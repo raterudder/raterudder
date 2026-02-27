@@ -275,8 +275,11 @@ export const updateSettings = async (settings: Settings, siteID?: string, creden
     }
 };
 
-export interface UserSite {
+export interface Site {
     id: string;
+}
+
+export interface UserSite extends Site {
     name: string;
 }
 
@@ -316,6 +319,20 @@ export const logout = async (): Promise<void> => {
     if (!response.ok) {
         throw new Error(await extractError(response, 'Logout failed'));
     }
+};
+
+export interface AdminSite extends Site {
+    lastAction?: Action;
+}
+
+export const listSites = async (): Promise<AdminSite[]> => {
+    const response = await fetch('/api/list/sites', {
+        method: 'GET',
+    });
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Failed to list sites'));
+    }
+    return response.json();
 };
 
 export interface ModelingHour {

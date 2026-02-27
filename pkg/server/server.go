@@ -204,6 +204,7 @@ func (s *Server) setupHandler() http.Handler {
 	apiMux.HandleFunc("POST /api/join", s.handleJoin)
 	apiMux.HandleFunc("GET /api/list/utilities", s.handleListUtilities)
 	apiMux.HandleFunc("GET /api/list/ess", s.handleListESS)
+	apiMux.HandleFunc("GET /api/list/sites", s.handleListSites)
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/", s.authMiddleware(apiMux))

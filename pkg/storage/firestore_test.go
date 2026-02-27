@@ -179,6 +179,32 @@ func TestFirestoreProvider(t *testing.T) {
 			assert.True(t, foundA1InFiltered, "did not find a1 in filtered results")
 			assert.True(t, foundA3InFiltered, "did not find a3 in filtered results")
 		})
+
+		t.Run("GetLatestAction", func(t *testing.T) {
+			now := time.Now().Truncate(time.Second).UTC()
+			a1 := types.Action{
+				Timestamp:   now.Add(-1 * time.Hour),
+				BatteryMode: types.BatteryModeChargeAny,
+				Description: "Old action",
+			}
+			a2 := types.Action{
+				Timestamp:   now,
+				BatteryMode: types.BatteryModeLoad,
+				Description: "New action",
+			}
+			require.NoError(t, f.InsertAction(ctx, "test-site-latest", a1))
+			require.NoError(t, f.InsertAction(ctx, "test-site-latest", a2))
+
+			latest, err := f.GetLatestAction(ctx, "test-site-latest")
+			require.NoError(t, err)
+			require.NotNil(t, latest)
+			assert.Equal(t, "New action", latest.Description)
+
+			// test empty
+			empty, err := f.GetLatestAction(ctx, "test-site-empty")
+			require.NoError(t, err)
+			require.Nil(t, empty)
+		})
 	})
 
 	t.Run("EnergyHistory", func(t *testing.T) {

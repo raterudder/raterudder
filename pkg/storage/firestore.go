@@ -225,6 +225,45 @@ func (f *FirestoreProvider) GetActionHistory(ctx context.Context, siteID string,
 	return actions, nil
 }
 
+// GetLatestAction retrieves the most recent action record. Will return nil if no actions found.
+func (f *FirestoreProvider) GetLatestAction(ctx context.Context, siteID string) (*types.Action, error) {
+	coll, err := f.getCollection(siteID, "action_history")
+	if err != nil {
+		return nil, err
+	}
+
+	iter := coll.
+		OrderBy("timestamp", firestore.Desc).
+		Limit(1).
+		Documents(ctx)
+	defer iter.Stop()
+
+	doc, err := iter.Next()
+	if err == iterator.Done {
+		return nil, nil // No actions found
+	}
+	if err != nil {
+		return nil, fmt.Errorf("error getting latest action: %w", err)
+	}
+
+	val, err := doc.DataAt("json")
+	if err != nil {
+		return nil, fmt.Errorf("action doc %s missing 'json': %w", doc.Ref.ID, err)
+	}
+
+	jsonStr, ok := val.(string)
+	if !ok {
+		return nil, fmt.Errorf("action doc %s 'json' field is not string", doc.Ref.ID)
+	}
+
+	var a types.Action
+	if err := json.Unmarshal([]byte(jsonStr), &a); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal action: %w", err)
+	}
+
+	return &a, nil
+}
+
 // UpsertEnergyHistory adds or updates an energy history record in the "energy_history" collection.
 // The document ID is the RFC3339 timestamp of TSHourStart for consistent formatting.
 func (f *FirestoreProvider) UpsertEnergyHistory(ctx context.Context, siteID string, stats types.EnergyStats, version int) error {

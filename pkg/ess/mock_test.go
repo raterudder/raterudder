@@ -11,113 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type MockDatabase struct {
-	mock.Mock
-}
-
-func (m *MockDatabase) GetSettings(ctx context.Context, siteID string) (types.Settings, int, error) {
-	args := m.Called(ctx, siteID)
-	return args.Get(0).(types.Settings), args.Int(1), args.Error(2)
-}
-
-func (m *MockDatabase) SetSettings(ctx context.Context, siteID string, settings types.Settings, version int) error {
-	args := m.Called(ctx, siteID, settings, version)
-	return args.Error(0)
-}
-
-func (m *MockDatabase) UpsertPrice(ctx context.Context, siteID string, price types.Price, version int) error {
-	args := m.Called(ctx, siteID, price, version)
-	return args.Error(0)
-}
-
-func (m *MockDatabase) InsertAction(ctx context.Context, siteID string, action types.Action) error {
-	args := m.Called(ctx, siteID, action)
-	return args.Error(0)
-}
-
-func (m *MockDatabase) UpsertEnergyHistory(ctx context.Context, siteID string, stats types.EnergyStats, version int) error {
-	args := m.Called(ctx, siteID, stats, version)
-	return args.Error(0)
-}
-
-func (m *MockDatabase) UpdateESSMockState(ctx context.Context, siteID string, state types.ESSMockState) error {
-	args := m.Called(ctx, siteID, state)
-	return args.Error(0)
-}
-
-func (m *MockDatabase) GetESSMockState(ctx context.Context, siteID string) (types.ESSMockState, error) {
-	args := m.Called(ctx, siteID)
-	return args.Get(0).(types.ESSMockState), args.Error(1)
-}
-
-func (m *MockDatabase) GetPriceHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Price, error) {
-	args := m.Called(ctx, siteID, start, end)
-	return args.Get(0).([]types.Price), args.Error(1)
-}
-
-func (m *MockDatabase) GetActionHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Action, error) {
-	args := m.Called(ctx, siteID, start, end)
-	return args.Get(0).([]types.Action), args.Error(1)
-}
-
-func (m *MockDatabase) GetEnergyHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.EnergyStats, error) {
-	args := m.Called(ctx, siteID, start, end)
-	return args.Get(0).([]types.EnergyStats), args.Error(1)
-}
-
-func (m *MockDatabase) GetLatestEnergyHistoryTime(ctx context.Context, siteID string) (time.Time, int, error) {
-	args := m.Called(ctx, siteID)
-	return args.Get(0).(time.Time), args.Int(1), args.Error(2)
-}
-
-func (m *MockDatabase) GetLatestPriceHistoryTime(ctx context.Context, siteID string) (time.Time, int, error) {
-	args := m.Called(ctx, siteID)
-	return args.Get(0).(time.Time), args.Int(1), args.Error(2)
-}
-
-func (m *MockDatabase) GetSite(ctx context.Context, siteID string) (types.Site, error) {
-	args := m.Called(ctx, siteID)
-	return args.Get(0).(types.Site), args.Error(1)
-}
-
-func (m *MockDatabase) ListSites(ctx context.Context) ([]types.Site, error) {
-	args := m.Called(ctx)
-	return args.Get(0).([]types.Site), args.Error(1)
-}
-
-func (m *MockDatabase) UpdateSite(ctx context.Context, siteID string, site types.Site) error {
-	args := m.Called(ctx, siteID, site)
-	return args.Error(0)
-}
-
-func (m *MockDatabase) CreateSite(ctx context.Context, siteID string, site types.Site) error {
-	args := m.Called(ctx, siteID, site)
-	return args.Error(0)
-}
-
-func (m *MockDatabase) GetUser(ctx context.Context, userID string) (types.User, error) {
-	args := m.Called(ctx, userID)
-	return args.Get(0).(types.User), args.Error(1)
-}
-
-func (m *MockDatabase) CreateUser(ctx context.Context, user types.User) error {
-	args := m.Called(ctx, user)
-	return args.Error(0)
-}
-
-func (m *MockDatabase) UpdateUser(ctx context.Context, user types.User) error {
-	args := m.Called(ctx, user)
-	return args.Error(0)
-}
-
-func (m *MockDatabase) Close() error {
-	args := m.Called()
-	return args.Error(0)
-}
-
 func TestMockESS(t *testing.T) {
 	t.Run("GetStatus", func(t *testing.T) {
-		db := new(MockDatabase)
+		db := new(mockStorage)
 		ConfigureMock(db)
 
 		ess := newMock("test-site")
@@ -179,7 +75,7 @@ func TestMockESS(t *testing.T) {
 	})
 
 	t.Run("SetModes", func(t *testing.T) {
-		db := new(MockDatabase)
+		db := new(mockStorage)
 		ConfigureMock(db)
 		ess := newMock("test-site")
 		_, _, err := ess.Authenticate(context.Background(), types.Credentials{})
@@ -206,7 +102,7 @@ func TestMockESS(t *testing.T) {
 	})
 
 	t.Run("GetEnergyHistory", func(t *testing.T) {
-		db := new(MockDatabase)
+		db := new(mockStorage)
 		ConfigureMock(db)
 		ess := newMock("test-site")
 		_, _, err := ess.Authenticate(context.Background(), types.Credentials{})
@@ -254,7 +150,7 @@ func TestMockESS(t *testing.T) {
 	})
 
 	t.Run("EnergyStatsFields", func(t *testing.T) {
-		db := new(MockDatabase)
+		db := new(mockStorage)
 		ConfigureMock(db)
 		ess := newMock("test-site")
 		_, _, err := ess.Authenticate(context.Background(), types.Credentials{})
@@ -294,7 +190,7 @@ func TestMockESS(t *testing.T) {
 	})
 
 	t.Run("Force charge below min SOC", func(t *testing.T) {
-		db := new(MockDatabase)
+		db := new(mockStorage)
 		ConfigureMock(db)
 		ess := newMock("test-site")
 		_, _, err := ess.Authenticate(context.Background(), types.Credentials{})
@@ -326,7 +222,7 @@ func TestMockESS(t *testing.T) {
 	})
 
 	t.Run("Repeated GetStatus", func(t *testing.T) {
-		db := new(MockDatabase)
+		db := new(mockStorage)
 		ConfigureMock(db)
 		ess := newMock("test-site")
 		_, _, err := ess.Authenticate(context.Background(), types.Credentials{})

@@ -32,6 +32,7 @@ type Database interface {
 	// History
 	GetPriceHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Price, error)
 	GetActionHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Action, error)
+	GetLatestAction(ctx context.Context, siteID string) (*types.Action, error)
 	GetEnergyHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.EnergyStats, error)
 	GetLatestEnergyHistoryTime(ctx context.Context, siteID string) (time.Time, int, error)
 	GetLatestPriceHistoryTime(ctx context.Context, siteID string) (time.Time, int, error)
