@@ -243,12 +243,25 @@ describe('App & Settings', () => {
         });
     });
 
-    it('can update price threshold fields', async () => {
+    it('can update price threshold fields and shows warning appropriately', async () => {
         await navigateToSettings();
+
+        // Expand advanced tuning settings to see the price threshold
+        const advancedBtn = await screen.findByText('Advanced Tuning Settings');
+        fireEvent.click(advancedBtn);
 
         // Check fields are accessible
         const priceInput = await screen.findByLabelText(/Always Charge Below/i);
+
+        // At initial value, warning should not be shown
+        expect(screen.queryByText(/Are you sure you want to force charging the batteries from the grid when it's below this price/i)).not.toBeInTheDocument();
+
         fireEvent.change(priceInput, { target: { value: '0.10' } });
+
+        // Warning should be shown now that value > 0.05
+        await waitFor(() => {
+            expect(screen.getByText(/Are you sure you want to force charging the batteries from the grid when it's below this price/i)).toBeInTheDocument();
+        });
 
         // Save
         const saveBtn = screen.getByText('Save Settings');

@@ -162,7 +162,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                     setIsUtilityDirty(true);
                                     const providerID = value as string;
                                     const provider = utilities.find(u => u.id === providerID);
-                                    let newSettings = {
+                                    const newSettings = {
                                         ...settings,
                                         utilityProvider: providerID,
                                         utilityRate: "",
@@ -218,7 +218,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                             setIsUtilityDirty(true);
                                             const rateID = value as string;
                                             const rate = provider.rates.find(r => r.id === rateID);
-                                            let newSettings = { ...settings, utilityRate: rateID };
+                                            const newSettings = { ...settings, utilityRate: rateID };
                                             if (rate) {
                                                 const newOpts: any = {};
                                                 rate.options.forEach((opt: UtilityRateOption) => {
@@ -427,18 +427,6 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                     </Field.Root>
 
                     <Field.Root className="form-group compact">
-                        <Field.Label htmlFor="alwaysChargeUnder">Always Charge Below ($/kWh)</Field.Label>
-                        <Input
-                            id="alwaysChargeUnder"
-                            type="number"
-                            step="0.01"
-                            value={settings.alwaysChargeUnderDollarsPerKWH}
-                            onChange={(e) => handleChange('alwaysChargeUnderDollarsPerKWH', parseFloat(e.target.value))}
-                        />
-                        <Field.Description>Charge battery whenever the price is less than this threshold.</Field.Description>
-                    </Field.Root>
-
-                    <Field.Root className="form-group compact">
                         <Field.Label htmlFor="minArbitrage">Min Arbitrage Profit ($/kWh)</Field.Label>
                         <Input
                             id="minArbitrage"
@@ -531,6 +519,23 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                         </Field.Root>
 
 
+
+                        <Field.Root className="form-group">
+                            <Field.Label htmlFor="alwaysChargeUnder">Always Charge Below ($/kWh)</Field.Label>
+                            <Input
+                                id="alwaysChargeUnder"
+                                type="number"
+                                step="0.01"
+                                value={settings.alwaysChargeUnderDollarsPerKWH}
+                                onChange={(e) => handleChange('alwaysChargeUnderDollarsPerKWH', parseFloat(e.target.value))}
+                            />
+                            <Field.Description>Charge battery whenever the price is less than this threshold.</Field.Description>
+                            {settings.alwaysChargeUnderDollarsPerKWH > 0.05 && (
+                                <div className="warning-text" style={{ color: 'orange', marginTop: '4px', fontSize: '0.9em' }}>
+                                    Are you sure you want to force charging the batteries from the grid when it's below this price?
+                                </div>
+                            )}
+                        </Field.Root>
 
                         <div className="section-header">
                             <h3>Solar Settings</h3>
