@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { listSites } from '../api';
 import type { AdminSite } from '../api';
-import { Link } from 'wouter';
 import { Separator } from '@base-ui/react/separator';
 import './AdminPage.css';
 
@@ -57,9 +56,9 @@ const AdminPage: React.FC = () => {
                                 </div>
                             )}
                         </div>
-                        <Link href={`/dashboard?viewSite=${site.id}`} className="btn admin-primary-btn">
+                        <a href={`/dashboard?viewSite=${site.id}`} className="btn admin-primary-btn">
                             View Dashboard
-                        </Link>
+                        </a>
                     </div>
                 ))}
             </div>
