@@ -205,6 +205,8 @@ func (s *Server) setupHandler() http.Handler {
 	apiMux.HandleFunc("GET /api/list/utilities", s.handleListUtilities)
 	apiMux.HandleFunc("GET /api/list/ess", s.handleListESS)
 	apiMux.HandleFunc("GET /api/list/sites", s.handleListSites)
+	apiMux.HandleFunc("POST /api/feedback", s.handleSubmitFeedback)
+	apiMux.HandleFunc("GET /api/list/feedback", s.handleListFeedback)
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/", s.authMiddleware(apiMux))
@@ -349,4 +351,14 @@ func (s *Server) revisionMiddleware(next http.Handler) http.Handler {
 
 func truncateDay(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+}
+
+// isMultiSiteAdmin returns true if the user's email is in the adminEmails list.
+func (s *Server) isMultiSiteAdmin(user types.User) bool {
+	for _, adminEmail := range s.adminEmails {
+		if user.Email == adminEmail {
+			return true
+		}
+	}
+	return false
 }

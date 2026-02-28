@@ -22,15 +22,7 @@ func (s *Server) handleListSites(w http.ResponseWriter, r *http.Request) {
 	// Check if user is an admin
 	// We aren't specifically checking for singleSite here because this is for
 	// listing sites which isn't even supported for singleSite
-	var isAdmin bool
-	for _, adminEmail := range s.adminEmails {
-		if user.Email == adminEmail {
-			isAdmin = true
-			break
-		}
-	}
-
-	if !isAdmin && !s.bypassAuth {
+	if !s.isMultiSiteAdmin(user) && !s.bypassAuth {
 		log.Ctx(ctx).WarnContext(ctx, "unauthorized access to list sites", slog.String("email", user.Email))
 		writeJSONError(w, "forbidden", http.StatusForbidden)
 		return

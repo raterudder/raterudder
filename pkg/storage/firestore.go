@@ -797,3 +797,66 @@ func (f *FirestoreProvider) GetESSMockState(ctx context.Context, siteID string) 
 	}
 	return state, nil
 }
+
+// InsertFeedback adds a new feedback record to the "feedback" collection.
+func (f *FirestoreProvider) InsertFeedback(ctx context.Context, feedback types.Feedback) error {
+	jsonBytes, err := json.Marshal(feedback)
+	if err != nil {
+		return fmt.Errorf("failed to marshal feedback: %w", err)
+	}
+
+	coll := f.client.Collection("feedback")
+	_, err = coll.Doc(feedback.ID).Set(ctx, map[string]interface{}{
+		"json": string(jsonBytes),
+		"id":   feedback.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to insert feedback: %w", err)
+	}
+	return nil
+}
+
+// ListFeedback retrieves feedback records, sorted by ID descending.
+func (f *FirestoreProvider) ListFeedback(ctx context.Context, limit int, lastFeedbackID string) ([]types.Feedback, error) {
+	coll := f.client.Collection("feedback")
+
+	q := coll.OrderBy("id", firestore.Desc).Limit(limit)
+	if lastFeedbackID != "" {
+		q = q.StartAfter(lastFeedbackID)
+	}
+
+	iter := q.Documents(ctx)
+	defer iter.Stop()
+
+	var feedbacks []types.Feedback
+	for {
+		doc, err := iter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("error iterating feedback: %w", err)
+		}
+
+		val, err := doc.DataAt("json")
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "feedback doc missing json", slog.String("docID", doc.Ref.ID), slog.Any("err", err))
+			continue
+		}
+
+		jsonStr, ok := val.(string)
+		if !ok {
+			log.Ctx(ctx).WarnContext(ctx, "feedback doc json not string", slog.String("docID", doc.Ref.ID))
+			continue
+		}
+
+		var fb types.Feedback
+		if err := json.Unmarshal([]byte(jsonStr), &fb); err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal feedback", slog.String("docID", doc.Ref.ID), slog.Any("err", err))
+			continue
+		}
+		feedbacks = append(feedbacks, fb)
+	}
+
+	return feedbacks, nil
+}

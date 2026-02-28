@@ -4,6 +4,7 @@ import { Route, Switch, Redirect, useLocation, Router } from 'wouter';
 
 import Header from './components/Header';
 import Footer from './components/Footer';
+import FeedbackWidget from './components/FeedbackWidget';
 import './App.css';
 import { fetchAuthStatus, login, logout, type AuthStatus, type UserSite } from './api';
 
@@ -263,6 +264,10 @@ function AppContent() {
                 </main>
 
                 <Footer />
+
+                {loggedIn && (
+                    <FeedbackWidget siteID={effectiveSiteID} />
+                )}
             </div>
         </>
     );

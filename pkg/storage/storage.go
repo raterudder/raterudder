@@ -47,6 +47,10 @@ type Database interface {
 	CreateUser(ctx context.Context, user types.User) error
 	UpdateUser(ctx context.Context, user types.User) error
 
+	// Feedback
+	InsertFeedback(ctx context.Context, feedback types.Feedback) error
+	ListFeedback(ctx context.Context, limit int, lastFeedbackID string) ([]types.Feedback, error)
+
 	// Lifecycle
 	Close() error
 }

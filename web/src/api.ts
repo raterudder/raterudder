@@ -415,3 +415,39 @@ export const fetchESSList = async (siteID?: string): Promise<ESSProviderInfo[]> 
     }
     return response.json();
 };
+
+export interface Feedback {
+    id: string;
+    sentiment: string;
+    comment: string;
+    siteID: string;
+    userID: string;
+    extra: Record<string, string>;
+    time: string;
+}
+
+export async function submitFeedback(siteID: string, sentiment: string, comment: string, extra: Record<string, string>): Promise<void> {
+    const response = await fetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ siteID, sentiment, comment, extra })
+    });
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Failed to submit feedback'));
+    }
+}
+
+export async function listFeedback(limit?: number, lastFeedbackID?: string): Promise<Feedback[]> {
+    let url = '/api/list/feedback?';
+    if (limit !== undefined) {
+        url += `limit=${limit}&`;
+    }
+    if (lastFeedbackID) {
+        url += `lastFeedbackID=${lastFeedbackID}`;
+    }
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Failed to fetch feedback'));
+    }
+    return response.json();
+}

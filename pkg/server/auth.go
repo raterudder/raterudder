@@ -176,17 +176,9 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 					}
 				}
 
-				var isAdmin bool
-				for _, admin := range s.adminEmails {
-					if email == admin {
-						isAdmin = true
-						// Do not set user.Admin = true to grant read-only access when multi-site
-						// but for single-site we do want to set Admin
-						if s.singleSite {
-							user.Admin = true
-						}
-						break
-					}
+				isAdmin := s.isMultiSiteAdmin(user)
+				if isAdmin && s.singleSite {
+					user.Admin = true
 				}
 				if !s.singleSite && siteID != "" && siteID != SiteIDAll && !authViaUpdateSpecific {
 					site, err := s.storage.GetSite(ctx, siteID)

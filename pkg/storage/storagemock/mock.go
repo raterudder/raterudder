@@ -154,3 +154,13 @@ func (m *MockDatabase) Close() error {
 	args := m.Called()
 	return args.Error(0)
 }
+
+func (m *MockDatabase) InsertFeedback(ctx context.Context, feedback types.Feedback) error {
+	args := m.Called(ctx, feedback)
+	return args.Error(0)
+}
+
+func (m *MockDatabase) ListFeedback(ctx context.Context, limit int, lastFeedbackID string) ([]types.Feedback, error) {
+	args := m.Called(ctx, limit, lastFeedbackID)
+	return args.Get(0).([]types.Feedback), args.Error(1)
+}

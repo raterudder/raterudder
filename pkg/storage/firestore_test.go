@@ -411,3 +411,67 @@ func TestFirestoreProvider(t *testing.T) {
 		})
 	})
 }
+
+func TestFirestore_Feedback(t *testing.T) {
+	// Use a test project ID
+	projectID := "test-project-id"
+
+	// Use a random database for isolation
+	randDB := fmt.Sprintf("test-db-%d", time.Now().UnixNano())
+	provider := &FirestoreProvider{
+		projectID: projectID,
+		database:  randDB,
+	}
+
+	ctx := context.Background()
+	err := provider.Init(ctx)
+	require.NoError(t, err)
+
+	defer provider.Close()
+
+	// Insert feedbacks
+	fb1 := types.Feedback{
+		ID:        "2023-10-27T10:00:00Z_site1",
+		SiteID:    "site1",
+		UserID:    "user1",
+		Sentiment: "happy",
+		Comment:   "Great job!",
+		Time:      time.Date(2023, 10, 27, 10, 0, 0, 0, time.UTC),
+	}
+	fb2 := types.Feedback{
+		ID:        "2023-10-27T11:00:00Z_site1",
+		SiteID:    "site1",
+		UserID:    "user2",
+		Sentiment: "sad",
+		Comment:   "Needs work.",
+		Time:      time.Date(2023, 10, 27, 11, 0, 0, 0, time.UTC),
+	}
+	fb3 := types.Feedback{
+		ID:        "2023-10-27T12:00:00Z_site1",
+		SiteID:    "site1",
+		UserID:    "user3",
+		Sentiment: "neutral",
+		Comment:   "It's okay.",
+		Time:      time.Date(2023, 10, 27, 12, 0, 0, 0, time.UTC),
+	}
+
+	err = provider.InsertFeedback(ctx, fb1)
+	require.NoError(t, err)
+	err = provider.InsertFeedback(ctx, fb2)
+	require.NoError(t, err)
+	err = provider.InsertFeedback(ctx, fb3)
+	require.NoError(t, err)
+
+	// List feedback
+	fbs, err := provider.ListFeedback(ctx, 2, "")
+	require.NoError(t, err)
+	require.Len(t, fbs, 2)
+	assert.Equal(t, fb3.ID, fbs[0].ID) // Descending order
+	assert.Equal(t, fb2.ID, fbs[1].ID)
+
+	// List with pagination
+	fbs2, err := provider.ListFeedback(ctx, 2, fb2.ID)
+	require.NoError(t, err)
+	require.Len(t, fbs2, 1)
+	assert.Equal(t, fb1.ID, fbs2[0].ID)
+}
