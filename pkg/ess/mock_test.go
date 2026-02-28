@@ -17,7 +17,7 @@ func TestMockESS(t *testing.T) {
 		ConfigureMock(db)
 
 		ess := newMock("test-site")
-		_, _, err := ess.Authenticate(context.Background(), types.Credentials{})
+		_, _, err := ess.Authenticate(context.Background(), types.Credentials{Mock: &types.MockCredentials{Strategy: "simple", Location: "America/Chicago"}})
 		require.NoError(t, err)
 		ctx := context.Background()
 
@@ -53,12 +53,8 @@ func TestMockESS(t *testing.T) {
 		ess := newMock("test-site")
 
 		// 1. Nil credentials
-		creds, isNew, err := ess.Authenticate(context.Background(), types.Credentials{})
-		require.NoError(t, err)
-		assert.True(t, isNew)
-		assert.NotNil(t, creds.Mock)
-		assert.Equal(t, "America/Chicago", creds.Mock.Location)
-		assert.Equal(t, "simple", creds.Mock.Strategy)
+		_, _, err := ess.Authenticate(context.Background(), types.Credentials{})
+		require.ErrorIs(t, err, ErrCredentialsMissing)
 
 		// 2. Existing credentials
 		existingCreds := types.Credentials{
@@ -67,7 +63,7 @@ func TestMockESS(t *testing.T) {
 				Location: "America/New_York",
 			},
 		}
-		creds, isNew, err = ess.Authenticate(context.Background(), existingCreds)
+		creds, isNew, err := ess.Authenticate(context.Background(), existingCreds)
 		require.NoError(t, err)
 		assert.False(t, isNew)
 		assert.Equal(t, "America/New_York", creds.Mock.Location)
@@ -78,7 +74,7 @@ func TestMockESS(t *testing.T) {
 		db := new(mockStorage)
 		ConfigureMock(db)
 		ess := newMock("test-site")
-		_, _, err := ess.Authenticate(context.Background(), types.Credentials{})
+		_, _, err := ess.Authenticate(context.Background(), types.Credentials{Mock: &types.MockCredentials{Strategy: "simple", Location: "America/Chicago"}})
 		require.NoError(t, err)
 		ctx := context.Background()
 
@@ -105,7 +101,7 @@ func TestMockESS(t *testing.T) {
 		db := new(mockStorage)
 		ConfigureMock(db)
 		ess := newMock("test-site")
-		_, _, err := ess.Authenticate(context.Background(), types.Credentials{})
+		_, _, err := ess.Authenticate(context.Background(), types.Credentials{Mock: &types.MockCredentials{Strategy: "simple", Location: "America/Chicago"}})
 		require.NoError(t, err)
 		ctx := context.Background()
 
@@ -153,7 +149,7 @@ func TestMockESS(t *testing.T) {
 		db := new(mockStorage)
 		ConfigureMock(db)
 		ess := newMock("test-site")
-		_, _, err := ess.Authenticate(context.Background(), types.Credentials{})
+		_, _, err := ess.Authenticate(context.Background(), types.Credentials{Mock: &types.MockCredentials{Strategy: "simple", Location: "America/Chicago"}})
 		require.NoError(t, err)
 
 		// Set settings to enable solar export
@@ -193,7 +189,7 @@ func TestMockESS(t *testing.T) {
 		db := new(mockStorage)
 		ConfigureMock(db)
 		ess := newMock("test-site")
-		_, _, err := ess.Authenticate(context.Background(), types.Credentials{})
+		_, _, err := ess.Authenticate(context.Background(), types.Credentials{Mock: &types.MockCredentials{Strategy: "simple", Location: "America/Chicago"}})
 		require.NoError(t, err)
 
 		// Set min SOC to 30
@@ -225,7 +221,7 @@ func TestMockESS(t *testing.T) {
 		db := new(mockStorage)
 		ConfigureMock(db)
 		ess := newMock("test-site")
-		_, _, err := ess.Authenticate(context.Background(), types.Credentials{})
+		_, _, err := ess.Authenticate(context.Background(), types.Credentials{Mock: &types.MockCredentials{Strategy: "simple", Location: "America/Chicago"}})
 		require.NoError(t, err)
 		ctx := context.Background()
 

@@ -102,7 +102,7 @@ func (f *Franklin) ApplySettings(ctx context.Context, settings types.Settings) e
 // persist it.
 func (f *Franklin) Authenticate(ctx context.Context, creds types.Credentials) (types.Credentials, bool, error) {
 	if creds.Franklin == nil {
-		return creds, false, errors.New("missing franklin credentials")
+		return creds, false, ErrCredentialsMissing
 	}
 
 	f.mu.Lock()
@@ -202,10 +202,10 @@ func (f *Franklin) ensureLogin(ctx context.Context) error {
 
 func (f *Franklin) login(ctx context.Context, username, md5Password string) (string, error) {
 	if username == "" {
-		return "", errors.New("missing username")
+		return "", fmt.Errorf("missing username: %w", ErrCredentialsMissing)
 	}
 	if md5Password == "" {
-		return "", errors.New("missing password")
+		return "", fmt.Errorf("missing password: %w", ErrCredentialsMissing)
 	}
 
 	data := url.Values{}

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -82,9 +83,13 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 		log.Ctx(ctx).DebugContext(ctx, "processing site update")
 		_, status, err := s.performSiteUpdate(ctx, site.ID, settings, creds)
 		if err != nil {
-			// TODO: don't error when its because of missing credentials
-			log.Ctx(ctx).ErrorContext(ctx, "site update failed", slog.Any("error", err))
-			results[site.ID] = fmt.Sprintf("failed: %v", err)
+			if errors.Is(err, ess.ErrCredentialsMissing) {
+				log.Ctx(ctx).DebugContext(ctx, "site update skipped: credentials missing", slog.Any("error", err))
+				results[site.ID] = "skipped: credentials missing"
+			} else {
+				log.Ctx(ctx).ErrorContext(ctx, "site update failed", slog.Any("error", err))
+				results[site.ID] = fmt.Sprintf("failed: %v", err)
+			}
 		} else {
 			log.Ctx(ctx).InfoContext(ctx, "site update success")
 			if status == "" {
