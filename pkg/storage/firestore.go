@@ -25,6 +25,10 @@ type FirestoreProvider struct {
 	database  string
 }
 
+// maxBatchSize is the maximum number of writes allowed in a single Firestore batch.
+// This is adjustable for testing.
+var maxBatchSize = 100
+
 // configuredFirestore sets up the Firestore provider.
 // It registers flags for configuration.
 func configuredFirestore() *FirestoreProvider {
@@ -297,8 +301,7 @@ func (f *FirestoreProvider) UpsertEnergyHistories(ctx context.Context, siteID st
 		return nil
 	}
 
-	// For multiple items, use batches chunked by 100
-	const maxBatchSize = 100
+	// For multiple items, use batches chunked by maxBatchSize
 	var batch *firestore.WriteBatch
 	count := 0
 
@@ -552,8 +555,7 @@ func (f *FirestoreProvider) UpsertPrices(ctx context.Context, siteID string, pri
 		return nil
 	}
 
-	// For multiple items, use batches chunked by 100
-	const maxBatchSize = 100
+	// For multiple items, use batches chunked by maxBatchSize
 	var batch *firestore.WriteBatch
 	count := 0
 

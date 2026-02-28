@@ -69,6 +69,30 @@ func TestFirestoreProvider(t *testing.T) {
 		prices, err := f.GetPriceHistory(ctx, "test-site", now.Add(-2*time.Hour), now.Add(1*time.Minute))
 		require.NoError(t, err)
 
+		t.Run("UpsertMultipleBatches", func(t *testing.T) {
+			// Temporarily lower batch size
+			origBatchSize := maxBatchSize
+			maxBatchSize = 2
+			defer func() { maxBatchSize = origBatchSize }()
+
+			var batchPrices []types.Price
+			for i := 0; i < 5; i++ {
+				batchPrices = append(batchPrices, types.Price{
+					TSStart:       now.Add(time.Duration(i+1) * time.Hour),
+					DollarsPerKWH: float64(i) * 0.1,
+					Provider:      "batch-test",
+				})
+			}
+			require.NoError(t, f.UpsertPrices(ctx, "test-site", batchPrices, 0))
+
+			res, err := f.GetPriceHistory(ctx, "test-site", now.Add(1*time.Hour), now.Add(6*time.Hour))
+			require.NoError(t, err)
+			assert.Len(t, res, 5)
+			for i := 0; i < 5; i++ {
+				assert.Equal(t, float64(i)*0.1, res[i].DollarsPerKWH)
+			}
+		})
+
 		// Note: We depend on emulator state. It might have data from previous runs if not cleared.
 		// But we should find at least our 2 inserts.
 		foundP1 := false
@@ -215,6 +239,29 @@ func TestFirestoreProvider(t *testing.T) {
 			BatteryChargedKWH: 2.0,
 		}
 		require.NoError(t, f.UpsertEnergyHistories(ctx, "test-site", []types.EnergyStats{stats}, 0))
+
+		t.Run("UpsertMultipleBatches", func(t *testing.T) {
+			// Temporarily lower batch size
+			origBatchSize := maxBatchSize
+			maxBatchSize = 2
+			defer func() { maxBatchSize = origBatchSize }()
+
+			var batchStats []types.EnergyStats
+			for i := 0; i < 5; i++ {
+				batchStats = append(batchStats, types.EnergyStats{
+					TSHourStart:       now.Add(time.Duration(i+1) * time.Hour),
+					SolarKWH:          float64(i) * 1.0,
+				})
+			}
+			require.NoError(t, f.UpsertEnergyHistories(ctx, "test-site", batchStats, 0))
+
+			res, err := f.GetEnergyHistory(ctx, "test-site", now.Add(1*time.Hour), now.Add(6*time.Hour))
+			require.NoError(t, err)
+			assert.Len(t, res, 5)
+			for i := 0; i < 5; i++ {
+				assert.Equal(t, float64(i)*1.0, res[i].SolarKWH)
+			}
+		})
 
 		t.Run("GetEnergyHistory", func(t *testing.T) {
 			energyHistory, err := f.GetEnergyHistory(ctx, "test-site", now.Add(-1*time.Minute), now.Add(2*time.Hour))
