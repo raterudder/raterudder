@@ -11,7 +11,7 @@ import (
 )
 
 func TestTOUUtility(t *testing.T) {
-	u := &TOUUtilityImpl{}
+	u := &genericTOU{}
 	err := u.ApplySettings(context.Background(), types.Settings{
 		UtilityProvider: "tou",
 		UtilityRate:     "example",
@@ -37,7 +37,8 @@ func TestTOUUtility(t *testing.T) {
 
 	// Verify price changes over a day
 	for _, cp := range confirmed {
-		h := cp.TSStart.Hour()
+		// New York location should be set
+		h := cp.TSStart.In(u.location).Hour()
 		if h >= 0 && h < 6 {
 			assert.Equal(t, 0.01, cp.DollarsPerKWH)
 		} else if h >= 6 && h < 12 {

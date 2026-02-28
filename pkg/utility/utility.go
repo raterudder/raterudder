@@ -101,7 +101,7 @@ func (m *Map) Site(ctx context.Context, siteID string, settings types.Settings) 
 		m.utilities[settings.UtilityProvider] = u
 		return u, nil
 	case "tou":
-		u := &TOUUtilityImpl{
+		u := &genericTOU{
 			siteID: siteID,
 		}
 		if err := u.ApplySettings(ctx, settings); err != nil {
