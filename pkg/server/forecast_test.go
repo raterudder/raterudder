@@ -231,8 +231,8 @@ func TestHandleForecast(t *testing.T) {
 		// Verify no backfill-related calls were made
 		mockS.AssertNotCalled(t, "GetLatestEnergyHistoryTime")
 		mockS.AssertNotCalled(t, "GetLatestPriceHistoryTime")
-		mockS.AssertNotCalled(t, "UpsertEnergyHistory")
-		mockS.AssertNotCalled(t, "UpsertPrice")
+		mockS.AssertNotCalled(t, "UpsertEnergyHistories")
+		mockS.AssertNotCalled(t, "UpsertPrices")
 		mockS.AssertNotCalled(t, "InsertAction")
 		mockES.AssertNotCalled(t, "GetEnergyHistory")
 		mockES.AssertNotCalled(t, "SetModes")

@@ -22,10 +22,11 @@ type Database interface {
 	SetSettings(ctx context.Context, siteID string, settings types.Settings, version int) error
 
 	// Data Persistence
-	// UpsertPrice adds or updates a price record.
-	UpsertPrice(ctx context.Context, siteID string, price types.Price, version int) error
+	// UpsertPrices adds or updates multiple price records.
+	UpsertPrices(ctx context.Context, siteID string, prices []types.Price, version int) error
 	InsertAction(ctx context.Context, siteID string, action types.Action) error
-	UpsertEnergyHistory(ctx context.Context, siteID string, stats types.EnergyStats, version int) error
+	// UpsertEnergyHistories adds or updates multiple energy history records.
+	UpsertEnergyHistories(ctx context.Context, siteID string, stats []types.EnergyStats, version int) error
 	UpdateESSMockState(ctx context.Context, siteID string, state types.ESSMockState) error
 	GetESSMockState(ctx context.Context, siteID string) (types.ESSMockState, error)
 

@@ -31,7 +31,7 @@ func TestSettings(t *testing.T) {
 	}, types.CurrentSettingsVersion, nil)
 	// Add expectations for background sync
 	mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
-	mockS.On("UpsertEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// Helper to create server with auth config
 	newAuthServer := func(audience string, emails []string, validator tokenVerifier) (*Server, *mockESS) {

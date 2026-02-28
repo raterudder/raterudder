@@ -264,30 +264,82 @@ func (f *FirestoreProvider) GetLatestAction(ctx context.Context, siteID string) 
 	return &a, nil
 }
 
-// UpsertEnergyHistory adds or updates an energy history record in the "energy_history" collection.
-// The document ID is the RFC3339 timestamp of TSHourStart for consistent formatting.
-func (f *FirestoreProvider) UpsertEnergyHistory(ctx context.Context, siteID string, stats types.EnergyStats, version int) error {
-	if stats.TSHourStart.IsZero() {
-		return fmt.Errorf("energy stats missing tsHourStart")
-	}
-	jsonBytes, err := json.Marshal(stats)
-	if err != nil {
-		return fmt.Errorf("failed to marshal energy stats: %w", err)
+// UpsertEnergyHistories adds or updates multiple energy history records in the "energy_history" collection.
+func (f *FirestoreProvider) UpsertEnergyHistories(ctx context.Context, siteID string, stats []types.EnergyStats, version int) error {
+	if len(stats) == 0 {
+		return nil
 	}
 
 	coll, err := f.getCollection(siteID, "energy_history")
 	if err != nil {
 		return err
 	}
-	docID := stats.TSHourStart.UTC().Format(time.RFC3339)
-	_, err = coll.Doc(docID).Set(ctx, map[string]interface{}{
-		"json":      string(jsonBytes),
-		"timestamp": stats.TSHourStart,
-		"version":   version,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to upsert energy history: %w", err)
+
+	// For a single item, use direct Set to avoid batch overhead
+	if len(stats) == 1 {
+		s := stats[0]
+		if s.TSHourStart.IsZero() {
+			return fmt.Errorf("energy stats missing tsHourStart")
+		}
+		jsonBytes, err := json.Marshal(s)
+		if err != nil {
+			return fmt.Errorf("failed to marshal energy stats: %w", err)
+		}
+		docID := s.TSHourStart.UTC().Format(time.RFC3339)
+		_, err = coll.Doc(docID).Set(ctx, map[string]interface{}{
+			"json":      string(jsonBytes),
+			"timestamp": s.TSHourStart,
+			"version":   version,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to upsert energy history: %w", err)
+		}
+		return nil
 	}
+
+	// For multiple items, use batches chunked by 100
+	const maxBatchSize = 100
+	var batch *firestore.WriteBatch
+	count := 0
+
+	for _, s := range stats {
+		if s.TSHourStart.IsZero() {
+			return fmt.Errorf("energy stats missing tsHourStart")
+		}
+
+		if count == 0 {
+			batch = f.client.Batch()
+		}
+
+		jsonBytes, err := json.Marshal(s)
+		if err != nil {
+			return fmt.Errorf("failed to marshal energy stats: %w", err)
+		}
+
+		docID := s.TSHourStart.UTC().Format(time.RFC3339)
+		ref := coll.Doc(docID)
+		batch.Set(ref, map[string]interface{}{
+			"json":      string(jsonBytes),
+			"timestamp": s.TSHourStart,
+			"version":   version,
+		})
+
+		count++
+		if count >= maxBatchSize {
+			if _, err := batch.Commit(ctx); err != nil {
+				return fmt.Errorf("failed to commit energy history batch: %w", err)
+			}
+			count = 0
+		}
+	}
+
+	// Commit any remaining items
+	if count > 0 {
+		if _, err := batch.Commit(ctx); err != nil {
+			return fmt.Errorf("failed to commit remaining energy history batch: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -470,12 +522,10 @@ func (f *FirestoreProvider) GetUser(ctx context.Context, userID string) (types.U
 	return user, nil
 }
 
-// UpsertPrice adds or updates a price record in the "price_history" sub-collection of the site.
-// The document ID is the RFC3339 timestamp of TSStart for efficient range queries.
-func (f *FirestoreProvider) UpsertPrice(ctx context.Context, siteID string, price types.Price, version int) error {
-	jsonBytes, err := json.Marshal(price)
-	if err != nil {
-		return fmt.Errorf("failed to marshal price: %w", err)
+// UpsertPrices adds or updates multiple price records in the "price_history" sub-collection of the site.
+func (f *FirestoreProvider) UpsertPrices(ctx context.Context, siteID string, prices []types.Price, version int) error {
+	if len(prices) == 0 {
+		return nil
 	}
 
 	coll, err := f.getCollection(siteID, "price_history")
@@ -483,15 +533,64 @@ func (f *FirestoreProvider) UpsertPrice(ctx context.Context, siteID string, pric
 		return err
 	}
 
-	docID := price.TSStart.UTC().Format(time.RFC3339)
-	_, err = coll.Doc(docID).Set(ctx, map[string]interface{}{
-		"json":      string(jsonBytes),
-		"timestamp": price.TSStart,
-		"version":   version,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to upsert price: %w", err)
+	// For a single item, use direct Set to avoid batch overhead
+	if len(prices) == 1 {
+		p := prices[0]
+		jsonBytes, err := json.Marshal(p)
+		if err != nil {
+			return fmt.Errorf("failed to marshal price: %w", err)
+		}
+		docID := p.TSStart.UTC().Format(time.RFC3339)
+		_, err = coll.Doc(docID).Set(ctx, map[string]interface{}{
+			"json":      string(jsonBytes),
+			"timestamp": p.TSStart,
+			"version":   version,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to upsert price: %w", err)
+		}
+		return nil
 	}
+
+	// For multiple items, use batches chunked by 100
+	const maxBatchSize = 100
+	var batch *firestore.WriteBatch
+	count := 0
+
+	for _, p := range prices {
+		if count == 0 {
+			batch = f.client.Batch()
+		}
+
+		jsonBytes, err := json.Marshal(p)
+		if err != nil {
+			return fmt.Errorf("failed to marshal price: %w", err)
+		}
+
+		docID := p.TSStart.UTC().Format(time.RFC3339)
+		ref := coll.Doc(docID)
+		batch.Set(ref, map[string]interface{}{
+			"json":      string(jsonBytes),
+			"timestamp": p.TSStart,
+			"version":   version,
+		})
+
+		count++
+		if count >= maxBatchSize {
+			if _, err := batch.Commit(ctx); err != nil {
+				return fmt.Errorf("failed to commit price batch: %w", err)
+			}
+			count = 0
+		}
+	}
+
+	// Commit any remaining items
+	if count > 0 {
+		if _, err := batch.Commit(ctx); err != nil {
+			return fmt.Errorf("failed to commit remaining price batch: %w", err)
+		}
+	}
+
 	return nil
 }
 

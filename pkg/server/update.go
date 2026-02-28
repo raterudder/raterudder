@@ -332,9 +332,9 @@ func (s *Server) updatePriceHistory(ctx context.Context, siteID string, provider
 		if err != nil {
 			return fmt.Errorf("failed to get confirmed prices: %w", err)
 		}
-		for _, p := range newPrices {
-			if err := s.storage.UpsertPrice(ctx, siteID, p, types.CurrentPriceHistoryVersion); err != nil {
-				return fmt.Errorf("failed to upsert price: %w", err)
+		if len(newPrices) > 0 {
+			if err := s.storage.UpsertPrices(ctx, siteID, newPrices, types.CurrentPriceHistoryVersion); err != nil {
+				return fmt.Errorf("failed to upsert prices: %w", err)
 			}
 		}
 	}
@@ -383,9 +383,9 @@ func (s *Server) updateEnergyHistory(ctx context.Context, siteID string, essSyst
 			log.Ctx(ctx).ErrorContext(ctx, "failed to get energy history from ess", slog.Any("error", err), slog.Time("start", t), slog.Time("end", end))
 			// continue to next day even if this one failed
 		} else {
-			for _, h := range newHistory {
-				if err := s.storage.UpsertEnergyHistory(ctx, siteID, h, types.CurrentEnergyStatsVersion); err != nil {
-					log.Ctx(ctx).ErrorContext(ctx, "failed to upsert energy history", slog.Any("error", err))
+			if len(newHistory) > 0 {
+				if err := s.storage.UpsertEnergyHistories(ctx, siteID, newHistory, types.CurrentEnergyStatsVersion); err != nil {
+					log.Ctx(ctx).ErrorContext(ctx, "failed to upsert energy histories", slog.Any("error", err))
 				}
 			}
 		}

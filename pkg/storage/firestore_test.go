@@ -63,8 +63,8 @@ func TestFirestoreProvider(t *testing.T) {
 		p1 := types.Price{TSStart: now.Add(-1 * time.Hour), DollarsPerKWH: 0.10, Provider: "test"}
 		p2 := types.Price{TSStart: now, DollarsPerKWH: 0.12, Provider: "test"}
 
-		require.NoError(t, f.UpsertPrice(ctx, "test-site", p1, 0))
-		require.NoError(t, f.UpsertPrice(ctx, "test-site", p2, 0))
+		require.NoError(t, f.UpsertPrices(ctx, "test-site", []types.Price{p1}, 0))
+		require.NoError(t, f.UpsertPrices(ctx, "test-site", []types.Price{p2}, 0))
 
 		prices, err := f.GetPriceHistory(ctx, "test-site", now.Add(-2*time.Hour), now.Add(1*time.Minute))
 		require.NoError(t, err)
@@ -86,7 +86,7 @@ func TestFirestoreProvider(t *testing.T) {
 
 		t.Run("UpsertOverwrite", func(t *testing.T) {
 			p2Updated := types.Price{TSStart: p2.TSStart, DollarsPerKWH: 0.99, Provider: "test"}
-			require.NoError(t, f.UpsertPrice(ctx, "test-site", p2Updated, 0))
+			require.NoError(t, f.UpsertPrices(ctx, "test-site", []types.Price{p2Updated}, 0))
 
 			pricesUpdated, err := f.GetPriceHistory(ctx, "test-site", now.Add(-2*time.Hour), now.Add(1*time.Minute))
 			require.NoError(t, err)
@@ -108,7 +108,7 @@ func TestFirestoreProvider(t *testing.T) {
 			// Insert a future price
 			future := now.Add(24 * time.Hour)
 			pFuture := types.Price{TSStart: future, DollarsPerKWH: 0.99, Provider: "test"}
-			require.NoError(t, f.UpsertPrice(ctx, "test-site", pFuture, 0))
+			require.NoError(t, f.UpsertPrices(ctx, "test-site", []types.Price{pFuture}, 0))
 
 			latestTime, version, err := f.GetLatestPriceHistoryTime(ctx, "test-site")
 			require.NoError(t, err)
@@ -214,7 +214,7 @@ func TestFirestoreProvider(t *testing.T) {
 			SolarKWH:          5.0,
 			BatteryChargedKWH: 2.0,
 		}
-		require.NoError(t, f.UpsertEnergyHistory(ctx, "test-site", stats, 0))
+		require.NoError(t, f.UpsertEnergyHistories(ctx, "test-site", []types.EnergyStats{stats}, 0))
 
 		t.Run("GetEnergyHistory", func(t *testing.T) {
 			energyHistory, err := f.GetEnergyHistory(ctx, "test-site", now.Add(-1*time.Minute), now.Add(2*time.Hour))
@@ -239,7 +239,7 @@ func TestFirestoreProvider(t *testing.T) {
 				SolarKWH:          1.0,
 				BatteryChargedKWH: 1.0,
 			}
-			require.NoError(t, f.UpsertEnergyHistory(ctx, "test-site", futureStats, 0))
+			require.NoError(t, f.UpsertEnergyHistories(ctx, "test-site", []types.EnergyStats{futureStats}, 0))
 
 			latestTime, version, err := f.GetLatestEnergyHistoryTime(ctx, "test-site")
 			require.NoError(t, err)

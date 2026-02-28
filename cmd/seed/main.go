@@ -214,7 +214,7 @@ func main() {
 		}
 
 		if action.CurrentPrice != nil {
-			if err := s.UpsertPrice(ctx, types.SiteIDNone, *action.CurrentPrice, types.CurrentPriceHistoryVersion); err != nil {
+			if err := s.UpsertPrices(ctx, types.SiteIDNone, []types.Price{*action.CurrentPrice}, types.CurrentPriceHistoryVersion); err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to seed price", "error", err)
 				os.Exit(1)
 			}
@@ -256,7 +256,7 @@ func main() {
 			eStat.GridExportKWH = -stat.GridKW
 		}
 
-		if err := s.UpsertEnergyHistory(ctx, types.SiteIDNone, eStat, types.CurrentEnergyStatsVersion); err != nil {
+		if err := s.UpsertEnergyHistories(ctx, types.SiteIDNone, []types.EnergyStats{eStat}, types.CurrentEnergyStatsVersion); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to seed energy stats", "error", err)
 			os.Exit(1)
 		}

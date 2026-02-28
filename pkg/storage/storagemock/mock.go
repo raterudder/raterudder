@@ -29,8 +29,8 @@ func (m *MockDatabase) SetSettings(ctx context.Context, siteID string, settings 
 	return args.Error(0)
 }
 
-func (m *MockDatabase) UpsertPrice(ctx context.Context, siteID string, price types.Price, version int) error {
-	args := m.Called(ctx, siteID, price, version)
+func (m *MockDatabase) UpsertPrices(ctx context.Context, siteID string, prices []types.Price, version int) error {
+	args := m.Called(ctx, siteID, prices, version)
 	return args.Error(0)
 }
 
@@ -39,7 +39,7 @@ func (m *MockDatabase) InsertAction(ctx context.Context, siteID string, action t
 	return args.Error(0)
 }
 
-func (m *MockDatabase) UpsertEnergyHistory(ctx context.Context, siteID string, stats types.EnergyStats, version int) error {
+func (m *MockDatabase) UpsertEnergyHistories(ctx context.Context, siteID string, stats []types.EnergyStats, version int) error {
 	args := m.Called(ctx, siteID, stats, version)
 	return args.Error(0)
 }
