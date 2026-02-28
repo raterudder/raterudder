@@ -227,14 +227,21 @@
   }
 }
 
+.hide-on-desktop {
+  display: none;
+}
+
 /* Additional rules for mobile */
 @media (max-width: 768px) {
   .hide-on-mobile {
     display: none;
   }
+  .hide-on-desktop {
+    display: inline;
+  }
   .login-link {
     white-space: nowrap;
-    padding: 0.4rem 0.8rem;
+    padding: 0.4rem 0.75rem;
     font-size: 0.85rem;
   }
 }
