@@ -28,7 +28,7 @@ describe('Header Component', () => {
 
         expect(screen.getByText('RateRudder')).toBeInTheDocument();
         expect(screen.queryByText('Dashboard')).not.toBeInTheDocument();
-        expect(screen.getByText('Log In / Sign Up')).toBeInTheDocument();
+        expect(screen.getByText(/Log In/)).toBeInTheDocument();
     });
 
     it('shows nav links when logged in on dashboard', () => {

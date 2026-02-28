@@ -226,3 +226,15 @@
     display: block;
   }
 }
+
+/* Additional rules for mobile */
+@media (max-width: 768px) {
+  .hide-on-mobile {
+    display: none;
+  }
+  .login-link {
+    white-space: nowrap;
+    padding: 0.4rem 0.8rem;
+    font-size: 0.85rem;
+  }
+}

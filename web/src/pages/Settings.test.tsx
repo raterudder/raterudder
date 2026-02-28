@@ -23,7 +23,7 @@ vi.mock('@react-oauth/google', () => ({
 const navigateToSettings = async () => {
     (fetchAuthStatus as any).mockResolvedValue({ ...defaultAuthStatus });
     render(<App />);
-    fireEvent.click(screen.getByText('Log In / Sign Up'));
+    fireEvent.click(screen.getByText(/Log In/));
     await waitFor(() => expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument());
     fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
     await screen.findByRole('heading', { name: /Settings/i });
@@ -44,7 +44,7 @@ describe('App & Settings', () => {
         render(<App />);
 
         // On LandingPage, click Login link in header
-        fireEvent.click(screen.getByText('Log In / Sign Up'));
+        fireEvent.click(screen.getByText(/Log In/));
 
         await waitFor(() => {
             expect(screen.getByText('Google Sign In')).toBeInTheDocument();
@@ -63,7 +63,7 @@ describe('App & Settings', () => {
         (login as any).mockResolvedValue(undefined);
 
         render(<App />);
-        fireEvent.click(screen.getByText('Log In / Sign Up'));
+        fireEvent.click(screen.getByText(/Log In/));
 
         await waitFor(() => {
             expect(screen.getByText('Google Sign In')).toBeInTheDocument();
@@ -81,7 +81,7 @@ describe('App & Settings', () => {
         (logout as any).mockResolvedValue(undefined);
 
         render(<App />);
-        fireEvent.click(screen.getByText('Log In / Sign Up'));
+        fireEvent.click(screen.getByText(/Log In/));
 
         await waitFor(() => {
             expect(screen.getByText('Log Out')).toBeInTheDocument();
@@ -98,7 +98,7 @@ describe('App & Settings', () => {
         (fetchAuthStatus as any).mockResolvedValue({ ...defaultAuthStatus });
 
         render(<App />);
-        fireEvent.click(screen.getByText('Log In / Sign Up'));
+        fireEvent.click(screen.getByText(/Log In/));
 
         await waitFor(() => {
             expect(screen.getByText('Settings')).toBeInTheDocument();

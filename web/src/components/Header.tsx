@@ -86,7 +86,9 @@ const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSite
                         {loggedIn ? (
                             <button onClick={() => { onLogout(); setIsMenuOpen(false); }} className="logout-link">Log Out</button>
                         ) : (
-                            <Link to="/login" className="login-link" onClick={() => setIsMenuOpen(false)}>Log In / Sign Up</Link>
+                            <Link to="/login" className="login-link" onClick={() => setIsMenuOpen(false)}>
+                                Log In <span className="hide-on-mobile">/ Sign Up</span>
+                            </Link>
                         )}
                     </div>
                 </div>
