@@ -169,13 +169,6 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 						}
 					} else {
 						userFound = true
-						// TODO: remove this after migration is done
-						if len(user.Sites) == 0 && len(user.SiteIDs) > 0 {
-							user.Sites = make([]types.UserSite, len(user.SiteIDs))
-							for i, siteID := range user.SiteIDs {
-								user.Sites[i] = types.UserSite{ID: siteID}
-							}
-						}
 						// fill in default siteID if the user only has 1 site
 						if siteID == "" && len(user.Sites) == 1 {
 							siteID = user.Sites[0].ID
