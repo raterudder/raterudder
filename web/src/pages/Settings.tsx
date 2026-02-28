@@ -520,6 +520,10 @@ const Settings = ({ siteID }: { siteID?: string }) => {
 
 
 
+                        <div className="section-header">
+                            <h3>Automation Overrides</h3>
+                        </div>
+
                         <Field.Root className="form-group">
                             <Field.Label htmlFor="alwaysChargeUnder">Always Charge Below ($/kWh)</Field.Label>
                             <Input
