@@ -261,6 +261,14 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
                             </p>
                         </div>
                     )}
+                    {settings && settings.essAuthStatus && settings.essAuthStatus.consecutiveFailures >= 3 && (
+                        <div className="banner warning-banner">
+                            <p>
+                                <span><strong>Warning:</strong> Energy Storage System authentication failed {settings.essAuthStatus.consecutiveFailures} time(s).{' '}
+                                <Link href="/settings">Update your credentials in Settings</Link> to ensure automation continues.</span>
+                            </p>
+                        </div>
+                    )}
                     {siteID !== 'ALL' && isToday && latestAction && (
                         <CurrentStatus action={latestAction} />
                     )}
