@@ -1,6 +1,7 @@
 Tests
 - go test ./folder/subfolder -name "TestFunctionName" -v
 - npm test path/to/test.test.tsx
+- Start the Firestore emulator for tests: `npx firebase-tools emulators:start --only firestore --project demo-test`
 - When testing Go HTTP handlers that use `authMiddleware`, `bypassAuth` is usually false. Use `setupOIDCTest(t)` and `generateTestToken` to create mock OIDC servers and valid JWT tokens, passing them as an `authTokenCookie` in the `httptest.NewRequest`. Do not rely solely on injecting `context.WithValue` as the middleware may overwrite it.
 
 
