@@ -80,6 +80,33 @@ describe('dashboardUtils', () => {
             expect(getReasonText(action)).toContain('exceed battery capacity');
         });
 
+
+        it('handles WaitingToCharge with significant savings', () => {
+            const action = {
+                ...baseAction,
+                reason: ActionReason.WaitingToCharge,
+                currentPrice: { dollarsPerKWH: 0.15, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
+                futurePrice: { dollarsPerKWH: 0.05, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+            };
+            const text = getReasonText(action);
+            expect(text).toContain('A cheaper charging window is coming up');
+            expect(text).toContain('savings: $ 0.100/kWh');
+        });
+
+        it('handles WaitingToCharge with < $0.01 savings', () => {
+            const action = {
+                ...baseAction,
+                reason: ActionReason.WaitingToCharge,
+                currentPrice: { dollarsPerKWH: 0.092, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
+                futurePrice: { dollarsPerKWH: 0.091, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+            };
+            const text = getReasonText(action);
+            expect(text).toContain('A charging window is coming up which is similar in price or cheaper than now');
+            expect(text).not.toContain('savings:');
+            expect(text).not.toContain('$ 0.091');
+            expect(text).not.toContain('$ 0.092');
+        });
+
         it('appends NoExport suffix for arbitrage', () => {
             const action = {
                 ...baseAction,

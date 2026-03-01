@@ -128,12 +128,21 @@ export const getReasonText = (action: Action): string => {
             return parts.concat(suffixParts).join(' ');
         }
         case ActionReason.WaitingToCharge: {
-            const delta = nowCost !== null && futureCost !== null ? futureCost - nowCost : null;
-            const parts = [
-                `A cheaper charging window is coming up${futureCostStr ? ` at ${futureCostStr}` : ''} which is cheaper than now (${nowCostStr}).`,
-                `Holding off charging the batteries until then.`,
-            ];
-            if (delta !== null) parts.push(`Estimated savings: ${formatPrice(delta)}/kWh.`);
+            const delta = nowCost !== null && futureCost !== null ? nowCost - futureCost : null;
+
+            let parts: string[] = [];
+            if (delta !== null && delta < 0.01) {
+                parts = [
+                    `A charging window is coming up which is similar in price or cheaper than now.`,
+                    `Holding off charging the batteries until then.`,
+                ];
+            } else {
+                parts = [
+                    `A cheaper charging window is coming up${futureCostStr ? ` at ${futureCostStr}` : ''} which is cheaper than now (${nowCostStr}).`,
+                    `Holding off charging the batteries until then.`,
+                ];
+                if (delta !== null) parts.push(`Estimated savings: ${formatPrice(delta)}/kWh.`);
+            }
             return parts.concat(suffixParts).join(' ');
         }
         case ActionReason.ChargeSurvivePeak: {
