@@ -209,7 +209,8 @@ func (s *Server) setupHandler() http.Handler {
 	apiMux.HandleFunc("GET /api/list/feedback", s.handleListFeedback)
 
 	mux := http.NewServeMux()
-	mux.Handle("/api/", s.authMiddleware(apiMux))
+	// limit request body to 1MB to prevent DoS
+	mux.Handle("/api/", http.MaxBytesHandler(s.authMiddleware(apiMux), 1048576))
 
 	// serve the web frontend, either from the embedded filesystem or from the dev server
 	if s.devProxy != "" {

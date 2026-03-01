@@ -36,8 +36,6 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			// read body to find SiteID
 			var bodyBytes []byte
 			if r.Body != nil {
-				// Limit body size to 1MB to prevent DoS
-				r.Body = http.MaxBytesReader(w, r.Body, 1048576)
 				var err error
 				bodyBytes, err = io.ReadAll(r.Body)
 				if err != nil {
