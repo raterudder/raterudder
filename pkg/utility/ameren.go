@@ -104,7 +104,7 @@ func (c *BaseAmerenSmart) GetConfirmedPrices(ctx context.Context, start, end tim
 		}
 
 		for _, p := range prices {
-			if !p.TSStart.Before(start) && p.TSEnd.Before(end) {
+			if !p.TSStart.Before(start) && p.TSStart.Before(end) {
 				confirmed = append(confirmed, p)
 			}
 		}
