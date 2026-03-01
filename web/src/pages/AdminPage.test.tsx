@@ -50,7 +50,7 @@ describe('AdminPage', () => {
                 userID: 'user1',
                 sentiment: 'happy',
                 comment: 'Test comment',
-                time: '2025-01-01T12:00:00Z',
+                timestamp: '2025-01-01T12:00:00Z',
                 extra: { 'test': 'data' }
             }
         ];

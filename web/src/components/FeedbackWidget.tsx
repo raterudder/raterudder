@@ -35,8 +35,7 @@ const FeedbackWidget: React.FC<FeedbackWidgetProps> = ({ siteID }) => {
 
         const extra = {
             pathname: window.location.pathname || location,
-            userAgent: navigator.userAgent,
-            timestamp: new Date().toISOString()
+            userAgent: navigator.userAgent
         };
 
         try {

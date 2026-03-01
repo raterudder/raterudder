@@ -63,59 +63,60 @@ func TestHandleListFeedback(t *testing.T) {
 	ctx = context.WithValue(ctx, userContextKey, types.User{ID: "admin1", Email: "admin@example.com"})
 	req = req.WithContext(ctx)
 
-	expectedFeedback := []types.Feedback{
-		{
-			ID:        "fb1",
-			Sentiment: "happy",
-			Comment:   "Good",
-			SiteID:    "site1",
-			UserID:    "user1",
-			Time:      time.Now(),
-		},
-	}
+	t.Run("Authorized", func(t *testing.T) {
+		expectedFeedback := []types.Feedback{
+			{
+				ID:        "fb1",
+				Sentiment: "happy",
+				Comment:   "Good",
+				SiteID:    "site1",
+				UserID:    "user1",
+				Timestamp: time.Now(),
+			},
+		}
 
-	mockDB.On("ListFeedback", mock.Anything, 50, "").Return(expectedFeedback, nil)
+		mockDB.On("ListFeedback", mock.Anything, 50, "").Return(expectedFeedback, nil).Once()
 
-	rr := httptest.NewRecorder()
-	handler := http.HandlerFunc(server.handleListFeedback)
-	handler.ServeHTTP(rr, req)
+		rr := httptest.NewRecorder()
+		handler := http.HandlerFunc(server.handleListFeedback)
+		handler.ServeHTTP(rr, req)
 
-	assert.Equal(t, http.StatusOK, rr.Code)
+		assert.Equal(t, http.StatusOK, rr.Code)
 
-	var resp []types.Feedback
-	err := json.Unmarshal(rr.Body.Bytes(), &resp)
-	assert.NoError(t, err)
-	assert.Len(t, resp, 1)
-	assert.Equal(t, "fb1", resp[0].ID)
+		var resp []types.Feedback
+		err := json.Unmarshal(rr.Body.Bytes(), &resp)
+		assert.NoError(t, err)
+		assert.Len(t, resp, 1)
+		assert.Equal(t, "fb1", resp[0].ID)
+		mockDB.AssertExpectations(t)
+	})
 
-	mockDB.AssertExpectations(t)
-}
+	t.Run("Pagination", func(t *testing.T) {
+		reqPagination, _ := http.NewRequest("GET", "/api/list/feedback?limit=10&lastFeedbackID=fb1", nil)
+		ctxPagination := reqPagination.Context()
+		ctxPagination = context.WithValue(ctxPagination, userContextKey, types.User{ID: "admin1", Email: "admin@example.com"})
+		reqPagination = reqPagination.WithContext(ctxPagination)
 
-func TestHandleListFeedback_Unauthorized(t *testing.T) {
-	mockDB := new(storagemock.MockDatabase)
-	server := &Server{
-		storage:     mockDB,
-		adminEmails: []string{"admin@example.com"},
-	}
+		mockDB.On("ListFeedback", mock.Anything, 10, "fb1").Return([]types.Feedback{}, nil).Once()
 
-	req, _ := http.NewRequest("GET", "/api/list/feedback", nil)
+		rrPagination := httptest.NewRecorder()
+		handler := http.HandlerFunc(server.handleListFeedback)
+		handler.ServeHTTP(rrPagination, reqPagination)
 
-	ctx := req.Context()
-	ctx = context.WithValue(ctx, userContextKey, types.User{ID: "user1", Email: "user@example.com"})
-	req = req.WithContext(ctx)
+		assert.Equal(t, http.StatusOK, rrPagination.Code)
+		mockDB.AssertExpectations(t)
+	})
 
-	rr := httptest.NewRecorder()
-	handler := http.HandlerFunc(server.handleListFeedback)
-	handler.ServeHTTP(rr, req)
+	t.Run("Unauthorized", func(t *testing.T) {
+		reqUnauth, _ := http.NewRequest("GET", "/api/list/feedback", nil)
+		ctxUnauth := reqUnauth.Context()
+		ctxUnauth = context.WithValue(ctxUnauth, userContextKey, types.User{ID: "user1", Email: "user@example.com"})
+		reqUnauth = reqUnauth.WithContext(ctxUnauth)
 
-	assert.Equal(t, http.StatusForbidden, rr.Code)
-}
+		rrUnauth := httptest.NewRecorder()
+		handler := http.HandlerFunc(server.handleListFeedback)
+		handler.ServeHTTP(rrUnauth, reqUnauth)
 
-func TestIsMultiSiteAdmin(t *testing.T) {
-	server := &Server{
-		adminEmails: []string{"admin@example.com"},
-	}
-
-	assert.True(t, server.isMultiSiteAdmin(types.User{Email: "admin@example.com"}))
-	assert.False(t, server.isMultiSiteAdmin(types.User{Email: "user@example.com"}))
+		assert.Equal(t, http.StatusForbidden, rrUnauth.Code)
+	})
 }

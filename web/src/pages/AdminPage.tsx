@@ -75,13 +75,11 @@ const AdminPage: React.FC = () => {
             <Separator className="admin-separator" />
 
             <div className="admin-list">
-                {feedbacks.length === 0 ? (
-                    <div style={{ color: 'var(--text-muted-color)' }}>No feedback found.</div>
-                ) : (
+                {feedbacks.length > 0 && (
                     feedbacks.map((fb) => (
                         <div key={fb.id} className="card admin-site-card" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '0.5rem' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', fontSize: '0.875rem', color: 'var(--text-muted-color)' }}>
-                                <span>{new Date(fb.time).toLocaleString()}</span>
+                                <span>{new Date(fb.timestamp).toLocaleString()}</span>
                                 <span>Site: {fb.siteID} | User: {fb.userID}</span>
                             </div>
                             <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>

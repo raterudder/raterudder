@@ -436,7 +436,7 @@ func TestFirestore_Feedback(t *testing.T) {
 		UserID:    "user1",
 		Sentiment: "happy",
 		Comment:   "Great job!",
-		Time:      time.Date(2023, 10, 27, 10, 0, 0, 0, time.UTC),
+		Timestamp: time.Date(2023, 10, 27, 10, 0, 0, 0, time.UTC),
 	}
 	fb2 := types.Feedback{
 		ID:        "2023-10-27T11:00:00Z_site1",
@@ -444,7 +444,7 @@ func TestFirestore_Feedback(t *testing.T) {
 		UserID:    "user2",
 		Sentiment: "sad",
 		Comment:   "Needs work.",
-		Time:      time.Date(2023, 10, 27, 11, 0, 0, 0, time.UTC),
+		Timestamp: time.Date(2023, 10, 27, 11, 0, 0, 0, time.UTC),
 	}
 	fb3 := types.Feedback{
 		ID:        "2023-10-27T12:00:00Z_site1",
@@ -452,7 +452,7 @@ func TestFirestore_Feedback(t *testing.T) {
 		UserID:    "user3",
 		Sentiment: "neutral",
 		Comment:   "It's okay.",
-		Time:      time.Date(2023, 10, 27, 12, 0, 0, 0, time.UTC),
+		Timestamp: time.Date(2023, 10, 27, 12, 0, 0, 0, time.UTC),
 	}
 
 	err = provider.InsertFeedback(ctx, fb1)

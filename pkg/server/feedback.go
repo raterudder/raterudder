@@ -47,7 +47,7 @@ func (s *Server) handleSubmitFeedback(w http.ResponseWriter, r *http.Request) {
 		SiteID:    siteID,
 		UserID:    user.ID,
 		Extra:     req.Extra,
-		Time:      now,
+		Timestamp: now,
 	}
 
 	if err := s.storage.InsertFeedback(ctx, feedback); err != nil {

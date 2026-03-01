@@ -423,7 +423,7 @@ export interface Feedback {
     siteID: string;
     userID: string;
     extra: Record<string, string>;
-    time: string;
+    timestamp: string;
 }
 
 export async function submitFeedback(siteID: string, sentiment: string, comment: string, extra: Record<string, string>): Promise<void> {

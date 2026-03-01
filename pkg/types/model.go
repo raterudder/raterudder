@@ -172,5 +172,5 @@ type Feedback struct {
 	SiteID    string            `json:"siteID"`
 	UserID    string            `json:"userID"`
 	Extra     map[string]string `json:"extra"`
-	Time      time.Time         `json:"time"`
+	Timestamp time.Time         `json:"timestamp"`
 }
