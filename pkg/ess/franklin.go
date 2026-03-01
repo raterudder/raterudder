@@ -519,7 +519,7 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		alarms = append(alarms, types.SystemAlarm{
 			Name:        alarm.Name,
 			Description: alarm.Explanation,
-			Time:        t,
+			Timestamp:   t,
 			Code:        alarm.AlarmCode,
 		})
 	}

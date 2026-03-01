@@ -108,7 +108,7 @@ type EnergyStats struct {
 type SystemAlarm struct {
 	Name        string    `json:"name"`
 	Description string    `json:"description"`
-	Time        time.Time `json:"time"`
+	Timestamp   time.Time `json:"timestamp"`
 	Code        string    `json:"code"`
 }
 

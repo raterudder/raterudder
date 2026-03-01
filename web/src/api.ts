@@ -1,7 +1,7 @@
 export interface SystemAlarm {
     name: string;
     description: string;
-    time: string;
+    timestamp: string;
     code: string;
 }
 
