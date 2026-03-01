@@ -9,10 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/raterudder/raterudder/pkg/storage/storagemock"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 func TestHandleSubmitFeedback(t *testing.T) {
@@ -118,5 +120,83 @@ func TestHandleListFeedback(t *testing.T) {
 		handler.ServeHTTP(rrUnauth, reqUnauth)
 
 		assert.Equal(t, http.StatusForbidden, rrUnauth.Code)
+	})
+
+	t.Run("Through Auth Middleware", func(t *testing.T) {
+		srv, priv := setupOIDCTest(t)
+		defer srv.Close()
+		provider, err := oidc.NewProvider(context.Background(), srv.URL)
+		require.NoError(t, err)
+
+		validToken := generateTestToken(t, srv.URL, priv, "admin@example.com", "admin1")
+
+		mockDBWithAuth := new(storagemock.MockDatabase)
+		serverWithAuth := &Server{
+			storage:     mockDBWithAuth,
+			adminEmails: []string{"admin@example.com"},
+			singleSite:  false,
+			oidcAudiences: map[string]string{
+				"google": "test-audience",
+			},
+			oidcVerifiers: map[string]tokenVerifier{
+				"google": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
+			},
+		}
+
+		mockDBWithAuth.On("GetUser", mock.Anything, "admin1").Return(types.User{
+			ID:    "admin1",
+			Email: "admin@example.com",
+		}, nil).Once()
+
+		mockDBWithAuth.On("ListFeedback", mock.Anything, 50, "").Return([]types.Feedback{}, nil).Once()
+
+		reqAuth, _ := http.NewRequest("GET", "/api/list/feedback", nil)
+		reqAuth.AddCookie(&http.Cookie{Name: authTokenCookie, Value: validToken})
+
+		rrAuth := httptest.NewRecorder()
+		handler := serverWithAuth.authMiddleware(http.HandlerFunc(serverWithAuth.handleListFeedback))
+		handler.ServeHTTP(rrAuth, reqAuth)
+
+		assert.Equal(t, http.StatusOK, rrAuth.Code)
+		mockDBWithAuth.AssertExpectations(t)
+	})
+
+	t.Run("Through Auth Middleware - Pagination", func(t *testing.T) {
+		srv, priv := setupOIDCTest(t)
+		defer srv.Close()
+		provider, err := oidc.NewProvider(context.Background(), srv.URL)
+		require.NoError(t, err)
+
+		validToken := generateTestToken(t, srv.URL, priv, "admin@example.com", "admin1")
+
+		mockDBWithAuth := new(storagemock.MockDatabase)
+		serverWithAuth := &Server{
+			storage:     mockDBWithAuth,
+			adminEmails: []string{"admin@example.com"},
+			singleSite:  false,
+			oidcAudiences: map[string]string{
+				"google": "test-audience",
+			},
+			oidcVerifiers: map[string]tokenVerifier{
+				"google": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
+			},
+		}
+
+		mockDBWithAuth.On("GetUser", mock.Anything, "admin1").Return(types.User{
+			ID:    "admin1",
+			Email: "admin@example.com",
+		}, nil).Once()
+
+		mockDBWithAuth.On("ListFeedback", mock.Anything, 20, "fb5").Return([]types.Feedback{}, nil).Once()
+
+		reqAuth, _ := http.NewRequest("GET", "/api/list/feedback?limit=20&lastFeedbackID=fb5", nil)
+		reqAuth.AddCookie(&http.Cookie{Name: authTokenCookie, Value: validToken})
+
+		rrAuth := httptest.NewRecorder()
+		handler := serverWithAuth.authMiddleware(http.HandlerFunc(serverWithAuth.handleListFeedback))
+		handler.ServeHTTP(rrAuth, reqAuth)
+
+		assert.Equal(t, http.StatusOK, rrAuth.Code)
+		mockDBWithAuth.AssertExpectations(t)
 	})
 }

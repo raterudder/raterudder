@@ -23,10 +23,10 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		ctx := r.Context()
 		ctx = log.With(ctx, log.Ctx(ctx).With(slog.String("reqPath", r.URL.Path)))
 
-		allowNoLogin := r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/join"
+		allowNoLogin := r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/join" || r.URL.Path == "/api/auth/logout"
 		ignoreUserNotFound := r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/join" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/logout"
 		isUpdatePath := r.URL.Path == "/api/update" || r.URL.Path == "/api/updateSites"
-		ignoreSiteID := r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/logout" || r.URL.Path == "/api/list/sites"
+		ignoreSiteID := r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/logout" || r.URL.Path == "/api/list/sites" || r.URL.Path == "/api/list/feedback"
 
 		// extract SiteID
 		var siteID string
@@ -126,12 +126,15 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 					emailRet, subjectRet, _, err := s.authenticateToken(ctx, authCookie.Value, "")
 					if err != nil {
 						log.Ctx(ctx).ErrorContext(ctx, "auth token validation failed", slog.Any("error", err))
-						writeJSONError(w, "invalid auth token", http.StatusBadRequest)
-						return
+						if !allowNoLogin {
+							writeJSONError(w, "invalid auth token", http.StatusBadRequest)
+							return
+						}
+					} else {
+						email = emailRet
+						userID = subjectRet
+						authSuccess = true
 					}
-					email = emailRet
-					userID = subjectRet
-					authSuccess = true
 				} else if !allowNoLogin {
 					log.Ctx(ctx).WarnContext(ctx, "no auth cookie found")
 					writeJSONError(w, "missing auth cookie", http.StatusBadRequest)

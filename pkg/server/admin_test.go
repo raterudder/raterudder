@@ -99,4 +99,30 @@ func TestAdminListSites(t *testing.T) {
 		}
 	})
 
+	t.Run("Through Auth Middleware", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/list/sites", nil)
+		req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: validAdminToken})
+
+		mockStorage.On("GetUser", mock.Anything, "admin1").Return(types.User{
+			ID:    "admin1",
+			Email: "admin@example.com",
+		}, nil).Once()
+
+		rr := httptest.NewRecorder()
+		authHandler := srv.authMiddleware(http.HandlerFunc(srv.handleListSites))
+		authHandler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+
+		var adminSites []AdminSite
+		err := json.NewDecoder(rr.Body).Decode(&adminSites)
+		require.NoError(t, err)
+
+		if assert.Len(t, adminSites, 2) {
+			siteIDs := []string{adminSites[0].ID, adminSites[1].ID}
+			assert.Contains(t, siteIDs, "site1")
+			assert.Contains(t, siteIDs, "site2")
+		}
+		mockStorage.AssertExpectations(t)
+	})
 }
