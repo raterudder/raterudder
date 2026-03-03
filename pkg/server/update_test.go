@@ -996,108 +996,170 @@ func TestUpdateEnergyHistory(t *testing.T) {
 }
 
 func TestUpdateWeatherHistory(t *testing.T) {
-	mockS := &mockStorage{}
-	mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil)
-	mockS.On("UpsertWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	t.Run("Update Missing History", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil)
+		mockS.On("UpsertWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"daily":{"time":["2026-03-01","2026-03-02","2026-03-03"],"sunrise":["2026-03-01T06:00","2026-03-02T06:00","2026-03-03T06:00"],"sunset":["2026-03-01T18:00","2026-03-02T18:00","2026-03-03T18:00"]},"hourly":{"time":["2026-03-01T00:00","2026-03-01T01:00"],"shortwave_radiation":[0,0]}}`))
-	}))
-	defer ts.Close()
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"daily":{"time":["2026-03-01","2026-03-02","2026-03-03"],"sunrise":["2026-03-01T06:00","2026-03-02T06:00","2026-03-03T06:00"],"sunset":["2026-03-01T18:00","2026-03-02T18:00","2026-03-03T18:00"]},"hourly":{"time":["2026-03-01T00:00","2026-03-01T01:00"],"shortwave_radiation":[0,0]}}`))
+		}))
+		defer ts.Close()
 
-	weatherSvc := weather.NewService(weather.Config{
-		ForecastURL: ts.URL,
-		HTTPClient:  ts.Client(),
+		weatherSvc := weather.NewService(weather.Config{
+			ForecastURL: ts.URL,
+			HTTPClient:  ts.Client(),
+		})
+
+		srv := &Server{
+			storage: mockS,
+			weather: weatherSvc,
+		}
+
+		loc := types.SiteLocation{
+			PostalCode: "90210",
+			CountryCode: "US",
+			Lat: 34.09,
+			Long: -118.4,
+			TimeZone: "America/Los_Angeles",
+		}
+
+		err := srv.updateWeatherHistory(context.Background(), "test-site", loc, nil)
+		assert.NoError(t, err)
+
+		mockS.AssertExpectations(t)
 	})
 
-	loc := types.SiteLocation{
-		PostalCode: "90210",
-		CountryCode: "US",
-		Lat: 34.09,
-		Long: -118.4,
-		TimeZone: "America/Los_Angeles",
-	}
+	t.Run("Does Not Update Before Sunset Plus Two Hours", func(t *testing.T) {
+		mockS := &mockStorage{}
 
-	err := updateWeatherHistory(context.Background(), mockS, weatherSvc, "test-site", loc)
-	assert.NoError(t, err)
+		now := time.Now().UTC()
+		// Set sunset to 1 hour ago
+		sunsetTime := now.Add(-1 * time.Hour)
 
-	mockS.AssertExpectations(t)
-}
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{
+			{
+				TSSunset: sunsetTime,
+			},
+		}, nil)
 
-func TestUpdateWeatherHistory_DoesNotUpdateBeforeSunsetPlusTwoHours(t *testing.T) {
-	mockS := &mockStorage{}
+		srv := &Server{
+			storage: mockS,
+			weather: weather.Configured(),
+		}
 
-	now := time.Now().UTC()
-	// Set sunset to 1 hour ago
-	sunsetTime := now.Add(-1 * time.Hour)
+		loc := types.SiteLocation{
+			PostalCode: "90210",
+			CountryCode: "US",
+			Lat: 34.09,
+			Long: -118.4,
+			TimeZone: "America/Los_Angeles",
+		}
 
-	mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{
-		{
-			TSSunset: sunsetTime,
-		},
-	}, nil)
+		err := srv.updateWeatherHistory(context.Background(), "test-site", loc, nil)
+		assert.NoError(t, err)
 
-	weatherSvc := weather.Configured()
-
-	loc := types.SiteLocation{
-		PostalCode: "90210",
-		CountryCode: "US",
-		Lat: 34.09,
-		Long: -118.4,
-		TimeZone: "America/Los_Angeles",
-	}
-
-	err := updateWeatherHistory(context.Background(), mockS, weatherSvc, "test-site", loc)
-	assert.NoError(t, err)
-
-	// Since sunset was 1 hour ago, sunset + 2 hours hasn't happened yet.
-	// It should NOT call UpsertWeather.
-	mockS.AssertExpectations(t)
-	mockS.AssertNotCalled(t, "UpsertWeather")
-}
-
-func TestUpdateWeatherHistory_UpdatesAfterSunsetPlusTwoHours(t *testing.T) {
-	mockS := &mockStorage{}
-
-	now := time.Now().UTC()
-	// Set sunset to 3 hours ago
-	sunsetTime := now.Add(-3 * time.Hour)
-	// Last updated 4 hours ago
-	updatedTime := now.Add(-4 * time.Hour)
-
-	mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{
-		{
-			TSSunset: sunsetTime,
-			TSUpdated: updatedTime,
-		},
-	}, nil)
-
-	mockS.On("UpsertWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"daily":{"time":["2026-03-01","2026-03-02","2026-03-03"],"sunrise":["2026-03-01T06:00","2026-03-02T06:00","2026-03-03T06:00"],"sunset":["2026-03-01T18:00","2026-03-02T18:00","2026-03-03T18:00"]},"hourly":{"time":["2026-03-01T00:00","2026-03-01T01:00"],"shortwave_radiation":[0,0]}}`))
-	}))
-	defer ts.Close()
-
-	weatherSvc := weather.NewService(weather.Config{
-		ForecastURL: ts.URL,
-		HTTPClient:  ts.Client(),
+		mockS.AssertExpectations(t)
+		mockS.AssertNotCalled(t, "UpsertWeather")
 	})
 
-	loc := types.SiteLocation{
-		PostalCode: "90210",
-		CountryCode: "US",
-		Lat: 34.09,
-		Long: -118.4,
-		TimeZone: "America/Los_Angeles",
-	}
+	t.Run("Updates After Sunset Plus Two Hours", func(t *testing.T) {
+		mockS := &mockStorage{}
 
-	err := updateWeatherHistory(context.Background(), mockS, weatherSvc, "test-site", loc)
-	assert.NoError(t, err)
+		now := time.Now().UTC()
+		// Set sunset to 3 hours ago
+		sunsetTime := now.Add(-3 * time.Hour)
+		// Last updated 4 hours ago
+		updatedTime := now.Add(-4 * time.Hour)
 
-	// Since sunset was 3 hours ago, sunset + 2 hours has passed.
-	// It SHOULD call UpsertWeather.
-	mockS.AssertExpectations(t)
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{
+			{
+				TSSunset: sunsetTime,
+				TSUpdated: updatedTime,
+			},
+		}, nil)
+
+		mockS.On("UpsertWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"daily":{"time":["2026-03-01","2026-03-02","2026-03-03"],"sunrise":["2026-03-01T06:00","2026-03-02T06:00","2026-03-03T06:00"],"sunset":["2026-03-01T18:00","2026-03-02T18:00","2026-03-03T18:00"]},"hourly":{"time":["2026-03-01T00:00","2026-03-01T01:00"],"shortwave_radiation":[0,0]}}`))
+		}))
+		defer ts.Close()
+
+		weatherSvc := weather.NewService(weather.Config{
+			ForecastURL: ts.URL,
+			HTTPClient:  ts.Client(),
+		})
+
+		srv := &Server{
+			storage: mockS,
+			weather: weatherSvc,
+		}
+
+		loc := types.SiteLocation{
+			PostalCode: "90210",
+			CountryCode: "US",
+			Lat: 34.09,
+			Long: -118.4,
+			TimeZone: "America/Los_Angeles",
+		}
+
+		err := srv.updateWeatherHistory(context.Background(), "test-site", loc, nil)
+		assert.NoError(t, err)
+
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("Updates Existing History with SolarKWH without Fetching API", func(t *testing.T) {
+		mockS := &mockStorage{}
+
+		now := time.Now().UTC()
+		// Set sunset to 1 hour ago so we don't trigger API fetch
+		sunsetTime := now.Add(-1 * time.Hour)
+
+		// Create a recent hour inside the weather actuals
+		recentHour := now.Truncate(time.Hour).Add(-1 * time.Hour)
+
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{
+			{
+				TSSunset: sunsetTime,
+				TSUpdated: now, // Recently updated
+				ActualHours: []types.HourlyWeather{
+					{TSHourStart: recentHour, GHI: 100},
+				},
+			},
+		}, nil)
+
+		// The upsert should be called with the mapped solar kwh
+		mockS.On("UpsertWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			weathers := args.Get(2).([]types.Weather)
+			require.Len(t, weathers, 1)
+			require.Len(t, weathers[0].ActualHours, 1)
+			assert.Equal(t, 2.5, weathers[0].ActualHours[0].SolarKWH)
+		}).Return(nil)
+
+		srv := &Server{
+			storage: mockS,
+			weather: weather.Configured(),
+		}
+
+		loc := types.SiteLocation{
+			PostalCode: "90210",
+			CountryCode: "US",
+			Lat: 34.09,
+			Long: -118.4,
+			TimeZone: "America/Los_Angeles",
+		}
+
+		energyHist := []types.EnergyStats{
+			{TSHourStart: recentHour, SolarKWH: 2.5},
+		}
+
+		err := srv.updateWeatherHistory(context.Background(), "test-site", loc, energyHist)
+		assert.NoError(t, err)
+
+		mockS.AssertExpectations(t)
+	})
 }

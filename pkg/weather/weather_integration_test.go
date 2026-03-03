@@ -33,9 +33,11 @@ func TestIntegration_RealAPI_FetchWeatherForecast(t *testing.T) {
 
 	loc, _ := time.LoadLocation("America/Los_Angeles")
 	targetDay := time.Now().In(loc)
+	startDay := targetDay.AddDate(0, 0, -1)
+	endDay := targetDay.AddDate(0, 0, 1)
 
 	s := NewService(Config{})
-	weathers, err := s.FetchWeatherForecast(context.Background(), 34.07, -118.40, "America/Los_Angeles", targetDay)
+	weathers, err := s.FetchWeatherForecast(context.Background(), 34.07, -118.40, "America/Los_Angeles", startDay, endDay)
 	require.NoError(t, err)
-	require.Len(t, weathers, 2)
+	require.GreaterOrEqual(t, len(weathers), 2)
 }

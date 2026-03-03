@@ -133,6 +133,8 @@ func TestGetLocationData(t *testing.T) {
 func TestFetchWeatherForecast(t *testing.T) {
 	loc, _ := time.LoadLocation("America/Los_Angeles")
 	targetDay := time.Date(2023, 10, 15, 12, 0, 0, 0, loc)
+	startDay := targetDay.AddDate(0, 0, -1)
+	endDay := targetDay.AddDate(0, 0, 1)
 
 	tests := []struct {
 		name       string
@@ -176,7 +178,7 @@ func TestFetchWeatherForecast(t *testing.T) {
 				},
 			},
 			wantErr:   false,
-			wantCount: 2,
+			wantCount: 3,
 		},
 	}
 
@@ -191,10 +193,10 @@ func TestFetchWeatherForecast(t *testing.T) {
 				}))
 				defer ts.Close()
 				s := NewService(Config{ForecastURL: ts.URL + "/v1/forecast", HTTPClient: ts.Client()})
-				res, err = s.FetchWeatherForecast(context.Background(), 34.0, -118.0, tc.timezone, targetDay)
+				res, err = s.FetchWeatherForecast(context.Background(), 34.0, -118.0, tc.timezone, startDay, endDay)
 			} else {
 				s := NewService(Config{})
-				res, err = s.FetchWeatherForecast(context.Background(), 34.0, -118.0, tc.timezone, targetDay)
+				res, err = s.FetchWeatherForecast(context.Background(), 34.0, -118.0, tc.timezone, startDay, endDay)
 			}
 
 			if tc.wantErr {

@@ -12,6 +12,35 @@ import (
 	"github.com/raterudder/raterudder/pkg/types"
 )
 
+// EnergyHistoryRes represents a simplified historical energy stat returned in the forecast.
+type EnergyHistoryRes struct {
+	TSHourStart   time.Time `json:"tsHourStart"`
+	AvgBatterySOC float64   `json:"avgBatterySOC"`
+	SolarKWH      float64   `json:"solarKWH"`
+}
+
+// PriceHistoryRes represents historical pricing returned in the forecast.
+type PriceHistoryRes struct {
+	TSHourStart          time.Time `json:"tsHourStart"`
+	DollarsPerKWH        float64   `json:"dollarsPerKWH"`
+	GridUseDollarsPerKWH float64   `json:"gridUseDollarsPerKWH"`
+}
+
+// WeatherRes represents a simplified historical weather and forecast stat.
+type WeatherRes struct {
+	TSHourStart time.Time `json:"tsHourStart"`
+	ActualGHI   float64   `json:"actualGHI,omitempty"`
+	ForecastGHI float64   `json:"forecastGHI,omitempty"`
+}
+
+// ForecastRes represents the complete response for the forecast endpoint, including histories.
+type ForecastRes struct {
+	Simulation    []controller.SimHour `json:"simulation"`
+	EnergyHistory []EnergyHistoryRes     `json:"energyHistory"`
+	PriceHistory  []PriceHistoryRes      `json:"priceHistory"`
+	Weather       []WeatherRes           `json:"weather"`
+}
+
 func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	siteID := s.getSiteID(r)
@@ -103,24 +132,6 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	type EnergyHistoryRes struct {
-		TSHourStart   time.Time `json:"tsHourStart"`
-		AvgBatterySOC float64   `json:"avgBatterySOC"`
-		SolarKWH      float64   `json:"solarKWH"`
-	}
-
-	type PriceHistoryRes struct {
-		TSHourStart          time.Time `json:"tsHourStart"`
-		DollarsPerKWH        float64   `json:"dollarsPerKWH"`
-		GridUseDollarsPerKWH float64   `json:"gridUseDollarsPerKWH"`
-	}
-
-	type WeatherRes struct {
-		TSHourStart time.Time `json:"tsHourStart"`
-		ActualGHI   float64   `json:"actualGHI"`
-		ForecastGHI float64   `json:"forecastGHI"`
-	}
-
 	var energyRes []EnergyHistoryRes
 	for _, h := range energyHistory24 {
 		avgSoc := (h.MinBatterySOC + h.MaxBatterySOC) / 2
@@ -165,12 +176,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		weatherRes = append(weatherRes, wr)
 	}
 
-	res := struct {
-		Simulation    []controller.SimHour `json:"simulation"`
-		EnergyHistory []EnergyHistoryRes     `json:"energyHistory"`
-		PriceHistory  []PriceHistoryRes      `json:"priceHistory"`
-		Weather       []WeatherRes           `json:"weather"`
-	}{
+	res := ForecastRes{
 		Simulation:    simHours,
 		EnergyHistory: energyRes,
 		PriceHistory:  priceRes,

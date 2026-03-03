@@ -230,7 +230,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 			go func() {
 				log.Ctx(context.Background()).InfoContext(context.Background(), "fetching initial weather for new location")
-				if err := updateWeatherHistory(context.Background(), s.storage, s.weather, siteID, *loc); err != nil {
+				if err := s.updateWeatherHistory(context.Background(), siteID, *loc, nil); err != nil {
 					log.Ctx(context.Background()).ErrorContext(context.Background(), "failed to sync weather history after settings update", slog.Any("error", err))
 				}
 			}()

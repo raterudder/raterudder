@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
 
 	lflag "github.com/levenlabs/go-lflag"
 	"github.com/raterudder/raterudder/pkg/common"
+	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 )
 
@@ -152,24 +154,26 @@ type weatherForecastResponse struct {
 	} `json:"hourly"`
 }
 
-// FetchWeatherForecast fetches the shortwave radiation for the past 24 hours and next 24 hours.
-// Returns a slice of two types.Weather structs (yesterday and tomorrow).
-// The API gets 3 days to cover the requested range safely.
-func (s *Service) FetchWeatherForecast(ctx context.Context, lat, long float64, timezone string, targetDay time.Time) ([]types.Weather, error) {
+// FetchWeatherForecast fetches the shortwave radiation for the specified date range.
+// startDate is inclusive and endDate is exclusive, similar to storage boundaries.
+// Returns a slice of types.Weather structs for each day in the requested range.
+func (s *Service) FetchWeatherForecast(ctx context.Context, lat, long float64, timezone string, startDate, endDate time.Time) ([]types.Weather, error) {
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
 		return nil, fmt.Errorf("invalid timezone: %w", err)
 	}
 
-	// Make sure targetDay is midnight in the target timezone
-	targetMidnight := time.Date(targetDay.Year(), targetDay.Month(), targetDay.Day(), 0, 0, 0, 0, loc)
+	startMidnight := time.Date(startDate.Year(), startDate.Month(), startDate.Day(), 0, 0, 0, 0, loc)
+	// Open-Meteo expects an inclusive end date for its query.
+	// Since our endDate is exclusive, we subtract one day for the API request
+	// if the endDate is exactly midnight.
+	apiEndDate := endDate
+	if endDate.Hour() == 0 && endDate.Minute() == 0 && endDate.Second() == 0 {
+		apiEndDate = endDate.AddDate(0, 0, -1)
+	}
 
-	// Fetch 3 days of data: Target day - 1, Target day, Target day + 1
-	yesterday := targetMidnight.AddDate(0, 0, -1)
-	tomorrow := targetMidnight.AddDate(0, 0, 1)
-
-	startDateStr := yesterday.Format("2006-01-02")
-	endDateStr := tomorrow.Format("2006-01-02")
+	startDateStr := startMidnight.Format("2006-01-02")
+	endDateStr := apiEndDate.Format("2006-01-02")
 
 	u, err := url.Parse(s.ForecastURL)
 	if err != nil {
@@ -208,11 +212,17 @@ func (s *Service) FetchWeatherForecast(ctx context.Context, lat, long float64, t
 		return nil, fmt.Errorf("failed to decode weather response: %w", err)
 	}
 
-	// Parse the response into yesterday and tomorrow types.Weather structs
-	weathers := make([]types.Weather, 0, 2)
+	// Parse the response into daily types.Weather structs
+	var weathers []types.Weather
 	now := time.Now()
 
-	for _, targetTime := range []time.Time{yesterday, tomorrow} {
+	// Build a slice of target days based on the requested range
+	var targetDays []time.Time
+	for t := startMidnight; t.Before(endDate); t = t.AddDate(0, 0, 1) {
+		targetDays = append(targetDays, t)
+	}
+
+	for _, targetTime := range targetDays {
 		targetDateStr := targetTime.Format("2006-01-02")
 
 		w := types.Weather{
@@ -227,10 +237,20 @@ func (s *Service) FetchWeatherForecast(ctx context.Context, lat, long float64, t
 		for i, tStr := range data.Daily.Time {
 			if tStr == targetDateStr {
 				if i < len(data.Daily.Sunrise) {
-					w.TSSunrise, _ = time.ParseInLocation("2006-01-02T15:04", data.Daily.Sunrise[i], loc)
+					t, err := time.ParseInLocation("2006-01-02T15:04", data.Daily.Sunrise[i], loc)
+					if err != nil {
+						log.Ctx(ctx).WarnContext(ctx, "failed to parse sunrise time", slog.Any("error", err), slog.String("time", data.Daily.Sunrise[i]))
+					} else {
+						w.TSSunrise = t
+					}
 				}
 				if i < len(data.Daily.Sunset) {
-					w.TSSunset, _ = time.ParseInLocation("2006-01-02T15:04", data.Daily.Sunset[i], loc)
+					t, err := time.ParseInLocation("2006-01-02T15:04", data.Daily.Sunset[i], loc)
+					if err != nil {
+						log.Ctx(ctx).WarnContext(ctx, "failed to parse sunset time", slog.Any("error", err), slog.String("time", data.Daily.Sunset[i]))
+					} else {
+						w.TSSunset = t
+					}
 				}
 				break
 			}
@@ -240,6 +260,7 @@ func (s *Service) FetchWeatherForecast(ctx context.Context, lat, long float64, t
 		for i, tStr := range data.Hourly.Time {
 			t, err := time.ParseInLocation("2006-01-02T15:04", tStr, loc)
 			if err != nil {
+				log.Ctx(ctx).WarnContext(ctx, "failed to parse hourly time", slog.Any("error", err), slog.String("time", tStr))
 				continue
 			}
 			if t.Year() == targetTime.Year() && t.Month() == targetTime.Month() && t.Day() == targetTime.Day() {

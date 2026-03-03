@@ -386,9 +386,7 @@ func TestSettings(t *testing.T) {
 
 		mockU.AssertExpectations(t)
 	})
-}
 
-func TestUpdateSettingsLocation(t *testing.T) {
 	t.Run("Update Site Location With Postal Code", func(t *testing.T) {
 		mockU := &mockUtility{}
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -422,11 +420,18 @@ func TestUpdateSettingsLocation(t *testing.T) {
 			adminEmails: []string{"test@example.com"},
 		}
 
-		body := `{"postalCode": "90210", "countryCode": "US", "utilityProvider": "test", "ignoreHourUsageOverMultiple": 1.0, "solarTrendRatioMax": 1.0, "solarTrendRatioMin": 0.1}`
-		req := httptest.NewRequest(http.MethodPost, "/api/settings", bytes.NewBufferString(body))
-			ctx := context.WithValue(req.Context(), userContextKey, types.User{Email: "test@example.com", ID: "admin", Admin: true})
-			ctx = context.WithValue(ctx, siteIDContextKey, "test-site")
-			req = req.WithContext(ctx)
+		bodyData := types.Settings{
+			PostalCode: "90210",
+			CountryCode: "US",
+			UtilityProvider: "test",
+			IgnoreHourUsageOverMultiple: 1.0,
+			SolarTrendRatioMax: 1.0,
+		}
+		body, _ := json.Marshal(bodyData)
+		req := httptest.NewRequest(http.MethodPost, "/api/settings", bytes.NewBuffer(body))
+		ctx := context.WithValue(req.Context(), userContextKey, types.User{Email: "test@example.com", ID: "admin", Admin: true})
+		ctx = context.WithValue(ctx, siteIDContextKey, "test-site")
+		req = req.WithContext(ctx)
 
 		w := httptest.NewRecorder()
 		srv.handleUpdateSettings(w, req)

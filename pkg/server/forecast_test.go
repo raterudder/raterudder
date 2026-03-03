@@ -309,7 +309,7 @@ func TestHandleForecast(t *testing.T) {
 			bypassAuth: true,
 		}
 
-		req := httptest.NewRequest("GET", "/api/forecast?include_history=true", nil)
+		req := httptest.NewRequest("GET", "/api/forecast", nil)
 		// Inject siteID
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
 		req = req.WithContext(ctx)
@@ -320,15 +320,7 @@ func TestHandleForecast(t *testing.T) {
 		resp := w.Result()
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 
-		type WeatherRes struct {
-			TSHourStart time.Time `json:"tsHourStart"`
-			ActualGHI   float64   `json:"actualGHI"`
-			ForecastGHI float64   `json:"forecastGHI"`
-		}
-		var data struct {
-			Simulation    []controller.SimHour `json:"simulation"`
-			Weather       []WeatherRes         `json:"weather"`
-		}
+		var data ForecastRes
 		err := json.NewDecoder(resp.Body).Decode(&data)
 		require.NoError(t, err)
 
