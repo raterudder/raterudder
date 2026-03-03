@@ -52,7 +52,12 @@ describe('Forecast Page', () => {
 
     it('calls fetchModeling and renders 5 charts', async () => {
         const data = makeSimHours();
-        (fetchModeling as any).mockResolvedValue(data);
+        (fetchModeling as any).mockResolvedValue({
+            simulation: data,
+            energyHistory: [],
+            priceHistory: [],
+            weather: []
+        });
 
         renderForecast();
 
@@ -70,7 +75,12 @@ describe('Forecast Page', () => {
     });
 
     it('shows page heading and subtitle', async () => {
-        (fetchModeling as any).mockResolvedValue(makeSimHours());
+        (fetchModeling as any).mockResolvedValue({
+            simulation: makeSimHours(),
+            energyHistory: [],
+            priceHistory: [],
+            weather: []
+        });
 
         renderForecast();
 
@@ -97,6 +107,21 @@ describe('Forecast Page', () => {
 
         await waitFor(() => {
             expect(screen.getByText('No simulation data available.')).toBeInTheDocument();
+        });
+    });
+
+    it('shows the include previous 24 hours checkbox', async () => {
+        (fetchModeling as any).mockResolvedValue({
+            simulation: makeSimHours(),
+            energyHistory: [],
+            priceHistory: [],
+            weather: []
+        });
+
+        renderForecast();
+
+        await waitFor(() => {
+            expect(screen.getByLabelText('Show Previous 24 Hours')).toBeInTheDocument();
         });
     });
 

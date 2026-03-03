@@ -13,6 +13,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
+	"github.com/raterudder/raterudder/pkg/weather"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -384,5 +385,51 @@ func TestSettings(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
 
 		mockU.AssertExpectations(t)
+	})
+}
+
+func TestUpdateSettingsLocation(t *testing.T) {
+	t.Run("Update Site Location With Postal Code", func(t *testing.T) {
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockUMap := utility.NewMap()
+		mockUMap.SetProvider("test", mockU)
+		mockS := &mockStorage{}
+		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil).Maybe()
+		mockS.On("UpdateSite", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			UtilityProvider: "test",
+		}, types.CurrentSettingsVersion, nil)
+		mockS.On("GetCredentials", mock.Anything, mock.Anything).Return(types.Credentials{}, types.CurrentSettingsVersion, nil)
+		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
+			settings := args.Get(2).(types.Settings)
+			assert.NotNil(t, settings.Location)
+			assert.Equal(t, "90210", settings.Location.PostalCode)
+		})
+		mockS.On("SetCredentials", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil).Maybe()
+		mockS.On("UpsertWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+		srv := &Server{
+			storage:     mockS,
+			utilities:   mockUMap,
+			controller:  controller.NewController(),
+			weather:     weather.Configured(),
+			bypassAuth:  true,
+			singleSite:  true,
+			adminEmails: []string{"test@example.com"},
+		}
+
+		body := `{"postalCode": "90210", "countryCode": "US", "utilityProvider": "test", "ignoreHourUsageOverMultiple": 1.0, "solarTrendRatioMax": 1.0, "solarTrendRatioMin": 0.1}`
+		req := httptest.NewRequest(http.MethodPost, "/api/settings", bytes.NewBufferString(body))
+			ctx := context.WithValue(req.Context(), userContextKey, types.User{Email: "test@example.com", ID: "admin", Admin: true})
+			ctx = context.WithValue(ctx, siteIDContextKey, "test-site")
+			req = req.WithContext(ctx)
+
+		w := httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	})
 }

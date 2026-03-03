@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { fetchModeling } from '../api';
 import type { ModelingHour } from '../api';
 import {
@@ -52,6 +52,16 @@ const charts: ChartConfig[] = [
         ],
     },
     {
+        title: 'Forecasted Solar Radiation (W/m²)',
+        dataKey: 'forecastGHI',
+        color: '#fbbf24', // lighter orange/yellow
+        gradientId: 'ghiGrad',
+        unit: ' W/m²',
+        additionalLines: [
+            { dataKey: 'actualGHI', color: '#ea580c', strokeDasharray: '0' }, // darker orange for actuals
+        ],
+    },
+    {
         title: 'Avg Home Load (kWh)',
         dataKey: 'avgHomeLoadKWH',
         color: '#8b5cf6',
@@ -80,11 +90,33 @@ interface ProcessedModelingHour extends ModelingHour {
     rawSolarKWH: number;
 }
 
-function ForecastChart({ data, config, isMobile }: { data: ProcessedModelingHour[]; config: ChartConfig; isMobile: boolean }) {
+function ForecastChart({ data, config, isMobile, showCurrentTime }: { data: ProcessedModelingHour[]; config: ChartConfig; isMobile: boolean; showCurrentTime: boolean }) {
     // Compute reference value if applicable
     const refValue = config.referenceLine
         ? (data[0]?.[config.referenceLine.dataKey as keyof ProcessedModelingHour] as number)
         : undefined;
+
+    const currentTimeStr = React.useMemo(() => {
+        if (!showCurrentTime || data.length === 0) return undefined;
+        // The last history element is typically right before the forecast starts,
+        // or we can find the exact transition point if we had a flag.
+        // We can just use "now" rounded to the current hour as an approximation,
+        // but it's more accurate to find the first item where it's a forecast.
+        // Since we prepend 24 items of history, let's just use the timestamp
+        // of the item that corresponds to `now` (the 24th or 25th item).
+        const nowMs = Date.now();
+        // find closest hour in data
+        let closest = data[0].ts;
+        let minDiff = Infinity;
+        for (const d of data) {
+            const diff = Math.abs(new Date(d.ts).getTime() - nowMs);
+            if (diff < minDiff) {
+                minDiff = diff;
+                closest = d.ts;
+            }
+        }
+        return closest;
+    }, [data, showCurrentTime]);
 
     return (
         <div className="forecast-chart-card">
@@ -124,7 +156,7 @@ function ForecastChart({ data, config, isMobile }: { data: ProcessedModelingHour
                                 config.unit.includes('$')
                                     ? `$${v.toFixed(4)}`
                                     : v.toFixed(2) + lineUnit.trim(),
-                                name === 'rawSolarKWH' ? 'Raw Model' : config.title, // Simple label mapping
+                                name === 'rawSolarKWH' ? 'Raw Model' : (name === 'actualGHI' ? 'Actual' : config.title), // Simple label mapping
                             ];
                         }}
                         contentStyle={{
@@ -165,6 +197,19 @@ function ForecastChart({ data, config, isMobile }: { data: ProcessedModelingHour
                             }}
                         />
                     )}
+                    {showCurrentTime && currentTimeStr && (
+                        <ReferenceLine
+                            x={currentTimeStr}
+                            stroke="#4b5563"
+                            strokeDasharray="3 3"
+                            label={{
+                                value: 'Now',
+                                position: 'insideTopLeft',
+                                fill: '#4b5563',
+                                fontSize: 11,
+                            }}
+                        />
+                    )}
                 </AreaChart>
             </ResponsiveContainer>
         </div>
@@ -176,6 +221,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+    const [includeHistory, setIncludeHistory] = useState(false);
 
     useEffect(() => {
         const handleResize = () => setIsMobile(window.innerWidth < 768);
@@ -187,9 +233,61 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
         const loadData = async () => {
             try {
                 setLoading(true);
-                const modelingData = await fetchModeling(siteID);
+                const forecastData = await fetchModeling(siteID, includeHistory);
+
+                // Combine history and simulation if includeHistory is true
+                let modelingData = forecastData.simulation || forecastData || [];
+
+                if (includeHistory && forecastData.energyHistory && forecastData.priceHistory) {
+                    const energyHist = forecastData.energyHistory || [];
+                    const priceHist = forecastData.priceHistory || [];
+                    const weatherHist = forecastData.weather || [];
+
+                    // The battery capacity for history is best estimated from the first simulation hour
+                    // or assumed from the context, here we use the first sim hour's capacity.
+                    const firstSim = modelingData[0];
+                    const capacity = firstSim ? firstSim.batteryCapacityKWH : 10;
+                    const reserve = firstSim ? firstSim.batteryReserveKWH : 0;
+
+                    const historyMapped = energyHist.map((h: any) => {
+                        const price = priceHist.find((p: any) => p.tsHourStart === h.tsHourStart);
+                        const weather = weatherHist.find((w: any) => w.tsHourStart === h.tsHourStart);
+                        return {
+                            ts: h.tsHourStart,
+                            hour: new Date(h.tsHourStart).getHours(),
+                            batteryKWH: (h.avgBatterySOC / 100) * capacity,
+                            batteryKWHIfStandby: (h.avgBatterySOC / 100) * capacity, // Historic actuals
+                            batteryCapacityKWH: capacity,
+                            batteryReserveKWH: reserve,
+                            predictedSolarKWH: h.solarKWH,
+                            todaySolarTrend: 1.0, // Used for raw solar calc below
+                            avgHomeLoadKWH: 0, // Not currently tracked in basic history struct, could be calculated
+                            gridChargeDollarsPerKWH: price ? price.gridUseDollarsPerKWH || price.dollarsPerKWH : 0,
+                            netLoadSolarKWH: -h.solarKWH,
+                            solarOppDollarsPerKWH: 0,
+                            actualGHI: weather?.actualGHI,
+                            forecastGHI: weather?.forecastGHI,
+                        };
+                    });
+
+                    // We also need to map the weather to the simulation hours
+                    modelingData = modelingData.map((sim: any) => {
+                        const weather = weatherHist.find((w: any) => w.tsHourStart === sim.ts);
+                        if (weather) {
+                            return {
+                                ...sim,
+                                actualGHI: weather.actualGHI,
+                                forecastGHI: weather.forecastGHI,
+                            };
+                        }
+                        return sim;
+                    });
+
+                    modelingData = [...historyMapped, ...modelingData];
+                }
+
                 // Pre-process data
-                const processed = modelingData.map((h) => ({
+                const processed = modelingData.map((h: any) => ({
                     ...h,
                     batterySOCIfUsed: (h.batteryKWH / h.batteryCapacityKWH) * 100,
                     batterySOCIfStandby: (h.batteryKWHIfStandby / h.batteryCapacityKWH) * 100,
@@ -211,7 +309,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
         };
 
         loadData();
-    }, [siteID]);
+    }, [siteID, includeHistory]);
 
     if (loading) return <div className="forecast-loading">Loading simulation…</div>;
     if (error) return <div className="error">Error: {error}</div>;
@@ -219,7 +317,18 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
 
     return (
         <div className="content-container forecast-page">
-            <h2>24-Hour Simulation</h2>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h2>24-Hour Simulation</h2>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', color: '#4b5563', cursor: 'pointer' }}>
+                    <input
+                        type="checkbox"
+                        checked={includeHistory}
+                        onChange={(e) => setIncludeHistory(e.target.checked)}
+                        style={{ accentColor: '#3b82f6', width: '16px', height: '16px', cursor: 'pointer' }}
+                    />
+                    Show Previous 24 Hours
+                </label>
+            </div>
             <p className="forecast-subtitle">
                 Predicted energy state <strong>assuming no action is taken</strong> starting from{' '}
                 {new Date(data[0].ts).toLocaleTimeString([], {
@@ -230,7 +339,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
             </p>
             <div className="modeling-charts">
                 {charts.map((c) => (
-                    <ForecastChart key={c.dataKey} data={data} config={c} isMobile={isMobile} />
+                    <ForecastChart key={c.dataKey} data={data} config={c} isMobile={isMobile} showCurrentTime={includeHistory} />
                 ))}
             </div>
         </div>

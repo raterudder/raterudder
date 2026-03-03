@@ -11,8 +11,10 @@ import (
 
 	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/log"
+	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
+	"github.com/raterudder/raterudder/pkg/weather"
 )
 
 func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
@@ -134,6 +136,13 @@ func (s *Server) performSiteUpdate(
 	if err := s.updatePriceHistory(ctx, siteID, utility); err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to update price history", slog.Any("error", err))
 		// continue even if price history sync fails
+	}
+
+	// fetch weather history/forecast if location is configured
+	if settings.Location != nil {
+		if err := updateWeatherHistory(ctx, s.storage, s.weather, siteID, *settings.Location); err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to update weather history", slog.Any("error", err))
+		}
 	}
 
 	log.Ctx(ctx).DebugContext(ctx, "update: energy history synced")
@@ -341,6 +350,47 @@ func (s *Server) updatePriceHistory(ctx context.Context, siteID string, provider
 	return nil
 }
 
+func updateWeatherHistory(ctx context.Context, db storage.Database, weatherSvc *weather.Service, siteID string, loc types.SiteLocation) error {
+	now := time.Now().UTC()
+	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+
+	weathers, err := db.GetWeather(ctx, siteID, startOfDay, startOfDay.Add(24*time.Hour))
+	if err != nil {
+		return fmt.Errorf("failed to get today's weather: %w", err)
+	}
+
+	// We should update if we don't have today's weather, OR
+	// if it is past sunset + 2 hours and we haven't updated yet.
+	shouldUpdate := false
+	if len(weathers) == 0 {
+		shouldUpdate = true
+	} else {
+		w := weathers[0]
+		// Determine if it's sunset + 2 hours
+		if !w.TSSunset.IsZero() {
+			sunsetPlusTwo := w.TSSunset.Add(2 * time.Hour)
+			if now.After(sunsetPlusTwo) {
+				// We haven't updated since sunset+2? We can check TSUpdated.
+				if w.TSUpdated.Before(sunsetPlusTwo) {
+					shouldUpdate = true
+				}
+			}
+		}
+	}
+
+	if shouldUpdate {
+		log.Ctx(ctx).InfoContext(ctx, "fetching weather forecast and history")
+		newWeathers, err := weatherSvc.FetchWeatherForecast(ctx, loc.Lat, loc.Long, loc.TimeZone, now)
+		if err != nil {
+			return fmt.Errorf("failed to fetch weather forecast: %w", err)
+		}
+		if err := db.UpsertWeather(ctx, siteID, newWeathers, types.CurrentWeatherVersion); err != nil {
+			return fmt.Errorf("failed to upsert weather: %w", err)
+		}
+	}
+	return nil
+}
+
 // does not log siteID so you should pass siteID in a logger to this method
 func (s *Server) updateEnergyHistory(ctx context.Context, siteID string, essSystem ess.System) error {
 	// First, find out the last time we have history for
@@ -386,6 +436,36 @@ func (s *Server) updateEnergyHistory(ctx context.Context, siteID string, essSyst
 			if len(newHistory) > 0 {
 				if err := s.storage.UpsertEnergyHistories(ctx, siteID, newHistory, types.CurrentEnergyStatsVersion); err != nil {
 					log.Ctx(ctx).ErrorContext(ctx, "failed to upsert energy histories", slog.Any("error", err))
+				}
+
+				// Synchronize SolarKWH into Weather History ActualHours
+				startOfDay := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+				endOfDay := startOfDay.Add(24 * time.Hour)
+				weathers, err := s.storage.GetWeather(ctx, siteID, startOfDay, endOfDay)
+				if err == nil && len(weathers) > 0 {
+					w := weathers[0]
+					updated := false
+
+					for _, eh := range newHistory {
+						// Convert eh.TSHourStart to UTC since weather hours are stored in UTC
+						ehUTC := eh.TSHourStart.UTC()
+						for i, ah := range w.ActualHours {
+							// Match the hour start
+							if ah.TSHourStart.Equal(ehUTC) {
+								if w.ActualHours[i].SolarKWH != eh.SolarKWH {
+									w.ActualHours[i].SolarKWH = eh.SolarKWH
+									updated = true
+								}
+								break
+							}
+						}
+					}
+
+					if updated {
+						if err := s.storage.UpsertWeather(ctx, siteID, []types.Weather{w}, types.CurrentWeatherVersion); err != nil {
+							log.Ctx(ctx).ErrorContext(ctx, "failed to upsert weather with solar kwh", slog.Any("error", err))
+						}
+					}
 				}
 			}
 		}

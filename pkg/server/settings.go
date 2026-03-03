@@ -217,6 +217,31 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	newSettings.ESSAuthStatus = existing.ESSAuthStatus
 
+	// Update Location if zip/country changed
+	if newSettings.PostalCode != "" && newSettings.CountryCode != "" {
+		if existing.PostalCode != newSettings.PostalCode || existing.CountryCode != newSettings.CountryCode || existing.Location == nil {
+			loc, err := s.weather.GetLocationData(ctx, newSettings.CountryCode, newSettings.PostalCode)
+			if err != nil {
+				log.Ctx(ctx).ErrorContext(ctx, "failed to fetch location data", slog.Any("error", err))
+				writeJSONError(w, fmt.Sprintf("failed to fetch location data: %v", err), http.StatusBadRequest)
+				return
+			}
+			newSettings.Location = loc
+
+			go func() {
+				log.Ctx(context.Background()).InfoContext(context.Background(), "fetching initial weather for new location")
+				if err := updateWeatherHistory(context.Background(), s.storage, s.weather, siteID, *loc); err != nil {
+					log.Ctx(context.Background()).ErrorContext(context.Background(), "failed to sync weather history after settings update", slog.Any("error", err))
+				}
+			}()
+
+		} else {
+			newSettings.Location = existing.Location
+		}
+	} else {
+		newSettings.Location = nil
+	}
+
 	var wg sync.WaitGroup
 	// Handle credentials update
 	if req.Credentials != nil {

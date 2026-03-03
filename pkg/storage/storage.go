@@ -27,6 +27,7 @@ type Database interface {
 	InsertAction(ctx context.Context, siteID string, action types.Action) error
 	// UpsertEnergyHistories adds or updates multiple energy history records.
 	UpsertEnergyHistories(ctx context.Context, siteID string, stats []types.EnergyStats, version int) error
+	UpsertWeather(ctx context.Context, siteID string, weather []types.Weather, version int) error
 	UpdateESSMockState(ctx context.Context, siteID string, state types.ESSMockState) error
 	GetESSMockState(ctx context.Context, siteID string) (types.ESSMockState, error)
 
@@ -35,6 +36,7 @@ type Database interface {
 	GetActionHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Action, error)
 	GetLatestAction(ctx context.Context, siteID string) (*types.Action, error)
 	GetEnergyHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.EnergyStats, error)
+	GetWeather(ctx context.Context, siteID string, start, end time.Time) ([]types.Weather, error)
 	GetLatestEnergyHistoryTime(ctx context.Context, siteID string) (time.Time, int, error)
 	GetLatestPriceHistoryTime(ctx context.Context, siteID string) (time.Time, int, error)
 

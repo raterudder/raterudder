@@ -23,6 +23,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
+	"github.com/raterudder/raterudder/pkg/weather"
 	"github.com/raterudder/raterudder/web"
 )
 
@@ -50,6 +51,7 @@ type Server struct {
 	ess        *ess.Map
 	storage    storage.Database
 	controller *controller.Controller
+	weather    *weather.Service
 
 	listenAddr string
 	devProxy   string
@@ -76,6 +78,7 @@ func Configured(u *utility.Map, e *ess.Map, s storage.Database) *Server {
 		ess:        e,
 		storage:    s,
 		controller: controller.NewController(),
+		weather:    weather.Configured(),
 		serverName: "raterudder",
 	}
 	revision := os.Getenv("K_REVISION")
