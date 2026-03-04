@@ -51,7 +51,7 @@ type Server struct {
 	ess        *ess.Map
 	storage    storage.Database
 	controller *controller.Controller
-	weather    *weather.Service
+	weather    weather.Service
 
 	listenAddr string
 	devProxy   string

@@ -86,3 +86,20 @@ func (m *mockESS) Validate() error {
 	args := m.Called()
 	return args.Error(0)
 }
+
+type mockWeather struct {
+	mock.Mock
+}
+
+func (m *mockWeather) GetLocationData(ctx context.Context, countryCode, postalCode string) (*types.SiteLocation, error) {
+	args := m.Called(ctx, countryCode, postalCode)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*types.SiteLocation), args.Error(1)
+}
+
+func (m *mockWeather) FetchWeatherForecast(ctx context.Context, lat, long float64, timezone string, startDate, endDate time.Time) ([]types.Weather, error) {
+	args := m.Called(ctx, lat, long, timezone, startDate, endDate)
+	return args.Get(0).([]types.Weather), args.Error(1)
+}

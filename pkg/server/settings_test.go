@@ -13,7 +13,6 @@ import (
 	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
-	"github.com/raterudder/raterudder/pkg/weather"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -410,11 +409,18 @@ func TestSettings(t *testing.T) {
 		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil).Maybe()
 		mockS.On("UpsertWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
+		mockW := &mockWeather{}
+		mockW.On("GetLocationData", mock.Anything, mock.Anything, mock.Anything).Return(&types.SiteLocation{
+			PostalCode:  "90210",
+			CountryCode: "US",
+		}, nil).Maybe()
+		mockW.On("FetchWeatherForecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+
 		srv := &Server{
 			storage:     mockS,
 			utilities:   mockUMap,
 			controller:  controller.NewController(),
-			weather:     weather.Configured(),
+			weather:     mockW,
 			bypassAuth:  true,
 			singleSite:  true,
 			adminEmails: []string{"test@example.com"},

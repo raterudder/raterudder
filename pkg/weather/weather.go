@@ -15,8 +15,14 @@ import (
 	"github.com/raterudder/raterudder/pkg/types"
 )
 
-// Service provides weather functionality using Open-Meteo.
-type Service struct {
+// Service provides weather data mapping and API handling.
+type Service interface {
+	GetLocationData(ctx context.Context, countryCode, postalCode string) (*types.SiteLocation, error)
+	FetchWeatherForecast(ctx context.Context, lat, long float64, timezone string, startDate, endDate time.Time) ([]types.Weather, error)
+}
+
+// OpenMeteo implements the weather Service interface using Open-Meteo APIs.
+type OpenMeteo struct {
 	GeocodingURL string
 	ForecastURL  string
 	HTTPClient   *http.Client
@@ -29,8 +35,8 @@ type Config struct {
 	HTTPClient   *http.Client
 }
 
-// NewService creates a new configured weather Service.
-func NewService(cfg Config) *Service {
+// NewService creates a new configured weather Service based on OpenMeteo.
+func NewService(cfg Config) *OpenMeteo {
 	if cfg.GeocodingURL == "" {
 		cfg.GeocodingURL = "https://geocoding-api.open-meteo.com/v1/search"
 	}
@@ -40,7 +46,7 @@ func NewService(cfg Config) *Service {
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = common.HTTPClient(10 * time.Second)
 	}
-	return &Service{
+	return &OpenMeteo{
 		GeocodingURL: cfg.GeocodingURL,
 		ForecastURL:  cfg.ForecastURL,
 		HTTPClient:   cfg.HTTPClient,
@@ -48,7 +54,7 @@ func NewService(cfg Config) *Service {
 }
 
 // Configured creates a weather service using lflag.
-func Configured() *Service {
+func Configured() Service {
 	geocodingBaseURL := lflag.String("weather-geocoding-url", "https://geocoding-api.open-meteo.com/v1/search", "Open-Meteo geocoding API URL")
 	forecastBaseURL := lflag.String("weather-forecast-url", "https://api.open-meteo.com/v1/forecast", "Open-Meteo forecast API URL")
 
@@ -76,7 +82,7 @@ type geocodingResponse struct {
 
 // GetLocationData queries the Open-Meteo Geocoding API to find a location based on zip code and country code.
 // It returns the location with the largest population if multiple results are found.
-func (s *Service) GetLocationData(ctx context.Context, countryCode, postalCode string) (*types.SiteLocation, error) {
+func (s *OpenMeteo) GetLocationData(ctx context.Context, countryCode, postalCode string) (*types.SiteLocation, error) {
 	if countryCode == "" || postalCode == "" {
 		return nil, fmt.Errorf("country code and zip code are required")
 	}
@@ -157,7 +163,7 @@ type weatherForecastResponse struct {
 // FetchWeatherForecast fetches the shortwave radiation for the specified date range.
 // startDate is inclusive and endDate is exclusive, similar to storage boundaries.
 // Returns a slice of types.Weather structs for each day in the requested range.
-func (s *Service) FetchWeatherForecast(ctx context.Context, lat, long float64, timezone string, startDate, endDate time.Time) ([]types.Weather, error) {
+func (s *OpenMeteo) FetchWeatherForecast(ctx context.Context, lat, long float64, timezone string, startDate, endDate time.Time) ([]types.Weather, error) {
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
 		return nil, fmt.Errorf("invalid timezone: %w", err)

@@ -12,7 +12,6 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/types"
-	"github.com/raterudder/raterudder/pkg/weather"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -1001,20 +1000,14 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil)
 		mockS.On("UpsertWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"daily":{"time":["2026-03-01","2026-03-02","2026-03-03"],"sunrise":["2026-03-01T06:00","2026-03-02T06:00","2026-03-03T06:00"],"sunset":["2026-03-01T18:00","2026-03-02T18:00","2026-03-03T18:00"]},"hourly":{"time":["2026-03-01T00:00","2026-03-01T01:00"],"shortwave_radiation":[0,0]}}`))
-		}))
-		defer ts.Close()
-
-		weatherSvc := weather.NewService(weather.Config{
-			ForecastURL: ts.URL,
-			HTTPClient:  ts.Client(),
-		})
+		mockW := &mockWeather{}
+		mockW.On("FetchWeatherForecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{
+			{ActualHours: []types.HourlyWeather{}},
+		}, nil)
 
 		srv := &Server{
 			storage: mockS,
-			weather: weatherSvc,
+			weather: mockW,
 		}
 
 		loc := types.SiteLocation{
@@ -1044,9 +1037,11 @@ func TestUpdateWeatherHistory(t *testing.T) {
 			},
 		}, nil)
 
+		mockW := &mockWeather{}
+
 		srv := &Server{
 			storage: mockS,
-			weather: weather.Configured(),
+			weather: mockW,
 		}
 
 		loc := types.SiteLocation{
@@ -1082,20 +1077,14 @@ func TestUpdateWeatherHistory(t *testing.T) {
 
 		mockS.On("UpsertWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"daily":{"time":["2026-03-01","2026-03-02","2026-03-03"],"sunrise":["2026-03-01T06:00","2026-03-02T06:00","2026-03-03T06:00"],"sunset":["2026-03-01T18:00","2026-03-02T18:00","2026-03-03T18:00"]},"hourly":{"time":["2026-03-01T00:00","2026-03-01T01:00"],"shortwave_radiation":[0,0]}}`))
-		}))
-		defer ts.Close()
-
-		weatherSvc := weather.NewService(weather.Config{
-			ForecastURL: ts.URL,
-			HTTPClient:  ts.Client(),
-		})
+		mockW := &mockWeather{}
+		mockW.On("FetchWeatherForecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{
+			{ActualHours: []types.HourlyWeather{}},
+		}, nil)
 
 		srv := &Server{
 			storage: mockS,
-			weather: weatherSvc,
+			weather: mockW,
 		}
 
 		loc := types.SiteLocation{
@@ -1140,9 +1129,11 @@ func TestUpdateWeatherHistory(t *testing.T) {
 			assert.Equal(t, 2.5, weathers[0].ActualHours[0].SolarKWH)
 		}).Return(nil)
 
+		mockW := &mockWeather{}
+
 		srv := &Server{
 			storage: mockS,
-			weather: weather.Configured(),
+			weather: mockW,
 		}
 
 		loc := types.SiteLocation{
