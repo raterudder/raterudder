@@ -50,7 +50,7 @@ describe('Forecast Page', () => {
         expect(screen.getByText(/Loading simulation/)).toBeInTheDocument();
     });
 
-    it('calls fetchModeling and renders 5 charts', async () => {
+    it('calls fetchModeling and renders 6 charts', async () => {
         const data = makeSimHours();
         (fetchModeling as any).mockResolvedValue({
             simulation: data,
@@ -69,6 +69,7 @@ describe('Forecast Page', () => {
             expect(screen.getByText('Battery (if used) (%)')).toBeInTheDocument();
             expect(screen.getByText('Battery (if standby) (%)')).toBeInTheDocument();
             expect(screen.getByText('Predicted Solar (kWh)')).toBeInTheDocument();
+            expect(screen.getByText('Forecasted Solar Radiation (W/m²)')).toBeInTheDocument();
             expect(screen.getByText('Avg Home Load (kWh)')).toBeInTheDocument();
             expect(screen.getByText('Grid Charge Cost ($/kWh)')).toBeInTheDocument();
         });

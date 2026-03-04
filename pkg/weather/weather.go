@@ -130,7 +130,7 @@ func (s *OpenMeteo) GetLocationData(ctx context.Context, countryCode, postalCode
 		if result.CountryCode == countryCode && result.Population > maxPop {
 			maxPop = result.Population
 			bestLoc = &types.SiteLocation{
-				PostalCode:     postalCode,
+				PostalCode:  postalCode,
 				CountryCode: countryCode,
 				Lat:         result.Latitude,
 				Long:        result.Longitude,
@@ -155,8 +155,8 @@ type weatherForecastResponse struct {
 		Sunset  []string `json:"sunset"`
 	} `json:"daily"`
 	Hourly struct {
-		Time                   []string  `json:"time"`
-		ShortwaveRadiation     []float64 `json:"shortwave_radiation"`
+		Time               []string  `json:"time"`
+		ShortwaveRadiation []float64 `json:"shortwave_radiation"`
 	} `json:"hourly"`
 }
 
@@ -232,7 +232,7 @@ func (s *OpenMeteo) FetchWeatherForecast(ctx context.Context, lat, long float64,
 		targetDateStr := targetTime.Format("2006-01-02")
 
 		w := types.Weather{
-			TSDayStart:    targetTime,
+			TSDayStart:   targetTime,
 			TimeLocation: timezone,
 			Lat:          lat,
 			Long:         long,

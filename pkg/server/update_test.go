@@ -1011,11 +1011,11 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		}
 
 		loc := types.SiteLocation{
-			PostalCode: "90210",
+			PostalCode:  "90210",
 			CountryCode: "US",
-			Lat: 34.09,
-			Long: -118.4,
-			TimeZone: "America/Los_Angeles",
+			Lat:         34.09,
+			Long:        -118.4,
+			TimeZone:    "America/Los_Angeles",
 		}
 
 		err := srv.updateWeatherHistory(context.Background(), "test-site", loc, nil)
@@ -1045,11 +1045,11 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		}
 
 		loc := types.SiteLocation{
-			PostalCode: "90210",
+			PostalCode:  "90210",
 			CountryCode: "US",
-			Lat: 34.09,
-			Long: -118.4,
-			TimeZone: "America/Los_Angeles",
+			Lat:         34.09,
+			Long:        -118.4,
+			TimeZone:    "America/Los_Angeles",
 		}
 
 		err := srv.updateWeatherHistory(context.Background(), "test-site", loc, nil)
@@ -1070,7 +1070,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 
 		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{
 			{
-				TSSunset: sunsetTime,
+				TSSunset:  sunsetTime,
 				TSUpdated: updatedTime,
 			},
 		}, nil)
@@ -1088,11 +1088,11 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		}
 
 		loc := types.SiteLocation{
-			PostalCode: "90210",
+			PostalCode:  "90210",
 			CountryCode: "US",
-			Lat: 34.09,
-			Long: -118.4,
-			TimeZone: "America/Los_Angeles",
+			Lat:         34.09,
+			Long:        -118.4,
+			TimeZone:    "America/Los_Angeles",
 		}
 
 		err := srv.updateWeatherHistory(context.Background(), "test-site", loc, nil)
@@ -1113,7 +1113,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 
 		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{
 			{
-				TSSunset: sunsetTime,
+				TSSunset:  sunsetTime,
 				TSUpdated: now, // Recently updated
 				ActualHours: []types.HourlyWeather{
 					{TSHourStart: recentHour, GHI: 100},
@@ -1137,11 +1137,11 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		}
 
 		loc := types.SiteLocation{
-			PostalCode: "90210",
+			PostalCode:  "90210",
 			CountryCode: "US",
-			Lat: 34.09,
-			Long: -118.4,
-			TimeZone: "America/Los_Angeles",
+			Lat:         34.09,
+			Long:        -118.4,
+			TimeZone:    "America/Los_Angeles",
 		}
 
 		energyHist := []types.EnergyStats{

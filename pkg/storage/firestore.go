@@ -365,9 +365,9 @@ func (f *FirestoreProvider) UpsertWeather(ctx context.Context, siteID string, we
 		}
 		docID := w.TSDayStart.UTC().Format(time.RFC3339)
 		_, err = coll.Doc(docID).Set(ctx, map[string]interface{}{
-			"json":      string(jsonBytes),
+			"json":       string(jsonBytes),
 			"tsDayStart": w.TSDayStart,
-			"version":   version,
+			"version":    version,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to upsert weather: %w", err)
@@ -391,9 +391,9 @@ func (f *FirestoreProvider) UpsertWeather(ctx context.Context, siteID string, we
 		docID := w.TSDayStart.UTC().Format(time.RFC3339)
 		ref := coll.Doc(docID)
 		batch.Set(ref, map[string]interface{}{
-			"json":      string(jsonBytes),
+			"json":       string(jsonBytes),
 			"tsDayStart": w.TSDayStart,
-			"version":   version,
+			"version":    version,
 		})
 
 		count++

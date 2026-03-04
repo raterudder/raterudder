@@ -249,8 +249,8 @@ func TestFirestoreProvider(t *testing.T) {
 			var batchStats []types.EnergyStats
 			for i := 0; i < 5; i++ {
 				batchStats = append(batchStats, types.EnergyStats{
-					TSHourStart:       now.Add(time.Duration(i+1) * time.Hour),
-					SolarKWH:          float64(i) * 1.0,
+					TSHourStart: now.Add(time.Duration(i+1) * time.Hour),
+					SolarKWH:    float64(i) * 1.0,
 				})
 			}
 			require.NoError(t, f.UpsertEnergyHistories(ctx, "test-site", batchStats, 0))
@@ -474,4 +474,87 @@ func TestFirestore_Feedback(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, fbs2, 1)
 	assert.Equal(t, fb1.ID, fbs2[0].ID)
+}
+
+func TestFirestore_Weather(t *testing.T) {
+	os.Setenv("FIRESTORE_EMULATOR_HOST", "127.0.0.1:8087")
+	projectID := "test-project-id"
+	randDB := fmt.Sprintf("test-db-%d", time.Now().UnixNano())
+	db := &FirestoreProvider{
+		projectID: projectID,
+		database:  randDB,
+	}
+
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	err := db.Validate()
+	require.NoError(t, err)
+
+	siteID := "test-site-weather"
+
+	t.Run("Upsert and Get Single", func(t *testing.T) {
+		start := time.Now().Truncate(24 * time.Hour).UTC()
+		w := types.Weather{
+			TSDayStart:   start,
+			TimeLocation: "America/Los_Angeles",
+			Lat:          34.0,
+			Long:         -118.0,
+			ActualHours: []types.HourlyWeather{
+				{TSHourStart: start.Add(1 * time.Hour), GHI: 150.5},
+			},
+		}
+
+		err := db.UpsertWeather(ctx, siteID, []types.Weather{w}, types.CurrentWeatherVersion)
+		require.NoError(t, err)
+
+		results, err := db.GetWeather(ctx, siteID, start, start.Add(24*time.Hour))
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.Equal(t, w.Lat, results[0].Lat)
+		assert.Equal(t, w.TimeLocation, results[0].TimeLocation)
+		assert.Len(t, results[0].ActualHours, 1)
+		assert.Equal(t, 150.5, results[0].ActualHours[0].GHI)
+	})
+
+	t.Run("Upsert and Get Batch", func(t *testing.T) {
+		var weathers []types.Weather
+		start := time.Now().Truncate(24 * time.Hour).UTC().Add(-48 * time.Hour)
+
+		// generate 3 days
+		for i := 0; i < 3; i++ {
+			day := start.Add(time.Duration(i*24) * time.Hour)
+			weathers = append(weathers, types.Weather{
+				TSDayStart: day,
+				Lat:        34.0,
+				Long:       -118.0,
+				ForecastHours: []types.HourlyWeather{
+					{TSHourStart: day.Add(12 * time.Hour), GHI: 800.0},
+				},
+			})
+		}
+
+		err := db.UpsertWeather(ctx, siteID, weathers, types.CurrentWeatherVersion)
+		require.NoError(t, err)
+
+		// Get all 3 days
+		results, err := db.GetWeather(ctx, siteID, start, start.Add(72*time.Hour))
+		require.NoError(t, err)
+		require.Len(t, results, 3)
+
+		// Get only middle day
+		middleDay := start.Add(24 * time.Hour)
+		resultsMid, err := db.GetWeather(ctx, siteID, middleDay, middleDay.Add(24*time.Hour))
+		require.NoError(t, err)
+		require.Len(t, resultsMid, 1)
+		assert.True(t, resultsMid[0].TSDayStart.Equal(middleDay))
+	})
+
+	t.Run("Get Empty Range", func(t *testing.T) {
+		start := time.Now().Add(-1000 * 24 * time.Hour).Truncate(24 * time.Hour).UTC()
+		results, err := db.GetWeather(ctx, siteID, start, start.Add(24*time.Hour))
+		require.NoError(t, err)
+		assert.Len(t, results, 0)
+	})
 }

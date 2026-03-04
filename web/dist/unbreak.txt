@@ -1,1 +1,0 @@
-This file is just here to not break the go embed.

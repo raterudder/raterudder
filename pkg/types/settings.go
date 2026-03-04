@@ -57,7 +57,7 @@ type Settings struct {
 	GridExportBatteries bool `json:"gridExportBatteries"`
 
 	CountryCode string        `json:"countryCode"`
-	PostalCode     string        `json:"postalCode"`
+	PostalCode  string        `json:"postalCode"`
 	Location    *SiteLocation `json:"location,omitempty"`
 
 	// Solar Settings

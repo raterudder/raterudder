@@ -36,9 +36,9 @@ type WeatherRes struct {
 // ForecastRes represents the complete response for the forecast endpoint, including histories.
 type ForecastRes struct {
 	Simulation    []controller.SimHour `json:"simulation"`
-	EnergyHistory []EnergyHistoryRes     `json:"energyHistory"`
-	PriceHistory  []PriceHistoryRes      `json:"priceHistory"`
-	Weather       []WeatherRes           `json:"weather"`
+	EnergyHistory []EnergyHistoryRes   `json:"energyHistory"`
+	PriceHistory  []PriceHistoryRes    `json:"priceHistory"`
+	Weather       []WeatherRes         `json:"weather"`
 }
 
 func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {

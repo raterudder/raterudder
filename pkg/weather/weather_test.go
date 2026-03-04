@@ -132,7 +132,7 @@ func TestGetLocationData(t *testing.T) {
 
 func TestFetchWeatherForecast(t *testing.T) {
 	loc, _ := time.LoadLocation("America/Los_Angeles")
-	targetDay := time.Date(2023, 10, 15, 12, 0, 0, 0, loc)
+	targetDay := time.Now().In(loc)
 	startDay := targetDay.AddDate(0, 0, -1)
 	endDay := targetDay.AddDate(0, 0, 1)
 
@@ -165,15 +165,15 @@ func TestFetchWeatherForecast(t *testing.T) {
 					Sunrise []string `json:"sunrise"`
 					Sunset  []string `json:"sunset"`
 				}{
-					Time:    []string{"2023-10-14", "2023-10-16"},
-					Sunrise: []string{"2023-10-14T06:00", "2023-10-16T06:00"},
-					Sunset:  []string{"2023-10-14T18:00", "2023-10-16T18:00"},
+					Time:    []string{startDay.Format("2006-01-02"), endDay.Format("2006-01-02")},
+					Sunrise: []string{startDay.Format("2006-01-02") + "T06:00", endDay.Format("2006-01-02") + "T06:00"},
+					Sunset:  []string{startDay.Format("2006-01-02") + "T18:00", endDay.Format("2006-01-02") + "T18:00"},
 				},
 				Hourly: struct {
 					Time               []string  `json:"time"`
 					ShortwaveRadiation []float64 `json:"shortwave_radiation"`
 				}{
-					Time:               []string{"2023-10-14T10:00", "2023-10-16T12:00"},
+					Time:               []string{startDay.Format("2006-01-02") + "T10:00", endDay.Format("2006-01-02") + "T12:00"},
 					ShortwaveRadiation: []float64{100.5, 200.5},
 				},
 			},
@@ -204,6 +204,17 @@ func TestFetchWeatherForecast(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				assert.Len(t, res, tc.wantCount)
+
+				// Assert the correct splitting into Actuals vs Forecasts based on time.Now() rule logic
+				// startDay is past so it must be actual
+				assert.Len(t, res[0].ActualHours, 1)
+				assert.Equal(t, 100.5, res[0].ActualHours[0].GHI)
+				assert.Len(t, res[0].ForecastHours, 0)
+
+				// endDay is future so it must be forecast
+				assert.Len(t, res[2].ForecastHours, 1)
+				assert.Equal(t, 200.5, res[2].ForecastHours[0].GHI)
+				assert.Len(t, res[2].ActualHours, 0)
 			}
 		})
 	}

@@ -427,11 +427,11 @@ func TestSettings(t *testing.T) {
 		}
 
 		bodyData := types.Settings{
-			PostalCode: "90210",
-			CountryCode: "US",
-			UtilityProvider: "test",
+			PostalCode:                  "90210",
+			CountryCode:                 "US",
+			UtilityProvider:             "test",
 			IgnoreHourUsageOverMultiple: 1.0,
-			SolarTrendRatioMax: 1.0,
+			SolarTrendRatioMax:          1.0,
 		}
 		body, _ := json.Marshal(bodyData)
 		req := httptest.NewRequest(http.MethodPost, "/api/settings", bytes.NewBuffer(body))

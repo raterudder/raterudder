@@ -178,7 +178,7 @@ type Feedback struct {
 
 // SiteLocation represents the geographical location of a site.
 type SiteLocation struct {
-	PostalCode     string  `json:"postalCode"`
+	PostalCode  string  `json:"postalCode"`
 	Lat         float64 `json:"lat"`
 	Long        float64 `json:"long"`
 	City        string  `json:"city"`
@@ -191,24 +191,23 @@ type SiteLocation struct {
 type HourlyWeather struct {
 	TSHourStart time.Time `json:"tsHourStart"`
 
-
 	GHI      float64 `json:"ghi"`      // Shortwave radiation in W/m²
 	SolarKWH float64 `json:"solarKWH"` // Actual solar generation in kWh
 }
 
 // Weather represents the daily weather and solar data.
 type Weather struct {
-	TSDayStart   time.Time `json:"tsDayStart"`
+	TSDayStart time.Time `json:"tsDayStart"`
 	// ActualHours contains the actual solar generation and GHI data for hours that have occurred.
 	// The slice is unsorted. Use TSHourStart to determine the hour instead of index.
-	ActualHours   []HourlyWeather `json:"actualHours"`
+	ActualHours []HourlyWeather `json:"actualHours"`
 	// ForecastHours contains the forecasted GHI data for hours that have not yet occurred or
 	// for which actuals are not yet available. The slice is unsorted. Use TSHourStart to determine the hour.
 	ForecastHours []HourlyWeather `json:"forecastHours"`
-	TimeLocation string          `json:"timeLocation"`
-	Lat          float64         `json:"lat"`
-	Long         float64         `json:"long"`
-	TSSunrise    time.Time       `json:"tsSunrise"`
-	TSSunset     time.Time       `json:"tsSunset"`
-	TSUpdated    time.Time       `json:"tsUpdated"`
+	TimeLocation  string          `json:"timeLocation"`
+	Lat           float64         `json:"lat"`
+	Long          float64         `json:"long"`
+	TSSunrise     time.Time       `json:"tsSunrise"`
+	TSSunset      time.Time       `json:"tsSunset"`
+	TSUpdated     time.Time       `json:"tsUpdated"`
 }
