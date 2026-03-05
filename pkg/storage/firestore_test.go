@@ -477,6 +477,7 @@ func TestFirestore_Feedback(t *testing.T) {
 }
 
 func TestFirestore_Weather(t *testing.T) {
+	ctx := context.Background()
 	os.Setenv("FIRESTORE_EMULATOR_HOST", "127.0.0.1:8087")
 	projectID := "test-project-id"
 	randDB := fmt.Sprintf("test-db-%d", time.Now().UnixNano())
@@ -485,7 +486,6 @@ func TestFirestore_Weather(t *testing.T) {
 		database:  randDB,
 	}
 
-	ctx := context.Background()
 	require.NoError(t, db.Init(ctx))
 	defer db.Close()
 

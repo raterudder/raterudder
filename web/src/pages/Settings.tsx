@@ -455,49 +455,53 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                     <h3>Grid Restrictions</h3>
                 </div>
 
-                <div className="section-header">
-                    <h3>Location</h3>
-                </div>
-                <div className="grid-strategy-grid">
-                    <Field.Root className="form-group">
-                        <Field.Label htmlFor="countryCode">Country</Field.Label>
-                        <Select.Root
-                            value={settings.countryCode}
-                            onValueChange={(val) => handleChange("countryCode", val)}
-                        >
-                            <Select.Trigger className="select-trigger" id="countryCode">
-                                <Select.Value placeholder="Select a country..." />
-                                <Select.Icon />
-                            </Select.Trigger>
-                            <Select.Portal>
-                                <Select.Positioner>
-                                    <Select.Popup className="select-content">
-                                        <Select.Item value="US" className="select-item"><Select.ItemText>United States</Select.ItemText><Select.ItemIndicator /></Select.Item>
-                                        <Select.Item value="GB" className="select-item"><Select.ItemText>United Kingdom</Select.ItemText><Select.ItemIndicator /></Select.Item>
-                                        <Select.Item value="CA" className="select-item"><Select.ItemText>Canada</Select.ItemText><Select.ItemIndicator /></Select.Item>
-                                        <Select.Item value="AU" className="select-item"><Select.ItemText>Australia</Select.ItemText><Select.ItemIndicator /></Select.Item>
-                                        <Select.Item value="DE" className="select-item"><Select.ItemText>Germany</Select.ItemText><Select.ItemIndicator /></Select.Item>
-                                        <Select.Item value="FR" className="select-item"><Select.ItemText>France</Select.ItemText><Select.ItemIndicator /></Select.Item>
-                                        <Select.Item value="IT" className="select-item"><Select.ItemText>Italy</Select.ItemText><Select.ItemIndicator /></Select.Item>
-                                        <Select.Item value="ES" className="select-item"><Select.ItemText>Spain</Select.ItemText><Select.ItemIndicator /></Select.Item>
-                                    </Select.Popup>
-                                </Select.Positioner>
-                            </Select.Portal>
-                        </Select.Root>
-                    </Field.Root>
-                    <Field.Root className="form-group">
-                        <Field.Label htmlFor="postalCode">Zip/Postal Code</Field.Label>
-                        <Input
-                            id="postalCode"
-                            type="text"
-                            value={settings.postalCode}
-                            onChange={(e) => handleChange("postalCode", e.target.value)}
-                        />
-                    </Field.Root>
-                </div>
-                <div style={{ fontSize: '0.9em', color: 'var(--text-color)', opacity: 0.8, marginTop: '8px', marginBottom: '16px' }}>
-                    Weather data provided by <a href="https://open-meteo.com" target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline' }}>Open-Meteo</a> to improve solar prediction
-                </div>
+                {settings.release === 'staging' && (
+                    <>
+                        <div className="section-header">
+                            <h3>Location</h3>
+                        </div>
+                        <div className="grid-strategy-grid">
+                            <Field.Root className="form-group">
+                                <Field.Label htmlFor="countryCode">Country</Field.Label>
+                                <Select.Root
+                                    value={settings.countryCode}
+                                    onValueChange={(val) => handleChange("countryCode", val)}
+                                >
+                                    <Select.Trigger className="select-trigger" id="countryCode">
+                                        <Select.Value placeholder="Select a country..." />
+                                        <Select.Icon />
+                                    </Select.Trigger>
+                                    <Select.Portal>
+                                        <Select.Positioner>
+                                            <Select.Popup className="select-content">
+                                                <Select.Item value="US" className="select-item"><Select.ItemText>United States</Select.ItemText><Select.ItemIndicator /></Select.Item>
+                                                <Select.Item value="GB" className="select-item"><Select.ItemText>United Kingdom</Select.ItemText><Select.ItemIndicator /></Select.Item>
+                                                <Select.Item value="CA" className="select-item"><Select.ItemText>Canada</Select.ItemText><Select.ItemIndicator /></Select.Item>
+                                                <Select.Item value="AU" className="select-item"><Select.ItemText>Australia</Select.ItemText><Select.ItemIndicator /></Select.Item>
+                                                <Select.Item value="DE" className="select-item"><Select.ItemText>Germany</Select.ItemText><Select.ItemIndicator /></Select.Item>
+                                                <Select.Item value="FR" className="select-item"><Select.ItemText>France</Select.ItemText><Select.ItemIndicator /></Select.Item>
+                                                <Select.Item value="IT" className="select-item"><Select.ItemText>Italy</Select.ItemText><Select.ItemIndicator /></Select.Item>
+                                                <Select.Item value="ES" className="select-item"><Select.ItemText>Spain</Select.ItemText><Select.ItemIndicator /></Select.Item>
+                                            </Select.Popup>
+                                        </Select.Positioner>
+                                    </Select.Portal>
+                                </Select.Root>
+                            </Field.Root>
+                            <Field.Root className="form-group">
+                                <Field.Label htmlFor="postalCode">Zip/Postal Code</Field.Label>
+                                <Input
+                                    id="postalCode"
+                                    type="text"
+                                    value={settings.postalCode || ''}
+                                    onChange={(e) => handleChange("postalCode", e.target.value)}
+                                />
+                            </Field.Root>
+                        </div>
+                        <div style={{ fontSize: '0.9em', color: 'var(--text-color)', opacity: 0.8, marginTop: '8px', marginBottom: '16px' }}>
+                            Weather data provided by <a href="https://open-meteo.com" target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline' }}>Open-Meteo</a> to improve solar prediction
+                        </div>
+                    </>
+                )}
 
                 <div className="grid-strategy-grid">
                     <Field.Root className="form-group switch-group compact">

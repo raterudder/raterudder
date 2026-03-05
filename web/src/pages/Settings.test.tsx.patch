@@ -1,0 +1,51 @@
+--- web/src/pages/Settings.test.tsx
++++ web/src/pages/Settings.test.tsx
+@@ -218,6 +218,48 @@
+         expect(mockUpdateSettings).toHaveBeenCalledWith(undefined, expect.objectContaining({ solarBellCurveMultiplier: 0.8 }));
+     });
+
++    it('shows location settings only when release is staging', async () => {
++        const stagingSettings = { ...mockSettings, release: 'staging' };
++        (api.fetchSettings as any).mockResolvedValue(stagingSettings);
++
++        render(
++            <ThemeProvider>
++                <Settings />
++            </ThemeProvider>
++        );
++
++        await waitFor(() => {
++            expect(screen.getByText('Location')).toBeInTheDocument();
++            expect(screen.getByLabelText(/Zip\/Postal Code/i)).toBeInTheDocument();
++        });
++
++        const zipInput = screen.getByLabelText(/Zip\/Postal Code/i);
++        fireEvent.change(zipInput, { target: { value: '90210' } });
++
++        const saveBtn = screen.getByText('Save Settings');
++        fireEvent.click(saveBtn);
++
++        await waitFor(() => {
++            expect(mockUpdateSettings).toHaveBeenCalledWith(undefined, expect.objectContaining({ postalCode: '90210' }));
++        });
++    });
++
++    it('hides location settings when release is not staging', async () => {
++        const prodSettings = { ...mockSettings, release: 'production' };
++        (api.fetchSettings as any).mockResolvedValue(prodSettings);
++
++        render(
++            <ThemeProvider>
++                <Settings />
++            </ThemeProvider>
++        );
++
++        await waitFor(() => {
++            expect(screen.queryByText('Location')).not.toBeInTheDocument();
++            expect(screen.queryByLabelText(/Zip\/Postal Code/i)).not.toBeInTheDocument();
++        });
++    });
++
+     it('can update ComEd rate options', async () => {
+         const comedSettings = {
+             ...mockSettings,
