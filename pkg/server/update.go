@@ -154,6 +154,22 @@ func (s *Server) performSiteUpdate(
 
 	log.Ctx(ctx).DebugContext(ctx, "update: current price fetched", slog.Float64("price", currentPrice.DollarsPerKWH), slog.Time("start", currentPrice.TSStart))
 
+	// get History for Controller (Last 72 hours from Storage)
+	historyStart := time.Now().Add(-72 * time.Hour)
+	historyEnd := time.Now()
+	energyHistory, err := s.storage.GetEnergyHistory(ctx, siteID, historyStart, historyEnd)
+	if err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to get energy history from storage", slog.Any("error", err))
+	}
+
+	// fetch weather history/forecast if location is configured
+	// We pass the 72 hours of history here to sync any new solar data into the weather actuals
+	if settings.Location != nil {
+		if err := s.updateWeatherHistory(ctx, siteID, *settings.Location, energyHistory); err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to update weather history", slog.Any("error", err))
+		}
+	}
+
 	if settings.Pause {
 		log.Ctx(ctx).InfoContext(ctx, "update: paused")
 		action := types.Action{
@@ -236,22 +252,6 @@ func (s *Server) performSiteUpdate(
 	}
 	if !hasFuture {
 		return nil, "", fmt.Errorf("insufficient future pricing data")
-	}
-
-	// get History for Controller (Last 72 hours from Storage)
-	historyStart := time.Now().Add(-72 * time.Hour)
-	historyEnd := time.Now()
-	energyHistory, err := s.storage.GetEnergyHistory(ctx, siteID, historyStart, historyEnd)
-	if err != nil {
-		log.Ctx(ctx).WarnContext(ctx, "failed to get energy history from storage", slog.Any("error", err))
-	}
-
-	// fetch weather history/forecast if location is configured
-	// We pass the 72 hours of history here to sync any new solar data into the weather actuals
-	if settings.Location != nil {
-		if err := s.updateWeatherHistory(ctx, siteID, *settings.Location, energyHistory); err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to update weather history", slog.Any("error", err))
-		}
 	}
 
 	log.Ctx(ctx).DebugContext(ctx, "update: starting decision")
