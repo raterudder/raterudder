@@ -416,8 +416,8 @@ func (f *FirestoreProvider) UpsertWeather(ctx context.Context, siteID string, we
 
 // GetWeather retrieves weather records within the specified time range.
 func (f *FirestoreProvider) GetWeather(ctx context.Context, siteID string, start, end time.Time) ([]types.Weather, error) {
-	startDocID := start.Truncate(24 * time.Hour).UTC().Format(time.RFC3339)
-	endDocID := end.Truncate(24 * time.Hour).UTC().Format(time.RFC3339)
+	startDocID := start.UTC().Format(time.RFC3339)
+	endDocID := end.UTC().Format(time.RFC3339)
 
 	coll, err := f.getCollection(siteID, "weather")
 	if err != nil {
