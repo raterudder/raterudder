@@ -17,6 +17,7 @@ type EnergyHistoryRes struct {
 	TSHourStart   time.Time `json:"tsHourStart"`
 	AvgBatterySOC float64   `json:"avgBatterySOC"`
 	SolarKWH      float64   `json:"solarKWH"`
+	HomeLoadKWH   float64   `json:"homeLoadKWH"`
 }
 
 // PriceHistoryRes represents historical pricing returned in the forecast.
@@ -139,6 +140,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 			TSHourStart:   h.TSHourStart,
 			AvgBatterySOC: avgSoc,
 			SolarKWH:      h.SolarKWH,
+			HomeLoadKWH:   h.HomeKWH,
 		})
 	}
 
