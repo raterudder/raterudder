@@ -490,7 +490,21 @@ func TestFirestoreProvider(t *testing.T) {
 
 		t.Run("Upsert and Get Batch", func(t *testing.T) {
 			var weathers []types.Weather
-			start := time.Now().Truncate(24 * time.Hour).UTC().Add(-48 * time.Hour)
+			// Ensure time is not nicely truncated to UTC day boundaries to test truncation bug
+			timeLoc, _ := time.LoadLocation("America/New_York")
+			localStart := time.Date(2024, 1, 1, 0, 0, 0, 0, timeLoc)
+			start := localStart.UTC() // This will be 2024-01-01T05:00:00Z
+
+			// To test the bug correctly: If we query up to "1 hour before the 4th day",
+			// the 3rd day's docID is "2024-01-03T05:00:00Z".
+			// If `end` is `2024-01-04T04:00:00Z`, the old buggy Truncate() code would truncate it to `2024-01-04T00:00:00Z`.
+			// `2024-01-04T00:00:00Z` is less than `2024-01-03T05:00:00Z`? No, 04 > 03.
+			// Let's use an end time of `2024-01-03T06:00:00Z`.
+			// The old code: `endDocID` = `2024-01-03T00:00:00Z`.
+			// The query condition: `< "2024-01-03T00:00:00Z"`.
+			// The document for day 3 is at `2024-01-03T05:00:00Z`.
+			// It would incorrectly skip day 3!
+			end := localStart.Add(48 * time.Hour).Add(6 * time.Hour).UTC()
 
 			// generate 3 days
 			for i := 0; i < 3; i++ {
@@ -509,7 +523,7 @@ func TestFirestoreProvider(t *testing.T) {
 			require.NoError(t, err)
 
 			// Get all 3 days
-			results, err := f.GetWeather(ctx, siteID, start, start.Add(72*time.Hour))
+			results, err := f.GetWeather(ctx, siteID, start, end)
 			require.NoError(t, err)
 			require.Len(t, results, 3)
 
