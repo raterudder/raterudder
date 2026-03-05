@@ -125,7 +125,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	if settings.Location != nil {
 		if timeLoc, err := time.LoadLocation(settings.Location.TimeZone); err == nil {
 			startMidnight := time.Date(histStart24.Year(), histStart24.Month(), histStart24.Day(), 0, 0, 0, 0, timeLoc)
-			endMidnight := time.Date(histEnd24.Year(), histEnd24.Month(), histEnd24.Day(), 0, 0, 0, 0, timeLoc).Add(24 * time.Hour)
+			endMidnight := time.Date(histEnd24.Year(), histEnd24.Month(), histEnd24.Day(), 0, 0, 0, 0, timeLoc).Add(48 * time.Hour)
 			weatherHistory24, err = s.storage.GetWeather(ctx, siteID, startMidnight, endMidnight)
 			if err != nil {
 				log.Ctx(ctx).WarnContext(ctx, "failed to fetch weather for forecast", slog.Any("error", err), slog.String("siteID", siteID))
