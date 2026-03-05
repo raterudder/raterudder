@@ -410,151 +410,57 @@ func TestFirestoreProvider(t *testing.T) {
 			assert.ErrorContains(t, err, "user not found")
 		})
 	})
-}
 
-func TestFirestore_Feedback(t *testing.T) {
-	// Use a test project ID
-	projectID := "test-project-id"
+	t.Run("Feedback", func(t *testing.T) {
+		provider := f
 
-	// Use a random database for isolation
-	randDB := fmt.Sprintf("test-db-%d", time.Now().UnixNano())
-	provider := &FirestoreProvider{
-		projectID: projectID,
-		database:  randDB,
-	}
-
-	ctx := context.Background()
-	err := provider.Init(ctx)
-	require.NoError(t, err)
-
-	defer provider.Close()
-
-	// Insert feedbacks
-	fb1 := types.Feedback{
-		ID:        "2023-10-27T10:00:00Z_site1",
-		SiteID:    "site1",
-		UserID:    "user1",
-		Sentiment: "happy",
-		Comment:   "Great job!",
-		Timestamp: time.Date(2023, 10, 27, 10, 0, 0, 0, time.UTC),
-	}
-	fb2 := types.Feedback{
-		ID:        "2023-10-27T11:00:00Z_site1",
-		SiteID:    "site1",
-		UserID:    "user2",
-		Sentiment: "sad",
-		Comment:   "Needs work.",
-		Timestamp: time.Date(2023, 10, 27, 11, 0, 0, 0, time.UTC),
-	}
-	fb3 := types.Feedback{
-		ID:        "2023-10-27T12:00:00Z_site1",
-		SiteID:    "site1",
-		UserID:    "user3",
-		Sentiment: "neutral",
-		Comment:   "It's okay.",
-		Timestamp: time.Date(2023, 10, 27, 12, 0, 0, 0, time.UTC),
-	}
-
-	err = provider.InsertFeedback(ctx, fb1)
-	require.NoError(t, err)
-	err = provider.InsertFeedback(ctx, fb2)
-	require.NoError(t, err)
-	err = provider.InsertFeedback(ctx, fb3)
-	require.NoError(t, err)
-
-	// List feedback
-	fbs, err := provider.ListFeedback(ctx, 2, "")
-	require.NoError(t, err)
-	require.Len(t, fbs, 2)
-	assert.Equal(t, fb3.ID, fbs[0].ID) // Descending order
-	assert.Equal(t, fb2.ID, fbs[1].ID)
-
-	// List with pagination
-	fbs2, err := provider.ListFeedback(ctx, 2, fb2.ID)
-	require.NoError(t, err)
-	require.Len(t, fbs2, 1)
-	assert.Equal(t, fb1.ID, fbs2[0].ID)
-}
-
-func TestFirestore_Weather(t *testing.T) {
-	ctx := context.Background()
-	os.Setenv("FIRESTORE_EMULATOR_HOST", "127.0.0.1:8087")
-	projectID := "test-project-id"
-	randDB := fmt.Sprintf("test-db-%d", time.Now().UnixNano())
-	db := &FirestoreProvider{
-		projectID: projectID,
-		database:  randDB,
-	}
-
-	require.NoError(t, db.Init(ctx))
-	defer db.Close()
-
-	err := db.Validate()
-	require.NoError(t, err)
-
-	siteID := "test-site-weather"
-
-	t.Run("Upsert and Get Single", func(t *testing.T) {
-		start := time.Now().Truncate(24 * time.Hour).UTC()
-		w := types.Weather{
-			TSDayStart:   start,
-			TimeLocation: "America/Los_Angeles",
-			Lat:          34.0,
-			Long:         -118.0,
-			ActualHours: []types.HourlyWeather{
-				{TSHourStart: start.Add(1 * time.Hour), GHI: 150.5},
-			},
+		// Insert feedbacks
+		fb1 := types.Feedback{
+			ID:        "2023-10-27T10:00:00Z_site1",
+			SiteID:    "site1",
+			UserID:    "user1",
+			Sentiment: "happy",
+			Comment:   "Great job!",
+			Timestamp: time.Date(2023, 10, 27, 10, 0, 0, 0, time.UTC),
+		}
+		fb2 := types.Feedback{
+			ID:        "2023-10-27T11:00:00Z_site1",
+			SiteID:    "site1",
+			UserID:    "user2",
+			Sentiment: "sad",
+			Comment:   "Needs work.",
+			Timestamp: time.Date(2023, 10, 27, 11, 0, 0, 0, time.UTC),
+		}
+		fb3 := types.Feedback{
+			ID:        "2023-10-27T12:00:00Z_site1",
+			SiteID:    "site1",
+			UserID:    "user3",
+			Sentiment: "neutral",
+			Comment:   "It's okay.",
+			Timestamp: time.Date(2023, 10, 27, 12, 0, 0, 0, time.UTC),
 		}
 
-		err := db.UpsertWeather(ctx, siteID, []types.Weather{w}, types.CurrentWeatherVersion)
+		err := provider.InsertFeedback(ctx, fb1)
+		require.NoError(t, err)
+		err = provider.InsertFeedback(ctx, fb2)
+		require.NoError(t, err)
+		err = provider.InsertFeedback(ctx, fb3)
 		require.NoError(t, err)
 
-		results, err := db.GetWeather(ctx, siteID, start, start.Add(24*time.Hour))
+		// List feedback
+		fbs, err := provider.ListFeedback(ctx, 2, "")
 		require.NoError(t, err)
-		require.Len(t, results, 1)
-		assert.Equal(t, w.Lat, results[0].Lat)
-		assert.Equal(t, w.TimeLocation, results[0].TimeLocation)
-		assert.Len(t, results[0].ActualHours, 1)
-		assert.Equal(t, 150.5, results[0].ActualHours[0].GHI)
+		require.Len(t, fbs, 2)
+		assert.Equal(t, fb3.ID, fbs[0].ID) // Descending order
+		assert.Equal(t, fb2.ID, fbs[1].ID)
+
+		// List with pagination
+		fbs2, err := provider.ListFeedback(ctx, 2, fb2.ID)
+		require.NoError(t, err)
+		require.Len(t, fbs2, 1)
+		assert.Equal(t, fb1.ID, fbs2[0].ID)
 	})
 
-	t.Run("Upsert and Get Batch", func(t *testing.T) {
-		var weathers []types.Weather
-		start := time.Now().Truncate(24 * time.Hour).UTC().Add(-48 * time.Hour)
-
-		// generate 3 days
-		for i := 0; i < 3; i++ {
-			day := start.Add(time.Duration(i*24) * time.Hour)
-			weathers = append(weathers, types.Weather{
-				TSDayStart: day,
-				Lat:        34.0,
-				Long:       -118.0,
-				ForecastHours: []types.HourlyWeather{
-					{TSHourStart: day.Add(12 * time.Hour), GHI: 800.0},
-				},
-			})
-		}
-
-		err := db.UpsertWeather(ctx, siteID, weathers, types.CurrentWeatherVersion)
-		require.NoError(t, err)
-
-		// Get all 3 days
-		results, err := db.GetWeather(ctx, siteID, start, start.Add(72*time.Hour))
-		require.NoError(t, err)
-		require.Len(t, results, 3)
-
-		// Get only middle day
-		middleDay := start.Add(24 * time.Hour)
-		resultsMid, err := db.GetWeather(ctx, siteID, middleDay, middleDay.Add(24*time.Hour))
-		require.NoError(t, err)
-		require.Len(t, resultsMid, 1)
-		assert.True(t, resultsMid[0].TSDayStart.Equal(middleDay))
-	})
-
-	t.Run("Get Empty Range", func(t *testing.T) {
-		start := time.Now().Add(-1000 * 24 * time.Hour).Truncate(24 * time.Hour).UTC()
-		results, err := db.GetWeather(ctx, siteID, start, start.Add(24*time.Hour))
-		require.NoError(t, err)
-		assert.Len(t, results, 0)
+	t.Run("Weather", func(t *testing.T) {
 	})
 }

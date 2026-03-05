@@ -6,4 +6,3 @@ config.test.json
 *.har
 *.log
 raterudder
-!web/dist/unbreak.txt
