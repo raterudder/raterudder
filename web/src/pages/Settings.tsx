@@ -548,8 +548,8 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                         </Combobox.Trigger>
                                     </div>
                                     <Combobox.Portal>
-                                        <Combobox.Positioner>
-                                            <Combobox.Popup className="select-content">
+                                        <Combobox.Positioner className="select-positioner">
+                                            <Combobox.Popup className="select-popup">
                                                 <Combobox.List>
                                                     {(item: { label: string, value: string }) => (
                                                         <Combobox.Item key={item.value} value={item.value} className="select-item">
