@@ -242,7 +242,8 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
 
                 // We also need to map the weather to the simulation hours
                 modelingData = modelingData.map((sim: any) => {
-                    const weather = weatherHist.find((w: any) => w.tsHourStart === sim.ts);
+                    const simTime = new Date(sim.ts).getTime();
+                    const weather = weatherHist.find((w: any) => new Date(w.tsHourStart).getTime() === simTime);
                     if (weather) {
                         return {
                             ...sim,
@@ -264,8 +265,9 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     const reserve = firstSim ? firstSim.batteryReserveKWH : 0;
 
                     const historyMapped = energyHist.map((h: any) => {
-                        const price = priceHist.find((p: any) => p.tsHourStart === h.tsHourStart);
-                        const weather = weatherHist.find((w: any) => w.tsHourStart === h.tsHourStart);
+                        const hTime = new Date(h.tsHourStart).getTime();
+                        const price = priceHist.find((p: any) => new Date(p.tsHourStart).getTime() === hTime);
+                        const weather = weatherHist.find((w: any) => new Date(w.tsHourStart).getTime() === hTime);
                         return {
                             ts: h.tsHourStart,
                             hour: new Date(h.tsHourStart).getHours(),
