@@ -265,8 +265,8 @@ func TestHandleForecast(t *testing.T) {
 			},
 		}, types.CurrentSettingsVersion, nil)
 		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{
-			{TSHourStart: pastHour2},
-			{TSHourStart: pastHour1},
+			{TSHourStart: pastHour2, SolarKWH: 1.5, HomeKWH: 2.0, MinBatterySOC: 40, MaxBatterySOC: 60},
+			{TSHourStart: pastHour1, SolarKWH: 2.0, HomeKWH: 3.0, MinBatterySOC: 50, MaxBatterySOC: 70},
 		}, nil)
 		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{
 			{TSStart: pastHour2, DollarsPerKWH: 0.1},
@@ -341,5 +341,20 @@ func TestHandleForecast(t *testing.T) {
 		}
 		assert.True(t, foundActual, "should have mapped actual GHI")
 		assert.True(t, foundForecast, "should have mapped forecast GHI")
+
+		// Verify Energy History mapping
+		assert.Len(t, data.EnergyHistory, 2)
+		for _, eh := range data.EnergyHistory {
+			if eh.TSHourStart.Equal(pastHour2) {
+				assert.Equal(t, 1.5, eh.SolarKWH)
+				assert.Equal(t, 2.0, eh.HomeLoadKWH)
+				assert.Equal(t, 50.0, eh.AvgBatterySOC) // (40+60)/2
+			}
+			if eh.TSHourStart.Equal(pastHour1) {
+				assert.Equal(t, 2.0, eh.SolarKWH)
+				assert.Equal(t, 3.0, eh.HomeLoadKWH)
+				assert.Equal(t, 60.0, eh.AvgBatterySOC) // (50+70)/2
+			}
+		}
 	})
 }
