@@ -203,6 +203,8 @@ export interface ESSProviderInfo {
 export interface Settings {
     dryRun: boolean;
     pause: boolean;
+    countryCode: string;
+    postalCode: string;
     release: string;
     alwaysChargeUnderDollarsPerKWH: number;
     minArbitrageDifferenceDollarsPerKWH: number;
@@ -354,10 +356,13 @@ export interface ModelingHour {
     todaySolarTrend: number;
 }
 
-export const fetchModeling = async (siteID?: string): Promise<ModelingHour[]> => {
+export const fetchModeling = async (siteID?: string, includeHistory?: boolean): Promise<ForecastResponse> => {
     const query = new URLSearchParams();
     if (siteID) {
         query.append('siteID', siteID);
+    }
+    if (includeHistory) {
+        query.append('include_history', 'true');
     }
     const response = await fetch(`/api/forecast?${query.toString()}`);
     if (!response.ok) {
@@ -450,4 +455,29 @@ export async function listFeedback(limit?: number, lastFeedbackID?: string): Pro
         throw new Error(await extractError(response, 'Failed to fetch feedback'));
     }
     return response.json();
+}
+
+export interface EnergyHistoryRes {
+    tsHourStart: string;
+    avgBatterySOC: number;
+    solarKWH: number;
+}
+
+export interface PriceHistoryRes {
+    tsHourStart: string;
+    dollarsPerKWH: number;
+    gridUseDollarsPerKWH: number;
+}
+
+export interface WeatherRes {
+    tsHourStart: string;
+    actualGHI: number;
+    forecastGHI: number;
+}
+
+export interface ForecastResponse {
+    simulation: ModelingHour[];
+    energyHistory: EnergyHistoryRes[];
+    priceHistory: PriceHistoryRes[];
+    weather: WeatherRes[];
 }

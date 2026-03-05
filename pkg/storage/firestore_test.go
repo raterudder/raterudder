@@ -249,8 +249,8 @@ func TestFirestoreProvider(t *testing.T) {
 			var batchStats []types.EnergyStats
 			for i := 0; i < 5; i++ {
 				batchStats = append(batchStats, types.EnergyStats{
-					TSHourStart:       now.Add(time.Duration(i+1) * time.Hour),
-					SolarKWH:          float64(i) * 1.0,
+					TSHourStart: now.Add(time.Duration(i+1) * time.Hour),
+					SolarKWH:    float64(i) * 1.0,
 				})
 			}
 			require.NoError(t, f.UpsertEnergyHistories(ctx, "test-site", batchStats, 0))
@@ -410,68 +410,154 @@ func TestFirestoreProvider(t *testing.T) {
 			assert.ErrorContains(t, err, "user not found")
 		})
 	})
-}
 
-func TestFirestore_Feedback(t *testing.T) {
-	// Use a test project ID
-	projectID := "test-project-id"
+	t.Run("Feedback", func(t *testing.T) {
+		provider := f
 
-	// Use a random database for isolation
-	randDB := fmt.Sprintf("test-db-%d", time.Now().UnixNano())
-	provider := &FirestoreProvider{
-		projectID: projectID,
-		database:  randDB,
-	}
+		// Insert feedbacks
+		fb1 := types.Feedback{
+			ID:        "2023-10-27T10:00:00Z_site1",
+			SiteID:    "site1",
+			UserID:    "user1",
+			Sentiment: "happy",
+			Comment:   "Great job!",
+			Timestamp: time.Date(2023, 10, 27, 10, 0, 0, 0, time.UTC),
+		}
+		fb2 := types.Feedback{
+			ID:        "2023-10-27T11:00:00Z_site1",
+			SiteID:    "site1",
+			UserID:    "user2",
+			Sentiment: "sad",
+			Comment:   "Needs work.",
+			Timestamp: time.Date(2023, 10, 27, 11, 0, 0, 0, time.UTC),
+		}
+		fb3 := types.Feedback{
+			ID:        "2023-10-27T12:00:00Z_site1",
+			SiteID:    "site1",
+			UserID:    "user3",
+			Sentiment: "neutral",
+			Comment:   "It's okay.",
+			Timestamp: time.Date(2023, 10, 27, 12, 0, 0, 0, time.UTC),
+		}
 
-	ctx := context.Background()
-	err := provider.Init(ctx)
-	require.NoError(t, err)
+		err := provider.InsertFeedback(ctx, fb1)
+		require.NoError(t, err)
+		err = provider.InsertFeedback(ctx, fb2)
+		require.NoError(t, err)
+		err = provider.InsertFeedback(ctx, fb3)
+		require.NoError(t, err)
 
-	defer provider.Close()
+		// List feedback
+		fbs, err := provider.ListFeedback(ctx, 2, "")
+		require.NoError(t, err)
+		require.Len(t, fbs, 2)
+		assert.Equal(t, fb3.ID, fbs[0].ID) // Descending order
+		assert.Equal(t, fb2.ID, fbs[1].ID)
 
-	// Insert feedbacks
-	fb1 := types.Feedback{
-		ID:        "2023-10-27T10:00:00Z_site1",
-		SiteID:    "site1",
-		UserID:    "user1",
-		Sentiment: "happy",
-		Comment:   "Great job!",
-		Timestamp: time.Date(2023, 10, 27, 10, 0, 0, 0, time.UTC),
-	}
-	fb2 := types.Feedback{
-		ID:        "2023-10-27T11:00:00Z_site1",
-		SiteID:    "site1",
-		UserID:    "user2",
-		Sentiment: "sad",
-		Comment:   "Needs work.",
-		Timestamp: time.Date(2023, 10, 27, 11, 0, 0, 0, time.UTC),
-	}
-	fb3 := types.Feedback{
-		ID:        "2023-10-27T12:00:00Z_site1",
-		SiteID:    "site1",
-		UserID:    "user3",
-		Sentiment: "neutral",
-		Comment:   "It's okay.",
-		Timestamp: time.Date(2023, 10, 27, 12, 0, 0, 0, time.UTC),
-	}
+		// List with pagination
+		fbs2, err := provider.ListFeedback(ctx, 2, fb2.ID)
+		require.NoError(t, err)
+		require.Len(t, fbs2, 1)
+		assert.Equal(t, fb1.ID, fbs2[0].ID)
+	})
 
-	err = provider.InsertFeedback(ctx, fb1)
-	require.NoError(t, err)
-	err = provider.InsertFeedback(ctx, fb2)
-	require.NoError(t, err)
-	err = provider.InsertFeedback(ctx, fb3)
-	require.NoError(t, err)
+	t.Run("Weather", func(t *testing.T) {
+		siteID := "test-site-weather"
 
-	// List feedback
-	fbs, err := provider.ListFeedback(ctx, 2, "")
-	require.NoError(t, err)
-	require.Len(t, fbs, 2)
-	assert.Equal(t, fb3.ID, fbs[0].ID) // Descending order
-	assert.Equal(t, fb2.ID, fbs[1].ID)
+		t.Run("Upsert and Get Single", func(t *testing.T) {
+			start := time.Now().Truncate(24 * time.Hour).UTC()
+			w := types.Weather{
+				TSDayStart:   start,
+				TimeLocation: "America/Los_Angeles",
+				Lat:          34.0,
+				Long:         -118.0,
+				ActualHours: []types.HourlyWeather{
+					{TSHourStart: start.Add(1 * time.Hour), GHI: 150.5},
+				},
+			}
 
-	// List with pagination
-	fbs2, err := provider.ListFeedback(ctx, 2, fb2.ID)
-	require.NoError(t, err)
-	require.Len(t, fbs2, 1)
-	assert.Equal(t, fb1.ID, fbs2[0].ID)
+			err := f.UpsertWeather(ctx, siteID, []types.Weather{w}, types.CurrentWeatherVersion)
+			require.NoError(t, err)
+
+			results, err := f.GetWeather(ctx, siteID, start, start.Add(24*time.Hour))
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			assert.Equal(t, w.Lat, results[0].Lat)
+			assert.Equal(t, w.TimeLocation, results[0].TimeLocation)
+			assert.Len(t, results[0].ActualHours, 1)
+			assert.Equal(t, 150.5, results[0].ActualHours[0].GHI)
+		})
+
+		t.Run("Upsert and Get Batch", func(t *testing.T) {
+			var weathers []types.Weather
+			start := time.Now().Truncate(24 * time.Hour).UTC().Add(-48 * time.Hour)
+
+			// generate 3 days
+			for i := 0; i < 3; i++ {
+				day := start.Add(time.Duration(i*24) * time.Hour)
+				weathers = append(weathers, types.Weather{
+					TSDayStart: day,
+					Lat:        34.0,
+					Long:       -118.0,
+					ForecastHours: []types.HourlyWeather{
+						{TSHourStart: day.Add(12 * time.Hour), GHI: 800.0},
+					},
+				})
+			}
+
+			err := f.UpsertWeather(ctx, siteID, weathers, types.CurrentWeatherVersion)
+			require.NoError(t, err)
+
+			// Get all 3 days
+			results, err := f.GetWeather(ctx, siteID, start, start.Add(72*time.Hour))
+			require.NoError(t, err)
+			require.Len(t, results, 3)
+
+			// Get only middle day
+			middleDay := start.Add(24 * time.Hour)
+			resultsMid, err := f.GetWeather(ctx, siteID, middleDay, middleDay.Add(24*time.Hour))
+			require.NoError(t, err)
+			require.Len(t, resultsMid, 1)
+			assert.True(t, resultsMid[0].TSDayStart.Equal(middleDay))
+		})
+
+		t.Run("Upsert Overwrite", func(t *testing.T) {
+			start := time.Now().Truncate(24 * time.Hour).UTC().Add(100 * 24 * time.Hour)
+			w1 := types.Weather{
+				TSDayStart: start,
+				Lat:        34.0,
+				ActualHours: []types.HourlyWeather{
+					{TSHourStart: start.Add(1 * time.Hour), GHI: 100.0},
+				},
+			}
+
+			err := f.UpsertWeather(ctx, siteID, []types.Weather{w1}, types.CurrentWeatherVersion)
+			require.NoError(t, err)
+
+			// Overwrite the same day
+			w2 := types.Weather{
+				TSDayStart: start,
+				Lat:        35.0,
+				ActualHours: []types.HourlyWeather{
+					{TSHourStart: start.Add(1 * time.Hour), GHI: 200.0, SolarKWH: 5.5},
+				},
+			}
+			err = f.UpsertWeather(ctx, siteID, []types.Weather{w2}, types.CurrentWeatherVersion)
+			require.NoError(t, err)
+
+			results, err := f.GetWeather(ctx, siteID, start, start.Add(24*time.Hour))
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			assert.Equal(t, 35.0, results[0].Lat)
+			assert.Equal(t, 200.0, results[0].ActualHours[0].GHI)
+			assert.Equal(t, 5.5, results[0].ActualHours[0].SolarKWH)
+		})
+
+		t.Run("Get Empty Range", func(t *testing.T) {
+			start := time.Now().Add(-1000 * 24 * time.Hour).Truncate(24 * time.Hour).UTC()
+			results, err := f.GetWeather(ctx, siteID, start, start.Add(24*time.Hour))
+			require.NoError(t, err)
+			assert.Len(t, results, 0)
+		})
+	})
 }

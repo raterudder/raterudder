@@ -44,6 +44,11 @@ func (m *MockDatabase) UpsertEnergyHistories(ctx context.Context, siteID string,
 	return args.Error(0)
 }
 
+func (m *MockDatabase) UpsertWeather(ctx context.Context, siteID string, weather []types.Weather, version int) error {
+	args := m.Called(ctx, siteID, weather, version)
+	return args.Error(0)
+}
+
 func (m *MockDatabase) UpdateESSMockState(ctx context.Context, siteID string, state types.ESSMockState) error {
 	args := m.Called(ctx, siteID, state)
 	return args.Error(0)
@@ -163,4 +168,9 @@ func (m *MockDatabase) InsertFeedback(ctx context.Context, feedback types.Feedba
 func (m *MockDatabase) ListFeedback(ctx context.Context, limit int, lastFeedbackID string) ([]types.Feedback, error) {
 	args := m.Called(ctx, limit, lastFeedbackID)
 	return args.Get(0).([]types.Feedback), args.Error(1)
+}
+
+func (m *MockDatabase) GetWeather(ctx context.Context, siteID string, start, end time.Time) ([]types.Weather, error) {
+	args := m.Called(ctx, siteID, start, end)
+	return args.Get(0).([]types.Weather), args.Error(1)
 }
