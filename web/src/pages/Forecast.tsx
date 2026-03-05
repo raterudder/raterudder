@@ -238,10 +238,24 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 // Combine history and simulation if includeHistory is true
                 let modelingData = forecastData.simulation || forecastData || [];
 
+                const weatherHist = forecastData.weather || [];
+
+                // We also need to map the weather to the simulation hours
+                modelingData = modelingData.map((sim: any) => {
+                    const weather = weatherHist.find((w: any) => w.tsHourStart === sim.ts);
+                    if (weather) {
+                        return {
+                            ...sim,
+                            actualGHI: weather.actualGHI,
+                            forecastGHI: weather.forecastGHI,
+                        };
+                    }
+                    return sim;
+                });
+
                 if (includeHistory && forecastData.energyHistory && forecastData.priceHistory) {
                     const energyHist = forecastData.energyHistory || [];
                     const priceHist = forecastData.priceHistory || [];
-                    const weatherHist = forecastData.weather || [];
 
                     // The battery capacity for history is best estimated from the first simulation hour
                     // or assumed from the context, here we use the first sim hour's capacity.
@@ -268,19 +282,6 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                             actualGHI: weather?.actualGHI,
                             forecastGHI: weather?.forecastGHI,
                         };
-                    });
-
-                    // We also need to map the weather to the simulation hours
-                    modelingData = modelingData.map((sim: any) => {
-                        const weather = weatherHist.find((w: any) => w.tsHourStart === sim.ts);
-                        if (weather) {
-                            return {
-                                ...sim,
-                                actualGHI: weather.actualGHI,
-                                forecastGHI: weather.forecastGHI,
-                            };
-                        }
-                        return sim;
                     });
 
                     modelingData = [...historyMapped, ...modelingData];
