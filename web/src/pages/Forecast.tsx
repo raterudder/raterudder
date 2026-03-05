@@ -261,7 +261,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                             batteryReserveKWH: reserve,
                             predictedSolarKWH: h.solarKWH,
                             todaySolarTrend: 1.0, // Used for raw solar calc below
-                            avgHomeLoadKWH: 0, // Not currently tracked in basic history struct, could be calculated
+                            avgHomeLoadKWH: h.homeLoadKWH || 0,
                             gridChargeDollarsPerKWH: price ? price.gridUseDollarsPerKWH || price.dollarsPerKWH : 0,
                             netLoadSolarKWH: -h.solarKWH,
                             solarOppDollarsPerKWH: 0,
