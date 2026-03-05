@@ -216,6 +216,50 @@ describe('App & Settings', () => {
         });
     });
 
+    it('shows location settings only when release is staging', async () => {
+        const stagingSettings = { release: 'staging', minArbitrageDifferenceDollarsPerKWH: 0.05, minBatterySOC: 20, minLoadForSolarHedgeKWH: 2.0, ess: 'mock', hasCredentials: { mock: true } };
+        (fetchSettings as any).mockResolvedValue(stagingSettings);
+        (fetchAuthStatus as any).mockResolvedValue({ ...defaultAuthStatus, loggedIn: true });
+
+        render(<App />);
+        fireEvent.click(screen.getByText(/Log In/));
+        await waitFor(() => expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument());
+        fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
+        await screen.findByRole('heading', { name: /Settings/i });
+
+        await waitFor(() => {
+            expect(screen.getByText('Location')).toBeInTheDocument();
+            expect(screen.getByLabelText(/Zip\/Postal Code/i)).toBeInTheDocument();
+        });
+
+        const zipInput = screen.getByLabelText(/Zip\/Postal Code/i);
+        fireEvent.change(zipInput, { target: { value: '90210' } });
+
+        const saveBtn = screen.getByText('Save Settings');
+        fireEvent.click(saveBtn);
+
+        await waitFor(() => {
+            expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ postalCode: '90210' }), expect.any(String), undefined);
+        });
+    });
+
+    it('hides location settings when release is not staging', async () => {
+        const prodSettings = { release: 'production', minArbitrageDifferenceDollarsPerKWH: 0.05, minBatterySOC: 20, minLoadForSolarHedgeKWH: 2.0, ess: 'mock', hasCredentials: { mock: true } };
+        (fetchSettings as any).mockResolvedValue(prodSettings);
+        (fetchAuthStatus as any).mockResolvedValue({ ...defaultAuthStatus, loggedIn: true });
+
+        render(<App />);
+        fireEvent.click(screen.getByText(/Log In/));
+        await waitFor(() => expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument());
+        fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
+        await screen.findByRole('heading', { name: /Settings/i });
+
+        await waitFor(() => {
+            expect(screen.queryByText('Location')).not.toBeInTheDocument();
+            expect(screen.queryByLabelText(/Zip\/Postal Code/i)).not.toBeInTheDocument();
+        });
+    });
+
     it('can update ComEd rate options', async () => {
         await navigateToSettings();
 

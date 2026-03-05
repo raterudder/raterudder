@@ -346,6 +346,123 @@ func (f *FirestoreProvider) UpsertEnergyHistories(ctx context.Context, siteID st
 	return nil
 }
 
+// UpsertWeather adds or updates multiple weather records.
+func (f *FirestoreProvider) UpsertWeather(ctx context.Context, siteID string, weather []types.Weather, version int) error {
+	if len(weather) == 0 {
+		return nil
+	}
+
+	coll, err := f.getCollection(siteID, "weather")
+	if err != nil {
+		return err
+	}
+
+	if len(weather) == 1 {
+		w := weather[0]
+		jsonBytes, err := json.Marshal(w)
+		if err != nil {
+			return fmt.Errorf("failed to marshal weather: %w", err)
+		}
+		docID := w.TSDayStart.UTC().Format(time.RFC3339)
+		_, err = coll.Doc(docID).Set(ctx, map[string]interface{}{
+			"json":       string(jsonBytes),
+			"tsDayStart": w.TSDayStart,
+			"version":    version,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to upsert weather: %w", err)
+		}
+		return nil
+	}
+
+	var batch *firestore.WriteBatch
+	count := 0
+
+	for _, w := range weather {
+		if count == 0 {
+			batch = f.client.Batch()
+		}
+
+		jsonBytes, err := json.Marshal(w)
+		if err != nil {
+			return fmt.Errorf("failed to marshal weather: %w", err)
+		}
+
+		docID := w.TSDayStart.UTC().Format(time.RFC3339)
+		ref := coll.Doc(docID)
+		batch.Set(ref, map[string]interface{}{
+			"json":       string(jsonBytes),
+			"tsDayStart": w.TSDayStart,
+			"version":    version,
+		})
+
+		count++
+		if count >= maxBatchSize {
+			if _, err := batch.Commit(ctx); err != nil {
+				return fmt.Errorf("failed to commit weather batch: %w", err)
+			}
+			count = 0
+		}
+	}
+
+	if count > 0 {
+		if _, err := batch.Commit(ctx); err != nil {
+			return fmt.Errorf("failed to commit remaining weather batch: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// GetWeather retrieves weather records within the specified time range.
+func (f *FirestoreProvider) GetWeather(ctx context.Context, siteID string, start, end time.Time) ([]types.Weather, error) {
+	startDocID := start.Truncate(24 * time.Hour).UTC().Format(time.RFC3339)
+	endDocID := end.Truncate(24 * time.Hour).UTC().Format(time.RFC3339)
+
+	coll, err := f.getCollection(siteID, "weather")
+	if err != nil {
+		return nil, err
+	}
+	iter := coll.
+		Where(firestore.DocumentID, ">=", coll.Doc(startDocID)).
+		Where(firestore.DocumentID, "<", coll.Doc(endDocID)).
+		OrderBy(firestore.DocumentID, firestore.Asc).
+		Documents(ctx)
+	defer iter.Stop()
+
+	var weather []types.Weather
+	for {
+		doc, err := iter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("error iterating weather: %w", err)
+		}
+
+		val, err := doc.DataAt("json")
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "weather doc missing json", slog.String("docID", doc.Ref.ID), slog.String("siteID", siteID), slog.Any("err", err))
+			continue
+		}
+
+		jsonStr, ok := val.(string)
+		if !ok {
+			log.Ctx(ctx).WarnContext(ctx, "weather doc json not string", slog.String("docID", doc.Ref.ID), slog.String("siteID", siteID))
+			continue
+		}
+
+		var w types.Weather
+		if err := json.Unmarshal([]byte(jsonStr), &w); err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal weather", slog.String("docID", doc.Ref.ID), slog.String("siteID", siteID), slog.Any("err", err))
+			continue
+		}
+
+		weather = append(weather, w)
+	}
+	return weather, nil
+}
+
 // GetEnergyHistory retrieves energy history records within the specified time range.
 func (f *FirestoreProvider) GetEnergyHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.EnergyStats, error) {
 	startDocID := start.Truncate(time.Hour).UTC().Format(time.RFC3339)
