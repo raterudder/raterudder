@@ -490,7 +490,11 @@ func TestFirestoreProvider(t *testing.T) {
 
 		t.Run("Upsert and Get Batch", func(t *testing.T) {
 			var weathers []types.Weather
-			start := time.Now().Truncate(24 * time.Hour).UTC().Add(-48 * time.Hour)
+			// Ensure time is not nicely truncated to UTC day boundaries to test truncation bug
+			timeLoc, _ := time.LoadLocation("America/New_York")
+			localStart := time.Date(2024, 1, 1, 0, 0, 0, 0, timeLoc)
+			start := localStart.UTC() // This will be 2024-01-01T05:00:00Z
+			end := localStart.Add(72 * time.Hour).UTC() // This will be 2024-01-04T05:00:00Z
 
 			// generate 3 days
 			for i := 0; i < 3; i++ {
@@ -509,7 +513,7 @@ func TestFirestoreProvider(t *testing.T) {
 			require.NoError(t, err)
 
 			// Get all 3 days
-			results, err := f.GetWeather(ctx, siteID, start, start.Add(72*time.Hour))
+			results, err := f.GetWeather(ctx, siteID, start, end)
 			require.NoError(t, err)
 			require.Len(t, results, 3)
 
