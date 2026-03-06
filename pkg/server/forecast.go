@@ -110,9 +110,12 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	histStart24 := now.Add(-24 * time.Hour)
 	histEnd24 := now
 
-	energyHistory24, err := s.storage.GetEnergyHistory(ctx, siteID, histStart24, histEnd24)
-	if err != nil {
-		log.Ctx(ctx).WarnContext(ctx, "failed to fetch energy history for forecast", slog.Any("error", err), slog.String("siteID", siteID))
+	// Reuse energyHistory already fetched from db
+	var energyHistory24 []types.EnergyStats
+	for _, h := range energyHistory {
+		if !h.TSHourStart.Before(histStart24.Truncate(time.Hour)) && h.TSHourStart.Before(histEnd24.Truncate(time.Hour)) {
+			energyHistory24 = append(energyHistory24, h)
+		}
 	}
 
 	priceHistory24, err := s.storage.GetPriceHistory(ctx, siteID, histStart24, histEnd24)
@@ -133,7 +136,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var energyRes []EnergyHistoryRes
+	energyRes := make([]EnergyHistoryRes, 0, len(energyHistory24))
 	for _, h := range energyHistory24 {
 		avgSoc := (h.MinBatterySOC + h.MaxBatterySOC) / 2
 		energyRes = append(energyRes, EnergyHistoryRes{
@@ -144,7 +147,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	var priceRes []PriceHistoryRes
+	priceRes := make([]PriceHistoryRes, 0, len(priceHistory24))
 	for _, p := range priceHistory24 {
 		priceRes = append(priceRes, PriceHistoryRes{
 			TSHourStart:          p.TSStart,
@@ -173,7 +176,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var weatherRes []WeatherRes
+	weatherRes := make([]WeatherRes, 0, len(weatherMap))
 	for _, wr := range weatherMap {
 		weatherRes = append(weatherRes, wr)
 	}
