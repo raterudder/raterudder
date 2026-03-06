@@ -33,4 +33,3 @@ func Configured() Service {
 
 	return s
 }
-
