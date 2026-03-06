@@ -210,6 +210,7 @@ func (s *Server) setupHandler() http.Handler {
 	apiMux.HandleFunc("GET /api/list/sites", s.handleListSites)
 	apiMux.HandleFunc("POST /api/feedback", s.handleSubmitFeedback)
 	apiMux.HandleFunc("GET /api/list/feedback", s.handleListFeedback)
+	apiMux.HandleFunc("POST /api/report/browser", s.handleReportBrowser)
 
 	mux := http.NewServeMux()
 	// limit request body to 1MB to prevent DoS
