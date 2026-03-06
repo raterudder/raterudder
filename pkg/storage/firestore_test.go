@@ -573,5 +573,35 @@ func TestFirestoreProvider(t *testing.T) {
 			require.NoError(t, err)
 			assert.Len(t, results, 0)
 		})
+
+		t.Run("Timezone Comparisons", func(t *testing.T) {
+			locEast, _ := time.LoadLocation("America/New_York")
+			locWest, _ := time.LoadLocation("America/Los_Angeles")
+
+			// Same actual time, different timezone representations
+			tEast := time.Date(2024, 3, 5, 0, 0, 0, 0, locEast)
+			tWest := time.Date(2024, 3, 4, 21, 0, 0, 0, locWest)
+
+			// Ensure they are the same absolute time
+			require.True(t, tEast.Equal(tWest))
+
+			w := types.Weather{
+				TSDayStart:   tWest, // Save with West Coast time
+				TimeLocation: "America/Los_Angeles",
+				Lat:          37.0,
+				Long:         -122.0,
+			}
+			err := f.UpsertWeather(ctx, siteID, []types.Weather{w}, types.CurrentWeatherVersion)
+			require.NoError(t, err)
+
+			// Query using East Coast time representation
+			// We query for the exact same point in time up to 1 hour later
+			results, err := f.GetWeather(ctx, siteID, tEast, tEast.Add(1*time.Hour))
+			require.NoError(t, err)
+			require.Len(t, results, 1, "should retrieve weather regardless of timezone representation")
+
+			// Verify timestamp matches
+			assert.True(t, results[0].TSDayStart.Equal(tEast))
+		})
 	})
 }

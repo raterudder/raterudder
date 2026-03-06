@@ -181,19 +181,15 @@ func (f *FirestoreProvider) InsertAction(ctx context.Context, siteID string, act
 }
 
 // GetActionHistory retrieves action records within the specified time range.
-// Uses document ID range queries for efficient filtering without reading all documents.
 func (f *FirestoreProvider) GetActionHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Action, error) {
-	startDocID := start.UTC().Format(time.RFC3339)
-	endDocID := end.UTC().Format(time.RFC3339)
-
 	coll, err := f.getCollection(siteID, "action_history")
 	if err != nil {
 		return nil, err
 	}
 	iter := coll.
-		Where(firestore.DocumentID, ">=", coll.Doc(startDocID)).
-		Where(firestore.DocumentID, "<", coll.Doc(endDocID)).
-		OrderBy(firestore.DocumentID, firestore.Asc).
+		Where("timestamp", ">=", start).
+		Where("timestamp", "<", end).
+		OrderBy("timestamp", firestore.Asc).
 		Documents(ctx)
 	defer iter.Stop()
 
@@ -416,17 +412,14 @@ func (f *FirestoreProvider) UpsertWeather(ctx context.Context, siteID string, we
 
 // GetWeather retrieves weather records within the specified time range.
 func (f *FirestoreProvider) GetWeather(ctx context.Context, siteID string, start, end time.Time) ([]types.Weather, error) {
-	startDocID := start.UTC().Format(time.RFC3339)
-	endDocID := end.UTC().Format(time.RFC3339)
-
 	coll, err := f.getCollection(siteID, "weather")
 	if err != nil {
 		return nil, err
 	}
 	iter := coll.
-		Where(firestore.DocumentID, ">=", coll.Doc(startDocID)).
-		Where(firestore.DocumentID, "<", coll.Doc(endDocID)).
-		OrderBy(firestore.DocumentID, firestore.Asc).
+		Where("tsDayStart", ">=", start).
+		Where("tsDayStart", "<", end).
+		OrderBy("tsDayStart", firestore.Asc).
 		Documents(ctx)
 	defer iter.Stop()
 
@@ -465,17 +458,17 @@ func (f *FirestoreProvider) GetWeather(ctx context.Context, siteID string, start
 
 // GetEnergyHistory retrieves energy history records within the specified time range.
 func (f *FirestoreProvider) GetEnergyHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.EnergyStats, error) {
-	startDocID := start.Truncate(time.Hour).UTC().Format(time.RFC3339)
-	endDocID := end.Truncate(time.Hour).UTC().Format(time.RFC3339)
+	startHour := start.Truncate(time.Hour)
+	endHour := end.Truncate(time.Hour)
 
 	coll, err := f.getCollection(siteID, "energy_history")
 	if err != nil {
 		return nil, err
 	}
 	iter := coll.
-		Where(firestore.DocumentID, ">=", coll.Doc(startDocID)).
-		Where(firestore.DocumentID, "<", coll.Doc(endDocID)).
-		OrderBy(firestore.DocumentID, firestore.Asc).
+		Where("timestamp", ">=", startHour).
+		Where("timestamp", "<", endHour).
+		OrderBy("timestamp", firestore.Asc).
 		Documents(ctx)
 	defer iter.Stop()
 
@@ -714,20 +707,16 @@ func (f *FirestoreProvider) UpsertPrices(ctx context.Context, siteID string, pri
 }
 
 // GetPriceHistory retrieves price records within the specified time range for a site.
-// Uses document ID range queries for efficient filtering.
 func (f *FirestoreProvider) GetPriceHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Price, error) {
-	startDocID := start.UTC().Format(time.RFC3339)
-	endDocID := end.UTC().Format(time.RFC3339)
-
 	coll, err := f.getCollection(siteID, "price_history")
 	if err != nil {
 		return nil, err
 	}
 
 	iter := coll.
-		Where(firestore.DocumentID, ">=", coll.Doc(startDocID)).
-		Where(firestore.DocumentID, "<", coll.Doc(endDocID)).
-		OrderBy(firestore.DocumentID, firestore.Asc).
+		Where("timestamp", ">=", start).
+		Where("timestamp", "<", end).
+		OrderBy("timestamp", firestore.Asc).
 		Documents(ctx)
 	defer iter.Stop()
 
