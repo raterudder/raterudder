@@ -18,6 +18,9 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 		// Control referrer information
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 
+		// Reporting endpoints
+		w.Header().Set("Reporting-Endpoints", "browser-reports=\"/api/report/browser\"")
+
 		next.ServeHTTP(w, r)
 	})
 }

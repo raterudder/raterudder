@@ -23,10 +23,10 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		ctx := r.Context()
 		ctx = log.With(ctx, log.Ctx(ctx).With(slog.String("reqPath", r.URL.Path)))
 
-		allowNoLogin := r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/join" || r.URL.Path == "/api/auth/logout"
-		ignoreUserNotFound := r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/join" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/logout"
+		allowNoLogin := r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/join" || r.URL.Path == "/api/auth/logout" || r.URL.Path == "/api/report/browser"
+		ignoreUserNotFound := r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/join" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/logout" || r.URL.Path == "/api/report/browser"
 		isUpdatePath := r.URL.Path == "/api/update" || r.URL.Path == "/api/updateSites"
-		ignoreSiteID := r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/logout" || r.URL.Path == "/api/list/sites" || r.URL.Path == "/api/list/feedback"
+		ignoreSiteID := r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/logout" || r.URL.Path == "/api/list/sites" || r.URL.Path == "/api/list/feedback" || r.URL.Path == "/api/report/browser"
 
 		// extract SiteID
 		var siteID string
