@@ -25,13 +25,34 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Reporting-Endpoints", "browser-reports=\"/api/report/browser\"")
 
 		// Content Security Policy
+		scriptSrc := "'self' 'unsafe-inline'"
+		styleSrc := "'self' 'unsafe-inline' https://fonts.googleapis.com"
+		fontSrc := "'self' data: https://fonts.gstatic.com"
+		imgSrc := "'self' data:"
+		connectSrc := "'self'"
+		frameSrc := "'self'"
+
+		if _, ok := s.oidcAudiences["google"]; ok {
+			scriptSrc += " https://accounts.google.com/gsi/client"
+			styleSrc += " https://accounts.google.com/gsi/style"
+			imgSrc += " https://accounts.google.com/gsi/ https://ssl.gstatic.com/accounts/ui/"
+			connectSrc += " https://accounts.google.com/gsi/"
+			frameSrc += " https://accounts.google.com/gsi/"
+		}
+
+		if _, ok := s.oidcAudiences["apple"]; ok {
+			scriptSrc += " https://appleid.cdn-apple.com"
+			connectSrc += " https://appleid.apple.com"
+			frameSrc += " https://appleid.apple.com"
+		}
+
 		csp := "default-src 'self'; " +
-			"script-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/client https://appleid.apple.com; " +
-			"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com/gsi/style; " +
-			"font-src 'self' data: https://fonts.gstatic.com; " +
-			"img-src 'self' data: https://accounts.google.com/gsi/ https://ssl.gstatic.com/accounts/ui/; " +
-			"connect-src 'self' https://accounts.google.com/gsi/ https://appleid.apple.com; " +
-			"frame-src 'self' https://accounts.google.com/gsi/ https://appleid.apple.com; " +
+			"script-src " + scriptSrc + "; " +
+			"style-src " + styleSrc + "; " +
+			"font-src " + fontSrc + "; " +
+			"img-src " + imgSrc + "; " +
+			"connect-src " + connectSrc + "; " +
+			"frame-src " + frameSrc + "; " +
 			"report-to browser-reports"
 		w.Header().Set("Content-Security-Policy", csp)
 
