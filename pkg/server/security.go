@@ -18,6 +18,12 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 		// Control referrer information
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 
+		// Content Security Policy
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://accounts.google.com https://appleid.apple.com; frame-ancestors 'none';")
+
+		// Prevent XSS attacks
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+
 		next.ServeHTTP(w, r)
 	})
 }
