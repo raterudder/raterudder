@@ -81,8 +81,13 @@ func TestSettings(t *testing.T) {
 		var resp SettingsRes
 		err := json.NewDecoder(w.Body).Decode(&resp)
 		require.NoError(t, err)
+		// Verify fields populated by default mockS.GetSettings
 		assert.Equal(t, 10.0, resp.MinBatterySOC)
+		assert.Equal(t, false, resp.DryRun)
+		assert.Equal(t, "test", resp.UtilityProvider)
+		// Verify hasCredentials flags accurately reflect the empty mock credentials
 		assert.False(t, resp.HasCredentials["franklin"])
+		assert.False(t, resp.HasCredentials["mock"])
 	})
 
 	t.Run("Update Settings - Disabled (No Admin)", func(t *testing.T) {
