@@ -242,8 +242,10 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
 
                 // We also need to map the weather to the simulation hours
                 modelingData = modelingData.map((sim: any) => {
-                    const simTime = new Date(sim.ts).getTime();
-                    const weather = weatherHist.find((w: any) => new Date(w.tsHourStart).getTime() === simTime);
+                    const simDate = new Date(sim.ts);
+                    simDate.setMinutes(0, 0, 0);
+                    const simTimeHour = simDate.getTime();
+                    const weather = weatherHist.find((w: any) => new Date(w.tsHourStart).getTime() === simTimeHour);
                     if (weather) {
                         return {
                             ...sim,
@@ -278,7 +280,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                             predictedSolarKWH: h.solarKWH,
                             todaySolarTrend: 1.0, // Used for raw solar calc below
                             avgHomeLoadKWH: h.homeLoadKWH || 0,
-                            gridChargeDollarsPerKWH: price ? price.gridUseDollarsPerKWH || price.dollarsPerKWH : 0,
+                            gridChargeDollarsPerKWH: price ? price.dollarsPerKWH + (price.gridUseDollarsPerKWH || 0) : 0,
                             netLoadSolarKWH: -h.solarKWH,
                             solarOppDollarsPerKWH: 0,
                             actualGHI: weather?.actualGHI,
