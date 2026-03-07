@@ -97,4 +97,101 @@ func TestReportBrowser(t *testing.T) {
 		// Assert successful processing of the report (returns 204 No Content)
 		require.Equal(t, http.StatusNoContent, w.Code)
 	})
+
+	t.Run("Handle Invalid CSP Violation Body", func(t *testing.T) {
+		payload := `[{
+			"age": 10,
+			"body": "invalid csp body format",
+			"type": "csp-violation",
+			"url": "https://example.com/doc",
+			"user_agent": "Mozilla/5.0"
+		}]`
+
+		req := httptest.NewRequest(http.MethodPost, "/api/report/browser", bytes.NewBufferString(payload))
+		w := httptest.NewRecorder()
+
+		srv := &Server{}
+		srv.handleReportBrowser(w, req)
+
+		// Assert successful processing of the report (returns 204 No Content)
+		// We expect the server to log the error but still return 204
+		require.Equal(t, http.StatusNoContent, w.Code)
+	})
+
+	t.Run("Handle Invalid Intervention Body", func(t *testing.T) {
+		payload := `[{
+			"age": 10,
+			"body": "invalid intervention body format",
+			"type": "intervention",
+			"url": "https://example.com/doc",
+			"user_agent": "Mozilla/5.0"
+		}]`
+
+		req := httptest.NewRequest(http.MethodPost, "/api/report/browser", bytes.NewBufferString(payload))
+		w := httptest.NewRecorder()
+
+		srv := &Server{}
+		srv.handleReportBrowser(w, req)
+
+		// Assert successful processing of the report (returns 204 No Content)
+		// We expect the server to log the error but still return 204
+		require.Equal(t, http.StatusNoContent, w.Code)
+	})
+
+	t.Run("Handle Multiple Reports", func(t *testing.T) {
+		payload := `[{
+			"age": 10,
+			"body": {
+				"blockedURL": "https://example.com/blocked",
+				"columnNumber": 12,
+				"disposition": "enforce",
+				"documentURL": "https://example.com/doc",
+				"effectiveDirective": "script-src",
+				"lineNumber": 34,
+				"originalPolicy": "default-src 'self'",
+				"referrer": "https://example.com/ref",
+				"sample": "",
+				"sourceFile": "https://example.com/source",
+				"statusCode": 200
+			},
+			"type": "csp-violation",
+			"url": "https://example.com/doc",
+			"user_agent": "Mozilla/5.0"
+		},
+		{
+			"age": 10,
+			"body": {
+				"id": "HeavyAdIntervention",
+				"message": "Ad was heavy",
+				"sourceFile": "https://example.com/ad.js",
+				"lineNumber": 10,
+				"columnNumber": 5
+			},
+			"type": "intervention",
+			"url": "https://example.com/doc",
+			"user_agent": "Mozilla/5.0"
+		}]`
+
+		req := httptest.NewRequest(http.MethodPost, "/api/report/browser", bytes.NewBufferString(payload))
+		w := httptest.NewRecorder()
+
+		srv := &Server{}
+		srv.handleReportBrowser(w, req)
+
+		// Assert successful processing of the report (returns 204 No Content)
+		require.Equal(t, http.StatusNoContent, w.Code)
+	})
+
+	t.Run("Handle Empty Report Array", func(t *testing.T) {
+		payload := `[]`
+
+		req := httptest.NewRequest(http.MethodPost, "/api/report/browser", bytes.NewBufferString(payload))
+		w := httptest.NewRecorder()
+
+		srv := &Server{}
+		srv.handleReportBrowser(w, req)
+
+		// Assert successful processing of the empty report array (returns 204 No Content)
+		require.Equal(t, http.StatusNoContent, w.Code)
+	})
 }
