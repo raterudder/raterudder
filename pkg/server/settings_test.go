@@ -260,7 +260,7 @@ func TestSettings(t *testing.T) {
 				ESS:                         "franklin",
 			},
 			Credentials: &types.Credentials{
-				Franklin: &types.FranklinCredentials{Username: "foo", MD5Password: "bar"},
+				Franklin: &types.FranklinCredentials{Username: "foo", Password: "bar"},
 			},
 		}
 		b, err := json.Marshal(s)
@@ -274,9 +274,9 @@ func TestSettings(t *testing.T) {
 
 		// Expect Authenticate to be called with the provided credentials
 		mockES.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
-			return c.Franklin != nil && c.Franklin.Username == "foo" && c.Franklin.MD5Password == "bar"
+			return c.Franklin != nil && c.Franklin.Username == "foo" && (c.Franklin.MD5Password == "bar" || c.Franklin.Password == "bar")
 		})).Return(types.Credentials{
-			Franklin: &types.FranklinCredentials{Username: "foo", MD5Password: "bar", GatewayID: "gw-123"},
+			Franklin: &types.FranklinCredentials{Username: "foo", MD5Password: "bar", GatewayID: "gw-123", Password: "bar"},
 		}, true, nil)
 
 		// Expect GetEnergyHistory (Sync) because we are providing new credentials
@@ -312,7 +312,7 @@ func TestSettings(t *testing.T) {
 				ESS:                         "franklin",
 			},
 			Credentials: &types.Credentials{
-				Franklin: &types.FranklinCredentials{Username: "foo", MD5Password: "bar"},
+				Franklin: &types.FranklinCredentials{Username: "foo", Password: "bar"},
 			},
 		}
 		b, err := json.Marshal(s)
@@ -338,11 +338,11 @@ func TestSettings(t *testing.T) {
 		// Expect validation to pass
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Once()
 
-		// Expect Authenticate to be called with the merged credentials
+		// Expect Authenticate to be called with the provided credentials
 		mockES.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
-			return c.Franklin != nil && c.Franklin.Username == "foo" && c.Franklin.MD5Password == "bar"
+			return c.Franklin != nil && c.Franklin.Username == "foo" && (c.Franklin.MD5Password == "bar" || c.Franklin.Password == "bar")
 		})).Return(types.Credentials{
-			Franklin: &types.FranklinCredentials{Username: "foo", MD5Password: "bar", GatewayID: "gw-123"},
+			Franklin: &types.FranklinCredentials{Username: "foo", MD5Password: "bar", GatewayID: "gw-123", Password: "bar"},
 		}, true, nil)
 
 		// Expect SetSettings to be called

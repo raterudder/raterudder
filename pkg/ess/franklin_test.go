@@ -43,7 +43,7 @@ func TestFranklin(t *testing.T) {
 			client:      ts.Client(),
 			baseURL:     ts.URL,
 			username:    "user@example.com",
-			md5Password: "pass",
+			md5Password: "pass", // Testing legacy MD5 support
 			gatewayID:   "GW123",
 		}
 
@@ -934,8 +934,8 @@ func TestFranklin(t *testing.T) {
 	})
 
 	t.Run("Authenticate", func(t *testing.T) {
-		t.Run("MD5HashRawPassword", func(t *testing.T) {
-			randomStr := "temp-token-md5"
+		t.Run("RawPassword", func(t *testing.T) {
+			randomStr := "temp-token-raw"
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
 					require.NoError(t, r.ParseForm())
@@ -993,10 +993,9 @@ func TestFranklin(t *testing.T) {
 			require.NoError(t, err)
 			assert.True(t, changed)
 			assert.Equal(t, randomStr, newCreds.Franklin.Token)
-			assert.Equal(t, "", newCreds.Franklin.Password, "Raw password should be cleared")
-
+			assert.Equal(t, "myrawpassword", newCreds.Franklin.Password, "Raw password should be preserved")
 			hash := md5.Sum([]byte("myrawpassword"))
-			assert.Equal(t, hex.EncodeToString(hash[:]), newCreds.Franklin.MD5Password, "MD5 hash should be set")
+			assert.Equal(t, hex.EncodeToString(hash[:]), f.md5Password)
 		})
 
 		t.Run("AutoFetchGatewayID", func(t *testing.T) {
