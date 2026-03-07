@@ -10,24 +10,12 @@ import (
 	"testing"
 
 	"github.com/raterudder/raterudder/pkg/log"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// stringBuffer implements io.Writer and stores written data.
-type stringBuffer struct {
-	b bytes.Buffer
-}
-
-func (sb *stringBuffer) Write(p []byte) (n int, err error) {
-	return sb.b.Write(p)
-}
-
-func (sb *stringBuffer) String() string {
-	return sb.b.String()
-}
-
-func setupTestLogger(ctx context.Context) (context.Context, *stringBuffer) {
-	buf := &stringBuffer{}
+func setupTestLogger(ctx context.Context) (context.Context, *bytes.Buffer) {
+	buf := &bytes.Buffer{}
 	logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	}))
@@ -46,11 +34,11 @@ func TestReportBrowser(t *testing.T) {
 		srv := &Server{}
 		srv.handleReportBrowser(w, req)
 
-		require.Equal(t, http.StatusNoContent, w.Code)
+		assert.Equal(t, http.StatusNoContent, w.Code)
 		logOutput := buf.String()
-		require.Contains(t, logOutput, "CSP Violation")
-		require.Contains(t, logOutput, "https://example.com/blocked")
-		require.Contains(t, logOutput, "script-src")
+		assert.Contains(t, logOutput, "CSP Violation")
+		assert.Contains(t, logOutput, "https://example.com/blocked")
+		assert.Contains(t, logOutput, "script-src")
 	})
 
 	t.Run("Handle Intervention", func(t *testing.T) {
@@ -64,11 +52,11 @@ func TestReportBrowser(t *testing.T) {
 		srv := &Server{}
 		srv.handleReportBrowser(w, req)
 
-		require.Equal(t, http.StatusNoContent, w.Code)
+		assert.Equal(t, http.StatusNoContent, w.Code)
 		logOutput := buf.String()
-		require.Contains(t, logOutput, "Browser Intervention")
-		require.Contains(t, logOutput, "HeavyAdIntervention")
-		require.Contains(t, logOutput, "Ad was heavy")
+		assert.Contains(t, logOutput, "Browser Intervention")
+		assert.Contains(t, logOutput, "HeavyAdIntervention")
+		assert.Contains(t, logOutput, "Ad was heavy")
 	})
 
 	t.Run("Handle Invalid JSON", func(t *testing.T) {
@@ -82,8 +70,8 @@ func TestReportBrowser(t *testing.T) {
 		srv := &Server{}
 		srv.handleReportBrowser(w, req)
 
-		require.Equal(t, http.StatusBadRequest, w.Code)
-		require.Contains(t, buf.String(), "failed to decode browser report body")
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Contains(t, buf.String(), "failed to decode browser report body")
 	})
 
 	t.Run("Handle Ignore Unknown Type", func(t *testing.T) {
@@ -97,8 +85,8 @@ func TestReportBrowser(t *testing.T) {
 		srv := &Server{}
 		srv.handleReportBrowser(w, req)
 
-		require.Equal(t, http.StatusNoContent, w.Code)
-		require.Contains(t, buf.String(), "unknown browser report type")
+		assert.Equal(t, http.StatusNoContent, w.Code)
+		assert.Contains(t, buf.String(), "unknown browser report type")
 	})
 
 	t.Run("Handle Invalid CSP Violation Body", func(t *testing.T) {
@@ -112,8 +100,8 @@ func TestReportBrowser(t *testing.T) {
 		srv := &Server{}
 		srv.handleReportBrowser(w, req)
 
-		require.Equal(t, http.StatusNoContent, w.Code)
-		require.Contains(t, buf.String(), "failed to decode csp violation report body")
+		assert.Equal(t, http.StatusNoContent, w.Code)
+		assert.Contains(t, buf.String(), "failed to decode csp violation report body")
 	})
 
 	t.Run("Handle Invalid Intervention Body", func(t *testing.T) {
@@ -127,8 +115,8 @@ func TestReportBrowser(t *testing.T) {
 		srv := &Server{}
 		srv.handleReportBrowser(w, req)
 
-		require.Equal(t, http.StatusNoContent, w.Code)
-		require.Contains(t, buf.String(), "failed to decode intervention report body")
+		assert.Equal(t, http.StatusNoContent, w.Code)
+		assert.Contains(t, buf.String(), "failed to decode intervention report body")
 	})
 
 	t.Run("Handle Multiple Reports", func(t *testing.T) {
@@ -142,7 +130,7 @@ func TestReportBrowser(t *testing.T) {
 		srv := &Server{}
 		srv.handleReportBrowser(w, req)
 
-		require.Equal(t, http.StatusNoContent, w.Code)
+		assert.Equal(t, http.StatusNoContent, w.Code)
 
 		logOutput := buf.String()
 		logLines := strings.Split(strings.TrimSpace(logOutput), "\n")
@@ -152,11 +140,11 @@ func TestReportBrowser(t *testing.T) {
 		}
 		require.Len(t, logLines, 2, "Expected exactly two log entries")
 
-		require.Contains(t, logLines[0], "CSP Violation")
-		require.Contains(t, logLines[0], "https://example.com/blocked")
+		assert.Contains(t, logLines[0], "CSP Violation")
+		assert.Contains(t, logLines[0], "https://example.com/blocked")
 
-		require.Contains(t, logLines[1], "Browser Intervention")
-		require.Contains(t, logLines[1], "HeavyAdIntervention")
+		assert.Contains(t, logLines[1], "Browser Intervention")
+		assert.Contains(t, logLines[1], "HeavyAdIntervention")
 	})
 
 	t.Run("Handle Empty Report Array", func(t *testing.T) {
@@ -170,9 +158,9 @@ func TestReportBrowser(t *testing.T) {
 		srv := &Server{}
 		srv.handleReportBrowser(w, req)
 
-		require.Equal(t, http.StatusNoContent, w.Code)
+		assert.Equal(t, http.StatusNoContent, w.Code)
 
 		// Ensure nothing is logged when there are no reports
-		require.Empty(t, buf.String())
+		assert.Empty(t, buf.String())
 	})
 }
