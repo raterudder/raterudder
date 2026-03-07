@@ -23,6 +23,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
+	"github.com/raterudder/raterudder/pkg/weather"
 	"github.com/raterudder/raterudder/web"
 )
 
@@ -50,6 +51,7 @@ type Server struct {
 	ess        *ess.Map
 	storage    storage.Database
 	controller *controller.Controller
+	weather    weather.Service
 
 	listenAddr string
 	devProxy   string
@@ -76,6 +78,7 @@ func Configured(u *utility.Map, e *ess.Map, s storage.Database) *Server {
 		ess:        e,
 		storage:    s,
 		controller: controller.NewController(),
+		weather:    weather.Configured(),
 		serverName: "raterudder",
 	}
 	revision := os.Getenv("K_REVISION")
@@ -204,9 +207,14 @@ func (s *Server) setupHandler() http.Handler {
 	apiMux.HandleFunc("POST /api/join", s.handleJoin)
 	apiMux.HandleFunc("GET /api/list/utilities", s.handleListUtilities)
 	apiMux.HandleFunc("GET /api/list/ess", s.handleListESS)
+	apiMux.HandleFunc("GET /api/list/sites", s.handleListSites)
+	apiMux.HandleFunc("POST /api/feedback", s.handleSubmitFeedback)
+	apiMux.HandleFunc("GET /api/list/feedback", s.handleListFeedback)
+	apiMux.HandleFunc("POST /api/report/browser", s.handleReportBrowser)
 
 	mux := http.NewServeMux()
-	mux.Handle("/api/", s.authMiddleware(apiMux))
+	// limit request body to 1MB to prevent DoS
+	mux.Handle("/api/", http.MaxBytesHandler(s.authMiddleware(apiMux), 1048576))
 
 	// serve the web frontend, either from the embedded filesystem or from the dev server
 	if s.devProxy != "" {
@@ -348,4 +356,14 @@ func (s *Server) revisionMiddleware(next http.Handler) http.Handler {
 
 func truncateDay(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+}
+
+// isMultiSiteAdmin returns true if the user's email is in the adminEmails list.
+func (s *Server) isMultiSiteAdmin(user types.User) bool {
+	for _, adminEmail := range s.adminEmails {
+		if user.Email == adminEmail {
+			return true
+		}
+	}
+	return false
 }

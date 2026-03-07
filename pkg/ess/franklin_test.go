@@ -248,7 +248,7 @@ func TestFranklin(t *testing.T) {
 		assert.Equal(t, "E123", status.Alarms[0].Code)
 
 		expectedTime, _ := time.Parse(time.DateTime, "2023-10-27 12:00:00")
-		assert.Equal(t, expectedTime.UTC(), status.Alarms[0].Time.UTC())
+		assert.Equal(t, expectedTime.UTC(), status.Alarms[0].Timestamp.UTC())
 	})
 
 	t.Run("GetStatus Alarms Filtered", func(t *testing.T) {

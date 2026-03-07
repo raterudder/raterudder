@@ -354,6 +354,50 @@ describe('Dashboard', () => {
         });
     });
 
+    it('shows ESS authentication warning banner when consecutive failures >= 3', async () => {
+        (fetchActions as any).mockResolvedValue([]);
+        (fetchSettings as any).mockResolvedValue({
+            minBatterySOC: 10,
+            utilityProvider: 'test',
+            ess: 'franklinwh',
+            hasCredentials: { franklinwh: true },
+            essAuthStatus: {
+                consecutiveFailures: 3,
+                lastAttempt: '2023-01-01T12:00:00Z'
+            }
+        });
+
+        renderWithRouter(<Dashboard />);
+
+        await waitFor(() => {
+            const warningTags = screen.getAllByText(/Warning:/);
+            expect(warningTags.length).toBeGreaterThan(0);
+            const failureTags = screen.getAllByText(/Energy Storage System authentication failed 3 time\(s\)\./);
+            expect(failureTags.length).toBeGreaterThan(0);
+        });
+    });
+
+    it('does not show ESS authentication warning banner when consecutive failures < 3', async () => {
+        (fetchActions as any).mockResolvedValue([]);
+        (fetchSettings as any).mockResolvedValue({
+            minBatterySOC: 10,
+            utilityProvider: 'test',
+            ess: 'franklinwh',
+            hasCredentials: { franklinwh: true },
+            essAuthStatus: {
+                consecutiveFailures: 2,
+                lastAttempt: '2023-01-01T12:00:00Z'
+            }
+        });
+
+        renderWithRouter(<Dashboard />);
+
+        await waitFor(() => {
+            expect(screen.queryByText(/Warning:/)).not.toBeInTheDocument();
+            expect(screen.queryByText(/Energy Storage System authentication failed/)).not.toBeInTheDocument();
+        });
+    });
+
     it('does not show banner when ESS credentials are present', async () => {
         (fetchActions as any).mockResolvedValue([]);
         (fetchSavings as any).mockResolvedValue(null);

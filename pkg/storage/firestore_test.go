@@ -63,11 +63,35 @@ func TestFirestoreProvider(t *testing.T) {
 		p1 := types.Price{TSStart: now.Add(-1 * time.Hour), DollarsPerKWH: 0.10, Provider: "test"}
 		p2 := types.Price{TSStart: now, DollarsPerKWH: 0.12, Provider: "test"}
 
-		require.NoError(t, f.UpsertPrice(ctx, "test-site", p1, 0))
-		require.NoError(t, f.UpsertPrice(ctx, "test-site", p2, 0))
+		require.NoError(t, f.UpsertPrices(ctx, "test-site", []types.Price{p1}, 0))
+		require.NoError(t, f.UpsertPrices(ctx, "test-site", []types.Price{p2}, 0))
 
 		prices, err := f.GetPriceHistory(ctx, "test-site", now.Add(-2*time.Hour), now.Add(1*time.Minute))
 		require.NoError(t, err)
+
+		t.Run("UpsertMultipleBatches", func(t *testing.T) {
+			// Temporarily lower batch size
+			origBatchSize := maxBatchSize
+			maxBatchSize = 2
+			defer func() { maxBatchSize = origBatchSize }()
+
+			var batchPrices []types.Price
+			for i := 0; i < 5; i++ {
+				batchPrices = append(batchPrices, types.Price{
+					TSStart:       now.Add(time.Duration(i+1) * time.Hour),
+					DollarsPerKWH: float64(i) * 0.1,
+					Provider:      "batch-test",
+				})
+			}
+			require.NoError(t, f.UpsertPrices(ctx, "test-site", batchPrices, 0))
+
+			res, err := f.GetPriceHistory(ctx, "test-site", now.Add(1*time.Hour), now.Add(6*time.Hour))
+			require.NoError(t, err)
+			assert.Len(t, res, 5)
+			for i := 0; i < 5; i++ {
+				assert.Equal(t, float64(i)*0.1, res[i].DollarsPerKWH)
+			}
+		})
 
 		// Note: We depend on emulator state. It might have data from previous runs if not cleared.
 		// But we should find at least our 2 inserts.
@@ -86,7 +110,7 @@ func TestFirestoreProvider(t *testing.T) {
 
 		t.Run("UpsertOverwrite", func(t *testing.T) {
 			p2Updated := types.Price{TSStart: p2.TSStart, DollarsPerKWH: 0.99, Provider: "test"}
-			require.NoError(t, f.UpsertPrice(ctx, "test-site", p2Updated, 0))
+			require.NoError(t, f.UpsertPrices(ctx, "test-site", []types.Price{p2Updated}, 0))
 
 			pricesUpdated, err := f.GetPriceHistory(ctx, "test-site", now.Add(-2*time.Hour), now.Add(1*time.Minute))
 			require.NoError(t, err)
@@ -108,7 +132,7 @@ func TestFirestoreProvider(t *testing.T) {
 			// Insert a future price
 			future := now.Add(24 * time.Hour)
 			pFuture := types.Price{TSStart: future, DollarsPerKWH: 0.99, Provider: "test"}
-			require.NoError(t, f.UpsertPrice(ctx, "test-site", pFuture, 0))
+			require.NoError(t, f.UpsertPrices(ctx, "test-site", []types.Price{pFuture}, 0))
 
 			latestTime, version, err := f.GetLatestPriceHistoryTime(ctx, "test-site")
 			require.NoError(t, err)
@@ -179,6 +203,32 @@ func TestFirestoreProvider(t *testing.T) {
 			assert.True(t, foundA1InFiltered, "did not find a1 in filtered results")
 			assert.True(t, foundA3InFiltered, "did not find a3 in filtered results")
 		})
+
+		t.Run("GetLatestAction", func(t *testing.T) {
+			now := time.Now().Truncate(time.Second).UTC()
+			a1 := types.Action{
+				Timestamp:   now.Add(-1 * time.Hour),
+				BatteryMode: types.BatteryModeChargeAny,
+				Description: "Old action",
+			}
+			a2 := types.Action{
+				Timestamp:   now,
+				BatteryMode: types.BatteryModeLoad,
+				Description: "New action",
+			}
+			require.NoError(t, f.InsertAction(ctx, "test-site-latest", a1))
+			require.NoError(t, f.InsertAction(ctx, "test-site-latest", a2))
+
+			latest, err := f.GetLatestAction(ctx, "test-site-latest")
+			require.NoError(t, err)
+			require.NotNil(t, latest)
+			assert.Equal(t, "New action", latest.Description)
+
+			// test empty
+			empty, err := f.GetLatestAction(ctx, "test-site-empty")
+			require.NoError(t, err)
+			require.Nil(t, empty)
+		})
 	})
 
 	t.Run("EnergyHistory", func(t *testing.T) {
@@ -188,7 +238,30 @@ func TestFirestoreProvider(t *testing.T) {
 			SolarKWH:          5.0,
 			BatteryChargedKWH: 2.0,
 		}
-		require.NoError(t, f.UpsertEnergyHistory(ctx, "test-site", stats, 0))
+		require.NoError(t, f.UpsertEnergyHistories(ctx, "test-site", []types.EnergyStats{stats}, 0))
+
+		t.Run("UpsertMultipleBatches", func(t *testing.T) {
+			// Temporarily lower batch size
+			origBatchSize := maxBatchSize
+			maxBatchSize = 2
+			defer func() { maxBatchSize = origBatchSize }()
+
+			var batchStats []types.EnergyStats
+			for i := 0; i < 5; i++ {
+				batchStats = append(batchStats, types.EnergyStats{
+					TSHourStart: now.Add(time.Duration(i+1) * time.Hour),
+					SolarKWH:    float64(i) * 1.0,
+				})
+			}
+			require.NoError(t, f.UpsertEnergyHistories(ctx, "test-site", batchStats, 0))
+
+			res, err := f.GetEnergyHistory(ctx, "test-site", now.Add(1*time.Hour), now.Add(6*time.Hour))
+			require.NoError(t, err)
+			assert.Len(t, res, 5)
+			for i := 0; i < 5; i++ {
+				assert.Equal(t, float64(i)*1.0, res[i].SolarKWH)
+			}
+		})
 
 		t.Run("GetEnergyHistory", func(t *testing.T) {
 			energyHistory, err := f.GetEnergyHistory(ctx, "test-site", now.Add(-1*time.Minute), now.Add(2*time.Hour))
@@ -213,7 +286,7 @@ func TestFirestoreProvider(t *testing.T) {
 				SolarKWH:          1.0,
 				BatteryChargedKWH: 1.0,
 			}
-			require.NoError(t, f.UpsertEnergyHistory(ctx, "test-site", futureStats, 0))
+			require.NoError(t, f.UpsertEnergyHistories(ctx, "test-site", []types.EnergyStats{futureStats}, 0))
 
 			latestTime, version, err := f.GetLatestEnergyHistoryTime(ctx, "test-site")
 			require.NoError(t, err)
@@ -335,6 +408,200 @@ func TestFirestoreProvider(t *testing.T) {
 		t.Run("GetUserNotFound", func(t *testing.T) {
 			_, err := f.GetUser(ctx, "nonexistent@test.com")
 			assert.ErrorContains(t, err, "user not found")
+		})
+	})
+
+	t.Run("Feedback", func(t *testing.T) {
+		provider := f
+
+		// Insert feedbacks
+		fb1 := types.Feedback{
+			ID:        "2023-10-27T10:00:00Z_site1",
+			SiteID:    "site1",
+			UserID:    "user1",
+			Sentiment: "happy",
+			Comment:   "Great job!",
+			Timestamp: time.Date(2023, 10, 27, 10, 0, 0, 0, time.UTC),
+		}
+		fb2 := types.Feedback{
+			ID:        "2023-10-27T11:00:00Z_site1",
+			SiteID:    "site1",
+			UserID:    "user2",
+			Sentiment: "sad",
+			Comment:   "Needs work.",
+			Timestamp: time.Date(2023, 10, 27, 11, 0, 0, 0, time.UTC),
+		}
+		fb3 := types.Feedback{
+			ID:        "2023-10-27T12:00:00Z_site1",
+			SiteID:    "site1",
+			UserID:    "user3",
+			Sentiment: "neutral",
+			Comment:   "It's okay.",
+			Timestamp: time.Date(2023, 10, 27, 12, 0, 0, 0, time.UTC),
+		}
+
+		err := provider.InsertFeedback(ctx, fb1)
+		require.NoError(t, err)
+		err = provider.InsertFeedback(ctx, fb2)
+		require.NoError(t, err)
+		err = provider.InsertFeedback(ctx, fb3)
+		require.NoError(t, err)
+
+		// List feedback
+		fbs, err := provider.ListFeedback(ctx, 2, "")
+		require.NoError(t, err)
+		require.Len(t, fbs, 2)
+		assert.Equal(t, fb3.ID, fbs[0].ID) // Descending order
+		assert.Equal(t, fb2.ID, fbs[1].ID)
+
+		// List with pagination
+		fbs2, err := provider.ListFeedback(ctx, 2, fb2.ID)
+		require.NoError(t, err)
+		require.Len(t, fbs2, 1)
+		assert.Equal(t, fb1.ID, fbs2[0].ID)
+	})
+
+	t.Run("Weather", func(t *testing.T) {
+		siteID := "test-site-weather"
+
+		t.Run("Upsert and Get Single", func(t *testing.T) {
+			start := time.Now().Truncate(24 * time.Hour).UTC()
+			w := types.Weather{
+				TSDayStart:   start,
+				TimeLocation: "America/Los_Angeles",
+				Lat:          34.0,
+				Long:         -118.0,
+				ActualHours: []types.HourlyWeather{
+					{TSHourStart: start.Add(1 * time.Hour), GHI: 150.5},
+				},
+			}
+
+			err := f.UpsertWeather(ctx, siteID, []types.Weather{w}, types.CurrentWeatherVersion)
+			require.NoError(t, err)
+
+			results, err := f.GetWeather(ctx, siteID, start, start.Add(24*time.Hour))
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			assert.Equal(t, w.Lat, results[0].Lat)
+			assert.Equal(t, w.TimeLocation, results[0].TimeLocation)
+			assert.Len(t, results[0].ActualHours, 1)
+			assert.Equal(t, 150.5, results[0].ActualHours[0].GHI)
+		})
+
+		t.Run("Upsert and Get Batch", func(t *testing.T) {
+			var weathers []types.Weather
+			// Ensure time is not nicely truncated to UTC day boundaries to test truncation bug
+			timeLoc, _ := time.LoadLocation("America/New_York")
+			localStart := time.Date(2024, 1, 1, 0, 0, 0, 0, timeLoc)
+			start := localStart.UTC() // This will be 2024-01-01T05:00:00Z
+
+			// To test the bug correctly: If we query up to "1 hour before the 4th day",
+			// the 3rd day's docID is "2024-01-03T05:00:00Z".
+			// If `end` is `2024-01-04T04:00:00Z`, the old buggy Truncate() code would truncate it to `2024-01-04T00:00:00Z`.
+			// `2024-01-04T00:00:00Z` is less than `2024-01-03T05:00:00Z`? No, 04 > 03.
+			// Let's use an end time of `2024-01-03T06:00:00Z`.
+			// The old code: `endDocID` = `2024-01-03T00:00:00Z`.
+			// The query condition: `< "2024-01-03T00:00:00Z"`.
+			// The document for day 3 is at `2024-01-03T05:00:00Z`.
+			// It would incorrectly skip day 3!
+			end := localStart.Add(48 * time.Hour).Add(6 * time.Hour).UTC()
+
+			// generate 3 days
+			for i := 0; i < 3; i++ {
+				day := start.Add(time.Duration(i*24) * time.Hour)
+				weathers = append(weathers, types.Weather{
+					TSDayStart: day,
+					Lat:        34.0,
+					Long:       -118.0,
+					ForecastHours: []types.HourlyWeather{
+						{TSHourStart: day.Add(12 * time.Hour), GHI: 800.0},
+					},
+				})
+			}
+
+			err := f.UpsertWeather(ctx, siteID, weathers, types.CurrentWeatherVersion)
+			require.NoError(t, err)
+
+			// Get all 3 days
+			results, err := f.GetWeather(ctx, siteID, start, end)
+			require.NoError(t, err)
+			require.Len(t, results, 3)
+
+			// Get only middle day
+			middleDay := start.Add(24 * time.Hour)
+			resultsMid, err := f.GetWeather(ctx, siteID, middleDay, middleDay.Add(24*time.Hour))
+			require.NoError(t, err)
+			require.Len(t, resultsMid, 1)
+			assert.True(t, resultsMid[0].TSDayStart.Equal(middleDay))
+		})
+
+		t.Run("Upsert Overwrite", func(t *testing.T) {
+			start := time.Now().Truncate(24 * time.Hour).UTC().Add(100 * 24 * time.Hour)
+			w1 := types.Weather{
+				TSDayStart: start,
+				Lat:        34.0,
+				ActualHours: []types.HourlyWeather{
+					{TSHourStart: start.Add(1 * time.Hour), GHI: 100.0},
+				},
+			}
+
+			err := f.UpsertWeather(ctx, siteID, []types.Weather{w1}, types.CurrentWeatherVersion)
+			require.NoError(t, err)
+
+			// Overwrite the same day
+			w2 := types.Weather{
+				TSDayStart: start,
+				Lat:        35.0,
+				ActualHours: []types.HourlyWeather{
+					{TSHourStart: start.Add(1 * time.Hour), GHI: 200.0, SolarKWH: 5.5},
+				},
+			}
+			err = f.UpsertWeather(ctx, siteID, []types.Weather{w2}, types.CurrentWeatherVersion)
+			require.NoError(t, err)
+
+			results, err := f.GetWeather(ctx, siteID, start, start.Add(24*time.Hour))
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			assert.Equal(t, 35.0, results[0].Lat)
+			assert.Equal(t, 200.0, results[0].ActualHours[0].GHI)
+			assert.Equal(t, 5.5, results[0].ActualHours[0].SolarKWH)
+		})
+
+		t.Run("Get Empty Range", func(t *testing.T) {
+			start := time.Now().Add(-1000 * 24 * time.Hour).Truncate(24 * time.Hour).UTC()
+			results, err := f.GetWeather(ctx, siteID, start, start.Add(24*time.Hour))
+			require.NoError(t, err)
+			assert.Len(t, results, 0)
+		})
+
+		t.Run("Timezone Comparisons", func(t *testing.T) {
+			locEast, _ := time.LoadLocation("America/New_York")
+			locWest, _ := time.LoadLocation("America/Los_Angeles")
+
+			// Same actual time, different timezone representations
+			tEast := time.Date(2024, 3, 5, 0, 0, 0, 0, locEast)
+			tWest := time.Date(2024, 3, 4, 21, 0, 0, 0, locWest)
+
+			// Ensure they are the same absolute time
+			require.True(t, tEast.Equal(tWest))
+
+			w := types.Weather{
+				TSDayStart:   tWest, // Save with West Coast time
+				TimeLocation: "America/Los_Angeles",
+				Lat:          37.0,
+				Long:         -122.0,
+			}
+			err := f.UpsertWeather(ctx, siteID, []types.Weather{w}, types.CurrentWeatherVersion)
+			require.NoError(t, err)
+
+			// Query using East Coast time representation
+			// We query for the exact same point in time up to 1 hour later
+			results, err := f.GetWeather(ctx, siteID, tEast, tEast.Add(1*time.Hour))
+			require.NoError(t, err)
+			require.Len(t, results, 1, "should retrieve weather regardless of timezone representation")
+
+			// Verify timestamp matches
+			assert.True(t, results[0].TSDayStart.Equal(tEast))
 		})
 	})
 }

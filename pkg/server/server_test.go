@@ -221,3 +221,11 @@ func TestWebHandler(t *testing.T) {
 		assert.Equal(t, "public, max-age=300", w.Header().Get("Cache-Control"))
 	})
 }
+func TestIsMultiSiteAdmin(t *testing.T) {
+	server := &Server{
+		adminEmails: []string{"admin@example.com"},
+	}
+
+	assert.True(t, server.isMultiSiteAdmin(types.User{Email: "admin@example.com"}))
+	assert.False(t, server.isMultiSiteAdmin(types.User{Email: "user@example.com"}))
+}

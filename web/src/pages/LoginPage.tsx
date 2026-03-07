@@ -43,6 +43,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onLoginError, aut
                                         width="250"
                                         auto_select
                                         use_fedcm_for_prompt
+                                        use_fedcm_for_button
                                     />
                                 </GoogleOAuthProvider>
                             )}

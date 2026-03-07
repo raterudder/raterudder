@@ -22,17 +22,21 @@ type Database interface {
 	SetSettings(ctx context.Context, siteID string, settings types.Settings, version int) error
 
 	// Data Persistence
-	// UpsertPrice adds or updates a price record.
-	UpsertPrice(ctx context.Context, siteID string, price types.Price, version int) error
+	// UpsertPrices adds or updates multiple price records.
+	UpsertPrices(ctx context.Context, siteID string, prices []types.Price, version int) error
 	InsertAction(ctx context.Context, siteID string, action types.Action) error
-	UpsertEnergyHistory(ctx context.Context, siteID string, stats types.EnergyStats, version int) error
+	// UpsertEnergyHistories adds or updates multiple energy history records.
+	UpsertEnergyHistories(ctx context.Context, siteID string, stats []types.EnergyStats, version int) error
+	UpsertWeather(ctx context.Context, siteID string, weather []types.Weather, version int) error
 	UpdateESSMockState(ctx context.Context, siteID string, state types.ESSMockState) error
 	GetESSMockState(ctx context.Context, siteID string) (types.ESSMockState, error)
 
 	// History
 	GetPriceHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Price, error)
 	GetActionHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Action, error)
+	GetLatestAction(ctx context.Context, siteID string) (*types.Action, error)
 	GetEnergyHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.EnergyStats, error)
+	GetWeather(ctx context.Context, siteID string, start, end time.Time) ([]types.Weather, error)
 	GetLatestEnergyHistoryTime(ctx context.Context, siteID string) (time.Time, int, error)
 	GetLatestPriceHistoryTime(ctx context.Context, siteID string) (time.Time, int, error)
 
@@ -44,6 +48,10 @@ type Database interface {
 	GetUser(ctx context.Context, userID string) (types.User, error)
 	CreateUser(ctx context.Context, user types.User) error
 	UpdateUser(ctx context.Context, user types.User) error
+
+	// Feedback
+	InsertFeedback(ctx context.Context, feedback types.Feedback) error
+	ListFeedback(ctx context.Context, limit int, lastFeedbackID string) ([]types.Feedback, error)
 
 	// Lifecycle
 	Close() error

@@ -582,6 +582,28 @@ func TestHandleAuthStatus(t *testing.T) {
 		assert.Equal(t, "existing@example.com", resp.Email)
 		assert.Equal(t, []types.UserSite{{ID: "site1"}}, resp.Sites)
 	})
+
+	t.Run("Through Auth Middleware", func(t *testing.T) {
+		mocks := new(mockStorage)
+		serverWithMocks := &Server{
+			storage:       mocks,
+			oidcAudiences: map[string]string{"google": "test-audience"},
+		}
+
+		req := httptest.NewRequest("GET", "/api/auth/status", nil)
+
+		w := httptest.NewRecorder()
+		handler := serverWithMocks.authMiddleware(http.HandlerFunc(serverWithMocks.handleAuthStatus))
+		handler.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var resp authStatusResponse
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+
+		assert.False(t, resp.LoggedIn)
+		assert.True(t, mocks.AssertExpectations(t))
+	})
 }
 
 func TestHandleLogin(t *testing.T) {
@@ -642,6 +664,19 @@ func TestHandleLogin(t *testing.T) {
 			}
 		}
 		assert.True(t, found, "auth cookie should be set")
+		assert.True(t, mocks.AssertExpectations(t))
+	})
+
+	t.Run("Through Auth Middleware", func(t *testing.T) {
+		mocks := new(mockStorage)
+		server.storage = mocks
+		w := httptest.NewRecorder()
+		req := createReq(validToken)
+
+		handler := server.authMiddleware(http.HandlerFunc(server.handleLogin))
+		handler.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
 		assert.True(t, mocks.AssertExpectations(t))
 	})
 
@@ -710,5 +745,75 @@ func TestHandleLogout(t *testing.T) {
 			}
 		}
 		assert.True(t, found, "auth cookie should be cleared")
+	})
+
+	t.Run("Through Auth Middleware", func(t *testing.T) {
+		mocks := new(mockStorage)
+		serverWithMocks := &Server{
+			storage: mocks,
+		}
+
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/api/auth/logout", nil)
+		// Set a cookie to be cleared.
+		req.AddCookie(&http.Cookie{
+			Name:  authTokenCookie,
+			Value: "some-token",
+		})
+
+		// Let's use bypassAuth to skip token validation or provide a valid token.
+		serverWithMocks.bypassAuth = true
+
+		handler := serverWithMocks.authMiddleware(http.HandlerFunc(serverWithMocks.handleLogout))
+		handler.ServeHTTP(w, req)
+
+		result := w.Result()
+		assert.Equal(t, http.StatusOK, result.StatusCode)
+
+		cookies := result.Cookies()
+		found := false
+		for _, c := range cookies {
+			if c.Name == authTokenCookie {
+				found = true
+				assert.Equal(t, "", c.Value)
+			}
+		}
+		assert.True(t, found, "auth cookie should be cleared")
+		assert.True(t, mocks.AssertExpectations(t))
+	})
+
+	t.Run("Through Auth Middleware - Invalid Token", func(t *testing.T) {
+		mocks := new(mockStorage)
+		serverWithMocks := &Server{
+			storage: mocks,
+		}
+
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/api/auth/logout", nil)
+		// Set a cookie to be cleared with an invalid token.
+		req.AddCookie(&http.Cookie{
+			Name:  authTokenCookie,
+			Value: "invalid-token",
+		})
+
+		// DO NOT use bypassAuth here, we want to ensure the allowNoLogin list correctly lets it through
+		serverWithMocks.bypassAuth = false
+
+		handler := serverWithMocks.authMiddleware(http.HandlerFunc(serverWithMocks.handleLogout))
+		handler.ServeHTTP(w, req)
+
+		result := w.Result()
+		assert.Equal(t, http.StatusOK, result.StatusCode)
+
+		cookies := result.Cookies()
+		found := false
+		for _, c := range cookies {
+			if c.Name == authTokenCookie {
+				found = true
+				assert.Equal(t, "", c.Value)
+			}
+		}
+		assert.True(t, found, "auth cookie should be cleared")
+		assert.True(t, mocks.AssertExpectations(t))
 	})
 }

@@ -32,6 +32,7 @@ func TestHandleForecast(t *testing.T) {
 			UtilityProvider: "test",
 		}, types.CurrentSettingsVersion, nil)
 		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
 
 		mockES := &mockESS{}
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
@@ -68,10 +69,12 @@ func TestHandleForecast(t *testing.T) {
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, "private, max-age=300", resp.Header.Get("Cache-Control"))
 
-		var hours []controller.SimHour
-		err := json.NewDecoder(resp.Body).Decode(&hours)
+		var data struct {
+			Simulation []controller.SimHour `json:"simulation"`
+		}
+		err := json.NewDecoder(resp.Body).Decode(&data)
 		require.NoError(t, err)
-		assert.Len(t, hours, 24, "should return exactly 24 simulated hours")
+		assert.Len(t, data.Simulation, 24, "should return exactly 24 simulated hours")
 
 		// Verify all expected mocks were called
 		mockU.AssertCalled(t, "GetCurrentPrice", mock.Anything)
@@ -195,6 +198,7 @@ func TestHandleForecast(t *testing.T) {
 			UtilityProvider: "test",
 		}, types.CurrentSettingsVersion, nil)
 		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
 
 		mockES := &mockESS{}
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
@@ -231,11 +235,126 @@ func TestHandleForecast(t *testing.T) {
 		// Verify no backfill-related calls were made
 		mockS.AssertNotCalled(t, "GetLatestEnergyHistoryTime")
 		mockS.AssertNotCalled(t, "GetLatestPriceHistoryTime")
-		mockS.AssertNotCalled(t, "UpsertEnergyHistory")
-		mockS.AssertNotCalled(t, "UpsertPrice")
+		mockS.AssertNotCalled(t, "UpsertEnergyHistories")
+		mockS.AssertNotCalled(t, "UpsertPrices")
 		mockS.AssertNotCalled(t, "InsertAction")
 		mockES.AssertNotCalled(t, "GetEnergyHistory")
 		mockES.AssertNotCalled(t, "SetModes")
 		mockU.AssertNotCalled(t, "GetConfirmedPrices")
+	})
+
+	t.Run("Returns History with Merged Weather Data", func(t *testing.T) {
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: time.Now()}, nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{}, nil)
+
+		now := time.Now().Truncate(time.Hour)
+		pastHour1 := now.Add(-1 * time.Hour)
+		pastHour2 := now.Add(-2 * time.Hour)
+		futureHour1 := now.Add(1 * time.Hour)
+		futureHour2 := now.Add(2 * time.Hour)
+
+		mockS := &mockStorage{}
+		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil)
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			MinBatterySOC:   5.0,
+			UtilityProvider: "test",
+			Location: &types.SiteLocation{
+				TimeZone: "UTC",
+			},
+		}, types.CurrentSettingsVersion, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{
+			{TSHourStart: pastHour2, SolarKWH: 1.5, HomeKWH: 2.0, MinBatterySOC: 40, MaxBatterySOC: 60},
+			{TSHourStart: pastHour1, SolarKWH: 2.0, HomeKWH: 3.0, MinBatterySOC: 50, MaxBatterySOC: 70},
+		}, nil)
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{
+			{TSStart: pastHour2, DollarsPerKWH: 0.1},
+			{TSStart: pastHour1, DollarsPerKWH: 0.1},
+		}, nil)
+
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{
+			{
+				ActualHours: []types.HourlyWeather{
+					{TSHourStart: pastHour2, GHI: 100, SolarKWH: 1.5},
+					{TSHourStart: pastHour1, GHI: 150, SolarKWH: 2.0},
+				},
+				ForecastHours: []types.HourlyWeather{
+					{TSHourStart: futureHour1, GHI: 200},
+					{TSHourStart: futureHour2, GHI: 250},
+				},
+			},
+		}, nil)
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{
+			BatterySOC:         50,
+			BatteryCapacityKWH: 10.0,
+			Timestamp:          time.Now(),
+		}, nil)
+
+		mockP := ess.NewMap()
+		mockP.SetSystem(types.SiteIDNone, mockES)
+
+		mockUMap := utility.NewMap()
+		mockUMap.SetProvider("test", mockU)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			controller: controller.NewController(),
+			bypassAuth: true,
+		}
+
+		req := httptest.NewRequest("GET", "/api/forecast", nil)
+		// Inject siteID
+		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
+		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv.handleForecast(w, req)
+
+		resp := w.Result()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var data ForecastRes
+		err := json.NewDecoder(resp.Body).Decode(&data)
+		require.NoError(t, err)
+
+		assert.Len(t, data.Simulation, 24, "should return exactly 24 simulated hours")
+
+		// Verify weather history contains mapped actual weather and forecast
+		foundActual := false
+		foundForecast := false
+		for _, w := range data.Weather {
+			if w.TSHourStart.Equal(pastHour2) {
+				assert.Equal(t, float64(100), w.ActualGHI)
+				foundActual = true
+			}
+			if w.TSHourStart.Equal(futureHour1) {
+				assert.Equal(t, float64(200), w.ForecastGHI)
+				foundForecast = true
+			}
+		}
+		assert.True(t, foundActual, "should have mapped actual GHI")
+		assert.True(t, foundForecast, "should have mapped forecast GHI")
+
+		// Verify Energy History mapping
+		assert.Len(t, data.EnergyHistory, 2)
+		for _, eh := range data.EnergyHistory {
+			if eh.TSHourStart.Equal(pastHour2) {
+				assert.Equal(t, 1.5, eh.SolarKWH)
+				assert.Equal(t, 2.0, eh.HomeLoadKWH)
+				assert.Equal(t, 50.0, eh.AvgBatterySOC) // (40+60)/2
+			}
+			if eh.TSHourStart.Equal(pastHour1) {
+				assert.Equal(t, 2.0, eh.SolarKWH)
+				assert.Equal(t, 3.0, eh.HomeLoadKWH)
+				assert.Equal(t, 60.0, eh.AvgBatterySOC) // (50+70)/2
+			}
+		}
 	})
 }

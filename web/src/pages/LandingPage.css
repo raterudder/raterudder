@@ -542,4 +542,12 @@
         align-items: center;
         text-align: center;
     }
+
+    .charts-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .chart-card.full-width {
+        grid-column: span 1;
+    }
 }

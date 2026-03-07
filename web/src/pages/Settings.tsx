@@ -5,6 +5,7 @@ import { Input } from '@base-ui/react/input';
 import { Switch } from '@base-ui/react/switch';
 import { Collapsible } from '@base-ui/react/collapsible';
 import { Select } from '@base-ui/react/select';
+import { Combobox } from '@base-ui/react/combobox';
 import './Settings.css';
 
 
@@ -15,6 +16,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
     const [utilities, setUtilities] = useState<UtilityProviderInfo[]>([]);
     const [essProviders, setEssProviders] = useState<ESSProviderInfo[]>([]);
     const [loading, setLoading] = useState(true);
+    const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
@@ -54,6 +56,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
         if (!settings) return;
 
         try {
+            setIsSaving(true);
             setError(null);
             setSuccessMessage(null);
 
@@ -96,6 +99,8 @@ const Settings = ({ siteID }: { siteID?: string }) => {
             setTimeout(() => setSuccessMessage(null), 3000);
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to save settings');
+        } finally {
+            setIsSaving(false);
         }
     };
 
@@ -162,7 +167,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                     setIsUtilityDirty(true);
                                     const providerID = value as string;
                                     const provider = utilities.find(u => u.id === providerID);
-                                    let newSettings = {
+                                    const newSettings = {
                                         ...settings,
                                         utilityProvider: providerID,
                                         utilityRate: "",
@@ -218,7 +223,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                             setIsUtilityDirty(true);
                                             const rateID = value as string;
                                             const rate = provider.rates.find(r => r.id === rateID);
-                                            let newSettings = { ...settings, utilityRate: rateID };
+                                            const newSettings = { ...settings, utilityRate: rateID };
                                             if (rate) {
                                                 const newOpts: any = {};
                                                 rate.options.forEach((opt: UtilityRateOption) => {
@@ -427,18 +432,6 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                     </Field.Root>
 
                     <Field.Root className="form-group compact">
-                        <Field.Label htmlFor="alwaysChargeUnder">Always Charge Below ($/kWh)</Field.Label>
-                        <Input
-                            id="alwaysChargeUnder"
-                            type="number"
-                            step="0.01"
-                            value={settings.alwaysChargeUnderDollarsPerKWH}
-                            onChange={(e) => handleChange('alwaysChargeUnderDollarsPerKWH', parseFloat(e.target.value))}
-                        />
-                        <Field.Description>Charge battery whenever the price is less than this threshold.</Field.Description>
-                    </Field.Root>
-
-                    <Field.Root className="form-group compact">
                         <Field.Label htmlFor="minArbitrage">Min Arbitrage Profit ($/kWh)</Field.Label>
                         <Input
                             id="minArbitrage"
@@ -511,6 +504,85 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                     </Field.Root>
                 </div>
 
+                {settings.release === 'staging' && (
+                    <>
+                        <div className="section-header">
+                            <h3>Location</h3>
+                        </div>
+                        <div className="grid-strategy-grid">
+                            <Field.Root className="form-group">
+                                <Field.Label htmlFor="countryCode">Country</Field.Label>
+                                <Combobox.Root
+                                    value={settings.countryCode || ''}
+                                    onValueChange={(val) => handleChange("countryCode", val as string)}
+                                    items={[
+                                        { label: 'United States', value: 'US' },
+                                        { label: 'United Kingdom', value: 'GB' },
+                                        { label: 'Canada', value: 'CA' },
+                                        { label: 'Australia', value: 'AU' },
+                                        { label: 'Germany', value: 'DE' },
+                                        { label: 'France', value: 'FR' },
+                                        { label: 'Italy', value: 'IT' },
+                                        { label: 'Spain', value: 'ES' },
+                                        { label: 'Netherlands', value: 'NL' },
+                                        { label: 'Belgium', value: 'BE' },
+                                        { label: 'Switzerland', value: 'CH' },
+                                        { label: 'Austria', value: 'AT' },
+                                        { label: 'Sweden', value: 'SE' },
+                                        { label: 'Norway', value: 'NO' },
+                                        { label: 'Denmark', value: 'DK' },
+                                        { label: 'Finland', value: 'FI' },
+                                        { label: 'Ireland', value: 'IE' },
+                                        { label: 'New Zealand', value: 'NZ' },
+                                        { label: 'Japan', value: 'JP' },
+                                        { label: 'South Korea', value: 'KR' },
+                                        { label: 'Singapore', value: 'SG' },
+                                        { label: 'Brazil', value: 'BR' },
+                                        { label: 'Mexico', value: 'MX' },
+                                        { label: 'India', value: 'IN' },
+                                        { label: 'South Africa', value: 'ZA' }
+                                    ]}
+                                >
+                                    <div className="combobox-input-wrapper select-trigger">
+                                        <Combobox.Input placeholder="Select a country..." id="countryCode" className="combobox-input" />
+                                        <Combobox.Trigger className="combobox-trigger">
+                                            <svg width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                <path d="M4.18179 6.18181C4.35753 6.00608 4.64245 6.00608 4.81819 6.18181L7.49999 8.86362L10.1818 6.18181C10.3575 6.00608 10.6424 6.00608 10.8182 6.18181C10.9939 6.35755 10.9939 6.64247 10.8182 6.81821L7.81819 9.81821C7.73379 9.9026 7.61934 9.95001 7.49999 9.95001C7.38064 9.95001 7.26618 9.9026 7.18179 9.81821L4.18179 6.81821C4.00605 6.64247 4.00605 6.35755 4.18179 6.18181Z" fill="currentColor" fillRule="evenodd" clipRule="evenodd"></path>
+                                            </svg>
+                                        </Combobox.Trigger>
+                                    </div>
+                                    <Combobox.Portal>
+                                        <Combobox.Positioner className="select-positioner">
+                                            <Combobox.Popup className="select-popup">
+                                                <Combobox.List>
+                                                    {(item: { label: string, value: string }) => (
+                                                        <Combobox.Item key={item.value} value={item.value} className="select-item">
+                                                            {item.label}
+                                                            <Combobox.ItemIndicator />
+                                                        </Combobox.Item>
+                                                    )}
+                                                </Combobox.List>
+                                            </Combobox.Popup>
+                                        </Combobox.Positioner>
+                                    </Combobox.Portal>
+                                </Combobox.Root>
+                            </Field.Root>
+                            <Field.Root className="form-group">
+                                <Field.Label htmlFor="postalCode">Zip/Postal Code</Field.Label>
+                                <Input
+                                    id="postalCode"
+                                    type="text"
+                                    value={settings.postalCode || ''}
+                                    onChange={(e) => handleChange("postalCode", e.target.value)}
+                                />
+                            </Field.Root>
+                        </div>
+                        <div className="weather-attribution">
+                            Weather data provided by <a href="https://open-meteo.com" target="_blank" rel="noopener noreferrer">Open-Meteo</a> to improve solar prediction
+                        </div>
+                    </>
+                )}
+
 
 
                 <Collapsible.Root className="advanced-section">
@@ -531,6 +603,27 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                         </Field.Root>
 
 
+
+                        <div className="section-header">
+                            <h3>Automation Overrides</h3>
+                        </div>
+
+                        <Field.Root className="form-group">
+                            <Field.Label htmlFor="alwaysChargeUnder">Always Charge Below ($/kWh)</Field.Label>
+                            <Input
+                                id="alwaysChargeUnder"
+                                type="number"
+                                step="0.01"
+                                value={settings.alwaysChargeUnderDollarsPerKWH}
+                                onChange={(e) => handleChange('alwaysChargeUnderDollarsPerKWH', parseFloat(e.target.value))}
+                            />
+                            <Field.Description>Charge battery whenever the price is less than this threshold.</Field.Description>
+                            {settings.alwaysChargeUnderDollarsPerKWH > 0.05 && (
+                                <div className="warning-text" style={{ color: 'orange', marginTop: '4px', fontSize: '0.9em' }}>
+                                    Are you sure you want to force charging the batteries from the grid when it's below this price?
+                                </div>
+                            )}
+                        </Field.Root>
 
                         <div className="section-header">
                             <h3>Solar Settings</h3>
@@ -638,8 +731,8 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                 <div className="submit-section">
                     {error && <div className="error-message">{error}</div>}
                     {successMessage && <div className="success-message">{successMessage}</div>}
-                    <button type="submit" className="save-button">
-                        Save Settings
+                    <button type="submit" className="save-button" disabled={isSaving}>
+                        {isSaving ? 'Saving...' : 'Save Settings'}
                     </button>
                 </div>
             </form>

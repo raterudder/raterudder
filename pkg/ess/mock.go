@@ -65,12 +65,7 @@ func (m *MockESS) ApplySettings(ctx context.Context, settings types.Settings) er
 func (m *MockESS) Authenticate(ctx context.Context, creds types.Credentials) (types.Credentials, bool, error) {
 	var updated bool
 	if creds.Mock == nil {
-		// fill in defaults to to be helpful
-		creds.Mock = &types.MockCredentials{
-			Strategy: "simple",
-			Location: "America/Chicago",
-		}
-		updated = true
+		return creds, false, ErrCredentialsMissing
 	}
 	if creds.Mock.Strategy != "simple" {
 		return creds, false, fmt.Errorf("invalid strategy: %s", creds.Mock.Strategy)

@@ -31,7 +31,7 @@ func TestSettings(t *testing.T) {
 	}, types.CurrentSettingsVersion, nil)
 	// Add expectations for background sync
 	mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
-	mockS.On("UpsertEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// Helper to create server with auth config
 	newAuthServer := func(audience string, emails []string, validator tokenVerifier) (*Server, *mockESS) {
@@ -81,8 +81,13 @@ func TestSettings(t *testing.T) {
 		var resp SettingsRes
 		err := json.NewDecoder(w.Body).Decode(&resp)
 		require.NoError(t, err)
+		// Verify fields populated by default mockS.GetSettings
 		assert.Equal(t, 10.0, resp.MinBatterySOC)
+		assert.Equal(t, false, resp.DryRun)
+		assert.Equal(t, "test", resp.UtilityProvider)
+		// Verify hasCredentials flags accurately reflect the empty mock credentials
 		assert.False(t, resp.HasCredentials["franklin"])
+		assert.False(t, resp.HasCredentials["mock"])
 	})
 
 	t.Run("Update Settings - Disabled (No Admin)", func(t *testing.T) {
@@ -384,5 +389,63 @@ func TestSettings(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
 
 		mockU.AssertExpectations(t)
+	})
+
+	t.Run("Update Site Location With Postal Code", func(t *testing.T) {
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockUMap := utility.NewMap()
+		mockUMap.SetProvider("test", mockU)
+		mockS := &mockStorage{}
+		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil).Maybe()
+		mockS.On("UpdateSite", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			UtilityProvider: "test",
+		}, types.CurrentSettingsVersion, nil)
+		mockS.On("GetCredentials", mock.Anything, mock.Anything).Return(types.Credentials{}, types.CurrentSettingsVersion, nil)
+		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
+			settings := args.Get(2).(types.Settings)
+			assert.NotNil(t, settings.Location)
+			assert.Equal(t, "90210", settings.Location.PostalCode)
+		})
+		mockS.On("SetCredentials", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil).Maybe()
+		mockS.On("UpsertWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+		mockW := &mockWeather{}
+		mockW.On("GetLocationData", mock.Anything, mock.Anything, mock.Anything).Return(&types.SiteLocation{
+			PostalCode:  "90210",
+			CountryCode: "US",
+		}, nil).Maybe()
+		mockW.On("FetchWeatherForecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+
+		srv := &Server{
+			storage:     mockS,
+			utilities:   mockUMap,
+			controller:  controller.NewController(),
+			weather:     mockW,
+			bypassAuth:  true,
+			singleSite:  true,
+			adminEmails: []string{"test@example.com"},
+		}
+
+		bodyData := types.Settings{
+			PostalCode:                  "90210",
+			CountryCode:                 "US",
+			UtilityProvider:             "test",
+			IgnoreHourUsageOverMultiple: 1.0,
+			SolarTrendRatioMax:          1.0,
+		}
+		body, _ := json.Marshal(bodyData)
+		req := httptest.NewRequest(http.MethodPost, "/api/settings", bytes.NewBuffer(body))
+		ctx := context.WithValue(req.Context(), userContextKey, types.User{Email: "test@example.com", ID: "admin", Admin: true})
+		ctx = context.WithValue(ctx, siteIDContextKey, "test-site")
+		req = req.WithContext(ctx)
+
+		w := httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	})
 }

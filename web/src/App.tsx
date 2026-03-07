@@ -4,6 +4,7 @@ import { Route, Switch, Redirect, useLocation, Router } from 'wouter';
 
 import Header from './components/Header';
 import Footer from './components/Footer';
+import FeedbackWidget from './components/FeedbackWidget';
 import './App.css';
 import { fetchAuthStatus, login, logout, type AuthStatus, type UserSite } from './api';
 
@@ -15,6 +16,7 @@ import LoginPage from './pages/LoginPage';
 import JoinSitePage from './pages/JoinSitePage';
 import NewSitePage from './pages/NewSitePage';
 import BetaInterstitialPage from './pages/BetaInterstitialPage';
+import AdminPage from './pages/AdminPage';
 import PrivacyPolicy from './pages/PrivacyPolicy';
 import TermsOfService from './pages/TermsOfService';
 
@@ -247,6 +249,11 @@ function AppContent() {
                                     )}
                                 </ProtectedRoute>
                             </Route>
+                            <Route path="/admin">
+                                <ProtectedRoute loggedIn={loggedIn} loading={loading}>
+                                    <AdminPage />
+                                </ProtectedRoute>
+                            </Route>
 
                             {/* Fallback */}
                             <Route>
@@ -257,6 +264,10 @@ function AppContent() {
                 </main>
 
                 <Footer />
+
+                {loggedIn && (
+                    <FeedbackWidget siteID={effectiveSiteID} />
+                )}
             </div>
         </>
     );
