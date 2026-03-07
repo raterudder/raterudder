@@ -28,3 +28,23 @@ func TestContextLogger(t *testing.T) {
 	require.NotNil(t, l2, "Ctx returned nil, expected custom logger")
 	assert.Equal(t, customLogger, l2, "Ctx should return customLogger")
 }
+
+func TestSetDefaultLogLevel(t *testing.T) {
+	t.Run("updates default log level", func(t *testing.T) {
+		// Store the original level to restore it after the test
+		originalLevel := defaultLogLevel.Level()
+		defer SetDefaultLogLevel(originalLevel)
+
+		// Change the log level
+		newLevel := slog.LevelDebug
+		SetDefaultLogLevel(newLevel)
+
+		// Verify the log level was updated correctly
+		assert.Equal(t, newLevel, defaultLogLevel.Level(), "Default log level should be updated to Debug")
+
+		// Change it to another level to be sure
+		anotherLevel := slog.LevelError
+		SetDefaultLogLevel(anotherLevel)
+		assert.Equal(t, anotherLevel, defaultLogLevel.Level(), "Default log level should be updated to Error")
+	})
+}
