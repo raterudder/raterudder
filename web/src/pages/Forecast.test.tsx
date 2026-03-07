@@ -50,13 +50,44 @@ describe('Forecast Page', () => {
         expect(screen.getByText(/Loading simulation/)).toBeInTheDocument();
     });
 
-    it('calls fetchModeling and renders 6 charts', async () => {
+    it('calls fetchModeling and renders 5 charts when no weather data is present', async () => {
         const data = makeSimHours();
         (fetchModeling as any).mockResolvedValue({
             simulation: data,
             energyHistory: [],
             priceHistory: [],
             weather: []
+        });
+
+        renderForecast();
+
+        await waitFor(() => {
+            expect(fetchModeling).toHaveBeenCalledTimes(1);
+        });
+
+        await waitFor(() => {
+            expect(screen.getByText('Battery (if used) (%)')).toBeInTheDocument();
+            expect(screen.getByText('Battery (if standby) (%)')).toBeInTheDocument();
+            expect(screen.getByText('Predicted Solar (kWh)')).toBeInTheDocument();
+            expect(screen.queryByText('Forecasted Solar Radiation (W/m²)')).not.toBeInTheDocument();
+            expect(screen.getByText('Avg Home Load (kWh)')).toBeInTheDocument();
+            expect(screen.getByText('Grid Charge Cost ($/kWh)')).toBeInTheDocument();
+        });
+    });
+
+    it('calls fetchModeling and renders 6 charts when weather data is present', async () => {
+        const data = makeSimHours();
+        (fetchModeling as any).mockResolvedValue({
+            simulation: data,
+            energyHistory: [],
+            priceHistory: [],
+            weather: [
+                {
+                    tsHourStart: data[0].ts,
+                    actualGHI: 100,
+                    forecastGHI: 120,
+                }
+            ]
         });
 
         renderForecast();
