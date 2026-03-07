@@ -1,7 +1,7 @@
 export interface SystemAlarm {
     name: string;
     description: string;
-    timestamp: string;
+    time: string;
     code: string;
 }
 
@@ -203,8 +203,6 @@ export interface ESSProviderInfo {
 export interface Settings {
     dryRun: boolean;
     pause: boolean;
-    countryCode: string;
-    postalCode: string;
     release: string;
     alwaysChargeUnderDollarsPerKWH: number;
     minArbitrageDifferenceDollarsPerKWH: number;
@@ -224,10 +222,6 @@ export interface Settings {
     ess: string;
     hasCredentials: {
         [key: string]: boolean;
-    };
-    essAuthStatus?: {
-        consecutiveFailures: number;
-        lastAttempt: string;
     };
 }
 
@@ -281,11 +275,8 @@ export const updateSettings = async (settings: Settings, siteID?: string, creden
     }
 };
 
-export interface Site {
+export interface UserSite {
     id: string;
-}
-
-export interface UserSite extends Site {
     name: string;
 }
 
@@ -327,20 +318,6 @@ export const logout = async (): Promise<void> => {
     }
 };
 
-export interface AdminSite extends Site {
-    lastAction?: Action;
-}
-
-export const listSites = async (): Promise<AdminSite[]> => {
-    const response = await fetch('/api/list/sites', {
-        method: 'GET',
-    });
-    if (!response.ok) {
-        throw new Error(await extractError(response, 'Failed to list sites'));
-    }
-    return response.json();
-};
-
 export interface ModelingHour {
     ts: string;
     hour: number;
@@ -356,13 +333,10 @@ export interface ModelingHour {
     todaySolarTrend: number;
 }
 
-export const fetchModeling = async (siteID?: string, includeHistory?: boolean): Promise<ForecastResponse> => {
+export const fetchModeling = async (siteID?: string): Promise<ModelingHour[]> => {
     const query = new URLSearchParams();
     if (siteID) {
         query.append('siteID', siteID);
-    }
-    if (includeHistory) {
-        query.append('include_history', 'true');
     }
     const response = await fetch(`/api/forecast?${query.toString()}`);
     if (!response.ok) {
@@ -420,64 +394,3 @@ export const fetchESSList = async (siteID?: string): Promise<ESSProviderInfo[]> 
     }
     return response.json();
 };
-
-export interface Feedback {
-    id: string;
-    sentiment: string;
-    comment: string;
-    siteID: string;
-    userID: string;
-    extra: Record<string, string>;
-    timestamp: string;
-}
-
-export async function submitFeedback(siteID: string, sentiment: string, comment: string, extra: Record<string, string>): Promise<void> {
-    const response = await fetch('/api/feedback', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ siteID, sentiment, comment, extra })
-    });
-    if (!response.ok) {
-        throw new Error(await extractError(response, 'Failed to submit feedback'));
-    }
-}
-
-export async function listFeedback(limit?: number, lastFeedbackID?: string): Promise<Feedback[]> {
-    let url = '/api/list/feedback?';
-    if (limit !== undefined) {
-        url += `limit=${limit}&`;
-    }
-    if (lastFeedbackID) {
-        url += `lastFeedbackID=${lastFeedbackID}`;
-    }
-    const response = await fetch(url);
-    if (!response.ok) {
-        throw new Error(await extractError(response, 'Failed to fetch feedback'));
-    }
-    return response.json();
-}
-
-export interface EnergyHistoryRes {
-    tsHourStart: string;
-    avgBatterySOC: number;
-    solarKWH: number;
-}
-
-export interface PriceHistoryRes {
-    tsHourStart: string;
-    dollarsPerKWH: number;
-    gridUseDollarsPerKWH: number;
-}
-
-export interface WeatherRes {
-    tsHourStart: string;
-    actualGHI: number;
-    forecastGHI: number;
-}
-
-export interface ForecastResponse {
-    simulation: ModelingHour[];
-    energyHistory: EnergyHistoryRes[];
-    priceHistory: PriceHistoryRes[];
-    weather: WeatherRes[];
-}

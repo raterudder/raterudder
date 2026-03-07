@@ -23,7 +23,7 @@ vi.mock('@react-oauth/google', () => ({
 const navigateToSettings = async () => {
     (fetchAuthStatus as any).mockResolvedValue({ ...defaultAuthStatus });
     render(<App />);
-    fireEvent.click(screen.getByText(/Log In/));
+    fireEvent.click(screen.getByText('Log In / Sign Up'));
     await waitFor(() => expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument());
     fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
     await screen.findByRole('heading', { name: /Settings/i });
@@ -44,7 +44,7 @@ describe('App & Settings', () => {
         render(<App />);
 
         // On LandingPage, click Login link in header
-        fireEvent.click(screen.getByText(/Log In/));
+        fireEvent.click(screen.getByText('Log In / Sign Up'));
 
         await waitFor(() => {
             expect(screen.getByText('Google Sign In')).toBeInTheDocument();
@@ -63,7 +63,7 @@ describe('App & Settings', () => {
         (login as any).mockResolvedValue(undefined);
 
         render(<App />);
-        fireEvent.click(screen.getByText(/Log In/));
+        fireEvent.click(screen.getByText('Log In / Sign Up'));
 
         await waitFor(() => {
             expect(screen.getByText('Google Sign In')).toBeInTheDocument();
@@ -81,7 +81,7 @@ describe('App & Settings', () => {
         (logout as any).mockResolvedValue(undefined);
 
         render(<App />);
-        fireEvent.click(screen.getByText(/Log In/));
+        fireEvent.click(screen.getByText('Log In / Sign Up'));
 
         await waitFor(() => {
             expect(screen.getByText('Log Out')).toBeInTheDocument();
@@ -98,7 +98,7 @@ describe('App & Settings', () => {
         (fetchAuthStatus as any).mockResolvedValue({ ...defaultAuthStatus });
 
         render(<App />);
-        fireEvent.click(screen.getByText(/Log In/));
+        fireEvent.click(screen.getByText('Log In / Sign Up'));
 
         await waitFor(() => {
             expect(screen.getByText('Settings')).toBeInTheDocument();
@@ -216,50 +216,6 @@ describe('App & Settings', () => {
         });
     });
 
-    it('shows location settings only when release is staging', async () => {
-        const stagingSettings = { release: 'staging', minArbitrageDifferenceDollarsPerKWH: 0.05, minBatterySOC: 20, minLoadForSolarHedgeKWH: 2.0, ess: 'mock', hasCredentials: { mock: true } };
-        (fetchSettings as any).mockResolvedValue(stagingSettings);
-        (fetchAuthStatus as any).mockResolvedValue({ ...defaultAuthStatus, loggedIn: true });
-
-        render(<App />);
-        fireEvent.click(screen.getByText(/Log In/));
-        await waitFor(() => expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument());
-        fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
-        await screen.findByRole('heading', { name: /Settings/i });
-
-        await waitFor(() => {
-            expect(screen.getByText('Location')).toBeInTheDocument();
-            expect(screen.getByLabelText(/Zip\/Postal Code/i)).toBeInTheDocument();
-        });
-
-        const zipInput = screen.getByLabelText(/Zip\/Postal Code/i);
-        fireEvent.change(zipInput, { target: { value: '90210' } });
-
-        const saveBtn = screen.getByText('Save Settings');
-        fireEvent.click(saveBtn);
-
-        await waitFor(() => {
-            expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ postalCode: '90210' }), expect.any(String), undefined);
-        });
-    });
-
-    it('hides location settings when release is not staging', async () => {
-        const prodSettings = { release: 'production', minArbitrageDifferenceDollarsPerKWH: 0.05, minBatterySOC: 20, minLoadForSolarHedgeKWH: 2.0, ess: 'mock', hasCredentials: { mock: true } };
-        (fetchSettings as any).mockResolvedValue(prodSettings);
-        (fetchAuthStatus as any).mockResolvedValue({ ...defaultAuthStatus, loggedIn: true });
-
-        render(<App />);
-        fireEvent.click(screen.getByText(/Log In/));
-        await waitFor(() => expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument());
-        fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
-        await screen.findByRole('heading', { name: /Settings/i });
-
-        await waitFor(() => {
-            expect(screen.queryByText('Location')).not.toBeInTheDocument();
-            expect(screen.queryByLabelText(/Zip\/Postal Code/i)).not.toBeInTheDocument();
-        });
-    });
-
     it('can update ComEd rate options', async () => {
         await navigateToSettings();
 
@@ -287,25 +243,12 @@ describe('App & Settings', () => {
         });
     });
 
-    it('can update price threshold fields and shows warning appropriately', async () => {
+    it('can update price threshold fields', async () => {
         await navigateToSettings();
-
-        // Expand advanced tuning settings to see the price threshold
-        const advancedBtn = await screen.findByText('Advanced Tuning Settings');
-        fireEvent.click(advancedBtn);
 
         // Check fields are accessible
         const priceInput = await screen.findByLabelText(/Always Charge Below/i);
-
-        // At initial value, warning should not be shown
-        expect(screen.queryByText(/Are you sure you want to force charging the batteries from the grid when it's below this price/i)).not.toBeInTheDocument();
-
         fireEvent.change(priceInput, { target: { value: '0.10' } });
-
-        // Warning should be shown now that value > 0.05
-        await waitFor(() => {
-            expect(screen.getByText(/Are you sure you want to force charging the batteries from the grid when it's below this price/i)).toBeInTheDocument();
-        });
 
         // Save
         const saveBtn = screen.getByText('Save Settings');

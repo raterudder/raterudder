@@ -142,42 +142,6 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-}
-
-.combobox-input-wrapper {
-    display: flex;
-    align-items: center;
-    width: 100%;
-    padding: 0;
-    gap: 0;
-}
-
-.combobox-input {
-    flex: 1;
-    border: none;
-    background: transparent;
-    color: var(--text-color);
-    padding: 0.75rem 1rem;
-    font-size: 1rem;
-    outline: none;
-    min-width: 0;
-}
-
-.combobox-input::placeholder {
-    color: var(--text-color);
-    opacity: 0.5;
-}
-
-.combobox-trigger {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: transparent;
-    border: none;
-    color: var(--text-color);
-    padding: 0 1rem;
-    cursor: pointer;
-    height: 100%;
   text-align: left;
 }
 
@@ -492,19 +456,6 @@
   border-radius: var(--radius-lg);
   border: 1px dashed var(--border);
   margin-bottom: 1.5rem;
-}
-
-.weather-attribution {
-    font-size: 0.9em;
-    color: var(--text-color);
-    opacity: 0.8;
-    margin-top: 8px;
-    margin-bottom: 16px;
-}
-
-.weather-attribution a {
-    color: inherit;
-    text-decoration: underline;
 }
 
 .sub-section {

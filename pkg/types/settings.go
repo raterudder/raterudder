@@ -6,7 +6,7 @@ import (
 )
 
 // CurrentSettingsVersion is the current version of the settings struct.
-// Increment this value only if you need to set a default value other than the Go default for that value.
+// Increment this value when adding new fields that require default values.
 const CurrentSettingsVersion = 8
 
 // Settings represents the configuration stored in the database.
@@ -55,10 +55,6 @@ type Settings struct {
 	GridExportSolar bool `json:"gridExportSolar"`
 	// Can export batteries to grid
 	GridExportBatteries bool `json:"gridExportBatteries"`
-
-	CountryCode string        `json:"countryCode"`
-	PostalCode  string        `json:"postalCode"`
-	Location    *SiteLocation `json:"location,omitempty"`
 
 	// Solar Settings
 	// Maximum ratio for solar trend adjustment (caps recentSolar/modelSolar).

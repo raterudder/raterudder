@@ -25,10 +25,6 @@ type FirestoreProvider struct {
 	database  string
 }
 
-// maxBatchSize is the maximum number of writes allowed in a single Firestore batch.
-// This is adjustable for testing.
-var maxBatchSize = 100
-
 // configuredFirestore sets up the Firestore provider.
 // It registers flags for configuration.
 func configuredFirestore() *FirestoreProvider {
@@ -181,15 +177,19 @@ func (f *FirestoreProvider) InsertAction(ctx context.Context, siteID string, act
 }
 
 // GetActionHistory retrieves action records within the specified time range.
+// Uses document ID range queries for efficient filtering without reading all documents.
 func (f *FirestoreProvider) GetActionHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Action, error) {
+	startDocID := start.UTC().Format(time.RFC3339)
+	endDocID := end.UTC().Format(time.RFC3339)
+
 	coll, err := f.getCollection(siteID, "action_history")
 	if err != nil {
 		return nil, err
 	}
 	iter := coll.
-		Where("timestamp", ">=", start).
-		Where("timestamp", "<", end).
-		OrderBy("timestamp", firestore.Asc).
+		Where(firestore.DocumentID, ">=", coll.Doc(startDocID)).
+		Where(firestore.DocumentID, "<", coll.Doc(endDocID)).
+		OrderBy(firestore.DocumentID, firestore.Asc).
 		Documents(ctx)
 	defer iter.Stop()
 
@@ -225,250 +225,46 @@ func (f *FirestoreProvider) GetActionHistory(ctx context.Context, siteID string,
 	return actions, nil
 }
 
-// GetLatestAction retrieves the most recent action record. Will return nil if no actions found.
-func (f *FirestoreProvider) GetLatestAction(ctx context.Context, siteID string) (*types.Action, error) {
-	coll, err := f.getCollection(siteID, "action_history")
+// UpsertEnergyHistory adds or updates an energy history record in the "energy_history" collection.
+// The document ID is the RFC3339 timestamp of TSHourStart for consistent formatting.
+func (f *FirestoreProvider) UpsertEnergyHistory(ctx context.Context, siteID string, stats types.EnergyStats, version int) error {
+	if stats.TSHourStart.IsZero() {
+		return fmt.Errorf("energy stats missing tsHourStart")
+	}
+	jsonBytes, err := json.Marshal(stats)
 	if err != nil {
-		return nil, err
-	}
-
-	iter := coll.
-		OrderBy("timestamp", firestore.Desc).
-		Limit(1).
-		Documents(ctx)
-	defer iter.Stop()
-
-	doc, err := iter.Next()
-	if err == iterator.Done {
-		return nil, nil // No actions found
-	}
-	if err != nil {
-		return nil, fmt.Errorf("error getting latest action: %w", err)
-	}
-
-	val, err := doc.DataAt("json")
-	if err != nil {
-		return nil, fmt.Errorf("action doc %s missing 'json': %w", doc.Ref.ID, err)
-	}
-
-	jsonStr, ok := val.(string)
-	if !ok {
-		return nil, fmt.Errorf("action doc %s 'json' field is not string", doc.Ref.ID)
-	}
-
-	var a types.Action
-	if err := json.Unmarshal([]byte(jsonStr), &a); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal action: %w", err)
-	}
-
-	return &a, nil
-}
-
-// UpsertEnergyHistories adds or updates multiple energy history records in the "energy_history" collection.
-func (f *FirestoreProvider) UpsertEnergyHistories(ctx context.Context, siteID string, stats []types.EnergyStats, version int) error {
-	if len(stats) == 0 {
-		return nil
+		return fmt.Errorf("failed to marshal energy stats: %w", err)
 	}
 
 	coll, err := f.getCollection(siteID, "energy_history")
 	if err != nil {
 		return err
 	}
-
-	// For a single item, use direct Set to avoid batch overhead
-	if len(stats) == 1 {
-		s := stats[0]
-		if s.TSHourStart.IsZero() {
-			return fmt.Errorf("energy stats missing tsHourStart")
-		}
-		jsonBytes, err := json.Marshal(s)
-		if err != nil {
-			return fmt.Errorf("failed to marshal energy stats: %w", err)
-		}
-		docID := s.TSHourStart.UTC().Format(time.RFC3339)
-		_, err = coll.Doc(docID).Set(ctx, map[string]interface{}{
-			"json":      string(jsonBytes),
-			"timestamp": s.TSHourStart,
-			"version":   version,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to upsert energy history: %w", err)
-		}
-		return nil
-	}
-
-	// For multiple items, use batches chunked by maxBatchSize
-	var batch *firestore.WriteBatch
-	count := 0
-
-	for _, s := range stats {
-		if s.TSHourStart.IsZero() {
-			return fmt.Errorf("energy stats missing tsHourStart")
-		}
-
-		if count == 0 {
-			batch = f.client.Batch()
-		}
-
-		jsonBytes, err := json.Marshal(s)
-		if err != nil {
-			return fmt.Errorf("failed to marshal energy stats: %w", err)
-		}
-
-		docID := s.TSHourStart.UTC().Format(time.RFC3339)
-		ref := coll.Doc(docID)
-		batch.Set(ref, map[string]interface{}{
-			"json":      string(jsonBytes),
-			"timestamp": s.TSHourStart,
-			"version":   version,
-		})
-
-		count++
-		if count >= maxBatchSize {
-			if _, err := batch.Commit(ctx); err != nil {
-				return fmt.Errorf("failed to commit energy history batch: %w", err)
-			}
-			count = 0
-		}
-	}
-
-	// Commit any remaining items
-	if count > 0 {
-		if _, err := batch.Commit(ctx); err != nil {
-			return fmt.Errorf("failed to commit remaining energy history batch: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// UpsertWeather adds or updates multiple weather records.
-func (f *FirestoreProvider) UpsertWeather(ctx context.Context, siteID string, weather []types.Weather, version int) error {
-	if len(weather) == 0 {
-		return nil
-	}
-
-	coll, err := f.getCollection(siteID, "weather")
+	docID := stats.TSHourStart.UTC().Format(time.RFC3339)
+	_, err = coll.Doc(docID).Set(ctx, map[string]interface{}{
+		"json":      string(jsonBytes),
+		"timestamp": stats.TSHourStart,
+		"version":   version,
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to upsert energy history: %w", err)
 	}
-
-	if len(weather) == 1 {
-		w := weather[0]
-		jsonBytes, err := json.Marshal(w)
-		if err != nil {
-			return fmt.Errorf("failed to marshal weather: %w", err)
-		}
-		docID := w.TSDayStart.UTC().Format(time.RFC3339)
-		_, err = coll.Doc(docID).Set(ctx, map[string]interface{}{
-			"json":       string(jsonBytes),
-			"tsDayStart": w.TSDayStart,
-			"version":    version,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to upsert weather: %w", err)
-		}
-		return nil
-	}
-
-	var batch *firestore.WriteBatch
-	count := 0
-
-	for _, w := range weather {
-		if count == 0 {
-			batch = f.client.Batch()
-		}
-
-		jsonBytes, err := json.Marshal(w)
-		if err != nil {
-			return fmt.Errorf("failed to marshal weather: %w", err)
-		}
-
-		docID := w.TSDayStart.UTC().Format(time.RFC3339)
-		ref := coll.Doc(docID)
-		batch.Set(ref, map[string]interface{}{
-			"json":       string(jsonBytes),
-			"tsDayStart": w.TSDayStart,
-			"version":    version,
-		})
-
-		count++
-		if count >= maxBatchSize {
-			if _, err := batch.Commit(ctx); err != nil {
-				return fmt.Errorf("failed to commit weather batch: %w", err)
-			}
-			count = 0
-		}
-	}
-
-	if count > 0 {
-		if _, err := batch.Commit(ctx); err != nil {
-			return fmt.Errorf("failed to commit remaining weather batch: %w", err)
-		}
-	}
-
 	return nil
-}
-
-// GetWeather retrieves weather records within the specified time range.
-func (f *FirestoreProvider) GetWeather(ctx context.Context, siteID string, start, end time.Time) ([]types.Weather, error) {
-	coll, err := f.getCollection(siteID, "weather")
-	if err != nil {
-		return nil, err
-	}
-	iter := coll.
-		Where("tsDayStart", ">=", start).
-		Where("tsDayStart", "<", end).
-		OrderBy("tsDayStart", firestore.Asc).
-		Documents(ctx)
-	defer iter.Stop()
-
-	var weather []types.Weather
-	for {
-		doc, err := iter.Next()
-		if err == iterator.Done {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("error iterating weather: %w", err)
-		}
-
-		val, err := doc.DataAt("json")
-		if err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "weather doc missing json", slog.String("docID", doc.Ref.ID), slog.String("siteID", siteID), slog.Any("err", err))
-			continue
-		}
-
-		jsonStr, ok := val.(string)
-		if !ok {
-			log.Ctx(ctx).WarnContext(ctx, "weather doc json not string", slog.String("docID", doc.Ref.ID), slog.String("siteID", siteID))
-			continue
-		}
-
-		var w types.Weather
-		if err := json.Unmarshal([]byte(jsonStr), &w); err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal weather", slog.String("docID", doc.Ref.ID), slog.String("siteID", siteID), slog.Any("err", err))
-			continue
-		}
-
-		weather = append(weather, w)
-	}
-	return weather, nil
 }
 
 // GetEnergyHistory retrieves energy history records within the specified time range.
 func (f *FirestoreProvider) GetEnergyHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.EnergyStats, error) {
-	startHour := start.Truncate(time.Hour)
-	endHour := end.Truncate(time.Hour)
+	startDocID := start.Truncate(time.Hour).UTC().Format(time.RFC3339)
+	endDocID := end.Truncate(time.Hour).UTC().Format(time.RFC3339)
 
 	coll, err := f.getCollection(siteID, "energy_history")
 	if err != nil {
 		return nil, err
 	}
 	iter := coll.
-		Where("timestamp", ">=", startHour).
-		Where("timestamp", "<", endHour).
-		OrderBy("timestamp", firestore.Asc).
+		Where(firestore.DocumentID, ">=", coll.Doc(startDocID)).
+		Where(firestore.DocumentID, "<", coll.Doc(endDocID)).
+		OrderBy(firestore.DocumentID, firestore.Asc).
 		Documents(ctx)
 	defer iter.Stop()
 
@@ -635,10 +431,12 @@ func (f *FirestoreProvider) GetUser(ctx context.Context, userID string) (types.U
 	return user, nil
 }
 
-// UpsertPrices adds or updates multiple price records in the "price_history" sub-collection of the site.
-func (f *FirestoreProvider) UpsertPrices(ctx context.Context, siteID string, prices []types.Price, version int) error {
-	if len(prices) == 0 {
-		return nil
+// UpsertPrice adds or updates a price record in the "price_history" sub-collection of the site.
+// The document ID is the RFC3339 timestamp of TSStart for efficient range queries.
+func (f *FirestoreProvider) UpsertPrice(ctx context.Context, siteID string, price types.Price, version int) error {
+	jsonBytes, err := json.Marshal(price)
+	if err != nil {
+		return fmt.Errorf("failed to marshal price: %w", err)
 	}
 
 	coll, err := f.getCollection(siteID, "price_history")
@@ -646,77 +444,33 @@ func (f *FirestoreProvider) UpsertPrices(ctx context.Context, siteID string, pri
 		return err
 	}
 
-	// For a single item, use direct Set to avoid batch overhead
-	if len(prices) == 1 {
-		p := prices[0]
-		jsonBytes, err := json.Marshal(p)
-		if err != nil {
-			return fmt.Errorf("failed to marshal price: %w", err)
-		}
-		docID := p.TSStart.UTC().Format(time.RFC3339)
-		_, err = coll.Doc(docID).Set(ctx, map[string]interface{}{
-			"json":      string(jsonBytes),
-			"timestamp": p.TSStart,
-			"version":   version,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to upsert price: %w", err)
-		}
-		return nil
+	docID := price.TSStart.UTC().Format(time.RFC3339)
+	_, err = coll.Doc(docID).Set(ctx, map[string]interface{}{
+		"json":      string(jsonBytes),
+		"timestamp": price.TSStart,
+		"version":   version,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to upsert price: %w", err)
 	}
-
-	// For multiple items, use batches chunked by maxBatchSize
-	var batch *firestore.WriteBatch
-	count := 0
-
-	for _, p := range prices {
-		if count == 0 {
-			batch = f.client.Batch()
-		}
-
-		jsonBytes, err := json.Marshal(p)
-		if err != nil {
-			return fmt.Errorf("failed to marshal price: %w", err)
-		}
-
-		docID := p.TSStart.UTC().Format(time.RFC3339)
-		ref := coll.Doc(docID)
-		batch.Set(ref, map[string]interface{}{
-			"json":      string(jsonBytes),
-			"timestamp": p.TSStart,
-			"version":   version,
-		})
-
-		count++
-		if count >= maxBatchSize {
-			if _, err := batch.Commit(ctx); err != nil {
-				return fmt.Errorf("failed to commit price batch: %w", err)
-			}
-			count = 0
-		}
-	}
-
-	// Commit any remaining items
-	if count > 0 {
-		if _, err := batch.Commit(ctx); err != nil {
-			return fmt.Errorf("failed to commit remaining price batch: %w", err)
-		}
-	}
-
 	return nil
 }
 
 // GetPriceHistory retrieves price records within the specified time range for a site.
+// Uses document ID range queries for efficient filtering.
 func (f *FirestoreProvider) GetPriceHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Price, error) {
+	startDocID := start.UTC().Format(time.RFC3339)
+	endDocID := end.UTC().Format(time.RFC3339)
+
 	coll, err := f.getCollection(siteID, "price_history")
 	if err != nil {
 		return nil, err
 	}
 
 	iter := coll.
-		Where("timestamp", ">=", start).
-		Where("timestamp", "<", end).
-		OrderBy("timestamp", firestore.Asc).
+		Where(firestore.DocumentID, ">=", coll.Doc(startDocID)).
+		Where(firestore.DocumentID, "<", coll.Doc(endDocID)).
+		OrderBy(firestore.DocumentID, firestore.Asc).
 		Documents(ctx)
 	defer iter.Stop()
 
@@ -902,67 +656,4 @@ func (f *FirestoreProvider) GetESSMockState(ctx context.Context, siteID string) 
 		return types.ESSMockState{}, fmt.Errorf("failed to unmarshal mock state %s: %w", siteID, err)
 	}
 	return state, nil
-}
-
-// InsertFeedback adds a new feedback record to the "feedback" collection.
-func (f *FirestoreProvider) InsertFeedback(ctx context.Context, feedback types.Feedback) error {
-	jsonBytes, err := json.Marshal(feedback)
-	if err != nil {
-		return fmt.Errorf("failed to marshal feedback: %w", err)
-	}
-
-	coll := f.client.Collection("feedback")
-	_, err = coll.Doc(feedback.ID).Set(ctx, map[string]interface{}{
-		"json": string(jsonBytes),
-		"id":   feedback.ID,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to insert feedback: %w", err)
-	}
-	return nil
-}
-
-// ListFeedback retrieves feedback records, sorted by ID descending.
-func (f *FirestoreProvider) ListFeedback(ctx context.Context, limit int, lastFeedbackID string) ([]types.Feedback, error) {
-	coll := f.client.Collection("feedback")
-
-	q := coll.OrderBy("id", firestore.Desc).Limit(limit)
-	if lastFeedbackID != "" {
-		q = q.StartAfter(lastFeedbackID)
-	}
-
-	iter := q.Documents(ctx)
-	defer iter.Stop()
-
-	var feedbacks []types.Feedback
-	for {
-		doc, err := iter.Next()
-		if err == iterator.Done {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("error iterating feedback: %w", err)
-		}
-
-		val, err := doc.DataAt("json")
-		if err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "feedback doc missing json", slog.String("docID", doc.Ref.ID), slog.Any("err", err))
-			continue
-		}
-
-		jsonStr, ok := val.(string)
-		if !ok {
-			log.Ctx(ctx).WarnContext(ctx, "feedback doc json not string", slog.String("docID", doc.Ref.ID))
-			continue
-		}
-
-		var fb types.Feedback
-		if err := json.Unmarshal([]byte(jsonStr), &fb); err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal feedback", slog.String("docID", doc.Ref.ID), slog.Any("err", err))
-			continue
-		}
-		feedbacks = append(feedbacks, fb)
-	}
-
-	return feedbacks, nil
 }

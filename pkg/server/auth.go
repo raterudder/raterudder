@@ -23,10 +23,10 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		ctx := r.Context()
 		ctx = log.With(ctx, log.Ctx(ctx).With(slog.String("reqPath", r.URL.Path)))
 
-		allowNoLogin := r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/join" || r.URL.Path == "/api/auth/logout" || r.URL.Path == "/api/report/browser"
-		ignoreUserNotFound := r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/join" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/logout" || r.URL.Path == "/api/report/browser"
+		allowNoLogin := r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/join"
+		ignoreUserNotFound := r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/join" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/logout"
 		isUpdatePath := r.URL.Path == "/api/update" || r.URL.Path == "/api/updateSites"
-		ignoreSiteID := r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/logout" || r.URL.Path == "/api/list/sites" || r.URL.Path == "/api/list/feedback" || r.URL.Path == "/api/report/browser"
+		ignoreSiteID := r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/logout"
 
 		// extract SiteID
 		var siteID string
@@ -36,6 +36,8 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			// read body to find SiteID
 			var bodyBytes []byte
 			if r.Body != nil {
+				// Limit body size to 1MB to prevent DoS
+				r.Body = http.MaxBytesReader(w, r.Body, 1048576)
 				var err error
 				bodyBytes, err = io.ReadAll(r.Body)
 				if err != nil {
@@ -126,15 +128,12 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 					emailRet, subjectRet, _, err := s.authenticateToken(ctx, authCookie.Value, "")
 					if err != nil {
 						log.Ctx(ctx).ErrorContext(ctx, "auth token validation failed", slog.Any("error", err))
-						if !allowNoLogin {
-							writeJSONError(w, "invalid auth token", http.StatusBadRequest)
-							return
-						}
-					} else {
-						email = emailRet
-						userID = subjectRet
-						authSuccess = true
+						writeJSONError(w, "invalid auth token", http.StatusBadRequest)
+						return
 					}
+					email = emailRet
+					userID = subjectRet
+					authSuccess = true
 				} else if !allowNoLogin {
 					log.Ctx(ctx).WarnContext(ctx, "no auth cookie found")
 					writeJSONError(w, "missing auth cookie", http.StatusBadRequest)
@@ -170,6 +169,13 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 						}
 					} else {
 						userFound = true
+						// TODO: remove this after migration is done
+						if len(user.Sites) == 0 && len(user.SiteIDs) > 0 {
+							user.Sites = make([]types.UserSite, len(user.SiteIDs))
+							for i, siteID := range user.SiteIDs {
+								user.Sites[i] = types.UserSite{ID: siteID}
+							}
+						}
 						// fill in default siteID if the user only has 1 site
 						if siteID == "" && len(user.Sites) == 1 {
 							siteID = user.Sites[0].ID
@@ -177,9 +183,17 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 					}
 				}
 
-				isAdmin := s.isMultiSiteAdmin(user)
-				if isAdmin && s.singleSite {
-					user.Admin = true
+				var isAdmin bool
+				for _, admin := range s.adminEmails {
+					if email == admin {
+						isAdmin = true
+						// Do not set user.Admin = true to grant read-only access when multi-site
+						// but for single-site we do want to set Admin
+						if s.singleSite {
+							user.Admin = true
+						}
+						break
+					}
 				}
 				if !s.singleSite && siteID != "" && siteID != SiteIDAll && !authViaUpdateSpecific {
 					site, err := s.storage.GetSite(ctx, siteID)

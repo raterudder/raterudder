@@ -2,14 +2,11 @@ package ess
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/types"
 )
-
-var ErrCredentialsMissing = errors.New("credentials missing")
 
 // System defines the interface for interacting with an Energy Storage System (like FranklinWH).
 type System interface {

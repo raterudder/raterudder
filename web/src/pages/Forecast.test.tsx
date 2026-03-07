@@ -50,14 +50,9 @@ describe('Forecast Page', () => {
         expect(screen.getByText(/Loading simulation/)).toBeInTheDocument();
     });
 
-    it('calls fetchModeling and renders 6 charts', async () => {
+    it('calls fetchModeling and renders 5 charts', async () => {
         const data = makeSimHours();
-        (fetchModeling as any).mockResolvedValue({
-            simulation: data,
-            energyHistory: [],
-            priceHistory: [],
-            weather: []
-        });
+        (fetchModeling as any).mockResolvedValue(data);
 
         renderForecast();
 
@@ -69,19 +64,13 @@ describe('Forecast Page', () => {
             expect(screen.getByText('Battery (if used) (%)')).toBeInTheDocument();
             expect(screen.getByText('Battery (if standby) (%)')).toBeInTheDocument();
             expect(screen.getByText('Predicted Solar (kWh)')).toBeInTheDocument();
-            expect(screen.getByText('Forecasted Solar Radiation (W/m²)')).toBeInTheDocument();
             expect(screen.getByText('Avg Home Load (kWh)')).toBeInTheDocument();
             expect(screen.getByText('Grid Charge Cost ($/kWh)')).toBeInTheDocument();
         });
     });
 
     it('shows page heading and subtitle', async () => {
-        (fetchModeling as any).mockResolvedValue({
-            simulation: makeSimHours(),
-            energyHistory: [],
-            priceHistory: [],
-            weather: []
-        });
+        (fetchModeling as any).mockResolvedValue(makeSimHours());
 
         renderForecast();
 
@@ -108,21 +97,6 @@ describe('Forecast Page', () => {
 
         await waitFor(() => {
             expect(screen.getByText('No simulation data available.')).toBeInTheDocument();
-        });
-    });
-
-    it('shows the include previous 24 hours checkbox', async () => {
-        (fetchModeling as any).mockResolvedValue({
-            simulation: makeSimHours(),
-            energyHistory: [],
-            priceHistory: [],
-            weather: []
-        });
-
-        renderForecast();
-
-        await waitFor(() => {
-            expect(screen.getByLabelText('Show Previous 24 Hours')).toBeInTheDocument();
         });
     });
 

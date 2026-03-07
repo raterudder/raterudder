@@ -11,13 +11,117 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type MockDatabase struct {
+	mock.Mock
+}
+
+func (m *MockDatabase) GetSettings(ctx context.Context, siteID string) (types.Settings, int, error) {
+	args := m.Called(ctx, siteID)
+	return args.Get(0).(types.Settings), args.Int(1), args.Error(2)
+}
+
+func (m *MockDatabase) SetSettings(ctx context.Context, siteID string, settings types.Settings, version int) error {
+	args := m.Called(ctx, siteID, settings, version)
+	return args.Error(0)
+}
+
+func (m *MockDatabase) UpsertPrice(ctx context.Context, siteID string, price types.Price, version int) error {
+	args := m.Called(ctx, siteID, price, version)
+	return args.Error(0)
+}
+
+func (m *MockDatabase) InsertAction(ctx context.Context, siteID string, action types.Action) error {
+	args := m.Called(ctx, siteID, action)
+	return args.Error(0)
+}
+
+func (m *MockDatabase) UpsertEnergyHistory(ctx context.Context, siteID string, stats types.EnergyStats, version int) error {
+	args := m.Called(ctx, siteID, stats, version)
+	return args.Error(0)
+}
+
+func (m *MockDatabase) UpdateESSMockState(ctx context.Context, siteID string, state types.ESSMockState) error {
+	args := m.Called(ctx, siteID, state)
+	return args.Error(0)
+}
+
+func (m *MockDatabase) GetESSMockState(ctx context.Context, siteID string) (types.ESSMockState, error) {
+	args := m.Called(ctx, siteID)
+	return args.Get(0).(types.ESSMockState), args.Error(1)
+}
+
+func (m *MockDatabase) GetPriceHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Price, error) {
+	args := m.Called(ctx, siteID, start, end)
+	return args.Get(0).([]types.Price), args.Error(1)
+}
+
+func (m *MockDatabase) GetActionHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Action, error) {
+	args := m.Called(ctx, siteID, start, end)
+	return args.Get(0).([]types.Action), args.Error(1)
+}
+
+func (m *MockDatabase) GetEnergyHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.EnergyStats, error) {
+	args := m.Called(ctx, siteID, start, end)
+	return args.Get(0).([]types.EnergyStats), args.Error(1)
+}
+
+func (m *MockDatabase) GetLatestEnergyHistoryTime(ctx context.Context, siteID string) (time.Time, int, error) {
+	args := m.Called(ctx, siteID)
+	return args.Get(0).(time.Time), args.Int(1), args.Error(2)
+}
+
+func (m *MockDatabase) GetLatestPriceHistoryTime(ctx context.Context, siteID string) (time.Time, int, error) {
+	args := m.Called(ctx, siteID)
+	return args.Get(0).(time.Time), args.Int(1), args.Error(2)
+}
+
+func (m *MockDatabase) GetSite(ctx context.Context, siteID string) (types.Site, error) {
+	args := m.Called(ctx, siteID)
+	return args.Get(0).(types.Site), args.Error(1)
+}
+
+func (m *MockDatabase) ListSites(ctx context.Context) ([]types.Site, error) {
+	args := m.Called(ctx)
+	return args.Get(0).([]types.Site), args.Error(1)
+}
+
+func (m *MockDatabase) UpdateSite(ctx context.Context, siteID string, site types.Site) error {
+	args := m.Called(ctx, siteID, site)
+	return args.Error(0)
+}
+
+func (m *MockDatabase) CreateSite(ctx context.Context, siteID string, site types.Site) error {
+	args := m.Called(ctx, siteID, site)
+	return args.Error(0)
+}
+
+func (m *MockDatabase) GetUser(ctx context.Context, userID string) (types.User, error) {
+	args := m.Called(ctx, userID)
+	return args.Get(0).(types.User), args.Error(1)
+}
+
+func (m *MockDatabase) CreateUser(ctx context.Context, user types.User) error {
+	args := m.Called(ctx, user)
+	return args.Error(0)
+}
+
+func (m *MockDatabase) UpdateUser(ctx context.Context, user types.User) error {
+	args := m.Called(ctx, user)
+	return args.Error(0)
+}
+
+func (m *MockDatabase) Close() error {
+	args := m.Called()
+	return args.Error(0)
+}
+
 func TestMockESS(t *testing.T) {
 	t.Run("GetStatus", func(t *testing.T) {
-		db := new(mockStorage)
+		db := new(MockDatabase)
 		ConfigureMock(db)
 
 		ess := newMock("test-site")
-		_, _, err := ess.Authenticate(context.Background(), types.Credentials{Mock: &types.MockCredentials{Strategy: "simple", Location: "America/Chicago"}})
+		_, _, err := ess.Authenticate(context.Background(), types.Credentials{})
 		require.NoError(t, err)
 		ctx := context.Background()
 
@@ -53,8 +157,12 @@ func TestMockESS(t *testing.T) {
 		ess := newMock("test-site")
 
 		// 1. Nil credentials
-		_, _, err := ess.Authenticate(context.Background(), types.Credentials{})
-		require.ErrorIs(t, err, ErrCredentialsMissing)
+		creds, isNew, err := ess.Authenticate(context.Background(), types.Credentials{})
+		require.NoError(t, err)
+		assert.True(t, isNew)
+		assert.NotNil(t, creds.Mock)
+		assert.Equal(t, "America/Chicago", creds.Mock.Location)
+		assert.Equal(t, "simple", creds.Mock.Strategy)
 
 		// 2. Existing credentials
 		existingCreds := types.Credentials{
@@ -63,7 +171,7 @@ func TestMockESS(t *testing.T) {
 				Location: "America/New_York",
 			},
 		}
-		creds, isNew, err := ess.Authenticate(context.Background(), existingCreds)
+		creds, isNew, err = ess.Authenticate(context.Background(), existingCreds)
 		require.NoError(t, err)
 		assert.False(t, isNew)
 		assert.Equal(t, "America/New_York", creds.Mock.Location)
@@ -71,10 +179,10 @@ func TestMockESS(t *testing.T) {
 	})
 
 	t.Run("SetModes", func(t *testing.T) {
-		db := new(mockStorage)
+		db := new(MockDatabase)
 		ConfigureMock(db)
 		ess := newMock("test-site")
-		_, _, err := ess.Authenticate(context.Background(), types.Credentials{Mock: &types.MockCredentials{Strategy: "simple", Location: "America/Chicago"}})
+		_, _, err := ess.Authenticate(context.Background(), types.Credentials{})
 		require.NoError(t, err)
 		ctx := context.Background()
 
@@ -98,10 +206,10 @@ func TestMockESS(t *testing.T) {
 	})
 
 	t.Run("GetEnergyHistory", func(t *testing.T) {
-		db := new(mockStorage)
+		db := new(MockDatabase)
 		ConfigureMock(db)
 		ess := newMock("test-site")
-		_, _, err := ess.Authenticate(context.Background(), types.Credentials{Mock: &types.MockCredentials{Strategy: "simple", Location: "America/Chicago"}})
+		_, _, err := ess.Authenticate(context.Background(), types.Credentials{})
 		require.NoError(t, err)
 		ctx := context.Background()
 
@@ -146,10 +254,10 @@ func TestMockESS(t *testing.T) {
 	})
 
 	t.Run("EnergyStatsFields", func(t *testing.T) {
-		db := new(mockStorage)
+		db := new(MockDatabase)
 		ConfigureMock(db)
 		ess := newMock("test-site")
-		_, _, err := ess.Authenticate(context.Background(), types.Credentials{Mock: &types.MockCredentials{Strategy: "simple", Location: "America/Chicago"}})
+		_, _, err := ess.Authenticate(context.Background(), types.Credentials{})
 		require.NoError(t, err)
 
 		// Set settings to enable solar export
@@ -186,10 +294,10 @@ func TestMockESS(t *testing.T) {
 	})
 
 	t.Run("Force charge below min SOC", func(t *testing.T) {
-		db := new(mockStorage)
+		db := new(MockDatabase)
 		ConfigureMock(db)
 		ess := newMock("test-site")
-		_, _, err := ess.Authenticate(context.Background(), types.Credentials{Mock: &types.MockCredentials{Strategy: "simple", Location: "America/Chicago"}})
+		_, _, err := ess.Authenticate(context.Background(), types.Credentials{})
 		require.NoError(t, err)
 
 		// Set min SOC to 30
@@ -218,10 +326,10 @@ func TestMockESS(t *testing.T) {
 	})
 
 	t.Run("Repeated GetStatus", func(t *testing.T) {
-		db := new(mockStorage)
+		db := new(MockDatabase)
 		ConfigureMock(db)
 		ess := newMock("test-site")
-		_, _, err := ess.Authenticate(context.Background(), types.Credentials{Mock: &types.MockCredentials{Strategy: "simple", Location: "America/Chicago"}})
+		_, _, err := ess.Authenticate(context.Background(), types.Credentials{})
 		require.NoError(t, err)
 		ctx := context.Background()
 

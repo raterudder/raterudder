@@ -31,7 +31,7 @@ describe('BetaInterstitialPage Component', () => {
         const utilitySelect = screen.getByRole('combobox', { name: /Utility Provider/i });
         await user.click(utilitySelect);
 
-        const otherOption = await screen.findByRole('option', { name: 'Other' });
+        const otherOption = screen.getByRole('option', { name: 'Other' });
         await user.click(otherOption);
 
         await waitFor(() => {
@@ -48,12 +48,12 @@ describe('BetaInterstitialPage Component', () => {
 
         const utilitySelect = screen.getByRole('combobox', { name: /Utility Provider/i });
         await user.click(utilitySelect);
-        const amerenOption = await screen.findByRole('option', { name: 'Ameren' });
+        const amerenOption = screen.getByRole('option', { name: 'Ameren' });
         await user.click(amerenOption);
 
         const batterySelect = screen.getByRole('combobox', { name: /Battery System/i });
         await user.click(batterySelect);
-        const franklinOption = await screen.findByRole('option', { name: 'FranklinWH' });
+        const franklinOption = screen.getByRole('option', { name: 'FranklinWH' });
         await user.click(franklinOption);
 
         await waitFor(() => {
@@ -70,12 +70,12 @@ describe('BetaInterstitialPage Component', () => {
 
         const utilitySelect = screen.getByRole('combobox', { name: /Utility Provider/i });
         await user.click(utilitySelect);
-        const amerenOption = await screen.findByRole('option', { name: 'Ameren' });
+        const amerenOption = screen.getByRole('option', { name: 'Ameren' });
         await user.click(amerenOption);
 
         const batterySelect = screen.getByRole('combobox', { name: /Battery System/i });
         await user.click(batterySelect);
-        const franklinOption = await screen.findByRole('option', { name: 'FranklinWH' });
+        const franklinOption = screen.getByRole('option', { name: 'FranklinWH' });
         await user.click(franklinOption);
 
         const continueButton = await screen.findByRole('button', { name: /start saving money/i });

@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -83,13 +82,9 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 		log.Ctx(ctx).DebugContext(ctx, "processing site update")
 		_, status, err := s.performSiteUpdate(ctx, site.ID, settings, creds)
 		if err != nil {
-			if errors.Is(err, ess.ErrCredentialsMissing) {
-				log.Ctx(ctx).DebugContext(ctx, "site update skipped: credentials missing", slog.Any("error", err))
-				results[site.ID] = "skipped: credentials missing"
-			} else {
-				log.Ctx(ctx).ErrorContext(ctx, "site update failed", slog.Any("error", err))
-				results[site.ID] = fmt.Sprintf("failed: %v", err)
-			}
+			// TODO: don't error when its because of missing credentials
+			log.Ctx(ctx).ErrorContext(ctx, "site update failed", slog.Any("error", err))
+			results[site.ID] = fmt.Sprintf("failed: %v", err)
 		} else {
 			log.Ctx(ctx).InfoContext(ctx, "site update success")
 			if status == "" {
@@ -153,22 +148,6 @@ func (s *Server) performSiteUpdate(
 	}
 
 	log.Ctx(ctx).DebugContext(ctx, "update: current price fetched", slog.Float64("price", currentPrice.DollarsPerKWH), slog.Time("start", currentPrice.TSStart))
-
-	// get History for Controller (Last 72 hours from Storage)
-	historyStart := time.Now().Add(-72 * time.Hour)
-	historyEnd := time.Now()
-	energyHistory, err := s.storage.GetEnergyHistory(ctx, siteID, historyStart, historyEnd)
-	if err != nil {
-		log.Ctx(ctx).WarnContext(ctx, "failed to get energy history from storage", slog.Any("error", err))
-	}
-
-	// fetch weather history/forecast if location is configured
-	// We pass the 72 hours of history here to sync any new solar data into the weather actuals
-	if settings.Location != nil {
-		if err := s.updateWeatherHistory(ctx, siteID, *settings.Location, energyHistory); err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to update weather history", slog.Any("error", err))
-		}
-	}
 
 	if settings.Pause {
 		log.Ctx(ctx).InfoContext(ctx, "update: paused")
@@ -252,6 +231,14 @@ func (s *Server) performSiteUpdate(
 	}
 	if !hasFuture {
 		return nil, "", fmt.Errorf("insufficient future pricing data")
+	}
+
+	// get History for Controller (Last 72 hours from Storage)
+	historyStart := time.Now().Add(-72 * time.Hour)
+	historyEnd := time.Now()
+	energyHistory, err := s.storage.GetEnergyHistory(ctx, siteID, historyStart, historyEnd)
+	if err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to get energy history from storage", slog.Any("error", err))
 	}
 
 	log.Ctx(ctx).DebugContext(ctx, "update: starting decision")
@@ -340,104 +327,12 @@ func (s *Server) updatePriceHistory(ctx context.Context, siteID string, provider
 		if err != nil {
 			return fmt.Errorf("failed to get confirmed prices: %w", err)
 		}
-		if len(newPrices) > 0 {
-			if err := s.storage.UpsertPrices(ctx, siteID, newPrices, types.CurrentPriceHistoryVersion); err != nil {
-				return fmt.Errorf("failed to upsert prices: %w", err)
+		for _, p := range newPrices {
+			if err := s.storage.UpsertPrice(ctx, siteID, p, types.CurrentPriceHistoryVersion); err != nil {
+				return fmt.Errorf("failed to upsert price: %w", err)
 			}
 		}
 	}
-	return nil
-}
-
-func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc types.SiteLocation, energyHistory []types.EnergyStats) error {
-	timeLoc, err := time.LoadLocation(loc.TimeZone)
-	if err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to load timezone for location", slog.Any("error", err), slog.String("timezone", loc.TimeZone))
-		timeLoc = time.UTC
-	}
-
-	now := time.Now().In(timeLoc)
-	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, timeLoc)
-
-	weathers, err := s.storage.GetWeather(ctx, siteID, startOfDay, startOfDay.Add(24*time.Hour))
-	if err != nil {
-		return fmt.Errorf("failed to get today's weather: %w", err)
-	}
-
-	// We should update if we don't have today's weather, OR
-	// if it is past sunset + 2 hours and we haven't updated yet.
-	shouldUpdate := false
-	if len(weathers) == 0 {
-		shouldUpdate = true
-	} else {
-		w := weathers[0]
-		// Determine if it's sunset + 2 hours
-		if !w.TSSunset.IsZero() {
-			sunsetPlusTwo := w.TSSunset.Add(2 * time.Hour)
-			if now.After(sunsetPlusTwo) {
-				// We haven't updated since sunset+2? We can check TSUpdated.
-				if w.TSUpdated.Before(sunsetPlusTwo) {
-					shouldUpdate = true
-				}
-			}
-		}
-	}
-
-	if shouldUpdate {
-		log.Ctx(ctx).InfoContext(ctx, "fetching weather forecast and history")
-
-		// Fetch weather from yesterday to tomorrow
-		startDay := now.AddDate(0, 0, -1)
-		endDay := now.AddDate(0, 0, 2) // exclusive boundary for the day after tomorrow
-
-		newWeathers, err := s.weather.FetchWeatherForecast(ctx, loc.Lat, loc.Long, loc.TimeZone, startDay, endDay)
-		if err != nil {
-			return fmt.Errorf("failed to fetch weather forecast: %w", err)
-		}
-
-		// If we successfully fetched weather, merge any incoming EnergyHistory (SolarKWH) into the new actuals
-		if len(energyHistory) > 0 {
-			for wi, w := range newWeathers {
-				for ahIdx, ah := range w.ActualHours {
-					for _, eh := range energyHistory {
-						// Match exact hour
-						if ah.TSHourStart.Equal(eh.TSHourStart.UTC()) || ah.TSHourStart.Equal(eh.TSHourStart) {
-							newWeathers[wi].ActualHours[ahIdx].SolarKWH = eh.SolarKWH
-							break
-						}
-					}
-				}
-			}
-		}
-
-		if err := s.storage.UpsertWeather(ctx, siteID, newWeathers, types.CurrentWeatherVersion); err != nil {
-			return fmt.Errorf("failed to upsert weather: %w", err)
-		}
-	} else if len(energyHistory) > 0 && len(weathers) > 0 {
-		// Map SolarKWH to existing weather actuals if we aren't fetching new ones
-		w := weathers[0]
-		updated := false
-
-		for _, eh := range energyHistory {
-			ehUTC := eh.TSHourStart.UTC()
-			for i, ah := range w.ActualHours {
-				if ah.TSHourStart.Equal(ehUTC) || ah.TSHourStart.Equal(eh.TSHourStart) {
-					if w.ActualHours[i].SolarKWH != eh.SolarKWH {
-						w.ActualHours[i].SolarKWH = eh.SolarKWH
-						updated = true
-					}
-					break
-				}
-			}
-		}
-
-		if updated {
-			if err := s.storage.UpsertWeather(ctx, siteID, []types.Weather{w}, types.CurrentWeatherVersion); err != nil {
-				log.Ctx(ctx).ErrorContext(ctx, "failed to upsert existing weather with new solar kwh", slog.Any("error", err))
-			}
-		}
-	}
-
 	return nil
 }
 
@@ -483,11 +378,10 @@ func (s *Server) updateEnergyHistory(ctx context.Context, siteID string, essSyst
 			log.Ctx(ctx).ErrorContext(ctx, "failed to get energy history from ess", slog.Any("error", err), slog.Time("start", t), slog.Time("end", end))
 			// continue to next day even if this one failed
 		} else {
-			if len(newHistory) > 0 {
-				if err := s.storage.UpsertEnergyHistories(ctx, siteID, newHistory, types.CurrentEnergyStatsVersion); err != nil {
-					log.Ctx(ctx).ErrorContext(ctx, "failed to upsert energy histories", slog.Any("error", err))
+			for _, h := range newHistory {
+				if err := s.storage.UpsertEnergyHistory(ctx, siteID, h, types.CurrentEnergyStatsVersion); err != nil {
+					log.Ctx(ctx).ErrorContext(ctx, "failed to upsert energy history", slog.Any("error", err))
 				}
-
 			}
 		}
 	}

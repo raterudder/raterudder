@@ -102,7 +102,7 @@ func (f *Franklin) ApplySettings(ctx context.Context, settings types.Settings) e
 // persist it.
 func (f *Franklin) Authenticate(ctx context.Context, creds types.Credentials) (types.Credentials, bool, error) {
 	if creds.Franklin == nil {
-		return creds, false, ErrCredentialsMissing
+		return creds, false, errors.New("missing franklin credentials")
 	}
 
 	f.mu.Lock()
@@ -112,7 +112,11 @@ func (f *Franklin) Authenticate(ctx context.Context, creds types.Credentials) (t
 
 	var md5Password string
 	if creds.Franklin.Password != "" {
-		hash := md5.Sum([]byte(creds.Franklin.Password)) //nolint:gosec
+		// MD5 is mandated by the FranklinWH API protocol for authentication.
+		// It is not used for secure password storage in RateRudder.
+		// codeql[go/insecure-hashing]
+		// nolint:gosec
+		hash := md5.Sum([]byte(creds.Franklin.Password))
 		md5Password = hex.EncodeToString(hash[:])
 	} else {
 		md5Password = creds.Franklin.MD5Password
@@ -201,10 +205,10 @@ func (f *Franklin) ensureLogin(ctx context.Context) error {
 
 func (f *Franklin) login(ctx context.Context, username, md5Password string) (string, error) {
 	if username == "" {
-		return "", fmt.Errorf("missing username: %w", ErrCredentialsMissing)
+		return "", errors.New("missing username")
 	}
 	if md5Password == "" {
-		return "", fmt.Errorf("missing password: %w", ErrCredentialsMissing)
+		return "", errors.New("missing password")
 	}
 
 	data := url.Values{}
@@ -518,7 +522,7 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		alarms = append(alarms, types.SystemAlarm{
 			Name:        alarm.Name,
 			Description: alarm.Explanation,
-			Timestamp:   t,
+			Time:        t,
 			Code:        alarm.AlarmCode,
 		})
 	}
