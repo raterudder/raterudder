@@ -255,7 +255,19 @@ func TestOpenMeteoService(t *testing.T) {
 			ForecastURL: "https://api.open-meteo.com/v1/forecast",
 			HTTPClient:  &http.Client{Timeout: 10 * time.Second},
 		}
-		weathers, err := s.FetchWeatherForecast(context.Background(), 34.07, -118.40, "America/Los_Angeles", startDay, endDay)
+
+		var weathers []types.Weather
+		var err error
+
+		// Retry up to 3 times to mitigate flaky OpenMeteo API network issues (like EOF)
+		for i := 0; i < 3; i++ {
+			weathers, err = s.FetchWeatherForecast(context.Background(), 34.07, -118.40, "America/Los_Angeles", startDay, endDay)
+			if err == nil {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+
 		require.NoError(t, err)
 		require.GreaterOrEqual(t, len(weathers), 2)
 	})
