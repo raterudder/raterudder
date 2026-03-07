@@ -16,6 +16,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
     const [utilities, setUtilities] = useState<UtilityProviderInfo[]>([]);
     const [essProviders, setEssProviders] = useState<ESSProviderInfo[]>([]);
     const [loading, setLoading] = useState(true);
+    const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
@@ -55,6 +56,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
         if (!settings) return;
 
         try {
+            setIsSaving(true);
             setError(null);
             setSuccessMessage(null);
 
@@ -97,6 +99,8 @@ const Settings = ({ siteID }: { siteID?: string }) => {
             setTimeout(() => setSuccessMessage(null), 3000);
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to save settings');
+        } finally {
+            setIsSaving(false);
         }
     };
 
@@ -727,8 +731,8 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                 <div className="submit-section">
                     {error && <div className="error-message">{error}</div>}
                     {successMessage && <div className="success-message">{successMessage}</div>}
-                    <button type="submit" className="save-button">
-                        Save Settings
+                    <button type="submit" className="save-button" disabled={isSaving}>
+                        {isSaving ? 'Saving...' : 'Save Settings'}
                     </button>
                 </div>
             </form>
