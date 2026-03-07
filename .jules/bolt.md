@@ -1,3 +1,3 @@
-## 2025-01-28 - Avoid Redundant Sequential Queries for Time-Series Data
-**Learning:** In the Go backend, querying Firestore for subsets of time-series data (like `GetPriceHistory` or `GetWeather`) sequentially after already fetching a larger superset (like `GetEnergyHistory` for 72 hours) causes redundant database reads and increases latency. Memory indicates that we should "avoid making redundant sequential queries for subsets of time-series data (e.g., fetching a 24-hour window after just fetching a 72-hour window). Instead, filter the larger slice in-memory."
-**Action:** When working with time-series data fetched from Firestore (like `types.EnergyStats`, `types.Price`, `types.Weather`), if a larger time window is already fetched, filter it in memory rather than querying the database again for a smaller time window.
+## 2025-01-28 - Slice Capacity
+**Learning:** When preallocating slices with `make([]Type, 0, capacity)` to avoid dynamic array resizing, if we are filtering a superset array down to a fixed window (e.g. 72 hours down to 24 hours), we should use the smaller, known capacity bound (24) rather than `len(source)` (72) to avoid over-allocating memory.
+**Action:** When preallocating slices inside a filter loop, use the expected logical bound (like `24` for a 24-hour window) instead of `len(source)`.

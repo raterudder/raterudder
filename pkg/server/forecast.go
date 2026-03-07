@@ -112,7 +112,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 
 	// Reuse energyHistory already fetched from db
 	// Preallocate with known capacity to minimize memory reallocations
-	energyHistory24 := make([]types.EnergyStats, 0, len(energyHistory))
+	energyHistory24 := make([]types.EnergyStats, 0, 24)
 	for _, h := range energyHistory {
 		if !h.TSHourStart.Before(histStart24.Truncate(time.Hour)) && h.TSHourStart.Before(histEnd24.Truncate(time.Hour)) {
 			energyHistory24 = append(energyHistory24, h)
