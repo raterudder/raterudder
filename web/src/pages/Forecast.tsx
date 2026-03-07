@@ -320,6 +320,18 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
     if (error) return <div className="error">Error: {error}</div>;
     if (!data.length) return <div className="no-actions">No simulation data available.</div>;
 
+    const hasSolarRadiationData = data.some(d =>
+        (d.forecastGHI !== undefined && d.forecastGHI !== null) ||
+        (d.actualGHI !== undefined && d.actualGHI !== null)
+    );
+
+    const activeCharts = charts.filter(c => {
+        if (c.dataKey === 'forecastGHI' && !hasSolarRadiationData) {
+            return false;
+        }
+        return true;
+    });
+
     return (
         <div className="content-container forecast-page">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -343,7 +355,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 })}
             </p>
             <div className="modeling-charts">
-                {charts.map((c) => (
+                {activeCharts.map((c) => (
                     <ForecastChart key={c.dataKey} data={data} config={c} isMobile={isMobile} showCurrentTime={includeHistory} />
                 ))}
             </div>
