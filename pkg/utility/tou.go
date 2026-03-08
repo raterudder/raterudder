@@ -109,7 +109,7 @@ func (t *genericTOU) GetCurrentPrice(ctx context.Context) (types.Price, error) {
 
 func (t *genericTOU) GetFuturePrices(ctx context.Context) ([]types.Price, error) {
 	now := time.Now().Truncate(time.Hour)
-	var prices []types.Price
+	prices := make([]types.Price, 0, 48)
 
 	// Generate prices for the next 48 hours
 	for i := 1; i <= 48; i++ {
