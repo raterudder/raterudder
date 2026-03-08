@@ -8,6 +8,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"context"
+	"time"
+
 	"github.com/raterudder/raterudder/pkg/log"
 )
 
@@ -87,5 +90,176 @@ func TestComEdUtilityInfo(t *testing.T) {
 		assert.Equal(t, types.UtilityOptionTypeSwitch, opt.Type)
 		assert.NotEmpty(t, opt.Description)
 		assert.Equal(t, false, opt.Default)
+	})
+}
+
+type mockUtility struct {
+	settingsErr error
+}
+
+func (m *mockUtility) GetCurrentPrice(ctx context.Context) (types.Price, error) {
+	return types.Price{}, nil
+}
+
+func (m *mockUtility) GetFuturePrices(ctx context.Context) ([]types.Price, error) {
+	return nil, nil
+}
+
+func (m *mockUtility) GetConfirmedPrices(ctx context.Context, start, end time.Time) ([]types.Price, error) {
+	return nil, nil
+}
+
+func (m *mockUtility) ApplySettings(ctx context.Context, settings types.Settings) error {
+	return m.settingsErr
+}
+
+func TestMap(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("NewMap", func(t *testing.T) {
+		m := NewMap()
+		assert.NotNil(t, m)
+		assert.NotNil(t, m.utilities)
+		assert.Nil(t, m.baseComEdHourly)
+		assert.Nil(t, m.baseAmerenSmart)
+	})
+
+	t.Run("Configured", func(t *testing.T) {
+		m := Configured()
+		assert.NotNil(t, m)
+		assert.NotNil(t, m.baseComEdHourly)
+		assert.NotNil(t, m.baseAmerenSmart)
+	})
+
+	t.Run("SetProvider", func(t *testing.T) {
+		m := NewMap()
+		provider := &mockUtility{}
+		m.SetProvider("mock_provider", provider)
+		assert.Equal(t, provider, m.utilities["mock_provider"])
+	})
+
+	t.Run("Site with custom provider", func(t *testing.T) {
+		m := NewMap()
+		provider := &mockUtility{}
+		m.SetProvider("mock_provider", provider)
+
+		settings := types.Settings{UtilityProvider: "mock_provider"}
+		u, err := m.Site(ctx, "site1", settings)
+		require.NoError(t, err)
+		assert.Equal(t, provider, u)
+	})
+
+	t.Run("Site with unknown provider", func(t *testing.T) {
+		m := NewMap()
+		settings := types.Settings{UtilityProvider: "unknown_provider"}
+		u, err := m.Site(ctx, "site1", settings)
+		require.Error(t, err)
+		assert.Nil(t, u)
+		assert.Contains(t, err.Error(), "unknown utility provider: unknown_provider")
+	})
+
+	t.Run("Site with ComEd provider", func(t *testing.T) {
+		m := Configured()
+		settings := types.Settings{UtilityProvider: "comed", UtilityRate: "comed_besh"}
+		u, err := m.Site(ctx, "site1", settings)
+		require.NoError(t, err)
+		assert.NotNil(t, u)
+
+		// Second call should return the cached instance
+		u2, err := m.Site(ctx, "site1", settings)
+		require.NoError(t, err)
+		assert.Equal(t, u, u2)
+	})
+
+	t.Run("Site with ComEd missing base", func(t *testing.T) {
+		m := NewMap() // ComEd base not configured
+		settings := types.Settings{UtilityProvider: "comed", UtilityRate: "comed_besh"}
+		u, err := m.Site(ctx, "site1", settings)
+		require.Error(t, err)
+		assert.Nil(t, u)
+		assert.Contains(t, err.Error(), "comed provider not configured")
+	})
+
+	t.Run("Site with ComEd unsupported rate", func(t *testing.T) {
+		m := Configured()
+		settings := types.Settings{UtilityProvider: "comed", UtilityRate: "unsupported"}
+		u, err := m.Site(ctx, "site1", settings)
+		require.Error(t, err)
+		assert.Nil(t, u)
+		assert.Contains(t, err.Error(), "unsupported comed rate: unsupported")
+	})
+
+	t.Run("Site with Ameren provider", func(t *testing.T) {
+		m := Configured()
+		settings := types.Settings{UtilityProvider: "ameren", UtilityRate: "ameren_psp"}
+		u, err := m.Site(ctx, "site1", settings)
+		require.NoError(t, err)
+		assert.NotNil(t, u)
+
+		// Second call should return the cached instance
+		u2, err := m.Site(ctx, "site1", settings)
+		require.NoError(t, err)
+		assert.Equal(t, u, u2)
+	})
+
+	t.Run("Site with Ameren missing base", func(t *testing.T) {
+		m := NewMap() // Ameren base not configured
+		settings := types.Settings{UtilityProvider: "ameren", UtilityRate: "ameren_psp"}
+		u, err := m.Site(ctx, "site1", settings)
+		require.Error(t, err)
+		assert.Nil(t, u)
+		assert.Contains(t, err.Error(), "ameren provider not configured")
+	})
+
+	t.Run("Site with Ameren unsupported rate", func(t *testing.T) {
+		m := Configured()
+		settings := types.Settings{UtilityProvider: "ameren", UtilityRate: "unsupported"}
+		u, err := m.Site(ctx, "site1", settings)
+		require.Error(t, err)
+		assert.Nil(t, u)
+		assert.Contains(t, err.Error(), "unsupported ameren rate: unsupported")
+	})
+
+	t.Run("Site with TOU provider", func(t *testing.T) {
+		m := NewMap()
+		settings := types.Settings{UtilityProvider: "tou", UtilityRate: "example"}
+		u, err := m.Site(ctx, "site1", settings)
+		require.NoError(t, err)
+		assert.NotNil(t, u)
+
+		// Second call should return the cached instance
+		u2, err := m.Site(ctx, "site1", settings)
+		require.NoError(t, err)
+		assert.Equal(t, u, u2)
+	})
+
+	t.Run("Site caches custom provider but checks ApplySettings error", func(t *testing.T) {
+		m := NewMap()
+		provider := &mockUtility{settingsErr: assert.AnError}
+		m.SetProvider("mock_provider", provider)
+
+		settings := types.Settings{UtilityProvider: "mock_provider"}
+		u, err := m.Site(ctx, "site1", settings)
+		require.ErrorIs(t, err, assert.AnError)
+		assert.Nil(t, u)
+	})
+
+	t.Run("Site with ComEd provider ApplySettings error", func(t *testing.T) {
+		m := Configured()
+		settings := types.Settings{UtilityProvider: "comed", UtilityRate: "comed_besh", UtilityRateOptions: types.UtilityRateOptions{RateClass: "invalid"}}
+		u, err := m.Site(ctx, "site1", settings)
+		require.Error(t, err)
+		assert.Nil(t, u)
+		assert.Contains(t, err.Error(), "unknown ComEd rate class")
+	})
+
+
+	t.Run("Site with TOU provider ApplySettings error", func(t *testing.T) {
+		m := NewMap()
+		settings := types.Settings{UtilityProvider: "tou", UtilityRate: "unknown"}
+		u, err := m.Site(ctx, "site1", settings)
+		require.Error(t, err)
+		assert.Nil(t, u)
+		assert.Contains(t, err.Error(), "unsupported tou rate: unknown")
 	})
 }
