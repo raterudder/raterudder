@@ -153,7 +153,7 @@ describe('Forecast Page', () => {
         renderForecast();
 
         await waitFor(() => {
-            expect(screen.getByLabelText('Show Previous 24 Hours')).toBeInTheDocument();
+            expect(screen.getByRole('switch', { name: /Show Previous 24 Hours/i })).toBeInTheDocument();
         });
     });
 

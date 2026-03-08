@@ -77,55 +77,6 @@
   line-height: 1.5;
 }
 
-/* Switch Groups */
-.switch-group {
-  gap: 0.25rem;
-}
-
-.switch-row {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.switch-row label {
-  cursor: pointer;
-  font-size: 1rem;
-}
-
-/* Switch Component */
-.switch-root {
-  width: 2.75rem;
-  height: 1.5rem;
-  padding: 2px;
-  border-radius: 99px;
-  border: none;
-  background: #cbd5e1;
-  cursor: pointer;
-  transition: background 0.2s ease;
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-}
-
-.switch-root[data-checked] {
-  background: var(--primary);
-}
-
-.switch-thumb {
-  display: block;
-  width: 1.125rem;
-  height: 1.125rem;
-  border-radius: 50%;
-  background: white;
-  transition: transform 0.2s ease;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-}
-
-.switch-root[data-checked] .switch-thumb {
-  transform: translateX(1.25rem);
-}
-
 /* Select Component */
 .select-trigger {
   width: 100%;
