@@ -79,17 +79,75 @@ func (s *Server) handleHistorySavings(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// getIgnoredFraction calculates the fraction of the hour [hStart, hStart+1h)
+// where the system was paused or in emergency mode (storm hedge).
+// It assumes actions are sorted by timestamp.
+func getIgnoredFraction(hStart time.Time, actions []types.Action) float64 {
+	hEnd := hStart.Add(time.Hour)
+	ignoredDuration := time.Duration(0)
+
+	// We evaluate the state piece-wise over the hour.
+	// To know the state at hStart, we find the last action before hStart.
+	var lastStatePausedOrEmergency bool
+	var lastActionTime time.Time
+
+	for _, a := range actions {
+		if a.Timestamp.Before(hStart) {
+			lastStatePausedOrEmergency = a.Paused || a.Reason == types.ActionReasonEmergencyMode || a.SystemStatus.EmergencyMode
+			lastActionTime = a.Timestamp
+		} else if a.Timestamp.Before(hEnd) {
+			// This action falls within the hour
+			if lastStatePausedOrEmergency {
+				// The time from max(hStart, lastActionTime) up to a.Timestamp was ignored
+				startPeriod := hStart
+				if lastActionTime.After(hStart) {
+					startPeriod = lastActionTime
+				}
+				ignoredDuration += a.Timestamp.Sub(startPeriod)
+			}
+			lastStatePausedOrEmergency = a.Paused || a.Reason == types.ActionReasonEmergencyMode || a.SystemStatus.EmergencyMode
+			lastActionTime = a.Timestamp
+		} else {
+			// action is at or after hEnd, we just evaluate the remaining part of the hour
+			break
+		}
+	}
+
+	// Handle the remainder of the hour up to hEnd
+	if lastStatePausedOrEmergency {
+		startPeriod := hStart
+		if lastActionTime.After(hStart) {
+			startPeriod = lastActionTime
+		}
+		if startPeriod.Before(hEnd) {
+			ignoredDuration += hEnd.Sub(startPeriod)
+		}
+	}
+
+	return float64(ignoredDuration) / float64(time.Hour)
+}
+
 func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end time.Time) (types.SavingsStats, error) {
+	// Look back 24 hours to track battery inventory correctly.
+	lookbackStart := start.Add(-24 * time.Hour)
+
 	// Fetch prices (these are hourly)
-	prices, err := s.storage.GetPriceHistory(ctx, siteID, start, end)
+	prices, err := s.storage.GetPriceHistory(ctx, siteID, lookbackStart, end)
 	if err != nil {
 		return types.SavingsStats{}, err
 	}
 
 	// Fetch energy stats (these are hourly)
-	energyStats, err := s.storage.GetEnergyHistory(ctx, siteID, start, end)
+	energyStats, err := s.storage.GetEnergyHistory(ctx, siteID, lookbackStart, end)
 	if err != nil {
 		return types.SavingsStats{}, err
+	}
+
+	// Fetch action history (look back further to make sure we cover the entire lookback period for pause/storm)
+	actions, err := s.storage.GetActionHistory(ctx, siteID, lookbackStart.Add(-48*time.Hour), end)
+	if err != nil {
+		// Log error but don't fail, we can just proceed without pause logic
+		log.Ctx(ctx).WarnContext(ctx, "failed to get action history for savings", slog.String("siteID", siteID), slog.Any("error", err))
 	}
 
 	var stats types.SavingsStats
@@ -103,55 +161,94 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 		hourlyImportPrices[tsHour] = p.DollarsPerKWH + p.GridUseDollarsPerKWH
 	}
 
+	type energyChunk struct {
+		amount float64
+		price  float64
+	}
+	var chargeStack []energyChunk
+
 	for _, stat := range energyStats {
 		ts := stat.TSHourStart.Truncate(time.Hour)
+		inRequestedPeriod := !ts.Before(start) && ts.Before(end)
 
-		// this will be 0 if we don't have price data for this hour
 		gridImportPrice := hourlyImportPrices[ts]
 		gridExportPrice := hourlyExportPrices[ts]
 
-		// Accumulate Energy Amounts even if price is missing
-		stats.HomeUsed += stat.HomeKWH
-		stats.SolarGenerated += stat.SolarKWH
-		stats.GridImported += stat.GridImportKWH
-		stats.GridExported += stat.GridExportKWH
-		stats.BatteryUsed += stat.BatteryUsedKWH
+		ignoredFraction := getIgnoredFraction(ts, actions)
+		activeFraction := 1.0 - ignoredFraction
 
-		// Cost and Credit
-		cost := stat.GridImportKWH * gridImportPrice
-		credit := stat.GridExportKWH * gridExportPrice
-		stats.Cost += cost
-		stats.Credit += credit
+		activeGridToBattery := math.Max(0, stat.BatteryChargedKWH-stat.SolarToBatteryKWH) * activeFraction
+		activeSolarToBattery := math.Min(stat.BatteryChargedKWH, stat.SolarToBatteryKWH) * activeFraction
 
-		// Determine how much battery was used to power the home and what cost we
-		// avoided by using the battery instead of the grid.
-		batteryToHome := stat.BatteryToHomeKWH
-		avoided := batteryToHome * gridImportPrice
-		stats.AvoidedCost += avoided
+		// Push to LIFO stack if we charged the battery.
+		if activeGridToBattery > 0 {
+			chargeStack = append(chargeStack, energyChunk{
+				amount: activeGridToBattery,
+				price:  gridImportPrice,
+			})
+		}
+		if activeSolarToBattery > 0 {
+			chargeStack = append(chargeStack, energyChunk{
+				amount: activeSolarToBattery,
+				price:  0.0, // Solar costs $0 to charge from the grid's perspective
+			})
+		}
 
-		// Determine how much battery was charged from the grid and what cost we
-		// paid to charge the battery.
-		gridToBattery := math.Max(0, stat.BatteryChargedKWH-stat.SolarToBatteryKWH)
-		chargingCost := gridToBattery * gridImportPrice
-		stats.ChargingCost += chargingCost
+		activeBatteryUsed := stat.BatteryUsedKWH * activeFraction
+		activeBatteryToHome := stat.BatteryToHomeKWH * activeFraction
 
-		// Solar Savings: Solar powering the home.
-		// you might think to include solar to battery as solar savings but it gets
-		// counted as battery savings later when the battery is discharged.
-		solarToHome := stat.SolarToHomeKWH
-		solarSavings := solarToHome * gridImportPrice
-		stats.SolarSavings += solarSavings
+		// Pop from LIFO stack to determine cost of the used battery energy
+		dischargeCost := 0.0
+		amountToDischarge := activeBatteryUsed
+		for amountToDischarge > 0 && len(chargeStack) > 0 {
+			top := &chargeStack[len(chargeStack)-1]
+			take := math.Min(amountToDischarge, top.amount)
+			dischargeCost += take * top.price
+			top.amount -= take
+			amountToDischarge -= take
+			if top.amount <= 0 {
+				chargeStack = chargeStack[:len(chargeStack)-1]
+			}
+		}
 
-		stats.HourlyDebugging = append(stats.HourlyDebugging, types.HourlySavingsStatsDebugging{
-			ExportPrice:   gridExportPrice,
-			ImportPrice:   gridImportPrice,
-			BatteryToHome: batteryToHome,
-			Avoided:       avoided,
-			GridToBattery: gridToBattery,
-			ChargingCost:  chargingCost,
-			SolarToHome:   solarToHome,
-			SolarSavings:  solarSavings,
-		})
+		// Calculate charging cost attributed to the home use
+		chargingCostForHome := 0.0
+		if activeBatteryUsed > 0 {
+			chargingCostForHome = dischargeCost * (activeBatteryToHome / activeBatteryUsed)
+		}
+
+		avoided := activeBatteryToHome * gridImportPrice
+
+		// Accumulate Energy Amounts (raw, unscaled for general stats)
+		if inRequestedPeriod {
+			stats.HomeUsed += stat.HomeKWH
+			stats.SolarGenerated += stat.SolarKWH
+			stats.GridImported += stat.GridImportKWH
+			stats.GridExported += stat.GridExportKWH
+			stats.BatteryUsed += stat.BatteryUsedKWH
+
+			// Cost and Credit
+			stats.Cost += stat.GridImportKWH * gridImportPrice
+			stats.Credit += stat.GridExportKWH * gridExportPrice
+
+			stats.AvoidedCost += avoided
+			stats.ChargingCost += chargingCostForHome
+
+			solarToHome := stat.SolarToHomeKWH
+			solarSavings := solarToHome * gridImportPrice
+			stats.SolarSavings += solarSavings
+
+			stats.HourlyDebugging = append(stats.HourlyDebugging, types.HourlySavingsStatsDebugging{
+				ExportPrice:   gridExportPrice,
+				ImportPrice:   gridImportPrice,
+				BatteryToHome: activeBatteryToHome,
+				Avoided:       avoided,
+				GridToBattery: activeGridToBattery,
+				ChargingCost:  chargingCostForHome,
+				SolarToHome:   solarToHome,
+				SolarSavings:  solarSavings,
+			})
+		}
 	}
 
 	stats.BatterySavings = stats.AvoidedCost - stats.ChargingCost

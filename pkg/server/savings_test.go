@@ -16,8 +16,9 @@ import (
 
 type mockSavingsStorage struct {
 	*mockStorage
-	prices []types.Price
-	stats  []types.EnergyStats
+	prices  []types.Price
+	stats   []types.EnergyStats
+	actions []types.Action
 }
 
 func (m *mockSavingsStorage) GetPriceHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Price, error) {
@@ -28,117 +29,182 @@ func (m *mockSavingsStorage) GetEnergyHistory(ctx context.Context, siteID string
 	return m.stats, nil
 }
 
+func (m *mockSavingsStorage) GetActionHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Action, error) {
+	return m.actions, nil
+}
+
 func TestHandleHistorySavings(t *testing.T) {
-	mockStoreBase := &mockStorage{}
-	mockStoreBase.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{}, types.CurrentSettingsVersion, nil)
-
-	mockStore := &mockSavingsStorage{
-		mockStorage: mockStoreBase,
-	}
-	s := &Server{storage: mockStore, bypassAuth: true}
-
-	// Create test data
 	start := time.Now().Truncate(24 * time.Hour)
 	end := start.Add(24 * time.Hour)
 
-	// Mock Prices (5 hours, 1 with missing data simulated by omitting or 0 price)
-	prices := []types.Price{
-		{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10},
-		{TSStart: start.Add(time.Hour), TSEnd: start.Add(2 * time.Hour), DollarsPerKWH: 0.20},
-		{TSStart: start.Add(2 * time.Hour), TSEnd: start.Add(3 * time.Hour), DollarsPerKWH: 0.05}, // Cheap charging
-		{TSStart: start.Add(3 * time.Hour), TSEnd: start.Add(4 * time.Hour), DollarsPerKWH: 0.30}, // Exporting
-		// Hour 5: Missing price data (simulated by having no price entry for this hour)
+	tests := []struct {
+		name                 string
+		setupMock            func(*mockSavingsStorage)
+		expectedCost         float64
+		expectedCredit       float64
+		expectedAvoidedCost  float64
+		expectedChargingCost float64
+		expectedBattSavings  float64
+		expectedSolarSavings float64
+	}{
+		{
+			name: "Basic Charge and Discharge",
+			setupMock: func(m *mockSavingsStorage) {
+				m.prices = []types.Price{
+					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10}, // H1: $0.10
+					{TSStart: start.Add(time.Hour), TSEnd: start.Add(2 * time.Hour), DollarsPerKWH: 0.20}, // H2: $0.20
+				}
+				m.stats = []types.EnergyStats{
+					{
+						TSHourStart:       start, // Charge 10kWh @ $0.10 = $1.00
+						GridImportKWH:     10,
+						BatteryChargedKWH: 10,
+					},
+					{
+						TSHourStart:      start.Add(time.Hour), // Discharge 5kWh @ $0.20 = $1.00 avoided
+						HomeKWH:          5,
+						BatteryUsedKWH:   5,
+						BatteryToHomeKWH: 5,
+					},
+				}
+			},
+			expectedCost:         1.00,
+			expectedCredit:       0.0,
+			expectedAvoidedCost:  1.00,
+			expectedChargingCost: 0.50, // 5kWh discharged from 10kWh pool charged @ $0.10
+			expectedBattSavings:  0.50, // 1.00 - 0.50
+			expectedSolarSavings: 0.0,
+		},
+		{
+			name: "Charge Only - No Battery Savings Penalty",
+			setupMock: func(m *mockSavingsStorage) {
+				m.prices = []types.Price{
+					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10}, // H1: $0.10
+				}
+				m.stats = []types.EnergyStats{
+					{
+						TSHourStart:       start, // Charge 10kWh @ $0.10 = $1.00
+						GridImportKWH:     10,
+						BatteryChargedKWH: 10,
+					},
+				}
+			},
+			expectedCost:         1.00,
+			expectedCredit:       0.0,
+			expectedAvoidedCost:  0.0,
+			expectedChargingCost: 0.0, // Nothing discharged, so no charging cost attributed to use
+			expectedBattSavings:  0.0, // Used to be -1.00
+			expectedSolarSavings: 0.0,
+		},
+		{
+			name: "Discharge Only (with 24h lookback stack)",
+			setupMock: func(m *mockSavingsStorage) {
+				lookbackStart := start.Add(-2 * time.Hour) // Past charge
+				m.prices = []types.Price{
+					{TSStart: lookbackStart, TSEnd: lookbackStart.Add(time.Hour), DollarsPerKWH: 0.05}, // Past charge @ $0.05
+					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.20}, // Current discharge @ $0.20
+				}
+				m.stats = []types.EnergyStats{
+					{
+						TSHourStart:       lookbackStart, // Charge 10kWh @ $0.05 in past
+						GridImportKWH:     10,
+						BatteryChargedKWH: 10,
+					},
+					{
+						TSHourStart:      start, // Discharge 10kWh @ $0.20 in current period
+						HomeKWH:          10,
+						BatteryUsedKWH:   10,
+						BatteryToHomeKWH: 10,
+					},
+				}
+			},
+			expectedCost:         0.0,  // Cost of charge was in lookback period
+			expectedCredit:       0.0,
+			expectedAvoidedCost:  2.00, // 10kWh * 0.20
+			expectedChargingCost: 0.50, // 10kWh * 0.05 (pulled from lookback stack)
+			expectedBattSavings:  1.50,
+			expectedSolarSavings: 0.0,
+		},
+		{
+			name: "Partial Paused Hour",
+			setupMock: func(m *mockSavingsStorage) {
+				m.prices = []types.Price{
+					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.20}, // H1: $0.20
+				}
+				m.stats = []types.EnergyStats{
+					{
+						TSHourStart:      start, // Discharged 10kWh, but 30 mins were paused
+						HomeKWH:          10,
+						BatteryUsedKWH:   10,
+						BatteryToHomeKWH: 10,
+					},
+				}
+				m.actions = []types.Action{
+					{Timestamp: start.Add(30 * time.Minute), Paused: true}, // Paused half way through
+				}
+			},
+			expectedCost:         0.0,
+			expectedCredit:       0.0,
+			expectedAvoidedCost:  1.00, // 10kWh * 50% active * $0.20
+			expectedChargingCost: 0.0,
+			expectedBattSavings:  1.00,
+			expectedSolarSavings: 0.0,
+		},
+		{
+			name: "Storm Hedge Ignoring",
+			setupMock: func(m *mockSavingsStorage) {
+				m.prices = []types.Price{
+					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10}, // H1: $0.10
+				}
+				m.stats = []types.EnergyStats{
+					{
+						TSHourStart:       start, // Charge 10kWh @ $0.10, but in storm
+						GridImportKWH:     10,
+						BatteryChargedKWH: 10,
+					},
+				}
+				m.actions = []types.Action{
+					{Timestamp: start.Add(-1 * time.Minute), Reason: types.ActionReasonEmergencyMode},
+				}
+			},
+			expectedCost:         1.00, // Actual grid cost is still recorded
+			expectedCredit:       0.0,
+			expectedAvoidedCost:  0.0,
+			expectedChargingCost: 0.0, // No charging cost attributed because it was a storm
+			expectedBattSavings:  0.0,
+			expectedSolarSavings: 0.0,
+		},
 	}
 
-	// Mock Energy Stats
-	stats := []types.EnergyStats{
-		// Hour 1: Basic usage + Solar to Home
-		{
-			TSHourStart:    start,
-			HomeKWH:        10,
-			SolarKWH:       5,
-			SolarToHomeKWH: 5,
-			GridImportKWH:  5,
-		},
-		// Hour 2: Discharging to Home
-		{
-			TSHourStart:      start.Add(time.Hour),
-			HomeKWH:          10,
-			SolarKWH:         0,
-			BatteryUsedKWH:   5,
-			BatteryToHomeKWH: 5,
-			GridImportKWH:    5,
-		},
-		// Hour 3: Charging from Grid
-		{
-			TSHourStart:       start.Add(2 * time.Hour),
-			GridImportKWH:     10,
-			BatteryChargedKWH: 10,
-			// SolarToBattery is 0, so all 10 from Grid
-		},
-		// Hour 4: Battery Export to Grid
-		{
-			TSHourStart:      start.Add(3 * time.Hour),
-			BatteryUsedKWH:   5,
-			BatteryToGridKWH: 5,
-			GridExportKWH:    5,
-			// BatteryToHome is 0
-		},
-		// Hour 5: Usage but missing price
-		{
-			TSHourStart:   start.Add(4 * time.Hour),
-			HomeKWH:       10,
-			GridImportKWH: 10,
-		},
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockStoreBase := &mockStorage{}
+			mockStoreBase.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{}, types.CurrentSettingsVersion, nil)
+			mockStore := &mockSavingsStorage{mockStorage: mockStoreBase}
+
+			tt.setupMock(mockStore)
+
+			s := &Server{storage: mockStore, bypassAuth: true}
+
+			req, _ := http.NewRequest("GET", "/api/history/savings?start="+start.Format(time.RFC3339)+"&end="+end.Format(time.RFC3339), nil)
+			req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
+			rr := httptest.NewRecorder()
+
+			s.handleHistorySavings(rr, req)
+			assert.Equal(t, http.StatusOK, rr.Code)
+
+			var savings types.SavingsStats
+			err := json.Unmarshal(rr.Body.Bytes(), &savings)
+			require.NoError(t, err)
+
+			assert.InDelta(t, tt.expectedCost, savings.Cost, 0.001, "Cost mismatch")
+			assert.InDelta(t, tt.expectedCredit, savings.Credit, 0.001, "Credit mismatch")
+			assert.InDelta(t, tt.expectedAvoidedCost, savings.AvoidedCost, 0.001, "AvoidedCost mismatch")
+			assert.InDelta(t, tt.expectedChargingCost, savings.ChargingCost, 0.001, "ChargingCost mismatch")
+			assert.InDelta(t, tt.expectedBattSavings, savings.BatterySavings, 0.001, "BatterySavings mismatch")
+			assert.InDelta(t, tt.expectedSolarSavings, savings.SolarSavings, 0.001, "SolarSavings mismatch")
+		})
 	}
-
-	mockStore.prices = prices
-	mockStore.stats = stats
-
-	req, _ := http.NewRequest("GET", "/api/history/savings?start="+start.Format(time.RFC3339)+"&end="+end.Format(time.RFC3339), nil)
-	req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
-	rr := httptest.NewRecorder()
-
-	s.handleHistorySavings(rr, req)
-
-	assert.Equal(t, http.StatusOK, rr.Code)
-
-	var savings types.SavingsStats
-	err := json.Unmarshal(rr.Body.Bytes(), &savings)
-	require.NoError(t, err)
-
-	// Cost:
-	// H1: 5 * 0.10 = 0.50
-	// H2: 5 * 0.20 = 1.00
-	// H3: 10 * 0.05 = 0.50
-	// H4: 0
-	// H5: 10 * 0.00 = 0.00 (Implicitly ignored due to missing price)
-	// Total: 2.00
-	assert.Equal(t, 2.00, savings.Cost)
-
-	// Credit:
-	// H4: 5 * 0.30 = 1.50
-	assert.Equal(t, 1.50, savings.Credit)
-
-	// Avoided Cost (BatteryToHome * Price):
-	// H2: 5 * 0.20 = 1.00
-	assert.Equal(t, 1.00, savings.AvoidedCost)
-
-	// Charging Cost ((BatteryCharged - SolarToBattery) * Price):
-	// H3: 10 * 0.05 = 0.50
-	assert.Equal(t, 0.50, savings.ChargingCost)
-
-	// Battery Savings: 1.00 - 0.50 = 0.50
-	assert.Equal(t, 0.50, savings.BatterySavings)
-
-	// Solar Savings (SolarToHome * Price):
-	// H1: 5 * 0.10 = 0.50
-	assert.Equal(t, 0.50, savings.SolarSavings)
-
-	// Net Savings calculation removed from backend.
-
-	// Home Used: 10 + 10 + 0 + 0 + 10 = 30
-	assert.Equal(t, 30.0, savings.HomeUsed)
 }
 
 func TestHandleHistorySavingsAll(t *testing.T) {
@@ -163,6 +229,8 @@ func TestHandleHistorySavingsAll(t *testing.T) {
 	mockStore.On("GetEnergyHistory", mock.Anything, "site2", mock.Anything, mock.Anything).Return([]types.EnergyStats{
 		{TSHourStart: start, HomeKWH: 20, GridImportKWH: 20},
 	}, nil)
+
+	mockStore.On("GetActionHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Action{}, nil)
 
 	req, _ := http.NewRequest("GET", "/api/history/savings?siteID=ALL&start="+start.Format(time.RFC3339)+"&end="+end.Format(time.RFC3339), nil)
 	// Mock authMiddleware effects
