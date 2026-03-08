@@ -9,7 +9,8 @@ interface CurrentStatusProps {
 
 const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
     const soc = action.systemStatus?.batterySOC ?? 0;
-    const price = action.currentPrice?.dollarsPerKWH ?? 0;
+    const hasPrice = action.currentPrice !== undefined;
+    const price = hasPrice ? (action.currentPrice!.dollarsPerKWH + (action.currentPrice!.gridUseDollarsPerKWH || 0)) : 0;
 
     if (action.paused) {
         return (
@@ -33,10 +34,12 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
                             </Meter.Track>
                         </Meter.Root>
                     </div>
-                    <div className="metric">
-                        <span className="metric-label">Price</span>
-                        <span className="metric-value">$ {price.toFixed(3)}<small>/kWh</small></span>
-                    </div>
+                    {hasPrice && (
+                        <div className="metric">
+                            <span className="metric-label">Price</span>
+                            <span className="metric-value">$ {price.toFixed(3)}<small>/kWh</small></span>
+                        </div>
+                    )}
                 </div>
             </div>
         );
@@ -75,10 +78,12 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
                         </Meter.Track>
                     </Meter.Root>
                 </div>
-                <div className="metric">
-                    <span className="metric-label">Price</span>
-                    <span className="metric-value">$ {price.toFixed(3)}<small>/kWh</small></span>
-                </div>
+                {hasPrice && (
+                    <div className="metric">
+                        <span className="metric-label">Price</span>
+                        <span className="metric-value">$ {price.toFixed(3)}<small>/kWh</small></span>
+                    </div>
+                )}
             </div>
         </div>
     );
