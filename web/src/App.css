@@ -965,3 +965,8 @@ button {
     font-size: 0.75rem;
   }
 }
+
+/* Portal root for Base UI components */
+.app-container, .app-container-home {
+  isolation: isolate;
+}
