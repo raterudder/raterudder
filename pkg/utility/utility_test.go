@@ -155,7 +155,7 @@ func TestMap(t *testing.T) {
 		u, err := m.Site(ctx, "site1", settings)
 		require.Error(t, err)
 		assert.Nil(t, u)
-		assert.Contains(t, err.Error(), "unknown utility provider: unknown_provider")
+		assert.ErrorContains(t, err, "unknown utility provider: unknown_provider")
 	})
 
 	t.Run("Site with ComEd provider", func(t *testing.T) {
@@ -177,7 +177,7 @@ func TestMap(t *testing.T) {
 		u, err := m.Site(ctx, "site1", settings)
 		require.Error(t, err)
 		assert.Nil(t, u)
-		assert.Contains(t, err.Error(), "comed provider not configured")
+		assert.ErrorContains(t, err, "comed provider not configured")
 	})
 
 	t.Run("Site with ComEd unsupported rate", func(t *testing.T) {
@@ -186,7 +186,7 @@ func TestMap(t *testing.T) {
 		u, err := m.Site(ctx, "site1", settings)
 		require.Error(t, err)
 		assert.Nil(t, u)
-		assert.Contains(t, err.Error(), "unsupported comed rate: unsupported")
+		assert.ErrorContains(t, err, "unsupported comed rate: unsupported")
 	})
 
 	t.Run("Site with Ameren provider", func(t *testing.T) {
@@ -208,7 +208,7 @@ func TestMap(t *testing.T) {
 		u, err := m.Site(ctx, "site1", settings)
 		require.Error(t, err)
 		assert.Nil(t, u)
-		assert.Contains(t, err.Error(), "ameren provider not configured")
+		assert.ErrorContains(t, err, "ameren provider not configured")
 	})
 
 	t.Run("Site with Ameren unsupported rate", func(t *testing.T) {
@@ -217,7 +217,7 @@ func TestMap(t *testing.T) {
 		u, err := m.Site(ctx, "site1", settings)
 		require.Error(t, err)
 		assert.Nil(t, u)
-		assert.Contains(t, err.Error(), "unsupported ameren rate: unsupported")
+		assert.ErrorContains(t, err, "unsupported ameren rate: unsupported")
 	})
 
 	t.Run("Site with TOU provider", func(t *testing.T) {
@@ -250,7 +250,7 @@ func TestMap(t *testing.T) {
 		u, err := m.Site(ctx, "site1", settings)
 		require.Error(t, err)
 		assert.Nil(t, u)
-		assert.Contains(t, err.Error(), "unknown ComEd rate class")
+		assert.ErrorContains(t, err, "unknown ComEd rate class")
 	})
 
 
@@ -260,6 +260,6 @@ func TestMap(t *testing.T) {
 		u, err := m.Site(ctx, "site1", settings)
 		require.Error(t, err)
 		assert.Nil(t, u)
-		assert.Contains(t, err.Error(), "unsupported tou rate: unknown")
+		assert.ErrorContains(t, err, "unsupported tou rate: unknown")
 	})
 }
