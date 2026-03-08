@@ -90,6 +90,57 @@ func TestSettings(t *testing.T) {
 		assert.False(t, resp.HasCredentials["mock"])
 	})
 
+	t.Run("Get Settings with Credentials", func(t *testing.T) {
+		mockS2 := &mockStorage{}
+		srv, _ := newAuthServer("", nil, nil)
+		srv.storage = mockS2
+
+		// Set up mock credentials
+		creds := types.Credentials{
+			Mock: &types.MockCredentials{
+				Strategy: "test-strategy",
+				Location: "test-location",
+			},
+		}
+
+		// Encrypt the mock credentials
+		encrypted, err := srv.encryptCredentials(context.Background(), creds)
+		require.NoError(t, err)
+
+		// Create settings with the encrypted credentials
+		settingsWithCreds := types.Settings{
+			DryRun:               false,
+			MinBatterySOC:        10.0,
+			UtilityProvider:      "test",
+			EncryptedCredentials: encrypted,
+		}
+
+		// Setup a specific mock for GetSettings to return our settings with credentials
+		mockS2.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil).Maybe()
+		mockS2.On("GetSettings", mock.Anything, mock.Anything).Return(settingsWithCreds, types.CurrentSettingsVersion, nil)
+		mockS2.On("UpdateSite", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS2.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+		mockS2.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+		req := httptest.NewRequest("GET", "/api/settings", nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
+		w := httptest.NewRecorder()
+
+		srv.handleGetSettings(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+		var resp SettingsRes
+		err = json.NewDecoder(w.Body).Decode(&resp)
+		require.NoError(t, err)
+
+		// Verify hasCredentials flags accurately reflect the mock credentials
+		assert.False(t, resp.HasCredentials["franklin"], "franklin credentials should not be present")
+		assert.True(t, resp.HasCredentials["mock"], "mock credentials should be present")
+
+		// Ensure encrypted credentials are removed from the response
+		assert.Empty(t, resp.EncryptedCredentials, "encrypted credentials should not be leaked in the response")
+	})
+
 	t.Run("Update Settings - Disabled (No Admin)", func(t *testing.T) {
 		srv, _ := newAuthServer("", nil, nil)
 		req := httptest.NewRequest("POST", "/api/settings", nil)
