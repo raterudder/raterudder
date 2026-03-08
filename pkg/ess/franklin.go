@@ -111,12 +111,21 @@ func (f *Franklin) Authenticate(ctx context.Context, creds types.Credentials) (t
 	var changed bool
 
 	// If raw password is provided, hash it inside backend to handle it securely
-	// and avoid frontend dependencies.
+	// and avoid frontend dependencies, but do not clear the raw password from
+	// storage. Fall back to existing MD5Password if no raw password is provided.
+	var currentMD5 string
 	if creds.Franklin.Password != "" {
 		hash := md5.Sum([]byte(creds.Franklin.Password))
-		creds.Franklin.MD5Password = hex.EncodeToString(hash[:])
-		creds.Franklin.Password = ""
-		changed = true
+		currentMD5 = hex.EncodeToString(hash[:])
+		if creds.Franklin.MD5Password != "" {
+			// Clear deprecated MD5Password if we are migrating to raw password
+			creds.Franklin.MD5Password = ""
+			changed = true
+		}
+	} else if creds.Franklin.MD5Password != "" {
+		currentMD5 = creds.Franklin.MD5Password
+	} else {
+		return creds, false, fmt.Errorf("missing password: %w", ErrCredentialsMissing)
 	}
 
 	// Determine if we need a fresh login. We need one when:
@@ -127,18 +136,18 @@ func (f *Franklin) Authenticate(ctx context.Context, creds types.Credentials) (t
 	needLogin := creds.Franklin.Token == ""
 	if !needLogin && f.username != "" {
 		// We've previously authenticated; check if credentials have changed.
-		needLogin = f.username != creds.Franklin.Username || f.md5Password != creds.Franklin.MD5Password
+		needLogin = f.username != creds.Franklin.Username || f.md5Password != currentMD5
 	}
 
 	if needLogin {
 		log.Ctx(ctx).DebugContext(ctx, "logging in to franklin")
 		// Credentials changed or no cached token — must login fresh.
-		token, err := f.login(ctx, creds.Franklin.Username, creds.Franklin.MD5Password)
+		token, err := f.login(ctx, creds.Franklin.Username, currentMD5)
 		if err != nil {
 			return creds, false, err
 		}
 		f.username = creds.Franklin.Username
-		f.md5Password = creds.Franklin.MD5Password
+		f.md5Password = currentMD5
 		f.tokenStr = token
 		// Persist the new token so we can skip login next time.
 		creds.Franklin.Token = token
@@ -147,7 +156,7 @@ func (f *Franklin) Authenticate(ctx context.Context, creds types.Credentials) (t
 		log.Ctx(ctx).DebugContext(ctx, "restored franklin credentials from cache")
 		// Restore the token from credentials so we can skip login.
 		f.username = creds.Franklin.Username
-		f.md5Password = creds.Franklin.MD5Password
+		f.md5Password = currentMD5
 		f.tokenStr = creds.Franklin.Token
 	}
 

@@ -993,10 +993,11 @@ func TestFranklin(t *testing.T) {
 			require.NoError(t, err)
 			assert.True(t, changed)
 			assert.Equal(t, randomStr, newCreds.Franklin.Token)
-			assert.Equal(t, "", newCreds.Franklin.Password, "Raw password should be cleared")
+			assert.Equal(t, "myrawpassword", newCreds.Franklin.Password, "Raw password should not be cleared")
 
 			hash := md5.Sum([]byte("myrawpassword"))
-			assert.Equal(t, hex.EncodeToString(hash[:]), newCreds.Franklin.MD5Password, "MD5 hash should be set")
+			assert.Empty(t, newCreds.Franklin.MD5Password, "MD5 hash should not be set")
+			assert.Equal(t, hex.EncodeToString(hash[:]), f.md5Password, "Internal MD5 hash state should be set")
 		})
 
 		t.Run("AutoFetchGatewayID", func(t *testing.T) {
