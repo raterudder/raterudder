@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { fetchModeling } from '../api';
 import type { ModelingHour } from '../api';
+import { Switch } from '@base-ui/react/switch';
+import { Field } from '@base-ui/react/field';
 import {
     ResponsiveContainer,
     AreaChart,
@@ -88,6 +90,8 @@ interface ProcessedModelingHour extends ModelingHour {
     batterySOCIfStandby: number;
     batteryReserveSOC: number;
     rawSolarKWH: number;
+    forecastGHI?: number;
+    actualGHI?: number;
 }
 
 function ForecastChart({ data, config, isMobile, showCurrentTime }: { data: ProcessedModelingHour[]; config: ChartConfig; isMobile: boolean; showCurrentTime: boolean }) {
@@ -336,15 +340,19 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
         <div className="content-container forecast-page">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <h2>24-Hour Simulation</h2>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', color: '#4b5563', cursor: 'pointer' }}>
-                    <input
-                        type="checkbox"
-                        checked={includeHistory}
-                        onChange={(e) => setIncludeHistory(e.target.checked)}
-                        style={{ accentColor: '#3b82f6', width: '16px', height: '16px', cursor: 'pointer' }}
-                    />
-                    Show Previous 24 Hours
-                </label>
+                <Field.Root className="form-group switch-group compact" style={{ margin: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', color: '#4b5563' }}>
+                        <Switch.Root
+                            id="showHistoryToggle"
+                            checked={includeHistory}
+                            onCheckedChange={(checked) => setIncludeHistory(checked)}
+                            className="switch-root"
+                        >
+                            <Switch.Thumb className="switch-thumb" />
+                        </Switch.Root>
+                        <Field.Label htmlFor="showHistoryToggle" style={{ cursor: 'pointer' }}>Show Previous 24 Hours</Field.Label>
+                    </div>
+                </Field.Root>
             </div>
             <p className="forecast-subtitle">
                 Predicted energy state <strong>assuming no action is taken</strong> starting from{' '}
