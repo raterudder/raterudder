@@ -111,9 +111,10 @@ type MockCredentials struct {
 
 // Credentials for Franklin
 type FranklinCredentials struct {
-	Username    string `json:"username"`
-	Password    string `json:"password,omitempty"`
-	MD5Password string `json:"md5Password"`
+	Username string `json:"username"`
+	Password string `json:"password,omitempty"`
+	// Deprecated: MD5Password is kept for backward compatibility with existing credentials.
+	MD5Password string `json:"md5Password,omitempty"`
 	GatewayID   string `json:"gatewayID,omitempty"`
 	// Token is the cached Franklin API session token. It is stored alongside
 	// the other credentials so we can skip login on every update cycle and only
