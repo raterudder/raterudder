@@ -35,7 +35,7 @@ func (s *Server) handleListSites(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var adminSites []AdminSite
+	adminSites := make([]AdminSite, 0, len(sites))
 	for _, site := range sites {
 		action, err := s.storage.GetLatestAction(ctx, site.ID)
 		if err != nil {
@@ -45,11 +45,6 @@ func (s *Server) handleListSites(w http.ResponseWriter, r *http.Request) {
 			Site:       site,
 			LastAction: action,
 		})
-	}
-
-	// Always return an array, even if empty
-	if adminSites == nil {
-		adminSites = []AdminSite{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
