@@ -1213,7 +1213,7 @@ func (f *Franklin) getEnergyStatsForDay(ctx context.Context, day time.Time, loc 
 	// Sort the keys in chronological order
 	sort.Strings(sortedKeys)
 
-	var result []types.EnergyStats
+	result := make([]types.EnergyStats, 0, len(sortedKeys))
 	for _, key := range sortedKeys {
 		result = append(result, *hourlyStats[key])
 	}
