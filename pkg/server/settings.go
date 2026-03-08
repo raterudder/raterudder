@@ -266,22 +266,10 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				if existingCreds.Franklin == nil {
 					shouldBackfillHistory = true
 					credentialsActuallyChanged = true
-					existingCreds.Franklin = req.Credentials.Franklin
-				} else {
-					if req.Credentials.Franklin.Username != existingCreds.Franklin.Username || req.Credentials.Franklin.Password != "" {
-						credentialsActuallyChanged = true
-					}
-					// Preserve the existing MD5Password or Password if a new one is not provided.
-					// This maintains backwards compatibility for older users before we
-					// started storing raw passwords.
-					if req.Credentials.Franklin.Password == "" {
-						req.Credentials.Franklin.Password = existingCreds.Franklin.Password
-					}
-					if req.Credentials.Franklin.MD5Password == "" {
-						req.Credentials.Franklin.MD5Password = existingCreds.Franklin.MD5Password
-					}
-					existingCreds.Franklin = req.Credentials.Franklin
+				} else if req.Credentials.Franklin.Username != existingCreds.Franklin.Username || req.Credentials.Franklin.Password != "" {
+					credentialsActuallyChanged = true
 				}
+				existingCreds.Franklin = req.Credentials.Franklin
 			}
 		case "mock":
 			if req.Credentials.Mock != nil {
