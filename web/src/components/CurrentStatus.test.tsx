@@ -46,4 +46,24 @@ describe('CurrentStatus', () => {
         render(<CurrentStatus action={action} />);
         expect(screen.getByText(/System Charging/i)).toBeInTheDocument();
     });
+
+    it('does not render price when currentPrice is missing', () => {
+        render(<CurrentStatus action={defaultAction} />);
+        expect(screen.queryByText('Price')).not.toBeInTheDocument();
+    });
+
+    it('renders total price including gridUseDollarsPerKWH when currentPrice is present', () => {
+        const action: Action = {
+            ...defaultAction,
+            currentPrice: {
+                tsStart: '',
+                tsEnd: '',
+                dollarsPerKWH: 0.15,
+                gridUseDollarsPerKWH: 0.05
+            }
+        };
+        render(<CurrentStatus action={action} />);
+        expect(screen.getByText('Price')).toBeInTheDocument();
+        expect(screen.getByText('$ 0.200')).toBeInTheDocument();
+    });
 });
