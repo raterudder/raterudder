@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/log"
@@ -148,6 +149,11 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 	if err != nil {
 		// Log error but don't fail, we can just proceed without pause logic
 		log.Ctx(ctx).WarnContext(ctx, "failed to get action history for savings", slog.String("siteID", siteID), slog.Any("error", err))
+	} else {
+		// getIgnoredFraction assumes actions are sorted by timestamp
+		sort.Slice(actions, func(i, j int) bool {
+			return actions[i].Timestamp.Before(actions[j].Timestamp)
+		})
 	}
 
 	var stats types.SavingsStats
