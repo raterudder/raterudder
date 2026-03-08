@@ -28,7 +28,7 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
                     <div className="metric">
                         <span className="metric-label">Battery</span>
                         <span className="metric-value">{soc.toFixed(1)}%</span>
-                        <Meter.Root className="battery-bar" value={soc} min={0} max={100}>
+                        <Meter.Root className="battery-bar" value={soc} min={0} max={100} aria-label="Battery Percentage">
                             <Meter.Track className="battery-track">
                                 <Meter.Indicator className="battery-fill" />
                             </Meter.Track>
@@ -72,7 +72,7 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
                 <div className="metric">
                     <span className="metric-label">Battery</span>
                     <span className="metric-value">{soc.toFixed(1)}%</span>
-                    <Meter.Root className="battery-bar" value={soc} min={0} max={100}>
+                    <Meter.Root className="battery-bar" value={soc} min={0} max={100} aria-label="Battery Percentage">
                         <Meter.Track className="battery-track">
                             <Meter.Indicator className="battery-fill" />
                         </Meter.Track>
