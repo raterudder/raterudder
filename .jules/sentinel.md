@@ -1,4 +1,4 @@
-## 2026-03-06 - [CSP Configuration for Third-Party Auth]
-**Vulnerability:** Missing Content-Security-Policy allowed potential Cross-Site Scripting (XSS) and data injection.
-**Learning:** When implementing CSP, explicitly whitelisting third-party auth providers (like Google Identity Services and Apple Sign-In) in directives such as `script-src`, `style-src`, `connect-src`, and `frame-src` is strictly required. Otherwise, the authentication UI will be broken, rendering users unable to log in.
-**Prevention:** Always verify external dependencies, especially authentication modules, before deploying a strict CSP, and use `report-to` alongside `Content-Security-Policy-Report-Only` (initially) to find required sources.
+## 2025-03-08 - Prevent Rate Limit Bypass on ESS Login (Update Settings)
+**Vulnerability:** A logic flaw allowed attackers to bypass exponential backoff and brute-force external ESS systems. When users submitted changed credentials, the `ConsecutiveFailures` counter was decreased and `LastAttempt` reset, meaning attackers could continually cycle incorrect passwords and bypass the lockout.
+**Learning:** Tracking rate-limits directly via a persistent storage field requires strict monotonic growth upon failure. Any mechanic that reduces failures on arbitrary user input (like a "new" password attempt) fundamentally breaks the rate limiter.
+**Prevention:** Never reset or decrease a failure tracking counter based on the contents of the failed payload; only reset it on an authenticated/successful login.

@@ -258,16 +258,12 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		// check which credentials changed
 		var changedESS bool
 		var shouldBackfillHistory bool
-		var credentialsActuallyChanged bool
 		switch newSettings.ESS {
 		case "franklin":
 			if req.Credentials.Franklin != nil {
 				changedESS = true
 				if existingCreds.Franklin == nil {
 					shouldBackfillHistory = true
-					credentialsActuallyChanged = true
-				} else if req.Credentials.Franklin.Username != existingCreds.Franklin.Username || req.Credentials.Franklin.Password != "" {
-					credentialsActuallyChanged = true
 				}
 				existingCreds.Franklin = req.Credentials.Franklin
 			}
@@ -288,11 +284,6 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to get ess system", slog.Any("error", err))
 				writeJSONError(w, fmt.Sprintf("failed to get ess system: %v", err), http.StatusInternalServerError)
 				return
-			}
-
-			if credentialsActuallyChanged && newSettings.ESSAuthStatus.ConsecutiveFailures > 0 {
-				newSettings.ESSAuthStatus.ConsecutiveFailures--
-				newSettings.ESSAuthStatus.LastAttempt = time.Time{}
 			}
 
 			if newSettings.ESSAuthStatus.ConsecutiveFailures >= 5 {
