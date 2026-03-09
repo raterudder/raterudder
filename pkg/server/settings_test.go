@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -857,4 +858,29 @@ func TestHandleUpdateSettings(t *testing.T) {
 		srv.handleUpdateSettings(w, req)
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
 	})
+}
+
+func TestGetESSBackoff(t *testing.T) {
+	tests := []struct {
+		failures int
+		expected time.Duration
+	}{
+		{0, 0},
+		{1, 0},
+		{2, 30 * time.Second},
+		{3, 60 * time.Second},
+		{4, 120 * time.Second},
+		{5, 240 * time.Second},
+		{6, 480 * time.Second},
+		{7, 900 * time.Second},  // Max capped at 15m
+		{10, 900 * time.Second}, // Beyond max is still capped
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%d failures", tt.failures), func(t *testing.T) {
+			result := getESSBackoff(tt.failures)
+			// assert that the expected backoff matches the calculated backoff based on the given failure count
+			assert.Equal(t, tt.expected, result)
+		})
+	}
 }

@@ -51,7 +51,7 @@ func TestHandleHistorySavings(t *testing.T) {
 			name: "Basic Charge and Discharge",
 			setupMock: func(m *mockSavingsStorage) {
 				m.prices = []types.Price{
-					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10}, // H1: $0.10
+					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10},                    // H1: $0.10
 					{TSStart: start.Add(time.Hour), TSEnd: start.Add(2 * time.Hour), DollarsPerKWH: 0.20}, // H2: $0.20
 				}
 				m.stats = []types.EnergyStats{
@@ -102,7 +102,7 @@ func TestHandleHistorySavings(t *testing.T) {
 				lookbackStart := start.Add(-2 * time.Hour) // Past charge
 				m.prices = []types.Price{
 					{TSStart: lookbackStart, TSEnd: lookbackStart.Add(time.Hour), DollarsPerKWH: 0.05}, // Past charge @ $0.05
-					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.20}, // Current discharge @ $0.20
+					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.20},                 // Current discharge @ $0.20
 				}
 				m.stats = []types.EnergyStats{
 					{
@@ -118,7 +118,7 @@ func TestHandleHistorySavings(t *testing.T) {
 					},
 				}
 			},
-			expectedCost:         0.0,  // Cost of charge was in lookback period
+			expectedCost:         0.0, // Cost of charge was in lookback period
 			expectedCredit:       0.0,
 			expectedAvoidedCost:  2.00, // 10kWh * 0.20
 			expectedChargingCost: 0.50, // 10kWh * 0.05 (pulled from lookback stack)
