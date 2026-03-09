@@ -106,7 +106,18 @@ func TestFranklin(t *testing.T) {
 				json.NewEncoder(w).Encode(map[string]interface{}{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"totalCap": 30.0},
+					"result":  map[string]interface{}{"totalCap": 30.0, "peHwVerList": []int{0, 20}},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"code":    200,
+					"success": true,
+					"result": []map[string]interface{}{
+						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
+						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
+					},
 				})
 				return
 			}
@@ -163,6 +174,8 @@ func TestFranklin(t *testing.T) {
 
 		assert.Equal(t, 88.5, status.BatterySOC, "BatterySOC should match")
 		assert.Equal(t, 30.0, status.BatteryCapacityKWH, "BatteryCapacityKWH should match")
+		assert.Equal(t, 13.0, status.MaxBatteryChargeKW, "MaxBatteryChargeKW should match 5kW + 8kW")
+		assert.Equal(t, 15.0, status.MaxBatteryDischargeKW, "MaxBatteryDischargeKW should match 5kW + 10kW")
 		assert.True(t, status.CanExportSolar, "CanExportSolar should be true")
 		assert.True(t, status.CanExportBattery, "CanExportBattery should be true")
 		assert.True(t, status.CanImportBattery, "CanImportBattery should be true")
@@ -185,6 +198,17 @@ func TestFranklin(t *testing.T) {
 					"code":    200,
 					"success": true,
 					"result":  map[string]interface{}{"totalCap": 30.0, "timeZone": "UTC"},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"code":    200,
+					"success": true,
+					"result": []map[string]interface{}{
+						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
+						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
+					},
 				})
 				return
 			}
@@ -266,6 +290,17 @@ func TestFranklin(t *testing.T) {
 					"code":    200,
 					"success": true,
 					"result":  map[string]interface{}{"totalCap": 30.0, "timeZone": "UTC"},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"code":    200,
+					"success": true,
+					"result": []map[string]interface{}{
+						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
+						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
+					},
 				})
 				return
 			}
@@ -361,6 +396,17 @@ func TestFranklin(t *testing.T) {
 				})
 				return
 			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"code":    200,
+					"success": true,
+					"result": []map[string]interface{}{
+						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
+						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
+					},
+				})
+				return
+			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
 				json.NewEncoder(w).Encode(map[string]interface{}{
 					"code":    200,
@@ -430,6 +476,17 @@ func TestFranklin(t *testing.T) {
 					"code":    200,
 					"success": true,
 					"result":  map[string]interface{}{"list": list},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"code":    200,
+					"success": true,
+					"result": []map[string]interface{}{
+						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
+						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
+					},
 				})
 				return
 			}
@@ -505,6 +562,17 @@ func TestFranklin(t *testing.T) {
 					"code":    200,
 					"success": true,
 					"result":  map[string]interface{}{"list": list, "currendId": 20.0},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"code":    200,
+					"success": true,
+					"result": []map[string]interface{}{
+						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
+						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
+					},
 				})
 				return
 			}
@@ -606,6 +674,17 @@ func TestFranklin(t *testing.T) {
 				})
 				return
 			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"code":    200,
+					"success": true,
+					"result": []map[string]interface{}{
+						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
+						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
+					},
+				})
+				return
+			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
 				json.NewEncoder(w).Encode(map[string]interface{}{
 					"code":    200,
@@ -666,6 +745,17 @@ func TestFranklin(t *testing.T) {
 					"code":    200,
 					"success": true,
 					"result":  map[string]interface{}{"list": list, "currendId": 20.0},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"code":    200,
+					"success": true,
+					"result": []map[string]interface{}{
+						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
+						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
+					},
 				})
 				return
 			}
@@ -741,6 +831,17 @@ func TestFranklin(t *testing.T) {
 				})
 				return
 			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"code":    200,
+					"success": true,
+					"result": []map[string]interface{}{
+						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
+						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
+					},
+				})
+				return
+			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
 				t.Error("Should not call getPowerControlSetting")
 				return
@@ -794,6 +895,17 @@ func TestFranklin(t *testing.T) {
 					"code":    200,
 					"success": true,
 					"result":  map[string]interface{}{"list": list, "currendId": 11.0},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"code":    200,
+					"success": true,
+					"result": []map[string]interface{}{
+						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
+						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
+					},
 				})
 				return
 			}
@@ -1362,6 +1474,17 @@ func TestFranklin(t *testing.T) {
 				})
 				return
 			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"code":    200,
+					"success": true,
+					"result": []map[string]interface{}{
+						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
+						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
+					},
+				})
+				return
+			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
 				json.NewEncoder(w).Encode(map[string]interface{}{
 					"code":    200,
@@ -1453,6 +1576,17 @@ func TestFranklin(t *testing.T) {
 					{"id": 20.0, "workMode": 2, "electricityType": 1, "editSocFlag": true},
 				}
 				json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "success": true, "result": map[string]interface{}{"list": list, "currendId": 20.0}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"code":    200,
+					"success": true,
+					"result": []map[string]interface{}{
+						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
+						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
+					},
+				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {

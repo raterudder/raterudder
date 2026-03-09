@@ -29,16 +29,18 @@ const franklinLoginPath = "hes-gateway/terminal/initialize/appUserOrInstallerLog
 // Franklin implements the System interface for FranklinWH.
 // It interacts with the FranklinWH API to monitor and control the energy storage system.
 type Franklin struct {
-	client           *http.Client
-	baseURL          string
-	username         string
-	md5Password      string
-	gatewayID        string
-	tokenStr         string
-	mu               sync.Mutex
-	settings         types.Settings
-	deviceInfoCache  deviceInfoV2Result
-	deviceInfoExpiry time.Time
+	client               *http.Client
+	baseURL              string
+	username             string
+	md5Password          string
+	gatewayID            string
+	tokenStr             string
+	mu                   sync.Mutex
+	settings             types.Settings
+	deviceInfoCache      deviceInfoV2Result
+	deviceInfoExpiry     time.Time
+	powerCapConfigCache  []powerCapConfigResult
+	powerCapConfigExpiry time.Time
 }
 
 type franklinMode struct {
@@ -334,7 +336,7 @@ func (f *Franklin) doRequest(req *http.Request, dest interface{}) error {
 
 		if resp.StatusCode != http.StatusOK {
 			if resp.StatusCode == http.StatusUnauthorized && !isLogin && f.tokenStr != "" {
-				log.Ctx(req.Context()).DebugContext(req.Context(), "franklin token expired")
+				log.Ctx(req.Context()).DebugContext(req.Context(), "franklin token expired", slog.Int("statusCode", resp.StatusCode))
 				f.tokenStr = ""
 				if err := f.ensureLogin(req.Context()); err != nil {
 					return err
@@ -359,7 +361,7 @@ func (f *Franklin) doRequest(req *http.Request, dest interface{}) error {
 			// if we got a 401 error, it wasn't a login, and we sent a token then we
 			// need to get another token
 			if fr.Code == 401 && !isLogin && f.tokenStr != "" {
-				log.Ctx(req.Context()).DebugContext(req.Context(), "franklin token expired", slog.String("message", fr.Message))
+				log.Ctx(req.Context()).DebugContext(req.Context(), "franklin token expired", slog.String("error", fr.Message))
 				f.tokenStr = ""
 				if err := f.ensureLogin(req.Context()); err != nil {
 					return err
@@ -370,7 +372,7 @@ func (f *Franklin) doRequest(req *http.Request, dest interface{}) error {
 				log.Ctx(req.Context()).ErrorContext(req.Context(), "franklin api unknown error", slog.String("body", string(body)))
 				return fmt.Errorf("franklin unknown error")
 			}
-			log.Ctx(req.Context()).ErrorContext(req.Context(), "franklin api error", slog.String("message", fr.Message))
+			log.Ctx(req.Context()).ErrorContext(req.Context(), "franklin api error", slog.String("error", fr.Message))
 			return fmt.Errorf("franklin api error: %s", fr.Message)
 		}
 
@@ -478,6 +480,33 @@ func (f *Franklin) getDeviceInfoWithCache(ctx context.Context) (deviceInfoV2Resu
 	return di, nil
 }
 
+func (f *Franklin) getPowerCapacityConfig(ctx context.Context) ([]powerCapConfigResult, error) {
+	req, err := f.newGetRequest(ctx, "hes-gateway/common/getPowerCapConfigList", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var res []powerCapConfigResult
+	if err := f.doRequest(req, &res); err != nil {
+		return nil, err
+	}
+
+	return res, nil
+}
+
+func (f *Franklin) getPowerCapacityConfigWithCache(ctx context.Context) ([]powerCapConfigResult, error) {
+	if time.Now().Before(f.powerCapConfigExpiry) {
+		return f.powerCapConfigCache, nil
+	}
+	pc, err := f.getPowerCapacityConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	f.powerCapConfigCache = pc
+	f.powerCapConfigExpiry = time.Now().Add(time.Hour)
+	return pc, nil
+}
+
 // GetStatus returns the status of the franklin system
 func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 	log.Ctx(ctx).DebugContext(ctx, "getting franklin system status")
@@ -504,6 +533,11 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 	}
 
 	pc, err := f.getPowerControl(ctx)
+	if err != nil {
+		return types.SystemStatus{}, err
+	}
+
+	pcaps, err := f.getPowerCapacityConfigWithCache(ctx)
 	if err != nil {
 		return types.SystemStatus{}, err
 	}
@@ -574,6 +608,34 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		)
 	}
 
+	maxBatteryChargeKW := 0.0
+	maxBatteryDischargeKW := 0.0
+
+	if len(di.BatteryPEHWVersions) > 0 {
+		for _, hwVer := range di.BatteryPEHWVersions {
+			found := false
+			for _, pc := range pcaps {
+				if pc.PEHWVersion == hwVer {
+					maxBatteryChargeKW += float64(pc.ChargePower) / 1000.0
+					maxBatteryDischargeKW += float64(pc.DischargePower) / 1000.0
+					found = true
+					break
+				}
+			}
+			if !found {
+				log.Ctx(ctx).WarnContext(ctx, "could not find power capacity config for battery hardware version", slog.Int("hwVer", hwVer))
+				// assume aPower 2 for each battery
+				maxBatteryChargeKW += 8.0
+				maxBatteryDischargeKW += 10.0
+			}
+		}
+	} else if len(rd.RuntimeData.EachSOC) > 0 {
+		// assume aPower 2 for each battery
+		log.Ctx(ctx).WarnContext(ctx, "no battery hardware versions reported, assuming aPower 2 for each battery", slog.Int("count", len(rd.RuntimeData.EachSOC)))
+		maxBatteryChargeKW = 8.0 * float64(len(rd.RuntimeData.EachSOC))
+		maxBatteryDischargeKW = 10.0 * float64(len(rd.RuntimeData.EachSOC))
+	}
+
 	return types.SystemStatus{
 		Timestamp:               time.Now().In(di.location),
 		BatterySOC:              rd.RuntimeData.SOC,
@@ -591,13 +653,10 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		ElevatedMinBatterySOC:   modes.currentMode.ReserveSOC > 0 && modes.currentMode.ReserveSOC > f.settings.MinBatterySOC,
 		BatteryAboveMinSOC:      rd.RuntimeData.SOC >= modes.currentMode.ReserveSOC,
 		BatteryChargingDisabled: batteryChargingDisabled,
-
-		// TODO: get this from hes-gateway/common/getPowerCapConfigList
-		MaxBatteryChargeKW:    8 * float64(len(rd.RuntimeData.EachSOC)),
-		MaxBatteryDischargeKW: 10 * float64(len(rd.RuntimeData.EachSOC)),
-
-		Alarms: alarms,
-		Storms: storms,
+		MaxBatteryChargeKW:      maxBatteryChargeKW,
+		MaxBatteryDischargeKW:   maxBatteryDischargeKW,
+		Alarms:                  alarms,
+		Storms:                  storms,
 	}, nil
 }
 
@@ -1287,6 +1346,16 @@ type runtimeData struct {
 	// TODO: what does solarPower (seems to be 10x p_sun?) mean?
 }
 
+type powerCapConfigResult struct {
+	ID             int    `json:"id"`
+	ModelName      string `json:"modelName"`
+	PEHWVersion    int    `json:"peHwVersion"`
+	RatedCap       int    `json:"ratedCap"`
+	ChargePower    int    `json:"chargePower"`
+	DischargePower int    `json:"dischargePower"`
+	DerateFlag     int    `json:"derateFlag"`
+}
+
 type deviceInfoV2Result struct {
 	GatewayID               string        `json:"gatewayId"`
 	DeviceTime              string        `json:"deviceTime"`
@@ -1294,7 +1363,9 @@ type deviceInfoV2Result struct {
 	SystemHardwareVersion   int           `json:"sysHdVersionInt"`
 	TotalBatteryCapacityKWH float64       `json:"totalCap"`
 	TotalBatteryPowerKW     float64       `json:"fixedPowerTotal"`
-	BatteryList             []batteryInfo `json:"batteryList"`
+	Batteries               []batteryInfo `json:"apowerList"`
+	BatteryPEHWVersions     []int         `json:"peHwVerList"`
+	ProtocolVersion         string        `json:"protocolVer"`
 
 	location *time.Location
 
@@ -1304,9 +1375,9 @@ type deviceInfoV2Result struct {
 }
 
 type batteryInfo struct {
-	Serial     int `json:"id"`
-	CapacityWH int `json:"rateBatCap"`
-	PowerW     int `json:"ratedPwr"`
+	Serial     string `json:"id"`
+	CapacityWH int    `json:"rateBatCap"`
+	PowerW     int    `json:"ratedPwr"`
 }
 
 type gridMaxFlag int
