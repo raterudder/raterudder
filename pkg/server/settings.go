@@ -62,14 +62,13 @@ func (s *Server) getSettingsWithMigration(ctx context.Context, siteID string) (s
 }
 
 func (s *Server) getESSSystem(ctx context.Context, siteID string, settings settingsWithVersion, creds types.Credentials) (ess.System, error) {
-	if settings.ESSAuthStatus.ConsecutiveFailures >= 5 {
-		return nil, fmt.Errorf("ESS authentication locked due to too many consecutive failures")
-	}
-
-	if settings.ESSAuthStatus.ConsecutiveFailures > 0 {
-		backoff := time.Duration(settings.ESSAuthStatus.ConsecutiveFailures*5) * time.Minute
-		if time.Since(settings.ESSAuthStatus.LastAttempt) < backoff {
-			return nil, fmt.Errorf("ESS authentication rate limited, try again later")
+	if settings.ESSAuthStatus.ConsecutiveFailures > 1 {
+		backoff := getESSBackoff(settings.ESSAuthStatus.ConsecutiveFailures)
+		timeLeft := backoff - time.Since(settings.ESSAuthStatus.LastAttempt)
+		if timeLeft > 0 {
+			// Round to seconds
+			timeLeft = timeLeft.Round(time.Second)
+			return nil, fmt.Errorf("ESS authentication rate limited, try again in %v", timeLeft)
 		}
 	}
 
@@ -258,16 +257,12 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		// check which credentials changed
 		var changedESS bool
 		var shouldBackfillHistory bool
-		var credentialsActuallyChanged bool
 		switch newSettings.ESS {
 		case "franklin":
 			if req.Credentials.Franklin != nil {
 				changedESS = true
 				if existingCreds.Franklin == nil {
 					shouldBackfillHistory = true
-					credentialsActuallyChanged = true
-				} else if req.Credentials.Franklin.Username != existingCreds.Franklin.Username || req.Credentials.Franklin.Password != "" {
-					credentialsActuallyChanged = true
 				}
 				existingCreds.Franklin = req.Credentials.Franklin
 			}
@@ -290,20 +285,12 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			if credentialsActuallyChanged && newSettings.ESSAuthStatus.ConsecutiveFailures > 0 {
-				newSettings.ESSAuthStatus.ConsecutiveFailures--
-				newSettings.ESSAuthStatus.LastAttempt = time.Time{}
-			}
-
-			if newSettings.ESSAuthStatus.ConsecutiveFailures >= 5 {
-				writeJSONError(w, "ESS authentication locked due to too many consecutive failures", http.StatusTooManyRequests)
-				return
-			}
-
-			if newSettings.ESSAuthStatus.ConsecutiveFailures > 0 {
-				backoff := time.Duration(newSettings.ESSAuthStatus.ConsecutiveFailures*5) * time.Minute
-				if time.Since(newSettings.ESSAuthStatus.LastAttempt) < backoff {
-					writeJSONError(w, "ESS authentication rate limited, try again later", http.StatusTooManyRequests)
+			if newSettings.ESSAuthStatus.ConsecutiveFailures > 1 {
+				backoff := getESSBackoff(newSettings.ESSAuthStatus.ConsecutiveFailures)
+				timeLeft := backoff - time.Since(newSettings.ESSAuthStatus.LastAttempt)
+				if timeLeft > 0 {
+					timeLeft = timeLeft.Round(time.Second)
+					writeJSONError(w, fmt.Sprintf("ESS authentication rate limited, try again in %v", timeLeft), http.StatusTooManyRequests)
 					return
 				}
 			}
@@ -363,4 +350,21 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	log.Ctx(ctx).InfoContext(ctx, "settings updated")
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func getESSBackoff(failures int) time.Duration {
+	if failures <= 1 {
+		return 0
+	}
+
+	// Failures = 2 -> 30s
+	// Failures = 3 -> 60s
+	// Failures = 4 -> 120s
+	// Failures = 5 -> 240s
+	seconds := 30 * (1 << (failures - 2))
+	if seconds > 900 {
+		seconds = 900 // max 15 minutes
+	}
+
+	return time.Duration(seconds) * time.Second
 }
