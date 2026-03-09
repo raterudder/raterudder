@@ -21,9 +21,7 @@ func Configured() Service {
 	forecastBaseURL := lflag.String("weather-forecast-url", "https://api.open-meteo.com/v1/forecast", "Open-Meteo forecast API URL")
 
 	s := &OpenMeteo{
-		GeocodingURL: "https://geocoding-api.open-meteo.com/v1/search",
-		ForecastURL:  "https://api.open-meteo.com/v1/forecast",
-		HTTPClient:   common.HTTPClient(10 * time.Second),
+		HTTPClient: common.HTTPClient(10 * time.Second),
 	}
 
 	lflag.Do(func() {

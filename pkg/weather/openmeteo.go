@@ -161,12 +161,18 @@ func (s *OpenMeteo) FetchWeatherForecast(ctx context.Context, lat, long float64,
 
 	if resp.StatusCode != http.StatusOK {
 		var errData map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&errData)
+		err := json.NewDecoder(resp.Body).Decode(&errData)
+		if err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to parse weather error response", slog.Any("error", err), slog.Int("status", resp.StatusCode))
+			return nil, fmt.Errorf("weather api returned status %d", resp.StatusCode)
+		}
+		log.Ctx(ctx).ErrorContext(ctx, "weather api returned status", slog.Any("response", errData), slog.Int("status", resp.StatusCode))
 		return nil, fmt.Errorf("weather api returned status %d: %v", resp.StatusCode, errData)
 	}
 
 	var data weatherForecastResponse
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to decode weather response", slog.Any("error", err))
 		return nil, fmt.Errorf("failed to decode weather response: %w", err)
 	}
 

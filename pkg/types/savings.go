@@ -4,14 +4,15 @@ import "time"
 
 // HourlySavingsStatsDebugging is a helper struct for debugging the savings calculations
 type HourlySavingsStatsDebugging struct {
-	ExportPrice   float64 `json:"exportPrice"`
-	ImportPrice   float64 `json:"importPrice"`
-	BatteryToHome float64 `json:"batteryToHome"`
-	Avoided       float64 `json:"avoided"`
-	GridToBattery float64 `json:"gridToBattery"`
-	ChargingCost  float64 `json:"chargingCost"`
-	SolarToHome   float64 `json:"solarToHome"`
-	SolarSavings  float64 `json:"solarSavings"`
+	ExportPrice     float64 `json:"exportPrice"`
+	ImportPrice     float64 `json:"importPrice"`
+	BatteryToHome   float64 `json:"batteryToHome"`
+	Avoided         float64 `json:"avoided"`
+	GridToBattery   float64 `json:"gridToBattery"`
+	ChargingCost    float64 `json:"chargingCost"`
+	SolarToHome     float64 `json:"solarToHome"`
+	SolarSavings    float64 `json:"solarSavings"`
+	IgnoredFraction float64 `json:"ignoredFraction"`
 }
 
 // SavingsStats is the response type for the savings endpoint

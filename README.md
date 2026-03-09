@@ -1,6 +1,6 @@
 # RateRudder
 
-RateRudder is an intelligent home energy management system designed to optimize the usage of Energy Storage Systems (ESS) like FranklinWH based on real-time electricity pricing (e.g., ComEd Hourly Pricing). It automates the charging and discharging of batteries to maximize savings and efficiency.
+RateRudder is an intelligent home energy management system designed to optimize the usage of Energy Storage Systems (ESS) like FranklinWH based on real-time/TOU electricity pricing. It automates the charging and discharging of batteries to maximize savings and efficiency.
 
 ## Architecture
 
@@ -12,7 +12,8 @@ The project is structured as follows:
     - **`ess`**: Interfaces and implementations for ESS (currently supports FranklinWH).
     - **`server`**: HTTP API server for the web dashboard and triggered updates.
     - **`storage`**: Persistence layer (currently supports Google Cloud Firestore).
-    - **`utility`**: Electricity pricing fetchers (ComEd & PJM).
+    - **`utility`**: Electricity pricing fetchers (ComEd, Ameren & PJM/MISO).
+    - **`weather`**: Weather status forecasts and geocoding.
 - **`web`**: A React + TypeScript + Vite single-page application for the frontend dashboard.
 - **`tf`**: Terraform configuration for provisioning infrastructure on Google Cloud.
 
@@ -63,29 +64,31 @@ The application uses command-line flags for configuration.
 
 #### General / Server
 - `--http-listen`: HTTP server listen address (default `:8080`).
-- `--dev-proxy`: URL to proxy requests to (e.g., `http://localhost:5173` for local Vite dev server).
+- `--dev-proxy`: Address of the dev server (e.g., `http://localhost:5173`).
 - `--update-specific-email`: Email requirement for authenticating calls to `/api/update`.
-- `--admin-emails`: Comma-delimited list of email addresses allowed to manage settings.
+- `--admin-emails`: Comma-delimited list of email addresses allowed to update settings via IAP.
 - `--oidc-audience`: Expected audience for OIDC token validation.
+- `--oidc-audiences`: JSON map of provider (`google`/`apple`) to audience/client ID.
+- `--update-specific-audience`: Google-specific legacy audience to validate for `/api/update`.
 - `--single-site`: Enable single-site mode (disables siteID requirement), for simple single-user deployments.
-- `--credentials-encryption-key`: Key for encrypting sensitive credentials in the database.
+- `--show-hidden`: Expose hidden providers in lists via the API.
+- `--credentials-encryption-key`: Key for encrypting credentials (must be 32 characters).
+- `--release`: Release environment (`production` or `staging`).
+- `--web-cache-duration`: Duration to cache web files (e.g., `1h`, `5m`). `0` means no cache.
 
-#### Utility (ComEd & PJM)
+#### Utility & Weather
 - `--comed-api-url`: URL for the ComEd Hourly Pricing API.
 - `--pjm-api-url`: URL for the PJM API (Day-ahead pricing).
 - `--pjm-api-key`: API Key for PJM Data Miner 2 (optional, enabled day-ahead lookups).
-
-#### ESS (FranklinWH)
-- `--franklin-username`: FranklinWH Email/Username.
-- `--franklin-password`: FranklinWH Password.
-- `--franklin-md5-password`: MD5 hashed password (alternative to plaintext).
-- `--franklin-gateway-id`: FranklinWH Gateway ID (optional, auto-detected if single gateway).
-- `--franklin-token`: FranklinWH Access Token (optional override).
+- `--miso-api-url`: URL for the MISO API.
+- `--weather-geocoding-url`: Open-Meteo geocoding API URL.
+- `--weather-forecast-url`: Open-Meteo forecast API URL.
 
 #### Storage (Firestore)
 - `--storage-provider`: Provider to use (default `firestore`).
-- `--firestore-project-id`: Google Cloud Project ID.
-- `--firestore-database`: Firestore Database ID (default `(default)`).
+- `--firestore-project-id`: Google Cloud Project ID for Firestore.
+- `--firestore-database`: Google Cloud Firestore Database.
+- `--firestore-emulator`: Use Firestore emulator.
 
 ## Development
 
@@ -112,8 +115,7 @@ To run the full stack locally:
     export FIRESTORE_EMULATOR_HOST=127.0.0.1:8087
     go run ./cmd/raterudder \
       --dev-proxy=http://localhost:5173 \
-      --franklin-username=YOUR_EMAIL \
-      --franklin-password=YOUR_PASSWORD
+      --credentials-encryption-key=YOUR_32_CHAR_LONG_SECRET_KEY_HERE
     ```
 
 ### Running Tests

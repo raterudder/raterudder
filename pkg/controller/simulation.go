@@ -241,7 +241,6 @@ func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, 
 		if h.TSHourStart.IsZero() {
 			continue
 		}
-		// TODO: use the user timezone
 		hour := h.TSHourStart.In(now.Location()).Hour()
 		hourlyData[hour] = append(hourlyData[hour], dataPoint{
 			solar: h.SolarKWH,
@@ -575,9 +574,8 @@ func (c *Controller) calculateSolarTrend(ctx context.Context, now time.Time, his
 
 	modelSolar := m1.avgSolarKWH + m2.avgSolarKWH
 
-	// If model expects no solar (e.g. night), we can't calculate a meaningful trend ratio.
-	// TODO: figure out a better way to handle this because it could be that
-	// yesterday was cloudy and today is sunny
+	// If model expects no solar (e.g. night), we can't calculate a meaningful
+	// trend ratio.
 	if modelSolar < 0.001 {
 		log.Ctx(ctx).DebugContext(
 			ctx,

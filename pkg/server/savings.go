@@ -245,14 +245,15 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 			stats.SolarSavings += solarSavings
 
 			stats.HourlyDebugging = append(stats.HourlyDebugging, types.HourlySavingsStatsDebugging{
-				ExportPrice:   gridExportPrice,
-				ImportPrice:   gridImportPrice,
-				BatteryToHome: activeBatteryToHome,
-				Avoided:       avoided,
-				GridToBattery: activeGridToBattery,
-				ChargingCost:  chargingCostForHome,
-				SolarToHome:   solarToHome,
-				SolarSavings:  solarSavings,
+				ExportPrice:     gridExportPrice,
+				ImportPrice:     gridImportPrice,
+				BatteryToHome:   activeBatteryToHome,
+				Avoided:         avoided,
+				GridToBattery:   activeGridToBattery,
+				ChargingCost:    chargingCostForHome,
+				SolarToHome:     solarToHome,
+				SolarSavings:    solarSavings,
+				IgnoredFraction: ignoredFraction,
 			})
 		}
 	}

@@ -779,7 +779,8 @@ func TestHandleUpdateSettings(t *testing.T) {
 		var errResp struct {
 			Error string `json:"error"`
 		}
-		json.NewDecoder(w.Result().Body).Decode(&errResp)
+		err := json.NewDecoder(w.Result().Body).Decode(&errResp)
+		require.NoError(t, err)
 		assert.Contains(t, errResp.Error, "try again in 20s")
 	})
 

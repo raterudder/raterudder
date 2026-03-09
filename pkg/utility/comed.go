@@ -510,7 +510,7 @@ func (c *BaseComEdHourly) fetchPJMDayAhead(ctx context.Context, pnodeID string) 
 	return prices, nil
 }
 
-// TODO: support Basic Electric Service Time of Use Pricing (Rate BEST)
+// TODO: support Basic Electric Service Time of Use Pricing (Rate BEST) once pricing is announced
 /*
 Basic Electric Service Time of Use Electricity
 Charges (BESTECs) Effective Prior to the June
@@ -536,7 +536,7 @@ periods.
 */
 
 func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityAdditionalFeesPeriod, error) {
-	// TODO: include 2027 prices
+	// TODO: include 2027 prices once they are announced
 
 	// The incremental distribution uncollectible cost factor applicable for residential
 	// retail customers (IDUFR) equals the applicable IDUFR listed in Informational

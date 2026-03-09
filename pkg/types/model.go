@@ -35,7 +35,6 @@ type User struct {
 	SiteIDs []string   `json:"siteIDs"`
 	Sites   []UserSite `json:"sites"`
 	Admin   bool       `json:"-"`
-	// TODO: add global admin field?
 }
 
 // ActionReason represents the type of action taken by the system.
@@ -162,7 +161,7 @@ const (
 	SolarModeNoChange SolarMode = 0
 	SolarModeNoExport SolarMode = 1
 	SolarModeAny      SolarMode = 2
-	// TODO: SolarModeExportOnly SolarMode = 2
+	// TODO: we could add SolarModeExportOnly SolarMode = 2 but right now no ESS system supports this mode
 )
 
 // Feedback represents feedback submitted by a user.

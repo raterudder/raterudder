@@ -109,12 +109,12 @@ func (f *Franklin) Authenticate(ctx context.Context, creds types.Credentials) (t
 	defer f.mu.Unlock()
 
 	var changed bool
-
-	// If raw password is provided, hash it inside backend to handle it securely
-	// and avoid frontend dependencies, but do not clear the raw password from
-	// storage. Fall back to existing MD5Password if no raw password is provided.
 	var currentMD5 string
 	if creds.Franklin.Password != "" {
+		// MD5 is mandated by the FranklinWH API protocol for authentication.
+		// It is not used for secure password storage in RateRudder.
+		// codeql[go/insecure-hashing]
+		// nolint:gosec
 		hash := md5.Sum([]byte(creds.Franklin.Password))
 		currentMD5 = hex.EncodeToString(hash[:])
 		if creds.Franklin.MD5Password != "" {
@@ -234,7 +234,6 @@ func (f *Franklin) login(ctx context.Context, username, md5Password string) (str
 	}
 	log.Ctx(ctx).DebugContext(ctx, "franklin login success", slog.String("username", username))
 
-	// TODO: what is the actual expiry of the token?
 	return res.Token, nil
 }
 
@@ -324,6 +323,8 @@ func (f *Franklin) doRequest(req *http.Request, dest interface{}) error {
 		}
 
 		// TODO: should we set softwareversion, lang, optsystemversion, opttime, optdevicename, optsource, optdevice
+		// we don't know what to set them as for now but at some point we should consider setting them
+		// once we better understand how Franklin expects them
 
 		resp, err := f.client.Do(req)
 		if err != nil {
@@ -629,7 +630,7 @@ func (f *Franklin) getPowerControl(ctx context.Context) (getPowerControlSettingR
 func (f *Franklin) setPowerControl(ctx context.Context, pc getPowerControlSettingResult) error {
 	data := map[string]interface{}{
 		"gatewayId": f.gatewayID,
-		// TODO: what is -1 here?
+		// TODO: what does a gridMax value of -1 mean? It's not clear yet
 		"gridMax":     pc.GridMax,
 		"gridMaxFlag": pc.GridMaxFlag,
 	}
@@ -656,7 +657,7 @@ func (f *Franklin) setPowerControl(ctx context.Context, pc getPowerControlSettin
 		return err
 	}
 
-	// TODO: powerControlTipMsg
+	// TODO: should we be doing something with the powerControlTipMsg response? What does it mean?
 	return f.doRequest(req, &struct{}{})
 }
 
@@ -1232,7 +1233,7 @@ type currentAlarmVO struct {
 	Name                 string `json:"logName"`
 	Explanation          string `json:"alarmExplanation"`
 	Plan                 string `json:"plan"`
-	// TODO: level?
+	// TODO: what does level mean? Should we only stop updating based on certain levels?
 }
 
 type deviceCompositeInfoResult struct {
@@ -1281,9 +1282,9 @@ type runtimeData struct {
 	SolarOutGrid        float64 `json:"soOutGrid"`
 	SolarChargedBattery float64 `json:"soChBat"`
 
-	// TODO: t_amb? temperature?
-	// TODO: kwhSolarLoad, kwhGridLoad, kwhFhpLoad, kwhGenLoad
-	// TODO: solarPower (seems to be 10x p_sun?)
+	// TODO: does t_amb mean the ambient temperature of the outside or the batteries?
+	// TODO: what do kwhSolarLoad, kwhGridLoad, kwhFhpLoad, kwhGenLoad mean?
+	// TODO: what does solarPower (seems to be 10x p_sun?) mean?
 }
 
 type deviceInfoV2Result struct {
@@ -1297,9 +1298,9 @@ type deviceInfoV2Result struct {
 
 	location *time.Location
 
-	// TODO: solarFlag, solarTipMsg
-	// TODO: activeStatus
-	// TODO: sleepStatus, blackSleepFlag
+	// TODO: what do solarFlag, solarTipMsg mean?
+	// TODO: what does activeStatus mean?
+	// TODO: what do sleepStatus, blackSleepFlag mean?
 }
 
 type batteryInfo struct {
@@ -1329,10 +1330,9 @@ type getPowerControlSettingResult struct {
 	GridMax         float64         `json:"gridMax"`
 	GridMaxFlag     gridMaxFlag     `json:"gridMaxFlag"`
 
-	// TODO: difference between global and non-global?
-	// TODO: globalGridDischargeMax, globalGridChargeMax, globalSettingStatus (does this being 1 mean we use global instead?)
-	// TODO: peakDemandGridMax
-	// TODO: isNem3, isCalifornia
+	// TODO: what is difference between global and non-global? does it only matter for tou? there is globalGridDischargeMax, globalGridChargeMax, globalSettingStatus (does this being 1 mean we use global instead?)
+	// TODO: what does peakDemandGridMax mean?
+	// TODO: what does isNem3, isCalifornia mean?
 }
 
 type gatewayTouListV2Result struct {
@@ -1356,10 +1356,10 @@ type touItem struct {
 	BackupForeverFlag  int     `json:"backupForeverFlag"`
 	TimerStartTimeUnix string  `json:"timerStartTimeZero"`
 
-	// TODO: multiSOCFlag
-	// TODO: stopMode
-	// TODO: gridChargeEn
-	// TODO: vppSocVo, todayVppVo
+	// TODO: what does multiSOCFlag mean?
+	// TODO: what does stopMode mean?
+	// TODO: what does gridChargeEn mean?
+	// TODO: what do vppSocVo, todayVppVo mean?
 }
 
 type fhpPowerByDayResult struct {

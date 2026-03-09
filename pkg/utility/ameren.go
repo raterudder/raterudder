@@ -286,7 +286,7 @@ func amerenLossFactor(t time.Time) float64 {
 	switch {
 	case t.Before(time.Date(2026, time.June, 1, 0, 0, 0, 0, etLocation)):
 		return 1.05009
-	// TODO: 2026-2027 loss factor
+	// TODO: figure out the 2026-2027 loss factor once it's announced by Ameren
 	default:
 		return 1.05009
 	}
@@ -319,7 +319,7 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityAdditiona
 			DollarsPerKWH: 0.02629,
 			Description:   "Ameren IL Transmission Service Charge (2026)",
 		},
-		// TODO: add 2027 transmission service charge
+		// TODO: add 2027 transmission service charge once it's announced by comed
 
 		// ── 2026 Distribution Delivery Charge ────────────────────────────────
 		{
