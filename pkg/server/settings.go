@@ -286,6 +286,8 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
+
+
 			if newSettings.ESSAuthStatus.ConsecutiveFailures > 0 {
 				backoff := time.Duration(newSettings.ESSAuthStatus.ConsecutiveFailures*5) * time.Minute
 				if time.Since(newSettings.ESSAuthStatus.LastAttempt) < backoff {

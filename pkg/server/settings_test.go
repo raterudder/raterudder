@@ -57,19 +57,6 @@ func TestHandleGetSettings(t *testing.T) {
 		}, mockES
 	}
 
-	// Helper to add user to context
-	withUser := func(req *http.Request, email string, isAdmin bool) *http.Request {
-		user := types.User{
-			ID:    email,
-			Email: email,
-			Admin: isAdmin,
-		}
-		ctx := context.WithValue(req.Context(), userContextKey, user)
-		ctx = context.WithValue(ctx, siteIDContextKey, types.SiteIDNone)
-		return req.WithContext(ctx)
-	}
-
-	_ = withUser
 	t.Run("Get Settings", func(t *testing.T) {
 		srv, _ := newAuthServer("", nil, nil)
 		req := httptest.NewRequest("GET", "/api/settings", nil)
@@ -553,49 +540,15 @@ func TestHandleUpdateSettings(t *testing.T) {
 		srv.handleUpdateSettings(w, req)
 		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	})
-}
-
-func TestHandleUpdateSettings_RateLimiting(t *testing.T) {
-	mockU := &mockUtility{}
-	mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
-
-	mockS := &mockStorage{}
-	mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil).Maybe()
-	mockS.On("UpdateSite", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-	mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
-	mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-
-	newAuthServer := func(audience string, emails []string, validator tokenVerifier) (*Server, *mockESS) {
-		mockES := &mockESS{}
-		mockP := ess.NewMap()
-		mockP.SetSystem(types.SiteIDNone, mockES)
-		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
-
-		mockUMap := utility.NewMap()
-		mockUMap.SetProvider("test", mockU)
-
-		return &Server{
-			utilities:     mockUMap,
-			ess:           mockP,
-			storage:       mockS,
-			singleSite:    true,
-			adminEmails:   emails,
-			release:       "production",
-			encryptionKey: "12345678901234567890123456789012",
-		}, mockES
-	}
-
-	withUser := func(r *http.Request, email string, admin bool) *http.Request {
-		ctx := context.WithValue(r.Context(), userContextKey, types.User{ID: email, Email: email, Admin: admin})
-		ctx = context.WithValue(ctx, siteIDContextKey, types.SiteIDNone)
-		return r.WithContext(ctx)
-	}
-
 	t.Run("Rate Limit Active (429)", func(t *testing.T) {
-		srv, _ := newAuthServer("my-audience", []string{"admin@example.com"}, nil)
+		mockU2 := &mockUtility{}
+		mockU2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
 
-		// Set existing settings with 1 failure, just occurred
-		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+		mockUMap2 := utility.NewMap()
+		mockUMap2.SetProvider("test", mockU2)
+
+		mockS2 := &mockStorage{}
+		mockS2.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
 			UtilityProvider: "test",
 			ESS:             "franklin",
 			ESSAuthStatus: types.ESSAuthStatus{
@@ -604,6 +557,21 @@ func TestHandleUpdateSettings_RateLimiting(t *testing.T) {
 			},
 		}, types.CurrentSettingsVersion, nil).Once()
 
+		mockES2 := &mockESS{}
+		mockES2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockP2 := ess.NewMap()
+		mockP2.SetSystem(types.SiteIDNone, mockES2)
+
+		srv := &Server{
+			utilities:     mockUMap2,
+			ess:           mockP2,
+			storage:       mockS2,
+			singleSite:    true,
+			adminEmails:   []string{"admin@example.com"},
+			release:       "production",
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
 		s := types.Settings{
 			UtilityProvider:             "test",
 			ESS:                         "franklin",
@@ -629,7 +597,12 @@ func TestHandleUpdateSettings_RateLimiting(t *testing.T) {
 
 		b, _ := json.Marshal(body)
 		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
-		req = withUser(req, "admin@example.com", true)
+
+		user := types.User{ID: "admin@example.com", Email: "admin@example.com", Admin: true}
+		ctx := context.WithValue(req.Context(), userContextKey, user)
+		ctx = context.WithValue(ctx, siteIDContextKey, types.SiteIDNone)
+		req = req.WithContext(ctx)
+
 		w := httptest.NewRecorder()
 
 		srv.handleUpdateSettings(w, req)
@@ -637,10 +610,14 @@ func TestHandleUpdateSettings_RateLimiting(t *testing.T) {
 	})
 
 	t.Run("Rate Limit Expired (200) after 5 Failures", func(t *testing.T) {
-		srv, mockES := newAuthServer("my-audience", []string{"admin@example.com"}, nil)
+		mockU2 := &mockUtility{}
+		mockU2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
 
-		// Set existing settings with 5 failures, occurred 26 minutes ago
-		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+		mockUMap2 := utility.NewMap()
+		mockUMap2.SetProvider("test", mockU2)
+
+		mockS2 := &mockStorage{}
+		mockS2.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
 			UtilityProvider: "test",
 			ESS:             "franklin",
 			ESSAuthStatus: types.ESSAuthStatus{
@@ -648,12 +625,27 @@ func TestHandleUpdateSettings_RateLimiting(t *testing.T) {
 				LastAttempt:         time.Now().UTC().Add(-26 * time.Minute),
 			},
 		}, types.CurrentSettingsVersion, nil).Once()
+		mockS2.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS2.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+		mockS2.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
-		// Mock authenticate success
-		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, true, nil).Once()
-		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil).Maybe()
+		mockES2 := &mockESS{}
+		mockES2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockES2.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, true, nil).Once()
+		mockES2.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil).Maybe()
 
-		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockP2 := ess.NewMap()
+		mockP2.SetSystem(types.SiteIDNone, mockES2)
+
+		srv := &Server{
+			utilities:     mockUMap2,
+			ess:           mockP2,
+			storage:       mockS2,
+			singleSite:    true,
+			adminEmails:   []string{"admin@example.com"},
+			release:       "production",
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
 
 		s := types.Settings{
 			UtilityProvider:             "test",
@@ -680,7 +672,12 @@ func TestHandleUpdateSettings_RateLimiting(t *testing.T) {
 
 		b, _ := json.Marshal(body)
 		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
-		req = withUser(req, "admin@example.com", true)
+
+		user := types.User{ID: "admin@example.com", Email: "admin@example.com", Admin: true}
+		ctx := context.WithValue(req.Context(), userContextKey, user)
+		ctx = context.WithValue(ctx, siteIDContextKey, types.SiteIDNone)
+		req = req.WithContext(ctx)
+
 		w := httptest.NewRecorder()
 
 		srv.handleUpdateSettings(w, req)
