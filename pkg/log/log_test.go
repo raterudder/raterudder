@@ -48,3 +48,82 @@ func TestSetDefaultLogLevel(t *testing.T) {
 		assert.Equal(t, anotherLevel, defaultLogLevel.Level(), "Default log level should be updated to Error")
 	})
 }
+
+func TestDefaultReplaceAttr(t *testing.T) {
+	t.Run("ignore groups", func(t *testing.T) {
+		attr := slog.String(slog.LevelKey, "INFO")
+		replaced := defaultReplaceAttr([]string{"group"}, attr)
+		assert.Equal(t, attr, replaced)
+	})
+
+	t.Run("level debug", func(t *testing.T) {
+		attr := slog.Any(slog.LevelKey, slog.LevelDebug)
+		replaced := defaultReplaceAttr(nil, attr)
+		assert.Equal(t, "severity", replaced.Key)
+		assert.Equal(t, slog.StringValue("DEBUG"), replaced.Value)
+	})
+
+	t.Run("level info", func(t *testing.T) {
+		attr := slog.Any(slog.LevelKey, slog.LevelInfo)
+		replaced := defaultReplaceAttr(nil, attr)
+		assert.Equal(t, "severity", replaced.Key)
+		assert.Equal(t, slog.StringValue("INFO"), replaced.Value)
+	})
+
+	t.Run("level warn", func(t *testing.T) {
+		attr := slog.Any(slog.LevelKey, slog.LevelWarn)
+		replaced := defaultReplaceAttr(nil, attr)
+		assert.Equal(t, "severity", replaced.Key)
+		assert.Equal(t, slog.StringValue("WARNING"), replaced.Value)
+	})
+
+	t.Run("level error", func(t *testing.T) {
+		attr := slog.Any(slog.LevelKey, slog.LevelError)
+		replaced := defaultReplaceAttr(nil, attr)
+		assert.Equal(t, "severity", replaced.Key)
+		assert.Equal(t, slog.StringValue("ERROR"), replaced.Value)
+	})
+
+	t.Run("level not level type", func(t *testing.T) {
+		attr := slog.Any(slog.LevelKey, "NOT_A_LEVEL")
+		replaced := defaultReplaceAttr(nil, attr)
+		assert.Equal(t, attr, replaced)
+	})
+
+	t.Run("source key", func(t *testing.T) {
+		src := &slog.Source{
+			Function: "main",
+			File:     "main.go",
+			Line:     1,
+		}
+		attr := slog.Any(slog.SourceKey, src)
+		replaced := defaultReplaceAttr(nil, attr)
+		assert.Equal(t, "logging.googleapis.com/sourceLocation", replaced.Key)
+		assert.Equal(t, slog.AnyValue(src), replaced.Value)
+	})
+
+	t.Run("source key not source type", func(t *testing.T) {
+		attr := slog.Any(slog.SourceKey, "not a source")
+		replaced := defaultReplaceAttr(nil, attr)
+		assert.Equal(t, attr, replaced)
+	})
+
+	t.Run("message key", func(t *testing.T) {
+		attr := slog.String(slog.MessageKey, "hello world")
+		replaced := defaultReplaceAttr(nil, attr)
+		assert.Equal(t, "message", replaced.Key)
+		assert.Equal(t, slog.StringValue("hello world"), replaced.Value)
+	})
+
+	t.Run("message key not string", func(t *testing.T) {
+		attr := slog.Any(slog.MessageKey, 123)
+		replaced := defaultReplaceAttr(nil, attr)
+		assert.Equal(t, attr, replaced)
+	})
+
+	t.Run("other key", func(t *testing.T) {
+		attr := slog.String("other", "value")
+		replaced := defaultReplaceAttr(nil, attr)
+		assert.Equal(t, attr, replaced)
+	})
+}

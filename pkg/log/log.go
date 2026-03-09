@@ -9,8 +9,9 @@ import (
 var (
 	defaultLogLevel slog.LevelVar
 	defaultLogger   = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		AddSource: true,
-		Level:     &defaultLogLevel,
+		AddSource:   true,
+		Level:       &defaultLogLevel,
+		ReplaceAttr: defaultReplaceAttr,
 	}))
 )
 
@@ -37,4 +38,41 @@ func With(ctx context.Context, logger *slog.Logger) context.Context {
 
 func SetDefaultLogLevel(level slog.Level) {
 	defaultLogLevel.Set(level)
+}
+
+// defaultReplaceAttr replaces attributes to match what GCP expects
+// https://cloud.google.com/logging/docs/structured-logging
+func defaultReplaceAttr(groups []string, a slog.Attr) slog.Attr {
+	if len(groups) > 0 {
+		return a
+	}
+	switch a.Key {
+	case slog.LevelKey:
+		lvl, ok := a.Value.Any().(slog.Level)
+		if ok {
+			a.Key = "severity"
+			switch lvl {
+			case slog.LevelDebug:
+				a.Value = slog.StringValue("DEBUG")
+			case slog.LevelInfo:
+				a.Value = slog.StringValue("INFO")
+			case slog.LevelWarn:
+				a.Value = slog.StringValue("WARNING")
+			case slog.LevelError:
+				a.Value = slog.StringValue("ERROR")
+			}
+		}
+	case slog.SourceKey:
+		source, ok := a.Value.Any().(*slog.Source)
+		if ok && source != nil {
+			a.Key = "logging.googleapis.com/sourceLocation"
+		}
+	case slog.MessageKey:
+		// rename to message if its already a string
+		if a.Value.Kind() == slog.KindString {
+			a.Key = "message"
+			return a
+		}
+	}
+	return a
 }
