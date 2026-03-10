@@ -144,10 +144,19 @@ func TestComEd(t *testing.T) {
 			historicalPrices: make(map[int64]types.Price),
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+		var price types.Price
+		var err error
 
-		price, err := c.GetCurrentPrice(ctx)
+		// Implement retry loop to mitigate intermittent network errors
+		for i := 0; i < 3; i++ {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			price, err = c.GetCurrentPrice(ctx)
+			cancel()
+			if err == nil {
+				break
+			}
+			time.Sleep(1 * time.Second)
+		}
 		require.NoError(t, err)
 
 		// Basic sanity checks
