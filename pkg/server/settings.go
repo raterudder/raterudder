@@ -361,6 +361,9 @@ func getESSBackoff(failures int) time.Duration {
 	// Failures = 3 -> 60s
 	// Failures = 4 -> 120s
 	// Failures = 5 -> 240s
+	if failures > 7 {
+		failures = 7 // max 15 minutes, prevent integer overflow
+	}
 	seconds := 30 * (1 << (failures - 2))
 	if seconds > 900 {
 		seconds = 900 // max 15 minutes
