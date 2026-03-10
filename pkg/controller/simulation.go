@@ -79,6 +79,13 @@ func (c *Controller) SimulateState(
 	var hitSolarCapacity bool
 	simTime := now
 
+	// Optimization: Pre-calculate truncated prices to avoid redundant O(N) loops and Truncate calls
+	currentPriceTrunc := currentPrice.TSStart.Truncate(time.Hour)
+	futurePricesMap := make(map[time.Time]types.Price, len(futurePrices))
+	for _, fp := range futurePrices {
+		futurePricesMap[fp.TSStart.Truncate(time.Hour)] = fp
+	}
+
 	simHours := 24
 	if len(futurePrices) > 0 {
 		var lastFuturePriceTime time.Time
@@ -109,15 +116,21 @@ func (c *Controller) SimulateState(
 		h := simTime.Hour()
 
 		var price types.Price
-		if currentPrice.TSStart.Truncate(time.Hour).Equal(simTime.Truncate(time.Hour)) {
+		simTimeTrunc := simTime.Truncate(time.Hour)
+		if currentPriceTrunc.Equal(simTimeTrunc) {
 			price = currentPrice
+		} else if fp, ok := futurePricesMap[simTimeTrunc]; ok {
+			price = fp
 		} else {
+			// Find the closest future price that has not ended yet
+			closestPrice := currentPrice
 			for _, fp := range futurePrices {
-				if fp.TSStart.Truncate(time.Hour).Equal(simTime.Truncate(time.Hour)) {
-					price = fp
+				if fp.TSStart.After(simTimeTrunc) || fp.TSStart.Equal(simTimeTrunc) {
+					closestPrice = fp
 					break
 				}
 			}
+			price = closestPrice
 		}
 
 		gridChargeCost := price.DollarsPerKWH + price.GridUseDollarsPerKWH
