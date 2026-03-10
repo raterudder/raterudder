@@ -77,8 +77,10 @@ IGNORE
 	})
 
 	t.Run("GetConfirmedPrices", func(t *testing.T) {
-		// Ensure start and end are cleanly aligned to the start of the day in etLocation
-		start := time.Date(now.Add(-48*time.Hour).Year(), now.Add(-48*time.Hour).Month(), now.Add(-48*time.Hour).Day(), 0, 0, 0, 0, etLocation)
+		// Ensure start and end are cleanly aligned to the start of the day in etLocation.
+		// We use a hardcoded date to prevent Daylight Saving Time (DST) transition
+		// issues that can result in unexpected 23-hour or 25-hour days.
+		start := time.Date(2024, time.January, 15, 0, 0, 0, 0, etLocation)
 		end := start.Add(24 * time.Hour)
 		startStr := start.Format("20060102")
 		endStr := end.Format("20060102")
