@@ -397,14 +397,16 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 
 		// If we successfully fetched weather, merge any incoming EnergyHistory (SolarKWH) into the new actuals
 		if len(energyHistory) > 0 {
+			// Optimize: use O(n) hash map lookup instead of O(n^2) nested loops for energy history matching
+			ehMap := make(map[int64]float64, len(energyHistory))
+			for _, eh := range energyHistory {
+				ehMap[eh.TSHourStart.UTC().Unix()] = eh.SolarKWH
+			}
+
 			for wi, w := range newWeathers {
 				for ahIdx, ah := range w.ActualHours {
-					for _, eh := range energyHistory {
-						// Match exact hour
-						if ah.TSHourStart.Equal(eh.TSHourStart.UTC()) || ah.TSHourStart.Equal(eh.TSHourStart) {
-							newWeathers[wi].ActualHours[ahIdx].SolarKWH = eh.SolarKWH
-							break
-						}
+					if solarKWH, exists := ehMap[ah.TSHourStart.UTC().Unix()]; exists {
+						newWeathers[wi].ActualHours[ahIdx].SolarKWH = solarKWH
 					}
 				}
 			}
@@ -418,15 +420,17 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 		w := weathers[0]
 		updated := false
 
+		// Optimize: use O(n) hash map lookup instead of O(n^2) nested loops for energy history matching
+		ehMap := make(map[int64]float64, len(energyHistory))
 		for _, eh := range energyHistory {
-			ehUTC := eh.TSHourStart.UTC()
-			for i, ah := range w.ActualHours {
-				if ah.TSHourStart.Equal(ehUTC) || ah.TSHourStart.Equal(eh.TSHourStart) {
-					if w.ActualHours[i].SolarKWH != eh.SolarKWH {
-						w.ActualHours[i].SolarKWH = eh.SolarKWH
-						updated = true
-					}
-					break
+			ehMap[eh.TSHourStart.UTC().Unix()] = eh.SolarKWH
+		}
+
+		for i, ah := range w.ActualHours {
+			if solarKWH, exists := ehMap[ah.TSHourStart.UTC().Unix()]; exists {
+				if w.ActualHours[i].SolarKWH != solarKWH {
+					w.ActualHours[i].SolarKWH = solarKWH
+					updated = true
 				}
 			}
 		}
