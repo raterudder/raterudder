@@ -236,9 +236,9 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
         <div className="content-container action-list-container">
             <header className="header">
                 <div className="date-controls">
-                    <button onClick={() => handleDateChange(-1)} disabled={loading}>&lt; Prev</button>
+                    <button onClick={() => handleDateChange(-1)} disabled={loading} aria-label="Previous day">&lt; Prev</button>
                     <h2>{formattedDate}</h2>
-                    <button onClick={() => handleDateChange(1)} disabled={loading || isToday}>Next &gt;</button>
+                    <button onClick={() => handleDateChange(1)} disabled={loading || isToday} aria-label="Next day">Next &gt;</button>
                 </div>
             </header>
 
