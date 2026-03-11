@@ -126,6 +126,23 @@ func TestHistory(t *testing.T) {
 		}
 	})
 
+	t.Run("Parse Dates Default", func(t *testing.T) {
+		// Test the default behavior when start and end parameters are omitted
+		req := httptest.NewRequest("GET", "/api/history/actions", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		resp := w.Result()
+
+		// Verify the request succeeds
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		// Assert that parseTimeRange correctly defaulted end to time.Now() and start to 24 hours prior
+		// Using a 1-second tolerance to account for the time difference between the request and the assertion
+		now := time.Now()
+		assert.WithinDuration(t, now, mockS.lastEnd, time.Second)
+		assert.WithinDuration(t, now.Add(-24*time.Hour), mockS.lastStart, time.Second)
+	})
+
 	t.Run("Validate 24 Hour Limit", func(t *testing.T) {
 		start := time.Now().Add(-25 * time.Hour)
 		end := time.Now()
