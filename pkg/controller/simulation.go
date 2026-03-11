@@ -105,6 +105,12 @@ func (c *Controller) SimulateState(
 		}
 	}
 
+	// Optimize: use O(n) hash map lookup instead of O(n^2) nested loops for future prices matching
+	futurePricesMap := make(map[int64]types.Price, len(futurePrices))
+	for _, fp := range futurePrices {
+		futurePricesMap[fp.TSStart.Truncate(time.Hour).Unix()] = fp
+	}
+
 	for i := 0; i < simHours; i++ {
 		h := simTime.Hour()
 
@@ -112,11 +118,8 @@ func (c *Controller) SimulateState(
 		if currentPrice.TSStart.Truncate(time.Hour).Equal(simTime.Truncate(time.Hour)) {
 			price = currentPrice
 		} else {
-			for _, fp := range futurePrices {
-				if fp.TSStart.Truncate(time.Hour).Equal(simTime.Truncate(time.Hour)) {
-					price = fp
-					break
-				}
+			if fp, ok := futurePricesMap[simTime.Truncate(time.Hour).Unix()]; ok {
+				price = fp
 			}
 		}
 
