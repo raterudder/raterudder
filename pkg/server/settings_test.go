@@ -949,6 +949,9 @@ func TestGetESSBackoff(t *testing.T) {
 		{6, 480 * time.Second},
 		{7, 900 * time.Second},  // Max capped at 15m
 		{10, 900 * time.Second}, // Beyond max is still capped
+		{64, 900 * time.Second}, // Prevent overflow wrap to negative
+		{65, 900 * time.Second}, // Prevent overflow wrap to zero/positive
+		{100, 900 * time.Second},
 	}
 
 	for _, tt := range tests {
