@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -102,7 +103,12 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 					} else {
 						email = emailRet
 						userID = subjectRet
-						if s.updateSpecificEmail != "" && subtle.ConstantTimeCompare([]byte(email), []byte(s.updateSpecificEmail)) == 1 {
+
+						// Hash both values before comparison to ensure ConstantTimeCompare
+						// doesn't exit early on length mismatch, preventing length leakage
+						emailHash := sha256.Sum256([]byte(email))
+						updateSpecificEmailHash := sha256.Sum256([]byte(s.updateSpecificEmail))
+						if s.updateSpecificEmail != "" && subtle.ConstantTimeCompare(emailHash[:], updateSpecificEmailHash[:]) == 1 {
 							authSuccess = true
 							authViaUpdateSpecific = true
 						} else {

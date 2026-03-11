@@ -253,7 +253,6 @@ func TestMap(t *testing.T) {
 		assert.ErrorContains(t, err, "unknown ComEd rate class")
 	})
 
-
 	t.Run("Site with TOU provider ApplySettings error", func(t *testing.T) {
 		m := NewMap()
 		settings := types.Settings{UtilityProvider: "tou", UtilityRate: "unknown"}

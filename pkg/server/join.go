@@ -2,6 +2,7 @@ package server
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -133,8 +134,12 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Validate invite code using constant-time comparison
-		if site.InviteCode == "" || subtle.ConstantTimeCompare([]byte(req.InviteCode), []byte(site.InviteCode)) != 1 {
+		// Validate invite code using constant-time comparison.
+		// Hash both values before comparison to ensure ConstantTimeCompare
+		// doesn't exit early on length mismatch, preventing length leakage
+		reqInviteCodeHash := sha256.Sum256([]byte(req.InviteCode))
+		siteInviteCodeHash := sha256.Sum256([]byte(site.InviteCode))
+		if site.InviteCode == "" || subtle.ConstantTimeCompare(reqInviteCodeHash[:], siteInviteCodeHash[:]) != 1 {
 			log.Ctx(ctx).WarnContext(ctx, "join: invalid invite code", slog.String("siteID", req.JoinSiteID), slog.String("userID", userID))
 			writeJSONError(w, "invalid invite code", http.StatusForbidden)
 			return
