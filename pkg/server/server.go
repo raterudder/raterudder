@@ -261,11 +261,12 @@ func (s *Server) getUser(r *http.Request) types.User {
 // It also handles graceful shutdown when the context is done.
 func (s *Server) Run(ctx context.Context) error {
 	s.httpServer = &http.Server{
-		Addr:         s.listenAddr,
-		Handler:      s.setupHandler(),
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 60 * time.Second,
-		IdleTimeout:  15 * time.Second,
+		Addr:              s.listenAddr,
+		Handler:           s.setupHandler(),
+		ReadTimeout:       15 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second, // Prevent slowloris attacks
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       15 * time.Second,
 	}
 
 	// use a channel to capturing server errors
