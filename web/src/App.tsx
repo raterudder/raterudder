@@ -74,7 +74,13 @@ function AppContent() {
         setHasAttemptedFetch(true);
 
         if (redirectOnLogin && status.loggedIn) {
-            navigate('/dashboard');
+            const queryParams = new URLSearchParams(window.location.search);
+            const from = queryParams.get('from');
+            if (from && from.startsWith('/')) {
+                navigate(from);
+            } else {
+                navigate('/dashboard');
+            }
         }
     }, [navigate]);
 
