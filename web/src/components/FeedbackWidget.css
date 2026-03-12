@@ -141,6 +141,11 @@
     transform: scale(1.1);
 }
 
+.sentiment-btn:focus-visible {
+    outline: 2px solid var(--primary-color, #10b981);
+    outline-offset: 2px;
+}
+
 .sentiment-btn.selected {
     filter: grayscale(0%);
     opacity: 1;
@@ -182,6 +187,11 @@
     border-radius: 6px;
 }
 
+.feedback-cancel-btn:focus-visible {
+    outline: 2px solid var(--primary-color, #10b981);
+    outline-offset: 2px;
+}
+
 .feedback-cancel-btn:hover {
     background-color: var(--bg-hover-color, #f3f4f6);
 }
@@ -194,6 +204,11 @@
     padding: 8px 16px;
     font-weight: 500;
     cursor: pointer;
+}
+
+.feedback-submit-btn:focus-visible {
+    outline: 2px solid var(--primary-color, #10b981);
+    outline-offset: 2px;
 }
 
 .feedback-submit-btn:hover:not(:disabled) {

@@ -80,25 +80,31 @@ const FeedbackWidget: React.FC<FeedbackWidgetProps> = ({ siteID }) => {
                                             className={`sentiment-btn ${sentiment === 'sad' ? 'selected' : ''}`}
                                             onClick={() => setSentiment('sad')}
                                             title="Sad"
+                                            aria-label="Sad"
+                                            aria-pressed={sentiment === 'sad'}
                                             type="button"
                                         >
-                                            😞
+                                            <span aria-hidden="true">😞</span>
                                         </button>
                                         <button
                                             className={`sentiment-btn ${sentiment === 'neutral' ? 'selected' : ''}`}
                                             onClick={() => setSentiment('neutral')}
                                             title="Neutral"
+                                            aria-label="Neutral"
+                                            aria-pressed={sentiment === 'neutral'}
                                             type="button"
                                         >
-                                            😐
+                                            <span aria-hidden="true">😐</span>
                                         </button>
                                         <button
                                             className={`sentiment-btn ${sentiment === 'happy' ? 'selected' : ''}`}
                                             onClick={() => setSentiment('happy')}
                                             title="Happy"
+                                            aria-label="Happy"
+                                            aria-pressed={sentiment === 'happy'}
                                             type="button"
                                         >
-                                            😀
+                                            <span aria-hidden="true">😀</span>
                                         </button>
                                     </div>
 
