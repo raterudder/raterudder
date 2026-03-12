@@ -1,13 +1,12 @@
 package server
 
 import (
-	"github.com/raterudder/raterudder/pkg/controller"
-
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 )
@@ -30,8 +29,7 @@ type PriceHistoryRes struct {
 // WeatherRes represents a simplified historical weather and forecast stat.
 type WeatherRes struct {
 	TSHourStart time.Time `json:"tsHourStart"`
-	ActualGHI   float64   `json:"actualGHI,omitempty"`
-	ForecastGHI float64   `json:"forecastGHI,omitempty"`
+	ForecastGHI float64   `json:"forecastGHI"`
 }
 
 // ForecastRes represents the complete response for the forecast endpoint, including histories.
@@ -98,7 +96,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 5. Get History (Last 72 hours from Storage) - no backfill
-	historyStart := time.Now().Add(-72 * time.Hour)
+	historyStart := time.Now().Add(-72 * time.Hour).Truncate(time.Hour)
 	historyEnd := time.Now()
 	energyHistory, err := s.storage.GetEnergyHistory(ctx, siteID, historyStart, historyEnd)
 	if err != nil {
@@ -112,7 +110,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	simHours := s.controller.SimulateState(ctx, now, status, currentPrice, futurePrices, energyHistory, settings.Settings)
 
 	// Fetch data for the previous 24 hours
-	histStart24 := now.Add(-24 * time.Hour)
+	histStart24 := now.Add(-24 * time.Hour).Truncate(time.Hour)
 	histEnd24 := now
 
 	// Reuse energyHistory already fetched from db
@@ -162,29 +160,14 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	weatherMap := make(map[time.Time]WeatherRes)
+	weatherRes := make([]WeatherRes, 0, len(weatherHistory24))
 	for _, w := range weatherHistory24 {
-		for _, h := range w.ActualHours {
-			if !h.TSHourStart.Before(histStart24.Truncate(time.Hour)) && !h.TSHourStart.After(histEnd24.Truncate(time.Hour).Add(48*time.Hour)) {
-				wr := weatherMap[h.TSHourStart]
-				wr.TSHourStart = h.TSHourStart
-				wr.ActualGHI = h.GHI
-				weatherMap[h.TSHourStart] = wr
-			}
-		}
 		for _, h := range w.ForecastHours {
-			if !h.TSHourStart.Before(histStart24.Truncate(time.Hour)) && !h.TSHourStart.After(histEnd24.Truncate(time.Hour).Add(48*time.Hour)) {
-				wr := weatherMap[h.TSHourStart]
-				wr.TSHourStart = h.TSHourStart
-				wr.ForecastGHI = h.GHI
-				weatherMap[h.TSHourStart] = wr
-			}
+			weatherRes = append(weatherRes, WeatherRes{
+				TSHourStart: h.TSHourStart,
+				ForecastGHI: h.GHI,
+			})
 		}
-	}
-
-	weatherRes := make([]WeatherRes, 0, len(weatherMap))
-	for _, wr := range weatherMap {
-		weatherRes = append(weatherRes, wr)
 	}
 
 	res := ForecastRes{

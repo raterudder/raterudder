@@ -278,11 +278,9 @@ func TestHandleForecast(t *testing.T) {
 
 		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{
 			{
-				ActualHours: []types.HourlyWeather{
-					{TSHourStart: pastHour2, GHI: 100, SolarKWH: 1.5},
-					{TSHourStart: pastHour1, GHI: 150, SolarKWH: 2.0},
-				},
 				ForecastHours: []types.HourlyWeather{
+					{TSHourStart: pastHour2, GHI: 100},
+					{TSHourStart: pastHour1, GHI: 150},
 					{TSHourStart: futureHour1, GHI: 200},
 					{TSHourStart: futureHour2, GHI: 250},
 				},
@@ -334,7 +332,7 @@ func TestHandleForecast(t *testing.T) {
 		foundForecast := false
 		for _, w := range data.Weather {
 			if w.TSHourStart.Equal(pastHour2) {
-				assert.Equal(t, float64(100), w.ActualGHI)
+				assert.Equal(t, float64(100), w.ForecastGHI)
 				foundActual = true
 			}
 			if w.TSHourStart.Equal(futureHour1) {

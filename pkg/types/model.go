@@ -183,27 +183,20 @@ type SiteLocation struct {
 	Elevation   float64 `json:"elevation"`
 }
 
-// HourlyWeather represents the solar generation data for a specific hour.
+// HourlyWeather represents the solar forecast data for a specific hour.
 type HourlyWeather struct {
 	TSHourStart time.Time `json:"tsHourStart"`
-
-	GHI      float64 `json:"ghi"`      // Shortwave radiation in W/m²
-	SolarKWH float64 `json:"solarKWH"` // Actual solar generation in kWh
+	GHI         float64   `json:"ghi"` // Shortwave radiation in W/m²
 }
 
-// Weather represents the daily weather and solar data.
+// Weather represents the daily weather forecast data.
 type Weather struct {
-	TSDayStart time.Time `json:"tsDayStart"`
-	// ActualHours contains the actual solar generation and GHI data for hours that have occurred.
-	// The slice is unsorted. Use TSHourStart to determine the hour instead of index.
-	ActualHours []HourlyWeather `json:"actualHours"`
-	// ForecastHours contains the forecasted GHI data for hours that have not yet occurred or
-	// for which actuals are not yet available. The slice is unsorted. Use TSHourStart to determine the hour.
-	ForecastHours []HourlyWeather `json:"forecastHours"`
+	TSDayStart    time.Time       `json:"tsDayStart"`
 	TimeLocation  string          `json:"timeLocation"`
 	Lat           float64         `json:"lat"`
 	Long          float64         `json:"long"`
 	TSSunrise     time.Time       `json:"tsSunrise"`
 	TSSunset      time.Time       `json:"tsSunset"`
 	TSUpdated     time.Time       `json:"tsUpdated"`
+	ForecastHours []HourlyWeather `json:"forecastHours"`
 }

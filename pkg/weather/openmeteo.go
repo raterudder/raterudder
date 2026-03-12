@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/log"
@@ -115,13 +116,17 @@ type weatherForecastResponse struct {
 // FetchWeatherForecast fetches the shortwave radiation for the specified date range.
 // startDate is inclusive and endDate is exclusive, similar to storage boundaries.
 // Returns a slice of types.Weather structs for each day in the requested range.
-func (s *OpenMeteo) FetchWeatherForecast(ctx context.Context, lat, long float64, timezone string, startDate, endDate time.Time) ([]types.Weather, error) {
+func (s *OpenMeteo) FetchWeatherForecast(
+	ctx context.Context,
+	lat, long float64,
+	timezone string,
+	startDate, endDate time.Time,
+) ([]types.Weather, error) {
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
 		return nil, fmt.Errorf("invalid timezone: %w", err)
 	}
 
-	startMidnight := time.Date(startDate.Year(), startDate.Month(), startDate.Day(), 0, 0, 0, 0, loc)
 	// Open-Meteo expects an inclusive end date for its query.
 	// Since our endDate is exclusive, we subtract one day for the API request
 	// if the endDate is exactly midnight.
@@ -130,7 +135,7 @@ func (s *OpenMeteo) FetchWeatherForecast(ctx context.Context, lat, long float64,
 		apiEndDate = endDate.AddDate(0, 0, -1)
 	}
 
-	startDateStr := startMidnight.Format("2006-01-02")
+	startDateStr := startDate.Format("2006-01-02")
 	endDateStr := apiEndDate.Format("2006-01-02")
 
 	u, err := url.Parse(s.ForecastURL)
@@ -176,21 +181,24 @@ func (s *OpenMeteo) FetchWeatherForecast(ctx context.Context, lat, long float64,
 		return nil, fmt.Errorf("failed to decode weather response: %w", err)
 	}
 
+	if len(data.Daily.Time) != len(data.Daily.Sunrise) || len(data.Daily.Time) != len(data.Daily.Sunset) {
+		log.Ctx(ctx).ErrorContext(ctx, "open-meteo daily data mismatch", slog.Int("timeCount", len(data.Daily.Time)), slog.Int("sunriseCount", len(data.Daily.Sunrise)), slog.Int("sunsetCount", len(data.Daily.Sunset)))
+		return nil, fmt.Errorf("daily data mismatch: %d times, %d sunrises, %d sunsets", len(data.Daily.Time), len(data.Daily.Sunrise), len(data.Daily.Sunset))
+	}
+
+	if len(data.Hourly.Time) != len(data.Hourly.ShortwaveRadiation) {
+		log.Ctx(ctx).ErrorContext(ctx, "open-meteo hourly data mismatch", slog.Int("timeCount", len(data.Hourly.Time)), slog.Int("ghiCount", len(data.Hourly.ShortwaveRadiation)))
+		return nil, fmt.Errorf("hourly data mismatch: %d times, %d shortwave radiation", len(data.Hourly.Time), len(data.Hourly.ShortwaveRadiation))
+	}
+
 	// Parse the response into daily types.Weather structs
 	var weathers []types.Weather
 	now := time.Now()
-
-	// Build a slice of target days based on the requested range
-	var targetDays []time.Time
-	for t := startMidnight; t.Before(endDate); t = t.AddDate(0, 0, 1) {
-		targetDays = append(targetDays, t)
-	}
-
-	for _, targetTime := range targetDays {
-		targetDateStr := targetTime.Format("2006-01-02")
-
+	startMidnight := time.Date(startDate.Year(), startDate.Month(), startDate.Day(), 0, 0, 0, 0, loc)
+	for day := startMidnight; day.Before(endDate); day = day.AddDate(0, 0, 1) {
+		targetDateStr := day.Format("2006-01-02")
 		w := types.Weather{
-			TSDayStart:   targetTime,
+			TSDayStart:   day,
 			TimeLocation: timezone,
 			Lat:          lat,
 			Long:         long,
@@ -200,54 +208,41 @@ func (s *OpenMeteo) FetchWeatherForecast(ctx context.Context, lat, long float64,
 		// Find daily sunrise/sunset
 		for i, tStr := range data.Daily.Time {
 			if tStr == targetDateStr {
-				if i < len(data.Daily.Sunrise) {
-					t, err := time.ParseInLocation("2006-01-02T15:04", data.Daily.Sunrise[i], loc)
-					if err != nil {
-						log.Ctx(ctx).WarnContext(ctx, "failed to parse sunrise time", slog.Any("error", err), slog.String("time", data.Daily.Sunrise[i]))
-					} else {
-						w.TSSunrise = t
-					}
+				t, err := time.ParseInLocation("2006-01-02T15:04", data.Daily.Sunrise[i], loc)
+				if err != nil {
+					log.Ctx(ctx).WarnContext(ctx, "failed to parse sunrise time", slog.Any("error", err), slog.String("time", data.Daily.Sunrise[i]))
+				} else {
+					w.TSSunrise = t
 				}
-				if i < len(data.Daily.Sunset) {
-					t, err := time.ParseInLocation("2006-01-02T15:04", data.Daily.Sunset[i], loc)
-					if err != nil {
-						log.Ctx(ctx).WarnContext(ctx, "failed to parse sunset time", slog.Any("error", err), slog.String("time", data.Daily.Sunset[i]))
-					} else {
-						w.TSSunset = t
-					}
+				t, err = time.ParseInLocation("2006-01-02T15:04", data.Daily.Sunset[i], loc)
+				if err != nil {
+					log.Ctx(ctx).WarnContext(ctx, "failed to parse sunset time", slog.Any("error", err), slog.String("time", data.Daily.Sunset[i]))
+				} else {
+					w.TSSunset = t
 				}
 				break
 			}
 		}
 
-		// Find hourly data
-		for i, tStr := range data.Hourly.Time {
-			t, err := time.ParseInLocation("2006-01-02T15:04", tStr, loc)
-			if err != nil {
-				log.Ctx(ctx).WarnContext(ctx, "failed to parse hourly time", slog.Any("error", err), slog.String("time", tStr))
-				continue
-			}
-			if t.Year() == targetTime.Year() && t.Month() == targetTime.Month() && t.Day() == targetTime.Day() {
-				if i < len(data.Hourly.ShortwaveRadiation) {
-					hw := types.HourlyWeather{
-						TSHourStart: t,
-						GHI:         data.Hourly.ShortwaveRadiation[i],
-					}
-
-					// Determine if this is an actual or forecast hour.
-					// Use the rule: if the current time is more than 2 hours past sunset, the whole day is "actual" (up to current time).
-					// But more generally, any hour in the past is actual, future is forecast.
-					// However, the rule specified was about updating once a day, 2 hours after sunset.
-					// A simple and robust way is: if t < now, it's Actual, else Forecast.
-					if t.Before(now) {
-						w.ActualHours = append(w.ActualHours, hw)
-					} else {
-						w.ForecastHours = append(w.ForecastHours, hw)
-					}
-				}
-			}
+		if len(data.Hourly.Time) != len(data.Hourly.ShortwaveRadiation) {
+			log.Ctx(ctx).ErrorContext(ctx, "hourly data mismatch", slog.Int("hourlyCount", len(data.Hourly.Time)), slog.Int("ghiCount", len(data.Hourly.ShortwaveRadiation)))
+			return nil, fmt.Errorf("hourly data mismatch: %d hourly times, %d shortwave radiation", len(data.Hourly.Time), len(data.Hourly.ShortwaveRadiation))
 		}
 
+		// Find hourly data
+		for i, tStr := range data.Hourly.Time {
+			if strings.HasPrefix(tStr, targetDateStr) {
+				t, err := time.ParseInLocation("2006-01-02T15:04", tStr, loc)
+				if err != nil {
+					log.Ctx(ctx).WarnContext(ctx, "failed to parse hourly time", slog.Any("error", err), slog.String("time", tStr))
+					continue
+				}
+				w.ForecastHours = append(w.ForecastHours, types.HourlyWeather{
+					TSHourStart: t,
+					GHI:         data.Hourly.ShortwaveRadiation[i],
+				})
+			}
+		}
 		weathers = append(weathers, w)
 	}
 
