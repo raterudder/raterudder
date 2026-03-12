@@ -471,8 +471,11 @@ func TestFirestoreProvider(t *testing.T) {
 				TimeLocation: "America/Los_Angeles",
 				Lat:          34.0,
 				Long:         -118.0,
-				ActualHours: []types.HourlyWeather{
-					{TSHourStart: start.Add(1 * time.Hour), GHI: 150.5},
+				ForecastHours: []types.HourlyWeather{
+					{
+						TSHourStart: start.Add(1 * time.Hour),
+						GHI:         150.5,
+					},
 				},
 			}
 
@@ -484,42 +487,37 @@ func TestFirestoreProvider(t *testing.T) {
 			require.Len(t, results, 1)
 			assert.Equal(t, w.Lat, results[0].Lat)
 			assert.Equal(t, w.TimeLocation, results[0].TimeLocation)
-			assert.Len(t, results[0].ActualHours, 1)
-			assert.Equal(t, 150.5, results[0].ActualHours[0].GHI)
+			assert.Len(t, results[0].ForecastHours, 1)
+			assert.Equal(t, 150.5, results[0].ForecastHours[0].GHI)
 		})
 
 		t.Run("Upsert and Get Batch", func(t *testing.T) {
 			var weathers []types.Weather
 			// Ensure time is not nicely truncated to UTC day boundaries to test truncation bug
-			timeLoc, _ := time.LoadLocation("America/New_York")
+			timeLoc, err := time.LoadLocation("America/New_York")
+			require.NoError(t, err)
 			localStart := time.Date(2024, 1, 1, 0, 0, 0, 0, timeLoc)
 			start := localStart.UTC() // This will be 2024-01-01T05:00:00Z
-
-			// To test the bug correctly: If we query up to "1 hour before the 4th day",
-			// the 3rd day's docID is "2024-01-03T05:00:00Z".
-			// If `end` is `2024-01-04T04:00:00Z`, the old buggy Truncate() code would truncate it to `2024-01-04T00:00:00Z`.
-			// `2024-01-04T00:00:00Z` is less than `2024-01-03T05:00:00Z`? No, 04 > 03.
-			// Let's use an end time of `2024-01-03T06:00:00Z`.
-			// The old code: `endDocID` = `2024-01-03T00:00:00Z`.
-			// The query condition: `< "2024-01-03T00:00:00Z"`.
-			// The document for day 3 is at `2024-01-03T05:00:00Z`.
-			// It would incorrectly skip day 3!
 			end := localStart.Add(48 * time.Hour).Add(6 * time.Hour).UTC()
 
 			// generate 3 days
 			for i := 0; i < 3; i++ {
 				day := start.Add(time.Duration(i*24) * time.Hour)
 				weathers = append(weathers, types.Weather{
-					TSDayStart: day,
-					Lat:        34.0,
-					Long:       -118.0,
+					TSDayStart:   day,
+					TimeLocation: "America/New_York",
+					Lat:          34.0,
+					Long:         -118.0,
 					ForecastHours: []types.HourlyWeather{
-						{TSHourStart: day.Add(12 * time.Hour), GHI: 800.0},
+						{
+							TSHourStart: day.Add(12 * time.Hour),
+							GHI:         800.0,
+						},
 					},
 				})
 			}
 
-			err := f.UpsertWeather(ctx, siteID, weathers, types.CurrentWeatherVersion)
+			err = f.UpsertWeather(ctx, siteID, weathers, types.CurrentWeatherVersion)
 			require.NoError(t, err)
 
 			// Get all 3 days
@@ -538,10 +536,15 @@ func TestFirestoreProvider(t *testing.T) {
 		t.Run("Upsert Overwrite", func(t *testing.T) {
 			start := time.Now().Truncate(24 * time.Hour).UTC().Add(100 * 24 * time.Hour)
 			w1 := types.Weather{
-				TSDayStart: start,
-				Lat:        34.0,
-				ActualHours: []types.HourlyWeather{
-					{TSHourStart: start.Add(1 * time.Hour), GHI: 100.0},
+				TSDayStart:   start,
+				TimeLocation: "America/New_York",
+				Lat:          34.0,
+				Long:         -118.0,
+				ForecastHours: []types.HourlyWeather{
+					{
+						TSHourStart: start.Add(1 * time.Hour),
+						GHI:         100.0,
+					},
 				},
 			}
 
@@ -550,10 +553,15 @@ func TestFirestoreProvider(t *testing.T) {
 
 			// Overwrite the same day
 			w2 := types.Weather{
-				TSDayStart: start,
-				Lat:        35.0,
-				ActualHours: []types.HourlyWeather{
-					{TSHourStart: start.Add(1 * time.Hour), GHI: 200.0, SolarKWH: 5.5},
+				TSDayStart:   start,
+				TimeLocation: "America/New_York",
+				Lat:          35.0,
+				Long:         -118.0,
+				ForecastHours: []types.HourlyWeather{
+					{
+						TSHourStart: start.Add(1 * time.Hour),
+						GHI:         200.0,
+					},
 				},
 			}
 			err = f.UpsertWeather(ctx, siteID, []types.Weather{w2}, types.CurrentWeatherVersion)
@@ -563,8 +571,7 @@ func TestFirestoreProvider(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, results, 1)
 			assert.Equal(t, 35.0, results[0].Lat)
-			assert.Equal(t, 200.0, results[0].ActualHours[0].GHI)
-			assert.Equal(t, 5.5, results[0].ActualHours[0].SolarKWH)
+			assert.Equal(t, 200.0, results[0].ForecastHours[0].GHI)
 		})
 
 		t.Run("Get Empty Range", func(t *testing.T) {
@@ -575,8 +582,10 @@ func TestFirestoreProvider(t *testing.T) {
 		})
 
 		t.Run("Timezone Comparisons", func(t *testing.T) {
-			locEast, _ := time.LoadLocation("America/New_York")
-			locWest, _ := time.LoadLocation("America/Los_Angeles")
+			locEast, err := time.LoadLocation("America/New_York")
+			require.NoError(t, err)
+			locWest, err := time.LoadLocation("America/Los_Angeles")
+			require.NoError(t, err)
 
 			// Same actual time, different timezone representations
 			tEast := time.Date(2024, 3, 5, 0, 0, 0, 0, locEast)
@@ -591,7 +600,7 @@ func TestFirestoreProvider(t *testing.T) {
 				Lat:          37.0,
 				Long:         -122.0,
 			}
-			err := f.UpsertWeather(ctx, siteID, []types.Weather{w}, types.CurrentWeatherVersion)
+			err = f.UpsertWeather(ctx, siteID, []types.Weather{w}, types.CurrentWeatherVersion)
 			require.NoError(t, err)
 
 			// Query using East Coast time representation

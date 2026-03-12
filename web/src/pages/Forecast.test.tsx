@@ -84,7 +84,6 @@ describe('Forecast Page', () => {
             weather: [
                 {
                     tsHourStart: data[0].ts,
-                    actualGHI: 100,
                     forecastGHI: 120,
                 }
             ]

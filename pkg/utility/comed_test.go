@@ -130,7 +130,8 @@ func TestComEd(t *testing.T) {
 
 		// Time check
 		// 2026-02-02 00:00:00 EPT (America/New_York)
-		loc, _ := time.LoadLocation("America/New_York")
+		loc, err := time.LoadLocation("America/New_York")
+		require.NoError(t, err)
 		expectedTime := time.Date(2026, 2, 2, 0, 0, 0, 0, loc)
 		assert.Equal(t, expectedTime, prices[0].TSStart)
 		expectedTime = time.Date(2026, 2, 2, 1, 0, 0, 0, loc)

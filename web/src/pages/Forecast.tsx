@@ -59,9 +59,6 @@ const charts: ChartConfig[] = [
         color: '#fbbf24', // lighter orange/yellow
         gradientId: 'ghiGrad',
         unit: ' W/m²',
-        additionalLines: [
-            { dataKey: 'actualGHI', color: '#ea580c', strokeDasharray: '0' }, // darker orange for actuals
-        ],
     },
     {
         title: 'Avg Home Load (kWh)',
@@ -91,7 +88,6 @@ interface ProcessedModelingHour extends ModelingHour {
     batteryReserveSOC: number;
     rawSolarKWH: number;
     forecastGHI?: number;
-    actualGHI?: number;
 }
 
 function ForecastChart({ data, config, isMobile, showCurrentTime }: { data: ProcessedModelingHour[]; config: ChartConfig; isMobile: boolean; showCurrentTime: boolean }) {
@@ -160,7 +156,7 @@ function ForecastChart({ data, config, isMobile, showCurrentTime }: { data: Proc
                                 config.unit.includes('$')
                                     ? `$${v.toFixed(4)}`
                                     : v.toFixed(2) + lineUnit.trim(),
-                                name === 'rawSolarKWH' ? 'Raw Model' : (name === 'actualGHI' ? 'Actual' : config.title), // Simple label mapping
+                                name === 'rawSolarKWH' ? 'Raw Model' : config.title, // Simple label mapping
                             ];
                         }}
                         contentStyle={{
@@ -237,7 +233,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
         const loadData = async () => {
             try {
                 setLoading(true);
-                const forecastData = await fetchModeling(siteID, includeHistory);
+                const forecastData = await fetchModeling(siteID);
 
                 // Combine history and simulation if includeHistory is true
                 let modelingData = forecastData.simulation || forecastData || [];
@@ -253,7 +249,6 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     if (weather) {
                         return {
                             ...sim,
-                            actualGHI: weather.actualGHI,
                             forecastGHI: weather.forecastGHI,
                         };
                     }
@@ -287,7 +282,6 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                             gridChargeDollarsPerKWH: price ? price.dollarsPerKWH + (price.gridUseDollarsPerKWH || 0) : 0,
                             netLoadSolarKWH: -h.solarKWH,
                             solarOppDollarsPerKWH: 0,
-                            actualGHI: weather?.actualGHI,
                             forecastGHI: weather?.forecastGHI,
                         };
                     });
@@ -318,15 +312,14 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
         };
 
         loadData();
-    }, [siteID, includeHistory]);
+    }, [siteID]);
 
     if (loading) return <div className="forecast-loading">Loading simulation…</div>;
     if (error) return <div className="error">Error: {error}</div>;
     if (!data.length) return <div className="no-actions">No simulation data available.</div>;
 
     const hasSolarRadiationData = data.some(d =>
-        (d.forecastGHI !== undefined && d.forecastGHI !== null) ||
-        (d.actualGHI !== undefined && d.actualGHI !== null)
+        (d.forecastGHI !== undefined && d.forecastGHI !== null)
     );
 
     const activeCharts = charts.filter(c => {

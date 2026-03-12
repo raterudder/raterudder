@@ -171,7 +171,7 @@ func (s *Server) performSiteUpdate(
 	// fetch weather history/forecast if location is configured
 	// We pass the 72 hours of history here to sync any new solar data into the weather actuals
 	if settings.Location != nil {
-		if err := s.updateWeatherHistory(ctx, siteID, *settings.Location, energyHistory); err != nil {
+		if err := s.updateWeatherHistory(ctx, siteID, *settings.Location); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update weather history", slog.Any("error", err))
 		}
 	}
@@ -353,7 +353,7 @@ func (s *Server) updatePriceHistory(ctx context.Context, siteID string, provider
 	return nil
 }
 
-func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc types.SiteLocation, energyHistory []types.EnergyStats) error {
+func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc types.SiteLocation) error {
 	timeLoc, err := time.LoadLocation(loc.TimeZone)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to load timezone for location", slog.Any("error", err), slog.String("timezone", loc.TimeZone))
@@ -362,88 +362,56 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 
 	now := time.Now().In(timeLoc)
 	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, timeLoc)
+	tomorrowStart := startOfDay.AddDate(0, 0, 1)
 
-	weathers, err := s.storage.GetWeather(ctx, siteID, startOfDay, startOfDay.Add(24*time.Hour))
+	// Check today's weather
+	// ensure the end is greater than what we want since it's exclusive
+	weathersToday, err := s.storage.GetWeather(ctx, siteID, startOfDay, tomorrowStart.Add(time.Hour))
 	if err != nil {
 		return fmt.Errorf("failed to get today's weather: %w", err)
 	}
 
-	// We should update if we don't have today's weather, OR
-	// if it is past sunset + 2 hours and we haven't updated yet.
-	shouldUpdate := false
-	if len(weathers) == 0 {
-		shouldUpdate = true
-	} else {
-		w := weathers[0]
-		// Determine if it's sunset + 2 hours
-		if !w.TSSunset.IsZero() {
-			sunsetPlusTwo := w.TSSunset.Add(2 * time.Hour)
-			if now.After(sunsetPlusTwo) {
-				// We haven't updated since sunset+2? We can check TSUpdated.
-				if w.TSUpdated.Before(sunsetPlusTwo) {
-					shouldUpdate = true
-				}
-			}
+	var todayWeather types.Weather
+	var tomorrowWeather types.Weather
+	for _, w := range weathersToday {
+		if w.TSDayStart.Equal(startOfDay) {
+			todayWeather = w
+		} else if w.TSDayStart.Equal(tomorrowStart) {
+			tomorrowWeather = w
 		}
 	}
 
-	if shouldUpdate {
-		log.Ctx(ctx).InfoContext(ctx, "fetching weather forecast and history")
+	var fetchStart time.Time
+	// if we already have 24 hours for the current day then don't bother
+	// fetching the current day again otherwise fetch today and tomorrow so we
+	// can upsert today to include any missing time.
+	if len(todayWeather.ForecastHours) < 24 {
+		fetchStart = startOfDay
+	}
 
-		// Fetch weather from yesterday to tomorrow
-		startDay := now.AddDate(0, 0, -1)
-		endDay := now.AddDate(0, 0, 2) // exclusive boundary for the day after tomorrow
+	// fetch the next 24 hours of weather if we haven't already fetched it and
+	// it's after sunset of the current day.
+	if fetchStart.IsZero() && len(tomorrowWeather.ForecastHours) < 24 && now.After(todayWeather.TSSunset) {
+		fetchStart = tomorrowStart
+	}
 
-		newWeathers, err := s.weather.FetchWeatherForecast(ctx, loc.Lat, loc.Long, loc.TimeZone, startDay, endDay)
-		if err != nil {
-			return fmt.Errorf("failed to fetch weather forecast: %w", err)
-		}
+	if fetchStart.IsZero() {
+		return nil
+	}
 
-		// If we successfully fetched weather, merge any incoming EnergyHistory (SolarKWH) into the new actuals
-		if len(energyHistory) > 0 {
-			// Optimize: use O(n) hash map lookup instead of O(n^2) nested loops for energy history matching
-			ehMap := make(map[int64]float64, len(energyHistory))
-			for _, eh := range energyHistory {
-				ehMap[eh.TSHourStart.UTC().Unix()] = eh.SolarKWH
-			}
+	log.Ctx(ctx).InfoContext(ctx, "fetching weather forecast", slog.Time("start", fetchStart))
 
-			for wi, w := range newWeathers {
-				for ahIdx, ah := range w.ActualHours {
-					if solarKWH, exists := ehMap[ah.TSHourStart.UTC().Unix()]; exists {
-						newWeathers[wi].ActualHours[ahIdx].SolarKWH = solarKWH
-					}
-				}
-			}
-		}
+	// if we're making a call we might as well fetch tomorrow too
+	// exclusive boundary for the day after tomorrow
+	fetchEnd := tomorrowStart.AddDate(0, 0, 1)
 
-		if err := s.storage.UpsertWeather(ctx, siteID, newWeathers, types.CurrentWeatherVersion); err != nil {
-			return fmt.Errorf("failed to upsert weather: %w", err)
-		}
-	} else if len(energyHistory) > 0 && len(weathers) > 0 {
-		// Map SolarKWH to existing weather actuals if we aren't fetching new ones
-		w := weathers[0]
-		updated := false
+	newWeathers, err := s.weather.FetchWeatherForecast(ctx, loc.Lat, loc.Long, loc.TimeZone, fetchStart, fetchEnd)
+	if err != nil {
+		return fmt.Errorf("failed to fetch weather forecast: %w", err)
+	}
 
-		// Optimize: use O(n) hash map lookup instead of O(n^2) nested loops for energy history matching
-		ehMap := make(map[int64]float64, len(energyHistory))
-		for _, eh := range energyHistory {
-			ehMap[eh.TSHourStart.UTC().Unix()] = eh.SolarKWH
-		}
-
-		for i, ah := range w.ActualHours {
-			if solarKWH, exists := ehMap[ah.TSHourStart.UTC().Unix()]; exists {
-				if w.ActualHours[i].SolarKWH != solarKWH {
-					w.ActualHours[i].SolarKWH = solarKWH
-					updated = true
-				}
-			}
-		}
-
-		if updated {
-			if err := s.storage.UpsertWeather(ctx, siteID, []types.Weather{w}, types.CurrentWeatherVersion); err != nil {
-				log.Ctx(ctx).ErrorContext(ctx, "failed to upsert existing weather with new solar kwh", slog.Any("error", err))
-			}
-		}
+	if err := s.storage.UpsertWeather(ctx, siteID, newWeathers, types.CurrentWeatherVersion); err != nil {
+		return fmt.Errorf("failed to upsert weather: %w", err)
 	}
 
 	return nil

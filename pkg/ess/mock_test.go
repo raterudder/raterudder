@@ -108,7 +108,8 @@ func TestMockESS(t *testing.T) {
 		// 1. Empty state backfill
 		db.On("GetESSMockState", ctx, "test-site").Return(types.ESSMockState{}, nil).Once()
 
-		loc, _ := time.LoadLocation("America/Chicago")
+		loc, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
 		now := time.Now().In(loc)
 		midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 

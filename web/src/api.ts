@@ -367,13 +367,10 @@ export interface ModelingHour {
     todaySolarTrend: number;
 }
 
-export const fetchModeling = async (siteID?: string, includeHistory?: boolean): Promise<ForecastResponse> => {
+export const fetchModeling = async (siteID?: string): Promise<ForecastResponse> => {
     const query = new URLSearchParams();
     if (siteID) {
         query.append('siteID', siteID);
-    }
-    if (includeHistory) {
-        query.append('include_history', 'true');
     }
     const response = await fetch(`/api/forecast?${query.toString()}`);
     if (!response.ok) {
@@ -482,7 +479,6 @@ export interface PriceHistoryRes {
 
 export interface WeatherRes {
     tsHourStart: string;
-    actualGHI: number;
     forecastGHI: number;
 }
 

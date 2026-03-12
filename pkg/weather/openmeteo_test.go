@@ -132,93 +132,70 @@ func TestOpenMeteoService(t *testing.T) {
 	})
 
 	t.Run("FetchWeatherForecast", func(t *testing.T) {
-		loc, _ := time.LoadLocation("America/Los_Angeles")
+		timezone := "America/Los_Angeles"
+		loc, err := time.LoadLocation(timezone)
+		require.NoError(t, err)
 		targetDay := time.Now().In(loc)
 		startDay := targetDay.AddDate(0, 0, -1)
 		endDay := targetDay.AddDate(0, 0, 1)
 
-		tests := []struct {
-			name       string
-			timezone   string
-			mockStatus int
-			mockBody   any
-			wantErr    bool
-			wantCount  int
-		}{
-			{
-				name:     "invalid timezone",
-				timezone: "Invalid/Zone",
-				wantErr:  true,
-			},
-			{
-				name:       "api error",
-				timezone:   "America/Los_Angeles",
-				mockStatus: http.StatusInternalServerError,
-				wantErr:    true,
-			},
-			{
-				name:       "success",
-				timezone:   "America/Los_Angeles",
-				mockStatus: http.StatusOK,
-				mockBody: weatherForecastResponse{
-					Daily: struct {
-						Time    []string `json:"time"`
-						Sunrise []string `json:"sunrise"`
-						Sunset  []string `json:"sunset"`
-					}{
-						Time:    []string{startDay.Format("2006-01-02"), endDay.Format("2006-01-02")},
-						Sunrise: []string{startDay.Format("2006-01-02") + "T06:00", endDay.Format("2006-01-02") + "T06:00"},
-						Sunset:  []string{startDay.Format("2006-01-02") + "T18:00", endDay.Format("2006-01-02") + "T18:00"},
-					},
-					Hourly: struct {
-						Time               []string  `json:"time"`
-						ShortwaveRadiation []float64 `json:"shortwave_radiation"`
-					}{
-						Time:               []string{startDay.Format("2006-01-02") + "T10:00", endDay.Format("2006-01-02") + "T12:00"},
-						ShortwaveRadiation: []float64{100.5, 200.5},
-					},
+		t.Run("invalid timezone", func(t *testing.T) {
+			s := &OpenMeteo{}
+			_, err := s.FetchWeatherForecast(context.Background(), 34.0, -118.0, "Invalid/Zone", startDay, endDay)
+			assert.Error(t, err)
+		})
+
+		t.Run("api error", func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusInternalServerError)
+			}))
+			defer ts.Close()
+
+			s := &OpenMeteo{ForecastURL: ts.URL + "/v1/forecast", HTTPClient: ts.Client()}
+			_, err := s.FetchWeatherForecast(context.Background(), 34.0, -118.0, timezone, startDay, endDay)
+			assert.Error(t, err)
+		})
+
+		t.Run("success", func(t *testing.T) {
+			mockBody := weatherForecastResponse{
+				Daily: struct {
+					Time    []string `json:"time"`
+					Sunrise []string `json:"sunrise"`
+					Sunset  []string `json:"sunset"`
+				}{
+					Time:    []string{startDay.Format("2006-01-02"), targetDay.Format("2006-01-02"), endDay.Format("2006-01-02")},
+					Sunrise: []string{startDay.Format("2006-01-02") + "T06:00", targetDay.Format("2006-01-02") + "T06:00", endDay.Format("2006-01-02") + "T06:00"},
+					Sunset:  []string{startDay.Format("2006-01-02") + "T18:00", targetDay.Format("2006-01-02") + "T18:00", endDay.Format("2006-01-02") + "T18:00"},
 				},
-				wantErr:   false,
-				wantCount: 3,
-			},
-		}
+				Hourly: struct {
+					Time               []string  `json:"time"`
+					ShortwaveRadiation []float64 `json:"shortwave_radiation"`
+				}{
+					Time:               []string{startDay.Format("2006-01-02") + "T10:00", endDay.Format("2006-01-02") + "T12:00"},
+					ShortwaveRadiation: []float64{100.5, 200.5},
+				},
+			}
 
-		for _, tc := range tests {
-			t.Run(tc.name, func(t *testing.T) {
-				var res []types.Weather
-				var err error
-				if tc.mockBody != nil || tc.mockStatus != 0 {
-					ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-						w.WriteHeader(tc.mockStatus)
-						json.NewEncoder(w).Encode(tc.mockBody)
-					}))
-					defer ts.Close()
-					s := &OpenMeteo{ForecastURL: ts.URL + "/v1/forecast", HTTPClient: ts.Client()}
-					res, err = s.FetchWeatherForecast(context.Background(), 34.0, -118.0, tc.timezone, startDay, endDay)
-				} else {
-					s := &OpenMeteo{}
-					res, err = s.FetchWeatherForecast(context.Background(), 34.0, -118.0, tc.timezone, startDay, endDay)
-				}
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(mockBody)
+			}))
+			defer ts.Close()
 
-				if tc.wantErr {
-					assert.Error(t, err)
-				} else {
-					require.NoError(t, err)
-					assert.Len(t, res, tc.wantCount)
+			s := &OpenMeteo{ForecastURL: ts.URL + "/v1/forecast", HTTPClient: ts.Client()}
+			res, err := s.FetchWeatherForecast(context.Background(), 34.0, -118.0, timezone, startDay, endDay)
 
-					// Assert the correct splitting into Actuals vs Forecasts based on time.Now() rule logic
-					// startDay is past so it must be actual
-					assert.Len(t, res[0].ActualHours, 1)
-					assert.Equal(t, 100.5, res[0].ActualHours[0].GHI)
-					assert.Len(t, res[0].ForecastHours, 0)
+			require.NoError(t, err)
+			assert.Len(t, res, 3)
 
-					// endDay is future so it must be forecast
-					assert.Len(t, res[2].ForecastHours, 1)
-					assert.Equal(t, 200.5, res[2].ForecastHours[0].GHI)
-					assert.Len(t, res[2].ActualHours, 0)
-				}
-			})
-		}
+			if assert.Len(t, res[0].ForecastHours, 1) {
+				assert.Equal(t, 100.5, res[0].ForecastHours[0].GHI)
+			}
+			assert.Len(t, res[1].ForecastHours, 0)
+			if assert.Len(t, res[2].ForecastHours, 1) {
+				assert.Equal(t, 200.5, res[2].ForecastHours[0].GHI)
+			}
+		})
 	})
 
 	t.Run("Integration_RealAPI_GetLocationData", func(t *testing.T) {
@@ -246,7 +223,8 @@ func TestOpenMeteoService(t *testing.T) {
 			t.Skip("Skipping integration test in short mode")
 		}
 
-		loc, _ := time.LoadLocation("America/Los_Angeles")
+		loc, err := time.LoadLocation("America/Los_Angeles")
+		require.NoError(t, err)
 		targetDay := time.Now().In(loc)
 		startDay := targetDay.AddDate(0, 0, -1)
 		endDay := targetDay.AddDate(0, 0, 1)
@@ -257,15 +235,13 @@ func TestOpenMeteoService(t *testing.T) {
 		}
 
 		var weathers []types.Weather
-		var err error
-
 		// Retry up to 3 times to mitigate flaky OpenMeteo API network issues (like EOF)
 		for i := 0; i < 3; i++ {
 			weathers, err = s.FetchWeatherForecast(context.Background(), 34.07, -118.40, "America/Los_Angeles", startDay, endDay)
 			if err == nil {
 				break
 			}
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(time.Second)
 		}
 
 		require.NoError(t, err)
