@@ -683,7 +683,8 @@ func TestHandleUpdateSettings(t *testing.T) {
 			},
 		}
 
-		b, _ := json.Marshal(body)
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
 		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
 		user := types.User{ID: "admin@example.com", Email: "admin@example.com", Admin: true}
 		req = req.WithContext(context.WithValue(context.WithValue(req.Context(), userContextKey, user), siteIDContextKey, types.SiteIDNone))
@@ -715,9 +716,16 @@ func TestHandleUpdateSettings(t *testing.T) {
 			encryptionKey: "test-secret-key-1234567890123456",
 		}
 
+		existingCreds := types.Credentials{
+			Mock: &types.MockCredentials{Strategy: "sameuser"},
+		}
+		encrypted, err := srv.encryptCredentials(context.Background(), existingCreds)
+		require.NoError(t, err)
+
 		mockS2.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
 			UtilityProvider: "test",
 			ESS:             "mock",
+			EncryptedCredentials: encrypted,
 			ESSAuthStatus: types.ESSAuthStatus{
 				ConsecutiveFailures: 2,
 				LastAttempt:         time.Now().UTC().Add(-10 * time.Second), // 20s remaining of 30s
@@ -757,7 +765,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		var errResp struct {
 			Error string `json:"error"`
 		}
-		err := json.NewDecoder(w.Result().Body).Decode(&errResp)
+		err = json.NewDecoder(w.Result().Body).Decode(&errResp)
 		require.NoError(t, err)
 		assert.Contains(t, errResp.Error, "try again in 20s")
 	})
@@ -784,9 +792,16 @@ func TestHandleUpdateSettings(t *testing.T) {
 			encryptionKey: "test-secret-key-1234567890123456",
 		}
 
+		existingCreds := types.Credentials{
+			Mock: &types.MockCredentials{Strategy: "sameuser"},
+		}
+		encrypted, err := srv.encryptCredentials(context.Background(), existingCreds)
+		require.NoError(t, err)
+
 		mockS2.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
 			UtilityProvider: "test",
 			ESS:             "mock",
+			EncryptedCredentials: encrypted,
 			ESSAuthStatus: types.ESSAuthStatus{
 				ConsecutiveFailures: 2,
 				LastAttempt:         time.Now().UTC().Add(-10 * time.Second), // 20s remaining of 30s
@@ -815,7 +830,8 @@ func TestHandleUpdateSettings(t *testing.T) {
 			},
 		}
 
-		b, _ := json.Marshal(body)
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
 		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
 		user := types.User{ID: "admin@example.com", Email: "admin@example.com", Admin: true}
 		req = req.WithContext(context.WithValue(context.WithValue(req.Context(), userContextKey, user), siteIDContextKey, types.SiteIDNone))
@@ -826,7 +842,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		var errResp struct {
 			Error string `json:"error"`
 		}
-		err := json.NewDecoder(w.Result().Body).Decode(&errResp)
+		err = json.NewDecoder(w.Result().Body).Decode(&errResp)
 		require.NoError(t, err)
 		// Assert rate limit remains active even when changing credentials to bypass it
 		assert.Contains(t, errResp.Error, "try again in 20s")
