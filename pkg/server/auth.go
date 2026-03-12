@@ -67,8 +67,6 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 		var email string
 		var userID string
-		// userFound is true if the user is a real user found in the database
-		var userFound bool
 		// user might be a mock/fake user if this is bypassAuth or singleSite
 		var user types.User
 		var authViaUpdateSpecific bool
@@ -175,7 +173,6 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 							return
 						}
 					} else {
-						userFound = true
 						// fill in default siteID if the user only has 1 site
 						if siteID == "" && len(user.Sites) == 1 {
 							siteID = user.Sites[0].ID
@@ -234,13 +231,6 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		if siteID != "" {
 			ctx = log.With(ctx, log.Ctx(ctx).With(slog.String("authSiteID", siteID)))
 		}
-
-		log.Ctx(ctx).DebugContext(
-			ctx,
-			"authenticated request",
-			slog.String("email", email),
-			slog.Bool("userFound", userFound),
-		)
 
 		ctx = context.WithValue(ctx, allUserSitesContextKey, user.Sites)
 		ctx = context.WithValue(ctx, siteIDContextKey, siteID)

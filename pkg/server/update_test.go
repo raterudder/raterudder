@@ -565,9 +565,9 @@ func TestHandleUpdateSites(t *testing.T) {
 	}, nil)
 
 	// In production mode (default), site1 and site3 (default) should run. site2 should be skipped.
-	mockS.On("GetSettings", mock.Anything, "site1").Return(types.Settings{UtilityProvider: "test", Release: "production"}, types.CurrentSettingsVersion, nil)
-	mockS.On("GetSettings", mock.Anything, "site2").Return(types.Settings{UtilityProvider: "test", Release: "staging"}, types.CurrentSettingsVersion, nil)
-	mockS.On("GetSettings", mock.Anything, "site3").Return(types.Settings{UtilityProvider: "test", Release: "production"}, types.CurrentSettingsVersion, nil)
+	mockS.On("GetSettings", mock.Anything, "site1").Return(types.Settings{ESS: "mock", UtilityProvider: "test", Release: "production"}, types.CurrentSettingsVersion, nil)
+	mockS.On("GetSettings", mock.Anything, "site2").Return(types.Settings{ESS: "mock", UtilityProvider: "test", Release: "staging"}, types.CurrentSettingsVersion, nil)
+	mockS.On("GetSettings", mock.Anything, "site3").Return(types.Settings{ESS: "mock", UtilityProvider: "test", Release: "production"}, types.CurrentSettingsVersion, nil)
 
 	// Other storage calls for site1 and site3
 	mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
@@ -639,6 +639,30 @@ func TestHandleUpdateSites(t *testing.T) {
 		assert.NotContains(t, results, "site1")
 		assert.Equal(t, "success", results["site2"])
 		assert.NotContains(t, results, "site3")
+	})
+
+	t.Run("No ESS Configured", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("ListSites", mock.Anything).Return([]types.Site{{ID: "site-no-ess"}}, nil)
+		mockS.On("GetSettings", mock.Anything, "site-no-ess").Return(types.Settings{
+			Release: "production",
+			ESS:     "", // Empty ESS
+		}, types.CurrentSettingsVersion, nil)
+
+		srv := &Server{
+			storage:    mockS,
+			release:    "production",
+			bypassAuth: true,
+		}
+
+		req := httptest.NewRequest("POST", "/api/updateSites", nil)
+		w := httptest.NewRecorder()
+		srv.handleUpdateSites(w, req)
+
+		var results map[string]string
+		err := json.NewDecoder(w.Body).Decode(&results)
+		require.NoError(t, err)
+		assert.Equal(t, "skipped: no ESS configured", results["site-no-ess"])
 	})
 }
 

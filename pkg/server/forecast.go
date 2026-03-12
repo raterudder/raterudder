@@ -54,6 +54,11 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if settings.ESS == "" {
+		writeJSONError(w, "no ESS configured", http.StatusBadRequest)
+		return
+	}
+
 	essSystem, err := s.getESSSystem(ctx, siteID, settings, creds)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get ess system", slog.Any("error", err))

@@ -80,6 +80,12 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		if settings.ESS == "" {
+			log.Ctx(ctx).DebugContext(ctx, "site update skipped: no ESS configured", slog.String("siteID", site.ID))
+			results[site.ID] = "skipped: no ESS configured"
+			continue
+		}
+
 		log.Ctx(ctx).DebugContext(ctx, "processing site update")
 		_, status, err := s.performSiteUpdate(ctx, site.ID, settings, creds)
 		if err != nil {

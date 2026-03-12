@@ -102,9 +102,7 @@ func (m *Map) Site(ctx context.Context, siteID string, settings types.Settings) 
 		}
 		sys = newTesla(m.baseTesla)
 	default:
-		// Default to franklin for backwards compatibility if not specified
-		// or if an unknown system is provided.
-		sys = newFranklin()
+		return nil, errors.New("unknown ESS system: " + settings.ESS)
 	}
 
 	if err := sys.ApplySettings(ctx, settings); err != nil {
