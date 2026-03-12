@@ -762,6 +762,76 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.Contains(t, errResp.Error, "try again in 20s")
 	})
 
+	t.Run("Rate Limit Active (429) after 2 Failures Even With Different Credentials", func(t *testing.T) {
+		mockU2 := &mockUtility{}
+		mockU2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockUMap2 := utility.NewMap()
+		mockUMap2.SetProvider(types.SiteIDNone, mockU2)
+
+		mockS2 := &mockStorage{}
+		mockES2 := &mockESS{}
+		mockES2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockP2 := ess.NewMap()
+		mockP2.SetSystem(types.SiteIDNone, mockES2)
+
+		srv := &Server{
+			utilities:     mockUMap2,
+			ess:           mockP2,
+			storage:       mockS2,
+			singleSite:    true,
+			adminEmails:   []string{"admin@example.com"},
+			release:       "production",
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
+		mockS2.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			UtilityProvider: "test",
+			ESS:             "mock",
+			ESSAuthStatus: types.ESSAuthStatus{
+				ConsecutiveFailures: 2,
+				LastAttempt:         time.Now().UTC().Add(-10 * time.Second), // 20s remaining of 30s
+			},
+		}, types.CurrentSettingsVersion, nil).Once()
+
+		s := types.Settings{
+			UtilityProvider:             "test",
+			ESS:                         "mock",
+			Release:                     "production",
+			MinBatterySOC:               20,
+			IgnoreHourUsageOverMultiple: 2,
+			SolarTrendRatioMax:          3,
+			SolarBellCurveMultiplier:    1,
+		}
+
+		body := struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials"`
+		}{
+			Settings: s,
+			Credentials: &types.Credentials{
+				Mock: &types.MockCredentials{
+					Strategy: "completely_different_user",
+				},
+			},
+		}
+
+		b, _ := json.Marshal(body)
+		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+		user := types.User{ID: "admin@example.com", Email: "admin@example.com", Admin: true}
+		req = req.WithContext(context.WithValue(context.WithValue(req.Context(), userContextKey, user), siteIDContextKey, types.SiteIDNone))
+		w := httptest.NewRecorder()
+
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusTooManyRequests, w.Result().StatusCode)
+		var errResp struct {
+			Error string `json:"error"`
+		}
+		err := json.NewDecoder(w.Result().Body).Decode(&errResp)
+		require.NoError(t, err)
+		// Assert rate limit remains active even when changing credentials to bypass it
+		assert.Contains(t, errResp.Error, "try again in 20s")
+	})
+
 	t.Run("Rate Limit Expired (200) after 5 Minutes", func(t *testing.T) {
 		mockU2 := &mockUtility{}
 		mockU2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
