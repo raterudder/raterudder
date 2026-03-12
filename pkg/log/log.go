@@ -19,9 +19,9 @@ func init() {
 	defaultLogLevel.Set(slog.LevelInfo)
 }
 
-type contextKey struct{}
+type contextKey int
 
-var loggerKey = contextKey{}
+var loggerKey contextKey = 1
 
 // Ctx returns the logger from the context. If no logger is found, it returns the default logger.
 func Ctx(ctx context.Context) *slog.Logger {

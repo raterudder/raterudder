@@ -77,8 +77,9 @@ func (s *Server) handleHistoryActions(w http.ResponseWriter, r *http.Request) {
 }
 
 func parseTimeRange(r *http.Request) (time.Time, time.Time, error) {
-	startStr := r.URL.Query().Get("start")
-	endStr := r.URL.Query().Get("end")
+	q := r.URL.Query()
+	startStr := q.Get("start")
+	endStr := q.Get("end")
 
 	if startStr == "" || endStr == "" {
 		// Default to last 24 hours if not specified

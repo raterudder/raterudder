@@ -3,9 +3,11 @@ package ess
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 )
 
@@ -13,6 +15,9 @@ var ErrCredentialsMissing = errors.New("credentials missing")
 
 // System defines the interface for interacting with an Energy Storage System (like FranklinWH).
 type System interface {
+	// Name returns the name of the system.
+	Name() string
+
 	// GetStatus returns the current status of the system.
 	GetStatus(ctx context.Context) (types.SystemStatus, error)
 
@@ -32,15 +37,11 @@ type System interface {
 	GetEnergyHistory(ctx context.Context, start, end time.Time) ([]types.EnergyStats, error)
 }
 
-// Configured sets up the ESS system provider Map
-func Configured() *Map {
-	return NewMap()
-}
-
 // Map manages multiple ESS systems.
 type Map struct {
-	mu      sync.Mutex
-	systems map[string]System
+	mu        sync.Mutex
+	systems   map[string]System
+	baseTesla *baseTesla
 }
 
 // NewMap creates a new ESS Map.
@@ -50,12 +51,23 @@ func NewMap() *Map {
 	}
 }
 
+// Configured sets up the ESS system provider Map
+func Configured() *Map {
+	m := NewMap()
+	m.baseTesla = configuredBaseTesla()
+	return m
+}
+
 // ListSystems returns the available ESS systems and their required credentials.
-func (m *Map) ListSystems() []types.ESSProviderInfo {
-	return []types.ESSProviderInfo{
+func (m *Map) ListSystems(ctx context.Context) []types.ESSProviderInfo {
+	sys := []types.ESSProviderInfo{
 		franklinInfo(),
 		mockInfo(),
 	}
+	if m.baseTesla != nil && m.baseTesla.enabled() {
+		sys = append(sys, m.baseTesla.info(ctx))
+	}
+	return sys
 }
 
 // Site returns the system for the given siteID.
@@ -69,10 +81,13 @@ func (m *Map) Site(ctx context.Context, siteID string, settings types.Settings) 
 	}
 
 	if sys, ok := m.systems[siteID]; ok {
-		if err := sys.ApplySettings(ctx, settings); err != nil {
-			return nil, err
+		if settings.ESS == "" || sys.Name() == settings.ESS {
+			if err := sys.ApplySettings(ctx, settings); err != nil {
+				return nil, err
+			}
+			return sys, nil
 		}
-		return sys, nil
+		log.Ctx(ctx).Warn("site changed ess system", slog.String("expected", settings.ESS), slog.String("actual", sys.Name()))
 	}
 
 	var sys System
@@ -81,6 +96,11 @@ func (m *Map) Site(ctx context.Context, siteID string, settings types.Settings) 
 		sys = newFranklin()
 	case "mock":
 		sys = newMock(siteID)
+	case "tesla":
+		if m.baseTesla == nil {
+			return nil, errors.New("tesla client is not configured")
+		}
+		sys = newTesla(m.baseTesla)
 	default:
 		// Default to franklin for backwards compatibility if not specified
 		// or if an unknown system is provided.
@@ -99,4 +119,12 @@ func (m *Map) SetSystem(siteID string, sys System) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.systems[siteID] = sys
+}
+
+// RegisterTesla generates a partner authentication token and calls the Tesla register endpoint.
+func (m *Map) RegisterTesla(ctx context.Context, domain string) error {
+	if m.baseTesla == nil {
+		return errors.New("tesla not configured")
+	}
+	return m.baseTesla.RegisterTesla(ctx, domain)
 }

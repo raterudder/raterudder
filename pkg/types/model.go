@@ -123,9 +123,7 @@ type Storm struct {
 type SystemStatus struct {
 	Timestamp               time.Time     `json:"timestamp"`
 	BatterySOC              float64       `json:"batterySOC"`            // 0-100
-	EachBatterySOC          []float64     `json:"eachBatterySOC"`        // 0-100
 	BatteryKW               float64       `json:"batteryKW"`             // Positive for discharge, negative for charge
-	EachBatteryKW           []float64     `json:"eachBatteryKW"`         // Positive for discharge, negative for charge
 	BatteryCapacityKWH      float64       `json:"batteryCapacityKWH"`    // Total capacity of the battery (kWh)
 	MaxBatteryChargeKW      float64       `json:"maxBatteryChargeKW"`    // Maximum charge rate of the battery (kW)
 	MaxBatteryDischargeKW   float64       `json:"maxBatteryDischargeKW"` // Maximum discharge rate of the battery (kW)

@@ -47,7 +47,7 @@ func TestHandleForecast(t *testing.T) {
 		mockP.SetSystem(types.SiteIDNone, mockES)
 
 		mockUMap := utility.NewMap()
-		mockUMap.SetProvider("test", mockU)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 		srv := &Server{
 			utilities:  mockUMap,
@@ -161,7 +161,7 @@ func TestHandleForecast(t *testing.T) {
 		mockP.SetSystem(types.SiteIDNone, mockES)
 
 		mockUMap := utility.NewMap()
-		mockUMap.SetProvider("test", mockU)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 		srv := &Server{
 			storage:    mockS,
@@ -213,7 +213,7 @@ func TestHandleForecast(t *testing.T) {
 		mockP.SetSystem(types.SiteIDNone, mockES)
 
 		mockUMap := utility.NewMap()
-		mockUMap.SetProvider("test", mockU)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 		srv := &Server{
 			utilities:  mockUMap,
@@ -299,7 +299,7 @@ func TestHandleForecast(t *testing.T) {
 		mockP.SetSystem(types.SiteIDNone, mockES)
 
 		mockUMap := utility.NewMap()
-		mockUMap.SetProvider("test", mockU)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 		srv := &Server{
 			utilities:  mockUMap,

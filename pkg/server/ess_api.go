@@ -6,7 +6,7 @@ import (
 )
 
 func (s *Server) handleListESS(w http.ResponseWriter, r *http.Request) {
-	systems := s.ess.ListSystems()
+	systems := s.ess.ListSystems(r.Context())
 
 	if s.showHidden {
 		for i := range systems {

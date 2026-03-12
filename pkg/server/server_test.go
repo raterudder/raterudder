@@ -30,7 +30,7 @@ func TestWebHandler(t *testing.T) {
 	mockP.SetSystem(types.SiteIDNone, mockE)
 
 	mockUMap := utility.NewMap()
-	mockUMap.SetProvider("test", mockU)
+	mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 	mockS.On("GetSettings", mock.Anything).Return(types.Settings{
 		DryRun:          true,

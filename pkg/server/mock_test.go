@@ -15,6 +15,9 @@ type mockUtility struct {
 	mock.Mock
 }
 
+func (m *mockUtility) Name() string {
+	return "mock"
+}
 func (m *mockUtility) GetCurrentPrice(ctx context.Context) (types.Price, error) {
 	args := m.Called(ctx)
 	if len(args) > 0 {
@@ -52,6 +55,9 @@ type mockESS struct {
 	mock.Mock
 }
 
+func (m *mockESS) Name() string {
+	return "mock"
+}
 func (m *mockESS) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 	args := m.Called(ctx)
 	if len(args) > 0 {

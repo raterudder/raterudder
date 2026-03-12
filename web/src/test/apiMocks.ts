@@ -1,3 +1,5 @@
+import type { ESSProviderInfo, UtilityProviderInfo } from "../api";
+
 export const defaultAuthStatus = {
     loggedIn: true,
     authRequired: true,
@@ -84,7 +86,7 @@ export const defaultUtilities = [
         hidden: true,
         rates: [],
     },
-];
+] as UtilityProviderInfo[];
 
 export const defaultESSProviders = [
     {
@@ -101,8 +103,37 @@ export const defaultESSProviders = [
         name: 'Secret ESS',
         hidden: true,
         credentials: [],
+    },
+    {
+        id: 'missing_ess',
+        name: 'Missing ESS',
+        credentials: [
+            { field: 'username', name: 'Username', type: 'string', required: true },
+        ],
+    },
+    {
+        id: 'multi_region_ess',
+        name: 'Multi Region ESS',
+        oAuthURLs: {
+            "NA": "https://na.example.com",
+            "EU": "https://eu.example.com"
+        },
+        oAuthKey: {
+            field: 'region',
+            name: 'Region',
+            type: 'select',
+            required: true,
+            choices: [
+                { value: 'NA', name: 'North America' },
+                { value: 'EU', name: 'Europe' },
+            ],
+            default: "NA"
+        },
+        credentials: [
+            { field: 'authCode', name: 'Authorization Code', type: 'password', required: true },
+        ]
     }
-];
+] as ESSProviderInfo[];
 
 export const setupDefaultApiMocks = (api: any) => {
     if (typeof api.fetchActions?.mockResolvedValue === 'function') api.fetchActions.mockResolvedValue([]);

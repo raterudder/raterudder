@@ -37,9 +37,9 @@ type Franklin struct {
 	tokenStr             string
 	mu                   sync.Mutex
 	settings             types.Settings
-	deviceInfoCache      deviceInfoV2Result
+	deviceInfoCache      franklinDeviceInfoV2Result
 	deviceInfoExpiry     time.Time
-	powerCapConfigCache  []powerCapConfigResult
+	powerCapConfigCache  []franklinPowerCapConfigResult
 	powerCapConfigExpiry time.Time
 }
 
@@ -64,28 +64,32 @@ func franklinInfo() types.ESSProviderInfo {
 	return types.ESSProviderInfo{
 		ID:   "franklin",
 		Name: "FranklinWH",
-		Credentials: []types.ESSCredential{
+		Credentials: []types.ESSCredentialField{
 			{
 				Field:    "username",
 				Name:     "Email",
-				Type:     "string",
+				Type:     types.ESSCredentialFieldTypeString,
 				Required: true,
 			},
 			{
 				Field:    "password",
 				Name:     "Password",
-				Type:     "password",
+				Type:     types.ESSCredentialFieldTypePassword,
 				Required: true,
 			},
 			{
 				Field:       "gatewayID",
 				Name:        "Gateway ID (Optional)",
-				Type:        "string",
+				Type:        types.ESSCredentialFieldTypeString,
 				Required:    false,
 				Description: "If left empty, RateRudder will attempt to auto-discover the gateway ID.",
 			},
 		},
 	}
+}
+
+func (f *Franklin) Name() string {
+	return "franklin"
 }
 
 // ApplySettings applies the given settings to the Franklin struct.
@@ -103,7 +107,7 @@ func (f *Franklin) ApplySettings(ctx context.Context, settings types.Settings) e
 // successful login the new token is written back into creds so the caller can
 // persist it.
 func (f *Franklin) Authenticate(ctx context.Context, creds types.Credentials) (types.Credentials, bool, error) {
-	if creds.Franklin == nil {
+	if creds.Franklin == nil || creds.Franklin.Username == "" || (creds.Franklin.Password == "" && creds.Franklin.MD5Password == "") {
 		return creds, false, ErrCredentialsMissing
 	}
 
@@ -126,8 +130,6 @@ func (f *Franklin) Authenticate(ctx context.Context, creds types.Credentials) (t
 		}
 	} else if creds.Franklin.MD5Password != "" {
 		currentMD5 = creds.Franklin.MD5Password
-	} else {
-		return creds, false, fmt.Errorf("missing password: %w", ErrCredentialsMissing)
 	}
 
 	// Determine if we need a fresh login. We need one when:
@@ -153,6 +155,16 @@ func (f *Franklin) Authenticate(ctx context.Context, creds types.Credentials) (t
 		f.tokenStr = token
 		// Persist the new token so we can skip login next time.
 		creds.Franklin.Token = token
+
+		// fill in the default gatewayID if it wasn't sent
+		if creds.Franklin.GatewayID == "" {
+			id, err := f.getDefaultGatewayID(ctx)
+			if err != nil {
+				return creds, false, err
+			}
+			log.Ctx(ctx).InfoContext(ctx, "automatically selected gateway", slog.String("gatewayID", id))
+			creds.Franklin.GatewayID = id
+		}
 		changed = true
 	} else {
 		log.Ctx(ctx).DebugContext(ctx, "restored franklin credentials from cache")
@@ -163,22 +175,34 @@ func (f *Franklin) Authenticate(ctx context.Context, creds types.Credentials) (t
 	}
 
 	if creds.Franklin.GatewayID == "" {
-		id, err := f.getDefaultGatewayID(ctx)
-		if err != nil {
-			return creds, false, err
-		}
-		log.Ctx(ctx).InfoContext(ctx, "automatically selected gateway", slog.String("gatewayID", id))
-		creds.Franklin.GatewayID = id
-		changed = true
+		return creds, false, fmt.Errorf("missing gateway ID: %w", ErrCredentialsMissing)
 	}
+
 	f.gatewayID = creds.Franklin.GatewayID
 
 	// Validate the credentials by fetching device info. This confirms the token
 	// and gateway ID are working. The result is cached so the subsequent
 	// GetStatus call will reuse it for free.
-	if _, err := f.getDeviceInfoWithCache(ctx); err != nil {
-		log.Ctx(ctx).WarnContext(ctx, "franklin credential validation failed", slog.Any("error", err))
-		return creds, false, fmt.Errorf("credential validation failed: %w", err)
+	if _, err := f.getDeviceInfoWithCache(ctx, true); err != nil {
+		// check if we got an invalid token error and try to refresh the token
+		if strings.Contains(err.Error(), "invalid token") {
+			log.Ctx(ctx).DebugContext(ctx, "franklin token expired", slog.Any("error", err))
+			// Credentials changed or no cached token — must login fresh.
+			var token string
+			token, err = f.login(ctx, f.username, f.md5Password)
+			if err != nil {
+				return creds, false, err
+			}
+			f.tokenStr = token
+			// Persist the new token so we can skip login next time.
+			creds.Franklin.Token = token
+			changed = true
+			_, err = f.getDeviceInfoWithCache(ctx, true)
+		}
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "franklin credential validation failed", slog.Any("error", err))
+			return creds, false, fmt.Errorf("credential validation failed: %w", err)
+		}
 	}
 
 	return creds, changed, nil
@@ -188,27 +212,6 @@ type loginResult struct {
 	UserID  int    `json:"userId"`
 	Token   string `json:"token"`
 	Version string `json:"version"`
-}
-
-// ensureLogin will not login again if the token we have cached is still valid
-func (f *Franklin) ensureLogin(ctx context.Context) error {
-	if f.tokenStr == "" {
-		token, err := f.login(ctx, f.username, f.md5Password)
-		if err != nil {
-			return fmt.Errorf("failed to login: %w", err)
-		}
-		f.tokenStr = token
-	}
-
-	if f.gatewayID == "" {
-		id, err := f.getDefaultGatewayID(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get default gateway id: %w", err)
-		}
-		f.gatewayID = id
-		log.Ctx(ctx).InfoContext(ctx, "automatically selected gateway", slog.String("gatewayID", f.gatewayID))
-	}
-	return nil
 }
 
 func (f *Franklin) login(ctx context.Context, username, md5Password string) (string, error) {
@@ -316,80 +319,65 @@ type franklinResponse struct {
 }
 
 func (f *Franklin) doRequest(req *http.Request, dest interface{}) error {
-	isLogin := strings.HasSuffix(req.URL.Path, franklinLoginPath)
+	if !strings.HasSuffix(req.URL.Path, franklinLoginPath) {
+		req.Header.Set("logintoken", f.tokenStr)
+	}
 
-	// we try up to 2 times because we might have an expired token
-	for i := 0; i < 2; i++ {
-		if !isLogin {
-			req.Header.Set("logintoken", f.tokenStr)
+	// TODO: should we set softwareversion, lang, optsystemversion, opttime, optdevicename, optsource, optdevice
+	// we don't know what to set them as for now but at some point we should consider setting them
+	// once we better understand how Franklin expects them
+
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		if len(body) == 0 {
+			return fmt.Errorf("unexpected franklin status code %d", resp.StatusCode)
 		}
-
-		// TODO: should we set softwareversion, lang, optsystemversion, opttime, optdevicename, optsource, optdevice
-		// we don't know what to set them as for now but at some point we should consider setting them
-		// once we better understand how Franklin expects them
-
-		resp, err := f.client.Do(req)
-		if err != nil {
-			return err
+		if len(body) > 256 {
+			body = body[:256]
 		}
-		defer resp.Body.Close()
+		return fmt.Errorf("unexpected franklin status code %d: %s", resp.StatusCode, string(body))
+	}
 
-		if resp.StatusCode != http.StatusOK {
-			if resp.StatusCode == http.StatusUnauthorized && !isLogin && f.tokenStr != "" {
-				log.Ctx(req.Context()).DebugContext(req.Context(), "franklin token expired", slog.Int("statusCode", resp.StatusCode))
-				f.tokenStr = ""
-				if err := f.ensureLogin(req.Context()); err != nil {
-					return err
-				}
-				continue
+	var fr franklinResponse
+	if err := json.Unmarshal(body, &fr); err != nil {
+		if len(body) > 256 {
+			body = body[:256]
+		}
+		log.Ctx(req.Context()).ErrorContext(req.Context(), "failed to decode franklin response", slog.Any("error", err), slog.String("body", string(body)))
+		return err
+	}
+
+	if !fr.Success && fr.Code != 200 {
+		if fr.Message == "" {
+			if len(body) > 256 {
+				body = body[:256]
 			}
-			return fmt.Errorf("status %d", resp.StatusCode)
+			log.Ctx(req.Context()).ErrorContext(req.Context(), "franklin api unknown error", slog.String("body", string(body)))
+			return fmt.Errorf("franklin unknown error")
 		}
+		return fmt.Errorf("franklin api error: %s", fr.Message)
+	}
 
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return err
+	if dest != nil {
+		if err := json.Unmarshal(fr.Result, dest); err != nil {
+			log.Ctx(req.Context()).ErrorContext(req.Context(), "failed to decode franklin result", slog.Any("error", err))
+			return fmt.Errorf("failed to decode franklin result: %w", err)
 		}
-
-		var fr franklinResponse
-		if err := json.NewDecoder(bytes.NewReader(body)).Decode(&fr); err != nil {
-			log.Ctx(req.Context()).ErrorContext(req.Context(), "failed to decode franklin response", slog.Any("error", err), slog.String("body", string(body)))
-			return err
-		}
-
-		if !fr.Success && fr.Code != 200 {
-			// if we got a 401 error, it wasn't a login, and we sent a token then we
-			// need to get another token
-			if fr.Code == 401 && !isLogin && f.tokenStr != "" {
-				log.Ctx(req.Context()).DebugContext(req.Context(), "franklin token expired", slog.String("error", fr.Message))
-				f.tokenStr = ""
-				if err := f.ensureLogin(req.Context()); err != nil {
-					return err
-				}
-				continue
-			}
-			if fr.Message == "" {
-				log.Ctx(req.Context()).ErrorContext(req.Context(), "franklin api unknown error", slog.String("body", string(body)))
-				return fmt.Errorf("franklin unknown error")
-			}
-			log.Ctx(req.Context()).ErrorContext(req.Context(), "franklin api error", slog.String("error", fr.Message))
-			return fmt.Errorf("franklin api error: %s", fr.Message)
-		}
-
-		if dest != nil {
-			if err := json.Unmarshal(fr.Result, dest); err != nil {
-				log.Ctx(req.Context()).ErrorContext(req.Context(), "failed to decode franklin result", slog.Any("error", err))
-				return fmt.Errorf("failed to decode franklin result: %w", err)
-			}
-		} else {
-			log.Ctx(req.Context()).DebugContext(req.Context(), "franklin request success (no destination)", slog.String("url", req.URL.String()))
-		}
-		return nil
 	}
 	return nil
 }
 
-func (f *Franklin) getRuntimeData(ctx context.Context) (deviceCompositeInfoResult, error) {
+func (f *Franklin) getRuntimeData(ctx context.Context) (franklinDeviceCompositeInfoResult, error) {
 	params := url.Values{}
 	params.Set("gatewayId", f.gatewayID)
 	// 0 is set on the first call and subsequent calls should set to 1
@@ -397,12 +385,12 @@ func (f *Franklin) getRuntimeData(ctx context.Context) (deviceCompositeInfoResul
 
 	req, err := f.newGetRequest(ctx, "hes-gateway/terminal/getDeviceCompositeInfo", params)
 	if err != nil {
-		return deviceCompositeInfoResult{}, err
+		return franklinDeviceCompositeInfoResult{}, err
 	}
 
-	var res deviceCompositeInfoResult
+	var res franklinDeviceCompositeInfoResult
 	if err := f.doRequest(req, &res); err != nil {
-		return deviceCompositeInfoResult{}, fmt.Errorf("getDeviceCompositeInfo failed: %w", err)
+		return franklinDeviceCompositeInfoResult{}, fmt.Errorf("getDeviceCompositeInfo failed: %w", err)
 	}
 
 	// solar inverters/combiners use power so it can be negative, just set it to 0
@@ -429,7 +417,7 @@ func (f *Franklin) getDefaultGatewayID(ctx context.Context) (string, error) {
 		return "", err
 	}
 
-	var list []homeGateway
+	var list []franklinHomeGateway
 	if err := f.doRequest(req, &list); err != nil {
 		return "", err
 	}
@@ -440,19 +428,19 @@ func (f *Franklin) getDefaultGatewayID(ctx context.Context) (string, error) {
 	return "", fmt.Errorf("found %d gateways, expected 1", len(list))
 }
 
-func (f *Franklin) getDeviceInfo(ctx context.Context) (deviceInfoV2Result, error) {
+func (f *Franklin) getDeviceInfo(ctx context.Context) (franklinDeviceInfoV2Result, error) {
 	params := url.Values{}
 	params.Set("gatewayId", f.gatewayID)
 	params.Set("lang", "en_US")
 
 	req, err := f.newGetRequest(ctx, "hes-gateway/terminal/getDeviceInfoV2", params)
 	if err != nil {
-		return deviceInfoV2Result{}, err
+		return franklinDeviceInfoV2Result{}, err
 	}
 
-	var res deviceInfoV2Result
+	var res franklinDeviceInfoV2Result
 	if err := f.doRequest(req, &res); err != nil {
-		return deviceInfoV2Result{}, err
+		return franklinDeviceInfoV2Result{}, err
 	}
 
 	loc, err := time.LoadLocation(res.TimeZone)
@@ -467,26 +455,26 @@ func (f *Franklin) getDeviceInfo(ctx context.Context) (deviceInfoV2Result, error
 
 // getDeviceInfoWithCache returns cached device info if still fresh, otherwise
 // fetches it from the API and updates the cache. Must be called with f.mu held.
-func (f *Franklin) getDeviceInfoWithCache(ctx context.Context) (deviceInfoV2Result, error) {
-	if time.Now().Before(f.deviceInfoExpiry) {
+func (f *Franklin) getDeviceInfoWithCache(ctx context.Context, refresh bool) (franklinDeviceInfoV2Result, error) {
+	if !refresh && time.Now().Before(f.deviceInfoExpiry) {
 		return f.deviceInfoCache, nil
 	}
 	di, err := f.getDeviceInfo(ctx)
 	if err != nil {
-		return deviceInfoV2Result{}, err
+		return franklinDeviceInfoV2Result{}, err
 	}
 	f.deviceInfoCache = di
 	f.deviceInfoExpiry = time.Now().Add(time.Minute)
 	return di, nil
 }
 
-func (f *Franklin) getPowerCapacityConfig(ctx context.Context) ([]powerCapConfigResult, error) {
+func (f *Franklin) getPowerCapacityConfig(ctx context.Context) ([]franklinPowerCapConfigResult, error) {
 	req, err := f.newGetRequest(ctx, "hes-gateway/common/getPowerCapConfigList", nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var res []powerCapConfigResult
+	var res []franklinPowerCapConfigResult
 	if err := f.doRequest(req, &res); err != nil {
 		return nil, err
 	}
@@ -494,7 +482,7 @@ func (f *Franklin) getPowerCapacityConfig(ctx context.Context) ([]powerCapConfig
 	return res, nil
 }
 
-func (f *Franklin) getPowerCapacityConfigWithCache(ctx context.Context) ([]powerCapConfigResult, error) {
+func (f *Franklin) getPowerCapacityConfigWithCache(ctx context.Context) ([]franklinPowerCapConfigResult, error) {
 	if time.Now().Before(f.powerCapConfigExpiry) {
 		return f.powerCapConfigCache, nil
 	}
@@ -513,16 +501,12 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if err := f.ensureLogin(ctx); err != nil {
-		return types.SystemStatus{}, err
-	}
-
 	rd, err := f.getRuntimeData(ctx)
 	if err != nil {
 		return types.SystemStatus{}, err
 	}
 
-	di, err := f.getDeviceInfoWithCache(ctx)
+	di, err := f.getDeviceInfoWithCache(ctx, false)
 	if err != nil {
 		return types.SystemStatus{}, err
 	}
@@ -639,17 +623,15 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 	return types.SystemStatus{
 		Timestamp:               time.Now().In(di.location),
 		BatterySOC:              rd.RuntimeData.SOC,
-		EachBatterySOC:          rd.RuntimeData.EachSOC,
 		BatteryKW:               rd.RuntimeData.PowerBattery,
-		EachBatteryKW:           rd.RuntimeData.PowerEachBattery,
 		SolarKW:                 rd.RuntimeData.PowerSolar,
 		GridKW:                  rd.RuntimeData.PowerGrid,
 		HomeKW:                  rd.RuntimeData.PowerLoad,
 		BatteryCapacityKWH:      di.TotalBatteryCapacityKWH,
 		EmergencyMode:           stormHedge || modes.currentMode.WorkMode == 3,
-		CanExportSolar:          pc.GridFeedMaxFlag == GridFeedMaxFlagSolarOnly || pc.GridFeedMaxFlag == GridFeedMaxFlagBatteryAndSolar,
-		CanExportBattery:        pc.GridFeedMaxFlag == GridFeedMaxFlagBatteryAndSolar,
-		CanImportBattery:        pc.GridMaxFlag == GridMaxFlagChargeFromGrid,
+		CanExportSolar:          pc.GridFeedMaxFlag == franklinGridFeedMaxFlagSolarOnly || pc.GridFeedMaxFlag == franklinGridFeedMaxFlagBatteryAndSolar,
+		CanExportBattery:        pc.GridFeedMaxFlag == franklinGridFeedMaxFlagBatteryAndSolar,
+		CanImportBattery:        pc.GridMaxFlag == franklinGridMaxFlagChargeFromGrid,
 		ElevatedMinBatterySOC:   modes.currentMode.ReserveSOC > 0 && modes.currentMode.ReserveSOC > f.settings.MinBatterySOC,
 		BatteryAboveMinSOC:      rd.RuntimeData.SOC >= modes.currentMode.ReserveSOC,
 		BatteryChargingDisabled: batteryChargingDisabled,
@@ -660,18 +642,18 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 	}, nil
 }
 
-func (f *Franklin) getPowerControl(ctx context.Context) (getPowerControlSettingResult, error) {
+func (f *Franklin) getPowerControl(ctx context.Context) (franklinGetPowerControlSettingResult, error) {
 	params := url.Values{}
 	params.Set("gatewayId", f.gatewayID)
 
 	req, err := f.newGetRequest(ctx, "hes-gateway/terminal/tou/getPowerControlSetting", params)
 	if err != nil {
-		return getPowerControlSettingResult{}, err
+		return franklinGetPowerControlSettingResult{}, err
 	}
 
-	var res getPowerControlSettingResult
+	var res franklinGetPowerControlSettingResult
 	if err := f.doRequest(req, &res); err != nil {
-		return getPowerControlSettingResult{}, err
+		return franklinGetPowerControlSettingResult{}, err
 	}
 
 	log.Ctx(ctx).DebugContext(
@@ -686,7 +668,7 @@ func (f *Franklin) getPowerControl(ctx context.Context) (getPowerControlSettingR
 	return res, nil
 }
 
-func (f *Franklin) setPowerControl(ctx context.Context, pc getPowerControlSettingResult) error {
+func (f *Franklin) setPowerControl(ctx context.Context, pc franklinGetPowerControlSettingResult) error {
 	data := map[string]interface{}{
 		"gatewayId": f.gatewayID,
 		// TODO: what does a gridMax value of -1 mean? It's not clear yet
@@ -737,7 +719,7 @@ func (f *Franklin) getAvailableModes(ctx context.Context) (availableModes, error
 		return availableModes{}, err
 	}
 
-	var res gatewayTouListV2Result
+	var res franklinGatewayTouListV2Result
 	if err := f.doRequest(req, &res); err != nil {
 		return availableModes{}, err
 	}
@@ -810,10 +792,6 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if err := f.ensureLogin(ctx); err != nil {
-		return err
-	}
-
 	if bat == types.BatteryModeNoChange && sol == types.SolarModeNoChange {
 		return nil
 	}
@@ -882,13 +860,13 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		soc = 100
 		updatedModeOrSOC = true
 		if f.settings.GridChargeBatteries {
-			if pc.GridMaxFlag != GridMaxFlagChargeFromGrid {
-				pc.GridMaxFlag = GridMaxFlagChargeFromGrid
+			if pc.GridMaxFlag != franklinGridMaxFlagChargeFromGrid {
+				pc.GridMaxFlag = franklinGridMaxFlagChargeFromGrid
 				updatedPC = true
 			}
 		} else {
-			if pc.GridMaxFlag != GridMaxFlagNoChargeFromGrid {
-				pc.GridMaxFlag = GridMaxFlagNoChargeFromGrid
+			if pc.GridMaxFlag != franklinGridMaxFlagNoChargeFromGrid {
+				pc.GridMaxFlag = franklinGridMaxFlagNoChargeFromGrid
 				updatedPC = true
 			}
 		}
@@ -903,8 +881,8 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		}
 		soc = 100
 		updatedModeOrSOC = true
-		if pc.GridMaxFlag != GridMaxFlagNoChargeFromGrid {
-			pc.GridMaxFlag = GridMaxFlagNoChargeFromGrid
+		if pc.GridMaxFlag != franklinGridMaxFlagNoChargeFromGrid {
+			pc.GridMaxFlag = franklinGridMaxFlagNoChargeFromGrid
 			updatedPC = true
 		}
 	case types.BatteryModeLoad:
@@ -915,13 +893,13 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		soc = minBatterySOC
 		updatedModeOrSOC = true
 		if f.settings.GridChargeBatteries {
-			if pc.GridMaxFlag != GridMaxFlagChargeFromGrid {
-				pc.GridMaxFlag = GridMaxFlagChargeFromGrid
+			if pc.GridMaxFlag != franklinGridMaxFlagChargeFromGrid {
+				pc.GridMaxFlag = franklinGridMaxFlagChargeFromGrid
 				updatedPC = true
 			}
 		} else {
-			if pc.GridMaxFlag != GridMaxFlagNoChargeFromGrid {
-				pc.GridMaxFlag = GridMaxFlagNoChargeFromGrid
+			if pc.GridMaxFlag != franklinGridMaxFlagNoChargeFromGrid {
+				pc.GridMaxFlag = franklinGridMaxFlagNoChargeFromGrid
 				updatedPC = true
 			}
 		}
@@ -939,8 +917,8 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		}
 		soc = math.Max(math.Floor(rd.RuntimeData.SOC), minBatterySOC)
 		updatedModeOrSOC = true
-		if pc.GridMaxFlag != GridMaxFlagNoChargeFromGrid {
-			pc.GridMaxFlag = GridMaxFlagNoChargeFromGrid
+		if pc.GridMaxFlag != franklinGridMaxFlagNoChargeFromGrid {
+			pc.GridMaxFlag = franklinGridMaxFlagNoChargeFromGrid
 			updatedPC = true
 		}
 	case types.BatteryModeNoChange:
@@ -958,25 +936,25 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		// if settings allow us to export solar then we start exporting solar
 		// this will prefer home, then charge, then export
 		if f.settings.GridExportSolar && f.settings.GridExportBatteries {
-			if pc.GridFeedMaxFlag != GridFeedMaxFlagBatteryAndSolar {
-				pc.GridFeedMaxFlag = GridFeedMaxFlagBatteryAndSolar
+			if pc.GridFeedMaxFlag != franklinGridFeedMaxFlagBatteryAndSolar {
+				pc.GridFeedMaxFlag = franklinGridFeedMaxFlagBatteryAndSolar
 				updatedPC = true
 			}
 		} else if f.settings.GridExportSolar {
-			if pc.GridFeedMaxFlag != GridFeedMaxFlagSolarOnly {
-				pc.GridFeedMaxFlag = GridFeedMaxFlagSolarOnly
+			if pc.GridFeedMaxFlag != franklinGridFeedMaxFlagSolarOnly {
+				pc.GridFeedMaxFlag = franklinGridFeedMaxFlagSolarOnly
 				updatedPC = true
 			}
 		} else {
-			if pc.GridFeedMaxFlag != GridFeedMaxFlagNoExport {
-				pc.GridFeedMaxFlag = GridFeedMaxFlagNoExport
+			if pc.GridFeedMaxFlag != franklinGridFeedMaxFlagNoExport {
+				pc.GridFeedMaxFlag = franklinGridFeedMaxFlagNoExport
 				updatedPC = true
 			}
 		}
 	case types.SolarModeNoExport:
 		// set the flag to not export solar
-		if pc.GridFeedMaxFlag != GridFeedMaxFlagNoExport {
-			pc.GridFeedMaxFlag = GridFeedMaxFlagNoExport
+		if pc.GridFeedMaxFlag != franklinGridFeedMaxFlagNoExport {
+			pc.GridFeedMaxFlag = franklinGridFeedMaxFlagNoExport
 			updatedPC = true
 		}
 	case types.SolarModeNoChange:
@@ -1072,11 +1050,7 @@ func (f *Franklin) GetEnergyHistory(ctx context.Context, start, end time.Time) (
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if err := f.ensureLogin(ctx); err != nil {
-		return nil, err
-	}
-
-	var di deviceInfoV2Result
+	var di franklinDeviceInfoV2Result
 	if time.Now().Before(f.deviceInfoExpiry) {
 		di = f.deviceInfoCache
 	} else {
@@ -1123,7 +1097,7 @@ func (f *Franklin) GetEnergyHistory(ctx context.Context, start, end time.Time) (
 	return allStats, nil
 }
 
-func (f *Franklin) getStormList(ctx context.Context) ([]stormListResult, error) {
+func (f *Franklin) getStormList(ctx context.Context) ([]franklinStormListResult, error) {
 	params := url.Values{}
 	params.Set("equipNo", f.gatewayID)
 
@@ -1132,7 +1106,7 @@ func (f *Franklin) getStormList(ctx context.Context) ([]stormListResult, error) 
 		return nil, err
 	}
 
-	var res []stormListResult
+	var res []franklinStormListResult
 	if err := f.doRequest(req, &res); err != nil {
 		return nil, err
 	}
@@ -1151,7 +1125,7 @@ func (f *Franklin) getEnergyStatsForDay(ctx context.Context, day time.Time, loc 
 		return nil, err
 	}
 
-	var res fhpPowerByDayResult
+	var res franklinFHPPowerByDayResult
 	if err := f.doRequest(req, &res); err != nil {
 		return nil, err
 	}
@@ -1283,7 +1257,7 @@ func (f *Franklin) getEnergyStatsForDay(ctx context.Context, day time.Time, loc 
 
 // Internal Structs
 
-type currentAlarmVO struct {
+type franklinCurrentAlarmVO struct {
 	ID                   int    `json:"id"`
 	GatewayID            string `json:"gatewayId"`
 	AlarmForSerialNumber string `json:"alarmEqSn"`
@@ -1295,17 +1269,17 @@ type currentAlarmVO struct {
 	// TODO: what does level mean? Should we only stop updating based on certain levels?
 }
 
-type deviceCompositeInfoResult struct {
-	CurrentWorkMode  int              `json:"currentWorkMode"`
-	DeviceStatus     int              `json:"deviceStatus"`
-	RuntimeData      runtimeData      `json:"runtimeData"`
-	Valid            bool             `json:"valid"`
-	CurrentAlarmList []currentAlarmVO `json:"currentAlarmVOList"`
+type franklinDeviceCompositeInfoResult struct {
+	CurrentWorkMode  int                      `json:"currentWorkMode"`
+	DeviceStatus     int                      `json:"deviceStatus"`
+	RuntimeData      franklinRuntimeData      `json:"runtimeData"`
+	Valid            bool                     `json:"valid"`
+	CurrentAlarmList []franklinCurrentAlarmVO `json:"currentAlarmVOList"`
 
 	// there's also "solarHaveVo": {...}
 }
 
-type runtimeData struct {
+type franklinRuntimeData struct {
 	TOUID    int    `json:"mode"`
 	ModeName string `json:"name"`
 
@@ -1346,7 +1320,7 @@ type runtimeData struct {
 	// TODO: what does solarPower (seems to be 10x p_sun?) mean?
 }
 
-type powerCapConfigResult struct {
+type franklinPowerCapConfigResult struct {
 	ID             int    `json:"id"`
 	ModelName      string `json:"modelName"`
 	PEHWVersion    int    `json:"peHwVersion"`
@@ -1356,16 +1330,16 @@ type powerCapConfigResult struct {
 	DerateFlag     int    `json:"derateFlag"`
 }
 
-type deviceInfoV2Result struct {
-	GatewayID               string        `json:"gatewayId"`
-	DeviceTime              string        `json:"deviceTime"`
-	TimeZone                string        `json:"zoneInfo"`
-	SystemHardwareVersion   int           `json:"sysHdVersionInt"`
-	TotalBatteryCapacityKWH float64       `json:"totalCap"`
-	TotalBatteryPowerKW     float64       `json:"fixedPowerTotal"`
-	Batteries               []batteryInfo `json:"apowerList"`
-	BatteryPEHWVersions     []int         `json:"peHwVerList"`
-	ProtocolVersion         string        `json:"protocolVer"`
+type franklinDeviceInfoV2Result struct {
+	GatewayID               string                `json:"gatewayId"`
+	DeviceTime              string                `json:"deviceTime"`
+	TimeZone                string                `json:"zoneInfo"`
+	SystemHardwareVersion   int                   `json:"sysHdVersionInt"`
+	TotalBatteryCapacityKWH float64               `json:"totalCap"`
+	TotalBatteryPowerKW     float64               `json:"fixedPowerTotal"`
+	Batteries               []franklinBatteryInfo `json:"apowerList"`
+	BatteryPEHWVersions     []int                 `json:"peHwVerList"`
+	ProtocolVersion         string                `json:"protocolVer"`
 
 	location *time.Location
 
@@ -1374,47 +1348,47 @@ type deviceInfoV2Result struct {
 	// TODO: what do sleepStatus, blackSleepFlag mean?
 }
 
-type batteryInfo struct {
+type franklinBatteryInfo struct {
 	Serial     string `json:"id"`
 	CapacityWH int    `json:"rateBatCap"`
 	PowerW     int    `json:"ratedPwr"`
 }
 
-type gridMaxFlag int
+type franklinGridMaxFlag int
 
 const (
-	GridMaxFlagNoChargeFromGrid gridMaxFlag = 1
-	GridMaxFlagChargeFromGrid   gridMaxFlag = 2
+	franklinGridMaxFlagNoChargeFromGrid franklinGridMaxFlag = 1
+	franklinGridMaxFlagChargeFromGrid   franklinGridMaxFlag = 2
 )
 
-type gridFeedMaxFlag int
+type franklinGridFeedMaxFlag int
 
 const (
-	GridFeedMaxFlagNoExport        gridFeedMaxFlag = 3
-	GridFeedMaxFlagSolarOnly       gridFeedMaxFlag = 1
-	GridFeedMaxFlagBatteryAndSolar gridFeedMaxFlag = 2
+	franklinGridFeedMaxFlagNoExport        franklinGridFeedMaxFlag = 3
+	franklinGridFeedMaxFlagSolarOnly       franklinGridFeedMaxFlag = 1
+	franklinGridFeedMaxFlagBatteryAndSolar franklinGridFeedMaxFlag = 2
 )
 
-type getPowerControlSettingResult struct {
-	GridFeedMax     float64         `json:"gridFeedMax"`
-	GridFeedMaxFlag gridFeedMaxFlag `json:"gridFeedMaxFlag"`
-	GridMax         float64         `json:"gridMax"`
-	GridMaxFlag     gridMaxFlag     `json:"gridMaxFlag"`
+type franklinGetPowerControlSettingResult struct {
+	GridFeedMax     float64                 `json:"gridFeedMax"`
+	GridFeedMaxFlag franklinGridFeedMaxFlag `json:"gridFeedMaxFlag"`
+	GridMax         float64                 `json:"gridMax"`
+	GridMaxFlag     franklinGridMaxFlag     `json:"gridMaxFlag"`
 
 	// TODO: what is difference between global and non-global? does it only matter for tou? there is globalGridDischargeMax, globalGridChargeMax, globalSettingStatus (does this being 1 mean we use global instead?)
 	// TODO: what does peakDemandGridMax mean?
 	// TODO: what does isNem3, isCalifornia mean?
 }
 
-type gatewayTouListV2Result struct {
-	CurrentID int       `json:"currendId"` // yes, it's misspelled
-	List      []touItem `json:"list"`
+type franklinGatewayTouListV2Result struct {
+	CurrentID int               `json:"currendId"` // yes, it's misspelled
+	List      []franklinTouItem `json:"list"`
 
 	// TODO: validate this
 	StormHedgeEnabled int `json:"stromEn"`
 }
 
-type touItem struct {
+type franklinTouItem struct {
 	ID                 int     `json:"id"`
 	OldIndex           int     `json:"oldIndex"`
 	Name               string  `json:"name"`
@@ -1433,7 +1407,7 @@ type touItem struct {
 	// TODO: what do vppSocVo, todayVppVo mean?
 }
 
-type fhpPowerByDayResult struct {
+type franklinFHPPowerByDayResult struct {
 	SOCArray        []float64 `json:"socArray"`
 	KwhTotalArray   []float64 `json:"kwhTotalArray"` // Unused for now
 	RunStatusArray  []int     `json:"runStatusArray"`
@@ -1452,7 +1426,7 @@ type fhpPowerByDayResult struct {
 	// Generators and V2L ignored for now
 }
 
-type homeGateway struct {
+type franklinHomeGateway struct {
 	ID       string `json:"id"`
 	Status   int    `json:"status"`
 	Name     string `json:"name"`
@@ -1460,7 +1434,7 @@ type homeGateway struct {
 	ZoneInfo string `json:"zoneInfo"`
 }
 
-type stormListResult struct {
+type franklinStormListResult struct {
 	ID           int    `json:"id"`
 	Onset        string `json:"onset"`
 	Severity     string `json:"severity"`

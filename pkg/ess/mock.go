@@ -16,6 +16,25 @@ var (
 	mockDB storage.Database
 )
 
+func mockInfo() types.ESSProviderInfo {
+	return types.ESSProviderInfo{
+		ID:   "mock",
+		Name: "Mock ESS",
+		Credentials: []types.ESSCredentialField{
+			{
+				Field:       "strategy",
+				Name:        "Strategy",
+				Type:        types.ESSCredentialFieldTypeSelect,
+				Choices:     []types.ESSCredentialFieldChoice{{Value: "simple", Name: "Simple"}},
+				Default:     "simple",
+				Required:    true,
+				Description: "The simulation strategy (e.g., 'simple')",
+			},
+		},
+		Hidden: true,
+	}
+}
+
 // ConfigureMock sets the database for the mock ESS provider.
 func ConfigureMock(db storage.Database) {
 	mockDB = db
@@ -35,21 +54,8 @@ func newMock(siteID string) *MockESS {
 	}
 }
 
-func mockInfo() types.ESSProviderInfo {
-	return types.ESSProviderInfo{
-		ID:   "mock",
-		Name: "Mock ESS",
-		Credentials: []types.ESSCredential{
-			{
-				Field:       "strategy",
-				Name:        "Strategy",
-				Type:        "string",
-				Required:    true,
-				Description: "The simulation strategy (e.g., 'simple')",
-			},
-		},
-		Hidden: true,
-	}
+func (m *MockESS) Name() string {
+	return "mock"
 }
 
 // ApplySettings saves the current system settings for use in the simulation.
@@ -312,7 +318,6 @@ func (m *MockESS) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 	return types.SystemStatus{
 		Timestamp:             now,
 		BatterySOC:            state.BatterySOC,
-		EachBatterySOC:        []float64{state.BatterySOC},
 		BatteryKW:             batteryKW,
 		SolarKW:               solarKW,
 		HomeKW:                homeKW,

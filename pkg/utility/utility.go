@@ -3,9 +3,11 @@ package utility
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 )
 
@@ -25,6 +27,9 @@ type UtilityPrices interface {
 // Utility defines the interface for a utility provider.
 type Utility interface {
 	UtilityPrices
+
+	// Name returns the utility rate name.
+	Name() string
 
 	// ApplySettings updates the system using the provided global settings.
 	ApplySettings(ctx context.Context, settings types.Settings) error
@@ -59,66 +64,59 @@ func (m *Map) Site(ctx context.Context, siteID string, settings types.Settings) 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if p, ok := m.utilities[settings.UtilityProvider]; ok {
-		if err := p.ApplySettings(ctx, settings); err != nil {
-			return nil, err
+	if p, ok := m.utilities[siteID]; ok {
+		if settings.UtilityRate == "" || p.Name() == settings.UtilityRate {
+			if err := p.ApplySettings(ctx, settings); err != nil {
+				return nil, err
+			}
+			return p, nil
 		}
-		return p, nil
+		log.Ctx(ctx).Warn("site changed utility rate", slog.String("expected", settings.UtilityRate), slog.String("actual", p.Name()))
 	}
 
+	var u Utility
 	switch settings.UtilityProvider {
 	case "comed":
 		if m.baseComEdHourly == nil {
 			return nil, fmt.Errorf("comed provider not configured")
 		}
-		// For now we only support BESH
-		if settings.UtilityRate != "comed_besh" {
-			return nil, fmt.Errorf("unsupported comed rate: %s", settings.UtilityRate)
-		}
-		u := &SiteFees{
+		u = &SiteFees{
 			base:   m.baseComEdHourly,
 			siteID: siteID,
 		}
 		if err := u.ApplySettings(ctx, settings); err != nil {
 			return nil, err
 		}
-		m.utilities[settings.UtilityProvider] = u
-		return u, nil
 	case "ameren":
 		if m.baseAmerenSmart == nil {
 			return nil, fmt.Errorf("ameren provider not configured")
 		}
-		if settings.UtilityRate != "ameren_psp" {
-			return nil, fmt.Errorf("unsupported ameren rate: %s", settings.UtilityRate)
-		}
-		u := &SiteFees{
+		u = &SiteFees{
 			base:   m.baseAmerenSmart,
 			siteID: siteID,
 		}
 		if err := u.ApplySettings(ctx, settings); err != nil {
 			return nil, err
 		}
-		m.utilities[settings.UtilityProvider] = u
-		return u, nil
 	case "tou":
-		u := &genericTOU{
+		u = &genericTOU{
 			siteID: siteID,
 		}
 		if err := u.ApplySettings(ctx, settings); err != nil {
 			return nil, err
 		}
-		m.utilities[settings.UtilityProvider] = u
-		return u, nil
 	default:
 		return nil, fmt.Errorf("unknown utility provider: %s", settings.UtilityProvider)
 	}
+	m.utilities[siteID] = u
+	return u, nil
 }
 
 // SetProvider sets a mock provider for testing.
-func (m *Map) SetProvider(name string, provider Utility) {
+func (m *Map) SetProvider(siteID string, provider Utility) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.utilities[name] = provider
+	m.utilities[siteID] = provider
 }
 
 // ListUtilities returns metadata for all supported utility providers.

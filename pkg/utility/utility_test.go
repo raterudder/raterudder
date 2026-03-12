@@ -97,6 +97,10 @@ type mockUtility struct {
 	settingsErr error
 }
 
+func (m *mockUtility) Name() string {
+	return "mock"
+}
+
 func (m *mockUtility) GetCurrentPrice(ctx context.Context) (types.Price, error) {
 	return types.Price{}, nil
 }
@@ -134,16 +138,16 @@ func TestMap(t *testing.T) {
 	t.Run("SetProvider", func(t *testing.T) {
 		m := NewMap()
 		provider := &mockUtility{}
-		m.SetProvider("mock_provider", provider)
-		assert.Equal(t, provider, m.utilities["mock_provider"])
+		m.SetProvider("site1", provider)
+		assert.Equal(t, provider, m.utilities["site1"])
 	})
 
 	t.Run("Site with custom provider", func(t *testing.T) {
 		m := NewMap()
 		provider := &mockUtility{}
-		m.SetProvider("mock_provider", provider)
+		m.SetProvider("site1", provider)
 
-		settings := types.Settings{UtilityProvider: "mock_provider"}
+		settings := types.Settings{UtilityRate: "mock"}
 		u, err := m.Site(ctx, "site1", settings)
 		require.NoError(t, err)
 		assert.Equal(t, provider, u)
@@ -186,7 +190,7 @@ func TestMap(t *testing.T) {
 		u, err := m.Site(ctx, "site1", settings)
 		require.Error(t, err)
 		assert.Nil(t, u)
-		assert.ErrorContains(t, err, "unsupported comed rate: unsupported")
+		assert.ErrorContains(t, err, "invalid utility rate")
 	})
 
 	t.Run("Site with Ameren provider", func(t *testing.T) {
@@ -217,7 +221,7 @@ func TestMap(t *testing.T) {
 		u, err := m.Site(ctx, "site1", settings)
 		require.Error(t, err)
 		assert.Nil(t, u)
-		assert.ErrorContains(t, err, "unsupported ameren rate: unsupported")
+		assert.ErrorContains(t, err, "invalid utility rate")
 	})
 
 	t.Run("Site with TOU provider", func(t *testing.T) {
@@ -236,9 +240,9 @@ func TestMap(t *testing.T) {
 	t.Run("Site caches custom provider but checks ApplySettings error", func(t *testing.T) {
 		m := NewMap()
 		provider := &mockUtility{settingsErr: assert.AnError}
-		m.SetProvider("mock_provider", provider)
+		m.SetProvider("site1", provider)
 
-		settings := types.Settings{UtilityProvider: "mock_provider"}
+		settings := types.Settings{UtilityRate: "mock"}
 		u, err := m.Site(ctx, "site1", settings)
 		require.ErrorIs(t, err, assert.AnError)
 		assert.Nil(t, u)

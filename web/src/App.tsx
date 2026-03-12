@@ -19,6 +19,7 @@ import BetaInterstitialPage from './pages/BetaInterstitialPage';
 import AdminPage from './pages/AdminPage';
 import PrivacyPolicy from './pages/PrivacyPolicy';
 import TermsOfService from './pages/TermsOfService';
+import TeslaCallback from './pages/TeslaCallback';
 
 // Protected Route Wrapper
 const ProtectedRoute = ({ children, loggedIn, loading }: { children: React.ReactElement, loggedIn: boolean, loading: boolean }) => {
@@ -254,6 +255,8 @@ function AppContent() {
                                     <AdminPage />
                                 </ProtectedRoute>
                             </Route>
+
+                            <Route path="/callback/tesla" component={TeslaCallback} />
 
                             {/* Fallback */}
                             <Route>

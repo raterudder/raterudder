@@ -15,6 +15,11 @@ type genericTOU struct {
 	siteID   string
 	periods  []types.UtilityAdditionalFeesPeriod
 	location *time.Location
+	name     string
+}
+
+func (t *genericTOU) Name() string {
+	return t.name
 }
 
 func (t *genericTOU) ApplySettings(ctx context.Context, settings types.Settings) error {
@@ -54,6 +59,7 @@ func (t *genericTOU) ApplySettings(ctx context.Context, settings types.Settings)
 				Description:   "Afternoon/Evening",
 			},
 		}
+		t.name = "example"
 	} else {
 		return fmt.Errorf("unsupported tou rate: %s", settings.UtilityRate)
 	}

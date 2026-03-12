@@ -17,6 +17,7 @@ import (
 	"github.com/NYTimes/gziphandler"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/levenlabs/go-lflag"
+	"github.com/raterudder/raterudder/pkg/common"
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/log"
@@ -211,10 +212,17 @@ func (s *Server) setupHandler() http.Handler {
 	apiMux.HandleFunc("POST /api/feedback", s.handleSubmitFeedback)
 	apiMux.HandleFunc("GET /api/list/feedback", s.handleListFeedback)
 	apiMux.HandleFunc("POST /api/report/browser", s.handleReportBrowser)
+	apiMux.HandleFunc("GET /api/tesla/register", s.handleTeslaRegister)
 
 	mux := http.NewServeMux()
 	// limit request body to 1MB to prevent DoS
-	mux.Handle("/api/", http.MaxBytesHandler(s.authMiddleware(apiMux), 1048576))
+	mux.Handle("/api/", http.MaxBytesHandler(
+		common.CtxFromRequestMiddleware(
+			s.authMiddleware(apiMux),
+		),
+		1048576,
+	))
+	mux.HandleFunc("GET /.well-known/appspecific/com.tesla.3p.public-key.pem", s.handleTeslaPublicKey)
 
 	// serve the web frontend, either from the embedded filesystem or from the dev server
 	if s.devProxy != "" {

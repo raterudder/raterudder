@@ -185,18 +185,29 @@ export interface UtilityRateInfo {
   options: UtilityRateOption[];
 }
 
-export interface ESSCredential {
+export interface ESSCredentialFieldChoice {
+    value: string;
+    name: string;
+}
+
+export type ESSCredentialFieldType = 'select' | 'string' | 'password';
+
+export interface ESSCredentialField {
   field: string;
   name: string;
-  type: string;
+  type: ESSCredentialFieldType;
   required: boolean;
   description?: string;
+  choices?: ESSCredentialFieldChoice[];
+  default?: any;
 }
 
 export interface ESSProviderInfo {
   id: string;
   name: string;
-  credentials: ESSCredential[];
+  credentials: ESSCredentialField[];
+  oAuthURLs?: Record<string, string>;
+  oAuthKey?: ESSCredentialField;
   hidden?: boolean;
 }
 

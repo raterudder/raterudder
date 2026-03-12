@@ -15,6 +15,12 @@ type SiteFees struct {
 	mu      sync.Mutex
 	siteID  string
 	periods []types.UtilityAdditionalFeesPeriod
+	name    string
+}
+
+// Name returns the name of the utility rate
+func (s *SiteFees) Name() string {
+	return s.name
 }
 
 // ApplySettings implements the Utility interface
@@ -35,6 +41,7 @@ func (s *SiteFees) ApplySettings(ctx context.Context, settings types.Settings) e
 				return err
 			}
 			s.periods = fees
+			s.name = settings.UtilityRate
 		case "ameren":
 			if settings.UtilityRate != "ameren_psp" {
 				return fmt.Errorf("invalid utility rate for Ameren: %s", settings.UtilityRate)
@@ -44,6 +51,7 @@ func (s *SiteFees) ApplySettings(ctx context.Context, settings types.Settings) e
 				return err
 			}
 			s.periods = fees
+			s.name = settings.UtilityRate
 		default:
 			return fmt.Errorf("invalid utility provider: %s", settings.UtilityProvider)
 		}

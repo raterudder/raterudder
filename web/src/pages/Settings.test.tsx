@@ -442,4 +442,79 @@ describe('App & Settings', () => {
          await user.click(serviceSelect);
          await waitFor(() => expect(screen.getByRole('option', { name: 'Secret Utility' })).toBeInTheDocument());
     });
+
+    it('shows edit ess if they are set without any credentials', async () => {
+         const user = userEvent.setup();
+         (fetchSettings as any).mockResolvedValue({
+             ...defaultSettings,
+             ess: 'missing_ess',
+             hasCredentials: {
+                 missing_ess: false,
+             }
+         });
+
+         await navigateToSettings();
+
+         // The select should show the ess's name
+         await waitFor(() => expect(screen.getByText("Missing ESS")).toBeInTheDocument());
+
+         const usernameInput = await screen.findByLabelText('Username');
+         expect(usernameInput).toBeInTheDocument();
+         await user.type(usernameInput, 'username');
+
+         const doneBtn = await screen.findByRole('button', { name: 'Done' });
+         expect(doneBtn).toBeInTheDocument();
+         await user.click(doneBtn);
+
+         await waitFor(() => expect(screen.getByText("Pending Save")).toBeInTheDocument());
+    });
+
+    it('handles oAuthKey dropdown and routes to correct oAuthURL', async () => {
+        const user = userEvent.setup();
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            hasCredentials: {}
+        });
+
+        await navigateToSettings();
+
+        // Select Multi Region ESS
+        const essSelect = await screen.findByLabelText(/System Type/i);
+        await user.click(essSelect);
+        const multiRegionOption = await screen.findByRole('option', { name: 'Multi Region ESS' });
+        await user.click(multiRegionOption);
+
+        // Verify Region select is shown and defaults to North America
+        const regionSelect = await screen.findByLabelText(/Region/i);
+        expect(screen.getByText('North America')).toBeInTheDocument();
+
+        // Verify Login button works and goes to NA url
+        const windowOpenSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+        const loginBtn = screen.getByRole('button', { name: /Login to link account/i });
+        fireEvent.click(loginBtn);
+        expect(windowOpenSpy).toHaveBeenCalledWith('https://na.example.com/?state=site1', 'OAuthLogin', expect.any(String));
+
+        // Change select to EU
+        await user.click(regionSelect);
+        const euOption = await screen.findByRole('option', { name: 'Europe' });
+        await user.click(euOption);
+
+        // Fill in required authCode based on apiMocks
+        const passInput = await screen.findByLabelText(/Authorization Code/i, { selector: 'input[type="password"]' });
+        await user.type(passInput, 'testauthcode');
+
+        // Save
+        const saveBtn = screen.getByText('Save Settings');
+        fireEvent.click(saveBtn);
+
+        await waitFor(() => {
+            expect(updateSettings).toHaveBeenCalledWith(expect.anything(), expect.any(String), {
+                multi_region_ess: {
+                    region: 'EU',
+                    authCode: 'testauthcode'
+                }
+            });
+        });
+        windowOpenSpy.mockRestore();
+    });
 });

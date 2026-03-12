@@ -91,6 +91,7 @@ type ESSAuthStatus struct {
 type Credentials struct {
 	Franklin *FranklinCredentials `json:"franklin,omitempty"`
 	Mock     *MockCredentials     `json:"mock,omitempty"`
+	Tesla    *TeslaCredentials    `json:"tesla,omitempty"`
 	// when a new field is added we need to make sure that handleGetSettings and
 	// handleUpdateSettings are updated to handle the new field
 }
@@ -100,7 +101,18 @@ func (c *Credentials) Has() map[string]bool {
 	return map[string]bool{
 		"franklin": c.Franklin != nil,
 		"mock":     c.Mock != nil,
+		"tesla":    c.Tesla != nil,
 	}
+}
+
+// Credentials for Tesla
+type TeslaCredentials struct {
+	AuthCode     string    `json:"authCode,omitempty"`
+	Region       string    `json:"region,omitempty"`
+	AccessToken  string    `json:"accessToken,omitempty"`
+	RefreshToken string    `json:"refreshToken,omitempty"`
+	Expiry       time.Time `json:"expiry,omitempty"`
+	EnergySiteID int64     `json:"energySiteID,omitempty"`
 }
 
 // MockCredentials for simulated ESS

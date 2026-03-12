@@ -79,7 +79,6 @@ func (s *Server) getESSSystem(ctx context.Context, siteID string, settings setti
 
 	// and apply those settings to the ESS
 	newCreds, updated, err := essSystem.Authenticate(ctx, creds)
-
 	now := time.Now().UTC()
 	if err != nil {
 		settings.ESSAuthStatus.ConsecutiveFailures++
@@ -265,6 +264,8 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 					shouldBackfillHistory = true
 				}
 				existingCreds.Franklin = req.Credentials.Franklin
+				existingCreds.Mock = nil
+				existingCreds.Tesla = nil
 			}
 		case "mock":
 			if req.Credentials.Mock != nil {
@@ -273,6 +274,18 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 					shouldBackfillHistory = true
 				}
 				existingCreds.Mock = req.Credentials.Mock
+				existingCreds.Franklin = nil
+				existingCreds.Tesla = nil
+			}
+		case "tesla":
+			if req.Credentials.Tesla != nil {
+				changedESS = true
+				if existingCreds.Tesla == nil {
+					shouldBackfillHistory = true
+				}
+				existingCreds.Tesla = req.Credentials.Tesla
+				existingCreds.Franklin = nil
+				existingCreds.Mock = nil
 			}
 		}
 
@@ -299,12 +312,15 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			existingCreds, _, err = essSystem.Authenticate(ctx, existingCreds)
 			now := time.Now().UTC()
 			if err != nil {
-				newSettings.ESSAuthStatus.ConsecutiveFailures++
-				newSettings.ESSAuthStatus.LastAttempt = now
-				if dbErr := s.storage.SetSettings(ctx, siteID, newSettings, types.CurrentSettingsVersion); dbErr != nil {
+				log.Ctx(ctx).WarnContext(ctx, "failed to verify ess credentials", slog.Any("error", err))
+
+				// purposefully store the existing settings with the auth status updated
+				// and NOT the new settings since the credentials were not verified
+				existing.ESSAuthStatus.ConsecutiveFailures++
+				existing.ESSAuthStatus.LastAttempt = now
+				if dbErr := s.storage.SetSettings(ctx, siteID, existing, types.CurrentSettingsVersion); dbErr != nil {
 					log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status", slog.Any("error", dbErr))
 				}
-				log.Ctx(ctx).WarnContext(ctx, "failed to verify ess credentials", slog.Any("error", err))
 				writeJSONError(w, fmt.Sprintf("failed to verify ess credentials: %v", err), http.StatusBadRequest)
 				return
 			}

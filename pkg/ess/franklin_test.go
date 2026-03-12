@@ -2,8 +2,6 @@ package ess
 
 import (
 	"context"
-	"crypto/md5"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -16,82 +14,6 @@ import (
 )
 
 func TestFranklin(t *testing.T) {
-	t.Run("Login Flow", func(t *testing.T) {
-		// Mock Server
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
-				// Verify payload
-				require.NoError(t, r.ParseForm())
-				assert.Equal(t, "user@example.com", r.Form.Get("account"))
-				assert.Equal(t, "pass", r.Form.Get("password"))
-
-				// Return success token
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"code":    200,
-					"success": true,
-					"result": map[string]interface{}{
-						"token": "fake-token-123",
-					},
-				})
-				return
-			}
-			http.Error(w, "not found", 404)
-		}))
-		defer ts.Close()
-
-		f := &Franklin{
-			client:      ts.Client(),
-			baseURL:     ts.URL,
-			username:    "user@example.com",
-			md5Password: "pass",
-			gatewayID:   "GW123",
-		}
-
-		err := f.ensureLogin(context.Background())
-		require.NoError(t, err, "login should succeed")
-
-		assert.Equal(t, "fake-token-123", f.tokenStr, "token should match")
-	})
-
-	t.Run("AutoFetchGatewayID", func(t *testing.T) {
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"code":    200,
-					"success": true,
-					"result": map[string]interface{}{
-						"token": "tok",
-					},
-				})
-				return
-			}
-			if r.URL.Path == "/hes-gateway/terminal/getHomeGatewayList" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"code":    200,
-					"success": true,
-					"result": []map[string]interface{}{
-						{"id": "AUTO-GW-123"},
-					},
-				})
-				return
-			}
-			http.Error(w, "not found: "+r.URL.Path, 404)
-		}))
-		defer ts.Close()
-
-		f := &Franklin{
-			client:      ts.Client(),
-			baseURL:     ts.URL,
-			username:    "u",
-			md5Password: "p",
-			// No gatewayID
-		}
-
-		err := f.ensureLogin(context.Background())
-		require.NoError(t, err, "login should succeed")
-		assert.Equal(t, "AUTO-GW-123", f.gatewayID, "Should auto-fetch gateway ID")
-	})
-
 	t.Run("GetStatus", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
@@ -1050,13 +972,12 @@ func TestFranklin(t *testing.T) {
 			randomStr := "temp-token-md5"
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
+					assert.Empty(t, r.Header.Get("logintoken"))
 					require.NoError(t, r.ParseForm())
 					assert.Equal(t, "user@example.com", r.Form.Get("account"))
 
 					// Should send the MD5 of "myrawpassword"
-					hash := md5.Sum([]byte("myrawpassword"))
-					expectedHash := hex.EncodeToString(hash[:])
-					assert.Equal(t, expectedHash, r.Form.Get("password"))
+					assert.Equal(t, "270f69c4e37e60424744310f20018ff2", r.Form.Get("password"))
 
 					json.NewEncoder(w).Encode(map[string]interface{}{
 						"code":    200,
@@ -1106,10 +1027,8 @@ func TestFranklin(t *testing.T) {
 			assert.True(t, changed)
 			assert.Equal(t, randomStr, newCreds.Franklin.Token)
 			assert.Equal(t, "myrawpassword", newCreds.Franklin.Password, "Raw password should not be cleared")
-
-			hash := md5.Sum([]byte("myrawpassword"))
 			assert.Empty(t, newCreds.Franklin.MD5Password, "MD5 hash should not be set")
-			assert.Equal(t, hex.EncodeToString(hash[:]), f.md5Password, "Internal MD5 hash state should be set")
+			assert.Equal(t, "270f69c4e37e60424744310f20018ff2", f.md5Password, "Internal MD5 hash state should be set")
 		})
 
 		t.Run("AutoFetchGatewayID", func(t *testing.T) {
@@ -1228,6 +1147,7 @@ func TestFranklin(t *testing.T) {
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
 					loginCalls++
+					assert.Empty(t, r.Header.Get("logintoken"))
 					json.NewEncoder(w).Encode(map[string]interface{}{
 						"code":    200,
 						"success": true,
@@ -1274,6 +1194,7 @@ func TestFranklin(t *testing.T) {
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
 					loginCalls++
+					assert.Empty(t, r.Header.Get("logintoken"))
 					json.NewEncoder(w).Encode(map[string]interface{}{
 						"code":    200,
 						"success": true,
@@ -1320,40 +1241,50 @@ func TestFranklin(t *testing.T) {
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
 					loginCalls++
+					assert.Empty(t, r.Header.Get("logintoken"))
 					json.NewEncoder(w).Encode(map[string]interface{}{
 						"code":    200,
 						"success": true,
-						"result":  map[string]interface{}{"token": "fresh-token-xyz"},
+						"result":  map[string]interface{}{"token": "new-token"},
 					})
 					return
 				}
 				if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
-					json.NewEncoder(w).Encode(map[string]interface{}{
-						"code":    200,
-						"success": true,
-						"result":  map[string]interface{}{"totalCap": 30.0},
-					})
+					token := r.Header.Get("logintoken")
+					if token == "expired-token" {
+						json.NewEncoder(w).Encode(map[string]interface{}{
+							"code":    401,
+							"success": false,
+							"message": "invalid token!",
+						})
+						return
+					}
+					if token == "new-token" {
+						json.NewEncoder(w).Encode(map[string]interface{}{
+							"code":    200,
+							"success": true,
+							"result":  map[string]interface{}{"totalCap": 30.0, "timeZone": "UTC"},
+						})
+						return
+					}
+					http.Error(w, "unexpected token: "+token, 400)
 					return
 				}
 				http.Error(w, "not found: "+r.URL.Path, 404)
 			}))
 			defer ts.Close()
 
-			// Simulate a Franklin instance that already has a different user cached.
 			f := &Franklin{
-				client:      ts.Client(),
-				baseURL:     ts.URL,
-				username:    "old-user@example.com",
-				md5Password: "old-pass",
-				tokenStr:    "old-token",
+				client:  ts.Client(),
+				baseURL: ts.URL,
 			}
 
 			creds := types.Credentials{
 				Franklin: &types.FranklinCredentials{
-					Username:    "new-user@example.com",
-					MD5Password: "new-pass",
+					Username:    "user@example.com",
+					MD5Password: "pass",
 					GatewayID:   "gw1",
-					Token:       "old-stored-token", // stale — credentials changed
+					Token:       "expired-token",
 				},
 			}
 
@@ -1361,64 +1292,9 @@ func TestFranklin(t *testing.T) {
 			require.NoError(t, err)
 			assert.True(t, changed, "changed should be true because credentials changed and a new token was obtained")
 			assert.Equal(t, 1, loginCalls, "login should be called when credentials have changed")
-			assert.Equal(t, "fresh-token-xyz", newCreds.Franklin.Token, "new token should be written back into credentials")
-			assert.Equal(t, "fresh-token-xyz", f.tokenStr)
+			assert.Equal(t, "new-token", newCreds.Franklin.Token, "new token should be written back into credentials")
+			assert.Equal(t, "new-token", f.tokenStr)
 		})
-	})
-
-	t.Run("Token Retry", func(t *testing.T) {
-		var callCount int
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			callCount++
-			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"code":    200,
-					"success": true,
-					"result":  map[string]interface{}{"token": "new-token"},
-				})
-				return
-			}
-			if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
-				token := r.Header.Get("logintoken")
-				if token == "expired-token" {
-					json.NewEncoder(w).Encode(map[string]interface{}{
-						"code":    401,
-						"success": false,
-						"message": "Token expired",
-					})
-					return
-				}
-				if token == "new-token" {
-					json.NewEncoder(w).Encode(map[string]interface{}{
-						"code":    200,
-						"success": true,
-						"result":  map[string]interface{}{"totalCap": 30.0, "timeZone": "UTC"},
-					})
-					return
-				}
-				http.Error(w, "unexpected token: "+token, 400)
-				return
-			}
-			http.Error(w, "not found: "+r.URL.Path, 404)
-		}))
-		defer ts.Close()
-
-		f := &Franklin{
-			client:      ts.Client(),
-			baseURL:     ts.URL,
-			username:    "user",
-			md5Password: "pass",
-			tokenStr:    "expired-token",
-			gatewayID:   "g",
-		}
-
-		_, err := f.getDeviceInfo(context.Background())
-		require.NoError(t, err)
-		assert.Equal(t, "new-token", f.tokenStr)
-		// 1. getDeviceInfo (expired)
-		// 2. login
-		// 3. getDeviceInfo (success)
-		assert.Equal(t, 3, callCount)
 	})
 
 	t.Run("Login Failure No Retry", func(t *testing.T) {

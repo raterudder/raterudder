@@ -39,6 +39,11 @@ const BetaInterstitialPage: React.FC = () => {
                                 <Select.Value placeholder="Select your utility...">
                                     {utility === 'ameren' ? 'Ameren' : utility === 'comed' ? 'ComEd' : utility === 'other' ? 'Other' : 'Select your utility...'}
                                 </Select.Value>
+                                <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                        <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                    </svg>
+                                </Select.Icon>
                             </Select.Trigger>
                             <Select.Portal>
                                 <Select.Positioner style={{ zIndex: 1000, width: 'var(--anchor-width)' }}>
@@ -68,6 +73,11 @@ const BetaInterstitialPage: React.FC = () => {
                                 <Select.Value placeholder="Select your battery...">
                                     {battery === 'franklin' ? 'FranklinWH' : battery === 'other' ? 'Other' : 'Select your battery...'}
                                 </Select.Value>
+                                <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                        <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                    </svg>
+                                </Select.Icon>
                             </Select.Trigger>
                             <Select.Portal>
                                 <Select.Positioner style={{ zIndex: 1000, width: 'var(--anchor-width)' }}>

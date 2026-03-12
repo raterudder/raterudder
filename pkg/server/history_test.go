@@ -58,7 +58,7 @@ func TestHistory(t *testing.T) {
 	mockP.SetSystem(types.SiteIDNone, mockE)
 
 	mockUMap := utility.NewMap()
-	mockUMap.SetProvider("test", mockU)
+	mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 	srv := &Server{
 		utilities:  mockUMap,

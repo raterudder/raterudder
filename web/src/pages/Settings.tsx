@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { fetchSettings, updateSettings, fetchUtilities, fetchESSList, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type ESSProviderInfo } from '../api';
 import { Field } from '@base-ui/react/field';
 import { Input } from '@base-ui/react/input';
+import { Button } from '@base-ui/react/button';
 import { Switch } from '@base-ui/react/switch';
 import { Collapsible } from '@base-ui/react/collapsible';
 import { Select } from '@base-ui/react/select';
@@ -43,6 +44,15 @@ const Settings = ({ siteID }: { siteID?: string }) => {
             setIsESSDirty(false);
             setUtilities(utilitiesData);
             setEssProviders(essProvidersData);
+
+            // if the ESS was configured but the credentials are not set then put
+            // the ESS section into edit mode
+            // we are explicitly checking for false in case the ess doesn't support
+            // credentials we don't set edit every time when its undefined
+            if (!isESSDirty && settingsData.ess && settingsData.hasCredentials?.[settingsData.ess] === false) {
+                setEditESS(true);
+            }
+
             setError(null);
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to load settings');
@@ -65,14 +75,21 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                 const provider = essProviders.find(p => p.id === settings.ess);
                 if (provider) {
                     credentialsPayload = { [provider.id]: {} };
-                    for (const cred of provider.credentials) {
-                        const val = essCredentials[cred.field] || "";
+                    const processCred = (cred: typeof provider.credentials[0]) => {
+                        const val = essCredentials[cred.field] || cred.default || "";
                         if (cred.required && !val) {
                             throw new Error(`The ${cred.name} field is required.`);
                         }
                         if (val) {
                             credentialsPayload[provider.id][cred.field] = val;
                         }
+                    };
+
+                    for (const cred of provider.credentials) {
+                        processCred(cred);
+                    }
+                    if (provider.oAuthKey) {
+                        processCred(provider.oAuthKey);
                     }
                 }
             }
@@ -107,6 +124,51 @@ const Settings = ({ siteID }: { siteID?: string }) => {
     const handleChange = (field: keyof SettingsType, value: any) => {
         if (!settings) return;
         setSettings({ ...settings, [field]: value });
+    };
+
+    const handleOAuthLogin = (url: string, fieldName: string) => {
+        const width = 500;
+        const height = 600;
+        const left = window.screenX + (window.outerWidth - width) / 2;
+        const top = window.screenY + (window.outerHeight - height) / 2;
+
+        const oauthUrl = new URL(url);
+        // add the siteID as the state parameter
+        if (siteID) {
+            oauthUrl.searchParams.set('state', siteID);
+        }
+
+        const popup = window.open(
+            oauthUrl.toString(),
+            'OAuthLogin',
+            `width=${width},height=${height},left=${left},top=${top},status=yes,scrollbars=yes`
+        );
+
+        if (!popup) {
+            setError('Please allow popups for this site to log in.');
+            return;
+        }
+
+        const listener = (event: MessageEvent) => {
+            if (event.origin !== window.location.origin) return;
+
+            if (event.data && event.data.type === 'OAUTH_CODE') {
+                if (siteID && event.data.state !== siteID && event.data.state) {
+                    setError('Authentication state mismatch. Please try again.');
+                    window.removeEventListener('message', listener);
+                    return;
+                }
+
+                setEssCredentials(prev => ({
+                    ...prev,
+                    [fieldName]: event.data.code
+                }));
+                setIsESSDirty(true);
+                window.removeEventListener('message', listener);
+            }
+        };
+
+        window.addEventListener('message', listener);
     };
 
     if (loading) return <div>Loading settings...</div>;
@@ -192,6 +254,11 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                     <Select.Value>
                                         {utilities.find(u => u.id === settings.utilityProvider)?.name || 'Select a service...'}
                                     </Select.Value>
+                                    <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                            <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                        </svg>
+                                    </Select.Icon>
                                 </Select.Trigger>
                                 <Select.Portal>
                                     <Select.Positioner className="select-positioner">
@@ -238,6 +305,11 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                             <Select.Value>
                                                 {provider.rates.find(r => r.id === settings.utilityRate)?.name || 'Select a rate/plan...'}
                                             </Select.Value>
+                                            <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                    <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                </svg>
+                                            </Select.Icon>
                                         </Select.Trigger>
                                         <Select.Portal>
                                             <Select.Positioner className="select-positioner">
@@ -285,6 +357,11 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                                             <Select.Value>
                                                                 {opt.choices?.find(c => c.value === (settings.utilityRateOptions?.[opt.field] || opt.default))?.name || (settings.utilityRateOptions?.[opt.field] || opt.default)}
                                                             </Select.Value>
+                                                            <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                                    <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                                </svg>
+                                                            </Select.Icon>
                                                         </Select.Trigger>
                                                         <Select.Portal>
                                                             <Select.Positioner className="select-positioner">
@@ -368,6 +445,11 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                     <Select.Value>
                                         {essProviders.find(u => u.id === settings.ess)?.name || 'Select a system type...'}
                                     </Select.Value>
+                                    <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                            <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                        </svg>
+                                    </Select.Icon>
                                 </Select.Trigger>
                                 <Select.Portal>
                                     <Select.Positioner className="select-positioner">
@@ -389,22 +471,111 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                         {(() => {
                             const provider = essProviders.find(p => p.id === settings.ess);
                             if (!provider) return null;
-
-                            return provider.credentials.map(cred => (
-                                <Field.Root key={cred.field} className="form-group">
-                                    <Field.Label>{cred.name}</Field.Label>
-                                    <Input
-                                        type={cred.type === 'password' ? 'password' : 'text'}
-                                        value={essCredentials[cred.field] || ""}
-                                        onChange={(e) => {
-                                            setEssCredentials({ ...essCredentials, [cred.field]: e.target.value });
-                                            setIsESSDirty(true);
-                                        }}
-                                        placeholder={`Enter ${cred.name}`}
-                                    />
-                                    {cred.description && <Field.Description>{cred.description}</Field.Description>}
-                                </Field.Root>
-                            ));
+                            
+                            return (
+                                <>
+                                    {provider.oAuthURLs && Object.keys(provider.oAuthURLs).length > 0 && (
+                                        <div style={{ marginBottom: '1rem' }}>
+                                            {provider.oAuthKey && provider.oAuthKey.choices && (
+                                                <Field.Root className="form-group" style={{ marginBottom: '1rem' }}>
+                                                    <Field.Label>{provider.oAuthKey.name}</Field.Label>
+                                                    <Select.Root
+                                                        value={essCredentials[provider.oAuthKey.field] || provider.oAuthKey.default || ""}
+                                                        onValueChange={(value) => {
+                                                            setEssCredentials({ ...essCredentials, [provider.oAuthKey!.field]: value as string });
+                                                            setIsESSDirty(true);
+                                                        }}
+                                                    >
+                                                        <Select.Trigger className="select-trigger" aria-label={provider.oAuthKey.name}>
+                                                            <Select.Value>
+                                                                {provider.oAuthKey.choices?.find(c => c.value === (essCredentials[provider.oAuthKey!.field] || provider.oAuthKey!.default))?.name || (essCredentials[provider.oAuthKey!.field] || provider.oAuthKey!.default)}
+                                                            </Select.Value>
+                                                            <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                                    <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                                </svg>
+                                                            </Select.Icon>
+                                                        </Select.Trigger>
+                                                        <Select.Portal>
+                                                            <Select.Positioner className="select-positioner">
+                                                                <Select.Popup className="select-popup">
+                                                                    {provider.oAuthKey.choices.map(c => (
+                                                                        <Select.Item key={c.value} className="select-item" value={c.value}>
+                                                                            <Select.ItemText>{c.name}</Select.ItemText>
+                                                                        </Select.Item>
+                                                                    ))}
+                                                                </Select.Popup>
+                                                            </Select.Positioner>
+                                                        </Select.Portal>
+                                                    </Select.Root>
+                                                    {provider.oAuthKey.description && <Field.Description>{provider.oAuthKey.description}</Field.Description>}
+                                                </Field.Root>
+                                            )}
+                                            <Button
+                                                className="save-button"
+                                                style={{ width: '100%' }}
+                                                onClick={() => {
+                                                    const keyVal = provider.oAuthKey ? (essCredentials[provider.oAuthKey.field] || provider.oAuthKey.default || Object.keys(provider.oAuthURLs!)[0]) : Object.keys(provider.oAuthURLs!)[0];
+                                                    const url = provider.oAuthURLs![keyVal];
+                                                    if (url) {
+                                                        handleOAuthLogin(url, "authCode");
+                                                    }
+                                                }}
+                                                type="button"
+                                            >
+                                                Login to link account
+                                            </Button>
+                                        </div>
+                                    )}
+                                    {provider.credentials.map(cred => (
+                                        <Field.Root key={cred.field} className="form-group">
+                                            <Field.Label>{cred.name}</Field.Label>
+                                            {cred.type === 'select' ? (
+                                                <Select.Root
+                                                    value={essCredentials[cred.field] || cred.default || ""}
+                                                    onValueChange={(value) => {
+                                                        setEssCredentials({ ...essCredentials, [cred.field]: value as string });
+                                                        setIsESSDirty(true);
+                                                    }}
+                                                >
+                                                    <Select.Trigger className="select-trigger" aria-label={cred.name}>
+                                                        <Select.Value>
+                                                            {cred.choices?.find(c => c.value === (essCredentials[cred.field] || cred.default))?.name || (essCredentials[cred.field] || cred.default)}
+                                                        </Select.Value>
+                                                        <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                                <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                            </svg>
+                                                        </Select.Icon>
+                                                    </Select.Trigger>
+                                                    <Select.Portal>
+                                                        <Select.Positioner className="select-positioner">
+                                                            <Select.Popup className="select-popup">
+                                                                {cred.choices?.map((choice) => (
+                                                                    <Select.Item key={choice.value} className="select-item" value={choice.value}>
+                                                                        <Select.ItemText>{choice.name}</Select.ItemText>
+                                                                    </Select.Item>
+                                                                ))}
+                                                            </Select.Popup>
+                                                        </Select.Positioner>
+                                                    </Select.Portal>
+                                                </Select.Root>
+                                            ) : (
+                                                <Input
+                                                    value={essCredentials[cred.field] || cred.default || ""}
+                                                    type={cred.type === 'password' ? 'password' : 'text'}
+                                                    onChange={(e) => {
+                                                        setEssCredentials({ ...essCredentials, [cred.field]: e.target.value });
+                                                        setIsESSDirty(true);
+                                                    }}
+                                                    placeholder={`Enter ${cred.name}`}
+                                                />
+                                            )}
+                                            {cred.description && <Field.Description>{cred.description}</Field.Description>}
+                                        </Field.Root>
+                                    ))}
+                                </>
+                            );
                         })()}
 
                         {editESS && (
@@ -684,6 +855,11 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                                 'Lowest / Default'
                                             }
                                         </Select.Value>
+                                        <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                            </svg>
+                                        </Select.Icon>
                                     </Select.Trigger>
                                     <Select.Portal>
                                         <Select.Positioner className="select-positioner">

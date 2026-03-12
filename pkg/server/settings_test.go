@@ -43,7 +43,7 @@ func TestHandleGetSettings(t *testing.T) {
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 		mockUMap := utility.NewMap()
-		mockUMap.SetProvider("test", mockU)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 		return &Server{
 			utilities:   mockUMap,
@@ -156,7 +156,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 		mockUMap := utility.NewMap()
-		mockUMap.SetProvider("test", mockU)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 		return &Server{
 			utilities:   mockUMap,
@@ -233,7 +233,6 @@ func TestHandleUpdateSettings(t *testing.T) {
 		// 1. Failures = 0, should succeed
 		s0 := settingsWithVersion{
 			Settings: types.Settings{
-				ESS: "franklin",
 				ESSAuthStatus: types.ESSAuthStatus{
 					ConsecutiveFailures: 0,
 				},
@@ -245,7 +244,6 @@ func TestHandleUpdateSettings(t *testing.T) {
 		// 2. Failures = 1, should succeed immediately
 		s1 := settingsWithVersion{
 			Settings: types.Settings{
-				ESS: "franklin",
 				ESSAuthStatus: types.ESSAuthStatus{
 					ConsecutiveFailures: 1,
 					LastAttempt:         time.Now(),
@@ -258,7 +256,6 @@ func TestHandleUpdateSettings(t *testing.T) {
 		// 3. Failures = 2, wait 30s. If last attempt was 10s ago, should fail.
 		s2 := settingsWithVersion{
 			Settings: types.Settings{
-				ESS: "franklin",
 				ESSAuthStatus: types.ESSAuthStatus{
 					ConsecutiveFailures: 2,
 					LastAttempt:         time.Now().Add(-10 * time.Second),
@@ -271,7 +268,6 @@ func TestHandleUpdateSettings(t *testing.T) {
 		// 4. Failures = 2, wait 30s. If last attempt was 31s ago, should succeed.
 		s2_expired := settingsWithVersion{
 			Settings: types.Settings{
-				ESS: "franklin",
 				ESSAuthStatus: types.ESSAuthStatus{
 					ConsecutiveFailures: 2,
 					LastAttempt:         time.Now().Add(-31 * time.Second),
@@ -284,7 +280,6 @@ func TestHandleUpdateSettings(t *testing.T) {
 		// 5. Failures = 5, backoff should be 240s (4 mins). If last attempt was 1 min ago, should fail.
 		s5 := settingsWithVersion{
 			Settings: types.Settings{
-				ESS: "franklin",
 				ESSAuthStatus: types.ESSAuthStatus{
 					ConsecutiveFailures: 5,
 					LastAttempt:         time.Now().Add(-1 * time.Minute),
@@ -297,7 +292,6 @@ func TestHandleUpdateSettings(t *testing.T) {
 		// 6. Failures = 5, backoff should be 240s. If last attempt was 5 mins ago, should succeed.
 		s5_expired := settingsWithVersion{
 			Settings: types.Settings{
-				ESS: "franklin",
 				ESSAuthStatus: types.ESSAuthStatus{
 					ConsecutiveFailures: 5,
 					LastAttempt:         time.Now().Add(-5 * time.Minute),
@@ -438,7 +432,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 	t.Run("Update Settings - Backfills History on New Credentials", func(t *testing.T) {
 		srv, mockES := newAuthServer("my-audience", []string{"admin@example.com"}, nil)
 
-		// Create a request with franklin credentials and valid settings
+		// Create a request with mock credentials and valid settings
 		s := struct {
 			types.Settings
 			Credentials *types.Credentials `json:"credentials,omitempty"`
@@ -450,10 +444,10 @@ func TestHandleUpdateSettings(t *testing.T) {
 				SolarTrendRatioMax:          3.0,
 				SolarBellCurveMultiplier:    1.0,
 				UtilityProvider:             "test",
-				ESS:                         "franklin",
+				ESS:                         "mock",
 			},
 			Credentials: &types.Credentials{
-				Franklin: &types.FranklinCredentials{Username: "foo", MD5Password: "bar"},
+				Mock: &types.MockCredentials{Strategy: "foo"},
 			},
 		}
 		b, err := json.Marshal(s)
@@ -467,9 +461,9 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		// Expect Authenticate to be called with the provided credentials
 		mockES.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
-			return c.Franklin != nil && c.Franklin.Username == "foo" && c.Franklin.MD5Password == "bar"
+			return c.Mock != nil && c.Mock.Strategy == "foo"
 		})).Return(types.Credentials{
-			Franklin: &types.FranklinCredentials{Username: "foo", MD5Password: "bar", GatewayID: "gw-123"},
+			Mock: &types.MockCredentials{Strategy: "foo"},
 		}, true, nil)
 
 		// Expect GetEnergyHistory (Sync) because we are providing new credentials
@@ -490,7 +484,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 	t.Run("Update Settings - Does Not Backfill History on Unchanged Credentials", func(t *testing.T) {
 		srv, mockES := newAuthServer("my-audience", []string{"admin@example.com"}, nil)
 
-		// Create a request with franklin credentials
+		// Create a request with mock credentials
 		s := struct {
 			types.Settings
 			Credentials *types.Credentials `json:"credentials,omitempty"`
@@ -502,10 +496,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 				SolarTrendRatioMax:          3.0,
 				SolarBellCurveMultiplier:    1.0,
 				UtilityProvider:             "test",
-				ESS:                         "franklin",
-			},
-			Credentials: &types.Credentials{
-				Franklin: &types.FranklinCredentials{Username: "foo", MD5Password: "bar"},
+				ESS:                         "mock",
 			},
 		}
 		b, err := json.Marshal(s)
@@ -516,11 +507,12 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		// Setup Mock Storage to return existing credentials (so they are not new)
 		existingCreds := types.Credentials{
-			Franklin: &types.FranklinCredentials{Username: "old", MD5Password: "old"},
+			Mock: &types.MockCredentials{Strategy: "foo"},
 		}
 		encrypted, _ := srv.encryptCredentials(req.Context(), existingCreds)
 
 		existingSettings := types.Settings{
+			ESS:                  "mock",
 			EncryptedCredentials: encrypted,
 		}
 
@@ -530,13 +522,6 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		// Expect validation to pass
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Once()
-
-		// Expect Authenticate to be called with the merged credentials
-		mockES.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
-			return c.Franklin != nil && c.Franklin.Username == "foo" && c.Franklin.MD5Password == "bar"
-		})).Return(types.Credentials{
-			Franklin: &types.FranklinCredentials{Username: "foo", MD5Password: "bar", GatewayID: "gw-123"},
-		}, true, nil)
 
 		// Expect SetSettings to be called
 		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, types.CurrentSettingsVersion).Return(nil)
@@ -583,7 +568,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockU := &mockUtility{}
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
 		mockUMap := utility.NewMap()
-		mockUMap.SetProvider("test", mockU)
+		mockUMap.SetProvider("test-site", mockU)
 		mockS := &mockStorage{}
 		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil).Maybe()
 		mockS.On("UpdateSite", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -641,7 +626,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockU2 := &mockUtility{}
 		mockU2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
 		mockUMap2 := utility.NewMap()
-		mockUMap2.SetProvider("test", mockU2)
+		mockUMap2.SetProvider(types.SiteIDNone, mockU2)
 
 		mockS2 := &mockStorage{}
 		mockES2 := &mockESS{}
@@ -678,7 +663,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		s := types.Settings{
 			UtilityProvider:             "test",
-			ESS:                         "franklin",
+			ESS:                         "mock",
 			Release:                     "production",
 			MinBatterySOC:               20,
 			IgnoreHourUsageOverMultiple: 2,
@@ -692,9 +677,8 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}{
 			Settings: s,
 			Credentials: &types.Credentials{
-				Franklin: &types.FranklinCredentials{
-					Username: "newuser",
-					Password: "newpassword",
+				Mock: &types.MockCredentials{
+					Strategy: "foo",
 				},
 			},
 		}
@@ -709,11 +693,11 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
 	})
 
-	t.Run("Rate Limit Active (429) after 2 Failures (Same Creds)", func(t *testing.T) {
+	t.Run("Rate Limit Active (429) after 2 Failures", func(t *testing.T) {
 		mockU2 := &mockUtility{}
 		mockU2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
 		mockUMap2 := utility.NewMap()
-		mockUMap2.SetProvider("test", mockU2)
+		mockUMap2.SetProvider(types.SiteIDNone, mockU2)
 
 		mockS2 := &mockStorage{}
 		mockES2 := &mockESS{}
@@ -731,15 +715,9 @@ func TestHandleUpdateSettings(t *testing.T) {
 			encryptionKey: "test-secret-key-1234567890123456",
 		}
 
-		// Create encrypted creds to match what we send, so changed=false
-		enc, _ := srv.encryptCredentials(context.Background(), types.Credentials{
-			Franklin: &types.FranklinCredentials{Username: "sameuser"},
-		})
-
 		mockS2.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
-			UtilityProvider:      "test",
-			ESS:                  "franklin",
-			EncryptedCredentials: enc,
+			UtilityProvider: "test",
+			ESS:             "mock",
 			ESSAuthStatus: types.ESSAuthStatus{
 				ConsecutiveFailures: 2,
 				LastAttempt:         time.Now().UTC().Add(-10 * time.Second), // 20s remaining of 30s
@@ -748,7 +726,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		s := types.Settings{
 			UtilityProvider:             "test",
-			ESS:                         "franklin",
+			ESS:                         "mock",
 			Release:                     "production",
 			MinBatterySOC:               20,
 			IgnoreHourUsageOverMultiple: 2,
@@ -762,9 +740,8 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}{
 			Settings: s,
 			Credentials: &types.Credentials{
-				Franklin: &types.FranklinCredentials{
-					Username: "sameuser",
-					Password: "", // No password change
+				Mock: &types.MockCredentials{
+					Strategy: "sameuser",
 				},
 			},
 		}
@@ -785,86 +762,11 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.Contains(t, errResp.Error, "try again in 20s")
 	})
 
-	t.Run("Rate Limit Active (429) after 2 Failures (Different Creds)", func(t *testing.T) {
+	t.Run("Rate Limit Expired (200) after 5 Minutes", func(t *testing.T) {
 		mockU2 := &mockUtility{}
 		mockU2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
 		mockUMap2 := utility.NewMap()
-		mockUMap2.SetProvider("test", mockU2)
-
-		mockS2 := &mockStorage{}
-		mockES2 := &mockESS{}
-		mockES2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockP2 := ess.NewMap()
-		mockP2.SetSystem(types.SiteIDNone, mockES2)
-
-		srv := &Server{
-			utilities:     mockUMap2,
-			ess:           mockP2,
-			storage:       mockS2,
-			singleSite:    true,
-			adminEmails:   []string{"admin@example.com"},
-			release:       "production",
-			encryptionKey: "test-secret-key-1234567890123456",
-		}
-
-		enc, _ := srv.encryptCredentials(context.Background(), types.Credentials{
-			Franklin: &types.FranklinCredentials{Username: "olduser"},
-		})
-
-		mockS2.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
-			UtilityProvider:      "test",
-			ESS:                  "franklin",
-			EncryptedCredentials: enc,
-			ESSAuthStatus: types.ESSAuthStatus{
-				ConsecutiveFailures: 2,
-				LastAttempt:         time.Now().UTC().Add(-10 * time.Second), // 20s remaining of 30s
-			},
-		}, types.CurrentSettingsVersion, nil).Once()
-
-		s := types.Settings{
-			UtilityProvider:             "test",
-			ESS:                         "franklin",
-			Release:                     "production",
-			MinBatterySOC:               20,
-			IgnoreHourUsageOverMultiple: 2,
-			SolarTrendRatioMax:          3,
-			SolarBellCurveMultiplier:    1,
-		}
-
-		body := struct {
-			types.Settings
-			Credentials *types.Credentials `json:"credentials"`
-		}{
-			Settings: s,
-			Credentials: &types.Credentials{
-				Franklin: &types.FranklinCredentials{
-					Username: "newuser",
-					Password: "newpassword",
-				},
-			},
-		}
-
-		b, _ := json.Marshal(body)
-		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
-		user := types.User{ID: "admin@example.com", Email: "admin@example.com", Admin: true}
-		req = req.WithContext(context.WithValue(context.WithValue(req.Context(), userContextKey, user), siteIDContextKey, types.SiteIDNone))
-		w := httptest.NewRecorder()
-
-		srv.handleUpdateSettings(w, req)
-		assert.Equal(t, http.StatusTooManyRequests, w.Result().StatusCode)
-		var errResp struct {
-			Error string `json:"error"`
-		}
-		err := json.NewDecoder(w.Result().Body).Decode(&errResp)
-		require.NoError(t, err)
-		assert.Contains(t, errResp.Error, "try again in 20s")
-	})
-
-	t.Run("Rate Limit Expired (200) after 5 Failures", func(t *testing.T) {
-		mockU2 := &mockUtility{}
-		mockU2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockUMap2 := utility.NewMap()
-		mockUMap2.SetProvider("test", mockU2)
+		mockUMap2.SetProvider(types.SiteIDNone, mockU2)
 
 		mockS2 := &mockStorage{}
 		mockES2 := &mockESS{}
@@ -888,14 +790,9 @@ func TestHandleUpdateSettings(t *testing.T) {
 			encryptionKey: "test-secret-key-1234567890123456",
 		}
 
-		enc, _ := srv.encryptCredentials(context.Background(), types.Credentials{
-			Franklin: &types.FranklinCredentials{Username: "sameuser"},
-		})
-
 		mockS2.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
-			UtilityProvider:      "test",
-			ESS:                  "franklin",
-			EncryptedCredentials: enc,
+			UtilityProvider: "test",
+			ESS:             "mock",
 			ESSAuthStatus: types.ESSAuthStatus{
 				ConsecutiveFailures: 5,
 				LastAttempt:         time.Now().UTC().Add(-5 * time.Minute),
@@ -904,7 +801,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		s := types.Settings{
 			UtilityProvider:             "test",
-			ESS:                         "franklin",
+			ESS:                         "mock",
 			Release:                     "production",
 			MinBatterySOC:               20,
 			IgnoreHourUsageOverMultiple: 2,
@@ -918,8 +815,8 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}{
 			Settings: s,
 			Credentials: &types.Credentials{
-				Franklin: &types.FranklinCredentials{
-					Username: "sameuser",
+				Mock: &types.MockCredentials{
+					Strategy: "sameuser",
 				},
 			},
 		}
