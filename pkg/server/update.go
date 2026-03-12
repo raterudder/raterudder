@@ -260,8 +260,6 @@ func (s *Server) performSiteUpdate(
 		return nil, "", fmt.Errorf("insufficient future pricing data")
 	}
 
-	log.Ctx(ctx).DebugContext(ctx, "update: starting decision")
-
 	// decide Action
 	decision, err := s.controller.Decide(ctx, status, currentPrice, futurePrices, energyHistory, settings.Settings)
 	if err != nil {

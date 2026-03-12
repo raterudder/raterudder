@@ -97,7 +97,7 @@ func (c *Controller) SimulateState(
 				simHours = hoursUntilEnd
 				log.Ctx(ctx).DebugContext(
 					ctx,
-					"simulation set to stop when running out of prices",
+					"simulation stopping with less than 12 hours",
 					slog.Int("simHours", simHours),
 					slog.Time("lastFuturePriceTime", lastFuturePriceTime),
 				)

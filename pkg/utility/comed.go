@@ -269,7 +269,7 @@ func (c *BaseComEdHourly) fetchPricesRange(ctx context.Context, start, end time.
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	log.Ctx(ctx).DebugContext(ctx, "fetching prices from comed", "url", u.String())
+	log.Ctx(ctx).DebugContext(ctx, "fetching prices from comed", slog.String("url", u.String()))
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -354,8 +354,6 @@ func (c *BaseComEdHourly) fetchPricesRange(ctx context.Context, start, end time.
 
 // GetCurrentPrice returns the latest hourly-averaged price.
 func (c *BaseComEdHourly) GetCurrentPrice(ctx context.Context) (types.Price, error) {
-	log.Ctx(ctx).DebugContext(ctx, "getting current price")
-
 	prices, err := c.getCachedCurrentPrices(ctx)
 	if err != nil {
 		return types.Price{}, err
@@ -393,7 +391,6 @@ func (c *BaseComEdHourly) GetFuturePrices(ctx context.Context) ([]types.Price, e
 	}
 	c.mu.Unlock()
 
-	log.Ctx(ctx).DebugContext(ctx, "fetching pjm day ahead prices for comed")
 	prices, err := c.fetchPJMDayAhead(ctx, pjmComedPNodeID)
 	if err != nil {
 		return nil, err
