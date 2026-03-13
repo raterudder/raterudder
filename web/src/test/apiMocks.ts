@@ -36,13 +36,10 @@ export const defaultSettings = {
     alwaysChargeUnderDollarsPerKWH: 0.05,
     minArbitrageDifferenceDollarsPerKWH: 0.03,
     minDeficitPriceDifferenceDollarsPerKWH: 0.02,
-    utilityProvider: 'comed',
-    utilityRate: 'comed_besh',
-    utilityRateOptions: {
-        rateClass: 'singleFamilyWithoutElectricHeat',
-        variableDeliveryRate: false,
-    },
-    ess: 'franklin',
+    utilityProvider: '',
+    utilityRate: '',
+    utilityRateOptions: {},
+    ess: '',
     hasCredentials: {
         franklin: false
     }
@@ -84,7 +81,13 @@ export const defaultUtilities = [
         id: 'hidden_utility',
         name: 'Secret Utility',
         hidden: true,
-        rates: [],
+        rates: [
+            {
+                id: 'hidden_rate',
+                name: 'Hidden Rate',
+                options: [],
+            },
+        ],
     },
 ] as UtilityProviderInfo[];
 

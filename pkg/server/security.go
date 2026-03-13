@@ -53,6 +53,7 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 			"img-src " + imgSrc + "; " +
 			"connect-src " + connectSrc + "; " +
 			"frame-src " + frameSrc + "; " +
+			"worker-src 'self' blob:; " +
 			"report-to browser-reports"
 		w.Header().Set("Content-Security-Policy", csp)
 

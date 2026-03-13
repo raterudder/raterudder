@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { fetchSettings, updateSettings, fetchUtilities, fetchESSList, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type ESSProviderInfo } from '../api';
+import { fetchSettings, updateSettings, fetchUtilities, fetchESSList, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type ESSProviderInfo, type ESSCredentialField } from '../api';
 import { Field } from '@base-ui/react/field';
 import { Input } from '@base-ui/react/input';
 import { Button } from '@base-ui/react/button';
@@ -40,8 +40,6 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                 fetchESSList(siteID)
             ]);
             setSettings(settingsData);
-            setIsUtilityDirty(false);
-            setIsESSDirty(false);
             setUtilities(utilitiesData);
             setEssProviders(essProvidersData);
 
@@ -49,8 +47,9 @@ const Settings = ({ siteID }: { siteID?: string }) => {
             // the ESS section into edit mode
             // we are explicitly checking for false in case the ess doesn't support
             // credentials we don't set edit every time when its undefined
-            if (!isESSDirty && settingsData.ess && settingsData.hasCredentials?.[settingsData.ess] === false) {
+            if (settingsData.ess && settingsData.hasCredentials?.[settingsData.ess] === false) {
                 setEditESS(true);
+                setIsESSDirty(true);
             }
 
             setError(null);
@@ -70,40 +69,61 @@ const Settings = ({ siteID }: { siteID?: string }) => {
             setError(null);
             setSuccessMessage(null);
 
-            let credentialsPayload: any = undefined;
-            if (Object.keys(essCredentials).length > 0) {
-                const provider = essProviders.find(p => p.id === settings.ess);
-                if (provider) {
-                    credentialsPayload = { [provider.id]: {} };
-                    const processCred = (cred: typeof provider.credentials[0]) => {
-                        const val = essCredentials[cred.field] || cred.default || "";
-                        if (cred.required && !val) {
-                            throw new Error(`The ${cred.name} field is required.`);
+            // Merge default values for utility rate options
+            const utilityProvider = utilities.find(u => u.id === settings.utilityProvider);
+            const utilityRate = utilityProvider?.rates.find(r => r.id === settings.utilityRate);
+            const finalSettings = { ...settings };
+            if (utilityRate) {
+                const finalOpts = { ...finalSettings.utilityRateOptions };
+                utilityRate.options.forEach(opt => {
+                    if (finalOpts[opt.field] === undefined || finalOpts[opt.field] === null || finalOpts[opt.field] === "") {
+                        if (opt.default !== undefined) {
+                            finalOpts[opt.field] = opt.default;
                         }
-                        if (val) {
-                            credentialsPayload[provider.id][cred.field] = val;
-                        }
-                    };
+                    }
+                });
+                finalSettings.utilityRateOptions = finalOpts;
+            }
 
-                    for (const cred of provider.credentials) {
-                        processCred(cred);
+            let credentialsPayload: any = undefined;
+            const essProvider = essProviders.find(p => p.id === settings.ess);
+            if (essProvider && (isESSDirty || Object.keys(essCredentials).length > 0)) {
+                credentialsPayload = { [essProvider.id]: {} };
+                const processCred = (cred: ESSCredentialField) => {
+                    let val = essCredentials[cred.field];
+                    if (val === undefined || val === null || val === "") {
+                        val = cred.default;
                     }
-                    if (provider.oAuthKey) {
-                        processCred(provider.oAuthKey);
+
+                    if (cred.required && (val === undefined || val === null || val === "")) {
+                        throw new Error(`The ${cred.name} field is required.`);
                     }
+                    if (val !== undefined && val !== null && val !== "") {
+                        credentialsPayload[essProvider.id][cred.field] = val;
+                    }
+                };
+
+                for (const cred of essProvider.credentials) {
+                    processCred(cred);
+                }
+                if (essProvider.oAuthKey) {
+                    processCred(essProvider.oAuthKey);
                 }
             }
 
-            await updateSettings(settings, siteID, credentialsPayload);
+            console.log("finalSettings", finalSettings);
+            console.log("credentialsPayload", credentialsPayload);
+
+            await updateSettings(finalSettings, siteID, credentialsPayload);
             setSuccessMessage('Settings saved successfully');
 
-            const updatedSettings = credentialsPayload && settings.ess ? {
-                ...settings,
+            const updatedSettings = credentialsPayload && finalSettings.ess ? {
+                ...finalSettings,
                 hasCredentials: {
-                    ...settings.hasCredentials,
-                    [settings.ess]: true
+                    ...finalSettings.hasCredentials,
+                    [finalSettings.ess]: true
                 }
-            } : settings;
+            } : finalSettings;
 
             if (credentialsPayload && settings.ess) {
                 setSettings(updatedSettings);
@@ -471,7 +491,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                         {(() => {
                             const provider = essProviders.find(p => p.id === settings.ess);
                             if (!provider) return null;
-                            
+
                             return (
                                 <>
                                     {provider.oAuthURLs && Object.keys(provider.oAuthURLs).length > 0 && (
@@ -729,7 +749,6 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                                     {(item: { label: string, value: string }) => (
                                                         <Combobox.Item key={item.value} value={item.value} className="select-item">
                                                             {item.label}
-                                                            <Combobox.ItemIndicator />
                                                         </Combobox.Item>
                                                     )}
                                                 </Combobox.List>

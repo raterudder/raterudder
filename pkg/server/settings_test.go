@@ -481,6 +481,55 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockU.AssertExpectations(t)
 	})
 
+	t.Run("Update Settings - Fails with Missing Credentials", func(t *testing.T) {
+		srv, _ := newAuthServer("my-audience", []string{"admin@example.com"}, nil)
+
+		// Select "franklin" but don't provide credentials
+		s := struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials,omitempty"`
+		}{
+			Settings: types.Settings{
+				MinBatterySOC:               80,
+				DryRun:                      true,
+				IgnoreHourUsageOverMultiple: 5,
+				SolarTrendRatioMax:          3.0,
+				SolarBellCurveMultiplier:    1.0,
+				UtilityProvider:             "test",
+				ESS:                         "franklin",
+			},
+			Credentials: nil,
+		}
+		b, err := json.Marshal(s)
+		require.NoError(t, err)
+		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+		req = withUser(req, "admin@example.com", true)
+		w := httptest.NewRecorder()
+
+		// Expect validation to pass for utility
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Once()
+
+		// Setting up existing settings with NO credentials
+		mockS.ExpectedCalls = nil
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			ESS: "mock", // different ESS
+		}, types.CurrentSettingsVersion, nil)
+		mockS.On("UpdateSite", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+		mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		// Expect SetSettings to be called to update auth status after failure
+		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveFailures == 1
+		}), types.CurrentSettingsVersion).Return(nil).Once()
+
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+		assert.Contains(t, w.Body.String(), "failed to verify ess credentials: credentials missing")
+
+		mockU.AssertExpectations(t)
+		mockS.AssertExpectations(t)
+	})
+
 	t.Run("Update Settings - Does Not Backfill History on Unchanged Credentials", func(t *testing.T) {
 		srv, mockES := newAuthServer("my-audience", []string{"admin@example.com"}, nil)
 

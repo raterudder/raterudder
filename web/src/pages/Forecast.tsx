@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { fetchModeling } from '../api';
-import type { ModelingHour } from '../api';
+import type { ForecastResponse, ModelingHour } from '../api';
 import { Switch } from '@base-ui/react/switch';
 import { Field } from '@base-ui/react/field';
 import {
@@ -217,7 +217,7 @@ function ForecastChart({ data, config, isMobile, showCurrentTime }: { data: Proc
 }
 
 const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
-    const [data, setData] = useState<ProcessedModelingHour[]>([]);
+    const [rawModelingData, setRawModelingData] = useState<ForecastResponse | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
@@ -230,89 +230,91 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
     }, []);
 
     useEffect(() => {
-        const loadData = async () => {
+        const loadRawData = async () => {
+            setLoading(true);
             try {
-                setLoading(true);
-                const forecastData = await fetchModeling(siteID);
-
-                // Combine history and simulation if includeHistory is true
-                let modelingData = forecastData.simulation || forecastData || [];
-
-                const weatherHist = forecastData.weather || [];
-
-                // We also need to map the weather to the simulation hours
-                modelingData = modelingData.map((sim: any) => {
-                    const simDate = new Date(sim.ts);
-                    simDate.setMinutes(0, 0, 0);
-                    const simTimeHour = simDate.getTime();
-                    const weather = weatherHist.find((w: any) => new Date(w.tsHourStart).getTime() === simTimeHour);
-                    if (weather) {
-                        return {
-                            ...sim,
-                            forecastGHI: weather.forecastGHI,
-                        };
-                    }
-                    return sim;
-                });
-
-                if (includeHistory && forecastData.energyHistory && forecastData.priceHistory) {
-                    const energyHist = forecastData.energyHistory || [];
-                    const priceHist = forecastData.priceHistory || [];
-
-                    // The battery capacity for history is best estimated from the first simulation hour
-                    // or assumed from the context, here we use the first sim hour's capacity.
-                    const firstSim = modelingData[0];
-                    const capacity = firstSim ? firstSim.batteryCapacityKWH : 10;
-                    const reserve = firstSim ? firstSim.batteryReserveKWH : 0;
-
-                    const historyMapped = energyHist.map((h: any) => {
-                        const hTime = new Date(h.tsHourStart).getTime();
-                        const price = priceHist.find((p: any) => new Date(p.tsHourStart).getTime() === hTime);
-                        const weather = weatherHist.find((w: any) => new Date(w.tsHourStart).getTime() === hTime);
-                        return {
-                            ts: h.tsHourStart,
-                            hour: new Date(h.tsHourStart).getHours(),
-                            batteryKWH: (h.avgBatterySOC / 100) * capacity,
-                            batteryKWHIfStandby: (h.avgBatterySOC / 100) * capacity, // Historic actuals
-                            batteryCapacityKWH: capacity,
-                            batteryReserveKWH: reserve,
-                            predictedSolarKWH: h.solarKWH,
-                            todaySolarTrend: 1.0, // Used for raw solar calc below
-                            avgHomeLoadKWH: h.homeLoadKWH || 0,
-                            gridChargeDollarsPerKWH: price ? price.dollarsPerKWH + (price.gridUseDollarsPerKWH || 0) : 0,
-                            netLoadSolarKWH: -h.solarKWH,
-                            solarOppDollarsPerKWH: 0,
-                            forecastGHI: weather?.forecastGHI,
-                        };
-                    });
-
-                    modelingData = [...historyMapped, ...modelingData];
-                }
-
-                // Pre-process data
-                const processed = modelingData.map((h: any) => ({
-                    ...h,
-                    batterySOCIfUsed: (h.batteryKWH / h.batteryCapacityKWH) * 100,
-                    batterySOCIfStandby: (h.batteryKWHIfStandby / h.batteryCapacityKWH) * 100,
-                    batteryReserveSOC: (h.batteryReserveKWH / h.batteryCapacityKWH) * 100,
-                    // Avoid division by zero
-                    rawSolarKWH: h.todaySolarTrend > 0.001
-                        ? h.predictedSolarKWH / h.todaySolarTrend
-                        : 0,
-                    solarTrendRatio: h.todaySolarTrend > 0 && h.todaySolarTrend !== 1.0
-                        ? h.todaySolarTrend
-                        : 0,
-                }));
-                setData(processed);
-            } catch (err: any) {
-                setError(err.message || 'Unknown error');
+                setRawModelingData(await fetchModeling(siteID));
+            } catch (error) {
+                setError(error instanceof Error ? error.message : 'Unknown error');
             } finally {
                 setLoading(false);
             }
         };
-
-        loadData();
+        loadRawData();
     }, [siteID]);
+
+    const data = useMemo(() => {
+        if (!rawModelingData) return [];
+
+        // Combine history and simulation if includeHistory is true
+        // Based on ForecastResponse, simulation is an array.
+        let modelingData: any[] = rawModelingData.simulation || [];
+        const weatherHist = rawModelingData.weather || [];
+
+        // We also need to map the weather to the simulation hours
+        modelingData = modelingData.map((sim: any) => {
+            const simDate = new Date(sim.ts);
+            simDate.setMinutes(0, 0, 0);
+            const simTimeHour = simDate.getTime();
+            const weather = weatherHist.find((w: any) => new Date(w.tsHourStart).getTime() === simTimeHour);
+            if (weather) {
+                return {
+                    ...sim,
+                    forecastGHI: weather.forecastGHI,
+                };
+            }
+            return sim;
+        });
+
+        if (includeHistory && rawModelingData.energyHistory && rawModelingData.priceHistory) {
+            const energyHist = rawModelingData.energyHistory || [];
+            const priceHist = rawModelingData.priceHistory || [];
+
+            // The battery capacity for history is best estimated from the first simulation hour
+            // or assumed from the context, here we use the first sim hour's capacity.
+            const firstSim = modelingData[0];
+            const capacity = firstSim ? firstSim.batteryCapacityKWH : 10;
+            const reserve = firstSim ? firstSim.batteryReserveKWH : 0;
+
+            const historyMapped = energyHist.map((h: any) => {
+                const hTime = new Date(h.tsHourStart).getTime();
+                const price = priceHist.find((p: any) => new Date(p.tsHourStart).getTime() === hTime);
+                const weather = weatherHist.find((w: any) => new Date(w.tsHourStart).getTime() === hTime);
+                return {
+                    ts: h.tsHourStart,
+                    hour: new Date(h.tsHourStart).getHours(),
+                    batteryKWH: (h.avgBatterySOC / 100) * capacity,
+                    batteryKWHIfStandby: (h.avgBatterySOC / 100) * capacity, // Historic actuals
+                    batteryCapacityKWH: capacity,
+                    batteryReserveKWH: reserve,
+                    predictedSolarKWH: h.solarKWH,
+                    todaySolarTrend: 1.0, // Used for raw solar calc below
+                    avgHomeLoadKWH: h.homeLoadKWH || 0,
+                    gridChargeDollarsPerKWH: price ? price.dollarsPerKWH + (price.gridUseDollarsPerKWH || 0) : 0,
+                    netLoadSolarKWH: -h.solarKWH,
+                    solarOppDollarsPerKWH: 0,
+                    forecastGHI: weather?.forecastGHI,
+                };
+            });
+
+            modelingData = [...historyMapped, ...modelingData];
+        }
+
+        // Pre-process data
+        return modelingData.map((h: any) => ({
+            ...h,
+            batterySOCIfUsed: (h.batteryKWH / h.batteryCapacityKWH) * 100,
+            batterySOCIfStandby: (h.batteryKWHIfStandby / h.batteryCapacityKWH) * 100,
+            batteryReserveSOC: (h.batteryReserveKWH / h.batteryCapacityKWH) * 100,
+            // Avoid division by zero
+            rawSolarKWH: h.todaySolarTrend > 0.001
+                ? h.predictedSolarKWH / h.todaySolarTrend
+                : 0,
+            solarTrendRatio: h.todaySolarTrend > 0 && h.todaySolarTrend !== 1.0
+                ? h.todaySolarTrend
+                : 0,
+        }));
+    }, [rawModelingData, includeHistory]);
 
     if (loading) return <div className="forecast-loading">Loading simulation…</div>;
     if (error) return <div className="error">Error: {error}</div>;
