@@ -132,7 +132,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				authCookie, err := r.Cookie(authTokenCookie)
 				if err != nil && !errors.Is(err, http.ErrNoCookie) {
 					log.Ctx(ctx).ErrorContext(ctx, "failed to get auth cookie", slog.Any("error", err))
-					writeJSONError(w, "missing auth cookie", http.StatusBadRequest)
+					writeJSONError(w, "missing auth cookie", http.StatusUnauthorized)
 					return
 				}
 				if authCookie != nil {
@@ -140,7 +140,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 					if err != nil {
 						log.Ctx(ctx).ErrorContext(ctx, "auth token validation failed", slog.Any("error", err))
 						if !allowNoLogin {
-							writeJSONError(w, "invalid auth token", http.StatusBadRequest)
+							writeJSONError(w, "invalid auth token", http.StatusUnauthorized)
 							return
 						}
 					} else {
@@ -150,7 +150,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 					}
 				} else if !allowNoLogin {
 					log.Ctx(ctx).WarnContext(ctx, "no auth cookie found")
-					writeJSONError(w, "missing auth cookie", http.StatusBadRequest)
+					writeJSONError(w, "missing auth cookie", http.StatusUnauthorized)
 					return
 				}
 			}

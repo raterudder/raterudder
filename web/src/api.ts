@@ -88,7 +88,8 @@ async function extractError(response: Response, fallback: string): Promise<strin
             if (statusRes.ok) {
                 const status = await statusRes.json();
                 if (!status.loggedIn) {
-                    window.location.href = '/login';
+                    const from = encodeURIComponent(window.location.pathname + window.location.search);
+                    window.location.href = `/login?from=${from}`;
                 }
             }
         } catch { /* ignore */ }
