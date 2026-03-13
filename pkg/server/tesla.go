@@ -6,7 +6,7 @@ import (
 
 func (s *Server) handleTeslaRegister(w http.ResponseWriter, r *http.Request) {
 	user := s.getUser(r)
-	if !user.Admin {
+	if !s.isMultiSiteAdmin(user) {
 		writeJSONError(w, "unauthorized", http.StatusForbidden)
 		return
 	}

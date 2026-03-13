@@ -44,8 +44,8 @@ func configuredBaseTesla() *baseTesla {
 	teslaKeyPEM := lflag.String("tesla-key-pem", "", "Tesla private key in PEM format")
 	teslaBaseURLs := map[string]string{
 		// from: https://developer.tesla.com/docs/fleet-api/getting-started/regions-countries#base-urls-by-region
-		"NA": "https://fleet-api.prd.na.vn.cloud.tesla.com/",
-		"EU": "https://fleet-api.prd.eu.vn.cloud.tesla.com/",
+		"NA": "https://fleet-api.prd.na.vn.cloud.tesla.com",
+		"EU": "https://fleet-api.prd.eu.vn.cloud.tesla.com",
 	}
 	lflag.JSON(&teslaBaseURLs, "tesla-base-urls", teslaBaseURLs, "JSON map of Region to Base URL for the Tesla API")
 
