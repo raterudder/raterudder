@@ -275,22 +275,28 @@ func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, 
 
 		validPoints := points
 		if len(points) >= 3 && settings.IgnoreHourUsageOverMultiple > 1 {
-			// find outlierIdx by comparing each point to every other point.
+			// find outlierIdx by comparing points to the top two maximum values.
+			// Optimize to O(n) by doing a single pass to find the two largest loads.
+			var max1, max2 float64
+			for _, p := range points {
+				if p.load > max1 {
+					max2 = max1
+					max1 = p.load
+				} else if p.load > max2 {
+					max2 = p.load
+				}
+			}
+
 			var outlierIdx []int
 			for i, p := range points {
-				isOutlier := true
-				for j, other := range points {
-					if i == j {
-						continue
-					}
-					// if the point is NOT greater than another point * multiple, it's not an outlier
-					if p.load <= other.load*settings.IgnoreHourUsageOverMultiple {
-						isOutlier = false
-						break
-					}
+				// To be an outlier, it must be > all other points * threshold.
+				// We only need to check against the largest other value.
+				largestOther := max1
+				if p.load == max1 {
+					largestOther = max2
 				}
 
-				if isOutlier {
+				if p.load > largestOther*settings.IgnoreHourUsageOverMultiple {
 					outlierIdx = append(outlierIdx, i)
 				}
 			}
