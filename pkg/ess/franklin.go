@@ -289,7 +289,7 @@ func (f *Franklin) newPostQueryRequest(ctx context.Context, endpoint string, par
 	return http.NewRequestWithContext(ctx, "POST", u.String(), nil)
 }
 
-func (f *Franklin) newPostJSONRequest(ctx context.Context, endpoint string, data interface{}) (*http.Request, error) {
+func (f *Franklin) newPostJSONRequest(ctx context.Context, endpoint string, data any) (*http.Request, error) {
 	u, err := url.Parse(f.baseURL)
 	if err != nil {
 		return nil, err
@@ -318,8 +318,11 @@ type franklinResponse struct {
 	Success bool            `json:"success"`
 }
 
-func (f *Franklin) doRequest(req *http.Request, dest interface{}) error {
-	if !strings.HasSuffix(req.URL.Path, franklinLoginPath) {
+func (f *Franklin) doRequest(req *http.Request, dest any) error {
+	var isLogin bool
+	if strings.HasSuffix(req.URL.Path, franklinLoginPath) {
+		isLogin = true
+	} else {
 		req.Header.Set("logintoken", f.tokenStr)
 	}
 
@@ -369,6 +372,17 @@ func (f *Franklin) doRequest(req *http.Request, dest interface{}) error {
 	}
 
 	if dest != nil {
+		// debug log the whole response which will aid in debugging but not if its a login response
+		if !isLogin {
+			log.Ctx(req.Context()).DebugContext(
+				req.Context(),
+				"franklin result",
+				slog.String("url", req.URL.String()),
+				slog.String("method", req.Method),
+				slog.Any("response", fr.Result),
+			)
+		}
+
 		if err := json.Unmarshal(fr.Result, dest); err != nil {
 			log.Ctx(req.Context()).ErrorContext(req.Context(), "failed to decode franklin result", slog.Any("error", err))
 			return fmt.Errorf("failed to decode franklin result: %w", err)
@@ -669,7 +683,7 @@ func (f *Franklin) getPowerControl(ctx context.Context) (franklinGetPowerControl
 }
 
 func (f *Franklin) setPowerControl(ctx context.Context, pc franklinGetPowerControlSettingResult) error {
-	data := map[string]interface{}{
+	data := map[string]any{
 		"gatewayId": f.gatewayID,
 		// TODO: what does a gridMax value of -1 mean? It's not clear yet
 		"gridMax":     pc.GridMax,

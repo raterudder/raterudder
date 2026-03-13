@@ -295,13 +295,13 @@ func TestHandleUpdate(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
 
-		var resp map[string]interface{}
+		var resp map[string]any
 		_ = json.NewDecoder(w.Body).Decode(&resp)
 		// Status should still be "paused"
 		assert.Equal(t, "paused", resp["status"])
 		// An action should be returned with the paused flag
 		require.NotNil(t, resp["action"], "a paused action should be returned")
-		actionMap, ok := resp["action"].(map[string]interface{})
+		actionMap, ok := resp["action"].(map[string]any)
 		require.True(t, ok)
 		assert.Equal(t, true, actionMap["paused"], "action should have paused=true")
 
@@ -358,7 +358,7 @@ func TestHandleUpdate(t *testing.T) {
 		srv.handleUpdate(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
-		var resp map[string]interface{}
+		var resp map[string]any
 		_ = json.NewDecoder(w.Body).Decode(&resp)
 		assert.Equal(t, "emergency mode", resp["status"])
 
@@ -414,7 +414,7 @@ func TestHandleUpdate(t *testing.T) {
 		srv.handleUpdate(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
-		var resp map[string]interface{}
+		var resp map[string]any
 		_ = json.NewDecoder(w.Body).Decode(&resp)
 		assert.Equal(t, "alarms present", resp["status"])
 

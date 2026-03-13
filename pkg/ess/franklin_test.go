@@ -17,26 +17,26 @@ func TestFranklin(t *testing.T) {
 	t.Run("GetStatus", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"token": "tok"},
+					"result":  map[string]any{"token": "tok"},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"totalCap": 30.0, "peHwVerList": []int{0, 20}},
+					"result":  map[string]any{"totalCap": 30.0, "peHwVerList": []int{0, 20}},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result": []map[string]interface{}{
+					"result": []map[string]any{
 						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
 						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
 					},
@@ -44,34 +44,34 @@ func TestFranklin(t *testing.T) {
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"globalGridChargeMax": 15.0, "gridFeedMaxFlag": 2, "gridMaxFlag": 2},
+					"result":  map[string]any{"globalGridChargeMax": 15.0, "gridFeedMaxFlag": 2, "gridMaxFlag": 2},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
-				list := []map[string]interface{}{
+				list := []map[string]any{
 					{"id": 138224.0, "workMode": 2, "soc": 88.5}, // Matches current SOC -> Standby
 				}
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"list": list, "currendId": 138224.0},
+					"result":  map[string]any{"list": list, "currendId": 138224.0},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
-				runtimeData := map[string]interface{}{
+				runtimeData := map[string]any{
 					"soc":   88.5,
 					"p_fhp": 1500.0,
 					"mode":  138224.0, // Self consumption ID
 				}
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result": map[string]interface{}{
+					"result": map[string]any{
 						"runtimeData":     runtimeData,
 						"currentWorkMode": 2,
 					},
@@ -108,26 +108,26 @@ func TestFranklin(t *testing.T) {
 	t.Run("GetStatus Alarms", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"token": "tok"},
+					"result":  map[string]any{"token": "tok"},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"totalCap": 30.0, "timeZone": "UTC"},
+					"result":  map[string]any{"totalCap": 30.0, "timeZone": "UTC"},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result": []map[string]interface{}{
+					"result": []map[string]any{
 						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
 						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
 					},
@@ -135,33 +135,33 @@ func TestFranklin(t *testing.T) {
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"gridMaxFlag": 0, "gridFeedMaxFlag": 0},
+					"result":  map[string]any{"gridMaxFlag": 0, "gridFeedMaxFlag": 0},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
-				list := []map[string]interface{}{
+				list := []map[string]any{
 					{"id": 1.0, "workMode": 1},
 				}
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"list": list, "currendId": 1.0},
+					"result":  map[string]any{"list": list, "currendId": 1.0},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result": map[string]interface{}{
-						"runtimeData": map[string]interface{}{
+					"result": map[string]any{
+						"runtimeData": map[string]any{
 							"soc": 50.0,
 						},
-						"currentAlarmVOList": []map[string]interface{}{
+						"currentAlarmVOList": []map[string]any{
 							{
 								"logName":          "Test Alarm",
 								"alarmExplanation": "Test Description",
@@ -200,26 +200,26 @@ func TestFranklin(t *testing.T) {
 	t.Run("GetStatus Alarms Filtered", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"token": "tok"},
+					"result":  map[string]any{"token": "tok"},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"totalCap": 30.0, "timeZone": "UTC"},
+					"result":  map[string]any{"totalCap": 30.0, "timeZone": "UTC"},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result": []map[string]interface{}{
+					"result": []map[string]any{
 						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
 						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
 					},
@@ -227,33 +227,33 @@ func TestFranklin(t *testing.T) {
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"gridMaxFlag": 0, "gridFeedMaxFlag": 0},
+					"result":  map[string]any{"gridMaxFlag": 0, "gridFeedMaxFlag": 0},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
-				list := []map[string]interface{}{
+				list := []map[string]any{
 					{"id": 1.0, "workMode": 1},
 				}
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"list": list, "currendId": 1.0},
+					"result":  map[string]any{"list": list, "currendId": 1.0},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result": map[string]interface{}{
-						"runtimeData": map[string]interface{}{
+					"result": map[string]any{
+						"runtimeData": map[string]any{
 							"soc": 50.0,
 						},
-						"currentAlarmVOList": []map[string]interface{}{
+						"currentAlarmVOList": []map[string]any{
 							{
 								"logName":          "SIM card not inserted",
 								"alarmExplanation": "Ignore this",
@@ -294,35 +294,35 @@ func TestFranklin(t *testing.T) {
 		var callOrder []string
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
-				json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "success": true, "result": map[string]interface{}{"token": "tok"}})
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{},
+					"result":  map[string]any{},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
-				list := []map[string]interface{}{
+				list := []map[string]any{
 					{"id": 11111.0, "workMode": 1}, // TOU
 					{"id": 22222.0, "workMode": 2}, // Self-consumption
 					{"id": 33333.0, "workMode": 3}, // Backup
 				}
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"list": list},
+					"result":  map[string]any{"list": list},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result": []map[string]interface{}{
+					"result": []map[string]any{
 						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
 						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
 					},
@@ -330,10 +330,10 @@ func TestFranklin(t *testing.T) {
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"gridMaxFlag": 1, "gridFeedMaxFlag": 3},
+					"result":  map[string]any{"gridMaxFlag": 1, "gridFeedMaxFlag": 3},
 				})
 				return
 			}
@@ -346,7 +346,7 @@ func TestFranklin(t *testing.T) {
 				assert.Equal(t, "2", r.Form.Get("workMode"), "workMode should be 2")
 				assert.Equal(t, "22222", r.Form.Get("currendId"), "currendId should match")
 
-				json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "success": true, "result": map[string]interface{}{}})
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
 				return
 			}
 			http.Error(w, "not found: "+r.URL.Path, 404)
@@ -377,35 +377,35 @@ func TestFranklin(t *testing.T) {
 		var callOrder []string
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
-				json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "success": true, "result": map[string]interface{}{"token": "tok"}})
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{},
+					"result":  map[string]any{},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
-				list := []map[string]interface{}{
+				list := []map[string]any{
 					{"id": 10.0, "workMode": 1},
 					{"id": 20.0, "workMode": 2, "editSocFlag": true},
 					{"id": 30.0, "workMode": 3},
 				}
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"list": list},
+					"result":  map[string]any{"list": list},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result": []map[string]interface{}{
+					"result": []map[string]any{
 						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
 						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
 					},
@@ -413,20 +413,20 @@ func TestFranklin(t *testing.T) {
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"gridMaxFlag": 0, "gridFeedMaxFlag": 3},
+					"result":  map[string]any{"gridMaxFlag": 0, "gridFeedMaxFlag": 3},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/setPowerControlV2" {
 				callOrder = append(callOrder, "setPowerControlV2")
 				// We expect it to enable generic grid charging (flag=2)
-				var data map[string]interface{}
+				var data map[string]any
 				require.NoError(t, json.NewDecoder(r.Body).Decode(&data))
 				assert.EqualValues(t, 2, data["gridMaxFlag"], "gridMaxFlag should be 2")
-				json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "success": true, "result": map[string]interface{}{}})
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/updateTouModeV2" {
@@ -434,7 +434,7 @@ func TestFranklin(t *testing.T) {
 				require.NoError(t, r.ParseForm())
 				// ChargeAny sets SOC to 100
 				assert.Equal(t, "100", r.Form.Get("soc"), "soc should be 100")
-				json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "success": true, "result": map[string]interface{}{}})
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
 				return
 			}
 			http.Error(w, "not found "+r.URL.Path, 404)
@@ -465,33 +465,33 @@ func TestFranklin(t *testing.T) {
 		var callOrder []string
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
-				json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "success": true, "result": map[string]interface{}{"token": "tok"}})
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{},
+					"result":  map[string]any{},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
-				list := []map[string]interface{}{
+				list := []map[string]any{
 					{"id": 20.0, "workMode": 2, "electricityType": 1, "editSocFlag": true},
 				}
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"list": list, "currendId": 20.0},
+					"result":  map[string]any{"list": list, "currendId": 20.0},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result": []map[string]interface{}{
+					"result": []map[string]any{
 						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
 						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
 					},
@@ -499,10 +499,10 @@ func TestFranklin(t *testing.T) {
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"gridMaxFlag": 1, "gridFeedMaxFlag": 3},
+					"result":  map[string]any{"gridMaxFlag": 1, "gridFeedMaxFlag": 3},
 				})
 				return
 			}
@@ -510,16 +510,16 @@ func TestFranklin(t *testing.T) {
 				callOrder = append(callOrder, "updateSocV2")
 				require.NoError(t, r.ParseForm())
 				assert.Equal(t, "100", r.Form.Get("soc"), "soc should be 100 for ChargeAny")
-				json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "success": true, "result": nil})
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": nil})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/setPowerControlV2" {
 				callOrder = append(callOrder, "setPowerControlV2")
-				var data map[string]interface{}
+				var data map[string]any
 				require.NoError(t, json.NewDecoder(r.Body).Decode(&data))
 				// Should set gridFeedMaxFlag to 1 (solar only export)
 				assert.EqualValues(t, 1, data["gridFeedMaxFlag"], "gridFeedMaxFlag should be 1 for SolarModeAny with GridExportSolar=true")
-				json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "success": true, "result": map[string]interface{}{}})
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
 				return
 			}
 			http.Error(w, "not found "+r.URL.Path, 404)
@@ -554,7 +554,7 @@ func TestFranklin(t *testing.T) {
 	t.Run("SetModes NoChange", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
-				json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "success": true, "result": map[string]interface{}{"token": "tok"}})
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
 				return
 			}
 			http.Error(w, "should not be called: "+r.URL.Path+" "+r.Method, 500)
@@ -574,33 +574,33 @@ func TestFranklin(t *testing.T) {
 		var callOrder []string
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
-				json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "success": true, "result": map[string]interface{}{"token": "tok"}})
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{},
+					"result":  map[string]any{},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
-				list := []map[string]interface{}{
+				list := []map[string]any{
 					{"id": 20.0, "workMode": 2, "soc": 55.0},
 				}
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"list": list, "currendId": 20.0},
+					"result":  map[string]any{"list": list, "currendId": 20.0},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result": []map[string]interface{}{
+					"result": []map[string]any{
 						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
 						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
 					},
@@ -608,20 +608,20 @@ func TestFranklin(t *testing.T) {
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"gridMaxFlag": 1, "gridFeedMaxFlag": 2},
+					"result":  map[string]any{"gridMaxFlag": 1, "gridFeedMaxFlag": 2},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/setPowerControlV2" {
 				callOrder = append(callOrder, "setPowerControlV2")
-				var data map[string]interface{}
+				var data map[string]any
 				require.NoError(t, json.NewDecoder(r.Body).Decode(&data))
 				// Should set gridFeedMaxFlag to 3 (no export) since SolarModeAny with GridExportSolar=false (default)
 				assert.EqualValues(t, 3, data["gridFeedMaxFlag"], "gridFeedMaxFlag should be 3 for no export")
-				json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "success": true, "result": map[string]interface{}{}})
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
 				return
 			}
 			http.Error(w, "not found "+r.URL.Path, 404)
@@ -648,33 +648,33 @@ func TestFranklin(t *testing.T) {
 		var callOrder []string
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
-				json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "success": true, "result": map[string]interface{}{"token": "tok"}})
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{},
+					"result":  map[string]any{},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
-				list := []map[string]interface{}{
+				list := []map[string]any{
 					{"id": 20.0, "workMode": 2, "electricityType": 1, "soc": 55.0, "canEditReserveSOC": true},
 				}
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"list": list, "currendId": 20.0},
+					"result":  map[string]any{"list": list, "currendId": 20.0},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result": []map[string]interface{}{
+					"result": []map[string]any{
 						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
 						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
 					},
@@ -682,10 +682,10 @@ func TestFranklin(t *testing.T) {
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"gridMaxFlag": 1, "gridFeedMaxFlag": 3},
+					"result":  map[string]any{"gridMaxFlag": 1, "gridFeedMaxFlag": 3},
 				})
 				return
 			}
@@ -696,7 +696,7 @@ func TestFranklin(t *testing.T) {
 				assert.Equal(t, "2", r.Form.Get("workMode"))
 				assert.Equal(t, "1", r.Form.Get("electricityType"))
 
-				json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "success": true, "result": nil})
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": nil})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/updateTouModeV2" {
@@ -729,35 +729,35 @@ func TestFranklin(t *testing.T) {
 	t.Run("SetModes Ignores Storm Hedge", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
-				json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "success": true, "result": map[string]interface{}{"token": "tok"}})
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result": map[string]interface{}{
-						"runtimeData": map[string]interface{}{"mode": 6},
+					"result": map[string]any{
+						"runtimeData": map[string]any{"mode": 6},
 					},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
-				list := []map[string]interface{}{
+				list := []map[string]any{
 					{"id": 11.0, "workMode": 2, "electricityType": 1},
 				}
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"list": list, "currendId": 11.0},
+					"result":  map[string]any{"list": list, "currendId": 11.0},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result": []map[string]interface{}{
+					"result": []map[string]any{
 						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
 						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
 					},
@@ -798,33 +798,33 @@ func TestFranklin(t *testing.T) {
 	t.Run("SetModes Ignores Emergency Mode", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
-				json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "success": true, "result": map[string]interface{}{"token": "tok"}})
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{},
+					"result":  map[string]any{},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
-				list := []map[string]interface{}{
+				list := []map[string]any{
 					{"id": 11.0, "workMode": 3, "electricityType": 1},
 				}
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"list": list, "currendId": 11.0},
+					"result":  map[string]any{"list": list, "currendId": 11.0},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result": []map[string]interface{}{
+					"result": []map[string]any{
 						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
 						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
 					},
@@ -865,28 +865,28 @@ func TestFranklin(t *testing.T) {
 	t.Run("GetEnergyHistory", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"token": "tok"},
+					"result":  map[string]any{"token": "tok"},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result": map[string]interface{}{
+					"result": map[string]any{
 						"zoneInfo": "America/Chicago",
 					},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{},
+					"result":  map[string]any{},
 				})
 				return
 			}
@@ -899,10 +899,10 @@ func TestFranklin(t *testing.T) {
 				// Return mock data with 3 timestamps to define 2 intervals in the 12:00 hour
 				// 12:00:00 -> 12:15:00 (15 min = 0.25h)
 				// 12:15:00 -> 13:00:00 (45 min = 0.75h)
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result": map[string]interface{}{
+					"result": map[string]any{
 						"deviceTimeArray": []string{
 							"2026-02-01 12:00:00",
 							"2026-02-01 12:15:00",
@@ -979,30 +979,30 @@ func TestFranklin(t *testing.T) {
 					// Should send the MD5 of "myrawpassword"
 					assert.Equal(t, "270f69c4e37e60424744310f20018ff2", r.Form.Get("password"))
 
-					json.NewEncoder(w).Encode(map[string]interface{}{
+					json.NewEncoder(w).Encode(map[string]any{
 						"code":    200,
 						"success": true,
-						"result": map[string]interface{}{
+						"result": map[string]any{
 							"token": randomStr,
 						},
 					})
 					return
 				}
 				if r.URL.Path == "/hes-gateway/terminal/getHomeGatewayList" {
-					json.NewEncoder(w).Encode(map[string]interface{}{
+					json.NewEncoder(w).Encode(map[string]any{
 						"code":    200,
 						"success": true,
-						"result": []map[string]interface{}{
+						"result": []map[string]any{
 							{"id": "GW-123"},
 						},
 					})
 					return
 				}
 				if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
-					json.NewEncoder(w).Encode(map[string]interface{}{
+					json.NewEncoder(w).Encode(map[string]any{
 						"code":    200,
 						"success": true,
-						"result":  map[string]interface{}{"totalCap": 30.0},
+						"result":  map[string]any{"totalCap": 30.0},
 					})
 					return
 				}
@@ -1041,10 +1041,10 @@ func TestFranklin(t *testing.T) {
 					assert.Equal(t, "user@example.com", r.Form.Get("account"))
 					assert.Equal(t, "pass", r.Form.Get("password"))
 
-					json.NewEncoder(w).Encode(map[string]interface{}{
+					json.NewEncoder(w).Encode(map[string]any{
 						"code":    200,
 						"success": true,
-						"result": map[string]interface{}{
+						"result": map[string]any{
 							"token": token,
 						},
 					})
@@ -1054,20 +1054,20 @@ func TestFranklin(t *testing.T) {
 					// Verify token is passed in header
 					assert.Equal(t, token, r.Header.Get("logintoken"))
 
-					json.NewEncoder(w).Encode(map[string]interface{}{
+					json.NewEncoder(w).Encode(map[string]any{
 						"code":    200,
 						"success": true,
-						"result": []map[string]interface{}{
+						"result": []map[string]any{
 							{"id": expectedGatewayID},
 						},
 					})
 					return
 				}
 				if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
-					json.NewEncoder(w).Encode(map[string]interface{}{
+					json.NewEncoder(w).Encode(map[string]any{
 						"code":    200,
 						"success": true,
-						"result":  map[string]interface{}{"totalCap": 30.0},
+						"result":  map[string]any{"totalCap": 30.0},
 					})
 					return
 				}
@@ -1100,20 +1100,20 @@ func TestFranklin(t *testing.T) {
 
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
-					json.NewEncoder(w).Encode(map[string]interface{}{
+					json.NewEncoder(w).Encode(map[string]any{
 						"code":    200,
 						"success": true,
-						"result": map[string]interface{}{
+						"result": map[string]any{
 							"token": token,
 						},
 					})
 					return
 				}
 				if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
-					json.NewEncoder(w).Encode(map[string]interface{}{
+					json.NewEncoder(w).Encode(map[string]any{
 						"code":    200,
 						"success": true,
-						"result":  map[string]interface{}{"totalCap": 30.0},
+						"result":  map[string]any{"totalCap": 30.0},
 					})
 					return
 				}
@@ -1148,18 +1148,18 @@ func TestFranklin(t *testing.T) {
 				if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
 					loginCalls++
 					assert.Empty(t, r.Header.Get("logintoken"))
-					json.NewEncoder(w).Encode(map[string]interface{}{
+					json.NewEncoder(w).Encode(map[string]any{
 						"code":    200,
 						"success": true,
-						"result":  map[string]interface{}{"token": "brand-new-token"},
+						"result":  map[string]any{"token": "brand-new-token"},
 					})
 					return
 				}
 				if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
-					json.NewEncoder(w).Encode(map[string]interface{}{
+					json.NewEncoder(w).Encode(map[string]any{
 						"code":    200,
 						"success": true,
-						"result":  map[string]interface{}{"totalCap": 30.0},
+						"result":  map[string]any{"totalCap": 30.0},
 					})
 					return
 				}
@@ -1195,18 +1195,18 @@ func TestFranklin(t *testing.T) {
 				if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
 					loginCalls++
 					assert.Empty(t, r.Header.Get("logintoken"))
-					json.NewEncoder(w).Encode(map[string]interface{}{
+					json.NewEncoder(w).Encode(map[string]any{
 						"code":    200,
 						"success": true,
-						"result":  map[string]interface{}{"token": "should-not-be-called"},
+						"result":  map[string]any{"token": "should-not-be-called"},
 					})
 					return
 				}
 				if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
-					json.NewEncoder(w).Encode(map[string]interface{}{
+					json.NewEncoder(w).Encode(map[string]any{
 						"code":    200,
 						"success": true,
-						"result":  map[string]interface{}{"totalCap": 30.0},
+						"result":  map[string]any{"totalCap": 30.0},
 					})
 					return
 				}
@@ -1242,17 +1242,17 @@ func TestFranklin(t *testing.T) {
 				if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
 					loginCalls++
 					assert.Empty(t, r.Header.Get("logintoken"))
-					json.NewEncoder(w).Encode(map[string]interface{}{
+					json.NewEncoder(w).Encode(map[string]any{
 						"code":    200,
 						"success": true,
-						"result":  map[string]interface{}{"token": "new-token"},
+						"result":  map[string]any{"token": "new-token"},
 					})
 					return
 				}
 				if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
 					token := r.Header.Get("logintoken")
 					if token == "expired-token" {
-						json.NewEncoder(w).Encode(map[string]interface{}{
+						json.NewEncoder(w).Encode(map[string]any{
 							"code":    401,
 							"success": false,
 							"message": "invalid token!",
@@ -1260,10 +1260,10 @@ func TestFranklin(t *testing.T) {
 						return
 					}
 					if token == "new-token" {
-						json.NewEncoder(w).Encode(map[string]interface{}{
+						json.NewEncoder(w).Encode(map[string]any{
 							"code":    200,
 							"success": true,
-							"result":  map[string]interface{}{"totalCap": 30.0, "timeZone": "UTC"},
+							"result":  map[string]any{"totalCap": 30.0, "timeZone": "UTC"},
 						})
 						return
 					}
@@ -1302,7 +1302,7 @@ func TestFranklin(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			callCount++
 			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    401,
 					"success": false,
 					"message": "Bad password",
@@ -1335,26 +1335,26 @@ func TestFranklin(t *testing.T) {
 	t.Run("GetStatus StormHedge", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"token": "tok"},
+					"result":  map[string]any{"token": "tok"},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"totalCap": 30.0, "timeZone": "UTC"},
+					"result":  map[string]any{"totalCap": 30.0, "timeZone": "UTC"},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result": []map[string]interface{}{
+					"result": []map[string]any{
 						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
 						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
 					},
@@ -1362,30 +1362,30 @@ func TestFranklin(t *testing.T) {
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"gridMaxFlag": 0, "gridFeedMaxFlag": 0},
+					"result":  map[string]any{"gridMaxFlag": 0, "gridFeedMaxFlag": 0},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
-				list := []map[string]interface{}{
+				list := []map[string]any{
 					{"id": 1.0, "workMode": 1},
 				}
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]interface{}{"list": list, "currendId": 1.0},
+					"result":  map[string]any{"list": list, "currendId": 1.0},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result": map[string]interface{}{
-						"runtimeData": map[string]interface{}{
+					"result": map[string]any{
+						"runtimeData": map[string]any{
 							"soc":  50.0,
 							"mode": 6, // Storm Hedge
 						},
@@ -1394,10 +1394,10 @@ func TestFranklin(t *testing.T) {
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/weather/getProgressingStormList" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result": []map[string]interface{}{
+					"result": []map[string]any{
 						{
 							"id":           61621,
 							"onset":        "2026-02-18 10:00:00",
@@ -1440,25 +1440,25 @@ func TestFranklin(t *testing.T) {
 		var callOrder []string
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
-				json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "success": true, "result": map[string]interface{}{"token": "tok"}})
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
-				json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "success": true, "result": map[string]interface{}{}})
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
-				list := []map[string]interface{}{
+				list := []map[string]any{
 					{"id": 20.0, "workMode": 2, "electricityType": 1, "editSocFlag": true},
 				}
-				json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "success": true, "result": map[string]interface{}{"list": list, "currendId": 20.0}})
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"list": list, "currendId": 20.0}})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result": []map[string]interface{}{
+					"result": []map[string]any{
 						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
 						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
 					},
@@ -1466,16 +1466,16 @@ func TestFranklin(t *testing.T) {
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
-				json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "success": true, "result": map[string]interface{}{"gridMaxFlag": 1, "gridFeedMaxFlag": 3}})
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"gridMaxFlag": 1, "gridFeedMaxFlag": 3}})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/setPowerControlV2" {
 				callOrder = append(callOrder, "setPowerControlV2")
-				var data map[string]interface{}
+				var data map[string]any
 				require.NoError(t, json.NewDecoder(r.Body).Decode(&data))
 				// Should set gridFeedMaxFlag to 2 (battery and solar export)
 				assert.EqualValues(t, 2, data["gridFeedMaxFlag"], "gridFeedMaxFlag should be 2 for Both Export")
-				json.NewEncoder(w).Encode(map[string]interface{}{"code": 200, "success": true, "result": map[string]interface{}{}})
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
 				return
 			}
 			http.Error(w, "not found "+r.URL.Path, 404)

@@ -25,7 +25,6 @@ type FirestoreProvider struct {
 	database  string
 }
 
-
 // configuredFirestore sets up the Firestore provider.
 // It registers flags for configuration.
 func configuredFirestore() *FirestoreProvider {
@@ -143,7 +142,7 @@ func (f *FirestoreProvider) SetSettings(ctx context.Context, siteID string, sett
 	if err != nil {
 		return err
 	}
-	_, err = coll.Doc("settings").Set(ctx, map[string]interface{}{
+	_, err = coll.Doc("settings").Set(ctx, map[string]any{
 		"json":    string(jsonBytes),
 		"version": version,
 	})
@@ -167,7 +166,7 @@ func (f *FirestoreProvider) InsertAction(ctx context.Context, siteID string, act
 	}
 	// Use RFC3339 as document ID for lexicographic ordering and efficient range queries
 	docID := action.Timestamp.UTC().Format(time.RFC3339)
-	_, err = coll.Doc(docID).Set(ctx, map[string]interface{}{
+	_, err = coll.Doc(docID).Set(ctx, map[string]any{
 		"json":      string(jsonBytes),
 		"timestamp": action.Timestamp,
 	})
@@ -283,7 +282,7 @@ func (f *FirestoreProvider) UpsertEnergyHistories(ctx context.Context, siteID st
 			return fmt.Errorf("failed to marshal energy stats: %w", err)
 		}
 		docID := s.TSHourStart.UTC().Format(time.RFC3339)
-		_, err = coll.Doc(docID).Set(ctx, map[string]interface{}{
+		_, err = coll.Doc(docID).Set(ctx, map[string]any{
 			"json":      string(jsonBytes),
 			"timestamp": s.TSHourStart,
 			"version":   version,
@@ -311,7 +310,7 @@ func (f *FirestoreProvider) UpsertEnergyHistories(ctx context.Context, siteID st
 		docID := s.TSHourStart.UTC().Format(time.RFC3339)
 		ref := coll.Doc(docID)
 
-		job, err := bw.Set(ref, map[string]interface{}{
+		job, err := bw.Set(ref, map[string]any{
 			"json":      string(jsonBytes),
 			"timestamp": s.TSHourStart,
 			"version":   version,
@@ -351,7 +350,7 @@ func (f *FirestoreProvider) UpsertWeather(ctx context.Context, siteID string, we
 			return fmt.Errorf("failed to marshal weather: %w", err)
 		}
 		docID := w.TSDayStart.UTC().Format(time.RFC3339)
-		_, err = coll.Doc(docID).Set(ctx, map[string]interface{}{
+		_, err = coll.Doc(docID).Set(ctx, map[string]any{
 			"json":       string(jsonBytes),
 			"tsDayStart": w.TSDayStart,
 			"version":    version,
@@ -374,7 +373,7 @@ func (f *FirestoreProvider) UpsertWeather(ctx context.Context, siteID string, we
 
 		docID := w.TSDayStart.UTC().Format(time.RFC3339)
 		ref := coll.Doc(docID)
-		job, err := bw.Set(ref, map[string]interface{}{
+		job, err := bw.Set(ref, map[string]any{
 			"json":       string(jsonBytes),
 			"tsDayStart": w.TSDayStart,
 			"version":    version,
@@ -640,7 +639,7 @@ func (f *FirestoreProvider) UpsertPrices(ctx context.Context, siteID string, pri
 			return fmt.Errorf("failed to marshal price: %w", err)
 		}
 		docID := p.TSStart.UTC().Format(time.RFC3339)
-		_, err = coll.Doc(docID).Set(ctx, map[string]interface{}{
+		_, err = coll.Doc(docID).Set(ctx, map[string]any{
 			"json":      string(jsonBytes),
 			"timestamp": p.TSStart,
 			"version":   version,
@@ -663,7 +662,7 @@ func (f *FirestoreProvider) UpsertPrices(ctx context.Context, siteID string, pri
 
 		docID := p.TSStart.UTC().Format(time.RFC3339)
 		ref := coll.Doc(docID)
-		job, err := bw.Set(ref, map[string]interface{}{
+		job, err := bw.Set(ref, map[string]any{
 			"json":      string(jsonBytes),
 			"timestamp": p.TSStart,
 			"version":   version,
@@ -777,7 +776,7 @@ func (f *FirestoreProvider) CreateSite(ctx context.Context, siteID string, site 
 	if err != nil {
 		return fmt.Errorf("failed to marshal site %s: %w", siteID, err)
 	}
-	_, err = f.client.Collection("sites").Doc(siteID).Create(ctx, map[string]interface{}{
+	_, err = f.client.Collection("sites").Doc(siteID).Create(ctx, map[string]any{
 		"json": string(siteJSON),
 	})
 	if err != nil {
@@ -792,7 +791,7 @@ func (f *FirestoreProvider) UpdateSite(ctx context.Context, siteID string, site 
 	if err != nil {
 		return fmt.Errorf("failed to marshal site %s: %w", siteID, err)
 	}
-	_, err = f.client.Collection("sites").Doc(siteID).Set(ctx, map[string]interface{}{
+	_, err = f.client.Collection("sites").Doc(siteID).Set(ctx, map[string]any{
 		"json": string(siteJSON),
 	}, firestore.MergeAll)
 	if err != nil {
@@ -807,7 +806,7 @@ func (f *FirestoreProvider) CreateUser(ctx context.Context, user types.User) err
 	if err != nil {
 		return fmt.Errorf("failed to marshal user %s: %w", user.ID, err)
 	}
-	_, err = f.client.Collection("users").Doc(user.ID).Create(ctx, map[string]interface{}{
+	_, err = f.client.Collection("users").Doc(user.ID).Create(ctx, map[string]any{
 		"json": string(userJSON),
 	})
 	if err != nil {
@@ -822,7 +821,7 @@ func (f *FirestoreProvider) UpdateUser(ctx context.Context, user types.User) err
 	if err != nil {
 		return fmt.Errorf("failed to marshal user %s: %w", user.ID, err)
 	}
-	_, err = f.client.Collection("users").Doc(user.ID).Set(ctx, map[string]interface{}{
+	_, err = f.client.Collection("users").Doc(user.ID).Set(ctx, map[string]any{
 		"json": string(userJSON),
 	}, firestore.MergeAll)
 	if err != nil {
@@ -843,7 +842,7 @@ func (f *FirestoreProvider) UpdateESSMockState(ctx context.Context, siteID strin
 	if err != nil {
 		return err
 	}
-	_, err = coll.Doc("mock_ess").Set(ctx, map[string]interface{}{
+	_, err = coll.Doc("mock_ess").Set(ctx, map[string]any{
 		"json": string(stateJSON),
 	}, firestore.MergeAll)
 	if err != nil {
@@ -891,7 +890,7 @@ func (f *FirestoreProvider) InsertFeedback(ctx context.Context, feedback types.F
 	}
 
 	coll := f.client.Collection("feedback")
-	_, err = coll.Doc(feedback.ID).Set(ctx, map[string]interface{}{
+	_, err = coll.Doc(feedback.ID).Set(ctx, map[string]any{
 		"json": string(jsonBytes),
 		"id":   feedback.ID,
 	})

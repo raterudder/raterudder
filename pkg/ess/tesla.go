@@ -220,7 +220,7 @@ func (b *baseTesla) newGETRequest(ctx context.Context, method, path, token, base
 	return req, nil
 }
 
-func (b *baseTesla) newPOSTRequest(ctx context.Context, method, path, token, baseURL string, payload interface{}) (*http.Request, error) {
+func (b *baseTesla) newPOSTRequest(ctx context.Context, method, path, token, baseURL string, payload any) (*http.Request, error) {
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, err
@@ -254,7 +254,7 @@ func (b *baseTesla) newPOSTRequest(ctx context.Context, method, path, token, bas
 	return req, nil
 }
 
-func (b *baseTesla) doRequest(req *http.Request, dest interface{}) error {
+func (b *baseTesla) doRequest(req *http.Request, dest any) error {
 	resp, err := b.client.Do(req)
 	if err != nil {
 		return err
@@ -454,17 +454,29 @@ func (b *Tesla) refreshToken(ctx context.Context, baseURL, refreshToken string) 
 	return b.base.doTokenRequest(ctx, baseURL, data)
 }
 
-func (b *Tesla) doGETRequest(ctx context.Context, method, path string, dest interface{}) error {
+func (b *Tesla) doGETRequest(ctx context.Context, method, path string, dest any) error {
 	req, err := b.base.newGETRequest(ctx, method, path, b.token, b.baseURL)
 	if err != nil {
 		return err
 	}
-	destWithResponse := struct {
-		Response interface{} `json:"response"`
-	}{
-		Response: dest,
+	var response struct {
+		Response json.RawMessage `json:"response"`
 	}
-	return b.base.doRequest(req, &destWithResponse)
+	if err := b.base.doRequest(req, &response); err != nil {
+		return err
+	}
+
+	// debug log the whole response which will aid in debugging
+	log.Ctx(ctx).DebugContext(ctx,
+		"tesla result",
+		slog.String("url", req.URL.String()),
+		slog.String("method", req.Method),
+		slog.Any("response", response.Response),
+	)
+	if err := json.Unmarshal(response.Response, dest); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (b *Tesla) getDefaultSiteID(ctx context.Context) (int64, error) {
@@ -473,7 +485,7 @@ func (b *Tesla) getDefaultSiteID(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	for _, p := range res {
-		if p.ResourceType == "battery" || p.EnergySiteID != 0 {
+		if p.DeviceType == "energy" && p.ResourceType == "battery" && p.EnergySiteID != 0 {
 			return p.EnergySiteID, nil
 		}
 	}
@@ -594,7 +606,7 @@ type teslaProduct struct {
 	EnergySiteID int64  `json:"energy_site_id"`
 	DeviceType   string `json:"device_type"`
 	ResourceType string `json:"resource_type"`
-	ID           int64  `json:"id"`
+	ID           string `json:"id"`
 }
 
 type teslaProductsResponse []teslaProduct

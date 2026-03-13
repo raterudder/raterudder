@@ -63,15 +63,15 @@ func TestTesla(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, "client_credentials", r.FormValue("grant_type"))
 				assert.Equal(t, "test-secret", r.FormValue("client_secret"))
-				json.NewEncoder(w).Encode(map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
 					"access_token": "partner-mock-access",
 					"expires_in":   3600,
 				})
 			case "/api/1/partner_accounts":
 				assert.Equal(t, "Bearer partner-mock-access", r.Header.Get("Authorization"))
 				w.WriteHeader(http.StatusOK)
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"response": map[string]interface{}{"registered": true},
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{"registered": true},
 				})
 			default:
 				t.Logf("Unexpected request: %s", r.URL.Path)
@@ -91,21 +91,22 @@ func TestTesla(t *testing.T) {
 				err := r.ParseForm()
 				require.NoError(t, err)
 				if assert.Equal(t, "NA_test-code", r.FormValue("code")) {
-					json.NewEncoder(w).Encode(map[string]interface{}{
+					json.NewEncoder(w).Encode(map[string]any{
 						"access_token":  "mock-access",
 						"refresh_token": "mock-refresh",
 						"expires_in":    3600,
 					})
 				}
 			case "/api/1/products":
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"response": []map[string]interface{}{
-						{"energy_site_id": 1234, "resource_type": "battery"},
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": []map[string]any{
+						{"energy_site_id": 5678, "device_type": "energy", "resource_type": "wall_connector", "id": "wall-connector-5678"},
+						{"energy_site_id": 1234, "device_type": "energy", "resource_type": "battery", "id": "battery-1234"},
 					},
 				})
 			case "/api/1/energy_sites/1234/site_info":
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"response": map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
 						"backup_reserve_percent": 20.0,
 					},
 				})
@@ -137,15 +138,15 @@ func TestTesla(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case "/api/1/energy_sites/1234/site_info":
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"response": map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
 						"backup_reserve_percent": 20.0,
 						"nameplate_energy":       27000.0,
 					},
 				})
 			case "/api/1/energy_sites/1234/live_status":
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"response": map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
 						"solar_power":        1200.0,
 						"battery_power":      -500.0,
 						"grid_power":         700.0,
@@ -192,15 +193,15 @@ func TestTesla(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case "/api/1/energy_sites/1234/site_info":
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"response": map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
 						"backup_reserve_percent": 25.0,
 						"nameplate_energy":       27000.0,
 					},
 				})
 			case "/api/1/energy_sites/1234/live_status":
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"response": map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
 						"solar_power":        1200.0,
 						"battery_power":      -500.0,
 						"grid_power":         700.0,
@@ -247,15 +248,15 @@ func TestTesla(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case "/api/1/energy_sites/1234/site_info":
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"response": map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
 						"backup_reserve_percent": 25.0,
 						"nameplate_energy":       27000.0,
 					},
 				})
 			case "/api/1/energy_sites/1234/live_status":
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"response": map[string]interface{}{
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
 						"solar_power":        1200.0,
 						"battery_power":      -500.0,
 						"grid_power":         700.0,

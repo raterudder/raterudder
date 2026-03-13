@@ -168,26 +168,26 @@ func (s *OpenMeteo) FetchWeatherForecast(
 		var errData map[string]interface{}
 		err := json.NewDecoder(resp.Body).Decode(&errData)
 		if err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to parse weather error response", slog.Any("error", err), slog.Int("status", resp.StatusCode))
+			log.Ctx(ctx).ErrorContext(ctx, "open-meteo: failed to parse weather error response", slog.Any("error", err), slog.Int("status", resp.StatusCode))
 			return nil, fmt.Errorf("weather api returned status %d", resp.StatusCode)
 		}
-		log.Ctx(ctx).ErrorContext(ctx, "weather api returned status", slog.Any("response", errData), slog.Int("status", resp.StatusCode))
+		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: weather api returned status", slog.Any("response", errData), slog.Int("status", resp.StatusCode))
 		return nil, fmt.Errorf("weather api returned status %d: %v", resp.StatusCode, errData)
 	}
 
 	var data weatherForecastResponse
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to decode weather response", slog.Any("error", err))
+		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: failed to decode weather response", slog.Any("error", err))
 		return nil, fmt.Errorf("failed to decode weather response: %w", err)
 	}
 
 	if len(data.Daily.Time) != len(data.Daily.Sunrise) || len(data.Daily.Time) != len(data.Daily.Sunset) {
-		log.Ctx(ctx).ErrorContext(ctx, "open-meteo daily data mismatch", slog.Int("timeCount", len(data.Daily.Time)), slog.Int("sunriseCount", len(data.Daily.Sunrise)), slog.Int("sunsetCount", len(data.Daily.Sunset)))
+		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: daily data mismatch", slog.Int("timeCount", len(data.Daily.Time)), slog.Int("sunriseCount", len(data.Daily.Sunrise)), slog.Int("sunsetCount", len(data.Daily.Sunset)))
 		return nil, fmt.Errorf("daily data mismatch: %d times, %d sunrises, %d sunsets", len(data.Daily.Time), len(data.Daily.Sunrise), len(data.Daily.Sunset))
 	}
 
 	if len(data.Hourly.Time) != len(data.Hourly.ShortwaveRadiation) {
-		log.Ctx(ctx).ErrorContext(ctx, "open-meteo hourly data mismatch", slog.Int("timeCount", len(data.Hourly.Time)), slog.Int("ghiCount", len(data.Hourly.ShortwaveRadiation)))
+		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.Int("timeCount", len(data.Hourly.Time)), slog.Int("ghiCount", len(data.Hourly.ShortwaveRadiation)))
 		return nil, fmt.Errorf("hourly data mismatch: %d times, %d shortwave radiation", len(data.Hourly.Time), len(data.Hourly.ShortwaveRadiation))
 	}
 
@@ -210,13 +210,13 @@ func (s *OpenMeteo) FetchWeatherForecast(
 			if tStr == targetDateStr {
 				t, err := time.ParseInLocation("2006-01-02T15:04", data.Daily.Sunrise[i], loc)
 				if err != nil {
-					log.Ctx(ctx).WarnContext(ctx, "failed to parse sunrise time", slog.Any("error", err), slog.String("time", data.Daily.Sunrise[i]))
+					log.Ctx(ctx).WarnContext(ctx, "open-meteo: failed to parse sunrise time", slog.Any("error", err), slog.String("time", data.Daily.Sunrise[i]))
 				} else {
 					w.TSSunrise = t
 				}
 				t, err = time.ParseInLocation("2006-01-02T15:04", data.Daily.Sunset[i], loc)
 				if err != nil {
-					log.Ctx(ctx).WarnContext(ctx, "failed to parse sunset time", slog.Any("error", err), slog.String("time", data.Daily.Sunset[i]))
+					log.Ctx(ctx).WarnContext(ctx, "open-meteo: failed to parse sunset time", slog.Any("error", err), slog.String("time", data.Daily.Sunset[i]))
 				} else {
 					w.TSSunset = t
 				}
@@ -225,7 +225,7 @@ func (s *OpenMeteo) FetchWeatherForecast(
 		}
 
 		if len(data.Hourly.Time) != len(data.Hourly.ShortwaveRadiation) {
-			log.Ctx(ctx).ErrorContext(ctx, "hourly data mismatch", slog.Int("hourlyCount", len(data.Hourly.Time)), slog.Int("ghiCount", len(data.Hourly.ShortwaveRadiation)))
+			log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.Int("hourlyCount", len(data.Hourly.Time)), slog.Int("ghiCount", len(data.Hourly.ShortwaveRadiation)))
 			return nil, fmt.Errorf("hourly data mismatch: %d hourly times, %d shortwave radiation", len(data.Hourly.Time), len(data.Hourly.ShortwaveRadiation))
 		}
 
@@ -234,7 +234,7 @@ func (s *OpenMeteo) FetchWeatherForecast(
 			if strings.HasPrefix(tStr, targetDateStr) {
 				t, err := time.ParseInLocation("2006-01-02T15:04", tStr, loc)
 				if err != nil {
-					log.Ctx(ctx).WarnContext(ctx, "failed to parse hourly time", slog.Any("error", err), slog.String("time", tStr))
+					log.Ctx(ctx).WarnContext(ctx, "open-meteo: failed to parse hourly time", slog.Any("error", err), slog.String("time", tStr))
 					continue
 				}
 				w.ForecastHours = append(w.ForecastHours, types.HourlyWeather{
