@@ -153,7 +153,7 @@ func (t *genericTOU) GetConfirmedPrices(ctx context.Context, start, end time.Tim
 
 		// even if the end time goes beyond the end time, we still want to include it
 		// since it will cover the time period between start and end
-		if !p.TSStart.Before(start) && !p.TSStart.After(end) {
+		if !p.TSStart.Before(start) && p.TSStart.Before(end) {
 			prices = append(prices, p)
 		}
 
