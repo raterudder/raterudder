@@ -137,7 +137,7 @@ func TestHandleUpdate(t *testing.T) {
 
 			handler := srv.authMiddleware(http.HandlerFunc(srv.handleUpdate))
 			handler.ServeHTTP(w, req)
-			assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+			assert.Equal(t, http.StatusUnauthorized, w.Result().StatusCode)
 		})
 
 		t.Run("Invalid Authorization Header Format", func(t *testing.T) {
@@ -163,7 +163,7 @@ func TestHandleUpdate(t *testing.T) {
 
 			handler := srv.authMiddleware(http.HandlerFunc(srv.handleUpdate))
 			handler.ServeHTTP(w, req)
-			assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+			assert.Equal(t, http.StatusUnauthorized, w.Result().StatusCode)
 		})
 
 		t.Run("Admin Email Fallback - Valid", func(t *testing.T) {
@@ -191,7 +191,7 @@ func TestHandleUpdate(t *testing.T) {
 
 			handler := srv.authMiddleware(http.HandlerFunc(srv.handleUpdate))
 			handler.ServeHTTP(w, req)
-			assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+			assert.Equal(t, http.StatusUnauthorized, w.Result().StatusCode)
 		})
 
 		t.Run("Valid Token, Correct Specific Email", func(t *testing.T) {
@@ -220,7 +220,7 @@ func TestHandleUpdate(t *testing.T) {
 
 			handler := srv.authMiddleware(http.HandlerFunc(srv.handleUpdate))
 			handler.ServeHTTP(w, req)
-			assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+			assert.Equal(t, http.StatusUnauthorized, w.Result().StatusCode)
 		})
 
 		t.Run("No Auth Configured - Blocked", func(t *testing.T) {
@@ -238,7 +238,7 @@ func TestHandleUpdate(t *testing.T) {
 
 			handler := srv.authMiddleware(http.HandlerFunc(srv.handleUpdate))
 			handler.ServeHTTP(w, req)
-			assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+			assert.Equal(t, http.StatusUnauthorized, w.Result().StatusCode)
 		})
 	})
 

@@ -166,7 +166,7 @@ func TestAuthMiddleware(t *testing.T) {
 
 		server.authMiddleware(testHandler).ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
 		assert.True(t, mocks.AssertExpectations(t))
 	})
 
@@ -407,7 +407,7 @@ func TestAuthMiddleware(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer "+validToken) // validToken has "test-audience"
 
 		server.authMiddleware(testHandler).ServeHTTP(w, req)
-		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
 		assert.True(t, mocks.AssertExpectations(t))
 	})
 
