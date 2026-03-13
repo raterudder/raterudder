@@ -454,11 +454,21 @@ func (b *Tesla) refreshToken(ctx context.Context, baseURL, refreshToken string) 
 	return b.base.doTokenRequest(ctx, baseURL, data)
 }
 
-func (b *Tesla) doGETRequest(ctx context.Context, method, path string, dest any) error {
-	req, err := b.base.newGETRequest(ctx, method, path, b.token, b.baseURL)
+func (b *Tesla) doGETRequest(ctx context.Context, path string, params url.Values, dest any) error {
+	req, err := b.base.newGETRequest(ctx, "GET", path, b.token, b.baseURL)
 	if err != nil {
 		return err
 	}
+	if len(params) > 0 {
+		q := req.URL.Query()
+		for k, vs := range params {
+			for _, v := range vs {
+				q.Add(k, v)
+			}
+		}
+		req.URL.RawQuery = q.Encode()
+	}
+
 	var response struct {
 		Response json.RawMessage `json:"response"`
 	}
@@ -481,7 +491,7 @@ func (b *Tesla) doGETRequest(ctx context.Context, method, path string, dest any)
 
 func (b *Tesla) getDefaultSiteID(ctx context.Context) (int64, error) {
 	var res teslaProductsResponse
-	if err := b.doGETRequest(ctx, "GET", "api/1/products", &res); err != nil {
+	if err := b.doGETRequest(ctx, "api/1/products", nil, &res); err != nil {
 		return 0, err
 	}
 	for _, p := range res {
@@ -495,7 +505,7 @@ func (b *Tesla) getDefaultSiteID(ctx context.Context) (int64, error) {
 func (b *Tesla) getSiteInfo(ctx context.Context) (teslaSiteInfoResponse, error) {
 	siteInfoPath := fmt.Sprintf("api/1/energy_sites/%d/site_info", b.energySiteID)
 	var siteInfo teslaSiteInfoResponse
-	if err := b.doGETRequest(ctx, "GET", siteInfoPath, &siteInfo); err != nil {
+	if err := b.doGETRequest(ctx, siteInfoPath, nil, &siteInfo); err != nil {
 		return teslaSiteInfoResponse{}, err
 	}
 	return siteInfo, nil
@@ -527,7 +537,7 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 
 	liveStatusPath := fmt.Sprintf("api/1/energy_sites/%d/live_status", b.energySiteID)
 	var liveStatus teslaLiveStatusResponse
-	if err := b.doGETRequest(ctx, "GET", liveStatusPath, &liveStatus); err != nil {
+	if err := b.doGETRequest(ctx, liveStatusPath, nil, &liveStatus); err != nil {
 		return types.SystemStatus{}, err
 	}
 
@@ -561,8 +571,130 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 
 // GetEnergyHistory returns the energy history for the specified period.
 func (b *Tesla) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]types.EnergyStats, error) {
-	// TODO: implement energy history fetching
-	return nil, nil // Return nil, nil to use builtin raterudder logging natively
+	log.Ctx(ctx).DebugContext(ctx, "getting tesla energy history", slog.String("start", start.String()), slog.String("end", end.String()))
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	siteInfo, err := b.getSiteInfoWithCache(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+
+	tz := siteInfo.InstallationTimeZone
+	if tz == "" {
+		tz = "UTC"
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to load timezone, defaulting to UTC", slog.String("tz", tz), slog.Any("error", err))
+		loc = time.UTC
+	}
+
+	historyPath := fmt.Sprintf("api/1/energy_sites/%d/calendar_history", b.energySiteID)
+	baseParams := url.Values{}
+	baseParams.Set("period", "day")
+	baseParams.Set("time_zone", tz)
+	baseParams.Set("start_date", start.In(loc).Format(time.RFC3339))
+	baseParams.Set("end_date", end.In(loc).Format(time.RFC3339))
+
+	// Fetch energy history
+	energyParams := url.Values{}
+	for k, v := range baseParams {
+		energyParams[k] = v
+	}
+	energyParams.Set("kind", "energy")
+
+	var energyRes teslaCalendarHistoryResponse
+	if err := b.doGETRequest(ctx, historyPath, energyParams, &energyRes); err != nil {
+		return nil, err
+	}
+
+	// Aggregate energy data into hourly buckets
+	hourlyStats := make(map[string]*types.EnergyStats)
+	for _, ts := range energyRes.TimeSeries {
+		t, err := time.Parse(time.RFC3339, ts.Timestamp)
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to parse timestamp", slog.String("timestamp", ts.Timestamp), slog.Any("error", err))
+			continue
+		}
+		tInLoc := t.In(loc)
+
+		hourKey := tInLoc.Truncate(time.Hour).Format(time.RFC3339)
+		if _, exists := hourlyStats[hourKey]; !exists {
+			hourlyStats[hourKey] = &types.EnergyStats{
+				TSHourStart: tInLoc.Truncate(time.Hour),
+			}
+		}
+		s := hourlyStats[hourKey]
+
+		s.SolarKWH += ts.SolarEnergyExportedWH / 1000.0
+		s.BatteryChargedKWH += (ts.BatteryEnergyImportedFromGridWH + ts.BatteryEnergyImportedFromSolarWH) / 1000.0
+		s.BatteryUsedKWH += ts.BatteryEnergyExportedWH / 1000.0
+		s.GridImportKWH += ts.GridEnergyImportedWH / 1000.0
+		s.GridExportKWH += (ts.GridEnergyExportedFromSolarWH + ts.GridEnergyExportedFromBatteryWH) / 1000.0
+		s.HomeKWH += (ts.ConsumerEnergyImportedFromGridWH + ts.ConsumerEnergyImportedFromSolarWH + ts.ConsumerEnergyImportedFromBatteryWH) / 1000.0
+		s.SolarToHomeKWH += ts.ConsumerEnergyImportedFromSolarWH / 1000.0
+		s.SolarToBatteryKWH += ts.BatteryEnergyImportedFromSolarWH / 1000.0
+		s.SolarToGridKWH += ts.GridEnergyExportedFromSolarWH / 1000.0
+		s.BatteryToHomeKWH += ts.ConsumerEnergyImportedFromBatteryWH / 1000.0
+		s.BatteryToGridKWH += ts.GridEnergyExportedFromBatteryWH / 1000.0
+	}
+
+	// Fetch SOE (state of energy) history for min/max battery SOC
+	soeParams := url.Values{}
+	for k, v := range baseParams {
+		soeParams[k] = v
+	}
+	soeParams.Set("kind", "soe")
+
+	var soeRes teslaSOEResponse
+	if err := b.doGETRequest(ctx, historyPath, soeParams, &soeRes); err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to get SOE history, continuing without SOC data", slog.Any("error", err))
+	}
+
+	// Merge SOE data into hourly buckets for min/max battery SOC
+	for _, soeEntry := range soeRes.TimeSeries {
+		t, err := time.Parse(time.RFC3339, soeEntry.Timestamp)
+		if err != nil {
+			continue
+		}
+		tInLoc := t.In(loc)
+		hourKey := tInLoc.Truncate(time.Hour).Format(time.RFC3339)
+
+		s, exists := hourlyStats[hourKey]
+		if !exists {
+			// SOE entry for hour without energy data; create a bucket
+			s = &types.EnergyStats{
+				TSHourStart:   tInLoc.Truncate(time.Hour),
+				MinBatterySOC: soeEntry.SOE,
+				MaxBatterySOC: soeEntry.SOE,
+			}
+			hourlyStats[hourKey] = s
+			continue
+		}
+
+		if s.MinBatterySOC == 0 && s.MaxBatterySOC == 0 {
+			// First SOE for this bucket
+			s.MinBatterySOC = soeEntry.SOE
+			s.MaxBatterySOC = soeEntry.SOE
+		} else {
+			if soeEntry.SOE < s.MinBatterySOC {
+				s.MinBatterySOC = soeEntry.SOE
+			}
+			if soeEntry.SOE > s.MaxBatterySOC {
+				s.MaxBatterySOC = soeEntry.SOE
+			}
+		}
+	}
+
+	var allStats []types.EnergyStats
+	for _, s := range hourlyStats {
+		if !s.TSHourStart.Before(start) && s.TSHourStart.Before(end) {
+			allStats = append(allStats, *s)
+		}
+	}
+
+	return allStats, nil
 }
 
 func (b *baseTesla) RegisterTesla(ctx context.Context, domain string) error {
@@ -661,4 +793,35 @@ type teslaRegisterRequest struct {
 type teslaErrorResponse struct {
 	Error            string `json:"error"`
 	ErrorDescription string `json:"error_description"`
+}
+
+type teslaCalendarHistoryTimeSeries struct {
+	Timestamp                           string  `json:"timestamp"`
+	SolarEnergyExportedWH               float64 `json:"solar_energy_exported"`
+	BatteryEnergyExportedWH             float64 `json:"battery_energy_exported"`
+	BatteryEnergyImportedFromGridWH     float64 `json:"battery_energy_imported_from_grid"`
+	BatteryEnergyImportedFromSolarWH    float64 `json:"battery_energy_imported_from_solar"`
+	GridEnergyImportedWH                float64 `json:"grid_energy_imported"`
+	GridEnergyExportedFromSolarWH       float64 `json:"grid_energy_exported_from_solar"`
+	GridEnergyExportedFromBatteryWH     float64 `json:"grid_energy_exported_from_battery"`
+	ConsumerEnergyImportedFromGridWH    float64 `json:"consumer_energy_imported_from_grid"`
+	ConsumerEnergyImportedFromSolarWH   float64 `json:"consumer_energy_imported_from_solar"`
+	ConsumerEnergyImportedFromBatteryWH float64 `json:"consumer_energy_imported_from_battery"`
+}
+
+type teslaCalendarHistoryResponse struct {
+	SerialNumber string                           `json:"serial_number"`
+	Period       string                           `json:"period"`
+	TimeSeries   []teslaCalendarHistoryTimeSeries `json:"time_series"`
+}
+
+type teslaSOETimeSeries struct {
+	Timestamp string  `json:"timestamp"`
+	SOE       float64 `json:"soe"`
+}
+
+type teslaSOEResponse struct {
+	SerialNumber string               `json:"serial_number"`
+	Period       string               `json:"period"`
+	TimeSeries   []teslaSOETimeSeries `json:"time_series"`
 }

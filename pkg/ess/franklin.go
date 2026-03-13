@@ -1099,8 +1099,8 @@ func (f *Franklin) GetEnergyHistory(ctx context.Context, start, end time.Time) (
 
 		// Filter stats that are within the requested range
 		for _, s := range stats {
-			hourEnd := s.TSHourStart.Add(time.Hour)
-			if !s.TSHourStart.Before(start) && !hourEnd.After(end) {
+			// if the end is in the middle of an hour, include that hour
+			if !s.TSHourStart.Before(start) && s.TSHourStart.Before(end) {
 				allStats = append(allStats, s)
 			}
 		}

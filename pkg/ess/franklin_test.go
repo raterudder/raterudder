@@ -946,8 +946,10 @@ func TestFranklin(t *testing.T) {
 
 		// Requesting 12:00 to 13:00 in Chicago time
 		// 12:00 CST is 18:00 UTC
-		start, _ := time.Parse(time.RFC3339, "2026-02-01T18:00:00Z")
-		end, _ := time.Parse(time.RFC3339, "2026-02-01T19:00:00Z")
+		start, err := time.Parse(time.RFC3339, "2026-02-01T18:00:00Z")
+		require.NoError(t, err)
+		end, err := time.Parse(time.RFC3339, "2026-02-01T19:00:00Z")
+		require.NoError(t, err)
 
 		stats, err := f.GetEnergyHistory(context.Background(), start, end)
 		require.NoError(t, err, "GetEnergyHistory should succeed")
