@@ -213,7 +213,9 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "failed to get settings", http.StatusInternalServerError)
 		return
 	}
+	// Preserve existing auth status and encrypted credentials by default
 	newSettings.ESSAuthStatus = existing.ESSAuthStatus
+	newSettings.EncryptedCredentials = existing.EncryptedCredentials
 
 	// Update Location if zip/country changed
 	if newSettings.PostalCode != "" && newSettings.CountryCode != "" {
@@ -240,56 +242,69 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		newSettings.Location = nil
 	}
 
-	var wg sync.WaitGroup
-	// Handle credentials update
-	if req.Credentials != nil {
-		var existingCreds types.Credentials
-		if len(existing.EncryptedCredentials) > 0 {
-			existingCreds, err = s.decryptCredentials(ctx, existing.EncryptedCredentials)
-			if err != nil {
-				log.Ctx(ctx).ErrorContext(ctx, "failed to decrypt credentials", slog.Any("error", err))
-				writeJSONError(w, "failed to decrypt credentials", http.StatusInternalServerError)
-				return
+	var existingCreds types.Credentials
+	var existingCredsOnce sync.Once
+	var credsChanged bool
+	loadExistingCreds := func() {
+		existingCredsOnce.Do(func() {
+			if len(existing.EncryptedCredentials) > 0 {
+				existingCreds, err = s.decryptCredentials(ctx, existing.EncryptedCredentials)
+				if err != nil {
+					log.Ctx(ctx).ErrorContext(ctx, "failed to decrypt credentials", slog.Any("error", err))
+					writeJSONError(w, "failed to decrypt credentials", http.StatusInternalServerError)
+					return
+				}
 			}
-		}
+		})
+	}
 
-		// check which credentials changed
+	var wg sync.WaitGroup
+	// Handle credentials or ESS update
+	if req.Credentials != nil || existing.ESS != newSettings.ESS {
+		loadExistingCreds()
+
+		// check if ESS changed
 		var changedESS bool
 		var shouldBackfillHistory bool
+		if existing.ESS != newSettings.ESS {
+			changedESS = true
+			shouldBackfillHistory = true
+		}
 		switch newSettings.ESS {
 		case "franklin":
-			if req.Credentials.Franklin != nil {
+			if req.Credentials != nil && req.Credentials.Franklin != nil {
 				changedESS = true
 				if existingCreds.Franklin == nil {
 					shouldBackfillHistory = true
 				}
 				existingCreds.Franklin = req.Credentials.Franklin
-				existingCreds.Mock = nil
-				existingCreds.Tesla = nil
 			}
+			existingCreds.Mock = nil
+			existingCreds.Tesla = nil
 		case "mock":
-			if req.Credentials.Mock != nil {
+			if req.Credentials != nil && req.Credentials.Mock != nil {
 				changedESS = true
 				if existingCreds.Mock == nil {
 					shouldBackfillHistory = true
 				}
 				existingCreds.Mock = req.Credentials.Mock
-				existingCreds.Franklin = nil
-				existingCreds.Tesla = nil
 			}
+			existingCreds.Franklin = nil
+			existingCreds.Tesla = nil
 		case "tesla":
-			if req.Credentials.Tesla != nil {
+			if req.Credentials != nil && req.Credentials.Tesla != nil {
 				changedESS = true
 				if existingCreds.Tesla == nil {
 					shouldBackfillHistory = true
 				}
 				existingCreds.Tesla = req.Credentials.Tesla
-				existingCreds.Franklin = nil
-				existingCreds.Mock = nil
 			}
+			existingCreds.Franklin = nil
+			existingCreds.Mock = nil
 		}
 
 		// if the ess credentials changed, we need to verify them and potentially backfill history
+		log.Ctx(ctx).InfoContext(ctx, "ess credentials changed, verifying and potentially backfilling history", slog.Bool("changedESS", changedESS), slog.Bool("shouldBackfillHistory", shouldBackfillHistory))
 		if changedESS {
 			essSystem, err := s.ess.Site(ctx, siteID, newSettings)
 			if err != nil {
@@ -342,7 +357,10 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				}()
 			}
 		}
+		credsChanged = true
+	}
 
+	if credsChanged {
 		// store the existing credentials with the new ones updated in-place
 		encrypted, err := s.encryptCredentials(ctx, existingCreds)
 		if err != nil {
@@ -351,9 +369,6 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		newSettings.EncryptedCredentials = encrypted
-	} else {
-		// Preserve existing encrypted credentials if not updating
-		newSettings.EncryptedCredentials = existing.EncryptedCredentials
 	}
 
 	if err := s.storage.SetSettings(ctx, siteID, newSettings, types.CurrentSettingsVersion); err != nil {

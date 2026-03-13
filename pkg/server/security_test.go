@@ -38,6 +38,7 @@ func TestSecurityHeadersMiddleware(t *testing.T) {
 
 		csp := resp.Header.Get("Content-Security-Policy")
 		assert.Contains(t, csp, "default-src 'self'")
+		assert.Contains(t, csp, "worker-src 'self' blob:")
 		// Google/Apple endpoints should be excluded by default
 		assert.NotContains(t, csp, "accounts.google.com")
 		assert.NotContains(t, csp, "appleid.apple.com")

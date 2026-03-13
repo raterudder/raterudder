@@ -261,6 +261,12 @@ describe('App & Settings', () => {
     });
 
     it('can update ComEd rate options', async () => {
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            utilityProvider: 'comed',
+            utilityRate: 'comed_besh',
+            utilityRateOptions: {}
+        });
         await navigateToSettings();
 
         // Wait for Utility Options section
@@ -281,6 +287,7 @@ describe('App & Settings', () => {
             expect(screen.getByText('Settings saved successfully')).toBeInTheDocument();
             expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
                 utilityRateOptions: expect.objectContaining({
+                    rateClass: "singleFamilyWithoutElectricHeat",
                     variableDeliveryRate: true
                 })
             }), expect.any(String), undefined);
@@ -347,7 +354,11 @@ describe('App & Settings', () => {
         await waitFor(() => {
             expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
                 utilityProvider: 'comed',
-                utilityRate: 'comed_besh'
+                utilityRate: 'comed_besh',
+                utilityRateOptions: expect.objectContaining({
+                    rateClass: "singleFamilyWithoutElectricHeat",
+                    variableDeliveryRate: false
+                })
             }), expect.any(String), undefined);
         });
     });
@@ -424,6 +435,7 @@ describe('App & Settings', () => {
          (fetchSettings as any).mockResolvedValue({
              ...defaultSettings,
              utilityProvider: 'hidden_utility',
+             utilityRate: 'hidden_rate',
              ess: 'hidden_ess',
          });
 
@@ -434,8 +446,7 @@ describe('App & Settings', () => {
          expect(screen.getByText("Secret ESS")).toBeInTheDocument();
 
          // In edit mode (change), the option should also be visible in the dropdown
-         // There are two "Change" / "Update" buttons, so look by closer container or find specific
-         const utilityChangeBtn = screen.getAllByText('Change')[0] || screen.getByText('Change');
+         const utilityChangeBtn = screen.getByText('Change');
          fireEvent.click(utilityChangeBtn); // click Utility Service "Change"
 
          const serviceSelect = await screen.findByLabelText(/Service/i);
@@ -516,5 +527,39 @@ describe('App & Settings', () => {
             });
         });
         windowOpenSpy.mockRestore();
+    });
+
+    it('shows error when required ESS credential field is missing', async () => {
+        const user = userEvent.setup();
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            ess: '',
+            hasCredentials: {}
+        });
+
+        await navigateToSettings();
+
+        // Select ESS
+        const essSelect = await screen.findByLabelText(/System Type/i);
+        await user.click(essSelect);
+        const franklinOption = await screen.findByRole('option', { name: 'FranklinWH' });
+        await user.click(franklinOption);
+
+        // Click Save without filling anything
+        const saveBtn = screen.getByText('Save Settings');
+        fireEvent.click(saveBtn);
+
+        await waitFor(() => {
+            expect(screen.getByText('The Email field is required.')).toBeInTheDocument();
+        });
+
+        // Fill Email, still missing Password
+        const emailInput = await screen.findByLabelText('Email');
+        await user.type(emailInput, 'user@example.com');
+        fireEvent.click(saveBtn);
+
+        await waitFor(() => {
+            expect(screen.getByText('The Password field is required.')).toBeInTheDocument();
+        });
     });
 });
