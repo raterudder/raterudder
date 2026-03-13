@@ -70,10 +70,6 @@ func TestFirestoreProvider(t *testing.T) {
 		require.NoError(t, err)
 
 		t.Run("UpsertMultipleBatches", func(t *testing.T) {
-			// Temporarily lower batch size
-			origBatchSize := maxBatchSize
-			maxBatchSize = 2
-			defer func() { maxBatchSize = origBatchSize }()
 
 			var batchPrices []types.Price
 			for i := 0; i < 5; i++ {
@@ -241,11 +237,6 @@ func TestFirestoreProvider(t *testing.T) {
 		require.NoError(t, f.UpsertEnergyHistories(ctx, "test-site", []types.EnergyStats{stats}, 0))
 
 		t.Run("UpsertMultipleBatches", func(t *testing.T) {
-			// Temporarily lower batch size
-			origBatchSize := maxBatchSize
-			maxBatchSize = 2
-			defer func() { maxBatchSize = origBatchSize }()
-
 			var batchStats []types.EnergyStats
 			for i := 0; i < 5; i++ {
 				batchStats = append(batchStats, types.EnergyStats{

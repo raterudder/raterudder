@@ -25,9 +25,6 @@ type FirestoreProvider struct {
 	database  string
 }
 
-// maxBatchSize is the maximum number of writes allowed in a single Firestore batch.
-// This is adjustable for testing.
-var maxBatchSize = 100
 
 // configuredFirestore sets up the Firestore provider.
 // It registers flags for configuration.
@@ -297,17 +294,13 @@ func (f *FirestoreProvider) UpsertEnergyHistories(ctx context.Context, siteID st
 		return nil
 	}
 
-	// For multiple items, use batches chunked by maxBatchSize
-	var batch *firestore.WriteBatch
-	count := 0
+	// For multiple items, use BulkWriter
+	bw := f.client.BulkWriter(ctx)
+	jobs := make([]*firestore.BulkWriterJob, 0, len(stats))
 
 	for _, s := range stats {
 		if s.TSHourStart.IsZero() {
 			return fmt.Errorf("energy stats missing tsHourStart")
-		}
-
-		if count == 0 {
-			batch = f.client.Batch()
 		}
 
 		jsonBytes, err := json.Marshal(s)
@@ -317,25 +310,23 @@ func (f *FirestoreProvider) UpsertEnergyHistories(ctx context.Context, siteID st
 
 		docID := s.TSHourStart.UTC().Format(time.RFC3339)
 		ref := coll.Doc(docID)
-		batch.Set(ref, map[string]interface{}{
+
+		job, err := bw.Set(ref, map[string]interface{}{
 			"json":      string(jsonBytes),
 			"timestamp": s.TSHourStart,
 			"version":   version,
 		})
-
-		count++
-		if count >= maxBatchSize {
-			if _, err := batch.Commit(ctx); err != nil {
-				return fmt.Errorf("failed to commit energy history batch: %w", err)
-			}
-			count = 0
+		if err != nil {
+			return fmt.Errorf("failed to enqueue energy history: %w", err)
 		}
+		jobs = append(jobs, job)
 	}
 
-	// Commit any remaining items
-	if count > 0 {
-		if _, err := batch.Commit(ctx); err != nil {
-			return fmt.Errorf("failed to commit remaining energy history batch: %w", err)
+	bw.End()
+
+	for _, job := range jobs {
+		if _, err := job.Results(); err != nil {
+			return fmt.Errorf("failed to upsert energy history: %w", err)
 		}
 	}
 
@@ -371,14 +362,11 @@ func (f *FirestoreProvider) UpsertWeather(ctx context.Context, siteID string, we
 		return nil
 	}
 
-	var batch *firestore.WriteBatch
-	count := 0
+	// For multiple items, use BulkWriter
+	bw := f.client.BulkWriter(ctx)
+	jobs := make([]*firestore.BulkWriterJob, 0, len(weather))
 
 	for _, w := range weather {
-		if count == 0 {
-			batch = f.client.Batch()
-		}
-
 		jsonBytes, err := json.Marshal(w)
 		if err != nil {
 			return fmt.Errorf("failed to marshal weather: %w", err)
@@ -386,24 +374,22 @@ func (f *FirestoreProvider) UpsertWeather(ctx context.Context, siteID string, we
 
 		docID := w.TSDayStart.UTC().Format(time.RFC3339)
 		ref := coll.Doc(docID)
-		batch.Set(ref, map[string]interface{}{
+		job, err := bw.Set(ref, map[string]interface{}{
 			"json":       string(jsonBytes),
 			"tsDayStart": w.TSDayStart,
 			"version":    version,
 		})
-
-		count++
-		if count >= maxBatchSize {
-			if _, err := batch.Commit(ctx); err != nil {
-				return fmt.Errorf("failed to commit weather batch: %w", err)
-			}
-			count = 0
+		if err != nil {
+			return fmt.Errorf("failed to enqueue weather: %w", err)
 		}
+		jobs = append(jobs, job)
 	}
 
-	if count > 0 {
-		if _, err := batch.Commit(ctx); err != nil {
-			return fmt.Errorf("failed to commit remaining weather batch: %w", err)
+	bw.End()
+
+	for _, job := range jobs {
+		if _, err := job.Results(); err != nil {
+			return fmt.Errorf("failed to upsert weather: %w", err)
 		}
 	}
 
@@ -665,15 +651,11 @@ func (f *FirestoreProvider) UpsertPrices(ctx context.Context, siteID string, pri
 		return nil
 	}
 
-	// For multiple items, use batches chunked by maxBatchSize
-	var batch *firestore.WriteBatch
-	count := 0
+	// For multiple items, use BulkWriter
+	bw := f.client.BulkWriter(ctx)
+	jobs := make([]*firestore.BulkWriterJob, 0, len(prices))
 
 	for _, p := range prices {
-		if count == 0 {
-			batch = f.client.Batch()
-		}
-
 		jsonBytes, err := json.Marshal(p)
 		if err != nil {
 			return fmt.Errorf("failed to marshal price: %w", err)
@@ -681,25 +663,22 @@ func (f *FirestoreProvider) UpsertPrices(ctx context.Context, siteID string, pri
 
 		docID := p.TSStart.UTC().Format(time.RFC3339)
 		ref := coll.Doc(docID)
-		batch.Set(ref, map[string]interface{}{
+		job, err := bw.Set(ref, map[string]interface{}{
 			"json":      string(jsonBytes),
 			"timestamp": p.TSStart,
 			"version":   version,
 		})
-
-		count++
-		if count >= maxBatchSize {
-			if _, err := batch.Commit(ctx); err != nil {
-				return fmt.Errorf("failed to commit price batch: %w", err)
-			}
-			count = 0
+		if err != nil {
+			return fmt.Errorf("failed to enqueue price: %w", err)
 		}
+		jobs = append(jobs, job)
 	}
 
-	// Commit any remaining items
-	if count > 0 {
-		if _, err := batch.Commit(ctx); err != nil {
-			return fmt.Errorf("failed to commit remaining price batch: %w", err)
+	bw.End()
+
+	for _, job := range jobs {
+		if _, err := job.Results(); err != nil {
+			return fmt.Errorf("failed to upsert prices: %w", err)
 		}
 	}
 
