@@ -196,6 +196,8 @@ func (c *BaseComEdHourly) GetConfirmedPrices(ctx context.Context, start, end tim
 	}
 
 	now := time.Now().In(ctLocation)
+	// don't confirm prices that ended within 5 minutes ago
+	endBuffer := now.Add(-5 * time.Minute)
 	confirmedPrices := make([]types.Price, 0, len(prices))
 	var earliest time.Time
 	var latest time.Time
@@ -204,19 +206,25 @@ func (c *BaseComEdHourly) GetConfirmedPrices(ctx context.Context, start, end tim
 	for i := len(prices) - 1; i >= 0; i-- {
 		p := prices[i]
 		// ignore any prices that are in the future
-		if p.TSEnd.After(now) {
+		if p.TSEnd.After(endBuffer) {
 			continue
 		}
 
-		// less than 59 minutes means we don't have a full hour
-		if p.TSEnd.Sub(p.TSStart) <= 59*time.Minute {
+		// less than 55 minutes means we don't have a full hour
+		// but we allow for one sample to be missing as long as it's in the past
+		if p.TSEnd.Sub(p.TSStart) < 55*time.Minute {
 			continue
 		}
 
 		// require full 12 5-minute periods to ensure complete data but somehow we
 		// don't have enough samples even though we have 59+minutes of data
-		if p.sampleCount != 12 {
-			log.Ctx(ctx).ErrorContext(
+		// well apparently there are somewhat frequent hours where comed doesn't
+		// provide a sample and I'm not sure what we can do about it so we tolerate
+		// a single missing sample
+		// TODO: should we use another sample to fill in the gap? it's not clear and
+		// hopefully not a big deal either way
+		if p.sampleCount < 11 {
+			log.Ctx(ctx).WarnContext(
 				ctx,
 				"incomplete price data for hour",
 				slog.Time("tsStart", p.TSStart),

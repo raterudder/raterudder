@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -184,15 +185,25 @@ func TestComEd(t *testing.T) {
 				entries = append(entries, makeEntry(t, "2.0"))
 			}
 
-			// 2. Partial Past Hour (3 hours ago) - 11 entries
-			// Missing one entry
+			// 2. Partial Past Hour (3 hours ago) - 10 entries
+			// Missing two entries but includes the 55-min one to pass duration check
 			partialStart := now.Add(-3 * time.Hour).Truncate(time.Hour)
-			for i := 0; i < 11; i++ {
+			for i := 0; i < 9; i++ {
 				t := partialStart.Add(time.Duration(i*5) * time.Minute)
 				entries = append(entries, makeEntry(t, "3.0"))
 			}
+			entries = append(entries, makeEntry(partialStart.Add(55*time.Minute), "3.0"))
 
-			// 3. Future Hour (1 hour ahead) - 12 entries
+			// 3. Almost Full Past Hour (4 hours ago) - 11 entries
+			// Missing one entry but includes the 55-min one to pass duration check
+			almostFullStart := now.Add(-4 * time.Hour).Truncate(time.Hour)
+			for i := 0; i < 10; i++ {
+				t := almostFullStart.Add(time.Duration(i*5) * time.Minute)
+				entries = append(entries, makeEntry(t, "5.0"))
+			}
+			entries = append(entries, makeEntry(almostFullStart.Add(55*time.Minute), "5.0"))
+
+			// 4. Future Hour (1 hour ahead) - 12 entries
 			// Should be ignored even if full because it's in the future
 			futureStart := now.Add(1 * time.Hour).Truncate(time.Hour)
 			for i := 0; i < 12; i++ {
@@ -221,13 +232,22 @@ func TestComEd(t *testing.T) {
 
 		// Assertions:
 		// - Future (1h ahead) should be ignored.
-		// - Partial (3h ago) should be ignored because < 12 entries.
-		// - Valid (2h ago) should be accepted.
-		assert.Len(t, prices, 1)
-		if len(prices) > 0 {
-			assert.InDelta(t, 0.02, prices[0].DollarsPerKWH, 0.0001) // 2.0 cents = 0.02 dollars
-			// Ensure it's the valid hour
-			assert.Equal(t, now.Add(-2*time.Hour).Truncate(time.Hour).Unix(), prices[0].TSStart.Unix())
-		}
+		// - Partial (3h ago) should be ignored because < 11 entries (has 10).
+		// - Valid (2h ago) should be accepted (has 12).
+		// - Almost Full (4h ago) should be accepted (has 11).
+		assert.Len(t, prices, 2)
+
+		// Sort prices by time to make identification easier
+		sort.Slice(prices, func(i, j int) bool {
+			return prices[i].TSStart.Before(prices[j].TSStart)
+		})
+
+		// 4h ago (Almost Full)
+		assert.InDelta(t, 0.05, prices[0].DollarsPerKWH, 0.0001)
+		assert.Equal(t, now.Add(-4*time.Hour).Truncate(time.Hour).Unix(), prices[0].TSStart.Unix())
+
+		// 2h ago (Valid)
+		assert.InDelta(t, 0.02, prices[1].DollarsPerKWH, 0.0001)
+		assert.Equal(t, now.Add(-2*time.Hour).Truncate(time.Hour).Unix(), prices[1].TSStart.Unix())
 	})
 }
