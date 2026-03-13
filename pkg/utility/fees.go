@@ -14,7 +14,7 @@ type SiteFees struct {
 	base    UtilityPrices
 	mu      sync.Mutex
 	siteID  string
-	periods []types.UtilityAdditionalFeesPeriod
+	periods []types.UtilityFeesPeriod
 	name    string
 }
 
@@ -30,7 +30,7 @@ func (s *SiteFees) ApplySettings(ctx context.Context, settings types.Settings) e
 
 	// if they don't have any additional fees periods, we will need to find the
 	// default for their utility provider
-	if settings.AdditionalFeesPeriods == nil {
+	if settings.UtilityFeesPeriods == nil {
 		switch settings.UtilityProvider {
 		case "comed":
 			if settings.UtilityRate != "comed_besh" {
@@ -56,7 +56,7 @@ func (s *SiteFees) ApplySettings(ctx context.Context, settings types.Settings) e
 			return fmt.Errorf("invalid utility provider: %s", settings.UtilityProvider)
 		}
 	} else {
-		s.periods = settings.AdditionalFeesPeriods
+		s.periods = settings.UtilityFeesPeriods
 	}
 
 	return nil
@@ -67,27 +67,30 @@ func (s *SiteFees) applyFees(p types.Price) (types.Price, error) {
 	defer s.mu.Unlock()
 
 	for _, period := range s.periods {
-		// Calculate time-of-day in minutes for easier comparison if needed, or just use hour
-		// Check date range
-		if !period.Start.IsZero() && p.TSStart.Before(period.Start) {
-			continue
+		// let's check to ensure that the period is contained within some part of
+		// the price interval
+		// TODO: we might need to split out the price into multiple prices if the price
+		// spans multiple different periods but for now we ignore that
+		// we don't end up checking the price's end time since we assume that as long
+		// as the periods start is after the price's start then it applies to that price
+		// see the TODO above to understand when we might need to care about end times
+		contains, err := period.Contains(p.TSStart)
+		if err != nil {
+			return types.Price{}, err
 		}
-		// period.End is exclusive: skip if the price starts at or after End
-		if !period.End.IsZero() && !p.TSStart.Before(period.End) {
+		if !contains {
 			continue
 		}
 
-		// Check hour range (inclusive start, exclusive end)
-		// Assuming p.TSStart is the start of the hour
-		h := p.TSStart.In(ctLocation).Hour()
-		if h < period.HourStart || h >= period.HourEnd {
-			continue
-		}
-
-		// Apply fee
-		if period.GridAdditional {
+		switch {
+		case period.GenerationCredit:
+			p.GenerationCreditDollarsPerKWH += period.DollarsPerKWH
+			if period.SeparateGenerationCredit {
+				p.SeparateGenerationCredit = true
+			}
+		case period.GridAdditional:
 			p.GridUseDollarsPerKWH += period.DollarsPerKWH
-		} else {
+		default:
 			p.DollarsPerKWH += period.DollarsPerKWH
 		}
 	}

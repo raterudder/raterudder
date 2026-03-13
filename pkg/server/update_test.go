@@ -1061,7 +1061,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		loc, err := time.LoadLocation("America/Los_Angeles")
 		require.NoError(t, err)
 
-		now := time.Now().UTC()
+		now := time.Now().In(loc)
 		midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 		// Set sunset to 1 hour from now
 		sunsetTime := now.Add(1 * time.Hour)
@@ -1086,7 +1086,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 			CountryCode: "US",
 			Lat:         34.09,
 			Long:        -118.4,
-			TimeZone:    "America/Los_Angeles",
+			TimeZone:    loc.String(),
 		}
 
 		err = srv.updateWeatherHistory(context.Background(), "test-site", sl)
@@ -1102,7 +1102,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		loc, err := time.LoadLocation("America/Los_Angeles")
 		require.NoError(t, err)
 
-		now := time.Now().UTC()
+		now := time.Now().In(loc)
 		midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 		// Set sunset to 1 hour ago
 		sunsetTime := now.Add(-1 * time.Hour)
@@ -1134,7 +1134,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 			CountryCode: "US",
 			Lat:         34.09,
 			Long:        -118.4,
-			TimeZone:    "America/Los_Angeles",
+			TimeZone:    loc.String(),
 		}
 
 		err = srv.updateWeatherHistory(context.Background(), "test-site", sl)

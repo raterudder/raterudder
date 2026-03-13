@@ -31,7 +31,9 @@ func TestDecide(t *testing.T) {
 		SolarBellCurveMultiplier:            1.0,
 	}
 
+	now := time.Now().Truncate(time.Hour)
 	baseStatus := types.SystemStatus{
+		Timestamp:          now,
 		BatterySOC:         50.0,
 		BatteryCapacityKWH: 10.0,
 		MaxBatteryChargeKW: 5.0,
@@ -40,8 +42,6 @@ func TestDecide(t *testing.T) {
 		CanExportBattery:   true,
 		CanExportSolar:     true,
 	}
-
-	now := time.Now()
 
 	// Create dummy history for 1kW load constant
 	history := []types.EnergyStats{}
@@ -69,7 +69,7 @@ func TestDecide(t *testing.T) {
 	}
 
 	t.Run("Negative Price -> Charge/Hold, No Export", func(t *testing.T) {
-		currentPrice := types.Price{TSStart: now, DollarsPerKWH: -0.01}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: -0.01}
 		decision, err := c.Decide(ctx, baseStatus, currentPrice, nil, history, baseSettings)
 		require.NoError(t, err)
 
@@ -84,7 +84,7 @@ func TestDecide(t *testing.T) {
 	})
 
 	t.Run("Low Price -> Charge", func(t *testing.T) {
-		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.00, GridUseDollarsPerKWH: -0.01}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.00, GridUseDollarsPerKWH: -0.01}
 		decision, err := c.Decide(ctx, baseStatus, currentPrice, nil, history, baseSettings)
 		require.NoError(t, err)
 
@@ -96,12 +96,13 @@ func TestDecide(t *testing.T) {
 	})
 
 	t.Run("High Price Now -> Load (Discharge)", func(t *testing.T) {
-		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.20}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.20}
 		// Provide cheap power for next 24 hours to ensure we definitely wait
 		futurePrices := []types.Price{}
 		for i := 1; i <= 24; i++ {
 			futurePrices = append(futurePrices, types.Price{
 				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
 				DollarsPerKWH: 0.04, GridUseDollarsPerKWH: 0.04,
 			})
 		}
@@ -120,12 +121,13 @@ func TestDecide(t *testing.T) {
 	})
 
 	t.Run("Low Battery + High Price -> Load (Discharge)", func(t *testing.T) {
-		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.20}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.20}
 		// Future is cheap for long time
 		futurePrices := []types.Price{}
 		for i := 1; i <= 24; i++ {
 			futurePrices = append(futurePrices, types.Price{
 				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
 				DollarsPerKWH: 0.04, GridUseDollarsPerKWH: 0.04,
 			})
 		}
@@ -143,12 +145,13 @@ func TestDecide(t *testing.T) {
 	})
 
 	t.Run("Deficit detected -> Charge Now (Cheapest Option)", func(t *testing.T) {
-		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
 		// Future is expensive!
 		futurePrices := []types.Price{}
 		for i := 1; i <= 24; i++ {
 			futurePrices = append(futurePrices, types.Price{
 				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
 				DollarsPerKWH: 0.50, GridUseDollarsPerKWH: 0.50,
 			})
 		}
@@ -168,7 +171,7 @@ func TestDecide(t *testing.T) {
 	})
 
 	t.Run("Peak Survival -> Already Hit Capacity Before Peak", func(t *testing.T) {
-		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
 		futurePrices := []types.Price{}
 		// First 5 hours are low price, then high price
 		for i := 1; i <= 24; i++ {
@@ -178,6 +181,7 @@ func TestDecide(t *testing.T) {
 			}
 			futurePrices = append(futurePrices, types.Price{
 				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
 				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
 			})
 		}
@@ -196,12 +200,13 @@ func TestDecide(t *testing.T) {
 	})
 
 	t.Run("Deficit detected -> Charge Later due to MinDeficitPriceDifference", func(t *testing.T) {
-		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
 		// Future is expensive, but difference is small
 		futurePrices := []types.Price{}
 		for i := 1; i <= 24; i++ {
 			futurePrices = append(futurePrices, types.Price{
 				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
 				DollarsPerKWH: 0.12, GridUseDollarsPerKWH: 0.12,
 			})
 		}
@@ -227,7 +232,7 @@ func TestDecide(t *testing.T) {
 	})
 
 	t.Run("Deficit detected -> Charge Now (Absolute Cheapest Is Now)", func(t *testing.T) {
-		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05} // ultra cheap right now
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05} // ultra cheap right now
 		futurePrices := []types.Price{}
 		for i := 1; i <= 24; i++ {
 			price := 0.10 // more expensive later
@@ -236,6 +241,7 @@ func TestDecide(t *testing.T) {
 			}
 			futurePrices = append(futurePrices, types.Price{
 				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
 				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
 			})
 		}
@@ -257,7 +263,7 @@ func TestDecide(t *testing.T) {
 	})
 
 	t.Run("Deficit detected -> Delay Charge (Future is equally cheap)", func(t *testing.T) {
-		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05}
 		futurePrices := []types.Price{}
 		for i := 1; i <= 24; i++ {
 			price := 0.05 // same as now
@@ -266,6 +272,7 @@ func TestDecide(t *testing.T) {
 			}
 			futurePrices = append(futurePrices, types.Price{
 				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
 				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
 			})
 		}
@@ -290,7 +297,7 @@ func TestDecide(t *testing.T) {
 	})
 
 	t.Run("Waiting To Charge (Charge Before Peak)", func(t *testing.T) {
-		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.20}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.20}
 		futurePrices := []types.Price{}
 		for i := 1; i <= 24; i++ {
 			price := 0.20
@@ -301,6 +308,7 @@ func TestDecide(t *testing.T) {
 			}
 			futurePrices = append(futurePrices, types.Price{
 				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
 				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
 			})
 		}
@@ -325,7 +333,7 @@ func TestDecide(t *testing.T) {
 	})
 
 	t.Run("Deficit Save For Peak (Peak Before Charge)", func(t *testing.T) {
-		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.20}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.20}
 		futurePrices := []types.Price{}
 		for i := 1; i <= 24; i++ {
 			price := 0.20
@@ -336,6 +344,7 @@ func TestDecide(t *testing.T) {
 			}
 			futurePrices = append(futurePrices, types.Price{
 				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
 				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
 			})
 		}
@@ -360,7 +369,7 @@ func TestDecide(t *testing.T) {
 	})
 
 	t.Run("Arbitrage Opportunity -> Charge", func(t *testing.T) {
-		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
 		futurePrices := []types.Price{}
 		for i := 1; i <= 24; i++ {
 			price := 0.10
@@ -369,6 +378,7 @@ func TestDecide(t *testing.T) {
 			}
 			futurePrices = append(futurePrices, types.Price{
 				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
 				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
 			})
 		}
@@ -385,7 +395,7 @@ func TestDecide(t *testing.T) {
 	})
 
 	t.Run("Arbitrage Constraint -> Standby", func(t *testing.T) {
-		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.20}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.20}
 		futurePrices := []types.Price{}
 		for i := 1; i <= 24; i++ {
 			price := 0.20
@@ -396,6 +406,7 @@ func TestDecide(t *testing.T) {
 			}
 			futurePrices = append(futurePrices, types.Price{
 				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
 				DollarsPerKWH: price,
 			})
 		}
@@ -416,7 +427,7 @@ func TestDecide(t *testing.T) {
 	})
 
 	t.Run("Arbitrage Hold (No Grid Charge) -> Standby", func(t *testing.T) {
-		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
 		futurePrices := []types.Price{}
 		for i := 1; i <= 24; i++ {
 			price := 0.10
@@ -425,6 +436,7 @@ func TestDecide(t *testing.T) {
 			}
 			futurePrices = append(futurePrices, types.Price{
 				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
 				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
 			})
 		}
@@ -444,7 +456,7 @@ func TestDecide(t *testing.T) {
 	})
 
 	t.Run("Battery Charging Disabled -> Standby", func(t *testing.T) {
-		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
 		futurePrices := []types.Price{}
 		for i := 1; i <= 24; i++ {
 			price := 0.10
@@ -453,6 +465,7 @@ func TestDecide(t *testing.T) {
 			}
 			futurePrices = append(futurePrices, types.Price{
 				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
 				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
 			})
 		}
@@ -470,7 +483,7 @@ func TestDecide(t *testing.T) {
 	})
 
 	t.Run("Zero Capacity -> Standby", func(t *testing.T) {
-		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
 
 		zeroCapStatus := baseStatus
 		zeroCapStatus.BatteryCapacityKWH = 0
@@ -485,7 +498,7 @@ func TestDecide(t *testing.T) {
 	})
 
 	t.Run("Default to Standby", func(t *testing.T) {
-		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
 		// No Future Prices (Flat).
 
 		status := baseStatus
@@ -500,12 +513,13 @@ func TestDecide(t *testing.T) {
 	})
 
 	t.Run("Sufficient Battery + Moderate Price -> Load", func(t *testing.T) {
-		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
 		// Flat prices
 		futurePrices := []types.Price{}
 		for i := 1; i <= 24; i++ {
 			futurePrices = append(futurePrices, types.Price{
 				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
 				DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10,
 			})
 		}
@@ -539,7 +553,7 @@ func TestDecide(t *testing.T) {
 	})
 
 	t.Run("Deficit + Moderate Price + High Future Price -> Standby", func(t *testing.T) {
-		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
 		futurePrices := []types.Price{}
 		for i := 1; i <= 24; i++ {
 			price := 0.10
@@ -548,6 +562,7 @@ func TestDecide(t *testing.T) {
 			}
 			futurePrices = append(futurePrices, types.Price{
 				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
 				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
 			})
 		}
@@ -567,11 +582,13 @@ func TestDecide(t *testing.T) {
 		assert.Contains(t, decision.Action.Description, "Deficit predicted")
 		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Action.Reason)
 		assert.False(t, decision.Action.HitDeficitAt.IsZero(), "HitDeficitAt should be set")
-		assert.Equal(t, 0.50, decision.Action.FuturePrice.DollarsPerKWH)
+		if assert.NotNil(t, decision.Action.FuturePrice) {
+			assert.Equal(t, 0.50, decision.Action.FuturePrice.DollarsPerKWH)
+		}
 	})
 
 	t.Run("Deficit + High Price (Peak) -> Load", func(t *testing.T) {
-		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.50, GridUseDollarsPerKWH: 0.50}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.50, GridUseDollarsPerKWH: 0.50}
 		futurePrices := []types.Price{}
 		for i := 1; i <= 24; i++ {
 			price := 0.50
@@ -580,6 +597,7 @@ func TestDecide(t *testing.T) {
 			}
 			futurePrices = append(futurePrices, types.Price{
 				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
 				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
 			})
 		}
@@ -607,7 +625,9 @@ func TestDecide(t *testing.T) {
 		baseSettings := types.Settings{
 			MinBatterySOC: 20.0,
 		}
+		now := time.Now().Truncate(time.Hour)
 		baseStatus := types.SystemStatus{
+			Timestamp:          now,
 			BatterySOC:         50.0,
 			BatteryCapacityKWH: 10.0,
 			BatteryKW:          0.0,
@@ -618,12 +638,12 @@ func TestDecide(t *testing.T) {
 			CanExportSolar:     true,
 		}
 		// Normal prices, no charge triggers
-		currentPrice := types.Price{TSStart: time.Now(), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.20}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.20}
 		history := []types.EnergyStats{}
 
 		t.Run("Already Charging -> NoChange", func(t *testing.T) {
 			// Setup scenario where it SHOULD charge (Very low price)
-			cheapPrice := types.Price{TSStart: time.Now(), DollarsPerKWH: -0.05, GridUseDollarsPerKWH: -0.05} // Neg price charges always
+			cheapPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: -0.05, GridUseDollarsPerKWH: -0.05} // Neg price charges always
 
 			status := baseStatus
 			status.BatteryKW = -5.0             // Already Charging
@@ -637,7 +657,7 @@ func TestDecide(t *testing.T) {
 
 		t.Run("Already Charging (Not Elevated) -> ChargeAny", func(t *testing.T) {
 			// Setup scenario where it SHOULD charge (Very low price)
-			cheapPrice := types.Price{TSStart: time.Now(), DollarsPerKWH: -0.05, GridUseDollarsPerKWH: -0.05} // Neg price charges always
+			cheapPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: -0.05, GridUseDollarsPerKWH: -0.05} // Neg price charges always
 
 			status := baseStatus
 			status.BatteryKW = -5.0              // Already Charging
@@ -649,7 +669,7 @@ func TestDecide(t *testing.T) {
 		})
 
 		t.Run("Battery Full -> NoChange", func(t *testing.T) {
-			cheapPrice := types.Price{TSStart: time.Now(), DollarsPerKWH: -0.05, GridUseDollarsPerKWH: -0.05}
+			cheapPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: -0.05, GridUseDollarsPerKWH: -0.05}
 
 			status := baseStatus
 			status.BatterySOC = 100.0
@@ -662,7 +682,7 @@ func TestDecide(t *testing.T) {
 		})
 
 		t.Run("Battery Full (Not Elevated) -> ChargeAny", func(t *testing.T) {
-			cheapPrice := types.Price{TSStart: time.Now(), DollarsPerKWH: -0.05, GridUseDollarsPerKWH: -0.05}
+			cheapPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: -0.05, GridUseDollarsPerKWH: -0.05}
 
 			status := baseStatus
 			status.BatterySOC = 100.0
@@ -799,11 +819,12 @@ func TestDecide(t *testing.T) {
 		}
 
 		// Create price to avoid cheap charge triggers
-		currentPrice := types.Price{TSStart: fixedNow, DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.20}
+		currentPrice := types.Price{TSStart: fixedNow, TSEnd: fixedNow.Add(time.Hour), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.20}
 		futurePrices := []types.Price{}
 		for i := 1; i <= 24; i++ {
 			futurePrices = append(futurePrices, types.Price{
 				TSStart:       fixedNow.Add(time.Duration(i) * time.Hour),
+				TSEnd:         fixedNow.Add(time.Duration(i+1) * time.Hour),
 				DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.20,
 			})
 		}
@@ -894,7 +915,7 @@ func TestDecide(t *testing.T) {
 		}
 
 		// Current Price is moderate/high (Morning Peak)
-		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.20}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.20}
 
 		// Future Prices: all flat at same level as current
 		// No higher future price means no reason to standby
@@ -903,6 +924,7 @@ func TestDecide(t *testing.T) {
 			ts := now.Add(time.Duration(i) * time.Hour)
 			futurePrices = append(futurePrices, types.Price{
 				TSStart:       ts,
+				TSEnd:         ts.Add(time.Hour),
 				DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.20,
 			})
 		}
@@ -961,7 +983,7 @@ func TestDecide(t *testing.T) {
 		}
 
 		// Current price is moderate
-		currentPrice := types.Price{TSStart: fixedNow, DollarsPerKWH: 0.10}
+		currentPrice := types.Price{TSStart: fixedNow, TSEnd: fixedNow.Add(time.Hour), DollarsPerKWH: 0.10}
 
 		// Future prices: a huge peak 6 hours from now
 		futurePrices := []types.Price{}
@@ -972,6 +994,7 @@ func TestDecide(t *testing.T) {
 			}
 			futurePrices = append(futurePrices, types.Price{
 				TSStart:       fixedNow.Add(time.Duration(i) * time.Hour),
+				TSEnd:         fixedNow.Add(time.Duration(i+1) * time.Hour),
 				DollarsPerKWH: price,
 			})
 		}
@@ -1037,6 +1060,7 @@ func TestDecide(t *testing.T) {
 			DollarsPerKWH:        0.50,
 			GridUseDollarsPerKWH: 0.10,
 			TSStart:              fixedNow,
+			TSEnd:                fixedNow.Add(time.Hour),
 		}
 
 		// Future prices: flat at same level (so this is the "peak")
@@ -1044,6 +1068,7 @@ func TestDecide(t *testing.T) {
 		for i := 1; i <= 24; i++ {
 			futurePrices = append(futurePrices, types.Price{
 				TSStart:       fixedNow.Add(time.Duration(i) * time.Hour),
+				TSEnd:         fixedNow.Add(time.Duration(i+1) * time.Hour),
 				DollarsPerKWH: 0.50, GridUseDollarsPerKWH: 0.10,
 			})
 		}

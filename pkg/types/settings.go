@@ -24,19 +24,19 @@ type Settings struct {
 	IgnoreHourUsageOverMultiple float64 `json:"ignoreHourUsageOverMultiple"`
 
 	// Utility Provider
-	UtilityProvider    string             `json:"utilityProvider"`
-	UtilityRate        string             `json:"utilityRate"`
-	UtilityRateOptions UtilityRateOptions `json:"utilityRateOptions"`
+	UtilityProvider    string              `json:"utilityProvider"`
+	UtilityRate        string              `json:"utilityRate"`
+	UtilityRateOptions UtilityRateOptions  `json:"utilityRateOptions"`
+	UtilityFeesPeriods []UtilityFeesPeriod `json:"utilityFeesPeriods,omitempty"`
 
 	// ESS Provider
 	ESS string `json:"ess"`
 
 	// Price Settings
 	// Always charge when the price is under this amount (in $/kWh)
-	AlwaysChargeUnderDollarsPerKWH         float64                       `json:"alwaysChargeUnderDollarsPerKWH"`
-	MinArbitrageDifferenceDollarsPerKWH    float64                       `json:"minArbitrageDifferenceDollarsPerKWH"`
-	MinDeficitPriceDifferenceDollarsPerKWH float64                       `json:"minDeficitPriceDifferenceDollarsPerKWH"`
-	AdditionalFeesPeriods                  []UtilityAdditionalFeesPeriod `json:"additionalFeesPeriods"`
+	AlwaysChargeUnderDollarsPerKWH         float64 `json:"alwaysChargeUnderDollarsPerKWH"`
+	MinArbitrageDifferenceDollarsPerKWH    float64 `json:"minArbitrageDifferenceDollarsPerKWH"`
+	MinDeficitPriceDifferenceDollarsPerKWH float64 `json:"minDeficitPriceDifferenceDollarsPerKWH"`
 
 	// How to value solar exports when net metering credits are active. Valid values: "", "lowest", "highest", "none". Default is "lowest".
 	SolarNetMeteringCreditsValue string `json:"solarNetMeteringCreditsValue"`

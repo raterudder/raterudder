@@ -79,7 +79,7 @@ func (c *BaseAmerenSmart) GetCurrentPrice(ctx context.Context) (types.Price, err
 	}
 
 	for _, p := range prices {
-		if !now.Before(p.TSStart) && now.Before(p.TSEnd) {
+		if p.Contains(now) {
 			return p, nil
 		}
 	}
@@ -104,6 +104,8 @@ func (c *BaseAmerenSmart) GetConfirmedPrices(ctx context.Context, start, end tim
 		}
 
 		for _, p := range prices {
+			// if the price starts before the start of the range it should be included
+			// because at least some part of the price is within the range
 			if !p.TSStart.Before(start) && p.TSStart.Before(end) {
 				confirmed = append(confirmed, p)
 			}
@@ -118,7 +120,7 @@ func (c *BaseAmerenSmart) GetConfirmedPrices(ctx context.Context, start, end tim
 func (c *BaseAmerenSmart) GetFuturePrices(ctx context.Context) ([]types.Price, error) {
 	now := time.Now().In(etLocation)
 	today := truncateDay(now)
-	tomorrow := today.AddDate(0, 0, 1) // AddDate is DST-safe, unlike Add(24*time.Hour)
+	tomorrow := today.AddDate(0, 0, 1)
 
 	pricesToday, err := c.getPricesForDate(ctx, today)
 	if err != nil {
@@ -133,6 +135,8 @@ func (c *BaseAmerenSmart) GetFuturePrices(ctx context.Context) ([]types.Price, e
 
 	var future []types.Price
 	for _, p := range append(pricesToday, pricesTomorrow...) {
+		// by truncating we ensure we get the current hour as well since that hour
+		// isn't over yet
 		if p.TSStart.After(now.Truncate(time.Hour)) {
 			future = append(future, p)
 		}
@@ -292,7 +296,7 @@ func amerenLossFactor(t time.Time) float64 {
 	}
 }
 
-func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityAdditionalFeesPeriod, error) {
+func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 	// Rider PSP says the delivery fees are "Residential - Rate DS-1"
 	// RATE PBR-R defines Rate DS-1.
 	// Summer = June 1 – September 30.  Non-summer = remainder of the year.
@@ -306,7 +310,7 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityAdditiona
 	// The Ameren Illinois Transmission Service Charge is a separate per-kWh
 	// charge included in the all-in price-to-compare. As of January 2026 it is
 	// 2.629¢/kWh and applies regardless of season or time-of-day.
-	return []types.UtilityAdditionalFeesPeriod{
+	return []types.UtilityFeesPeriod{
 		// ── 2026 Transmission Service Charge ──────────────────────────────────
 		// Applies all hours, both summer and non-summer.
 		{

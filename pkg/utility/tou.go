@@ -13,7 +13,7 @@ import (
 type genericTOU struct {
 	mu       sync.Mutex
 	siteID   string
-	periods  []types.UtilityAdditionalFeesPeriod
+	periods  []types.UtilityFeesPeriod
 	location *time.Location
 	name     string
 }
@@ -33,7 +33,7 @@ func (t *genericTOU) ApplySettings(ctx context.Context, settings types.Settings)
 		}
 		t.location = loc
 
-		t.periods = []types.UtilityAdditionalFeesPeriod{
+		t.periods = []types.UtilityFeesPeriod{
 			{
 				UtilityPeriod: types.UtilityPeriod{
 					HourStart: 0,
@@ -98,9 +98,15 @@ func (t *genericTOU) priceForTime(target time.Time) (types.Price, error) {
 			return p, err
 		}
 		if contains {
-			if period.GridAdditional {
+			switch {
+			case period.GenerationCredit:
+				p.GenerationCreditDollarsPerKWH += period.DollarsPerKWH
+				if period.SeparateGenerationCredit {
+					p.SeparateGenerationCredit = true
+				}
+			case period.GridAdditional:
 				p.GridUseDollarsPerKWH += period.DollarsPerKWH
-			} else {
+			default:
 				p.DollarsPerKWH += period.DollarsPerKWH
 			}
 		}
@@ -109,10 +115,12 @@ func (t *genericTOU) priceForTime(target time.Time) (types.Price, error) {
 	return p, nil
 }
 
+// GetCurrentPrice returns the current price.
 func (t *genericTOU) GetCurrentPrice(ctx context.Context) (types.Price, error) {
 	return t.priceForTime(time.Now())
 }
 
+// GetFuturePrices returns the next 48 hours of prices.
 func (t *genericTOU) GetFuturePrices(ctx context.Context) ([]types.Price, error) {
 	now := time.Now().Truncate(time.Hour)
 	prices := make([]types.Price, 0, 48)
@@ -130,6 +138,8 @@ func (t *genericTOU) GetFuturePrices(ctx context.Context) ([]types.Price, error)
 	return prices, nil
 }
 
+// GetConfirmedPrices returns all the prices for a specific time range since TOU
+// prices are always the same for a given hour.
 func (t *genericTOU) GetConfirmedPrices(ctx context.Context, start, end time.Time) ([]types.Price, error) {
 	var prices []types.Price
 
@@ -141,7 +151,9 @@ func (t *genericTOU) GetConfirmedPrices(ctx context.Context, start, end time.Tim
 			return nil, err
 		}
 
-		if !p.TSStart.Before(start) && !p.TSEnd.After(end) {
+		// even if the end time goes beyond the end time, we still want to include it
+		// since it will cover the time period between start and end
+		if !p.TSStart.Before(start) && !p.TSStart.After(end) {
 			prices = append(prices, p)
 		}
 

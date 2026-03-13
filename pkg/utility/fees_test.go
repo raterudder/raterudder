@@ -73,14 +73,14 @@ func TestSiteFees(t *testing.T) {
 
 	t.Run("ApplySettings custom periods", func(t *testing.T) {
 		s := &SiteFees{}
-		periods := []types.UtilityAdditionalFeesPeriod{
+		periods := []types.UtilityFeesPeriod{
 			{
 				Description:   "Custom Fee",
 				DollarsPerKWH: 0.05,
 			},
 		}
 		settings := types.Settings{
-			AdditionalFeesPeriods: periods,
+			UtilityFeesPeriods: periods,
 		}
 		err := s.ApplySettings(ctx, settings)
 		require.NoError(t, err)
@@ -88,7 +88,7 @@ func TestSiteFees(t *testing.T) {
 	})
 
 	t.Run("applyFees logic", func(t *testing.T) {
-		periods := []types.UtilityAdditionalFeesPeriod{
+		periods := []types.UtilityFeesPeriod{
 			{
 				UtilityPeriod: types.UtilityPeriod{
 					HourStart: 14,
@@ -165,7 +165,7 @@ func TestSiteFees(t *testing.T) {
 			// Use a dedicated SiteFees with a single date-bounded period to isolate period.End behavior.
 			endTime := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 			boundedS := &SiteFees{
-				periods: []types.UtilityAdditionalFeesPeriod{
+				periods: []types.UtilityFeesPeriod{
 					{
 						UtilityPeriod: types.UtilityPeriod{
 							Start:   time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
@@ -199,13 +199,181 @@ func TestSiteFees(t *testing.T) {
 			})
 			assert.InDelta(t, 0.10, afterEnd.DollarsPerKWH, 0.0001, "price after End should NOT have fee applied")
 		})
+
+		t.Run("GenerationCredit sets GenerationCreditDollarsPerKWH", func(t *testing.T) {
+			genS := &SiteFees{
+				periods: []types.UtilityFeesPeriod{
+					{
+						UtilityPeriod:    types.UtilityPeriod{HourStart: 0, HourEnd: 24},
+						DollarsPerKWH:    0.03,
+						GenerationCredit: true,
+						Description:      "Solar Generation Credit",
+					},
+				},
+			}
+			p := types.Price{
+				TSStart:       time.Date(2026, 1, 1, 10, 0, 0, 0, ctLocation),
+				DollarsPerKWH: 0.10,
+			}
+			result, err := genS.applyFees(p)
+			require.NoError(t, err)
+			// GenerationCredit should NOT touch DollarsPerKWH or GridUseDollarsPerKWH
+			assert.InDelta(t, 0.10, result.DollarsPerKWH, 0.0001, "DollarsPerKWH must be unchanged")
+			assert.InDelta(t, 0.0, result.GridUseDollarsPerKWH, 0.0001, "GridUseDollarsPerKWH must be unchanged")
+			assert.InDelta(t, 0.03, result.GenerationCreditDollarsPerKWH, 0.0001, "GenerationCreditDollarsPerKWH must be set")
+			assert.False(t, result.SeparateGenerationCredit, "SeparateGenerationCredit must remain false when period.SeparateGenerationCredit is false")
+		})
+
+		t.Run("SeparateGenerationCredit sets flag on Price", func(t *testing.T) {
+			genS := &SiteFees{
+				periods: []types.UtilityFeesPeriod{
+					{
+						UtilityPeriod:            types.UtilityPeriod{HourStart: 0, HourEnd: 24},
+						DollarsPerKWH:            0.025,
+						GenerationCredit:         true,
+						SeparateGenerationCredit: true,
+						Description:              "Post-2025 Solar Credit",
+					},
+				},
+			}
+			p := types.Price{
+				TSStart:       time.Date(2026, 3, 1, 10, 0, 0, 0, ctLocation),
+				DollarsPerKWH: 0.10,
+			}
+			result, err := genS.applyFees(p)
+			require.NoError(t, err)
+			assert.InDelta(t, 0.10, result.DollarsPerKWH, 0.0001, "DollarsPerKWH must be unchanged")
+			assert.InDelta(t, 0.025, result.GenerationCreditDollarsPerKWH, 0.0001)
+			assert.True(t, result.SeparateGenerationCredit, "SeparateGenerationCredit must be true")
+		})
+
+		t.Run("Multiple GenerationCredit periods accumulate", func(t *testing.T) {
+			genS := &SiteFees{
+				periods: []types.UtilityFeesPeriod{
+					{
+						UtilityPeriod:            types.UtilityPeriod{HourStart: 0, HourEnd: 24},
+						DollarsPerKWH:            0.01,
+						GenerationCredit:         true,
+						SeparateGenerationCredit: true,
+						Description:              "Credit Part 1",
+					},
+					{
+						UtilityPeriod:    types.UtilityPeriod{HourStart: 0, HourEnd: 24},
+						DollarsPerKWH:    0.015,
+						GenerationCredit: true,
+						Description:      "Credit Part 2",
+					},
+				},
+			}
+			p := types.Price{
+				TSStart:       time.Date(2026, 3, 1, 10, 0, 0, 0, ctLocation),
+				DollarsPerKWH: 0.10,
+			}
+			result, err := genS.applyFees(p)
+			require.NoError(t, err)
+			assert.InDelta(t, 0.10, result.DollarsPerKWH, 0.0001, "base price unchanged")
+			assert.InDelta(t, 0.025, result.GenerationCreditDollarsPerKWH, 0.0001, "both credits accumulated")
+			assert.True(t, result.SeparateGenerationCredit, "flag set by first period")
+		})
+
+		t.Run("DaysOfTheWeek filtering via Contains", func(t *testing.T) {
+			// Period only applies on weekdays (Mon-Fri)
+			weekdayLoc, _ := time.LoadLocation("America/Chicago")
+			weekdayS := &SiteFees{
+				periods: []types.UtilityFeesPeriod{
+					{
+						UtilityPeriod: types.UtilityPeriod{
+							HourStart:     0,
+							HourEnd:       24,
+							DaysOfTheWeek: []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday},
+							LocationPtr:   weekdayLoc,
+						},
+						DollarsPerKWH: 0.05,
+						Description:   "Weekday Fee",
+					},
+				},
+			}
+			// 2026-03-09 is a Monday
+			monday := time.Date(2026, 3, 9, 10, 0, 0, 0, weekdayLoc)
+			// 2026-03-08 is a Sunday
+			sunday := time.Date(2026, 3, 8, 10, 0, 0, 0, weekdayLoc)
+
+			mondayResult, err := weekdayS.applyFees(types.Price{TSStart: monday, DollarsPerKWH: 0.10})
+			require.NoError(t, err)
+			assert.InDelta(t, 0.15, mondayResult.DollarsPerKWH, 0.0001, "weekday fee should apply on Monday")
+
+			sundayResult, err := weekdayS.applyFees(types.Price{TSStart: sunday, DollarsPerKWH: 0.10})
+			require.NoError(t, err)
+			assert.InDelta(t, 0.10, sundayResult.DollarsPerKWH, 0.0001, "weekday fee should NOT apply on Sunday")
+		})
+
+		t.Run("comprehensive days and hours filtering", func(t *testing.T) {
+			s := &SiteFees{
+				periods: []types.UtilityFeesPeriod{
+					{
+						UtilityPeriod: types.UtilityPeriod{
+							Location:      "America/Chicago",
+							DaysOfTheWeek: []time.Weekday{time.Monday, time.Wednesday, time.Friday},
+							HourStart:     14,
+							HourEnd:       18,
+						},
+						DollarsPerKWH: 0.10,
+						Description:   "MWF Peak",
+					},
+					{
+						UtilityPeriod: types.UtilityPeriod{
+							Location:      "America/Chicago",
+							DaysOfTheWeek: []time.Weekday{time.Saturday, time.Sunday},
+							HourEnd:       24,
+						},
+						DollarsPerKWH: 0.05,
+						Description:   "Weekend Flat Fee",
+					},
+				},
+			}
+
+			// Monday 3 PM Central (Peak)
+			t1 := time.Date(2026, 3, 9, 15, 0, 0, 0, ctLocation)
+			res1, _ := s.applyFees(types.Price{TSStart: t1, DollarsPerKWH: 0.10})
+			assert.InDelta(t, 0.20, res1.DollarsPerKWH, 0.0001, "Mon 3pm should have peak fee")
+
+			// Monday 10 AM Central (Off-peak)
+			t2 := time.Date(2026, 3, 9, 10, 0, 0, 0, ctLocation)
+			res2, _ := s.applyFees(types.Price{TSStart: t2, DollarsPerKWH: 0.10})
+			assert.InDelta(t, 0.10, res2.DollarsPerKWH, 0.0001, "Mon 10am should NOT have peak fee")
+
+			// Tuesday 3 PM Central (Off-day)
+			t3 := time.Date(2026, 3, 10, 15, 0, 0, 0, ctLocation)
+			res3, _ := s.applyFees(types.Price{TSStart: t3, DollarsPerKWH: 0.10})
+			assert.InDelta(t, 0.10, res3.DollarsPerKWH, 0.0001, "Tue 3pm should NOT have peak fee")
+
+			// Sunday 10 AM Central (Weekend)
+			t4 := time.Date(2026, 3, 8, 10, 0, 0, 0, ctLocation)
+			res4, _ := s.applyFees(types.Price{TSStart: t4, DollarsPerKWH: 0.10})
+			assert.InDelta(t, 0.15, res4.DollarsPerKWH, 0.0001, "Sun should have weekend fee")
+		})
+
+		t.Run("invalid location error", func(t *testing.T) {
+			s := &SiteFees{
+				periods: []types.UtilityFeesPeriod{
+					{
+						UtilityPeriod: types.UtilityPeriod{
+							Location: "Invalid/Location",
+						},
+					},
+				},
+			}
+			_, err := s.applyFees(types.Price{TSStart: time.Now()})
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "failed to load location")
+		})
 	})
 
 	t.Run("GetConfirmedPrices", func(t *testing.T) {
 		m := new(mockUtilityPrices)
 		s := &SiteFees{
 			base: m,
-			periods: []types.UtilityAdditionalFeesPeriod{
+			periods: []types.UtilityFeesPeriod{
 				{
 					UtilityPeriod: types.UtilityPeriod{HourStart: 0, HourEnd: 24},
 					DollarsPerKWH: 0.01,
@@ -233,7 +401,7 @@ func TestSiteFees(t *testing.T) {
 		m := new(mockUtilityPrices)
 		s := &SiteFees{
 			base:    m,
-			periods: []types.UtilityAdditionalFeesPeriod{{UtilityPeriod: types.UtilityPeriod{HourStart: 0, HourEnd: 24}, DollarsPerKWH: 0.01}},
+			periods: []types.UtilityFeesPeriod{{UtilityPeriod: types.UtilityPeriod{HourStart: 0, HourEnd: 24}, DollarsPerKWH: 0.01}},
 		}
 
 		basePrice := types.Price{TSStart: now, DollarsPerKWH: 0.50}
@@ -249,7 +417,7 @@ func TestSiteFees(t *testing.T) {
 		m := new(mockUtilityPrices)
 		s := &SiteFees{
 			base:    m,
-			periods: []types.UtilityAdditionalFeesPeriod{{UtilityPeriod: types.UtilityPeriod{HourStart: 0, HourEnd: 24}, DollarsPerKWH: 0.01}},
+			periods: []types.UtilityFeesPeriod{{UtilityPeriod: types.UtilityPeriod{HourStart: 0, HourEnd: 24}, DollarsPerKWH: 0.01}},
 		}
 
 		basePrices := []types.Price{
