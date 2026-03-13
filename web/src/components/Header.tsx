@@ -36,7 +36,7 @@ const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSite
                             }}
                             onValueChange={(value) => onSiteChange(value as string)}
                         >
-                            <Select.Trigger className="site-selector-header">
+                            <Select.Trigger className="site-selector-header" aria-label="Select Site">
                                 <Select.Value />
                                 <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
                                     <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
