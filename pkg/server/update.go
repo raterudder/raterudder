@@ -15,6 +15,12 @@ import (
 	"github.com/raterudder/raterudder/pkg/utility"
 )
 
+type updateResult struct {
+	Status string        `json:"status"`
+	Action *types.Action `json:"action,omitempty"`
+	Price  *types.Price  `json:"price,omitempty"`
+}
+
 func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	siteID := s.getSiteID(r)
@@ -35,24 +41,24 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+	var result updateResult
 	if action != nil {
 		if status == "" {
 			status = "success"
 		}
-		if err := json.NewEncoder(w).Encode(map[string]interface{}{
-			"status": status,
-			"action": action,
-			"price":  action.CurrentPrice,
-		}); err != nil {
-			panic(http.ErrAbortHandler)
+		result = updateResult{
+			Status: status,
+			Action: action,
+			Price:  action.CurrentPrice,
 		}
 	} else {
 		// No action taken
-		if err := json.NewEncoder(w).Encode(map[string]interface{}{
-			"status": status,
-		}); err != nil {
-			panic(http.ErrAbortHandler)
+		result = updateResult{
+			Status: status,
 		}
+	}
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		panic(http.ErrAbortHandler)
 	}
 }
 
@@ -68,7 +74,7 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 
 	results := make(map[string]string)
 	for _, site := range sites {
-		ctx := log.With(ctx, log.Ctx(ctx).With(slog.String("siteID", site.ID)))
+		ctx := log.With(ctx, log.Ctx(ctx).With(slog.Group("update", slog.String("siteID", site.ID))))
 
 		settings, creds, err := s.getSettingsWithMigration(ctx, site.ID)
 		if err != nil {

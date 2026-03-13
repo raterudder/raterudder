@@ -23,7 +23,7 @@ func TestHandleSubmitFeedback(t *testing.T) {
 		storage: mockDB,
 	}
 
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"sentiment": "happy",
 		"comment":   "Great app!",
 		"extra": map[string]string{

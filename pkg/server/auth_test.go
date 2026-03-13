@@ -80,7 +80,7 @@ func TestAuthMiddleware(t *testing.T) {
 	}
 
 	// Helper to create request
-	createReq := func(method, url string, body interface{}, cookie *http.Cookie) *http.Request {
+	createReq := func(method, url string, body any, cookie *http.Cookie) *http.Request {
 		var bodyReader *bytes.Buffer
 		if body != nil {
 			bodyBytes, _ := json.Marshal(body)

@@ -22,7 +22,16 @@ import (
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		ctx = log.With(ctx, log.Ctx(ctx).With(slog.String("reqPath", r.URL.Path)))
+		ctx = log.With(ctx, log.Ctx(ctx).With(
+			slog.Group(
+				"http",
+				slog.String("path", r.URL.Path),
+				slog.String("method", r.Method),
+				slog.String("remoteAddr", r.RemoteAddr),
+				slog.String("userAgent", r.UserAgent()),
+				slog.String("xff", r.Header.Get("X-Forwarded-For")),
+			),
+		))
 
 		allowNoLogin := r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/join" || r.URL.Path == "/api/auth/logout" || r.URL.Path == "/api/report/browser"
 		ignoreUserNotFound := r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/join" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/logout" || r.URL.Path == "/api/report/browser"
@@ -225,11 +234,15 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
+		var authAttrs []any
 		if userID != "" {
-			ctx = log.With(ctx, log.Ctx(ctx).With(slog.String("authUserID", userID)))
+			authAttrs = append(authAttrs, slog.String("authUserID", userID))
 		}
 		if siteID != "" {
-			ctx = log.With(ctx, log.Ctx(ctx).With(slog.String("authSiteID", siteID)))
+			authAttrs = append(authAttrs, slog.String("authSiteID", siteID))
+		}
+		if len(authAttrs) > 0 {
+			ctx = log.With(ctx, log.Ctx(ctx).With(slog.Group("auth", authAttrs...)))
 		}
 
 		ctx = context.WithValue(ctx, allUserSitesContextKey, user.Sites)

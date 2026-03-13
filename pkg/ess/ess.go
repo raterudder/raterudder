@@ -87,7 +87,7 @@ func (m *Map) Site(ctx context.Context, siteID string, settings types.Settings) 
 			}
 			return sys, nil
 		}
-		log.Ctx(ctx).Warn("site changed ess system", slog.String("expected", settings.ESS), slog.String("actual", sys.Name()))
+		log.Ctx(ctx).InfoContext(ctx, "site changed ess system", slog.String("expected", settings.ESS), slog.String("actual", sys.Name()))
 	}
 
 	var sys System

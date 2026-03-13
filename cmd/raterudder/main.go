@@ -65,5 +65,4 @@ func main() {
 		log.Ctx(ctx).ErrorContext(ctx, "server failed", "error", err)
 		os.Exit(1)
 	}
-	log.Ctx(ctx).InfoContext(ctx, "server exited cleanly")
 }
