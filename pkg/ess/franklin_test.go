@@ -951,7 +951,7 @@ func TestFranklin(t *testing.T) {
 
 		stats, err := f.GetEnergyHistory(context.Background(), start, end)
 		require.NoError(t, err, "GetEnergyHistory should succeed")
-		require.Len(t, stats, 1, "should have 1 stat for the hour")
+		require.Len(t, stats, 2, "should have 2 stats based on before/after logic (inclusive end)")
 
 		s := stats[0]
 		// HomeKWH = SolarToHome + GridToHome + BatToHome
