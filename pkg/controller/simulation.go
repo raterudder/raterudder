@@ -83,12 +83,8 @@ func (c *Controller) SimulateState(
 	if len(futurePrices) > 0 {
 		var lastFuturePriceTime time.Time
 		for _, fp := range futurePrices {
-			end := fp.TSEnd
-			if end.IsZero() {
-				end = fp.TSStart.Add(time.Hour)
-			}
-			if end.After(lastFuturePriceTime) {
-				lastFuturePriceTime = end
+			if !fp.TSEnd.IsZero() && fp.TSEnd.After(lastFuturePriceTime) {
+				lastFuturePriceTime = fp.TSEnd
 			}
 		}
 		if !lastFuturePriceTime.IsZero() && lastFuturePriceTime.After(now) {
@@ -103,28 +99,42 @@ func (c *Controller) SimulateState(
 				)
 			}
 		}
-	}
-
-	// Optimize: use O(n) hash map lookup instead of O(n^2) nested loops for future prices matching
-	futurePricesMap := make(map[int64]types.Price, len(futurePrices))
-	for _, fp := range futurePrices {
-		futurePricesMap[fp.TSStart.Truncate(time.Hour).Unix()] = fp
+	} else {
+		log.Ctx(ctx).WarnContext(ctx, "no future prices provided, simulated prices will be 0")
 	}
 
 	for i := 0; i < simHours; i++ {
 		h := simTime.Hour()
 
 		var price types.Price
-		if currentPrice.TSStart.Truncate(time.Hour).Equal(simTime.Truncate(time.Hour)) {
+		if currentPrice.Contains(simTime) {
 			price = currentPrice
 		} else {
-			if fp, ok := futurePricesMap[simTime.Truncate(time.Hour).Unix()]; ok {
-				price = fp
+			var found bool
+			for _, fp := range futurePrices {
+				if fp.Contains(simTime) {
+					price = fp
+					found = true
+					break
+				}
+			}
+			// don't log for every hour if we didn't get any prices at all
+			if !found && len(futurePrices) > 0 {
+				log.Ctx(ctx).WarnContext(ctx, "missing future price for simulation hour", slog.Time("simTime", simTime))
+				// just use the last price for the last hour instead if we have it
+				lastHour := simTime.Add(-time.Hour)
+				for _, fp := range futurePrices {
+					if fp.Contains(lastHour) {
+						price = fp
+						log.Ctx(ctx).DebugContext(ctx, "using last hour price for simulation hour", slog.Time("simTime", simTime))
+						break
+					}
+				}
 			}
 		}
 
 		gridChargeCost := price.DollarsPerKWH + price.GridUseDollarsPerKWH
-		solarOppCost := price.DollarsPerKWH
+		var solarOppCost float64
 
 		if !settings.GridExportSolar {
 			solarOppCost = 0
@@ -138,6 +148,12 @@ func (c *Controller) SimulateState(
 				// Default to conservative value ("lowest")
 				solarOppCost = minFutureGridChargeCost
 			}
+		} else if price.SeparateGenerationCredit {
+			// Post-2025 style: utility pays a distinct generation credit rate for
+			// solar exported to the grid, separate from the supply rate.
+			solarOppCost = price.GenerationCreditDollarsPerKWH
+		} else {
+			solarOppCost = price.DollarsPerKWH
 		}
 
 		profile := model[h]

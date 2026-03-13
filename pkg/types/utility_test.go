@@ -36,10 +36,10 @@ func TestUtilityPeriodContains(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, contained)
 
-		// Exactly at end
+		// Exactly at end does NOT contain since the end is exclusive
 		contained, err = p.Contains(end)
 		require.NoError(t, err)
-		assert.True(t, contained)
+		assert.False(t, contained)
 
 		// Before start
 		contained, err = p.Contains(start.Add(-time.Second))
@@ -176,5 +176,47 @@ func TestUtilityPeriodContains(t *testing.T) {
 		contained, err := p.Contains(time.Now())
 		require.NoError(t, err)
 		assert.True(t, contained)
+	})
+}
+
+func TestPriceContains(t *testing.T) {
+	t.Run("time range", func(t *testing.T) {
+		start := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
+		end := time.Date(2024, 1, 1, 11, 0, 0, 0, time.UTC)
+		p := &Price{
+			TSStart: start,
+			TSEnd:   end,
+		}
+
+		// Exactly at start
+		assert.True(t, p.Contains(start))
+
+		// Exactly at end (exclusive)
+		assert.False(t, p.Contains(end))
+
+		// Before start
+		assert.False(t, p.Contains(start.Add(-time.Second)))
+
+		// After end
+		assert.False(t, p.Contains(end.Add(time.Second)))
+
+		// Within range
+		assert.True(t, p.Contains(start.Add(30*time.Minute)))
+	})
+
+	t.Run("zero end time", func(t *testing.T) {
+		start := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
+		p := &Price{
+			TSStart: start,
+		}
+
+		// Exactly at start
+		assert.True(t, p.Contains(start))
+
+		// After start
+		assert.True(t, p.Contains(start.Add(24*time.Hour)))
+
+		// Before start
+		assert.False(t, p.Contains(start.Add(-time.Second)))
 	})
 }

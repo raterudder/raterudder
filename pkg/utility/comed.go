@@ -148,12 +148,17 @@ func (c *BaseComEdHourly) getCachedCurrentPrices(ctx context.Context) ([]types.P
 		return nil, err
 	}
 
+	rawPrices := make([]types.Price, len(prices))
+	for i, p := range prices {
+		rawPrices[i] = p.Price
+	}
+
 	c.mu.Lock()
-	c.cachedPrices = prices
+	c.cachedPrices = rawPrices
 	c.lastFetchTime = now
 	c.mu.Unlock()
 
-	return prices, nil
+	return rawPrices, nil
 }
 
 // GetConfirmedPrices returns confirmed prices for a specific time range.
@@ -210,17 +215,17 @@ func (c *BaseComEdHourly) GetConfirmedPrices(ctx context.Context, start, end tim
 
 		// require full 12 5-minute periods to ensure complete data but somehow we
 		// don't have enough samples even though we have 59+minutes of data
-		if p.SampleCount != 12 {
+		if p.sampleCount != 12 {
 			log.Ctx(ctx).ErrorContext(
 				ctx,
 				"incomplete price data for hour",
 				slog.Time("tsStart", p.TSStart),
 				slog.Time("tsEnd", p.TSEnd),
-				slog.Int("sampleCount", p.SampleCount))
+				slog.Int("sampleCount", p.sampleCount))
 			continue
 		}
 
-		confirmedPrices = append(confirmedPrices, p)
+		confirmedPrices = append(confirmedPrices, p.Price)
 
 		if earliest.IsZero() || p.TSStart.Before(earliest) {
 			earliest = p.TSStart
@@ -248,8 +253,13 @@ func (c *BaseComEdHourly) GetConfirmedPrices(ctx context.Context, start, end tim
 	return confirmedPrices, nil
 }
 
+type priceWithSampleCount struct {
+	types.Price
+	sampleCount int
+}
+
 // fetchPricesRange retrieves prices from the ComEd API for a specific range.
-func (c *BaseComEdHourly) fetchPricesRange(ctx context.Context, start, end time.Time) ([]types.Price, error) {
+func (c *BaseComEdHourly) fetchPricesRange(ctx context.Context, start, end time.Time) ([]priceWithSampleCount, error) {
 	start = start.In(ctLocation)
 	end = end.In(ctLocation)
 
@@ -332,15 +342,17 @@ func (c *BaseComEdHourly) fetchPricesRange(ctx context.Context, start, end time.
 		}
 	}
 
-	var prices []types.Price
+	var prices []priceWithSampleCount
 	for _, h := range hours {
 		avgCents := h.sum / float64(h.count)
-		prices = append(prices, types.Price{
-			Provider:      "comed_besh",
-			TSStart:       h.start,
-			TSEnd:         h.lastTime.Add(4*time.Minute + 59*time.Second),
-			DollarsPerKWH: avgCents / 100, // Cents to Dollars
-			SampleCount:   h.count,
+		prices = append(prices, priceWithSampleCount{
+			Price: types.Price{
+				Provider:      "comed_besh",
+				TSStart:       h.start,
+				TSEnd:         h.lastTime.Add(5 * time.Minute),
+				DollarsPerKWH: avgCents / 100, // Cents to Dollars
+			},
+			sampleCount: h.count,
 		})
 	}
 
@@ -532,7 +544,7 @@ Informational Sheet No. 20.
 periods.
 */
 
-func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityAdditionalFeesPeriod, error) {
+func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 	// TODO: include 2027 prices once they are announced
 
 	// The incremental distribution uncollectible cost factor applicable for residential
@@ -574,7 +586,7 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityAdditio
 	// PJM Service Charge (PSC) for 2026
 	psc := 1.083 / 100
 
-	fees := []types.UtilityAdditionalFeesPeriod{
+	fees := []types.UtilityFeesPeriod{
 		{
 			UtilityPeriod: types.UtilityPeriod{
 				Start:       time.Date(2026, 1, 1, 0, 0, 0, 0, ctLocation),
@@ -605,7 +617,7 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityAdditio
 		// DFC & ADJ = DFC x (IDUF + DRAF + EDAF + TPAF + RBAFD) + DGRAD
 		dfcAdj := dfc*(iduf+draf+edaf+tpaf+rbafd) + dgrad
 
-		return append(fees, types.UtilityAdditionalFeesPeriod{
+		return append(fees, types.UtilityFeesPeriod{
 			UtilityPeriod: types.UtilityPeriod{
 				Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
@@ -653,7 +665,7 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityAdditio
 		midDayDFCAdj := midDayDFC*(iduf+draf+edaf+tpaf+rbafd) + dgrad
 		eveningDFCAdj := eveningDFC*(iduf+draf+edaf+tpaf+rbafd) + dgrad
 		nightDFCAdj := nightDFC*(iduf+draf+edaf+tpaf+rbafd) + dgrad
-		return append(fees, []types.UtilityAdditionalFeesPeriod{
+		return append(fees, []types.UtilityFeesPeriod{
 			// night (midnight - 6am)
 			{
 				UtilityPeriod: types.UtilityPeriod{

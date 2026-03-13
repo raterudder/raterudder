@@ -216,7 +216,7 @@ func TestComEd(t *testing.T) {
 		ctx := context.Background()
 		now := time.Now()
 		// Request broad range covering everything
-		prices, err := c.GetConfirmedPrices(ctx, now.Add(-24*time.Hour), now.Add(24*time.Hour))
+		prices, err := c.GetConfirmedPrices(ctx, now.AddDate(0, 0, -1), now.AddDate(0, 0, 1))
 		require.NoError(t, err)
 
 		// Assertions:

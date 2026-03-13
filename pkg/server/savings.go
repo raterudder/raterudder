@@ -156,29 +156,26 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 		})
 	}
 
-	var stats types.SavingsStats
-	stats.Timestamp = start
-	hourlyExportPrices := make(map[time.Time]float64)
-	hourlyImportPrices := make(map[time.Time]float64)
-
-	for _, p := range prices {
-		tsHour := p.TSStart.Truncate(time.Hour)
-		hourlyExportPrices[tsHour] = p.DollarsPerKWH
-		hourlyImportPrices[tsHour] = p.DollarsPerKWH + p.GridUseDollarsPerKWH
-	}
-
 	type energyChunk struct {
 		amount float64
 		price  float64
 	}
 	var chargeStack []energyChunk
-
+	var stats types.SavingsStats
+	stats.Timestamp = start
 	for _, stat := range energyStats {
 		ts := stat.TSHourStart.Truncate(time.Hour)
 		inRequestedPeriod := !ts.Before(start) && ts.Before(end)
 
-		gridImportPrice := hourlyImportPrices[ts]
-		gridExportPrice := hourlyExportPrices[ts]
+		var gridImportPrice float64
+		var gridExportPrice float64
+		for _, p := range prices {
+			if p.Contains(ts) {
+				gridImportPrice = p.DollarsPerKWH
+				gridExportPrice = p.DollarsPerKWH + p.GridUseDollarsPerKWH
+				break
+			}
+		}
 
 		ignoredFraction := getIgnoredFraction(ts, actions)
 		activeFraction := 1.0 - ignoredFraction

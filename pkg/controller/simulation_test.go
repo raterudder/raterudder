@@ -457,7 +457,7 @@ func TestSimulateState(t *testing.T) {
 		}
 
 		// Use dummy prices
-		currentPrice := types.Price{DollarsPerKWH: 0.10, TSStart: now}
+		currentPrice := types.Price{DollarsPerKWH: 0.10, TSStart: now, TSEnd: now.Add(time.Hour)}
 		futurePrices := []types.Price{}
 
 		simData := c.SimulateState(ctx, now, currentStatus, currentPrice, futurePrices, history, settings)
@@ -543,7 +543,7 @@ func TestSimulateState(t *testing.T) {
 			MaxBatteryChargeKW:    5.0,
 			MaxBatteryDischargeKW: 5.0,
 		}
-		currentPrice := types.Price{DollarsPerKWH: 0.10, TSStart: now}
+		currentPrice := types.Price{DollarsPerKWH: 0.10, TSStart: now, TSEnd: now.Add(time.Hour)}
 		futurePrices := []types.Price{} // Flat price
 		settings := types.Settings{
 			MinBatterySOC:            20.0,
@@ -605,6 +605,7 @@ func TestSimulateState(t *testing.T) {
 			DollarsPerKWH:        0.10,
 			GridUseDollarsPerKWH: 0.05,
 			TSStart:              now,
+			TSEnd:                now.Add(time.Hour),
 		}
 
 		// Add a peak price later to test 1:1 net metering valuation
@@ -612,6 +613,7 @@ func TestSimulateState(t *testing.T) {
 			DollarsPerKWH:        0.40,
 			GridUseDollarsPerKWH: 0.10,
 			TSStart:              now.Add(2 * time.Hour),
+			TSEnd:                now.Add(3 * time.Hour),
 		}
 
 		tests := []struct {
@@ -676,6 +678,118 @@ func TestSimulateState(t *testing.T) {
 				simData := c.SimulateState(ctx, now, currentStatus, currentPrice, []types.Price{futurePrice}, nil, settings)
 				assert.NotEmpty(t, simData)
 				assert.InDelta(t, tt.expectedOppCost, simData[0].SolarOppDollarsPerKWH, 0.001)
+			})
+		}
+	})
+
+	t.Run("SolarOppCost", func(t *testing.T) {
+		c := NewController()
+		ctx := context.Background()
+		now := time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC)
+
+		currentStatus := types.SystemStatus{
+			BatteryCapacityKWH: 10.0,
+			BatterySOC:         50.0,
+			Timestamp:          now,
+		}
+
+		tests := []struct {
+			name                     string
+			separateGenerationCredit bool
+			generationCreditDollars  float64
+			baseSupplyDollars        float64
+			gridExportSolar          bool
+			netMetering              bool
+			nmValue                  string
+			expectedOppCost          float64
+			description              string
+		}{
+			{
+				name:                     "SeparateGenerationCredit uses GenerationCreditDollarsPerKWH",
+				separateGenerationCredit: true,
+				generationCreditDollars:  0.03,
+				baseSupplyDollars:        0.10,
+				gridExportSolar:          true,
+				netMetering:              false,
+				expectedOppCost:          0.03,
+				description:              "When SeparateGenerationCredit=true the generation credit rate is used, not the supply rate",
+			},
+			{
+				name:                     "SeparateGenerationCredit=false uses DollarsPerKWH",
+				separateGenerationCredit: false,
+				generationCreditDollars:  0.03, // set but ignored
+				baseSupplyDollars:        0.10,
+				gridExportSolar:          true,
+				netMetering:              false,
+				expectedOppCost:          0.10, // base supply used
+				description:              "When SeparateGenerationCredit=false, GenerationCreditDollarsPerKWH is ignored",
+			},
+			{
+				name:                     "NetMetering overrides SeparateGenerationCredit",
+				separateGenerationCredit: true,
+				generationCreditDollars:  0.03,
+				baseSupplyDollars:        0.10,
+				gridExportSolar:          true,
+				netMetering:              true,
+				nmValue:                  "none", // explicit none to get 0
+				expectedOppCost:          0.0,
+				description:              "Net metering path takes precedence over SeparateGenerationCredit",
+			},
+			{
+				name:                     "Export disabled yields 0 even with SeparateGenerationCredit",
+				separateGenerationCredit: true,
+				generationCreditDollars:  0.05,
+				baseSupplyDollars:        0.10,
+				gridExportSolar:          false,
+				netMetering:              false,
+				expectedOppCost:          0.0,
+				description:              "Export disabled always gives 0 opportunity cost",
+			},
+			{
+				name:                     "Zero GenerationCreditDollarsPerKWH with SeparateGenerationCredit",
+				separateGenerationCredit: true,
+				generationCreditDollars:  0.0,
+				baseSupplyDollars:        0.10,
+				gridExportSolar:          true,
+				netMetering:              false,
+				expectedOppCost:          0.0,
+				description:              "Zero generation credit is valid and not replaced by supply rate",
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				price := types.Price{
+					DollarsPerKWH:                 tt.baseSupplyDollars,
+					GenerationCreditDollarsPerKWH: tt.generationCreditDollars,
+					SeparateGenerationCredit:      tt.separateGenerationCredit,
+					TSStart:                       now,
+					TSEnd:                         now.Add(time.Hour),
+				}
+				futurePrices := []types.Price{
+					{
+						DollarsPerKWH:                 tt.baseSupplyDollars,
+						GenerationCreditDollarsPerKWH: tt.generationCreditDollars,
+						SeparateGenerationCredit:      tt.separateGenerationCredit,
+						TSStart:                       now.Add(time.Hour),
+						TSEnd:                         now.Add(2 * time.Hour),
+					},
+				}
+				settings := types.Settings{
+					GridExportSolar: tt.gridExportSolar,
+					UtilityRateOptions: types.UtilityRateOptions{
+						NetMeteringCredits: tt.netMetering,
+					},
+					SolarNetMeteringCreditsValue: tt.nmValue,
+				}
+
+				simData := c.SimulateState(ctx, now, currentStatus, price, futurePrices, nil, settings)
+				assert.NotEmpty(t, simData)
+				// there should be 2 because one for the current hour and one for the next hour
+				if assert.Len(t, simData, 2) {
+					assert.InDelta(t, tt.expectedOppCost, simData[0].SolarOppDollarsPerKWH, 0.0001, tt.description)
+					assert.InDelta(t, tt.expectedOppCost, simData[1].SolarOppDollarsPerKWH, 0.0001, tt.description)
+				}
 			})
 		}
 	})
