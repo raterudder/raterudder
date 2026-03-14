@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -288,8 +287,8 @@ func TestHandleJoin(t *testing.T) {
 	t.Run("CreateNewSiteLongEmailPrefix", func(t *testing.T) {
 		store := &mockStorage{}
 
-		// Expect GetSite for "longprefix" to fail (meaning it's available)
-		store.On("GetSite", mock.Anything, "longprefix").Return(types.Site{}, storage.ErrSiteNotFound)
+		// Expect ListSites to return no sites (meaning "longprefix" is available)
+		store.On("ListSites", mock.Anything).Return([]types.Site{}, nil)
 
 		// Expect CreateSite with "longprefix"
 		store.On("CreateSite", mock.Anything, "longprefix", mock.MatchedBy(func(site types.Site) bool {

@@ -6,14 +6,12 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/raterudder/raterudder/pkg/log"
-	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
 )
 
@@ -87,15 +85,25 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 
 		usePrefix := false
 		if len(prefix) >= 8 {
-			for i := 0; i < 10; i++ {
-				try := prefix
-				if i > 0 {
-					try = fmt.Sprintf("%s_%d", prefix, i)
+			existingSites, err := s.storage.ListSites(ctx)
+			if err != nil {
+				log.Ctx(ctx).ErrorContext(ctx, "join: failed to list sites", slog.Any("error", err))
+			} else {
+				siteIDs := make(map[string]struct{}, len(existingSites))
+				for _, st := range existingSites {
+					siteIDs[st.ID] = struct{}{}
 				}
-				if _, err := s.storage.GetSite(ctx, try); errors.Is(err, storage.ErrSiteNotFound) {
-					prefix = try
-					usePrefix = true
-					break
+
+				for i := 0; i < 10; i++ {
+					try := prefix
+					if i > 0 {
+						try = fmt.Sprintf("%s_%d", prefix, i)
+					}
+					if _, exists := siteIDs[try]; !exists {
+						prefix = try
+						usePrefix = true
+						break
+					}
 				}
 			}
 		}
