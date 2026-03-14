@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { useLocation, useSearch, Link } from 'wouter';
 import { BatteryMode, SolarMode, type Action, type SavingsStats, type Settings, fetchActions, fetchSavings, fetchSettings } from '../api';
 import CurrentStatus from '../components/CurrentStatus';
@@ -17,11 +17,11 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
     const search = useSearch();
     const searchParams = useMemo(() => new URLSearchParams(search), [search]);
 
-    const setSearchParams = (params: Record<string, string>) => {
+    const setSearchParams = useCallback((params: Record<string, string>) => {
         const p = new URLSearchParams(search);
         Object.entries(params).forEach(([k, v]) => p.set(k, v));
         navigate(location + "?" + p.toString());
-    };
+    }, [search, location, navigate]);
 
     const dateQuery = searchParams.get('date');
     const [actions, setActions] = useState<Action[]>([]);
@@ -75,14 +75,30 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
         loadData();
     }, [currentDate, siteID]);
 
-    const handleDateChange = (days: number) => {
+    const handleDateChange = useCallback((days: number) => {
         const newDate = new Date(currentDate);
         newDate.setDate(newDate.getDate() + days);
         const year = newDate.getFullYear();
         const month = String(newDate.getMonth() + 1).padStart(2, '0');
         const day = String(newDate.getDate()).padStart(2, '0');
         setSearchParams({ date: `${year}-${month}-${day}` });
-    };
+    }, [currentDate, setSearchParams]);
+
+    const isToday = currentDate.toDateString() === new Date().toDateString();
+
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
+
+            if (e.key === 'ArrowLeft' && !loading) {
+                handleDateChange(-1);
+            } else if (e.key === 'ArrowRight' && !loading && !isToday) {
+                handleDateChange(1);
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [handleDateChange, loading, isToday]);
 
     // Format date for display
     const formattedDate = currentDate.toLocaleDateString(undefined, {
@@ -92,7 +108,6 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
         day: 'numeric'
     });
 
-    const isToday = currentDate.toDateString() === new Date().toDateString();
     const latestAction = actions.length > 0 ? actions[actions.length - 1] : null;
     // Filter out paused actions from the displayed timeline — they are captured for
     // status tracking only and should not appear as regular action items.
@@ -236,9 +251,19 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
         <div className="content-container action-list-container">
             <header className="header">
                 <div className="date-controls">
-                    <button onClick={() => handleDateChange(-1)} disabled={loading} aria-label="Previous day">&lt; Prev</button>
+                    <button
+                        onClick={() => handleDateChange(-1)}
+                        disabled={loading}
+                        aria-label="Previous day"
+                        title="Previous day (Left Arrow)"
+                    >&lt; Prev</button>
                     <h2>{formattedDate}</h2>
-                    <button onClick={() => handleDateChange(1)} disabled={loading || isToday} aria-label="Next day">Next &gt;</button>
+                    <button
+                        onClick={() => handleDateChange(1)}
+                        disabled={loading || isToday}
+                        aria-label="Next day"
+                        title={isToday ? "Cannot view future dates" : "Next day (Right Arrow)"}
+                    >Next &gt;</button>
                 </div>
             </header>
 
