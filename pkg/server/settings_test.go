@@ -967,6 +967,124 @@ func TestHandleUpdateSettings(t *testing.T) {
 	})
 }
 
+func TestGetSettingsWithMigration(t *testing.T) {
+	t.Run("Returns Settings And Decrypts Credentials", func(t *testing.T) {
+		mockS := &mockStorage{}
+		srv := &Server{
+			storage:       mockS,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
+		ctx := context.Background()
+		siteID := "test-site"
+
+		creds := types.Credentials{
+			Mock: &types.MockCredentials{Strategy: "test-strategy"},
+		}
+		encrypted, err := srv.encryptCredentials(ctx, creds)
+		require.NoError(t, err)
+
+		mockS.On("GetSettings", ctx, siteID).Return(types.Settings{
+			UtilityProvider:      "test-utility",
+			EncryptedCredentials: encrypted,
+		}, types.CurrentSettingsVersion, nil)
+
+		sv, returnedCreds, err := srv.getSettingsWithMigration(ctx, siteID)
+
+		require.NoError(t, err)
+		assert.Equal(t, types.CurrentSettingsVersion, sv.version)
+		assert.Equal(t, "test-utility", sv.Settings.UtilityProvider)
+		assert.Equal(t, "test-strategy", returnedCreds.Mock.Strategy)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("Migrates Settings Below Current Version And Saves", func(t *testing.T) {
+		mockS := &mockStorage{}
+		srv := &Server{
+			storage: mockS,
+		}
+
+		ctx := context.Background()
+		siteID := "test-site"
+
+		// Mock returning an old version of settings
+		oldVersion := 1 // Assume CurrentSettingsVersion > 1
+		mockS.On("GetSettings", ctx, siteID).Return(types.Settings{
+			UtilityProvider: "old-utility",
+		}, oldVersion, nil)
+
+		// Mock the SetSettings call that should happen after migration
+		mockS.On("SetSettings", ctx, siteID, mock.MatchedBy(func(s types.Settings) bool {
+			// Basic validation to ensure settings are actually migrated/passed correctly
+			return s.UtilityProvider == "old-utility" && s.MinDeficitPriceDifferenceDollarsPerKWH == 0.02
+		}), types.CurrentSettingsVersion).Return(nil)
+
+		sv, creds, err := srv.getSettingsWithMigration(ctx, siteID)
+
+		require.NoError(t, err)
+		assert.Equal(t, types.CurrentSettingsVersion, sv.version)
+		// We expect SetSettings to have been called with the migrated settings
+		mockS.AssertExpectations(t)
+
+		for _, v := range creds.Has() {
+			assert.False(t, v)
+		}
+	})
+
+	t.Run("Returns Migrated Settings Even If Save Fails", func(t *testing.T) {
+		mockS := &mockStorage{}
+		srv := &Server{
+			storage: mockS,
+		}
+
+		ctx := context.Background()
+		siteID := "test-site"
+
+		oldVersion := 1
+		mockS.On("GetSettings", ctx, siteID).Return(types.Settings{
+			UtilityProvider: "old-utility",
+		}, oldVersion, nil)
+
+		// Mock the SetSettings call to return an error
+		mockS.On("SetSettings", ctx, siteID, mock.MatchedBy(func(s types.Settings) bool {
+			// Basic validation to ensure settings are actually migrated/passed correctly
+			return s.UtilityProvider == "old-utility" && s.MinDeficitPriceDifferenceDollarsPerKWH == 0.02
+		}), types.CurrentSettingsVersion).Return(fmt.Errorf("save failed"))
+
+		sv, creds, err := srv.getSettingsWithMigration(ctx, siteID)
+
+		require.NoError(t, err)
+		assert.Equal(t, types.CurrentSettingsVersion, sv.version)
+		mockS.AssertExpectations(t)
+
+		for _, v := range creds.Has() {
+			assert.False(t, v)
+		}
+	})
+
+	t.Run("Fails to Decrypt Invalid Credentials", func(t *testing.T) {
+		mockS := &mockStorage{}
+		srv := &Server{
+			storage:       mockS,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
+		ctx := context.Background()
+		siteID := "test-site"
+
+		mockS.On("GetSettings", ctx, siteID).Return(types.Settings{
+			UtilityProvider:      "test-utility",
+			EncryptedCredentials: []byte("invalid-encrypted-data"),
+		}, types.CurrentSettingsVersion, nil)
+
+		_, _, err := srv.getSettingsWithMigration(ctx, siteID)
+
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "cipher")
+		mockS.AssertExpectations(t)
+	})
+}
+
 func TestGetESSBackoff(t *testing.T) {
 	tests := []struct {
 		failures int
