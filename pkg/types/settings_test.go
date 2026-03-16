@@ -64,3 +64,61 @@ func TestMigrateSettings(t *testing.T) {
 		assert.Equal(t, current, s)
 	})
 }
+
+func TestCredentialsHas(t *testing.T) {
+	t.Run("All Nil", func(t *testing.T) {
+		creds := &Credentials{}
+		hasMap := creds.Has()
+		// Do not use assert.Empty or assert.False on the entire map per memory guidelines
+		// The map is pre-populated with keys for each credential strategy
+		for _, v := range hasMap {
+			assert.False(t, v, "Expected all credential values to be false")
+		}
+		// Also verify the specific keys
+		assert.Contains(t, hasMap, "franklin")
+		assert.Contains(t, hasMap, "mock")
+		assert.Contains(t, hasMap, "tesla")
+	})
+
+	t.Run("Only Franklin", func(t *testing.T) {
+		creds := &Credentials{
+			Franklin: &FranklinCredentials{},
+		}
+		hasMap := creds.Has()
+		assert.True(t, hasMap["franklin"], "Expected franklin to be true")
+		assert.False(t, hasMap["mock"], "Expected mock to be false")
+		assert.False(t, hasMap["tesla"], "Expected tesla to be false")
+	})
+
+	t.Run("Only Mock", func(t *testing.T) {
+		creds := &Credentials{
+			Mock: &MockCredentials{},
+		}
+		hasMap := creds.Has()
+		assert.False(t, hasMap["franklin"], "Expected franklin to be false")
+		assert.True(t, hasMap["mock"], "Expected mock to be true")
+		assert.False(t, hasMap["tesla"], "Expected tesla to be false")
+	})
+
+	t.Run("Only Tesla", func(t *testing.T) {
+		creds := &Credentials{
+			Tesla: &TeslaCredentials{},
+		}
+		hasMap := creds.Has()
+		assert.False(t, hasMap["franklin"], "Expected franklin to be false")
+		assert.False(t, hasMap["mock"], "Expected mock to be false")
+		assert.True(t, hasMap["tesla"], "Expected tesla to be true")
+	})
+
+	t.Run("All Set", func(t *testing.T) {
+		creds := &Credentials{
+			Franklin: &FranklinCredentials{},
+			Mock:     &MockCredentials{},
+			Tesla:    &TeslaCredentials{},
+		}
+		hasMap := creds.Has()
+		for key, v := range hasMap {
+			assert.True(t, v, "Expected %s to be true", key)
+		}
+	})
+}
