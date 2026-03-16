@@ -772,8 +772,8 @@ func TestHandleUpdateSettings(t *testing.T) {
 		require.NoError(t, err)
 
 		mockS2.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
-			UtilityProvider: "test",
-			ESS:             "mock",
+			UtilityProvider:      "test",
+			ESS:                  "mock",
 			EncryptedCredentials: encrypted,
 			ESSAuthStatus: types.ESSAuthStatus{
 				ConsecutiveFailures: 2,
@@ -848,8 +848,8 @@ func TestHandleUpdateSettings(t *testing.T) {
 		require.NoError(t, err)
 
 		mockS2.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
-			UtilityProvider: "test",
-			ESS:             "mock",
+			UtilityProvider:      "test",
+			ESS:                  "mock",
 			EncryptedCredentials: encrypted,
 			ESSAuthStatus: types.ESSAuthStatus{
 				ConsecutiveFailures: 2,

@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -203,5 +204,39 @@ func TestReportBrowser(t *testing.T) {
 
 		assert.Contains(t, logLines[3], "CSP Violation")
 		assert.Contains(t, logLines[3], "https://example.com/blocked")
+	})
+
+	t.Run("Handle Too Many Reports", func(t *testing.T) {
+		// Generate an array of 15 reports
+		var reports []map[string]any
+		for i := 0; i < 15; i++ {
+			reports = append(reports, map[string]any{
+				"type": "unknown-report-type",
+				"url":  "https://example.com/doc",
+			})
+		}
+		payload, err := json.Marshal(reports)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/report/browser", bytes.NewBuffer(payload))
+		ctx, buf := setupTestLogger(req.Context())
+		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv := &Server{}
+		srv.handleReportBrowser(w, req)
+
+		assert.Equal(t, http.StatusNoContent, w.Code)
+
+		logOutput := buf.String()
+		assert.Contains(t, logOutput, "too many browser reports in single request")
+
+		logLines := strings.Split(strings.TrimSpace(logOutput), "\n")
+		// The logger adds an extra empty string from the last newline
+		if len(logLines) > 0 && logLines[len(logLines)-1] == "" {
+			logLines = logLines[:len(logLines)-1]
+		}
+		// 1 log for the warning + 10 logs for the reports
+		require.Len(t, logLines, 11)
 	})
 }
