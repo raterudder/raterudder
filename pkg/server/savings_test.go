@@ -126,6 +126,40 @@ func TestHandleHistorySavings(t *testing.T) {
 			expectedSolarSavings: 0.0,
 		},
 		{
+			name: "LIFO Stack Multiple Charges",
+			setupMock: func(m *mockSavingsStorage) {
+				m.prices = []types.Price{
+					{TSStart: start.Add(-2 * time.Hour), TSEnd: start.Add(-1 * time.Hour), DollarsPerKWH: 0.05}, // Past charge 1 @ $0.05
+					{TSStart: start.Add(-1 * time.Hour), TSEnd: start, DollarsPerKWH: 0.10},                     // Past charge 2 @ $0.10
+					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.20},                          // Current discharge @ $0.20
+				}
+				m.stats = []types.EnergyStats{
+					{
+						TSHourStart:       start.Add(-2 * time.Hour), // Charge 10kWh @ $0.05
+						GridImportKWH:     10,
+						BatteryChargedKWH: 10,
+					},
+					{
+						TSHourStart:       start.Add(-1 * time.Hour), // Charge 10kWh @ $0.10
+						GridImportKWH:     10,
+						BatteryChargedKWH: 10,
+					},
+					{
+						TSHourStart:      start, // Discharge 15kWh @ $0.20
+						HomeKWH:          15,
+						BatteryUsedKWH:   15,
+						BatteryToHomeKWH: 15,
+					},
+				}
+			},
+			expectedCost:         0.0,  // Cost of charges were in lookback period
+			expectedCredit:       0.0,
+			expectedAvoidedCost:  3.00, // 15kWh * 0.20
+			expectedChargingCost: 1.25, // 10kWh * 0.10 (LIFO top) + 5kWh * 0.05 (LIFO bottom) = 1.00 + 0.25 = 1.25
+			expectedBattSavings:  1.75, // 3.00 - 1.25 = 1.75
+			expectedSolarSavings: 0.0,
+		},
+		{
 			name: "Partial Paused Hour",
 			setupMock: func(m *mockSavingsStorage) {
 				m.prices = []types.Price{
