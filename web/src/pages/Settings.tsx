@@ -225,7 +225,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                 </div>
 
                 {settings.utilityProvider && settings.utilityRate && !editUtility ? (
-                    <div className="configured-summary" onClick={() => setEditUtility(true)}>
+                    <button type="button" className="configured-summary" onClick={() => setEditUtility(true)}>
                         <div className="summary-info">
                             <span className="summary-label">
                                 {utilities.find(u => u.id === settings.utilityProvider)?.name || settings.utilityProvider}
@@ -237,7 +237,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                         <div className={`summary-status ${isUtilityDirty ? 'pending' : ''}`}>
                             {isUtilityDirty ? 'Pending Save' : 'Configured'}
                         </div>
-                    </div>
+                    </button>
                 ) : (
                     <div className={editUtility ? "edit-section" : ""}>
                         <Field.Root className="form-group">
@@ -440,14 +440,14 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                 </div>
 
                 {settings.ess && (settings.hasCredentials?.[settings.ess] || isESSDirty) && !editESS ? (
-                    <div className="configured-summary" onClick={() => setEditESS(true)}>
+                    <button type="button" className="configured-summary" onClick={() => setEditESS(true)}>
                         <div className="summary-info">
                             <span className="summary-label">{essProviders.find(p => p.id === settings.ess)?.name || settings.ess || 'Unknown System'}</span>
                         </div>
                         <div className={`summary-status ${isESSDirty ? 'pending' : ''}`}>
                             {isESSDirty ? 'Pending Save' : 'Connected'}
                         </div>
-                    </div>
+                    </button>
                 ) : (
                     <div className={editESS ? "edit-section" : ""}>
                         <Field.Root className="form-group">

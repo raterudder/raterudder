@@ -367,6 +367,15 @@
   cursor: pointer;
   transition: all 0.2s ease;
   margin-bottom: 1.5rem;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+}
+
+.configured-summary:focus-visible {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.15);
 }
 
 .configured-summary:hover {
