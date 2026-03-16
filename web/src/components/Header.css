@@ -126,26 +126,61 @@
   background: var(--surface-subtle);
 }
 
+
 /* Hamburger */
 .mobile-menu-toggle {
   display: none;
   flex-direction: column;
-  justify-content: space-around;
+  justify-content: center;
+  align-items: center;
   width: 26px;
-  height: 20px;
+  height: 26px;
   background: transparent;
   border: none;
   cursor: pointer;
   padding: 0;
   z-index: 1001;
+  position: relative;
 }
 
 .hamburger-line {
-  width: 100%;
+  width: 22px;
   height: 2px;
   background-color: var(--text-secondary);
   border-radius: 2px;
-  transition: all 0.2s ease;
+  transition: all 0.3s ease;
+  position: absolute;
+  left: 50%;
+  transform-origin: center;
+}
+
+.hamburger-line:nth-child(1) {
+  top: 6px;
+  transform: translateX(-50%);
+}
+
+.hamburger-line:nth-child(2) {
+  top: 12px;
+  transform: translateX(-50%);
+}
+
+.hamburger-line:nth-child(3) {
+  top: 18px;
+  transform: translateX(-50%);
+}
+
+.mobile-menu-toggle.open .hamburger-line:nth-child(1) {
+  top: 12px;
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.mobile-menu-toggle.open .hamburger-line:nth-child(2) {
+  opacity: 0;
+}
+
+.mobile-menu-toggle.open .hamburger-line:nth-child(3) {
+  top: 12px;
+  transform: translateX(-50%) rotate(-45deg);
 }
 
 .header-content {

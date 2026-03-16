@@ -63,7 +63,11 @@ const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSite
                 </div>
 
                 {loggedIn && (
-                    <button className="mobile-menu-toggle" onClick={toggleMenu} aria-label="Toggle navigation">
+                    <button
+                        className={`mobile-menu-toggle ${isMenuOpen ? 'open' : ''}`}
+                        onClick={toggleMenu}
+                        aria-label={isMenuOpen ? "Close navigation menu" : "Open navigation menu"}
+                        aria-expanded={isMenuOpen}>
                         <span className="hamburger-line"></span>
                         <span className="hamburger-line"></span>
                         <span className="hamburger-line"></span>
