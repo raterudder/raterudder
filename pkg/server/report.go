@@ -48,6 +48,12 @@ func (s *Server) handleReportBrowser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Prevent DoS by limiting the number of reports processed per request
+	if len(reports) > 10 {
+		log.Ctx(ctx).WarnContext(ctx, "too many browser reports in single request", slog.Int("count", len(reports)))
+		reports = reports[:10]
+	}
+
 	for _, report := range reports {
 		if report.Type == "csp-violation" {
 			var body CSPViolationReportBody
