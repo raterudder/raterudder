@@ -152,7 +152,7 @@ func TestHandleHistorySavings(t *testing.T) {
 					},
 				}
 			},
-			expectedCost:         0.0,  // Cost of charges were in lookback period
+			expectedCost:         0.0, // Cost of charges were in lookback period
 			expectedCredit:       0.0,
 			expectedAvoidedCost:  3.00, // 15kWh * 0.20
 			expectedChargingCost: 1.25, // 10kWh * 0.10 (LIFO top) + 5kWh * 0.05 (LIFO bottom) = 1.00 + 0.25 = 1.25

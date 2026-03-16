@@ -47,6 +47,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			var bodyBytes []byte
 			if r.Body != nil {
 				var err error
+				r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // Limit to 1MB to prevent DoS
 				bodyBytes, err = io.ReadAll(r.Body)
 				if err != nil {
 					log.Ctx(ctx).ErrorContext(ctx, "failed to read request body", slog.Any("error", err))
