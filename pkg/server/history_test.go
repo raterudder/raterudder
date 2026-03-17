@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -204,6 +205,46 @@ func TestHistory(t *testing.T) {
 		assert.WithinDuration(t, end, mockS.lastEnd, time.Second)
 	})
 
+	t.Run("Fetch Actions Data Error", func(t *testing.T) {
+		// Mock GetActionHistory to return a storage error to verify the 500 status code response
+		now := time.Now()
+
+		// Save original state to restore it after the test
+		originalActions := mockS.actions
+		originalErr := mockS.err
+		defer func() {
+			mockS.actions = originalActions
+			mockS.err = originalErr
+		}()
+
+		mockS.actions = nil
+		mockS.err = fmt.Errorf("storage error")
+
+		start := now.Add(-time.Hour)
+		end := now
+
+		q := make(url.Values)
+		q.Set("start", start.Format(time.RFC3339))
+		q.Set("end", end.Format(time.RFC3339))
+		u := "/api/history/actions?" + q.Encode()
+
+		req := httptest.NewRequest("GET", u, nil)
+		w := httptest.NewRecorder()
+
+		handler.ServeHTTP(w, req)
+
+		resp := w.Result()
+		require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+
+		var errResp struct {
+			Error string `json:"error"`
+		}
+		err := json.NewDecoder(resp.Body).Decode(&errResp)
+		require.NoError(t, err)
+		// Ensure the error message specifically mentions the failure action
+		assert.Contains(t, errResp.Error, "failed to get actions")
+	})
+
 	t.Run("Fetch Prices Data", func(t *testing.T) {
 		now := time.Now()
 		expectedPrices := []types.Price{
@@ -241,6 +282,46 @@ func TestHistory(t *testing.T) {
 		// Verify storage call
 		assert.WithinDuration(t, start, mockS.lastStart, time.Second)
 		assert.WithinDuration(t, end, mockS.lastEnd, time.Second)
+	})
+
+	t.Run("Fetch Prices Data Error", func(t *testing.T) {
+		// Mock GetPriceHistory to return a storage error to verify the 500 status code response
+		now := time.Now()
+
+		// Save original state to restore it after the test
+		originalPrices := mockS.prices
+		originalErr := mockS.err
+		defer func() {
+			mockS.prices = originalPrices
+			mockS.err = originalErr
+		}()
+
+		mockS.prices = nil
+		mockS.err = fmt.Errorf("storage error")
+
+		start := now.Add(-time.Hour)
+		end := now
+
+		q := make(url.Values)
+		q.Set("start", start.Format(time.RFC3339))
+		q.Set("end", end.Format(time.RFC3339))
+		u := "/api/history/prices?" + q.Encode()
+
+		req := httptest.NewRequest("GET", u, nil)
+		w := httptest.NewRecorder()
+
+		handler.ServeHTTP(w, req)
+
+		resp := w.Result()
+		require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+
+		var errResp struct {
+			Error string `json:"error"`
+		}
+		err := json.NewDecoder(resp.Body).Decode(&errResp)
+		require.NoError(t, err)
+		// Ensure the error message specifically mentions the failure action
+		assert.Contains(t, errResp.Error, "failed to get prices")
 	})
 
 	t.Run("Cache Control Today", func(t *testing.T) {
