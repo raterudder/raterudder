@@ -10,7 +10,7 @@ interface FeedbackWidgetProps {
 
 const FeedbackWidget: React.FC<FeedbackWidgetProps> = ({ siteID }) => {
     const [isOpen, setIsOpen] = useState(false);
-    const [sentiment, setSentiment] = useState('neutral');
+    const [sentiment, setSentiment] = useState<string | null>(null);
     const [comment, setComment] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -22,7 +22,7 @@ const FeedbackWidget: React.FC<FeedbackWidgetProps> = ({ siteID }) => {
     const handleOpenChange = (open: boolean) => {
         if (open) {
             // Reset state when opening
-            setSentiment('neutral');
+            setSentiment(null);
             setComment('');
             setError(null);
             setSuccess(false);
@@ -40,7 +40,7 @@ const FeedbackWidget: React.FC<FeedbackWidgetProps> = ({ siteID }) => {
         };
 
         try {
-            await submitFeedback(siteID, sentiment, comment, extra);
+            await submitFeedback(siteID, sentiment || 'neutral', comment, extra);
             setSuccess(true);
             setTimeout(() => {
                 setIsOpen(false);
@@ -128,7 +128,7 @@ const FeedbackWidget: React.FC<FeedbackWidgetProps> = ({ siteID }) => {
                                             className="feedback-submit-btn"
                                             onClick={handleSubmit}
                                             type="button"
-                                            disabled={loading || (comment.trim() === '' && sentiment === 'neutral')}
+                                            disabled={loading || (comment.trim() === '' && sentiment === null)}
                                         >
                                             {loading ? 'Sending...' : 'Submit'}
                                         </button>
