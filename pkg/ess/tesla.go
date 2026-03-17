@@ -261,7 +261,7 @@ func (b *baseTesla) doRequest(req *http.Request, dest any) error {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1048576))
 	if err != nil {
 		return err
 	}
