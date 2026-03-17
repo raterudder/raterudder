@@ -198,6 +198,9 @@ func (c *BaseComEdHourly) GetConfirmedPrices(ctx context.Context, start, end tim
 	now := time.Now().In(ctLocation)
 	// don't confirm prices that ended within 5 minutes ago
 	endBuffer := now.Add(-5 * time.Minute)
+	// don't confirm prices that have less than 12 samples and ended within 45
+	// minutes ago
+	unfullEndBuffer := now.Add(-45 * time.Minute)
 	confirmedPrices := make([]types.Price, 0, len(prices))
 	var earliest time.Time
 	var latest time.Time
@@ -210,28 +213,21 @@ func (c *BaseComEdHourly) GetConfirmedPrices(ctx context.Context, start, end tim
 			continue
 		}
 
-		// less than 55 minutes means we don't have a full hour
-		// but we allow for one sample to be missing as long as it's in the past
-		if p.TSEnd.Sub(p.TSStart) < 55*time.Minute {
-			continue
-		}
-
-		// require full 12 5-minute periods to ensure complete data but somehow we
-		// don't have enough samples even though we have 59+minutes of data
-		// well apparently there are somewhat frequent hours where comed doesn't
-		// provide a sample and I'm not sure what we can do about it so we tolerate
-		// a single missing sample
-		// TODO: should we use another sample to fill in the gap? it's not clear and
-		// hopefully not a big deal either way
-		if p.sampleCount < 11 {
+		// if we don't have a full hour of data and it's recent, wait to see if more
+		// data comes in
+		if p.sampleCount < 12 && p.TSEnd.After(unfullEndBuffer) {
 			log.Ctx(ctx).WarnContext(
 				ctx,
-				"incomplete price data for hour",
+				"waiting for more price data for hour",
 				slog.Time("tsStart", p.TSStart),
 				slog.Time("tsEnd", p.TSEnd),
 				slog.Int("sampleCount", p.sampleCount))
 			continue
 		}
+
+		// TODO: if we have less than 12 samples what does ComEd do in that case?
+		// is it actually just the API that's missing data or is the underlying PJM data
+		// missing as well? What does ComEd charge for that hour?
 
 		confirmedPrices = append(confirmedPrices, p.Price)
 
@@ -355,9 +351,13 @@ func (c *BaseComEdHourly) fetchPricesRange(ctx context.Context, start, end time.
 		avgCents := h.sum / float64(h.count)
 		prices = append(prices, priceWithSampleCount{
 			Price: types.Price{
-				Provider:      "comed_besh",
-				TSStart:       h.start,
-				TSEnd:         h.lastTime.Add(5 * time.Minute),
+				Provider: "comed_besh",
+				TSStart:  h.start,
+				// we used to set TSEnd to be the last value we saw but since the ComEd
+				// data is sometimes unreliable that meant that there are some hours where
+				// we say the end is only 40 minutes into the hour because of missing
+				// data which is inaccurate
+				TSEnd:         h.start.Add(time.Hour),
 				DollarsPerKWH: avgCents / 100, // Cents to Dollars
 			},
 			sampleCount: h.count,

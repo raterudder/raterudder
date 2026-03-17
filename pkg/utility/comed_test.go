@@ -232,10 +232,10 @@ func TestComEd(t *testing.T) {
 
 		// Assertions:
 		// - Future (1h ahead) should be ignored.
-		// - Partial (3h ago) should be ignored because < 11 entries (has 10).
+		// - Partial (3h ago) should be accepted (has 10).
 		// - Valid (2h ago) should be accepted (has 12).
 		// - Almost Full (4h ago) should be accepted (has 11).
-		assert.Len(t, prices, 2)
+		assert.Len(t, prices, 3)
 
 		// Sort prices by time to make identification easier
 		sort.Slice(prices, func(i, j int) bool {
@@ -246,8 +246,12 @@ func TestComEd(t *testing.T) {
 		assert.InDelta(t, 0.05, prices[0].DollarsPerKWH, 0.0001)
 		assert.Equal(t, now.Add(-4*time.Hour).Truncate(time.Hour).Unix(), prices[0].TSStart.Unix())
 
+		// 3h ago (Partial)
+		assert.InDelta(t, 0.03, prices[1].DollarsPerKWH, 0.0001)
+		assert.Equal(t, now.Add(-3*time.Hour).Truncate(time.Hour).Unix(), prices[1].TSStart.Unix())
+
 		// 2h ago (Valid)
-		assert.InDelta(t, 0.02, prices[1].DollarsPerKWH, 0.0001)
-		assert.Equal(t, now.Add(-2*time.Hour).Truncate(time.Hour).Unix(), prices[1].TSStart.Unix())
+		assert.InDelta(t, 0.02, prices[2].DollarsPerKWH, 0.0001)
+		assert.Equal(t, now.Add(-2*time.Hour).Truncate(time.Hour).Unix(), prices[2].TSStart.Unix())
 	})
 }
