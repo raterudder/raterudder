@@ -2,6 +2,7 @@ package common
 
 import (
 	_ "embed"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -21,7 +22,22 @@ func (t *userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error
 	// which might be shared or reused
 	req = req.Clone(req.Context())
 	req.Header.Set("User-Agent", t.userAgent)
-	return t.transport.RoundTrip(req)
+
+	resp, err := t.transport.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Automatically wrap the response body with a 16MB LimitReader to prevent DoS memory exhaustion
+	resp.Body = struct {
+		io.Reader
+		io.Closer
+	}{
+		Reader: io.LimitReader(resp.Body, 16*1024*1024),
+		Closer: resp.Body,
+	}
+
+	return resp, nil
 }
 
 // HTTPClient returns a default http client with a default user-agent set

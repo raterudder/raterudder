@@ -336,7 +336,7 @@ func (f *Franklin) doRequest(req *http.Request, dest any) error {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1048576))
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}
