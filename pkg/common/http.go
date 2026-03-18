@@ -11,13 +11,13 @@ import (
 //go:embed VERSION
 var version string
 
-type userAgentTransport struct {
+type defaultTransport struct {
 	transport http.RoundTripper
 	userAgent string
 }
 
 // RoundTrip implements the
-func (t *userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+func (t *defaultTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Clone the request to avoid modifying the original request's headers
 	// which might be shared or reused
 	req = req.Clone(req.Context())
@@ -46,7 +46,7 @@ func HTTPClient(timeout time.Duration) *http.Client {
 	userAgent := "RateRudder/" + v
 
 	return &http.Client{
-		Transport: &userAgentTransport{
+		Transport: &defaultTransport{
 			transport: http.DefaultTransport,
 			userAgent: userAgent,
 		},
