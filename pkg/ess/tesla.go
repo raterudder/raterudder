@@ -738,7 +738,8 @@ type teslaProduct struct {
 	EnergySiteID int64  `json:"energy_site_id"`
 	DeviceType   string `json:"device_type"`
 	ResourceType string `json:"resource_type"`
-	ID           string `json:"id"`
+	// this is sometimes a string and sometimes a number
+	ID interface{} `json:"id"`
 }
 
 type teslaProductsResponse []teslaProduct
