@@ -163,17 +163,49 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 	var chargeStack []energyChunk
 	var stats types.SavingsStats
 	stats.Timestamp = start
+
+	// Pre-compute an O(n) hash map using the UTC Unix timestamp as the lookup key.
+	// We map each hour block that the price contains to its Price object.
+	pricesByHour := make(map[int64]*types.Price)
+	for i := range prices {
+		p := &prices[i]
+		// Usually prices are hourly blocks, but they might cover multiple hours.
+		// We index every hour starting from TSStart up to TSEnd (or just TSStart if TSEnd is zero).
+		curr := p.TSStart.Truncate(time.Hour)
+		endHour := p.TSEnd
+		if endHour.IsZero() {
+			endHour = curr.Add(time.Hour)
+		}
+		for curr.Before(endHour) {
+			// Only insert if not already present to preserve the "first match" behavior
+			// of the original linear scan which breaks on the first Contains() == true
+			if _, exists := pricesByHour[curr.UTC().Unix()]; !exists {
+				pricesByHour[curr.UTC().Unix()] = p
+			}
+			curr = curr.Add(time.Hour)
+		}
+	}
+
 	for _, stat := range energyStats {
 		ts := stat.TSHourStart.Truncate(time.Hour)
 		inRequestedPeriod := !ts.Before(start) && ts.Before(end)
 
 		var gridImportPrice float64
 		var gridExportPrice float64
-		for _, p := range prices {
-			if p.Contains(ts) {
-				gridImportPrice = p.DollarsPerKWH
-				gridExportPrice = p.DollarsPerKWH + p.GridUseDollarsPerKWH
-				break
+		// Fast path: Check the pre-computed hash map for the exact hour block
+		if p, ok := pricesByHour[ts.UTC().Unix()]; ok && p.Contains(ts) {
+			gridImportPrice = p.DollarsPerKWH
+			gridExportPrice = p.DollarsPerKWH + p.GridUseDollarsPerKWH
+		} else {
+			// Fallback: Use linear scan if the exact hour wasn't in our map, or
+			// if the price block mapped to this hour didn't actually contain 'ts'
+			// (e.g. interval didn't align neatly to hour boundaries).
+			for _, p := range prices {
+				if p.Contains(ts) {
+					gridImportPrice = p.DollarsPerKWH
+					gridExportPrice = p.DollarsPerKWH + p.GridUseDollarsPerKWH
+					break
+				}
 			}
 		}
 
