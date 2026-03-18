@@ -411,7 +411,7 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 	// exclusive boundary for the day after tomorrow
 	fetchEnd := tomorrowStart.AddDate(0, 0, 1)
 
-	newWeathers, err := s.weather.FetchWeatherForecast(ctx, loc.Lat, loc.Long, loc.TimeZone, fetchStart, fetchEnd)
+	newWeathers, err := s.weather.FetchWeatherForecast(ctx, loc, fetchStart, fetchEnd)
 	if err != nil {
 		return fmt.Errorf("failed to fetch weather forecast: %w", err)
 	}

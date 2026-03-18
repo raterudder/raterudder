@@ -228,15 +228,23 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			}
 			newSettings.Location = loc
 
+			// Set user-provided azimuth/tilt
+			loc.SolarAzimuth = newSettings.SolarAzimuth
+			loc.SolarTilt = newSettings.SolarTilt
+
 			go func() {
 				log.Ctx(context.Background()).InfoContext(context.Background(), "fetching initial weather for new location")
 				if err := s.updateWeatherHistory(context.Background(), siteID, *loc); err != nil {
 					log.Ctx(context.Background()).ErrorContext(context.Background(), "failed to sync weather history after settings update", slog.Any("error", err))
 				}
 			}()
-
 		} else {
 			newSettings.Location = existing.Location
+			// Always sync solar azimuth/tilt into location if it's set
+			if newSettings.Location != nil {
+				newSettings.Location.SolarAzimuth = newSettings.SolarAzimuth
+				newSettings.Location.SolarTilt = newSettings.SolarTilt
+			}
 		}
 	} else {
 		newSettings.Location = nil

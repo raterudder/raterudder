@@ -243,6 +243,34 @@ describe('App & Settings', () => {
         });
     });
 
+    it('can update roof solar panel direction', async () => {
+        const user = userEvent.setup();
+        const stagingSettings = { release: 'staging', solarAzimuth: 0, solarTilt: 25, ess: 'mock', hasCredentials: { mock: true } };
+        (fetchSettings as any).mockResolvedValue(stagingSettings);
+        (fetchAuthStatus as any).mockResolvedValue({ ...defaultAuthStatus, loggedIn: true });
+
+        render(<App />);
+        fireEvent.click(screen.getByText(/Log In/));
+        await waitFor(() => expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument());
+        fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
+        await screen.findByRole('heading', { name: /Settings/i });
+
+        const directionSelect = await screen.findByLabelText(/Solar Direction/i);
+        await user.click(directionSelect);
+        const northOption = await screen.findByRole('option', { name: 'North' });
+        await user.click(northOption);
+
+        const saveBtn = screen.getByText('Save Settings');
+        fireEvent.click(saveBtn);
+
+        await waitFor(() => {
+            expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+                solarAzimuth: 180,
+                solarTilt: 25
+            }), expect.any(String), undefined);
+        });
+    });
+
     it('hides location settings when release is not staging', async () => {
         const prodSettings = { release: 'production', minArbitrageDifferenceDollarsPerKWH: 0.05, minBatterySOC: 20, minLoadForSolarHedgeKWH: 2.0, ess: 'mock', hasCredentials: { mock: true } };
         (fetchSettings as any).mockResolvedValue(prodSettings);

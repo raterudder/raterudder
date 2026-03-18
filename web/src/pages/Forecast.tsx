@@ -54,11 +54,21 @@ const charts: ChartConfig[] = [
         ],
     },
     {
+        title: 'Improved Predicted Solar (kWh)',
+        dataKey: 'improvedSolarGeneration',
+        color: '#f97316', // deeper orange
+        gradientId: 'improvedSolarGrad',
+        unit: ' kWh',
+    },
+    {
         title: 'Forecasted Solar Radiation (W/m²)',
         dataKey: 'forecastGHI',
         color: '#fbbf24', // lighter orange/yellow
         gradientId: 'ghiGrad',
         unit: ' W/m²',
+        additionalLines: [
+            { dataKey: 'forecastGTI', color: '#f59e0b' },
+        ],
     },
     {
         title: 'Avg Home Load (kWh)',
@@ -88,6 +98,10 @@ interface ProcessedModelingHour extends ModelingHour {
     batteryReserveSOC: number;
     rawSolarKWH: number;
     forecastGHI?: number;
+    forecastGTI?: number;
+    improvedSolarGeneration?: number;
+    temperature?: number;
+    snowfall?: number;
 }
 
 function ForecastChart({ data, config, isMobile, showCurrentTime }: { data: ProcessedModelingHour[]; config: ChartConfig; isMobile: boolean; showCurrentTime: boolean }) {
@@ -261,6 +275,10 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 return {
                     ...sim,
                     forecastGHI: weather.forecastGHI,
+                    forecastGTI: weather.forecastGTI,
+                    temperature: weather.temperature,
+                    snowfall: weather.snowfall,
+                    improvedSolarGeneration: weather.improvedSolarGeneration,
                 };
             }
             return sim;
@@ -294,6 +312,10 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     netLoadSolarKWH: -h.solarKWH,
                     solarOppDollarsPerKWH: 0,
                     forecastGHI: weather?.forecastGHI,
+                    forecastGTI: weather?.forecastGTI,
+                    temperature: weather?.temperature,
+                    snowfall: weather?.snowfall,
+                    improvedSolarGeneration: weather?.improvedSolarGeneration,
                 };
             });
 
@@ -326,6 +348,9 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
 
     const activeCharts = charts.filter(c => {
         if (c.dataKey === 'forecastGHI' && !hasSolarRadiationData) {
+            return false;
+        }
+        if (c.dataKey === 'improvedSolarGeneration' && !data.some(d => d.improvedSolarGeneration !== undefined)) {
             return false;
         }
         return true;

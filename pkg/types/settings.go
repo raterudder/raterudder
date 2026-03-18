@@ -56,9 +56,13 @@ type Settings struct {
 	// Can export batteries to grid
 	GridExportBatteries bool `json:"gridExportBatteries"`
 
-	CountryCode string        `json:"countryCode"`
-	PostalCode  string        `json:"postalCode"`
-	Location    *SiteLocation `json:"location,omitempty"`
+	// Location settings
+	CountryCode  string  `json:"countryCode"`
+	PostalCode   string  `json:"postalCode"`
+	SolarAzimuth float64 `json:"solarAzimuth"`
+	SolarTilt    float64 `json:"solarTilt"`
+	// Location is set by the weather package and the solar azimuth/tilt are copied
+	Location *SiteLocation `json:"location,omitempty"`
 
 	// Solar Settings
 	// Maximum ratio for solar trend adjustment (caps recentSolar/modelSolar).

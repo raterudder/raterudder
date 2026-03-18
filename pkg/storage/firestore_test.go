@@ -460,8 +460,8 @@ func TestFirestoreProvider(t *testing.T) {
 			w := types.Weather{
 				TSDayStart:   start,
 				TimeLocation: "America/Los_Angeles",
-				Lat:          34.0,
-				Long:         -118.0,
+				Latitude:     34.0,
+				Longitude:    -118.0,
 				ForecastHours: []types.HourlyWeather{
 					{
 						TSHourStart: start.Add(1 * time.Hour),
@@ -476,7 +476,8 @@ func TestFirestoreProvider(t *testing.T) {
 			results, err := f.GetWeather(ctx, siteID, start, start.Add(24*time.Hour))
 			require.NoError(t, err)
 			require.Len(t, results, 1)
-			assert.Equal(t, w.Lat, results[0].Lat)
+			assert.Equal(t, w.Latitude, results[0].Latitude)
+			assert.Equal(t, w.Longitude, results[0].Longitude)
 			assert.Equal(t, w.TimeLocation, results[0].TimeLocation)
 			assert.Len(t, results[0].ForecastHours, 1)
 			assert.Equal(t, 150.5, results[0].ForecastHours[0].GHI)
@@ -497,8 +498,8 @@ func TestFirestoreProvider(t *testing.T) {
 				weathers = append(weathers, types.Weather{
 					TSDayStart:   day,
 					TimeLocation: "America/New_York",
-					Lat:          34.0,
-					Long:         -118.0,
+					Latitude:     34.0,
+					Longitude:    -118.0,
 					ForecastHours: []types.HourlyWeather{
 						{
 							TSHourStart: day.Add(12 * time.Hour),
@@ -529,8 +530,8 @@ func TestFirestoreProvider(t *testing.T) {
 			w1 := types.Weather{
 				TSDayStart:   start,
 				TimeLocation: "America/New_York",
-				Lat:          34.0,
-				Long:         -118.0,
+				Latitude:     34.0,
+				Longitude:    -118.0,
 				ForecastHours: []types.HourlyWeather{
 					{
 						TSHourStart: start.Add(1 * time.Hour),
@@ -546,8 +547,8 @@ func TestFirestoreProvider(t *testing.T) {
 			w2 := types.Weather{
 				TSDayStart:   start,
 				TimeLocation: "America/New_York",
-				Lat:          35.0,
-				Long:         -118.0,
+				Latitude:     35.0,
+				Longitude:    -118.0,
 				ForecastHours: []types.HourlyWeather{
 					{
 						TSHourStart: start.Add(1 * time.Hour),
@@ -561,7 +562,8 @@ func TestFirestoreProvider(t *testing.T) {
 			results, err := f.GetWeather(ctx, siteID, start, start.Add(24*time.Hour))
 			require.NoError(t, err)
 			require.Len(t, results, 1)
-			assert.Equal(t, 35.0, results[0].Lat)
+			assert.Equal(t, 35.0, results[0].Latitude)
+			assert.Equal(t, -118.0, results[0].Longitude)
 			assert.Equal(t, 200.0, results[0].ForecastHours[0].GHI)
 		})
 
@@ -588,8 +590,8 @@ func TestFirestoreProvider(t *testing.T) {
 			w := types.Weather{
 				TSDayStart:   tWest, // Save with West Coast time
 				TimeLocation: "America/Los_Angeles",
-				Lat:          37.0,
-				Long:         -122.0,
+				Latitude:     37.0,
+				Longitude:    -122.0,
 			}
 			err = f.UpsertWeather(ctx, siteID, []types.Weather{w}, types.CurrentWeatherVersion)
 			require.NoError(t, err)

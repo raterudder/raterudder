@@ -241,6 +241,8 @@ export interface Settings {
         consecutiveFailures: number;
         lastAttempt: string;
     };
+    solarAzimuth?: number;
+    solarTilt?: number;
 }
 
 export interface FranklinCredentials {
@@ -481,6 +483,10 @@ export interface PriceHistoryRes {
 export interface WeatherRes {
     tsHourStart: string;
     forecastGHI: number;
+    forecastGTI?: number;
+    temperature?: number;
+    snowfall?: number;
+    improvedSolarGeneration?: number;
 }
 
 export interface ForecastResponse {

@@ -105,7 +105,7 @@ func (m *mockWeather) GetLocationData(ctx context.Context, countryCode, postalCo
 	return args.Get(0).(*types.SiteLocation), args.Error(1)
 }
 
-func (m *mockWeather) FetchWeatherForecast(ctx context.Context, lat, long float64, timezone string, startDate, endDate time.Time) ([]types.Weather, error) {
-	args := m.Called(ctx, lat, long, timezone, startDate, endDate)
+func (m *mockWeather) FetchWeatherForecast(ctx context.Context, loc types.SiteLocation, startDate, endDate time.Time) ([]types.Weather, error) {
+	args := m.Called(ctx, loc, startDate, endDate)
 	return args.Get(0).([]types.Weather), args.Error(1)
 }

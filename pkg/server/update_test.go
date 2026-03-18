@@ -1031,7 +1031,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		mockS.On("UpsertWeather", mock.Anything, "test-site", mock.Anything, mock.Anything).Return(nil)
 
 		mockW := &mockWeather{}
-		mockW.On("FetchWeatherForecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{
+		mockW.On("FetchWeatherForecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{
 			{ForecastHours: make([]types.HourlyWeather, 24)},
 			{ForecastHours: make([]types.HourlyWeather, 24)},
 		}, nil)
@@ -1044,8 +1044,8 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		loc := types.SiteLocation{
 			PostalCode:  "90210",
 			CountryCode: "US",
-			Lat:         34.09,
-			Long:        -118.4,
+			Latitude:    34.09,
+			Longitude:   -118.4,
 			TimeZone:    "America/Los_Angeles",
 		}
 
@@ -1084,8 +1084,8 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		sl := types.SiteLocation{
 			PostalCode:  "90210",
 			CountryCode: "US",
-			Lat:         34.09,
-			Long:        -118.4,
+			Latitude:    34.09,
+			Longitude:   -118.4,
 			TimeZone:    loc.String(),
 		}
 
@@ -1119,7 +1119,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		mockS.On("UpsertWeather", mock.Anything, "test-site", mock.Anything, mock.Anything).Return(nil)
 
 		mockW := &mockWeather{}
-		mockW.On("FetchWeatherForecast", mock.Anything, 34.09, -118.4, "America/Los_Angeles", midnight.AddDate(0, 0, 1), midnight.AddDate(0, 0, 2)).Return([]types.Weather{
+		mockW.On("FetchWeatherForecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{
 			{ForecastHours: make([]types.HourlyWeather, 24)},
 			{ForecastHours: make([]types.HourlyWeather, 24)},
 		}, nil)
@@ -1132,8 +1132,8 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		sl := types.SiteLocation{
 			PostalCode:  "90210",
 			CountryCode: "US",
-			Lat:         34.09,
-			Long:        -118.4,
+			Latitude:    34.09,
+			Longitude:   -118.4,
 			TimeZone:    loc.String(),
 		}
 
