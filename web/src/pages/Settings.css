@@ -298,12 +298,30 @@
   cursor: pointer;
   transition: all 0.2s;
   box-shadow: var(--shadow-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
 }
 
 .save-button:hover {
   background: var(--primary-hover);
   box-shadow: var(--shadow-md);
   transform: translateY(-1px);
+}
+
+.save-spinner {
+  animation: save-spin 1s linear infinite;
+  display: block;
+}
+
+@keyframes save-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .save-button:active {

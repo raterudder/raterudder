@@ -972,6 +972,12 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                     {error && <div className="error-message">{error}</div>}
                     {successMessage && <div className="success-message">{successMessage}</div>}
                     <button type="submit" className="save-button" disabled={isSaving}>
+                        {isSaving && (
+                            <svg className="save-spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <circle className="spinner-track" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.25" />
+                                <path className="spinner-head" d="M12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                            </svg>
+                        )}
                         {isSaving ? 'Saving...' : 'Save Settings'}
                     </button>
                 </div>
