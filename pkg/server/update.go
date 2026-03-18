@@ -176,7 +176,7 @@ func (s *Server) performSiteUpdate(
 
 	// fetch weather history/forecast if location is configured
 	// We pass the 72 hours of history here to sync any new solar data into the weather actuals
-	if settings.Location != nil {
+	if settings.Location != nil && settings.Location.Latitude != 0 && settings.Location.Longitude != 0 {
 		if err := s.updateWeatherHistory(ctx, siteID, *settings.Location); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update weather history", slog.Any("error", err))
 		}
@@ -411,7 +411,7 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 	// exclusive boundary for the day after tomorrow
 	fetchEnd := tomorrowStart.AddDate(0, 0, 1)
 
-	newWeathers, err := s.weather.FetchWeatherForecast(ctx, loc.Lat, loc.Long, loc.TimeZone, fetchStart, fetchEnd)
+	newWeathers, err := s.weather.FetchWeatherForecast(ctx, loc, fetchStart, fetchEnd)
 	if err != nil {
 		return fmt.Errorf("failed to fetch weather forecast: %w", err)
 	}

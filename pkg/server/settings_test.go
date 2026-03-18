@@ -641,7 +641,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 			PostalCode:  "90210",
 			CountryCode: "US",
 		}, nil).Maybe()
-		mockW.On("FetchWeatherForecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockW.On("FetchWeatherForecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
 
 		srv := &Server{
 			storage:     mockS,
@@ -669,6 +669,149 @@ func TestHandleUpdateSettings(t *testing.T) {
 		w := httptest.NewRecorder()
 		srv.handleUpdateSettings(w, req)
 		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	})
+
+	t.Run("Update Solar Direction - Preservation", func(t *testing.T) {
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockUMap := utility.NewMap()
+		mockUMap.SetProvider("test-site", mockU)
+		mockS := &mockStorage{}
+
+		existingLoc := &types.SiteLocation{
+			PostalCode:   "90210",
+			CountryCode:  "US",
+			Latitude:     34.0736,
+			Longitude:    -118.4004,
+			SolarAzimuth: 180,
+			SolarTilt:    25,
+		}
+
+		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil).Maybe()
+		mockS.On("UpdateSite", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			UtilityProvider: "test",
+			PostalCode:      "90210",
+			CountryCode:     "US",
+			Location:        existingLoc,
+		}, types.CurrentSettingsVersion, nil)
+
+		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			// Verify that the new azimuth and tilt are saved, but geo data is preserved
+			return s.Location != nil &&
+				s.Location.SolarAzimuth == 270 &&
+				s.Location.SolarTilt == 30 &&
+				s.Location.Latitude == 34.0736 &&
+				s.Location.Longitude == -118.4004
+		}), types.CurrentSettingsVersion).Return(nil).Once()
+
+		srv := &Server{
+			storage:     mockS,
+			utilities:   mockUMap,
+			controller:  controller.NewController(),
+			bypassAuth:  true,
+			singleSite:  true,
+			adminEmails: []string{"test@example.com"},
+			release:     "production",
+		}
+
+		bodyData := types.Settings{
+			PostalCode:                  "90210",
+			CountryCode:                 "US",
+			UtilityProvider:             "test",
+			IgnoreHourUsageOverMultiple: 1.0,
+			SolarTrendRatioMax:          1.0,
+			Release:                     "production",
+			SolarAzimuth:                270,
+			SolarTilt:                   30,
+		}
+		body, _ := json.Marshal(bodyData)
+		req := httptest.NewRequest(http.MethodPost, "/api/settings", bytes.NewBuffer(body))
+		ctx := context.WithValue(req.Context(), userContextKey, types.User{Email: "test@example.com", ID: "admin", Admin: true})
+		ctx = context.WithValue(ctx, siteIDContextKey, "test-site")
+		req = req.WithContext(ctx)
+
+		w := httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("Update Solar Direction - With Zip Change", func(t *testing.T) {
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockUMap := utility.NewMap()
+		mockUMap.SetProvider("test-site", mockU)
+		mockS := &mockStorage{}
+
+		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil).Maybe()
+		mockS.On("UpdateSite", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			UtilityProvider: "test",
+			PostalCode:      "90210",
+			CountryCode:     "US",
+			Location: &types.SiteLocation{
+				PostalCode:  "90210",
+				CountryCode: "US",
+				Latitude:    34.0736,
+				Longitude:   -118.4004,
+			},
+		}, types.CurrentSettingsVersion, nil)
+
+		// Mock weather service for new zip
+		mockW := &mockWeather{}
+		newLoc := &types.SiteLocation{
+			PostalCode:  "60601",
+			CountryCode: "US",
+			Latitude:    41.8818,
+			Longitude:   -87.6231,
+		}
+		mockW.On("GetLocationData", mock.Anything, "US", "60601").Return(newLoc, nil).Once()
+		mockW.On("FetchWeatherForecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("UpsertWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			// Verify that the new azimuth and tilt are preserved despite a zip change re-fetching location
+			return s.Location != nil &&
+				s.Location.SolarAzimuth == 270 &&
+				s.Location.SolarTilt == 15 &&
+				s.Location.PostalCode == "60601" &&
+				s.Location.Latitude == 41.8818
+		}), types.CurrentSettingsVersion).Return(nil).Once()
+
+		srv := &Server{
+			storage:     mockS,
+			utilities:   mockUMap,
+			weather:     mockW,
+			controller:  controller.NewController(),
+			bypassAuth:  true,
+			singleSite:  true,
+			adminEmails: []string{"test@example.com"},
+			release:     "production",
+		}
+
+		bodyData := types.Settings{
+			PostalCode:                  "60601",
+			CountryCode:                 "US",
+			UtilityProvider:             "test",
+			IgnoreHourUsageOverMultiple: 1.0,
+			SolarTrendRatioMax:          1.0,
+			Release:                     "production",
+			SolarAzimuth:                270,
+			SolarTilt:                   15,
+		}
+		body, _ := json.Marshal(bodyData)
+		req := httptest.NewRequest(http.MethodPost, "/api/settings", bytes.NewBuffer(body))
+		ctx := context.WithValue(req.Context(), userContextKey, types.User{Email: "test@example.com", ID: "admin", Admin: true})
+		ctx = context.WithValue(ctx, siteIDContextKey, "test-site")
+		req = req.WithContext(ctx)
+
+		w := httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		mockS.AssertExpectations(t)
+		mockW.AssertExpectations(t)
 	})
 
 	t.Run("Rate Limit First Retry Allowed (200)", func(t *testing.T) {

@@ -85,8 +85,8 @@ func (s *OpenMeteo) GetLocationData(ctx context.Context, countryCode, postalCode
 			bestLoc = &types.SiteLocation{
 				PostalCode:  postalCode,
 				CountryCode: countryCode,
-				Lat:         result.Latitude,
-				Long:        result.Longitude,
+				Latitude:    result.Latitude,
+				Longitude:   result.Longitude,
 				City:        result.Name,
 				TimeZone:    result.Timezone,
 				Elevation:   result.Elevation,
@@ -110,19 +110,26 @@ type weatherForecastResponse struct {
 	Hourly struct {
 		Time               []string  `json:"time"`
 		ShortwaveRadiation []float64 `json:"shortwave_radiation"`
+		TiltedRadiation    []float64 `json:"global_tilted_irradiance"`
+		Temperature        []float64 `json:"temperature_2m"`
+		Snowfall           []float64 `json:"snowfall"`
 	} `json:"hourly"`
 }
 
-// FetchWeatherForecast fetches the shortwave radiation for the specified date range.
+// FetchWeatherForecast fetches the weather forecast data for the specified date range.
 // startDate is inclusive and endDate is exclusive, similar to storage boundaries.
 // Returns a slice of types.Weather structs for each day in the requested range.
 func (s *OpenMeteo) FetchWeatherForecast(
 	ctx context.Context,
-	lat, long float64,
-	timezone string,
+	loc types.SiteLocation,
 	startDate, endDate time.Time,
 ) ([]types.Weather, error) {
-	loc, err := time.LoadLocation(timezone)
+	if loc.Latitude == 0 && loc.Longitude == 0 {
+		return nil, fmt.Errorf("latitude and longitude are required")
+	}
+
+	timezone := loc.TimeZone
+	tLoc, err := time.LoadLocation(timezone)
 	if err != nil {
 		return nil, fmt.Errorf("invalid timezone: %w", err)
 	}
@@ -144,9 +151,23 @@ func (s *OpenMeteo) FetchWeatherForecast(
 	}
 
 	q := u.Query()
-	q.Set("latitude", fmt.Sprintf("%f", lat))
-	q.Set("longitude", fmt.Sprintf("%f", long))
-	q.Set("hourly", "shortwave_radiation")
+	q.Set("latitude", fmt.Sprintf("%f", loc.Latitude))
+	q.Set("longitude", fmt.Sprintf("%f", loc.Longitude))
+	hourly := []string{"shortwave_radiation", "temperature_2m", "snowfall"}
+	if loc.SolarTilt > 0 {
+		hourly = append(hourly, "global_tilted_irradiance")
+		q.Set("tilt", fmt.Sprintf("%f", loc.SolarTilt))
+		if loc.SolarAzimuth < 0 || loc.SolarAzimuth > 360 {
+			log.Ctx(ctx).WarnContext(ctx, "open-meteo: invalid azimuth", slog.Float64("azimuth", loc.SolarAzimuth))
+		} else {
+			// correct for values > 180 which should be negative when passed to Open-Meteo
+			if loc.SolarAzimuth > 180 {
+				loc.SolarAzimuth = loc.SolarAzimuth - 360
+			}
+			q.Set("azimuth", fmt.Sprintf("%f", loc.SolarAzimuth))
+		}
+	}
+	q.Set("hourly", strings.Join(hourly, ","))
 	q.Set("daily", "sunrise,sunset")
 	q.Set("timezone", timezone)
 	q.Set("start_date", startDateStr)
@@ -194,27 +215,27 @@ func (s *OpenMeteo) FetchWeatherForecast(
 	// Parse the response into daily types.Weather structs
 	var weathers []types.Weather
 	now := time.Now()
-	startMidnight := time.Date(startDate.Year(), startDate.Month(), startDate.Day(), 0, 0, 0, 0, loc)
+	startMidnight := time.Date(startDate.Year(), startDate.Month(), startDate.Day(), 0, 0, 0, 0, tLoc)
 	for day := startMidnight; day.Before(endDate); day = day.AddDate(0, 0, 1) {
 		targetDateStr := day.Format("2006-01-02")
 		w := types.Weather{
 			TSDayStart:   day,
 			TimeLocation: timezone,
-			Lat:          lat,
-			Long:         long,
+			Latitude:     loc.Latitude,
+			Longitude:    loc.Longitude,
 			TSUpdated:    now,
 		}
 
 		// Find daily sunrise/sunset
 		for i, tStr := range data.Daily.Time {
 			if tStr == targetDateStr {
-				t, err := time.ParseInLocation("2006-01-02T15:04", data.Daily.Sunrise[i], loc)
+				t, err := time.ParseInLocation("2006-01-02T15:04", data.Daily.Sunrise[i], tLoc)
 				if err != nil {
 					log.Ctx(ctx).WarnContext(ctx, "open-meteo: failed to parse sunrise time", slog.Any("error", err), slog.String("time", data.Daily.Sunrise[i]))
 				} else {
 					w.TSSunrise = t
 				}
-				t, err = time.ParseInLocation("2006-01-02T15:04", data.Daily.Sunset[i], loc)
+				t, err = time.ParseInLocation("2006-01-02T15:04", data.Daily.Sunset[i], tLoc)
 				if err != nil {
 					log.Ctx(ctx).WarnContext(ctx, "open-meteo: failed to parse sunset time", slog.Any("error", err), slog.String("time", data.Daily.Sunset[i]))
 				} else {
@@ -232,15 +253,21 @@ func (s *OpenMeteo) FetchWeatherForecast(
 		// Find hourly data
 		for i, tStr := range data.Hourly.Time {
 			if strings.HasPrefix(tStr, targetDateStr) {
-				t, err := time.ParseInLocation("2006-01-02T15:04", tStr, loc)
+				t, err := time.ParseInLocation("2006-01-02T15:04", tStr, tLoc)
 				if err != nil {
 					log.Ctx(ctx).WarnContext(ctx, "open-meteo: failed to parse hourly time", slog.Any("error", err), slog.String("time", tStr))
 					continue
 				}
-				w.ForecastHours = append(w.ForecastHours, types.HourlyWeather{
-					TSHourStart: t,
-					GHI:         data.Hourly.ShortwaveRadiation[i],
-				})
+				hw := types.HourlyWeather{
+					TSHourStart:  t,
+					GHI:          data.Hourly.ShortwaveRadiation[i],
+					TemperatureC: data.Hourly.Temperature[i],
+					SnowfallCM:   data.Hourly.Snowfall[i],
+				}
+				if i < len(data.Hourly.TiltedRadiation) {
+					hw.GTI = data.Hourly.TiltedRadiation[i]
+				}
+				w.ForecastHours = append(w.ForecastHours, hw)
 			}
 		}
 		weathers = append(weathers, w)

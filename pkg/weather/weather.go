@@ -12,7 +12,7 @@ import (
 // Service provides weather data mapping and API handling.
 type Service interface {
 	GetLocationData(ctx context.Context, countryCode, postalCode string) (*types.SiteLocation, error)
-	FetchWeatherForecast(ctx context.Context, lat, long float64, timezone string, startDate, endDate time.Time) ([]types.Weather, error)
+	FetchWeatherForecast(ctx context.Context, loc types.SiteLocation, startDate, endDate time.Time) ([]types.Weather, error)
 }
 
 // Configured creates a weather service using lflag.

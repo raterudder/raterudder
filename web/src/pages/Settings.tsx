@@ -111,8 +111,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                 }
             }
 
-            console.log("finalSettings", finalSettings);
-            console.log("credentialsPayload", credentialsPayload);
+            finalSettings.release = "staging";
 
             await updateSettings(finalSettings, siteID, credentialsPayload);
             setSuccessMessage('Settings saved successfully');
@@ -142,8 +141,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
     };
 
     const handleChange = (field: keyof SettingsType, value: any) => {
-        if (!settings) return;
-        setSettings({ ...settings, [field]: value });
+        setSettings(prev => prev ? ({ ...prev, [field]: value }) : null);
     };
 
     const handleOAuthLogin = (url: string, fieldName: string) => {
@@ -766,7 +764,54 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                     onChange={(e) => handleChange("postalCode", e.target.value)}
                                 />
                             </Field.Root>
+
+                            <Field.Root className="form-group">
+                                <Field.Label htmlFor="solarDirection">Roof Solar Panel Direction</Field.Label>
+                                <Select.Root
+                                    /* since an azimuth of 0 is south, we need to instead check the solarTilt */
+                                    value={(settings.solarTilt && settings.solarTilt > 0) ? (settings.solarAzimuth?.toString() || "") : ""}
+                                    onValueChange={(val) => {
+                                        const azimuth = parseInt(val as string, 10);
+                                        handleChange("solarAzimuth", azimuth);
+                                        handleChange("solarTilt", 25);
+                                    }}
+                                >
+                                        <Select.Trigger className="select-trigger" aria-label="Solar Direction">
+                                            <Select.Value placeholder="Select direction...">
+                                                {settings.solarTilt && settings.solarTilt > 0 ? (
+                                                    ({ "180": "North", "270": "East", "0": "South", "90": "West" } as Record<string, string>)[settings.solarAzimuth?.toString() || ""]
+                                                ) : null}
+                                            </Select.Value>
+                                            <Select.Icon className="select-icon">
+                                                <svg width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                    <path d="M4.18179 6.18181C4.35753 6.00608 4.64245 6.00608 4.81819 6.18181L7.49999 8.86362L10.1818 6.18181C10.3575 6.00608 10.6424 6.00608 10.8182 6.18181C10.9939 6.35755 10.9939 6.64247 10.8182 6.81821L7.81819 9.81821C7.73379 9.9026 7.61934 9.95001 7.49999 9.95001C7.38064 9.95001 7.26618 9.9026 7.18179 9.81821L4.18179 6.81821C4.00605 6.64247 4.00605 6.35755 4.18179 6.18181Z" fill="currentColor" fillRule="evenodd" clipRule="evenodd"></path>
+                                                </svg>
+                                            </Select.Icon>
+                                        </Select.Trigger>
+                                    <Select.Portal>
+                                        <Select.Positioner className="select-positioner">
+                                            <Select.Popup className="select-popup">
+                                                <Select.List>
+                                                    <Select.Item className="select-item" value="180">
+                                                        <Select.ItemText>North</Select.ItemText>
+                                                    </Select.Item>
+                                                    <Select.Item className="select-item" value="270">
+                                                        <Select.ItemText>East</Select.ItemText>
+                                                    </Select.Item>
+                                                    <Select.Item className="select-item" value="0">
+                                                        <Select.ItemText>South</Select.ItemText>
+                                                    </Select.Item>
+                                                    <Select.Item className="select-item" value="90">
+                                                        <Select.ItemText>West</Select.ItemText>
+                                                    </Select.Item>
+                                                </Select.List>
+                                            </Select.Popup>
+                                        </Select.Positioner>
+                                    </Select.Portal>
+                                </Select.Root>
+                            </Field.Root>
                         </div>
+
                         <div className="weather-attribution">
                             Weather data provided by <a href="https://open-meteo.com" target="_blank" rel="noopener noreferrer">Open-Meteo</a> to improve solar prediction
                         </div>

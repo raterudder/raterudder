@@ -5,7 +5,7 @@ import "time"
 const (
 	CurrentEnergyStatsVersion  = 1
 	CurrentPriceHistoryVersion = 1
-	CurrentWeatherVersion      = 1
+	CurrentWeatherVersion      = 2
 
 	SiteIDNone = "none"
 )
@@ -174,27 +174,32 @@ type Feedback struct {
 
 // SiteLocation represents the geographical location of a site.
 type SiteLocation struct {
-	PostalCode  string  `json:"postalCode"`
-	Lat         float64 `json:"lat"`
-	Long        float64 `json:"long"`
-	City        string  `json:"city"`
-	CountryCode string  `json:"countryCode"`
-	TimeZone    string  `json:"timeZone"`
-	Elevation   float64 `json:"elevation"`
+	PostalCode   string  `json:"postalCode"`
+	Latitude     float64 `json:"latitude"`
+	Longitude    float64 `json:"longitude"`
+	City         string  `json:"city"`
+	CountryCode  string  `json:"countryCode"`
+	TimeZone     string  `json:"timeZone"`
+	Elevation    float64 `json:"elevation"`
+	SolarAzimuth float64 `json:"solarAzimuth"`
+	SolarTilt    float64 `json:"solarTilt"`
 }
 
 // HourlyWeather represents the solar forecast data for a specific hour.
 type HourlyWeather struct {
-	TSHourStart time.Time `json:"tsHourStart"`
-	GHI         float64   `json:"ghi"` // Shortwave radiation in W/m²
+	TSHourStart  time.Time `json:"tsHourStart"`
+	GHI          float64   `json:"ghi"`                    // Shortwave radiation in W/m²
+	GTI          float64   `json:"gti,omitempty"`          // Global Tilted Irradiance in W/m²
+	TemperatureC float64   `json:"temperatureC,omitempty"` // Temperature in °C
+	SnowfallCM   float64   `json:"snowfallCM,omitempty"`   // Snowfall in cm
 }
 
 // Weather represents the daily weather forecast data.
 type Weather struct {
 	TSDayStart    time.Time       `json:"tsDayStart"`
 	TimeLocation  string          `json:"timeLocation"`
-	Lat           float64         `json:"lat"`
-	Long          float64         `json:"long"`
+	Latitude      float64         `json:"latitude"`
+	Longitude     float64         `json:"longitude"`
 	TSSunrise     time.Time       `json:"tsSunrise"`
 	TSSunset      time.Time       `json:"tsSunset"`
 	TSUpdated     time.Time       `json:"tsUpdated"`
