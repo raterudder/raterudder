@@ -17,7 +17,7 @@ const LandingPage: React.FC = () => {
             // Add some "cloud" dips and atmospheric noise
             if (base > 0) {
                 const noise = 0.9 + pseudoRandom(i) * 0.2;
-                const clouds = (i === 10 || i === 14) ? 0.7 : 1; 
+                const clouds = (i === 10 || i === 14) ? 0.7 : 1;
                 base = base * noise * clouds;
             }
             return {
@@ -75,7 +75,11 @@ const LandingPage: React.FC = () => {
         },
         {
             question: "How much does it cost?",
-            answer: "RateRudder is currently free during public beta."
+            answer: "Nothing! RateRudder is currently free during public beta."
+        },
+        {
+            question: "Is it safe for my battery and electrical system?",
+            answer: "Absolutely. RateRudder requires zero physical hardware changes or electrical work. We communicate exclusively through manufacturer APIs to manage settings, just like their mobile apps do."
         }
     ];
 
@@ -124,26 +128,46 @@ const LandingPage: React.FC = () => {
 
             <section className="features-strip">
                 <div className="content-container">
-                    <div className="features-grid">
-                        <div className="feature-item">
+                    <div className="features-grid" onMouseMove={(e) => {
+                        const target = e.currentTarget;
+                        const items = target.getElementsByClassName('feature-item');
+                        for (const item of items) {
+                            const rect = item.getBoundingClientRect();
+                            const x = e.clientX - rect.left;
+                            const y = e.clientY - rect.top;
+                            (item as HTMLElement).style.setProperty('--mouse-x', `${x}px`);
+                            (item as HTMLElement).style.setProperty('--mouse-y', `${y}px`);
+                        }
+                    }}>
+                        <div className="feature-item arbitrage">
                             <div className="icon">⚡</div>
                             <h3>Automated Arbitrage</h3>
                             <p>Our algorithms track utility rates in real-time, charging your battery when prices bottom out and discharging when they peak.</p>
                         </div>
-                        <div className="feature-item">
+                        <div className="feature-item grid">
                             <div className="icon">🛡️</div>
                             <h3>Grid Independence</h3>
                             <p>Maximize your solar self-consumption and insulate your home from rising grid costs and peak-hour surcharges.</p>
                         </div>
-                        <div className="feature-item">
+                        <div className="feature-item intelligence">
                             <div className="icon">🧠</div>
                             <h3>Predictive Intelligence</h3>
                             <p>RateRudder learns your home's unique energy footprint and solar generation patterns to optimize for the days ahead.</p>
                         </div>
-                        <div className="feature-item">
+                        <div className="feature-item advanced">
+                            <div className="icon">🎛️</div>
+                            <h3>Advanced Control</h3>
+                            <p>RateRudder offers power users granular controls to customize battery reserves, charging priority, and discharge thresholds.</p>
+                        </div>
+                        <div className="feature-item rocket">
                             <div className="icon">🚀</div>
                             <h3>Set & Forget</h3>
-                            <p>Once configured, RateRudder works 24/7 in the background to secure your savings automatically.</p>
+                            <p>Once configured, RateRudder works 24/7 in the background to secure your savings automatically with no manual effort.</p>
+                        </div>
+                        <div className="feature-item insights">
+                            <div className="icon">📊</div>
+                            <h3>Energy Insights</h3>
+                            <p>Visualize your impact with detailed reports on your energy savings, battery adjustments, and solar generation in real-time.</p>
                         </div>
                     </div>
                 </div>
