@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"sort"
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/controller"
@@ -236,6 +237,7 @@ type improvedSolar struct {
 	SnowFactor       float64
 	TCell            float64
 	GTI              float64
+	GHI              float64
 }
 
 // calculateImprovedSolar estimates solar generation for each weather hour by:
@@ -298,9 +300,20 @@ func calculateImprovedSolar(ctx context.Context, history []types.EnergyStats, we
 		}
 	}
 
+	type efficiencyDetail struct {
+		EfficiencyGTI float64   `json:"efficiencyGTI"`
+		EfficiencyGHI float64   `json:"efficiencyGHI"`
+		GTI           float64   `json:"gti"`
+		GHI           float64   `json:"ghi"`
+		WindowStart   time.Time `json:"windowStart"`
+		WindowEnd     time.Time `json:"windowEnd"`
+		TSHourStart   time.Time `json:"tsHourStart"`
+	}
+
 	var (
-		efficiencies     []float64
+		efficiencies     []efficiencyDetail
 		snowAccumulation float64
+		hasGTI           bool
 	)
 	results := make(map[int64]improvedSolar, len(timestamps))
 
@@ -309,16 +322,19 @@ func calculateImprovedSolar(ctx context.Context, history []types.EnergyStats, we
 		h := improvedSolar{TSHourStart: ts}
 
 		// Use GTI when available (accounts for panel tilt/azimuth); fall back to GHI.
-		gti := hw.GTI
-		if gti <= 0 {
-			gti = hw.GHI
+		gtiOrGHI := hw.GTI
+		if gtiOrGHI <= 0 {
+			gtiOrGHI = hw.GHI
+		} else {
+			hasGTI = true
 		}
-		h.GTI = gti
+		h.GTI = hw.GTI
+		h.GHI = hw.GHI
 
 		// Estimated cell temperature via NOCT model:
 		//   Tcell = Tamb + (GTI / 800) * (NOCT - 20)
 		// At rated conditions (GTI=800 W/m²) the cell runs (NOCT-20) degrees above ambient.
-		h.TCell = hw.TemperatureC + (gti/800.0)*(noct-20.0)
+		h.TCell = hw.TemperatureC + (gtiOrGHI/800.0)*(noct-20.0)
 
 		// Add new snowfall first, then apply temperature-driven melt / slide-off.
 		snowAccumulation += hw.SnowfallCM
@@ -377,20 +393,40 @@ func calculateImprovedSolar(ctx context.Context, history []types.EnergyStats, we
 			isEdge := hw.TSHourStart.Before(window.start.Add(2*time.Hour)) || hw.TSHourStart.After(window.end.Add(-2*time.Hour))
 			hasSolar := stats.SolarKWH > 0.5
 
-			if gti >= 50 && h.TempFactor > 0 && hasSolar && !isCurtailed && !isSnowy && !isEdge {
-				eff := stats.SolarKWH / (gti * h.TempFactor * h.SnowFactor)
-				efficiencies = append(efficiencies, eff)
+			if gtiOrGHI >= 50 && h.TempFactor > 0 && hasSolar && !isCurtailed && !isSnowy && !isEdge {
+				var eGTI, eGHI float64
+				if hw.GTI > 0 {
+					eGTI = stats.SolarKWH / (hw.GTI * h.TempFactor * h.SnowFactor)
+				}
+				if hw.GHI > 0 {
+					eGHI = stats.SolarKWH / (hw.GHI * h.TempFactor * h.SnowFactor)
+				}
+				efficiencies = append(efficiencies, efficiencyDetail{
+					EfficiencyGTI: eGTI,
+					EfficiencyGHI: eGHI,
+					GTI:           hw.GTI,
+					GHI:           hw.GHI,
+					WindowStart:   window.start,
+					WindowEnd:     window.end,
+					TSHourStart:   stats.TSHourStart,
+				})
 			}
 		}
 
 		results[ts] = h
 	}
 
-	// 3. Determine robust efficiency (e.g., 90th percentile)
-	var finalEff float64
+	// 3. Determine robust efficiency (e.g., 75th percentile)
+	// only compare ghi to ghi and gti to gti
+	var finalEff efficiencyDetail
 	if len(efficiencies) > 0 {
-		slices.Sort(efficiencies)
-		index := int(0.9 * float64(len(efficiencies)))
+		sort.Slice(efficiencies, func(i, j int) bool {
+			if hasGTI {
+				return efficiencies[i].EfficiencyGTI < efficiencies[j].EfficiencyGTI
+			}
+			return efficiencies[i].EfficiencyGHI < efficiencies[j].EfficiencyGHI
+		})
+		index := int(0.75 * float64(len(efficiencies)))
 		// If index is greater than or equal to the highest index, default to the
 		// second highest or the highest if the dataset is small
 		if index >= len(efficiencies)-1 {
@@ -402,16 +438,19 @@ func calculateImprovedSolar(ctx context.Context, history []types.EnergyStats, we
 	log.Ctx(ctx).DebugContext(
 		ctx,
 		"calculated robust efficiency",
-		slog.Float64("finalEfficiency", finalEff),
+		slog.Any("finalEfficiency", finalEff),
 		slog.Int("validPoints", len(efficiencies)),
 	)
 
-	// 4. Project solar generation for every weather hour using the calibrated efficiency.
-	if finalEff > 0 {
+	// 4. Project solar generation for every weather hour using the calibrated
+	// efficiency unless we don't have any efficiency data.
+	if finalEff.EfficiencyGTI > 0 || finalEff.EfficiencyGHI > 0 {
 		for _, ts := range timestamps {
 			h := results[ts]
 			if h.GTI > 0 {
-				h.ImprovedSolar = h.GTI * finalEff * h.TempFactor * h.SnowFactor
+				h.ImprovedSolar = h.GTI * finalEff.EfficiencyGTI * h.TempFactor * h.SnowFactor
+			} else if h.GHI > 0 {
+				h.ImprovedSolar = h.GHI * finalEff.EfficiencyGHI * h.TempFactor * h.SnowFactor
 			}
 			results[ts] = h
 		}

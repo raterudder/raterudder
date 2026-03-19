@@ -554,7 +554,9 @@ func TestCalculateImprovedSolar(t *testing.T) {
 		if assert.Len(t, results, 10) {
 			assert.InDelta(t, 1.979, results[h[9].Unix()].ImprovedSolar, 0.02,
 				"GTI=0 should fall back to GHI for both calibration and projection")
-			assert.Equal(t, 100.0, results[h[5].Unix()].GTI,
+			assert.Equal(t, 0.0, results[h[5].Unix()].GTI,
+				"GHI value should be stored as effective GTI when GTI is zero")
+			assert.Equal(t, 100.0, results[h[5].Unix()].GHI,
 				"GHI value should be stored as effective GTI when GTI is zero")
 		}
 	})
@@ -677,9 +679,9 @@ func TestCalculateImprovedSolar(t *testing.T) {
 		weather := []types.Weather{{ForecastHours: forecastHours}}
 
 		history := []types.EnergyStats{
-			{TSHourStart: h[2], SolarKWH: 5.0},                                       // eff=0.05 (curtailed?) - No, this one will be the baseline
+			{TSHourStart: h[2], SolarKWH: 5.0},                                           // eff=0.05 (curtailed?) - No, this one will be the baseline
 			{TSHourStart: h[3], SolarKWH: 10.0, MaxBatterySOC: 99.0, GridExportKWH: 0.0}, // Curtailed outlier, should be ignored
-			{TSHourStart: h[4], SolarKWH: 5.0},                                       // Another baseline
+			{TSHourStart: h[4], SolarKWH: 5.0},                                           // Another baseline
 		}
 		// Snow at h[4]
 		weather[0].ForecastHours[4].SnowfallCM = 2.0 // This will cause snowAccum > 0.1 for h[4]

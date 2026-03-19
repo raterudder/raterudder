@@ -171,7 +171,7 @@ function ForecastChart({ data, config, isMobile, showCurrentTime }: { data: Proc
                                 config.unit.includes('$')
                                     ? `$${v.toFixed(4)}`
                                     : v.toFixed(2) + lineUnit.trim(),
-                                name === 'rawSolarKWH' ? 'Raw Model' : config.title,
+                                name === 'rawSolarKWH' ? 'Raw Model' : name === 'forecastGTI' ? 'Forecasted Tilted Radiation (W/m²)' : config.title,
                             ];
                         }}
                         contentStyle={{

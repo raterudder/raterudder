@@ -314,6 +314,7 @@ func writeJSONError(w http.ResponseWriter, msg string, code int) {
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	// TODO: check database health
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write([]byte("ok")); err != nil {
 		panic(http.ErrAbortHandler)
