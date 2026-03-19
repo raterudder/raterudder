@@ -1169,8 +1169,12 @@ func TestGetSettingsWithMigration(t *testing.T) {
 		// We expect SetSettings to have been called with the migrated settings
 		mockS.AssertExpectations(t)
 
-		for _, v := range creds.Has() {
-			assert.False(t, v)
+		hasMap := creds.Has()
+		assert.Contains(t, hasMap, "franklin")
+		assert.Contains(t, hasMap, "mock")
+		assert.Contains(t, hasMap, "tesla")
+		for key, v := range hasMap {
+			assert.False(t, v, "Expected %s to be false", key)
 		}
 	})
 
@@ -1200,8 +1204,12 @@ func TestGetSettingsWithMigration(t *testing.T) {
 		assert.Equal(t, types.CurrentSettingsVersion, sv.version)
 		mockS.AssertExpectations(t)
 
-		for _, v := range creds.Has() {
-			assert.False(t, v)
+		hasMap := creds.Has()
+		assert.Contains(t, hasMap, "franklin")
+		assert.Contains(t, hasMap, "mock")
+		assert.Contains(t, hasMap, "tesla")
+		for key, v := range hasMap {
+			assert.False(t, v, "Expected %s to be false", key)
 		}
 	})
 
