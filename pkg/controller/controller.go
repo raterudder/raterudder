@@ -176,7 +176,7 @@ func (c *Controller) Decide(
 		// so we set hitCapacity to true so we never try to charge since that power
 		// would be meaningless to pull from the grid since we end up filling up
 		// the batteries without the grid in the simulation anyways
-		if slot.HitCapacity && hitCapacityAt.IsZero() {
+		if !slot.HitCapacityAt.IsZero() && hitCapacityAt.IsZero() {
 			log.Ctx(ctx).DebugContext(
 				ctx,
 				"simulated energy hit capacity",
@@ -187,7 +187,7 @@ func (c *Controller) Decide(
 			hitCapacityAt = slot.TS
 		}
 
-		if slot.HitSolarCapacity && hitSolarCapacityAt.IsZero() {
+		if !slot.HitSolarCapacityAt.IsZero() && hitSolarCapacityAt.IsZero() {
 			log.Ctx(ctx).DebugContext(
 				ctx,
 				"simulated energy hit solar headroom capacity",
@@ -206,15 +206,16 @@ func (c *Controller) Decide(
 		}
 
 		// check if we are below the minimum SOC and when we need to charge
-		if slot.HitDeficit && hitDeficitAt.IsZero() {
+		if !slot.HitDeficitAt.IsZero() && hitDeficitAt.IsZero() {
 			log.Ctx(ctx).DebugContext(
 				ctx,
 				"simulated energy below minimum SOC causing a deficit",
 				slog.Float64("batteryKWH", slot.BatteryKWH),
 				slog.Float64("reserveKWH", slot.BatteryReserveKWH),
 				slog.Int("simHour", slot.Hour),
+				slog.Time("hitAt", slot.HitDeficitAt),
 			)
-			hitDeficitAt = slot.TS
+			hitDeficitAt = slot.HitDeficitAt
 		}
 
 		if slot.TotalBatteryDeficitKWH > 0 {
@@ -379,11 +380,21 @@ func (c *Controller) Decide(
 		return decision(types.BatteryModeChargeAny, chargeActionReason, desc, futurePrice, hitDeficitAt, hitCapacityAt), nil
 	}
 
-	// Rule 4: Logic for Battery Usage vs Standby
+	// check if the battery is below the minimum SOC
+	isBatteryAtReserve := !currentStatus.BatteryAboveMinSOC && !currentStatus.ElevatedMinBatterySOC
+	if !isBatteryAtReserve && !hitDeficitAt.IsZero() {
+		// or if we're about to hit the reserve within 5 minutes
+		if hitDeficitAt.Before(now.Add(5 * time.Minute)) {
+			isBatteryAtReserve = true
+		}
+	}
+	if isBatteryAtReserve {
+		return decision(types.BatteryModeLoad, types.ActionReasonBatteryAtReserve, "Battery is at reserve. Using remaining energy.", nil, hitDeficitAt, hitCapacityAt), nil
+	}
+
 	// If we have plenty of battery (no deficit), Use it (Load).
 	// If we have a deficit, but we are at the Highest Price, Use it (Load).
 	// If we have a deficit, and cheaper now than later, Standby (Save for later).
-
 	if !hitDeficitAt.IsZero() {
 		// Optimization: If we hit full capacity BEFORE we hit the deficit, then
 		// the current energy we have in the battery is "use it or lose it" effectively,

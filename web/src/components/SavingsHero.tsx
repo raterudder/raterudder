@@ -15,7 +15,7 @@ const SavingsHero: React.FC<SavingsHeroProps> = ({ savings }) => {
         <div className="savings-hero">
             <div className="overview-hero">
                 <div className="net-savings-panel">
-                    <span className="hero-label">Net Savings Today</span>
+                    <span className="hero-label">Savings Today</span>
                     <div className="hero-value-group">
                         <span className={`hero-value ${netSavings >= 0 ? 'positive' : 'negative'}`}>
                             {formatCurrency(netSavings)}

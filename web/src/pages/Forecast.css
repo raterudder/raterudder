@@ -7,7 +7,6 @@
   font-weight: 800;
   color: var(--on-surface);
   margin: 0;
-  letter-spacing: -0.04em;
 }
 
 .forecast-subtitle {

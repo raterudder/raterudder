@@ -26,9 +26,9 @@ type SimHour struct {
 	BatteryReserveKWH       float64     `json:"batteryReserveKWH"`
 	TotalBatteryDeficitKWH  float64     `json:"totalBatteryDeficitKWH"`
 	TodaySolarTrend         float64     `json:"todaySolarTrend"`
-	HitCapacity             bool        `json:"hitCapacity"`
-	HitSolarCapacity        bool        `json:"hitSolarCapacity"`
-	HitDeficit              bool        `json:"hitDeficit"`
+	HitCapacityAt           time.Time   `json:"hitCapacityAt"`
+	HitSolarCapacityAt      time.Time   `json:"hitSolarCapacityAt"`
+	HitDeficitAt            time.Time   `json:"hitDeficitAt"`
 	Price                   types.Price `json:"price"`
 }
 
@@ -46,8 +46,8 @@ func (c *Controller) SimulateState(
 	capacityKWH := currentStatus.BatteryCapacityKWH
 	currentSOC := currentStatus.BatterySOC
 	// simulate battery energy over the 24 hours
-	simEnergy := capacityKWH * (currentSOC / 100.0)
-	simStandbyEnergy := simEnergy
+	simEnergyKWH := capacityKWH * (currentSOC / 100.0)
+	simStandbyEnergy := simEnergyKWH
 	var deficitKWH float64
 
 	// Build Energy Model
@@ -74,9 +74,9 @@ func (c *Controller) SimulateState(
 		}
 	}
 
-	var hitDeficit bool
-	var hitCapacity bool
-	var hitSolarCapacity bool
+	var simDeficitAt time.Time
+	var simCapacityAt time.Time
+	var simSolarCapacityAt time.Time
 	simTime := now
 
 	simHours := 24
@@ -166,49 +166,78 @@ func (c *Controller) SimulateState(
 			currentSolarTrend = 1.0
 		}
 
-		predictedAvgSolar := profile.avgSolarKWH * currentSolarTrend
-
-		netLoadSolar := profile.avgHomeLoadKWH - predictedAvgSolar
-
-		clampedNet := netLoadSolar
+		predictedAvgSolarKWH := profile.avgSolarKWH * currentSolarTrend
+		netLoadSolarKWH := profile.avgHomeLoadKWH - predictedAvgSolarKWH
+		clampedNetKWH := netLoadSolarKWH
 		// update simulated energy state
-		if netLoadSolar > 0 {
-			// make sure we don't simulate discharging more than we can
-			if currentStatus.MaxBatteryDischargeKW > 0 && clampedNet > currentStatus.MaxBatteryDischargeKW {
-				clampedNet = currentStatus.MaxBatteryDischargeKW
-			}
+		if netLoadSolarKWH > 0 {
 			// Load > Solar: We consume battery
-			simEnergy -= clampedNet
-			if simEnergy < minKWH {
-				deficitKWH += minKWH - simEnergy
-				simEnergy = minKWH
-				hitDeficit = true
+			// make sure we don't simulate discharging more than we can
+			if currentStatus.MaxBatteryDischargeKW > 0 && clampedNetKWH > currentStatus.MaxBatteryDischargeKW {
+				clampedNetKWH = currentStatus.MaxBatteryDischargeKW
+			}
+
+			// if we will go below the minimum battery SOC update the deficit and calculate
+			// when we hit the deficit
+			if simEnergyKWH-clampedNetKWH < minKWH {
+				if simDeficitAt.IsZero() {
+					// estimate when into the hour we hit the deficit
+					remainingBeforeMin := simEnergyKWH - minKWH
+					if clampedNetKWH > 0 && remainingBeforeMin > 0 {
+						fraction := max(remainingBeforeMin/clampedNetKWH, 0)
+						simDeficitAt = simTime.Add(time.Duration(fraction * float64(time.Hour)))
+					} else {
+						simDeficitAt = simTime
+					}
+				}
+				deficitKWH += minKWH - (simEnergyKWH - clampedNetKWH)
+				simEnergyKWH = minKWH
+			} else {
+				simEnergyKWH -= clampedNetKWH
 			}
 		} else {
-			// make sure we don't simulate charging more than we can
-			if currentStatus.MaxBatteryChargeKW > 0 && clampedNet < -currentStatus.MaxBatteryChargeKW {
-				clampedNet = -currentStatus.MaxBatteryChargeKW
-			}
 			// Solar > Load: We charge battery
-			simEnergy -= clampedNet
+			// make sure we don't simulate charging more than we can
+			if currentStatus.MaxBatteryChargeKW > 0 && clampedNetKWH < -currentStatus.MaxBatteryChargeKW {
+				clampedNetKWH = -currentStatus.MaxBatteryChargeKW
+			}
 
 			// If solar export is disabled, we might be curtailed if we hit capacity.
-			if !settings.GridExportSolar && predictedAvgSolar > 0.1 {
+			if !settings.GridExportSolar && predictedAvgSolarKWH > 0.1 {
 				if settings.SolarFullyChargeHeadroomBatterySOC > -99.0 {
 					solarCapacityKWH := capacityKWH * (1.0 - settings.SolarFullyChargeHeadroomBatterySOC/100.0)
-					if simEnergy > solarCapacityKWH {
-						hitSolarCapacity = true
+					if simEnergyKWH-clampedNetKWH > solarCapacityKWH {
+						// estimate when into the hour we hit the deficit
+						remainingBeforeCapacity := solarCapacityKWH - simEnergyKWH
+						if clampedNetKWH < 0 && remainingBeforeCapacity > 0 {
+							fraction := max(remainingBeforeCapacity/-clampedNetKWH, 0)
+							simSolarCapacityAt = simTime.Add(time.Duration(fraction * float64(time.Hour)))
+						} else {
+							simSolarCapacityAt = simTime
+						}
 					}
 				}
 			}
 
-			// make sure we don't simulate charging more than it can hold
-			if simEnergy > capacityKWH {
-				simEnergy = capacityKWH
-				hitCapacity = true
+			// if we have no headroom in the battery, we can't charge so mark that
+			// we hit the capacity
+			if simEnergyKWH-clampedNetKWH > capacityKWH {
+				if simSolarCapacityAt.IsZero() {
+					// estimate when into the hour we hit the deficit
+					remainingBeforeCapacity := capacityKWH - simEnergyKWH
+					if clampedNetKWH < 0 && remainingBeforeCapacity > 0 {
+						fraction := max(remainingBeforeCapacity/-clampedNetKWH, 0)
+						simSolarCapacityAt = simTime.Add(time.Duration(fraction * float64(time.Hour)))
+					} else {
+						simSolarCapacityAt = simTime
+					}
+				}
+				simEnergyKWH = capacityKWH
+			} else {
+				simEnergyKWH -= clampedNetKWH
 			}
 
-			simStandbyEnergy -= clampedNet
+			simStandbyEnergy -= clampedNetKWH
 			if simStandbyEnergy > capacityKWH {
 				simStandbyEnergy = capacityKWH
 			}
@@ -217,21 +246,21 @@ func (c *Controller) SimulateState(
 		simData = append(simData, SimHour{
 			TS:                      simTime,
 			Hour:                    h,
-			NetLoadSolarKWH:         netLoadSolar,
-			ClampedNetLoadSolarKWH:  clampedNet,
+			NetLoadSolarKWH:         netLoadSolarKWH,
+			ClampedNetLoadSolarKWH:  clampedNetKWH,
 			GridChargeDollarsPerKWH: gridChargeCost,
 			SolarOppDollarsPerKWH:   solarOppCost,
 			AvgHomeLoadKWH:          profile.avgHomeLoadKWH,
-			PredictedSolarKWH:       predictedAvgSolar,
-			BatteryKWH:              simEnergy,
+			PredictedSolarKWH:       predictedAvgSolarKWH,
+			BatteryKWH:              simEnergyKWH,
 			BatteryKWHIfStandby:     simStandbyEnergy,
 			BatteryCapacityKWH:      capacityKWH,
 			BatteryReserveKWH:       minKWH,
 			TotalBatteryDeficitKWH:  deficitKWH,
 			TodaySolarTrend:         currentSolarTrend,
-			HitCapacity:             hitCapacity,
-			HitSolarCapacity:        hitSolarCapacity,
-			HitDeficit:              hitDeficit,
+			HitCapacityAt:           simCapacityAt,
+			HitSolarCapacityAt:      simSolarCapacityAt,
+			HitDeficitAt:            simDeficitAt,
 			Price:                   price,
 		})
 		simTime = simTime.Add(1 * time.Hour)

@@ -84,7 +84,6 @@
 
 .hero-content h1 {
     font-size: 4.5rem; /* display-lg */
-    letter-spacing: -0.04em;
     line-height: 0.95;
     color: var(--on-surface);
     margin-bottom: 2rem;
@@ -283,7 +282,6 @@
     color: var(--on-surface);
     margin-bottom: 1.5rem;
     font-weight: 800;
-    letter-spacing: -0.02em;
 }
 
 /* Charts Grid */
@@ -494,7 +492,7 @@
     .hero-content h1 {
         font-size: 2.75rem;
     }
-    
+
     .floating-card strong {
         font-size: 3.5rem;
     }

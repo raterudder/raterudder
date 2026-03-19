@@ -31,7 +31,6 @@
   color: var(--text-primary);
   text-decoration: none;
   margin-right: 2rem;
-  letter-spacing: -0.02em;
 }
 
 .header-logo-img {
@@ -90,7 +89,6 @@
   padding: 0.5rem 1rem;
   border-radius: var(--radius-sm);
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-  letter-spacing: -0.01em;
 }
 
 .nav-link:hover {

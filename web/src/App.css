@@ -2,20 +2,17 @@
    RateRudder — Global Design System
    ============================================ */
 
-/* Import Inter font if not already loaded in index.html, but it is. */
-
 :root {
-  /* Core Palette - Illuminated Logic */
   --surface: #111318;             /* Base Layer: Laboratory Floor */
   --surface-container-low: #1a1c20;  /* Secondary Layer: Large content blocks */
   --surface-container-high: #282a2e; /* Active Layer: Interactive cards/modals */
   --surface-container-highest: #333539; /* Elevation Layer: Stacked cards */
-  
+
   --primary: #4b8eff;             /* Primary Power Cell */
   --primary-glow: #adc6ff;        /* Illumination Blue */
   --on-primary: #001a41;          /* High Contrast on Primary */
   --accent: #00ffc2;              /* Synthetic Cyan/Emerald */
-  
+
   --warning: #ffb800;
   --danger: #ff4b4b;
 
@@ -23,7 +20,7 @@
   --bg-app: var(--surface);
   --on-surface: #e2e2e8;          /* Headline / Primary Text */
   --on-surface-variant: #c1c6d7;  /* Body / Secondary Text */
-  
+
   --text-primary: var(--on-surface);
   --text-secondary: var(--on-surface-variant);
   --text-muted: #8b90a0;
@@ -37,11 +34,10 @@
   /* Shadows (Ambient Glow) */
   --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.2);
   --shadow-md: 0 12px 32px rgba(0, 0, 0, 0.4);
-  /* The Ambient Shadow from DESIGN.md */
   --shadow-lg: 0 40px 40px 0 rgba(0, 26, 65, 0.08);
 
   /* Spacing & Radius */
-  --radius-sm: 6px;               /* md (0.375rem) from DESIGN.md */
+  --radius-sm: 6px;
   --radius-md: 6px;
   --radius-lg: 12px;
   --radius-xl: 16px;
@@ -51,7 +47,7 @@
   --spacing-6: 1.3rem;
   --spacing-16: 3.5rem;
   --spacing-20: 4.5rem;
-  
+
   --spacing-xs: 0.5rem;
   --spacing-sm: 1rem;
   --spacing-md: 1.5rem;
@@ -61,7 +57,7 @@
   /* Typography */
   --font-display: 'Inter', sans-serif;
   --font-body: 'Inter', sans-serif;
-  --font-mono: 'Inter', monospace; /* tabular-nums via CSS font-variant-numeric */
+  --font-mono: 'Inter', monospace;
 }
 
 * {
@@ -171,7 +167,6 @@ textarea:focus-visible,
   margin-bottom: 0.75rem;
   font-size: 2.25rem;
   font-weight: 800;
-  letter-spacing: -0.04em;
   color: var(--on-surface);
 }
 
@@ -368,7 +363,6 @@ button {
 .hero-value {
   font-size: 3rem;
   font-weight: 800;
-  letter-spacing: -0.05em;
   line-height: 1;
   color: var(--on-surface);
   font-variant-numeric: tabular-nums;
@@ -761,57 +755,73 @@ button {
   text-transform: capitalize;
 }
 
-/* Tag Variants */
-.mode-charge_any {
-  background: #e0f2fe;
-  color: #0369a1;
+/* Tag Variants (Scoped to tags to avoid leaking to containers) */
+.tag.mode-charge_any {
+  background: rgba(75, 142, 255, 0.1);
+  color: var(--primary);
+  border: 1px solid rgba(75, 142, 255, 0.2);
 }
 
-.mode-charge_solar {
-  background: #f0fdf4;
-  color: #15803d;
+.tag.mode-charge_solar {
+  background: rgba(0, 255, 194, 0.1);
+  color: var(--accent);
+  border: 1px solid rgba(0, 255, 194, 0.2);
 }
 
-.mode-load {
-  background: #ecfdf5;
-  color: #047857;
+.tag.mode-load {
+  background: rgba(0, 255, 194, 0.1);
+  color: var(--accent);
+  border: 1px solid rgba(0, 255, 194, 0.2);
 }
 
-.mode-standby {
-  background: #fffbeb;
-  color: #b45309;
+.tag.mode-standby {
+  background: rgba(255, 184, 0, 0.1);
+  color: var(--warning);
+  border: 1px solid rgba(255, 184, 0, 0.2);
 }
 
-.mode-no_change {
-  background: #f1f5f9;
-  color: #64748b;
+.tag.mode-no_change {
+  background: var(--surface-container-highest);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
 }
 
-.solar-export {
-  background: #f0fdf4;
-  color: #15803d;
+.tag.solar-export {
+  background: rgba(0, 255, 194, 0.1);
+  color: var(--accent);
+  border: 1px solid rgba(0, 255, 194, 0.2);
 }
 
-.solar-no_export {
-  background: #fefce8;
-  color: #a16207;
+.tag.solar-no_export {
+  background: rgba(255, 184, 0, 0.1);
+  color: var(--warning);
+  border: 1px solid rgba(255, 184, 0, 0.2);
 }
 
-.dry-run {
-  background: #f3e8ff;
-  color: #7e22ce;
+.tag.dry-run {
+  background: rgba(126, 34, 206, 0.1);
+  color: #c084fc;
+  border: 1px solid rgba(126, 34, 206, 0.2);
 }
 
-.tag-info {
-  background: #f1f5f9;
-  color: #475569;
-  border: 1px solid #e2e8f0;
+/* Faults (Legacy compatibility) */
+.action-item.fault-item {
+  border-left: 4px solid var(--danger);
+  background: rgba(255, 75, 75, 0.05);
+}
+
+.warning-banner {
+  background: rgba(255, 184, 0, 0.1);
+  border: 1px solid rgba(255, 184, 0, 0.2);
+  border-left: 4px solid var(--warning);
+  color: var(--warning);
 }
 
 /* Faults */
-.action-item.fault-item {
-  border-left: 4px solid var(--danger);
-  background: #fef2f2;
+/* Fault Alarms */
+.fault-alarms {
+  color: var(--danger);
+  font-weight: 600;
 }
 
 .fault-alarms {
@@ -867,10 +877,10 @@ button {
 
 /* Icon for warning banner */
 .warning-banner {
-  background: #fffbeb;
-  border: 1px solid #fcd34d;
-  border-left-color: #f59e0b;
-  color: #92400e;
+  background: rgba(255, 184, 0, 0.1);
+  border: 1px solid rgba(255, 184, 0, 0.2);
+  border-left: 4px solid var(--warning);
+  color: var(--on-surface);
 }
 
 .warning-banner p::before {
@@ -880,13 +890,13 @@ button {
 }
 
 .error {
-  background: #fee2e2;
-  color: #991b1b;
+  background: rgba(255, 75, 75, 0.1);
+  color: var(--on-surface);
   padding: 1rem;
   border-radius: var(--radius-md);
   margin-bottom: 1rem;
   text-align: center;
-  border: 1px solid #fecaca;
+  border: 1px solid rgba(255, 75, 75, 0.2);
 }
 
 /* Responsive */

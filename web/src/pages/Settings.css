@@ -13,7 +13,6 @@
   font-weight: 800;
   color: var(--on-surface);
   margin-bottom: 2.5rem;
-  letter-spacing: -0.04em;
 }
 
 .settings-container h3 {
@@ -38,7 +37,6 @@
   font-size: 0.95rem;
   font-weight: 700;
   color: var(--on-surface);
-  letter-spacing: -0.01em;
 }
 
 .form-group input[type="number"],
@@ -394,7 +392,6 @@
   font-weight: 700;
   color: var(--on-surface);
   font-size: 1.125rem;
-  letter-spacing: -0.02em;
 }
 
 .summary-sublabel {

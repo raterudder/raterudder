@@ -1,16 +1,16 @@
-import React from 'react';
 import { type Action, BatteryMode, SolarMode, ActionReason } from '../api';
-import {
-    getBatteryModeLabel,
-    getBatteryModeClass,
-    getSolarModeLabel,
-    getSolarModeClass,
-    formatPrice,
-    formatTime,
+import { 
+    getBatteryModeLabel, 
+    getBatteryModeClass, 
+    getSolarModeLabel, 
+    getSolarModeClass, 
+    formatPrice, 
+    formatTime, 
     getReasonText,
     gridChargeCost,
     type ActionSummary
 } from '../utils/dashboardUtils';
+import './ActionTimeline.css';
 
 interface ActionTimelineProps {
     groupedActions: (Action | ActionSummary)[];
@@ -18,153 +18,144 @@ interface ActionTimelineProps {
 
 const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
     return (
-        <ul className="action-list">
+        <ul className="timeline">
             {groupedActions.map((item, index) => {
-                if ('isSummary' in item) {
-                    const summary = item as ActionSummary;
-                    const isFault = summary.type === 'fault';
-                    const isEmergency = isFault && summary.reason === ActionReason.EmergencyMode;
-                    const hasStorms = isEmergency && summary.storms && summary.storms.size > 0;
-
-                    let title = isFault ? 'System Fault' : getBatteryModeLabel(summary.latestAction.batteryMode);
-                    let description = '';
-
-                    if (isEmergency) {
-                        if (hasStorms) {
-                            title = 'Storm Hedge Mode';
-                            description = 'Franklin is charging the battery to prepare for the storm.';
-                        } else {
-                            title = 'Emergency Mode';
-                            description = 'System manually put into emergency mode. Skipping automation.';
-                        }
-                    } else if (!isFault && summary.latestAction) {
-                        description = getReasonText(summary.latestAction);
-                    }
-
-                    const alarms = isFault && !isEmergency ? Array.from(summary.alarms).join(', ') : '';
-
-                    return (
-                        <li key={index} className={`action-item summary-item ${isFault ? 'fault-item' : ''} ${isEmergency ? 'emergency-item' : ''}`}>
-                            <div className="action-time">
-                                {formatTime(summary.startTime)}
-                                {summary.count > 1 && summary.endTime && (
-                                    <> - {formatTime(summary.endTime)}</>
-                                )}
-                            </div>
-                            <div className="action-details">
-                                <h3>{title} {summary.count > 1 && <span>({summary.count}x)</span>}</h3>
-                                {isEmergency ? (
-                                    <div className="emergency-details">
-                                        <p>{description}</p>
-                                        {hasStorms && summary.stormStart && summary.stormEnd && (
-                                            <p className="storm-time">
-                                                Storm Duration: {formatTime(summary.stormStart.toISOString())} - {formatTime(summary.stormEnd.toISOString())}
-                                            </p>
-                                        )}
-                                    </div>
-                                ) : (
-                                    <>
-                                        {isFault && alarms && (
-                                            <p className="fault-alarms">Alarms: {alarms}</p>
-                                        )}
-                                        {!isFault && description && (
-                                            <p>{description}</p>
-                                        )}
-                                        <div className="tags">
-                                            {(summary.latestAction.targetBatteryMode !== undefined && summary.latestAction.targetBatteryMode !== BatteryMode.NoChange) && (
-                                                <span className={`tag mode-${getBatteryModeClass(summary.latestAction.targetBatteryMode)}`}>{getBatteryModeLabel(summary.latestAction.targetBatteryMode)}</span>
-                                            )}
-                                            {(summary.latestAction.targetSolarMode !== undefined && summary.latestAction.targetSolarMode !== SolarMode.NoChange) && (
-                                                <span className={`tag solar-${getSolarModeClass(summary.latestAction.targetSolarMode)}`}>{getSolarModeLabel(summary.latestAction.targetSolarMode)}</span>
-                                            )}
-                                            {summary.latestAction.deficitAt && summary.latestAction.deficitAt !== '0001-01-01T00:00:00Z' && (
-                                                <span className="tag tag-info">Deficit: {formatTime(summary.latestAction.deficitAt)}</span>
-                                            )}
-                                            {summary.latestAction.capacityAt && summary.latestAction.capacityAt !== '0001-01-01T00:00:00Z' && (
-                                                <span className="tag tag-info">Capacity: {formatTime(summary.latestAction.capacityAt)}</span>
-                                            )}
-                                        </div>
-                                    </>
-                                )}
-                                {(summary.hasPrice || summary.hasSOC) && (
-                                    <div className="action-footer">
-                                        {summary.hasPrice && (
-                                            <span>
-                                                <span className="price-label">Avg Price:</span>{formatPrice(summary.avgPrice)}
-                                                {summary.hasPrice && summary.min !== summary.max && <span className="price-range"> (Range: $ {summary.min.toFixed(3)} - $ {summary.max.toFixed(3)})</span>}                                                        </span>
-                                        )}
-                                        {summary.hasSOC && (
-                                            <span>
-                                                <span className="price-label">Battery:</span> {summary.avgSOC.toFixed(1)}%
-                                                {summary.minSOC !== summary.maxSOC && <span className="soc-range"> (Range: {summary.minSOC.toFixed(0)}% - {summary.maxSOC.toFixed(0)}%)</span>}
-                                            </span>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-                        </li>
-                    );
-                }
-                const action = item as Action;
+                const isSummary = 'isSummary' in item;
+                const action = isSummary ? (item as ActionSummary).latestAction : (item as Action);
+                
+                // For summaries, we might have multiple actions in one card
+                const summary = isSummary ? (item as ActionSummary) : null;
+                const isFault = !!action.fault || (summary?.type === 'fault');
+                const hasStorms = action.systemStatus?.storms && action.systemStatus.storms.length > 0;
+                const isEmergency = hasStorms || action.reason === ActionReason.EmergencyMode;
+                
                 const reasonText = getReasonText(action);
-                const isNegPrice = action.currentPrice && (action.currentPrice.dollarsPerKWH+action.currentPrice.gridUseDollarsPerKWH) < 0;
-                const showDeficit = action.deficitAt && action.deficitAt !== '0001-01-01T00:00:00Z';
-                const showCapacity = action.capacityAt && action.capacityAt !== '0001-01-01T00:00:00Z';
+                const batteryModeClass = getBatteryModeClass(action.batteryMode);
+                const isNegPrice = action.currentPrice && (action.currentPrice.dollarsPerKWH + (action.currentPrice.gridUseDollarsPerKWH || 0)) < 0;
 
-                const deficitReasons: string[] = [
-                    ActionReason.DeficitCharge,
-                    ActionReason.DeficitSaveForPeak,
-                    ActionReason.DeficitSave,
-                    ActionReason.WaitingToCharge,
-                    ActionReason.DischargeBeforeCapacity,
-                    ActionReason.PreventSolarCurtailment,
-                    ActionReason.ChargeSurvivePeak,
-                ];
-                const showDeficitTag = showDeficit && action.reason && deficitReasons.includes(action.reason);
-                const showCapacityTag = showCapacity && (action.reason === ActionReason.DischargeBeforeCapacity || action.reason === ActionReason.PreventSolarCurtailment);
+                // Determine Title
+                let title = getBatteryModeLabel(action.batteryMode);
+                if (isFault) title = 'System Fault';
+                if (isEmergency) {
+                    title = hasStorms ? 'Storm Hedge Mode' : 'Emergency Mode';
+                }
+                if (action.reason === ActionReason.BatteryAtReserve) {
+                    title = 'Battery At Reserve';
+                }
+
+                const showDeficitTag = action.deficitAt && action.deficitAt !== '0001-01-01T00:00:00Z';
+                const showCapacityTag = action.capacityAt && action.capacityAt !== '0001-01-01T00:00:00Z';
 
                 return (
-                    <li key={index} className="action-item">
-                        <div className="action-time">
-                            {new Date(action.timestamp).toLocaleTimeString()}
+                    <li key={index} className={`timeline-item mode-${isFault ? 'fault' : batteryModeClass} ${summary ? 'is-grouped' : ''}`}>
+                        <div className="timeline-marker"></div>
+                        
+                        <div className="timeline-time">
+                            {formatTime(isSummary ? summary!.startTime : action.timestamp)}
                         </div>
-                        <div className="action-details">
-                            <h3>{getBatteryModeLabel(action.batteryMode)}</h3>
-                            <p>{reasonText}</p>
+
+                        <div className="timeline-content">
+                            <h3>
+                                {title}
+                                {summary && summary.count > 1 && (
+                                    <span className="count">({summary.count}x)</span>
+                                )}
+                            </h3>
+                            
+                            <div className="reason">
+                                {isEmergency ? (
+                                    <>
+                                        {action.reason === ActionReason.EmergencyMode && !hasStorms && <p>System manually put into emergency mode. Skipping automation.</p>}
+                                        {hasStorms && <p>Franklin is charging the battery to prepare for the storm.</p>}
+                                        {hasStorms && summary && Array.from(summary.storms).length > 0 && (
+                                            <p className="storm-details">Storms: {Array.from(summary.storms).join(', ')}</p>
+                                        )}
+                                        {hasStorms && (
+                                            <p className="storm-time">
+                                                Storm Duration: {formatTime(isSummary && summary ? summary.stormStart?.toISOString() || '' : action.systemStatus?.storms?.[0]?.tsStart || '')} - {formatTime(isSummary && summary ? summary.stormEnd?.toISOString() || '' : action.systemStatus?.storms?.[0]?.tsEnd || '')}
+                                            </p>
+                                        )}
+                                    </>
+                                ) : isFault ? (
+                                    <div className="fault-details">
+                                        <p className="fault-alarms">
+                                            Alarms: {summary ? Array.from(summary.alarms).join(', ') : action.systemStatus?.alarms?.map(a => a.name).join(', ')}
+                                        </p>
+                                    </div>
+                                ) : (
+                                    <p>{reasonText}</p>
+                                )}
+                            </div>
+
                             <div className="tags">
                                 {(action.batteryMode !== BatteryMode.NoChange || (action.targetBatteryMode !== undefined && action.targetBatteryMode !== BatteryMode.NoChange)) && (
-                                    <span className={`tag mode-${getBatteryModeClass(action.targetBatteryMode || action.batteryMode)}`}>{getBatteryModeLabel(action.targetBatteryMode || action.batteryMode)}</span>
+                                    <span className={`tag mode-${getBatteryModeClass(action.targetBatteryMode || action.batteryMode)}`}>
+                                        {getBatteryModeLabel(action.targetBatteryMode || action.batteryMode)}
+                                    </span>
                                 )}
                                 {(action.solarMode !== SolarMode.NoChange || (action.targetSolarMode !== undefined && action.targetSolarMode !== SolarMode.NoChange)) && (
-                                    <span className={`tag solar-${getSolarModeClass(action.targetSolarMode || action.solarMode)}`}>{getSolarModeLabel(action.targetSolarMode || action.solarMode)}</span>
-                                )}
-                                {isNegPrice && (
-                                    <span className="tag tag-warning">Negative Price</span>
+                                    <span className={`tag solar-${getSolarModeClass(action.targetSolarMode || action.solarMode)}`}>
+                                        {getSolarModeLabel(action.targetSolarMode || action.solarMode)}
+                                    </span>
                                 )}
                                 {showDeficitTag && (
                                     <span className="tag tag-info">Deficit: {formatTime(action.deficitAt!)}</span>
                                 )}
                                 {showCapacityTag && (
-                                    <span className="tag tag-info">Full by: {formatTime(action.capacityAt!)}</span>
+                                    <span className="tag tag-info">Capacity: {formatTime(action.capacityAt!)}</span>
+                                )}
+                                {isNegPrice && (
+                                    <span className="tag tag-warning">Negative Price</span>
                                 )}
                                 {action.dryRun && (
                                     <span className="tag dry-run">Dry Run</span>
                                 )}
                             </div>
-                            <div className="action-footer">
-                                {action.currentPrice && (
-                                    <span>
-                                        <span className="price-label">Price:</span>{formatPrice(gridChargeCost(action.currentPrice))}
-                                        {action.futurePrice && action.futurePrice.dollarsPerKWH > 0 && (
-                                            <span className="price-future"> · Peak: {formatPrice(gridChargeCost(action.futurePrice))}</span>
-                                        )}
-                                    </span>
-                                )}
-                                {action.systemStatus && !!action.systemStatus.batterySOC && (
-                                    <span className="battery-soc">
-                                        <span className="price-label">Battery:</span> {action.systemStatus.batterySOC.toFixed(1)}%
-                                    </span>
-                                )}
+
+                            <div className="timeline-footer">
+                                <div className="timeline-metrics">
+                                    {isSummary ? (
+                                        <>
+                                            {summary!.hasPrice && (
+                                                <div className="timeline-metric">
+                                                    <span className="label">Avg Price:</span>
+                                                    <span className="value">
+                                                        {formatPrice(summary!.avgPrice)}
+                                                        {summary!.min !== summary!.max && (
+                                                            <small className="range"> (Range: $ {summary!.min.toFixed(3)} - $ {summary!.max.toFixed(3)})</small>
+                                                        )}
+                                                    </span>
+                                                </div>
+                                            )}
+                                            {summary!.hasSOC && (
+                                                <div className="timeline-metric">
+                                                    <span className="label">Battery:</span>
+                                                    <span className="value">
+                                                        {summary!.avgSOC.toFixed(1)}%
+                                                        {summary!.minSOC !== summary!.maxSOC && (
+                                                            <small className="range"> (Range: {summary!.minSOC.toFixed(0)}% - {summary!.maxSOC.toFixed(0)}%)</small>
+                                                        )}
+                                                    </span>
+                                                </div>
+                                            )}
+                                        </>
+                                    ) : (
+                                        <>
+                                            {action.currentPrice && (
+                                                <div className="timeline-metric">
+                                                    <span className="label">Price:</span>
+                                                    <span className="value">{formatPrice(gridChargeCost(action.currentPrice))}</span>
+                                                </div>
+                                            )}
+                                            {action.systemStatus?.batterySOC !== undefined && (
+                                                <div className="timeline-metric">
+                                                    <span className="label">Battery SOC:</span>
+                                                    <span className="value">{action.systemStatus.batterySOC.toFixed(1)}%</span>
+                                                </div>
+                                            )}
+                                        </>
+                                    )}
+                                </div>
                             </div>
                         </div>
                     </li>

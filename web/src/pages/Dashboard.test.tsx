@@ -266,7 +266,7 @@ describe('Dashboard', () => {
         renderWithRouter(<Dashboard />);
 
         await waitFor(() => {
-            expect(screen.getByText('Net Savings Today')).toBeInTheDocument();
+            expect(screen.getByText('Savings Today')).toBeInTheDocument();
             // Net savings: 5.50 (battery) + 5.00 (solar) + 1.00 (credit) = 11.50
             expect(screen.getByText(/\$ 11\.50/)).toBeInTheDocument();
             expect(screen.getByText('Solar')).toBeInTheDocument();
@@ -315,7 +315,7 @@ describe('Dashboard', () => {
 
         await waitFor(() => {
             // Net savings: 1.00 (solar) - 2.50 (battery) - 0.50 (credit) = -2.00
-            expect(screen.getByText('Net Savings Today')).toBeInTheDocument();
+            expect(screen.getByText('Savings Today')).toBeInTheDocument();
             const netValue = screen.getByText(/- \$ 2\.00/);
             expect(netValue).toBeInTheDocument();
             expect(netValue).toHaveClass('negative');
@@ -802,7 +802,7 @@ describe('Dashboard', () => {
         renderWithRouter(<Dashboard siteID="ALL" />);
 
         await waitFor(() => {
-            expect(screen.getByText('Net Savings Today')).toBeInTheDocument();
+            expect(screen.getByText('Savings Today')).toBeInTheDocument();
             expect(screen.getByText(/\$ 32\.00/)).toBeInTheDocument(); // 10+20+2
         });
 

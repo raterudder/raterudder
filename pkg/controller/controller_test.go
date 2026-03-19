@@ -38,6 +38,7 @@ func TestDecide(t *testing.T) {
 		BatteryCapacityKWH: 10.0,
 		MaxBatteryChargeKW: 5.0,
 		HomeKW:             1.0,
+		BatteryAboveMinSOC: true,
 	}
 
 	// Create dummy history for 1kW load constant
@@ -208,7 +209,7 @@ func TestDecide(t *testing.T) {
 		}
 
 		lowBattStatus := baseStatus
-		lowBattStatus.BatterySOC = 20.0
+		lowBattStatus.BatterySOC = 21.0
 		// pretend we're charging from the grid now
 		lowBattStatus.GridKW = 2.0
 		lowBattStatus.BatteryKW = -1.0
@@ -227,6 +228,95 @@ func TestDecide(t *testing.T) {
 		assert.False(t, decision.Action.HitDeficitAt.IsZero(), "HitDeficitAt should be set")
 	})
 
+	t.Run("Battery At Reserve -> Below Min SOC", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
+		futurePrices := []types.Price{
+			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05},
+		}
+
+		status := baseStatus
+		status.BatterySOC = 19.9
+		status.BatteryAboveMinSOC = false
+		status.HomeKW = 1.0
+
+		decision, err := c.Decide(ctx, status, currentPrice, futurePrices, history, baseSettings)
+		require.NoError(t, err)
+
+		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonBatteryAtReserve, decision.Action.Reason)
+		assert.Contains(t, decision.Action.Description, "at reserve")
+	})
+
+	t.Run("Battery At Reserve -> Deficit within 5 minutes", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
+		futurePrices := []types.Price{
+			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05},
+		}
+
+		status := baseStatus
+		// 10kWh capacity, 20% min = 2kWh reserve.
+		// 20.01% = 2.001kWh. 0.001kWh above reserve.
+		// 1kW load = 0.001 hour = 0.06 minutes.
+		status.BatterySOC = 20.01
+		status.BatteryAboveMinSOC = true
+		status.HomeKW = 1.0
+		status.SolarKW = 0.0
+
+		decision, err := c.Decide(ctx, status, currentPrice, futurePrices, history, baseSettings)
+		require.NoError(t, err)
+
+		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonBatteryAtReserve, decision.Action.Reason)
+		assert.Contains(t, decision.Action.Description, "at reserve")
+	})
+
+	t.Run("Not Battery At Reserve -> Deficit at 10 minutes", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
+		futurePrices := []types.Price{
+			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05},
+		}
+
+		status := baseStatus
+		// 10kWh capacity, 20% min = 2kWh reserve.
+		// 1kW load.
+		// We want hit at 10 minutes = 1/6 hour = 0.1666 kWh above reserve.
+		// SOC = 20% + (0.1666 / 10 * 100)% = 21.666%
+		status.BatterySOC = 21.666
+		status.BatteryAboveMinSOC = true
+		status.HomeKW = 1.0
+		status.SolarKW = 0.0
+
+		decision, err := c.Decide(ctx, status, currentPrice, futurePrices, history, baseSettings)
+		require.NoError(t, err)
+
+		// Should NOT be BatteryAtReserve (10 mins > 5 mins)
+		assert.NotEqual(t, types.ActionReasonBatteryAtReserve, decision.Action.Reason)
+	})
+
+	t.Run("Battery SOC < Reserve but ElevatedMinBatterySOC -> No BatteryAtReserve Trigger", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
+		futurePrices := []types.Price{
+			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.50, GridUseDollarsPerKWH: 0.50},
+		}
+
+		status := baseStatus
+		status.BatterySOC = 50.0
+		// ElevatedMinBatterySOC is true, representing e.g. a charge-hold state.
+		// Franklin driver set BatteryAboveMinSOC to false because it's < 100%.
+		status.BatteryAboveMinSOC = false
+		status.ElevatedMinBatterySOC = true
+		status.HomeKW = 1.0
+
+		decision, err := c.Decide(ctx, status, currentPrice, futurePrices, history, baseSettings)
+		require.NoError(t, err)
+
+		// It should NOT trigger Battery At Reserve.
+		// Instead, it should trigger Arbitrage Charge (Rule 3)
+		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
+		assert.NotEqual(t, types.ActionReasonBatteryAtReserve, decision.Action.Reason)
+		assert.Equal(t, types.ActionReasonArbitrageChargeNow, decision.Action.Reason)
+	})
+	
 	t.Run("Deficit detected -> Charge Now (Absolute Cheapest Is Now)", func(t *testing.T) {
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05} // ultra cheap right now
 		futurePrices := []types.Price{}
@@ -629,6 +719,7 @@ func TestDecide(t *testing.T) {
 			BatteryKW:          0.0,
 			SolarKW:            0.0,
 			HomeKW:             1.0,
+			BatteryAboveMinSOC: true,
 		}
 		// Normal prices, no charge triggers
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.20}
@@ -806,6 +897,7 @@ func TestDecide(t *testing.T) {
 			MaxBatteryChargeKW: 5.0,
 			HomeKW:             0.5,
 			SolarKW:            2.0,
+			BatteryAboveMinSOC: true,
 		}
 
 		// Create price to avoid cheap charge triggers
@@ -899,6 +991,7 @@ func TestDecide(t *testing.T) {
 			HomeKW:                1.0,
 			SolarKW:               1.0,
 			ElevatedMinBatterySOC: true,  // Simulate we are currently in Standby/Full
+			BatteryAboveMinSOC:    true,
 		}
 
 		// Current Price is moderate/high (Morning Peak)
@@ -967,6 +1060,7 @@ func TestDecide(t *testing.T) {
 			MaxBatteryChargeKW: 5.0,
 			HomeKW:             1.0,
 			SolarKW:            0.0, // Currently no solar (maybe just before solar hours)
+			BatteryAboveMinSOC: true,
 		}
 
 		// Current price is moderate
@@ -1038,6 +1132,7 @@ func TestDecide(t *testing.T) {
 			HomeKW:                3.0,
 			SolarKW:               0.0,
 			ElevatedMinBatterySOC: true,
+			BatteryAboveMinSOC:    true,
 		}
 
 		// Current price is high (Peak)

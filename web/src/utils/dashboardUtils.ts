@@ -173,6 +173,12 @@ export const getReasonText = (action: Action): string => {
             ];
             return parts.concat(suffixParts).join(' ');
         }
+        case ActionReason.BatteryAtReserve: {
+            const parts = [
+                'Battery is at reserve. Using remaining energy.',
+            ];
+            return parts.concat(suffixParts).join(' ');
+        }
         default:
             return action.description || `Unknown reason: ${reason}`;
     }

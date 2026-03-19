@@ -32,6 +32,7 @@ export const ActionReason = {
     WaitingToCharge: 'waitingToCharge',
     ChargeSurvivePeak: 'chargeSurvivePeak',
     PreventSolarCurtailment: 'preventSolarCurtailment',
+    BatteryAtReserve: 'batteryAtReserve',
     // deprecated
     DeficitSave: 'deficitSave',
 } as const;

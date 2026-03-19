@@ -1,0 +1,228 @@
+.timeline {
+    list-style: none;
+    padding: 2rem 0;
+    margin: 0;
+    position: relative;
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+/* The vertical line */
+.timeline::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 24px;
+    width: 2px;
+    background: linear-gradient(
+        to bottom,
+        transparent,
+        var(--outline-variant) 50px,
+        var(--outline-variant) calc(100% - 50px),
+        transparent
+    );
+    opacity: 0.3;
+}
+
+.timeline-item {
+    position: relative;
+    padding-left: 64px;
+    margin-bottom: 2.5rem;
+    background: transparent;
+    animation: timelineItemSlideIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes timelineItemSlideIn {
+    from {
+        opacity: 0;
+        transform: translateX(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+/* The Marker/Point */
+.timeline-marker {
+    position: absolute;
+    left: 17px;
+    top: 6px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--surface-container-highest);
+    border: 2px solid var(--outline-variant);
+    z-index: 1;
+    transition: all 0.3s ease;
+}
+
+.timeline-item:hover .timeline-marker {
+    transform: scale(1.3);
+    border-color: var(--primary);
+    box-shadow: 0 0 12px var(--primary-glow);
+}
+
+/* Color markers based on battery mode */
+.timeline-item.mode-charge_any .timeline-marker { border-color: var(--primary); background: var(--primary); }
+.timeline-item.mode-charge_solar .timeline-marker { border-color: var(--accent); background: var(--accent); }
+.timeline-item.mode-load .timeline-marker { border-color: var(--accent); }
+.timeline-item.mode-standby .timeline-marker { border-color: var(--warning); }
+.timeline-item.mode-fault .timeline-marker { border-color: var(--danger); background: var(--danger); }
+
+/* Marker indicator for grouped actions */
+.timeline-item.is-grouped .timeline-marker::after {
+    content: '';
+    position: absolute;
+    top: -4px;
+    left: -4px;
+    right: -4px;
+    bottom: -4px;
+    border-radius: 50%;
+    border: 1px dashed var(--outline);
+    animation: rotate 10s linear infinite;
+}
+
+@keyframes rotate {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.timeline-time {
+    position: absolute;
+    left: -100px;
+    top: 4px;
+    width: 100px;
+    text-align: right;
+    padding-right: 20px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+}
+
+/* For mobile, we might want to hide the time on the left or reposition it */
+@media (max-width: 600px) {
+    .timeline-time {
+        position: static;
+        width: auto;
+        text-align: left;
+        padding-right: 0;
+        margin-bottom: 0.5rem;
+        display: block;
+    }
+    .timeline::before {
+        left: 14px;
+    }
+    .timeline-marker {
+        left: 7px;
+    }
+    .timeline-item {
+        padding-left: 40px;
+    }
+}
+
+.timeline-content {
+    background: var(--surface-container-low);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 1.25rem 1.5rem;
+    box-shadow: var(--shadow-sm);
+    transition: all 0.3s ease;
+    position: relative;
+}
+
+.timeline-item:hover .timeline-content {
+    background: var(--surface-container-high);
+    border-color: var(--outline-variant);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-2px);
+}
+
+.timeline-content h3 {
+    margin: 0;
+    font-size: 1.125rem;
+    font-weight: 800;
+    color: var(--on-surface);
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.timeline-content h3 span.count {
+    font-size: 0.75rem;
+    font-weight: 600;
+    background: var(--surface-container-highest);
+    padding: 2px 8px;
+    border-radius: 4px;
+    color: var(--text-muted);
+}
+
+.timeline-content .reason {
+    margin: 0.75rem 0 1rem 0;
+    color: var(--on-surface-variant);
+    font-size: 0.9375rem;
+    line-height: 1.6;
+}
+
+.timeline-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 1.25rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+}
+
+.timeline-metrics {
+    display: flex;
+    gap: 1.5rem;
+}
+
+.timeline-metric {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.timeline-metric .label {
+    font-size: 0.625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+.timeline-metric .value {
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: var(--on-surface);
+    font-variant-numeric: tabular-nums;
+}
+
+.timeline-tags {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 1rem;
+}
+
+/* Reuse existing tag styles from App.css but make them a bit subtler here */
+.timeline-content .tag {
+    opacity: 0.9;
+}
+
+.fault-details {
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+    background: rgba(248, 113, 113, 0.1);
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(248, 113, 113, 0.2);
+}
+
+.fault-alarms {
+    color: var(--danger);
+    font-weight: 600;
+    font-size: 0.875rem;
+}

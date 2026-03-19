@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { useLocation, useSearch, Link } from 'wouter';
-import { type Action, type SavingsStats, type Settings, fetchActions, fetchSavings, fetchSettings } from '../api';
+import { type Action, type SavingsStats, type Settings, fetchActions, fetchSavings, fetchSettings, BatteryMode } from '../api';
 import CurrentStatus from '../components/CurrentStatus';
 import SavingsHero from '../components/SavingsHero';
 import ActionTimeline from '../components/ActionTimeline';
@@ -119,7 +119,6 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
 
         for (const action of visibleActions) {
             const isFault = !!action.fault;
-            // currentPrice wasn't always optional so check tsStart as well
             const hasPrice = !!action.currentPrice && action.currentPrice.tsStart !== "0001-01-01T00:00:00Z";
             const price = action.currentPrice ? gridChargeCost(action.currentPrice) : 0;
 
@@ -165,16 +164,15 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     minSOC: hasSOC ? soc : Infinity,
                     maxSOC: hasSOC ? soc : -Infinity
                 };
-            }
+            };
 
             if (isFault) {
-                // fill in missing reason from before we had reason
                 if (!action.reason) {
                     if (action.systemStatus && action.systemStatus.alarms) {
-                        action.reason = "hasAlarms"
+                        action.reason = "hasAlarms" as any;
                     }
                     if (action.systemStatus && action.systemStatus.storms) {
-                        action.reason = "emergencyMode"
+                        action.reason = "emergencyMode" as any;
                     }
                 }
                 if (currentSummary && currentSummary.type === 'fault' && currentSummary.reason === action.reason) {
@@ -210,11 +208,24 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     });
                 }
             } else {
-                // Group non-fault actions by reason AND batteryMode to create summaries
-                // support old NoChange actions by allowing them to group naturally
-                if (currentSummary && currentSummary.type === 'grouped' && currentSummary.reason === action.reason && currentSummary.latestAction.batteryMode === action.batteryMode) {
+                // Group non-fault actions
+                const effectiveBatteryMode = action.batteryMode === BatteryMode.NoChange && currentSummary 
+                    ? currentSummary.latestAction.batteryMode 
+                    : action.batteryMode;
+
+                if (
+                    currentSummary && 
+                    currentSummary.type === 'grouped' && 
+                    (
+                        (currentSummary.reason === action.reason && currentSummary.latestAction.batteryMode === effectiveBatteryMode) ||
+                        (action.batteryMode === BatteryMode.NoChange)
+                    )
+                ) {
                     updateSummary(currentSummary);
-                    currentSummary.latestAction = action;
+                    currentSummary.latestAction = {
+                        ...action,
+                        batteryMode: effectiveBatteryMode 
+                    };
                 } else {
                     if (currentSummary) {
                         accumulator.push(currentSummary);
@@ -231,8 +242,6 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
         return accumulator.map(item => {
             if ('isSummary' in item) {
                 const summary = item as ActionSummaryAccumulator;
-                // If we only have one item in a 'grouped' summary, just return the action itself
-                // so it shows the full detail/description for that hour.
                 if (summary.type === 'grouped' && summary.count === 1) {
                     return summary.latestAction;
                 }
