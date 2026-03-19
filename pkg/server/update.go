@@ -156,7 +156,7 @@ func (s *Server) performSiteUpdate(
 		return nil, "", fmt.Errorf("failed to get ess status: %w", err)
 	}
 
-	log.Ctx(ctx).DebugContext(ctx, "update: ess status fetched")
+	log.Ctx(ctx).DebugContext(ctx, "update: ess status fetched", slog.Any("status", status))
 
 	// get current price (fetched early so all actions can include the latest price)
 	currentPrice, err := utility.GetCurrentPrice(ctx)
@@ -164,7 +164,7 @@ func (s *Server) performSiteUpdate(
 		return nil, "", fmt.Errorf("failed to get price: %w", err)
 	}
 
-	log.Ctx(ctx).DebugContext(ctx, "update: current price fetched", slog.Float64("price", currentPrice.DollarsPerKWH), slog.Time("start", currentPrice.TSStart))
+	log.Ctx(ctx).DebugContext(ctx, "update: current price fetched", slog.Any("price", currentPrice))
 
 	// get History for Controller (Last 72 hours from Storage)
 	historyStart := time.Now().Add(-72 * time.Hour)

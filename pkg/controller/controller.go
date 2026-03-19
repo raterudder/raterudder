@@ -111,6 +111,7 @@ func (c *Controller) Decide(
 		// conservatively assume it takes 3 hours to charge the battery from 0->100
 		chargeKW = capacityKWH / 3.0
 	}
+	currentEnergyKWH := currentStatus.BatterySOC * capacityKWH / 100.0
 
 	simData := c.SimulateState(ctx, now, currentStatus, currentPrice, futurePrices, history, settings)
 
@@ -336,7 +337,7 @@ func (c *Controller) Decide(
 
 		// assume we need to charge for at least 10 minutes for it to be worth it
 		chargeDurationHours := 10.0 / 60.0
-		simEnergyAfterCharge := slot.BatteryKWH + chargeKW*chargeDurationHours
+		simEnergyAfterCharge := currentEnergyKWH + chargeKW*chargeDurationHours
 
 		// make sure we can charge the batteries, we can export solar, and we have
 		// enough headroom to charge

@@ -31,7 +31,7 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
     const [error, setError] = useState<string | null>(null);
 
     const whatsNewVersion = 1;
-    const whatsNewText = "Updated design and improved Hold Battery performance.";
+    const whatsNewText = "Updated design, improved Hold Battery, Charge Battery, and Arbitrage actions.";
     const [showWhatsNew, setShowWhatsNew] = useState(false);
 
     useEffect(() => {

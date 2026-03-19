@@ -206,7 +206,7 @@ func (c *Controller) SimulateState(
 			if !settings.GridExportSolar && predictedAvgSolarKWH > 0.1 {
 				if settings.SolarFullyChargeHeadroomBatterySOC > -99.0 {
 					solarCapacityKWH := capacityKWH * (1.0 - settings.SolarFullyChargeHeadroomBatterySOC/100.0)
-					if simEnergyKWH-clampedNetKWH > solarCapacityKWH {
+					if simEnergyKWH-clampedNetKWH > solarCapacityKWH && simSolarCapacityAt.IsZero() {
 						// estimate when into the hour we hit the deficit
 						remainingBeforeCapacity := solarCapacityKWH - simEnergyKWH
 						if clampedNetKWH < 0 && remainingBeforeCapacity > 0 {
@@ -222,14 +222,14 @@ func (c *Controller) SimulateState(
 			// if we have no headroom in the battery, we can't charge so mark that
 			// we hit the capacity
 			if simEnergyKWH-clampedNetKWH > capacityKWH {
-				if simSolarCapacityAt.IsZero() {
+				if simCapacityAt.IsZero() {
 					// estimate when into the hour we hit the deficit
 					remainingBeforeCapacity := capacityKWH - simEnergyKWH
 					if clampedNetKWH < 0 && remainingBeforeCapacity > 0 {
 						fraction := max(remainingBeforeCapacity/-clampedNetKWH, 0)
-						simSolarCapacityAt = simTime.Add(time.Duration(fraction * float64(time.Hour)))
+						simCapacityAt = simTime.Add(time.Duration(fraction * float64(time.Hour)))
 					} else {
-						simSolarCapacityAt = simTime
+						simCapacityAt = simTime
 					}
 				}
 				simEnergyKWH = capacityKWH

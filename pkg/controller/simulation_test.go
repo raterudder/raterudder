@@ -789,4 +789,78 @@ func TestSimulateState(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("HitCapacityAt", func(t *testing.T) {
+		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+		capacityKWH := 10.0
+		// Start at 5.0 kWh (SOC 50). Net charge is 10.0 kWh/hr.
+		// We should hit capacity at 50% into the hour (12:30).
+		currentStatus := types.SystemStatus{
+			BatteryCapacityKWH:    capacityKWH,
+			BatterySOC:            50.0,
+			Timestamp:             now,
+			MaxBatteryChargeKW:    10.0,
+			MaxBatteryDischargeKW: 5.0,
+		}
+
+		history := []types.EnergyStats{}
+		for i := 1; i <= 3; i++ {
+			pastDay := now.Add(time.Duration(-24*i) * time.Hour)
+			history = append(history, types.EnergyStats{
+				TSHourStart: pastDay,
+				SolarKWH:    11.0,
+				HomeKWH:     1.0,
+			})
+		}
+
+		settings := types.Settings{
+			GridExportSolar: true,
+		}
+
+		simData := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, settings)
+
+		if assert.NotEmpty(t, simData) {
+			assert.False(t, simData[0].HitCapacityAt.IsZero())
+			expected := now.Add(30 * time.Minute)
+			assert.Equal(t, expected, simData[0].HitCapacityAt)
+		}
+	})
+
+	t.Run("HitSolarCapacityAt", func(t *testing.T) {
+		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+		capacityKWH := 10.0
+		// Start at 5.0 kWh (SOC 50). Net charge is 10.0 kWh/hr.
+		// SolarHeadroomSOC is 10%, so target is 90% (9.0 kWh).
+		// Need +4.0 kWh. 4.0 / 10.0 = 0.4 hrs = 24 minutes.
+		currentStatus := types.SystemStatus{
+			BatteryCapacityKWH:    capacityKWH,
+			BatterySOC:            50.0,
+			Timestamp:             now,
+			MaxBatteryChargeKW:    10.0,
+			MaxBatteryDischargeKW: 5.0,
+		}
+
+		history := []types.EnergyStats{}
+		for i := 1; i <= 3; i++ {
+			pastDay := now.Add(time.Duration(-24*i) * time.Hour)
+			history = append(history, types.EnergyStats{
+				TSHourStart: pastDay,
+				SolarKWH:    11.0,
+				HomeKWH:     1.0,
+			})
+		}
+
+		settings := types.Settings{
+			GridExportSolar:                    false,
+			SolarFullyChargeHeadroomBatterySOC: 10.0,
+		}
+
+		simData := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, settings)
+
+		if assert.NotEmpty(t, simData) {
+			assert.False(t, simData[0].HitSolarCapacityAt.IsZero())
+			expected := now.Add(24 * time.Minute)
+			assert.Equal(t, expected, simData[0].HitSolarCapacityAt)
+		}
+	})
 }
