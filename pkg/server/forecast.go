@@ -136,6 +136,18 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		log.Ctx(ctx).WarnContext(ctx, "failed to fetch price history for forecast", slog.Any("error", err))
 	}
 
+	// if we don't have the current hour in the price history, add it
+	var foundCurrentPrice bool
+	for _, p := range priceHistory24 {
+		if p.Contains(now) {
+			foundCurrentPrice = true
+			break
+		}
+	}
+	if !foundCurrentPrice && currentPrice.Contains(now) {
+		priceHistory24 = append(priceHistory24, currentPrice)
+	}
+
 	var weatherHistory []types.Weather
 
 	// 8. Get Weather History if we have a location set

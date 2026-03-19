@@ -186,7 +186,7 @@ type SiteLocation struct {
 // HourlyWeather represents the solar forecast data for a specific hour.
 type HourlyWeather struct {
 	TSHourStart  time.Time `json:"tsHourStart"`
-	GHI          float64   `json:"ghi"`                    // Shortwave radiation in W/m²
+	GHI          float64   `json:"ghi,omitempty"`          // Shortwave radiation in W/m²
 	GTI          float64   `json:"gti,omitempty"`          // Global Tilted Irradiance in W/m²
 	TemperatureC float64   `json:"temperatureC,omitempty"` // Temperature in °C
 	SnowfallCM   float64   `json:"snowfallCM,omitempty"`   // Snowfall in cm
