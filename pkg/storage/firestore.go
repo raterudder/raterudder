@@ -349,7 +349,7 @@ func (f *FirestoreProvider) UpsertWeather(ctx context.Context, siteID string, we
 		if err != nil {
 			return fmt.Errorf("failed to marshal weather: %w", err)
 		}
-		docID := w.TSDayStart.UTC().Format(time.RFC3339)
+		docID := w.TSDayStart.UTC().Format("2006-01-02")
 		_, err = coll.Doc(docID).Set(ctx, map[string]any{
 			"json":       string(jsonBytes),
 			"tsDayStart": w.TSDayStart,
@@ -371,7 +371,7 @@ func (f *FirestoreProvider) UpsertWeather(ctx context.Context, siteID string, we
 			return fmt.Errorf("failed to marshal weather: %w", err)
 		}
 
-		docID := w.TSDayStart.UTC().Format(time.RFC3339)
+		docID := w.TSDayStart.UTC().Format("2006-01-02")
 		ref := coll.Doc(docID)
 		job, err := bw.Set(ref, map[string]any{
 			"json":       string(jsonBytes),
