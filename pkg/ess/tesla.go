@@ -541,19 +541,28 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		return types.SystemStatus{}, err
 	}
 
+	var totalChargeKW float64
+	var totalDischargeKW float64
+	for _, b := range siteInfo.Components.Batteries {
+		totalChargeKW += b.NameplateMaxChargePowerW / 1000.0
+		totalDischargeKW += b.NameplateMaxDischargePowerW / 1000.0
+	}
+
 	status := types.SystemStatus{
 		Timestamp:             time.Now(),
 		BatterySOC:            liveStatus.PercentageCharged,
 		BatteryKW:             liveStatus.BatteryPowerW / 1000.0,
+		BatteryCapacityKWH:    siteInfo.NameplateEnergyWH / 1000.0,
+		MaxBatteryDischargeKW: totalDischargeKW,
+		MaxBatteryChargeKW:    totalChargeKW,
 		SolarKW:               liveStatus.SolarPowerW / 1000.0,
 		GridKW:                liveStatus.GridPowerW / 1000.0,
 		HomeKW:                liveStatus.LoadPowerW / 1000.0,
-		BatteryCapacityKWH:    liveStatus.TotalPackEnergyWH / 1000.0,
-		EmergencyMode:         liveStatus.StormModeActive,
-		MaxBatteryDischargeKW: siteInfo.NameplatePowerW / 1000.0,
 		ElevatedMinBatterySOC: siteInfo.BackupReservePercent > 0 && siteInfo.BackupReservePercent > b.settings.MinBatterySOC,
 		BatteryAboveMinSOC:    liveStatus.PercentageCharged >= siteInfo.BackupReservePercent,
-		// TODO: can we get MaxBatteryChargeKW and MaxBatteryDischargeKW
+		EmergencyMode:         liveStatus.StormModeActive,
+		// TODO: how do we know when battery charging is disabled
+		// TODO: what about alarms?
 	}
 
 	return status, nil
@@ -747,7 +756,7 @@ type teslaSiteInfoResponse struct {
 	BackupReservePercent float64 `json:"backup_reserve_percent"`
 	// DefaultRealMode can be autonomous or self_consumption
 	DefaultRealMode      string              `json:"default_real_mode"`
-	NamePlateEnergyWH    float64             `json:"nameplate_energy"`
+	NameplateEnergyWH    float64             `json:"nameplate_energy"`
 	NameplatePowerW      float64             `json:"nameplate_power"`
 	BatteryCount         int                 `json:"battery_count"`
 	InstallationTimeZone string              `json:"installation_time_zone"`
@@ -761,14 +770,33 @@ type teslaSiteInfoResponse struct {
 }
 
 type teslaSiteComponents struct {
-	Solar            bool   `json:"solar"`
-	Battery          bool   `json:"battery"`
-	Grid             bool   `json:"grid"`
-	Backup           bool   `json:"backup"`
-	LoadMeter        bool   `json:"load_meter"`
-	StormModeCapable bool   `json:"storm_mode_capable"`
-	BatteryType      string `json:"battery_type"`
-	Configurable     bool   `json:"configurable"`
+	Solar bool `json:"solar"`
+
+	Battery     bool                         `json:"battery"`
+	Batteries   []teslaSiteComponentsBattery `json:"batteries"`
+	BatteryType string                       `json:"battery_type"`
+
+	Grid             bool `json:"grid"`
+	Backup           bool `json:"backup"`
+	LoadMeter        bool `json:"load_meter"`
+	StormModeCapable bool `json:"storm_mode_capable"`
+	Configurable     bool `json:"configurable"`
+	// can be pv_only or battery_ok
+	CustomerPreferredExportRule              string `json:"customer_preferred_export_rule"`
+	DisallowChargeFromGridWithSolarInstalled bool   `json:"disallow_charge_from_grid_with_solar_installed"`
+	// can be pv_only or battery_ok
+	NetMeterMode string `json:"net_meter_mode"`
+}
+
+type teslaSiteComponentsBattery struct {
+	DeviceID                    string  `json:"device_id"`
+	Active                      bool    `json:"is_active"`
+	NameplateEnergyWH           float64 `json:"nameplate_energy"`
+	NameplateMaxChargePowerW    float64 `json:"nameplate_max_charge_power"`
+	NameplateMaxDischargePowerW float64 `json:"nameplate_max_discharge_power"`
+	PartName                    string  `json:"part_name"`
+	PartNumber                  string  `json:"part_number"`
+	SerialNumber                string  `json:"serial_number"`
 }
 
 type teslaLiveStatusResponse struct {
@@ -781,9 +809,7 @@ type teslaLiveStatusResponse struct {
 	// GridStatus can be "Active", not sure what else
 	GridStatus string `json:"grid_status"`
 	// IslandStatus can be "on_grid", not sure what else
-	IslandStatus      string  `json:"island_status"`
-	EnergyLeftWH      float64 `json:"energy_left"`
-	TotalPackEnergyWH float64 `json:"total_pack_energy"`
+	IslandStatus string `json:"island_status"`
 }
 
 type teslaRegisterRequest struct {
@@ -807,6 +833,10 @@ type teslaCalendarHistoryTimeSeries struct {
 	ConsumerEnergyImportedFromGridWH    float64 `json:"consumer_energy_imported_from_grid"`
 	ConsumerEnergyImportedFromSolarWH   float64 `json:"consumer_energy_imported_from_solar"`
 	ConsumerEnergyImportedFromBatteryWH float64 `json:"consumer_energy_imported_from_battery"`
+	TotalHomeUsageWH                    float64 `json:"total_home_usage"`
+	TotalSolarGenerationWH              float64 `json:"total_solar_generation"`
+	TotalBatteryChargeWH                float64 `json:"total_battery_charge"`
+	TotalGridEnergyExportedWH           float64 `json:"total_grid_energy_exported"`
 }
 
 type teslaCalendarHistoryResponse struct {

@@ -154,8 +154,8 @@ func TestTesla(t *testing.T) {
 						"grid_power":         700.0,
 						"load_power":         1400.0,
 						"percentage_charged": 55.4,
-						"total_pack_energy":  26000.0,
 						"grid_status":        "Active",
+						"island_status":      "on_grid",
 						"storm_mode_active":  true,
 					},
 				})
@@ -185,7 +185,7 @@ func TestTesla(t *testing.T) {
 		assert.Equal(t, 0.7, status.GridKW)
 		assert.Equal(t, 1.4, status.HomeKW)
 		assert.Equal(t, 55.4, status.BatterySOC)
-		assert.Equal(t, 26.0, status.BatteryCapacityKWH)
+		assert.Equal(t, 27.0, status.BatteryCapacityKWH)
 		assert.False(t, status.ElevatedMinBatterySOC)
 		assert.True(t, status.BatteryAboveMinSOC)
 		assert.True(t, status.EmergencyMode)
@@ -209,8 +209,8 @@ func TestTesla(t *testing.T) {
 						"grid_power":         700.0,
 						"load_power":         1400.0,
 						"percentage_charged": 55.4,
-						"total_pack_energy":  26000.0,
 						"grid_status":        "Active",
+						"island_status":      "on_grid",
 						"storm_mode_active":  false,
 					},
 				})
@@ -240,7 +240,7 @@ func TestTesla(t *testing.T) {
 		assert.Equal(t, 0.7, status.GridKW)
 		assert.Equal(t, 1.4, status.HomeKW)
 		assert.Equal(t, 55.4, status.BatterySOC)
-		assert.Equal(t, 26.0, status.BatteryCapacityKWH)
+		assert.Equal(t, 27.0, status.BatteryCapacityKWH)
 		assert.True(t, status.ElevatedMinBatterySOC)
 		assert.True(t, status.BatteryAboveMinSOC)
 		assert.False(t, status.EmergencyMode)
@@ -264,8 +264,8 @@ func TestTesla(t *testing.T) {
 						"grid_power":         700.0,
 						"load_power":         1400.0,
 						"percentage_charged": 21.0,
-						"total_pack_energy":  26000.0,
 						"grid_status":        "Active",
+						"island_status":      "on_grid",
 						"storm_mode_active":  false,
 					},
 				})
@@ -295,7 +295,7 @@ func TestTesla(t *testing.T) {
 		assert.Equal(t, 0.7, status.GridKW)
 		assert.Equal(t, 1.4, status.HomeKW)
 		assert.Equal(t, 21.0, status.BatterySOC)
-		assert.Equal(t, 26.0, status.BatteryCapacityKWH)
+		assert.Equal(t, 27.0, status.BatteryCapacityKWH)
 		assert.True(t, status.ElevatedMinBatterySOC)
 		assert.False(t, status.BatteryAboveMinSOC)
 		assert.False(t, status.EmergencyMode)
@@ -380,6 +380,10 @@ func TestTesla(t *testing.T) {
 									"consumer_energy_imported_from_grid":    1250.0,
 									"consumer_energy_imported_from_solar":   1350.0,
 									"consumer_energy_imported_from_battery": 900.0,
+									"total_home_usage":                      3500.0,
+									"total_solar_generation":                3000.0,
+									"total_battery_charge":                  1000.0,
+									"total_grid_energy_exported":            500.0,
 								},
 								{
 									"timestamp":                             "2026-03-12T10:15:00-05:00",
@@ -393,6 +397,10 @@ func TestTesla(t *testing.T) {
 									"consumer_energy_imported_from_grid":    1250.0,
 									"consumer_energy_imported_from_solar":   1350.0,
 									"consumer_energy_imported_from_battery": 900.0,
+									"total_home_usage":                      3500.0,
+									"total_solar_generation":                2000.0,
+									"total_battery_charge":                  1000.0,
+									"total_grid_energy_exported":            500.0,
 								},
 								{
 									"timestamp":                             "2026-03-12T11:00:00-05:00",
@@ -406,6 +414,10 @@ func TestTesla(t *testing.T) {
 									"consumer_energy_imported_from_grid":    1000.0,
 									"consumer_energy_imported_from_solar":   2800.0,
 									"consumer_energy_imported_from_battery": 1000.0,
+									"total_home_usage":                      4800.0,
+									"total_solar_generation":                6000.0,
+									"total_battery_charge":                  2000.0,
+									"total_grid_energy_exported":            1200.0,
 								},
 							},
 						},
