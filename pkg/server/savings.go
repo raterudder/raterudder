@@ -156,6 +156,12 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 		})
 	}
 
+	// O(1) lookups for prices using the truncated hour timestamp
+	pricesByHour := make(map[int64]types.Price, len(prices))
+	for _, p := range prices {
+		pricesByHour[p.TSStart.Truncate(time.Hour).Unix()] = p
+	}
+
 	type energyChunk struct {
 		amount float64
 		price  float64
@@ -169,11 +175,18 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 
 		var gridImportPrice float64
 		var gridExportPrice float64
-		for _, p := range prices {
-			if p.Contains(ts) {
-				gridImportPrice = p.DollarsPerKWH
-				gridExportPrice = p.DollarsPerKWH + p.GridUseDollarsPerKWH
-				break
+
+		if p, ok := pricesByHour[ts.Truncate(time.Hour).Unix()]; ok && p.Contains(ts) {
+			gridImportPrice = p.DollarsPerKWH
+			gridExportPrice = p.DollarsPerKWH + p.GridUseDollarsPerKWH
+		} else {
+			// Fallback for partial hour overlap or missing exact start time
+			for _, p := range prices {
+				if p.Contains(ts) {
+					gridImportPrice = p.DollarsPerKWH
+					gridExportPrice = p.DollarsPerKWH + p.GridUseDollarsPerKWH
+					break
+				}
 			}
 		}
 
