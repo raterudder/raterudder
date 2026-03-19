@@ -1,26 +1,37 @@
 import React from 'react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer, LineChart, Line } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer } from 'recharts';
 import { Accordion } from '@base-ui/react/accordion';
 import './LandingPage.css';
 
 const LandingPage: React.FC = () => {
-    // Fake data for charts
-    const solarData = React.useMemo(() => Array.from({ length: 24 }, (_, i) => ({
-        name: `${i}:00`,
-        uv: i >= 6 && i <= 18 ? Math.sin((i - 6) * Math.PI / 12) * 7 : 0,
-    })), []);
+    // Fake data for charts with more "flashy" and realistic variability
+    const solarData = React.useMemo(() => {
+        return Array.from({ length: 24 }, (_, i) => {
+            let base = i >= 6 && i <= 18 ? Math.sin((i - 6) * Math.PI / 12) * 7 : 0;
+            // Add some "cloud" dips and atmospheric noise
+            if (base > 0) {
+                const noise = 0.9 + Math.random() * 0.2;
+                const clouds = (i === 10 || i === 14) ? 0.7 : 1; 
+                base = base * noise * clouds;
+            }
+            return {
+                name: `${i}:00`,
+                uv: parseFloat(base.toFixed(2)),
+            };
+        });
+    }, []);
 
     const usageData = React.useMemo(() => Array.from({ length: 24 }, (_, i) => ({
         name: `${i}:00`,
-        usage: .5 + Math.random() + (i > 17 ? 1 : 0),
+        usage: parseFloat((.8 + Math.random() * 0.5 + (i > 17 && i < 22 ? 2 : 0) + (i > 6 && i < 9 ? 1.5 : 0)).toFixed(2)),
     })), []);
 
     const batteryData = React.useMemo(() => Array.from({ length: 24 }, (_, i) => {
         let level = 20;
-        if (i > 8 && i < 16) level = 80 + Math.random() * 10;
-        else if (i >= 16) level = 90 - (i - 16) * 5;
-        else level = 40 - i * 2;
-        return { name: `${i}:00`, level: Math.max(0, level) };
+        if (i > 8 && i < 17) level = 40 + (i - 8) * 7 + Math.random() * 5;
+        else if (i >= 17) level = 95 - (i - 17) * 8;
+        else level = 30 - i * 1.5;
+        return { name: `${i}:00`, level: Math.min(100, Math.max(0, parseFloat(level.toFixed(1)))) };
     }), []);
 
     const [isMobile, setIsMobile] = React.useState(window.innerWidth < 768);
@@ -128,55 +139,70 @@ const LandingPage: React.FC = () => {
 
                     <div className="charts-grid">
                         <div className="chart-card">
-                            <h3>Solar Generation</h3>
+                            <div className="chart-header">
+                                <h3>Solar Generation</h3>
+                                <div className="chart-stat">Peak: 7.0kW</div>
+                            </div>
                             <div className="chart-wrapper">
                                 <ResponsiveContainer width="100%" height="100%">
                                     <AreaChart data={solarData} margin={chartMargin}>
                                         <defs>
                                             <linearGradient id="colorSolar" x1="0" y1="0" x2="0" y2="1">
-                                                <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.8}/>
-                                                <stop offset="95%" stopColor="#f59e0b" stopOpacity={0}/>
+                                                <stop offset="5%" stopColor="#ffb800" stopOpacity={0.8}/>
+                                                <stop offset="95%" stopColor="#ffb800" stopOpacity={0}/>
                                             </linearGradient>
                                         </defs>
-                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                                        <XAxis dataKey="name" tick={axisStyle} stroke="#9ca3af" axisLine={false} tickLine={false} />
-                                        <YAxis tick={axisStyle} width={yAxisWidth} stroke="#9ca3af" axisLine={false} tickLine={false} />
-                                        <Area type="monotone" dataKey="uv" stroke="#f59e0b" strokeWidth={2} fillOpacity={1} fill="url(#colorSolar)" />
+                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(65, 71, 85, 0.1)" />
+                                        <XAxis dataKey="name" tick={axisStyle} stroke="#414755" axisLine={false} tickLine={false} />
+                                        <YAxis tick={axisStyle} width={yAxisWidth} stroke="#414755" axisLine={false} tickLine={false} />
+                                        <Area type="monotone" dataKey="uv" stroke="#ffb800" strokeWidth={3} fillOpacity={1} fill="url(#colorSolar)" isAnimationActive={true} />
                                     </AreaChart>
                                 </ResponsiveContainer>
                             </div>
                         </div>
 
                         <div className="chart-card">
-                            <h3>Home Usage</h3>
+                            <div className="chart-header">
+                                <h3>Home Usage</h3>
+                                <div className="chart-stat">Avg: 1.2kW</div>
+                            </div>
                             <div className="chart-wrapper">
                                 <ResponsiveContainer width="100%" height="100%">
                                     <AreaChart data={usageData} margin={chartMargin}>
                                         <defs>
                                             <linearGradient id="colorUsage" x1="0" y1="0" x2="0" y2="1">
-                                                <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8}/>
-                                                <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                                                <stop offset="5%" stopColor="#4b8eff" stopOpacity={0.8}/>
+                                                <stop offset="95%" stopColor="#4b8eff" stopOpacity={0}/>
                                             </linearGradient>
                                         </defs>
-                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                                        <XAxis dataKey="name" tick={axisStyle} stroke="#9ca3af" axisLine={false} tickLine={false} />
-                                        <YAxis tick={axisStyle} width={yAxisWidth} stroke="#9ca3af" axisLine={false} tickLine={false} />
-                                        <Area type="monotone" dataKey="usage" stroke="#3b82f6" strokeWidth={2} fillOpacity={1} fill="url(#colorUsage)" />
+                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(65, 71, 85, 0.1)" />
+                                        <XAxis dataKey="name" tick={axisStyle} stroke="#414755" axisLine={false} tickLine={false} />
+                                        <YAxis tick={axisStyle} width={yAxisWidth} stroke="#414755" axisLine={false} tickLine={false} />
+                                        <Area type="monotone" dataKey="usage" stroke="#4b8eff" strokeWidth={3} fillOpacity={1} fill="url(#colorUsage)" isAnimationActive={true} />
                                     </AreaChart>
                                 </ResponsiveContainer>
                             </div>
                         </div>
 
                         <div className="chart-card full-width">
-                            <h3>Battery Capacity</h3>
+                            <div className="chart-header">
+                                <h3>Battery Capacity</h3>
+                                <div className="chart-stat">SoC: 84%</div>
+                            </div>
                             <div className="chart-wrapper">
                                 <ResponsiveContainer width="100%" height="100%">
-                                    <LineChart data={batteryData} margin={chartMargin}>
-                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                                        <XAxis dataKey="name" tick={axisStyle} stroke="#9ca3af" axisLine={false} tickLine={false} />
-                                        <YAxis tick={axisStyle} width={yAxisWidth} stroke="#9ca3af" axisLine={false} tickLine={false} />
-                                        <Line type="monotone" dataKey="level" stroke="#10b981" strokeWidth={3} dot={false} activeDot={{ r: 6 }} />
-                                    </LineChart>
+                                    <AreaChart data={batteryData} margin={chartMargin}>
+                                        <defs>
+                                            <linearGradient id="colorBattery" x1="0" y1="0" x2="0" y2="1">
+                                                <stop offset="5%" stopColor="#00ffc2" stopOpacity={0.4}/>
+                                                <stop offset="95%" stopColor="#00ffc2" stopOpacity={0}/>
+                                            </linearGradient>
+                                        </defs>
+                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(65, 71, 85, 0.1)" />
+                                        <XAxis dataKey="name" tick={axisStyle} stroke="#414755" axisLine={false} tickLine={false} />
+                                        <YAxis tick={axisStyle} width={yAxisWidth} stroke="#414755" axisLine={false} tickLine={false} />
+                                        <Area type="monotone" dataKey="level" stroke="#00ffc2" strokeWidth={3} fillOpacity={1} fill="url(#colorBattery)" isAnimationActive={true} />
+                                    </AreaChart>
                                 </ResponsiveContainer>
                             </div>
                         </div>

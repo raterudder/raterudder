@@ -30,7 +30,7 @@ const charts: ChartConfig[] = [
     {
         title: 'Battery (if used) (%)',
         dataKey: 'batterySOCIfUsed',
-        color: '#3b82f6',
+        color: 'var(--accent)',
         gradientId: 'batteryGrad',
         unit: '%',
         referenceLine: { dataKey: 'batteryReserveSOC', label: 'Reserve', color: '#ef4444' },
@@ -38,7 +38,7 @@ const charts: ChartConfig[] = [
     {
         title: 'Battery (if standby) (%)',
         dataKey: 'batterySOCIfStandby',
-        color: '#3b82f6',
+        color: 'var(--accent)',
         gradientId: 'batteryGrad',
         unit: '%',
         referenceLine: { dataKey: 'batteryReserveSOC', label: 'Reserve', color: '#ef4444' },
@@ -46,34 +46,34 @@ const charts: ChartConfig[] = [
     {
         title: 'Predicted Solar (kWh)',
         dataKey: 'predictedSolarKWH',
-        color: '#f59e0b',
+        color: 'var(--warning)',
         gradientId: 'solarGrad',
         unit: ' kWh',
         additionalLines: [
-            { dataKey: 'rawSolarKWH', color: '#9ca3af', strokeDasharray: '4 4' },
+            { dataKey: 'rawSolarKWH', color: 'var(--text-muted)', strokeDasharray: '4 4' },
         ],
     },
     {
         title: 'Improved Predicted Solar (kWh)',
         dataKey: 'improvedSolarGeneration',
-        color: '#f97316', // deeper orange
+        color: '#ff8a00',
         gradientId: 'improvedSolarGrad',
         unit: ' kWh',
     },
     {
         title: 'Forecasted Solar Radiation (W/m²)',
         dataKey: 'forecastGHI',
-        color: '#fbbf24', // lighter orange/yellow
+        color: 'var(--warning)',
         gradientId: 'ghiGrad',
         unit: ' W/m²',
         additionalLines: [
-            { dataKey: 'forecastGTI', color: '#f59e0b' },
+            { dataKey: 'forecastGTI', color: '#ffb800' },
         ],
     },
     {
         title: 'Avg Home Load (kWh)',
         dataKey: 'avgHomeLoadKWH',
-        color: '#8b5cf6',
+        color: '#a855f7',
         gradientId: 'loadGrad',
         unit: ' kWh',
     },
@@ -143,17 +143,21 @@ function ForecastChart({ data, config, isMobile, showCurrentTime }: { data: Proc
                             <stop offset="95%" stopColor={config.color} stopOpacity={0.02} />
                         </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--outline-variant)" vertical={false} opacity={0.4} />
                     <XAxis
                         dataKey="ts"
                         tickFormatter={formatHour}
-                        tick={{ fontSize: isMobile ? 10 : 12 }}
-                        stroke="#9ca3af"
+                        tick={{ fontSize: isMobile ? 10 : 12, fill: 'var(--text-muted)' }}
+                        stroke="var(--outline-variant)"
+                        axisLine={false}
+                        tickLine={false}
                     />
                     <YAxis
-                        tick={{ fontSize: isMobile ? 10 : 12 }}
-                        stroke="#9ca3af"
+                        tick={{ fontSize: isMobile ? 10 : 12, fill: 'var(--text-muted)' }}
+                        stroke="var(--outline-variant)"
                         width={isMobile ? 35 : 50}
+                        axisLine={false}
+                        tickLine={false}
                         tickFormatter={(v: number) =>
                             config.unit.includes('$') ? `$${v.toFixed(2)}` : v.toFixed(1)
                         }
@@ -162,30 +166,32 @@ function ForecastChart({ data, config, isMobile, showCurrentTime }: { data: Proc
                         labelFormatter={(label) => formatHour(String(label))}
                         formatter={(value: number | string | undefined, name: string | number | undefined) => {
                             const v = Number(value ?? 0);
-                            // Determine which config/line this is
                             const lineUnit = config.unit;
-                            // If it's the solar raw line, it uses the same unit
-
                             return [
                                 config.unit.includes('$')
                                     ? `$${v.toFixed(4)}`
                                     : v.toFixed(2) + lineUnit.trim(),
-                                name === 'rawSolarKWH' ? 'Raw Model' : config.title, // Simple label mapping
+                                name === 'rawSolarKWH' ? 'Raw Model' : config.title,
                             ];
                         }}
                         contentStyle={{
-                            backgroundColor: '#fff',
-                            border: '1px solid #e5e7eb',
+                            backgroundColor: 'var(--surface-container-high)',
+                            border: '1px solid var(--border)',
                             borderRadius: '8px',
-                            boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+                            boxShadow: 'var(--shadow-lg)',
+                            color: 'var(--on-surface)',
+                            backdropFilter: 'blur(10px)',
                         }}
+                        itemStyle={{ color: 'var(--on-surface)' }}
+                        labelStyle={{ color: 'var(--text-muted)', marginBottom: '4px', fontWeight: 700 }}
                     />
                     <Area
                         type="monotone"
                         dataKey={config.dataKey}
                         stroke={config.color}
-                        strokeWidth={2}
+                        strokeWidth={3}
                         fill={`url(#${config.gradientId})`}
+                        isAnimationActive={true}
                     />
                     {config.additionalLines?.map((line) => (
                         <Line
@@ -214,12 +220,12 @@ function ForecastChart({ data, config, isMobile, showCurrentTime }: { data: Proc
                     {showCurrentTime && currentTimeStr && (
                         <ReferenceLine
                             x={currentTimeStr}
-                            stroke="#4b5563"
+                            stroke="var(--primary)"
                             strokeDasharray="3 3"
                             label={{
                                 value: 'Now',
                                 position: 'insideTopLeft',
-                                fill: '#4b5563',
+                                fill: 'var(--primary)',
                                 fontSize: 11,
                             }}
                         />
