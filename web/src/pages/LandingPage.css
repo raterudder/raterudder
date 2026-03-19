@@ -461,6 +461,7 @@
     }
 
     .hero-content {
+        flex: none;
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -475,6 +476,7 @@
     }
 
     .hero-visual {
+        flex: none;
         height: 400px;
         width: 100%;
     }

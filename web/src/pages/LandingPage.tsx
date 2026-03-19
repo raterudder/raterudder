@@ -6,11 +6,17 @@ import './LandingPage.css';
 const LandingPage: React.FC = () => {
     // Fake data for charts with more "flashy" and realistic variability
     const solarData = React.useMemo(() => {
+        // Use a pseudo-random function so data is consistent between renders
+        const pseudoRandom = (seed: number) => {
+            const x = Math.sin(seed++) * 10000;
+            return x - Math.floor(x);
+        };
+
         return Array.from({ length: 24 }, (_, i) => {
             let base = i >= 6 && i <= 18 ? Math.sin((i - 6) * Math.PI / 12) * 7 : 0;
             // Add some "cloud" dips and atmospheric noise
             if (base > 0) {
-                const noise = 0.9 + Math.random() * 0.2;
+                const noise = 0.9 + pseudoRandom(i) * 0.2;
                 const clouds = (i === 10 || i === 14) ? 0.7 : 1; 
                 base = base * noise * clouds;
             }
@@ -21,18 +27,30 @@ const LandingPage: React.FC = () => {
         });
     }, []);
 
-    const usageData = React.useMemo(() => Array.from({ length: 24 }, (_, i) => ({
-        name: `${i}:00`,
-        usage: parseFloat((.8 + Math.random() * 0.5 + (i > 17 && i < 22 ? 2 : 0) + (i > 6 && i < 9 ? 1.5 : 0)).toFixed(2)),
-    })), []);
+    const usageData = React.useMemo(() => {
+        const pseudoRandom = (seed: number) => {
+            const x = Math.sin(seed++) * 10000;
+            return x - Math.floor(x);
+        };
+        return Array.from({ length: 24 }, (_, i) => ({
+            name: `${i}:00`,
+            usage: parseFloat((.8 + pseudoRandom(i + 100) * 0.5 + (i > 17 && i < 22 ? 2 : 0) + (i > 6 && i < 9 ? 1.5 : 0)).toFixed(2)),
+        }));
+    }, []);
 
-    const batteryData = React.useMemo(() => Array.from({ length: 24 }, (_, i) => {
-        let level = 20;
-        if (i > 8 && i < 17) level = 40 + (i - 8) * 7 + Math.random() * 5;
-        else if (i >= 17) level = 95 - (i - 17) * 8;
-        else level = 30 - i * 1.5;
-        return { name: `${i}:00`, level: Math.min(100, Math.max(0, parseFloat(level.toFixed(1)))) };
-    }), []);
+    const batteryData = React.useMemo(() => {
+        const pseudoRandom = (seed: number) => {
+            const x = Math.sin(seed++) * 10000;
+            return x - Math.floor(x);
+        };
+        return Array.from({ length: 24 }, (_, i) => {
+            let level = 20;
+            if (i > 8 && i < 17) level = 40 + (i - 8) * 7 + pseudoRandom(i + 200) * 5;
+            else if (i >= 17) level = 95 - (i - 17) * 8;
+            else level = 30 - i * 1.5;
+            return { name: `${i}:00`, level: Math.min(100, Math.max(0, parseFloat(level.toFixed(1)))) };
+        });
+    }, []);
 
     const [isMobile, setIsMobile] = React.useState(window.innerWidth < 768);
 
