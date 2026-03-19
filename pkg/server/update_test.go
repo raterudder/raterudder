@@ -1063,12 +1063,14 @@ func TestUpdateWeatherHistory(t *testing.T) {
 
 		now := time.Now().In(loc)
 		midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-		// Set sunset to 1 hour from now
-		sunsetTime := now.Add(1 * time.Hour)
+		// Set sunrise to 2 hours from now
+		sunriseTime := now.Add(2 * time.Hour)
+		sunsetTime := now.Add(3 * time.Hour)
 
 		mockS.On("GetWeather", mock.Anything, "test-site", midnight, mock.Anything).Return([]types.Weather{
 			{
 				TSDayStart:    midnight,
+				TSSunrise:     sunriseTime,
 				TSSunset:      sunsetTime,
 				ForecastHours: make([]types.HourlyWeather, 24),
 			},
@@ -1096,7 +1098,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		mockW.AssertNotCalled(t, "FetchWeatherForecast")
 	})
 
-	t.Run("Updates After Sunset If Tomorrow Missing", func(t *testing.T) {
+	t.Run("Updates Near Sunrise If Tomorrow Missing", func(t *testing.T) {
 		mockS := &mockStorage{}
 
 		loc, err := time.LoadLocation("America/Los_Angeles")
@@ -1104,13 +1106,15 @@ func TestUpdateWeatherHistory(t *testing.T) {
 
 		now := time.Now().In(loc)
 		midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-		// Set sunset to 1 hour ago
-		sunsetTime := now.Add(-1 * time.Hour)
+		// Set sunrise to 1 hour ago
+		sunriseTime := now.Add(time.Minute)
+		sunsetTime := now.Add(2 * time.Hour)
 
 		// First call for today returns 24 hours
 		mockS.On("GetWeather", mock.Anything, "test-site", midnight, mock.Anything).Return([]types.Weather{
 			{
 				TSDayStart:    midnight,
+				TSSunrise:     sunriseTime,
 				TSSunset:      sunsetTime,
 				ForecastHours: make([]types.HourlyWeather, 24),
 			},

@@ -396,8 +396,8 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 	}
 
 	// fetch the next 24 hours of weather if we haven't already fetched it and
-	// it's after sunset of the current day.
-	if fetchStart.IsZero() && len(tomorrowWeather.ForecastHours) < 24 && now.After(todayWeather.TSSunset) {
+	// it's within 1 hour of sunrise of the current day.
+	if fetchStart.IsZero() && len(tomorrowWeather.ForecastHours) < 24 && now.After(todayWeather.TSSunrise.Add(-time.Hour)) {
 		fetchStart = tomorrowStart
 	}
 
