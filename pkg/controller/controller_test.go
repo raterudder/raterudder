@@ -38,9 +38,6 @@ func TestDecide(t *testing.T) {
 		BatteryCapacityKWH: 10.0,
 		MaxBatteryChargeKW: 5.0,
 		HomeKW:             1.0,
-		CanImportBattery:   true,
-		CanExportBattery:   true,
-		CanExportSolar:     true,
 	}
 
 	// Create dummy history for 1kW load constant
@@ -115,7 +112,6 @@ func TestDecide(t *testing.T) {
 		require.NoError(t, err)
 
 		// Should Load (Use battery now because current price is high vs future low)
-		// But since we are discharging (BatteryKW=-1), Load -> NoChange
 		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
 		assert.Equal(t, types.BatteryModeLoad, decision.Action.TargetBatteryMode)
 	})
@@ -508,8 +504,8 @@ func TestDecide(t *testing.T) {
 		decision, err := c.Decide(ctx, status, currentPrice, nil, noLoadHistory, baseSettings)
 		require.NoError(t, err)
 
-		// No deficit, default to Load -> NoChange (discharging)
-		assert.Equal(t, types.BatteryModeNoChange, decision.Action.BatteryMode)
+		// No deficit, default to Load
+		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
 	})
 
 	t.Run("Sufficient Battery + Moderate Price -> Load", func(t *testing.T) {
@@ -619,7 +615,7 @@ func TestDecide(t *testing.T) {
 		assert.Zero(t, decision.Action.FuturePrice, "FuturePrice should be zero for peak discharge")
 	})
 
-	t.Run("NoChange", func(t *testing.T) {
+	t.Run("ExplicitModes", func(t *testing.T) {
 		c := NewController()
 		ctx := context.Background()
 		baseSettings := types.Settings{
@@ -633,25 +629,22 @@ func TestDecide(t *testing.T) {
 			BatteryKW:          0.0,
 			SolarKW:            0.0,
 			HomeKW:             1.0,
-			CanImportBattery:   true,
-			CanExportBattery:   true,
-			CanExportSolar:     true,
 		}
 		// Normal prices, no charge triggers
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.20}
 		history := []types.EnergyStats{}
 
-		t.Run("Already Charging -> NoChange", func(t *testing.T) {
+		t.Run("Already Charging -> NoOverride", func(t *testing.T) {
 			// Setup scenario where it SHOULD charge (Very low price)
 			cheapPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: -0.05, GridUseDollarsPerKWH: -0.05} // Neg price charges always
 
 			status := baseStatus
 			status.BatteryKW = -5.0             // Already Charging
-			status.ElevatedMinBatterySOC = true // Needs to be elevated which implies we successfully set the change last time
+			status.ElevatedMinBatterySOC = true // Previously this would trigger NoChange optimization
 
 			decision, err := c.Decide(ctx, status, cheapPrice, nil, history, baseSettings)
 			require.NoError(t, err)
-			assert.Equal(t, types.BatteryModeNoChange, decision.Action.BatteryMode)
+			assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
 			assert.Equal(t, types.BatteryModeChargeAny, decision.Action.TargetBatteryMode)
 		})
 
@@ -668,7 +661,7 @@ func TestDecide(t *testing.T) {
 			assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
 		})
 
-		t.Run("Battery Full -> NoChange", func(t *testing.T) {
+		t.Run("Battery Full -> NoOverride", func(t *testing.T) {
 			cheapPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: -0.05, GridUseDollarsPerKWH: -0.05}
 
 			status := baseStatus
@@ -677,7 +670,7 @@ func TestDecide(t *testing.T) {
 
 			decision, err := c.Decide(ctx, status, cheapPrice, nil, history, baseSettings)
 			require.NoError(t, err)
-			assert.Equal(t, types.BatteryModeNoChange, decision.Action.BatteryMode)
+			assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
 			assert.Equal(t, types.BatteryModeChargeAny, decision.Action.TargetBatteryMode)
 		})
 
@@ -693,18 +686,18 @@ func TestDecide(t *testing.T) {
 			assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
 		})
 
-		t.Run("Standby Logic: Discharging -> NoChange (Load)", func(t *testing.T) {
+		t.Run("Standby Logic: Discharging -> Load", func(t *testing.T) {
 			status := baseStatus
 			status.BatteryKW = 2.0 // Discharging
 
 			decision, err := c.Decide(ctx, status, currentPrice, nil, history, baseSettings)
 			require.NoError(t, err)
-			// Discharging (-2.0) -> Load (Allow Discharge) -> NoChange (Optimization)
-			assert.Equal(t, types.BatteryModeNoChange, decision.Action.BatteryMode)
+			// Discharging (-2.0) -> Load (Allow Discharge)
+			assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
 			assert.Equal(t, types.BatteryModeLoad, decision.Action.TargetBatteryMode)
 		})
 
-		t.Run("Standby Logic: Charging from Grid -> NoChange (Load)", func(t *testing.T) {
+		t.Run("Standby Logic: Charging from Grid -> Load", func(t *testing.T) {
 			status := baseStatus
 			// Battery charging at 3kW
 			status.BatteryKW = -3.0
@@ -719,11 +712,11 @@ func TestDecide(t *testing.T) {
 
 			decision, err := c.Decide(ctx, status, currentPrice, nil, history, baseSettings)
 			require.NoError(t, err)
-			assert.Equal(t, types.BatteryModeNoChange, decision.Action.BatteryMode)
+			assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
 			assert.Equal(t, types.BatteryModeLoad, decision.Action.TargetBatteryMode)
 		})
 
-		t.Run("Standby Logic: Charging from Solar -> NoChange", func(t *testing.T) {
+		t.Run("Standby Logic: Charging from Solar -> Load", func(t *testing.T) {
 			status := baseStatus
 			// Battery charging at 1kW
 			status.BatteryKW = -1.0
@@ -739,24 +732,23 @@ func TestDecide(t *testing.T) {
 			decision, err := c.Decide(ctx, status, currentPrice, nil, history, baseSettings)
 			require.NoError(t, err)
 			// Charging from Solar -> Load (Allow Discharge/Solar) -> Load (Ensure not Standby)
-			assert.Equal(t, types.BatteryModeNoChange, decision.Action.BatteryMode)
+			assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
 			assert.Equal(t, types.BatteryModeLoad, decision.Action.TargetBatteryMode)
 		})
 
-		t.Run("Standby Logic: Idle -> NoChange", func(t *testing.T) {
+		t.Run("Standby Logic: Idle -> Load", func(t *testing.T) {
 			status := baseStatus
 			status.BatteryKW = 0.0
 
 			decision, err := c.Decide(ctx, status, currentPrice, nil, history, baseSettings)
 			require.NoError(t, err)
 			// Idle -> Load
-			assert.Equal(t, types.BatteryModeNoChange, decision.Action.BatteryMode)
+			assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
 			assert.Equal(t, types.BatteryModeLoad, decision.Action.TargetBatteryMode)
 		})
 
-		t.Run("Solar Mode Match -> NoChange", func(t *testing.T) {
+		t.Run("Solar Mode Match -> NoChange Removed", func(t *testing.T) {
 			status := baseStatus
-			status.CanExportSolar = true
 
 			baseSettings.GridExportSolar = true
 
@@ -764,24 +756,22 @@ func TestDecide(t *testing.T) {
 
 			decision, err := c.Decide(ctx, status, currentPrice, nil, history, baseSettings)
 			require.NoError(t, err)
-			assert.Equal(t, types.SolarModeNoChange, decision.Action.SolarMode)
+			assert.Equal(t, types.SolarModeAny, decision.Action.SolarMode)
 			assert.Equal(t, types.SolarModeAny, decision.Action.TargetSolarMode)
 		})
 
-		t.Run("NoChange Integration check", func(t *testing.T) {
+		t.Run("Explicit Integration check", func(t *testing.T) {
 			status := baseStatus
-			status.CanExportSolar = true
 			status.BatteryKW = 0.0 // Idle
 
 			decision, err := c.Decide(ctx, status, currentPrice, nil, history, baseSettings)
 			require.NoError(t, err)
-			assert.Equal(t, types.BatteryModeNoChange, decision.Action.BatteryMode)
-			assert.Equal(t, types.SolarModeNoChange, decision.Action.SolarMode)
+			assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
+			assert.Equal(t, types.SolarModeAny, decision.Action.SolarMode)
 		})
 
 		t.Run("Solar No Export", func(t *testing.T) {
 			status := baseStatus
-			status.CanExportSolar = true
 
 			baseSettings.GridExportSolar = false
 
@@ -908,9 +898,6 @@ func TestDecide(t *testing.T) {
 			MaxBatteryDischargeKW: 5.0,
 			HomeKW:                1.0,
 			SolarKW:               1.0,
-			CanImportBattery:      true,
-			CanExportBattery:      false, // Can't export battery usually
-			CanExportSolar:        false, // Can't export solar
 			ElevatedMinBatterySOC: true,  // Simulate we are currently in Standby/Full
 		}
 
@@ -1050,8 +1037,6 @@ func TestDecide(t *testing.T) {
 			BatteryCapacityKWH:    10.0,
 			HomeKW:                3.0,
 			SolarKW:               0.0,
-			CanImportBattery:      true,
-			CanExportSolar:        true,
 			ElevatedMinBatterySOC: true,
 		}
 

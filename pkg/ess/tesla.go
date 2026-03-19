@@ -553,7 +553,6 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		MaxBatteryDischargeKW: siteInfo.NameplatePowerW / 1000.0,
 		ElevatedMinBatterySOC: siteInfo.BackupReservePercent > 0 && siteInfo.BackupReservePercent > b.settings.MinBatterySOC,
 		BatteryAboveMinSOC:    liveStatus.PercentageCharged >= siteInfo.BackupReservePercent,
-		// TODO: get CanExportSolar, CanExportBattery, CanImportBattery
 		// TODO: can we get MaxBatteryChargeKW and MaxBatteryDischargeKW
 	}
 

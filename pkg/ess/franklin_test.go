@@ -98,9 +98,6 @@ func TestFranklin(t *testing.T) {
 		assert.Equal(t, 30.0, status.BatteryCapacityKWH, "BatteryCapacityKWH should match")
 		assert.Equal(t, 13.0, status.MaxBatteryChargeKW, "MaxBatteryChargeKW should match 5kW + 8kW")
 		assert.Equal(t, 15.0, status.MaxBatteryDischargeKW, "MaxBatteryDischargeKW should match 5kW + 10kW")
-		assert.True(t, status.CanExportSolar, "CanExportSolar should be true")
-		assert.True(t, status.CanExportBattery, "CanExportBattery should be true")
-		assert.True(t, status.CanImportBattery, "CanImportBattery should be true")
 		assert.True(t, status.ElevatedMinBatterySOC, "ElevatedMinBatterySOC should be true")
 		assert.True(t, status.BatteryAboveMinSOC, "BatteryAboveMinSOC should be true")
 	})
@@ -1451,9 +1448,9 @@ func TestFranklin(t *testing.T) {
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
 				list := []map[string]any{
-					{"id": 20.0, "workMode": 2, "electricityType": 1, "editSocFlag": true},
+					{"id": 20, "workMode": 2, "electricityType": 1, "soc": 20.0, "editSocFlag": true},
 				}
-				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"list": list, "currendId": 20.0}})
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"list": list, "currendId": 20}})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {

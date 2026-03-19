@@ -129,9 +129,6 @@ type SystemStatus struct {
 	SolarKW                 float64       `json:"solarKW"`               // Solar generation (kW)
 	GridKW                  float64       `json:"gridKW"`                // Grid import/export (kW, + import, - export)
 	HomeKW                  float64       `json:"homeKW"`                // Home consumption (kW)
-	CanExportSolar          bool          `json:"canExportSolar"`        // True if solar exporting is enabled
-	CanExportBattery        bool          `json:"canExportBattery"`      // True if battery exporting is enabled
-	CanImportBattery        bool          `json:"canImportBattery"`      // True if battery importing is enabled
 	ElevatedMinBatterySOC   bool          `json:"elevatedMinBatterySOC"` // True if the minimum SOC is elevated to force standby
 	BatteryAboveMinSOC      bool          `json:"batteryAboveMinSOC"`    // True if the battery SOC is above the minimum SOC
 	EmergencyMode           bool          `json:"emergencyMode"`

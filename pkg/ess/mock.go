@@ -325,9 +325,6 @@ func (m *MockESS) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		BatteryCapacityKWH:    10.0,
 		MaxBatteryChargeKW:    5.0,
 		MaxBatteryDischargeKW: 5.0,
-		CanExportSolar:        state.SolarMode != types.SolarModeNoExport,
-		CanExportBattery:      true,
-		CanImportBattery:      state.BatteryMode == types.BatteryModeChargeAny,
 		ElevatedMinBatterySOC: state.BatteryMode != types.BatteryModeLoad,
 		BatteryAboveMinSOC:    false,
 	}, nil

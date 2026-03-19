@@ -5,4 +5,5 @@ config.test.json
 *.har
 *.log
 raterudder
+raterudder.exe
 *.pem

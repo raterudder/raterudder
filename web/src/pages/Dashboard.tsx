@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { useLocation, useSearch, Link } from 'wouter';
-import { BatteryMode, SolarMode, type Action, type SavingsStats, type Settings, fetchActions, fetchSavings, fetchSettings } from '../api';
+import { type Action, type SavingsStats, type Settings, fetchActions, fetchSavings, fetchSettings } from '../api';
 import CurrentStatus from '../components/CurrentStatus';
 import SavingsHero from '../components/SavingsHero';
 import ActionTimeline from '../components/ActionTimeline';
@@ -119,7 +119,6 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
 
         for (const action of visibleActions) {
             const isFault = !!action.fault;
-            const isNoChange = !isFault && action.batteryMode === BatteryMode.NoChange && action.solarMode === SolarMode.NoChange;
             // currentPrice wasn't always optional so check tsStart as well
             const hasPrice = !!action.currentPrice && action.currentPrice.tsStart !== "0001-01-01T00:00:00Z";
             const price = action.currentPrice ? gridChargeCost(action.currentPrice) : 0;
@@ -210,22 +209,18 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
                        }
                     });
                 }
-            } else if (isNoChange) {
-                if (currentSummary && currentSummary.type === 'no_change') {
+            } else {
+                // Group non-fault actions by reason AND batteryMode to create summaries
+                // support old NoChange actions by allowing them to group naturally
+                if (currentSummary && currentSummary.type === 'grouped' && currentSummary.reason === action.reason && currentSummary.latestAction.batteryMode === action.batteryMode) {
                     updateSummary(currentSummary);
                     currentSummary.latestAction = action;
                 } else {
                     if (currentSummary) {
                         accumulator.push(currentSummary);
                     }
-                    currentSummary = createSummary('no_change');
+                    currentSummary = createSummary('grouped');
                 }
-            } else {
-                if (currentSummary) {
-                    accumulator.push(currentSummary);
-                    currentSummary = null;
-                }
-                accumulator.push(action);
             }
         }
 
@@ -236,9 +231,16 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
         return accumulator.map(item => {
             if ('isSummary' in item) {
                 const summary = item as ActionSummaryAccumulator;
+                // If we only have one item in a 'grouped' summary, just return the action itself
+                // so it shows the full detail/description for that hour.
+                if (summary.type === 'grouped' && summary.count === 1) {
+                    return summary.latestAction;
+                }
+
                 const { priceTotal, priceCount, socTotal, socCount, ...rest } = summary;
                 return {
                     ...rest,
+                    endTime: summary.latestAction.timestamp,
                     avgPrice: priceCount > 0 ? priceTotal / priceCount : 0,
                     avgSOC: socCount > 0 ? socTotal / socCount : 0
                 } as ActionSummary;

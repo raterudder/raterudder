@@ -530,11 +530,6 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		return types.SystemStatus{}, err
 	}
 
-	pc, err := f.getPowerControl(ctx)
-	if err != nil {
-		return types.SystemStatus{}, err
-	}
-
 	pcaps, err := f.getPowerCapacityConfigWithCache(ctx)
 	if err != nil {
 		return types.SystemStatus{}, err
@@ -643,9 +638,6 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		HomeKW:                  rd.RuntimeData.PowerLoad,
 		BatteryCapacityKWH:      di.TotalBatteryCapacityKWH,
 		EmergencyMode:           stormHedge || modes.currentMode.WorkMode == 3,
-		CanExportSolar:          pc.GridFeedMaxFlag == franklinGridFeedMaxFlagSolarOnly || pc.GridFeedMaxFlag == franklinGridFeedMaxFlagBatteryAndSolar,
-		CanExportBattery:        pc.GridFeedMaxFlag == franklinGridFeedMaxFlagBatteryAndSolar,
-		CanImportBattery:        pc.GridMaxFlag == franklinGridMaxFlagChargeFromGrid,
 		ElevatedMinBatterySOC:   modes.currentMode.ReserveSOC > 0 && modes.currentMode.ReserveSOC > f.settings.MinBatterySOC,
 		BatteryAboveMinSOC:      rd.RuntimeData.SOC >= modes.currentMode.ReserveSOC,
 		BatteryChargingDisabled: batteryChargingDisabled,
@@ -838,20 +830,8 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 	sc := modes.selfConsumption
 	alreadySC := sc.ID == modes.currentMode.ID
 
-	data := url.Values{}
-	data.Set("gatewayId", f.gatewayID)
-	data.Set("currendId", fmt.Sprint(sc.ID)) // yes, this is misspelled
-	data.Set("workMode", fmt.Sprint(sc.WorkMode))
-	data.Set("electricityType", fmt.Sprint(sc.ElectricityType))
-	data.Set("oldIndex", fmt.Sprint(sc.OldIndex))
-	data.Set("stromEn", fmt.Sprint(modes.stormHedgeEnabled))
-
-	minBatterySOC := f.settings.MinBatterySOC
-	if minBatterySOC < 5 {
-		minBatterySOC = 5
-	}
-
-	soc := sc.ReserveSOC
+	reserveSOC := sc.ReserveSOC
+	newReserveSOC := reserveSOC
 
 	log.Ctx(ctx).DebugContext(ctx, "existing reserve SOC", slog.Float64("reserveSOC", sc.ReserveSOC))
 
@@ -860,7 +840,6 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		return err
 	}
 	var updatedPC bool
-	var updatedModeOrSOC bool
 	switch bat {
 	case types.BatteryModeChargeAny:
 		// if they want to charge the battery then set the SOC to 100 to force it to
@@ -871,8 +850,7 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 			log.Ctx(ctx).WarnContext(ctx, "cannot edit reserve SOC")
 			return errors.New("cannot edit reserve SOC")
 		}
-		soc = 100
-		updatedModeOrSOC = true
+		newReserveSOC = 100
 		if f.settings.GridChargeBatteries {
 			if pc.GridMaxFlag != franklinGridMaxFlagChargeFromGrid {
 				pc.GridMaxFlag = franklinGridMaxFlagChargeFromGrid
@@ -893,8 +871,7 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 			log.Ctx(ctx).WarnContext(ctx, "cannot edit reserve SOC")
 			return errors.New("cannot edit reserve SOC")
 		}
-		soc = 100
-		updatedModeOrSOC = true
+		newReserveSOC = 100
 		if pc.GridMaxFlag != franklinGridMaxFlagNoChargeFromGrid {
 			pc.GridMaxFlag = franklinGridMaxFlagNoChargeFromGrid
 			updatedPC = true
@@ -904,8 +881,7 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		// if we're somehow less than this soc, we'll charge from the solar, unless
 		// solar is unavailable then it'll charge from the grid
 		// it seems like this accepts an int value
-		soc = minBatterySOC
-		updatedModeOrSOC = true
+		newReserveSOC = f.settings.MinBatterySOC
 		if f.settings.GridChargeBatteries {
 			if pc.GridMaxFlag != franklinGridMaxFlagChargeFromGrid {
 				pc.GridMaxFlag = franklinGridMaxFlagChargeFromGrid
@@ -918,10 +894,6 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 			}
 		}
 	case types.BatteryModeStandby:
-		rd, err := f.getRuntimeData(ctx)
-		if err != nil {
-			return err
-		}
 		// we floor the SOC to ensure we don't set it to a value that would cause the
 		// battery to charge
 		// make sure we don't set it to less than the minimum battery SOC
@@ -929,8 +901,7 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 			log.Ctx(ctx).WarnContext(ctx, "cannot edit reserve SOC")
 			return errors.New("cannot edit reserve SOC")
 		}
-		soc = math.Max(math.Floor(rd.RuntimeData.SOC), minBatterySOC)
-		updatedModeOrSOC = true
+		newReserveSOC = math.Max(math.Floor(rd.RuntimeData.SOC), f.settings.MinBatterySOC)
 		if pc.GridMaxFlag != franklinGridMaxFlagNoChargeFromGrid {
 			pc.GridMaxFlag = franklinGridMaxFlagNoChargeFromGrid
 			updatedPC = true
@@ -941,9 +912,12 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		return fmt.Errorf("unknown battery mode: %v", bat)
 	}
 
-	// round to the nearest integer to minimize the chance of the battery charging
-	// or discharging when we don't want it to
-	data.Set("soc", strconv.Itoa(int(math.Round(soc))))
+	// we can't set it below 5
+	if newReserveSOC < 5 {
+		newReserveSOC = 5
+	}
+
+	updatedSOC := math.Round(newReserveSOC) != math.Round(sc.ReserveSOC)
 
 	switch sol {
 	case types.SolarModeAny:
@@ -977,21 +951,21 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		return fmt.Errorf("unknown solar mode: %v", sol)
 	}
 
-	if updatedModeOrSOC {
+	if !alreadySC || updatedSOC {
 		if f.settings.DryRun {
 			if alreadySC {
 				log.Ctx(ctx).DebugContext(
 					ctx,
 					"dry run: would've updated just soc",
-					slog.String("soc", data.Get("soc")),
-					slog.String("workMode", data.Get("workMode")),
+					slog.Int("soc", int(math.Round(newReserveSOC))),
+					slog.Int("workMode", sc.WorkMode),
 				)
 			} else {
 				log.Ctx(ctx).DebugContext(
 					ctx,
 					"dry run: would've tou mode",
-					slog.String("soc", data.Get("soc")),
-					slog.String("workMode", data.Get("workMode")),
+					slog.Int("soc", int(math.Round(newReserveSOC))),
+					slog.Int("workMode", sc.WorkMode),
 				)
 			}
 		} else {
@@ -999,14 +973,16 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 				log.Ctx(ctx).InfoContext(
 					ctx,
 					"updating franklin soc",
-					slog.String("soc", data.Get("soc")),
-					slog.String("workMode", data.Get("workMode")),
+					slog.Int("soc", int(math.Round(newReserveSOC))),
+					slog.Int("workMode", sc.WorkMode),
 				)
 				params := url.Values{}
 				params.Set("gatewayId", f.gatewayID)
 				params.Set("workMode", strconv.Itoa(sc.WorkMode))
 				params.Set("electricityType", strconv.Itoa(sc.ElectricityType))
-				params.Set("soc", data.Get("soc"))
+				// round to the nearest integer to minimize the chance of the battery charging
+				// or discharging when we don't want it to
+				params.Set("soc", strconv.Itoa(int(math.Round(newReserveSOC))))
 
 				req, err := f.newPostQueryRequest(ctx, "hes-gateway/terminal/tou/updateSocV2", params)
 				if err != nil {
@@ -1020,10 +996,22 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 				log.Ctx(ctx).InfoContext(
 					ctx,
 					"updating franklin tou mode",
-					slog.String("soc", data.Get("soc")),
-					slog.String("workMode", data.Get("workMode")),
+					slog.Int("soc", int(math.Round(newReserveSOC))),
+					slog.Int("workMode", sc.WorkMode),
 				)
-				req, err := f.newPostQueryRequest(ctx, "hes-gateway/terminal/tou/updateTouModeV2", data)
+
+				params := url.Values{}
+				params.Set("gatewayId", f.gatewayID)
+				params.Set("currendId", fmt.Sprint(sc.ID)) // yes, this is misspelled
+				params.Set("workMode", fmt.Sprint(sc.WorkMode))
+				params.Set("electricityType", fmt.Sprint(sc.ElectricityType))
+				params.Set("oldIndex", fmt.Sprint(sc.OldIndex))
+				params.Set("stromEn", fmt.Sprint(modes.stormHedgeEnabled))
+				// round to the nearest integer to minimize the chance of the battery charging
+				// or discharging when we don't want it to
+				params.Set("soc", strconv.Itoa(int(math.Round(newReserveSOC))))
+
+				req, err := f.newPostQueryRequest(ctx, "hes-gateway/terminal/tou/updateTouModeV2", params)
 				if err != nil {
 					return err
 				}

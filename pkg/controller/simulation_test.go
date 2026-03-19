@@ -442,8 +442,6 @@ func TestSimulateState(t *testing.T) {
 			BatterySOC:            50.0, // 5.0 kWh
 			BatteryKW:             0,
 			Timestamp:             now,
-			CanImportBattery:      true,
-			CanExportSolar:        true,
 			MaxBatteryChargeKW:    5.0,
 			MaxBatteryDischargeKW: 5.0,
 		}
@@ -538,8 +536,6 @@ func TestSimulateState(t *testing.T) {
 			BatterySOC:            50.0,
 			BatteryKW:             0,
 			Timestamp:             now,
-			CanImportBattery:      true,
-			CanExportSolar:        true,
 			MaxBatteryChargeKW:    5.0,
 			MaxBatteryDischargeKW: 5.0,
 		}

@@ -61,117 +61,13 @@ func (c *Controller) Decide(
 		// We do NOT return here. We fall through to allow charging logic to trigger.
 	}
 
-	// Helper to determine final action with "No Change" optimizations
-	finalizeAction := func(batteryMode types.BatteryMode, reason types.ActionReason, modeReason string, futurePrice *types.Price, hitDeficitAt time.Time, hitCapacityAt time.Time) Decision {
-		finalBatMode := batteryMode
-		switch batteryMode {
-		case types.BatteryModeChargeAny:
-			// If we want to charge, and we are already charging (negative BatteryKW),
-			// then don't change anything.
-			// we might not be charging if Battery is already full
-			// also make sure we've elevated the min SOC to force charging
-			if (currentStatus.BatteryKW < 0 || currentStatus.BatterySOC >= 99) && currentStatus.ElevatedMinBatterySOC && (!settings.GridChargeBatteries || currentStatus.CanImportBattery) {
-				finalBatMode = types.BatteryModeNoChange
-			}
-		case types.BatteryModeChargeSolar:
-			// If we want to charge from solar, and we are already charging from
-			// only solar (negative BatteryKW), then don't change anything.
-			// we might not be charging if Battery is already full
-			// also make sure we've elevated the min SOC to force charging
-			if (currentStatus.BatteryKW < 0 || currentStatus.BatterySOC >= 99) && currentStatus.ElevatedMinBatterySOC && !currentStatus.CanImportBattery {
-				finalBatMode = types.BatteryModeNoChange
-			}
-		case types.BatteryModeStandby:
-			// If we want to standby:
-			// 1. If charging (BatteryKW < 0), we must change to Stop charging.
-			// 2. If effectively charging from grid, we want to stop
-			// 3. If charging from solar, we can't stop that so assume standby
-			// 4. If Idle (BatteryKW == 0), return NoChange.
-
-			// battery is charging from the grid if the battery charge rate exceeds
-			// the solar surplus (solar generation minus home consumption)
-			// give a little bit of tolerance to account for energy losses/floats/etc
-			isChargingFromGrid := false
-			if currentStatus.BatteryKW < -0.1 && currentStatus.GridKW > 0 {
-				solarSurplus := currentStatus.SolarKW - currentStatus.HomeKW
-				// remember BatteryKW is negative when charging
-				// give a little bit of tolerance to account for energy losses/floats/etc
-				if solarSurplus < 0 || solarSurplus+currentStatus.BatteryKW > 0.1 {
-					isChargingFromGrid = true
-				}
-			}
-
-			log.Ctx(ctx).DebugContext(
-				ctx,
-				"determined if we are charging from grid for standby calculation",
-				slog.Float64("batteryKW", currentStatus.BatteryKW),
-				slog.Float64("gridKW", currentStatus.GridKW),
-				slog.Float64("solarKW", currentStatus.SolarKW),
-				slog.Float64("homeKW", currentStatus.HomeKW),
-				slog.Bool("isChargingFromGrid", isChargingFromGrid),
-				slog.Float64("batterySOC", currentStatus.BatterySOC),
-				slog.Bool("batteryAboveMinSOC", currentStatus.BatteryAboveMinSOC),
-				slog.Bool("elevatedMinBatterySOC", currentStatus.ElevatedMinBatterySOC),
-			)
-
-			if currentStatus.BatteryKW > 0 {
-				// we're using the battery but it might be because we're greater than
-				// the elevated reserve SOC and maybe solar was charging us up
-				if currentStatus.BatteryAboveMinSOC && currentStatus.ElevatedMinBatterySOC {
-					// we're already above reserve SOC and we've elevated the reserve SOC
-					// probably because of a previous standby request
-					finalBatMode = types.BatteryModeNoChange
-				}
-				// discharging, switch to standby
-			} else if isChargingFromGrid {
-				// charging from grid, switch to standby
-			} else if currentStatus.BatteryKW < 0 {
-				// charging from solar (not grid), ignore
-				finalBatMode = types.BatteryModeNoChange
-			} else {
-				// already standby, ignore
-				finalBatMode = types.BatteryModeNoChange
-			}
-		case types.BatteryModeNoChange:
-			// nothing to do
-		case types.BatteryModeLoad:
-			log.Ctx(ctx).DebugContext(
-				ctx,
-				"determined if we are using the battery as much as possible",
-				slog.Float64("batterySOC", currentStatus.BatterySOC),
-				slog.Float64("minBatterySOC", settings.MinBatterySOC),
-				slog.Bool("elevatedMinBatterySOC", currentStatus.ElevatedMinBatterySOC),
-				slog.Bool("gridChargeBatteries", settings.GridChargeBatteries),
-				slog.Bool("canImportBattery", currentStatus.CanImportBattery),
-			)
-			// if the minimum SOC is not elevated then we're already using the battery
-			// as much as possible
-			if !currentStatus.ElevatedMinBatterySOC && (!settings.GridChargeBatteries || currentStatus.CanImportBattery) {
-				finalBatMode = types.BatteryModeNoChange
-			}
-		default:
-		}
-
-		// Check Solar Mode
-		finalSolarMode := solarMode
-		switch solarMode {
-		case types.SolarModeNoExport:
-			if !currentStatus.CanExportSolar {
-				finalSolarMode = types.SolarModeNoChange
-			}
-		case types.SolarModeAny:
-			if currentStatus.CanExportSolar {
-				finalSolarMode = types.SolarModeNoChange
-			}
-		case types.SolarModeNoChange:
-			// nothing to do
-		}
-
+	// Helper to build final action
+	decision := func(batteryMode types.BatteryMode, reason types.ActionReason, modeReason string, futurePrice *types.Price, hitDeficitAt time.Time, hitCapacityAt time.Time) Decision {
 		return Decision{
 			Action: types.Action{
 				Timestamp:         now.UTC(),
-				BatteryMode:       finalBatMode,
-				SolarMode:         finalSolarMode,
+				BatteryMode:       batteryMode,
+				SolarMode:         solarMode,
 				TargetBatteryMode: batteryMode,
 				TargetSolarMode:   solarMode,
 				Reason:            reason,
@@ -187,7 +83,7 @@ func (c *Controller) Decide(
 
 	capacityKWH := currentStatus.BatteryCapacityKWH
 	if capacityKWH <= 0 {
-		return finalizeAction(types.BatteryModeStandby, types.ActionReasonMissingBattery, "Battery Config Missing or Capacity 0. Standby.", nil, time.Time{}, time.Time{}), nil
+		return decision(types.BatteryModeStandby, types.ActionReasonMissingBattery, "Battery Config Missing or Capacity 0. Standby.", nil, time.Time{}, time.Time{}), nil
 	}
 
 	gridChargeNowCost := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
@@ -204,7 +100,7 @@ func (c *Controller) Decide(
 		}
 		// If negative, we charge.
 		log.Ctx(ctx).DebugContext(ctx, "price below always charge threshold", slog.Float64("price", gridChargeNowCost), slog.Float64("threshold", settings.AlwaysChargeUnderDollarsPerKWH))
-		return finalizeAction(types.BatteryModeChargeAny, types.ActionReasonAlwaysChargeBelowThreshold, desc, nil, time.Time{}, time.Time{}), nil
+		return decision(types.BatteryModeChargeAny, types.ActionReasonAlwaysChargeBelowThreshold, desc, nil, time.Time{}, time.Time{}), nil
 	}
 
 	// Rule 3: Charge now if its cheaper than later, if we will run out of energy
@@ -480,7 +376,7 @@ func (c *Controller) Decide(
 	// if we should charge, return now.
 	if shouldCharge {
 		desc := fmt.Sprintf("Charging Optimized: %s", chargeDescription)
-		return finalizeAction(types.BatteryModeChargeAny, chargeActionReason, desc, futurePrice, hitDeficitAt, hitCapacityAt), nil
+		return decision(types.BatteryModeChargeAny, chargeActionReason, desc, futurePrice, hitDeficitAt, hitCapacityAt), nil
 	}
 
 	// Rule 4: Logic for Battery Usage vs Standby
@@ -509,7 +405,7 @@ func (c *Controller) Decide(
 				slog.Time("hitDeficitAt", hitDeficitAt),
 				slog.String("reason", string(reason)),
 			)
-			return finalizeAction(types.BatteryModeLoad, reason, loadReason, nil, hitDeficitAt, hitCapacityAt), nil
+			return decision(types.BatteryModeLoad, reason, loadReason, nil, hitDeficitAt, hitCapacityAt), nil
 		}
 
 		// We are going to run out. Should we save it?
@@ -528,7 +424,7 @@ func (c *Controller) Decide(
 					slog.Float64("maxFutureGridChargeCost", maxFutureGridChargeCost),
 					slog.Float64("gridChargeNowCost", gridChargeNowCost),
 				)
-				return finalizeAction(types.BatteryModeStandby, types.ActionReasonWaitingToCharge, standbyReason, &plannedChargePrice, hitDeficitAt, hitCapacityAt), nil
+				return decision(types.BatteryModeStandby, types.ActionReasonWaitingToCharge, standbyReason, &plannedChargePrice, hitDeficitAt, hitCapacityAt), nil
 			}
 
 			standbyReason := fmt.Sprintf("Deficit predicted at %s and higher prices at %s ($%.3f < $%.3f).", hitDeficitAt.Format(time.Kitchen), maxFutureGridChargeTime.Format(time.Kitchen), gridChargeNowCost, maxFutureGridChargeCost)
@@ -542,7 +438,7 @@ func (c *Controller) Decide(
 				slog.Time("plannedChargeTime", plannedChargeTime),
 				slog.Float64("plannedChargeCost", plannedChargeCost),
 			)
-			return finalizeAction(types.BatteryModeStandby, types.ActionReasonDeficitSaveForPeak, standbyReason, &maxFutureGridChargePrice, hitDeficitAt, hitCapacityAt), nil
+			return decision(types.BatteryModeStandby, types.ActionReasonDeficitSaveForPeak, standbyReason, &maxFutureGridChargePrice, hitDeficitAt, hitCapacityAt), nil
 		}
 		// If we are at the peak (or flat), use it until empty.
 		log.Ctx(ctx).DebugContext(
@@ -550,7 +446,7 @@ func (c *Controller) Decide(
 			"deficit predicted but at peak price",
 			slog.Float64("currentPrice", currentPrice.DollarsPerKWH),
 		)
-		return finalizeAction(types.BatteryModeLoad, types.ActionReasonArbitrageSave, "Deficit predicted but Current Price is Peak.", nil, hitDeficitAt, hitCapacityAt), nil
+		return decision(types.BatteryModeLoad, types.ActionReasonArbitrageSave, "Deficit predicted but Current Price is Peak.", nil, hitDeficitAt, hitCapacityAt), nil
 	}
 
 	// No deficit predicted, use battery.
@@ -560,5 +456,5 @@ func (c *Controller) Decide(
 		slog.Float64("minEnergy", minEnergy),
 		slog.Float64("maxEnergy", maxEnergy),
 	)
-	return finalizeAction(types.BatteryModeLoad, types.ActionReasonSufficientBattery, "Sufficient battery.", nil, hitDeficitAt, hitCapacityAt), nil
+	return decision(types.BatteryModeLoad, types.ActionReasonSufficientBattery, "Sufficient battery.", nil, hitDeficitAt, hitCapacityAt), nil
 }

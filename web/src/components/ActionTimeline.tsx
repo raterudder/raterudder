@@ -26,7 +26,7 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
                     const isEmergency = isFault && summary.reason === ActionReason.EmergencyMode;
                     const hasStorms = isEmergency && summary.storms && summary.storms.size > 0;
 
-                    let title = isFault ? 'System Fault' : 'No Change';
+                    let title = isFault ? 'System Fault' : getBatteryModeLabel(summary.latestAction.batteryMode);
                     let description = '';
 
                     if (isEmergency) {
@@ -47,6 +47,9 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
                         <li key={index} className={`action-item summary-item ${isFault ? 'fault-item' : ''} ${isEmergency ? 'emergency-item' : ''}`}>
                             <div className="action-time">
                                 {formatTime(summary.startTime)}
+                                {summary.count > 1 && summary.endTime && (
+                                    <> - {formatTime(summary.endTime)}</>
+                                )}
                             </div>
                             <div className="action-details">
                                 <h3>{title} {summary.count > 1 && <span>({summary.count}x)</span>}</h3>

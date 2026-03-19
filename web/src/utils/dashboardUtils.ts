@@ -177,7 +177,7 @@ export const getReasonText = (action: Action): string => {
             return action.description || `Unknown reason: ${reason}`;
     }
 };
-export type SummaryType = 'no_change' | 'fault';
+export type SummaryType = 'no_change' | 'fault' | 'grouped';
 
 export interface ActionSummary {
     isSummary: true;
@@ -185,6 +185,7 @@ export interface ActionSummary {
     reason?: ActionReason;
     latestAction: Action;
     startTime: string;
+    endTime?: string;
     avgPrice: number;
     min: number;
     max: number;
