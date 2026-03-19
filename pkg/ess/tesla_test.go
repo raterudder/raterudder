@@ -542,4 +542,159 @@ func TestTesla(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, stats)
 	})
+
+	t.Run("SetModes", func(t *testing.T) {
+		setupTesla := func(t *testing.T, initialMode string, initialSOC float64, initialGrid bool, initialExport string, liveSOC float64, stormMode bool, settings types.Settings) (*Tesla, *httptest.Server, *bool, *bool, *bool, *map[string]any) {
+			modeCalled := false
+			backupCalled := false
+			gridCalled := false
+			lastReq := make(map[string]any)
+
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/1/energy_sites/1234/site_info":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"backup_reserve_percent": initialSOC,
+							"default_real_mode":      initialMode,
+							"components": map[string]any{
+								"customer_preferred_export_rule":                 initialExport,
+								"disallow_charge_from_grid_with_solar_installed": initialGrid,
+							},
+						},
+					})
+				case "/api/1/energy_sites/1234/live_status":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"percentage_charged": liveSOC,
+							"storm_mode_active":  stormMode,
+						},
+					})
+				case "/api/1/energy_sites/1234/operation":
+					modeCalled = true
+					json.NewDecoder(r.Body).Decode(&lastReq)
+					json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 200}})
+				case "/api/1/energy_sites/1234/backup":
+					backupCalled = true
+					json.NewDecoder(r.Body).Decode(&lastReq)
+					json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 200}})
+				case "/api/1/energy_sites/1234/grid_import_export":
+					gridCalled = true
+					json.NewDecoder(r.Body).Decode(&lastReq)
+					json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 200}})
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "test-site", settings)
+			require.NoError(t, err)
+			teslaSys := sys.(*Tesla)
+			teslaSys.token = "mock-access"
+			teslaSys.energySiteID = 1234
+			teslaSys.baseURL = ts.URL
+
+			return teslaSys, ts, &modeCalled, &backupCalled, &gridCalled, &lastReq
+		}
+
+		t.Run("No changes needed", func(t *testing.T) {
+			sys, ts, mode, backup, grid, _ := setupTesla(t, "self_consumption", 20.0, false, "battery_ok", 50.0, false, types.Settings{
+				ESS:                 "tesla",
+				MinBatterySOC:       20.0,
+				GridChargeBatteries: true,
+				GridExportSolar:     true,
+				GridExportBatteries: true,
+			})
+			defer ts.Close()
+
+			err := sys.SetModes(ctx, types.BatteryModeLoad, types.SolarModeAny)
+			require.NoError(t, err)
+			assert.False(t, *mode)
+			assert.False(t, *backup)
+			assert.False(t, *grid)
+		})
+
+		t.Run("No change requested", func(t *testing.T) {
+			sys, ts, mode, backup, grid, _ := setupTesla(t, "autonomous", 20.0, true, "pv_only", 50.0, false, types.Settings{ESS: "tesla"})
+			defer ts.Close()
+
+			err := sys.SetModes(ctx, types.BatteryModeNoChange, types.SolarModeNoChange)
+			require.NoError(t, err)
+			assert.False(t, *mode)
+			assert.False(t, *backup)
+			assert.False(t, *grid)
+		})
+
+		t.Run("ChargeAny", func(t *testing.T) {
+			sys, ts, mode, backup, grid, lastReq := setupTesla(t, "autonomous", 20.0, true, "pv_only", 50.0, false, types.Settings{
+				ESS:                 "tesla",
+				GridChargeBatteries: true,
+				GridExportSolar:     true,
+				GridExportBatteries: true,
+			})
+			defer ts.Close()
+
+			err := sys.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeAny)
+			require.NoError(t, err)
+			assert.True(t, *mode)
+			assert.True(t, *backup)
+			assert.True(t, *grid)
+
+			// Check one of the payloads to ensure correctness
+			assert.False(t, (*lastReq)["disallow_charge_from_grid_with_solar_installed"].(bool))
+			assert.Equal(t, "battery_ok", (*lastReq)["customer_preferred_export_rule"])
+		})
+
+		t.Run("ChargeSolar", func(t *testing.T) {
+			sys, ts, _, backup, grid, lastReq := setupTesla(t, "self_consumption", 20.0, false, "battery_ok", 50.0, false, types.Settings{ESS: "tesla"})
+			defer ts.Close()
+
+			err := sys.SetModes(ctx, types.BatteryModeChargeSolar, types.SolarModeNoExport)
+			require.NoError(t, err)
+			assert.True(t, *backup)
+			assert.True(t, *grid)
+			assert.Equal(t, 100.0, (*lastReq)["backup_reserve_percent"])
+			assert.Equal(t, "never", (*lastReq)["customer_preferred_export_rule"])
+		})
+
+		t.Run("Standby below min SOC", func(t *testing.T) {
+			sys, ts, _, backup, grid, lastReq := setupTesla(t, "self_consumption", 20.0, false, "pv_only", 15.0, false, types.Settings{
+				ESS:           "tesla",
+				MinBatterySOC: 20.0,
+			})
+			defer ts.Close()
+
+			err := sys.SetModes(ctx, types.BatteryModeStandby, types.SolarModeNoChange)
+			require.NoError(t, err)
+			// Target is floor(15) = 15, which is < 20, so target should be 20.
+			// Since initial SOC is already 20, backup update should NOT be called.
+			assert.False(t, *backup)
+			assert.True(t, *grid)
+			assert.True(t, (*lastReq)["disallow_charge_from_grid_with_solar_installed"].(bool))
+		})
+
+		t.Run("Standby above min SOC", func(t *testing.T) {
+			sys, ts, _, backup, grid, lastReq := setupTesla(t, "self_consumption", 20.0, false, "pv_only", 55.6, false, types.Settings{
+				ESS:           "tesla",
+				MinBatterySOC: 20.0,
+			})
+			defer ts.Close()
+
+			err := sys.SetModes(ctx, types.BatteryModeStandby, types.SolarModeNoChange)
+			require.NoError(t, err)
+			assert.True(t, *backup)
+			assert.True(t, *grid)
+			assert.Equal(t, 55.0, (*lastReq)["backup_reserve_percent"])
+		})
+
+		t.Run("Storm mode active", func(t *testing.T) {
+			sys, ts, _, _, _, _ := setupTesla(t, "self_consumption", 20.0, false, "pv_only", 55.0, true, types.Settings{ESS: "tesla"})
+			defer ts.Close()
+
+			err := sys.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeAny)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "device is in storm mode")
+		})
+	})
 }

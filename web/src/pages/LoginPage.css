@@ -20,6 +20,7 @@
   background-image: radial-gradient(rgba(65, 71, 85, 0.1) 1px, transparent 1px);
   background-size: 24px 24px;
   z-index: 0;
+  pointer-events: none;
 }
 
 .google-btn-wrapper {
@@ -133,41 +134,7 @@
   font-size: 0.9rem;
 }
 
-.beta-interstitial-select-trigger {
-  width: 100%;
-  padding: 0.75rem 1rem;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  font-size: 1rem;
-  background-color: var(--surface);
-  color: var(--text-primary);
-  cursor: pointer;
-  outline: none;
-  transition: border-color 0.2s;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
 
-.beta-interstitial-select-popup {
-  min-width: var(--anchor-width);
-  background-color: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-md);
-  overflow: hidden;
-}
-
-.beta-interstitial-select-item {
-  padding: 0.75rem 1rem;
-  cursor: pointer;
-  outline: none;
-  color: var(--text-primary);
-}
-
-.beta-interstitial-select-item[data-highlighted] {
-  background-color: var(--surface-subtle);
-}
 
 .beta-interstitial-feedback {
   margin-top: 2rem;
@@ -199,18 +166,20 @@
 .beta-interstitial-continue-btn {
   margin-top: 2rem;
   width: 100%;
-  padding: 0.875rem;
-  background-color: var(--accent);
-  color: white;
+  padding: 1rem;
+  background-color: var(--primary);
+  color: var(--on-primary);
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   cursor: pointer;
-  font-weight: 600;
+  font-weight: 700;
   font-size: 1rem;
-  transition: background-color 0.2s;
-  box-shadow: var(--shadow-sm);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
 .beta-interstitial-continue-btn:hover {
-  background-color: var(--accent-hover);
+  background-color: var(--primary-glow);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 24px rgba(75, 142, 255, 0.3);
 }

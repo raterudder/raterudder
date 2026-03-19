@@ -212,7 +212,7 @@ function AppContent() {
                             {/* Protected Routes */}
                             <Route path="/welcome">
                                 <ProtectedRoute loggedIn={loggedIn} loading={loading}>
-                                    {effectiveSites.length > 0 ? (
+                                    {effectiveSites.length > 0 && false ? (
                                         <Redirect to="/dashboard" replace />
                                     ) : (
                                         <BetaInterstitialPage />

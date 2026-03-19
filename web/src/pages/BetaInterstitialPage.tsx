@@ -12,7 +12,7 @@ const BetaInterstitialPage: React.FC = () => {
 
     const isSupported = (
         (utility === 'ameren' || utility === 'comed') &&
-        battery === 'franklin'
+        (battery === 'franklin' || battery === 'tesla')
     );
     const isOther = (utility === 'other' || battery === 'other');
 
@@ -35,7 +35,7 @@ const BetaInterstitialPage: React.FC = () => {
                             value={utility}
                             onValueChange={(value) => setUtility(value as string)}
                         >
-                            <Select.Trigger aria-labelledby="utility-label" className="beta-interstitial-select-trigger">
+                            <Select.Trigger aria-labelledby="utility-label" className="select-trigger">
                                 <Select.Value placeholder="Select your utility...">
                                     {utility === 'ameren' ? 'Ameren' : utility === 'comed' ? 'ComEd' : utility === 'other' ? 'Other' : 'Select your utility...'}
                                 </Select.Value>
@@ -47,14 +47,14 @@ const BetaInterstitialPage: React.FC = () => {
                             </Select.Trigger>
                             <Select.Portal>
                                 <Select.Positioner style={{ zIndex: 1000, width: 'var(--anchor-width)' }}>
-                                    <Select.Popup className="beta-interstitial-select-popup">
-                                        <Select.Item value="ameren" className="beta-interstitial-select-item">
+                                    <Select.Popup className="select-popup">
+                                        <Select.Item value="ameren" className="select-item">
                                             <Select.ItemText>Ameren</Select.ItemText>
                                         </Select.Item>
-                                        <Select.Item value="comed" className="beta-interstitial-select-item">
+                                        <Select.Item value="comed" className="select-item">
                                             <Select.ItemText>ComEd</Select.ItemText>
                                         </Select.Item>
-                                        <Select.Item value="other" className="beta-interstitial-select-item">
+                                        <Select.Item value="other" className="select-item">
                                             <Select.ItemText>Other</Select.ItemText>
                                         </Select.Item>
                                     </Select.Popup>
@@ -69,9 +69,9 @@ const BetaInterstitialPage: React.FC = () => {
                             value={battery}
                             onValueChange={(value) => setBattery(value as string)}
                         >
-                            <Select.Trigger aria-labelledby="battery-label" className="beta-interstitial-select-trigger">
+                            <Select.Trigger aria-labelledby="battery-label" className="select-trigger">
                                 <Select.Value placeholder="Select your battery...">
-                                    {battery === 'franklin' ? 'FranklinWH' : battery === 'other' ? 'Other' : 'Select your battery...'}
+                                    {battery === 'franklin' ? 'FranklinWH' : battery === 'tesla' ? 'Tesla' : battery === 'other' ? 'Other' : 'Select your battery...'}
                                 </Select.Value>
                                 <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
                                     <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -81,11 +81,14 @@ const BetaInterstitialPage: React.FC = () => {
                             </Select.Trigger>
                             <Select.Portal>
                                 <Select.Positioner style={{ zIndex: 1000, width: 'var(--anchor-width)' }}>
-                                    <Select.Popup className="beta-interstitial-select-popup">
-                                        <Select.Item value="franklin" className="beta-interstitial-select-item">
+                                    <Select.Popup className="select-popup">
+                                        <Select.Item value="franklin" className="select-item">
                                             <Select.ItemText>FranklinWH</Select.ItemText>
                                         </Select.Item>
-                                        <Select.Item value="other" className="beta-interstitial-select-item">
+                                        <Select.Item value="tesla" className="select-item">
+                                            <Select.ItemText>Tesla</Select.ItemText>
+                                        </Select.Item>
+                                        <Select.Item value="other" className="select-item">
                                             <Select.ItemText>Other</Select.ItemText>
                                         </Select.Item>
                                     </Select.Popup>

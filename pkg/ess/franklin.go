@@ -896,11 +896,11 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 	case types.BatteryModeStandby:
 		// we floor the SOC to ensure we don't set it to a value that would cause the
 		// battery to charge
-		// make sure we don't set it to less than the minimum battery SOC
 		if !sc.CanEditReserveSOC {
 			log.Ctx(ctx).WarnContext(ctx, "cannot edit reserve SOC")
 			return errors.New("cannot edit reserve SOC")
 		}
+		// make sure we don't set it to less than the minimum battery SOC
 		newReserveSOC = math.Max(math.Floor(rd.RuntimeData.SOC), f.settings.MinBatterySOC)
 		if pc.GridMaxFlag != franklinGridMaxFlagNoChargeFromGrid {
 			pc.GridMaxFlag = franklinGridMaxFlagNoChargeFromGrid
@@ -917,7 +917,7 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		newReserveSOC = 5
 	}
 
-	updatedSOC := math.Round(newReserveSOC) != math.Round(sc.ReserveSOC)
+	updatedSOC := math.Round(newReserveSOC) != math.Round(reserveSOC)
 
 	switch sol {
 	case types.SolarModeAny:
@@ -996,7 +996,8 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 				log.Ctx(ctx).InfoContext(
 					ctx,
 					"updating franklin tou mode",
-					slog.Int("soc", int(math.Round(newReserveSOC))),
+					slog.Float64("soc", newReserveSOC),
+					slog.Float64("previous", reserveSOC),
 					slog.Int("workMode", sc.WorkMode),
 				)
 

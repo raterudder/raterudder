@@ -30,6 +30,22 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
+    const whatsNewVersion = 1;
+    const whatsNewText = "Updated design and improved Hold Battery performance.";
+    const [showWhatsNew, setShowWhatsNew] = useState(false);
+
+    useEffect(() => {
+        const storedVersion = localStorage.getItem('whats_new_banner_version');
+        if (!storedVersion || parseInt(storedVersion, 10) < whatsNewVersion) {
+            setShowWhatsNew(true);
+        }
+    }, []);
+
+    const dismissWhatsNew = () => {
+        localStorage.setItem('whats_new_banner_version', whatsNewVersion.toString());
+        setShowWhatsNew(false);
+    };
+
     const currentDate = useMemo(() => {
         if (dateQuery) {
             const parts = dateQuery.split('-');
@@ -209,13 +225,13 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 }
             } else {
                 // Group non-fault actions
-                const effectiveBatteryMode = action.batteryMode === BatteryMode.NoChange && currentSummary 
-                    ? currentSummary.latestAction.batteryMode 
+                const effectiveBatteryMode = action.batteryMode === BatteryMode.NoChange && currentSummary
+                    ? currentSummary.latestAction.batteryMode
                     : action.batteryMode;
 
                 if (
-                    currentSummary && 
-                    currentSummary.type === 'grouped' && 
+                    currentSummary &&
+                    currentSummary.type === 'grouped' &&
                     (
                         (currentSummary.reason === action.reason && currentSummary.latestAction.batteryMode === effectiveBatteryMode) ||
                         (action.batteryMode === BatteryMode.NoChange)
@@ -224,7 +240,7 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     updateSummary(currentSummary);
                     currentSummary.latestAction = {
                         ...action,
-                        batteryMode: effectiveBatteryMode 
+                        batteryMode: effectiveBatteryMode
                     };
                 } else {
                     if (currentSummary) {
@@ -283,6 +299,14 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
 
             {!loading && !error && (
                 <>
+                    {showWhatsNew && (
+                        <div className="banner info-banner" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <p>
+                                <strong>What's New:</strong> {whatsNewText}
+                            </p>
+                            <button onClick={dismissWhatsNew} style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: '1.5rem', padding: '0 8px', lineHeight: 1 }} aria-label="Dismiss">&times;</button>
+                        </div>
+                    )}
                     {settings && (!settings.utilityProvider || settings.utilityProvider === "") && (
                         <div className="banner warning-banner">
                             <p>

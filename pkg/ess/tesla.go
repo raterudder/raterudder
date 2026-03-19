@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -26,6 +27,12 @@ import (
 
 // from: https://developer.tesla.com/docs/fleet-api/authentication/overview#scopes
 const teslaScopes = "openid offline_access energy_cmds energy_device_data"
+
+const (
+	teslaExportRuleBatteryOk = "battery_ok"
+	teslaExportRulePvOnly    = "pv_only"
+	teslaExportRuleNever     = "never"
+)
 
 type baseTesla struct {
 	clientID     string
@@ -134,9 +141,8 @@ func (b *baseTesla) info(ctx context.Context) types.ESSProviderInfo {
 	}
 
 	return types.ESSProviderInfo{
-		ID:     "tesla",
-		Name:   "Tesla",
-		Hidden: true,
+		ID:   "tesla",
+		Name: "Tesla (Beta)",
 		OAuthURLs: map[string]string{
 			"default": baseOAuthURL,
 		},
@@ -570,10 +576,197 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 
 // SetModes sets the operating modes of the system.
 func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode) error {
+	log.Ctx(ctx).DebugContext(ctx, "SetModes called", slog.Any("batteryMode", bat), slog.Any("solarMode", sol))
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	// TODO: implement mode setting
+	if bat == types.BatteryModeNoChange && sol == types.SolarModeNoChange {
+		return nil
+	}
+
+	siteInfo, err := b.getSiteInfoWithCache(ctx, false)
+	if err != nil {
+		return err
+	}
+
+	liveStatusPath := fmt.Sprintf("api/1/energy_sites/%d/live_status", b.energySiteID)
+	var liveStatus teslaLiveStatusResponse
+	if err := b.doGETRequest(ctx, liveStatusPath, nil, &liveStatus); err != nil {
+		return err
+	}
+
+	if liveStatus.StormModeActive {
+		log.Ctx(ctx).InfoContext(ctx, "device is in storm mode, skipping set modes")
+		return errors.New("device is in storm mode")
+	}
+
+	reserveSOC := siteInfo.BackupReservePercent
+	newReserveSOC := reserveSOC
+	allowGridCharge := !siteInfo.Components.DisallowChargeFromGridWithSolarInstalled
+	var updatedGrid bool
+	var updatedMode bool
+
+	switch bat {
+	case types.BatteryModeChargeAny:
+		// if they want to charge the battery then set the SOC to 100 to force it to
+		// charge if its not charging already
+		newReserveSOC = 100
+		if b.settings.GridChargeBatteries {
+			if !allowGridCharge {
+				allowGridCharge = true
+				updatedGrid = true
+			}
+		} else {
+			if allowGridCharge {
+				allowGridCharge = false
+				updatedGrid = true
+			}
+		}
+	case types.BatteryModeChargeSolar:
+		// we disallow charging from the grid if they only want to charge via solar
+		// and otherwise set the SOC to 100
+		newReserveSOC = 100
+		if allowGridCharge {
+			allowGridCharge = false
+			updatedGrid = true
+		}
+	case types.BatteryModeLoad:
+		// we set the SOC to the minimum battery SOC to ensure we start discharging
+		// if we're somehow less than this soc, we'll charge from the solar, unless
+		// solar is unavailable then it'll charge from the grid
+		newReserveSOC = b.settings.MinBatterySOC
+		if b.settings.GridChargeBatteries {
+			if !allowGridCharge {
+				allowGridCharge = true
+				updatedGrid = true
+			}
+		} else {
+			if allowGridCharge {
+				allowGridCharge = false
+				updatedGrid = true
+			}
+		}
+	case types.BatteryModeStandby:
+		// we floor the SOC to ensure we don't set it to a value that would cause the
+		// battery to charge
+		// make sure we don't set it to less than the minimum battery SOC
+		newReserveSOC = math.Max(math.Floor(liveStatus.PercentageCharged), b.settings.MinBatterySOC)
+		if allowGridCharge {
+			allowGridCharge = false
+			updatedGrid = true
+		}
+	case types.BatteryModeNoChange:
+		// Do not change battery settings
+	default:
+		return fmt.Errorf("unknown battery mode: %v", bat)
+	}
+
+	if newReserveSOC < 5 {
+		newReserveSOC = 5
+	}
+	updatedSOC := math.Round(newReserveSOC) != math.Round(reserveSOC)
+
+	exportRule := siteInfo.Components.CustomerPreferredExportRule
+	switch sol {
+	case types.SolarModeAny:
+		if b.settings.GridExportSolar && b.settings.GridExportBatteries {
+			if exportRule != teslaExportRuleBatteryOk {
+				exportRule = teslaExportRuleBatteryOk
+				updatedGrid = true
+			}
+		} else if b.settings.GridExportSolar {
+			if exportRule != teslaExportRulePvOnly {
+				exportRule = teslaExportRulePvOnly
+				updatedGrid = true
+			}
+		} else {
+			if exportRule != teslaExportRuleNever {
+				exportRule = teslaExportRuleNever
+				updatedGrid = true
+			}
+		}
+	case types.SolarModeNoExport:
+		if exportRule != teslaExportRuleNever {
+			exportRule = teslaExportRuleNever
+			updatedGrid = true
+		}
+	case types.SolarModeNoChange:
+		// Do nothing
+	default:
+		return fmt.Errorf("unknown solar mode: %v", sol)
+	}
+
+	if siteInfo.DefaultRealMode != "self_consumption" {
+		updatedMode = true
+	}
+
+	if b.settings.DryRun {
+		if updatedMode {
+			log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated operation mode", slog.String("mode", "self_consumption"))
+		}
+		if updatedSOC {
+			log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated backup reserve", slog.Float64("soc", newReserveSOC))
+		}
+		if updatedGrid {
+			log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated grid import export", slog.Bool("allowGridCharge", allowGridCharge), slog.String("exportRule", exportRule))
+		}
+		return nil
+	}
+
+	if updatedMode {
+		log.Ctx(ctx).InfoContext(ctx, "updating tesla operation mode", slog.String("mode", "self_consumption"))
+		path := fmt.Sprintf("api/1/energy_sites/%d/operation", b.energySiteID)
+		payload := map[string]string{"default_real_mode": "self_consumption"}
+		req, err := b.base.newPOSTRequest(ctx, "POST", path, b.token, b.baseURL, payload)
+		if err != nil {
+			return err
+		}
+		if err := b.base.doRequest(req, nil); err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla operation mode", slog.Any("error", err))
+			return err
+		}
+	}
+
+	if updatedSOC {
+		log.Ctx(ctx).InfoContext(ctx,
+			"updating tesla backup reserve",
+			slog.Float64("soc", newReserveSOC),
+			slog.Float64("previous", reserveSOC),
+		)
+		path := fmt.Sprintf("api/1/energy_sites/%d/backup", b.energySiteID)
+		payload := map[string]float64{"backup_reserve_percent": newReserveSOC}
+		req, err := b.base.newPOSTRequest(ctx, "POST", path, b.token, b.baseURL, payload)
+		if err != nil {
+			return err
+		}
+		if err := b.base.doRequest(req, nil); err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla backup reserve", slog.Any("error", err))
+			return err
+		}
+	}
+
+	if updatedGrid {
+		log.Ctx(ctx).InfoContext(
+			ctx,
+			"updating tesla grid import export",
+			slog.Bool("allowGridCharge", allowGridCharge),
+			slog.String("exportRule", exportRule),
+		)
+		path := fmt.Sprintf("api/1/energy_sites/%d/grid_import_export", b.energySiteID)
+		payload := map[string]any{
+			"disallow_charge_from_grid_with_solar_installed": !allowGridCharge,
+			"customer_preferred_export_rule":                 exportRule,
+		}
+		req, err := b.base.newPOSTRequest(ctx, "POST", path, b.token, b.baseURL, payload)
+		if err != nil {
+			return err
+		}
+		if err := b.base.doRequest(req, nil); err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla grid import export", slog.Any("error", err))
+			return err
+		}
+	}
+
 	return nil
 }
 
