@@ -314,6 +314,71 @@ func TestHandleJoin(t *testing.T) {
 		store.AssertExpectations(t)
 	})
 
+	t.Run("CreateNewSitePrefixCollision", func(t *testing.T) {
+		store := &mockStorage{}
+
+		// Simulate existing sites that collide with the expected prefix to test collision resolution logic
+		store.On("ListSites", mock.Anything).Return([]types.Site{
+			{ID: "longprefix"},
+			{ID: "longprefix_1"},
+		}, nil)
+
+		// Expect CreateSite to be called with the resolved non-colliding prefix 'longprefix_2'
+		store.On("CreateSite", mock.Anything, "longprefix_2", mock.MatchedBy(func(site types.Site) bool {
+			return site.InviteCode == "" && len(site.Permissions) == 1 && site.Permissions[0].UserID == "new@test.com"
+		})).Return(nil)
+
+		// Expect User Creation with the resolved site ID
+		store.On("CreateUser", mock.Anything, mock.MatchedBy(func(user types.User) bool {
+			return user.ID == "new@test.com" &&
+				user.Email == "longprefix@test.com" &&
+				len(user.Sites) == 1 &&
+				user.Sites[0].ID == "longprefix_2" &&
+				user.Sites[0].Name == "My Prefix Site"
+		})).Return(nil)
+
+		s := newServer(store)
+		body := `{"create":true,"name":"My Prefix Site"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/join", bytes.NewBufferString(body))
+		req = withNewUser(req, "new@test.com", "longprefix@test.com")
+		w := httptest.NewRecorder()
+
+		s.handleJoin(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+		store.AssertExpectations(t)
+	})
+
+	t.Run("CreateNewSiteListSitesErrorFallback", func(t *testing.T) {
+		store := &mockStorage{}
+
+		// Simulate a database error when attempting to list existing sites
+		store.On("ListSites", mock.Anything).Return([]types.Site{}, assert.AnError)
+
+		// Expect CreateSite to fall back to a 16-character randomly generated hex string
+		store.On("CreateSite", mock.Anything, mock.MatchedBy(func(id string) bool { return len(id) == 16 }), mock.MatchedBy(func(site types.Site) bool {
+			return site.InviteCode == "" && len(site.Permissions) == 1 && site.Permissions[0].UserID == "new@test.com"
+		})).Return(nil)
+
+		// Expect User Creation with the generated site ID
+		store.On("CreateUser", mock.Anything, mock.MatchedBy(func(user types.User) bool {
+			return user.ID == "new@test.com" &&
+				user.Email == "longprefix@test.com" &&
+				len(user.Sites) == 1 &&
+				len(user.Sites[0].ID) == 16 &&
+				user.Sites[0].Name == "My Prefix Site"
+		})).Return(nil)
+
+		s := newServer(store)
+		body := `{"create":true,"name":"My Prefix Site"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/join", bytes.NewBufferString(body))
+		req = withNewUser(req, "new@test.com", "longprefix@test.com")
+		w := httptest.NewRecorder()
+
+		s.handleJoin(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+		store.AssertExpectations(t)
+	})
+
 	t.Run("SiteLimitReached", func(t *testing.T) {
 		store := &mockStorage{}
 		s := newServer(store)
