@@ -304,6 +304,53 @@ func TestHandleUpdateSettings(t *testing.T) {
 		require.NoError(t, err)
 	})
 
+	t.Run("getESSSystem Authentication Failure", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockP := ess.NewMap()
+		mockES := &mockESS{}
+
+		// Test that authentication failure correctly updates ConsecutiveFailures and LastAttempt
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, fmt.Errorf("auth failed")).Once()
+
+		var savedSettings types.Settings
+		// Validate that the storage saves the updated auth status
+		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
+			savedSettings = s
+			return s.ESSAuthStatus.ConsecutiveFailures == 1 && !s.ESSAuthStatus.LastAttempt.IsZero()
+		}), 1).Return(nil).Once()
+
+		mockP.SetSystem("site1", mockES)
+
+		srv := &Server{
+			storage: mockS,
+			ess:     mockP,
+		}
+
+		ctx := context.Background()
+		creds := types.Credentials{}
+
+		s0 := settingsWithVersion{
+			Settings: types.Settings{
+				ESSAuthStatus: types.ESSAuthStatus{
+					ConsecutiveFailures: 0,
+				},
+			},
+			version: 1,
+		}
+
+		sys, err := srv.getESSSystem(ctx, "site1", s0, creds)
+		require.ErrorContains(t, err, "failed to apply settings: auth failed")
+		assert.Nil(t, sys)
+
+		mockS.AssertExpectations(t)
+		mockES.AssertExpectations(t)
+
+		// Ensure fields were updated
+		assert.Equal(t, 1, savedSettings.ESSAuthStatus.ConsecutiveFailures, "ConsecutiveFailures should be incremented")
+		assert.WithinDuration(t, time.Now().UTC(), savedSettings.ESSAuthStatus.LastAttempt, 2*time.Second, "LastAttempt should be updated to now")
+	})
+
 	t.Run("Update Settings - Validation Error", func(t *testing.T) {
 		srv, _ := newAuthServer("my-audience", []string{"admin@example.com"}, nil)
 
