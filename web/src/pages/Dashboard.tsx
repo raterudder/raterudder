@@ -283,14 +283,22 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
                         disabled={loading}
                         aria-label="Previous day"
                         title="Previous day (Left Arrow)"
-                    >&lt; Prev</button>
+                        className="date-nav-btn"
+                    >
+                        &lt; Prev
+                        <span className="kbd-hint hide-on-mobile">←</span>
+                    </button>
                     <h2>{formattedDate}</h2>
                     <button
                         onClick={() => handleDateChange(1)}
                         disabled={loading || isToday}
                         aria-label="Next day"
                         title={isToday ? "Cannot view future dates" : "Next day (Right Arrow)"}
-                    >Next &gt;</button>
+                        className="date-nav-btn"
+                    >
+                        Next &gt;
+                        <span className="kbd-hint hide-on-mobile">→</span>
+                    </button>
                 </div>
             </header>
 

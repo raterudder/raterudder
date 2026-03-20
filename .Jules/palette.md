@@ -1,3 +1,3 @@
-## 2024-05-18 - Replacing Interactive Divs with Semantic Buttons
-**Learning:** Found a pattern in Settings.tsx where `div` elements were used with `onClick` handlers for interactive summary cards (e.g., `.configured-summary`). This is a critical accessibility issue because it prevents keyboard navigation (tabbing), lacks proper focus states, and cannot be activated via Enter/Space keys by screen reader or keyboard users.
-**Action:** When discovering interactive `div`s used as buttons, refactor them into native `<button type="button">` elements. Ensure the corresponding CSS preserves the original layout and styling (e.g., by adding `text-align: left`, `font-family: inherit`, and `width: 100%`) and provides a clear `:focus-visible` state.
+## 2024-03-20 - Add visual hints for hidden keyboard shortcuts
+**Learning:** The dashboard already had keyboard shortcuts (arrow keys) for date navigation, but they were invisible to users unless they stumbled upon them or read the title text tooltip.
+**Action:** Always consider adding subtle, non-intrusive visual hints (like `<span class="kbd-hint">`) for existing keyboard shortcuts to improve discoverability without cluttering the interface.
