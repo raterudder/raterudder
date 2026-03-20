@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"math"
 	"net/http"
 	"slices"
 	"sort"
@@ -416,10 +417,15 @@ func calculateImprovedSolar(ctx context.Context, history []types.EnergyStats, we
 		results[ts] = h
 	}
 
-	// 3. Determine robust efficiency by averaging the top 3 items
-	// only compare ghi to ghi and gti to gti
-	var finalEff efficiencyDetail
-	var top3Efficiencies []efficiencyDetail
+	// 3. Determine robust efficiency by analyzing the top points for outliers and variance.
+	var (
+		finalEff         efficiencyDetail
+		top3Efficiencies []efficiencyDetail
+		outlierDiscarded efficiencyDetail
+		method           string
+		cv               float64
+	)
+
 	if len(efficiencies) > 0 {
 		sort.Slice(efficiencies, func(i, j int) bool {
 			if hasGTI {
@@ -428,19 +434,65 @@ func calculateImprovedSolar(ctx context.Context, history []types.EnergyStats, we
 			return efficiencies[i].EfficiencyGHI > efficiencies[j].EfficiencyGHI
 		})
 
-		if len(efficiencies) >= 3 {
-			var sumGTI, sumGHI float64
-			for i := 0; i < 3; i++ {
-				sumGTI += efficiencies[i].EfficiencyGTI
-				sumGHI += efficiencies[i].EfficiencyGHI
-				top3Efficiencies = append(top3Efficiencies, efficiencies[i])
+		remaining := efficiencies
+		// 1. Outlier Detection: If top value is > 35% higher than the next, discard it.
+		if len(remaining) >= 2 {
+			e0 := remaining[0].EfficiencyGHI
+			e1 := remaining[1].EfficiencyGHI
+			if hasGTI {
+				e0 = remaining[0].EfficiencyGTI
+				e1 = remaining[1].EfficiencyGTI
 			}
-			finalEff.EfficiencyGTI = sumGTI / 3
-			finalEff.EfficiencyGHI = sumGHI / 3
-		} else {
-			finalEff.EfficiencyGTI = efficiencies[0].EfficiencyGTI
-			finalEff.EfficiencyGHI = efficiencies[0].EfficiencyGHI
-			top3Efficiencies = append(top3Efficiencies, efficiencies[0])
+			if e1 > 0 && e0 > 1.35*e1 {
+				outlierDiscarded = remaining[0]
+				remaining = remaining[1:]
+			}
+		}
+
+		// 2. Aggregation: Take up to top 3 of the remaining points.
+		n := min(3, len(remaining))
+		if n > 0 {
+			for i := 0; i < n; i++ {
+				top3Efficiencies = append(top3Efficiencies, remaining[i])
+			}
+
+			if n == 3 {
+				// 3. Confidence Check via Coefficient of Variation (CV)
+				var sumGTI, sumGHI float64
+				for _, e := range top3Efficiencies {
+					sumGTI += e.EfficiencyGTI
+					sumGHI += e.EfficiencyGHI
+				}
+				meanGTI := sumGTI / 3
+				meanGHI := sumGHI / 3
+
+				var varGTI, varGHI float64
+				for _, e := range top3Efficiencies {
+					varGTI += math.Pow(e.EfficiencyGTI-meanGTI, 2)
+					varGHI += math.Pow(e.EfficiencyGHI-meanGHI, 2)
+				}
+				stdDevGTI := math.Sqrt(varGTI / 3)
+				stdDevGHI := math.Sqrt(varGHI / 3)
+
+				// Calculate CV based on the primary metric
+				if hasGTI && meanGTI > 0 {
+					cv = stdDevGTI / meanGTI
+				} else if !hasGTI && meanGHI > 0 {
+					cv = stdDevGHI / meanGHI
+				}
+
+				if cv > 0 && cv < 0.1 {
+					method = "average"
+					finalEff.EfficiencyGTI = meanGTI
+					finalEff.EfficiencyGHI = meanGHI
+				} else {
+					method = "conservative (3rd highest)"
+					finalEff = top3Efficiencies[2]
+				}
+			} else {
+				method = "highest available"
+				finalEff = top3Efficiencies[0]
+			}
 		}
 	}
 
@@ -450,6 +502,9 @@ func calculateImprovedSolar(ctx context.Context, history []types.EnergyStats, we
 		slog.Any("finalEfficiency", finalEff),
 		slog.Any("top3Efficiencies", top3Efficiencies),
 		slog.Int("validPoints", len(efficiencies)),
+		slog.Any("outlier", outlierDiscarded),
+		slog.String("method", method),
+		slog.Float64("cv", cv),
 	)
 
 	// 4. Project solar generation for every weather hour using the calibrated

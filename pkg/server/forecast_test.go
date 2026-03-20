@@ -437,13 +437,18 @@ func TestCalculateImprovedSolar(t *testing.T) {
 			{TSHourStart: h[5], SolarKWH: 2.2},
 		}
 
+		// efficiencies collected: [0.01011, 0.02022, 0.02224] (approx)
+		// Sorted: 0.02224, 0.02022, 0.01011.
+		// CV is high (~0.30), so conservative (3rd highest) 0.01011 is used.
+		// Result at h5: 100 * 0.01011 * 0.989 (TF) = 1.0.
+
 		results := calculateImprovedSolar(ctx, history, weather)
 
 		if assert.Len(t, results, 10) {
 			assert.Greater(t, results[h[4].Unix()].ImprovedSolar, 0.0,
 				"historical hours should receive an ImprovedSolar value for comparison")
-			assert.InDelta(t, 1.73, results[h[5].Unix()].ImprovedSolar, 0.05,
-				"peak hour projection should be close to the average of top calibrated readings")
+			assert.InDelta(t, 1.0, results[h[5].Unix()].ImprovedSolar, 0.05,
+				"high variance should trigger conservative 3rd-highest efficiency")
 		}
 	})
 
@@ -657,13 +662,55 @@ func TestCalculateImprovedSolar(t *testing.T) {
 		results := calculateImprovedSolar(ctx, history, weather)
 
 		// efficiencies collected: [0.011, 0.012, 0.013, 0.014, 0.015, 0.020]
-		// Top 3 are 0.020, 0.015, 0.014. Average = 0.01633...
-		// Temperature Factor for h[8] at 25C is 1.0.
-		// Result should be 100 * 0.01633 * 1.0 = 1.633...
+		// Sorted: 0.020, 0.015, 0.014, 0.013, 0.012, 0.011.
+		// Outlier check: 0.020/0.015 = 1.33 < 1.35 (No discard).
+		// CV of (0.020, 0.015, 0.014) is ~0.16 > 0.1 (High noise).
+		// Should use 3rd highest: 0.014.
+		// Result: 100 * 0.014 * 1.0 = 1.4.
 
 		if assert.Len(t, results, 10) {
-			assert.InDelta(t, 1.63, results[h[8].Unix()].ImprovedSolar, 0.01,
-				"should use average of top 3 efficiencies")
+			assert.InDelta(t, 1.4, results[h[8].Unix()].ImprovedSolar, 0.01,
+				"should use 3rd highest efficiency when top 3 are noisy")
+		}
+	})
+
+	t.Run("Discards top outlier and uses average of tight remaining points", func(t *testing.T) {
+		h := make([]time.Time, 10)
+		for i := range h {
+			h[i] = now.Add(time.Duration(i-5) * time.Hour)
+		}
+
+		// User's scenario extended: 0.0197, 0.0127, 0.0116, 0.0110.
+		// h2: actual=1.97, GTI=100 -> eff=0.0197 (v. close to user's 0.0197)
+		// h3: actual=1.27, GTI=100 -> eff=0.0127
+		// h4: actual=1.16, GTI=100 -> eff=0.0116
+		// h5: actual=1.10, GTI=100 -> eff=0.0110
+		history := []types.EnergyStats{
+			{TSHourStart: h[2], SolarKWH: 1.97},
+			{TSHourStart: h[3], SolarKWH: 1.27},
+			{TSHourStart: h[4], SolarKWH: 1.16},
+			{TSHourStart: h[5], SolarKWH: 1.10},
+		}
+
+		forecastHours := make([]types.HourlyWeather, len(h))
+		for i, ts := range h {
+			forecastHours[i] = types.HourlyWeather{TSHourStart: ts, GTI: 100, TemperatureC: 25}
+		}
+		weather := []types.Weather{{ForecastHours: forecastHours}}
+
+		results := calculateImprovedSolar(ctx, history, weather)
+
+		// Effs: 0.0197, 0.0127, 0.0116, 0.0110.
+		// Sorted: 0.0197, 0.0127, 0.0116, 0.0110.
+		// Outlier check: 0.0197/0.0127 = 1.55 > 1.35. DISCARD 0.0197.
+		// Remaining: 0.0127, 0.0116, 0.0110.
+		// Mean: 0.01176. StdDev: 0.0007. CV: 0.06 < 0.1 (Tight).
+		// Use Average: 0.01176.
+		// Result: 100 * 0.01176 * 1.0 = 1.176.
+
+		if assert.Len(t, results, 10) {
+			assert.InDelta(t, 1.176, results[h[8].Unix()].ImprovedSolar, 0.01,
+				"should discard 0.0197 outlier and average the remaining tight points")
 		}
 	})
 
