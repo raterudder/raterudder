@@ -135,15 +135,11 @@ func (s *OpenMeteo) FetchWeatherForecast(
 	}
 
 	// Open-Meteo expects an inclusive end date for its query.
-	// Since our endDate is exclusive, we subtract one day for the API request
-	// if the endDate is exactly midnight.
-	apiEndDate := endDate
-	if endDate.Hour() == 0 && endDate.Minute() == 0 && endDate.Second() == 0 {
-		apiEndDate = endDate.AddDate(0, 0, -1)
-	}
-
+	// we used to subtract one day if the endDate sent was exactly midnight, but
+	// some of the data points from the API are for th	e preceding hour so we need
+	// to always fetch the next hour.
 	startDateStr := startDate.Format("2006-01-02")
-	endDateStr := apiEndDate.Format("2006-01-02")
+	endDateStr := endDate.Format("2006-01-02")
 
 	u, err := url.Parse(s.ForecastURL)
 	if err != nil {
@@ -154,7 +150,9 @@ func (s *OpenMeteo) FetchWeatherForecast(
 	q.Set("latitude", fmt.Sprintf("%f", loc.Latitude))
 	q.Set("longitude", fmt.Sprintf("%f", loc.Longitude))
 	hourly := []string{"shortwave_radiation", "temperature_2m", "snowfall"}
+	var hasTiltedRadiation bool
 	if loc.SolarTilt > 0 {
+		hasTiltedRadiation = true
 		hourly = append(hourly, "global_tilted_irradiance")
 		q.Set("tilt", fmt.Sprintf("%f", loc.SolarTilt))
 		if loc.SolarAzimuth < 0 || loc.SolarAzimuth > 360 {
@@ -212,6 +210,11 @@ func (s *OpenMeteo) FetchWeatherForecast(
 		return nil, fmt.Errorf("hourly data mismatch: %d times, %d shortwave radiation", len(data.Hourly.Time), len(data.Hourly.ShortwaveRadiation))
 	}
 
+	if hasTiltedRadiation && len(data.Hourly.Time) != len(data.Hourly.TiltedRadiation) {
+		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.Int("timeCount", len(data.Hourly.Time)), slog.Int("gtiCount", len(data.Hourly.TiltedRadiation)))
+		return nil, fmt.Errorf("hourly data mismatch: %d times, %d tilted radiation", len(data.Hourly.Time), len(data.Hourly.TiltedRadiation))
+	}
+
 	// Parse the response into daily types.Weather structs
 	var weathers []types.Weather
 	now := time.Now()
@@ -245,11 +248,6 @@ func (s *OpenMeteo) FetchWeatherForecast(
 			}
 		}
 
-		if len(data.Hourly.Time) != len(data.Hourly.ShortwaveRadiation) {
-			log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.Int("hourlyCount", len(data.Hourly.Time)), slog.Int("ghiCount", len(data.Hourly.ShortwaveRadiation)))
-			return nil, fmt.Errorf("hourly data mismatch: %d hourly times, %d shortwave radiation", len(data.Hourly.Time), len(data.Hourly.ShortwaveRadiation))
-		}
-
 		// Find hourly data
 		for i, tStr := range data.Hourly.Time {
 			if strings.HasPrefix(tStr, targetDateStr) {
@@ -259,14 +257,40 @@ func (s *OpenMeteo) FetchWeatherForecast(
 					continue
 				}
 				hw := types.HourlyWeather{
-					TSHourStart:  t,
-					GHI:          data.Hourly.ShortwaveRadiation[i],
-					TemperatureC: data.Hourly.Temperature[i],
-					SnowfallCM:   data.Hourly.Snowfall[i],
+					TSHourStart: t,
+					SnowfallCM:  data.Hourly.Snowfall[i],
 				}
-				if i < len(data.Hourly.TiltedRadiation) {
-					hw.GTI = data.Hourly.TiltedRadiation[i]
+
+				// the temperature values are instantaneous values so we average the
+				// temperature at this start of the hour to the next start of the hour
+				// to get the "average" temperature over the hour
+				if i+1 < len(data.Hourly.Temperature) {
+					hw.TemperatureC = (data.Hourly.Temperature[i] + data.Hourly.Temperature[i+1]) / 2.0
+				} else {
+					// realistically we should never get here because we'll be before the end date
+					hw.TemperatureC = data.Hourly.Temperature[i]
 				}
+
+				// irradiance values are for the hour preceding the timestamp
+				// so we take the value for the next hour
+				if i+1 < len(data.Hourly.ShortwaveRadiation) {
+					hw.GHI = data.Hourly.ShortwaveRadiation[i+1]
+				} else {
+					// realistically we should never get here because we'll be before the end date
+					hw.GHI = data.Hourly.ShortwaveRadiation[i]
+				}
+
+				// irradiance values are for the hour preceding the timestamp
+				// so we take the value for the next hour
+				if hasTiltedRadiation {
+					if i+1 < len(data.Hourly.TiltedRadiation) {
+						hw.GTI = data.Hourly.TiltedRadiation[i+1]
+					} else {
+						// realistically we should never get here because we'll be before the end date
+						hw.GTI = data.Hourly.TiltedRadiation[i]
+					}
+				}
+
 				w.ForecastHours = append(w.ForecastHours, hw)
 			}
 		}

@@ -5,7 +5,7 @@ import "time"
 const (
 	CurrentEnergyStatsVersion  = 1
 	CurrentPriceHistoryVersion = 1
-	CurrentWeatherVersion      = 2
+	CurrentWeatherVersion      = 3
 
 	SiteIDNone = "none"
 )

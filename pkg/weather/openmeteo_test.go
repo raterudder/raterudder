@@ -174,10 +174,10 @@ func TestOpenMeteoService(t *testing.T) {
 					Temperature        []float64 `json:"temperature_2m"`
 					Snowfall           []float64 `json:"snowfall"`
 				}{
-					Time:               []string{startDay.Format("2006-01-02") + "T10:00", endDay.Format("2006-01-02") + "T12:00"},
-					ShortwaveRadiation: []float64{100.5, 200.5},
-					Temperature:        []float64{20.0, 25.0},
-					Snowfall:           []float64{0.0, 0.0},
+					Time:               []string{startDay.Format("2006-01-02") + "T10:00", startDay.Format("2006-01-02") + "T11:00", endDay.Format("2006-01-02") + "T12:00", endDay.Format("2006-01-02") + "T13:00"},
+					ShortwaveRadiation: []float64{100.5, 150.5, 200.5, 250.5},
+					Temperature:        []float64{20.0, 22.0, 25.0, 27.0},
+					Snowfall:           []float64{0.0, 0.0, 0.0, 0.0},
 				},
 			}
 
@@ -193,12 +193,16 @@ func TestOpenMeteoService(t *testing.T) {
 			require.NoError(t, err)
 			assert.Len(t, res, 3)
 
-			if assert.Len(t, res[0].ForecastHours, 1) {
-				assert.Equal(t, 100.5, res[0].ForecastHours[0].GHI)
+			if assert.Len(t, res[0].ForecastHours, 2) {
+				assert.Equal(t, 150.5, res[0].ForecastHours[0].GHI)
+				assert.Equal(t, 21.0, res[0].ForecastHours[0].TemperatureC) // (20+22)/2
+				assert.Equal(t, 200.5, res[0].ForecastHours[1].GHI) // takes next index 2
+				assert.Equal(t, 23.5, res[0].ForecastHours[1].TemperatureC) // average of index 1 and 2
 			}
 			assert.Len(t, res[1].ForecastHours, 0)
-			if assert.Len(t, res[2].ForecastHours, 1) {
-				assert.Equal(t, 200.5, res[2].ForecastHours[0].GHI)
+			if assert.Len(t, res[2].ForecastHours, 2) {
+				assert.Equal(t, 250.5, res[2].ForecastHours[0].GHI)
+				assert.Equal(t, 26.0, res[2].ForecastHours[0].TemperatureC) // (25+27)/2
 			}
 		})
 
