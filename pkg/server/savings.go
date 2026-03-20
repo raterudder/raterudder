@@ -70,9 +70,9 @@ func (s *Server) handleHistorySavings(w http.ResponseWriter, r *http.Request) {
 	// Set Cache-Control
 	today := truncateDay(time.Now())
 	if end.Before(today) {
-		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Header().Set("Cache-Control", "private, max-age=86400")
 	} else {
-		w.Header().Set("Cache-Control", "public, max-age=60")
+		w.Header().Set("Cache-Control", "private, max-age=60")
 	}
 
 	if err := json.NewEncoder(w).Encode(totalSavings); err != nil {
