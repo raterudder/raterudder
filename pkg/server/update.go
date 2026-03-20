@@ -338,22 +338,20 @@ func (s *Server) updatePriceHistory(ctx context.Context, siteID string, provider
 		)
 	}
 
-	log.Ctx(ctx).DebugContext(ctx, "syncing price history", slog.Any("since", syncStart))
+	if !syncStart.Before(now) {
+		return nil
+	}
 
-	// Loop day by day
-	for t := syncStart; t.Before(now); t = t.Add(24 * time.Hour) {
-		// always fetch to the end of the day even if it's in the future
-		end := t.Add(24 * time.Hour)
+	log.Ctx(ctx).DebugContext(ctx, "syncing price history", slog.Any("since", syncStart), slog.Any("to", now))
 
-		log.Ctx(ctx).DebugContext(ctx, "syncing price history batch", slog.Time("start", t), slog.Time("end", end))
-		newPrices, err := provider.GetConfirmedPrices(ctx, t, end)
-		if err != nil {
-			return fmt.Errorf("failed to get confirmed prices: %w", err)
-		}
-		if len(newPrices) > 0 {
-			if err := s.storage.UpsertPrices(ctx, siteID, newPrices, types.CurrentPriceHistoryVersion); err != nil {
-				return fmt.Errorf("failed to upsert prices: %w", err)
-			}
+	newPrices, err := provider.GetConfirmedPrices(ctx, syncStart, now)
+	if err != nil {
+		return fmt.Errorf("failed to get confirmed prices: %w", err)
+	}
+
+	if len(newPrices) > 0 {
+		if err := s.storage.UpsertPrices(ctx, siteID, newPrices, types.CurrentPriceHistoryVersion); err != nil {
+			return fmt.Errorf("failed to upsert prices: %w", err)
 		}
 	}
 	return nil
@@ -436,27 +434,20 @@ func (s *Server) updateEnergyHistory(ctx context.Context, siteID string, essSyst
 		)
 	}
 
-	log.Ctx(ctx).DebugContext(ctx, "syncing energy history", slog.Any("since", syncStart))
+	if !syncStart.Before(now) {
+		return nil
+	}
 
-	// Loop day by day
-	for t := syncStart; t.Before(now); t = t.Add(24 * time.Hour) {
-		end := t.Add(24 * time.Hour)
-		if end.After(now) {
-			end = now
-		}
+	log.Ctx(ctx).DebugContext(ctx, "syncing energy history", slog.Any("since", syncStart), slog.Any("to", now))
 
-		log.Ctx(ctx).DebugContext(ctx, "syncing energy history batch", slog.Time("start", t), slog.Time("end", end))
-		newHistory, err := essSystem.GetEnergyHistory(ctx, t, end)
-		if err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to get energy history from ess", slog.Any("error", err), slog.Time("start", t), slog.Time("end", end))
-			// continue to next day even if this one failed
-		} else {
-			if len(newHistory) > 0 {
-				if err := s.storage.UpsertEnergyHistories(ctx, siteID, newHistory, types.CurrentEnergyStatsVersion); err != nil {
-					log.Ctx(ctx).ErrorContext(ctx, "failed to upsert energy histories", slog.Any("error", err))
-				}
+	newHistory, err := essSystem.GetEnergyHistory(ctx, syncStart, now)
+	if err != nil {
+		return fmt.Errorf("failed to get energy history from ess: %w", err)
+	}
 
-			}
+	if len(newHistory) > 0 {
+		if err := s.storage.UpsertEnergyHistories(ctx, siteID, newHistory, types.CurrentEnergyStatsVersion); err != nil {
+			return fmt.Errorf("failed to upsert energy histories: %w", err)
 		}
 	}
 

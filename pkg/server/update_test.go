@@ -716,13 +716,14 @@ func TestUpdateSitePrices(t *testing.T) {
 	t.Run("Backfill - No History", func(t *testing.T) {
 		mockU := &mockUtility{}
 		// Expect GetConfirmedPrices to be called for ~5 days
-		var startTimes []time.Time
-		mockU.On("GetConfirmedPrices", mock.Anything, mock.MatchedBy(func(start time.Time) bool {
-			startTimes = append(startTimes, start)
-			return true
-		}), mock.Anything).Return([]types.Price{
+		var startTime time.Time
+		var endTime time.Time
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			startTime = args.Get(1).(time.Time)
+			endTime = args.Get(2).(time.Time)
+		}).Return([]types.Price{
 			{DollarsPerKWH: 0.1, TSStart: time.Now()},
-		}, nil)
+		}, nil).Once()
 
 		mockS := &mockStorage{}
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site1").Return(time.Time{}, 0, nil)
@@ -740,18 +741,12 @@ func TestUpdateSitePrices(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify that it started from 5 days ago
-		require.NotEmpty(t, startTimes)
-		earliest := startTimes[0]
-		for _, st := range startTimes {
-			if st.Before(earliest) {
-				earliest = st
-			}
-		}
-		// roughly 5 days ago
+		// Verify that it started from 5 days ago
 		now := time.Now()
 		fiveDaysAgo := now.Add(-5 * 24 * time.Hour)
-		expected := time.Date(fiveDaysAgo.Year(), fiveDaysAgo.Month(), fiveDaysAgo.Day(), 0, 0, 0, 0, fiveDaysAgo.Location())
-		assert.True(t, expected.Equal(earliest), "Expected start time %v, got %v", expected, earliest)
+		expectedStart := time.Date(fiveDaysAgo.Year(), fiveDaysAgo.Month(), fiveDaysAgo.Day(), 0, 0, 0, 0, fiveDaysAgo.Location())
+		assert.True(t, expectedStart.Equal(startTime), "Expected start time %v, got %v", expectedStart, startTime)
+		assert.WithinDuration(t, now, endTime, time.Second, "Expected end time to be approximately now")
 	})
 
 	t.Run("Incremental Update", func(t *testing.T) {
@@ -759,11 +754,12 @@ func TestUpdateSitePrices(t *testing.T) {
 		lastTime := time.Now().Add(-2 * 24 * time.Hour).Truncate(time.Hour)
 
 		// Expect GetConfirmedPrices to start from lastTime
-		var startTimes []time.Time
-		mockU.On("GetConfirmedPrices", mock.Anything, mock.MatchedBy(func(start time.Time) bool {
-			startTimes = append(startTimes, start)
-			return true
-		}), mock.Anything).Return([]types.Price{}, nil)
+		var startTime time.Time
+		var endTime time.Time
+		mockU.On("GetConfirmedPrices", mock.Anything, lastTime, mock.Anything).Run(func(args mock.Arguments) {
+			startTime = args.Get(1).(time.Time)
+			endTime = args.Get(2).(time.Time)
+		}).Return([]types.Price{}, nil).Once()
 
 		mockS := &mockStorage{}
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site1").Return(lastTime, types.CurrentPriceHistoryVersion, nil)
@@ -780,8 +776,8 @@ func TestUpdateSitePrices(t *testing.T) {
 		err := srv.updatePriceHistory(context.Background(), "site1", mockU)
 		require.NoError(t, err)
 
-		require.NotEmpty(t, startTimes)
-		assert.True(t, startTimes[0].Equal(lastTime) || startTimes[0].After(lastTime))
+		assert.True(t, startTime.Equal(lastTime))
+		assert.WithinDuration(t, time.Now(), endTime, time.Second)
 	})
 
 	t.Run("No Future Update", func(t *testing.T) {
@@ -820,11 +816,12 @@ func TestUpdateSitePrices(t *testing.T) {
 		lastTime := time.Now().Add(-1 * time.Hour)
 		oldVersion := types.CurrentPriceHistoryVersion - 1
 
-		var startTimes []time.Time
-		mockU.On("GetConfirmedPrices", mock.Anything, mock.MatchedBy(func(start time.Time) bool {
-			startTimes = append(startTimes, start)
-			return true
-		}), mock.Anything).Return([]types.Price{}, nil)
+		var startTime time.Time
+		var endTime time.Time
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			startTime = args.Get(1).(time.Time)
+			endTime = args.Get(2).(time.Time)
+		}).Return([]types.Price{}, nil).Once()
 
 		mockS := &mockStorage{}
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site1").Return(lastTime, oldVersion, nil)
@@ -842,19 +839,12 @@ func TestUpdateSitePrices(t *testing.T) {
 		require.NoError(t, err)
 
 		// Should have triggered backfill from 5 days ago, not 1 hour ago
-		require.NotEmpty(t, startTimes)
-		earliest := startTimes[0]
-		for _, st := range startTimes {
-			if st.Before(earliest) {
-				earliest = st
-			}
-		}
-
 		now := time.Now()
 		fiveDaysAgo := now.Add(-5 * 24 * time.Hour)
-		expected := time.Date(fiveDaysAgo.Year(), fiveDaysAgo.Month(), fiveDaysAgo.Day(), 0, 0, 0, 0, fiveDaysAgo.Location())
+		expectedStart := time.Date(fiveDaysAgo.Year(), fiveDaysAgo.Month(), fiveDaysAgo.Day(), 0, 0, 0, 0, fiveDaysAgo.Location())
 
-		assert.True(t, expected.Equal(earliest), "Expected start time %v, got %v", expected, earliest)
+		assert.True(t, expectedStart.Equal(startTime), "Expected start time %v, got %v", expectedStart, startTime)
+		assert.WithinDuration(t, now, endTime, time.Second)
 	})
 }
 
@@ -866,11 +856,12 @@ func TestUpdateEnergyHistory(t *testing.T) {
 
 		mockES := &mockESS{}
 		// Expect call for ~5 days
-		var startTimes []time.Time
-		mockES.On("GetEnergyHistory", mock.Anything, mock.MatchedBy(func(start time.Time) bool {
-			startTimes = append(startTimes, start)
-			return true
-		}), mock.Anything).Return([]types.EnergyStats{{}}, nil)
+		var startTime time.Time
+		var endTime time.Time
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			startTime = args.Get(1).(time.Time)
+			endTime = args.Get(2).(time.Time)
+		}).Return([]types.EnergyStats{{}}, nil).Once()
 
 		srv := &Server{
 			storage: mockS,
@@ -880,18 +871,11 @@ func TestUpdateEnergyHistory(t *testing.T) {
 		err := srv.updateEnergyHistory(context.Background(), "site1", mockES)
 		require.NoError(t, err)
 
-		require.NotEmpty(t, startTimes)
-		earliest := startTimes[0]
-		for _, st := range startTimes {
-			if st.Before(earliest) {
-				earliest = st
-			}
-		}
-
 		now := time.Now()
 		fiveDaysAgo := now.Add(-5 * 24 * time.Hour)
-		expected := time.Date(fiveDaysAgo.Year(), fiveDaysAgo.Month(), fiveDaysAgo.Day(), 0, 0, 0, 0, fiveDaysAgo.Location())
-		assert.True(t, expected.Equal(earliest), "Expected start time %v, got %v", expected, earliest)
+		expectedStart := time.Date(fiveDaysAgo.Year(), fiveDaysAgo.Month(), fiveDaysAgo.Day(), 0, 0, 0, 0, fiveDaysAgo.Location())
+		assert.True(t, expectedStart.Equal(startTime), "Expected start time %v, got %v", expectedStart, startTime)
+		assert.WithinDuration(t, now, endTime, time.Second)
 	})
 
 	t.Run("Incremental Update - Recent History", func(t *testing.T) {
@@ -901,11 +885,12 @@ func TestUpdateEnergyHistory(t *testing.T) {
 		mockS.On("UpsertEnergyHistories", mock.Anything, "site1", mock.Anything, mock.Anything).Return(nil)
 
 		mockES := &mockESS{}
-		var startTimes []time.Time
-		mockES.On("GetEnergyHistory", mock.Anything, mock.MatchedBy(func(start time.Time) bool {
-			startTimes = append(startTimes, start)
-			return true
-		}), mock.Anything).Return([]types.EnergyStats{{}}, nil)
+		var startTime time.Time
+		var endTime time.Time
+		mockES.On("GetEnergyHistory", mock.Anything, lastTime, mock.Anything).Run(func(args mock.Arguments) {
+			startTime = args.Get(1).(time.Time)
+			endTime = args.Get(2).(time.Time)
+		}).Return([]types.EnergyStats{{}}, nil).Once()
 
 		srv := &Server{
 			storage: mockS,
@@ -915,9 +900,8 @@ func TestUpdateEnergyHistory(t *testing.T) {
 		err := srv.updateEnergyHistory(context.Background(), "site1", mockES)
 		require.NoError(t, err)
 
-		require.NotEmpty(t, startTimes)
-		// Should start from lastTime
-		assert.True(t, startTimes[0].Equal(lastTime) || startTimes[0].After(lastTime))
+		assert.True(t, startTime.Equal(lastTime))
+		assert.WithinDuration(t, time.Now(), endTime, time.Second)
 	})
 
 	t.Run("Version Mismatch - Partial Backfill", func(t *testing.T) {
@@ -929,11 +913,12 @@ func TestUpdateEnergyHistory(t *testing.T) {
 		mockS.On("UpsertEnergyHistories", mock.Anything, "site1", mock.Anything, mock.Anything).Return(nil)
 
 		mockES := &mockESS{}
-		var startTimes []time.Time
-		mockES.On("GetEnergyHistory", mock.Anything, mock.MatchedBy(func(start time.Time) bool {
-			startTimes = append(startTimes, start)
-			return true
-		}), mock.Anything).Return([]types.EnergyStats{{}}, nil)
+		var startTime time.Time
+		var endTime time.Time
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			startTime = args.Get(1).(time.Time)
+			endTime = args.Get(2).(time.Time)
+		}).Return([]types.EnergyStats{{}}, nil).Once()
 
 		srv := &Server{
 			storage: mockS,
@@ -943,18 +928,11 @@ func TestUpdateEnergyHistory(t *testing.T) {
 		err := srv.updateEnergyHistory(context.Background(), "site1", mockES)
 		require.NoError(t, err)
 
-		require.NotEmpty(t, startTimes)
-		earliest := startTimes[0]
-		for _, st := range startTimes {
-			if st.Before(earliest) {
-				earliest = st
-			}
-		}
-
 		now := time.Now()
 		fiveDaysAgo := now.Add(-5 * 24 * time.Hour)
-		expected := time.Date(fiveDaysAgo.Year(), fiveDaysAgo.Month(), fiveDaysAgo.Day(), 0, 0, 0, 0, fiveDaysAgo.Location())
-		assert.True(t, expected.Equal(earliest), "Expected start time %v, got %v", expected, earliest)
+		expectedStart := time.Date(fiveDaysAgo.Year(), fiveDaysAgo.Month(), fiveDaysAgo.Day(), 0, 0, 0, 0, fiveDaysAgo.Location())
+		assert.True(t, expectedStart.Equal(startTime), "Expected start time %v, got %v", expectedStart, startTime)
+		assert.WithinDuration(t, now, endTime, time.Second)
 	})
 
 	t.Run("Future Time - No Update", func(t *testing.T) {
