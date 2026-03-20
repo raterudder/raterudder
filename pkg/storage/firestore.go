@@ -349,7 +349,7 @@ func (f *FirestoreProvider) UpsertWeather(ctx context.Context, siteID string, we
 		if err != nil {
 			return fmt.Errorf("failed to marshal weather: %w", err)
 		}
-		docID := w.TSDayStart.UTC().Format("2006-01-02")
+		docID := w.TSDayStart.Format("2006-01-02")
 		_, err = coll.Doc(docID).Set(ctx, map[string]any{
 			"json":       string(jsonBytes),
 			"tsDayStart": w.TSDayStart,
@@ -371,7 +371,7 @@ func (f *FirestoreProvider) UpsertWeather(ctx context.Context, siteID string, we
 			return fmt.Errorf("failed to marshal weather: %w", err)
 		}
 
-		docID := w.TSDayStart.UTC().Format("2006-01-02")
+		docID := w.TSDayStart.Format("2006-01-02")
 		ref := coll.Doc(docID)
 		job, err := bw.Set(ref, map[string]any{
 			"json":       string(jsonBytes),
@@ -755,6 +755,43 @@ func (f *FirestoreProvider) GetLatestPriceHistoryTime(ctx context.Context, siteI
 	ts, err := time.Parse(time.RFC3339, doc.Ref.ID)
 	if err != nil {
 		return time.Time{}, 0, fmt.Errorf("invalid price doc id %s: %w", doc.Ref.ID, err)
+	}
+
+	// Read version if available (default 0)
+	var version int
+	if v, err := doc.DataAt("version"); err == nil {
+		if vInt, ok := v.(int64); ok {
+			version = int(vInt)
+		}
+	}
+
+	return ts, version, nil
+}
+
+// GetLatestWeatherTime retrieves the timestamp of the last stored weather record for a site.
+func (f *FirestoreProvider) GetLatestWeatherTime(ctx context.Context, siteID string) (time.Time, int, error) {
+	coll, err := f.getCollection(siteID, "weather")
+	if err != nil {
+		return time.Time{}, 0, err
+	}
+
+	iter := coll.
+		OrderBy("tsDayStart", firestore.Desc).
+		Limit(1).
+		Documents(ctx)
+	defer iter.Stop()
+
+	doc, err := iter.Next()
+	if err == iterator.Done {
+		return time.Time{}, 0, nil
+	}
+	if err != nil {
+		return time.Time{}, 0, fmt.Errorf("failed to get latest weather doc: %w", err)
+	}
+
+	ts, err := time.Parse("2006-01-02", doc.Ref.ID)
+	if err != nil {
+		return time.Time{}, 0, fmt.Errorf("invalid weather doc id %s: %w", doc.Ref.ID, err)
 	}
 
 	// Read version if available (default 0)

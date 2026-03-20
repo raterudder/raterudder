@@ -39,6 +39,7 @@ type Database interface {
 	GetWeather(ctx context.Context, siteID string, start, end time.Time) ([]types.Weather, error)
 	GetLatestEnergyHistoryTime(ctx context.Context, siteID string) (time.Time, int, error)
 	GetLatestPriceHistoryTime(ctx context.Context, siteID string) (time.Time, int, error)
+	GetLatestWeatherTime(ctx context.Context, siteID string) (time.Time, int, error)
 
 	// Sites & Users
 	GetSite(ctx context.Context, siteID string) (types.Site, error)

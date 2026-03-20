@@ -366,52 +366,38 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 		timeLoc = time.UTC
 	}
 
-	now := time.Now().In(timeLoc)
-	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, timeLoc)
-	tomorrowStart := startOfDay.AddDate(0, 0, 1)
-
-	// Check today's weather
-	// ensure the end is greater than what we want since it's exclusive
-	weathersToday, err := s.storage.GetWeather(ctx, siteID, startOfDay, tomorrowStart.Add(time.Hour))
+	lastWeatherTime, lastVersion, err := s.storage.GetLatestWeatherTime(ctx, siteID)
 	if err != nil {
-		return fmt.Errorf("failed to get today's weather: %w", err)
+		log.Ctx(ctx).WarnContext(ctx, "failed to get latest weather time", slog.Any("error", err))
 	}
 
-	var todayWeather types.Weather
-	var tomorrowWeather types.Weather
-	for _, w := range weathersToday {
-		if w.TSDayStart.Equal(startOfDay) {
-			todayWeather = w
-		} else if w.TSDayStart.Equal(tomorrowStart) {
-			tomorrowWeather = w
-		}
+	now := time.Now().In(timeLoc)
+	fiveDaysAgo := now.AddDate(0, 0, -5)
+	syncStart := time.Date(fiveDaysAgo.Year(), fiveDaysAgo.Month(), fiveDaysAgo.Day(), 0, 0, 0, 0, timeLoc)
+
+	if !lastWeatherTime.IsZero() && lastVersion >= types.CurrentWeatherVersion && lastWeatherTime.After(syncStart) {
+		syncStart = lastWeatherTime
+	} else if !lastWeatherTime.IsZero() && lastVersion < types.CurrentWeatherVersion {
+		log.Ctx(ctx).InfoContext(
+			ctx,
+			"backfilling weather history due to version mismatch",
+			slog.Int("lastVersion", lastVersion),
+			slog.Int("currentVersion", types.CurrentWeatherVersion),
+		)
 	}
 
-	var fetchStart time.Time
-	// if we already have 24 hours for the current day then don't bother
-	// fetching the current day again otherwise fetch today and tomorrow so we
-	// can upsert today to include any missing time.
-	if len(todayWeather.ForecastHours) < 24 {
-		fetchStart = startOfDay
-	}
+	log.Ctx(ctx).DebugContext(ctx, "syncing weather history", slog.Any("since", syncStart))
 
-	// fetch the next 24 hours of weather if we haven't already fetched it and
-	// it's within 1 hour of sunrise of the current day.
-	if fetchStart.IsZero() && len(tomorrowWeather.ForecastHours) < 24 && now.After(todayWeather.TSSunrise.Add(-time.Hour)) {
-		fetchStart = tomorrowStart
-	}
+	// Fetch from syncStart to the end of tomorrow (exclusive)
+	tomorrowStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, timeLoc).AddDate(0, 0, 1)
+	fetchEnd := tomorrowStart.AddDate(0, 0, 1)
 
-	if fetchStart.IsZero() {
+	// if we already have all of tomorrow then don't bother fetching more
+	if syncStart.After(tomorrowStart) {
 		return nil
 	}
 
-	log.Ctx(ctx).InfoContext(ctx, "fetching weather forecast", slog.Time("start", fetchStart))
-
-	// if we're making a call we might as well fetch tomorrow too
-	// exclusive boundary for the day after tomorrow
-	fetchEnd := tomorrowStart.AddDate(0, 0, 1)
-
-	newWeathers, err := s.weather.FetchWeatherForecast(ctx, loc, fetchStart, fetchEnd)
+	newWeathers, err := s.weather.FetchWeatherForecast(ctx, loc, syncStart, fetchEnd)
 	if err != nil {
 		return fmt.Errorf("failed to fetch weather forecast: %w", err)
 	}
@@ -435,7 +421,7 @@ func (s *Server) updateEnergyHistory(ctx context.Context, siteID string, essSyst
 	// We want at most last 5 days, but starting from the last record
 	// truncated to the hour in case we previously stored an incomplete hour.
 	now := time.Now()
-	fiveDaysAgo := now.Add(-5 * 24 * time.Hour)
+	fiveDaysAgo := now.AddDate(0, 0, -5)
 	syncStart := time.Date(fiveDaysAgo.Year(), fiveDaysAgo.Month(), fiveDaysAgo.Day(), 0, 0, 0, 0, fiveDaysAgo.Location())
 
 	// Only use lastHistoryTime if version matches

@@ -442,8 +442,8 @@ func TestCalculateImprovedSolar(t *testing.T) {
 		if assert.Len(t, results, 10) {
 			assert.Greater(t, results[h[4].Unix()].ImprovedSolar, 0.0,
 				"historical hours should receive an ImprovedSolar value for comparison")
-			assert.InDelta(t, 2.2, results[h[5].Unix()].ImprovedSolar, 0.33,
-				"peak hour projection should be close to the robustly calibrated reading")
+			assert.InDelta(t, 1.73, results[h[5].Unix()].ImprovedSolar, 0.05,
+				"peak hour projection should be close to the average of top calibrated readings")
 		}
 	})
 
@@ -657,13 +657,13 @@ func TestCalculateImprovedSolar(t *testing.T) {
 		results := calculateImprovedSolar(ctx, history, weather)
 
 		// efficiencies collected: [0.011, 0.012, 0.013, 0.014, 0.015, 0.020]
-		// len=6. 90th percentile index = 5. index == 6-1 -> index = 4 (value 0.015).
+		// Top 3 are 0.020, 0.015, 0.014. Average = 0.01633...
 		// Temperature Factor for h[8] at 25C is 1.0.
-		// Result should be 100 * 0.015 * 1.0 = 1.5.
+		// Result should be 100 * 0.01633 * 1.0 = 1.633...
 
 		if assert.Len(t, results, 10) {
-			assert.InDelta(t, 1.5, results[h[8].Unix()].ImprovedSolar, 0.01,
-				"should use second highest efficiency (0.015) instead of peak outlier (0.02)")
+			assert.InDelta(t, 1.63, results[h[8].Unix()].ImprovedSolar, 0.01,
+				"should use average of top 3 efficiencies")
 		}
 	})
 

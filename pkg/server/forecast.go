@@ -416,29 +416,39 @@ func calculateImprovedSolar(ctx context.Context, history []types.EnergyStats, we
 		results[ts] = h
 	}
 
-	// 3. Determine robust efficiency (e.g., 75th percentile)
+	// 3. Determine robust efficiency by averaging the top 3 items
 	// only compare ghi to ghi and gti to gti
 	var finalEff efficiencyDetail
+	var top3Efficiencies []efficiencyDetail
 	if len(efficiencies) > 0 {
 		sort.Slice(efficiencies, func(i, j int) bool {
 			if hasGTI {
-				return efficiencies[i].EfficiencyGTI < efficiencies[j].EfficiencyGTI
+				return efficiencies[i].EfficiencyGTI > efficiencies[j].EfficiencyGTI
 			}
-			return efficiencies[i].EfficiencyGHI < efficiencies[j].EfficiencyGHI
+			return efficiencies[i].EfficiencyGHI > efficiencies[j].EfficiencyGHI
 		})
-		index := int(0.75 * float64(len(efficiencies)))
-		// If index is greater than or equal to the highest index, default to the
-		// second highest or the highest if the dataset is small
-		if index >= len(efficiencies)-1 {
-			index = max(0, len(efficiencies)-2)
+
+		if len(efficiencies) >= 3 {
+			var sumGTI, sumGHI float64
+			for i := 0; i < 3; i++ {
+				sumGTI += efficiencies[i].EfficiencyGTI
+				sumGHI += efficiencies[i].EfficiencyGHI
+				top3Efficiencies = append(top3Efficiencies, efficiencies[i])
+			}
+			finalEff.EfficiencyGTI = sumGTI / 3
+			finalEff.EfficiencyGHI = sumGHI / 3
+		} else {
+			finalEff.EfficiencyGTI = efficiencies[0].EfficiencyGTI
+			finalEff.EfficiencyGHI = efficiencies[0].EfficiencyGHI
+			top3Efficiencies = append(top3Efficiencies, efficiencies[0])
 		}
-		finalEff = efficiencies[index]
 	}
 
 	log.Ctx(ctx).DebugContext(
 		ctx,
 		"calculated robust efficiency",
 		slog.Any("finalEfficiency", finalEff),
+		slog.Any("top3Efficiencies", top3Efficiencies),
 		slog.Int("validPoints", len(efficiencies)),
 	)
 

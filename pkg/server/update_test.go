@@ -36,6 +36,7 @@ func TestHandleUpdate(t *testing.T) {
 	}, types.CurrentSettingsVersion, nil)
 	mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
 	mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+	mockS.On("GetLatestWeatherTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
 	mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
@@ -429,6 +430,7 @@ func TestHandleUpdate(t *testing.T) {
 			lastTime := time.Date(2023, 10, 27, 12, 0, 0, 0, time.UTC)
 			mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(lastTime, 0, nil) // Version 0 < CurrentVersion
 			mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(lastTime, 0, nil)
+			mockS.On("GetLatestWeatherTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
 
 			// Expect backfill from 5 days ago, not lastTime
 			// We can verify this by checking the start time in GetEnergyHistory call to ESS
@@ -500,6 +502,7 @@ func TestHandleUpdate(t *testing.T) {
 			lastTime := time.Now().Add(-2 * time.Hour).Truncate(time.Hour)
 			mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(lastTime, types.CurrentEnergyStatsVersion, nil)
 			mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(lastTime, types.CurrentPriceHistoryVersion, nil)
+			mockS.On("GetLatestWeatherTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
 
 			mockES := &mockESS{}
 			mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
@@ -572,6 +575,7 @@ func TestHandleUpdateSites(t *testing.T) {
 	// Other storage calls for site1 and site3
 	mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
 	mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Now().Add(-1*time.Hour), types.CurrentPriceHistoryVersion, nil)
+	mockS.On("GetLatestWeatherTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
 	mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
@@ -1024,126 +1028,118 @@ func TestUpdateEnergyHistory(t *testing.T) {
 }
 
 func TestUpdateWeatherHistory(t *testing.T) {
+	loc, err := time.LoadLocation("America/Los_Angeles")
+	require.NoError(t, err)
+
+	sl := types.SiteLocation{
+		PostalCode:  "90210",
+		CountryCode: "US",
+		Latitude:    34.09,
+		Longitude:   -118.4,
+		TimeZone:    loc.String(),
+	}
+
 	t.Run("Update Missing History", func(t *testing.T) {
 		mockS := &mockStorage{}
-		// Today's weather is missing
-		mockS.On("GetWeather", mock.Anything, "test-site", mock.Anything, mock.Anything).Return([]types.Weather{}, nil)
-		mockS.On("UpsertWeather", mock.Anything, "test-site", mock.Anything, mock.Anything).Return(nil)
-
 		mockW := &mockWeather{}
-		mockW.On("FetchWeatherForecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{
-			{ForecastHours: make([]types.HourlyWeather, 24)},
-			{ForecastHours: make([]types.HourlyWeather, 24)},
-		}, nil)
+
+		// No history exists
+		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(time.Time{}, 0, nil)
+
+		// Expected fetch range: 5 days ago to tomorrow midnight (total 7 days)
+		now := time.Now().In(loc)
+		fiveDaysAgoMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, -5)
+		tomorrowMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, 2)
+
+		mockW.On("FetchWeatherForecast", mock.Anything, sl, mock.MatchedBy(func(t time.Time) bool {
+			return t.Equal(fiveDaysAgoMidnight)
+		}), mock.MatchedBy(func(t time.Time) bool {
+			return t.Equal(tomorrowMidnight)
+		})).Return([]types.Weather{{TSDayStart: now}}, nil)
+
+		mockS.On("UpsertWeather", mock.Anything, "test-site", mock.Anything, types.CurrentWeatherVersion).Return(nil)
 
 		srv := &Server{
 			storage: mockS,
 			weather: mockW,
 		}
 
-		loc := types.SiteLocation{
-			PostalCode:  "90210",
-			CountryCode: "US",
-			Latitude:    34.09,
-			Longitude:   -118.4,
-			TimeZone:    "America/Los_Angeles",
+		err := srv.updateWeatherHistory(context.Background(), "test-site", sl)
+		assert.NoError(t, err)
+		mockS.AssertExpectations(t)
+		mockW.AssertExpectations(t)
+	})
+
+	t.Run("Backfill on Version Mismatch", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockW := &mockWeather{}
+
+		// Old version history exists
+		lastTime := time.Now().In(loc).AddDate(0, 0, -1)
+		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(lastTime, 1, nil) // Version 1 < 3
+
+		// Should still start from 5 days ago due to version mismatch
+		now := time.Now().In(loc)
+		fiveDaysAgoMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, -5)
+
+		mockW.On("FetchWeatherForecast", mock.Anything, sl, mock.MatchedBy(func(t time.Time) bool {
+			return t.Equal(fiveDaysAgoMidnight)
+		}), mock.Anything).Return([]types.Weather{}, nil)
+
+		mockS.On("UpsertWeather", mock.Anything, "test-site", mock.Anything, types.CurrentWeatherVersion).Return(nil)
+
+		srv := &Server{
+			storage: mockS,
+			weather: mockW,
 		}
 
-		err := srv.updateWeatherHistory(context.Background(), "test-site", loc)
+		err := srv.updateWeatherHistory(context.Background(), "test-site", sl)
 		assert.NoError(t, err)
-
 		mockS.AssertExpectations(t)
 	})
 
-	t.Run("Does Not Update If Today Has 24 Hours and Before Sunset", func(t *testing.T) {
+	t.Run("No Update If Already Recent", func(t *testing.T) {
 		mockS := &mockStorage{}
-
-		loc, err := time.LoadLocation("America/Los_Angeles")
-		require.NoError(t, err)
-
-		now := time.Now().In(loc)
-		midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-		// Set sunrise to 2 hours from now
-		sunriseTime := now.Add(2 * time.Hour)
-		sunsetTime := now.Add(3 * time.Hour)
-
-		mockS.On("GetWeather", mock.Anything, "test-site", midnight, mock.Anything).Return([]types.Weather{
-			{
-				TSDayStart:    midnight,
-				TSSunrise:     sunriseTime,
-				TSSunset:      sunsetTime,
-				ForecastHours: make([]types.HourlyWeather, 24),
-			},
-		}, nil)
-
 		mockW := &mockWeather{}
+
+		// History already exists through end of tomorrow
+		now := time.Now().In(loc)
+		tomorrowMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, 2)
+		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(tomorrowMidnight, types.CurrentWeatherVersion, nil)
 
 		srv := &Server{
 			storage: mockS,
 			weather: mockW,
 		}
 
-		sl := types.SiteLocation{
-			PostalCode:  "90210",
-			CountryCode: "US",
-			Latitude:    34.09,
-			Longitude:   -118.4,
-			TimeZone:    loc.String(),
-		}
-
-		err = srv.updateWeatherHistory(context.Background(), "test-site", sl)
+		err := srv.updateWeatherHistory(context.Background(), "test-site", sl)
 		assert.NoError(t, err)
-
-		mockS.AssertExpectations(t)
 		mockW.AssertNotCalled(t, "FetchWeatherForecast")
 	})
 
-	t.Run("Updates Near Sunrise If Tomorrow Missing", func(t *testing.T) {
+	t.Run("Resume From Last Weather Time", func(t *testing.T) {
 		mockS := &mockStorage{}
-
-		loc, err := time.LoadLocation("America/Los_Angeles")
-		require.NoError(t, err)
-
-		now := time.Now().In(loc)
-		midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-		// Set sunrise to 1 hour ago
-		sunriseTime := now.Add(time.Minute)
-		sunsetTime := now.Add(2 * time.Hour)
-
-		// First call for today returns 24 hours
-		mockS.On("GetWeather", mock.Anything, "test-site", midnight, mock.Anything).Return([]types.Weather{
-			{
-				TSDayStart:    midnight,
-				TSSunrise:     sunriseTime,
-				TSSunset:      sunsetTime,
-				ForecastHours: make([]types.HourlyWeather, 24),
-			},
-		}, nil).Once()
-
-		mockS.On("UpsertWeather", mock.Anything, "test-site", mock.Anything, mock.Anything).Return(nil)
-
 		mockW := &mockWeather{}
-		mockW.On("FetchWeatherForecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{
-			{ForecastHours: make([]types.HourlyWeather, 24)},
-			{ForecastHours: make([]types.HourlyWeather, 24)},
-		}, nil)
+
+		// Recent history exists but tomorrow's end and today's end are not yet fully covered
+		now := time.Now().In(loc)
+		lastTime := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc) // midnight today
+		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(lastTime, types.CurrentWeatherVersion, nil)
+
+		// Sync should start from lastTime
+		mockW.On("FetchWeatherForecast", mock.Anything, sl, mock.MatchedBy(func(t time.Time) bool {
+			return t.Equal(lastTime)
+		}), mock.Anything).Return([]types.Weather{}, nil)
+
+		mockS.On("UpsertWeather", mock.Anything, "test-site", mock.Anything, types.CurrentWeatherVersion).Return(nil)
 
 		srv := &Server{
 			storage: mockS,
 			weather: mockW,
 		}
 
-		sl := types.SiteLocation{
-			PostalCode:  "90210",
-			CountryCode: "US",
-			Latitude:    34.09,
-			Longitude:   -118.4,
-			TimeZone:    loc.String(),
-		}
-
-		err = srv.updateWeatherHistory(context.Background(), "test-site", sl)
+		err := srv.updateWeatherHistory(context.Background(), "test-site", sl)
 		assert.NoError(t, err)
-
 		mockS.AssertExpectations(t)
 	})
 }

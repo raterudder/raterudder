@@ -32,6 +32,7 @@ func TestHandleGetSettings(t *testing.T) {
 	}, types.CurrentSettingsVersion, nil)
 	// Add expectations for background sync
 	mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+	mockS.On("GetLatestWeatherTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
 	mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// Helper to create server with auth config
@@ -145,6 +146,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 	}, types.CurrentSettingsVersion, nil)
 	// Add expectations for background sync
 	mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+	mockS.On("GetLatestWeatherTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
 	mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	// Helper to create server with auth config
@@ -632,6 +634,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		})
 		mockS.On("SetCredentials", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+		mockS.On("GetLatestWeatherTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
 		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
 		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil).Maybe()
 		mockS.On("UpsertWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -768,6 +771,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}
 		mockW.On("GetLocationData", mock.Anything, "US", "60601").Return(newLoc, nil).Once()
 		mockW.On("FetchWeatherForecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("GetLatestWeatherTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
 		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
 		mockS.On("UpsertWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
