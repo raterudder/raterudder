@@ -156,6 +156,15 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 		})
 	}
 
+	// Pre-compute an O(1) lookup map for prices keyed by hour start to avoid an O(N^2) nested loop.
+	// Only prices that span exactly 1 hour are mapped, as energyStats are hourly.
+	pricesByHour := make(map[int64]*types.Price, len(prices))
+	for i, p := range prices {
+		if !p.TSEnd.IsZero() && p.TSEnd.Sub(p.TSStart) == time.Hour {
+			pricesByHour[p.TSStart.Unix()] = &prices[i]
+		}
+	}
+
 	type energyChunk struct {
 		amount float64
 		price  float64
@@ -169,11 +178,19 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 
 		var gridImportPrice float64
 		var gridExportPrice float64
-		for _, p := range prices {
-			if p.Contains(ts) {
-				gridImportPrice = p.DollarsPerKWH
-				gridExportPrice = p.DollarsPerKWH + p.GridUseDollarsPerKWH
-				break
+
+		// Try O(1) lookup first
+		if p, ok := pricesByHour[ts.Unix()]; ok && p.Contains(ts) {
+			gridImportPrice = p.DollarsPerKWH
+			gridExportPrice = p.DollarsPerKWH + p.GridUseDollarsPerKWH
+		} else {
+			// Fallback to O(N) iterative loop for correctness on partial overlaps or non-exact hours
+			for _, p := range prices {
+				if p.Contains(ts) {
+					gridImportPrice = p.DollarsPerKWH
+					gridExportPrice = p.DollarsPerKWH + p.GridUseDollarsPerKWH
+					break
+				}
 			}
 		}
 
