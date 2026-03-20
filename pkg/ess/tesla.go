@@ -460,6 +460,17 @@ func (b *Tesla) refreshToken(ctx context.Context, baseURL, refreshToken string) 
 	return b.base.doTokenRequest(ctx, baseURL, data)
 }
 
+func (b *Tesla) getCalendarHistory(ctx context.Context, kind string, start, end time.Time, loc *time.Location, tz string, dest any) error {
+	path := fmt.Sprintf("api/1/energy_sites/%d/calendar_history", b.energySiteID)
+	params := url.Values{}
+	params.Set("kind", kind)
+	params.Set("period", "day")
+	params.Set("time_zone", tz)
+	params.Set("start_date", start.In(loc).Format(time.RFC3339))
+	params.Set("end_date", end.In(loc).Format(time.RFC3339))
+	return b.doGETRequest(ctx, path, params, dest)
+}
+
 func (b *Tesla) doGETRequest(ctx context.Context, path string, params url.Values, dest any) error {
 	req, err := b.base.newGETRequest(ctx, "GET", path, b.token, b.baseURL)
 	if err != nil {
@@ -791,101 +802,96 @@ func (b *Tesla) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]t
 		loc = time.UTC
 	}
 
-	historyPath := fmt.Sprintf("api/1/energy_sites/%d/calendar_history", b.energySiteID)
-	baseParams := url.Values{}
-	baseParams.Set("period", "day")
-	baseParams.Set("time_zone", tz)
-	baseParams.Set("start_date", start.In(loc).Format(time.RFC3339))
-	baseParams.Set("end_date", end.In(loc).Format(time.RFC3339))
-
-	// Fetch energy history
-	energyParams := url.Values{}
-	for k, v := range baseParams {
-		energyParams[k] = v
-	}
-	energyParams.Set("kind", "energy")
-
-	var energyRes teslaCalendarHistoryResponse
-	if err := b.doGETRequest(ctx, historyPath, energyParams, &energyRes); err != nil {
-		return nil, err
-	}
-
-	// Aggregate energy data into hourly buckets
 	hourlyStats := make(map[string]*types.EnergyStats)
-	for _, ts := range energyRes.TimeSeries {
-		t, err := time.Parse(time.RFC3339, ts.Timestamp)
-		if err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to parse timestamp", slog.String("timestamp", ts.Timestamp), slog.Any("error", err))
-			continue
-		}
-		tInLoc := t.In(loc)
 
-		hourKey := tInLoc.Truncate(time.Hour).Format(time.RFC3339)
-		if _, exists := hourlyStats[hourKey]; !exists {
-			hourlyStats[hourKey] = &types.EnergyStats{
-				TSHourStart: tInLoc.Truncate(time.Hour),
+	startInLoc := start.In(loc)
+	endInLoc := end.In(loc)
+	current := time.Date(startInLoc.Year(), startInLoc.Month(), startInLoc.Day(), 0, 0, 0, 0, loc)
+
+	for current.Before(endInLoc) {
+		if current.After(time.Now()) {
+			break
+		}
+		dayEnd := current.AddDate(0, 0, 1).Add(-time.Second)
+
+		// Fetch energy history for this day
+		var energyRes teslaCalendarHistoryResponse
+		if err := b.getCalendarHistory(ctx, "energy", current, dayEnd, loc, tz, &energyRes); err != nil {
+			return nil, err
+		}
+
+		// Aggregate energy data into hourly buckets
+		for _, ts := range energyRes.TimeSeries {
+			t, err := time.Parse(time.RFC3339, ts.Timestamp)
+			if err != nil {
+				log.Ctx(ctx).WarnContext(ctx, "failed to parse timestamp", slog.String("timestamp", ts.Timestamp), slog.Any("error", err))
+				continue
 			}
-		}
-		s := hourlyStats[hourKey]
+			tInLoc := t.In(loc)
 
-		s.SolarKWH += ts.SolarEnergyExportedWH / 1000.0
-		s.BatteryChargedKWH += (ts.BatteryEnergyImportedFromGridWH + ts.BatteryEnergyImportedFromSolarWH) / 1000.0
-		s.BatteryUsedKWH += ts.BatteryEnergyExportedWH / 1000.0
-		s.GridImportKWH += ts.GridEnergyImportedWH / 1000.0
-		s.GridExportKWH += (ts.GridEnergyExportedFromSolarWH + ts.GridEnergyExportedFromBatteryWH) / 1000.0
-		s.HomeKWH += (ts.ConsumerEnergyImportedFromGridWH + ts.ConsumerEnergyImportedFromSolarWH + ts.ConsumerEnergyImportedFromBatteryWH) / 1000.0
-		s.SolarToHomeKWH += ts.ConsumerEnergyImportedFromSolarWH / 1000.0
-		s.SolarToBatteryKWH += ts.BatteryEnergyImportedFromSolarWH / 1000.0
-		s.SolarToGridKWH += ts.GridEnergyExportedFromSolarWH / 1000.0
-		s.BatteryToHomeKWH += ts.ConsumerEnergyImportedFromBatteryWH / 1000.0
-		s.BatteryToGridKWH += ts.GridEnergyExportedFromBatteryWH / 1000.0
-	}
-
-	// Fetch SOE (state of energy) history for min/max battery SOC
-	soeParams := url.Values{}
-	for k, v := range baseParams {
-		soeParams[k] = v
-	}
-	soeParams.Set("kind", "soe")
-
-	var soeRes teslaSOEResponse
-	if err := b.doGETRequest(ctx, historyPath, soeParams, &soeRes); err != nil {
-		log.Ctx(ctx).WarnContext(ctx, "failed to get SOE history, continuing without SOC data", slog.Any("error", err))
-	}
-
-	// Merge SOE data into hourly buckets for min/max battery SOC
-	for _, soeEntry := range soeRes.TimeSeries {
-		t, err := time.Parse(time.RFC3339, soeEntry.Timestamp)
-		if err != nil {
-			continue
-		}
-		tInLoc := t.In(loc)
-		hourKey := tInLoc.Truncate(time.Hour).Format(time.RFC3339)
-
-		s, exists := hourlyStats[hourKey]
-		if !exists {
-			// SOE entry for hour without energy data; create a bucket
-			s = &types.EnergyStats{
-				TSHourStart:   tInLoc.Truncate(time.Hour),
-				MinBatterySOC: soeEntry.SOE,
-				MaxBatterySOC: soeEntry.SOE,
+			hourKey := tInLoc.Truncate(time.Hour).Format(time.RFC3339)
+			if _, exists := hourlyStats[hourKey]; !exists {
+				hourlyStats[hourKey] = &types.EnergyStats{
+					TSHourStart: tInLoc.Truncate(time.Hour),
+				}
 			}
-			hourlyStats[hourKey] = s
-			continue
+			s := hourlyStats[hourKey]
+
+			s.SolarKWH += ts.SolarEnergyExportedWH / 1000.0
+			s.BatteryChargedKWH += (ts.BatteryEnergyImportedFromGridWH + ts.BatteryEnergyImportedFromSolarWH) / 1000.0
+			s.BatteryUsedKWH += ts.BatteryEnergyExportedWH / 1000.0
+			s.GridImportKWH += ts.GridEnergyImportedWH / 1000.0
+			s.GridExportKWH += (ts.GridEnergyExportedFromSolarWH + ts.GridEnergyExportedFromBatteryWH) / 1000.0
+			s.HomeKWH += (ts.ConsumerEnergyImportedFromGridWH + ts.ConsumerEnergyImportedFromSolarWH + ts.ConsumerEnergyImportedFromBatteryWH) / 1000.0
+			s.SolarToHomeKWH += ts.ConsumerEnergyImportedFromSolarWH / 1000.0
+			s.SolarToBatteryKWH += ts.BatteryEnergyImportedFromSolarWH / 1000.0
+			s.SolarToGridKWH += ts.GridEnergyExportedFromSolarWH / 1000.0
+			s.BatteryToHomeKWH += ts.ConsumerEnergyImportedFromBatteryWH / 1000.0
+			s.BatteryToGridKWH += ts.GridEnergyExportedFromBatteryWH / 1000.0
 		}
 
-		if s.MinBatterySOC == 0 && s.MaxBatterySOC == 0 {
-			// First SOE for this bucket
-			s.MinBatterySOC = soeEntry.SOE
-			s.MaxBatterySOC = soeEntry.SOE
+		// Fetch SOE history for this day
+		var soeRes teslaSOEResponse
+		if err := b.getCalendarHistory(ctx, "soe", current, dayEnd, loc, tz, &soeRes); err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to get SOE history, continuing without SOC data", slog.Any("error", err))
 		} else {
-			if soeEntry.SOE < s.MinBatterySOC {
-				s.MinBatterySOC = soeEntry.SOE
-			}
-			if soeEntry.SOE > s.MaxBatterySOC {
-				s.MaxBatterySOC = soeEntry.SOE
+			// Merge SOE data into hourly buckets
+			for _, soeEntry := range soeRes.TimeSeries {
+				t, err := time.Parse(time.RFC3339, soeEntry.Timestamp)
+				if err != nil {
+					continue
+				}
+				tInLoc := t.In(loc)
+				hourKey := tInLoc.Truncate(time.Hour).Format(time.RFC3339)
+
+				s, exists := hourlyStats[hourKey]
+				if !exists {
+					// SOE entry for hour without energy data; create a bucket
+					s = &types.EnergyStats{
+						TSHourStart:   tInLoc.Truncate(time.Hour),
+						MinBatterySOC: soeEntry.SOE,
+						MaxBatterySOC: soeEntry.SOE,
+					}
+					hourlyStats[hourKey] = s
+					continue
+				}
+
+				if s.MinBatterySOC == 0 && s.MaxBatterySOC == 0 {
+					// First SOE for this bucket
+					s.MinBatterySOC = soeEntry.SOE
+					s.MaxBatterySOC = soeEntry.SOE
+				} else {
+					if soeEntry.SOE < s.MinBatterySOC {
+						s.MinBatterySOC = soeEntry.SOE
+					}
+					if soeEntry.SOE > s.MaxBatterySOC {
+						s.MaxBatterySOC = soeEntry.SOE
+					}
+				}
 			}
 		}
+
+		current = current.AddDate(0, 0, 1)
 	}
 
 	var allStats []types.EnergyStats

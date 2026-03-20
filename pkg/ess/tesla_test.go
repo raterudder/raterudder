@@ -543,6 +543,73 @@ func TestTesla(t *testing.T) {
 		assert.Empty(t, stats)
 	})
 
+	t.Run("GetEnergyHistory Multi-day loop", func(t *testing.T) {
+		loc, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
+
+		var requests []map[string]string
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/1/energy_sites/1234/site_info":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"installation_time_zone": "America/Chicago",
+					},
+				})
+			case "/api/1/energy_sites/1234/calendar_history":
+				requests = append(requests, map[string]string{
+					"kind":       r.URL.Query().Get("kind"),
+					"start_date": r.URL.Query().Get("start_date"),
+					"end_date":   r.URL.Query().Get("end_date"),
+				})
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"serial_number": "abc123",
+						"period":        "day",
+						"time_series":   []map[string]any{},
+					},
+				})
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer ts.Close()
+
+		m := teslaMap(ts)
+		sys, err := m.Site(ctx, "test-site", types.Settings{ESS: "tesla"})
+		require.NoError(t, err)
+
+		teslaSys := sys.(*Tesla)
+		teslaSys.token = "mock-access"
+		teslaSys.energySiteID = 1234
+		teslaSys.baseURL = ts.URL
+
+		// 3 days range
+		start := time.Date(2026, 3, 10, 0, 0, 0, 0, loc)
+		end := time.Date(2026, 3, 13, 0, 0, 0, 0, loc)
+
+		_, err = sys.GetEnergyHistory(ctx, start, end)
+		require.NoError(t, err)
+
+		// Expect 3 days * 2 kinds (energy, soe) = 6 requests
+		assert.Equal(t, 6, len(requests))
+
+		for _, req := range requests {
+			s, err := time.Parse(time.RFC3339, req["start_date"])
+			require.NoError(t, err)
+			e, err := time.Parse(time.RFC3339, req["end_date"])
+			require.NoError(t, err)
+
+			sInLoc := s.In(loc)
+			eInLoc := e.In(loc)
+
+			// Assert start and end are on the same day in local time
+			assert.Equal(t, sInLoc.Year(), eInLoc.Year())
+			assert.Equal(t, sInLoc.Month(), eInLoc.Month())
+			assert.Equal(t, sInLoc.Day(), eInLoc.Day())
+		}
+	})
+
 	t.Run("SetModes", func(t *testing.T) {
 		setupTesla := func(t *testing.T, initialMode string, initialSOC float64, initialGrid bool, initialExport string, liveSOC float64, stormMode bool, settings types.Settings) (*Tesla, *httptest.Server, *bool, *bool, *bool, *map[string]any) {
 			modeCalled := false
