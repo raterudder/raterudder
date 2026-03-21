@@ -252,9 +252,11 @@ export interface FranklinCredentials {
     gatewayID: string;
 }
 
+export type CredentialsPayload = Record<string, Record<string, any>>;
+
 export interface SettingsUpdate {
     settings: Settings;
-    credentials?: Record<string, any>;
+    credentials?: CredentialsPayload;
     siteID?: string;
 }
 
@@ -270,7 +272,7 @@ export const fetchSettings = async (siteID?: string): Promise<Settings> => {
     return response.json();
 };
 
-export const updateSettings = async (settings: Settings, siteID?: string, credentials?: Record<string, any>): Promise<void> => {
+export const updateSettings = async (settings: Settings, siteID?: string, credentials?: CredentialsPayload): Promise<void> => {
     const payload: any = {
         ...settings,
         siteID: siteID,
