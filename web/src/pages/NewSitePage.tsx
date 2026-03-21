@@ -67,6 +67,7 @@ const NewSitePage = ({ onJoinSuccess }: NewSitePageProps) => {
                         disabled={isSubmitting || !name.trim()}
                         className="join-submit"
                     >
+                        {isSubmitting && <span className="loading-spinner" aria-hidden="true"></span>}
                         {isSubmitting ? 'Creating...' : 'Create Site'}
                     </button>
                 </form>

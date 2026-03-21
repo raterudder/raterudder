@@ -198,20 +198,6 @@
   transform: translateY(-1px);
 }
 
-.save-spinner {
-  animation: save-spin 1s linear infinite;
-  display: block;
-}
-
-@keyframes save-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 .save-button:active {
   transform: translateY(0);
 }
