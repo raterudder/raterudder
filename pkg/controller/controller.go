@@ -298,7 +298,11 @@ func (c *Controller) Decide(
 				)
 				break
 			} else {
-				if plannedChargeTime.IsZero() || cheapestFutureChargeCost < plannedChargeCost {
+				// don't plan to charge after the deficit time and only plan to charge if
+				// the difference is sigificant
+				isBeforeDeficit := !cheapestFutureChargeTime.After(hitDeficitAt)
+				isSignificantlyCheaper := gridChargeNowCost-plannedChargeCost > settings.MinDeficitPriceDifferenceDollarsPerKWH
+				if isBeforeDeficit && isSignificantlyCheaper && (plannedChargeTime.IsZero() || cheapestFutureChargeCost < plannedChargeCost) {
 					plannedChargeTime = cheapestFutureChargeTime
 					plannedChargePrice = cheapestFutureChargePrice
 					plannedChargeCost = cheapestFutureChargeCost
