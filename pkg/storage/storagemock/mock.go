@@ -163,6 +163,11 @@ func (m *MockDatabase) GetLatestAction(ctx context.Context, siteID string) (*typ
 	return val.(*types.Action), args.Error(1)
 }
 
+func (m *MockDatabase) Ping(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
 func (m *MockDatabase) Close() error {
 	args := m.Called()
 	return args.Error(0)

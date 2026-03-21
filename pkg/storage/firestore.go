@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -69,6 +70,19 @@ func (f *FirestoreProvider) Init(ctx context.Context) error {
 		return fmt.Errorf("failed to create firestore client (project=%s, database=%s): %w", projectID, database, err)
 	}
 	f.client = client
+	return nil
+}
+
+// Ping checks if the Firestore client can connect to the database.
+func (f *FirestoreProvider) Ping(ctx context.Context) error {
+	if f.client == nil {
+		return fmt.Errorf("firestore client not initialized")
+	}
+	// Use a simple operation to check connectivity
+	_, err := f.client.Collections(ctx).Next()
+	if !errors.Is(err, iterator.Done) && err != nil {
+		return fmt.Errorf("failed to ping firestore: %w", err)
+	}
 	return nil
 }
 
@@ -192,7 +206,7 @@ func (f *FirestoreProvider) GetActionHistory(ctx context.Context, siteID string,
 	var actions []types.Action
 	for {
 		doc, err := iter.Next()
-		if err == iterator.Done {
+		if errors.Is(err, iterator.Done) {
 			break
 		}
 		if err != nil {
@@ -235,7 +249,7 @@ func (f *FirestoreProvider) GetLatestAction(ctx context.Context, siteID string) 
 	defer iter.Stop()
 
 	doc, err := iter.Next()
-	if err == iterator.Done {
+	if errors.Is(err, iterator.Done) {
 		return nil, nil // No actions found
 	}
 	if err != nil {
@@ -411,7 +425,7 @@ func (f *FirestoreProvider) GetWeather(ctx context.Context, siteID string, start
 	var weather []types.Weather
 	for {
 		doc, err := iter.Next()
-		if err == iterator.Done {
+		if errors.Is(err, iterator.Done) {
 			break
 		}
 		if err != nil {
@@ -460,7 +474,7 @@ func (f *FirestoreProvider) GetEnergyHistory(ctx context.Context, siteID string,
 	var allStats []types.EnergyStats
 	for {
 		doc, err := iter.Next()
-		if err == iterator.Done {
+		if errors.Is(err, iterator.Done) {
 			break
 		}
 		if err != nil {
@@ -502,7 +516,7 @@ func (f *FirestoreProvider) GetLatestEnergyHistoryTime(ctx context.Context, site
 	defer iter.Stop()
 
 	doc, err := iter.Next()
-	if err == iterator.Done {
+	if errors.Is(err, iterator.Done) {
 		return time.Time{}, 0, nil
 	}
 	if err != nil {
@@ -562,7 +576,7 @@ func (f *FirestoreProvider) ListSites(ctx context.Context) ([]types.Site, error)
 	var sites []types.Site
 	for {
 		doc, err := iter.Next()
-		if err == iterator.Done {
+		if errors.Is(err, iterator.Done) {
 			break
 		}
 		if err != nil {
@@ -701,7 +715,7 @@ func (f *FirestoreProvider) GetPriceHistory(ctx context.Context, siteID string, 
 	var prices []types.Price
 	for {
 		doc, err := iter.Next()
-		if err == iterator.Done {
+		if errors.Is(err, iterator.Done) {
 			break
 		}
 		if err != nil {
@@ -745,7 +759,7 @@ func (f *FirestoreProvider) GetLatestPriceHistoryTime(ctx context.Context, siteI
 	defer iter.Stop()
 
 	doc, err := iter.Next()
-	if err == iterator.Done {
+	if errors.Is(err, iterator.Done) {
 		return time.Time{}, 0, nil
 	}
 	if err != nil {
@@ -782,7 +796,7 @@ func (f *FirestoreProvider) GetLatestWeatherTime(ctx context.Context, siteID str
 	defer iter.Stop()
 
 	doc, err := iter.Next()
-	if err == iterator.Done {
+	if errors.Is(err, iterator.Done) {
 		return time.Time{}, 0, nil
 	}
 	if err != nil {
@@ -952,7 +966,7 @@ func (f *FirestoreProvider) ListFeedback(ctx context.Context, limit int, lastFee
 	var feedbacks []types.Feedback
 	for {
 		doc, err := iter.Next()
-		if err == iterator.Done {
+		if errors.Is(err, iterator.Done) {
 			break
 		}
 		if err != nil {

@@ -37,6 +37,7 @@ func TestWebHandler(t *testing.T) {
 		MinBatterySOC:   5.0,
 		UtilityProvider: "test",
 	}, types.CurrentSettingsVersion, nil)
+	mockS.On("Ping", mock.Anything).Return(nil)
 
 	// Create a map-based filesystem for testing
 	testFS := fstest.MapFS{
@@ -219,6 +220,46 @@ func TestWebHandler(t *testing.T) {
 		resp := w.Result()
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, "public, max-age=300", w.Header().Get("Cache-Control"))
+	})
+
+	t.Run("Healthz Endpoint", func(t *testing.T) {
+		t.Run("Success", func(t *testing.T) {
+			mockS := &mockStorage{}
+			mockS.On("Ping", mock.Anything).Return(nil)
+
+			srv := &Server{
+				storage: mockS,
+			}
+
+			req := httptest.NewRequest("GET", "/healthz", nil)
+			w := httptest.NewRecorder()
+
+			srv.handleHealthz(w, req)
+
+			resp := w.Result()
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, "ok", w.Body.String())
+			mockS.AssertExpectations(t)
+		})
+
+		t.Run("Failure", func(t *testing.T) {
+			mockS := &mockStorage{}
+			mockS.On("Ping", mock.Anything).Return(assert.AnError)
+
+			srv := &Server{
+				storage: mockS,
+			}
+
+			req := httptest.NewRequest("GET", "/healthz", nil)
+			w := httptest.NewRecorder()
+
+			srv.handleHealthz(w, req)
+
+			resp := w.Result()
+			assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+			assert.Contains(t, w.Body.String(), "database health check failed")
+			mockS.AssertExpectations(t)
+		})
 	})
 }
 func TestIsMultiSiteAdmin(t *testing.T) {
