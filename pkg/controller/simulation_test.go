@@ -863,4 +863,53 @@ func TestSimulateState(t *testing.T) {
 			assert.Equal(t, expected, simData[0].HitSolarCapacityAt)
 		}
 	})
+
+	t.Run("FirstHourProportionate", func(t *testing.T) {
+		// Scenario:
+		// current time: 12:30 (30 minutes into the hour).
+		// Load is 2.0 kWh/hr.
+		// Since only 30 minutes remain, we should only apply 1.0 kWh of drain.
+		now := time.Date(2025, 6, 15, 12, 30, 0, 0, time.UTC)
+		capacityKWH := 10.0
+
+		currentStatus := types.SystemStatus{
+			BatteryCapacityKWH:    capacityKWH,
+			BatterySOC:            50.0, // 5.0 kWh
+			Timestamp:             now,
+			MaxBatteryChargeKW:    5.0,
+			MaxBatteryDischargeKW: 5.0,
+		}
+
+		history := []types.EnergyStats{}
+		for h := 0; h < 24; h++ {
+			for i := 1; i <= 3; i++ {
+				pastDay := now.Add(time.Duration(-24*i) * time.Hour).Truncate(time.Hour)
+				// Set high load for all hours to be safe
+				history = append(history, types.EnergyStats{
+					TSHourStart: time.Date(pastDay.Year(), pastDay.Month(), pastDay.Day(), h, 0, 0, 0, time.UTC),
+					SolarKWH:    0.0,
+					HomeKWH:     2.0,
+				})
+			}
+		}
+
+		settings := types.Settings{
+			MinBatterySOC: 0.0,
+		}
+
+		simData := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, settings)
+
+		// Verification:
+		// Hour 12 (first hour): Start 5.0. 30 mins (0.5 hrs) left.
+		// Drain = 2.0 * 0.5 = 1.0.
+		// End BatteryKWH = 5.0 - 1.0 = 4.0.
+		assert.Equal(t, 12, simData[0].Hour)
+		assert.InDelta(t, 4.0, simData[0].BatteryKWH, 0.001, "First hour should only apply remaining 30 mins of load")
+
+		// Hour 13 (second hour): Start 4.0. Full hour (1.0 ratio).
+		// Drain = 2.0 * 1.0 = 2.0.
+		// End BatteryKWH = 4.0 - 2.0 = 2.0.
+		assert.Equal(t, 13, simData[1].Hour)
+		assert.InDelta(t, 2.0, simData[1].BatteryKWH, 0.001, "Second hour should apply full 1 hour of load")
+	})
 }

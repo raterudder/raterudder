@@ -283,7 +283,7 @@ func (b *baseTesla) doRequest(req *http.Request, dest any) error {
 		if len(body) > 256 {
 			body = body[:256]
 		}
-		return fmt.Errorf("unexpected tesla response status %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("unexpected hm sponse status %d: %s", resp.StatusCode, string(body))
 	}
 
 	if dest != nil {

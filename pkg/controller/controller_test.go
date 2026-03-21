@@ -470,7 +470,7 @@ func TestDecide(t *testing.T) {
 		}
 
 		// Use Default Status (50%). No immediate deficit.
-		decision, err := c.Decide(ctx, baseStatus, currentPrice, futurePrices, history, baseSettings)
+		decision, err := c.Decide(ctx, baseStatus, currentPrice, futurePrices, noLoadHistory, baseSettings)
 		require.NoError(t, err)
 
 		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
@@ -1198,5 +1198,33 @@ func TestDecide(t *testing.T) {
 		assert.NotEqual(t, types.ActionReasonArbitrageChargeNow, decision.Action.Reason)
 		// Should default to Load (Sufficient Battery)
 		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
+	})
+
+	t.Run("Deficit Charge Now -> No Charge If Full", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05}
+		futurePrices := []types.Price{}
+		for i := 1; i <= 24; i++ {
+			price := 0.20 // Later it's more expensive to charge ($0.20 vs $0.05)
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
+			})
+		}
+
+		// Battery is full
+		fullStatus := baseStatus
+		fullStatus.BatterySOC = 100.0
+
+		// Use History with high load (1.0kW * 24 = 24kWh needed, but capacity is 10kWh)
+		// This will predict a deficit later.
+		decision, err := c.Decide(ctx, fullStatus, currentPrice, futurePrices, history, baseSettings)
+		require.NoError(t, err)
+
+		// It should NOT charge for deficit because already full.
+		// Instead it should probably Standby (Deficit predicted, saving for peak) or Load.
+		// Since current price is 0.05 and future is 0.20, it should Standby unless we expect to be full from solar.
+		assert.NotEqual(t, types.ActionReasonDeficitChargeNow, decision.Action.Reason)
+		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
 	})
 }
