@@ -208,6 +208,27 @@ func TestHandleHistorySavings(t *testing.T) {
 			expectedBattSavings:  0.0,
 			expectedSolarSavings: 0.0,
 		},
+		{
+			name: "Solar Savings",
+			setupMock: func(m *mockSavingsStorage) {
+				m.prices = []types.Price{
+					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10}, // H1: $0.10
+				}
+				m.stats = []types.EnergyStats{
+					{
+						TSHourStart:    start,
+						SolarKWH:       10,
+						SolarToHomeKWH: 10,
+					},
+				}
+			},
+			expectedCost:         0.0,
+			expectedCredit:       0.0,
+			expectedAvoidedCost:  0.0,
+			expectedChargingCost: 0.0,
+			expectedBattSavings:  0.0,
+			expectedSolarSavings: 1.00, // 10kWh * $0.10
+		},
 	}
 
 	for _, tt := range tests {
@@ -288,4 +309,62 @@ func TestHandleHistorySavingsAll(t *testing.T) {
 	assert.Equal(t, 5.00, savings.Cost)
 	assert.Equal(t, 30.0, savings.HomeUsed) // 10 + 20
 	assert.Empty(t, savings.HourlyDebugging)
+}
+
+func TestGetIgnoredFraction(t *testing.T) {
+	hStart := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	t.Run("No Actions", func(t *testing.T) {
+		assert.Equal(t, 0.0, getIgnoredFraction(hStart, nil))
+	})
+
+	t.Run("Always Paused from Before", func(t *testing.T) {
+		actions := []types.Action{
+			{Timestamp: hStart.Add(-time.Hour), Paused: true},
+		}
+		assert.Equal(t, 1.0, getIgnoredFraction(hStart, actions))
+	})
+
+	t.Run("Paused Halfway", func(t *testing.T) {
+		actions := []types.Action{
+			{Timestamp: hStart.Add(30 * time.Minute), Paused: true},
+		}
+		// Before 12:30 it was not paused (assuming no prior actions).
+		// After 12:30 it is paused.
+		assert.Equal(t, 0.5, getIgnoredFraction(hStart, actions))
+	})
+
+	t.Run("Unpaused Halfway", func(t *testing.T) {
+		actions := []types.Action{
+			{Timestamp: hStart.Add(-time.Hour), Paused: true},
+			{Timestamp: hStart.Add(30 * time.Minute), Paused: false},
+		}
+		// Before 12:30 it was paused.
+		// After 12:30 it is unpaused.
+		assert.Equal(t, 0.5, getIgnoredFraction(hStart, actions))
+	})
+
+	t.Run("Multiple Changes Within Hour", func(t *testing.T) {
+		actions := []types.Action{
+			{Timestamp: hStart.Add(15 * time.Minute), Paused: true},  // 0-15 not paused, 15-30 paused
+			{Timestamp: hStart.Add(30 * time.Minute), Paused: false}, // 30-45 not paused
+			{Timestamp: hStart.Add(45 * time.Minute), Paused: true},  // 45-60 paused
+		}
+		// Paused for 15-30 and 45-60 = 30 minutes total = 0.5
+		assert.Equal(t, 0.5, getIgnoredFraction(hStart, actions))
+	})
+
+	t.Run("Emergency Mode", func(t *testing.T) {
+		actions := []types.Action{
+			{Timestamp: hStart.Add(30 * time.Minute), Reason: types.ActionReasonEmergencyMode},
+		}
+		assert.Equal(t, 0.5, getIgnoredFraction(hStart, actions))
+	})
+
+	t.Run("System Status Emergency Mode", func(t *testing.T) {
+		actions := []types.Action{
+			{Timestamp: hStart.Add(30 * time.Minute), SystemStatus: types.SystemStatus{EmergencyMode: true}},
+		}
+		assert.Equal(t, 0.5, getIgnoredFraction(hStart, actions))
+	})
 }
