@@ -362,4 +362,43 @@ func TestHistory(t *testing.T) {
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, "private, max-age=86400", resp.Header.Get("Cache-Control"))
 	})
+
+	t.Run("Prices Cache Control Today", func(t *testing.T) {
+		// End time is now, which overlaps with the current day, meaning cache should be short (1 min)
+		now := time.Now()
+		start := now.Add(-time.Hour)
+		q := make(url.Values)
+		q.Set("start", start.Format(time.RFC3339))
+		q.Set("end", now.Format(time.RFC3339))
+		u := "/api/history/prices?" + q.Encode()
+
+		req := httptest.NewRequest("GET", u, nil)
+		w := httptest.NewRecorder()
+
+		handler.ServeHTTP(w, req)
+
+		resp := w.Result()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "private, max-age=60", resp.Header.Get("Cache-Control"))
+	})
+
+	t.Run("Prices Cache Control Past", func(t *testing.T) {
+		// End time is yesterday, so data is final and can be cached longer (24 hrs)
+		end := time.Now().Add(-25 * time.Hour)
+		start := end.Add(-time.Hour)
+
+		q := make(url.Values)
+		q.Set("start", start.Format(time.RFC3339))
+		q.Set("end", end.Format(time.RFC3339))
+		u := "/api/history/prices?" + q.Encode()
+
+		req := httptest.NewRequest("GET", u, nil)
+		w := httptest.NewRecorder()
+
+		handler.ServeHTTP(w, req)
+
+		resp := w.Result()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "private, max-age=86400", resp.Header.Get("Cache-Control"))
+	})
 }
