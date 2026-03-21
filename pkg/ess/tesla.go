@@ -565,8 +565,18 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		totalDischargeKW += b.NameplateMaxDischargePowerW / 1000.0
 	}
 
+	tz := siteInfo.InstallationTimeZone
+	if tz == "" {
+		tz = "UTC"
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to load installation time zone", slog.String("tz", tz), slog.Any("error", err))
+		loc = time.UTC
+	}
+
 	status := types.SystemStatus{
-		Timestamp:             time.Now(),
+		Timestamp:             time.Now().In(loc),
 		BatterySOC:            liveStatus.PercentageCharged,
 		BatteryKW:             liveStatus.BatteryPowerW / 1000.0,
 		BatteryCapacityKWH:    siteInfo.NameplateEnergyWH / 1000.0,

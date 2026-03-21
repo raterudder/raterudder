@@ -162,7 +162,7 @@ func (c *Controller) SimulateState(
 		// Determine solar trend for this hour
 		currentSolarTrend := todaySolarTrend
 		// If we've rolled over to the next day, reset the trend to 1.0 (average)
-		// We compare Year/Day to see if it's strictly a different calendar day.
+		// We compare Year/YearDay to see if it's strictly a different calendar day.
 		if simTime.Year() != now.Year() || simTime.YearDay() != now.YearDay() {
 			currentSolarTrend = 1.0
 		}
@@ -588,7 +588,7 @@ func (c *Controller) calculateSolarTrend(ctx context.Context, now time.Time, his
 		t := h.TSHourStart.In(now.Location())
 		statsByTime[t] = h
 		// get the latest time today
-		if t.Day() == now.Day() && t.After(latestTime) {
+		if t.Year() == now.Year() && t.YearDay() == now.YearDay() && t.After(latestTime) {
 			latestTime = t
 		}
 	}

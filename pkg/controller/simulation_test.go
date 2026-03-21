@@ -586,6 +586,46 @@ func TestSimulateState(t *testing.T) {
 		assert.Equal(t, 1.0, day2Hour.TodaySolarTrend, "Day 2 SolarTrend should be explicitly 1.0")
 	})
 
+	t.Run("SolarTrendOnlyToday", func(t *testing.T) {
+		// Provide 48 hours of future prices to allow a longer simulation
+		now := time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)
+		futurePrices := make([]types.Price, 48)
+		for i := 0; i < 48; i++ {
+			futurePrices[i] = types.Price{
+				DollarsPerKWH: 0.10,
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+			}
+		}
+
+		// Setup history to have a trend for today (e.g. 0.5)
+		history := []types.EnergyStats{
+			{TSHourStart: now.Add(-1 * time.Hour), SolarKWH: 5.0},
+			{TSHourStart: now.Add(-2 * time.Hour), SolarKWH: 5.0},
+		}
+		// Note: SimulateState builds its own model, so we need to provide history
+		// that produces those averages across all hours.
+		history = append(history, types.EnergyStats{TSHourStart: now.Add(-25 * time.Hour), SolarKWH: 15.0})
+		history = append(history, types.EnergyStats{TSHourStart: now.Add(-26 * time.Hour), SolarKWH: 15.0})
+
+		settings := types.Settings{SolarTrendRatioMax: 3.0}
+		currentStatus := types.SystemStatus{BatteryCapacityKWH: 10, BatterySOC: 50, Timestamp: now}
+		currentPrice := futurePrices[0]
+
+		simData := c.SimulateState(ctx, now, currentStatus, currentPrice, futurePrices, history, settings)
+
+		for _, hour := range simData {
+			if hour.TS.Year() == now.Year() && hour.TS.YearDay() == now.YearDay() {
+				// Today: trend could be anything (depending on above setup), but we check it's returned
+				// We don't strictly assert the value here as it's complex to setup the exact trend via history,
+				// but we know it's applied to Today.
+			} else {
+				// Not Today: MUST BE 1.0
+				assert.Equal(t, 1.0, hour.TodaySolarTrend, "Trend must be 1.0 for %v", hour.TS)
+			}
+		}
+	})
+
 	t.Run("SolarOppCostNetMetering", func(t *testing.T) {
 		c := NewController()
 		ctx := context.Background()

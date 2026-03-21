@@ -301,6 +301,42 @@ func TestTesla(t *testing.T) {
 		assert.False(t, status.EmergencyMode)
 	})
 
+	t.Run("GetStatus TimeZone", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/1/energy_sites/1234/site_info":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"installation_time_zone": "America/New_York",
+					},
+				})
+			case "/api/1/energy_sites/1234/live_status":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{},
+				})
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer ts.Close()
+
+		m := teslaMap(ts)
+		sys, err := m.Site(ctx, "test-site", types.Settings{ESS: "tesla"})
+		require.NoError(t, err)
+
+		teslaSys := sys.(*Tesla)
+		teslaSys.token = "mock-access"
+		teslaSys.energySiteID = 1234
+		teslaSys.baseURL = ts.URL
+
+		status, err := sys.GetStatus(ctx)
+		require.NoError(t, err)
+
+		loc, err := time.LoadLocation("America/New_York")
+		require.NoError(t, err)
+		assert.Equal(t, loc.String(), status.Timestamp.Location().String())
+	})
+
 	t.Run("TeslaPublicKeyPEM_Valid", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
