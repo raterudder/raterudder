@@ -7,6 +7,7 @@ import (
 
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
+	"golang.org/x/sync/errgroup"
 )
 
 // AdminSite is a site that is visible to admins along with the LastAction
@@ -35,16 +36,27 @@ func (s *Server) handleListSites(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	adminSites := make([]AdminSite, 0, len(sites))
-	for _, site := range sites {
-		action, err := s.storage.GetLatestAction(ctx, site.ID)
-		if err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to get latest action", slog.String("siteID", site.ID), slog.Any("error", err))
-		}
-		adminSites = append(adminSites, AdminSite{
-			Site:       site,
-			LastAction: action,
+	adminSites := make([]AdminSite, len(sites))
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(5)
+	for i, site := range sites {
+		g.Go(func() error {
+			action, err := s.storage.GetLatestAction(gCtx, site.ID)
+			if err != nil {
+				log.Ctx(gCtx).WarnContext(gCtx, "failed to get latest action", slog.String("siteID", site.ID), slog.Any("error", err))
+				return err
+			}
+			adminSites[i] = AdminSite{
+				Site:       site,
+				LastAction: action,
+			}
+			return nil
 		})
+	}
+	if err := g.Wait(); err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to get latest actions", slog.Any("error", err))
+		writeJSONError(w, "failed to list sites", http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
