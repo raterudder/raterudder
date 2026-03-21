@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { fetchSettings, updateSettings, fetchUtilities, fetchESSList, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type ESSProviderInfo, type ESSCredentialField } from '../api';
+import { fetchSettings, updateSettings, fetchUtilities, fetchESSList, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type ESSProviderInfo, type ESSCredentialField, type CredentialsPayload } from '../api';
 import { Field } from '@base-ui/react/field';
 import { Input } from '@base-ui/react/input';
 import { Button } from '@base-ui/react/button';
@@ -85,7 +85,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                 finalSettings.utilityRateOptions = finalOpts;
             }
 
-            let credentialsPayload: any = undefined;
+            let credentialsPayload: CredentialsPayload | undefined = undefined;
             const essProvider = essProviders.find(p => p.id === settings.ess);
             if (essProvider && (isESSDirty || Object.keys(essCredentials).length > 0)) {
                 credentialsPayload = { [essProvider.id]: {} };
@@ -99,7 +99,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                         throw new Error(`The ${cred.name} field is required.`);
                     }
                     if (val !== undefined && val !== null && val !== "") {
-                        credentialsPayload[essProvider.id][cred.field] = val;
+                        credentialsPayload![essProvider.id][cred.field] = val;
                     }
                 };
 
@@ -140,7 +140,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
         }
     };
 
-    const handleChange = (field: keyof SettingsType, value: any) => {
+    const handleChange = <K extends keyof SettingsType>(field: K, value: SettingsType[K]) => {
         setSettings(prev => prev ? ({ ...prev, [field]: value }) : null);
     };
 
@@ -258,7 +258,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                     if (provider?.rates.length === 1) {
                                         const rate = provider.rates[0];
                                         newSettings.utilityRate = rate.id;
-                                        const newOpts: any = {};
+                                        const newOpts: Record<string, string | number | boolean> = {};
                                         rate.options.forEach((opt: UtilityRateOption) => {
                                             newOpts[opt.field] = opt.default;
                                         });
@@ -310,7 +310,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                             const rate = provider.rates.find(r => r.id === rateID);
                                             const newSettings = { ...settings, utilityRate: rateID };
                                             if (rate) {
-                                                const newOpts: any = {};
+                                                const newOpts: Record<string, string | number | boolean> = {};
                                                 rate.options.forEach((opt: UtilityRateOption) => {
                                                     newOpts[opt.field] = opt.default;
                                                 });
