@@ -96,6 +96,7 @@ const JoinPage: React.FC<JoinPageProps> = ({ onJoinSuccess }) => {
                         className="join-submit"
                         disabled={loading || !siteID.trim() || !inviteCode.trim() || !name.trim()}
                     >
+                        {loading && <span className="loading-spinner" aria-hidden="true"></span>}
                         {loading ? 'Joining…' : 'Join Site'}
                     </button>
                 </form>
