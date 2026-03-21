@@ -2,6 +2,8 @@ package utility
 
 import (
 	"archive/zip"
+	"bytes"
+	"io"
 
 	"context"
 	"encoding/csv"
@@ -110,13 +112,14 @@ func (e *BaseERCOT) fetchZipCSV(ctx context.Context, docID string) ([][]string, 
 	// Pass the response body directly to the zip reader.
 	// Since zip.NewReader requires an io.ReaderAt and a size, we use our custom ReaderAtWrapper
 	// which allows passing the body directly without manually creating a byte slice buffer here.
-	// Provide ReaderAtWrapper which supports lazy full buffering when necessary.
-	wrapper := &common.ReaderAtWrapper{Reader: resp.Body}
-	size := resp.ContentLength
-	if size <= 0 {
-		size = wrapper.Size()
+	// As requested, read the entire zip response body into a byte slice to satisfy zip.NewReader.
+	// zip.NewReader requires an io.ReaderAt and exact size, so buffering into memory is required here.
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read doc body: %w", err)
 	}
-	zipReader, err := zip.NewReader(wrapper, size)
+
+	zipReader, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create zip reader: %w", err)
 	}
