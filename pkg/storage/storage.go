@@ -55,6 +55,7 @@ type Database interface {
 	ListFeedback(ctx context.Context, limit int, lastFeedbackID string) ([]types.Feedback, error)
 
 	// Lifecycle
+	Ping(ctx context.Context) error
 	Close() error
 }
 

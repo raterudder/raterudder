@@ -314,7 +314,11 @@ func writeJSONError(w http.ResponseWriter, msg string, code int) {
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
-	// TODO: check database health
+	if err := s.storage.Ping(r.Context()); err != nil {
+		log.Ctx(r.Context()).ErrorContext(r.Context(), "health check failed: database ping failed", slog.Any("error", err))
+		writeJSONError(w, "database health check failed", http.StatusServiceUnavailable)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write([]byte("ok")); err != nil {
 		panic(http.ErrAbortHandler)
