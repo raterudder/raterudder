@@ -217,8 +217,10 @@ func (s *Server) setupHandler() http.Handler {
 	mux := http.NewServeMux()
 	// limit request body to 1MB to prevent DoS
 	mux.Handle("/api/", http.MaxBytesHandler(
-		common.CtxFromRequestMiddleware(
-			s.authMiddleware(apiMux),
+		s.rateLimitMiddleware(
+			common.CtxFromRequestMiddleware(
+				s.authMiddleware(apiMux),
+			),
 		),
 		1048576,
 	))

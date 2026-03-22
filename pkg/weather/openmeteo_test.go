@@ -196,7 +196,7 @@ func TestOpenMeteoService(t *testing.T) {
 			if assert.Len(t, res[0].ForecastHours, 2) {
 				assert.Equal(t, 150.5, res[0].ForecastHours[0].GHI)
 				assert.Equal(t, 21.0, res[0].ForecastHours[0].TemperatureC) // (20+22)/2
-				assert.Equal(t, 200.5, res[0].ForecastHours[1].GHI) // takes next index 2
+				assert.Equal(t, 200.5, res[0].ForecastHours[1].GHI)         // takes next index 2
 				assert.Equal(t, 23.5, res[0].ForecastHours[1].TemperatureC) // average of index 1 and 2
 			}
 			assert.Len(t, res[1].ForecastHours, 0)
