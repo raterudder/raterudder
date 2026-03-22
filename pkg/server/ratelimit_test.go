@@ -116,30 +116,6 @@ func TestRateLimitMiddleware(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w2.Code)
 	})
 
-	t.Run("X-Forwarded-For Header Handling", func(t *testing.T) {
-		clientLimiterMux.Lock()
-		clientLimiters = make(map[string]*clientRateLimiter)
-		sensitiveBurst = 1
-		sensitiveRateLimit = rate.Every(time.Minute / 1)
-		clientLimiterMux.Unlock()
-
-		req := httptest.NewRequest("POST", "/api/auth/login", nil)
-		// Set a chain of IPs in X-Forwarded-For
-		req.Header.Set("X-Forwarded-For", "203.0.113.1, 198.51.100.1, 10.0.0.1")
-		req.RemoteAddr = "127.0.0.1:8080" // Proxied connection
-
-		// Should extract 203.0.113.1 and allow
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusOK, w.Code)
-
-		// Verify the limiter was created for the correct IP
-		clientLimiterMux.Lock()
-		_, exists := clientLimiters["203.0.113.1"]
-		clientLimiterMux.Unlock()
-		assert.True(t, exists, "Limiter should be created for the client IP from X-Forwarded-For")
-	})
-
 	t.Run("Cleanup Stale Limiters", func(t *testing.T) {
 		clientLimiterMux.Lock()
 		clientLimiters = make(map[string]*clientRateLimiter)
@@ -172,4 +148,88 @@ func TestRateLimitMiddleware(t *testing.T) {
 		assert.False(t, staleExists, "Stale limiter should have been removed")
 		assert.True(t, recentExists, "Recent limiter should have been kept")
 	})
+}
+
+func TestGetClientIP(t *testing.T) {
+	tests := []struct {
+		name       string
+		headers    map[string]string
+		remoteAddr string
+		expectedIP string
+	}{
+		{
+			name: "CF-Connecting-IP takes precedence",
+			headers: map[string]string{
+				"CF-Connecting-IP": "203.0.113.5",
+				"X-Forwarded-For":  "198.51.100.10",
+			},
+			remoteAddr: "127.0.0.1:8080",
+			expectedIP: "203.0.113.5",
+		},
+		{
+			name: "X-Forwarded-For single public IP",
+			headers: map[string]string{
+				"X-Forwarded-For": "198.51.100.10",
+			},
+			remoteAddr: "127.0.0.1:8080",
+			expectedIP: "198.51.100.10",
+		},
+		{
+			name: "X-Forwarded-For multiple IPs returns first public",
+			headers: map[string]string{
+				"X-Forwarded-For": "10.0.0.1, 192.168.1.1, 203.0.113.10, 198.51.100.10",
+			},
+			remoteAddr: "127.0.0.1:8080",
+			expectedIP: "203.0.113.10", // The first public IP
+		},
+		{
+			name: "X-Forwarded-For all private IPs returns first",
+			headers: map[string]string{
+				"X-Forwarded-For": "10.0.0.1, 192.168.1.1",
+			},
+			remoteAddr: "127.0.0.1:8080",
+			expectedIP: "10.0.0.1",
+		},
+		{
+			name: "X-Forwarded-For empty fallback to RemoteAddr",
+			headers: map[string]string{
+				"X-Forwarded-For": "",
+			},
+			remoteAddr: "198.51.100.10:8080",
+			expectedIP: "198.51.100.10",
+		},
+		{
+			name:       "No headers fallback to RemoteAddr with port",
+			headers:    map[string]string{},
+			remoteAddr: "203.0.113.10:12345",
+			expectedIP: "203.0.113.10",
+		},
+		{
+			name:       "No headers fallback to RemoteAddr without port",
+			headers:    map[string]string{},
+			remoteAddr: "203.0.113.10",
+			expectedIP: "203.0.113.10",
+		},
+		{
+			name: "Invalid IP in X-Forwarded-For skipped",
+			headers: map[string]string{
+				"X-Forwarded-For": "invalid-ip, 198.51.100.10",
+			},
+			remoteAddr: "127.0.0.1:8080",
+			expectedIP: "198.51.100.10",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/", nil)
+			for k, v := range tt.headers {
+				req.Header.Set(k, v)
+			}
+			req.RemoteAddr = tt.remoteAddr
+
+			ip := getClientIP(req)
+			assert.Equal(t, tt.expectedIP, ip)
+		})
+	}
 }
