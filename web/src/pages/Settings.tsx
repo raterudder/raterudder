@@ -218,12 +218,12 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                 <div className="section-header">
                     <h3>Utility Service</h3>
                     {settings.utilityProvider && settings.utilityRate && !editUtility && (
-                        <button type="button" className="text-button" onClick={() => setEditUtility(true)}>Change</button>
+                        <button type="button" className="text-button" onClick={() => setEditUtility(true)} aria-label="Change Utility Service">Change</button>
                     )}
                 </div>
 
                 {settings.utilityProvider && settings.utilityRate && !editUtility ? (
-                    <button type="button" className="configured-summary" onClick={() => setEditUtility(true)}>
+                    <button type="button" className="configured-summary" onClick={() => setEditUtility(true)} aria-label="Edit Utility Service">
                         <div className="summary-info">
                             <span className="summary-label">
                                 {utilities.find(u => u.id === settings.utilityProvider)?.name || settings.utilityProvider}
@@ -424,7 +424,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                             );
                         })()}
                         {editUtility && (
-                            <button type="button" className="text-button cancel-button" onClick={() => setEditUtility(false)}>Done</button>
+                            <button type="button" className="text-button cancel-button" onClick={() => setEditUtility(false)} aria-label="Finish editing Utility Service">Done</button>
                         )}
                     </div>
                 )}
@@ -433,12 +433,12 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                 <div className="section-header">
                     <h3 id="ess-credentials">Energy Storage System</h3>
                     {settings.ess && settings.hasCredentials?.[settings.ess] && !editESS && (
-                        <button type="button" className="text-button" onClick={() => setEditESS(true)}>Update</button>
+                        <button type="button" className="text-button" onClick={() => setEditESS(true)} aria-label="Update Energy Storage System">Update</button>
                     )}
                 </div>
 
                 {settings.ess && (settings.hasCredentials?.[settings.ess] || isESSDirty) && !editESS ? (
-                    <button type="button" className="configured-summary" onClick={() => setEditESS(true)}>
+                    <button type="button" className="configured-summary" onClick={() => setEditESS(true)} aria-label="Edit Energy Storage System">
                         <div className="summary-info">
                             <span className="summary-label">{essProviders.find(p => p.id === settings.ess)?.name || settings.ess || 'Unknown System'}</span>
                         </div>
@@ -597,7 +597,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                         })()}
 
                         {editESS && (
-                            <button type="button" className="text-button cancel-button" onClick={() => setEditESS(false)}>Done</button>
+                            <button type="button" className="text-button cancel-button" onClick={() => setEditESS(false)} aria-label="Finish editing Energy Storage System">Done</button>
                         )}
                     </div>
                 )}
