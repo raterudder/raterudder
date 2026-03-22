@@ -5,7 +5,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -19,41 +18,30 @@ type clientRateLimiter struct {
 	lastSeen  atomic.Int64
 }
 
-var (
-	// Rate limits
-	generalRateLimit   = rate.Every(time.Minute / 30) // 30 per minute
-	generalBurst       = 30
-	sensitiveRateLimit = rate.Every(time.Minute / 5) // 5 per minute
-	sensitiveBurst     = 5
-
-	// Store for IP rate limiters
-	clientLimiters sync.Map
-)
-
-func init() {
+func (s *Server) startCleanupStaleLimiters() {
 	// Start background goroutine to clean up stale limiters
 	go func() {
 		for {
 			time.Sleep(time.Minute)
-			cleanupStaleLimiters()
+			s.cleanupStaleLimiters()
 		}
 	}()
 }
 
-func cleanupStaleLimiters() {
+func (s *Server) cleanupStaleLimiters() {
 	threshold := time.Now().Add(-10 * time.Minute).UnixNano()
-	clientLimiters.Range(func(key, value any) bool {
+	s.clientLimiters.Range(func(key, value any) bool {
 		limiter := value.(*clientRateLimiter)
 		if limiter.lastSeen.Load() < threshold {
-			clientLimiters.Delete(key)
+			s.clientLimiters.Delete(key)
 		}
 		return true // Continue iteration
 	})
 }
 
-func getClientLimiter(ip string) *clientRateLimiter {
+func (s *Server) getClientLimiter(ip string) *clientRateLimiter {
 	// Optimistic load
-	if val, ok := clientLimiters.Load(ip); ok {
+	if val, ok := s.clientLimiters.Load(ip); ok {
 		limiter := val.(*clientRateLimiter)
 		limiter.lastSeen.Store(time.Now().UnixNano())
 		return limiter
@@ -61,13 +49,13 @@ func getClientLimiter(ip string) *clientRateLimiter {
 
 	// Create a new limiter if not found
 	newLimiter := &clientRateLimiter{
-		general:   rate.NewLimiter(generalRateLimit, generalBurst),
-		sensitive: rate.NewLimiter(sensitiveRateLimit, sensitiveBurst),
+		general:   rate.NewLimiter(s.generalRateLimit, s.generalBurst),
+		sensitive: rate.NewLimiter(s.sensitiveRateLimit, s.sensitiveBurst),
 	}
 	newLimiter.lastSeen.Store(time.Now().UnixNano())
 
 	// Try to store, but handle the case where another goroutine beat us to it
-	actual, loaded := clientLimiters.LoadOrStore(ip, newLimiter)
+	actual, loaded := s.clientLimiters.LoadOrStore(ip, newLimiter)
 	if loaded {
 		limiter := actual.(*clientRateLimiter)
 		limiter.lastSeen.Store(time.Now().UnixNano())
@@ -114,7 +102,7 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 		ctx := r.Context()
 
 		ip := getClientIP(r)
-		limiter := getClientLimiter(ip)
+		limiter := s.getClientLimiter(ip)
 
 		// Check if it's a sensitive endpoint
 		isSensitive := r.URL.Path == "/api/auth/login" ||
