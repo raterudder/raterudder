@@ -299,7 +299,7 @@ describe('App & Settings', () => {
 
         // Wait for Utility Options section
         await screen.findByText('Configured');
-        fireEvent.click(screen.getByText('Change'));
+        fireEvent.click(screen.getByRole('button', { name: 'Change Utility Service' }));
 
         await waitFor(() => expect(screen.getByRole('switch', { name: /Delivery Time-of-Day/i })).toBeInTheDocument());
 
@@ -474,10 +474,10 @@ describe('App & Settings', () => {
          expect(screen.getByText("Secret ESS")).toBeInTheDocument();
 
          // In edit mode (change), the option should also be visible in the dropdown
-         const utilityChangeBtn = screen.getByText('Change');
-         fireEvent.click(utilityChangeBtn); // click Utility Service "Change"
+         const utilityChangeBtn = await screen.findByRole('button', { name: 'Edit Utility Service' });
+         await user.click(utilityChangeBtn); // click Utility Service "Change"
 
-         const serviceSelect = await screen.findByLabelText(/Service/i);
+         const serviceSelect = await screen.findByRole('combobox', { name: /Service/i });
          await user.click(serviceSelect);
          await waitFor(() => expect(screen.getByRole('option', { name: 'Secret Utility' })).toBeInTheDocument());
     });
@@ -501,7 +501,7 @@ describe('App & Settings', () => {
          expect(usernameInput).toBeInTheDocument();
          await user.type(usernameInput, 'username');
 
-         const doneBtn = await screen.findByRole('button', { name: 'Done' });
+         const doneBtn = await screen.findByRole('button', { name: 'Finish editing Energy Storage System' });
          expect(doneBtn).toBeInTheDocument();
          await user.click(doneBtn);
 
