@@ -3,12 +3,20 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/time/rate"
 )
+
+func clearLimiters() {
+	clientLimiters.Range(func(key, _ any) bool {
+		clientLimiters.Delete(key)
+		return true
+	})
+}
 
 func TestRateLimitMiddleware(t *testing.T) {
 	s := &Server{}
@@ -23,9 +31,7 @@ func TestRateLimitMiddleware(t *testing.T) {
 
 	t.Run("General Rate Limit - Allowed", func(t *testing.T) {
 		// Reset limiters for clean state
-		clientLimiterMux.Lock()
-		clientLimiters = make(map[string]*clientRateLimiter)
-		clientLimiterMux.Unlock()
+		clearLimiters()
 
 		req := httptest.NewRequest("GET", "/api/test", nil)
 		req.RemoteAddr = "192.168.1.1:12345"
@@ -40,12 +46,16 @@ func TestRateLimitMiddleware(t *testing.T) {
 
 	t.Run("General Rate Limit - Exceeded", func(t *testing.T) {
 		// Reset limiters for clean state
-		clientLimiterMux.Lock()
-		clientLimiters = make(map[string]*clientRateLimiter)
+		clearLimiters()
 		// Artificially lower the burst for testing
+		originalBurst := generalBurst
+		originalLimit := generalRateLimit
 		generalBurst = 2
 		generalRateLimit = rate.Every(time.Minute / 2) // 2 per minute
-		clientLimiterMux.Unlock()
+		defer func() {
+			generalBurst = originalBurst
+			generalRateLimit = originalLimit
+		}()
 
 		req := httptest.NewRequest("GET", "/api/test", nil)
 		req.RemoteAddr = "192.168.1.2:12345"
@@ -65,12 +75,16 @@ func TestRateLimitMiddleware(t *testing.T) {
 
 	t.Run("Sensitive Endpoint Limit - Exceeded", func(t *testing.T) {
 		// Reset limiters for clean state
-		clientLimiterMux.Lock()
-		clientLimiters = make(map[string]*clientRateLimiter)
+		clearLimiters()
 		// Artificially lower the burst for testing
+		originalBurst := sensitiveBurst
+		originalLimit := sensitiveRateLimit
 		sensitiveBurst = 1
 		sensitiveRateLimit = rate.Every(time.Minute / 1) // 1 per minute
-		clientLimiterMux.Unlock()
+		defer func() {
+			sensitiveBurst = originalBurst
+			sensitiveRateLimit = originalLimit
+		}()
 
 		req := httptest.NewRequest("POST", "/api/auth/login", nil)
 		req.RemoteAddr = "192.168.1.3:12345"
@@ -88,11 +102,15 @@ func TestRateLimitMiddleware(t *testing.T) {
 
 	t.Run("IP Separation", func(t *testing.T) {
 		// Reset limiters for clean state
-		clientLimiterMux.Lock()
-		clientLimiters = make(map[string]*clientRateLimiter)
+		clearLimiters()
+		originalBurst := sensitiveBurst
+		originalLimit := sensitiveRateLimit
 		sensitiveBurst = 1
-		sensitiveRateLimit = rate.Every(time.Minute / 1)
-		clientLimiterMux.Unlock()
+		sensitiveRateLimit = rate.Every(time.Minute / 1) // 1 per minute
+		defer func() {
+			sensitiveBurst = originalBurst
+			sensitiveRateLimit = originalLimit
+		}()
 
 		req1 := httptest.NewRequest("POST", "/api/auth/login", nil)
 		req1.RemoteAddr = "192.168.1.4:12345"
@@ -117,8 +135,7 @@ func TestRateLimitMiddleware(t *testing.T) {
 	})
 
 	t.Run("Cleanup Stale Limiters", func(t *testing.T) {
-		clientLimiterMux.Lock()
-		clientLimiters = make(map[string]*clientRateLimiter)
+		clearLimiters()
 
 		// Create a stale limiter (last seen 15 minutes ago)
 		staleLimiter := &clientRateLimiter{
@@ -126,7 +143,7 @@ func TestRateLimitMiddleware(t *testing.T) {
 			sensitive: rate.NewLimiter(rate.Inf, 1),
 			lastSeen:  time.Now().Add(-15 * time.Minute),
 		}
-		clientLimiters["1.1.1.1"] = staleLimiter
+		clientLimiters.Store("1.1.1.1", staleLimiter)
 
 		// Create a recent limiter (last seen 1 minute ago)
 		recentLimiter := &clientRateLimiter{
@@ -134,19 +151,37 @@ func TestRateLimitMiddleware(t *testing.T) {
 			sensitive: rate.NewLimiter(rate.Inf, 1),
 			lastSeen:  time.Now().Add(-1 * time.Minute),
 		}
-		clientLimiters["2.2.2.2"] = recentLimiter
-		clientLimiterMux.Unlock()
+		clientLimiters.Store("2.2.2.2", recentLimiter)
 
 		// Run cleanup
 		cleanupStaleLimiters()
 
-		clientLimiterMux.Lock()
-		_, staleExists := clientLimiters["1.1.1.1"]
-		_, recentExists := clientLimiters["2.2.2.2"]
-		clientLimiterMux.Unlock()
+		_, staleExists := clientLimiters.Load("1.1.1.1")
+		_, recentExists := clientLimiters.Load("2.2.2.2")
 
 		assert.False(t, staleExists, "Stale limiter should have been removed")
 		assert.True(t, recentExists, "Recent limiter should have been kept")
+	})
+
+	t.Run("Concurrency test for LoadOrStore", func(t *testing.T) {
+		clearLimiters()
+		var wg sync.WaitGroup
+		concurrency := 100
+
+		// Have 100 goroutines try to get the limiter for the same IP concurrently
+		for i := 0; i < concurrency; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_ = getClientLimiter("10.0.0.99")
+			}()
+		}
+
+		wg.Wait()
+		// If LoadOrStore is working correctly, there's no panic and we have 1 limiter.
+		val, exists := clientLimiters.Load("10.0.0.99")
+		assert.True(t, exists)
+		assert.NotNil(t, val)
 	})
 }
 

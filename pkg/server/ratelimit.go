@@ -26,8 +26,7 @@ var (
 	sensitiveBurst     = 5
 
 	// Store for IP rate limiters
-	clientLimiters   = make(map[string]*clientRateLimiter)
-	clientLimiterMux sync.Mutex
+	clientLimiters sync.Map
 )
 
 func init() {
@@ -41,31 +40,40 @@ func init() {
 }
 
 func cleanupStaleLimiters() {
-	clientLimiterMux.Lock()
-	defer clientLimiterMux.Unlock()
-
 	threshold := time.Now().Add(-10 * time.Minute)
-	for ip, limiter := range clientLimiters {
+	clientLimiters.Range(func(key, value any) bool {
+		limiter := value.(*clientRateLimiter)
 		if limiter.lastSeen.Before(threshold) {
-			delete(clientLimiters, ip)
+			clientLimiters.Delete(key)
 		}
-	}
+		return true // Continue iteration
+	})
 }
 
 func getClientLimiter(ip string) *clientRateLimiter {
-	clientLimiterMux.Lock()
-	defer clientLimiterMux.Unlock()
-
-	limiter, exists := clientLimiters[ip]
-	if !exists {
-		limiter = &clientRateLimiter{
-			general:   rate.NewLimiter(generalRateLimit, generalBurst),
-			sensitive: rate.NewLimiter(sensitiveRateLimit, sensitiveBurst),
-		}
-		clientLimiters[ip] = limiter
+	// Optimistic load
+	if val, ok := clientLimiters.Load(ip); ok {
+		limiter := val.(*clientRateLimiter)
+		limiter.lastSeen = time.Now()
+		return limiter
 	}
-	limiter.lastSeen = time.Now()
-	return limiter
+
+	// Create a new limiter if not found
+	newLimiter := &clientRateLimiter{
+		general:   rate.NewLimiter(generalRateLimit, generalBurst),
+		sensitive: rate.NewLimiter(sensitiveRateLimit, sensitiveBurst),
+		lastSeen:  time.Now(),
+	}
+
+	// Try to store, but handle the case where another goroutine beat us to it
+	actual, loaded := clientLimiters.LoadOrStore(ip, newLimiter)
+	if loaded {
+		limiter := actual.(*clientRateLimiter)
+		limiter.lastSeen = time.Now()
+		return limiter
+	}
+
+	return newLimiter
 }
 
 func getClientIP(r *http.Request) string {
