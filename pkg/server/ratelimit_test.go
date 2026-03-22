@@ -141,16 +141,16 @@ func TestRateLimitMiddleware(t *testing.T) {
 		staleLimiter := &clientRateLimiter{
 			general:   rate.NewLimiter(rate.Inf, 1),
 			sensitive: rate.NewLimiter(rate.Inf, 1),
-			lastSeen:  time.Now().Add(-15 * time.Minute),
 		}
+		staleLimiter.lastSeen.Store(time.Now().Add(-15 * time.Minute).UnixNano())
 		clientLimiters.Store("1.1.1.1", staleLimiter)
 
 		// Create a recent limiter (last seen 1 minute ago)
 		recentLimiter := &clientRateLimiter{
 			general:   rate.NewLimiter(rate.Inf, 1),
 			sensitive: rate.NewLimiter(rate.Inf, 1),
-			lastSeen:  time.Now().Add(-1 * time.Minute),
 		}
+		recentLimiter.lastSeen.Store(time.Now().Add(-1 * time.Minute).UnixNano())
 		clientLimiters.Store("2.2.2.2", recentLimiter)
 
 		// Run cleanup

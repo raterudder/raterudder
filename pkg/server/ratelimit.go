@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/log"
@@ -15,7 +16,7 @@ import (
 type clientRateLimiter struct {
 	general   *rate.Limiter
 	sensitive *rate.Limiter
-	lastSeen  time.Time
+	lastSeen  atomic.Int64
 }
 
 var (
@@ -40,10 +41,10 @@ func init() {
 }
 
 func cleanupStaleLimiters() {
-	threshold := time.Now().Add(-10 * time.Minute)
+	threshold := time.Now().Add(-10 * time.Minute).UnixNano()
 	clientLimiters.Range(func(key, value any) bool {
 		limiter := value.(*clientRateLimiter)
-		if limiter.lastSeen.Before(threshold) {
+		if limiter.lastSeen.Load() < threshold {
 			clientLimiters.Delete(key)
 		}
 		return true // Continue iteration
@@ -54,7 +55,7 @@ func getClientLimiter(ip string) *clientRateLimiter {
 	// Optimistic load
 	if val, ok := clientLimiters.Load(ip); ok {
 		limiter := val.(*clientRateLimiter)
-		limiter.lastSeen = time.Now()
+		limiter.lastSeen.Store(time.Now().UnixNano())
 		return limiter
 	}
 
@@ -62,14 +63,14 @@ func getClientLimiter(ip string) *clientRateLimiter {
 	newLimiter := &clientRateLimiter{
 		general:   rate.NewLimiter(generalRateLimit, generalBurst),
 		sensitive: rate.NewLimiter(sensitiveRateLimit, sensitiveBurst),
-		lastSeen:  time.Now(),
 	}
+	newLimiter.lastSeen.Store(time.Now().UnixNano())
 
 	// Try to store, but handle the case where another goroutine beat us to it
 	actual, loaded := clientLimiters.LoadOrStore(ip, newLimiter)
 	if loaded {
 		limiter := actual.(*clientRateLimiter)
-		limiter.lastSeen = time.Now()
+		limiter.lastSeen.Store(time.Now().UnixNano())
 		return limiter
 	}
 
