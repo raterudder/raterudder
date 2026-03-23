@@ -169,9 +169,18 @@ func TestHistory(t *testing.T) {
 		now := time.Now()
 		expectedActions := []types.Action{
 			{
-				Timestamp:   now.Add(-30 * time.Minute),
-				BatteryMode: types.BatteryModeChargeSolar,
-				Description: "Solar charging",
+				Timestamp:         now.Add(-30 * time.Minute),
+				BatteryMode:       types.BatteryModeChargeSolar,
+				SolarMode:         types.SolarModeAny,
+				TargetBatteryMode: types.BatteryModeStandby,
+				TargetSolarMode:   types.SolarModeNoExport,
+				Reason:            types.ActionReasonSufficientBattery,
+				Description:       "Solar charging",
+				DryRun:            true,
+				Fault:             false,
+				Failed:            false,
+				Paused:            false,
+				Error:             "",
 			},
 		}
 		mockS.actions = expectedActions
@@ -197,7 +206,17 @@ func TestHistory(t *testing.T) {
 		err := json.NewDecoder(resp.Body).Decode(&actions)
 		require.NoError(t, err)
 		assert.Len(t, actions, 1)
+		assert.Equal(t, expectedActions[0].BatteryMode, actions[0].BatteryMode)
+		assert.Equal(t, expectedActions[0].SolarMode, actions[0].SolarMode)
+		assert.Equal(t, expectedActions[0].TargetBatteryMode, actions[0].TargetBatteryMode)
+		assert.Equal(t, expectedActions[0].TargetSolarMode, actions[0].TargetSolarMode)
+		assert.Equal(t, expectedActions[0].Reason, actions[0].Reason)
 		assert.Equal(t, expectedActions[0].Description, actions[0].Description)
+		assert.Equal(t, expectedActions[0].DryRun, actions[0].DryRun)
+		assert.Equal(t, expectedActions[0].Fault, actions[0].Fault)
+		assert.Equal(t, expectedActions[0].Failed, actions[0].Failed)
+		assert.Equal(t, expectedActions[0].Paused, actions[0].Paused)
+		assert.Equal(t, expectedActions[0].Error, actions[0].Error)
 
 		// Verify storage call
 		// GetActionHistory should be called with siteID as well
@@ -249,9 +268,13 @@ func TestHistory(t *testing.T) {
 		now := time.Now()
 		expectedPrices := []types.Price{
 			{
-				TSStart:       now.Add(-30 * time.Minute),
-				TSEnd:         now,
-				DollarsPerKWH: 0.12,
+				Provider:                      "test-provider",
+				TSStart:                       now.Add(-30 * time.Minute),
+				TSEnd:                         now,
+				DollarsPerKWH:                 0.12,
+				GridUseDollarsPerKWH:          0.05,
+				GenerationCreditDollarsPerKWH: 0.08,
+				SeparateGenerationCredit:      true,
 			},
 		}
 		mockS.prices = expectedPrices
@@ -277,7 +300,11 @@ func TestHistory(t *testing.T) {
 		err := json.NewDecoder(resp.Body).Decode(&prices)
 		require.NoError(t, err)
 		assert.Len(t, prices, 1)
-		assert.Equal(t, 0.12, prices[0].DollarsPerKWH)
+		assert.Equal(t, expectedPrices[0].Provider, prices[0].Provider)
+		assert.Equal(t, expectedPrices[0].DollarsPerKWH, prices[0].DollarsPerKWH)
+		assert.Equal(t, expectedPrices[0].GridUseDollarsPerKWH, prices[0].GridUseDollarsPerKWH)
+		assert.Equal(t, expectedPrices[0].GenerationCreditDollarsPerKWH, prices[0].GenerationCreditDollarsPerKWH)
+		assert.Equal(t, expectedPrices[0].SeparateGenerationCredit, prices[0].SeparateGenerationCredit)
 
 		// Verify storage call
 		assert.WithinDuration(t, start, mockS.lastStart, time.Second)
