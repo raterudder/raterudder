@@ -67,7 +67,7 @@ const LandingPage: React.FC = () => {
         },
         {
             question: "Do I need specific hardware?",
-            answer: "Currently, only FranklinWH aPower batteries are supported. We're looking for testers to help us add support for more battery types soon."
+            answer: "Currently, only FranklinWH aPower and Tesla Powerwall batteries are supported. We're looking for testers to help us add support for more battery types soon."
         },
         {
             question: "Which utilities are supported?",
@@ -102,15 +102,11 @@ const LandingPage: React.FC = () => {
                             RateRudder transforms your home battery into a powerful financial asset.
                             Intelligently managing your energy to buy low, sell high, and slash your bill—all while you sleep.
                         </p>
-                        {JOIN_FORM_URL && (
-                            <div className="cta-wrapper">
-                                <a href={JOIN_FORM_URL} target="_blank" rel="noopener noreferrer" className="cta-button">
-                                    Request Early Access
-                                </a>
-                                <span className="cta-note">Tell us about your battery and utility to help skip the queue.</span>
-
-                            </div>
-                        )}
+                        <div className="cta-wrapper">
+                            <a href="/login" className="cta-button">
+                                Get Started
+                            </a>
+                        </div>
                     </div>
                     <div className="hero-visual">
                         <div className="pulse-circle"></div>

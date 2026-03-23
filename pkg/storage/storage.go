@@ -58,6 +58,10 @@ type Database interface {
 	InsertFeedback(ctx context.Context, feedback types.Feedback) error
 	ListFeedback(ctx context.Context, limit int, lastFeedbackID string) ([]types.Feedback, error)
 
+	// Interest
+	UpsertInterest(ctx context.Context, submission types.InterestSubmission) error
+	ListInterest(ctx context.Context, limit int) ([]types.InterestSubmission, error)
+
 	// Lifecycle
 	Ping(ctx context.Context) error
 	Close() error

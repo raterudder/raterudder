@@ -15,7 +15,6 @@ describe('LoginPage Component', () => {
 
         expect(screen.getByText('RateRudder')).toBeInTheDocument();
         expect(screen.getByText('Log in or sign up to manage your home energy.')).toBeInTheDocument();
-        expect(screen.getByText(/During our limited beta/)).toBeInTheDocument();
         expect(screen.getByText('Mock Google Login')).toBeInTheDocument();
     });
 

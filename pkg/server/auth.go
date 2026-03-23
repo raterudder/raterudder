@@ -19,6 +19,27 @@ import (
 	"github.com/raterudder/raterudder/pkg/types"
 )
 
+type pathAttributes struct {
+	allowNoLogin       bool
+	ignoreUserNotFound bool
+	isUpdatePath       bool
+	ignoreSiteID       bool
+}
+
+var routeAuthAttributes = map[string]pathAttributes{
+	"/api/auth/login":     {allowNoLogin: true, ignoreUserNotFound: true, ignoreSiteID: true},
+	"/api/auth/status":    {allowNoLogin: true, ignoreUserNotFound: true, ignoreSiteID: true},
+	"/api/auth/logout":    {allowNoLogin: true, ignoreUserNotFound: true, ignoreSiteID: true},
+	"/api/report/browser": {allowNoLogin: true, ignoreUserNotFound: true, ignoreSiteID: true},
+	"/api/join":           {ignoreUserNotFound: true, ignoreSiteID: true},
+	"/api/update":         {isUpdatePath: true},
+	"/api/updateSites":    {isUpdatePath: true, ignoreSiteID: true},
+	"/api/list/sites":     {ignoreSiteID: true},
+	"/api/list/feedback":  {ignoreSiteID: true},
+	"/api/tesla/register": {ignoreSiteID: true},
+	"/api/interest":       {ignoreUserNotFound: true, ignoreSiteID: true},
+}
+
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -33,10 +54,11 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			),
 		))
 
-		allowNoLogin := r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/join" || r.URL.Path == "/api/auth/logout" || r.URL.Path == "/api/report/browser"
-		ignoreUserNotFound := r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/join" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/logout" || r.URL.Path == "/api/report/browser"
-		isUpdatePath := r.URL.Path == "/api/update" || r.URL.Path == "/api/updateSites"
-		ignoreSiteID := r.URL.Path == "/api/auth/login" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/logout" || r.URL.Path == "/api/list/sites" || r.URL.Path == "/api/list/feedback" || r.URL.Path == "/api/report/browser" || r.URL.Path == "/api/tesla/register"
+		attrs := routeAuthAttributes[r.URL.Path]
+		allowNoLogin := attrs.allowNoLogin
+		ignoreUserNotFound := attrs.ignoreUserNotFound
+		isUpdatePath := attrs.isUpdatePath
+		ignoreSiteID := attrs.ignoreSiteID
 
 		// extract SiteID
 		var siteID string
@@ -227,7 +249,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		if siteID == "" {
 			if s.singleSite {
 				siteID = types.SiteIDNone
-			} else if !allowNoLogin && !isUpdatePath && !ignoreSiteID {
+			} else if !ignoreSiteID {
 				log.Ctx(ctx).WarnContext(ctx, "siteID required", slog.String("userID", userID))
 				writeJSONError(w, "siteID required", http.StatusBadRequest)
 				return

@@ -1,11 +1,11 @@
 import { type Action, BatteryMode, SolarMode, ActionReason } from '../api';
-import { 
-    getBatteryModeLabel, 
-    getBatteryModeClass, 
-    getSolarModeLabel, 
-    getSolarModeClass, 
-    formatPrice, 
-    formatTime, 
+import {
+    getBatteryModeLabel,
+    getBatteryModeClass,
+    getSolarModeLabel,
+    getSolarModeClass,
+    formatPrice,
+    formatTime,
     getReasonText,
     gridChargeCost,
     type ActionSummary
@@ -22,13 +22,13 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
             {groupedActions.map((item, index) => {
                 const isSummary = 'isSummary' in item;
                 const action = isSummary ? (item as ActionSummary).latestAction : (item as Action);
-                
+
                 // For summaries, we might have multiple actions in one card
                 const summary = isSummary ? (item as ActionSummary) : null;
                 const isFault = !!action.fault || (summary?.type === 'fault');
                 const hasStorms = action.systemStatus?.storms && action.systemStatus.storms.length > 0;
                 const isEmergency = hasStorms || action.reason === ActionReason.EmergencyMode;
-                
+
                 const reasonText = getReasonText(action);
                 const batteryModeClass = getBatteryModeClass(action.batteryMode);
                 const isNegPrice = action.currentPrice && (action.currentPrice.dollarsPerKWH + (action.currentPrice.gridUseDollarsPerKWH || 0)) < 0;
@@ -49,7 +49,7 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
                 return (
                     <li key={index} className={`timeline-item mode-${isFault ? 'fault' : batteryModeClass} ${summary ? 'is-grouped' : ''}`}>
                         <div className="timeline-marker"></div>
-                        
+
                         <div className="timeline-time">
                             {formatTime(isSummary ? summary!.startTime : action.timestamp)}
                         </div>
@@ -61,12 +61,12 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
                                     <span className="count">({summary.count}x)</span>
                                 )}
                             </h3>
-                            
+
                             <div className="reason">
                                 {isEmergency ? (
                                     <>
                                         {action.reason === ActionReason.EmergencyMode && !hasStorms && <p>System manually put into emergency mode. Skipping automation.</p>}
-                                        {hasStorms && <p>Franklin is charging the battery to prepare for the storm.</p>}
+                                        {hasStorms && <p>Charging the battery to prepare for the storm.</p>}
                                         {hasStorms && summary && Array.from(summary.storms).length > 0 && (
                                             <p className="storm-details">Storms: {Array.from(summary.storms).join(', ')}</p>
                                         )}

@@ -16,6 +16,10 @@
   font-size: 1.125rem;
 }
 
+.admin-header.secondary {
+  margin-top: 2rem;
+}
+
 .admin-separator {
   height: 1px;
   background-color: var(--border);
@@ -85,4 +89,56 @@
   border-radius: var(--radius-md);
   border: 1px solid #fecaca;
   margin-top: var(--spacing-md);
+}
+
+.admin-card-col {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.admin-card-meta {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  font-size: 0.875rem;
+  color: var(--text-muted-color);
+}
+
+.feedback-row {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+.feedback-sentiment {
+  font-size: 1.5rem;
+}
+
+.feedback-comment {
+  font-size: 1rem;
+}
+
+.feedback-extra {
+  font-size: 0.75rem;
+  color: var(--text-muted-color);
+  margin-top: 0.5rem;
+  word-break: break-all;
+}
+
+.interest-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.5rem;
+  width: 100%;
+  font-size: 0.9rem;
+}
+
+.interest-comments {
+  font-size: 1rem;
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  background-color: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  width: 100%;
 }

@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Link } from 'wouter';
 import { Field } from '@base-ui/react/field';
 import { createSite } from '../api';
-import './SitePages.css';
 
 export interface NewSitePageProps {
     onJoinSuccess: () => void;
@@ -46,7 +45,7 @@ const NewSitePage = ({ onJoinSuccess }: NewSitePageProps) => {
                         <Field.Label htmlFor="create-name">Site Name</Field.Label>
                         <Field.Control
                             id="create-name"
-                            className="join-input"
+                            className="input"
                             value={name}
                             onChange={(e: React.ChangeEvent<HTMLInputElement>) => setName(e.target.value)}
                             disabled={isSubmitting}

@@ -471,6 +471,41 @@ export async function listFeedback(limit?: number, lastFeedbackID?: string): Pro
     return response.json();
 }
 
+export interface InterestSubmission {
+    email: string;
+    utility: string;
+    battery: string;
+    utilityProviderName: string;
+    state: string;
+    planName: string;
+    batteryName: string;
+    comments: string;
+    timestamp: string;
+}
+
+export async function submitInterest(submission: Omit<InterestSubmission, 'email' | 'timestamp'>): Promise<void> {
+    const response = await fetch('/api/interest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(submission)
+    });
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Failed to submit interest'));
+    }
+}
+
+export async function listInterest(limit?: number): Promise<InterestSubmission[]> {
+    let url = '/api/list/interest?';
+    if (limit !== undefined) {
+        url += `limit=${limit}`;
+    }
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Failed to fetch interest submissions'));
+    }
+    return response.json();
+}
+
 export interface EnergyHistoryRes {
     tsHourStart: string;
     avgBatterySOC: number;

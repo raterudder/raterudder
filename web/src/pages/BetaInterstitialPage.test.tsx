@@ -3,10 +3,16 @@ import userEvent from '@testing-library/user-event';
 import BetaInterstitialPage from './BetaInterstitialPage';
 import { describe, it, expect, vi } from 'vitest';
 import { useLocation } from 'wouter';
+import { submitInterest } from '../api';
 
 // Mock wouter
 vi.mock('wouter', () => ({
     useLocation: vi.fn(),
+}));
+
+// Mock api
+vi.mock('../api', () => ({
+    submitInterest: vi.fn(),
 }));
 
 describe('BetaInterstitialPage Component', () => {
@@ -18,14 +24,15 @@ describe('BetaInterstitialPage Component', () => {
         expect(screen.getByText('Utility Provider')).toBeInTheDocument();
         expect(screen.getByText('Battery System')).toBeInTheDocument();
 
-        // Neither waitlist nor continue button should be present initially
-        expect(screen.queryByText(/We're currently in a limited beta/)).not.toBeInTheDocument();
-        expect(screen.queryByRole('button', { name: /start saving money/i })).not.toBeInTheDocument();
+        // Interest form and success message should not be present initially
+        expect(screen.queryByText(/Utility Provider Name/i)).not.toBeInTheDocument();
+        expect(screen.queryByText(/Success!/i)).not.toBeInTheDocument();
     });
 
-    it('shows waitlist message when unsupported utility is selected', async () => {
+    it('shows interest form and allows submission when "Other" is selected', async () => {
         const user = userEvent.setup();
         (useLocation as ReturnType<typeof vi.fn>).mockReturnValue(['/welcome', vi.fn()]);
+        vi.mocked(submitInterest).mockResolvedValue(undefined);
         render(<BetaInterstitialPage />);
 
         const utilitySelect = screen.getByRole('combobox', { name: /Utility Provider/i });
@@ -35,10 +42,29 @@ describe('BetaInterstitialPage Component', () => {
         await user.click(otherOption);
 
         await waitFor(() => {
-            expect(screen.getByText(/We're currently in a limited beta/)).toBeInTheDocument();
-            // Since VITE_JOIN_FORM_URL is likely undefined in tests unless mocked, we just check the message
-            expect(screen.getByText(/Please express your interest/i)).toBeInTheDocument();
+            expect(screen.getByText(/Utility Provider Name/i)).toBeInTheDocument();
+            expect(screen.getByPlaceholderText(/e.g. PG&E/i)).toBeInTheDocument();
         });
+
+        const providerInput = screen.getByPlaceholderText(/e.g. PG&E/i);
+        await user.type(providerInput, 'Test Utility');
+
+        const submitBtn = screen.getByRole('button', { name: /Express Interest/i });
+        await user.click(submitBtn);
+
+        await waitFor(() => {
+            expect(submitInterest).toHaveBeenCalledWith(expect.objectContaining({
+                utility: 'other',
+                utilityProviderName: 'Test Utility'
+            }));
+            expect(screen.getByText(/Success!/i)).toBeInTheDocument();
+            expect(screen.getByText(/We've received your interest!/i)).toBeInTheDocument();
+        });
+
+        // Verify inputs are hidden on success
+        expect(screen.queryByRole('combobox', { name: /Utility Provider/i })).not.toBeInTheDocument();
+        expect(screen.queryByPlaceholderText(/e.g. PG&E/i)).not.toBeInTheDocument();
+        expect(screen.queryByText(/To get started, please confirm your equipment/i)).not.toBeInTheDocument();
     });
 
     it('shows continue button when supported equipment is selected', async () => {

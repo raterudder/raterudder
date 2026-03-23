@@ -1,12 +1,13 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import AdminPage from './AdminPage';
-import { listSites, listFeedback } from '../api';
+import { listSites, listFeedback, listInterest } from '../api';
 import { Router } from 'wouter';
 
 vi.mock('../api', () => ({
     listSites: vi.fn(),
     listFeedback: vi.fn(),
+    listInterest: vi.fn(),
 }));
 
 describe('AdminPage', () => {
@@ -54,14 +55,25 @@ describe('AdminPage', () => {
                 extra: { 'test': 'data' }
             }
         ];
+        const mockInterest: any = [
+            {
+                email: 'interest@example.com',
+                utility: 'other',
+                utilityProviderName: 'Strange Utility',
+                timestamp: '2025-01-01T12:00:00Z'
+            }
+        ];
         vi.mocked(listSites).mockResolvedValue(mockSites);
         vi.mocked(listFeedback).mockResolvedValue(mockFeedback);
+        vi.mocked(listInterest).mockResolvedValue(mockInterest);
 
         render(<Router><AdminPage /></Router>);
 
         await waitFor(() => {
             expect(screen.getByText('site1')).toBeInTheDocument();
             expect(screen.getByText(/Test comment/)).toBeInTheDocument();
+            expect(screen.getByText('interest@example.com')).toBeInTheDocument();
+            expect(screen.getByText(/Strange Utility/)).toBeInTheDocument();
             expect(screen.getByText('site2')).toBeInTheDocument();
             expect(screen.getByText(/Charging battery for profit/)).toBeInTheDocument();
             expect(screen.getByText(/50\.5%/)).toBeInTheDocument();

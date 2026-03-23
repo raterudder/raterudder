@@ -134,18 +134,27 @@
   font-size: 0.9rem;
 }
 
-
-
 .beta-interstitial-feedback {
   margin-top: 2rem;
-  padding: 1.25rem;
-  background-color: #fffbeb;
-  color: #b45309;
-  border-radius: var(--radius-md);
+  padding: 1.5rem;
+  background-color: var(--surface-container-high);
+  color: var(--on-surface);
+  border-radius: var(--radius-lg);
   text-align: left;
-  font-size: 0.9rem;
-  border: 1px solid #fde68a;
-  line-height: 1.5;
+  font-size: 1rem;
+  border: 1px solid var(--ghost-border);
+  line-height: 1.6;
+  box-shadow: var(--shadow-md);
+}
+
+.beta-interstitial-feedback.success {
+  background-color: rgba(0, 255, 194, 0.08);
+  border-color: rgba(0, 255, 194, 0.3);
+  color: var(--on-surface);
+}
+
+.beta-interstitial-feedback.success p:first-child {
+  color: var(--accent);
 }
 
 .beta-interstitial-feedback p {

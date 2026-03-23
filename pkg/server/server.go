@@ -227,6 +227,8 @@ func (s *Server) setupHandler() http.Handler {
 	apiMux.HandleFunc("GET /api/list/sites", s.handleListSites)
 	apiMux.HandleFunc("POST /api/feedback", s.handleSubmitFeedback)
 	apiMux.HandleFunc("GET /api/list/feedback", s.handleListFeedback)
+	apiMux.HandleFunc("POST /api/interest", s.handleSubmitInterest)
+	apiMux.HandleFunc("GET /api/list/interest", s.handleListInterest)
 	apiMux.HandleFunc("POST /api/report/browser", s.handleReportBrowser)
 	apiMux.HandleFunc("GET /api/tesla/register", s.handleTeslaRegister)
 

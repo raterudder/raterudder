@@ -1094,3 +1094,66 @@ func (f *FirestoreProvider) GetUtilityPrices(ctx context.Context, utilityID stri
 	}
 	return prices, nil
 }
+
+// UpsertInterest adds or updates an interest submission record in the "interest" collection.
+// It uses the email as the document ID to ensure one record per email.
+func (f *FirestoreProvider) UpsertInterest(ctx context.Context, submission types.InterestSubmission) error {
+	if submission.Email == "" {
+		return fmt.Errorf("email cannot be empty for interest submission")
+	}
+
+	jsonBytes, err := json.Marshal(submission)
+	if err != nil {
+		return fmt.Errorf("failed to marshal interest submission: %w", err)
+	}
+
+	coll := f.client.Collection("interest")
+	_, err = coll.Doc(submission.Email).Set(ctx, map[string]any{
+		"json":      string(jsonBytes),
+		"timestamp": submission.Timestamp,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to upsert interest submission: %w", err)
+	}
+	return nil
+}
+
+// ListInterest retrieves interest submissions, sorted by timestamp descending.
+func (f *FirestoreProvider) ListInterest(ctx context.Context, limit int) ([]types.InterestSubmission, error) {
+	coll := f.client.Collection("interest")
+
+	iter := coll.OrderBy("timestamp", firestore.Desc).Limit(limit).Documents(ctx)
+	defer iter.Stop()
+
+	var submissions []types.InterestSubmission
+	for {
+		doc, err := iter.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("error iterating interest submissions: %w", err)
+		}
+
+		val, err := doc.DataAt("json")
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "interest doc missing json", slog.String("docID", doc.Ref.ID), slog.Any("err", err))
+			continue
+		}
+
+		jsonStr, ok := val.(string)
+		if !ok {
+			log.Ctx(ctx).WarnContext(ctx, "interest doc json not string", slog.String("docID", doc.Ref.ID))
+			continue
+		}
+
+		var sub types.InterestSubmission
+		if err := json.Unmarshal([]byte(jsonStr), &sub); err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal interest submission", slog.String("docID", doc.Ref.ID), slog.Any("err", err))
+			continue
+		}
+		submissions = append(submissions, sub)
+	}
+
+	return submissions, nil
+}

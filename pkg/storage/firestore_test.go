@@ -648,4 +648,35 @@ func TestFirestoreProvider(t *testing.T) {
 		require.Len(t, pricesRange, 1)
 		assert.Equal(t, 0.10, pricesRange[0].DollarsPerKWH)
 	})
+
+	t.Run("Interest", func(t *testing.T) {
+		// 1. Empty results
+		list, err := f.ListInterest(ctx, 10)
+		require.NoError(t, err)
+		assert.Empty(t, list)
+
+		// 2. Insert multiple for sorting/pagination
+		for i := 1; i <= 5; i++ {
+			submission := types.InterestSubmission{
+				Email:     fmt.Sprintf("user%d@example.com", i),
+				Utility:   "other",
+				Timestamp: time.Now().Add(time.Duration(i) * time.Hour).Truncate(time.Second).UTC(),
+			}
+			require.NoError(t, f.UpsertInterest(ctx, submission))
+		}
+
+		// 3. Sorting (newest first)
+		list, err = f.ListInterest(ctx, 10)
+		require.NoError(t, err)
+		require.Len(t, list, 5)
+		assert.Equal(t, "user5@example.com", list[0].Email)
+		assert.Equal(t, "user1@example.com", list[4].Email)
+
+		// 4. Pagination (limit)
+		list, err = f.ListInterest(ctx, 2)
+		require.NoError(t, err)
+		assert.Len(t, list, 2)
+		assert.Equal(t, "user5@example.com", list[0].Email)
+		assert.Equal(t, "user4@example.com", list[1].Email)
+	})
 }

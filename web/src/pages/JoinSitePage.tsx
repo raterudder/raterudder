@@ -3,7 +3,6 @@ import { Link } from 'wouter';
 import { joinSite } from '../api';
 import { Field } from '@base-ui/react/field';
 import { Input } from '@base-ui/react/input';
-import './SitePages.css';
 
 interface JoinPageProps {
     onJoinSuccess: () => void;
@@ -47,6 +46,7 @@ const JoinPage: React.FC<JoinPageProps> = ({ onJoinSuccess }) => {
                         <Field.Label htmlFor="join-site-id">Site ID</Field.Label>
                         <Input
                             id="join-site-id"
+                            className="input"
                             type="text"
                             value={siteID}
                             onChange={(e) => setSiteID(e.target.value)}
@@ -60,6 +60,7 @@ const JoinPage: React.FC<JoinPageProps> = ({ onJoinSuccess }) => {
                         <Field.Label htmlFor="join-name">Site Name</Field.Label>
                         <Input
                             id="join-name"
+                            className="input"
                             type="text"
                             value={name}
                             onChange={(e) => setName(e.target.value)}
@@ -74,6 +75,7 @@ const JoinPage: React.FC<JoinPageProps> = ({ onJoinSuccess }) => {
                         <Field.Label htmlFor="join-invite-code">Invite Code</Field.Label>
                         <Input
                             id="join-invite-code"
+                            className="input"
                             type="text"
                             value={inviteCode}
                             onChange={(e) => setInviteCode(e.target.value)}

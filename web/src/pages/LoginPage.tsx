@@ -72,9 +72,6 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onLoginError, aut
                         </div>
                     )}
                 </div>
-                <p className="beta-notice" style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '0', marginBottom: '1.5rem', lineHeight: '1.5' }}>
-                    During our limited beta, we currently only support Ameren and ComEd utility providers, and FranklinWH battery systems.
-                </p>
                 <div className="login-footer">
                     <Link to="/privacy">Privacy Policy</Link>
                     <Separator className="separator" />

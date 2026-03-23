@@ -506,7 +506,7 @@ describe('Dashboard', () => {
 
         await waitFor(() => {
             expect(screen.getByRole('heading', { name: /Storm Hedge Mode/ })).toBeInTheDocument();
-            expect(screen.getByText('Franklin is charging the battery to prepare for the storm.')).toBeInTheDocument();
+            expect(screen.getByText('Charging the battery to prepare for the storm.')).toBeInTheDocument();
             expect(screen.getByText(/Storm Duration: 12:00 PM - 3:00 PM/)).toBeInTheDocument();
         });
     });

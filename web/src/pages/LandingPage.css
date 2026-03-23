@@ -132,11 +132,6 @@
     background: var(--primary-glow);
 }
 
-.cta-note {
-    font-size: 0.875rem;
-    color: var(--text-muted);
-}
-
 .hero-visual {
     flex: 0.8;
     position: relative;

@@ -39,36 +39,6 @@
   color: var(--on-surface);
 }
 
-.form-group input[type="number"],
-.form-group input[type="text"],
-.form-group input[type="email"],
-.form-group input[type="password"] {
-  width: 100%;
-  padding: 0.875rem 1.125rem;
-  font-family: inherit;
-  font-size: 1rem;
-  color: var(--on-surface);
-  background: var(--surface-container-low);
-  border: 1px solid var(--outline-variant); /* Increased contrast */
-  border-radius: var(--radius-md);
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-  box-sizing: border-box;
-}
-
-.form-group input:focus {
-  outline: none;
-  border-color: var(--primary);
-  box-shadow: 0 0 0 1px var(--primary), 0 0 15px rgba(75, 142, 255, 0.2);
-  background: var(--surface-container-high);
-}
-
-.form-group input:disabled {
-  background: var(--surface-container-low);
-  color: var(--text-muted);
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
 /* Field.Description styling */
 .form-group [data-field="description"] {
   font-size: 0.875rem;

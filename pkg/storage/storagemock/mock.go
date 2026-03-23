@@ -200,3 +200,16 @@ func (m *MockDatabase) GetUtilityPrices(ctx context.Context, utilityID string, s
 	}
 	return nil, nil
 }
+
+func (m *MockDatabase) UpsertInterest(ctx context.Context, submission types.InterestSubmission) error {
+	args := m.Called(ctx, submission)
+	return args.Error(0)
+}
+
+func (m *MockDatabase) ListInterest(ctx context.Context, limit int) ([]types.InterestSubmission, error) {
+	args := m.Called(ctx, limit)
+	if len(args) > 0 {
+		return args.Get(0).([]types.InterestSubmission), args.Error(1)
+	}
+	return nil, nil
+}
