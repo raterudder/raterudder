@@ -70,6 +70,13 @@ type Price struct {
 	SeparateGenerationCredit bool `json:"separateGenerationCredit"`
 }
 
+// PriceState embeds Price and adds a Confirmed flag.
+type PriceState struct {
+	Price
+	Confirmed bool      `json:"confirmed"`
+	TSUpdated time.Time `json:"tsUpdated"`
+}
+
 // Contains checks if a time is within the price interval.
 func (p *Price) Contains(ts time.Time) bool {
 	return !ts.Before(p.TSStart) && (p.TSEnd.IsZero() || ts.Before(p.TSEnd))

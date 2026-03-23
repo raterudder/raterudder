@@ -10,8 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/raterudder/raterudder/pkg/storage/storagemock"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -66,12 +68,12 @@ func TestComEd(t *testing.T) {
 		}
 
 		// First call
-		_, err := c.getCachedCurrentPrices(context.Background())
+		_, err := c.GetCurrentPrice(context.Background())
 		require.NoError(t, err)
 		assert.Equal(t, 1, requests)
 
 		// Second call (immediate)
-		_, err = c.getCachedCurrentPrices(context.Background())
+		_, err = c.GetCurrentPrice(context.Background())
 		require.NoError(t, err)
 		assert.Equal(t, 1, requests, "expected cached response")
 	})
@@ -253,5 +255,104 @@ func TestComEd(t *testing.T) {
 		// 2h ago (Valid)
 		assert.InDelta(t, 0.02, prices[2].DollarsPerKWH, 0.0001)
 		assert.Equal(t, now.Add(-2*time.Hour).Truncate(time.Hour).Unix(), prices[2].TSStart.Unix())
+	})
+
+	t.Run("DB Caching", func(t *testing.T) {
+		m := &storagemock.MockDatabase{}
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`[{"millisUTC":"1706227200000","price":"2.0"}]`))
+		}))
+		defer ts.Close()
+
+		c := configuredComEdHourly(m)
+		c.apiURL = ts.URL
+		c.client = ts.Client()
+
+		ctx := context.Background()
+		start := time.UnixMilli(1706227200000).In(ctLocation)
+		end := start.Add(time.Hour)
+
+		// 1. Test GetConfirmedPrices - DB Empty -> API -> DB Upsert
+		m.On("GetUtilityPrices", mock.Anything, "comed", start, end).Return([]types.PriceState{}, nil).Once()
+		m.On("UpsertUtilityPrices", mock.Anything, "comed", mock.Anything, 0).Return(nil).Once()
+
+		prices, err := c.GetConfirmedPrices(ctx, start, end)
+		require.NoError(t, err)
+		assert.Len(t, prices, 1)
+		m.AssertExpectations(t)
+
+		// 2. Test GetConfirmedPrices - DB Full
+		// Clear memory cache to force DB check
+		c.historicalPrices = make(map[int64]types.Price)
+		m.On("GetUtilityPrices", mock.Anything, "comed", start, end).Return([]types.PriceState{
+			{Price: prices[0], Confirmed: true, TSUpdated: time.Now()},
+		}, nil).Once()
+
+		prices2, err := c.GetConfirmedPrices(ctx, start, end)
+		require.NoError(t, err)
+		assert.Len(t, prices2, 1)
+		assert.Equal(t, prices[0].DollarsPerKWH, prices2[0].DollarsPerKWH)
+		m.AssertExpectations(t)
+
+		// 3. Test GetConfirmedPrices - Memory Cache
+		// No GetUtilityPrices call expected
+		prices3, err := c.GetConfirmedPrices(ctx, start, end)
+		require.NoError(t, err)
+		assert.Len(t, prices3, 1)
+		assert.Equal(t, prices[0].DollarsPerKWH, prices3[0].DollarsPerKWH)
+		m.AssertExpectations(t)
+	})
+
+	t.Run("GetFuturePrices DB Caching", func(t *testing.T) {
+		m := &storagemock.MockDatabase{}
+		now := time.Now().In(ctLocation)
+		futureEpt := now.Add(24 * time.Hour).Format("2006-01-02T15:04:05")
+
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(fmt.Sprintf(`[{"datetime_beginning_ept":"%s","total_lmp_da":10.0}]`, futureEpt)))
+		}))
+		defer ts.Close()
+
+		c := configuredComEdHourly(m)
+		c.pjmAPIURL = ts.URL
+		c.pjmAPIKey = "dummy" // Ensure logic isn't skipped
+		c.client = ts.Client()
+
+		ctx := context.Background()
+
+		m.On("GetUtilityPrices", mock.Anything, "comed", mock.Anything, mock.Anything).Return([]types.PriceState{
+			{Price: types.Price{TSStart: now, DollarsPerKWH: 0.0105009}, Confirmed: false, TSUpdated: time.Now()}, // Using a stable price for test
+		}, nil).Once()
+		m.On("UpsertUtilityPrices", mock.Anything, "comed", mock.MatchedBy(func(p []types.PriceState) bool {
+			return len(p) > 0
+		}), 0).Return(nil).Once()
+
+		futures, err := c.GetFuturePrices(ctx)
+		require.NoError(t, err)
+		assert.NotEmpty(t, futures)
+		m.AssertExpectations(t)
+
+		// 2. DB Full ( >= 11 ) -> Use DB
+		// Clear memory cache to force DB check
+		c.mu.Lock()
+		c.cachedFuture = nil
+		c.lastFutureFetch = time.Time{}
+		c.mu.Unlock()
+
+		var dbPrices []types.PriceState
+		for i := 0; i < 11; i++ {
+			dbPrices = append(dbPrices, types.PriceState{
+				Price:     types.Price{TSStart: now.Truncate(time.Hour).Add(time.Duration(i+1) * time.Hour), DollarsPerKWH: 0.05},
+				Confirmed: false,
+				TSUpdated: time.Now(),
+			})
+		}
+		m.On("GetUtilityPrices", mock.Anything, "comed", mock.Anything, mock.Anything).Return(dbPrices, nil).Once()
+
+		futures2, err := c.GetFuturePrices(ctx)
+		require.NoError(t, err)
+		assert.Len(t, futures2, 11)
+		assert.Equal(t, 0.05, futures2[0].DollarsPerKWH)
+		m.AssertExpectations(t)
 	})
 }

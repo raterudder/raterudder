@@ -24,6 +24,8 @@ type Database interface {
 	// Data Persistence
 	// UpsertPrices adds or updates multiple price records.
 	UpsertPrices(ctx context.Context, siteID string, prices []types.Price, version int) error
+	// UpsertUtilityPrices adds or updates multiple price records for a utility.
+	UpsertUtilityPrices(ctx context.Context, utilityID string, prices []types.PriceState, version int) error
 	InsertAction(ctx context.Context, siteID string, action types.Action) error
 	// UpsertEnergyHistories adds or updates multiple energy history records.
 	UpsertEnergyHistories(ctx context.Context, siteID string, stats []types.EnergyStats, version int) error
@@ -33,6 +35,8 @@ type Database interface {
 
 	// History
 	GetPriceHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Price, error)
+	// GetUtilityPrices retrieves price records within the specified time range for a utility.
+	GetUtilityPrices(ctx context.Context, utilityID string, start, end time.Time) ([]types.PriceState, error)
 	GetActionHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Action, error)
 	GetLatestAction(ctx context.Context, siteID string) (*types.Action, error)
 	GetEnergyHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.EnergyStats, error)

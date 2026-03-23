@@ -15,7 +15,7 @@ import (
 )
 
 func TestHandleListESS(t *testing.T) {
-	mockUMap := utility.NewMap()
+	mockUMap := utility.NewMap(nil)
 	mockE := ess.NewMap()
 
 	t.Run("Returns JSON array of ESS providers", func(t *testing.T) {

@@ -187,3 +187,16 @@ func (m *MockDatabase) GetWeather(ctx context.Context, siteID string, start, end
 	args := m.Called(ctx, siteID, start, end)
 	return args.Get(0).([]types.Weather), args.Error(1)
 }
+
+func (m *MockDatabase) UpsertUtilityPrices(ctx context.Context, utilityID string, prices []types.PriceState, version int) error {
+	args := m.Called(ctx, utilityID, prices, version)
+	return args.Error(0)
+}
+
+func (m *MockDatabase) GetUtilityPrices(ctx context.Context, utilityID string, start, end time.Time) ([]types.PriceState, error) {
+	args := m.Called(ctx, utilityID, start, end)
+	if len(args) > 0 {
+		return args.Get(0).([]types.PriceState), args.Error(1)
+	}
+	return nil, nil
+}

@@ -606,4 +606,46 @@ func TestFirestoreProvider(t *testing.T) {
 			assert.True(t, results[0].TSDayStart.Equal(tEast))
 		})
 	})
+
+	t.Run("UtilityPrices", func(t *testing.T) {
+		utilityID := "comed"
+		now := time.Now().Truncate(time.Hour).UTC()
+		p1 := types.PriceState{
+			Price: types.Price{
+				TSStart:       now,
+				DollarsPerKWH: 0.10,
+				Provider:      "comed_besh",
+			},
+			Confirmed: true,
+			TSUpdated: now,
+		}
+		p2 := types.PriceState{
+			Price: types.Price{
+				TSStart:       now.Add(time.Hour),
+				DollarsPerKWH: 0.12,
+				Provider:      "comed_besh",
+			},
+			Confirmed: false,
+			TSUpdated: now,
+		}
+
+		require.NoError(t, f.UpsertUtilityPrices(ctx, utilityID, []types.PriceState{p1, p2}, 0))
+
+		// Get both
+		prices, err := f.GetUtilityPrices(ctx, utilityID, now, now.Add(2*time.Hour))
+		require.NoError(t, err)
+		require.Len(t, prices, 2)
+		assert.True(t, prices[0].Confirmed)
+		assert.False(t, prices[1].Confirmed)
+		assert.Equal(t, 0.10, prices[0].DollarsPerKWH)
+		assert.Equal(t, 0.12, prices[1].DollarsPerKWH)
+		assert.Equal(t, now, prices[0].TSUpdated)
+		assert.Equal(t, now, prices[1].TSUpdated)
+
+		// Get range
+		pricesRange, err := f.GetUtilityPrices(ctx, utilityID, now, now.Add(time.Hour))
+		require.NoError(t, err)
+		require.Len(t, pricesRange, 1)
+		assert.Equal(t, 0.10, pricesRange[0].DollarsPerKWH)
+	})
 }

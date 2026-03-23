@@ -20,9 +20,9 @@ import (
 
 func main() {
 	// init packages
-	u := utility.Configured()
-	e := ess.Configured()
 	s := storage.Configured()
+	u := utility.Configured(s)
+	e := ess.Configured()
 
 	ess.ConfigureMock(s)
 

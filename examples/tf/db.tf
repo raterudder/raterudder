@@ -22,11 +22,13 @@ resource "google_project_iam_member" "raterudder_firestore" {
 locals {
   collections = [
     "config",
-    "actions",
-    "energy_hourly",
-    "utility_prices",
+    "action_history",
+    "energy_history",
+    "price_history",
     "users",
     "sites",
+    "feedback",
+    "hourly_prices",
   ]
 }
 

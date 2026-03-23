@@ -19,7 +19,7 @@ func init() {
 }
 
 func TestListUtilities(t *testing.T) {
-	m := NewMap()
+	m := NewMap(nil)
 	utilities := m.ListUtilities()
 
 	require.NotEmpty(t, utilities, "expected at least one utility")
@@ -121,7 +121,7 @@ func TestMap(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("NewMap", func(t *testing.T) {
-		m := NewMap()
+		m := NewMap(nil)
 		assert.NotNil(t, m)
 		assert.NotNil(t, m.utilities)
 		assert.Nil(t, m.baseComEdHourly)
@@ -129,21 +129,21 @@ func TestMap(t *testing.T) {
 	})
 
 	t.Run("Configured", func(t *testing.T) {
-		m := Configured()
+		m := Configured(nil)
 		assert.NotNil(t, m)
 		assert.NotNil(t, m.baseComEdHourly)
 		assert.NotNil(t, m.baseAmerenSmart)
 	})
 
 	t.Run("SetProvider", func(t *testing.T) {
-		m := NewMap()
+		m := NewMap(nil)
 		provider := &mockUtility{}
 		m.SetProvider("site1", provider)
 		assert.Equal(t, provider, m.utilities["site1"])
 	})
 
 	t.Run("Site with custom provider", func(t *testing.T) {
-		m := NewMap()
+		m := NewMap(nil)
 		provider := &mockUtility{}
 		m.SetProvider("site1", provider)
 
@@ -154,7 +154,7 @@ func TestMap(t *testing.T) {
 	})
 
 	t.Run("Site with unknown provider", func(t *testing.T) {
-		m := NewMap()
+		m := NewMap(nil)
 		settings := types.Settings{UtilityProvider: "unknown_provider"}
 		u, err := m.Site(ctx, "site1", settings)
 		require.Error(t, err)
@@ -163,7 +163,7 @@ func TestMap(t *testing.T) {
 	})
 
 	t.Run("Site with ComEd provider", func(t *testing.T) {
-		m := Configured()
+		m := Configured(nil)
 		settings := types.Settings{UtilityProvider: "comed", UtilityRate: "comed_besh"}
 		u, err := m.Site(ctx, "site1", settings)
 		require.NoError(t, err)
@@ -176,7 +176,7 @@ func TestMap(t *testing.T) {
 	})
 
 	t.Run("Site with ComEd missing base", func(t *testing.T) {
-		m := NewMap() // ComEd base not configured
+		m := NewMap(nil) // ComEd base not configured
 		settings := types.Settings{UtilityProvider: "comed", UtilityRate: "comed_besh"}
 		u, err := m.Site(ctx, "site1", settings)
 		require.Error(t, err)
@@ -185,7 +185,7 @@ func TestMap(t *testing.T) {
 	})
 
 	t.Run("Site with ComEd unsupported rate", func(t *testing.T) {
-		m := Configured()
+		m := Configured(nil)
 		settings := types.Settings{UtilityProvider: "comed", UtilityRate: "unsupported"}
 		u, err := m.Site(ctx, "site1", settings)
 		require.Error(t, err)
@@ -194,7 +194,7 @@ func TestMap(t *testing.T) {
 	})
 
 	t.Run("Site with Ameren provider", func(t *testing.T) {
-		m := Configured()
+		m := Configured(nil)
 		settings := types.Settings{UtilityProvider: "ameren", UtilityRate: "ameren_psp"}
 		u, err := m.Site(ctx, "site1", settings)
 		require.NoError(t, err)
@@ -207,7 +207,7 @@ func TestMap(t *testing.T) {
 	})
 
 	t.Run("Site with Ameren missing base", func(t *testing.T) {
-		m := NewMap() // Ameren base not configured
+		m := NewMap(nil) // Ameren base not configured
 		settings := types.Settings{UtilityProvider: "ameren", UtilityRate: "ameren_psp"}
 		u, err := m.Site(ctx, "site1", settings)
 		require.Error(t, err)
@@ -216,7 +216,7 @@ func TestMap(t *testing.T) {
 	})
 
 	t.Run("Site with Ameren unsupported rate", func(t *testing.T) {
-		m := Configured()
+		m := Configured(nil)
 		settings := types.Settings{UtilityProvider: "ameren", UtilityRate: "unsupported"}
 		u, err := m.Site(ctx, "site1", settings)
 		require.Error(t, err)
@@ -225,7 +225,7 @@ func TestMap(t *testing.T) {
 	})
 
 	t.Run("Site with TOU provider", func(t *testing.T) {
-		m := NewMap()
+		m := NewMap(nil)
 		settings := types.Settings{UtilityProvider: "tou", UtilityRate: "example"}
 		u, err := m.Site(ctx, "site1", settings)
 		require.NoError(t, err)
@@ -238,7 +238,7 @@ func TestMap(t *testing.T) {
 	})
 
 	t.Run("Site caches custom provider but checks ApplySettings error", func(t *testing.T) {
-		m := NewMap()
+		m := NewMap(nil)
 		provider := &mockUtility{settingsErr: assert.AnError}
 		m.SetProvider("site1", provider)
 
@@ -249,7 +249,7 @@ func TestMap(t *testing.T) {
 	})
 
 	t.Run("Site with ComEd provider ApplySettings error", func(t *testing.T) {
-		m := Configured()
+		m := Configured(nil)
 		settings := types.Settings{UtilityProvider: "comed", UtilityRate: "comed_besh", UtilityRateOptions: types.UtilityRateOptions{RateClass: "invalid"}}
 		u, err := m.Site(ctx, "site1", settings)
 		require.Error(t, err)
@@ -258,7 +258,7 @@ func TestMap(t *testing.T) {
 	})
 
 	t.Run("Site with TOU provider ApplySettings error", func(t *testing.T) {
-		m := NewMap()
+		m := NewMap(nil)
 		settings := types.Settings{UtilityProvider: "tou", UtilityRate: "unknown"}
 		u, err := m.Site(ctx, "site1", settings)
 		require.Error(t, err)

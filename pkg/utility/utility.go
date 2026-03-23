@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/log"
+	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
 )
 
@@ -36,25 +37,27 @@ type Utility interface {
 }
 
 // Configured sets up the utility providers and returns a Map.
-func Configured() *Map {
-	m := NewMap()
+func Configured(db storage.Database) *Map {
+	m := NewMap(db)
 	// Initialize supported providers
-	m.baseComEdHourly = configuredComEdHourly()
-	m.baseAmerenSmart = configuredAmerenSmart()
+	m.baseComEdHourly = configuredComEdHourly(db)
+	m.baseAmerenSmart = configuredAmerenSmart(db)
 	return m
 }
 
 // Map manages utility providers.
 type Map struct {
 	mu              sync.Mutex
+	db              storage.Database
 	baseComEdHourly *BaseComEdHourly
 	baseAmerenSmart *BaseAmerenSmart
 	utilities       map[string]Utility
 }
 
 // NewMap creates a new Utility Map.
-func NewMap() *Map {
+func NewMap(db storage.Database) *Map {
 	return &Map{
+		db:        db,
 		utilities: make(map[string]Utility),
 	}
 }

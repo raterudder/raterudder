@@ -29,7 +29,7 @@ func TestWebHandler(t *testing.T) {
 	mockP := ess.NewMap()
 	mockP.SetSystem(types.SiteIDNone, mockE)
 
-	mockUMap := utility.NewMap()
+	mockUMap := utility.NewMap(nil)
 	mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 	mockS.On("GetSettings", mock.Anything).Return(types.Settings{

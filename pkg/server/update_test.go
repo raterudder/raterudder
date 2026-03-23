@@ -55,7 +55,7 @@ func TestHandleUpdate(t *testing.T) {
 	mockP := ess.NewMap()
 	mockP.SetSystem(types.SiteIDNone, mockES)
 
-	mockUMap := utility.NewMap()
+	mockUMap := utility.NewMap(mockS)
 	mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 	srv := &Server{
@@ -109,7 +109,7 @@ func TestHandleUpdate(t *testing.T) {
 			mockP := ess.NewMap()
 			mockP.SetSystem(types.SiteIDNone, mockES)
 
-			mockUMap := utility.NewMap()
+			mockUMap := utility.NewMap(mockS)
 			mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 			provider, err := oidc.NewProvider(context.Background(), srvURL)
@@ -230,7 +230,7 @@ func TestHandleUpdate(t *testing.T) {
 			// But for completeness, we can create a server with empty verifiers
 			srv := &Server{
 				storage:    mockS,
-				utilities:  utility.NewMap(),
+				utilities:  utility.NewMap(mockS),
 				ess:        ess.NewMap(),
 				singleSite: true,
 			}
@@ -271,7 +271,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{{DollarsPerKWH: 0.15, TSStart: time.Now().Add(time.Hour)}}, nil)
 		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
 
-		mockUMap := utility.NewMap()
+		mockUMap := utility.NewMap(mockS)
 		mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 		// Expect a paused action to be inserted with paused=true
@@ -341,7 +341,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: time.Now()}, nil)
 		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
 
-		mockUMap := utility.NewMap()
+		mockUMap := utility.NewMap(mockS)
 		mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 		srv := &Server{
@@ -397,7 +397,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: time.Now()}, nil)
 		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
 
-		mockUMap := utility.NewMap()
+		mockUMap := utility.NewMap(mockS)
 		mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 		srv := &Server{
@@ -456,7 +456,7 @@ func TestHandleUpdate(t *testing.T) {
 			mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{{DollarsPerKWH: 0.15, TSStart: time.Now().Add(time.Hour)}}, nil)
 			mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
 
-			mockUMap := utility.NewMap()
+			mockUMap := utility.NewMap(mockS)
 			mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 			// Other storage expectations
@@ -525,7 +525,7 @@ func TestHandleUpdate(t *testing.T) {
 			mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{{DollarsPerKWH: 0.15, TSStart: time.Now().Add(time.Hour)}}, nil)
 			mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
 
-			mockUMap := utility.NewMap()
+			mockUMap := utility.NewMap(mockS)
 			mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 			// Other storage expectations
@@ -593,7 +593,7 @@ func TestHandleUpdateSites(t *testing.T) {
 	mockP.SetSystem("site1", mockES)
 	mockP.SetSystem("site3", mockES)
 
-	mockUMap := utility.NewMap()
+	mockUMap := utility.NewMap(mockS)
 	mockUMap.SetProvider("site1", mockU)
 	mockUMap.SetProvider("site2", mockU)
 	mockUMap.SetProvider("site3", mockU)
@@ -729,7 +729,7 @@ func TestUpdateSitePrices(t *testing.T) {
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site1").Return(time.Time{}, 0, nil)
 		mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-		mockUMap := utility.NewMap()
+		mockUMap := utility.NewMap(mockS)
 		mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 		srv := &Server{
@@ -765,7 +765,7 @@ func TestUpdateSitePrices(t *testing.T) {
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site1").Return(lastTime, types.CurrentPriceHistoryVersion, nil)
 		mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-		mockUMap := utility.NewMap()
+		mockUMap := utility.NewMap(mockS)
 		mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 		srv := &Server{
@@ -793,7 +793,7 @@ func TestUpdateSitePrices(t *testing.T) {
 		mockS := &mockStorage{}
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site1").Return(lastTime, types.CurrentPriceHistoryVersion, nil)
 
-		mockUMap := utility.NewMap()
+		mockUMap := utility.NewMap(mockS)
 		mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 		srv := &Server{
@@ -827,7 +827,7 @@ func TestUpdateSitePrices(t *testing.T) {
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site1").Return(lastTime, oldVersion, nil)
 		mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-		mockUMap := utility.NewMap()
+		mockUMap := utility.NewMap(mockS)
 		mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 		srv := &Server{
@@ -986,7 +986,7 @@ func TestUpdateEnergyHistory(t *testing.T) {
 		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{}, nil) // Trigger fallback
 		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
 
-		mockUMap := utility.NewMap()
+		mockUMap := utility.NewMap(mockS)
 		mockUMap.SetProvider("site1", mockU)
 		mockP := ess.NewMap()
 		mockP.SetSystem("site1", mockES)

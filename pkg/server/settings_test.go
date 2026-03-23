@@ -43,7 +43,7 @@ func TestHandleGetSettings(t *testing.T) {
 		// Expect some ESS calls if they happen, e.g. ApplySettings
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
 
-		mockUMap := utility.NewMap()
+		mockUMap := utility.NewMap(mockS)
 		mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 		return &Server{
@@ -157,7 +157,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		// Expect some ESS calls if they happen, e.g. ApplySettings
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
 
-		mockUMap := utility.NewMap()
+		mockUMap := utility.NewMap(mockS)
 		mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 		return &Server{
@@ -665,7 +665,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 	t.Run("Update Site Location With Postal Code", func(t *testing.T) {
 		mockU := &mockUtility{}
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockUMap := utility.NewMap()
+		mockUMap := utility.NewMap(mockS)
 		mockUMap.SetProvider("test-site", mockU)
 		mockS := &mockStorage{}
 		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil).Maybe()
@@ -724,9 +724,9 @@ func TestHandleUpdateSettings(t *testing.T) {
 	t.Run("Update Solar Direction - Preservation", func(t *testing.T) {
 		mockU := &mockUtility{}
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockUMap := utility.NewMap()
-		mockUMap.SetProvider("test-site", mockU)
 		mockS := &mockStorage{}
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider("test-site", mockU)
 
 		existingLoc := &types.SiteLocation{
 			PostalCode:   "90210",
@@ -790,9 +790,9 @@ func TestHandleUpdateSettings(t *testing.T) {
 	t.Run("Update Solar Direction - With Zip Change", func(t *testing.T) {
 		mockU := &mockUtility{}
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockUMap := utility.NewMap()
-		mockUMap.SetProvider("test-site", mockU)
 		mockS := &mockStorage{}
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider("test-site", mockU)
 
 		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil).Maybe()
 		mockS.On("UpdateSite", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -868,7 +868,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 	t.Run("Rate Limit First Retry Allowed (200)", func(t *testing.T) {
 		mockU2 := &mockUtility{}
 		mockU2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockUMap2 := utility.NewMap()
+		mockUMap2 := utility.NewMap(nil)
 		mockUMap2.SetProvider(types.SiteIDNone, mockU2)
 
 		mockS2 := &mockStorage{}
@@ -940,7 +940,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 	t.Run("Rate Limit Active (429) after 2 Failures", func(t *testing.T) {
 		mockU2 := &mockUtility{}
 		mockU2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockUMap2 := utility.NewMap()
+		mockUMap2 := utility.NewMap(nil)
 		mockUMap2.SetProvider(types.SiteIDNone, mockU2)
 
 		mockS2 := &mockStorage{}
@@ -1016,7 +1016,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 	t.Run("Rate Limit Active (429) after 2 Failures Even With Different Credentials", func(t *testing.T) {
 		mockU2 := &mockUtility{}
 		mockU2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockUMap2 := utility.NewMap()
+		mockUMap2 := utility.NewMap(nil)
 		mockUMap2.SetProvider(types.SiteIDNone, mockU2)
 
 		mockS2 := &mockStorage{}
@@ -1094,7 +1094,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 	t.Run("Rate Limit Expired (200) after 5 Minutes", func(t *testing.T) {
 		mockU2 := &mockUtility{}
 		mockU2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockUMap2 := utility.NewMap()
+		mockUMap2 := utility.NewMap(nil)
 		mockUMap2.SetProvider(types.SiteIDNone, mockU2)
 
 		mockS2 := &mockStorage{}

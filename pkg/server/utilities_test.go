@@ -17,7 +17,7 @@ import (
 )
 
 func TestHandleListUtilities(t *testing.T) {
-	mockUMap := utility.NewMap()
+	mockUMap := utility.NewMap(nil)
 	mockE := ess.NewMap()
 
 	srv := &Server{

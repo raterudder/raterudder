@@ -16,6 +16,7 @@ import (
 	"github.com/levenlabs/go-lflag"
 	"github.com/raterudder/raterudder/pkg/common"
 	"github.com/raterudder/raterudder/pkg/log"
+	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
 )
 
@@ -45,16 +46,18 @@ type BaseAmerenSmart struct {
 	misoAPIURL string
 	cpnodeID   string
 	client     *http.Client
+	db         storage.Database
 
 	mu           sync.Mutex
 	cachedPrices map[string][]types.Price
 }
 
-func configuredAmerenSmart() *BaseAmerenSmart {
+func configuredAmerenSmart(db storage.Database) *BaseAmerenSmart {
 	c := &BaseAmerenSmart{
 		client:       common.HTTPClient(time.Minute),
 		cachedPrices: make(map[string][]types.Price),
 		cpnodeID:     "AMIL.BGS6",
+		db:           db,
 	}
 	misoURL := lflag.String("miso-api-url", "https://docs.misoenergy.org/marketreports", "URL for the MISO API")
 
@@ -155,6 +158,31 @@ func (c *BaseAmerenSmart) getPricesForDate(ctx context.Context, date time.Time) 
 	}
 	c.mu.Unlock()
 
+	// Then check database
+	if c.db != nil {
+		start := truncateDay(date)
+		end := start.AddDate(0, 0, 1)
+		dbPrices, err := c.db.GetUtilityPrices(ctx, "ameren", start, end)
+		expectedHours := int(end.Sub(start).Hours())
+		if err == nil && len(dbPrices) >= expectedHours {
+			log.Ctx(ctx).DebugContext(ctx, "ameren prices found in database", slog.String("date", dateStr))
+			var prices []types.Price
+			for _, p := range dbPrices {
+				prices = append(prices, p.Price)
+			}
+			c.mu.Lock()
+			c.cachedPrices[dateStr] = prices
+			c.mu.Unlock()
+			return prices, nil
+		}
+		if err == nil && len(dbPrices) > 0 {
+			log.Ctx(ctx).ErrorContext(ctx, "incomplete ameren prices found in database, falling back to api",
+				slog.String("date", dateStr),
+				slog.Int("got", len(dbPrices)),
+				slog.Int("expected", expectedHours))
+		}
+	}
+
 	prices, err := c.fetchMISODayAhead(ctx, date, c.cpnodeID)
 	if err != nil {
 		return nil, err
@@ -162,7 +190,22 @@ func (c *BaseAmerenSmart) getPricesForDate(ctx context.Context, date time.Time) 
 
 	c.mu.Lock()
 	c.cachedPrices[dateStr] = prices
+	var toUpsert []types.PriceState
+	nowUpsert := time.Now()
+	for _, p := range prices {
+		toUpsert = append(toUpsert, types.PriceState{
+			Price:     p,
+			Confirmed: true, // all ameren prices are confirmed
+			TSUpdated: nowUpsert,
+		})
+	}
 	c.mu.Unlock()
+
+	if c.db != nil {
+		if err := c.db.UpsertUtilityPrices(ctx, "ameren", toUpsert, 0); err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to upsert ameren prices to database", slog.Any("error", err))
+		}
+	}
 
 	return prices, nil
 }

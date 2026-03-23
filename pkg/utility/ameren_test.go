@@ -8,7 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/raterudder/raterudder/pkg/storage/storagemock"
+	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,7 +46,7 @@ IGNORE
 		}))
 		defer api.Close()
 
-		c := configuredAmerenSmart()
+		c := configuredAmerenSmart(nil)
 		c.misoAPIURL = api.URL
 
 		ctx := context.Background()
@@ -99,7 +102,7 @@ AMIL.BGS6,Loadzone,LMP,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,
 		}))
 		defer api.Close()
 
-		c := configuredAmerenSmart()
+		c := configuredAmerenSmart(nil)
 		c.misoAPIURL = api.URL
 
 		ctx := context.Background()
@@ -123,7 +126,7 @@ AMIL.BGS6,Loadzone,LMP
 		}))
 		defer api.Close()
 
-		c := configuredAmerenSmart()
+		c := configuredAmerenSmart(nil)
 		c.misoAPIURL = api.URL
 
 		ctx := context.Background()
@@ -148,7 +151,7 @@ AMIL.BGS6,Loadzone,LMP,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
 		}))
 		defer apiError.Close()
 
-		cError := configuredAmerenSmart()
+		cError := configuredAmerenSmart(nil)
 		cError.misoAPIURL = apiError.URL
 
 		ctx := context.Background()
@@ -164,7 +167,7 @@ AMIL.BGS6,Loadzone,LMP,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
 	})
 
 	t.Run("Integration_RealAPI", func(t *testing.T) {
-		c := configuredAmerenSmart()
+		c := configuredAmerenSmart(nil)
 		// misoAPIURL is set by default in configuredAmerenSmart via lflags, but let's ensure it's explicitly set.
 		c.misoAPIURL = "https://docs.misoenergy.org/marketreports"
 
@@ -177,5 +180,97 @@ AMIL.BGS6,Loadzone,LMP,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
 		// Basic sanity checks
 		assert.NotZero(t, price.DollarsPerKWH)
 		assert.False(t, price.TSStart.IsZero())
+	})
+
+	t.Run("DB Caching", func(t *testing.T) {
+		m := &storagemock.MockDatabase{}
+		api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/csv")
+			_, _ = w.Write([]byte(`Node,Type,Value,HE 1,HE 2,HE 3,HE 4,HE 5,HE 6,HE 7,HE 8,HE 9,HE 10,HE 11,HE 12,HE 13,HE 14,HE 15,HE 16,HE 17,HE 18,HE 19,HE 20,HE 21,HE 22,HE 23,HE 24
+AMIL.BGS6,Loadzone,LMP,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10
+`))
+		}))
+		defer api.Close()
+
+		c := configuredAmerenSmart(m)
+		c.misoAPIURL = api.URL
+
+		ctx := context.Background()
+
+		// 1. GetCurrentPrice - DB Empty -> API -> DB Upsert
+		m.On("GetUtilityPrices", mock.Anything, "ameren", mock.Anything, mock.Anything).Return([]types.PriceState{}, nil).Once()
+		m.On("UpsertUtilityPrices", mock.Anything, "ameren", mock.Anything, 0).Return(nil).Once()
+
+		price, err := c.GetCurrentPrice(ctx)
+		require.NoError(t, err)
+		assert.NotZero(t, price.DollarsPerKWH)
+		m.AssertExpectations(t)
+
+		// 2. GetCurrentPrice - DB Full
+		// Clear memory cache to force DB check
+		c.mu.Lock()
+		c.cachedPrices = make(map[string][]types.Price)
+		c.mu.Unlock()
+
+		var fullDayPrices []types.PriceState
+		start := truncateDay(time.Now().In(etLocation))
+		for i := 0; i < 24; i++ {
+			fullDayPrices = append(fullDayPrices, types.PriceState{
+				Price: types.Price{
+					TSStart:       start.Add(time.Duration(i) * time.Hour),
+					TSEnd:         start.Add(time.Duration(i+1) * time.Hour),
+					DollarsPerKWH: 0.0105009,
+				},
+				Confirmed: true,
+				TSUpdated: time.Now(),
+			},
+			)
+		}
+
+		m.On("GetUtilityPrices", mock.Anything, "ameren", mock.Anything, mock.Anything).Return(fullDayPrices, nil).Once()
+
+		price2, err := c.GetCurrentPrice(ctx)
+		require.NoError(t, err)
+		assert.InDelta(t, 0.0105009, price2.DollarsPerKWH, 0.0000001)
+		m.AssertExpectations(t)
+	})
+
+	t.Run("DB_Partial_Fallback", func(t *testing.T) {
+		m := &storagemock.MockDatabase{}
+		api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/csv")
+			_, _ = w.Write([]byte(`Node,Type,Value,HE 1,HE 2,HE 3,HE 4,HE 5,HE 6,HE 7,HE 8,HE 9,HE 10,HE 11,HE 12,HE 13,HE 14,HE 15,HE 16,HE 17,HE 18,HE 19,HE 20,HE 21,HE 22,HE 23,HE 24
+AMIL.BGS6,Loadzone,LMP,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10
+`))
+		}))
+		defer api.Close()
+
+		c := configuredAmerenSmart(m)
+		c.misoAPIURL = api.URL
+
+		ctx := context.Background()
+
+		// 1. Mock DB returns only 1 price state (partial data)
+		m.On("GetUtilityPrices", mock.Anything, "ameren", mock.Anything, mock.Anything).Return([]types.PriceState{
+			{
+				Price: types.Price{
+					TSStart:       time.Now().In(etLocation).Truncate(time.Hour),
+					DollarsPerKWH: 0.99, // dummy value
+				},
+				Confirmed: true,
+				TSUpdated: time.Now(),
+			},
+		}, nil).Once()
+
+		// 2. Expect fallback to API and UPSERT the full day
+		m.On("UpsertUtilityPrices", mock.Anything, "ameren", mock.MatchedBy(func(p []types.PriceState) bool {
+			return len(p) >= 23 // expect full day
+		}), 0).Return(nil).Once()
+
+		price, err := c.GetCurrentPrice(ctx)
+		require.NoError(t, err)
+		// Should have matched price from API (10 -> 0.0105009) not from partial DB (0.99)
+		assert.InDelta(t, 0.0105009, price.DollarsPerKWH, 0.0000001)
+		m.AssertExpectations(t)
 	})
 }

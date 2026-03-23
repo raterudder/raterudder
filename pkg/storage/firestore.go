@@ -995,3 +995,102 @@ func (f *FirestoreProvider) ListFeedback(ctx context.Context, limit int, lastFee
 
 	return feedbacks, nil
 }
+
+// UpsertUtilityPrices adds or updates multiple price records for a utility.
+func (f *FirestoreProvider) UpsertUtilityPrices(ctx context.Context, utilityID string, prices []types.PriceState, version int) error {
+	if len(prices) == 0 {
+		return nil
+	}
+
+	coll := f.client.Collection("utilities").Doc(utilityID).Collection("hourly_prices")
+
+	if len(prices) == 1 {
+		p := prices[0]
+		jsonBytes, err := json.Marshal(p)
+		if err != nil {
+			return fmt.Errorf("failed to marshal utility price: %w", err)
+		}
+		docID := p.TSStart.UTC().Format(time.RFC3339)
+		_, err = coll.Doc(docID).Set(ctx, map[string]any{
+			"json":      string(jsonBytes),
+			"timestamp": p.TSStart,
+			"version":   version,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to upsert utility price: %w", err)
+		}
+		return nil
+	}
+
+	bw := f.client.BulkWriter(ctx)
+	jobs := make([]*firestore.BulkWriterJob, 0, len(prices))
+
+	for _, p := range prices {
+		jsonBytes, err := json.Marshal(p)
+		if err != nil {
+			return fmt.Errorf("failed to marshal utility price: %w", err)
+		}
+
+		docID := p.TSStart.UTC().Format(time.RFC3339)
+		ref := coll.Doc(docID)
+		job, err := bw.Set(ref, map[string]any{
+			"json":      string(jsonBytes),
+			"timestamp": p.TSStart,
+			"version":   version,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to enqueue utility price: %w", err)
+		}
+		jobs = append(jobs, job)
+	}
+
+	bw.End()
+
+	for _, job := range jobs {
+		if _, err := job.Results(); err != nil {
+			return fmt.Errorf("failed to upsert utility prices: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// GetUtilityPrices retrieves price records within the specified time range for a utility.
+func (f *FirestoreProvider) GetUtilityPrices(ctx context.Context, utilityID string, start, end time.Time) ([]types.PriceState, error) {
+	coll := f.client.Collection("utilities").Doc(utilityID).Collection("hourly_prices")
+
+	iter := coll.
+		Where("timestamp", ">=", start).
+		Where("timestamp", "<", end).
+		OrderBy("timestamp", firestore.Asc).
+		Documents(ctx)
+	defer iter.Stop()
+
+	var prices []types.PriceState
+	for {
+		doc, err := iter.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("error iterating utility prices: %w", err)
+		}
+
+		val, err := doc.DataAt("json")
+		if err != nil {
+			continue
+		}
+
+		jsonStr, ok := val.(string)
+		if !ok {
+			continue
+		}
+
+		var p types.PriceState
+		if err := json.Unmarshal([]byte(jsonStr), &p); err != nil {
+			continue
+		}
+		prices = append(prices, p)
+	}
+	return prices, nil
+}
