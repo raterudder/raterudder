@@ -908,7 +908,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                 <Field.Label>Solar Net Metering Credits Value</Field.Label>
                                 <Select.Root
                                     value={settings.solarNetMeteringCreditsValue || ""}
-                                    onValueChange={(value) => handleChange('solarNetMeteringCreditsValue', value)}
+                                    onValueChange={(value) => handleChange('solarNetMeteringCreditsValue', value || '')}
                                 >
                                     <Select.Trigger className="select-trigger" id="solarNetMeteringCreditsValue">
                                         <Select.Value>
