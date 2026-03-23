@@ -47,7 +47,7 @@ function AppContent() {
         const queryParams = new URLSearchParams(window.location.search);
         return queryParams.get('viewSite');
     });
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(() => window.location.pathname !== '/');
     const [hasAttemptedFetch, setHasAttemptedFetch] = useState(false);
 
     const [location, navigate] = useLocation();
@@ -90,7 +90,6 @@ function AppContent() {
         // Skip auth check if we're on the landing page.
         // We'll trigger it later if they navigate away.
         if (window.location.pathname === '/') {
-            setLoading(false);
             return;
         }
 
@@ -110,7 +109,6 @@ function AppContent() {
     // Trigger auth check if user navigates to a non-home page and hasn't checked yet.
     useEffect(() => {
         if (!isHome && !hasAttemptedFetch && !loading) {
-            setLoading(true);
             fetchAuthStatus()
                 .then(status => {
                     applyStatus(status, false);
@@ -211,8 +209,8 @@ function AppContent() {
 
                             {/* Protected Routes */}
                             <Route path="/welcome">
-                                <ProtectedRoute loggedIn={loggedIn} loading={loading}>
-                                    {effectiveSites.length > 0 && false ? (
+                                <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
+                                    {effectiveSites.length > 0 ? (
                                         <Redirect to="/dashboard" replace />
                                     ) : (
                                         <BetaInterstitialPage />
@@ -220,17 +218,17 @@ function AppContent() {
                                 </ProtectedRoute>
                             </Route>
                             <Route path="/new-site">
-                                <ProtectedRoute loggedIn={loggedIn} loading={loading}>
+                                <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
                                     <NewSitePage onJoinSuccess={() => checkStatus(true)} />
                                 </ProtectedRoute>
                             </Route>
                             <Route path="/join-site">
-                                <ProtectedRoute loggedIn={loggedIn} loading={loading}>
+                                <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
                                     <JoinSitePage onJoinSuccess={() => checkStatus(true)} />
                                 </ProtectedRoute>
                             </Route>
                             <Route path="/dashboard">
-                                <ProtectedRoute loggedIn={loggedIn} loading={loading}>
+                                <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
                                     {!effectiveSiteID && effectiveSites.length === 0 ? (
                                         <Redirect to="/welcome" replace />
                                     ) : (
@@ -239,7 +237,7 @@ function AppContent() {
                                 </ProtectedRoute>
                             </Route>
                             <Route path="/forecast">
-                                <ProtectedRoute loggedIn={loggedIn} loading={loading}>
+                                <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
                                     {!effectiveSiteID && effectiveSites.length === 0 ? (
                                         <Redirect to="/welcome" replace />
                                     ) : (
@@ -248,7 +246,7 @@ function AppContent() {
                                 </ProtectedRoute>
                             </Route>
                             <Route path="/settings">
-                                <ProtectedRoute loggedIn={loggedIn} loading={loading}>
+                                <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
                                     {!effectiveSiteID && effectiveSites.length === 0 ? (
                                         <Redirect to="/welcome" replace />
                                     ) : (
@@ -257,7 +255,7 @@ function AppContent() {
                                 </ProtectedRoute>
                             </Route>
                             <Route path="/admin">
-                                <ProtectedRoute loggedIn={loggedIn} loading={loading}>
+                                <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
                                     <AdminPage />
                                 </ProtectedRoute>
                             </Route>

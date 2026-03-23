@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { fetchSettings, updateSettings, fetchUtilities, fetchESSList, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type ESSProviderInfo, type ESSCredentialField, type CredentialsPayload } from '../api';
 import { Field } from '@base-ui/react/field';
 import { Input } from '@base-ui/react/input';
@@ -27,11 +27,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
     const [editUtility, setEditUtility] = useState(false);
     const [editESS, setEditESS] = useState(false);
 
-    useEffect(() => {
-        loadData();
-    }, [siteID]);
-
-    const loadData = async () => {
+    const loadData = useCallback(async () => {
         try {
             setLoading(true);
             const [settingsData, utilitiesData, essProvidersData] = await Promise.all([
@@ -43,10 +39,6 @@ const Settings = ({ siteID }: { siteID?: string }) => {
             setUtilities(utilitiesData);
             setEssProviders(essProvidersData);
 
-            // if the ESS was configured but the credentials are not set then put
-            // the ESS section into edit mode
-            // we are explicitly checking for false in case the ess doesn't support
-            // credentials we don't set edit every time when its undefined
             if (settingsData.ess && settingsData.hasCredentials?.[settingsData.ess] === false) {
                 setEditESS(true);
                 setIsESSDirty(true);
@@ -58,7 +50,11 @@ const Settings = ({ siteID }: { siteID?: string }) => {
         } finally {
             setLoading(false);
         }
-    };
+    }, [siteID]);
+
+    useEffect(() => {
+        loadData();
+    }, [loadData]);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();

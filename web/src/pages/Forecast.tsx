@@ -104,7 +104,7 @@ interface ProcessedModelingHour extends ModelingHour {
     snowfall?: number;
 }
 
-function ForecastChart({ data, config, isMobile, showCurrentTime }: { data: ProcessedModelingHour[]; config: ChartConfig; isMobile: boolean; showCurrentTime: boolean }) {
+function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs }: { data: ProcessedModelingHour[]; config: ChartConfig; isMobile: boolean; showCurrentTime: boolean; nowMs: number }) {
     // Compute reference value if applicable
     const refValue = config.referenceLine
         ? (data[0]?.[config.referenceLine.dataKey as keyof ProcessedModelingHour] as number)
@@ -112,13 +112,6 @@ function ForecastChart({ data, config, isMobile, showCurrentTime }: { data: Proc
 
     const currentTimeStr = React.useMemo(() => {
         if (!showCurrentTime || data.length === 0) return undefined;
-        // The last history element is typically right before the forecast starts,
-        // or we can find the exact transition point if we had a flag.
-        // We can just use "now" rounded to the current hour as an approximation,
-        // but it's more accurate to find the first item where it's a forecast.
-        // Since we prepend 24 items of history, let's just use the timestamp
-        // of the item that corresponds to `now` (the 24th or 25th item).
-        const nowMs = Date.now();
         // find closest hour in data
         let closest = data[0].ts;
         let minDiff = Infinity;
@@ -130,7 +123,7 @@ function ForecastChart({ data, config, isMobile, showCurrentTime }: { data: Proc
             }
         }
         return closest;
-    }, [data, showCurrentTime]);
+    }, [data, showCurrentTime, nowMs]);
 
     return (
         <div className="forecast-chart-card">
@@ -239,6 +232,7 @@ function ForecastChart({ data, config, isMobile, showCurrentTime }: { data: Proc
 const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
     const [rawModelingData, setRawModelingData] = useState<ForecastResponse | null>(null);
     const [loading, setLoading] = useState(true);
+    const [nowMs] = useState(() => Date.now());
     const [error, setError] = useState<string | null>(null);
     const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
     const [includeHistory, setIncludeHistory] = useState(false);
@@ -390,7 +384,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
             </p>
             <div className="modeling-charts">
                 {activeCharts.map((c) => (
-                    <ForecastChart key={c.dataKey} data={data} config={c} isMobile={isMobile} showCurrentTime={includeHistory} />
+                    <ForecastChart key={c.dataKey} data={data} config={c} isMobile={isMobile} showCurrentTime={includeHistory} nowMs={nowMs} />
                 ))}
             </div>
         </div>
