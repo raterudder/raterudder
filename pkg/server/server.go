@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/NYTimes/gziphandler"
@@ -26,6 +27,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/utility"
 	"github.com/raterudder/raterudder/pkg/weather"
 	"github.com/raterudder/raterudder/web"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -69,6 +71,12 @@ type Server struct {
 	serverName          string
 	webCacheDuration    time.Duration
 	showHidden          bool
+
+	clientLimiters     sync.Map
+	generalRateLimit   rate.Limit
+	generalBurst       int
+	sensitiveRateLimit rate.Limit
+	sensitiveBurst     int
 }
 
 // Configured initializes the Server with dependencies.
@@ -107,6 +115,8 @@ func Configured(u *utility.Map, e *ess.Map, s storage.Database) *Server {
 	encryptionKey := lflag.RequiredString("credentials-encryption-key", "Key for encrypting credentials")
 	release := lflag.String("release", "production", "Release environment (production or staging)")
 	webCacheDuration := lflag.Duration("web-cache-duration", 0, "Duration to cache web files (e.g. 1h, 5m). 0 means no cache.")
+	generalRateLimitPerMin := lflag.Int("general-rate-limit", 30, "General rate limit per minute per IP")
+	sensitiveRateLimitPerMin := lflag.Int("sensitive-rate-limit", 5, "Sensitive rate limit per minute per IP")
 
 	lflag.Do(func() {
 		srv.listenAddr = *listenAddr
@@ -187,6 +197,12 @@ func Configured(u *utility.Map, e *ess.Map, s storage.Database) *Server {
 		if srv.devProxy != "" && len(srv.oidcAudiences) == 0 && len(srv.adminEmails) == 0 {
 			srv.bypassAuth = true
 		}
+
+		srv.generalRateLimit = rate.Every(time.Minute / time.Duration(*generalRateLimitPerMin))
+		srv.generalBurst = *generalRateLimitPerMin
+		srv.sensitiveRateLimit = rate.Every(time.Minute / time.Duration(*sensitiveRateLimitPerMin))
+		srv.sensitiveBurst = *sensitiveRateLimitPerMin
+		srv.startCleanupStaleLimiters()
 	})
 
 	return srv
@@ -217,8 +233,10 @@ func (s *Server) setupHandler() http.Handler {
 	mux := http.NewServeMux()
 	// limit request body to 1MB to prevent DoS
 	mux.Handle("/api/", http.MaxBytesHandler(
-		common.CtxFromRequestMiddleware(
-			s.authMiddleware(apiMux),
+		s.rateLimitMiddleware(
+			common.CtxFromRequestMiddleware(
+				s.authMiddleware(apiMux),
+			),
 		),
 		1048576,
 	))

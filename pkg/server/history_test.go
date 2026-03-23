@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/time/rate"
 )
 
 // historyMockStorage extends verify usage and allows returning data
@@ -62,13 +63,17 @@ func TestHistory(t *testing.T) {
 	mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 	srv := &Server{
-		utilities:  mockUMap,
-		ess:        mockP,
-		storage:    mockS,
-		listenAddr: ":8080",
-		controller: controller.NewController(),
-		bypassAuth: true,
-		singleSite: true,
+		utilities:          mockUMap,
+		ess:                mockP,
+		storage:            mockS,
+		listenAddr:         ":8080",
+		controller:         controller.NewController(),
+		bypassAuth:         true,
+		singleSite:         true,
+		generalRateLimit:   rate.Every(time.Minute / 30),
+		generalBurst:       30,
+		sensitiveRateLimit: rate.Every(time.Minute / 5),
+		sensitiveBurst:     5,
 	}
 
 	handler := srv.setupHandler()

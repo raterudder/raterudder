@@ -6,12 +6,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/time/rate"
 )
 
 func TestAdminListSites(t *testing.T) {
@@ -41,6 +43,10 @@ func TestAdminListSites(t *testing.T) {
 		oidcVerifiers: map[string]tokenVerifier{
 			"google": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
 		},
+		generalRateLimit:   rate.Every(time.Minute / 30),
+		generalBurst:       30,
+		sensitiveRateLimit: rate.Every(time.Minute / 5),
+		sensitiveBurst:     5,
 	}
 	handler := srv.setupHandler()
 

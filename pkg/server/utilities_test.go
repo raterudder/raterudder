@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
@@ -12,6 +13,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/utility"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/time/rate"
 )
 
 func TestHandleListUtilities(t *testing.T) {
@@ -128,12 +130,16 @@ func TestHandleListUtilities(t *testing.T) {
 		mockP.SetSystem(types.SiteIDNone, mockESS)
 
 		s := &Server{
-			utilities:  mockUMap,
-			ess:        mockP,
-			storage:    mockStorage,
-			controller: controller.NewController(),
-			bypassAuth: true,
-			singleSite: true,
+			utilities:          mockUMap,
+			ess:                mockP,
+			storage:            mockStorage,
+			controller:         controller.NewController(),
+			bypassAuth:         true,
+			singleSite:         true,
+			generalRateLimit:   rate.Every(time.Minute / 30),
+			generalBurst:       30,
+			sensitiveRateLimit: rate.Every(time.Minute / 5),
+			sensitiveBurst:     5,
 		}
 
 		handler := s.setupHandler()

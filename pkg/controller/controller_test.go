@@ -316,7 +316,7 @@ func TestDecide(t *testing.T) {
 		assert.NotEqual(t, types.ActionReasonBatteryAtReserve, decision.Action.Reason)
 		assert.Equal(t, types.ActionReasonArbitrageChargeNow, decision.Action.Reason)
 	})
-	
+
 	t.Run("Deficit detected -> Charge Now (Absolute Cheapest Is Now)", func(t *testing.T) {
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05} // ultra cheap right now
 		futurePrices := []types.Price{}
@@ -990,7 +990,7 @@ func TestDecide(t *testing.T) {
 			MaxBatteryDischargeKW: 5.0,
 			HomeKW:                1.0,
 			SolarKW:               1.0,
-			ElevatedMinBatterySOC: true,  // Simulate we are currently in Standby/Full
+			ElevatedMinBatterySOC: true, // Simulate we are currently in Standby/Full
 			BatteryAboveMinSOC:    true,
 		}
 
