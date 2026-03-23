@@ -62,6 +62,26 @@ func TestRateLimitMiddleware(t *testing.T) {
 		assert.Equal(t, http.StatusTooManyRequests, w.Code)
 	})
 
+	t.Run("Sensitive Endpoint Limit - Allowed", func(t *testing.T) {
+		s := &Server{
+			generalRateLimit:   rate.Every(time.Minute / 30),
+			generalBurst:       30,
+			sensitiveRateLimit: rate.Every(time.Minute / 5),
+			sensitiveBurst:     5,
+		}
+		handler := s.rateLimitMiddleware(dummyHandler)
+
+		req := httptest.NewRequest("POST", "/api/auth/login", nil)
+		req.RemoteAddr = "192.168.1.3:12345"
+
+		// Should be allowed up to the sensitive burst limit
+		for i := 0; i < s.sensitiveBurst; i++ {
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusOK, w.Code, "Sensitive request %d should be allowed", i)
+		}
+	})
+
 	t.Run("Sensitive Endpoint Limit - Exceeded", func(t *testing.T) {
 		s := &Server{
 			generalRateLimit:   rate.Every(time.Minute / 30),
@@ -83,6 +103,27 @@ func TestRateLimitMiddleware(t *testing.T) {
 		w2 := httptest.NewRecorder()
 		handler.ServeHTTP(w2, req)
 		assert.Equal(t, http.StatusTooManyRequests, w2.Code)
+	})
+
+	t.Run("General Endpoint - Only Uses General Limit", func(t *testing.T) {
+		s := &Server{
+			generalRateLimit:   rate.Every(time.Minute / 30),
+			generalBurst:       30,
+			sensitiveRateLimit: rate.Every(time.Minute / 1), // 1 per minute
+			sensitiveBurst:     1,
+		}
+		handler := s.rateLimitMiddleware(dummyHandler)
+
+		req := httptest.NewRequest("GET", "/api/test", nil)
+		req.RemoteAddr = "192.168.1.99:12345"
+
+		// General endpoints should not consume sensitive limit, so sending more
+		// requests than the sensitive burst limit should be allowed.
+		for i := 0; i < s.sensitiveBurst+2; i++ {
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusOK, w.Code, "Request %d should be allowed", i)
+		}
 	})
 
 	t.Run("IP Separation", func(t *testing.T) {
