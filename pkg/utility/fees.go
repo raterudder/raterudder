@@ -2,7 +2,6 @@ package utility
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -28,35 +27,17 @@ func (s *SiteFees) ApplySettings(ctx context.Context, settings types.Settings) e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// if they don't have any additional fees periods, we will need to find the
-	// default for their utility provider
-	if settings.UtilityFeesPeriods == nil {
-		switch settings.UtilityProvider {
-		case "comed":
-			if settings.UtilityRate != "comed_besh" {
-				return fmt.Errorf("invalid utility rate for ComEd: %s", settings.UtilityRate)
-			}
-			fees, err := getComEdAdditionalFees(settings.UtilityRateOptions)
-			if err != nil {
-				return err
-			}
-			s.periods = fees
-			s.name = settings.UtilityRate
-		case "ameren":
-			if settings.UtilityRate != "ameren_psp" {
-				return fmt.Errorf("invalid utility rate for Ameren: %s", settings.UtilityRate)
-			}
-			fees, err := getAmerenAdditionalFees(settings.UtilityRateOptions)
-			if err != nil {
-				return err
-			}
-			s.periods = fees
-			s.name = settings.UtilityRate
-		default:
-			return fmt.Errorf("invalid utility provider: %s", settings.UtilityProvider)
-		}
-	} else {
+	if settings.UtilityFeesPeriods != nil {
 		s.periods = settings.UtilityFeesPeriods
+	} else {
+		// if they don't have any additional fees periods, we will need to find the
+		// default for their utility provider
+		fees, err := getUtilityRateFees(settings.UtilityRate, settings.UtilityRateOptions)
+		if err != nil {
+			return err
+		}
+		s.periods = fees
+		s.name = settings.UtilityRate
 	}
 
 	return nil
@@ -65,43 +46,12 @@ func (s *SiteFees) ApplySettings(ctx context.Context, settings types.Settings) e
 func (s *SiteFees) applyFees(p types.Price) (types.Price, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	newPrice := p
-	for _, period := range s.periods {
-		// let's check to ensure that the period is contained within some part of
-		// the price interval
-		// TODO: we might need to split out the price into multiple prices if the price
-		// spans multiple different periods but for now we ignore that
-		// we don't end up checking the price's end time since we assume that as long
-		// as the periods start is after the price's start then it applies to that price
-		// see the TODO above to understand when we might need to care about end times
-		contains, err := period.Contains(p.TSStart)
-		if err != nil {
-			return types.Price{}, err
-		}
-		if !contains {
-			continue
-		}
-
-		switch {
-		case period.GenerationCredit:
-			newPrice.GenerationCreditDollarsPerKWH += period.DollarsPerKWH
-			if period.SeparateGenerationCredit {
-				newPrice.SeparateGenerationCredit = true
-			}
-		case period.GridAdditional:
-			if period.DollarsPerKWHPreMultiple != 0 {
-				newPrice.GridUseDollarsPerKWH += p.DollarsPerKWH * period.DollarsPerKWHPreMultiple
-			} else {
-				newPrice.GridUseDollarsPerKWH += period.DollarsPerKWH
-			}
-		case period.DollarsPerKWHPreMultiple != 0:
-			newPrice.DollarsPerKWH += p.DollarsPerKWH * period.DollarsPerKWHPreMultiple
-		default:
-			newPrice.DollarsPerKWH += period.DollarsPerKWH
-		}
-	}
-	return newPrice, nil
+	// TODO: we might need to split out the price into multiple prices if the price
+	// spans multiple different periods but for now we ignore that
+	// we don't end up checking the price's end time since we assume that as long
+	// as the periods start is after the price's start then it applies to that price
+	// see the TODO above to understand when we might need to care about end times
+	return types.ApplyUtilityFeesPeriods(p, s.periods)
 }
 
 func (s *SiteFees) GetConfirmedPrices(ctx context.Context, start, end time.Time) ([]types.Price, error) {

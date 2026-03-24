@@ -190,7 +190,7 @@ func TestMap(t *testing.T) {
 		u, err := m.Site(ctx, "site1", settings)
 		require.Error(t, err)
 		assert.Nil(t, u)
-		assert.ErrorContains(t, err, "invalid utility rate")
+		assert.ErrorContains(t, err, "unknown utility rate")
 	})
 
 	t.Run("Site with Ameren provider", func(t *testing.T) {
@@ -221,12 +221,12 @@ func TestMap(t *testing.T) {
 		u, err := m.Site(ctx, "site1", settings)
 		require.Error(t, err)
 		assert.Nil(t, u)
-		assert.ErrorContains(t, err, "invalid utility rate")
+		assert.ErrorContains(t, err, "unknown utility rate")
 	})
 
 	t.Run("Site with TOU provider", func(t *testing.T) {
 		m := NewMap(nil)
-		settings := types.Settings{UtilityProvider: "tou", UtilityRate: "example"}
+		settings := types.Settings{UtilityProvider: "tou_example", UtilityRate: "tou_example_1"}
 		u, err := m.Site(ctx, "site1", settings)
 		require.NoError(t, err)
 		assert.NotNil(t, u)
@@ -259,10 +259,131 @@ func TestMap(t *testing.T) {
 
 	t.Run("Site with TOU provider ApplySettings error", func(t *testing.T) {
 		m := NewMap(nil)
-		settings := types.Settings{UtilityProvider: "tou", UtilityRate: "unknown"}
+		settings := types.Settings{UtilityProvider: "tou_example", UtilityRate: "unknown"}
 		u, err := m.Site(ctx, "site1", settings)
 		require.Error(t, err)
 		assert.Nil(t, u)
-		assert.ErrorContains(t, err, "unsupported tou rate: unknown")
+		assert.ErrorContains(t, err, "unknown utility rate: unknown")
 	})
+}
+
+func TestRatesCoverAllTime(t *testing.T) {
+	for _, provider := range allUtilities {
+		for _, rate := range provider.Rates {
+			t.Run(rate.ID, func(t *testing.T) {
+				periods, err := rate.GetFees(types.UtilityRateOptions{})
+				require.NoError(t, err)
+				if !assert.Greater(t, len(periods), 0, "should have at least one period") {
+					return
+				}
+
+				minStart := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+				maxEnd := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+
+				// Find earliest Start and latest End from periods
+				hasBound := false
+				for _, p := range periods {
+					if !p.Start.IsZero() {
+						if !hasBound || p.Start.Before(minStart) {
+							minStart = p.Start
+						}
+					}
+					if !p.End.IsZero() {
+						if !hasBound || p.End.After(maxEnd) {
+							maxEnd = p.End
+						}
+					}
+					hasBound = true
+				}
+
+				// If all period started/ended before our default UTC year then
+				// move the loop bounds to match. We check this because minStart
+				// and maxEnd were initialized to 2026 UTC.
+				for _, p := range periods {
+					if !p.Start.IsZero() && p.Start.Before(minStart) {
+						minStart = p.Start
+					}
+					if !p.End.IsZero() && p.End.After(maxEnd) {
+						maxEnd = p.End
+					}
+				}
+
+				// Use a location for the loop if all periods have one
+				loopLoc := time.UTC
+				var candidateLoc *time.Location
+				first := true
+				var hasSolar bool
+				var hasAdditional bool
+				for _, p := range periods {
+					if p.LocationPtr != nil {
+						if first {
+							candidateLoc = p.LocationPtr
+							first = false
+						} else if p.LocationPtr.String() != candidateLoc.String() {
+							candidateLoc = nil
+							break
+						}
+					}
+					if p.SeparateGenerationCredit {
+						hasSolar = true
+					}
+					if p.GridAdditional {
+						hasAdditional = true
+					}
+				}
+				if candidateLoc != nil {
+					loopLoc = candidateLoc
+				}
+
+				var failures int
+				for ts := minStart.In(loopLoc); ts.Before(maxEnd); ts = ts.Add(time.Hour) {
+					var applicableNames []string
+					var applicableSolarNames []string
+					var additionalNames []string
+					for _, p := range periods {
+						ok, err := p.Contains(ts)
+						require.NoError(t, err)
+						if ok {
+							if p.SeparateGenerationCredit {
+								applicableSolarNames = append(applicableSolarNames, p.Description)
+							} else if p.GridAdditional {
+								additionalNames = append(additionalNames, p.Description)
+							} else {
+								applicableNames = append(applicableNames, p.Description)
+							}
+						}
+					}
+					expectBase := 1
+					if provider.ID == "comed" || provider.ID == "ameren" {
+						expectBase = 0
+					}
+					if len(applicableNames) != expectBase {
+						failures++
+						if failures > 10 {
+							assert.Fail(t, "too many failures")
+							return
+						}
+						assert.Fail(t, "missing or overlapping base periods", "Hour %v should have %v period (found %v)", ts, expectBase, applicableNames)
+					}
+					if hasSolar && len(applicableSolarNames) != 1 {
+						failures++
+						if failures > 10 {
+							assert.Fail(t, "too many failures")
+							return
+						}
+						assert.Fail(t, "missing or overlapping solar periods", "Hour %v should have 1 period (found %v)", ts, applicableSolarNames)
+					}
+					// we allow multiple additional periods
+					if hasAdditional && len(additionalNames) < 1 {
+						failures++
+						if failures > 10 {
+							assert.Fail(t, "too many failures")
+							return
+						}
+						assert.Fail(t, "missing or overlapping additional periods", "Hour %v should have at least 1 period (found %v)", ts, additionalNames)
+					}
+				}
+			})
+		}
+	}
 }

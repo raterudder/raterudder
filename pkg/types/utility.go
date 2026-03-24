@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -15,9 +16,10 @@ type UtilityProviderInfo struct {
 
 // UtilityRateInfo provides metadata about a specific utility rate.
 type UtilityRateInfo struct {
-	ID      string              `json:"id"`
-	Name    string              `json:"name"`
-	Options []UtilityRateOption `json:"options"`
+	ID      string                                                `json:"id"`
+	Name    string                                                `json:"name"`
+	Options []UtilityRateOption                                   `json:"options"`
+	GetFees func(UtilityRateOptions) ([]UtilityFeesPeriod, error) `json:"-"`
 }
 
 // UtilityOptionType defines the type of input field for a utility option.
@@ -89,15 +91,45 @@ type UtilityRateOptions struct {
 	NetMeteringCredits   bool   `json:"netMeteringCredits"`
 }
 
+type UtilityHourPeriod struct {
+	// HourStart is the optional inclusive hour of the applicable period. If it is zero,
+	// then it applies to all hours. This is checked after the Start and End times
+	// have been checked.
+	HourStart int `json:"hourStart"`
+
+	// HourEnd is the optional exclusive hour of the applicable period. If it is zero,
+	// then it applies to all hours. This is checked after the Start and End times
+	// have been checked.
+	HourEnd int `json:"hourEnd"`
+}
+
 // UtilityPeriod defines a particular schedule for some utility rate or fee
 type UtilityPeriod struct {
-	Start         time.Time      `json:"start"`
-	End           time.Time      `json:"end"`
-	HourStart     int            `json:"hourStart"`
-	HourEnd       int            `json:"hourEnd"`
-	DaysOfTheWeek []time.Weekday `json:"daysOfTheWeek"`
-	Location      string         `json:"location"`
-	LocationPtr   *time.Location `json:"-"`
+	// Start is the optional inclusive start time of the applicable period. If it is zero,
+	// then it applies from the beginning of time.
+	Start time.Time `json:"start,omitempty"`
+
+	// End is the optional exclusive end time of the applicable period. If it is zero,
+	// then it applies until the end of time.
+	End time.Time `json:"end,omitempty"`
+
+	// Hours is the optional list of hours that the period applies to. If it is empty,
+	// then it applies to all hours. This is checked after the Start and End times
+	// have been checked.
+	Hours []UtilityHourPeriod `json:"hours,omitempty"`
+
+	// DaysOfTheWeek is the list of days of the week this period applies. If it is
+	// empty, then it applies to all days of the week. This is checked after the
+	// Start and End times have been checked.
+	DaysOfTheWeek []time.Weekday `json:"daysOfTheWeek,omitempty"`
+
+	// Location is the location of the period. If it is empty then we won't change
+	// the time zone of the sent time
+	Location    string         `json:"location,omitempty"`
+	LocationPtr *time.Location `json:"-"`
+
+	// HoursNot means it applies to all hours except the hours in Hours.
+	HoursNot bool `json:"hoursNot,omitempty"`
 }
 
 // Contains checks if a time is within the period.
@@ -118,21 +150,26 @@ func (p *UtilityPeriod) Contains(t time.Time) (bool, error) {
 	if !p.End.IsZero() && !t.Before(p.End) {
 		return false, nil
 	}
-	if h := t.Hour(); h < p.HourStart || h >= p.HourEnd {
-		return false, nil
-	}
-	if len(p.DaysOfTheWeek) > 0 {
-		var found bool
-		dow := t.Weekday()
-		for _, d := range p.DaysOfTheWeek {
-			if d == dow {
-				found = true
+
+	if len(p.Hours) > 0 {
+		h := t.Hour()
+		inRange := false
+		for _, hour := range p.Hours {
+			if h >= hour.HourStart && h < hour.HourEnd {
+				inRange = true
 				break
 			}
 		}
-		if !found {
+		if p.HoursNot {
+			inRange = !inRange
+		}
+		if !inRange {
 			return false, nil
 		}
+	}
+
+	if len(p.DaysOfTheWeek) > 0 && !slices.Contains(p.DaysOfTheWeek, t.Weekday()) {
+		return false, nil
 	}
 	return true, nil
 }
@@ -144,11 +181,9 @@ type UtilityFeesPeriod struct {
 	// DollarsPerKWH is the fee per kWh in the time interval.
 	DollarsPerKWH float64 `json:"dollarsPerKWH,omitempty"`
 
-	// GridAdditional is true if the fee is additional to the grid use price.
+	// GridAdditional is true if the fee is additional to the grid use price but is
+	// not credited when energy is exported to the grid.
 	GridAdditional bool `json:"gridAdditional,omitempty"`
-
-	// GenerationCredit is true if the value of credits for solar.
-	GenerationCredit bool `json:"generationCredit,omitempty"`
 
 	// SeparateGenerationCredit is true if the generation credit is separate from
 	// the base price for this period. Some utilities ALWAYS have a separate
@@ -163,4 +198,49 @@ type UtilityFeesPeriod struct {
 
 	// Description is a description of the fee.
 	Description string `json:"description"`
+}
+
+// Apply checks if the period contains the price start time and if so applies the fee logic.
+// p is the accumulated Price, while originalPrice is the original price before any fees
+// were applied and is used to calculate fees that are a multiple of the base price.
+func (up *UtilityFeesPeriod) Apply(p Price, originalPrice Price) (Price, error) {
+	contains, err := up.Contains(p.TSStart)
+	if err != nil {
+		return Price{}, err
+	}
+	if !contains {
+		return p, nil
+	}
+
+	switch {
+	case up.SeparateGenerationCredit:
+		p.GenerationCreditDollarsPerKWH += up.DollarsPerKWH
+		p.SeparateGenerationCredit = true
+	case up.GridAdditional:
+		if up.DollarsPerKWHPreMultiple != 0 {
+			p.GridUseDollarsPerKWH += originalPrice.DollarsPerKWH * up.DollarsPerKWHPreMultiple
+		} else {
+			p.GridUseDollarsPerKWH += up.DollarsPerKWH
+		}
+	case up.DollarsPerKWHPreMultiple != 0:
+		p.DollarsPerKWH += originalPrice.DollarsPerKWH * up.DollarsPerKWHPreMultiple
+	default:
+		p.DollarsPerKWH += up.DollarsPerKWH
+	}
+
+	return p, nil
+}
+
+// ApplyUtilityFeesPeriods takes a price and a slice of periods and applies the fees
+// for every period that contains the price's start time, returning the result.
+func ApplyUtilityFeesPeriods(p Price, periods []UtilityFeesPeriod) (Price, error) {
+	newPrice := p
+	for _, period := range periods {
+		var err error
+		newPrice, err = period.Apply(newPrice, p)
+		if err != nil {
+			return Price{}, err
+		}
+	}
+	return newPrice, nil
 }

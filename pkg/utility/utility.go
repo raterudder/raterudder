@@ -49,8 +49,8 @@ func Configured(db storage.Database) *Map {
 type Map struct {
 	mu              sync.Mutex
 	db              storage.Database
-	baseComEdHourly *BaseComEdHourly
-	baseAmerenSmart *BaseAmerenSmart
+	baseComEdHourly *baseComEdHourly
+	baseAmerenSmart *baseAmerenSmart
 	utilities       map[string]Utility
 }
 
@@ -101,14 +101,17 @@ func (m *Map) Site(ctx context.Context, siteID string, settings types.Settings) 
 		if err := u.ApplySettings(ctx, settings); err != nil {
 			return nil, err
 		}
-	case "tou":
-		u = &genericTOU{
-			siteID: siteID,
-		}
-		if err := u.ApplySettings(ctx, settings); err != nil {
-			return nil, err
-		}
 	default:
+		if _, ok := touUtilitiesMap[settings.UtilityProvider]; ok {
+			u = &genericTOU{
+				siteID: siteID,
+			}
+			if err := u.ApplySettings(ctx, settings); err != nil {
+				return nil, err
+			}
+			m.utilities[siteID] = u
+			return u, nil
+		}
 		return nil, fmt.Errorf("unknown utility provider: %s", settings.UtilityProvider)
 	}
 	m.utilities[siteID] = u
@@ -122,12 +125,46 @@ func (m *Map) SetProvider(siteID string, provider Utility) {
 	m.utilities[siteID] = provider
 }
 
-// ListUtilities returns metadata for all supported utility providers.
-func (m *Map) ListUtilities() []types.UtilityProviderInfo {
-	return []types.UtilityProviderInfo{
+var (
+	touUtilities    = touUtilityInfo()
+	touUtilitiesMap = func() map[string]types.UtilityProviderInfo {
+		out := make(map[string]types.UtilityProviderInfo)
+		for _, u := range touUtilities {
+			out[u.ID] = u
+		}
+		return out
+	}()
+	allUtilities = append([]types.UtilityProviderInfo{
 		comEdUtilityInfo(),
 		amerenUtilityInfo(),
+	}, touUtilities...)
+	utilityRateFeesMap = func() map[string]func(types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+		out := make(map[string]func(types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error))
+		for _, u := range allUtilities {
+			for _, r := range u.Rates {
+				// might be nil but that's okay we will check it later
+				out[r.ID] = r.GetFees
+			}
+		}
+		return out
+	}()
+)
+
+func getUtilityRateFees(rate string, options types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+	fees, ok := utilityRateFeesMap[rate]
+	if !ok {
+		return nil, fmt.Errorf("unknown utility rate: %s", rate)
 	}
+	// this just means no fees
+	if fees == nil {
+		return nil, nil
+	}
+	return fees(options)
+}
+
+// ListUtilities returns metadata for all supported utility providers.
+func (m *Map) ListUtilities() []types.UtilityProviderInfo {
+	return allUtilities
 }
 
 func truncateDay(t time.Time) time.Time {

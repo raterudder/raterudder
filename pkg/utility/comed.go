@@ -27,53 +27,11 @@ const (
 	ComEdRateClassMultiFamilyResidenceWithElectricSpaceHeat     = "multiFamilyElectricHeat"
 )
 
-// comEdUtilityInfo returns metadata about ComEd and its supported rate plans.
-func comEdUtilityInfo() types.UtilityProviderInfo {
-	return types.UtilityProviderInfo{
-		ID:   "comed",
-		Name: "ComEd",
-		Rates: []types.UtilityRateInfo{
-			{
-				ID:   "comed_besh",
-				Name: "Hourly Pricing Program (BESH)",
-				Options: []types.UtilityRateOption{
-					{
-						Field: "rateClass",
-						Name:  "Rate Class",
-						Type:  types.UtilityOptionTypeSelect,
-						Choices: []types.UtilityOptionChoice{
-							{Value: ComEdRateClassSingleFamilyResidenceWithoutElectricSpaceHeat, Name: "Residential Single Family Without Electric Space Heat"},
-							{Value: ComEdRateClassMultiFamilyResidenceWithoutElectricSpaceHeat, Name: "Residential Multi Family Without Electric Space Heat"},
-							{Value: ComEdRateClassSingleFamilyResidenceWithElectricSpaceHeat, Name: "Residential Single Family With Electric Space Heat"},
-							{Value: ComEdRateClassMultiFamilyResidenceWithElectricSpaceHeat, Name: "Residential Multi Family With Electric Space Heat"},
-						},
-						Default: ComEdRateClassSingleFamilyResidenceWithoutElectricSpaceHeat,
-					},
-					{
-						Field:       "variableDeliveryRate",
-						Name:        "Delivery Time-of-Day (DTOD)",
-						Type:        types.UtilityOptionTypeSwitch,
-						Description: "Enable if you are enrolled in ComEd's Delivery Time-of-Day pricing. 30%-47% cheaper than fixed delivery rates in off-peak hours but 2x more expensive in on-peak hours (1pm-7pm).",
-						Default:     false,
-					},
-					{
-						Field:       "netMeteringCredits",
-						Name:        "Pre-2025 Full Net Metering",
-						Type:        types.UtilityOptionTypeSwitch,
-						Description: "Enable if you are grandfathered into ComEd's pre-2025 full net metering program. You are credited for your supply and delivery charges at the full retail rate.",
-						Default:     false,
-					},
-				},
-			},
-		},
-	}
-}
-
 // COMED_RESID_AGG
 const pjmComedPNodeID = "116472935"
 
-// BaseComEdHourly implements the UtilityPrices interface for ComEd Hourly Energy Pricing (BESH).
-type BaseComEdHourly struct {
+// baseComEdHourly implements the UtilityPrices interface for ComEd Hourly Energy Pricing (BESH).
+type baseComEdHourly struct {
 	apiURL    string
 	pjmAPIKey string
 	pjmAPIURL string
@@ -90,8 +48,8 @@ type BaseComEdHourly struct {
 
 // configuredComEd sets up flags for ComEd and returns the instance.
 // It uses lflag to register command-line flags for configuration.
-func configuredComEdHourly(db storage.Database) *BaseComEdHourly {
-	c := &BaseComEdHourly{
+func configuredComEdHourly(db storage.Database) *baseComEdHourly {
+	c := &baseComEdHourly{
 		client:           common.HTTPClient(time.Minute),
 		historicalPrices: make(map[int64]types.Price),
 		db:               db,
@@ -131,7 +89,7 @@ type comedPriceEntry struct {
 
 // GetConfirmedPrices returns confirmed prices for a specific time range.
 // This requests 5-minute feed data and averages it into hourly buckets.
-func (c *BaseComEdHourly) GetConfirmedPrices(ctx context.Context, start, end time.Time) ([]types.Price, error) {
+func (c *baseComEdHourly) GetConfirmedPrices(ctx context.Context, start, end time.Time) ([]types.Price, error) {
 	ctx = log.With(ctx, log.Ctx(ctx).With(slog.Time("start", start), slog.Time("end", end)))
 
 	// Check if all needed hours are in cache
@@ -275,7 +233,7 @@ func (p priceWithSampleCount) isConfirmed(now time.Time) bool {
 }
 
 // fetchPricesRange retrieves prices from the ComEd API for a specific range.
-func (c *BaseComEdHourly) fetchPricesRange(ctx context.Context, start, end time.Time) ([]priceWithSampleCount, error) {
+func (c *baseComEdHourly) fetchPricesRange(ctx context.Context, start, end time.Time) ([]priceWithSampleCount, error) {
 	start = start.In(ctLocation)
 	end = end.In(ctLocation)
 
@@ -385,7 +343,7 @@ func (c *BaseComEdHourly) fetchPricesRange(ctx context.Context, start, end time.
 }
 
 // GetCurrentPrice returns the latest hourly-averaged price.
-func (c *BaseComEdHourly) GetCurrentPrice(ctx context.Context) (types.Price, error) {
+func (c *baseComEdHourly) GetCurrentPrice(ctx context.Context) (types.Price, error) {
 	now := time.Now().In(ctLocation)
 
 	c.mu.Lock()
@@ -473,7 +431,7 @@ func (c *BaseComEdHourly) GetCurrentPrice(ctx context.Context) (types.Price, err
 
 // GetFuturePrices returns predicted or day-ahead prices.
 // Prefers PJM API if configured, otherwise returns nothing
-func (c *BaseComEdHourly) GetFuturePrices(ctx context.Context) ([]types.Price, error) {
+func (c *baseComEdHourly) GetFuturePrices(ctx context.Context) ([]types.Price, error) {
 	if c.pjmAPIKey == "" {
 		return nil, nil
 	}
@@ -554,7 +512,7 @@ type pjmItem struct {
 	TotalLMPDA           float64 `json:"total_lmp_da"`
 }
 
-func (c *BaseComEdHourly) fetchPJMDayAhead(ctx context.Context, pnodeID string) ([]types.Price, error) {
+func (c *baseComEdHourly) fetchPJMDayAhead(ctx context.Context, pnodeID string) ([]types.Price, error) {
 	now := time.Now().In(etLocation)
 	today := now.Format("2006-01-02")
 	tomorrow := now.AddDate(0, 0, 1).Format("2006-01-02")
@@ -647,30 +605,72 @@ func (c *BaseComEdHourly) fetchPJMDayAhead(ctx context.Context, pnodeID string) 
 	return prices, nil
 }
 
-// TODO: support Basic Electric Service Time of Use Pricing (Rate BEST) once pricing is announced
-/*
-Basic Electric Service Time of Use Electricity
-Charges (BESTECs) Effective Prior to the June
-Summer BESTEC (6) Nonsummer BESTEC
-Morning Period Electricity Charge (MPEC)
-Mid-Day Peak Period Electricity Charge (MDPPEC)
-Evening Period Electricity Charge (EPEC)
-Overnight Period Electricity Charge (OPEC)
-NOTES:
-(1) This informational sheet is supplemental to Rate BEST – Basic Electric Service Time of Use Pricing
-(Rate BEST).
-(2) The energy prices apply to energy provided every day during the following Central Prevailing Time
-(CPT) periods: MPECs from 6:00 a.m. to 1:00 p.m., MDPPECs from 1:00 p.m. to 7:00 p.m., EPECs
-from 7:00 p.m. to 9:00 p.m., and OPECs from 9:00 p.m. to 6:00 a.m.
-(3) BESTECs are applied in the Supply Section on retail customer bills for each period pursuant to Rate
-BEST.
-(4) BESTECs include Residential Supply Base Uncollectible Cost Factors (SBUFR) as listed in
-Informational Sheet No. 21.
-(5) BESTECs incorporate Residential Incremental Supply Uncollectible Cost Factors (ISUFR) as listed in
-Informational Sheet No. 20.
-(6) The Summer BESTECs are applicable in the June, July, August, and September monthly billing
-periods.
-*/
+// comEdUtilityInfo returns metadata about ComEd and its supported rate plans.
+func comEdUtilityInfo() types.UtilityProviderInfo {
+	return types.UtilityProviderInfo{
+		ID:   "comed",
+		Name: "ComEd",
+		Rates: []types.UtilityRateInfo{
+			{
+				ID:   "comed_besh",
+				Name: "Hourly Pricing Program (BESH)",
+				Options: []types.UtilityRateOption{
+					{
+						Field: "rateClass",
+						Name:  "Rate Class",
+						Type:  types.UtilityOptionTypeSelect,
+						Choices: []types.UtilityOptionChoice{
+							{Value: ComEdRateClassSingleFamilyResidenceWithoutElectricSpaceHeat, Name: "Residential Single Family Without Electric Space Heat"},
+							{Value: ComEdRateClassMultiFamilyResidenceWithoutElectricSpaceHeat, Name: "Residential Multi Family Without Electric Space Heat"},
+							{Value: ComEdRateClassSingleFamilyResidenceWithElectricSpaceHeat, Name: "Residential Single Family With Electric Space Heat"},
+							{Value: ComEdRateClassMultiFamilyResidenceWithElectricSpaceHeat, Name: "Residential Multi Family With Electric Space Heat"},
+						},
+						Default: ComEdRateClassSingleFamilyResidenceWithoutElectricSpaceHeat,
+					},
+					{
+						Field:       "variableDeliveryRate",
+						Name:        "Delivery Time-of-Day (DTOD)",
+						Type:        types.UtilityOptionTypeSwitch,
+						Description: "Enable if you are enrolled in ComEd's Delivery Time-of-Day pricing. 30%-47% cheaper than fixed delivery rates in off-peak hours but 2x more expensive in on-peak hours (1pm-7pm).",
+						Default:     false,
+					},
+					{
+						Field:       "netMeteringCredits",
+						Name:        "Pre-2025 Full Net Metering",
+						Type:        types.UtilityOptionTypeSwitch,
+						Description: "Enable if you are grandfathered into ComEd's pre-2025 full net metering program. You are credited for your supply and delivery charges at the full retail rate.",
+						Default:     false,
+					},
+				},
+				GetFees: getComEdAdditionalFees,
+			},
+			// TODO: support Basic Electric Service Time of Use Pricing (Rate BEST) once pricing is announced
+			/*
+			   Basic Electric Service Time of Use Electricity
+			   Charges (BESTECs) Effective Prior to the June
+			   Summer BESTEC (6) Nonsummer BESTEC
+			   Morning Period Electricity Charge (MPEC)
+			   Mid-Day Peak Period Electricity Charge (MDPPEC)
+			   Evening Period Electricity Charge (EPEC)
+			   Overnight Period Electricity Charge (OPEC)
+			   NOTES:
+			   (1) This informational sheet is supplemental to Rate BEST – Basic Electric Service Time of Use Pricing
+			   (Rate BEST).
+			   (2) The energy prices apply to energy provided every day during the following Central Prevailing Time
+			   (CPT) periods: MPECs from 6:00 a.m. to 1:00 p.m., MDPPECs from 1:00 p.m. to 7:00 p.m., EPECs
+			   from 7:00 p.m. to 9:00 p.m., and OPECs from 9:00 p.m. to 6:00 a.m.
+			   (3) BESTECs are applied in the Supply Section on retail customer bills for each period pursuant to Rate
+			   BEST.
+			   (4) BESTECs include Residential Supply Base Uncollectible Cost Factors (SBUFR) as listed in
+			   Informational Sheet No. 21.
+			   (5) BESTECs incorporate Residential Incremental Supply Uncollectible Cost Factors (ISUFR) as listed in
+			   Informational Sheet No. 20.
+			   (6) The Summer BESTECs are applicable in the June, July, August, and September monthly billing
+			   periods.
+			*/
+		},
+	}
+}
 
 func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 	// TODO: include 2027 prices once they are announced
@@ -719,8 +719,6 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 			UtilityPeriod: types.UtilityPeriod{
 				Start:       time.Date(2026, 1, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
-				HourStart:   0,
-				HourEnd:     24,
 				LocationPtr: ctLocation,
 			},
 			DollarsPerKWH:  psc,
@@ -750,8 +748,6 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 			UtilityPeriod: types.UtilityPeriod{
 				Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
-				HourStart:   0,
-				HourEnd:     24,
 				LocationPtr: ctLocation,
 			},
 			GridAdditional: true,
@@ -796,12 +792,15 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 		nightDFCAdj := nightDFC*(iduf+draf+edaf+tpaf+rbafd) + dgrad
 		return append(fees, []types.UtilityFeesPeriod{
 			// night (midnight - 6am)
+			// night (9pm - midnight)
 			{
 				UtilityPeriod: types.UtilityPeriod{
-					Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
-					End:         time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
-					HourStart:   0,
-					HourEnd:     6,
+					Start: time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
+					End:   time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
+					Hours: []types.UtilityHourPeriod{
+						{HourStart: 0, HourEnd: 6},
+						{HourStart: 21, HourEnd: 24},
+					},
 					LocationPtr: ctLocation,
 				},
 				GridAdditional: true,
@@ -811,10 +810,11 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 			// morning (6am - 1pm)
 			{
 				UtilityPeriod: types.UtilityPeriod{
-					Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
-					End:         time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
-					HourStart:   6,
-					HourEnd:     13,
+					Start: time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
+					End:   time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
+					Hours: []types.UtilityHourPeriod{
+						{HourStart: 6, HourEnd: 13},
+					},
 					LocationPtr: ctLocation,
 				},
 				GridAdditional: true,
@@ -824,10 +824,11 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 			// mid day (1pm - 7pm)
 			{
 				UtilityPeriod: types.UtilityPeriod{
-					Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
-					End:         time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
-					HourStart:   13,
-					HourEnd:     19,
+					Start: time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
+					End:   time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
+					Hours: []types.UtilityHourPeriod{
+						{HourStart: 13, HourEnd: 19},
+					},
 					LocationPtr: ctLocation,
 				},
 				GridAdditional: true,
@@ -837,28 +838,16 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 			// evening (7pm - 9pm)
 			{
 				UtilityPeriod: types.UtilityPeriod{
-					Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
-					End:         time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
-					HourStart:   19,
-					HourEnd:     21,
+					Start: time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
+					End:   time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
+					Hours: []types.UtilityHourPeriod{
+						{HourStart: 19, HourEnd: 21},
+					},
 					LocationPtr: ctLocation,
 				},
 				GridAdditional: true,
 				DollarsPerKWH:  eveningDFCAdj,
 				Description:    "TOU Distribution Facilities Charge (Evening) - DFC & ADJ",
-			},
-			// night (9pm - midnight)
-			{
-				UtilityPeriod: types.UtilityPeriod{
-					Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
-					End:         time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
-					HourStart:   21,
-					HourEnd:     24,
-					LocationPtr: ctLocation,
-				},
-				GridAdditional: true,
-				DollarsPerKWH:  nightDFCAdj,
-				Description:    "TOU Distribution Facilities Charge (Night) - DFC & ADJ",
 			},
 		}...), nil
 	}

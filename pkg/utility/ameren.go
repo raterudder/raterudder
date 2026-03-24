@@ -20,29 +20,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/types"
 )
 
-func amerenUtilityInfo() types.UtilityProviderInfo {
-	return types.UtilityProviderInfo{
-		ID:   "ameren",
-		Name: "Ameren",
-		Rates: []types.UtilityRateInfo{
-			{
-				ID:   "ameren_psp",
-				Name: "Power Smart Pricing (Ameren IL)",
-				Options: []types.UtilityRateOption{
-					{
-						Field:       "netMeteringCredits",
-						Name:        "Pre-2025 Full Net Metering",
-						Type:        types.UtilityOptionTypeSwitch,
-						Description: "Enable if you are grandfathered into Ameren's pre-2025 full net metering program. You are credited for your supply and delivery charges at the full retail rate.",
-						Default:     false,
-					},
-				},
-			},
-		},
-	}
-}
-
-type BaseAmerenSmart struct {
+type baseAmerenSmart struct {
 	misoAPIURL string
 	cpnodeID   string
 	client     *http.Client
@@ -52,8 +30,8 @@ type BaseAmerenSmart struct {
 	cachedPrices map[string][]types.Price
 }
 
-func configuredAmerenSmart(db storage.Database) *BaseAmerenSmart {
-	c := &BaseAmerenSmart{
+func configuredAmerenSmart(db storage.Database) *baseAmerenSmart {
+	c := &baseAmerenSmart{
 		client:       common.HTTPClient(time.Minute),
 		cachedPrices: make(map[string][]types.Price),
 		cpnodeID:     "AMIL.BGS6",
@@ -70,7 +48,7 @@ func configuredAmerenSmart(db storage.Database) *BaseAmerenSmart {
 
 // GetCurrentPrice gets the current price for Ameren PSP rate plan which is the
 // day ahead price for the current hour.
-func (c *BaseAmerenSmart) GetCurrentPrice(ctx context.Context) (types.Price, error) {
+func (c *baseAmerenSmart) GetCurrentPrice(ctx context.Context) (types.Price, error) {
 	log.Ctx(ctx).DebugContext(ctx, "getting current ameren price")
 
 	now := time.Now().In(etLocation)
@@ -92,7 +70,7 @@ func (c *BaseAmerenSmart) GetCurrentPrice(ctx context.Context) (types.Price, err
 
 // GetConfirmedPrices gets the confirmed prices for Ameren PSP rate plan which
 // contains the day ahead hourly prices for the given date range.
-func (c *BaseAmerenSmart) GetConfirmedPrices(ctx context.Context, start, end time.Time) ([]types.Price, error) {
+func (c *baseAmerenSmart) GetConfirmedPrices(ctx context.Context, start, end time.Time) ([]types.Price, error) {
 	var confirmed []types.Price
 
 	today := truncateDay(time.Now().In(etLocation))
@@ -120,7 +98,7 @@ func (c *BaseAmerenSmart) GetConfirmedPrices(ctx context.Context, start, end tim
 
 // GetFuturePrices gets the future prices for Ameren PSP rate plan which
 // contains the day ahead hourly prices for the given date range.
-func (c *BaseAmerenSmart) GetFuturePrices(ctx context.Context) ([]types.Price, error) {
+func (c *baseAmerenSmart) GetFuturePrices(ctx context.Context) ([]types.Price, error) {
 	now := time.Now().In(etLocation)
 	today := truncateDay(now)
 	tomorrow := today.AddDate(0, 0, 1)
@@ -148,7 +126,7 @@ func (c *BaseAmerenSmart) GetFuturePrices(ctx context.Context) ([]types.Price, e
 	return future, nil
 }
 
-func (c *BaseAmerenSmart) getPricesForDate(ctx context.Context, date time.Time) ([]types.Price, error) {
+func (c *baseAmerenSmart) getPricesForDate(ctx context.Context, date time.Time) ([]types.Price, error) {
 	dateStr := date.Format("20060102")
 
 	c.mu.Lock()
@@ -210,7 +188,7 @@ func (c *BaseAmerenSmart) getPricesForDate(ctx context.Context, date time.Time) 
 	return prices, nil
 }
 
-func (c *BaseAmerenSmart) fetchMISODayAhead(ctx context.Context, date time.Time, cpnode string) ([]types.Price, error) {
+func (c *baseAmerenSmart) fetchMISODayAhead(ctx context.Context, date time.Time, cpnode string) ([]types.Price, error) {
 	dateStr := date.Format("20060102")
 	url := fmt.Sprintf("%s/%s_da_expost_lmp.csv", c.misoAPIURL, dateStr)
 	log.Ctx(ctx).DebugContext(ctx, "fetching miso day ahead prices for ameren", slog.String("date", dateStr), slog.String("url", url))
@@ -339,6 +317,29 @@ func amerenLossFactor(t time.Time) float64 {
 	}
 }
 
+func amerenUtilityInfo() types.UtilityProviderInfo {
+	return types.UtilityProviderInfo{
+		ID:   "ameren",
+		Name: "Ameren",
+		Rates: []types.UtilityRateInfo{
+			{
+				ID:   "ameren_psp",
+				Name: "Power Smart Pricing (Ameren IL)",
+				Options: []types.UtilityRateOption{
+					{
+						Field:       "netMeteringCredits",
+						Name:        "Pre-2025 Full Net Metering",
+						Type:        types.UtilityOptionTypeSwitch,
+						Description: "Enable if you are grandfathered into Ameren's pre-2025 full net metering program. You are credited for your supply and delivery charges at the full retail rate.",
+						Default:     false,
+					},
+				},
+				GetFees: getAmerenAdditionalFees,
+			},
+		},
+	}
+}
+
 func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 	// Rider PSP says the delivery fees are "Residential - Rate DS-1"
 	// RATE PBR-R defines Rate DS-1.
@@ -358,23 +359,20 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPerio
 		// Applies all hours, both summer and non-summer.
 		{
 			UtilityPeriod: types.UtilityPeriod{
-				Start:     time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
-				End:       time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
-				HourStart: 0,
-				HourEnd:   24,
+				Start: time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
+				End:   time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
 			},
-			DollarsPerKWH: 0.02629,
-			Description:   "Ameren IL Transmission Service Charge (2026)",
+			DollarsPerKWH:  0.02629,
+			GridAdditional: true,
+			Description:    "Ameren IL Transmission Service Charge (2026)",
 		},
 		// TODO: add 2027 transmission service charge once it's announced by comed
 
 		// ── 2026 Distribution Delivery Charge ────────────────────────────────
 		{
 			UtilityPeriod: types.UtilityPeriod{
-				Start:     time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
-				End:       time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
-				HourStart: 0,
-				HourEnd:   24,
+				Start: time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
+				End:   time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 			},
 			DollarsPerKWH:  0.04572, // first-tier non-summer rate; see tiering note above
 			GridAdditional: true,
@@ -382,10 +380,8 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPerio
 		},
 		{
 			UtilityPeriod: types.UtilityPeriod{
-				Start:     time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
-				End:       time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
-				HourStart: 0,
-				HourEnd:   24,
+				Start: time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
+				End:   time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
 			},
 			DollarsPerKWH:  0.07811,
 			GridAdditional: true,
@@ -393,10 +389,8 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPerio
 		},
 		{
 			UtilityPeriod: types.UtilityPeriod{
-				Start:     time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
-				End:       time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
-				HourStart: 0,
-				HourEnd:   24,
+				Start: time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
+				End:   time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
 			},
 			DollarsPerKWH:  0.04572, // first-tier non-summer rate
 			GridAdditional: true,
@@ -406,10 +400,8 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPerio
 		// ── 2027 Distribution Delivery Charge ────────────────────────────────
 		{
 			UtilityPeriod: types.UtilityPeriod{
-				Start:     time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
-				End:       time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
-				HourStart: 0,
-				HourEnd:   24,
+				Start: time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
+				End:   time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 			},
 			DollarsPerKWH:  0.04687, // first-tier non-summer rate
 			GridAdditional: true,
@@ -417,10 +409,8 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPerio
 		},
 		{
 			UtilityPeriod: types.UtilityPeriod{
-				Start:     time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
-				End:       time.Date(2027, time.October, 1, 0, 0, 0, 0, ctLocation),
-				HourStart: 0,
-				HourEnd:   24,
+				Start: time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
+				End:   time.Date(2027, time.October, 1, 0, 0, 0, 0, ctLocation),
 			},
 			DollarsPerKWH:  0.08009,
 			GridAdditional: true,
@@ -428,10 +418,8 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPerio
 		},
 		{
 			UtilityPeriod: types.UtilityPeriod{
-				Start:     time.Date(2027, time.October, 1, 0, 0, 0, 0, ctLocation),
-				End:       time.Date(2028, time.January, 1, 0, 0, 0, 0, ctLocation),
-				HourStart: 0,
-				HourEnd:   24,
+				Start: time.Date(2027, time.October, 1, 0, 0, 0, 0, ctLocation),
+				End:   time.Date(2028, time.January, 1, 0, 0, 0, 0, ctLocation),
 			},
 			DollarsPerKWH:  0.04687, // first-tier non-summer rate
 			GridAdditional: true,

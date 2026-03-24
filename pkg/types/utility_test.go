@@ -11,8 +11,7 @@ import (
 func TestUtilityPeriodContains(t *testing.T) {
 	t.Run("zero values", func(t *testing.T) {
 		p := &UtilityPeriod{
-			HourStart: 0,
-			HourEnd:   24,
+			Hours: []UtilityHourPeriod{{HourStart: 0, HourEnd: 24}},
 		}
 		// Any time should be contained if within the hour range
 		now := time.Now()
@@ -21,14 +20,29 @@ func TestUtilityPeriodContains(t *testing.T) {
 		assert.True(t, contained)
 	})
 
+	t.Run("empty period", func(t *testing.T) {
+		p := &UtilityPeriod{}
+		// Test various times: past, present, future, leap years
+		times := []time.Time{
+			time.Now(),
+			time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
+			time.Date(2024, 2, 29, 12, 0, 0, 0, time.UTC), // Leap day
+			time.Date(2099, 12, 31, 23, 59, 59, 0, time.UTC),
+		}
+		for _, ts := range times {
+			contained, err := p.Contains(ts)
+			require.NoError(t, err)
+			assert.True(t, contained, "Empty period should contain %v", ts)
+		}
+	})
+
 	t.Run("date range", func(t *testing.T) {
 		start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 		end := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 		p := &UtilityPeriod{
-			Start:     start,
-			End:       end,
-			HourStart: 0,
-			HourEnd:   24,
+			Start: start,
+			End:   end,
+			Hours: []UtilityHourPeriod{{HourStart: 0, HourEnd: 24}},
 		}
 
 		// Exactly at start
@@ -54,8 +68,7 @@ func TestUtilityPeriodContains(t *testing.T) {
 
 	t.Run("hour range", func(t *testing.T) {
 		p := &UtilityPeriod{
-			HourStart: 9,
-			HourEnd:   17,
+			Hours: []UtilityHourPeriod{{HourStart: 9, HourEnd: 17}},
 		}
 
 		// 9:00 AM (at Start)
@@ -82,8 +95,7 @@ func TestUtilityPeriodContains(t *testing.T) {
 	t.Run("days of the week", func(t *testing.T) {
 		p := &UtilityPeriod{
 			DaysOfTheWeek: []time.Weekday{time.Monday, time.Wednesday, time.Friday},
-			HourStart:     0,
-			HourEnd:       24,
+			Hours:         []UtilityHourPeriod{{HourStart: 0, HourEnd: 24}},
 		}
 
 		// Monday
@@ -109,9 +121,8 @@ func TestUtilityPeriodContains(t *testing.T) {
 
 	t.Run("location", func(t *testing.T) {
 		p := &UtilityPeriod{
-			Location:  "America/Chicago",
-			HourStart: 9,
-			HourEnd:   17,
+			Location: "America/Chicago",
+			Hours:    []UtilityHourPeriod{{HourStart: 9, HourEnd: 17}},
 		}
 
 		// 10:00 AM Central is 16:00 UTC (Standard Time)
@@ -140,8 +151,7 @@ func TestUtilityPeriodContains(t *testing.T) {
 		p := &UtilityPeriod{
 			Start:         time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 			End:           time.Date(2024, 12, 31, 23, 59, 59, 0, time.UTC),
-			HourStart:     9,
-			HourEnd:       17,
+			Hours:         []UtilityHourPeriod{{HourStart: 9, HourEnd: 17}},
 			DaysOfTheWeek: []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday},
 			Location:      "America/Chicago",
 		}
@@ -170,12 +180,94 @@ func TestUtilityPeriodContains(t *testing.T) {
 	t.Run("empty days of week", func(t *testing.T) {
 		p := &UtilityPeriod{
 			DaysOfTheWeek: []time.Weekday{},
-			HourStart:     0,
-			HourEnd:       24,
+			Hours:         []UtilityHourPeriod{{HourStart: 0, HourEnd: 24}},
 		}
 		contained, err := p.Contains(time.Now())
 		require.NoError(t, err)
 		assert.True(t, contained)
+	})
+
+	t.Run("HoursNot", func(t *testing.T) {
+		p := &UtilityPeriod{
+			Hours:    []UtilityHourPeriod{{HourStart: 9, HourEnd: 17}},
+			HoursNot: true,
+		}
+
+		// 8:00 AM (Outside 9-17, should be true because HoursNot is true)
+		contained, err := p.Contains(time.Date(2024, 1, 1, 8, 0, 0, 0, time.UTC))
+		require.NoError(t, err)
+		assert.True(t, contained)
+
+		// 10:00 AM (Inside 9-17, should be false)
+		contained, err = p.Contains(time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC))
+		require.NoError(t, err)
+		assert.False(t, contained)
+
+		// 5:00 PM (Start of exclusive end, should be true)
+		contained, err = p.Contains(time.Date(2024, 1, 1, 17, 0, 0, 0, time.UTC))
+		require.NoError(t, err)
+		assert.True(t, contained)
+	})
+
+	t.Run("multiple hour ranges", func(t *testing.T) {
+		p := &UtilityPeriod{
+			Hours: []UtilityHourPeriod{
+				{HourStart: 7, HourEnd: 10},
+				{HourStart: 17, HourEnd: 21},
+			},
+		}
+
+		// 8:00 AM (in first range)
+		contained, err := p.Contains(time.Date(2024, 1, 1, 8, 0, 0, 0, time.UTC))
+		require.NoError(t, err)
+		assert.True(t, contained)
+
+		// 12:00 PM (out of range)
+		contained, err = p.Contains(time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC))
+		require.NoError(t, err)
+		assert.False(t, contained)
+
+		// 7:00 PM (in second range)
+		contained, err = p.Contains(time.Date(2024, 1, 1, 19, 0, 0, 0, time.UTC))
+		require.NoError(t, err)
+		assert.True(t, contained)
+	})
+
+	t.Run("Overlapping hour ranges", func(t *testing.T) {
+		p := &UtilityPeriod{
+			Hours: []UtilityHourPeriod{
+				{HourStart: 9, HourEnd: 15},
+				{HourStart: 12, HourEnd: 17},
+			},
+		}
+		// 14:00 (In both ranges)
+		contained, _ := p.Contains(time.Date(2024, 1, 1, 14, 0, 0, 0, time.UTC))
+		assert.True(t, contained)
+
+		// 16:00 (In second range only)
+		contained, _ = p.Contains(time.Date(2024, 1, 1, 16, 0, 0, 0, time.UTC))
+		assert.True(t, contained)
+	})
+
+	t.Run("DST Transition - America/Chicago Spring Forward", func(t *testing.T) {
+		// March 10, 2024: 02:00:00 -> 03:00:00
+		chi, _ := time.LoadLocation("America/Chicago")
+		p := &UtilityPeriod{
+			Location: "America/Chicago",
+			Hours:    []UtilityHourPeriod{{HourStart: 2, HourEnd: 3}},
+		}
+
+		// 1:59 AM (should be false)
+		t1 := time.Date(2024, 3, 10, 1, 59, 0, 0, chi)
+		contained, _ := p.Contains(t1)
+		assert.False(t, contained)
+
+		// 3:00 AM (The hour 2:00-3:00 is skipped, so 3:00 is the first valid hour after 1:59)
+		// Wait, if I ask for 2:30 AM on that day, Go's time.Date and time.Parse will give me something else.
+		// Usually it's better to test the boundaries.
+		t2 := time.Date(2024, 3, 10, 3, 0, 0, 0, chi)
+		contained, _ = p.Contains(t2)
+		assert.False(t, contained, "Hour 3 is outside range [2, 3)")
 	})
 }
 
@@ -218,5 +310,243 @@ func TestPriceContains(t *testing.T) {
 
 		// Before start
 		assert.False(t, p.Contains(start.Add(-time.Second)))
+	})
+}
+
+func TestUtilityFeesPeriodApply(t *testing.T) {
+	testTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	basePrice := 0.20
+
+	t.Run("basic DollarsPerKWH", func(t *testing.T) {
+		up := UtilityFeesPeriod{
+			UtilityPeriod: UtilityPeriod{},
+			DollarsPerKWH: 0.05,
+		}
+		p := Price{TSStart: testTime, DollarsPerKWH: basePrice}
+		result, err := up.Apply(p, p)
+		require.NoError(t, err)
+		assert.Equal(t, 0.25, result.DollarsPerKWH)
+	})
+
+	t.Run("GridAdditional fixed fee", func(t *testing.T) {
+		up := UtilityFeesPeriod{
+			UtilityPeriod:  UtilityPeriod{},
+			DollarsPerKWH:  0.03,
+			GridAdditional: true,
+		}
+		p := Price{TSStart: testTime, DollarsPerKWH: basePrice}
+		result, err := up.Apply(p, p)
+		require.NoError(t, err)
+		assert.Equal(t, 0.20, result.DollarsPerKWH)
+		assert.Equal(t, 0.03, result.GridUseDollarsPerKWH)
+	})
+
+	t.Run("SeparateGenerationCredit", func(t *testing.T) {
+		up := UtilityFeesPeriod{
+			UtilityPeriod:            UtilityPeriod{},
+			DollarsPerKWH:            0.08,
+			SeparateGenerationCredit: true,
+		}
+		p := Price{TSStart: testTime, DollarsPerKWH: basePrice}
+		result, err := up.Apply(p, p)
+		require.NoError(t, err)
+		assert.Equal(t, 0.20, result.DollarsPerKWH)
+		assert.Equal(t, 0.08, result.GenerationCreditDollarsPerKWH)
+		assert.True(t, result.SeparateGenerationCredit)
+	})
+
+	t.Run("DollarsPerKWHPreMultiple", func(t *testing.T) {
+		up := UtilityFeesPeriod{
+			UtilityPeriod:            UtilityPeriod{},
+			DollarsPerKWHPreMultiple: 0.1, // 10%
+		}
+		p := Price{TSStart: testTime, DollarsPerKWH: basePrice}
+		result, err := up.Apply(p, p)
+		require.NoError(t, err)
+		// 0.20 + (0.20 * 0.1) = 0.22
+		assert.InDelta(t, 0.22, result.DollarsPerKWH, 0.0001)
+	})
+
+	t.Run("GridAdditional with multiplier", func(t *testing.T) {
+		up := UtilityFeesPeriod{
+			UtilityPeriod:            UtilityPeriod{},
+			DollarsPerKWHPreMultiple: 0.05, // 5%
+			GridAdditional:           true,
+		}
+		p := Price{TSStart: testTime, DollarsPerKWH: basePrice}
+		result, err := up.Apply(p, p)
+		require.NoError(t, err)
+		// GridUse += 0.20 * 0.05 = 0.01
+		assert.InDelta(t, 0.01, result.GridUseDollarsPerKWH, 0.0001)
+	})
+
+	t.Run("Combination: fixed fee and multiplier precedence", func(t *testing.T) {
+		up := UtilityFeesPeriod{
+			UtilityPeriod:            UtilityPeriod{},
+			DollarsPerKWH:            0.10, // Should be ignored
+			DollarsPerKWHPreMultiple: 0.1,  // Should be used
+		}
+		p := Price{TSStart: testTime, DollarsPerKWH: basePrice}
+		result, err := up.Apply(p, p)
+		require.NoError(t, err)
+		// 0.20 + (0.20 * 0.1) = 0.22 (if fixed was used, would be 0.30)
+		assert.InDelta(t, 0.22, result.DollarsPerKWH, 0.0001)
+	})
+
+	t.Run("Combination: GridAdditional precedence", func(t *testing.T) {
+		up := UtilityFeesPeriod{
+			UtilityPeriod:            UtilityPeriod{},
+			DollarsPerKWH:            0.10, // Should be ignored
+			DollarsPerKWHPreMultiple: 0.1,  // Should be used
+			GridAdditional:           true,
+		}
+		p := Price{TSStart: testTime, DollarsPerKWH: basePrice}
+		result, err := up.Apply(p, p)
+		require.NoError(t, err)
+		assert.InDelta(t, 0.02, result.GridUseDollarsPerKWH, 0.0001)
+	})
+
+	t.Run("Contains logic: outside hour range", func(t *testing.T) {
+		up := UtilityFeesPeriod{
+			UtilityPeriod: UtilityPeriod{Hours: []UtilityHourPeriod{{HourStart: 0, HourEnd: 12}}}, // 12:00 is exclusive
+			DollarsPerKWH: 0.10,
+		}
+		p := Price{TSStart: testTime, DollarsPerKWH: basePrice} // 12:00
+		result, err := up.Apply(p, p)
+		require.NoError(t, err)
+		assert.Equal(t, basePrice, result.DollarsPerKWH) // Unchanged
+	})
+
+	t.Run("Contains logic: different location", func(t *testing.T) {
+		// testTime is 12:00 UTC.
+		// America/Chicago is UTC-6 (Standard) or UTC-5 (Daylight).
+		// Jan 1st is Standard Time. 12:00 UTC is 6:00 AM CST.
+		up := UtilityFeesPeriod{
+			UtilityPeriod: UtilityPeriod{
+				Location: "America/Chicago",
+				Hours:    []UtilityHourPeriod{{HourStart: 9, HourEnd: 17}},
+			},
+			DollarsPerKWH: 0.10,
+		}
+		p := Price{TSStart: testTime, DollarsPerKWH: basePrice}
+		result, err := up.Apply(p, p)
+		require.NoError(t, err)
+		assert.Equal(t, basePrice, result.DollarsPerKWH) // Unchanged because 6:00 AM is outside 9-17 range
+	})
+
+	t.Run("Multiple periods in sequence", func(t *testing.T) {
+		periods := []UtilityFeesPeriod{
+			{DollarsPerKWH: 0.10},
+			{DollarsPerKWHPreMultiple: 0.05}, // 5% of original base
+			{DollarsPerKWH: 0.02, GridAdditional: true},
+		}
+
+		p := Price{TSStart: testTime, DollarsPerKWH: basePrice}
+		current := p
+		var err error
+		for _, up := range periods {
+			current, err = up.Apply(current, p)
+			require.NoError(t, err)
+		}
+
+		// Final DollarsPerKWH: base (0.20) + fixed (0.10) + percentage (0.20 * 0.05 = 0.01) = 0.31
+		assert.InDelta(t, 0.31, current.DollarsPerKWH, 0.0001)
+		// Final GridUse: 0.02
+		assert.InDelta(t, 0.02, current.GridUseDollarsPerKWH, 0.0001)
+	})
+
+	t.Run("Apply with zero base price and multiplier", func(t *testing.T) {
+		up := UtilityFeesPeriod{
+			UtilityPeriod:            UtilityPeriod{},
+			DollarsPerKWHPreMultiple: 0.5, // 50%
+		}
+		p := Price{TSStart: testTime, DollarsPerKWH: 0.0}
+		result, err := up.Apply(p, p)
+		require.NoError(t, err)
+		assert.Equal(t, 0.0, result.DollarsPerKWH, "Multiplier on zero should be zero")
+	})
+
+	t.Run("Apply with multiple multipliers", func(t *testing.T) {
+		periods := []UtilityFeesPeriod{
+			{DollarsPerKWHPreMultiple: 0.1}, // 10%
+			{DollarsPerKWHPreMultiple: 0.2}, // 20%
+		}
+		orig := Price{TSStart: testTime, DollarsPerKWH: 1.00}
+		curr := orig
+		var err error
+		for _, up := range periods {
+			curr, err = up.Apply(curr, orig)
+			require.NoError(t, err)
+		}
+		// 1.00 + (1.00 * 0.1) + (1.00 * 0.2) = 1.30
+		assert.InDelta(t, 1.30, curr.DollarsPerKWH, 0.0001)
+	})
+}
+
+func TestApplyUtilityFeesPeriods(t *testing.T) {
+	testTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	basePrice := 0.20
+	p := Price{TSStart: testTime, DollarsPerKWH: basePrice}
+
+	t.Run("Empty periods", func(t *testing.T) {
+		result, err := ApplyUtilityFeesPeriods(p, nil)
+		require.NoError(t, err)
+		assert.Equal(t, p, result)
+	})
+
+	t.Run("Multiple periods - cumulative and separate", func(t *testing.T) {
+		periods := []UtilityFeesPeriod{
+			{
+				UtilityPeriod: UtilityPeriod{},
+				DollarsPerKWH: 0.10,
+				Description:   "Fixed 1",
+			},
+			{
+				UtilityPeriod:            UtilityPeriod{},
+				DollarsPerKWHPreMultiple: 0.1, // 10% of 0.20 = 0.02
+				Description:              "10% Markup",
+			},
+			{
+				UtilityPeriod:  UtilityPeriod{},
+				DollarsPerKWH:  0.05,
+				GridAdditional: true,
+				Description:    "Grid Delivery",
+			},
+			{
+				UtilityPeriod:            UtilityPeriod{},
+				DollarsPerKWH:            0.08,
+				SeparateGenerationCredit: true,
+				Description:              "Solar Credit",
+			},
+		}
+
+		result, err := ApplyUtilityFeesPeriods(p, periods)
+		require.NoError(t, err)
+
+		// Base (0.20) + Fixed (0.10) + Markup (0.02) = 0.32
+		assert.InDelta(t, 0.32, result.DollarsPerKWH, 0.0001)
+		// Grid Delivery = 0.05
+		assert.Equal(t, 0.05, result.GridUseDollarsPerKWH)
+		// Generation Credit = 0.08
+		assert.Equal(t, 0.08, result.GenerationCreditDollarsPerKWH)
+	})
+
+	t.Run("Periods outside timing", func(t *testing.T) {
+		periods := []UtilityFeesPeriod{
+			{
+				UtilityPeriod: UtilityPeriod{Hours: []UtilityHourPeriod{{HourStart: 0, HourEnd: 6}}}, // Should not apply (testTime is 12:00)
+				DollarsPerKWH: 1.00,
+			},
+			{
+				UtilityPeriod: UtilityPeriod{Hours: []UtilityHourPeriod{{HourStart: 6, HourEnd: 18}}}, // Should apply
+				DollarsPerKWH: 0.05,
+			},
+		}
+
+		result, err := ApplyUtilityFeesPeriods(p, periods)
+		require.NoError(t, err)
+
+		// Base (0.20) + 0.05 = 0.25
+		assert.InDelta(t, 0.25, result.DollarsPerKWH, 0.0001)
 	})
 }
