@@ -66,6 +66,7 @@ func (s *SiteFees) applyFees(p types.Price) (types.Price, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	newPrice := p
 	for _, period := range s.periods {
 		// let's check to ensure that the period is contained within some part of
 		// the price interval
@@ -84,17 +85,23 @@ func (s *SiteFees) applyFees(p types.Price) (types.Price, error) {
 
 		switch {
 		case period.GenerationCredit:
-			p.GenerationCreditDollarsPerKWH += period.DollarsPerKWH
+			newPrice.GenerationCreditDollarsPerKWH += period.DollarsPerKWH
 			if period.SeparateGenerationCredit {
-				p.SeparateGenerationCredit = true
+				newPrice.SeparateGenerationCredit = true
 			}
 		case period.GridAdditional:
-			p.GridUseDollarsPerKWH += period.DollarsPerKWH
+			if period.DollarsPerKWHPreMultiple != 0 {
+				newPrice.GridUseDollarsPerKWH += p.DollarsPerKWH * period.DollarsPerKWHPreMultiple
+			} else {
+				newPrice.GridUseDollarsPerKWH += period.DollarsPerKWH
+			}
+		case period.DollarsPerKWHPreMultiple != 0:
+			newPrice.DollarsPerKWH += p.DollarsPerKWH * period.DollarsPerKWHPreMultiple
 		default:
-			p.DollarsPerKWH += period.DollarsPerKWH
+			newPrice.DollarsPerKWH += period.DollarsPerKWH
 		}
 	}
-	return p, nil
+	return newPrice, nil
 }
 
 func (s *SiteFees) GetConfirmedPrices(ctx context.Context, start, end time.Time) ([]types.Price, error) {

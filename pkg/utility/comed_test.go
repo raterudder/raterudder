@@ -128,8 +128,8 @@ func TestComEd(t *testing.T) {
 
 		// Verification
 		// Item 1: 00:00 EPT. 34.999970 $/MWh -> 0.03499997 $/kWh
-		// 0.03499997 $/kWh x (1.0124 * 1.0002 * 1.047) -> 0.0371067860737561 $/kWh
-		assert.InDelta(t, 0.0371067860737561, prices[0].DollarsPerKWH, 0.0000001)
+		// 0.03499997 $/kWh x (1.0124 * 1.0002 * 1.0406) -> 0.03687996331265578 $/kWh
+		assert.InDelta(t, 0.03687996331265578, prices[0].DollarsPerKWH, 0.0000001)
 
 		// Time check
 		// 2026-02-02 00:00:00 EPT (America/New_York)

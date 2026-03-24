@@ -367,6 +367,58 @@ func TestSiteFees(t *testing.T) {
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "failed to load location")
 		})
+
+		t.Run("DollarsPerKWHPreMultiple cases", func(t *testing.T) {
+			s := &SiteFees{
+				periods: []types.UtilityFeesPeriod{
+					{
+						UtilityPeriod:            types.UtilityPeriod{HourStart: 0, HourEnd: 24},
+						DollarsPerKWHPreMultiple: 0.1, // 10% markup on DollarsPerKWH
+						Description:              "10% Markup",
+					},
+					{
+						UtilityPeriod:            types.UtilityPeriod{HourStart: 0, HourEnd: 24},
+						DollarsPerKWHPreMultiple: 0.05,
+						GridAdditional:           true, // 5% markup on GridUseDollarsPerKWH
+						Description:              "5% Grid Markup",
+					},
+					{
+						UtilityPeriod:            types.UtilityPeriod{HourStart: 0, HourEnd: 24},
+						DollarsPerKWHPreMultiple: 0.02,
+						DollarsPerKWH:            1.00, // Should be ignored because DollarsPerKWHPreMultiple is non-zero
+						Description:              "2% Markup with ignored DollarsPerKWH",
+					},
+					{
+						UtilityPeriod:            types.UtilityPeriod{HourStart: 0, HourEnd: 24},
+						DollarsPerKWHPreMultiple: 0.03,
+						DollarsPerKWH:            2.00, // Should be ignored because DollarsPerKWHPreMultiple is non-zero
+						GridAdditional:           true,
+						Description:              "3% Grid Markup with ignored DollarsPerKWH",
+					},
+					{
+						UtilityPeriod: types.UtilityPeriod{HourStart: 0, HourEnd: 24},
+						DollarsPerKWH: 0.04, // Fixed fee to test mixing
+						Description:   "Fixed Fee",
+					},
+				},
+			}
+
+			p := types.Price{
+				TSStart:       time.Date(2026, 1, 1, 10, 0, 0, 0, ctLocation),
+				DollarsPerKWH: 0.40,
+			}
+
+			result, err := s.applyFees(p)
+			require.NoError(t, err)
+
+			// Expected DollarsPerKWH:
+			// Base (0.40) + 10% (0.04) + 2% (0.008) + Fixed (0.04) = 0.488
+			assert.InDelta(t, 0.488, result.DollarsPerKWH, 0.0001)
+
+			// Expected GridUseDollarsPerKWH:
+			// 5% (0.02) + 3% (0.012) = 0.032
+			assert.InDelta(t, 0.032, result.GridUseDollarsPerKWH, 0.0001)
+		})
 	})
 
 	t.Run("GetConfirmedPrices", func(t *testing.T) {

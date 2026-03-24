@@ -619,11 +619,8 @@ func (c *BaseComEdHourly) fetchPJMDayAhead(ctx context.Context, pnodeID string) 
 		// Convert $/MWh to $/kWh
 
 		// HEC = LMP x (1 MWh/ 1000 kWh) x BUF x ISUF x (1 + DLF)
-		// Residential Single Family Without Electric Space Heat 0.0517 0.0459
-		// Residential Multi Family Without Electric Space Heat 0.0532 0.0468
-		// Residential Single Family With Electric Space Heat 0.0554 0.0473
-		// Residential Multi Family With Electric Space Heat 0.0567 0.0497
-		hec := (item.TotalLMPDA / 1000) * 1.0124 * 1.0002 * (1.0 + .047)
+		// for rate BESH a system average is used: 0.0470 0.0406
+		hec := (item.TotalLMPDA / 1000) * 1.0124 * 1.0002 * (1.0 + 0.0406)
 
 		prices = append(prices, types.Price{
 			Provider:      "comed_besh",
@@ -726,8 +723,9 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 				HourEnd:     24,
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH: psc,
-			Description:   "Transmission Services Charge (PSC)",
+			DollarsPerKWH:  psc,
+			GridAdditional: true,
+			Description:    "Transmission Services Charge (PSC)",
 		},
 	}
 
