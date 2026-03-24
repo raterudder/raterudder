@@ -155,7 +155,7 @@ func TestHandleListInterest(t *testing.T) {
 		req = req.WithContext(context.WithValue(req.Context(), userContextKey, admin))
 
 		expected := []types.InterestSubmission{{Email: "test@example.com"}}
-		mockDB.On("ListInterest", mock.Anything, 50).Return(expected, nil)
+		mockDB.On("ListInterest", mock.Anything, 50).Return(expected, nil).Once()
 
 		w = httptest.NewRecorder()
 		s.handleListInterest(w, req)
@@ -165,6 +165,38 @@ func TestHandleListInterest(t *testing.T) {
 		err := json.NewDecoder(w.Body).Decode(&list)
 		require.NoError(t, err)
 		assert.NotEmpty(t, list)
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("WithLimit", func(t *testing.T) {
+		mockDB.ExpectedCalls = nil
+		req := httptest.NewRequest("GET", "/api/list/interest?limit=10", nil)
+		admin := types.User{ID: "admin-user", Email: "admin@example.com"}
+		req = req.WithContext(context.WithValue(req.Context(), userContextKey, admin))
+
+		// Expect custom limit to be passed
+		expected := []types.InterestSubmission{{Email: "test@example.com"}}
+		mockDB.On("ListInterest", mock.Anything, 10).Return(expected, nil).Once()
+
+		w := httptest.NewRecorder()
+		s.handleListInterest(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("InvalidLimitFallback", func(t *testing.T) {
+		mockDB.ExpectedCalls = nil
+		req := httptest.NewRequest("GET", "/api/list/interest?limit=invalid", nil)
+		admin := types.User{ID: "admin-user", Email: "admin@example.com"}
+		req = req.WithContext(context.WithValue(req.Context(), userContextKey, admin))
+
+		// Expect default limit (50) to be passed
+		expected := []types.InterestSubmission{{Email: "test@example.com"}}
+		mockDB.On("ListInterest", mock.Anything, 50).Return(expected, nil).Once()
+
+		w := httptest.NewRecorder()
+		s.handleListInterest(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
 		mockDB.AssertExpectations(t)
 	})
 }
