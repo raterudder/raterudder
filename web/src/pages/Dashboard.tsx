@@ -190,6 +190,9 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     if (action.systemStatus && action.systemStatus.storms) {
                         action.reason = "emergencyMode" as any;
                     }
+                    if (action.systemStatus && action.systemStatus.gridUnavailable) {
+                        action.reason = "gridUnavailable" as any;
+                    }
                 }
                 if (currentSummary && currentSummary.type === 'fault' && currentSummary.reason === action.reason) {
                     updateSummary(currentSummary);

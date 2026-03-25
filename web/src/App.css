@@ -552,6 +552,14 @@ button {
 .current-status-card.standby {
   border-left: 6px solid var(--warning);
 }
+ 
+.current-status-card.grid-unavailable {
+  border-left: 6px solid var(--danger);
+}
+ 
+.current-status-card.paused {
+  border-left: 6px solid var(--outline-variant);
+}
 
 .status-main {
   display: flex;

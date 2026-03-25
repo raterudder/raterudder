@@ -42,6 +42,9 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
                 if (action.reason === ActionReason.BatteryAtReserve) {
                     title = 'Battery At Reserve';
                 }
+                if (action.reason === ActionReason.GridUnavailable || action.systemStatus?.gridUnavailable) {
+                    title = 'Grid Unavailable';
+                }
                 if (action.reason === ActionReason.ArbitrageHoldExport || action.reason === ActionReason.ArbitrageHoldSave || action.reason === ActionReason.ArbitrageHold) {
                     title = 'Hold for Arbitrage';
                 }
@@ -81,9 +84,13 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
                                     </>
                                 ) : isFault ? (
                                     <div className="fault-details">
-                                        <p className="fault-alarms">
-                                            Alarms: {summary ? Array.from(summary.alarms).join(', ') : action.systemStatus?.alarms?.map(a => a.name).join(', ')}
-                                        </p>
+                                        {action.reason === ActionReason.GridUnavailable || action.systemStatus?.gridUnavailable ? (
+                                            <p>{reasonText}</p>
+                                        ) : (
+                                            <p className="fault-alarms">
+                                                Alarms: {summary ? Array.from(summary.alarms).join(', ') : action.systemStatus?.alarms?.map(a => a.name).join(', ')}
+                                            </p>
+                                        )}
                                     </div>
                                 ) : (
                                     <p>{reasonText}</p>

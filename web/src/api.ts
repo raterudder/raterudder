@@ -30,6 +30,7 @@ export const ActionReason = {
     SufficientBattery: 'sufficientBattery',
     EmergencyMode: 'emergencyMode',
     HasAlarms: 'hasAlarms',
+    GridUnavailable: 'gridUnavailable',
     WaitingToCharge: 'waitingToCharge',
     ChargeSurvivePeak: 'chargeSurvivePeak',
     PreventSolarCurtailment: 'preventSolarCurtailment',

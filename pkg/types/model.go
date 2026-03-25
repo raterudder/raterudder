@@ -53,6 +53,7 @@ const (
 	ActionReasonSufficientBattery          ActionReason = "sufficientBattery"
 	ActionReasonEmergencyMode              ActionReason = "emergencyMode"
 	ActionReasonHasAlarms                  ActionReason = "hasAlarms"
+	ActionReasonGridUnavailable            ActionReason = "gridUnavailable"
 	ActionReasonWaitingToCharge            ActionReason = "waitingToCharge"
 	ActionReasonChargeSurvivePeak          ActionReason = "chargeSurvivePeak"
 	ActionReasonPreventSolarCurtailment    ActionReason = "preventSolarCurtailment"
@@ -140,10 +141,11 @@ type SystemStatus struct {
 	HomeKW                  float64       `json:"homeKW"`                // Home consumption (kW)
 	ElevatedMinBatterySOC   bool          `json:"elevatedMinBatterySOC"` // True if the minimum SOC is elevated to force standby
 	BatteryAboveMinSOC      bool          `json:"batteryAboveMinSOC"`    // True if the battery SOC is above the minimum SOC
-	EmergencyMode           bool          `json:"emergencyMode"`
-	BatteryChargingDisabled bool          `json:"batteryChargingDisabled"` // True if battery charging is disabled due to alarms
-	Alarms                  []SystemAlarm `json:"alarms"`
-	Storms                  []Storm       `json:"storms"`
+	EmergencyMode           bool          `json:"emergencyMode,omitempty"`
+	GridUnavailable         bool          `json:"gridUnavailable,omitempty"`         // True if the grid is unavailable
+	BatteryChargingDisabled bool          `json:"batteryChargingDisabled,omitempty"` // True if battery charging is disabled due to alarms
+	Alarms                  []SystemAlarm `json:"alarms,omitempty"`
+	Storms                  []Storm       `json:"storms,omitempty"`
 }
 
 // BatteryMode represents the mode of the battery.

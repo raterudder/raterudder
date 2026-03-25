@@ -45,6 +45,33 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
         );
     }
 
+    if (action.systemStatus?.gridUnavailable) {
+        return (
+            <div className="current-status-card grid-unavailable">
+                <div className="status-main">
+                    <div className="status-icon">
+                        <span className="icon">⚠️</span>
+                    </div>
+                    <div className="status-info">
+                        <span className="status-label">Grid Unavailable</span>
+                        <span className="status-value">Grid is currently down</span>
+                    </div>
+                </div>
+                <div className="status-metrics">
+                    <div className="metric">
+                        <span className="metric-label">Battery</span>
+                        <span className="metric-value">{soc.toFixed(1)}%</span>
+                        <Meter.Root className="battery-bar" value={soc} min={0} max={100} aria-label="Battery Percentage">
+                            <Meter.Track className="battery-track">
+                                <Meter.Indicator className="battery-fill" />
+                            </Meter.Track>
+                        </Meter.Root>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     const effectiveBatteryMode = action.targetBatteryMode
         ? action.targetBatteryMode
         : action.batteryMode;

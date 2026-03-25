@@ -240,6 +240,22 @@ func (s *Server) performSiteUpdate(
 		return nil, "alarms present", nil
 	}
 
+	if status.GridUnavailable {
+		log.Ctx(ctx).InfoContext(ctx, "update: grid unavailable")
+		action := types.Action{
+			Timestamp:    time.Now(),
+			Description:  "Grid is unavailable",
+			Reason:       types.ActionReasonGridUnavailable,
+			SystemStatus: status,
+			Fault:        true,
+			CurrentPrice: &currentPrice,
+		}
+		if err := s.storage.InsertAction(ctx, siteID, action); err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to insert action", slog.Any("error", err))
+		}
+		return nil, "grid unavailable", nil
+	}
+
 	// get Future Prices for controller
 	futurePrices, err := utility.GetFuturePrices(ctx)
 	if err != nil {

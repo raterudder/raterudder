@@ -183,6 +183,8 @@ export const getReasonText = (action: Action): string => {
             ];
             return parts.concat(suffixParts).join(' ');
         }
+        case ActionReason.GridUnavailable:
+            return 'Grid is currently unavailable. The system is standing by to protect the battery and ensure power is available for the home.';
         case ActionReason.BatteryAtReserve: {
             const parts = [
                 'Battery is at reserve. Using remaining energy.',

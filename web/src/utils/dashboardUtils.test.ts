@@ -79,6 +79,11 @@ describe('dashboardUtils', () => {
             const action = { ...baseAction, reason: ActionReason.PreventSolarCurtailment };
             expect(getReasonText(action)).toContain('exceed battery capacity');
         });
+ 
+        it('handles GridUnavailable', () => {
+            const action = { ...baseAction, reason: ActionReason.GridUnavailable };
+            expect(getReasonText(action)).toContain('Grid is currently unavailable');
+        });
 
 
         it('handles WaitingToCharge with significant savings', () => {

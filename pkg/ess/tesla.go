@@ -588,6 +588,7 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		ElevatedMinBatterySOC: siteInfo.BackupReservePercent > 0 && siteInfo.BackupReservePercent > b.settings.MinBatterySOC,
 		BatteryAboveMinSOC:    liveStatus.PercentageCharged >= siteInfo.BackupReservePercent,
 		EmergencyMode:         liveStatus.StormModeActive,
+		GridUnavailable:       liveStatus.GridStatus != "Active",
 		// TODO: how do we know when battery charging is disabled
 		// TODO: what about alarms?
 	}

@@ -638,6 +638,7 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		HomeKW:                  rd.RuntimeData.PowerLoad,
 		BatteryCapacityKWH:      di.TotalBatteryCapacityKWH,
 		EmergencyMode:           stormHedge || modes.currentMode.WorkMode == 3,
+		GridUnavailable:         rd.RuntimeData.OffGridFlag != 0,
 		ElevatedMinBatterySOC:   modes.currentMode.ReserveSOC > 0 && modes.currentMode.ReserveSOC > f.settings.MinBatterySOC,
 		BatteryAboveMinSOC:      rd.RuntimeData.SOC >= modes.currentMode.ReserveSOC,
 		BatteryChargingDisabled: batteryChargingDisabled,
@@ -1294,6 +1295,10 @@ type franklinRuntimeData struct {
 	// 6 is off-grid charging
 	// 7 is off-grid discharging
 	RunStatus int `json:"run_status"`
+
+	// 0 means on-grid
+	// unclear what other values mean
+	OffGridFlag int `json:"offGirdFlag"` // misspelled in API
 
 	SOC     float64   `json:"soc"`
 	EachSOC []float64 `json:"fhpSoc"`
