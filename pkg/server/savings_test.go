@@ -229,12 +229,153 @@ func TestHandleHistorySavings(t *testing.T) {
 			expectedBattSavings:  0.0,
 			expectedSolarSavings: 1.00, // 10kWh * $0.10
 		},
+		{
+			name: "Grid Use Fees Included in Import",
+			setupMock: func(m *mockSavingsStorage) {
+				m.prices = []types.Price{
+					{
+						TSStart:              start,
+						TSEnd:                start.Add(time.Hour),
+						DollarsPerKWH:        0.10,
+						GridUseDollarsPerKWH: 0.05,
+					}, // Import: 0.15, Export: 0.10
+				}
+				m.stats = []types.EnergyStats{
+					{
+						TSHourStart:   start,
+						GridImportKWH: 10,
+					},
+				}
+			},
+			expectedCost: 1.50, // 10 * (0.10 + 0.05)
+		},
+		{
+			name: "Default Export Price (no Grid Use)",
+			setupMock: func(m *mockSavingsStorage) {
+				m.prices = []types.Price{
+					{
+						TSStart:              start,
+						TSEnd:                start.Add(time.Hour),
+						DollarsPerKWH:        0.10,
+						GridUseDollarsPerKWH: 0.05,
+					},
+				}
+				m.stats = []types.EnergyStats{
+					{
+						TSHourStart:   start,
+						GridExportKWH: 10,
+					},
+				}
+				m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Unset()
+				m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+					GridExportSolar: true,
+				}, types.CurrentSettingsVersion, nil)
+			},
+			expectedCredit: 1.00, // 10 * 0.10
+		},
+		{
+			name: "Net Metering Credits - Highest",
+			setupMock: func(m *mockSavingsStorage) {
+				m.prices = []types.Price{
+					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.02},                    // H0: 0.12
+					{TSStart: start.Add(time.Hour), TSEnd: start.Add(2 * time.Hour), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.02}, // H1: 0.22
+					{TSStart: start.Add(2 * time.Hour), TSEnd: start.Add(3 * time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.02}, // H2: 0.07
+				}
+				m.stats = []types.EnergyStats{
+					{
+						TSHourStart:   start,
+						GridExportKWH: 10,
+					},
+				}
+				m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Unset()
+				m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+					GridExportSolar: true,
+					UtilityRateOptions: types.UtilityRateOptions{
+						NetMeteringCredits: true,
+					},
+					SolarNetMeteringCreditsValue: "highest",
+				}, types.CurrentSettingsVersion, nil)
+			},
+			expectedCredit: 2.20, // 10 * 0.22 (max of 0.12, 0.22, 0.07)
+		},
+		{
+			name: "Net Metering Credits - Lowest",
+			setupMock: func(m *mockSavingsStorage) {
+				m.prices = []types.Price{
+					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.02},                    // H0: 0.12
+					{TSStart: start.Add(time.Hour), TSEnd: start.Add(2 * time.Hour), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.02}, // H1: 0.22
+					{TSStart: start.Add(2 * time.Hour), TSEnd: start.Add(3 * time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.02}, // H2: 0.07
+				}
+				m.stats = []types.EnergyStats{
+					{
+						TSHourStart:   start,
+						GridExportKWH: 10,
+					},
+				}
+				m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Unset()
+				m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+					GridExportSolar: true,
+					UtilityRateOptions: types.UtilityRateOptions{
+						NetMeteringCredits: true,
+					},
+					SolarNetMeteringCreditsValue: "lowest",
+				}, types.CurrentSettingsVersion, nil)
+			},
+			expectedCredit: 0.70, // 10 * 0.07 (min of 0.12, 0.22, 0.07)
+		},
+		{
+			name: "Separate Generation Credit",
+			setupMock: func(m *mockSavingsStorage) {
+				m.prices = []types.Price{
+					{
+						TSStart:                       start,
+						TSEnd:                         start.Add(time.Hour),
+						DollarsPerKWH:                 0.10,
+						GridUseDollarsPerKWH:          0.05,
+						SeparateGenerationCredit:      true,
+						GenerationCreditDollarsPerKWH: 0.08,
+					},
+				}
+				m.stats = []types.EnergyStats{
+					{
+						TSHourStart:   start,
+						GridExportKWH: 10,
+					},
+				}
+				m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Unset()
+				m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+					GridExportSolar: true,
+				}, types.CurrentSettingsVersion, nil)
+			},
+			expectedCredit: 0.80, // 10 * 0.08
+		},
+		{
+			name: "Grid Export Solar Disabled",
+			setupMock: func(m *mockSavingsStorage) {
+				m.prices = []types.Price{
+					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10},
+				}
+				m.stats = []types.EnergyStats{
+					{
+						TSHourStart:   start,
+						GridExportKWH: 10,
+					},
+				}
+				m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Unset()
+				m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+					GridExportSolar: false,
+				}, types.CurrentSettingsVersion, nil)
+			},
+			expectedCredit: 0.0,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockStoreBase := &mockStorage{}
-			mockStoreBase.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{}, types.CurrentSettingsVersion, nil)
+			mockStoreBase.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+				GridExportSolar: false, // Default to false as it was before
+			}, types.CurrentSettingsVersion, nil)
 			mockStore := &mockSavingsStorage{mockStorage: mockStoreBase}
 
 			tt.setupMock(mockStore)
@@ -286,6 +427,7 @@ func TestHandleHistorySavingsAll(t *testing.T) {
 	}, nil)
 
 	mockStore.On("GetActionHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Action{}, nil)
+	mockStore.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{}, types.CurrentSettingsVersion, nil)
 
 	req, _ := http.NewRequest("GET", "/api/history/savings?siteID=ALL&start="+start.Format(time.RFC3339)+"&end="+end.Format(time.RFC3339), nil)
 	// Mock authMiddleware effects

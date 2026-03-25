@@ -30,8 +30,8 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
-    const whatsNewVersion = 1;
-    const whatsNewText = "Updated design, improved Hold Battery, Charge Battery, and Arbitrage actions.";
+    const whatsNewVersion = 2;
+    const whatsNewText = "Corrected exported solar pricing and ComEd day-ahead pricing.";
     const [showWhatsNew, setShowWhatsNew] = useState(false);
 
     useEffect(() => {

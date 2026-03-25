@@ -133,7 +133,8 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 	lookbackStart := start.Add(-24 * time.Hour)
 
 	// Fetch prices (these are hourly)
-	prices, err := s.storage.GetPriceHistory(ctx, siteID, lookbackStart, end)
+	// We look ahead another 24 hours to support the 24h window for net metering valuation.
+	prices, err := s.storage.GetPriceHistory(ctx, siteID, lookbackStart, end.Add(24*time.Hour))
 	if err != nil {
 		return types.SavingsStats{}, err
 	}
@@ -156,6 +157,12 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 		})
 	}
 
+	// Fetch settings for this site
+	settings, _, err := s.storage.GetSettings(ctx, siteID)
+	if err != nil {
+		return types.SavingsStats{}, err
+	}
+
 	type energyChunk struct {
 		amount float64
 		price  float64
@@ -167,14 +174,59 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 		ts := stat.TSHourStart.Truncate(time.Hour)
 		inRequestedPeriod := !ts.Before(start) && ts.Before(end)
 
-		var gridImportPrice float64
-		var gridExportPrice float64
+		var currentPrice types.Price
+		var found bool
 		for _, p := range prices {
 			if p.Contains(ts) {
-				gridImportPrice = p.DollarsPerKWH
-				gridExportPrice = p.DollarsPerKWH + p.GridUseDollarsPerKWH
+				currentPrice = p
+				found = true
 				break
 			}
+		}
+
+		if !found {
+			// If no price found, we can't calculate savings for this hour
+			continue
+		}
+
+		gridImportPrice := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
+		var gridExportPrice float64
+
+		if !settings.GridExportSolar {
+			gridExportPrice = 0
+		} else if settings.UtilityRateOptions.NetMeteringCredits {
+			// For net metering, we value the export based on the min/max price of the day (24h window)
+			maxPrice := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
+			minPrice := maxPrice
+			windowEnd := ts.Add(24 * time.Hour)
+			for _, p := range prices {
+				if !p.TSStart.Before(ts) && p.TSStart.Before(windowEnd) {
+					cost := p.DollarsPerKWH + p.GridUseDollarsPerKWH
+					if cost > maxPrice {
+						maxPrice = cost
+					}
+					if cost < minPrice {
+						minPrice = cost
+					}
+				}
+			}
+
+			switch settings.SolarNetMeteringCreditsValue {
+			case "highest":
+				gridExportPrice = maxPrice
+			case "none":
+				gridExportPrice = 0
+			default:
+				// Default to conservative value ("lowest")
+				gridExportPrice = minPrice
+			}
+		} else if currentPrice.SeparateGenerationCredit {
+			// Post-2025 style: utility pays a distinct generation credit rate for
+			// solar exported to the grid, separate from the supply rate.
+			gridExportPrice = currentPrice.GenerationCreditDollarsPerKWH
+		} else {
+			// Default export price should NOT include the gridUse fees
+			gridExportPrice = currentPrice.DollarsPerKWH
 		}
 
 		ignoredFraction := getIgnoredFraction(ts, actions)
