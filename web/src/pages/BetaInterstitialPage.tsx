@@ -199,6 +199,7 @@ const BetaInterstitialPage: React.FC = () => {
                             disabled={isSubmitting}
                             className="btn beta-interstitial-continue-btn"
                         >
+                            {isSubmitting && <span className="loading-spinner" aria-hidden="true"></span>}
                             {isSubmitting ? 'Submitting...' : 'Express Interest'}
                         </button>
                     </div>
