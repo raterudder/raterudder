@@ -60,6 +60,9 @@ func TestRateLimitMiddleware(t *testing.T) {
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusTooManyRequests, w.Code)
+
+		retryAfter := w.Header().Get("Retry-After")
+		assert.NotEmpty(t, retryAfter)
 	})
 
 	t.Run("Sensitive Endpoint Limit - Allowed", func(t *testing.T) {
@@ -103,6 +106,9 @@ func TestRateLimitMiddleware(t *testing.T) {
 		w2 := httptest.NewRecorder()
 		handler.ServeHTTP(w2, req)
 		assert.Equal(t, http.StatusTooManyRequests, w2.Code)
+
+		retryAfter := w2.Header().Get("Retry-After")
+		assert.NotEmpty(t, retryAfter)
 	})
 
 	t.Run("General Endpoint - Only Uses General Limit", func(t *testing.T) {
@@ -228,6 +234,15 @@ func TestGetClientIP(t *testing.T) {
 			},
 			remoteAddr: "127.0.0.1:8080",
 			expectedIP: "203.0.113.5",
+		},
+		{
+			name: "Ignores headers if not from trusted proxy",
+			headers: map[string]string{
+				"CF-Connecting-IP": "203.0.113.5",
+				"X-Forwarded-For":  "198.51.100.10",
+			},
+			remoteAddr: "203.0.113.1:8080", // Not a loopback or private IP
+			expectedIP: "203.0.113.1",
 		},
 		{
 			name: "X-Forwarded-For single public IP",

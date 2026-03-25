@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -66,35 +67,41 @@ func (s *Server) getClientLimiter(ip string) *clientRateLimiter {
 }
 
 func getClientIP(r *http.Request) string {
-	// 1. Check Cloudflare header first
-	cfIP := r.Header.Get("CF-Connecting-IP")
-	if cfIP != "" {
-		return strings.TrimSpace(cfIP)
+	remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		remoteIP = r.RemoteAddr
 	}
 
-	// 2. Check X-Forwarded-For and find the first public IP
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff != "" {
-		ips := strings.Split(xff, ",")
-		for _, ipStr := range ips {
-			ipStr = strings.TrimSpace(ipStr)
-			ip := net.ParseIP(ipStr)
-			if ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() {
-				return ipStr
-			}
+	parsedRemoteIP := net.ParseIP(remoteIP)
+	isTrustedProxy := parsedRemoteIP != nil && (parsedRemoteIP.IsLoopback() || parsedRemoteIP.IsPrivate())
+
+	if isTrustedProxy {
+		// 1. Check Cloudflare header first
+		cfIP := r.Header.Get("CF-Connecting-IP")
+		if cfIP != "" {
+			return strings.TrimSpace(cfIP)
 		}
-		// If no public IP found but header exists, return the first one (it might be all private)
-		if len(ips) > 0 {
-			return strings.TrimSpace(ips[0])
+
+		// 2. Check X-Forwarded-For and find the first public IP
+		xff := r.Header.Get("X-Forwarded-For")
+		if xff != "" {
+			ips := strings.Split(xff, ",")
+			for _, ipStr := range ips {
+				ipStr = strings.TrimSpace(ipStr)
+				ip := net.ParseIP(ipStr)
+				if ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() {
+					return ipStr
+				}
+			}
+			// If no public IP found but header exists, return the first one (it might be all private)
+			if len(ips) > 0 {
+				return strings.TrimSpace(ips[0])
+			}
 		}
 	}
 
 	// 3. Fallback to RemoteAddr
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return ip
+	return remoteIP
 }
 
 func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
@@ -111,16 +118,26 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 
 		// Apply sensitive rate limit first if applicable
 		if isSensitive {
-			if !limiter.sensitive.Allow() {
+			res := limiter.sensitive.Reserve()
+			if !res.OK() || res.Delay() > 0 {
+				if res.OK() {
+					res.Cancel()
+				}
 				log.Ctx(ctx).WarnContext(ctx, "sensitive rate limit exceeded", slog.String("ip", ip), slog.String("path", r.URL.Path))
+				w.Header().Set("Retry-After", strconv.Itoa(int(res.Delay().Seconds())+1))
 				writeJSONError(w, "too many requests", http.StatusTooManyRequests)
 				return
 			}
 		}
 
 		// Apply general rate limit
-		if !limiter.general.Allow() {
+		res := limiter.general.Reserve()
+		if !res.OK() || res.Delay() > 0 {
+			if res.OK() {
+				res.Cancel()
+			}
 			log.Ctx(ctx).WarnContext(ctx, "general rate limit exceeded", slog.String("ip", ip), slog.String("path", r.URL.Path))
+			w.Header().Set("Retry-After", strconv.Itoa(int(res.Delay().Seconds())+1))
 			writeJSONError(w, "too many requests", http.StatusTooManyRequests)
 			return
 		}

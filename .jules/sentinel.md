@@ -12,3 +12,7 @@
 **Vulnerability:** The exponential backoff algorithm `getESSBackoff` used a bitwise left shift (`1 << (failures - 2)`) without capping the `failures` exponent. An attacker failing authentication 66 times or more caused an integer overflow, resulting in a 0s or negative backoff duration, completely bypassing the 15-minute maximum rate limit.
 **Learning:** Unbounded user-driven integers used in bitwise operations for security logic (like backoff exponents) are highly susceptible to integer overflow, leading to logic bypasses.
 **Prevention:** Always cap the exponent or failure counter *before* performing bitwise math to calculate backoffs.
+## 2024-03-25 - Prevent IP Spoofing in Rate Limiter
+**Vulnerability:** The `getClientIP` function blindly trusted `X-Forwarded-For` and `CF-Connecting-IP` headers from any source, allowing attackers to spoof their IP address and bypass rate limiting.
+**Learning:** Always validate that requests with proxy headers (`X-Forwarded-For`, `CF-Connecting-IP`) originate from a trusted proxy (e.g., loopback or private IP). Otherwise, the headers can be forged by a malicious client.
+**Prevention:** Check if `r.RemoteAddr` belongs to a trusted proxy before trusting proxy headers. If it's not a trusted proxy, use `r.RemoteAddr` as the client IP.
