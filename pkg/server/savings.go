@@ -132,11 +132,44 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 	// Look back 24 hours to track battery inventory correctly.
 	lookbackStart := start.Add(-24 * time.Hour)
 
-	// Fetch prices (these are hourly)
-	// We look ahead another 24 hours to support the 24h window for net metering valuation.
-	prices, err := s.storage.GetPriceHistory(ctx, siteID, lookbackStart, end.Add(24*time.Hour))
+	// Fetch settings for this site
+	settings, _, err := s.storage.GetSettings(ctx, siteID)
 	if err != nil {
 		return types.SavingsStats{}, err
+	}
+
+	fetchEnd := end
+	if settings.UtilityRateOptions.NetMeteringCredits {
+		// We look ahead another 24 hours to support the 24h window for net metering valuation.
+		fetchEnd = end.Add(24 * time.Hour)
+	}
+
+	// Fetch prices (these are hourly)
+	prices, err := s.storage.GetPriceHistory(ctx, siteID, lookbackStart, fetchEnd)
+	if err != nil {
+		return types.SavingsStats{}, err
+	}
+
+	// Only fetch future prices if net metering is enabled and we are looking at recent data
+	if settings.UtilityRateOptions.NetMeteringCredits && fetchEnd.After(time.Now()) {
+		needFuture := true
+		for _, p := range prices {
+			// Check if we already have a price covering the end of our required window
+			if p.Contains(fetchEnd.Add(-time.Hour)) {
+				needFuture = false
+				break
+			}
+		}
+
+		if needFuture {
+			u, err := s.utilities.Site(ctx, siteID, settings)
+			if err == nil {
+				futurePrices, err := u.GetFuturePrices(ctx)
+				if err == nil {
+					prices = append(prices, futurePrices...)
+				}
+			}
+		}
 	}
 
 	// Fetch energy stats (these are hourly)
@@ -155,12 +188,6 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 		sort.Slice(actions, func(i, j int) bool {
 			return actions[i].Timestamp.Before(actions[j].Timestamp)
 		})
-	}
-
-	// Fetch settings for this site
-	settings, _, err := s.storage.GetSettings(ctx, siteID)
-	if err != nil {
-		return types.SavingsStats{}, err
 	}
 
 	type energyChunk struct {

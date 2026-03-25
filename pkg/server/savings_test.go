@@ -3,12 +3,14 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/types"
+	"github.com/raterudder/raterudder/pkg/utility"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -37,375 +39,450 @@ func TestHandleHistorySavings(t *testing.T) {
 	start := time.Now().Truncate(24 * time.Hour)
 	end := start.Add(24 * time.Hour)
 
-	tests := []struct {
-		name                 string
-		setupMock            func(*mockSavingsStorage)
-		expectedCost         float64
-		expectedCredit       float64
-		expectedAvoidedCost  float64
-		expectedChargingCost float64
-		expectedBattSavings  float64
-		expectedSolarSavings float64
-	}{
-		{
-			name: "Basic Charge and Discharge",
-			setupMock: func(m *mockSavingsStorage) {
-				m.prices = []types.Price{
-					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10},                    // H1: $0.10
-					{TSStart: start.Add(time.Hour), TSEnd: start.Add(2 * time.Hour), DollarsPerKWH: 0.20}, // H2: $0.20
-				}
-				m.stats = []types.EnergyStats{
-					{
-						TSHourStart:       start, // Charge 10kWh @ $0.10 = $1.00
-						GridImportKWH:     10,
-						BatteryChargedKWH: 10,
-					},
-					{
-						TSHourStart:      start.Add(time.Hour), // Discharge 5kWh @ $0.20 = $1.00 avoided
-						HomeKWH:          5,
-						BatteryUsedKWH:   5,
-						BatteryToHomeKWH: 5,
-					},
-				}
-			},
-			expectedCost:         1.00,
-			expectedCredit:       0.0,
-			expectedAvoidedCost:  1.00,
-			expectedChargingCost: 0.50, // 5kWh discharged from 10kWh pool charged @ $0.10
-			expectedBattSavings:  0.50, // 1.00 - 0.50
-			expectedSolarSavings: 0.0,
-		},
-		{
-			name: "Charge Only - No Battery Savings Penalty",
-			setupMock: func(m *mockSavingsStorage) {
-				m.prices = []types.Price{
-					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10}, // H1: $0.10
-				}
-				m.stats = []types.EnergyStats{
-					{
-						TSHourStart:       start, // Charge 10kWh @ $0.10 = $1.00
-						GridImportKWH:     10,
-						BatteryChargedKWH: 10,
-					},
-				}
-			},
-			expectedCost:         1.00,
-			expectedCredit:       0.0,
-			expectedAvoidedCost:  0.0,
-			expectedChargingCost: 0.0, // Nothing discharged, so no charging cost attributed to use
-			expectedBattSavings:  0.0, // Used to be -1.00
-			expectedSolarSavings: 0.0,
-		},
-		{
-			name: "Discharge Only (with 24h lookback stack)",
-			setupMock: func(m *mockSavingsStorage) {
-				lookbackStart := start.Add(-2 * time.Hour) // Past charge
-				m.prices = []types.Price{
-					{TSStart: lookbackStart, TSEnd: lookbackStart.Add(time.Hour), DollarsPerKWH: 0.05}, // Past charge @ $0.05
-					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.20},                 // Current discharge @ $0.20
-				}
-				m.stats = []types.EnergyStats{
-					{
-						TSHourStart:       lookbackStart, // Charge 10kWh @ $0.05 in past
-						GridImportKWH:     10,
-						BatteryChargedKWH: 10,
-					},
-					{
-						TSHourStart:      start, // Discharge 10kWh @ $0.20 in current period
-						HomeKWH:          10,
-						BatteryUsedKWH:   10,
-						BatteryToHomeKWH: 10,
-					},
-				}
-			},
-			expectedCost:         0.0, // Cost of charge was in lookback period
-			expectedCredit:       0.0,
-			expectedAvoidedCost:  2.00, // 10kWh * 0.20
-			expectedChargingCost: 0.50, // 10kWh * 0.05 (pulled from lookback stack)
-			expectedBattSavings:  1.50,
-			expectedSolarSavings: 0.0,
-		},
-		{
-			name: "LIFO Stack Multiple Charges",
-			setupMock: func(m *mockSavingsStorage) {
-				m.prices = []types.Price{
-					{TSStart: start.Add(-2 * time.Hour), TSEnd: start.Add(-1 * time.Hour), DollarsPerKWH: 0.05}, // Past charge 1 @ $0.05
-					{TSStart: start.Add(-1 * time.Hour), TSEnd: start, DollarsPerKWH: 0.10},                     // Past charge 2 @ $0.10
-					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.20},                          // Current discharge @ $0.20
-				}
-				m.stats = []types.EnergyStats{
-					{
-						TSHourStart:       start.Add(-2 * time.Hour), // Charge 10kWh @ $0.05
-						GridImportKWH:     10,
-						BatteryChargedKWH: 10,
-					},
-					{
-						TSHourStart:       start.Add(-1 * time.Hour), // Charge 10kWh @ $0.10
-						GridImportKWH:     10,
-						BatteryChargedKWH: 10,
-					},
-					{
-						TSHourStart:      start, // Discharge 15kWh @ $0.20
-						HomeKWH:          15,
-						BatteryUsedKWH:   15,
-						BatteryToHomeKWH: 15,
-					},
-				}
-			},
-			expectedCost:         0.0, // Cost of charges were in lookback period
-			expectedCredit:       0.0,
-			expectedAvoidedCost:  3.00, // 15kWh * 0.20
-			expectedChargingCost: 1.25, // 10kWh * 0.10 (LIFO top) + 5kWh * 0.05 (LIFO bottom) = 1.00 + 0.25 = 1.25
-			expectedBattSavings:  1.75, // 3.00 - 1.25 = 1.75
-			expectedSolarSavings: 0.0,
-		},
-		{
-			name: "Partial Paused Hour",
-			setupMock: func(m *mockSavingsStorage) {
-				m.prices = []types.Price{
-					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.20}, // H1: $0.20
-				}
-				m.stats = []types.EnergyStats{
-					{
-						TSHourStart:      start, // Discharged 10kWh, but 30 mins were paused
-						HomeKWH:          10,
-						BatteryUsedKWH:   10,
-						BatteryToHomeKWH: 10,
-					},
-				}
-				m.actions = []types.Action{
-					{Timestamp: start.Add(30 * time.Minute), Paused: true}, // Paused half way through
-				}
-			},
-			expectedCost:         0.0,
-			expectedCredit:       0.0,
-			expectedAvoidedCost:  1.00, // 10kWh * 50% active * $0.20
-			expectedChargingCost: 0.0,
-			expectedBattSavings:  1.00,
-			expectedSolarSavings: 0.0,
-		},
-		{
-			name: "Storm Hedge Ignoring",
-			setupMock: func(m *mockSavingsStorage) {
-				m.prices = []types.Price{
-					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10}, // H1: $0.10
-				}
-				m.stats = []types.EnergyStats{
-					{
-						TSHourStart:       start, // Charge 10kWh @ $0.10, but in storm
-						GridImportKWH:     10,
-						BatteryChargedKWH: 10,
-					},
-				}
-				m.actions = []types.Action{
-					{Timestamp: start.Add(-1 * time.Minute), Reason: types.ActionReasonEmergencyMode},
-				}
-			},
-			expectedCost:         1.00, // Actual grid cost is still recorded
-			expectedCredit:       0.0,
-			expectedAvoidedCost:  0.0,
-			expectedChargingCost: 0.0, // No charging cost attributed because it was a storm
-			expectedBattSavings:  0.0,
-			expectedSolarSavings: 0.0,
-		},
-		{
-			name: "Solar Savings",
-			setupMock: func(m *mockSavingsStorage) {
-				m.prices = []types.Price{
-					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10}, // H1: $0.10
-				}
-				m.stats = []types.EnergyStats{
-					{
-						TSHourStart:    start,
-						SolarKWH:       10,
-						SolarToHomeKWH: 10,
-					},
-				}
-			},
-			expectedCost:         0.0,
-			expectedCredit:       0.0,
-			expectedAvoidedCost:  0.0,
-			expectedChargingCost: 0.0,
-			expectedBattSavings:  0.0,
-			expectedSolarSavings: 1.00, // 10kWh * $0.10
-		},
-		{
-			name: "Grid Use Fees Included in Import",
-			setupMock: func(m *mockSavingsStorage) {
-				m.prices = []types.Price{
-					{
-						TSStart:              start,
-						TSEnd:                start.Add(time.Hour),
-						DollarsPerKWH:        0.10,
-						GridUseDollarsPerKWH: 0.05,
-					}, // Import: 0.15, Export: 0.10
-				}
-				m.stats = []types.EnergyStats{
-					{
-						TSHourStart:   start,
-						GridImportKWH: 10,
-					},
-				}
-			},
-			expectedCost: 1.50, // 10 * (0.10 + 0.05)
-		},
-		{
-			name: "Default Export Price (no Grid Use)",
-			setupMock: func(m *mockSavingsStorage) {
-				m.prices = []types.Price{
-					{
-						TSStart:              start,
-						TSEnd:                start.Add(time.Hour),
-						DollarsPerKWH:        0.10,
-						GridUseDollarsPerKWH: 0.05,
-					},
-				}
-				m.stats = []types.EnergyStats{
-					{
-						TSHourStart:   start,
-						GridExportKWH: 10,
-					},
-				}
-				m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Unset()
-				m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
-					GridExportSolar: true,
-				}, types.CurrentSettingsVersion, nil)
-			},
-			expectedCredit: 1.00, // 10 * 0.10
-		},
-		{
-			name: "Net Metering Credits - Highest",
-			setupMock: func(m *mockSavingsStorage) {
-				m.prices = []types.Price{
-					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.02},                        // H0: 0.12
-					{TSStart: start.Add(time.Hour), TSEnd: start.Add(2 * time.Hour), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.02},     // H1: 0.22
-					{TSStart: start.Add(2 * time.Hour), TSEnd: start.Add(3 * time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.02}, // H2: 0.07
-				}
-				m.stats = []types.EnergyStats{
-					{
-						TSHourStart:   start,
-						GridExportKWH: 10,
-					},
-				}
-				m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Unset()
-				m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
-					GridExportSolar: true,
-					UtilityRateOptions: types.UtilityRateOptions{
-						NetMeteringCredits: true,
-					},
-					SolarNetMeteringCreditsValue: "highest",
-				}, types.CurrentSettingsVersion, nil)
-			},
-			expectedCredit: 2.20, // 10 * 0.22 (max of 0.12, 0.22, 0.07)
-		},
-		{
-			name: "Net Metering Credits - Lowest",
-			setupMock: func(m *mockSavingsStorage) {
-				m.prices = []types.Price{
-					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.02},                        // H0: 0.12
-					{TSStart: start.Add(time.Hour), TSEnd: start.Add(2 * time.Hour), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.02},     // H1: 0.22
-					{TSStart: start.Add(2 * time.Hour), TSEnd: start.Add(3 * time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.02}, // H2: 0.07
-				}
-				m.stats = []types.EnergyStats{
-					{
-						TSHourStart:   start,
-						GridExportKWH: 10,
-					},
-				}
-				m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Unset()
-				m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
-					GridExportSolar: true,
-					UtilityRateOptions: types.UtilityRateOptions{
-						NetMeteringCredits: true,
-					},
-					SolarNetMeteringCreditsValue: "lowest",
-				}, types.CurrentSettingsVersion, nil)
-			},
-			expectedCredit: 0.70, // 10 * 0.07 (min of 0.12, 0.22, 0.07)
-		},
-		{
-			name: "Separate Generation Credit",
-			setupMock: func(m *mockSavingsStorage) {
-				m.prices = []types.Price{
-					{
-						TSStart:                       start,
-						TSEnd:                         start.Add(time.Hour),
-						DollarsPerKWH:                 0.10,
-						GridUseDollarsPerKWH:          0.05,
-						SeparateGenerationCredit:      true,
-						GenerationCreditDollarsPerKWH: 0.08,
-					},
-				}
-				m.stats = []types.EnergyStats{
-					{
-						TSHourStart:   start,
-						GridExportKWH: 10,
-					},
-				}
-				m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Unset()
-				m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
-					GridExportSolar: true,
-				}, types.CurrentSettingsVersion, nil)
-			},
-			expectedCredit: 0.80, // 10 * 0.08
-		},
-		{
-			name: "Grid Export Solar Disabled",
-			setupMock: func(m *mockSavingsStorage) {
-				m.prices = []types.Price{
-					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10},
-				}
-				m.stats = []types.EnergyStats{
-					{
-						TSHourStart:   start,
-						GridExportKWH: 10,
-					},
-				}
-				m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Unset()
-				m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
-					GridExportSolar: false,
-				}, types.CurrentSettingsVersion, nil)
-			},
-			expectedCredit: 0.0,
-		},
+	runTest := func(t *testing.T, setupMock func(*mockSavingsStorage)) types.SavingsStats {
+		mockStoreBase := &mockStorage{}
+		mockStoreBase.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			GridExportSolar: false, // Default to false as it was before
+		}, types.CurrentSettingsVersion, nil)
+		mockStore := &mockSavingsStorage{mockStorage: mockStoreBase}
+
+		setupMock(mockStore)
+
+		mockUtility := &mockUtility{}
+		mockUtility.On("GetFuturePrices", mock.Anything).Return([]types.Price{}, nil)
+		mockUtility.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+
+		mockUtilities := utility.NewMap(mockStore)
+		mockUtilities.SetProvider(types.SiteIDNone, mockUtility)
+
+		s := &Server{storage: mockStore, utilities: mockUtilities, bypassAuth: true}
+
+		req, err := http.NewRequest("GET", "/api/history/savings?start="+start.Format(time.RFC3339)+"&end="+end.Format(time.RFC3339), nil)
+		require.NoError(t, err)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
+		rr := httptest.NewRecorder()
+
+		s.handleHistorySavings(rr, req)
+		assert.Equal(t, http.StatusOK, rr.Code)
+
+		var savings types.SavingsStats
+		err = json.Unmarshal(rr.Body.Bytes(), &savings)
+		require.NoError(t, err)
+
+		return savings
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mockStoreBase := &mockStorage{}
-			mockStoreBase.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
-				GridExportSolar: false, // Default to false as it was before
-			}, types.CurrentSettingsVersion, nil)
-			mockStore := &mockSavingsStorage{mockStorage: mockStoreBase}
-
-			tt.setupMock(mockStore)
-
-			s := &Server{storage: mockStore, bypassAuth: true}
-
-			req, _ := http.NewRequest("GET", "/api/history/savings?start="+start.Format(time.RFC3339)+"&end="+end.Format(time.RFC3339), nil)
-			req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
-			rr := httptest.NewRecorder()
-
-			s.handleHistorySavings(rr, req)
-			assert.Equal(t, http.StatusOK, rr.Code)
-
-			var savings types.SavingsStats
-			err := json.Unmarshal(rr.Body.Bytes(), &savings)
-			require.NoError(t, err)
-
-			assert.InDelta(t, tt.expectedCost, savings.Cost, 0.001, "Cost mismatch")
-			assert.InDelta(t, tt.expectedCredit, savings.Credit, 0.001, "Credit mismatch")
-			assert.InDelta(t, tt.expectedAvoidedCost, savings.AvoidedCost, 0.001, "AvoidedCost mismatch")
-			assert.InDelta(t, tt.expectedChargingCost, savings.ChargingCost, 0.001, "ChargingCost mismatch")
-			assert.InDelta(t, tt.expectedBattSavings, savings.BatterySavings, 0.001, "BatterySavings mismatch")
-			assert.InDelta(t, tt.expectedSolarSavings, savings.SolarSavings, 0.001, "SolarSavings mismatch")
+	t.Run("Basic Charge and Discharge", func(t *testing.T) {
+		savings := runTest(t, func(m *mockSavingsStorage) {
+			m.prices = []types.Price{
+				{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10},                    // H1: $0.10
+				{TSStart: start.Add(time.Hour), TSEnd: start.Add(2 * time.Hour), DollarsPerKWH: 0.20}, // H2: $0.20
+			}
+			m.stats = []types.EnergyStats{
+				{
+					TSHourStart:       start, // Charge 10kWh @ $0.10 = $1.00
+					GridImportKWH:     10,
+					BatteryChargedKWH: 10,
+				},
+				{
+					TSHourStart:      start.Add(time.Hour), // Discharge 5kWh @ $0.20 = $1.00 avoided
+					HomeKWH:          5,
+					BatteryUsedKWH:   5,
+					BatteryToHomeKWH: 5,
+				},
+			}
 		})
-	}
-}
+		assert.InDelta(t, 1.00, savings.Cost, 0.001, "Cost mismatch")
+		assert.InDelta(t, 0.0, savings.Credit, 0.001, "Credit mismatch")
+		assert.InDelta(t, 1.00, savings.AvoidedCost, 0.001, "AvoidedCost mismatch")
+		assert.InDelta(t, 0.50, savings.ChargingCost, 0.001, "ChargingCost mismatch")
+		assert.InDelta(t, 0.50, savings.BatterySavings, 0.001, "BatterySavings mismatch")
+		assert.InDelta(t, 0.0, savings.SolarSavings, 0.001, "SolarSavings mismatch")
+	})
 
+	t.Run("Charge Only - No Battery Savings Penalty", func(t *testing.T) {
+		savings := runTest(t, func(m *mockSavingsStorage) {
+			m.prices = []types.Price{
+				{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10}, // H1: $0.10
+			}
+			m.stats = []types.EnergyStats{
+				{
+					TSHourStart:       start, // Charge 10kWh @ $0.10 = $1.00
+					GridImportKWH:     10,
+					BatteryChargedKWH: 10,
+				},
+			}
+		})
+		assert.InDelta(t, 1.00, savings.Cost, 0.001, "Cost mismatch")
+		assert.InDelta(t, 0.0, savings.Credit, 0.001, "Credit mismatch")
+		assert.InDelta(t, 0.0, savings.AvoidedCost, 0.001, "AvoidedCost mismatch")
+		assert.InDelta(t, 0.0, savings.ChargingCost, 0.001, "ChargingCost mismatch")
+		assert.InDelta(t, 0.0, savings.BatterySavings, 0.001, "BatterySavings mismatch")
+		assert.InDelta(t, 0.0, savings.SolarSavings, 0.001, "SolarSavings mismatch")
+	})
+
+	t.Run("Discharge Only (with 24h lookback stack)", func(t *testing.T) {
+		savings := runTest(t, func(m *mockSavingsStorage) {
+			lookbackStart := start.Add(-2 * time.Hour) // Past charge
+			m.prices = []types.Price{
+				{TSStart: lookbackStart, TSEnd: lookbackStart.Add(time.Hour), DollarsPerKWH: 0.05}, // Past charge @ $0.05
+				{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.20},                 // Current discharge @ $0.20
+			}
+			m.stats = []types.EnergyStats{
+				{
+					TSHourStart:       lookbackStart, // Charge 10kWh @ $0.05 in past
+					GridImportKWH:     10,
+					BatteryChargedKWH: 10,
+				},
+				{
+					TSHourStart:      start, // Discharge 10kWh @ $0.20 in current period
+					HomeKWH:          10,
+					BatteryUsedKWH:   10,
+					BatteryToHomeKWH: 10,
+				},
+			}
+		})
+		assert.InDelta(t, 0.0, savings.Cost, 0.001, "Cost mismatch")
+		assert.InDelta(t, 0.0, savings.Credit, 0.001, "Credit mismatch")
+		assert.InDelta(t, 2.00, savings.AvoidedCost, 0.001, "AvoidedCost mismatch")
+		assert.InDelta(t, 0.50, savings.ChargingCost, 0.001, "ChargingCost mismatch")
+		assert.InDelta(t, 1.50, savings.BatterySavings, 0.001, "BatterySavings mismatch")
+		assert.InDelta(t, 0.0, savings.SolarSavings, 0.001, "SolarSavings mismatch")
+	})
+
+	t.Run("LIFO Stack Multiple Charges", func(t *testing.T) {
+		savings := runTest(t, func(m *mockSavingsStorage) {
+			m.prices = []types.Price{
+				{TSStart: start.Add(-2 * time.Hour), TSEnd: start.Add(-1 * time.Hour), DollarsPerKWH: 0.05}, // Past charge 1 @ $0.05
+				{TSStart: start.Add(-1 * time.Hour), TSEnd: start, DollarsPerKWH: 0.10},                     // Past charge 2 @ $0.10
+				{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.20},                          // Current discharge @ $0.20
+			}
+			m.stats = []types.EnergyStats{
+				{
+					TSHourStart:       start.Add(-2 * time.Hour), // Charge 10kWh @ $0.05
+					GridImportKWH:     10,
+					BatteryChargedKWH: 10,
+				},
+				{
+					TSHourStart:       start.Add(-1 * time.Hour), // Charge 10kWh @ $0.10
+					GridImportKWH:     10,
+					BatteryChargedKWH: 10,
+				},
+				{
+					TSHourStart:      start, // Discharge 15kWh @ $0.20
+					HomeKWH:          15,
+					BatteryUsedKWH:   15,
+					BatteryToHomeKWH: 15,
+				},
+			}
+		})
+		assert.InDelta(t, 0.0, savings.Cost, 0.001, "Cost mismatch")
+		assert.InDelta(t, 0.0, savings.Credit, 0.001, "Credit mismatch")
+		assert.InDelta(t, 3.00, savings.AvoidedCost, 0.001, "AvoidedCost mismatch")
+		assert.InDelta(t, 1.25, savings.ChargingCost, 0.001, "ChargingCost mismatch")
+		assert.InDelta(t, 1.75, savings.BatterySavings, 0.001, "BatterySavings mismatch")
+		assert.InDelta(t, 0.0, savings.SolarSavings, 0.001, "SolarSavings mismatch")
+	})
+
+	t.Run("Partial Paused Hour", func(t *testing.T) {
+		savings := runTest(t, func(m *mockSavingsStorage) {
+			m.prices = []types.Price{
+				{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.20}, // H1: $0.20
+			}
+			m.stats = []types.EnergyStats{
+				{
+					TSHourStart:      start, // Discharged 10kWh, but 30 mins were paused
+					HomeKWH:          10,
+					BatteryUsedKWH:   10,
+					BatteryToHomeKWH: 10,
+				},
+			}
+			m.actions = []types.Action{
+				{Timestamp: start.Add(30 * time.Minute), Paused: true}, // Paused half way through
+			}
+		})
+		assert.InDelta(t, 0.0, savings.Cost, 0.001, "Cost mismatch")
+		assert.InDelta(t, 0.0, savings.Credit, 0.001, "Credit mismatch")
+		assert.InDelta(t, 1.00, savings.AvoidedCost, 0.001, "AvoidedCost mismatch")
+		assert.InDelta(t, 0.0, savings.ChargingCost, 0.001, "ChargingCost mismatch")
+		assert.InDelta(t, 1.00, savings.BatterySavings, 0.001, "BatterySavings mismatch")
+		assert.InDelta(t, 0.0, savings.SolarSavings, 0.001, "SolarSavings mismatch")
+	})
+
+	t.Run("Storm Hedge Ignoring", func(t *testing.T) {
+		savings := runTest(t, func(m *mockSavingsStorage) {
+			m.prices = []types.Price{
+				{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10}, // H1: $0.10
+			}
+			m.stats = []types.EnergyStats{
+				{
+					TSHourStart:       start, // Charge 10kWh @ $0.10, but in storm
+					GridImportKWH:     10,
+					BatteryChargedKWH: 10,
+				},
+			}
+			m.actions = []types.Action{
+				{Timestamp: start.Add(-1 * time.Minute), Reason: types.ActionReasonEmergencyMode},
+			}
+		})
+		assert.InDelta(t, 1.00, savings.Cost, 0.001, "Cost mismatch")
+		assert.InDelta(t, 0.0, savings.Credit, 0.001, "Credit mismatch")
+		assert.InDelta(t, 0.0, savings.AvoidedCost, 0.001, "AvoidedCost mismatch")
+		assert.InDelta(t, 0.0, savings.ChargingCost, 0.001, "ChargingCost mismatch")
+		assert.InDelta(t, 0.0, savings.BatterySavings, 0.001, "BatterySavings mismatch")
+		assert.InDelta(t, 0.0, savings.SolarSavings, 0.001, "SolarSavings mismatch")
+	})
+
+	t.Run("Solar Savings", func(t *testing.T) {
+		savings := runTest(t, func(m *mockSavingsStorage) {
+			m.prices = []types.Price{
+				{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10}, // H1: $0.10
+			}
+			m.stats = []types.EnergyStats{
+				{
+					TSHourStart:    start,
+					SolarKWH:       10,
+					SolarToHomeKWH: 10,
+				},
+			}
+		})
+		assert.InDelta(t, 0.0, savings.Cost, 0.001, "Cost mismatch")
+		assert.InDelta(t, 0.0, savings.Credit, 0.001, "Credit mismatch")
+		assert.InDelta(t, 0.0, savings.AvoidedCost, 0.001, "AvoidedCost mismatch")
+		assert.InDelta(t, 0.0, savings.ChargingCost, 0.001, "ChargingCost mismatch")
+		assert.InDelta(t, 0.0, savings.BatterySavings, 0.001, "BatterySavings mismatch")
+		assert.InDelta(t, 1.00, savings.SolarSavings, 0.001, "SolarSavings mismatch")
+	})
+
+	t.Run("Grid Use Fees Included in Import", func(t *testing.T) {
+		savings := runTest(t, func(m *mockSavingsStorage) {
+			m.prices = []types.Price{
+				{
+					TSStart:              start,
+					TSEnd:                start.Add(time.Hour),
+					DollarsPerKWH:        0.10,
+					GridUseDollarsPerKWH: 0.05,
+				}, // Import: 0.15, Export: 0.10
+			}
+			m.stats = []types.EnergyStats{
+				{
+					TSHourStart:   start,
+					GridImportKWH: 10,
+				},
+			}
+		})
+		assert.InDelta(t, 1.50, savings.Cost, 0.001, "Cost mismatch")
+		assert.InDelta(t, 0.0, savings.Credit, 0.001, "Credit mismatch")
+		assert.InDelta(t, 0.0, savings.AvoidedCost, 0.001, "AvoidedCost mismatch")
+		assert.InDelta(t, 0.0, savings.ChargingCost, 0.001, "ChargingCost mismatch")
+		assert.InDelta(t, 0.0, savings.BatterySavings, 0.001, "BatterySavings mismatch")
+		assert.InDelta(t, 0.0, savings.SolarSavings, 0.001, "SolarSavings mismatch")
+	})
+
+	t.Run("Default Export Price (no Grid Use)", func(t *testing.T) {
+		savings := runTest(t, func(m *mockSavingsStorage) {
+			m.prices = []types.Price{
+				{
+					TSStart:              start,
+					TSEnd:                start.Add(time.Hour),
+					DollarsPerKWH:        0.10,
+					GridUseDollarsPerKWH: 0.05,
+				},
+			}
+			m.stats = []types.EnergyStats{
+				{
+					TSHourStart:   start,
+					GridExportKWH: 10,
+				},
+			}
+			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Unset()
+			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+				GridExportSolar: true,
+			}, types.CurrentSettingsVersion, nil)
+		})
+		assert.InDelta(t, 0.0, savings.Cost, 0.001, "Cost mismatch")
+		assert.InDelta(t, 1.00, savings.Credit, 0.001, "Credit mismatch")
+		assert.InDelta(t, 0.0, savings.AvoidedCost, 0.001, "AvoidedCost mismatch")
+		assert.InDelta(t, 0.0, savings.ChargingCost, 0.001, "ChargingCost mismatch")
+		assert.InDelta(t, 0.0, savings.BatterySavings, 0.001, "BatterySavings mismatch")
+		assert.InDelta(t, 0.0, savings.SolarSavings, 0.001, "SolarSavings mismatch")
+	})
+
+	t.Run("Net Metering Credits - Highest", func(t *testing.T) {
+		savings := runTest(t, func(m *mockSavingsStorage) {
+			m.prices = []types.Price{
+				{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.02},                        // H0: 0.12
+				{TSStart: start.Add(time.Hour), TSEnd: start.Add(2 * time.Hour), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.02},     // H1: 0.22
+				{TSStart: start.Add(2 * time.Hour), TSEnd: start.Add(3 * time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.02}, // H2: 0.07
+			}
+			m.stats = []types.EnergyStats{
+				{
+					TSHourStart:   start,
+					GridExportKWH: 10,
+				},
+			}
+			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Unset()
+			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+				GridExportSolar: true,
+				UtilityRateOptions: types.UtilityRateOptions{
+					NetMeteringCredits: true,
+				},
+				SolarNetMeteringCreditsValue: "highest",
+			}, types.CurrentSettingsVersion, nil)
+		})
+		assert.InDelta(t, 0.0, savings.Cost, 0.001, "Cost mismatch")
+		assert.InDelta(t, 2.20, savings.Credit, 0.001, "Credit mismatch")
+		assert.InDelta(t, 0.0, savings.AvoidedCost, 0.001, "AvoidedCost mismatch")
+		assert.InDelta(t, 0.0, savings.ChargingCost, 0.001, "ChargingCost mismatch")
+		assert.InDelta(t, 0.0, savings.BatterySavings, 0.001, "BatterySavings mismatch")
+		assert.InDelta(t, 0.0, savings.SolarSavings, 0.001, "SolarSavings mismatch")
+	})
+
+	t.Run("Net Metering Credits - Lowest", func(t *testing.T) {
+		savings := runTest(t, func(m *mockSavingsStorage) {
+			m.prices = []types.Price{
+				{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.02},                        // H0: 0.12
+				{TSStart: start.Add(time.Hour), TSEnd: start.Add(2 * time.Hour), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.02},     // H1: 0.22
+				{TSStart: start.Add(2 * time.Hour), TSEnd: start.Add(3 * time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.02}, // H2: 0.07
+			}
+			m.stats = []types.EnergyStats{
+				{
+					TSHourStart:   start,
+					GridExportKWH: 10,
+				},
+			}
+			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Unset()
+			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+				GridExportSolar: true,
+				UtilityRateOptions: types.UtilityRateOptions{
+					NetMeteringCredits: true,
+				},
+				SolarNetMeteringCreditsValue: "lowest",
+			}, types.CurrentSettingsVersion, nil)
+		})
+		assert.InDelta(t, 0.0, savings.Cost, 0.001, "Cost mismatch")
+		assert.InDelta(t, 0.70, savings.Credit, 0.001, "Credit mismatch")
+		assert.InDelta(t, 0.0, savings.AvoidedCost, 0.001, "AvoidedCost mismatch")
+		assert.InDelta(t, 0.0, savings.ChargingCost, 0.001, "ChargingCost mismatch")
+		assert.InDelta(t, 0.0, savings.BatterySavings, 0.001, "BatterySavings mismatch")
+		assert.InDelta(t, 0.0, savings.SolarSavings, 0.001, "SolarSavings mismatch")
+	})
+
+	t.Run("Net Metering Credits - None", func(t *testing.T) {
+		savings := runTest(t, func(m *mockSavingsStorage) {
+			m.prices = []types.Price{
+				{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.02}, // H0: 0.12
+			}
+			m.stats = []types.EnergyStats{
+				{
+					TSHourStart:   start,
+					GridExportKWH: 10,
+				},
+			}
+			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Unset()
+			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+				GridExportSolar: true,
+				UtilityRateOptions: types.UtilityRateOptions{
+					NetMeteringCredits: true,
+				},
+				SolarNetMeteringCreditsValue: "none",
+			}, types.CurrentSettingsVersion, nil)
+		})
+		assert.InDelta(t, 0.0, savings.Cost, 0.001, "Cost mismatch")
+		assert.InDelta(t, 0.0, savings.Credit, 0.001, "Credit mismatch") // Should be 0 based on simulation logic
+		assert.InDelta(t, 0.0, savings.AvoidedCost, 0.001, "AvoidedCost mismatch")
+		assert.InDelta(t, 0.0, savings.ChargingCost, 0.001, "ChargingCost mismatch")
+		assert.InDelta(t, 0.0, savings.BatterySavings, 0.001, "BatterySavings mismatch")
+		assert.InDelta(t, 0.0, savings.SolarSavings, 0.001, "SolarSavings mismatch")
+	})
+
+	t.Run("Separate Generation Credit", func(t *testing.T) {
+		savings := runTest(t, func(m *mockSavingsStorage) {
+			m.prices = []types.Price{
+				{
+					TSStart:                       start,
+					TSEnd:                         start.Add(time.Hour),
+					DollarsPerKWH:                 0.10,
+					GridUseDollarsPerKWH:          0.05,
+					SeparateGenerationCredit:      true,
+					GenerationCreditDollarsPerKWH: 0.08,
+				},
+			}
+			m.stats = []types.EnergyStats{
+				{
+					TSHourStart:   start,
+					GridExportKWH: 10,
+				},
+			}
+			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Unset()
+			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+				GridExportSolar: true,
+			}, types.CurrentSettingsVersion, nil)
+		})
+		assert.InDelta(t, 0.0, savings.Cost, 0.001, "Cost mismatch")
+		assert.InDelta(t, 0.80, savings.Credit, 0.001, "Credit mismatch")
+		assert.InDelta(t, 0.0, savings.AvoidedCost, 0.001, "AvoidedCost mismatch")
+		assert.InDelta(t, 0.0, savings.ChargingCost, 0.001, "ChargingCost mismatch")
+		assert.InDelta(t, 0.0, savings.BatterySavings, 0.001, "BatterySavings mismatch")
+		assert.InDelta(t, 0.0, savings.SolarSavings, 0.001, "SolarSavings mismatch")
+	})
+
+	t.Run("Grid Export Solar Disabled", func(t *testing.T) {
+		savings := runTest(t, func(m *mockSavingsStorage) {
+			m.prices = []types.Price{
+				{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10},
+			}
+			m.stats = []types.EnergyStats{
+				{
+					TSHourStart:   start,
+					GridExportKWH: 10,
+				},
+			}
+			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Unset()
+			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+				GridExportSolar: false,
+			}, types.CurrentSettingsVersion, nil)
+		})
+		assert.InDelta(t, 0.0, savings.Cost, 0.001, "Cost mismatch")
+		assert.InDelta(t, 0.0, savings.Credit, 0.001, "Credit mismatch")
+		assert.InDelta(t, 0.0, savings.AvoidedCost, 0.001, "AvoidedCost mismatch")
+		assert.InDelta(t, 0.0, savings.ChargingCost, 0.001, "ChargingCost mismatch")
+		assert.InDelta(t, 0.0, savings.BatterySavings, 0.001, "BatterySavings mismatch")
+		assert.InDelta(t, 0.0, savings.SolarSavings, 0.001, "SolarSavings mismatch")
+	})
+
+	t.Run("Invalid Time Range", func(t *testing.T) {
+		mockStore := &mockSavingsStorage{mockStorage: &mockStorage{}}
+		s := &Server{storage: mockStore, bypassAuth: true}
+
+		req, _ := http.NewRequest("GET", "/api/history/savings?start=invalid&end=invalid", nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
+		rr := httptest.NewRecorder()
+
+		s.handleHistorySavings(rr, req)
+		assert.Equal(t, http.StatusBadRequest, rr.Code)
+	})
+
+	t.Run("Storage Error Propagated", func(t *testing.T) {
+		mockStore := &mockStorage{}
+		mockStore.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{}, types.CurrentSettingsVersion, nil)
+		mockStore.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price(nil), errors.New("db error"))
+
+		mockUtilities := utility.NewMap(mockStore)
+		s := &Server{storage: mockStore, utilities: mockUtilities, bypassAuth: true}
+
+		req, _ := http.NewRequest("GET", "/api/history/savings?start="+start.Format(time.RFC3339)+"&end="+end.Format(time.RFC3339), nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
+		rr := httptest.NewRecorder()
+
+		s.handleHistorySavings(rr, req)
+		assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	})
+}
 func TestHandleHistorySavingsAll(t *testing.T) {
 	mockStore := &mockStorage{}
-	s := &Server{storage: mockStore, bypassAuth: true}
+	mockUtilities := utility.NewMap(mockStore)
+	s := &Server{storage: mockStore, utilities: mockUtilities, bypassAuth: true}
 
 	start := time.Now().Truncate(24 * time.Hour)
 	end := start.Add(24 * time.Hour)
