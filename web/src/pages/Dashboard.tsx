@@ -31,7 +31,7 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
     const [error, setError] = useState<string | null>(null);
 
     const whatsNewVersion = 2;
-    const whatsNewText = "Corrected exported solar pricing and ComEd day-ahead pricing.";
+    const whatsNewText = "Corrected exported solar pricing and improved arbitrage charging logic.";
     const [showWhatsNew, setShowWhatsNew] = useState(false);
 
     useEffect(() => {

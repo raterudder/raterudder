@@ -43,10 +43,13 @@ const (
 	ActionReasonAlwaysChargeBelowThreshold ActionReason = "alwaysChargeBelowThreshold"
 	ActionReasonMissingBattery             ActionReason = "missingBattery"
 	ActionReasonDeficitChargeNow           ActionReason = "deficitCharge"
-	ActionReasonArbitrageChargeNow         ActionReason = "arbitrageCharge"
+	ActionReasonArbitrageChargeExport      ActionReason = "arbitrageChargeExport"
+	ActionReasonArbitrageChargeSave        ActionReason = "arbitrageChargeSave"
 	ActionReasonDischargeBeforeCapacityNow ActionReason = "dischargeBeforeCapacity"
 	ActionReasonDeficitSaveForPeak         ActionReason = "deficitSaveForPeak"
 	ActionReasonArbitrageSave              ActionReason = "dischargeAtPeak"
+	ActionReasonArbitrageHoldExport        ActionReason = "arbitrageHoldExport"
+	ActionReasonArbitrageHoldSave          ActionReason = "arbitrageHoldSave"
 	ActionReasonSufficientBattery          ActionReason = "sufficientBattery"
 	ActionReasonEmergencyMode              ActionReason = "emergencyMode"
 	ActionReasonHasAlarms                  ActionReason = "hasAlarms"
@@ -54,6 +57,11 @@ const (
 	ActionReasonChargeSurvivePeak          ActionReason = "chargeSurvivePeak"
 	ActionReasonPreventSolarCurtailment    ActionReason = "preventSolarCurtailment"
 	ActionReasonBatteryAtReserve           ActionReason = "batteryAtReserve"
+
+	// Deprecated - we don't use these anymore but we don't delete them so we know they were used
+	ActionReasonArbitrageChargeNow ActionReason = "arbitrageCharge"
+	ActionReasonArbitrageHold      ActionReason = "arbitrageHold"
+	ActionReasonDeficitSave        ActionReason = "deficitSave"
 )
 
 // Action represents a control decision made by the system.

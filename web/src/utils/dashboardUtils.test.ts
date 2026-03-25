@@ -110,7 +110,7 @@ describe('dashboardUtils', () => {
         it('appends NoExport suffix for arbitrage', () => {
             const action = {
                 ...baseAction,
-                reason: ActionReason.ArbitrageCharge,
+                reason: ActionReason.ArbitrageChargeSave,
                 solarMode: SolarMode.NoExport,
                 currentPrice: { dollarsPerKWH: -0.05, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
             };

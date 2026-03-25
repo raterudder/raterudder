@@ -147,6 +147,7 @@ func (c *Controller) Decide(
 	var highestExportValue float64
 	var highestExportPrice types.Price
 	var highestExportAt time.Time
+	var highestExportIsExport bool
 	minEnergy := -1.0
 	maxEnergy := -1.0
 
@@ -234,12 +235,14 @@ func (c *Controller) Decide(
 				highestExportValue = slot.GridChargeDollarsPerKWH
 				highestExportAt = slot.TS
 				highestExportPrice = slot.Price
+				highestExportIsExport = false
 			}
 		} else {
 			if slot.SolarOppDollarsPerKWH > highestExportValue {
 				highestExportValue = slot.SolarOppDollarsPerKWH
 				highestExportAt = slot.TS
 				highestExportPrice = slot.Price
+				highestExportIsExport = true
 			}
 		}
 
@@ -366,26 +369,77 @@ func (c *Controller) Decide(
 	// make sure we can actually export something otherwise there's no reason to
 	// arbitrage but we can't check export battery since we don't support that yet
 	// if we're going to hit capacity there's no reason to try and charge now
-	if !shouldCharge && canCharge && plannedChargeTime.IsZero() && settings.GridExportSolar && highestExportValue > 0 && (hitCapacityAt.IsZero() || hitCapacityAt.After(highestExportAt)) {
+	if !shouldCharge && plannedChargeTime.IsZero() && settings.GridExportSolar && highestExportValue > 0 && (hitCapacityAt.IsZero() || hitCapacityAt.After(highestExportAt)) {
 		// if the value we get later minus our cost to charge now is greater than
 		// the minimum arbitrage difference, we should charge now
 		if highestExportValue-gridChargeNowCost > settings.MinArbitrageDifferenceDollarsPerKWH {
-			shouldCharge = true
-			chargeDescription = fmt.Sprintf(
-				"Arbitrage Opportunity at %s. Buy@%.3f -> Sell/Save@%.3f.",
-				highestExportAt.Format(time.Kitchen),
-				gridChargeNowCost,
-				highestExportValue,
-			)
-			chargeActionReason = types.ActionReasonArbitrageChargeNow
-			futurePrice = &highestExportPrice
-			log.Ctx(ctx).DebugContext(
-				ctx,
-				"arbitrage opportunity found",
-				slog.Float64("buyAt", gridChargeNowCost),
-				slog.Float64("sellAt", highestExportValue),
-				slog.Float64("diff", highestExportValue-gridChargeNowCost),
-			)
+			var chargeDescTemplate string
+			var holdReason types.ActionReason
+			if highestExportIsExport {
+				chargeDescTemplate = "Arbitrage Opportunity (Export) at %s. Buy@%.3f -> Sell/Save@%.3f."
+				chargeActionReason = types.ActionReasonArbitrageChargeExport
+				holdReason = types.ActionReasonArbitrageHoldExport
+			} else {
+				chargeDescTemplate = "Arbitrage Opportunity (Save) at %s. Buy@%.3f -> Save@%.3f."
+				chargeActionReason = types.ActionReasonArbitrageChargeSave
+				holdReason = types.ActionReasonArbitrageHoldSave
+			}
+
+			if canCharge {
+				shouldCharge = true
+				chargeDescription = fmt.Sprintf(
+					chargeDescTemplate,
+					highestExportAt.Format(time.Kitchen),
+					gridChargeNowCost,
+					highestExportValue,
+				)
+				futurePrice = &highestExportPrice
+				log.Ctx(ctx).DebugContext(
+					ctx,
+					"arbitrage opportunity found",
+					slog.Float64("buyAt", gridChargeNowCost),
+					slog.Float64("sellAt", highestExportValue),
+					slog.Float64("diff", highestExportValue-gridChargeNowCost),
+				)
+			} else if currentStatus.BatteryAboveMinSOC || currentStatus.ElevatedMinBatterySOC {
+				var holdState string
+				if currentStatus.BatterySOC >= 98.0 {
+					holdState = "Battery full"
+				} else if !settings.GridChargeBatteries {
+					holdState = "Grid charging disabled"
+				} else if currentStatus.BatteryChargingDisabled {
+					holdState = "Charging disabled"
+				} else {
+					holdState = "Unable to charge"
+				}
+
+				holdType := "Save"
+				if highestExportIsExport {
+					holdType = "Export"
+				}
+
+				holdDescription := fmt.Sprintf(
+					"Arbitrage Opportunity (%s) at %s. %s. Hold energy.",
+					holdType,
+					highestExportAt.Format(time.Kitchen),
+					holdState,
+				)
+				log.Ctx(ctx).DebugContext(
+					ctx,
+					"arbitrage opportunity found but cannot charge, holding",
+					slog.Float64("buyAt", gridChargeNowCost),
+					slog.Float64("sellAt", highestExportValue),
+					slog.Float64("diff", highestExportValue-gridChargeNowCost),
+				)
+				return decision(
+					types.BatteryModeStandby,
+					holdReason,
+					holdDescription,
+					&highestExportPrice,
+					hitDeficitAt,
+					hitCapacityAt,
+				), nil
+			}
 		}
 	}
 

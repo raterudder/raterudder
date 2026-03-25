@@ -314,7 +314,7 @@ func TestDecide(t *testing.T) {
 		// Instead, it should trigger Arbitrage Charge (Rule 3)
 		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
 		assert.NotEqual(t, types.ActionReasonBatteryAtReserve, decision.Action.Reason)
-		assert.Equal(t, types.ActionReasonArbitrageChargeNow, decision.Action.Reason)
+		assert.Equal(t, types.ActionReasonArbitrageChargeSave, decision.Action.Reason)
 	})
 
 	t.Run("Deficit detected -> Charge Now (Absolute Cheapest Is Now)", func(t *testing.T) {
@@ -475,9 +475,38 @@ func TestDecide(t *testing.T) {
 
 		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
 		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.TargetBatteryMode)
-		assert.Equal(t, types.ActionReasonArbitrageChargeNow, decision.Action.Reason)
+		assert.Equal(t, types.ActionReasonArbitrageChargeExport, decision.Action.Reason)
 		assert.Equal(t, 0.50, decision.Action.FuturePrice.DollarsPerKWH, "FuturePrice should be the peak future price")
 		assert.Equal(t, baseStatus.BatterySOC, decision.Action.SystemStatus.BatterySOC)
+	})
+
+	t.Run("Arbitrage Hold (Battery Full) -> Standby", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
+		futurePrices := []types.Price{}
+		for i := 1; i <= 24; i++ {
+			price := 0.10
+			if i == 2 {
+				price = 0.50
+			}
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
+			})
+		}
+
+		fullStatus := baseStatus
+		fullStatus.BatterySOC = 99.0
+
+		decision, err := c.Decide(ctx, fullStatus, currentPrice, futurePrices, noLoadHistory, baseSettings)
+		require.NoError(t, err)
+
+		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
+		assert.Equal(t, types.BatteryModeStandby, decision.Action.TargetBatteryMode)
+		assert.Equal(t, types.ActionReasonArbitrageHoldExport, decision.Action.Reason)
+		if assert.NotNil(t, decision.Action.FuturePrice) {
+			assert.Equal(t, 0.50, decision.Action.FuturePrice.DollarsPerKWH, "FuturePrice should be the peak future price")
+		}
 	})
 
 	t.Run("Arbitrage Constraint -> Standby", func(t *testing.T) {
@@ -531,14 +560,15 @@ func TestDecide(t *testing.T) {
 		noGridChargeSettings.GridChargeBatteries = false
 
 		status := baseStatus
-		status.BatteryKW = 1.0 // Force discharge
+		// SOC is sufficient but we can't charge from grid.
+		// There's an arbitrage opportunity (Save) because we have home load.
 
-		// Use History (Load) to trigger deficit logic
 		decision, err := c.Decide(ctx, status, currentPrice, futurePrices, history, noGridChargeSettings)
 		require.NoError(t, err)
 
-		// Deficit + High Future Price -> Standby
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonArbitrageHoldSave, decision.Action.Reason)
+		assert.Contains(t, decision.Action.Description, "Grid charging disabled")
 	})
 
 	t.Run("Battery Charging Disabled -> Standby", func(t *testing.T) {
@@ -558,14 +588,13 @@ func TestDecide(t *testing.T) {
 
 		status := baseStatus
 		status.BatteryChargingDisabled = true
-		status.BatteryKW = 1.0 // Force discharge
 
-		// Use History (Load) to trigger deficit logic. Normally it would charge to arbitrage, but is disabled
 		decision, err := c.Decide(ctx, status, currentPrice, futurePrices, history, baseSettings)
 		require.NoError(t, err)
 
-		// Deficit + High Future Price -> Standby
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonArbitrageHoldSave, decision.Action.Reason)
+		assert.Contains(t, decision.Action.Description, "Charging disabled")
 	})
 
 	t.Run("Zero Capacity -> Standby", func(t *testing.T) {
@@ -656,6 +685,7 @@ func TestDecide(t *testing.T) {
 		// Use No Grid Charge settings to test Standby/Load logic without charging triggers
 		noGridSettings := baseSettings
 		noGridSettings.GridChargeBatteries = false
+		noGridSettings.MinArbitrageDifferenceDollarsPerKWH = 2.0
 
 		usingBatteryStatus := baseStatus
 		usingBatteryStatus.BatteryKW = 1.0
@@ -1169,35 +1199,6 @@ func TestDecide(t *testing.T) {
 
 			assert.Equal(t, types.BatteryModeLoad, decision.Action.TargetBatteryMode, "Should prefer Load during peak even with Net Metering to conservatively avoid peak grid pulls.")
 		})
-	})
-
-	t.Run("Arbitrage Opportunity -> No Charge If Full", func(t *testing.T) {
-		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
-		futurePrices := []types.Price{}
-		for i := 1; i <= 24; i++ {
-			price := 0.10
-			if i == 2 {
-				price = 0.50
-			}
-			futurePrices = append(futurePrices, types.Price{
-				TSStart:       now.Add(time.Duration(i) * time.Hour),
-				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
-				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
-			})
-		}
-
-		// Battery is 99% full, not enough room for 10 minutes (1/6 hour) of 5kW charge (0.833 kWh).
-		// 99% of 10kWh = 9.9kWh. Room = 0.1kWh. Needed = 0.833kWh.
-		fullStatus := baseStatus
-		fullStatus.BatterySOC = 99.0
-
-		decision, err := c.Decide(ctx, fullStatus, currentPrice, futurePrices, noLoadHistory, baseSettings)
-		require.NoError(t, err)
-
-		// It should NOT charge for arbitrage because no room
-		assert.NotEqual(t, types.ActionReasonArbitrageChargeNow, decision.Action.Reason)
-		// Should default to Load (Sufficient Battery)
-		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
 	})
 
 	t.Run("Deficit Charge Now -> No Charge If Full", func(t *testing.T) {

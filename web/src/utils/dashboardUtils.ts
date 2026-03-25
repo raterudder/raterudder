@@ -101,7 +101,17 @@ export const getReasonText = (action: Action): string => {
             if (delta !== null) parts.push(`Estimated savings: ${formatPrice(delta)}/kWh.`);
             return parts.concat(suffixParts).join(' ');
         }
-        case ActionReason.ArbitrageCharge: {
+        case ActionReason.ArbitrageChargeExport: {
+            const delta = nowCost !== null && futureCost !== null ? futureCost - nowCost : null;
+            const parts = [
+                `Forecast shows higher prices later${futureCostStr ? ` (${futureCostStr})` : ''} compared to right now (${nowCostStr}).`,
+                `Charging the battery cheaply now so we can export solar to the grid later.`,
+            ];
+            if (delta !== null) parts.push(`Estimated savings: ${formatPrice(delta)}/kWh.`);
+            return parts.concat(suffixParts).join(' ');
+        }
+        case ActionReason.ArbitrageCharge:
+        case ActionReason.ArbitrageChargeSave: {
             const delta = nowCost !== null && futureCost !== null ? futureCost - nowCost : null;
             const parts = [
                 `Forecast shows higher prices later${futureCostStr ? ` (${futureCostStr})` : ''} compared to right now (${nowCostStr}).`,
@@ -176,6 +186,21 @@ export const getReasonText = (action: Action): string => {
         case ActionReason.BatteryAtReserve: {
             const parts = [
                 'Battery is at reserve. Using remaining energy.',
+            ];
+            return parts.concat(suffixParts).join(' ');
+        }
+        case ActionReason.ArbitrageHoldExport: {
+            const parts = [
+                `An arbitrage opportunity window is coming up${futureCostStr ? ` (${futureCostStr})` : ''} which is higher than now (${nowCostStr}).`,
+                `Holding the stored energy in reserve so we can export maximum solar to the grid later.`,
+            ];
+            return parts.concat(suffixParts).join(' ');
+        }
+        case ActionReason.ArbitrageHold:
+        case ActionReason.ArbitrageHoldSave: {
+            const parts = [
+                `An arbitrage opportunity window is coming up${futureCostStr ? ` (${futureCostStr})` : ''} which is higher than now (${nowCostStr}).`,
+                `Holding the stored energy in reserve to avoid drawing from the grid during the peak window.`,
             ];
             return parts.concat(suffixParts).join(' ');
         }

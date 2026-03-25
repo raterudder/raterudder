@@ -22,7 +22,8 @@ export const ActionReason = {
     AlwaysChargeBelowThreshold: 'alwaysChargeBelowThreshold',
     MissingBattery: 'missingBattery',
     DeficitCharge: 'deficitCharge',
-    ArbitrageCharge: 'arbitrageCharge',
+    ArbitrageChargeExport: 'arbitrageChargeExport',
+    ArbitrageChargeSave: 'arbitrageChargeSave',
     DischargeBeforeCapacity: 'dischargeBeforeCapacity',
     DeficitSaveForPeak: 'deficitSaveForPeak',
     ArbitrageSave: 'dischargeAtPeak',
@@ -33,8 +34,12 @@ export const ActionReason = {
     ChargeSurvivePeak: 'chargeSurvivePeak',
     PreventSolarCurtailment: 'preventSolarCurtailment',
     BatteryAtReserve: 'batteryAtReserve',
-    // deprecated
+    ArbitrageHoldExport: 'arbitrageHoldExport',
+    ArbitrageHoldSave: 'arbitrageHoldSave',
+    // deprecated - but we don't delete them because old actions still have them
     DeficitSave: 'deficitSave',
+    ArbitrageCharge: 'arbitrageCharge',
+    ArbitrageHold: 'arbitrageHold',
 } as const;
 
 export type ActionReason = typeof ActionReason[keyof typeof ActionReason];
