@@ -668,6 +668,99 @@ func TestHandleUpdateSites(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "skipped: no ESS configured", results["site-no-ess"])
 	})
+
+	t.Run("Through Auth Middleware", func(t *testing.T) {
+		oidcSrv, priv := setupOIDCTest(t)
+		defer oidcSrv.Close()
+		provider, err := oidc.NewProvider(context.Background(), oidcSrv.URL)
+		require.NoError(t, err)
+
+		updateEmail := "updater@example.com"
+		token := generateTestToken(t, oidcSrv.URL, priv, updateEmail, "updater")
+
+		mockS := &mockStorage{}
+		mockS.On("ListSites", mock.Anything).Return([]types.Site{{ID: "site1"}}, nil)
+		mockS.On("GetSettings", mock.Anything, "site1").Return(types.Settings{
+			Release:         "production",
+			ESS:             "mock",
+			UtilityProvider: "test",
+		}, types.CurrentSettingsVersion, nil)
+
+		// Other storage calls
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+		mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+		mockS.On("InsertAction", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 80}, nil)
+		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+		mockP := ess.NewMap()
+		mockP.SetSystem("site1", mockES)
+
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.15, TSStart: time.Now()}, nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{{DollarsPerKWH: 0.15, TSStart: time.Now().Add(time.Hour)}}, nil)
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider("site1", mockU)
+
+		srv := &Server{
+			storage:             mockS,
+			utilities:           mockUMap,
+			ess:                 mockP,
+			controller:          controller.NewController(),
+			release:             "production",
+			updateSpecificEmail: updateEmail,
+			oidcVerifiers: map[string]tokenVerifier{
+				"google_update_specific": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
+			},
+			oidcAudiences: map[string]string{
+				"google_update_specific": "test-audience",
+			},
+		}
+
+		t.Run("Valid Token", func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/api/updateSites", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			w := httptest.NewRecorder()
+
+			handler := srv.authMiddleware(http.HandlerFunc(srv.handleUpdateSites))
+			handler.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+		})
+
+		t.Run("Mismatch Token", func(t *testing.T) {
+			badToken := generateTestToken(t, oidcSrv.URL, priv, "wrong@example.com", "wrong")
+			req := httptest.NewRequest("POST", "/api/updateSites", nil)
+			req.Header.Set("Authorization", "Bearer "+badToken)
+			w := httptest.NewRecorder()
+
+			handler := srv.authMiddleware(http.HandlerFunc(srv.handleUpdateSites))
+			handler.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusUnauthorized, w.Code)
+		})
+
+		t.Run("Missing Token", func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/api/updateSites", nil)
+			w := httptest.NewRecorder()
+
+			handler := srv.authMiddleware(http.HandlerFunc(srv.handleUpdateSites))
+			handler.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusUnauthorized, w.Code)
+		})
+	})
 }
 
 // Helpers for Recording Mocks

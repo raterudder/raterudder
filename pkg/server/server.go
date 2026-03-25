@@ -38,10 +38,11 @@ const (
 type contextKey string
 
 const (
-	siteIDContextKey         contextKey = "siteID"
-	allUserSitesContextKey   contextKey = "allUserSites"
-	userContextKey           contextKey = "user"
-	userToRegisterContextKey contextKey = "userToRegister"
+	siteIDContextKey             contextKey = "siteID"
+	allUserSitesContextKey       contextKey = "allUserSites"
+	userContextKey               contextKey = "user"
+	userToRegisterContextKey     contextKey = "userToRegister"
+	updateSpecificAuthContextKey contextKey = "updateSpecificAuth"
 )
 
 // tokenVerifier is a function that validates a Google or Apple ID Token.
@@ -104,7 +105,7 @@ func Configured(u *utility.Map, e *ess.Map, s storage.Database) *Server {
 
 	listenAddr := lflag.String("http-listen", ":"+port, "HTTP server listen address")
 	devProxy := lflag.String("dev-proxy", "", "Address of the dev server (e.g. http://localhost:5173)")
-	updateSpecificEmail := lflag.String("update-specific-email", "", "email to validate for /api/update")
+	updateSpecificEmail := lflag.String("update-specific-email", "", "email to validate for /api/update and /api/updateSites")
 	adminEmails := lflag.String("admin-emails", "", "comma-delimited list of email addresses allowed to update settings via IAP")
 	oidcAudience := lflag.String("oidc-audience", "", "token to use for id tokens audience to validate")
 	oidcAudiences := map[string]string{}
@@ -283,6 +284,13 @@ func (s *Server) getUser(r *http.Request) types.User {
 		return user
 	}
 	return types.User{}
+}
+
+func (s *Server) getUpdateSpecificAuth(r *http.Request) bool {
+	if auth, ok := r.Context().Value(updateSpecificAuthContextKey).(bool); ok {
+		return auth
+	}
+	return false
 }
 
 // Run starts the HTTP server and blocks until the context is canceled or an error occurs.

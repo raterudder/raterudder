@@ -277,8 +277,8 @@ func TestHandleHistorySavings(t *testing.T) {
 			name: "Net Metering Credits - Highest",
 			setupMock: func(m *mockSavingsStorage) {
 				m.prices = []types.Price{
-					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.02},                    // H0: 0.12
-					{TSStart: start.Add(time.Hour), TSEnd: start.Add(2 * time.Hour), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.02}, // H1: 0.22
+					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.02},                        // H0: 0.12
+					{TSStart: start.Add(time.Hour), TSEnd: start.Add(2 * time.Hour), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.02},     // H1: 0.22
 					{TSStart: start.Add(2 * time.Hour), TSEnd: start.Add(3 * time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.02}, // H2: 0.07
 				}
 				m.stats = []types.EnergyStats{
@@ -302,8 +302,8 @@ func TestHandleHistorySavings(t *testing.T) {
 			name: "Net Metering Credits - Lowest",
 			setupMock: func(m *mockSavingsStorage) {
 				m.prices = []types.Price{
-					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.02},                    // H0: 0.12
-					{TSStart: start.Add(time.Hour), TSEnd: start.Add(2 * time.Hour), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.02}, // H1: 0.22
+					{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.02},                        // H0: 0.12
+					{TSStart: start.Add(time.Hour), TSEnd: start.Add(2 * time.Hour), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.02},     // H1: 0.22
 					{TSStart: start.Add(2 * time.Hour), TSEnd: start.Add(3 * time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.02}, // H2: 0.07
 				}
 				m.stats = []types.EnergyStats{

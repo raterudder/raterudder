@@ -65,6 +65,16 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	if s.updateSpecificEmail != "" {
+		if !s.getUpdateSpecificAuth(r) {
+			writeJSONError(w, "update-specific authentication required", http.StatusUnauthorized)
+			return
+		}
+	} else if !s.bypassAuth {
+		writeJSONError(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+
 	sites, err := s.storage.ListSites(ctx)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to list sites", slog.Any("error", err))

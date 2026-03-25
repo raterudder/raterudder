@@ -114,7 +114,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			var authSuccess bool
 
 			// Check /api/update specific auth
-			if isUpdatePath {
+			if isUpdatePath && s.updateSpecificEmail != "" {
 				authHeader := r.Header.Get("Authorization")
 				if authHeader != "" {
 					if !strings.HasPrefix(authHeader, "Bearer ") {
@@ -134,16 +134,15 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 						email = emailRet
 						userID = subjectRet
 
-						// Hash both values before comparison to ensure ConstantTimeCompare
-						// doesn't exit early on length mismatch, preventing length leakage
 						emailHash := sha256.Sum256([]byte(email))
 						updateSpecificEmailHash := sha256.Sum256([]byte(s.updateSpecificEmail))
-						if s.updateSpecificEmail != "" && subtle.ConstantTimeCompare(emailHash[:], updateSpecificEmailHash[:]) == 1 {
+						if subtle.ConstantTimeCompare(emailHash[:], updateSpecificEmailHash[:]) == 1 {
 							authSuccess = true
 							authViaUpdateSpecific = true
 						} else {
 							log.Ctx(ctx).WarnContext(ctx, "update email mismatch", slog.String("got", email), slog.String("want", s.updateSpecificEmail))
-							email = "" // invalid
+							writeJSONError(w, "unauthorized update specific email", http.StatusUnauthorized)
+							return
 						}
 					}
 				}
@@ -270,6 +269,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 		ctx = context.WithValue(ctx, allUserSitesContextKey, user.Sites)
 		ctx = context.WithValue(ctx, siteIDContextKey, siteID)
+		ctx = context.WithValue(ctx, updateSpecificAuthContextKey, authViaUpdateSpecific)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

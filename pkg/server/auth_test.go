@@ -110,6 +110,9 @@ func TestAuthMiddleware(t *testing.T) {
 				w.Header().Set("X-Admin", "false")
 			}
 		}
+		if server.getUpdateSpecificAuth(r) {
+			w.Header().Set("X-Update-Specific", "true")
+		}
 		userReg, ok := r.Context().Value(userToRegisterContextKey).(types.User)
 		if ok {
 			w.Header().Set("X-Register-Email", userReg.Email)
@@ -367,15 +370,27 @@ func TestAuthMiddleware(t *testing.T) {
 		server.singleSite = false
 		server.updateSpecificEmail = "updater@example.com"
 
-		w := httptest.NewRecorder()
-		req := createReq("POST", "/api/update", map[string]string{"siteID": "site1"}, nil)
-		req.Header.Set("Authorization", "Bearer "+updaterToken)
+		t.Run("Valid Email", func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req := createReq("POST", "/api/update", map[string]string{"siteID": "site1"}, nil)
+			req.Header.Set("Authorization", "Bearer "+updaterToken)
 
-		// Update specific should NOT call GetUser or GetSite since it's bypassed
-		server.authMiddleware(testHandler).ServeHTTP(w, req)
+			server.authMiddleware(testHandler).ServeHTTP(w, req)
 
-		assert.Empty(t, w.Header().Get("X-Email"))
-		assert.Empty(t, w.Header().Get("X-Admin"))
+			assert.Equal(t, http.StatusOK, w.Code)
+			assert.Equal(t, "true", w.Header().Get("X-Update-Specific"))
+		})
+
+		t.Run("Mismatch Email", func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req := createReq("POST", "/api/update", map[string]string{"siteID": "site1"}, nil)
+			req.Header.Set("Authorization", "Bearer "+validToken) // validToken is for user@example.com
+
+			server.authMiddleware(testHandler).ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusUnauthorized, w.Code)
+		})
+
 		assert.True(t, mocks.AssertExpectations(t))
 	})
 
