@@ -39,6 +39,17 @@ describe('Header Component', () => {
         expect(screen.getByText('Settings')).toBeInTheDocument();
     });
 
+    it('shows active styling and aria-current for the current route', () => {
+        renderHeader('/dashboard', true);
+        const dashboardLink = screen.getByText('Dashboard');
+        expect(dashboardLink).toHaveClass('active');
+        expect(dashboardLink).toHaveAttribute('aria-current', 'page');
+
+        const forecastLink = screen.getByText('Forecast');
+        expect(forecastLink).not.toHaveClass('active');
+        expect(forecastLink).not.toHaveAttribute('aria-current');
+    });
+
     it('calls onLogout when logout button is clicked', () => {
         renderHeader('/dashboard', true);
         fireEvent.click(screen.getByText('Log Out'));

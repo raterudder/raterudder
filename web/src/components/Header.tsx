@@ -1,5 +1,5 @@
 import React from 'react';
-import { Link } from 'wouter';
+import { Link, useLocation } from 'wouter';
 import { Select } from '@base-ui/react/select';
 import './Header.css';
 import type { UserSite } from '../api';
@@ -14,6 +14,7 @@ interface HeaderProps {
 
 const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSiteChange, onLogout }) => {
     const [isMenuOpen, setIsMenuOpen] = React.useState(false);
+    const [location] = useLocation();
 
     const toggleMenu = () => {
         setIsMenuOpen(!isMenuOpen);
@@ -78,11 +79,11 @@ const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSite
                     <nav className="header-nav">
                         {loggedIn ? (
                             <>
-                                <Link to="/dashboard" className="nav-link" onClick={() => setIsMenuOpen(false)}>Dashboard</Link>
+                                <Link to="/dashboard" className={`nav-link ${location === '/dashboard' ? 'active' : ''}`} aria-current={location === '/dashboard' ? 'page' : undefined} onClick={() => setIsMenuOpen(false)}>Dashboard</Link>
                                 {selectedSiteID !== 'ALL' && (
                                     <>
-                                        <Link to="/forecast" className="nav-link" onClick={() => setIsMenuOpen(false)}>Forecast</Link>
-                                        <Link to="/settings" className="nav-link" onClick={() => setIsMenuOpen(false)}>Settings</Link>
+                                        <Link to="/forecast" className={`nav-link ${location === '/forecast' ? 'active' : ''}`} aria-current={location === '/forecast' ? 'page' : undefined} onClick={() => setIsMenuOpen(false)}>Forecast</Link>
+                                        <Link to="/settings" className={`nav-link ${location === '/settings' ? 'active' : ''}`} aria-current={location === '/settings' ? 'page' : undefined} onClick={() => setIsMenuOpen(false)}>Settings</Link>
                                     </>
                                 )}
                             </>
