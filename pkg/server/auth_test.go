@@ -457,9 +457,7 @@ func TestAuthMiddleware(t *testing.T) {
 		req := createReq("POST", "/api/join", map[string]string{"inviteCode": "abc", "joinSiteID": "site1"}, cookie)
 
 		// Mock GetUser returning a generic error
-		mocks.On("GetUser", mock.MatchedBy(func(ctx context.Context) bool {
-			return ctx != nil
-		}), "user@example.com").Return(types.User{}, assert.AnError).Once()
+		mocks.On("GetUser", mock.Anything, "user@example.com").Return(types.User{}, assert.AnError).Once()
 
 		server.authMiddleware(testHandler).ServeHTTP(w, req)
 
