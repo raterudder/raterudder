@@ -448,6 +448,28 @@ func TestAuthMiddleware(t *testing.T) {
 		assert.True(t, mocks.AssertExpectations(t))
 	})
 
+	t.Run("Multi Site Mode - User Lookup Fails", func(t *testing.T) {
+		mocks := new(mockStorage)
+		server.storage = mocks
+		server.singleSite = false
+		w := httptest.NewRecorder()
+		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
+		req := createReq("POST", "/api/join", map[string]string{"inviteCode": "abc", "joinSiteID": "site1"}, cookie)
+
+		// Mock GetUser returning a generic error
+		mocks.On("GetUser", mock.MatchedBy(func(ctx context.Context) bool {
+			return ctx != nil
+		}), "user@example.com").Return(types.User{}, assert.AnError).Once()
+
+		server.authMiddleware(testHandler).ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusForbidden, w.Code)
+		// Should NOT have user header because userContextKey wasn't set
+		assert.Empty(t, w.Header().Get("X-Email"))
+		assert.Empty(t, w.Header().Get("X-Admin"))
+		assert.True(t, mocks.AssertExpectations(t))
+	})
+
 	t.Run("Multi Site Mode - Auth Status with Unregistered User", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
