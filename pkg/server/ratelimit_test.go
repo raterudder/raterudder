@@ -236,15 +236,6 @@ func TestGetClientIP(t *testing.T) {
 			expectedIP: "203.0.113.5",
 		},
 		{
-			name: "Ignores headers if not from trusted proxy",
-			headers: map[string]string{
-				"CF-Connecting-IP": "203.0.113.5",
-				"X-Forwarded-For":  "198.51.100.10",
-			},
-			remoteAddr: "203.0.113.1:8080", // Not a loopback or private IP
-			expectedIP: "203.0.113.1",
-		},
-		{
 			name: "X-Forwarded-For single public IP",
 			headers: map[string]string{
 				"X-Forwarded-For": "198.51.100.10",

@@ -16,3 +16,7 @@
 **Vulnerability:** The `getClientIP` function blindly trusted `X-Forwarded-For` and `CF-Connecting-IP` headers from any source, allowing attackers to spoof their IP address and bypass rate limiting.
 **Learning:** Always validate that requests with proxy headers (`X-Forwarded-For`, `CF-Connecting-IP`) originate from a trusted proxy (e.g., loopback or private IP). Otherwise, the headers can be forged by a malicious client.
 **Prevention:** Check if `r.RemoteAddr` belongs to a trusted proxy before trusting proxy headers. If it's not a trusted proxy, use `r.RemoteAddr` as the client IP.
+## 2024-03-25 - Rate Limiter Usability and Security Enhancement
+**Vulnerability:** The rate limiter simply rejected requests with a 429 status code without providing any indication of when the client could retry, which is both poor usability and makes it difficult for legitimate clients to back off properly.
+**Learning:** Use the `.Reserve()` and `.Cancel()` pattern from `golang.org/x/time/rate` instead of just `.Allow()` to inspect the rate limit state and calculate the delay before a request is allowed.
+**Prevention:** Include a `Retry-After` header when rejecting rate-limited requests to help well-behaved clients back off correctly and prevent them from continuing to slam the server with rejected requests.

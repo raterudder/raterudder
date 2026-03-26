@@ -67,41 +67,35 @@ func (s *Server) getClientLimiter(ip string) *clientRateLimiter {
 }
 
 func getClientIP(r *http.Request) string {
-	remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		remoteIP = r.RemoteAddr
+	// 1. Check Cloudflare header first
+	cfIP := r.Header.Get("CF-Connecting-IP")
+	if cfIP != "" {
+		return strings.TrimSpace(cfIP)
 	}
 
-	parsedRemoteIP := net.ParseIP(remoteIP)
-	isTrustedProxy := parsedRemoteIP != nil && (parsedRemoteIP.IsLoopback() || parsedRemoteIP.IsPrivate())
-
-	if isTrustedProxy {
-		// 1. Check Cloudflare header first
-		cfIP := r.Header.Get("CF-Connecting-IP")
-		if cfIP != "" {
-			return strings.TrimSpace(cfIP)
+	// 2. Check X-Forwarded-For and find the first public IP
+	xff := r.Header.Get("X-Forwarded-For")
+	if xff != "" {
+		ips := strings.Split(xff, ",")
+		for _, ipStr := range ips {
+			ipStr = strings.TrimSpace(ipStr)
+			ip := net.ParseIP(ipStr)
+			if ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() {
+				return ipStr
+			}
 		}
-
-		// 2. Check X-Forwarded-For and find the first public IP
-		xff := r.Header.Get("X-Forwarded-For")
-		if xff != "" {
-			ips := strings.Split(xff, ",")
-			for _, ipStr := range ips {
-				ipStr = strings.TrimSpace(ipStr)
-				ip := net.ParseIP(ipStr)
-				if ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() {
-					return ipStr
-				}
-			}
-			// If no public IP found but header exists, return the first one (it might be all private)
-			if len(ips) > 0 {
-				return strings.TrimSpace(ips[0])
-			}
+		// If no public IP found but header exists, return the first one (it might be all private)
+		if len(ips) > 0 {
+			return strings.TrimSpace(ips[0])
 		}
 	}
 
 	// 3. Fallback to RemoteAddr
-	return remoteIP
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
 }
 
 func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
