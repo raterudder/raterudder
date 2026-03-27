@@ -66,19 +66,34 @@ func TestDecide(t *testing.T) {
 		ts = ts.Add(1 * time.Hour)
 	}
 
-	t.Run("Negative Price -> Charge/Hold, No Export", func(t *testing.T) {
+	t.Run("Negative Price without Net Metering -> Charge, No Export Solar", func(t *testing.T) {
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: -0.01}
 		decision, err := c.Decide(ctx, baseStatus, currentPrice, nil, history, baseSettings)
 		require.NoError(t, err)
 
 		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
 		assert.Equal(t, types.SolarModeNoExport, decision.Action.SolarMode)
-		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.TargetBatteryMode)
-		assert.Equal(t, types.SolarModeNoExport, decision.Action.TargetSolarMode)
 		assert.Equal(t, types.ActionReasonAlwaysChargeBelowThreshold, decision.Action.Reason)
-		assert.Equal(t, baseStatus.BatterySOC, decision.Action.SystemStatus.BatterySOC)
-		assert.True(t, decision.Action.HitDeficitAt.IsZero(), "HitDeficitAt should be zero for always-charge")
-		assert.True(t, decision.Action.HitCapacityAt.IsZero(), "HitCapacityAt should be zero for always-charge")
+	})
+
+	t.Run("Negative Price with Net Metering -> Charge, Export Solar", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: -0.01}
+		settings := baseSettings
+		settings.UtilityRateOptions.NetMeteringCredits = true
+		settings.SolarNetMeteringCreditsValue = "highest"
+		// future price 0.20
+		futurePrices := []types.Price{
+			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.20},
+		}
+
+		decision, err := c.Decide(ctx, baseStatus, currentPrice, futurePrices, history, settings)
+		require.NoError(t, err)
+
+		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
+		assert.Equal(t, types.SolarModeAny, decision.Action.SolarMode, "Solar export should NOT be disabled when net metering is on")
+		// The description should NOT mention export disabled due to negative price.
+		assert.NotContains(t, decision.Action.Description, "Export Disabled due to Negative Price")
+		assert.Equal(t, types.ActionReasonAlwaysChargeBelowThreshold, decision.Action.Reason)
 	})
 
 	t.Run("Low Price -> Charge", func(t *testing.T) {

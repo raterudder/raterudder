@@ -273,7 +273,7 @@ func (c *Controller) SimulateState(
 			HitDeficitAt:            simDeficitAt,
 			Price:                   price,
 		})
-		simTime = simTime.Add(1 * time.Hour)
+		simTime = simTime.Add(1 * time.Hour).Truncate(time.Hour)
 	}
 
 	return simData

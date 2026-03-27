@@ -54,10 +54,20 @@ func (c *Controller) Decide(
 		solarMode = types.SolarModeNoExport
 	}
 
-	// Rule 1: If the price is negative, then don't export anything to the grid.
-	if currentPrice.DollarsPerKWH < 0 {
+	simData := c.SimulateState(ctx, now, currentStatus, currentPrice, futurePrices, history, settings)
+
+	if len(simData) > 0 && simData[0].TS.After(now) {
+		log.Ctx(ctx).WarnContext(ctx, "simulation started in the future", slog.Time("simTime", simData[0].TS))
+	}
+
+	// Rule 1: If the solar export value is negative, then don't export solar to the grid.
+	// This ensures that net-metering users (with positive solar opportunity values)
+	// continue to export solar even if the spot price is negative.
+	if len(simData) > 0 && !simData[0].TS.After(now) && simData[0].SolarOppDollarsPerKWH < 0 {
 		solarMode = types.SolarModeNoExport
-		log.Ctx(ctx).DebugContext(ctx, "price is negative, disabling solar export", slog.Float64("price", currentPrice.DollarsPerKWH))
+		log.Ctx(ctx).DebugContext(ctx, "solar export value is negative, disabling solar export",
+			slog.Float64("price", currentPrice.DollarsPerKWH),
+			slog.Float64("solarOppValue", simData[0].SolarOppDollarsPerKWH))
 		// We do NOT return here. We fall through to allow charging logic to trigger.
 	}
 
@@ -117,8 +127,6 @@ func (c *Controller) Decide(
 	minChargeDurationHours := 10.0 / 60.0
 	simEnergyAfterCharge := currentEnergyKWH + chargeKW*minChargeDurationHours
 	canCharge := simEnergyAfterCharge < capacityKWH && settings.GridChargeBatteries && !currentStatus.BatteryChargingDisabled
-
-	simData := c.SimulateState(ctx, now, currentStatus, currentPrice, futurePrices, history, settings)
 
 	shouldCharge := false
 	var chargeDescription string
