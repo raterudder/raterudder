@@ -596,6 +596,9 @@ func TestHandleAuthStatus(t *testing.T) {
 		assert.True(t, resp.LoggedIn)
 		assert.Equal(t, "new@example.com", resp.Email)
 		assert.Empty(t, resp.Sites)
+		// Verify auth settings are exposed to frontend correctly
+		assert.True(t, resp.AuthRequired)
+		assert.Equal(t, map[string]string{"google": "test-audience"}, resp.ClientIDs)
 	})
 
 	t.Run("Registered User", func(t *testing.T) {
@@ -616,6 +619,9 @@ func TestHandleAuthStatus(t *testing.T) {
 		assert.True(t, resp.LoggedIn)
 		assert.Equal(t, "existing@example.com", resp.Email)
 		assert.Equal(t, []types.UserSite{{ID: "site1"}}, resp.Sites)
+		// Verify auth settings are exposed to frontend correctly
+		assert.True(t, resp.AuthRequired)
+		assert.Equal(t, map[string]string{"google": "test-audience"}, resp.ClientIDs)
 	})
 
 	t.Run("Through Auth Middleware", func(t *testing.T) {
@@ -637,6 +643,9 @@ func TestHandleAuthStatus(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.False(t, resp.LoggedIn)
+		// Verify auth settings are exposed even when not logged in
+		assert.True(t, resp.AuthRequired)
+		assert.Equal(t, map[string]string{"google": "test-audience"}, resp.ClientIDs)
 		assert.True(t, mocks.AssertExpectations(t))
 	})
 }
