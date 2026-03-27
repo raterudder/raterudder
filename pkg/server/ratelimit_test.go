@@ -105,6 +105,29 @@ func TestRateLimitMiddleware(t *testing.T) {
 		assert.Equal(t, http.StatusTooManyRequests, w2.Code)
 	})
 
+	t.Run("Sensitive Endpoint Limit - UpdateSites Exceeded", func(t *testing.T) {
+		s := &Server{
+			generalRateLimit:   rate.Every(time.Minute / 30),
+			generalBurst:       30,
+			sensitiveRateLimit: rate.Every(time.Minute / 1), // 1 per minute
+			sensitiveBurst:     1,
+		}
+		handler := s.rateLimitMiddleware(dummyHandler)
+
+		req := httptest.NewRequest("POST", "/api/updateSites", nil)
+		req.RemoteAddr = "192.168.1.3:12345"
+
+		// First request allowed
+		w1 := httptest.NewRecorder()
+		handler.ServeHTTP(w1, req)
+		assert.Equal(t, http.StatusOK, w1.Code)
+
+		// Second request blocked (sensitive burst is 1)
+		w2 := httptest.NewRecorder()
+		handler.ServeHTTP(w2, req)
+		assert.Equal(t, http.StatusTooManyRequests, w2.Code)
+	})
+
 	t.Run("General Endpoint - Only Uses General Limit", func(t *testing.T) {
 		s := &Server{
 			generalRateLimit:   rate.Every(time.Minute / 30),
