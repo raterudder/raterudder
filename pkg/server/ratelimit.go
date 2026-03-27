@@ -72,20 +72,23 @@ func getClientIP(r *http.Request) string {
 		return strings.TrimSpace(cfIP)
 	}
 
-	// 2. Check X-Forwarded-For and find the first public IP
+	// 2. Check X-Forwarded-For and find the last public IP
+	// We parse this in reverse to prevent spoofing of IPs.
+	// We assume this is not behind an external load balancer because if it was
+	// then the last public IP would be the load balancer's IP itself.
 	xff := r.Header.Get("X-Forwarded-For")
 	if xff != "" {
 		ips := strings.Split(xff, ",")
-		for _, ipStr := range ips {
-			ipStr = strings.TrimSpace(ipStr)
+		for i := len(ips) - 1; i >= 0; i-- {
+			ipStr := strings.TrimSpace(ips[i])
 			ip := net.ParseIP(ipStr)
 			if ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() {
 				return ipStr
 			}
 		}
-		// If no public IP found but header exists, return the first one (it might be all private)
+		// If no public IP found but header exists, return the last one (it might be all private)
 		if len(ips) > 0 {
-			return strings.TrimSpace(ips[0])
+			return strings.TrimSpace(ips[len(ips)-1])
 		}
 	}
 

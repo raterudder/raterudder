@@ -238,20 +238,20 @@ func TestGetClientIP(t *testing.T) {
 			expectedIP: "198.51.100.10",
 		},
 		{
-			name: "X-Forwarded-For multiple IPs returns first public",
+			name: "X-Forwarded-For multiple IPs returns last public (prevents spoofing)",
 			headers: map[string]string{
-				"X-Forwarded-For": "10.0.0.1, 192.168.1.1, 203.0.113.10, 198.51.100.10",
+				"X-Forwarded-For": "203.0.113.10, 198.51.100.10",
 			},
 			remoteAddr: "127.0.0.1:8080",
-			expectedIP: "203.0.113.10", // The first public IP
+			expectedIP: "198.51.100.10", // The last public IP
 		},
 		{
-			name: "X-Forwarded-For all private IPs returns first",
+			name: "X-Forwarded-For all private IPs returns last",
 			headers: map[string]string{
 				"X-Forwarded-For": "10.0.0.1, 192.168.1.1",
 			},
 			remoteAddr: "127.0.0.1:8080",
-			expectedIP: "10.0.0.1",
+			expectedIP: "192.168.1.1",
 		},
 		{
 			name: "X-Forwarded-For empty fallback to RemoteAddr",
