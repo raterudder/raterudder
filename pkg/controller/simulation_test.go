@@ -952,4 +952,33 @@ func TestSimulateState(t *testing.T) {
 		assert.Equal(t, 13, simData[1].Hour)
 		assert.InDelta(t, 2.0, simData[1].BatteryKWH, 0.001, "Second hour should apply full 1 hour of load")
 	})
+
+	t.Run("LimitHoursBasedOnPricing", func(t *testing.T) {
+		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+		// Provide only 12 hours of future prices
+		futurePrices := make([]types.Price, 12)
+		for i := 0; i < 12; i++ {
+			futurePrices[i] = types.Price{
+				DollarsPerKWH: 0.10,
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+			}
+		}
+
+		currentStatus := types.SystemStatus{
+			BatteryCapacityKWH: 10.0,
+			BatterySOC:         50.0,
+			Timestamp:          now,
+		}
+
+		// Current price covers the first hour
+		currentPrice := futurePrices[0]
+
+		simData := c.SimulateState(ctx, now, currentStatus, currentPrice, futurePrices, nil, types.Settings{})
+
+		// Should only simulate 12 hours, not 24
+		assert.Len(t, simData, 12)
+	})
+
 }
