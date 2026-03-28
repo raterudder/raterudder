@@ -110,7 +110,8 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 		// Check if it's a sensitive endpoint
 		isSensitive := r.URL.Path == "/api/auth/login" ||
 			r.URL.Path == "/api/join" ||
-			r.URL.Path == "/api/update"
+			r.URL.Path == "/api/update" ||
+			r.URL.Path == "/api/updateSites"
 
 		// Apply sensitive rate limit first if applicable
 		if isSensitive {
