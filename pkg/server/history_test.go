@@ -49,7 +49,7 @@ func TestHistory(t *testing.T) {
 	// But we need to use historyMockStorage to override methods.
 	mockSBase := &mockStorage{}
 	// We need to set expectations on the base mock if it's called
-	mockSBase.On("GetSettings", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), types.SiteIDNone).Return(types.Settings{UtilityProvider: "test"}, types.CurrentSettingsVersion, nil)
+	mockSBase.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{UtilityProvider: "test"}, types.CurrentSettingsVersion, nil)
 
 	mockS := &historyMockStorage{
 		mockStorage: mockSBase,
