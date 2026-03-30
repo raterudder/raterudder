@@ -82,6 +82,46 @@ func TestRateLimitMiddleware(t *testing.T) {
 		}
 	})
 
+	t.Run("Sensitive Endpoint Limit auth/logout - Allowed", func(t *testing.T) {
+		s := &Server{
+			generalRateLimit:   rate.Every(time.Minute / 30),
+			generalBurst:       30,
+			sensitiveRateLimit: rate.Every(time.Minute / 5),
+			sensitiveBurst:     5,
+		}
+		handler := s.rateLimitMiddleware(dummyHandler)
+
+		req := httptest.NewRequest("POST", "/api/auth/logout", nil)
+		req.RemoteAddr = "192.168.1.3:12345"
+
+		// Should be allowed up to the sensitive burst limit
+		for i := 0; i < s.sensitiveBurst; i++ {
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusOK, w.Code, "Sensitive request %d should be allowed", i)
+		}
+	})
+
+	t.Run("Sensitive Endpoint Limit tesla/register - Allowed", func(t *testing.T) {
+		s := &Server{
+			generalRateLimit:   rate.Every(time.Minute / 30),
+			generalBurst:       30,
+			sensitiveRateLimit: rate.Every(time.Minute / 5),
+			sensitiveBurst:     5,
+		}
+		handler := s.rateLimitMiddleware(dummyHandler)
+
+		req := httptest.NewRequest("GET", "/api/tesla/register", nil)
+		req.RemoteAddr = "192.168.1.3:12345"
+
+		// Should be allowed up to the sensitive burst limit
+		for i := 0; i < s.sensitiveBurst; i++ {
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusOK, w.Code, "Sensitive request %d should be allowed", i)
+		}
+	})
+
 	t.Run("Sensitive Endpoint Limit updateSites - Allowed", func(t *testing.T) {
 		s := &Server{
 			generalRateLimit:   rate.Every(time.Minute / 30),
@@ -112,6 +152,52 @@ func TestRateLimitMiddleware(t *testing.T) {
 		handler := s.rateLimitMiddleware(dummyHandler)
 
 		req := httptest.NewRequest("POST", "/api/auth/login", nil)
+		req.RemoteAddr = "192.168.1.3:12345"
+
+		// First request allowed
+		w1 := httptest.NewRecorder()
+		handler.ServeHTTP(w1, req)
+		assert.Equal(t, http.StatusOK, w1.Code)
+
+		// Second request blocked (sensitive burst is 1)
+		w2 := httptest.NewRecorder()
+		handler.ServeHTTP(w2, req)
+		assert.Equal(t, http.StatusTooManyRequests, w2.Code)
+	})
+
+	t.Run("Sensitive Endpoint Limit auth/logout - Exceeded", func(t *testing.T) {
+		s := &Server{
+			generalRateLimit:   rate.Every(time.Minute / 30),
+			generalBurst:       30,
+			sensitiveRateLimit: rate.Every(time.Minute / 1), // 1 per minute
+			sensitiveBurst:     1,
+		}
+		handler := s.rateLimitMiddleware(dummyHandler)
+
+		req := httptest.NewRequest("POST", "/api/auth/logout", nil)
+		req.RemoteAddr = "192.168.1.3:12345"
+
+		// First request allowed
+		w1 := httptest.NewRecorder()
+		handler.ServeHTTP(w1, req)
+		assert.Equal(t, http.StatusOK, w1.Code)
+
+		// Second request blocked (sensitive burst is 1)
+		w2 := httptest.NewRecorder()
+		handler.ServeHTTP(w2, req)
+		assert.Equal(t, http.StatusTooManyRequests, w2.Code)
+	})
+
+	t.Run("Sensitive Endpoint Limit tesla/register - Exceeded", func(t *testing.T) {
+		s := &Server{
+			generalRateLimit:   rate.Every(time.Minute / 30),
+			generalBurst:       30,
+			sensitiveRateLimit: rate.Every(time.Minute / 1), // 1 per minute
+			sensitiveBurst:     1,
+		}
+		handler := s.rateLimitMiddleware(dummyHandler)
+
+		req := httptest.NewRequest("GET", "/api/tesla/register", nil)
 		req.RemoteAddr = "192.168.1.3:12345"
 
 		// First request allowed
