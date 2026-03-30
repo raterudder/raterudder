@@ -228,9 +228,9 @@ func TestHandleJoin(t *testing.T) {
 		s.handleJoin(w, req)
 		assert.Equal(t, http.StatusOK, w.Code)
 		// UpdateSite should NOT be called since user already has permission
-		store.AssertNotCalled(t, "UpdateSite", mock.Anything, mock.Anything, mock.Anything)
+		store.AssertNotCalled(t, "UpdateSite", mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("types.Site"))
 		// UpdateUser should NOT be called since user already has site
-		store.AssertNotCalled(t, "UpdateUser", mock.Anything, mock.Anything)
+		store.AssertNotCalled(t, "UpdateUser", mock.Anything, mock.AnythingOfType("types.User"))
 	})
 
 	t.Run("CreateNewSiteInSingleSiteMode", func(t *testing.T) {
@@ -245,7 +245,7 @@ func TestHandleJoin(t *testing.T) {
 		s.handleJoin(w, req)
 		assert.Equal(t, http.StatusForbidden, w.Code)
 		// No storage calls should have been made
-		store.AssertNotCalled(t, "CreateSite", mock.Anything, mock.Anything, mock.Anything)
+		store.AssertNotCalled(t, "CreateSite", mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("types.Site"))
 	})
 
 	t.Run("CreateNewSite", func(t *testing.T) {
@@ -424,7 +424,7 @@ func TestHandleJoin(t *testing.T) {
 				},
 			}, nil)
 			store.On("GetUser", mock.Anything, "user1").Return(types.User{ID: "user1", Sites: sites}, nil)
-			store.On("UpdateUser", mock.Anything, mock.Anything).Return(nil)
+			store.On("UpdateUser", mock.Anything, mock.MatchedBy(func(u types.User) bool { return u.ID == "user1" })).Return(nil)
 
 			body := `{"create":false,"joinSiteID":"site1","inviteCode":"abc","name":"New Name"}`
 			req := httptest.NewRequest(http.MethodPost, "/api/join", bytes.NewBufferString(body))
