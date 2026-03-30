@@ -436,15 +436,28 @@ func (c *baseComEdHourly) GetFuturePrices(ctx context.Context) ([]types.Price, e
 		return nil, nil
 	}
 
+	nowHour := time.Now().In(ctLocation).Truncate(time.Hour)
+
 	c.mu.Lock()
-	// TODO: instead we should only update if we're running out of future prices
-	// but what if they change?
-	if !c.lastFutureFetch.IsZero() && time.Since(c.lastFutureFetch) < 15*time.Minute {
-		prices := c.cachedFuture
-		c.mu.Unlock()
-		return prices, nil
+	var futurePrices []types.Price
+	for _, p := range c.cachedFuture {
+		if !p.TSStart.Before(nowHour) {
+			futurePrices = append(futurePrices, p)
+		}
 	}
+	lastFutureFetch := c.lastFutureFetch
 	c.mu.Unlock()
+
+	// PJM updates the day-ahead prices at 1:30pm ET at which point we would
+	// have 11 hours of prices, so if we have less than 11 we are past 1:30pm ET
+	// and should fetch new prices
+	if len(futurePrices) >= 11 {
+		return futurePrices, nil
+	}
+
+	if !lastFutureFetch.IsZero() && time.Since(lastFutureFetch) < 15*time.Minute {
+		return futurePrices, nil
+	}
 
 	// Check database for future prices
 	if c.db != nil {
@@ -453,15 +466,18 @@ func (c *baseComEdHourly) GetFuturePrices(ctx context.Context) ([]types.Price, e
 		end := now.Add(48 * time.Hour)
 		dbPrices, err := c.db.GetUtilityPrices(ctx, "comed", now.Truncate(time.Hour), end)
 		if err == nil && len(dbPrices) > 0 {
+			var prices []types.Price
+			for _, p := range dbPrices {
+				if !p.TSStart.Before(nowHour) {
+					prices = append(prices, p.Price)
+				}
+			}
+
 			// PJM updates the day-ahead prices at 1:30pm ET at which point we would
 			// have 11 hours of prices, so if we have less than 11 we are past 1:30pm ET
 			// and should fetch new prices
-			if len(dbPrices) >= 11 {
+			if len(prices) >= 11 {
 				log.Ctx(ctx).DebugContext(ctx, "future prices found in database")
-				var prices []types.Price
-				for _, p := range dbPrices {
-					prices = append(prices, p.Price)
-				}
 				c.mu.Lock()
 				c.cachedFuture = prices
 				c.lastFutureFetch = time.Now()
@@ -471,29 +487,28 @@ func (c *baseComEdHourly) GetFuturePrices(ctx context.Context) ([]types.Price, e
 		}
 	}
 
-	prices, err := c.fetchPJMDayAhead(ctx, pjmComedPNodeID)
+	fetchedPrices, err := c.fetchPJMDayAhead(ctx, pjmComedPNodeID)
 	if err != nil {
 		return nil, err
+	}
+
+	var prices []types.Price
+	var toUpsert []types.PriceState
+	nowUpsert := time.Now()
+	for _, p := range fetchedPrices {
+		if !p.TSStart.Before(nowHour) {
+			prices = append(prices, p)
+			toUpsert = append(toUpsert, types.PriceState{
+				Price:     p,
+				Confirmed: false, // not confirmed for ComEd future prices
+				TSUpdated: nowUpsert,
+			})
+		}
 	}
 
 	c.mu.Lock()
 	c.cachedFuture = prices
 	c.lastFutureFetch = time.Now()
-	var toUpsert []types.PriceState
-	nowUpsert := time.Now()
-	nowHour := time.Now().In(ctLocation).Truncate(time.Hour)
-	for _, p := range prices {
-		// don't store future prices that are the current hour or earlier since they
-		// might overwrite more recent or confirmed prices from the actual utility
-		if !p.TSStart.After(nowHour) {
-			continue
-		}
-		toUpsert = append(toUpsert, types.PriceState{
-			Price:     p,
-			Confirmed: false, // not confirmed for ComEd future prices
-			TSUpdated: nowUpsert,
-		})
-	}
 	c.mu.Unlock()
 
 	if c.db != nil {

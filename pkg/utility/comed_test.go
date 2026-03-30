@@ -91,6 +91,11 @@ func TestComEd(t *testing.T) {
 	})
 
 	t.Run("GetFuturePrices_PJM_Mock", func(t *testing.T) {
+		// PJM prices are filtered to be after the current hour
+		now := time.Now().In(etLocation).Truncate(time.Hour)
+		time1 := now.Add(time.Hour)
+		time2 := now.Add(2 * time.Hour)
+
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/api/v1/da_hrl_lmps" {
 				t.Errorf("expected path /api/v1/da_hrl_lmps, got %s", r.URL.Path)
@@ -100,16 +105,16 @@ func TestComEd(t *testing.T) {
 			}
 
 			// Valid response captured from actual API
-			response := `[
+			response := fmt.Sprintf(`[
 				{
-					"datetime_beginning_ept": "2026-02-02T00:00:00",
+					"datetime_beginning_ept": "%s",
 					"total_lmp_da": 34.999970
 				},
 				{
-					"datetime_beginning_ept": "2026-02-02T01:00:00",
+					"datetime_beginning_ept": "%s",
 					"total_lmp_da": 19.775851
 				}
-			]`
+			]`, time1.Format("2006-01-02T15:04:05"), time2.Format("2006-01-02T15:04:05"))
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(response))
 		}))
@@ -132,13 +137,8 @@ func TestComEd(t *testing.T) {
 		assert.InDelta(t, 0.03687996331265578, prices[0].DollarsPerKWH, 0.0000001)
 
 		// Time check
-		// 2026-02-02 00:00:00 EPT (America/New_York)
-		loc, err := time.LoadLocation("America/New_York")
-		require.NoError(t, err)
-		expectedTime := time.Date(2026, 2, 2, 0, 0, 0, 0, loc)
-		assert.Equal(t, expectedTime, prices[0].TSStart)
-		expectedTime = time.Date(2026, 2, 2, 1, 0, 0, 0, loc)
-		assert.Equal(t, expectedTime, prices[0].TSEnd)
+		assert.Equal(t, time1.Unix(), prices[0].TSStart.Unix())
+		assert.Equal(t, time1.Add(time.Hour).Unix(), prices[0].TSEnd.Unix())
 	})
 
 	t.Run("Integration_RealAPI", func(t *testing.T) {
@@ -354,5 +354,35 @@ func TestComEd(t *testing.T) {
 		assert.Len(t, futures2, 11)
 		assert.Equal(t, 0.05, futures2[0].DollarsPerKWH)
 		m.AssertExpectations(t)
+	})
+
+	t.Run("GetFuturePrices_MemoryCaching", func(t *testing.T) {
+		m := &storagemock.MockDatabase{}
+		c := configuredComEdHourly(m)
+		c.pjmAPIKey = "dummy"
+
+		now := time.Now().In(ctLocation).Truncate(time.Hour)
+		var prices []types.Price
+		for i := 0; i < 11; i++ {
+			prices = append(prices, types.Price{
+				TSStart:       now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: 0.10,
+			})
+		}
+
+		c.mu.Lock()
+		c.cachedFuture = prices
+		c.lastFutureFetch = time.Now()
+		c.mu.Unlock()
+
+		// GetFuturePrices should return from memory without calling DB
+		ctx := context.Background()
+		futures, err := c.GetFuturePrices(ctx)
+		require.NoError(t, err)
+		assert.Len(t, futures, 11)
+		assert.Equal(t, 0.10, futures[0].DollarsPerKWH)
+
+		// Assert no DB calls were made
+		m.AssertNotCalled(t, "GetUtilityPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	})
 }
