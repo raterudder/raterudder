@@ -307,7 +307,7 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
                             <p>
                                 <strong>What's New:</strong> {whatsNewText}
                             </p>
-                            <button onClick={dismissWhatsNew} style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: '1.5rem', padding: '0 8px', lineHeight: 1 }} aria-label="Dismiss">&times;</button>
+                            <button onClick={dismissWhatsNew} className="banner-dismiss-btn" aria-label="Dismiss What's New banner">&times;</button>
                         </div>
                     )}
                     {settings && (!settings.utilityProvider || settings.utilityProvider === "") && (
