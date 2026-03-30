@@ -38,6 +38,18 @@ func generateTestTokenWithAudience(t *testing.T, srvURL string, priv crypto.Priv
 	return oidctest.SignIDToken(priv, "my-key-id", "RS256", rawClaims)
 }
 
+func generateTestTokenWithEmailVerified(t *testing.T, srvURL string, priv crypto.PrivateKey, email, subject string, verified bool) string {
+	rawClaims := fmt.Sprintf(`{
+		"iss": "%s",
+		"aud": "%s",
+		"sub": "%s",
+		"email": "%s",
+		"email_verified": %t,
+		"exp": %d
+	}`, srvURL, "test-audience", subject, email, verified, time.Now().Add(1*time.Hour).Unix())
+	return oidctest.SignIDToken(priv, "my-key-id", "RS256", rawClaims)
+}
+
 func setupOIDCTest(t *testing.T) (*httptest.Server, *rsa.PrivateKey) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
@@ -661,6 +673,8 @@ func TestHandleLogin(t *testing.T) {
 	validToken := generateTestToken(t, srv.URL, priv, "user@example.com", "user@example.com")
 	invalidToken := "invalid-token"
 	noEmailToken := generateTestToken(t, srv.URL, priv, "", "user-subject")
+	unverifiedEmailToken := generateTestTokenWithEmailVerified(t, srv.URL, priv, "user@example.com", "user@example.com", false)
+	verifiedEmailToken := generateTestTokenWithEmailVerified(t, srv.URL, priv, "user@example.com", "user@example.com", true)
 
 	server := &Server{
 		singleSite: false,
@@ -745,6 +759,30 @@ func TestHandleLogin(t *testing.T) {
 		server.handleLogin(w, req)
 
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
+		assert.True(t, mocks.AssertExpectations(t))
+	})
+
+	t.Run("Unverified Email", func(t *testing.T) {
+		mocks := new(mockStorage)
+		server.storage = mocks
+		w := httptest.NewRecorder()
+		req := createReq(unverifiedEmailToken)
+
+		server.handleLogin(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+		assert.True(t, mocks.AssertExpectations(t))
+	})
+
+	t.Run("Verified Email", func(t *testing.T) {
+		mocks := new(mockStorage)
+		server.storage = mocks
+		w := httptest.NewRecorder()
+		req := createReq(verifiedEmailToken)
+
+		server.handleLogin(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
 		assert.True(t, mocks.AssertExpectations(t))
 	})
 

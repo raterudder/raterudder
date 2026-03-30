@@ -375,10 +375,29 @@ func (s *Server) authenticateToken(ctx context.Context, token string, specificCl
 		if err == nil {
 			var claims struct {
 				Email string `json:"email"`
+				// Apple documentation states email_verified can be either a boolean or a string:
+				// https://developer.apple.com/documentation/signinwithapplejs/authorizationi/id_token
+				EmailVerified any `json:"email_verified"`
 			}
 			err = idToken.Claims(&claims)
 			if err == nil {
-				return claims.Email, idToken.Subject, idToken.Expiry, nil
+				// TODO: set this to false after we've confirmed that there are no errors from existing users
+				verified := true
+				if claims.EmailVerified != nil {
+					switch v := claims.EmailVerified.(type) {
+					case bool:
+						verified = v
+					case string:
+						verified = v == "true"
+					}
+				} else {
+					log.Ctx(ctx).ErrorContext(ctx, "email_verified claim missing from id token", slog.String("email", claims.Email), slog.String("provider", providerName))
+				}
+				if !verified {
+					err = errors.New("email not verified")
+				} else {
+					return claims.Email, idToken.Subject, idToken.Expiry, nil
+				}
 			}
 		}
 		errs = append(errs, fmt.Errorf("%s verifier failed: %v", providerName, err))
