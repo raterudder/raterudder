@@ -134,8 +134,9 @@ const BetaInterstitialPage: React.FC = () => {
                         {utility === 'other' && (
                             <>
                                 <div>
-                                    <label className="beta-interstitial-label">Utility Provider Name</label>
+                                    <label htmlFor="utility-provider-name" className="beta-interstitial-label">Utility Provider Name</label>
                                     <input
+                                        id="utility-provider-name"
                                         type="text"
                                         className="input"
                                         placeholder="e.g. PG&E"
@@ -145,8 +146,9 @@ const BetaInterstitialPage: React.FC = () => {
                                 </div>
                                 <div style={{ display: 'flex', gap: '1rem' }}>
                                     <div style={{ flex: 1 }}>
-                                        <label className="beta-interstitial-label">State</label>
+                                        <label htmlFor="utility-state" className="beta-interstitial-label">State</label>
                                         <input
+                                            id="utility-state"
                                             type="text"
                                             className="input"
                                             placeholder="e.g. CA"
@@ -155,8 +157,9 @@ const BetaInterstitialPage: React.FC = () => {
                                         />
                                     </div>
                                     <div style={{ flex: 2 }}>
-                                        <label className="beta-interstitial-label">Plan Name</label>
+                                        <label htmlFor="utility-plan-name" className="beta-interstitial-label">Plan Name</label>
                                         <input
+                                            id="utility-plan-name"
                                             type="text"
                                             className="input"
                                             placeholder="e.g. EV2-A"
@@ -170,8 +173,9 @@ const BetaInterstitialPage: React.FC = () => {
 
                         {battery === 'other' && (
                             <div>
-                                <label className="beta-interstitial-label">Battery System</label>
+                                <label htmlFor="battery-system-name" className="beta-interstitial-label">Battery System</label>
                                 <input
+                                    id="battery-system-name"
                                     type="text"
                                     className="input"
                                     placeholder="e.g. Enphase"
@@ -182,8 +186,9 @@ const BetaInterstitialPage: React.FC = () => {
                         )}
 
                         <div>
-                            <label className="beta-interstitial-label">Anything else to share or comments?</label>
+                            <label htmlFor="interstitial-comments" className="beta-interstitial-label">Anything else to share or comments?</label>
                             <textarea
+                                id="interstitial-comments"
                                 className="input"
                                 style={{ minHeight: '80px', paddingTop: '0.5rem' }}
                                 placeholder="Your feedback helps us prioritize..."

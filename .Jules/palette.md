@@ -5,3 +5,7 @@
 ## 2026-03-24 - Async Button Feedback Pattern
 **Learning:** The application uses a consistent pattern of displaying a loading spinner *inside* buttons during async operations, using the `<span className="loading-spinner" aria-hidden="true"></span>` element. This prevents the UI from shifting unexpectedly and clearly associates the loading state with the action taken.
 **Action:** Always wrap async submit handlers with state (e.g., `isSubmitting`) and conditionally render the `.loading-spinner` inside the corresponding action button, applying `aria-hidden="true"` so it is ignored by screen readers, while updating the button text (e.g., 'Submitting...') for screen reader clarity.
+
+## 2026-03-30 - Added explicit `htmlFor` and `id` linking to form fields in `BetaInterstitialPage.tsx`
+**Learning:** Native `<label>` elements in custom form layouts (specifically within the Beta Interstitial's 'other' state) require explicit `htmlFor` attributes matching the corresponding input's `id` to ensure screen reader focus and click-to-focus functionality, especially when not using Base UI form field abstractions that handle this automatically.
+**Action:** Always verify that every custom form `<input>` or `<textarea>` has a unique `id` and an explicitly associated `<label>` using the `htmlFor` attribute.
