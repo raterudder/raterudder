@@ -1,19 +1,19 @@
 import React from 'react';
-import { GoogleLogin, GoogleOAuthProvider } from '@react-oauth/google';
-import AppleSignin from 'react-apple-signin-auth';
+import { GoogleLogin, GoogleOAuthProvider, type CredentialResponse } from '@react-oauth/google';
+import AppleSignin, { type AppleAuthResponse } from 'react-apple-signin-auth';
 import { Link } from 'wouter';
 import { Separator } from '@base-ui/react/separator';
 import './LoginPage.css';
 
 interface LoginPageProps {
-    onLoginSuccess: (credentialResponse: any, client?: string) => void;
+    onLoginSuccess: (credentialResponse: CredentialResponse, client?: string) => void;
     onLoginError?: () => void;
     authEnabled: boolean;
     clientIDs: Record<string, string>;
 }
 
 const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onLoginError, authEnabled, clientIDs }) => {
-    const handleAppleSuccess = (response: any) => {
+    const handleAppleSuccess = (response: AppleAuthResponse) => {
         if (response.authorization && response.authorization.id_token) {
             onLoginSuccess({ credential: response.authorization.id_token }, 'apple');
         } else {
