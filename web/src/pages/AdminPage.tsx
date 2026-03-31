@@ -33,7 +33,12 @@ const AdminPage: React.FC = () => {
     }, []);
 
     if (loading) {
-        return <div className="loading-screen">Loading Admin Data...</div>;
+        return (
+            <div className="loading-screen">
+                <span className="loading-spinner loading-spinner-large" aria-hidden="true"></span>
+                <span>Loading Admin Data...</span>
+            </div>
+        );
     }
 
     if (error) {
