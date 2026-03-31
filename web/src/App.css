@@ -233,6 +233,12 @@ textarea:focus-visible,
   min-height: 50vh;
   color: var(--text-muted);
   font-weight: 500;
+  flex-direction: column;
+}
+
+.loading-screen .loading-spinner-large {
+  margin-right: 0;
+  margin-bottom: 1rem;
 }
 
 /* ============================================
@@ -1036,6 +1042,15 @@ button {
   animation: save-spin 1s linear infinite;
   display: inline-block;
   margin-right: 0.5rem;
+}
+
+.loading-spinner-large {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-width: 3px;
+  border-color: var(--outline-variant);
+  border-top-color: var(--primary);
+  margin-right: 1rem;
 }
 
 @keyframes save-spin {

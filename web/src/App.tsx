@@ -26,7 +26,12 @@ const ProtectedRoute = ({ children, loggedIn, loading }: { children: React.React
     const [location] = useLocation();
 
     if (loading) {
-        return <div className="loading-screen">Loading...</div>; // Could be a nicer spinner
+        return (
+            <div className="loading-screen">
+                <span className="loading-spinner loading-spinner-large" aria-hidden="true"></span>
+                <span>Loading...</span>
+            </div>
+        ); // Could be a nicer spinner
     }
 
     if (!loggedIn) {
@@ -191,7 +196,10 @@ function AppContent() {
                         </div>
                     )}
                     {showLoading ? (
-                        <div className="loading-screen">Loading...</div>
+                        <div className="loading-screen">
+                            <span className="loading-spinner loading-spinner-large" aria-hidden="true"></span>
+                            <span>Loading...</span>
+                        </div>
                     ) : (
                         <Switch>
                             <Route path="/" component={LandingPage} />
