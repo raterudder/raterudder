@@ -274,7 +274,9 @@ func TestComEd(t *testing.T) {
 
 		// 1. Test GetConfirmedPrices - DB Empty -> API -> DB Upsert
 		m.On("GetUtilityPrices", mock.Anything, "comed", start, end).Return([]types.PriceState{}, nil).Once()
-		m.On("UpsertUtilityPrices", mock.Anything, "comed", mock.Anything, 0).Return(nil).Once()
+		m.On("UpsertUtilityPrices", mock.Anything, "comed", mock.MatchedBy(func(p []types.PriceState) bool {
+			return len(p) == 1 && p[0].Price.DollarsPerKWH == 0.02
+		}), 0).Return(nil).Once()
 
 		prices, err := c.GetConfirmedPrices(ctx, start, end)
 		require.NoError(t, err)
@@ -320,7 +322,11 @@ func TestComEd(t *testing.T) {
 
 		ctx := context.Background()
 
-		m.On("GetUtilityPrices", mock.Anything, "comed", mock.Anything, mock.Anything).Return([]types.PriceState{
+		m.On("GetUtilityPrices", mock.Anything, "comed", mock.MatchedBy(func(t time.Time) bool {
+			return true
+		}), mock.MatchedBy(func(t time.Time) bool {
+			return true
+		})).Return([]types.PriceState{
 			{Price: types.Price{TSStart: now, DollarsPerKWH: 0.0105009}, Confirmed: false, TSUpdated: time.Now()}, // Using a stable price for test
 		}, nil).Once()
 		m.On("UpsertUtilityPrices", mock.Anything, "comed", mock.MatchedBy(func(p []types.PriceState) bool {
@@ -347,7 +353,11 @@ func TestComEd(t *testing.T) {
 				TSUpdated: time.Now(),
 			})
 		}
-		m.On("GetUtilityPrices", mock.Anything, "comed", mock.Anything, mock.Anything).Return(dbPrices, nil).Once()
+		m.On("GetUtilityPrices", mock.Anything, "comed", mock.MatchedBy(func(t time.Time) bool {
+			return true
+		}), mock.MatchedBy(func(t time.Time) bool {
+			return true
+		})).Return(dbPrices, nil).Once()
 
 		futures2, err := c.GetFuturePrices(ctx)
 		require.NoError(t, err)
@@ -383,6 +393,6 @@ func TestComEd(t *testing.T) {
 		assert.Equal(t, 0.10, futures[0].DollarsPerKWH)
 
 		// Assert no DB calls were made
-		m.AssertNotCalled(t, "GetUtilityPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		m.AssertNotCalled(t, "GetUtilityPrices", mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"))
 	})
 }
