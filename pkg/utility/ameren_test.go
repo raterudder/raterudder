@@ -198,8 +198,12 @@ AMIL.BGS6,Loadzone,LMP,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,
 		ctx := context.Background()
 
 		// 1. GetCurrentPrice - DB Empty -> API -> DB Upsert
-		m.On("GetUtilityPrices", mock.Anything, "ameren", mock.Anything, mock.Anything).Return([]types.PriceState{}, nil).Once()
-		m.On("UpsertUtilityPrices", mock.Anything, "ameren", mock.Anything, 0).Return(nil).Once()
+		start := truncateDay(time.Now().In(etLocation))
+		end := start.AddDate(0, 0, 1)
+		m.On("GetUtilityPrices", mock.Anything, "ameren", start, end).Return([]types.PriceState{}, nil).Once()
+		m.On("UpsertUtilityPrices", mock.Anything, "ameren", mock.MatchedBy(func(p []types.PriceState) bool {
+			return len(p) >= 23
+		}), 0).Return(nil).Once()
 
 		price, err := c.GetCurrentPrice(ctx)
 		require.NoError(t, err)
@@ -213,7 +217,7 @@ AMIL.BGS6,Loadzone,LMP,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,
 		c.mu.Unlock()
 
 		var fullDayPrices []types.PriceState
-		start := truncateDay(time.Now().In(etLocation))
+		start = truncateDay(time.Now().In(etLocation))
 		for i := 0; i < 24; i++ {
 			fullDayPrices = append(fullDayPrices, types.PriceState{
 				Price: types.Price{
@@ -227,7 +231,7 @@ AMIL.BGS6,Loadzone,LMP,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,
 			)
 		}
 
-		m.On("GetUtilityPrices", mock.Anything, "ameren", mock.Anything, mock.Anything).Return(fullDayPrices, nil).Once()
+		m.On("GetUtilityPrices", mock.Anything, "ameren", start, end).Return(fullDayPrices, nil).Once()
 
 		price2, err := c.GetCurrentPrice(ctx)
 		require.NoError(t, err)
@@ -251,7 +255,9 @@ AMIL.BGS6,Loadzone,LMP,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,
 		ctx := context.Background()
 
 		// 1. Mock DB returns only 1 price state (partial data)
-		m.On("GetUtilityPrices", mock.Anything, "ameren", mock.Anything, mock.Anything).Return([]types.PriceState{
+		start := truncateDay(time.Now().In(etLocation))
+		end := start.AddDate(0, 0, 1)
+		m.On("GetUtilityPrices", mock.Anything, "ameren", start, end).Return([]types.PriceState{
 			{
 				Price: types.Price{
 					TSStart:       time.Now().In(etLocation).Truncate(time.Hour),
