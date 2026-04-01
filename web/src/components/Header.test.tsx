@@ -55,4 +55,12 @@ describe('Header Component', () => {
         fireEvent.click(screen.getByText('Log Out'));
         expect(mockOnLogout).toHaveBeenCalledTimes(1);
     });
+
+    it('has correct aria attributes on mobile menu button', () => {
+        renderHeader('/dashboard', true);
+        const menuButton = screen.getByLabelText('Open navigation menu');
+        expect(menuButton).toBeInTheDocument();
+        expect(menuButton).toHaveAttribute('aria-controls', 'mobile-menu-content');
+        expect(menuButton).toHaveAttribute('aria-expanded', 'false');
+    });
 });
