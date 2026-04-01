@@ -68,14 +68,15 @@ const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSite
                         className={`mobile-menu-toggle ${isMenuOpen ? 'open' : ''}`}
                         onClick={toggleMenu}
                         aria-label={isMenuOpen ? "Close navigation menu" : "Open navigation menu"}
-                        aria-expanded={isMenuOpen}>
+                        aria-expanded={isMenuOpen}
+                        aria-controls="mobile-menu-content">
                         <span className="hamburger-line"></span>
                         <span className="hamburger-line"></span>
                         <span className="hamburger-line"></span>
                     </button>
                 )}
 
-                <div className={`header-content ${isMenuOpen ? 'open' : ''}`}>
+                <div id="mobile-menu-content" className={`header-content ${isMenuOpen ? 'open' : ''}`}>
                     <nav className="header-nav">
                         {loggedIn ? (
                             <>
