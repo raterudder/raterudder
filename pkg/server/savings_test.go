@@ -41,7 +41,7 @@ func TestHandleHistorySavings(t *testing.T) {
 
 	runTest := func(t *testing.T, setupMock func(*mockSavingsStorage)) types.SavingsStats {
 		mockStoreBase := &mockStorage{}
-		mockStoreBase.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+		mockStoreBase.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
 			GridExportSolar: false, // Default to false as it was before
 		}, types.CurrentSettingsVersion, nil)
 		mockStore := &mockSavingsStorage{mockStorage: mockStoreBase}
@@ -50,7 +50,7 @@ func TestHandleHistorySavings(t *testing.T) {
 
 		mockUtility := &mockUtility{}
 		mockUtility.On("GetFuturePrices", mock.Anything).Return([]types.Price{}, nil)
-		mockUtility.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockUtility.On("ApplySettings", mock.Anything, mock.AnythingOfType("types.Settings")).Return(nil)
 
 		mockUtilities := utility.NewMap(mockStore)
 		mockUtilities.SetProvider(types.SiteIDNone, mockUtility)
@@ -295,8 +295,8 @@ func TestHandleHistorySavings(t *testing.T) {
 					GridExportKWH: 10,
 				},
 			}
-			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Unset()
-			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			m.mockStorage.On("GetSettings", mock.Anything, types.SiteIDNone).Unset()
+			m.mockStorage.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
 				GridExportSolar: true,
 			}, types.CurrentSettingsVersion, nil)
 		})
@@ -321,8 +321,8 @@ func TestHandleHistorySavings(t *testing.T) {
 					GridExportKWH: 10,
 				},
 			}
-			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Unset()
-			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			m.mockStorage.On("GetSettings", mock.Anything, types.SiteIDNone).Unset()
+			m.mockStorage.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
 				GridExportSolar: true,
 				UtilityRateOptions: types.UtilityRateOptions{
 					NetMeteringCredits: true,
@@ -351,8 +351,8 @@ func TestHandleHistorySavings(t *testing.T) {
 					GridExportKWH: 10,
 				},
 			}
-			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Unset()
-			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			m.mockStorage.On("GetSettings", mock.Anything, types.SiteIDNone).Unset()
+			m.mockStorage.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
 				GridExportSolar: true,
 				UtilityRateOptions: types.UtilityRateOptions{
 					NetMeteringCredits: true,
@@ -379,8 +379,8 @@ func TestHandleHistorySavings(t *testing.T) {
 					GridExportKWH: 10,
 				},
 			}
-			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Unset()
-			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			m.mockStorage.On("GetSettings", mock.Anything, types.SiteIDNone).Unset()
+			m.mockStorage.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
 				GridExportSolar: true,
 				UtilityRateOptions: types.UtilityRateOptions{
 					NetMeteringCredits: true,
@@ -414,8 +414,8 @@ func TestHandleHistorySavings(t *testing.T) {
 					GridExportKWH: 10,
 				},
 			}
-			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Unset()
-			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			m.mockStorage.On("GetSettings", mock.Anything, types.SiteIDNone).Unset()
+			m.mockStorage.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
 				GridExportSolar: true,
 			}, types.CurrentSettingsVersion, nil)
 		})
@@ -438,8 +438,8 @@ func TestHandleHistorySavings(t *testing.T) {
 					GridExportKWH: 10,
 				},
 			}
-			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Unset()
-			m.mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			m.mockStorage.On("GetSettings", mock.Anything, types.SiteIDNone).Unset()
+			m.mockStorage.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
 				GridExportSolar: false,
 			}, types.CurrentSettingsVersion, nil)
 		})
@@ -465,8 +465,8 @@ func TestHandleHistorySavings(t *testing.T) {
 
 	t.Run("Storage Error Propagated", func(t *testing.T) {
 		mockStore := &mockStorage{}
-		mockStore.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{}, types.CurrentSettingsVersion, nil)
-		mockStore.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price(nil), errors.New("db error"))
+		mockStore.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{}, types.CurrentSettingsVersion, nil)
+		mockStore.On("GetPriceHistory", mock.Anything, types.SiteIDNone, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.Price(nil), errors.New("db error"))
 
 		mockUtilities := utility.NewMap(mockStore)
 		s := &Server{storage: mockStore, utilities: mockUtilities, bypassAuth: true}
@@ -488,23 +488,23 @@ func TestHandleHistorySavingsAll(t *testing.T) {
 	end := start.Add(24 * time.Hour)
 
 	// Site 1 data
-	mockStore.On("GetPriceHistory", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.Price{
+	mockStore.On("GetPriceHistory", mock.Anything, "site1", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.Price{
 		{TSStart: start, DollarsPerKWH: 0.10},
 	}, nil)
-	mockStore.On("GetEnergyHistory", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.EnergyStats{
+	mockStore.On("GetEnergyHistory", mock.Anything, "site1", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.EnergyStats{
 		{TSHourStart: start, HomeKWH: 10, GridImportKWH: 10},
 	}, nil)
 
 	// Site 2 data
-	mockStore.On("GetPriceHistory", mock.Anything, "site2", mock.Anything, mock.Anything).Return([]types.Price{
+	mockStore.On("GetPriceHistory", mock.Anything, "site2", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.Price{
 		{TSStart: start, DollarsPerKWH: 0.20},
 	}, nil)
-	mockStore.On("GetEnergyHistory", mock.Anything, "site2", mock.Anything, mock.Anything).Return([]types.EnergyStats{
+	mockStore.On("GetEnergyHistory", mock.Anything, "site2", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.EnergyStats{
 		{TSHourStart: start, HomeKWH: 20, GridImportKWH: 20},
 	}, nil)
 
-	mockStore.On("GetActionHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Action{}, nil)
-	mockStore.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{}, types.CurrentSettingsVersion, nil)
+	mockStore.On("GetActionHistory", mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.Action{}, nil)
+	mockStore.On("GetSettings", mock.Anything, mock.AnythingOfType("string")).Return(types.Settings{}, types.CurrentSettingsVersion, nil)
 
 	req, _ := http.NewRequest("GET", "/api/history/savings?siteID=ALL&start="+start.Format(time.RFC3339)+"&end="+end.Format(time.RFC3339), nil)
 	// Mock authMiddleware effects
