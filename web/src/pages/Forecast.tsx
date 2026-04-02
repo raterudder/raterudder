@@ -59,16 +59,16 @@ const charts: ChartConfig[] = [
         color: '#ff8a00',
         gradientId: 'improvedSolarGrad',
         unit: ' kWh',
+        additionalLines: [
+            { dataKey: 'unclippedSolarGeneration', color: '#ffb800', strokeDasharray: '4 4' },
+        ],
     },
     {
-        title: 'Forecasted Solar Radiation (W/m²)',
-        dataKey: 'forecastGHI',
-        color: 'var(--warning)',
-        gradientId: 'ghiGrad',
+        title: 'Estimated Irradiance (W/m²)',
+        dataKey: 'irradiance',
+        color: '#60a5fa',
+        gradientId: 'irradianceGrad',
         unit: ' W/m²',
-        additionalLines: [
-            { dataKey: 'forecastGTI', color: '#ffb800' },
-        ],
     },
     {
         title: 'Avg Home Load (kWh)',
@@ -97,11 +97,11 @@ interface ProcessedModelingHour extends ModelingHour {
     batterySOCIfStandby: number;
     batteryReserveSOC: number;
     rawSolarKWH: number;
-    forecastGHI?: number;
-    forecastGTI?: number;
+    irradiance?: number;
     improvedSolarGeneration?: number;
-    temperature?: number;
-    snowfall?: number;
+    unclippedSolarGeneration?: number;
+    temperatureC?: number;
+    snowfallCM?: number;
 }
 
 function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs }: { data: ProcessedModelingHour[]; config: ChartConfig; isMobile: boolean; showCurrentTime: boolean; nowMs: number }) {
@@ -164,7 +164,7 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs }: { dat
                                 config.unit.includes('$')
                                     ? `$${v.toFixed(4)}`
                                     : v.toFixed(2) + lineUnit.trim(),
-                                name === 'rawSolarKWH' ? 'Raw Model' : name === 'forecastGTI' ? 'Forecasted Tilted Radiation (W/m²)' : config.title,
+                                name === 'rawSolarKWH' ? 'Raw Model' : name === 'unclippedSolarGeneration' ? 'Unclipped Potential' : name === 'irradiance' ? 'Irradiance' : config.title,
                             ];
                         }}
                         contentStyle={{
@@ -274,11 +274,11 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
             if (weather) {
                 return {
                     ...sim,
-                    forecastGHI: weather.forecastGHI,
-                    forecastGTI: weather.forecastGTI,
-                    temperature: weather.temperature,
-                    snowfall: weather.snowfall,
+                    irradiance: weather.irradiance,
+                    temperatureC: weather.temperatureC,
+                    snowfallCM: weather.snowfallCM,
                     improvedSolarGeneration: weather.improvedSolarGeneration,
+                    unclippedSolarGeneration: weather.unclippedSolarGeneration,
                 };
             }
             return sim;
@@ -311,11 +311,11 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     gridChargeDollarsPerKWH: price ? price.dollarsPerKWH + (price.gridUseDollarsPerKWH || 0) : 0,
                     netLoadSolarKWH: -h.solarKWH,
                     solarOppDollarsPerKWH: 0,
-                    forecastGHI: weather?.forecastGHI,
-                    forecastGTI: weather?.forecastGTI,
-                    temperature: weather?.temperature,
-                    snowfall: weather?.snowfall,
+                    irradiance: weather?.irradiance,
+                    temperatureC: weather?.temperatureC,
+                    snowfallCM: weather?.snowfallCM,
                     improvedSolarGeneration: weather?.improvedSolarGeneration,
+                    unclippedSolarGeneration: weather?.unclippedSolarGeneration,
                 };
             });
 
@@ -342,12 +342,12 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
     if (error) return <div className="error">Error: {error}</div>;
     if (!data.length) return <div className="no-actions">No simulation data available.</div>;
 
-    const hasSolarRadiationData = data.some(d =>
-        (d.forecastGHI !== undefined && d.forecastGHI !== null)
+    const hasForecastData = data.some(d =>
+        (d.irradiance !== undefined && d.irradiance !== null)
     );
 
     const activeCharts = charts.filter(c => {
-        if (c.dataKey === 'forecastGHI' && !hasSolarRadiationData) {
+        if (c.dataKey === 'irradiance' && !hasForecastData) {
             return false;
         }
         if (c.dataKey === 'improvedSolarGeneration' && !data.some(d => d.improvedSolarGeneration !== undefined)) {

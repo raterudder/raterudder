@@ -1,0 +1,39 @@
+.date-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  background: var(--surface-container-low);
+  padding: 0.5rem var(--spacing-sm);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+
+.date-controls h2 {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+  min-width: 200px;
+  text-align: center;
+  color: var(--on-surface);
+}
+
+.date-controls button {
+  background: transparent;
+  border: none;
+  color: var(--on-surface-variant);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius-sm);
+  transition: all 0.2s ease;
+}
+
+.date-controls button:hover:not(:disabled) {
+  color: var(--primary);
+  background: var(--surface-container-high);
+}
+
+.date-controls button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}

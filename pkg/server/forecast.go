@@ -32,16 +32,17 @@ type PriceHistoryRes struct {
 
 // WeatherRes represents a simplified historical weather and forecast stat.
 type WeatherRes struct {
-	TSHourStart             time.Time `json:"tsHourStart"`
-	ForecastGHI             float64   `json:"forecastGHI"`
-	ForecastGTI             float64   `json:"forecastGTI,omitempty"`
-	TemperatureC            float64   `json:"temperatureC,omitempty"`
-	TemperatureCellC        float64   `json:"temperatureCellC,omitempty"`
-	SnowfallCM              float64   `json:"snowfallCM,omitempty"`
-	ImprovedSolarGeneration float64   `json:"improvedSolarGeneration,omitempty"`
-	SnowAccumulationCM      float64   `json:"snowAccumulationCM,omitempty"`
-	TempFactor              float64   `json:"tempFactor,omitempty"`
-	SnowFactor              float64   `json:"snowFactor,omitempty"`
+	TSHourStart              time.Time `json:"tsHourStart"`
+	Irradiance               float64   `json:"irradiance"`
+	TemperatureC             float64   `json:"temperatureC,omitempty"`
+	TemperatureCellC         float64   `json:"temperatureCellC,omitempty"`
+	SnowfallCM               float64   `json:"snowfallCM,omitempty"`
+	EstimatedSolarKWH        float64   `json:"estimatedSolarKWH,omitempty"`
+	ImprovedSolarGeneration  float64   `json:"improvedSolarGeneration,omitempty"`
+	UnclippedSolarGeneration float64   `json:"unclippedSolarGeneration,omitempty"`
+	SnowDepthCM              float64   `json:"snowDepthCM,omitempty"`
+	TempFactor               float64   `json:"tempFactor,omitempty"`
+	SnowFactor               float64   `json:"snowFactor,omitempty"`
 }
 
 // ForecastRes represents the complete response for the forecast endpoint, including histories.
@@ -108,7 +109,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 5. Get History (Last 3 days from Storage) - no backfill
-	now := time.Now().In(status.Timestamp.Location())
+	now := status.Timestamp.Truncate(time.Hour)
 	historyStart := now.AddDate(0, 0, -3).Truncate(time.Hour)
 	energyHistory, err := s.storage.GetEnergyHistory(ctx, siteID, historyStart, now)
 	if err != nil {
@@ -190,7 +191,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	// Find improved solar for calculations
 	var improvedSolarMap map[int64]improvedSolar
 	if settings.Location != nil {
-		improvedSolarMap = calculateImprovedSolar(ctx, energyHistory, weatherHistory)
+		improvedSolarMap = calculateImprovedSolar(ctx, energyHistory, weatherHistory, *settings.Location)
 	}
 
 	weatherRes := make([]WeatherRes, 0, len(weatherHistory))
@@ -198,18 +199,18 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		for _, h := range w.ForecastHours {
 			wr := WeatherRes{
 				TSHourStart:  h.TSHourStart,
-				ForecastGHI:  h.GHI,
-				ForecastGTI:  h.GTI,
 				TemperatureC: h.TemperatureC,
 				SnowfallCM:   h.SnowfallCM,
 			}
 
 			if improved, ok := improvedSolarMap[h.TSHourStart.Unix()]; ok {
 				wr.ImprovedSolarGeneration = improved.ImprovedSolar
-				wr.SnowAccumulationCM = improved.SnowAccumulation
+				wr.UnclippedSolarGeneration = improved.UnclippedSolar
+				wr.SnowDepthCM = improved.SnowDepth
 				wr.TempFactor = improved.TempFactor
 				wr.SnowFactor = improved.SnowFactor
 				wr.TemperatureCellC = improved.TCell
+				wr.Irradiance = improved.Irradiance
 			}
 			weatherRes = append(weatherRes, wr)
 		}
@@ -231,14 +232,14 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 }
 
 type improvedSolar struct {
-	TSHourStart      int64
-	ImprovedSolar    float64
-	SnowAccumulation float64
-	TempFactor       float64
-	SnowFactor       float64
-	TCell            float64
-	GTI              float64
-	GHI              float64
+	TSHourStart    int64
+	ImprovedSolar  float64
+	UnclippedSolar float64
+	SnowDepth      float64
+	TempFactor     float64
+	SnowFactor     float64
+	TCell          float64
+	Irradiance     float64
 }
 
 // calculateImprovedSolar estimates solar generation for each weather hour by:
@@ -248,16 +249,64 @@ type improvedSolar struct {
 //  4. Projecting forward (and backward for history comparison) using the calibrated efficiency.
 //
 // Returns a map keyed by Unix timestamp (seconds) of each weather hour's computed improvedSolar.
-func calculateImprovedSolar(ctx context.Context, history []types.EnergyStats, weather []types.Weather) map[int64]improvedSolar {
+func calculateImprovedSolar(ctx context.Context, history []types.EnergyStats, weather []types.Weather, locInfo types.SiteLocation) map[int64]improvedSolar {
 	const (
-		noct      = 45.0   // Nominal Operating Cell Temperature
-		tempCoeff = 0.0035 // typical power temperature coefficient
+		noct        = 45.0   // Nominal Operating Cell Temperature
+		tempCoeff   = 0.0035 // typical power temperature coefficient
+		clippingEps = 0.05   // kWh epsilon for detecting a plateau
 	)
 
 	// 1. Index historical actual solar by hour timestamp for O(1) lookup.
 	statsByHour := make(map[int64]types.EnergyStats, len(history))
+	maxSolarKWH := 0.0
 	for _, h := range history {
 		statsByHour[h.TSHourStart.Unix()] = h
+		if h.SolarKWH > maxSolarKWH {
+			maxSolarKWH = h.SolarKWH
+		}
+	}
+
+	// Learning the Clipping Cap:
+	// Identify days where production plateaus at the peak.
+	var clippingCap float64
+	if maxSolarKWH > 1.0 { // only consider clipping if production is significant
+		usageCounts := make(map[int]int)
+		for _, s := range history {
+			if s.SolarKWH > maxSolarKWH*0.9 {
+				// Round to 1 decimal place to group similar peak values
+				val := int(math.Round(s.SolarKWH * 10))
+				usageCounts[val]++
+			}
+		}
+
+		// If any value in the top 30% of max occurs frequently, it might be a cap.
+		mostFreqVal := -1
+		mostFreqCount := 0
+		for val, count := range usageCounts {
+			if count > mostFreqCount {
+				mostFreqVal = val
+				mostFreqCount = count
+			}
+		}
+
+		// only if we've seen this for at least 6 hours
+		if mostFreqVal > 0 && mostFreqCount >= 6 {
+			clippingCap = float64(mostFreqVal) / 10.0
+			log.Ctx(ctx).DebugContext(
+				ctx,
+				"learned inverter clipping cap",
+				slog.Float64("capKWH", clippingCap),
+				slog.Int("occurrences", mostFreqCount),
+			)
+		} else {
+			log.Ctx(ctx).DebugContext(
+				ctx,
+				"found no inverter clipping cap",
+				slog.Float64("maxSolarKWH", maxSolarKWH),
+				slog.Float64("frequentKWH", float64(mostFreqVal)/10.0),
+				slog.Int("occurrences", mostFreqCount),
+			)
+		}
 	}
 
 	// Index weather by timestamp; later hours overwrite earlier for the same slot (dedup).
@@ -275,251 +324,170 @@ func calculateImprovedSolar(ctx context.Context, history []types.EnergyStats, we
 	}
 	slices.Sort(timestamps)
 
-	// Pre-calculate solar window for each day (hours with GTI > 50)
-	// Key is the Unix timestamp of the start of the day.
-	type solarWindow struct {
-		start time.Time
-		end   time.Time
-	}
-	solarWindows := make(map[int64]solarWindow)
-	for _, ts := range timestamps {
-		hw := weatherByHour[ts]
-		gti := hw.GTI
-		if gti <= 0 {
-			gti = hw.GHI
+	// Identify the best irradiance source (GTI if available, fallback to GHI)
+	var anyGTI bool
+	var anyGHI bool
+	for _, hw := range weatherByHour {
+		if hw.GTI > 0 {
+			anyGTI = true
 		}
-		if gti > 50 {
-			dayStart := hw.TSHourStart.Truncate(24 * time.Hour).Unix()
-			window := solarWindows[dayStart]
-			if window.start.IsZero() || hw.TSHourStart.Before(window.start) {
-				window.start = hw.TSHourStart
+		if hw.GHI > 0 {
+			anyGHI = true
+		}
+	}
+	useGTI := anyGTI || !anyGHI // if no GHI either, doesn't matter, but if we have GTI use it.
+
+	var minClippedIrradiance float64
+	if clippingCap > 0 {
+		for ts, stats := range statsByHour {
+			if stats.SolarKWH >= clippingCap-clippingEps {
+				if hw, ok := weatherByHour[ts]; ok {
+					var irr float64
+					if useGTI {
+						irr = hw.GTI
+					} else {
+						irr = hw.GHI
+					}
+					if irr > 0 && (irr < minClippedIrradiance || minClippedIrradiance == 0) {
+						minClippedIrradiance = irr
+					}
+				}
 			}
-			if window.end.IsZero() || hw.TSHourStart.After(window.end) {
-				window.end = hw.TSHourStart
-			}
-			solarWindows[dayStart] = window
+		}
+		if minClippedIrradiance > 0 {
+			log.Ctx(ctx).DebugContext(
+				ctx,
+				"learned min clipped irradiance",
+				slog.Float64("minClippedIrradiance", minClippedIrradiance),
+			)
 		}
 	}
 
-	type efficiencyDetail struct {
-		EfficiencyGTI float64   `json:"efficiencyGTI"`
-		EfficiencyGHI float64   `json:"efficiencyGHI"`
-		GTI           float64   `json:"gti"`
-		GHI           float64   `json:"ghi"`
-		WindowStart   time.Time `json:"windowStart"`
-		WindowEnd     time.Time `json:"windowEnd"`
-		TSHourStart   time.Time `json:"tsHourStart"`
+	type dailyAcc struct {
+		solarKWH         float64
+		theoreticalIrrad float64
+		count            int
+	}
+	dailyData := make(map[string]*dailyAcc)
+
+	timeLoc, err := time.LoadLocation(locInfo.TimeZone)
+	if err != nil {
+		timeLoc = time.UTC
 	}
 
-	var (
-		efficiencies     []efficiencyDetail
-		snowAccumulation float64
-		hasGTI           bool
-	)
 	results := make(map[int64]improvedSolar, len(timestamps))
 
 	for _, ts := range timestamps {
 		hw := weatherByHour[ts]
 		h := improvedSolar{TSHourStart: ts}
 
-		// Use GTI when available (accounts for panel tilt/azimuth); fall back to GHI.
-		gtiOrGHI := hw.GTI
-		if gtiOrGHI <= 0 {
-			gtiOrGHI = hw.GHI
+		// Use GTI from Open-Meteo when available; fallback to GHI.
+		if useGTI {
+			h.Irradiance = hw.GTI
 		} else {
-			hasGTI = true
+			h.Irradiance = hw.GHI
 		}
-		h.GTI = hw.GTI
-		h.GHI = hw.GHI
 
 		// Estimated cell temperature via NOCT model:
-		//   Tcell = Tamb + (GTI / 800) * (NOCT - 20)
-		// At rated conditions (GTI=800 W/m²) the cell runs (NOCT-20) degrees above ambient.
-		h.TCell = hw.TemperatureC + (gtiOrGHI/800.0)*(noct-20.0)
+		//   Tcell = Tamb + (Irradiance / 800) * (NOCT - 20)
+		h.TCell = hw.TemperatureC + (h.Irradiance/800.0)*(noct-20.0)
 
-		// Add new snowfall first, then apply temperature-driven melt / slide-off.
-		snowAccumulation += hw.SnowfallCM
-
-		switch {
-		case h.TCell > 5:
-			// High melt: ~2 cm/hr. If residual drops below 1 cm it slides off.
-			snowAccumulation -= 2
-			if snowAccumulation < 1 {
-				snowAccumulation = 0
-			}
-		case h.TCell > 2:
-			// Moderate melt: ~1 cm/hr. If residual drops below 1 cm it slides off.
-			snowAccumulation -= 1
-			if snowAccumulation < 1 {
-				snowAccumulation = 0
-			}
-		case h.TCell > 0:
-			// Slow surface melt: ~0.5 cm/hr. Snow stays put at these temps.
-			snowAccumulation -= 0.5
-		}
-		// Hard bounds: snow cannot be negative, and we cap at 10 cm (extreme event).
-		snowAccumulation = min(max(0, snowAccumulation), 10)
-		h.SnowAccumulation = snowAccumulation
+		// Use direct snow depth from API which is an average from this hour to the next
+		h.SnowDepth = hw.SnowDepthCM
 
 		// Calculate factor based on cell difference compared to STC (25C cell temp).
-		// Degrades by tempCoeff per C above 25 C; improves below 25 C.
-		// Cell temp is physically bounded to the operating range [-40, 80] C.
-		clampedTCell := min(max(h.TCell, -40), 80)
-		h.TempFactor = 1.0 - (clampedTCell-25)*tempCoeff
+		h.TCell = min(max(h.TCell, -40), 80)
+		h.TempFactor = 1.0 - (h.TCell-25)*tempCoeff
 
 		// > 5 cm: opaque layer, essentially zero generation.
 		// > 0.2 cm: partial blockage, ~90 % reduction.
 		// > 0 cm: light dusting, ~30 % reduction.
 		h.SnowFactor = 1.0
 		switch {
-		case snowAccumulation > 5:
+		case h.SnowDepth > 5:
 			h.SnowFactor = 0.0
-		case snowAccumulation > 0.2:
+		case h.SnowDepth > 0.2:
 			h.SnowFactor = 0.1
-		case snowAccumulation > 0:
+		case h.SnowDepth > 0:
 			h.SnowFactor = 0.70
 		}
 
 		// Collect historical efficiency ratios that pass several quality filters:
-		// 1. Minimum Irradiance: Noise is high at dawn/dusk.
+		// 1. Minimum Irradiance: Ignore low light / noise levels.
 		// 2. Curtailment: Ignore hours if the battery was nearly full and no export occurred.
 		// 3. Snow: Ignore hours with significant snow accumulation.
-		// 4. Solar Window Edge: Avoid the first/last two hours of daily production range.
+		// 4. Clipping: If clipped, clamp irradiance to minClippedIrradiance.
 		if stats, ok := statsByHour[ts]; ok {
-			dayStart := hw.TSHourStart.Truncate(24 * time.Hour).Unix()
-			window := solarWindows[dayStart]
-
 			isCurtailed := stats.GridExportKWH <= 0.1 && stats.MaxBatterySOC >= 98.0
-			isSnowy := snowAccumulation > 0.2
-			isEdge := hw.TSHourStart.Before(window.start.Add(2*time.Hour)) || hw.TSHourStart.After(window.end.Add(-2*time.Hour))
+			isSnowy := h.SnowDepth > 0.2
 			hasSolar := stats.SolarKWH > 0.5
+			isClipped := clippingCap > 0 && stats.SolarKWH >= clippingCap-clippingEps
 
-			if gtiOrGHI >= 50 && h.TempFactor > 0 && hasSolar && !isCurtailed && !isSnowy && !isEdge {
-				var eGTI, eGHI float64
-				if hw.GTI > 0 {
-					eGTI = stats.SolarKWH / (hw.GTI * h.TempFactor * h.SnowFactor)
+			// Filters: Irradiance < 25. Ignore low light.
+			if h.Irradiance >= 25 && h.TempFactor > 0 && hasSolar && !isCurtailed && !isSnowy {
+				effectiveIrradiance := h.Irradiance
+				if isClipped && minClippedIrradiance > 0 {
+					effectiveIrradiance = math.Min(h.Irradiance, minClippedIrradiance)
 				}
-				if hw.GHI > 0 {
-					eGHI = stats.SolarKWH / (hw.GHI * h.TempFactor * h.SnowFactor)
+
+				dayStr := time.Unix(ts, 0).In(timeLoc).Format("2006-01-02")
+				if dailyData[dayStr] == nil {
+					dailyData[dayStr] = &dailyAcc{}
 				}
-				efficiencies = append(efficiencies, efficiencyDetail{
-					EfficiencyGTI: eGTI,
-					EfficiencyGHI: eGHI,
-					GTI:           hw.GTI,
-					GHI:           hw.GHI,
-					WindowStart:   window.start,
-					WindowEnd:     window.end,
-					TSHourStart:   stats.TSHourStart,
-				})
+				dailyData[dayStr].solarKWH += stats.SolarKWH
+				dailyData[dayStr].theoreticalIrrad += effectiveIrradiance * h.TempFactor * h.SnowFactor
+				dailyData[dayStr].count++
 			}
 		}
 
 		results[ts] = h
 	}
 
-	// 3. Determine robust efficiency by analyzing the top points for outliers and variance.
-	var (
-		finalEff         efficiencyDetail
-		top3Efficiencies []efficiencyDetail
-		outlierDiscarded efficiencyDetail
-		method           string
-		cv               float64
-	)
-
-	if len(efficiencies) > 0 {
-		sort.Slice(efficiencies, func(i, j int) bool {
-			if hasGTI {
-				return efficiencies[i].EfficiencyGTI > efficiencies[j].EfficiencyGTI
-			}
-			return efficiencies[i].EfficiencyGHI > efficiencies[j].EfficiencyGHI
-		})
-
-		remaining := efficiencies
-		// 1. Outlier Detection: If top value is > 35% higher than the next, discard it.
-		if len(remaining) >= 2 {
-			e0 := remaining[0].EfficiencyGHI
-			e1 := remaining[1].EfficiencyGHI
-			if hasGTI {
-				e0 = remaining[0].EfficiencyGTI
-				e1 = remaining[1].EfficiencyGTI
-			}
-			if e1 > 0 && e0 > 1.35*e1 {
-				outlierDiscarded = remaining[0]
-				remaining = remaining[1:]
-			}
+	// 3. Determine robust efficiency by analyzing daily points
+	var dailyEfficiencies []float64
+	for _, acc := range dailyData {
+		if acc.theoreticalIrrad > 0 && acc.count > 0 {
+			dailyEfficiencies = append(dailyEfficiencies, acc.solarKWH/acc.theoreticalIrrad)
 		}
+	}
 
-		// 2. Aggregation: Take up to top 3 of the remaining points.
-		n := min(3, len(remaining))
-		if n > 0 {
-			for i := 0; i < n; i++ {
-				top3Efficiencies = append(top3Efficiencies, remaining[i])
-			}
+	var finalEff float64
 
-			if n == 3 {
-				// 3. Confidence Check via Coefficient of Variation (CV)
-				var sumGTI, sumGHI float64
-				for _, e := range top3Efficiencies {
-					sumGTI += e.EfficiencyGTI
-					sumGHI += e.EfficiencyGHI
-				}
-				meanGTI := sumGTI / 3
-				meanGHI := sumGHI / 3
+	if len(dailyEfficiencies) > 0 {
+		sort.Float64s(dailyEfficiencies)
 
-				var varGTI, varGHI float64
-				for _, e := range top3Efficiencies {
-					varGTI += math.Pow(e.EfficiencyGTI-meanGTI, 2)
-					varGHI += math.Pow(e.EfficiencyGHI-meanGHI, 2)
-				}
-				stdDevGTI := math.Sqrt(varGTI / 3)
-				stdDevGHI := math.Sqrt(varGHI / 3)
-
-				// Calculate CV based on the primary metric
-				if hasGTI && meanGTI > 0 {
-					cv = stdDevGTI / meanGTI
-				} else if !hasGTI && meanGHI > 0 {
-					cv = stdDevGHI / meanGHI
-				}
-
-				if cv > 0 && cv < 0.1 {
-					method = "average"
-					finalEff.EfficiencyGTI = meanGTI
-					finalEff.EfficiencyGHI = meanGHI
-				} else {
-					method = "conservative (3rd highest)"
-					finalEff = top3Efficiencies[2]
-				}
-			} else {
-				method = "highest available"
-				finalEff = top3Efficiencies[0]
-			}
+		// simple averaging
+		var sum float64
+		for _, e := range dailyEfficiencies {
+			sum += e
 		}
+		finalEff = sum / float64(len(dailyEfficiencies))
 	}
 
 	log.Ctx(ctx).DebugContext(
 		ctx,
 		"calculated robust efficiency",
-		slog.Any("finalEfficiency", finalEff),
-		slog.Any("top3Efficiencies", top3Efficiencies),
-		slog.Int("validPoints", len(efficiencies)),
-		slog.Any("outlier", outlierDiscarded),
-		slog.String("method", method),
-		slog.Float64("cv", cv),
+		slog.Float64("finalEfficiency", finalEff),
+		slog.Any("dailyEfficiencies", dailyEfficiencies),
 	)
 
 	// 4. Project solar generation for every weather hour using the calibrated
 	// efficiency unless we don't have any efficiency data.
-	if finalEff.EfficiencyGTI > 0 || finalEff.EfficiencyGHI > 0 {
+	if finalEff > 0 {
 		for _, ts := range timestamps {
 			h := results[ts]
-			if h.GTI > 0 {
-				h.ImprovedSolar = h.GTI * finalEff.EfficiencyGTI * h.TempFactor * h.SnowFactor
-			} else if h.GHI > 0 {
-				h.ImprovedSolar = h.GHI * finalEff.EfficiencyGHI * h.TempFactor * h.SnowFactor
+			if h.Irradiance > 0 {
+				h.UnclippedSolar = h.Irradiance * finalEff * h.TempFactor * h.SnowFactor
+				h.ImprovedSolar = h.UnclippedSolar
+				if clippingCap > 0 && h.ImprovedSolar > clippingCap {
+					h.ImprovedSolar = clippingCap
+				}
 			}
 			results[ts] = h
 		}
 	}
+	// TODO: if we dont have any efficiency data then we should just average the
+	// last few days and assume it stays the same
 
 	return results
 }

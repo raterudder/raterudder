@@ -8,6 +8,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/levenlabs/go-lflag v1.0.2
 	github.com/levenlabs/go-llog v1.0.0
+	github.com/mstephenholl/go-solar v1.0.1
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/sync v0.19.0
 	golang.org/x/time v0.15.0

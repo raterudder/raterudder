@@ -1067,38 +1067,45 @@ func (f *Franklin) GetEnergyHistory(ctx context.Context, start, end time.Time) (
 		f.deviceInfoExpiry = time.Now().Add(time.Minute)
 	}
 
-	var allStats []types.EnergyStats
-
 	startInLoc := start.In(di.location)
 	endInLoc := end.In(di.location)
 
-	// Iterate through days
-	// Start from the beginning of the start day
-	current := time.Date(startInLoc.Year(), startInLoc.Month(), startInLoc.Day(), 0, 0, 0, 0, di.location)
-	for current.Before(endInLoc) || current.Equal(endInLoc) {
-		if current.After(time.Now()) {
-			break
-		}
+	// determine if we need the next day or not because the API returns preceding
+	// data so we always need the next hour
+	lastHourToFetch := endInLoc.Add(time.Hour)
+	lastDayToFetch := time.Date(endInLoc.Year(), endInLoc.Month(), endInLoc.Day(), 0, 0, 0, 0, di.location)
+	nextDay := lastDayToFetch.AddDate(0, 0, 1)
+	// if the next hour is in the next day, and the next day is in the past,
+	// then we need to include the next day
+	if !lastHourToFetch.Before(nextDay) && !nextDay.After(time.Now()) {
+		lastDayToFetch = nextDay
+	}
+	var allPoints []franklinEnergyPoint
 
-		stats, err := f.getEnergyStatsForDay(ctx, current, di.location)
+	// Iterate through days
+	current := time.Date(startInLoc.Year(), startInLoc.Month(), startInLoc.Day(), 0, 0, 0, 0, di.location)
+	for !current.After(lastDayToFetch) {
+		points, err := f.getEnergyPointsForDay(ctx, current, di.location)
 		if err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to get energy stats for day", slog.String("day", current.Format("2006-01-02")), slog.Any("error", err))
-			// Continue or return error? Let's return error to be safe.
+			log.Ctx(ctx).ErrorContext(ctx, "failed to get energy points for day", slog.String("day", current.Format("2006-01-02")), slog.Any("error", err))
 			return nil, err
 		}
-
-		// Filter stats that are within the requested range
-		for _, s := range stats {
-			// if the end is in the middle of an hour, include that hour
-			if !s.TSHourStart.Before(start) && s.TSHourStart.Before(end) {
-				allStats = append(allStats, s)
-			}
-		}
-
+		allPoints = append(allPoints, points...)
 		current = current.AddDate(0, 0, 1)
 	}
 
-	return allStats, nil
+	// Aggregate all points into hourly buckets
+	allStats := f.aggregatePointsIntoHours(allPoints, di.location)
+
+	// Filter final result to requested range
+	filteredStats := make([]types.EnergyStats, 0)
+	for _, s := range allStats {
+		if !s.TSHourStart.Before(start) && s.TSHourStart.Before(end) {
+			filteredStats = append(filteredStats, s)
+		}
+	}
+
+	return filteredStats, nil
 }
 
 func (f *Franklin) getStormList(ctx context.Context) ([]franklinStormListResult, error) {
@@ -1118,7 +1125,7 @@ func (f *Franklin) getStormList(ctx context.Context) ([]franklinStormListResult,
 	return res, nil
 }
 
-func (f *Franklin) getEnergyStatsForDay(ctx context.Context, day time.Time, loc *time.Location) ([]types.EnergyStats, error) {
+func (f *Franklin) getEnergyPointsForDay(ctx context.Context, day time.Time, loc *time.Location) ([]franklinEnergyPoint, error) {
 	day = day.In(loc)
 	params := url.Values{}
 	params.Set("gatewayId", f.gatewayID)
@@ -1133,10 +1140,6 @@ func (f *Franklin) getEnergyStatsForDay(ctx context.Context, day time.Time, loc 
 	if err := f.doRequest(req, &res); err != nil {
 		return nil, err
 	}
-
-	// Aggregate 5-min data into hourly buckets
-	hourlyStats := make(map[string]*types.EnergyStats)
-	var sortedKeys []string
 
 	// no energy data for this day
 	if len(res.SolarToHomeKWHRates) == 0 &&
@@ -1184,35 +1187,74 @@ func (f *Franklin) getEnergyStatsForDay(ctx context.Context, day time.Time, loc 
 		return nil, errors.New("unexpected array length in response")
 	}
 
+	points := make([]franklinEnergyPoint, len(res.DeviceTimeArray))
 	for i, timeStr := range res.DeviceTimeArray {
 		t, err := time.ParseInLocation("2006-01-02 15:04:05", timeStr, loc)
 		if err != nil {
 			log.Ctx(ctx).WarnContext(ctx, "failed to parse time", slog.String("time", timeStr), slog.Any("error", err))
 			return nil, err
 		}
-		// figure out the duration of this "bucket"
-		var duration time.Duration
-		if len(res.DeviceTimeArray) > i+1 {
-			nextT, err := time.ParseInLocation("2006-01-02 15:04:05", res.DeviceTimeArray[i+1], loc)
-			if err != nil {
-				log.Ctx(ctx).WarnContext(ctx, "failed to parse time", slog.String("time", timeStr), slog.Any("error", err))
-				return nil, err
-			}
-			duration = nextT.Sub(t)
-		} else {
-			nextDay := day.AddDate(0, 0, 1)
-			nextDay = time.Date(nextDay.Year(), nextDay.Month(), nextDay.Day(), 0, 0, 0, 0, loc)
-			// duration until the next day?
-			duration = nextDay.Sub(t)
+		points[i] = franklinEnergyPoint{
+			Timestamp:             t,
+			SolarToHomeKWHRate:    res.SolarToHomeKWHRates[i],
+			SolarToGridKWHRate:    res.SolarToGridKWHRates[i],
+			SolarToBatteryKWHRate: res.SolarToBatteryKWHRates[i],
+			GridToBatteryKWHRate:  res.GridToBatteryKWHRates[i],
+			GridToHomeKWHRate:     res.GridToHomeKWHRates[i],
+			BatteryToGridKWHRate:  res.BatteryToGridKWHRates[i],
+			BatteryToHomeKWHRate:  res.BatteryToHomeKWHRates[i],
+			BatterySOC:            res.SOCArray[i],
+		}
+	}
+
+	return points, nil
+}
+
+func (f *Franklin) aggregatePointsIntoHours(points []franklinEnergyPoint, loc *time.Location) []types.EnergyStats {
+	if len(points) == 0 {
+		return nil
+	}
+
+	// make sure the points are sorted by timestamp
+	sort.Slice(points, func(i, j int) bool {
+		return points[i].Timestamp.Before(points[j].Timestamp)
+	})
+
+	// Aggregate points into hourly buckets
+	hourlyStats := make(map[string]*types.EnergyStats)
+	var sortedKeys []string
+
+	for i, p := range points {
+		t := p.Timestamp
+
+		// if its the first point and its for a previous hour (minute 0), skip it
+		if i == 0 && t.Minute() == 0 {
+			continue
 		}
 
+		// The data is for the preceding period, so we look backwards.
+		var duration time.Duration
+		if i > 0 {
+			// Cap duration to 1 hour to avoid massive errors during data gaps
+			duration = min(t.Sub(points[i-1].Timestamp), time.Hour)
+		} else {
+			// for the first point, we assume it's a 5 minute interval leading up to t.
+			duration = 5 * time.Minute
+		}
+
+		// The data is for the preceding period, so the bucket should be based on
+		// the start of that period.
+		// We'll subtract 1 second to shift the "end of hour" timestamp (e.g. 12:00:00)
+		// into the correct bucket (11:00:00).
+		bucketT := t.Add(-time.Second).In(loc)
+
 		// Determine hour bucket
-		hourKey := t.Format("2006-01-02 15:00:00")
+		hourKey := bucketT.Format("2006-01-02 15:00:00")
 		if _, exists := hourlyStats[hourKey]; !exists {
 			hourlyStats[hourKey] = &types.EnergyStats{
-				TSHourStart:   time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, t.Location()),
-				MinBatterySOC: res.SOCArray[i],
-				MaxBatterySOC: res.SOCArray[i],
+				TSHourStart:   time.Date(bucketT.Year(), bucketT.Month(), bucketT.Day(), bucketT.Hour(), 0, 0, 0, loc),
+				MinBatterySOC: p.BatterySOC,
+				MaxBatterySOC: p.BatterySOC,
 			}
 			sortedKeys = append(sortedKeys, hourKey)
 		}
@@ -1220,13 +1262,14 @@ func (f *Franklin) getEnergyStatsForDay(ctx context.Context, day time.Time, loc 
 
 		// collect all relevant stats for the time
 		// and convert them all to KWH from the rate of kwh in that duration
-		solarToHome := res.SolarToHomeKWHRates[i] * (duration.Hours())
-		solarToGrid := res.SolarToGridKWHRates[i] * (duration.Hours())
-		solarToBat := res.SolarToBatteryKWHRates[i] * (duration.Hours())
-		gridToBat := res.GridToBatteryKWHRates[i] * (duration.Hours())
-		gridToHome := res.GridToHomeKWHRates[i] * (duration.Hours())
-		batToGrid := res.BatteryToGridKWHRates[i] * (duration.Hours())
-		batToHome := res.BatteryToHomeKWHRates[i] * (duration.Hours())
+		hours := duration.Hours()
+		solarToHome := p.SolarToHomeKWHRate * hours
+		solarToGrid := p.SolarToGridKWHRate * hours
+		solarToBat := p.SolarToBatteryKWHRate * hours
+		gridToBat := p.GridToBatteryKWHRate * hours
+		gridToHome := p.GridToHomeKWHRate * hours
+		batToGrid := p.BatteryToGridKWHRate * hours
+		batToHome := p.BatteryToHomeKWHRate * hours
 
 		s.SolarKWH += (solarToHome + solarToGrid + solarToBat)
 		s.BatteryChargedKWH += (solarToBat + gridToBat)
@@ -1240,11 +1283,11 @@ func (f *Franklin) getEnergyStatsForDay(ctx context.Context, day time.Time, loc 
 		s.SolarToBatteryKWH += solarToBat
 		s.SolarToGridKWH += solarToGrid
 
-		if res.SOCArray[i] < s.MinBatterySOC {
-			s.MinBatterySOC = res.SOCArray[i]
+		if p.BatterySOC < s.MinBatterySOC {
+			s.MinBatterySOC = p.BatterySOC
 		}
-		if res.SOCArray[i] > s.MaxBatterySOC {
-			s.MaxBatterySOC = res.SOCArray[i]
+		if p.BatterySOC > s.MaxBatterySOC {
+			s.MaxBatterySOC = p.BatterySOC
 		}
 	}
 
@@ -1256,7 +1299,7 @@ func (f *Franklin) getEnergyStatsForDay(ctx context.Context, day time.Time, loc 
 		result = append(result, *hourlyStats[key])
 	}
 
-	return result, nil
+	return result
 }
 
 // Internal Structs
@@ -1447,4 +1490,16 @@ type franklinStormListResult struct {
 	Onset        string `json:"onset"`
 	Severity     string `json:"severity"`
 	DurationMins int    `json:"durationTime"`
+}
+
+type franklinEnergyPoint struct {
+	Timestamp             time.Time
+	SolarToHomeKWHRate    float64
+	SolarToGridKWHRate    float64
+	SolarToBatteryKWHRate float64
+	GridToBatteryKWHRate  float64
+	GridToHomeKWHRate     float64
+	BatteryToGridKWHRate  float64
+	BatteryToHomeKWHRate  float64
+	BatterySOC            float64
 }

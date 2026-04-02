@@ -14,7 +14,7 @@ import (
 )
 
 func TestOpenMeteoService(t *testing.T) {
-	t.Run("GetLocationData", func(t *testing.T) {
+	t.Run("Location", func(t *testing.T) {
 		tests := []struct {
 			name        string
 			countryCode string
@@ -115,10 +115,10 @@ func TestOpenMeteoService(t *testing.T) {
 					}))
 					defer ts.Close()
 					s := &OpenMeteo{GeocodingURL: ts.URL + "/v1/search", HTTPClient: ts.Client()}
-					loc, err = s.GetLocationData(context.Background(), tc.countryCode, tc.postalCode)
+					loc, err = s.Location(context.Background(), tc.countryCode, tc.postalCode)
 				} else {
 					s := &OpenMeteo{}
-					loc, err = s.GetLocationData(context.Background(), tc.countryCode, tc.postalCode)
+					loc, err = s.Location(context.Background(), tc.countryCode, tc.postalCode)
 				}
 
 				if tc.wantErr {
@@ -131,7 +131,7 @@ func TestOpenMeteoService(t *testing.T) {
 		}
 	})
 
-	t.Run("FetchWeatherForecast", func(t *testing.T) {
+	t.Run("Forecast", func(t *testing.T) {
 		timezone := "America/Los_Angeles"
 		loc, err := time.LoadLocation(timezone)
 		require.NoError(t, err)
@@ -141,7 +141,7 @@ func TestOpenMeteoService(t *testing.T) {
 
 		t.Run("invalid timezone", func(t *testing.T) {
 			s := &OpenMeteo{}
-			_, err := s.FetchWeatherForecast(context.Background(), types.SiteLocation{Latitude: 34.0, Longitude: -118.0, TimeZone: "Invalid/Zone"}, startDay, endDay)
+			_, err := s.Forecast(context.Background(), types.SiteLocation{Latitude: 34.0, Longitude: -118.0, TimeZone: "Invalid/Zone"}, startDay, endDay)
 			assert.Error(t, err)
 		})
 
@@ -152,7 +152,7 @@ func TestOpenMeteoService(t *testing.T) {
 			defer ts.Close()
 
 			s := &OpenMeteo{ForecastURL: ts.URL + "/v1/forecast", HTTPClient: ts.Client()}
-			_, err := s.FetchWeatherForecast(context.Background(), types.SiteLocation{Latitude: 34.0, Longitude: -118.0, TimeZone: timezone}, startDay, endDay)
+			_, err := s.Forecast(context.Background(), types.SiteLocation{Latitude: 34.0, Longitude: -118.0, TimeZone: timezone}, startDay, endDay)
 			assert.Error(t, err)
 		})
 
@@ -168,41 +168,63 @@ func TestOpenMeteoService(t *testing.T) {
 					Sunset:  []string{startDay.Format("2006-01-02") + "T18:00", targetDay.Format("2006-01-02") + "T18:00", endDay.Format("2006-01-02") + "T18:00"},
 				},
 				Hourly: struct {
-					Time               []string  `json:"time"`
-					ShortwaveRadiation []float64 `json:"shortwave_radiation"`
-					TiltedRadiation    []float64 `json:"global_tilted_irradiance"`
-					Temperature        []float64 `json:"temperature_2m"`
-					Snowfall           []float64 `json:"snowfall"`
+					Time                   []string  `json:"time"`
+					ShortwaveRadiation     []float64 `json:"shortwave_radiation"`
+					DiffuseRadiation       []float64 `json:"diffuse_radiation"`
+					DirectNormalIrradiance []float64 `json:"direct_normal_irradiance"`
+					TiltedRadiation        []float64 `json:"global_tilted_irradiance"`
+					Temperature            []float64 `json:"temperature_2m"`
+					Snowfall               []float64 `json:"snowfall"`
+					SnowDepth              []float64 `json:"snow_depth"`
+					CloudCover             []float64 `json:"cloud_cover"`
 				}{
-					Time:               []string{startDay.Format("2006-01-02") + "T10:00", startDay.Format("2006-01-02") + "T11:00", endDay.Format("2006-01-02") + "T12:00", endDay.Format("2006-01-02") + "T13:00"},
-					ShortwaveRadiation: []float64{100.5, 150.5, 200.5, 250.5},
-					Temperature:        []float64{20.0, 22.0, 25.0, 27.0},
-					Snowfall:           []float64{0.0, 0.0, 0.0, 0.0},
+					Time:                   []string{startDay.Format("2006-01-02") + "T10:00", startDay.Format("2006-01-02") + "T11:00", endDay.Format("2006-01-02") + "T12:00", endDay.Format("2006-01-02") + "T13:00"},
+					ShortwaveRadiation:     []float64{100.5, 150.5, 200.5, 250.5},
+					DiffuseRadiation:       []float64{50.0, 60.0, 70.0, 80.0},
+					DirectNormalIrradiance: []float64{200.0, 300.0, 400.0, 500.0},
+					TiltedRadiation:        []float64{110.0, 160.0, 210.0, 260.0},
+					Temperature:            []float64{20.0, 22.0, 25.0, 27.0},
+					Snowfall:               []float64{0.0, 0.0, 0.0, 0.0},
+					SnowDepth:              []float64{0.1, 0.3, 0.5, 0.7},
+					CloudCover:             []float64{10.0, 20.0, 30.0, 40.0},
 				},
 			}
 
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				query := r.URL.Query()
+				assert.Equal(t, "20.000000", query.Get("tilt"))
+				// South is 180 in compass, should be 0 in Open-Meteo
+				assert.Equal(t, "0.000000", query.Get("azimuth"))
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(mockBody)
 			}))
 			defer ts.Close()
 
 			s := &OpenMeteo{ForecastURL: ts.URL + "/v1/forecast", HTTPClient: ts.Client()}
-			res, err := s.FetchWeatherForecast(context.Background(), types.SiteLocation{Latitude: 34.0, Longitude: -118.0, TimeZone: timezone}, startDay, endDay)
+			res, err := s.Forecast(context.Background(), types.SiteLocation{Latitude: 34.0, Longitude: -118.0, TimeZone: timezone, SolarTilt: 20, SolarAzimuth: 180}, startDay, endDay)
 
 			require.NoError(t, err)
 			assert.Len(t, res, 3)
 
 			if assert.Len(t, res[0].ForecastHours, 2) {
 				assert.Equal(t, 150.5, res[0].ForecastHours[0].GHI)
-				assert.Equal(t, 21.0, res[0].ForecastHours[0].TemperatureC) // (20+22)/2
-				assert.Equal(t, 200.5, res[0].ForecastHours[1].GHI)         // takes next index 2
-				assert.Equal(t, 23.5, res[0].ForecastHours[1].TemperatureC) // average of index 1 and 2
+				assert.Equal(t, 160.0, res[0].ForecastHours[0].GTI)
+				assert.Equal(t, 21.0, res[0].ForecastHours[0].TemperatureC)      // (20+22)/2
+				assert.Equal(t, 15.0, res[0].ForecastHours[0].CloudCoverPercent) // (10+20)/2
+				assert.Equal(t, 20.0, res[0].ForecastHours[0].SnowDepthCM)       // (0.1+0.3)/2 * 100
+				assert.Equal(t, 200.5, res[0].ForecastHours[1].GHI)              // takes next index 2
+				assert.Equal(t, 210.0, res[0].ForecastHours[1].GTI)
+				assert.Equal(t, 23.5, res[0].ForecastHours[1].TemperatureC)      // average of index 1 and 2
+				assert.Equal(t, 25.0, res[0].ForecastHours[1].CloudCoverPercent) // (20+30)/2
+				assert.Equal(t, 40.0, res[0].ForecastHours[1].SnowDepthCM)       // (0.3+0.5)/2 * 100
 			}
 			assert.Len(t, res[1].ForecastHours, 0)
 			if assert.Len(t, res[2].ForecastHours, 2) {
 				assert.Equal(t, 250.5, res[2].ForecastHours[0].GHI)
-				assert.Equal(t, 26.0, res[2].ForecastHours[0].TemperatureC) // (25+27)/2
+				assert.Equal(t, 260.0, res[2].ForecastHours[0].GTI)
+				assert.Equal(t, 26.0, res[2].ForecastHours[0].TemperatureC)      // (25+27)/2
+				assert.Equal(t, 35.0, res[2].ForecastHours[0].CloudCoverPercent) // (30+40)/2
+				assert.Equal(t, 60.0, res[2].ForecastHours[0].SnowDepthCM)       // (0.5+0.7)/2 * 100
 			}
 		})
 
@@ -220,7 +242,7 @@ func TestOpenMeteoService(t *testing.T) {
 			defer ts.Close()
 
 			s := &OpenMeteo{ForecastURL: ts.URL + "/v1/forecast", HTTPClient: ts.Client()}
-			_, err := s.FetchWeatherForecast(context.Background(), types.SiteLocation{Latitude: 34.0, Longitude: -118.0, TimeZone: timezone, SolarTilt: 0}, startDay, endDay)
+			_, err := s.Forecast(context.Background(), types.SiteLocation{Latitude: 34.0, Longitude: -118.0, TimeZone: timezone, SolarTilt: 0}, startDay, endDay)
 			require.NoError(t, err)
 		})
 	})
@@ -234,7 +256,7 @@ func TestOpenMeteoService(t *testing.T) {
 			GeocodingURL: "https://geocoding-api.open-meteo.com/v1/search",
 			HTTPClient:   &http.Client{Timeout: 10 * time.Second},
 		}
-		loc, err := s.GetLocationData(context.Background(), "US", "90210")
+		loc, err := s.Location(context.Background(), "US", "90210")
 		require.NoError(t, err)
 		require.NotNil(t, loc)
 		assert.Equal(t, "Beverly Hills", loc.City)
@@ -264,7 +286,7 @@ func TestOpenMeteoService(t *testing.T) {
 		var weathers []types.Weather
 		// Retry up to 3 times to mitigate flaky OpenMeteo API network issues (like EOF)
 		for i := 0; i < 3; i++ {
-			weathers, err = s.FetchWeatherForecast(context.Background(), types.SiteLocation{Latitude: 34.07, Longitude: -118.40, TimeZone: "America/Los_Angeles"}, startDay, endDay)
+			weathers, err = s.Forecast(context.Background(), types.SiteLocation{Latitude: 34.07, Longitude: -118.40, TimeZone: "America/Los_Angeles"}, startDay, endDay)
 			if err == nil {
 				break
 			}

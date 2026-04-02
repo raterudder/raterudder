@@ -12,6 +12,7 @@ import LandingPage from './pages/LandingPage';
 import Dashboard from './pages/Dashboard';
 import Settings from './pages/Settings';
 import Forecast from './pages/Forecast';
+import History from './pages/History';
 import LoginPage from './pages/LoginPage';
 import JoinSitePage from './pages/JoinSitePage';
 import NewSitePage from './pages/NewSitePage';
@@ -250,6 +251,15 @@ function AppContent() {
                                         <Redirect to="/welcome" replace />
                                     ) : (
                                         <Forecast siteID={effectiveSiteID} />
+                                    )}
+                                </ProtectedRoute>
+                            </Route>
+                            <Route path="/history">
+                                <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
+                                    {!effectiveSiteID && effectiveSites.length === 0 ? (
+                                        <Redirect to="/welcome" replace />
+                                    ) : (
+                                        <History siteID={effectiveSiteID} />
                                     )}
                                 </ProtectedRoute>
                             </Route>

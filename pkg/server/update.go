@@ -396,32 +396,43 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 	}
 
 	now := time.Now().In(timeLoc)
-	fiveDaysAgo := now.AddDate(0, 0, -5)
-	syncStart := time.Date(fiveDaysAgo.Year(), fiveDaysAgo.Month(), fiveDaysAgo.Day(), 0, 0, 0, 0, timeLoc)
+	todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, timeLoc)
+	yesterdayMidnight := todayMidnight.AddDate(0, 0, -1)
 
-	if !lastWeatherTime.IsZero() && lastVersion >= types.CurrentWeatherVersion && lastWeatherTime.After(syncStart) {
-		syncStart = lastWeatherTime
-	} else if !lastWeatherTime.IsZero() && lastVersion < types.CurrentWeatherVersion {
-		log.Ctx(ctx).InfoContext(
-			ctx,
-			"backfilling weather history due to version mismatch",
-			slog.Int("lastVersion", lastVersion),
-			slog.Int("currentVersion", types.CurrentWeatherVersion),
-		)
+	// Default sync start: yesterday (to always refresh yesterday+today+tomorrow).
+	syncStart := yesterdayMidnight
+
+	// On cold start or version mismatch, go back further.
+	fiveDaysAgo := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, timeLoc).AddDate(0, 0, -5)
+	if lastWeatherTime.IsZero() || (lastVersion < types.CurrentWeatherVersion) {
+		if !lastWeatherTime.IsZero() && lastVersion < types.CurrentWeatherVersion {
+			log.Ctx(ctx).InfoContext(
+				ctx,
+				"backfilling weather history due to version mismatch",
+				slog.Int("lastVersion", lastVersion),
+				slog.Int("currentVersion", types.CurrentWeatherVersion),
+			)
+		}
+		syncStart = fiveDaysAgo
+	} else if lastWeatherTime.Before(fiveDaysAgo) {
+		// If last update is older than 5 days, start from 5 days ago.
+		syncStart = fiveDaysAgo
 	}
 
 	log.Ctx(ctx).DebugContext(ctx, "syncing weather history", slog.Any("since", syncStart))
 
-	// Fetch from syncStart to the end of tomorrow (exclusive)
-	tomorrowStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, timeLoc).AddDate(0, 0, 1)
-	fetchEnd := tomorrowStart.AddDate(0, 0, 1)
+	// Always fetch through end of tomorrow to capture a full forecast window.
+	tomorrowMidnight := todayMidnight.AddDate(0, 0, 1)
+	fetchEnd := tomorrowMidnight.AddDate(0, 0, 1)
 
-	// if we already have all of tomorrow then don't bother fetching more
-	if syncStart.After(tomorrowStart) {
+	// Skip only if lastWeatherTime already covers the full fetch window.
+	// fetchEnd is exclusive (day-after-tomorrow midnight), so we need
+	// lastWeatherTime >= fetchEnd to have all of tomorrow's data.
+	if !lastWeatherTime.IsZero() && !lastWeatherTime.Before(fetchEnd) && lastVersion >= types.CurrentWeatherVersion {
 		return nil
 	}
 
-	newWeathers, err := s.weather.FetchWeatherForecast(ctx, loc, syncStart, fetchEnd)
+	newWeathers, err := s.weather.Forecast(ctx, loc, syncStart, fetchEnd)
 	if err != nil {
 		return fmt.Errorf("failed to fetch weather forecast: %w", err)
 	}

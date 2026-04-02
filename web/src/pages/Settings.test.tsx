@@ -266,7 +266,7 @@ describe('App & Settings', () => {
 
         await waitFor(() => {
             expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
-                solarAzimuth: 180,
+                solarAzimuth: 0,
                 solarTilt: 25
             }), expect.any(String), undefined);
         });

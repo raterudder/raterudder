@@ -11,14 +11,18 @@ import (
 
 // Service provides weather data mapping and API handling.
 type Service interface {
-	GetLocationData(ctx context.Context, countryCode, postalCode string) (*types.SiteLocation, error)
-	FetchWeatherForecast(ctx context.Context, loc types.SiteLocation, startDate, endDate time.Time) ([]types.Weather, error)
+	Location(ctx context.Context, countryCode, postalCode string) (*types.SiteLocation, error)
+	Forecast(ctx context.Context, loc types.SiteLocation, startDate, endDate time.Time) ([]types.Weather, error)
 }
 
 // Configured creates a weather service using lflag.
 func Configured() Service {
-	geocodingBaseURL := lflag.String("weather-geocoding-url", "https://geocoding-api.open-meteo.com/v1/search", "Open-Meteo geocoding API URL")
-	forecastBaseURL := lflag.String("weather-forecast-url", "https://api.open-meteo.com/v1/forecast", "Open-Meteo forecast API URL")
+	return configuredOpenMeteo()
+}
+
+func configuredOpenMeteo() Service {
+	geocodingBaseURL := lflag.String("open-meteo-geocoding-url", "https://geocoding-api.open-meteo.com/v1/search", "Open-Meteo geocoding API URL")
+	forecastBaseURL := lflag.String("open-meteo-forecast-url", "https://api.open-meteo.com/v1/forecast", "Open-Meteo forecast API URL")
 
 	s := &OpenMeteo{
 		HTTPClient: common.HTTPClient(10 * time.Second),

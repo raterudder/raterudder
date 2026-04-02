@@ -944,6 +944,15 @@ func TestFranklin(t *testing.T) {
 				dayTime := r.URL.Query().Get("dayTime")
 				// We expect the day in America/Chicago.
 				// Start is 2026-02-01 18:00 UTC -> 2026-02-01 12:00 CST.
+				if dayTime == "2026-02-02" {
+					// Extra day due to one-day-lookahead
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result":  map[string]any{},
+					})
+					return
+				}
 				assert.Equal(t, "2026-02-01", dayTime, "dayTime should match")
 
 				// Return mock data with 3 timestamps to define 2 intervals in the 12:00 hour
@@ -954,23 +963,25 @@ func TestFranklin(t *testing.T) {
 					"success": true,
 					"result": map[string]any{
 						"deviceTimeArray": []string{
-							"2026-02-01 12:00:00",
+							"2026-02-01 12:05:00",
 							"2026-02-01 12:15:00",
 							"2026-02-01 13:00:00",
 						},
 						// SocArray length must match
 						"socArray": []float64{50.0, 40.0, 50.0},
 						// SolarToHome:
-						// 1st interval: 4.0 kW * 0.25 h = 1.0 kWh
-						// 2nd interval: 0.0 kW * 0.75 h = 0.0 kWh
+						// 12:05:00 (period 12:00 to 12:05): 12.0 kW * (5/60) h = 1.0 kWh
+						// 12:15:00 (period 12:05 to 12:15): 0.0 kW * (10/60) h = 0.0 kWh
+						// 13:00:00 (period 12:15 to 13:00): 0.0 kW * (45/60) h = 0.0 kWh
 						// Total = 1.0
-						"powerSolarHomeArray": []float64{4.0, 0.0, 0.0},
+						"powerSolarHomeArray": []float64{12.0, 0.0, 0.0},
 
 						// BatteryToHome:
-						// 1st interval: 8.0 kW * 0.25 h = 2.0 kWh
-						// 2nd interval: 4.0 kW * 0.75 h = 3.0 kWh
+						// 12:05:00 (period 12:00 to 12:05): 24.0 kW * (5/60) h = 2.0 kWh
+						// 12:15:00 (period 12:05 to 12:15): 18.0 kW * (10/60) h = 3.0 kWh
+						// 13:00:00 (period 12:15 to 13:00): 0.0 kW * (45/60) h = 0.0 kWh
 						// Total = 5.0
-						"powerFhpHomeArray": []float64{8.0, 4.0, 0.0},
+						"powerFhpHomeArray": []float64{24.0, 18.0, 0.0},
 
 						// Arrays must be same length (3)
 						"powerSolarGirdArray": []float64{0.0, 0.0, 0.0},
@@ -1555,5 +1566,119 @@ func TestFranklin(t *testing.T) {
 		// Verify setPowerControlV2 was called
 		require.Len(t, callOrder, 1, "setPowerControlV2 should be called")
 		assert.Equal(t, "setPowerControlV2", callOrder[0])
+	})
+
+	t.Run("GetEnergyHistory Deduplication and Next Day", func(t *testing.T) {
+		day1Calls := 0
+		day2Calls := 0
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"zoneInfo": "UTC"}})
+				return
+			}
+			if r.URL.Path == "/api-energy/power/getFhpPowerByDay" {
+				dayTime := r.URL.Query().Get("dayTime")
+				switch dayTime {
+				case "2026-03-28":
+					day1Calls++
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result": map[string]any{
+							// Day 1 ends with 00:00:00
+							"deviceTimeArray":     []string{"2026-03-28 23:55:00", "2026-03-29 00:00:00"},
+							"socArray":            []float64{50.0, 50.0},
+							"powerSolarHomeArray": []float64{120.0, 120.0}, // 120kW * 5min / 60min = 10kWh
+							"powerFhpHomeArray":   []float64{0.0, 0.0},
+							"powerSolarGirdArray": []float64{0.0, 0.0},
+							"powerSolarFhpArray":  []float64{0.0, 0.0},
+							"powerGirdFhpArray":   []float64{0.0, 0.0},
+							"powerGirdHomeArray":  []float64{0.0, 0.0},
+							"powerFhpGirdArray":   []float64{0.0, 0.0},
+						},
+					})
+				case "2026-03-29":
+					day2Calls++
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result": map[string]any{
+							// Day 2 starts with 00:00:00 (duplicate) and continues
+							"deviceTimeArray":     []string{"2026-03-29 00:00:00", "2026-03-29 00:05:00"},
+							"socArray":            []float64{50.0, 50.0},
+							"powerSolarHomeArray": []float64{120.0, 120.0},
+							"powerFhpHomeArray":   []float64{0.0, 0.0},
+							"powerSolarGirdArray": []float64{0.0, 0.0},
+							"powerSolarFhpArray":  []float64{0.0, 0.0},
+							"powerGirdFhpArray":   []float64{0.0, 0.0},
+							"powerGirdHomeArray":  []float64{0.0, 0.0},
+							"powerFhpGirdArray":   []float64{0.0, 0.0},
+						},
+					})
+				default:
+					t.Errorf("unexpected dayTime: %s", dayTime)
+					http.Error(w, "unexpected dayTime", 400)
+				}
+				return
+			}
+			http.Error(w, "not found", 404)
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:      ts.Client(),
+			baseURL:     ts.URL,
+			gatewayID:   "g",
+			username:    "u",
+			md5Password: "p",
+		}
+
+		// Requesting 23:00 on Day 1 to 01:00 on Day 2
+		start, _ := time.Parse(time.RFC3339, "2026-03-28T23:00:00Z")
+		end, _ := time.Parse(time.RFC3339, "2026-03-29T01:00:00Z")
+
+		stats, err := f.GetEnergyHistory(context.Background(), start, end)
+		require.NoError(t, err)
+
+		// Check for duplicates
+		seen := make(map[time.Time]int)
+		for _, s := range stats {
+			seen[s.TSHourStart]++
+		}
+
+		for ts, count := range seen {
+			assert.Equal(t, 1, count, "Duplicate TSHourStart found: %v", ts)
+		}
+
+		// Verify we have stats for both hours
+		if !assert.Len(t, stats, 2, "Expected 2 hours (23:00 and 00:00)") {
+			for i, s := range stats {
+				t.Logf("Stats[%d]: %v", i, s.TSHourStart)
+			}
+		}
+
+		// Hour 23:00 should have only the 23:55-00:00 interval (10 kWh)
+		// Plus whatever the default 5min interval for the 23:55 point gave (another 10 kWh?)
+		// Actually, Day 1 first point is 23:55. It gets 5min default.
+		// Day 1 second point is 00:00. It gets 5min (00:00 - 23:55).
+		// Total for 23:00 bucket = 2 * 10 = 20 kWh.
+		h23 := stats[0]
+		expected23, _ := time.Parse(time.RFC3339, "2026-03-28T23:00:00Z")
+		assert.Equal(t, expected23.Unix(), h23.TSHourStart.Unix())
+		assert.InDelta(t, 20.0, h23.SolarKWH, 0.01)
+
+		// Hour 00:00 should have only the 00:00-00:05 interval (10 kWh)
+		h00 := stats[1]
+		expected00, _ := time.Parse(time.RFC3339, "2026-03-29T00:00:00Z")
+		assert.Equal(t, expected00.Unix(), h00.TSHourStart.Unix())
+		assert.InDelta(t, 10.0, h00.SolarKWH, 0.01)
+
+		// Verify we fetched both days
+		assert.Equal(t, 1, day1Calls, "Day 1 should be fetched")
+		assert.Equal(t, 1, day2Calls, "Day 2 should be fetched")
 	})
 }

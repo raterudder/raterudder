@@ -4,6 +4,7 @@ import { type Action, type SavingsStats, type Settings, fetchActions, fetchSavin
 import CurrentStatus from '../components/CurrentStatus';
 import SavingsHero from '../components/SavingsHero';
 import ActionTimeline from '../components/ActionTimeline';
+import DateSelector from '../components/DateSelector';
 import {
     gridChargeCost,
     type ActionSummary,
@@ -102,27 +103,6 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
 
     const isToday = currentDate.toDateString() === new Date().toDateString();
 
-    useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
-
-            if (e.key === 'ArrowLeft' && !loading) {
-                handleDateChange(-1);
-            } else if (e.key === 'ArrowRight' && !loading && !isToday) {
-                handleDateChange(1);
-            }
-        };
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [handleDateChange, loading, isToday]);
-
-    // Format date for display
-    const formattedDate = currentDate.toLocaleDateString(undefined, {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-    });
 
     const latestAction = actions.length > 0 ? actions[actions.length - 1] : null;
     // Filter out paused actions from the displayed timeline — they are captured for
@@ -280,21 +260,12 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
     return (
         <div className="content-container action-list-container">
             <header className="header">
-                <div className="date-controls">
-                    <button
-                        onClick={() => handleDateChange(-1)}
-                        disabled={loading}
-                        aria-label="Previous day"
-                        title="Previous day (Left Arrow)"
-                    >&lt; Prev</button>
-                    <h2>{formattedDate}</h2>
-                    <button
-                        onClick={() => handleDateChange(1)}
-                        disabled={loading || isToday}
-                        aria-label="Next day"
-                        title={isToday ? "Cannot view future dates" : "Next day (Right Arrow)"}
-                    >Next &gt;</button>
-                </div>
+                <DateSelector
+                    currentDate={currentDate}
+                    onDateChange={handleDateChange}
+                    loading={loading}
+                    isToday={isToday}
+                />
             </header>
 
             {loading && <p>Loading day...</p>}

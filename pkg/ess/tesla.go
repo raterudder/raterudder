@@ -839,11 +839,13 @@ func (b *Tesla) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]t
 				continue
 			}
 			tInLoc := t.In(loc)
-
-			hourKey := tInLoc.Truncate(time.Hour).Format(time.RFC3339)
+			// The data is for the preceding period, so we subtract 1 second to shift the
+			// "end of hour" timestamp (e.g. 10:00:00) into the correct bucket (09:00:00).
+			bucketT := tInLoc.Add(-time.Second)
+			hourKey := bucketT.Truncate(time.Hour).Format(time.RFC3339)
 			if _, exists := hourlyStats[hourKey]; !exists {
 				hourlyStats[hourKey] = &types.EnergyStats{
-					TSHourStart: tInLoc.Truncate(time.Hour),
+					TSHourStart: bucketT.Truncate(time.Hour),
 				}
 			}
 			s := hourlyStats[hourKey]

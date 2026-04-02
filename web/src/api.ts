@@ -183,14 +183,14 @@ export interface UtilityRateOption {
 export interface UtilityProviderInfo {
   id: string;
   name: string;
-  rates: UtilityRateInfo[];
+  rates?: UtilityRateInfo[];
   hidden?: boolean;
 }
 
 export interface UtilityRateInfo {
   id: string;
   name: string;
-  options: UtilityRateOption[];
+  options?: UtilityRateOption[];
 }
 
 export interface ESSCredentialFieldChoice {
@@ -213,7 +213,7 @@ export interface ESSCredentialField {
 export interface ESSProviderInfo {
   id: string;
   name: string;
-  credentials: ESSCredentialField[];
+  credentials?: ESSCredentialField[];
   oAuthURLs?: Record<string, string>;
   oAuthKey?: ESSCredentialField;
   hidden?: boolean;
@@ -526,11 +526,15 @@ export interface PriceHistoryRes {
 
 export interface WeatherRes {
     tsHourStart: string;
-    forecastGHI: number;
-    forecastGTI?: number;
-    temperature?: number;
-    snowfall?: number;
+    irradiance: number;
+    temperatureC?: number;
+    temperatureCellC?: number;
+    snowfallCM?: number;
     improvedSolarGeneration?: number;
+    unclippedSolarGeneration?: number;
+    snowDepthCM?: number;
+    tempFactor?: number;
+    snowFactor?: number;
 }
 
 export interface ForecastResponse {
@@ -539,3 +543,44 @@ export interface ForecastResponse {
     priceHistory: PriceHistoryRes[];
     weather: WeatherRes[];
 }
+export interface EnergyStats {
+    tsHourStart: string;
+    minBatterySOC: number;
+    maxBatterySOC: number;
+    batteryChargedKWH: number;
+    batteryUsedKWH: number;
+    solarKWH: number;
+    homeKWH: number;
+    gridExportKWH: number;
+    gridImportKWH: number;
+    batteryToHomeKWH: number;
+    solarToHomeKWH: number;
+    solarToBatteryKWH: number;
+    solarToGridKWH: number;
+    batteryToGridKWH: number;
+    alarms?: SystemAlarm[];
+}
+
+export interface HistoryEnergyResponse {
+    energy: EnergyStats[];
+    weather: WeatherRes[];
+}
+
+export const fetchHistoryEnergy = async (date: Date, siteID?: string): Promise<HistoryEnergyResponse> => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const dateStr = `${year}-${month}-${day}`;
+    
+    const query = new URLSearchParams({
+        date: dateStr,
+    });
+    if (siteID) {
+        query.append('siteID', siteID);
+    }
+    const response = await fetch(`/api/history/energy?${query.toString()}`);
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Failed to fetch energy history'));
+    }
+    return response.json();
+};

@@ -224,7 +224,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	// Update Location if zip/country changed
 	if newSettings.PostalCode != "" && newSettings.CountryCode != "" {
 		if existing.PostalCode != newSettings.PostalCode || existing.CountryCode != newSettings.CountryCode || existing.Location == nil {
-			loc, err := s.weather.GetLocationData(ctx, newSettings.CountryCode, newSettings.PostalCode)
+			loc, err := s.weather.Location(ctx, newSettings.CountryCode, newSettings.PostalCode)
 			if err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to fetch location data", slog.Any("error", err))
 				writeJSONError(w, fmt.Sprintf("failed to fetch location data: %v", err), http.StatusBadRequest)

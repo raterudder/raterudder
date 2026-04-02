@@ -69,7 +69,7 @@ describe('Forecast Page', () => {
             expect(screen.getByText('Battery (if used) (%)')).toBeInTheDocument();
             expect(screen.getByText('Battery (if standby) (%)')).toBeInTheDocument();
             expect(screen.getByText('Predicted Solar (kWh)')).toBeInTheDocument();
-            expect(screen.queryByText('Forecasted Solar Radiation (W/m²)')).not.toBeInTheDocument();
+            expect(screen.queryByText('Estimated Irradiance (W/m²)')).not.toBeInTheDocument();
             expect(screen.getByText('Avg Home Load (kWh)')).toBeInTheDocument();
             expect(screen.getByText('Grid Charge Cost ($/kWh)')).toBeInTheDocument();
         });
@@ -84,7 +84,9 @@ describe('Forecast Page', () => {
             weather: [
                 {
                     tsHourStart: data[0].ts,
-                    forecastGHI: 120,
+                    irradiance: 350,
+                    improvedSolarGeneration: 2.5,
+                    unclippedSolarGeneration: 2.8,
                 }
             ]
         });
@@ -98,8 +100,8 @@ describe('Forecast Page', () => {
         await waitFor(() => {
             expect(screen.getByText('Battery (if used) (%)')).toBeInTheDocument();
             expect(screen.getByText('Battery (if standby) (%)')).toBeInTheDocument();
-            expect(screen.getByText('Predicted Solar (kWh)')).toBeInTheDocument();
-            expect(screen.getByText('Forecasted Solar Radiation (W/m²)')).toBeInTheDocument();
+            expect(screen.getByText('Improved Predicted Solar (kWh)')).toBeInTheDocument();
+            expect(screen.getByText('Estimated Irradiance (W/m²)')).toBeInTheDocument();
             expect(screen.getByText('Avg Home Load (kWh)')).toBeInTheDocument();
             expect(screen.getByText('Grid Charge Cost ($/kWh)')).toBeInTheDocument();
         });

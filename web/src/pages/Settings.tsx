@@ -67,11 +67,11 @@ const Settings = ({ siteID }: { siteID?: string }) => {
 
             // Merge default values for utility rate options
             const utilityProvider = utilities.find(u => u.id === settings.utilityProvider);
-            const utilityRate = utilityProvider?.rates.find(r => r.id === settings.utilityRate);
+            const utilityRate = (utilityProvider?.rates || []).find(r => r.id === settings.utilityRate);
             const finalSettings = { ...settings };
             if (utilityRate) {
                 const finalOpts = { ...finalSettings.utilityRateOptions };
-                utilityRate.options.forEach(opt => {
+                (utilityRate.options || []).forEach(opt => {
                     if (finalOpts[opt.field] === undefined || finalOpts[opt.field] === null || finalOpts[opt.field] === "") {
                         if (opt.default !== undefined) {
                             finalOpts[opt.field] = opt.default;
@@ -99,7 +99,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                     }
                 };
 
-                for (const cred of essProvider.credentials) {
+                for (const cred of (essProvider.credentials || [])) {
                     processCred(cred);
                 }
                 if (essProvider.oAuthKey) {
@@ -223,7 +223,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                 {utilities.find(u => u.id === settings.utilityProvider)?.name || settings.utilityProvider}
                             </span>
                             <span className="summary-sublabel">
-                                {utilities.find(u => u.id === settings.utilityProvider)?.rates.find(r => r.id === settings.utilityRate)?.name || settings.utilityRate}
+                                {utilities.find(u => u.id === settings.utilityProvider)?.rates?.find(r => r.id === settings.utilityRate)?.name || settings.utilityRate}
                             </span>
                         </div>
                         <div className={`summary-status ${isUtilityDirty ? 'pending' : ''}`}>
@@ -249,11 +249,11 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                     };
 
                                     // If provider has only one rate, auto-select it
-                                    if (provider?.rates.length === 1) {
+                                    if (provider?.rates && provider.rates.length === 1) {
                                         const rate = provider.rates[0];
                                         newSettings.utilityRate = rate.id;
                                         const newOpts: Record<string, string | number | boolean> = {};
-                                        rate.options.forEach((opt: UtilityRateOption) => {
+                                        (rate.options || []).forEach((opt: UtilityRateOption) => {
                                             newOpts[opt.field] = opt.default;
                                         });
                                         newSettings.utilityRateOptions = newOpts;
@@ -301,11 +301,11 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                         onValueChange={(value) => {
                                             setIsUtilityDirty(true);
                                             const rateID = value as string;
-                                            const rate = provider.rates.find(r => r.id === rateID);
+                                            const rate = (provider.rates || []).find(r => r.id === rateID);
                                             const newSettings = { ...settings, utilityRate: rateID };
                                             if (rate) {
                                                 const newOpts: Record<string, string | number | boolean> = {};
-                                                rate.options.forEach((opt: UtilityRateOption) => {
+                                                (rate.options || []).forEach((opt: UtilityRateOption) => {
                                                     newOpts[opt.field] = opt.default;
                                                 });
                                                 newSettings.utilityRateOptions = newOpts;
@@ -315,7 +315,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                     >
                                         <Select.Trigger className="select-trigger" id="utilityRate" aria-label="Rate/Plan">
                                             <Select.Value>
-                                                {provider.rates.find(r => r.id === settings.utilityRate)?.name || 'Select a rate/plan...'}
+                                                {(provider.rates || []).find(r => r.id === settings.utilityRate)?.name || 'Select a rate/plan...'}
                                             </Select.Value>
                                             <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
                                                 <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -329,7 +329,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                                     <Select.Item className="select-item" value="">
                                                         <Select.ItemText>Select a rate/plan...</Select.ItemText>
                                                     </Select.Item>
-                                                    {provider.rates.map(r => (
+                                                    {(provider.rates || []).map(r => (
                                                         <Select.Item key={r.id} className="select-item" value={r.id}>
                                                             <Select.ItemText>{r.name}</Select.ItemText>
                                                         </Select.Item>
@@ -344,8 +344,8 @@ const Settings = ({ siteID }: { siteID?: string }) => {
 
                         {(() => {
                             const provider = utilities.find(u => u.id === settings.utilityProvider);
-                            const rate = provider?.rates.find(r => r.id === settings.utilityRate);
-                            if (!rate || rate.options.length === 0) return null;
+                            const rate = (provider?.rates || []).find(r => r.id === settings.utilityRate);
+                            if (!rate || !rate.options || rate.options.length === 0) return null;
 
                             return (
                                 <div className="sub-section">
@@ -539,7 +539,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                             </Button>
                                         </div>
                                     )}
-                                    {provider.credentials.map(cred => (
+                                    {(provider.credentials || []).map(cred => (
                                         <Field.Root key={cred.field} className="form-group">
                                             <Field.Label>{cred.name}</Field.Label>
                                             {cred.type === 'select' ? (
@@ -773,7 +773,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                         <Select.Trigger className="select-trigger" aria-label="Solar Direction">
                                             <Select.Value placeholder="Select direction...">
                                                 {settings.solarTilt && settings.solarTilt > 0 ? (
-                                                    ({ "180": "North", "270": "East", "0": "South", "90": "West" } as Record<string, string>)[settings.solarAzimuth?.toString() || ""]
+                                                    ({ "0": "North", "90": "East", "180": "South", "270": "West" } as Record<string, string>)[settings.solarAzimuth?.toString() || ""]
                                                 ) : null}
                                             </Select.Value>
                                             <Select.Icon className="select-icon">
@@ -786,16 +786,16 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                         <Select.Positioner className="select-positioner">
                                             <Select.Popup className="select-popup">
                                                 <Select.List>
-                                                    <Select.Item className="select-item" value="180">
+                                                    <Select.Item className="select-item" value="0">
                                                         <Select.ItemText>North</Select.ItemText>
                                                     </Select.Item>
-                                                    <Select.Item className="select-item" value="270">
+                                                    <Select.Item className="select-item" value="90">
                                                         <Select.ItemText>East</Select.ItemText>
                                                     </Select.Item>
-                                                    <Select.Item className="select-item" value="0">
+                                                    <Select.Item className="select-item" value="180">
                                                         <Select.ItemText>South</Select.ItemText>
                                                     </Select.Item>
-                                                    <Select.Item className="select-item" value="90">
+                                                    <Select.Item className="select-item" value="270">
                                                         <Select.ItemText>West</Select.ItemText>
                                                     </Select.Item>
                                                 </Select.List>

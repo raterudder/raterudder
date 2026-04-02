@@ -434,3 +434,73 @@ func TestHistory(t *testing.T) {
 		assert.Equal(t, "private, max-age=86400", resp.Header.Get("Cache-Control"))
 	})
 }
+
+func TestHandleHistoryEnergy(t *testing.T) {
+	mockS := &mockStorage{}
+	srv := &Server{
+		storage:            mockS,
+		bypassAuth:         true,
+		singleSite:         true,
+		controller:         controller.NewController(),
+		generalRateLimit:   rate.Every(time.Minute / 30),
+		generalBurst:       30,
+		sensitiveRateLimit: rate.Every(time.Minute / 5),
+		sensitiveBurst:     5,
+	}
+
+	handler := srv.setupHandler()
+
+	t.Run("Success", func(t *testing.T) {
+		targetDate := "2023-10-27"
+		d, _ := time.Parse("2006-01-02", targetDate)
+		dUTC := d.UTC()
+
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			Location: &types.SiteLocation{
+				TimeZone:     "UTC",
+				Latitude:     41.8781,
+				Longitude:    -87.6298,
+				SolarTilt:    20,
+				SolarAzimuth: 180,
+			},
+		}, types.CurrentSettingsVersion, nil)
+
+		// Energy History
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{
+			{TSHourStart: dUTC, SolarKWH: 5.2, MaxBatterySOC: 85.0},
+		}, nil)
+
+		// Weather
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{
+			{
+				ForecastHours: []types.HourlyWeather{
+					{TSHourStart: dUTC, TemperatureC: 15, DNI: 500, DHI: 100},
+				},
+			},
+		}, nil)
+
+		req := httptest.NewRequest("GET", "/api/history/energy?date="+targetDate, nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var res HistoryEnergyRes
+		err := json.Unmarshal(w.Body.Bytes(), &res)
+		require.NoError(t, err)
+
+		assert.Len(t, res.Energy, 1)
+		assert.Equal(t, 5.2, res.Energy[0].SolarKWH)
+		assert.Equal(t, 85.0, res.Energy[0].MaxBatterySOC)
+		assert.Len(t, res.Weather, 1)
+		assert.Equal(t, dUTC.Unix(), res.Weather[0].TSHourStart.Unix())
+	})
+
+	t.Run("Invalid Date", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/history/energy?date=invalid", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Contains(t, w.Body.String(), "invalid date format")
+	})
+}

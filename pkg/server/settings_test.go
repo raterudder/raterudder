@@ -687,11 +687,11 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockS.On("UpsertWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 		mockW := &mockWeather{}
-		mockW.On("GetLocationData", mock.Anything, mock.Anything, mock.Anything).Return(&types.SiteLocation{
+		mockW.On("Location", mock.Anything, mock.Anything, mock.Anything).Return(&types.SiteLocation{
 			PostalCode:  "90210",
 			CountryCode: "US",
 		}, nil).Maybe()
-		mockW.On("FetchWeatherForecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockW.On("Forecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
 
 		srv := &Server{
 			storage:     mockS,
@@ -816,8 +816,8 @@ func TestHandleUpdateSettings(t *testing.T) {
 			Latitude:    41.8818,
 			Longitude:   -87.6231,
 		}
-		mockW.On("GetLocationData", mock.Anything, "US", "60601").Return(newLoc, nil).Once()
-		mockW.On("FetchWeatherForecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockW.On("Location", mock.Anything, "US", "60601").Return(newLoc, nil).Once()
+		mockW.On("Forecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
 		mockS.On("GetLatestWeatherTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
 		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
 		mockS.On("UpsertWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()

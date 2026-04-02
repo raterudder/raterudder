@@ -58,6 +58,8 @@ github.com/levenlabs/go-lflag v1.0.2 h1:eaI2qZJaYU+z3fzCQjY+9tW7ROW7q7bTrZLtWn7L
 github.com/levenlabs/go-lflag v1.0.2/go.mod h1:n7V7JAjejtAQTOoMH6Cew6uEqnBUnAYAdgbO+CYH+ts=
 github.com/levenlabs/go-llog v1.0.0 h1:3DL5Pk8URGWZ0Nls2AVlybnbiPI7LacPETxpTlISepM=
 github.com/levenlabs/go-llog v1.0.0/go.mod h1:90qkaDrsObaIbrVba3gPV+EAZMm9cscEzBJoKF3frGg=
+github.com/mstephenholl/go-solar v1.0.1 h1:W6EUgBl2OCwnUjdnOsG/3+1WOKrnpGnlmDhzlmPWraY=
+github.com/mstephenholl/go-solar v1.0.1/go.mod h1:OQCM8tI/ojQoL7UFJijFeyqzMpjYMXBonpgDSGLAHcU=
 github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 h1:GFCKgmp0tecUJ0sJuv4pzYCqS9+RGSn52M3FUwPs+uo=
 github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10/go.mod h1:t/avpk3KcrXxUnYOhZhMXJlSEyie6gQbtLq5NM3loB8=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=

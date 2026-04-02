@@ -97,7 +97,7 @@ type mockWeather struct {
 	mock.Mock
 }
 
-func (m *mockWeather) GetLocationData(ctx context.Context, countryCode, postalCode string) (*types.SiteLocation, error) {
+func (m *mockWeather) Location(ctx context.Context, countryCode, postalCode string) (*types.SiteLocation, error) {
 	args := m.Called(ctx, countryCode, postalCode)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -105,7 +105,7 @@ func (m *mockWeather) GetLocationData(ctx context.Context, countryCode, postalCo
 	return args.Get(0).(*types.SiteLocation), args.Error(1)
 }
 
-func (m *mockWeather) FetchWeatherForecast(ctx context.Context, loc types.SiteLocation, startDate, endDate time.Time) ([]types.Weather, error) {
+func (m *mockWeather) Forecast(ctx context.Context, loc types.SiteLocation, startDate, endDate time.Time) ([]types.Weather, error) {
 	args := m.Called(ctx, loc, startDate, endDate)
 	return args.Get(0).([]types.Weather), args.Error(1)
 }

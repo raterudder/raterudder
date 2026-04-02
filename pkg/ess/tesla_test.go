@@ -441,41 +441,41 @@ func TestTesla(t *testing.T) {
 							"period":        "day",
 							"time_series": []map[string]any{
 								{
-									"timestamp":                             "2026-03-12T10:00:00-05:00",
-									"solar_energy_exported":                 3000.0,
-									"battery_energy_exported":               1000.0,
-									"battery_energy_imported_from_grid":     250.0,
-									"battery_energy_imported_from_solar":    750.0,
-									"grid_energy_imported":                  1500.0,
-									"grid_energy_exported_from_solar":       400.0,
-									"grid_energy_exported_from_battery":     100.0,
-									"consumer_energy_imported_from_grid":    1250.0,
-									"consumer_energy_imported_from_solar":   1350.0,
-									"consumer_energy_imported_from_battery": 900.0,
-									"total_home_usage":                      3500.0,
-									"total_solar_generation":                3000.0,
-									"total_battery_charge":                  1000.0,
-									"total_grid_energy_exported":            500.0,
-								},
-								{
 									"timestamp":                             "2026-03-12T10:15:00-05:00",
 									"solar_energy_exported":                 2000.0,
-									"battery_energy_exported":               1000.0,
+									"battery_energy_exported":               500.0,
 									"battery_energy_imported_from_grid":     250.0,
-									"battery_energy_imported_from_solar":    750.0,
+									"battery_energy_imported_from_solar":    500.0,
 									"grid_energy_imported":                  1500.0,
-									"grid_energy_exported_from_solar":       400.0,
-									"grid_energy_exported_from_battery":     100.0,
+									"grid_energy_exported_from_solar":       200.0,
+									"grid_energy_exported_from_battery":     50.0,
 									"consumer_energy_imported_from_grid":    1250.0,
-									"consumer_energy_imported_from_solar":   1350.0,
-									"consumer_energy_imported_from_battery": 900.0,
-									"total_home_usage":                      3500.0,
+									"consumer_energy_imported_from_solar":   1300.0,
+									"consumer_energy_imported_from_battery": 450.0,
+									"total_home_usage":                      3000.0,
 									"total_solar_generation":                2000.0,
-									"total_battery_charge":                  1000.0,
-									"total_grid_energy_exported":            500.0,
+									"total_battery_charge":                  500.0,
+									"total_grid_energy_exported":            250.0,
 								},
 								{
 									"timestamp":                             "2026-03-12T11:00:00-05:00",
+									"solar_energy_exported":                 3000.0,
+									"battery_energy_exported":               1500.0,
+									"battery_energy_imported_from_grid":     0.0,
+									"battery_energy_imported_from_solar":    250.0,
+									"grid_energy_imported":                  1500.0,
+									"grid_energy_exported_from_solar":       200.0,
+									"grid_energy_exported_from_battery":     50.0,
+									"consumer_energy_imported_from_grid":    1500.0,
+									"consumer_energy_imported_from_solar":   1400.0,
+									"consumer_energy_imported_from_battery": 1350.0,
+									"total_home_usage":                      4250.0,
+									"total_solar_generation":                3000.0,
+									"total_battery_charge":                  1500.0,
+									"total_grid_energy_exported":            250.0,
+								},
+								{
+									"timestamp":                             "2026-03-12T12:00:00-05:00",
 									"solar_energy_exported":                 6000.0,
 									"battery_energy_exported":               1000.0,
 									"battery_energy_imported_from_grid":     0.0,
@@ -495,18 +495,18 @@ func TestTesla(t *testing.T) {
 						},
 					})
 				case "soe":
-					// SOE at 15 min intervals: 10:00=80, 10:15=75, 10:30=70, 10:45=72, 11:00=65, 11:15=68
+					// SOE at 15 min intervals shifted: 10:15=80, 10:30=75, 10:45=70, 11:00=72, 11:15=65, 12:00=68
 					json.NewEncoder(w).Encode(map[string]any{
 						"response": map[string]any{
 							"serial_number": "abc123",
 							"period":        "day",
 							"time_series": []map[string]any{
-								{"timestamp": "2026-03-12T10:00:00-05:00", "soe": 80.0},
-								{"timestamp": "2026-03-12T10:15:00-05:00", "soe": 75.0},
-								{"timestamp": "2026-03-12T10:30:00-05:00", "soe": 70.0},
-								{"timestamp": "2026-03-12T10:45:00-05:00", "soe": 72.0},
-								{"timestamp": "2026-03-12T11:00:00-05:00", "soe": 65.0},
-								{"timestamp": "2026-03-12T11:15:00-05:00", "soe": 68.0},
+								{"timestamp": "2026-03-12T10:15:00-05:00", "soe": 80.0},
+								{"timestamp": "2026-03-12T10:30:00-05:00", "soe": 75.0},
+								{"timestamp": "2026-03-12T10:45:00-05:00", "soe": 70.0},
+								{"timestamp": "2026-03-12T11:00:00-05:00", "soe": 72.0},
+								{"timestamp": "2026-03-12T11:15:00-05:00", "soe": 65.0},
+								{"timestamp": "2026-03-12T12:00:00-05:00", "soe": 68.0},
 							},
 						},
 					})
@@ -539,36 +539,36 @@ func TestTesla(t *testing.T) {
 			sort.Slice(stats, func(i, j int) bool {
 				return stats[i].TSHourStart.Before(stats[j].TSHourStart)
 			})
-			// Hour 10: aggregated from two 15-min entries (3000+2000=5000 Wh solar, etc)
+			// Hour 10: aggregated from two entries (2000+3000=5000 Wh solar, etc)
 			s := stats[0]
 			assert.Equal(t, time.Date(2026, 3, 12, 10, 0, 0, 0, loc), s.TSHourStart)
 			assert.Equal(t, 5.0, s.SolarKWH)
-			assert.Equal(t, 2.0, s.BatteryChargedKWH)
+			assert.Equal(t, 1.0, s.BatteryChargedKWH)
 			assert.Equal(t, 2.0, s.BatteryUsedKWH)
 			assert.Equal(t, 3.0, s.GridImportKWH)
-			assert.Equal(t, 1.0, s.GridExportKWH)
-			assert.Equal(t, 7.0, s.HomeKWH)
+			assert.Equal(t, 0.5, s.GridExportKWH)
+			assert.Equal(t, 7.25, s.HomeKWH)
 			assert.Equal(t, 2.7, s.SolarToHomeKWH)
-			assert.Equal(t, 1.5, s.SolarToBatteryKWH)
-			assert.Equal(t, 0.8, s.SolarToGridKWH)
+			assert.Equal(t, 0.75, s.SolarToBatteryKWH)
+			assert.Equal(t, 0.4, s.SolarToGridKWH)
 			assert.Equal(t, 1.8, s.BatteryToHomeKWH)
-			assert.Equal(t, 0.2, s.BatteryToGridKWH)
-			// SOC: min=70 (10:30), max=80 (10:00)
+			assert.Equal(t, 0.1, s.BatteryToGridKWH)
+			// SOC: min=70 (10:45), max=80 (10:15)
 			assert.Equal(t, 70.0, s.MinBatterySOC)
 			assert.Equal(t, 80.0, s.MaxBatterySOC)
 
-			// Hour 11: single entry
+			// Hour 11: single entry (from 12:00:00 timestamp)
 			s2 := stats[1]
 			assert.Equal(t, time.Date(2026, 3, 12, 11, 0, 0, 0, loc), s2.TSHourStart)
 			assert.Equal(t, 6.0, s2.SolarKWH)
-			assert.Equal(t, 1.0, s2.BatteryUsedKWH)
 			assert.Equal(t, 2.0, s2.BatteryChargedKWH)
+			assert.Equal(t, 1.0, s2.BatteryUsedKWH)
 			assert.Equal(t, 1.0, s2.GridImportKWH)
 			assert.Equal(t, 1.2, s2.GridExportKWH)
 			assert.Equal(t, 4.8, s2.HomeKWH)
-			// SOC: min=65 (11:00), max=68 (11:15)
+			// SOC: min=65 (11:15), max=72 (11:00)
 			assert.Equal(t, 65.0, s2.MinBatterySOC)
-			assert.Equal(t, 68.0, s2.MaxBatterySOC)
+			assert.Equal(t, 72.0, s2.MaxBatterySOC)
 		}
 	})
 

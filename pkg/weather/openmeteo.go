@@ -33,9 +33,9 @@ type geocodingResponse struct {
 	} `json:"results"`
 }
 
-// GetLocationData queries the Open-Meteo Geocoding API to find a location based on zip code and country code.
+// Location queries the Open-Meteo Geocoding API to find a location based on zip code and country code.
 // It returns the location with the largest population if multiple results are found.
-func (s *OpenMeteo) GetLocationData(ctx context.Context, countryCode, postalCode string) (*types.SiteLocation, error) {
+func (s *OpenMeteo) Location(ctx context.Context, countryCode, postalCode string) (*types.SiteLocation, error) {
 	if countryCode == "" || postalCode == "" {
 		return nil, fmt.Errorf("country code and zip code are required")
 	}
@@ -108,18 +108,22 @@ type weatherForecastResponse struct {
 		Sunset  []string `json:"sunset"`
 	} `json:"daily"`
 	Hourly struct {
-		Time               []string  `json:"time"`
-		ShortwaveRadiation []float64 `json:"shortwave_radiation"`
-		TiltedRadiation    []float64 `json:"global_tilted_irradiance"`
-		Temperature        []float64 `json:"temperature_2m"`
-		Snowfall           []float64 `json:"snowfall"`
+		Time                   []string  `json:"time"`
+		ShortwaveRadiation     []float64 `json:"shortwave_radiation"`
+		DiffuseRadiation       []float64 `json:"diffuse_radiation"`
+		DirectNormalIrradiance []float64 `json:"direct_normal_irradiance"`
+		TiltedRadiation        []float64 `json:"global_tilted_irradiance"`
+		Temperature            []float64 `json:"temperature_2m"`
+		Snowfall               []float64 `json:"snowfall"`
+		SnowDepth              []float64 `json:"snow_depth"`
+		CloudCover             []float64 `json:"cloud_cover"`
 	} `json:"hourly"`
 }
 
-// FetchWeatherForecast fetches the weather forecast data for the specified date range.
+// Forecast fetches the weather forecast data for the specified date range.
 // startDate is inclusive and endDate is exclusive, similar to storage boundaries.
 // Returns a slice of types.Weather structs for each day in the requested range.
-func (s *OpenMeteo) FetchWeatherForecast(
+func (s *OpenMeteo) Forecast(
 	ctx context.Context,
 	loc types.SiteLocation,
 	startDate, endDate time.Time,
@@ -149,21 +153,14 @@ func (s *OpenMeteo) FetchWeatherForecast(
 	q := u.Query()
 	q.Set("latitude", fmt.Sprintf("%f", loc.Latitude))
 	q.Set("longitude", fmt.Sprintf("%f", loc.Longitude))
-	hourly := []string{"shortwave_radiation", "temperature_2m", "snowfall"}
-	var hasTiltedRadiation bool
+	hourly := []string{"shortwave_radiation", "diffuse_radiation", "direct_normal_irradiance", "snow_depth", "snowfall", "cloud_cover", "temperature_2m"}
 	if loc.SolarTilt > 0 {
-		hasTiltedRadiation = true
 		hourly = append(hourly, "global_tilted_irradiance")
 		q.Set("tilt", fmt.Sprintf("%f", loc.SolarTilt))
-		if loc.SolarAzimuth < 0 || loc.SolarAzimuth > 360 {
-			log.Ctx(ctx).WarnContext(ctx, "open-meteo: invalid azimuth", slog.Float64("azimuth", loc.SolarAzimuth))
-		} else {
-			// correct for values > 180 which should be negative when passed to Open-Meteo
-			if loc.SolarAzimuth > 180 {
-				loc.SolarAzimuth = loc.SolarAzimuth - 360
-			}
-			q.Set("azimuth", fmt.Sprintf("%f", loc.SolarAzimuth))
-		}
+		// Open-Meteo expects Azimuth 0 south, -90 = east, +90 = west.
+		// Our system uses compass degrees where 0 = North, 90 = East, 180 = South, 270 = West.
+		omAzimuth := loc.SolarAzimuth - 180
+		q.Set("azimuth", fmt.Sprintf("%f", omAzimuth))
 	}
 	q.Set("hourly", strings.Join(hourly, ","))
 	q.Set("daily", "sunrise,sunset")
@@ -204,14 +201,36 @@ func (s *OpenMeteo) FetchWeatherForecast(
 		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: daily data mismatch", slog.Int("timeCount", len(data.Daily.Time)), slog.Int("sunriseCount", len(data.Daily.Sunrise)), slog.Int("sunsetCount", len(data.Daily.Sunset)))
 		return nil, fmt.Errorf("daily data mismatch: %d times, %d sunrises, %d sunsets", len(data.Daily.Time), len(data.Daily.Sunrise), len(data.Daily.Sunset))
 	}
-
 	if len(data.Hourly.Time) != len(data.Hourly.ShortwaveRadiation) {
-		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.Int("timeCount", len(data.Hourly.Time)), slog.Int("ghiCount", len(data.Hourly.ShortwaveRadiation)))
+		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.Int("timeCount", len(data.Hourly.Time)), slog.Int("shortwaveRadiationCount", len(data.Hourly.ShortwaveRadiation)))
 		return nil, fmt.Errorf("hourly data mismatch: %d times, %d shortwave radiation", len(data.Hourly.Time), len(data.Hourly.ShortwaveRadiation))
 	}
-
-	if hasTiltedRadiation && len(data.Hourly.Time) != len(data.Hourly.TiltedRadiation) {
-		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.Int("timeCount", len(data.Hourly.Time)), slog.Int("gtiCount", len(data.Hourly.TiltedRadiation)))
+	if len(data.Hourly.Time) != len(data.Hourly.DiffuseRadiation) {
+		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.Int("timeCount", len(data.Hourly.Time)), slog.Int("diffuseRadiationCount", len(data.Hourly.DiffuseRadiation)))
+		return nil, fmt.Errorf("hourly data mismatch: %d times, %d diffuse radiation", len(data.Hourly.Time), len(data.Hourly.DiffuseRadiation))
+	}
+	if len(data.Hourly.Time) != len(data.Hourly.DirectNormalIrradiance) {
+		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.Int("timeCount", len(data.Hourly.Time)), slog.Int("directNormalIrradianceCount", len(data.Hourly.DirectNormalIrradiance)))
+		return nil, fmt.Errorf("hourly data mismatch: %d times, %d direct normal irradiance", len(data.Hourly.Time), len(data.Hourly.DirectNormalIrradiance))
+	}
+	if len(data.Hourly.Time) != len(data.Hourly.Temperature) {
+		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.Int("timeCount", len(data.Hourly.Time)), slog.Int("temperatureCount", len(data.Hourly.Temperature)))
+		return nil, fmt.Errorf("hourly data mismatch: %d times, %d temperature", len(data.Hourly.Time), len(data.Hourly.Temperature))
+	}
+	if len(data.Hourly.Time) != len(data.Hourly.Snowfall) {
+		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.Int("timeCount", len(data.Hourly.Time)), slog.Int("snowfallCount", len(data.Hourly.Snowfall)))
+		return nil, fmt.Errorf("hourly data mismatch: %d times, %d snowfall", len(data.Hourly.Time), len(data.Hourly.Snowfall))
+	}
+	if len(data.Hourly.Time) != len(data.Hourly.SnowDepth) {
+		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.Int("timeCount", len(data.Hourly.Time)), slog.Int("snowDepthCount", len(data.Hourly.SnowDepth)))
+		return nil, fmt.Errorf("hourly data mismatch: %d times, %d snow depth", len(data.Hourly.Time), len(data.Hourly.SnowDepth))
+	}
+	if len(data.Hourly.Time) != len(data.Hourly.CloudCover) {
+		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.Int("timeCount", len(data.Hourly.Time)), slog.Int("cloudCoverCount", len(data.Hourly.CloudCover)))
+		return nil, fmt.Errorf("hourly data mismatch: %d times, %d cloud cover", len(data.Hourly.Time), len(data.Hourly.CloudCover))
+	}
+	if loc.SolarTilt > 0 && len(data.Hourly.Time) != len(data.Hourly.TiltedRadiation) {
+		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.Int("timeCount", len(data.Hourly.Time)), slog.Int("tiltedRadiationCount", len(data.Hourly.TiltedRadiation)))
 		return nil, fmt.Errorf("hourly data mismatch: %d times, %d tilted radiation", len(data.Hourly.Time), len(data.Hourly.TiltedRadiation))
 	}
 
@@ -256,37 +275,42 @@ func (s *OpenMeteo) FetchWeatherForecast(
 					log.Ctx(ctx).WarnContext(ctx, "open-meteo: failed to parse hourly time", slog.Any("error", err), slog.String("time", tStr))
 					continue
 				}
+				// instance values
 				hw := types.HourlyWeather{
 					TSHourStart: t,
-					SnowfallCM:  data.Hourly.Snowfall[i],
 				}
 
-				// the temperature values are instantaneous values so we average the
-				// temperature at this start of the hour to the next start of the hour
-				// to get the "average" temperature over the hour
+				// the temperature, snow depth, and cloud cover values are instantaneous values so we average
+				// the value at this start of the hour to the next start of the hour
+				// to get the "average" over the hour
 				if i+1 < len(data.Hourly.Temperature) {
 					hw.TemperatureC = (data.Hourly.Temperature[i] + data.Hourly.Temperature[i+1]) / 2.0
+					hw.SnowDepthCM = (data.Hourly.SnowDepth[i] + data.Hourly.SnowDepth[i+1]) / 2.0 * 100.0
+					hw.CloudCoverPercent = (data.Hourly.CloudCover[i] + data.Hourly.CloudCover[i+1]) / 2.0
 				} else {
 					// realistically we should never get here because we'll be before the end date
 					hw.TemperatureC = data.Hourly.Temperature[i]
+					hw.SnowDepthCM = data.Hourly.SnowDepth[i] * 100.0
+					hw.CloudCoverPercent = data.Hourly.CloudCover[i]
 				}
 
-				// irradiance values are for the hour preceding the timestamp
+				// irradiance values and snowfall are for the hour preceding the timestamp
 				// so we take the value for the next hour
 				if i+1 < len(data.Hourly.ShortwaveRadiation) {
 					hw.GHI = data.Hourly.ShortwaveRadiation[i+1]
+					hw.DHI = data.Hourly.DiffuseRadiation[i+1]
+					hw.DNI = data.Hourly.DirectNormalIrradiance[i+1]
+					hw.SnowfallCM = data.Hourly.Snowfall[i+1]
+					if len(data.Hourly.TiltedRadiation) > i+1 {
+						hw.GTI = data.Hourly.TiltedRadiation[i+1]
+					}
 				} else {
 					// realistically we should never get here because we'll be before the end date
 					hw.GHI = data.Hourly.ShortwaveRadiation[i]
-				}
-
-				// irradiance values are for the hour preceding the timestamp
-				// so we take the value for the next hour
-				if hasTiltedRadiation {
-					if i+1 < len(data.Hourly.TiltedRadiation) {
-						hw.GTI = data.Hourly.TiltedRadiation[i+1]
-					} else {
-						// realistically we should never get here because we'll be before the end date
+					hw.DHI = data.Hourly.DiffuseRadiation[i]
+					hw.DNI = data.Hourly.DirectNormalIrradiance[i]
+					hw.SnowfallCM = data.Hourly.Snowfall[i]
+					if len(data.Hourly.TiltedRadiation) > i {
 						hw.GTI = data.Hourly.TiltedRadiation[i]
 					}
 				}

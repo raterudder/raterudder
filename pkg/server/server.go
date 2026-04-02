@@ -214,6 +214,7 @@ func (s *Server) setupHandler() http.Handler {
 	apiMux.HandleFunc("POST /api/update", s.handleUpdate)
 	apiMux.HandleFunc("POST /api/updateSites", s.handleUpdateSites)
 	apiMux.HandleFunc("GET /api/history/prices", s.handleHistoryPrices)
+	apiMux.HandleFunc("GET /api/history/energy", s.handleHistoryEnergy)
 	apiMux.HandleFunc("GET /api/history/actions", s.handleHistoryActions)
 	apiMux.HandleFunc("GET /api/history/savings", s.handleHistorySavings)
 	apiMux.HandleFunc("GET /api/settings", s.handleGetSettings)
