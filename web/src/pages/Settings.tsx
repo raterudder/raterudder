@@ -107,8 +107,6 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                 }
             }
 
-            finalSettings.release = "staging";
-
             await updateSettings(finalSettings, siteID, credentialsPayload);
             setSuccessMessage('Settings saved successfully');
 

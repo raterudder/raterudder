@@ -196,6 +196,10 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if newSettings.Release != s.release {
+		log.Ctx(ctx).WarnContext(ctx,
+			"settings release mismatch",
+			slog.String("release", newSettings.Release),
+		)
 		writeJSONError(w, "settings release mismatch", http.StatusBadRequest)
 		return
 	}

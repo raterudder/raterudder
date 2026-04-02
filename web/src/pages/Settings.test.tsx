@@ -131,7 +131,8 @@ describe('App & Settings', () => {
          await waitFor(() => {
              expect(screen.getByText('Settings saved successfully')).toBeInTheDocument();
              expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
-                 minBatterySOC: 20
+                 minBatterySOC: 20,
+                 release: "production"
              }), expect.any(String), undefined);
          });
     });
