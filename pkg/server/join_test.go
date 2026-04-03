@@ -43,16 +43,42 @@ func TestHandleJoin(t *testing.T) {
 	}
 
 	t.Run("MissingFields", func(t *testing.T) {
-		store := &mockStorage{}
-		s := newServer(store)
+		tests := []struct {
+			name       string
+			inviteCode string
+			joinSiteID string
+		}{
+			{
+				name:       "BothMissing",
+				inviteCode: "",
+				joinSiteID: "",
+			},
+			{
+				name:       "InviteCodeMissing",
+				inviteCode: "",
+				joinSiteID: "site1",
+			},
+			{
+				name:       "JoinSiteIDMissing",
+				inviteCode: "abc",
+				joinSiteID: "",
+			},
+		}
 
-		body := `{"inviteCode":"","joinSiteID":""}`
-		req := httptest.NewRequest(http.MethodPost, "/api/join", bytes.NewBufferString(body))
-		req = withUser(req, "user@test.com", "user@test.com")
-		w := httptest.NewRecorder()
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				store := &mockStorage{}
+				s := newServer(store)
 
-		s.handleJoin(w, req)
-		assert.Equal(t, http.StatusBadRequest, w.Code)
+				body := fmt.Sprintf(`{"inviteCode":"%s","joinSiteID":"%s"}`, tc.inviteCode, tc.joinSiteID)
+				req := httptest.NewRequest(http.MethodPost, "/api/join", bytes.NewBufferString(body))
+				req = withUser(req, "user@test.com", "user@test.com")
+				w := httptest.NewRecorder()
+
+				s.handleJoin(w, req)
+				assert.Equal(t, http.StatusBadRequest, w.Code, "Expected Bad Request for missing fields")
+			})
+		}
 	})
 
 	t.Run("InvalidBody", func(t *testing.T) {
