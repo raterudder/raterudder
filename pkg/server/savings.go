@@ -191,8 +191,9 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 	}
 
 	type energyChunk struct {
-		amount float64
-		price  float64
+		amount  float64
+		price   float64
+		ignored bool
 	}
 	var chargeStack []energyChunk
 	var stats types.SavingsStats
@@ -261,31 +262,60 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 
 		activeGridToBattery := math.Max(0, stat.BatteryChargedKWH-stat.SolarToBatteryKWH) * activeFraction
 		activeSolarToBattery := math.Min(stat.BatteryChargedKWH, stat.SolarToBatteryKWH) * activeFraction
+		// Emergency/paused charging: the energy still enters the battery, but
+		// we treat it as $0 cost since it was forced (storm hedge, pause, etc.)
+		// and not a deliberate arbitrage decision.
+		ignoredGridToBattery := math.Max(0, stat.BatteryChargedKWH-stat.SolarToBatteryKWH) * ignoredFraction
+		ignoredSolarToBattery := math.Min(stat.BatteryChargedKWH, stat.SolarToBatteryKWH) * ignoredFraction
 
 		// Push to LIFO stack if we charged the battery.
+		// We push 'active' first then 'ignored' so that the 'ignored' portion
+		// (which often happens later in the hour, e.g. storm starts) is popped first (LIFO).
 		if activeGridToBattery > 0 {
 			chargeStack = append(chargeStack, energyChunk{
-				amount: activeGridToBattery,
-				price:  gridImportPrice,
+				amount:  activeGridToBattery,
+				price:   gridImportPrice,
+				ignored: false,
 			})
 		}
 		if activeSolarToBattery > 0 {
 			chargeStack = append(chargeStack, energyChunk{
-				amount: activeSolarToBattery,
-				price:  0.0, // Solar costs $0 to charge from the grid's perspective
+				amount:  activeSolarToBattery,
+				price:   0.0, // Solar costs $0
+				ignored: false,
+			})
+		}
+		if ignoredGridToBattery > 0 {
+			chargeStack = append(chargeStack, energyChunk{
+				amount:  ignoredGridToBattery,
+				price:   gridImportPrice, // Track matching rate, but flag as ignored
+				ignored: true,
+			})
+		}
+		if ignoredSolarToBattery > 0 {
+			chargeStack = append(chargeStack, energyChunk{
+				amount:  ignoredSolarToBattery,
+				price:   0.0,
+				ignored: true,
 			})
 		}
 
-		activeBatteryUsed := stat.BatteryUsedKWH * activeFraction
 		activeBatteryToHome := stat.BatteryToHomeKWH * activeFraction
 
-		// Pop from LIFO stack to determine cost of the used battery energy
-		dischargeCost := 0.0
-		amountToDischarge := activeBatteryUsed
+		// Pop from LIFO stack to determine cost of the used battery energy.
+		// We pop the TOTAL amount to keep our inventory stack in sync with the physical battery,
+		// but we separate 'ignored' volume from 'active' cost.
+		activeDischargeCost := 0.0
+		ignoredDischargeKWH := 0.0
+		amountToDischarge := stat.BatteryUsedKWH
 		for amountToDischarge > 0 && len(chargeStack) > 0 {
 			top := &chargeStack[len(chargeStack)-1]
 			take := math.Min(amountToDischarge, top.amount)
-			dischargeCost += take * top.price
+			if !top.ignored {
+				activeDischargeCost += take * top.price
+			} else {
+				ignoredDischargeKWH += take
+			}
 			top.amount -= take
 			amountToDischarge -= take
 			if top.amount <= 0 {
@@ -293,13 +323,19 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 			}
 		}
 
-		// Calculate charging cost attributed to the home use
+		// Calculate performance metrics by subtracting ignored volume from raterudder's results.
+		// We subtract ignored volume from both used and to-home (conservative assumption).
+		ignoredUsedForHome := math.Min(stat.BatteryToHomeKWH, ignoredDischargeKWH)
+		effBatteryToHome := (stat.BatteryToHomeKWH - ignoredUsedForHome) * activeFraction
+		effBatteryUsed := (stat.BatteryUsedKWH - ignoredDischargeKWH) * activeFraction
+
+		// Calculate charging cost for home based on the active (non-ignored) portion.
 		chargingCostForHome := 0.0
-		if activeBatteryUsed > 0 {
-			chargingCostForHome = dischargeCost * (activeBatteryToHome / activeBatteryUsed)
+		if effBatteryUsed > 0 {
+			chargingCostForHome = activeDischargeCost * (effBatteryToHome / effBatteryUsed)
 		}
 
-		avoided := activeBatteryToHome * gridImportPrice
+		avoided := effBatteryToHome * gridImportPrice
 
 		// Accumulate Energy Amounts (raw, unscaled for general stats)
 		if inRequestedPeriod {

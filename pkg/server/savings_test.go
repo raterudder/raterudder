@@ -233,6 +233,81 @@ func TestHandleHistorySavings(t *testing.T) {
 		assert.InDelta(t, 0.0, savings.SolarSavings, 0.001, "SolarSavings mismatch")
 	})
 
+	t.Run("Storm Charging Then Discharge", func(t *testing.T) {
+		savings := runTest(t, func(m *mockSavingsStorage) {
+			m.prices = []types.Price{
+				{TSStart: start.Add(-2 * time.Hour), TSEnd: start.Add(-1 * time.Hour), DollarsPerKWH: 0.15}, // Heavy charge @ $0.15 during storm
+				{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.20},                          // Normal discharge @ $0.20
+			}
+			m.stats = []types.EnergyStats{
+				{
+					TSHourStart:       start.Add(-2 * time.Hour),
+					GridImportKWH:     10,
+					BatteryChargedKWH: 10,
+				},
+				{
+					TSHourStart:      start,
+					HomeKWH:          10,
+					BatteryUsedKWH:   10,
+					BatteryToHomeKWH: 10,
+				},
+			}
+			m.actions = []types.Action{
+				{Timestamp: start.Add(-125 * time.Minute), Reason: types.ActionReasonEmergencyMode}, // Storm started before charge
+				{Timestamp: start.Add(-1 * time.Minute), Reason: "normal"},                          // Storm ended before discharge
+			}
+		})
+		// Avoided: 0.0 (because it was all storm energy)
+		// ChargingCost: 0.0 (because it was all storm energy)
+		// BatterySavings: 0.0
+		assert.InDelta(t, 0.00, savings.AvoidedCost, 0.001, "AvoidedCost mismatch")
+		assert.InDelta(t, 0.00, savings.ChargingCost, 0.001, "ChargingCost mismatch")
+		assert.InDelta(t, 0.00, savings.BatterySavings, 0.001, "BatterySavings mismatch")
+	})
+
+	t.Run("Mixed Energy Discharge", func(t *testing.T) {
+		savings := runTest(t, func(m *mockSavingsStorage) {
+			m.prices = []types.Price{
+				{TSStart: start.Add(-3 * time.Hour), TSEnd: start.Add(-2 * time.Hour), DollarsPerKWH: 0.10}, // Active charge @ $0.10
+				{TSStart: start.Add(-2 * time.Hour), TSEnd: start.Add(-1 * time.Hour), DollarsPerKWH: 0.15}, // Storm charge @ $0.15
+				{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.20},                          // Normal discharge @ $0.20
+			}
+			m.stats = []types.EnergyStats{
+				{
+					TSHourStart:       start.Add(-3 * time.Hour),
+					GridImportKWH:     10,
+					BatteryChargedKWH: 10,
+				},
+				{
+					TSHourStart:       start.Add(-2 * time.Hour),
+					GridImportKWH:     10,
+					BatteryChargedKWH: 10,
+				},
+				{
+					TSHourStart:      start,
+					HomeKWH:          15,
+					BatteryUsedKWH:   15,
+					BatteryToHomeKWH: 15,
+				},
+			}
+			m.actions = []types.Action{
+				{Timestamp: start.Add(-2 * time.Hour), Reason: types.ActionReasonEmergencyMode}, // Storm started exactly at second charge hour
+				{Timestamp: start, Reason: "normal"},                                            // Storm ended exactly at discharge hour
+			}
+		})
+		// Inventory: 10kWh active ($1.00), 10kWh ignored (atop LIFO)
+		// Discharge 15kWh:
+		// - 10kWh ignored (from storm) -> excluded
+		// - 5kWh active (from first charge) -> counted
+		// EffBatteryToHome = 15 - 10 = 5kWh
+		// Avoided: 5kWh * $0.20 = $1.00
+		// ChargingCost: 5kWh * $0.10 = $0.50
+		// BatterySavings: $0.50
+		assert.InDelta(t, 1.00, savings.AvoidedCost, 0.001, "AvoidedCost mismatch")
+		assert.InDelta(t, 0.50, savings.ChargingCost, 0.001, "ChargingCost mismatch")
+		assert.InDelta(t, 0.50, savings.BatterySavings, 0.001, "BatterySavings mismatch")
+	})
+
 	t.Run("Solar Savings", func(t *testing.T) {
 		savings := runTest(t, func(m *mockSavingsStorage) {
 			m.prices = []types.Price{
