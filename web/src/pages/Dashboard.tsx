@@ -268,7 +268,12 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 />
             </header>
 
-            {loading && <p>Loading day...</p>}
+            {loading && (
+                <div className="loading-screen">
+                    <span className="loading-spinner loading-spinner-large" aria-hidden="true"></span>
+                    Loading day...
+                </div>
+            )}
             {error && <p className="error">{error}</p>}
 
             {!loading && !error && (

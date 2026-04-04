@@ -219,7 +219,12 @@ const History: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 />
             </header>
 
-            {loading && <div className="loading">Loading history...</div>}
+            {loading && (
+                <div className="loading-screen">
+                    <span className="loading-spinner loading-spinner-large" aria-hidden="true"></span>
+                    Loading history...
+                </div>
+            )}
             {error && <div className="error">Error: {error}</div>}
             {!loading && !error && data.length === 0 && (
                 <div className="no-data">No history found for this date.</div>
