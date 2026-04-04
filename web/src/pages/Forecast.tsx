@@ -338,7 +338,12 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
         }));
     }, [rawModelingData, includeHistory]);
 
-    if (loading) return <div className="forecast-loading">Loading simulation…</div>;
+    if (loading) return (
+        <div className="loading-screen">
+            <span className="loading-spinner loading-spinner-large" aria-hidden="true"></span>
+            Loading simulation…
+        </div>
+    );
     if (error) return <div className="error">Error: {error}</div>;
     if (!data.length) return <div className="no-actions">No simulation data available.</div>;
 
