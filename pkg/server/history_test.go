@@ -455,7 +455,7 @@ func TestHandleHistoryEnergy(t *testing.T) {
 		d, _ := time.Parse("2006-01-02", targetDate)
 		dUTC := d.UTC()
 
-		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
 			Location: &types.SiteLocation{
 				TimeZone:     "UTC",
 				Latitude:     41.8781,
@@ -463,21 +463,21 @@ func TestHandleHistoryEnergy(t *testing.T) {
 				SolarTilt:    20,
 				SolarAzimuth: 180,
 			},
-		}, types.CurrentSettingsVersion, nil)
+		}, types.CurrentSettingsVersion, nil).Once()
 
 		// Energy History
-		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{
+		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.EnergyStats{
 			{TSHourStart: dUTC, SolarKWH: 5.2, MaxBatterySOC: 85.0},
-		}, nil)
+		}, nil).Once()
 
 		// Weather
-		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{
+		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.Weather{
 			{
 				ForecastHours: []types.HourlyWeather{
 					{TSHourStart: dUTC, TemperatureC: 15, DNI: 500, DHI: 100},
 				},
 			},
-		}, nil)
+		}, nil).Once()
 
 		req := httptest.NewRequest("GET", "/api/history/energy?date="+targetDate, nil)
 		w := httptest.NewRecorder()
@@ -502,5 +502,79 @@ func TestHandleHistoryEnergy(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 		assert.Contains(t, w.Body.String(), "invalid date format")
+	})
+
+	t.Run("Energy Cache Control Today", func(t *testing.T) {
+		// End time is now, which overlaps with the current day, meaning cache should be short (5 mins)
+		now := time.Now()
+		targetDate := now.Format("2006-01-02")
+		d, _ := time.Parse("2006-01-02", targetDate)
+		dUTC := d.UTC()
+
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+			Location: &types.SiteLocation{
+				TimeZone:     "UTC",
+				Latitude:     41.8781,
+				Longitude:    -87.6298,
+				SolarTilt:    20,
+				SolarAzimuth: 180,
+			},
+		}, types.CurrentSettingsVersion, nil).Once()
+
+		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.EnergyStats{
+			{TSHourStart: dUTC, SolarKWH: 5.2, MaxBatterySOC: 85.0},
+		}, nil).Once()
+
+		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.Weather{
+			{
+				ForecastHours: []types.HourlyWeather{
+					{TSHourStart: dUTC, TemperatureC: 15, DNI: 500, DHI: 100},
+				},
+			},
+		}, nil).Once()
+
+		req := httptest.NewRequest("GET", "/api/history/energy?date="+targetDate, nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "private, max-age=300", w.Header().Get("Cache-Control"))
+	})
+
+	t.Run("Energy Cache Control Past", func(t *testing.T) {
+		// End time is in the past, so data is final and can be cached longer (24 hrs)
+		past := time.Now().Add(-48 * time.Hour)
+		targetDate := past.Format("2006-01-02")
+		d, _ := time.Parse("2006-01-02", targetDate)
+		dUTC := d.UTC()
+
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+			Location: &types.SiteLocation{
+				TimeZone:     "UTC",
+				Latitude:     41.8781,
+				Longitude:    -87.6298,
+				SolarTilt:    20,
+				SolarAzimuth: 180,
+			},
+		}, types.CurrentSettingsVersion, nil).Once()
+
+		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.EnergyStats{
+			{TSHourStart: dUTC, SolarKWH: 5.2, MaxBatterySOC: 85.0},
+		}, nil).Once()
+
+		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.Weather{
+			{
+				ForecastHours: []types.HourlyWeather{
+					{TSHourStart: dUTC, TemperatureC: 15, DNI: 500, DHI: 100},
+				},
+			},
+		}, nil).Once()
+
+		req := httptest.NewRequest("GET", "/api/history/energy?date="+targetDate, nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "private, max-age=86400", w.Header().Get("Cache-Control"))
 	})
 }
