@@ -129,8 +129,8 @@ func getIgnoredFraction(hStart time.Time, actions []types.Action) float64 {
 }
 
 func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end time.Time) (types.SavingsStats, error) {
-	// Look back 24 hours to track battery inventory correctly.
-	lookbackStart := start.Add(-24 * time.Hour)
+	// Look back 1day to track battery inventory correctly.
+	lookbackStart := start.AddDate(0, 0, -1)
 
 	// Fetch settings for this site
 	settings, _, err := s.storage.GetSettings(ctx, siteID)
@@ -141,7 +141,7 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 	fetchEnd := end
 	if settings.UtilityRateOptions.NetMeteringCredits {
 		// We look ahead another 24 hours to support the 24h window for net metering valuation.
-		fetchEnd = end.Add(24 * time.Hour)
+		fetchEnd = end.AddDate(0, 0, 1)
 	}
 
 	// Fetch prices (these are hourly)

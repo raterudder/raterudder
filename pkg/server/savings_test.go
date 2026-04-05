@@ -583,35 +583,38 @@ func TestHandleHistorySavings(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, rr.Code)
 	})
 }
+
 func TestHandleHistorySavingsAll(t *testing.T) {
 	mockStore := &mockStorage{}
 	mockUtilities := utility.NewMap(mockStore)
 	s := &Server{storage: mockStore, utilities: mockUtilities, bypassAuth: true}
 
-	start := time.Now().Truncate(24 * time.Hour)
-	end := start.Add(24 * time.Hour)
+	start := time.Now().Truncate(24 * time.Hour).UTC()
+	end := start.Add(24 * time.Hour).UTC()
 
 	startQuery := start.Add(-24 * time.Hour)
 	endQuery := end
 
 	// Site 1 data
-	mockStore.On("GetPriceHistory", mock.Anything, "site1", startQuery.UTC(), endQuery.UTC()).Return([]types.Price{
+	mockStore.On("GetPriceHistory", mock.Anything, "site1", startQuery, endQuery).Return([]types.Price{
 		{TSStart: start, DollarsPerKWH: 0.10},
 	}, nil)
-	mockStore.On("GetEnergyHistory", mock.Anything, "site1", startQuery.UTC(), endQuery.UTC()).Return([]types.DailyEnergyStats{
+	mockStore.On("GetEnergyHistory", mock.Anything, "site1", startQuery, endQuery).Return([]types.DailyEnergyStats{
 		{Hourly: []types.EnergyStats{{TSHourStart: start, HomeKWH: 10, GridImportKWH: 10}}},
 	}, nil)
+	mockStore.On("GetActionHistory", mock.Anything, "site1", start.Add(-72*time.Hour), end).Return([]types.Action{}, nil)
+	mockStore.On("GetSettings", mock.Anything, "site1").Return(types.Settings{}, types.CurrentSettingsVersion, nil)
 
 	// Site 2 data
-	mockStore.On("GetPriceHistory", mock.Anything, "site2", startQuery.UTC(), endQuery.UTC()).Return([]types.Price{
+	mockStore.On("GetPriceHistory", mock.Anything, "site2", startQuery, endQuery).Return([]types.Price{
 		{TSStart: start, DollarsPerKWH: 0.20},
 	}, nil)
-	mockStore.On("GetEnergyHistory", mock.Anything, "site2", startQuery.UTC(), endQuery.UTC()).Return([]types.DailyEnergyStats{
+	mockStore.On("GetEnergyHistory", mock.Anything, "site2", startQuery, endQuery).Return([]types.DailyEnergyStats{
 		{Hourly: []types.EnergyStats{{TSHourStart: start, HomeKWH: 20, GridImportKWH: 20}}},
 	}, nil)
 
-	mockStore.On("GetActionHistory", mock.Anything, "site1", startQuery.Add(-48*time.Hour).UTC(), endQuery.UTC()).Return([]types.Action{}, nil)
-	mockStore.On("GetActionHistory", mock.Anything, "site2", startQuery.Add(-48*time.Hour).UTC(), endQuery.UTC()).Return([]types.Action{}, nil)
+	mockStore.On("GetActionHistory", mock.Anything, "site1", startQuery.Add(-48*time.Hour), endQuery).Return([]types.Action{}, nil)
+	mockStore.On("GetActionHistory", mock.Anything, "site2", startQuery.Add(-48*time.Hour), endQuery).Return([]types.Action{}, nil)
 	mockStore.On("GetSettings", mock.Anything, "site1").Return(types.Settings{}, types.CurrentSettingsVersion, nil)
 	mockStore.On("GetSettings", mock.Anything, "site2").Return(types.Settings{}, types.CurrentSettingsVersion, nil)
 

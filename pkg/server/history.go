@@ -21,11 +21,12 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	siteID := s.getSiteID(r)
 
-	// 1. Get Date from query
+	// Get Date from query
 	dateStr := r.URL.Query().Get("date")
 	var targetDate time.Time
 	if dateStr == "" {
 		targetDate = time.Now()
+		dateStr = targetDate.Format("2006-01-02")
 	} else {
 		var err error
 		targetDate, err = time.Parse("2006-01-02", dateStr)
@@ -35,7 +36,7 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 2. Get Settings and Location
+	// Get Settings and Location
 	settings, _, err := s.getSettingsWithMigration(ctx, siteID)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get settings", slog.Any("error", err))
@@ -43,82 +44,85 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	timeLoc := time.Local
-	if settings.Location != nil && settings.Location.TimeZone != "" {
-		var err error
-		timeLoc, err = time.LoadLocation(settings.Location.TimeZone)
-		if err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to load location", slog.Any("error", err), slog.String("timeZone", settings.Location.TimeZone))
-			timeLoc = time.Local
-		}
-	}
+	// add a day because if today is the 8th locally it might be the 9th in UTC
+	// but the frontend will send the 8th to the backend which means targetDate
+	// will be the 8th and then we'll only end up fetching data for the 7th
+	end := targetDate.AddDate(0, 0, 1)
+	// we have to go back x+1 days because in UTC time, which we parsed from the user
+	// input might be actually a day ahead of the user's local time
+	start := targetDate.AddDate(0, 0, -4)
 
-	// 3. Calculate ranges
-	// Target day in site timezone
-	targetStart := time.Date(targetDate.Year(), targetDate.Month(), targetDate.Day(), 0, 0, 0, 0, timeLoc)
-	targetEnd := targetStart.AddDate(0, 0, 1)
-
-	// Calibration range: 3 days leading up to targetStart
-	calibStart := targetStart.AddDate(0, 0, -3)
-
-	// 4. Fetch Energy Stats
-	// We need stats from calibStart to targetEnd for calibration + display
-	dailyStats, err := s.storage.GetEnergyHistory(ctx, siteID, calibStart, targetEnd)
+	// Fetch Energy Stats
+	dailyStats, err := s.storage.GetEnergyHistory(ctx, siteID, start, end)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get energy history", slog.Any("error", err))
 		writeJSONError(w, "failed to get energy history", http.StatusInternalServerError)
 		return
 	}
 
-	var allStats []types.EnergyStats
+	// now we need to figure out their time zone from the returned data
 	for _, day := range dailyStats {
-		allStats = append(allStats, day.Hourly...)
+		if day.TSDayStart.Format("2006-01-02") == dateStr {
+			// go to the start of the next day because it's exclusive
+			end = day.TSDayStart.AddDate(0, 0, 1)
+			start = day.TSDayStart.AddDate(0, 0, -3)
+			break
+		}
 	}
 
-	// 5. Fetch Weather
-	// We need weather from calibStart to targetEnd
+	var allStats []types.EnergyStats
+	for _, day := range dailyStats {
+		// exclude future days
+		if day.TSDayStart.Format("2006-01-02") <= dateStr {
+			allStats = append(allStats, day.Hourly...)
+		}
+	}
+
+	// Fetch Weather
 	var weatherHistory []types.Weather
 	if settings.Location != nil {
-		weatherHistory, err = s.storage.GetWeather(ctx, siteID, calibStart, targetEnd)
+		weatherHistory, err = s.storage.GetWeather(ctx, siteID, start, end)
 		if err != nil {
 			log.Ctx(ctx).WarnContext(ctx, "failed to fetch weather for history", slog.Any("error", err))
 		}
 	}
 
-	// 6. Calculate Improved Solar
+	// Calculate Improved Solar
 	var improvedSolarMap map[int64]improvedSolar
 	if settings.Location != nil {
 		improvedSolarMap = calculateImprovedSolar(ctx, allStats, weatherHistory, *settings.Location)
 	}
 
-	// 7. Filter results for the target day
-	dayStats := make([]types.EnergyStats, 0)
-	for _, s := range allStats {
-		if !s.TSHourStart.Before(targetStart) && s.TSHourStart.Before(targetEnd) {
-			dayStats = append(dayStats, s)
+	// Filter results for the target day
+	dayStats := make([]types.EnergyStats, 0, 24)
+	for _, day := range dailyStats {
+		if day.TSDayStart.Format("2006-01-02") != dateStr {
+			continue
 		}
+		dayStats = append(dayStats, day.Hourly...)
 	}
 
-	dayWeather := make([]WeatherRes, 0)
+	dayWeather := make([]WeatherRes, 0, 24)
 	for _, w := range weatherHistory {
+		if w.TSDayStart.Format("2006-01-02") != dateStr {
+			continue
+		}
 		for _, h := range w.ForecastHours {
-			if !h.TSHourStart.Before(targetStart) && h.TSHourStart.Before(targetEnd) {
-				wr := WeatherRes{
-					TSHourStart:  h.TSHourStart,
-					TemperatureC: h.TemperatureC,
-					SnowfallCM:   h.SnowfallCM,
-				}
-				if improved, ok := improvedSolarMap[h.TSHourStart.Unix()]; ok {
-					wr.ImprovedSolarGeneration = improved.ImprovedSolar
-					wr.UnclippedSolarGeneration = improved.UnclippedSolar
-					wr.SnowDepthCM = improved.SnowDepth
-					wr.TempFactor = improved.TempFactor
-					wr.SnowFactor = improved.SnowFactor
-					wr.TemperatureCellC = improved.TCell
-					wr.Irradiance = improved.Irradiance
-				}
-				dayWeather = append(dayWeather, wr)
+			wr := WeatherRes{
+				TSHourStart:  h.TSHourStart,
+				TemperatureC: h.TemperatureC,
+				SnowfallCM:   h.SnowfallCM,
 			}
+			if improved, ok := improvedSolarMap[h.TSHourStart.Unix()]; ok {
+				wr.ImprovedSolarGeneration = improved.ImprovedSolar
+				wr.UnclippedSolarGeneration = improved.UnclippedSolar
+				wr.SnowDepthCM = improved.SnowDepth
+				wr.TempFactor = improved.TempFactor
+				wr.SnowFactor = improved.SnowFactor
+				wr.TemperatureCellC = improved.TCell
+				wr.Irradiance = improved.Irradiance
+			}
+			dayWeather = append(dayWeather, wr)
 		}
 	}
 
@@ -129,7 +133,7 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	// Cache historical data for 24 hours if it's in the past
-	if targetEnd.Before(time.Now()) {
+	if end.Before(truncateDay(time.Now())) {
 		w.Header().Set("Cache-Control", "private, max-age=86400")
 	} else {
 		w.Header().Set("Cache-Control", "private, max-age=300")

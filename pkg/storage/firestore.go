@@ -496,22 +496,14 @@ func (f *FirestoreProvider) GetWeather(ctx context.Context, siteID string, start
 
 // GetEnergyHistory retrieves energy history records within the specified time range.
 func (f *FirestoreProvider) GetEnergyHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.DailyEnergyStats, error) {
-	// Truncate to days. Ensure we query based on the passed timezones since the documents are saved that way.
-	startDay := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
-	endDay := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, end.Location())
-	// special case where end is midnight which means we don't include that day
-	if endDay.Equal(end) {
-		endDay = endDay.AddDate(0, 0, -1)
-	}
-
 	coll, err := f.getCollection(siteID, "energy_history")
 	if err != nil {
 		return nil, err
 	}
 
 	iter := coll.
-		Where("tsDayStart", ">=", startDay).
-		Where("tsDayStart", "<=", endDay).
+		Where("tsDayStart", ">=", start).
+		Where("tsDayStart", "<", end).
 		OrderBy("tsDayStart", firestore.Asc).
 		Documents(ctx)
 	defer iter.Stop()

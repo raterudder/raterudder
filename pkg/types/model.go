@@ -115,7 +115,7 @@ type EnergyStats struct {
 
 // DailyEnergyStats represents aggregated energy statistics for a day.
 type DailyEnergyStats struct {
-	TSDayStart time.Time     `json:"tsDayStartUTC"`
+	TSDayStart time.Time     `json:"tsDayStart"`
 	Hourly     []EnergyStats `json:"hourly"`
 }
 
