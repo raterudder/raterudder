@@ -17,7 +17,7 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
             <div className="current-status-card paused">
                 <div className="status-main">
                     <div className="status-icon">
-                        <span className="icon">⏸️</span>
+                        <span className="icon" aria-hidden="true">⏸️</span>
                     </div>
                     <div className="status-info">
                         <span className="status-label">System Paused</span>
@@ -50,7 +50,7 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
             <div className="current-status-card grid-unavailable">
                 <div className="status-main">
                     <div className="status-icon">
-                        <span className="icon">⚠️</span>
+                        <span className="icon" aria-hidden="true">⚠️</span>
                     </div>
                     <div className="status-info">
                         <span className="status-label">Grid Unavailable</span>
@@ -86,9 +86,9 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
         <div className={`current-status-card ${state}`}>
             <div className="status-main">
                 <div className="status-icon">
-                    {state === 'charging' && <span className="icon">⚡</span>}
-                    {state === 'discharging' && <span className="icon">🏠</span>}
-                    {state === 'standby' && <span className="icon">⏲️</span>}
+                    {state === 'charging' && <span className="icon" aria-hidden="true">⚡</span>}
+                    {state === 'discharging' && <span className="icon" aria-hidden="true">🏠</span>}
+                    {state === 'standby' && <span className="icon" aria-hidden="true">⏲️</span>}
                 </div>
                 <div className="status-info">
                     <span className="status-label">System {state.charAt(0).toUpperCase() + state.slice(1)}</span>
