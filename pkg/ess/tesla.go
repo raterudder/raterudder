@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -793,8 +794,8 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 }
 
 // GetEnergyHistory returns the energy history for the specified period.
-func (b *Tesla) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]types.EnergyStats, error) {
-	log.Ctx(ctx).DebugContext(ctx, "getting tesla energy history", slog.String("start", start.String()), slog.String("end", end.String()))
+func (b *Tesla) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]types.DailyEnergyStats, error) {
+	log.Ctx(ctx).DebugContext(ctx, "getting tesla energy history", slog.Time("start", start), slog.Time("end", end))
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -817,9 +818,18 @@ func (b *Tesla) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]t
 
 	startInLoc := start.In(loc)
 	endInLoc := end.In(loc)
-	current := time.Date(startInLoc.Year(), startInLoc.Month(), startInLoc.Day(), 0, 0, 0, 0, loc)
+	startDay := time.Date(startInLoc.Year(), startInLoc.Month(), startInLoc.Day(), 0, 0, 0, 0, loc)
+	endDay := time.Date(endInLoc.Year(), endInLoc.Month(), endInLoc.Day(), 0, 0, 0, 0, loc)
+	lastDayToFetch := endDay
+	// since the points look backward, we need to include the next day to get the
+	// last period of the last day but if its in the future there's no point
+	// in fetching it
+	if nextDay := lastDayToFetch.AddDate(0, 0, 1); !nextDay.After(time.Now()) {
+		lastDayToFetch = nextDay
+	}
+	current := startDay
 
-	for current.Before(endInLoc) {
+	for !current.After(lastDayToFetch) {
 		if current.After(time.Now()) {
 			break
 		}
@@ -839,9 +849,9 @@ func (b *Tesla) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]t
 				continue
 			}
 			tInLoc := t.In(loc)
-			// The data is for the preceding period, so we subtract 1 second to shift the
+			// The data is for the preceding period, so we subtract 1 minute to shift the
 			// "end of hour" timestamp (e.g. 10:00:00) into the correct bucket (09:00:00).
-			bucketT := tInLoc.Add(-time.Second)
+			bucketT := tInLoc.Add(-time.Minute)
 			hourKey := bucketT.Truncate(time.Hour).Format(time.RFC3339)
 			if _, exists := hourlyStats[hourKey]; !exists {
 				hourlyStats[hourKey] = &types.EnergyStats{
@@ -863,42 +873,45 @@ func (b *Tesla) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]t
 			s.BatteryToGridKWH += ts.GridEnergyExportedFromBatteryWH / 1000.0
 		}
 
-		// Fetch SOE history for this day
-		var soeRes teslaSOEResponse
-		if err := b.getCalendarHistory(ctx, "soe", current, dayEnd, loc, tz, &soeRes); err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to get SOE history, continuing without SOC data", slog.Any("error", err))
-		} else {
-			// Merge SOE data into hourly buckets
-			for _, soeEntry := range soeRes.TimeSeries {
-				t, err := time.Parse(time.RFC3339, soeEntry.Timestamp)
-				if err != nil {
-					continue
-				}
-				tInLoc := t.In(loc)
-				hourKey := tInLoc.Truncate(time.Hour).Format(time.RFC3339)
-
-				s, exists := hourlyStats[hourKey]
-				if !exists {
-					// SOE entry for hour without energy data; create a bucket
-					s = &types.EnergyStats{
-						TSHourStart:   tInLoc.Truncate(time.Hour),
-						MinBatterySOC: soeEntry.SOE,
-						MaxBatterySOC: soeEntry.SOE,
+		// Fetch SOE history for this day but SOE is believed to be exact SOE values
+		// for the timestamp so we don't need to fetch ahead
+		if !current.After(endDay) {
+			var soeRes teslaSOEResponse
+			if err := b.getCalendarHistory(ctx, "soe", current, dayEnd, loc, tz, &soeRes); err != nil {
+				log.Ctx(ctx).WarnContext(ctx, "failed to get SOE history, continuing without SOC data", slog.Any("error", err))
+			} else {
+				// Merge SOE data into hourly buckets
+				for _, soeEntry := range soeRes.TimeSeries {
+					t, err := time.Parse(time.RFC3339, soeEntry.Timestamp)
+					if err != nil {
+						continue
 					}
-					hourlyStats[hourKey] = s
-					continue
-				}
+					tInLoc := t.In(loc)
+					hourKey := tInLoc.Truncate(time.Hour).Format(time.RFC3339)
 
-				if s.MinBatterySOC == 0 && s.MaxBatterySOC == 0 {
-					// First SOE for this bucket
-					s.MinBatterySOC = soeEntry.SOE
-					s.MaxBatterySOC = soeEntry.SOE
-				} else {
-					if soeEntry.SOE < s.MinBatterySOC {
+					s, exists := hourlyStats[hourKey]
+					if !exists {
+						// SOE entry for hour without energy data; create a bucket
+						s = &types.EnergyStats{
+							TSHourStart:   tInLoc.Truncate(time.Hour),
+							MinBatterySOC: soeEntry.SOE,
+							MaxBatterySOC: soeEntry.SOE,
+						}
+						hourlyStats[hourKey] = s
+						continue
+					}
+
+					if s.MinBatterySOC == 0 && s.MaxBatterySOC == 0 {
+						// First SOE for this bucket
 						s.MinBatterySOC = soeEntry.SOE
-					}
-					if soeEntry.SOE > s.MaxBatterySOC {
 						s.MaxBatterySOC = soeEntry.SOE
+					} else {
+						if soeEntry.SOE < s.MinBatterySOC {
+							s.MinBatterySOC = soeEntry.SOE
+						}
+						if soeEntry.SOE > s.MaxBatterySOC {
+							s.MaxBatterySOC = soeEntry.SOE
+						}
 					}
 				}
 			}
@@ -907,14 +920,47 @@ func (b *Tesla) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]t
 		current = current.AddDate(0, 0, 1)
 	}
 
-	var allStats []types.EnergyStats
+	dailyMap := make(map[string][]types.EnergyStats)
+	var sortedDayKeys []string
+
 	for _, s := range hourlyStats {
-		if !s.TSHourStart.Before(start) && s.TSHourStart.Before(end) {
-			allStats = append(allStats, *s)
+		dayStart := time.Date(s.TSHourStart.Year(), s.TSHourStart.Month(), s.TSHourStart.Day(), 0, 0, 0, 0, loc)
+		dayKey := dayStart.Format("2006-01-02")
+		if _, exists := dailyMap[dayKey]; !exists {
+			sortedDayKeys = append(sortedDayKeys, dayKey)
 		}
+		dailyMap[dayKey] = append(dailyMap[dayKey], *s)
 	}
 
-	return allStats, nil
+	for _, list := range dailyMap {
+		sort.Slice(list, func(i, j int) bool {
+			return list[i].TSHourStart.Before(list[j].TSHourStart)
+		})
+	}
+
+	sort.Strings(sortedDayKeys)
+
+	var result []types.DailyEnergyStats
+	for _, key := range sortedDayKeys {
+		dayStart, err := time.ParseInLocation("2006-01-02", key, loc)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse day key %s: %w", key, err)
+		}
+
+		// Filter based on the requested start and end bounds per the overall intent,
+		// but since we keep whole days, we just check if the day intersects the requested range reasonably
+		// actually, let's just return the full days that we fetched!
+		if dayStart.After(endDay) || dayStart.Before(startDay) {
+			continue
+		}
+
+		result = append(result, types.DailyEnergyStats{
+			TSDayStart: dayStart,
+			Hourly:     dailyMap[key],
+		})
+	}
+
+	return result, nil
 }
 
 func (b *baseTesla) RegisterTesla(ctx context.Context, domain string) error {

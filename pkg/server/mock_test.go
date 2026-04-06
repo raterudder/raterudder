@@ -81,10 +81,10 @@ func (m *mockESS) Authenticate(ctx context.Context, creds types.Credentials) (ty
 	}
 	return creds, false, nil
 }
-func (m *mockESS) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]types.EnergyStats, error) {
+func (m *mockESS) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]types.DailyEnergyStats, error) {
 	args := m.Called(ctx, start, end)
 	if len(args) > 0 {
-		return args.Get(0).([]types.EnergyStats), args.Error(1)
+		return args.Get(0).([]types.DailyEnergyStats), args.Error(1)
 	}
 	return nil, nil
 }
@@ -97,12 +97,9 @@ type mockWeather struct {
 	mock.Mock
 }
 
-func (m *mockWeather) Location(ctx context.Context, countryCode, postalCode string) (*types.SiteLocation, error) {
+func (m *mockWeather) Location(ctx context.Context, countryCode, postalCode string) (types.SiteLocation, error) {
 	args := m.Called(ctx, countryCode, postalCode)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*types.SiteLocation), args.Error(1)
+	return args.Get(0).(types.SiteLocation), args.Error(1)
 }
 
 func (m *mockWeather) Forecast(ctx context.Context, loc types.SiteLocation, startDate, endDate time.Time) ([]types.Weather, error) {

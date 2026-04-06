@@ -1016,7 +1016,7 @@ func TestFranklin(t *testing.T) {
 		require.NoError(t, err, "GetEnergyHistory should succeed")
 		require.Len(t, stats, 1, "should have 1 stat for the hour")
 
-		s := stats[0]
+		s := stats[0].Hourly[0]
 		// HomeKWH = SolarToHome + GridToHome + BatToHome
 		// SolarToHome = 1.0
 		// BatToHome = 5.0
@@ -1569,8 +1569,7 @@ func TestFranklin(t *testing.T) {
 	})
 
 	t.Run("GetEnergyHistory Deduplication and Next Day", func(t *testing.T) {
-		day1Calls := 0
-		day2Calls := 0
+		dayCalls := map[string]int{}
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
 				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
@@ -1582,9 +1581,9 @@ func TestFranklin(t *testing.T) {
 			}
 			if r.URL.Path == "/api-energy/power/getFhpPowerByDay" {
 				dayTime := r.URL.Query().Get("dayTime")
+				dayCalls[dayTime]++
 				switch dayTime {
 				case "2026-03-28":
-					day1Calls++
 					json.NewEncoder(w).Encode(map[string]any{
 						"code":    200,
 						"success": true,
@@ -1602,7 +1601,6 @@ func TestFranklin(t *testing.T) {
 						},
 					})
 				case "2026-03-29":
-					day2Calls++
 					json.NewEncoder(w).Encode(map[string]any{
 						"code":    200,
 						"success": true,
@@ -1617,6 +1615,23 @@ func TestFranklin(t *testing.T) {
 							"powerGirdFhpArray":   []float64{0.0, 0.0},
 							"powerGirdHomeArray":  []float64{0.0, 0.0},
 							"powerFhpGirdArray":   []float64{0.0, 0.0},
+						},
+					})
+				case "2026-03-30":
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result": map[string]any{
+							// Day 3 starts with 00:00:00 (duplicate) and continues
+							"deviceTimeArray":     []string{"2026-03-30 00:00:00"},
+							"socArray":            []float64{40.0},
+							"powerSolarHomeArray": []float64{180.0},
+							"powerFhpHomeArray":   []float64{0.0},
+							"powerSolarGirdArray": []float64{0.0},
+							"powerSolarFhpArray":  []float64{0.0},
+							"powerGirdFhpArray":   []float64{0.0},
+							"powerGirdHomeArray":  []float64{0.0},
+							"powerFhpGirdArray":   []float64{0.0},
 						},
 					})
 				default:
@@ -1638,25 +1653,35 @@ func TestFranklin(t *testing.T) {
 		}
 
 		// Requesting 23:00 on Day 1 to 01:00 on Day 2
-		start, _ := time.Parse(time.RFC3339, "2026-03-28T23:00:00Z")
-		end, _ := time.Parse(time.RFC3339, "2026-03-29T01:00:00Z")
+		start, err := time.Parse(time.RFC3339, "2026-03-28T23:00:00Z")
+		require.NoError(t, err)
+		end, err := time.Parse(time.RFC3339, "2026-03-29T01:00:00Z")
+		require.NoError(t, err)
 
 		stats, err := f.GetEnergyHistory(context.Background(), start, end)
 		require.NoError(t, err)
 
 		// Check for duplicates
 		seen := make(map[time.Time]int)
-		for _, s := range stats {
-			seen[s.TSHourStart]++
+		for _, dayStats := range stats {
+			for _, s := range dayStats.Hourly {
+				seen[s.TSHourStart]++
+			}
 		}
 
 		for ts, count := range seen {
 			assert.Equal(t, 1, count, "Duplicate TSHourStart found: %v", ts)
 		}
 
-		// Verify we have stats for both hours
-		if !assert.Len(t, stats, 2, "Expected 2 hours (23:00 and 00:00)") {
-			for i, s := range stats {
+		// Collect flat list to verify
+		var flatStats []types.EnergyStats
+		for _, ds := range stats {
+			flatStats = append(flatStats, ds.Hourly...)
+		}
+
+		// Verify we have stats for 3 hours
+		if !assert.Len(t, flatStats, 3, "Expected 3 hours (23:00, 00:00, and 23:00)") {
+			for i, s := range flatStats {
 				t.Logf("Stats[%d]: %v", i, s.TSHourStart)
 			}
 		}
@@ -1666,19 +1691,30 @@ func TestFranklin(t *testing.T) {
 		// Actually, Day 1 first point is 23:55. It gets 5min default.
 		// Day 1 second point is 00:00. It gets 5min (00:00 - 23:55).
 		// Total for 23:00 bucket = 2 * 10 = 20 kWh.
-		h23 := stats[0]
-		expected23, _ := time.Parse(time.RFC3339, "2026-03-28T23:00:00Z")
+		h23 := flatStats[0]
+		expected23, err := time.Parse(time.RFC3339, "2026-03-28T23:00:00Z")
+		require.NoError(t, err)
 		assert.Equal(t, expected23.Unix(), h23.TSHourStart.Unix())
 		assert.InDelta(t, 20.0, h23.SolarKWH, 0.01)
 
 		// Hour 00:00 should have only the 00:00-00:05 interval (10 kWh)
-		h00 := stats[1]
-		expected00, _ := time.Parse(time.RFC3339, "2026-03-29T00:00:00Z")
+		h00 := flatStats[1]
+		expected00, err := time.Parse(time.RFC3339, "2026-03-29T00:00:00Z")
+		require.NoError(t, err)
 		assert.Equal(t, expected00.Unix(), h00.TSHourStart.Unix())
 		assert.InDelta(t, 10.0, h00.SolarKWH, 0.01)
 
-		// Verify we fetched both days
-		assert.Equal(t, 1, day1Calls, "Day 1 should be fetched")
-		assert.Equal(t, 1, day2Calls, "Day 2 should be fetched")
+		// hour 23 should have the next day's 00:00 point
+		h23 = flatStats[len(flatStats)-1]
+		expected23, err = time.Parse(time.RFC3339, "2026-03-29T23:00:00Z")
+		require.NoError(t, err)
+		assert.Equal(t, expected23.Unix(), h23.TSHourStart.Unix())
+		// ignore the value because the difference between the points is huge since
+		// we have sparse data
+
+		// Verify we fetched all days
+		assert.Equal(t, 1, dayCalls["2026-03-28"])
+		assert.Equal(t, 1, dayCalls["2026-03-29"])
+		assert.Equal(t, 1, dayCalls["2026-03-30"])
 	})
 }

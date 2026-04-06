@@ -34,7 +34,7 @@ type System interface {
 	Authenticate(ctx context.Context, creds types.Credentials) (types.Credentials, bool, error)
 
 	// GetEnergyHistory returns the energy history for the specified period.
-	GetEnergyHistory(ctx context.Context, start, end time.Time) ([]types.EnergyStats, error)
+	GetEnergyHistory(ctx context.Context, start, end time.Time) ([]types.DailyEnergyStats, error)
 }
 
 // Map manages multiple ESS systems.

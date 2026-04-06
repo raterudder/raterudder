@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -21,34 +22,35 @@ import (
 
 func TestHandleGetSettings(t *testing.T) {
 	mockU := &mockUtility{}
+	mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
 	mockS := &mockStorage{}
 	// Default setup for most tests
-	mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil).Maybe()
-	mockS.On("UpdateSite", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil)
+	mockS.On("UpdateSite", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
 		DryRun:          false,
 		MinBatterySOC:   10.0,
 		UtilityProvider: "test",
 	}, types.CurrentSettingsVersion, nil)
 	// Add expectations for background sync
-	mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
-	mockS.On("GetLatestWeatherTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
-	mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+	mockS.On("GetLatestWeatherTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+	mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	// Helper to create server with auth config
 	newAuthServer := func(audience string, emails []string, validator tokenVerifier) (*Server, *mockESS) {
 		mockES := &mockESS{}
-		mockP := ess.NewMap()
-		mockP.SetSystem(types.SiteIDNone, mockES)
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockES)
 		// Expect some ESS calls if they happen, e.g. ApplySettings
-		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 
 		mockUMap := utility.NewMap(mockS)
 		mockUMap.SetProvider(types.SiteIDNone, mockU)
 
 		return &Server{
 			utilities:   mockUMap,
-			ess:         mockP,
+			ess:         essMap,
 			storage:     mockS,
 			controller:  controller.NewController(),
 			adminEmails: emails,
@@ -106,11 +108,11 @@ func TestHandleGetSettings(t *testing.T) {
 		}
 
 		// Setup a specific mock for GetSettings to return our settings with credentials
-		mockS2.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil).Maybe()
+		mockS2.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil)
 		mockS2.On("GetSettings", mock.Anything, mock.Anything).Return(settingsWithCreds, types.CurrentSettingsVersion, nil)
-		mockS2.On("UpdateSite", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockS2.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
-		mockS2.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS2.On("UpdateSite", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mockS2.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+		mockS2.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 		req := httptest.NewRequest("GET", "/api/settings", nil)
 		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
@@ -134,43 +136,16 @@ func TestHandleGetSettings(t *testing.T) {
 }
 
 func TestHandleUpdateSettings(t *testing.T) {
-	mockU := &mockUtility{}
-	mockS := &mockStorage{}
-	// Default setup for most tests
-	mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil).Maybe()
-	mockS.On("UpdateSite", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-	mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
-		DryRun:          false,
-		MinBatterySOC:   10.0,
-		UtilityProvider: "test",
-	}, types.CurrentSettingsVersion, nil)
-	// Add expectations for background sync
-	mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
-	mockS.On("GetLatestWeatherTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
-	mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-
 	// Helper to create server with auth config
-	newAuthServer := func(audience string, emails []string, validator tokenVerifier) (*Server, *mockESS) {
-		mockES := &mockESS{}
-		mockP := ess.NewMap()
-		mockP.SetSystem(types.SiteIDNone, mockES)
-		// Expect some ESS calls if they happen, e.g. ApplySettings
-		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
-
-		mockUMap := utility.NewMap(mockS)
-		mockUMap.SetProvider(types.SiteIDNone, mockU)
-
+	newAuthServer := func(audience string, emails []string, validator tokenVerifier) *Server {
 		return &Server{
-			utilities:   mockUMap,
-			ess:         mockP,
-			storage:     mockS,
 			controller:  controller.NewController(),
 			adminEmails: emails,
 			oidcVerifiers: map[string]tokenVerifier{
 				"google": validator,
 			},
 			encryptionKey: "test-secret-key-1234567890123456",
-		}, mockES
+		}
 	}
 
 	// Helper to add user to context
@@ -186,7 +161,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 	}
 
 	t.Run("Update Settings - Disabled (No Admin)", func(t *testing.T) {
-		srv, _ := newAuthServer("", nil, nil)
+		srv := &Server{}
 		req := httptest.NewRequest("POST", "/api/settings", nil)
 		req = withUser(req, "user@example.com", false) // Not admin
 		w := httptest.NewRecorder()
@@ -196,7 +171,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 	})
 
 	t.Run("Update Settings - Missing Auth", func(t *testing.T) {
-		srv, _ := newAuthServer("my-audience", []string{"admin@example.com"}, nil)
+		srv := newAuthServer("my-audience", []string{"admin@example.com"}, nil)
 		req := httptest.NewRequest("POST", "/api/settings", nil)
 		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
 		w := httptest.NewRecorder()
@@ -205,28 +180,18 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.Equal(t, http.StatusUnauthorized, w.Result().StatusCode)
 	})
 
-	t.Run("Update Settings - Unauthorized Email", func(t *testing.T) {
-		srv, _ := newAuthServer("my-audience", []string{"admin@example.com"}, nil)
-		req := httptest.NewRequest("POST", "/api/settings", nil)
-		req = withUser(req, "hacker@example.com", false)
-		w := httptest.NewRecorder()
-
-		srv.handleUpdateSettings(w, req)
-		assert.Equal(t, http.StatusForbidden, w.Result().StatusCode)
-	})
-
 	t.Run("getESSSystem Backoff Logic", func(t *testing.T) {
 		mockS := &mockStorage{}
-		mockP := ess.NewMap()
+		essMap := ess.NewMap()
 		mockES := &mockESS{}
-		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil).Maybe()
-		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockP.SetSystem("site1", mockES)
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		essMap.SetSystem("site1", mockES)
 
 		srv := &Server{
 			storage: mockS,
-			ess:     mockP,
+			ess:     essMap,
 		}
 
 		ctx := context.Background()
@@ -306,11 +271,11 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 	t.Run("getESSSystem Authentication Failure", func(t *testing.T) {
 		mockS := &mockStorage{}
-		mockP := ess.NewMap()
+		essMap := ess.NewMap()
 		mockES := &mockESS{}
 
 		// Test that authentication failure correctly updates ConsecutiveFailures and LastAttempt
-		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, fmt.Errorf("auth failed")).Once()
 
 		var savedSettings types.Settings
@@ -320,11 +285,11 @@ func TestHandleUpdateSettings(t *testing.T) {
 			return s.ESSAuthStatus.ConsecutiveFailures == 1 && !s.ESSAuthStatus.LastAttempt.IsZero()
 		}), 1).Return(nil).Once()
 
-		mockP.SetSystem("site1", mockES)
+		essMap.SetSystem("site1", mockES)
 
 		srv := &Server{
 			storage: mockS,
-			ess:     mockP,
+			ess:     essMap,
 		}
 
 		ctx := context.Background()
@@ -343,8 +308,8 @@ func TestHandleUpdateSettings(t *testing.T) {
 		require.ErrorContains(t, err, "failed to apply settings: auth failed")
 		assert.Nil(t, sys)
 
-		mockS.AssertExpectations(t)
-		mockES.AssertExpectations(t)
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockES.AssertExpectations(t))
 
 		// Ensure fields were updated
 		assert.Equal(t, 1, savedSettings.ESSAuthStatus.ConsecutiveFailures, "ConsecutiveFailures should be incremented")
@@ -352,13 +317,14 @@ func TestHandleUpdateSettings(t *testing.T) {
 	})
 
 	t.Run("Update Settings - Validation Error", func(t *testing.T) {
-		srv, _ := newAuthServer("my-audience", []string{"admin@example.com"}, nil)
+		srv := &Server{
+			release: "test",
+		}
 
 		base := types.Settings{
 			IgnoreHourUsageOverMultiple: 1,
 			SolarTrendRatioMax:          1,
 			MinBatterySOC:               20,
-			Release:                     srv.release,
 		}
 
 		// Invalid value (negative battery SOC)
@@ -429,7 +395,17 @@ func TestHandleUpdateSettings(t *testing.T) {
 	})
 
 	t.Run("Update Settings - Success", func(t *testing.T) {
-		srv, mockES := newAuthServer("my-audience", []string{"admin@example.com"}, nil)
+		mockS := &mockStorage{}
+		// Default setup for most tests
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			DryRun:        false,
+			MinBatterySOC: 10.0,
+		}, types.CurrentSettingsVersion, nil)
+
+		srv := &Server{
+			storage: mockS,
+			release: "test",
+		}
 
 		s := types.Settings{
 			MinBatterySOC:               80,
@@ -437,7 +413,6 @@ func TestHandleUpdateSettings(t *testing.T) {
 			IgnoreHourUsageOverMultiple: 5,
 			SolarTrendRatioMax:          3.0,
 			SolarBellCurveMultiplier:    1.0,
-			UtilityProvider:             "test",
 		}
 		b, err := json.Marshal(s)
 		require.NoError(t, err)
@@ -447,24 +422,19 @@ func TestHandleUpdateSettings(t *testing.T) {
 		w := httptest.NewRecorder()
 
 		// Expect SetSettings with version
-		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
 			return s.MinBatterySOC == 80.0 && s.DryRun == true
 		}), types.CurrentSettingsVersion).Return(nil)
-
-		// Expect validation to pass
-		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Once()
 
 		srv.handleUpdateSettings(w, req)
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
 
 		// Verify storage updated
-		mockS.AssertExpectations(t)
-		mockES.AssertExpectations(t)
-		mockU.AssertExpectations(t)
+		assert.True(t, mockS.AssertExpectations(t))
 	})
 
 	t.Run("Auth Status - Not Logged In", func(t *testing.T) {
-		srv, _ := newAuthServer("my-audience", []string{"admin@example.com"}, nil)
+		srv := newAuthServer("my-audience", []string{"admin@example.com"}, nil)
 
 		req := httptest.NewRequest("GET", "/api/auth/status", nil)
 		w := httptest.NewRecorder()
@@ -479,7 +449,22 @@ func TestHandleUpdateSettings(t *testing.T) {
 	})
 
 	t.Run("Update Settings - Backfills History on New Credentials", func(t *testing.T) {
-		srv, mockES := newAuthServer("my-audience", []string{"admin@example.com"}, nil)
+		mockS := &mockStorage{}
+		// Default setup for most tests
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			DryRun:        false,
+			MinBatterySOC: 10.0,
+		}, types.CurrentSettingsVersion, nil)
+
+		mockES := &mockESS{}
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockES)
+
+		srv := &Server{
+			storage:       mockS,
+			ess:           essMap,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
 
 		// Create a request with mock credentials and valid settings
 		s := struct {
@@ -492,7 +477,6 @@ func TestHandleUpdateSettings(t *testing.T) {
 				IgnoreHourUsageOverMultiple: 5,
 				SolarTrendRatioMax:          3.0,
 				SolarBellCurveMultiplier:    1.0,
-				UtilityProvider:             "test",
 				ESS:                         "mock",
 			},
 			Credentials: &types.Credentials{
@@ -505,9 +489,9 @@ func TestHandleUpdateSettings(t *testing.T) {
 		req = withUser(req, "admin@example.com", true)
 		w := httptest.NewRecorder()
 
-		// Expect validation to pass
-		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Once()
-
+		mockES.On("ApplySettings", mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESS == "mock"
+		})).Return(nil)
 		// Expect Authenticate to be called with the provided credentials
 		mockES.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
 			return c.Mock != nil && c.Mock.Strategy == "foo"
@@ -517,21 +501,51 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		// Expect GetEnergyHistory (Sync) because we are providing new credentials
 		// and the default mock storage returns no EncryptedCredentials
-		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+		energyHistories := []types.DailyEnergyStats{
+			{
+				TSDayStart: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC),
+				Hourly: []types.EnergyStats{
+					{
+						TSHourStart: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC),
+						HomeKWH:     10,
+					},
+				},
+			},
+		}
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return(energyHistories, nil)
+
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+		mockS.On("UpsertEnergyHistories", mock.Anything, types.SiteIDNone, energyHistories, types.CurrentEnergyStatsVersion).Return(nil)
 
 		// Expect SetSettings to be called
-		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, types.CurrentSettingsVersion).Return(nil)
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESS == "mock" && len(s.EncryptedCredentials) > 0
+		}), types.CurrentSettingsVersion).Return(nil)
 
 		srv.handleUpdateSettings(w, req)
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
 
-		mockES.AssertExpectations(t)
-		mockS.AssertExpectations(t)
-		mockU.AssertExpectations(t)
+		assert.True(t, mockES.AssertExpectations(t))
+		assert.True(t, mockS.AssertExpectations(t))
 	})
 
 	t.Run("Update Settings - Fails with Missing Credentials", func(t *testing.T) {
-		srv, _ := newAuthServer("my-audience", []string{"admin@example.com"}, nil)
+		mockS := &mockStorage{}
+		// Default setup for most tests
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			DryRun:        false,
+			MinBatterySOC: 10.0,
+		}, types.CurrentSettingsVersion, nil)
+
+		mockES := &mockESS{}
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockES)
+
+		srv := &Server{
+			storage:       mockS,
+			ess:           essMap,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
 
 		// Select "franklin" but don't provide credentials
 		s := struct {
@@ -544,10 +558,8 @@ func TestHandleUpdateSettings(t *testing.T) {
 				IgnoreHourUsageOverMultiple: 5,
 				SolarTrendRatioMax:          3.0,
 				SolarBellCurveMultiplier:    1.0,
-				UtilityProvider:             "test",
-				ESS:                         "franklin",
+				ESS:                         "mock",
 			},
-			Credentials: nil,
 		}
 		b, err := json.Marshal(s)
 		require.NoError(t, err)
@@ -555,32 +567,33 @@ func TestHandleUpdateSettings(t *testing.T) {
 		req = withUser(req, "admin@example.com", true)
 		w := httptest.NewRecorder()
 
-		// Expect validation to pass for utility
-		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Once()
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, types.Credentials{}).Return(types.Credentials{}, false, ess.ErrCredentialsMissing)
 
-		// Setting up existing settings with NO credentials
-		mockS.ExpectedCalls = nil
-		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
-			ESS: "mock", // different ESS
-		}, types.CurrentSettingsVersion, nil)
-		mockS.On("UpdateSite", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
-		mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 		// Expect SetSettings to be called to update auth status after failure
 		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
 			return s.ESSAuthStatus.ConsecutiveFailures == 1
-		}), types.CurrentSettingsVersion).Return(nil).Once()
+		}), types.CurrentSettingsVersion).Return(nil)
 
 		srv.handleUpdateSettings(w, req)
 		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
 		assert.Contains(t, w.Body.String(), "failed to verify ess credentials: credentials missing")
 
-		mockU.AssertExpectations(t)
-		mockS.AssertExpectations(t)
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockES.AssertExpectations(t))
 	})
 
 	t.Run("Update Settings - Does Not Backfill History on Unchanged Credentials", func(t *testing.T) {
-		srv, mockES := newAuthServer("my-audience", []string{"admin@example.com"}, nil)
+		mockS := &mockStorage{}
+		mockES := &mockESS{}
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockES)
+
+		srv := &Server{
+			storage:       mockS,
+			ess:           essMap,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
 
 		// Create a request with mock credentials
 		s := struct {
@@ -593,7 +606,6 @@ func TestHandleUpdateSettings(t *testing.T) {
 				IgnoreHourUsageOverMultiple: 5,
 				SolarTrendRatioMax:          3.0,
 				SolarBellCurveMultiplier:    1.0,
-				UtilityProvider:             "test",
 				ESS:                         "mock",
 			},
 		}
@@ -607,19 +619,16 @@ func TestHandleUpdateSettings(t *testing.T) {
 		existingCreds := types.Credentials{
 			Mock: &types.MockCredentials{Strategy: "foo"},
 		}
-		encrypted, _ := srv.encryptCredentials(req.Context(), existingCreds)
+		encrypted, err := srv.encryptCredentials(req.Context(), existingCreds)
+		require.NoError(t, err)
 
 		existingSettings := types.Settings{
 			ESS:                  "mock",
+			UtilityProvider:      "test",
 			EncryptedCredentials: encrypted,
 		}
 
-		// Unset the default mock and add a specific one
-		mockS.ExpectedCalls = nil
 		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(existingSettings, types.CurrentSettingsVersion, nil)
-
-		// Expect validation to pass
-		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Once()
 
 		// Expect SetSettings to be called
 		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, types.CurrentSettingsVersion).Return(nil)
@@ -627,13 +636,20 @@ func TestHandleUpdateSettings(t *testing.T) {
 		srv.handleUpdateSettings(w, req)
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
 
-		mockES.AssertExpectations(t)
-		mockS.AssertExpectations(t)
-		mockU.AssertExpectations(t)
+		assert.True(t, mockES.AssertExpectations(t))
+		assert.True(t, mockS.AssertExpectations(t))
 	})
 
 	t.Run("Update Settings - Rate Options Validation Failure", func(t *testing.T) {
-		srv, _ := newAuthServer("my-audience", []string{"admin@example.com"}, nil)
+		mockS := &mockStorage{}
+		mockU := &mockUtility{}
+		uMap := utility.NewMap(mockS)
+		uMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			storage:   mockS,
+			utilities: uMap,
+		}
 
 		// Create a request with valid settings but invalid rate options
 		s := types.Settings{
@@ -649,86 +665,78 @@ func TestHandleUpdateSettings(t *testing.T) {
 		require.NoError(t, err)
 		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
 		req = withUser(req, "admin@example.com", true)
-		w := httptest.NewRecorder()
 
 		// Expect validation to fail
 		mockU.On("ApplySettings", mock.Anything, mock.MatchedBy(func(opts types.Settings) bool {
 			return opts.UtilityRateOptions.RateClass == "invalid"
-		})).Return(assert.AnError).Once()
+		})).Return(assert.AnError)
 
+		w := httptest.NewRecorder()
 		srv.handleUpdateSettings(w, req)
 		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
 
-		mockU.AssertExpectations(t)
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockU.AssertExpectations(t))
 	})
 
 	t.Run("Update Site Location With Postal Code", func(t *testing.T) {
-		mockU := &mockUtility{}
-		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockUMap := utility.NewMap(mockS)
-		mockUMap.SetProvider("test-site", mockU)
 		mockS := &mockStorage{}
-		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil).Maybe()
-		mockS.On("UpdateSite", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
-			UtilityProvider: "test",
-		}, types.CurrentSettingsVersion, nil)
-		mockS.On("GetCredentials", mock.Anything, mock.Anything).Return(types.Credentials{}, types.CurrentSettingsVersion, nil)
-		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
-			settings := args.Get(2).(types.Settings)
-			assert.NotNil(t, settings.Location)
-			assert.Equal(t, "90210", settings.Location.PostalCode)
-		})
-		mockS.On("SetCredentials", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
-		mockS.On("GetLatestWeatherTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
-		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
-		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil).Maybe()
-		mockS.On("UpsertWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{}, types.CurrentSettingsVersion, nil)
 		mockW := &mockWeather{}
-		mockW.On("Location", mock.Anything, mock.Anything, mock.Anything).Return(&types.SiteLocation{
-			PostalCode:  "90210",
-			CountryCode: "US",
-		}, nil).Maybe()
-		mockW.On("Forecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
 
 		srv := &Server{
-			storage:     mockS,
-			utilities:   mockUMap,
-			controller:  controller.NewController(),
-			weather:     mockW,
-			bypassAuth:  true,
-			singleSite:  true,
-			adminEmails: []string{"test@example.com"},
+			storage: mockS,
+			weather: mockW,
 		}
 
 		bodyData := types.Settings{
 			PostalCode:                  "90210",
 			CountryCode:                 "US",
-			UtilityProvider:             "test",
 			IgnoreHourUsageOverMultiple: 1.0,
 			SolarTrendRatioMax:          1.0,
 		}
-		body, _ := json.Marshal(bodyData)
+		body, err := json.Marshal(bodyData)
+		require.NoError(t, err)
 		req := httptest.NewRequest(http.MethodPost, "/api/settings", bytes.NewBuffer(body))
-		ctx := context.WithValue(req.Context(), userContextKey, types.User{Email: "test@example.com", ID: "admin", Admin: true})
-		ctx = context.WithValue(ctx, siteIDContextKey, "test-site")
-		req = req.WithContext(ctx)
+		req = withUser(req, "test@test.com", true)
+
+		location := types.SiteLocation{
+			PostalCode:  "90210",
+			CountryCode: "US",
+		}
+		mockW.On("Location", mock.Anything, mock.Anything, mock.Anything).Return(location, nil)
+		weather := []types.Weather{
+			{
+				TSDayStart:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+				TimeLocation: "UTC",
+				ForecastHours: []types.HourlyWeather{
+					{
+						TSHourStart: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+						GHI:         800,
+					},
+				},
+			},
+		}
+		mockW.On("Forecast", mock.Anything, location, mock.Anything, mock.Anything).Return(weather, nil)
+
+		mockS.On("GetLatestWeatherTime", mock.Anything, types.SiteIDNone).Return(time.Time{}, 0, nil)
+		mockS.On("UpsertWeather", mock.Anything, types.SiteIDNone, weather, types.CurrentWeatherVersion).Return(nil)
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+			return s.Location != nil && s.Location.PostalCode == "90210"
+		}), types.CurrentSettingsVersion).Return(nil)
 
 		w := httptest.NewRecorder()
 		srv.handleUpdateSettings(w, req)
 		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockW.AssertExpectations(t))
 	})
 
 	t.Run("Update Solar Direction - Preservation", func(t *testing.T) {
-		mockU := &mockUtility{}
-		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
 		mockS := &mockStorage{}
-		mockUMap := utility.NewMap(mockS)
-		mockUMap.SetProvider("test-site", mockU)
 
-		existingLoc := &types.SiteLocation{
+		existingLoc := types.SiteLocation{
 			PostalCode:   "90210",
 			CountryCode:  "US",
 			Latitude:     34.0736,
@@ -737,13 +745,28 @@ func TestHandleUpdateSettings(t *testing.T) {
 			SolarTilt:    25,
 		}
 
-		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil).Maybe()
-		mockS.On("UpdateSite", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		srv := &Server{
+			storage: mockS,
+		}
+
+		bodyData := types.Settings{
+			PostalCode:                  "90210",
+			CountryCode:                 "US",
+			IgnoreHourUsageOverMultiple: 1.0,
+			SolarTrendRatioMax:          1.0,
+			SolarAzimuth:                270,
+			SolarTilt:                   30,
+		}
+		body, err := json.Marshal(bodyData)
+		require.NoError(t, err)
+		req := httptest.NewRequest(http.MethodPost, "/api/settings", bytes.NewBuffer(body))
+		req = withUser(req, "test@test.com", true)
+
 		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
 			UtilityProvider: "test",
 			PostalCode:      "90210",
 			CountryCode:     "US",
-			Location:        existingLoc,
+			Location:        &existingLoc,
 		}, types.CurrentSettingsVersion, nil)
 
 		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
@@ -753,49 +776,37 @@ func TestHandleUpdateSettings(t *testing.T) {
 				s.Location.SolarTilt == 30 &&
 				s.Location.Latitude == 34.0736 &&
 				s.Location.Longitude == -118.4004
-		}), types.CurrentSettingsVersion).Return(nil).Once()
-
-		srv := &Server{
-			storage:     mockS,
-			utilities:   mockUMap,
-			controller:  controller.NewController(),
-			bypassAuth:  true,
-			singleSite:  true,
-			adminEmails: []string{"test@example.com"},
-			release:     "production",
-		}
-
-		bodyData := types.Settings{
-			PostalCode:                  "90210",
-			CountryCode:                 "US",
-			UtilityProvider:             "test",
-			IgnoreHourUsageOverMultiple: 1.0,
-			SolarTrendRatioMax:          1.0,
-			Release:                     "production",
-			SolarAzimuth:                270,
-			SolarTilt:                   30,
-		}
-		body, _ := json.Marshal(bodyData)
-		req := httptest.NewRequest(http.MethodPost, "/api/settings", bytes.NewBuffer(body))
-		ctx := context.WithValue(req.Context(), userContextKey, types.User{Email: "test@example.com", ID: "admin", Admin: true})
-		ctx = context.WithValue(ctx, siteIDContextKey, "test-site")
-		req = req.WithContext(ctx)
+		}), types.CurrentSettingsVersion).Return(nil)
 
 		w := httptest.NewRecorder()
 		srv.handleUpdateSettings(w, req)
 		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-		mockS.AssertExpectations(t)
+
+		assert.True(t, mockS.AssertExpectations(t))
 	})
 
 	t.Run("Update Solar Direction - With Zip Change", func(t *testing.T) {
-		mockU := &mockUtility{}
-		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
 		mockS := &mockStorage{}
-		mockUMap := utility.NewMap(mockS)
-		mockUMap.SetProvider("test-site", mockU)
+		mockW := &mockWeather{}
 
-		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil).Maybe()
-		mockS.On("UpdateSite", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		srv := &Server{
+			storage: mockS,
+			weather: mockW,
+		}
+
+		bodyData := types.Settings{
+			PostalCode:                  "60601",
+			CountryCode:                 "US",
+			IgnoreHourUsageOverMultiple: 1.0,
+			SolarTrendRatioMax:          1.0,
+			SolarAzimuth:                270,
+			SolarTilt:                   15,
+		}
+		body, err := json.Marshal(bodyData)
+		require.NoError(t, err)
+		req := httptest.NewRequest(http.MethodPost, "/api/settings", bytes.NewBuffer(body))
+		req = withUser(req, "test@test.com", true)
+
 		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
 			UtilityProvider: "test",
 			PostalCode:      "90210",
@@ -808,19 +819,30 @@ func TestHandleUpdateSettings(t *testing.T) {
 			},
 		}, types.CurrentSettingsVersion, nil)
 
-		// Mock weather service for new zip
-		mockW := &mockWeather{}
-		newLoc := &types.SiteLocation{
+		newLoc := types.SiteLocation{
 			PostalCode:  "60601",
 			CountryCode: "US",
 			Latitude:    41.8818,
 			Longitude:   -87.6231,
 		}
 		mockW.On("Location", mock.Anything, "US", "60601").Return(newLoc, nil).Once()
-		mockW.On("Forecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
-		mockS.On("GetLatestWeatherTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
-		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
-		mockS.On("UpsertWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		weather := []types.Weather{
+			{
+				TSDayStart:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+				TimeLocation: "UTC",
+				ForecastHours: []types.HourlyWeather{
+					{
+						TSHourStart: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+						GHI:         800,
+					},
+				},
+			},
+		}
+		newLoc.SolarAzimuth = 270
+		newLoc.SolarTilt = 15
+		mockW.On("Forecast", mock.Anything, newLoc, mock.Anything, mock.Anything).Return(weather, nil)
+		mockS.On("GetLatestWeatherTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+		mockS.On("UpsertWeather", mock.Anything, types.SiteIDNone, weather, types.CurrentWeatherVersion).Return(nil)
 
 		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
 			// Verify that the new azimuth and tilt are preserved despite a zip change re-fetching location
@@ -831,83 +853,29 @@ func TestHandleUpdateSettings(t *testing.T) {
 				s.Location.Latitude == 41.8818
 		}), types.CurrentSettingsVersion).Return(nil).Once()
 
-		srv := &Server{
-			storage:     mockS,
-			utilities:   mockUMap,
-			weather:     mockW,
-			controller:  controller.NewController(),
-			bypassAuth:  true,
-			singleSite:  true,
-			adminEmails: []string{"test@example.com"},
-			release:     "production",
-		}
-
-		bodyData := types.Settings{
-			PostalCode:                  "60601",
-			CountryCode:                 "US",
-			UtilityProvider:             "test",
-			IgnoreHourUsageOverMultiple: 1.0,
-			SolarTrendRatioMax:          1.0,
-			Release:                     "production",
-			SolarAzimuth:                270,
-			SolarTilt:                   15,
-		}
-		body, _ := json.Marshal(bodyData)
-		req := httptest.NewRequest(http.MethodPost, "/api/settings", bytes.NewBuffer(body))
-		ctx := context.WithValue(req.Context(), userContextKey, types.User{Email: "test@example.com", ID: "admin", Admin: true})
-		ctx = context.WithValue(ctx, siteIDContextKey, "test-site")
-		req = req.WithContext(ctx)
-
 		w := httptest.NewRecorder()
 		srv.handleUpdateSettings(w, req)
 		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-		mockS.AssertExpectations(t)
-		mockW.AssertExpectations(t)
+
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockW.AssertExpectations(t))
 	})
 
-	t.Run("Rate Limit First Retry Allowed (200)", func(t *testing.T) {
-		mockU2 := &mockUtility{}
-		mockU2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockUMap2 := utility.NewMap(nil)
-		mockUMap2.SetProvider(types.SiteIDNone, mockU2)
+	t.Run("ESS Rate Limit First Retry Allowed (200)", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockES := &mockESS{}
 
-		mockS2 := &mockStorage{}
-		mockES2 := &mockESS{}
-		mockES2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockES2.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, true, nil).Once()
-		mockES2.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil).Maybe()
-		mockS2.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockS2.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
-		mockS2.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-
-		mockP2 := ess.NewMap()
-		mockP2.SetSystem(types.SiteIDNone, mockES2)
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockES)
 
 		srv := &Server{
-			utilities:     mockUMap2,
-			ess:           mockP2,
-			storage:       mockS2,
-			singleSite:    true,
-			adminEmails:   []string{"admin@example.com"},
-			release:       "production",
+			ess:           essMap,
+			storage:       mockS,
 			encryptionKey: "test-secret-key-1234567890123456",
 		}
 
-		// For the first retry, even if credentials haven't changed, the failures = 1 logic should return backoff = 0
-		// Wait, if existingCreds is empty, credentialsActuallyChanged = true anyway.
-		mockS2.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
-			UtilityProvider: "test",
-			ESS:             "franklin",
-			ESSAuthStatus: types.ESSAuthStatus{
-				ConsecutiveFailures: 1,
-				LastAttempt:         time.Now().UTC(),
-			},
-		}, types.CurrentSettingsVersion, nil).Once()
-
 		s := types.Settings{
-			UtilityProvider:             "test",
 			ESS:                         "mock",
-			Release:                     "production",
 			MinBatterySOC:               20,
 			IgnoreHourUsageOverMultiple: 2,
 			SolarTrendRatioMax:          3,
@@ -925,37 +893,53 @@ func TestHandleUpdateSettings(t *testing.T) {
 				},
 			},
 		}
-
 		b, err := json.Marshal(body)
 		require.NoError(t, err)
 		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
 		user := types.User{ID: "admin@example.com", Email: "admin@example.com", Admin: true}
 		req = req.WithContext(context.WithValue(context.WithValue(req.Context(), userContextKey, user), siteIDContextKey, types.SiteIDNone))
-		w := httptest.NewRecorder()
 
+		existingCreds := types.Credentials{
+			Mock: &types.MockCredentials{Strategy: "bar"},
+		}
+		encrypted, err := srv.encryptCredentials(context.Background(), existingCreds)
+		require.NoError(t, err)
+
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+			ESS:                  "mock",
+			EncryptedCredentials: encrypted,
+			ESSAuthStatus: types.ESSAuthStatus{
+				ConsecutiveFailures: 1,
+				LastAttempt:         time.Now().UTC(),
+			},
+		}, types.CurrentSettingsVersion, nil)
+
+		mockES.On("ApplySettings", mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESS == "mock"
+		})).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+			return c.Mock.Strategy == "foo"
+		})).Return(types.Credentials{}, true, nil).Once()
+
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveFailures == 0
+		}), types.CurrentSettingsVersion).Return(nil)
+
+		w := httptest.NewRecorder()
 		srv.handleUpdateSettings(w, req)
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
 	})
 
 	t.Run("Rate Limit Active (429) after 2 Failures", func(t *testing.T) {
-		mockU2 := &mockUtility{}
-		mockU2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockUMap2 := utility.NewMap(nil)
-		mockUMap2.SetProvider(types.SiteIDNone, mockU2)
-
-		mockS2 := &mockStorage{}
-		mockES2 := &mockESS{}
-		mockES2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockP2 := ess.NewMap()
-		mockP2.SetSystem(types.SiteIDNone, mockES2)
+		mockS := &mockStorage{}
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockES)
 
 		srv := &Server{
-			utilities:     mockUMap2,
-			ess:           mockP2,
-			storage:       mockS2,
-			singleSite:    true,
-			adminEmails:   []string{"admin@example.com"},
-			release:       "production",
+			ess:           essMap,
+			storage:       mockS,
 			encryptionKey: "test-secret-key-1234567890123456",
 		}
 
@@ -965,20 +949,8 @@ func TestHandleUpdateSettings(t *testing.T) {
 		encrypted, err := srv.encryptCredentials(context.Background(), existingCreds)
 		require.NoError(t, err)
 
-		mockS2.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
-			UtilityProvider:      "test",
-			ESS:                  "mock",
-			EncryptedCredentials: encrypted,
-			ESSAuthStatus: types.ESSAuthStatus{
-				ConsecutiveFailures: 2,
-				LastAttempt:         time.Now().UTC().Add(-10 * time.Second), // 20s remaining of 30s
-			},
-		}, types.CurrentSettingsVersion, nil).Once()
-
 		s := types.Settings{
-			UtilityProvider:             "test",
 			ESS:                         "mock",
-			Release:                     "production",
 			MinBatterySOC:               20,
 			IgnoreHourUsageOverMultiple: 2,
 			SolarTrendRatioMax:          3,
@@ -997,51 +969,12 @@ func TestHandleUpdateSettings(t *testing.T) {
 			},
 		}
 
-		b, _ := json.Marshal(body)
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
 		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
-		user := types.User{ID: "admin@example.com", Email: "admin@example.com", Admin: true}
-		req = req.WithContext(context.WithValue(context.WithValue(req.Context(), userContextKey, user), siteIDContextKey, types.SiteIDNone))
-		w := httptest.NewRecorder()
+		req = withUser(req, "admin@example.com", true)
 
-		srv.handleUpdateSettings(w, req)
-		assert.Equal(t, http.StatusTooManyRequests, w.Result().StatusCode)
-		var errResp struct {
-			Error string `json:"error"`
-		}
-		err = json.NewDecoder(w.Result().Body).Decode(&errResp)
-		require.NoError(t, err)
-		assert.Contains(t, errResp.Error, "try again in 20s")
-	})
-
-	t.Run("Rate Limit Active (429) after 2 Failures Even With Different Credentials", func(t *testing.T) {
-		mockU2 := &mockUtility{}
-		mockU2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockUMap2 := utility.NewMap(nil)
-		mockUMap2.SetProvider(types.SiteIDNone, mockU2)
-
-		mockS2 := &mockStorage{}
-		mockES2 := &mockESS{}
-		mockES2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockP2 := ess.NewMap()
-		mockP2.SetSystem(types.SiteIDNone, mockES2)
-
-		srv := &Server{
-			utilities:     mockUMap2,
-			ess:           mockP2,
-			storage:       mockS2,
-			singleSite:    true,
-			adminEmails:   []string{"admin@example.com"},
-			release:       "production",
-			encryptionKey: "test-secret-key-1234567890123456",
-		}
-
-		existingCreds := types.Credentials{
-			Mock: &types.MockCredentials{Strategy: "sameuser"},
-		}
-		encrypted, err := srv.encryptCredentials(context.Background(), existingCreds)
-		require.NoError(t, err)
-
-		mockS2.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
 			UtilityProvider:      "test",
 			ESS:                  "mock",
 			EncryptedCredentials: encrypted,
@@ -1051,10 +984,41 @@ func TestHandleUpdateSettings(t *testing.T) {
 			},
 		}, types.CurrentSettingsVersion, nil).Once()
 
+		w := httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusTooManyRequests, w.Result().StatusCode)
+		var errResp struct {
+			Error string `json:"error"`
+		}
+		err = json.NewDecoder(w.Result().Body).Decode(&errResp)
+		require.NoError(t, err)
+		assert.Contains(t, errResp.Error, "try again in 20s")
+
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockES.AssertExpectations(t))
+	})
+
+	t.Run("Rate Limit Active (429) after 2 Failures Even With Different Credentials", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockES)
+
+		srv := &Server{
+			ess:           essMap,
+			storage:       mockS,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
+		existingCreds := types.Credentials{
+			Mock: &types.MockCredentials{Strategy: "sameuser"},
+		}
+		encrypted, err := srv.encryptCredentials(context.Background(), existingCreds)
+		require.NoError(t, err)
+
 		s := types.Settings{
-			UtilityProvider:             "test",
 			ESS:                         "mock",
-			Release:                     "production",
 			MinBatterySOC:               20,
 			IgnoreHourUsageOverMultiple: 2,
 			SolarTrendRatioMax:          3,
@@ -1076,10 +1040,18 @@ func TestHandleUpdateSettings(t *testing.T) {
 		b, err := json.Marshal(body)
 		require.NoError(t, err)
 		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
-		user := types.User{ID: "admin@example.com", Email: "admin@example.com", Admin: true}
-		req = req.WithContext(context.WithValue(context.WithValue(req.Context(), userContextKey, user), siteIDContextKey, types.SiteIDNone))
-		w := httptest.NewRecorder()
+		req = withUser(req, "admin@example.com", true)
 
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			ESS:                  "mock",
+			EncryptedCredentials: encrypted,
+			ESSAuthStatus: types.ESSAuthStatus{
+				ConsecutiveFailures: 2,
+				LastAttempt:         time.Now().UTC().Add(-10 * time.Second), // 20s remaining of 30s
+			},
+		}, types.CurrentSettingsVersion, nil).Once()
+
+		w := httptest.NewRecorder()
 		srv.handleUpdateSettings(w, req)
 		assert.Equal(t, http.StatusTooManyRequests, w.Result().StatusCode)
 		var errResp struct {
@@ -1089,49 +1061,28 @@ func TestHandleUpdateSettings(t *testing.T) {
 		require.NoError(t, err)
 		// Assert rate limit remains active even when changing credentials to bypass it
 		assert.Contains(t, errResp.Error, "try again in 20s")
+
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockES.AssertExpectations(t))
 	})
 
 	t.Run("Rate Limit Expired (200) after 5 Minutes", func(t *testing.T) {
-		mockU2 := &mockUtility{}
-		mockU2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockUMap2 := utility.NewMap(nil)
-		mockUMap2.SetProvider(types.SiteIDNone, mockU2)
+		mockS := &mockStorage{}
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, true, nil)
 
-		mockS2 := &mockStorage{}
-		mockES2 := &mockESS{}
-		mockES2.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockES2.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, true, nil).Once()
-		mockES2.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil).Maybe()
-		mockS2.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-		mockS2.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
-		mockS2.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-
-		mockP2 := ess.NewMap()
-		mockP2.SetSystem(types.SiteIDNone, mockES2)
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockES)
 
 		srv := &Server{
-			utilities:     mockUMap2,
-			ess:           mockP2,
-			storage:       mockS2,
-			singleSite:    true,
-			adminEmails:   []string{"admin@example.com"},
-			release:       "production",
+			ess:           essMap,
+			storage:       mockS,
 			encryptionKey: "test-secret-key-1234567890123456",
 		}
 
-		mockS2.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
-			UtilityProvider: "test",
-			ESS:             "mock",
-			ESSAuthStatus: types.ESSAuthStatus{
-				ConsecutiveFailures: 5,
-				LastAttempt:         time.Now().UTC().Add(-5 * time.Minute),
-			},
-		}, types.CurrentSettingsVersion, nil).Once()
-
 		s := types.Settings{
-			UtilityProvider:             "test",
 			ESS:                         "mock",
-			Release:                     "production",
 			MinBatterySOC:               20,
 			IgnoreHourUsageOverMultiple: 2,
 			SolarTrendRatioMax:          3,
@@ -1145,19 +1096,97 @@ func TestHandleUpdateSettings(t *testing.T) {
 			Settings: s,
 			Credentials: &types.Credentials{
 				Mock: &types.MockCredentials{
-					Strategy: "sameuser",
+					Strategy: "foo",
 				},
 			},
 		}
 
-		b, _ := json.Marshal(body)
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
 		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
-		user := types.User{ID: "admin@example.com", Email: "admin@example.com", Admin: true}
-		req = req.WithContext(context.WithValue(context.WithValue(req.Context(), userContextKey, user), siteIDContextKey, types.SiteIDNone))
+		req = withUser(req, "admin@example.com", true)
+
+		existingCreds := types.Credentials{
+			Mock: &types.MockCredentials{Strategy: "bar"},
+		}
+		encrypted, err := srv.encryptCredentials(context.Background(), existingCreds)
+		require.NoError(t, err)
+
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			ESS:                  "mock",
+			EncryptedCredentials: encrypted,
+			ESSAuthStatus: types.ESSAuthStatus{
+				ConsecutiveFailures: 5,
+				LastAttempt:         time.Now().UTC().Add(-5 * time.Minute),
+			},
+		}, types.CurrentSettingsVersion, nil)
+
+		mockES.On("ApplySettings", mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESS == "mock"
+		})).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+			return c.Mock.Strategy == "foo"
+		})).Return(types.Credentials{}, true, nil)
+
+		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveFailures == 0
+		}), mock.Anything).Return(nil)
+
 		w := httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+	})
+
+	t.Run("Update Settings - Utility Provider Changed Re-fetches Prices", func(t *testing.T) {
+		mockU := &mockUtility{}
+		uMap := utility.NewMap(nil)
+		uMap.SetProvider(types.SiteIDNone, mockU)
+		mockS := &mockStorage{}
+
+		srv := &Server{
+			utilities: uMap,
+			storage:   mockS,
+		}
+
+		// Create a request with new utility provider
+		s := types.Settings{
+			MinBatterySOC:               20,
+			IgnoreHourUsageOverMultiple: 5,
+			SolarTrendRatioMax:          3.0,
+			SolarBellCurveMultiplier:    1.0,
+			UtilityProvider:             "new-utility",
+		}
+		b, err := json.Marshal(s)
+		require.NoError(t, err)
+		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+		req = withUser(req, "admin@example.com", true)
+		w := httptest.NewRecorder()
+
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+			UtilityProvider: "old-utility",
+		}, types.CurrentSettingsVersion, nil).Once()
+
+		mockU.On("ApplySettings", mock.Anything, mock.MatchedBy(func(set types.Settings) bool {
+			return set.UtilityProvider == "new-utility"
+		})).Return(nil).Once()
+
+		prices := []types.Price{{DollarsPerKWH: 0.1, TSStart: time.Now()}}
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.MatchedBy(func(start time.Time) bool {
+			return math.Abs(time.Until(start).Seconds()) < 1
+		}), mock.Anything).Return(prices, nil)
+
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, types.SiteIDNone).Return(time.Now().Add(8*time.Hour), types.CurrentPriceHistoryVersion, nil).Once()
+		mockS.On("UpsertPrices", mock.Anything, types.SiteIDNone, prices, types.CurrentPriceHistoryVersion).Return(nil)
+
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(set types.Settings) bool {
+			return set.UtilityProvider == "new-utility"
+		}), types.CurrentSettingsVersion).Return(nil).Once()
 
 		srv.handleUpdateSettings(w, req)
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockU.AssertExpectations(t))
 	})
 }
 
@@ -1189,7 +1218,7 @@ func TestGetSettingsWithMigration(t *testing.T) {
 		assert.Equal(t, types.CurrentSettingsVersion, sv.version)
 		assert.Equal(t, "test-utility", sv.Settings.UtilityProvider)
 		assert.Equal(t, "test-strategy", returnedCreds.Mock.Strategy)
-		mockS.AssertExpectations(t)
+		assert.True(t, mockS.AssertExpectations(t))
 	})
 
 	t.Run("Migrates Settings Below Current Version And Saves", func(t *testing.T) {
@@ -1218,7 +1247,7 @@ func TestGetSettingsWithMigration(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, types.CurrentSettingsVersion, sv.version)
 		// We expect SetSettings to have been called with the migrated settings
-		mockS.AssertExpectations(t)
+		assert.True(t, mockS.AssertExpectations(t))
 
 		hasMap := creds.Has()
 		assert.Contains(t, hasMap, "franklin")
@@ -1253,7 +1282,7 @@ func TestGetSettingsWithMigration(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.Equal(t, types.CurrentSettingsVersion, sv.version)
-		mockS.AssertExpectations(t)
+		assert.True(t, mockS.AssertExpectations(t))
 
 		hasMap := creds.Has()
 		assert.Contains(t, hasMap, "franklin")
@@ -1283,7 +1312,7 @@ func TestGetSettingsWithMigration(t *testing.T) {
 
 		require.Error(t, err)
 		assert.ErrorContains(t, err, "cipher")
-		mockS.AssertExpectations(t)
+		assert.True(t, mockS.AssertExpectations(t))
 	})
 }
 

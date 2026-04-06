@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -27,8 +28,36 @@ func (m *mockSavingsStorage) GetPriceHistory(ctx context.Context, siteID string,
 	return m.prices, nil
 }
 
-func (m *mockSavingsStorage) GetEnergyHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.EnergyStats, error) {
-	return m.stats, nil
+func (m *mockSavingsStorage) GetEnergyHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.DailyEnergyStats, error) {
+	dailyMap := make(map[string][]types.EnergyStats)
+	var sortedDayKeys []string
+
+	startDay := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
+	endDay := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, end.Location())
+	for _, s := range m.stats {
+		dayStart := time.Date(s.TSHourStart.Year(), s.TSHourStart.Month(), s.TSHourStart.Day(), 0, 0, 0, 0, s.TSHourStart.Location())
+		if dayStart.Before(startDay) || dayStart.After(endDay) {
+			continue
+		}
+		dayKey := dayStart.Format("2006-01-02")
+		if _, exists := dailyMap[dayKey]; !exists {
+			sortedDayKeys = append(sortedDayKeys, dayKey)
+		}
+		dailyMap[dayKey] = append(dailyMap[dayKey], s)
+	}
+
+	var result []types.DailyEnergyStats
+	for _, key := range sortedDayKeys {
+		dayStart, err := time.ParseInLocation("2006-01-02", key, time.Local)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse day key %s: %v", key, err)
+		}
+		result = append(result, types.DailyEnergyStats{
+			TSDayStart: dayStart,
+			Hourly:     dailyMap[key],
+		})
+	}
+	return result, nil
 }
 
 func (m *mockSavingsStorage) GetActionHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Action, error) {
@@ -566,16 +595,16 @@ func TestHandleHistorySavingsAll(t *testing.T) {
 	mockStore.On("GetPriceHistory", mock.Anything, "site1", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.Price{
 		{TSStart: start, DollarsPerKWH: 0.10},
 	}, nil)
-	mockStore.On("GetEnergyHistory", mock.Anything, "site1", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.EnergyStats{
-		{TSHourStart: start, HomeKWH: 10, GridImportKWH: 10},
+	mockStore.On("GetEnergyHistory", mock.Anything, "site1", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.DailyEnergyStats{
+		{Hourly: []types.EnergyStats{{TSHourStart: start, HomeKWH: 10, GridImportKWH: 10}}},
 	}, nil)
 
 	// Site 2 data
 	mockStore.On("GetPriceHistory", mock.Anything, "site2", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.Price{
 		{TSStart: start, DollarsPerKWH: 0.20},
 	}, nil)
-	mockStore.On("GetEnergyHistory", mock.Anything, "site2", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.EnergyStats{
-		{TSHourStart: start, HomeKWH: 20, GridImportKWH: 20},
+	mockStore.On("GetEnergyHistory", mock.Anything, "site2", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.DailyEnergyStats{
+		{Hourly: []types.EnergyStats{{TSHourStart: start, HomeKWH: 20, GridImportKWH: 20}}},
 	}, nil)
 
 	mockStore.On("GetActionHistory", mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.Action{}, nil)

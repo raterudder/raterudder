@@ -11,7 +11,7 @@ import (
 
 // Service provides weather data mapping and API handling.
 type Service interface {
-	Location(ctx context.Context, countryCode, postalCode string) (*types.SiteLocation, error)
+	Location(ctx context.Context, countryCode, postalCode string) (types.SiteLocation, error)
 	Forecast(ctx context.Context, loc types.SiteLocation, startDate, endDate time.Time) ([]types.Weather, error)
 }
 

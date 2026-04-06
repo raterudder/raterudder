@@ -126,22 +126,26 @@ func TestMockESS(t *testing.T) {
 		})).Return(nil).Once()
 
 		end := time.Now().In(loc)
-		start := end.Add(-72 * time.Hour)
+		start := end.AddDate(0, 0, -1) // yesterday
 		history, err := ess.GetEnergyHistory(ctx, start, end)
 		require.NoError(t, err)
 		assert.NotEmpty(t, history)
 
-		// Assert we have at least exactly 24 elements for yesterday and some for today
+		// Assert we have exactly 24 elements for yesterday and some for today
 		var yesterdayDataCount int
-		for _, v := range history {
-			// Count how many are returned that are before the local midnight
-			if v.TSHourStart.Before(midnight) {
-				yesterdayDataCount++
+		var todayDataCount int
+		for _, ds := range history {
+			for _, v := range ds.Hourly {
+				if v.TSHourStart.Before(midnight) {
+					yesterdayDataCount++
+				} else {
+					todayDataCount++
+				}
 			}
 		}
 
-		// depending on when start was there may be 23 or 24 depending on exactly when we cross the hour
-		assert.GreaterOrEqual(t, yesterdayDataCount, 23, "Should return yesterday's backfilled data")
+		assert.Equal(t, 24, yesterdayDataCount, "Should return a full day of 24 hours for yesterday")
+		assert.Greater(t, todayDataCount, 0, "Should return some data for today")
 
 		db.AssertExpectations(t)
 	})
@@ -171,15 +175,17 @@ func TestMockESS(t *testing.T) {
 		assert.NotEmpty(t, history)
 
 		foundDetailed := false
-		for _, stat := range history {
-			// check if we have any hour with both solar and battery activity
-			if stat.SolarKWH > 0 && (stat.SolarToBatteryKWH > 0 || stat.SolarToGridKWH > 0 || stat.SolarToHomeKWH > 0) {
-				foundDetailed = true
-				// Basic sum check
-				assert.InDelta(t, stat.SolarToHomeKWH+stat.SolarToBatteryKWH+stat.SolarToGridKWH, stat.SolarKWH, 0.001, "Solar components should sum to total solar")
-				// In the mock, battery only discharges to home
-				if stat.BatteryUsedKWH > 0 {
-					assert.InDelta(t, stat.BatteryToHomeKWH, stat.BatteryUsedKWH, 0.001)
+		for _, ds := range history {
+			for _, stat := range ds.Hourly {
+				// check if we have any hour with both solar and battery activity
+				if stat.SolarKWH > 0 && (stat.SolarToBatteryKWH > 0 || stat.SolarToGridKWH > 0 || stat.SolarToHomeKWH > 0) {
+					foundDetailed = true
+					// Basic sum check
+					assert.InDelta(t, stat.SolarToHomeKWH+stat.SolarToBatteryKWH+stat.SolarToGridKWH, stat.SolarKWH, 0.001, "Solar components should sum to total solar")
+					// In the mock, battery only discharges to home
+					if stat.BatteryUsedKWH > 0 {
+						assert.InDelta(t, stat.BatteryToHomeKWH, stat.BatteryUsedKWH, 0.001)
+					}
 				}
 			}
 		}

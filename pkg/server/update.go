@@ -153,7 +153,7 @@ func (s *Server) performSiteUpdate(
 		// continue even if history sync fails
 	}
 
-	if err := s.updatePriceHistory(ctx, siteID, utility); err != nil {
+	if err := s.updatePriceHistory(ctx, siteID, utility, false); err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to update price history", slog.Any("error", err))
 		// continue even if price history sync fails
 	}
@@ -179,9 +179,14 @@ func (s *Server) performSiteUpdate(
 	// get History for Controller (Last 72 hours from Storage)
 	historyStart := time.Now().Add(-72 * time.Hour)
 	historyEnd := time.Now()
-	energyHistory, err := s.storage.GetEnergyHistory(ctx, siteID, historyStart, historyEnd)
+	energyHistoryDaily, err := s.storage.GetEnergyHistory(ctx, siteID, historyStart, historyEnd)
 	if err != nil {
 		log.Ctx(ctx).WarnContext(ctx, "failed to get energy history from storage", slog.Any("error", err))
+	}
+
+	var energyHistory []types.EnergyStats
+	for _, day := range energyHistoryDaily {
+		energyHistory = append(energyHistory, day.Hourly...)
 	}
 
 	// fetch weather history/forecast if location is configured
@@ -343,15 +348,15 @@ func (s *Server) performSiteUpdate(
 	return &action, "", nil
 }
 
-func (s *Server) updatePriceHistory(ctx context.Context, siteID string, provider utility.Utility) error {
+func (s *Server) updatePriceHistory(ctx context.Context, siteID string, provider utility.Utility, refreshNow bool) error {
 	lastPriceTime, lastVersion, err := s.storage.GetLatestPriceHistoryTime(ctx, siteID)
 	if err != nil {
 		return fmt.Errorf("failed to get latest price history time: %w", err)
 	}
 
 	now := time.Now()
-	fiveDaysAgo := now.Add(-5 * 24 * time.Hour)
-	syncStart := time.Date(fiveDaysAgo.Year(), fiveDaysAgo.Month(), fiveDaysAgo.Day(), 0, 0, 0, 0, fiveDaysAgo.Location())
+	fiveDaysAgo := now.AddDate(0, 0, -5)
+	syncStart := truncateDay(fiveDaysAgo)
 
 	if !lastPriceTime.IsZero() && lastVersion >= types.CurrentPriceHistoryVersion && lastPriceTime.After(syncStart) {
 		syncStart = lastPriceTime.Truncate(time.Hour)
@@ -364,13 +369,23 @@ func (s *Server) updatePriceHistory(ctx context.Context, siteID string, provider
 		)
 	}
 
-	if !syncStart.Before(now) {
+	if refreshNow && syncStart.After(now) {
+		syncStart = now
+	}
+
+	// We fetch 12 hours into the future. Previously we fetched until the end of the day (UTC),
+	// but that's end of day UTC (or whatever the server timezone is) which might not match
+	// up which is confusing. 12 hours is enough so that we aren't calling this every single
+	// hour, but conservative enough in case prices change.
+	fetchEnd := now.Add(12 * time.Hour)
+
+	if !syncStart.Before(fetchEnd) {
 		return nil
 	}
 
-	log.Ctx(ctx).DebugContext(ctx, "syncing price history", slog.Any("since", syncStart), slog.Any("to", now))
+	log.Ctx(ctx).DebugContext(ctx, "syncing price history", slog.Time("since", syncStart), slog.Time("to", fetchEnd))
 
-	newPrices, err := provider.GetConfirmedPrices(ctx, syncStart, now)
+	newPrices, err := provider.GetConfirmedPrices(ctx, syncStart, fetchEnd)
 	if err != nil {
 		return fmt.Errorf("failed to get confirmed prices: %w", err)
 	}
@@ -396,73 +411,61 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 	}
 
 	now := time.Now().In(timeLoc)
-	todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, timeLoc)
-	yesterdayMidnight := todayMidnight.AddDate(0, 0, -1)
+	todayMidnight := truncateDay(now)
+	syncStart := todayMidnight.AddDate(0, 0, -5) // Default to 5 days ago backfill
 
-	// Default sync start: yesterday (to always refresh yesterday+today+tomorrow).
-	syncStart := yesterdayMidnight
+	if !lastWeatherTime.IsZero() && lastVersion >= types.CurrentWeatherVersion && lastWeatherTime.After(syncStart) {
+		syncStart = truncateDay(lastWeatherTime.In(timeLoc))
 
-	// On cold start or version mismatch, go back further.
-	fiveDaysAgo := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, timeLoc).AddDate(0, 0, -5)
-	if lastWeatherTime.IsZero() || (lastVersion < types.CurrentWeatherVersion) {
-		if !lastWeatherTime.IsZero() && lastVersion < types.CurrentWeatherVersion {
-			log.Ctx(ctx).InfoContext(
-				ctx,
-				"backfilling weather history due to version mismatch",
-				slog.Int("lastVersion", lastVersion),
-				slog.Int("currentVersion", types.CurrentWeatherVersion),
-			)
+		// we want to make sure we fetch the weather for today and tomorrow but if we
+		// already have tomorrows weather then we don't need to fetch it again since we
+		// know we already fetched it
+		// if the syncStart (i.e. the latest weather time we have) is after today then
+		// we know we already have tomorrow
+		if syncStart.After(todayMidnight) {
+			return nil
 		}
-		syncStart = fiveDaysAgo
-	} else if lastWeatherTime.Before(fiveDaysAgo) {
-		// If last update is older than 5 days, start from 5 days ago.
-		syncStart = fiveDaysAgo
+	} else if !lastWeatherTime.IsZero() && lastVersion < types.CurrentWeatherVersion {
+		log.Ctx(ctx).InfoContext(
+			ctx,
+			"backfilling weather history due to version mismatch",
+			slog.Int("lastVersion", lastVersion),
+			slog.Int("currentVersion", types.CurrentWeatherVersion),
+		)
 	}
 
-	log.Ctx(ctx).DebugContext(ctx, "syncing weather history", slog.Any("since", syncStart))
+	// the end date is exclusive so we need to go to start of the day AFTER
+	// tomorrow to make sure that we get all of tomorrow
+	fetchEnd := todayMidnight.AddDate(0, 0, 2)
 
-	// Always fetch through end of tomorrow to capture a full forecast window.
-	tomorrowMidnight := todayMidnight.AddDate(0, 0, 1)
-	fetchEnd := tomorrowMidnight.AddDate(0, 0, 1)
-
-	// Skip only if lastWeatherTime already covers the full fetch window.
-	// fetchEnd is exclusive (day-after-tomorrow midnight), so we need
-	// lastWeatherTime >= fetchEnd to have all of tomorrow's data.
-	if !lastWeatherTime.IsZero() && !lastWeatherTime.Before(fetchEnd) && lastVersion >= types.CurrentWeatherVersion {
-		return nil
-	}
+	log.Ctx(ctx).DebugContext(ctx, "syncing weather history", slog.Any("since", syncStart), slog.Any("to", fetchEnd))
 
 	newWeathers, err := s.weather.Forecast(ctx, loc, syncStart, fetchEnd)
 	if err != nil {
-		return fmt.Errorf("failed to fetch weather forecast: %w", err)
+		return fmt.Errorf("failed to get weather history: %w", err)
 	}
 
-	if err := s.storage.UpsertWeather(ctx, siteID, newWeathers, types.CurrentWeatherVersion); err != nil {
-		return fmt.Errorf("failed to upsert weather: %w", err)
+	if len(newWeathers) > 0 {
+		if err := s.storage.UpsertWeather(ctx, siteID, newWeathers, types.CurrentWeatherVersion); err != nil {
+			return fmt.Errorf("failed to upsert weather: %w", err)
+		}
 	}
-
 	return nil
 }
 
-// does not log siteID so you should pass siteID in a logger to this method
 func (s *Server) updateEnergyHistory(ctx context.Context, siteID string, essSystem ess.System) error {
-	// First, find out the last time we have history for
-	lastHistoryTime, lastVersion, err := s.storage.GetLatestEnergyHistoryTime(ctx, siteID)
+	lastEnergyTime, lastVersion, err := s.storage.GetLatestEnergyHistoryTime(ctx, siteID)
 	if err != nil {
-		log.Ctx(ctx).WarnContext(ctx, "failed to get latest energy history time", slog.Any("error", err))
+		return fmt.Errorf("failed to get latest energy history time: %w", err)
 	}
 
-	// Determine start time for fetching new data
-	// We want at most last 5 days, but starting from the last record
-	// truncated to the hour in case we previously stored an incomplete hour.
 	now := time.Now()
-	fiveDaysAgo := now.AddDate(0, 0, -5)
+	fiveDaysAgo := now.Add(-5 * 24 * time.Hour)
 	syncStart := time.Date(fiveDaysAgo.Year(), fiveDaysAgo.Month(), fiveDaysAgo.Day(), 0, 0, 0, 0, fiveDaysAgo.Location())
 
-	// Only use lastHistoryTime if version matches
-	if !lastHistoryTime.IsZero() && lastVersion >= types.CurrentEnergyStatsVersion && lastHistoryTime.After(syncStart) {
-		syncStart = lastHistoryTime.Truncate(time.Hour)
-	} else if !lastHistoryTime.IsZero() && lastVersion < types.CurrentEnergyStatsVersion {
+	if !lastEnergyTime.IsZero() && lastVersion >= types.CurrentEnergyStatsVersion && lastEnergyTime.After(syncStart) {
+		syncStart = lastEnergyTime.Truncate(time.Hour)
+	} else if !lastEnergyTime.IsZero() && lastVersion < types.CurrentEnergyStatsVersion {
 		log.Ctx(ctx).InfoContext(
 			ctx,
 			"backfilling energy history due to version mismatch",
@@ -479,7 +482,7 @@ func (s *Server) updateEnergyHistory(ctx context.Context, siteID string, essSyst
 
 	newHistory, err := essSystem.GetEnergyHistory(ctx, syncStart, now)
 	if err != nil {
-		return fmt.Errorf("failed to get energy history from ess: %w", err)
+		return fmt.Errorf("failed to get energy history: %w", err)
 	}
 
 	if len(newHistory) > 0 {
@@ -487,6 +490,5 @@ func (s *Server) updateEnergyHistory(ctx context.Context, siteID string, essSyst
 			return fmt.Errorf("failed to upsert energy histories: %w", err)
 		}
 	}
-
 	return nil
 }

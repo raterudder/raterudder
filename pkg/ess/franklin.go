@@ -1049,7 +1049,7 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 
 // GetEnergyHistory retrieves energy history for the specified period.
 // It aggregates 5-minute intervals into hourly EnergyStats.
-func (f *Franklin) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]types.EnergyStats, error) {
+func (f *Franklin) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]types.DailyEnergyStats, error) {
 	log.Ctx(ctx).DebugContext(ctx, "getting franklin energy history", slog.String("start", start.String()), slog.String("end", end.String()))
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1070,21 +1070,25 @@ func (f *Franklin) GetEnergyHistory(ctx context.Context, start, end time.Time) (
 	startInLoc := start.In(di.location)
 	endInLoc := end.In(di.location)
 
-	// determine if we need the next day or not because the API returns preceding
-	// data so we always need the next hour
-	lastHourToFetch := endInLoc.Add(time.Hour)
+	// Fetch full days based on start and end
+	startDay := time.Date(startInLoc.Year(), startInLoc.Month(), startInLoc.Day(), 0, 0, 0, 0, di.location)
 	lastDayToFetch := time.Date(endInLoc.Year(), endInLoc.Month(), endInLoc.Day(), 0, 0, 0, 0, di.location)
-	nextDay := lastDayToFetch.AddDate(0, 0, 1)
-	// if the next hour is in the next day, and the next day is in the past,
-	// then we need to include the next day
-	if !lastHourToFetch.Before(nextDay) && !nextDay.After(time.Now()) {
+	// since the points look backward, we need to include the next day to get the
+	// last 5 minutes of the last day but if its in the future there's no point
+	// in fetching it
+	if nextDay := lastDayToFetch.AddDate(0, 0, 1); !nextDay.After(time.Now()) {
 		lastDayToFetch = nextDay
 	}
+
 	var allPoints []franklinEnergyPoint
 
 	// Iterate through days
-	current := time.Date(startInLoc.Year(), startInLoc.Month(), startInLoc.Day(), 0, 0, 0, 0, di.location)
+	current := startDay
 	for !current.After(lastDayToFetch) {
+		if current.After(time.Now()) {
+			break
+		}
+
 		points, err := f.getEnergyPointsForDay(ctx, current, di.location)
 		if err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to get energy points for day", slog.String("day", current.Format("2006-01-02")), slog.Any("error", err))
@@ -1097,15 +1101,42 @@ func (f *Franklin) GetEnergyHistory(ctx context.Context, start, end time.Time) (
 	// Aggregate all points into hourly buckets
 	allStats := f.aggregatePointsIntoHours(allPoints, di.location)
 
-	// Filter final result to requested range
-	filteredStats := make([]types.EnergyStats, 0)
+	// Group into daily buckets
+	dailyMap := make(map[string][]types.EnergyStats)
+	var sortedDayKeys []string
+
 	for _, s := range allStats {
-		if !s.TSHourStart.Before(start) && s.TSHourStart.Before(end) {
-			filteredStats = append(filteredStats, s)
+		dayStart := time.Date(s.TSHourStart.Year(), s.TSHourStart.Month(), s.TSHourStart.Day(), 0, 0, 0, 0, di.location)
+		dayKey := dayStart.Format("2006-01-02")
+		if _, exists := dailyMap[dayKey]; !exists {
+			sortedDayKeys = append(sortedDayKeys, dayKey)
 		}
+		dailyMap[dayKey] = append(dailyMap[dayKey], s)
 	}
 
-	return filteredStats, nil
+	sort.Strings(sortedDayKeys)
+
+	var result []types.DailyEnergyStats
+	for _, key := range sortedDayKeys {
+		dayStart, err := time.ParseInLocation("2006-01-02", key, di.location)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse day key %s: %w", key, err)
+		}
+
+		// Filter based on the requested start and end bounds per the overall intent,
+		// but since we keep whole days, we just check if the day intersects the requested range reasonably
+		// actually, let's just return the full days that we fetched!
+		if dayStart.After(lastDayToFetch) || dayStart.Before(startDay) {
+			continue
+		}
+
+		result = append(result, types.DailyEnergyStats{
+			TSDayStart: dayStart,
+			Hourly:     dailyMap[key],
+		})
+	}
+
+	return result, nil
 }
 
 func (f *Franklin) getStormList(ctx context.Context) ([]franklinStormListResult, error) {
@@ -1244,9 +1275,9 @@ func (f *Franklin) aggregatePointsIntoHours(points []franklinEnergyPoint, loc *t
 
 		// The data is for the preceding period, so the bucket should be based on
 		// the start of that period.
-		// We'll subtract 1 second to shift the "end of hour" timestamp (e.g. 12:00:00)
+		// We'll subtract 1 minute to shift the "end of hour" timestamp (e.g. 12:00:00)
 		// into the correct bucket (11:00:00).
-		bucketT := t.Add(-time.Second).In(loc)
+		bucketT := t.Add(-time.Minute).In(loc)
 
 		// Determine hour bucket
 		hourKey := bucketT.Format("2006-01-02 15:00:00")

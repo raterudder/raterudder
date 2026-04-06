@@ -172,10 +172,15 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 		}
 	}
 
-	// Fetch energy stats (these are hourly)
-	energyStats, err := s.storage.GetEnergyHistory(ctx, siteID, lookbackStart, end)
+	// Fetch energy history
+	energyStatsDaily, err := s.storage.GetEnergyHistory(ctx, siteID, lookbackStart, end)
 	if err != nil {
 		return types.SavingsStats{}, err
+	}
+
+	var energyStats []types.EnergyStats
+	for _, day := range energyStatsDaily {
+		energyStats = append(energyStats, day.Hourly...)
 	}
 
 	// Fetch action history (look back further to make sure we cover the entire lookback period for pause/storm)

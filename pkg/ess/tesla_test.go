@@ -420,6 +420,8 @@ func TestTesla(t *testing.T) {
 		loc, err := time.LoadLocation("America/Chicago")
 		require.NoError(t, err)
 
+		dateEnergyCalls := make(map[string]int)
+		dateSOECalls := make(map[string]int)
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case "/api/1/energy_sites/1234/site_info":
@@ -432,84 +434,145 @@ func TestTesla(t *testing.T) {
 				kind := r.URL.Query().Get("kind")
 				assert.Equal(t, "day", r.URL.Query().Get("period"))
 				assert.Equal(t, "America/Chicago", r.URL.Query().Get("time_zone"))
+				startDate := r.URL.Query().Get("start_date")
 				switch kind {
 				case "energy":
-					// Return sub-hourly entries (two per hour) to test aggregation
-					json.NewEncoder(w).Encode(map[string]any{
-						"response": map[string]any{
-							"serial_number": "abc123",
-							"period":        "day",
-							"time_series": []map[string]any{
-								{
-									"timestamp":                             "2026-03-12T10:15:00-05:00",
-									"solar_energy_exported":                 2000.0,
-									"battery_energy_exported":               500.0,
-									"battery_energy_imported_from_grid":     250.0,
-									"battery_energy_imported_from_solar":    500.0,
-									"grid_energy_imported":                  1500.0,
-									"grid_energy_exported_from_solar":       200.0,
-									"grid_energy_exported_from_battery":     50.0,
-									"consumer_energy_imported_from_grid":    1250.0,
-									"consumer_energy_imported_from_solar":   1300.0,
-									"consumer_energy_imported_from_battery": 450.0,
-									"total_home_usage":                      3000.0,
-									"total_solar_generation":                2000.0,
-									"total_battery_charge":                  500.0,
-									"total_grid_energy_exported":            250.0,
-								},
-								{
-									"timestamp":                             "2026-03-12T11:00:00-05:00",
-									"solar_energy_exported":                 3000.0,
-									"battery_energy_exported":               1500.0,
-									"battery_energy_imported_from_grid":     0.0,
-									"battery_energy_imported_from_solar":    250.0,
-									"grid_energy_imported":                  1500.0,
-									"grid_energy_exported_from_solar":       200.0,
-									"grid_energy_exported_from_battery":     50.0,
-									"consumer_energy_imported_from_grid":    1500.0,
-									"consumer_energy_imported_from_solar":   1400.0,
-									"consumer_energy_imported_from_battery": 1350.0,
-									"total_home_usage":                      4250.0,
-									"total_solar_generation":                3000.0,
-									"total_battery_charge":                  1500.0,
-									"total_grid_energy_exported":            250.0,
-								},
-								{
-									"timestamp":                             "2026-03-12T12:00:00-05:00",
-									"solar_energy_exported":                 6000.0,
-									"battery_energy_exported":               1000.0,
-									"battery_energy_imported_from_grid":     0.0,
-									"battery_energy_imported_from_solar":    2000.0,
-									"grid_energy_imported":                  1000.0,
-									"grid_energy_exported_from_solar":       1200.0,
-									"grid_energy_exported_from_battery":     0.0,
-									"consumer_energy_imported_from_grid":    1000.0,
-									"consumer_energy_imported_from_solar":   2800.0,
-									"consumer_energy_imported_from_battery": 1000.0,
-									"total_home_usage":                      4800.0,
-									"total_solar_generation":                6000.0,
-									"total_battery_charge":                  2000.0,
-									"total_grid_energy_exported":            1200.0,
+					dateEnergyCalls[startDate]++
+					switch startDate {
+					case "2026-03-12T00:00:00-05:00":
+						// Return sub-hourly entries (two per hour) to test aggregation
+						json.NewEncoder(w).Encode(map[string]any{
+							"response": map[string]any{
+								"serial_number": "abc123",
+								"period":        "day",
+								"time_series": []map[string]any{
+									{
+										"timestamp":                             "2026-03-12T10:15:00-05:00",
+										"solar_energy_exported":                 2000.0,
+										"battery_energy_exported":               500.0,
+										"battery_energy_imported_from_grid":     250.0,
+										"battery_energy_imported_from_solar":    500.0,
+										"grid_energy_imported":                  1500.0,
+										"grid_energy_exported_from_solar":       200.0,
+										"grid_energy_exported_from_battery":     50.0,
+										"consumer_energy_imported_from_grid":    1250.0,
+										"consumer_energy_imported_from_solar":   1300.0,
+										"consumer_energy_imported_from_battery": 450.0,
+										"total_home_usage":                      3000.0,
+										"total_solar_generation":                2000.0,
+										"total_battery_charge":                  500.0,
+										"total_grid_energy_exported":            250.0,
+									},
+									{
+										"timestamp":                             "2026-03-12T11:00:00-05:00",
+										"solar_energy_exported":                 3000.0,
+										"battery_energy_exported":               1500.0,
+										"battery_energy_imported_from_grid":     0.0,
+										"battery_energy_imported_from_solar":    250.0,
+										"grid_energy_imported":                  1500.0,
+										"grid_energy_exported_from_solar":       200.0,
+										"grid_energy_exported_from_battery":     50.0,
+										"consumer_energy_imported_from_grid":    1500.0,
+										"consumer_energy_imported_from_solar":   1400.0,
+										"consumer_energy_imported_from_battery": 1350.0,
+										"total_home_usage":                      4250.0,
+										"total_solar_generation":                3000.0,
+										"total_battery_charge":                  1500.0,
+										"total_grid_energy_exported":            250.0,
+									},
+									{
+										"timestamp":                             "2026-03-12T12:00:00-05:00",
+										"solar_energy_exported":                 6000.0,
+										"battery_energy_exported":               1000.0,
+										"battery_energy_imported_from_grid":     0.0,
+										"battery_energy_imported_from_solar":    2000.0,
+										"grid_energy_imported":                  1000.0,
+										"grid_energy_exported_from_solar":       1200.0,
+										"grid_energy_exported_from_battery":     0.0,
+										"consumer_energy_imported_from_grid":    1000.0,
+										"consumer_energy_imported_from_solar":   2800.0,
+										"consumer_energy_imported_from_battery": 1000.0,
+										"total_home_usage":                      4800.0,
+										"total_solar_generation":                6000.0,
+										"total_battery_charge":                  2000.0,
+										"total_grid_energy_exported":            1200.0,
+									},
+									// bad data
+									{
+										"timestamp":                             "2026-03-13T12:00:00-05:00",
+										"solar_energy_exported":                 9999.0,
+										"battery_energy_exported":               9999.0,
+										"battery_energy_imported_from_grid":     0.0,
+										"battery_energy_imported_from_solar":    9999.0,
+										"grid_energy_imported":                  9999.0,
+										"grid_energy_exported_from_solar":       9999.0,
+										"grid_energy_exported_from_battery":     0.0,
+										"consumer_energy_imported_from_grid":    9999.0,
+										"consumer_energy_imported_from_solar":   9999.0,
+										"consumer_energy_imported_from_battery": 9999.0,
+										"total_home_usage":                      9999.0,
+										"total_solar_generation":                9999.0,
+										"total_battery_charge":                  9999.0,
+										"total_grid_energy_exported":            9999.0,
+									},
 								},
 							},
-						},
-					})
+						})
+					case "2026-03-13T00:00:00-05:00":
+						json.NewEncoder(w).Encode(map[string]any{
+							"response": map[string]any{
+								"serial_number": "abc123",
+								"period":        "day",
+								"time_series": []map[string]any{
+									{
+										"timestamp":                             "2026-03-13T00:00:00-05:00",
+										"solar_energy_exported":                 4000.0,
+										"battery_energy_exported":               3000.0,
+										"battery_energy_imported_from_grid":     500.0,
+										"battery_energy_imported_from_solar":    500.0,
+										"grid_energy_imported":                  1000.0,
+										"grid_energy_exported_from_solar":       400.0,
+										"grid_energy_exported_from_battery":     100.0,
+										"consumer_energy_imported_from_grid":    1050.0,
+										"consumer_energy_imported_from_solar":   600.0,
+										"consumer_energy_imported_from_battery": 400.0,
+										"total_home_usage":                      5000.0,
+										"total_solar_generation":                6000.0,
+										"total_battery_charge":                  9000.0,
+										"total_grid_energy_exported":            8000.0,
+									},
+								},
+							},
+						})
+					default:
+						t.Logf("Unexpected date: %s", startDate)
+						w.WriteHeader(http.StatusBadRequest)
+					}
 				case "soe":
-					// SOE at 15 min intervals shifted: 10:15=80, 10:30=75, 10:45=70, 11:00=72, 11:15=65, 12:00=68
-					json.NewEncoder(w).Encode(map[string]any{
-						"response": map[string]any{
-							"serial_number": "abc123",
-							"period":        "day",
-							"time_series": []map[string]any{
-								{"timestamp": "2026-03-12T10:15:00-05:00", "soe": 80.0},
-								{"timestamp": "2026-03-12T10:30:00-05:00", "soe": 75.0},
-								{"timestamp": "2026-03-12T10:45:00-05:00", "soe": 70.0},
-								{"timestamp": "2026-03-12T11:00:00-05:00", "soe": 72.0},
-								{"timestamp": "2026-03-12T11:15:00-05:00", "soe": 65.0},
-								{"timestamp": "2026-03-12T12:00:00-05:00", "soe": 68.0},
+					dateSOECalls[startDate]++
+					switch startDate {
+					case "2026-03-12T00:00:00-05:00":
+						// SOE at 15 min intervals shifted: 10:15=80, 10:30=75, 10:45=70, 11:00=72, 11:15=65, 12:00=68
+						json.NewEncoder(w).Encode(map[string]any{
+							"response": map[string]any{
+								"serial_number": "abc123",
+								"period":        "day",
+								"time_series": []map[string]any{
+									{"timestamp": "2026-03-12T10:15:00-05:00", "soe": 80.0},
+									{"timestamp": "2026-03-12T10:30:00-05:00", "soe": 75.0},
+									{"timestamp": "2026-03-12T10:45:00-05:00", "soe": 70.0},
+									{"timestamp": "2026-03-12T11:00:00-05:00", "soe": 72.0},
+									{"timestamp": "2026-03-12T11:15:00-05:00", "soe": 65.0},
+									{"timestamp": "2026-03-12T23:15:00-05:00", "soe": 68.0},
+									// bad data
+									{"timestamp": "2026-03-13T12:15:00-05:00", "soe": 20.0},
+								},
 							},
-						},
-					})
+						})
+					default:
+						t.Logf("Unexpected date: %s", startDate)
+						w.WriteHeader(http.StatusBadRequest)
+					}
 				default:
 					t.Logf("Unexpected kind: %s", kind)
 					w.WriteHeader(http.StatusBadRequest)
@@ -535,12 +598,13 @@ func TestTesla(t *testing.T) {
 
 		stats, err := sys.GetEnergyHistory(ctx, start, end)
 		require.NoError(t, err)
-		if assert.Len(t, stats, 2) {
-			sort.Slice(stats, func(i, j int) bool {
-				return stats[i].TSHourStart.Before(stats[j].TSHourStart)
+		if assert.Len(t, stats, 1) { // 1 day
+			hourly := stats[0].Hourly
+			sort.Slice(hourly, func(i, j int) bool {
+				return hourly[i].TSHourStart.Before(hourly[j].TSHourStart)
 			})
 			// Hour 10: aggregated from two entries (2000+3000=5000 Wh solar, etc)
-			s := stats[0]
+			s := hourly[0]
 			assert.Equal(t, time.Date(2026, 3, 12, 10, 0, 0, 0, loc), s.TSHourStart)
 			assert.Equal(t, 5.0, s.SolarKWH)
 			assert.Equal(t, 1.0, s.BatteryChargedKWH)
@@ -558,7 +622,7 @@ func TestTesla(t *testing.T) {
 			assert.Equal(t, 80.0, s.MaxBatterySOC)
 
 			// Hour 11: single entry (from 12:00:00 timestamp)
-			s2 := stats[1]
+			s2 := hourly[1]
 			assert.Equal(t, time.Date(2026, 3, 12, 11, 0, 0, 0, loc), s2.TSHourStart)
 			assert.Equal(t, 6.0, s2.SolarKWH)
 			assert.Equal(t, 2.0, s2.BatteryChargedKWH)
@@ -569,7 +633,22 @@ func TestTesla(t *testing.T) {
 			// SOC: min=65 (11:15), max=72 (11:00)
 			assert.Equal(t, 65.0, s2.MinBatterySOC)
 			assert.Equal(t, 72.0, s2.MaxBatterySOC)
+
+			// Hour 23
+			s3 := hourly[2]
+			assert.Equal(t, time.Date(2026, 3, 12, 23, 0, 0, 0, loc), s3.TSHourStart)
+			assert.Equal(t, 4.0, s3.SolarKWH)
+			assert.Equal(t, 1.0, s3.BatteryChargedKWH)
+			assert.Equal(t, 3.0, s3.BatteryUsedKWH)
+			assert.Equal(t, 1.0, s3.GridImportKWH)
+			assert.Equal(t, 0.5, s3.GridExportKWH)
+			assert.Equal(t, 2.05, s3.HomeKWH)
+			assert.Equal(t, 68.0, s3.MinBatterySOC)
+			assert.Equal(t, 68.0, s3.MaxBatterySOC)
 		}
+		assert.Equal(t, 1, dateEnergyCalls["2026-03-12T00:00:00-05:00"])
+		assert.Equal(t, 1, dateEnergyCalls["2026-03-13T00:00:00-05:00"])
+		assert.Equal(t, 1, dateSOECalls["2026-03-12T00:00:00-05:00"])
 	})
 
 	t.Run("GetEnergyHistory Empty", func(t *testing.T) {
@@ -613,73 +692,6 @@ func TestTesla(t *testing.T) {
 		stats, err := sys.GetEnergyHistory(ctx, start, end)
 		require.NoError(t, err)
 		assert.Empty(t, stats)
-	})
-
-	t.Run("GetEnergyHistory Multi-day loop", func(t *testing.T) {
-		loc, err := time.LoadLocation("America/Chicago")
-		require.NoError(t, err)
-
-		var requests []map[string]string
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch r.URL.Path {
-			case "/api/1/energy_sites/1234/site_info":
-				json.NewEncoder(w).Encode(map[string]any{
-					"response": map[string]any{
-						"installation_time_zone": "America/Chicago",
-					},
-				})
-			case "/api/1/energy_sites/1234/calendar_history":
-				requests = append(requests, map[string]string{
-					"kind":       r.URL.Query().Get("kind"),
-					"start_date": r.URL.Query().Get("start_date"),
-					"end_date":   r.URL.Query().Get("end_date"),
-				})
-				json.NewEncoder(w).Encode(map[string]any{
-					"response": map[string]any{
-						"serial_number": "abc123",
-						"period":        "day",
-						"time_series":   []map[string]any{},
-					},
-				})
-			default:
-				w.WriteHeader(http.StatusNotFound)
-			}
-		}))
-		defer ts.Close()
-
-		m := teslaMap(ts)
-		sys, err := m.Site(ctx, "test-site", types.Settings{ESS: "tesla"})
-		require.NoError(t, err)
-
-		teslaSys := sys.(*Tesla)
-		teslaSys.token = "mock-access"
-		teslaSys.energySiteID = 1234
-		teslaSys.baseURL = ts.URL
-
-		// 3 days range
-		start := time.Date(2026, 3, 10, 0, 0, 0, 0, loc)
-		end := time.Date(2026, 3, 13, 0, 0, 0, 0, loc)
-
-		_, err = sys.GetEnergyHistory(ctx, start, end)
-		require.NoError(t, err)
-
-		// Expect 3 days * 2 kinds (energy, soe) = 6 requests
-		assert.Equal(t, 6, len(requests))
-
-		for _, req := range requests {
-			s, err := time.Parse(time.RFC3339, req["start_date"])
-			require.NoError(t, err)
-			e, err := time.Parse(time.RFC3339, req["end_date"])
-			require.NoError(t, err)
-
-			sInLoc := s.In(loc)
-			eInLoc := e.In(loc)
-
-			// Assert start and end are on the same day in local time
-			assert.Equal(t, sInLoc.Year(), eInLoc.Year())
-			assert.Equal(t, sInLoc.Month(), eInLoc.Month())
-			assert.Equal(t, sInLoc.Day(), eInLoc.Day())
-		}
 	})
 
 	t.Run("SetModes", func(t *testing.T) {

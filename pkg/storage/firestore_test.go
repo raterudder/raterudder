@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/api/iterator"
 )
 
 func TestFirestoreProvider(t *testing.T) {
@@ -228,61 +230,75 @@ func TestFirestoreProvider(t *testing.T) {
 	})
 
 	t.Run("EnergyHistory", func(t *testing.T) {
-		now := time.Now().Truncate(time.Hour).UTC() // Truncate to hour since energy stats are hourly
-		stats := types.EnergyStats{
-			TSHourStart:       now,
-			SolarKWH:          5.0,
-			BatteryChargedKWH: 2.0,
+		now := time.Now().Truncate(24 * time.Hour).UTC() // Truncate to day since we now use DailyEnergyStats
+		stats := types.DailyEnergyStats{
+			TSDayStart: now,
+			Hourly: []types.EnergyStats{
+				{
+					TSHourStart:       now.Add(10 * time.Hour),
+					SolarKWH:          5.0,
+					BatteryChargedKWH: 2.0,
+				},
+			},
 		}
-		require.NoError(t, f.UpsertEnergyHistories(ctx, "test-site", []types.EnergyStats{stats}, 0))
+		require.NoError(t, f.UpsertEnergyHistories(ctx, "test-site", []types.DailyEnergyStats{stats}, types.CurrentEnergyStatsVersion))
 
-		t.Run("UpsertMultipleBatches", func(t *testing.T) {
-			var batchStats []types.EnergyStats
-			for i := 0; i < 5; i++ {
-				batchStats = append(batchStats, types.EnergyStats{
-					TSHourStart: now.Add(time.Duration(i+1) * time.Hour),
-					SolarKWH:    float64(i) * 1.0,
+		t.Run("UpsertMultipleDays", func(t *testing.T) {
+			var batchStats []types.DailyEnergyStats
+			for i := 1; i <= 5; i++ {
+				day := now.Add(time.Duration(i*24) * time.Hour)
+				batchStats = append(batchStats, types.DailyEnergyStats{
+					TSDayStart: day,
+					Hourly: []types.EnergyStats{
+						{
+							TSHourStart: day.Add(12 * time.Hour),
+							SolarKWH:    float64(i) * 1.0,
+						},
+					},
 				})
 			}
-			require.NoError(t, f.UpsertEnergyHistories(ctx, "test-site", batchStats, 0))
+			require.NoError(t, f.UpsertEnergyHistories(ctx, "test-site", batchStats, types.CurrentEnergyStatsVersion))
 
-			res, err := f.GetEnergyHistory(ctx, "test-site", now.Add(1*time.Hour), now.Add(6*time.Hour))
-			require.NoError(t, err)
-			assert.Len(t, res, 5)
-			for i := 0; i < 5; i++ {
-				assert.Equal(t, float64(i)*1.0, res[i].SolarKWH)
+			res, err := f.GetEnergyHistory(ctx, "test-site", now.Add(24*time.Hour), now.Add(6*24*time.Hour))
+			if assert.NoError(t, err) {
+				assert.Len(t, res, 5)
+				for i := 0; i < 5; i++ {
+					assert.Equal(t, float64(i+1)*1.0, res[i].Hourly[0].SolarKWH)
+				}
 			}
 		})
 
 		t.Run("GetEnergyHistory", func(t *testing.T) {
-			energyHistory, err := f.GetEnergyHistory(ctx, "test-site", now.Add(-1*time.Minute), now.Add(2*time.Hour))
-			require.NoError(t, err)
-
-			foundS := false
-			for _, s := range energyHistory {
-				if s.SolarKWH == 5.0 && s.TSHourStart.Equal(stats.TSHourStart) {
-					foundS = true
+			energyHistory, err := f.GetEnergyHistory(ctx, "test-site", now.Add(-1*time.Minute), now.Add(24*time.Hour))
+			if assert.NoError(t, err) {
+				foundS := false
+				for _, s := range energyHistory {
+					if len(s.Hourly) > 0 && s.Hourly[0].SolarKWH == 5.0 {
+						foundS = true
+					}
 				}
+				assert.True(t, foundS, "did not find inserted energy stats")
 			}
-			assert.True(t, foundS, "did not find inserted energy stats")
 		})
 
 		t.Run("GetLatestEnergyHistoryTime", func(t *testing.T) {
-			// Since we just inserted 'now', and it's the latest in this test,
-			// let's insert an older one to assume 'now' is still the latest,
-			// or insert a newer one to verify update.
-			future := now.Add(24 * time.Hour)
-			futureStats := types.EnergyStats{
-				TSHourStart:       future,
-				SolarKWH:          1.0,
-				BatteryChargedKWH: 1.0,
+			future := now.Add(10 * 24 * time.Hour)
+			futureStats := types.DailyEnergyStats{
+				TSDayStart: future,
+				Hourly: []types.EnergyStats{
+					{
+						TSHourStart: future.Add(15 * time.Hour),
+						SolarKWH:    1.0,
+					},
+				},
 			}
-			require.NoError(t, f.UpsertEnergyHistories(ctx, "test-site", []types.EnergyStats{futureStats}, 0))
+			require.NoError(t, f.UpsertEnergyHistories(ctx, "test-site", []types.DailyEnergyStats{futureStats}, types.CurrentEnergyStatsVersion))
 
 			latestTime, version, err := f.GetLatestEnergyHistoryTime(ctx, "test-site")
-			require.NoError(t, err)
-			assert.Equal(t, future, latestTime, "latest time should match the future timestamp we just inserted")
-			assert.Equal(t, 0, version, "version should be 0 because we didn't set it explicitly")
+			if assert.NoError(t, err) {
+				assert.Equal(t, future.Add(15*time.Hour), latestTime, "latest time should be the last recorded hour")
+				assert.Equal(t, int(types.CurrentEnergyStatsVersion), version)
+			}
 		})
 	})
 
@@ -678,5 +694,91 @@ func TestFirestoreProvider(t *testing.T) {
 		assert.Len(t, list, 2)
 		assert.Equal(t, "user5@example.com", list[0].Email)
 		assert.Equal(t, "user4@example.com", list[1].Email)
+	})
+
+	t.Run("Migration", func(t *testing.T) {
+		siteID := fmt.Sprintf("migration-site-%d", time.Now().UnixNano())
+		now := time.Now().Truncate(24 * time.Hour).UTC()
+
+		// 1. Manually insert Version 2 (hourly) data
+		coll, err := f.getCollection(siteID, "energy_history")
+		require.NoError(t, err)
+
+		h1 := now.Add(10 * time.Hour)
+		h2 := now.Add(11 * time.Hour)
+		stats1 := types.EnergyStats{TSHourStart: h1, SolarKWH: 1.0}
+		stats2 := types.EnergyStats{TSHourStart: h2, SolarKWH: 2.0}
+
+		for _, s := range []types.EnergyStats{stats1, stats2} {
+			jsonBytes, _ := json.Marshal(s)
+			docID := s.TSHourStart.UTC().Format(time.RFC3339)
+			_, err := coll.Doc(docID).Set(ctx, map[string]any{
+				"json":      string(jsonBytes),
+				"timestamp": s.TSHourStart,
+				"version":   2,
+			})
+			require.NoError(t, err)
+		}
+
+		// Verify GetLatestEnergyHistoryTime identifies the latest Version 2 record and triggers migration
+		latestTime, version, err := f.GetLatestEnergyHistoryTime(ctx, siteID)
+		require.NoError(t, err)
+		assert.Equal(t, h2, latestTime)
+		assert.Equal(t, 3, version) // Should be upgraded to 3
+
+		// Verify that data is now in Version 3 format
+		docs, err := f.GetEnergyHistory(ctx, siteID, now, now.Add(24*time.Hour))
+		require.NoError(t, err)
+		require.Len(t, docs, 1)
+		assert.Equal(t, now, docs[0].TSDayStart)
+		require.Len(t, docs[0].Hourly, 2)
+
+		// Verify Version 2 docs are deleted
+		iter := coll.Where("version", "==", 2).Documents(ctx)
+		_, err = iter.Next()
+		assert.ErrorIs(t, err, iterator.Done)
+		iter.Stop()
+
+		t.Run("MigrationWithMixedData", func(t *testing.T) {
+			siteID := fmt.Sprintf("mixed-migration-%d", time.Now().UnixNano())
+			day1 := now.Add(-48 * time.Hour)
+			day2 := now.Add(-24 * time.Hour)
+
+			// Day 1: Version 2 (Hourly)
+			coll, _ := f.getCollection(siteID, "energy_history")
+			s1 := types.EnergyStats{TSHourStart: day1.Add(12 * time.Hour), SolarKWH: 10.0}
+			jsonBytes, _ := json.Marshal(s1)
+			_, err := coll.Doc(s1.TSHourStart.UTC().Format(time.RFC3339)).Set(ctx, map[string]any{
+				"json":      string(jsonBytes),
+				"timestamp": s1.TSHourStart,
+				"version":   2,
+			})
+			require.NoError(t, err)
+
+			// Day 2: Version 3 (Daily)
+			s3 := types.DailyEnergyStats{
+				TSDayStart: day2,
+				Hourly: []types.EnergyStats{
+					{TSHourStart: day2.Add(12 * time.Hour), SolarKWH: 20.0},
+				},
+			}
+			require.NoError(t, f.UpsertEnergyHistories(ctx, siteID, []types.DailyEnergyStats{s3}, 3))
+
+			// 1. Query for range including both: only returns Day 2 because Day 1 is still v2 and we are lazy.
+			all, err := f.GetEnergyHistory(ctx, siteID, day1, now)
+			require.NoError(t, err)
+			assert.Len(t, all, 1, "should have 1 items before migration because we're lazy")
+
+			// 2. Query only Day 1 range: should find NO v3 docs, find v2 docs, and trigger migration.
+			onlyDay1, err := f.GetEnergyHistory(ctx, siteID, day1, day1.Add(24*time.Hour))
+			require.NoError(t, err)
+			require.Len(t, onlyDay1, 1, "should have migrated and returned Day 1")
+			assert.Equal(t, day1, onlyDay1[0].TSDayStart)
+
+			// 3. Query all again: should now have both.
+			allNow, err := f.GetEnergyHistory(ctx, siteID, day1, now)
+			require.NoError(t, err)
+			assert.Len(t, allNow, 2)
+		})
 	})
 }

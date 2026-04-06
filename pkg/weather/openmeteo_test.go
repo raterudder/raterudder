@@ -22,7 +22,7 @@ func TestOpenMeteoService(t *testing.T) {
 			mockStatus  int
 			mockBody    any
 			wantErr     bool
-			wantLoc     *types.SiteLocation
+			wantLoc     types.SiteLocation
 		}{
 			{
 				name:        "missing params",
@@ -85,7 +85,7 @@ func TestOpenMeteoService(t *testing.T) {
 					},
 				},
 				wantErr: false,
-				wantLoc: &types.SiteLocation{
+				wantLoc: types.SiteLocation{
 					PostalCode:  "90210",
 					CountryCode: "US",
 					Latitude:    34.0736,
@@ -99,7 +99,7 @@ func TestOpenMeteoService(t *testing.T) {
 
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
-				var loc *types.SiteLocation
+				var loc types.SiteLocation
 				var err error
 				if tc.mockBody != nil || tc.mockStatus != 0 {
 					ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

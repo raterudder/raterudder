@@ -63,11 +63,16 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 
 	// 4. Fetch Energy Stats
 	// We need stats from calibStart to targetEnd for calibration + display
-	allStats, err := s.storage.GetEnergyHistory(ctx, siteID, calibStart, targetEnd)
+	dailyStats, err := s.storage.GetEnergyHistory(ctx, siteID, calibStart, targetEnd)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get energy history", slog.Any("error", err))
 		writeJSONError(w, "failed to get energy history", http.StatusInternalServerError)
 		return
+	}
+
+	var allStats []types.EnergyStats
+	for _, day := range dailyStats {
+		allStats = append(allStats, day.Hourly...)
 	}
 
 	// 5. Fetch Weather

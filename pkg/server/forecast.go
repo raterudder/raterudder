@@ -78,6 +78,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Fetch current ESS status
+	// TODO: skip fetching this and use the latest action instead
 	status, err := essSystem.GetStatus(ctx)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get ess status", slog.Any("error", err))
@@ -111,11 +112,16 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	// 5. Get History (Last 3 days from Storage) - no backfill
 	now := status.Timestamp.Truncate(time.Hour)
 	historyStart := now.AddDate(0, 0, -3).Truncate(time.Hour)
-	energyHistory, err := s.storage.GetEnergyHistory(ctx, siteID, historyStart, now)
+	energyHistoryDaily, err := s.storage.GetEnergyHistory(ctx, siteID, historyStart, now)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get energy history from storage", slog.Any("error", err))
 		writeJSONError(w, "failed to get energy history", http.StatusInternalServerError)
 		return
+	}
+
+	var energyHistory []types.EnergyStats
+	for _, day := range energyHistoryDaily {
+		energyHistory = append(energyHistory, day.Hourly...)
 	}
 
 	// 6. Run Simulation
@@ -466,7 +472,7 @@ func calculateImprovedSolar(ctx context.Context, history []types.EnergyStats, we
 
 	log.Ctx(ctx).DebugContext(
 		ctx,
-		"calculated robust efficiency",
+		"calculated gti scale factor",
 		slog.Float64("finalEfficiency", finalEff),
 		slog.Any("dailyEfficiencies", dailyEfficiencies),
 	)

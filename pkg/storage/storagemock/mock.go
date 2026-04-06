@@ -39,7 +39,7 @@ func (m *MockDatabase) InsertAction(ctx context.Context, siteID string, action t
 	return args.Error(0)
 }
 
-func (m *MockDatabase) UpsertEnergyHistories(ctx context.Context, siteID string, stats []types.EnergyStats, version int) error {
+func (m *MockDatabase) UpsertEnergyHistories(ctx context.Context, siteID string, stats []types.DailyEnergyStats, version int) error {
 	args := m.Called(ctx, siteID, stats, version)
 	return args.Error(0)
 }
@@ -78,10 +78,10 @@ func (m *MockDatabase) GetActionHistory(ctx context.Context, siteID string, star
 	return nil, nil
 }
 
-func (m *MockDatabase) GetEnergyHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.EnergyStats, error) {
+func (m *MockDatabase) GetEnergyHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.DailyEnergyStats, error) {
 	args := m.Called(ctx, siteID, start, end)
 	if len(args) > 0 {
-		return args.Get(0).([]types.EnergyStats), args.Error(1)
+		return args.Get(0).([]types.DailyEnergyStats), args.Error(1)
 	}
 	return nil, nil
 }

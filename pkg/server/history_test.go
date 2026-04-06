@@ -455,7 +455,7 @@ func TestHandleHistoryEnergy(t *testing.T) {
 		d, _ := time.Parse("2006-01-02", targetDate)
 		dUTC := d.UTC()
 
-		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+		mockS.On("GetSettings", mock.Anything, "none").Return(types.Settings{
 			Location: &types.SiteLocation{
 				TimeZone:     "UTC",
 				Latitude:     41.8781,
@@ -466,12 +466,12 @@ func TestHandleHistoryEnergy(t *testing.T) {
 		}, types.CurrentSettingsVersion, nil)
 
 		// Energy History
-		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{
-			{TSHourStart: dUTC, SolarKWH: 5.2, MaxBatterySOC: 85.0},
+		mockS.On("GetEnergyHistory", mock.Anything, "none", mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{
+			{Hourly: []types.EnergyStats{{TSHourStart: dUTC, SolarKWH: 5.2, MaxBatterySOC: 85.0}}},
 		}, nil)
 
 		// Weather
-		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{
+		mockS.On("GetWeather", mock.Anything, "none", mock.Anything, mock.Anything).Return([]types.Weather{
 			{
 				ForecastHours: []types.HourlyWeather{
 					{TSHourStart: dUTC, TemperatureC: 15, DNI: 500, DHI: 100},

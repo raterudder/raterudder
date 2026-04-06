@@ -350,9 +350,9 @@ func (m *MockESS) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 	return mockDB.UpdateESSMockState(ctx, m.siteID, state)
 }
 
-// GetEnergyHistory returns historical hourly energy data between a start and end time.
+// GetEnergyHistory returns historical daily energy data between a start and end time.
 // It also ensures the state simulation continues accurately up to the current wall-clock time.
-func (m *MockESS) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]types.EnergyStats, error) {
+func (m *MockESS) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]types.DailyEnergyStats, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	state, err := mockDB.GetESSMockState(ctx, m.siteID)
@@ -360,49 +360,91 @@ func (m *MockESS) GetEnergyHistory(ctx context.Context, start, end time.Time) ([
 		return nil, err
 	}
 
-	var history []types.EnergyStats
-	var needsSave bool
+	rawHourlyStatsMap := make(map[string]types.EnergyStats)
 	now := time.Now().In(m.location)
 
 	if state.Timestamp.IsZero() {
-		// Backfill: previous day and today up to 'now'
-		currentMidnight := getMidnight(now)
-		previousMidnight := currentMidnight.Add(-time.Second)
+		// Start from the beginning of the first requested day
+		state.Timestamp = getMidnight(start.In(m.location))
+		state.BatterySOC = 50.0
+	}
 
-		// advance through all of yesterday, up to almost midnight
-		m.advanceState(&state, previousMidnight)
-		needsSave = true
+	// Advance state until 'now', collecting all history points along the way
+	// We do this by advancing one day at a time, collecting history, then crossing midnight
+	for state.Timestamp.Before(now) {
+		currentMidnight := getMidnight(state.Timestamp.In(m.location))
+		nextMidnight := currentMidnight.AddDate(0, 0, 1)
 
-		// then collect all of the history
-		for _, stats := range state.DailyHistory {
-			if !stats.TSHourStart.Before(start) && stats.TSHourStart.Before(end) {
-				history = append(history, stats)
-			}
+		// Target is just before the next midnight, or 'now'
+		target := nextMidnight.Add(-time.Millisecond)
+		if target.After(now) {
+			target = now
 		}
-		// fallthrough to collecting today's history
-	}
 
-	if state.Timestamp.Before(now) {
-		// If we have state but it's older than 'now', advance it up to 'now'
-		m.advanceState(&state, now)
-		needsSave = true
-	}
+		m.advanceState(&state, target)
 
-	if needsSave {
-		if err := mockDB.UpdateESSMockState(ctx, m.siteID, state); err != nil {
-			return nil, err
+		// Collect everything currently in DailyHistory
+		for k, v := range state.DailyHistory {
+			rawHourlyStatsMap[k] = v
 		}
-	}
 
-	for _, stats := range state.DailyHistory {
-		if !stats.TSHourStart.Before(start) && stats.TSHourStart.Before(end) {
-			history = append(history, stats)
+		if target.Equal(now) {
+			break
 		}
+
+		// Advance to exactly midnight to trigger the next day reset
+		m.advanceState(&state, nextMidnight)
 	}
 
-	sort.Slice(history, func(i, j int) bool {
-		return history[i].TSHourStart.Before(history[j].TSHourStart)
-	})
+	if err := mockDB.UpdateESSMockState(ctx, m.siteID, state); err != nil {
+		return nil, err
+	}
+
+	var rawHourlyStats []types.EnergyStats
+	for _, stats := range rawHourlyStatsMap {
+		rawHourlyStats = append(rawHourlyStats, stats)
+	}
+
+	startDay := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, m.location)
+	endDay := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, m.location)
+
+	dailyMap := make(map[string][]types.EnergyStats)
+	var sortedDayKeys []string
+
+	for _, stats := range rawHourlyStats {
+		dayStart := time.Date(stats.TSHourStart.Year(), stats.TSHourStart.Month(), stats.TSHourStart.Day(), 0, 0, 0, 0, m.location)
+		if dayStart.Before(startDay) || dayStart.After(endDay) {
+			continue
+		}
+		dayKey := dayStart.Format("2006-01-02")
+		if _, exists := dailyMap[dayKey]; !exists {
+			sortedDayKeys = append(sortedDayKeys, dayKey)
+		}
+		dailyMap[dayKey] = append(dailyMap[dayKey], stats)
+	}
+
+	sort.Strings(sortedDayKeys)
+
+	for _, k := range sortedDayKeys {
+		list := dailyMap[k]
+		sort.Slice(list, func(i, j int) bool {
+			return list[i].TSHourStart.Before(list[j].TSHourStart)
+		})
+		dailyMap[k] = list
+	}
+
+	var history []types.DailyEnergyStats
+	for _, key := range sortedDayKeys {
+		dayStart, err := time.ParseInLocation("2006-01-02", key, m.location)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse day key %s: %w", key, err)
+		}
+
+		history = append(history, types.DailyEnergyStats{
+			TSDayStart: dayStart,
+			Hourly:     dailyMap[key],
+		})
+	}
 
 	return history, nil
 }

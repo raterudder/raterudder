@@ -1,8 +1,9 @@
 Tests
 - go test ./folder/subfolder -name "TestFunctionName"
+- Focus on a single test at a time and avoid running all the tests until verification
 - Make sure you run go fmt ./file or go fmt ./folder/subfolder on any changed files or directories
 - Avoid passing "-v" to the go test command since it's too verbose and unnecessary
-- Since we're not using verbose output, avoid writing the output to a file
+- Avoid redirecting test output to a file
 - npm test path/to/test.test.tsx
 - Start the Firestore emulator for tests: `npx firebase-tools emulators:start --only firestore --project demo-test`
 - When testing Go HTTP handlers that use `authMiddleware`, `bypassAuth` is usually false. Use `setupOIDCTest(t)` and `generateTestToken` to create mock OIDC servers and valid JWT tokens, passing them as an `authTokenCookie` in the `httptest.NewRequest`. Do not rely solely on injecting `context.WithValue` as the middleware may overwrite it.
@@ -16,7 +17,6 @@ Architecture
 - pkg/server exposes HTTP API endpoints for update/history.
 - pkg/model and pkg/types hold shared data models and types.
 - web is the React frontend.
-- tf is the actual Terraform configuration for deployment.
 - deployment/tf is an example Terraform configuration for deployment.
 
 Code Style
@@ -24,7 +24,7 @@ Code Style
 - Keep package boundaries: controller logic in pkg/controller, external IO in utility/ess/storage/server.
 - Prefer context.Context in public APIs and return (value, error).
 - Use testify assert/require in tests.
-- Log with slog and use slog.String, slog.Int, slog.Float64, slog.Bool, slog.Any, etc for key value pairs
+- Log with slog and use slog.String, slog.Int, slog.Float64, slog.Bool, slog.Time, slog.Any, etc for key value pairs
 - Log field names with headless camelcase
 - Struct fields should have json Go tags with their name headless camelcase
 - Tests should live in a file with the same name as the file they test, with suffix _test
@@ -39,39 +39,4 @@ Code Style
 - Make sure to import vitest test functions implicitly like `import { describe, it, expect, beforeEach, vi } from 'vitest';` in frontend tests.
 
 Base-ui Components:
-Accordion
-Alert
-Autocomplete
-Avatar
-Button
-Checkbox
-Checkbox
-Collapsible
-Combobox
-Context
-Dialog
-Drawer
-Field
-Fieldset
-Form
-Input
-Menu
-Menubar
-Meter
-Navigation
-Number
-Popover
-Preview
-Progress
-Radio
-Scroll
-Select
-Separator
-Slider
-Switch
-Tabs
-Toast
-Toggle
-Toggle
-Toolbar
-Tooltip
+Accordion, Alert, Autocomplete, Avatar, Button, Checkbox, Checkbox, Collapsible, Combobox, Context, Dialog, Drawer, Field, Fieldset, Form, Input, Menu, Menubar, Meter, Navigation, Number, Popover, Preview, Progress, Radio, Scroll, Select, Separator, Slider, Switch, Tabs, Toast, Toggle, Toggle, Toolbar, Tooltip

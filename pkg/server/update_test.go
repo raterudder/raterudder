@@ -39,7 +39,7 @@ func TestHandleUpdate(t *testing.T) {
 	mockS.On("GetLatestWeatherTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
 	mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+	mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 	mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
 	mockS.On("InsertAction", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -47,7 +47,7 @@ func TestHandleUpdate(t *testing.T) {
 	mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 	mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
 	// Add GetEnergyHistory expectation
-	mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+	mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 	mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 80}, nil)
 	// We might need strict matching for SetModes later, but for now:
 	mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything).Return(nil)
@@ -89,7 +89,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
 		mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 		mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
 		// InsertAction might not be called if validation fails, so we can't strict expect it or we use .Maybe()
 		mockS.On("InsertAction", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -102,7 +102,7 @@ func TestHandleUpdate(t *testing.T) {
 			mockES := &mockESS{}
 			mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 			mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
-			mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+			mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 			mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 50}, nil)
 			mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -253,12 +253,12 @@ func TestHandleUpdate(t *testing.T) {
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
 		mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 		mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 
 		mockES := &mockESS{}
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
-		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 		// GetStatus should be called even when paused
 		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 75}, nil)
 
@@ -320,12 +320,12 @@ func TestHandleUpdate(t *testing.T) {
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
 		mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 		mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 
 		mockES := &mockESS{}
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
-		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{EmergencyMode: true}, nil)
 
 		mockP := ess.NewMap()
@@ -374,12 +374,12 @@ func TestHandleUpdate(t *testing.T) {
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
 		mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 		mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 
 		mockES := &mockESS{}
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
-		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{
 			Alarms: []types.SystemAlarm{{Name: "Test Alarm"}},
 		}, nil)
@@ -430,12 +430,12 @@ func TestHandleUpdate(t *testing.T) {
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
 		mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 		mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 
 		mockES := &mockESS{}
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
-		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{GridUnavailable: true}, nil)
 
 		mockP := ess.NewMap()
@@ -499,7 +499,7 @@ func TestHandleUpdate(t *testing.T) {
 			var startTimes []time.Time
 			mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 				startTimes = append(startTimes, args.Get(1).(time.Time))
-			}).Return([]types.EnergyStats{}, nil).Maybe()
+			}).Return([]types.DailyEnergyStats{}, nil).Maybe()
 
 			mockP := ess.NewMap()
 			mockP.SetSystem(types.SiteIDNone, mockES)
@@ -517,7 +517,7 @@ func TestHandleUpdate(t *testing.T) {
 			mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{UtilityProvider: "test"}, types.CurrentSettingsVersion, nil)
 			mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 			mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-			mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+			mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 			mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
 			mockS.On("InsertAction", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -568,7 +568,7 @@ func TestHandleUpdate(t *testing.T) {
 			mockES.On("GetEnergyHistory", mock.Anything, mock.MatchedBy(func(start time.Time) bool {
 				// Should be equal to lastTime (or close to it due to truncation logic)
 				return start.Equal(lastTime)
-			}), mock.Anything).Return([]types.EnergyStats{}, nil).Maybe()
+			}), mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
 
 			mockP := ess.NewMap()
 			mockP.SetSystem(types.SiteIDNone, mockES)
@@ -586,7 +586,7 @@ func TestHandleUpdate(t *testing.T) {
 			mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{UtilityProvider: "test"}, types.CurrentSettingsVersion, nil)
 			mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 			mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-			mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+			mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 			mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
 			mockS.On("InsertAction", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -632,14 +632,14 @@ func TestHandleUpdateSites(t *testing.T) {
 	mockS.On("GetLatestWeatherTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
 	mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+	mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 	mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
 	mockS.On("InsertAction", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	mockES := &mockESS{}
 	mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 	mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
-	mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+	mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 	mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 80}, nil)
 	mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -745,13 +745,13 @@ func TestHandleUpdateSites(t *testing.T) {
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
 		mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 		mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 		mockS.On("InsertAction", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 		mockES := &mockESS{}
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
-		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 80}, nil)
 		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -884,16 +884,17 @@ func TestUpdateSitePrices(t *testing.T) {
 			storage:   mockS,
 		}
 
-		err := srv.updatePriceHistory(context.Background(), "site1", mockU)
+		err := srv.updatePriceHistory(context.Background(), "site1", mockU, false)
 		require.NoError(t, err)
 
-		// Verify that it started from 5 days ago
 		// Verify that it started from 5 days ago
 		now := time.Now()
 		fiveDaysAgo := now.Add(-5 * 24 * time.Hour)
 		expectedStart := time.Date(fiveDaysAgo.Year(), fiveDaysAgo.Month(), fiveDaysAgo.Day(), 0, 0, 0, 0, fiveDaysAgo.Location())
 		assert.True(t, expectedStart.Equal(startTime), "Expected start time %v, got %v", expectedStart, startTime)
-		assert.WithinDuration(t, now, endTime, time.Second, "Expected end time to be approximately now")
+
+		expectedEnd := now.Add(12 * time.Hour)
+		assert.WithinDuration(t, expectedEnd, endTime, time.Second)
 	})
 
 	t.Run("Incremental Update", func(t *testing.T) {
@@ -920,11 +921,12 @@ func TestUpdateSitePrices(t *testing.T) {
 			storage:   mockS,
 		}
 
-		err := srv.updatePriceHistory(context.Background(), "site1", mockU)
+		err := srv.updatePriceHistory(context.Background(), "site1", mockU, false)
 		require.NoError(t, err)
 
 		assert.True(t, startTime.Equal(lastTime))
-		assert.WithinDuration(t, time.Now(), endTime, time.Second)
+		expectedEnd := time.Now().Add(12 * time.Hour)
+		assert.WithinDuration(t, expectedEnd, endTime, time.Second)
 	})
 
 	t.Run("No Future Update", func(t *testing.T) {
@@ -932,7 +934,7 @@ func TestUpdateSitePrices(t *testing.T) {
 		// If last time is now (or very close), we might still get a call for the current partial hour/day
 		lastTime := time.Now().Truncate(time.Hour)
 
-		// Allow calls for past/present
+		// Allow calls for past/present/future within the day
 		mockU.On("GetConfirmedPrices", mock.Anything, mock.MatchedBy(func(start time.Time) bool {
 			return !start.After(time.Now())
 		}), mock.Anything).Return([]types.Price{}, nil)
@@ -948,7 +950,7 @@ func TestUpdateSitePrices(t *testing.T) {
 			storage:   mockS,
 		}
 
-		err := srv.updatePriceHistory(context.Background(), "site1", mockU)
+		err := srv.updatePriceHistory(context.Background(), "site1", mockU, false)
 		require.NoError(t, err)
 
 		// Ensure strictly no calls with start time in the future
@@ -982,7 +984,7 @@ func TestUpdateSitePrices(t *testing.T) {
 			storage:   mockS,
 		}
 
-		err := srv.updatePriceHistory(context.Background(), "site1", mockU)
+		err := srv.updatePriceHistory(context.Background(), "site1", mockU, false)
 		require.NoError(t, err)
 
 		// Should have triggered backfill from 5 days ago, not 1 hour ago
@@ -991,7 +993,41 @@ func TestUpdateSitePrices(t *testing.T) {
 		expectedStart := time.Date(fiveDaysAgo.Year(), fiveDaysAgo.Month(), fiveDaysAgo.Day(), 0, 0, 0, 0, fiveDaysAgo.Location())
 
 		assert.True(t, expectedStart.Equal(startTime), "Expected start time %v, got %v", expectedStart, startTime)
-		assert.WithinDuration(t, now, endTime, time.Second)
+		expectedEnd := now.Add(12 * time.Hour)
+		assert.WithinDuration(t, expectedEnd, endTime, time.Second)
+	})
+
+	t.Run("Refresh Now", func(t *testing.T) {
+		mockU := &mockUtility{}
+		// If last time is in the future, normally we wouldn't fetch.
+		// But with refreshNow=true, we should fetch starting from now.
+		lastTime := time.Now().Add(5 * time.Hour).Truncate(time.Hour)
+
+		var startTime time.Time
+		var endTime time.Time
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			startTime = args.Get(1).(time.Time)
+			endTime = args.Get(2).(time.Time)
+		}).Return([]types.Price{}, nil).Once()
+
+		mockS := &mockStorage{}
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site1").Return(lastTime, types.CurrentPriceHistoryVersion, nil)
+		mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities: mockUMap,
+			storage:   mockS,
+		}
+
+		err := srv.updatePriceHistory(context.Background(), "site1", mockU, true)
+		require.NoError(t, err)
+
+		// Should have started from now, not lastTime
+		assert.WithinDuration(t, time.Now(), startTime, time.Second)
+		assert.WithinDuration(t, time.Now().Add(12*time.Hour), endTime, time.Second)
 	})
 }
 
@@ -1008,7 +1044,7 @@ func TestUpdateEnergyHistory(t *testing.T) {
 		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 			startTime = args.Get(1).(time.Time)
 			endTime = args.Get(2).(time.Time)
-		}).Return([]types.EnergyStats{{}}, nil).Once()
+		}).Return([]types.DailyEnergyStats{{}}, nil).Once()
 
 		srv := &Server{
 			storage: mockS,
@@ -1037,7 +1073,7 @@ func TestUpdateEnergyHistory(t *testing.T) {
 		mockES.On("GetEnergyHistory", mock.Anything, lastTime, mock.Anything).Run(func(args mock.Arguments) {
 			startTime = args.Get(1).(time.Time)
 			endTime = args.Get(2).(time.Time)
-		}).Return([]types.EnergyStats{{}}, nil).Once()
+		}).Return([]types.DailyEnergyStats{{}}, nil).Once()
 
 		srv := &Server{
 			storage: mockS,
@@ -1065,7 +1101,7 @@ func TestUpdateEnergyHistory(t *testing.T) {
 		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 			startTime = args.Get(1).(time.Time)
 			endTime = args.Get(2).(time.Time)
-		}).Return([]types.EnergyStats{{}}, nil).Once()
+		}).Return([]types.DailyEnergyStats{{}}, nil).Once()
 
 		srv := &Server{
 			storage: mockS,
@@ -1118,14 +1154,14 @@ func TestUpdateEnergyHistory(t *testing.T) {
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site1").Return(time.Time{}, 0, nil)
 		mockS.On("UpsertEnergyHistories", mock.Anything, "site1", mock.Anything, mock.Anything).Return(nil)
 		mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-		mockS.On("GetEnergyHistory", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 		mockS.On("InsertAction", mock.Anything, "site1", mock.Anything).Return(nil)
 		mockS.On("GetPriceHistory", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.Price{pastPrice}, nil)
 
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
 		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 50}, nil)
-		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.EnergyStats{}, nil)
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
@@ -1211,7 +1247,10 @@ func TestUpdateWeatherHistory(t *testing.T) {
 
 		mockW.On("Forecast", mock.Anything, sl, mock.MatchedBy(func(t time.Time) bool {
 			return t.Equal(fiveDaysAgoMidnight)
-		}), mock.Anything).Return([]types.Weather{}, nil)
+		}), mock.Anything).Return([]types.Weather{
+			// need to return something otherwise UpsertWeather will not be called.
+			{TSDayStart: now},
+		}, nil)
 
 		mockS.On("UpsertWeather", mock.Anything, "test-site", mock.Anything, types.CurrentWeatherVersion).Return(nil)
 
@@ -1250,19 +1289,21 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		mockS := &mockStorage{}
 		mockW := &mockWeather{}
 
-		// Recent history exists — should always re-fetch from yesterday midnight
+		// Recent history exists — should always re-fetch from today midnight
 		// regardless of lastWeatherTime, so today's hourly updates are included.
 		now := time.Now().In(loc)
 		todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-		yesterdayMidnight := todayMidnight.AddDate(0, 0, -1)
 		// last time is mid-today, still current version
 		lastTime := todayMidnight.Add(6 * time.Hour)
 		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(lastTime, types.CurrentWeatherVersion, nil)
 
-		// Sync should always start from yesterday midnight
+		// Sync should always start from today midnight
 		mockW.On("Forecast", mock.Anything, sl, mock.MatchedBy(func(t time.Time) bool {
-			return t.Equal(yesterdayMidnight)
-		}), mock.Anything).Return([]types.Weather{}, nil)
+			return t.Equal(todayMidnight)
+		}), mock.Anything).Return([]types.Weather{
+			// need to return something otherwise UpsertWeather will not be called.
+			{TSDayStart: now},
+		}, nil)
 
 		mockS.On("UpsertWeather", mock.Anything, "test-site", mock.Anything, types.CurrentWeatherVersion).Return(nil)
 
@@ -1277,23 +1318,17 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		mockW.AssertExpectations(t)
 	})
 
-	t.Run("Always Fetches Yesterday Even When Up To Date", func(t *testing.T) {
+	t.Run("Should Not Fetch Anything When Up To Date", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockW := &mockWeather{}
 
 		// lastWeatherTime is exactly tomorrow midnight (fully up to date for today)
-		// but should still refetch from yesterday to pick up hourly updates.
+		// but should still refetch from TODAY to pick up hourly updates?
+		// Wait, user said ONLY fetch today.
 		now := time.Now().In(loc)
 		todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-		yesterdayMidnight := todayMidnight.AddDate(0, 0, -1)
 		tomorrowMidnight := todayMidnight.AddDate(0, 0, 1)
 		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(tomorrowMidnight, types.CurrentWeatherVersion, nil)
-
-		mockW.On("Forecast", mock.Anything, sl, mock.MatchedBy(func(t time.Time) bool {
-			return t.Equal(yesterdayMidnight)
-		}), mock.Anything).Return([]types.Weather{}, nil)
-
-		mockS.On("UpsertWeather", mock.Anything, "test-site", mock.Anything, types.CurrentWeatherVersion).Return(nil)
 
 		srv := &Server{
 			storage: mockS,
@@ -1303,6 +1338,6 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		err := srv.updateWeatherHistory(context.Background(), "test-site", sl)
 		assert.NoError(t, err)
 		mockS.AssertExpectations(t)
-		mockW.AssertExpectations(t)
+		mockW.AssertNotCalled(t, "Forecast")
 	})
 }

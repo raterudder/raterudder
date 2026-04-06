@@ -33,6 +33,7 @@ func generateTestTokenWithAudience(t *testing.T, srvURL string, priv crypto.Priv
 		"aud": "%s",
 		"sub": "%s",
 		"email": "%s",
+		"email_verified": true,
 		"exp": %d
 	}`, srvURL, aud, subject, email, time.Now().Add(1*time.Hour).Unix())
 	return oidctest.SignIDToken(priv, "my-key-id", "RS256", rawClaims)

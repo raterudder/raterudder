@@ -35,14 +35,14 @@ type geocodingResponse struct {
 
 // Location queries the Open-Meteo Geocoding API to find a location based on zip code and country code.
 // It returns the location with the largest population if multiple results are found.
-func (s *OpenMeteo) Location(ctx context.Context, countryCode, postalCode string) (*types.SiteLocation, error) {
+func (s *OpenMeteo) Location(ctx context.Context, countryCode, postalCode string) (types.SiteLocation, error) {
 	if countryCode == "" || postalCode == "" {
-		return nil, fmt.Errorf("country code and zip code are required")
+		return types.SiteLocation{}, fmt.Errorf("country code and zip code are required")
 	}
 
 	u, err := url.Parse(s.GeocodingURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse geocoding base URL: %w", err)
+		return types.SiteLocation{}, fmt.Errorf("failed to parse geocoding base URL: %w", err)
 	}
 
 	q := u.Query()
@@ -53,36 +53,36 @@ func (s *OpenMeteo) Location(ctx context.Context, countryCode, postalCode string
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create geocoding request: %w", err)
+		return types.SiteLocation{}, fmt.Errorf("failed to create geocoding request: %w", err)
 	}
 
 	resp, err := s.HTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("geocoding request failed: %w", err)
+		return types.SiteLocation{}, fmt.Errorf("geocoding request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("geocoding api returned status %d", resp.StatusCode)
+		return types.SiteLocation{}, fmt.Errorf("geocoding api returned status %d", resp.StatusCode)
 	}
 
 	var data geocodingResponse
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil, fmt.Errorf("failed to decode geocoding response: %w", err)
+		return types.SiteLocation{}, fmt.Errorf("failed to decode geocoding response: %w", err)
 	}
 
 	if len(data.Results) == 0 {
-		return nil, fmt.Errorf("no location found for zip code %s", postalCode)
+		return types.SiteLocation{}, fmt.Errorf("no location found for zip code %s", postalCode)
 	}
 
 	// Find the result with the largest population that matches the country code
-	var bestLoc *types.SiteLocation
+	var bestLoc types.SiteLocation
 	maxPop := -1
 
 	for _, result := range data.Results {
 		if result.CountryCode == countryCode && result.Population > maxPop {
 			maxPop = result.Population
-			bestLoc = &types.SiteLocation{
+			bestLoc = types.SiteLocation{
 				PostalCode:  postalCode,
 				CountryCode: countryCode,
 				Latitude:    result.Latitude,
@@ -94,8 +94,8 @@ func (s *OpenMeteo) Location(ctx context.Context, countryCode, postalCode string
 		}
 	}
 
-	if bestLoc == nil {
-		return nil, fmt.Errorf("no location found for zip code %s and country code %s", postalCode, countryCode)
+	if bestLoc == (types.SiteLocation{}) {
+		return types.SiteLocation{}, fmt.Errorf("no location found for zip code %s and country code %s", postalCode, countryCode)
 	}
 
 	return bestLoc, nil

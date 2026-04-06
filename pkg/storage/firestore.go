@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -275,7 +276,7 @@ func (f *FirestoreProvider) GetLatestAction(ctx context.Context, siteID string) 
 }
 
 // UpsertEnergyHistories adds or updates multiple energy history records in the "energy_history" collection.
-func (f *FirestoreProvider) UpsertEnergyHistories(ctx context.Context, siteID string, stats []types.EnergyStats, version int) error {
+func (f *FirestoreProvider) UpsertEnergyHistories(ctx context.Context, siteID string, stats []types.DailyEnergyStats, version int) error {
 	if len(stats) == 0 {
 		return nil
 	}
@@ -285,21 +286,61 @@ func (f *FirestoreProvider) UpsertEnergyHistories(ctx context.Context, siteID st
 		return err
 	}
 
+	for _, s := range stats {
+		if s.TSDayStart.IsZero() {
+			return fmt.Errorf("energy stats missing tsDayStart")
+		}
+
+		slices.SortFunc(s.Hourly, func(a, b types.EnergyStats) int {
+			return a.TSHourStart.Compare(b.TSHourStart)
+		})
+
+		// Check for contiguous data and warn if not 'today'
+		nowSite := time.Now().In(s.TSDayStart.Location())
+		todayStart := time.Date(nowSite.Year(), nowSite.Month(), nowSite.Day(), 0, 0, 0, 0, nowSite.Location())
+		if s.TSDayStart.Before(todayStart) {
+			contiguous := true
+			if len(s.Hourly) == 0 {
+				contiguous = false
+			} else {
+				for i := 1; i < len(s.Hourly); i++ {
+					if !s.Hourly[i].TSHourStart.Equal(s.Hourly[i-1].TSHourStart.Add(time.Hour)) {
+						contiguous = false
+						break
+					}
+				}
+				// Also check if the day has roughly 24 hours of data.
+				// A local day can have 23, 24, or 25 hours due to DST.
+				// Just checking if we have at least 23 hours.
+				if len(s.Hourly) < 23 {
+					contiguous = false
+				}
+			}
+			if !contiguous {
+				log.Ctx(ctx).WarnContext(
+					ctx,
+					"non-contiguous energy data provided",
+					slog.String("siteID", siteID),
+					slog.Time("tsDayStart", s.TSDayStart),
+					slog.Int("hours", len(s.Hourly)),
+				)
+			}
+		}
+	}
+
 	// For a single item, use direct Set to avoid batch overhead
 	if len(stats) == 1 {
 		s := stats[0]
-		if s.TSHourStart.IsZero() {
-			return fmt.Errorf("energy stats missing tsHourStart")
-		}
+		s.TSDayStart = time.Date(s.TSDayStart.Year(), s.TSDayStart.Month(), s.TSDayStart.Day(), 0, 0, 0, 0, s.TSDayStart.Location())
 		jsonBytes, err := json.Marshal(s)
 		if err != nil {
 			return fmt.Errorf("failed to marshal energy stats: %w", err)
 		}
-		docID := s.TSHourStart.UTC().Format(time.RFC3339)
+		docID := s.TSDayStart.Format("2006-01-02")
 		_, err = coll.Doc(docID).Set(ctx, map[string]any{
-			"json":      string(jsonBytes),
-			"timestamp": s.TSHourStart,
-			"version":   version,
+			"json":       string(jsonBytes),
+			"tsDayStart": s.TSDayStart,
+			"version":    version,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to upsert energy history: %w", err)
@@ -312,22 +353,20 @@ func (f *FirestoreProvider) UpsertEnergyHistories(ctx context.Context, siteID st
 	jobs := make([]*firestore.BulkWriterJob, 0, len(stats))
 
 	for _, s := range stats {
-		if s.TSHourStart.IsZero() {
-			return fmt.Errorf("energy stats missing tsHourStart")
-		}
+		s.TSDayStart = time.Date(s.TSDayStart.Year(), s.TSDayStart.Month(), s.TSDayStart.Day(), 0, 0, 0, 0, s.TSDayStart.Location())
 
 		jsonBytes, err := json.Marshal(s)
 		if err != nil {
 			return fmt.Errorf("failed to marshal energy stats: %w", err)
 		}
 
-		docID := s.TSHourStart.UTC().Format(time.RFC3339)
+		docID := s.TSDayStart.Format("2006-01-02")
 		ref := coll.Doc(docID)
 
 		job, err := bw.Set(ref, map[string]any{
-			"json":      string(jsonBytes),
-			"timestamp": s.TSHourStart,
-			"version":   version,
+			"json":       string(jsonBytes),
+			"tsDayStart": s.TSDayStart,
+			"version":    version,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to enqueue energy history: %w", err)
@@ -456,29 +495,35 @@ func (f *FirestoreProvider) GetWeather(ctx context.Context, siteID string, start
 }
 
 // GetEnergyHistory retrieves energy history records within the specified time range.
-func (f *FirestoreProvider) GetEnergyHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.EnergyStats, error) {
-	startHour := start.Truncate(time.Hour)
-	endHour := end.Truncate(time.Hour)
+func (f *FirestoreProvider) GetEnergyHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.DailyEnergyStats, error) {
+	// Truncate to days. Ensure we query based on the passed timezones since the documents are saved that way.
+	startDay := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
+	endDay := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, end.Location())
+	// special case where end is midnight which means we don't include that day
+	if endDay.Equal(end) {
+		endDay = endDay.AddDate(0, 0, -1)
+	}
 
 	coll, err := f.getCollection(siteID, "energy_history")
 	if err != nil {
 		return nil, err
 	}
+
 	iter := coll.
-		Where("timestamp", ">=", startHour).
-		Where("timestamp", "<", endHour).
-		OrderBy("timestamp", firestore.Asc).
+		Where("tsDayStart", ">=", startDay).
+		Where("tsDayStart", "<=", endDay).
+		OrderBy("tsDayStart", firestore.Asc).
 		Documents(ctx)
 	defer iter.Stop()
 
-	var allStats []types.EnergyStats
+	var allStats []types.DailyEnergyStats
 	for {
 		doc, err := iter.Next()
 		if errors.Is(err, iterator.Done) {
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("error iterating hourly energy history: %w", err)
+			return nil, fmt.Errorf("error iterating daily energy history: %w", err)
 		}
 
 		val, err := doc.DataAt("json")
@@ -493,39 +538,154 @@ func (f *FirestoreProvider) GetEnergyHistory(ctx context.Context, siteID string,
 			return nil, fmt.Errorf("energy stats doc %s 'json' field is not string", doc.Ref.ID)
 		}
 
-		var s types.EnergyStats
+		var s types.DailyEnergyStats
 		if err := json.Unmarshal([]byte(jsonStr), &s); err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal energy stats", slog.String("docID", doc.Ref.ID), slog.String("siteID", siteID), slog.Any("err", err))
-			return nil, fmt.Errorf("failed to unmarshal energy stats (id=%s): %w", doc.Ref.ID, err)
+			log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal daily energy stats", slog.String("docID", doc.Ref.ID), slog.String("siteID", siteID), slog.Any("err", err))
+			return nil, fmt.Errorf("failed to unmarshal daily energy stats (id=%s): %w", doc.Ref.ID, err)
 		}
 		allStats = append(allStats, s)
 	}
+
+	// Lazy migration: if no daily stats found, check if any legacy hourly docs exist.
+	if len(allStats) == 0 {
+		oldIter := coll.Where("version", "<", 3).Limit(1).Documents(ctx)
+		_, err := oldIter.Next()
+		oldIter.Stop()
+		if err == nil {
+			log.Ctx(ctx).InfoContext(ctx, "migrating energy history schema (fallback check)", slog.String("siteID", siteID))
+			if err := f.migrateEnergyHistory(ctx, siteID); err != nil {
+				return nil, fmt.Errorf("failed to migrate energy history: %w", err)
+			}
+			// Retry the query after migration
+			return f.GetEnergyHistory(ctx, siteID, start, end)
+		} else if !errors.Is(err, iterator.Done) {
+			return nil, fmt.Errorf("error checking for old energy history: %w", err)
+		}
+	}
+
 	return allStats, nil
 }
 
-// GetLatestEnergyHistoryTime retrieves the timestamp of the last stored energy history record.
+// migrateEnergyHistory fetches old hourly docs, aggregates them, saves new daily ones, and deletes the old ones.
+func (f *FirestoreProvider) migrateEnergyHistory(ctx context.Context, siteID string) error {
+	coll, err := f.getCollection(siteID, "energy_history")
+	if err != nil {
+		return err
+	}
+
+	// Query all hourly documents that haven't been migrated yet
+	iter := coll.Where("version", "<", types.CurrentEnergyStatsVersion).Documents(ctx)
+	defer iter.Stop()
+
+	// Temporary map to group hourly stats into daily slices
+	dailyGroups := make(map[string][]types.EnergyStats)
+	var docsToDelete []*firestore.DocumentRef
+
+	for {
+		doc, err := iter.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("migrating: error fetching old doc: %w", err)
+		}
+
+		docsToDelete = append(docsToDelete, doc.Ref)
+
+		val, err := doc.DataAt("json")
+		if err != nil {
+			return fmt.Errorf("migrating: error reading json of old doc %s: %w", doc.Ref.ID, err)
+		}
+		jsonStr, ok := val.(string)
+		if !ok {
+			return fmt.Errorf("migrating: error reading json of old doc %s: not a string", doc.Ref.ID)
+		}
+		var s types.EnergyStats
+		if err := json.Unmarshal([]byte(jsonStr), &s); err != nil {
+			return fmt.Errorf("migrating: error unmarshalling json of old doc %s: %w", doc.Ref.ID, err)
+		}
+		if s.TSHourStart.IsZero() {
+			return fmt.Errorf("migrating: error reading TSHourStart of old doc %s: zero value", doc.Ref.ID)
+		}
+
+		// Use the timezone attached to the TSHourStart time to compute the day string.
+		dayStr := s.TSHourStart.Format("2006-01-02")
+		dailyGroups[dayStr] = append(dailyGroups[dayStr], s)
+	}
+
+	var dailyStats []types.DailyEnergyStats
+	for dayStr, hourlyStats := range dailyGroups {
+		// Just take the first element's timezone and reconstruct the day start
+		loc := hourlyStats[0].TSHourStart.Location()
+		parsed, err := time.ParseInLocation("2006-01-02", dayStr, loc)
+		if err != nil {
+			return fmt.Errorf("migrating: failed to parse day string %s: %w", dayStr, err)
+		}
+
+		daily := types.DailyEnergyStats{
+			TSDayStart: parsed,
+			Hourly:     hourlyStats,
+		}
+		dailyStats = append(dailyStats, daily)
+	}
+
+	// 1. Bulk write the new daily docs
+	if err := f.UpsertEnergyHistories(ctx, siteID, dailyStats, types.CurrentEnergyStatsVersion); err != nil {
+		return fmt.Errorf("migration: failed to save new daily docs: %w", err)
+	}
+
+	// 2. Delete the old hourly docs safely
+	bw := f.client.BulkWriter(ctx)
+	var deleteJobs []*firestore.BulkWriterJob
+	for _, ref := range docsToDelete {
+		job, err := bw.Delete(ref)
+		if err == nil {
+			deleteJobs = append(deleteJobs, job)
+		}
+	}
+	bw.End()
+	for _, job := range deleteJobs {
+		if _, err := job.Results(); err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to delete old energy doc during migration", slog.Any("err", err))
+		}
+	}
+
+	return nil
+}
+
+// GetLatestEnergyHistoryTime retrieves the timestamp of the last stored energy
+// history record.
 func (f *FirestoreProvider) GetLatestEnergyHistoryTime(ctx context.Context, siteID string) (time.Time, int, error) {
 	coll, err := f.getCollection(siteID, "energy_history")
 	if err != nil {
 		return time.Time{}, 0, err
 	}
 	iter := coll.
-		OrderBy("timestamp", firestore.Desc).
+		OrderBy("tsDayStart", firestore.Desc).
 		Limit(1).
 		Documents(ctx)
 	defer iter.Stop()
 
 	doc, err := iter.Next()
 	if errors.Is(err, iterator.Done) {
-		return time.Time{}, 0, nil
+		// instead look for them ordered by timestamp
+		iter2 := coll.
+			OrderBy("timestamp", firestore.Desc).
+			Limit(1).
+			Documents(ctx)
+		defer iter2.Stop()
+		doc2, err2 := iter2.Next()
+		if errors.Is(err2, iterator.Done) {
+			return time.Time{}, 0, nil
+		}
+		if err2 != nil {
+			return time.Time{}, 0, fmt.Errorf("failed to get latest energy history doc (v2): %w", err2)
+		}
+		doc = doc2
+		err = nil // found one in v2
 	}
 	if err != nil {
-		return time.Time{}, 0, fmt.Errorf("failed to get latest energy history doc: %w", err)
-	}
-
-	ts, err := time.Parse(time.RFC3339, doc.Ref.ID)
-	if err != nil {
-		return time.Time{}, 0, fmt.Errorf("invalid energy history doc id %s: %w", doc.Ref.ID, err)
+		return time.Time{}, 0, fmt.Errorf("failed to get latest energy history doc (v3): %w", err)
 	}
 
 	// Read version if available (default 0)
@@ -533,6 +693,37 @@ func (f *FirestoreProvider) GetLatestEnergyHistoryTime(ctx context.Context, site
 	if v, err := doc.DataAt("version"); err == nil {
 		if vInt, ok := v.(int64); ok {
 			version = int(vInt)
+		}
+	}
+	// this is crucial because if we don't do this here then there might be a
+	// call to UpsertEnergyHistories which will store the version 3 data and we
+	// will never migrate old data.
+	if version < 3 {
+		log.Ctx(ctx).InfoContext(ctx, "migrating energy history schema synchronously (detecting old version in latest check)", slog.String("siteID", siteID))
+		if err := f.migrateEnergyHistory(ctx, siteID); err != nil {
+			return time.Time{}, 0, fmt.Errorf("failed to migrate energy history: %w", err)
+		}
+		return f.GetLatestEnergyHistoryTime(ctx, siteID)
+	}
+
+	ts, err := time.Parse("2006-01-02", doc.Ref.ID)
+	if err != nil {
+		return time.Time{}, 0, fmt.Errorf("invalid energy history doc id %s: %w", doc.Ref.ID, err)
+	}
+	// If this doc is daily, the latest actual recorded hour needs to be extracted from JSON
+	val, err := doc.DataAt("json")
+	if err == nil {
+		if jsonStr, ok := val.(string); ok {
+			var s types.DailyEnergyStats
+			if err := json.Unmarshal([]byte(jsonStr), &s); err == nil && len(s.Hourly) > 0 {
+				latest := s.Hourly[0].TSHourStart
+				for _, h := range s.Hourly {
+					if h.TSHourStart.After(latest) {
+						latest = h.TSHourStart
+					}
+				}
+				return latest, version, nil
+			}
 		}
 	}
 

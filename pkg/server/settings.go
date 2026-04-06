@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"sync"
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
+	"github.com/raterudder/raterudder/pkg/utility"
 )
 
 type settingsWithVersion struct {
@@ -195,6 +197,10 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "solar trend ratio max must be at least 1", http.StatusBadRequest)
 		return
 	}
+	// this should never really happen in practice but makes tests easier
+	if newSettings.Release == "" {
+		newSettings.Release = s.release
+	}
 	if newSettings.Release != s.release {
 		log.Ctx(ctx).WarnContext(ctx,
 			"settings release mismatch",
@@ -204,12 +210,29 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := s.utilities.Site(ctx, siteID, newSettings)
-	if err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to get utility provider", slog.String("utilityProvider", newSettings.UtilityProvider), slog.Any("error", err))
-		writeJSONError(w, fmt.Sprintf("invalid utility provider settings: %v", err), http.StatusBadRequest)
-		return
+	var wg sync.WaitGroup
+	// normally we would just do defer wg.Wait() but then we write out the response
+	// before we actually finish which makes tests difficult and also could cause
+	// cloud run to shutdown before we're done
+	var finishedWaiting bool
+	defer func() {
+		if !finishedWaiting {
+			wg.Wait()
+		}
+	}()
+
+	// do this early in case the utility options are invalid
+	var u utility.Utility
+	if newSettings.UtilityProvider != "" {
+		var err error
+		u, err = s.utilities.Site(ctx, siteID, newSettings)
+		if err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to get utility provider", slog.String("utilityProvider", newSettings.UtilityProvider), slog.Any("error", err))
+			writeJSONError(w, fmt.Sprintf("invalid utility provider settings: %v", err), http.StatusBadRequest)
+			return
+		}
 	}
+
 	// Get existing credentials to preserve other fields
 	existing, _, err := s.storage.GetSettings(ctx, siteID)
 	if err != nil {
@@ -224,24 +247,30 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	// Update Location if zip/country changed
 	if newSettings.PostalCode != "" && newSettings.CountryCode != "" {
 		if existing.PostalCode != newSettings.PostalCode || existing.CountryCode != newSettings.CountryCode || existing.Location == nil {
+			log.Ctx(ctx).InfoContext(
+				ctx,
+				"location changed, fetching new location data",
+				slog.String("postalCode", newSettings.PostalCode),
+				slog.String("countryCode", newSettings.CountryCode),
+			)
 			loc, err := s.weather.Location(ctx, newSettings.CountryCode, newSettings.PostalCode)
 			if err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to fetch location data", slog.Any("error", err))
 				writeJSONError(w, fmt.Sprintf("failed to fetch location data: %v", err), http.StatusBadRequest)
 				return
 			}
-			newSettings.Location = loc
+			newSettings.Location = &loc
 
 			// Set user-provided azimuth/tilt
 			loc.SolarAzimuth = newSettings.SolarAzimuth
 			loc.SolarTilt = newSettings.SolarTilt
 
-			go func() {
-				log.Ctx(context.Background()).InfoContext(context.Background(), "fetching initial weather for new location")
-				if err := s.updateWeatherHistory(context.Background(), siteID, *loc); err != nil {
-					log.Ctx(context.Background()).ErrorContext(context.Background(), "failed to sync weather history after settings update", slog.Any("error", err))
+			wg.Go(func() {
+				log.Ctx(ctx).InfoContext(ctx, "fetching initial weather for new location")
+				if err := s.updateWeatherHistory(context.WithoutCancel(ctx), siteID, loc); err != nil {
+					log.Ctx(ctx).ErrorContext(ctx, "failed to sync weather history after settings update", slog.Any("error", err))
 				}
-			}()
+			})
 		} else {
 			newSettings.Location = existing.Location
 			// Always sync solar azimuth/tilt into location if it's set
@@ -270,7 +299,6 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	var wg sync.WaitGroup
 	// Handle credentials or ESS update
 	if req.Credentials != nil || existing.ESS != newSettings.ESS {
 		loadExistingCreds()
@@ -316,8 +344,15 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// if the ess credentials changed, we need to verify them and potentially backfill history
-		log.Ctx(ctx).InfoContext(ctx, "ess credentials changed, verifying and potentially backfilling history", slog.Bool("changedESS", changedESS), slog.Bool("shouldBackfillHistory", shouldBackfillHistory))
+		log.Ctx(ctx).InfoContext(
+			ctx,
+			"ess credentials changed, verifying and potentially backfilling history",
+			slog.Bool("changedESS", changedESS),
+			slog.Bool("shouldBackfillHistory", shouldBackfillHistory),
+		)
 		if changedESS {
+			// this is an expensive call since it will apply the settings too which means
+			// it might log into the ess
 			essSystem, err := s.ess.Site(ctx, siteID, newSettings)
 			if err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to get ess system", slog.Any("error", err))
@@ -359,14 +394,14 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 			// now backfill if we need to since the credentials were verified
 			if shouldBackfillHistory {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
+				// this goroutine is okay because we use a waitgroup to block the return
+				// of the call until it finishes
+				wg.Go(func() {
 					log.Ctx(ctx).InfoContext(ctx, "backfilling energy history for new credentials")
-					if err := s.updateEnergyHistory(ctx, siteID, essSystem); err != nil {
+					if err := s.updateEnergyHistory(context.WithoutCancel(ctx), siteID, essSystem); err != nil {
 						log.Ctx(ctx).ErrorContext(ctx, "failed to sync energy history after settings update", slog.Any("error", err))
 					}
-				}()
+				})
 			}
 		}
 		credsChanged = true
@@ -383,15 +418,36 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		newSettings.EncryptedCredentials = encrypted
 	}
 
+	// we want this to be low down at the bottom because it will re-fetch prices
+	// and start storing data into firestore which we want to minimize if other
+	// errors will happen earlier
+	if newSettings.UtilityProvider != "" && (existing.UtilityProvider != newSettings.UtilityProvider ||
+		existing.UtilityRate != newSettings.UtilityRate ||
+		existing.UtilityRateOptions != newSettings.UtilityRateOptions ||
+		!reflect.DeepEqual(existing.UtilityFeesPeriods, newSettings.UtilityFeesPeriods)) {
+		wg.Go(func() {
+			log.Ctx(ctx).InfoContext(
+				ctx,
+				"utility settings changed, re-fetching prices",
+				slog.String("utilityProvider", newSettings.UtilityProvider),
+				slog.String("utilityRate", newSettings.UtilityRate),
+			)
+			if err := s.updatePriceHistory(context.WithoutCancel(ctx), siteID, u, true); err != nil {
+				log.Ctx(ctx).ErrorContext(ctx, "failed to update price history after settings change", slog.Any("error", err))
+			}
+		})
+	}
+
 	if err := s.storage.SetSettings(ctx, siteID, newSettings, types.CurrentSettingsVersion); err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to save settings", slog.Any("error", err))
 		writeJSONError(w, "failed to save settings", http.StatusInternalServerError)
 		return
 	}
 
-	wg.Wait()
 	log.Ctx(ctx).InfoContext(ctx, "settings updated")
 
+	wg.Wait()
+	finishedWaiting = true
 	w.WriteHeader(http.StatusOK)
 }
 

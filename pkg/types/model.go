@@ -3,7 +3,7 @@ package types
 import "time"
 
 const (
-	CurrentEnergyStatsVersion  = 2
+	CurrentEnergyStatsVersion  = 3
 	CurrentPriceHistoryVersion = 2
 	CurrentWeatherVersion      = 4
 
@@ -111,6 +111,12 @@ type EnergyStats struct {
 
 	// Miscellaneous
 	Alarms []SystemAlarm `json:"alarms,omitempty"`
+}
+
+// DailyEnergyStats represents aggregated energy statistics for a day.
+type DailyEnergyStats struct {
+	TSDayStart time.Time     `json:"tsDayStartUTC"`
+	Hourly     []EnergyStats `json:"hourly"`
 }
 
 // SystemAlarm represents a single alarm condition.
