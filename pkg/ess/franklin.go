@@ -1218,14 +1218,18 @@ func (f *Franklin) getEnergyPointsForDay(ctx context.Context, day time.Time, loc
 		return nil, errors.New("unexpected array length in response")
 	}
 
-	points := make([]franklinEnergyPoint, len(res.DeviceTimeArray))
+	now := time.Now().In(loc)
+	points := make([]franklinEnergyPoint, 0, len(res.DeviceTimeArray))
 	for i, timeStr := range res.DeviceTimeArray {
 		t, err := time.ParseInLocation("2006-01-02 15:04:05", timeStr, loc)
 		if err != nil {
 			log.Ctx(ctx).WarnContext(ctx, "failed to parse time", slog.String("time", timeStr), slog.Any("error", err))
 			return nil, err
 		}
-		points[i] = franklinEnergyPoint{
+		if t.After(now) {
+			continue
+		}
+		points = append(points, franklinEnergyPoint{
 			Timestamp:             t,
 			SolarToHomeKWHRate:    res.SolarToHomeKWHRates[i],
 			SolarToGridKWHRate:    res.SolarToGridKWHRates[i],
@@ -1235,7 +1239,7 @@ func (f *Franklin) getEnergyPointsForDay(ctx context.Context, day time.Time, loc
 			BatteryToGridKWHRate:  res.BatteryToGridKWHRates[i],
 			BatteryToHomeKWHRate:  res.BatteryToHomeKWHRates[i],
 			BatterySOC:            res.SOCArray[i],
-		}
+		})
 	}
 
 	return points, nil

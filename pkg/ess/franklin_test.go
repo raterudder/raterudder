@@ -1717,4 +1717,80 @@ func TestFranklin(t *testing.T) {
 		assert.Equal(t, 1, dayCalls["2026-03-29"])
 		assert.Equal(t, 1, dayCalls["2026-03-30"])
 	})
+
+	t.Run("GetEnergyHistory Future Points", func(t *testing.T) {
+		now := time.Now().UTC()
+		pastTime := now.Add(-10 * time.Minute)
+		futureTime := now.Add(10 * time.Minute)
+
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"zoneInfo": "UTC"}})
+				return
+			}
+			if r.URL.Path == "/api-energy/power/getFhpPowerByDay" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"deviceTimeArray": []string{
+							pastTime.Format("2006-01-02 15:04:05"),
+							futureTime.Format("2006-01-02 15:04:05"),
+						},
+						"socArray":            []float64{50.0, 60.0},
+						"powerSolarHomeArray": []float64{10.0, 20.0},
+						"powerFhpHomeArray":   []float64{0.0, 0.0},
+						"powerSolarGirdArray": []float64{0.0, 0.0},
+						"powerSolarFhpArray":  []float64{0.0, 0.0},
+						"powerGirdFhpArray":   []float64{0.0, 0.0},
+						"powerGirdHomeArray":  []float64{0.0, 0.0},
+						"powerFhpGirdArray":   []float64{0.0, 0.0},
+					},
+				})
+				return
+			}
+			http.Error(w, "not found", 404)
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:      ts.Client(),
+			baseURL:     ts.URL,
+			gatewayID:   "g",
+			username:    "u",
+			md5Password: "p",
+		}
+
+		start := now.Add(-24 * time.Hour)
+		end := now.Add(24 * time.Hour)
+
+		stats, err := f.GetEnergyHistory(context.Background(), start, end)
+		require.NoError(t, err)
+
+		// We expect only the past point to be present
+		foundFuture := false
+		foundPast := false
+		for _, ds := range stats {
+			for _, h := range ds.Hourly {
+				// The hourly bucket for pastTime should exist.
+				// pastTime is now - 10m. Hourly bucket is hour start.
+				// We don't check the exact value here but rather that the future point didn't contribute.
+				// Since we only have two points, let's look at the raw points in aggregatePointsIntoHours if we could.
+				// But we can check if the SOC or Power values reflect the future point.
+				if h.MaxBatterySOC == 60.0 {
+					foundFuture = true
+				}
+				if h.MaxBatterySOC == 50.0 {
+					foundPast = true
+				}
+			}
+		}
+
+		assert.True(t, foundPast, "should have found the past data point")
+		assert.False(t, foundFuture, "should not have found the future data point")
+	})
 }

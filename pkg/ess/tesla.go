@@ -841,6 +841,7 @@ func (b *Tesla) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]t
 			return nil, err
 		}
 
+		now := time.Now().In(loc)
 		// Aggregate energy data into hourly buckets
 		for _, ts := range energyRes.TimeSeries {
 			t, err := time.Parse(time.RFC3339, ts.Timestamp)
@@ -849,6 +850,9 @@ func (b *Tesla) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]t
 				continue
 			}
 			tInLoc := t.In(loc)
+			if tInLoc.After(now) {
+				continue
+			}
 			// The data is for the preceding period, so we subtract 1 minute to shift the
 			// "end of hour" timestamp (e.g. 10:00:00) into the correct bucket (09:00:00).
 			bucketT := tInLoc.Add(-time.Minute)
@@ -887,6 +891,9 @@ func (b *Tesla) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]t
 						continue
 					}
 					tInLoc := t.In(loc)
+					if tInLoc.After(now) {
+						continue
+					}
 					hourKey := tInLoc.Truncate(time.Hour).Format(time.RFC3339)
 
 					s, exists := hourlyStats[hourKey]
