@@ -116,7 +116,6 @@ locals {
 }
 
 resource "google_cloud_run_v2_service" "raterudder" {
-  provider             = google-beta
   project              = var.project_id
   name                 = "raterudder"
   location             = "us-central1"
@@ -143,14 +142,6 @@ resource "google_cloud_run_v2_service" "raterudder" {
         }
         cpu_idle          = true
         startup_cpu_boost = false
-      }
-
-      liveness_probe {
-        timeout_seconds = 1
-        period_seconds  = 15
-        http_get {
-          path = "/healthz"
-        }
       }
 
       startup_probe {

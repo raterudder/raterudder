@@ -80,8 +80,8 @@ func (f *FirestoreProvider) Ping(ctx context.Context) error {
 		return fmt.Errorf("firestore client not initialized")
 	}
 	// Use a simple operation to check connectivity
-	_, err := f.client.Collections(ctx).Next()
-	if !errors.Is(err, iterator.Done) && err != nil {
+	_, err := f.client.Doc("health_check/non_existent").Get(ctx)
+	if err != nil && status.Code(err) != codes.NotFound {
 		return fmt.Errorf("failed to ping firestore: %w", err)
 	}
 	return nil
