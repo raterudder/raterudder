@@ -1,3 +1,6 @@
 ## 2026-03-26 - Do not use mock.Anything in tests
 **Learning:** Even when the specific argument value is not critical (like an email string that doesn't trigger specific mock behavior), using `mock.Anything` is an anti-pattern because it reduces assertion thoroughness and violates strict testing boundaries. The only exception to this rule is for `context.Context` arguments, where `mock.Anything` is acceptable since contexts are typically inconsequential to the test's outcome.
 **Action:** Always use explicit values or specific matching strategies for parameters to ensure assertion thoroughness, but you may use `mock.Anything` for `context.Context` arguments.
+## 2026-04-06 - [Mock Assertions with Time Parsed from Query Params]
+**Learning:** In HTTP handler tests (like `TestHandleHistorySavingsAll`), `time.Time` instances parsed from query parameters will be in UTC. Therefore, mock expectations matching these inputs must also have `.UTC()` applied to the expected time (e.g., `start.Add(-24 * time.Hour).UTC()`), otherwise `testify/mock` will report a mismatch even if the times represent the exact same instant, due to differing `Location` pointers.
+**Action:** Always apply `.UTC()` to expected time values when mocking database calls that originate from times parsed from HTTP requests using RFC3339 format.
