@@ -335,6 +335,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
             solarTrendRatio: h.todaySolarTrend > 0 && h.todaySolarTrend !== 1.0
                 ? h.todaySolarTrend
                 : 0,
+            avgHomeLoadKWH: Math.floor((h.avgHomeLoadKWH || 0) * 10) / 10,
         }));
     }, [rawModelingData, includeHistory]);
 

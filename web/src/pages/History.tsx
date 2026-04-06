@@ -183,7 +183,10 @@ const History: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     return {
                         ...e,
                         irradiance: w?.irradiance,
-                        improvedSolarGeneration: w?.improvedSolarGeneration
+                        improvedSolarGeneration: w?.improvedSolarGeneration,
+                        homeKWH: Math.floor((e.homeKWH || 0) * 10) / 10,
+                        gridImportKWH: Math.floor((e.gridImportKWH || 0) * 10) / 10,
+                        gridExportKWH: Math.floor((e.gridExportKWH || 0) * 10) / 10,
                     };
                 });
                 
