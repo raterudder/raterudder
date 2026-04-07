@@ -16,7 +16,7 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
         return (
             <div className="current-status-card paused">
                 <div className="status-main">
-                    <div className="status-icon">
+                    <div className="status-icon" aria-hidden="true">
                         <span className="icon">⏸️</span>
                     </div>
                     <div className="status-info">
@@ -49,7 +49,7 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
         return (
             <div className="current-status-card grid-unavailable">
                 <div className="status-main">
-                    <div className="status-icon">
+                    <div className="status-icon" aria-hidden="true">
                         <span className="icon">⚠️</span>
                     </div>
                     <div className="status-info">
@@ -85,7 +85,7 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
     return (
         <div className={`current-status-card ${state}`}>
             <div className="status-main">
-                <div className="status-icon">
+                <div className="status-icon" aria-hidden="true">
                     {state === 'charging' && <span className="icon">⚡</span>}
                     {state === 'discharging' && <span className="icon">🏠</span>}
                     {state === 'standby' && <span className="icon">⏲️</span>}
