@@ -341,7 +341,7 @@ func TestComEd(t *testing.T) {
 
 		ctx := context.Background()
 
-		m.On("GetUtilityPrices", mock.Anything, "comed", now.Truncate(time.Hour), mock.Anything).Return([]types.PriceState{
+		m.On("GetUtilityPrices", mock.Anything, "comed", now.Truncate(time.Hour), mock.AnythingOfType("time.Time")).Return([]types.PriceState{
 			{Price: types.Price{TSStart: now, DollarsPerKWH: 0.0105009}, Confirmed: false, TSUpdated: time.Now()}, // Using a stable price for test
 		}, nil).Once()
 		m.On("UpsertUtilityPrices", mock.Anything, "comed", mock.MatchedBy(func(p []types.PriceState) bool {
@@ -368,7 +368,7 @@ func TestComEd(t *testing.T) {
 				TSUpdated: time.Now(),
 			})
 		}
-		m.On("GetUtilityPrices", mock.Anything, "comed", now.Truncate(time.Hour), mock.Anything).Return(dbPrices, nil).Once()
+		m.On("GetUtilityPrices", mock.Anything, "comed", now.Truncate(time.Hour), mock.AnythingOfType("time.Time")).Return(dbPrices, nil).Once()
 
 		futures2, err := c.GetFuturePrices(ctx)
 		require.NoError(t, err)
@@ -450,7 +450,7 @@ func TestComEd(t *testing.T) {
 			})
 		}
 
-		m.On("GetUtilityPrices", mock.Anything, "comed", expectedDBStart, mock.Anything).Return(dbPrices, nil).Once()
+		m.On("GetUtilityPrices", mock.Anything, "comed", expectedDBStart, mock.AnythingOfType("time.Time")).Return(dbPrices, nil).Once()
 
 		// 3. Execution should return 11 prices (5 cached + 6 DB)
 		ctx := context.Background()
