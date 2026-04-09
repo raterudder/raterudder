@@ -93,32 +93,39 @@ func (c *baseComEdHourly) GetConfirmedPrices(ctx context.Context, start, end tim
 	ctx = log.With(ctx, log.Ctx(ctx).With(slog.Time("start", start), slog.Time("end", end)))
 
 	// Check if all needed hours are in cache
-	c.mu.Lock()
 	var cached []types.Price
-
-	// iterate hourly
 	curr := start.Truncate(time.Hour)
-	allCached := true
-	for curr.Before(end) {
-		// key is unixtimestamp of start of hour
-		if p, ok := c.historicalPrices[curr.Unix()]; ok {
-			cached = append(cached, p)
-		} else {
-			allCached = false
+	func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		// iterate hourly
+		for curr.Before(end) {
+			// key is unixtimestamp of start of hour
+			if p, ok := c.historicalPrices[curr.Unix()]; ok {
+				cached = append(cached, p)
+			} else {
+				break
+			}
+			curr = curr.Add(time.Hour)
 		}
-		curr = curr.Add(time.Hour)
-	}
-	c.mu.Unlock()
+	}()
 
-	if allCached {
+	if !curr.Before(end) {
 		log.Ctx(ctx).DebugContext(ctx, "confirmed prices found in cache")
 		return cached, nil
 	}
 
 	// Then check database
 	if c.db != nil {
-		dbPrices, err := c.db.GetUtilityPrices(ctx, "comed", start, end)
-		if err == nil && len(dbPrices) > 0 {
+		log.Ctx(ctx).DebugContext(ctx,
+			"confirmed prices not found in cache, checking database",
+			slog.Time("dbStart", curr),
+			slog.Time("dbEnd", end),
+		)
+		dbPrices, err := c.db.GetUtilityPrices(ctx, "comed", curr, end)
+		if err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to get confirmed prices from database", slog.Any("error", err))
+		} else if len(dbPrices) > 0 {
 			// verify if all confirmed
 			allConfirmed := true
 			for _, p := range dbPrices {
@@ -130,7 +137,8 @@ func (c *baseComEdHourly) GetConfirmedPrices(ctx context.Context, start, end tim
 
 			if allConfirmed {
 				log.Ctx(ctx).DebugContext(ctx, "confirmed prices found in database")
-				var prices []types.Price
+				prices := make([]types.Price, len(cached), len(cached)+len(dbPrices))
+				copy(prices, cached)
 				c.mu.Lock()
 				for _, p := range dbPrices {
 					prices = append(prices, p.Price)
@@ -361,7 +369,9 @@ func (c *baseComEdHourly) GetCurrentPrice(ctx context.Context) (types.Price, err
 	if c.db != nil {
 		start := now.Truncate(time.Hour)
 		dbPrices, err := c.db.GetUtilityPrices(ctx, "comed", start, now)
-		if err == nil && len(dbPrices) > 0 {
+		if err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to get current price from database", slog.Any("error", err))
+		} else if len(dbPrices) > 0 {
 			sort.Slice(dbPrices, func(i, j int) bool {
 				return dbPrices[i].TSStart.Before(dbPrices[j].TSStart)
 			})
@@ -436,53 +446,87 @@ func (c *baseComEdHourly) GetFuturePrices(ctx context.Context) ([]types.Price, e
 		return nil, nil
 	}
 
-	nowHour := time.Now().In(ctLocation).Truncate(time.Hour)
-
-	c.mu.Lock()
 	var futurePrices []types.Price
-	for _, p := range c.cachedFuture {
-		if !p.TSStart.Before(nowHour) {
-			futurePrices = append(futurePrices, p)
+	nowHour := time.Now().In(ctLocation).Truncate(time.Hour)
+	var latestFutureHour time.Time
+	var lastFutureFetch time.Time
+
+	func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		for _, p := range c.cachedFuture {
+			if !p.TSStart.Before(nowHour) {
+				futurePrices = append(futurePrices, p)
+				if p.TSStart.After(latestFutureHour) {
+					latestFutureHour = p.TSStart
+				}
+			}
 		}
-	}
-	lastFutureFetch := c.lastFutureFetch
-	c.mu.Unlock()
+		lastFutureFetch = c.lastFutureFetch
+	}()
 
 	// PJM updates the day-ahead prices at 1:30pm ET at which point we would
 	// have 11 hours of prices, so if we have less than 11 we are past 1:30pm ET
 	// and should fetch new prices
 	if len(futurePrices) >= 11 {
+		log.Ctx(ctx).DebugContext(
+			ctx,
+			"future prices found in cache",
+			slog.Int("len", len(futurePrices)),
+			slog.Time("latestFutureHour", latestFutureHour),
+			slog.Time("lastFutureFetch", lastFutureFetch),
+		)
 		return futurePrices, nil
 	}
 
 	if !lastFutureFetch.IsZero() && time.Since(lastFutureFetch) < 15*time.Minute {
+		log.Ctx(ctx).DebugContext(
+			ctx,
+			"future prices not stale enough to fetch",
+			slog.Int("len", len(futurePrices)),
+			slog.Time("latestFutureHour", latestFutureHour),
+			slog.Time("lastFutureFetch", lastFutureFetch),
+		)
 		return futurePrices, nil
 	}
 
 	// Check database for future prices
 	if c.db != nil {
-		now := time.Now().In(etLocation)
+		dbStart := nowHour
+		if latestFutureHour.After(nowHour) {
+			dbStart = latestFutureHour.Add(time.Hour)
+		}
 		// we want prices from now until at least tomorrow night
-		end := now.Add(48 * time.Hour)
-		dbPrices, err := c.db.GetUtilityPrices(ctx, "comed", now.Truncate(time.Hour), end)
-		if err == nil && len(dbPrices) > 0 {
-			var prices []types.Price
+		end := nowHour.Add(48 * time.Hour)
+		log.Ctx(ctx).DebugContext(
+			ctx,
+			"checking database for future prices",
+			slog.Time("dbStart", dbStart),
+			slog.Time("dbEnd", end),
+			slog.Time("nowHour", nowHour),
+			slog.Time("latestFutureHour", latestFutureHour),
+			slog.Time("lastFutureFetch", lastFutureFetch),
+		)
+		dbPrices, err := c.db.GetUtilityPrices(ctx, "comed", dbStart, end)
+		if err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to get future prices from database", slog.Any("error", err))
+		} else if len(dbPrices) > 0 {
 			for _, p := range dbPrices {
 				if !p.TSStart.Before(nowHour) {
-					prices = append(prices, p.Price)
+					futurePrices = append(futurePrices, p.Price)
 				}
 			}
 
 			// PJM updates the day-ahead prices at 1:30pm ET at which point we would
 			// have 11 hours of prices, so if we have less than 11 we are past 1:30pm ET
 			// and should fetch new prices
-			if len(prices) >= 11 {
+			if len(futurePrices) >= 11 {
 				log.Ctx(ctx).DebugContext(ctx, "future prices found in database")
 				c.mu.Lock()
-				c.cachedFuture = prices
+				c.cachedFuture = futurePrices
 				c.lastFutureFetch = time.Now()
 				c.mu.Unlock()
-				return prices, nil
+				return futurePrices, nil
 			}
 		}
 	}

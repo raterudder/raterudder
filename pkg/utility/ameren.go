@@ -71,13 +71,38 @@ func (c *baseAmerenSmart) GetCurrentPrice(ctx context.Context) (types.Price, err
 // GetConfirmedPrices gets the confirmed prices for Ameren PSP rate plan which
 // contains the day ahead hourly prices for the given date range.
 func (c *baseAmerenSmart) GetConfirmedPrices(ctx context.Context, start, end time.Time) ([]types.Price, error) {
-	var confirmed []types.Price
+	var cached []types.Price
+	curr := start.In(etLocation).Truncate(time.Hour)
+	func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		for curr.Before(end) {
+			currDate := truncateDay(curr)
+			dateStr := currDate.Format("20060102")
+			if prices, ok := c.cachedPrices[dateStr]; ok {
+				for _, p := range prices {
+					if !p.TSStart.Before(curr) && p.TSStart.Before(end) {
+						cached = append(cached, p)
+					}
+				}
+				curr = currDate.AddDate(0, 0, 1)
+			} else {
+				break
+			}
+		}
+	}()
+
+	if !curr.Before(end) {
+		return cached, nil
+	}
+
+	// assume we need at least 24 more hours
+	confirmed := make([]types.Price, len(cached), len(cached)+24)
+	copy(confirmed, cached)
 
 	today := truncateDay(time.Now().In(etLocation))
-	// Fetch for each day in the range
-	start = start.In(etLocation)
-	end = end.In(etLocation)
-	for d := start; !d.After(end) && !d.After(today); d = d.AddDate(0, 0, 1) {
+	// Fetch for each day in the remaining range
+	for d := truncateDay(curr); !d.After(end) && !d.After(today); d = d.AddDate(0, 0, 1) {
 		prices, err := c.getPricesForDate(ctx, d)
 		if err != nil {
 			log.Ctx(ctx).WarnContext(ctx, "failed to fetch ameren prices for date", slog.Time("date", d), slog.Any("error", err))
@@ -87,7 +112,7 @@ func (c *baseAmerenSmart) GetConfirmedPrices(ctx context.Context, start, end tim
 		for _, p := range prices {
 			// if the price starts before the start of the range it should be included
 			// because at least some part of the price is within the range
-			if !p.TSStart.Before(start) && p.TSStart.Before(end) {
+			if !p.TSStart.Before(curr) && p.TSStart.Before(end) {
 				confirmed = append(confirmed, p)
 			}
 		}
@@ -138,12 +163,17 @@ func (c *baseAmerenSmart) getPricesForDate(ctx context.Context, date time.Time) 
 
 	// Then check database
 	if c.db != nil {
+		log.Ctx(ctx).DebugContext(ctx,
+			"ameren prices not found in cache, checking database",
+			slog.String("date", dateStr),
+		)
 		start := truncateDay(date)
 		end := start.AddDate(0, 0, 1)
-		dbPrices, err := c.db.GetUtilityPrices(ctx, "ameren", start, end)
 		expectedHours := int(end.Sub(start).Hours())
-		if err == nil && len(dbPrices) >= expectedHours {
-			log.Ctx(ctx).DebugContext(ctx, "ameren prices found in database", slog.String("date", dateStr))
+		dbPrices, err := c.db.GetUtilityPrices(ctx, "ameren", start, end)
+		if err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to get ameren prices from database", slog.Any("error", err))
+		} else if len(dbPrices) >= expectedHours {
 			var prices []types.Price
 			for _, p := range dbPrices {
 				prices = append(prices, p.Price)

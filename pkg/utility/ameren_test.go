@@ -239,7 +239,7 @@ AMIL.BGS6,Loadzone,LMP,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,
 		m.AssertExpectations(t)
 	})
 
-	t.Run("DB_Partial_Fallback", func(t *testing.T) {
+	t.Run("DB Partial Fallback", func(t *testing.T) {
 		m := &storagemock.MockDatabase{}
 		api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/csv")
@@ -277,6 +277,55 @@ AMIL.BGS6,Loadzone,LMP,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,
 		require.NoError(t, err)
 		// Should have matched price from API (10 -> 0.0105009) not from partial DB (0.99)
 		assert.InDelta(t, 0.0105009, price.DollarsPerKWH, 0.0000001)
+		m.AssertExpectations(t)
+	})
+
+	t.Run("GetConfirmedPrices Partial Memory Cache", func(t *testing.T) {
+		m := &storagemock.MockDatabase{}
+		api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/csv")
+			_, _ = w.Write([]byte(`Node,Type,Value,HE 1,HE 2,HE 3,HE 4,HE 5,HE 6,HE 7,HE 8,HE 9,HE 10,HE 11,HE 12,HE 13,HE 14,HE 15,HE 16,HE 17,HE 18,HE 19,HE 20,HE 21,HE 22,HE 23,HE 24
+AMIL.BGS6,Loadzone,LMP,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10
+`))
+		}))
+		defer api.Close()
+
+		c := configuredAmerenSmart(m)
+		c.misoAPIURL = api.URL
+		ctx := context.Background()
+
+		start := time.Date(2024, time.January, 15, 0, 0, 0, 0, etLocation)
+		end := start.Add(27 * time.Hour) // asking for 24 hours of first day + 3 hours of next day
+
+		dateStr := start.Format("20060102")
+
+		var cached []types.Price
+		for i := 0; i < 24; i++ {
+			cached = append(cached, types.Price{TSStart: start.Add(time.Duration(i) * time.Hour), TSEnd: start.Add(time.Duration(i+1) * time.Hour), DollarsPerKWH: 0.1})
+		}
+
+		// Fill cache to contain the whole first day
+		c.mu.Lock()
+		c.cachedPrices[dateStr] = cached
+		c.mu.Unlock()
+
+		// DB query should be for the SECOND day (the remainder)
+		expectedCurr := start.Add(24 * time.Hour)
+		expectedDBStart := truncateDay(expectedCurr)
+		expectedDBEnd := expectedDBStart.AddDate(0, 0, 1)
+
+		m.On("GetUtilityPrices", mock.Anything, "ameren", expectedDBStart, expectedDBEnd).Return([]types.PriceState{}, nil).Once()
+		m.On("UpsertUtilityPrices", mock.Anything, "ameren", mock.MatchedBy(func(p []types.PriceState) bool {
+			return len(p) >= 23
+		}), 0).Return(nil).Once()
+
+		prices, err := c.GetConfirmedPrices(ctx, start, end)
+		require.NoError(t, err)
+		assert.Len(t, prices, 27)
+		assert.Equal(t, 0.1, prices[0].DollarsPerKWH)                     // from cache
+		assert.Equal(t, 0.1, prices[23].DollarsPerKWH)                    // from cache
+		assert.InDelta(t, 0.0105009, prices[24].DollarsPerKWH, 0.0000001) // from API fallback
+
 		m.AssertExpectations(t)
 	})
 }

@@ -18,7 +18,7 @@ import (
 )
 
 func TestComEd(t *testing.T) {
-	t.Run("GetCurrentPrice_Parsing", func(t *testing.T) {
+	t.Run("GetCurrentPrice Parsing", func(t *testing.T) {
 		// Mock server returning a sample response
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Return JSON mimicking ComEd 5-min feed
@@ -78,7 +78,7 @@ func TestComEd(t *testing.T) {
 		assert.Equal(t, 1, requests, "expected cached response")
 	})
 
-	t.Run("GetFuturePrices_NoPJM", func(t *testing.T) {
+	t.Run("GetFuturePrices No PJM", func(t *testing.T) {
 		c := &baseComEdHourly{
 			apiURL:           "http://example.com", // irrelevant
 			client:           &http.Client{},
@@ -90,7 +90,7 @@ func TestComEd(t *testing.T) {
 		assert.Nil(t, prices)
 	})
 
-	t.Run("GetFuturePrices_PJM_Mock", func(t *testing.T) {
+	t.Run("GetFuturePrices PJM Mock", func(t *testing.T) {
 		// PJM prices are filtered to be after the current hour
 		now := time.Now().In(etLocation).Truncate(time.Hour)
 		time1 := now.Add(time.Hour)
@@ -141,7 +141,7 @@ func TestComEd(t *testing.T) {
 		assert.Equal(t, time1.Add(time.Hour).Unix(), prices[0].TSEnd.Unix())
 	})
 
-	t.Run("Integration_RealAPI", func(t *testing.T) {
+	t.Run("Integration Real API", func(t *testing.T) {
 		c := &baseComEdHourly{
 			apiURL:           "https://hourlypricing.comed.com/api?",
 			client:           &http.Client{Timeout: 10 * time.Second},
@@ -288,7 +288,7 @@ func TestComEd(t *testing.T) {
 		c.historicalPrices = make(map[int64]types.Price)
 		m.On("GetUtilityPrices", mock.Anything, "comed", start, end).Return([]types.PriceState{
 			{Price: prices[0], Confirmed: true, TSUpdated: time.Now()},
-		}, nil).Once()
+		}, nil)
 
 		prices2, err := c.GetConfirmedPrices(ctx, start, end)
 		require.NoError(t, err)
@@ -302,6 +302,25 @@ func TestComEd(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, prices3, 1)
 		assert.Equal(t, prices[0].DollarsPerKWH, prices3[0].DollarsPerKWH)
+		m.AssertExpectations(t)
+
+		// 4. Test GetConfirmedPrices - Partial Memory Cache
+		// 1 hour in cache, fetch 2 hours
+		end2 := start.Add(2 * time.Hour)
+		c.historicalPrices = map[int64]types.Price{
+			start.Unix(): prices[0],
+		}
+
+		// DB mock should start from `start.Add(time.Hour)`
+		m.On("GetUtilityPrices", mock.Anything, "comed", start.Add(time.Hour), end2).Return([]types.PriceState{
+			{Price: types.Price{TSStart: start.Add(time.Hour), DollarsPerKWH: 0.05}, Confirmed: true, TSUpdated: time.Now()},
+		}, nil)
+
+		prices4, err := c.GetConfirmedPrices(ctx, start, end2)
+		require.NoError(t, err)
+		assert.Len(t, prices4, 2)
+		assert.Equal(t, prices[0].DollarsPerKWH, prices4[0].DollarsPerKWH)
+		assert.Equal(t, 0.05, prices4[1].DollarsPerKWH)
 		m.AssertExpectations(t)
 	})
 
@@ -322,11 +341,7 @@ func TestComEd(t *testing.T) {
 
 		ctx := context.Background()
 
-		m.On("GetUtilityPrices", mock.Anything, "comed", mock.MatchedBy(func(t time.Time) bool {
-			return true
-		}), mock.MatchedBy(func(t time.Time) bool {
-			return true
-		})).Return([]types.PriceState{
+		m.On("GetUtilityPrices", mock.Anything, "comed", now.Truncate(time.Hour), mock.Anything).Return([]types.PriceState{
 			{Price: types.Price{TSStart: now, DollarsPerKWH: 0.0105009}, Confirmed: false, TSUpdated: time.Now()}, // Using a stable price for test
 		}, nil).Once()
 		m.On("UpsertUtilityPrices", mock.Anything, "comed", mock.MatchedBy(func(p []types.PriceState) bool {
@@ -353,11 +368,7 @@ func TestComEd(t *testing.T) {
 				TSUpdated: time.Now(),
 			})
 		}
-		m.On("GetUtilityPrices", mock.Anything, "comed", mock.MatchedBy(func(t time.Time) bool {
-			return true
-		}), mock.MatchedBy(func(t time.Time) bool {
-			return true
-		})).Return(dbPrices, nil).Once()
+		m.On("GetUtilityPrices", mock.Anything, "comed", now.Truncate(time.Hour), mock.Anything).Return(dbPrices, nil).Once()
 
 		futures2, err := c.GetFuturePrices(ctx)
 		require.NoError(t, err)
@@ -366,7 +377,7 @@ func TestComEd(t *testing.T) {
 		m.AssertExpectations(t)
 	})
 
-	t.Run("GetFuturePrices_MemoryCaching", func(t *testing.T) {
+	t.Run("GetFuturePrices Memory Caching", func(t *testing.T) {
 		m := &storagemock.MockDatabase{}
 		c := configuredComEdHourly(m)
 		c.pjmAPIKey = "dummy"
@@ -394,5 +405,68 @@ func TestComEd(t *testing.T) {
 
 		// Assert no DB calls were made
 		m.AssertNotCalled(t, "GetUtilityPrices", mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"))
+	})
+
+	t.Run("GetFuturePrices Hybrid Caching", func(t *testing.T) {
+		m := &storagemock.MockDatabase{}
+		c := configuredComEdHourly(m)
+		c.pjmAPIKey = "dummy"
+
+		// Use a fixed time for stability
+		loc := ctLocation
+		now := time.Now().In(loc).Truncate(time.Hour)
+		nowHour := now
+
+		// 1. Setup memory cache with 5 prices starting from now
+		var cachedPrices []types.Price
+		for i := 0; i < 5; i++ {
+			pStart := nowHour.Add(time.Duration(i) * time.Hour)
+			cachedPrices = append(cachedPrices, types.Price{
+				TSStart:       pStart,
+				TSEnd:         pStart.Add(time.Hour),
+				DollarsPerKWH: 0.10,
+			})
+		}
+		c.mu.Lock()
+		c.cachedFuture = cachedPrices
+		c.mu.Unlock()
+
+		// 2. Expect DB query to start AFTER the cached prices (at the 6th hour)
+		// latestFutureHour is nowHour + 4h, so dbStart is nowHour + 5h
+		expectedDBStart := nowHour.Add(5 * time.Hour)
+
+		// Setup DB with 6 more prices
+		var dbPrices []types.PriceState
+		for i := 0; i < 6; i++ {
+			pStart := expectedDBStart.Add(time.Duration(i) * time.Hour)
+			dbPrices = append(dbPrices, types.PriceState{
+				Price: types.Price{
+					TSStart:       pStart,
+					TSEnd:         pStart.Add(time.Hour),
+					DollarsPerKWH: 0.20,
+				},
+				Confirmed: false,
+				TSUpdated: time.Now(),
+			})
+		}
+
+		m.On("GetUtilityPrices", mock.Anything, "comed", expectedDBStart, mock.Anything).Return(dbPrices, nil).Once()
+
+		// 3. Execution should return 11 prices (5 cached + 6 DB)
+		ctx := context.Background()
+		futures, err := c.GetFuturePrices(ctx)
+		require.NoError(t, err)
+		require.Len(t, futures, 11)
+
+		// First 5 should be 0.10 (cached)
+		for i := 0; i < 5; i++ {
+			assert.Equal(t, 0.10, futures[i].DollarsPerKWH, "expected cached price for index %d", i)
+		}
+		// Next 6 should be 0.20 (DB)
+		for i := 5; i < 11; i++ {
+			assert.Equal(t, 0.20, futures[i].DollarsPerKWH, "expected DB price for index %d", i)
+		}
+
+		m.AssertExpectations(t)
 	})
 }
