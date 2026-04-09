@@ -153,9 +153,10 @@ type touSimplifiedPeriod struct {
 	Months     []time.Month
 
 	// HoursAndDays is a list of hours and days that the period applies to.
-	// If this is set, then all of the above hours, days, etc fields are ignored.
 	HoursAndDays []touSimplifiedHoursAndDays
 
+	// OtherDollarsPerKWH is the dollars per kwh for hours and days that are not
+	// in HoursAndDays
 	OtherDollarsPerKWH                 float64
 	OtherGenerationCreditDollarsPerKWH float64
 	OtherDescription                   string
@@ -510,6 +511,133 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 									OtherGenerationCreditDollarsPerKWH: 0.02375,
 									OtherDescription:                   "November - March Off-Peak",
 									SeparateGenerationCredit:           true,
+								},
+							},
+						),
+					),
+				},
+			},
+		},
+		// source: https://www.ladwp.com/account/customer-service/electric-rates/residential-rates
+		{
+			ID:   "ladwp",
+			Name: "Los Angeles Department of Water & Power",
+			Rates: []types.UtilityRateInfo{
+				{
+					ID:   "ladwp_r1a",
+					Name: "Standard Residential Rate",
+					GetFees: getStaticGetFees(
+						buildPeriods(
+							"America/Los_Angeles",
+							[]touSimplifiedPeriod{
+								{
+									Year:               2026,
+									MonthStart:         time.January,
+									MonthEnd:           time.March,
+									OtherDollarsPerKWH: 0.24771,
+									OtherDescription:   "January - March Total Consumption Charge Tier 1",
+								},
+								{
+									Year:               2026,
+									MonthStart:         time.April,
+									MonthEnd:           time.May,
+									OtherDollarsPerKWH: 0.24362,
+									OtherDescription:   "April - May Total Consumption Charge Tier 1",
+								},
+								{
+									Year:               2026,
+									Months:             []time.Month{time.June},
+									OtherDollarsPerKWH: 0.24362,
+									OtherDescription:   "June Total Consumption Charge Tier 1",
+								},
+								// TODO: get July onward rates once they're posted
+							},
+						),
+					),
+				},
+				{
+					ID:   "ladwp_r1b",
+					Name: "Time-of-Use (TOU) Residential",
+					GetFees: getStaticGetFees(
+						buildPeriods(
+							"America/Los_Angeles",
+							[]touSimplifiedPeriod{
+								{
+									Year:       2026,
+									MonthStart: time.January,
+									MonthEnd:   time.March,
+									HoursAndDays: []touSimplifiedHoursAndDays{
+										{
+											Hours: []types.UtilityHourPeriod{
+												{HourStart: 13, HourEnd: 17},
+											},
+											Weekday:       true,
+											DollarsPerKWH: 0.27647,
+											Description:   "January - March Total Consumption Charge High Peak",
+										},
+										{
+											Hours: []types.UtilityHourPeriod{
+												{HourStart: 10, HourEnd: 13},
+												{HourStart: 17, HourEnd: 20},
+											},
+											Weekday:       true,
+											DollarsPerKWH: 0.27647,
+											Description:   "January - March Total Consumption Charge Low Peak",
+										},
+									},
+									OtherDollarsPerKWH: 0.25293,
+									OtherDescription:   "January - March Total Consumption Charge Base",
+								},
+								{
+									Year:       2026,
+									MonthStart: time.April,
+									MonthEnd:   time.May,
+									HoursAndDays: []touSimplifiedHoursAndDays{
+										{
+											Hours: []types.UtilityHourPeriod{
+												{HourStart: 13, HourEnd: 17},
+											},
+											Weekday:       true,
+											DollarsPerKWH: 0.27238,
+											Description:   "April - May Total Consumption Charge High Peak",
+										},
+										{
+											Hours: []types.UtilityHourPeriod{
+												{HourStart: 10, HourEnd: 13},
+												{HourStart: 17, HourEnd: 20},
+											},
+											Weekday:       true,
+											DollarsPerKWH: 0.27238,
+											Description:   "April - May Total Consumption Charge Low Peak",
+										},
+									},
+									OtherDollarsPerKWH: 0.24884,
+									OtherDescription:   "April - May Total Consumption Charge Base",
+								},
+								{
+									Year:   2026,
+									Months: []time.Month{time.June},
+									HoursAndDays: []touSimplifiedHoursAndDays{
+										{
+											Hours: []types.UtilityHourPeriod{
+												{HourStart: 13, HourEnd: 17},
+											},
+											Weekday:       true,
+											DollarsPerKWH: 0.33078,
+											Description:   "June Total Consumption Charge High Peak",
+										},
+										{
+											Hours: []types.UtilityHourPeriod{
+												{HourStart: 10, HourEnd: 13},
+												{HourStart: 17, HourEnd: 20},
+											},
+											Weekday:       true,
+											DollarsPerKWH: 0.27238,
+											Description:   "June Total Consumption Charge Low Peak",
+										},
+									},
+									OtherDollarsPerKWH: 0.24494,
+									OtherDescription:   "June Total Consumption Charge Base",
 								},
 							},
 						),

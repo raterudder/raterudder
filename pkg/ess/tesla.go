@@ -143,7 +143,7 @@ func (b *baseTesla) info(ctx context.Context) types.ESSProviderInfo {
 
 	return types.ESSProviderInfo{
 		ID:   "tesla",
-		Name: "Tesla (Beta)",
+		Name: "Tesla",
 		OAuthURLs: map[string]string{
 			"default": baseOAuthURL,
 		},

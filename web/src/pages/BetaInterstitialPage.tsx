@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLocation } from 'wouter';
 import { Select } from '@base-ui/react/select';
-import { submitInterest } from '../api';
+import { submitInterest, fetchUtilities, fetchESSList, type UtilityProviderInfo, type ESSProviderInfo } from '../api';
 import './LoginPage.css';
 
 const BetaInterstitialPage: React.FC = () => {
@@ -19,6 +19,28 @@ const BetaInterstitialPage: React.FC = () => {
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isSubmitted, setIsSubmitted] = useState(false);
     const [error, setError] = useState<string | null>(null);
+
+    const [utilitiesList, setUtilitiesList] = useState<UtilityProviderInfo[]>([]);
+    const [essList, setEssList] = useState<ESSProviderInfo[]>([]);
+    const [isLoadingData, setIsLoadingData] = useState(true);
+
+    useEffect(() => {
+        const load = async () => {
+            try {
+                const [utils, ess] = await Promise.all([
+                    fetchUtilities(),
+                    fetchESSList()
+                ]);
+                setUtilitiesList(utils);
+                setEssList(ess);
+            } catch (err) {
+                console.error("Failed to load options", err);
+            } finally {
+                setIsLoadingData(false);
+            }
+        };
+        load();
+    }, []);
 
     const isOther = (utility === 'other' || battery === 'other');
 
@@ -65,9 +87,9 @@ const BetaInterstitialPage: React.FC = () => {
                                 value={utility}
                                 onValueChange={(value) => setUtility(value as string)}
                             >
-                                <Select.Trigger aria-labelledby="utility-label" className="select-trigger">
-                                    <Select.Value placeholder="Select your utility...">
-                                        {utility === 'ameren' ? 'Ameren' : utility === 'comed' ? 'ComEd' : utility === 'other' ? 'Other' : 'Select your utility...'}
+                                <Select.Trigger aria-labelledby="utility-label" className="select-trigger" disabled={isLoadingData}>
+                                    <Select.Value placeholder={isLoadingData ? "Loading..." : "Select your utility..."}>
+                                        {utility === 'other' ? 'Other' : utilitiesList.find(u => u.id === utility)?.name || (isLoadingData ? 'Loading...' : 'Select your utility...')}
                                     </Select.Value>
                                     <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
                                         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -78,12 +100,11 @@ const BetaInterstitialPage: React.FC = () => {
                                 <Select.Portal>
                                     <Select.Positioner style={{ zIndex: 1000, width: 'var(--anchor-width)' }}>
                                         <Select.Popup className="select-popup">
-                                            <Select.Item value="ameren" className="select-item">
-                                                <Select.ItemText>Ameren</Select.ItemText>
-                                            </Select.Item>
-                                            <Select.Item value="comed" className="select-item">
-                                                <Select.ItemText>ComEd</Select.ItemText>
-                                            </Select.Item>
+                                            {utilitiesList.filter(u => !u.hidden).map(u => (
+                                                <Select.Item key={u.id} value={u.id} className="select-item">
+                                                    <Select.ItemText>{u.name}</Select.ItemText>
+                                                </Select.Item>
+                                            ))}
                                             <Select.Item value="other" className="select-item">
                                                 <Select.ItemText>Other</Select.ItemText>
                                             </Select.Item>
@@ -99,9 +120,9 @@ const BetaInterstitialPage: React.FC = () => {
                                 value={battery}
                                 onValueChange={(value) => setBattery(value as string)}
                             >
-                                <Select.Trigger aria-labelledby="battery-label" className="select-trigger">
-                                    <Select.Value placeholder="Select your battery...">
-                                        {battery === 'franklin' ? 'FranklinWH' : battery === 'tesla' ? 'Tesla' : battery === 'other' ? 'Other' : 'Select your battery...'}
+                                <Select.Trigger aria-labelledby="battery-label" className="select-trigger" disabled={isLoadingData}>
+                                    <Select.Value placeholder={isLoadingData ? "Loading..." : "Select your battery..."}>
+                                        {battery === 'other' ? 'Other' : essList.find(e => e.id === battery)?.name || (isLoadingData ? 'Loading...' : 'Select your battery...')}
                                     </Select.Value>
                                     <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
                                         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -112,12 +133,11 @@ const BetaInterstitialPage: React.FC = () => {
                                 <Select.Portal>
                                     <Select.Positioner style={{ zIndex: 1000, width: 'var(--anchor-width)' }}>
                                         <Select.Popup className="select-popup">
-                                            <Select.Item value="franklin" className="select-item">
-                                                <Select.ItemText>FranklinWH</Select.ItemText>
-                                            </Select.Item>
-                                            <Select.Item value="tesla" className="select-item">
-                                                <Select.ItemText>Tesla</Select.ItemText>
-                                            </Select.Item>
+                                            {essList.filter(e => !e.hidden).map(e => (
+                                                <Select.Item key={e.id} value={e.id} className="select-item">
+                                                    <Select.ItemText>{e.name}</Select.ItemText>
+                                                </Select.Item>
+                                            ))}
                                             <Select.Item value="other" className="select-item">
                                                 <Select.ItemText>Other</Select.ItemText>
                                             </Select.Item>

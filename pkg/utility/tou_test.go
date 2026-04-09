@@ -157,4 +157,64 @@ func TestTOUUtility(t *testing.T) {
 		assert.Equal(t, 12, p.TSStart.Hour())
 		assert.Equal(t, time.UTC, p.TSStart.Location())
 	})
+
+	t.Run("LADWP", func(t *testing.T) {
+		la, err := time.LoadLocation("America/Los_Angeles")
+		require.NoError(t, err)
+
+		u := &genericTOU{}
+
+		// Test R-1A
+		err = u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "ladwp",
+			UtilityRate:     "ladwp_r1a",
+		})
+		require.NoError(t, err)
+
+		p, err := u.priceForTime(time.Date(2026, time.February, 15, 12, 0, 0, 0, la))
+		require.NoError(t, err)
+		assert.Equal(t, 0.24771, p.DollarsPerKWH)
+
+		p, err = u.priceForTime(time.Date(2026, time.April, 15, 12, 0, 0, 0, la))
+		require.NoError(t, err)
+		assert.Equal(t, 0.24362, p.DollarsPerKWH)
+
+		// Test R-1B
+		err = u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "ladwp",
+			UtilityRate:     "ladwp_r1b",
+		})
+		require.NoError(t, err)
+
+		// June 1, 2026 is a Monday
+		// June High Peak (13:00 - 17:00 Weekdays)
+		p, err = u.priceForTime(time.Date(2026, time.June, 1, 14, 0, 0, 0, la))
+		require.NoError(t, err)
+		assert.Equal(t, 0.33078, p.DollarsPerKWH)
+
+		// June Low Peak (10:00 - 13:00 Weekdays)
+		p, err = u.priceForTime(time.Date(2026, time.June, 1, 11, 0, 0, 0, la))
+		require.NoError(t, err)
+		assert.Equal(t, 0.27238, p.DollarsPerKWH)
+
+		// June Low Peak (17:00 - 20:00 Weekdays)
+		p, err = u.priceForTime(time.Date(2026, time.June, 1, 18, 0, 0, 0, la))
+		require.NoError(t, err)
+		assert.Equal(t, 0.27238, p.DollarsPerKWH)
+
+		// June Base (20:00 - 10:00 Weekdays)
+		p, err = u.priceForTime(time.Date(2026, time.June, 1, 21, 0, 0, 0, la))
+		require.NoError(t, err)
+		assert.Equal(t, 0.24494, p.DollarsPerKWH)
+
+		// June Base (Weekends) - June 6, 2026 is Saturday
+		p, err = u.priceForTime(time.Date(2026, time.June, 6, 14, 0, 0, 0, la))
+		require.NoError(t, err)
+		assert.Equal(t, 0.24494, p.DollarsPerKWH)
+
+		// Jan-Mar Peak - February 2, 2026 is Monday
+		p, err = u.priceForTime(time.Date(2026, time.February, 2, 14, 0, 0, 0, la))
+		require.NoError(t, err)
+		assert.Equal(t, 0.27647, p.DollarsPerKWH)
+	})
 }

@@ -150,7 +150,7 @@ func TestHandleListFeedback(t *testing.T) {
 
 		mockDBWithAuth.On("ListFeedback", mock.Anything, 50, "").Return([]types.Feedback{}, nil).Once()
 
-		reqAuth, _ := http.NewRequest("GET", "/api/list/feedback", nil)
+		reqAuth := httptest.NewRequest("GET", "/api/list/feedback", nil)
 		reqAuth.AddCookie(&http.Cookie{Name: authTokenCookie, Value: validToken})
 
 		rrAuth := httptest.NewRecorder()
@@ -189,7 +189,7 @@ func TestHandleListFeedback(t *testing.T) {
 
 		mockDBWithAuth.On("ListFeedback", mock.Anything, 20, "fb5").Return([]types.Feedback{}, nil).Once()
 
-		reqAuth, _ := http.NewRequest("GET", "/api/list/feedback?limit=20&lastFeedbackID=fb5", nil)
+		reqAuth := httptest.NewRequest("GET", "/api/list/feedback?limit=20&lastFeedbackID=fb5", nil)
 		reqAuth.AddCookie(&http.Cookie{Name: authTokenCookie, Value: validToken})
 
 		rrAuth := httptest.NewRecorder()

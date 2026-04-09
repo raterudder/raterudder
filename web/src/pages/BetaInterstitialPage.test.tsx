@@ -1,9 +1,9 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import BetaInterstitialPage from './BetaInterstitialPage';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useLocation } from 'wouter';
-import { submitInterest } from '../api';
+import { submitInterest, fetchUtilities, fetchESSList } from '../api';
 
 // Mock wouter
 vi.mock('wouter', () => ({
@@ -13,12 +13,29 @@ vi.mock('wouter', () => ({
 // Mock api
 vi.mock('../api', () => ({
     submitInterest: vi.fn(),
+    fetchUtilities: vi.fn(),
+    fetchESSList: vi.fn(),
 }));
 
 describe('BetaInterstitialPage Component', () => {
-    it('renders the initial state', () => {
+    beforeEach(() => {
+        vi.mocked(fetchUtilities).mockResolvedValue([
+            { id: 'ameren', name: 'Ameren' },
+            { id: 'comed', name: 'ComEd' }
+        ] as any);
+        vi.mocked(fetchESSList).mockResolvedValue([
+            { id: 'franklin', name: 'FranklinWH' },
+            { id: 'tesla', name: 'Tesla' }
+        ] as any);
+    });
+
+    it('renders the initial state', async () => {
         (useLocation as ReturnType<typeof vi.fn>).mockReturnValue(['/welcome', vi.fn()]);
         render(<BetaInterstitialPage />);
+
+        await waitFor(() => {
+            expect(screen.getByText('Utility Provider')).toBeInTheDocument();
+        });
 
         expect(screen.getByText('RateRudder Beta')).toBeInTheDocument();
         expect(screen.getByText('Utility Provider')).toBeInTheDocument();
@@ -34,6 +51,11 @@ describe('BetaInterstitialPage Component', () => {
         (useLocation as ReturnType<typeof vi.fn>).mockReturnValue(['/welcome', vi.fn()]);
         vi.mocked(submitInterest).mockResolvedValue(undefined);
         render(<BetaInterstitialPage />);
+
+        // Wait to load lists
+        await waitFor(() => {
+            expect(screen.getByRole('combobox', { name: /Utility Provider/i })).not.toBeDisabled();
+        });
 
         const utilitySelect = screen.getByRole('combobox', { name: /Utility Provider/i });
         await user.click(utilitySelect);
@@ -72,6 +94,10 @@ describe('BetaInterstitialPage Component', () => {
         (useLocation as ReturnType<typeof vi.fn>).mockReturnValue(['/welcome', vi.fn()]);
         render(<BetaInterstitialPage />);
 
+        await waitFor(() => {
+            expect(screen.getByRole('combobox', { name: /Utility Provider/i })).not.toBeDisabled();
+        });
+
         const utilitySelect = screen.getByRole('combobox', { name: /Utility Provider/i });
         await user.click(utilitySelect);
         const amerenOption = await screen.findByRole('option', { name: 'Ameren' });
@@ -93,6 +119,10 @@ describe('BetaInterstitialPage Component', () => {
         const navigateMock = vi.fn();
         (useLocation as ReturnType<typeof vi.fn>).mockReturnValue(['/welcome', navigateMock]);
         render(<BetaInterstitialPage />);
+
+        await waitFor(() => {
+            expect(screen.getByRole('combobox', { name: /Utility Provider/i })).not.toBeDisabled();
+        });
 
         const utilitySelect = screen.getByRole('combobox', { name: /Utility Provider/i });
         await user.click(utilitySelect);
