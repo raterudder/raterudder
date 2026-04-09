@@ -50,7 +50,7 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 	end := targetDate.AddDate(0, 0, 1)
 	// we have to go back x+1 days because in UTC time, which we parsed from the user
 	// input might be actually a day ahead of the user's local time
-	start := targetDate.AddDate(0, 0, -4)
+	start := targetDate.AddDate(0, 0, -forecastHistoryDays-1)
 
 	// Fetch Energy Stats
 	dailyStats, err := s.storage.GetEnergyHistory(ctx, siteID, start, end)
@@ -65,7 +65,7 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 		if day.TSDayStart.Format("2006-01-02") == dateStr {
 			// go to the start of the next day because it's exclusive
 			end = day.TSDayStart.AddDate(0, 0, 1)
-			start = day.TSDayStart.AddDate(0, 0, -3)
+			start = day.TSDayStart.AddDate(0, 0, -forecastHistoryDays)
 			break
 		}
 	}

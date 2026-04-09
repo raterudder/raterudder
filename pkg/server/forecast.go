@@ -15,6 +15,8 @@ import (
 	"github.com/raterudder/raterudder/pkg/types"
 )
 
+const forecastHistoryDays = 5
+
 // EnergyHistoryRes represents a simplified historical energy stat returned in the forecast.
 type EnergyHistoryRes struct {
 	TSHourStart   time.Time `json:"tsHourStart"`
@@ -109,9 +111,9 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		// Continue with empty future prices
 	}
 
-	// 5. Get History (Last 3 days from Storage) - no backfill
+	// 5. Get History (Last x days from Storage) - no backfill
 	now := status.Timestamp.Truncate(time.Hour)
-	historyStart := now.AddDate(0, 0, -3).Truncate(time.Hour)
+	historyStart := now.AddDate(0, 0, -forecastHistoryDays).Truncate(time.Hour)
 	energyHistoryDaily, err := s.storage.GetEnergyHistory(ctx, siteID, historyStart, now)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get energy history from storage", slog.Any("error", err))

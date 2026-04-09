@@ -465,7 +465,7 @@ func TestHandleHistoryEnergy(t *testing.T) {
 			},
 		}, types.CurrentSettingsVersion, nil).Once()
 
-		startQuery := d.AddDate(0, 0, -4)
+		startQuery := d.AddDate(0, 0, -forecastHistoryDays-1)
 		endQuery := d.AddDate(0, 0, 1)
 
 		// Energy History
@@ -473,7 +473,7 @@ func TestHandleHistoryEnergy(t *testing.T) {
 			{TSDayStart: d, Hourly: []types.EnergyStats{{TSHourStart: d, SolarKWH: 5.2, MaxBatterySOC: 85.0}}},
 		}, nil).Once()
 
-		actualStart := d.AddDate(0, 0, -3)
+		actualStart := d.AddDate(0, 0, -forecastHistoryDays)
 		actualEnd := d.AddDate(0, 0, 1)
 
 		// Weather
