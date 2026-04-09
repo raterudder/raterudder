@@ -179,7 +179,6 @@ const LandingPage: React.FC = () => {
                         <div className="chart-card">
                             <div className="chart-header">
                                 <h3>Solar Generation</h3>
-                                <div className="chart-stat">Peak: 7.0kW</div>
                             </div>
                             <div className="chart-wrapper">
                                 <ResponsiveContainer width="100%" height="100%">
@@ -202,7 +201,6 @@ const LandingPage: React.FC = () => {
                         <div className="chart-card">
                             <div className="chart-header">
                                 <h3>Home Usage</h3>
-                                <div className="chart-stat">Avg: 1.2kW</div>
                             </div>
                             <div className="chart-wrapper">
                                 <ResponsiveContainer width="100%" height="100%">
@@ -225,7 +223,6 @@ const LandingPage: React.FC = () => {
                         <div className="chart-card full-width">
                             <div className="chart-header">
                                 <h3>Battery Capacity</h3>
-                                <div className="chart-stat">SoC: 84%</div>
                             </div>
                             <div className="chart-wrapper">
                                 <ResponsiveContainer width="100%" height="100%">

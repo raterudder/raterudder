@@ -3,23 +3,33 @@
    ============================================ */
 
 :root {
-  --surface: #111318;             /* Base Layer: Laboratory Floor */
-  --surface-container-low: #1a1c20;  /* Secondary Layer: Large content blocks */
-  --surface-container-high: #282a2e; /* Active Layer: Interactive cards/modals */
-  --surface-container-highest: #333539; /* Elevation Layer: Stacked cards */
+  --surface: #111318;
+  /* Base Layer: Laboratory Floor */
+  --surface-container-low: #1a1c20;
+  /* Secondary Layer: Large content blocks */
+  --surface-container-high: #282a2e;
+  /* Active Layer: Interactive cards/modals */
+  --surface-container-highest: #333539;
+  /* Elevation Layer: Stacked cards */
 
-  --primary: #4b8eff;             /* Primary Power Cell */
-  --primary-glow: #adc6ff;        /* Illumination Blue */
-  --on-primary: #001a41;          /* High Contrast on Primary */
-  --accent: #00ffc2;              /* Synthetic Cyan/Emerald */
+  --primary: #4b8eff;
+  /* Primary Power Cell */
+  --primary-glow: #adc6ff;
+  /* Illumination Blue */
+  --on-primary: #001a41;
+  /* High Contrast on Primary */
+  --accent: #00ffc2;
+  /* Synthetic Cyan/Emerald */
 
   --warning: #ffb800;
   --danger: #ff4b4b;
 
   /* Surfaces & Text */
   --bg-app: var(--surface);
-  --on-surface: #e2e2e8;          /* Headline / Primary Text */
-  --on-surface-variant: #c1c6d7;  /* Body / Secondary Text */
+  --on-surface: #e2e2e8;
+  /* Headline / Primary Text */
+  --on-surface-variant: #c1c6d7;
+  /* Body / Secondary Text */
 
   --text-primary: var(--on-surface);
   --text-secondary: var(--on-surface-variant);
@@ -28,8 +38,10 @@
   /* Borders & Depth */
   --outline: #8b90a0;
   --outline-variant: #414755;
-  --border: rgba(65, 71, 85, 0.15); /* Ghost edge: outline-variant at 15% */
-  --ghost-border: rgba(139, 144, 160, 0.15); /* Laser-etched border */
+  --border: rgba(65, 71, 85, 0.15);
+  /* Ghost edge: outline-variant at 15% */
+  --ghost-border: rgba(139, 144, 160, 0.15);
+  /* Laser-etched border */
 
   /* Shadows (Ambient Glow) */
   --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.2);
@@ -259,6 +271,49 @@ textarea:focus-visible,
 }
 
 /* ============================================
+   Component: Chart Card
+   ============================================ */
+.chart-card {
+  background: var(--surface-container-low);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-lg);
+  margin: 0 0 1.5rem 0;
+  box-shadow: var(--shadow-sm);
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.chart-card:hover {
+  background: var(--surface-container-high);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+
+.chart-card h3 {
+  margin-top: 0;
+  margin-bottom: var(--spacing-md);
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--on-surface);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.chart-card .recharts-cartesian-axis-tick-value {
+  fill: var(--text-muted);
+}
+
+@media (max-width: 768px) {
+  .chart-card {
+    padding: var(--spacing-md);
+  }
+}
+
+
+/* ============================================
    Component: Buttons
    ============================================ */
 button {
@@ -423,8 +478,13 @@ button {
   display: block;
 }
 
-.hero-value.positive { color: var(--accent); }
-.hero-value.negative { color: #f87171; }
+.hero-value.positive {
+  color: var(--accent);
+}
+
+.hero-value.negative {
+  color: #f87171;
+}
 
 .hero-breakdown {
   margin-top: 1.5rem;
@@ -448,9 +508,20 @@ button {
   border-radius: 2px;
 }
 
-.dot.solar { background: var(--warning); box-shadow: 0 0 8px var(--warning); }
-.dot.battery { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
-.dot.credit { background: var(--primary); box-shadow: 0 0 8px var(--primary); }
+.dot.solar {
+  background: var(--warning);
+  box-shadow: 0 0 8px var(--warning);
+}
+
+.dot.battery {
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+
+.dot.credit {
+  background: var(--primary);
+  box-shadow: 0 0 8px var(--primary);
+}
 
 .breakdown-item .label {
   color: var(--text-muted);
@@ -558,11 +629,11 @@ button {
 .current-status-card.standby {
   border-left: 6px solid var(--warning);
 }
- 
+
 .current-status-card.grid-unavailable {
   border-left: 6px solid var(--danger);
 }
- 
+
 .current-status-card.paused {
   border-left: 6px solid var(--outline-variant);
 }
@@ -576,7 +647,8 @@ button {
 .status-icon {
   width: 48px;
   height: 48px;
-  border-radius: 8px; /* md shape per DESIGN.md */
+  border-radius: 8px;
+  /* md shape per DESIGN.md */
   background: var(--surface-container-high);
   display: flex;
   align-items: center;
@@ -705,7 +777,8 @@ button {
   font-size: 1rem;
   color: var(--on-surface);
   background: var(--surface-container-low);
-  border: 1px solid var(--outline-variant); /* Increased contrast */
+  border: 1px solid var(--outline-variant);
+  /* Increased contrast */
   border-radius: var(--radius-md);
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   box-sizing: border-box;
@@ -779,7 +852,8 @@ button {
 
 .select-popup {
   background: var(--surface-container-high);
-  border: 1px solid var(--outline-variant); /* Increased contrast */
+  border: 1px solid var(--outline-variant);
+  /* Increased contrast */
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
   padding: 0.5rem;
@@ -1057,6 +1131,7 @@ button {
   from {
     transform: rotate(0deg);
   }
+
   to {
     transform: rotate(360deg);
   }
@@ -1267,4 +1342,12 @@ button {
 
 .join-consent a:hover {
   text-decoration: underline;
+}
+
+/* Remove default focus outline from Recharts */
+.recharts-wrapper,
+.recharts-surface,
+.recharts-wrapper *:focus,
+.recharts-surface *:focus {
+  outline: none !important;
 }

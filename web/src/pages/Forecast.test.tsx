@@ -101,7 +101,6 @@ describe('Forecast Page', () => {
             expect(screen.getByText('Battery (if used) (%)')).toBeInTheDocument();
             expect(screen.getByText('Battery (if standby) (%)')).toBeInTheDocument();
             expect(screen.getByText('Improved Predicted Solar (kWh)')).toBeInTheDocument();
-            expect(screen.getByText('Estimated Irradiance (W/m²)')).toBeInTheDocument();
             expect(screen.getByText('Avg Home Load (kWh)')).toBeInTheDocument();
             expect(screen.getByText('Grid Charge Cost ($/kWh)')).toBeInTheDocument();
         });

@@ -26,7 +26,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onLoginError, aut
         <div className="auth-page">
             <div className="auth-card">
                 <h1>RateRudder</h1>
-                <p>Log in or sign up to manage your home energy.</p>
+                <p>To get started, sign in below.</p>
 
                 <div className="google-btn-wrapper">
                     {authEnabled && (clientIDs["google"] || clientIDs["apple"]) ? (

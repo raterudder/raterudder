@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useLocation, useSearch } from 'wouter';
-import { fetchHistoryEnergy } from '../api';
-import type { EnergyStats } from '../api';
+import { fetchHistoryEnergy, fetchSettings } from '../api';
+import type { EnergyStats, Settings as SettingsType } from '../api';
 import DateSelector from '../components/DateSelector';
 import {
     ResponsiveContainer,
@@ -73,7 +73,7 @@ function formatHour(ts: string): string {
 
 function HistoryChart({ data, config, isMobile }: { data: HistoryDataPoint[]; config: ChartConfig; isMobile: boolean }) {
     return (
-        <div className="history-chart-card">
+        <div className="chart-card">
             <h3>{config.title}</h3>
             <ResponsiveContainer width="100%" height={240}>
                 <AreaChart data={data} syncId="history" margin={{ top: 5, right: isMobile ? 0 : 20, left: 0, bottom: 5 }}>
@@ -89,13 +89,13 @@ function HistoryChart({ data, config, isMobile }: { data: HistoryDataPoint[]; co
                     <XAxis
                         dataKey="tsHourStart"
                         tickFormatter={formatHour}
-                        tick={{ fontSize: isMobile ? 10 : 12, fill: 'var(--text-muted)' }}
+                        tick={{ fontSize: isMobile ? 10 : 12 }}
                         stroke="var(--outline-variant)"
                         axisLine={false}
                         tickLine={false}
                     />
                     <YAxis
-                        tick={{ fontSize: isMobile ? 10 : 12, fill: 'var(--text-muted)' }}
+                        tick={{ fontSize: isMobile ? 10 : 12 }}
                         stroke="var(--outline-variant)"
                         width={isMobile ? 35 : 50}
                         axisLine={false}
@@ -158,6 +158,7 @@ const History: React.FC<{ siteID?: string }> = ({ siteID }) => {
     }, [dateParam]);
 
     const [data, setData] = useState<HistoryDataPoint[]>([]);
+    const [settings, setSettings] = useState<SettingsType | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
@@ -173,11 +174,12 @@ const History: React.FC<{ siteID?: string }> = ({ siteID }) => {
             setLoading(true);
             setError(null);
             try {
-                const res = await fetchHistoryEnergy(currentDate, siteID);
-                
+                const [res, s] = await Promise.all([fetchHistoryEnergy(currentDate, siteID), fetchSettings(siteID)]);
+                setSettings(s);
+
                 // Merge energy and weather
                 const merged: HistoryDataPoint[] = res.energy.map(e => {
-                    const w = res.weather.find(weather => 
+                    const w = res.weather.find(weather =>
                         new Date(weather.tsHourStart).getTime() === new Date(e.tsHourStart).getTime()
                     );
                     return {
@@ -189,7 +191,7 @@ const History: React.FC<{ siteID?: string }> = ({ siteID }) => {
                         gridExportKWH: Math.floor((e.gridExportKWH || 0) * 10) / 10,
                     };
                 });
-                
+
                 setData(merged.sort((a, b) => new Date(a.tsHourStart).getTime() - new Date(b.tsHourStart).getTime()));
             } catch (err) {
                 setError(err instanceof Error ? err.message : 'Failed to load history');
@@ -235,7 +237,10 @@ const History: React.FC<{ siteID?: string }> = ({ siteID }) => {
 
             {!loading && !error && data.length > 0 && (
                 <div className="history-charts">
-                    {historyCharts.map(config => (
+                    {historyCharts.filter(c => {
+                        if (c.dataKeys.some(dk => dk.key === 'irradiance') && settings?.release !== 'staging') return false;
+                        return true;
+                    }).map(config => (
                         <HistoryChart key={config.title} data={data} config={config} isMobile={isMobile} />
                     ))}
                 </div>

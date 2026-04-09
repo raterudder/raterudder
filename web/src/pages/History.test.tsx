@@ -55,7 +55,6 @@ describe('History', () => {
         await waitFor(() => {
             expect(screen.getByText('Battery (%)')).toBeInTheDocument();
             expect(screen.getByText('Solar Generation (kWh)')).toBeInTheDocument();
-            expect(screen.getByText('Estimated Irradiance')).toBeInTheDocument();
             expect(screen.getByText('Home Load (kWh)')).toBeInTheDocument();
             expect(screen.getByText('Grid (kWh)')).toBeInTheDocument();
         });

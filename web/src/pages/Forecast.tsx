@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { fetchModeling } from '../api';
-import type { ForecastResponse, ModelingHour } from '../api';
+import { fetchModeling, fetchSettings } from '../api';
+import type { ForecastResponse, ModelingHour, Settings as SettingsType } from '../api';
 import { Switch } from '@base-ui/react/switch';
 import { Field } from '@base-ui/react/field';
 import {
@@ -126,7 +126,7 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs }: { dat
     }, [data, showCurrentTime, nowMs]);
 
     return (
-        <div className="forecast-chart-card">
+        <div className="chart-card">
             <h3>{config.title}</h3>
             <ResponsiveContainer width="100%" height={200}>
                 <AreaChart data={data} syncId="forecast" margin={{ top: 5, right: isMobile ? 0 : 20, left: 0, bottom: 5 }}>
@@ -140,13 +140,13 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs }: { dat
                     <XAxis
                         dataKey="ts"
                         tickFormatter={formatHour}
-                        tick={{ fontSize: isMobile ? 10 : 12, fill: 'var(--text-muted)' }}
+                        tick={{ fontSize: isMobile ? 10 : 12 }}
                         stroke="var(--outline-variant)"
                         axisLine={false}
                         tickLine={false}
                     />
                     <YAxis
-                        tick={{ fontSize: isMobile ? 10 : 12, fill: 'var(--text-muted)' }}
+                        tick={{ fontSize: isMobile ? 10 : 12 }}
                         stroke="var(--outline-variant)"
                         width={isMobile ? 35 : 50}
                         axisLine={false}
@@ -231,6 +231,7 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs }: { dat
 
 const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
     const [rawModelingData, setRawModelingData] = useState<ForecastResponse | null>(null);
+    const [settings, setSettings] = useState<SettingsType | null>(null);
     const [loading, setLoading] = useState(true);
     const [nowMs] = useState(() => Date.now());
     const [error, setError] = useState<string | null>(null);
@@ -247,7 +248,9 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
         const loadRawData = async () => {
             setLoading(true);
             try {
-                setRawModelingData(await fetchModeling(siteID));
+                const [mod, s] = await Promise.all([fetchModeling(siteID), fetchSettings(siteID)]);
+                setRawModelingData(mod);
+                setSettings(s);
             } catch (error) {
                 setError(error instanceof Error ? error.message : 'Unknown error');
             } finally {
@@ -353,6 +356,9 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
     );
 
     const activeCharts = charts.filter(c => {
+        if (c.dataKey === 'irradiance' && settings?.release !== 'staging') {
+            return false;
+        }
         if (c.dataKey === 'irradiance' && !hasForecastData) {
             return false;
         }

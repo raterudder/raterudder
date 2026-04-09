@@ -22,47 +22,6 @@
   gap: 2rem;
 }
 
-.forecast-chart-card {
-  background: var(--surface-container-low);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: var(--spacing-lg);
-  margin: 0 0 1.5rem 0;
-  box-shadow: var(--shadow-sm);
-  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-  position: relative;
-  overflow: hidden;
-}
-
-.forecast-chart-card:hover {
-  background: var(--surface-container-high);
-  box-shadow: var(--shadow-md);
-  transform: translateY(-2px);
-}
-
-.forecast-chart-card h3 {
-  font-size: 0.75rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  margin: 0 0 1.5rem 0;
-  letter-spacing: 0.1em;
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-/* Bullet decoration consistent with design guide */
-.forecast-chart-card h3::before {
-  content: '';
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--primary);
-  box-shadow: 0 0 8px var(--primary);
-}
-
 .forecast-loading {
   display: flex;
   justify-content: center;
@@ -96,10 +55,6 @@
 }
 
 @media (max-width: 768px) {
-  .forecast-chart-card {
-    padding: var(--spacing-md);
-  }
-
   .forecast-page h2 {
     font-size: 1.5rem;
   }

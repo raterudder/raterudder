@@ -14,7 +14,7 @@ describe('LoginPage Component', () => {
         render(<Router><LoginPage onLoginSuccess={vi.fn()} onLoginError={vi.fn()} authEnabled={true} clientIDs={{ google: "test-id" }} /></Router>);
 
         expect(screen.getByText('RateRudder')).toBeInTheDocument();
-        expect(screen.getByText('Log in or sign up to manage your home energy.')).toBeInTheDocument();
+        expect(screen.getByText('To get started, sign in below.')).toBeInTheDocument();
         expect(screen.getByText('Mock Google Login')).toBeInTheDocument();
     });
 
