@@ -517,6 +517,10 @@ func TestHandleHistoryEnergy(t *testing.T) {
 		targetDate := now.Format("2006-01-02")
 		today := truncateDay(now)
 
+		targetDateTime, _ := time.Parse("2006-01-02", targetDate)
+		expectedEnd := targetDateTime.AddDate(0, 0, 1).UTC()
+		expectedStart := targetDateTime.AddDate(0, 0, -forecastHistoryDays-1).UTC()
+
 		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
 			Location: &types.SiteLocation{
 				TimeZone:     "UTC",
@@ -527,13 +531,13 @@ func TestHandleHistoryEnergy(t *testing.T) {
 			},
 		}, types.CurrentSettingsVersion, nil).Once()
 
-		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.DailyEnergyStats{
+		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, expectedStart, expectedEnd).Return([]types.DailyEnergyStats{
 			{Hourly: []types.EnergyStats{
 				{TSHourStart: today, SolarKWH: 5.2, MaxBatterySOC: 85.0},
 			}},
 		}, nil).Once()
 
-		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.Weather{
+		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, expectedStart, expectedEnd).Return([]types.Weather{
 			{
 				ForecastHours: []types.HourlyWeather{
 					{TSHourStart: today, TemperatureC: 15, DNI: 500, DHI: 100},
@@ -557,6 +561,9 @@ func TestHandleHistoryEnergy(t *testing.T) {
 		require.NoError(t, err)
 		dUTC := d.UTC()
 
+		expectedEnd := d.AddDate(0, 0, 1).UTC()
+		expectedStart := d.AddDate(0, 0, -forecastHistoryDays-1).UTC()
+
 		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
 			Location: &types.SiteLocation{
 				TimeZone:     "UTC",
@@ -567,11 +574,11 @@ func TestHandleHistoryEnergy(t *testing.T) {
 			},
 		}, types.CurrentSettingsVersion, nil).Once()
 
-		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.DailyEnergyStats{
+		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, expectedStart, expectedEnd).Return([]types.DailyEnergyStats{
 			{Hourly: []types.EnergyStats{{TSHourStart: dUTC, SolarKWH: 5.2, MaxBatterySOC: 85.0}}},
 		}, nil).Once()
 
-		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.Weather{
+		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, expectedStart, expectedEnd).Return([]types.Weather{
 			{
 				ForecastHours: []types.HourlyWeather{
 					{TSHourStart: dUTC, TemperatureC: 15, DNI: 500, DHI: 100},
