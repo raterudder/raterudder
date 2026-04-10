@@ -1,3 +1,6 @@
 ## 2026-03-26 - Do not use mock.Anything in tests
 **Learning:** Even when the specific argument value is not critical (like an email string that doesn't trigger specific mock behavior), using `mock.Anything` is an anti-pattern because it reduces assertion thoroughness and violates strict testing boundaries. The only exception to this rule is for `context.Context` arguments, where `mock.Anything` is acceptable since contexts are typically inconsequential to the test's outcome.
 **Action:** Always use explicit values or specific matching strategies for parameters to ensure assertion thoroughness, but you may use `mock.Anything` for `context.Context` arguments.
+## 2026-04-10 - mock.AnythingOfType is redundant for statically typed languages
+**Learning:** In statically typed languages like Go, using `mock.AnythingOfType("time.Time")` provides little value over `mock.Anything` because the compiler already enforces the type. It's better to use explicit expected values or `mock.MatchedBy` for assertions to actually test logic.
+**Action:** When replacing `mock.Anything`, avoid falling back to `mock.AnythingOfType` for strong-typed parameters. Instead, calculate and provide the exact expected value, or use `mock.MatchedBy` to assert specific logical properties of the argument.
