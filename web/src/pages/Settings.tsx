@@ -183,7 +183,12 @@ const Settings = ({ siteID }: { siteID?: string }) => {
         window.addEventListener('message', listener);
     };
 
-    if (loading) return <div>Loading settings...</div>;
+    if (loading) return (
+        <div className="loading-screen">
+            <span className="loading-spinner loading-spinner-large" aria-hidden="true"></span>
+            Loading settings...
+        </div>
+    );
     if (!settings) return <div>Error loading settings</div>;
 
     return (
