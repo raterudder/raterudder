@@ -115,7 +115,7 @@ const LandingPage: React.FC = () => {
                             <strong>$12.84</strong>
                             <small>This Month*</small>
                             <div className="status-indicator">
-                                <span className="dot"></span> Optimized by RateRudder
+                                <span className="dot" aria-hidden="true"></span> Optimized by RateRudder
                             </div>
                         </div>
                     </div>
@@ -136,32 +136,32 @@ const LandingPage: React.FC = () => {
                         }
                     }}>
                         <div className="feature-item arbitrage">
-                            <div className="icon">⚡</div>
+                            <div className="icon" aria-hidden="true">⚡</div>
                             <h3>Automated Arbitrage</h3>
                             <p>Our algorithms track utility rates in real-time, charging your battery when prices bottom out and discharging when they peak.</p>
                         </div>
                         <div className="feature-item grid">
-                            <div className="icon">🛡️</div>
+                            <div className="icon" aria-hidden="true">🛡️</div>
                             <h3>Grid Independence</h3>
                             <p>Maximize your solar self-consumption and insulate your home from rising grid costs and peak-hour surcharges.</p>
                         </div>
                         <div className="feature-item intelligence">
-                            <div className="icon">🧠</div>
+                            <div className="icon" aria-hidden="true">🧠</div>
                             <h3>Predictive Intelligence</h3>
                             <p>RateRudder learns your home's unique energy footprint and solar generation patterns to optimize for the days ahead.</p>
                         </div>
                         <div className="feature-item advanced">
-                            <div className="icon">🎛️</div>
+                            <div className="icon" aria-hidden="true">🎛️</div>
                             <h3>Advanced Control</h3>
                             <p>RateRudder offers power users granular controls to customize battery reserves, charging priority, and discharge thresholds.</p>
                         </div>
                         <div className="feature-item rocket">
-                            <div className="icon">🚀</div>
+                            <div className="icon" aria-hidden="true">🚀</div>
                             <h3>Set & Forget</h3>
                             <p>Once configured, RateRudder works 24/7 in the background to secure your savings automatically with no manual effort.</p>
                         </div>
                         <div className="feature-item insights">
-                            <div className="icon">📊</div>
+                            <div className="icon" aria-hidden="true">📊</div>
                             <h3>Energy Insights</h3>
                             <p>Visualize your impact with detailed reports on your energy savings, battery adjustments, and solar generation in real-time.</p>
                         </div>

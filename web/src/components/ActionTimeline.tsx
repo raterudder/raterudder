@@ -54,7 +54,7 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
 
                 return (
                     <li key={index} className={`timeline-item mode-${isFault ? 'fault' : batteryModeClass} ${summary ? 'is-grouped' : ''}`}>
-                        <div className="timeline-marker"></div>
+                        <div className="timeline-marker" aria-hidden="true"></div>
 
                         <div className="timeline-time">
                             {formatTime(isSummary ? summary!.startTime : action.timestamp)}
