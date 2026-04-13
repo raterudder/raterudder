@@ -516,6 +516,8 @@ func TestHandleHistoryEnergy(t *testing.T) {
 		now := time.Now()
 		targetDate := now.Format("2006-01-02")
 		today := truncateDay(now)
+		targetParsed, err := time.Parse("2006-01-02", targetDate)
+		require.NoError(t, err)
 
 		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
 			Location: &types.SiteLocation{
@@ -527,13 +529,13 @@ func TestHandleHistoryEnergy(t *testing.T) {
 			},
 		}, types.CurrentSettingsVersion, nil).Once()
 
-		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.DailyEnergyStats{
-			{Hourly: []types.EnergyStats{
+		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(tm time.Time) bool { return tm.UTC().Equal(today.UTC().AddDate(0, 0, -forecastHistoryDays-1)) }), mock.MatchedBy(func(tm time.Time) bool { return tm.UTC().Equal(today.UTC().AddDate(0, 0, 1)) })).Return([]types.DailyEnergyStats{
+			{TSDayStart: targetParsed, Hourly: []types.EnergyStats{
 				{TSHourStart: today, SolarKWH: 5.2, MaxBatterySOC: 85.0},
 			}},
 		}, nil).Once()
 
-		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.Weather{
+		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(tm time.Time) bool { return tm.UTC().Equal(today.UTC().AddDate(0, 0, -forecastHistoryDays)) }), mock.MatchedBy(func(tm time.Time) bool { return tm.UTC().Equal(today.UTC().AddDate(0, 0, 1)) })).Return([]types.Weather{
 			{
 				ForecastHours: []types.HourlyWeather{
 					{TSHourStart: today, TemperatureC: 15, DNI: 500, DHI: 100},
@@ -567,11 +569,11 @@ func TestHandleHistoryEnergy(t *testing.T) {
 			},
 		}, types.CurrentSettingsVersion, nil).Once()
 
-		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.DailyEnergyStats{
-			{Hourly: []types.EnergyStats{{TSHourStart: dUTC, SolarKWH: 5.2, MaxBatterySOC: 85.0}}},
+		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(tm time.Time) bool { return tm.UTC().Equal(dUTC.UTC().AddDate(0, 0, -forecastHistoryDays-1)) }), mock.MatchedBy(func(tm time.Time) bool { return tm.UTC().Equal(dUTC.UTC().AddDate(0, 0, 1)) })).Return([]types.DailyEnergyStats{
+			{TSDayStart: dUTC, Hourly: []types.EnergyStats{{TSHourStart: dUTC, SolarKWH: 5.2, MaxBatterySOC: 85.0}}},
 		}, nil).Once()
 
-		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.Weather{
+		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(tm time.Time) bool { return tm.UTC().Equal(dUTC.UTC().AddDate(0, 0, -forecastHistoryDays)) }), mock.MatchedBy(func(tm time.Time) bool { return tm.UTC().Equal(dUTC.UTC().AddDate(0, 0, 1)) })).Return([]types.Weather{
 			{
 				ForecastHours: []types.HourlyWeather{
 					{TSHourStart: dUTC, TemperatureC: 15, DNI: 500, DHI: 100},

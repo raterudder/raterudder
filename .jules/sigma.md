@@ -4,3 +4,7 @@
 ## 2026-04-10 - mock.AnythingOfType is redundant for statically typed languages
 **Learning:** In statically typed languages like Go, using `mock.AnythingOfType("time.Time")` provides little value over `mock.Anything` because the compiler already enforces the type. It's better to use explicit expected values or `mock.MatchedBy` for assertions to actually test logic.
 **Action:** When replacing `mock.Anything`, avoid falling back to `mock.AnythingOfType` for strong-typed parameters. Instead, calculate and provide the exact expected value, or use `mock.MatchedBy` to assert specific logical properties of the argument.
+
+## 2026-04-13 - Mock assertions for time parameters involving UTC parsing
+**Learning:** When asserting `time.Time` parameters in mocked storage endpoints for HTTP handlers that parse times using `time.Parse("2006-01-02", ...)`, the parsed time defaults to UTC exactly at midnight. Assertions (such as `mock.MatchedBy`) must compute expected times relative to this parsed UTC time, rather than a locally truncated `time.Now().Truncate(24 * time.Hour)`, which leads to timezone offset mismatches during comparison tests.
+**Action:** Always parse the string query param exactly as the handler does to reconstruct the baseline UTC time before calculating expected time offsets (e.g., `-forecastHistoryDays-1`) for accurate mock test assertions, and use the `.UTC()` method during assertions to enforce strict checking.
