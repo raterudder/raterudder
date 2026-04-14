@@ -23,14 +23,14 @@ const SavingsHero: React.FC<SavingsHeroProps> = ({ savings }) => {
                     </div>
                     <div className="hero-breakdown">
                         <div className="breakdown-item">
-                            <span className="dot solar"></span>
+                            <span className="dot solar" aria-hidden="true"></span>
                             <span className="label">Solar</span>
                             <span className={`value ${savings.solarSavings >= 0 ? 'positive' : 'negative'}`}>
                                 {formatCurrency(savings.solarSavings, true)}
                             </span>
                         </div>
                         <div className="breakdown-item">
-                            <span className="dot battery"></span>
+                            <span className="dot battery" aria-hidden="true"></span>
                             <span className="label">Battery</span>
                             <span className={`value ${savings.batterySavings >= 0 ? 'positive' : 'negative'}`}>
                                 {formatCurrency(savings.batterySavings, true)}
@@ -38,7 +38,7 @@ const SavingsHero: React.FC<SavingsHeroProps> = ({ savings }) => {
                         </div>
                         {Math.abs(savings.credit) > 0.01 && (
                             <div className="breakdown-item">
-                                <span className="dot credit"></span>
+                                <span className="dot credit" aria-hidden="true"></span>
                                 <span className="label">Export</span>
                                 <span className={`value ${savings.credit >= 0 ? 'positive' : 'negative'}`}>
                                     {formatCurrency(savings.credit, true)}
