@@ -4,3 +4,6 @@
 ## 2026-04-10 - mock.AnythingOfType is redundant for statically typed languages
 **Learning:** In statically typed languages like Go, using `mock.AnythingOfType("time.Time")` provides little value over `mock.Anything` because the compiler already enforces the type. It's better to use explicit expected values or `mock.MatchedBy` for assertions to actually test logic.
 **Action:** When replacing `mock.Anything`, avoid falling back to `mock.AnythingOfType` for strong-typed parameters. Instead, calculate and provide the exact expected value, or use `mock.MatchedBy` to assert specific logical properties of the argument.
+## 2026-04-14 - Populate TSDayStart when mocking GetEnergyHistory
+**Learning:** When mocking `GetEnergyHistory` in server tests (like `pkg/server/history_test.go`), you must populate the `TSDayStart` field in the returned `DailyEnergyStats`. If it defaults to a zero value, any subsequent calculations based on that timezone (like `GetWeather` start/end times) will be wildly inaccurate and break tests when asserting exact parameter values instead of `mock.AnythingOfType`.
+**Action:** Always populate `TSDayStart` explicitly (usually matching the requested `start` or `todayUTC`) in `DailyEnergyStats` mocks if downstream code loops over them to calculate offsets.

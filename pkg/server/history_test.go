@@ -527,13 +527,27 @@ func TestHandleHistoryEnergy(t *testing.T) {
 			},
 		}, types.CurrentSettingsVersion, nil).Once()
 
-		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.DailyEnergyStats{
-			{Hourly: []types.EnergyStats{
-				{TSHourStart: today, SolarKWH: 5.2, MaxBatterySOC: 85.0},
-			}},
+		// Since input date has no timezone we simulate time.Parse logic which defaults to UTC
+		// End is always tomorrow exclusive. Start factors in lookback for forecasting logic
+		parsedToday, _ := time.Parse("2006-01-02", targetDate)
+		todayUTC := parsedToday
+		endEnergy := parsedToday.AddDate(0, 0, 1)
+		startEnergy := parsedToday.AddDate(0, 0, -forecastHistoryDays-1)
+
+		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, startEnergy, endEnergy).Return([]types.DailyEnergyStats{
+			{
+				TSDayStart: todayUTC,
+				Hourly: []types.EnergyStats{
+					{TSHourStart: today, SolarKWH: 5.2, MaxBatterySOC: 85.0},
+				},
+			},
 		}, nil).Once()
 
-		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.Weather{
+		// Weather query offsets start slightly differently since it adjusts based on the returned daily stats TSDayStart timezone.
+		startWeather := todayUTC.AddDate(0, 0, -forecastHistoryDays)
+		endWeather := todayUTC.AddDate(0, 0, 1)
+
+		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, startWeather, endWeather).Return([]types.Weather{
 			{
 				ForecastHours: []types.HourlyWeather{
 					{TSHourStart: today, TemperatureC: 15, DNI: 500, DHI: 100},
@@ -567,11 +581,20 @@ func TestHandleHistoryEnergy(t *testing.T) {
 			},
 		}, types.CurrentSettingsVersion, nil).Once()
 
-		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.DailyEnergyStats{
-			{Hourly: []types.EnergyStats{{TSHourStart: dUTC, SolarKWH: 5.2, MaxBatterySOC: 85.0}}},
+		// End is tomorrow exclusive. Start factors in lookback for forecasting logic
+		endEnergy := dUTC.AddDate(0, 0, 1)
+		startEnergy := dUTC.AddDate(0, 0, -forecastHistoryDays-1)
+		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, startEnergy, endEnergy).Return([]types.DailyEnergyStats{
+			{
+				TSDayStart: dUTC,
+				Hourly: []types.EnergyStats{{TSHourStart: dUTC, SolarKWH: 5.2, MaxBatterySOC: 85.0}},
+			},
 		}, nil).Once()
 
-		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return([]types.Weather{
+		// Weather query offsets start slightly differently since it adjusts based on the returned daily stats TSDayStart timezone.
+		startWeather := dUTC.AddDate(0, 0, -forecastHistoryDays)
+		endWeather := dUTC.AddDate(0, 0, 1)
+		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, startWeather, endWeather).Return([]types.Weather{
 			{
 				ForecastHours: []types.HourlyWeather{
 					{TSHourStart: dUTC, TemperatureC: 15, DNI: 500, DHI: 100},
