@@ -383,8 +383,7 @@ func (s *Server) authenticateToken(ctx context.Context, token string, specificCl
 			}
 			err = idToken.Claims(&claims)
 			if err == nil {
-				// TODO: set this to false after we've confirmed that there are no errors from existing users
-				verified := true
+				verified := false
 				if claims.EmailVerified != nil {
 					switch v := claims.EmailVerified.(type) {
 					case bool:
