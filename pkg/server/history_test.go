@@ -587,7 +587,7 @@ func TestHandleHistoryEnergy(t *testing.T) {
 		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, startEnergy, endEnergy).Return([]types.DailyEnergyStats{
 			{
 				TSDayStart: dUTC,
-				Hourly: []types.EnergyStats{{TSHourStart: dUTC, SolarKWH: 5.2, MaxBatterySOC: 85.0}},
+				Hourly:     []types.EnergyStats{{TSHourStart: dUTC, SolarKWH: 5.2, MaxBatterySOC: 85.0}},
 			},
 		}, nil).Once()
 
