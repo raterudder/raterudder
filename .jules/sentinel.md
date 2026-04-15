@@ -1,0 +1,4 @@
+## 2024-04-16 - [CRITICAL] Authentication Bypass via Missing Email Verification Claim
+**Vulnerability:** The application was skipping the email verification check during OIDC authentication (Google, Apple) by defaulting `verified := true` when the `email_verified` claim was missing. This created a critical authentication bypass vulnerability where malicious or misconfigured identity providers could grant access without verifying the user's email address.
+**Learning:** Default-allow policies in authentication checks can lead to critical bypasses. The `email_verified` claim MUST be explicitly treated as unverified (`verified := false`) when it is omitted by the identity provider.
+**Prevention:** In Go, default security-related flags to false. Never bypass security checks in production ("TODO: set this to false after we've confirmed..."). Ensure robust parsing of OIDC tokens and validate all required claims are both present and explicit before granting access.
