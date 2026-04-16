@@ -111,6 +111,7 @@ const FeedbackWidget: React.FC<FeedbackWidgetProps> = ({ siteID }) => {
                                     <textarea
                                         className="feedback-textarea"
                                         placeholder="Tell us more about your experience (optional)..."
+                                        aria-label="Tell us more about your experience (optional)"
                                         value={comment}
                                         onChange={(e) => setComment(e.target.value)}
                                     />
