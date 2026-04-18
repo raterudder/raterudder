@@ -7,3 +7,6 @@
 ## 2026-04-14 - Populate TSDayStart when mocking GetEnergyHistory
 **Learning:** When mocking `GetEnergyHistory` in server tests (like `pkg/server/history_test.go`), you must populate the `TSDayStart` field in the returned `DailyEnergyStats`. If it defaults to a zero value, any subsequent calculations based on that timezone (like `GetWeather` start/end times) will be wildly inaccurate and break tests when asserting exact parameter values instead of `mock.AnythingOfType`.
 **Action:** Always populate `TSDayStart` explicitly (usually matching the requested `start` or `todayUTC`) in `DailyEnergyStats` mocks if downstream code loops over them to calculate offsets.
+## 2026-04-18 - Ensure MatchedBy actually validates state
+**Learning:** When replacing `mock.Anything` or `mock.AnythingOfType` with `mock.MatchedBy` to increase assertion strictness, the matching function must actively validate specific field values. Returning `true` unconditionally is an anti-pattern that defeats the purpose of the improvement and will fail code review.
+**Action:** Always write `MatchedBy` functions that assert specific properties (e.g., `return s.UtilityProvider == "test"`) to genuinely test the logic.

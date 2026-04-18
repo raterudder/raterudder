@@ -23,7 +23,8 @@ import (
 func TestHandleUpdate(t *testing.T) {
 	// Scenario: High price -> Should Discharge
 	mockU := &mockUtility{}
-	mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+	// Replaced mock.Anything with explicit matching for the expected UtilityProvider from settings
+	mockU.On("ApplySettings", mock.Anything, mock.MatchedBy(func(s types.Settings) bool { return s.UtilityProvider == "test" })).Return(nil)
 	mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.15, TSStart: time.Now()}, nil)
 	mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{{DollarsPerKWH: 0.15, TSStart: time.Now().Add(time.Hour)}}, nil)
 	mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
