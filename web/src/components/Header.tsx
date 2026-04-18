@@ -70,9 +70,9 @@ const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSite
                         aria-label={isMenuOpen ? "Close navigation menu" : "Open navigation menu"}
                         aria-expanded={isMenuOpen}
                         aria-controls="mobile-menu-content">
-                        <span className="hamburger-line"></span>
-                        <span className="hamburger-line"></span>
-                        <span className="hamburger-line"></span>
+                        <span className="hamburger-line" aria-hidden="true"></span>
+                        <span className="hamburger-line" aria-hidden="true"></span>
+                        <span className="hamburger-line" aria-hidden="true"></span>
                     </button>
                 )}
 
