@@ -51,6 +51,18 @@ func generateTestTokenWithEmailVerified(t *testing.T, srvURL string, priv crypto
 	return oidctest.SignIDToken(priv, "my-key-id", "RS256", rawClaims)
 }
 
+
+func generateTestTokenMissingEmailVerified(t *testing.T, srvURL string, priv crypto.PrivateKey, email, subject string) string {
+	rawClaims := fmt.Sprintf(`{
+		"iss": "%s",
+		"aud": "%s",
+		"sub": "%s",
+		"email": "%s",
+		"exp": %d
+	}`, srvURL, "test-audience", subject, email, time.Now().Add(1*time.Hour).Unix())
+	return oidctest.SignIDToken(priv, "my-key-id", "RS256", rawClaims)
+}
+
 func setupOIDCTest(t *testing.T) (*httptest.Server, *rsa.PrivateKey) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
@@ -676,6 +688,7 @@ func TestHandleLogin(t *testing.T) {
 	noEmailToken := generateTestToken(t, srv.URL, priv, "", "user-subject")
 	unverifiedEmailToken := generateTestTokenWithEmailVerified(t, srv.URL, priv, "user@example.com", "user@example.com", false)
 	verifiedEmailToken := generateTestTokenWithEmailVerified(t, srv.URL, priv, "user@example.com", "user@example.com", true)
+	missingVerifiedToken := generateTestTokenMissingEmailVerified(t, srv.URL, priv, "user@example.com", "user@example.com")
 
 	server := &Server{
 		singleSite: false,
@@ -768,6 +781,19 @@ func TestHandleLogin(t *testing.T) {
 		server.storage = mocks
 		w := httptest.NewRecorder()
 		req := createReq(unverifiedEmailToken)
+
+		server.handleLogin(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+		assert.True(t, mocks.AssertExpectations(t))
+	})
+
+
+	t.Run("Missing Email_Verified Claim", func(t *testing.T) {
+		mocks := new(mockStorage)
+		server.storage = mocks
+		w := httptest.NewRecorder()
+		req := createReq(missingVerifiedToken)
 
 		server.handleLogin(w, req)
 
