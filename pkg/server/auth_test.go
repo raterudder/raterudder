@@ -51,7 +51,6 @@ func generateTestTokenWithEmailVerified(t *testing.T, srvURL string, priv crypto
 	return oidctest.SignIDToken(priv, "my-key-id", "RS256", rawClaims)
 }
 
-
 func generateTestTokenMissingEmailVerified(t *testing.T, srvURL string, priv crypto.PrivateKey, email, subject string) string {
 	rawClaims := fmt.Sprintf(`{
 		"iss": "%s",
@@ -787,7 +786,6 @@ func TestHandleLogin(t *testing.T) {
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
 		assert.True(t, mocks.AssertExpectations(t))
 	})
-
 
 	t.Run("Missing Email_Verified Claim", func(t *testing.T) {
 		mocks := new(mockStorage)
