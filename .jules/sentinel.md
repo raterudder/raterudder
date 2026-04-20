@@ -1,0 +1,5 @@
+## 2024-05-24 - Unverified Email Authentication Bypass Vulnerability
+
+**Vulnerability:** The OIDC token authentication process (`authenticateToken` in `pkg/server/auth.go`) had a default `verified := true` fallback if the `email_verified` claim was omitted from an identity provider's JWT. This could allow authentication bypass if a maliciously configured or poorly implemented identity provider issued tokens without this claim for unverified email addresses.
+**Learning:** Defaulting security checks to `true` (fail-open) in authentication flows introduces severe risks. While it may have been temporarily convenient for backwards compatibility, it compromised the fundamental assurance of the `email_verified` claim. OIDC claims must be treated as untrusted until explicitly proven otherwise.
+**Prevention:** In authentication logic, specifically when handling OIDC tokens, always fail-closed. If an expected verification claim (like `email_verified`) is missing, explicitly treat it as unverified (e.g., `verified := false`). Do not assume verification in the absence of explicit proof from the identity provider.
