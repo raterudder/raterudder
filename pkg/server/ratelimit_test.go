@@ -496,6 +496,16 @@ func TestGetClientIP(t *testing.T) {
 			remoteAddr: "127.0.0.1:8080",
 			expectedIP: "198.51.100.10",
 		},
+		{
+			name: "Spoofed IP from untrusted proxy",
+			headers: map[string]string{
+				"CF-Connecting-IP": "203.0.113.5",
+				"X-Forwarded-For":  "198.51.100.10",
+			},
+			// Not a loopback or private IP
+			remoteAddr: "203.0.113.10:8080",
+			expectedIP: "203.0.113.10", // Should return remoteAddr, not header
+		},
 	}
 
 	for _, tt := range tests {

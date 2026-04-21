@@ -66,38 +66,45 @@ func (s *Server) getClientLimiter(ip string) *clientRateLimiter {
 }
 
 func getClientIP(r *http.Request) string {
-	// 1. Check Cloudflare header first
-	cfIP := r.Header.Get("CF-Connecting-IP")
-	if cfIP != "" {
-		return strings.TrimSpace(cfIP)
+	remoteIPStr, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		remoteIPStr = r.RemoteAddr
 	}
 
-	// 2. Check X-Forwarded-For and find the last public IP
-	// We parse this in reverse to prevent spoofing of IPs.
-	// We assume this is not behind an external load balancer because if it was
-	// then the last public IP would be the load balancer's IP itself.
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff != "" {
-		ips := strings.Split(xff, ",")
-		for i := len(ips) - 1; i >= 0; i-- {
-			ipStr := strings.TrimSpace(ips[i])
-			ip := net.ParseIP(ipStr)
-			if ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() {
-				return ipStr
-			}
+	remoteIP := net.ParseIP(remoteIPStr)
+	// Trust proxy headers only if request comes from a trusted local network
+	isTrustedProxy := remoteIP != nil && (remoteIP.IsPrivate() || remoteIP.IsLoopback())
+
+	if isTrustedProxy {
+		// 1. Check Cloudflare header first
+		cfIP := r.Header.Get("CF-Connecting-IP")
+		if cfIP != "" {
+			return strings.TrimSpace(cfIP)
 		}
-		// If no public IP found but header exists, return the last one (it might be all private)
-		if len(ips) > 0 {
-			return strings.TrimSpace(ips[len(ips)-1])
+
+		// 2. Check X-Forwarded-For and find the last public IP
+		// We parse this in reverse to prevent spoofing of IPs.
+		// We assume this is not behind an external load balancer because if it was
+		// then the last public IP would be the load balancer's IP itself.
+		xff := r.Header.Get("X-Forwarded-For")
+		if xff != "" {
+			ips := strings.Split(xff, ",")
+			for i := len(ips) - 1; i >= 0; i-- {
+				ipStr := strings.TrimSpace(ips[i])
+				ip := net.ParseIP(ipStr)
+				if ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() {
+					return ipStr
+				}
+			}
+			// If no public IP found but header exists, return the last one (it might be all private)
+			if len(ips) > 0 {
+				return strings.TrimSpace(ips[len(ips)-1])
+			}
 		}
 	}
 
 	// 3. Fallback to RemoteAddr
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return ip
+	return remoteIPStr
 }
 
 func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
