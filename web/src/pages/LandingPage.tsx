@@ -256,7 +256,7 @@ const LandingPage: React.FC = () => {
                                 <Accordion.Header>
                                     <Accordion.Trigger className="faq-question">
                                         <span>{item.question}</span>
-                                        <span className="toggle-icon" />
+                                        <span className="toggle-icon" aria-hidden="true" />
                                     </Accordion.Trigger>
                                 </Accordion.Header>
                                 <Accordion.Panel className="faq-answer">
