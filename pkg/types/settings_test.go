@@ -78,6 +78,7 @@ func TestCredentialsHas(t *testing.T) {
 		assert.Contains(t, hasMap, "franklin")
 		assert.Contains(t, hasMap, "mock")
 		assert.Contains(t, hasMap, "tesla")
+		assert.Contains(t, hasMap, "enphase")
 	})
 
 	t.Run("Only Franklin", func(t *testing.T) {
@@ -115,6 +116,7 @@ func TestCredentialsHas(t *testing.T) {
 			Franklin: &FranklinCredentials{},
 			Mock:     &MockCredentials{},
 			Tesla:    &TeslaCredentials{},
+			Enphase:  &EnphaseCredentials{},
 		}
 		hasMap := creds.Has()
 		for key, v := range hasMap {

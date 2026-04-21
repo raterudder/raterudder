@@ -62,6 +62,7 @@ func Configured() *Map {
 func (m *Map) ListSystems(ctx context.Context) []types.ESSProviderInfo {
 	sys := []types.ESSProviderInfo{
 		franklinInfo(),
+		enphaseInfo(),
 		mockInfo(),
 	}
 	if m.baseTesla != nil && m.baseTesla.enabled() {
@@ -94,6 +95,8 @@ func (m *Map) Site(ctx context.Context, siteID string, settings types.Settings) 
 	switch settings.ESS {
 	case "franklin":
 		sys = newFranklin()
+	case "enphase":
+		sys = newEnphase()
 	case "mock":
 		sys = newMock(siteID)
 	case "tesla":

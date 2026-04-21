@@ -96,6 +96,7 @@ type Credentials struct {
 	Franklin *FranklinCredentials `json:"franklin,omitempty"`
 	Mock     *MockCredentials     `json:"mock,omitempty"`
 	Tesla    *TeslaCredentials    `json:"tesla,omitempty"`
+	Enphase  *EnphaseCredentials  `json:"enphase,omitempty"`
 	// when a new field is added we need to make sure that handleGetSettings and
 	// handleUpdateSettings are updated to handle the new field
 }
@@ -106,6 +107,7 @@ func (c *Credentials) Has() map[string]bool {
 		"franklin": c.Franklin != nil,
 		"mock":     c.Mock != nil,
 		"tesla":    c.Tesla != nil,
+		"enphase":  c.Enphase != nil,
 	}
 }
 
@@ -136,6 +138,15 @@ type FranklinCredentials struct {
 	// the other credentials so we can skip login on every update cycle and only
 	// re-login when the token has expired (backend returns 401).
 	Token string `json:"token,omitempty"`
+}
+
+// Credentials for Enphase
+type EnphaseCredentials struct {
+	Username     string `json:"username"`
+	Password     string `json:"password,omitempty"`
+	SessionID    string `json:"sessionID,omitempty"`
+	ManagerToken string `json:"managerToken,omitempty"`
+	SystemID     int    `json:"systemID,omitempty"`
 }
 
 // MigrateSettings migrates the settings to the current version.
