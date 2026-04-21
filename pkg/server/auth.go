@@ -398,7 +398,7 @@ func (s *Server) authenticateToken(ctx context.Context, token string, specificCl
 				if !verified {
 					err = errors.New("email not verified")
 				} else {
-					return claims.Email, idToken.Subject, idToken.Expiry, nil
+					return claims.Email, providerName + ":" + idToken.Subject, idToken.Expiry, nil
 				}
 			}
 		}

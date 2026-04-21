@@ -54,8 +54,8 @@ func TestAdminListSites(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/list/sites", nil)
 		req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: validUserToken})
 
-		mockStorage.On("GetUser", mock.Anything, "user1").Return(types.User{
-			ID:    "user1",
+		mockStorage.On("GetUser", mock.Anything, "google:user1").Return(types.User{
+			ID:    "google:user1",
 			Email: "user@example.com",
 		}, nil).Once()
 
@@ -74,8 +74,8 @@ func TestAdminListSites(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/list/sites", nil)
 		req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: validAdminToken})
 
-		mockStorage.On("GetUser", mock.Anything, "admin1").Return(types.User{
-			ID:    "admin1",
+		mockStorage.On("GetUser", mock.Anything, "google:admin1").Return(types.User{
+			ID:    "google:admin1",
 			Email: "admin@example.com",
 		}, nil).Once()
 
@@ -109,8 +109,8 @@ func TestAdminListSites(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/list/sites", nil)
 		req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: validAdminToken})
 
-		mockStorage.On("GetUser", mock.Anything, "admin1").Return(types.User{
-			ID:    "admin1",
+		mockStorage.On("GetUser", mock.Anything, "google:admin1").Return(types.User{
+			ID:    "google:admin1",
 			Email: "admin@example.com",
 		}, nil).Once()
 

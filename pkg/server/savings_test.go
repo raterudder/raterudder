@@ -65,8 +65,8 @@ func (m *mockSavingsStorage) GetActionHistory(ctx context.Context, siteID string
 }
 
 func TestHandleHistorySavings(t *testing.T) {
-	start := time.Now().Truncate(24 * time.Hour)
-	end := start.Add(24 * time.Hour)
+	start := time.Now().Truncate(24 * time.Hour).UTC()
+	end := start.Add(24 * time.Hour).UTC()
 
 	runTest := func(t *testing.T, setupMock func(*mockSavingsStorage)) types.SavingsStats {
 		mockStoreBase := &mockStorage{}
@@ -570,8 +570,8 @@ func TestHandleHistorySavings(t *testing.T) {
 	t.Run("Storage Error Propagated", func(t *testing.T) {
 		mockStore := &mockStorage{}
 		mockStore.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{}, types.CurrentSettingsVersion, nil)
-		// We explicitly assert the lookback (-24 hours) and timezone (UTC) adjustments instead of using mock.AnythingOfType("time.Time")
-		mockStore.On("GetPriceHistory", mock.Anything, types.SiteIDNone, start.Add(-24*time.Hour).UTC(), end.UTC()).Return([]types.Price(nil), errors.New("db error"))
+		// We explicitly assert the lookback (-24 hours) adjustment instead of using mock.AnythingOfType("time.Time")
+		mockStore.On("GetPriceHistory", mock.Anything, types.SiteIDNone, start.AddDate(0, 0, -1), end).Return([]types.Price(nil), errors.New("db error"))
 
 		mockUtilities := utility.NewMap(mockStore)
 		s := &Server{storage: mockStore, utilities: mockUtilities, bypassAuth: true}
@@ -593,7 +593,7 @@ func TestHandleHistorySavingsAll(t *testing.T) {
 	start := time.Now().Truncate(24 * time.Hour).UTC()
 	end := start.Add(24 * time.Hour).UTC()
 
-	startQuery := start.Add(-24 * time.Hour)
+	startQuery := start.AddDate(0, 0, -1)
 	endQuery := end
 
 	// Site 1 data

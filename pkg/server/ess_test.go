@@ -104,7 +104,7 @@ func TestHandleListESS(t *testing.T) {
 		require.NoError(t, err)
 
 		mockStorage := &mockStorage{}
-		mockStorage.On("GetUser", mock.Anything, "unregistered@example.com").Return(types.User{}, storage.ErrUserNotFound).Once()
+		mockStorage.On("GetUser", mock.Anything, "google:unregistered@example.com").Return(types.User{}, storage.ErrUserNotFound).Once()
 
 		mockP := ess.NewMap()
 		mockP.SetSystem(types.SiteIDNone, &mockESS{}) // just to populate providers

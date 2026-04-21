@@ -143,8 +143,8 @@ func TestHandleListFeedback(t *testing.T) {
 			},
 		}
 
-		mockDBWithAuth.On("GetUser", mock.Anything, "admin1").Return(types.User{
-			ID:    "admin1",
+		mockDBWithAuth.On("GetUser", mock.Anything, "google:admin1").Return(types.User{
+			ID:    "google:admin1",
 			Email: "admin@example.com",
 		}, nil).Once()
 
@@ -182,8 +182,8 @@ func TestHandleListFeedback(t *testing.T) {
 			},
 		}
 
-		mockDBWithAuth.On("GetUser", mock.Anything, "admin1").Return(types.User{
-			ID:    "admin1",
+		mockDBWithAuth.On("GetUser", mock.Anything, "google:admin1").Return(types.User{
+			ID:    "google:admin1",
 			Email: "admin@example.com",
 		}, nil).Once()
 

@@ -89,17 +89,17 @@ func TestAuthMiddleware(t *testing.T) {
 	require.NoError(t, err)
 
 	validToken := generateTestToken(t, srv.URL, priv, "user@example.com", "user@example.com")
-	updaterToken := generateTestToken(t, srv.URL, priv, "updater@example.com", "updater@example.com")
+	updaterToken := generateTestTokenWithAudience(t, srv.URL, priv, "updater@example.com", "updater@example.com", "update-audience")
 
 	server := &Server{
 		singleSite: false, // Multi-site mode by default for testing
 		oidcAudiences: map[string]string{
 			"google":                 "test-audience",
-			"google_update_specific": "test-audience",
+			"google_update_specific": "update-audience",
 		},
 		oidcVerifiers: map[string]tokenVerifier{
 			"google":                 provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
-			"google_update_specific": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
+			"google_update_specific": provider.Verifier(&oidc.Config{ClientID: "update-audience"}).Verify,
 		},
 	}
 
@@ -206,8 +206,8 @@ func TestAuthMiddleware(t *testing.T) {
 		req := createReq("GET", "/api/test", nil, cookie)
 
 		// Mock GetUser
-		mocks.On("GetUser", mock.Anything, "user@example.com").Return(types.User{
-			ID:    "user@example.com",
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:    "google:user@example.com",
 			Email: "user@example.com",
 			Sites: []types.UserSite{{ID: "site1"}, {ID: "site2"}},
 		}, nil).Once()
@@ -226,8 +226,8 @@ func TestAuthMiddleware(t *testing.T) {
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("GET", "/api/test?siteID=site1", nil, cookie)
 
-		mocks.On("GetUser", mock.Anything, "user@example.com").Return(types.User{
-			ID:    "user@example.com",
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:    "google:user@example.com",
 			Email: "user@example.com",
 			Sites: []types.UserSite{{ID: "site1"}, {ID: "site2"}},
 			Admin: false,
@@ -236,7 +236,7 @@ func TestAuthMiddleware(t *testing.T) {
 		mocks.On("GetSite", mock.Anything, "site1").Return(types.Site{
 			ID: "site1",
 			Permissions: []types.SitePermissions{
-				{UserID: "user@example.com"},
+				{UserID: "google:user@example.com"},
 			},
 		}, nil).Once()
 
@@ -257,8 +257,8 @@ func TestAuthMiddleware(t *testing.T) {
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("GET", "/api/test?siteID=site3", nil, cookie)
 
-		mocks.On("GetUser", mock.Anything, "user@example.com").Return(types.User{
-			ID:    "user@example.com",
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:    "google:user@example.com",
 			Email: "user@example.com",
 			Sites: []types.UserSite{{ID: "site1"}, {ID: "site2"}},
 		}, nil).Once()
@@ -286,8 +286,8 @@ func TestAuthMiddleware(t *testing.T) {
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("GET", "/api/test?siteID=site3", nil, cookie)
 
-		mocks.On("GetUser", mock.Anything, "user@example.com").Return(types.User{
-			ID:    "user@example.com",
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:    "google:user@example.com",
 			Email: "user@example.com",
 			Sites: []types.UserSite{{ID: "site1"}, {ID: "site2"}},
 			Admin: false,
@@ -315,8 +315,8 @@ func TestAuthMiddleware(t *testing.T) {
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("POST", "/api/test", map[string]string{"siteID": "site2"}, cookie)
 
-		mocks.On("GetUser", mock.Anything, "user@example.com").Return(types.User{
-			ID:    "user@example.com",
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:    "google:user@example.com",
 			Email: "user@example.com",
 			Sites: []types.UserSite{{ID: "site1"}, {ID: "site2"}},
 		}, nil).Once()
@@ -324,7 +324,7 @@ func TestAuthMiddleware(t *testing.T) {
 		mocks.On("GetSite", mock.Anything, "site2").Return(types.Site{
 			ID: "site2",
 			Permissions: []types.SitePermissions{
-				{UserID: "user@example.com"},
+				{UserID: "google:user@example.com"},
 			},
 		}, nil).Once()
 
@@ -345,8 +345,8 @@ func TestAuthMiddleware(t *testing.T) {
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("GET", "/api/test", nil, cookie)
 
-		mocks.On("GetUser", mock.Anything, "user@example.com").Return(types.User{
-			ID:    "user@example.com",
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:    "google:user@example.com",
 			Email: "user@example.com",
 			Sites: []types.UserSite{{ID: "site1"}},
 		}, nil).Once()
@@ -354,7 +354,7 @@ func TestAuthMiddleware(t *testing.T) {
 		mocks.On("GetSite", mock.Anything, "site1").Return(types.Site{
 			ID: "site1",
 			Permissions: []types.SitePermissions{
-				{UserID: "user@example.com"},
+				{UserID: "google:user@example.com"},
 			},
 		}, nil).Once()
 
@@ -375,8 +375,8 @@ func TestAuthMiddleware(t *testing.T) {
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("POST", "/api/auth/logout", nil, cookie)
 
-		mocks.On("GetUser", mock.Anything, "user@example.com").Return(types.User{
-			ID:    "user@example.com",
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:    "google:user@example.com",
 			Email: "user@example.com",
 			Sites: []types.UserSite{{ID: "site1"}, {ID: "site2"}},
 		}, nil).Once()
@@ -422,13 +422,7 @@ func TestAuthMiddleware(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
 		server.singleSite = false
-		server.oidcAudiences["google_update_specific"] = "update-audience"
-		server.oidcVerifiers["google_update_specific"] = provider.Verifier(&oidc.Config{ClientID: "update-audience"}).Verify
 		server.updateSpecificEmail = "updater@example.com"
-		defer func() {
-			server.oidcAudiences["google_update_specific"] = "test-audience"
-			server.oidcVerifiers["google_update_specific"] = provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify
-		}()
 
 		// 1. Success with correct audience
 		token := generateTestTokenWithAudience(t, srv.URL, priv, "updater@example.com", "updater@example.com", "update-audience")
@@ -459,7 +453,7 @@ func TestAuthMiddleware(t *testing.T) {
 		req := createReq("POST", "/api/join", map[string]string{"inviteCode": "abc", "joinSiteID": "site1"}, cookie)
 
 		// Mock GetUser returning ErrUserNotFound
-		mocks.On("GetUser", mock.Anything, "user@example.com").Return(types.User{}, storage.ErrUserNotFound).Once()
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{}, storage.ErrUserNotFound).Once()
 
 		server.authMiddleware(testHandler).ServeHTTP(w, req)
 
@@ -481,7 +475,7 @@ func TestAuthMiddleware(t *testing.T) {
 		req := createReq("POST", "/api/join", map[string]string{"inviteCode": "abc", "joinSiteID": "site1"}, cookie)
 
 		// Mock GetUser returning a generic error
-		mocks.On("GetUser", mock.Anything, "user@example.com").Return(types.User{}, assert.AnError).Once()
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{}, assert.AnError).Once()
 
 		server.authMiddleware(testHandler).ServeHTTP(w, req)
 
@@ -501,7 +495,7 @@ func TestAuthMiddleware(t *testing.T) {
 		req := createReq("GET", "/api/auth/status", nil, cookie)
 
 		// Mock GetUser returning ErrUserNotFound
-		mocks.On("GetUser", mock.Anything, "user@example.com").Return(types.User{}, storage.ErrUserNotFound).Once()
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{}, storage.ErrUserNotFound).Once()
 
 		server.authMiddleware(testHandler).ServeHTTP(w, req)
 
@@ -522,8 +516,8 @@ func TestAuthMiddleware(t *testing.T) {
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("GET", "/api/test?siteID=ALL", nil, cookie)
 
-		mocks.On("GetUser", mock.Anything, "user@example.com").Return(types.User{
-			ID:    "user@example.com",
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:    "google:user@example.com",
 			Email: "user@example.com",
 			Sites: []types.UserSite{{ID: "site1"}, {ID: "site2"}},
 		}, nil).Once()
@@ -549,8 +543,8 @@ func TestAuthMiddleware(t *testing.T) {
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("GET", "/api/test?siteID=ALL", nil, cookie)
 
-		mocks.On("GetUser", mock.Anything, "user@example.com").Return(types.User{
-			ID:    "user@example.com",
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:    "google:user@example.com",
 			Email: "user@example.com",
 			Sites: []types.UserSite{{ID: "site1"}},
 		}, nil).Once()
@@ -576,15 +570,15 @@ func TestAuthMiddleware(t *testing.T) {
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("GET", "/api/test", nil, cookie)
 
-		mocks.On("GetUser", mock.Anything, "user@example.com").Return(types.User{
-			ID:    "user@example.com",
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:    "google:user@example.com",
 			Email: "user@example.com",
 			Sites: []types.UserSite{{ID: "site1"}},
 		}, nil).Once()
 
 		mocks.On("GetSite", mock.Anything, "site1").Return(types.Site{
 			ID:          "site1",
-			Permissions: []types.SitePermissions{{UserID: "user@example.com"}},
+			Permissions: []types.SitePermissions{{UserID: "google:user@example.com"}},
 		}, nil).Once()
 
 		server.authMiddleware(testHandler).ServeHTTP(w, req)

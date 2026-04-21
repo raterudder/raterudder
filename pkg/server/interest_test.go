@@ -112,7 +112,7 @@ func TestHandleSubmitInterestAuth(t *testing.T) {
 	}
 
 	// Verify it ignores user lookup error and siteID requirement
-	mockDB.On("GetUser", mock.Anything, "new-user-id").Return(types.User{}, storage.ErrUserNotFound).Once()
+	mockDB.On("GetUser", mock.Anything, "google:new-user-id").Return(types.User{}, storage.ErrUserNotFound).Once()
 	mockDB.On("UpsertInterest", mock.Anything, mock.MatchedBy(func(it types.InterestSubmission) bool {
 		return it.Email == "new@example.com"
 	})).Return(nil).Once()

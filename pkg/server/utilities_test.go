@@ -206,7 +206,7 @@ func TestHandleListUtilities(t *testing.T) {
 		require.NoError(t, err)
 
 		mockStorage := &mockStorage{}
-		mockStorage.On("GetUser", mock.Anything, "unregistered@example.com").Return(types.User{}, storage.ErrUserNotFound).Once()
+		mockStorage.On("GetUser", mock.Anything, "google:unregistered@example.com").Return(types.User{}, storage.ErrUserNotFound).Once()
 
 		srv := &Server{
 			utilities:          mockUMap,
