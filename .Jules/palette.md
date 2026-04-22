@@ -5,3 +5,7 @@
 ## 2024-05-24 - Hide decorative hamburger menu lines from screen readers
 **Learning:** Purely visual, CSS-driven decorative elements like the spans used for a hamburger menu icon can clutter screen reader output if not explicitly hidden. Even if the parent button has a descriptive `aria-label`, the empty child spans might still be announced.
 **Action:** Always add `aria-hidden="true"` to empty `<span>` tags that are used solely for decorative purposes, such as building icon lines via CSS.
+
+## 2024-04-22 - [Add keyboard shortcut hints to buttons]
+**Learning:** Adding keyboard shortcut hints to buttons that have shortcuts associated with them improves discoverability and power-user usability. Hiding the hints by default and displaying them on hover or focus reduces visual clutter.
+**Action:** When a button or action has a keyboard shortcut, add a `<kbd>` element with the hint (e.g. `←` or `Ctrl+S`), mark it with `aria-hidden="true"`, and use CSS to show it only on hover or focus of the parent element.
