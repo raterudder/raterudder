@@ -149,7 +149,7 @@ func (s *Server) handleHistoryPrices(w http.ResponseWriter, r *http.Request) {
 	siteID := s.getSiteID(r)
 	start, end, err := parseTimeRange(r)
 	if err != nil {
-		writeJSONError(w, fmt.Sprintf("invalid time range: %v", err), http.StatusBadRequest)
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -182,7 +182,7 @@ func (s *Server) handleHistoryActions(w http.ResponseWriter, r *http.Request) {
 	siteID := s.getSiteID(r)
 	start, end, err := parseTimeRange(r)
 	if err != nil {
-		writeJSONError(w, fmt.Sprintf("invalid time range: %v", err), http.StatusBadRequest)
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -224,12 +224,12 @@ func parseTimeRange(r *http.Request) (time.Time, time.Time, error) {
 
 	start, err := time.Parse(time.RFC3339, startStr)
 	if err != nil {
-		return time.Time{}, time.Time{}, fmt.Errorf("invalid start time: %w", err)
+		return time.Time{}, time.Time{}, fmt.Errorf("invalid start time")
 	}
 
 	end, err := time.Parse(time.RFC3339, endStr)
 	if err != nil {
-		return time.Time{}, time.Time{}, fmt.Errorf("invalid end time: %w", err)
+		return time.Time{}, time.Time{}, fmt.Errorf("invalid end time")
 	}
 
 	if end.Before(start) {
