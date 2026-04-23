@@ -1,9 +1,0 @@
---- pkg/utility/comed_test.go
-+++ pkg/utility/comed_test.go
-@@ -164,7 +164,6 @@
-		require.NoError(t, err)
-
-		// Basic sanity checks
--		assert.NotZero(t, price.DollarsPerKWH)
-		assert.False(t, price.TSStart.IsZero())
-	})
