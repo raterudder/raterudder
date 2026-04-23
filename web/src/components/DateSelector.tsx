@@ -45,6 +45,7 @@ const DateSelector: React.FC<DateSelectorProps> = ({
             >
                 {loading && <span className="loading-spinner" aria-hidden="true"></span>}
                 <span aria-hidden="true">&lt;</span> Prev
+                <kbd className="shortcut-hint" aria-hidden="true">←</kbd>
             </button>
             <h2>{formattedDate}</h2>
             <button
@@ -55,6 +56,7 @@ const DateSelector: React.FC<DateSelectorProps> = ({
             >
                 {loading && <span className="loading-spinner" aria-hidden="true"></span>}
                 Next <span aria-hidden="true">&gt;</span>
+                <kbd className="shortcut-hint" aria-hidden="true">→</kbd>
             </button>
         </div>
     );

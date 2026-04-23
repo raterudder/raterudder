@@ -5,3 +5,4 @@
 ## 2024-05-24 - Hide decorative hamburger menu lines from screen readers
 **Learning:** Purely visual, CSS-driven decorative elements like the spans used for a hamburger menu icon can clutter screen reader output if not explicitly hidden. Even if the parent button has a descriptive `aria-label`, the empty child spans might still be announced.
 **Action:** Always add `aria-hidden="true"` to empty `<span>` tags that are used solely for decorative purposes, such as building icon lines via CSS.
+## 2024-05-25 - CSS width auto transitions\n**Learning:** CSS transitions cannot smoothly animate to `width: auto` (the element will snap instead of animating).\n**Action:** To achieve a smooth reveal/expand animation, transition the `max-width` property instead (e.g., from `max-width: 0` to a fixed value like `max-width: 2rem`).

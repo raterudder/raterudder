@@ -33,6 +33,33 @@
   background: var(--surface-container-high);
 }
 
+.date-controls button:hover:not(:disabled) .shortcut-hint,
+.date-controls button:focus-visible:not(:disabled) .shortcut-hint {
+  opacity: 1;
+  max-width: 2rem;
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.4rem;
+}
+
+.shortcut-hint {
+  opacity: 0;
+  max-width: 0;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  background: var(--surface-container-highest);
+  color: var(--on-surface-variant);
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-sm);
+  transition: all 0.2s ease;
+  padding: 0;
+  margin: 0;
+  line-height: 1;
+}
+
 .date-controls button:disabled {
   opacity: 0.3;
   cursor: not-allowed;
