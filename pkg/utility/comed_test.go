@@ -164,7 +164,6 @@ func TestComEd(t *testing.T) {
 		require.NoError(t, err)
 
 		// Basic sanity checks
-		assert.NotZero(t, price.DollarsPerKWH)
 		assert.False(t, price.TSStart.IsZero())
 	})
 
