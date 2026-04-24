@@ -37,3 +37,34 @@
   opacity: 0.3;
   cursor: not-allowed;
 }
+
+.date-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  position: relative;
+}
+
+.keyboard-shortcut {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+  font-size: 0.75rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  background-color: var(--surface-container-high);
+  color: var(--on-surface-variant);
+  border: 1px solid var(--border);
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  pointer-events: none;
+  margin-left: 0.25rem;
+}
+
+.date-nav-btn:hover:not(:disabled) .keyboard-shortcut,
+.date-nav-btn:focus-visible:not(:disabled) .keyboard-shortcut {
+  opacity: 1;
+  transform: translateY(0);
+}
