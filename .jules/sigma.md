@@ -10,3 +10,10 @@
 ## 2026-04-18 - Ensure MatchedBy actually validates state
 **Learning:** When replacing `mock.Anything` or `mock.AnythingOfType` with `mock.MatchedBy` to increase assertion strictness, the matching function must actively validate specific field values. Returning `true` unconditionally is an anti-pattern that defeats the purpose of the improvement and will fail code review.
 **Action:** Always write `MatchedBy` functions that assert specific properties (e.g., `return s.UtilityProvider == "test"`) to genuinely test the logic.
+## 2026-04-24 - Avoiding assumptions about truncated terminal output
+**Learning:** The outputs of tools like `grep` and `cat` can be truncated by the terminal or sandbox. Assuming the contents of code based on a truncated response leads to planning invalid file modifications and failing the Groundedness Rule.
+**Action:** Always fetch and read the full, un-truncated text (using tools like `sed` or targeted `cat` blocks) to verify the actual codebase state before proposing edits based on partial context.
+
+## 2026-04-24 - Go package compilation error from scratchpad files
+**Learning:** Creating a test file with a mismatched package name (like `package test` in a directory full of `package main` or `package server`) will instantly cause a "found multiple packages in the same directory" compilation error in Go, preventing test execution.
+**Action:** When creating new Go files, even if they are temporary or just used as a scratchpad, always match the package declaration of the existing files in that directory, or just delete the file immediately when done.
