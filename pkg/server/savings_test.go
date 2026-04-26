@@ -79,7 +79,7 @@ func TestHandleHistorySavings(t *testing.T) {
 
 		mockUtility := &mockUtility{}
 		mockUtility.On("GetFuturePrices", mock.Anything).Return([]types.Price{}, nil)
-		mockUtility.On("ApplySettings", mock.Anything, mock.AnythingOfType("types.Settings")).Return(nil)
+		mockUtility.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 
 		mockUtilities := utility.NewMap(mockStore)
 		mockUtilities.SetProvider(types.SiteIDNone, mockUtility)

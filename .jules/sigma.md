@@ -17,3 +17,6 @@
 ## 2026-04-24 - Go package compilation error from scratchpad files
 **Learning:** Creating a test file with a mismatched package name (like `package test` in a directory full of `package main` or `package server`) will instantly cause a "found multiple packages in the same directory" compilation error in Go, preventing test execution.
 **Action:** When creating new Go files, even if they are temporary or just used as a scratchpad, always match the package declaration of the existing files in that directory, or just delete the file immediately when done.
+## 2024-04-26 - [Avoid mock.AnythingOfType in AssertNotCalled]
+**Learning:** Using `mock.AnythingOfType(...)` inside `AssertNotCalled` assertions creates a weaker test. It only asserts that the mock wasn't called with specific types, rather than asserting it was never called at all.
+**Action:** Always replace `mock.AnythingOfType` with `mock.Anything` in `AssertNotCalled` expectations to ensure the function is strictly never invoked with any arguments. Replace `mock.AnythingOfType` with `mock.Anything` or `mock.MatchedBy` in other scenarios when the exact type is statically typed in Go.

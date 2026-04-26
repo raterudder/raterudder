@@ -254,9 +254,9 @@ func TestHandleJoin(t *testing.T) {
 		s.handleJoin(w, req)
 		assert.Equal(t, http.StatusOK, w.Code)
 		// UpdateSite should NOT be called since user already has permission
-		store.AssertNotCalled(t, "UpdateSite", mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("types.Site"))
+		store.AssertNotCalled(t, "UpdateSite", mock.Anything, mock.Anything, mock.Anything)
 		// UpdateUser should NOT be called since user already has site
-		store.AssertNotCalled(t, "UpdateUser", mock.Anything, mock.AnythingOfType("types.User"))
+		store.AssertNotCalled(t, "UpdateUser", mock.Anything, mock.Anything)
 	})
 
 	t.Run("CreateNewSiteInSingleSiteMode", func(t *testing.T) {
@@ -271,7 +271,7 @@ func TestHandleJoin(t *testing.T) {
 		s.handleJoin(w, req)
 		assert.Equal(t, http.StatusForbidden, w.Code)
 		// No storage calls should have been made
-		store.AssertNotCalled(t, "CreateSite", mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("types.Site"))
+		store.AssertNotCalled(t, "CreateSite", mock.Anything, mock.Anything, mock.Anything)
 	})
 
 	t.Run("CreateNewSite", func(t *testing.T) {
