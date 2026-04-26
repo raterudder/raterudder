@@ -38,23 +38,27 @@ const DateSelector: React.FC<DateSelectorProps> = ({
     return (
         <div className="date-controls">
             <button
+                className="date-nav-btn"
                 onClick={() => onDateChange(-1)}
                 disabled={loading}
                 aria-label="Previous day"
                 title="Previous day (Left Arrow)"
             >
                 {loading && <span className="loading-spinner" aria-hidden="true"></span>}
-                <span aria-hidden="true">&lt;</span> Prev
+                <kbd aria-hidden="true" className="kbd-shortcut">←</kbd>
+                <span><span aria-hidden="true">&lt;</span> Prev</span>
             </button>
             <h2>{formattedDate}</h2>
             <button
+                className="date-nav-btn"
                 onClick={() => onDateChange(1)}
                 disabled={loading || isToday}
                 aria-label="Next day"
                 title={isToday ? "Cannot view future dates" : "Next day (Right Arrow)"}
             >
                 {loading && <span className="loading-spinner" aria-hidden="true"></span>}
-                Next <span aria-hidden="true">&gt;</span>
+                <span>Next <span aria-hidden="true">&gt;</span></span>
+                <kbd aria-hidden="true" className="kbd-shortcut">→</kbd>
             </button>
         </div>
     );

@@ -37,3 +37,35 @@
   opacity: 0.3;
   cursor: not-allowed;
 }
+
+.date-nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.date-nav-btn:hover:not(:disabled) {
+  gap: var(--spacing-xs, 0.25rem);
+}
+
+.kbd-shortcut {
+  display: inline-block;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: max-width 0.2s ease, opacity 0.2s ease;
+  font-family: monospace;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  padding: 0;
+  font-size: 0.75rem;
+}
+
+.date-controls button:hover:not(:disabled) .kbd-shortcut,
+.date-controls button:focus-visible .kbd-shortcut {
+  max-width: 1.5rem;
+  opacity: 1;
+  padding: 0.1rem 0.3rem;
+}
