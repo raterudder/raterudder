@@ -37,3 +37,23 @@
   opacity: 0.3;
   cursor: not-allowed;
 }
+
+.keyboard-shortcut {
+  display: inline-block;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  font-family: inherit;
+  font-size: 0.85em;
+  font-weight: bold;
+  vertical-align: middle;
+  transition: max-width 0.3s ease, opacity 0.3s ease, margin 0.3s ease;
+  color: var(--text-muted);
+}
+
+.date-selector-btn:hover:not(:disabled) .keyboard-shortcut,
+.date-selector-btn:focus-visible:not(:disabled) .keyboard-shortcut {
+  max-width: 1.5rem;
+  opacity: 1;
+  margin: 0 0.25rem;
+}
