@@ -1,8 +1,8 @@
 package server
 
 import (
-	"net/http"
 	"log/slog"
+	"net/http"
 
 	"github.com/raterudder/raterudder/pkg/log"
 )
