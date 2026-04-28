@@ -44,6 +44,7 @@ const DateSelector: React.FC<DateSelectorProps> = ({
                 title="Previous day (Left Arrow)"
             >
                 {loading && <span className="loading-spinner" aria-hidden="true"></span>}
+                <kbd aria-hidden="true" className="keyboard-shortcut">←</kbd>
                 <span aria-hidden="true">&lt;</span> Prev
             </button>
             <h2>{formattedDate}</h2>
@@ -55,6 +56,7 @@ const DateSelector: React.FC<DateSelectorProps> = ({
             >
                 {loading && <span className="loading-spinner" aria-hidden="true"></span>}
                 Next <span aria-hidden="true">&gt;</span>
+                <kbd aria-hidden="true" className="keyboard-shortcut">→</kbd>
             </button>
         </div>
     );

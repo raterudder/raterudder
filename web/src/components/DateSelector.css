@@ -37,3 +37,50 @@
   opacity: 0.3;
   cursor: not-allowed;
 }
+
+.date-controls button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.keyboard-shortcut {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--on-surface-variant);
+  background: var(--surface-container-low);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: max-width 0.3s ease, opacity 0.3s ease, margin 0.3s ease;
+}
+
+.date-controls button:first-of-type .keyboard-shortcut {
+  margin-right: 0;
+}
+
+.date-controls button:last-of-type .keyboard-shortcut {
+  margin-left: 0;
+}
+
+.date-controls button:hover:not(:disabled) .keyboard-shortcut,
+.date-controls button:focus-visible:not(:disabled) .keyboard-shortcut {
+  max-width: 2rem;
+  opacity: 1;
+}
+
+.date-controls button:first-of-type:hover:not(:disabled) .keyboard-shortcut,
+.date-controls button:first-of-type:focus-visible:not(:disabled) .keyboard-shortcut {
+  margin-right: 0.5rem;
+}
+
+.date-controls button:last-of-type:hover:not(:disabled) .keyboard-shortcut,
+.date-controls button:last-of-type:focus-visible:not(:disabled) .keyboard-shortcut {
+  margin-left: 0.5rem;
+}
