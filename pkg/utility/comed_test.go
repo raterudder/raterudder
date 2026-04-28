@@ -404,7 +404,7 @@ func TestComEd(t *testing.T) {
 		assert.Equal(t, 0.10, futures[0].DollarsPerKWH)
 
 		// Assert no DB calls were made
-		m.AssertNotCalled(t, "GetUtilityPrices", mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"))
+		m.AssertNotCalled(t, "GetUtilityPrices")
 	})
 
 	t.Run("GetFuturePrices Hybrid Caching", func(t *testing.T) {
