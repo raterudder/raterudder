@@ -228,7 +228,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		u, err = s.utilities.Site(ctx, siteID, newSettings)
 		if err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to get utility provider", slog.String("utilityProvider", newSettings.UtilityProvider), slog.Any("error", err))
-			writeJSONError(w, fmt.Sprintf("invalid utility provider settings: %v", err), http.StatusBadRequest)
+			writeJSONError(w, "invalid utility provider settings", http.StatusBadRequest)
 			return
 		}
 	}
@@ -256,7 +256,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			loc, err := s.weather.Location(ctx, newSettings.CountryCode, newSettings.PostalCode)
 			if err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to fetch location data", slog.Any("error", err))
-				writeJSONError(w, fmt.Sprintf("failed to fetch location data: %v", err), http.StatusBadRequest)
+				writeJSONError(w, "failed to fetch location data", http.StatusBadRequest)
 				return
 			}
 			newSettings.Location = &loc
@@ -356,7 +356,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			essSystem, err := s.ess.Site(ctx, siteID, newSettings)
 			if err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to get ess system", slog.Any("error", err))
-				writeJSONError(w, fmt.Sprintf("failed to get ess system: %v", err), http.StatusInternalServerError)
+				writeJSONError(w, "failed to get ess system", http.StatusInternalServerError)
 				return
 			}
 
@@ -383,7 +383,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				if dbErr := s.storage.SetSettings(ctx, siteID, existing, types.CurrentSettingsVersion); dbErr != nil {
 					log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status", slog.Any("error", dbErr))
 				}
-				writeJSONError(w, fmt.Sprintf("failed to verify ess credentials: %v", err), http.StatusBadRequest)
+				writeJSONError(w, "failed to verify ess credentials", http.StatusBadRequest)
 				return
 			}
 

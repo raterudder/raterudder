@@ -577,7 +577,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		srv.handleUpdateSettings(w, req)
 		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
-		assert.Contains(t, w.Body.String(), "failed to verify ess credentials: credentials missing")
+		assert.Contains(t, w.Body.String(), "failed to verify ess credentials")
 
 		assert.True(t, mockS.AssertExpectations(t))
 		assert.True(t, mockES.AssertExpectations(t))
