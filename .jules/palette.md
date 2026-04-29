@@ -1,0 +1,3 @@
+## 2024-03-24 - Hidden Keyboard Shortcut Hints
+**Learning:** Adding keyboard shortcut hints directly to buttons improves discoverability, but can add visual clutter if always visible. Using CSS transitions on `max-width` to reveal `<kbd>` elements on hover/focus is a clean way to expose shortcuts to power users without compromising the clean UI for others. CSS transitions cannot smoothly animate to `width: auto` so `max-width` must be used instead.
+**Action:** When an interactive element has a keyboard shortcut, append a `<kbd aria-hidden="true">` element that becomes visible on hover or focus using `max-width` transitions.

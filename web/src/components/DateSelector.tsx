@@ -42,9 +42,11 @@ const DateSelector: React.FC<DateSelectorProps> = ({
                 disabled={loading}
                 aria-label="Previous day"
                 title="Previous day (Left Arrow)"
+                className="date-btn"
             >
                 {loading && <span className="loading-spinner" aria-hidden="true"></span>}
                 <span aria-hidden="true">&lt;</span> Prev
+                <kbd aria-hidden="true" className="shortcut-hint">←</kbd>
             </button>
             <h2>{formattedDate}</h2>
             <button
@@ -52,9 +54,11 @@ const DateSelector: React.FC<DateSelectorProps> = ({
                 disabled={loading || isToday}
                 aria-label="Next day"
                 title={isToday ? "Cannot view future dates" : "Next day (Right Arrow)"}
+                className="date-btn"
             >
                 {loading && <span className="loading-spinner" aria-hidden="true"></span>}
                 Next <span aria-hidden="true">&gt;</span>
+                <kbd aria-hidden="true" className="shortcut-hint">→</kbd>
             </button>
         </div>
     );
