@@ -1,7 +1,10 @@
 package server
 
 import (
+	"log/slog"
 	"net/http"
+
+	"github.com/raterudder/raterudder/pkg/log"
 )
 
 func (s *Server) handleTeslaRegister(w http.ResponseWriter, r *http.Request) {
@@ -18,7 +21,8 @@ func (s *Server) handleTeslaRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.ess.RegisterTesla(r.Context(), domain); err != nil {
-		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		log.Ctx(r.Context()).ErrorContext(r.Context(), "failed to register tesla", slog.Any("error", err))
+		writeJSONError(w, "failed to register tesla", http.StatusInternalServerError)
 		return
 	}
 
