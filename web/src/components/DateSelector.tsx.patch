@@ -1,0 +1,18 @@
+--- web/src/components/DateSelector.tsx
++++ web/src/components/DateSelector.tsx
+@@ -37,6 +37,7 @@
+             >
+                 {loading && <span className="loading-spinner" aria-hidden="true"></span>}
+                 <span aria-hidden="true">&lt;</span> Prev
++                <kbd className="shortcut-hint" aria-hidden="true">←</kbd>
+             </button>
+             <h2>{formattedDate}</h2>
+             <button
+@@ -47,6 +48,7 @@
+             >
+                 {loading && <span className="loading-spinner" aria-hidden="true"></span>}
+                 Next <span aria-hidden="true">&gt;</span>
++                <kbd className="shortcut-hint" aria-hidden="true">→</kbd>
+             </button>
+         </div>
+     );

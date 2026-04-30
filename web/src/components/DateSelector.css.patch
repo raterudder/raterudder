@@ -1,0 +1,33 @@
+--- web/src/components/DateSelector.css
++++ web/src/components/DateSelector.css
+@@ -21,6 +21,10 @@
+   padding: 0.5rem 1rem;
+   border-radius: var(--radius-sm);
+   transition: all 0.2s ease;
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  gap: 0.35rem;
+ }
+
+ .date-controls button:hover:not(:disabled) {
+@@ -32,3 +36,19 @@
+   opacity: 0.3;
+   cursor: not-allowed;
+ }
++
++.shortcut-hint {
++  opacity: 0;
++  font-family: var(--font-mono);
++  font-size: 0.75rem;
++  padding: 0.125rem 0.25rem;
++  border-radius: 4px;
++  background: var(--surface-container-highest);
++  border: 1px solid var(--border);
++  transition: opacity 0.2s ease;
++}
++
++.date-controls button:hover:not(:disabled) .shortcut-hint,
++.date-controls button:focus-visible:not(:disabled) .shortcut-hint {
++  opacity: 1;
++}
