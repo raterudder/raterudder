@@ -37,3 +37,27 @@
   opacity: 0.3;
   cursor: not-allowed;
 }
+
+.shortcut-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 0.5rem;
+  padding: 0 0.25rem;
+  font-family: inherit;
+  font-size: 0.75rem;
+  color: var(--on-surface-variant);
+  background: var(--surface-container-highest);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  opacity: 0;
+  transform: translateY(2px);
+  transition: all 0.2s ease;
+  pointer-events: none;
+}
+
+.date-controls button:hover:not(:disabled) .shortcut-hint,
+.date-controls button:focus-visible .shortcut-hint {
+  opacity: 0.8;
+  transform: translateY(0);
+}
