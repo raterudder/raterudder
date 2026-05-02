@@ -571,7 +571,11 @@ func TestHandleHistorySavings(t *testing.T) {
 		mockStore := &mockStorage{}
 		mockStore.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{}, types.CurrentSettingsVersion, nil)
 		// We explicitly assert the lookback (-24 hours) adjustment instead of using mock.AnythingOfType("time.Time")
-		mockStore.On("GetPriceHistory", mock.Anything, types.SiteIDNone, start.AddDate(0, 0, -1), end).Return([]types.Price(nil), errors.New("db error"))
+		mockStore.On("GetPriceHistory", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(t time.Time) bool {
+			return t.Equal(start.AddDate(0, 0, -1))
+		}), mock.MatchedBy(func(t time.Time) bool {
+			return t.Equal(end)
+		})).Return([]types.Price(nil), errors.New("db error"))
 
 		mockUtilities := utility.NewMap(mockStore)
 		s := &Server{storage: mockStore, utilities: mockUtilities, bypassAuth: true}
@@ -597,20 +601,36 @@ func TestHandleHistorySavingsAll(t *testing.T) {
 	endQuery := end
 
 	// Site 1 data
-	mockStore.On("GetPriceHistory", mock.Anything, "site1", startQuery, endQuery).Return([]types.Price{
+	mockStore.On("GetPriceHistory", mock.Anything, "site1", mock.MatchedBy(func(t time.Time) bool {
+		return t.Equal(startQuery)
+	}), mock.MatchedBy(func(t time.Time) bool {
+		return t.Equal(endQuery)
+	})).Return([]types.Price{
 		{TSStart: start, DollarsPerKWH: 0.10},
 	}, nil)
-	mockStore.On("GetEnergyHistory", mock.Anything, "site1", startQuery, endQuery).Return([]types.DailyEnergyStats{
+	mockStore.On("GetEnergyHistory", mock.Anything, "site1", mock.MatchedBy(func(t time.Time) bool {
+		return t.Equal(startQuery)
+	}), mock.MatchedBy(func(t time.Time) bool {
+		return t.Equal(endQuery)
+	})).Return([]types.DailyEnergyStats{
 		{Hourly: []types.EnergyStats{{TSHourStart: start, HomeKWH: 10, GridImportKWH: 10}}},
 	}, nil)
 	mockStore.On("GetActionHistory", mock.Anything, "site1", start.Add(-72*time.Hour), end).Return([]types.Action{}, nil)
 	mockStore.On("GetSettings", mock.Anything, "site1").Return(types.Settings{}, types.CurrentSettingsVersion, nil)
 
 	// Site 2 data
-	mockStore.On("GetPriceHistory", mock.Anything, "site2", startQuery, endQuery).Return([]types.Price{
+	mockStore.On("GetPriceHistory", mock.Anything, "site2", mock.MatchedBy(func(t time.Time) bool {
+		return t.Equal(startQuery)
+	}), mock.MatchedBy(func(t time.Time) bool {
+		return t.Equal(endQuery)
+	})).Return([]types.Price{
 		{TSStart: start, DollarsPerKWH: 0.20},
 	}, nil)
-	mockStore.On("GetEnergyHistory", mock.Anything, "site2", startQuery, endQuery).Return([]types.DailyEnergyStats{
+	mockStore.On("GetEnergyHistory", mock.Anything, "site2", mock.MatchedBy(func(t time.Time) bool {
+		return t.Equal(startQuery)
+	}), mock.MatchedBy(func(t time.Time) bool {
+		return t.Equal(endQuery)
+	})).Return([]types.DailyEnergyStats{
 		{Hourly: []types.EnergyStats{{TSHourStart: start, HomeKWH: 20, GridImportKWH: 20}}},
 	}, nil)
 
