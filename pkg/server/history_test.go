@@ -49,7 +49,7 @@ func TestHistory(t *testing.T) {
 	// But we need to use historyMockStorage to override methods.
 	mockSBase := &mockStorage{}
 	// We need to set expectations on the base mock if it's called
-	mockSBase.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{UtilityProvider: "test"}, types.CurrentSettingsVersion, nil)
+	mockSBase.On("GetSettings", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), types.SiteIDNone).Return(types.Settings{UtilityProvider: "test"}, types.CurrentSettingsVersion, nil)
 
 	mockS := &historyMockStorage{
 		mockStorage: mockSBase,
@@ -455,7 +455,7 @@ func TestHandleHistoryEnergy(t *testing.T) {
 		d, err := time.Parse("2006-01-02", targetDate)
 		require.NoError(t, err)
 
-		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+		mockS.On("GetSettings", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), types.SiteIDNone).Return(types.Settings{
 			Location: &types.SiteLocation{
 				TimeZone:     "UTC",
 				Latitude:     41.8781,
@@ -469,7 +469,7 @@ func TestHandleHistoryEnergy(t *testing.T) {
 		endQuery := d.AddDate(0, 0, 1)
 
 		// Energy History
-		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, startQuery, endQuery).Return([]types.DailyEnergyStats{
+		mockS.On("GetEnergyHistory", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), types.SiteIDNone, startQuery, endQuery).Return([]types.DailyEnergyStats{
 			{TSDayStart: d, Hourly: []types.EnergyStats{{TSHourStart: d, SolarKWH: 5.2, MaxBatterySOC: 85.0}}},
 		}, nil).Once()
 
@@ -477,7 +477,7 @@ func TestHandleHistoryEnergy(t *testing.T) {
 		actualEnd := d.AddDate(0, 0, 1)
 
 		// Weather
-		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, actualStart, actualEnd).Return([]types.Weather{
+		mockS.On("GetWeather", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), types.SiteIDNone, actualStart, actualEnd).Return([]types.Weather{
 			{
 				TSDayStart: d,
 				ForecastHours: []types.HourlyWeather{
@@ -517,7 +517,7 @@ func TestHandleHistoryEnergy(t *testing.T) {
 		targetDate := now.Format("2006-01-02")
 		today := truncateDay(now)
 
-		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+		mockS.On("GetSettings", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), types.SiteIDNone).Return(types.Settings{
 			Location: &types.SiteLocation{
 				TimeZone:     "UTC",
 				Latitude:     41.8781,
@@ -534,7 +534,7 @@ func TestHandleHistoryEnergy(t *testing.T) {
 		endEnergy := parsedToday.AddDate(0, 0, 1)
 		startEnergy := parsedToday.AddDate(0, 0, -forecastHistoryDays-1)
 
-		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, startEnergy, endEnergy).Return([]types.DailyEnergyStats{
+		mockS.On("GetEnergyHistory", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), types.SiteIDNone, startEnergy, endEnergy).Return([]types.DailyEnergyStats{
 			{
 				TSDayStart: todayUTC,
 				Hourly: []types.EnergyStats{
@@ -547,7 +547,7 @@ func TestHandleHistoryEnergy(t *testing.T) {
 		startWeather := todayUTC.AddDate(0, 0, -forecastHistoryDays)
 		endWeather := todayUTC.AddDate(0, 0, 1)
 
-		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, startWeather, endWeather).Return([]types.Weather{
+		mockS.On("GetWeather", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), types.SiteIDNone, startWeather, endWeather).Return([]types.Weather{
 			{
 				ForecastHours: []types.HourlyWeather{
 					{TSHourStart: today, TemperatureC: 15, DNI: 500, DHI: 100},
@@ -571,7 +571,7 @@ func TestHandleHistoryEnergy(t *testing.T) {
 		require.NoError(t, err)
 		dUTC := d.UTC()
 
-		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+		mockS.On("GetSettings", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), types.SiteIDNone).Return(types.Settings{
 			Location: &types.SiteLocation{
 				TimeZone:     "UTC",
 				Latitude:     41.8781,
@@ -584,7 +584,7 @@ func TestHandleHistoryEnergy(t *testing.T) {
 		// End is tomorrow exclusive. Start factors in lookback for forecasting logic
 		endEnergy := dUTC.AddDate(0, 0, 1)
 		startEnergy := dUTC.AddDate(0, 0, -forecastHistoryDays-1)
-		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, startEnergy, endEnergy).Return([]types.DailyEnergyStats{
+		mockS.On("GetEnergyHistory", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), types.SiteIDNone, startEnergy, endEnergy).Return([]types.DailyEnergyStats{
 			{
 				TSDayStart: dUTC,
 				Hourly:     []types.EnergyStats{{TSHourStart: dUTC, SolarKWH: 5.2, MaxBatterySOC: 85.0}},
@@ -594,7 +594,7 @@ func TestHandleHistoryEnergy(t *testing.T) {
 		// Weather query offsets start slightly differently since it adjusts based on the returned daily stats TSDayStart timezone.
 		startWeather := dUTC.AddDate(0, 0, -forecastHistoryDays)
 		endWeather := dUTC.AddDate(0, 0, 1)
-		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, startWeather, endWeather).Return([]types.Weather{
+		mockS.On("GetWeather", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), types.SiteIDNone, startWeather, endWeather).Return([]types.Weather{
 			{
 				ForecastHours: []types.HourlyWeather{
 					{TSHourStart: dUTC, TemperatureC: 15, DNI: 500, DHI: 100},

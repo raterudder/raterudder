@@ -17,3 +17,6 @@
 ## 2026-04-24 - Go package compilation error from scratchpad files
 **Learning:** Creating a test file with a mismatched package name (like `package test` in a directory full of `package main` or `package server`) will instantly cause a "found multiple packages in the same directory" compilation error in Go, preventing test execution.
 **Action:** When creating new Go files, even if they are temporary or just used as a scratchpad, always match the package declaration of the existing files in that directory, or just delete the file immediately when done.
+## 2026-05-02 - [Mocking Contexts Safely in Testify]
+**Learning:** When mocking Go functions that accept a `context.Context` using `testify/mock`, asserting on specific concrete context types like `*context.valueCtx` via `mock.AnythingOfType` is brittle because the underlying implementation type of the context can change based on upstream middleware or context wrappers.
+**Action:** Always use `mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil })` to safely verify that a valid, non-nil context was passed without tying the test to standard library internals.
