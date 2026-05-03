@@ -17,3 +17,9 @@
 ## 2026-04-24 - Go package compilation error from scratchpad files
 **Learning:** Creating a test file with a mismatched package name (like `package test` in a directory full of `package main` or `package server`) will instantly cause a "found multiple packages in the same directory" compilation error in Go, preventing test execution.
 **Action:** When creating new Go files, even if they are temporary or just used as a scratchpad, always match the package declaration of the existing files in that directory, or just delete the file immediately when done.
+## 2026-05-03 - [Selective mock replacement in Go tests]
+**Learning:** Using global `sed` replacements to swap `mock.Anything` for a strict context matcher often incorrectly modifies non-context arguments, leading to test panics when strings or errors fail the context matcher's type assertion.
+**Action:** Use targeted script-based replacements or manual edits to selectively replace only the `mock.Anything` occurrences that correspond to `context.Context` arguments.
+## 2026-05-03 - [Excluding generated files from commits]
+**Learning:** Generated artifacts like `coverage.out` from `go test -coverprofile` should not be committed to source control as they pollute the repository and cause issues.
+**Action:** Always verify `git status` before committing and proactively delete or ignore generated test artifacts.
