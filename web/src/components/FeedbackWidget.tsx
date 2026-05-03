@@ -130,6 +130,7 @@ const FeedbackWidget: React.FC<FeedbackWidgetProps> = ({ siteID }) => {
                                             onClick={handleSubmit}
                                             type="button"
                                             disabled={loading || (comment.trim() === '' && sentiment === null)}
+                                            title={(comment.trim() === '' && sentiment === null) ? "Please select a sentiment or leave a comment" : undefined}
                                         >
                                             {loading && <span className="loading-spinner" aria-hidden="true"></span>}
                                             {loading ? 'Sending...' : 'Submit'}
