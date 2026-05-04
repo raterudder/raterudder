@@ -58,7 +58,7 @@ const FeedbackWidget: React.FC<FeedbackWidgetProps> = ({ siteID }) => {
         <div className="feedback-widget-container">
             <Popover.Root open={isOpen} onOpenChange={(open) => handleOpenChange(open)}>
                 <Popover.Trigger aria-label="Feedback" className="feedback-fab">
-                    💬
+                    <span aria-hidden="true">💬</span>
                 </Popover.Trigger>
                 <Popover.Portal>
                     <Popover.Positioner sideOffset={8}>
