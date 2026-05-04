@@ -283,7 +283,9 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
                             <p>
                                 <strong>What's New:</strong> {whatsNewText}
                             </p>
-                            <button onClick={dismissWhatsNew} className="banner-dismiss-btn" aria-label="Dismiss What's New banner">&times;</button>
+                            <button onClick={dismissWhatsNew} className="banner-dismiss-btn" aria-label="Dismiss What's New banner">
+                                <span aria-hidden="true">&times;</span>
+                            </button>
                         </div>
                     )}
                     {settings && (!settings.utilityProvider || settings.utilityProvider === "") && (
