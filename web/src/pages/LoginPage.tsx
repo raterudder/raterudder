@@ -42,8 +42,8 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onLoginError, aut
                                         shape="pill"
                                         width="250"
                                         auto_select
-                                        use_fedcm_for_prompt
-                                        use_fedcm_for_button
+                                        use_fedcm_for_prompt={!((navigator as any).brave)}
+                                        use_fedcm_for_button={!((navigator as any).brave)}
                                     />
                                 </GoogleOAuthProvider>
                             )}
