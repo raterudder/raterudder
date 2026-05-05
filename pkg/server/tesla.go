@@ -18,7 +18,7 @@ func (s *Server) handleTeslaRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.ess.RegisterTesla(r.Context(), domain); err != nil {
-		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		writeJSONError(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
