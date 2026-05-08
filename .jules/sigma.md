@@ -17,3 +17,6 @@
 ## 2026-04-24 - Go package compilation error from scratchpad files
 **Learning:** Creating a test file with a mismatched package name (like `package test` in a directory full of `package main` or `package server`) will instantly cause a "found multiple packages in the same directory" compilation error in Go, preventing test execution.
 **Action:** When creating new Go files, even if they are temporary or just used as a scratchpad, always match the package declaration of the existing files in that directory, or just delete the file immediately when done.
+## 2024-05-24 - Document Context Matching Rationale
+**Learning:** When replacing `mock.Anything` with `mock.MatchedBy` for `context.Context` arguments in Go tests, it is critical to explicitly document the rationale via a code comment (e.g., `// Ensure a non-nil valid context is passed to storage methods`). This prevents code review nitpicks and clarifies the intent of the assertion for future maintainers.
+**Action:** Always pair `mock.MatchedBy` context assertions with a comment explaining what is being validated and why.
