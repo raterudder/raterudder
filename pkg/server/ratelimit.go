@@ -66,13 +66,7 @@ func (s *Server) getClientLimiter(ip string) *clientRateLimiter {
 }
 
 func getClientIP(r *http.Request) string {
-	// 1. Check Cloudflare header first
-	cfIP := r.Header.Get("CF-Connecting-IP")
-	if cfIP != "" {
-		return strings.TrimSpace(cfIP)
-	}
-
-	// 2. Check X-Forwarded-For and find the last public IP
+	// 1. Check X-Forwarded-For and find the last public IP
 	// We parse this in reverse to prevent spoofing of IPs.
 	// We assume this is not behind an external load balancer because if it was
 	// then the last public IP would be the load balancer's IP itself.
