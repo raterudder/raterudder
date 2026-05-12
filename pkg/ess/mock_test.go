@@ -23,7 +23,9 @@ func TestMockESS(t *testing.T) {
 
 		// 1. Test first run (no state)
 		db.On("GetESSMockState", ctx, "test-site").Return(types.ESSMockState{}, nil).Once()
-		db.On("UpdateESSMockState", ctx, "test-site", mock.MatchedBy(func(s types.ESSMockState) bool { return !s.Timestamp.IsZero() /* Ensure a valid state with timestamp is passed */ })).Return(nil).Once()
+		db.On("UpdateESSMockState", ctx, "test-site", mock.MatchedBy(func(s types.ESSMockState) bool {
+			return !s.Timestamp.IsZero() /* Ensure a valid state with timestamp is passed */
+		})).Return(nil).Once()
 
 		status, err := ess.GetStatus(ctx)
 		require.NoError(t, err)
@@ -38,7 +40,9 @@ func TestMockESS(t *testing.T) {
 			BatteryMode: types.BatteryModeChargeAny,
 		}
 		db.On("GetESSMockState", ctx, "test-site").Return(state, nil).Once()
-		db.On("UpdateESSMockState", ctx, "test-site", mock.MatchedBy(func(s types.ESSMockState) bool { return !s.Timestamp.IsZero() /* Ensure a valid state with timestamp is passed */ })).Return(nil).Once()
+		db.On("UpdateESSMockState", ctx, "test-site", mock.MatchedBy(func(s types.ESSMockState) bool {
+			return !s.Timestamp.IsZero() /* Ensure a valid state with timestamp is passed */
+		})).Return(nil).Once()
 
 		status, err = ess.GetStatus(ctx)
 		require.NoError(t, err)
@@ -166,7 +170,9 @@ func TestMockESS(t *testing.T) {
 
 		ctx := context.Background()
 		db.On("GetESSMockState", ctx, "test-site").Return(types.ESSMockState{}, nil).Once()
-		db.On("UpdateESSMockState", ctx, "test-site", mock.MatchedBy(func(s types.ESSMockState) bool { return !s.Timestamp.IsZero() /* Ensure a valid state with timestamp is passed */ })).Return(nil).Once()
+		db.On("UpdateESSMockState", ctx, "test-site", mock.MatchedBy(func(s types.ESSMockState) bool {
+			return !s.Timestamp.IsZero() /* Ensure a valid state with timestamp is passed */
+		})).Return(nil).Once()
 
 		end := time.Now()
 		start := end.Add(-24 * time.Hour)
@@ -236,7 +242,9 @@ func TestMockESS(t *testing.T) {
 		db.On("GetESSMockState", ctx, "test-site").Return(types.ESSMockState{}, nil).Once()
 
 		var savedState types.ESSMockState
-		db.On("UpdateESSMockState", ctx, "test-site", mock.MatchedBy(func(s types.ESSMockState) bool { return !s.Timestamp.IsZero() /* Ensure a valid state with timestamp is passed */ })).Run(func(args mock.Arguments) {
+		db.On("UpdateESSMockState", ctx, "test-site", mock.MatchedBy(func(s types.ESSMockState) bool {
+			return !s.Timestamp.IsZero() /* Ensure a valid state with timestamp is passed */
+		})).Run(func(args mock.Arguments) {
 			savedState = args.Get(2).(types.ESSMockState)
 		}).Return(nil).Once()
 
@@ -245,7 +253,9 @@ func TestMockESS(t *testing.T) {
 
 		// 2. Second time
 		db.On("GetESSMockState", ctx, "test-site").Return(savedState, nil).Once()
-		db.On("UpdateESSMockState", ctx, "test-site", mock.MatchedBy(func(s types.ESSMockState) bool { return !s.Timestamp.IsZero() /* Ensure a valid state with timestamp is passed */ })).Return(nil).Once()
+		db.On("UpdateESSMockState", ctx, "test-site", mock.MatchedBy(func(s types.ESSMockState) bool {
+			return !s.Timestamp.IsZero() /* Ensure a valid state with timestamp is passed */
+		})).Return(nil).Once()
 
 		status2, err := ess.GetStatus(ctx)
 		require.NoError(t, err)
