@@ -272,8 +272,8 @@ func TestComEd(t *testing.T) {
 		end := start.Add(time.Hour)
 
 		// 1. Test GetConfirmedPrices - DB Empty -> API -> DB Upsert
-		m.On("GetUtilityPrices", mock.Anything, "comed", start, end).Return([]types.PriceState{}, nil).Once()
-		m.On("UpsertUtilityPrices", mock.Anything, "comed", mock.MatchedBy(func(p []types.PriceState) bool {
+		m.On("GetUtilityPrices", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil /* Ensure a non-nil valid context is passed */ }), "comed", start, end).Return([]types.PriceState{}, nil).Once()
+		m.On("UpsertUtilityPrices", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil /* Ensure a non-nil valid context is passed */ }), "comed", mock.MatchedBy(func(p []types.PriceState) bool {
 			return len(p) == 1 && p[0].Price.DollarsPerKWH == 0.02
 		}), 0).Return(nil).Once()
 
@@ -285,7 +285,7 @@ func TestComEd(t *testing.T) {
 		// 2. Test GetConfirmedPrices - DB Full
 		// Clear memory cache to force DB check
 		c.historicalPrices = make(map[int64]types.Price)
-		m.On("GetUtilityPrices", mock.Anything, "comed", start, end).Return([]types.PriceState{
+		m.On("GetUtilityPrices", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil /* Ensure a non-nil valid context is passed */ }), "comed", start, end).Return([]types.PriceState{
 			{Price: prices[0], Confirmed: true, TSUpdated: time.Now()},
 		}, nil)
 
@@ -311,7 +311,7 @@ func TestComEd(t *testing.T) {
 		}
 
 		// DB mock should start from `start.Add(time.Hour)`
-		m.On("GetUtilityPrices", mock.Anything, "comed", start.Add(time.Hour), end2).Return([]types.PriceState{
+		m.On("GetUtilityPrices", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil /* Ensure a non-nil valid context is passed */ }), "comed", start.Add(time.Hour), end2).Return([]types.PriceState{
 			{Price: types.Price{TSStart: start.Add(time.Hour), DollarsPerKWH: 0.05}, Confirmed: true, TSUpdated: time.Now()},
 		}, nil)
 
@@ -340,10 +340,10 @@ func TestComEd(t *testing.T) {
 
 		ctx := context.Background()
 
-		m.On("GetUtilityPrices", mock.Anything, "comed", now.Truncate(time.Hour), now.Truncate(time.Hour).Add(48*time.Hour)).Return([]types.PriceState{
+		m.On("GetUtilityPrices", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil /* Ensure a non-nil valid context is passed */ }), "comed", now.Truncate(time.Hour), now.Truncate(time.Hour).Add(48*time.Hour)).Return([]types.PriceState{
 			{Price: types.Price{TSStart: now, DollarsPerKWH: 0.0105009}, Confirmed: false, TSUpdated: time.Now()}, // Using a stable price for test
 		}, nil).Once()
-		m.On("UpsertUtilityPrices", mock.Anything, "comed", mock.MatchedBy(func(p []types.PriceState) bool {
+		m.On("UpsertUtilityPrices", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil /* Ensure a non-nil valid context is passed */ }), "comed", mock.MatchedBy(func(p []types.PriceState) bool {
 			return len(p) > 0
 		}), 0).Return(nil).Once()
 
@@ -367,7 +367,7 @@ func TestComEd(t *testing.T) {
 				TSUpdated: time.Now(),
 			})
 		}
-		m.On("GetUtilityPrices", mock.Anything, "comed", now.Truncate(time.Hour), now.Truncate(time.Hour).Add(48*time.Hour)).Return(dbPrices, nil).Once()
+		m.On("GetUtilityPrices", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil /* Ensure a non-nil valid context is passed */ }), "comed", now.Truncate(time.Hour), now.Truncate(time.Hour).Add(48*time.Hour)).Return(dbPrices, nil).Once()
 
 		futures2, err := c.GetFuturePrices(ctx)
 		require.NoError(t, err)
@@ -449,7 +449,7 @@ func TestComEd(t *testing.T) {
 			})
 		}
 
-		m.On("GetUtilityPrices", mock.Anything, "comed", expectedDBStart, nowHour.Add(48*time.Hour)).Return(dbPrices, nil).Once()
+		m.On("GetUtilityPrices", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil /* Ensure a non-nil valid context is passed */ }), "comed", expectedDBStart, nowHour.Add(48*time.Hour)).Return(dbPrices, nil).Once()
 
 		// 3. Execution should return 11 prices (5 cached + 6 DB)
 		ctx := context.Background()

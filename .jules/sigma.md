@@ -17,3 +17,6 @@
 ## 2026-04-24 - Go package compilation error from scratchpad files
 **Learning:** Creating a test file with a mismatched package name (like `package test` in a directory full of `package main` or `package server`) will instantly cause a "found multiple packages in the same directory" compilation error in Go, preventing test execution.
 **Action:** When creating new Go files, even if they are temporary or just used as a scratchpad, always match the package declaration of the existing files in that directory, or just delete the file immediately when done.
+## 2024-11-20 - Enforcing Exact Types over mock.Anything
+**Learning:** Using `mock.Anything` in `testify/mock` tests causes tests to pass even if nil pointers, missing contexts, or uninitialized structs are accidentally passed by the code.
+**Action:** Replace `mock.Anything` with `mock.MatchedBy(func(T) bool)` implementations to assert critical fields exist (e.g. `ctx != nil` or `!state.Timestamp.IsZero()`), improving test precision without rewriting the system.
