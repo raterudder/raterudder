@@ -67,7 +67,7 @@ const FeedbackWidget: React.FC<FeedbackWidgetProps> = ({ siteID }) => {
                                 <ArrowSvg />
                             </Popover.Arrow>
                             {success ? (
-                                <div className="feedback-success">
+                                <div className="feedback-success" role="status">
                                     <Popover.Title className="feedback-title">Thank you!</Popover.Title>
                                     <Popover.Description className="feedback-desc">Your feedback has been submitted.</Popover.Description>
                                 </div>
@@ -116,7 +116,7 @@ const FeedbackWidget: React.FC<FeedbackWidgetProps> = ({ siteID }) => {
                                         onChange={(e) => setComment(e.target.value)}
                                     />
 
-                                    {error && <div className="feedback-error">{error}</div>}
+                                    {error && <div className="feedback-error" role="alert">{error}</div>}
 
                                     <div className="feedback-actions">
                                         <Popover.Close
