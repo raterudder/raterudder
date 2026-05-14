@@ -217,7 +217,7 @@ const BetaInterstitialPage: React.FC = () => {
                             />
                         </div>
 
-                        {error && <div className="error-message" style={{ marginBottom: '1rem' }}>{error}</div>}
+                        {error && <div className="error-message" role="alert" style={{ marginBottom: '1rem' }}>{error}</div>}
 
                         <button
                             onClick={handleSubmitInterest}
@@ -231,7 +231,7 @@ const BetaInterstitialPage: React.FC = () => {
                 )}
 
                 {isSubmitted && (
-                    <div className="beta-interstitial-feedback success">
+                    <div className="beta-interstitial-feedback success" role="status">
                         <p style={{ fontWeight: '700', marginBottom: '0.5rem', fontSize: '1.1rem' }}>Success!</p>
                         <p>
                             We've received your interest! We'll reach out when we can support your configuration or if we have further questions.

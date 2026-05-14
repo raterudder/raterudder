@@ -44,7 +44,7 @@ const AdminPage: React.FC = () => {
     if (error) {
         return (
             <div className="content-container admin-page">
-                <div className="admin-error">{error}</div>
+                <div className="admin-error" role="alert">{error}</div>
             </div>
         );
     }
