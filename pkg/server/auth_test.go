@@ -275,6 +275,29 @@ func TestAuthMiddleware(t *testing.T) {
 		assert.True(t, mocks.AssertExpectations(t))
 	})
 
+	t.Run("Multi Site Mode - Site Lookup Fails", func(t *testing.T) {
+		mocks := new(mockStorage)
+		server.storage = mocks
+		server.singleSite = false
+		w := httptest.NewRecorder()
+		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
+		req := createReq("GET", "/api/test?siteID=site3", nil, cookie)
+
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:    "google:user@example.com",
+			Email: "user@example.com",
+			Sites: []types.UserSite{{ID: "site1"}, {ID: "site2"}},
+		}, nil).Once()
+
+		// Site lookup fails
+		mocks.On("GetSite", mock.Anything, "site3").Return(types.Site{}, assert.AnError).Once()
+
+		server.authMiddleware(testHandler).ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusForbidden, w.Code)
+		assert.True(t, mocks.AssertExpectations(t))
+	})
+
 	t.Run("Multi Site Mode - Auth as Admin bypasses permissions as read-only", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks

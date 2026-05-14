@@ -17,3 +17,7 @@
 ## 2026-04-24 - Go package compilation error from scratchpad files
 **Learning:** Creating a test file with a mismatched package name (like `package test` in a directory full of `package main` or `package server`) will instantly cause a "found multiple packages in the same directory" compilation error in Go, preventing test execution.
 **Action:** When creating new Go files, even if they are temporary or just used as a scratchpad, always match the package declaration of the existing files in that directory, or just delete the file immediately when done.
+
+## 2024-05-20 - Subtest Duplication During Scripted Text Replacement
+**Learning:** Using simple `content.replace(search, replace)` in Python without limiting the replacement count (or verifying uniqueness) inside a loop or repeated executions can cause massive duplication of subtests, bloating the test file and polluting the commit.
+**Action:** When programmatically modifying a test file (e.g., adding a subtest via Python script), always pass `count=1` to `.replace()` (or use precise split-join logic) and explicitly check the file's pre-state to avoid redundant modifications. Ensure scratchpad scripts are thoroughly removed before `request_code_review`.
