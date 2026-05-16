@@ -18,8 +18,7 @@ type Decision struct {
 }
 
 // Controller handles the decision-making logic for the ESS.
-type Controller struct {
-}
+type Controller struct{}
 
 // NewController creates a new Controller.
 func NewController() *Controller {
@@ -33,6 +32,7 @@ func (c *Controller) Decide(
 	currentPrice types.Price,
 	futurePrices []types.Price,
 	history []types.EnergyStats,
+	weather []types.Weather,
 	settings types.Settings,
 ) (Decision, error) {
 	log.Ctx(ctx).DebugContext(ctx, "controller decide started",
@@ -54,7 +54,7 @@ func (c *Controller) Decide(
 		solarMode = types.SolarModeNoExport
 	}
 
-	simData := c.SimulateState(ctx, now, currentStatus, currentPrice, futurePrices, history, settings)
+	simData := c.SimulateState(ctx, now, currentStatus, currentPrice, futurePrices, history, weather, settings)
 
 	if len(simData) > 0 && simData[0].TS.After(now) {
 		log.Ctx(ctx).WarnContext(ctx, "simulation started in the future", slog.Time("simTime", simData[0].TS))

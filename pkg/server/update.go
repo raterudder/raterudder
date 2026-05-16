@@ -176,8 +176,8 @@ func (s *Server) performSiteUpdate(
 
 	log.Ctx(ctx).DebugContext(ctx, "update: current price fetched", slog.Any("price", currentPrice))
 
-	// get History for Controller (Last 72 hours from Storage)
-	historyStart := time.Now().Add(-72 * time.Hour)
+	// get History for Controller (Last 5 days from Storage)
+	historyStart := time.Now().AddDate(0, 0, -forecastHistoryDays)
 	historyEnd := time.Now()
 	energyHistoryDaily, err := s.storage.GetEnergyHistory(ctx, siteID, historyStart, historyEnd)
 	if err != nil {
@@ -190,10 +190,16 @@ func (s *Server) performSiteUpdate(
 	}
 
 	// fetch weather history/forecast if location is configured
-	// We pass the 72 hours of history here to sync any new solar data into the weather actuals
+	// We pass the history here to sync any new solar data into the weather actuals
+	var weatherHistory []types.Weather
 	if settings.Location != nil {
 		if err := s.updateWeatherHistory(ctx, siteID, *settings.Location); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update weather history", slog.Any("error", err))
+		}
+
+		weatherHistory, err = s.storage.GetWeather(ctx, siteID, historyStart, historyEnd)
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to get weather history from storage", slog.Any("error", err))
 		}
 	}
 
@@ -298,7 +304,7 @@ func (s *Server) performSiteUpdate(
 	}
 
 	// decide Action
-	decision, err := s.controller.Decide(ctx, status, currentPrice, futurePrices, energyHistory, settings.Settings)
+	decision, err := s.controller.Decide(ctx, status, currentPrice, futurePrices, energyHistory, weatherHistory, settings.Settings)
 	if err != nil {
 		return nil, "", fmt.Errorf("controller decision failed: %w", err)
 	}

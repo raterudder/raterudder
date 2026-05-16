@@ -75,7 +75,7 @@ describe('Forecast Page', () => {
         });
     });
 
-    it('calls fetchModeling and renders 6 charts when weather data is present', async () => {
+    it('calls fetchModeling and renders charts when weather data is present', async () => {
         const data = makeSimHours();
         (fetchModeling as any).mockResolvedValue({
             simulation: data,
@@ -100,7 +100,6 @@ describe('Forecast Page', () => {
         await waitFor(() => {
             expect(screen.getByText('Battery (if used) (%)')).toBeInTheDocument();
             expect(screen.getByText('Battery (if standby) (%)')).toBeInTheDocument();
-            expect(screen.getByText('Improved Predicted Solar (kWh)')).toBeInTheDocument();
             expect(screen.getByText('Avg Home Load (kWh)')).toBeInTheDocument();
             expect(screen.getByText('Grid Charge Cost ($/kWh)')).toBeInTheDocument();
         });

@@ -41,6 +41,7 @@ func (c *Controller) SimulateState(
 	currentPrice types.Price,
 	futurePrices []types.Price,
 	history []types.EnergyStats,
+	weather []types.Weather,
 	settings types.Settings,
 ) []SimHour {
 	capacityKWH := currentStatus.BatteryCapacityKWH
@@ -51,15 +52,19 @@ func (c *Controller) SimulateState(
 	var deficitKWH float64
 
 	// Build Energy Model
-	model := c.buildHourlyEnergyModel(ctx, now, history, settings)
+	model := c.buildHourlyEnergyModel(ctx, now, history, weather, settings)
 	minKWH := capacityKWH * (settings.MinBatterySOC / 100.0)
 
 	// simulate our energy state and prices for the next 24 hours
 	simData := make([]SimHour, 0, 24)
 
 	// build our simulation timeline
-	todaySolarTrend := c.calculateSolarTrend(ctx, now, history, model, settings)
-	log.Ctx(ctx).DebugContext(ctx, "solar trend calculated", slog.Float64("trend", todaySolarTrend))
+	todaySolarTrend := 1.0
+	// If we don't have weather data, calculate the solar trend based on recent history
+	if len(weather) == 0 {
+		todaySolarTrend = c.calculateSolarTrend(ctx, now, history, model, settings)
+		log.Ctx(ctx).DebugContext(ctx, "solar trend calculated", slog.Float64("trend", todaySolarTrend))
+	}
 
 	// Find the maximum and minimum future grid charge cost within the 24h window for net metering valuation
 	maxFutureGridChargeCost := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
@@ -287,10 +292,9 @@ type timeProfile struct {
 
 // buildHourlyEnergyModel averages usage and solar by hour of day from history.
 // It filters out outliers if ignoreHourUsageOverMultiple is set and > 0.
-func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, history []types.EnergyStats, settings types.Settings) map[int]timeProfile {
+func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, history []types.EnergyStats, weather []types.Weather, settings types.Settings) map[int]timeProfile {
 	type dataPoint struct {
-		solar float64
-		load  float64
+		load float64
 	}
 	hourlyData := make(map[int][]dataPoint)
 
@@ -301,9 +305,24 @@ func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, 
 		}
 		hour := h.TSHourStart.In(now.Location()).Hour()
 		hourlyData[hour] = append(hourlyData[hour], dataPoint{
-			solar: h.SolarKWH,
-			load:  h.HomeKWH,
+			load: h.HomeKWH,
 		})
+	}
+
+	// Calculate solar predictions
+	var weatherSolar map[int64]WeatherSolar
+	var smoothedSolar map[int]float64
+
+	if len(weather) > 0 {
+		// Construct location from weather data
+		loc := types.SiteLocation{
+			Latitude:  weather[0].Latitude,
+			Longitude: weather[0].Longitude,
+			TimeZone:  weather[0].TimeLocation,
+		}
+		weatherSolar = CalculateWeatherSolar(ctx, history, weather, loc)
+	} else {
+		smoothedSolar = CalculateSmoothedSolar(ctx, now, history, settings)
 	}
 
 	result := make(map[int]timeProfile)
@@ -341,7 +360,6 @@ func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, 
 					"ignoring outlier data point",
 					slog.Int("hour", h),
 					slog.Float64("outlierLoad", points[outlierIdx[0]].load),
-					slog.Float64("solar", points[outlierIdx[0]].solar),
 				)
 				// Rebuild valid points excluding this one
 				validPoints = make([]dataPoint, 0, len(points)-1)
@@ -350,39 +368,39 @@ func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, 
 						validPoints = append(validPoints, p)
 					}
 				}
-			} else if len(outlierIdx) > 1 {
-				log.Ctx(ctx).DebugContext(
-					ctx,
-					"ignoring multiple outlier data points",
-					slog.Int("hour", h),
-					slog.Int("outliers", len(outlierIdx)),
-					slog.Int("points", len(points)),
-				)
 			}
 		}
 
 		// Now calculate averages from valid points
-		var totalSolar, totalLoad float64
-		var countSolar, countLoad float64
+		var totalLoad float64
+		var countLoad float64
 		for _, p := range validPoints {
-			// Ignore values <= 0.1 as noise
-			if p.solar > 0.1 {
-				totalSolar += p.solar
-				countSolar++
-			}
 			if p.load > 0.1 {
 				totalLoad += p.load
 				countLoad++
 			}
 		}
 
-		avgSolar := 0.0
-		if countSolar > 0 {
-			avgSolar = totalSolar / countSolar
-		}
 		avgHomeLoad := 0.0
 		if countLoad > 0 {
 			avgHomeLoad = totalLoad / countLoad
+		}
+
+		avgSolar := 0.0
+		if len(weather) > 0 {
+			// Find solar for this hour of the upcoming 24h simulation
+			simTime := now.In(now.Location())
+			for i := 0; i < 24; i++ {
+				if simTime.Hour() == h {
+					if ws, ok := weatherSolar[simTime.Truncate(time.Hour).Unix()]; ok {
+						avgSolar = ws.ImprovedSolar
+					}
+					break
+				}
+				simTime = simTime.Add(time.Hour)
+			}
+		} else {
+			avgSolar = smoothedSolar[h]
 		}
 
 		result[h] = timeProfile{
@@ -408,170 +426,6 @@ func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, 
 			if h > endSolarHour {
 				endSolarHour = h
 			}
-		}
-	}
-
-	var daylightDuration int
-	if startSolarHour != -1 && endSolarHour != -1 {
-		daylightDuration = endSolarHour - startSolarHour + 1
-	}
-
-	log.Ctx(ctx).DebugContext(
-		ctx,
-		"determined daytime hours",
-		slog.Int("startSolarHour", startSolarHour),
-		slog.Int("endSolarHour", endSolarHour),
-		slog.Int("daylightDuration", daylightDuration),
-	)
-
-	// if no daylight detected, return early
-	if daylightDuration == 0 {
-		return result
-	}
-
-	// now fit a bell curve to the daylight hours
-	// standard deviation should be roughly 1/6th of the duration to fit 99.7% of data
-	// widening it to 1/3rd to be more conservative and less sensitive to edge readings
-	sigma := float64(daylightDuration) / 3.0
-	mu := float64(startSolarHour) + float64(daylightDuration)/2.0
-
-	// function to calculate the bell curve value at hour x
-	// returns a factor between 0 and 1 (height of bell curve relative to peak)
-	bellCurveFactor := func(x float64) float64 {
-		return math.Exp(-math.Pow(x-mu, 2) / (2 * math.Pow(sigma, 2)))
-	}
-
-	// find the max "estimated peak" solar generation in the history
-	// "valid" means we weren't curtailed (battery full and no export)
-	maxEstimatedPeak := 0.0
-	maxOriginalPeak := 0.0
-	maxPeakTS := time.Time{}
-
-	// Bucket valid solar readings by hour of day
-	validSolarByHour := make(map[int][]float64)
-
-	for _, h := range history {
-		hourStart := h.TSHourStart.In(now.Location())
-		hour := hourStart.Hour()
-
-		// ignore low solar values to avoid estimating huge peaks from noise at edges
-		// only consider values that are at least 0.1 AND at least 20% of the bell curve height
-		hourFactor := bellCurveFactor(float64(hour))
-		if h.SolarKWH <= 0.1 || hourFactor <= 0.2 {
-			continue
-		}
-
-		// Track max original peak for logging/debugging
-		if h.SolarKWH > maxOriginalPeak {
-			maxOriginalPeak = h.SolarKWH
-			maxPeakTS = hourStart
-		}
-
-		// if we are exporting to the grid, or if the battery isn't full, then
-		// we can trust the solar generation value
-		// 98% is "full enough" to trigger curtailment
-		if h.GridExportKWH > 0.1 || h.MaxBatterySOC < 98.0 {
-			validSolarByHour[hour] = append(validSolarByHour[hour], h.SolarKWH)
-		}
-	}
-
-	// Find the "best" hour:
-	// 1. Most valid data points.
-	// 2. Tie-breaker: Largest average solar (prefer hours closer to noon/peak).
-	bestHour := -1
-	maxCount := 0
-	maxAvg := 0.0
-
-	for h, readings := range validSolarByHour {
-		count := len(readings)
-		sum := 0.0
-		for _, v := range readings {
-			sum += v
-		}
-		avg := sum / float64(count)
-
-		if count > maxCount {
-			bestHour = h
-			maxCount = count
-			maxAvg = avg
-		} else if count == maxCount {
-			if avg > maxAvg {
-				bestHour = h
-				maxAvg = avg
-			}
-		}
-	}
-
-	if bestHour != -1 {
-		// Calculate estimated peak using the average of the best hour
-		factor := bellCurveFactor(float64(bestHour))
-		maxEstimatedPeak = maxAvg / factor
-		log.Ctx(ctx).DebugContext(
-			ctx,
-			"found best solar hour",
-			slog.Int("hour", bestHour),
-			slog.Int("count", maxCount),
-			slog.Float64("avg", maxAvg),
-			slog.Float64("estimatedPeak", maxEstimatedPeak),
-		)
-	}
-
-	// if we didn't find any valid solar data, try to find *any* max solar data
-	// (Fallback to original behavior if no valid data exists)
-	if maxEstimatedPeak == 0 {
-		log.Ctx(ctx).DebugContext(ctx, "no non-battery-curtailed solar data found for smoothing, using raw max solar")
-		// Reset tracking to find the max raw solar that fits the curve constraints
-		maxOriginalPeak = 0.0
-		for _, h := range history {
-			hourStart := h.TSHourStart.In(now.Location())
-			hourFactor := bellCurveFactor(float64(hourStart.Hour()))
-			if h.SolarKWH > 0.1 && hourFactor > 0.2 {
-				if h.SolarKWH > maxOriginalPeak {
-					// We prioritize the highest *observed* solar value to be conservative/realistic
-					// rather than the highest *estimated* peak which can blow up with edge noise.
-					maxOriginalPeak = h.SolarKWH
-					maxEstimatedPeak = h.SolarKWH / hourFactor
-				}
-			}
-		}
-	}
-
-	log.Ctx(ctx).DebugContext(
-		ctx,
-		"max solar estimated peak for smoothing",
-		slog.Float64("maxEstimatedPeak", maxEstimatedPeak),
-		slog.Float64("maxOriginalPeak", maxOriginalPeak),
-		slog.Time("maxPeakTS", maxPeakTS),
-	)
-
-	// this shouldn't really happen because we checked for daylight hours earlier
-	if maxEstimatedPeak == 0 {
-		return result
-	}
-
-	// apply the bell curve to the model
-	// we only apply it if the bell curve is *higher* than the average
-	// this helps fill in gaps from clouds or curtailment
-	// but we respect the average if it's higher (e.g. unusually sunny day or different season)
-	for h := startSolarHour; h <= endSolarHour; h++ {
-		curr, ok := result[h]
-		if !ok {
-			continue
-		}
-		predicted := maxEstimatedPeak * bellCurveFactor(float64(h))
-		if curr.avgSolarKWH < predicted {
-			newSolar := curr.avgSolarKWH + (predicted-curr.avgSolarKWH)*settings.SolarBellCurveMultiplier
-			log.Ctx(ctx).DebugContext(
-				ctx,
-				"smoothing solar with bell curve",
-				slog.Int("hour", h),
-				slog.Float64("original", curr.avgSolarKWH),
-				slog.Float64("predicted", predicted),
-				slog.Float64("new", newSolar),
-				slog.Float64("estimatedPeak", maxEstimatedPeak),
-			)
-			curr.avgSolarKWH = newSolar
-			result[h] = curr
 		}
 	}
 

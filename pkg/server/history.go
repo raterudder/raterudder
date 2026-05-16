@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 )
@@ -88,9 +89,9 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Calculate Improved Solar
-	var improvedSolarMap map[int64]improvedSolar
+	var improvedSolarMap map[int64]controller.WeatherSolar
 	if settings.Location != nil {
-		improvedSolarMap = calculateImprovedSolar(ctx, allStats, weatherHistory, *settings.Location)
+		improvedSolarMap = controller.CalculateWeatherSolar(ctx, allStats, weatherHistory, *settings.Location)
 	}
 
 	// Filter results for the target day

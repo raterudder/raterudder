@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { fetchModeling, fetchSettings } from '../api';
-import type { ForecastResponse, ModelingHour, Settings as SettingsType } from '../api';
+import { fetchModeling } from '../api';
+import type { ForecastResponse, ModelingHour } from '../api';
 import { Switch } from '@base-ui/react/switch';
 import { Field } from '@base-ui/react/field';
 import {
@@ -54,23 +54,6 @@ const charts: ChartConfig[] = [
         ],
     },
     {
-        title: 'Improved Predicted Solar (kWh)',
-        dataKey: 'improvedSolarGeneration',
-        color: '#ff8a00',
-        gradientId: 'improvedSolarGrad',
-        unit: ' kWh',
-        additionalLines: [
-            { dataKey: 'unclippedSolarGeneration', color: '#ffb800', strokeDasharray: '4 4' },
-        ],
-    },
-    {
-        title: 'Estimated Irradiance (W/m²)',
-        dataKey: 'irradiance',
-        color: '#60a5fa',
-        gradientId: 'irradianceGrad',
-        unit: ' W/m²',
-    },
-    {
         title: 'Avg Home Load (kWh)',
         dataKey: 'avgHomeLoadKWH',
         color: '#a855f7',
@@ -97,11 +80,6 @@ interface ProcessedModelingHour extends ModelingHour {
     batterySOCIfStandby: number;
     batteryReserveSOC: number;
     rawSolarKWH: number;
-    irradiance?: number;
-    improvedSolarGeneration?: number;
-    unclippedSolarGeneration?: number;
-    temperatureC?: number;
-    snowfallCM?: number;
 }
 
 function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs }: { data: ProcessedModelingHour[]; config: ChartConfig; isMobile: boolean; showCurrentTime: boolean; nowMs: number }) {
@@ -164,7 +142,7 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs }: { dat
                                 config.unit.includes('$')
                                     ? `$${v.toFixed(4)}`
                                     : v.toFixed(2) + lineUnit.trim(),
-                                name === 'rawSolarKWH' ? 'Raw Model' : name === 'unclippedSolarGeneration' ? 'Unclipped Potential' : name === 'irradiance' ? 'Irradiance' : config.title,
+                                name === 'rawSolarKWH' ? 'Raw Model' : config.title,
                             ];
                         }}
                         contentStyle={{
@@ -231,7 +209,6 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs }: { dat
 
 const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
     const [rawModelingData, setRawModelingData] = useState<ForecastResponse | null>(null);
-    const [settings, setSettings] = useState<SettingsType | null>(null);
     const [loading, setLoading] = useState(true);
     const [nowMs] = useState(() => Date.now());
     const [error, setError] = useState<string | null>(null);
@@ -248,9 +225,8 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
         const loadRawData = async () => {
             setLoading(true);
             try {
-                const [mod, s] = await Promise.all([fetchModeling(siteID), fetchSettings(siteID)]);
+                const mod = await fetchModeling(siteID);
                 setRawModelingData(mod);
-                setSettings(s);
             } catch (error) {
                 setError(error instanceof Error ? error.message : 'Unknown error');
             } finally {
@@ -263,29 +239,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
     const data = useMemo(() => {
         if (!rawModelingData) return [];
 
-        // Combine history and simulation if includeHistory is true
-        // Based on ForecastResponse, simulation is an array.
         let modelingData: any[] = rawModelingData.simulation || [];
-        const weatherHist = rawModelingData.weather || [];
-
-        // We also need to map the weather to the simulation hours
-        modelingData = modelingData.map((sim: any) => {
-            const simDate = new Date(sim.ts);
-            simDate.setMinutes(0, 0, 0);
-            const simTimeHour = simDate.getTime();
-            const weather = weatherHist.find((w: any) => new Date(w.tsHourStart).getTime() === simTimeHour);
-            if (weather) {
-                return {
-                    ...sim,
-                    irradiance: weather.irradiance,
-                    temperatureC: weather.temperatureC,
-                    snowfallCM: weather.snowfallCM,
-                    improvedSolarGeneration: weather.improvedSolarGeneration,
-                    unclippedSolarGeneration: weather.unclippedSolarGeneration,
-                };
-            }
-            return sim;
-        });
 
         if (includeHistory && rawModelingData.energyHistory && rawModelingData.priceHistory) {
             const energyHist = rawModelingData.energyHistory || [];
@@ -300,7 +254,6 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
             const historyMapped = energyHist.map((h: any) => {
                 const hTime = new Date(h.tsHourStart).getTime();
                 const price = priceHist.find((p: any) => new Date(p.tsHourStart).getTime() === hTime);
-                const weather = weatherHist.find((w: any) => new Date(w.tsHourStart).getTime() === hTime);
                 return {
                     ts: h.tsHourStart,
                     hour: new Date(h.tsHourStart).getHours(),
@@ -314,11 +267,6 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     gridChargeDollarsPerKWH: price ? price.dollarsPerKWH + (price.gridUseDollarsPerKWH || 0) : 0,
                     netLoadSolarKWH: -h.solarKWH,
                     solarOppDollarsPerKWH: 0,
-                    irradiance: weather?.irradiance,
-                    temperatureC: weather?.temperatureC,
-                    snowfallCM: weather?.snowfallCM,
-                    improvedSolarGeneration: weather?.improvedSolarGeneration,
-                    unclippedSolarGeneration: weather?.unclippedSolarGeneration,
                 };
             });
 
@@ -351,23 +299,6 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
     if (error) return <div className="error">Error: {error}</div>;
     if (!data.length) return <div className="no-actions">No simulation data available.</div>;
 
-    const hasForecastData = data.some(d =>
-        (d.irradiance !== undefined && d.irradiance !== null)
-    );
-
-    const activeCharts = charts.filter(c => {
-        if (c.dataKey === 'irradiance' && settings?.release !== 'staging') {
-            return false;
-        }
-        if (c.dataKey === 'irradiance' && !hasForecastData) {
-            return false;
-        }
-        if (c.dataKey === 'improvedSolarGeneration' && !data.some(d => d.improvedSolarGeneration !== undefined)) {
-            return false;
-        }
-        return true;
-    });
-
     return (
         <div className="content-container forecast-page">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -395,7 +326,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 })}
             </p>
             <div className="modeling-charts">
-                {activeCharts.map((c) => (
+                {charts.map((c) => (
                     <ForecastChart key={c.dataKey} data={data} config={c} isMobile={isMobile} showCurrentTime={includeHistory} nowMs={nowMs} />
                 ))}
             </div>
