@@ -958,7 +958,6 @@ func TestFranklin(t *testing.T) {
 		assert.ErrorContains(t, err, "self consumption mode not available")
 	})
 
-
 	t.Run("GetEnergyHistory", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
