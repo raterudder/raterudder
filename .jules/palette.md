@@ -12,3 +12,7 @@
 ## 2024-05-26 - Hide standalone emojis and html entities in icon-only buttons
 **Learning:** Even when icon-only buttons have an `aria-label`, screen readers may still announce the visible text content (like a "💬" emoji or an "&times;" symbol) inside them, leading to redundant or confusing announcements like "Feedback, speech balloon".
 **Action:** Always wrap text-based icons, HTML entities, or emojis in a `<span aria-hidden="true">` when they are placed inside a button that already provides its accessible name via `aria-label`.
+
+## 2024-05-27 - Announce Dynamic Messages to Screen Readers
+**Learning:** When UI renders dynamic success or error messages (e.g. `{error && <div>{error}</div>}`), screen readers won't announce them automatically unless they steal focus or have an appropriate ARIA role.
+**Action:** Always include `role="alert"` on dynamically rendered error messages and `role="status"` on success messages. This ensures assistive technologies announce the update without disrupting the user's workflow.

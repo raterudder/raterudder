@@ -296,7 +296,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
             Loading simulation…
         </div>
     );
-    if (error) return <div className="error">Error: {error}</div>;
+    if (error) return <div className="error" role="alert">Error: {error}</div>;
     if (!data.length) return <div className="no-actions">No simulation data available.</div>;
 
     return (

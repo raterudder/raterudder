@@ -217,7 +217,7 @@ const BetaInterstitialPage: React.FC = () => {
                             />
                         </div>
 
-                        {error && <div className="error-message" style={{ marginBottom: '1rem' }}>{error}</div>}
+                        {error && <div className="error-message" style={{ marginBottom: '1rem' }} role="alert">{error}</div>}
 
                         <button
                             onClick={handleSubmitInterest}

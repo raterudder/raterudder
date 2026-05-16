@@ -962,8 +962,8 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                 </Collapsible.Root>
 
                 <div className="submit-section">
-                    {error && <div className="error-message">{error}</div>}
-                    {successMessage && <div className="success-message">{successMessage}</div>}
+                    {error && <div className="error-message" role="alert">{error}</div>}
+                    {successMessage && <div className="success-message" role="status">{successMessage}</div>}
                     <button type="submit" className="save-button" disabled={isSaving}>
                         {isSaving && <span className="loading-spinner" aria-hidden="true"></span>}
                         {isSaving ? 'Saving...' : 'Save Settings'}
