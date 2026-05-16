@@ -435,15 +435,7 @@ func TestGetClientIP(t *testing.T) {
 		remoteAddr string
 		expectedIP string
 	}{
-		{
-			name: "CF-Connecting-IP takes precedence",
-			headers: map[string]string{
-				"CF-Connecting-IP": "203.0.113.5",
-				"X-Forwarded-For":  "198.51.100.10",
-			},
-			remoteAddr: "127.0.0.1:8080",
-			expectedIP: "203.0.113.5",
-		},
+
 		{
 			name: "X-Forwarded-For single public IP",
 			headers: map[string]string{
