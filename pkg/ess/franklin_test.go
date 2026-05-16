@@ -912,6 +912,53 @@ func TestFranklin(t *testing.T) {
 		assert.ErrorContains(t, err, "device is in backup mode")
 	})
 
+	t.Run("SetModes Missing Self Consumption", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
+				// Return a list without a self-consumption mode (WorkMode 2)
+				list := []map[string]any{
+					{"id": 11.0, "workMode": 1, "electricityType": 1},
+				}
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"list": list, "currendId": 11.0},
+				})
+				return
+			}
+			http.Error(w, "not found "+r.URL.Path, 404)
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:      ts.Client(),
+			baseURL:     ts.URL,
+			username:    "u",
+			md5Password: "p",
+			gatewayID:   "g",
+		}
+
+		err := f.ApplySettings(context.Background(), types.Settings{MinBatterySOC: 20})
+		require.NoError(t, err)
+
+		// Assert that SetModes fails explicitly due to missing self consumption mode
+		err = f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange)
+		assert.ErrorContains(t, err, "self consumption mode not available")
+	})
+
+
 	t.Run("GetEnergyHistory", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
