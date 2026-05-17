@@ -200,8 +200,8 @@ AMIL.BGS6,Loadzone,LMP,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,
 		// 1. GetCurrentPrice - DB Empty -> API -> DB Upsert
 		start := truncateDay(time.Now().In(etLocation))
 		end := start.AddDate(0, 0, 1)
-		m.On("GetUtilityPrices", mock.Anything, "ameren", start, end).Return([]types.PriceState{}, nil).Once()
-		m.On("UpsertUtilityPrices", mock.Anything, "ameren", mock.MatchedBy(func(p []types.PriceState) bool {
+		m.On("GetUtilityPrices", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, "ameren", start, end).Return([]types.PriceState{}, nil).Once()
+		m.On("UpsertUtilityPrices", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, "ameren", mock.MatchedBy(func(p []types.PriceState) bool {
 			return len(p) >= 23
 		}), 0).Return(nil).Once()
 
@@ -231,7 +231,7 @@ AMIL.BGS6,Loadzone,LMP,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,
 			)
 		}
 
-		m.On("GetUtilityPrices", mock.Anything, "ameren", start, end).Return(fullDayPrices, nil).Once()
+		m.On("GetUtilityPrices", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, "ameren", start, end).Return(fullDayPrices, nil).Once()
 
 		price2, err := c.GetCurrentPrice(ctx)
 		require.NoError(t, err)
@@ -257,7 +257,7 @@ AMIL.BGS6,Loadzone,LMP,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,
 		// 1. Mock DB returns only 1 price state (partial data)
 		start := truncateDay(time.Now().In(etLocation))
 		end := start.AddDate(0, 0, 1)
-		m.On("GetUtilityPrices", mock.Anything, "ameren", start, end).Return([]types.PriceState{
+		m.On("GetUtilityPrices", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, "ameren", start, end).Return([]types.PriceState{
 			{
 				Price: types.Price{
 					TSStart:       time.Now().In(etLocation).Truncate(time.Hour),
@@ -269,7 +269,7 @@ AMIL.BGS6,Loadzone,LMP,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,
 		}, nil).Once()
 
 		// 2. Expect fallback to API and UPSERT the full day
-		m.On("UpsertUtilityPrices", mock.Anything, "ameren", mock.MatchedBy(func(p []types.PriceState) bool {
+		m.On("UpsertUtilityPrices", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, "ameren", mock.MatchedBy(func(p []types.PriceState) bool {
 			return len(p) >= 23 // expect full day
 		}), 0).Return(nil).Once()
 
@@ -314,8 +314,8 @@ AMIL.BGS6,Loadzone,LMP,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,
 		expectedDBStart := truncateDay(expectedCurr)
 		expectedDBEnd := expectedDBStart.AddDate(0, 0, 1)
 
-		m.On("GetUtilityPrices", mock.Anything, "ameren", expectedDBStart, expectedDBEnd).Return([]types.PriceState{}, nil).Once()
-		m.On("UpsertUtilityPrices", mock.Anything, "ameren", mock.MatchedBy(func(p []types.PriceState) bool {
+		m.On("GetUtilityPrices", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, "ameren", expectedDBStart, expectedDBEnd).Return([]types.PriceState{}, nil).Once()
+		m.On("UpsertUtilityPrices", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, "ameren", mock.MatchedBy(func(p []types.PriceState) bool {
 			return len(p) >= 23
 		}), 0).Return(nil).Once()
 
