@@ -206,7 +206,7 @@ func TestHandleListUtilities(t *testing.T) {
 		require.NoError(t, err)
 
 		mockStorage := &mockStorage{}
-		mockStorage.On("GetUser", mock.Anything, "google:unregistered@example.com").Return(types.User{}, storage.ErrUserNotFound).Once()
+		mockStorage.On("GetUser", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), "google:unregistered@example.com").Return(types.User{}, storage.ErrUserNotFound).Once() // Ensure a non-nil valid context is passed
 
 		srv := &Server{
 			utilities:          mockUMap,
