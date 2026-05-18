@@ -687,6 +687,12 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 	if newReserveSOC < 5 {
 		newReserveSOC = 5
 	}
+
+	// if tesla overshot our reserve SOC by less than 1 percent, ignore it
+	if math.Abs(newReserveSOC-reserveSOC) <= 1.0 {
+		newReserveSOC = reserveSOC
+	}
+
 	updatedSOC := math.Round(newReserveSOC) != math.Round(reserveSOC)
 
 	exportRule := siteInfo.Components.CustomerPreferredExportRule

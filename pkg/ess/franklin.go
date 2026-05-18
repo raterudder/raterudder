@@ -918,6 +918,11 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		newReserveSOC = 5
 	}
 
+	// if franklin overshot our reserve SOC by less than 1 percent, ignore it
+	if math.Abs(newReserveSOC-reserveSOC) <= 1.0 {
+		newReserveSOC = reserveSOC
+	}
+
 	updatedSOC := math.Round(newReserveSOC) != math.Round(reserveSOC)
 
 	switch sol {

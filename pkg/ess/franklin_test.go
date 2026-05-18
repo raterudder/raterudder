@@ -711,7 +711,7 @@ func TestFranklin(t *testing.T) {
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
 				list := []map[string]any{
-					{"id": 20.0, "workMode": 2, "electricityType": 1, "soc": 55.0, "canEditReserveSOC": true},
+					{"id": 20.0, "workMode": 2, "electricityType": 1, "soc": 55.0, "editSocFlag": true},
 				}
 				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
@@ -774,6 +774,88 @@ func TestFranklin(t *testing.T) {
 		// Verify only updateSocV2 was called (not updateTouModeV2)
 		require.Len(t, callOrder, 1, "only updateSocV2 should be called")
 		assert.Equal(t, "updateSocV2", callOrder[0])
+	})
+
+	t.Run("SetModes Avoid Small SOC Update", func(t *testing.T) {
+		var callOrder []string
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"runtimeData": map[string]any{
+							"soc": 55.9,
+						},
+					},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
+				list := []map[string]any{
+					{"id": 20.0, "workMode": 2, "electricityType": 1, "soc": 56.0, "editSocFlag": true},
+				}
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"list": list, "currendId": 20.0},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": []map[string]any{
+						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
+					},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"gridMaxFlag": 1, "gridFeedMaxFlag": 3},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/setPowerControlV2" {
+				callOrder = append(callOrder, "setPowerControlV2")
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/updateSocV2" {
+				t.Error("Should not call updateSocV2")
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/updateTouModeV2" {
+				t.Error("Should not call updateTouModeV2")
+				return
+			}
+			http.Error(w, "not found "+r.URL.Path, 404)
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:      ts.Client(),
+			baseURL:     ts.URL,
+			username:    "u",
+			md5Password: "p",
+			gatewayID:   "g",
+		}
+
+		err := f.ApplySettings(context.Background(), types.Settings{MinBatterySOC: 20})
+		require.NoError(t, err)
+
+		err = f.SetModes(context.Background(), types.BatteryModeStandby, types.SolarModeNoChange)
+		require.NoError(t, err, "SetModes should succeed")
+
+		require.Empty(t, callOrder, "no updates should be called")
 	})
 
 	t.Run("SetModes Ignores Storm Hedge", func(t *testing.T) {

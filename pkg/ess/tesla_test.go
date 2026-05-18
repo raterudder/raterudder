@@ -825,6 +825,22 @@ func TestTesla(t *testing.T) {
 			assert.True(t, (*lastReq)["disallow_charge_from_grid_with_solar_installed"].(bool))
 		})
 
+		t.Run("Standby avoids small SOC updates", func(t *testing.T) {
+			sys, ts, _, backup, grid, lastReq := setupTesla(t, "self_consumption", 55.0, false, "pv_only", 55.6, false, types.Settings{
+				ESS:           "tesla",
+				MinBatterySOC: 20.0,
+			})
+			defer ts.Close()
+
+			err := sys.SetModes(ctx, types.BatteryModeStandby, types.SolarModeNoChange)
+			require.NoError(t, err)
+			// Target is math.Floor(55.6) = 55.0. Since old SOC is 55.0, the diff is <= 1.0.
+			// We avoid updating backup reserve percent, but we still update grid import export.
+			assert.False(t, *backup)
+			assert.True(t, *grid)
+			assert.True(t, (*lastReq)["disallow_charge_from_grid_with_solar_installed"].(bool))
+		})
+
 		t.Run("Standby above min SOC", func(t *testing.T) {
 			sys, ts, _, backup, grid, lastReq := setupTesla(t, "self_consumption", 20.0, false, "pv_only", 55.6, false, types.Settings{
 				ESS:           "tesla",
