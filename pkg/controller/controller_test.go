@@ -427,9 +427,9 @@ func TestDecide(t *testing.T) {
 		decision, err := c.Decide(ctx, lowBattStatus, currentPrice, futurePrices, history, nil, settings)
 		require.NoError(t, err)
 
-		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
-		assert.Equal(t, types.ActionReasonWaitingToCharge, decision.Action.Reason)
-		assert.Contains(t, decision.Action.Description, "Waiting to charge")
+		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonSufficientBattery, decision.Action.Reason)
+		assert.Contains(t, decision.Action.Description, "Sufficient battery to reach planned")
 		assert.False(t, decision.Action.HitDeficitAt.IsZero(), "HitDeficitAt should be set")
 	})
 
@@ -451,7 +451,7 @@ func TestDecide(t *testing.T) {
 		}
 
 		lowBattStatus := baseStatus
-		lowBattStatus.BatterySOC = 80.0
+		lowBattStatus.BatterySOC = 30.0
 		lowBattStatus.HomeKW = 1.0
 		lowBattStatus.GridKW = 2.0
 		lowBattStatus.BatteryKW = -1.0
@@ -467,6 +467,39 @@ func TestDecide(t *testing.T) {
 		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Action.Reason)
 		assert.Contains(t, decision.Action.Description, "Deficit predicted")
 		assert.False(t, decision.Action.HitDeficitAt.IsZero(), "HitDeficitAt should be set")
+	})
+
+	t.Run("Sufficient Battery to Reach Charging Window -> Load (Discharge)", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
+		futurePrices := []types.Price{}
+		for i := 1; i <= 24; i++ {
+			price := 0.10
+			if i == 4 {
+				price = 0.05 // Cheap charge time (charging window)
+			}
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
+			})
+		}
+
+		lowBattStatus := baseStatus
+		lowBattStatus.BatterySOC = 80.0 // Plenty of battery to reach 4 hours from now
+		lowBattStatus.HomeKW = 1.0
+		lowBattStatus.GridKW = 2.0
+		lowBattStatus.BatteryKW = -1.0
+
+		settings := baseSettings
+		settings.MinDeficitPriceDifferenceDollarsPerKWH = 0.01
+		settings.MinArbitrageDifferenceDollarsPerKWH = 2.0
+
+		decision, err := c.Decide(ctx, lowBattStatus, currentPrice, futurePrices, history, nil, settings)
+		require.NoError(t, err)
+
+		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonSufficientBattery, decision.Action.Reason)
+		assert.Contains(t, decision.Action.Description, "Sufficient battery to reach planned charge time")
 	})
 
 	t.Run("Arbitrage Opportunity -> Charge", func(t *testing.T) {
@@ -547,7 +580,8 @@ func TestDecide(t *testing.T) {
 		// Deficit: ChargeNow(0.20) > Future(0.05). No Charge.
 
 		status := baseStatus
-		status.BatteryKW = 1.0 // Force discharge
+		status.BatterySOC = 25.0 // Runs out in 0.5 hrs, which is before the cheap period starts (1 hour from now)
+		status.BatteryKW = 1.0   // Force discharge
 
 		decision, err := c.Decide(ctx, status, currentPrice, futurePrices, history, nil, settings)
 		require.NoError(t, err)
