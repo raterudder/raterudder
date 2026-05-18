@@ -31,8 +31,9 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
-    const whatsNewVersion = 2;
-    const whatsNewText = "Corrected exported solar pricing and improved arbitrage charging logic.";
+    const whatsNewVersion = 3;
+    const whatsNewText = "Fixed possible standby drain, corrected arbitrage calculations, and switched to weather-based solar prediction.";
+    const whatsNewLinkText = "Make sure to add your zip code in Settings!";
     const [showWhatsNew, setShowWhatsNew] = useState(false);
 
     useEffect(() => {
@@ -281,7 +282,7 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     {showWhatsNew && (
                         <div className="banner info-banner" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <p>
-                                <strong>What's New:</strong> {whatsNewText}
+                                <strong>What's New:</strong> {whatsNewText}{whatsNewLinkText && <>{' '}<Link href="/settings">{whatsNewLinkText}</Link></>}
                             </p>
                             <button onClick={dismissWhatsNew} className="banner-dismiss-btn" aria-label="Dismiss What's New banner">
                                 <span aria-hidden="true">&times;</span>

@@ -811,4 +811,36 @@ describe('Dashboard', () => {
         expect(screen.queryByText('Should not show')).not.toBeInTheDocument();
         expect(document.querySelector('.action-list')).not.toBeInTheDocument();
     });
+
+    it("shows What's New banner with a link to settings when not dismissed", async () => {
+        localStorage.clear();
+        (fetchActions as any).mockResolvedValue([]);
+        renderWithRouter(<Dashboard />);
+
+        await waitFor(() => {
+            expect(screen.getByText("What's New:")).toBeInTheDocument();
+            const link = screen.getByRole('link', { name: /Make sure to add your zip code/i });
+            expect(link).toBeInTheDocument();
+            expect(link).toHaveAttribute('href', '/settings');
+        });
+    });
+
+    it("can dismiss the What's New banner", async () => {
+        const user = userEvent.setup();
+        localStorage.clear();
+        (fetchActions as any).mockResolvedValue([]);
+        renderWithRouter(<Dashboard />);
+
+        await waitFor(() => {
+            expect(screen.getByText("What's New:")).toBeInTheDocument();
+        });
+
+        const dismissBtn = screen.getByRole('button', { name: /Dismiss What's New banner/i });
+        await user.click(dismissBtn);
+
+        await waitFor(() => {
+            expect(screen.queryByText("What's New:")).not.toBeInTheDocument();
+        });
+        expect(localStorage.getItem('whats_new_banner_version')).toBe('3');
+    });
 });
