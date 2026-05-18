@@ -13,12 +13,14 @@ jobs:
   test-go:
     name: Run Go Tests
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: '1.25.x'
           cache: true
@@ -30,7 +32,7 @@ jobs:
           java-version: '21'
 
       - name: Install gcloud and firestore emulator
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@v3
         with:
           install_components: 'cloud-firestore-emulator'
 
@@ -64,6 +66,8 @@ jobs:
   test-web:
     name: Run Web Tests
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
     defaults:
       run:
         working-directory: ./web
