@@ -1156,6 +1156,17 @@ button {
   gap: 0.75rem;
 }
 
+.banner a {
+  color: var(--primary);
+  text-decoration: underline;
+  font-weight: 600;
+  transition: color 0.2s ease;
+}
+
+.banner a:hover {
+  color: var(--primary-glow);
+}
+
 .banner-dismiss-btn {
   background: none;
   border: none;
