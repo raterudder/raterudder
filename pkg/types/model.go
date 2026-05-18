@@ -44,7 +44,6 @@ const (
 	ActionReasonMissingBattery             ActionReason = "missingBattery"
 	ActionReasonDeficitChargeNow           ActionReason = "deficitCharge"
 	ActionReasonArbitrageChargeExport      ActionReason = "arbitrageChargeExport"
-	ActionReasonArbitrageChargeSave        ActionReason = "arbitrageChargeSave"
 	ActionReasonDischargeBeforeCapacityNow ActionReason = "dischargeBeforeCapacity"
 	ActionReasonDeficitSaveForPeak         ActionReason = "deficitSaveForPeak"
 	ActionReasonArbitrageSave              ActionReason = "dischargeAtPeak"
@@ -60,9 +59,10 @@ const (
 	ActionReasonBatteryAtReserve           ActionReason = "batteryAtReserve"
 
 	// Deprecated - we don't use these anymore but we don't delete them so we know they were used
-	ActionReasonArbitrageChargeNow ActionReason = "arbitrageCharge"
-	ActionReasonArbitrageHold      ActionReason = "arbitrageHold"
-	ActionReasonDeficitSave        ActionReason = "deficitSave"
+	ActionReasonArbitrageChargeSave ActionReason = "arbitrageChargeSave"
+	ActionReasonArbitrageChargeNow  ActionReason = "arbitrageCharge"
+	ActionReasonArbitrageHold       ActionReason = "arbitrageHold"
+	ActionReasonDeficitSave         ActionReason = "deficitSave"
 )
 
 // Action represents a control decision made by the system.

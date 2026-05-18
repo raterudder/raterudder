@@ -123,10 +123,13 @@ func (c *Controller) Decide(
 	}
 	currentEnergyKWH := currentStatus.BatterySOC * capacityKWH / 100.0
 
-	// assume we need to charge for at least 10 minutes for it to be worth it
+	// add a 0.1 kWh buffer to prevent trying to charge when we are almost full (e.g. 99.9%)
+	canChargeAny := currentEnergyKWH+0.1 < capacityKWH && settings.GridChargeBatteries && !currentStatus.BatteryChargingDisabled
+
+	// assume we need to charge for at least 10 minutes for it to be worth it for arbitrage
 	minChargeDurationHours := 10.0 / 60.0
 	simEnergyAfterCharge := currentEnergyKWH + chargeKW*minChargeDurationHours
-	canCharge := simEnergyAfterCharge < capacityKWH && settings.GridChargeBatteries && !currentStatus.BatteryChargingDisabled
+	canChargeArbitrage := simEnergyAfterCharge < capacityKWH && canChargeAny
 
 	shouldCharge := false
 	var chargeDescription string
@@ -155,7 +158,6 @@ func (c *Controller) Decide(
 	var highestExportValue float64
 	var highestExportPrice types.Price
 	var highestExportAt time.Time
-	var highestExportIsExport bool
 	minEnergy := -1.0
 	maxEnergy := -1.0
 
@@ -236,25 +238,19 @@ func (c *Controller) Decide(
 			hitDeficitAt = slot.HitDeficitAt
 		}
 
-		// if we are importing, we avoid the import cost
-		// if we are exporting, we get the export value
-		if slot.NetLoadSolarKWH > 0 {
-			if slot.GridChargeDollarsPerKWH > highestExportValue {
-				highestExportValue = slot.GridChargeDollarsPerKWH
-				highestExportAt = slot.TS
-				highestExportPrice = slot.Price
-				highestExportIsExport = false
-			}
-		} else {
+		// we only track the export value for arbitrage since we cannot export battery
+		// to the grid. If we have a deficit, it is handled by the deficit logic.
+		// "Save" arbitrage (avoiding grid import) is redundant and causes unnecessary
+		// charging when there is no deficit.
+		if slot.NetLoadSolarKWH <= 0 {
 			if slot.SolarOppDollarsPerKWH > highestExportValue {
 				highestExportValue = slot.SolarOppDollarsPerKWH
 				highestExportAt = slot.TS
 				highestExportPrice = slot.Price
-				highestExportIsExport = true
 			}
 		}
 
-		if slot.TotalBatteryDeficitKWH > 0 && canCharge {
+		if slot.TotalBatteryDeficitKWH > 0 && canChargeAny {
 			deficitAmount := slot.TotalBatteryDeficitKWH
 
 			// future in this section is actually in the PAST from the current
@@ -312,7 +308,7 @@ func (c *Controller) Decide(
 				// don't plan to charge after the deficit time and only plan to charge if
 				// the difference is sigificant
 				isBeforeDeficit := !cheapestFutureChargeTime.After(hitDeficitAt)
-				isSignificantlyCheaper := gridChargeNowCost-plannedChargeCost > settings.MinDeficitPriceDifferenceDollarsPerKWH
+				isSignificantlyCheaper := gridChargeNowCost-cheapestFutureChargeCost > settings.MinDeficitPriceDifferenceDollarsPerKWH
 				if isBeforeDeficit && isSignificantlyCheaper && (plannedChargeTime.IsZero() || cheapestFutureChargeCost < plannedChargeCost) {
 					plannedChargeTime = cheapestFutureChargeTime
 					plannedChargePrice = cheapestFutureChargePrice
@@ -337,7 +333,7 @@ func (c *Controller) Decide(
 		// normally we are checking if we have a deficit when using the battery
 		// but here we are checking if we have enough energy to survive the peak
 		// without using the battery
-		if isAboveMinDeficitPriceDifference && canCharge {
+		if isAboveMinDeficitPriceDifference && canChargeAny {
 			remaining := slot.BatteryKWHIfStandby - continuousPeakLoadKWH
 			// if we already hit capacity before the peak there's no need to do anything
 			// because the battery can't hold more
@@ -381,19 +377,11 @@ func (c *Controller) Decide(
 		// if the value we get later minus our cost to charge now is greater than
 		// the minimum arbitrage difference, we should charge now
 		if highestExportValue-gridChargeNowCost > settings.MinArbitrageDifferenceDollarsPerKWH {
-			var chargeDescTemplate string
-			var holdReason types.ActionReason
-			if highestExportIsExport {
-				chargeDescTemplate = "Arbitrage Opportunity (Export) at %s. Buy@%.3f -> Sell/Save@%.3f."
-				chargeActionReason = types.ActionReasonArbitrageChargeExport
-				holdReason = types.ActionReasonArbitrageHoldExport
-			} else {
-				chargeDescTemplate = "Arbitrage Opportunity (Save) at %s. Buy@%.3f -> Save@%.3f."
-				chargeActionReason = types.ActionReasonArbitrageChargeSave
-				holdReason = types.ActionReasonArbitrageHoldSave
-			}
+			chargeDescTemplate := "Arbitrage Opportunity (Export) at %s. Buy@%.3f -> Sell/Save@%.3f."
+			chargeActionReason = types.ActionReasonArbitrageChargeExport
+			holdReason := types.ActionReasonArbitrageHoldExport
 
-			if canCharge {
+			if canChargeArbitrage {
 				shouldCharge = true
 				chargeDescription = fmt.Sprintf(
 					chargeDescTemplate,
@@ -421,10 +409,7 @@ func (c *Controller) Decide(
 					holdState = "Unable to charge"
 				}
 
-				holdType := "Save"
-				if highestExportIsExport {
-					holdType = "Export"
-				}
+				holdType := "Export"
 
 				holdDescription := fmt.Sprintf(
 					"Arbitrage Opportunity (%s) at %s. %s. Hold energy.",

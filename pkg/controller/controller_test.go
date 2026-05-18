@@ -326,10 +326,10 @@ func TestDecide(t *testing.T) {
 		require.NoError(t, err)
 
 		// It should NOT trigger Battery At Reserve.
-		// Instead, it should trigger Arbitrage Charge (Rule 3)
-		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
+		// Since there is no actual deficit and save arbitrage is removed, it should use battery.
+		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
 		assert.NotEqual(t, types.ActionReasonBatteryAtReserve, decision.Action.Reason)
-		assert.Equal(t, types.ActionReasonArbitrageChargeSave, decision.Action.Reason)
+		assert.Equal(t, types.ActionReasonSufficientBattery, decision.Action.Reason)
 	})
 
 	t.Run("Deficit detected -> Charge Now (Absolute Cheapest Is Now)", func(t *testing.T) {
@@ -392,8 +392,8 @@ func TestDecide(t *testing.T) {
 
 		// It should DELAY because future has equally cheap hours before the spike!
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
-		assert.Equal(t, types.ActionReasonWaitingToCharge, decision.Action.Reason)
-		assert.Contains(t, decision.Action.Description, "Waiting to charge")
+		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Action.Reason)
+		assert.Contains(t, decision.Action.Description, "Deficit predicted")
 		assert.False(t, decision.Action.HitDeficitAt.IsZero(), "HitDeficitAt should be set")
 	})
 
@@ -576,14 +576,13 @@ func TestDecide(t *testing.T) {
 
 		status := baseStatus
 		// SOC is sufficient but we can't charge from grid.
-		// There's an arbitrage opportunity (Save) because we have home load.
 
 		decision, err := c.Decide(ctx, status, currentPrice, futurePrices, history, nil, noGridChargeSettings)
 		require.NoError(t, err)
 
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
-		assert.Equal(t, types.ActionReasonArbitrageHoldSave, decision.Action.Reason)
-		assert.Contains(t, decision.Action.Description, "Grid charging disabled")
+		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Action.Reason)
+		assert.Contains(t, decision.Action.Description, "Deficit predicted")
 	})
 
 	t.Run("Battery Charging Disabled -> Standby", func(t *testing.T) {
@@ -608,8 +607,8 @@ func TestDecide(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
-		assert.Equal(t, types.ActionReasonArbitrageHoldSave, decision.Action.Reason)
-		assert.Contains(t, decision.Action.Description, "Charging disabled")
+		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Action.Reason)
+		assert.Contains(t, decision.Action.Description, "Deficit predicted")
 	})
 
 	t.Run("Zero Capacity -> Standby", func(t *testing.T) {
@@ -1216,7 +1215,7 @@ func TestDecide(t *testing.T) {
 		})
 	})
 
-	t.Run("Deficit Charge Now -> No Charge If Full", func(t *testing.T) {
+	t.Run("Deficit Charge Now -> Charge Even If Almost Full (< 10 mins left)", func(t *testing.T) {
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05}
 		futurePrices := []types.Price{}
 		for i := 1; i <= 24; i++ {
@@ -1228,18 +1227,76 @@ func TestDecide(t *testing.T) {
 			})
 		}
 
-		// Battery is full
-		fullStatus := baseStatus
-		fullStatus.BatterySOC = 100.0
+		// Battery is at 98% of 10kWh = 9.8kWh.
+		// 9.8 + 0.1 = 9.9 < 10.0, so it can charge.
+		almostFullStatus := baseStatus
+		almostFullStatus.BatterySOC = 98.0
+		almostFullStatus.MaxBatteryChargeKW = 5.0
+		almostFullStatus.BatteryCapacityKWH = 10.0
 
 		// Use History with high load (1.0kW * 24 = 24kWh needed, but capacity is 10kWh)
 		// This will predict a deficit later.
+		decision, err := c.Decide(ctx, almostFullStatus, currentPrice, futurePrices, history, nil, baseSettings)
+		require.NoError(t, err)
+
+		// It SHOULD charge for deficit because we still have room and there's a deficit!
+		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonDeficitChargeNow, decision.Action.Reason)
+	})
+
+	t.Run("Arbitrage Opportunity -> No Charge If Almost Full (< 10 mins left)", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05}
+		futurePrices := []types.Price{}
+		for i := 1; i <= 24; i++ {
+			price := 0.05
+			if i == 5 {
+				price = 0.50 // Arbitrage opportunity
+			}
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
+			})
+		}
+
+		// Battery is at 98%
+		almostFullStatus := baseStatus
+		almostFullStatus.BatterySOC = 98.0
+		almostFullStatus.MaxBatteryChargeKW = 5.0
+		almostFullStatus.BatteryCapacityKWH = 10.0
+
+		// Use noLoadHistory to avoid deficit
+		decision, err := c.Decide(ctx, almostFullStatus, currentPrice, futurePrices, noLoadHistory, nil, baseSettings)
+		require.NoError(t, err)
+
+		// It should NOT charge because of 10 minute rule for arbitrage.
+		// It should Standby and hold the energy.
+		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonArbitrageHoldExport, decision.Action.Reason)
+	})
+
+	t.Run("Deficit Charge Now -> No Charge If Effectively Full (99.9%)", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05}
+		futurePrices := []types.Price{}
+		for i := 1; i <= 24; i++ {
+			price := 0.20 // Later it's more expensive to charge ($0.20 vs $0.05)
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
+			})
+		}
+
+		// Battery is at 99.9%
+		fullStatus := baseStatus
+		fullStatus.BatterySOC = 99.9
+		fullStatus.BatteryCapacityKWH = 10.0
+
+		// Use History with high load
 		decision, err := c.Decide(ctx, fullStatus, currentPrice, futurePrices, history, nil, baseSettings)
 		require.NoError(t, err)
 
-		// It should NOT charge for deficit because already full.
-		// Instead it should probably Standby (Deficit predicted, saving for peak) or Load.
-		// Since current price is 0.05 and future is 0.20, it should Standby unless we expect to be full from solar.
+		// It should NOT charge because 99.9% rounds to 10kWh, which equals capacity.
 		assert.NotEqual(t, types.ActionReasonDeficitChargeNow, decision.Action.Reason)
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
 	})
