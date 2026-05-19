@@ -429,85 +429,154 @@ func TestRateLimitMiddleware(t *testing.T) {
 }
 
 func TestGetClientIP(t *testing.T) {
-	tests := []struct {
-		name       string
-		headers    map[string]string
-		remoteAddr string
-		expectedIP string
-	}{
-		{
-			name: "CF-Connecting-IP takes precedence",
-			headers: map[string]string{
-				"CF-Connecting-IP": "203.0.113.5",
-				"X-Forwarded-For":  "198.51.100.10",
-			},
-			remoteAddr: "127.0.0.1:8080",
-			expectedIP: "203.0.113.5",
-		},
-		{
-			name: "X-Forwarded-For single public IP",
-			headers: map[string]string{
-				"X-Forwarded-For": "198.51.100.10",
-			},
-			remoteAddr: "127.0.0.1:8080",
-			expectedIP: "198.51.100.10",
-		},
-		{
-			name: "X-Forwarded-For multiple IPs returns last public (prevents spoofing)",
-			headers: map[string]string{
-				"X-Forwarded-For": "203.0.113.10, 198.51.100.10",
-			},
-			remoteAddr: "127.0.0.1:8080",
-			expectedIP: "198.51.100.10", // The last public IP
-		},
-		{
-			name: "X-Forwarded-For all private IPs returns last",
-			headers: map[string]string{
-				"X-Forwarded-For": "10.0.0.1, 192.168.1.1",
-			},
-			remoteAddr: "127.0.0.1:8080",
-			expectedIP: "192.168.1.1",
-		},
-		{
-			name: "X-Forwarded-For empty fallback to RemoteAddr",
-			headers: map[string]string{
-				"X-Forwarded-For": "",
-			},
-			remoteAddr: "198.51.100.10:8080",
-			expectedIP: "198.51.100.10",
-		},
-		{
-			name:       "No headers fallback to RemoteAddr with port",
-			headers:    map[string]string{},
-			remoteAddr: "203.0.113.10:12345",
-			expectedIP: "203.0.113.10",
-		},
-		{
-			name:       "No headers fallback to RemoteAddr without port",
-			headers:    map[string]string{},
-			remoteAddr: "203.0.113.10",
-			expectedIP: "203.0.113.10",
-		},
-		{
-			name: "Invalid IP in X-Forwarded-For skipped",
-			headers: map[string]string{
-				"X-Forwarded-For": "invalid-ip, 198.51.100.10",
-			},
-			remoteAddr: "127.0.0.1:8080",
-			expectedIP: "198.51.100.10",
-		},
-	}
+	t.Run("CF-Connecting-IP takes precedence when RemoteAddr is a Cloudflare IP", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("CF-Connecting-IP", "203.0.113.5")
+		req.Header.Set("X-Forwarded-For", "198.51.100.10")
+		req.RemoteAddr = "103.21.244.5:8080" // Cloudflare IP
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "/", nil)
-			for k, v := range tt.headers {
-				req.Header.Set(k, v)
-			}
-			req.RemoteAddr = tt.remoteAddr
+		ip := getClientIP(req)
+		assert.Equal(t, "203.0.113.5", ip)
+	})
 
-			ip := getClientIP(req)
-			assert.Equal(t, tt.expectedIP, ip)
-		})
-	}
+	t.Run("CF-Connecting-IP ignored when RemoteAddr is not a Cloudflare IP", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("CF-Connecting-IP", "203.0.113.5")
+		req.Header.Set("X-Forwarded-For", "198.51.100.10")
+		req.RemoteAddr = "127.0.0.1:8080" // Not Cloudflare IP
+
+		ip := getClientIP(req)
+		assert.Equal(t, "198.51.100.10", ip)
+	})
+
+	t.Run("CF-Connecting-IP takes precedence when behind GCP LB and trustedRemoteIP is a Cloudflare IP", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		// 130.211.0.1 is a load balancer IP; 103.21.244.5 is Cloudflare.
+		req.Header.Set("X-Forwarded-For", "103.21.244.5, 130.211.0.1")
+		req.Header.Set("CF-Connecting-IP", "203.0.113.5")
+		req.RemoteAddr = "35.191.0.10:12345" // GFE IP
+
+		ip := getClientIP(req)
+		assert.Equal(t, "203.0.113.5", ip)
+	})
+
+	t.Run("CF-Connecting-IP ignored when behind GCP LB and trustedRemoteIP is not a Cloudflare IP", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		// 130.211.0.1 is a load balancer IP; 198.51.100.10 is not Cloudflare.
+		req.Header.Set("X-Forwarded-For", "198.51.100.10, 130.211.0.1")
+		req.Header.Set("CF-Connecting-IP", "203.0.113.5")
+		req.RemoteAddr = "35.191.0.10:12345" // GFE IP
+
+		ip := getClientIP(req)
+		assert.Equal(t, "198.51.100.10", ip)
+	})
+
+	t.Run("X-Forwarded-For single public IP", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("X-Forwarded-For", "198.51.100.10")
+		req.RemoteAddr = "127.0.0.1:8080"
+
+		ip := getClientIP(req)
+		assert.Equal(t, "198.51.100.10", ip)
+	})
+
+	t.Run("X-Forwarded-For multiple IPs returns last public (prevents spoofing)", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("X-Forwarded-For", "203.0.113.10, 198.51.100.10")
+		req.RemoteAddr = "127.0.0.1:8080"
+
+		ip := getClientIP(req)
+		assert.Equal(t, "198.51.100.10", ip)
+	})
+
+	t.Run("X-Forwarded-For all private IPs returns last", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("X-Forwarded-For", "10.0.0.1, 192.168.1.1")
+		req.RemoteAddr = "127.0.0.1:8080"
+
+		ip := getClientIP(req)
+		assert.Equal(t, "192.168.1.1", ip)
+	})
+
+	t.Run("X-Forwarded-For empty fallback to RemoteAddr", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("X-Forwarded-For", "")
+		req.RemoteAddr = "198.51.100.10:8080"
+
+		ip := getClientIP(req)
+		assert.Equal(t, "198.51.100.10", ip)
+	})
+
+	t.Run("No headers fallback to RemoteAddr with port", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.RemoteAddr = "203.0.113.10:12345"
+
+		ip := getClientIP(req)
+		assert.Equal(t, "203.0.113.10", ip)
+	})
+
+	t.Run("No headers fallback to RemoteAddr without port", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.RemoteAddr = "203.0.113.10"
+
+		ip := getClientIP(req)
+		assert.Equal(t, "203.0.113.10", ip)
+	})
+
+	t.Run("Invalid IP in X-Forwarded-For skipped", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("X-Forwarded-For", "invalid-ip, 198.51.100.10")
+		req.RemoteAddr = "127.0.0.1:8080"
+
+		ip := getClientIP(req)
+		assert.Equal(t, "198.51.100.10", ip)
+	})
+
+	t.Run("RemoteAddr is GCP IP - IPv4 - strips last IP from X-Forwarded-For", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		// 55.55.55.55 is a load balancer's public IP; 203.0.113.5 is the real client.
+		req.Header.Set("X-Forwarded-For", "203.0.113.5, 55.55.55.55")
+		req.RemoteAddr = "35.191.0.10:12345"
+
+		ip := getClientIP(req)
+		assert.Equal(t, "203.0.113.5", ip)
+	})
+
+	t.Run("RemoteAddr is GCP IP - IPv6 - strips last IP from X-Forwarded-For", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		// 2600:feed::1 is a load balancer's public IP; 203.0.113.5 is the real client.
+		req.Header.Set("X-Forwarded-For", "203.0.113.5, 2600:feed::1")
+		req.RemoteAddr = "[2600:2d00:1:1::5]:12345"
+
+		ip := getClientIP(req)
+		assert.Equal(t, "203.0.113.5", ip)
+	})
+
+	t.Run("RemoteAddr is GCP IP - only one IP in X-Forwarded-For", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("X-Forwarded-For", "35.191.0.1")
+		req.RemoteAddr = "130.211.0.10"
+
+		ip := getClientIP(req)
+		assert.Equal(t, "130.211.0.10", ip)
+	})
+
+	t.Run("RemoteAddr is Cloud Run IP - trusts last value of X-Forwarded-For (does not strip)", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("X-Forwarded-For", "203.0.113.5, 198.51.100.10")
+		req.RemoteAddr = "169.254.8.1:12345"
+
+		ip := getClientIP(req)
+		assert.Equal(t, "198.51.100.10", ip)
+	})
+
+	t.Run("RemoteAddr is Cloud Run IP - trusts last value of X-Forwarded-For and resolves Cloudflare proxy", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("X-Forwarded-For", "203.0.113.5, 103.21.244.5") // 103.21.244.5 is Cloudflare IP
+		req.Header.Set("CF-Connecting-IP", "198.51.100.10")
+		req.RemoteAddr = "169.254.8.1:12345"
+
+		ip := getClientIP(req)
+		assert.Equal(t, "198.51.100.10", ip)
+	})
 }
