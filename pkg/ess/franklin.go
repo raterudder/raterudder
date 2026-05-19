@@ -41,6 +41,8 @@ type Franklin struct {
 	deviceInfoExpiry     time.Time
 	powerCapConfigCache  []franklinPowerCapConfigResult
 	powerCapConfigExpiry time.Time
+	runtimeDataCache     franklinDeviceCompositeInfoResult
+	runtimeDataExpiry    time.Time
 }
 
 type franklinMode struct {
@@ -395,7 +397,8 @@ func (f *Franklin) getRuntimeData(ctx context.Context) (franklinDeviceCompositeI
 	params := url.Values{}
 	params.Set("gatewayId", f.gatewayID)
 	// 0 is set on the first call and subsequent calls should set to 1
-	params.Set("refreshFlag", "0")
+	// when it was set to 0 we got some weird data for some sites
+	params.Set("refreshFlag", "1")
 
 	req, err := f.newGetRequest(ctx, "hes-gateway/terminal/getDeviceCompositeInfo", params)
 	if err != nil {
@@ -408,6 +411,9 @@ func (f *Franklin) getRuntimeData(ctx context.Context) (franklinDeviceCompositeI
 	}
 
 	// solar inverters/combiners use power so it can be negative, just set it to 0
+	// sometimes the PowerSolar field is stuck (particularly when report_type: 2),
+	// we should decide if we want to rely on the solarPower field which is ~10x the p_sun field
+	// but for now we're changing the refreshFlag to 1 and seeing if that helps
 	if res.RuntimeData.PowerSolar < 0 {
 		res.RuntimeData.PowerSolar = 0
 	}
@@ -423,6 +429,21 @@ func (f *Franklin) getRuntimeData(ctx context.Context) (franklinDeviceCompositeI
 	)
 
 	return res, nil
+}
+
+func (f *Franklin) getRuntimeDataWithCache(ctx context.Context, refresh bool) (franklinDeviceCompositeInfoResult, error) {
+	if !refresh && time.Now().Before(f.runtimeDataExpiry) {
+		return f.runtimeDataCache, nil
+	}
+	rd, err := f.getRuntimeData(ctx)
+	if err != nil {
+		return franklinDeviceCompositeInfoResult{}, err
+	}
+	f.runtimeDataCache = rd
+	// we are really only trying to keep this around for the update call which
+	// calls SetMode and GetStatus
+	f.runtimeDataExpiry = time.Now().Add(5 * time.Second)
+	return rd, nil
 }
 
 func (f *Franklin) getDefaultGatewayID(ctx context.Context) (string, error) {
@@ -515,7 +536,7 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	rd, err := f.getRuntimeData(ctx)
+	rd, err := f.getRuntimeDataWithCache(ctx, false)
 	if err != nil {
 		return types.SystemStatus{}, err
 	}
@@ -803,7 +824,7 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		return nil
 	}
 
-	rd, err := f.getRuntimeData(ctx)
+	rd, err := f.getRuntimeDataWithCache(ctx, false)
 	if err != nil {
 		return err
 	}
