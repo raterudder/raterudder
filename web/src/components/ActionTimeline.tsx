@@ -64,7 +64,7 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
                             <h3>
                                 {title}
                                 {summary && summary.count > 1 && (
-                                    <span className="count">({summary.count}x)</span>
+                                    <span className="count" aria-label={`Happened ${summary.count} times`}>({summary.count}x)</span>
                                 )}
                             </h3>
 

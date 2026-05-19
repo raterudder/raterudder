@@ -77,7 +77,7 @@ const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSite
                 )}
 
                 <div id="mobile-menu-content" className={`header-content ${isMenuOpen ? 'open' : ''}`}>
-                    <nav className="header-nav">
+                    <nav className="header-nav" aria-label="Main Navigation">
                         {loggedIn ? (
                             <>
                                 <Link to="/dashboard" className={`nav-link ${location === '/dashboard' ? 'active' : ''}`} aria-current={location === '/dashboard' ? 'page' : undefined} onClick={() => setIsMenuOpen(false)}>Dashboard</Link>
