@@ -54,7 +54,6 @@ const (
 	ActionReasonHasAlarms                  ActionReason = "hasAlarms"
 	ActionReasonGridUnavailable            ActionReason = "gridUnavailable"
 	ActionReasonWaitingToCharge            ActionReason = "waitingToCharge"
-	ActionReasonChargeSurvivePeak          ActionReason = "chargeSurvivePeak"
 	ActionReasonPreventSolarCurtailment    ActionReason = "preventSolarCurtailment"
 	ActionReasonBatteryAtReserve           ActionReason = "batteryAtReserve"
 

@@ -155,15 +155,6 @@ export const getReasonText = (action: Action): string => {
             }
             return parts.concat(suffixParts).join(' ');
         }
-        case ActionReason.ChargeSurvivePeak: {
-            const delta = nowCost !== null && futureCost !== null ? futureCost - nowCost : null;
-            const parts = [
-                `Battery will deplete before forecasted high-price period${futureCostStr ? ` (${futureCostStr})` : ''}.`,
-                `Charging now at the current rate (${nowCostStr}) so we can use the battery later during the expensive window.`,
-            ];
-            if (delta !== null) parts.push(`Estimated savings: ${formatPrice(delta)}/kWh.`);
-            return parts.concat(suffixParts).join(' ');
-        }
         case ActionReason.PreventSolarCurtailment: {
             const parts = [
                 `Solar generation will exceed battery capacity${capacityTimeStr ? ` by ${capacityTimeStr}` : ''}.`,

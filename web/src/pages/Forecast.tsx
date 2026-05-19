@@ -36,14 +36,6 @@ const charts: ChartConfig[] = [
         referenceLine: { dataKey: 'batteryReserveSOC', label: 'Reserve', color: '#ef4444' },
     },
     {
-        title: 'Battery (if standby) (%)',
-        dataKey: 'batterySOCIfStandby',
-        color: 'var(--accent)',
-        gradientId: 'batteryGrad',
-        unit: '%',
-        referenceLine: { dataKey: 'batteryReserveSOC', label: 'Reserve', color: '#ef4444' },
-    },
-    {
         title: 'Predicted Solar (kWh)',
         dataKey: 'predictedSolarKWH',
         color: 'var(--warning)',
@@ -77,7 +69,6 @@ function formatHour(ts: string): string {
 // Extended interface adding calculated fields
 interface ProcessedModelingHour extends ModelingHour {
     batterySOCIfUsed: number;
-    batterySOCIfStandby: number;
     batteryReserveSOC: number;
     rawSolarKWH: number;
 }
@@ -258,7 +249,6 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     ts: h.tsHourStart,
                     hour: new Date(h.tsHourStart).getHours(),
                     batteryKWH: (h.avgBatterySOC / 100) * capacity,
-                    batteryKWHIfStandby: (h.avgBatterySOC / 100) * capacity, // Historic actuals
                     batteryCapacityKWH: capacity,
                     batteryReserveKWH: reserve,
                     predictedSolarKWH: h.solarKWH,
@@ -277,7 +267,6 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
         return modelingData.map((h: any) => ({
             ...h,
             batterySOCIfUsed: (h.batteryKWH / h.batteryCapacityKWH) * 100,
-            batterySOCIfStandby: (h.batteryKWHIfStandby / h.batteryCapacityKWH) * 100,
             batteryReserveSOC: (h.batteryReserveKWH / h.batteryCapacityKWH) * 100,
             // Avoid division by zero
             rawSolarKWH: h.todaySolarTrend > 0.001

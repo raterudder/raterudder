@@ -21,7 +21,6 @@ type SimHour struct {
 	AvgHomeLoadKWH          float64     `json:"avgHomeLoadKWH"`
 	PredictedSolarKWH       float64     `json:"predictedSolarKWH"`
 	BatteryKWH              float64     `json:"batteryKWH"`
-	BatteryKWHIfStandby     float64     `json:"batteryKWHIfStandby"`
 	BatteryCapacityKWH      float64     `json:"batteryCapacityKWH"`
 	BatteryReserveKWH       float64     `json:"batteryReserveKWH"`
 	TotalBatteryDeficitKWH  float64     `json:"totalBatteryDeficitKWH"`
@@ -48,7 +47,6 @@ func (c *Controller) SimulateState(
 	currentSOC := currentStatus.BatterySOC
 	// simulate battery energy over the 24 hours
 	simEnergyKWH := capacityKWH * (currentSOC / 100.0)
-	simStandbyEnergy := simEnergyKWH
 	var deficitKWH float64
 
 	// Build Energy Model
@@ -204,7 +202,11 @@ func (c *Controller) SimulateState(
 						simDeficitAt = simTime
 					}
 				}
-				deficitKWH += minKWH - newSimEnergy
+				// once we hit capacity the deficit doesn't matter anymore so stop
+				// tracking it
+				if simCapacityAt.IsZero() {
+					deficitKWH += minKWH - newSimEnergy
+				}
 				simEnergyKWH = minKWH
 			} else {
 				simEnergyKWH = newSimEnergy
@@ -246,15 +248,12 @@ func (c *Controller) SimulateState(
 					} else {
 						simCapacityAt = simTime
 					}
+					// once we hit capacity the battery is full and any deficit must be handled before this
+					deficitKWH = 0.0
 				}
 				simEnergyKWH = capacityKWH
 			} else {
 				simEnergyKWH = newSimEnergy
-			}
-
-			simStandbyEnergy -= (clampedNetKWH * simEnergyApplyRatio)
-			if simStandbyEnergy > capacityKWH {
-				simStandbyEnergy = capacityKWH
 			}
 		}
 
@@ -268,7 +267,6 @@ func (c *Controller) SimulateState(
 			AvgHomeLoadKWH:          profile.avgHomeLoadKWH,
 			PredictedSolarKWH:       predictedAvgSolarKWH,
 			BatteryKWH:              simEnergyKWH,
-			BatteryKWHIfStandby:     simStandbyEnergy,
 			BatteryCapacityKWH:      capacityKWH,
 			BatteryReserveKWH:       minKWH,
 			TotalBatteryDeficitKWH:  deficitKWH,

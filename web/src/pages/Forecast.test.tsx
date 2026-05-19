@@ -27,7 +27,6 @@ function makeSimHours(): ModelingHour[] {
             avgHomeLoadKWH: 1.5,
             predictedSolarKWH: Math.max(0, 3.0 * Math.sin((i / 24) * Math.PI)),
             batteryKWH: 5.0 - i * 0.2,
-            batteryKWHIfStandby: 5.0 - i * 0.1,
             batteryCapacityKWH: 10.0,
             batteryReserveKWH: 0.5,
             todaySolarTrend: 1.0,
@@ -67,7 +66,6 @@ describe('Forecast Page', () => {
 
         await waitFor(() => {
             expect(screen.getByText('Battery (if used) (%)')).toBeInTheDocument();
-            expect(screen.getByText('Battery (if standby) (%)')).toBeInTheDocument();
             expect(screen.getByText('Predicted Solar (kWh)')).toBeInTheDocument();
             expect(screen.queryByText('Estimated Irradiance (W/m²)')).not.toBeInTheDocument();
             expect(screen.getByText('Avg Home Load (kWh)')).toBeInTheDocument();
@@ -99,7 +97,6 @@ describe('Forecast Page', () => {
 
         await waitFor(() => {
             expect(screen.getByText('Battery (if used) (%)')).toBeInTheDocument();
-            expect(screen.getByText('Battery (if standby) (%)')).toBeInTheDocument();
             expect(screen.getByText('Avg Home Load (kWh)')).toBeInTheDocument();
             expect(screen.getByText('Grid Charge Cost ($/kWh)')).toBeInTheDocument();
         });

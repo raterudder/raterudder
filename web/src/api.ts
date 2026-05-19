@@ -32,7 +32,6 @@ export const ActionReason = {
     HasAlarms: 'hasAlarms',
     GridUnavailable: 'gridUnavailable',
     WaitingToCharge: 'waitingToCharge',
-    ChargeSurvivePeak: 'chargeSurvivePeak',
     PreventSolarCurtailment: 'preventSolarCurtailment',
     BatteryAtReserve: 'batteryAtReserve',
     ArbitrageHoldExport: 'arbitrageHoldExport',
@@ -373,7 +372,6 @@ export interface ModelingHour {
     avgHomeLoadKWH: number;
     predictedSolarKWH: number;
     batteryKWH: number;
-    batteryKWHIfStandby: number;
     batteryCapacityKWH: number;
     batteryReserveKWH: number;
     todaySolarTrend: number;
@@ -571,7 +569,7 @@ export const fetchHistoryEnergy = async (date: Date, siteID?: string): Promise<H
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
     const dateStr = `${year}-${month}-${day}`;
-    
+
     const query = new URLSearchParams({
         date: dateStr,
     });
