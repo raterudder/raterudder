@@ -22,9 +22,9 @@ func TestAdminListSites(t *testing.T) {
 		{ID: "site1"},
 		{ID: "site2"},
 	}
-	mockStorage.On("ListSites", mock.Anything).Return(sites, nil)
-	mockStorage.On("GetLatestAction", mock.Anything, "site1").Return(&types.Action{Description: "test1 action"}, nil)
-	mockStorage.On("GetLatestAction", mock.Anything, "site2").Return((*types.Action)(nil), nil)
+	mockStorage.On("ListSites", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */).Return(sites, nil)
+	mockStorage.On("GetLatestAction", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, "site1").Return(&types.Action{Description: "test1 action"}, nil)
+	mockStorage.On("GetLatestAction", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, "site2").Return((*types.Action)(nil), nil)
 	// Setup OIDC for tests
 	srvUrl, priv := setupOIDCTest(t)
 	defer srvUrl.Close()
@@ -54,7 +54,7 @@ func TestAdminListSites(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/list/sites", nil)
 		req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: validUserToken})
 
-		mockStorage.On("GetUser", mock.Anything, "google:user1").Return(types.User{
+		mockStorage.On("GetUser", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, "google:user1").Return(types.User{
 			ID:    "google:user1",
 			Email: "user@example.com",
 		}, nil).Once()
@@ -74,7 +74,7 @@ func TestAdminListSites(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/list/sites", nil)
 		req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: validAdminToken})
 
-		mockStorage.On("GetUser", mock.Anything, "google:admin1").Return(types.User{
+		mockStorage.On("GetUser", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, "google:admin1").Return(types.User{
 			ID:    "google:admin1",
 			Email: "admin@example.com",
 		}, nil).Once()
@@ -109,7 +109,7 @@ func TestAdminListSites(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/list/sites", nil)
 		req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: validAdminToken})
 
-		mockStorage.On("GetUser", mock.Anything, "google:admin1").Return(types.User{
+		mockStorage.On("GetUser", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, "google:admin1").Return(types.User{
 			ID:    "google:admin1",
 			Email: "admin@example.com",
 		}, nil).Once()
