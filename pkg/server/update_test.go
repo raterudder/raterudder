@@ -589,6 +589,79 @@ func TestHandleUpdate(t *testing.T) {
 			assert.Equal(t, http.StatusOK, w.Result().StatusCode)
 		})
 	})
+
+	t.Run("Weather Query Future Range", func(t *testing.T) {
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.15, TSStart: time.Now()}, nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{{DollarsPerKWH: 0.15, TSStart: time.Now().Add(time.Hour)}}, nil)
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+
+		mockS := &mockStorage{}
+		timeLoc := "America/Chicago"
+
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			DryRun:          true,
+			MinBatterySOC:   5.0,
+			UtilityProvider: "test",
+			Location: &types.SiteLocation{
+				Latitude:    41.8781,
+				Longitude:   -87.6298,
+				TimeZone:    timeLoc,
+				PostalCode:  "60601",
+				CountryCode: "US",
+			},
+		}, types.CurrentSettingsVersion, nil)
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+		mockS.On("GetLatestWeatherTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockS.On("InsertAction", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+		// Mock the weather update call
+		mockW := &mockWeather{}
+		mockW.On("Forecast", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("UpsertWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+		// Verify GetWeather is called with an end time in the future
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.MatchedBy(func(end time.Time) bool {
+			// end time should be in the future (roughly now + 2 days)
+			return end.After(time.Now().Add(24 * time.Hour))
+		})).Return([]types.Weather{}, nil)
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 80}, nil)
+		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+		mockP := ess.NewMap()
+		mockP.SetSystem(types.SiteIDNone, mockES)
+
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			weather:    mockW,
+			listenAddr: ":8080",
+			controller: controller.NewController(),
+			bypassAuth: true,
+		}
+
+		req := httptest.NewRequest("GET", "/api/update", nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
+		w := httptest.NewRecorder()
+
+		srv.handleUpdate(w, req)
+
+		resp := w.Result()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		mockS.AssertExpectations(t)
+	})
 }
 
 func TestHandleUpdateSites(t *testing.T) {

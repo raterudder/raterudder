@@ -106,7 +106,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 5. Get History (Last x days from Storage)
-	now := status.Timestamp.Truncate(time.Hour)
+	now := status.Timestamp
 	historyStart := now.AddDate(0, 0, -forecastHistoryDays).Truncate(time.Hour)
 	energyHistoryDaily, err := s.storage.GetEnergyHistory(ctx, siteID, historyStart, now)
 	if err != nil {
@@ -125,6 +125,11 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	if settings.Location != nil {
 		if timeLoc, err := time.LoadLocation(settings.Location.TimeZone); err != nil {
 			log.Ctx(ctx).WarnContext(ctx, "failed to load location", slog.Any("error", err), slog.String("timeZone", settings.Location.TimeZone))
+			// fallback to at least fetching something and 2 days in the future
+			weatherHistory, err = s.storage.GetWeather(ctx, siteID, historyStart, now.AddDate(0, 0, 2))
+			if err != nil {
+				log.Ctx(ctx).WarnContext(ctx, "failed to fetch weather for forecast", slog.Any("error", err))
+			}
 		} else {
 			start := time.Date(historyStart.Year(), historyStart.Month(), historyStart.Day(), 0, 0, 0, 0, timeLoc)
 			end := now.In(timeLoc).AddDate(0, 0, 2) // simulate up to 24-48 hours

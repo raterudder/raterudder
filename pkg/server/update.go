@@ -177,9 +177,10 @@ func (s *Server) performSiteUpdate(
 	log.Ctx(ctx).DebugContext(ctx, "update: current price fetched", slog.Any("price", currentPrice))
 
 	// get History for Controller (Last 5 days from Storage)
-	historyStart := time.Now().AddDate(0, 0, -forecastHistoryDays)
-	historyEnd := time.Now()
-	energyHistoryDaily, err := s.storage.GetEnergyHistory(ctx, siteID, historyStart, historyEnd)
+	// in case the timestamp is off, we just use the location of it
+	now := time.Now().In(status.Timestamp.Location())
+	historyStart := now.AddDate(0, 0, -forecastHistoryDays).Truncate(time.Hour)
+	energyHistoryDaily, err := s.storage.GetEnergyHistory(ctx, siteID, historyStart, now)
 	if err != nil {
 		log.Ctx(ctx).WarnContext(ctx, "failed to get energy history from storage", slog.Any("error", err))
 	}
@@ -190,16 +191,26 @@ func (s *Server) performSiteUpdate(
 	}
 
 	// fetch weather history/forecast if location is configured
-	// We pass the history here to sync any new solar data into the weather actuals
 	var weatherHistory []types.Weather
 	if settings.Location != nil {
 		if err := s.updateWeatherHistory(ctx, siteID, *settings.Location); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update weather history", slog.Any("error", err))
 		}
 
-		weatherHistory, err = s.storage.GetWeather(ctx, siteID, historyStart, historyEnd)
-		if err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to get weather history from storage", slog.Any("error", err))
+		if timeLoc, err := time.LoadLocation(settings.Location.TimeZone); err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to load location timezone", slog.Any("error", err), slog.String("timeZone", settings.Location.TimeZone))
+			// fallback to at least fetching something and 2 days in the future
+			weatherHistory, err = s.storage.GetWeather(ctx, siteID, historyStart, now.AddDate(0, 0, 2))
+			if err != nil {
+				log.Ctx(ctx).WarnContext(ctx, "failed to get weather history from storage", slog.Any("error", err))
+			}
+		} else {
+			start := time.Date(historyStart.Year(), historyStart.Month(), historyStart.Day(), 0, 0, 0, 0, timeLoc)
+			end := time.Now().In(timeLoc).AddDate(0, 0, 2)
+			weatherHistory, err = s.storage.GetWeather(ctx, siteID, start, end)
+			if err != nil {
+				log.Ctx(ctx).WarnContext(ctx, "failed to get weather history from storage", slog.Any("error", err))
+			}
 		}
 	}
 
