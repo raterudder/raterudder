@@ -28,6 +28,7 @@ export const ActionReason = {
     DeficitSaveForPeak: 'deficitSaveForPeak',
     ArbitrageSave: 'dischargeAtPeak',
     SufficientBattery: 'sufficientBattery',
+    SufficientBatteryTillCharge: 'sufficientBatteryTillCharge',
     EmergencyMode: 'emergencyMode',
     HasAlarms: 'hasAlarms',
     GridUnavailable: 'gridUnavailable',

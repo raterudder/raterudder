@@ -174,6 +174,17 @@ export const getReasonText = (action: Action): string => {
             ];
             return parts.concat(suffixParts).join(' ');
         }
+        case ActionReason.SufficientBatteryTillCharge: {
+            const delta = nowCost !== null && futureCost !== null ? nowCost - futureCost : null;
+            const parts = [
+                `The battery will deplete${deficitTimeStr ? ` around ${deficitTimeStr}` : ''}, but a cheaper charging window is coming up${futureCostStr ? ` (${futureCostStr})` : ''} compared to now (${nowCostStr}).`,
+                `Using the battery now and waiting to refill it during the cheaper window.`,
+            ];
+            if (delta !== null && delta > 0) {
+                parts.push(`Estimated savings: ${formatPrice(delta)}/kWh.`);
+            }
+            return parts.concat(suffixParts).join(' ');
+        }
         case ActionReason.GridUnavailable:
             return 'Grid is currently unavailable. The system is standing by to protect the battery and ensure power is available for the home.';
         case ActionReason.BatteryAtReserve: {

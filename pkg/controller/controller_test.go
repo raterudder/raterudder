@@ -1578,4 +1578,63 @@ func TestDecide(t *testing.T) {
 		assert.NotEqual(t, types.ActionReasonDeficitChargeNow, decision.Action.Reason)
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
 	})
+
+	t.Run("Full Battery but Cheap Future Charge -> Load (Discharge)", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.105}
+
+		futurePrices := []types.Price{}
+		for i := 1; i <= 24; i++ {
+			price := 0.105
+			tStart := now.Add(time.Duration(i) * time.Hour)
+			// Cheap 5 hours from now
+			if tStart.Hour() == 0 {
+				price = 0.055
+			}
+			// Peak 18 hours from now
+			if tStart.Hour() == 13 {
+				price = 0.31443
+			}
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       tStart,
+				TSEnd:         tStart.Add(time.Hour),
+				DollarsPerKWH: price,
+			})
+		}
+
+		almostFullStatus := types.SystemStatus{
+			Timestamp:             now,
+			BatterySOC:            99.474,
+			BatteryCapacityKWH:    15.0,
+			MaxBatteryChargeKW:    8.0,
+			MaxBatteryDischargeKW: 10.0,
+			HomeKW:                2.0,
+			BatteryAboveMinSOC:    true,
+		}
+
+		// Create history with 2kW constant load
+		customHistory := []types.EnergyStats{}
+		ts := now.Add(-24 * time.Hour)
+		for i := 0; i < 48; i++ {
+			customHistory = append(customHistory, types.EnergyStats{
+				TSHourStart: ts,
+				HomeKWH:     2.0,
+			})
+			ts = ts.Add(1 * time.Hour)
+		}
+
+		settings := baseSettings
+		settings.MinBatterySOC = 20.0
+		settings.MinDeficitPriceDifferenceDollarsPerKWH = 0.02
+		settings.GridChargeBatteries = true
+		settings.GridExportSolar = true
+
+		decision, err := c.Decide(ctx, almostFullStatus, currentPrice, futurePrices, customHistory, nil, settings)
+		require.NoError(t, err)
+
+		// It should load (discharge) because we have a planned charge time at midnight which is cheap,
+		// and we have sufficient battery to reach that window.
+		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonSufficientBatteryTillCharge, decision.Action.Reason)
+		assert.Contains(t, decision.Action.Description, "Sufficient battery to reach planned charge time")
+	})
 }

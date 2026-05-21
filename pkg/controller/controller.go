@@ -124,12 +124,13 @@ func (c *Controller) Decide(
 	currentEnergyKWH := currentStatus.BatterySOC * capacityKWH / 100.0
 
 	// add a 0.1 kWh buffer to prevent trying to charge when we are almost full (e.g. 99.9%)
-	canChargeAny := currentEnergyKWH+0.1 < capacityKWH && settings.GridChargeBatteries && !currentStatus.BatteryChargingDisabled
+	canChargeNow := currentEnergyKWH+0.1 < capacityKWH && settings.GridChargeBatteries && !currentStatus.BatteryChargingDisabled
+	canChargeFuture := settings.GridChargeBatteries && !currentStatus.BatteryChargingDisabled
 
 	// assume we need to charge for at least 10 minutes for it to be worth it for arbitrage
 	minChargeDurationHours := 10.0 / 60.0
 	simEnergyAfterCharge := currentEnergyKWH + chargeKW*minChargeDurationHours
-	canChargeArbitrage := simEnergyAfterCharge < capacityKWH && canChargeAny
+	canChargeArbitrage := simEnergyAfterCharge < capacityKWH && canChargeNow
 
 	shouldCharge := false
 	var chargeDescription string
@@ -234,7 +235,7 @@ func (c *Controller) Decide(
 		}
 
 		// the simulation resets the total deficit when we hit capacity
-		if slot.TotalBatteryDeficitKWH > 0 && canChargeAny {
+		if slot.TotalBatteryDeficitKWH > 0 && canChargeFuture {
 			deficitAmount := slot.TotalBatteryDeficitKWH
 
 			// future in this section is actually in the PAST from the current
@@ -267,7 +268,7 @@ func (c *Controller) Decide(
 
 			// if we have determined we'll run out of energy and it's cheaper to
 			// charge now than later, and we have room in the battery, charge now
-			if simInFuture && gridChargeNowCost+settings.MinDeficitPriceDifferenceDollarsPerKWH <= cheapestFutureChargeCost {
+			if simInFuture && canChargeNow && gridChargeNowCost+settings.MinDeficitPriceDifferenceDollarsPerKWH <= cheapestFutureChargeCost {
 				shouldCharge = true
 				chargeDescription = fmt.Sprintf(
 					"Projected Deficit at %s. Charge Now ($%.3f) <= Later ($%.3f) - Delta ($%.3f).",
@@ -440,7 +441,7 @@ func (c *Controller) Decide(
 				slog.Time("plannedChargeTime", plannedChargeTime),
 				slog.Float64("currentPrice", currentPrice.DollarsPerKWH),
 			)
-			return decision(types.BatteryModeLoad, types.ActionReasonSufficientBattery, loadReason, &plannedChargePrice, hitDeficitAt, hitCapacityAt), nil
+			return decision(types.BatteryModeLoad, types.ActionReasonSufficientBatteryTillCharge, loadReason, &plannedChargePrice, hitDeficitAt, hitCapacityAt), nil
 		}
 
 		// if we have a planned charge time, we should record as waiting to charge

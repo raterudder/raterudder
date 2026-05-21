@@ -62,6 +62,22 @@ describe('dashboardUtils', () => {
              expect(getReasonText(action)).toContain('battery has enough stored energy');
         });
 
+        it('handles SufficientBatteryTillCharge with prices and savings', () => {
+            const action = {
+                ...baseAction,
+                reason: ActionReason.SufficientBatteryTillCharge,
+                deficitAt: '2026-05-20T19:24:00-05:00',
+                currentPrice: { dollarsPerKWH: 0.15, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
+                futurePrice: { dollarsPerKWH: 0.05, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+            };
+            const text = getReasonText(action);
+            expect(text).toContain('The battery will deplete');
+            expect(text).toContain('cheaper charging window is coming up');
+            expect(text).toContain('$ 0.050');
+            expect(text).toContain('$ 0.150');
+            expect(text).toContain('savings: $ 0.100/kWh');
+        });
+
         it('handles DeficitCharge with prices and savings', () => {
             const action = {
                 ...baseAction,
@@ -79,7 +95,7 @@ describe('dashboardUtils', () => {
             const action = { ...baseAction, reason: ActionReason.PreventSolarCurtailment };
             expect(getReasonText(action)).toContain('exceed battery capacity');
         });
- 
+
         it('handles GridUnavailable', () => {
             const action = { ...baseAction, reason: ActionReason.GridUnavailable };
             expect(getReasonText(action)).toContain('Grid is currently unavailable');
