@@ -91,7 +91,7 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 	// Calculate Improved Solar
 	var improvedSolarMap map[int64]controller.WeatherSolar
 	if settings.Location != nil {
-		improvedSolarMap = controller.CalculateWeatherSolar(ctx, allStats, weatherHistory, *settings.Location)
+		improvedSolarMap = controller.CalculateWeatherSolar(ctx, time.Now(), allStats, weatherHistory, *settings.Location)
 	}
 
 	// Filter results for the target day

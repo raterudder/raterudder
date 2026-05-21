@@ -26,7 +26,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 			},
 		}
 
-		results := CalculateWeatherSolar(ctx, history, weather, loc)
+		results := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		assert.NotEmpty(t, results)
 
 		// 12:00 has history, so it should calibrate efficiency
@@ -53,7 +53,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 			},
 		}
 
-		results := CalculateWeatherSolar(ctx, history, weather, loc)
+		results := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		val12 := results[time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC).Unix()]
 		// Should learn clipping cap of 5.0
 		assert.LessOrEqual(t, val12.ImprovedSolar, 5.0001)
@@ -75,7 +75,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 				},
 			},
 		}
-		results := CalculateWeatherSolar(ctx, history, weather, loc)
+		results := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		// Efficiency should be learned ONLY from 12:00 (10.0 / 800 * ...)
 		// Not from 11:00 (which would drag efficiency down)
 		val13 := results[time.Date(2024, 1, 1, 13, 0, 0, 0, time.UTC).Unix()]
@@ -101,7 +101,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 			},
 		}
 
-		results := CalculateWeatherSolar(ctx, history, weather, loc)
+		results := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		assert.Equal(t, 0.0, results[time.Date(2024, 1, 1, 13, 0, 0, 0, time.UTC).Unix()].SnowFactor)
 		assert.Equal(t, 0.1, results[time.Date(2024, 1, 1, 14, 0, 0, 0, time.UTC).Unix()].SnowFactor)
 		assert.Equal(t, 0.7, results[time.Date(2024, 1, 1, 15, 0, 0, 0, time.UTC).Unix()].SnowFactor)
@@ -127,7 +127,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 			},
 		}
 
-		results := CalculateWeatherSolar(ctx, history, weather, loc)
+		results := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		// Should use GHI for calculation
 		val12 := results[time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC).Unix()]
 		val13 := results[time.Date(2024, 1, 1, 13, 0, 0, 0, time.UTC).Unix()]
@@ -135,6 +135,44 @@ func TestCalculateWeatherSolar(t *testing.T) {
 		assert.Equal(t, 800.0, val12.Irradiance)
 		assert.Equal(t, 400.0, val13.Irradiance)
 		assert.InDelta(t, 5.24, val13.ImprovedSolar, 0.1) // proportional to 10
+	})
+
+	t.Run("ignore current hour", func(t *testing.T) {
+		currentHour := time.Now().Truncate(time.Hour)
+		yesterdayHour := currentHour.Add(-24 * time.Hour)
+		futureHour := currentHour.Add(time.Hour)
+
+		history := []types.EnergyStats{
+			// Yesterday's hour: should be used for calibration (yields efficiency = 10.0 / theoretical)
+			{TSHourStart: yesterdayHour, SolarKWH: 10.0, GridExportKWH: 5.0},
+			// Current hour: has high actual solar (e.g. 50.0) but should be IGNORED for calibration
+			{TSHourStart: currentHour, SolarKWH: 50.0, GridExportKWH: 25.0},
+		}
+
+		weather := []types.Weather{
+			{
+				ForecastHours: []types.HourlyWeather{
+					{TSHourStart: yesterdayHour, GTI: 800, TemperatureC: 25},
+					{TSHourStart: currentHour, GTI: 800, TemperatureC: 25},
+					{TSHourStart: futureHour, GTI: 800, TemperatureC: 25},
+				},
+			},
+		}
+
+		results := CalculateWeatherSolar(ctx, currentHour, history, weather, loc)
+		assert.NotEmpty(t, results)
+
+		valYesterday := results[yesterdayHour.Unix()]
+		valCurrent := results[currentHour.Unix()]
+		valFuture := results[futureHour.Unix()]
+
+		// If current hour was ignored for calibration:
+		// 1. Learned efficiency is based ONLY on yesterday (which yields 10.0 ImprovedSolar).
+		// 2. Both currentHour and futureHour (both having GTI 800) should project exactly around 10.0 ImprovedSolar.
+		// 3. Neither should be 50.0 (the actual value of current hour), and neither should be 0.0.
+		assert.InDelta(t, 10.0, valYesterday.ImprovedSolar, 0.1)
+		assert.InDelta(t, 10.0, valCurrent.ImprovedSolar, 0.1)
+		assert.InDelta(t, 10.0, valFuture.ImprovedSolar, 0.1)
 	})
 }
 

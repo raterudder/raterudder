@@ -30,7 +30,13 @@ type WeatherSolar struct {
 //  4. Projecting forward (and backward for history comparison) using the calibrated efficiency.
 //
 // Returns a map keyed by Unix timestamp (seconds) of each weather hour's computed improvedSolar.
-func CalculateWeatherSolar(ctx context.Context, history []types.EnergyStats, weather []types.Weather, locInfo types.SiteLocation) map[int64]WeatherSolar {
+func CalculateWeatherSolar(
+	ctx context.Context,
+	now time.Time,
+	history []types.EnergyStats,
+	weather []types.Weather,
+	locInfo types.SiteLocation,
+) map[int64]WeatherSolar {
 	const (
 		noct        = 45.0   // Nominal Operating Cell Temperature
 		tempCoeff   = 0.0035 // typical power temperature coefficient
@@ -199,14 +205,16 @@ func CalculateWeatherSolar(ctx context.Context, history []types.EnergyStats, wea
 		// 2. Curtailment: Ignore hours if the battery was nearly full and no export occurred.
 		// 3. Snow: Ignore hours with significant snow accumulation.
 		// 4. Clipping: If clipped, clamp irradiance to minClippedIrradiance.
+		// 5. Skip the current hour to avoid partial actuals distorting learned daily efficiencies
 		if stats, ok := statsByHour[ts]; ok {
 			isCurtailed := stats.GridExportKWH <= 0.1 && stats.MaxBatterySOC >= 98.0
 			isSnowy := h.SnowDepth > 0.2
 			hasSolar := stats.SolarKWH > 0.5
 			isClipped := clippingCap > 0 && stats.SolarKWH >= clippingCap-clippingEps
+			currentHour := ts == now.Truncate(time.Hour).Unix()
 
 			// Filters: Irradiance < 25. Ignore low light.
-			if h.Irradiance >= 25 && h.TempFactor > 0 && hasSolar && !isCurtailed && !isSnowy {
+			if h.Irradiance >= 25 && h.TempFactor > 0 && hasSolar && !isCurtailed && !isSnowy && !currentHour {
 				effectiveIrradiance := h.Irradiance
 				if isClipped && minClippedIrradiance > 0 {
 					effectiveIrradiance = math.Min(h.Irradiance, minClippedIrradiance)
@@ -273,7 +281,12 @@ func CalculateWeatherSolar(ctx context.Context, history []types.EnergyStats, wea
 }
 
 // CalculateSmoothedSolar averages usage and solar by hour of day from history and fits a bell curve.
-func CalculateSmoothedSolar(ctx context.Context, now time.Time, history []types.EnergyStats, settings types.Settings) map[int]float64 {
+func CalculateSmoothedSolar(
+	ctx context.Context,
+	now time.Time,
+	history []types.EnergyStats,
+	settings types.Settings,
+) map[int]float64 {
 	hourlyData := make(map[int][]float64)
 
 	// Regroup history by hour

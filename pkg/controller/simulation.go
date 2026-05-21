@@ -318,7 +318,7 @@ func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, 
 			Longitude: weather[0].Longitude,
 			TimeZone:  weather[0].TimeLocation,
 		}
-		weatherSolar = CalculateWeatherSolar(ctx, history, weather, loc)
+		weatherSolar = CalculateWeatherSolar(ctx, now, history, weather, loc)
 	} else {
 		smoothedSolar = CalculateSmoothedSolar(ctx, now, history, settings)
 	}
@@ -438,8 +438,12 @@ func (c *Controller) calculateSolarTrend(ctx context.Context, now time.Time, his
 	// Index history by time for easy lookups
 	statsByTime := make(map[time.Time]types.EnergyStats)
 	var latestTime time.Time
+	currentHour := now.Truncate(time.Hour)
 	for _, h := range history {
 		t := h.TSHourStart.In(now.Location())
+		if t.Equal(currentHour) {
+			continue
+		}
 		statsByTime[t] = h
 		// get the latest time today
 		if t.Year() == now.Year() && t.YearDay() == now.YearDay() && t.After(latestTime) {

@@ -406,6 +406,22 @@ func TestCalculateSolarTrend(t *testing.T) {
 		ratio := c.calculateSolarTrend(ctx, now, history, model, customSettings)
 		assert.Equal(t, 4.0, ratio)
 	})
+
+	t.Run("Ignore Current Hour", func(t *testing.T) {
+		// If the latestTime is the current hour, it should be ignored.
+		// So recent actual solar and expected solar should use the 2 previous full hours.
+		// Model expects 2.0 (hr 11) + 3.0 (hr 12) = 5.0.
+		// Actual solar for hr 11 and 12 is 4.0 + 6.0 = 10.0.
+		// Ratio should be 10.0 / 5.0 = 2.0.
+		// If current hour (hr 13) were not ignored, expected would be 7.0, actual 31.0, ratio capped at 3.0.
+		history := []types.EnergyStats{
+			{TSHourStart: now, SolarKWH: 25.0}, // current hour (now is 13:00)
+			{TSHourStart: now.Add(-1 * time.Hour), SolarKWH: 6.0},
+			{TSHourStart: now.Add(-2 * time.Hour), SolarKWH: 4.0},
+		}
+		ratio := c.calculateSolarTrend(ctx, now, history, model, settings)
+		assert.Equal(t, 2.0, ratio)
+	})
 }
 
 func TestSimulateState(t *testing.T) {
