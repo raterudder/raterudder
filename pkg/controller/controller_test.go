@@ -31,7 +31,7 @@ func TestDecide(t *testing.T) {
 		SolarBellCurveMultiplier:            1.0,
 	}
 
-	now := time.Now().Truncate(time.Hour)
+	now := time.Date(2026, 5, 20, 10, 0, 0, 0, time.UTC)
 	baseStatus := types.SystemStatus{
 		Timestamp:          now,
 		BatterySOC:         50.0,
@@ -308,7 +308,7 @@ func TestDecide(t *testing.T) {
 		// Since it has enough battery to reach that cheaper price without hitting a deficit,
 		// it correctly decides to USE the battery now (Load) and returns SufficientBattery.
 		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
-		assert.Equal(t, types.ActionReasonSufficientBattery, decision.Action.Reason)
+		assert.Equal(t, types.ActionReasonSufficientBatteryTillCharge, decision.Action.Reason)
 	})
 
 	t.Run("Deficit detected -> Charge Later due to MinDeficitPriceDifference", func(t *testing.T) {
@@ -497,7 +497,7 @@ func TestDecide(t *testing.T) {
 		assert.False(t, decision.Action.HitDeficitAt.IsZero(), "HitDeficitAt should be set")
 	})
 
-	t.Run("Inefficient Charging Prevention (Avoid premature charging on deficit growth)", func(t *testing.T) {
+	t.Run("Charging Prevention (Avoid premature charging on deficit growth)", func(t *testing.T) {
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.12, GridUseDollarsPerKWH: 0.0}
 		futurePrices := []types.Price{
 			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.096, GridUseDollarsPerKWH: 0.0},
@@ -567,6 +567,118 @@ func TestDecide(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonDeficitChargeNow, decision.Action.Reason)
+	})
+
+	t.Run("Deficit Charge Delay (Delay charging when future cheap hours cover deficiency to solar)", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.055, GridUseDollarsPerKWH: 0.0}
+		futurePrices := []types.Price{}
+		// 5 cheap hours of 0.055, then peak of 0.105
+		for i := 1; i <= 24; i++ {
+			price := 0.055
+			if i >= 6 {
+				price = 0.105
+			}
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: price, GridUseDollarsPerKWH: 0.0,
+			})
+		}
+
+		lowBattStatus := baseStatus
+		lowBattStatus.BatterySOC = 19.8 // below reserve 20%
+		lowBattStatus.BatteryCapacityKWH = 15.0
+		lowBattStatus.MaxBatteryChargeKW = 8.0
+		lowBattStatus.HomeKW = 10.0
+		lowBattStatus.SolarKW = 0.0
+		lowBattStatus.BatteryAboveMinSOC = false
+
+		// High load history to match simulated future load
+		customHistory := []types.EnergyStats{}
+		ts := now.Add(-24 * time.Hour)
+		for i := 0; i < 48; i++ {
+			customHistory = append(customHistory, types.EnergyStats{
+				TSHourStart:    ts,
+				GridImportKWH:  10.0,
+				SolarKWH:       0.0,
+				BatteryUsedKWH: 0.0,
+				HomeKWH:        10.0,
+			})
+			ts = ts.Add(1 * time.Hour)
+		}
+
+		settings := baseSettings
+		settings.MinBatterySOC = 20.0
+		settings.MinDeficitPriceDifferenceDollarsPerKWH = 0.02
+		settings.AlwaysChargeUnderDollarsPerKWH = 0.01 // keep it lower than 0.055 to avoid always-charge
+		settings.GridChargeBatteries = true
+
+		decision, err := c.Decide(ctx, lowBattStatus, currentPrice, futurePrices, customHistory, nil, settings)
+		require.NoError(t, err)
+
+		// It should delay charging because we have enough future cheap hours (Hours 1 to 5)
+		// to cover the deficit/capacity before the peak begins!
+		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonWaitingToCharge, decision.Action.Reason)
+		assert.Contains(t, decision.Action.Description, "Waiting to charge")
+	})
+
+	t.Run("Deficit Charge Delay (Delay to the LATEST possible slots in a flat cheap window)", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.055, GridUseDollarsPerKWH: 0.0}
+		futurePrices := []types.Price{}
+		// 12 cheap hours of 0.055, then peak of 0.105
+		for i := 1; i <= 24; i++ {
+			price := 0.055
+			if i >= 13 {
+				price = 0.105
+			}
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: price, GridUseDollarsPerKWH: 0.0,
+			})
+		}
+
+		lowBattStatus := baseStatus
+		lowBattStatus.BatterySOC = 19.8 // below reserve 20%
+		lowBattStatus.BatteryCapacityKWH = 15.0
+		lowBattStatus.MaxBatteryChargeKW = 8.0
+		lowBattStatus.HomeKW = 10.0
+		lowBattStatus.SolarKW = 0.0
+		lowBattStatus.BatteryAboveMinSOC = false
+
+		// High load history to match simulated future load
+		customHistory := []types.EnergyStats{}
+		ts := now.Add(-24 * time.Hour)
+		for i := 0; i < 48; i++ {
+			customHistory = append(customHistory, types.EnergyStats{
+				TSHourStart:    ts,
+				GridImportKWH:  10.0,
+				SolarKWH:       0.0,
+				BatteryUsedKWH: 0.0,
+				HomeKWH:        10.0,
+			})
+			ts = ts.Add(1 * time.Hour)
+		}
+
+		settings := baseSettings
+		settings.MinBatterySOC = 20.0
+		settings.MinDeficitPriceDifferenceDollarsPerKWH = 0.02
+		settings.AlwaysChargeUnderDollarsPerKWH = 0.01 // keep it lower than 0.055 to avoid always-charge
+		settings.GridChargeBatteries = true
+
+		decision, err := c.Decide(ctx, lowBattStatus, currentPrice, futurePrices, customHistory, nil, settings)
+		require.NoError(t, err)
+
+		// It should delay charging to the LATEST possible cheap hours (Hour 11 and Hour 12)
+		// before the peak starts at Hour 13.
+		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonWaitingToCharge, decision.Action.Reason)
+
+		expectedTargetTime := now.Add(11 * time.Hour)
+		if assert.NotNil(t, decision.Action.FuturePrice) {
+			assert.Equal(t, expectedTargetTime.Format(time.Kitchen), decision.Action.FuturePrice.TSStart.In(now.Location()).Format(time.Kitchen))
+		}
 	})
 
 	t.Run("Inefficient Charging Prevention (Ignore Cheap After Capacity)", func(t *testing.T) {
@@ -672,7 +784,7 @@ func TestDecide(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
-		assert.Equal(t, types.ActionReasonSufficientBattery, decision.Action.Reason)
+		assert.Equal(t, types.ActionReasonSufficientBatteryTillCharge, decision.Action.Reason)
 		assert.Contains(t, decision.Action.Description, "Sufficient battery to reach planned")
 		assert.False(t, decision.Action.HitDeficitAt.IsZero(), "HitDeficitAt should be set")
 	})
@@ -742,7 +854,7 @@ func TestDecide(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
-		assert.Equal(t, types.ActionReasonSufficientBattery, decision.Action.Reason)
+		assert.Equal(t, types.ActionReasonSufficientBatteryTillCharge, decision.Action.Reason)
 		assert.Contains(t, decision.Action.Description, "Sufficient battery to reach planned charge time")
 	})
 
@@ -1587,11 +1699,11 @@ func TestDecide(t *testing.T) {
 			price := 0.105
 			tStart := now.Add(time.Duration(i) * time.Hour)
 			// Cheap 5 hours from now
-			if tStart.Hour() == 0 {
+			if i == 5 {
 				price = 0.055
 			}
 			// Peak 18 hours from now
-			if tStart.Hour() == 13 {
+			if i == 18 {
 				price = 0.31443
 			}
 			futurePrices = append(futurePrices, types.Price{
