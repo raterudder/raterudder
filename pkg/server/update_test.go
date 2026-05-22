@@ -1296,10 +1296,13 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		now := time.Now().In(loc)
 		todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 		fiveDaysAgoMidnight := todayMidnight.AddDate(0, 0, -5)
+		endOfTomorrow := todayMidnight.AddDate(0, 0, 2)
 
 		mockW.On("Forecast", mock.Anything, sl, mock.MatchedBy(func(t time.Time) bool {
 			return t.Equal(fiveDaysAgoMidnight)
-		}), mock.Anything).Return([]types.Weather{
+		}), mock.MatchedBy(func(t time.Time) bool {
+			return t.Equal(endOfTomorrow)
+		})).Return([]types.Weather{
 			// need to return something otherwise UpsertWeather will not be called.
 			{TSDayStart: now},
 		}, nil)
