@@ -17,3 +17,7 @@
 ## 2026-04-24 - Go package compilation error from scratchpad files
 **Learning:** Creating a test file with a mismatched package name (like `package test` in a directory full of `package main` or `package server`) will instantly cause a "found multiple packages in the same directory" compilation error in Go, preventing test execution.
 **Action:** When creating new Go files, even if they are temporary or just used as a scratchpad, always match the package declaration of the existing files in that directory, or just delete the file immediately when done.
+
+## 2026-05-22 - mock.Anything in Weather Update Backfill Testing
+**Learning:** In Go tests, `mock.Anything` is considered an anti-pattern that reduces assertion thoroughness. Always use explicit values or specific matching strategies (like `mock.MatchedBy`), with the sole exception of `context.Context` arguments where `mock.Anything` is acceptable. In Go tests, avoid using `mock.AnythingOfType` (e.g., `mock.AnythingOfType("time.Time")`) as it is redundant and provides little value over `mock.Anything` in statically typed languages.
+**Action:** When updating mock behaviors, specifically assert on dynamically calculated values using `mock.MatchedBy` functions instead of falling back to broad matchers.
