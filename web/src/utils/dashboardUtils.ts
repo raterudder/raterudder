@@ -189,7 +189,7 @@ export const getReasonText = (action: Action): string => {
             return 'Grid is currently unavailable. The system is standing by to protect the battery and ensure power is available for the home.';
         case ActionReason.BatteryAtReserve: {
             const parts = [
-                'Battery is at reserve. Using remaining energy.',
+                'Battery is at reserve. Using remaining energy because standby is not meaningful (battery is already held at reserve).',
             ];
             return parts.concat(suffixParts).join(' ');
         }

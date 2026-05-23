@@ -511,6 +511,24 @@ func (c *Controller) Decide(
 		}
 	}
 
+	// make sure we're not about to charge with only a few minutes left until peak
+	// price which would mean we charge mostly in peak pricing because we only run
+	// this decision periodically
+	if shouldCharge {
+		timeLeft := maxFutureGridChargeTime.Sub(now)
+		if gridChargeNowCost < maxFutureGridChargeCost && timeLeft < 10*time.Minute {
+			log.Ctx(ctx).DebugContext(
+				ctx,
+				"grid charging blocked: too close to peak price",
+				slog.Duration("timeLeft", timeLeft),
+				slog.Float64("priceNow", gridChargeNowCost),
+				slog.Float64("maxPrice", maxFutureGridChargeCost),
+				slog.Time("maxPriceStart", maxFutureGridChargeTime),
+			)
+			shouldCharge = false
+		}
+	}
+
 	// if we should charge, return now.
 	if shouldCharge {
 		desc := fmt.Sprintf("Charging Optimized: %s", chargeDescription)
@@ -600,7 +618,7 @@ func (c *Controller) Decide(
 		}
 
 		if isBatteryAtReserve {
-			return decision(types.BatteryModeLoad, types.ActionReasonBatteryAtReserve, "Battery is at reserve. Using remaining energy.", nil, hitDeficitAt, hitCapacityAt), nil
+			return decision(types.BatteryModeLoad, types.ActionReasonBatteryAtReserve, "Battery is at reserve. Using remaining energy because standby is not meaningful (battery is already held at reserve).", nil, hitDeficitAt, hitCapacityAt), nil
 		}
 
 		// We are going to run out. Should we save it?

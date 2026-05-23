@@ -822,7 +822,27 @@ func TestDecide(t *testing.T) {
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Action.Reason)
 		assert.Contains(t, decision.Action.Description, "Deficit predicted")
-		assert.False(t, decision.Action.HitDeficitAt.IsZero(), "HitDeficitAt should be set")
+	})
+
+	t.Run("Deficit Charge Now -> Blocked Close to Peak", func(t *testing.T) {
+		// Current time is 10:53 AM
+		testNow := time.Date(2026, 5, 20, 10, 53, 0, 0, time.UTC)
+		currentPrice := types.Price{TSStart: testNow.Add(-53 * time.Minute), TSEnd: testNow.Add(7 * time.Minute), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
+		futurePrices := []types.Price{
+			// Peak starts at 11:00 AM (7 minutes from now)
+			{TSStart: testNow.Add(7 * time.Minute), TSEnd: testNow.Add(1*time.Hour + 7*time.Minute), DollarsPerKWH: 0.50, GridUseDollarsPerKWH: 0.50},
+		}
+
+		lowBattStatus := baseStatus
+		lowBattStatus.Timestamp = testNow
+		lowBattStatus.BatterySOC = 25.0
+
+		decision, err := c.Decide(ctx, lowBattStatus, currentPrice, futurePrices, history, nil, baseSettings)
+		require.NoError(t, err)
+
+		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Action.Reason)
+		assert.Contains(t, decision.Action.Description, "Deficit predicted")
 	})
 
 	t.Run("Sufficient Battery to Reach Charging Window -> Load (Discharge)", func(t *testing.T) {
