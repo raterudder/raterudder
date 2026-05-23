@@ -858,6 +858,132 @@ func TestDecide(t *testing.T) {
 		assert.Contains(t, decision.Action.Description, "Sufficient battery to reach planned charge time")
 	})
 
+	t.Run("Cheap Window Preceding Peak Deficit -> Plan Charge and Load", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05}
+		futurePrices := []types.Price{}
+		// Flat cheap window for 6 hours (0.05 + 0.05 = 0.10)
+		// followed by peak (0.50 + 0.50 = 1.00)
+		for i := 1; i <= 24; i++ {
+			price := 0.05
+			if i >= 6 {
+				price = 0.50
+			}
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
+			})
+		}
+
+		lowBattStatus := baseStatus
+		lowBattStatus.BatterySOC = 80.0
+		lowBattStatus.HomeKW = 1.0
+		lowBattStatus.GridKW = 2.0
+		lowBattStatus.BatteryKW = -1.0
+
+		settings := baseSettings
+		settings.MinDeficitPriceDifferenceDollarsPerKWH = 0.01
+		settings.MinArbitrageDifferenceDollarsPerKWH = 2.0
+
+		decision, err := c.Decide(ctx, lowBattStatus, currentPrice, futurePrices, history, nil, settings)
+		require.NoError(t, err)
+
+		// It should discharge (BatteryModeLoad) because we have a planned charge time
+		// at the end of the cheap window before the peak deficit, and sufficient battery to reach it.
+		if assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode) {
+			assert.Equal(t, types.ActionReasonSufficientBatteryTillCharge, decision.Action.Reason)
+			assert.Contains(t, decision.Action.Description, "Sufficient battery to reach planned charge time")
+			if assert.NotNil(t, decision.Action.FuturePrice) {
+				assert.Equal(t, 0.05, decision.Action.FuturePrice.DollarsPerKWH)
+			}
+		}
+	})
+
+	t.Run("Cheap Window Preceding Peak Deficit with Absolute Min After Deficit -> Plan Charge and Load", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.075, GridUseDollarsPerKWH: 0.075}
+		futurePrices := []types.Price{}
+		// Local cheap window for 6 hours (0.075 + 0.075 = 0.15)
+		// followed by peak (0.225 + 0.225 = 0.45)
+		// followed by absolute minimum later in the day (0.025 + 0.025 = 0.05)
+		for i := 1; i <= 24; i++ {
+			price := 0.075
+			if i >= 6 && i <= 10 {
+				price = 0.225
+			} else if i >= 16 {
+				price = 0.025
+			}
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
+			})
+		}
+
+		lowBattStatus := baseStatus
+		lowBattStatus.BatterySOC = 80.0
+		lowBattStatus.HomeKW = 1.0
+		lowBattStatus.GridKW = 2.0
+		lowBattStatus.BatteryKW = -1.0
+
+		settings := baseSettings
+		settings.MinDeficitPriceDifferenceDollarsPerKWH = 0.01
+		settings.MinArbitrageDifferenceDollarsPerKWH = 2.0
+
+		decision, err := c.Decide(ctx, lowBattStatus, currentPrice, futurePrices, history, nil, settings)
+		require.NoError(t, err)
+
+		// It should discharge (BatteryModeLoad) because we have a planned charge time
+		// at the end of the local cheap window (hour 5, cost 0.15) before the peak deficit (hour 6, cost 0.45),
+		// despite the global absolute minimum (0.05) occurring later at hour 16.
+		if assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode) {
+			assert.Equal(t, types.ActionReasonSufficientBatteryTillCharge, decision.Action.Reason)
+			assert.Contains(t, decision.Action.Description, "Sufficient battery to reach planned charge time")
+			if assert.NotNil(t, decision.Action.FuturePrice) {
+				assert.Equal(t, 0.075, decision.Action.FuturePrice.DollarsPerKWH)
+			}
+		}
+	})
+
+	t.Run("Cheap Window Preceding Peak Deficit with Equal Planned Cost -> Plan Charge and Load", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.075, GridUseDollarsPerKWH: 0.075}
+		futurePrices := []types.Price{}
+		// Cheap window until 5am, peak at 6am to 10am ($0.225 + $0.225 = $0.45 cost)
+		for i := 1; i <= 24; i++ {
+			price := 0.075
+			if i >= 3 && i <= 7 { // Hour 6 to 10 relative to 3am
+				price = 0.225
+			}
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
+			})
+		}
+
+		lowBattStatus := baseStatus
+		lowBattStatus.BatterySOC = 50.0 // 5.0 kWh total energy, reserve is 2.0 kWh, so 3.0 kWh usable.
+		lowBattStatus.HomeKW = 1.0     // 1.0 kW load means 3 hours of battery life.
+		lowBattStatus.GridKW = 2.0
+		lowBattStatus.BatteryKW = -1.0
+
+		settings := baseSettings
+		settings.MinDeficitPriceDifferenceDollarsPerKWH = 0.01
+		settings.MinArbitrageDifferenceDollarsPerKWH = 2.0
+
+		decision, err := c.Decide(ctx, lowBattStatus, currentPrice, futurePrices, history, nil, settings)
+		require.NoError(t, err)
+
+		// It should discharge (BatteryModeLoad) because we have a planned charge time
+		// before the peak deficit, and we can reach it safely.
+		if assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode) {
+			assert.Equal(t, types.ActionReasonSufficientBatteryTillCharge, decision.Action.Reason)
+			assert.Contains(t, decision.Action.Description, "Sufficient battery to reach planned charge time")
+			if assert.NotNil(t, decision.Action.FuturePrice) {
+				assert.Equal(t, 0.075, decision.Action.FuturePrice.DollarsPerKWH)
+			}
+		}
+	})
+
 	t.Run("Arbitrage Opportunity -> Charge", func(t *testing.T) {
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
 		futurePrices := []types.Price{}

@@ -193,29 +193,11 @@ func (c *Controller) Decide(
 	var highestExportAt time.Time
 	minEnergy := -1.0
 	maxEnergy := -1.0
+	var deficitAmount float64
+	var chargeDurationHours int
 
 	for i, slot := range simData {
-		simInFuture := false
-
-		// these costs ignore the "now" hour so it can be compared against gridChargeNowCost
-		var simPrevChargeCosts []simPriceSlot
-		if i > 0 {
-			simInFuture = true
-			simPrevChargeCosts = make([]simPriceSlot, i)
-			for j := 1; j <= i; j++ {
-				simPrevChargeCosts[j-1] = simPriceSlot{
-					cost:  simData[j].GridChargeDollarsPerKWH,
-					ts:    simData[j].TS,
-					price: simData[j].Price,
-				}
-			}
-			sort.Slice(simPrevChargeCosts, func(a, b int) bool {
-				if simPrevChargeCosts[a].cost != simPrevChargeCosts[b].cost {
-					return simPrevChargeCosts[a].cost < simPrevChargeCosts[b].cost
-				}
-				return simPrevChargeCosts[a].ts.After(simPrevChargeCosts[b].ts)
-			})
-		}
+		simInFuture := i > 0
 
 		if minEnergy == -1 || slot.BatteryKWH < minEnergy {
 			minEnergy = slot.BatteryKWH
@@ -249,20 +231,50 @@ func (c *Controller) Decide(
 			}
 		}
 
-		// the simulation resets the total deficit when we hit capacity
-		if slot.TotalBatteryDeficitKWH > 0 && canChargeFuture {
-			deficitAmount := slot.TotalBatteryDeficitKWH
-
-			// future in this section is actually in the PAST from the current
-			// simulation hour but in the future compared to the real time
-			var cheapestFutureChargeSlot simPriceSlot
+		if slot.TotalBatteryDeficitKWH > 0 {
+			deficitAmount = slot.TotalBatteryDeficitKWH
+			neededEnergy := deficitAmount
+			headroom := capacityKWH - currentEnergyKWH
+			if headroom < 0 {
+				headroom = 0
+			}
+			if neededEnergy > headroom {
+				neededEnergy = headroom
+			}
 
 			// factor in the cost of charging for the duration of the charge which
 			// means we need to look at the nth cheapest charge cost
 			// round up the hours we need to charge except for a little buffer
-			chargeDurationHours := max(1, int((float64(deficitAmount)/chargeKW + 0.84)))
+			chargeDurationHours = max(1, int((neededEnergy/chargeKW + 0.84)))
+		}
 
-			if simInFuture {
+		// If we are simulating an hour after a future deficit, we skip it for planning
+		// because we cannot delay charging past the deficit hour without running out of battery.
+		// However, if the deficit is happening right now, we do not skip future hours so we
+		// can compare current price against all future prices to decide whether to charge now.
+		isAfterFutureDeficit := !hitDeficitAt.IsZero() && hitDeficitAt.After(now.Add(time.Hour)) && slot.TS.After(hitDeficitAt)
+		if slot.TotalBatteryDeficitKWH > 0 && canChargeFuture && !isAfterFutureDeficit {
+			// these costs ignore the "now" hour so it can be compared against gridChargeNowCost.
+			var simPrevChargeCosts []simPriceSlot
+			if i > 0 {
+				simPrevChargeCosts = make([]simPriceSlot, i)
+				for j := 1; j <= i; j++ {
+					simPrevChargeCosts[j-1] = simPriceSlot{
+						cost:  simData[j].GridChargeDollarsPerKWH,
+						ts:    simData[j].TS,
+						price: simData[j].Price,
+					}
+				}
+				sort.Slice(simPrevChargeCosts, func(a, b int) bool {
+					if simPrevChargeCosts[a].cost != simPrevChargeCosts[b].cost {
+						return simPrevChargeCosts[a].cost < simPrevChargeCosts[b].cost
+					}
+					return simPrevChargeCosts[a].ts.After(simPrevChargeCosts[b].ts)
+				})
+			}
+
+			var cheapestFutureChargeSlot simPriceSlot
+			if simInFuture && len(simPrevChargeCosts) > 0 {
 				idx := chargeDurationHours
 				if idx > len(simPrevChargeCosts) {
 					idx = len(simPrevChargeCosts)
@@ -295,6 +307,7 @@ func (c *Controller) Decide(
 					// Find the cheapest future hour in the simulation up to this point
 					// that gives us enough time to charge the needed energy.
 					neededDurationHours := max(1, int((neededEnergy/chargeKW + 0.84)))
+
 					idx := neededDurationHours
 					if idx > len(simPrevChargeCosts) {
 						idx = len(simPrevChargeCosts)
@@ -355,7 +368,18 @@ func (c *Controller) Decide(
 			}
 
 			if len(simPrevChargeCosts) > 0 {
-				isSignificantlyCheaper := gridChargeNowCost-cheapestFutureChargeSlot.cost > settings.MinDeficitPriceDifferenceDollarsPerKWH
+				// We determine if it is significantly cheaper to charge at a future planned slot before the deficit.
+				// This condition is split into two logical paths:
+				//
+				// 1. If charging in the future is strictly and significantly cheaper than charging right now,
+				//    we should wait and charge later.
+				//
+				// 2. We are already in a cheap window compared to now, but want to plan a charge time before an upcoming peak-rate deficit.
+				//    Ensures the simulated deficit hour's cost is significantly more expensive than the cheapest future slot
+				//    before the deficit, making it optimal to plan a charge.
+				isSignificantlyCheaper := (gridChargeNowCost-cheapestFutureChargeSlot.cost > settings.MinDeficitPriceDifferenceDollarsPerKWH) ||
+					(cheapestFutureChargeSlot.cost <= gridChargeNowCost &&
+						slot.GridChargeDollarsPerKWH-cheapestFutureChargeSlot.cost >= settings.MinDeficitPriceDifferenceDollarsPerKWH)
 				if isSignificantlyCheaper && (plannedChargeTime.IsZero() || cheapestFutureChargeSlot.cost < plannedChargeCost) {
 					plannedChargeTime = cheapestFutureChargeSlot.ts
 					plannedChargePrice = cheapestFutureChargeSlot.price
@@ -487,10 +511,12 @@ func (c *Controller) Decide(
 			return decision(types.BatteryModeLoad, reason, loadReason, nil, hitDeficitAt, hitCapacityAt), nil
 		}
 
-		// Optimization: If we have a planned charge time, and we have enough battery to last until
-		// that planned charge time without hitting a deficit, we should continue to use the battery
-		// (Load) now, and then charge it up later when it is cheap.
-		if !plannedChargeTime.IsZero() && !hitDeficitAt.Before(plannedChargeTime) {
+		// Optimization: If there is a future planned charge time, and the battery has enough energy
+		// to last until that planned charge time without hitting a deficit, we should continue
+		// using the battery (Load) now instead of standing by.
+		//
+		// This is valid if the planned future charge cost is cheaper than or equal to charging right now.
+		if !plannedChargeTime.IsZero() && hitDeficitAt.After(plannedChargeTime) && plannedChargeCost <= gridChargeNowCost {
 			loadReason := fmt.Sprintf("Sufficient battery to reach planned charge time at %s.", plannedChargeTime.Format(time.Kitchen))
 			log.Ctx(ctx).DebugContext(
 				ctx,
@@ -502,11 +528,15 @@ func (c *Controller) Decide(
 			return decision(types.BatteryModeLoad, types.ActionReasonSufficientBatteryTillCharge, loadReason, &plannedChargePrice, hitDeficitAt, hitCapacityAt), nil
 		}
 
-		// if we have a planned charge time, we should record as waiting to charge
-		// but only if it's before the maxFutureGridChargeTime otherwise we should
-		// report that we're saving the battery for the upcoming peak and then use
-		// the battery during that peak
-		if !plannedChargeTime.IsZero() && plannedChargeTime.After(now) && plannedChargeTime.Before(maxFutureGridChargeTime) {
+		// If there is a future planned charge time that occurs after 'now' but before the peak price
+		// time (maxFutureGridChargeTime), we stand by to wait for that cheap charge window.
+		//
+		// However, we only stand by (instead of discharging the battery to cover load) if:
+		// 1. The battery is already at its reserve limit (so it cannot discharge anyway).
+		// 2. The planned charge cost is strictly cheaper than the current cost (making it financially
+		//    optimal to preserve battery energy and wait to charge at the lower rate, rather than
+		//    discharging now and having to recharge at a higher rate later).
+		if !plannedChargeTime.IsZero() && plannedChargeTime.After(now) && plannedChargeTime.Before(maxFutureGridChargeTime) && (isBatteryAtReserve || plannedChargeCost < gridChargeNowCost) {
 			var standbyReason string
 			if plannedChargeCost < gridChargeNowCost {
 				standbyReason = fmt.Sprintf("Waiting to charge at %s ($%.3f < $%.3f).", plannedChargeTime.Format(time.Kitchen), plannedChargeCost, gridChargeNowCost)
@@ -546,6 +576,8 @@ func (c *Controller) Decide(
 				slog.Float64("plannedChargeCost", plannedChargeCost),
 				slog.Float64("minDeficitPriceDifference", settings.MinDeficitPriceDifferenceDollarsPerKWH),
 				slog.Float64("gridChargeNowCost", gridChargeNowCost),
+				slog.Float64("deficit", deficitAmount),
+				slog.Int("chargeDurationHours", chargeDurationHours),
 			)
 			return decision(types.BatteryModeStandby, types.ActionReasonDeficitSaveForPeak, standbyReason, &maxFutureGridChargePrice, hitDeficitAt, hitCapacityAt), nil
 		}
@@ -558,6 +590,8 @@ func (c *Controller) Decide(
 			slog.Time("hitDeficitAt", hitDeficitAt),
 			slog.Float64("minDeficitPriceDifference", settings.MinDeficitPriceDifferenceDollarsPerKWH),
 			slog.Float64("gridChargeNowCost", gridChargeNowCost),
+			slog.Float64("deficit", deficitAmount),
+			slog.Int("chargeDurationHours", chargeDurationHours),
 		)
 		return decision(types.BatteryModeLoad, types.ActionReasonArbitrageSave, "Deficit predicted but Current Price is Peak.", nil, hitDeficitAt, hitCapacityAt), nil
 	}
