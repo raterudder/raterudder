@@ -432,7 +432,10 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 	syncStart := todayMidnight.AddDate(0, 0, -5) // Default to 5 days ago backfill
 
 	if !lastWeatherTime.IsZero() && lastVersion >= types.CurrentWeatherVersion && lastWeatherTime.After(syncStart) {
-		syncStart = truncateDay(lastWeatherTime.In(timeLoc))
+		// We extract the date parts from lastWeatherTime (which is parsed in UTC from the YYYY-MM-DD doc ID)
+		// and construct the time in timeLoc. Using truncateDay(lastWeatherTime.In(timeLoc)) would shift
+		// the midnight time to the previous day under negative UTC offsets (e.g. 00:00 UTC -> 20:00 local).
+		syncStart = time.Date(lastWeatherTime.Year(), lastWeatherTime.Month(), lastWeatherTime.Day(), 0, 0, 0, 0, timeLoc)
 
 		// we want to make sure we fetch the weather for today and tomorrow but if we
 		// already have tomorrows weather then we don't need to fetch it again since we
