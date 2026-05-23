@@ -71,7 +71,7 @@ describe('dashboardUtils', () => {
                 futurePrice: { dollarsPerKWH: 0.05, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
             };
             const text = getReasonText(action);
-            expect(text).toContain('The battery will deplete');
+            expect(text).toContain('If discharged, the battery would deplete');
             expect(text).toContain('cheaper charging window is coming up');
             expect(text).toContain('$ 0.050');
             expect(text).toContain('$ 0.150');

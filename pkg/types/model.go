@@ -48,7 +48,6 @@ const (
 	ActionReasonDeficitSaveForPeak          ActionReason = "deficitSaveForPeak"
 	ActionReasonArbitrageSave               ActionReason = "dischargeAtPeak"
 	ActionReasonArbitrageHoldExport         ActionReason = "arbitrageHoldExport"
-	ActionReasonArbitrageHoldSave           ActionReason = "arbitrageHoldSave"
 	ActionReasonSufficientBattery           ActionReason = "sufficientBattery"
 	ActionReasonSufficientBatteryTillCharge ActionReason = "sufficientBatteryTillCharge"
 	ActionReasonEmergencyMode               ActionReason = "emergencyMode"
@@ -59,6 +58,7 @@ const (
 	ActionReasonBatteryAtReserve            ActionReason = "batteryAtReserve"
 
 	// Deprecated - we don't use these anymore but we don't delete them so we know they were used
+	ActionReasonArbitrageHoldSave   ActionReason = "arbitrageHoldSave"
 	ActionReasonArbitrageChargeSave ActionReason = "arbitrageChargeSave"
 	ActionReasonArbitrageChargeNow  ActionReason = "arbitrageCharge"
 	ActionReasonArbitrageHold       ActionReason = "arbitrageHold"

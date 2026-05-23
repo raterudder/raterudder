@@ -625,7 +625,16 @@ func (c *Controller) Decide(
 		// Check if there is a significantly more expensive time later.
 		// If current price is lower than maxFuturePrice, we should probably save it.
 		if gridChargeNowCost < maxFutureGridChargeCost {
-			standbyReason := fmt.Sprintf("Deficit predicted at %s and higher prices at %s ($%.3f < $%.3f).", hitDeficitAt.Format(time.Kitchen), maxFutureGridChargeTime.Format(time.Kitchen), gridChargeNowCost, maxFutureGridChargeCost)
+			standbyReason := fmt.Sprintf(
+				"If discharged, battery would deplete at %s. "+
+					"Since current price ($%.3f) is cheap and will remain cheap, "+
+					"holding off charging and preserving battery energy for higher prices at %s ($%.3f < $%.3f).",
+				hitDeficitAt.Format(time.Kitchen),
+				gridChargeNowCost,
+				maxFutureGridChargeTime.Format(time.Kitchen),
+				gridChargeNowCost,
+				maxFutureGridChargeCost,
+			)
 			log.Ctx(ctx).DebugContext(
 				ctx,
 				"deficit predicted, saving for peak",

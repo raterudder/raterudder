@@ -338,7 +338,7 @@ func TestDecide(t *testing.T) {
 
 		// Should not charge now, so it should be Standby
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
-		assert.Contains(t, decision.Action.Description, "Deficit predicted")
+		assert.Contains(t, decision.Action.Description, "deplete")
 		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Action.Reason)
 		assert.False(t, decision.Action.HitDeficitAt.IsZero(), "HitDeficitAt should be set")
 	})
@@ -493,7 +493,7 @@ func TestDecide(t *testing.T) {
 		// It should DELAY because future has equally cheap hours before the spike!
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Action.Reason)
-		assert.Contains(t, decision.Action.Description, "Deficit predicted")
+		assert.Contains(t, decision.Action.Description, "deplete")
 		assert.False(t, decision.Action.HitDeficitAt.IsZero(), "HitDeficitAt should be set")
 	})
 
@@ -821,7 +821,7 @@ func TestDecide(t *testing.T) {
 
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Action.Reason)
-		assert.Contains(t, decision.Action.Description, "Deficit predicted")
+		assert.Contains(t, decision.Action.Description, "deplete")
 	})
 
 	t.Run("Deficit Charge Now -> Blocked Close to Peak", func(t *testing.T) {
@@ -842,7 +842,7 @@ func TestDecide(t *testing.T) {
 
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Action.Reason)
-		assert.Contains(t, decision.Action.Description, "Deficit predicted")
+		assert.Contains(t, decision.Action.Description, "deplete")
 	})
 
 	t.Run("Sufficient Battery to Reach Charging Window -> Load (Discharge)", func(t *testing.T) {
@@ -1196,7 +1196,7 @@ func TestDecide(t *testing.T) {
 
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Action.Reason)
-		assert.Contains(t, decision.Action.Description, "Deficit predicted")
+		assert.Contains(t, decision.Action.Description, "deplete")
 	})
 
 	t.Run("Battery Charging Disabled -> Standby", func(t *testing.T) {
@@ -1222,7 +1222,7 @@ func TestDecide(t *testing.T) {
 
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Action.Reason)
-		assert.Contains(t, decision.Action.Description, "Deficit predicted")
+		assert.Contains(t, decision.Action.Description, "deplete")
 	})
 
 	t.Run("Zero Capacity -> Standby", func(t *testing.T) {
@@ -1323,7 +1323,7 @@ func TestDecide(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
-		assert.Contains(t, decision.Action.Description, "Deficit predicted")
+		assert.Contains(t, decision.Action.Description, "deplete")
 		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Action.Reason)
 		assert.False(t, decision.Action.HitDeficitAt.IsZero(), "HitDeficitAt should be set")
 		if assert.NotNil(t, decision.Action.FuturePrice) {

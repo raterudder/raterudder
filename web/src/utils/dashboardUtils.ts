@@ -95,8 +95,8 @@ export const getReasonText = (action: Action): string => {
         case ActionReason.DeficitCharge: {
             const delta = nowCost !== null && futureCost !== null ? futureCost - nowCost : null;
             const parts = [
-                `The battery will deplete${deficitTimeStr ? ` around ${deficitTimeStr}` : ''}.`,
-                `Charging now at ${nowCostStr} is cheaper than the best future window${futureCostStr ? ` (${futureCostStr})` : ''}.`,
+                `If we do not charge, the battery would deplete${deficitTimeStr ? ` around ${deficitTimeStr}` : ''}.`,
+                `Charging now at ${nowCostStr} is cheaper than the cheapest future charging window${futureCostStr ? ` (${futureCostStr})` : ''}.`,
             ];
             if (delta !== null) parts.push(`Estimated savings: ${formatPrice(delta)}/kWh.`);
             return parts.concat(suffixParts).join(' ');
@@ -105,7 +105,7 @@ export const getReasonText = (action: Action): string => {
             const delta = nowCost !== null && futureCost !== null ? futureCost - nowCost : null;
             const parts = [
                 `Forecast shows higher prices later${futureCostStr ? ` (${futureCostStr})` : ''} compared to right now (${nowCostStr}).`,
-                `Charging the battery cheaply now so we can export solar to the grid later.`,
+                `Charging the battery cheaply now to cover home load during the peak, allowing us to export maximum solar to the grid at higher rates.`,
             ];
             if (delta !== null) parts.push(`Estimated savings: ${formatPrice(delta)}/kWh.`);
             return parts.concat(suffixParts).join(' ');
@@ -114,16 +114,16 @@ export const getReasonText = (action: Action): string => {
         case ActionReason.ArbitrageChargeSave: {
             const delta = nowCost !== null && futureCost !== null ? futureCost - nowCost : null;
             const parts = [
-                `Forecast shows higher prices later${futureCostStr ? ` (${futureCostStr})` : ''} compared to right now (${nowCostStr}).`,
-                `Charging the battery cheaply now so we can use the battery later during the expensive window.`,
+                `Forecast shows higher electricity prices later${futureCostStr ? ` (${futureCostStr})` : ''} compared to right now (${nowCostStr}).`,
+                `Charging the battery cheaply now so we can use stored energy later and avoid buying from the grid during the expensive window.`,
             ];
             if (delta !== null) parts.push(`Estimated savings: ${formatPrice(delta)}/kWh.`);
             return parts.concat(suffixParts).join(' ');
         }
         case ActionReason.DischargeBeforeCapacity: {
             const parts = [
-                `Solar generation will fill the battery${capacityTimeStr ? ` by ${capacityTimeStr}` : ''} before battery depletion${deficitTimeStr ? ` (expected ${deficitTimeStr})` : ''}.`,
-                `Using the battery now rather than letting it go to waste.`,
+                `Solar generation is forecast to fully charge the battery${capacityTimeStr ? ` by ${capacityTimeStr}` : ''} before the next predicted deficit${deficitTimeStr ? ` at ${deficitTimeStr}` : ''}.`,
+                `Using the battery now to power the home, since it will refill anyway.`,
             ];
             return parts.concat(suffixParts).join(' ');
         }
@@ -131,8 +131,8 @@ export const getReasonText = (action: Action): string => {
         case ActionReason.DeficitSaveForPeak: {
             const delta = nowCost !== null && futureCost !== null ? futureCost - nowCost : null;
             const parts = [
-                `The battery will deplete${deficitTimeStr ? ` around ${deficitTimeStr}` : ''}, but forecasted electricity prices are higher${futureCostStr ? ` (${futureCostStr})` : ''} than now (${nowCostStr}).`,
-                `Holding the battery in reserve so it can offset those higher costs.`,
+                `If discharged, the battery would deplete${deficitTimeStr ? ` around ${deficitTimeStr}` : ''}.`,
+                `Since electricity prices now (${nowCostStr}) are cheap and are expected to remain cheap before the deficit, we can delay charging for now. We are keeping the battery in standby to preserve its remaining energy for the peak period${futureCostStr ? ` (${futureCostStr})` : ''}.`,
             ];
             if (delta !== null) parts.push(`Estimated savings: ${formatPrice(delta)}/kWh.`);
             return parts.concat(suffixParts).join(' ');
@@ -144,12 +144,12 @@ export const getReasonText = (action: Action): string => {
             if (delta !== null && delta < 0.01) {
                 parts = [
                     `A charging window is coming up which is similar in price or cheaper than now.`,
-                    `Holding off charging the batteries until then.`,
+                    `Holding off grid-charging the batteries and keeping them in standby until then.`,
                 ];
             } else {
                 parts = [
-                    `A cheaper charging window is coming up${futureCostStr ? ` at ${futureCostStr}` : ''} which is cheaper than now (${nowCostStr}).`,
-                    `Holding off charging the batteries until then.`,
+                    `A cheaper charging window is coming up${futureCostStr ? ` at ${futureCostStr}` : ''} compared to now (${nowCostStr}).`,
+                    `Holding off grid-charging the batteries and keeping them in standby until then.`,
                 ];
                 if (delta !== null) parts.push(`Estimated savings: ${formatPrice(delta)}/kWh.`);
             }
@@ -157,28 +157,28 @@ export const getReasonText = (action: Action): string => {
         }
         case ActionReason.PreventSolarCurtailment: {
             const parts = [
-                `Solar generation will exceed battery capacity${capacityTimeStr ? ` by ${capacityTimeStr}` : ''}.`,
-                `Using the battery now to create headroom so we don't have to curtail solar production later.`,
+                `Solar generation is forecast to exceed battery capacity${capacityTimeStr ? ` by ${capacityTimeStr}` : ''}.`,
+                `Discharging the battery now to create headroom, ensuring we can capture all solar production later without curtailment.`,
             ];
             return parts.concat(suffixParts).join(' ');
         }
         case ActionReason.ArbitrageSave: {
             const parts = [
-                `Electricity prices are at their peak${nowCostStr ? ` (${nowCostStr})` : ''}. Using the battery to avoid paying the highest rates of the day.`
+                `Electricity prices are currently at their peak${nowCostStr ? ` (${nowCostStr})` : ''}. Discharging the battery to power the home, avoiding expensive grid imports.`
             ];
             return parts.concat(suffixParts).join(' ');
         }
         case ActionReason.SufficientBattery: {
             const parts = [
-                'The battery has enough stored energy to meet predicted demand. Using the battery normally to reduce grid usage.'
+                'The battery has enough stored energy to meet predicted demand. Discharging the battery to cover home load and minimize grid imports.'
             ];
             return parts.concat(suffixParts).join(' ');
         }
         case ActionReason.SufficientBatteryTillCharge: {
             const delta = nowCost !== null && futureCost !== null ? nowCost - futureCost : null;
             const parts = [
-                `The battery will deplete${deficitTimeStr ? ` around ${deficitTimeStr}` : ''}, but a cheaper charging window is coming up${futureCostStr ? ` (${futureCostStr})` : ''} compared to now (${nowCostStr}).`,
-                `Using the battery now and waiting to refill it during the cheaper window.`,
+                `If discharged, the battery would deplete${deficitTimeStr ? ` around ${deficitTimeStr}` : ''}, but a cheaper charging window is coming up${futureCostStr ? ` (${futureCostStr})` : ''} compared to now (${nowCostStr}).`,
+                `Discharging the battery now to power the home, and waiting to refill it during the cheaper window.`,
             ];
             if (delta !== null && delta > 0) {
                 parts.push(`Estimated savings: ${formatPrice(delta)}/kWh.`);
@@ -195,16 +195,16 @@ export const getReasonText = (action: Action): string => {
         }
         case ActionReason.ArbitrageHoldExport: {
             const parts = [
-                `An arbitrage opportunity window is coming up${futureCostStr ? ` (${futureCostStr})` : ''} which is higher than now (${nowCostStr}).`,
-                `Holding the stored energy in reserve so we can export maximum solar to the grid later.`,
+                `An export arbitrage window is coming up${futureCostStr ? ` (${futureCostStr})` : ''} with higher rates than now (${nowCostStr}).`,
+                `Keeping the battery in standby to preserve stored energy, allowing maximum solar export to the grid during the peak period.`,
             ];
             return parts.concat(suffixParts).join(' ');
         }
         case ActionReason.ArbitrageHold:
         case ActionReason.ArbitrageHoldSave: {
             const parts = [
-                `An arbitrage opportunity window is coming up${futureCostStr ? ` (${futureCostStr})` : ''} which is higher than now (${nowCostStr}).`,
-                `Holding the stored energy in reserve to avoid drawing from the grid during the peak window.`,
+                `An arbitrage window is coming up${futureCostStr ? ` (${futureCostStr})` : ''} with higher rates than now (${nowCostStr}).`,
+                `Keeping the battery in standby to preserve stored energy so we can avoid importing from the grid during the peak period.`,
             ];
             return parts.concat(suffixParts).join(' ');
         }
