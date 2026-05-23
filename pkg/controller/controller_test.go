@@ -324,7 +324,7 @@ func TestDecide(t *testing.T) {
 		}
 
 		lowBattStatus := baseStatus
-		lowBattStatus.BatterySOC = 21.0
+		lowBattStatus.BatterySOC = 22.0
 		// pretend we're charging from the grid now
 		lowBattStatus.GridKW = 2.0
 		lowBattStatus.BatteryKW = -1.0
@@ -396,7 +396,8 @@ func TestDecide(t *testing.T) {
 		// 1kW load.
 		// We want hit at 10 minutes = 1/6 hour = 0.1666 kWh above reserve.
 		// SOC = 20% + (0.1666 / 10 * 100)% = 21.666%
-		status.BatterySOC = 21.666
+		// Adjusted by +1.0% to match the simulated reserve SOC buffer
+		status.BatterySOC = 22.666
 		status.BatteryAboveMinSOC = true
 		status.HomeKW = 1.0
 		status.SolarKW = 0.0
@@ -896,7 +897,8 @@ func TestDecide(t *testing.T) {
 		}
 
 		lowBattStatus := baseStatus
-		lowBattStatus.BatterySOC = 80.0
+		// Adjusted by +1.1% to match the simulated reserve SOC buffer plus float padding
+		lowBattStatus.BatterySOC = 81.1
 		lowBattStatus.HomeKW = 1.0
 		lowBattStatus.GridKW = 2.0
 		lowBattStatus.BatteryKW = 1.0
@@ -940,7 +942,8 @@ func TestDecide(t *testing.T) {
 		}
 
 		lowBattStatus := baseStatus
-		lowBattStatus.BatterySOC = 80.0
+		// Adjusted by +1.1% to match the simulated reserve SOC buffer plus float padding
+		lowBattStatus.BatterySOC = 81.1
 		lowBattStatus.HomeKW = 1.0
 		lowBattStatus.GridKW = 2.0
 		lowBattStatus.BatteryKW = 1.0
@@ -981,7 +984,8 @@ func TestDecide(t *testing.T) {
 		}
 
 		lowBattStatus := baseStatus
-		lowBattStatus.BatterySOC = 50.0 // 5.0 kWh total energy, reserve is 2.0 kWh, so 3.0 kWh usable.
+		// Adjusted by +1.1% to match the simulated reserve SOC buffer plus float padding
+		lowBattStatus.BatterySOC = 51.1 // reserve is 2.1 kWh, so 3.0 kWh usable.
 		lowBattStatus.HomeKW = 1.0      // 1.0 kW load means 3 hours of battery life.
 		lowBattStatus.GridKW = 2.0
 		lowBattStatus.BatteryKW = 1.0
@@ -1021,7 +1025,8 @@ func TestDecide(t *testing.T) {
 		}
 
 		lowBattStatus := baseStatus
-		lowBattStatus.BatterySOC = 50.0 // 5.0 kWh total energy, reserve is 2.0 kWh, so 3.0 kWh usable.
+		// Adjusted by +1.1% to match the simulated reserve SOC buffer plus float padding
+		lowBattStatus.BatterySOC = 51.1 // reserve is 2.1 kWh, so 3.0 kWh usable.
 		lowBattStatus.HomeKW = 1.0      // 1.0 kW load means 3 hours of battery life.
 		lowBattStatus.GridKW = 2.0
 		lowBattStatus.BatteryKW = -5.0 // Charging at 5kW
@@ -1060,7 +1065,8 @@ func TestDecide(t *testing.T) {
 		}
 
 		lowBattStatus := baseStatus
-		lowBattStatus.BatterySOC = 50.0 // 5.0 kWh total energy, reserve is 2.0 kWh, so 3.0 kWh usable.
+		// Adjusted by +1.1% to match the simulated reserve SOC buffer plus float padding
+		lowBattStatus.BatterySOC = 51.1 // reserve is 2.1 kWh, so 3.0 kWh usable.
 		lowBattStatus.HomeKW = 1.0      // 1.0 kW load means 3 hours of battery life.
 		lowBattStatus.GridKW = -2.0     // Exporting (charging from solar, not grid)
 		lowBattStatus.BatteryKW = -5.0  // Charging at 5kW

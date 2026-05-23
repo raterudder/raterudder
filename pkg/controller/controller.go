@@ -77,8 +77,11 @@ func (c *Controller) Decide(
 		// We do NOT return here. We fall through to allow charging logic to trigger.
 	}
 
+	var hitDeficitAt time.Time
+	var hitCapacityAt time.Time
+	var hitSolarCapacityAt time.Time
 	// Helper to build final action
-	decision := func(batteryMode types.BatteryMode, reason types.ActionReason, modeReason string, futurePrice *types.Price, hitDeficitAt time.Time, hitCapacityAt time.Time) Decision {
+	decision := func(batteryMode types.BatteryMode, reason types.ActionReason, modeReason string, futurePrice *types.Price) Decision {
 		return Decision{
 			Action: types.Action{
 				Timestamp:         now.UTC(),
@@ -99,7 +102,7 @@ func (c *Controller) Decide(
 
 	capacityKWH := currentStatus.BatteryCapacityKWH
 	if capacityKWH <= 0 {
-		return decision(types.BatteryModeStandby, types.ActionReasonMissingBattery, "Battery Config Missing or Capacity 0. Standby.", nil, time.Time{}, time.Time{}), nil
+		return decision(types.BatteryModeStandby, types.ActionReasonMissingBattery, "Battery Config Missing or Capacity 0. Standby.", nil), nil
 	}
 
 	gridChargeNowCost := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
@@ -116,7 +119,7 @@ func (c *Controller) Decide(
 		}
 		// If negative, we charge.
 		log.Ctx(ctx).DebugContext(ctx, "price below always charge threshold", slog.Float64("price", gridChargeNowCost), slog.Float64("threshold", settings.AlwaysChargeUnderDollarsPerKWH))
-		return decision(types.BatteryModeChargeAny, types.ActionReasonAlwaysChargeBelowThreshold, desc, nil, time.Time{}, time.Time{}), nil
+		return decision(types.BatteryModeChargeAny, types.ActionReasonAlwaysChargeBelowThreshold, desc, nil), nil
 	}
 
 	// Rule 3: Charge now if its cheaper than later, if we will run out of energy
@@ -159,9 +162,6 @@ func (c *Controller) Decide(
 	var chargeActionReason types.ActionReason
 	var futurePrice *types.Price
 
-	var hitDeficitAt time.Time
-	var hitCapacityAt time.Time
-	var hitSolarCapacityAt time.Time
 	for _, slot := range simData {
 		if !slot.HitCapacityAt.IsZero() && hitCapacityAt.IsZero() {
 			hitCapacityAt = slot.HitCapacityAt
@@ -185,12 +185,17 @@ func (c *Controller) Decide(
 		}
 	}
 
+	// Record the earliest of solar or battery capacity as hitCapacityAt
+	if !hitSolarCapacityAt.IsZero() && (hitCapacityAt.IsZero() || hitSolarCapacityAt.Before(hitCapacityAt)) {
+		hitCapacityAt = hitSolarCapacityAt
+	}
+
 	maxFutureGridChargeCost := gridChargeNowCost
 	maxFutureGridChargePrice := currentPrice
 	maxFutureGridChargeTime := now
 	minFutureGridChargeCost := gridChargeNowCost
 	for _, slot := range simData {
-		// don't bother recording any grid charge costs after we hit capacity
+		// don't bother recording any grid charge costs after we hit capacity (earliest of solar or battery capacity)
 		if !hitCapacityAt.IsZero() && slot.TS.After(hitCapacityAt) {
 			break
 		}
@@ -215,6 +220,7 @@ func (c *Controller) Decide(
 	maxEnergy := -1.0
 	var deficitAmount float64
 	var chargeDurationHours int
+	var neededEnergy float64
 
 	for i, slot := range simData {
 		if minEnergy == -1 || slot.BatteryKWH < minEnergy {
@@ -251,13 +257,13 @@ func (c *Controller) Decide(
 
 		if slot.TotalBatteryDeficitKWH > 0 {
 			deficitAmount = slot.TotalBatteryDeficitKWH
-			neededEnergy := deficitAmount
-			headroom := capacityKWH - currentEnergyKWH
-			if headroom < 0 {
-				headroom = 0
+			maxHeadroom := capacityKWH - slot.BatteryReserveKWH
+			if maxHeadroom < 0 {
+				maxHeadroom = 0
 			}
-			if neededEnergy > headroom {
-				neededEnergy = headroom
+			neededEnergy = deficitAmount
+			if neededEnergy > maxHeadroom {
+				neededEnergy = maxHeadroom
 			}
 
 			// factor in the cost of charging for the duration of the charge which
@@ -324,13 +330,6 @@ func (c *Controller) Decide(
 					if simData[j].GridChargeDollarsPerKWH <= gridChargeNowCost+settings.MinDeficitPriceDifferenceDollarsPerKWH {
 						futureCheapHours++
 					}
-				}
-
-				// if we need more energy than we have capacity for, cap the needed energy
-				// by the capacity of the battery
-				neededEnergy := deficitAmount
-				if neededEnergy > capacityKWH-currentEnergyKWH {
-					neededEnergy = capacityKWH - currentEnergyKWH
 				}
 
 				// if there is a peak rate in the future (current price < max future price) and
@@ -504,8 +503,6 @@ func (c *Controller) Decide(
 					holdReason,
 					holdDescription,
 					&highestExportPrice,
-					hitDeficitAt,
-					hitCapacityAt,
 				), nil
 			}
 		}
@@ -532,7 +529,7 @@ func (c *Controller) Decide(
 	// if we should charge, return now.
 	if shouldCharge {
 		desc := fmt.Sprintf("Charging Optimized: %s", chargeDescription)
-		return decision(types.BatteryModeChargeAny, chargeActionReason, desc, futurePrice, hitDeficitAt, hitCapacityAt), nil
+		return decision(types.BatteryModeChargeAny, chargeActionReason, desc, futurePrice), nil
 	}
 
 	// check if the battery is below the minimum SOC
@@ -552,11 +549,11 @@ func (c *Controller) Decide(
 		// the current energy we have in the battery is "use it or lose it" effectively,
 		// because we will refill to 100% anyway. So we should NOT Standby to save THIS energy.
 		// don't bother using this reason if we're already above 90%
-		if (!hitCapacityAt.IsZero() && hitCapacityAt.Before(hitDeficitAt)) || (!hitSolarCapacityAt.IsZero() && hitSolarCapacityAt.Before(hitDeficitAt)) {
+		if !hitCapacityAt.IsZero() && hitCapacityAt.Before(hitDeficitAt) {
 			reason := types.ActionReasonDischargeBeforeCapacityNow
 			loadReason := fmt.Sprintf("Capacity hit at %s before deficit at %s.", hitCapacityAt.Format(time.Kitchen), hitDeficitAt.Format(time.Kitchen))
 
-			if !hitSolarCapacityAt.IsZero() && hitSolarCapacityAt.Before(hitDeficitAt) && (hitCapacityAt.IsZero() || !hitSolarCapacityAt.After(hitCapacityAt)) {
+			if !hitSolarCapacityAt.IsZero() && hitSolarCapacityAt.Before(hitDeficitAt) && hitCapacityAt.Equal(hitSolarCapacityAt) {
 				reason = types.ActionReasonPreventSolarCurtailment
 				loadReason = fmt.Sprintf("Solar curtailment likely at %s before deficit at %s.", hitSolarCapacityAt.Format(time.Kitchen), hitDeficitAt.Format(time.Kitchen))
 			}
@@ -569,7 +566,7 @@ func (c *Controller) Decide(
 				slog.Time("hitDeficitAt", hitDeficitAt),
 				slog.String("reason", string(reason)),
 			)
-			return decision(types.BatteryModeLoad, reason, loadReason, nil, hitDeficitAt, hitCapacityAt), nil
+			return decision(types.BatteryModeLoad, reason, loadReason, nil), nil
 		}
 
 		// Optimization: If there is a future planned charge time, and the battery has enough energy
@@ -586,7 +583,7 @@ func (c *Controller) Decide(
 				slog.Time("plannedChargeTime", plannedChargeTime),
 				slog.Float64("currentPrice", currentPrice.DollarsPerKWH),
 			)
-			return decision(types.BatteryModeLoad, types.ActionReasonSufficientBatteryTillCharge, loadReason, &plannedChargePrice, hitDeficitAt, hitCapacityAt), nil
+			return decision(types.BatteryModeLoad, types.ActionReasonSufficientBatteryTillCharge, loadReason, &plannedChargePrice), nil
 		}
 
 		// If there is a future planned charge time that occurs after 'now' but before the peak price
@@ -614,11 +611,11 @@ func (c *Controller) Decide(
 				slog.Float64("gridChargeNowCost", gridChargeNowCost),
 				slog.Float64("minDeficitPriceDifference", settings.MinDeficitPriceDifferenceDollarsPerKWH),
 			)
-			return decision(types.BatteryModeStandby, types.ActionReasonWaitingToCharge, standbyReason, &plannedChargePrice, hitDeficitAt, hitCapacityAt), nil
+			return decision(types.BatteryModeStandby, types.ActionReasonWaitingToCharge, standbyReason, &plannedChargePrice), nil
 		}
 
 		if isBatteryAtReserve {
-			return decision(types.BatteryModeLoad, types.ActionReasonBatteryAtReserve, "Battery is at reserve. Using remaining energy because standby is not meaningful (battery is already held at reserve).", nil, hitDeficitAt, hitCapacityAt), nil
+			return decision(types.BatteryModeLoad, types.ActionReasonBatteryAtReserve, "Battery is at reserve. Using remaining energy because standby is not meaningful (battery is already held at reserve).", nil), nil
 		}
 
 		// We are going to run out. Should we save it?
@@ -649,7 +646,7 @@ func (c *Controller) Decide(
 				slog.Float64("deficit", deficitAmount),
 				slog.Int("chargeDurationHours", chargeDurationHours),
 			)
-			return decision(types.BatteryModeStandby, types.ActionReasonDeficitSaveForPeak, standbyReason, &maxFutureGridChargePrice, hitDeficitAt, hitCapacityAt), nil
+			return decision(types.BatteryModeStandby, types.ActionReasonDeficitSaveForPeak, standbyReason, &maxFutureGridChargePrice), nil
 		}
 
 		// If we are at the peak (or flat), use it until empty.
@@ -663,7 +660,7 @@ func (c *Controller) Decide(
 			slog.Float64("deficit", deficitAmount),
 			slog.Int("chargeDurationHours", chargeDurationHours),
 		)
-		return decision(types.BatteryModeLoad, types.ActionReasonArbitrageSave, "Deficit predicted but Current Price is Peak.", nil, hitDeficitAt, hitCapacityAt), nil
+		return decision(types.BatteryModeLoad, types.ActionReasonArbitrageSave, "Deficit predicted but Current Price is Peak.", nil), nil
 	}
 
 	// No deficit predicted, use battery.
@@ -673,5 +670,5 @@ func (c *Controller) Decide(
 		slog.Float64("minEnergy", minEnergy),
 		slog.Float64("maxEnergy", maxEnergy),
 	)
-	return decision(types.BatteryModeLoad, types.ActionReasonSufficientBattery, "Sufficient battery.", nil, hitDeficitAt, hitCapacityAt), nil
+	return decision(types.BatteryModeLoad, types.ActionReasonSufficientBattery, "Sufficient battery.", nil), nil
 }

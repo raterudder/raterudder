@@ -51,7 +51,7 @@ func (c *Controller) SimulateState(
 
 	// Build Energy Model
 	model := c.buildHourlyEnergyModel(ctx, now, history, weather, settings)
-	minKWH := capacityKWH * (settings.MinBatterySOC / 100.0)
+	minKWH := capacityKWH * (min(settings.MinBatterySOC+1.0, 100.0) / 100.0)
 
 	// simulate our energy state and prices for the next 24 hours
 	simData := make([]SimHour, 0, 24)
