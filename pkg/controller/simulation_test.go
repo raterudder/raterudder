@@ -877,7 +877,7 @@ func TestSimulateState(t *testing.T) {
 
 		if assert.NotEmpty(t, simData) {
 			assert.False(t, simData[0].HitCapacityAt.IsZero())
-			expected := now.Add(30 * time.Minute)
+			expected := now.Add(28*time.Minute + 48*time.Second)
 			assert.Equal(t, expected, simData[0].HitCapacityAt)
 		}
 	})

@@ -1821,10 +1821,10 @@ func TestDecide(t *testing.T) {
 			})
 		}
 
-		// Battery is at 98% of 10kWh = 9.8kWh.
-		// 9.8 + 0.1 = 9.9 < 10.0, so it can charge.
+		// Battery is at 95% of 10kWh = 9.5kWh.
+		// 9.5 + 0.417 = 9.917 < 10.0, so it can charge.
 		almostFullStatus := baseStatus
-		almostFullStatus.BatterySOC = 98.0
+		almostFullStatus.BatterySOC = 95.0
 		almostFullStatus.MaxBatteryChargeKW = 5.0
 		almostFullStatus.BatteryCapacityKWH = 10.0
 
@@ -1836,6 +1836,42 @@ func TestDecide(t *testing.T) {
 		// It SHOULD charge for deficit because we still have room and there's a deficit!
 		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonDeficitChargeNow, decision.Action.Reason)
+	})
+
+	t.Run("Grid Charging Hysteresis -> No Charge unless sufficient headroom, continue if already charging", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05}
+		futurePrices := []types.Price{}
+		for i := 1; i <= 24; i++ {
+			price := 0.20
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
+			})
+		}
+
+		almostFullStatus := baseStatus
+		almostFullStatus.MaxBatteryChargeKW = 5.0
+		almostFullStatus.BatteryCapacityKWH = 10.0
+
+		// Case 1: Battery at 98% (headroom 0.2kWh < 0.417kWh start headroom limit).
+		// We are not already charging. Should Standby (not charge).
+		almostFullStatus.BatterySOC = 98.0
+		almostFullStatus.BatteryKW = 0.0
+		almostFullStatus.GridKW = 0.0
+
+		decision, err := c.Decide(ctx, almostFullStatus, currentPrice, futurePrices, history, nil, baseSettings)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode, "Should standby because we are not already charging and headroom is too small to start")
+
+		// Case 2: Battery at 98% but we are already charging from the grid.
+		// Should continue charging to 100%.
+		almostFullStatus.BatteryKW = -2.0
+		almostFullStatus.GridKW = 3.0
+
+		decision, err = c.Decide(ctx, almostFullStatus, currentPrice, futurePrices, history, nil, baseSettings)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode, "Should continue charging because we are already grid charging")
 	})
 
 	t.Run("Arbitrage Opportunity -> No Charge If Almost Full (< 10 mins left)", func(t *testing.T) {

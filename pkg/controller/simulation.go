@@ -236,13 +236,17 @@ func (c *Controller) SimulateState(
 				}
 			}
 
-			// if we have no headroom in the battery, we can't charge so mark that
-			// we hit the capacity
-			if newSimEnergy > capacityKWH {
+			// Treat the battery as having "hit capacity" slightly earlier (at 98% SOC)
+			// rather than strictly 100%. This acts as a conservative buffer that prevents
+			// feedback loops (rapidly oscillating between charge, standby, and load) when
+			// the battery is nearly full. We only trigger this capacity hit if we are
+			// actively charging (clampedNetKWH < 0) or if the energy exceeds capacity.
+			capacityThresholdKWH := capacityKWH * 0.98
+			if (clampedNetKWH < 0 && newSimEnergy >= capacityThresholdKWH) || newSimEnergy > capacityKWH {
 				if simCapacityAt.IsZero() {
-					// estimate when into the hour we hit the deficit
-					remainingBeforeCapacity := capacityKWH - simEnergyKWH
-					if clampedNetKWH < 0 && remainingBeforeCapacity > 0 {
+					// estimate when into the hour we hit the capacity threshold
+					remainingBeforeCapacity := capacityThresholdKWH - simEnergyKWH
+					if remainingBeforeCapacity > 0 {
 						fraction := max(remainingBeforeCapacity/-clampedNetKWH, 0)
 						simCapacityAt = simTime.Add(time.Duration(fraction * float64(time.Hour)))
 					} else {
@@ -251,6 +255,10 @@ func (c *Controller) SimulateState(
 					// once we hit capacity the battery is full and any deficit must be handled before this
 					deficitKWH = 0.0
 				}
+			}
+
+			// Still cap physical energy at 100% capacity
+			if newSimEnergy > capacityKWH {
 				simEnergyKWH = capacityKWH
 			} else {
 				simEnergyKWH = newSimEnergy

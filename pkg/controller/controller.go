@@ -129,8 +129,24 @@ func (c *Controller) Decide(
 	}
 	currentEnergyKWH := currentStatus.BatterySOC * capacityKWH / 100.0
 
-	// add a 0.1 kWh buffer to prevent trying to charge when we are almost full (e.g. 99.9%)
-	canChargeNow := currentEnergyKWH+0.1 < capacityKWH && settings.GridChargeBatteries && !currentStatus.BatteryChargingDisabled
+	// To prevent rapid start/stop cycling near full capacity, we implement a hysteresis buffer:
+	// - If the battery is already charging from the grid, we can continue charging up to 100% capacity (minus a 0.1 kWh buffer).
+	// - If the battery is not currently charging from the grid, we only start charging if the battery has at least 5 minutes of charging headroom.
+	isAlreadyChargingGrid := currentStatus.BatteryKW < 0 && currentStatus.GridKW > 0
+	minStartChargeDurationHours := 5.0 / 60.0
+	startChargeHeadroom := chargeKW * minStartChargeDurationHours
+	if startChargeHeadroom < 0.3 {
+		startChargeHeadroom = 0.3 // minimum 0.3 kWh headroom to initiate a charge
+	}
+
+	var allowedHeadroom float64
+	if isAlreadyChargingGrid {
+		allowedHeadroom = 0.1 // 0.1 kWh buffer to complete charge
+	} else {
+		allowedHeadroom = startChargeHeadroom
+	}
+
+	canChargeNow := currentEnergyKWH+allowedHeadroom < capacityKWH && settings.GridChargeBatteries && !currentStatus.BatteryChargingDisabled
 	canChargeFuture := settings.GridChargeBatteries && !currentStatus.BatteryChargingDisabled
 
 	// assume we need to charge for at least 10 minutes for it to be worth it for arbitrage
@@ -298,7 +314,6 @@ func (c *Controller) Decide(
 			// Stutter prevention: If the battery is already charging from the grid during the cheapest
 			// window of the day, and charging is economically justified to cover the upcoming peak deficit,
 			// continue charging now to avoid inverter start/stop wear.
-			isAlreadyChargingGrid := currentStatus.BatteryKW < 0 && currentStatus.GridKW > 0
 			isCheapestWindow := cheapestFutureChargeSlot.cost == gridChargeNowCost && gridChargeNowCost <= minFutureGridChargeCost+0.001
 			isAlreadyChargingSamePrice := canChargeNow && isAlreadyChargingGrid && isCheapestWindow && isSignificantlyCheaperThanDeficit
 
