@@ -172,6 +172,7 @@ func (c *Controller) Decide(
 	maxFutureGridChargeCost := gridChargeNowCost
 	maxFutureGridChargePrice := currentPrice
 	maxFutureGridChargeTime := now
+	minFutureGridChargeCost := gridChargeNowCost
 	for _, slot := range simData {
 		// don't bother recording any grid charge costs after we hit capacity
 		if !hitCapacityAt.IsZero() && slot.TS.After(hitCapacityAt) {
@@ -181,6 +182,9 @@ func (c *Controller) Decide(
 			maxFutureGridChargeCost = slot.GridChargeDollarsPerKWH
 			maxFutureGridChargePrice = slot.Price
 			maxFutureGridChargeTime = slot.TS
+		}
+		if slot.GridChargeDollarsPerKWH < minFutureGridChargeCost {
+			minFutureGridChargeCost = slot.GridChargeDollarsPerKWH
 		}
 	}
 
@@ -197,8 +201,6 @@ func (c *Controller) Decide(
 	var chargeDurationHours int
 
 	for i, slot := range simData {
-		simInFuture := i > 0
-
 		if minEnergy == -1 || slot.BatteryKWH < minEnergy {
 			minEnergy = slot.BatteryKWH
 		}
@@ -254,9 +256,13 @@ func (c *Controller) Decide(
 		// can compare current price against all future prices to decide whether to charge now.
 		isAfterFutureDeficit := !hitDeficitAt.IsZero() && hitDeficitAt.After(now.Add(time.Hour)) && slot.TS.After(hitDeficitAt)
 		if slot.TotalBatteryDeficitKWH > 0 && canChargeFuture && !isAfterFutureDeficit {
+			simInFuture := i > 0
+
 			// these costs ignore the "now" hour so it can be compared against gridChargeNowCost.
+			// They are called simPrevChargeCosts because they are the candidate price slots *previous*
+			// to the simulated future hour `i` where we have a deficit, excluding the "now" hour at index 0.
 			var simPrevChargeCosts []simPriceSlot
-			if i > 0 {
+			if simInFuture {
 				simPrevChargeCosts = make([]simPriceSlot, i)
 				for j := 1; j <= i; j++ {
 					simPrevChargeCosts[j-1] = simPriceSlot{
@@ -282,9 +288,21 @@ func (c *Controller) Decide(
 				cheapestFutureChargeSlot = simPrevChargeCosts[idx-1]
 			}
 
-			// if we have determined we'll run out of energy and it's cheaper to
-			// charge now than later, and we have room in the battery, charge now
-			if simInFuture && canChargeNow && gridChargeNowCost+settings.MinDeficitPriceDifferenceDollarsPerKWH <= cheapestFutureChargeSlot.cost {
+			// We determine if charging right now is significantly cheaper than the cheapest future planned slot.
+			isSignificantlyCheaperNow := simInFuture && cheapestFutureChargeSlot.cost-gridChargeNowCost >= settings.MinDeficitPriceDifferenceDollarsPerKWH
+
+			// We determine if the upcoming peak deficit price is high enough relative to the cheap window
+			// cost to justify charging the battery at the cheap rate.
+			isSignificantlyCheaperThanDeficit := simInFuture && slot.GridChargeDollarsPerKWH-cheapestFutureChargeSlot.cost >= settings.MinDeficitPriceDifferenceDollarsPerKWH
+
+			// Stutter prevention: If the battery is already charging from the grid during the cheapest
+			// window of the day, and charging is economically justified to cover the upcoming peak deficit,
+			// continue charging now to avoid inverter start/stop wear.
+			isAlreadyChargingGrid := currentStatus.BatteryKW < 0 && currentStatus.GridKW > 0
+			isCheapestWindow := cheapestFutureChargeSlot.cost == gridChargeNowCost && gridChargeNowCost <= minFutureGridChargeCost+0.001
+			isAlreadyChargingSamePrice := canChargeNow && isAlreadyChargingGrid && isCheapestWindow && isSignificantlyCheaperThanDeficit
+
+			if simInFuture && canChargeNow && (isSignificantlyCheaperNow || isAlreadyChargingSamePrice) {
 				// count how many future cheap hours we have before the current hour i
 				futureCheapHours := 0
 				for j := 1; j < i; j++ {
@@ -303,7 +321,7 @@ func (c *Controller) Decide(
 				// if there is a peak rate in the future (current price < max future price) and
 				// we have enough cheap hours in the future before the deficit hour to satisfy
 				// the remaining battery capacity, we can delay charging.
-				if gridChargeNowCost < maxFutureGridChargeCost && futureCheapHours > 0 && float64(futureCheapHours)*chargeKW >= neededEnergy {
+				if !isAlreadyChargingSamePrice && gridChargeNowCost < maxFutureGridChargeCost && futureCheapHours > 0 && float64(futureCheapHours)*chargeKW >= neededEnergy {
 					// Find the cheapest future hour in the simulation up to this point
 					// that gives us enough time to charge the needed energy.
 					neededDurationHours := max(1, int((neededEnergy/chargeKW + 0.84)))
@@ -338,6 +356,9 @@ func (c *Controller) Decide(
 							slog.Float64("plannedChargeCost", plannedChargeCost),
 							slog.Float64("deficit", deficitAmount),
 							slog.Int("futureCheapHours", futureCheapHours),
+							slog.Bool("isAlreadyChargingGrid", isAlreadyChargingGrid),
+							slog.Bool("isCheapestWindow", isCheapestWindow),
+							slog.Bool("isAlreadyChargingSamePrice", isAlreadyChargingSamePrice),
 						)
 					}
 				} else {
@@ -362,12 +383,16 @@ func (c *Controller) Decide(
 						slog.Float64("minDeficitPriceDifference", settings.MinDeficitPriceDifferenceDollarsPerKWH),
 						slog.Time("cheapestFutureChargeTime", cheapestFutureChargeSlot.ts),
 						slog.Int("chargeDurationHours", chargeDurationHours),
+						slog.Bool("isAlreadyChargingGrid", isAlreadyChargingGrid),
+						slog.Bool("isCheapestWindow", isCheapestWindow),
+						slog.Bool("isAlreadyChargingSamePrice", isAlreadyChargingSamePrice),
+						slog.Bool("isSignificantlyCheaperNow", isSignificantlyCheaperNow),
 					)
 					break
 				}
 			}
 
-			if len(simPrevChargeCosts) > 0 {
+			if simInFuture {
 				// We determine if it is significantly cheaper to charge at a future planned slot before the deficit.
 				// This condition is split into two logical paths:
 				//
@@ -394,6 +419,9 @@ func (c *Controller) Decide(
 						slog.Int("chargeDurationHours", chargeDurationHours),
 						slog.Time("plannedChargeTime", plannedChargeTime),
 						slog.Float64("minDeficitPriceDifference", settings.MinDeficitPriceDifferenceDollarsPerKWH),
+						slog.Bool("isAlreadyChargingGrid", isAlreadyChargingGrid),
+						slog.Bool("isCheapestWindow", isCheapestWindow),
+						slog.Bool("isAlreadyChargingSamePrice", isAlreadyChargingSamePrice),
 					)
 				}
 			}
