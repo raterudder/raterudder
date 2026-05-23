@@ -75,7 +75,33 @@ describe('dashboardUtils', () => {
             expect(text).toContain('cheaper charging window is coming up');
             expect(text).toContain('$ 0.050');
             expect(text).toContain('$ 0.150');
-            expect(text).toContain('savings: $ 0.100/kWh');
+            expect(text).toContain('savings: $ 0.100/kWh.');
+        });
+
+        it('handles SufficientBatteryTillCharge with identical prices or less than 1 cent margin', () => {
+            const action1 = {
+                ...baseAction,
+                reason: ActionReason.SufficientBatteryTillCharge,
+                deficitAt: '2026-05-20T19:24:00-05:00',
+                currentPrice: { dollarsPerKWH: 0.055, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
+                futurePrice: { dollarsPerKWH: 0.055, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+            };
+            const text1 = getReasonText(action1);
+            expect(text1).toContain('charging window with the same price is coming up');
+            expect(text1).toContain('waiting to refill it during that window');
+            expect(text1).not.toContain('savings:');
+
+            const action2 = {
+                ...baseAction,
+                reason: ActionReason.SufficientBatteryTillCharge,
+                deficitAt: '2026-05-20T19:24:00-05:00',
+                currentPrice: { dollarsPerKWH: 0.060, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
+                futurePrice: { dollarsPerKWH: 0.055, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+            };
+            const text2 = getReasonText(action2);
+            expect(text2).toContain('charging window with the same price is coming up');
+            expect(text2).toContain('waiting to refill it during that window');
+            expect(text2).not.toContain('savings:');
         });
 
         it('handles DeficitCharge with prices and savings', () => {
@@ -88,7 +114,31 @@ describe('dashboardUtils', () => {
             const text = getReasonText(action);
             expect(text).toContain('Charging now');
             expect(text).toContain('$ 0.100');
-            expect(text).toContain('savings: $ 0.400/kWh');
+            expect(text).toContain('savings: $ 0.400/kWh.');
+        });
+
+        it('handles DeficitCharge with identical prices or less than 1 cent margin', () => {
+            const action1 = {
+                ...baseAction,
+                reason: ActionReason.DeficitCharge,
+                currentPrice: { dollarsPerKWH: 0.055, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
+                futurePrice: { dollarsPerKWH: 0.055, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+            };
+            const text1 = getReasonText(action1);
+            expect(text1).toContain('same price as');
+            expect(text1).not.toContain('cheaper than');
+            expect(text1).not.toContain('savings:');
+
+            const action2 = {
+                ...baseAction,
+                reason: ActionReason.DeficitCharge,
+                currentPrice: { dollarsPerKWH: 0.055, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
+                futurePrice: { dollarsPerKWH: 0.060, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+            };
+            const text2 = getReasonText(action2);
+            expect(text2).toContain('same price as');
+            expect(text2).not.toContain('cheaper than');
+            expect(text2).not.toContain('savings:');
         });
 
         it('handles PreventSolarCurtailment', () => {
@@ -111,7 +161,7 @@ describe('dashboardUtils', () => {
             };
             const text = getReasonText(action);
             expect(text).toContain('A cheaper charging window is coming up');
-            expect(text).toContain('savings: $ 0.100/kWh');
+            expect(text).toContain('savings: $ 0.100/kWh.');
         });
 
         it('handles WaitingToCharge with < $0.01 savings', () => {
