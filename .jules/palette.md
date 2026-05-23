@@ -12,3 +12,7 @@
 ## 2024-05-26 - Hide standalone emojis and html entities in icon-only buttons
 **Learning:** Even when icon-only buttons have an `aria-label`, screen readers may still announce the visible text content (like a "💬" emoji or an "&times;" symbol) inside them, leading to redundant or confusing announcements like "Feedback, speech balloon".
 **Action:** Always wrap text-based icons, HTML entities, or emojis in a `<span aria-hidden="true">` when they are placed inside a button that already provides its accessible name via `aria-label`.
+
+## 2026-05-23 - Add ARIA Roles to Dynamic Feedback Messages
+**Learning:** React elements conditionally rendered based on state changes (like `{error && <div>{error}</div>}`) are often missed by screen readers because the DOM update happens silently without shifting focus.
+**Action:** When creating dynamic error or success messages, always apply `role="alert"` for errors and `role="status"` for success messages directly on the container. This ensures assistive technologies announce the update immediately without stealing focus.
