@@ -379,11 +379,10 @@ func (c *Controller) Decide(
 					// we cannot delay charging, charge now.
 					shouldCharge = true
 					chargeDescription = fmt.Sprintf(
-						"Projected Deficit at %s. Charge Now ($%.3f) <= Later ($%.3f) - Delta ($%.3f).",
+						"Projected Deficit at %s. Charge Now ($%.3f) <= Later ($%.3f).",
 						hitDeficitAt.Format(time.Kitchen),
 						gridChargeNowCost,
 						cheapestFutureChargeSlot.cost,
-						settings.MinDeficitPriceDifferenceDollarsPerKWH,
 					)
 					futurePrice = &cheapestFutureChargeSlot.price
 					chargeActionReason = types.ActionReasonDeficitChargeNow
@@ -574,7 +573,7 @@ func (c *Controller) Decide(
 		// using the battery (Load) now instead of standing by.
 		//
 		// This is valid if the planned future charge cost is cheaper than or equal to charging right now.
-		if !plannedChargeTime.IsZero() && hitDeficitAt.After(plannedChargeTime) && plannedChargeCost <= gridChargeNowCost {
+		if !plannedChargeTime.IsZero() && hitDeficitAt.After(plannedChargeTime) && plannedChargeCost < gridChargeNowCost {
 			loadReason := fmt.Sprintf("Sufficient battery to reach planned charge time at %s.", plannedChargeTime.Format(time.Kitchen))
 			log.Ctx(ctx).DebugContext(
 				ctx,
@@ -594,7 +593,7 @@ func (c *Controller) Decide(
 		// 2. The planned charge cost is strictly cheaper than the current cost (making it financially
 		//    optimal to preserve battery energy and wait to charge at the lower rate, rather than
 		//    discharging now and having to recharge at a higher rate later).
-		if !plannedChargeTime.IsZero() && plannedChargeTime.After(now) && plannedChargeTime.Before(maxFutureGridChargeTime) && (isBatteryAtReserve || plannedChargeCost < gridChargeNowCost) {
+		if !plannedChargeTime.IsZero() && plannedChargeTime.After(now) && plannedChargeTime.Before(maxFutureGridChargeTime) && (isBatteryAtReserve || plannedChargeCost <= gridChargeNowCost) {
 			var standbyReason string
 			if plannedChargeCost < gridChargeNowCost {
 				standbyReason = fmt.Sprintf("Waiting to charge at %s ($%.3f < $%.3f).", plannedChargeTime.Format(time.Kitchen), plannedChargeCost, gridChargeNowCost)
