@@ -406,6 +406,7 @@ func (f *FirestoreProvider) UpsertWeather(ctx context.Context, siteID string, we
 		_, err = coll.Doc(docID).Set(ctx, map[string]any{
 			"json":       string(jsonBytes),
 			"tsDayStart": w.TSDayStart,
+			"tsUpdated":  w.TSUpdated,
 			"version":    version,
 		})
 		if err != nil {
@@ -429,6 +430,7 @@ func (f *FirestoreProvider) UpsertWeather(ctx context.Context, siteID string, we
 		job, err := bw.Set(ref, map[string]any{
 			"json":       string(jsonBytes),
 			"tsDayStart": w.TSDayStart,
+			"tsUpdated":  w.TSUpdated,
 			"version":    version,
 		})
 		if err != nil {
@@ -965,11 +967,11 @@ func (f *FirestoreProvider) GetLatestPriceHistoryTime(ctx context.Context, siteI
 	return ts, version, nil
 }
 
-// GetLatestWeatherTime retrieves the timestamp of the last stored weather record for a site.
-func (f *FirestoreProvider) GetLatestWeatherTime(ctx context.Context, siteID string) (time.Time, int, error) {
+// GetLatestWeatherTime retrieves the timestamp of the last stored weather record for a site, along with its update time.
+func (f *FirestoreProvider) GetLatestWeatherTime(ctx context.Context, siteID string) (time.Time, time.Time, int, error) {
 	coll, err := f.getCollection(siteID, "weather")
 	if err != nil {
-		return time.Time{}, 0, err
+		return time.Time{}, time.Time{}, 0, err
 	}
 
 	iter := coll.
@@ -980,15 +982,15 @@ func (f *FirestoreProvider) GetLatestWeatherTime(ctx context.Context, siteID str
 
 	doc, err := iter.Next()
 	if errors.Is(err, iterator.Done) {
-		return time.Time{}, 0, nil
+		return time.Time{}, time.Time{}, 0, nil
 	}
 	if err != nil {
-		return time.Time{}, 0, fmt.Errorf("failed to get latest weather doc: %w", err)
+		return time.Time{}, time.Time{}, 0, fmt.Errorf("failed to get latest weather doc: %w", err)
 	}
 
 	ts, err := time.Parse("2006-01-02", doc.Ref.ID)
 	if err != nil {
-		return time.Time{}, 0, fmt.Errorf("invalid weather doc id %s: %w", doc.Ref.ID, err)
+		return time.Time{}, time.Time{}, 0, fmt.Errorf("invalid weather doc id %s: %w", doc.Ref.ID, err)
 	}
 
 	// Read version if available (default 0)
@@ -999,7 +1001,27 @@ func (f *FirestoreProvider) GetLatestWeatherTime(ctx context.Context, siteID str
 		}
 	}
 
-	return ts, version, nil
+	// Read tsUpdated if available
+	var tsUpdated time.Time
+	if tUp, err := doc.DataAt("tsUpdated"); err == nil {
+		if tTime, ok := tUp.(time.Time); ok {
+			tsUpdated = tTime
+		}
+	}
+
+	if tsUpdated.IsZero() {
+		// Fallback to reading it from JSON
+		if val, err := doc.DataAt("json"); err == nil {
+			if jsonStr, ok := val.(string); ok {
+				var w types.Weather
+				if err := json.Unmarshal([]byte(jsonStr), &w); err == nil {
+					tsUpdated = w.TSUpdated
+				}
+			}
+		}
+	}
+
+	return ts, tsUpdated, version, nil
 }
 
 // CreateSite creates a new site document in the "sites" collection.

@@ -102,12 +102,12 @@ func (m *MockDatabase) GetLatestPriceHistoryTime(ctx context.Context, siteID str
 	return time.Time{}, 0, nil
 }
 
-func (m *MockDatabase) GetLatestWeatherTime(ctx context.Context, siteID string) (time.Time, int, error) {
+func (m *MockDatabase) GetLatestWeatherTime(ctx context.Context, siteID string) (time.Time, time.Time, int, error) {
 	args := m.Called(ctx, siteID)
 	if len(args) > 0 {
-		return args.Get(0).(time.Time), args.Int(1), args.Error(2)
+		return args.Get(0).(time.Time), args.Get(1).(time.Time), args.Int(2), args.Error(3)
 	}
-	return time.Time{}, 0, nil
+	return time.Time{}, time.Time{}, 0, nil
 }
 
 func (m *MockDatabase) GetUser(ctx context.Context, email string) (types.User, error) {

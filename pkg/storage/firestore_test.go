@@ -621,6 +621,60 @@ func TestFirestoreProvider(t *testing.T) {
 			// Verify timestamp matches
 			assert.True(t, results[0].TSDayStart.Equal(tEast))
 		})
+
+		t.Run("GetLatestWeatherTime", func(t *testing.T) {
+			start := time.Now().Truncate(24 * time.Hour).UTC().Add(200 * 24 * time.Hour)
+			updatedTime := time.Now().Truncate(time.Second).UTC()
+			w := types.Weather{
+				TSDayStart:   start,
+				TimeLocation: "America/New_York",
+				Latitude:     34.0,
+				Longitude:    -118.0,
+				TSUpdated:    updatedTime,
+			}
+
+			err := f.UpsertWeather(ctx, siteID, []types.Weather{w}, types.CurrentWeatherVersion)
+			require.NoError(t, err)
+
+			latestTime, lastUpdated, version, err := f.GetLatestWeatherTime(ctx, siteID)
+			require.NoError(t, err)
+			assert.Equal(t, start, latestTime)
+			assert.Equal(t, updatedTime, lastUpdated.UTC())
+			assert.Equal(t, int(types.CurrentWeatherVersion), version)
+		})
+
+		t.Run("GetLatestWeatherTime Fallback", func(t *testing.T) {
+			fallbackSiteID := "test-site-weather-fallback"
+			start := time.Now().Truncate(24 * time.Hour).UTC().Add(300 * 24 * time.Hour)
+			updatedTime := time.Now().Truncate(time.Second).UTC()
+			w := types.Weather{
+				TSDayStart:   start,
+				TimeLocation: "America/New_York",
+				Latitude:     34.0,
+				Longitude:    -118.0,
+				TSUpdated:    updatedTime,
+			}
+
+			coll, err := f.getCollection(fallbackSiteID, "weather")
+			require.NoError(t, err)
+
+			jsonBytes, err := json.Marshal(w)
+			require.NoError(t, err)
+
+			docID := start.Format("2006-01-02")
+			_, err = coll.Doc(docID).Set(ctx, map[string]any{
+				"json":       string(jsonBytes),
+				"tsDayStart": w.TSDayStart,
+				"version":    types.CurrentWeatherVersion,
+			})
+			require.NoError(t, err)
+
+			latestTime, lastUpdated, version, err := f.GetLatestWeatherTime(ctx, fallbackSiteID)
+			require.NoError(t, err)
+			assert.Equal(t, start, latestTime)
+			assert.Equal(t, updatedTime, lastUpdated.UTC())
+			assert.Equal(t, int(types.CurrentWeatherVersion), version)
+		})
 	})
 
 	t.Run("UtilityPrices", func(t *testing.T) {

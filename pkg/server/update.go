@@ -422,7 +422,7 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 		timeLoc = time.UTC
 	}
 
-	lastWeatherTime, lastVersion, err := s.storage.GetLatestWeatherTime(ctx, siteID)
+	lastWeatherTime, lastWeatherUpdated, lastVersion, err := s.storage.GetLatestWeatherTime(ctx, siteID)
 	if err != nil {
 		log.Ctx(ctx).WarnContext(ctx, "failed to get latest weather time", slog.Any("error", err))
 	}
@@ -443,7 +443,15 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 		// if the syncStart (i.e. the latest weather time we have) is after today then
 		// we know we already have tomorrow
 		if syncStart.After(todayMidnight) {
-			return nil
+			// We already have tomorrow's weather, but we want to refresh the forecast at least once
+			// in the morning after 6 AM local time.
+			sixAMToday := time.Date(now.Year(), now.Month(), now.Day(), 6, 0, 0, 0, timeLoc)
+			lastUpdateLocal := lastWeatherUpdated.In(timeLoc)
+			if now.After(sixAMToday) && lastUpdateLocal.Before(sixAMToday) {
+				syncStart = todayMidnight
+			} else {
+				return nil
+			}
 		}
 	} else if !lastWeatherTime.IsZero() && lastVersion < types.CurrentWeatherVersion {
 		log.Ctx(ctx).InfoContext(
@@ -466,6 +474,67 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 	}
 
 	if len(newWeathers) > 0 {
+		// Fetch old weather for today to check if there is a significant change.
+		oldWeathers, err := s.storage.GetWeather(ctx, siteID, todayMidnight, todayMidnight.Add(24*time.Hour))
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to fetch old weather for today for comparison", slog.Any("error", err))
+		} else if len(oldWeathers) > 0 {
+			oldWeather := oldWeathers[0]
+			var newWeather *types.Weather
+			for i := range newWeathers {
+				if newWeathers[i].TSDayStart.Equal(todayMidnight) {
+					newWeather = &newWeathers[i]
+					break
+				}
+			}
+
+			if newWeather != nil {
+				oldHoursMap := make(map[time.Time]types.HourlyWeather)
+				for _, hw := range oldWeather.ForecastHours {
+					oldHoursMap[hw.TSHourStart] = hw
+				}
+
+				var hours []string
+				var oldGTIs []float64
+				var newGTIs []float64
+				anySignificantChange := false
+
+				for _, newHw := range newWeather.ForecastHours {
+					if oldHw, found := oldHoursMap[newHw.TSHourStart]; found {
+						isDaylight := oldHw.GTI > 0 || newHw.GTI > 0
+						if isDaylight {
+							hours = append(hours, newHw.TSHourStart.In(timeLoc).Format("15:04"))
+							oldGTIs = append(oldGTIs, oldHw.GTI)
+							newGTIs = append(newGTIs, newHw.GTI)
+
+							if oldHw.GTI > 10 || newHw.GTI > 10 {
+								if oldHw.GTI == 0 {
+									if newHw.GTI > 10 {
+										anySignificantChange = true
+									}
+								} else {
+									ratio := newHw.GTI / oldHw.GTI
+									if ratio > 1.20 || ratio < 0.80 {
+										anySignificantChange = true
+									}
+								}
+							}
+						}
+					}
+				}
+
+				if anySignificantChange {
+					log.Ctx(ctx).InfoContext(
+						ctx,
+						"weather forecast changed significantly after morning refresh",
+						slog.Any("hours", hours),
+						slog.Any("oldGti", oldGTIs),
+						slog.Any("newGti", newGTIs),
+					)
+				}
+			}
+		}
+
 		if err := s.storage.UpsertWeather(ctx, siteID, newWeathers, types.CurrentWeatherVersion); err != nil {
 			return fmt.Errorf("failed to upsert weather: %w", err)
 		}
