@@ -831,8 +831,8 @@ func TestDecide(t *testing.T) {
 		testNow := time.Date(2026, 5, 20, 10, 53, 0, 0, time.UTC)
 		currentPrice := types.Price{TSStart: testNow.Add(-53 * time.Minute), TSEnd: testNow.Add(7 * time.Minute), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
 		futurePrices := []types.Price{
-			// Peak starts at 11:00 AM (7 minutes from now)
-			{TSStart: testNow.Add(7 * time.Minute), TSEnd: testNow.Add(1*time.Hour + 7*time.Minute), DollarsPerKWH: 0.50, GridUseDollarsPerKWH: 0.50},
+			// Peak starts at 11:00 AM (7 minutes from now) and lasts 2 hours
+			{TSStart: testNow.Add(7 * time.Minute), TSEnd: testNow.Add(2*time.Hour + 7*time.Minute), DollarsPerKWH: 0.50, GridUseDollarsPerKWH: 0.50},
 		}
 
 		lowBattStatus := baseStatus
@@ -845,6 +845,47 @@ func TestDecide(t *testing.T) {
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Action.Reason)
 		assert.Contains(t, decision.Action.Description, "deplete")
+	})
+
+	t.Run("Deficit Ignored -> Charge Duration Under 7 Minutes", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10}
+		futurePrices := []types.Price{}
+		for i := 1; i <= 24; i++ {
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.10,
+			})
+		}
+
+		lowBattStatus := baseStatus
+		lowBattStatus.BatterySOC = 21.01 // very close to reserve limit (21.0% = 2.1 kWh)
+		lowBattStatus.HomeKW = 0.01      // extremely small load
+		lowBattStatus.SolarKW = 0.0
+
+		// Create small load history
+		smallLoadHistory := []types.EnergyStats{}
+		ts := now.Add(-24 * time.Hour)
+		for i := 0; i < 48; i++ {
+			smallLoadHistory = append(smallLoadHistory, types.EnergyStats{
+				TSHourStart:    ts,
+				GridImportKWH:  0.01,
+				SolarKWH:       0.0,
+				BatteryUsedKWH: 0.0,
+				HomeKWH:        0.01,
+			})
+			ts = ts.Add(1 * time.Hour)
+		}
+
+		// The deficit will be extremely small (0.24 kWh after 24 hours), which requires
+		// less than 7 minutes to charge at MaxBatteryChargeKW (5.0 kW).
+		decision, err := c.Decide(ctx, lowBattStatus, currentPrice, futurePrices, smallLoadHistory, nil, baseSettings)
+		require.NoError(t, err)
+
+		// It should ignore the deficit and behave as if we have sufficient battery
+		if assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode) {
+			assert.Equal(t, types.ActionReasonSufficientBattery, decision.Action.Reason)
+		}
 	})
 
 	t.Run("Sufficient Battery to Reach Charging Window -> Load (Discharge)", func(t *testing.T) {

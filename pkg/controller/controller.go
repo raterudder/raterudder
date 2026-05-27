@@ -221,6 +221,8 @@ func (c *Controller) Decide(
 	var deficitAmount float64
 	var chargeDurationHours int
 	var neededEnergy float64
+	var hitSolarSurplusAt time.Time
+	var predictedSolarAtDeficitKWH float64
 
 	for i, slot := range simData {
 		if minEnergy == -1 || slot.BatteryKWH < minEnergy {
@@ -230,8 +232,27 @@ func (c *Controller) Decide(
 			maxEnergy = slot.BatteryKWH
 		}
 
+		// if we have less than 7 minutes charging's worth of deficit, ignore it
+		hasDeficit := slot.TotalBatteryDeficitKWH > 0
+		if hasDeficit {
+			deficitDurationMinutes := (slot.TotalBatteryDeficitKWH / chargeKW) * 60.0
+			if deficitDurationMinutes < 7.0 {
+				log.Ctx(ctx).DebugContext(
+					ctx,
+					"deficit ignored: charge duration too small",
+					slog.Float64("deficit", slot.TotalBatteryDeficitKWH),
+					slog.Float64("chargeKW", chargeKW),
+					slog.Float64("deficitDurationMinutes", deficitDurationMinutes),
+					slog.Int("simHour", slot.Hour),
+					slog.Float64("predictedSolarKWH", slot.PredictedSolarKWH),
+				)
+				hasDeficit = false
+			}
+		}
+
 		// check if we are below the minimum SOC and when we need to charge
-		if !slot.HitDeficitAt.IsZero() && hitDeficitAt.IsZero() {
+		isPostCapacityDeficit := !hitCapacityAt.IsZero() && !slot.HitDeficitAt.IsZero() && !slot.HitDeficitAt.Before(hitCapacityAt)
+		if (hasDeficit || isPostCapacityDeficit) && !slot.HitDeficitAt.IsZero() && hitDeficitAt.IsZero() {
 			log.Ctx(ctx).DebugContext(
 				ctx,
 				"simulated energy below minimum SOC causing a deficit",
@@ -239,8 +260,26 @@ func (c *Controller) Decide(
 				slog.Float64("reserveKWH", slot.BatteryReserveKWH),
 				slog.Int("simHour", slot.Hour),
 				slog.Time("hitAt", slot.HitDeficitAt),
+				slog.Float64("predictedSolarKWH", slot.PredictedSolarKWH),
 			)
 			hitDeficitAt = slot.HitDeficitAt
+			if hitDeficitAt.Before(slot.TS) {
+				hitDeficitAt = slot.TS
+			}
+			predictedSolarAtDeficitKWH = slot.PredictedSolarKWH
+		}
+
+		// check when solar generates more than home load
+		if slot.PredictedSolarKWH > slot.AvgHomeLoadKWH && hitSolarSurplusAt.IsZero() {
+			log.Ctx(ctx).DebugContext(
+				ctx,
+				"simulated solar generation exceeds home usage",
+				slog.Float64("solarKWH", slot.PredictedSolarKWH),
+				slog.Float64("homeKWH", slot.AvgHomeLoadKWH),
+				slog.Int("simHour", slot.Hour),
+				slog.Time("hitAt", slot.TS),
+			)
+			hitSolarSurplusAt = slot.TS
 		}
 
 		// we only track the export value for arbitrage since we cannot export battery
@@ -255,7 +294,7 @@ func (c *Controller) Decide(
 			}
 		}
 
-		if slot.TotalBatteryDeficitKWH > 0 {
+		if hasDeficit {
 			deficitAmount = slot.TotalBatteryDeficitKWH
 			maxHeadroom := capacityKWH - slot.BatteryReserveKWH
 			if maxHeadroom < 0 {
@@ -277,7 +316,7 @@ func (c *Controller) Decide(
 		// However, if the deficit is happening right now, we do not skip future hours so we
 		// can compare current price against all future prices to decide whether to charge now.
 		isAfterFutureDeficit := !hitDeficitAt.IsZero() && hitDeficitAt.After(now.Add(time.Hour)) && slot.TS.After(hitDeficitAt)
-		if slot.TotalBatteryDeficitKWH > 0 && canChargeFuture && !isAfterFutureDeficit {
+		if hasDeficit && canChargeFuture && !isAfterFutureDeficit {
 			simInFuture := i > 0
 
 			// these costs ignore the "now" hour so it can be compared against gridChargeNowCost.
@@ -373,6 +412,7 @@ func (c *Controller) Decide(
 							slog.Bool("isAlreadyChargingGrid", isAlreadyChargingGrid),
 							slog.Bool("isCheapestWindow", isCheapestWindow),
 							slog.Bool("isAlreadyChargingSamePrice", isAlreadyChargingSamePrice),
+							slog.Float64("predictedSolarKWH", slot.PredictedSolarKWH),
 						)
 					}
 				} else {
@@ -400,6 +440,7 @@ func (c *Controller) Decide(
 						slog.Bool("isCheapestWindow", isCheapestWindow),
 						slog.Bool("isAlreadyChargingSamePrice", isAlreadyChargingSamePrice),
 						slog.Bool("isSignificantlyCheaperNow", isSignificantlyCheaperNow),
+						slog.Float64("predictedSolarKWH", slot.PredictedSolarKWH),
 					)
 					break
 				}
@@ -435,6 +476,7 @@ func (c *Controller) Decide(
 						slog.Bool("isAlreadyChargingGrid", isAlreadyChargingGrid),
 						slog.Bool("isCheapestWindow", isCheapestWindow),
 						slog.Bool("isAlreadyChargingSamePrice", isAlreadyChargingSamePrice),
+						slog.Float64("predictedSolarKWH", slot.PredictedSolarKWH),
 					)
 				}
 			}
@@ -644,6 +686,7 @@ func (c *Controller) Decide(
 				slog.Float64("gridChargeNowCost", gridChargeNowCost),
 				slog.Float64("deficit", deficitAmount),
 				slog.Int("chargeDurationHours", chargeDurationHours),
+				slog.Float64("predictedSolarKWH", predictedSolarAtDeficitKWH),
 			)
 			return decision(types.BatteryModeStandby, types.ActionReasonDeficitSaveForPeak, standbyReason, &maxFutureGridChargePrice), nil
 		}
@@ -658,6 +701,7 @@ func (c *Controller) Decide(
 			slog.Float64("gridChargeNowCost", gridChargeNowCost),
 			slog.Float64("deficit", deficitAmount),
 			slog.Int("chargeDurationHours", chargeDurationHours),
+			slog.Float64("predictedSolarKWH", predictedSolarAtDeficitKWH),
 		)
 		return decision(types.BatteryModeLoad, types.ActionReasonArbitrageSave, "Deficit predicted but Current Price is Peak.", nil), nil
 	}
