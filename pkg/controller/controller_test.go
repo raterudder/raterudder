@@ -2057,4 +2057,171 @@ func TestDecide(t *testing.T) {
 		assert.Equal(t, types.ActionReasonSufficientBatteryTillCharge, decision.Action.Reason)
 		assert.Contains(t, decision.Action.Description, "Sufficient battery to reach planned charge time")
 	})
+
+	t.Run("Deficit At Equal to Planned Charge Time -> Load (Discharge)", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.105}
+
+		futurePrices := []types.Price{}
+		for i := 1; i <= 24; i++ {
+			price := 0.105
+			tStart := now.Add(time.Duration(i) * time.Hour)
+			// Cheap 3 hours from now
+			if i == 3 {
+				price = 0.055
+			}
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       tStart,
+				TSEnd:         tStart.Add(time.Hour),
+				DollarsPerKWH: price,
+			})
+		}
+
+		// Capacity = 15.0 kWh, Min SOC = 20.0% (3.0 kWh reserve).
+		// We want to run out in exactly 3 hours with 2.0 kW load.
+		// Usable energy needed = 3 * 2.0 = 6.0 kWh.
+		// Total energy needed = 6.0 + 3.0 = 9.0 kWh.
+		// SOC = 9.0 / 15.0 = 60.0%.
+		status := types.SystemStatus{
+			Timestamp:             now,
+			BatterySOC:            60.0,
+			BatteryCapacityKWH:    15.0,
+			MaxBatteryChargeKW:    8.0,
+			MaxBatteryDischargeKW: 10.0,
+			HomeKW:                2.0,
+			BatteryAboveMinSOC:    true,
+		}
+
+		customHistory := []types.EnergyStats{}
+		ts := now.Add(-24 * time.Hour)
+		for i := 0; i < 48; i++ {
+			customHistory = append(customHistory, types.EnergyStats{
+				TSHourStart: ts,
+				HomeKWH:     2.0,
+			})
+			ts = ts.Add(1 * time.Hour)
+		}
+
+		settings := baseSettings
+		settings.MinBatterySOC = 20.0
+		settings.MinDeficitPriceDifferenceDollarsPerKWH = 0.02
+		settings.GridChargeBatteries = true
+		settings.GridExportSolar = true
+
+		decision, err := c.Decide(ctx, status, currentPrice, futurePrices, customHistory, nil, settings)
+		require.NoError(t, err)
+
+		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonSufficientBatteryTillCharge, decision.Action.Reason)
+		assert.Contains(t, decision.Action.Description, "Sufficient battery to reach planned charge time")
+	})
+
+	t.Run("Arbitrage Delay - Delay Charge", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.12}
+
+		futurePrices := []types.Price{}
+		for i := 1; i <= 24; i++ {
+			price := 0.12
+			if i == 1 {
+				price = 0.06 // Cheapest future slot
+			} else if i == 5 {
+				price = 0.30 // Peak export slot
+			}
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: price,
+			})
+		}
+
+		status := types.SystemStatus{
+			Timestamp:             now,
+			BatterySOC:            50.0,
+			BatteryCapacityKWH:    10.0,
+			MaxBatteryChargeKW:    5.0,
+			MaxBatteryDischargeKW: 5.0,
+			HomeKW:                0.0, // No load so no deficit
+			BatteryAboveMinSOC:    true,
+		}
+
+		// Empty history (no load, no solar)
+		customHistory := []types.EnergyStats{}
+		ts := now.Add(-24 * time.Hour)
+		for i := 0; i < 48; i++ {
+			customHistory = append(customHistory, types.EnergyStats{
+				TSHourStart: ts,
+				HomeKWH:     0.0,
+			})
+			ts = ts.Add(1 * time.Hour)
+		}
+
+		settings := baseSettings
+		settings.MinBatterySOC = 20.0
+		settings.MinDeficitPriceDifferenceDollarsPerKWH = 0.02
+		settings.GridChargeBatteries = true
+		settings.GridExportSolar = true
+
+		decision, err := c.Decide(ctx, status, currentPrice, futurePrices, customHistory, nil, settings)
+		require.NoError(t, err)
+
+		// It should delay charging (not charge now) because Hour 1 is cheaper than now.
+		// Since there is no deficit, it should default to Load (use battery/normal).
+		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonSufficientBatteryTillCharge, decision.Action.Reason)
+
+		// plannedChargeTime should be set to Hour 1
+		expectedPlannedTime := now.Add(1 * time.Hour)
+		if assert.NotNil(t, decision.Action.FuturePrice) {
+			assert.Equal(t, expectedPlannedTime.Format(time.Kitchen), decision.Action.FuturePrice.TSStart.In(now.Location()).Format(time.Kitchen))
+		}
+	})
+
+	t.Run("Arbitrage Delay - Charge Now", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.06} // Already at cheapest rate
+
+		futurePrices := []types.Price{}
+		for i := 1; i <= 24; i++ {
+			price := 0.12
+			if i == 5 {
+				price = 0.30 // Peak export slot
+			}
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: price,
+			})
+		}
+
+		status := types.SystemStatus{
+			Timestamp:             now,
+			BatterySOC:            50.0,
+			BatteryCapacityKWH:    10.0,
+			MaxBatteryChargeKW:    5.0,
+			MaxBatteryDischargeKW: 5.0,
+			HomeKW:                0.0,
+			BatteryAboveMinSOC:    true,
+		}
+
+		customHistory := []types.EnergyStats{}
+		ts := now.Add(-24 * time.Hour)
+		for i := 0; i < 48; i++ {
+			customHistory = append(customHistory, types.EnergyStats{
+				TSHourStart: ts,
+				HomeKWH:     0.0,
+			})
+			ts = ts.Add(1 * time.Hour)
+		}
+
+		settings := baseSettings
+		settings.MinBatterySOC = 20.0
+		settings.MinDeficitPriceDifferenceDollarsPerKWH = 0.02
+		settings.GridChargeBatteries = true
+		settings.GridExportSolar = true
+
+		decision, err := c.Decide(ctx, status, currentPrice, futurePrices, customHistory, nil, settings)
+		require.NoError(t, err)
+
+		// It should charge immediately since current price is already the cheapest available before peak
+		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonArbitrageChargeExport, decision.Action.Reason)
+	})
 }
