@@ -62,4 +62,10 @@ describe('DateSelector', () => {
         fireEvent.keyDown(window, { key: 'ArrowRight' });
         expect(onDateChange).not.toHaveBeenCalledWith(1);
     });
+
+    it('has proper accessibility attributes', () => {
+        render(<DateSelector {...defaultProps} />);
+        expect(screen.getByRole('group', { name: 'Date navigation' })).toBeInTheDocument();
+        expect(screen.getByText(/Friday/i)).toHaveAttribute('aria-live', 'polite');
+    });
 });
