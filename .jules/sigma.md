@@ -17,3 +17,7 @@
 ## 2026-04-24 - Go package compilation error from scratchpad files
 **Learning:** Creating a test file with a mismatched package name (like `package test` in a directory full of `package main` or `package server`) will instantly cause a "found multiple packages in the same directory" compilation error in Go, preventing test execution.
 **Action:** When creating new Go files, even if they are temporary or just used as a scratchpad, always match the package declaration of the existing files in that directory, or just delete the file immediately when done.
+
+## 2024-05-28 - Avoid global find-and-replace for context matchers
+**Learning:** When replacing `mock.Anything` with a stricter context matcher (`mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil })`) in Go tests, global replacements or overly broad regular expressions can inadvertently modify `mock.Anything` usages intended for non-context parameters (like strings or error returns), causing type mismatch panics in the test suite.
+**Action:** Use targeted, explicitly validated string replacements (e.g., via a Python script calling `content.replace('mockW.On("Location", mock.Anything', '...')`) that have been pre-confirmed via `grep` to only modify the intended context arguments.

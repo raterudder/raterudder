@@ -186,7 +186,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		essMap := ess.NewMap()
 		mockES := &mockESS{}
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
-		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockES.On("Authenticate", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, mock.Anything).Return(types.Credentials{}, false, nil)
 		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 		essMap.SetSystem("site1", mockES)
 
@@ -277,7 +277,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		// Test that authentication failure correctly updates ConsecutiveFailures and LastAttempt
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
-		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, fmt.Errorf("auth failed")).Once()
+		mockES.On("Authenticate", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, mock.Anything).Return(types.Credentials{}, false, fmt.Errorf("auth failed")).Once()
 
 		var savedSettings types.Settings
 		// Validate that the storage saves the updated auth status
@@ -494,7 +494,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 			return s.ESS == "mock"
 		})).Return(nil)
 		// Expect Authenticate to be called with the provided credentials
-		mockES.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+		mockES.On("Authenticate", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, mock.MatchedBy(func(c types.Credentials) bool {
 			return c.Mock != nil && c.Mock.Strategy == "foo"
 		})).Return(types.Credentials{
 			Mock: &types.MockCredentials{Strategy: "foo"},
@@ -569,7 +569,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		w := httptest.NewRecorder()
 
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
-		mockES.On("Authenticate", mock.Anything, types.Credentials{}).Return(types.Credentials{}, false, ess.ErrCredentialsMissing)
+		mockES.On("Authenticate", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, types.Credentials{}).Return(types.Credentials{}, false, ess.ErrCredentialsMissing)
 
 		// Expect SetSettings to be called to update auth status after failure
 		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
@@ -705,7 +705,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 			PostalCode:  "90210",
 			CountryCode: "US",
 		}
-		mockW.On("Location", mock.Anything, mock.Anything, mock.Anything).Return(location, nil)
+		mockW.On("Location", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, mock.Anything, mock.Anything).Return(location, nil)
 		weather := []types.Weather{
 			{
 				TSDayStart:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
@@ -718,7 +718,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 				},
 			},
 		}
-		mockW.On("Forecast", mock.Anything, location, mock.Anything, mock.Anything).Return(weather, nil)
+		mockW.On("Forecast", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, location, mock.Anything, mock.Anything).Return(weather, nil)
 
 		mockS.On("GetLatestWeatherTime", mock.Anything, types.SiteIDNone).Return(time.Time{}, time.Time{}, 0, nil)
 		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
@@ -827,7 +827,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 			Latitude:    41.8818,
 			Longitude:   -87.6231,
 		}
-		mockW.On("Location", mock.Anything, "US", "60601").Return(newLoc, nil).Once()
+		mockW.On("Location", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, "US", "60601").Return(newLoc, nil).Once()
 		weather := []types.Weather{
 			{
 				TSDayStart:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
@@ -842,7 +842,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}
 		newLoc.SolarAzimuth = 270
 		newLoc.SolarTilt = 15
-		mockW.On("Forecast", mock.Anything, newLoc, mock.Anything, mock.Anything).Return(weather, nil)
+		mockW.On("Forecast", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, newLoc, mock.Anything, mock.Anything).Return(weather, nil)
 		mockS.On("GetLatestWeatherTime", mock.Anything, mock.Anything).Return(time.Time{}, time.Time{}, 0, nil)
 		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
 		mockS.On("UpsertWeather", mock.Anything, types.SiteIDNone, weather, types.CurrentWeatherVersion).Return(nil)
@@ -920,7 +920,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockES.On("ApplySettings", mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
 			return s.ESS == "mock"
 		})).Return(nil)
-		mockES.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+		mockES.On("Authenticate", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, mock.MatchedBy(func(c types.Credentials) bool {
 			return c.Mock.Strategy == "foo"
 		})).Return(types.Credentials{}, true, nil).Once()
 
@@ -1073,7 +1073,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockS := &mockStorage{}
 		mockES := &mockESS{}
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
-		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, true, nil)
+		mockES.On("Authenticate", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, mock.Anything).Return(types.Credentials{}, true, nil)
 
 		essMap := ess.NewMap()
 		essMap.SetSystem(types.SiteIDNone, mockES)
@@ -1127,7 +1127,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockES.On("ApplySettings", mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
 			return s.ESS == "mock"
 		})).Return(nil)
-		mockES.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+		mockES.On("Authenticate", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }) /* Ensure a non-nil valid context is passed */, mock.MatchedBy(func(c types.Credentials) bool {
 			return c.Mock.Strategy == "foo"
 		})).Return(types.Credentials{}, true, nil)
 
