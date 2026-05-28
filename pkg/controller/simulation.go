@@ -23,9 +23,11 @@ type SimHour struct {
 	BatteryKWH              float64     `json:"batteryKWH"`
 	BatteryCapacityKWH      float64     `json:"batteryCapacityKWH"`
 	BatteryReserveKWH       float64     `json:"batteryReserveKWH"`
+	StandbyBatteryKWH       float64     `json:"standbyBatteryKWH"`
 	TotalBatteryDeficitKWH  float64     `json:"totalBatteryDeficitKWH"`
 	TodaySolarTrend         float64     `json:"todaySolarTrend"`
 	HitCapacityAt           time.Time   `json:"hitCapacityAt"`
+	HitStandbyCapacityAt    time.Time   `json:"hitStandbyCapacityAt"`
 	HitSolarCapacityAt      time.Time   `json:"hitSolarCapacityAt"`
 	HitDeficitAt            time.Time   `json:"hitDeficitAt"`
 	Price                   types.Price `json:"price"`
@@ -47,6 +49,8 @@ func (c *Controller) SimulateState(
 	currentSOC := currentStatus.BatterySOC
 	// simulate battery energy over the 24 hours
 	simEnergyKWH := capacityKWH * (currentSOC / 100.0)
+	standbyEnergyKWH := simEnergyKWH
+	var simStandbyCapacityAt time.Time
 	var deficitKWH float64
 
 	// Build Energy Model
@@ -265,6 +269,28 @@ func (c *Controller) SimulateState(
 			}
 		}
 
+		// Simulate standby capacity progression: standby holds battery energy but still charges from surplus solar.
+		clampedStandbyNetKWH := clampedNetKWH
+		if clampedStandbyNetKWH > 0 {
+			clampedStandbyNetKWH = 0.0 // standby doesn't discharge to cover net load
+		}
+		newStandbyEnergy := standbyEnergyKWH - (clampedStandbyNetKWH * simEnergyApplyRatio)
+		capacityThresholdKWH := capacityKWH * 0.98
+		if (clampedStandbyNetKWH < 0 && newStandbyEnergy >= capacityThresholdKWH) || newStandbyEnergy > capacityKWH {
+			if simStandbyCapacityAt.IsZero() {
+				remainingBeforeCapacity := capacityThresholdKWH - standbyEnergyKWH
+				if remainingBeforeCapacity > 0 {
+					fraction := max(remainingBeforeCapacity/-clampedStandbyNetKWH, 0)
+					simStandbyCapacityAt = simTime.Add(time.Duration(fraction * float64(time.Hour)))
+				} else {
+					simStandbyCapacityAt = simTime
+				}
+			}
+			standbyEnergyKWH = capacityKWH
+		} else {
+			standbyEnergyKWH = newStandbyEnergy
+		}
+
 		simData = append(simData, SimHour{
 			TS:                      simTime,
 			Hour:                    h,
@@ -277,9 +303,11 @@ func (c *Controller) SimulateState(
 			BatteryKWH:              simEnergyKWH,
 			BatteryCapacityKWH:      capacityKWH,
 			BatteryReserveKWH:       minKWH,
+			StandbyBatteryKWH:       standbyEnergyKWH,
 			TotalBatteryDeficitKWH:  deficitKWH,
 			TodaySolarTrend:         currentSolarTrend,
 			HitCapacityAt:           simCapacityAt,
+			HitStandbyCapacityAt:    simStandbyCapacityAt,
 			HitSolarCapacityAt:      simSolarCapacityAt,
 			HitDeficitAt:            simDeficitAt,
 			Price:                   price,

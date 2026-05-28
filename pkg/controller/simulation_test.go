@@ -920,6 +920,60 @@ func TestSimulateState(t *testing.T) {
 		}
 	})
 
+	t.Run("HitStandbyCapacityAt", func(t *testing.T) {
+		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+		capacityKWH := 10.0
+		// Start at 5.0 kWh (SOC 50).
+		// Hour 12: Load is 2.0 kWh, Solar is 0.0 kWh.
+		// Hour 13: Load is 1.0 kWh, Solar is 11.0 kWh.
+		currentStatus := types.SystemStatus{
+			BatteryCapacityKWH:    capacityKWH,
+			BatterySOC:            50.0,
+			Timestamp:             now,
+			MaxBatteryChargeKW:    10.0,
+			MaxBatteryDischargeKW: 5.0,
+		}
+
+		history := []types.EnergyStats{}
+		for i := 1; i <= 3; i++ {
+			pastDay := now.Add(time.Duration(-24*i) * time.Hour).Truncate(time.Hour)
+			history = append(history, types.EnergyStats{
+				TSHourStart: time.Date(pastDay.Year(), pastDay.Month(), pastDay.Day(), 12, 0, 0, 0, time.UTC),
+				SolarKWH:    0.0,
+				HomeKWH:     2.0,
+			})
+			history = append(history, types.EnergyStats{
+				TSHourStart: time.Date(pastDay.Year(), pastDay.Month(), pastDay.Day(), 13, 0, 0, 0, time.UTC),
+				SolarKWH:    11.0,
+				HomeKWH:     1.0,
+			})
+		}
+
+		settings := types.Settings{
+			GridExportSolar: true,
+		}
+
+		simData := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
+
+		if assert.NotEmpty(t, simData) && assert.Len(t, simData, 24) {
+			// Normal battery discharges during hour 12: 5.0 - 2.0 = 3.0 kWh.
+			// Charges during hour 13 starting from 3.0 kWh.
+			// Target is 9.8 kWh. Net charge is 10.0 kW.
+			// Time to hit capacity: 1 hour + (9.8 - 3.0)/10.0 hr = 1 hr + 0.68 hr = 1 hr 40 min 48 sec.
+			assert.False(t, simData[1].HitCapacityAt.IsZero())
+			expectedNormal := now.Add(1*time.Hour + 40*time.Minute + 48*time.Second)
+			assert.Equal(t, expectedNormal, simData[1].HitCapacityAt)
+
+			// Standby battery does not discharge during hour 12, so it stays at 5.0 kWh.
+			// Charges during hour 13 starting from 5.0 kWh.
+			// Target is 9.8 kWh. Net charge is 10.0 kW.
+			// Time to hit standby capacity: 1 hour + (9.8 - 5.0)/10.0 hr = 1 hr + 0.48 hr = 1 hr 28 min 48 sec.
+			assert.False(t, simData[1].HitStandbyCapacityAt.IsZero())
+			expectedStandby := now.Add(1*time.Hour + 28*time.Minute + 48*time.Second)
+			assert.Equal(t, expectedStandby, simData[1].HitStandbyCapacityAt)
+		}
+	})
+
 	t.Run("FirstHourProportionate", func(t *testing.T) {
 		// Scenario:
 		// current time: 12:30 (30 minutes into the hour).
