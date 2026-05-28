@@ -269,6 +269,44 @@ func TestUtilityPeriodContains(t *testing.T) {
 		contained, _ = p.Contains(t2)
 		assert.False(t, contained, "Hour 3 is outside range [2, 3)")
 	})
+
+	t.Run("SpecificDates", func(t *testing.T) {
+		p := &UtilityPeriod{
+			SpecificDates: []string{"2026-01-01", "2026-12-25"},
+		}
+
+		// Matching date
+		contained, err := p.Contains(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+		require.NoError(t, err)
+		assert.True(t, contained)
+
+		// Another matching date
+		contained, err = p.Contains(time.Date(2026, 12, 25, 8, 0, 0, 0, time.UTC))
+		require.NoError(t, err)
+		assert.True(t, contained)
+
+		// Non-matching date
+		contained, err = p.Contains(time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
+		require.NoError(t, err)
+		assert.False(t, contained)
+	})
+
+	t.Run("SpecificDatesNot", func(t *testing.T) {
+		p := &UtilityPeriod{
+			SpecificDates:    []string{"2026-01-01", "2026-12-25"},
+			SpecificDatesNot: true,
+		}
+
+		// Matching date (should be excluded)
+		contained, err := p.Contains(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+		require.NoError(t, err)
+		assert.False(t, contained)
+
+		// Non-matching date (should be included)
+		contained, err = p.Contains(time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
+		require.NoError(t, err)
+		assert.True(t, contained)
+	})
 }
 
 func TestPriceContains(t *testing.T) {

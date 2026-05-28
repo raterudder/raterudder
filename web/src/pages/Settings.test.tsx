@@ -574,4 +574,122 @@ describe('App & Settings', () => {
             expect(screen.getByText('The Password field is required.')).toBeInTheDocument();
         });
     });
+
+    it('hides options that have hidden true', async () => {
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            utilityProvider: 'test_provider',
+            utilityRate: 'test_rate',
+            utilityRateOptions: {}
+        });
+        (api.fetchUtilities as any).mockResolvedValue([
+            {
+                id: 'test_provider',
+                name: 'Test Provider',
+                rates: [
+                    {
+                        id: 'test_rate',
+                        name: 'Test Rate',
+                        options: [
+                            {
+                                field: 'visibleOption',
+                                name: 'Visible Option',
+                                type: 'switch',
+                                default: true
+                            },
+                            {
+                                field: 'hiddenOption',
+                                name: 'Hidden Option',
+                                type: 'switch',
+                                default: true,
+                                hidden: true
+                            }
+                        ]
+                    }
+                ]
+            }
+        ] as any);
+
+        await navigateToSettings();
+
+        // Check that the configured rates view shows up
+        await screen.findByText('Configured');
+        fireEvent.click(screen.getByRole('button', { name: 'Change Utility Service' }));
+
+        // Check that visible option is rendered but hidden option is not
+        await waitFor(() => expect(screen.getByRole('switch', { name: /Visible Option/i })).toBeInTheDocument());
+        expect(screen.queryByRole('switch', { name: /Hidden Option/i })).not.toBeInTheDocument();
+    });
+
+    it('can select SCE utility and net metering options', async () => {
+        const user = userEvent.setup();
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            utilityProvider: '',
+            utilityRate: '',
+            utilityRateOptions: {}
+        });
+        (api.fetchUtilities as any).mockResolvedValue([
+            {
+                id: 'sce',
+                name: 'Southern California Edison',
+                rates: [
+                    {
+                        id: 'sce_tou_d_prime',
+                        name: 'TOU-D-PRIME',
+                        options: [
+                            {
+                                field: 'netMeteringScheme',
+                                name: 'Net Metering / Export Scheme',
+                                type: 'select',
+                                choices: [
+                                    { value: 'nem1', name: 'NEM 1.0 (Full Retail 1:1 Credits)' },
+                                    { value: 'nem2', name: 'NEM 2.0 (Retail Credits minus NBCs)' },
+                                    { value: 'sbp', name: 'Solar Billing Plan (NEM 3.0)' }
+                                ],
+                                default: 'sbp'
+                            }
+                        ]
+                    }
+                ]
+            }
+        ] as any);
+
+        await navigateToSettings();
+
+        // Select Service (Provider)
+        const serviceSelect = await screen.findByLabelText(/Service/i);
+        await user.click(serviceSelect);
+        const sceOption = await screen.findByRole('option', { name: 'Southern California Edison' });
+        await user.click(sceOption);
+
+        // Rate/Plan should be auto-selected since SCE only has one in this mock
+        await screen.findByText(/TOU-D-PRIME/i);
+
+        // Verify select option appears for export scheme
+        const schemeSelect = await screen.findByLabelText(/Net Metering \/ Export Scheme/i);
+        expect(schemeSelect).toBeInTheDocument();
+        expect(screen.getByText('Solar Billing Plan (NEM 3.0)')).toBeInTheDocument();
+
+        // Change select option to NEM 2.0
+        await user.click(schemeSelect);
+        const nem2Option = await screen.findByRole('option', { name: 'NEM 2.0 (Retail Credits minus NBCs)' });
+        await user.click(nem2Option);
+
+        // Save
+        (updateSettings as any).mockResolvedValue(undefined);
+        const saveBtn = screen.getByText('Save Settings');
+        fireEvent.click(saveBtn);
+
+        await waitFor(() => {
+            expect(screen.getByText('Settings saved successfully')).toBeInTheDocument();
+            expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+                utilityProvider: 'sce',
+                utilityRate: 'sce_tou_d_prime',
+                utilityRateOptions: expect.objectContaining({
+                    netMeteringScheme: 'nem2'
+                })
+            }), expect.any(String), undefined);
+        });
+    });
 });

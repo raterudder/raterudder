@@ -350,11 +350,13 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                         {(() => {
                             const provider = utilities.find(u => u.id === settings.utilityProvider);
                             const rate = (provider?.rates || []).find(r => r.id === settings.utilityRate);
-                            if (!rate || !rate.options || rate.options.length === 0) return null;
+                            if (!rate || !rate.options) return null;
+                            const visibleOptions = rate.options.filter((opt: UtilityRateOption) => !opt.hidden);
+                            if (visibleOptions.length === 0) return null;
 
                             return (
                                 <div className="sub-section">
-                                    {rate.options.map((opt: UtilityRateOption) => (
+                                    {visibleOptions.map((opt: UtilityRateOption) => (
                                         <Field.Root key={opt.field} className={`form-group ${opt.type === 'switch' ? 'switch-group' : ''}`}>
                                             {opt.type === 'select' && (
                                                 <>

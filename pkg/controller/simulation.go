@@ -144,7 +144,7 @@ func (c *Controller) SimulateState(
 
 		if !settings.GridExportSolar {
 			solarOppCost = 0
-		} else if settings.UtilityRateOptions.NetMeteringCredits {
+		} else if settings.UtilityRateOptions.NetMeteringCredits || settings.UtilityRateOptions.NetMeteringScheme == "net" {
 			switch settings.SolarNetMeteringCreditsValue {
 			case "highest":
 				solarOppCost = maxFutureGridChargeCost

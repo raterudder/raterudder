@@ -38,6 +38,7 @@ type UtilityRateOption struct {
 	Description string                `json:"description,omitempty"`
 	Choices     []UtilityOptionChoice `json:"choices,omitempty"` // Populated if Type is UtilityOptionTypeSelect
 	Default     any                   `json:"default,omitempty"`
+	Hidden      bool                  `json:"hidden,omitempty"`
 }
 
 // UtilityOptionChoice represents a single choice in a select-type utility option.
@@ -89,6 +90,8 @@ type UtilityRateOptions struct {
 	RateClass            string `json:"rateClass"`
 	VariableDeliveryRate bool   `json:"variableDeliveryRate"`
 	NetMeteringCredits   bool   `json:"netMeteringCredits"`
+	NetMeteringScheme    string `json:"netMeteringScheme"`
+	PeakPeriodOption     string `json:"peakPeriodOption"`
 }
 
 type UtilityHourPeriod struct {
@@ -130,6 +133,12 @@ type UtilityPeriod struct {
 
 	// HoursNot means it applies to all hours except the hours in Hours.
 	HoursNot bool `json:"hoursNot,omitempty"`
+
+	// SpecificDates is the list of specific dates (formatted as YYYY-MM-DD) that this period applies to.
+	SpecificDates []string `json:"specificDates,omitempty"`
+
+	// SpecificDatesNot means it applies to all dates except the dates in SpecificDates.
+	SpecificDatesNot bool `json:"specificDatesNot,omitempty"`
 }
 
 // Contains checks if a time is within the period.
@@ -149,6 +158,20 @@ func (p *UtilityPeriod) Contains(t time.Time) (bool, error) {
 	// period.End is exclusive: skip if the price starts at or after End
 	if !p.End.IsZero() && !t.Before(p.End) {
 		return false, nil
+	}
+
+	if len(p.SpecificDates) > 0 {
+		dateStr := t.Format("2006-01-02")
+		containsDate := slices.Contains(p.SpecificDates, dateStr)
+		if p.SpecificDatesNot {
+			if containsDate {
+				return false, nil
+			}
+		} else {
+			if !containsDate {
+				return false, nil
+			}
+		}
 	}
 
 	if len(p.Hours) > 0 {

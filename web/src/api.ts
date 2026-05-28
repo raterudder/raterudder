@@ -178,6 +178,7 @@ export interface UtilityRateOption {
     description?: string;
     choices?: UtilityOptionChoice[];
     default?: any;
+    hidden?: boolean;
 }
 
 export interface UtilityProviderInfo {

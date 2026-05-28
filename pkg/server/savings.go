@@ -139,7 +139,7 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 	}
 
 	fetchEnd := end
-	if settings.UtilityRateOptions.NetMeteringCredits {
+	if settings.UtilityRateOptions.NetMeteringCredits || settings.UtilityRateOptions.NetMeteringScheme == "net" {
 		// We look ahead another 24 hours to support the 24h window for net metering valuation.
 		fetchEnd = end.AddDate(0, 0, 1)
 	}
@@ -151,7 +151,7 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 	}
 
 	// Only fetch future prices if net metering is enabled and we are looking at recent data
-	if settings.UtilityRateOptions.NetMeteringCredits && fetchEnd.After(time.Now()) {
+	if (settings.UtilityRateOptions.NetMeteringCredits || settings.UtilityRateOptions.NetMeteringScheme == "net") && fetchEnd.After(time.Now()) {
 		needFuture := true
 		for _, p := range prices {
 			// Check if we already have a price covering the end of our required window
@@ -227,7 +227,7 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 
 		if !settings.GridExportSolar {
 			gridExportPrice = 0
-		} else if settings.UtilityRateOptions.NetMeteringCredits {
+		} else if settings.UtilityRateOptions.NetMeteringCredits || settings.UtilityRateOptions.NetMeteringScheme == "net" {
 			// For net metering, we value the export based on the min/max price of the day (24h window)
 			maxPrice := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
 			minPrice := maxPrice
