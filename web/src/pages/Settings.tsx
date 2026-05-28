@@ -778,7 +778,16 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                 <Select.Trigger className="select-trigger" aria-label="Solar Direction">
                                     <Select.Value placeholder="Select direction...">
                                         {settings.solarTilt && settings.solarTilt > 0 ? (
-                                            ({ "0": "North", "90": "East", "180": "South", "270": "West" } as Record<string, string>)[settings.solarAzimuth?.toString() || ""]
+                                            ({
+                                                "0": "North",
+                                                "45": "Northeast",
+                                                "90": "East",
+                                                "135": "Southeast",
+                                                "180": "South",
+                                                "225": "Southwest",
+                                                "270": "West",
+                                                "315": "Northwest"
+                                            } as Record<string, string>)[settings.solarAzimuth?.toString() || ""]
                                         ) : null}
                                     </Select.Value>
                                     <Select.Icon className="select-icon">
@@ -794,14 +803,26 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                             <Select.Item className="select-item" value="0">
                                                 <Select.ItemText>North</Select.ItemText>
                                             </Select.Item>
+                                            <Select.Item className="select-item" value="45">
+                                                <Select.ItemText>Northeast</Select.ItemText>
+                                            </Select.Item>
                                             <Select.Item className="select-item" value="90">
                                                 <Select.ItemText>East</Select.ItemText>
+                                            </Select.Item>
+                                            <Select.Item className="select-item" value="135">
+                                                <Select.ItemText>Southeast</Select.ItemText>
                                             </Select.Item>
                                             <Select.Item className="select-item" value="180">
                                                 <Select.ItemText>South</Select.ItemText>
                                             </Select.Item>
+                                            <Select.Item className="select-item" value="225">
+                                                <Select.ItemText>Southwest</Select.ItemText>
+                                            </Select.Item>
                                             <Select.Item className="select-item" value="270">
                                                 <Select.ItemText>West</Select.ItemText>
+                                            </Select.Item>
+                                            <Select.Item className="select-item" value="315">
+                                                <Select.ItemText>Northwest</Select.ItemText>
                                             </Select.Item>
                                         </Select.List>
                                     </Select.Popup>
