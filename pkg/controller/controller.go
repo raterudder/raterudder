@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
 	"time"
 
@@ -79,6 +80,7 @@ func (c *Controller) Decide(
 
 	var hitDeficitAt time.Time
 	var hitCapacityAt time.Time
+	var hitStandbyCapacityAt time.Time
 	var hitSolarCapacityAt time.Time
 	// Helper to build final action
 	decision := func(batteryMode types.BatteryMode, reason types.ActionReason, modeReason string, futurePrice *types.Price) Decision {
@@ -171,6 +173,18 @@ func (c *Controller) Decide(
 				slog.Float64("batteryKWH", slot.BatteryKWH),
 				slog.Float64("capacityKWH", capacityKWH),
 				slog.Int("simHour", slot.Hour),
+				slog.Time("hitCapacityAt", hitCapacityAt),
+			)
+		}
+		if !slot.HitStandbyCapacityAt.IsZero() && hitStandbyCapacityAt.IsZero() {
+			hitStandbyCapacityAt = slot.HitStandbyCapacityAt
+			log.Ctx(ctx).DebugContext(
+				ctx,
+				"simulated standby energy hit capacity",
+				slog.Float64("standbyBatteryKWH", slot.StandbyBatteryKWH),
+				slog.Float64("capacityKWH", capacityKWH),
+				slog.Int("simHour", slot.Hour),
+				slog.Time("hitStandbyCapacityAt", hitStandbyCapacityAt),
 			)
 		}
 		if !slot.HitSolarCapacityAt.IsZero() && hitSolarCapacityAt.IsZero() {
@@ -181,6 +195,7 @@ func (c *Controller) Decide(
 				slog.Float64("batteryKWH", slot.BatteryKWH),
 				slog.Float64("capacityKWH", capacityKWH),
 				slog.Int("simHour", slot.Hour),
+				slog.Time("hitSolarCapacityAt", hitSolarCapacityAt),
 			)
 		}
 	}
@@ -213,9 +228,9 @@ func (c *Controller) Decide(
 	var plannedChargeTime time.Time
 	var plannedChargePrice types.Price
 	var plannedChargeCost float64
-	var highestExportValue float64
-	var highestExportPrice types.Price
-	var highestExportAt time.Time
+	var soonestExportValue float64
+	var soonestExportPrice types.Price
+	var soonestExportAt time.Time
 	minEnergy := -1.0
 	maxEnergy := -1.0
 	var deficitAmount float64
@@ -286,11 +301,11 @@ func (c *Controller) Decide(
 		// to the grid. If we have a deficit, it is handled by the deficit logic.
 		// "Save" arbitrage (avoiding grid import) is redundant and causes unnecessary
 		// charging when there is no deficit.
-		if slot.NetLoadSolarKWH <= 0 {
-			if slot.SolarOppDollarsPerKWH > highestExportValue {
-				highestExportValue = slot.SolarOppDollarsPerKWH
-				highestExportAt = slot.TS
-				highestExportPrice = slot.Price
+		if slot.NetLoadSolarKWH <= -0.05 {
+			if soonestExportValue == 0 && slot.SolarOppDollarsPerKWH-gridChargeNowCost > settings.MinArbitrageDifferenceDollarsPerKWH {
+				soonestExportValue = slot.SolarOppDollarsPerKWH
+				soonestExportAt = slot.TS
+				soonestExportPrice = slot.Price
 			}
 		}
 
@@ -450,27 +465,72 @@ func (c *Controller) Decide(
 	}
 
 	// at this point it's opportunity cost because we either have enough energy
-	// or it'll be cheaper later to charge
-	// make sure we can actually export something otherwise there's no reason to
-	// arbitrage but we can't check export battery since we don't support that yet
-	// if we're going to hit capacity there's no reason to try and charge now
-	if !shouldCharge && plannedChargeTime.IsZero() && settings.GridExportSolar && highestExportValue > 0 && (hitCapacityAt.IsZero() || hitCapacityAt.After(highestExportAt)) {
-		// if the value we get later minus our cost to charge now is greater than
-		// the minimum arbitrage difference, we should charge now
-		if highestExportValue-gridChargeNowCost > settings.MinArbitrageDifferenceDollarsPerKWH {
+	// or it'll be cheaper later to charge.
+	// We check for arbitrage export opportunities regardless of when we hit battery capacity,
+	// because even if solar refills the battery later, we still want to hold the existing
+	// energy in standby during cheap rates instead of discharging it prematurely.
+	if !shouldCharge && plannedChargeTime.IsZero() && settings.GridExportSolar && soonestExportValue > 0 {
+		minKWH := capacityKWH * (min(settings.MinBatterySOC+1.0, 100.0) / 100.0)
+		standbyHitCapacityAt, standbyHitDeficitAt := c.simulateStandby(
+			simData,
+			soonestExportValue,
+			settings.MinArbitrageDifferenceDollarsPerKWH,
+			currentEnergyKWH,
+			capacityKWH,
+			minKWH,
+		)
+
+		effectiveExportValue := soonestExportValue
+		if !standbyHitCapacityAt.IsZero() && !standbyHitCapacityAt.After(soonestExportAt) {
+			// If we will hit capacity before the peak export time, holding energy in the battery
+			// forces us to export solar at the capacity hour instead of storing it.
+			// Therefore, the marginal value of holding energy is the solar export price at the capacity hour.
+			var exportValueAtCapacity float64
+			for _, slot := range simData {
+				if slot.TS.Equal(standbyHitCapacityAt) || (slot.TS.Before(standbyHitCapacityAt) && slot.TS.Add(time.Hour).After(standbyHitCapacityAt)) {
+					exportValueAtCapacity = slot.SolarOppDollarsPerKWH
+					break
+				}
+			}
+			effectiveExportValue = exportValueAtCapacity
+		}
+
+		// we hold the battery in standby if the effective value of the export is greater tha
+		// the cost to cover home load today by at least the minimum arbitrage difference.
+		// shifting load to the daytime peak via standby has no round-trip efficiency loss,
+		// so it's profitable even for tiny price differences,
+		// but we still require the min arbitrage difference threshold to avoid
+		// low-value/wear standby holding.
+		if effectiveExportValue-gridChargeNowCost > settings.MinArbitrageDifferenceDollarsPerKWH {
 			chargeDescTemplate := "Arbitrage Opportunity (Export) at %s. Buy@%.3f -> Sell/Save@%.3f."
 			chargeActionReason = types.ActionReasonArbitrageChargeExport
 			holdReason := types.ActionReasonArbitrageHoldExport
 
-			if canChargeArbitrage {
-				// Check if we can delay charging to a future cheap window before highestExportAt
+			headroom := capacityKWH - currentEnergyKWH
+			neededDurationHours := max(1, int((headroom/chargeKW + 0.84)))
+
+			// Check if charging now would cause us to hit capacity before the peak export hour
+			stepEnergyKWH := chargeKW * minChargeDurationHours
+			standbyHitCapacityWithChargeAt, _ := c.simulateStandby(
+				simData,
+				soonestExportValue,
+				settings.MinArbitrageDifferenceDollarsPerKWH,
+				currentEnergyKWH+stepEnergyKWH,
+				capacityKWH,
+				minKWH,
+			)
+			willHitCapacityBeforePeak := !standbyHitCapacityWithChargeAt.IsZero() && !standbyHitCapacityWithChargeAt.After(soonestExportAt)
+
+			// we only charge from the grid if we won't hit capacity before the peak.
+			if canChargeArbitrage && !willHitCapacityBeforePeak {
+				// Check if we can delay charging to a future cheap window before soonestExportAt
 				var simPrevChargeCosts []simPriceSlot
 				futureCheapHours := 0
 				for _, slot := range simData {
 					if slot.TS.Equal(now) {
 						continue
 					}
-					if !slot.TS.Before(highestExportAt) {
+					if !slot.TS.Before(soonestExportAt) {
 						break
 					}
 					simPrevChargeCosts = append(simPrevChargeCosts, simPriceSlot{
@@ -478,16 +538,18 @@ func (c *Controller) Decide(
 						ts:    slot.TS,
 						price: slot.Price,
 					})
+					// We use the smaller MinDeficitPriceDifference here to compare charge-timing costs,
+					// rather than MinArbitrageDifference, because we have already decided cycling the battery
+					// is profitable, and now we are just optimizing charge timing without adding extra cycles.
 					if slot.GridChargeDollarsPerKWH <= gridChargeNowCost+settings.MinDeficitPriceDifferenceDollarsPerKWH {
 						futureCheapHours++
 					}
 				}
 
-				headroom := capacityKWH - currentEnergyKWH
-				neededDurationHours := max(1, int((headroom/chargeKW + 0.84)))
-
 				cheapestTime, cheapestPrice, cheapestCost, cheapestFutureChargeSlot := c.findCheapestPlan(simPrevChargeCosts, neededDurationHours)
 
+				// Compare charging now vs charging later using MinDeficitPriceDifference to choose
+				// the cheapest charge window and avoid over-penalizing delay-charging decisions.
 				isSignificantlyCheaperNow := len(simPrevChargeCosts) > 0 && cheapestFutureChargeSlot.cost-gridChargeNowCost >= settings.MinDeficitPriceDifferenceDollarsPerKWH
 
 				if len(simPrevChargeCosts) > 0 && !isSignificantlyCheaperNow && futureCheapHours > 0 && float64(futureCheapHours)*chargeKW >= headroom {
@@ -501,25 +563,38 @@ func (c *Controller) Decide(
 						slog.Float64("plannedChargeCost", plannedChargeCost),
 						slog.Float64("headroom", headroom),
 						slog.Int("futureCheapHours", futureCheapHours),
+						slog.Time("soonestExportAt", soonestExportAt),
+						slog.Float64("soonestExportValue", soonestExportValue),
+						slog.Time("standbyHitCapacityWithChargeAt", standbyHitCapacityWithChargeAt),
+						slog.Float64("stepEnergyKWH", stepEnergyKWH),
+						slog.Int("neededDurationHours", neededDurationHours),
 					)
 				} else {
 					shouldCharge = true
 					chargeDescription = fmt.Sprintf(
 						chargeDescTemplate,
-						highestExportAt.Format(time.Kitchen),
+						soonestExportAt.Format(time.Kitchen),
 						gridChargeNowCost,
-						highestExportValue,
+						soonestExportValue,
 					)
-					futurePrice = &highestExportPrice
+					futurePrice = &soonestExportPrice
 					log.Ctx(ctx).DebugContext(
 						ctx,
 						"arbitrage opportunity found, charging now",
 						slog.Float64("buyAt", gridChargeNowCost),
-						slog.Float64("sellAt", highestExportValue),
-						slog.Float64("diff", highestExportValue-gridChargeNowCost),
+						slog.Float64("sellAt", soonestExportValue),
+						slog.Float64("diff", soonestExportValue-gridChargeNowCost),
+						slog.Time("soonestExportAt", soonestExportAt),
+						slog.Time("standbyHitCapacityWithChargeAt", standbyHitCapacityWithChargeAt),
+						slog.Float64("stepEnergyKWH", stepEnergyKWH),
+						slog.Float64("headroom", headroom),
+						slog.Int("neededDurationHours", neededDurationHours),
 					)
 				}
-			} else if currentStatus.BatteryAboveMinSOC || currentStatus.ElevatedMinBatterySOC {
+			} else if (currentStatus.BatteryAboveMinSOC || currentStatus.ElevatedMinBatterySOC) && (standbyHitDeficitAt.IsZero() || standbyHitDeficitAt.After(soonestExportAt)) {
+				// We hold the battery in standby if we cannot charge now.
+				// Note that we check standbyHitDeficitAt to prioritize deficit handling if we would run out
+				// of battery before the peak even under the dynamic standby model.
 				var holdState string
 				if currentStatus.BatterySOC >= 98.0 {
 					holdState = "Battery full"
@@ -536,21 +611,26 @@ func (c *Controller) Decide(
 				holdDescription := fmt.Sprintf(
 					"Arbitrage Opportunity (%s) at %s. %s. Hold energy.",
 					holdType,
-					highestExportAt.Format(time.Kitchen),
+					soonestExportAt.Format(time.Kitchen),
 					holdState,
 				)
 				log.Ctx(ctx).DebugContext(
 					ctx,
 					"arbitrage opportunity found but cannot charge, holding",
 					slog.Float64("buyAt", gridChargeNowCost),
-					slog.Float64("sellAt", highestExportValue),
-					slog.Float64("diff", highestExportValue-gridChargeNowCost),
+					slog.Float64("sellAt", soonestExportValue),
+					slog.Float64("diff", soonestExportValue-gridChargeNowCost),
+					slog.Time("soonestExportAt", soonestExportAt),
+					slog.Time("standbyHitCapacityWithChargeAt", standbyHitCapacityWithChargeAt),
+					slog.Float64("stepEnergyKWH", stepEnergyKWH),
+					slog.Float64("headroom", headroom),
+					slog.Int("neededDurationHours", neededDurationHours),
 				)
 				return decision(
 					types.BatteryModeStandby,
 					holdReason,
 					holdDescription,
-					&highestExportPrice,
+					&soonestExportPrice,
 				), nil
 			}
 		}
@@ -758,4 +838,110 @@ func (c *Controller) findCheapestPlan(
 		}
 	}
 	return
+}
+
+// simulateStandby simulates the battery progression under a dynamic standby model.
+// For hours where the price is cheap, we hold the battery in standby (no load discharge, only charge from solar).
+// For hours where the price is expensive, we discharge the battery to cover load.
+// It returns the hitCapacityAt and hitDeficitAt times under this model.
+func (c *Controller) simulateStandby(
+	simData []SimHour,
+	exportPrice float64,
+	minArbitrageDiff float64,
+	currentEnergyKWH float64,
+	capacityKWH float64,
+	minKWH float64,
+) (time.Time, time.Time) {
+	batteryEnergy := currentEnergyKWH
+	var hitCapacityAt time.Time
+	var hitDeficitAt time.Time
+
+	// We default to a 98% capacity threshold to avoid rapid start/stop controller
+	// oscillations when the battery is nearly full, or use the pre-calculated threshold from slot.
+	capacityThresholdKWH := capacityKWH * 0.98
+	if len(simData) > 0 && simData[0].CapacityThresholdKWH > 0 {
+		capacityThresholdKWH = simData[0].CapacityThresholdKWH
+	}
+
+	for _, slot := range simData {
+		// Use the pre-calculated EnergyApplyRatio from simulation (e.g. for fractional first hours).
+		// If it is 0.0 (like in manually constructed test fixtures), default to 1.0 (full hour).
+		simEnergyApplyRatio := slot.EnergyApplyRatio
+		if simEnergyApplyRatio == 0.0 {
+			simEnergyApplyRatio = 1.0
+		}
+
+		clampedNetKWH := slot.ClampedNetLoadSolarKWH
+
+		// We only standby if the simulated hour's price is cheap compared to the target export price.
+		// If it's expensive (grid cost >= exportPrice - minArbitrageDiff), we discharge the battery to cover the load.
+		// We use a tiny epsilon of 1e-9 to prevent floating point precision inaccuracies from affecting comparisons.
+		shouldDischarge := slot.GridChargeDollarsPerKWH >= exportPrice-minArbitrageDiff-1e-9
+
+		var appliedNetKWH float64
+		if shouldDischarge {
+			appliedNetKWH = clampedNetKWH // cover home load (discharging if positive, solar charging if negative)
+		} else {
+			if clampedNetKWH < 0 {
+				appliedNetKWH = clampedNetKWH // standby holds energy but still charges from solar surplus
+			} else {
+				appliedNetKWH = 0.0 // standby holds energy; do not discharge to cover load
+			}
+		}
+
+		// Calculate simulated energy at the end of the slot based on the apply ratio
+		newEnergy := batteryEnergy - (appliedNetKWH * simEnergyApplyRatio)
+
+		// Check if solar charging pushes us above the capacity threshold.
+		// If so, interpolate the exact fraction of the hour when the threshold was crossed.
+		if (appliedNetKWH < 0 && newEnergy >= capacityThresholdKWH) || newEnergy > capacityKWH {
+			if hitCapacityAt.IsZero() {
+				remainingBeforeCapacity := capacityThresholdKWH - batteryEnergy
+				if remainingBeforeCapacity > 0 && appliedNetKWH < 0 {
+					fraction := remainingBeforeCapacity / -appliedNetKWH
+					// Round to nearest nanosecond to avoid off-by-one float-casting issues.
+					hitCapacityAt = slot.TS.Add(time.Duration(math.Round(fraction * float64(time.Hour))))
+				} else {
+					hitCapacityAt = slot.TS
+				}
+			}
+		}
+
+		if appliedNetKWH > 0 {
+			// Draining/Discharging
+			// Check if we will drop below the minimum reserve limit.
+			// If so, interpolate the exact fraction of the hour when we hit the reserve.
+			if newEnergy < minKWH {
+				if hitDeficitAt.IsZero() {
+					remainingBeforeMin := batteryEnergy - minKWH
+					if remainingBeforeMin > 0 {
+						fraction := remainingBeforeMin / appliedNetKWH
+						// Round to nearest nanosecond to avoid off-by-one float-casting issues.
+						hitDeficitAt = slot.TS.Add(time.Duration(math.Round(fraction * float64(time.Hour))))
+					} else {
+						hitDeficitAt = slot.TS
+					}
+				}
+				// Clamped at minimum reserve limit; battery cannot physically drain below minKWH.
+				batteryEnergy = minKWH
+			} else {
+				batteryEnergy = newEnergy
+			}
+		} else {
+			// Charging or holding
+			// Clamped at maximum battery capacity.
+			if newEnergy > capacityKWH {
+				batteryEnergy = capacityKWH
+			} else {
+				batteryEnergy = newEnergy
+			}
+		}
+
+		// If we've already determined both capacity and deficit hit times, we can stop simulating.
+		if !hitCapacityAt.IsZero() && !hitDeficitAt.IsZero() {
+			break
+		}
+	}
+
+	return hitCapacityAt, hitDeficitAt
 }

@@ -45,6 +45,8 @@ func TestDecide(t *testing.T) {
 	history := []types.EnergyStats{}
 	// Create no load history
 	noLoadHistory := []types.EnergyStats{}
+	// Create solar arbitrage history
+	solarArbitrageHistory := []types.EnergyStats{}
 
 	// Generate history covering all hours
 	ts := now.Add(-24 * time.Hour)
@@ -60,6 +62,17 @@ func TestDecide(t *testing.T) {
 			TSHourStart:    ts,
 			GridImportKWH:  0.0,
 			SolarKWH:       0.0,
+			BatteryUsedKWH: 0.0,
+			HomeKWH:        0.0,
+		})
+		solar := 0.0
+		if ts.Hour() == 12 {
+			solar = 5.0
+		}
+		solarArbitrageHistory = append(solarArbitrageHistory, types.EnergyStats{
+			TSHourStart:    ts,
+			GridImportKWH:  0.0,
+			SolarKWH:       solar,
 			BatteryUsedKWH: 0.0,
 			HomeKWH:        0.0,
 		})
@@ -1146,7 +1159,7 @@ func TestDecide(t *testing.T) {
 		}
 
 		// Use Default Status (50%). No immediate deficit.
-		decision, err := c.Decide(ctx, baseStatus, currentPrice, futurePrices, noLoadHistory, nil, baseSettings)
+		decision, err := c.Decide(ctx, baseStatus, currentPrice, futurePrices, solarArbitrageHistory, nil, baseSettings)
 		require.NoError(t, err)
 
 		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
@@ -1174,7 +1187,7 @@ func TestDecide(t *testing.T) {
 		fullStatus := baseStatus
 		fullStatus.BatterySOC = 99.0
 
-		decision, err := c.Decide(ctx, fullStatus, currentPrice, futurePrices, noLoadHistory, nil, baseSettings)
+		decision, err := c.Decide(ctx, fullStatus, currentPrice, futurePrices, solarArbitrageHistory, nil, baseSettings)
 		require.NoError(t, err)
 
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
@@ -1947,8 +1960,8 @@ func TestDecide(t *testing.T) {
 		futurePrices := []types.Price{}
 		for i := 1; i <= 24; i++ {
 			price := 0.05
-			if i == 5 {
-				price = 0.50 // Arbitrage opportunity
+			if i == 2 {
+				price = 0.50 // Arbitrage opportunity (noon peak)
 			}
 			futurePrices = append(futurePrices, types.Price{
 				TSStart:       now.Add(time.Duration(i) * time.Hour),
@@ -1963,11 +1976,62 @@ func TestDecide(t *testing.T) {
 		almostFullStatus.MaxBatteryChargeKW = 5.0
 		almostFullStatus.BatteryCapacityKWH = 10.0
 
-		// Use noLoadHistory to avoid deficit
-		decision, err := c.Decide(ctx, almostFullStatus, currentPrice, futurePrices, noLoadHistory, nil, baseSettings)
+		// Use solarArbitrageHistory to avoid deficit
+		decision, err := c.Decide(ctx, almostFullStatus, currentPrice, futurePrices, solarArbitrageHistory, nil, baseSettings)
 		require.NoError(t, err)
 
 		// It should NOT charge because of 10 minute rule for arbitrage.
+		// It should Standby and hold the energy.
+		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonArbitrageHoldExport, decision.Action.Reason)
+	})
+
+	t.Run("Arbitrage Opportunity -> No Charge If Grid Charge Causes Early Capacity Hit", func(t *testing.T) {
+		testNow := time.Date(2026, 5, 20, 9, 40, 0, 0, time.UTC)
+		currentPrice := types.Price{TSStart: testNow.Truncate(time.Hour), TSEnd: testNow.Truncate(time.Hour).Add(time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05}
+		futurePrices := []types.Price{}
+		// Peak export hour at 10:00 AM (price = 0.50)
+		for i := 1; i <= 24; i++ {
+			price := 0.05
+			// i == 1 starts at 10:00 AM
+			if i == 1 {
+				price = 0.50 // Arbitrage opportunity
+			}
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       testNow.Truncate(time.Hour).Add(time.Duration(i) * time.Hour),
+				TSEnd:         testNow.Truncate(time.Hour).Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
+			})
+		}
+
+		// Battery is at 95% (9.5 kWh out of 10.0 kWh)
+		almostFullStatus := baseStatus
+		almostFullStatus.Timestamp = testNow
+		almostFullStatus.BatterySOC = 95.0
+		almostFullStatus.MaxBatteryChargeKW = 5.0
+		almostFullStatus.BatteryCapacityKWH = 10.0
+
+		// Empty history with solar at 10:00 AM (hour 10)
+		customHistory := []types.EnergyStats{}
+		ts := testNow.Add(-24 * time.Hour)
+		for i := 0; i < 48; i++ {
+			solar := 0.0
+			if ts.Hour() == 10 {
+				solar = 5.0
+			}
+			customHistory = append(customHistory, types.EnergyStats{
+				TSHourStart: ts,
+				HomeKWH:     0.0,
+				SolarKWH:    solar,
+			})
+			ts = ts.Add(1 * time.Hour)
+		}
+
+		decision, err := c.Decide(ctx, almostFullStatus, currentPrice, futurePrices, customHistory, nil, baseSettings)
+		require.NoError(t, err)
+
+		// It should NOT charge because charging now (step energy = 5.0 * 10/60 = 0.833 kWh)
+		// combined with 9.5 kWh starting energy would exceed the 9.8 kWh capacity threshold before the 10:00 AM peak.
 		// It should Standby and hold the energy.
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonArbitrageHoldExport, decision.Action.Reason)
@@ -2143,13 +2207,18 @@ func TestDecide(t *testing.T) {
 			BatteryAboveMinSOC:    true,
 		}
 
-		// Empty history (no load, no solar)
+		// Empty history with solar at peak export hour (hour 15, matching i == 5 where now is 10:00)
 		customHistory := []types.EnergyStats{}
 		ts := now.Add(-24 * time.Hour)
 		for i := 0; i < 48; i++ {
+			solar := 0.0
+			if ts.Hour() == 15 {
+				solar = 5.0
+			}
 			customHistory = append(customHistory, types.EnergyStats{
 				TSHourStart: ts,
 				HomeKWH:     0.0,
+				SolarKWH:    solar,
 			})
 			ts = ts.Add(1 * time.Hour)
 		}
@@ -2201,12 +2270,18 @@ func TestDecide(t *testing.T) {
 			BatteryAboveMinSOC:    true,
 		}
 
+		// Empty history with solar at peak export hour (hour 15, matching i == 5 where now is 10:00)
 		customHistory := []types.EnergyStats{}
 		ts := now.Add(-24 * time.Hour)
 		for i := 0; i < 48; i++ {
+			solar := 0.0
+			if ts.Hour() == 15 {
+				solar = 5.0
+			}
 			customHistory = append(customHistory, types.EnergyStats{
 				TSHourStart: ts,
 				HomeKWH:     0.0,
+				SolarKWH:    solar,
 			})
 			ts = ts.Add(1 * time.Hour)
 		}
@@ -2223,5 +2298,456 @@ func TestDecide(t *testing.T) {
 		// It should charge immediately since current price is already the cheapest available before peak
 		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonArbitrageChargeExport, decision.Action.Reason)
+	})
+
+	t.Run("Arbitrage Hold With Capacity Refill", func(t *testing.T) {
+		// Mock user scenario:
+		// - Battery is full (SOC 99%).
+		// - Current price is cheap ($0.055).
+		// - High arbitrage export opportunity in the afternoon ($0.094 export value).
+		// - Price rises to $0.10481 in the morning (higher than $0.094 arbitrage value).
+		// - Simulation predicts battery will be refilled by solar before the peak arbitrage window.
+		// - Verify that the controller decides to Standby (Hold) at night, and then Load (Discharge) in the morning.
+
+		nightTime := time.Date(2026, 5, 28, 2, 0, 0, 0, time.UTC)
+
+		// Set current night price
+		currentPriceNight := types.Price{
+			TSStart:                       nightTime,
+			TSEnd:                         nightTime.Add(time.Hour),
+			DollarsPerKWH:                 0.055,
+			GenerationCreditDollarsPerKWH: 0.094,
+			SeparateGenerationCredit:      true,
+		}
+
+		// Build future prices (next 24 hours)
+		futurePrices := []types.Price{}
+		for i := 1; i <= 24; i++ {
+			slotStart := nightTime.Add(time.Duration(i) * time.Hour)
+			slotPrice := 0.055
+			// Peak price at 13:00 PM (11 hours after 02:00 AM)
+			if slotStart.Hour() == 13 {
+				slotPrice = 0.31443
+			}
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:                       slotStart,
+				TSEnd:                         slotStart.Add(time.Hour),
+				DollarsPerKWH:                 slotPrice,
+				GenerationCreditDollarsPerKWH: 0.094,
+				SeparateGenerationCredit:      true,
+			})
+		}
+
+		statusNight := types.SystemStatus{
+			Timestamp:             nightTime,
+			BatterySOC:            99.0,
+			BatteryCapacityKWH:    10.0,
+			MaxBatteryChargeKW:    5.0,
+			MaxBatteryDischargeKW: 5.0,
+			HomeKW:                1.0,
+			BatteryAboveMinSOC:    true,
+		}
+
+		// Build 48 hours history to predict solar refilling battery to capacity in the morning
+		customHistory := []types.EnergyStats{}
+		ts := nightTime.Add(-24 * time.Hour)
+		for i := 0; i < 48; i++ {
+			solar := 0.0
+			h := ts.Hour()
+			// Solar surplus from 7am to 5pm
+			if h >= 7 && h <= 17 {
+				solar = 2.0
+			}
+			customHistory = append(customHistory, types.EnergyStats{
+				TSHourStart:    ts,
+				GridImportKWH:  0.0,
+				SolarKWH:       solar,
+				BatteryUsedKWH: 0.0,
+				HomeKWH:        0.5,
+			})
+			ts = ts.Add(1 * time.Hour)
+		}
+
+		settings := baseSettings
+		settings.MinBatterySOC = 20.0
+		settings.GridChargeBatteries = true
+		settings.GridExportSolar = true
+
+		// 1. Call Decide at Night (02:00 AM): gridChargeNowCost ($0.055) < effectiveExportValue ($0.094)
+		// Should hold battery in standby
+		decisionNight, err := c.Decide(ctx, statusNight, currentPriceNight, futurePrices, customHistory, nil, settings)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeStandby, decisionNight.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonArbitrageHoldExport, decisionNight.Action.Reason)
+
+		// 2. Call Decide in Morning (08:00 AM): gridChargeNowCost ($0.10481) > effectiveExportValue ($0.094)
+		// Should discharge battery (Load)
+		morningTime := time.Date(2026, 5, 28, 8, 0, 0, 0, time.UTC)
+		currentPriceMorning := types.Price{
+			TSStart:                       morningTime,
+			TSEnd:                         morningTime.Add(time.Hour),
+			DollarsPerKWH:                 0.10481,
+			GenerationCreditDollarsPerKWH: 0.094,
+			SeparateGenerationCredit:      true,
+		}
+		statusMorning := statusNight
+		statusMorning.Timestamp = morningTime
+
+		// Build morning future prices (next 24 hours starting from 8am)
+		futurePricesMorning := []types.Price{}
+		for i := 1; i <= 24; i++ {
+			slotStart := morningTime.Add(time.Duration(i) * time.Hour)
+			slotPrice := 0.055
+			if slotStart.Hour() == 13 {
+				slotPrice = 0.31443
+			}
+			futurePricesMorning = append(futurePricesMorning, types.Price{
+				TSStart:                       slotStart,
+				TSEnd:                         slotStart.Add(time.Hour),
+				DollarsPerKWH:                 slotPrice,
+				GenerationCreditDollarsPerKWH: 0.094,
+				SeparateGenerationCredit:      true,
+			})
+		}
+
+		decisionMorning, err := c.Decide(ctx, statusMorning, currentPriceMorning, futurePricesMorning, customHistory, nil, settings)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeLoad, decisionMorning.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonSufficientBattery, decisionMorning.Action.Reason)
+	})
+}
+
+func TestSimulateStandby(t *testing.T) {
+	c := NewController()
+	now := time.Date(2026, 5, 20, 10, 0, 0, 0, time.UTC)
+	capacityKWH := 10.0
+	minKWH := 2.0 // 20% reserve
+
+	t.Run("Basic Standby - Hit Capacity", func(t *testing.T) {
+		// Start at 5.0 kWh (50% SOC).
+		// Grid cost: flat $0.05. Target export price: $0.10. MinArbitrageDiff: $0.01.
+		// Since grid cost ($0.05) < export ($0.10) - diff ($0.01) = $0.09, we should hold in standby.
+		// Net Load is -2.0 kWh (charging at 2.0 kW).
+		// Target to hit capacity: 9.8 kWh. Headroom needed = 4.8 kWh.
+		// Time to hit capacity: 4.8 kWh / 2.0 kW = 2.4 hours = 2 hours 24 minutes.
+		simData := []SimHour{}
+		for i := 0; i < 6; i++ {
+			simData = append(simData, SimHour{
+				TS:                      now.Add(time.Duration(i) * time.Hour),
+				ClampedNetLoadSolarKWH:  -2.0,
+				GridChargeDollarsPerKWH: 0.05,
+			})
+		}
+
+		hitCapacityAt, hitDeficitAt := c.simulateStandby(
+			simData,
+			0.10, // export price
+			0.01, // min diff
+			5.0,  // current energy
+			capacityKWH,
+			minKWH,
+		)
+
+		assert.Zero(t, hitDeficitAt)
+		if assert.False(t, hitCapacityAt.IsZero()) {
+			expected := now.Add(2*time.Hour + 24*time.Minute)
+			assert.Equal(t, expected, hitCapacityAt)
+		}
+	})
+
+	t.Run("High-Price Window - Exit Standby & Deficit Hit", func(t *testing.T) {
+		// Start at 5.0 kWh (50% SOC).
+		// Hour 0-1: Grid cost is $0.05 (standby). Load is 0.0.
+		// Hour 2: Grid cost is $0.15 (exits standby -> discharge). Load is 4.0 kW.
+		// Since grid cost ($0.15) >= export ($0.10) - diff ($0.01) = $0.09, we discharge at Hour 2.
+		// Battery drops from 5.0 kWh to 2.0 kWh (deficit) during Hour 2.
+		// Headroom to reserve: 5.0 - 2.0 = 3.0 kWh.
+		// Time to hit deficit: 2 hours + 3.0 kWh / 4.0 kW = 2 hours 45 minutes.
+		simData := []SimHour{
+			{TS: now, ClampedNetLoadSolarKWH: 1.0, GridChargeDollarsPerKWH: 0.05},
+			{TS: now.Add(1 * time.Hour), ClampedNetLoadSolarKWH: 1.0, GridChargeDollarsPerKWH: 0.05},
+			{TS: now.Add(2 * time.Hour), ClampedNetLoadSolarKWH: 4.0, GridChargeDollarsPerKWH: 0.15},
+		}
+
+		hitCapacityAt, hitDeficitAt := c.simulateStandby(
+			simData,
+			0.10,
+			0.01,
+			5.0,
+			capacityKWH,
+			minKWH,
+		)
+
+		assert.Zero(t, hitCapacityAt)
+		if assert.False(t, hitDeficitAt.IsZero()) {
+			expected := now.Add(2*time.Hour + 45*time.Minute)
+			assert.Equal(t, expected, hitDeficitAt)
+		}
+	})
+
+	t.Run("No Capacity Hit When Charging Is Insufficient", func(t *testing.T) {
+		// Start at 5.0 kWh. Solar surplus is tiny (-0.1 kW).
+		// Battery charges to 5.0 + 6 * 0.1 = 5.6 kWh.
+		// Never hits 9.8 kWh capacity threshold.
+		simData := []SimHour{}
+		for i := 0; i < 6; i++ {
+			simData = append(simData, SimHour{
+				TS:                      now.Add(time.Duration(i) * time.Hour),
+				ClampedNetLoadSolarKWH:  -0.1,
+				GridChargeDollarsPerKWH: 0.05,
+			})
+		}
+
+		hitCapacityAt, hitDeficitAt := c.simulateStandby(
+			simData,
+			0.10,
+			0.01,
+			5.0,
+			capacityKWH,
+			minKWH,
+		)
+
+		assert.Zero(t, hitDeficitAt)
+		assert.Zero(t, hitCapacityAt)
+	})
+
+	t.Run("First Hour Proportionate Calculation", func(t *testing.T) {
+		// Start at 5.0 kWh at 10:30 AM (30 minutes remaining in the first hour).
+		// First hour: ClampedNetLoadSolarKWH = -4.0 kW.
+		// Battery should charge by -4.0 * 0.5 = +2.0 kWh.
+		// End of first hour battery energy = 7.0 kWh.
+		// Second hour: ClampedNetLoadSolarKWH = -4.0 kW.
+		// Needs to reach 9.8 kWh from 7.0 kWh (headroom = 2.8 kWh).
+		// Time to hit capacity in second hour: 2.8 kWh / 4.0 kW = 0.7 hours = 42 minutes.
+		// So total time to hit capacity is 30 mins (first hour) + 42 mins (second hour) = 72 minutes = 1 hour 12 minutes.
+		testNow := time.Date(2026, 5, 20, 10, 30, 0, 0, time.UTC)
+		simData := []SimHour{
+			{TS: testNow, ClampedNetLoadSolarKWH: -4.0, GridChargeDollarsPerKWH: 0.05, EnergyApplyRatio: 0.5},
+			{TS: testNow.Truncate(time.Hour).Add(time.Hour), ClampedNetLoadSolarKWH: -4.0, GridChargeDollarsPerKWH: 0.05},
+		}
+
+		hitCapacityAt, hitDeficitAt := c.simulateStandby(
+			simData,
+			0.10,
+			0.01,
+			5.0,
+			capacityKWH,
+			minKWH,
+		)
+
+		assert.Zero(t, hitDeficitAt)
+		if assert.False(t, hitCapacityAt.IsZero()) {
+			expected := testNow.Add(1*time.Hour + 12*time.Minute)
+			assert.Equal(t, expected, hitCapacityAt)
+		}
+	})
+
+	t.Run("Instant Deficit Hit", func(t *testing.T) {
+		// Start exactly at the minimum limit (2.0 kWh) and discharge immediately.
+		// Grid cost ($0.15) >= export ($0.10) - diff ($0.01) = $0.09, so we discharge.
+		// Since we are already at minKWH, deficit should be hit immediately at the start of the first hour.
+		simData := []SimHour{
+			{TS: now, ClampedNetLoadSolarKWH: 2.0, GridChargeDollarsPerKWH: 0.15},
+		}
+
+		hitCapacityAt, hitDeficitAt := c.simulateStandby(
+			simData,
+			0.10,
+			0.01,
+			2.0, // current energy equal to minKWH
+			capacityKWH,
+			minKWH,
+		)
+
+		assert.Zero(t, hitCapacityAt)
+		if assert.False(t, hitDeficitAt.IsZero()) {
+			assert.Equal(t, now, hitDeficitAt)
+		}
+	})
+
+	t.Run("Instant Capacity Hit", func(t *testing.T) {
+		// Start at capacityThresholdKWH (9.8 kWh) or higher.
+		// Grid cost: $0.05. Solar charging: -1.0 kW.
+		// Capacity should be hit instantly at the start of the slot.
+		simData := []SimHour{
+			{TS: now, ClampedNetLoadSolarKWH: -1.0, GridChargeDollarsPerKWH: 0.05},
+		}
+
+		hitCapacityAt, hitDeficitAt := c.simulateStandby(
+			simData,
+			0.10,
+			0.01,
+			9.8, // current energy equal to capacityThresholdKWH
+			capacityKWH,
+			minKWH,
+		)
+
+		assert.Zero(t, hitDeficitAt)
+		if assert.False(t, hitCapacityAt.IsZero()) {
+			assert.Equal(t, now, hitCapacityAt)
+		}
+	})
+
+	t.Run("Standby During Cheap Hours Ignores Positive Net Load", func(t *testing.T) {
+		// Start at 5.0 kWh. Grid cost: $0.05. Target export: $0.10. MinArbitrageDiff: $0.01.
+		// Since cost ($0.05) < export ($0.10) - diff ($0.01) = $0.09, we should hold in standby.
+		// Load is positive (3.0 kW).
+		// Because we are in standby, we should NOT discharge to cover the load.
+		// Battery energy should remain exactly 5.0 kWh at the end of the simulation.
+		// Thus no capacity hit and no deficit hit.
+		simData := []SimHour{
+			{TS: now, ClampedNetLoadSolarKWH: 3.0, GridChargeDollarsPerKWH: 0.05},
+			{TS: now.Add(1 * time.Hour), ClampedNetLoadSolarKWH: 3.0, GridChargeDollarsPerKWH: 0.05},
+		}
+
+		hitCapacityAt, hitDeficitAt := c.simulateStandby(
+			simData,
+			0.10,
+			0.01,
+			5.0,
+			capacityKWH,
+			minKWH,
+		)
+
+		assert.Zero(t, hitCapacityAt)
+		assert.Zero(t, hitDeficitAt)
+	})
+
+	t.Run("Complex Pricing Boundaries - Equal, Slightly Above, Slightly Below", func(t *testing.T) {
+		// Export: $0.10. MinArbitrageDiff: $0.01. Threshold is $0.09.
+		// Slot 0: Grid charge price is $0.089 (slightly below $0.09) -> standby.
+		//         Load is 2.0 kW. Since standby, appliedNetKWH is 0.0. Battery stays at 5.0 kWh.
+		// Slot 1: Grid charge price is $0.090 (exactly equal to $0.09) -> discharge.
+		//         Load is 2.0 kW. Battery discharges to 3.0 kWh.
+		// Slot 2: Grid charge price is $0.091 (slightly above $0.09) -> discharge.
+		//         Load is 2.0 kW. Battery discharges to minKWH (2.0 kWh) at 50% through the hour.
+		//         Time to hit deficit: Slot 2 TS + (3.0 - 2.0) / 2.0 hours = TS + 30 mins.
+		simData := []SimHour{
+			{TS: now, ClampedNetLoadSolarKWH: 2.0, GridChargeDollarsPerKWH: 0.089},
+			{TS: now.Add(1 * time.Hour), ClampedNetLoadSolarKWH: 2.0, GridChargeDollarsPerKWH: 0.090},
+			{TS: now.Add(2 * time.Hour), ClampedNetLoadSolarKWH: 2.0, GridChargeDollarsPerKWH: 0.091},
+		}
+
+		hitCapacityAt, hitDeficitAt := c.simulateStandby(
+			simData,
+			0.10,
+			0.01,
+			5.0,
+			capacityKWH,
+			minKWH,
+		)
+
+		assert.Zero(t, hitCapacityAt)
+		if assert.False(t, hitDeficitAt.IsZero()) {
+			expected := now.Add(2*time.Hour + 30*time.Minute)
+			assert.Equal(t, expected, hitDeficitAt)
+		}
+	})
+
+	t.Run("Under Minimum Limit At Start", func(t *testing.T) {
+		// Current energy is 1.5 kWh, which is below minKWH (2.0 kWh).
+		// Grid cost: $0.15 (discharge). Load is 1.0 kW.
+		// Deficit should be hit immediately because we are already below minimum limit.
+		simData := []SimHour{
+			{TS: now, ClampedNetLoadSolarKWH: 1.0, GridChargeDollarsPerKWH: 0.15},
+		}
+
+		hitCapacityAt, hitDeficitAt := c.simulateStandby(
+			simData,
+			0.10,
+			0.01,
+			1.5, // below minKWH (2.0)
+			capacityKWH,
+			minKWH,
+		)
+
+		assert.Zero(t, hitCapacityAt)
+		if assert.False(t, hitDeficitAt.IsZero()) {
+			assert.Equal(t, now, hitDeficitAt)
+		}
+	})
+
+	t.Run("Solar Charging Exceeds Maximum Capacity Limits", func(t *testing.T) {
+		// Current energy is 9.0 kWh. ClampedNetLoadSolarKWH = -20.0 kW.
+		// Grid charge price = $0.05.
+		// Capacity threshold = 9.8 kWh. Max capacity = 10.0 kWh.
+		// Remaining to threshold: 9.8 - 9.0 = 0.8 kWh.
+		// Time to hit threshold: 0.8 kWh / 20.0 kW = 0.04 hours = 2 minutes 24 seconds.
+		// Energy after 1 hour (clamped at 10.0): batteryEnergy = 10.0.
+		// Next hour: Net load = -5.0 kW, should stay at 10.0 kWh limit.
+		simData := []SimHour{
+			{TS: now, ClampedNetLoadSolarKWH: -20.0, GridChargeDollarsPerKWH: 0.05},
+			{TS: now.Add(1 * time.Hour), ClampedNetLoadSolarKWH: -5.0, GridChargeDollarsPerKWH: 0.05},
+		}
+
+		hitCapacityAt, hitDeficitAt := c.simulateStandby(
+			simData,
+			0.10,
+			0.01,
+			9.0,
+			capacityKWH,
+			minKWH,
+		)
+
+		assert.Zero(t, hitDeficitAt)
+		if assert.False(t, hitCapacityAt.IsZero()) {
+			expected := now.Add(2*time.Minute + 24*time.Second)
+			assert.Equal(t, expected, hitCapacityAt)
+		}
+	})
+
+	t.Run("Ratio Into Hour Extreme Boundaries - 59 minutes past", func(t *testing.T) {
+		// Start at 10:59 AM (1 minute remaining in the first hour).
+		// First hour: ClampedNetLoadSolarKWH = -60.0 kW.
+		// With 1 minute remaining, ratio applied = 1/60.
+		// Battery should charge by -60.0 * (1/60) = +1.0 kWh.
+		// End of first hour battery energy = 5.0 + 1.0 = 6.0 kWh.
+		// Second hour: ClampedNetLoadSolarKWH = -3.8 kW. Grid charge price: $0.05.
+		// Needs to reach 9.8 kWh from 6.0 kWh (headroom = 3.8 kWh).
+		// Time to hit capacity in second hour: 3.8 kWh / 3.8 kW = 1.0 hours.
+		// So total time to hit capacity: 1 min (first hour) + 60 mins (second hour) = 61 minutes.
+		testNow := time.Date(2026, 5, 20, 10, 59, 0, 0, time.UTC)
+		simData := []SimHour{
+			{TS: testNow, ClampedNetLoadSolarKWH: -60.0, GridChargeDollarsPerKWH: 0.05, EnergyApplyRatio: 1.0 / 60.0},
+			{TS: testNow.Truncate(time.Hour).Add(time.Hour), ClampedNetLoadSolarKWH: -3.8, GridChargeDollarsPerKWH: 0.05},
+		}
+
+		hitCapacityAt, hitDeficitAt := c.simulateStandby(
+			simData,
+			0.10,
+			0.01,
+			5.0,
+			capacityKWH,
+			minKWH,
+		)
+
+		assert.Zero(t, hitDeficitAt)
+		if assert.False(t, hitCapacityAt.IsZero()) {
+			expected := testNow.Add(1*time.Hour + 1*time.Minute)
+			assert.Equal(t, expected, hitCapacityAt)
+		}
+	})
+
+	t.Run("Over Capacity At Start", func(t *testing.T) {
+		// Start at 10.2 kWh (capacity is 10.0 kWh).
+		// Net Load is negative (-1.0 kW) -> charging.
+		// Since we are already above capacityKWH (and capacityThresholdKWH),
+		// we should hit capacity immediately at the start of the slot.
+		simData := []SimHour{
+			{TS: now, ClampedNetLoadSolarKWH: -1.0, GridChargeDollarsPerKWH: 0.05},
+		}
+
+		hitCapacityAt, _ := c.simulateStandby(
+			simData,
+			0.10,
+			0.01,
+			10.2, // above capacityKWH
+			capacityKWH,
+			minKWH,
+		)
+
+		if assert.False(t, hitCapacityAt.IsZero()) {
+			assert.Equal(t, now, hitCapacityAt)
+		}
 	})
 }
