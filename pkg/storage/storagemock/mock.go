@@ -213,3 +213,8 @@ func (m *MockDatabase) ListInterest(ctx context.Context, limit int) ([]types.Int
 	}
 	return nil, nil
 }
+
+func (m *MockDatabase) DeleteInterest(ctx context.Context, email string) error {
+	args := m.Called(ctx, email)
+	return args.Error(0)
+}

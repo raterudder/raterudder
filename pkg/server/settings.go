@@ -446,6 +446,14 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	log.Ctx(ctx).InfoContext(ctx, "settings updated")
 
+	if existing.UtilityProvider == "" && newSettings.UtilityProvider != "" && user.Email != "" {
+		if err := s.storage.DeleteInterest(ctx, user.Email); err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to automatically clear interest submission", slog.String("email", user.Email), slog.Any("error", err))
+		} else {
+			log.Ctx(ctx).DebugContext(ctx, "automatically cleared interest submission", slog.String("email", user.Email))
+		}
+	}
+
 	wg.Wait()
 	finishedWaiting = true
 	w.WriteHeader(http.StatusOK)

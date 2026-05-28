@@ -61,6 +61,7 @@ type Database interface {
 	// Interest
 	UpsertInterest(ctx context.Context, submission types.InterestSubmission) error
 	ListInterest(ctx context.Context, limit int) ([]types.InterestSubmission, error)
+	DeleteInterest(ctx context.Context, email string) error
 
 	// Lifecycle
 	Ping(ctx context.Context) error

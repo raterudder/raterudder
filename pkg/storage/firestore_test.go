@@ -748,6 +748,20 @@ func TestFirestoreProvider(t *testing.T) {
 		assert.Len(t, list, 2)
 		assert.Equal(t, "user5@example.com", list[0].Email)
 		assert.Equal(t, "user4@example.com", list[1].Email)
+
+		// 5. DeleteInterest
+		t.Run("DeleteInterest", func(t *testing.T) {
+			require.NoError(t, f.DeleteInterest(ctx, "user3@example.com"))
+
+			all, err := f.ListInterest(ctx, 10)
+			require.NoError(t, err)
+			assert.Len(t, all, 4)
+			for _, item := range all {
+				assert.NotEqual(t, "user3@example.com", item.Email)
+			}
+
+			require.NoError(t, f.DeleteInterest(ctx, "nonexistent@example.com"))
+		})
 	})
 
 	t.Run("Migration", func(t *testing.T) {

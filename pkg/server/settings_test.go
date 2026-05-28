@@ -1191,6 +1191,107 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.True(t, mockS.AssertExpectations(t))
 		assert.True(t, mockU.AssertExpectations(t))
 	})
+
+	t.Run("Update Settings - Transition to Configured Utility Clears Interest", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockU := &mockUtility{}
+		uMap := utility.NewMap(mockS)
+		uMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities: uMap,
+			storage:   mockS,
+		}
+
+		s := types.Settings{
+			MinBatterySOC:               20,
+			IgnoreHourUsageOverMultiple: 5,
+			SolarTrendRatioMax:          3.0,
+			SolarBellCurveMultiplier:    1.0,
+			UtilityProvider:             "new-utility",
+		}
+		b, err := json.Marshal(s)
+		require.NoError(t, err)
+		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+		req = withUser(req, "admin@example.com", true)
+		w := httptest.NewRecorder()
+
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+			UtilityProvider: "",
+		}, types.CurrentSettingsVersion, nil).Once()
+
+		mockU.On("ApplySettings", mock.Anything, mock.MatchedBy(func(set types.Settings) bool {
+			return set.UtilityProvider == "new-utility"
+		})).Return(nil).Once()
+
+		prices := []types.Price{{DollarsPerKWH: 0.1, TSStart: time.Now()}}
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return(prices, nil)
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, types.SiteIDNone).Return(time.Now().Add(8*time.Hour), types.CurrentPriceHistoryVersion, nil).Once()
+		mockS.On("UpsertPrices", mock.Anything, types.SiteIDNone, prices, types.CurrentPriceHistoryVersion).Return(nil)
+
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(set types.Settings) bool {
+			return set.UtilityProvider == "new-utility"
+		}), types.CurrentSettingsVersion).Return(nil).Once()
+
+		// Expect DeleteInterest to be called since transitioning from "" to "new-utility"
+		mockS.On("DeleteInterest", mock.Anything, "admin@example.com").Return(nil).Once()
+
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockU.AssertExpectations(t))
+	})
+
+	t.Run("Update Settings - Already Configured Utility Does Not Clear Interest", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockU := &mockUtility{}
+		uMap := utility.NewMap(mockS)
+		uMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities: uMap,
+			storage:   mockS,
+		}
+
+		s := types.Settings{
+			MinBatterySOC:               20,
+			IgnoreHourUsageOverMultiple: 5,
+			SolarTrendRatioMax:          3.0,
+			SolarBellCurveMultiplier:    1.0,
+			UtilityProvider:             "new-utility",
+		}
+		b, err := json.Marshal(s)
+		require.NoError(t, err)
+		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+		req = withUser(req, "admin@example.com", true)
+		w := httptest.NewRecorder()
+
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+			UtilityProvider: "old-utility",
+		}, types.CurrentSettingsVersion, nil).Once()
+
+		mockU.On("ApplySettings", mock.Anything, mock.MatchedBy(func(set types.Settings) bool {
+			return set.UtilityProvider == "new-utility"
+		})).Return(nil).Once()
+
+		prices := []types.Price{{DollarsPerKWH: 0.1, TSStart: time.Now()}}
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return(prices, nil)
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, types.SiteIDNone).Return(time.Now().Add(8*time.Hour), types.CurrentPriceHistoryVersion, nil).Once()
+		mockS.On("UpsertPrices", mock.Anything, types.SiteIDNone, prices, types.CurrentPriceHistoryVersion).Return(nil)
+
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(set types.Settings) bool {
+			return set.UtilityProvider == "new-utility"
+		}), types.CurrentSettingsVersion).Return(nil).Once()
+
+		// DeleteInterest should NOT be called
+
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockU.AssertExpectations(t))
+	})
 }
 
 func TestGetSettingsWithMigration(t *testing.T) {

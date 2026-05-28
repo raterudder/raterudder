@@ -1362,3 +1362,17 @@ func (f *FirestoreProvider) ListInterest(ctx context.Context, limit int) ([]type
 
 	return submissions, nil
 }
+
+// DeleteInterest removes an interest submission record from the "interest" collection.
+func (f *FirestoreProvider) DeleteInterest(ctx context.Context, email string) error {
+	if email == "" {
+		return fmt.Errorf("email cannot be empty for interest deletion")
+	}
+
+	coll := f.client.Collection("interest")
+	_, err := coll.Doc(email).Delete(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to delete interest submission: %w", err)
+	}
+	return nil
+}
