@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { fetchSettings, updateSettings, fetchUtilities, fetchESSList, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type ESSProviderInfo, type ESSCredentialField, type CredentialsPayload } from '../api';
+import { fetchSettings, updateSettings, fetchUtilities, fetchESSList, submitESSStage, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type ESSProviderInfo, type ESSCredentialField, type CredentialsPayload } from '../api';
 import { Field } from '@base-ui/react/field';
 import { Input } from '@base-ui/react/input';
 import { Button } from '@base-ui/react/button';
@@ -20,6 +20,8 @@ const Settings = ({ siteID }: { siteID?: string }) => {
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
+    const [currentStage, setCurrentStage] = useState(0);
+    const [isStaging, setIsStaging] = useState(false);
 
     const [essCredentials, setEssCredentials] = useState<Record<string, string>>({});
 
@@ -30,6 +32,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
     const loadData = useCallback(async () => {
         try {
             setLoading(true);
+            setCurrentStage(0);
             const [settingsData, utilitiesData, essProvidersData] = await Promise.all([
                 fetchSettings(siteID),
                 fetchUtilities(siteID),
@@ -39,7 +42,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
             setUtilities(utilitiesData);
             setEssProviders(essProvidersData);
 
-            if (settingsData.ess && settingsData.hasCredentials?.[settingsData.ess] === false) {
+            if (settingsData.ess && !settingsData.hasCredentials?.[settingsData.ess]) {
                 setEditESS(true);
                 setIsESSDirty(true);
             }
@@ -56,9 +59,41 @@ const Settings = ({ siteID }: { siteID?: string }) => {
         loadData();
     }, [loadData]);
 
+    const handleESSContinue = async (e?: React.FormEvent | React.MouseEvent) => {
+        if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+        if (!settings || !settings.ess) return;
+        setIsStaging(true);
+        setError(null);
+        try {
+            const provider = essProviders.find(p => p.id === settings.ess);
+            if (!provider) throw new Error('Selected ESS provider not found');
+
+            const payload: Record<string, string> = {};
+            const stageFields = (provider.credentials || []).filter(cred => (cred.stage ?? 0) <= currentStage);
+            for (const cred of stageFields) {
+                payload[cred.field] = essCredentials[cred.field] || cred.default || "";
+            }
+
+            await submitESSStage(settings.ess, payload, siteID);
+            setCurrentStage(prev => prev + 1);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to advance stage');
+        } finally {
+            setIsStaging(false);
+        }
+    };
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!settings) return;
+
+        if (editESS && maxStage > currentStage) {
+            handleESSContinue(e);
+            return;
+        }
 
         try {
             setIsSaving(true);
@@ -190,6 +225,14 @@ const Settings = ({ siteID }: { siteID?: string }) => {
         </div>
     );
     if (!settings) return <div>Error loading settings</div>;
+
+    const provider = essProviders.find(p => p.id === settings.ess);
+    const maxStage = provider
+        ? (provider.credentials || []).reduce((max, cred) => {
+              const stage = cred.stage ?? 0;
+              return stage > max ? stage : max;
+          }, 0)
+        : 0;
 
     return (
         <div className="content-container settings-container">
@@ -458,6 +501,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                     setIsESSDirty(true);
                                     setSettings({ ...settings, ess: value as string });
                                     setEssCredentials({}); // clear credentials when changing provider
+                                    setCurrentStage(0);
                                 }}
                             >
                                 <Select.Trigger className="select-trigger" aria-label="ESS Type">
@@ -546,12 +590,13 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                             </Button>
                                         </div>
                                     )}
-                                    {(provider.credentials || []).map(cred => (
+                                    {(provider.credentials || []).filter(cred => ((cred.stage ?? 0) <= currentStage) && !cred.hidden).map(cred => (
                                         <Field.Root key={cred.field} className="form-group">
                                             <Field.Label>{cred.name}</Field.Label>
                                             {cred.type === 'select' ? (
                                                 <Select.Root
                                                     value={essCredentials[cred.field] || cred.default || ""}
+                                                    disabled={isSaving || isStaging}
                                                     onValueChange={(value) => {
                                                         setEssCredentials({ ...essCredentials, [cred.field]: value as string });
                                                         setIsESSDirty(true);
@@ -583,6 +628,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                                 <Input
                                                     value={essCredentials[cred.field] || cred.default || ""}
                                                     type={cred.type === 'password' ? 'password' : 'text'}
+                                                    disabled={isSaving || isStaging}
                                                     onChange={(e) => {
                                                         setEssCredentials({ ...essCredentials, [cred.field]: e.target.value });
                                                         setIsESSDirty(true);
@@ -598,7 +644,32 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                         })()}
 
                         {editESS && (
-                            <button type="button" className="text-button cancel-button" onClick={() => setEditESS(false)} aria-label="Finish editing Energy Storage System">Done</button>
+                            <div className="ess-actions" style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem', alignItems: 'center' }}>
+                                {maxStage > currentStage && (
+                                    <button
+                                        type="button"
+                                        className="save-button"
+                                        style={{ width: 'auto', padding: '0.5rem 1.5rem', marginTop: 0 }}
+                                        onClick={handleESSContinue}
+                                        disabled={isStaging}
+                                    >
+                                        {isStaging && <span className="loading-spinner" aria-hidden="true"></span>}
+                                        {isStaging ? 'Submitting...' : 'Continue'}
+                                    </button>
+                                )}
+                                <button
+                                    type="button"
+                                    className="text-button cancel-button"
+                                    style={{ marginTop: 0 }}
+                                    onClick={() => {
+                                        setEditESS(false);
+                                        setCurrentStage(0);
+                                    }}
+                                    aria-label="Finish editing Energy Storage System"
+                                >
+                                    {maxStage > currentStage ? 'Cancel' : 'Done'}
+                                </button>
+                            </div>
                         )}
                     </div>
                 )}
@@ -987,10 +1058,12 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                 <div className="submit-section">
                     {error && <div className="error-message">{error}</div>}
                     {successMessage && <div className="success-message">{successMessage}</div>}
-                    <button type="submit" className="save-button" disabled={isSaving}>
-                        {isSaving && <span className="loading-spinner" aria-hidden="true"></span>}
-                        {isSaving ? 'Saving...' : 'Save Settings'}
-                    </button>
+                    {!(editESS && maxStage > currentStage) && (
+                        <button type="submit" className="save-button" disabled={isSaving}>
+                            {isSaving && <span className="loading-spinner" aria-hidden="true"></span>}
+                            {isSaving ? 'Saving...' : 'Save Settings'}
+                        </button>
+                    )}
                 </div>
             </form>
         </div>

@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import App from '../App';
 import * as api from '../api';
-import { setupDefaultApiMocks, defaultAuthStatus, defaultSettings } from '../test/apiMocks';
+import { setupDefaultApiMocks, defaultAuthStatus, defaultSettings, defaultESSProviders } from '../test/apiMocks';
 
 const { fetchAuthStatus, fetchSettings, updateSettings, login, logout } = api;
 
@@ -718,6 +718,65 @@ describe('App & Settings', () => {
                     netMeteringScheme: 'nem2'
                 })
             }), expect.any(String), undefined);
+        });
+    });
+
+    it('supports multi-stage OTP credential staging flow for Enphase', async () => {
+        const user = userEvent.setup();
+        const enphaseSettings = {
+            ...defaultSettings,
+            ess: 'enphase',
+            hasCredentials: {}
+        };
+        (fetchSettings as any).mockResolvedValue(enphaseSettings);
+        (api.fetchESSList as any).mockResolvedValue([
+            ...defaultESSProviders,
+            {
+                id: 'enphase',
+                name: 'Enphase',
+                credentials: [
+                    { field: 'username', name: 'Email', type: 'string', required: true, stage: 0 },
+                    { field: 'code', name: 'Email Code', type: 'string', required: false, stage: 1 }
+                ]
+            }
+        ]);
+        (api.submitESSStage as any).mockResolvedValue(undefined);
+
+        await navigateToSettings();
+
+        const emailInput = await screen.findByLabelText('Email');
+        expect(emailInput).toBeInTheDocument();
+        expect(screen.queryByLabelText(/Email Code/i)).not.toBeInTheDocument();
+
+        await user.type(emailInput, 'test@example.com');
+
+        const continueBtn = screen.getByRole('button', { name: 'Continue' });
+        expect(continueBtn).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Save Settings' })).not.toBeInTheDocument();
+
+        await user.click(continueBtn);
+
+        expect(api.submitESSStage).toHaveBeenCalledWith('enphase', { username: 'test@example.com' }, expect.any(String));
+
+        const codeInput = await screen.findByLabelText(/Email Code/i);
+        expect(codeInput).toBeInTheDocument();
+
+        expect(screen.queryByRole('button', { name: 'Continue' })).not.toBeInTheDocument();
+        const saveBtn = screen.getByRole('button', { name: 'Save Settings' });
+        expect(saveBtn).toBeInTheDocument();
+
+        await user.type(codeInput, '654321');
+
+        (updateSettings as any).mockResolvedValue(undefined);
+        await user.click(saveBtn);
+
+        await waitFor(() => {
+            expect(updateSettings).toHaveBeenCalledWith(expect.anything(), expect.any(String), {
+                enphase: {
+                    username: 'test@example.com',
+                    code: '654321'
+                }
+            });
         });
     });
 });

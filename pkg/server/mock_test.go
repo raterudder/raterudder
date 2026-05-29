@@ -53,9 +53,13 @@ func (m *mockUtility) ApplySettings(ctx context.Context, settings types.Settings
 
 type mockESS struct {
 	mock.Mock
+	MockName string
 }
 
 func (m *mockESS) Name() string {
+	if m.MockName != "" {
+		return m.MockName
+	}
 	return "mock"
 }
 func (m *mockESS) GetStatus(ctx context.Context) (types.SystemStatus, error) {

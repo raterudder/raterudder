@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -321,6 +322,18 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			}
 			existingCreds.Mock = nil
 			existingCreds.Tesla = nil
+			existingCreds.Enphase = nil
+		case "enphase":
+			if req.Credentials != nil && req.Credentials.Enphase != nil {
+				changedESS = true
+				if existingCreds.Enphase == nil {
+					shouldBackfillHistory = true
+				}
+				existingCreds.Enphase = req.Credentials.Enphase
+			}
+			existingCreds.Franklin = nil
+			existingCreds.Mock = nil
+			existingCreds.Tesla = nil
 		case "mock":
 			if req.Credentials != nil && req.Credentials.Mock != nil {
 				changedESS = true
@@ -331,6 +344,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			}
 			existingCreds.Franklin = nil
 			existingCreds.Tesla = nil
+			existingCreds.Enphase = nil
 		case "tesla":
 			if req.Credentials != nil && req.Credentials.Tesla != nil {
 				changedESS = true
@@ -341,6 +355,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			}
 			existingCreds.Franklin = nil
 			existingCreds.Mock = nil
+			existingCreds.Enphase = nil
 		}
 
 		// if the ess credentials changed, we need to verify them and potentially backfill history
@@ -477,4 +492,131 @@ func getESSBackoff(failures int) time.Duration {
 	}
 
 	return time.Duration(seconds) * time.Second
+}
+
+func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	siteID := s.getSiteID(r)
+
+	user := s.getUser(r)
+	if user.ID == "" {
+		writeJSONError(w, "missing authentication", http.StatusUnauthorized)
+		return
+	}
+
+	if !user.Admin {
+		writeJSONError(w, "unauthorized", http.StatusForbidden)
+		return
+	}
+
+	var req struct {
+		ESS         string             `json:"ess"`
+		Credentials *types.Credentials `json:"credentials,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to decode ess stage request", slog.Any("error", err))
+		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.ESS == "" {
+		writeJSONError(w, "missing ess", http.StatusBadRequest)
+		return
+	}
+
+	tempSettings := types.Settings{
+		ESS: req.ESS,
+	}
+
+	existing, version, err := s.storage.GetSettings(ctx, siteID)
+	if err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to get settings", slog.Any("error", err))
+		writeJSONError(w, "failed to get settings", http.StatusInternalServerError)
+		return
+	}
+
+	if existing.ESSAuthStatus.ConsecutiveFailures > 1 {
+		backoff := getESSBackoff(existing.ESSAuthStatus.ConsecutiveFailures)
+		timeLeft := backoff - time.Since(existing.ESSAuthStatus.LastAttempt)
+		if timeLeft > 0 {
+			timeLeft = timeLeft.Round(time.Second)
+			writeJSONError(w, fmt.Sprintf("ESS authentication rate limited, try again in %v", timeLeft), http.StatusTooManyRequests)
+			return
+		}
+	}
+
+	var existingCreds types.Credentials
+	if len(existing.EncryptedCredentials) > 0 {
+		existingCreds, err = s.decryptCredentials(ctx, existing.EncryptedCredentials)
+		if err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to decrypt credentials", slog.Any("error", err))
+			writeJSONError(w, "failed to decrypt credentials", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	switch req.ESS {
+	case "enphase":
+		if req.Credentials != nil && req.Credentials.Enphase != nil {
+			if existingCreds.Enphase == nil {
+				existingCreds.Enphase = &types.EnphaseCredentials{}
+			}
+			existingCreds.Enphase.Username = req.Credentials.Enphase.Username
+			existingCreds.Enphase.Password = req.Credentials.Enphase.Password
+			existingCreds.Enphase.Code = req.Credentials.Enphase.Code
+		}
+		existingCreds.Franklin = nil
+		existingCreds.Mock = nil
+		existingCreds.Tesla = nil
+	case "franklin":
+		log.Ctx(ctx).ErrorContext(ctx, "stages not supported for franklin")
+		writeJSONError(w, "Franklin does not support stages", http.StatusBadRequest)
+		return
+	case "mock":
+		log.Ctx(ctx).ErrorContext(ctx, "stages not supported for mock")
+		writeJSONError(w, "Mock does not support stages", http.StatusBadRequest)
+		return
+	case "tesla":
+		log.Ctx(ctx).ErrorContext(ctx, "stages not supported for tesla")
+		writeJSONError(w, "Tesla does not support stages", http.StatusBadRequest)
+		return
+	default:
+		log.Ctx(ctx).ErrorContext(ctx, "unknown ess", slog.String("ess", req.ESS))
+		writeJSONError(w, "unknown ess", http.StatusBadRequest)
+		return
+	}
+
+	essSystem, err := s.ess.Site(ctx, siteID, tempSettings)
+	if err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to get ess system", slog.Any("error", err))
+		writeJSONError(w, fmt.Sprintf("failed to get ess system: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	_, _, err = essSystem.Authenticate(ctx, existingCreds)
+	now := time.Now().UTC()
+	// its expected that this returns needs next stage if there is one
+	if err != nil && !errors.Is(err, ess.ErrNeedsNextStage) {
+		existing.ESSAuthStatus.ConsecutiveFailures++
+		existing.ESSAuthStatus.LastAttempt = now
+		if dbErr := s.storage.SetSettings(ctx, siteID, existing, version); dbErr != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status", slog.Any("error", dbErr))
+		}
+
+		log.Ctx(ctx).WarnContext(ctx, "ess stage authentication failed", slog.Any("error", err))
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if existing.ESSAuthStatus.ConsecutiveFailures > 0 {
+		existing.ESSAuthStatus.ConsecutiveFailures = 0
+		existing.ESSAuthStatus.LastAttempt = now
+		if dbErr := s.storage.SetSettings(ctx, siteID, existing, version); dbErr != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status", slog.Any("error", dbErr))
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }

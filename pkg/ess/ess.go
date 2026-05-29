@@ -12,6 +12,7 @@ import (
 )
 
 var ErrCredentialsMissing = errors.New("credentials missing")
+var ErrNeedsNextStage = errors.New("authentication needs next stage")
 
 // System defines the interface for interacting with an Energy Storage System (like FranklinWH).
 type System interface {

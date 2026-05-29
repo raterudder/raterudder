@@ -2,6 +2,7 @@ package ess
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -68,12 +69,15 @@ func enphaseInfo() types.ESSProviderInfo {
 				Name:     "Email",
 				Type:     types.ESSCredentialFieldTypeString,
 				Required: true,
+				Stage:    0,
 			},
 			{
-				Field:    "password",
-				Name:     "Password",
-				Type:     types.ESSCredentialFieldTypePassword,
-				Required: true,
+				Field:       "code",
+				Name:        "Email Code",
+				Type:        types.ESSCredentialFieldTypeString,
+				Required:    false,
+				Stage:       1,
+				Description: "Enter the code sent to your email/phone.",
 			},
 		},
 	}
@@ -91,13 +95,8 @@ func (e *Enphase) ApplySettings(ctx context.Context, settings types.Settings) er
 }
 
 func (e *Enphase) Authenticate(ctx context.Context, creds types.Credentials) (types.Credentials, bool, error) {
-	if creds.Enphase == nil || creds.Enphase.Username == "" || creds.Enphase.Password == "" {
-		// If we have session info but no password, we might be able to restore
-		if creds.Enphase != nil && creds.Enphase.SessionID != "" && creds.Enphase.Username != "" {
-			// Restore from cache
-		} else {
-			return creds, false, ErrCredentialsMissing
-		}
+	if creds.Enphase == nil || creds.Enphase.Username == "" {
+		return creds, false, ErrCredentialsMissing
 	}
 
 	e.mu.Lock()
@@ -106,15 +105,42 @@ func (e *Enphase) Authenticate(ctx context.Context, creds types.Credentials) (ty
 	needLogin := creds.Enphase.SessionID == "" || creds.Enphase.ManagerToken == "" || creds.Enphase.SystemID == 0
 	if !needLogin && e.username != "" {
 		// Check if credentials changed
-		needLogin = e.username != creds.Enphase.Username || e.password != creds.Enphase.Password
+		if e.username != creds.Enphase.Username {
+			needLogin = true
+		} else if creds.Enphase.Password != "" && e.password != creds.Enphase.Password {
+			needLogin = true
+		} else if creds.Enphase.Code != "" {
+			needLogin = true
+		}
 	}
 
 	var changed bool
 	if needLogin {
-		log.Ctx(ctx).DebugContext(ctx, "logging in to enphase")
-		res, err := e.login(ctx, creds.Enphase.Username, creds.Enphase.Password)
-		if err != nil {
-			return creds, false, err
+		var res enphaseLoginResponse
+		var err error
+
+		if creds.Enphase.Code != "" {
+			log.Ctx(ctx).DebugContext(ctx, "logging in to enphase with otp code")
+			res, err = e.loginWithOTP(ctx, creds.Enphase.Username, creds.Enphase.Code)
+			if err != nil {
+				return creds, false, err
+			}
+			// Clear the temporary Code field so we don't store it
+			creds.Enphase.Code = ""
+		} else if creds.Enphase.Password != "" {
+			log.Ctx(ctx).DebugContext(ctx, "logging in to enphase with password")
+			res, err = e.login(ctx, creds.Enphase.Username, creds.Enphase.Password)
+			if err != nil {
+				return creds, false, err
+			}
+		} else {
+			// Trigger OTP generation
+			log.Ctx(ctx).DebugContext(ctx, "triggering enphase otp email code generation")
+			err = e.generateOTP(ctx, creds.Enphase.Username)
+			if err != nil {
+				return creds, false, err
+			}
+			return creds, false, ErrNeedsNextStage
 		}
 
 		e.username = creds.Enphase.Username
@@ -148,26 +174,31 @@ func (e *Enphase) Authenticate(ctx context.Context, creds types.Credentials) (ty
 	if _, err := e.getDataWithCache(ctx, true); err != nil {
 		// If we didn't just login and we got a 401, try to login and retry
 		if !needLogin && errors.Is(err, errEnphaseUnauthorized) {
-			log.Ctx(ctx).DebugContext(ctx, "enphase session expired, retrying login")
-			res, err := e.login(ctx, e.username, e.password)
-			if err != nil {
+			if e.password != "" {
+				log.Ctx(ctx).DebugContext(ctx, "enphase session expired, retrying login")
+				res, err := e.login(ctx, e.username, e.password)
+				if err != nil {
+					return creds, false, err
+				}
+
+				e.sessionID = res.SessionID
+				e.managerToken = res.ManagerToken
+				e.systemID = res.SystemID
+				e.syncCookies()
+
+				creds.Enphase.SessionID = res.SessionID
+				creds.Enphase.ManagerToken = res.ManagerToken
+				creds.Enphase.SystemID = res.SystemID
+				changed = true
+
+				// Retry fetching data
+				_, err = e.getDataWithCache(ctx, true)
+				if err != nil {
+					return creds, false, fmt.Errorf("credential validation failed after retry: %w", err)
+				}
+			} else {
+				log.Ctx(ctx).WarnContext(ctx, "enphase session expired, cannot retry login without password")
 				return creds, false, err
-			}
-
-			e.sessionID = res.SessionID
-			e.managerToken = res.ManagerToken
-			e.systemID = res.SystemID
-			e.syncCookies()
-
-			creds.Enphase.SessionID = res.SessionID
-			creds.Enphase.ManagerToken = res.ManagerToken
-			creds.Enphase.SystemID = res.SystemID
-			changed = true
-
-			// Retry fetching data
-			_, err = e.getDataWithCache(ctx, true)
-			if err != nil {
-				return creds, false, fmt.Errorf("credential validation failed after retry: %w", err)
 			}
 		} else {
 			log.Ctx(ctx).WarnContext(ctx, "enphase credential validation failed", slog.Any("error", err))
@@ -385,6 +416,62 @@ func (e *Enphase) login(ctx context.Context, username, password string) (enphase
 	return res, nil
 }
 
+func (e *Enphase) generateOTP(ctx context.Context, email string) error {
+	data := url.Values{}
+	b64Email := base64.StdEncoding.EncodeToString([]byte(email))
+	data.Set("email", b64Email)
+	data.Set("locale", "en")
+	data.Set("source", "ENHO")
+
+	u := e.baseURL.JoinPath("app-api/generate_login_otp.json")
+	req, err := http.NewRequestWithContext(ctx, "POST", u.String(), strings.NewReader(data.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+
+	var res struct {
+		Success   bool `json:"success"`
+		IsBlocked bool `json:"isBlocked"`
+	}
+	if err := e.doRequest(req, &res); err != nil {
+		return err
+	}
+
+	if !res.Success {
+		return fmt.Errorf("enphase otp generation failed (blocked: %v)", res.IsBlocked)
+	}
+
+	return nil
+}
+
+func (e *Enphase) loginWithOTP(ctx context.Context, email, otp string) (enphaseLoginResponse, error) {
+	data := url.Values{}
+	b64Email := base64.StdEncoding.EncodeToString([]byte(email))
+	b64OTP := base64.StdEncoding.EncodeToString([]byte(otp))
+	data.Set("email", b64Email)
+	data.Set("otp", b64OTP)
+	data.Set("xhrFields[withCredentials]", "true")
+
+	u := e.baseURL.JoinPath("app-api/validate_login_otp.json")
+	req, err := http.NewRequestWithContext(ctx, "POST", u.String(), strings.NewReader(data.Encode()))
+	if err != nil {
+		return enphaseLoginResponse{}, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+
+	var res enphaseLoginResponse
+	if err := e.doRequest(req, &res); err != nil {
+		return enphaseLoginResponse{}, err
+	}
+
+	if res.Message != "success" {
+		return enphaseLoginResponse{}, fmt.Errorf("enphase otp validation failed: %s", res.Message)
+	}
+
+	return res, nil
+}
+
 func (e *Enphase) getDataWithCache(ctx context.Context, force bool) (enphaseDataResult, error) {
 	if !force && time.Now().Before(e.dataExpiry) {
 		return e.dataCache, nil
@@ -489,7 +576,7 @@ func (e *Enphase) doRequest(req *http.Request, dest any) error {
 			return err
 		}
 
-		if !strings.HasSuffix(req.URL.Path, "/login/login.json") {
+		if !strings.HasSuffix(req.URL.Path, "/login.json") && !strings.HasSuffix(req.URL.Path, "/generate_login_otp.json") {
 			log.Ctx(req.Context()).DebugContext(
 				req.Context(),
 				"enphase result",

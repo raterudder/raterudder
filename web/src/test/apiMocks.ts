@@ -146,6 +146,7 @@ export const setupDefaultApiMocks = (api: any) => {
     if (typeof api.fetchUtilities?.mockResolvedValue === 'function') api.fetchUtilities.mockResolvedValue(defaultUtilities);
     if (typeof api.fetchESSList?.mockResolvedValue === 'function') api.fetchESSList.mockResolvedValue(defaultESSProviders);
     if (typeof api.updateSettings?.mockResolvedValue === 'function') api.updateSettings.mockResolvedValue(undefined);
+    if (typeof api.submitESSStage?.mockResolvedValue === 'function') api.submitESSStage.mockResolvedValue(undefined);
     if (typeof api.login?.mockResolvedValue === 'function') api.login.mockResolvedValue(undefined);
     if (typeof api.logout?.mockResolvedValue === 'function') api.logout.mockResolvedValue(undefined);
     if (typeof api.fetchModeling?.mockResolvedValue === 'function') api.fetchModeling.mockResolvedValue([]);

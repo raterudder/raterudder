@@ -144,6 +144,7 @@ type FranklinCredentials struct {
 type EnphaseCredentials struct {
 	Username     string `json:"username"`
 	Password     string `json:"password,omitempty"`
+	Code         string `json:"code,omitempty"`
 	SessionID    string `json:"sessionID,omitempty"`
 	ManagerToken string `json:"managerToken,omitempty"`
 	SystemID     int    `json:"systemID,omitempty"`

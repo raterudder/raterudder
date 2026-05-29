@@ -209,6 +209,8 @@ export interface ESSCredentialField {
   description?: string;
   choices?: ESSCredentialFieldChoice[];
   default?: any;
+  stage?: number;
+  hidden?: boolean;
 }
 
 export interface ESSProviderInfo {
@@ -583,4 +585,26 @@ export const fetchHistoryEnergy = async (date: Date, siteID?: string): Promise<H
         throw new Error(await extractError(response, 'Failed to fetch energy history'));
     }
     return response.json();
+};
+
+export const submitESSStage = async (ess: string, credentials: Record<string, any>, siteID?: string): Promise<void> => {
+    const payload: any = {
+        ess,
+        credentials: {
+            [ess]: credentials,
+        },
+    };
+    if (siteID) {
+        payload.siteID = siteID;
+    }
+    const response = await fetch('/api/ess/stage', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Failed to trigger next stage'));
+    }
 };

@@ -219,4 +219,91 @@ func TestEnphase(t *testing.T) {
 		assert.Equal(t, 0.5, hourStat.SolarToGridKWH)
 		assert.Equal(t, 0.5, hourStat.HomeKWH)
 	})
+
+	t.Run("Authenticate trigger OTP", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/app-api/generate_login_otp.json" {
+				assert.Equal(t, "POST", r.Method)
+				assert.Equal(t, "application/x-www-form-urlencoded; charset=UTF-8", r.Header.Get("Content-Type"))
+
+				err := r.ParseForm()
+				assert.NoError(t, err)
+				assert.Equal(t, "dGVzdEBleGFtcGxlLmNvbQ==", r.Form.Get("email"))
+				assert.Equal(t, "en", r.Form.Get("locale"))
+				assert.Equal(t, "ENHO", r.Form.Get("source"))
+
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"success":true,"isBlocked":false}`))
+				return
+			}
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}))
+		defer server.Close()
+
+		e := newEnphase()
+		e.baseURL, _ = url.Parse(server.URL)
+
+		creds := types.Credentials{
+			Enphase: &types.EnphaseCredentials{
+				Username: "test@example.com",
+			},
+		}
+
+		_, changed, err := e.Authenticate(context.Background(), creds)
+		require.ErrorIs(t, err, ErrNeedsNextStage)
+		assert.False(t, changed)
+	})
+
+	t.Run("Authenticate validate OTP code", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/app-api/validate_login_otp.json" {
+				assert.Equal(t, "POST", r.Method)
+				assert.Equal(t, "application/x-www-form-urlencoded; charset=UTF-8", r.Header.Get("Content-Type"))
+
+				err := r.ParseForm()
+				assert.NoError(t, err)
+				assert.Equal(t, "dGVzdEBleGFtcGxlLmNvbQ==", r.Form.Get("email"))
+				assert.Equal(t, "MTIzNDU2", r.Form.Get("otp"))
+				assert.Equal(t, "true", r.Form.Get("xhrFields[withCredentials]"))
+
+				res := enphaseLoginResponse{
+					Message:      "success",
+					SessionID:    "sessionotp123",
+					ManagerToken: "tokenotp123",
+					SystemID:     987654321,
+				}
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(res)
+				return
+			}
+
+			if r.URL.Path == "/app-api/987654321/data.json" {
+				res := enphaseDataResult{State: enphaseState{SiteID: 123}}
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(res)
+				return
+			}
+
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}))
+		defer server.Close()
+
+		e := newEnphase()
+		e.baseURL, _ = url.Parse(server.URL)
+
+		creds := types.Credentials{
+			Enphase: &types.EnphaseCredentials{
+				Username: "test@example.com",
+				Code:     "123456",
+			},
+		}
+
+		updatedCreds, changed, err := e.Authenticate(context.Background(), creds)
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.Equal(t, "sessionotp123", updatedCreds.Enphase.SessionID)
+		assert.Equal(t, "tokenotp123", updatedCreds.Enphase.ManagerToken)
+		assert.Equal(t, 987654321, updatedCreds.Enphase.SystemID)
+		assert.Empty(t, updatedCreds.Enphase.Code)
+	})
 }

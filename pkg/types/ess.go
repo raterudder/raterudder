@@ -30,6 +30,8 @@ type ESSCredentialField struct {
 	Default     any                        `json:"default,omitempty"`
 	Required    bool                       `json:"required"`
 	Description string                     `json:"description,omitempty"`
+	Stage       int                        `json:"stage"`
+	Hidden      bool                       `json:"hidden,omitempty"`
 }
 
 // ESSCredentialFieldChoice defines a single choice for an ESSCredentialField.

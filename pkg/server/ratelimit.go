@@ -233,7 +233,8 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 			r.URL.Path == "/api/join" ||
 			r.URL.Path == "/api/update" ||
 			r.URL.Path == "/api/updateSites" ||
-			r.URL.Path == "/api/tesla/register"
+			r.URL.Path == "/api/tesla/register" ||
+			r.URL.Path == "/api/ess/stage"
 
 		// Apply sensitive rate limit first if applicable
 		if isSensitive {

@@ -1447,3 +1447,245 @@ func TestGetESSBackoff(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleESSStage(t *testing.T) {
+	newAuthServer := func() (*Server, *mockESS, *mockStorage) {
+		mockES := &mockESS{MockName: "enphase"}
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockES)
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+
+		mockS := &mockStorage{}
+		return &Server{
+			ess:           essMap,
+			storage:       mockS,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}, mockES, mockS
+	}
+
+	withUser := func(req *http.Request, email string, isAdmin bool) *http.Request {
+		user := types.User{
+			ID:    email,
+			Email: email,
+			Admin: isAdmin,
+		}
+		ctx := context.WithValue(req.Context(), userContextKey, user)
+		ctx = context.WithValue(ctx, siteIDContextKey, types.SiteIDNone)
+		return req.WithContext(ctx)
+	}
+
+	t.Run("Stage success on ErrNeedsNextStage", func(t *testing.T) {
+		srv, mockES, mockS := newAuthServer()
+
+		// GetSettings expectation
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{}, types.CurrentSettingsVersion, nil)
+
+		// Authenticate returns ErrNeedsNextStage
+		mockES.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+			return c.Enphase != nil && c.Enphase.Username == "test@example.com"
+		})).Return(types.Credentials{}, false, ess.ErrNeedsNextStage)
+
+		body := map[string]any{
+			"ess": "enphase",
+			"credentials": map[string]any{
+				"enphase": map[string]any{
+					"username": "test@example.com",
+				},
+			},
+		}
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest("POST", "/api/ess/stage", bytes.NewReader(b))
+		req = withUser(req, "admin@example.com", true)
+		w := httptest.NewRecorder()
+
+		srv.handleESSStage(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+		var resp map[string]bool
+		err = json.NewDecoder(w.Body).Decode(&resp)
+		require.NoError(t, err)
+		assert.True(t, resp["success"])
+	})
+
+	t.Run("Stage failure on other error", func(t *testing.T) {
+		srv, mockES, mockS := newAuthServer()
+
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{}, types.CurrentSettingsVersion, nil)
+
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, fmt.Errorf("some other error"))
+
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.Anything, types.CurrentSettingsVersion).Return(nil).Once()
+
+		body := map[string]any{
+			"ess": "enphase",
+			"credentials": map[string]any{
+				"enphase": map[string]any{
+					"username": "test@example.com",
+				},
+			},
+		}
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest("POST", "/api/ess/stage", bytes.NewReader(b))
+		req = withUser(req, "admin@example.com", true)
+		w := httptest.NewRecorder()
+
+		srv.handleESSStage(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+		assert.Contains(t, w.Body.String(), "some other error")
+	})
+
+	t.Run("Stage failure on unsupported or unknown ESS", func(t *testing.T) {
+		srv, _, mockS := newAuthServer()
+
+		// GetSettings expectation
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{}, types.CurrentSettingsVersion, nil)
+
+		// Test unsupported ESS (e.g. franklin)
+		body := map[string]any{
+			"ess": "franklin",
+			"credentials": map[string]any{
+				"franklin": map[string]any{
+					"password": "123",
+				},
+			},
+		}
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest("POST", "/api/ess/stage", bytes.NewReader(b))
+		req = withUser(req, "admin@example.com", true)
+		w := httptest.NewRecorder()
+
+		srv.handleESSStage(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+		assert.Contains(t, w.Body.String(), "Franklin does not support stages")
+
+		// Test unknown ESS
+		bodyUnknown := map[string]any{
+			"ess": "unknown_ess",
+		}
+		bUnknown, err := json.Marshal(bodyUnknown)
+		require.NoError(t, err)
+
+		reqUnknown := httptest.NewRequest("POST", "/api/ess/stage", bytes.NewReader(bUnknown))
+		reqUnknown = withUser(reqUnknown, "admin@example.com", true)
+		wUnknown := httptest.NewRecorder()
+
+		srv.handleESSStage(wUnknown, reqUnknown)
+		assert.Equal(t, http.StatusBadRequest, wUnknown.Result().StatusCode)
+		assert.Contains(t, wUnknown.Body.String(), "unknown ess")
+	})
+
+	t.Run("Stage failure increments consecutive failures and rate limits", func(t *testing.T) {
+		srv, mockES, mockS := newAuthServer()
+
+		// Initial request: GetSettings returns 0 failures
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+			ESS: "enphase",
+			ESSAuthStatus: types.ESSAuthStatus{
+				ConsecutiveFailures: 0,
+			},
+		}, types.CurrentSettingsVersion, nil).Once()
+
+		// Authenticate returns error
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, fmt.Errorf("auth failed")).Once()
+
+		// SetSettings must be called to update auth status
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.Anything, types.CurrentSettingsVersion).Return(nil).Once()
+
+		body := map[string]any{
+			"ess": "enphase",
+			"credentials": map[string]any{
+				"enphase": map[string]any{
+					"username": "test@example.com",
+				},
+			},
+		}
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest("POST", "/api/ess/stage", bytes.NewReader(b))
+		req = withUser(req, "admin@example.com", true)
+		w := httptest.NewRecorder()
+
+		srv.handleESSStage(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+
+		// Second request: GetSettings returns 2 failures
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+			ESS: "enphase",
+			ESSAuthStatus: types.ESSAuthStatus{
+				ConsecutiveFailures: 2,
+				LastAttempt:         time.Now().UTC(),
+			},
+		}, types.CurrentSettingsVersion, nil).Once()
+
+		req2 := httptest.NewRequest("POST", "/api/ess/stage", bytes.NewReader(b))
+		req2 = withUser(req2, "admin@example.com", true)
+		w2 := httptest.NewRecorder()
+
+		srv.handleESSStage(w2, req2)
+		assert.Equal(t, http.StatusTooManyRequests, w2.Result().StatusCode)
+		assert.Contains(t, w2.Body.String(), "ESS authentication rate limited")
+	})
+
+	t.Run("Stage success resets consecutive failures", func(t *testing.T) {
+		srv, mockES, mockS := newAuthServer()
+
+		// GetSettings returns 2 failures
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+			ESS: "enphase",
+			ESSAuthStatus: types.ESSAuthStatus{
+				ConsecutiveFailures: 2,
+				LastAttempt:         time.Now().UTC().Add(-10 * time.Minute), // wait has expired
+			},
+		}, types.CurrentSettingsVersion, nil).Once()
+
+		// Authenticate returns ErrNeedsNextStage (success)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, ess.ErrNeedsNextStage).Once()
+
+		// SetSettings must be called to reset auth status
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.Anything, types.CurrentSettingsVersion).Return(nil).Once()
+
+		body := map[string]any{
+			"ess": "enphase",
+			"credentials": map[string]any{
+				"enphase": map[string]any{
+					"username": "test@example.com",
+				},
+			},
+		}
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest("POST", "/api/ess/stage", bytes.NewReader(b))
+		req = withUser(req, "admin@example.com", true)
+		w := httptest.NewRecorder()
+
+		srv.handleESSStage(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+		// Let's also test a complete success (err = nil) which resets failures to 0
+		srv2, mockES2, mockS2 := newAuthServer()
+		mockS2.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+			ESS: "enphase",
+			ESSAuthStatus: types.ESSAuthStatus{
+				ConsecutiveFailures: 2,
+				LastAttempt:         time.Now().UTC().Add(-10 * time.Minute),
+			},
+		}, types.CurrentSettingsVersion, nil).Once()
+
+		mockES2.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil).Once()
+		mockS2.On("SetSettings", mock.Anything, types.SiteIDNone, mock.Anything, types.CurrentSettingsVersion).Return(nil).Once()
+
+		w2 := httptest.NewRecorder()
+		req2 := httptest.NewRequest("POST", "/api/ess/stage", bytes.NewReader(b))
+		req2 = withUser(req2, "admin@example.com", true)
+		srv2.handleESSStage(w2, req2)
+		assert.Equal(t, http.StatusOK, w2.Result().StatusCode)
+	})
+}
