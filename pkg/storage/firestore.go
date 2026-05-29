@@ -74,6 +74,11 @@ func (f *FirestoreProvider) Init(ctx context.Context) error {
 	return nil
 }
 
+// FirestoreClient returns the underlying *firestore.Client.
+func (f *FirestoreProvider) FirestoreClient() *firestore.Client {
+	return f.client
+}
+
 // Ping checks if the Firestore client can connect to the database.
 func (f *FirestoreProvider) Ping(ctx context.Context) error {
 	if f.client == nil {

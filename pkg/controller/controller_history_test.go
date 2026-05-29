@@ -28,16 +28,6 @@ var fileBaselines = map[string]float64{
 	"site4_may.json":   3.358,
 }
 
-type JSONDataset struct {
-	SiteID        string                   `json:"siteId"`
-	Period        string                   `json:"period"`
-	SimStart      time.Time                `json:"simStart"`
-	SimEnd        time.Time                `json:"simEnd"`
-	EnergyHistory []types.DailyEnergyStats `json:"energyHistory"`
-	ActionHistory []types.Action           `json:"actionHistory"`
-	PriceHistory  []types.Price            `json:"priceHistory"`
-}
-
 func findEnergyStats(history []types.DailyEnergyStats, ts time.Time, loc *time.Location) (types.EnergyStats, bool) {
 	targetHour := ts.In(loc).Truncate(time.Hour)
 	for _, day := range history {
@@ -104,7 +94,7 @@ func TestDecideHistory(t *testing.T) {
 			fileBytes, err := historyFS.ReadFile("testdata/history/" + fileName)
 			require.NoError(t, err)
 
-			var dataset JSONDataset
+			var dataset types.ControllerHistoryDataset
 			err = json.Unmarshal(fileBytes, &dataset)
 			require.NoError(t, err)
 
