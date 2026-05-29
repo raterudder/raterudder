@@ -36,7 +36,7 @@ const DateSelector: React.FC<DateSelectorProps> = ({
     }, [onDateChange, loading, isToday]);
 
     return (
-        <div className="date-controls">
+        <div className="date-controls" role="group" aria-label="Date selection">
             <button
                 onClick={() => onDateChange(-1)}
                 disabled={loading}
@@ -47,7 +47,7 @@ const DateSelector: React.FC<DateSelectorProps> = ({
                 <span aria-hidden="true">&lt;</span> Prev
                 <kbd aria-hidden="true" className="shortcut-hint">←</kbd>
             </button>
-            <h2>{formattedDate}</h2>
+            <h2 aria-live="polite">{formattedDate}</h2>
             <button
                 onClick={() => onDateChange(1)}
                 disabled={loading || isToday}
