@@ -1630,7 +1630,7 @@ func TestHandleESSStage(t *testing.T) {
 
 		srv.handleESSStage(w2, req2)
 		assert.Equal(t, http.StatusTooManyRequests, w2.Result().StatusCode)
-		assert.Contains(t, w2.Body.String(), "ESS authentication rate limited")
+		assert.Contains(t, w2.Body.String(), "ESS rate limited")
 	})
 
 	t.Run("Stage success resets consecutive failures", func(t *testing.T) {

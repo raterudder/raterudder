@@ -1468,3 +1468,98 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		mockW.AssertNotCalled(t, "Forecast")
 	})
 }
+
+func TestSetESSModes(t *testing.T) {
+	t.Run("Success clears ConsecutiveSetFailures", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockES := &mockESS{}
+
+		// Expect SetModes to succeed
+		mockES.On("SetModes", mock.Anything, types.BatteryModeChargeAny, types.SolarModeAny).Return(nil)
+
+		// Expect settings to be saved with ConsecutiveSetFailures reset to 0
+		mockS.On("SetSettings", mock.Anything, "test-site", mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveSetFailures == 0
+		}), 1).Return(nil)
+
+		srv := &Server{
+			storage: mockS,
+		}
+
+		settings := settingsWithVersion{
+			Settings: types.Settings{
+				ESSAuthStatus: types.ESSAuthStatus{
+					ConsecutiveSetFailures: 3,
+					LastAttempt:            time.Now(),
+				},
+			},
+			version: 1,
+		}
+
+		err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeChargeAny, settings)
+		assert.NoError(t, err)
+		mockS.AssertExpectations(t)
+		mockES.AssertExpectations(t)
+	})
+
+	t.Run("Unauthorized error increments ConsecutiveSetFailures", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockES := &mockESS{}
+
+		// Expect SetModes to return unauthorized
+		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny).Return(ess.ErrUnauthorized)
+
+		// Expect settings to be saved with ConsecutiveSetFailures incremented
+		mockS.On("SetSettings", mock.Anything, "test-site", mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveSetFailures == 2
+		}), 1).Return(nil)
+
+		srv := &Server{
+			storage: mockS,
+		}
+
+		settings := settingsWithVersion{
+			Settings: types.Settings{
+				ESSAuthStatus: types.ESSAuthStatus{
+					ConsecutiveSetFailures: 1,
+					LastAttempt:            time.Now(),
+				},
+			},
+			version: 1,
+		}
+
+		err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeLoad, settings)
+		assert.ErrorIs(t, err, ess.ErrUnauthorized)
+		mockS.AssertExpectations(t)
+		mockES.AssertExpectations(t)
+	})
+
+	t.Run("Other error does not increment ConsecutiveSetFailures", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockES := &mockESS{}
+
+		// Expect SetModes to return some other error
+		otherErr := fmt.Errorf("network timeout")
+		mockES.On("SetModes", mock.Anything, types.BatteryModeStandby, types.SolarModeAny).Return(otherErr)
+
+		// SetSettings should NOT be called since it is not an unauthorized error
+		srv := &Server{
+			storage: mockS,
+		}
+
+		settings := settingsWithVersion{
+			Settings: types.Settings{
+				ESSAuthStatus: types.ESSAuthStatus{
+					ConsecutiveSetFailures: 1,
+					LastAttempt:            time.Now(),
+				},
+			},
+			version: 1,
+		}
+
+		err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeStandby, settings)
+		assert.ErrorIs(t, err, otherErr)
+		mockS.AssertNotCalled(t, "SetSettings")
+		mockES.AssertExpectations(t)
+	})
+}

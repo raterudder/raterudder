@@ -276,16 +276,33 @@ func (b *baseTesla) doRequest(req *http.Request, dest any) error {
 
 	if resp.StatusCode != http.StatusOK {
 		if len(body) == 0 {
+			if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+				return fmt.Errorf("%w: unexpected tesla response status %d", ErrUnauthorized, resp.StatusCode)
+			}
 			return fmt.Errorf("unexpected tesla response status %d", resp.StatusCode)
 		}
 		var errBody teslaErrorResponse
-		if err := json.Unmarshal(body, &errBody); err == nil && errBody.ErrorDescription != "" {
-			return fmt.Errorf("unexpected tesla response status %d: %s", resp.StatusCode, errBody.ErrorDescription)
+		if err := json.Unmarshal(body, &errBody); err == nil && (errBody.Error != "" || errBody.ErrorDescription != "") {
+			errStr := errBody.ErrorDescription
+			if errStr == "" {
+				errStr = errBody.Error
+			}
+			originalErr := fmt.Errorf("unexpected tesla response status %d: %s", resp.StatusCode, errStr)
+			errStrLower := strings.ToLower(errStr)
+			if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden ||
+				strings.Contains(errStrLower, "unauthorized") || strings.Contains(errStrLower, "missing scopes") || strings.Contains(errStrLower, "invalid_token") {
+				return fmt.Errorf("%w: %w", ErrUnauthorized, originalErr)
+			}
+			return originalErr
 		}
 		if len(body) > 256 {
 			body = body[:256]
 		}
-		return fmt.Errorf("unexpected hm sponse status %d: %s", resp.StatusCode, string(body))
+		originalErr := fmt.Errorf("unexpected tesla response status %d: %s", resp.StatusCode, string(body))
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return fmt.Errorf("%w: %w", ErrUnauthorized, originalErr)
+		}
+		return originalErr
 	}
 
 	if dest != nil {
@@ -496,11 +513,20 @@ func (b *Tesla) doGETRequest(ctx context.Context, path string, params url.Values
 	}
 
 	// debug log the whole response which will aid in debugging
+	var logResponse any = response.Response
+	var responseMap map[string]any
+	if err := json.Unmarshal(response.Response, &responseMap); err == nil {
+		if _, hasTariff := responseMap["tariff_content"]; hasTariff {
+			responseMap["tariff_content"] = "removed: unnecessary and causes logs to be truncated"
+		}
+		logResponse = responseMap
+	}
+
 	log.Ctx(ctx).DebugContext(ctx,
 		"tesla result",
 		slog.String("url", req.URL.String()),
 		slog.String("method", req.Method),
-		slog.Any("response", response.Response),
+		slog.Any("response", logResponse),
 	)
 	if err := json.Unmarshal(response.Response, dest); err != nil {
 		return err

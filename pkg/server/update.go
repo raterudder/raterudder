@@ -338,15 +338,7 @@ func (s *Server) performSiteUpdate(
 	)
 
 	// execute Action
-	switch action.BatteryMode {
-	case types.BatteryModeChargeAny:
-		err = essSystem.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeAny) // Force charge
-	case types.BatteryModeLoad:
-		err = essSystem.SetModes(ctx, types.BatteryModeLoad, types.SolarModeAny) // Use battery
-	case types.BatteryModeStandby:
-		// "self_consumption" is usually safe for idle too (just don't force charge)
-		err = essSystem.SetModes(ctx, types.BatteryModeStandby, types.SolarModeAny)
-	}
+	err = s.setESSModes(ctx, siteID, essSystem, action.BatteryMode, settings)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to set mode", slog.Any("error", err))
 		action.Description += fmt.Sprintf(" (FAILED: %v)", err)
@@ -577,6 +569,45 @@ func (s *Server) updateEnergyHistory(ctx context.Context, siteID string, essSyst
 	if len(newHistory) > 0 {
 		if err := s.storage.UpsertEnergyHistories(ctx, siteID, newHistory, types.CurrentEnergyStatsVersion); err != nil {
 			return fmt.Errorf("failed to upsert energy histories: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Server) setESSModes(
+	ctx context.Context,
+	siteID string,
+	essSystem ess.System,
+	batteryMode types.BatteryMode,
+	settings settingsWithVersion,
+) error {
+	var err error
+	switch batteryMode {
+	case types.BatteryModeChargeAny:
+		err = essSystem.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeAny) // Force charge
+	case types.BatteryModeLoad:
+		err = essSystem.SetModes(ctx, types.BatteryModeLoad, types.SolarModeAny) // Use battery
+	case types.BatteryModeStandby:
+		// "self_consumption" is usually safe for idle too (just don't force charge)
+		err = essSystem.SetModes(ctx, types.BatteryModeStandby, types.SolarModeAny)
+	}
+
+	if err != nil {
+		if errors.Is(err, ess.ErrUnauthorized) {
+			settings.ESSAuthStatus.ConsecutiveSetFailures++
+			settings.ESSAuthStatus.LastAttempt = time.Now().UTC()
+			if dbErr := s.storage.SetSettings(ctx, siteID, settings.Settings, settings.version); dbErr != nil {
+				log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status after set modes failure", slog.Any("error", dbErr))
+			}
+		}
+		return err
+	}
+
+	if settings.ESSAuthStatus.ConsecutiveSetFailures > 0 {
+		settings.ESSAuthStatus.ConsecutiveSetFailures = 0
+		settings.ESSAuthStatus.LastAttempt = time.Now().UTC()
+		if dbErr := s.storage.SetSettings(ctx, siteID, settings.Settings, settings.version); dbErr != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status after set modes success", slog.Any("error", dbErr))
 		}
 	}
 	return nil

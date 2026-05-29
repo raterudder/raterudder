@@ -87,8 +87,9 @@ type Settings struct {
 
 // ESSAuthStatus represents the status of ESS authentication for the site.
 type ESSAuthStatus struct {
-	ConsecutiveFailures int       `json:"consecutiveFailures,omitempty"`
-	LastAttempt         time.Time `json:"lastAttempt,omitempty"`
+	ConsecutiveFailures    int       `json:"consecutiveFailures,omitempty"`
+	ConsecutiveSetFailures int       `json:"consecutiveSetFailures,omitempty"`
+	LastAttempt            time.Time `json:"lastAttempt,omitempty"`
 }
 
 // Credentials for external systems
