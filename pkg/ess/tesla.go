@@ -519,6 +519,9 @@ func (b *Tesla) doGETRequest(ctx context.Context, path string, params url.Values
 		if _, hasTariff := responseMap["tariff_content"]; hasTariff {
 			responseMap["tariff_content"] = "removed: unnecessary and causes logs to be truncated"
 		}
+		if _, hasTariff2 := responseMap["tariff_content_v2"]; hasTariff2 {
+			responseMap["tariff_content_v2"] = "removed: unnecessary and causes logs to be truncated"
+		}
 		logResponse = responseMap
 	}
 
@@ -586,11 +589,25 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		return types.SystemStatus{}, err
 	}
 
+	capacityKWH := siteInfo.NameplateEnergyWH / 1000.0
 	var totalChargeKW float64
 	var totalDischargeKW float64
-	for _, b := range siteInfo.Components.Batteries {
-		totalChargeKW += b.NameplateMaxChargePowerW / 1000.0
-		totalDischargeKW += b.NameplateMaxDischargePowerW / 1000.0
+	if len(siteInfo.Components.Batteries) > 0 {
+		for _, b := range siteInfo.Components.Batteries {
+			totalChargeKW += b.NameplateMaxChargePowerW / 1000.0
+			totalDischargeKW += b.NameplateMaxDischargePowerW / 1000.0
+		}
+	} else if len(siteInfo.Components.Gateways) > 0 {
+		var totalGatewayEnergyWH float64
+		for _, gw := range siteInfo.Components.Gateways {
+			// TODO: find a better way to get charge power. nameplate_power_watts is just the discharge power.
+			totalChargeKW += 5.0
+			totalDischargeKW += gw.NameplatePowerWatts / 1000.0
+			totalGatewayEnergyWH += gw.NameplateEnergyWatts
+		}
+		if capacityKWH == 0 {
+			capacityKWH = totalGatewayEnergyWH / 1000.0
+		}
 	}
 
 	tz := siteInfo.InstallationTimeZone
@@ -607,7 +624,7 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		Timestamp:             time.Now().In(loc),
 		BatterySOC:            liveStatus.PercentageCharged,
 		BatteryKW:             liveStatus.BatteryPowerW / 1000.0,
-		BatteryCapacityKWH:    siteInfo.NameplateEnergyWH / 1000.0,
+		BatteryCapacityKWH:    capacityKWH,
 		MaxBatteryDischargeKW: totalDischargeKW,
 		MaxBatteryChargeKW:    totalChargeKW,
 		SolarKW:               liveStatus.SolarPowerW / 1000.0,
@@ -1072,6 +1089,7 @@ type teslaSiteComponents struct {
 
 	Battery     bool                         `json:"battery"`
 	Batteries   []teslaSiteComponentsBattery `json:"batteries"`
+	Gateways    []teslaSiteComponentsGateway `json:"gateways"`
 	BatteryType string                       `json:"battery_type"`
 
 	Grid             bool `json:"grid"`
@@ -1084,6 +1102,19 @@ type teslaSiteComponents struct {
 	DisallowChargeFromGridWithSolarInstalled bool   `json:"disallow_charge_from_grid_with_solar_installed"`
 	// can be pv_only or battery_ok
 	NetMeterMode string `json:"net_meter_mode"`
+}
+
+type teslaSiteComponentsGateway struct {
+	DeviceID             string  `json:"device_id"`
+	SerialNumber         string  `json:"serial_number"`
+	PartNumber           string  `json:"part_number"`
+	PartName             string  `json:"part_name"`
+	IsActive             bool    `json:"is_active"`
+	SiteID               string  `json:"site_id"`
+	FirmwareVersion      string  `json:"firmware_version"`
+	UpdatedDatetime      string  `json:"updated_datetime"`
+	NameplatePowerWatts  float64 `json:"nameplate_power_watts"`
+	NameplateEnergyWatts float64 `json:"nameplate_energy_watts"`
 }
 
 type teslaSiteComponentsBattery struct {

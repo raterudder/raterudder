@@ -191,6 +191,78 @@ func TestTesla(t *testing.T) {
 		assert.True(t, status.EmergencyMode)
 	})
 
+	t.Run("GetStatus Gateways Fallback", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/1/energy_sites/1234/site_info":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"backup_reserve_percent": 20.0,
+						"nameplate_energy":       0.0, // Trigger gateway fallback
+						"components": map[string]any{
+							"gateways": []map[string]any{
+								{
+									"device_id":              "9626696f-3ba0-46b1-bb9c-22f3d2082017",
+									"din":                    "1707000-11-J--TG124059002L4J",
+									"serial_number":          "TG124059002L4J",
+									"part_number":            "1707000-11-J",
+									"part_type":              4,
+									"part_name":              "Powerwall 3",
+									"is_active":              true,
+									"site_id":                "887f6ddd-6085-4203-bad0-e54d4fd325f2",
+									"firmware_version":       "26.10.3-1-p acae60d8",
+									"updated_datetime":       "2026-05-05T05:51:52.152Z",
+									"nameplate_power_watts":  11520.0,
+									"nameplate_energy_watts": 13500.0,
+								},
+							},
+						},
+					},
+				})
+			case "/api/1/energy_sites/1234/live_status":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"solar_power":        1200.0,
+						"battery_power":      -500.0,
+						"grid_power":         700.0,
+						"load_power":         1400.0,
+						"percentage_charged": 55.4,
+						"grid_status":        "Active",
+						"island_status":      "on_grid",
+						"storm_mode_active":  true,
+					},
+				})
+			default:
+				t.Logf("Unexpected request: %s", r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer ts.Close()
+
+		m := teslaMap(ts)
+		sys, err := m.Site(ctx, "test-site", types.Settings{
+			ESS:           "tesla",
+			MinBatterySOC: 20.0,
+		})
+		require.NoError(t, err)
+
+		teslaSys := sys.(*Tesla)
+		teslaSys.token = "mock-access"
+		teslaSys.energySiteID = 1234
+		teslaSys.baseURL = ts.URL
+
+		status, err := sys.GetStatus(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 1.2, status.SolarKW)
+		assert.Equal(t, -0.5, status.BatteryKW)
+		assert.Equal(t, 0.7, status.GridKW)
+		assert.Equal(t, 1.4, status.HomeKW)
+		assert.Equal(t, 55.4, status.BatterySOC)
+		assert.Equal(t, 13.5, status.BatteryCapacityKWH)
+		assert.Equal(t, 5.0, status.MaxBatteryChargeKW)
+		assert.Equal(t, 11.52, status.MaxBatteryDischargeKW)
+	})
+
 	t.Run("GetStatus Grid Status", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
