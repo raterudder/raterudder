@@ -70,234 +70,56 @@ func shiftXcelWeekendHoliday(t time.Time) time.Time {
 	}
 }
 
-func getXcelGoodFriday(year int) time.Time {
-	// Anonymous Gregorian Algorithm for Easter Sunday
-	a := year % 19
-	b := year / 100
-	c := year % 100
-	d := b / 4
-	e := b % 4
-	f := (b + 8) / 25
-	g := (b - f + 1) / 3
-	h := (19*a + b - d - g + 15) % 30
-	i := c / 4
-	k := c % 4
-	l := (32 + 2*e + 2*i - h - k) % 7
-	m := (a + 11*h + 22*l) / 451
-	month := (h + l - 7*m + 114) / 31
-	day := ((h + l - 7*m + 114) % 31) + 1
-	easter := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
-	return easter.AddDate(0, 0, -2) // Friday before Easter
-}
-
+// getXcelNSPHolidays returns Xcel's holiday calendar for Northern States Power (NSP)
 func getXcelNSPHolidays(year int) []string {
-	var holidays []time.Time
-
-	// 1. New Year's Day (Jan 1)
-	holidays = append(holidays, shiftXcelWeekendHoliday(time.Date(year, time.January, 1, 0, 0, 0, 0, time.UTC)))
-
-	// 2. Good Friday
-	holidays = append(holidays, getXcelGoodFriday(year))
-
-	// 3. Memorial Day (last Monday in May)
-	memorialDay := time.Date(year, time.May, 31, 0, 0, 0, 0, time.UTC)
-	for memorialDay.Weekday() != time.Monday {
-		memorialDay = memorialDay.AddDate(0, 0, -1)
+	holidays := []time.Time{
+		shiftXcelWeekendHoliday(newYearsDay(year)),
+		goodFriday(year),
+		memorialDay(year),
+		shiftXcelWeekendHoliday(independenceDay(year)),
+		laborDay(year),
+		thanksgivingDay(year),
+		shiftXcelWeekendHoliday(christmasDay(year)),
 	}
-	holidays = append(holidays, memorialDay)
 
-	// 4. Independence Day (July 4)
-	holidays = append(holidays, shiftXcelWeekendHoliday(time.Date(year, time.July, 4, 0, 0, 0, 0, time.UTC)))
-
-	// 5. Labor Day (first Monday in September)
-	laborDay := time.Date(year, time.September, 1, 0, 0, 0, 0, time.UTC)
-	for laborDay.Weekday() != time.Monday {
-		laborDay = laborDay.AddDate(0, 0, 1)
-	}
-	holidays = append(holidays, laborDay)
-
-	// 6. Thanksgiving Day (fourth Thursday in November)
-	thanksgiving := time.Date(year, time.November, 1, 0, 0, 0, 0, time.UTC)
-	thursdayCount := 0
-	for thanksgiving.Month() == time.November {
-		if thanksgiving.Weekday() == time.Thursday {
-			thursdayCount++
-			if thursdayCount == 4 {
-				break
-			}
-		}
-		thanksgiving = thanksgiving.AddDate(0, 0, 1)
-	}
-	holidays = append(holidays, thanksgiving)
-
-	// 7. Christmas Day (Dec 25)
-	holidays = append(holidays, shiftXcelWeekendHoliday(time.Date(year, time.December, 25, 0, 0, 0, 0, time.UTC)))
-
-	var holidayStrings []string
-	for _, h := range holidays {
-		if h.Year() == year {
-			holidayStrings = append(holidayStrings, h.Format("2006-01-02"))
-		}
-	}
-	return holidayStrings
+	return formatHolidays(holidays, year)
 }
 
 func getXcelWIHolidays(year int) []string {
-	var holidays []time.Time
+	thanksgiving := thanksgivingDay(year)
 
-	// 1. New Year's Day (Jan 1)
-	holidays = append(holidays, shiftXcelWeekendHoliday(time.Date(year, time.January, 1, 0, 0, 0, 0, time.UTC)))
-
-	// 2. Good Friday
-	holidays = append(holidays, getXcelGoodFriday(year))
-
-	// 3. Memorial Day (last Monday in May)
-	memorialDay := time.Date(year, time.May, 31, 0, 0, 0, 0, time.UTC)
-	for memorialDay.Weekday() != time.Monday {
-		memorialDay = memorialDay.AddDate(0, 0, -1)
+	holidays := []time.Time{
+		shiftXcelWeekendHoliday(newYearsDay(year)),
+		goodFriday(year),
+		memorialDay(year),
+		shiftXcelWeekendHoliday(independenceDay(year)),
+		laborDay(year),
+		thanksgiving,
+		thanksgiving.AddDate(0, 0, 1),
+		shiftXcelWeekendHoliday(christmasEve(year)),
+		shiftXcelWeekendHoliday(christmasDay(year)),
+		shiftXcelWeekendHoliday(newYearsEve(year)),
 	}
-	holidays = append(holidays, memorialDay)
 
-	// 4. Independence Day (July 4)
-	holidays = append(holidays, shiftXcelWeekendHoliday(time.Date(year, time.July, 4, 0, 0, 0, 0, time.UTC)))
-
-	// 5. Labor Day (first Monday in September)
-	laborDay := time.Date(year, time.September, 1, 0, 0, 0, 0, time.UTC)
-	for laborDay.Weekday() != time.Monday {
-		laborDay = laborDay.AddDate(0, 0, 1)
-	}
-	holidays = append(holidays, laborDay)
-
-	// 6. Thanksgiving Day (fourth Thursday in November)
-	thanksgiving := time.Date(year, time.November, 1, 0, 0, 0, 0, time.UTC)
-	thursdayCount := 0
-	for thanksgiving.Month() == time.November {
-		if thanksgiving.Weekday() == time.Thursday {
-			thursdayCount++
-			if thursdayCount == 4 {
-				break
-			}
-		}
-		thanksgiving = thanksgiving.AddDate(0, 0, 1)
-	}
-	holidays = append(holidays, thanksgiving)
-
-	// 7. Friday after Thanksgiving
-	holidays = append(holidays, thanksgiving.AddDate(0, 0, 1))
-
-	// 8. Christmas Eve (Dec 24)
-	holidays = append(holidays, shiftXcelWeekendHoliday(time.Date(year, time.December, 24, 0, 0, 0, 0, time.UTC)))
-
-	// 9. Christmas Day (Dec 25)
-	holidays = append(holidays, shiftXcelWeekendHoliday(time.Date(year, time.December, 25, 0, 0, 0, 0, time.UTC)))
-
-	// 10. New Year's Eve (Dec 31)
-	holidays = append(holidays, shiftXcelWeekendHoliday(time.Date(year, time.December, 31, 0, 0, 0, 0, time.UTC)))
-
-	var holidayStrings []string
-	for _, h := range holidays {
-		if h.Year() == year {
-			holidayStrings = append(holidayStrings, h.Format("2006-01-02"))
-		}
-	}
-	return holidayStrings
+	return formatHolidays(holidays, year)
 }
 
 func getXcelCOHolidays(year int) []string {
-	var holidays []time.Time
-
-	// 1. New Year's Day (Jan 1)
-	holidays = append(holidays, shiftXcelWeekendHoliday(time.Date(year, time.January, 1, 0, 0, 0, 0, time.UTC)))
-
-	// 2. Martin Luther King, Jr. Day (third Monday in January)
-	mlk := time.Date(year, time.January, 1, 0, 0, 0, 0, time.UTC)
-	mondayCount := 0
-	for mlk.Month() == time.January {
-		if mlk.Weekday() == time.Monday {
-			mondayCount++
-			if mondayCount == 3 {
-				break
-			}
-		}
-		mlk = mlk.AddDate(0, 0, 1)
+	holidays := []time.Time{
+		shiftXcelWeekendHoliday(newYearsDay(year)),
+		martinLutherKingDay(year),
+		presidentsDay(year),
+		memorialDay(year),
+		shiftXcelWeekendHoliday(juneteenth(year)),
+		shiftXcelWeekendHoliday(independenceDay(year)),
+		laborDay(year),
+		columbusDay(year),
+		shiftXcelWeekendHoliday(veteransDay(year)),
+		thanksgivingDay(year),
+		shiftXcelWeekendHoliday(christmasDay(year)),
 	}
-	holidays = append(holidays, mlk)
 
-	// 3. Presidents' Day (third Monday in February)
-	presidents := time.Date(year, time.February, 1, 0, 0, 0, 0, time.UTC)
-	mondayCount = 0
-	for presidents.Month() == time.February {
-		if presidents.Weekday() == time.Monday {
-			mondayCount++
-			if mondayCount == 3 {
-				break
-			}
-		}
-		presidents = presidents.AddDate(0, 0, 1)
-	}
-	holidays = append(holidays, presidents)
-
-	// 4. Memorial Day (last Monday in May)
-	memorialDay := time.Date(year, time.May, 31, 0, 0, 0, 0, time.UTC)
-	for memorialDay.Weekday() != time.Monday {
-		memorialDay = memorialDay.AddDate(0, 0, -1)
-	}
-	holidays = append(holidays, memorialDay)
-
-	// 5. Juneteenth (June 19)
-	holidays = append(holidays, shiftXcelWeekendHoliday(time.Date(year, time.June, 19, 0, 0, 0, 0, time.UTC)))
-
-	// 6. Independence Day (July 4)
-	holidays = append(holidays, shiftXcelWeekendHoliday(time.Date(year, time.July, 4, 0, 0, 0, 0, time.UTC)))
-
-	// 7. Labor Day (first Monday in September)
-	laborDay := time.Date(year, time.September, 1, 0, 0, 0, 0, time.UTC)
-	for laborDay.Weekday() != time.Monday {
-		laborDay = laborDay.AddDate(0, 0, 1)
-	}
-	holidays = append(holidays, laborDay)
-
-	// 8. Columbus Day (second Monday in October)
-	columbus := time.Date(year, time.October, 1, 0, 0, 0, 0, time.UTC)
-	mondayCount = 0
-	for columbus.Month() == time.October {
-		if columbus.Weekday() == time.Monday {
-			mondayCount++
-			if mondayCount == 2 {
-				break
-			}
-		}
-		columbus = columbus.AddDate(0, 0, 1)
-	}
-	holidays = append(holidays, columbus)
-
-	// 9. Veterans Day (Nov 11)
-	holidays = append(holidays, shiftXcelWeekendHoliday(time.Date(year, time.November, 11, 0, 0, 0, 0, time.UTC)))
-
-	// 10. Thanksgiving Day (fourth Thursday in November)
-	thanksgiving := time.Date(year, time.November, 1, 0, 0, 0, 0, time.UTC)
-	thursdayCount := 0
-	for thanksgiving.Month() == time.November {
-		if thanksgiving.Weekday() == time.Thursday {
-			thursdayCount++
-			if thursdayCount == 4 {
-				break
-			}
-		}
-		thanksgiving = thanksgiving.AddDate(0, 0, 1)
-	}
-	holidays = append(holidays, thanksgiving)
-
-	// 11. Christmas Day (Dec 25)
-	holidays = append(holidays, shiftXcelWeekendHoliday(time.Date(year, time.December, 25, 0, 0, 0, 0, time.UTC)))
-
-	var holidayStrings []string
-	for _, h := range holidays {
-		if h.Year() == year {
-			holidayStrings = append(holidayStrings, h.Format("2006-01-02"))
-		}
-	}
-	return holidayStrings
+	return formatHolidays(holidays, year)
 }
 
 func getXcelMIPeakHours(option string) types.UtilityHourPeriod {

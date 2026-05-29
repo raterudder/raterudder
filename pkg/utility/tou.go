@@ -928,6 +928,8 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 			},
 		},
 		xcelUtilityInfo(),
+		rockyUtilityInfo(),
+		srpUtilityInfo(),
 	},
 		dukeUtilityInfo()...,
 	)

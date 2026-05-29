@@ -75,147 +75,48 @@ func shiftDukeWeekendHoliday(t time.Time) time.Time {
 	}
 }
 
-// getDukeGoodFriday returns the date of Good Friday (Friday before Easter) for a given year.
-func getDukeGoodFriday(year int) time.Time {
-	var month time.Month
-	var day int
-	switch year {
-	case 2026:
-		month, day = time.April, 3
-	case 2027:
-		month, day = time.March, 26
-	case 2028:
-		month, day = time.April, 14
-	case 2029:
-		month, day = time.March, 30
-	case 2030:
-		month, day = time.April, 19
-	case 2031:
-		month, day = time.April, 11
-	case 2032:
-		month, day = time.March, 26
-	case 2033:
-		month, day = time.April, 15
-	case 2034:
-		month, day = time.April, 7
-	case 2035:
-		month, day = time.March, 23
-	default:
-		panic("unsupported holiday year for Duke Good Friday calculation")
-	}
-	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
-}
-
 // getDukeHolidays returns Duke's holiday calendar for Carolinas/Progress (NC/SC)
 func getDukeHolidays(year int) []string {
-	var holidays []time.Time
+	thanksgiving := thanksgivingDay(year)
+	nextNY := newYearsDay(year + 1)
 
-	// New Year's Day
-	holidays = append(holidays, shiftDukeWeekendHoliday(time.Date(year, time.January, 1, 0, 0, 0, 0, time.UTC)))
-
-	// Good Friday
-	holidays = append(holidays, getDukeGoodFriday(year))
-
-	// Memorial Day (last Monday in May)
-	memDay := time.Date(year, time.May, 31, 0, 0, 0, 0, time.UTC)
-	for memDay.Weekday() != time.Monday {
-		memDay = memDay.AddDate(0, 0, -1)
+	holidays := []time.Time{
+		shiftDukeWeekendHoliday(newYearsDay(year)),
+		goodFriday(year),
+		memorialDay(year),
+		shiftDukeWeekendHoliday(independenceDay(year)),
+		laborDay(year),
+		thanksgiving,
+		thanksgiving.AddDate(0, 0, 1),
+		shiftDukeWeekendHoliday(christmasDay(year)),
 	}
-	holidays = append(holidays, memDay)
 
-	// Independence Day (July 4)
-	holidays = append(holidays, shiftDukeWeekendHoliday(time.Date(year, time.July, 4, 0, 0, 0, 0, time.UTC)))
-
-	// Labor Day (first Monday in September)
-	laborDay := time.Date(year, time.September, 1, 0, 0, 0, 0, time.UTC)
-	for laborDay.Weekday() != time.Monday {
-		laborDay = laborDay.AddDate(0, 0, 1)
-	}
-	holidays = append(holidays, laborDay)
-
-	// Thanksgiving (fourth Thursday in November)
-	tgDay := time.Date(year, time.November, 1, 0, 0, 0, 0, time.UTC)
-	thursdayCount := 0
-	for tgDay.Month() == time.November {
-		if tgDay.Weekday() == time.Thursday {
-			thursdayCount++
-			if thursdayCount == 4 {
-				break
-			}
-		}
-		tgDay = tgDay.AddDate(0, 0, 1)
-	}
-	holidays = append(holidays, tgDay)
-
-	// Day after Thanksgiving (Friday after fourth Thursday in November)
-	holidays = append(holidays, tgDay.AddDate(0, 0, 1))
-
-	// Christmas Day (Dec 25)
-	holidays = append(holidays, shiftDukeWeekendHoliday(time.Date(year, time.December, 25, 0, 0, 0, 0, time.UTC)))
-
-	// Check if next year's New Year's Day holiday falls in this year (Dec 31)
-	nextNY := time.Date(year+1, time.January, 1, 0, 0, 0, 0, time.UTC)
 	if nextNY.Weekday() == time.Saturday {
 		holidays = append(holidays, nextNY.AddDate(0, 0, -1))
 	}
 
-	var holidayStrings []string
-	for _, h := range holidays {
-		if h.Year() == year {
-			holidayStrings = append(holidayStrings, h.Format("2006-01-02"))
-		}
-	}
-	return holidayStrings
+	return formatHolidays(holidays, year)
 }
 
 // getIndianaHolidays returns Duke Energy Indiana's holiday list.
 // Holidays are: New Year's Day, Memorial Day, Independence Day, Labor Day, Thanksgiving Day, Christmas Day.
 func getIndianaHolidays(year int) []string {
-	var holidays []time.Time
+	nextNY := newYearsDay(year + 1)
 
-	holidays = append(holidays, shiftDukeWeekendHoliday(time.Date(year, time.January, 1, 0, 0, 0, 0, time.UTC)))
-
-	memDay := time.Date(year, time.May, 31, 0, 0, 0, 0, time.UTC)
-	for memDay.Weekday() != time.Monday {
-		memDay = memDay.AddDate(0, 0, -1)
+	holidays := []time.Time{
+		shiftDukeWeekendHoliday(newYearsDay(year)),
+		memorialDay(year),
+		shiftDukeWeekendHoliday(independenceDay(year)),
+		laborDay(year),
+		thanksgivingDay(year),
+		shiftDukeWeekendHoliday(christmasDay(year)),
 	}
-	holidays = append(holidays, memDay)
 
-	holidays = append(holidays, shiftDukeWeekendHoliday(time.Date(year, time.July, 4, 0, 0, 0, 0, time.UTC)))
-
-	laborDay := time.Date(year, time.September, 1, 0, 0, 0, 0, time.UTC)
-	for laborDay.Weekday() != time.Monday {
-		laborDay = laborDay.AddDate(0, 0, 1)
-	}
-	holidays = append(holidays, laborDay)
-
-	tgDay := time.Date(year, time.November, 1, 0, 0, 0, 0, time.UTC)
-	thursdayCount := 0
-	for tgDay.Month() == time.November {
-		if tgDay.Weekday() == time.Thursday {
-			thursdayCount++
-			if thursdayCount == 4 {
-				break
-			}
-		}
-		tgDay = tgDay.AddDate(0, 0, 1)
-	}
-	holidays = append(holidays, tgDay)
-
-	holidays = append(holidays, shiftDukeWeekendHoliday(time.Date(year, time.December, 25, 0, 0, 0, 0, time.UTC)))
-
-	nextNY := time.Date(year+1, time.January, 1, 0, 0, 0, 0, time.UTC)
 	if nextNY.Weekday() == time.Saturday {
 		holidays = append(holidays, nextNY.AddDate(0, 0, -1))
 	}
 
-	var holidayStrings []string
-	for _, h := range holidays {
-		if h.Year() == year {
-			holidayStrings = append(holidayStrings, h.Format("2006-01-02"))
-		}
-	}
-	return holidayStrings
+	return formatHolidays(holidays, year)
 }
 
 // buildDukeTOUPeriods generates the standard On-Peak/Discount/Off-Peak periods

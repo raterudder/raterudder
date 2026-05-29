@@ -634,8 +634,6 @@ var pgeNBTData = map[int]map[string]float64{
 // - If a holiday falls on a Sunday, the following Monday is recognized as the holiday.
 // - If a holiday falls on a Saturday, the Friday before is recognized as the holiday.
 func getPGEHolidays(year int) []string {
-	var holidays []time.Time
-
 	shiftPGEWeekendHoliday := func(t time.Time) time.Time {
 		switch t.Weekday() {
 		case time.Saturday:
@@ -647,55 +645,18 @@ func getPGEHolidays(year int) []string {
 		}
 	}
 
-	// 1. New Year's Day (Jan 1)
-	holidays = append(holidays, shiftPGEWeekendHoliday(time.Date(year, time.January, 1, 0, 0, 0, 0, time.UTC)))
-
-	// 2. Presidents' Day: third Monday in February
-	presDay := time.Date(year, time.February, 1, 0, 0, 0, 0, time.UTC)
-	for presDay.Weekday() != time.Monday {
-		presDay = presDay.AddDate(0, 0, 1)
+	holidays := []time.Time{
+		shiftPGEWeekendHoliday(newYearsDay(year)),
+		shiftPGEWeekendHoliday(presidentsDay(year)),
+		memorialDay(year),
+		shiftPGEWeekendHoliday(independenceDay(year)),
+		laborDay(year),
+		shiftPGEWeekendHoliday(veteransDay(year)),
+		thanksgivingDay(year),
+		shiftPGEWeekendHoliday(christmasDay(year)),
 	}
-	presDay = presDay.AddDate(0, 0, 14)
-	holidays = append(holidays, presDay)
 
-	// 3. Memorial Day: last Monday in May
-	memDay := time.Date(year, time.May, 31, 0, 0, 0, 0, time.UTC)
-	for memDay.Weekday() != time.Monday {
-		memDay = memDay.AddDate(0, 0, -1)
-	}
-	holidays = append(holidays, memDay)
-
-	// 4. Independence Day: July 4
-	holidays = append(holidays, shiftPGEWeekendHoliday(time.Date(year, time.July, 4, 0, 0, 0, 0, time.UTC)))
-
-	// 5. Labor Day: first Monday in September
-	laborDay := time.Date(year, time.September, 1, 0, 0, 0, 0, time.UTC)
-	for laborDay.Weekday() != time.Monday {
-		laborDay = laborDay.AddDate(0, 0, 1)
-	}
-	holidays = append(holidays, laborDay)
-
-	// 6. Veterans Day: November 11
-	holidays = append(holidays, shiftPGEWeekendHoliday(time.Date(year, time.November, 11, 0, 0, 0, 0, time.UTC)))
-
-	// 7. Thanksgiving: fourth Thursday in November
-	tgDay := time.Date(year, time.November, 1, 0, 0, 0, 0, time.UTC)
-	for tgDay.Weekday() != time.Thursday {
-		tgDay = tgDay.AddDate(0, 0, 1)
-	}
-	tgDay = tgDay.AddDate(0, 0, 21)
-	holidays = append(holidays, tgDay)
-
-	// 8. Christmas Day: Dec 25
-	holidays = append(holidays, shiftPGEWeekendHoliday(time.Date(year, time.December, 25, 0, 0, 0, 0, time.UTC)))
-
-	var holidayStrings []string
-	for _, h := range holidays {
-		if h.Year() == year {
-			holidayStrings = append(holidayStrings, h.Format("2006-01-02"))
-		}
-	}
-	return holidayStrings
+	return formatHolidays(holidays, year)
 }
 
 // pgEPeriods generates the Pricing periods for PG&E (Pacific Gas & Electric).

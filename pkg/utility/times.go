@@ -37,4 +37,22 @@ var (
 		}
 		return loc
 	}()
+
+	// Rocky Mountain Power uses Mountain Time
+	mtLocation = func() *time.Location {
+		loc, err := time.LoadLocation("America/Denver")
+		if err != nil {
+			panic(fmt.Errorf("failed to load mountain time location: %w", err))
+		}
+		return loc
+	}()
+
+	// Salt River Project uses Mountain Standard Time (no DST)
+	mstLocation = func() *time.Location {
+		loc, err := time.LoadLocation("America/Phoenix")
+		if err != nil {
+			panic(fmt.Errorf("failed to load Arizona time location: %w", err))
+		}
+		return loc
+	}()
 )

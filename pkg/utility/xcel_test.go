@@ -10,17 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestXcelGoodFriday(t *testing.T) {
-	t.Run("Good Friday 2026", func(t *testing.T) {
-		gf2026 := getXcelGoodFriday(2026)
-		assert.Equal(t, "2026-04-03", gf2026.Format("2006-01-02"))
-	})
-	t.Run("Good Friday 2027", func(t *testing.T) {
-		gf2027 := getXcelGoodFriday(2027)
-		assert.Equal(t, "2027-03-26", gf2027.Format("2006-01-02"))
-	})
-}
-
 func TestXcelNSPHolidays(t *testing.T) {
 	t.Run("Check NSP holidays 2026", func(t *testing.T) {
 		holidays := getXcelNSPHolidays(2026)

@@ -1230,8 +1230,6 @@ func getSCENBTExportRate(t time.Time) float64 {
 // - If a holiday falls on a Sunday, the following Monday is recognized as the holiday.
 // - If a holiday falls on a Saturday, it is not shifted (Saturday is already treated as weekend).
 func getSCEHolidays(year int) []string {
-	var holidays []time.Time
-
 	// Helper to shift Sunday holiday to Monday
 	shiftSCEHoliday := func(t time.Time) time.Time {
 		if t.Weekday() == time.Sunday {
@@ -1240,55 +1238,18 @@ func getSCEHolidays(year int) []string {
 		return t
 	}
 
-	// 1. New Year's Day (Jan 1)
-	holidays = append(holidays, shiftSCEHoliday(time.Date(year, time.January, 1, 0, 0, 0, 0, time.UTC)))
-
-	// 2. Presidents' Day: third Monday in February
-	presDay := time.Date(year, time.February, 1, 0, 0, 0, 0, time.UTC)
-	for presDay.Weekday() != time.Monday {
-		presDay = presDay.AddDate(0, 0, 1)
+	holidays := []time.Time{
+		shiftSCEHoliday(newYearsDay(year)),
+		shiftSCEHoliday(presidentsDay(year)),
+		memorialDay(year),
+		shiftSCEHoliday(independenceDay(year)),
+		laborDay(year),
+		shiftSCEHoliday(veteransDay(year)),
+		thanksgivingDay(year),
+		shiftSCEHoliday(christmasDay(year)),
 	}
-	presDay = presDay.AddDate(0, 0, 14)
-	holidays = append(holidays, presDay)
 
-	// 3. Memorial Day: last Monday in May
-	memDay := time.Date(year, time.May, 31, 0, 0, 0, 0, time.UTC)
-	for memDay.Weekday() != time.Monday {
-		memDay = memDay.AddDate(0, 0, -1)
-	}
-	holidays = append(holidays, memDay)
-
-	// 4. Independence Day: July 4
-	holidays = append(holidays, shiftSCEHoliday(time.Date(year, time.July, 4, 0, 0, 0, 0, time.UTC)))
-
-	// 5. Labor Day: first Monday in September
-	laborDay := time.Date(year, time.September, 1, 0, 0, 0, 0, time.UTC)
-	for laborDay.Weekday() != time.Monday {
-		laborDay = laborDay.AddDate(0, 0, 1)
-	}
-	holidays = append(holidays, laborDay)
-
-	// 6. Veterans Day: November 11
-	holidays = append(holidays, shiftSCEHoliday(time.Date(year, time.November, 11, 0, 0, 0, 0, time.UTC)))
-
-	// 7. Thanksgiving: fourth Thursday in November
-	tgDay := time.Date(year, time.November, 1, 0, 0, 0, 0, time.UTC)
-	for tgDay.Weekday() != time.Thursday {
-		tgDay = tgDay.AddDate(0, 0, 1)
-	}
-	tgDay = tgDay.AddDate(0, 0, 21)
-	holidays = append(holidays, tgDay)
-
-	// 8. Christmas Day: Dec 25
-	holidays = append(holidays, shiftSCEHoliday(time.Date(year, time.December, 25, 0, 0, 0, 0, time.UTC)))
-
-	var holidayStrings []string
-	for _, h := range holidays {
-		if h.Year() == year {
-			holidayStrings = append(holidayStrings, h.Format("2006-01-02"))
-		}
-	}
-	return holidayStrings
+	return formatHolidays(holidays, year)
 }
 
 func scePeriods(plan string, options types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {

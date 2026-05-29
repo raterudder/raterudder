@@ -28,26 +28,12 @@ func shiftGPWeekendHoliday(t time.Time) time.Time {
 }
 
 func getGPHolidays(year int) []string {
-	var holidays []time.Time
-
-	// Independence Day: July 4 (shifted Saturday-to-Friday, Sunday-to-Monday)
-	july4 := time.Date(year, time.July, 4, 0, 0, 0, 0, time.UTC)
-	holidays = append(holidays, shiftGPWeekendHoliday(july4))
-
-	// Labor Day: first Monday in September
-	laborDay := time.Date(year, time.September, 1, 0, 0, 0, 0, time.UTC)
-	for laborDay.Weekday() != time.Monday {
-		laborDay = laborDay.AddDate(0, 0, 1)
+	holidays := []time.Time{
+		shiftGPWeekendHoliday(independenceDay(year)),
+		laborDay(year),
 	}
-	holidays = append(holidays, laborDay)
 
-	var holidayStrings []string
-	for _, h := range holidays {
-		if h.Year() == year {
-			holidayStrings = append(holidayStrings, h.Format("2006-01-02"))
-		}
-	}
-	return holidayStrings
+	return formatHolidays(holidays, year)
 }
 
 func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
