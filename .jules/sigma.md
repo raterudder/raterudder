@@ -17,3 +17,6 @@
 ## 2026-04-24 - Go package compilation error from scratchpad files
 **Learning:** Creating a test file with a mismatched package name (like `package test` in a directory full of `package main` or `package server`) will instantly cause a "found multiple packages in the same directory" compilation error in Go, preventing test execution.
 **Action:** When creating new Go files, even if they are temporary or just used as a scratchpad, always match the package declaration of the existing files in that directory, or just delete the file immediately when done.
+## $(date +%Y-%m-%d) - [Improved Context Assertion in Auth Tests]
+**Learning:** In Go tests, `mock.Anything` is often used out of convenience for `context.Context` arguments but it reduces assertion thoroughness, potentially allowing `nil` contexts to slip through and cause runtime panics in deeper code layers.
+**Action:** Replace `mock.Anything` with explicit matchers like `mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil })` for context arguments. Added these strict assertions across the `auth_test.go` suite to ensure test completeness and reliability.
