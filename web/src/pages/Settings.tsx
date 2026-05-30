@@ -1056,7 +1056,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                 </Collapsible.Root>
 
                 <div className="submit-section">
-                    {error && <div className="error-message">{error}</div>}
+                    {error && <div className="error-message" role="alert">{error}</div>}
                     {successMessage && <div className="success-message">{successMessage}</div>}
                     {!(editESS && maxStage > currentStage) && (
                         <button type="submit" className="save-button" disabled={isSaving}>

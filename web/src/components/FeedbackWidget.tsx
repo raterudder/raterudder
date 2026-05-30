@@ -116,7 +116,7 @@ const FeedbackWidget: React.FC<FeedbackWidgetProps> = ({ siteID }) => {
                                         onChange={(e) => setComment(e.target.value)}
                                     />
 
-                                    {error && <div className="feedback-error">{error}</div>}
+                                    {error && <div className="feedback-error" role="alert">{error}</div>}
 
                                     <div className="feedback-actions">
                                         <Popover.Close
