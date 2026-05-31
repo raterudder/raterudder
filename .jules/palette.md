@@ -12,3 +12,6 @@
 ## 2024-05-26 - Hide standalone emojis and html entities in icon-only buttons
 **Learning:** Even when icon-only buttons have an `aria-label`, screen readers may still announce the visible text content (like a "💬" emoji or an "&times;" symbol) inside them, leading to redundant or confusing announcements like "Feedback, speech balloon".
 **Action:** Always wrap text-based icons, HTML entities, or emojis in a `<span aria-hidden="true">` when they are placed inside a button that already provides its accessible name via `aria-label`.
+## 2024-05-31 - Group interactive elements and announce dynamic changes
+**Learning:** For components with interactive elements that update dynamically displayed text (like `DateSelector` where "Next"/"Prev" buttons change the displayed date), grouping the controls and making the text a polite live region significantly improves the screen reader experience. Otherwise, screen reader users might not know the content updated without manually moving focus.
+**Action:** When creating components with controls that update non-interactive text, add `role="group"` and `aria-label="..."` to the parent container to link them contextually. Add `aria-live="polite"` and `aria-atomic="true"` to the element containing the dynamically updating text.
