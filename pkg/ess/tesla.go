@@ -589,13 +589,26 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		return types.SystemStatus{}, err
 	}
 
+	var validBatteries []teslaSiteComponentsBattery
+	for _, b := range siteInfo.Components.Batteries {
+		if strings.ToLower(b.PartName) == "unknown" || b.NameplateEnergyWH == 0 || b.NameplateMaxChargePowerW == 0 || b.NameplateMaxDischargePowerW == 0 {
+			continue
+		}
+		validBatteries = append(validBatteries, b)
+	}
+
 	capacityKWH := siteInfo.NameplateEnergyWH / 1000.0
 	var totalChargeKW float64
 	var totalDischargeKW float64
-	if len(siteInfo.Components.Batteries) > 0 {
-		for _, b := range siteInfo.Components.Batteries {
+	if len(validBatteries) > 0 {
+		var totalBatteryEnergyWH float64
+		for _, b := range validBatteries {
 			totalChargeKW += b.NameplateMaxChargePowerW / 1000.0
 			totalDischargeKW += b.NameplateMaxDischargePowerW / 1000.0
+			totalBatteryEnergyWH += b.NameplateEnergyWH
+		}
+		if capacityKWH == 0 {
+			capacityKWH = totalBatteryEnergyWH / 1000.0
 		}
 	} else if len(siteInfo.Components.Gateways) > 0 {
 		var totalGatewayEnergyWH float64

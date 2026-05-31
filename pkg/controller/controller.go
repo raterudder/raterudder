@@ -41,9 +41,10 @@ type DecisionResult struct {
 
 // PlannedCharge represents the details of a planned future charge.
 type PlannedCharge struct {
-	Time  time.Time
-	Price types.Price
-	Cost  float64
+	Time        time.Time
+	Price       types.Price
+	Cost        float64
+	Description string
 }
 
 // futurePlan represents a planned future charge window.
@@ -51,6 +52,7 @@ type futurePlan struct {
 	ChargeTime  time.Time
 	ChargePrice types.Price
 	ChargeCost  float64
+	Description string
 }
 
 // StrategyEvaluation represents the economic evaluation of a potential strategy.
