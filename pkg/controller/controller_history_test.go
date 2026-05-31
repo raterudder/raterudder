@@ -166,7 +166,10 @@ func TestDecideHistory(t *testing.T) {
 			if dataset.SiteID == "site1" {
 				settings.UtilityRateOptions.NetMeteringCredits = true
 			} else if dataset.SiteID == "site2" {
-				settings.GridExportSolar = false
+				// Old datasets for site2 did not have solar export enabled
+				if fileName == "site2_march.json" || fileName == "site2_april.json" || fileName == "site2_may.json" {
+					settings.GridExportSolar = false
+				}
 			}
 
 			// Filter actions that fall within the simulation range
