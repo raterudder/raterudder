@@ -241,15 +241,17 @@ func (c *Controller) Decide(
 	var activePlan *PlannedCharge
 	if bestPlan != nil {
 		activePlan = &PlannedCharge{
-			Time:  bestPlan.Plan.ChargeTime,
-			Price: bestPlan.Plan.ChargePrice,
-			Cost:  bestPlan.Plan.ChargeCost,
+			Time:        bestPlan.Plan.ChargeTime,
+			Price:       bestPlan.Plan.ChargePrice,
+			Cost:        bestPlan.Plan.ChargeCost,
+			Description: bestPlan.Plan.Description,
 		}
 		log.Ctx(ctx).DebugContext(ctx, "evaluated planned charges",
 			slog.Bool("hasActivePlan", true),
 			slog.Time("activePlanTime", activePlan.Time),
 			slog.Float64("activePlanCost", activePlan.Cost),
 			slog.Float64("benefitDollars", bestPlan.BenefitDollars),
+			slog.String("description", activePlan.Description),
 		)
 	}
 
@@ -262,6 +264,7 @@ func (c *Controller) Decide(
 			slog.String("reason", string(planDecision.Reason)),
 			slog.Float64("gridChargeNowCost", gridChargeNowCost),
 			slog.Float64("batterySOC", currentStatus.BatterySOC),
+			slog.String("description", activePlan.Description),
 		)
 		dec := buildFinalDecision(planDecision)
 		if dec.Action.Reason == types.ActionReasonWaitingToCharge || dec.Action.Reason == types.ActionReasonDeficitSaveForPeak {
@@ -737,6 +740,8 @@ func (c *Controller) evaluateDeficit(
 			ChargeTime:  plannedChargeTime,
 			ChargePrice: plannedChargePrice,
 			ChargeCost:  plannedChargeCost,
+			Description: fmt.Sprintf("deficit expected at %s, planned charge at %s ($%.3f)",
+				hitDeficitAt.Format("15:04"), plannedChargeTime.Format("15:04"), plannedChargeCost),
 		}
 		// If we don't have an immediate decision but we have a plan, set benefit
 		if decision == nil {
@@ -1013,6 +1018,8 @@ func (c *Controller) evaluateExportArbitrage(
 				ChargeTime:  cheapestTime,
 				ChargePrice: cheapestPrice,
 				ChargeCost:  cheapestCost,
+				Description: fmt.Sprintf("export arbitrage peak at %s, planned charge at %s ($%.3f)", 
+					targetAt.Format("15:04"), cheapestTime.Format("15:04"), cheapestCost),
 			},
 			BenefitDollars: requiredChargeEnergy * (effectiveExportValue - cheapestCost),
 		}
