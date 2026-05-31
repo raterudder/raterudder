@@ -201,23 +201,91 @@ func (c *Controller) Decide(
 	evalExport := c.evaluateExportArbitrage(ctx, now, currentStatus, currentPrice, settings, simData, summary)
 
 	var bestImmediate *StrategyEvaluation
-	var bestPlan *StrategyEvaluation
-
 	evals := []*StrategyEvaluation{evalDeficit, evalExport}
-
 	for _, e := range evals {
-		if e != nil {
-			if e.Decision != nil {
-				if bestImmediate == nil || e.BenefitDollars > bestImmediate.BenefitDollars {
-					bestImmediate = e
-				}
-			}
-			if e.Plan != nil {
-				if bestPlan == nil || e.Plan.ChargeTime.Before(bestPlan.Plan.ChargeTime) || (e.Plan.ChargeTime.Equal(bestPlan.Plan.ChargeTime) && e.BenefitDollars > bestPlan.BenefitDollars) {
-					bestPlan = e
-				}
+		if e != nil && e.Decision != nil {
+			if bestImmediate == nil || e.BenefitDollars > bestImmediate.BenefitDollars {
+				bestImmediate = e
 			}
 		}
+	}
+
+	var bestPlan *StrategyEvaluation
+	var planChoiceReason string
+	var chosenPlanType string
+
+	var deficitPlanDesc string
+	if evalDeficit != nil && evalDeficit.Plan != nil {
+		deficitPlanDesc = evalDeficit.Plan.Description
+	}
+	var exportPlanDesc string
+	if evalExport != nil && evalExport.Plan != nil {
+		exportPlanDesc = evalExport.Plan.Description
+	}
+
+	if evalDeficit != nil && evalDeficit.Plan != nil && (evalExport == nil || evalExport.Plan == nil) {
+		bestPlan = evalDeficit
+		chosenPlanType = "deficit"
+		planChoiceReason = "only deficit plan is available"
+	} else if evalExport != nil && evalExport.Plan != nil && (evalDeficit == nil || evalDeficit.Plan == nil) {
+		bestPlan = evalExport
+		chosenPlanType = "export_arbitrage"
+		planChoiceReason = "only export arbitrage plan is available"
+	} else if evalDeficit != nil && evalDeficit.Plan != nil && evalExport != nil && evalExport.Plan != nil {
+		// Both plans exist, compare them
+		deficitTime := evalDeficit.Plan.ChargeTime
+		exportTime := evalExport.Plan.ChargeTime
+		if exportTime.Before(deficitTime) {
+			bestPlan = evalExport
+			chosenPlanType = "export_arbitrage"
+			planChoiceReason = fmt.Sprintf("export arbitrage plan is earlier than deficit plan (%s vs %s)",
+				exportTime.Format("15:04"), deficitTime.Format("15:04"))
+		} else if deficitTime.Before(exportTime) {
+			bestPlan = evalDeficit
+			chosenPlanType = "deficit"
+			planChoiceReason = fmt.Sprintf("deficit plan is earlier than export arbitrage plan (%s vs %s)",
+				deficitTime.Format("15:04"), exportTime.Format("15:04"))
+		} else {
+			// Same charge time, compare benefit
+			if evalExport.BenefitDollars > evalDeficit.BenefitDollars {
+				bestPlan = evalExport
+				chosenPlanType = "export_arbitrage"
+				planChoiceReason = fmt.Sprintf("same charge time (%s), but export arbitrage has higher benefit ($%.4f vs $%.4f)",
+					exportTime.Format("15:04"), evalExport.BenefitDollars, evalDeficit.BenefitDollars)
+			} else {
+				bestPlan = evalDeficit
+				chosenPlanType = "deficit"
+				planChoiceReason = fmt.Sprintf("same charge time (%s), but deficit has higher or equal benefit ($%.4f vs $%.4f)",
+					deficitTime.Format("15:04"), evalDeficit.BenefitDollars, evalExport.BenefitDollars)
+			}
+		}
+	}
+
+	var activePlan *PlannedCharge
+	if bestPlan != nil {
+		activePlan = &PlannedCharge{
+			Time:        bestPlan.Plan.ChargeTime,
+			Price:       bestPlan.Plan.ChargePrice,
+			Cost:        bestPlan.Plan.ChargeCost,
+			Description: bestPlan.Plan.Description,
+		}
+		log.Ctx(ctx).DebugContext(ctx, "evaluated planned charges",
+			slog.Bool("hasActivePlan", true),
+			slog.String("chosenPlanType", chosenPlanType),
+			slog.String("choiceReason", planChoiceReason),
+			slog.Time("activePlanTime", activePlan.Time),
+			slog.Float64("activePlanCost", activePlan.Cost),
+			slog.Float64("benefitDollars", bestPlan.BenefitDollars),
+			slog.String("description", activePlan.Description),
+			slog.String("deficitPlan", deficitPlanDesc),
+			slog.String("exportPlan", exportPlanDesc),
+		)
+	} else {
+		log.Ctx(ctx).DebugContext(ctx, "evaluated planned charges",
+			slog.Bool("hasActivePlan", false),
+			slog.String("deficitPlan", deficitPlanDesc),
+			slog.String("exportPlan", exportPlanDesc),
+		)
 	}
 
 	if bestImmediate != nil {
@@ -236,23 +304,6 @@ func (c *Controller) Decide(
 		dec := buildFinalDecision(bestImmediate.Decision)
 		dec.Action.StrategyBenefitDollars = bestImmediate.BenefitDollars
 		return dec, nil
-	}
-
-	var activePlan *PlannedCharge
-	if bestPlan != nil {
-		activePlan = &PlannedCharge{
-			Time:        bestPlan.Plan.ChargeTime,
-			Price:       bestPlan.Plan.ChargePrice,
-			Cost:        bestPlan.Plan.ChargeCost,
-			Description: bestPlan.Plan.Description,
-		}
-		log.Ctx(ctx).DebugContext(ctx, "evaluated planned charges",
-			slog.Bool("hasActivePlan", true),
-			slog.Time("activePlanTime", activePlan.Time),
-			slog.Float64("activePlanCost", activePlan.Cost),
-			slog.Float64("benefitDollars", bestPlan.BenefitDollars),
-			slog.String("description", activePlan.Description),
-		)
 	}
 
 	if activePlan != nil {
@@ -1018,7 +1069,7 @@ func (c *Controller) evaluateExportArbitrage(
 				ChargeTime:  cheapestTime,
 				ChargePrice: cheapestPrice,
 				ChargeCost:  cheapestCost,
-				Description: fmt.Sprintf("export arbitrage peak at %s, planned charge at %s ($%.3f)", 
+				Description: fmt.Sprintf("export arbitrage peak at %s, planned charge at %s ($%.3f)",
 					targetAt.Format("15:04"), cheapestTime.Format("15:04"), cheapestCost),
 			},
 			BenefitDollars: requiredChargeEnergy * (effectiveExportValue - cheapestCost),
