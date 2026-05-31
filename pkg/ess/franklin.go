@@ -573,6 +573,10 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		if alarm.Name == "SIM card not inserted" {
 			continue
 		}
+		if alarm.Name == "No PV Current Detected" {
+			log.Ctx(ctx).InfoContext(ctx, "ignoring alarm: No PV Current Detected", slog.String("alarmName", alarm.Name), slog.String("alarmCode", alarm.AlarmCode))
+			continue
+		}
 
 		alarms = append(alarms, types.SystemAlarm{
 			Name:        alarm.Name,

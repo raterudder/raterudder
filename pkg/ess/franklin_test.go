@@ -311,6 +311,12 @@ func TestFranklin(t *testing.T) {
 								"time":             "2023-10-27 12:00:00",
 							},
 							{
+								"logName":          "No PV Current Detected",
+								"alarmExplanation": "Ignore this too",
+								"alarmCode":        "1032",
+								"time":             "2023-10-27 12:00:02",
+							},
+							{
 								"logName":          "Real Alarm",
 								"alarmExplanation": "Don't ignore this",
 								"alarmCode":        "E002",
@@ -336,8 +342,9 @@ func TestFranklin(t *testing.T) {
 
 		status, err := f.GetStatus(context.Background())
 		require.NoError(t, err, "GetStatus should succeed")
-		require.Len(t, status.Alarms, 1, "should have only 1 alarm (SIM card alarm should be ignored)")
-		assert.Equal(t, "Real Alarm", status.Alarms[0].Name)
+		if assert.Len(t, status.Alarms, 1, "should have only 1 alarm (SIM card and PV alarms should be ignored)") {
+			assert.Equal(t, "Real Alarm", status.Alarms[0].Name)
+		}
 	})
 
 	t.Run("SetModes", func(t *testing.T) {
