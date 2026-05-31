@@ -10,6 +10,10 @@ import (
 	"github.com/raterudder/raterudder/pkg/types"
 )
 
+// deficitThresholdOffsetCapacityRatio represents the capacity threshold ratio (3 percentage points)
+// below the reserve percent before we count/accumulate it as a deficit.
+const deficitThresholdOffsetCapacityRatio = 0.03
+
 // SimHour represents one hour of simulated energy state.
 type SimHour struct {
 	TS                      time.Time   `json:"ts"`
@@ -32,6 +36,8 @@ type SimHour struct {
 	HitStandbyCapacityAt    time.Time   `json:"hitStandbyCapacityAt"`
 	HitSolarCapacityAt      time.Time   `json:"hitSolarCapacityAt"`
 	HitDeficitAt            time.Time   `json:"hitDeficitAt"`
+	HitBelowDeficitAt       time.Time   `json:"hitBelowDeficitAt"`
+	HitAboveDeficitAt       time.Time   `json:"hitAboveDeficitAt"`
 	Price                   types.Price `json:"price"`
 }
 
@@ -85,6 +91,8 @@ func (c *Controller) SimulateState(
 	}
 
 	var simDeficitAt time.Time
+	var simBelowDeficitAt time.Time
+	var simAboveDeficitAt time.Time
 	var simCapacityAt time.Time
 	var simSolarCapacityAt time.Time
 	simTime := now
@@ -196,11 +204,11 @@ func (c *Controller) SimulateState(
 			}
 
 			newSimEnergy := simEnergyKWH - (clampedNetKWH * simEnergyApplyRatio)
-			// if we will go below the minimum battery SOC update the deficit and calculate
-			// when we hit the deficit
+
+			// 1. Calculate HitDeficitAt (no buffer, i.e., drops below minKWH reserve SOC).
+			// We check this to track when the battery physically runs out of usable energy to cover load.
 			if newSimEnergy < minKWH {
 				if simDeficitAt.IsZero() {
-					// estimate when into the hour we hit the deficit
 					remainingBeforeMin := simEnergyKWH - minKWH
 					if clampedNetKWH > 0 && remainingBeforeMin > 0 {
 						fraction := max(remainingBeforeMin/clampedNetKWH, 0)
@@ -209,11 +217,38 @@ func (c *Controller) SimulateState(
 						simDeficitAt = simTime
 					}
 				}
-				// once we hit capacity the deficit doesn't matter anymore so stop
-				// tracking it
-				if simCapacityAt.IsZero() {
-					deficitKWH += minKWH - newSimEnergy
+			}
+
+			// 2. Calculate HitAboveDeficitAt (with 1% safety buffer above reserve, i.e., drops below aboveDeficitThresholdKWH).
+			// We check this for peak survival checks to stop discharging and preserve battery energy early.
+			aboveDeficitThresholdKWH := minKWH + (capacityKWH * 0.01)
+			if newSimEnergy < aboveDeficitThresholdKWH {
+				if simAboveDeficitAt.IsZero() {
+					remainingBeforeAbove := simEnergyKWH - aboveDeficitThresholdKWH
+					if clampedNetKWH > 0 && remainingBeforeAbove > 0 {
+						fraction := max(remainingBeforeAbove/clampedNetKWH, 0)
+						simAboveDeficitAt = simTime.Add(time.Duration(fraction * float64(time.Hour)))
+					} else {
+						simAboveDeficitAt = simTime
+					}
 				}
+			}
+
+			// 3. Calculate HitBelowDeficitAt (with 3% hysteresis buffer below reserve, i.e., drops below deficitThresholdKWH).
+			// We only count it as a deficit and trigger grid charging if it goes below this threshold
+			// to avoid micro-charging the battery for trivial, noise-level SOC fluctuations.
+			deficitThresholdKWH := max(minKWH-(capacityKWH*deficitThresholdOffsetCapacityRatio), 0.0)
+			if newSimEnergy < deficitThresholdKWH {
+				if simBelowDeficitAt.IsZero() {
+					remainingBeforeDeficit := simEnergyKWH - deficitThresholdKWH
+					if clampedNetKWH > 0 && remainingBeforeDeficit > 0 {
+						fraction := max(remainingBeforeDeficit/clampedNetKWH, 0)
+						simBelowDeficitAt = simTime.Add(time.Duration(fraction * float64(time.Hour)))
+					} else {
+						simBelowDeficitAt = simTime
+					}
+				}
+				deficitKWH += minKWH - newSimEnergy
 				simEnergyKWH = minKWH
 			} else {
 				simEnergyKWH = newSimEnergy
@@ -258,9 +293,11 @@ func (c *Controller) SimulateState(
 					} else {
 						simCapacityAt = simTime
 					}
-					// once we hit capacity the battery is full and any deficit must be handled before this
-					deficitKWH = 0.0
 				}
+				deficitKWH = 0.0
+				simDeficitAt = time.Time{}
+				simBelowDeficitAt = time.Time{}
+				simAboveDeficitAt = time.Time{}
 			}
 
 			// Still cap physical energy at 100% capacity
@@ -313,6 +350,8 @@ func (c *Controller) SimulateState(
 			HitStandbyCapacityAt:    simStandbyCapacityAt,
 			HitSolarCapacityAt:      simSolarCapacityAt,
 			HitDeficitAt:            simDeficitAt,
+			HitBelowDeficitAt:       simBelowDeficitAt,
+			HitAboveDeficitAt:       simAboveDeficitAt,
 			Price:                   price,
 		})
 		simTime = simTime.Add(1 * time.Hour).Truncate(time.Hour)

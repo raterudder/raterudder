@@ -1051,4 +1051,134 @@ func TestSimulateState(t *testing.T) {
 		assert.Len(t, simData, 12)
 	})
 
+	t.Run("PostCapacityDeficitAccumulation", func(t *testing.T) {
+		// Scenario:
+		// 12:00 (Start): 50% SOC (5.0 kWh). Capacity 10.0 kWh.
+		// Hour 12: Solar 11.0 kWh, Load 1.0 kWh -> Net charge +10.0 kWh/hr. Hits capacity at 12:30.
+		// Hour 13: Solar 0.0 kWh, Load 10.0 kWh -> Net drain -10.0 kWh/hr.
+		// Since we hit capacity in hour 12, the deficit for hour 12 is reset to 0.
+		// Then in hour 13, the battery drains from 10.0 kWh down to min SOC 20% (2.0 kWh).
+		// Drain is 10.0 kWh, so it goes below 2.0 kWh, hitting a deficit.
+		// We expect the simulator to accumulate this post-capacity deficit.
+		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+		capacityKWH := 10.0
+		currentStatus := types.SystemStatus{
+			BatteryCapacityKWH:    capacityKWH,
+			BatterySOC:            50.0,
+			Timestamp:             now,
+			MaxBatteryChargeKW:    10.0,
+			MaxBatteryDischargeKW: 10.0,
+		}
+
+		history := []types.EnergyStats{}
+		for i := 1; i <= 3; i++ {
+			pastDay := now.Add(time.Duration(-24*i) * time.Hour).Truncate(time.Hour)
+			// Hour 12: Solar 11.0, Load 1.0
+			history = append(history, types.EnergyStats{
+				TSHourStart: time.Date(pastDay.Year(), pastDay.Month(), pastDay.Day(), 12, 0, 0, 0, time.UTC),
+				SolarKWH:    11.0,
+				HomeKWH:     1.0,
+			})
+			// Hour 13: Solar 0.0, Load 10.0
+			history = append(history, types.EnergyStats{
+				TSHourStart: time.Date(pastDay.Year(), pastDay.Month(), pastDay.Day(), 13, 0, 0, 0, time.UTC),
+				SolarKWH:    0.0,
+				HomeKWH:     10.0,
+			})
+		}
+
+		settings := types.Settings{
+			GridExportSolar: true,
+			MinBatterySOC:   20.0, // minKWH = 2.0 kWh
+		}
+
+		simData := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
+
+		if assert.NotEmpty(t, simData) && assert.GreaterOrEqual(t, len(simData), 2) {
+			// Hour 12: Hits capacity, deficitKWH reset to 0.0
+			assert.Equal(t, 0.0, simData[0].TotalBatteryDeficitKWH)
+			assert.False(t, simData[0].HitCapacityAt.IsZero())
+
+			// Hour 13: Drains from 10.0 kWh. Load is 10.0 kWh.
+			// newSimEnergy = 10.0 - 10.0 = 0.0 kWh.
+			// minKWH is 2.1 kWh (due to safety buffer: MinBatterySOC + 1%).
+			// Deficit should be 2.1 - 0.0 = 2.1 kWh.
+			assert.Equal(t, 2.1, simData[1].TotalBatteryDeficitKWH)
+			assert.False(t, simData[1].HitDeficitAt.IsZero())
+
+			// Assert on all three deficit fields in hour 13
+			assert.False(t, simData[1].HitAboveDeficitAt.IsZero())
+			assert.False(t, simData[1].HitDeficitAt.IsZero())
+			assert.False(t, simData[1].HitBelowDeficitAt.IsZero())
+
+			// Verify they hit at different times (AboveDeficit first, then Deficit, then BelowDeficit)
+			assert.True(t, simData[1].HitAboveDeficitAt.Before(simData[1].HitDeficitAt))
+			assert.True(t, simData[1].HitDeficitAt.Before(simData[1].HitBelowDeficitAt))
+		}
+	})
+
+	t.Run("DeficitThresholdBuffer3Percent", func(t *testing.T) {
+		// Scenario:
+		// 10.0 kWh capacity. MinBatterySOC = 20.0%.
+		// minKWH = 10.0 * 21% = 2.1 kWh.
+		// deficitThresholdKWH = 2.1 - 10.0 * 0.03 = 1.8 kWh.
+		// Start SOC = 20.5% (2.05 kWh).
+		// Hour 0: Load 1.0 kW. Ends at 1.05 kWh (below 1.8, deficit!).
+		// HitDeficitAt should be Hour 0 start + 15 minutes (fraction = (2.05 - 1.8) / 1.0 = 0.25 hours = 15 minutes).
+		now := time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)
+		capacityKWH := 10.0
+		currentStatus := types.SystemStatus{
+			BatteryCapacityKWH:    capacityKWH,
+			BatterySOC:            20.5,
+			Timestamp:             now,
+			MaxBatteryChargeKW:    5.0,
+			MaxBatteryDischargeKW: 5.0,
+		}
+
+		history := []types.EnergyStats{}
+		for i := 1; i <= 3; i++ {
+			pastDay := now.Add(time.Duration(-24*i) * time.Hour).Truncate(time.Hour)
+			for h := 0; h < 24; h++ {
+				history = append(history, types.EnergyStats{
+					TSHourStart: time.Date(pastDay.Year(), pastDay.Month(), pastDay.Day(), h, 0, 0, 0, time.UTC),
+					SolarKWH:    0.0,
+					HomeKWH:     1.0,
+				})
+			}
+		}
+
+		settings := types.Settings{
+			GridExportSolar: true,
+			MinBatterySOC:   20.0,
+		}
+
+		simData := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
+
+		for idx, sd := range simData {
+			t.Logf("Hour %d (%s): BatteryKWH=%.3f, Deficit=%.3f, HitDeficitAt=%s",
+				idx, sd.TS.Format("15:04"), sd.BatteryKWH, sd.TotalBatteryDeficitKWH, sd.HitDeficitAt.Format("15:04:05"))
+		}
+
+		assert.NotEmpty(t, simData)
+		// Hour 0: Deficit is registered
+		assert.Greater(t, simData[0].TotalBatteryDeficitKWH, 0.0)
+
+		// Starts at 2.05 kWh.
+		// minKWH is 2.1 kWh, so it is already below minKWH at start.
+		// aboveDeficitThresholdKWH is 2.2 kWh, so it is already below that at start.
+		// Thus, HitAboveDeficitAt and HitDeficitAt should hit immediately (at now).
+		if assert.False(t, simData[0].HitAboveDeficitAt.IsZero()) {
+			assert.Equal(t, now, simData[0].HitAboveDeficitAt)
+		}
+		if assert.False(t, simData[0].HitDeficitAt.IsZero()) {
+			assert.Equal(t, now, simData[0].HitDeficitAt)
+		}
+
+		// deficitThresholdKWH is 1.8 kWh, so we hit it at 15 minutes.
+		if assert.False(t, simData[0].HitBelowDeficitAt.IsZero()) {
+			expectedHitTime := now.Add(15 * time.Minute)
+			assert.WithinDuration(t, expectedHitTime, simData[0].HitBelowDeficitAt, time.Second)
+		}
+	})
+
 }

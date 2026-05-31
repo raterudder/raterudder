@@ -331,7 +331,6 @@ func (s *Server) performSiteUpdate(
 		"update: decision made",
 		slog.Int("batteryMode", int(action.BatteryMode)),
 		slog.Int("solarMode", int(action.SolarMode)),
-		slog.String("explanation", decision.Explanation),
 		slog.String("description", action.Description),
 		slog.Float64("price", currentPrice.DollarsPerKWH),
 		slog.Float64("batterySOC", status.BatterySOC),

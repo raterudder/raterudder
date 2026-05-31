@@ -17,7 +17,7 @@ RUN go mod download
 # Copy frontend build to the expected location for embedding
 COPY --from=vite-builder /app/web/dist ./web/dist
 # Build static binary
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o raterudder ./cmd/raterudder
+RUN CGO_ENABLED=0 GOOS=linux go build -tags timetzdata -trimpath -ldflags='-s -w' -o raterudder ./cmd/raterudder
 
 # Final image
 FROM gcr.io/distroless/static-debian12

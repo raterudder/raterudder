@@ -46,7 +46,7 @@ const (
 	ActionReasonArbitrageChargeExport       ActionReason = "arbitrageChargeExport"
 	ActionReasonDischargeBeforeCapacityNow  ActionReason = "dischargeBeforeCapacity"
 	ActionReasonDeficitSaveForPeak          ActionReason = "deficitSaveForPeak"
-	ActionReasonArbitrageSave               ActionReason = "dischargeAtPeak"
+	ActionReasonDischargeAtPeak             ActionReason = "dischargeAtPeak"
 	ActionReasonArbitrageHoldExport         ActionReason = "arbitrageHoldExport"
 	ActionReasonSufficientBattery           ActionReason = "sufficientBattery"
 	ActionReasonSufficientBatteryTillCharge ActionReason = "sufficientBatteryTillCharge"
@@ -67,23 +67,29 @@ const (
 
 // Action represents a control decision made by the system.
 type Action struct {
-	Timestamp         time.Time    `json:"timestamp"`
-	BatteryMode       BatteryMode  `json:"batteryMode"`
-	SolarMode         SolarMode    `json:"solarMode"`
-	TargetBatteryMode BatteryMode  `json:"targetBatteryMode"`
-	TargetSolarMode   SolarMode    `json:"targetSolarMode"`
-	Reason            ActionReason `json:"reason"`
-	Description       string       `json:"description"`
-	CurrentPrice      *Price       `json:"currentPrice,omitempty"`
-	FuturePrice       *Price       `json:"futurePrice,omitempty"`
-	SystemStatus      SystemStatus `json:"systemStatus"`
-	HitDeficitAt      time.Time    `json:"deficitAt"`
-	HitCapacityAt     time.Time    `json:"capacityAt"`
-	DryRun            bool         `json:"dryRun,omitempty"`
-	Fault             bool         `json:"fault,omitempty"`
-	Failed            bool         `json:"failed,omitempty"`
-	Paused            bool         `json:"paused,omitempty"`
-	Error             string       `json:"error,omitempty"`
+	Timestamp              time.Time    `json:"timestamp"`
+	BatteryMode            BatteryMode  `json:"batteryMode"`
+	SolarMode              SolarMode    `json:"solarMode"`
+	Reason                 ActionReason `json:"reason"`
+	Description            string       `json:"description"`
+	CurrentPrice           *Price       `json:"currentPrice,omitempty"`
+	FuturePrice            *Price       `json:"futurePrice,omitempty"`
+	SystemStatus           SystemStatus `json:"systemStatus"`
+	HitDeficitAt           time.Time    `json:"deficitAt"`
+	HitBelowDeficitAt      time.Time    `json:"hitBelowDeficitAt"`
+	HitAboveDeficitAt      time.Time    `json:"hitAboveDeficitAt"`
+	HitCapacityAt          time.Time    `json:"capacityAt"`
+	StrategyBenefitDollars float64      `json:"strategyBenefitDollars,omitempty"`
+	DryRun                 bool         `json:"dryRun,omitempty"`
+	Fault                  bool         `json:"fault,omitempty"`
+	Failed                 bool         `json:"failed,omitempty"`
+	Paused                 bool         `json:"paused,omitempty"`
+	Error                  string       `json:"error,omitempty"`
+
+	// Deprecated: use BatteryMode
+	TargetBatteryMode BatteryMode `json:"targetBatteryMode,omitempty"`
+	// Deprecated: use SolarMode
+	TargetSolarMode SolarMode `json:"targetSolarMode,omitempty"`
 }
 
 // EnergyStats represents aggregated energy statistics for an hourly period.

@@ -377,9 +377,20 @@ func CalculateSmoothedSolar(
 			bestHour = h
 			maxCount = count
 			maxAvg = avg
-		} else if count == maxCount && avg > maxAvg {
-			bestHour = h
-			maxAvg = avg
+		} else if count == maxCount {
+			if avg > maxAvg {
+				bestHour = h
+				maxAvg = avg
+			} else if avg == maxAvg {
+				// Deterministic tie-breaker: prefer hours closer to solar noon (12:00)
+				// to align with the peak of the bell curve.
+				currDist := math.Abs(float64(h) - 12.0)
+				bestDist := math.Abs(float64(bestHour) - 12.0)
+				if currDist < bestDist || (currDist == bestDist && h < bestHour) {
+					bestHour = h
+					maxAvg = avg
+				}
+			}
 		}
 	}
 
