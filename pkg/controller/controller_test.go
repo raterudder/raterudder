@@ -511,7 +511,7 @@ func TestDecide(t *testing.T) {
 		})
 	})
 
-	t.Run("Deficit Charge Now -> Charge Even If Almost Full (< 10 mins left)", func(t *testing.T) {
+	t.Run("Deficit Charge Now -> Ignore If Almost Full (< 10 mins left)", func(t *testing.T) {
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05}
 		futurePrices := []types.Price{}
 		for i := 1; i <= 24; i++ {
@@ -524,7 +524,7 @@ func TestDecide(t *testing.T) {
 		}
 
 		// Battery is at 95% of 10kWh = 9.5kWh.
-		// 9.5 + 0.417 = 9.917 < 10.0, so it can charge.
+		// Headroom is 0.5 kWh. At 5 kW max charge rate, it requires 6 minutes to charge.
 		almostFullStatus := baseStatus
 		almostFullStatus.BatterySOC = 95.0
 		almostFullStatus.MaxBatteryChargeKW = 5.0
@@ -535,9 +535,87 @@ func TestDecide(t *testing.T) {
 		decision, err := c.Decide(ctx, almostFullStatus, currentPrice, futurePrices, history, nil, baseSettings)
 		require.NoError(t, err)
 
-		// It SHOULD charge for deficit because we still have room and there's a deficit!
+		// It should NOT charge because the deficit charge duration (headroom-limited) is < 10 minutes.
+		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Action.Reason)
+	})
+
+	t.Run("Deficit Charge Now -> Continue Charge When Already Charging", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05}
+		futurePrices := []types.Price{}
+		for i := 1; i <= 24; i++ {
+			price := 0.20
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
+			})
+		}
+
+		almostFullStatus := baseStatus
+		almostFullStatus.BatterySOC = 95.0
+		almostFullStatus.MaxBatteryChargeKW = 5.0
+		almostFullStatus.BatteryCapacityKWH = 10.0
+		// Simulate already charging from grid
+		almostFullStatus.BatteryKW = -4.0
+		almostFullStatus.GridKW = 4.5
+
+		// Use History with high load
+		decision, err := c.Decide(ctx, almostFullStatus, currentPrice, futurePrices, history, nil, baseSettings)
+		require.NoError(t, err)
+
+		// It should CONTINUE charging because we are already charging (bypassing the minimum duration check)
 		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonDeficitChargeNow, decision.Action.Reason)
+	})
+
+	t.Run("Deficit Charge Now -> Ignore if Deficit is < 10 mins", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05}
+		futurePrices := []types.Price{}
+		for i := 1; i <= 24; i++ {
+			price := 0.20 // Later it's more expensive to charge ($0.20 vs $0.05)
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: price, GridUseDollarsPerKWH: price,
+			})
+		}
+
+		// Battery has 10kWh capacity. Max charge rate is 12.0 kW (so 10 mins = 2.0 kWh).
+		smallDeficitStatus := baseStatus
+		smallDeficitStatus.BatterySOC = 80.0
+		smallDeficitStatus.MaxBatteryChargeKW = 12.0
+		smallDeficitStatus.BatteryCapacityKWH = 10.0
+
+		// Generate custom history where the total deficit is only 0.5 kWh.
+		// We set home load to 0.5 kW from 10:00 AM to 11:00 PM, and 0.0 kW overnight.
+		// starting SOC = 8.0 kWh. reserve = 2.0 kWh. usable = 6.0 kWh.
+		// load = 0.5 kW for 13 hours = 6.5 kWh.
+		// Remaining energy = 8.0 - 6.5 = 1.5 kWh (deficit = 0.5 kWh).
+		// 0.5 kWh deficit / 6.0 kW charge rate = 5 minutes deficit charging duration.
+		customHistory := []types.EnergyStats{}
+		ts := now.Add(-48 * time.Hour)
+		for i := 0; i < 72; i++ {
+			load := 0.0
+			h := ts.Hour()
+			if h >= 10 && h <= 23 {
+				load = 0.5
+			}
+			customHistory = append(customHistory, types.EnergyStats{
+				TSHourStart: ts,
+				HomeKWH:     load,
+				SolarKWH:    0.0,
+			})
+			ts = ts.Add(1 * time.Hour)
+		}
+
+		decision, err := c.Decide(ctx, smallDeficitStatus, currentPrice, futurePrices, customHistory, nil, baseSettings)
+		require.NoError(t, err)
+
+		// It should NOT charge because the deficit requires < 10 minutes of charging.
+		// Since future prices are expensive, it should standby to save battery for the peak.
+		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Action.Reason)
 	})
 
 	t.Run("Grid Charging Hysteresis -> No Charge unless sufficient headroom, continue if already charging", func(t *testing.T) {
@@ -4714,7 +4792,8 @@ func TestEvaluateFallback(t *testing.T) {
 
 		decision1, err := c.Decide(ctx, status1, currentPrice, futurePrices, testHistory, nil, settings)
 		require.NoError(t, err)
-		assert.Equal(t, types.BatteryModeChargeAny, decision1.Action.BatteryMode)
+		assert.Equal(t, types.BatteryModeStandby, decision1.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonWaitingToCharge, decision1.Action.Reason)
 
 		startNow2 := startNow.Add(20 * time.Minute)
 		currentPrice2 := priceAt(startNow2)

@@ -452,8 +452,10 @@ func (c *Controller) evaluateDeficit(
 	capacityKWH := currentStatus.BatteryCapacityKWH
 	gridChargeNowCost := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
 	// isAlreadyChargingGrid indicates if the system is currently actively drawing power from the grid
-	// to charge the battery. (GridKW > 0 and BatteryKW < 0).
-	isAlreadyChargingGrid := currentStatus.BatteryKW < 0 && currentStatus.GridKW > 0
+	// to charge the battery. To prevent phantom draw from tricking us into thinking we're charging,
+	// and to ensure solar-only charging doesn't confuse us, we require the battery charging rate
+	// to be more than 1 kW (BatteryKW < -1.0) and grid import to be positive (GridKW > 0).
+	isAlreadyChargingGrid := currentStatus.BatteryKW < -1.0 && currentStatus.GridKW > 0
 
 	// Charge Hysteresis & Anti-Oscillation:
 	// We calculate the minimum required physical battery capacity headroom (in kWh) before initiating a charge.
@@ -529,6 +531,23 @@ func (c *Controller) evaluateDeficit(
 			slog.Time("hitCapacityAt", summary.HitCapacityAt),
 		)
 	}
+
+	headroomNow := capacityKWH - currentEnergyKWH
+	if headroomNow < 0 {
+		headroomNow = 0
+	}
+	deficitChargeDurationHours := 0.0
+	neededDeficitEnergy := totalDeficitKWH
+	if chargeKW > 0 {
+		if neededDeficitEnergy > headroomNow {
+			neededDeficitEnergy = headroomNow
+		}
+		deficitChargeDurationHours = neededDeficitEnergy / chargeKW
+	}
+	// isTinyDeficitCharge prevents starting a new grid charge session if the duration
+	// is less than 10 minutes. If we are already charging from the grid, we bypass
+	// this check to allow the session to finish using the headroom hysteresis.
+	isTinyDeficitCharge := !isAlreadyChargingGrid && (deficitChargeDurationHours < 10.0/60.0)
 
 	var plannedChargeTime time.Time
 	var plannedChargePrice types.Price
@@ -665,29 +684,48 @@ func (c *Controller) evaluateDeficit(
 							planBenefitDollars = neededEnergy * (averageDeficitRateDollarsPerKWH - plannedChargeCost)
 						}
 					} else {
-						log.Ctx(ctx).DebugContext(ctx, "charging now to avoid deficit",
-							slog.Float64("effectiveGridChargeNowCost", effectiveGridChargeNowCost),
-							slog.Time("cheapestTime", cheapestFutureChargeSlot.ts),
-							slog.Float64("cheapestCost", cheapestFutureChargeSlot.cost),
-							slog.Float64("neededEnergy", neededEnergy),
-							slog.Bool("isSignificantlyCheaperNow", isSignificantlyCheaperNow),
-							slog.Bool("isAlreadyChargingSamePrice", isAlreadyChargingSamePrice),
-							slog.Bool("isSignificantlyCheaperFuture", isSignificantlyCheaperFuture),
-							slog.Bool("isAlreadyChargingGrid", isAlreadyChargingGrid),
-							slog.Any("cheapestFutureChargeSlot", cheapestFutureChargeSlot),
-							slog.Time("hitDeficitAt", hitDeficitAt),
-						)
-						shouldCharge = true
-						chargeDescription = fmt.Sprintf(
-							"Projected Deficit at %s. Charge Now ($%.3f) <= Later ($%.3f).",
-							hitDeficitAt.Format(time.Kitchen),
-							effectiveGridChargeNowCost,
-							cheapestFutureChargeSlot.cost,
-						)
-						futurePrice = &cheapestFutureChargeSlot.price
-						chargeActionReason = types.ActionReasonDeficitChargeNow
-						chargeBenefitDollars = neededEnergy * (averageDeficitRateDollarsPerKWH - effectiveGridChargeNowCost)
-						break
+						// If the required charging duration to cover the deficit is less than 10 minutes,
+						// we ignore immediate charging to prevent tiny grid-charging sessions. However, we
+						// still plan a future charge so that if the deficit grows later, we will be ready.
+						if isTinyDeficitCharge {
+							log.Ctx(ctx).DebugContext(ctx, "skipping immediate deficit charge because deficit charge duration is less than 10 minutes",
+								slog.Float64("deficitChargeDurationHours", deficitChargeDurationHours),
+								slog.Float64("neededDeficitEnergy", neededDeficitEnergy),
+								slog.Float64("chargeKW", chargeKW),
+								slog.Time("until", cheapestFutureChargeSlot.ts),
+								slog.Float64("cheapestCost", cheapestFutureChargeSlot.cost),
+							)
+							if plannedChargeTime.IsZero() || cheapestFutureChargeSlot.cost < plannedChargeCost {
+								plannedChargeTime = cheapestFutureChargeSlot.ts
+								plannedChargePrice = cheapestFutureChargeSlot.price
+								plannedChargeCost = cheapestFutureChargeSlot.cost
+								planBenefitDollars = neededEnergy * (averageDeficitRateDollarsPerKWH - plannedChargeCost)
+							}
+						} else {
+							log.Ctx(ctx).DebugContext(ctx, "charging now to avoid deficit",
+								slog.Float64("effectiveGridChargeNowCost", effectiveGridChargeNowCost),
+								slog.Time("cheapestTime", cheapestFutureChargeSlot.ts),
+								slog.Float64("cheapestCost", cheapestFutureChargeSlot.cost),
+								slog.Float64("neededEnergy", neededEnergy),
+								slog.Bool("isSignificantlyCheaperNow", isSignificantlyCheaperNow),
+								slog.Bool("isAlreadyChargingSamePrice", isAlreadyChargingSamePrice),
+								slog.Bool("isSignificantlyCheaperFuture", isSignificantlyCheaperFuture),
+								slog.Bool("isAlreadyChargingGrid", isAlreadyChargingGrid),
+								slog.Any("cheapestFutureChargeSlot", cheapestFutureChargeSlot),
+								slog.Time("hitDeficitAt", hitDeficitAt),
+							)
+							shouldCharge = true
+							chargeDescription = fmt.Sprintf(
+								"Projected Deficit at %s. Charge Now ($%.3f) <= Later ($%.3f).",
+								hitDeficitAt.Format(time.Kitchen),
+								effectiveGridChargeNowCost,
+								cheapestFutureChargeSlot.cost,
+							)
+							futurePrice = &cheapestFutureChargeSlot.price
+							chargeActionReason = types.ActionReasonDeficitChargeNow
+							chargeBenefitDollars = neededEnergy * (averageDeficitRateDollarsPerKWH - effectiveGridChargeNowCost)
+							break
+						}
 					}
 				}
 
@@ -914,7 +952,11 @@ func (c *Controller) evaluateExportArbitrage(
 		)
 	}
 
-	isAlreadyChargingGrid := currentStatus.BatteryKW < 0 && currentStatus.GridKW > 0
+	// isAlreadyChargingGrid indicates if the system is currently actively drawing power from the grid
+	// to charge the battery. To prevent phantom draw from tricking us into thinking we're charging,
+	// and to ensure solar-only charging doesn't confuse us, we require the battery charging rate
+	// to be more than 1 kW (BatteryKW < -1.0) and grid import to be positive (GridKW > 0).
+	isAlreadyChargingGrid := currentStatus.BatteryKW < -1.0 && currentStatus.GridKW > 0
 	effectiveGridChargeNowCost := gridChargeNowCost
 
 	// 10-Minute Boundary Penalty:
