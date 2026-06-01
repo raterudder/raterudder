@@ -779,4 +779,77 @@ describe('App & Settings', () => {
             });
         });
     });
+
+    it('can request a new utility rate/option via the dialog', async () => {
+        const user = userEvent.setup();
+        (api.fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            utilityProvider: 'comed',
+            utilityRate: 'comed_besh'
+        });
+        await navigateToSettings();
+
+        // 1. Click "Change" in the Utility Service section to open/edit utility configuration
+        fireEvent.click(screen.getByRole('button', { name: 'Change Utility Service' }));
+
+        // 2. Click the link to open the dialog
+        const unsupportedLink = await screen.findByRole('button', { name: "Don't see your rate or options?" });
+        await user.click(unsupportedLink);
+
+        // 3. Verify dialog is open and shows correct title
+        const dialogTitle = await screen.findByRole('heading', { name: 'Request a Rate or Option' });
+        expect(dialogTitle).toBeInTheDocument();
+
+        // 4. Select utility 'Other'
+        const serviceSelect = screen.getByRole('combobox', { name: /Utility Provider/i });
+        await user.click(serviceSelect);
+        const otherOption = await screen.findByRole('option', { name: 'Other' });
+        await user.click(otherOption);
+
+        // 5. Fill out the details
+        const providerInput = screen.getByLabelText('Utility Provider Name');
+        await user.type(providerInput, 'National Grid');
+
+        const stateInput = screen.getByLabelText('State');
+        await user.type(stateInput, 'NY');
+
+        const rateInput = screen.getByLabelText('Rate / Plan Name');
+        await user.type(rateInput, 'TOU-123');
+
+        const commentInput = screen.getByLabelText(/Anything else to share or comments?/i);
+        await user.type(commentInput, 'Please add this rate!');
+
+        // Mock API submission
+        (api.submitInterest as any).mockResolvedValue(undefined);
+
+        // 6. Click submit
+        const submitBtn = screen.getByRole('button', { name: 'Express Interest' });
+        await user.click(submitBtn);
+
+        // 7. Verify success message
+        await waitFor(() => {
+            expect(screen.getByText('Success!')).toBeInTheDocument();
+            expect(screen.getByText(/We've received your interest!/)).toBeInTheDocument();
+        });
+
+        // 8. Verify the submitInterest API was called with the correct arguments
+        expect(api.submitInterest).toHaveBeenCalledWith({
+            utility: 'other',
+            battery: 'none',
+            utilityProviderName: 'National Grid',
+            state: 'NY',
+            planName: 'TOU-123',
+            batteryName: '',
+            comments: 'Please add this rate!'
+        });
+
+        // 9. Close the dialog
+        const closeBtn = screen.getByRole('button', { name: 'Close' });
+        await user.click(closeBtn);
+
+        // 10. Verify dialog is closed (title is no longer visible)
+        await waitFor(() => {
+            expect(screen.queryByRole('heading', { name: 'Request a Rate or Option' })).not.toBeInTheDocument();
+        });
+    });
 });

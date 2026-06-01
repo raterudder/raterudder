@@ -7,6 +7,8 @@ import { Switch } from '@base-ui/react/switch';
 import { Collapsible } from '@base-ui/react/collapsible';
 import { Select } from '@base-ui/react/select';
 import { Combobox } from '@base-ui/react/combobox';
+import { Dialog } from '@base-ui/react/dialog';
+import { InterestForm } from '../components/InterestForm';
 import './Settings.css';
 
 
@@ -477,6 +479,31 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                 </div>
                             );
                         })()}
+                        <div className="utility-rate-unsupported-link">
+                            <Dialog.Root>
+                                <Dialog.Trigger className="inline-link" type="button">
+                                    Don't see your rate or options?
+                                </Dialog.Trigger>
+                                <Dialog.Portal>
+                                    <Dialog.Backdrop className="dialog-backdrop" />
+                                    <Dialog.Popup className="dialog-popup">
+                                        <Dialog.Title className="dialog-title">Request a Rate or Option</Dialog.Title>
+                                        <Dialog.Description className="dialog-description">
+                                            Let us know which utility provider, state, or rate plan options you need.
+                                        </Dialog.Description>
+                                        <InterestForm
+                                            utilitiesList={utilities}
+                                            hideBattery={true}
+                                            alwaysShowDetails={true}
+                                        />
+                                        <Dialog.Close className="btn btn-secondary dialog-close-btn" type="button">
+                                            Close
+                                        </Dialog.Close>
+                                    </Dialog.Popup>
+                                </Dialog.Portal>
+                            </Dialog.Root>
+                        </div>
+
                         {editUtility && (
                             <button type="button" className="text-button cancel-button" onClick={() => setEditUtility(false)} aria-label="Finish editing Utility Service">Done</button>
                         )}

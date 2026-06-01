@@ -329,3 +329,30 @@
   padding-top: 1rem;
   border-top: 1px solid var(--border);
 }
+
+/* Unsupported Link trigger */
+.utility-rate-unsupported-link {
+  margin-top: 1.5rem;
+  text-align: center;
+  border-top: 1px solid var(--outline-variant);
+  padding-top: 1.25rem;
+}
+
+.utility-rate-unsupported-link .inline-link {
+  color: var(--primary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  text-decoration: underline;
+  font-weight: 600;
+  font-size: 0.9rem;
+  transition: all 0.2s;
+  border-radius: var(--radius-sm);
+}
+
+.utility-rate-unsupported-link .inline-link:hover {
+  color: var(--primary-glow);
+  background: rgba(14, 165, 233, 0.1);
+}
+
