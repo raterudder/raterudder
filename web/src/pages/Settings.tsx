@@ -11,6 +11,33 @@ import { Dialog } from '@base-ui/react/dialog';
 import { InterestForm } from '../components/InterestForm';
 import './Settings.css';
 
+const countries = [
+    { label: 'United States', value: 'US' },
+    { label: 'United Kingdom', value: 'GB' },
+    { label: 'Canada', value: 'CA' },
+    { label: 'Australia', value: 'AU' },
+    { label: 'Germany', value: 'DE' },
+    { label: 'France', value: 'FR' },
+    { label: 'Italy', value: 'IT' },
+    { label: 'Spain', value: 'ES' },
+    { label: 'Netherlands', value: 'NL' },
+    { label: 'Belgium', value: 'BE' },
+    { label: 'Switzerland', value: 'CH' },
+    { label: 'Austria', value: 'AT' },
+    { label: 'Sweden', value: 'SE' },
+    { label: 'Norway', value: 'NO' },
+    { label: 'Denmark', value: 'DK' },
+    { label: 'Finland', value: 'FI' },
+    { label: 'Ireland', value: 'IE' },
+    { label: 'New Zealand', value: 'NZ' },
+    { label: 'Japan', value: 'JP' },
+    { label: 'South Korea', value: 'KR' },
+    { label: 'Singapore', value: 'SG' },
+    { label: 'Brazil', value: 'BR' },
+    { label: 'Mexico', value: 'MX' },
+    { label: 'India', value: 'IN' },
+    { label: 'South Africa', value: 'ZA' }
+];
 
 const Settings = ({ siteID }: { siteID?: string }) => {
     const [settings, setSettings] = useState<SettingsType | null>(null);
@@ -317,6 +344,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                     setSettings(newSettings);
                                 }}
                                 items={sortedUtilities}
+                                itemToStringLabel={(val) => utilities.find(u => u.id === val)?.name || val}
                             >
                                 <div className="combobox-input-wrapper select-trigger">
                                     <Combobox.Input
@@ -811,33 +839,8 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                         <Combobox.Root
                             value={settings.countryCode || ''}
                             onValueChange={(val) => handleChange("countryCode", val as string)}
-                            items={[
-                                { label: 'United States', value: 'US' },
-                                { label: 'United Kingdom', value: 'GB' },
-                                { label: 'Canada', value: 'CA' },
-                                { label: 'Australia', value: 'AU' },
-                                { label: 'Germany', value: 'DE' },
-                                { label: 'France', value: 'FR' },
-                                { label: 'Italy', value: 'IT' },
-                                { label: 'Spain', value: 'ES' },
-                                { label: 'Netherlands', value: 'NL' },
-                                { label: 'Belgium', value: 'BE' },
-                                { label: 'Switzerland', value: 'CH' },
-                                { label: 'Austria', value: 'AT' },
-                                { label: 'Sweden', value: 'SE' },
-                                { label: 'Norway', value: 'NO' },
-                                { label: 'Denmark', value: 'DK' },
-                                { label: 'Finland', value: 'FI' },
-                                { label: 'Ireland', value: 'IE' },
-                                { label: 'New Zealand', value: 'NZ' },
-                                { label: 'Japan', value: 'JP' },
-                                { label: 'South Korea', value: 'KR' },
-                                { label: 'Singapore', value: 'SG' },
-                                { label: 'Brazil', value: 'BR' },
-                                { label: 'Mexico', value: 'MX' },
-                                { label: 'India', value: 'IN' },
-                                { label: 'South Africa', value: 'ZA' }
-                            ]}
+                            items={countries}
+                            itemToStringLabel={(val) => countries.find(c => c.value === val)?.label || val}
                         >
                             <div className="combobox-input-wrapper select-trigger">
                                 <Combobox.Input placeholder="Select a country..." id="countryCode" className="combobox-input" />

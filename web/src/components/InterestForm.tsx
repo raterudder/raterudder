@@ -76,6 +76,10 @@ export const InterestForm: React.FC<InterestFormProps> = ({
                             value={utility || ''}
                             onValueChange={(value) => setUtility(value as string)}
                             items={sortedUtilities}
+                            itemToStringLabel={(val) => {
+                                if (val === 'other') return 'Other';
+                                return utilitiesList.find(u => u.id === val)?.name || val;
+                            }}
                         >
                             <div className="combobox-input-wrapper select-trigger">
                                 <Combobox.Input
