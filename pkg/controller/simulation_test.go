@@ -1181,4 +1181,59 @@ func TestSimulateState(t *testing.T) {
 		}
 	})
 
+	t.Run("ContinuousDeficitAccumulation", func(t *testing.T) {
+		now := time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC)
+
+		// Create history where home load is 0.4 kWh in hour 0, 0.2 kWh in hour 1, and 0.15 kWh in hour 2
+		history := []types.EnergyStats{}
+		for i := 1; i <= 3; i++ {
+			pastDay := now.Add(time.Duration(-24*i) * time.Hour).Truncate(time.Hour)
+			for h := 0; h < 24; h++ {
+				load := 0.0
+				if h == 0 {
+					load = 0.4
+				} else if h == 1 {
+					load = 0.2
+				} else if h == 2 {
+					load = 0.15
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: time.Date(pastDay.Year(), pastDay.Month(), pastDay.Day(), h, 0, 0, 0, time.UTC),
+					SolarKWH:    0.0,
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		currentStatus := types.SystemStatus{
+			BatteryCapacityKWH:    10.0,
+			BatterySOC:            21.0, // Start exactly at minKWH (2.1 kWh)
+			BatteryKW:             0,
+			Timestamp:             now,
+			MaxBatteryChargeKW:    5.0,
+			MaxBatteryDischargeKW: 5.0,
+		}
+
+		settings := types.Settings{
+			GridExportSolar: true,
+			MinBatterySOC:   20.0,
+		}
+
+		simData := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
+
+		if assert.NotEmpty(t, simData) && assert.GreaterOrEqual(t, len(simData), 3) {
+			// Hour 0: Drains 0.4 kWh. Drops below 1.8 kWh (deficit threshold).
+			// Deficit should be 0.4 kWh.
+			assert.InDelta(t, 0.4, simData[0].TotalBatteryDeficitKWH, 0.001)
+
+			// Hour 1: Drains 0.2 kWh. Since it's already below deficit, it should accumulate 0.2 kWh.
+			// Total Deficit should be 0.6 kWh.
+			assert.InDelta(t, 0.6, simData[1].TotalBatteryDeficitKWH, 0.001)
+
+			// Hour 2: Drains 0.15 kWh.
+			// Total Deficit should be 0.75 kWh.
+			assert.InDelta(t, 0.75, simData[2].TotalBatteryDeficitKWH, 0.001)
+		}
+	})
+
 }

@@ -2035,6 +2035,74 @@ func TestDecide(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
 	})
+
+	t.Run("Deficit Charge Overrides Arbitrage Standby", func(t *testing.T) {
+		settings := baseSettings
+		settings.MinArbitrageDifferenceDollarsPerKWH = 0.03
+		settings.MinDeficitPriceDifferenceDollarsPerKWH = 0.02
+		settings.GridChargeBatteries = true
+		settings.GridExportSolar = true
+		settings.SolarNetMeteringCreditsValue = "highest"
+		settings.UtilityRateOptions.NetMeteringCredits = true
+
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.055}
+		// Future price has a peak export hour at hour 2
+		futurePrices := []types.Price{
+			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.055},
+			{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(3 * time.Hour), DollarsPerKWH: 0.08}, // Arbitrage peak (saves/holds energy)
+			{TSStart: now.Add(3 * time.Hour), TSEnd: now.Add(4 * time.Hour), DollarsPerKWH: 0.60}, // Deficit peak (charges now to survive)
+		}
+		for i := 4; i <= 24; i++ {
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: 0.055,
+			})
+		}
+
+		// Battery is above reserve (30.0% SOC), so we have held energy for arbitrage to standby.
+		status := baseStatus
+		status.BatterySOC = 30.0
+
+		// Home load history: 1.0 kWh constant load, except at hour 3 (deficit peak) where it spikes to 5.0 kWh.
+		customHistory := []types.EnergyStats{}
+		ts := now.Add(-24 * time.Hour)
+		for i := 0; i < 48; i++ {
+			load := 1.0
+			if ts.Hour() == (now.Hour()+3)%24 {
+				load = 5.0
+			}
+			customHistory = append(customHistory, types.EnergyStats{
+				TSHourStart: ts,
+				HomeKWH:     load,
+				SolarKWH:    0.0,
+			})
+			ts = ts.Add(1 * time.Hour)
+		}
+
+		simData := c.SimulateState(ctx, now, status, currentPrice, futurePrices, customHistory, nil, settings)
+		summary := c.analyzeSimulation(ctx, now, currentPrice, settings, simData)
+		evalDef := c.evaluateDeficit(ctx, now, status, currentPrice, settings, simData, summary)
+		evalExport := c.evaluateExportArbitrage(ctx, now, status, currentPrice, settings, simData, summary)
+
+		t.Logf("evalDef: %+v", evalDef)
+		if evalDef != nil {
+			t.Logf("evalDef.Decision: %+v", evalDef.Decision)
+			t.Logf("evalDef.Plan: %+v", evalDef.Plan)
+		}
+		t.Logf("evalExport: %+v", evalExport)
+		if evalExport != nil {
+			t.Logf("evalExport.Decision: %+v", evalExport.Decision)
+			t.Logf("evalExport.Plan: %+v", evalExport.Plan)
+		}
+
+		decision, err := c.Decide(ctx, status, currentPrice, futurePrices, customHistory, nil, settings)
+		require.NoError(t, err)
+
+		// The decision must be to charge now due to deficit, overriding arbitrage standby.
+		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonDeficitChargeNow, decision.Action.Reason)
+	})
 }
 
 func TestSimulateStandby(t *testing.T) {
@@ -3328,6 +3396,39 @@ func TestEvaluateDeficit(t *testing.T) {
 
 		// It should ignore the deficit and behave as if we have sufficient battery (returns nil from evaluateDeficit)
 		assert.Nil(t, eval)
+	})
+
+	t.Run("Off-by-one: current hour cheap slot is planned when tiny deficit charge is skipped", func(t *testing.T) {
+		status := baseStatus
+		status.BatterySOC = 20.0
+		// Current price is cheap ($0.055)
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.055}
+		// Future price is expensive ($0.10)
+		futurePrices := []types.Price{
+			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.10},
+		}
+
+		// Hit deficit at hour 1 (now + 1 hour).
+		summary := simulationSummary{
+			HitBelowDeficitAt:       now.Add(time.Hour),
+			MinFutureGridChargeCost: 0.10,
+		}
+
+		// Deficit is very small: 0.5 kWh.
+		// chargeKW = 5.0, so duration = 0.5 / 5.0 = 0.1 hours = 6 minutes (< 10 minutes).
+		// So immediate charge will be skipped as tiny deficit charge.
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.055, Price: currentPrice},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.10, TotalBatteryDeficitKWH: 0.5, Price: futurePrices[0], BatteryReserveKWH: 2.0},
+		}
+
+		eval := c.evaluateDeficit(ctx, now, status, currentPrice, baseSettings, simData, summary)
+		require.NotNil(t, eval)
+		assert.Nil(t, eval.Decision, "Should skip immediate charge because deficit is tiny (< 10 minutes)")
+		if assert.NotNil(t, eval.Plan) {
+			assert.Equal(t, now, eval.Plan.ChargeTime, "Should plan charge for the current cheapest hour (now)")
+			assert.Equal(t, 0.055, eval.Plan.ChargeCost)
+		}
 	})
 }
 

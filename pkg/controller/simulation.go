@@ -238,7 +238,7 @@ func (c *Controller) SimulateState(
 			// We only count it as a deficit and trigger grid charging if it goes below this threshold
 			// to avoid micro-charging the battery for trivial, noise-level SOC fluctuations.
 			deficitThresholdKWH := max(minKWH-(capacityKWH*deficitThresholdOffsetCapacityRatio), 0.0)
-			if newSimEnergy < deficitThresholdKWH {
+			if newSimEnergy < deficitThresholdKWH || (!simBelowDeficitAt.IsZero() && newSimEnergy < minKWH) {
 				if simBelowDeficitAt.IsZero() {
 					remainingBeforeDeficit := simEnergyKWH - deficitThresholdKWH
 					if clampedNetKWH > 0 && remainingBeforeDeficit > 0 {
