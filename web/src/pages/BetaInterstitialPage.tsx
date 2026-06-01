@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation } from 'wouter';
 import { Select } from '@base-ui/react/select';
+import { Combobox } from '@base-ui/react/combobox';
 import { submitInterest, fetchUtilities, fetchESSList, type UtilityProviderInfo, type ESSProviderInfo } from '../api';
 import './LoginPage.css';
 
@@ -69,6 +70,12 @@ const BetaInterstitialPage: React.FC = () => {
         }
     };
 
+    const sortedUtilities = utilitiesList
+        .filter(u => !u.hidden)
+        .map(u => ({ label: u.name, value: u.id }))
+        .sort((a, b) => a.label.localeCompare(b.label));
+    sortedUtilities.push({ label: 'Other', value: 'other' });
+
     return (
         <div className="auth-page">
             <div className="auth-card" style={{ maxWidth: '440px' }}>
@@ -82,36 +89,42 @@ const BetaInterstitialPage: React.FC = () => {
                 {!isSubmitted && (
                     <div className="beta-interstitial-form">
                         <div>
-                            <label id="utility-label" className="beta-interstitial-label">Utility Provider</label>
-                            <Select.Root
-                                value={utility}
+                            <label id="utility-label" htmlFor="utility" className="beta-interstitial-label">Utility Provider</label>
+                            <Combobox.Root
+                                value={utility || ''}
                                 onValueChange={(value) => setUtility(value as string)}
+                                items={sortedUtilities}
+                                disabled={isLoadingData}
                             >
-                                <Select.Trigger aria-labelledby="utility-label" className="select-trigger" disabled={isLoadingData}>
-                                    <Select.Value placeholder={isLoadingData ? "Loading..." : "Select your utility..."}>
-                                        {utility === 'other' ? 'Other' : utilitiesList.find(u => u.id === utility)?.name || (isLoadingData ? 'Loading...' : 'Select your utility...')}
-                                    </Select.Value>
-                                    <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                <div className="combobox-input-wrapper select-trigger">
+                                    <Combobox.Input
+                                        placeholder={isLoadingData ? "Loading..." : "Select your utility..."}
+                                        id="utility"
+                                        className="combobox-input"
+                                    />
+                                    <Combobox.Trigger className="combobox-trigger" aria-label="Open popup">
                                         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
                                             <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                                         </svg>
-                                    </Select.Icon>
-                                </Select.Trigger>
-                                <Select.Portal>
-                                    <Select.Positioner style={{ zIndex: 1000, width: 'var(--anchor-width)' }}>
-                                        <Select.Popup className="select-popup">
-                                            {utilitiesList.filter(u => !u.hidden).map(u => (
-                                                <Select.Item key={u.id} value={u.id} className="select-item">
-                                                    <Select.ItemText>{u.name}</Select.ItemText>
-                                                </Select.Item>
-                                            ))}
-                                            <Select.Item value="other" className="select-item">
-                                                <Select.ItemText>Other</Select.ItemText>
-                                            </Select.Item>
-                                        </Select.Popup>
-                                    </Select.Positioner>
-                                </Select.Portal>
-                            </Select.Root>
+                                    </Combobox.Trigger>
+                                </div>
+                                <Combobox.Portal>
+                                    <Combobox.Positioner style={{ zIndex: 1000, width: 'var(--anchor-width)' }}>
+                                        <Combobox.Popup className="select-popup">
+                                            <Combobox.Empty>
+                                                <div className="select-item" style={{ pointerEvents: 'none' }}>No utilities found.</div>
+                                            </Combobox.Empty>
+                                            <Combobox.List>
+                                                {(item: { label: string, value: string }) => (
+                                                    <Combobox.Item key={item.value} value={item.value} className="select-item">
+                                                        {item.label}
+                                                    </Combobox.Item>
+                                                )}
+                                            </Combobox.List>
+                                        </Combobox.Popup>
+                                    </Combobox.Positioner>
+                                </Combobox.Portal>
+                            </Combobox.Root>
                         </div>
 
                         <div>

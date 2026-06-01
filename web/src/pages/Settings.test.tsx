@@ -377,7 +377,7 @@ describe('App & Settings', () => {
         await navigateToSettings();
 
         // Select Service (Provider)
-        const serviceSelect = await screen.findByLabelText(/Service/i);
+        const serviceSelect = await screen.findByRole('combobox', { name: /Service/i });
         await user.click(serviceSelect);
         const comedOption = await screen.findByRole('option', { name: 'ComEd' });
         await user.click(comedOption);
@@ -456,7 +456,7 @@ describe('App & Settings', () => {
         await navigateToSettings();
 
         // Check utility
-        const serviceSelect = await screen.findByLabelText(/Service/i);
+        const serviceSelect = await screen.findByRole('combobox', { name: /Service/i });
         await user.click(serviceSelect);
         await waitFor(() => expect(screen.getByRole('option', { name: 'ComEd' })).toBeInTheDocument());
         expect(screen.queryByRole('option', { name: 'Secret Utility' })).not.toBeInTheDocument();
@@ -686,7 +686,7 @@ describe('App & Settings', () => {
         await navigateToSettings();
 
         // Select Service (Provider)
-        const serviceSelect = await screen.findByLabelText(/Service/i);
+        const serviceSelect = await screen.findByRole('combobox', { name: /Service/i });
         await user.click(serviceSelect);
         const sceOption = await screen.findByRole('option', { name: 'Southern California Edison' });
         await user.click(sceOption);

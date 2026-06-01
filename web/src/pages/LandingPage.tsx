@@ -103,9 +103,12 @@ const LandingPage: React.FC = () => {
                             Intelligently managing your energy to buy low, sell high, and slash your bill—all while you sleep.
                         </p>
                         <div className="cta-wrapper">
-                            <a href="/login" className="cta-button">
-                                Get Started
-                            </a>
+                            <div className="cta-button-container">
+                                <a href="/login" className="cta-button">
+                                    Get Started
+                                </a>
+                                <span className="cta-note">Free to sign up during public beta</span>
+                            </div>
                         </div>
                     </div>
                     <div className="hero-visual">
@@ -113,7 +116,7 @@ const LandingPage: React.FC = () => {
                         <div className="floating-card">
                             <span>Estimated Savings</span>
                             <strong>$12.84</strong>
-                            <small>This Month*</small>
+                            <small>Saved This Month*</small>
                             <div className="status-indicator">
                                 <span className="dot" aria-hidden="true"></span> Optimized by RateRudder
                             </div>

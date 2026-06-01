@@ -234,6 +234,11 @@ const Settings = ({ siteID }: { siteID?: string }) => {
           }, 0)
         : 0;
 
+    const sortedUtilities = utilities
+        .filter(u => !u.hidden || u.id === settings.utilityProvider)
+        .map(u => ({ label: u.name, value: u.id }))
+        .sort((a, b) => a.label.localeCompare(b.label));
+
     return (
         <div className="content-container settings-container">
             <h2>Settings</h2>
@@ -281,9 +286,9 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                 ) : (
                     <div className={editUtility ? "edit-section" : ""}>
                         <Field.Root className="form-group">
-                            <Field.Label>Service</Field.Label>
-                            <Select.Root
-                                value={settings.utilityProvider}
+                            <Field.Label htmlFor="utilityService">Service</Field.Label>
+                            <Combobox.Root
+                                value={settings.utilityProvider || ''}
                                 onValueChange={(value) => {
                                     setEditUtility(true);
                                     setIsUtilityDirty(true);
@@ -309,32 +314,37 @@ const Settings = ({ siteID }: { siteID?: string }) => {
 
                                     setSettings(newSettings);
                                 }}
+                                items={sortedUtilities}
                             >
-                                <Select.Trigger className="select-trigger" id="utilityService" aria-label="Service">
-                                    <Select.Value>
-                                        {utilities.find(u => u.id === settings.utilityProvider)?.name || 'Select a service...'}
-                                    </Select.Value>
-                                    <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                <div className="combobox-input-wrapper select-trigger">
+                                    <Combobox.Input
+                                        placeholder="Select a service..."
+                                        id="utilityService"
+                                        className="combobox-input"
+                                    />
+                                    <Combobox.Trigger className="combobox-trigger" aria-label="Open popup">
                                         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                                             <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                                         </svg>
-                                    </Select.Icon>
-                                </Select.Trigger>
-                                <Select.Portal>
-                                    <Select.Positioner className="select-positioner">
-                                        <Select.Popup className="select-popup">
-                                            <Select.Item className="select-item" value="">
-                                                <Select.ItemText>Select a service...</Select.ItemText>
-                                            </Select.Item>
-                                            {utilities.filter(u => !u.hidden || u.id === settings.utilityProvider).map(u => (
-                                                <Select.Item key={u.id} className="select-item" value={u.id}>
-                                                    <Select.ItemText>{u.name}</Select.ItemText>
-                                                </Select.Item>
-                                            ))}
-                                        </Select.Popup>
-                                    </Select.Positioner>
-                                </Select.Portal>
-                            </Select.Root>
+                                    </Combobox.Trigger>
+                                </div>
+                                <Combobox.Portal>
+                                    <Combobox.Positioner className="select-positioner">
+                                        <Combobox.Popup className="select-popup">
+                                            <Combobox.Empty>
+                                                <div className="select-item" style={{ pointerEvents: 'none' }}>No services found.</div>
+                                            </Combobox.Empty>
+                                            <Combobox.List>
+                                                {(item: { label: string, value: string }) => (
+                                                    <Combobox.Item key={item.value} value={item.value} className="select-item">
+                                                        {item.label}
+                                                    </Combobox.Item>
+                                                )}
+                                            </Combobox.List>
+                                        </Combobox.Popup>
+                                    </Combobox.Positioner>
+                                </Combobox.Portal>
+                            </Combobox.Root>
                         </Field.Root>
 
                         {(() => {

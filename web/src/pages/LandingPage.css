@@ -112,6 +112,19 @@
     align-items: flex-start;
 }
 
+.cta-button-container {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    align-items: flex-start;
+}
+
+.cta-note {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
 .cta-button {
     display: inline-block;
     padding: 1.25rem 3.5rem;
@@ -184,11 +197,17 @@
 }
 
 .floating-card span {
-    font-size: 0.75rem;
+    font-size: 1.125rem;
     text-transform: uppercase;
+    color: var(--on-surface);
+    font-weight: 800;
+    letter-spacing: 0.15em;
+}
+
+.floating-card small {
+    font-size: 0.875rem;
     color: var(--text-muted);
-    font-weight: 700;
-    letter-spacing: 0.2em;
+    font-weight: 500;
 }
 
 .status-indicator {
@@ -590,6 +609,10 @@
     }
 
     .cta-wrapper {
+        align-items: center;
+    }
+
+    .cta-button-container {
         align-items: center;
     }
 
