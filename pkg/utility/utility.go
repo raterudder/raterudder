@@ -169,6 +169,14 @@ var (
 )
 
 func getUtilityRateFees(rate string, options types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+	if rate == "gp_tou_oa_14" {
+		rate = "gp_tou_oa"
+	} else if rate == "gp_tou_rd_11" {
+		rate = "gp_tou_rd"
+	} else if rate == "gp_tou_reo_18" {
+		rate = "gp_tou_reo"
+	}
+
 	fees, ok := utilityRateFeesMap[rate]
 	if !ok {
 		return nil, fmt.Errorf("unknown utility rate: %s", rate)

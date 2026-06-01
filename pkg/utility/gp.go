@@ -17,31 +17,86 @@ var gpInstantaneousRates = map[int]float64{
 	2027: 0.07471,
 }
 
-// GP base rates (before ECCR is applied)
-const (
-	// Overnight Advantage (TOU-OA-14)
-	oaSummerOnPeak   = 0.297868
-	oaSummerOffPeak  = 0.101676
-	oaSummerSuperOff = 0.021859
-	oaWinterOffPeak  = 0.101676
-	oaWinterSuperOff = 0.021859
+type gpOARates struct {
+	SummerOnPeak   float64
+	SummerOffPeak  float64
+	SummerSuperOff float64
+	WinterOffPeak  float64
+	WinterSuperOff float64
+}
 
-	// Residential Demand (TOU-RD-11)
-	rdSummerOnPeak  = 0.142986
-	rdSummerOffPeak = 0.015288
-	rdWinterOffPeak = 0.015288
+type gpRDRates struct {
+	SummerOnPeak  float64
+	SummerOffPeak float64
+	WinterOffPeak float64
+}
 
-	// Residential Energy Only (TOU-REO-18)
-	reoSummerOnPeak  = 0.297868
-	reoSummerOffPeak = 0.076281
-	reoWinterOffPeak = 0.076281
-)
+type gpREORates struct {
+	SummerOnPeak  float64
+	SummerOffPeak float64
+	WinterOffPeak float64
+}
+
+var gpOAVersions = map[int]gpOARates{
+	// TOU-OA-14: Applicable to billing months prior to June 2026 (starting from January 2025)
+	14: {
+		SummerOnPeak:   0.297868,
+		SummerOffPeak:  0.101676,
+		SummerSuperOff: 0.021859,
+		WinterOffPeak:  0.101676,
+		WinterSuperOff: 0.021859,
+	},
+	// TOU-OA-15: Applicable to billing months June 2026 onwards
+	15: {
+		SummerOnPeak:   0.303495,
+		SummerOffPeak:  0.103598,
+		SummerSuperOff: 0.022272,
+		WinterOffPeak:  0.103598,
+		WinterSuperOff: 0.022272,
+	},
+}
+
+var gpRDVersions = map[int]gpRDRates{
+	// TOU-RD-11: Applicable to billing months prior to June 2026
+	11: {
+		SummerOnPeak:  0.142986,
+		SummerOffPeak: 0.015288,
+		WinterOffPeak: 0.015288,
+	},
+	// TOU-RD-12: Applicable to billing months June 2026 onwards
+	12: {
+		SummerOnPeak:  0.145620,
+		SummerOffPeak: 0.015569,
+		WinterOffPeak: 0.015569,
+	},
+}
+
+var gpREOVersions = map[int]gpREORates{
+	// TOU-REO-18: Applicable to billing months prior to June 2026
+	18: {
+		SummerOnPeak:  0.297868,
+		SummerOffPeak: 0.076281,
+		WinterOffPeak: 0.076281,
+	},
+	// TOU-REO-19: Applicable to billing months June 2026 onwards (renamed to Nights & Weekends)
+	19: {
+		SummerOnPeak:  0.303495,
+		SummerOffPeak: 0.077702,
+		WinterOffPeak: 0.077702,
+	},
+}
 
 // ECCR percentage rates (as multipliers)
 const (
-	eccrMultiplierOld = 1.132343 // ECCR-14: 13.2343%
-	eccrMultiplierNew = 1.130205 // ECCR-15p: 13.0205%
+	eccrMultiplierJan26 = 1.132343 // ECCR-14: 13.2343%
+	eccrMultiplierJun26 = 1.130205 // ECCR-15p: 13.0205%
 )
+
+// TODO: Support asking the user for their location (inside/outside city limits) to determine
+// the exact Municipal Franchise Fee (MFF). Inside city limits is 3.0843% (multiplier 1.030843),
+// and outside city limits is 1.1995% (multiplier 1.011995).
+// For now, we conservatively use the outside city limits rate of 1.1995% (multiplier 1.011995) to prevent overestimating savings.
+const mffMultiplier = 1.011995
 
 var (
 	summerMonths = []time.Month{time.June, time.July, time.August, time.September}
@@ -82,6 +137,15 @@ func intersectMonths(months []time.Month, allowed []time.Month) []time.Month {
 }
 
 func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
+	// Handle backwards compatibility for old plan IDs (excluding utility info)
+	if plan == "gp_tou_oa_14" {
+		plan = "gp_tou_oa"
+	} else if plan == "gp_tou_rd_11" {
+		plan = "gp_tou_rd"
+	} else if plan == "gp_tou_reo_18" {
+		plan = "gp_tou_reo"
+	}
+
 	var periods []types.UtilityFeesPeriod
 	loc := etLocation
 
@@ -91,43 +155,43 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 		type yearBlock struct {
 			months         []time.Month
 			eccrMultiplier float64
-			isOld          bool
+			versionDiff    int
 		}
 
 		var blocks []yearBlock
 		if year < 2026 {
 			blocks = []yearBlock{
-				{months: nil, eccrMultiplier: eccrMultiplierOld, isOld: true},
+				{months: nil, eccrMultiplier: eccrMultiplierJan26, versionDiff: 0},
 			}
 		} else if year == 2026 {
 			blocks = []yearBlock{
 				{
 					months:         []time.Month{time.January, time.February, time.March, time.April, time.May},
-					eccrMultiplier: eccrMultiplierOld,
-					isOld:          true,
+					eccrMultiplier: eccrMultiplierJan26,
+					versionDiff:    0,
 				},
 				{
 					months:         []time.Month{time.June, time.July, time.August, time.September, time.October, time.November, time.December},
-					eccrMultiplier: eccrMultiplierNew,
-					isOld:          false,
+					eccrMultiplier: eccrMultiplierJun26,
+					versionDiff:    1,
 				},
 			}
 		} else {
 			blocks = []yearBlock{
-				{months: nil, eccrMultiplier: eccrMultiplierNew, isOld: false},
+				{months: nil, eccrMultiplier: eccrMultiplierJun26, versionDiff: 1},
 			}
 		}
 
 		for _, block := range blocks {
 			// 1. Build base simplified periods with ECCR applied
 			switch plan {
-			case "gp_tou_oa_14":
-				onPeakRate := oaSummerOnPeak * block.eccrMultiplier
-				offPeakRate := oaSummerOffPeak * block.eccrMultiplier
-				superOffPeakRate := oaSummerSuperOff * block.eccrMultiplier
-
-				winterOffPeakRate := oaWinterOffPeak * block.eccrMultiplier
-				winterSuperOffPeakRate := oaWinterSuperOff * block.eccrMultiplier
+			case "gp_tou_oa":
+				r := gpOAVersions[14+block.versionDiff]
+				onPeakRate := r.SummerOnPeak * block.eccrMultiplier * mffMultiplier
+				offPeakRate := r.SummerOffPeak * block.eccrMultiplier * mffMultiplier
+				superOffPeakRate := r.SummerSuperOff * block.eccrMultiplier * mffMultiplier
+				winterOffPeakRate := r.WinterOffPeak * block.eccrMultiplier * mffMultiplier
+				winterSuperOffPeakRate := r.WinterSuperOff * block.eccrMultiplier * mffMultiplier
 
 				summerIntersection := intersectMonths(summerMonths, block.months)
 				winterIntersection := intersectMonths(winterMonths, block.months)
@@ -206,10 +270,11 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 					periods = append(periods, buildPeriods(loc.String(), []touSimplifiedPeriod{winterPeriod})...)
 				}
 
-			case "gp_tou_rd_11":
-				onPeakRate := rdSummerOnPeak * block.eccrMultiplier
-				offPeakRate := rdSummerOffPeak * block.eccrMultiplier
-				winterOffPeakRate := rdWinterOffPeak * block.eccrMultiplier
+			case "gp_tou_rd":
+				r := gpRDVersions[11+block.versionDiff]
+				onPeakRate := r.SummerOnPeak * block.eccrMultiplier * mffMultiplier
+				offPeakRate := r.SummerOffPeak * block.eccrMultiplier * mffMultiplier
+				winterOffPeakRate := r.WinterOffPeak * block.eccrMultiplier * mffMultiplier
 
 				summerIntersection := intersectMonths(summerMonths, block.months)
 				winterIntersection := intersectMonths(winterMonths, block.months)
@@ -255,10 +320,11 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 					periods = append(periods, buildPeriods(loc.String(), []touSimplifiedPeriod{winterPeriod})...)
 				}
 
-			case "gp_tou_reo_18":
-				onPeakRate := reoSummerOnPeak * block.eccrMultiplier
-				offPeakRate := reoSummerOffPeak * block.eccrMultiplier
-				winterOffPeakRate := reoWinterOffPeak * block.eccrMultiplier
+			case "gp_tou_reo":
+				r := gpREOVersions[18+block.versionDiff]
+				onPeakRate := r.SummerOnPeak * block.eccrMultiplier * mffMultiplier
+				offPeakRate := r.SummerOffPeak * block.eccrMultiplier * mffMultiplier
+				winterOffPeakRate := r.WinterOffPeak * block.eccrMultiplier * mffMultiplier
 
 				summerIntersection := intersectMonths(summerMonths, block.months)
 				winterIntersection := intersectMonths(winterMonths, block.months)
@@ -306,7 +372,7 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 			}
 
 			// 2. Build and append FCR fee periods for this block
-			periods = append(periods, gpFCRPeriods(plan, year, block.months, block.isOld, holidays)...)
+			periods = append(periods, gpFCRPeriods(plan, year, block.months, block.versionDiff, holidays)...)
 		}
 	}
 
@@ -334,18 +400,27 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 	return periods
 }
 
-func gpFCRPeriods(plan string, year int, months []time.Month, isOld bool, holidays []string) []types.UtilityFeesPeriod {
+func gpFCRPeriods(plan string, year int, months []time.Month, versionDiff int, holidays []string) []types.UtilityFeesPeriod {
+	// Handle backwards compatibility for old plan IDs
+	if plan == "gp_tou_oa_14" {
+		plan = "gp_tou_oa"
+	} else if plan == "gp_tou_rd_11" {
+		plan = "gp_tou_rd"
+	} else if plan == "gp_tou_reo_18" {
+		plan = "gp_tou_reo"
+	}
+
 	var periods []types.UtilityFeesPeriod
 	loc := etLocation
 
-	if plan == "gp_tou_oa_14" {
+	if plan == "gp_tou_oa" {
 		var onPeakRate, offPeakRate, superOffPeakRate float64
 		var suffix string
-		if isOld {
-			onPeakRate, offPeakRate, superOffPeakRate = 0.066871, 0.044284, 0.038252
+		if versionDiff == 0 {
+			onPeakRate, offPeakRate, superOffPeakRate = 0.066871*mffMultiplier, 0.044284*mffMultiplier, 0.038252*mffMultiplier
 			suffix = " (FCR-26)"
 		} else {
-			onPeakRate, offPeakRate, superOffPeakRate = 0.052269, 0.038690, 0.034747
+			onPeakRate, offPeakRate, superOffPeakRate = 0.052269*mffMultiplier, 0.038690*mffMultiplier, 0.034747*mffMultiplier
 			suffix = " (FCR-27)"
 		}
 
@@ -424,11 +499,11 @@ func gpFCRPeriods(plan string, year int, months []time.Month, isOld bool, holida
 		// two-part FCR (TOU-FCR-6 / TOU-FCR-7) for RD and REO
 		var onPeakRate, offPeakRate float64
 		var suffix string
-		if isOld {
-			onPeakRate, offPeakRate = 0.066871, 0.042398
+		if versionDiff == 0 {
+			onPeakRate, offPeakRate = 0.066871*mffMultiplier, 0.042398*mffMultiplier
 			suffix = " (FCR-26)"
 		} else {
-			onPeakRate, offPeakRate = 0.052269, 0.037441
+			onPeakRate, offPeakRate = 0.052269*mffMultiplier, 0.037441*mffMultiplier
 			suffix = " (FCR-27)"
 		}
 
@@ -482,4 +557,74 @@ func gpFCRPeriods(plan string, year int, months []time.Month, isOld bool, holida
 	}
 
 	return periods
+}
+
+// gpUtilityInfo returns the metadata and rate options for Georgia Power.
+func gpUtilityInfo() types.UtilityProviderInfo {
+	return types.UtilityProviderInfo{
+		ID:   "gp",
+		Name: "Georgia Power",
+		Rates: []types.UtilityRateInfo{
+			{
+				ID:   "gp_tou_oa",
+				Name: "TOU-OA (Overnight Advantage)",
+				Options: []types.UtilityRateOption{
+					{
+						Field:       "netMeteringScheme",
+						Name:        "Net Metering / Export Scheme",
+						Type:        types.UtilityOptionTypeSelect,
+						Description: "Select your net metering or solar billing plan program.",
+						Choices: []types.UtilityOptionChoice{
+							{Value: "gp_instantaneous", Name: "Instantaneous Netting (RNR)"},
+							{Value: "net", Name: "Monthly Netting (RNR)"},
+						},
+						Default: "gp_instantaneous",
+					},
+				},
+				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+					return gpPeriods("gp_tou_oa", opts, []int{2026, 2027}), nil
+				},
+			},
+			{
+				ID:   "gp_tou_rd",
+				Name: "TOU-RD (Residential Demand)",
+				Options: []types.UtilityRateOption{
+					{
+						Field:       "netMeteringScheme",
+						Name:        "Net Metering / Export Scheme",
+						Type:        types.UtilityOptionTypeSelect,
+						Description: "Select your net metering or solar billing plan program.",
+						Choices: []types.UtilityOptionChoice{
+							{Value: "gp_instantaneous", Name: "Instantaneous Netting (RNR)"},
+							{Value: "net", Name: "Monthly Netting (RNR)"},
+						},
+						Default: "gp_instantaneous",
+					},
+				},
+				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+					return gpPeriods("gp_tou_rd", opts, []int{2026, 2027}), nil
+				},
+			},
+			{
+				ID:   "gp_tou_reo",
+				Name: "TOU-REO (Nights & Weekends)",
+				Options: []types.UtilityRateOption{
+					{
+						Field:       "netMeteringScheme",
+						Name:        "Net Metering / Export Scheme",
+						Type:        types.UtilityOptionTypeSelect,
+						Description: "Select your net metering or solar billing plan program.",
+						Choices: []types.UtilityOptionChoice{
+							{Value: "gp_instantaneous", Name: "Instantaneous Netting (RNR)"},
+							{Value: "net", Name: "Monthly Netting (RNR)"},
+						},
+						Default: "gp_instantaneous",
+					},
+				},
+				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+					return gpPeriods("gp_tou_reo", opts, []int{2026, 2027}), nil
+				},
+			},
+		},
+	}
 }

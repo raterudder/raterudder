@@ -868,72 +868,6 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 			},
 		},
 		{
-			ID:   "gp",
-			Name: "Georgia Power",
-			Rates: []types.UtilityRateInfo{
-				{
-					ID:   "gp_tou_oa_14",
-					Name: "TOU-OA-14 (Overnight Advantage)",
-					Options: []types.UtilityRateOption{
-						{
-							Field:       "netMeteringScheme",
-							Name:        "Net Metering / Export Scheme",
-							Type:        types.UtilityOptionTypeSelect,
-							Description: "Select your net metering or solar billing plan program.",
-							Choices: []types.UtilityOptionChoice{
-								{Value: "gp_instantaneous", Name: "Instantaneous Netting (RNR)"},
-								{Value: "net", Name: "Monthly Netting (RNR)"},
-							},
-							Default: "gp_instantaneous",
-						},
-					},
-					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-						return gpPeriods("gp_tou_oa_14", opts, []int{2026, 2027}), nil
-					},
-				},
-				{
-					ID:   "gp_tou_rd_11",
-					Name: "TOU-RD-11 (Residential Demand)",
-					Options: []types.UtilityRateOption{
-						{
-							Field:       "netMeteringScheme",
-							Name:        "Net Metering / Export Scheme",
-							Type:        types.UtilityOptionTypeSelect,
-							Description: "Select your net metering or solar billing plan program.",
-							Choices: []types.UtilityOptionChoice{
-								{Value: "gp_instantaneous", Name: "Instantaneous Netting (RNR)"},
-								{Value: "net", Name: "Monthly Netting (RNR)"},
-							},
-							Default: "gp_instantaneous",
-						},
-					},
-					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-						return gpPeriods("gp_tou_rd_11", opts, []int{2026, 2027}), nil
-					},
-				},
-				{
-					ID:   "gp_tou_reo_18",
-					Name: "TOU-REO-18 (Residential Energy Only)",
-					Options: []types.UtilityRateOption{
-						{
-							Field:       "netMeteringScheme",
-							Name:        "Net Metering / Export Scheme",
-							Type:        types.UtilityOptionTypeSelect,
-							Description: "Select your net metering or solar billing plan program.",
-							Choices: []types.UtilityOptionChoice{
-								{Value: "gp_instantaneous", Name: "Instantaneous Netting (RNR)"},
-								{Value: "net", Name: "Monthly Netting (RNR)"},
-							},
-							Default: "gp_instantaneous",
-						},
-					},
-					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-						return gpPeriods("gp_tou_reo_18", opts, []int{2026, 2027}), nil
-					},
-				},
-			},
-		},
-		{
 			ID:   "mvea",
 			Name: "Mountain View Electric Association",
 			Rates: []types.UtilityRateInfo{
@@ -1003,6 +937,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 				},
 			},
 		},
+		gpUtilityInfo(),
 		xcelUtilityInfo(),
 		rockyUtilityInfo(),
 		srpUtilityInfo(),
