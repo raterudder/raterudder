@@ -169,12 +169,18 @@ func (c *Controller) SimulateState(
 				// Default to conservative value ("lowest")
 				solarOppCost = minFutureGridChargeCost
 			}
+			if solarOppCost != 0 {
+				// Apply generation adjustment if net metering is active and not valued at 0.
+				solarOppCost += price.GenerationAdjustmentDollarsPerKWH
+			}
 		} else if price.SeparateGenerationCredit {
 			// Post-2025 style: utility pays a distinct generation credit rate for
 			// solar exported to the grid, separate from the supply rate.
 			solarOppCost = price.GenerationCreditDollarsPerKWH
 		} else {
-			solarOppCost = price.DollarsPerKWH
+			// If SeparateGenerationCredit is false, the export credit is equal to the supply rate (DollarsPerKWH)
+			// adjusted by the GenerationAdjustmentDollarsPerKWH (if any).
+			solarOppCost = price.DollarsPerKWH + price.GenerationAdjustmentDollarsPerKWH
 		}
 
 		profile := model[h]

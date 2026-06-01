@@ -217,4 +217,76 @@ func TestTOUUtility(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 0.27647, p.DollarsPerKWH)
 	})
+
+	t.Run("MVEA", func(t *testing.T) {
+		mveaLoc, err := time.LoadLocation("America/Denver")
+		require.NoError(t, err)
+
+		u := &genericTOU{}
+
+		// 1. Test Flat Rate 16.01
+		err = u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "mvea",
+			UtilityRate:     "mvea_16_01",
+		})
+		require.NoError(t, err)
+
+		// Flat rate should be $0.12475/kWh at any time
+		p, err := u.priceForTime(time.Date(2026, time.June, 1, 14, 0, 0, 0, mveaLoc))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.12475, p.DollarsPerKWH, 1e-6)
+			// Standard net metering: SeparateGenerationCredit is false, so it offsets at the consumption rate
+			assert.False(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.0, p.GenerationCreditDollarsPerKWH, 1e-6)
+		}
+
+		p, err = u.priceForTime(time.Date(2026, time.June, 7, 18, 0, 0, 0, mveaLoc)) // Sunday
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.12475, p.DollarsPerKWH, 1e-6)
+			assert.False(t, p.SeparateGenerationCredit)
+		}
+
+		// 2. Test Time of Day Rate 16.05
+		err = u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "mvea",
+			UtilityRate:     "mvea_16_05",
+		})
+		require.NoError(t, err)
+
+		// On-peak: Mon-Sat 5:00 p.m. - 9:00 p.m. ($0.32371/kWh)
+		// Off-peak: All other times ($0.08346/kWh)
+		// Export credit: Always $0.00/kWh (SeparateGenerationCredit = true)
+
+		// Wednesday, June 3, 2026 at 6:00 p.m. (On-Peak)
+		p, err = u.priceForTime(time.Date(2026, time.June, 3, 18, 0, 0, 0, mveaLoc))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.32371, p.DollarsPerKWH, 1e-6)
+			assert.True(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.0, p.GenerationCreditDollarsPerKWH, 1e-6)
+		}
+
+		// Wednesday, June 3, 2026 at 10:00 a.m. (Off-Peak)
+		p, err = u.priceForTime(time.Date(2026, time.June, 3, 10, 0, 0, 0, mveaLoc))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.08346, p.DollarsPerKWH, 1e-6)
+			assert.True(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.0, p.GenerationCreditDollarsPerKWH, 1e-6)
+		}
+
+		// Saturday, June 6, 2026 at 8:00 p.m. (On-Peak)
+		p, err = u.priceForTime(time.Date(2026, time.June, 6, 20, 0, 0, 0, mveaLoc))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.32371, p.DollarsPerKWH, 1e-6)
+			assert.True(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.0, p.GenerationCreditDollarsPerKWH, 1e-6)
+		}
+
+		// Sunday, June 7, 2026 at 6:00 p.m. (Off-Peak - Sunday is never on-peak)
+		p, err = u.priceForTime(time.Date(2026, time.June, 7, 18, 0, 0, 0, mveaLoc))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.08346, p.DollarsPerKWH, 1e-6)
+			assert.True(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.0, p.GenerationCreditDollarsPerKWH, 1e-6)
+		}
+	})
 }

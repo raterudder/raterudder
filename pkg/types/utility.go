@@ -71,6 +71,14 @@ type Price struct {
 	// GenerationCreditDollarsPerKWH. The separate bool allows us to handle for a period
 	// where the generation credit is either zero or separate from the base price.
 	SeparateGenerationCredit bool `json:"separateGenerationCredit,omitempty"`
+
+	// GenerationAdjustmentDollarsPerKWH is an adjustment applied to generated energy.
+	// For Connecticut Eversource, exports are via the Renewable Energy Solutions Rider,
+	// which is standard net metering but with a -$0.0402/kWh fee/adjustment applied to generated energy.
+	// If SeparateGenerationCredit is false (1:1 net metering or standard net metering),
+	// this adjustment is added to the base rate for export credits (i.e. DollarsPerKWH + GenerationAdjustmentDollarsPerKWH).
+	// If NetMetering is active (e.g. min/max price valuation), this adjustment is applied to the max or min price (excluding 0).
+	GenerationAdjustmentDollarsPerKWH float64 `json:"generationAdjustmentDollarsPerKWH,omitempty"`
 }
 
 // PriceState embeds Price and adds a Confirmed flag.
@@ -222,6 +230,9 @@ type UtilityFeesPeriod struct {
 	// and then added to the total. In general, this should be less than 1.
 	DollarsPerKWHPreMultiple float64 `json:"dollarsPerKWHPreMultiple,omitempty"`
 
+	// GenerationAdjustmentDollarsPerKWH is the adjustment to generation credits.
+	GenerationAdjustmentDollarsPerKWH float64 `json:"generationAdjustmentDollarsPerKWH,omitempty"`
+
 	// Description is a description of the fee.
 	Description string `json:"description"`
 }
@@ -236,6 +247,10 @@ func (up *UtilityFeesPeriod) Apply(p Price, originalPrice Price) (Price, error) 
 	}
 	if !contains {
 		return p, nil
+	}
+
+	if up.GenerationAdjustmentDollarsPerKWH != 0 {
+		p.GenerationAdjustmentDollarsPerKWH += up.GenerationAdjustmentDollarsPerKWH
 	}
 
 	switch {

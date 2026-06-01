@@ -350,10 +350,13 @@ func TestDecideHistory(t *testing.T) {
 							gridExportPrice = 0.0
 						} else if settings.UtilityRateOptions.NetMeteringCredits {
 							gridExportPrice = calculateMinFuturePrice(dataset.PriceHistory, tMin)
+							if gridExportPrice != 0.0 {
+								gridExportPrice += pMin.GenerationAdjustmentDollarsPerKWH
+							}
 						} else if pMin.SeparateGenerationCredit {
 							gridExportPrice = pMin.GenerationCreditDollarsPerKWH
 						} else {
-							gridExportPrice = pMin.DollarsPerKWH
+							gridExportPrice = pMin.DollarsPerKWH + pMin.GenerationAdjustmentDollarsPerKWH
 						}
 					} else {
 						gridImportPrice = currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
@@ -364,10 +367,13 @@ func TestDecideHistory(t *testing.T) {
 							if gridExportPrice == 0.0 {
 								gridExportPrice = currentPrice.DollarsPerKWH
 							}
+							if gridExportPrice != 0.0 {
+								gridExportPrice += currentPrice.GenerationAdjustmentDollarsPerKWH
+							}
 						} else if currentPrice.SeparateGenerationCredit {
 							gridExportPrice = currentPrice.GenerationCreditDollarsPerKWH
 						} else {
-							gridExportPrice = currentPrice.DollarsPerKWH
+							gridExportPrice = currentPrice.DollarsPerKWH + currentPrice.GenerationAdjustmentDollarsPerKWH
 						}
 					}
 
@@ -454,10 +460,13 @@ func TestDecideHistory(t *testing.T) {
 							gridExportPrice = 0.0
 						} else if settings.UtilityRateOptions.NetMeteringCredits {
 							gridExportPrice = calculateMinFuturePrice(dataset.PriceHistory, tHour)
+							if gridExportPrice != 0.0 {
+								gridExportPrice += pMin.GenerationAdjustmentDollarsPerKWH
+							}
 						} else if pMin.SeparateGenerationCredit {
 							gridExportPrice = pMin.GenerationCreditDollarsPerKWH
 						} else {
-							gridExportPrice = pMin.DollarsPerKWH
+							gridExportPrice = pMin.DollarsPerKWH + pMin.GenerationAdjustmentDollarsPerKWH
 						}
 					} else {
 						var closestPrice types.Price
@@ -480,10 +489,13 @@ func TestDecideHistory(t *testing.T) {
 							if gridExportPrice == 0.0 {
 								gridExportPrice = closestPrice.DollarsPerKWH
 							}
+							if gridExportPrice != 0.0 {
+								gridExportPrice += closestPrice.GenerationAdjustmentDollarsPerKWH
+							}
 						} else if closestPrice.SeparateGenerationCredit {
 							gridExportPrice = closestPrice.GenerationCreditDollarsPerKWH
 						} else {
-							gridExportPrice = closestPrice.DollarsPerKWH
+							gridExportPrice = closestPrice.DollarsPerKWH + closestPrice.GenerationAdjustmentDollarsPerKWH
 						}
 					}
 

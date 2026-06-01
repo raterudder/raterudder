@@ -846,6 +846,81 @@ func TestSimulateState(t *testing.T) {
 		}
 	})
 
+	t.Run("SolarOppCostGenerationAdjustment", func(t *testing.T) {
+		c := NewController()
+		ctx := context.Background()
+		now := time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC)
+
+		currentStatus := types.SystemStatus{
+			BatteryCapacityKWH: 10.0,
+			BatterySOC:         50.0,
+			Timestamp:          now,
+		}
+
+		tests := []struct {
+			name            string
+			baseSupply      float64
+			gridUse         float64
+			adjustment      float64
+			gridExportSolar bool
+			netMetering     bool
+			nmValue         string
+			expectedOppCost float64
+		}{
+			{
+				name:            "Standard Export with Adjustment",
+				baseSupply:      0.10,
+				adjustment:      -0.0402,
+				gridExportSolar: true,
+				netMetering:     false,
+				expectedOppCost: 0.0598,
+			},
+			{
+				name:            "Net Metering Lowest with Adjustment",
+				baseSupply:      0.10,
+				gridUse:         0.05,
+				adjustment:      -0.0402,
+				gridExportSolar: true,
+				netMetering:     true,
+				nmValue:         "lowest",
+				expectedOppCost: 0.1098, // 0.10 + 0.05 - 0.0402
+			},
+			{
+				name:            "Net Metering None with Adjustment",
+				baseSupply:      0.10,
+				gridUse:         0.05,
+				adjustment:      -0.0402,
+				gridExportSolar: true,
+				netMetering:     true,
+				nmValue:         "none",
+				expectedOppCost: 0.0, // Should stay 0.0 and ignore adjustment
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				price := types.Price{
+					DollarsPerKWH:                     tt.baseSupply,
+					GridUseDollarsPerKWH:              tt.gridUse,
+					GenerationAdjustmentDollarsPerKWH: tt.adjustment,
+					TSStart:                           now,
+					TSEnd:                             now.Add(time.Hour),
+				}
+				settings := types.Settings{
+					GridExportSolar: tt.gridExportSolar,
+					UtilityRateOptions: types.UtilityRateOptions{
+						NetMeteringCredits: tt.netMetering,
+					},
+					SolarNetMeteringCreditsValue: tt.nmValue,
+				}
+
+				simData := c.SimulateState(ctx, now, currentStatus, price, nil, nil, nil, settings)
+				assert.NotEmpty(t, simData)
+				assert.InDelta(t, tt.expectedOppCost, simData[0].SolarOppDollarsPerKWH, 0.0001)
+			})
+		}
+	})
+
 	t.Run("HitCapacityAt", func(t *testing.T) {
 		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 		capacityKWH := 10.0

@@ -140,9 +140,10 @@ type touSimplifiedHoursAndDays struct {
 	Weekday       bool
 	Weekend       bool
 
-	DollarsPerKWH                 float64
-	GenerationCreditDollarsPerKWH float64
-	Description                   string
+	DollarsPerKWH                     float64
+	GenerationCreditDollarsPerKWH     float64
+	GenerationAdjustmentDollarsPerKWH float64
+	Description                       string
 }
 
 type touSimplifiedPeriod struct {
@@ -159,9 +160,10 @@ type touSimplifiedPeriod struct {
 
 	// OtherDollarsPerKWH is the dollars per kwh for hours and days that are not
 	// in HoursAndDays
-	OtherDollarsPerKWH                 float64
-	OtherGenerationCreditDollarsPerKWH float64
-	OtherDescription                   string
+	OtherDollarsPerKWH                     float64
+	OtherGenerationCreditDollarsPerKWH     float64
+	OtherGenerationAdjustmentDollarsPerKWH float64
+	OtherDescription                       string
 
 	// SeparateGenerationCredit is true if this period also contains solar
 	// generation credit pricing. GenerationCreditDollarsPerKWH will be used
@@ -261,17 +263,19 @@ func buildPeriods(loc string, simplified []touSimplifiedPeriod) []types.UtilityF
 				}
 
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod:            p,
-					DollarsPerKWH:            dollarsPerKWH,
-					Description:              hd.Description,
-					SeparateGenerationCredit: s.OnlySeparateGenerationCredit,
+					UtilityPeriod:                     p,
+					DollarsPerKWH:                     dollarsPerKWH,
+					Description:                       hd.Description,
+					SeparateGenerationCredit:          s.OnlySeparateGenerationCredit,
+					GenerationAdjustmentDollarsPerKWH: hd.GenerationAdjustmentDollarsPerKWH,
 				})
 				if !s.OnlySeparateGenerationCredit && s.SeparateGenerationCredit {
 					periods = append(periods, types.UtilityFeesPeriod{
-						UtilityPeriod:            p,
-						DollarsPerKWH:            hd.GenerationCreditDollarsPerKWH,
-						Description:              hd.Description,
-						SeparateGenerationCredit: true,
+						UtilityPeriod:                     p,
+						DollarsPerKWH:                     hd.GenerationCreditDollarsPerKWH,
+						Description:                       hd.Description,
+						SeparateGenerationCredit:          true,
+						GenerationAdjustmentDollarsPerKWH: hd.GenerationAdjustmentDollarsPerKWH,
 					})
 				}
 			}
@@ -357,17 +361,19 @@ func buildPeriods(loc string, simplified []touSimplifiedPeriod) []types.UtilityF
 						}
 
 						periods = append(periods, types.UtilityFeesPeriod{
-							UtilityPeriod:            period,
-							DollarsPerKWH:            dollarsPerKWH,
-							Description:              s.OtherDescription,
-							SeparateGenerationCredit: s.OnlySeparateGenerationCredit,
+							UtilityPeriod:                     period,
+							DollarsPerKWH:                     dollarsPerKWH,
+							Description:                       s.OtherDescription,
+							SeparateGenerationCredit:          s.OnlySeparateGenerationCredit,
+							GenerationAdjustmentDollarsPerKWH: s.OtherGenerationAdjustmentDollarsPerKWH,
 						})
 						if !s.OnlySeparateGenerationCredit && s.SeparateGenerationCredit {
 							periods = append(periods, types.UtilityFeesPeriod{
-								UtilityPeriod:            period,
-								DollarsPerKWH:            s.OtherGenerationCreditDollarsPerKWH,
-								Description:              s.OtherDescription,
-								SeparateGenerationCredit: true,
+								UtilityPeriod:                     period,
+								DollarsPerKWH:                     s.OtherGenerationCreditDollarsPerKWH,
+								Description:                       s.OtherDescription,
+								SeparateGenerationCredit:          true,
+								GenerationAdjustmentDollarsPerKWH: s.OtherGenerationAdjustmentDollarsPerKWH,
 							})
 						}
 					}
@@ -927,6 +933,76 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 				},
 			},
 		},
+		{
+			ID:   "mvea",
+			Name: "Mountain View Electric Association",
+			Rates: []types.UtilityRateInfo{
+				{
+					ID:   "mvea_16_01",
+					Name: "Residential Rate (16.01)",
+					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+						// Rate 16.01: Flat Residential Rate
+						// Energy rate: $0.12475/kWh
+						return buildPeriods(mtLocation.String(), []touSimplifiedPeriod{
+							{
+								Year:               2026,
+								MonthStart:         time.January,
+								MonthEnd:           time.December,
+								OtherDollarsPerKWH: 0.12475,
+								OtherDescription:   "MVEA 16.01 Flat Rate",
+							},
+						}), nil
+					},
+				},
+				{
+					ID:   "mvea_16_05",
+					Name: "Residential Time of Day Rate (16.05)",
+					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+						// Rate 16.05: Residential Time-of-Day Service Rate
+						// On-Peak hours: 5:00 p.m. - 9:00 p.m. (17:00-21:00) Monday through Saturday
+						// On-Peak energy rate: $0.32371/kWh
+						// Off-Peak energy rate (all other hours/days): $0.08346/kWh
+						peakHours := []types.UtilityHourPeriod{{HourStart: 17, HourEnd: 21}}
+						return buildPeriods(mtLocation.String(), []touSimplifiedPeriod{
+							{
+								Year:       2026,
+								MonthStart: time.January,
+								MonthEnd:   time.December,
+								HoursAndDays: []touSimplifiedHoursAndDays{
+									{
+										Hours: peakHours,
+										DaysOfTheWeek: []time.Weekday{
+											time.Monday,
+											time.Tuesday,
+											time.Wednesday,
+											time.Thursday,
+											time.Friday,
+											time.Saturday,
+										},
+										DollarsPerKWH: 0.32371,
+										Description:   "MVEA 16.05 On-Peak",
+									},
+								},
+								OtherDollarsPerKWH: 0.08346,
+								OtherDescription:   "MVEA 16.05 Off-Peak",
+							},
+
+							// Export credits:
+							// TOD rate customers do not get any export rate credit.
+							// We model this by setting SeparateGenerationCredit to true and DollarsPerKWH to 0.00.
+							{
+								Year:                               2026,
+								MonthStart:                         time.January,
+								MonthEnd:                           time.December,
+								OnlySeparateGenerationCredit:       true,
+								OtherGenerationCreditDollarsPerKWH: 0.00,
+								OtherDescription:                   "MVEA 16.05 Export Credit (No Export Credit allowed on TOD)",
+							},
+						}), nil
+					},
+				},
+			},
+		},
 		xcelUtilityInfo(),
 		rockyUtilityInfo(),
 		srpUtilityInfo(),
@@ -938,6 +1014,8 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 		bgeUtilityInfo(),
 		jeaUtilityInfo(),
 		weUtilityInfo(),
+		bwpUtilityInfo(),
+		eversourceUtilityInfo(),
 	},
 		append(hawaiiUtilityInfo(), dukeUtilityInfo()...)...,
 	)

@@ -253,13 +253,17 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 				// Default to conservative value ("lowest")
 				gridExportPrice = minPrice
 			}
+			if gridExportPrice != 0 {
+				// Apply generation adjustment if net metering is active and not valued at 0.
+				gridExportPrice += currentPrice.GenerationAdjustmentDollarsPerKWH
+			}
 		} else if currentPrice.SeparateGenerationCredit {
 			// Post-2025 style: utility pays a distinct generation credit rate for
 			// solar exported to the grid, separate from the supply rate.
 			gridExportPrice = currentPrice.GenerationCreditDollarsPerKWH
 		} else {
-			// Default export price should NOT include the gridUse fees
-			gridExportPrice = currentPrice.DollarsPerKWH
+			// Default export price should NOT include the gridUse fees, but includes the generation adjustment (if any).
+			gridExportPrice = currentPrice.DollarsPerKWH + currentPrice.GenerationAdjustmentDollarsPerKWH
 		}
 
 		ignoredFraction := getIgnoredFraction(ts, actions)
