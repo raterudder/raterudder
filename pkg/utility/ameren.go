@@ -336,35 +336,42 @@ func (c *baseAmerenSmart) fetchMISODayAhead(ctx context.Context, date time.Time,
 // amerenLossFactor returns the applicable residential secondary voltage loss
 // multiplier for the given hour.  Ameren publishes updated values each June;
 // add new rows here when new values are released.
-// see https://www.icc.illinois.gov/downloads/public/filing/4/390832.pdf
+// see https://www.ameren.com/bill/rates/residential (Distrubtion Loss Factors pdf)
 func amerenLossFactor(t time.Time) float64 {
 	switch {
 	case t.Before(time.Date(2026, time.June, 1, 0, 0, 0, 0, etLocation)):
 		return 1.05009
-	// TODO: figure out the 2026-2027 loss factor once it's announced by Ameren
+	case t.Before(time.Date(2027, time.June, 1, 0, 0, 0, 0, etLocation)):
+		return 1.04895
 	default:
-		return 1.05009
+		return 1.04895
 	}
 }
 
 func amerenUtilityInfo() types.UtilityProviderInfo {
+	netMeteringOption := types.UtilityRateOption{
+		Field:       "netMeteringCredits",
+		Name:        "Pre-2025 Full Net Metering",
+		Type:        types.UtilityOptionTypeSwitch,
+		Description: "Enable if you are grandfathered into Ameren's pre-2025 full net metering program. You are credited for your supply and delivery charges at the full retail rate.",
+		Default:     false,
+	}
+
 	return types.UtilityProviderInfo{
 		ID:   "ameren",
 		Name: "Ameren",
 		Rates: []types.UtilityRateInfo{
 			{
-				ID:   "ameren_psp",
-				Name: "Power Smart Pricing (Ameren IL)",
-				Options: []types.UtilityRateOption{
-					{
-						Field:       "netMeteringCredits",
-						Name:        "Pre-2025 Full Net Metering",
-						Type:        types.UtilityOptionTypeSwitch,
-						Description: "Enable if you are grandfathered into Ameren's pre-2025 full net metering program. You are credited for your supply and delivery charges at the full retail rate.",
-						Default:     false,
-					},
-				},
+				ID:      "ameren_psp",
+				Name:    "Power Smart Pricing (Ameren IL)",
+				Options: []types.UtilityRateOption{netMeteringOption},
 				GetFees: getAmerenAdditionalFees,
+			},
+			{
+				ID:      "ameren_bgs",
+				Name:    "Basic Generation Service (BGS) (Ameren IL)",
+				Options: []types.UtilityRateOption{netMeteringOption},
+				GetFees: getAmerenBGSFees,
 			},
 		},
 	}
@@ -385,18 +392,26 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPerio
 	// charge included in the all-in price-to-compare. As of January 2026 it is
 	// 2.629¢/kWh and applies regardless of season or time-of-day.
 	return []types.UtilityFeesPeriod{
-		// ── 2026 Transmission Service Charge ──────────────────────────────────
+		// ── Transmission Service Charge ──────────────────────────────────
 		// Applies all hours, both summer and non-summer.
 		{
 			UtilityPeriod: types.UtilityPeriod{
 				Start: time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
-				End:   time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
+				End:   time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 			},
 			DollarsPerKWH:  0.02629,
 			GridAdditional: true,
-			Description:    "Ameren IL Transmission Service Charge (2026)",
+			Description:    "Ameren IL Transmission Service Charge (Jan-May 2026)",
 		},
-		// TODO: add 2027 transmission service charge once it's announced by comed
+		{
+			UtilityPeriod: types.UtilityPeriod{
+				Start: time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
+				End:   time.Date(2028, time.January, 1, 0, 0, 0, 0, ctLocation),
+			},
+			DollarsPerKWH:  0.02765,
+			GridAdditional: true,
+			Description:    "Ameren IL Transmission Service Charge (June 2026 - Dec 2027)",
+		},
 
 		// ── 2026 Distribution Delivery Charge ────────────────────────────────
 		{
@@ -456,4 +471,74 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPerio
 			Description:    "Rate DS-1 Distribution Delivery Charge (Non-summer 2027-Q4)",
 		},
 	}, nil
+}
+
+func getAmerenBGSFees(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+	// First get the delivery and transmission fees
+	additional, err := getAmerenAdditionalFees(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add BGS-1 Supply Charges
+	// Effective June 2026 through May 2027
+	// Summer: June 1 - Sept 30. Non-Summer: Oct 1 - May 31.
+	bgsSupply := []types.UtilityFeesPeriod{
+		// Summer 2026 Supply Charge
+		{
+			UtilityPeriod: types.UtilityPeriod{
+				Start: time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
+				End:   time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
+			},
+			DollarsPerKWH: 0.08409,
+			Description:   "Ameren IL BGS-1 Summer Retail Purchased Electricity Charge",
+		},
+		// Non-Summer 2026 (Jan - May) Supply Charge
+		{
+			UtilityPeriod: types.UtilityPeriod{
+				Start: time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
+				End:   time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
+			},
+			DollarsPerKWH: 0.07283,
+			Description:   "Ameren IL BGS-1 Non-Summer Retail Purchased Electricity Charge",
+		},
+		// Non-Summer 2026 (Oct - Dec) Supply Charge
+		{
+			UtilityPeriod: types.UtilityPeriod{
+				Start: time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
+				End:   time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
+			},
+			DollarsPerKWH: 0.07283,
+			Description:   "Ameren IL BGS-1 Non-Summer Retail Purchased Electricity Charge",
+		},
+		// Summer 2027 Supply Charge
+		{
+			UtilityPeriod: types.UtilityPeriod{
+				Start: time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
+				End:   time.Date(2027, time.October, 1, 0, 0, 0, 0, ctLocation),
+			},
+			DollarsPerKWH: 0.08409,
+			Description:   "Ameren IL BGS-1 Summer Retail Purchased Electricity Charge",
+		},
+		// Non-Summer 2027 (Jan - May) Supply Charge
+		{
+			UtilityPeriod: types.UtilityPeriod{
+				Start: time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
+				End:   time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
+			},
+			DollarsPerKWH: 0.07283,
+			Description:   "Ameren IL BGS-1 Non-Summer Retail Purchased Electricity Charge",
+		},
+		// Non-Summer 2027 (Oct - Dec) Supply Charge
+		{
+			UtilityPeriod: types.UtilityPeriod{
+				Start: time.Date(2027, time.October, 1, 0, 0, 0, 0, ctLocation),
+				End:   time.Date(2028, time.January, 1, 0, 0, 0, 0, ctLocation),
+			},
+			DollarsPerKWH: 0.07283,
+			Description:   "Ameren IL BGS-1 Non-Summer Retail Purchased Electricity Charge",
+		},
+	}
+
+	return append(additional, bgsSupply...), nil
 }

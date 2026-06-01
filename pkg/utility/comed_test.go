@@ -468,4 +468,245 @@ func TestComEd(t *testing.T) {
 
 		m.AssertExpectations(t)
 	})
+
+	t.Run("ComEd BESH BES BEST Fees", func(t *testing.T) {
+		// BESH Fees
+		// Test getComEdAdditionalFees for BESH (before and after June 2026)
+		opts := types.UtilityRateOptions{
+			RateClass:            ComEdRateClassSingleFamilyResidenceWithoutElectricSpaceHeat,
+			VariableDeliveryRate: false,
+		}
+		fees, err := getComEdAdditionalFees(opts)
+		require.NoError(t, err)
+		assert.NotEmpty(t, fees)
+
+		// Find transmission services charge (PSC) for BESH Jan-May 2026
+		var pscJanMay, pscJune2026 *types.UtilityFeesPeriod
+		var mpccJanMay, mpccJune2026 *types.UtilityFeesPeriod
+		var hpeaJan, hpeaJune *types.UtilityFeesPeriod
+
+		for i := range fees {
+			f := &fees[i]
+			if strings.Contains(f.Description, "Transmission Services Charge (PSC)") {
+				if f.Start.Month() == time.January {
+					pscJanMay = f
+				} else if f.Start.Month() == time.June {
+					pscJune2026 = f
+				}
+			}
+			if strings.Contains(f.Description, "Miscellaneous Procurement Components Charge") {
+				if f.Start.Month() == time.January {
+					mpccJanMay = f
+				} else if f.Start.Month() == time.June {
+					mpccJune2026 = f
+				}
+			}
+			if strings.Contains(f.Description, "Hourly Purchased Electricity Adjustment (HPEA)") {
+				if f.Start.Month() == time.January {
+					hpeaJan = f
+				} else if f.Start.Month() == time.June {
+					hpeaJune = f
+				}
+			}
+		}
+
+		if assert.NotNil(t, pscJanMay) {
+			assert.InDelta(t, 0.01083, pscJanMay.DollarsPerKWH, 0.00001)
+			assert.True(t, pscJanMay.GridAdditional)
+		}
+		if assert.NotNil(t, pscJune2026) {
+			assert.InDelta(t, 0.01074, pscJune2026.DollarsPerKWH, 0.00001)
+			assert.True(t, pscJune2026.GridAdditional)
+		}
+		if assert.NotNil(t, mpccJanMay) {
+			assert.InDelta(t, 0.00062, mpccJanMay.DollarsPerKWH, 0.00001)
+			assert.True(t, mpccJanMay.GridAdditional)
+		}
+		if assert.NotNil(t, mpccJune2026) {
+			assert.InDelta(t, 0.00134, mpccJune2026.DollarsPerKWH, 0.00001)
+			assert.True(t, mpccJune2026.GridAdditional)
+		}
+		if assert.NotNil(t, hpeaJan) {
+			assert.InDelta(t, 0.00743, hpeaJan.DollarsPerKWH, 0.00001)
+			assert.True(t, hpeaJan.GridAdditional)
+		}
+		if assert.NotNil(t, hpeaJune) {
+			assert.InDelta(t, -0.00191, hpeaJune.DollarsPerKWH, 0.00001)
+			assert.True(t, hpeaJune.GridAdditional)
+		}
+
+		// BES Fees
+		besFees, err := getComEdBESFees(opts)
+		require.NoError(t, err)
+		assert.NotEmpty(t, besFees)
+
+		var pscBESJanMay, pscBESJune2026 *types.UtilityFeesPeriod
+		var pecPEAJan, pecPEAJune *types.UtilityFeesPeriod
+		var pecSummer, pecNonsummer *types.UtilityFeesPeriod
+
+		for i := range besFees {
+			f := &besFees[i]
+			if strings.Contains(f.Description, "Transmission Services Charge (PSC)") {
+				if f.Start.Month() == time.January {
+					pscBESJanMay = f
+				} else if f.Start.Month() == time.June {
+					pscBESJune2026 = f
+				}
+			}
+			if strings.Contains(f.Description, "Electricity Supply Charge (PEC) & Adjustment (PEA)") {
+				if f.Start.Month() == time.January {
+					pecPEAJan = f
+				} else if f.Start.Month() == time.June {
+					pecPEAJune = f
+				}
+			}
+			if strings.Contains(f.Description, "Electricity Supply Charge (PEC)") && !strings.Contains(f.Description, "& Adjustment") {
+				if strings.Contains(f.Description, "Summer") {
+					pecSummer = f
+				} else if strings.Contains(f.Description, "Nonsummer") {
+					pecNonsummer = f
+				}
+			}
+		}
+
+		if assert.NotNil(t, pscBESJanMay) {
+			assert.InDelta(t, 0.01819, pscBESJanMay.DollarsPerKWH, 0.00001)
+		}
+		if assert.NotNil(t, pscBESJune2026) {
+			assert.InDelta(t, 0.01722, pscBESJune2026.DollarsPerKWH, 0.00001)
+		}
+		if assert.NotNil(t, pecPEAJan) {
+			assert.InDelta(t, 0.08198, pecPEAJan.DollarsPerKWH, 0.00001)
+		}
+		if assert.NotNil(t, pecPEAJune) {
+			assert.InDelta(t, 0.08907, pecPEAJune.DollarsPerKWH, 0.00001)
+		}
+		if assert.NotNil(t, pecSummer) {
+			assert.InDelta(t, 0.08677, pecSummer.DollarsPerKWH, 0.00001)
+		}
+		if assert.NotNil(t, pecNonsummer) {
+			assert.InDelta(t, 0.08241, pecNonsummer.DollarsPerKWH, 0.00001)
+		}
+
+		// BEST Fees
+		bestFees, err := getComEdBESTFees(opts)
+		require.NoError(t, err)
+		assert.NotEmpty(t, bestFees)
+
+		var mpecBESTSummer, mdppecBESTSummer, epecBESTSummer, opecBESTSummer *types.UtilityFeesPeriod
+		var mpecBESTNonsummer, mdppecBESTNonsummer, epecBESTNonsummer, opecBESTNonsummer *types.UtilityFeesPeriod
+
+		for i := range bestFees {
+			f := &bestFees[i]
+			if strings.Contains(f.Description, "BEST Summer Morning") {
+				mpecBESTSummer = f
+			}
+			if strings.Contains(f.Description, "BEST Summer Mid-Day") {
+				mdppecBESTSummer = f
+			}
+			if strings.Contains(f.Description, "BEST Summer Evening") {
+				epecBESTSummer = f
+			}
+			if strings.Contains(f.Description, "BEST Summer Overnight") {
+				opecBESTSummer = f
+			}
+			if strings.Contains(f.Description, "BEST Nonsummer Morning") && f.Start.Month() == time.October {
+				mpecBESTNonsummer = f
+			}
+			if strings.Contains(f.Description, "BEST Nonsummer Mid-Day") && f.Start.Month() == time.October {
+				mdppecBESTNonsummer = f
+			}
+			if strings.Contains(f.Description, "BEST Nonsummer Evening") && f.Start.Month() == time.October {
+				epecBESTNonsummer = f
+			}
+			if strings.Contains(f.Description, "BEST Nonsummer Overnight") && f.Start.Month() == time.October {
+				opecBESTNonsummer = f
+			}
+		}
+
+		if assert.NotNil(t, mpecBESTSummer) {
+			assert.InDelta(t, 0.05653, mpecBESTSummer.DollarsPerKWH, 0.00001)
+		}
+		if assert.NotNil(t, mdppecBESTSummer) {
+			assert.InDelta(t, 0.18469, mdppecBESTSummer.DollarsPerKWH, 0.00001)
+		}
+		if assert.NotNil(t, epecBESTSummer) {
+			assert.InDelta(t, 0.07668, epecBESTSummer.DollarsPerKWH, 0.00001)
+		}
+		if assert.NotNil(t, opecBESTSummer) {
+			assert.InDelta(t, 0.04704, opecBESTSummer.DollarsPerKWH, 0.00001)
+		}
+		if assert.NotNil(t, mpecBESTNonsummer) {
+			assert.InDelta(t, 0.06643, mpecBESTNonsummer.DollarsPerKWH, 0.00001)
+		}
+		if assert.NotNil(t, mdppecBESTNonsummer) {
+			assert.InDelta(t, 0.16574, mdppecBESTNonsummer.DollarsPerKWH, 0.00001)
+		}
+		if assert.NotNil(t, epecBESTNonsummer) {
+			assert.InDelta(t, 0.07884, epecBESTNonsummer.DollarsPerKWH, 0.00001)
+		}
+		if assert.NotNil(t, opecBESTNonsummer) {
+			assert.InDelta(t, 0.05269, opecBESTNonsummer.DollarsPerKWH, 0.00001)
+		}
+	})
+}
+
+func TestComEdUtilityInfo(t *testing.T) {
+	info := comEdUtilityInfo()
+
+	assert.Equal(t, "comed", info.ID)
+	assert.Equal(t, "ComEd", info.Name)
+	require.Len(t, info.Rates, 3, "comed should have exactly 3 rates")
+
+	// BESH rate
+	rateBESH := info.Rates[0]
+	assert.Equal(t, "comed_besh", rateBESH.ID)
+	assert.NotEmpty(t, rateBESH.Name)
+	require.Len(t, rateBESH.Options, 3, "comed_besh should have exactly 3 options")
+
+	t.Run("BESH RateClass option", func(t *testing.T) {
+		opt := rateBESH.Options[0]
+		assert.Equal(t, "rateClass", opt.Field)
+		assert.Equal(t, types.UtilityOptionTypeSelect, opt.Type)
+		require.Len(t, opt.Choices, 4, "rateClass should have 4 choices")
+
+		choiceValues := make([]string, len(opt.Choices))
+		for i, c := range opt.Choices {
+			choiceValues[i] = c.Value
+		}
+		assert.Contains(t, choiceValues, ComEdRateClassSingleFamilyResidenceWithoutElectricSpaceHeat)
+		assert.Contains(t, choiceValues, ComEdRateClassMultiFamilyResidenceWithoutElectricSpaceHeat)
+		assert.Contains(t, choiceValues, ComEdRateClassSingleFamilyResidenceWithElectricSpaceHeat)
+		assert.Contains(t, choiceValues, ComEdRateClassMultiFamilyResidenceWithElectricSpaceHeat)
+
+		assert.Equal(t, ComEdRateClassSingleFamilyResidenceWithoutElectricSpaceHeat, opt.Default)
+	})
+
+	t.Run("BESH VariableDeliveryRate option", func(t *testing.T) {
+		opt := rateBESH.Options[1]
+		assert.Equal(t, "variableDeliveryRate", opt.Field)
+		assert.Equal(t, types.UtilityOptionTypeSwitch, opt.Type)
+		assert.NotEmpty(t, opt.Description)
+		assert.Equal(t, false, opt.Default)
+	})
+
+	// BES rate
+	rateBES := info.Rates[1]
+	assert.Equal(t, "comed_bes", rateBES.ID)
+	assert.NotEmpty(t, rateBES.Name)
+	require.Len(t, rateBES.Options, 3, "comed_bes should have exactly 3 options")
+
+	// BEST rate
+	rateBEST := info.Rates[2]
+	assert.Equal(t, "comed_best", rateBEST.ID)
+	assert.NotEmpty(t, rateBEST.Name)
+	require.Len(t, rateBEST.Options, 3, "comed_best should have exactly 3 options")
+
+	t.Run("BEST VariableDeliveryRate hidden option", func(t *testing.T) {
+		opt := rateBEST.Options[1]
+		assert.Equal(t, "variableDeliveryRate", opt.Field)
+		assert.Equal(t, types.UtilityOptionTypeSwitch, opt.Type)
+		assert.True(t, opt.Hidden)
+		assert.Equal(t, true, opt.Default)
+	})
 }

@@ -55,4 +55,13 @@ var (
 		}
 		return loc
 	}()
+
+	// Hawaiian Electric uses Hawaii Time (no DST)
+	hstLocation = func() *time.Location {
+		loc, err := time.LoadLocation("Pacific/Honolulu")
+		if err != nil {
+			panic(fmt.Errorf("failed to load Hawaii time location: %w", err))
+		}
+		return loc
+	}()
 )

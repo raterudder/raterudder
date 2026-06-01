@@ -161,6 +161,8 @@ export const fetchSavings = async (start: Date, end: Date, siteID?: string): Pro
 };
 
 export interface UtilityRateOptions {
+    generationRate?: string;
+    location?: string;
     [key: string]: any;
 }
 

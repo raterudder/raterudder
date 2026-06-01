@@ -54,7 +54,7 @@ IGNORE
 		price, err := c.GetCurrentPrice(ctx)
 		require.NoError(t, err)
 		expectedTodayVal := 10 + float64(now.Hour())
-		assert.InDelta(t, (expectedTodayVal/1000.0)*1.05009, price.DollarsPerKWH, 0.00001)
+		assert.InDelta(t, (expectedTodayVal/1000.0)*amerenLossFactor(now), price.DollarsPerKWH, 0.00001)
 		assert.Equal(t, "ameren_psp", price.Provider)
 
 		// Test future prices
@@ -65,10 +65,13 @@ IGNORE
 		// Next hour price should be from futures[0]
 		// If current hour is 23, the next hour will be tomorrow's first hour (40)
 		expectedNextHourVal := expectedTodayVal + 1
+		nextHour := now.Truncate(time.Hour).Add(time.Hour)
 		if now.Hour() == 23 {
 			expectedNextHourVal = 40
 		}
-		assert.InDelta(t, (expectedNextHourVal/1000.0)*1.05009, futures[0].DollarsPerKWH, 0.00001)
+		if assert.NotEmpty(t, futures) {
+			assert.InDelta(t, (expectedNextHourVal/1000.0)*amerenLossFactor(nextHour), futures[0].DollarsPerKWH, 0.00001)
+		}
 
 		// Test caching - changing the server won't affect it since it's cached
 		api.Close()
@@ -76,7 +79,7 @@ IGNORE
 		// Should still work due to cache
 		price2, err := c.GetCurrentPrice(ctx)
 		require.NoError(t, err)
-		assert.InDelta(t, (expectedTodayVal/1000.0)*1.05009, price2.DollarsPerKWH, 0.00001)
+		assert.InDelta(t, (expectedTodayVal/1000.0)*amerenLossFactor(now), price2.DollarsPerKWH, 0.00001)
 	})
 
 	t.Run("GetConfirmedPrices", func(t *testing.T) {
@@ -111,8 +114,8 @@ AMIL.BGS6,Loadzone,LMP,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,
 
 		// 24 hours in the day (might be 23 or 25 depending on DST transition, but we'll accept the returned length)
 		assert.True(t, len(prices) >= 23 && len(prices) <= 25)
-		if len(prices) > 0 {
-			assert.InDelta(t, (10.0/1000.0)*1.05009, prices[0].DollarsPerKWH, 0.00001)
+		if assert.NotEmpty(t, prices) {
+			assert.InDelta(t, (10.0/1000.0)*amerenLossFactor(start), prices[0].DollarsPerKWH, 0.00001)
 		}
 	})
 
@@ -159,16 +162,17 @@ AMIL.BGS6,Loadzone,LMP,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
 		require.NoError(t, err)
 
 		if now.Hour() < 23 {
-			assert.True(t, len(futuresError) > 0)
-			assert.InDelta(t, (float64(10+now.Hour()+1)/1000.0)*1.05009, futuresError[0].DollarsPerKWH, 0.00001)
+			if assert.NotEmpty(t, futuresError) {
+				nextHour := now.Truncate(time.Hour).Add(time.Hour)
+				assert.InDelta(t, (float64(10+now.Hour()+1)/1000.0)*amerenLossFactor(nextHour), futuresError[0].DollarsPerKWH, 0.00001)
+			}
 		} else {
-			assert.Equal(t, 0, len(futuresError))
+			assert.Empty(t, futuresError)
 		}
 	})
 
 	t.Run("Integration_RealAPI", func(t *testing.T) {
 		c := configuredAmerenSmart(nil)
-		// misoAPIURL is set by default in configuredAmerenSmart via lflags, but let's ensure it's explicitly set.
 		c.misoAPIURL = "https://docs.misoenergy.org/marketreports"
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -223,7 +227,7 @@ AMIL.BGS6,Loadzone,LMP,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,
 				Price: types.Price{
 					TSStart:       start.Add(time.Duration(i) * time.Hour),
 					TSEnd:         start.Add(time.Duration(i+1) * time.Hour),
-					DollarsPerKWH: 0.0105009,
+					DollarsPerKWH: 0.01 * amerenLossFactor(start.Add(time.Duration(i)*time.Hour)),
 				},
 				Confirmed: true,
 				TSUpdated: time.Now(),
@@ -235,7 +239,7 @@ AMIL.BGS6,Loadzone,LMP,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,
 
 		price2, err := c.GetCurrentPrice(ctx)
 		require.NoError(t, err)
-		assert.InDelta(t, 0.0105009, price2.DollarsPerKWH, 0.0000001)
+		assert.InDelta(t, 0.01*amerenLossFactor(now), price2.DollarsPerKWH, 0.0000001)
 		m.AssertExpectations(t)
 	})
 
@@ -275,8 +279,8 @@ AMIL.BGS6,Loadzone,LMP,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,
 
 		price, err := c.GetCurrentPrice(ctx)
 		require.NoError(t, err)
-		// Should have matched price from API (10 -> 0.0105009) not from partial DB (0.99)
-		assert.InDelta(t, 0.0105009, price.DollarsPerKWH, 0.0000001)
+		// Should have matched price from API (10 -> 0.01 * amerenLossFactor) not from partial DB (0.99)
+		assert.InDelta(t, 0.01*amerenLossFactor(now), price.DollarsPerKWH, 0.0000001)
 		m.AssertExpectations(t)
 	})
 
@@ -321,11 +325,89 @@ AMIL.BGS6,Loadzone,LMP,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,
 
 		prices, err := c.GetConfirmedPrices(ctx, start, end)
 		require.NoError(t, err)
-		assert.Len(t, prices, 27)
-		assert.Equal(t, 0.1, prices[0].DollarsPerKWH)                     // from cache
-		assert.Equal(t, 0.1, prices[23].DollarsPerKWH)                    // from cache
-		assert.InDelta(t, 0.0105009, prices[24].DollarsPerKWH, 0.0000001) // from API fallback
+		if assert.Len(t, prices, 27) {
+			assert.Equal(t, 0.1, prices[0].DollarsPerKWH)                                                     // from cache
+			assert.Equal(t, 0.1, prices[23].DollarsPerKWH)                                                    // from cache
+			assert.InDelta(t, 0.01*amerenLossFactor(prices[24].TSStart), prices[24].DollarsPerKWH, 0.0000001) // from API fallback
+		}
 
 		m.AssertExpectations(t)
+	})
+}
+
+func TestAmerenBGSAndLossFactor(t *testing.T) {
+	ct, err := time.LoadLocation("America/Chicago")
+	require.NoError(t, err)
+
+	et, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	t.Run("Loss factor transitions", func(t *testing.T) {
+		// Before June 1, 2026 (EST/EDT) -> 1.05009
+		t1 := time.Date(2026, time.May, 31, 23, 0, 0, 0, et)
+		assert.Equal(t, 1.05009, amerenLossFactor(t1))
+
+		// On/After June 1, 2026 -> 1.04895
+		t2 := time.Date(2026, time.June, 1, 0, 0, 0, 0, et)
+		assert.Equal(t, 1.04895, amerenLossFactor(t2))
+
+		// Later in 2026
+		t3 := time.Date(2026, time.December, 15, 12, 0, 0, 0, et)
+		assert.Equal(t, 1.04895, amerenLossFactor(t3))
+	})
+
+	t.Run("BGS-1 Flat Rates", func(t *testing.T) {
+		u := &genericTOU{}
+		err := u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "ameren",
+			UtilityRate:     "ameren_bgs",
+		})
+		require.NoError(t, err)
+
+		// 1. Summer BGS-1 (July 15, 2026)
+		// Supply: $0.08409
+		// Transmission (June 2026+): $0.02765
+		// Distribution Delivery (Summer 2026): $0.07811
+		// Total: 0.08409 + 0.02765 + 0.07811 = 0.18985
+		pSummer, err := u.priceForTime(time.Date(2026, time.July, 15, 12, 0, 0, 0, ct))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.08409, pSummer.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.02765+0.07811, pSummer.GridUseDollarsPerKWH, 1e-6)
+
+		// 2. Non-Summer BGS-1 (November 15, 2026)
+		// Supply: $0.07283
+		// Transmission: $0.02765
+		// Distribution Delivery (Non-summer 2026): $0.04572
+		// Total: 0.07283 + 0.02765 + 0.04572 = 0.14620
+		pNonSummer, err := u.priceForTime(time.Date(2026, time.November, 15, 12, 0, 0, 0, ct))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.07283, pNonSummer.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.02765+0.04572, pNonSummer.GridUseDollarsPerKWH, 1e-6)
+	})
+
+	t.Run("PSP Transmission charge transitions", func(t *testing.T) {
+		opts := types.UtilityRateOptions{}
+		fees, err := getAmerenAdditionalFees(opts)
+		require.NoError(t, err)
+
+		// Check transmission charge before and after June 1, 2026
+		// We can test this by applying fees on a dummy price
+		p1 := types.Price{
+			TSStart: time.Date(2026, time.May, 1, 12, 0, 0, 0, ct),
+			TSEnd:   time.Date(2026, time.May, 1, 13, 0, 0, 0, ct),
+		}
+		p1Applied, err := types.ApplyUtilityFeesPeriods(p1, fees)
+		require.NoError(t, err)
+		// May 2026 Transmission is $0.02629, Delivery is Non-summer $0.04572 -> GridUse = 0.02629 + 0.04572 = 0.07201
+		assert.InDelta(t, 0.02629+0.04572, p1Applied.GridUseDollarsPerKWH, 1e-6)
+
+		p2 := types.Price{
+			TSStart: time.Date(2026, time.June, 15, 12, 0, 0, 0, ct),
+			TSEnd:   time.Date(2026, time.June, 15, 13, 0, 0, 0, ct),
+		}
+		p2Applied, err := types.ApplyUtilityFeesPeriods(p2, fees)
+		require.NoError(t, err)
+		// June 2026 Transmission is $0.02765, Delivery is Summer $0.07811 -> GridUse = 0.02765 + 0.07811 = 0.10576
+		assert.InDelta(t, 0.02765+0.07811, p2Applied.GridUseDollarsPerKWH, 1e-6)
 	})
 }

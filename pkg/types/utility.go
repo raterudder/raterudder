@@ -87,11 +87,14 @@ func (p *Price) Contains(ts time.Time) bool {
 
 // UtilityRateOptions represents the options for the utility rate.
 type UtilityRateOptions struct {
-	RateClass            string `json:"rateClass"`
-	VariableDeliveryRate bool   `json:"variableDeliveryRate"`
-	NetMeteringCredits   bool   `json:"netMeteringCredits"`
-	NetMeteringScheme    string `json:"netMeteringScheme"`
-	PeakPeriodOption     string `json:"peakPeriodOption"`
+	RateClass            string `json:"rateClass,omitempty"`
+	VariableDeliveryRate bool   `json:"variableDeliveryRate,omitempty"`
+	NetMeteringCredits   bool   `json:"netMeteringCredits,omitempty"`
+	NetMeteringScheme    string `json:"netMeteringScheme,omitempty"`
+	PeakPeriodOption     string `json:"peakPeriodOption,omitempty"`
+	GenerationRate       string `json:"generationRate,omitempty"`
+	Location             string `json:"location,omitempty"`
+	EVCredit             bool   `json:"evCredit,omitempty"`
 }
 
 type UtilityHourPeriod struct {

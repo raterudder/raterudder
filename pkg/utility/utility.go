@@ -80,26 +80,44 @@ func (m *Map) Site(ctx context.Context, siteID string, settings types.Settings) 
 	var u Utility
 	switch settings.UtilityProvider {
 	case "comed":
-		if m.baseComEdHourly == nil {
-			return nil, fmt.Errorf("comed provider not configured")
-		}
-		u = &SiteFees{
-			base:   m.baseComEdHourly,
-			siteID: siteID,
-		}
-		if err := u.ApplySettings(ctx, settings); err != nil {
-			return nil, err
+		if settings.UtilityRate == "comed_bes" || settings.UtilityRate == "comed_best" {
+			u = &genericTOU{
+				siteID: siteID,
+			}
+			if err := u.ApplySettings(ctx, settings); err != nil {
+				return nil, err
+			}
+		} else {
+			if m.baseComEdHourly == nil {
+				return nil, fmt.Errorf("comed provider not configured")
+			}
+			u = &SiteFees{
+				base:   m.baseComEdHourly,
+				siteID: siteID,
+			}
+			if err := u.ApplySettings(ctx, settings); err != nil {
+				return nil, err
+			}
 		}
 	case "ameren":
-		if m.baseAmerenSmart == nil {
-			return nil, fmt.Errorf("ameren provider not configured")
-		}
-		u = &SiteFees{
-			base:   m.baseAmerenSmart,
-			siteID: siteID,
-		}
-		if err := u.ApplySettings(ctx, settings); err != nil {
-			return nil, err
+		if settings.UtilityRate == "ameren_bgs" {
+			u = &genericTOU{
+				siteID: siteID,
+			}
+			if err := u.ApplySettings(ctx, settings); err != nil {
+				return nil, err
+			}
+		} else {
+			if m.baseAmerenSmart == nil {
+				return nil, fmt.Errorf("ameren provider not configured")
+			}
+			u = &SiteFees{
+				base:   m.baseAmerenSmart,
+				siteID: siteID,
+			}
+			if err := u.ApplySettings(ctx, settings); err != nil {
+				return nil, err
+			}
 		}
 	default:
 		if _, ok := touUtilitiesMap[settings.UtilityProvider]; ok {

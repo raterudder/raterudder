@@ -930,7 +930,15 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 		xcelUtilityInfo(),
 		rockyUtilityInfo(),
 		srpUtilityInfo(),
+		fplUtilityInfo(),
+		dlcUtilityInfo(),
+		sdgeUtilityInfo(),
+		apsUtilityInfo(),
+		dominionUtilityInfo(),
+		bgeUtilityInfo(),
+		jeaUtilityInfo(),
+		weUtilityInfo(),
 	},
-		dukeUtilityInfo()...,
+		append(hawaiiUtilityInfo(), dukeUtilityInfo()...)...,
 	)
 }

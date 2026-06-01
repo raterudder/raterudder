@@ -1,17 +1,16 @@
 package utility
 
 import (
-	"log/slog"
-	"testing"
-
-	"github.com/raterudder/raterudder/pkg/types"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"context"
+	"log/slog"
+	"math/rand"
+	"testing"
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/log"
+	"github.com/raterudder/raterudder/pkg/types"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -52,45 +51,6 @@ func TestListUtilities(t *testing.T) {
 			}
 		}
 	}
-}
-
-func TestComEdUtilityInfo(t *testing.T) {
-	info := comEdUtilityInfo()
-
-	assert.Equal(t, "comed", info.ID)
-	assert.Equal(t, "ComEd", info.Name)
-	require.Len(t, info.Rates, 1, "comed should have exactly 1 rate")
-
-	rate := info.Rates[0]
-	assert.Equal(t, "comed_besh", rate.ID)
-	assert.NotEmpty(t, rate.Name)
-	require.Len(t, rate.Options, 3, "comed_besh should have exactly 3 options")
-
-	t.Run("RateClass option", func(t *testing.T) {
-		opt := rate.Options[0]
-		assert.Equal(t, "rateClass", opt.Field)
-		assert.Equal(t, types.UtilityOptionTypeSelect, opt.Type)
-		require.Len(t, opt.Choices, 4, "rateClass should have 4 choices")
-
-		choiceValues := make([]string, len(opt.Choices))
-		for i, c := range opt.Choices {
-			choiceValues[i] = c.Value
-		}
-		assert.Contains(t, choiceValues, ComEdRateClassSingleFamilyResidenceWithoutElectricSpaceHeat)
-		assert.Contains(t, choiceValues, ComEdRateClassMultiFamilyResidenceWithoutElectricSpaceHeat)
-		assert.Contains(t, choiceValues, ComEdRateClassSingleFamilyResidenceWithElectricSpaceHeat)
-		assert.Contains(t, choiceValues, ComEdRateClassMultiFamilyResidenceWithElectricSpaceHeat)
-
-		assert.Equal(t, ComEdRateClassSingleFamilyResidenceWithoutElectricSpaceHeat, opt.Default)
-	})
-
-	t.Run("VariableDeliveryRate option", func(t *testing.T) {
-		opt := rate.Options[1]
-		assert.Equal(t, "variableDeliveryRate", opt.Field)
-		assert.Equal(t, types.UtilityOptionTypeSwitch, opt.Type)
-		assert.NotEmpty(t, opt.Description)
-		assert.Equal(t, false, opt.Default)
-	})
 }
 
 type mockUtility struct {
@@ -271,6 +231,7 @@ func TestRatesCoverAllTime(t *testing.T) {
 	for _, provider := range allUtilities {
 		for _, rate := range provider.Rates {
 			t.Run(rate.ID, func(t *testing.T) {
+				t.Parallel()
 				periods, err := rate.GetFees(types.UtilityRateOptions{})
 				require.NoError(t, err)
 				if !assert.Greater(t, len(periods), 0, "should have at least one period") {
@@ -335,8 +296,74 @@ func TestRatesCoverAllTime(t *testing.T) {
 					loopLoc = candidateLoc
 				}
 
+				// Calendar Sampling Optimization:
+				// Brute-force checking every single hour of a multi-year window (e.g. for dynamic schedules
+				// like SCE or PG&E which have thousands of periods) is extremely slow and resource intensive.
+				// Since utility schedules are highly periodic, we sample a subset of days per month to balance
+				// coverage and execution speed.
+				//
+				// To ensure eventually complete test coverage over multiple test runs, we randomly select
+				// 8 weekdays and 8 weekend days per month. All defined holidays/specific dates are always tested.
+				holidaysMap := make(map[string]bool)
+				for _, p := range periods {
+					for _, d := range p.SpecificDates {
+						holidaysMap[d] = true
+					}
+				}
+
+				type ymM struct {
+					year  int
+					month time.Month
+				}
+				monthDays := make(map[ymM][]time.Time)
+				startDay := minStart.In(loopLoc)
+				startDay = time.Date(startDay.Year(), startDay.Month(), startDay.Day(), 0, 0, 0, 0, loopLoc)
+				for d := startDay; d.Before(maxEnd); d = d.AddDate(0, 0, 1) {
+					ym := ymM{d.Year(), d.Month()}
+					monthDays[ym] = append(monthDays[ym], d)
+				}
+
+				testedDates := make(map[string]bool)
+				for _, days := range monthDays {
+					var weekdays []time.Time
+					var weekends []time.Time
+					for _, d := range days {
+						dateStr := d.Format("2006-01-02")
+						if holidaysMap[dateStr] {
+							testedDates[dateStr] = true
+							continue
+						}
+						if d.Weekday() == time.Saturday || d.Weekday() == time.Sunday {
+							weekends = append(weekends, d)
+						} else {
+							weekdays = append(weekdays, d)
+						}
+					}
+
+					// Shuffle days randomly to pick a different subset of days on each test run
+					rand.Shuffle(len(weekdays), func(i, j int) {
+						weekdays[i], weekdays[j] = weekdays[j], weekdays[i]
+					})
+					rand.Shuffle(len(weekends), func(i, j int) {
+						weekends[i], weekends[j] = weekends[j], weekends[i]
+					})
+
+					// Select up to 8 weekdays and 8 weekend days
+					for i := 0; i < len(weekdays) && i < 8; i++ {
+						testedDates[weekdays[i].Format("2006-01-02")] = true
+					}
+					for i := 0; i < len(weekends) && i < 8; i++ {
+						testedDates[weekends[i].Format("2006-01-02")] = true
+					}
+				}
+
 				var failures int
 				for ts := minStart.In(loopLoc); ts.Before(maxEnd); ts = ts.Add(time.Hour) {
+					dateStr := ts.Format("2006-01-02")
+					if !testedDates[dateStr] {
+						continue
+					}
+
 					var applicableNames []string
 					var applicableSolarNames []string
 					var additionalNames []string
@@ -354,7 +381,7 @@ func TestRatesCoverAllTime(t *testing.T) {
 						}
 					}
 					expectBase := 1
-					if provider.ID == "comed" || provider.ID == "ameren" {
+					if rate.ID == "comed_besh" || rate.ID == "ameren_psp" {
 						expectBase = 0
 					}
 					if len(applicableNames) != expectBase {

@@ -67,27 +67,32 @@ func TestHandleListUtilities(t *testing.T) {
 		}
 		require.NotNil(t, comedInfo, "comed should be present in the utilities list")
 		assert.Equal(t, "ComEd", comedInfo.Name)
-		require.Len(t, comedInfo.Rates, 1)
 
-		rate := comedInfo.Rates[0]
-		assert.Equal(t, "comed_besh", rate.ID)
-		assert.NotEmpty(t, rate.Name)
-		require.Len(t, rate.Options, 3)
+		var comedBeshRate *types.UtilityRateInfo
+		for i := range comedInfo.Rates {
+			if comedInfo.Rates[i].ID == "comed_besh" {
+				comedBeshRate = &comedInfo.Rates[i]
+				break
+			}
+		}
+		require.NotNil(t, comedBeshRate, "comed_besh should be present in the comed rates list")
+		assert.NotEmpty(t, comedBeshRate.Name)
+		require.Len(t, comedBeshRate.Options, 3)
 
 		// rateClass option
-		rateClassOpt := rate.Options[0]
+		rateClassOpt := comedBeshRate.Options[0]
 		assert.Equal(t, "rateClass", rateClassOpt.Field)
 		assert.Equal(t, types.UtilityOptionTypeSelect, rateClassOpt.Type)
 		assert.NotEmpty(t, rateClassOpt.Choices)
 
 		// variableDeliveryRate option
-		dtodOpt := rate.Options[1]
+		dtodOpt := comedBeshRate.Options[1]
 		assert.Equal(t, "variableDeliveryRate", dtodOpt.Field)
 		assert.Equal(t, types.UtilityOptionTypeSwitch, dtodOpt.Type)
 		assert.NotEmpty(t, dtodOpt.Description)
 
 		// netMeteringCredits option
-		nmOpt := rate.Options[2]
+		nmOpt := comedBeshRate.Options[2]
 		assert.Equal(t, "netMeteringCredits", nmOpt.Field)
 		assert.Equal(t, types.UtilityOptionTypeSwitch, nmOpt.Type)
 		assert.NotEmpty(t, nmOpt.Description)
