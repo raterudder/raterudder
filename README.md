@@ -1,6 +1,6 @@
 # RateRudder
 
-RateRudder is an intelligent home energy management system designed to optimize the usage of Energy Storage Systems (ESS) like FranklinWH based on real-time/TOU electricity pricing. It automates the charging and discharging of batteries to maximize savings and efficiency.
+RateRudder is an intelligent home energy management system designed to optimize the usage of Energy Storage Systems (ESS) like Tesla Powerwall and FranklinWH based on real-time/TOU electricity pricing. It automates the charging and discharging of batteries to maximize savings and efficiency.
 
 ## Architecture
 
@@ -9,10 +9,10 @@ The project is structured as follows:
 - **`cmd/raterudder`**: The main entry point and orchestrator.
 - **`pkg`**: Core backend logic.
     - **`controller`**: Decision-making logic for ESS control.
-    - **`ess`**: Interfaces and implementations for ESS (currently supports FranklinWH).
+    - **`ess`**: Interfaces and implementations for ESS (supports Tesla Powerwall and FranklinWH).
     - **`server`**: HTTP API server for the web dashboard and triggered updates.
     - **`storage`**: Persistence layer (currently supports Google Cloud Firestore).
-    - **`utility`**: Electricity pricing fetchers (ComEd, Ameren & PJM/MISO).
+    - **`utility`**: Electricity pricing fetchers (supporting over 25 utility companies including ComEd and Ameren, plus PJM/MISO).
     - **`weather`**: Weather status forecasts and geocoding.
 - **`web`**: A React + TypeScript + Vite single-page application for the frontend dashboard.
 - **`tf`**: Terraform configuration for provisioning infrastructure on Google Cloud.
@@ -24,7 +24,7 @@ The project is structured as follows:
 - Go 1.25+
 - Node.js & npm (for web development)
 - Google Cloud Project with Firestore enabled
-- FranklinWH Account Credentials
+- Tesla or FranklinWH Account Credentials
 
 ### Installation
 

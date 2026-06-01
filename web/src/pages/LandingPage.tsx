@@ -67,11 +67,11 @@ const LandingPage: React.FC = () => {
         },
         {
             question: "Do I need specific hardware?",
-            answer: "Currently, only FranklinWH aPower and Tesla Powerwall batteries are supported. We're looking for testers to help us add support for more battery types soon."
+            answer: "Yes, RateRudder currently supports Tesla Powerwall and FranklinWH aPower battery systems. We're looking for testers to help us add support for more battery types soon."
         },
         {
             question: "Which utilities are supported?",
-            answer: "Currently only a limited set of utility provider rates are supported but new utilities are being added quickly based on demand."
+            answer: "We support over 25 utility companies, including ComEd, Ameren, PG&E, Southern California Edison, Duke, and many others, with new providers and rates added regularly."
         },
         {
             question: "How much does it cost?",
