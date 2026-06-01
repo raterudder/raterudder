@@ -12,3 +12,6 @@
 ## 2024-05-26 - Hide standalone emojis and html entities in icon-only buttons
 **Learning:** Even when icon-only buttons have an `aria-label`, screen readers may still announce the visible text content (like a "💬" emoji or an "&times;" symbol) inside them, leading to redundant or confusing announcements like "Feedback, speech balloon".
 **Action:** Always wrap text-based icons, HTML entities, or emojis in a `<span aria-hidden="true">` when they are placed inside a button that already provides its accessible name via `aria-label`.
+## 2024-06-02 - DateSelector Accessibility
+**Learning:** For interactive date navigators, dynamically updated content like the displayed date is often missed by screen readers unless announced. Also, wrapping the controls in a role="group" provides context.
+**Action:** Always add aria-live="polite" and aria-atomic="true" to dynamic text elements like dates, and wrap associated navigation controls in a semantic or aria group.
