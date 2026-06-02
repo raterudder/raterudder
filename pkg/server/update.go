@@ -82,9 +82,9 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// For now handleUpdateSites should send in nil but leave a TODO to later send in [1,...16] to fetch all sites that have an updateGroup set.
-	// TODO: send in [1,...16] to fetch all sites that have an updateGroup set.
-	settingsMap, versionsMap, err := s.storage.ListSitesSettings(ctx, nil)
+	// TODO: later accept an argument that includes which update group ids to grab.
+	// This will allow us to update sites in smaller batches.
+	settingsMap, versionsMap, err := s.storage.ListSitesSettings(ctx, []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16})
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to list sites settings", slog.Any("error", err))
 		writeJSONError(w, "failed to list sites settings", http.StatusInternalServerError)
