@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { useLocation, useSearch, Link } from 'wouter';
-import { type Action, type SavingsStats, type Settings, fetchActions, fetchSavings, fetchSettings, BatteryMode } from '../api';
+import { type Action, type SavingsStats, type Settings, fetchActionsAndSavings, fetchSettings, BatteryMode } from '../api';
 import CurrentStatus from '../components/CurrentStatus';
 import SavingsHero from '../components/SavingsHero';
 import ActionTimeline from '../components/ActionTimeline';
@@ -72,15 +72,14 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 const end = new Date(currentDate);
                 end.setHours(23, 59, 59, 999);
 
-                // Fetch both actions and savings in parallel
-                const [actionsData, savingsData, settingsData] = await Promise.all([
-                    siteID === 'ALL' ? Promise.resolve([]) : fetchActions(start, end, siteID),
-                    fetchSavings(start, end, siteID),
+                // Fetch actions and savings in a single call, and settings
+                const [actionsAndSavingsData, settingsData] = await Promise.all([
+                    fetchActionsAndSavings(start, end, siteID),
                     siteID === 'ALL' ? Promise.resolve(null) : fetchSettings(siteID)
                 ]);
 
-                setActions(actionsData || []);
-                setSavings(savingsData);
+                setActions(actionsAndSavingsData.actions || []);
+                setSavings(actionsAndSavingsData.savings);
                 setSettings(settingsData);
             } catch (err) {
                 console.error(err);

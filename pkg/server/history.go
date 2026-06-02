@@ -211,6 +211,82 @@ func (s *Server) handleHistoryActions(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handleHistoryActionsAndSavings(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	siteID := s.getSiteID(r)
+	start, end, err := parseTimeRange(r)
+	if err != nil {
+		writeJSONError(w, fmt.Sprintf("invalid time range: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	var siteIDs []string
+	if siteID == SiteIDAll {
+		sites := s.getAllUserSites(r)
+		siteIDs = make([]string, len(sites))
+		for i, site := range sites {
+			siteIDs[i] = site.ID
+		}
+	} else {
+		siteIDs = []string{siteID}
+	}
+
+	var totalSavings types.SavingsStats
+	totalSavings.Timestamp = start
+
+	var allActions []types.Action
+
+	for _, id := range siteIDs {
+		stats, actions, err := s.getSiteSavings(ctx, id, start, end)
+		if err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to get savings for site", slog.String("siteID", id), slog.Any("error", err))
+			writeJSONError(w, fmt.Sprintf("failed to get savings for site %s", id), http.StatusInternalServerError)
+			return
+		}
+
+		totalSavings.HomeUsed += stats.HomeUsed
+		totalSavings.SolarGenerated += stats.SolarGenerated
+		totalSavings.GridImported += stats.GridImported
+		totalSavings.GridExported += stats.GridExported
+		totalSavings.BatteryUsed += stats.BatteryUsed
+		totalSavings.Cost += stats.Cost
+		totalSavings.Credit += stats.Credit
+		totalSavings.AvoidedCost += stats.AvoidedCost
+		totalSavings.ChargingCost += stats.ChargingCost
+		totalSavings.SolarSavings += stats.SolarSavings
+
+		// Only include hourly debugging and actions if it's a single site request
+		if siteID != SiteIDAll {
+			totalSavings.HourlyDebugging = stats.HourlyDebugging
+			allActions = actions
+		}
+	}
+
+	totalSavings.BatterySavings = totalSavings.AvoidedCost - totalSavings.ChargingCost
+
+	resp := struct {
+		Actions []types.Action     `json:"actions"`
+		Savings types.SavingsStats `json:"savings"`
+	}{
+		Actions: allActions,
+		Savings: totalSavings,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	// Set Cache-Control
+	today := truncateDay(time.Now())
+	if end.Before(today) {
+		w.Header().Set("Cache-Control", "private, max-age=86400")
+	} else {
+		w.Header().Set("Cache-Control", "private, max-age=60")
+	}
+
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		panic(http.ErrAbortHandler)
+	}
+}
+
 func parseTimeRange(r *http.Request) (time.Time, time.Time, error) {
 	q := r.URL.Query()
 	startStr := q.Get("start")

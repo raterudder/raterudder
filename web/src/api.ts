@@ -610,3 +610,25 @@ export const submitESSStage = async (ess: string, credentials: Record<string, an
         throw new Error(await extractError(response, 'Failed to trigger next stage'));
     }
 };
+
+export interface ActionsAndSavingsResponse {
+    actions: Action[];
+    savings: SavingsStats;
+}
+
+export const fetchActionsAndSavings = async (start: Date, end: Date, siteID?: string): Promise<ActionsAndSavingsResponse> => {
+    const startStr = start.toISOString();
+    const endStr = end.toISOString();
+    const query = new URLSearchParams({
+        start: startStr,
+        end: endStr,
+    });
+    if (siteID) {
+        query.append('siteID', siteID);
+    }
+    const response = await fetch(`/api/history/actionsAndSavings?${query.toString()}`);
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Failed to fetch actions and savings'));
+    }
+    return response.json();
+};

@@ -141,6 +141,12 @@ export const defaultESSProviders = [
 export const setupDefaultApiMocks = (api: any) => {
     if (typeof api.fetchActions?.mockResolvedValue === 'function') api.fetchActions.mockResolvedValue([]);
     if (typeof api.fetchSavings?.mockResolvedValue === 'function') api.fetchSavings.mockResolvedValue(defaultSavings);
+    if (typeof api.fetchActionsAndSavings?.mockResolvedValue === 'function') {
+        api.fetchActionsAndSavings.mockResolvedValue({
+            actions: [],
+            savings: defaultSavings
+        });
+    }
     if (typeof api.fetchAuthStatus?.mockResolvedValue === 'function') api.fetchAuthStatus.mockResolvedValue(defaultAuthStatus);
     if (typeof api.fetchSettings?.mockResolvedValue === 'function') api.fetchSettings.mockResolvedValue(defaultSettings);
     if (typeof api.fetchUtilities?.mockResolvedValue === 'function') api.fetchUtilities.mockResolvedValue(defaultUtilities);

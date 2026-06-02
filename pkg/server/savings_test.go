@@ -61,7 +61,13 @@ func (m *mockSavingsStorage) GetEnergyHistory(ctx context.Context, siteID string
 }
 
 func (m *mockSavingsStorage) GetActionHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Action, error) {
-	return m.actions, nil
+	var result []types.Action
+	for _, a := range m.actions {
+		if !a.Timestamp.Before(start) && a.Timestamp.Before(end) {
+			result = append(result, a)
+		}
+	}
+	return result, nil
 }
 
 func TestHandleHistorySavings(t *testing.T) {
@@ -615,8 +621,8 @@ func TestHandleHistorySavingsAll(t *testing.T) {
 	})).Return([]types.DailyEnergyStats{
 		{Hourly: []types.EnergyStats{{TSHourStart: start, HomeKWH: 10, GridImportKWH: 10}}},
 	}, nil)
-	mockStore.On("GetActionHistory", mock.Anything, "site1", start.Add(-72*time.Hour), end).Return([]types.Action{}, nil)
-	mockStore.On("GetSettings", mock.Anything, "site1").Return(types.Settings{}, types.CurrentSettingsVersion, nil)
+	mockStore.On("GetActionHistory", mock.Anything, "site1", mock.Anything, mock.Anything).Return([]types.Action{}, nil)
+	mockStore.On("GetActionHistory", mock.Anything, "site2", mock.Anything, mock.Anything).Return([]types.Action{}, nil)
 
 	// Site 2 data
 	mockStore.On("GetPriceHistory", mock.Anything, "site2", mock.MatchedBy(func(t time.Time) bool {
@@ -634,8 +640,6 @@ func TestHandleHistorySavingsAll(t *testing.T) {
 		{Hourly: []types.EnergyStats{{TSHourStart: start, HomeKWH: 20, GridImportKWH: 20}}},
 	}, nil)
 
-	mockStore.On("GetActionHistory", mock.Anything, "site1", startQuery.Add(-48*time.Hour), endQuery).Return([]types.Action{}, nil)
-	mockStore.On("GetActionHistory", mock.Anything, "site2", startQuery.Add(-48*time.Hour), endQuery).Return([]types.Action{}, nil)
 	mockStore.On("GetSettings", mock.Anything, "site1").Return(types.Settings{}, types.CurrentSettingsVersion, nil)
 	mockStore.On("GetSettings", mock.Anything, "site2").Return(types.Settings{}, types.CurrentSettingsVersion, nil)
 

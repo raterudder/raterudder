@@ -6,7 +6,7 @@ import { Router } from 'wouter';
 import * as api from '../api';
 import { setupDefaultApiMocks } from '../test/apiMocks';
 
-const { fetchActions, fetchSavings, fetchSettings, ActionReason } = api;
+const { fetchActionsAndSavings, fetchSettings, ActionReason } = api;
 
 vi.mock('../api');
 
@@ -18,6 +18,25 @@ const renderWithRouter = (component: React.ReactNode) => {
     );
 };
 
+const mockActionsAndSavings = (actions: any[] = [], savings: any = null) => {
+    (fetchActionsAndSavings as any).mockResolvedValue({
+        actions,
+        savings: savings || {
+            batterySavings: 0,
+            solarSavings: 0,
+            cost: 0,
+            credit: 0,
+            avoidedCost: 0,
+            chargingCost: 0,
+            solarGenerated: 0,
+            gridImported: 0,
+            gridExported: 0,
+            homeUsed: 0,
+            batteryUsed: 0
+        }
+    });
+};
+
 describe('Dashboard', () => {
     beforeEach(() => {
         window.history.replaceState({}, '', '/');
@@ -26,7 +45,7 @@ describe('Dashboard', () => {
     });
 
     it('renders loading state initially', () => {
-        (fetchActions as any).mockReturnValueOnce(new Promise(() => {}));
+        (fetchActionsAndSavings as any).mockReturnValueOnce(new Promise(() => {}));
         renderWithRouter(<Dashboard />);
         expect(screen.getByText('Loading day...')).toBeInTheDocument();
     });
@@ -40,7 +59,7 @@ describe('Dashboard', () => {
             solarMode: 0,
             currentPrice: { dollarsPerKWH: 0.04, tsStart: '', tsEnd: '' },
         }];
-        (fetchActions as any).mockResolvedValue(actions);
+        mockActionsAndSavings(actions);
 
         renderWithRouter(<Dashboard />);
 
@@ -59,7 +78,7 @@ describe('Dashboard', () => {
             batteryMode: 1,
             solarMode: 1,
         }];
-        (fetchActions as any).mockResolvedValue(actions);
+        mockActionsAndSavings(actions);
 
         renderWithRouter(<Dashboard />);
 
@@ -71,7 +90,7 @@ describe('Dashboard', () => {
     });
 
     it('renders no actions message when empty', async () => {
-        (fetchActions as any).mockResolvedValue([]);
+        mockActionsAndSavings([]);
         renderWithRouter(<Dashboard />);
         await waitFor(() => {
             expect(screen.getByText('No actions recorded for this day.')).toBeInTheDocument();
@@ -80,7 +99,7 @@ describe('Dashboard', () => {
 
     it('navigates to previous day', async () => {
          const user = userEvent.setup();
-         (fetchActions as any).mockResolvedValue([]);
+         mockActionsAndSavings([]);
          renderWithRouter(<Dashboard />);
 
          await waitFor(() => {
@@ -92,8 +111,8 @@ describe('Dashboard', () => {
          await user.click(prevButton);
 
          await waitFor(() => {
-             const calls = (fetchActions as any).mock.calls;
-             if (calls.length < 2) throw new Error('fetchActions not called twice');
+             const calls = (fetchActionsAndSavings as any).mock.calls;
+             if (calls.length < 2) throw new Error('fetchActionsAndSavings not called twice');
              const lastCall = calls[calls.length - 1];
              const startArg = lastCall[0] as Date;
              const now = new Date();
@@ -117,7 +136,7 @@ describe('Dashboard', () => {
                 storms: [],
             }
         }];
-        (fetchActions as any).mockResolvedValue(actions);
+        mockActionsAndSavings(actions);
 
         renderWithRouter(<Dashboard />);
 
@@ -137,7 +156,7 @@ describe('Dashboard', () => {
             dryRun: true,
             currentPrice: { dollarsPerKWH: 0.01, tsStart: '', tsEnd: '' },
         }];
-        (fetchActions as any).mockResolvedValue(actions);
+        mockActionsAndSavings(actions);
 
         renderWithRouter(<Dashboard />);
 
@@ -154,7 +173,7 @@ describe('Dashboard', () => {
             batteryMode: 0, // NoChange
             solarMode: 1, // NoExport
         }];
-        (fetchActions as any).mockResolvedValue(actions);
+        mockActionsAndSavings(actions);
 
         renderWithRouter(<Dashboard />);
 
@@ -194,7 +213,7 @@ describe('Dashboard', () => {
                 currentPrice: { dollarsPerKWH: 0.20, tsStart: '', tsEnd: '' }
             }
         ];
-        (fetchActions as any).mockResolvedValue(actions);
+        mockActionsAndSavings(actions);
 
         renderWithRouter(<Dashboard />);
 
@@ -227,7 +246,7 @@ describe('Dashboard', () => {
                 currentPrice: { dollarsPerKWH: 0.20, tsStart: '', tsEnd: '' }
             }
         ];
-        (fetchActions as any).mockResolvedValue(actions);
+        mockActionsAndSavings(actions);
 
         renderWithRouter(<Dashboard />);
 
@@ -248,8 +267,7 @@ describe('Dashboard', () => {
     });
 
     it('renders daily savings summary', async () => {
-        (fetchActions as any).mockResolvedValue([]);
-        (fetchSavings as any).mockResolvedValue({
+        const savingsData = {
             batterySavings: 5.50,
             solarSavings: 5.00,
             cost: 2.00,
@@ -261,7 +279,8 @@ describe('Dashboard', () => {
             gridExported: 5,
             homeUsed: 25,
             batteryUsed: 11,
-        });
+        };
+        mockActionsAndSavings([], savingsData);
 
         renderWithRouter(<Dashboard />);
 
@@ -296,8 +315,7 @@ describe('Dashboard', () => {
     });
 
     it('renders negative savings correctly', async () => {
-        (fetchActions as any).mockResolvedValue([]);
-        (fetchSavings as any).mockResolvedValue({
+        const savingsData = {
             batterySavings: -2.50,
             solarSavings: 1.00,
             cost: 10.00,
@@ -309,7 +327,8 @@ describe('Dashboard', () => {
             gridExported: 2,
             homeUsed: 23,
             batteryUsed: 5
-        });
+        };
+        mockActionsAndSavings([], savingsData);
 
         renderWithRouter(<Dashboard />);
 
@@ -337,8 +356,7 @@ describe('Dashboard', () => {
 
 
     it('shows banner when ESS credentials are missing', async () => {
-        (fetchActions as any).mockResolvedValue([]);
-        (fetchSavings as any).mockResolvedValue(null);
+        mockActionsAndSavings([], null);
         (fetchSettings as any).mockResolvedValue({
             minBatterySOC: 10,
             ess: 'franklin',
@@ -355,7 +373,7 @@ describe('Dashboard', () => {
     });
 
     it('shows ESS authentication warning banner when consecutive failures >= 3', async () => {
-        (fetchActions as any).mockResolvedValue([]);
+        mockActionsAndSavings([]);
         (fetchSettings as any).mockResolvedValue({
             minBatterySOC: 10,
             utilityProvider: 'test',
@@ -378,7 +396,7 @@ describe('Dashboard', () => {
     });
 
     it('does not show ESS authentication warning banner when consecutive failures < 3', async () => {
-        (fetchActions as any).mockResolvedValue([]);
+        mockActionsAndSavings([]);
         (fetchSettings as any).mockResolvedValue({
             minBatterySOC: 10,
             utilityProvider: 'test',
@@ -399,8 +417,7 @@ describe('Dashboard', () => {
     });
 
     it('does not show banner when ESS credentials are present', async () => {
-        (fetchActions as any).mockResolvedValue([]);
-        (fetchSavings as any).mockResolvedValue(null);
+        mockActionsAndSavings([], null);
         (fetchSettings as any).mockResolvedValue({
             minBatterySOC: 10,
             ess: 'franklin',
@@ -419,8 +436,7 @@ describe('Dashboard', () => {
     });
 
     it('shows banner when Utility Provider is missing', async () => {
-        (fetchActions as any).mockResolvedValue([]);
-        (fetchSavings as any).mockResolvedValue(null);
+        mockActionsAndSavings([], null);
         (fetchSettings as any).mockResolvedValue({
             minBatterySOC: 10,
             ess: 'franklin',
@@ -437,8 +453,7 @@ describe('Dashboard', () => {
     });
 
     it('does not show banner when Utility Provider is present', async () => {
-        (fetchActions as any).mockResolvedValue([]);
-        (fetchSavings as any).mockResolvedValue(null);
+        mockActionsAndSavings([], null);
         (fetchSettings as any).mockResolvedValue({
             minBatterySOC: 10,
             ess: 'franklin',
@@ -470,7 +485,7 @@ describe('Dashboard', () => {
             },
             currentPrice: { dollarsPerKWH: 0.10, tsStart: '', tsEnd: '' }
         }];
-        (fetchActions as any).mockResolvedValue(actions);
+        mockActionsAndSavings(actions);
 
         renderWithRouter(<Dashboard />);
 
@@ -500,7 +515,7 @@ describe('Dashboard', () => {
             },
             currentPrice: { dollarsPerKWH: 0.10, tsStart: '', tsEnd: '' }
         }];
-        (fetchActions as any).mockResolvedValue(actions);
+        mockActionsAndSavings(actions);
 
         renderWithRouter(<Dashboard />);
 
@@ -525,7 +540,7 @@ describe('Dashboard', () => {
             },
             // currentPrice is undefined
         }];
-        (fetchActions as any).mockResolvedValue(actions);
+        mockActionsAndSavings(actions);
 
         renderWithRouter(<Dashboard />);
 
@@ -542,7 +557,7 @@ describe('Dashboard', () => {
         const yesterday = new Date(now);
         yesterday.setDate(yesterday.getDate() - 1);
 
-        (fetchActions as any).mockResolvedValue([]);
+        mockActionsAndSavings([]);
         renderWithRouter(<Dashboard />);
 
         // Wait for initial load
@@ -572,7 +587,7 @@ describe('Dashboard', () => {
             },
             currentPrice: { dollarsPerKWH: 0.05, tsStart: '', tsEnd: '' },
         }];
-        (fetchActions as any).mockResolvedValue(actions);
+        mockActionsAndSavings(actions);
 
         await waitFor(() => {
             // Should NOT show CurrentStatus card on a non-today date
@@ -593,7 +608,7 @@ describe('Dashboard', () => {
             },
             currentPrice: { dollarsPerKWH: 0.05, tsStart: '', tsEnd: '' },
         }];
-        (fetchActions as any).mockResolvedValue(actions);
+        mockActionsAndSavings(actions);
 
         renderWithRouter(<Dashboard />);
 
@@ -617,7 +632,7 @@ describe('Dashboard', () => {
             targetBatteryMode: -1, // Load
             targetSolarMode: 1, // NoExport
         }];
-        (fetchActions as any).mockResolvedValue(actions);
+        mockActionsAndSavings(actions);
 
         renderWithRouter(<Dashboard />);
 
@@ -650,7 +665,7 @@ describe('Dashboard', () => {
                 targetSolarMode: 1, // NoExport
             }
         ];
-        (fetchActions as any).mockResolvedValue(actions);
+        mockActionsAndSavings(actions);
 
         renderWithRouter(<Dashboard />);
 
@@ -685,7 +700,7 @@ describe('Dashboard', () => {
                 capacityAt: '2023-01-01T18:00:00Z',
             }
         ];
-        (fetchActions as any).mockResolvedValue(actions);
+        mockActionsAndSavings(actions);
 
         renderWithRouter(<Dashboard />);
 
@@ -736,7 +751,7 @@ describe('Dashboard', () => {
                 paused: true,
             }
         ];
-        (fetchActions as any).mockResolvedValue(actions);
+        mockActionsAndSavings(actions);
 
         renderWithRouter(<Dashboard />);
 
@@ -762,7 +777,7 @@ describe('Dashboard', () => {
                 paused: true,
             }
         ];
-        (fetchActions as any).mockResolvedValue(actions);
+        mockActionsAndSavings(actions);
 
         renderWithRouter(<Dashboard />);
 
@@ -783,8 +798,7 @@ describe('Dashboard', () => {
 
 
     it('renders only savings in overview mode (siteID=ALL)', async () => {
-        (fetchActions as any).mockResolvedValue([{ description: 'Should not show' }]);
-        (fetchSavings as any).mockResolvedValue({
+        const savingsData = {
             batterySavings: 10,
             solarSavings: 20,
             cost: 5,
@@ -796,7 +810,8 @@ describe('Dashboard', () => {
             gridExported: 5,
             homeUsed: 40,
             batteryUsed: 10,
-        });
+        };
+        mockActionsAndSavings([{ description: 'Should not show' }], savingsData);
         (fetchSettings as any).mockResolvedValue({ utilityProvider: 'test' });
 
         renderWithRouter(<Dashboard siteID="ALL" />);
@@ -814,7 +829,7 @@ describe('Dashboard', () => {
 
     it("shows What's New banner with a link to settings when not dismissed", async () => {
         localStorage.clear();
-        (fetchActions as any).mockResolvedValue([]);
+        mockActionsAndSavings([]);
         renderWithRouter(<Dashboard />);
 
         await waitFor(() => {
@@ -828,7 +843,7 @@ describe('Dashboard', () => {
     it("can dismiss the What's New banner", async () => {
         const user = userEvent.setup();
         localStorage.clear();
-        (fetchActions as any).mockResolvedValue([]);
+        mockActionsAndSavings([]);
         renderWithRouter(<Dashboard />);
 
         await waitFor(() => {

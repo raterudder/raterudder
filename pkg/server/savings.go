@@ -38,7 +38,7 @@ func (s *Server) handleHistorySavings(w http.ResponseWriter, r *http.Request) {
 	totalSavings.Timestamp = start
 
 	for _, id := range siteIDs {
-		stats, err := s.getSiteSavings(ctx, id, start, end)
+		stats, _, err := s.getSiteSavings(ctx, id, start, end)
 		if err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to get savings for site", slog.String("siteID", id), slog.Any("error", err))
 			// If one site fails, maybe continue or fail fast? Failing fast for now to be safe.
@@ -125,17 +125,26 @@ func getIgnoredFraction(hStart time.Time, actions []types.Action) float64 {
 		}
 	}
 
-	return float64(ignoredDuration) / float64(time.Hour)
+	fraction := float64(ignoredDuration) / float64(time.Hour)
+
+	// EDGE CASE NOTE:
+	// If there is no action preceding hStart within the query results, we assume the initial
+	// state at hStart was NOT paused or emergency.
+	// In reality, the system might have been in a paused or emergency state that was entered
+	// prior to our query window (e.g. during an extended gateway/API outage or a long pause).
+	// We are explicitly okay with this edge case having a slightly lower-than-potentially-accurate
+	// fraction for that first hour to avoid the complexity and overhead of fetching further back.
+	return fraction
 }
 
-func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end time.Time) (types.SavingsStats, error) {
+func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end time.Time) (types.SavingsStats, []types.Action, error) {
 	// Look back 1day to track battery inventory correctly.
 	lookbackStart := start.AddDate(0, 0, -1)
 
 	// Fetch settings for this site
 	settings, _, err := s.storage.GetSettings(ctx, siteID)
 	if err != nil {
-		return types.SavingsStats{}, err
+		return types.SavingsStats{}, nil, err
 	}
 
 	fetchEnd := end
@@ -147,7 +156,7 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 	// Fetch prices (these are hourly)
 	prices, err := s.storage.GetPriceHistory(ctx, siteID, lookbackStart, fetchEnd)
 	if err != nil {
-		return types.SavingsStats{}, err
+		return types.SavingsStats{}, nil, err
 	}
 
 	// Only fetch future prices if net metering is enabled and we are looking at recent data
@@ -175,7 +184,7 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 	// Fetch energy history
 	energyStatsDaily, err := s.storage.GetEnergyHistory(ctx, siteID, lookbackStart, end)
 	if err != nil {
-		return types.SavingsStats{}, err
+		return types.SavingsStats{}, nil, err
 	}
 
 	var energyStats []types.EnergyStats
@@ -183,16 +192,17 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 		energyStats = append(energyStats, day.Hourly...)
 	}
 
-	// Fetch action history (look back further to make sure we cover the entire lookback period for pause/storm)
-	actions, err := s.storage.GetActionHistory(ctx, siteID, lookbackStart.Add(-48*time.Hour), end)
-	if err != nil {
-		// Log error but don't fail, we can just proceed without pause logic
-		log.Ctx(ctx).WarnContext(ctx, "failed to get action history for savings", slog.String("siteID", siteID), slog.Any("error", err))
-	} else {
+	// Fetch action history (look back 2 hours first to cover the state at lookbackStart)
+	actionStart := lookbackStart.Add(-2 * time.Hour)
+	actions, err := s.storage.GetActionHistory(ctx, siteID, actionStart, end)
+	if err == nil {
 		// getIgnoredFraction assumes actions are sorted by timestamp
 		sort.Slice(actions, func(i, j int) bool {
 			return actions[i].Timestamp.Before(actions[j].Timestamp)
 		})
+	} else {
+		// Log error but don't fail, we can just proceed without pause logic
+		log.Ctx(ctx).WarnContext(ctx, "failed to get action history for savings", slog.String("siteID", siteID), slog.Any("error", err))
 	}
 
 	type energyChunk struct {
@@ -200,6 +210,7 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 		price   float64
 		ignored bool
 	}
+
 	var chargeStack []energyChunk
 	var stats types.SavingsStats
 	stats.Timestamp = start
@@ -379,6 +390,13 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 		}
 	}
 
+	var filteredActions []types.Action
+	for _, a := range actions {
+		if !a.Timestamp.Before(start) && a.Timestamp.Before(end) {
+			filteredActions = append(filteredActions, a)
+		}
+	}
+
 	stats.BatterySavings = stats.AvoidedCost - stats.ChargingCost
-	return stats, nil
+	return stats, filteredActions, nil
 }
