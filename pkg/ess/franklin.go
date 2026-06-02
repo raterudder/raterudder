@@ -410,6 +410,10 @@ func (f *Franklin) getRuntimeData(ctx context.Context) (franklinDeviceCompositeI
 		return franklinDeviceCompositeInfoResult{}, fmt.Errorf("getDeviceCompositeInfo failed: %w", err)
 	}
 
+	if !res.Valid {
+		return franklinDeviceCompositeInfoResult{}, fmt.Errorf("getDeviceCompositeInfo returned invalid status")
+	}
+
 	// solar inverters/combiners use power so it can be negative, just set it to 0
 	// sometimes the PowerSolar field is stuck (particularly when report_type: 2),
 	// we should decide if we want to rely on the solarPower field which is ~10x the p_sun field

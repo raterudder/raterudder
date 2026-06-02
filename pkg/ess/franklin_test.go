@@ -72,6 +72,7 @@ func TestFranklin(t *testing.T) {
 					"code":    200,
 					"success": true,
 					"result": map[string]any{
+						"valid":           true,
 						"runtimeData":     runtimeData,
 						"currentWorkMode": 2,
 					},
@@ -100,6 +101,49 @@ func TestFranklin(t *testing.T) {
 		assert.Equal(t, 15.0, status.MaxBatteryDischargeKW, "MaxBatteryDischargeKW should match 5kW + 10kW")
 		assert.True(t, status.ElevatedMinBatterySOC, "ElevatedMinBatterySOC should be true")
 		assert.True(t, status.BatteryAboveMinSOC, "BatteryAboveMinSOC should be true")
+	})
+
+	t.Run("GetStatus Invalid", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"totalCap": 30.0}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": []map[string]any{}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"list": []map[string]any{}}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"valid": false,
+					},
+				})
+				return
+			}
+			http.Error(w, "not found: "+r.URL.Path, 404)
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:    ts.Client(),
+			baseURL:   ts.URL,
+			gatewayID: "g",
+		}
+
+		_, err := f.GetStatus(context.Background())
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "getDeviceCompositeInfo returned invalid status")
 	})
 
 	t.Run("GetStatus Grid Status", func(t *testing.T) {
@@ -133,6 +177,7 @@ func TestFranklin(t *testing.T) {
 					"code":    200,
 					"success": true,
 					"result": map[string]any{
+						"valid": true,
 						"runtimeData": map[string]any{
 							"offGirdFlag": 1,
 						},
@@ -208,6 +253,7 @@ func TestFranklin(t *testing.T) {
 					"code":    200,
 					"success": true,
 					"result": map[string]any{
+						"valid": true,
 						"runtimeData": map[string]any{
 							"soc": 50.0,
 						},
@@ -300,6 +346,7 @@ func TestFranklin(t *testing.T) {
 					"code":    200,
 					"success": true,
 					"result": map[string]any{
+						"valid": true,
 						"runtimeData": map[string]any{
 							"soc": 50.0,
 						},
@@ -358,7 +405,7 @@ func TestFranklin(t *testing.T) {
 				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]any{},
+					"result":  map[string]any{"valid": true},
 				})
 				return
 			}
@@ -441,7 +488,7 @@ func TestFranklin(t *testing.T) {
 				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]any{},
+					"result":  map[string]any{"valid": true},
 				})
 				return
 			}
@@ -529,7 +576,7 @@ func TestFranklin(t *testing.T) {
 				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]any{},
+					"result":  map[string]any{"valid": true},
 				})
 				return
 			}
@@ -638,7 +685,7 @@ func TestFranklin(t *testing.T) {
 				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]any{},
+					"result":  map[string]any{"valid": true},
 				})
 				return
 			}
@@ -712,7 +759,7 @@ func TestFranklin(t *testing.T) {
 				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]any{},
+					"result":  map[string]any{"valid": true},
 				})
 				return
 			}
@@ -795,6 +842,7 @@ func TestFranklin(t *testing.T) {
 					"code":    200,
 					"success": true,
 					"result": map[string]any{
+						"valid": true,
 						"runtimeData": map[string]any{
 							"soc": 55.9,
 						},
@@ -876,6 +924,7 @@ func TestFranklin(t *testing.T) {
 					"code":    200,
 					"success": true,
 					"result": map[string]any{
+						"valid":       true,
 						"runtimeData": map[string]any{"mode": 6},
 					},
 				})
@@ -944,7 +993,7 @@ func TestFranklin(t *testing.T) {
 				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]any{},
+					"result":  map[string]any{"valid": true},
 				})
 				return
 			}
@@ -1025,7 +1074,7 @@ func TestFranklin(t *testing.T) {
 				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]any{},
+					"result":  map[string]any{"valid": true},
 				})
 				return
 			}
@@ -1537,6 +1586,7 @@ func TestFranklin(t *testing.T) {
 					"code":    200,
 					"success": true,
 					"result": map[string]any{
+						"valid": true,
 						"runtimeData": map[string]any{
 							"soc":  50.0,
 							"mode": 6, // Storm Hedge
@@ -1596,7 +1646,7 @@ func TestFranklin(t *testing.T) {
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
-				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"valid": true}})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
