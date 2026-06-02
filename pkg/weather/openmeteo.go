@@ -16,8 +16,8 @@ import (
 
 // OpenMeteo implements the weather Service interface using Open-Meteo APIs.
 type OpenMeteo struct {
-	GeocodingURL string
-	ForecastURL  string
+	GeocodingURL *url.URL
+	ForecastURL  *url.URL
 	HTTPClient   *http.Client
 }
 
@@ -40,10 +40,7 @@ func (s *OpenMeteo) Location(ctx context.Context, countryCode, postalCode string
 		return types.SiteLocation{}, fmt.Errorf("country code and zip code are required")
 	}
 
-	u, err := url.Parse(s.GeocodingURL)
-	if err != nil {
-		return types.SiteLocation{}, fmt.Errorf("failed to parse geocoding base URL: %w", err)
-	}
+	u := *s.GeocodingURL
 
 	q := u.Query()
 	q.Set("name", postalCode)
@@ -145,10 +142,7 @@ func (s *OpenMeteo) Forecast(
 	startDateStr := startDate.Format("2006-01-02")
 	endDateStr := endDate.Format("2006-01-02")
 
-	u, err := url.Parse(s.ForecastURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse forecast base URL: %w", err)
-	}
+	u := *s.ForecastURL
 
 	q := u.Query()
 	q.Set("latitude", fmt.Sprintf("%f", loc.Latitude))

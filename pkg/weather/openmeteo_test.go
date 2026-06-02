@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -114,7 +115,9 @@ func TestOpenMeteoService(t *testing.T) {
 						}
 					}))
 					defer ts.Close()
-					s := &OpenMeteo{GeocodingURL: ts.URL + "/v1/search", HTTPClient: ts.Client()}
+					geoURL, parseErr := url.Parse(ts.URL + "/v1/search")
+					require.NoError(t, parseErr)
+					s := &OpenMeteo{GeocodingURL: geoURL, HTTPClient: ts.Client()}
 					loc, err = s.Location(context.Background(), tc.countryCode, tc.postalCode)
 				} else {
 					s := &OpenMeteo{}
@@ -151,8 +154,10 @@ func TestOpenMeteoService(t *testing.T) {
 			}))
 			defer ts.Close()
 
-			s := &OpenMeteo{ForecastURL: ts.URL + "/v1/forecast", HTTPClient: ts.Client()}
-			_, err := s.Forecast(context.Background(), types.SiteLocation{Latitude: 34.0, Longitude: -118.0, TimeZone: timezone}, startDay, endDay)
+			forecastURL, parseErr := url.Parse(ts.URL + "/v1/forecast")
+			require.NoError(t, parseErr)
+			s := &OpenMeteo{ForecastURL: forecastURL, HTTPClient: ts.Client()}
+			_, err = s.Forecast(context.Background(), types.SiteLocation{Latitude: 34.0, Longitude: -118.0, TimeZone: timezone}, startDay, endDay)
 			assert.Error(t, err)
 		})
 
@@ -200,7 +205,9 @@ func TestOpenMeteoService(t *testing.T) {
 			}))
 			defer ts.Close()
 
-			s := &OpenMeteo{ForecastURL: ts.URL + "/v1/forecast", HTTPClient: ts.Client()}
+			forecastURL, parseErr := url.Parse(ts.URL + "/v1/forecast")
+			require.NoError(t, parseErr)
+			s := &OpenMeteo{ForecastURL: forecastURL, HTTPClient: ts.Client()}
 			res, err := s.Forecast(context.Background(), types.SiteLocation{Latitude: 34.0, Longitude: -118.0, TimeZone: timezone, SolarTilt: 20, SolarAzimuth: 180}, startDay, endDay)
 
 			require.NoError(t, err)
@@ -241,8 +248,10 @@ func TestOpenMeteoService(t *testing.T) {
 			}))
 			defer ts.Close()
 
-			s := &OpenMeteo{ForecastURL: ts.URL + "/v1/forecast", HTTPClient: ts.Client()}
-			_, err := s.Forecast(context.Background(), types.SiteLocation{Latitude: 34.0, Longitude: -118.0, TimeZone: timezone, SolarTilt: 0}, startDay, endDay)
+			forecastURL, parseErr := url.Parse(ts.URL + "/v1/forecast")
+			require.NoError(t, parseErr)
+			s := &OpenMeteo{ForecastURL: forecastURL, HTTPClient: ts.Client()}
+			_, err = s.Forecast(context.Background(), types.SiteLocation{Latitude: 34.0, Longitude: -118.0, TimeZone: timezone, SolarTilt: 0}, startDay, endDay)
 			require.NoError(t, err)
 		})
 	})
@@ -252,8 +261,10 @@ func TestOpenMeteoService(t *testing.T) {
 			t.Skip("Skipping integration test in short mode")
 		}
 
+		geoURL, parseErr := url.Parse("https://geocoding-api.open-meteo.com/v1/search")
+		require.NoError(t, parseErr)
 		s := &OpenMeteo{
-			GeocodingURL: "https://geocoding-api.open-meteo.com/v1/search",
+			GeocodingURL: geoURL,
 			HTTPClient:   &http.Client{Timeout: 10 * time.Second},
 		}
 		loc, err := s.Location(context.Background(), "US", "90210")
@@ -278,8 +289,10 @@ func TestOpenMeteoService(t *testing.T) {
 		startDay := targetDay.AddDate(0, 0, -1)
 		endDay := targetDay.AddDate(0, 0, 1)
 
+		forecastURL, parseErr := url.Parse("https://api.open-meteo.com/v1/forecast")
+		require.NoError(t, parseErr)
 		s := &OpenMeteo{
-			ForecastURL: "https://api.open-meteo.com/v1/forecast",
+			ForecastURL: forecastURL,
 			HTTPClient:  &http.Client{Timeout: 10 * time.Second},
 		}
 
