@@ -18,6 +18,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
+	"golang.org/x/sync/singleflight"
 )
 
 type baseAmerenSmart struct {
@@ -28,6 +29,7 @@ type baseAmerenSmart struct {
 
 	mu           sync.Mutex
 	cachedPrices map[string][]types.Price
+	sfGroup      singleflight.Group
 }
 
 func configuredAmerenSmart(db storage.Database) *baseAmerenSmart {
@@ -161,61 +163,78 @@ func (c *baseAmerenSmart) getPricesForDate(ctx context.Context, date time.Time) 
 	}
 	c.mu.Unlock()
 
-	// Then check database
-	if c.db != nil {
-		log.Ctx(ctx).DebugContext(ctx,
-			"ameren prices not found in cache, checking database",
-			slog.String("date", dateStr),
-		)
-		start := truncateDay(date)
-		end := start.AddDate(0, 0, 1)
-		expectedHours := int(end.Sub(start).Hours())
-		dbPrices, err := c.db.GetUtilityPrices(ctx, "ameren", start, end)
-		if err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to get ameren prices from database", slog.Any("error", err))
-		} else if len(dbPrices) >= expectedHours {
-			var prices []types.Price
-			for _, p := range dbPrices {
-				prices = append(prices, p.Price)
-			}
-			c.mu.Lock()
-			c.cachedPrices[dateStr] = prices
+	res, err, _ := c.sfGroup.Do(dateStr, func() (interface{}, error) {
+		// Recheck the cache inside the singleflight block
+		c.mu.Lock()
+		if prices, ok := c.cachedPrices[dateStr]; ok && len(prices) > 0 {
 			c.mu.Unlock()
 			return prices, nil
 		}
-		if err == nil && len(dbPrices) > 0 {
-			log.Ctx(ctx).ErrorContext(ctx, "incomplete ameren prices found in database, falling back to api",
-				slog.String("date", dateStr),
-				slog.Int("got", len(dbPrices)),
-				slog.Int("expected", expectedHours))
-		}
-	}
+		c.mu.Unlock()
 
-	prices, err := c.fetchMISODayAhead(ctx, date, c.cpnodeID)
+		// Then check database
+		if c.db != nil {
+			log.Ctx(ctx).DebugContext(ctx,
+				"ameren prices not found in cache, checking database",
+				slog.String("date", dateStr),
+			)
+			start := truncateDay(date)
+			end := start.AddDate(0, 0, 1)
+			expectedHours := int(end.Sub(start).Hours())
+			dbPrices, err := c.db.GetUtilityPrices(ctx, "ameren", start, end)
+			if err != nil {
+				log.Ctx(ctx).ErrorContext(ctx, "failed to get ameren prices from database", slog.Any("error", err))
+			} else if len(dbPrices) >= expectedHours {
+				var prices []types.Price
+				for _, p := range dbPrices {
+					prices = append(prices, p.Price)
+				}
+				c.mu.Lock()
+				c.cachedPrices[dateStr] = prices
+				c.mu.Unlock()
+				return prices, nil
+			}
+			if err == nil && len(dbPrices) > 0 {
+				log.Ctx(ctx).ErrorContext(ctx, "incomplete ameren prices found in database, falling back to api",
+					slog.String("date", dateStr),
+					slog.Int("got", len(dbPrices)),
+					slog.Int("expected", expectedHours))
+			}
+		}
+
+		prices, err := c.fetchMISODayAhead(ctx, date, c.cpnodeID)
+		if err != nil {
+			return nil, err
+		}
+
+		c.mu.Lock()
+		c.cachedPrices[dateStr] = prices
+		var toUpsert []types.PriceState
+		nowUpsert := time.Now()
+		for _, p := range prices {
+			toUpsert = append(toUpsert, types.PriceState{
+				Price:     p,
+				Confirmed: true, // all ameren prices are confirmed
+				TSUpdated: nowUpsert,
+			})
+		}
+		c.mu.Unlock()
+
+		if c.db != nil {
+			if err := c.db.UpsertUtilityPrices(ctx, "ameren", toUpsert, 0); err != nil {
+				log.Ctx(ctx).WarnContext(ctx, "failed to upsert ameren prices to database", slog.Any("error", err))
+			}
+		}
+
+		return prices, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	c.mu.Lock()
-	c.cachedPrices[dateStr] = prices
-	var toUpsert []types.PriceState
-	nowUpsert := time.Now()
-	for _, p := range prices {
-		toUpsert = append(toUpsert, types.PriceState{
-			Price:     p,
-			Confirmed: true, // all ameren prices are confirmed
-			TSUpdated: nowUpsert,
-		})
-	}
-	c.mu.Unlock()
-
-	if c.db != nil {
-		if err := c.db.UpsertUtilityPrices(ctx, "ameren", toUpsert, 0); err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to upsert ameren prices to database", slog.Any("error", err))
-		}
-	}
-
-	return prices, nil
+	prices := res.([]types.Price)
+	copied := make([]types.Price, len(prices))
+	copy(copied, prices)
+	return copied, nil
 }
 
 func (c *baseAmerenSmart) fetchMISODayAhead(ctx context.Context, date time.Time, cpnode string) ([]types.Price, error) {

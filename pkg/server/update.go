@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
+	"golang.org/x/sync/errgroup"
 )
 
 type updateResult struct {
@@ -34,6 +36,11 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	action, status, err := s.performSiteUpdate(ctx, siteID, settings, creds)
 	if err != nil {
+		if errors.Is(err, errESSRateLimited) {
+			log.Ctx(ctx).DebugContext(ctx, "update skipped: ESS rate limited", slog.Any("error", err))
+			writeJSONError(w, err.Error(), http.StatusTooManyRequests)
+			return
+		}
 		// Log the error, but check if we returned an error that should be returned to the client
 		log.Ctx(ctx).ErrorContext(ctx, "update failed", slog.Any("error", err))
 		writeJSONError(w, "update failed", http.StatusInternalServerError)
@@ -83,42 +90,72 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results := make(map[string]string)
+	var mu sync.Mutex
+
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(3)
+
 	for _, site := range sites {
-		ctx := log.With(ctx, log.Ctx(ctx).With(slog.Group("update", slog.String("siteID", site.ID))))
+		g.Go(func() error {
+			if err := gCtx.Err(); err != nil {
+				return err
+			}
 
-		settings, creds, err := s.getSettingsWithMigration(ctx, site.ID)
-		if err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to get site settings", slog.Any("error", err))
-			continue
-		}
+			ctx := log.With(gCtx, log.Ctx(gCtx).With(slog.Group("update", slog.String("siteID", site.ID))))
 
-		if settings.Release != s.release {
-			continue
-		}
+			settings, creds, err := s.getSettingsWithMigration(ctx, site.ID)
+			if err != nil {
+				log.Ctx(ctx).ErrorContext(ctx, "failed to get site settings", slog.Any("error", err))
+				return nil
+			}
 
-		if settings.ESS == "" {
-			log.Ctx(ctx).DebugContext(ctx, "site update skipped: no ESS configured", slog.String("siteID", site.ID))
-			results[site.ID] = "skipped: no ESS configured"
-			continue
-		}
+			if settings.Release != s.release {
+				return nil
+			}
 
-		log.Ctx(ctx).DebugContext(ctx, "processing site update")
-		_, status, err := s.performSiteUpdate(ctx, site.ID, settings, creds)
-		if err != nil {
-			if errors.Is(err, ess.ErrCredentialsMissing) {
-				log.Ctx(ctx).DebugContext(ctx, "site update skipped: credentials missing", slog.Any("error", err))
-				results[site.ID] = "skipped: credentials missing"
+			if settings.ESS == "" {
+				log.Ctx(ctx).DebugContext(ctx, "site update skipped: no ESS configured", slog.String("siteID", site.ID))
+				mu.Lock()
+				results[site.ID] = "skipped: no ESS configured"
+				mu.Unlock()
+				return nil
+			}
+
+			log.Ctx(ctx).DebugContext(ctx, "processing site update")
+			_, status, err := s.performSiteUpdate(ctx, site.ID, settings, creds)
+
+			var resVal string
+			if err != nil {
+				if errors.Is(err, errESSRateLimited) {
+					log.Ctx(ctx).DebugContext(ctx, "site update skipped: ESS rate limited", slog.Any("error", err))
+					resVal = "skipped: ESS rate limited"
+				} else if errors.Is(err, ess.ErrCredentialsMissing) {
+					log.Ctx(ctx).DebugContext(ctx, "site update skipped: credentials missing", slog.Any("error", err))
+					resVal = "skipped: credentials missing"
+				} else {
+					log.Ctx(ctx).ErrorContext(ctx, "site update failed", slog.Any("error", err))
+					resVal = fmt.Sprintf("failed: %v", err)
+				}
 			} else {
-				log.Ctx(ctx).ErrorContext(ctx, "site update failed", slog.Any("error", err))
-				results[site.ID] = fmt.Sprintf("failed: %v", err)
+				log.Ctx(ctx).InfoContext(ctx, "site update success")
+				if status == "" {
+					status = "success"
+				}
+				resVal = status
 			}
-		} else {
-			log.Ctx(ctx).InfoContext(ctx, "site update success")
-			if status == "" {
-				status = "success"
-			}
-			results[site.ID] = status
-		}
+
+			mu.Lock()
+			results[site.ID] = resVal
+			mu.Unlock()
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to run site updates in parallel", slog.Any("error", err))
+		writeJSONError(w, "failed to run site updates in parallel", http.StatusInternalServerError)
+		return
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -276,6 +313,10 @@ func (s *Server) performSiteUpdate(
 			log.Ctx(ctx).ErrorContext(ctx, "failed to insert action", slog.Any("error", err))
 		}
 		return nil, "grid unavailable", nil
+	}
+
+	if err := s.canSetModes(settings); err != nil {
+		return nil, "", err
 	}
 
 	// get Future Prices for controller
@@ -573,6 +614,19 @@ func (s *Server) updateEnergyHistory(ctx context.Context, siteID string, essSyst
 	return nil
 }
 
+func (s *Server) canSetModes(settings settingsWithVersion) error {
+	failures := settings.ESSAuthStatus.ConsecutiveSetFailures
+	if failures > 1 {
+		backoff := getESSBackoff(failures)
+		timeLeft := backoff - time.Since(settings.ESSAuthStatus.LastAttempt)
+		if timeLeft > 0 {
+			timeLeft = timeLeft.Round(time.Second)
+			return fmt.Errorf("%w, try again in %v", errESSRateLimited, timeLeft)
+		}
+	}
+	return nil
+}
+
 func (s *Server) setESSModes(
 	ctx context.Context,
 	siteID string,
@@ -580,6 +634,10 @@ func (s *Server) setESSModes(
 	batteryMode types.BatteryMode,
 	settings settingsWithVersion,
 ) error {
+	if err := s.canSetModes(settings); err != nil {
+		return err
+	}
+
 	var err error
 	switch batteryMode {
 	case types.BatteryModeChargeAny:

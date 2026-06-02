@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -68,6 +69,11 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 
 	essSystem, err := s.getESSSystem(ctx, siteID, settings, creds)
 	if err != nil {
+		if errors.Is(err, errESSRateLimited) {
+			log.Ctx(ctx).DebugContext(ctx, "failed to get ess system: ESS rate limited", slog.Any("error", err))
+			writeJSONError(w, err.Error(), http.StatusTooManyRequests)
+			return
+		}
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get ess system", slog.Any("error", err))
 		writeJSONError(w, "failed to get ess system", http.StatusInternalServerError)
 		return

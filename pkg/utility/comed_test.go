@@ -78,6 +78,56 @@ func TestComEd(t *testing.T) {
 		assert.Equal(t, 1, requests, "expected cached response")
 	})
 
+	t.Run("Concurrency singleflight", func(t *testing.T) {
+		requests := 0
+		doneCh := make(chan struct{})
+
+		// The mock server will block until we signal it to continue, ensuring that
+		// concurrent requests definitely overlap in time.
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests++
+			<-doneCh
+			_, _ = w.Write([]byte(`[{"millisUTC":"1706227200000","price":"2.0"}]`))
+		}))
+		defer ts.Close()
+
+		c := &baseComEdHourly{
+			apiURL:           ts.URL,
+			client:           ts.Client(),
+			historicalPrices: make(map[int64]types.Price),
+		}
+
+		// Run multiple concurrent requests
+		numGoroutines := 5
+		type result struct {
+			price types.Price
+			err   error
+		}
+		resCh := make(chan result, numGoroutines)
+
+		for i := 0; i < numGoroutines; i++ {
+			go func() {
+				price, err := c.GetCurrentPrice(context.Background())
+				resCh <- result{price: price, err: err}
+			}()
+		}
+
+		// Give them a moment to start and block on the mock server
+		time.Sleep(100 * time.Millisecond)
+
+		// Close doneCh to unblock the mock server handler
+		close(doneCh)
+
+		// Collect results
+		for i := 0; i < numGoroutines; i++ {
+			res := <-resCh
+			require.NoError(t, res.err)
+			assert.Equal(t, 0.02, res.price.DollarsPerKWH)
+		}
+
+		assert.Equal(t, 1, requests, "expected only 1 request to the API due to singleflight")
+	})
+
 	t.Run("GetFuturePrices No PJM", func(t *testing.T) {
 		c := &baseComEdHourly{
 			apiURL:           "http://example.com", // irrelevant

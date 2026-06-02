@@ -17,6 +17,8 @@ import (
 	"github.com/raterudder/raterudder/pkg/utility"
 )
 
+var errESSRateLimited = errors.New("ESS rate limited")
+
 type settingsWithVersion struct {
 	types.Settings
 	version int
@@ -65,14 +67,14 @@ func (s *Server) getSettingsWithMigration(ctx context.Context, siteID string) (s
 }
 
 func (s *Server) getESSSystem(ctx context.Context, siteID string, settings settingsWithVersion, creds types.Credentials) (ess.System, error) {
-	failures := settings.ESSAuthStatus.ConsecutiveFailures + settings.ESSAuthStatus.ConsecutiveSetFailures
+	failures := settings.ESSAuthStatus.ConsecutiveFailures
 	if failures > 1 {
 		backoff := getESSBackoff(failures)
 		timeLeft := backoff - time.Since(settings.ESSAuthStatus.LastAttempt)
 		if timeLeft > 0 {
 			// Round to seconds
 			timeLeft = timeLeft.Round(time.Second)
-			return nil, fmt.Errorf("ESS rate limited, try again in %v", timeLeft)
+			return nil, fmt.Errorf("%w, try again in %v", errESSRateLimited, timeLeft)
 		}
 	}
 

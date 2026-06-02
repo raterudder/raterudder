@@ -82,6 +82,54 @@ IGNORE
 		assert.InDelta(t, (expectedTodayVal/1000.0)*amerenLossFactor(now), price2.DollarsPerKWH, 0.00001)
 	})
 
+	t.Run("Concurrency singleflight", func(t *testing.T) {
+		requests := 0
+		doneCh := make(chan struct{})
+
+		api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests++
+			<-doneCh
+			w.Header().Set("Content-Type", "text/csv")
+			_, _ = w.Write([]byte(`Node,Type,Value,HE 1,HE 2,HE 3,HE 4,HE 5,HE 6,HE 7,HE 8,HE 9,HE 10,HE 11,HE 12,HE 13,HE 14,HE 15,HE 16,HE 17,HE 18,HE 19,HE 20,HE 21,HE 22,HE 23,HE 24
+AMIL.BGS6,Loadzone,LMP,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33
+`))
+		}))
+		defer api.Close()
+
+		c := configuredAmerenSmart(nil)
+		c.misoAPIURL = api.URL
+
+		// Run multiple concurrent requests
+		numGoroutines := 5
+		type result struct {
+			price types.Price
+			err   error
+		}
+		resCh := make(chan result, numGoroutines)
+
+		for i := 0; i < numGoroutines; i++ {
+			go func() {
+				price, err := c.GetCurrentPrice(context.Background())
+				resCh <- result{price: price, err: err}
+			}()
+		}
+
+		// Give them a moment to start and block on the mock server
+		time.Sleep(100 * time.Millisecond)
+
+		// Close doneCh to unblock the mock server handler
+		close(doneCh)
+
+		// Collect results
+		for i := 0; i < numGoroutines; i++ {
+			res := <-resCh
+			require.NoError(t, res.err)
+			assert.Equal(t, "ameren_psp", res.price.Provider)
+		}
+
+		assert.Equal(t, 1, requests, "expected only 1 request to the API due to singleflight")
+	})
+
 	t.Run("GetConfirmedPrices", func(t *testing.T) {
 		// Use a hardcoded non-DST transition date to avoid hour count variations (23/24/25)
 		// when testing with fixed 24-column mock CSV data.

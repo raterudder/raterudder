@@ -867,6 +867,85 @@ func TestHandleUpdateSites(t *testing.T) {
 			assert.Equal(t, http.StatusUnauthorized, w.Code)
 		})
 	})
+
+	t.Run("ESS Rate Limited", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("ListSites", mock.Anything).Return([]types.Site{{ID: "site-rate-limited"}}, nil)
+		mockS.On("GetSettings", mock.Anything, "site-rate-limited").Return(types.Settings{
+			Release: "production",
+			ESS:     "mock",
+			ESSAuthStatus: types.ESSAuthStatus{
+				ConsecutiveFailures: 2,
+				LastAttempt:         time.Now(),
+			},
+		}, types.CurrentSettingsVersion, nil)
+
+		srv := &Server{
+			storage:    mockS,
+			release:    "production",
+			bypassAuth: true,
+		}
+
+		req := httptest.NewRequest("POST", "/api/updateSites", nil)
+		w := httptest.NewRecorder()
+		srv.handleUpdateSites(w, req)
+
+		var results map[string]string
+		err := json.NewDecoder(w.Body).Decode(&results)
+		require.NoError(t, err)
+		assert.Equal(t, "skipped: ESS rate limited", results["site-rate-limited"])
+	})
+
+	t.Run("ESS Write Rate Limited", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("ListSites", mock.Anything).Return([]types.Site{{ID: "site-write-rate-limited"}}, nil)
+		mockS.On("GetSettings", mock.Anything, "site-write-rate-limited").Return(types.Settings{
+			Release: "production",
+			ESS:     "mock",
+			ESSAuthStatus: types.ESSAuthStatus{
+				ConsecutiveSetFailures: 2,
+				LastAttempt:            time.Now(),
+			},
+			UtilityProvider: "test",
+		}, types.CurrentSettingsVersion, nil)
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, "site-write-rate-limited").Return(time.Time{}, 0, nil)
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site-write-rate-limited").Return(time.Time{}, 0, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, "site-write-rate-limited", mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 80}, nil)
+
+		mockP := ess.NewMap()
+		mockP.SetSystem("site-write-rate-limited", mockES)
+
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.15, TSStart: time.Now()}, nil)
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider("site-write-rate-limited", mockU)
+
+		srv := &Server{
+			storage:    mockS,
+			utilities:  mockUMap,
+			ess:        mockP,
+			release:    "production",
+			bypassAuth: true,
+		}
+
+		req := httptest.NewRequest("POST", "/api/updateSites", nil)
+		w := httptest.NewRecorder()
+		srv.handleUpdateSites(w, req)
+
+		var results map[string]string
+		err := json.NewDecoder(w.Body).Decode(&results)
+		require.NoError(t, err)
+		assert.Equal(t, "skipped: ESS rate limited", results["site-write-rate-limited"])
+	})
 }
 
 // Helpers for Recording Mocks
@@ -1490,7 +1569,7 @@ func TestSetESSModes(t *testing.T) {
 			Settings: types.Settings{
 				ESSAuthStatus: types.ESSAuthStatus{
 					ConsecutiveSetFailures: 3,
-					LastAttempt:            time.Now(),
+					LastAttempt:            time.Now().Add(-time.Hour),
 				},
 			},
 			version: 1,
