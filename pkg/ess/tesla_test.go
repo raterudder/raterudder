@@ -1021,4 +1021,50 @@ func TestTesla(t *testing.T) {
 			assert.Contains(t, err.Error(), "device is in storm mode")
 		})
 	})
+
+	t.Run("doGETRequest Decode Failures", func(t *testing.T) {
+		t.Run("Envelope unmarshal failure", func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`"envelope-error"`))
+			}))
+			defer ts.Close()
+
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "test-site", types.Settings{ESS: "tesla"})
+			require.NoError(t, err)
+
+			teslaSys := sys.(*Tesla)
+			teslaSys.token = "mock-access"
+			teslaSys.energySiteID = 1234
+			teslaSys.baseURL = ts.URL
+
+			var res teslaSiteInfoResponse
+			err = teslaSys.doGETRequest(ctx, "api/1/energy_sites/1234/site_info", nil, &res)
+			require.Error(t, err)
+			assert.ErrorContains(t, err, "failed to decode tesla envelope")
+		})
+
+		t.Run("Target unmarshal failure (empty/string response)", func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"response": ""}`))
+			}))
+			defer ts.Close()
+
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "test-site", types.Settings{ESS: "tesla"})
+			require.NoError(t, err)
+
+			teslaSys := sys.(*Tesla)
+			teslaSys.token = "mock-access"
+			teslaSys.energySiteID = 1234
+			teslaSys.baseURL = ts.URL
+
+			var res teslaSiteInfoResponse
+			err = teslaSys.doGETRequest(ctx, "api/1/energy_sites/1234/site_info", nil, &res)
+			require.Error(t, err)
+			assert.ErrorContains(t, err, "failed to decode tesla response")
+		})
+	})
 }

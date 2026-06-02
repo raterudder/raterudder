@@ -505,11 +505,21 @@ func (b *Tesla) doGETRequest(ctx context.Context, path string, params url.Values
 		req.URL.RawQuery = q.Encode()
 	}
 
+	var raw json.RawMessage
+	if err := b.base.doRequest(req, &raw); err != nil {
+		return err
+	}
+
 	var response struct {
 		Response json.RawMessage `json:"response"`
 	}
-	if err := b.base.doRequest(req, &response); err != nil {
-		return err
+	if err := json.Unmarshal(raw, &response); err != nil {
+		body := raw
+		if len(body) > 256 {
+			body = body[:256]
+		}
+		log.Ctx(ctx).ErrorContext(ctx, "failed to decode tesla envelope", slog.Any("error", err), slog.String("body", string(body)))
+		return fmt.Errorf("failed to decode tesla envelope: %w", err)
 	}
 
 	// debug log the whole response which will aid in debugging
@@ -532,7 +542,15 @@ func (b *Tesla) doGETRequest(ctx context.Context, path string, params url.Values
 		slog.Any("response", logResponse),
 	)
 	if err := json.Unmarshal(response.Response, dest); err != nil {
-		return err
+		// We encountered cases where the response field is a string like ""
+		// rather than the expected struct object. Log up to 256 characters of response.Response
+		// to help debug why the API returned this shape instead of the expected struct/slice.
+		body := response.Response
+		if len(body) > 256 {
+			body = body[:256]
+		}
+		log.Ctx(ctx).ErrorContext(ctx, "failed to decode tesla response", slog.Any("error", err), slog.String("body", string(body)))
+		return fmt.Errorf("failed to decode tesla response: %w", err)
 	}
 	return nil
 }
