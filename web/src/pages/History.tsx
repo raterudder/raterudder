@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useLocation, useSearch } from 'wouter';
 import { fetchHistoryEnergy, fetchSettings } from '../api';
 import type { EnergyStats, Settings as SettingsType } from '../api';
@@ -159,6 +159,8 @@ const History: React.FC<{ siteID?: string }> = ({ siteID }) => {
 
     const [data, setData] = useState<HistoryDataPoint[]>([]);
     const [settings, setSettings] = useState<SettingsType | null>(null);
+    const settingsRef = useRef<SettingsType | null>(null);
+    const loadedSiteIDRef = useRef<string | undefined>(undefined);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
@@ -174,8 +176,18 @@ const History: React.FC<{ siteID?: string }> = ({ siteID }) => {
             setLoading(true);
             setError(null);
             try {
-                const [res, s] = await Promise.all([fetchHistoryEnergy(currentDate, siteID), fetchSettings(siteID)]);
+                const shouldFetchSettings = settingsRef.current === null || loadedSiteIDRef.current !== siteID;
+                const fetchSettingsPromise = shouldFetchSettings
+                    ? fetchSettings(siteID)
+                    : Promise.resolve(settingsRef.current);
+
+                const [res, s] = await Promise.all([
+                    fetchHistoryEnergy(currentDate, siteID),
+                    fetchSettingsPromise
+                ]);
                 setSettings(s);
+                settingsRef.current = s;
+                loadedSiteIDRef.current = siteID;
 
                 // Merge energy and weather
                 const merged: HistoryDataPoint[] = res.energy.map(e => {

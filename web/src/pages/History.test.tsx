@@ -1,10 +1,11 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import userEvent from '@testing-library/user-event';
 import History from './History';
 import { Router } from 'wouter';
 import * as api from '../api';
 
-const { fetchHistoryEnergy } = api;
+const { fetchHistoryEnergy, fetchSettings } = api;
 
 vi.mock('../api');
 
@@ -73,6 +74,26 @@ describe('History', () => {
         renderWithRouter(<History />);
         await waitFor(() => {
             expect(screen.getByText('No history found for this date.')).toBeInTheDocument();
+        });
+    });
+
+    it('does not refetch settings when date changes', async () => {
+        const user = userEvent.setup();
+        (fetchHistoryEnergy as any).mockResolvedValue({ energy: [], weather: [] });
+        (fetchSettings as any).mockResolvedValue({ release: 'production' });
+
+        renderWithRouter(<History />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/Prev/)).toBeInTheDocument();
+        });
+
+        const prevButton = screen.getByText(/Prev/);
+        await user.click(prevButton);
+
+        await waitFor(() => {
+            expect((fetchHistoryEnergy as any).mock.calls.length).toBeGreaterThanOrEqual(2);
+            expect((fetchSettings as any).mock.calls.length).toBe(1);
         });
     });
 });

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useLocation, useSearch, Link } from 'wouter';
 import { type Action, type SavingsStats, type Settings, fetchActionsAndSavings, fetchSettings, BatteryMode } from '../api';
 import CurrentStatus from '../components/CurrentStatus';
@@ -31,6 +31,8 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
     const [actions, setActions] = useState<Action[]>([]);
     const [savings, setSavings] = useState<SavingsStats | null>(null);
     const [settings, setSettings] = useState<Settings | null>(null);
+    const settingsRef = useRef<Settings | null>(null);
+    const loadedSiteIDRef = useRef<string | undefined>(undefined);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -72,15 +74,22 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 const end = new Date(currentDate);
                 end.setHours(23, 59, 59, 999);
 
-                // Fetch actions and savings in a single call, and settings
+                const shouldFetchSettings = siteID !== 'ALL' && (settingsRef.current === null || loadedSiteIDRef.current !== siteID);
+                const fetchSettingsPromise = shouldFetchSettings
+                    ? fetchSettings(siteID)
+                    : (siteID === 'ALL' ? Promise.resolve(null) : Promise.resolve(settingsRef.current));
+
+                // Fetch actions and savings in a single call, and settings if needed
                 const [actionsAndSavingsData, settingsData] = await Promise.all([
                     fetchActionsAndSavings(start, end, siteID),
-                    siteID === 'ALL' ? Promise.resolve(null) : fetchSettings(siteID)
+                    fetchSettingsPromise
                 ]);
 
                 setActions(actionsAndSavingsData.actions || []);
                 setSavings(actionsAndSavingsData.savings);
                 setSettings(settingsData);
+                settingsRef.current = settingsData;
+                loadedSiteIDRef.current = siteID;
             } catch (err) {
                 console.error(err);
                 setError(err instanceof Error ? err.message : 'Failed to load data');

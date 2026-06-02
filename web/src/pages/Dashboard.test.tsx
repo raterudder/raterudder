@@ -119,6 +119,7 @@ describe('Dashboard', () => {
              const expectedDate = new Date(now);
              expectedDate.setDate(expectedDate.getDate() - 1);
              expect(startArg.getDate()).toBe(expectedDate.getDate());
+             expect((fetchSettings as any).mock.calls.length).toBe(1);
          });
     });
 
