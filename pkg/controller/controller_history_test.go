@@ -18,15 +18,15 @@ import (
 var historyFS embed.FS
 
 var fileBaselines = map[string]float64{
-	"site1_march.json":    -4.845,
-	"site1_may.json":      -15.827,
-	"site2_april.json":    1.765,
-	"site2_march.json":    9.245,
-	"site2_may.json":      0.612,
-	"site3_march.json":    -1.741,
-	"site3_may.json":      -6.409,
-	"site4_late-may.json": 0.476,
-	"site4_may.json":      3.358,
+	"site1_march.json":    -4.811,
+	"site1_may.json":      -15.705,
+	"site2_april.json":    1.396,
+	"site2_march.json":    8.941,
+	"site2_may.json":      0.757,
+	"site3_march.json":    -1.865,
+	"site3_may.json":      -6.341,
+	"site4_late-may.json": 0.449,
+	"site4_may.json":      3.057,
 }
 
 func findEnergyStats(history []types.DailyEnergyStats, ts time.Time, loc *time.Location) (types.EnergyStats, bool) {
@@ -285,7 +285,8 @@ func TestDecideHistory(t *testing.T) {
 				decision, err := c.Decide(ctx, simStatus, currentPrice, futurePrices, mockHistory, mockWeather, settings)
 				require.NoError(t, err)
 
-				if true {
+				// enable for debugging
+				if false {
 					if tCurrent.Day() == 20 && tCurrent.Hour() == 18 && tCurrent.Minute() == 33 {
 						simData := c.SimulateState(ctx, tCurrent, simStatus, currentPrice, futurePrices, mockHistory, mockWeather, settings)
 						t.Logf("=== SIMULATION SLOTS AT 18:33 ===")
@@ -537,10 +538,8 @@ func TestDecideHistory(t *testing.T) {
 			if hasBaseline {
 				// Round to 3 decimal places to avoid float precision issues when comparing against 3-decimal-place target baselines
 				simNetCostRounded := math.Round(simNetCost*1000.0) / 1000.0
-				// Allow up to $0.25 regression per site, because the new logic correctly values overall economics
-				// and relies on slightly more conservative buffers, resulting in higher overall savings across all sites
-				// combined, but occasional slight regressions on specific day histories.
-				allowedBuffer := 0.25
+				// Allow up to $0.10 regression per site
+				allowedBuffer := 0.10
 				assert.LessOrEqual(t, simNetCostRounded, baseNetCost+allowedBuffer, "Simulated net cost should be less than or equal to baseline")
 			}
 		})
