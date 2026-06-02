@@ -20,6 +20,7 @@ type Database interface {
 	// Settings
 	GetSettings(ctx context.Context, siteID string) (types.Settings, int, error)
 	SetSettings(ctx context.Context, siteID string, settings types.Settings, version int) error
+	ListSitesSettings(ctx context.Context, updateGroup []int) (map[string]types.Settings, map[string]int, error)
 
 	// Data Persistence
 	// UpsertPrices adds or updates multiple price records.

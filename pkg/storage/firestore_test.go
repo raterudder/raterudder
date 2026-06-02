@@ -355,6 +355,37 @@ func TestFirestoreProvider(t *testing.T) {
 			assert.True(t, foundTestSite, "ListSites did not return test-site-crud")
 			assert.True(t, foundSite2, "ListSites did not return site2")
 		})
+
+		t.Run("ListSitesSettings", func(t *testing.T) {
+			// Set settings with specific UpdateGroup values
+			set1 := types.Settings{UpdateGroup: 3}
+			set2 := types.Settings{UpdateGroup: 7}
+			set3 := types.Settings{UpdateGroup: 0}
+
+			require.NoError(t, f.SetSettings(ctx, "site-group-3", set1, 1))
+			require.NoError(t, f.SetSettings(ctx, "site-group-7", set2, 1))
+			require.NoError(t, f.SetSettings(ctx, "site-group-0", set3, 1))
+
+			// Query with nil updateGroup: should return all
+			allSettings, allVersions, err := f.ListSitesSettings(ctx, nil)
+			require.NoError(t, err)
+			assert.Contains(t, allSettings, "site-group-3")
+			assert.Contains(t, allSettings, "site-group-7")
+			assert.Contains(t, allSettings, "site-group-0")
+			assert.Equal(t, 3, allSettings["site-group-3"].UpdateGroup)
+			assert.Equal(t, 7, allSettings["site-group-7"].UpdateGroup)
+			assert.Equal(t, 0, allSettings["site-group-0"].UpdateGroup)
+			assert.Equal(t, 1, allVersions["site-group-3"])
+
+			// Query with [3, 4] updateGroup: should only return site-group-3
+			filteredSettings, filteredVersions, err := f.ListSitesSettings(ctx, []int{3, 4})
+			require.NoError(t, err)
+			assert.Contains(t, filteredSettings, "site-group-3")
+			assert.NotContains(t, filteredSettings, "site-group-7")
+			assert.NotContains(t, filteredSettings, "site-group-0")
+			assert.Equal(t, 3, filteredSettings["site-group-3"].UpdateGroup)
+			assert.Equal(t, 1, filteredVersions["site-group-3"])
+		})
 	})
 
 	t.Run("Users", func(t *testing.T) {

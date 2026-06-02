@@ -29,6 +29,7 @@ locals {
     "sites",
     "feedback",
     "hourly_prices",
+    "interest",
   ]
 }
 
@@ -43,3 +44,16 @@ resource "google_firestore_field" "json" {
   index_config {}
 }
 
+resource "google_firestore_field" "update_group" {
+  project    = var.project_id
+  database   = google_firestore_database.default.name
+  collection = "config"
+  field      = "updateGroup"
+
+  index_config {
+    indexes {
+      order       = "ASCENDING"
+      query_scope = "COLLECTION_GROUP"
+    }
+  }
+}

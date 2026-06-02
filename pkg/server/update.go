@@ -82,10 +82,12 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sites, err := s.storage.ListSites(ctx)
+	// For now handleUpdateSites should send in nil but leave a TODO to later send in [1,...16] to fetch all sites that have an updateGroup set.
+	// TODO: send in [1,...16] to fetch all sites that have an updateGroup set.
+	settingsMap, versionsMap, err := s.storage.ListSitesSettings(ctx, nil)
 	if err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to list sites", slog.Any("error", err))
-		writeJSONError(w, "failed to list sites", http.StatusInternalServerError)
+		log.Ctx(ctx).ErrorContext(ctx, "failed to list sites settings", slog.Any("error", err))
+		writeJSONError(w, "failed to list sites settings", http.StatusInternalServerError)
 		return
 	}
 
@@ -95,34 +97,35 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(3)
 
-	for _, site := range sites {
+	for siteID, settings := range settingsMap {
+		version := versionsMap[siteID]
 		g.Go(func() error {
 			if err := gCtx.Err(); err != nil {
 				return err
 			}
 
-			ctx := log.With(gCtx, log.Ctx(gCtx).With(slog.Group("update", slog.String("siteID", site.ID))))
+			ctx := log.With(gCtx, log.Ctx(gCtx).With(slog.Group("update", slog.String("siteID", siteID))))
 
-			settings, creds, err := s.getSettingsWithMigration(ctx, site.ID)
+			sv, creds, err := s.migrateAndDecryptSettings(ctx, siteID, settings, version)
 			if err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to get site settings", slog.Any("error", err))
 				return nil
 			}
 
-			if settings.Release != s.release {
+			if sv.Release != s.release {
 				return nil
 			}
 
-			if settings.ESS == "" {
-				log.Ctx(ctx).DebugContext(ctx, "site update skipped: no ESS configured", slog.String("siteID", site.ID))
+			if sv.ESS == "" {
+				log.Ctx(ctx).DebugContext(ctx, "site update skipped: no ESS configured", slog.String("siteID", siteID))
 				mu.Lock()
-				results[site.ID] = "skipped: no ESS configured"
+				results[siteID] = "skipped: no ESS configured"
 				mu.Unlock()
 				return nil
 			}
 
 			log.Ctx(ctx).DebugContext(ctx, "processing site update")
-			_, status, err := s.performSiteUpdate(ctx, site.ID, settings, creds)
+			_, status, err := s.performSiteUpdate(ctx, siteID, sv, creds)
 
 			var resVal string
 			if err != nil {
@@ -145,7 +148,7 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 			}
 
 			mu.Lock()
-			results[site.ID] = resVal
+			results[siteID] = resVal
 			mu.Unlock()
 
 			return nil

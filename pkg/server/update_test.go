@@ -675,16 +675,15 @@ func TestHandleUpdateSites(t *testing.T) {
 	mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
 
 	mockS := &mockStorage{}
-	mockS.On("ListSites", mock.Anything).Return([]types.Site{
-		{ID: "site1"},
-		{ID: "site2"},
-		{ID: "site3"},
+	mockS.On("ListSitesSettings", mock.Anything, mock.Anything).Return(map[string]types.Settings{
+		"site1": {ESS: "mock", UtilityProvider: "test", Release: "production"},
+		"site2": {ESS: "mock", UtilityProvider: "test", Release: "staging"},
+		"site3": {ESS: "mock", UtilityProvider: "test", Release: "production"},
+	}, map[string]int{
+		"site1": types.CurrentSettingsVersion,
+		"site2": types.CurrentSettingsVersion,
+		"site3": types.CurrentSettingsVersion,
 	}, nil)
-
-	// In production mode (default), site1 and site3 (default) should run. site2 should be skipped.
-	mockS.On("GetSettings", mock.Anything, "site1").Return(types.Settings{ESS: "mock", UtilityProvider: "test", Release: "production"}, types.CurrentSettingsVersion, nil)
-	mockS.On("GetSettings", mock.Anything, "site2").Return(types.Settings{ESS: "mock", UtilityProvider: "test", Release: "staging"}, types.CurrentSettingsVersion, nil)
-	mockS.On("GetSettings", mock.Anything, "site3").Return(types.Settings{ESS: "mock", UtilityProvider: "test", Release: "production"}, types.CurrentSettingsVersion, nil)
 
 	mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
 	mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Now().Add(-1*time.Hour), types.CurrentPriceHistoryVersion, nil)
@@ -739,7 +738,6 @@ func TestHandleUpdateSites(t *testing.T) {
 	t.Run("Staging Release", func(t *testing.T) {
 		srv.release = "staging"
 		// Reset mocks if necessary, but here we just want to verify site2 is picked up
-		mockS.On("GetSettings", mock.Anything, "site2").Return(types.Settings{UtilityProvider: "test"}, types.CurrentSettingsVersion, nil)
 		mockP.SetSystem("site2", mockES)
 
 		w := httptest.NewRecorder()
@@ -756,11 +754,14 @@ func TestHandleUpdateSites(t *testing.T) {
 
 	t.Run("No ESS Configured", func(t *testing.T) {
 		mockS := &mockStorage{}
-		mockS.On("ListSites", mock.Anything).Return([]types.Site{{ID: "site-no-ess"}}, nil)
-		mockS.On("GetSettings", mock.Anything, "site-no-ess").Return(types.Settings{
-			Release: "production",
-			ESS:     "", // Empty ESS
-		}, types.CurrentSettingsVersion, nil)
+		mockS.On("ListSitesSettings", mock.Anything, mock.Anything).Return(map[string]types.Settings{
+			"site-no-ess": {
+				Release: "production",
+				ESS:     "", // Empty ESS
+			},
+		}, map[string]int{
+			"site-no-ess": types.CurrentSettingsVersion,
+		}, nil)
 
 		srv := &Server{
 			storage:    mockS,
@@ -788,12 +789,15 @@ func TestHandleUpdateSites(t *testing.T) {
 		token := generateTestToken(t, oidcSrv.URL, priv, updateEmail, "updater")
 
 		mockS := &mockStorage{}
-		mockS.On("ListSites", mock.Anything).Return([]types.Site{{ID: "site1"}}, nil)
-		mockS.On("GetSettings", mock.Anything, "site1").Return(types.Settings{
-			Release:         "production",
-			ESS:             "mock",
-			UtilityProvider: "test",
-		}, types.CurrentSettingsVersion, nil)
+		mockS.On("ListSitesSettings", mock.Anything, mock.Anything).Return(map[string]types.Settings{
+			"site1": {
+				Release:         "production",
+				ESS:             "mock",
+				UtilityProvider: "test",
+			},
+		}, map[string]int{
+			"site1": types.CurrentSettingsVersion,
+		}, nil)
 
 		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, "site1").Return(time.Time{}, 0, nil)
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site1").Return(time.Time{}, 0, nil)
@@ -870,15 +874,18 @@ func TestHandleUpdateSites(t *testing.T) {
 
 	t.Run("ESS Rate Limited", func(t *testing.T) {
 		mockS := &mockStorage{}
-		mockS.On("ListSites", mock.Anything).Return([]types.Site{{ID: "site-rate-limited"}}, nil)
-		mockS.On("GetSettings", mock.Anything, "site-rate-limited").Return(types.Settings{
-			Release: "production",
-			ESS:     "mock",
-			ESSAuthStatus: types.ESSAuthStatus{
-				ConsecutiveFailures: 2,
-				LastAttempt:         time.Now(),
+		mockS.On("ListSitesSettings", mock.Anything, mock.Anything).Return(map[string]types.Settings{
+			"site-rate-limited": {
+				Release: "production",
+				ESS:     "mock",
+				ESSAuthStatus: types.ESSAuthStatus{
+					ConsecutiveFailures: 2,
+					LastAttempt:         time.Now(),
+				},
 			},
-		}, types.CurrentSettingsVersion, nil)
+		}, map[string]int{
+			"site-rate-limited": types.CurrentSettingsVersion,
+		}, nil)
 
 		srv := &Server{
 			storage:    mockS,
@@ -898,16 +905,19 @@ func TestHandleUpdateSites(t *testing.T) {
 
 	t.Run("ESS Write Rate Limited", func(t *testing.T) {
 		mockS := &mockStorage{}
-		mockS.On("ListSites", mock.Anything).Return([]types.Site{{ID: "site-write-rate-limited"}}, nil)
-		mockS.On("GetSettings", mock.Anything, "site-write-rate-limited").Return(types.Settings{
-			Release: "production",
-			ESS:     "mock",
-			ESSAuthStatus: types.ESSAuthStatus{
-				ConsecutiveSetFailures: 2,
-				LastAttempt:            time.Now(),
+		mockS.On("ListSitesSettings", mock.Anything, mock.Anything).Return(map[string]types.Settings{
+			"site-write-rate-limited": {
+				Release: "production",
+				ESS:     "mock",
+				ESSAuthStatus: types.ESSAuthStatus{
+					ConsecutiveSetFailures: 2,
+					LastAttempt:            time.Now(),
+				},
+				UtilityProvider: "test",
 			},
-			UtilityProvider: "test",
-		}, types.CurrentSettingsVersion, nil)
+		}, map[string]int{
+			"site-write-rate-limited": types.CurrentSettingsVersion,
+		}, nil)
 		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, "site-write-rate-limited").Return(time.Time{}, 0, nil)
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site-write-rate-limited").Return(time.Time{}, 0, nil)
 		mockS.On("GetEnergyHistory", mock.Anything, "site-write-rate-limited", mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)

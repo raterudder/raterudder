@@ -2,12 +2,13 @@ package types
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"time"
 )
 
 // CurrentSettingsVersion is the current version of the settings struct.
 // Increment this value only if you need to set a default value other than the Go default for that value.
-const CurrentSettingsVersion = 8
+const CurrentSettingsVersion = 9
 
 // Settings represents the configuration stored in the database.
 // These are dynamic settings that can be changed without redeploying.
@@ -83,6 +84,9 @@ type Settings struct {
 
 	// ESS Authentication Status
 	ESSAuthStatus ESSAuthStatus `json:"essAuthStatus,omitempty"`
+
+	// UpdateGroup controls which group the site gets updated in to spread out updates.
+	UpdateGroup int `json:"updateGroup"`
 }
 
 // ESSAuthStatus represents the status of ESS authentication for the site.
@@ -219,6 +223,12 @@ func MigrateSettings(s Settings, currentVersion int) (Settings, bool, error) {
 			// because until now, Franklin was the only ESS supported
 			if len(s.EncryptedCredentials) > 0 && s.ESS == "" {
 				s.ESS = "franklin"
+				migrated = true
+			}
+		case 9:
+			// version 9: set UpdateGroup if it is unset (i.e. 0) if and only if both the ess is configured and a utility is configured.
+			if s.UpdateGroup == 0 && s.ESS != "" && s.UtilityProvider != "" {
+				s.UpdateGroup = rand.IntN(16) + 1
 				migrated = true
 			}
 		default:

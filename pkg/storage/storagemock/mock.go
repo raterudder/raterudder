@@ -154,6 +154,14 @@ func (m *MockDatabase) ListSites(ctx context.Context) ([]types.Site, error) {
 	return nil, nil
 }
 
+func (m *MockDatabase) ListSitesSettings(ctx context.Context, updateGroup []int) (map[string]types.Settings, map[string]int, error) {
+	args := m.Called(ctx, updateGroup)
+	if len(args) > 0 {
+		return args.Get(0).(map[string]types.Settings), args.Get(1).(map[string]int), args.Error(2)
+	}
+	return nil, nil, nil
+}
+
 func (m *MockDatabase) GetLatestAction(ctx context.Context, siteID string) (*types.Action, error) {
 	args := m.Called(ctx, siteID)
 	val := args.Get(0)

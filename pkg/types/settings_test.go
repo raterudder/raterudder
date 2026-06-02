@@ -52,11 +52,53 @@ func TestMigrateSettings(t *testing.T) {
 		assert.Equal(t, "singleFamilyWithoutElectricHeat", s.UtilityRateOptions.RateClass)
 	})
 
+	t.Run("v8 to v9: set UpdateGroup", func(t *testing.T) {
+		// Both ESS and Utility configured, UpdateGroup unset (0)
+		old := Settings{
+			ESS:             "franklin",
+			UtilityProvider: "comed",
+		}
+		s, changed, err := MigrateSettings(old, 8)
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.True(t, s.UpdateGroup >= 1 && s.UpdateGroup <= 16, "UpdateGroup should be between 1 and 16, got %d", s.UpdateGroup)
+
+		// ESS configured but Utility is not
+		oldNoUtility := Settings{
+			ESS: "franklin",
+		}
+		s, changed, err = MigrateSettings(oldNoUtility, 8)
+		require.NoError(t, err)
+		assert.False(t, changed)
+		assert.Equal(t, 0, s.UpdateGroup)
+
+		// Utility configured but ESS is not
+		oldNoESS := Settings{
+			UtilityProvider: "comed",
+		}
+		s, changed, err = MigrateSettings(oldNoESS, 8)
+		require.NoError(t, err)
+		assert.False(t, changed)
+		assert.Equal(t, 0, s.UpdateGroup)
+
+		// UpdateGroup already set
+		oldSet := Settings{
+			ESS:             "franklin",
+			UtilityProvider: "comed",
+			UpdateGroup:     5,
+		}
+		s, changed, err = MigrateSettings(oldSet, 8)
+		require.NoError(t, err)
+		assert.False(t, changed)
+		assert.Equal(t, 5, s.UpdateGroup)
+	})
+
 	t.Run("no change: current version", func(t *testing.T) {
 		current := Settings{
 			UtilityProvider: "comed",
 			UtilityRate:     "comed_besh",
 			Release:         "production",
+			UpdateGroup:     7,
 		}
 		s, changed, err := MigrateSettings(current, CurrentSettingsVersion)
 		require.NoError(t, err)

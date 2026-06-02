@@ -163,8 +163,9 @@ func (f *FirestoreProvider) SetSettings(ctx context.Context, siteID string, sett
 		return err
 	}
 	_, err = coll.Doc("settings").Set(ctx, map[string]any{
-		"json":    string(jsonBytes),
-		"version": version,
+		"json":        string(jsonBytes),
+		"version":     version,
+		"updateGroup": settings.UpdateGroup,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to save settings: %w", err)
@@ -794,6 +795,79 @@ func (f *FirestoreProvider) ListSites(ctx context.Context) ([]types.Site, error)
 		sites = append(sites, site)
 	}
 	return sites, nil
+}
+
+// ListSitesSettings retrieves settings for sites, optionally filtered by updateGroup.
+func (f *FirestoreProvider) ListSitesSettings(ctx context.Context, updateGroup []int) (map[string]types.Settings, map[string]int, error) {
+	q := f.client.CollectionGroup("config").Query
+	if updateGroup != nil {
+		q = q.Where("updateGroup", "in", updateGroup)
+	}
+	iter := q.Documents(ctx)
+	defer iter.Stop()
+
+	settingsMap := make(map[string]types.Settings)
+	versionsMap := make(map[string]int)
+
+	for {
+		doc, err := iter.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("error iterating config documents: %w", err)
+		}
+
+		// Only look at the settings document
+		if doc.Ref.ID != "settings" {
+			continue
+		}
+
+		parentSite := doc.Ref.Parent.Parent
+		if parentSite == nil {
+			log.Ctx(ctx).WarnContext(ctx, "settings doc missing parent site", slog.String("doc", doc.Ref.Path))
+			continue
+		}
+		if parentSite.Parent == nil || parentSite.Parent.ID != "sites" {
+			log.Ctx(ctx).WarnContext(ctx, "settings doc missing parent sites collection", slog.String("doc", doc.Ref.Path))
+			continue
+		}
+		siteID := parentSite.ID
+		if siteID == "" {
+			log.Ctx(ctx).WarnContext(ctx, "settings doc missing parent site id", slog.String("doc", doc.Ref.Path))
+			continue
+		}
+
+		var version int
+		if v, err := doc.DataAt("version"); err == nil {
+			if vInt, ok := v.(int64); ok {
+				version = int(vInt)
+			}
+		}
+
+		val, err := doc.DataAt("json")
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "settings doc missing json", slog.String("siteID", siteID))
+			continue
+		}
+
+		jsonStr, ok := val.(string)
+		if !ok {
+			log.Ctx(ctx).WarnContext(ctx, "settings doc json not string", slog.String("siteID", siteID))
+			continue
+		}
+
+		var s types.Settings
+		if err := json.Unmarshal([]byte(jsonStr), &s); err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal settings json", slog.String("siteID", siteID), slog.Any("err", err))
+			continue
+		}
+
+		settingsMap[siteID] = s
+		versionsMap[siteID] = version
+	}
+
+	return settingsMap, versionsMap, nil
 }
 
 // GetUser retrieves a user from the "users" collection.

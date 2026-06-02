@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"reflect"
 	"sync"
@@ -24,11 +25,7 @@ type settingsWithVersion struct {
 	version int
 }
 
-func (s *Server) getSettingsWithMigration(ctx context.Context, siteID string) (settingsWithVersion, types.Credentials, error) {
-	settings, version, err := s.storage.GetSettings(ctx, siteID)
-	if err != nil {
-		return settingsWithVersion{}, types.Credentials{}, err
-	}
+func (s *Server) migrateAndDecryptSettings(ctx context.Context, siteID string, settings types.Settings, version int) (settingsWithVersion, types.Credentials, error) {
 	sv := settingsWithVersion{
 		Settings: settings,
 		version:  version,
@@ -55,8 +52,9 @@ func (s *Server) getSettingsWithMigration(ctx context.Context, siteID string) (s
 	}
 
 	var creds types.Credentials
-	if len(settings.EncryptedCredentials) > 0 {
-		creds, err = s.decryptCredentials(ctx, settings.EncryptedCredentials)
+	var err error
+	if len(sv.Settings.EncryptedCredentials) > 0 {
+		creds, err = s.decryptCredentials(ctx, sv.Settings.EncryptedCredentials)
 		if err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to decrypt credentials", slog.Any("error", err))
 			return settingsWithVersion{}, types.Credentials{}, err
@@ -64,6 +62,14 @@ func (s *Server) getSettingsWithMigration(ctx context.Context, siteID string) (s
 	}
 
 	return sv, creds, nil
+}
+
+func (s *Server) getSettingsWithMigration(ctx context.Context, siteID string) (settingsWithVersion, types.Credentials, error) {
+	settings, version, err := s.storage.GetSettings(ctx, siteID)
+	if err != nil {
+		return settingsWithVersion{}, types.Credentials{}, err
+	}
+	return s.migrateAndDecryptSettings(ctx, siteID, settings, version)
 }
 
 func (s *Server) getESSSystem(ctx context.Context, siteID string, settings settingsWithVersion, creds types.Credentials) (ess.System, error) {
@@ -304,12 +310,12 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	var changedESS bool
 	// Handle credentials or ESS update
 	if req.Credentials != nil || existing.ESS != newSettings.ESS {
 		loadExistingCreds()
 
 		// check if ESS changed
-		var changedESS bool
 		var shouldBackfillHistory bool
 		if existing.ESS != newSettings.ESS {
 			changedESS = true
@@ -457,6 +463,12 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to update price history after settings change", slog.Any("error", err))
 			}
 		})
+	}
+
+	// setting UpdateGroup means it's ready for updates which we only do if the
+	// ess and utility are set and they're both validated
+	if newSettings.UpdateGroup == 0 && newSettings.ESS != "" && changedESS && newSettings.UtilityProvider != "" {
+		newSettings.UpdateGroup = rand.IntN(16) + 1
 	}
 
 	if err := s.storage.SetSettings(ctx, siteID, newSettings, types.CurrentSettingsVersion); err != nil {
