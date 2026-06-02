@@ -121,6 +121,29 @@ func TestWebHandler(t *testing.T) {
 		assert.Empty(t, w.Header().Get("Cache-Control"))
 	})
 
+	t.Run("Serve Index on Unknown Route with Trailing Slash", func(t *testing.T) {
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			listenAddr: ":8080",
+			controller: controller.NewController(),
+		}
+
+		mux := http.NewServeMux()
+		fileServer := http.FileServer(http.FS(testFS))
+		mux.Handle("/", srv.webHandler(testFS, fileServer))
+
+		req := httptest.NewRequest("GET", "/wp-admin/css/", nil)
+		w := httptest.NewRecorder()
+
+		mux.ServeHTTP(w, req)
+
+		resp := w.Result()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "<html>index</html>", w.Body.String())
+	})
+
 	t.Run("Proxy to Dev Server", func(t *testing.T) {
 		// Start a mock dev server
 		devServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

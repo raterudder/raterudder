@@ -11,6 +11,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -360,8 +361,10 @@ func (s *Server) webHandler(dir fs.FS, h http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Default to serving index.html for unknown paths (SPA)
 		if r.URL.Path != "/" {
+			// Clean the path to remove trailing slashes and normalize it for io/fs
+			cleanedPath := path.Clean(strings.TrimPrefix(r.URL.Path, "/"))
 			// Check if the file exists in the filesystem
-			f, err := dir.Open(strings.TrimPrefix(r.URL.Path, "/"))
+			f, err := dir.Open(cleanedPath)
 			if err == nil {
 				f.Close()
 			} else if errors.Is(err, fs.ErrNotExist) {
@@ -374,7 +377,7 @@ func (s *Server) webHandler(dir fs.FS, h http.Handler) http.HandlerFunc {
 				// If file doesn't exist, serve index.html
 				r.URL.Path = "/"
 			} else {
-				log.Ctx(r.Context()).ErrorContext(r.Context(), "failed to open file", "error", err)
+				log.Ctx(r.Context()).ErrorContext(r.Context(), "failed to open file", slog.Any("error", err), slog.String("path", r.URL.Path))
 				// we don't write JSON here because we don't know what file type is expected
 				http.Error(w, "internal server error", http.StatusInternalServerError)
 				return
