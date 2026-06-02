@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import Dashboard from './Dashboard';
+import Dashboard, { whatsNewVersion } from './Dashboard';
 import { Router } from 'wouter';
 import * as api from '../api';
 import { setupDefaultApiMocks } from '../test/apiMocks';
@@ -841,6 +841,6 @@ describe('Dashboard', () => {
         await waitFor(() => {
             expect(screen.queryByText("What's New:")).not.toBeInTheDocument();
         });
-        expect(localStorage.getItem('whats_new_banner_version')).toBe('3');
+        expect(localStorage.getItem('whats_new_banner_version')).toBe(whatsNewVersion.toString());
     });
 });

@@ -12,6 +12,9 @@ import {
     type SummaryType
 } from '../utils/dashboardUtils';
 
+export const whatsNewVersion = 4;
+const whatsNewText = "Updated deficit vs arbitrage logic significantly improving savings. Added support for more zip codes.";
+const whatsNewLinkText = "Make sure to add your zip code in Settings!";
 
 const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
     const [location, navigate] = useLocation();
@@ -31,9 +34,6 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
-    const whatsNewVersion = 4;
-    const whatsNewText = "Updated deficit vs arbitrage logic significantly improving savings. Added support for more zip codes.";
-    const whatsNewLinkText = "Make sure to add your zip code in Settings!";
     const [showWhatsNew, setShowWhatsNew] = useState(false);
 
     useEffect(() => {
