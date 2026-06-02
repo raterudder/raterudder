@@ -31,8 +31,8 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
-    const whatsNewVersion = 3;
-    const whatsNewText = "Fixed possible standby drain, corrected arbitrage calculations, and switched to weather-based solar prediction.";
+    const whatsNewVersion = 4;
+    const whatsNewText = "Updated deficit vs arbitrage logic significantly improving savings. Added support for more zip codes.";
     const whatsNewLinkText = "Make sure to add your zip code in Settings!";
     const [showWhatsNew, setShowWhatsNew] = useState(false);
 
