@@ -283,7 +283,7 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     Loading day...
                 </div>
             )}
-            {error && <p className="error">{error}</p>}
+            {error && <p className="error" role="alert">{error}</p>}
 
             {!loading && !error && (
                 <>

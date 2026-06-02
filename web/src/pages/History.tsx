@@ -242,7 +242,7 @@ const History: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     Loading history...
                 </div>
             )}
-            {error && <div className="error">Error: {error}</div>}
+            {error && <div className="error" role="alert">Error: {error}</div>}
             {!loading && !error && data.length === 0 && (
                 <div className="no-data">No history found for this date.</div>
             )}
