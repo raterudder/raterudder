@@ -303,7 +303,7 @@ func (s *Server) Run(ctx context.Context) error {
 		Handler:           s.setupHandler(),
 		ReadTimeout:       15 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second, // Prevent slowloris attacks
-		WriteTimeout:      60 * time.Second,
+		WriteTimeout:      90 * time.Second,
 		IdleTimeout:       15 * time.Second,
 	}
 
