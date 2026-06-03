@@ -225,6 +225,7 @@ func TestOpenMeteoService(t *testing.T) {
 				assert.Equal(t, 25.0, res[0].ForecastHours[1].CloudCoverPercent) // (20+30)/2
 				assert.Equal(t, 40.0, res[0].ForecastHours[1].SnowDepthCM)       // (0.3+0.5)/2 * 100
 			}
+
 			assert.Len(t, res[1].ForecastHours, 0)
 			if assert.Len(t, res[2].ForecastHours, 2) {
 				assert.Equal(t, 250.5, res[2].ForecastHours[0].GHI)

@@ -308,10 +308,10 @@ func (s *OpenMeteo) Forecast(
 						hw.GTI = data.Hourly.TiltedRadiation[i]
 					}
 				}
-
 				w.ForecastHours = append(w.ForecastHours, hw)
 			}
 		}
+
 		weathers = append(weathers, w)
 	}
 
