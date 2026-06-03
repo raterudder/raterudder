@@ -251,9 +251,10 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "failed to get settings", http.StatusInternalServerError)
 		return
 	}
-	// Preserve existing auth status and encrypted credentials by default
+	// Preserve existing auth status, encrypted credentials, and update group by default
 	newSettings.ESSAuthStatus = existing.ESSAuthStatus
 	newSettings.EncryptedCredentials = existing.EncryptedCredentials
+	newSettings.UpdateGroup = existing.UpdateGroup
 
 	// Update Location if zip/country changed
 	if newSettings.PostalCode != "" && newSettings.CountryCode != "" {

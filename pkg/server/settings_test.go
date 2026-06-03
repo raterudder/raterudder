@@ -401,6 +401,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
 			DryRun:        false,
 			MinBatterySOC: 10.0,
+			UpdateGroup:   5,
 		}, types.CurrentSettingsVersion, nil)
 
 		srv := &Server{
@@ -424,14 +425,14 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		// Expect SetSettings with version
 		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
-			return s.MinBatterySOC == 80.0 && s.DryRun == true
+			return s.MinBatterySOC == 80.0 && s.DryRun == true && s.UpdateGroup == 5
 		}), types.CurrentSettingsVersion).Return(nil)
 
 		srv.handleUpdateSettings(w, req)
-		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
-
-		// Verify storage updated
-		assert.True(t, mockS.AssertExpectations(t))
+		if assert.Equal(t, http.StatusOK, w.Result().StatusCode) {
+			// Verify storage updated
+			assert.True(t, mockS.AssertExpectations(t))
+		}
 	})
 
 	t.Run("Auth Status - Not Logged In", func(t *testing.T) {
