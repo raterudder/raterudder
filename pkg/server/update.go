@@ -526,7 +526,7 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 			if newWeather != nil {
 				oldHoursMap := make(map[time.Time]types.HourlyWeather)
 				for _, hw := range oldWeather.ForecastHours {
-					oldHoursMap[hw.TSHourStart] = hw
+					oldHoursMap[hw.TSHourStart.UTC()] = hw
 				}
 
 				var hours []string
@@ -535,7 +535,7 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 				anySignificantChange := false
 
 				for _, newHw := range newWeather.ForecastHours {
-					if oldHw, found := oldHoursMap[newHw.TSHourStart]; found {
+					if oldHw, found := oldHoursMap[newHw.TSHourStart.UTC()]; found {
 						isDaylight := oldHw.GTI > 0 || newHw.GTI > 0
 						if isDaylight {
 							hours = append(hours, newHw.TSHourStart.In(timeLoc).Format("15:04"))
