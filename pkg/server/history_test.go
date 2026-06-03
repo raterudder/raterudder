@@ -68,6 +68,8 @@ func setupTestServer(t *testing.T) (http.Handler, *historyMockStorage, *mockStor
 	mockUMap := utility.NewMap(nil)
 	mockUMap.SetProvider(types.SiteIDNone, mockU)
 
+	testTime := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+
 	srv := &Server{
 		utilities:          mockUMap,
 		ess:                mockP,
@@ -80,6 +82,7 @@ func setupTestServer(t *testing.T) (http.Handler, *historyMockStorage, *mockStor
 		generalBurst:       30,
 		sensitiveRateLimit: rate.Every(time.Minute / 5),
 		sensitiveBurst:     5,
+		nowFunc:            func() time.Time { return testTime },
 	}
 
 	return srv.setupHandler(), mockS, mockSBase
@@ -87,6 +90,7 @@ func setupTestServer(t *testing.T) (http.Handler, *historyMockStorage, *mockStor
 
 func setupTestEnergyServer(t *testing.T) (http.Handler, *mockStorage) {
 	mockS := &mockStorage{}
+	testTime := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
 	srv := &Server{
 		storage:            mockS,
 		bypassAuth:         true,
@@ -96,6 +100,7 @@ func setupTestEnergyServer(t *testing.T) (http.Handler, *mockStorage) {
 		generalBurst:       30,
 		sensitiveRateLimit: rate.Every(time.Minute / 5),
 		sensitiveBurst:     5,
+		nowFunc:            func() time.Time { return testTime },
 	}
 	return srv.setupHandler(), mockS
 }
@@ -165,9 +170,9 @@ func TestHandleHistoryPrices(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-		now := time.Now()
-		assert.WithinDuration(t, now, mockS.lastEnd, time.Second)
-		assert.WithinDuration(t, now.Add(-24*time.Hour), mockS.lastStart, time.Second)
+		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		assert.Equal(t, now, mockS.lastEnd)
+		assert.Equal(t, now.Add(-24*time.Hour), mockS.lastStart)
 	})
 
 	t.Run("Validate 24 Hour Limit", func(t *testing.T) {
@@ -375,9 +380,9 @@ func TestHandleHistoryActions(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-		now := time.Now()
-		assert.WithinDuration(t, now, mockS.lastEnd, time.Second)
-		assert.WithinDuration(t, now.Add(-24*time.Hour), mockS.lastStart, time.Second)
+		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		assert.Equal(t, now, mockS.lastEnd)
+		assert.Equal(t, now.Add(-24*time.Hour), mockS.lastStart)
 	})
 
 	t.Run("Validate 24 Hour Limit", func(t *testing.T) {
@@ -598,9 +603,9 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-		now := time.Now()
-		assert.WithinDuration(t, now, mockS.lastEnd, time.Second)
-		assert.WithinDuration(t, now.Add(-50*time.Hour), mockS.lastStart, time.Second)
+		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		assert.Equal(t, now, mockS.lastEnd)
+		assert.Equal(t, now.Add(-50*time.Hour), mockS.lastStart)
 	})
 
 	t.Run("Validate 24 Hour Limit", func(t *testing.T) {
@@ -869,7 +874,7 @@ func TestHandleHistoryEnergy(t *testing.T) {
 	t.Run("Energy Cache Control Today", func(t *testing.T) {
 		handler, mockS := setupTestEnergyServer(t)
 		// End time is now, which overlaps with the current day, meaning cache should be short (5 mins)
-		now := time.Now()
+		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
 		targetDate := now.Format("2006-01-02")
 		today := truncateDay(now)
 
@@ -922,7 +927,7 @@ func TestHandleHistoryEnergy(t *testing.T) {
 	t.Run("Energy Cache Control Past", func(t *testing.T) {
 		handler, mockS := setupTestEnergyServer(t)
 		// End time is in the past, so data is final and can be cached longer (24 hrs)
-		past := time.Now().Add(-48 * time.Hour)
+		past := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
 		targetDate := past.Format("2006-01-02")
 		d, err := time.Parse("2006-01-02", targetDate)
 		require.NoError(t, err)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/controller"
@@ -45,9 +46,10 @@ type WeatherRes struct {
 
 // ForecastRes represents the complete response for the forecast endpoint, including histories.
 type ForecastRes struct {
-	Simulation    []controller.SimHour `json:"simulation"`
-	EnergyHistory []EnergyHistoryRes   `json:"energyHistory"`
-	PriceHistory  []PriceHistoryRes    `json:"priceHistory"`
+	Simulation      []controller.SimHour `json:"simulation"`
+	EnergyHistory   []EnergyHistoryRes   `json:"energyHistory"`
+	PriceHistory    []PriceHistoryRes    `json:"priceHistory"`
+	Solar1hForecast []WeatherRes         `json:"solar1hForecast,omitempty"`
 }
 
 func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
@@ -196,10 +198,53 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	var solar1hRes []WeatherRes
+
+	if settings.Location != nil && len(weatherHistory) > 0 {
+		timeLoc, err := time.LoadLocation(settings.Location.TimeZone)
+		if err == nil {
+			todayMidnight := time.Date(now.In(timeLoc).Year(), now.In(timeLoc).Month(), now.In(timeLoc).Day(), 0, 0, 0, 0, timeLoc)
+			tomorrowEnd := todayMidnight.AddDate(0, 0, 2)
+
+			solar1hMap := controller.CalculateWeatherSolar1h(ctx, now, energyHistory, weatherHistory, *settings.Location)
+
+			// Find matching forecast hours
+			var allForecastHours []types.HourlyWeather
+			for _, w := range weatherHistory {
+				allForecastHours = append(allForecastHours, w.ForecastHours...)
+			}
+			// Sort them chronologically
+			slices.SortFunc(allForecastHours, func(a, b types.HourlyWeather) int {
+				return a.TSHourStart.Compare(b.TSHourStart)
+			})
+
+			for _, hw := range allForecastHours {
+				if !hw.TSHourStart.Before(todayMidnight) && hw.TSHourStart.Before(tomorrowEnd) {
+					ts := hw.TSHourStart.Unix()
+					if ws, ok := solar1hMap[ts]; ok {
+						solar1hRes = append(solar1hRes, WeatherRes{
+							TSHourStart:              hw.TSHourStart,
+							ImprovedSolarGeneration:  ws.ImprovedSolar,
+							UnclippedSolarGeneration: ws.UnclippedSolar,
+							SnowDepthCM:              ws.SnowDepth,
+							TempFactor:               ws.TempFactor,
+							SnowFactor:               ws.SnowFactor,
+							TemperatureC:             hw.TemperatureC,
+							TemperatureCellC:         ws.TCell,
+							Irradiance:               ws.Irradiance,
+							SnowfallCM:               hw.SnowfallCM,
+						})
+					}
+				}
+			}
+		}
+	}
+
 	res := ForecastRes{
-		Simulation:    simHours,
-		EnergyHistory: energyRes,
-		PriceHistory:  priceRes,
+		Simulation:      simHours,
+		EnergyHistory:   energyRes,
+		PriceHistory:    priceRes,
+		Solar1hForecast: solar1hRes,
 	}
 
 	w.Header().Set("Cache-Control", "private, max-age=300")

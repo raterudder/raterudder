@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { fetchModeling } from '../api';
-import type { ForecastResponse, ModelingHour } from '../api';
+import { fetchModeling, fetchSettings } from '../api';
+import type { ForecastResponse, ModelingHour, Settings } from '../api';
 import { Switch } from '@base-ui/react/switch';
 import { Field } from '@base-ui/react/field';
 import {
@@ -200,6 +200,7 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs }: { dat
 
 const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
     const [rawModelingData, setRawModelingData] = useState<ForecastResponse | null>(null);
+    const [settings, setSettings] = useState<Settings | null>(null);
     const [loading, setLoading] = useState(true);
     const [nowMs] = useState(() => Date.now());
     const [error, setError] = useState<string | null>(null);
@@ -216,8 +217,12 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
         const loadRawData = async () => {
             setLoading(true);
             try {
-                const mod = await fetchModeling(siteID);
+                const [mod, sett] = await Promise.all([
+                    fetchModeling(siteID),
+                    fetchSettings(siteID),
+                ]);
                 setRawModelingData(mod);
+                setSettings(sett);
             } catch (error) {
                 setError(error instanceof Error ? error.message : 'Unknown error');
             } finally {
@@ -279,6 +284,18 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
         }));
     }, [rawModelingData, includeHistory]);
 
+    const todayStr = useMemo(() => new Date(nowMs).toDateString(), [nowMs]);
+
+    const todaySolar1h = useMemo(() => {
+        if (!rawModelingData?.solar1hForecast) return [];
+        return rawModelingData.solar1hForecast.filter((h: any) => new Date(h.tsHourStart).toDateString() === todayStr);
+    }, [rawModelingData, todayStr]);
+
+    const tomorrowSolar1h = useMemo(() => {
+        if (!rawModelingData?.solar1hForecast) return [];
+        return rawModelingData.solar1hForecast.filter((h: any) => new Date(h.tsHourStart).toDateString() !== todayStr);
+    }, [rawModelingData, todayStr]);
+
     if (loading) return (
         <div className="loading-screen">
             <span className="loading-spinner loading-spinner-large" aria-hidden="true"></span>
@@ -295,10 +312,10 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 <Field.Root className="form-group switch-group compact" style={{ margin: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', color: '#4b5563' }}>
                         <Switch.Root
-                            id="showHistoryToggle"
-                            checked={includeHistory}
-                            onCheckedChange={(checked) => setIncludeHistory(checked)}
-                            className="switch-root"
+                             id="showHistoryToggle"
+                             checked={includeHistory}
+                             onCheckedChange={(checked) => setIncludeHistory(checked)}
+                             className="switch-root"
                         >
                             <Switch.Thumb className="switch-thumb" />
                         </Switch.Root>
@@ -319,6 +336,80 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     <ForecastChart key={c.dataKey} data={data} config={c} isMobile={isMobile} showCurrentTime={includeHistory} nowMs={nowMs} />
                 ))}
             </div>
+            {settings?.release === 'staging' && (
+                <>
+                    {todaySolar1h.length > 0 && (
+                        <>
+                            <h3 style={{ marginTop: '2rem', marginBottom: '1rem', color: 'var(--on-surface)' }}>Today's Solar Forecast Comparison</h3>
+                            <div className="modeling-charts">
+                                <ForecastChart
+                                    data={todaySolar1h.map((h: any) => ({
+                                        ...h,
+                                        ts: h.tsHourStart,
+                                        batterySOCIfUsed: 0,
+                                        batteryReserveSOC: 0,
+                                        rawSolarKWH: h.unclippedSolarGeneration,
+                                        predictedSolarKWH: h.improvedSolarGeneration,
+                                        todaySolarTrend: 1.0,
+                                        avgHomeLoadKWH: 0,
+                                        gridChargeDollarsPerKWH: 0,
+                                        netLoadSolarKWH: 0,
+                                        solarOppDollarsPerKWH: 0,
+                                    }))}
+                                    config={{
+                                        title: 'Hourly Mean Self-Calculated Solar (1h Forecast) (kWh)',
+                                        dataKey: 'predictedSolarKWH',
+                                        color: '#f59e0b',
+                                        gradientId: 'solar1hGradToday',
+                                        unit: ' kWh',
+                                        additionalLines: [
+                                            { dataKey: 'rawSolarKWH', color: 'var(--text-muted)', strokeDasharray: '4 4' },
+                                        ],
+                                    }}
+                                    isMobile={isMobile}
+                                    showCurrentTime={false}
+                                    nowMs={nowMs}
+                                />
+                            </div>
+                        </>
+                    )}
+                    {tomorrowSolar1h.length > 0 && (
+                        <>
+                            <h3 style={{ marginTop: '2rem', marginBottom: '1rem', color: 'var(--on-surface)' }}>Tomorrow's Solar Forecast Comparison</h3>
+                            <div className="modeling-charts">
+                                <ForecastChart
+                                    data={tomorrowSolar1h.map((h: any) => ({
+                                        ...h,
+                                        ts: h.tsHourStart,
+                                        batterySOCIfUsed: 0,
+                                        batteryReserveSOC: 0,
+                                        rawSolarKWH: h.unclippedSolarGeneration,
+                                        predictedSolarKWH: h.improvedSolarGeneration,
+                                        todaySolarTrend: 1.0,
+                                        avgHomeLoadKWH: 0,
+                                        gridChargeDollarsPerKWH: 0,
+                                        netLoadSolarKWH: 0,
+                                        solarOppDollarsPerKWH: 0,
+                                    }))}
+                                    config={{
+                                        title: 'Hourly Mean Self-Calculated Solar (1h Forecast) (kWh)',
+                                        dataKey: 'predictedSolarKWH',
+                                        color: '#f59e0b',
+                                        gradientId: 'solar1hGradTomorrow',
+                                        unit: ' kWh',
+                                        additionalLines: [
+                                            { dataKey: 'rawSolarKWH', color: 'var(--text-muted)', strokeDasharray: '4 4' },
+                                        ],
+                                    }}
+                                    isMobile={isMobile}
+                                    showCurrentTime={false}
+                                    nowMs={nowMs}
+                                />
+                            </div>
+                        </>
+                    )}
+                </>
+            )}
         </div>
     );
 }

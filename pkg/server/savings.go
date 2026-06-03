@@ -17,7 +17,7 @@ import (
 func (s *Server) handleHistorySavings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	siteID := s.getSiteID(r)
-	start, end, err := parseTimeRange(r)
+	start, end, err := s.parseTimeRange(r)
 	if err != nil {
 		writeJSONError(w, fmt.Sprintf("invalid time range: %v", err), http.StatusBadRequest)
 		return

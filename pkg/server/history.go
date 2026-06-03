@@ -14,8 +14,9 @@ import (
 
 // HistoryEnergyRes represents the response for the history energy endpoint.
 type HistoryEnergyRes struct {
-	Energy  []types.EnergyStats `json:"energy"`
-	Weather []WeatherRes        `json:"weather"`
+	Energy          []types.EnergyStats `json:"energy"`
+	Weather         []WeatherRes        `json:"weather"`
+	Solar1hForecast []WeatherRes        `json:"solar1hForecast,omitempty"`
 }
 
 func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
@@ -26,7 +27,7 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 	dateStr := r.URL.Query().Get("date")
 	var targetDate time.Time
 	if dateStr == "" {
-		targetDate = time.Now()
+		targetDate = s.now()
 		dateStr = targetDate.Format("2006-01-02")
 	} else {
 		var err error
@@ -91,7 +92,7 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 	// Calculate Improved Solar
 	var improvedSolarMap map[int64]controller.WeatherSolar
 	if settings.Location != nil {
-		improvedSolarMap = controller.CalculateWeatherSolar(ctx, time.Now(), allStats, weatherHistory, *settings.Location)
+		improvedSolarMap = controller.CalculateWeatherSolar(ctx, s.now(), allStats, weatherHistory, *settings.Location)
 	}
 
 	// Filter results for the target day
@@ -127,14 +128,44 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var solar1hRes []WeatherRes
+
+	if settings.Location != nil && len(weatherHistory) > 0 {
+		solar1hMap := controller.CalculateWeatherSolar1h(ctx, s.now(), allStats, weatherHistory, *settings.Location)
+
+		for _, w := range weatherHistory {
+			if w.TSDayStart.Format("2006-01-02") != dateStr {
+				continue
+			}
+			for _, h := range w.ForecastHours {
+				ts := h.TSHourStart.Unix()
+				if ws, ok := solar1hMap[ts]; ok {
+					solar1hRes = append(solar1hRes, WeatherRes{
+						TSHourStart:              h.TSHourStart,
+						ImprovedSolarGeneration:  ws.ImprovedSolar,
+						UnclippedSolarGeneration: ws.UnclippedSolar,
+						SnowDepthCM:              ws.SnowDepth,
+						TempFactor:               ws.TempFactor,
+						SnowFactor:               ws.SnowFactor,
+						TemperatureC:             h.TemperatureC,
+						TemperatureCellC:         ws.TCell,
+						Irradiance:               ws.Irradiance,
+						SnowfallCM:               h.SnowfallCM,
+					})
+				}
+			}
+		}
+	}
+
 	res := HistoryEnergyRes{
-		Energy:  dayStats,
-		Weather: dayWeather,
+		Energy:          dayStats,
+		Weather:         dayWeather,
+		Solar1hForecast: solar1hRes,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	// Cache historical data for 24 hours if it's in the past
-	if end.Before(truncateDay(time.Now())) {
+	if end.Before(truncateDay(s.now())) {
 		w.Header().Set("Cache-Control", "private, max-age=86400")
 	} else {
 		w.Header().Set("Cache-Control", "private, max-age=300")
@@ -148,7 +179,7 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHistoryPrices(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	siteID := s.getSiteID(r)
-	start, end, err := parseTimeRange(r)
+	start, end, err := s.parseTimeRange(r)
 	if err != nil {
 		writeJSONError(w, fmt.Sprintf("invalid time range: %v", err), http.StatusBadRequest)
 		return
@@ -166,7 +197,7 @@ func (s *Server) handleHistoryPrices(w http.ResponseWriter, r *http.Request) {
 	// Set Cache-Control headers
 	// If the range ends before today (midnight today), cache for 24 hours.
 	// Otherwise, cache for 1 minute.
-	today := truncateDay(time.Now())
+	today := truncateDay(s.now())
 	if end.Before(today) {
 		w.Header().Set("Cache-Control", "private, max-age=86400")
 	} else {
@@ -181,7 +212,7 @@ func (s *Server) handleHistoryPrices(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHistoryActions(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	siteID := s.getSiteID(r)
-	start, end, err := parseTimeRange(r)
+	start, end, err := s.parseTimeRange(r)
 	if err != nil {
 		writeJSONError(w, fmt.Sprintf("invalid time range: %v", err), http.StatusBadRequest)
 		return
@@ -199,7 +230,7 @@ func (s *Server) handleHistoryActions(w http.ResponseWriter, r *http.Request) {
 	// Set Cache-Control headers
 	// If the range ends before today (midnight today), cache for 24 hours.
 	// Otherwise, cache for 1 minute.
-	today := truncateDay(time.Now())
+	today := truncateDay(s.now())
 	if end.Before(today) {
 		w.Header().Set("Cache-Control", "private, max-age=86400")
 	} else {
@@ -214,7 +245,7 @@ func (s *Server) handleHistoryActions(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHistoryActionsAndSavings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	siteID := s.getSiteID(r)
-	start, end, err := parseTimeRange(r)
+	start, end, err := s.parseTimeRange(r)
 	if err != nil {
 		writeJSONError(w, fmt.Sprintf("invalid time range: %v", err), http.StatusBadRequest)
 		return
@@ -275,7 +306,7 @@ func (s *Server) handleHistoryActionsAndSavings(w http.ResponseWriter, r *http.R
 	w.Header().Set("Content-Type", "application/json")
 
 	// Set Cache-Control
-	today := truncateDay(time.Now())
+	today := truncateDay(s.now())
 	if end.Before(today) {
 		w.Header().Set("Cache-Control", "private, max-age=86400")
 	} else {
@@ -287,14 +318,14 @@ func (s *Server) handleHistoryActionsAndSavings(w http.ResponseWriter, r *http.R
 	}
 }
 
-func parseTimeRange(r *http.Request) (time.Time, time.Time, error) {
+func (s *Server) parseTimeRange(r *http.Request) (time.Time, time.Time, error) {
 	q := r.URL.Query()
 	startStr := q.Get("start")
 	endStr := q.Get("end")
 
 	if startStr == "" || endStr == "" {
 		// Default to last 24 hours if not specified
-		end := time.Now()
+		end := s.now()
 		start := end.Add(-24 * time.Hour)
 		return start, end, nil
 	}

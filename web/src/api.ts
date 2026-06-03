@@ -546,6 +546,7 @@ export interface ForecastResponse {
     energyHistory: EnergyHistoryRes[];
     priceHistory: PriceHistoryRes[];
     weather: WeatherRes[];
+    solar1hForecast?: WeatherRes[];
 }
 export interface EnergyStats {
     tsHourStart: string;
@@ -568,6 +569,7 @@ export interface EnergyStats {
 export interface HistoryEnergyResponse {
     energy: EnergyStats[];
     weather: WeatherRes[];
+    solar1hForecast?: WeatherRes[];
 }
 
 export const fetchHistoryEnergy = async (date: Date, siteID?: string): Promise<HistoryEnergyResponse> => {
