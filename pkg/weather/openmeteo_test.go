@@ -193,6 +193,17 @@ func TestOpenMeteoService(t *testing.T) {
 					SnowDepth:              []float64{0.1, 0.3, 0.5, 0.7},
 					CloudCover:             []float64{10.0, 20.0, 30.0, 40.0},
 				},
+				Minutely15: struct {
+					Time                   []string  `json:"time"`
+					DirectNormalIrradiance []float64 `json:"direct_normal_irradiance"`
+					DiffuseRadiation       []float64 `json:"diffuse_radiation"`
+					Snowfall               []float64 `json:"snowfall"`
+				}{
+					Time:                   []string{startDay.Format("2006-01-02") + "T10:00", startDay.Format("2006-01-02") + "T10:15", startDay.Format("2006-01-02") + "T10:30", startDay.Format("2006-01-02") + "T10:45"},
+					DirectNormalIrradiance: []float64{100.0, 110.0, 120.0, 130.0},
+					DiffuseRadiation:       []float64{10.0, 15.0, 20.0, 25.0},
+					Snowfall:               []float64{0.0, 0.0, 0.0, 0.0},
+				},
 			}
 
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -225,6 +236,11 @@ func TestOpenMeteoService(t *testing.T) {
 				assert.Equal(t, 25.0, res[0].ForecastHours[1].CloudCoverPercent) // (20+30)/2
 				assert.Equal(t, 40.0, res[0].ForecastHours[1].SnowDepthCM)       // (0.3+0.5)/2 * 100
 			}
+			if assert.Len(t, res[0].ForecastHours[0].Forecast15m, 4) {
+				assert.Equal(t, 0, res[0].ForecastHours[0].Forecast15m[0].MinuteStart)
+				assert.Equal(t, 110.0, res[0].ForecastHours[0].Forecast15m[0].DNI) // takes index i+1 (2026-06-02T10:15 value for 10:00 start)
+				assert.Equal(t, 15.0, res[0].ForecastHours[0].Forecast15m[0].DHI)
+			}
 			assert.Len(t, res[1].ForecastHours, 0)
 			if assert.Len(t, res[2].ForecastHours, 2) {
 				assert.Equal(t, 250.5, res[2].ForecastHours[0].GHI)
@@ -232,6 +248,94 @@ func TestOpenMeteoService(t *testing.T) {
 				assert.Equal(t, 26.0, res[2].ForecastHours[0].TemperatureC)      // (25+27)/2
 				assert.Equal(t, 35.0, res[2].ForecastHours[0].CloudCoverPercent) // (30+40)/2
 				assert.Equal(t, 60.0, res[2].ForecastHours[0].SnowDepthCM)       // (0.5+0.7)/2 * 100
+			}
+		})
+
+		t.Run("success with missing 15m slots", func(t *testing.T) {
+			// In this scenario, the 15-minute slot for T10:15 is missing.
+			// The value for T10:00 (starts at 10:00, wants T10:15) should average
+			// the values of T10:00 (100.0) and T10:30 (120.0), resulting in 110.0.
+			mockBody := weatherForecastResponse{
+				Daily: struct {
+					Time    []string `json:"time"`
+					Sunrise []string `json:"sunrise"`
+					Sunset  []string `json:"sunset"`
+				}{
+					Time:    []string{startDay.Format("2006-01-02")},
+					Sunrise: []string{startDay.Format("2006-01-02") + "T06:00"},
+					Sunset:  []string{startDay.Format("2006-01-02") + "T18:00"},
+				},
+				Hourly: struct {
+					Time                   []string  `json:"time"`
+					ShortwaveRadiation     []float64 `json:"shortwave_radiation"`
+					DiffuseRadiation       []float64 `json:"diffuse_radiation"`
+					DirectNormalIrradiance []float64 `json:"direct_normal_irradiance"`
+					TiltedRadiation        []float64 `json:"global_tilted_irradiance"`
+					Temperature            []float64 `json:"temperature_2m"`
+					Snowfall               []float64 `json:"snowfall"`
+					SnowDepth              []float64 `json:"snow_depth"`
+					CloudCover             []float64 `json:"cloud_cover"`
+				}{
+					Time:                   []string{startDay.Format("2006-01-02") + "T10:00", startDay.Format("2006-01-02") + "T11:00"},
+					ShortwaveRadiation:     []float64{100.0, 100.0},
+					DiffuseRadiation:       []float64{10.0, 10.0},
+					DirectNormalIrradiance: []float64{100.0, 100.0},
+					Temperature:            []float64{20.0, 20.0},
+					Snowfall:               []float64{0.0, 0.0},
+					SnowDepth:              []float64{0.0, 0.0},
+					CloudCover:             []float64{10.0, 10.0},
+				},
+				Minutely15: struct {
+					Time                   []string  `json:"time"`
+					DirectNormalIrradiance []float64 `json:"direct_normal_irradiance"`
+					DiffuseRadiation       []float64 `json:"diffuse_radiation"`
+					Snowfall               []float64 `json:"snowfall"`
+				}{
+					// Missing T10:15
+					Time:                   []string{startDay.Format("2006-01-02") + "T10:00", startDay.Format("2006-01-02") + "T10:30", startDay.Format("2006-01-02") + "T10:45", startDay.Format("2006-01-02") + "T11:00"},
+					DirectNormalIrradiance: []float64{100.0, 120.0, 130.0, 140.0},
+					DiffuseRadiation:       []float64{10.0, 20.0, 30.0, 40.0},
+					Snowfall:               []float64{0.0, 0.0, 0.0, 0.0},
+				},
+			}
+
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(mockBody)
+			}))
+			defer ts.Close()
+
+			forecastURL, parseErr := url.Parse(ts.URL + "/v1/forecast")
+			require.NoError(t, parseErr)
+			s := &OpenMeteo{ForecastURL: forecastURL, HTTPClient: ts.Client()}
+			res, err := s.Forecast(context.Background(), types.SiteLocation{Latitude: 34.0, Longitude: -118.0, TimeZone: timezone}, startDay, endDay)
+
+			require.NoError(t, err)
+			assert.Len(t, res, 3)
+
+			if assert.Len(t, res[0].ForecastHours, 2) {
+				hour := res[0].ForecastHours[0]
+				if assert.Len(t, hour.Forecast15m, 4) {
+					// 10:00 interval (wants T10:15). Since T10:15 is missing, averages T10:00 (100) and T10:30 (120) -> 110.0
+					assert.Equal(t, 0, hour.Forecast15m[0].MinuteStart)
+					assert.Equal(t, 110.0, hour.Forecast15m[0].DNI)
+					assert.Equal(t, 15.0, hour.Forecast15m[0].DHI)
+
+					// 10:15 interval (wants T10:30). Present -> 120.0
+					assert.Equal(t, 15, hour.Forecast15m[1].MinuteStart)
+					assert.Equal(t, 120.0, hour.Forecast15m[1].DNI)
+					assert.Equal(t, 20.0, hour.Forecast15m[1].DHI)
+
+					// 10:30 interval (wants T10:45). Present -> 130.0
+					assert.Equal(t, 30, hour.Forecast15m[2].MinuteStart)
+					assert.Equal(t, 130.0, hour.Forecast15m[2].DNI)
+					assert.Equal(t, 30.0, hour.Forecast15m[2].DHI)
+
+					// 10:45 interval (wants T11:00). Present -> 140.0
+					assert.Equal(t, 45, hour.Forecast15m[3].MinuteStart)
+					assert.Equal(t, 140.0, hour.Forecast15m[3].DNI)
+					assert.Equal(t, 40.0, hour.Forecast15m[3].DHI)
+				}
 			}
 		})
 

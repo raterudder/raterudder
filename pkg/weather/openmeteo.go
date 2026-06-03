@@ -115,6 +115,12 @@ type weatherForecastResponse struct {
 		SnowDepth              []float64 `json:"snow_depth"`
 		CloudCover             []float64 `json:"cloud_cover"`
 	} `json:"hourly"`
+	Minutely15 struct {
+		Time                   []string  `json:"time"`
+		DirectNormalIrradiance []float64 `json:"direct_normal_irradiance"`
+		DiffuseRadiation       []float64 `json:"diffuse_radiation"`
+		Snowfall               []float64 `json:"snowfall"`
+	} `json:"minutely_15"`
 }
 
 // Forecast fetches the weather forecast data for the specified date range.
@@ -157,6 +163,7 @@ func (s *OpenMeteo) Forecast(
 		q.Set("azimuth", fmt.Sprintf("%f", omAzimuth))
 	}
 	q.Set("hourly", strings.Join(hourly, ","))
+	q.Set("minutely_15", "direct_normal_irradiance,diffuse_radiation,snowfall")
 	q.Set("daily", "sunrise,sunset")
 	q.Set("timezone", timezone)
 	q.Set("start_date", startDateStr)
@@ -226,6 +233,26 @@ func (s *OpenMeteo) Forecast(
 	if loc.SolarTilt > 0 && len(data.Hourly.Time) != len(data.Hourly.TiltedRadiation) {
 		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.Int("timeCount", len(data.Hourly.Time)), slog.Int("tiltedRadiationCount", len(data.Hourly.TiltedRadiation)))
 		return nil, fmt.Errorf("hourly data mismatch: %d times, %d tilted radiation", len(data.Hourly.Time), len(data.Hourly.TiltedRadiation))
+	}
+	if len(data.Minutely15.Time) > 0 {
+		if len(data.Minutely15.Time) != len(data.Minutely15.DirectNormalIrradiance) {
+			log.Ctx(ctx).ErrorContext(ctx, "open-meteo: minutely_15 data mismatch", slog.Int("timeCount", len(data.Minutely15.Time)), slog.Int("dniCount", len(data.Minutely15.DirectNormalIrradiance)))
+			return nil, fmt.Errorf("minutely_15 data mismatch: %d times, %d dni", len(data.Minutely15.Time), len(data.Minutely15.DirectNormalIrradiance))
+		}
+		if len(data.Minutely15.Time) != len(data.Minutely15.DiffuseRadiation) {
+			log.Ctx(ctx).ErrorContext(ctx, "open-meteo: minutely_15 data mismatch", slog.Int("timeCount", len(data.Minutely15.Time)), slog.Int("dhiCount", len(data.Minutely15.DiffuseRadiation)))
+			return nil, fmt.Errorf("minutely_15 data mismatch: %d times, %d dhi", len(data.Minutely15.Time), len(data.Minutely15.DiffuseRadiation))
+		}
+		if len(data.Minutely15.Time) != len(data.Minutely15.Snowfall) {
+			log.Ctx(ctx).ErrorContext(ctx, "open-meteo: minutely_15 data mismatch", slog.Int("timeCount", len(data.Minutely15.Time)), slog.Int("snowfallCount", len(data.Minutely15.Snowfall)))
+			return nil, fmt.Errorf("minutely_15 data mismatch: %d times, %d snowfall", len(data.Minutely15.Time), len(data.Minutely15.Snowfall))
+		}
+	}
+
+	// Build a map of 15-minute time strings to their index in data.Minutely15.Time
+	minutely15IdxMap := make(map[string]int)
+	for idx15, tStr15 := range data.Minutely15.Time {
+		minutely15IdxMap[tStr15] = idx15
 	}
 
 	// Parse the response into daily types.Weather structs
@@ -309,9 +336,82 @@ func (s *OpenMeteo) Forecast(
 					}
 				}
 
+				// Populate 15-minute nested forecasts if minutely_15 data is present
+				if len(data.Minutely15.Time) > 0 {
+					get15mVal := func(targetTime time.Time) (float64, float64, float64, bool) {
+						tStr15 := targetTime.Format("2006-01-02T15:04")
+						if idx, ok := minutely15IdxMap[tStr15]; ok {
+							if idx < len(data.Minutely15.DirectNormalIrradiance) {
+								return data.Minutely15.DirectNormalIrradiance[idx], data.Minutely15.DiffuseRadiation[idx], data.Minutely15.Snowfall[idx], true
+							}
+						}
+
+						// If missing, look for the closest valid points before and after targetTime (up to 1 hour range)
+						var prevDNI, prevDHI, prevSnow float64
+						var hasPrev bool
+						for d := 1; d <= 4; d++ {
+							pStr := targetTime.Add(time.Duration(-d*15) * time.Minute).Format("2006-01-02T15:04")
+							if idx, ok := minutely15IdxMap[pStr]; ok {
+								if idx < len(data.Minutely15.DirectNormalIrradiance) {
+									prevDNI = data.Minutely15.DirectNormalIrradiance[idx]
+									prevDHI = data.Minutely15.DiffuseRadiation[idx]
+									prevSnow = data.Minutely15.Snowfall[idx]
+									hasPrev = true
+									break
+								}
+							}
+						}
+
+						var nextDNI, nextDHI, nextSnow float64
+						var hasNext bool
+						for d := 1; d <= 4; d++ {
+							nStr := targetTime.Add(time.Duration(d*15) * time.Minute).Format("2006-01-02T15:04")
+							if idx, ok := minutely15IdxMap[nStr]; ok {
+								if idx < len(data.Minutely15.DirectNormalIrradiance) {
+									nextDNI = data.Minutely15.DirectNormalIrradiance[idx]
+									nextDHI = data.Minutely15.DiffuseRadiation[idx]
+									nextSnow = data.Minutely15.Snowfall[idx]
+									hasNext = true
+									break
+								}
+							}
+						}
+
+						if hasPrev && hasNext {
+							log.Ctx(ctx).WarnContext(ctx, "open-meteo: missing 15m slot, interpolating from adjacent slots", slog.String("targetTime", targetTime.Format(time.RFC3339)))
+							return (prevDNI + nextDNI) / 2.0, (prevDHI + nextDHI) / 2.0, (prevSnow + nextSnow) / 2.0, true
+						}
+						if hasPrev {
+							log.Ctx(ctx).WarnContext(ctx, "open-meteo: missing 15m slot, falling back to preceding slot", slog.String("targetTime", targetTime.Format(time.RFC3339)))
+							return prevDNI, prevDHI, prevSnow, true
+						}
+						if hasNext {
+							log.Ctx(ctx).WarnContext(ctx, "open-meteo: missing 15m slot, falling back to succeeding slot", slog.String("targetTime", targetTime.Format(time.RFC3339)))
+							return nextDNI, nextDHI, nextSnow, true
+						}
+						log.Ctx(ctx).WarnContext(ctx, "open-meteo: missing 15m slot and no adjacent slots found within 1 hour", slog.String("targetTime", targetTime.Format(time.RFC3339)))
+						return 0, 0, 0, false
+					}
+
+					dni0, dhi0, snow0, ok0 := get15mVal(t.Add(15 * time.Minute))
+					dni15, dhi15, snow15, ok15 := get15mVal(t.Add(30 * time.Minute))
+					dni30, dhi30, snow30, ok30 := get15mVal(t.Add(45 * time.Minute))
+					dni45, dhi45, snow45, ok45 := get15mVal(t.Add(60 * time.Minute))
+
+					if ok0 || ok15 || ok30 || ok45 {
+						hw.Forecast15m = []types.Weather15m{
+							{MinuteStart: 0, DNI: dni0, DHI: dhi0, SnowfallCM: snow0},
+							{MinuteStart: 15, DNI: dni15, DHI: dhi15, SnowfallCM: snow15},
+							{MinuteStart: 30, DNI: dni30, DHI: dhi30, SnowfallCM: snow30},
+							{MinuteStart: 45, DNI: dni45, DHI: dhi45, SnowfallCM: snow45},
+						}
+					}
+				}
+
 				w.ForecastHours = append(w.ForecastHours, hw)
 			}
 		}
+
 		weathers = append(weathers, w)
 	}
 

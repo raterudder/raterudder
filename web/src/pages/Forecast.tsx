@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { fetchModeling } from '../api';
-import type { ForecastResponse, ModelingHour } from '../api';
+import { fetchModeling, fetchSettings } from '../api';
+import type { ForecastResponse, ModelingHour, Settings } from '../api';
 import { Switch } from '@base-ui/react/switch';
 import { Field } from '@base-ui/react/field';
 import {
@@ -200,6 +200,7 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs }: { dat
 
 const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
     const [rawModelingData, setRawModelingData] = useState<ForecastResponse | null>(null);
+    const [settings, setSettings] = useState<Settings | null>(null);
     const [loading, setLoading] = useState(true);
     const [nowMs] = useState(() => Date.now());
     const [error, setError] = useState<string | null>(null);
@@ -216,8 +217,12 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
         const loadRawData = async () => {
             setLoading(true);
             try {
-                const mod = await fetchModeling(siteID);
+                const [mod, sett] = await Promise.all([
+                    fetchModeling(siteID),
+                    fetchSettings(siteID),
+                ]);
                 setRawModelingData(mod);
+                setSettings(sett);
             } catch (error) {
                 setError(error instanceof Error ? error.message : 'Unknown error');
             } finally {
@@ -319,6 +324,75 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     <ForecastChart key={c.dataKey} data={data} config={c} isMobile={isMobile} showCurrentTime={includeHistory} nowMs={nowMs} />
                 ))}
             </div>
+            {settings?.release === 'staging' &&
+              ((rawModelingData?.solar15mForecast && rawModelingData.solar15mForecast.length > 0) ||
+               (rawModelingData?.solar1hForecast && rawModelingData.solar1hForecast.length > 0)) && (
+                <>
+                    <h3 style={{ marginTop: '2rem', marginBottom: '1rem', color: 'var(--on-surface)' }}>Tomorrow's Solar Forecast Comparison</h3>
+                    <div className="modeling-charts">
+                        {rawModelingData?.solar1hForecast && rawModelingData.solar1hForecast.length > 0 && (
+                            <ForecastChart
+                                data={rawModelingData.solar1hForecast.map((h: any) => ({
+                                    ...h,
+                                    ts: h.tsHourStart,
+                                    batterySOCIfUsed: 0,
+                                    batteryReserveSOC: 0,
+                                    rawSolarKWH: h.unclippedSolarGeneration,
+                                    predictedSolarKWH: h.improvedSolarGeneration,
+                                    todaySolarTrend: 1.0,
+                                    avgHomeLoadKWH: 0,
+                                    gridChargeDollarsPerKWH: 0,
+                                    netLoadSolarKWH: 0,
+                                    solarOppDollarsPerKWH: 0,
+                                }))}
+                                config={{
+                                    title: 'Hourly Mean Self-Calculated Solar (1h Forecast) (kWh)',
+                                    dataKey: 'predictedSolarKWH',
+                                    color: '#f59e0b',
+                                    gradientId: 'solar1hGrad',
+                                    unit: ' kWh',
+                                    additionalLines: [
+                                        { dataKey: 'rawSolarKWH', color: 'var(--text-muted)', strokeDasharray: '4 4' },
+                                    ],
+                                }}
+                                isMobile={isMobile}
+                                showCurrentTime={false}
+                                nowMs={nowMs}
+                            />
+                        )}
+                        {rawModelingData?.solar15mForecast && rawModelingData.solar15mForecast.length > 0 && (
+                            <ForecastChart
+                                data={rawModelingData.solar15mForecast.map((h: any) => ({
+                                    ...h,
+                                    ts: h.tsHourStart,
+                                    batterySOCIfUsed: 0,
+                                    batteryReserveSOC: 0,
+                                    rawSolarKWH: h.unclippedSolarGeneration,
+                                    predictedSolarKWH: h.improvedSolarGeneration,
+                                    todaySolarTrend: 1.0,
+                                    avgHomeLoadKWH: 0,
+                                    gridChargeDollarsPerKWH: 0,
+                                    netLoadSolarKWH: 0,
+                                    solarOppDollarsPerKWH: 0,
+                                }))}
+                                config={{
+                                    title: '15-Minute Self-Calculated Solar (15m Forecast) (kWh)',
+                                    dataKey: 'predictedSolarKWH',
+                                    color: '#3b82f6',
+                                    gradientId: 'solar15mGrad',
+                                    unit: ' kWh',
+                                    additionalLines: [
+                                        { dataKey: 'rawSolarKWH', color: 'var(--text-muted)', strokeDasharray: '4 4' },
+                                    ],
+                                }}
+                                isMobile={isMobile}
+                                showCurrentTime={false}
+                                nowMs={nowMs}
+                            />
+                        )}
+                    </div>
+                </>
+            )}
         </div>
     );
 }

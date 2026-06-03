@@ -5,7 +5,7 @@ import "time"
 const (
 	CurrentEnergyStatsVersion  = 3
 	CurrentPriceHistoryVersion = 2
-	CurrentWeatherVersion      = 4
+	CurrentWeatherVersion      = 5
 
 	SiteIDNone = "none"
 )
@@ -207,15 +207,24 @@ type SiteLocation struct {
 
 // HourlyWeather represents the solar forecast data for a specific hour.
 type HourlyWeather struct {
-	TSHourStart       time.Time `json:"tsHourStart"`
-	GHI               float64   `json:"ghi,omitempty"`               // Shortwave radiation in W/m²
-	GTI               float64   `json:"gti,omitempty"`               // Global tilted irradiance in W/m²
-	DHI               float64   `json:"dhi,omitempty"`               // Diffuse radiation in W/m²
-	DNI               float64   `json:"dni,omitempty"`               // Direct normal irradiance in W/m²
-	TemperatureC      float64   `json:"temperatureC,omitempty"`      // Temperature in °C
-	SnowfallCM        float64   `json:"snowfallCM,omitempty"`        // Snowfall in cm
-	SnowDepthCM       float64   `json:"snowDepthCM,omitempty"`       // Snow depth in cm
-	CloudCoverPercent float64   `json:"cloudCoverPercent,omitempty"` // Cloud cover
+	TSHourStart       time.Time    `json:"tsHourStart"`
+	GHI               float64      `json:"ghi,omitempty"`               // Shortwave radiation in W/m²
+	GTI               float64      `json:"gti,omitempty"`               // Global tilted irradiance in W/m²
+	DHI               float64      `json:"dhi,omitempty"`               // Diffuse radiation in W/m²
+	DNI               float64      `json:"dni,omitempty"`               // Direct normal irradiance in W/m²
+	TemperatureC      float64      `json:"temperatureC,omitempty"`      // Temperature in °C
+	SnowfallCM        float64      `json:"snowfallCM,omitempty"`        // Snowfall in cm
+	SnowDepthCM       float64      `json:"snowDepthCM,omitempty"`       // Snow depth in cm
+	CloudCoverPercent float64      `json:"cloudCoverPercent,omitempty"` // Cloud cover
+	Forecast15m       []Weather15m `json:"forecast15m,omitempty"`
+}
+
+// Weather15m represents the 15-minute solar forecast data.
+type Weather15m struct {
+	MinuteStart int     `json:"minuteStart"`          // Minute offset from hour start (e.g. 0, 15, 30, 45)
+	DHI         float64 `json:"dhi,omitempty"`        // Diffuse horizontal irradiance in W/m²
+	DNI         float64 `json:"dni,omitempty"`        // Direct normal irradiance in W/m²
+	SnowfallCM  float64 `json:"snowfallCM,omitempty"` // Snowfall in cm
 }
 
 // Weather represents the daily weather forecast data.

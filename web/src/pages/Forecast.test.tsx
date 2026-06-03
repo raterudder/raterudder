@@ -6,7 +6,7 @@ import * as api from '../api';
 import { setupDefaultApiMocks } from '../test/apiMocks';
 import type { ModelingHour } from '../api';
 
-const { fetchModeling } = api;
+const { fetchModeling, fetchSettings } = api;
 
 vi.mock('../api');
 
@@ -153,4 +153,38 @@ describe('Forecast Page', () => {
         });
     });
 
+    it('renders tomorrow comparison charts when solar1hForecast or solar15mForecast is present', async () => {
+        (fetchSettings as any).mockResolvedValue({ release: 'staging' });
+        const data = makeSimHours();
+        (fetchModeling as any).mockResolvedValue({
+            simulation: data,
+            energyHistory: [],
+            priceHistory: [],
+            weather: [],
+            solar1hForecast: [
+                {
+                    tsHourStart: '2026-02-12T12:00:00Z',
+                    improvedSolarGeneration: 1.5,
+                    unclippedSolarGeneration: 1.8,
+                }
+            ],
+            solar15mForecast: [
+                {
+                    tsHourStart: '2026-02-12T12:00:00Z',
+                    improvedSolarGeneration: 1.6,
+                    unclippedSolarGeneration: 1.9,
+                }
+            ]
+        });
+
+        renderForecast();
+
+        await waitFor(() => {
+            expect(screen.getByText("Tomorrow's Solar Forecast Comparison")).toBeInTheDocument();
+            expect(screen.getByText('Hourly Mean Self-Calculated Solar (1h Forecast) (kWh)')).toBeInTheDocument();
+            expect(screen.getByText('15-Minute Self-Calculated Solar (15m Forecast) (kWh)')).toBeInTheDocument();
+        });
+    });
+
 });
+
