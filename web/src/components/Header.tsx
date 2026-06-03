@@ -65,6 +65,7 @@ const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSite
 
                 {loggedIn && (
                     <button
+                        type="button"
                         className={`mobile-menu-toggle ${isMenuOpen ? 'open' : ''}`}
                         onClick={toggleMenu}
                         aria-label={isMenuOpen ? "Close navigation menu" : "Open navigation menu"}
@@ -95,7 +96,7 @@ const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSite
 
                     <div className="header-right">
                         {loggedIn ? (
-                            <button onClick={() => { onLogout(); setIsMenuOpen(false); }} className="logout-link">Log Out</button>
+                            <button type="button" onClick={() => { onLogout(); setIsMenuOpen(false); }} className="logout-link">Log Out</button>
                         ) : (
                             <Link to="/login" className="login-link" onClick={() => setIsMenuOpen(false)}>
                                 <span className="hide-on-mobile">Log In / Sign Up</span>
