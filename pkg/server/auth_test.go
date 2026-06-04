@@ -206,7 +206,7 @@ func TestAuthMiddleware(t *testing.T) {
 		req := createReq("GET", "/api/test", nil, cookie)
 
 		// Mock GetUser
-		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+		mocks.On("GetUser", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), "google:user@example.com") /* Ensure a non-nil valid context is passed */.Return(types.User{
 			ID:    "google:user@example.com",
 			Email: "user@example.com",
 			Sites: []types.UserSite{{ID: "site1"}, {ID: "site2"}},
@@ -226,14 +226,14 @@ func TestAuthMiddleware(t *testing.T) {
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("GET", "/api/test?siteID=site1", nil, cookie)
 
-		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+		mocks.On("GetUser", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), "google:user@example.com") /* Ensure a non-nil valid context is passed */.Return(types.User{
 			ID:    "google:user@example.com",
 			Email: "user@example.com",
 			Sites: []types.UserSite{{ID: "site1"}, {ID: "site2"}},
 			Admin: false,
 		}, nil).Once()
 
-		mocks.On("GetSite", mock.Anything, "site1").Return(types.Site{
+		mocks.On("GetSite", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), "site1") /* Ensure a non-nil valid context is passed */.Return(types.Site{
 			ID: "site1",
 			Permissions: []types.SitePermissions{
 				{UserID: "google:user@example.com"},
@@ -257,14 +257,14 @@ func TestAuthMiddleware(t *testing.T) {
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("GET", "/api/test?siteID=site3", nil, cookie)
 
-		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+		mocks.On("GetUser", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), "google:user@example.com") /* Ensure a non-nil valid context is passed */.Return(types.User{
 			ID:    "google:user@example.com",
 			Email: "user@example.com",
 			Sites: []types.UserSite{{ID: "site1"}, {ID: "site2"}},
 		}, nil).Once()
 
 		// Permission check fails
-		mocks.On("GetSite", mock.Anything, "site3").Return(types.Site{
+		mocks.On("GetSite", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), "site3") /* Ensure a non-nil valid context is passed */.Return(types.Site{
 			ID:          "site3",
 			Permissions: []types.SitePermissions{},
 		}, nil).Once()
@@ -286,7 +286,7 @@ func TestAuthMiddleware(t *testing.T) {
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("GET", "/api/test?siteID=site3", nil, cookie)
 
-		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+		mocks.On("GetUser", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), "google:user@example.com") /* Ensure a non-nil valid context is passed */.Return(types.User{
 			ID:    "google:user@example.com",
 			Email: "user@example.com",
 			Sites: []types.UserSite{{ID: "site1"}, {ID: "site2"}},
@@ -294,7 +294,7 @@ func TestAuthMiddleware(t *testing.T) {
 		}, nil).Once()
 
 		// Permission check typically fails because they aren't explicit here
-		mocks.On("GetSite", mock.Anything, "site3").Return(types.Site{
+		mocks.On("GetSite", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), "site3") /* Ensure a non-nil valid context is passed */.Return(types.Site{
 			ID:          "site3",
 			Permissions: []types.SitePermissions{},
 		}, nil).Once()
@@ -315,13 +315,13 @@ func TestAuthMiddleware(t *testing.T) {
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("POST", "/api/test", map[string]string{"siteID": "site2"}, cookie)
 
-		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+		mocks.On("GetUser", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), "google:user@example.com") /* Ensure a non-nil valid context is passed */.Return(types.User{
 			ID:    "google:user@example.com",
 			Email: "user@example.com",
 			Sites: []types.UserSite{{ID: "site1"}, {ID: "site2"}},
 		}, nil).Once()
 
-		mocks.On("GetSite", mock.Anything, "site2").Return(types.Site{
+		mocks.On("GetSite", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), "site2") /* Ensure a non-nil valid context is passed */.Return(types.Site{
 			ID: "site2",
 			Permissions: []types.SitePermissions{
 				{UserID: "google:user@example.com"},
@@ -345,13 +345,13 @@ func TestAuthMiddleware(t *testing.T) {
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("GET", "/api/test", nil, cookie)
 
-		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+		mocks.On("GetUser", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), "google:user@example.com") /* Ensure a non-nil valid context is passed */.Return(types.User{
 			ID:    "google:user@example.com",
 			Email: "user@example.com",
 			Sites: []types.UserSite{{ID: "site1"}},
 		}, nil).Once()
 
-		mocks.On("GetSite", mock.Anything, "site1").Return(types.Site{
+		mocks.On("GetSite", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), "site1") /* Ensure a non-nil valid context is passed */.Return(types.Site{
 			ID: "site1",
 			Permissions: []types.SitePermissions{
 				{UserID: "google:user@example.com"},
@@ -375,7 +375,7 @@ func TestAuthMiddleware(t *testing.T) {
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("POST", "/api/auth/logout", nil, cookie)
 
-		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+		mocks.On("GetUser", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), "google:user@example.com") /* Ensure a non-nil valid context is passed */.Return(types.User{
 			ID:    "google:user@example.com",
 			Email: "user@example.com",
 			Sites: []types.UserSite{{ID: "site1"}, {ID: "site2"}},
@@ -453,7 +453,7 @@ func TestAuthMiddleware(t *testing.T) {
 		req := createReq("POST", "/api/join", map[string]string{"inviteCode": "abc", "joinSiteID": "site1"}, cookie)
 
 		// Mock GetUser returning ErrUserNotFound
-		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{}, storage.ErrUserNotFound).Once()
+		mocks.On("GetUser", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), "google:user@example.com") /* Ensure a non-nil valid context is passed */.Return(types.User{}, storage.ErrUserNotFound).Once()
 
 		server.authMiddleware(testHandler).ServeHTTP(w, req)
 
@@ -475,7 +475,7 @@ func TestAuthMiddleware(t *testing.T) {
 		req := createReq("POST", "/api/join", map[string]string{"inviteCode": "abc", "joinSiteID": "site1"}, cookie)
 
 		// Mock GetUser returning a generic error
-		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{}, assert.AnError).Once()
+		mocks.On("GetUser", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), "google:user@example.com") /* Ensure a non-nil valid context is passed */.Return(types.User{}, assert.AnError).Once()
 
 		server.authMiddleware(testHandler).ServeHTTP(w, req)
 
@@ -495,7 +495,7 @@ func TestAuthMiddleware(t *testing.T) {
 		req := createReq("GET", "/api/auth/status", nil, cookie)
 
 		// Mock GetUser returning ErrUserNotFound
-		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{}, storage.ErrUserNotFound).Once()
+		mocks.On("GetUser", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), "google:user@example.com") /* Ensure a non-nil valid context is passed */.Return(types.User{}, storage.ErrUserNotFound).Once()
 
 		server.authMiddleware(testHandler).ServeHTTP(w, req)
 
@@ -516,7 +516,7 @@ func TestAuthMiddleware(t *testing.T) {
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("GET", "/api/test?siteID=ALL", nil, cookie)
 
-		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+		mocks.On("GetUser", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), "google:user@example.com") /* Ensure a non-nil valid context is passed */.Return(types.User{
 			ID:    "google:user@example.com",
 			Email: "user@example.com",
 			Sites: []types.UserSite{{ID: "site1"}, {ID: "site2"}},
@@ -543,7 +543,7 @@ func TestAuthMiddleware(t *testing.T) {
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("GET", "/api/test?siteID=ALL", nil, cookie)
 
-		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+		mocks.On("GetUser", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), "google:user@example.com") /* Ensure a non-nil valid context is passed */.Return(types.User{
 			ID:    "google:user@example.com",
 			Email: "user@example.com",
 			Sites: []types.UserSite{{ID: "site1"}},
@@ -570,13 +570,13 @@ func TestAuthMiddleware(t *testing.T) {
 		cookie := &http.Cookie{Name: authTokenCookie, Value: validToken}
 		req := createReq("GET", "/api/test", nil, cookie)
 
-		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+		mocks.On("GetUser", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), "google:user@example.com") /* Ensure a non-nil valid context is passed */.Return(types.User{
 			ID:    "google:user@example.com",
 			Email: "user@example.com",
 			Sites: []types.UserSite{{ID: "site1"}},
 		}, nil).Once()
 
-		mocks.On("GetSite", mock.Anything, "site1").Return(types.Site{
+		mocks.On("GetSite", mock.MatchedBy(func(ctx context.Context) bool { return ctx != nil }), "site1") /* Ensure a non-nil valid context is passed */.Return(types.Site{
 			ID:          "site1",
 			Permissions: []types.SitePermissions{{UserID: "google:user@example.com"}},
 		}, nil).Once()
