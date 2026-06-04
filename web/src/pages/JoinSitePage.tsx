@@ -85,7 +85,7 @@ const JoinPage: React.FC<JoinPageProps> = ({ onJoinSuccess }) => {
                         />
                     </Field.Root>
 
-                    {error && <div className="join-error">{error}</div>}
+                    {error && <div className="join-error" role="alert">{error}</div>}
 
                     <p className="join-consent">
                         By joining, you agree to our{' '}
