@@ -763,6 +763,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                             id="minArbitrage"
                             type="number"
                             step="0.01"
+                            min="0"
                             value={settings.minArbitrageDifferenceDollarsPerKWH}
                             onChange={(e) => handleChange('minArbitrageDifferenceDollarsPerKWH', parseFloat(e.target.value))}
                         />
@@ -775,6 +776,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                             id="minDeficit"
                             type="number"
                             step="0.01"
+                            min="0"
                             value={settings.minDeficitPriceDifferenceDollarsPerKWH}
                             onChange={(e) => handleChange('minDeficitPriceDifferenceDollarsPerKWH', parseFloat(e.target.value))}
                         />
@@ -976,6 +978,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                 id="alwaysChargeUnder"
                                 type="number"
                                 step="0.01"
+                                min="0"
                                 value={settings.alwaysChargeUnderDollarsPerKWH}
                                 onChange={(e) => handleChange('alwaysChargeUnderDollarsPerKWH', parseFloat(e.target.value))}
                             />
@@ -985,6 +988,32 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                     Are you sure you want to force charging the batteries from the grid when it's below this price?
                                 </div>
                             )}
+                        </Field.Root>
+
+                        <Field.Root className="form-group">
+                            <Field.Label htmlFor="minStartChargeMinutes">Minimum Start Charge Duration (minutes)</Field.Label>
+                            <Input
+                                id="minStartChargeMinutes"
+                                type="number"
+                                step="1"
+                                min="1"
+                                value={settings.minStartChargeMinutes}
+                                onChange={(e) => handleChange('minStartChargeMinutes', parseInt(e.target.value, 10))}
+                            />
+                            <Field.Description>Minimum duration in minutes of charging time needed to start charging.</Field.Description>
+                        </Field.Root>
+
+                        <Field.Root className="form-group">
+                            <Field.Label htmlFor="peakSurvivalBufferMinutes">Peak Survival Buffer (minutes)</Field.Label>
+                            <Input
+                                id="peakSurvivalBufferMinutes"
+                                type="number"
+                                step="1"
+                                min="0"
+                                value={settings.peakSurvivalBufferMinutes}
+                                onChange={(e) => handleChange('peakSurvivalBufferMinutes', parseInt(e.target.value, 10))}
+                            />
+                            <Field.Description>Buffer in minutes to attempt to have the battery outlast a peak price period.</Field.Description>
                         </Field.Root>
 
                         <div className="section-header">

@@ -208,6 +208,16 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "solar trend ratio max must be at least 1", http.StatusBadRequest)
 		return
 	}
+	if newSettings.MinStartChargeMinutes == 0 {
+		newSettings.MinStartChargeMinutes = 5
+	} else if newSettings.MinStartChargeMinutes < 1 {
+		writeJSONError(w, "minimum start charge minutes must be at least 1", http.StatusBadRequest)
+		return
+	}
+	if newSettings.PeakSurvivalBufferMinutes < 0 {
+		writeJSONError(w, "peak survival buffer minutes cannot be negative", http.StatusBadRequest)
+		return
+	}
 	// this should never really happen in practice but makes tests easier
 	if newSettings.Release == "" {
 		newSettings.Release = s.release

@@ -42,7 +42,9 @@ export const defaultSettings = {
     ess: '',
     hasCredentials: {
         franklin: false
-    }
+    },
+    minStartChargeMinutes: 5,
+    peakSurvivalBufferMinutes: 30
 };
 
 export const defaultUtilities = [

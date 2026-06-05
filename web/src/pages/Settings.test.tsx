@@ -852,4 +852,38 @@ describe('App & Settings', () => {
             expect(screen.queryByRole('heading', { name: 'Request a Rate or Option' })).not.toBeInTheDocument();
         });
     });
+
+    it('can update new timing settings: minStartChargeMinutes and peakSurvivalBufferMinutes', async () => {
+        await navigateToSettings();
+
+        // Expand advanced tuning settings
+        const advancedBtn = await screen.findByText('Advanced Tuning Settings');
+        fireEvent.click(advancedBtn);
+
+        await waitFor(() => {
+            expect(screen.getByLabelText(/Minimum Start Charge Duration/i)).toBeInTheDocument();
+            expect(screen.getByLabelText(/Peak Survival Buffer/i)).toBeInTheDocument();
+        });
+
+        const minStartInput = screen.getByLabelText(/Minimum Start Charge Duration/i);
+        const peakBufferInput = screen.getByLabelText(/Peak Survival Buffer/i);
+
+        expect(minStartInput).toHaveValue(5);
+        expect(peakBufferInput).toHaveValue(30);
+
+        fireEvent.change(minStartInput, { target: { value: '10' } });
+        fireEvent.change(peakBufferInput, { target: { value: '45' } });
+
+        (updateSettings as any).mockResolvedValue(undefined);
+        const saveBtn = screen.getByText('Save Settings');
+        fireEvent.click(saveBtn);
+
+        await waitFor(() => {
+            expect(screen.getByText('Settings saved successfully')).toBeInTheDocument();
+            expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+                minStartChargeMinutes: 10,
+                peakSurvivalBufferMinutes: 45
+            }), expect.any(String), undefined);
+        });
+    });
 });

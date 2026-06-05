@@ -8,7 +8,7 @@ import (
 
 // CurrentSettingsVersion is the current version of the settings struct.
 // Increment this value only if you need to set a default value other than the Go default for that value.
-const CurrentSettingsVersion = 9
+const CurrentSettingsVersion = 10
 
 // Settings represents the configuration stored in the database.
 // These are dynamic settings that can be changed without redeploying.
@@ -87,6 +87,10 @@ type Settings struct {
 
 	// UpdateGroup controls which group the site gets updated in to spread out updates.
 	UpdateGroup int `json:"updateGroup"`
+
+	// Hysteresis & timing thresholds
+	MinStartChargeMinutes     int `json:"minStartChargeMinutes"`
+	PeakSurvivalBufferMinutes int `json:"peakSurvivalBufferMinutes"`
 }
 
 // ESSAuthStatus represents the status of ESS authentication for the site.
@@ -229,6 +233,16 @@ func MigrateSettings(s Settings, currentVersion int) (Settings, bool, error) {
 			// version 9: set UpdateGroup if it is unset (i.e. 0) if and only if both the ess is configured and a utility is configured.
 			if s.UpdateGroup == 0 && s.ESS != "" && s.UtilityProvider != "" {
 				s.UpdateGroup = rand.IntN(16) + 1
+				migrated = true
+			}
+		case 10:
+			// version 10: set default MinStartChargeMinutes and PeakSurvivalBufferMinutes
+			if s.MinStartChargeMinutes == 0 {
+				s.MinStartChargeMinutes = 5
+				migrated = true
+			}
+			if s.PeakSurvivalBufferMinutes == 0 {
+				s.PeakSurvivalBufferMinutes = 30
 				migrated = true
 			}
 		default:

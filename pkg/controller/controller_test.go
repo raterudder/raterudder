@@ -5447,6 +5447,128 @@ func TestEvaluateFallback(t *testing.T) {
 			assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Reason)
 		}
 	})
+
+	t.Run("Peak Survival Buffer - Standby if deficit occurs within the buffer", func(t *testing.T) {
+		status := baseStatus
+		status.BatterySOC = 50.0
+		status.HomeKW = 1.0
+
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}
+
+		// The peak is from Hour 4 to Hour 5. It ends at Hour 5.
+		// PeakSurvivalBufferMinutes is 30 minutes. So we must survive until Hour 5 + 30 minutes (now.Add(5 * time.Hour + 30 * time.Minute)).
+		// If we hit a deficit at Hour 5 + 15 minutes, we are within the buffer and should standby.
+		settings := baseSettings
+		settings.PeakSurvivalBufferMinutes = 30
+
+		summary := simulationSummary{
+			HitDeficitAt:      now.Add(5*time.Hour + 15*time.Minute),
+			HitBelowDeficitAt: now.Add(5*time.Hour + 15*time.Minute),
+			HitAboveDeficitAt: now.Add(5*time.Hour + 15*time.Minute),
+		}
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.10},
+			{TS: now.Add(4 * time.Hour), GridChargeDollarsPerKWH: 0.50}, // peak starts
+		}
+
+		decision := c.evaluateFallback(ctx, now, status, currentPrice, settings, simData, summary)
+		if assert.NotNil(t, decision) {
+			assert.Equal(t, types.BatteryModeStandby, decision.BatteryMode)
+			assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Reason)
+		}
+	})
+
+	t.Run("Peak Survival Buffer - Load if deficit occurs after the buffer", func(t *testing.T) {
+		status := baseStatus
+		status.BatterySOC = 50.0
+		status.HomeKW = 1.0
+
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}
+
+		// The peak is from Hour 4 to Hour 5 (ends at Hour 5).
+		// Buffer is 30 minutes. We need to outlast Hour 5 + 30 minutes.
+		// If we hit a deficit at Hour 5 + 45 minutes, we survive beyond the buffer and can discharge (Load).
+		settings := baseSettings
+		settings.PeakSurvivalBufferMinutes = 30
+
+		summary := simulationSummary{
+			HitDeficitAt:      now.Add(5*time.Hour + 45*time.Minute),
+			HitBelowDeficitAt: now.Add(5*time.Hour + 45*time.Minute),
+			HitAboveDeficitAt: now.Add(5*time.Hour + 45*time.Minute),
+		}
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.10},
+			{TS: now.Add(4 * time.Hour), GridChargeDollarsPerKWH: 0.50}, // peak starts
+		}
+
+		decision := c.evaluateFallback(ctx, now, status, currentPrice, settings, simData, summary)
+		if assert.NotNil(t, decision) {
+			assert.Equal(t, types.BatteryModeLoad, decision.BatteryMode)
+			assert.Equal(t, types.ActionReasonDischargeAtPeak, decision.Reason)
+		}
+	})
+
+	t.Run("Peak Survival Buffer - Multi-hour peak - Standby if deficit occurs within the buffer", func(t *testing.T) {
+		status := baseStatus
+		status.BatterySOC = 50.0
+		status.HomeKW = 1.0
+
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}
+
+		// The peak is from Hour 4 to Hour 6. It ends at Hour 6.
+		// PeakSurvivalBufferMinutes is 30 minutes. So we must survive until Hour 6 + 30 minutes (now.Add(6 * time.Hour + 30 * time.Minute)).
+		// If we hit a deficit at Hour 6 + 15 minutes, we are within the buffer and should standby.
+		settings := baseSettings
+		settings.PeakSurvivalBufferMinutes = 30
+
+		summary := simulationSummary{
+			HitDeficitAt:      now.Add(6*time.Hour + 15*time.Minute),
+			HitBelowDeficitAt: now.Add(6*time.Hour + 15*time.Minute),
+			HitAboveDeficitAt: now.Add(6*time.Hour + 15*time.Minute),
+		}
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.10},
+			{TS: now.Add(4 * time.Hour), GridChargeDollarsPerKWH: 0.50}, // peak starts (Hour 4-5)
+			{TS: now.Add(5 * time.Hour), GridChargeDollarsPerKWH: 0.50}, // peak continues (Hour 5-6)
+		}
+
+		decision := c.evaluateFallback(ctx, now, status, currentPrice, settings, simData, summary)
+		if assert.NotNil(t, decision) {
+			assert.Equal(t, types.BatteryModeStandby, decision.BatteryMode)
+			assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Reason)
+		}
+	})
+
+	t.Run("Peak Survival Buffer - Multi-hour peak - Load if deficit occurs after the buffer", func(t *testing.T) {
+		status := baseStatus
+		status.BatterySOC = 50.0
+		status.HomeKW = 1.0
+
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}
+
+		// The peak is from Hour 4 to Hour 6 (ends at Hour 6).
+		// Buffer is 30 minutes. We need to outlast Hour 6 + 30 minutes.
+		// If we hit a deficit at Hour 6 + 45 minutes, we survive beyond the buffer and can discharge (Load).
+		settings := baseSettings
+		settings.PeakSurvivalBufferMinutes = 30
+
+		summary := simulationSummary{
+			HitDeficitAt:      now.Add(6*time.Hour + 45*time.Minute),
+			HitBelowDeficitAt: now.Add(6*time.Hour + 45*time.Minute),
+			HitAboveDeficitAt: now.Add(6*time.Hour + 45*time.Minute),
+		}
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.10},
+			{TS: now.Add(4 * time.Hour), GridChargeDollarsPerKWH: 0.50}, // peak starts
+			{TS: now.Add(5 * time.Hour), GridChargeDollarsPerKWH: 0.50}, // peak continues
+		}
+
+		decision := c.evaluateFallback(ctx, now, status, currentPrice, settings, simData, summary)
+		if assert.NotNil(t, decision) {
+			assert.Equal(t, types.BatteryModeLoad, decision.BatteryMode)
+			assert.Equal(t, types.ActionReasonDischargeAtPeak, decision.Reason)
+		}
+	})
 }
 
 func TestFindCheapestPlan(t *testing.T) {
@@ -5499,5 +5621,65 @@ func TestFindCheapestPlan(t *testing.T) {
 		copy(slotsCopy, slots)
 		_, _, _, marginal := c.findCheapestPlan(slotsCopy, 2.20)
 		assert.Equal(t, 0.10, marginal.cost)
+	})
+}
+
+func TestCheckPeakSurvival(t *testing.T) {
+	c := NewController()
+	now := time.Now().Truncate(time.Hour)
+	gridChargeNowCost := 0.10
+	settings := types.Settings{
+		PeakSurvivalBufferMinutes: 30,
+	}
+
+	simData := []SimHour{
+		{TS: now, GridChargeDollarsPerKWH: 0.10},
+		{TS: now.Add(1 * time.Hour), GridChargeDollarsPerKWH: 0.10},
+		{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.30}, // Peak starts
+		{TS: now.Add(3 * time.Hour), GridChargeDollarsPerKWH: 0.30}, // Peak continues
+		{TS: now.Add(4 * time.Hour), GridChargeDollarsPerKWH: 0.10}, // Peak ends at hour 4
+		{TS: now.Add(5 * time.Hour), GridChargeDollarsPerKWH: 0.10},
+	}
+
+	t.Run("Peak occurs and hit deficit before peak ends + buffer -> Standby", func(t *testing.T) {
+		hitAboveDeficitAt := now.Add(4 * time.Hour).Add(10 * time.Minute)
+
+		mustStandby, peakTime, peakCost, peakPrice := c.checkPeakSurvival(simData, time.Time{}, gridChargeNowCost, hitAboveDeficitAt, settings)
+		assert.True(t, mustStandby)
+		assert.Equal(t, now.Add(2*time.Hour), peakTime)
+		assert.Equal(t, 0.30, peakCost)
+		assert.NotNil(t, peakPrice)
+	})
+
+	t.Run("Peak occurs and hit deficit strictly after peak ends + buffer -> Load", func(t *testing.T) {
+		hitAboveDeficitAt := now.Add(4 * time.Hour).Add(45 * time.Minute)
+
+		mustStandby, _, _, _ := c.checkPeakSurvival(simData, time.Time{}, gridChargeNowCost, hitAboveDeficitAt, settings)
+		assert.False(t, mustStandby)
+	})
+
+	t.Run("No peak occurs -> Load", func(t *testing.T) {
+		flatSimData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.10},
+			{TS: now.Add(1 * time.Hour), GridChargeDollarsPerKWH: 0.10},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.10},
+		}
+		hitAboveDeficitAt := now.Add(1 * time.Hour)
+
+		mustStandby, _, _, _ := c.checkPeakSurvival(flatSimData, time.Time{}, gridChargeNowCost, hitAboveDeficitAt, settings)
+		assert.False(t, mustStandby)
+	})
+
+	t.Run("scanUntil reached before peak -> Load", func(t *testing.T) {
+		hitAboveDeficitAt := now.Add(4 * time.Hour).Add(10 * time.Minute)
+		scanUntil := now.Add(1 * time.Hour).Add(30 * time.Minute) // Stop scanning before peak
+
+		mustStandby, _, _, _ := c.checkPeakSurvival(simData, scanUntil, gridChargeNowCost, hitAboveDeficitAt, settings)
+		assert.False(t, mustStandby)
+	})
+
+	t.Run("Empty sim data -> Load", func(t *testing.T) {
+		mustStandby, _, _, _ := c.checkPeakSurvival([]SimHour{}, time.Time{}, gridChargeNowCost, now, settings)
+		assert.False(t, mustStandby)
 	})
 }

@@ -55,8 +55,10 @@ func TestMigrateSettings(t *testing.T) {
 	t.Run("v8 to v9: set UpdateGroup", func(t *testing.T) {
 		// Both ESS and Utility configured, UpdateGroup unset (0)
 		old := Settings{
-			ESS:             "franklin",
-			UtilityProvider: "comed",
+			ESS:                       "franklin",
+			UtilityProvider:           "comed",
+			MinStartChargeMinutes:     5,
+			PeakSurvivalBufferMinutes: 30,
 		}
 		s, changed, err := MigrateSettings(old, 8)
 		require.NoError(t, err)
@@ -65,7 +67,9 @@ func TestMigrateSettings(t *testing.T) {
 
 		// ESS configured but Utility is not
 		oldNoUtility := Settings{
-			ESS: "franklin",
+			ESS:                       "franklin",
+			MinStartChargeMinutes:     5,
+			PeakSurvivalBufferMinutes: 30,
 		}
 		s, changed, err = MigrateSettings(oldNoUtility, 8)
 		require.NoError(t, err)
@@ -74,7 +78,9 @@ func TestMigrateSettings(t *testing.T) {
 
 		// Utility configured but ESS is not
 		oldNoESS := Settings{
-			UtilityProvider: "comed",
+			UtilityProvider:           "comed",
+			MinStartChargeMinutes:     5,
+			PeakSurvivalBufferMinutes: 30,
 		}
 		s, changed, err = MigrateSettings(oldNoESS, 8)
 		require.NoError(t, err)
@@ -83,9 +89,11 @@ func TestMigrateSettings(t *testing.T) {
 
 		// UpdateGroup already set
 		oldSet := Settings{
-			ESS:             "franklin",
-			UtilityProvider: "comed",
-			UpdateGroup:     5,
+			ESS:                       "franklin",
+			UtilityProvider:           "comed",
+			UpdateGroup:               5,
+			MinStartChargeMinutes:     5,
+			PeakSurvivalBufferMinutes: 30,
 		}
 		s, changed, err = MigrateSettings(oldSet, 8)
 		require.NoError(t, err)
@@ -93,12 +101,26 @@ func TestMigrateSettings(t *testing.T) {
 		assert.Equal(t, 5, s.UpdateGroup)
 	})
 
+	t.Run("v9 to v10: default timing values", func(t *testing.T) {
+		old := Settings{
+			MinStartChargeMinutes:     0,
+			PeakSurvivalBufferMinutes: 0,
+		}
+		s, changed, err := MigrateSettings(old, 9)
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.Equal(t, 5, s.MinStartChargeMinutes)
+		assert.Equal(t, 30, s.PeakSurvivalBufferMinutes)
+	})
+
 	t.Run("no change: current version", func(t *testing.T) {
 		current := Settings{
-			UtilityProvider: "comed",
-			UtilityRate:     "comed_besh",
-			Release:         "production",
-			UpdateGroup:     7,
+			UtilityProvider:           "comed",
+			UtilityRate:               "comed_besh",
+			Release:                   "production",
+			UpdateGroup:               7,
+			MinStartChargeMinutes:     5,
+			PeakSurvivalBufferMinutes: 30,
 		}
 		s, changed, err := MigrateSettings(current, CurrentSettingsVersion)
 		require.NoError(t, err)

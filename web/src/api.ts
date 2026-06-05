@@ -255,6 +255,8 @@ export interface Settings {
     };
     solarAzimuth?: number;
     solarTilt?: number;
+    minStartChargeMinutes: number;
+    peakSurvivalBufferMinutes: number;
 }
 
 export interface FranklinCredentials {

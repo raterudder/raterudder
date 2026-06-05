@@ -503,7 +503,7 @@ func (c *Controller) evaluateDeficit(
 	// 2. Hysteresis (to continue charging): If we are already grid-charging, we lower the required headroom to 0.1 kWh.
 	//    This permits the battery to continue charging until it is almost completely full, preventing short-cycling
 	//    right at the end of the charge.
-	minStartChargeDurationHours := 5.0 / 60.0
+	minStartChargeDurationHours := float64(settings.MinStartChargeMinutes) / 60.0
 	startChargeHeadroom := chargeKW * minStartChargeDurationHours
 	if startChargeHeadroom < 0.3 {
 		startChargeHeadroom = 0.3
@@ -1077,7 +1077,7 @@ func (c *Controller) evaluateExportArbitrage(
 	minChargeDurationHours := 10.0 / 60.0
 
 	// minStartChargeDurationHours defines the required starting headroom in hours of charging time.
-	minStartChargeDurationHours := 5.0 / 60.0
+	minStartChargeDurationHours := float64(settings.MinStartChargeMinutes) / 60.0
 
 	// startChargeHeadroom represents the minimum physical empty capacity (in kWh) needed to start charging.
 	startChargeHeadroom := max(0.5, chargeKW*minStartChargeDurationHours)
@@ -1559,28 +1559,11 @@ func (c *Controller) evaluatePlannedCharge(
 	// to cover home load would deplete it prematurely, forcing us to buy from the grid at those higher peak rates.
 	// Thus, we force Standby now to preserve the battery's energy specifically to offset the highest upcoming peak.
 	// If the planned charge time is now or in the past (e.g. we decided to skip it), we scan the entire simulation window.
-	var mustStandbyForPeak bool
-	var peakTime time.Time
-	var peakCost float64
-	var peakPrice types.Price
-
-	for _, slot := range simData {
-		if plan.Time.After(now) && !slot.TS.Before(plan.Time) {
-			break
-		}
-
-		isMoreExpensiveThanNow := slot.GridChargeDollarsPerKWH > gridChargeNowCost
-		deficitBeforeOrDuring := !hitAboveDeficitAt.IsZero() && !hitAboveDeficitAt.After(slot.TS.Add(time.Hour))
-
-		if isMoreExpensiveThanNow && deficitBeforeOrDuring {
-			mustStandbyForPeak = true
-			if slot.GridChargeDollarsPerKWH > peakCost {
-				peakCost = slot.GridChargeDollarsPerKWH
-				peakTime = slot.TS
-				peakPrice = slot.Price
-			}
-		}
+	var scanUntil time.Time
+	if plan.Time.After(now) {
+		scanUntil = plan.Time
 	}
+	mustStandbyForPeak, peakTime, peakCost, peakPrice := c.checkPeakSurvival(simData, scanUntil, gridChargeNowCost, hitAboveDeficitAt, settings)
 
 	if isCheapNow || mustStandbyForPeak {
 		var reason types.ActionReason
@@ -1596,7 +1579,7 @@ func (c *Controller) evaluatePlannedCharge(
 				gridChargeNowCost,
 				peakCost,
 			)
-			futurePrice = &peakPrice
+			futurePrice = peakPrice
 		} else {
 			reason = types.ActionReasonWaitingToCharge
 			if plan.Cost < gridChargeNowCost {
@@ -1768,37 +1751,11 @@ func (c *Controller) evaluateFallback(
 		// In this case, we must conserve whatever energy we currently have. If the current price is cheap,
 		// but there is an upcoming peak hour that is more expensive, we standby now.
 		// Preserving the battery's energy for that future peak hour is far more valuable than discharging it now.
-		var mustStandbyForPeak bool
-		var peakTime time.Time
-		var peakCost float64
-		var peakPrice types.Price
-
-		for _, slot := range simData {
-			// Stop looking once we hit capacity (refilling to capacity resets/wipes out any need to save energy).
-			// If we hit capacity before the peak price, we will have a full battery at the peak anyway,
-			// so there is no reason to standby now (we should discharge now to utilize the battery and headroom).
-			// We use HitFutureCapacityAt (strictly in the future, After(now)) instead of HitCapacityAt because if the
-			// battery starts full at 'now', HitCapacityAt would be 'now'. That would immediately break the loop on the
-			// first slot, preventing us from scanning for peak prices. Since the battery will discharge as time passes,
-			// we only care about future capacity hits that refill the battery later.
-			if !summary.HitFutureCapacityAt.IsZero() && !slot.TS.Before(summary.HitFutureCapacityAt) {
-				break
-			}
-			isMoreExpensiveThanNow := slot.GridChargeDollarsPerKWH > gridChargeNowCost
-			// We only need to standby to save energy if the battery is projected to hit a deficit (run out of charge)
-			// before or during the expensive peak hour. If the deficit is projected to occur strictly after the peak
-			// hour has ended, the battery has sufficient energy to cover both the current cheap hours and the peak
-			// hour without running out, so we can continue to discharge now.
-			deficitBeforeOrDuring := !hitAboveDeficitAt.IsZero() && !hitAboveDeficitAt.After(slot.TS.Add(time.Hour))
-			if isMoreExpensiveThanNow && deficitBeforeOrDuring {
-				mustStandbyForPeak = true
-				if slot.GridChargeDollarsPerKWH > peakCost {
-					peakCost = slot.GridChargeDollarsPerKWH
-					peakTime = slot.TS
-					peakPrice = slot.Price
-				}
-			}
+		var scanUntil time.Time
+		if !summary.HitFutureCapacityAt.IsZero() {
+			scanUntil = summary.HitFutureCapacityAt
 		}
+		mustStandbyForPeak, peakTime, peakCost, peakPrice := c.checkPeakSurvival(simData, scanUntil, gridChargeNowCost, hitAboveDeficitAt, settings)
 
 		if mustStandbyForPeak {
 			standbyReason := fmt.Sprintf(
@@ -1824,7 +1781,7 @@ func (c *Controller) evaluateFallback(
 				BatteryMode: types.BatteryModeStandby,
 				Reason:      types.ActionReasonDeficitSaveForPeak,
 				Description: standbyReason,
-				FuturePrice: &peakPrice,
+				FuturePrice: peakPrice,
 			}
 		}
 
@@ -2046,4 +2003,57 @@ func drModeString(mode types.BatteryMode) string {
 
 func equalCosts(a, b float64) bool {
 	return math.Abs(a-b) <= 0.001
+}
+
+// checkPeakSurvival scans the simulated hours to determine if discharging the battery now
+// would cause it to prematurely deplete before or during an upcoming peak price period.
+//
+// We scan the simulated hours between now and the `scanUntil` bounding time (which can be a planned charge
+// time, or the time the battery naturally hits capacity) to identify if there are any peak hours
+// that are more expensive than our current price.
+//
+// If we would hit a deficit (HitAboveDeficitAt) before or during that future peak, discharging the battery now
+// to cover home load would deplete it prematurely, forcing us to buy from the grid at those higher peak rates.
+// Thus, we return mustStandby=true to preserve the battery's energy specifically to offset the highest upcoming peak.
+func (c *Controller) checkPeakSurvival(
+	simData []SimHour,
+	scanUntil time.Time,
+	gridChargeNowCost float64,
+	hitAboveDeficitAt time.Time,
+	settings types.Settings,
+) (mustStandby bool, peakTime time.Time, peakCost float64, peakPrice *types.Price) {
+	var peakEnd time.Time
+
+	for _, slot := range simData {
+		// Stop looking once we reach the bounding time (e.g., planned charge time, or refilling to capacity).
+		// If we hit capacity before the peak price, we will have a full battery at the peak anyway,
+		// so there is no reason to standby now (we should discharge now to utilize the battery and headroom).
+		// Note that for capacity bounding, we pass HitFutureCapacityAt (strictly in the future, After(now))
+		// instead of HitCapacityAt because if the battery starts full at 'now', HitCapacityAt would be 'now'.
+		// That would immediately break the loop on the first slot, preventing us from scanning for peak prices.
+		// Since the battery will discharge as time passes, we only care about future capacity hits that refill it later.
+		if !scanUntil.IsZero() && !slot.TS.Before(scanUntil) {
+			break
+		}
+
+		if slot.GridChargeDollarsPerKWH > gridChargeNowCost {
+			slotEnd := slot.TS.Add(time.Hour)
+			if peakEnd.IsZero() || slotEnd.After(peakEnd) {
+				peakEnd = slotEnd
+			}
+			if slot.GridChargeDollarsPerKWH > peakCost {
+				peakCost = slot.GridChargeDollarsPerKWH
+				peakTime = slot.TS
+				p := slot.Price
+				peakPrice = &p
+			}
+		}
+	}
+
+	if !peakEnd.IsZero() && !hitAboveDeficitAt.IsZero() {
+		if !hitAboveDeficitAt.After(peakEnd.Add(time.Duration(settings.PeakSurvivalBufferMinutes) * time.Minute)) {
+			mustStandby = true
+		}
+	}
+	return
 }
