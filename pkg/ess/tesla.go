@@ -543,11 +543,11 @@ func (b *Tesla) doGETRequest(ctx context.Context, path string, params url.Values
 	)
 	if err := json.Unmarshal(response.Response, dest); err != nil {
 		// We encountered cases where the response field is a string like ""
-		// rather than the expected struct object. Log up to 256 characters of response.Response
+		// rather than the expected struct object. Log up to 512 characters of the raw envelope
 		// to help debug why the API returned this shape instead of the expected struct/slice.
-		body := response.Response
-		if len(body) > 256 {
-			body = body[:256]
+		body := raw
+		if len(body) > 512 {
+			body = body[:512]
 		}
 		log.Ctx(ctx).ErrorContext(ctx, "failed to decode tesla response", slog.Any("error", err), slog.String("body", string(body)))
 		return fmt.Errorf("failed to decode tesla response: %w", err)

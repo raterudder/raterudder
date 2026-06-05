@@ -363,6 +363,10 @@ func (f *Franklin) doRequest(req *http.Request, dest any) error {
 	}
 
 	if !fr.Success && fr.Code != 200 {
+		if dest == nil && strings.Contains(fr.Message, "Saved successfully") && strings.Contains(fr.Message, "synchronized later") {
+			log.Ctx(req.Context()).WarnContext(req.Context(), "franklin api warning: Saved successfully. The data will be synchronized later", slog.String("url", req.URL.String()))
+			return nil
+		}
 		if fr.Message == "" {
 			if len(body) > 256 {
 				body = body[:256]
@@ -735,7 +739,7 @@ func (f *Franklin) setPowerControl(ctx context.Context, pc franklinGetPowerContr
 	}
 
 	// TODO: should we be doing something with the powerControlTipMsg response? What does it mean?
-	return f.doRequest(req, &struct{}{})
+	return f.doRequest(req, nil)
 }
 
 type availableModes struct {
@@ -1023,7 +1027,7 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 				if err != nil {
 					return err
 				}
-				if err := f.doRequest(req, &struct{}{}); err != nil {
+				if err := f.doRequest(req, nil); err != nil {
 					log.Ctx(ctx).ErrorContext(ctx, "failed to update soc", slog.Any("error", err))
 					return err
 				}
@@ -1051,7 +1055,7 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 				if err != nil {
 					return err
 				}
-				if err := f.doRequest(req, &struct{}{}); err != nil {
+				if err := f.doRequest(req, nil); err != nil {
 					log.Ctx(ctx).ErrorContext(ctx, "failed to update tou mode", slog.Any("error", err))
 					return err
 				}

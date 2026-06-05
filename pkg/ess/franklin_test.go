@@ -830,6 +830,78 @@ func TestFranklin(t *testing.T) {
 		assert.Equal(t, "updateSocV2", callOrder[0])
 	})
 
+	t.Run("SetModes Saved Successfully Warning", func(t *testing.T) {
+		var callOrder []string
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"valid": true},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
+				list := []map[string]any{
+					{"id": 20.0, "workMode": 2, "electricityType": 1, "soc": 55.0, "editSocFlag": true},
+				}
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"list": list, "currendId": 20.0},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  []map[string]any{},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"gridMaxFlag": 1, "gridFeedMaxFlag": 3},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/updateSocV2" {
+				callOrder = append(callOrder, "updateSocV2")
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    201,
+					"success": false,
+					"message": "Saved successfully. The data will be synchronized later",
+				})
+				return
+			}
+			http.Error(w, "not found "+r.URL.Path, 404)
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:      ts.Client(),
+			baseURL:     ts.URL,
+			username:    "u",
+			md5Password: "p",
+			gatewayID:   "g",
+		}
+
+		err := f.ApplySettings(context.Background(), types.Settings{MinBatterySOC: 20})
+		require.NoError(t, err)
+
+		err = f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange)
+		require.NoError(t, err, "SetModes should succeed despite the warning response")
+
+		require.Len(t, callOrder, 1, "updateSocV2 should be called")
+	})
+
 	t.Run("SetModes Avoid Small SOC Update", func(t *testing.T) {
 		var callOrder []string
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
