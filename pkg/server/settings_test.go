@@ -190,9 +190,11 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 		essMap.SetSystem("site1", mockES)
 
+		testTime := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
 		srv := &Server{
 			storage: mockS,
 			ess:     essMap,
+			nowFunc: func() time.Time { return testTime },
 		}
 
 		ctx := context.Background()
@@ -214,7 +216,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 			Settings: types.Settings{
 				ESSAuthStatus: types.ESSAuthStatus{
 					ConsecutiveFailures: 1,
-					LastAttempt:         time.Now(),
+					LastAttempt:         testTime,
 				},
 			},
 		}
@@ -226,7 +228,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 			Settings: types.Settings{
 				ESSAuthStatus: types.ESSAuthStatus{
 					ConsecutiveFailures: 2,
-					LastAttempt:         time.Now().Add(-10 * time.Second),
+					LastAttempt:         testTime.Add(-10 * time.Second),
 				},
 			},
 		}
@@ -238,7 +240,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 			Settings: types.Settings{
 				ESSAuthStatus: types.ESSAuthStatus{
 					ConsecutiveFailures: 2,
-					LastAttempt:         time.Now().Add(-31 * time.Second),
+					LastAttempt:         testTime.Add(-31 * time.Second),
 				},
 			},
 		}
@@ -250,7 +252,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 			Settings: types.Settings{
 				ESSAuthStatus: types.ESSAuthStatus{
 					ConsecutiveFailures: 5,
-					LastAttempt:         time.Now().Add(-1 * time.Minute),
+					LastAttempt:         testTime.Add(-1 * time.Minute),
 				},
 			},
 		}
@@ -262,7 +264,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 			Settings: types.Settings{
 				ESSAuthStatus: types.ESSAuthStatus{
 					ConsecutiveFailures: 5,
-					LastAttempt:         time.Now().Add(-5 * time.Minute),
+					LastAttempt:         testTime.Add(-5 * time.Minute),
 				},
 			},
 		}
@@ -275,6 +277,8 @@ func TestHandleUpdateSettings(t *testing.T) {
 		essMap := ess.NewMap()
 		mockES := &mockESS{}
 
+		testTime := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+
 		// Test that authentication failure correctly updates ConsecutiveFailures and LastAttempt
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, fmt.Errorf("auth failed")).Once()
@@ -283,7 +287,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		// Validate that the storage saves the updated auth status
 		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
 			savedSettings = s
-			return s.ESSAuthStatus.ConsecutiveFailures == 1 && !s.ESSAuthStatus.LastAttempt.IsZero()
+			return s.ESSAuthStatus.ConsecutiveFailures == 1 && s.ESSAuthStatus.LastAttempt.Equal(testTime)
 		}), 1).Return(nil).Once()
 
 		essMap.SetSystem("site1", mockES)
@@ -291,6 +295,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		srv := &Server{
 			storage: mockS,
 			ess:     essMap,
+			nowFunc: func() time.Time { return testTime },
 		}
 
 		ctx := context.Background()
@@ -314,7 +319,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		// Ensure fields were updated
 		assert.Equal(t, 1, savedSettings.ESSAuthStatus.ConsecutiveFailures, "ConsecutiveFailures should be incremented")
-		assert.WithinDuration(t, time.Now().UTC(), savedSettings.ESSAuthStatus.LastAttempt, 2*time.Second, "LastAttempt should be updated to now")
+		assert.Equal(t, testTime, savedSettings.ESSAuthStatus.LastAttempt, "LastAttempt should be updated to now")
 	})
 
 	t.Run("Update Settings - Validation Error", func(t *testing.T) {

@@ -218,7 +218,7 @@ func (s *Server) performSiteUpdate(
 
 	// get History for Controller (Last 5 days from Storage)
 	// in case the timestamp is off, we just use the location of it
-	now := time.Now().In(status.Timestamp.Location())
+	now := s.now().In(status.Timestamp.Location())
 	historyStart := now.AddDate(0, 0, -forecastHistoryDays).Truncate(time.Hour)
 	energyHistoryDaily, err := s.storage.GetEnergyHistory(ctx, siteID, historyStart, now)
 	if err != nil {
@@ -246,7 +246,7 @@ func (s *Server) performSiteUpdate(
 			}
 		} else {
 			start := time.Date(historyStart.Year(), historyStart.Month(), historyStart.Day(), 0, 0, 0, 0, timeLoc)
-			end := time.Now().In(timeLoc).AddDate(0, 0, 2)
+			end := s.now().In(timeLoc).AddDate(0, 0, 2)
 			weatherHistory, err = s.storage.GetWeather(ctx, siteID, start, end)
 			if err != nil {
 				log.Ctx(ctx).WarnContext(ctx, "failed to get weather history from storage", slog.Any("error", err))
@@ -257,7 +257,7 @@ func (s *Server) performSiteUpdate(
 	if settings.Pause {
 		log.Ctx(ctx).InfoContext(ctx, "update: paused")
 		action := types.Action{
-			Timestamp:    time.Now(),
+			Timestamp:    s.now(),
 			Description:  "Automation is paused",
 			SystemStatus: status,
 			CurrentPrice: &currentPrice,
@@ -273,7 +273,7 @@ func (s *Server) performSiteUpdate(
 	if status.EmergencyMode {
 		log.Ctx(ctx).InfoContext(ctx, "update: emergency mode")
 		action := types.Action{
-			Timestamp:    time.Now(),
+			Timestamp:    s.now(),
 			Description:  "In emergency mode",
 			Reason:       types.ActionReasonEmergencyMode,
 			SystemStatus: status,
@@ -289,7 +289,7 @@ func (s *Server) performSiteUpdate(
 	if len(status.Alarms) > 0 {
 		log.Ctx(ctx).InfoContext(ctx, "update: alarms present", slog.Any("alarms", status.Alarms))
 		action := types.Action{
-			Timestamp:    time.Now(),
+			Timestamp:    s.now(),
 			Description:  fmt.Sprintf("%d alarms present", len(status.Alarms)),
 			Reason:       types.ActionReasonHasAlarms,
 			SystemStatus: status,
@@ -305,7 +305,7 @@ func (s *Server) performSiteUpdate(
 	if status.GridUnavailable {
 		log.Ctx(ctx).InfoContext(ctx, "update: grid unavailable")
 		action := types.Action{
-			Timestamp:    time.Now(),
+			Timestamp:    s.now(),
 			Description:  "Grid is unavailable",
 			Reason:       types.ActionReasonGridUnavailable,
 			SystemStatus: status,
@@ -329,7 +329,7 @@ func (s *Server) performSiteUpdate(
 		// Continue with empty future prices
 	}
 
-	nowTime := time.Now()
+	nowTime := s.now()
 	if len(futurePrices) == 0 {
 		log.Ctx(ctx).WarnContext(ctx, "no future prices available, estimating using last 24 hours")
 		histStart := nowTime.Add(-24 * time.Hour)
@@ -367,7 +367,7 @@ func (s *Server) performSiteUpdate(
 	action := decision.Action
 	// Ensure timestamps match if not set
 	if action.Timestamp.IsZero() {
-		action.Timestamp = time.Now()
+		action.Timestamp = s.now()
 	}
 
 	log.Ctx(ctx).InfoContext(
@@ -406,7 +406,7 @@ func (s *Server) updatePriceHistory(ctx context.Context, siteID string, provider
 		return fmt.Errorf("failed to get latest price history time: %w", err)
 	}
 
-	now := time.Now()
+	now := s.now()
 	fiveDaysAgo := now.AddDate(0, 0, -5)
 	syncStart := truncateDay(fiveDaysAgo)
 
@@ -462,31 +462,60 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 		log.Ctx(ctx).WarnContext(ctx, "failed to get latest weather time", slog.Any("error", err))
 	}
 
-	now := time.Now().In(timeLoc)
+	now := s.now().In(timeLoc)
 	todayMidnight := truncateDay(now)
 	syncStart := todayMidnight.AddDate(0, 0, -5) // Default to 5 days ago backfill
+	fetchEnd := todayMidnight.AddDate(0, 0, 2)
 
-	if !lastWeatherTime.IsZero() && lastVersion >= types.CurrentWeatherVersion && lastWeatherTime.After(syncStart) {
-		// We extract the date parts from lastWeatherTime (which is parsed in UTC from the YYYY-MM-DD doc ID)
-		// and construct the time in timeLoc. Using truncateDay(lastWeatherTime.In(timeLoc)) would shift
-		// the midnight time to the previous day under negative UTC offsets (e.g. 00:00 UTC -> 20:00 local).
-		syncStart = time.Date(lastWeatherTime.Year(), lastWeatherTime.Month(), lastWeatherTime.Day(), 0, 0, 0, 0, timeLoc)
-
-		// we want to make sure we fetch the weather for today and tomorrow but if we
-		// already have tomorrows weather then we don't need to fetch it again since we
-		// know we already fetched it
-		// if the syncStart (i.e. the latest weather time we have) is after today then
-		// we know we already have tomorrow
-		if syncStart.After(todayMidnight) {
-			// We already have tomorrow's weather, but we want to refresh the forecast at least once
-			// in the morning after 6 AM local time.
-			sixAMToday := time.Date(now.Year(), now.Month(), now.Day(), 6, 0, 0, 0, timeLoc)
-			lastUpdateLocal := lastWeatherUpdated.In(timeLoc)
-			if now.After(sixAMToday) && lastUpdateLocal.Before(sixAMToday) {
-				syncStart = todayMidnight
-			} else {
-				return nil
+	// Determine the latest passed UTC slot.
+	// Since the current time might just have rolled past midnight UTC, the latest passed slot
+	// could be a slot from yesterday (e.g. at 22:00 UTC yesterday). To handle this, we check
+	// the scheduled slot hours for both yesterday (dayOffset = -1) and today (dayOffset = 0).
+	nowUTC := s.now().UTC()
+	hours := []int{2, 8, 12, 14, 22}
+	var lastPassedSlot time.Time
+	for _, dayOffset := range []int{-1, 0} {
+		// targetDay represents the UTC date (yesterday or today) we are evaluating.
+		targetDay := nowUTC.AddDate(0, 0, dayOffset)
+		for _, hr := range hours {
+			// slotTime is the absolute timestamp of the scheduled slot on targetDay in UTC.
+			slotTime := time.Date(targetDay.Year(), targetDay.Month(), targetDay.Day(), hr, 0, 0, 0, time.UTC)
+			// Since hours and days are sorted in ascending order, the first slot we find that is
+			// in the future means all subsequent slots will also be in the future.
+			if slotTime.After(nowUTC) {
+				break
 			}
+			// Keep the most recent slot that has passed.
+			if lastPassedSlot.IsZero() || slotTime.After(lastPassedSlot) {
+				lastPassedSlot = slotTime
+			}
+		}
+	}
+
+	isNormalUpdate := !lastWeatherTime.IsZero() && lastVersion >= types.CurrentWeatherVersion && lastWeatherTime.After(syncStart)
+
+	var checkSignificantChanges bool
+	if isNormalUpdate {
+		if !lastWeatherUpdated.Before(lastPassedSlot) {
+			return nil
+		}
+		// We need to refresh!
+		targetLocalDay := time.Date(lastPassedSlot.Year(), lastPassedSlot.Month(), lastPassedSlot.Day(), 0, 0, 0, 0, timeLoc)
+		// If the slot occurred at or after 5:00 PM local time (17:00), most of the daylight hours
+		// for the day have already passed. In this case, we only fetch the weather forecast for the
+		// next day (tomorrow) to avoid fetching unnecessary data for the current day.
+		if lastPassedSlot.In(timeLoc).Hour() >= 17 {
+			syncStart = targetLocalDay.AddDate(0, 0, 1)
+			// the end date is exclusive so we need to go to start of the day AFTER
+			// tomorrow to make sure that we get all of tomorrow
+			fetchEnd = syncStart.AddDate(0, 0, 1)
+		} else {
+			syncStart = targetLocalDay
+			// the end date is exclusive so we need to go to start of the day AFTER
+			// tomorrow to make sure that we get all of tomorrow
+			fetchEnd = syncStart.AddDate(0, 0, 2)
+			// check for significant changes if we updated today just for debugging
+			checkSignificantChanges = true
 		}
 	} else if !lastWeatherTime.IsZero() && lastVersion < types.CurrentWeatherVersion {
 		log.Ctx(ctx).InfoContext(
@@ -497,10 +526,6 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 		)
 	}
 
-	// the end date is exclusive so we need to go to start of the day AFTER
-	// tomorrow to make sure that we get all of tomorrow
-	fetchEnd := todayMidnight.AddDate(0, 0, 2)
-
 	log.Ctx(ctx).DebugContext(ctx, "syncing weather history", slog.Any("since", syncStart), slog.Any("to", fetchEnd))
 
 	newWeathers, err := s.weather.Forecast(ctx, loc, syncStart, fetchEnd)
@@ -508,7 +533,16 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 		return fmt.Errorf("failed to get weather history: %w", err)
 	}
 
-	if len(newWeathers) > 0 {
+	if len(newWeathers) == 0 {
+		log.Ctx(ctx).WarnContext(ctx, "no weather data found for the given time range", slog.Time("syncStart", syncStart), slog.Time("fetchEnd", fetchEnd))
+		return nil
+	}
+
+	if err := s.storage.UpsertWeather(ctx, siteID, newWeathers, types.CurrentWeatherVersion); err != nil {
+		return fmt.Errorf("failed to upsert weather: %w", err)
+	}
+
+	if checkSignificantChanges {
 		// Fetch old weather for today to check if there is a significant change.
 		oldWeathers, err := s.storage.GetWeather(ctx, siteID, todayMidnight, todayMidnight.Add(24*time.Hour))
 		if err != nil {
@@ -561,17 +595,13 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 				if anySignificantChange {
 					log.Ctx(ctx).InfoContext(
 						ctx,
-						"weather forecast changed significantly after morning refresh",
+						"weather forecast changed significantly after refresh",
 						slog.Any("hours", hours),
 						slog.Any("oldGti", oldGTIs),
 						slog.Any("newGti", newGTIs),
 					)
 				}
 			}
-		}
-
-		if err := s.storage.UpsertWeather(ctx, siteID, newWeathers, types.CurrentWeatherVersion); err != nil {
-			return fmt.Errorf("failed to upsert weather: %w", err)
 		}
 	}
 	return nil
@@ -583,7 +613,7 @@ func (s *Server) updateEnergyHistory(ctx context.Context, siteID string, essSyst
 		return fmt.Errorf("failed to get latest energy history time: %w", err)
 	}
 
-	now := time.Now()
+	now := s.now()
 	fiveDaysAgo := now.Add(-5 * 24 * time.Hour)
 	syncStart := time.Date(fiveDaysAgo.Year(), fiveDaysAgo.Month(), fiveDaysAgo.Day(), 0, 0, 0, 0, fiveDaysAgo.Location())
 
@@ -621,7 +651,7 @@ func (s *Server) canSetModes(settings settingsWithVersion) error {
 	failures := settings.ESSAuthStatus.ConsecutiveSetFailures
 	if failures > 1 {
 		backoff := getESSBackoff(failures)
-		timeLeft := backoff - time.Since(settings.ESSAuthStatus.LastAttempt)
+		timeLeft := backoff - s.now().Sub(settings.ESSAuthStatus.LastAttempt)
 		if timeLeft > 0 {
 			timeLeft = timeLeft.Round(time.Second)
 			return fmt.Errorf("%w, try again in %v", errESSRateLimited, timeLeft)
@@ -655,7 +685,7 @@ func (s *Server) setESSModes(
 	if err != nil {
 		if errors.Is(err, ess.ErrUnauthorized) {
 			settings.ESSAuthStatus.ConsecutiveSetFailures++
-			settings.ESSAuthStatus.LastAttempt = time.Now().UTC()
+			settings.ESSAuthStatus.LastAttempt = s.now().UTC()
 			if dbErr := s.storage.SetSettings(ctx, siteID, settings.Settings, settings.version); dbErr != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status after set modes failure", slog.Any("error", dbErr))
 			}
@@ -665,7 +695,7 @@ func (s *Server) setESSModes(
 
 	if settings.ESSAuthStatus.ConsecutiveSetFailures > 0 {
 		settings.ESSAuthStatus.ConsecutiveSetFailures = 0
-		settings.ESSAuthStatus.LastAttempt = time.Now().UTC()
+		settings.ESSAuthStatus.LastAttempt = s.now().UTC()
 		if dbErr := s.storage.SetSettings(ctx, siteID, settings.Settings, settings.version); dbErr != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status after set modes success", slog.Any("error", dbErr))
 		}

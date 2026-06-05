@@ -76,7 +76,7 @@ func (s *Server) getESSSystem(ctx context.Context, siteID string, settings setti
 	failures := settings.ESSAuthStatus.ConsecutiveFailures
 	if failures > 1 {
 		backoff := getESSBackoff(failures)
-		timeLeft := backoff - time.Since(settings.ESSAuthStatus.LastAttempt)
+		timeLeft := backoff - s.now().Sub(settings.ESSAuthStatus.LastAttempt)
 		if timeLeft > 0 {
 			// Round to seconds
 			timeLeft = timeLeft.Round(time.Second)
@@ -91,7 +91,7 @@ func (s *Server) getESSSystem(ctx context.Context, siteID string, settings setti
 
 	// and apply those settings to the ESS
 	newCreds, updated, err := essSystem.Authenticate(ctx, creds)
-	now := time.Now().UTC()
+	now := s.now().UTC()
 	if err != nil {
 		settings.ESSAuthStatus.ConsecutiveFailures++
 		settings.ESSAuthStatus.LastAttempt = now
@@ -389,7 +389,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			failures := newSettings.ESSAuthStatus.ConsecutiveFailures + newSettings.ESSAuthStatus.ConsecutiveSetFailures
 			if failures > 1 {
 				backoff := getESSBackoff(failures)
-				timeLeft := backoff - time.Since(newSettings.ESSAuthStatus.LastAttempt)
+				timeLeft := backoff - s.now().Sub(newSettings.ESSAuthStatus.LastAttempt)
 				if timeLeft > 0 {
 					timeLeft = timeLeft.Round(time.Second)
 					writeJSONError(w, fmt.Sprintf("ESS rate limited, try again in %v", timeLeft), http.StatusTooManyRequests)
@@ -399,7 +399,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 			// Verify and update credentials
 			existingCreds, _, err = essSystem.Authenticate(ctx, existingCreds)
-			now := time.Now().UTC()
+			now := s.now().UTC()
 			if err != nil {
 				log.Ctx(ctx).WarnContext(ctx, "failed to verify ess credentials", slog.Any("error", err))
 
@@ -557,7 +557,7 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 	failures := existing.ESSAuthStatus.ConsecutiveFailures + existing.ESSAuthStatus.ConsecutiveSetFailures
 	if failures > 1 {
 		backoff := getESSBackoff(failures)
-		timeLeft := backoff - time.Since(existing.ESSAuthStatus.LastAttempt)
+		timeLeft := backoff - s.now().Sub(existing.ESSAuthStatus.LastAttempt)
 		if timeLeft > 0 {
 			timeLeft = timeLeft.Round(time.Second)
 			writeJSONError(w, fmt.Sprintf("ESS rate limited, try again in %v", timeLeft), http.StatusTooManyRequests)
@@ -614,7 +614,7 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, _, err = essSystem.Authenticate(ctx, existingCreds)
-	now := time.Now().UTC()
+	now := s.now().UTC()
 	// its expected that this returns needs next stage if there is one
 	if err != nil && !errors.Is(err, ess.ErrNeedsNextStage) {
 		existing.ESSAuthStatus.ConsecutiveFailures++

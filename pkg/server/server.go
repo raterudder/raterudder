@@ -79,6 +79,7 @@ type Server struct {
 	generalBurst       int
 	sensitiveRateLimit rate.Limit
 	sensitiveBurst     int
+	nowFunc            func() time.Time
 }
 
 // Configured initializes the Server with dependencies.
@@ -414,4 +415,11 @@ func (s *Server) isMultiSiteAdmin(user types.User) bool {
 		}
 	}
 	return false
+}
+
+func (s *Server) now() time.Time {
+	if s.nowFunc != nil {
+		return s.nowFunc()
+	}
+	return time.Now()
 }

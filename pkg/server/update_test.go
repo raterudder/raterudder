@@ -1344,6 +1344,9 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		TimeZone:    loc.String(),
 	}
 
+	// Fixed test time: 2026-06-05 10:00:00 UTC (3:00 AM PDT)
+	testTime := time.Date(2026, 6, 5, 10, 0, 0, 0, time.UTC)
+
 	t.Run("Update Missing History", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockW := &mockWeather{}
@@ -1352,7 +1355,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		mockS.On("GetWeather", mock.Anything, "test-site", mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
 
 		// Cold start: expected fetch range is 5 days ago to end of tomorrow
-		now := time.Now().In(loc)
+		now := testTime.In(loc)
 		todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 		fiveDaysAgoMidnight := todayMidnight.AddDate(0, 0, -5)
 		endOfTomorrow := todayMidnight.AddDate(0, 0, 2)
@@ -1368,6 +1371,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		srv := &Server{
 			storage: mockS,
 			weather: mockW,
+			nowFunc: func() time.Time { return testTime },
 		}
 
 		err := srv.updateWeatherHistory(context.Background(), "test-site", sl)
@@ -1381,12 +1385,12 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		mockW := &mockWeather{}
 
 		// Old version history exists
-		lastTime := time.Now().In(loc).AddDate(0, 0, -1)
+		now := testTime.In(loc)
+		lastTime := now.AddDate(0, 0, -1)
 		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(lastTime, time.Time{}, 1, nil) // Version 1 < 3
 		mockS.On("GetWeather", mock.Anything, "test-site", mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
 
 		// Should still start from 5 days ago due to version mismatch
-		now := time.Now().In(loc)
 		todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 		fiveDaysAgoMidnight := todayMidnight.AddDate(0, 0, -5)
 
@@ -1402,6 +1406,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		srv := &Server{
 			storage: mockS,
 			weather: mockW,
+			nowFunc: func() time.Time { return testTime },
 		}
 
 		err := srv.updateWeatherHistory(context.Background(), "test-site", sl)
@@ -1413,16 +1418,16 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		mockS := &mockStorage{}
 		mockW := &mockWeather{}
 
-		// Skip only when lastWeatherTime >= fetchEnd (day-after-tomorrow midnight, exclusive end).
-		now := time.Now().In(loc)
+		now := testTime.In(loc)
 		todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 		// fetchEnd = tomorrowMidnight + 1 day = todayMidnight + 2 days
 		fetchEnd := todayMidnight.AddDate(0, 0, 2)
-		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(fetchEnd, now, types.CurrentWeatherVersion, nil)
+		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(fetchEnd, testTime, types.CurrentWeatherVersion, nil)
 
 		srv := &Server{
 			storage: mockS,
 			weather: mockW,
+			nowFunc: func() time.Time { return testTime },
 		}
 
 		err := srv.updateWeatherHistory(context.Background(), "test-site", sl)
@@ -1436,7 +1441,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 
 		// Recent history exists — should always re-fetch from today midnight
 		// regardless of lastWeatherTime, so today's hourly updates are included.
-		now := time.Now().In(loc)
+		now := testTime.In(loc)
 		todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 		// last time is mid-today, still current version
 		lastTime := todayMidnight.Add(6 * time.Hour)
@@ -1456,6 +1461,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		srv := &Server{
 			storage: mockS,
 			weather: mockW,
+			nowFunc: func() time.Time { return testTime },
 		}
 
 		err := srv.updateWeatherHistory(context.Background(), "test-site", sl)
@@ -1469,16 +1475,15 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		mockW := &mockWeather{}
 
 		// lastWeatherTime is exactly tomorrow midnight (fully up to date for today)
-		// but should still refetch from TODAY to pick up hourly updates?
-		// Wait, user said ONLY fetch today.
-		now := time.Now().In(loc)
+		now := testTime.In(loc)
 		todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 		tomorrowMidnight := todayMidnight.AddDate(0, 0, 1)
-		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(tomorrowMidnight, now, types.CurrentWeatherVersion, nil)
+		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(tomorrowMidnight, testTime, types.CurrentWeatherVersion, nil)
 
 		srv := &Server{
 			storage: mockS,
 			weather: mockW,
+			nowFunc: func() time.Time { return testTime },
 		}
 
 		err := srv.updateWeatherHistory(context.Background(), "test-site", sl)
@@ -1487,74 +1492,74 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		mockW.AssertNotCalled(t, "Forecast")
 	})
 
-	t.Run("Morning Refresh Logic", func(t *testing.T) {
+	t.Run("Scheduled UTC Slots Refresh - normal hour (Today & Tomorrow)", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockW := &mockWeather{}
 
-		now := time.Now().In(loc)
+		// 8:30am UTC is hour 8 slot.
+		normalTime := time.Date(2026, 6, 5, 8, 30, 0, 0, time.UTC)
+		now := normalTime.In(loc)
 		todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 		tomorrowMidnight := todayMidnight.AddDate(0, 0, 1)
 
-		sixAMToday := time.Date(now.Year(), now.Month(), now.Day(), 6, 0, 0, 0, loc)
+		// Last updated before the 8:00 AM UTC slot.
+		lastUpdate := time.Date(2026, 6, 5, 7, 59, 0, 0, time.UTC)
+		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(tomorrowMidnight, lastUpdate, types.CurrentWeatherVersion, nil)
+		mockS.On("GetWeather", mock.Anything, "test-site", mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
 
-		if now.After(sixAMToday) {
-			// Scenario A: It is after 6 AM.
-			// If last update was before 6 AM (e.g. 5 AM), we expect a Forecast and UpsertWeather call.
-			lastUpdate := sixAMToday.Add(-time.Hour)
-			mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(tomorrowMidnight, lastUpdate, types.CurrentWeatherVersion, nil)
-			mockS.On("GetWeather", mock.Anything, "test-site", mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
-
-			mockW.On("Forecast", mock.Anything, sl, todayMidnight, todayMidnight.AddDate(0, 0, 2)).Return([]types.Weather{
-				{TSDayStart: todayMidnight},
-			}, nil)
-			mockS.On("UpsertWeather", mock.Anything, "test-site", mock.Anything, types.CurrentWeatherVersion).Return(nil)
-
-			srv := &Server{
-				storage: mockS,
-				weather: mockW,
-			}
-
-			err := srv.updateWeatherHistory(context.Background(), "test-site", sl)
-			assert.NoError(t, err)
-			mockS.AssertExpectations(t)
-			mockW.AssertExpectations(t)
-		} else {
-			// Scenario B: It is before 6 AM.
-			// It should not refresh even if last update was yesterday.
-			lastUpdate := todayMidnight.AddDate(0, 0, -1)
-			mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(tomorrowMidnight, lastUpdate, types.CurrentWeatherVersion, nil)
-
-			srv := &Server{
-				storage: mockS,
-				weather: mockW,
-			}
-
-			err := srv.updateWeatherHistory(context.Background(), "test-site", sl)
-			assert.NoError(t, err)
-			mockS.AssertExpectations(t)
-			mockW.AssertNotCalled(t, "Forecast")
-		}
-	})
-
-	t.Run("Morning Refresh Logic - Already Up To Date", func(t *testing.T) {
-		mockS := &mockStorage{}
-		mockW := &mockWeather{}
-
-		now := time.Now().In(loc)
-		todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-		tomorrowMidnight := todayMidnight.AddDate(0, 0, 1)
-
-		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(tomorrowMidnight, now, types.CurrentWeatherVersion, nil)
+		// Expect fetch starting from today to end of tomorrow (today and tomorrow).
+		mockW.On("Forecast", mock.Anything, sl, todayMidnight, todayMidnight.AddDate(0, 0, 2)).Return([]types.Weather{
+			{TSDayStart: todayMidnight},
+		}, nil)
+		mockS.On("UpsertWeather", mock.Anything, "test-site", mock.Anything, types.CurrentWeatherVersion).Return(nil)
 
 		srv := &Server{
 			storage: mockS,
 			weather: mockW,
+			nowFunc: func() time.Time { return normalTime },
 		}
 
 		err := srv.updateWeatherHistory(context.Background(), "test-site", sl)
 		assert.NoError(t, err)
 		mockS.AssertExpectations(t)
-		mockW.AssertNotCalled(t, "Forecast")
+		mockW.AssertExpectations(t)
+	})
+
+	t.Run("Scheduled UTC Slots Refresh - 10:00pm UTC (Next Day Only)", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockW := &mockWeather{}
+
+		utcLoc := time.UTC
+		utcSl := sl
+		utcSl.TimeZone = utcLoc.String()
+
+		// 22:15 UTC is 10:00pm UTC slot.
+		tenPMTime := time.Date(2026, 6, 5, 22, 15, 0, 0, time.UTC)
+		now := tenPMTime.In(utcLoc)
+		todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, utcLoc)
+		tomorrowMidnight := todayMidnight.AddDate(0, 0, 1)
+
+		// Last updated before 10:00 PM UTC slot.
+		lastUpdate := time.Date(2026, 6, 5, 21, 59, 0, 0, time.UTC)
+		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(tomorrowMidnight, lastUpdate, types.CurrentWeatherVersion, nil)
+		mockS.On("GetWeather", mock.Anything, "test-site", mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+
+		// Expect fetch starting from tomorrow (next day only).
+		mockW.On("Forecast", mock.Anything, utcSl, tomorrowMidnight, tomorrowMidnight.AddDate(0, 0, 1)).Return([]types.Weather{
+			{TSDayStart: tomorrowMidnight},
+		}, nil)
+		mockS.On("UpsertWeather", mock.Anything, "test-site", mock.Anything, types.CurrentWeatherVersion).Return(nil)
+
+		srv := &Server{
+			storage: mockS,
+			weather: mockW,
+			nowFunc: func() time.Time { return tenPMTime },
+		}
+
+		err := srv.updateWeatherHistory(context.Background(), "test-site", utcSl)
+		assert.NoError(t, err)
+		mockS.AssertExpectations(t)
+		mockW.AssertExpectations(t)
 	})
 }
 
