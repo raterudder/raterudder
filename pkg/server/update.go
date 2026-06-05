@@ -499,15 +499,13 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 		if !lastWeatherUpdated.Before(lastPassedSlot) {
 			return nil
 		}
-		// We need to refresh!
-		targetLocalDay := time.Date(lastPassedSlot.Year(), lastPassedSlot.Month(), lastPassedSlot.Day(), 0, 0, 0, 0, timeLoc)
+		targetLocalDay := truncateDay(lastPassedSlot.In(timeLoc))
 		// If the slot occurred at or after 5:00 PM local time (17:00), most of the daylight hours
 		// for the day have already passed. In this case, we only fetch the weather forecast for the
 		// next day (tomorrow) to avoid fetching unnecessary data for the current day.
 		if lastPassedSlot.In(timeLoc).Hour() >= 17 {
 			syncStart = targetLocalDay.AddDate(0, 0, 1)
-			// the end date is exclusive so we need to go to start of the day AFTER
-			// tomorrow to make sure that we get all of tomorrow
+			// the end date is exclusive so we only fetch tomorrow
 			fetchEnd = syncStart.AddDate(0, 0, 1)
 		} else {
 			syncStart = targetLocalDay
