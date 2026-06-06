@@ -379,7 +379,7 @@ describe('App & Settings', () => {
         // Select Service (Provider)
         const serviceSelect = await screen.findByRole('combobox', { name: /Service/i });
         await user.click(serviceSelect);
-        const comedOption = await screen.findByRole('option', { name: 'ComEd' });
+        const comedOption = await screen.findByRole('option', { name: 'Commonwealth Edison (ComEd)' });
         await user.click(comedOption);
 
         // Rate/Plan should be auto-selected since ComEd only has one in the mock
@@ -458,7 +458,7 @@ describe('App & Settings', () => {
         // Check utility
         const serviceSelect = await screen.findByRole('combobox', { name: /Service/i });
         await user.click(serviceSelect);
-        await waitFor(() => expect(screen.getByRole('option', { name: 'ComEd' })).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByRole('option', { name: 'Commonwealth Edison (ComEd)' })).toBeInTheDocument());
         expect(screen.queryByRole('option', { name: 'Secret Utility' })).not.toBeInTheDocument();
         // Try to close dropdown by clicking document body
         fireEvent.pointerDown(document.body);

@@ -269,7 +269,7 @@ func hawaiiUtilityInfo() []types.UtilityProviderInfo {
 	return []types.UtilityProviderInfo{
 		{
 			ID:   "heco",
-			Name: "Hawaiian Electric (O‘ahu)",
+			Name: "Hawaiian Electric (HECO) (O‘ahu)",
 			Rates: []types.UtilityRateInfo{
 				{
 					ID:      "heco_r",

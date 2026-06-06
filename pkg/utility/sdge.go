@@ -636,7 +636,7 @@ func sdgeUtilityInfo() types.UtilityProviderInfo {
 
 	return types.UtilityProviderInfo{
 		ID:   "sdge",
-		Name: "San Diego Gas & Electric",
+		Name: "San Diego Gas & Electric (SDG&E)",
 		Rates: []types.UtilityRateInfo{
 			{
 				ID:      "sdge_ev_tou",

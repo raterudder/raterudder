@@ -106,7 +106,7 @@ func TestDLCRates(t *testing.T) {
 func TestDLCMetadata(t *testing.T) {
 	info := dlcUtilityInfo()
 	assert.Equal(t, "dlc", info.ID)
-	assert.Equal(t, "Duquesne Light Co.", info.Name)
+	assert.Equal(t, "Duquesne Light Co. (DLC)", info.Name)
 	if assert.Len(t, info.Rates, 2) {
 		assert.Equal(t, "dlc_rs", info.Rates[0].ID)
 		if assert.Len(t, info.Rates[0].Options, 1) {

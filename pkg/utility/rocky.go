@@ -283,7 +283,7 @@ func rockyPeriods(plan string, options types.UtilityRateOptions, years []int) []
 func rockyUtilityInfo() types.UtilityProviderInfo {
 	return types.UtilityProviderInfo{
 		ID:   "rocky_mountain_power",
-		Name: "Rocky Mountain Power",
+		Name: "Rocky Mountain Power (RMP)",
 		Rates: []types.UtilityRateInfo{
 			{
 				ID:   "rocky_mountain_power_utah_residential",

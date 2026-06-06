@@ -122,7 +122,7 @@ func TestFPLRates(t *testing.T) {
 func TestFPLMetadata(t *testing.T) {
 	info := fplUtilityInfo()
 	assert.Equal(t, "fpl", info.ID)
-	assert.Equal(t, "Florida Power & Light", info.Name)
+	assert.Equal(t, "Florida Power & Light (FPL)", info.Name)
 	if assert.Len(t, info.Rates, 2) {
 		assert.Equal(t, "fpl_rs1", info.Rates[0].ID)
 		if assert.Len(t, info.Rates[0].Options, 1) {

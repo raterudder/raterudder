@@ -251,7 +251,7 @@ func weUtilityInfo() types.UtilityProviderInfo {
 
 	return types.UtilityProviderInfo{
 		ID:   "we",
-		Name: "WE Energies",
+		Name: "WE Energies (WE)",
 		Rates: []types.UtilityRateInfo{
 			{
 				ID:      "we_rg1",

@@ -174,7 +174,7 @@ func dlcUtilityInfo() types.UtilityProviderInfo {
 
 	return types.UtilityProviderInfo{
 		ID:   "dlc",
-		Name: "Duquesne Light Co.",
+		Name: "Duquesne Light Co. (DLC)",
 		Rates: []types.UtilityRateInfo{
 			{
 				ID:      "dlc_rs",

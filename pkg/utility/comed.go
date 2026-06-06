@@ -785,7 +785,7 @@ func comEdUtilityInfo() types.UtilityProviderInfo {
 
 	return types.UtilityProviderInfo{
 		ID:   "comed",
-		Name: "ComEd",
+		Name: "Commonwealth Edison (ComEd)",
 		Rates: []types.UtilityRateInfo{
 			{
 				ID:      "comed_besh",

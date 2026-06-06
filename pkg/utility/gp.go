@@ -563,7 +563,7 @@ func gpFCRPeriods(plan string, year int, months []time.Month, versionDiff int, h
 func gpUtilityInfo() types.UtilityProviderInfo {
 	return types.UtilityProviderInfo{
 		ID:   "gp",
-		Name: "Georgia Power",
+		Name: "Georgia Power (GP)",
 		Rates: []types.UtilityRateInfo{
 			{
 				ID:   "gp_tou_oa",

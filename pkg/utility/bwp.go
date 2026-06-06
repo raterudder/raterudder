@@ -215,7 +215,7 @@ func bwpUtilityInfo() types.UtilityProviderInfo {
 
 	return types.UtilityProviderInfo{
 		ID:   "bwp",
-		Name: "Burbank Water and Power",
+		Name: "Burbank Water and Power (BWP)",
 		Rates: []types.UtilityRateInfo{
 			{
 				ID:      "bwp_residential",

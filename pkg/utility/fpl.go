@@ -172,7 +172,7 @@ func fplUtilityInfo() types.UtilityProviderInfo {
 
 	return types.UtilityProviderInfo{
 		ID:   "fpl",
-		Name: "Florida Power & Light",
+		Name: "Florida Power & Light (FPL)",
 		Rates: []types.UtilityRateInfo{
 			{
 				ID:      "fpl_rs1",

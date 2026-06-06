@@ -50,7 +50,7 @@ export const defaultSettings = {
 export const defaultUtilities = [
     {
         id: 'comed',
-        name: 'ComEd',
+        name: 'Commonwealth Edison (ComEd)',
         rates: [
             {
                 id: 'comed_besh',

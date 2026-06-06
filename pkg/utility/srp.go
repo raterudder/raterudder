@@ -905,7 +905,7 @@ func srpUtilityInfo() types.UtilityProviderInfo {
 
 	return types.UtilityProviderInfo{
 		ID:   "srp",
-		Name: "Salt River Project",
+		Name: "Salt River Project (SRP)",
 		Rates: []types.UtilityRateInfo{
 			{
 				ID:      "srp_e13",

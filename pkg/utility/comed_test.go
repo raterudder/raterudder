@@ -705,7 +705,7 @@ func TestComEdUtilityInfo(t *testing.T) {
 	info := comEdUtilityInfo()
 
 	assert.Equal(t, "comed", info.ID)
-	assert.Equal(t, "ComEd", info.Name)
+	assert.Equal(t, "Commonwealth Edison (ComEd)", info.Name)
 	require.Len(t, info.Rates, 3, "comed should have exactly 3 rates")
 
 	// BESH rate

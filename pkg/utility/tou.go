@@ -551,7 +551,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 		// source: https://www.ladwp.com/account/customer-service/electric-rates/residential-rates
 		{
 			ID:   "ladwp",
-			Name: "Los Angeles Department of Water & Power",
+			Name: "Los Angeles Department of Water & Power (LADWP)",
 			Rates: []types.UtilityRateInfo{
 				{
 					ID:   "ladwp_r1a",
@@ -677,7 +677,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 		},
 		{
 			ID:   "portland_general_electric",
-			Name: "Portland General Electric",
+			Name: "Portland General Electric (PGE)",
 			Rates: []types.UtilityRateInfo{
 				{
 					ID:   "portland_general_electric_tod",
@@ -700,7 +700,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 		},
 		{
 			ID:   "sce",
-			Name: "Southern California Edison",
+			Name: "Southern California Edison (SCE)",
 			Rates: []types.UtilityRateInfo{
 				{
 					ID:   "sce_tou_d_4_9pm",
@@ -769,7 +769,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 		},
 		{
 			ID:   "pg_e",
-			Name: "Pacific Gas and Electric",
+			Name: "Pacific Gas and Electric (PG&E)",
 			Rates: []types.UtilityRateInfo{
 				{
 					ID:   "pg_e_e1",
@@ -880,7 +880,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 		},
 		{
 			ID:   "mvea",
-			Name: "Mountain View Electric Association",
+			Name: "Mountain View Electric Association (MVEA)",
 			Rates: []types.UtilityRateInfo{
 				{
 					ID:   "mvea_16_01",

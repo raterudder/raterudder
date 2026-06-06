@@ -21,7 +21,7 @@ describe('BetaInterstitialPage Component', () => {
     beforeEach(() => {
         vi.mocked(fetchUtilities).mockResolvedValue([
             { id: 'ameren', name: 'Ameren' },
-            { id: 'comed', name: 'ComEd' }
+            { id: 'comed', name: 'Commonwealth Edison (ComEd)' }
         ] as any);
         vi.mocked(fetchESSList).mockResolvedValue([
             { id: 'franklin', name: 'FranklinWH' },

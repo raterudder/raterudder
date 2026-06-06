@@ -66,7 +66,7 @@ func TestHandleListUtilities(t *testing.T) {
 			}
 		}
 		require.NotNil(t, comedInfo, "comed should be present in the utilities list")
-		assert.Equal(t, "ComEd", comedInfo.Name)
+		assert.Equal(t, "Commonwealth Edison (ComEd)", comedInfo.Name)
 
 		var comedBeshRate *types.UtilityRateInfo
 		for i := range comedInfo.Rates {

@@ -284,7 +284,7 @@ func bgeUtilityInfo() types.UtilityProviderInfo {
 
 	return types.UtilityProviderInfo{
 		ID:   "bge",
-		Name: "Baltimore Gas and Electric",
+		Name: "Baltimore Gas and Electric (BGE)",
 		Rates: []types.UtilityRateInfo{
 			{
 				ID:      "bge_r",
