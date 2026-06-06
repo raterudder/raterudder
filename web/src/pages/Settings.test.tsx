@@ -886,4 +886,38 @@ describe('App & Settings', () => {
             }), expect.any(String), undefined);
         });
     });
+
+    it('clears one-time credentials on save failure to force restart', async () => {
+        const user = userEvent.setup();
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            ess: 'multi_region_ess',
+            hasCredentials: {}
+        });
+
+        await navigateToSettings();
+
+        // Fill in required authCode based on apiMocks
+        const passInput = await screen.findByLabelText(/Authorization Code/i, { selector: 'input[type="password"]' });
+        await user.type(passInput, 'testauthcode');
+
+        // Mock update to fail
+        (updateSettings as any).mockRejectedValue(new Error('Failed to verify credentials'));
+
+        // Save
+        const saveBtn = screen.getByText('Save Settings');
+        await user.click(saveBtn);
+
+        // Expect error to be shown
+        await waitFor(() => {
+            expect(screen.getByText('Failed to verify credentials')).toBeInTheDocument();
+        });
+
+        // Click save again - now it should fail because authCode was cleared and is required
+        await user.click(saveBtn);
+        await waitFor(() => {
+            expect(screen.getByText('The Authorization Code field is required.')).toBeInTheDocument();
+        });
+    });
 });
+

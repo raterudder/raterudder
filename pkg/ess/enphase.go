@@ -78,6 +78,7 @@ func enphaseInfo() types.ESSProviderInfo {
 				Required:    false,
 				Stage:       1,
 				Description: "Enter the code sent to your email/phone.",
+				OneTime:     true,
 			},
 		},
 	}

@@ -135,7 +135,7 @@ export const defaultESSProviders = [
             default: "NA"
         },
         credentials: [
-            { field: 'authCode', name: 'Authorization Code', type: 'password', required: true },
+            { field: 'authCode', name: 'Authorization Code', type: 'password', required: true, oneTime: true },
         ]
     }
 ] as ESSProviderInfo[];

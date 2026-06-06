@@ -193,6 +193,24 @@ const Settings = ({ siteID }: { siteID?: string }) => {
             setTimeout(() => setSuccessMessage(null), 3000);
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to save settings');
+            const provider = essProviders.find(p => p.id === settings.ess);
+            if (provider) {
+                const oneTimeFields = (provider.credentials || [])
+                    .filter(c => c.oneTime)
+                    .map(c => c.field);
+                if (provider.oAuthKey && provider.oAuthKey.oneTime) {
+                    oneTimeFields.push(provider.oAuthKey.field);
+                }
+                if (oneTimeFields.length > 0) {
+                    setEssCredentials(prev => {
+                        const next = { ...prev };
+                        for (const field of oneTimeFields) {
+                            delete next[field];
+                        }
+                        return next;
+                    });
+                }
+            }
         } finally {
             setIsSaving(false);
         }

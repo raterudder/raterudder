@@ -213,6 +213,7 @@ export interface ESSCredentialField {
   default?: any;
   stage?: number;
   hidden?: boolean;
+  oneTime?: boolean;
 }
 
 export interface ESSProviderInfo {

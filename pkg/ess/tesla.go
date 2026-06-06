@@ -154,6 +154,7 @@ func (b *baseTesla) info(ctx context.Context) types.ESSProviderInfo {
 				Type:     types.ESSCredentialFieldTypePassword,
 				Required: true,
 				Hidden:   true,
+				OneTime:  true,
 			},
 			{
 				Field:       "energySiteID",
