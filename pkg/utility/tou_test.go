@@ -289,4 +289,70 @@ func TestTOUUtility(t *testing.T) {
 			assert.InDelta(t, 0.0, p.GenerationCreditDollarsPerKWH, 1e-6)
 		}
 	})
+
+	t.Run("NOVEC", func(t *testing.T) {
+		u := &genericTOU{}
+
+		// 1. Test Schedule R-1 (Residential Service) flat rate
+		err := u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "novec",
+			UtilityRate:     "novec_r1",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "novec_r1", u.Name())
+		assert.NotEmpty(t, u.periods)
+
+		ny, err := time.LoadLocation("America/New_York")
+		require.NoError(t, err)
+
+		// R-1 rate should be flat $0.11079 all day, all year
+		for _, hour := range []int{2, 7, 12, 18, 23} {
+			p, err := u.priceForTime(time.Date(2026, time.June, 15, hour, 0, 0, 0, ny))
+			if assert.NoError(t, err) {
+				assert.InDelta(t, 0.11079, p.DollarsPerKWH, 1e-6)
+			}
+		}
+
+		// 2. Test Schedule R-1-EV (Residential EV Service) TOU rate
+		err = u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "novec",
+			UtilityRate:     "novec_r1_ev",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "novec_r1_ev", u.Name())
+
+		// Test On-Peak: 6:00 a.m. to 11:00 p.m. daily ($0.12694)
+		// 6:00 a.m.
+		p, err := u.priceForTime(time.Date(2026, time.June, 15, 6, 0, 0, 0, ny))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.12694, p.DollarsPerKWH, 1e-6)
+		}
+		// 12:00 p.m.
+		p, err = u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, ny))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.12694, p.DollarsPerKWH, 1e-6)
+		}
+		// 10:59 p.m. (22:59)
+		p, err = u.priceForTime(time.Date(2026, time.June, 15, 22, 59, 0, 0, ny))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.12694, p.DollarsPerKWH, 1e-6)
+		}
+
+		// Test Off-Peak: 11:00 p.m. to 6:00 a.m. daily ($0.07320)
+		// 11:00 p.m.
+		p, err = u.priceForTime(time.Date(2026, time.June, 15, 23, 0, 0, 0, ny))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.07320, p.DollarsPerKWH, 1e-6)
+		}
+		// 2:00 a.m.
+		p, err = u.priceForTime(time.Date(2026, time.June, 15, 2, 0, 0, 0, ny))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.07320, p.DollarsPerKWH, 1e-6)
+		}
+		// 5:59 a.m.
+		p, err = u.priceForTime(time.Date(2026, time.June, 15, 5, 59, 0, 0, ny))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.07320, p.DollarsPerKWH, 1e-6)
+		}
+	})
 }

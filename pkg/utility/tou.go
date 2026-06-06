@@ -385,6 +385,17 @@ func buildPeriods(loc string, simplified []touSimplifiedPeriod) []types.UtilityF
 }
 
 func touUtilityInfo() []types.UtilityProviderInfo {
+	novecOptions := []types.UtilityRateOption{
+		{
+			Field:       "netMeteringCredits",
+			Name:        "Net Metering",
+			Type:        types.UtilityOptionTypeSwitch,
+			Description: "NOVEC net metering tracks energy exports as kWh 1:1 credits.",
+			Default:     true,
+			Hidden:      true,
+		},
+	}
+
 	return append([]types.UtilityProviderInfo{
 		{
 			ID:   "tou_example",
@@ -951,6 +962,51 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 		weUtilityInfo(),
 		bwpUtilityInfo(),
 		eversourceUtilityInfo(),
+		{
+			ID:   "novec",
+			Name: "Northern Virginia Electric Cooperative (NOVEC)",
+			Rates: []types.UtilityRateInfo{
+				{
+					ID:      "novec_r1",
+					Name:    "Schedule R-1 (Residential Service)",
+					Options: novecOptions,
+					GetFees: getStaticGetFees(
+						buildPeriods(
+							"America/New_York",
+							[]touSimplifiedPeriod{
+								{
+									OtherDollarsPerKWH: 0.11079,
+									OtherDescription:   "NOVEC Schedule R-1 Residential Service",
+								},
+							},
+						),
+					),
+				},
+				{
+					ID:      "novec_r1_ev",
+					Name:    "Schedule R-1-EV (Residential Electric Vehicle Service)",
+					Options: novecOptions,
+					GetFees: getStaticGetFees(
+						buildPeriods(
+							"America/New_York",
+							[]touSimplifiedPeriod{
+								{
+									HoursAndDays: []touSimplifiedHoursAndDays{
+										{
+											Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 23}},
+											DollarsPerKWH: 0.12694,
+											Description:   "NOVEC Schedule R-1-EV On-Peak",
+										},
+									},
+									OtherDollarsPerKWH: 0.07320,
+									OtherDescription:   "NOVEC Schedule R-1-EV Off-Peak",
+								},
+							},
+						),
+					),
+				},
+			},
+		},
 	},
 		append(hawaiiUtilityInfo(), dukeUtilityInfo()...)...,
 	)
