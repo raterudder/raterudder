@@ -91,6 +91,11 @@ type Settings struct {
 	// Hysteresis & timing thresholds
 	MinStartChargeMinutes     int `json:"minStartChargeMinutes"`
 	PeakSurvivalBufferMinutes int `json:"peakSurvivalBufferMinutes"`
+
+	// A/C Energy Estimation Settings
+	ACBaseTemperatureC              float64 `json:"acBaseTemperatureC"`
+	ACUsageIncreasePercentPerDegree float64 `json:"acUsageIncreasePercentPerDegree"`
+	ACUsageMaxIncreasePercent       float64 `json:"acUsageMaxIncreasePercent"`
 }
 
 // ESSAuthStatus represents the status of ESS authentication for the site.

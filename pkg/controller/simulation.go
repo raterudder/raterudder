@@ -23,6 +23,7 @@ type SimHour struct {
 	GridChargeDollarsPerKWH float64     `json:"gridChargeDollarsPerKWH"`
 	SolarOppDollarsPerKWH   float64     `json:"solarOppDollarsPerKWH"`
 	AvgHomeLoadKWH          float64     `json:"avgHomeLoadKWH"`
+	AvgHomeLoadACAdjKWH     float64     `json:"avgHomeLoadACAdjKWH"`
 	PredictedSolarKWH       float64     `json:"predictedSolarKWH"`
 	BatteryKWH              float64     `json:"batteryKWH"`
 	BatteryCapacityKWH      float64     `json:"batteryCapacityKWH"`
@@ -343,6 +344,7 @@ func (c *Controller) SimulateState(
 			GridChargeDollarsPerKWH: gridChargeCost,
 			SolarOppDollarsPerKWH:   solarOppCost,
 			AvgHomeLoadKWH:          profile.avgHomeLoadKWH,
+			AvgHomeLoadACAdjKWH:     profile.avgHomeLoadACAdjKWH,
 			PredictedSolarKWH:       predictedAvgSolarKWH,
 			BatteryKWH:              simEnergyKWH,
 			BatteryCapacityKWH:      capacityKWH,
@@ -367,9 +369,10 @@ func (c *Controller) SimulateState(
 }
 
 type timeProfile struct {
-	hour           int
-	avgSolarKWH    float64
-	avgHomeLoadKWH float64
+	hour                int
+	avgSolarKWH         float64
+	avgHomeLoadKWH      float64
+	avgHomeLoadACAdjKWH float64
 }
 
 // buildHourlyEnergyModel averages usage and solar by hour of day from history.
@@ -405,6 +408,30 @@ func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, 
 		weatherSolar = CalculateWeatherSolar(ctx, now, history, weather, loc)
 	} else {
 		smoothedSolar = CalculateSmoothedSolar(ctx, now, history, settings)
+	}
+
+	weatherByHour := make(map[time.Time]float64)
+	for _, w := range weather {
+		for _, hw := range w.ForecastHours {
+			weatherByHour[hw.TSHourStart.UTC()] = hw.TemperatureC
+		}
+	}
+
+	// getRollingTemp calculates a rolling thermal lag temperature centered on H-2.
+	// We use a weighted moving average of the temperatures at H-1 (30%), H-2 (50%), and H-3 (20%).
+	// This models the thermodynamic inertia (thermal mass) of a house: indoor temperature changes
+	// lag behind ambient outdoor temperature changes, and peak A/C load typically lags peak solar/outdoor
+	// temperature by 1 to 3 hours.
+	// Returns false if weather data for any of the required hourly offsets is missing, ensuring we
+	// do not perform inaccurate load adjustments with partial weather records.
+	getRollingTemp := func(targetTime time.Time) (float64, bool) {
+		t1, ok1 := weatherByHour[targetTime.Add(-1*time.Hour).UTC()]
+		t2, ok2 := weatherByHour[targetTime.Add(-2*time.Hour).UTC()]
+		t3, ok3 := weatherByHour[targetTime.Add(-3*time.Hour).UTC()]
+		if !ok1 || !ok2 || !ok3 {
+			return 0, false
+		}
+		return (0.3 * t1) + (0.5 * t2) + (0.2 * t3), true
 	}
 
 	result := make(map[int]timeProfile)
@@ -468,6 +495,91 @@ func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, 
 			avgHomeLoad = totalLoad / countLoad
 		}
 
+		avgHomeLoadACAdj := avgHomeLoad
+
+		// Apply A/C estimation adjustment if configured.
+		// If either of the user settings (ACUsageIncreasePercentPerDegree or ACUsageMaxIncreasePercent)
+		// is less than or equal to 0, or if we have no weather data, this feature is completely disabled.
+		if settings.ACUsageIncreasePercentPerDegree > 0 && settings.ACUsageMaxIncreasePercent > 0 && len(weather) > 0 {
+			// Find the actual simulation time for local hour h in the upcoming 24 hours.
+			// The simulation models the next 24 hours starting from 'now'. We iterate hour-by-hour
+			// to find the exact future time slot where the local hour matches 'h', and use its
+			// truncated hour timestamp to query the correct weather forecast window.
+			var simTime time.Time
+			tCur := now.In(now.Location())
+			for i := 0; i < 24; i++ {
+				if tCur.Hour() == h {
+					simTime = tCur.Truncate(time.Hour)
+					break
+				}
+				tCur = tCur.Add(time.Hour)
+			}
+
+			if !simTime.IsZero() {
+				// Get today's thermal-lagged temperature at the simulated time.
+				todayTemp, hasTodayTemp := getRollingTemp(simTime)
+
+				// Calculate the average temperature of the same hour over the past 5 days.
+				// This forms the seasonal baseline. Since the historical home load (avgHomeLoad)
+				// is computed from the past 5 days of energy usage, it already inherently reflects
+				// the typical A/C consumption driven by the average weather during that period.
+				var pastTemps []float64
+				for d := 1; d <= 5; d++ {
+					if ptemp, ok := getRollingTemp(simTime.AddDate(0, 0, -d)); ok {
+						pastTemps = append(pastTemps, ptemp)
+					}
+				}
+
+				// Adjustments require that:
+				// 1. Today's rolled temperature is above the user's A/C activation threshold (ACBaseTemperatureC).
+				// 2. We have at least 3 valid past temperature data points (out of 5 days lookback) to form
+				//    a stable historical baseline. This prevents skewed calculations due to missing forecast
+				//    history or transient weather data failures.
+				if hasTodayTemp && todayTemp > settings.ACBaseTemperatureC && len(pastTemps) >= 3 {
+					var sumPastTemp float64
+					for _, t := range pastTemps {
+						sumPastTemp += t
+					}
+					baselineTemp := sumPastTemp / float64(len(pastTemps))
+
+					// We only adjust load upwards if today is hotter than the recent historical baseline temperature.
+					// If today is cooler than or equal to the baseline, the A/C usage is assumed to be
+					// already fully captured (or over-estimated) by the average home load profile.
+					if todayTemp > baselineTemp {
+						// Calculate the temperature increase above the maximum of the baselineTemp and the A/C base temperature.
+						// This subtraction prevents "double counting":
+						// - If baselineTemp > ACBaseTemperatureC, the baseline load already includes A/C load up to baselineTemp.
+						//   Thus, we only scale the load for degrees exceeding baselineTemp.
+						// - If baselineTemp <= ACBaseTemperatureC, no substantial A/C load was present in the historical baseline.
+						//   Thus, we only scale the load for degrees exceeding ACBaseTemperatureC.
+						effInc := todayTemp - math.Max(baselineTemp, settings.ACBaseTemperatureC)
+						if effInc > 0 {
+							// Scale the baseline load by the configured rate (e.g., 9% increase per degree Celsius of effective increase).
+							// The resulting adjustment factor is capped at the maximum allowed increase percent (e.g., 50%) to prevent
+							// runaway over-estimation during extreme, uncharacteristic heat spikes.
+							ratio := (settings.ACUsageIncreasePercentPerDegree / 100.0) * effInc
+							maxRatio := settings.ACUsageMaxIncreasePercent / 100.0
+							if ratio > maxRatio {
+								ratio = maxRatio
+							}
+
+							// Apply the scaled percentage increase to the calculated average home load to produce the AC-adjusted load.
+							adjustedLoad := avgHomeLoad + (avgHomeLoad * ratio)
+							log.Ctx(ctx).DebugContext(ctx, "calculated AC load adjustment",
+								slog.Int("hour", h),
+								slog.Float64("originalLoad", avgHomeLoad),
+								slog.Float64("adjustedLoad", adjustedLoad),
+								slog.Float64("todayTemp", todayTemp),
+								slog.Float64("baselineTemp", baselineTemp),
+								slog.Float64("ratio", ratio),
+							)
+							avgHomeLoadACAdj = adjustedLoad
+						}
+					}
+				}
+			}
+		}
+
 		avgSolar := 0.0
 		if len(weather) > 0 {
 			// Find solar for this hour of the upcoming 24h simulation
@@ -486,9 +598,10 @@ func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, 
 		}
 
 		result[h] = timeProfile{
-			hour:           h,
-			avgSolarKWH:    avgSolar,
-			avgHomeLoadKWH: avgHomeLoad,
+			hour:                h,
+			avgSolarKWH:         avgSolar,
+			avgHomeLoadKWH:      avgHomeLoad,
+			avgHomeLoadACAdjKWH: avgHomeLoadACAdj,
 		}
 	}
 

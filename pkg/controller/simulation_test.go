@@ -317,6 +317,104 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		assert.Less(t, model[13].avgSolarKWH, 7.0, "Should be closer to 5.0 than 10.0")
 		assert.Greater(t, model[13].avgSolarKWH, 5.0, "Should capture the average including outlier")
 	})
+
+	t.Run("A/C Weather Prediction", func(t *testing.T) {
+		// Setup a fixed current time: June 15, 2025 at 12:00 PM UTC
+		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+		// Setup 3 days of load history for hour 12
+		history := []types.EnergyStats{
+			{TSHourStart: time.Date(2025, 6, 12, 12, 0, 0, 0, time.UTC), HomeKWH: 2.0},
+			{TSHourStart: time.Date(2025, 6, 13, 12, 0, 0, 0, time.UTC), HomeKWH: 2.0},
+			{TSHourStart: time.Date(2025, 6, 14, 12, 0, 0, 0, time.UTC), HomeKWH: 2.0},
+		}
+
+		// Setup mock weather data
+		// Today (June 15): temps 25, 26, 27 at 9:00, 10:00, 11:00 UTC -> rolling temp = 26.1
+		// Past days (June 14, 13, 12): temps 23, 24, 25 at 9:00, 10:00, 11:00 UTC -> rolling temp = 24.1
+		weather := []types.Weather{
+			{
+				TSDayStart:   time.Date(2025, 6, 12, 0, 0, 0, 0, time.UTC),
+				TimeLocation: "UTC",
+				ForecastHours: []types.HourlyWeather{
+					// June 12
+					{TSHourStart: time.Date(2025, 6, 12, 9, 0, 0, 0, time.UTC), TemperatureC: 23.0},
+					{TSHourStart: time.Date(2025, 6, 12, 10, 0, 0, 0, time.UTC), TemperatureC: 24.0},
+					{TSHourStart: time.Date(2025, 6, 12, 11, 0, 0, 0, time.UTC), TemperatureC: 25.0},
+					// June 13
+					{TSHourStart: time.Date(2025, 6, 13, 9, 0, 0, 0, time.UTC), TemperatureC: 23.0},
+					{TSHourStart: time.Date(2025, 6, 13, 10, 0, 0, 0, time.UTC), TemperatureC: 24.0},
+					{TSHourStart: time.Date(2025, 6, 13, 11, 0, 0, 0, time.UTC), TemperatureC: 25.0},
+					// June 14
+					{TSHourStart: time.Date(2025, 6, 14, 9, 0, 0, 0, time.UTC), TemperatureC: 23.0},
+					{TSHourStart: time.Date(2025, 6, 14, 10, 0, 0, 0, time.UTC), TemperatureC: 24.0},
+					{TSHourStart: time.Date(2025, 6, 14, 11, 0, 0, 0, time.UTC), TemperatureC: 25.0},
+					// June 15
+					{TSHourStart: time.Date(2025, 6, 15, 9, 0, 0, 0, time.UTC), TemperatureC: 25.0},
+					{TSHourStart: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC), TemperatureC: 26.0},
+					{TSHourStart: time.Date(2025, 6, 15, 11, 0, 0, 0, time.UTC), TemperatureC: 27.0},
+				},
+			},
+		}
+
+		t.Run("Disabled if percent per degree is 0 or negative", func(t *testing.T) {
+			settings := types.Settings{
+				ACBaseTemperatureC:              24.0,
+				ACUsageIncreasePercentPerDegree: 0.0, // 0 means disabled
+				ACUsageMaxIncreasePercent:       50.0,
+			}
+			model := c.buildHourlyEnergyModel(ctx, now, history, weather, settings)
+			profile := model[12]
+			assert.Equal(t, 2.0, profile.avgHomeLoadKWH)
+			assert.Equal(t, 2.0, profile.avgHomeLoadACAdjKWH)
+
+			settings.ACUsageIncreasePercentPerDegree = -1.0 // -1 also means disabled
+			model = c.buildHourlyEnergyModel(ctx, now, history, weather, settings)
+			profile = model[12]
+			assert.Equal(t, 2.0, profile.avgHomeLoadKWH)
+			assert.Equal(t, 2.0, profile.avgHomeLoadACAdjKWH)
+		})
+
+		t.Run("Respects base temperature setting", func(t *testing.T) {
+			// rolling temp today = 26.1, rolling temp yesterday = 24.1
+			// Base temp = 25.0 -> effInc = 26.1 - Max(24.1, 25.0) = 26.1 - 25.0 = 1.1
+			// Base temp = 24.0 -> effInc = 26.1 - Max(24.1, 24.0) = 26.1 - 24.1 = 2.0
+			// Let's test with Base temp = 25.0:
+			// ratio = 10% * 1.1 = 11% increase -> 2.0 * 1.11 = 2.22
+			settings := types.Settings{
+				ACBaseTemperatureC:              25.0,
+				ACUsageIncreasePercentPerDegree: 10.0,
+				ACUsageMaxIncreasePercent:       50.0,
+			}
+			model := c.buildHourlyEnergyModel(ctx, now, history, weather, settings)
+			profile := model[12]
+			assert.Equal(t, 2.0, profile.avgHomeLoadKWH)
+			assert.InDelta(t, 2.22, profile.avgHomeLoadACAdjKWH, 0.001)
+
+			// Base temp = 24.0:
+			// ratio = 10% * 2.0 = 20% increase -> 2.0 * 1.20 = 2.40
+			settings.ACBaseTemperatureC = 24.0
+			model = c.buildHourlyEnergyModel(ctx, now, history, weather, settings)
+			profile = model[12]
+			assert.Equal(t, 2.0, profile.avgHomeLoadKWH)
+			assert.InDelta(t, 2.40, profile.avgHomeLoadACAdjKWH, 0.001)
+		})
+
+		t.Run("Respects max cap setting", func(t *testing.T) {
+			// Base temp = 24.0 -> effInc = 2.0
+			// Increase = 20% per degree -> ratio = 40% increase -> 2.0 * 1.40 = 2.80
+			// But cap is 25% -> ratio capped at 25% -> 2.0 * 1.25 = 2.50
+			settings := types.Settings{
+				ACBaseTemperatureC:              24.0,
+				ACUsageIncreasePercentPerDegree: 20.0,
+				ACUsageMaxIncreasePercent:       25.0,
+			}
+			model := c.buildHourlyEnergyModel(ctx, now, history, weather, settings)
+			profile := model[12]
+			assert.Equal(t, 2.0, profile.avgHomeLoadKWH)
+			assert.InDelta(t, 2.50, profile.avgHomeLoadACAdjKWH, 0.001)
+		})
+	})
 }
 
 func TestCalculateSolarTrend(t *testing.T) {

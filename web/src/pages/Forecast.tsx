@@ -281,6 +281,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 ? h.todaySolarTrend
                 : 0,
             avgHomeLoadKWH: Math.floor((h.avgHomeLoadKWH || 0) * 10) / 10,
+            avgHomeLoadACAdjKWH: Math.floor((h.avgHomeLoadACAdjKWH || 0) * 10) / 10,
         }));
     }, [rawModelingData, includeHistory]);
 
@@ -332,9 +333,18 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 })}
             </p>
             <div className="modeling-charts">
-                {charts.map((c) => (
-                    <ForecastChart key={c.dataKey} data={data} config={c} isMobile={isMobile} showCurrentTime={includeHistory} nowMs={nowMs} />
-                ))}
+                {charts.map((c) => {
+                    const config = { ...c };
+                    if (config.dataKey === 'avgHomeLoadKWH' && settings?.release === 'staging') {
+                        config.additionalLines = [
+                            ...(config.additionalLines || []),
+                            { dataKey: 'avgHomeLoadACAdjKWH', color: '#ec4899', strokeDasharray: '4 4' }
+                        ];
+                    }
+                    return (
+                        <ForecastChart key={config.dataKey} data={data} config={config} isMobile={isMobile} showCurrentTime={includeHistory} nowMs={nowMs} />
+                    );
+                })}
             </div>
             {settings?.release === 'staging' && (
                 <>

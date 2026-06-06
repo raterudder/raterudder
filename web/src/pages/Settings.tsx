@@ -966,7 +966,54 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                             <Field.Description>Simulate actions without executing them (useful for testing).</Field.Description>
                         </Field.Root>
 
+                        {settings.release === 'staging' && (
+                            <>
+                                <div className="section-header">
+                                    <h3>Air Conditioning Prediction</h3>
+                                </div>
+                                <Field.Root className="form-group switch-group">
+                                    <div className="switch-row">
+                                        <Switch.Root
+                                            checked={settings.acUsageIncreasePercentPerDegree > 0}
+                                            onCheckedChange={(checked) => {
+                                                if (checked) {
+                                                    handleChange('acUsageIncreasePercentPerDegree', 9);
+                                                    handleChange('acUsageMaxIncreasePercent', 50);
+                                                } else {
+                                                    handleChange('acUsageIncreasePercentPerDegree', -1);
+                                                    handleChange('acUsageMaxIncreasePercent', -1);
+                                                }
+                                            }}
+                                            className="switch-root"
+                                        >
+                                            <Switch.Thumb className="switch-thumb" />
+                                        </Switch.Root>
+                                        <Field.Label>Enable A/C Weather Prediction</Field.Label>
+                                    </div>
+                                    <Field.Description>Automatically predict increased load during hotter weather to ensure adequate battery reserves.</Field.Description>
+                                </Field.Root>
 
+                                {settings.acUsageIncreasePercentPerDegree > 0 && (
+                                    <Field.Root className="form-group">
+                                        <Field.Label htmlFor="acBaseTemperatureF">A/C Base Temperature (°F)</Field.Label>
+                                        <Input
+                                            id="acBaseTemperatureF"
+                                            type="number"
+                                            step="1"
+                                            value={Math.round((settings.acBaseTemperatureC || 24) * 9 / 5 + 32)}
+                                            onChange={(e) => {
+                                                const f = parseFloat(e.target.value);
+                                                if (!isNaN(f)) {
+                                                    const c = (f - 32) * 5 / 9;
+                                                    handleChange('acBaseTemperatureC', c);
+                                                }
+                                            }}
+                                        />
+                                        <Field.Description>Temperature above which A/C is typically used to cool the house.</Field.Description>
+                                    </Field.Root>
+                                )}
+                            </>
+                        )}
 
                         <div className="section-header">
                             <h3>Automation Overrides</h3>

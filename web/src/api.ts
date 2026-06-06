@@ -257,6 +257,9 @@ export interface Settings {
     solarTilt?: number;
     minStartChargeMinutes: number;
     peakSurvivalBufferMinutes: number;
+    acBaseTemperatureC: number;
+    acUsageIncreasePercentPerDegree: number;
+    acUsageMaxIncreasePercent: number;
 }
 
 export interface FranklinCredentials {
@@ -378,6 +381,7 @@ export interface ModelingHour {
     gridChargeDollarsPerKWH: number;
     solarOppDollarsPerKWH: number;
     avgHomeLoadKWH: number;
+    avgHomeLoadACAdjKWH: number;
     predictedSolarKWH: number;
     batteryKWH: number;
     batteryCapacityKWH: number;
