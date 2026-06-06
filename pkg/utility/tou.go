@@ -1007,6 +1007,77 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 				},
 			},
 		},
+		{
+			ID:   "centerpoint_indiana",
+			Name: "CenterPoint Energy Indiana South (Indiana)",
+			Rates: []types.UtilityRateInfo{
+				{
+					ID:   "centerpoint_indiana_rs",
+					Name: "Rate RS - Residential Service (Indiana)",
+					Options: []types.UtilityRateOption{
+						{
+							Field:       "netMeteringScheme",
+							Name:        "Export Scheme / Rider",
+							Type:        types.UtilityOptionTypeSelect,
+							Description: "Select your solar export scheme.",
+							Choices: []types.UtilityOptionChoice{
+								{Value: "edg", Name: "Excess Distributed Generation (EDG)"},
+								{Value: "net", Name: "Standard Net Metering (1:1)"},
+							},
+							Default: "edg",
+						},
+					},
+					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+						// Standard Customers:
+						// Energy Charge: $0.157230
+						// Fuel Charge: $0.041220
+						// Variable Production Charge: $0.001692
+						// Total rate = $0.200142
+						rate := 0.157230 + 0.041220 + 0.001692
+						simplified := []touSimplifiedPeriod{
+							{
+								Year:               2026,
+								MonthStart:         time.January,
+								MonthEnd:           time.December,
+								OtherDollarsPerKWH: rate,
+								OtherDescription:   "CenterPoint Indiana Rate RS Standard Charge",
+							},
+						}
+
+						periods := buildPeriods(ctLocation.String(), simplified)
+
+						// Export Credits
+						scheme := opts.NetMeteringScheme
+						if scheme == "" {
+							scheme = "edg"
+						}
+
+						if scheme == "edg" {
+							for _, year := range []int{2026} {
+								periods = append(periods, types.UtilityFeesPeriod{
+									UtilityPeriod: types.UtilityPeriod{
+										Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, ctLocation),
+										End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, ctLocation),
+										LocationPtr: ctLocation,
+									},
+									DollarsPerKWH:            0.05561,
+									SeparateGenerationCredit: true,
+									Description:              "Excess Distributed Generation Credit",
+								})
+							}
+						}
+
+						return periods, nil
+					},
+				},
+			},
+		},
+		pecoUtilityInfo(),
+		sawneeUtilityInfo(),
+		waltonUtilityInfo(),
+		idahoUtilityInfo(),
+		psegliUtilityInfo(),
+		pseUtilityInfo(),
 	},
 		append(hawaiiUtilityInfo(), dukeUtilityInfo()...)...,
 	)

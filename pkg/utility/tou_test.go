@@ -355,4 +355,53 @@ func TestTOUUtility(t *testing.T) {
 			assert.InDelta(t, 0.07320, p.DollarsPerKWH, 1e-6)
 		}
 	})
+
+	t.Run("CenterPoint Indiana", func(t *testing.T) {
+		u := &genericTOU{}
+
+		// 1. Test standard rate settings application (default export: edg)
+		err := u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "centerpoint_indiana",
+			UtilityRate:     "centerpoint_indiana_rs",
+			UtilityRateOptions: types.UtilityRateOptions{
+				NetMeteringScheme: "edg",
+			},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "centerpoint_indiana_rs", u.Name())
+		assert.NotEmpty(t, u.periods)
+
+		chi, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
+
+		// Flat rate should be $0.200142/kWh at any time
+		// EDG rate should be separate generation credit of $0.05561
+		for _, hour := range []int{2, 7, 12, 18, 23} {
+			p, err := u.priceForTime(time.Date(2026, time.June, 15, hour, 0, 0, 0, chi))
+			if assert.NoError(t, err) {
+				assert.InDelta(t, 0.200142, p.DollarsPerKWH, 1e-6)
+				assert.True(t, p.SeparateGenerationCredit)
+				assert.InDelta(t, 0.05561, p.GenerationCreditDollarsPerKWH, 1e-6)
+			}
+		}
+
+		// 2. Test net metering option (1:1)
+		err = u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "centerpoint_indiana",
+			UtilityRate:     "centerpoint_indiana_rs",
+			UtilityRateOptions: types.UtilityRateOptions{
+				NetMeteringScheme: "net",
+			},
+		})
+		require.NoError(t, err)
+
+		for _, hour := range []int{2, 7, 12, 18, 23} {
+			p, err := u.priceForTime(time.Date(2026, time.June, 15, hour, 0, 0, 0, chi))
+			if assert.NoError(t, err) {
+				assert.InDelta(t, 0.200142, p.DollarsPerKWH, 1e-6)
+				assert.False(t, p.SeparateGenerationCredit)
+				assert.InDelta(t, 0.0, p.GenerationCreditDollarsPerKWH, 1e-6)
+			}
+		}
+	})
 }
