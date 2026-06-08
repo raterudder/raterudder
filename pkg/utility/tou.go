@@ -1078,6 +1078,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 		idahoUtilityInfo(),
 		psegliUtilityInfo(),
 		pseUtilityInfo(),
+		secoUtilityInfo(),
 	},
 		append(hawaiiUtilityInfo(), dukeUtilityInfo()...)...,
 	)
