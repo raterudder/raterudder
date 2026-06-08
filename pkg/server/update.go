@@ -795,9 +795,11 @@ func (s *Server) getCombinedHistory(
 	for _, summary := range summaries {
 		// Filter and append energy stats from the summaries
 		for _, day := range summary.Energy {
-			// Only include days in the range [historyStart, todayStart).
-			// This excludes today's data (which won't be in the summary yet) and older days out of bounds.
-			if !day.TSDayStart.Before(historyStart) && day.TSDayStart.Before(todayStart) {
+			// We exclude today's data (which won't be in the monthly summary yet).
+			// We explicitly ignore filtering by historyStart (the request range's lower bound)
+			// because the entire monthly summary document was already loaded from Firestore.
+			// Filtering out the early days of the month would discard data we have already paid to read.
+			if day.TSDayStart.Before(todayStart) {
 				combinedEnergy = append(combinedEnergy, day)
 				if latestSummaryEnergyDay.IsZero() || day.TSDayStart.After(latestSummaryEnergyDay) {
 					latestSummaryEnergyDay = day.TSDayStart
@@ -807,7 +809,9 @@ func (s *Server) getCombinedHistory(
 
 		// Filter and append weather data from the summaries
 		for _, w := range summary.Weather {
-			if !w.TSDayStart.Before(historyStart) && w.TSDayStart.Before(todayStart) {
+			// Explicitly ignore filtering by historyStart because the monthly summary document
+			// was already fetched. Keeping all days ensures we use all available loaded history.
+			if w.TSDayStart.Before(todayStart) {
 				combinedWeather = append(combinedWeather, w)
 				if latestSummaryWeatherDay.IsZero() || w.TSDayStart.After(latestSummaryWeatherDay) {
 					latestSummaryWeatherDay = w.TSDayStart

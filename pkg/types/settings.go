@@ -8,7 +8,7 @@ import (
 
 // CurrentSettingsVersion is the current version of the settings struct.
 // Increment this value only if you need to set a default value other than the Go default for that value.
-const CurrentSettingsVersion = 10
+const CurrentSettingsVersion = 11
 
 // Settings represents the configuration stored in the database.
 // These are dynamic settings that can be changed without redeploying.
@@ -23,6 +23,8 @@ type Settings struct {
 	// Power History Settings
 	// What multiple over previous days to ignore when calculating power usage
 	IgnoreHourUsageOverMultiple float64 `json:"ignoreHourUsageOverMultiple"`
+	// The minimum hourly energy usage (in kWh) below which we do not filter outliers.
+	IgnoreHourUsageFloorKWH float64 `json:"ignoreHourUsageFloorKWH"`
 
 	// Utility Provider
 	UtilityProvider    string              `json:"utilityProvider"`
@@ -248,6 +250,12 @@ func MigrateSettings(s Settings, currentVersion int) (Settings, bool, error) {
 			}
 			if s.PeakSurvivalBufferMinutes == 0 {
 				s.PeakSurvivalBufferMinutes = 30
+				migrated = true
+			}
+		case 11:
+			// version 11: add IgnoreHourUsageFloorKWH default
+			if s.IgnoreHourUsageFloorKWH == 0 {
+				s.IgnoreHourUsageFloorKWH = 0.5
 				migrated = true
 			}
 		default:

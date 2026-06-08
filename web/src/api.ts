@@ -382,7 +382,7 @@ export interface ModelingHour {
     gridChargeDollarsPerKWH: number;
     solarOppDollarsPerKWH: number;
     avgHomeLoadKWH: number;
-    avgHomeLoadACAdjKWH: number;
+    avgHomeLoadImprovedKWH: number;
     predictedSolarKWH: number;
     batteryKWH: number;
     batteryCapacityKWH: number;
@@ -543,6 +543,7 @@ export interface WeatherRes {
     snowfallCM?: number;
     improvedSolarGeneration?: number;
     unclippedSolarGeneration?: number;
+    improvedHomeLoad?: number;
     snowDepthCM?: number;
     tempFactor?: number;
     snowFactor?: number;

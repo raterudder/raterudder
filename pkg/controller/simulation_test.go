@@ -29,8 +29,8 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		// Avg Load: (1+3)/2 = 2.0. Solar: 0 (no solar at night).
 		// The 0.05 values are ignored.
 		model := c.buildHourlyEnergyModel(ctx, time.Now().UTC(), history, nil, types.Settings{IgnoreHourUsageOverMultiple: 0.0})
-		assert.InDelta(t, 2.0, model[h1.Hour()].avgHomeLoadKWH, 0.001)
-		assert.InDelta(t, 0.0, model[h1.Hour()].avgSolarKWH, 0.001)
+		assert.InDelta(t, 2.0, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
+		assert.InDelta(t, 0.0, model[h1.Hour()].AvgSolarKWH, 0.001)
 	})
 
 	t.Run("Basic Average All Low", func(t *testing.T) {
@@ -42,8 +42,8 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		model := c.buildHourlyEnergyModel(ctx, time.Now().UTC(), history, nil, types.Settings{IgnoreHourUsageOverMultiple: 0.0})
 		// Should be 0.0 because all filtered
-		assert.InDelta(t, 0.0, model[h1.Hour()].avgHomeLoadKWH, 0.001)
-		assert.InDelta(t, 0.0, model[h1.Hour()].avgSolarKWH, 0.001)
+		assert.InDelta(t, 0.0, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
+		assert.InDelta(t, 0.0, model[h1.Hour()].AvgSolarKWH, 0.001)
 	})
 
 	t.Run("Ignore Outliers", func(t *testing.T) {
@@ -59,7 +59,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 		model := c.buildHourlyEnergyModel(ctx, time.Now().UTC(), history, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
 		// (1.0 + 1.2) / 2 = 1.1
-		assert.InDelta(t, 1.1, model[h1.Hour()].avgHomeLoadKWH, 0.001)
+		assert.InDelta(t, 1.1, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
 
 		// Case 2: Multiple outliers (not removed)
 		historyMulti := []types.EnergyStats{
@@ -69,7 +69,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 		modelMulti := c.buildHourlyEnergyModel(ctx, time.Now().UTC(), historyMulti, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
 		// (1.0 + 10.0 + 12.0) / 3 = 7.666...
-		assert.InDelta(t, 7.666, modelMulti[h1.Hour()].avgHomeLoadKWH, 0.001)
+		assert.InDelta(t, 7.666, modelMulti[h1.Hour()].AvgHomeLoadKWH, 0.001)
 
 		// Case 3: Not enough points (min 3)
 		historyFew := []types.EnergyStats{
@@ -78,7 +78,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 		modelFew := c.buildHourlyEnergyModel(ctx, time.Now().UTC(), historyFew, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
 		// (1.0 + 10.0) / 2 = 5.5
-		assert.InDelta(t, 5.5, modelFew[h1.Hour()].avgHomeLoadKWH, 0.001)
+		assert.InDelta(t, 5.5, modelFew[h1.Hour()].AvgHomeLoadKWH, 0.001)
 	})
 
 	t.Run("Smoothes Solar With Bell Curve", func(t *testing.T) {
@@ -143,9 +143,9 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		// Predicted peak ~13.5 (between 13 and 14).
 		// Predicted at 13: 5.0 * exp(-(13-13.5)^2/...) = 5.0 * 0.99 = ~4.95.
 
-		assert.Greater(t, model[13].avgSolarKWH, 4.8,
+		assert.Greater(t, model[13].AvgSolarKWH, 4.8,
 			"Should reconstruct bell curve peak to ~5.0 using off-peak data")
-		assert.Less(t, model[13].avgSolarKWH, 5.2, "Should be around 5.0")
+		assert.Less(t, model[13].AvgSolarKWH, 5.2, "Should be around 5.0")
 
 		// Run 2: No valid data (Everything curtailed or low)
 		// Set all solar to 0.05 (filtered)
@@ -154,7 +154,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 		modelNoData := c.buildHourlyEnergyModel(ctx, now, history, nil, settings)
 		// Should be 0.0 (filtered) and no smoothing (no valid max)
-		assert.Equal(t, 0.0, modelNoData[13].avgSolarKWH)
+		assert.Equal(t, 0.0, modelNoData[13].AvgSolarKWH)
 	})
 
 	t.Run("No Daylight In History", func(t *testing.T) {
@@ -177,7 +177,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		// No solar detected, should not smooth
 		for h := 0; h < 24; h++ {
-			assert.InDelta(t, 0.0, model[h].avgSolarKWH, 0.001, "Hour %d should have no solar", h)
+			assert.InDelta(t, 0.0, model[h].AvgSolarKWH, 0.001, "Hour %d should have no solar", h)
 		}
 	})
 
@@ -209,7 +209,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		// All data is curtailed (SOC=99%, no export), so the first pass finds nothing.
 		// The fallback pass should still find valid data and smooth.
 		// Peak hour should be at least 3.0
-		assert.GreaterOrEqual(t, model[13].avgSolarKWH, 3.0,
+		assert.GreaterOrEqual(t, model[13].AvgSolarKWH, 3.0,
 			"Should use fallback data and maintain at least the raw average")
 	})
 
@@ -258,8 +258,8 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		// Let's just verify the peak isn't totally insane.
 		// Estimated peak should be around 21.2.
-		assert.Less(t, model[13].avgSolarKWH, 25.0, "Peak should not explode from noisy edge data")
-		assert.Greater(t, model[13].avgSolarKWH, 5.0, "Should still boost above the baseline peak of 2.0")
+		assert.Less(t, model[13].AvgSolarKWH, 25.0, "Peak should not explode from noisy edge data")
+		assert.Greater(t, model[13].AvgSolarKWH, 5.0, "Should still boost above the baseline peak of 2.0")
 	})
 
 	t.Run("Solar Peak Estimation With Outliers", func(t *testing.T) {
@@ -314,106 +314,8 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		// 5.83 is much closer to 5.0 than 10.0.
 		// If we took the max (old logic), it would be 10.0.
 
-		assert.Less(t, model[13].avgSolarKWH, 7.0, "Should be closer to 5.0 than 10.0")
-		assert.Greater(t, model[13].avgSolarKWH, 5.0, "Should capture the average including outlier")
-	})
-
-	t.Run("A/C Weather Prediction", func(t *testing.T) {
-		// Setup a fixed current time: June 15, 2025 at 12:00 PM UTC
-		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
-
-		// Setup 3 days of load history for hour 12
-		history := []types.EnergyStats{
-			{TSHourStart: time.Date(2025, 6, 12, 12, 0, 0, 0, time.UTC), HomeKWH: 2.0},
-			{TSHourStart: time.Date(2025, 6, 13, 12, 0, 0, 0, time.UTC), HomeKWH: 2.0},
-			{TSHourStart: time.Date(2025, 6, 14, 12, 0, 0, 0, time.UTC), HomeKWH: 2.0},
-		}
-
-		// Setup mock weather data
-		// Today (June 15): temps 25, 26, 27 at 9:00, 10:00, 11:00 UTC -> rolling temp = 26.1
-		// Past days (June 14, 13, 12): temps 23, 24, 25 at 9:00, 10:00, 11:00 UTC -> rolling temp = 24.1
-		weather := []types.Weather{
-			{
-				TSDayStart:   time.Date(2025, 6, 12, 0, 0, 0, 0, time.UTC),
-				TimeLocation: "UTC",
-				ForecastHours: []types.HourlyWeather{
-					// June 12
-					{TSHourStart: time.Date(2025, 6, 12, 9, 0, 0, 0, time.UTC), TemperatureC: 23.0},
-					{TSHourStart: time.Date(2025, 6, 12, 10, 0, 0, 0, time.UTC), TemperatureC: 24.0},
-					{TSHourStart: time.Date(2025, 6, 12, 11, 0, 0, 0, time.UTC), TemperatureC: 25.0},
-					// June 13
-					{TSHourStart: time.Date(2025, 6, 13, 9, 0, 0, 0, time.UTC), TemperatureC: 23.0},
-					{TSHourStart: time.Date(2025, 6, 13, 10, 0, 0, 0, time.UTC), TemperatureC: 24.0},
-					{TSHourStart: time.Date(2025, 6, 13, 11, 0, 0, 0, time.UTC), TemperatureC: 25.0},
-					// June 14
-					{TSHourStart: time.Date(2025, 6, 14, 9, 0, 0, 0, time.UTC), TemperatureC: 23.0},
-					{TSHourStart: time.Date(2025, 6, 14, 10, 0, 0, 0, time.UTC), TemperatureC: 24.0},
-					{TSHourStart: time.Date(2025, 6, 14, 11, 0, 0, 0, time.UTC), TemperatureC: 25.0},
-					// June 15
-					{TSHourStart: time.Date(2025, 6, 15, 9, 0, 0, 0, time.UTC), TemperatureC: 25.0},
-					{TSHourStart: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC), TemperatureC: 26.0},
-					{TSHourStart: time.Date(2025, 6, 15, 11, 0, 0, 0, time.UTC), TemperatureC: 27.0},
-				},
-			},
-		}
-
-		t.Run("Disabled if percent per degree is 0 or negative", func(t *testing.T) {
-			settings := types.Settings{
-				ACBaseTemperatureC:              24.0,
-				ACUsageIncreasePercentPerDegree: 0.0, // 0 means disabled
-				ACUsageMaxIncreasePercent:       50.0,
-			}
-			model := c.buildHourlyEnergyModel(ctx, now, history, weather, settings)
-			profile := model[12]
-			assert.Equal(t, 2.0, profile.avgHomeLoadKWH)
-			assert.Equal(t, 2.0, profile.avgHomeLoadACAdjKWH)
-
-			settings.ACUsageIncreasePercentPerDegree = -1.0 // -1 also means disabled
-			model = c.buildHourlyEnergyModel(ctx, now, history, weather, settings)
-			profile = model[12]
-			assert.Equal(t, 2.0, profile.avgHomeLoadKWH)
-			assert.Equal(t, 2.0, profile.avgHomeLoadACAdjKWH)
-		})
-
-		t.Run("Respects base temperature setting", func(t *testing.T) {
-			// rolling temp today = 26.1, rolling temp yesterday = 24.1
-			// Base temp = 25.0 -> effInc = 26.1 - Max(24.1, 25.0) = 26.1 - 25.0 = 1.1
-			// Base temp = 24.0 -> effInc = 26.1 - Max(24.1, 24.0) = 26.1 - 24.1 = 2.0
-			// Let's test with Base temp = 25.0:
-			// ratio = 10% * 1.1 = 11% increase -> 2.0 * 1.11 = 2.22
-			settings := types.Settings{
-				ACBaseTemperatureC:              25.0,
-				ACUsageIncreasePercentPerDegree: 10.0,
-				ACUsageMaxIncreasePercent:       50.0,
-			}
-			model := c.buildHourlyEnergyModel(ctx, now, history, weather, settings)
-			profile := model[12]
-			assert.Equal(t, 2.0, profile.avgHomeLoadKWH)
-			assert.InDelta(t, 2.22, profile.avgHomeLoadACAdjKWH, 0.001)
-
-			// Base temp = 24.0:
-			// ratio = 10% * 2.0 = 20% increase -> 2.0 * 1.20 = 2.40
-			settings.ACBaseTemperatureC = 24.0
-			model = c.buildHourlyEnergyModel(ctx, now, history, weather, settings)
-			profile = model[12]
-			assert.Equal(t, 2.0, profile.avgHomeLoadKWH)
-			assert.InDelta(t, 2.40, profile.avgHomeLoadACAdjKWH, 0.001)
-		})
-
-		t.Run("Respects max cap setting", func(t *testing.T) {
-			// Base temp = 24.0 -> effInc = 2.0
-			// Increase = 20% per degree -> ratio = 40% increase -> 2.0 * 1.40 = 2.80
-			// But cap is 25% -> ratio capped at 25% -> 2.0 * 1.25 = 2.50
-			settings := types.Settings{
-				ACBaseTemperatureC:              24.0,
-				ACUsageIncreasePercentPerDegree: 20.0,
-				ACUsageMaxIncreasePercent:       25.0,
-			}
-			model := c.buildHourlyEnergyModel(ctx, now, history, weather, settings)
-			profile := model[12]
-			assert.Equal(t, 2.0, profile.avgHomeLoadKWH)
-			assert.InDelta(t, 2.50, profile.avgHomeLoadACAdjKWH, 0.001)
-		})
+		assert.Less(t, model[13].AvgSolarKWH, 7.0, "Should be closer to 5.0 than 10.0")
+		assert.Greater(t, model[13].AvgSolarKWH, 5.0, "Should capture the average including outlier")
 	})
 }
 
@@ -424,10 +326,10 @@ func TestCalculateSolarTrend(t *testing.T) {
 	historyStart := now.Add(-2 * time.Hour)
 
 	// Mock model
-	model := map[int]timeProfile{
-		11: {avgSolarKWH: 2.0},
-		12: {avgSolarKWH: 3.0},
-		13: {avgSolarKWH: 4.0},
+	model := map[int]TimeProfile{
+		11: {AvgSolarKWH: 2.0},
+		12: {AvgSolarKWH: 3.0},
+		13: {AvgSolarKWH: 4.0},
 	}
 
 	settings := types.Settings{
@@ -448,10 +350,10 @@ func TestCalculateSolarTrend(t *testing.T) {
 			{TSHourStart: nightNow.Add(-1 * time.Hour), SolarKWH: 0.0},
 			{TSHourStart: nightNow.Add(-2 * time.Hour), SolarKWH: 0.0},
 		}
-		nightModel := map[int]timeProfile{
-			0: {avgSolarKWH: 0.0},
-			1: {avgSolarKWH: 0.0},
-			2: {avgSolarKWH: 0.0},
+		nightModel := map[int]TimeProfile{
+			0: {AvgSolarKWH: 0.0},
+			1: {AvgSolarKWH: 0.0},
+			2: {AvgSolarKWH: 0.0},
 		}
 		ratio := c.calculateSolarTrend(ctx, nightNow, history, nightModel, settings)
 		assert.Equal(t, 1.0, ratio)

@@ -18,6 +18,7 @@ import './History.css';
 interface HistoryDataPoint extends EnergyStats {
     irradiance?: number;
     improvedSolarGeneration?: number;
+    improvedHomeLoad?: number;
     solar1hImproved?: number;
     solar1hUnclipped?: number;
 }
@@ -204,6 +205,7 @@ const History: React.FC<{ siteID?: string }> = ({ siteID }) => {
                         ...e,
                         irradiance: w?.irradiance,
                         improvedSolarGeneration: w?.improvedSolarGeneration,
+                        improvedHomeLoad: w?.improvedHomeLoad !== undefined ? Math.floor(w.improvedHomeLoad * 10) / 10 : undefined,
                         solar1hImproved: s1h?.improvedSolarGeneration,
                         solar1hUnclipped: s1h?.unclippedSolarGeneration,
                         homeKWH: Math.floor((e.homeKWH || 0) * 10) / 10,
@@ -233,7 +235,18 @@ const History: React.FC<{ siteID?: string }> = ({ siteID }) => {
     };
 
     const chartsToRender = useMemo(() => {
-        const filtered = historyCharts.filter(c => {
+        const filtered = historyCharts.map(c => {
+            if (c.title === 'Home Load (kWh)' && settings?.release === 'staging') {
+                return {
+                    ...c,
+                    dataKeys: [
+                        { key: 'homeKWH', color: '#a855f7', label: 'Home Load', type: 'area' as const },
+                        { key: 'improvedHomeLoad', color: '#ec4899', label: 'Forecast Load', type: 'line' as const, strokeDasharray: '4 4' }
+                    ]
+                };
+            }
+            return c;
+        }).filter(c => {
             if (c.dataKeys.some(dk => dk.key === 'irradiance') && settings?.release !== 'staging') return false;
             return true;
         });

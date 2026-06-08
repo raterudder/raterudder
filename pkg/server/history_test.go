@@ -974,4 +974,72 @@ func TestHandleHistoryEnergy(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 		assert.Equal(t, "private, max-age=86400", w.Header().Get("Cache-Control"))
 	})
+
+	t.Run("NoDataLeakage", func(t *testing.T) {
+		handler, mockS := setupTestEnergyServer(t)
+		targetDate := "2026-06-05" // Friday
+		d, err := time.Parse("2006-01-02", targetDate)
+		require.NoError(t, err)
+
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+			Location: &types.SiteLocation{
+				TimeZone:     "UTC",
+				Latitude:     41.8781,
+				Longitude:    -87.6298,
+				SolarTilt:    20,
+				SolarAzimuth: 180,
+			},
+		}, types.CurrentSettingsVersion, nil).Once()
+
+		// Prior Friday (May 29) has load 1.0, Target Friday (June 5) has load 10.0
+		priorFriday := d.AddDate(0, 0, -7)
+
+		mockS.On("GetHistorySummaries", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{
+						TSDayStart: priorFriday,
+						Hourly: []types.EnergyStats{
+							{TSHourStart: priorFriday.Add(12 * time.Hour), HomeKWH: 1.0},
+						},
+					},
+					{
+						TSDayStart: d,
+						Hourly: []types.EnergyStats{
+							{TSHourStart: d.Add(12 * time.Hour), HomeKWH: 10.0},
+						},
+					},
+				},
+				Weather: []types.Weather{
+					{
+						TSDayStart: d,
+						ForecastHours: []types.HourlyWeather{
+							{TSHourStart: d.Add(12 * time.Hour), TemperatureC: 15, DNI: 500, DHI: 100},
+						},
+					},
+				},
+			},
+		}, nil).Once()
+
+		// Energy History (d+1 to d+2)
+		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, d.AddDate(0, 0, 1), d.AddDate(0, 0, 2)).Return([]types.DailyEnergyStats{}, nil).Once()
+
+		// Weather (d+1 to d+3)
+		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, d.AddDate(0, 0, 1), d.AddDate(0, 0, 3)).Return([]types.Weather{}, nil).Once()
+
+		req := httptest.NewRequest("GET", "/api/history/energy?date="+targetDate, nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var res HistoryEnergyRes
+		err = json.Unmarshal(w.Body.Bytes(), &res)
+		require.NoError(t, err)
+
+		// If the leak is fixed, June 5th's load of 10.0 KWH is excluded.
+		// The predicted load for hour 12 should be 1.0 KWH (from May 29th) rather than 5.5 KWH.
+		if assert.Len(t, res.Weather, 1) {
+			assert.InDelta(t, 1.0, res.Weather[0].ImprovedHomeLoad, 0.001)
+		}
+	})
 }

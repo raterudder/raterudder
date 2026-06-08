@@ -13,6 +13,7 @@ func TestMigrateSettings(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.Equal(t, 2.0, s.IgnoreHourUsageOverMultiple)
+		assert.Equal(t, 0.5, s.IgnoreHourUsageFloorKWH)
 		assert.Equal(t, 0.03, s.MinArbitrageDifferenceDollarsPerKWH)
 		assert.Equal(t, 20.0, s.MinBatterySOC)
 	})
@@ -70,6 +71,7 @@ func TestMigrateSettings(t *testing.T) {
 			ESS:                       "franklin",
 			MinStartChargeMinutes:     5,
 			PeakSurvivalBufferMinutes: 30,
+			IgnoreHourUsageFloorKWH:   0.5,
 		}
 		s, changed, err = MigrateSettings(oldNoUtility, 8)
 		require.NoError(t, err)
@@ -81,6 +83,7 @@ func TestMigrateSettings(t *testing.T) {
 			UtilityProvider:           "comed",
 			MinStartChargeMinutes:     5,
 			PeakSurvivalBufferMinutes: 30,
+			IgnoreHourUsageFloorKWH:   0.5,
 		}
 		s, changed, err = MigrateSettings(oldNoESS, 8)
 		require.NoError(t, err)
@@ -94,6 +97,7 @@ func TestMigrateSettings(t *testing.T) {
 			UpdateGroup:               5,
 			MinStartChargeMinutes:     5,
 			PeakSurvivalBufferMinutes: 30,
+			IgnoreHourUsageFloorKWH:   0.5,
 		}
 		s, changed, err = MigrateSettings(oldSet, 8)
 		require.NoError(t, err)

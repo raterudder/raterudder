@@ -65,10 +65,41 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 	flatEnergy := flattenDailyEnergyStats(allStats)
 
 	// Calculate Improved Solar
+	// NOTE: We pass s.now() (the real-world current time) here because the solar calibration
+	// needs to know the true current hour. This allows it to exclude the current in-progress
+	// hour (which only has partial generation telemetry) so that it doesn't skew learned solar efficiencies.
 	var improvedSolarMap map[int64]controller.WeatherSolar
 	if settings.Location != nil {
 		improvedSolarMap = controller.CalculateWeatherSolar(ctx, s.now(), flatEnergy, weatherHistory, *settings.Location)
 	}
+
+	loc := time.UTC
+	for _, day := range allStats {
+		if !day.TSDayStart.IsZero() {
+			loc = day.TSDayStart.Location()
+			break
+		}
+	}
+	var targetDateLocal time.Time
+	targetDateLocal, err = time.ParseInLocation("2006-01-02", dateStr, loc)
+	if err != nil {
+		targetDateLocal = targetDate.In(loc)
+	}
+	// NOTE: We pass targetDateLocal (local midnight of the target day) as the 'now' parameter here.
+	// The energy model uses 'now' as the starting point to scan forward 24 hours of prediction.
+	// By starting at local midnight of the target day, all 24 hours evaluated fall on the target day.
+	// If we passed s.now() instead, the model would produce a forecast starting from the current hour,
+	// which would shift/misalign the predicted hours on the history page graph.
+	// Filter out target date and future date records from the energy history passed to the prediction model.
+	// This prevents data leakage (using actual load from the target day to predict the target day).
+	var priorEnergy []types.EnergyStats
+	for _, h := range flatEnergy {
+		if !h.TSHourStart.IsZero() && h.TSHourStart.Before(targetDateLocal) {
+			priorEnergy = append(priorEnergy, h)
+		}
+	}
+
+	improvedModel := s.controller.BuildImprovedHourlyEnergyModel(ctx, targetDateLocal, priorEnergy, weatherHistory, settings.Settings)
 
 	// Filter results for the target day
 	dayStats := make([]types.EnergyStats, 0, 24)
@@ -97,6 +128,10 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 				wr.SnowFactor = improved.SnowFactor
 				wr.TemperatureCellC = improved.TCell
 				wr.Irradiance = improved.Irradiance
+			}
+			localHour := h.TSHourStart.In(loc).Hour()
+			if profile, ok := improvedModel[localHour]; ok {
+				wr.ImprovedHomeLoad = profile.AvgHomeLoadKWH
 			}
 			dayWeather = append(dayWeather, wr)
 		}

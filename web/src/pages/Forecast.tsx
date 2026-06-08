@@ -129,11 +129,19 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs }: { dat
                         formatter={(value: number | string | undefined, name: string | number | undefined) => {
                             const v = Number(value ?? 0);
                             const lineUnit = config.unit;
+                            let displayName = config.title;
+                            if (name === 'rawSolarKWH') {
+                                displayName = 'Raw Model';
+                            } else if (name === 'avgHomeLoadImprovedKWH') {
+                                displayName = 'Improved Model';
+                            } else if (name === 'avgHomeLoadKWH') {
+                                displayName = 'Current Model';
+                            }
                             return [
                                 config.unit.includes('$')
                                     ? `$${v.toFixed(4)}`
                                     : v.toFixed(2) + lineUnit.trim(),
-                                name === 'rawSolarKWH' ? 'Raw Model' : config.title,
+                                displayName,
                             ];
                         }}
                         contentStyle={{
@@ -281,7 +289,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 ? h.todaySolarTrend
                 : 0,
             avgHomeLoadKWH: Math.floor((h.avgHomeLoadKWH || 0) * 10) / 10,
-            avgHomeLoadACAdjKWH: Math.floor((h.avgHomeLoadACAdjKWH || 0) * 10) / 10,
+            avgHomeLoadImprovedKWH: Math.floor((h.avgHomeLoadImprovedKWH || 0) * 10) / 10,
         }));
     }, [rawModelingData, includeHistory]);
 
@@ -338,7 +346,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     if (config.dataKey === 'avgHomeLoadKWH' && settings?.release === 'staging') {
                         config.additionalLines = [
                             ...(config.additionalLines || []),
-                            { dataKey: 'avgHomeLoadACAdjKWH', color: '#ec4899', strokeDasharray: '4 4' }
+                            { dataKey: 'avgHomeLoadImprovedKWH', color: '#ec4899', strokeDasharray: '4 4' }
                         ];
                     }
                     return (

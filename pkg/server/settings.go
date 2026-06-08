@@ -200,6 +200,10 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "ignore hour usage over multiple must be at least 1", http.StatusBadRequest)
 		return
 	}
+	if newSettings.IgnoreHourUsageFloorKWH < 0 {
+		writeJSONError(w, "ignore hour usage floor KWH cannot be negative", http.StatusBadRequest)
+		return
+	}
 	if newSettings.SolarBellCurveMultiplier < 0 {
 		writeJSONError(w, "solar bell curve multiplier cannot be negative", http.StatusBadRequest)
 		return

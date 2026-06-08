@@ -447,6 +447,17 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
 		assert.Contains(t, w.Body.String(), "ignore hour usage over multiple must be at least 1")
 
+		// Invalid value (IgnoreHourUsageFloorKWH < 0)
+		s2Floor := base
+		s2Floor.IgnoreHourUsageFloorKWH = -0.5
+		b2Floor, _ := json.Marshal(s2Floor)
+		req = httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b2Floor))
+		req = withUser(req, "admin@example.com", true)
+		w = httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+		assert.Contains(t, w.Body.String(), "ignore hour usage floor KWH cannot be negative")
+
 		// Invalid value (MinArbitrageDifferenceDollarsPerKWH < 0)
 		s3 := base
 		s3.MinArbitrageDifferenceDollarsPerKWH = -0.01

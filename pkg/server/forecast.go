@@ -35,6 +35,7 @@ type WeatherRes struct {
 	TSHourStart              time.Time `json:"tsHourStart"`
 	ImprovedSolarGeneration  float64   `json:"improvedSolarGeneration,omitempty"`
 	UnclippedSolarGeneration float64   `json:"unclippedSolarGeneration,omitempty"`
+	ImprovedHomeLoad         float64   `json:"improvedHomeLoad,omitempty"`
 	SnowDepthCM              float64   `json:"snowDepthCM,omitempty"`
 	TempFactor               float64   `json:"tempFactor,omitempty"`
 	SnowFactor               float64   `json:"snowFactor,omitempty"`
