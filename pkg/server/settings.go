@@ -519,6 +519,18 @@ func getESSBackoff(failures int) time.Duration {
 	if failures <= 1 {
 		return 0
 	}
+	if failures >= 40 {
+		return 365 * 24 * time.Hour // stop trying
+	}
+	if failures >= 22 {
+		return 12 * time.Hour
+	}
+	if failures >= 13 {
+		return 2 * time.Hour
+	}
+	if failures >= 10 {
+		return time.Hour
+	}
 
 	// Failures = 2 -> 30s
 	// Failures = 3 -> 60s

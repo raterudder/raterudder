@@ -322,6 +322,98 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.Equal(t, testTime, savedSettings.ESSAuthStatus.LastAttempt, "LastAttempt should be updated to now")
 	})
 
+	t.Run("getESSSystem Authentication Failure - Max Failures Reached", func(t *testing.T) {
+		mockS := &mockStorage{}
+		essMap := ess.NewMap()
+		mockES := &mockESS{}
+
+		testTime := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+
+		essMap.SetSystem("site1", mockES)
+
+		srv := &Server{
+			storage: mockS,
+			ess:     essMap,
+			nowFunc: func() time.Time { return testTime },
+		}
+
+		ctx := context.Background()
+		creds := types.Credentials{}
+
+		s0 := settingsWithVersion{
+			Settings: types.Settings{
+				ESSAuthStatus: types.ESSAuthStatus{
+					ConsecutiveFailures: 40,
+					LastAttempt:         testTime.Add(-1 * time.Hour),
+				},
+			},
+			version: 1,
+		}
+
+		sys, err := srv.getESSSystem(ctx, "site1", s0, creds)
+		require.ErrorIs(t, err, errESSRateLimited)
+		assert.ErrorContains(t, err, "try again in")
+		assert.Nil(t, sys)
+
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockES.AssertExpectations(t))
+	})
+
+	t.Run("getESSSystem Backoff Logic - Tiered Backoffs", func(t *testing.T) {
+		mockS := &mockStorage{}
+		essMap := ess.NewMap()
+
+		testTime := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+
+		srv := &Server{
+			storage: mockS,
+			ess:     essMap,
+			nowFunc: func() time.Time { return testTime },
+		}
+
+		ctx := context.Background()
+		creds := types.Credentials{}
+
+		// 1. Failures = 10, backoff should be 1 hour. If last attempt was 45 mins ago, should fail.
+		s10 := settingsWithVersion{
+			Settings: types.Settings{
+				ESSAuthStatus: types.ESSAuthStatus{
+					ConsecutiveFailures: 10,
+					LastAttempt:         testTime.Add(-45 * time.Minute),
+				},
+			},
+		}
+		_, err := srv.getESSSystem(ctx, "site1", s10, creds)
+		require.ErrorIs(t, err, errESSRateLimited)
+		assert.ErrorContains(t, err, "try again in 15m")
+
+		// 2. Failures = 15, backoff should be 2 hours. If last attempt was 90 mins ago, should fail.
+		s15 := settingsWithVersion{
+			Settings: types.Settings{
+				ESSAuthStatus: types.ESSAuthStatus{
+					ConsecutiveFailures: 15,
+					LastAttempt:         testTime.Add(-90 * time.Minute),
+				},
+			},
+		}
+		_, err = srv.getESSSystem(ctx, "site1", s15, creds)
+		require.ErrorIs(t, err, errESSRateLimited)
+		assert.ErrorContains(t, err, "try again in 30m")
+
+		// 3. Failures = 30, backoff should be 12 hours. If last attempt was 10 hours ago, should fail.
+		s30 := settingsWithVersion{
+			Settings: types.Settings{
+				ESSAuthStatus: types.ESSAuthStatus{
+					ConsecutiveFailures: 30,
+					LastAttempt:         testTime.Add(-10 * time.Hour),
+				},
+			},
+		}
+		_, err = srv.getESSSystem(ctx, "site1", s30, creds)
+		require.ErrorIs(t, err, errESSRateLimited)
+		assert.ErrorContains(t, err, "try again in 2h")
+	})
+
 	t.Run("Update Settings - Validation Error", func(t *testing.T) {
 		srv := &Server{
 			release: "test",
@@ -1438,11 +1530,15 @@ func TestGetESSBackoff(t *testing.T) {
 		{4, 120 * time.Second},
 		{5, 240 * time.Second},
 		{6, 480 * time.Second},
-		{7, 900 * time.Second},  // Max capped at 15m
-		{10, 900 * time.Second}, // Beyond max is still capped
-		{64, 900 * time.Second}, // Prevent overflow wrap to negative
-		{65, 900 * time.Second}, // Prevent overflow wrap to zero/positive
-		{100, 900 * time.Second},
+		{7, 900 * time.Second}, // Max capped at 15m
+		{10, time.Hour},
+		{13, 2 * time.Hour},
+		{22, 12 * time.Hour},
+		{39, 12 * time.Hour},
+		{40, 365 * 24 * time.Hour},
+		{64, 365 * 24 * time.Hour},
+		{65, 365 * 24 * time.Hour},
+		{100, 365 * 24 * time.Hour},
 	}
 
 	for _, tt := range tests {
