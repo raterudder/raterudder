@@ -46,6 +46,10 @@ type Database interface {
 	GetLatestPriceHistoryTime(ctx context.Context, siteID string) (time.Time, int, error)
 	GetLatestWeatherTime(ctx context.Context, siteID string) (time.Time, time.Time, int, error)
 
+	// History summaries
+	GetHistorySummaries(ctx context.Context, siteID string, start, end time.Time) ([]types.HistorySummary, error)
+	UpdateHistorySummary(ctx context.Context, siteID string, month string, newSummary types.HistorySummary) (types.HistorySummary, error)
+
 	// Sites & Users
 	GetSite(ctx context.Context, siteID string) (types.Site, error)
 	ListSites(ctx context.Context) ([]types.Site, error)

@@ -22,6 +22,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/common"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
+	"golang.org/x/time/rate"
 )
 
 const franklinLoginPath = "hes-gateway/terminal/initialize/appUserOrInstallerLogin"
@@ -1122,9 +1123,14 @@ func (f *Franklin) GetEnergyHistory(ctx context.Context, start, end time.Time) (
 
 	// Iterate through days
 	current := startDay
+	limiter := rate.NewLimiter(rate.Limit(4), 4)
 	for !current.After(lastDayToFetch) {
 		if current.After(time.Now()) {
 			break
+		}
+
+		if err := limiter.Wait(ctx); err != nil {
+			return nil, err
 		}
 
 		points, err := f.getEnergyPointsForDay(ctx, current, di.location)

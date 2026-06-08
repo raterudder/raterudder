@@ -546,111 +546,7 @@ func (f *FirestoreProvider) GetEnergyHistory(ctx context.Context, siteID string,
 		allStats = append(allStats, s)
 	}
 
-	// Lazy migration: if no daily stats found, check if any legacy hourly docs exist.
-	if len(allStats) == 0 {
-		oldIter := coll.Where("version", "<", 3).Limit(1).Documents(ctx)
-		_, err := oldIter.Next()
-		oldIter.Stop()
-		if err == nil {
-			log.Ctx(ctx).InfoContext(ctx, "migrating energy history schema (fallback check)", slog.String("siteID", siteID))
-			if err := f.migrateEnergyHistory(ctx, siteID); err != nil {
-				return nil, fmt.Errorf("failed to migrate energy history: %w", err)
-			}
-			// Retry the query after migration
-			return f.GetEnergyHistory(ctx, siteID, start, end)
-		} else if !errors.Is(err, iterator.Done) {
-			return nil, fmt.Errorf("error checking for old energy history: %w", err)
-		}
-	}
-
 	return allStats, nil
-}
-
-// migrateEnergyHistory fetches old hourly docs, aggregates them, saves new daily ones, and deletes the old ones.
-func (f *FirestoreProvider) migrateEnergyHistory(ctx context.Context, siteID string) error {
-	coll, err := f.getCollection(siteID, "energy_history")
-	if err != nil {
-		return err
-	}
-
-	// Query all hourly documents that haven't been migrated yet
-	iter := coll.Where("version", "<", types.CurrentEnergyStatsVersion).Documents(ctx)
-	defer iter.Stop()
-
-	// Temporary map to group hourly stats into daily slices
-	dailyGroups := make(map[string][]types.EnergyStats)
-	var docsToDelete []*firestore.DocumentRef
-
-	for {
-		doc, err := iter.Next()
-		if errors.Is(err, iterator.Done) {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("migrating: error fetching old doc: %w", err)
-		}
-
-		docsToDelete = append(docsToDelete, doc.Ref)
-
-		val, err := doc.DataAt("json")
-		if err != nil {
-			return fmt.Errorf("migrating: error reading json of old doc %s: %w", doc.Ref.ID, err)
-		}
-		jsonStr, ok := val.(string)
-		if !ok {
-			return fmt.Errorf("migrating: error reading json of old doc %s: not a string", doc.Ref.ID)
-		}
-		var s types.EnergyStats
-		if err := json.Unmarshal([]byte(jsonStr), &s); err != nil {
-			return fmt.Errorf("migrating: error unmarshalling json of old doc %s: %w", doc.Ref.ID, err)
-		}
-		if s.TSHourStart.IsZero() {
-			return fmt.Errorf("migrating: error reading TSHourStart of old doc %s: zero value", doc.Ref.ID)
-		}
-
-		// Use the timezone attached to the TSHourStart time to compute the day string.
-		dayStr := s.TSHourStart.Format("2006-01-02")
-		dailyGroups[dayStr] = append(dailyGroups[dayStr], s)
-	}
-
-	var dailyStats []types.DailyEnergyStats
-	for dayStr, hourlyStats := range dailyGroups {
-		// Just take the first element's timezone and reconstruct the day start
-		loc := hourlyStats[0].TSHourStart.Location()
-		parsed, err := time.ParseInLocation("2006-01-02", dayStr, loc)
-		if err != nil {
-			return fmt.Errorf("migrating: failed to parse day string %s: %w", dayStr, err)
-		}
-
-		daily := types.DailyEnergyStats{
-			TSDayStart: parsed,
-			Hourly:     hourlyStats,
-		}
-		dailyStats = append(dailyStats, daily)
-	}
-
-	// 1. Bulk write the new daily docs
-	if err := f.UpsertEnergyHistories(ctx, siteID, dailyStats, types.CurrentEnergyStatsVersion); err != nil {
-		return fmt.Errorf("migration: failed to save new daily docs: %w", err)
-	}
-
-	// 2. Delete the old hourly docs safely
-	bw := f.client.BulkWriter(ctx)
-	var deleteJobs []*firestore.BulkWriterJob
-	for _, ref := range docsToDelete {
-		job, err := bw.Delete(ref)
-		if err == nil {
-			deleteJobs = append(deleteJobs, job)
-		}
-	}
-	bw.End()
-	for _, job := range deleteJobs {
-		if _, err := job.Results(); err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to delete old energy doc during migration", slog.Any("err", err))
-		}
-	}
-
-	return nil
 }
 
 // GetLatestEnergyHistoryTime retrieves the timestamp of the last stored energy
@@ -668,24 +564,10 @@ func (f *FirestoreProvider) GetLatestEnergyHistoryTime(ctx context.Context, site
 
 	doc, err := iter.Next()
 	if errors.Is(err, iterator.Done) {
-		// instead look for them ordered by timestamp
-		iter2 := coll.
-			OrderBy("timestamp", firestore.Desc).
-			Limit(1).
-			Documents(ctx)
-		defer iter2.Stop()
-		doc2, err2 := iter2.Next()
-		if errors.Is(err2, iterator.Done) {
-			return time.Time{}, 0, nil
-		}
-		if err2 != nil {
-			return time.Time{}, 0, fmt.Errorf("failed to get latest energy history doc (v2): %w", err2)
-		}
-		doc = doc2
-		err = nil // found one in v2
+		return time.Time{}, 0, nil
 	}
 	if err != nil {
-		return time.Time{}, 0, fmt.Errorf("failed to get latest energy history doc (v3): %w", err)
+		return time.Time{}, 0, fmt.Errorf("failed to get latest energy history doc: %w", err)
 	}
 
 	// Read version if available (default 0)
@@ -694,16 +576,6 @@ func (f *FirestoreProvider) GetLatestEnergyHistoryTime(ctx context.Context, site
 		if vInt, ok := v.(int64); ok {
 			version = int(vInt)
 		}
-	}
-	// this is crucial because if we don't do this here then there might be a
-	// call to UpsertEnergyHistories which will store the version 3 data and we
-	// will never migrate old data.
-	if version < 3 {
-		log.Ctx(ctx).InfoContext(ctx, "migrating energy history schema synchronously (detecting old version in latest check)", slog.String("siteID", siteID))
-		if err := f.migrateEnergyHistory(ctx, siteID); err != nil {
-			return time.Time{}, 0, fmt.Errorf("failed to migrate energy history: %w", err)
-		}
-		return f.GetLatestEnergyHistoryTime(ctx, siteID)
 	}
 
 	ts, err := time.Parse("2006-01-02", doc.Ref.ID)
@@ -1454,4 +1326,181 @@ func (f *FirestoreProvider) DeleteInterest(ctx context.Context, email string) er
 		return fmt.Errorf("failed to delete interest submission: %w", err)
 	}
 	return nil
+}
+
+func getOverlappingMonths(start, end time.Time) []string {
+	var months []string
+	t := time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, start.Location())
+	for t.Before(end) {
+		months = append(months, t.Format("2006-01"))
+		t = t.AddDate(0, 1, 0)
+	}
+	return months
+}
+
+// GetHistorySummaries retrieves the monthly summaries that overlap with a range of dates.
+func (f *FirestoreProvider) GetHistorySummaries(ctx context.Context, siteID string, start, end time.Time) ([]types.HistorySummary, error) {
+	coll, err := f.getCollection(siteID, "history_summary")
+	if err != nil {
+		return nil, err
+	}
+
+	months := getOverlappingMonths(start, end)
+	if len(months) == 0 {
+		return nil, nil
+	}
+
+	refs := make([]*firestore.DocumentRef, len(months))
+	for i, m := range months {
+		refs[i] = coll.Doc(m)
+	}
+
+	snapshots, err := f.client.GetAll(ctx, refs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to batch get history summaries: %w", err)
+	}
+
+	var summaries []types.HistorySummary
+	for _, doc := range snapshots {
+		if !doc.Exists() {
+			continue
+		}
+
+		val, err := doc.DataAt("json")
+		if err != nil {
+			return nil, fmt.Errorf("history summary doc %s missing 'json' field: %w", doc.Ref.ID, err)
+		}
+
+		jsonStr, ok := val.(string)
+		if !ok {
+			return nil, fmt.Errorf("history summary doc %s 'json' field is not a string", doc.Ref.ID)
+		}
+
+		var summary types.HistorySummary
+		if err := json.Unmarshal([]byte(jsonStr), &summary); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal history summary for month %s: %w", doc.Ref.ID, err)
+		}
+		summaries = append(summaries, summary)
+	}
+
+	return summaries, nil
+}
+
+// UpdateHistorySummary reads the existing summary, merges it with newSummary (overwriting matching days), and saves it.
+func (f *FirestoreProvider) UpdateHistorySummary(ctx context.Context, siteID string, month string, newSummary types.HistorySummary) (types.HistorySummary, error) {
+	coll, err := f.getCollection(siteID, "history_summary")
+	if err != nil {
+		return types.HistorySummary{}, err
+	}
+	docRef := coll.Doc(month)
+
+	var mergedSummary types.HistorySummary
+
+	err = f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		doc, err := tx.Get(docRef)
+		var existing types.HistorySummary
+		exists := true
+		if err != nil {
+			if status.Code(err) == codes.NotFound {
+				exists = false
+			} else {
+				return err
+			}
+		}
+
+		if exists {
+			val, err := doc.DataAt("json")
+			if err != nil {
+				return fmt.Errorf("history summary doc missing 'json' field: %w", err)
+			}
+			jsonStr, ok := val.(string)
+			if !ok {
+				return fmt.Errorf("history summary doc 'json' field is not string")
+			}
+			if err := json.Unmarshal([]byte(jsonStr), &existing); err != nil {
+				return fmt.Errorf("failed to unmarshal history summary: %w", err)
+			}
+		}
+
+		// Merge Energy data, favoring the newSummary's days.
+		energyMap := make(map[string]types.DailyEnergyStats)
+		for _, e := range existing.Energy {
+			energyMap[e.TSDayStart.Format("2006-01-02")] = e
+		}
+		for _, e := range newSummary.Energy {
+			energyMap[e.TSDayStart.Format("2006-01-02")] = e
+		}
+		var mergedEnergy []types.DailyEnergyStats
+		for _, e := range energyMap {
+			mergedEnergy = append(mergedEnergy, e)
+		}
+		slices.SortFunc(mergedEnergy, func(a, b types.DailyEnergyStats) int {
+			return a.TSDayStart.Compare(b.TSDayStart)
+		})
+
+		// Merge Weather data, favoring the newSummary's days.
+		weatherMap := make(map[string]types.Weather)
+		for _, w := range existing.Weather {
+			weatherMap[w.TSDayStart.Format("2006-01-02")] = w
+		}
+		for _, w := range newSummary.Weather {
+			weatherMap[w.TSDayStart.Format("2006-01-02")] = w
+		}
+		var mergedWeather []types.Weather
+		for _, w := range weatherMap {
+			mergedWeather = append(mergedWeather, w)
+		}
+		slices.SortFunc(mergedWeather, func(a, b types.Weather) int {
+			return a.TSDayStart.Compare(b.TSDayStart)
+		})
+
+		var monthStart time.Time
+		if monthTime, err := time.Parse("2006-01", month); err == nil {
+			monthStart = monthTime
+		}
+
+		mergedSummary = types.HistorySummary{
+			TSMonthStart: monthStart,
+			Energy:       mergedEnergy,
+			Weather:      mergedWeather,
+		}
+
+		// Determine latestDate and earliestDate.
+		var latestDate, earliestDate time.Time
+		if len(mergedSummary.Energy) > 0 {
+			earliestDate = mergedSummary.Energy[0].TSDayStart
+			latestDate = mergedSummary.Energy[0].TSDayStart
+			for _, day := range mergedSummary.Energy {
+				if day.TSDayStart.Before(earliestDate) {
+					earliestDate = day.TSDayStart
+				}
+				if day.TSDayStart.After(latestDate) {
+					latestDate = day.TSDayStart
+				}
+			}
+		}
+
+		jsonBytes, err := json.Marshal(mergedSummary)
+		if err != nil {
+			return fmt.Errorf("failed to marshal history summary: %w", err)
+		}
+
+		data := map[string]any{
+			"json": string(jsonBytes),
+		}
+		if !latestDate.IsZero() {
+			data["latestDate"] = latestDate
+		}
+		if !earliestDate.IsZero() {
+			data["earliestDate"] = earliestDate
+		}
+
+		return tx.Set(docRef, data)
+	})
+
+	if err != nil {
+		return types.HistorySummary{}, err
+	}
+
+	return mergedSummary, nil
 }

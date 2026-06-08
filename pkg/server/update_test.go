@@ -30,6 +30,13 @@ func TestHandleUpdate(t *testing.T) {
 	mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
 
 	mockS := &mockStorage{}
+	mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+		{
+			Energy: []types.DailyEnergyStats{
+				{TSDayStart: truncateDay(time.Now()).AddDate(0, 0, -1)},
+			},
+		},
+	}, nil)
 	mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
 		DryRun:          true,
 		MinBatterySOC:   5.0,
@@ -81,6 +88,13 @@ func TestHandleUpdate(t *testing.T) {
 		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
 
 		mockS := &mockStorage{}
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(time.Now()).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil)
 		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{DryRun: true, UtilityProvider: "test"}, types.CurrentSettingsVersion, nil)
 		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
@@ -239,6 +253,13 @@ func TestHandleUpdate(t *testing.T) {
 
 	t.Run("Paused Updates", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(time.Now()).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil)
 		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
 			Pause:           true,
 			UtilityProvider: "test",
@@ -307,6 +328,13 @@ func TestHandleUpdate(t *testing.T) {
 
 	t.Run("Action - Emergency Mode", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(time.Now()).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil)
 		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{UtilityProvider: "test"}, types.CurrentSettingsVersion, nil)
 		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
@@ -359,6 +387,13 @@ func TestHandleUpdate(t *testing.T) {
 
 	t.Run("Action - Alarms Present", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(time.Now()).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil)
 		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{UtilityProvider: "test"}, types.CurrentSettingsVersion, nil)
 		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
@@ -413,6 +448,13 @@ func TestHandleUpdate(t *testing.T) {
 
 	t.Run("Action - Grid Unavailable", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(time.Now()).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil)
 		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{UtilityProvider: "test"}, types.CurrentSettingsVersion, nil)
 		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
@@ -466,6 +508,13 @@ func TestHandleUpdate(t *testing.T) {
 	t.Run("Handle Update - Backfill Logic", func(t *testing.T) {
 		t.Run("Version Mismatch - Backfill Triggered", func(t *testing.T) {
 			mockS := &mockStorage{}
+			mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+				{
+					Energy: []types.DailyEnergyStats{
+						{TSDayStart: truncateDay(time.Now()).AddDate(0, 0, -1)},
+					},
+				},
+			}, nil)
 			// Set up old version
 			lastTime := time.Date(2023, 10, 27, 12, 0, 0, 0, time.UTC)
 			mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(lastTime, 0, nil) // Version 0 < CurrentVersion
@@ -530,13 +579,20 @@ func TestHandleUpdate(t *testing.T) {
 				}
 			}
 			now := time.Now()
-			fiveDaysAgo := now.Add(-5 * 24 * time.Hour)
-			expected := time.Date(fiveDaysAgo.Year(), fiveDaysAgo.Month(), fiveDaysAgo.Day(), 0, 0, 0, 0, fiveDaysAgo.Location())
-			assert.Equal(t, expected, earliest, "Backfill should start from midnight 5 days ago")
+			fourteenDaysAgo := now.Add(-14 * 24 * time.Hour)
+			expected := time.Date(fourteenDaysAgo.Year(), fourteenDaysAgo.Month(), fourteenDaysAgo.Day(), 0, 0, 0, 0, fourteenDaysAgo.Location())
+			assert.Equal(t, expected, earliest, "Backfill should start from midnight 14 days ago")
 		})
 
 		t.Run("Version Match - No Backfill", func(t *testing.T) {
 			mockS := &mockStorage{}
+			mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+				{
+					Energy: []types.DailyEnergyStats{
+						{TSDayStart: truncateDay(time.Now()).AddDate(0, 0, -1)},
+					},
+				},
+			}, nil)
 			// Set up current version
 			// Make lastTime recent enough that it would normally just resume from there
 			lastTime := time.Now().Add(-2 * time.Hour).Truncate(time.Hour)
@@ -600,6 +656,13 @@ func TestHandleUpdate(t *testing.T) {
 		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
 
 		mockS := &mockStorage{}
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(time.Now()).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil)
 		timeLoc := "America/Chicago"
 
 		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
@@ -675,6 +738,13 @@ func TestHandleUpdateSites(t *testing.T) {
 	mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
 
 	mockS := &mockStorage{}
+	mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+		{
+			Energy: []types.DailyEnergyStats{
+				{TSDayStart: truncateDay(time.Now()).AddDate(0, 0, -1)},
+			},
+		},
+	}, nil)
 	mockS.On("ListSitesSettings", mock.Anything, mock.Anything).Return(map[string]types.Settings{
 		"site1": {ESS: "mock", UtilityProvider: "test", Release: "production"},
 		"site2": {ESS: "mock", UtilityProvider: "test", Release: "staging"},
@@ -754,6 +824,13 @@ func TestHandleUpdateSites(t *testing.T) {
 
 	t.Run("No ESS Configured", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(time.Now()).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil)
 		mockS.On("ListSitesSettings", mock.Anything, mock.Anything).Return(map[string]types.Settings{
 			"site-no-ess": {
 				Release: "production",
@@ -789,6 +866,13 @@ func TestHandleUpdateSites(t *testing.T) {
 		token := generateTestToken(t, oidcSrv.URL, priv, updateEmail, "updater")
 
 		mockS := &mockStorage{}
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(time.Now()).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil)
 		mockS.On("ListSitesSettings", mock.Anything, mock.Anything).Return(map[string]types.Settings{
 			"site1": {
 				Release:         "production",
@@ -874,6 +958,13 @@ func TestHandleUpdateSites(t *testing.T) {
 
 	t.Run("ESS Rate Limited", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(time.Now()).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil)
 		mockS.On("ListSitesSettings", mock.Anything, mock.Anything).Return(map[string]types.Settings{
 			"site-rate-limited": {
 				Release: "production",
@@ -905,6 +996,13 @@ func TestHandleUpdateSites(t *testing.T) {
 
 	t.Run("ESS Write Rate Limited", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(time.Now()).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil)
 		mockS.On("ListSitesSettings", mock.Anything, mock.Anything).Return(map[string]types.Settings{
 			"site-write-rate-limited": {
 				Release: "production",
@@ -1195,8 +1293,8 @@ func TestUpdateEnergyHistory(t *testing.T) {
 		require.NoError(t, err)
 
 		now := time.Now()
-		fiveDaysAgo := now.Add(-5 * 24 * time.Hour)
-		expectedStart := time.Date(fiveDaysAgo.Year(), fiveDaysAgo.Month(), fiveDaysAgo.Day(), 0, 0, 0, 0, fiveDaysAgo.Location())
+		fourteenDaysAgo := now.Add(-14 * 24 * time.Hour)
+		expectedStart := time.Date(fourteenDaysAgo.Year(), fourteenDaysAgo.Month(), fourteenDaysAgo.Day(), 0, 0, 0, 0, fourteenDaysAgo.Location())
 		assert.True(t, expectedStart.Equal(startTime), "Expected start time %v, got %v", expectedStart, startTime)
 		assert.WithinDuration(t, now, endTime, time.Second)
 	})
@@ -1231,6 +1329,13 @@ func TestUpdateEnergyHistory(t *testing.T) {
 
 	t.Run("Version Mismatch - Partial Backfill", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(time.Now()).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil)
 		// Recent time but old version
 		lastTime := time.Now().Add(-1 * time.Hour)
 		oldVersion := types.CurrentEnergyStatsVersion - 1
@@ -1256,14 +1361,21 @@ func TestUpdateEnergyHistory(t *testing.T) {
 		require.NoError(t, err)
 
 		now := time.Now()
-		fiveDaysAgo := now.Add(-5 * 24 * time.Hour)
-		expectedStart := time.Date(fiveDaysAgo.Year(), fiveDaysAgo.Month(), fiveDaysAgo.Day(), 0, 0, 0, 0, fiveDaysAgo.Location())
+		fourteenDaysAgo := now.Add(-14 * 24 * time.Hour)
+		expectedStart := time.Date(fourteenDaysAgo.Year(), fourteenDaysAgo.Month(), fourteenDaysAgo.Day(), 0, 0, 0, 0, fourteenDaysAgo.Location())
 		assert.True(t, expectedStart.Equal(startTime), "Expected start time %v, got %v", expectedStart, startTime)
 		assert.WithinDuration(t, now, endTime, time.Second)
 	})
 
 	t.Run("Future Time - No Update", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(time.Now()).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil)
 		lastTime := time.Now().Add(1 * time.Hour) // Future
 		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, "site1").Return(lastTime, types.CurrentEnergyStatsVersion, nil)
 
@@ -1285,6 +1397,13 @@ func TestUpdateEnergyHistory(t *testing.T) {
 
 	t.Run("Future Price Fallback", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(time.Now()).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil)
 		mockES := &mockESS{}
 		mockU := &mockUtility{}
 
@@ -1354,14 +1473,14 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(time.Time{}, time.Time{}, 0, nil)
 		mockS.On("GetWeather", mock.Anything, "test-site", mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
 
-		// Cold start: expected fetch range is 5 days ago to end of tomorrow
+		// Cold start: expected fetch range is 14 days ago to end of tomorrow
 		now := testTime.In(loc)
 		todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-		fiveDaysAgoMidnight := todayMidnight.AddDate(0, 0, -5)
+		fourteenDaysAgoMidnight := todayMidnight.AddDate(0, 0, -14)
 		endOfTomorrow := todayMidnight.AddDate(0, 0, 2)
 
 		mockW.On("Forecast", mock.Anything, sl, mock.MatchedBy(func(t time.Time) bool {
-			return t.Equal(fiveDaysAgoMidnight)
+			return t.Equal(fourteenDaysAgoMidnight)
 		}), mock.MatchedBy(func(t time.Time) bool {
 			return t.Equal(endOfTomorrow)
 		})).Return([]types.Weather{{TSDayStart: now}}, nil)
@@ -1390,13 +1509,13 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(lastTime, time.Time{}, 1, nil) // Version 1 < 3
 		mockS.On("GetWeather", mock.Anything, "test-site", mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
 
-		// Should still start from 5 days ago due to version mismatch
+		// Should still start from 14 days ago due to version mismatch
 		todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-		fiveDaysAgoMidnight := todayMidnight.AddDate(0, 0, -5)
+		fourteenDaysAgoMidnight := todayMidnight.AddDate(0, 0, -14)
 		endOfTomorrow := todayMidnight.AddDate(0, 0, 2)
 
 		mockW.On("Forecast", mock.Anything, sl, mock.MatchedBy(func(t time.Time) bool {
-			return t.Equal(fiveDaysAgoMidnight)
+			return t.Equal(fourteenDaysAgoMidnight)
 		}), mock.MatchedBy(func(t time.Time) bool {
 			return t.Equal(endOfTomorrow)
 		})).Return([]types.Weather{

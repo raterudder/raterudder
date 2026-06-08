@@ -118,21 +118,21 @@ func TestHandleHistoryPrices(t *testing.T) {
 			{
 				name:       "Invalid Start String",
 				start:      "invalid",
-				end:        time.Now().Format(time.RFC3339),
+				end:        time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC).Format(time.RFC3339),
 				statusCode: http.StatusBadRequest,
 				errMsg:     "invalid start time",
 			},
 			{
 				name:       "Invalid End String",
-				start:      time.Now().Add(-time.Hour).Format(time.RFC3339),
+				start:      time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC).Add(-time.Hour).Format(time.RFC3339),
 				end:        "invalid",
 				statusCode: http.StatusBadRequest,
 				errMsg:     "invalid end time",
 			},
 			{
 				name:       "End Before Start",
-				start:      time.Now().Format(time.RFC3339),
-				end:        time.Now().Add(-time.Hour).Format(time.RFC3339),
+				start:      time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC).Format(time.RFC3339),
+				end:        time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC).Add(-time.Hour).Format(time.RFC3339),
 				statusCode: http.StatusBadRequest,
 				errMsg:     "start time must be before end time",
 			},
@@ -177,8 +177,9 @@ func TestHandleHistoryPrices(t *testing.T) {
 
 	t.Run("Validate 24 Hour Limit", func(t *testing.T) {
 		handler, _, _ := setupTestServer(t)
-		start := time.Now().Add(-25 * time.Hour)
-		end := time.Now()
+		testTime := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		start := testTime.Add(-25 * time.Hour)
+		end := testTime
 
 		q := make(url.Values)
 		q.Set("start", start.Format(time.RFC3339))
@@ -199,7 +200,7 @@ func TestHandleHistoryPrices(t *testing.T) {
 
 	t.Run("Fetch Prices Data", func(t *testing.T) {
 		handler, mockS, _ := setupTestServer(t)
-		now := time.Now()
+		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
 		expectedPrices := []types.Price{
 			{
 				Provider:                      "test-provider",
@@ -247,7 +248,7 @@ func TestHandleHistoryPrices(t *testing.T) {
 
 	t.Run("Fetch Prices Data Error", func(t *testing.T) {
 		handler, mockS, _ := setupTestServer(t)
-		now := time.Now()
+		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
 		mockS.prices = nil
 		mockS.err = fmt.Errorf("storage error")
 
@@ -277,7 +278,7 @@ func TestHandleHistoryPrices(t *testing.T) {
 
 	t.Run("Cache Control Today", func(t *testing.T) {
 		handler, _, _ := setupTestServer(t)
-		now := time.Now()
+		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
 		start := now.Add(-time.Hour)
 		q := make(url.Values)
 		q.Set("start", start.Format(time.RFC3339))
@@ -296,7 +297,8 @@ func TestHandleHistoryPrices(t *testing.T) {
 
 	t.Run("Cache Control Past", func(t *testing.T) {
 		handler, _, _ := setupTestServer(t)
-		end := time.Now().Add(-25 * time.Hour)
+		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		end := now.Add(-25 * time.Hour)
 		start := end.Add(-time.Hour)
 
 		q := make(url.Values)
@@ -328,21 +330,21 @@ func TestHandleHistoryActions(t *testing.T) {
 			{
 				name:       "Invalid Start String",
 				start:      "invalid",
-				end:        time.Now().Format(time.RFC3339),
+				end:        time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC).Format(time.RFC3339),
 				statusCode: http.StatusBadRequest,
 				errMsg:     "invalid start time",
 			},
 			{
 				name:       "Invalid End String",
-				start:      time.Now().Add(-time.Hour).Format(time.RFC3339),
+				start:      time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC).Add(-time.Hour).Format(time.RFC3339),
 				end:        "invalid",
 				statusCode: http.StatusBadRequest,
 				errMsg:     "invalid end time",
 			},
 			{
 				name:       "End Before Start",
-				start:      time.Now().Format(time.RFC3339),
-				end:        time.Now().Add(-time.Hour).Format(time.RFC3339),
+				start:      time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC).Format(time.RFC3339),
+				end:        time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC).Add(-time.Hour).Format(time.RFC3339),
 				statusCode: http.StatusBadRequest,
 				errMsg:     "start time must be before end time",
 			},
@@ -387,8 +389,9 @@ func TestHandleHistoryActions(t *testing.T) {
 
 	t.Run("Validate 24 Hour Limit", func(t *testing.T) {
 		handler, _, _ := setupTestServer(t)
-		start := time.Now().Add(-25 * time.Hour)
-		end := time.Now()
+		testTime := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		start := testTime.Add(-25 * time.Hour)
+		end := testTime
 
 		q := make(url.Values)
 		q.Set("start", start.Format(time.RFC3339))
@@ -409,7 +412,7 @@ func TestHandleHistoryActions(t *testing.T) {
 
 	t.Run("Fetch Actions Data", func(t *testing.T) {
 		handler, mockS, _ := setupTestServer(t)
-		now := time.Now()
+		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
 		expectedActions := []types.Action{
 			{
 				Timestamp:         now.Add(-30 * time.Minute),
@@ -468,7 +471,7 @@ func TestHandleHistoryActions(t *testing.T) {
 
 	t.Run("Fetch Actions Data Error", func(t *testing.T) {
 		handler, mockS, _ := setupTestServer(t)
-		now := time.Now()
+		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
 		mockS.actions = nil
 		mockS.err = fmt.Errorf("storage error")
 
@@ -498,7 +501,7 @@ func TestHandleHistoryActions(t *testing.T) {
 
 	t.Run("Cache Control Today", func(t *testing.T) {
 		handler, _, _ := setupTestServer(t)
-		now := time.Now()
+		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
 		start := now.Add(-time.Hour)
 		q := make(url.Values)
 		q.Set("start", start.Format(time.RFC3339))
@@ -517,7 +520,8 @@ func TestHandleHistoryActions(t *testing.T) {
 
 	t.Run("Cache Control Past", func(t *testing.T) {
 		handler, _, _ := setupTestServer(t)
-		end := time.Now().Add(-25 * time.Hour)
+		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		end := now.Add(-25 * time.Hour)
 		start := end.Add(-time.Hour)
 
 		q := make(url.Values)
@@ -549,21 +553,21 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 			{
 				name:       "Invalid Start String",
 				start:      "invalid",
-				end:        time.Now().Format(time.RFC3339),
+				end:        time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC).Format(time.RFC3339),
 				statusCode: http.StatusBadRequest,
 				errMsg:     "invalid start time",
 			},
 			{
 				name:       "Invalid End String",
-				start:      time.Now().Add(-time.Hour).Format(time.RFC3339),
+				start:      time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC).Add(-time.Hour).Format(time.RFC3339),
 				end:        "invalid",
 				statusCode: http.StatusBadRequest,
 				errMsg:     "invalid end time",
 			},
 			{
 				name:       "End Before Start",
-				start:      time.Now().Format(time.RFC3339),
-				end:        time.Now().Add(-time.Hour).Format(time.RFC3339),
+				start:      time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC).Format(time.RFC3339),
+				end:        time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC).Add(-time.Hour).Format(time.RFC3339),
 				statusCode: http.StatusBadRequest,
 				errMsg:     "start time must be before end time",
 			},
@@ -610,8 +614,9 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 
 	t.Run("Validate 24 Hour Limit", func(t *testing.T) {
 		handler, _, _ := setupTestServer(t)
-		start := time.Now().Add(-25 * time.Hour)
-		end := time.Now()
+		testTime := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		start := testTime.Add(-25 * time.Hour)
+		end := testTime
 
 		q := make(url.Values)
 		q.Set("start", start.Format(time.RFC3339))
@@ -632,7 +637,7 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 
 	t.Run("Fetch Actions and Savings Data", func(t *testing.T) {
 		handler, mockS, mockSBase := setupTestServer(t)
-		now := time.Now().Truncate(time.Hour)
+		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
 		start := now.Add(-time.Hour)
 		end := now
 
@@ -699,7 +704,7 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 
 	t.Run("Fetch Actions and Savings Data Error", func(t *testing.T) {
 		handler, mockS, _ := setupTestServer(t)
-		now := time.Now().Truncate(time.Hour)
+		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
 		start := now.Add(-time.Hour)
 		end := now
 
@@ -732,9 +737,9 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 	t.Run("Fetch Actions and Savings Data ALL Sites", func(t *testing.T) {
 		mockStore := &mockStorage{}
 		mockUtilities := utility.NewMap(mockStore)
-		s := &Server{storage: mockStore, utilities: mockUtilities, bypassAuth: true}
+		start := time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC)
+		s := &Server{storage: mockStore, utilities: mockUtilities, bypassAuth: true, nowFunc: func() time.Time { return start.Add(12 * time.Hour) }}
 
-		start := time.Now().Truncate(24 * time.Hour).UTC()
 		end := start.Add(24 * time.Hour).UTC()
 
 		startQuery := start.AddDate(0, 0, -1)
@@ -822,26 +827,27 @@ func TestHandleHistoryEnergy(t *testing.T) {
 			},
 		}, types.CurrentSettingsVersion, nil).Once()
 
-		startQuery := d.AddDate(0, 0, -forecastHistoryDays-1)
-		endQuery := d.AddDate(0, 0, 1)
-
-		// Energy History
-		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, startQuery, endQuery).Return([]types.DailyEnergyStats{
-			{TSDayStart: d, Hourly: []types.EnergyStats{{TSHourStart: d, SolarKWH: 5.2, MaxBatterySOC: 85.0}}},
-		}, nil).Once()
-
-		actualStart := d.AddDate(0, 0, -forecastHistoryDays)
-		actualEnd := d.AddDate(0, 0, 1)
-
-		// Weather
-		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, actualStart, actualEnd).Return([]types.Weather{
+		mockS.On("GetHistorySummaries", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
-				TSDayStart: d,
-				ForecastHours: []types.HourlyWeather{
-					{TSHourStart: d, TemperatureC: 15, DNI: 500, DHI: 100},
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: d, Hourly: []types.EnergyStats{{TSHourStart: d, SolarKWH: 5.2, MaxBatterySOC: 85.0}}},
+				},
+				Weather: []types.Weather{
+					{
+						TSDayStart: d,
+						ForecastHours: []types.HourlyWeather{
+							{TSHourStart: d, TemperatureC: 15, DNI: 500, DHI: 100},
+						},
+					},
 				},
 			},
 		}, nil).Once()
+
+		// Energy History (d+1 to d+2)
+		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, d.AddDate(0, 0, 1), d.AddDate(0, 0, 2)).Return([]types.DailyEnergyStats{}, nil).Once()
+
+		// Weather (d+1 to d+3)
+		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, d.AddDate(0, 0, 1), d.AddDate(0, 0, 3)).Return([]types.Weather{}, nil).Once()
 
 		req := httptest.NewRequest("GET", "/api/history/energy?date="+targetDate, nil)
 		w := httptest.NewRecorder()
@@ -888,33 +894,29 @@ func TestHandleHistoryEnergy(t *testing.T) {
 			},
 		}, types.CurrentSettingsVersion, nil).Once()
 
-		// Since input date has no timezone we simulate time.Parse logic which defaults to UTC
-		// End is always tomorrow exclusive. Start factors in lookback for forecasting logic
-		parsedToday, _ := time.Parse("2006-01-02", targetDate)
-		todayUTC := parsedToday
-		endEnergy := parsedToday.AddDate(0, 0, 1)
-		startEnergy := parsedToday.AddDate(0, 0, -forecastHistoryDays-1)
-
-		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, startEnergy, endEnergy).Return([]types.DailyEnergyStats{
+		mockS.On("GetHistorySummaries", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
-				TSDayStart: todayUTC,
-				Hourly: []types.EnergyStats{
-					{TSHourStart: today, SolarKWH: 5.2, MaxBatterySOC: 85.0},
+				Energy: []types.DailyEnergyStats{
+					{
+						TSDayStart: today,
+						Hourly: []types.EnergyStats{
+							{TSHourStart: today, SolarKWH: 5.2, MaxBatterySOC: 85.0},
+						},
+					},
+				},
+				Weather: []types.Weather{
+					{
+						ForecastHours: []types.HourlyWeather{
+							{TSHourStart: today, TemperatureC: 15, DNI: 500, DHI: 100},
+						},
+					},
 				},
 			},
 		}, nil).Once()
 
-		// Weather query offsets start slightly differently since it adjusts based on the returned daily stats TSDayStart timezone.
-		startWeather := todayUTC.AddDate(0, 0, -forecastHistoryDays)
-		endWeather := todayUTC.AddDate(0, 0, 1)
+		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, today.AddDate(0, 0, 1), today.AddDate(0, 0, 2)).Return([]types.DailyEnergyStats{}, nil).Once()
 
-		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, startWeather, endWeather).Return([]types.Weather{
-			{
-				ForecastHours: []types.HourlyWeather{
-					{TSHourStart: today, TemperatureC: 15, DNI: 500, DHI: 100},
-				},
-			},
-		}, nil).Once()
+		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, today.AddDate(0, 0, 1), today.AddDate(0, 0, 3)).Return([]types.Weather{}, nil).Once()
 
 		req := httptest.NewRequest("GET", "/api/history/energy?date="+targetDate, nil)
 		w := httptest.NewRecorder()
@@ -943,26 +945,27 @@ func TestHandleHistoryEnergy(t *testing.T) {
 			},
 		}, types.CurrentSettingsVersion, nil).Once()
 
-		// End is tomorrow exclusive. Start factors in lookback for forecasting logic
-		endEnergy := dUTC.AddDate(0, 0, 1)
-		startEnergy := dUTC.AddDate(0, 0, -forecastHistoryDays-1)
-		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, startEnergy, endEnergy).Return([]types.DailyEnergyStats{
+		mockS.On("GetHistorySummaries", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
-				TSDayStart: dUTC,
-				Hourly:     []types.EnergyStats{{TSHourStart: dUTC, SolarKWH: 5.2, MaxBatterySOC: 85.0}},
-			},
-		}, nil).Once()
-
-		// Weather query offsets start slightly differently since it adjusts based on the returned daily stats TSDayStart timezone.
-		startWeather := dUTC.AddDate(0, 0, -forecastHistoryDays)
-		endWeather := dUTC.AddDate(0, 0, 1)
-		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, startWeather, endWeather).Return([]types.Weather{
-			{
-				ForecastHours: []types.HourlyWeather{
-					{TSHourStart: dUTC, TemperatureC: 15, DNI: 500, DHI: 100},
+				Energy: []types.DailyEnergyStats{
+					{
+						TSDayStart: dUTC,
+						Hourly:     []types.EnergyStats{{TSHourStart: dUTC, SolarKWH: 5.2, MaxBatterySOC: 85.0}},
+					},
+				},
+				Weather: []types.Weather{
+					{
+						ForecastHours: []types.HourlyWeather{
+							{TSHourStart: dUTC, TemperatureC: 15, DNI: 500, DHI: 100},
+						},
+					},
 				},
 			},
 		}, nil).Once()
+
+		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, dUTC.AddDate(0, 0, 1), dUTC.AddDate(0, 0, 2)).Return([]types.DailyEnergyStats{}, nil).Once()
+
+		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, dUTC.AddDate(0, 0, 1), dUTC.AddDate(0, 0, 3)).Return([]types.Weather{}, nil).Once()
 
 		req := httptest.NewRequest("GET", "/api/history/energy?date="+targetDate, nil)
 		w := httptest.NewRecorder()

@@ -24,6 +24,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/common"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
+	"golang.org/x/time/rate"
 )
 
 // from: https://developer.tesla.com/docs/fleet-api/authentication/overview#scopes
@@ -911,10 +912,16 @@ func (b *Tesla) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]t
 	}
 	current := startDay
 
+	limiter := rate.NewLimiter(rate.Limit(4), 4)
 	for !current.After(lastDayToFetch) {
 		if current.After(time.Now()) {
 			break
 		}
+
+		if err := limiter.Wait(ctx); err != nil {
+			return nil, err
+		}
+
 		dayEnd := current.AddDate(0, 0, 1).Add(-time.Second)
 
 		// Fetch energy history for this day

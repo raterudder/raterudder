@@ -229,3 +229,10 @@ type Weather struct {
 	TSUpdated     time.Time       `json:"tsUpdated"`
 	ForecastHours []HourlyWeather `json:"forecastHours"`
 }
+
+// HistorySummary represents the monthly history data stored in the history_summary Firestore collection.
+type HistorySummary struct {
+	TSMonthStart time.Time          `json:"tsMonthStart"`
+	Energy       []DailyEnergyStats `json:"energy"`
+	Weather      []Weather          `json:"weather"`
+}

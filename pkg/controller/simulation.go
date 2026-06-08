@@ -382,16 +382,21 @@ func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, 
 		load float64
 	}
 	hourlyData := make(map[int][]dataPoint)
-
+	uniqueDays := make(map[string]bool)
 	// Regroup history by hour
 	for _, h := range history {
 		if h.TSHourStart.IsZero() {
 			continue
 		}
-		hour := h.TSHourStart.In(now.Location()).Hour()
+		uniqueDays[h.TSHourStart.Format("2006-01-02")] = true
+		hour := h.TSHourStart.Hour()
 		hourlyData[hour] = append(hourlyData[hour], dataPoint{
 			load: h.HomeKWH,
 		})
+	}
+	numHistoryDays := len(uniqueDays)
+	if numHistoryDays == 0 {
+		numHistoryDays = 5
 	}
 
 	// Calculate solar predictions
@@ -519,12 +524,12 @@ func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, 
 				// Get today's thermal-lagged temperature at the simulated time.
 				todayTemp, hasTodayTemp := getRollingTemp(simTime)
 
-				// Calculate the average temperature of the same hour over the past 5 days.
+				// Calculate the average temperature of the same hour over the past history days.
 				// This forms the seasonal baseline. Since the historical home load (avgHomeLoad)
-				// is computed from the past 5 days of energy usage, it already inherently reflects
+				// is computed from the past history days of energy usage, it already inherently reflects
 				// the typical A/C consumption driven by the average weather during that period.
 				var pastTemps []float64
-				for d := 1; d <= 5; d++ {
+				for d := 1; d <= numHistoryDays; d++ {
 					if ptemp, ok := getRollingTemp(simTime.AddDate(0, 0, -d)); ok {
 						pastTemps = append(pastTemps, ptemp)
 					}

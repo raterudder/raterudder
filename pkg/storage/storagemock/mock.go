@@ -226,3 +226,19 @@ func (m *MockDatabase) DeleteInterest(ctx context.Context, email string) error {
 	args := m.Called(ctx, email)
 	return args.Error(0)
 }
+
+func (m *MockDatabase) GetHistorySummaries(ctx context.Context, siteID string, start, end time.Time) ([]types.HistorySummary, error) {
+	args := m.Called(ctx, siteID, start, end)
+	if len(args) > 0 {
+		return args.Get(0).([]types.HistorySummary), args.Error(1)
+	}
+	return nil, nil
+}
+
+func (m *MockDatabase) UpdateHistorySummary(ctx context.Context, siteID string, month string, newSummary types.HistorySummary) (types.HistorySummary, error) {
+	args := m.Called(ctx, siteID, month, newSummary)
+	if len(args) > 0 {
+		return args.Get(0).(types.HistorySummary), args.Error(1)
+	}
+	return newSummary, nil
+}

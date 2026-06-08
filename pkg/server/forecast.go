@@ -13,7 +13,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/types"
 )
 
-const forecastHistoryDays = 5
+const forecastHistoryDays = 35
 
 // EnergyHistoryRes represents a simplified historical energy stat returned in the forecast.
 type EnergyHistoryRes struct {
@@ -113,48 +113,25 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		// Continue with empty future prices
 	}
 
-	// 5. Get History (Last x days from Storage)
+	// 5. Get History (Last x days from monthly summaries + today's/tomorrow's unsummarized data)
 	now := status.Timestamp
 	historyStart := now.AddDate(0, 0, -forecastHistoryDays).Truncate(time.Hour)
-	energyHistoryDaily, err := s.storage.GetEnergyHistory(ctx, siteID, historyStart, now)
+	energyHistory, weatherHistory, err := s.getCombinedHistory(ctx, siteID, settings, historyStart, now, nil)
 	if err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to get energy history from storage", slog.Any("error", err))
-		writeJSONError(w, "failed to get energy history", http.StatusInternalServerError)
+		log.Ctx(ctx).ErrorContext(ctx, "failed to get combined history for forecast", slog.Any("error", err))
+		writeJSONError(w, "failed to get history", http.StatusInternalServerError)
 		return
 	}
 
-	var energyHistory []types.EnergyStats
-	for _, day := range energyHistoryDaily {
-		energyHistory = append(energyHistory, day.Hourly...)
-	}
-
-	// 6. Get Weather History if we have a location set
-	var weatherHistory []types.Weather
-	if settings.Location != nil {
-		if timeLoc, err := time.LoadLocation(settings.Location.TimeZone); err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to load location", slog.Any("error", err), slog.String("timeZone", settings.Location.TimeZone))
-			// fallback to at least fetching something and 2 days in the future
-			weatherHistory, err = s.storage.GetWeather(ctx, siteID, historyStart, now.AddDate(0, 0, 2))
-			if err != nil {
-				log.Ctx(ctx).WarnContext(ctx, "failed to fetch weather for forecast", slog.Any("error", err))
-			}
-		} else {
-			start := time.Date(historyStart.Year(), historyStart.Month(), historyStart.Day(), 0, 0, 0, 0, timeLoc)
-			end := now.In(timeLoc).AddDate(0, 0, 2) // simulate up to 24-48 hours
-			weatherHistory, err = s.storage.GetWeather(ctx, siteID, start, end)
-			if err != nil {
-				log.Ctx(ctx).WarnContext(ctx, "failed to fetch weather for forecast", slog.Any("error", err))
-			}
-		}
-	}
+	flatEnergyHistory := flattenDailyEnergyStats(energyHistory)
 
 	// 7. Run Simulation
-	simHours := s.controller.SimulateState(ctx, now, status, currentPrice, futurePrices, energyHistory, weatherHistory, settings.Settings)
+	simHours := s.controller.SimulateState(ctx, now, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings)
 
 	// Fetch data for the previous day for history display
 	histStart24 := now.AddDate(0, 0, -1).Truncate(time.Hour)
 	energyHistory24 := make([]types.EnergyStats, 0, 24)
-	for _, h := range energyHistory {
+	for _, h := range flatEnergyHistory {
 		if !h.TSHourStart.Before(histStart24) && h.TSHourStart.Before(now) {
 			energyHistory24 = append(energyHistory24, h)
 		}
@@ -206,7 +183,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 			todayMidnight := time.Date(now.In(timeLoc).Year(), now.In(timeLoc).Month(), now.In(timeLoc).Day(), 0, 0, 0, 0, timeLoc)
 			tomorrowEnd := todayMidnight.AddDate(0, 0, 2)
 
-			solar1hMap := controller.CalculateWeatherSolar1h(ctx, now, energyHistory, weatherHistory, *settings.Location)
+			solar1hMap := controller.CalculateWeatherSolar1h(ctx, now, flatEnergyHistory, weatherHistory, *settings.Location)
 
 			// Find matching forecast hours
 			var allForecastHours []types.HourlyWeather

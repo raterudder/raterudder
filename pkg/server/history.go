@@ -54,54 +54,28 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 	// input might be actually a day ahead of the user's local time
 	start := targetDate.AddDate(0, 0, -forecastHistoryDays-1)
 
-	// Fetch Energy Stats
-	dailyStats, err := s.storage.GetEnergyHistory(ctx, siteID, start, end)
+	// Fetch combined history
+	allStats, weatherHistory, err := s.getCombinedHistory(ctx, siteID, settings, start, end, nil)
 	if err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to get energy history", slog.Any("error", err))
+		log.Ctx(ctx).ErrorContext(ctx, "failed to get combined history", slog.Any("error", err))
 		writeJSONError(w, "failed to get energy history", http.StatusInternalServerError)
 		return
 	}
 
-	// now we need to figure out their time zone from the returned data
-	for _, day := range dailyStats {
-		if day.TSDayStart.Format("2006-01-02") == dateStr {
-			// go to the start of the next day because it's exclusive
-			end = day.TSDayStart.AddDate(0, 0, 1)
-			start = day.TSDayStart.AddDate(0, 0, -forecastHistoryDays)
-			break
-		}
-	}
-
-	var allStats []types.EnergyStats
-	for _, day := range dailyStats {
-		// exclude future days
-		if day.TSDayStart.Format("2006-01-02") <= dateStr {
-			allStats = append(allStats, day.Hourly...)
-		}
-	}
-
-	// Fetch Weather
-	var weatherHistory []types.Weather
-	if settings.Location != nil {
-		weatherHistory, err = s.storage.GetWeather(ctx, siteID, start, end)
-		if err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to fetch weather for history", slog.Any("error", err))
-		}
-	}
+	flatEnergy := flattenDailyEnergyStats(allStats)
 
 	// Calculate Improved Solar
 	var improvedSolarMap map[int64]controller.WeatherSolar
 	if settings.Location != nil {
-		improvedSolarMap = controller.CalculateWeatherSolar(ctx, s.now(), allStats, weatherHistory, *settings.Location)
+		improvedSolarMap = controller.CalculateWeatherSolar(ctx, s.now(), flatEnergy, weatherHistory, *settings.Location)
 	}
 
 	// Filter results for the target day
 	dayStats := make([]types.EnergyStats, 0, 24)
-	for _, day := range dailyStats {
-		if day.TSDayStart.Format("2006-01-02") != dateStr {
-			continue
+	for _, day := range allStats {
+		if day.TSDayStart.Format("2006-01-02") == dateStr {
+			dayStats = append(dayStats, day.Hourly...)
 		}
-		dayStats = append(dayStats, day.Hourly...)
 	}
 
 	dayWeather := make([]WeatherRes, 0, 24)
@@ -131,7 +105,7 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 	var solar1hRes []WeatherRes
 
 	if settings.Location != nil && len(weatherHistory) > 0 {
-		solar1hMap := controller.CalculateWeatherSolar1h(ctx, s.now(), allStats, weatherHistory, *settings.Location)
+		solar1hMap := controller.CalculateWeatherSolar1h(ctx, s.now(), flatEnergy, weatherHistory, *settings.Location)
 
 		for _, w := range weatherHistory {
 			if w.TSDayStart.Format("2006-01-02") != dateStr {

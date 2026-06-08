@@ -11,7 +11,6 @@ import (
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/api/iterator"
 )
 
 func TestFirestoreProvider(t *testing.T) {
@@ -795,89 +794,140 @@ func TestFirestoreProvider(t *testing.T) {
 		})
 	})
 
-	t.Run("Migration", func(t *testing.T) {
-		siteID := fmt.Sprintf("migration-site-%d", time.Now().UnixNano())
-		now := time.Now().Truncate(24 * time.Hour).UTC()
+	t.Run("HistorySummaries", func(t *testing.T) {
+		siteID := "test-site-summaries"
 
-		// 1. Manually insert Version 2 (hourly) data
-		coll, err := f.getCollection(siteID, "energy_history")
+		// 1. Check empty summaries
+		start := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+		end := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+		res, err := f.GetHistorySummaries(ctx, siteID, start, end)
 		require.NoError(t, err)
+		assert.Empty(t, res)
 
-		h1 := now.Add(10 * time.Hour)
-		h2 := now.Add(11 * time.Hour)
-		stats1 := types.EnergyStats{TSHourStart: h1, SolarKWH: 1.0}
-		stats2 := types.EnergyStats{TSHourStart: h2, SolarKWH: 2.0}
-
-		for _, s := range []types.EnergyStats{stats1, stats2} {
-			jsonBytes, _ := json.Marshal(s)
-			docID := s.TSHourStart.UTC().Format(time.RFC3339)
-			_, err := coll.Doc(docID).Set(ctx, map[string]any{
-				"json":      string(jsonBytes),
-				"timestamp": s.TSHourStart,
-				"version":   2,
-			})
-			require.NoError(t, err)
+		// 2. Perform UpdateHistorySummary to insert fresh data
+		es1 := types.DailyEnergyStats{
+			TSDayStart: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+			Hourly: []types.EnergyStats{
+				{TSHourStart: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC), SolarKWH: 15.0},
+			},
+		}
+		hs1 := types.HistorySummary{
+			Energy: []types.DailyEnergyStats{es1},
 		}
 
-		// Verify GetLatestEnergyHistoryTime identifies the latest Version 2 record and triggers migration
-		latestTime, version, err := f.GetLatestEnergyHistoryTime(ctx, siteID)
+		updated, err := f.UpdateHistorySummary(ctx, siteID, "2026-06", hs1)
 		require.NoError(t, err)
-		assert.Equal(t, h2, latestTime)
-		assert.Equal(t, 3, version) // Should be upgraded to 3
-
-		// Verify that data is now in Version 3 format
-		docs, err := f.GetEnergyHistory(ctx, siteID, now, now.Add(24*time.Hour))
-		require.NoError(t, err)
-		require.Len(t, docs, 1)
-		assert.Equal(t, now, docs[0].TSDayStart)
-		require.Len(t, docs[0].Hourly, 2)
-
-		// Verify Version 2 docs are deleted
-		iter := coll.Where("version", "==", 2).Documents(ctx)
-		_, err = iter.Next()
-		assert.ErrorIs(t, err, iterator.Done)
-		iter.Stop()
-
-		t.Run("MigrationWithMixedData", func(t *testing.T) {
-			siteID := fmt.Sprintf("mixed-migration-%d", time.Now().UnixNano())
-			day1 := now.Add(-48 * time.Hour)
-			day2 := now.Add(-24 * time.Hour)
-
-			// Day 1: Version 2 (Hourly)
-			coll, _ := f.getCollection(siteID, "energy_history")
-			s1 := types.EnergyStats{TSHourStart: day1.Add(12 * time.Hour), SolarKWH: 10.0}
-			jsonBytes, _ := json.Marshal(s1)
-			_, err := coll.Doc(s1.TSHourStart.UTC().Format(time.RFC3339)).Set(ctx, map[string]any{
-				"json":      string(jsonBytes),
-				"timestamp": s1.TSHourStart,
-				"version":   2,
-			})
-			require.NoError(t, err)
-
-			// Day 2: Version 3 (Daily)
-			s3 := types.DailyEnergyStats{
-				TSDayStart: day2,
-				Hourly: []types.EnergyStats{
-					{TSHourStart: day2.Add(12 * time.Hour), SolarKWH: 20.0},
-				},
+		if assert.Len(t, updated.Energy, 1) {
+			if assert.Len(t, updated.Energy[0].Hourly, 1) {
+				assert.Equal(t, 15.0, updated.Energy[0].Hourly[0].SolarKWH)
 			}
-			require.NoError(t, f.UpsertEnergyHistories(ctx, siteID, []types.DailyEnergyStats{s3}, 3))
+		}
 
-			// 1. Query for range including both: only returns Day 2 because Day 1 is still v2 and we are lazy.
-			all, err := f.GetEnergyHistory(ctx, siteID, day1, now)
-			require.NoError(t, err)
-			assert.Len(t, all, 1, "should have 1 items before migration because we're lazy")
+		// 3. Perform UpdateHistorySummary to merge/overwrite data
+		es2 := types.DailyEnergyStats{
+			TSDayStart: time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC),
+			Hourly: []types.EnergyStats{
+				{TSHourStart: time.Date(2026, 6, 2, 12, 0, 0, 0, time.UTC), SolarKWH: 25.0},
+			},
+		}
+		hs2 := types.HistorySummary{
+			Energy: []types.DailyEnergyStats{es2},
+		}
+		updated2, err := f.UpdateHistorySummary(ctx, siteID, "2026-06", hs2)
+		require.NoError(t, err)
+		if assert.Len(t, updated2.Energy, 2) {
+			if assert.Len(t, updated2.Energy[0].Hourly, 1) {
+				assert.Equal(t, 15.0, updated2.Energy[0].Hourly[0].SolarKWH)
+			}
+			if assert.Len(t, updated2.Energy[1].Hourly, 1) {
+				assert.Equal(t, 25.0, updated2.Energy[1].Hourly[0].SolarKWH)
+			}
+		}
 
-			// 2. Query only Day 1 range: should find NO v3 docs, find v2 docs, and trigger migration.
-			onlyDay1, err := f.GetEnergyHistory(ctx, siteID, day1, day1.Add(24*time.Hour))
-			require.NoError(t, err)
-			require.Len(t, onlyDay1, 1, "should have migrated and returned Day 1")
-			assert.Equal(t, day1, onlyDay1[0].TSDayStart)
+		// 4. Retrieve summaries and check overlapping months
+		resSummaries, err := f.GetHistorySummaries(ctx, siteID, start, end)
+		require.NoError(t, err)
+		if assert.Len(t, resSummaries, 1) {
+			assert.Len(t, resSummaries[0].Energy, 2)
+		}
 
-			// 3. Query all again: should now have both.
-			allNow, err := f.GetEnergyHistory(ctx, siteID, day1, now)
-			require.NoError(t, err)
-			assert.Len(t, allNow, 2)
-		})
+		// 5. Merge duplicate day (verify it overwrites rather than appends)
+		es1Overwrite := types.DailyEnergyStats{
+			TSDayStart: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+			Hourly: []types.EnergyStats{
+				{TSHourStart: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC), SolarKWH: 99.0},
+			},
+		}
+		hsOverwrite := types.HistorySummary{
+			Energy: []types.DailyEnergyStats{es1Overwrite},
+		}
+		updated3, err := f.UpdateHistorySummary(ctx, siteID, "2026-06", hsOverwrite)
+		require.NoError(t, err)
+		if assert.Len(t, updated3.Energy, 2) { // 2026-06-01 (overwritten) and 2026-06-02 (kept)
+			var found01 *types.DailyEnergyStats
+			for i := range updated3.Energy {
+				if updated3.Energy[i].TSDayStart.Format("2006-01-02") == "2026-06-01" {
+					found01 = &updated3.Energy[i]
+				}
+			}
+			if assert.NotNil(t, found01) && assert.Len(t, found01.Hourly, 1) {
+				assert.Equal(t, 99.0, found01.Hourly[0].SolarKWH) // Verified overwrite
+			}
+		}
+
+		// 6. Test weather data merging and chronological sorting
+		w1 := types.Weather{
+			TSDayStart: time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC),
+			ForecastHours: []types.HourlyWeather{
+				{TSHourStart: time.Date(2026, 6, 2, 10, 0, 0, 0, time.UTC), TemperatureC: 20.0},
+			},
+		}
+		w2 := types.Weather{
+			TSDayStart: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+			ForecastHours: []types.HourlyWeather{
+				{TSHourStart: time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC), TemperatureC: 10.0},
+			},
+		}
+		hsWeather := types.HistorySummary{
+			Weather: []types.Weather{w1, w2}, // out of order input
+		}
+		updated4, err := f.UpdateHistorySummary(ctx, siteID, "2026-06", hsWeather)
+		require.NoError(t, err)
+		if assert.Len(t, updated4.Weather, 2) {
+			assert.Equal(t, "2026-06-01", updated4.Weather[0].TSDayStart.Format("2006-01-02"))
+			assert.Equal(t, "2026-06-02", updated4.Weather[1].TSDayStart.Format("2006-01-02"))
+		}
+
+		// 7. Insert and retrieve across multiple months
+		esPrevMonth := types.DailyEnergyStats{
+			TSDayStart: time.Date(2026, 5, 25, 0, 0, 0, 0, time.UTC),
+			Hourly: []types.EnergyStats{
+				{TSHourStart: time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC), SolarKWH: 5.0},
+			},
+		}
+		hsPrev := types.HistorySummary{
+			Energy: []types.DailyEnergyStats{esPrevMonth},
+		}
+		_, err = f.UpdateHistorySummary(ctx, siteID, "2026-05", hsPrev)
+		require.NoError(t, err)
+
+		multiRes, err := f.GetHistorySummaries(ctx, siteID, start, end)
+		require.NoError(t, err)
+		assert.Len(t, multiRes, 2) // both months returned
+
+		// 8. Assert raw document properties (latestDate, earliestDate fields for querying)
+		coll, err := f.getCollection(siteID, "history_summary")
+		require.NoError(t, err)
+
+		doc202606, err := coll.Doc("2026-06").Get(ctx)
+		require.NoError(t, err)
+
+		rawEarliest, err := doc202606.DataAt("earliestDate")
+		require.NoError(t, err)
+		rawLatest, err := doc202606.DataAt("latestDate")
+		require.NoError(t, err)
+
+		assert.Equal(t, time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), rawEarliest.(time.Time).UTC())
+		assert.Equal(t, time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC), rawLatest.(time.Time).UTC())
 	})
 }
