@@ -490,7 +490,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	// setting UpdateGroup means it's ready for updates which we only do if the
 	// ess and utility are set and they're both validated
-	if newSettings.UpdateGroup == 0 && newSettings.ESS != "" && changedESS && newSettings.UtilityProvider != "" {
+	if newSettings.UpdateGroup == 0 && newSettings.ESS != "" && newSettings.UtilityProvider != "" && (changedESS || len(newSettings.EncryptedCredentials) > 0) {
 		newSettings.UpdateGroup = rand.IntN(16) + 1
 	}
 

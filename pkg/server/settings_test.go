@@ -1341,6 +1341,69 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.True(t, mockU.AssertExpectations(t))
 	})
 
+	t.Run("Update Settings - Transition to Configured Utility Sets UpdateGroup when ESS is already configured", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockU := &mockUtility{}
+		uMap := utility.NewMap(mockS)
+		uMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:     uMap,
+			storage:       mockS,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
+		s := types.Settings{
+			MinBatterySOC:               20,
+			IgnoreHourUsageOverMultiple: 5,
+			SolarTrendRatioMax:          3.0,
+			SolarBellCurveMultiplier:    1.0,
+			UtilityProvider:             "new-utility",
+			ESS:                         "tesla",
+		}
+		b, err := json.Marshal(s)
+		require.NoError(t, err)
+		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+		req = withUser(req, "admin@example.com", true)
+		w := httptest.NewRecorder()
+
+		// Mock existing credentials for Tesla
+		existingCreds := types.Credentials{
+			Tesla: &types.TeslaCredentials{AccessToken: "token"},
+		}
+		encrypted, err := srv.encryptCredentials(req.Context(), existingCreds)
+		require.NoError(t, err)
+
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+			ESS:                  "tesla",
+			UtilityProvider:      "",
+			UpdateGroup:          0,
+			EncryptedCredentials: encrypted,
+		}, types.CurrentSettingsVersion, nil).Once()
+
+		mockU.On("ApplySettings", mock.Anything, mock.MatchedBy(func(set types.Settings) bool {
+			return set.UtilityProvider == "new-utility"
+		})).Return(nil).Once()
+
+		prices := []types.Price{{DollarsPerKWH: 0.1, TSStart: time.Now()}}
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return(prices, nil)
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, types.SiteIDNone).Return(time.Now().Add(8*time.Hour), types.CurrentPriceHistoryVersion, nil).Once()
+		mockS.On("UpsertPrices", mock.Anything, types.SiteIDNone, prices, types.CurrentPriceHistoryVersion).Return(nil)
+
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(set types.Settings) bool {
+			return set.UtilityProvider == "new-utility" && set.UpdateGroup > 0 && set.UpdateGroup <= 16
+		}), types.CurrentSettingsVersion).Return(nil).Once()
+
+		// Expect DeleteInterest to be called since transitioning from "" to "new-utility"
+		mockS.On("DeleteInterest", mock.Anything, "admin@example.com").Return(nil).Once()
+
+		srv.handleUpdateSettings(w, req)
+		if assert.Equal(t, http.StatusOK, w.Result().StatusCode) {
+			assert.True(t, mockS.AssertExpectations(t))
+			assert.True(t, mockU.AssertExpectations(t))
+		}
+	})
+
 	t.Run("Update Settings - Already Configured Utility Does Not Clear Interest", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockU := &mockUtility{}
