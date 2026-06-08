@@ -30,6 +30,7 @@ locals {
     "feedback",
     "hourly_prices",
     "interest",
+    "history_summary",
   ]
 }
 
