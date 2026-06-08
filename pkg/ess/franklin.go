@@ -663,7 +663,7 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		maxBatteryDischargeKW = 10.0 * float64(len(rd.RuntimeData.EachSOC))
 	}
 
-	return types.SystemStatus{
+	status := types.SystemStatus{
 		Timestamp:               time.Now().In(di.location),
 		BatterySOC:              rd.RuntimeData.SOC,
 		BatteryKW:               rd.RuntimeData.PowerBattery,
@@ -680,7 +680,10 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		MaxBatteryDischargeKW:   maxBatteryDischargeKW,
 		Alarms:                  alarms,
 		Storms:                  storms,
-	}, nil
+	}
+
+	log.Ctx(ctx).DebugContext(ctx, "franklin system status", slog.Any("status", status))
+	return status, nil
 }
 
 func (f *Franklin) getPowerControl(ctx context.Context) (franklinGetPowerControlSettingResult, error) {

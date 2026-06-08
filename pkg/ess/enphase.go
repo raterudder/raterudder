@@ -1,6 +1,7 @@
 package ess
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -17,6 +19,7 @@ import (
 	"time"
 
 	"golang.org/x/net/publicsuffix"
+	"golang.org/x/time/rate"
 
 	"github.com/raterudder/raterudder/pkg/common"
 	"github.com/raterudder/raterudder/pkg/log"
@@ -211,13 +214,367 @@ func (e *Enphase) Authenticate(ctx context.Context, creds types.Credentials) (ty
 }
 
 func (e *Enphase) GetStatus(ctx context.Context) (types.SystemStatus, error) {
-	// TODO: implement
-	return types.SystemStatus{}, fmt.Errorf("not implemented")
+	log.Ctx(ctx).DebugContext(ctx, "getting enphase status")
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	data, err := e.getDataWithCache(ctx, false)
+	if err != nil {
+		return types.SystemStatus{}, err
+	}
+
+	tz := data.App.Timezone
+	if tz == "" {
+		tz = "UTC"
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to load location, defaulting to UTC", slog.String("tz", tz), slog.Any("error", err))
+		loc = time.UTC
+	}
+
+	// Get current SOC from EnvStorageSettings if available
+	var currentSOC float64
+	for _, settings := range data.State.BatteryConfig.EnvStorageSettings {
+		currentSOC = settings.SOC
+		break
+	}
+
+	// Fetch today's stats to estimate live powers
+	todayStats, err := e.getToday(ctx, time.Now().In(loc))
+	if err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to get enphase today stats, continuing without live powers", slog.Any("error", err))
+	}
+
+	var solarKW, gridKW, homeKW, batteryKW float64
+	if len(todayStats.Stats) > 0 {
+		stat := todayStats.Stats[0]
+		intervalSecs := stat.IntervalLength
+		if intervalSecs == 0 {
+			intervalSecs = 900 // 15 minutes
+		}
+
+		maxLen := 0
+		if len(stat.Production) > maxLen {
+			maxLen = len(stat.Production)
+		}
+		if len(stat.Consumption) > maxLen {
+			maxLen = len(stat.Consumption)
+		}
+		if len(stat.GridImport) > maxLen {
+			maxLen = len(stat.GridImport)
+		}
+
+		if maxLen > 0 {
+			latestIndex := maxLen - 1
+			whToKW := func(val int) float64 {
+				return (float64(val) / 1000.0) / (float64(intervalSecs) / 3600.0)
+			}
+
+			getPowerVal := func(arr []int) float64 {
+				if latestIndex < len(arr) {
+					return whToKW(arr[latestIndex])
+				}
+				return 0
+			}
+
+			prod := getPowerVal(stat.Production)
+			solarHome := getPowerVal(stat.SolarHome)
+			solarBat := getPowerVal(stat.SolarBattery)
+			solarGrid := getPowerVal(stat.SolarGrid)
+
+			gridBat := getPowerVal(stat.GridBattery)
+			gridHome := getPowerVal(stat.GridHome)
+
+			batHome := getPowerVal(stat.BatteryHome)
+			batGrid := getPowerVal(stat.BatteryGrid)
+
+			solarKW = prod
+			if solarKW == 0 {
+				solarKW = solarHome + solarBat + solarGrid
+			}
+			batteryKW = batHome + batGrid - gridBat - solarBat
+			gridKW = gridHome + gridBat - solarGrid - batGrid
+			homeKW = solarHome + batHome + gridHome
+			if homeKW == 0 && latestIndex < len(stat.Consumption) {
+				homeKW = whToKW(stat.Consumption[latestIndex])
+			}
+		}
+	}
+
+	// TotalCapacity is reported in Wh, convert to kWh.
+	capacityKWH := float64(data.State.BatteryInfo.TotalCapacity) / 1000.0
+	var maxPower float64
+
+	// Determine continuous charge/discharge power limits based on battery models.
+	if data.State.IsEncharge5P {
+		// Encharge 5P is rated at 3.84 kW charge/discharge per battery unit.
+		num5P := data.State.BatteryInfo.NumberOfBatteries
+		if num5P == 0 && capacityKWH > 0 {
+			num5P = int(math.Round(capacityKWH / 5.0))
+		}
+		if num5P == 0 {
+			num5P = 1
+		}
+		maxPower = float64(num5P) * 3.84
+	} else {
+		// Older models: IQ Battery 3 (3.36 kWh capacity, 1.28 kW power) and IQ Battery 10 (10.08 kWh capacity).
+		// IQ Battery 10 is modularly composed of 3x IQ Battery 3 modules. We determine the count of modules
+		// by dividing the total capacity by the capacity of a single IQ 3 module (3.36 kWh).
+		u3 := int(math.Round(capacityKWH / 3.36))
+		if u3 > 0 {
+			n10 := u3 / 3
+			n3 := u3 % 3
+
+			// Distinguish between IQ Battery 10 (3.84 kW) and IQ Battery 10C (7.08 kW).
+			// If any device name in the list contains "10c" (case-insensitive), we assume the 10C model.
+			has10C := false
+			for _, dev := range data.State.Devices {
+				if strings.Contains(strings.ToLower(dev.Name), "10c") {
+					has10C = true
+					break
+				}
+			}
+
+			power10 := 3.84
+			if has10C {
+				power10 = 7.08
+			}
+			maxPower = float64(n10)*power10 + float64(n3)*1.28
+		}
+	}
+
+	drEventActive := data.State.BatteryConfig.DrEventActive
+	severeWeatherWatch := data.State.BatteryConfig.SevereWeatherWatch == "enabled"
+	emergencyMode := drEventActive || severeWeatherWatch
+
+	backupReserveSOC := float64(data.State.BatteryConfig.BatteryBackupPercentage)
+
+	var storms []types.Storm
+	// If a severe weather alert is active, populate the storms list with a generic description
+	// and log the detailed StormAlertMessage object to verify its structure.
+	if data.State.BatteryConfig.ShowSevereWeatherAlert {
+		log.Ctx(ctx).InfoContext(ctx, "severe weather alert active", slog.Any("stormAlertMessage", data.State.BatteryConfig.StormAlertMessage))
+		storms = append(storms, types.Storm{
+			Description: "Severe weather alert active",
+		})
+	}
+
+	var alarms []types.SystemAlarm
+	var batteryChargingDisabled bool
+	offlineBatteries := 0
+	totalBatteries := 0
+
+	// Scan through devices to check connection statuses and reporting states
+	for _, dev := range data.State.Devices {
+		isBattery := strings.Contains(strings.ToLower(dev.Name), "battery") || strings.Contains(strings.ToLower(dev.Name), "encharge")
+		if isBattery {
+			totalBatteries++
+			if !dev.Connected {
+				offlineBatteries++
+			}
+		}
+
+		if !dev.Connected {
+			log.Ctx(ctx).DebugContext(ctx, "device disconnected", slog.Any("device", dev))
+		}
+
+		if !dev.Connected || (dev.Status != "" && !strings.EqualFold(dev.Status, "normal") && !strings.EqualFold(dev.Status, "reporting")) {
+			code := "DEVICE_ALERT"
+			if !dev.Connected {
+				code = "DEVICE_OFFLINE"
+			}
+			alarms = append(alarms, types.SystemAlarm{
+				Name:        dev.Name,
+				Description: fmt.Sprintf("Device %s is offline or in status: %s", dev.SerialNumber, dev.Status),
+				Timestamp:   time.Now().In(loc),
+				Code:        code,
+			})
+		}
+	}
+
+	// Disable battery charging if all battery units are reported offline
+	// TODO: is there a better way to determine this?
+	if totalBatteries > 0 && offlineBatteries == totalBatteries {
+		batteryChargingDisabled = true
+	}
+
+	status := types.SystemStatus{
+		Timestamp:             time.Now().In(loc),
+		BatterySOC:            currentSOC,
+		BatteryKW:             batteryKW,
+		BatteryCapacityKWH:    capacityKWH,
+		MaxBatteryDischargeKW: maxPower,
+		MaxBatteryChargeKW:    maxPower,
+		SolarKW:               solarKW,
+		GridKW:                gridKW,
+		HomeKW:                homeKW,
+		ElevatedMinBatterySOC: backupReserveSOC > 0 && backupReserveSOC > e.settings.MinBatterySOC,
+		BatteryAboveMinSOC:    currentSOC >= backupReserveSOC,
+		EmergencyMode:         emergencyMode,
+		// TODO: determine GridUnavailable
+		BatteryChargingDisabled: batteryChargingDisabled,
+		Alarms:                  alarms,
+		Storms:                  storms,
+	}
+
+	log.Ctx(ctx).DebugContext(ctx, "enphase system status", slog.Any("status", status))
+	return status, nil
 }
 
 func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode) error {
-	// TODO: implement
-	return fmt.Errorf("not implemented")
+	log.Ctx(ctx).DebugContext(ctx, "SetModes called", slog.Any("batteryMode", bat), slog.Any("solarMode", sol))
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if bat == types.BatteryModeNoChange && sol == types.SolarModeNoChange {
+		return nil
+	}
+
+	data, err := e.getDataWithCache(ctx, false)
+	if err != nil {
+		return err
+	}
+
+	drEventActive := data.State.BatteryConfig.DrEventActive
+	severeWeatherWatch := data.State.BatteryConfig.SevereWeatherWatch == "enabled"
+	if drEventActive || severeWeatherWatch {
+		log.Ctx(ctx).InfoContext(ctx, "device is in storm mode, skipping set modes",
+			slog.Bool("drEventActive", drEventActive),
+			slog.Bool("severeWeatherWatch", severeWeatherWatch),
+		)
+		return errors.New("device is in storm mode")
+	}
+
+	var currentSOC float64
+	for _, settings := range data.State.BatteryConfig.EnvStorageSettings {
+		currentSOC = settings.SOC
+		break
+	}
+
+	currentReserveSOC := float64(data.State.BatteryConfig.BatteryBackupPercentage)
+	newReserveSOC := currentReserveSOC
+
+	currentChargeFromGrid := data.State.BatteryConfig.ChargeFromGrid
+	newChargeFromGrid := currentChargeFromGrid
+
+	switch bat {
+	case types.BatteryModeChargeAny:
+		// If they want to charge the battery, set the backup reserve SOC to 100% to
+		// force it to charge. Allow charging from the grid if configured.
+		newReserveSOC = 100
+		newChargeFromGrid = e.settings.GridChargeBatteries
+	case types.BatteryModeChargeSolar:
+		// Force charging by setting reserve SOC to 100%, but disallow charging
+		// from the grid so it only charges using solar power.
+		newReserveSOC = 100
+		newChargeFromGrid = false
+	case types.BatteryModeLoad:
+		// Set the reserve SOC to the configured minimum battery SOC to begin discharging
+		// and covering home loads. Allow grid charging if configured.
+		newReserveSOC = e.settings.MinBatterySOC
+		newChargeFromGrid = e.settings.GridChargeBatteries
+	case types.BatteryModeStandby:
+		// Set reserve SOC to the floored current SOC to prevent discharging further,
+		// without setting it higher which would force a charge. Disallow grid charging.
+		newReserveSOC = math.Max(math.Floor(currentSOC), e.settings.MinBatterySOC)
+		newChargeFromGrid = false
+	case types.BatteryModeNoChange:
+		// Keep existing values
+	default:
+		return fmt.Errorf("unknown battery mode: %v", bat)
+	}
+
+	if bat != types.BatteryModeNoChange {
+		if newReserveSOC < 5 {
+			newReserveSOC = 5
+		}
+		if newReserveSOC > 100 {
+			newReserveSOC = 100
+		}
+		// if enphase overshot our reserve SOC by less than 1 percent, ignore it
+		if math.Abs(newReserveSOC-currentReserveSOC) <= 1.0 {
+			newReserveSOC = currentReserveSOC
+		}
+	}
+
+	currentGridMode := data.State.BatteryGridMode
+	newGridMode := currentGridMode
+
+	switch sol {
+	case types.SolarModeAny:
+		if e.settings.GridExportSolar && e.settings.GridExportBatteries {
+			newGridMode = "ImportAndExport"
+		} else {
+			newGridMode = "NoImportOrExport"
+		}
+	case types.SolarModeNoExport:
+		newGridMode = "NoImportOrExport"
+	case types.SolarModeNoChange:
+		// Keep existing values
+	default:
+		return fmt.Errorf("unknown solar mode: %v", sol)
+	}
+
+	updatedSOC := math.Round(newReserveSOC) != math.Round(currentReserveSOC)
+	updatedCharge := newChargeFromGrid != currentChargeFromGrid
+	updatedGridMode := sol != types.SolarModeNoChange && newGridMode != currentGridMode
+
+	if !updatedSOC && !updatedCharge && !updatedGridMode {
+		log.Ctx(ctx).DebugContext(ctx, "no enphase modes or reserve SOC updates required")
+		return nil
+	}
+
+	usage := data.State.BatteryConfig.Usage
+	if usage == "" {
+		usage = "self-consumption"
+	}
+
+	if e.settings.DryRun {
+		log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated enphase battery schedules",
+			slog.String("usage", usage),
+			slog.Int("batteryBackupPercentage", int(math.Round(newReserveSOC))),
+			slog.Bool("chargeFromGrid", newChargeFromGrid),
+			slog.String("batteryGridMode", newGridMode),
+		)
+		return nil
+	}
+
+	payload := enphaseBatterySchedulesPayload{
+		Usage:                   usage,
+		BatteryBackupPercentage: int(math.Round(newReserveSOC)),
+		ChargeFromGrid:          newChargeFromGrid,
+	}
+	if sol != types.SolarModeNoChange {
+		payload.BatteryGridMode = newGridMode
+	}
+
+	u := e.baseURL.JoinPath(fmt.Sprintf("pv/systems/%d/battery_schedules", e.systemID))
+	jsonBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal enphase battery schedules payload: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", u.String(), bytes.NewReader(jsonBytes))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	log.Ctx(ctx).InfoContext(ctx, "updating enphase battery schedules",
+		slog.String("usage", usage),
+		slog.Int("batteryBackupPercentage", payload.BatteryBackupPercentage),
+		slog.Bool("chargeFromGrid", payload.ChargeFromGrid),
+		slog.String("batteryGridMode", payload.BatteryGridMode),
+	)
+
+	if err := e.doRequest(req, nil); err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to update enphase battery schedules", slog.Any("error", err))
+		return err
+	}
+
+	e.dataExpiry = time.Time{}
+	return nil
 }
 
 func (e *Enphase) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]types.DailyEnergyStats, error) {
@@ -252,9 +609,14 @@ func (e *Enphase) GetEnergyHistory(ctx context.Context, start, end time.Time) ([
 
 	var result []types.DailyEnergyStats
 
+	limiter := rate.NewLimiter(rate.Limit(4), 4)
 	for current := startDay; !current.After(lastDayToFetch); current = current.AddDate(0, 0, 1) {
 		if current.After(time.Now()) {
 			break
+		}
+
+		if err := limiter.Wait(ctx); err != nil {
+			return nil, err
 		}
 
 		res, err := e.getToday(ctx, current)
@@ -553,8 +915,13 @@ func (e *Enphase) doRequest(req *http.Request, dest any) error {
 	}
 	defer resp.Body.Close()
 
+	// If we get redirected to a login page, treat it as unauthorized
+	if resp.Request != nil && !strings.Contains(req.URL.Path, "/login") && strings.Contains(resp.Request.URL.Path, "/login") {
+		return errEnphaseUnauthorized
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		if resp.StatusCode == http.StatusUnauthorized {
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 			return errEnphaseUnauthorized
 		}
 		// if this errors there's nothing we can do
@@ -635,35 +1002,42 @@ type enphaseStorageSettings struct {
 }
 
 type enphaseState struct {
-	SiteID        int                  `json:"siteId"`
-	BatteryConfig enphaseBatteryConfig `json:"batteryConfig"`
-	Devices       []enphaseDevice      `json:"devices"`
-	BatteryInfo   enphaseBatteryInfo   `json:"battery_info"`
-	HasBatteries  bool                 `json:"hasBatteries"`
-	// TODO: batteryGridMode
+	SiteID          int                  `json:"siteId"`
+	BatteryConfig   enphaseBatteryConfig `json:"batteryConfig"`
+	Devices         []enphaseDevice      `json:"devices"`
+	BatteryInfo     enphaseBatteryInfo   `json:"battery_info"`
+	HasBatteries    bool                 `json:"hasBatteries"`
+	BatteryGridMode string               `json:"batteryGridMode"`
+	IsEncharge5P    bool                 `json:"isEncharge5P"`
+}
+
+type enphaseEnvStorageSettings struct {
+	SOC  float64 `json:"soc"`
+	Mode string  `json:"mode"`
 }
 
 type enphaseBatteryConfig struct {
-	ID                               string                         `json:"_id"`
-	ActiveAlertCount                 int                            `json:"active_alert_count"`
-	BatteryBackupPercentage          int                            `json:"battery_backup_percentage"`
-	ChargeFromGrid                   bool                           `json:"charge_from_grid"`
-	ChargeFromGridOnlyScheduleChange bool                           `json:"charge_from_grid_only_schedule_change"`
-	ChargeFromGridPending            bool                           `json:"charge_from_grid_pending"`
-	ChargeFromGridScheduleEnabled    bool                           `json:"charge_from_grid_schedule_enabled"`
-	DrEventActive                    bool                           `json:"dr_event_active"`
-	DrEventMode                      string                         `json:"dr_event_mode"`
-	GridModeSettings                 map[string]any                 `json:"grid_mode_settings"`
-	HideChargeFromGrid               bool                           `json:"hide_charge_from_grid"`
-	IsTOU                            bool                           `json:"is_tou"`
-	OperationModePvType              string                         `json:"operation_mode_pv_type"`
-	OperationModeSubType             string                         `json:"operation_mode_sub_type"`
-	PrevBatteryBackupPercentage      enphaseBatteryBackupPercentage `json:"prev_battery_backup_percentage"`
-	SevereWeatherWatch               string                         `json:"severe_weather_watch"`
-	ShowSevereWeatherAlert           bool                           `json:"show_severe_weather_alert"`
-	StormAlertMessage                map[string]any                 `json:"storm_alert_message"`
-	Usage                            string                         `json:"usage"`
-	VeryLowSoc                       int                            `json:"very_low_soc"`
+	ID                               string                               `json:"_id"`
+	ActiveAlertCount                 int                                  `json:"active_alert_count"`
+	BatteryBackupPercentage          int                                  `json:"battery_backup_percentage"`
+	ChargeFromGrid                   bool                                 `json:"charge_from_grid"`
+	ChargeFromGridOnlyScheduleChange bool                                 `json:"charge_from_grid_only_schedule_change"`
+	ChargeFromGridPending            bool                                 `json:"charge_from_grid_pending"`
+	ChargeFromGridScheduleEnabled    bool                                 `json:"charge_from_grid_schedule_enabled"`
+	DrEventActive                    bool                                 `json:"dr_event_active"`
+	DrEventMode                      string                               `json:"dr_event_mode"`
+	GridModeSettings                 map[string]any                       `json:"grid_mode_settings"`
+	HideChargeFromGrid               bool                                 `json:"hide_charge_from_grid"`
+	IsTOU                            bool                                 `json:"is_tou"`
+	OperationModePvType              string                               `json:"operation_mode_pv_type"`
+	OperationModeSubType             string                               `json:"operation_mode_sub_type"`
+	PrevBatteryBackupPercentage      enphaseBatteryBackupPercentage       `json:"prev_battery_backup_percentage"`
+	SevereWeatherWatch               string                               `json:"severe_weather_watch"`
+	ShowSevereWeatherAlert           bool                                 `json:"show_severe_weather_alert"`
+	StormAlertMessage                map[string]any                       `json:"storm_alert_message"`
+	Usage                            string                               `json:"usage"`
+	VeryLowSoc                       int                                  `json:"very_low_soc"`
+	EnvStorageSettings               map[string]enphaseEnvStorageSettings `json:"env_storage_settings"`
 }
 
 type enphaseBatteryBackupPercentage struct {
@@ -684,4 +1058,11 @@ type enphaseBatteryInfo struct {
 	NumberOfBatteries int `json:"no_of_batteries"`
 	// TODO: kwh?
 	TotalCapacity int `json:"total_capacity"`
+}
+
+type enphaseBatterySchedulesPayload struct {
+	Usage                   string `json:"usage"`
+	BatteryBackupPercentage int    `json:"battery_backup_percentage"`
+	ChargeFromGrid          bool   `json:"charge_from_grid"`
+	BatteryGridMode         string `json:"battery_grid_mode,omitempty"`
 }

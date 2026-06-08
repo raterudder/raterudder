@@ -670,6 +670,7 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		// TODO: how do we know when battery charging is disabled
 		// TODO: what about alarms?
 	}
+	log.Ctx(ctx).DebugContext(ctx, "tesla system status", slog.Any("status", status))
 
 	return status, nil
 }

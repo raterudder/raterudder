@@ -306,4 +306,200 @@ func TestEnphase(t *testing.T) {
 		assert.Equal(t, 987654321, updatedCreds.Enphase.SystemID)
 		assert.Empty(t, updatedCreds.Enphase.Code)
 	})
+
+	t.Run("GetStatus", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/app-api/123/data.json" {
+				res := enphaseDataResult{
+					App: enphaseApp{
+						Timezone: "America/Chicago",
+					},
+					State: enphaseState{
+						SiteID: 123,
+						BatteryInfo: enphaseBatteryInfo{
+							NumberOfBatteries: 2,
+							TotalCapacity:     6720,
+						},
+						HasBatteries:    true,
+						BatteryGridMode: "NoImportOrExport",
+						IsEncharge5P:    false,
+						Devices: []enphaseDevice{
+							{Name: "IQ Battery 3", SerialNumber: "1", Connected: true, Status: "normal"},
+							{Name: "IQ Battery 3", SerialNumber: "2", Connected: false, Status: "error"},
+						},
+						BatteryConfig: enphaseBatteryConfig{
+							BatteryBackupPercentage: 30,
+							DrEventActive:           false,
+							SevereWeatherWatch:      "disabled",
+							ShowSevereWeatherAlert:  true,
+							StormAlertMessage: map[string]any{
+								"message": "Blizzard Warning",
+							},
+							EnvStorageSettings: map[string]enphaseEnvStorageSettings{
+								"envoy1": {SOC: 75, Mode: "self-consumption"},
+							},
+						},
+					},
+				}
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(res)
+				return
+			}
+
+			if r.URL.Path == "/pv/systems/123/today" {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{
+					"start_date": "2026-06-06",
+					"stats": [{
+						"production": [1000],
+						"consumption": [800],
+						"solar_home": [400],
+						"solar_battery": [400],
+						"solar_grid": [200],
+						"battery_home": [100],
+						"battery_grid": [0],
+						"grid_battery": [0],
+						"grid_home": [300],
+						"start_time": 1776038400,
+						"interval_length": 900
+					}]
+				}`))
+				return
+			}
+
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		e := newEnphase()
+		e.baseURL, _ = url.Parse(server.URL)
+		e.systemID = 123
+		e.settings = types.Settings{
+			MinBatterySOC: 20,
+		}
+
+		status, err := e.GetStatus(context.Background())
+		require.NoError(t, err)
+
+		assert.Equal(t, 75.0, status.BatterySOC)
+		assert.Equal(t, 6.72, status.BatteryCapacityKWH)
+		assert.Equal(t, 2.56, status.MaxBatteryDischargeKW)
+		assert.Equal(t, 2.56, status.MaxBatteryChargeKW)
+
+		assert.InDelta(t, 4.0, status.SolarKW, 0.0001)
+		assert.InDelta(t, -1.2, status.BatteryKW, 0.0001)
+		assert.InDelta(t, 0.4, status.GridKW, 0.0001)
+		assert.InDelta(t, 3.2, status.HomeKW, 0.0001)
+
+		assert.True(t, status.ElevatedMinBatterySOC)
+		assert.True(t, status.BatteryAboveMinSOC)
+		assert.False(t, status.EmergencyMode)
+
+		assert.Len(t, status.Storms, 1)
+		assert.Equal(t, "Severe weather alert active", status.Storms[0].Description)
+
+		assert.Len(t, status.Alarms, 1)
+		assert.Equal(t, "IQ Battery 3", status.Alarms[0].Name)
+		assert.Contains(t, status.Alarms[0].Description, "offline or in status")
+	})
+
+	t.Run("SetModes", func(t *testing.T) {
+		var lastPayload *enphaseBatterySchedulesPayload
+		var postCalled bool
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/app-api/123/data.json" {
+				res := enphaseDataResult{
+					State: enphaseState{
+						SiteID:          123,
+						BatteryGridMode: "NoImportOrExport",
+						BatteryConfig: enphaseBatteryConfig{
+							BatteryBackupPercentage: 30,
+							Usage:                   "self-consumption",
+							ChargeFromGrid:          false,
+							EnvStorageSettings: map[string]enphaseEnvStorageSettings{
+								"envoy1": {SOC: 80},
+							},
+						},
+					},
+				}
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(res)
+				return
+			}
+
+			if r.URL.Path == "/pv/systems/123/battery_schedules" {
+				assert.Equal(t, "POST", r.Method)
+				var payload enphaseBatterySchedulesPayload
+				err := json.NewDecoder(r.Body).Decode(&payload)
+				assert.NoError(t, err)
+				lastPayload = &payload
+				postCalled = true
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		e := newEnphase()
+		e.baseURL, _ = url.Parse(server.URL)
+		e.systemID = 123
+		e.settings = types.Settings{
+			MinBatterySOC:       20,
+			GridChargeBatteries: true,
+			GridExportSolar:     true,
+			GridExportBatteries: false,
+		}
+
+		err := e.SetModes(context.Background(), types.BatteryModeStandby, types.SolarModeAny)
+		require.NoError(t, err)
+		if assert.True(t, postCalled) {
+			assert.Equal(t, 80, lastPayload.BatteryBackupPercentage)
+			assert.False(t, lastPayload.ChargeFromGrid)
+			assert.Equal(t, "NoImportOrExport", lastPayload.BatteryGridMode)
+			assert.Equal(t, "self-consumption", lastPayload.Usage)
+		}
+
+		postCalled = false
+		lastPayload = nil
+
+		err = e.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeNoChange)
+		require.NoError(t, err)
+		if assert.True(t, postCalled) {
+			assert.Equal(t, 100, lastPayload.BatteryBackupPercentage)
+			assert.True(t, lastPayload.ChargeFromGrid)
+			assert.Empty(t, lastPayload.BatteryGridMode)
+		}
+	})
+
+	t.Run("SetModes storm mode guard", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/app-api/123/data.json" {
+				res := enphaseDataResult{
+					State: enphaseState{
+						SiteID: 123,
+						BatteryConfig: enphaseBatteryConfig{
+							SevereWeatherWatch: "enabled",
+						},
+					},
+				}
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(res)
+				return
+			}
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		e := newEnphase()
+		e.baseURL, _ = url.Parse(server.URL)
+		e.systemID = 123
+
+		err := e.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny)
+		require.ErrorContains(t, err, "device is in storm mode")
+	})
 }
