@@ -84,7 +84,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			}
 
 			// try to unmarshal just the SiteID
-			if len(bodyBytes) > 0 {
+			if len(bodyBytes) > 0 && !ignoreSiteID {
 				var justSiteID struct {
 					SiteID string `json:"siteID"`
 				}

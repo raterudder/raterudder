@@ -590,6 +590,20 @@ func TestAuthMiddleware(t *testing.T) {
 
 		assert.True(t, mocks.AssertExpectations(t))
 	})
+
+	t.Run("Browser Report - Bypass SiteID Unmarshal", func(t *testing.T) {
+		mocks := new(mockStorage)
+		server.storage = mocks
+		server.singleSite = false
+		w := httptest.NewRecorder()
+		payload := `[{"type": "csp-violation"}]`
+		req := createReq("POST", "/api/report/browser", json.RawMessage(payload), nil)
+
+		server.authMiddleware(testHandler).ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.True(t, mocks.AssertExpectations(t))
+	})
 }
 
 func TestHandleAuthStatus(t *testing.T) {
