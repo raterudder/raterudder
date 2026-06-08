@@ -1550,7 +1550,9 @@ func (c *Controller) evaluatePlannedCharge(
 	// If the current price is cheap compared to the planned future price (the difference is smaller than minDiff),
 	// we shouldn't discharge. We standby to wait for the planned charge window.
 	// Only apply this check if the plan is in the future.
-	isCheapNow := plan.Time.After(now) && plan.Cost+minDiff > gridChargeNowCost
+	// We also skip this check if the battery will hit capacity before the planned charge,
+	// since any energy preserved now will be overwritten when the battery fills up.
+	isCheapNow := plan.Time.After(now) && plan.Cost+minDiff > gridChargeNowCost && (summary.HitFutureCapacityAt.IsZero() || !summary.HitFutureCapacityAt.Before(plan.Time))
 
 	// Future Peak Preservation scanning:
 	// We scan the simulated hours between now and the planned charge time to identify if there are any peak hours
@@ -1562,6 +1564,9 @@ func (c *Controller) evaluatePlannedCharge(
 	var scanUntil time.Time
 	if plan.Time.After(now) {
 		scanUntil = plan.Time
+	}
+	if !summary.HitFutureCapacityAt.IsZero() && (scanUntil.IsZero() || summary.HitFutureCapacityAt.Before(scanUntil)) {
+		scanUntil = summary.HitFutureCapacityAt
 	}
 	mustStandbyForPeak, peakTime, peakCost, peakPrice := c.checkPeakSurvival(simData, scanUntil, gridChargeNowCost, hitAboveDeficitAt, settings)
 

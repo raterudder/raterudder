@@ -671,6 +671,13 @@ func CalibrateSolarScaleFactor(
 	}
 
 	validHours := make(map[int]float64)
+	type hourScaleFactorLog struct {
+		HourOfDay  int     `json:"hourOfDay"`
+		Efficiency float64 `json:"efficiency"`
+		NumPoints  int     `json:"numPoints"`
+	}
+	var hourScaleFactors []hourScaleFactorLog
+
 	for h := 0; h < 24; h++ {
 		acc := efficienciesByHourOfDay[h]
 		if acc.count < 3 {
@@ -698,14 +705,20 @@ func CalibrateSolarScaleFactor(
 		if acc.denom > 0 {
 			mean := acc.solarKWH / acc.denom
 			validHours[h] = mean
-			log.Ctx(ctx).DebugContext(
-				ctx,
-				"stage 3: hour valid scale factor",
-				slog.Int("hourOfDay", h),
-				slog.Float64("efficiency", mean),
-				slog.Int("numPoints", acc.count),
-			)
+			hourScaleFactors = append(hourScaleFactors, hourScaleFactorLog{
+				HourOfDay:  h,
+				Efficiency: mean,
+				NumPoints:  acc.count,
+			})
 		}
+	}
+
+	if len(hourScaleFactors) > 0 {
+		log.Ctx(ctx).DebugContext(
+			ctx,
+			"stage 3: hour valid scale factors",
+			slog.Any("factors", hourScaleFactors),
+		)
 	}
 
 	// If we have at least 4 valid hours, interpolate the rest.

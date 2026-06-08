@@ -439,6 +439,16 @@ func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, 
 		return (0.3 * t1) + (0.5 * t2) + (0.2 * t3), true
 	}
 
+	type acAdjustmentLog struct {
+		Hour         int     `json:"hour"`
+		OriginalLoad float64 `json:"originalLoad"`
+		AdjustedLoad float64 `json:"adjustedLoad"`
+		TodayTemp    float64 `json:"todayTemp"`
+		BaselineTemp float64 `json:"baselineTemp"`
+		Ratio        float64 `json:"ratio"`
+	}
+	var acAdjustments []acAdjustmentLog
+
 	result := make(map[int]timeProfile)
 	for h, points := range hourlyData {
 		if len(points) == 0 {
@@ -570,14 +580,14 @@ func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, 
 
 							// Apply the scaled percentage increase to the calculated average home load to produce the AC-adjusted load.
 							adjustedLoad := avgHomeLoad + (avgHomeLoad * ratio)
-							log.Ctx(ctx).DebugContext(ctx, "calculated AC load adjustment",
-								slog.Int("hour", h),
-								slog.Float64("originalLoad", avgHomeLoad),
-								slog.Float64("adjustedLoad", adjustedLoad),
-								slog.Float64("todayTemp", todayTemp),
-								slog.Float64("baselineTemp", baselineTemp),
-								slog.Float64("ratio", ratio),
-							)
+							acAdjustments = append(acAdjustments, acAdjustmentLog{
+								Hour:         h,
+								OriginalLoad: avgHomeLoad,
+								AdjustedLoad: adjustedLoad,
+								TodayTemp:    todayTemp,
+								BaselineTemp: baselineTemp,
+								Ratio:        ratio,
+							})
 							avgHomeLoadACAdj = adjustedLoad
 						}
 					}
@@ -608,6 +618,12 @@ func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, 
 			avgHomeLoadKWH:      avgHomeLoad,
 			avgHomeLoadACAdjKWH: avgHomeLoadACAdj,
 		}
+	}
+
+	if len(acAdjustments) > 0 {
+		log.Ctx(ctx).DebugContext(ctx, "calculated AC load adjustments",
+			slog.Any("adjustments", acAdjustments),
+		)
 	}
 
 	// if they disabled solar bell curve fitting return early

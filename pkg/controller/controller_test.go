@@ -4784,6 +4784,44 @@ func TestEvaluatePlannedCharge(t *testing.T) {
 			assert.Equal(t, types.ActionReasonSufficientBatteryTillCharge, decision.Reason)
 		}
 	})
+
+	t.Run("HitCapacity Before Planned Charge -> Ignore Cheap Price Retention -> Load", func(t *testing.T) {
+		status := types.SystemStatus{
+			Timestamp:             now,
+			BatterySOC:            60.0,
+			BatteryCapacityKWH:    15.0,
+			MaxBatteryChargeKW:    8.0,
+			MaxBatteryDischargeKW: 10.0,
+			HomeKW:                2.0,
+			BatteryAboveMinSOC:    true,
+		}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05}
+		summary := simulationSummary{
+			HitDeficitAt:        now.Add(5 * time.Hour),
+			HitBelowDeficitAt:   now.Add(5 * time.Hour),
+			HitAboveDeficitAt:   now.Add(5 * time.Hour),
+			HitFutureCapacityAt: now.Add(2 * time.Hour),
+		}
+		plan := PlannedCharge{
+			Time:  now.Add(4 * time.Hour),
+			Price: types.Price{DollarsPerKWH: 0.05},
+			Cost:  0.05,
+		}
+		simData := []SimHour{
+			{TS: now, ClampedNetLoadSolarKWH: -5.0, GridChargeDollarsPerKWH: 0.05},
+			{TS: now.Add(time.Hour), ClampedNetLoadSolarKWH: -5.0, GridChargeDollarsPerKWH: 0.05},
+			{TS: now.Add(2 * time.Hour), ClampedNetLoadSolarKWH: 1.0, GridChargeDollarsPerKWH: 0.05},
+			{TS: now.Add(3 * time.Hour), ClampedNetLoadSolarKWH: 1.0, GridChargeDollarsPerKWH: 0.05},
+			{TS: now.Add(4 * time.Hour), ClampedNetLoadSolarKWH: 1.0, GridChargeDollarsPerKWH: 0.05},
+			{TS: now.Add(5 * time.Hour), ClampedNetLoadSolarKWH: 1.0, GridChargeDollarsPerKWH: 0.10},
+		}
+
+		decision := c.evaluatePlannedCharge(ctx, now, status, currentPrice, baseSettings, simData, summary, plan)
+		if assert.NotNil(t, decision) {
+			assert.Equal(t, types.BatteryModeLoad, decision.BatteryMode)
+			assert.Equal(t, types.ActionReasonSufficientBatteryTillCharge, decision.Reason)
+		}
+	})
 }
 
 func TestEvaluateFallback(t *testing.T) {
