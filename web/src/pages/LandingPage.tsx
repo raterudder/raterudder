@@ -1,64 +1,60 @@
 import React from 'react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer } from 'recharts';
 import { Accordion } from '@base-ui/react/accordion';
 import './LandingPage.css';
 
+const timelineEvents = [
+    {
+        time: "02:00 AM",
+        action: "Grid Charge",
+        type: "charge",
+        title: "Smart Grid Charging",
+        description: "RateRudder triggers battery charging from the grid during off-peak hours, drawing only enough energy to power the home until solar generation takes over.",
+        factors: [
+            "📈 Grid Pricing Schedule",
+            "🔋 Battery State-of-Charge",
+            "☀️ Upcoming Weather Forecast",
+            "🏠 Historical Home Demand"
+        ]
+    },
+    {
+        time: "08:00 AM",
+        action: "Solar Focus",
+        type: "solar",
+        title: "Solar Self-Consumption",
+        description: "Solar generation powers your home while charging the battery to its full capacity, maximizing clean self-consumption.",
+        factors: [
+            "🌤️ Real-Time Cloud Cover",
+            "⚡ Live Solar Generation",
+            "🏠 Current Household Load"
+        ]
+    },
+    {
+        time: "02:00 PM",
+        action: "Smart Export",
+        type: "export",
+        title: "Peak Solar Export",
+        description: "Utility rates are at their peak. Excess solar is exported to the grid for maximum credits.",
+        factors: [
+            "💰 High Peak-Tariff Credits",
+            "🔋 Current battery state-of-charge",
+            "⏱️ Peak Rate Duration Window"
+        ]
+    },
+    {
+        time: "07:00 PM",
+        action: "Grid Offset",
+        type: "offset",
+        title: "Evening Battery Discharge",
+        description: "The sun has set, but evening grid rates remain high. The battery powers the home, offsetting expensive evening grid energy costs.",
+        factors: [
+            "🌙 Evening Demand Projection",
+            "⏱️ Remaining Peak Window"
+        ]
+    }
+];
+
 const LandingPage: React.FC = () => {
-    // Fake data for charts with more "flashy" and realistic variability
-    const solarData = React.useMemo(() => {
-        // Use a pseudo-random function so data is consistent between renders
-        const pseudoRandom = (seed: number) => {
-            const x = Math.sin(seed++) * 10000;
-            return x - Math.floor(x);
-        };
 
-        return Array.from({ length: 24 }, (_, i) => {
-            let base = i >= 6 && i <= 18 ? Math.sin((i - 6) * Math.PI / 12) * 7 : 0;
-            // Add some "cloud" dips and atmospheric noise
-            if (base > 0) {
-                const noise = 0.9 + pseudoRandom(i) * 0.2;
-                const clouds = (i === 10 || i === 14) ? 0.7 : 1;
-                base = base * noise * clouds;
-            }
-            return {
-                name: `${i}:00`,
-                uv: parseFloat(base.toFixed(2)),
-            };
-        });
-    }, []);
-
-    const usageData = React.useMemo(() => {
-        const pseudoRandom = (seed: number) => {
-            const x = Math.sin(seed++) * 10000;
-            return x - Math.floor(x);
-        };
-        return Array.from({ length: 24 }, (_, i) => ({
-            name: `${i}:00`,
-            usage: parseFloat((.8 + pseudoRandom(i + 100) * 0.5 + (i > 17 && i < 22 ? 2 : 0) + (i > 6 && i < 9 ? 1.5 : 0)).toFixed(2)),
-        }));
-    }, []);
-
-    const batteryData = React.useMemo(() => {
-        const pseudoRandom = (seed: number) => {
-            const x = Math.sin(seed++) * 10000;
-            return x - Math.floor(x);
-        };
-        return Array.from({ length: 24 }, (_, i) => {
-            let level = 20;
-            if (i > 8 && i < 17) level = 40 + (i - 8) * 7 + pseudoRandom(i + 200) * 5;
-            else if (i >= 17) level = 95 - (i - 17) * 8;
-            else level = 30 - i * 1.5;
-            return { name: `${i}:00`, level: Math.min(100, Math.max(0, parseFloat(level.toFixed(1)))) };
-        });
-    }, []);
-
-    const [isMobile, setIsMobile] = React.useState(window.innerWidth < 768);
-
-    React.useEffect(() => {
-        const handleResize = () => setIsMobile(window.innerWidth < 768);
-        window.addEventListener('resize', handleResize);
-        return () => window.removeEventListener('resize', handleResize);
-    }, []);
 
     const faqData = [
         {
@@ -84,10 +80,6 @@ const LandingPage: React.FC = () => {
     ];
 
     const JOIN_FORM_URL = import.meta.env.VITE_JOIN_FORM_URL;
-
-    const chartMargin = { top: 10, right: 10, left: 0, bottom: 0 };
-    const axisStyle = { fontSize: isMobile ? 10 : 12, fontFamily: 'Inter, sans-serif' };
-    const yAxisWidth = isMobile ? 30 : 40;
 
     return (
         <div className="landing-page">
@@ -121,6 +113,55 @@ const LandingPage: React.FC = () => {
                                 <span className="dot" aria-hidden="true"></span> Optimized by RateRudder
                             </div>
                         </div>
+                    </div>
+                </div>
+            </section>
+
+            <section className="setup-section">
+                <div className="content-container">
+                    <div className="section-header">
+                        <h2>Setup in 3 Steps</h2>
+                    </div>
+                    <div className="setup-steps-wrapper">
+                        <div className="setup-step">
+                            <div className="step-badge">1</div>
+                            <div className="step-icon-container">
+                                <svg className="step-icon" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                                    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                                </svg>
+                            </div>
+                            <h3>Secure Login</h3>
+                            <p>Create an account using Google or Apple.</p>
+                        </div>
+                        <div className="setup-connector" aria-hidden="true"></div>
+                        <div className="setup-step">
+                            <div className="step-badge">2</div>
+                            <div className="step-icon-container">
+                                <svg className="step-icon" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                                </svg>
+                            </div>
+                            <h3>Choose Utility</h3>
+                            <p>Select your pre-configured rate plan.</p>
+                        </div>
+                        <div className="setup-connector" aria-hidden="true"></div>
+                        <div className="setup-step">
+                            <div className="step-badge">3</div>
+                            <div className="step-icon-container">
+                                <svg className="step-icon" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <rect x="2" y="7" width="16" height="10" rx="2" ry="2" />
+                                    <path d="M22 11v2" />
+                                    <path d="M9 10l-2 3h4l-2 3" />
+                                </svg>
+                            </div>
+                            <h3>Connect Battery</h3>
+                            <p>Link your Tesla Powerwall or FranklinWH system.</p>
+                        </div>
+                    </div>
+                    <div className="setup-savings-banner">
+                        <span className="sparkle" aria-hidden="true">✨</span>
+                        <span className="highlight">That's it!</span> RateRudder automatically manages your energy flow to slash your bills.
                     </div>
                 </div>
             </section>
@@ -172,78 +213,37 @@ const LandingPage: React.FC = () => {
                 </div>
             </section>
 
-            <section className="live-demo-section">
+            <section className="timeline-section">
                 <div className="content-container">
                     <div className="section-header">
-                        <h2>Intelligent Energy Forecast</h2>
+                        <h2>Example Day of Savings</h2>
                     </div>
 
-                    <div className="charts-grid">
-                        <div className="chart-card">
-                            <div className="chart-header">
-                                <h3>Solar Generation</h3>
+                    <div className="timeline-container">
+                        <div className="timeline-line"></div>
+                        {timelineEvents.map((event, index) => (
+                            <div key={index} className={`timeline-item ${event.type}`}>
+                                <div className="timeline-meta">
+                                    <div className="timeline-time">{event.time}</div>
+                                    <div className="timeline-action-badge">{event.action}</div>
+                                </div>
+                                <div className="timeline-marker"></div>
+                                <div className="timeline-card">
+                                    <div className="timeline-card-header">
+                                        <h3>{event.title}</h3>
+                                    </div>
+                                    <p className="timeline-desc">{event.description}</p>
+                                    <div className="timeline-factors-section">
+                                        <span className="factors-label">Intelligent Factors Analyzed:</span>
+                                        <div className="timeline-factors">
+                                            {event.factors.map((factor, fIdx) => (
+                                                <span key={fIdx} className="factor-pill">{factor}</span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
-                            <div className="chart-wrapper">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <AreaChart data={solarData} margin={chartMargin}>
-                                        <defs>
-                                            <linearGradient id="colorSolar" x1="0" y1="0" x2="0" y2="1">
-                                                <stop offset="5%" stopColor="#ffb800" stopOpacity={0.8}/>
-                                                <stop offset="95%" stopColor="#ffb800" stopOpacity={0}/>
-                                            </linearGradient>
-                                        </defs>
-                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(65, 71, 85, 0.1)" />
-                                        <XAxis dataKey="name" tick={axisStyle} stroke="#414755" axisLine={false} tickLine={false} />
-                                        <YAxis tick={axisStyle} width={yAxisWidth} stroke="#414755" axisLine={false} tickLine={false} />
-                                        <Area type="monotone" dataKey="uv" stroke="#ffb800" strokeWidth={3} fillOpacity={1} fill="url(#colorSolar)" isAnimationActive={true} />
-                                    </AreaChart>
-                                </ResponsiveContainer>
-                            </div>
-                        </div>
-
-                        <div className="chart-card">
-                            <div className="chart-header">
-                                <h3>Home Usage</h3>
-                            </div>
-                            <div className="chart-wrapper">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <AreaChart data={usageData} margin={chartMargin}>
-                                        <defs>
-                                            <linearGradient id="colorUsage" x1="0" y1="0" x2="0" y2="1">
-                                                <stop offset="5%" stopColor="#4b8eff" stopOpacity={0.8}/>
-                                                <stop offset="95%" stopColor="#4b8eff" stopOpacity={0}/>
-                                            </linearGradient>
-                                        </defs>
-                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(65, 71, 85, 0.1)" />
-                                        <XAxis dataKey="name" tick={axisStyle} stroke="#414755" axisLine={false} tickLine={false} />
-                                        <YAxis tick={axisStyle} width={yAxisWidth} stroke="#414755" axisLine={false} tickLine={false} />
-                                        <Area type="monotone" dataKey="usage" stroke="#4b8eff" strokeWidth={3} fillOpacity={1} fill="url(#colorUsage)" isAnimationActive={true} />
-                                    </AreaChart>
-                                </ResponsiveContainer>
-                            </div>
-                        </div>
-
-                        <div className="chart-card full-width">
-                            <div className="chart-header">
-                                <h3>Battery Capacity</h3>
-                            </div>
-                            <div className="chart-wrapper">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <AreaChart data={batteryData} margin={chartMargin}>
-                                        <defs>
-                                            <linearGradient id="colorBattery" x1="0" y1="0" x2="0" y2="1">
-                                                <stop offset="5%" stopColor="#00ffc2" stopOpacity={0.4}/>
-                                                <stop offset="95%" stopColor="#00ffc2" stopOpacity={0}/>
-                                            </linearGradient>
-                                        </defs>
-                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(65, 71, 85, 0.1)" />
-                                        <XAxis dataKey="name" tick={axisStyle} stroke="#414755" axisLine={false} tickLine={false} />
-                                        <YAxis tick={axisStyle} width={yAxisWidth} stroke="#414755" axisLine={false} tickLine={false} />
-                                        <Area type="monotone" dataKey="level" stroke="#00ffc2" strokeWidth={3} fillOpacity={1} fill="url(#colorBattery)" isAnimationActive={true} />
-                                    </AreaChart>
-                                </ResponsiveContainer>
-                            </div>
-                        </div>
+                        ))}
                     </div>
                 </div>
             </section>
