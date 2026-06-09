@@ -11,9 +11,6 @@ import (
 )
 
 func TestSECOUtility(t *testing.T) {
-	ny, err := time.LoadLocation("America/New_York")
-	require.NoError(t, err)
-
 	t.Run("Schedule RS Flat Rates", func(t *testing.T) {
 		u := &genericTOU{}
 		err := u.ApplySettings(context.Background(), types.Settings{
@@ -23,14 +20,14 @@ func TestSECOUtility(t *testing.T) {
 		require.NoError(t, err)
 
 		// Flat $0.1194 year-round
-		p, err := u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, ny))
+		p, err := u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.1194, p.DollarsPerKWH, 1e-6)
 			assert.True(t, p.SeparateGenerationCredit)
 			assert.InDelta(t, 0.095, p.GenerationCreditDollarsPerKWH, 1e-6)
 		}
 
-		p, err = u.priceForTime(time.Date(2026, time.January, 15, 12, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.January, 15, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.1194, p.DollarsPerKWH, 1e-6)
 			assert.True(t, p.SeparateGenerationCredit)
@@ -47,7 +44,7 @@ func TestSECOUtility(t *testing.T) {
 		require.NoError(t, err)
 
 		// Summer (Apr - Oct): Mon, Jun 15, 2026
-		summerMon := time.Date(2026, time.June, 15, 0, 0, 0, 0, ny)
+		summerMon := time.Date(2026, time.June, 15, 0, 0, 0, 0, etLocation)
 
 		// Peak (2 PM - 6 PM weekdays): 3:00 PM -> $0.2370
 		p, err := u.priceForTime(summerMon.Add(15 * time.Hour))
@@ -68,7 +65,7 @@ func TestSECOUtility(t *testing.T) {
 		}
 
 		// Winter (Nov - Mar): Tue, Jan 20, 2026
-		winterTue := time.Date(2026, time.January, 20, 0, 0, 0, 0, ny)
+		winterTue := time.Date(2026, time.January, 20, 0, 0, 0, 0, etLocation)
 
 		// Peak (6 AM - 9 AM weekdays): 8:00 AM -> $0.2370
 		p, err = u.priceForTime(winterTue.Add(8 * time.Hour))
@@ -98,7 +95,7 @@ func TestSECOUtility(t *testing.T) {
 		require.NoError(t, err)
 
 		// Memorial Day (last Monday in May): Mon, May 25, 2026 at 3:00 PM -> should be Off-Peak ($0.0970)
-		p, err := u.priceForTime(time.Date(2026, time.May, 25, 15, 0, 0, 0, ny))
+		p, err := u.priceForTime(time.Date(2026, time.May, 25, 15, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.0970, p.DollarsPerKWH, 1e-6)
 		}

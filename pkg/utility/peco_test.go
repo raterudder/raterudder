@@ -11,9 +11,6 @@ import (
 )
 
 func TestPECOUtility(t *testing.T) {
-	ny, err := time.LoadLocation("America/New_York")
-	require.NoError(t, err)
-
 	t.Run("Standard Flat Rate R", func(t *testing.T) {
 		u := &genericTOU{}
 		err := u.ApplySettings(context.Background(), types.Settings{
@@ -23,20 +20,20 @@ func TestPECOUtility(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test Dec 2025: $0.11024
-		p, err := u.priceForTime(time.Date(2025, time.December, 15, 12, 0, 0, 0, ny))
+		p, err := u.priceForTime(time.Date(2025, time.December, 15, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.11024, p.DollarsPerKWH, 1e-6)
 			assert.False(t, p.SeparateGenerationCredit)
 		}
 
 		// Test Jan-May 2026: $0.11024
-		p, err = u.priceForTime(time.Date(2026, time.February, 10, 12, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.February, 10, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.11024, p.DollarsPerKWH, 1e-6)
 		}
 
 		// Test Jun-Dec 2026: $0.11759
-		p, err = u.priceForTime(time.Date(2026, time.July, 4, 12, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.July, 4, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.11759, p.DollarsPerKWH, 1e-6)
 		}
@@ -52,7 +49,7 @@ func TestPECOUtility(t *testing.T) {
 
 		// Dec 2025 (Winter 2025)
 		// Monday, Dec 15, 2025
-		decMon := time.Date(2025, time.December, 15, 0, 0, 0, 0, ny)
+		decMon := time.Date(2025, time.December, 15, 0, 0, 0, 0, etLocation)
 
 		// Super Off-Peak: 2:00 AM ($0.06061)
 		p, err := u.priceForTime(decMon.Add(2 * time.Hour))
@@ -74,7 +71,7 @@ func TestPECOUtility(t *testing.T) {
 
 		// Jun-Dec 2026 (Summer/Fall 2026)
 		// Monday, Jun 15, 2026
-		junMon := time.Date(2026, time.June, 15, 0, 0, 0, 0, ny)
+		junMon := time.Date(2026, time.June, 15, 0, 0, 0, 0, etLocation)
 
 		// Super Off-Peak: 2:00 AM ($0.06741)
 		p, err = u.priceForTime(junMon.Add(2 * time.Hour))
@@ -95,7 +92,7 @@ func TestPECOUtility(t *testing.T) {
 		}
 
 		// Holiday exclusion: Christmas Day 2026 (Friday, Dec 25, 2026)
-		christmas := time.Date(2026, time.December, 25, 15, 0, 0, 0, ny) // 3:00 PM
+		christmas := time.Date(2026, time.December, 25, 15, 0, 0, 0, etLocation) // 3:00 PM
 		p, err = u.priceForTime(christmas)
 		if assert.NoError(t, err) {
 			// Peak hours on holidays should be treated as Off-Peak ($0.09336)

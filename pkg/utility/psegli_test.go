@@ -11,9 +11,6 @@ import (
 )
 
 func TestPSEGLIUtility(t *testing.T) {
-	ny, err := time.LoadLocation("America/New_York")
-	require.NoError(t, err)
-
 	t.Run("Rate 194 TOU Prices", func(t *testing.T) {
 		u := &genericTOU{}
 		err := u.ApplySettings(context.Background(), types.Settings{
@@ -23,7 +20,7 @@ func TestPSEGLIUtility(t *testing.T) {
 		require.NoError(t, err)
 
 		// Summer: Mon, Jun 15, 2026
-		summerMon := time.Date(2026, time.June, 15, 0, 0, 0, 0, ny)
+		summerMon := time.Date(2026, time.June, 15, 0, 0, 0, 0, etLocation)
 
 		// Peak (3 PM - 7 PM weekdays): 4:00 PM -> $0.2217
 		p, err := u.priceForTime(summerMon.Add(16 * time.Hour))
@@ -38,7 +35,7 @@ func TestPSEGLIUtility(t *testing.T) {
 		}
 
 		// Winter: Tue, Jan 20, 2026
-		winterMon := time.Date(2026, time.January, 20, 0, 0, 0, 0, ny)
+		winterMon := time.Date(2026, time.January, 20, 0, 0, 0, 0, etLocation)
 
 		// Peak (3 PM - 7 PM weekdays): 4:00 PM -> $0.1885
 		p, err = u.priceForTime(winterMon.Add(16 * time.Hour))
@@ -61,7 +58,7 @@ func TestPSEGLIUtility(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		summerMon := time.Date(2026, time.June, 15, 0, 0, 0, 0, ny)
+		summerMon := time.Date(2026, time.June, 15, 0, 0, 0, 0, etLocation)
 
 		// Super Off-Peak (10 PM - 6 AM daily): 12:00 AM -> $0.0452
 		p, err := u.priceForTime(summerMon)
@@ -91,19 +88,19 @@ func TestPSEGLIUtility(t *testing.T) {
 		require.NoError(t, err)
 
 		// Summer Peak: Mon, Jun 15, 2026 at 5:00 PM -> $0.2697
-		p, err := u.priceForTime(time.Date(2026, time.June, 15, 17, 0, 0, 0, ny))
+		p, err := u.priceForTime(time.Date(2026, time.June, 15, 17, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.2697, p.DollarsPerKWH, 1e-6)
 		}
 
 		// Shoulder Peak: Mon, Apr 15, 2026 at 5:00 PM -> $0.1698
-		p, err = u.priceForTime(time.Date(2026, time.April, 15, 17, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.April, 15, 17, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.1698, p.DollarsPerKWH, 1e-6)
 		}
 
 		// Winter Peak: Mon, Jan 15, 2026 at 5:00 PM -> $0.2222
-		p, err = u.priceForTime(time.Date(2026, time.January, 15, 17, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.January, 15, 17, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.2222, p.DollarsPerKWH, 1e-6)
 		}
@@ -118,19 +115,19 @@ func TestPSEGLIUtility(t *testing.T) {
 		require.NoError(t, err)
 
 		// Summer Night (12 AM): $0.0694
-		p, err := u.priceForTime(time.Date(2026, time.June, 15, 0, 0, 0, 0, ny))
+		p, err := u.priceForTime(time.Date(2026, time.June, 15, 0, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.0694, p.DollarsPerKWH, 1e-6)
 		}
 
 		// Summer Day (12 PM): $0.1438
-		p, err = u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.1438, p.DollarsPerKWH, 1e-6)
 		}
 
 		// Winter Day (12 PM): $0.1173
-		p, err = u.priceForTime(time.Date(2026, time.January, 15, 12, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.January, 15, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.1173, p.DollarsPerKWH, 1e-6)
 		}
@@ -145,13 +142,13 @@ func TestPSEGLIUtility(t *testing.T) {
 		require.NoError(t, err)
 
 		// Memorial Day (last Monday in May): Mon, May 25, 2026 at 4:00 PM -> should be Off-Peak ($0.0929)
-		p, err := u.priceForTime(time.Date(2026, time.May, 25, 16, 0, 0, 0, ny))
+		p, err := u.priceForTime(time.Date(2026, time.May, 25, 16, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.0929, p.DollarsPerKWH, 1e-6)
 		}
 
 		// Christmas Day: Fri, Dec 25, 2026 at 4:00 PM -> should be Off-Peak ($0.0929)
-		p, err = u.priceForTime(time.Date(2026, time.December, 25, 16, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.December, 25, 16, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.0929, p.DollarsPerKWH, 1e-6)
 		}

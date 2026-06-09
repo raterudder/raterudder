@@ -11,9 +11,6 @@ import (
 )
 
 func TestIdahoUtility(t *testing.T) {
-	mt, err := time.LoadLocation("America/Denver")
-	require.NoError(t, err)
-
 	t.Run("Schedule 1 Standard Plan Rates", func(t *testing.T) {
 		u := &genericTOU{}
 		err := u.ApplySettings(context.Background(), types.Settings{
@@ -26,7 +23,7 @@ func TestIdahoUtility(t *testing.T) {
 		require.NoError(t, err)
 
 		// Summer: Mon, Jun 15, 2026 -> $0.121195
-		p, err := u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, mt))
+		p, err := u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, mtLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.121195, p.DollarsPerKWH, 1e-6)
 			assert.True(t, p.SeparateGenerationCredit)
@@ -35,7 +32,7 @@ func TestIdahoUtility(t *testing.T) {
 		}
 
 		// Non-Summer: Thu, Jan 15, 2026 -> $0.099332
-		p, err = u.priceForTime(time.Date(2026, time.January, 15, 12, 0, 0, 0, mt))
+		p, err = u.priceForTime(time.Date(2026, time.January, 15, 12, 0, 0, 0, mtLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.099332, p.DollarsPerKWH, 1e-6)
 			assert.True(t, p.SeparateGenerationCredit)
@@ -56,7 +53,7 @@ func TestIdahoUtility(t *testing.T) {
 		require.NoError(t, err)
 
 		// --- SUMMER PERIODS (June 1 - Sept 30) ---
-		summerMon := time.Date(2026, time.June, 15, 0, 0, 0, 0, mt)
+		summerMon := time.Date(2026, time.June, 15, 0, 0, 0, 0, mtLocation)
 
 		// On-Peak (Mon-Sat 7 PM - 11 PM): 8:00 PM -> $0.299185
 		p, err := u.priceForTime(summerMon.Add(20 * time.Hour))
@@ -83,21 +80,21 @@ func TestIdahoUtility(t *testing.T) {
 		}
 
 		// Sunday: Sun, Jun 14, 2026 at 8:00 PM -> $0.074797 (off-peak)
-		p, err = u.priceForTime(time.Date(2026, time.June, 14, 20, 0, 0, 0, mt))
+		p, err = u.priceForTime(time.Date(2026, time.June, 14, 20, 0, 0, 0, mtLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.074797, p.DollarsPerKWH, 1e-6)
 			assert.InDelta(t, 0.033920, p.GenerationCreditDollarsPerKWH, 1e-6)
 		}
 
 		// Holiday (July 4th): Sat, Jul 4, 2026 at 8:00 PM -> $0.074797 (off-peak)
-		p, err = u.priceForTime(time.Date(2026, time.July, 4, 20, 0, 0, 0, mt))
+		p, err = u.priceForTime(time.Date(2026, time.July, 4, 20, 0, 0, 0, mtLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.074797, p.DollarsPerKWH, 1e-6)
 			assert.InDelta(t, 0.033920, p.GenerationCreditDollarsPerKWH, 1e-6)
 		}
 
 		// --- NON-SUMMER PERIODS (Oct 1 - May 31) ---
-		winterMon := time.Date(2026, time.January, 19, 0, 0, 0, 0, mt)
+		winterMon := time.Date(2026, time.January, 19, 0, 0, 0, 0, mtLocation)
 
 		// On-Peak (Mon-Sat 6 AM - 9 AM & 5 PM - 8 PM): 7:00 AM -> $0.138347
 		p, err = u.priceForTime(winterMon.Add(7 * time.Hour))
@@ -126,7 +123,7 @@ func TestIdahoUtility(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		p, err := u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, mt))
+		p, err := u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, mtLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.121195, p.DollarsPerKWH, 1e-6)
 			// 1:1 net metering should not append separate credits to genericTOU

@@ -64,4 +64,28 @@ var (
 		}
 		return loc
 	}()
+
+	bneLocation = func() *time.Location {
+		loc, err := time.LoadLocation("Australia/Brisbane")
+		if err != nil {
+			panic(fmt.Errorf("failed to load Brisbane time location: %w", err))
+		}
+		return loc
+	}()
+
+	melLocation = func() *time.Location {
+		loc, err := time.LoadLocation("Australia/Melbourne")
+		if err != nil {
+			panic(fmt.Errorf("failed to load Melbourne time location: %w", err))
+		}
+		return loc
+	}()
+
+	sydLocation = func() *time.Location {
+		loc, err := time.LoadLocation("Australia/Sydney")
+		if err != nil {
+			panic(fmt.Errorf("failed to load Sydney time location: %w", err))
+		}
+		return loc
+	}()
 )
