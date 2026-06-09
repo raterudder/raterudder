@@ -599,10 +599,6 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 		return nil
 	}
 
-	if err := s.storage.UpsertWeather(ctx, siteID, newWeathers, types.CurrentWeatherVersion); err != nil {
-		return fmt.Errorf("failed to upsert weather: %w", err)
-	}
-
 	if checkSignificantChanges {
 		// Fetch old weather for today to check if there is a significant change.
 		oldWeathers, err := s.storage.GetWeather(ctx, siteID, todayMidnight, todayMidnight.Add(24*time.Hour))
@@ -665,6 +661,11 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 			}
 		}
 	}
+
+	if err := s.storage.UpsertWeather(ctx, siteID, newWeathers, types.CurrentWeatherVersion); err != nil {
+		return fmt.Errorf("failed to upsert weather: %w", err)
+	}
+
 	return nil
 }
 
