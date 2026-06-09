@@ -770,6 +770,7 @@ func (f *Franklin) getAvailableModes(ctx context.Context) (availableModes, error
 
 	var sc franklinMode
 	var current franklinMode
+	var first franklinMode
 	foundIDs := make([]string, len(res.List))
 	modes := make([]franklinMode, len(res.List))
 	for i, item := range res.List {
@@ -801,19 +802,16 @@ func (f *Franklin) getAvailableModes(ctx context.Context) (availableModes, error
 			)
 		}
 		if item.ID == res.CurrentID {
-			current = franklinMode{
-				ID:              item.ID,
-				Name:            item.Name,
-				WorkMode:        item.WorkMode,
-				OldIndex:        item.OldIndex,
-				ElectricityType: item.ElectricityType,
-				ReserveSOC:      item.ReserveSOC,
-			}
+			current = m
+		}
+		if i == 0 {
+			first = m
 		}
 		foundIDs[i] = fmt.Sprintf("%d", item.ID)
 	}
 
 	if current.ID == 0 {
+		current = first
 		log.Ctx(ctx).WarnContext(
 			ctx,
 			"franklin current tou id not found",

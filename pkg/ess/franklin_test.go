@@ -2004,4 +2004,37 @@ func TestFranklin(t *testing.T) {
 		assert.True(t, foundPast, "should have found the past data point")
 		assert.False(t, foundFuture, "should not have found the future data point")
 	})
+
+	t.Run("GetAvailableModes Current Tou ID Not Found", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
+				list := []map[string]any{
+					{"id": 83450.0, "workMode": 1, "soc": 15.0, "name": "TOU"},
+					{"id": 55594.0, "workMode": 2, "soc": 10.0, "name": "自发自用"},
+					{"id": 100626.0, "workMode": 3, "soc": 100.0, "name": "仅备电"},
+				}
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"list": list, "currendId": 9322.0},
+				})
+				return
+			}
+			http.Error(w, "not found: "+r.URL.Path, 404)
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:    ts.Client(),
+			baseURL:   ts.URL,
+			gatewayID: "g",
+		}
+
+		modes, err := f.getAvailableModes(context.Background())
+		require.NoError(t, err)
+
+		assert.Equal(t, 83450, modes.currentMode.ID)
+		assert.Equal(t, 1, modes.currentMode.WorkMode)
+		assert.Equal(t, "TOU", modes.currentMode.Name)
+	})
 }
