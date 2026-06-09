@@ -137,6 +137,17 @@ export const defaultESSProviders = [
         credentials: [
             { field: 'authCode', name: 'Authorization Code', type: 'password', required: true, oneTime: true },
         ]
+    },
+    {
+        id: 'tesla',
+        name: 'Tesla',
+        oAuthURLs: {
+            "default": "https://auth.tesla.com"
+        },
+        credentials: [
+            { field: 'authCode', name: 'Authorization Code', type: 'password', required: true, hidden: true, oneTime: true },
+            { field: 'energySiteID', name: 'Energy Site ID (Optional)', type: 'string', required: false }
+        ]
     }
 ] as ESSProviderInfo[];
 

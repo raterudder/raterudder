@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import App from '../App';
@@ -26,7 +26,7 @@ const navigateToSettings = async () => {
     fireEvent.click(screen.getByText(/Log In/));
     await waitFor(() => expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument());
     fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
-    await screen.findByRole('heading', { name: /Settings/i });
+    await screen.findByRole('heading', { name: /^Settings$/i });
 };
 
 describe('App & Settings', () => {
@@ -185,7 +185,7 @@ describe('App & Settings', () => {
         await navigateToSettings();
 
         // Expand advanced tuning settings
-        const advancedBtn = await screen.findByText('Advanced Tuning Settings');
+        const advancedBtn = await screen.findByText('Show Advanced Settings');
         fireEvent.click(advancedBtn);
 
         await waitFor(() => {
@@ -200,7 +200,7 @@ describe('App & Settings', () => {
         await navigateToSettings();
 
         // Expand advanced tuning settings
-        const advancedBtn = await screen.findByText('Advanced Tuning Settings');
+        const advancedBtn = await screen.findByText('Show Advanced Settings');
         fireEvent.click(advancedBtn);
 
         await waitFor(() => expect(screen.getByLabelText(/Solar Bell Curve Multiplier/i)).toBeInTheDocument());
@@ -226,7 +226,7 @@ describe('App & Settings', () => {
         fireEvent.click(screen.getByText(/Log In/));
         await waitFor(() => expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument());
         fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
-        await screen.findByRole('heading', { name: /Settings/i });
+        await screen.findByRole('heading', { name: /^Settings$/i });
 
         await waitFor(() => {
             expect(screen.getByText('Location')).toBeInTheDocument();
@@ -254,7 +254,7 @@ describe('App & Settings', () => {
         fireEvent.click(screen.getByText(/Log In/));
         await waitFor(() => expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument());
         fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
-        await screen.findByRole('heading', { name: /Settings/i });
+        await screen.findByRole('heading', { name: /^Settings$/i });
 
         const directionSelect = await screen.findByLabelText(/Solar Direction/i);
         await user.click(directionSelect);
@@ -282,7 +282,7 @@ describe('App & Settings', () => {
         fireEvent.click(screen.getByText(/Log In/));
         await waitFor(() => expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument());
         fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
-        await screen.findByRole('heading', { name: /Settings/i });
+        await screen.findByRole('heading', { name: /^Settings$/i });
 
         const directionSelect = await screen.findByLabelText(/Solar Direction/i);
         await user.click(directionSelect);
@@ -338,7 +338,7 @@ describe('App & Settings', () => {
         await navigateToSettings();
 
         // Expand advanced tuning settings to see the price threshold
-        const advancedBtn = await screen.findByText('Advanced Tuning Settings');
+        const advancedBtn = await screen.findByText('Show Advanced Settings');
         fireEvent.click(advancedBtn);
 
         // Check fields are accessible
@@ -857,7 +857,7 @@ describe('App & Settings', () => {
         await navigateToSettings();
 
         // Expand advanced tuning settings
-        const advancedBtn = await screen.findByText('Advanced Tuning Settings');
+        const advancedBtn = await screen.findByText('Show Advanced Settings');
         fireEvent.click(advancedBtn);
 
         await waitFor(() => {
@@ -919,5 +919,125 @@ describe('App & Settings', () => {
             expect(screen.getByText('The Authorization Code field is required.')).toBeInTheDocument();
         });
     });
+
+    it('handles invalid authorization code error and expands ESS section with custom message', async () => {
+        const user = userEvent.setup();
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            ess: 'franklin',
+            hasCredentials: { franklin: true }
+        });
+
+        await navigateToSettings();
+
+        // Initially ESS is not in edit mode (it's configured)
+        expect(screen.queryByLabelText('Email')).not.toBeInTheDocument();
+
+        // Make updateSettings fail with invalid auth code error
+        (updateSettings as any).mockRejectedValue(new Error('failed to exchange auth code: upstream error status 400: The authorization code is invalid. It may have already been used or expired.'));
+
+        // Submit form
+        const saveBtn = screen.getByText('Save Settings');
+        await user.click(saveBtn);
+
+        // Expect custom message and ESS section to be open
+        await waitFor(() => {
+            expect(screen.getByText("The authorization code expired. Please click 'Login to link account' again and save immediately.")).toBeInTheDocument();
+            expect(screen.getByLabelText('Email')).toBeInTheDocument();
+        });
+    });
+
+    it('handles oauthStatus transitions and popup button disabled/spinner states', async () => {
+        const user = userEvent.setup();
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            ess: 'multi_region_ess',
+            hasCredentials: {}
+        });
+
+        await navigateToSettings();
+
+        // Mock window.open
+        const mockPopup = { closed: false };
+        const windowOpenSpy = vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
+
+        // Click login button
+        const loginBtn = screen.getByRole('button', { name: /Login to link account/i });
+        await user.click(loginBtn);
+
+        // Expect button to be disabled and show "Awaiting link..." with guidance text
+        expect(screen.getByRole('button', { name: /Awaiting link.../i })).toBeDisabled();
+        expect(screen.getByText('Please complete authentication in the popup window.')).toBeInTheDocument();
+
+        // Simulate successful OAuth message
+        act(() => {
+            window.dispatchEvent(new MessageEvent('message', {
+                origin: window.location.origin,
+                data: { type: 'OAUTH_CODE', code: 'success_code_123', state: 'site1' }
+            }));
+        });
+
+        // Expect success badge to render and button to be gone
+        await waitFor(() => {
+            expect(screen.getByText('Received code! Save Settings below to complete.')).toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: /Login to link account/i })).not.toBeInTheDocument();
+        });
+
+        windowOpenSpy.mockRestore();
+    });
+
+    it('clears Tesla oauth success message and shows login button on save failure', async () => {
+        const user = userEvent.setup();
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            ess: 'tesla',
+            hasCredentials: {}
+        });
+
+        await navigateToSettings();
+
+        // Initially we see the Login button, not the success message
+        expect(screen.getByRole('button', { name: /Login to link account/i })).toBeInTheDocument();
+        expect(screen.queryByText('Received code! Save Settings below to complete.')).not.toBeInTheDocument();
+
+        // Mock window.open
+        const mockPopup = { closed: false };
+        const windowOpenSpy = vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
+
+        // Click login button
+        const loginBtn = screen.getByRole('button', { name: /Login to link account/i });
+        await user.click(loginBtn);
+
+        // Simulate successful OAuth message
+        act(() => {
+            window.dispatchEvent(new MessageEvent('message', {
+                origin: window.location.origin,
+                data: { type: 'OAUTH_CODE', code: 'tesla_success_code', state: 'site1' }
+            }));
+        });
+
+        // Expect success badge to render and button to be gone
+        await waitFor(() => {
+            expect(screen.getByText('Received code! Save Settings below to complete.')).toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: /Login to link account/i })).not.toBeInTheDocument();
+        });
+
+        // Mock update to fail
+        (updateSettings as any).mockRejectedValue(new Error('Failed to verify credentials'));
+
+        // Save
+        const saveBtn = screen.getByText('Save Settings');
+        await user.click(saveBtn);
+
+        // Expect error to be shown, success banner to be gone, and login button to be back
+        await waitFor(() => {
+            expect(screen.getByText('Failed to verify credentials')).toBeInTheDocument();
+            expect(screen.queryByText('Received code! Save Settings below to complete.')).not.toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /Login to link account/i })).toBeInTheDocument();
+        });
+
+        windowOpenSpy.mockRestore();
+    });
 });
+
 

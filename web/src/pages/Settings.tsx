@@ -1,10 +1,9 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { fetchSettings, updateSettings, fetchUtilities, fetchESSList, submitESSStage, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type ESSProviderInfo, type ESSCredentialField, type CredentialsPayload } from '../api';
 import { Field } from '@base-ui/react/field';
 import { Input } from '@base-ui/react/input';
 import { Button } from '@base-ui/react/button';
 import { Switch } from '@base-ui/react/switch';
-import { Collapsible } from '@base-ui/react/collapsible';
 import { Select } from '@base-ui/react/select';
 import { Combobox } from '@base-ui/react/combobox';
 import { Dialog } from '@base-ui/react/dialog';
@@ -53,10 +52,26 @@ const Settings = ({ siteID }: { siteID?: string }) => {
     const [isStaging, setIsStaging] = useState(false);
 
     const [essCredentials, setEssCredentials] = useState<Record<string, string>>({});
+    const [oauthStatus, setOauthStatus] = useState<'idle' | 'popup_open' | 'success'>('idle');
+    const savingRef = useRef(false);
+    const oauthTimerRef = useRef<any>(null);
+    const oauthListenerRef = useRef<((event: MessageEvent) => void) | null>(null);
+
+    useEffect(() => {
+        return () => {
+            if (oauthTimerRef.current) {
+                clearInterval(oauthTimerRef.current);
+            }
+            if (oauthListenerRef.current) {
+                window.removeEventListener('message', oauthListenerRef.current);
+            }
+        };
+    }, []);
 
     // UI State for consolidated views
     const [editUtility, setEditUtility] = useState(false);
     const [editESS, setEditESS] = useState(false);
+    const [showAdvanced, setShowAdvanced] = useState(false);
 
     const loadData = useCallback(async () => {
         try {
@@ -117,7 +132,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!settings) return;
+        if (!settings || savingRef.current) return;
 
         if (editESS && maxStage > currentStage) {
             handleESSContinue(e);
@@ -125,6 +140,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
         }
 
         try {
+            savingRef.current = true;
             setIsSaving(true);
             setError(null);
             setSuccessMessage(null);
@@ -186,32 +202,43 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                 setSettings(updatedSettings);
                 setEditESS(false);
                 setEssCredentials({});
+                setOauthStatus('idle');
             }
             setIsUtilityDirty(false);
             setIsESSDirty(false);
 
             setTimeout(() => setSuccessMessage(null), 3000);
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'Failed to save settings');
-            const provider = essProviders.find(p => p.id === settings.ess);
+            const errMsg = err instanceof Error ? err.message : 'Failed to save settings';
+            if (errMsg.toLowerCase().includes("authorization code is invalid") || errMsg.toLowerCase().includes("code is invalid")) {
+                setError("The authorization code expired. Please click 'Login to link account' again and save immediately.");
+                setEditESS(true);
+            } else {
+                setError(errMsg);
+            }
+            setOauthStatus('idle');
+
+            const provider = essProviders.find(p => p.id.toLowerCase() === settings.ess?.toLowerCase());
+            const oneTimeFields = new Set<string>(['authCode']);
             if (provider) {
-                const oneTimeFields = (provider.credentials || [])
+                const fields = (provider.credentials || [])
                     .filter(c => c.oneTime)
                     .map(c => c.field);
+                fields.forEach(f => oneTimeFields.add(f));
                 if (provider.oAuthKey && provider.oAuthKey.oneTime) {
-                    oneTimeFields.push(provider.oAuthKey.field);
-                }
-                if (oneTimeFields.length > 0) {
-                    setEssCredentials(prev => {
-                        const next = { ...prev };
-                        for (const field of oneTimeFields) {
-                            delete next[field];
-                        }
-                        return next;
-                    });
+                    oneTimeFields.add(provider.oAuthKey.field);
                 }
             }
+
+            setEssCredentials(prev => {
+                const next = { ...prev };
+                oneTimeFields.forEach(field => {
+                    delete next[field];
+                });
+                return next;
+            });
         } finally {
+            savingRef.current = false;
             setIsSaving(false);
         }
     };
@@ -243,13 +270,26 @@ const Settings = ({ siteID }: { siteID?: string }) => {
             return;
         }
 
+        // Clear any existing listener/timer before starting a new one
+        if (oauthTimerRef.current) {
+            clearInterval(oauthTimerRef.current);
+            oauthTimerRef.current = null;
+        }
+        if (oauthListenerRef.current) {
+            window.removeEventListener('message', oauthListenerRef.current);
+            oauthListenerRef.current = null;
+        }
+
+        setOauthStatus('popup_open');
+
         const listener = (event: MessageEvent) => {
             if (event.origin !== window.location.origin) return;
 
             if (event.data && event.data.type === 'OAUTH_CODE') {
-                if (siteID && event.data.state !== siteID && event.data.state) {
+                if (siteID && event.data.state !== siteID) {
                     setError('Authentication state mismatch. Please try again.');
                     window.removeEventListener('message', listener);
+                    oauthListenerRef.current = null;
                     return;
                 }
 
@@ -257,12 +297,35 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                     ...prev,
                     [fieldName]: event.data.code
                 }));
+                setOauthStatus('success');
                 setIsESSDirty(true);
                 window.removeEventListener('message', listener);
+                oauthListenerRef.current = null;
+                if (oauthTimerRef.current) {
+                    clearInterval(oauthTimerRef.current);
+                    oauthTimerRef.current = null;
+                }
             }
         };
 
         window.addEventListener('message', listener);
+        oauthListenerRef.current = listener;
+
+        const timer = setInterval(() => {
+            if (popup.closed) {
+                clearInterval(timer);
+                oauthTimerRef.current = null;
+                window.removeEventListener('message', listener);
+                oauthListenerRef.current = null;
+                setOauthStatus(current => {
+                    if (current === 'popup_open') {
+                        return 'idle';
+                    }
+                    return current;
+                });
+            }
+        }, 500);
+        oauthTimerRef.current = timer;
     };
 
     if (loading) return (
@@ -290,23 +353,157 @@ const Settings = ({ siteID }: { siteID?: string }) => {
         <div className="content-container settings-container">
             <h2>Settings</h2>
             <form onSubmit={handleSubmit}>
-                {/* Pause Updates at the top */}
-                <div className="section-header pause-section">
-                    <h3>Automation Status</h3>
+                {/* Quick Settings at the top */}
+                <div className="section-header">
+                    <h3>Quick Settings</h3>
                 </div>
-                <Field.Root className="form-group switch-group">
-                    <div className="switch-row">
-                        <Switch.Root
-                            checked={settings.pause}
-                            onCheckedChange={(checked) => handleChange('pause', checked)}
-                            className="switch-root"
+                <div className="form-grid compact-grid">
+                    <Field.Root className="form-group switch-group compact">
+                        <div className="switch-row">
+                            <Switch.Root
+                                checked={settings.pause}
+                                onCheckedChange={(checked) => handleChange('pause', checked)}
+                                className="switch-root"
+                            >
+                                <Switch.Thumb className="switch-thumb" />
+                            </Switch.Root>
+                            <Field.Label>Pause Automation</Field.Label>
+                        </div>
+                        <Field.Description>If enabled, stop changing states but continue monitoring.</Field.Description>
+                    </Field.Root>
+
+                    <Field.Root className="form-group compact">
+                        <Field.Label htmlFor="minBatterySOC">Minimum Battery %</Field.Label>
+                        <Input
+                            id="minBatterySOC"
+                            type="number"
+                            step="1"
+                            min="0"
+                            max="100"
+                            value={settings.minBatterySOC}
+                            onChange={(e) => handleChange('minBatterySOC', parseFloat(e.target.value))}
+                        />
+                        <Field.Description>Maintain battery charge at or above this level at all costs.</Field.Description>
+                    </Field.Root>
+                </div>
+
+                {/* Location directly under Quick Settings */}
+                <div className="section-header">
+                    <h3>Location</h3>
+                </div>
+                <div className="grid-strategy-grid">
+                    <Field.Root className="form-group">
+                        <Field.Label htmlFor="countryCode">Country</Field.Label>
+                        <Combobox.Root
+                            value={settings.countryCode || ''}
+                            onValueChange={(val) => handleChange("countryCode", val as string)}
+                            items={countries}
+                            itemToStringLabel={(val) => countries.find(c => c.value === val)?.label || val}
                         >
-                            <Switch.Thumb className="switch-thumb" />
-                        </Switch.Root>
-                        <Field.Label>Pause Automation</Field.Label>
-                    </div>
-                    <Field.Description>If enabled, stop changing states but continue monitoring.</Field.Description>
-                </Field.Root>
+                            <div className="combobox-input-wrapper select-trigger">
+                                <Combobox.Input placeholder="Select a country..." id="countryCode" className="combobox-input" />
+                                <Combobox.Trigger className="combobox-trigger">
+                                    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                        <path d="M4.18179 6.18181C4.35753 6.00608 4.64245 6.00608 4.81819 6.18181L7.49999 8.86362L10.1818 6.18181C10.3575 6.00608 10.6424 6.00608 10.8182 6.18181C10.9939 6.35755 10.9939 6.64247 10.8182 6.81821L7.81819 9.81821C7.73379 9.9026 7.61934 9.95001 7.49999 9.95001C7.38064 9.95001 7.26618 9.9026 7.18179 9.81821L4.18179 6.81821C4.00605 6.64247 4.00605 6.35755 4.18179 6.18181Z" fill="currentColor" fillRule="evenodd" clipRule="evenodd"></path>
+                                    </svg>
+                                </Combobox.Trigger>
+                            </div>
+                            <Combobox.Portal>
+                                <Combobox.Positioner className="select-positioner">
+                                    <Combobox.Popup className="select-popup">
+                                        <Combobox.List>
+                                            {(item: { label: string, value: string }) => (
+                                                <Combobox.Item key={item.value} value={item.value} className="select-item">
+                                                    {item.label}
+                                                </Combobox.Item>
+                                            )}
+                                        </Combobox.List>
+                                    </Combobox.Popup>
+                                </Combobox.Positioner>
+                            </Combobox.Portal>
+                        </Combobox.Root>
+                    </Field.Root>
+                    <Field.Root className="form-group">
+                        <Field.Label htmlFor="postalCode">Zip/Postal Code</Field.Label>
+                        <Input
+                            id="postalCode"
+                            type="text"
+                            value={settings.postalCode || ''}
+                            onChange={(e) => handleChange("postalCode", e.target.value)}
+                        />
+                    </Field.Root>
+
+                    <Field.Root className="form-group">
+                        <Field.Label htmlFor="solarDirection">Roof Solar Panel Direction</Field.Label>
+                        <Select.Root
+                            /* since an azimuth of 0 is south, we need to instead check the solarTilt */
+                            value={(settings.solarTilt && settings.solarTilt > 0) ? (settings.solarAzimuth?.toString() || "") : ""}
+                            onValueChange={(val) => {
+                                const azimuth = parseInt(val as string, 10);
+                                handleChange("solarAzimuth", azimuth);
+                                handleChange("solarTilt", 25);
+                            }}
+                        >
+                                <Select.Trigger className="select-trigger" aria-label="Solar Direction">
+                                    <Select.Value placeholder="Select direction...">
+                                        {settings.solarTilt && settings.solarTilt > 0 ? (
+                                            ({
+                                                "0": "North",
+                                                "45": "Northeast",
+                                                "90": "East",
+                                                "135": "Southeast",
+                                                "180": "South",
+                                                "225": "Southwest",
+                                                "270": "West",
+                                                "315": "Northwest"
+                                            } as Record<string, string>)[settings.solarAzimuth?.toString() || ""]
+                                        ) : null}
+                                    </Select.Value>
+                                    <Select.Icon className="select-icon">
+                                        <svg width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                            <path d="M4.18179 6.18181C4.35753 6.00608 4.64245 6.00608 4.81819 6.18181L7.49999 8.86362L10.1818 6.18181C10.3575 6.00608 10.6424 6.00608 10.8182 6.18181C10.9939 6.35755 10.9939 6.64247 10.8182 6.81821L7.81819 9.81821C7.73379 9.9026 7.61934 9.95001 7.49999 9.95001C7.38064 9.95001 7.26618 9.9026 7.18179 9.81821L4.18179 6.81821C4.00605 6.64247 4.00605 6.35755 4.18179 6.18181Z" fill="currentColor" fillRule="evenodd" clipRule="evenodd"></path>
+                                        </svg>
+                                    </Select.Icon>
+                                </Select.Trigger>
+                            <Select.Portal>
+                                <Select.Positioner className="select-positioner">
+                                    <Select.Popup className="select-popup">
+                                        <Select.List>
+                                            <Select.Item className="select-item" value="0">
+                                                <Select.ItemText>North</Select.ItemText>
+                                            </Select.Item>
+                                            <Select.Item className="select-item" value="45">
+                                                <Select.ItemText>Northeast</Select.ItemText>
+                                            </Select.Item>
+                                            <Select.Item className="select-item" value="90">
+                                                <Select.ItemText>East</Select.ItemText>
+                                            </Select.Item>
+                                            <Select.Item className="select-item" value="135">
+                                                <Select.ItemText>Southeast</Select.ItemText>
+                                            </Select.Item>
+                                            <Select.Item className="select-item" value="180">
+                                                <Select.ItemText>South</Select.ItemText>
+                                            </Select.Item>
+                                            <Select.Item className="select-item" value="225">
+                                                <Select.ItemText>Southwest</Select.ItemText>
+                                            </Select.Item>
+                                            <Select.Item className="select-item" value="270">
+                                                <Select.ItemText>West</Select.ItemText>
+                                            </Select.Item>
+                                            <Select.Item className="select-item" value="315">
+                                                <Select.ItemText>Northwest</Select.ItemText>
+                                            </Select.Item>
+                                        </Select.List>
+                                    </Select.Popup>
+                                </Select.Positioner>
+                            </Select.Portal>
+                        </Select.Root>
+                    </Field.Root>
+                </div>
+
+                <div className="weather-attribution">
+                    Weather data provided by <a href="https://open-meteo.com" target="_blank" rel="noopener noreferrer">Open-Meteo</a> to improve solar prediction
+                </div>
 
                 {/* Utility Service Section */}
                 <div className="section-header">
@@ -556,6 +753,50 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                     </div>
                 )}
 
+                <div className="grid-strategy-grid">
+                    <Field.Root className="form-group switch-group compact">
+                        <div className="switch-row">
+                            <Switch.Root
+                                id="gridChargeBatteries"
+                                checked={settings.gridChargeBatteries}
+                                onCheckedChange={(checked) => handleChange('gridChargeBatteries', checked)}
+                                className="switch-root"
+                            >
+                                <Switch.Thumb className="switch-thumb" />
+                            </Switch.Root>
+                            <Field.Label htmlFor="gridChargeBatteries">Grid Can Charge Battery</Field.Label>
+                        </div>
+                    </Field.Root>
+
+                    <Field.Root className="form-group switch-group compact">
+                        <div className="switch-row">
+                            <Switch.Root
+                                id="gridExportSolar"
+                                checked={settings.gridExportSolar}
+                                onCheckedChange={(checked) => handleChange('gridExportSolar', checked)}
+                                className="switch-root"
+                            >
+                                <Switch.Thumb className="switch-thumb" />
+                            </Switch.Root>
+                            <Field.Label htmlFor="gridExportSolar">Export Solar to Grid</Field.Label>
+                        </div>
+                    </Field.Root>
+
+                    <Field.Root className="form-group switch-group compact">
+                        <div className="switch-row">
+                            <Switch.Root
+                                id="gridExportBatteries"
+                                checked={settings.gridExportBatteries}
+                                onCheckedChange={(checked) => handleChange('gridExportBatteries', checked)}
+                                className="switch-root"
+                            >
+                                <Switch.Thumb className="switch-thumb" />
+                            </Switch.Root>
+                            <Field.Label htmlFor="gridExportBatteries">Export Battery to Grid</Field.Label>
+                        </div>
+                    </Field.Root>
+                </div>
+
                 {/* ESS Configuration Section */}
                 <div className="section-header">
                     <h3 id="ess-credentials">Energy Storage System</h3>
@@ -584,6 +825,7 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                     setIsESSDirty(true);
                                     setSettings({ ...settings, ess: value as string });
                                     setEssCredentials({}); // clear credentials when changing provider
+                                    setOauthStatus('idle');
                                     setCurrentStage(0);
                                 }}
                             >
@@ -657,20 +899,38 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                                                     {provider.oAuthKey.description && <Field.Description>{provider.oAuthKey.description}</Field.Description>}
                                                 </Field.Root>
                                             )}
-                                            <Button
-                                                className="save-button"
-                                                style={{ width: '100%' }}
-                                                onClick={() => {
-                                                    const keyVal = provider.oAuthKey ? (essCredentials[provider.oAuthKey.field] || provider.oAuthKey.default || Object.keys(provider.oAuthURLs!)[0]) : Object.keys(provider.oAuthURLs!)[0];
-                                                    const url = provider.oAuthURLs![keyVal];
-                                                    if (url) {
-                                                        handleOAuthLogin(url, "authCode");
-                                                    }
-                                                }}
-                                                type="button"
-                                            >
-                                                Login to link account
-                                            </Button>
+                                            {essCredentials.authCode ? (
+                                                <div className="success-message" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: 0 }}>
+                                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ marginRight: '0.25rem' }}>
+                                                        <polyline points="20 6 9 17 4 12" />
+                                                    </svg>
+                                                    Received code! Save Settings below to complete.
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    <Button
+                                                        className="save-button"
+                                                        style={{ width: '100%' }}
+                                                        disabled={oauthStatus === 'popup_open'}
+                                                        onClick={() => {
+                                                            const keyVal = provider.oAuthKey ? (essCredentials[provider.oAuthKey.field] || provider.oAuthKey.default || Object.keys(provider.oAuthURLs!)[0]) : Object.keys(provider.oAuthURLs!)[0];
+                                                            const url = provider.oAuthURLs![keyVal];
+                                                            if (url) {
+                                                                handleOAuthLogin(url, "authCode");
+                                                            }
+                                                        }}
+                                                        type="button"
+                                                    >
+                                                        {oauthStatus === 'popup_open' && <span className="loading-spinner" aria-hidden="true"></span>}
+                                                        {oauthStatus === 'popup_open' ? 'Awaiting link...' : 'Login to link account'}
+                                                    </Button>
+                                                    {oauthStatus === 'popup_open' && (
+                                                        <div className="warning-notice" style={{ marginTop: '0.5rem' }}>
+                                                            Please complete authentication in the popup window.
+                                                        </div>
+                                                    )}
+                                                </>
+                                            )}
                                         </div>
                                     )}
                                     {(provider.credentials || []).filter(cred => ((cred.stage ?? 0) <= currentStage) && !cred.hidden).map(cred => (
@@ -757,437 +1017,270 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                     </div>
                 )}
 
-                <div className="section-header">
-                    <h3>Automation Thresholds</h3>
-                </div>
-                <div className="form-grid compact-grid">
-                    <Field.Root className="form-group compact">
-                        <Field.Label htmlFor="minBatterySOC">Minimum Battery %</Field.Label>
-                        <Input
-                            id="minBatterySOC"
-                            type="number"
-                            step="1"
-                            min="0"
-                            max="100"
-                            value={settings.minBatterySOC}
-                            onChange={(e) => handleChange('minBatterySOC', parseFloat(e.target.value))}
-                        />
-                        <Field.Description>Maintain battery charge at or above this level at all costs.</Field.Description>
-                    </Field.Root>
 
-                    <Field.Root className="form-group compact">
-                        <Field.Label htmlFor="minArbitrage">Min Arbitrage Profit ($/kWh)</Field.Label>
-                        <Input
-                            id="minArbitrage"
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            value={settings.minArbitrageDifferenceDollarsPerKWH}
-                            onChange={(e) => handleChange('minArbitrageDifferenceDollarsPerKWH', parseFloat(e.target.value))}
-                        />
-                        <Field.Description>Required profit margin to trigger immediate charging to later use/export at a higher prices.</Field.Description>
-                    </Field.Root>
 
-                    <Field.Root className="form-group compact">
-                        <Field.Label htmlFor="minDeficit">Charge for Deficit ($/kWh)</Field.Label>
-                        <Input
-                            id="minDeficit"
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            value={settings.minDeficitPriceDifferenceDollarsPerKWH}
-                            onChange={(e) => handleChange('minDeficitPriceDifferenceDollarsPerKWH', parseFloat(e.target.value))}
-                        />
-                        <Field.Description>Price difference required to justify charging now to avoid a future battery depletion.</Field.Description>
-                    </Field.Root>
-                </div>
-
-                <div className="section-header">
-                    <h3>Grid Restrictions</h3>
-                </div>
-
-                <div className="grid-strategy-grid">
-                    <Field.Root className="form-group switch-group compact">
-                        <div className="switch-row">
-                            <Switch.Root
-                                id="gridChargeBatteries"
-                                checked={settings.gridChargeBatteries}
-                                onCheckedChange={(checked) => handleChange('gridChargeBatteries', checked)}
-                                className="switch-root"
-                            >
-                                <Switch.Thumb className="switch-thumb" />
-                            </Switch.Root>
-                            <Field.Label htmlFor="gridChargeBatteries">Grid Can Charge Battery</Field.Label>
-                        </div>
-                    </Field.Root>
-
-                    <Field.Root className="form-group switch-group compact">
-                        <div className="switch-row">
-                            <Switch.Root
-                                id="gridExportSolar"
-                                checked={settings.gridExportSolar}
-                                onCheckedChange={(checked) => handleChange('gridExportSolar', checked)}
-                                className="switch-root"
-                            >
-                                <Switch.Thumb className="switch-thumb" />
-                            </Switch.Root>
-                            <Field.Label htmlFor="gridExportSolar">Export Solar to Grid</Field.Label>
-                        </div>
-                    </Field.Root>
-
-                    <Field.Root className="form-group switch-group compact">
-                        <div className="switch-row">
-                            <Switch.Root
-                                id="gridExportBatteries"
-                                checked={settings.gridExportBatteries}
-                                onCheckedChange={(checked) => handleChange('gridExportBatteries', checked)}
-                                className="switch-root"
-                            >
-                                <Switch.Thumb className="switch-thumb" />
-                            </Switch.Root>
-                            <Field.Label htmlFor="gridExportBatteries">Export Battery to Grid</Field.Label>
-                        </div>
-                    </Field.Root>
-                </div>
-
-                <div className="section-header">
-                    <h3>Location</h3>
-                </div>
-                <div className="grid-strategy-grid">
-                    <Field.Root className="form-group">
-                        <Field.Label htmlFor="countryCode">Country</Field.Label>
-                        <Combobox.Root
-                            value={settings.countryCode || ''}
-                            onValueChange={(val) => handleChange("countryCode", val as string)}
-                            items={countries}
-                            itemToStringLabel={(val) => countries.find(c => c.value === val)?.label || val}
+                {!showAdvanced ? (
+                    <div className="advanced-trigger-section">
+                        <hr className="settings-separator" />
+                        <button
+                            type="button"
+                            className="btn btn-secondary show-advanced-btn"
+                            onClick={() => setShowAdvanced(true)}
                         >
-                            <div className="combobox-input-wrapper select-trigger">
-                                <Combobox.Input placeholder="Select a country..." id="countryCode" className="combobox-input" />
-                                <Combobox.Trigger className="combobox-trigger">
-                                    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                        <path d="M4.18179 6.18181C4.35753 6.00608 4.64245 6.00608 4.81819 6.18181L7.49999 8.86362L10.1818 6.18181C10.3575 6.00608 10.6424 6.00608 10.8182 6.18181C10.9939 6.35755 10.9939 6.64247 10.8182 6.81821L7.81819 9.81821C7.73379 9.9026 7.61934 9.95001 7.49999 9.95001C7.38064 9.95001 7.26618 9.9026 7.18179 9.81821L4.18179 6.81821C4.00605 6.64247 4.00605 6.35755 4.18179 6.18181Z" fill="currentColor" fillRule="evenodd" clipRule="evenodd"></path>
-                                    </svg>
-                                </Combobox.Trigger>
-                            </div>
-                            <Combobox.Portal>
-                                <Combobox.Positioner className="select-positioner">
-                                    <Combobox.Popup className="select-popup">
-                                        <Combobox.List>
-                                            {(item: { label: string, value: string }) => (
-                                                <Combobox.Item key={item.value} value={item.value} className="select-item">
-                                                    {item.label}
-                                                </Combobox.Item>
-                                            )}
-                                        </Combobox.List>
-                                    </Combobox.Popup>
-                                </Combobox.Positioner>
-                            </Combobox.Portal>
-                        </Combobox.Root>
-                    </Field.Root>
-                    <Field.Root className="form-group">
-                        <Field.Label htmlFor="postalCode">Zip/Postal Code</Field.Label>
-                        <Input
-                            id="postalCode"
-                            type="text"
-                            value={settings.postalCode || ''}
-                            onChange={(e) => handleChange("postalCode", e.target.value)}
-                        />
-                    </Field.Root>
-
-                    <Field.Root className="form-group">
-                        <Field.Label htmlFor="solarDirection">Roof Solar Panel Direction</Field.Label>
-                        <Select.Root
-                            /* since an azimuth of 0 is south, we need to instead check the solarTilt */
-                            value={(settings.solarTilt && settings.solarTilt > 0) ? (settings.solarAzimuth?.toString() || "") : ""}
-                            onValueChange={(val) => {
-                                const azimuth = parseInt(val as string, 10);
-                                handleChange("solarAzimuth", azimuth);
-                                handleChange("solarTilt", 25);
-                            }}
-                        >
-                                <Select.Trigger className="select-trigger" aria-label="Solar Direction">
-                                    <Select.Value placeholder="Select direction...">
-                                        {settings.solarTilt && settings.solarTilt > 0 ? (
-                                            ({
-                                                "0": "North",
-                                                "45": "Northeast",
-                                                "90": "East",
-                                                "135": "Southeast",
-                                                "180": "South",
-                                                "225": "Southwest",
-                                                "270": "West",
-                                                "315": "Northwest"
-                                            } as Record<string, string>)[settings.solarAzimuth?.toString() || ""]
-                                        ) : null}
-                                    </Select.Value>
-                                    <Select.Icon className="select-icon">
-                                        <svg width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                            <path d="M4.18179 6.18181C4.35753 6.00608 4.64245 6.00608 4.81819 6.18181L7.49999 8.86362L10.1818 6.18181C10.3575 6.00608 10.6424 6.00608 10.8182 6.18181C10.9939 6.35755 10.9939 6.64247 10.8182 6.81821L7.81819 9.81821C7.73379 9.9026 7.61934 9.95001 7.49999 9.95001C7.38064 9.95001 7.26618 9.9026 7.18179 9.81821L4.18179 6.81821C4.00605 6.64247 4.00605 6.35755 4.18179 6.18181Z" fill="currentColor" fillRule="evenodd" clipRule="evenodd"></path>
-                                        </svg>
-                                    </Select.Icon>
-                                </Select.Trigger>
-                            <Select.Portal>
-                                <Select.Positioner className="select-positioner">
-                                    <Select.Popup className="select-popup">
-                                        <Select.List>
-                                            <Select.Item className="select-item" value="0">
-                                                <Select.ItemText>North</Select.ItemText>
-                                            </Select.Item>
-                                            <Select.Item className="select-item" value="45">
-                                                <Select.ItemText>Northeast</Select.ItemText>
-                                            </Select.Item>
-                                            <Select.Item className="select-item" value="90">
-                                                <Select.ItemText>East</Select.ItemText>
-                                            </Select.Item>
-                                            <Select.Item className="select-item" value="135">
-                                                <Select.ItemText>Southeast</Select.ItemText>
-                                            </Select.Item>
-                                            <Select.Item className="select-item" value="180">
-                                                <Select.ItemText>South</Select.ItemText>
-                                            </Select.Item>
-                                            <Select.Item className="select-item" value="225">
-                                                <Select.ItemText>Southwest</Select.ItemText>
-                                            </Select.Item>
-                                            <Select.Item className="select-item" value="270">
-                                                <Select.ItemText>West</Select.ItemText>
-                                            </Select.Item>
-                                            <Select.Item className="select-item" value="315">
-                                                <Select.ItemText>Northwest</Select.ItemText>
-                                            </Select.Item>
-                                        </Select.List>
-                                    </Select.Popup>
-                                </Select.Positioner>
-                            </Select.Portal>
-                        </Select.Root>
-                    </Field.Root>
-                </div>
-
-                <div className="weather-attribution">
-                    Weather data provided by <a href="https://open-meteo.com" target="_blank" rel="noopener noreferrer">Open-Meteo</a> to improve solar prediction
-                </div>
-
-                <Collapsible.Root className="advanced-section">
-                    <Collapsible.Trigger className="advanced-trigger">Advanced Tuning Settings</Collapsible.Trigger>
-                    <Collapsible.Panel className="advanced-panel">
-                        <Field.Root className="form-group switch-group" style={{ marginTop: '1rem' }}>
-                            <div className="switch-row">
-                                <Switch.Root
-                                    checked={settings.dryRun}
-                                    onCheckedChange={(checked) => handleChange('dryRun', checked)}
-                                    className="switch-root"
-                                >
-                                    <Switch.Thumb className="switch-thumb" />
-                                </Switch.Root>
-                                <Field.Label>Dry Run Mode</Field.Label>
-                            </div>
-                            <Field.Description>Simulate actions without executing them (useful for testing).</Field.Description>
-                        </Field.Root>
-
-                        {settings.release === 'staging' && (
-                            <>
-                                <div className="section-header">
-                                    <h3>Air Conditioning Prediction</h3>
-                                </div>
-                                <Field.Root className="form-group switch-group">
-                                    <div className="switch-row">
-                                        <Switch.Root
-                                            checked={settings.acUsageIncreasePercentPerDegree > 0}
-                                            onCheckedChange={(checked) => {
-                                                if (checked) {
-                                                    handleChange('acUsageIncreasePercentPerDegree', 9);
-                                                    handleChange('acUsageMaxIncreasePercent', 50);
-                                                } else {
-                                                    handleChange('acUsageIncreasePercentPerDegree', -1);
-                                                    handleChange('acUsageMaxIncreasePercent', -1);
-                                                }
-                                            }}
-                                            className="switch-root"
-                                        >
-                                            <Switch.Thumb className="switch-thumb" />
-                                        </Switch.Root>
-                                        <Field.Label>Enable A/C Weather Prediction</Field.Label>
-                                    </div>
-                                    <Field.Description>Automatically predict increased load during hotter weather to ensure adequate battery reserves.</Field.Description>
-                                </Field.Root>
-
-                                {settings.acUsageIncreasePercentPerDegree > 0 && (
-                                    <Field.Root className="form-group">
-                                        <Field.Label htmlFor="acBaseTemperatureF">A/C Base Temperature (°F)</Field.Label>
-                                        <Input
-                                            id="acBaseTemperatureF"
-                                            type="number"
-                                            step="1"
-                                            value={Math.round((settings.acBaseTemperatureC || 24) * 9 / 5 + 32)}
-                                            onChange={(e) => {
-                                                const f = parseFloat(e.target.value);
-                                                if (!isNaN(f)) {
-                                                    const c = (f - 32) * 5 / 9;
-                                                    handleChange('acBaseTemperatureC', c);
-                                                }
-                                            }}
-                                        />
-                                        <Field.Description>Temperature above which A/C is typically used to cool the house.</Field.Description>
-                                    </Field.Root>
-                                )}
-                            </>
-                        )}
-
+                            Show Advanced Settings
+                        </button>
+                    </div>
+                ) : (
+                    <>
                         <div className="section-header">
-                            <h3>Automation Overrides</h3>
+                            <h3>Advanced Automation Overrides</h3>
                         </div>
 
-                        <Field.Root className="form-group">
-                            <Field.Label htmlFor="alwaysChargeUnder">Always Charge Below ($/kWh)</Field.Label>
-                            <Input
-                                id="alwaysChargeUnder"
-                                type="number"
-                                step="0.01"
-                                min="0"
-                                value={settings.alwaysChargeUnderDollarsPerKWH}
-                                onChange={(e) => handleChange('alwaysChargeUnderDollarsPerKWH', parseFloat(e.target.value))}
-                            />
-                            <Field.Description>Charge battery whenever the price is less than this threshold.</Field.Description>
-                            {settings.alwaysChargeUnderDollarsPerKWH > 0.05 && (
-                                <div className="warning-text" style={{ color: 'orange', marginTop: '4px', fontSize: '0.9em' }}>
-                                    Are you sure you want to force charging the batteries from the grid when it's below this price?
-                                </div>
-                            )}
-                        </Field.Root>
-
-                        <Field.Root className="form-group">
-                            <Field.Label htmlFor="minStartChargeMinutes">Minimum Start Charge Duration (minutes)</Field.Label>
-                            <Input
-                                id="minStartChargeMinutes"
-                                type="number"
-                                step="1"
-                                min="1"
-                                value={settings.minStartChargeMinutes}
-                                onChange={(e) => handleChange('minStartChargeMinutes', parseInt(e.target.value, 10))}
-                            />
-                            <Field.Description>Minimum duration in minutes of charging time needed to start charging.</Field.Description>
-                        </Field.Root>
-
-                        <Field.Root className="form-group">
-                            <Field.Label htmlFor="peakSurvivalBufferMinutes">Peak Survival Buffer (minutes)</Field.Label>
-                            <Input
-                                id="peakSurvivalBufferMinutes"
-                                type="number"
-                                step="1"
-                                min="0"
-                                value={settings.peakSurvivalBufferMinutes}
-                                onChange={(e) => handleChange('peakSurvivalBufferMinutes', parseInt(e.target.value, 10))}
-                            />
-                            <Field.Description>Buffer in minutes to attempt to have the battery outlast a peak price period.</Field.Description>
-                        </Field.Root>
-
-                        <div className="section-header">
-                            <h3>Solar Settings</h3>
-                        </div>
-                        <Field.Root className="form-group">
-                            <Field.Label>Solar Trend Ratio Max</Field.Label>
-                            <Input
-                                id="solarTrendRatioMax"
-                                type="number"
-                                step="0.1"
-                                min="1"
-                                value={settings.solarTrendRatioMax}
-                                onChange={(e) => handleChange('solarTrendRatioMax', parseFloat(e.target.value))}
-                            />
-                            <Field.Description>Maximum ratio for solar trend adjustment. Higher values allow more aggressive upward solar predictions.</Field.Description>
-                        </Field.Root>
-                        <Field.Root className="form-group">
-                            <Field.Label>Solar Bell Curve Multiplier</Field.Label>
-                            <Input
-                                id="solarBellCurveMultiplier"
-                                type="number"
-                                step="0.1"
-                                min="0"
-                                max="1"
-                                value={settings.solarBellCurveMultiplier}
-                                onChange={(e) => handleChange('solarBellCurveMultiplier', parseFloat(e.target.value))}
-                            />
-                            <Field.Description>Multiplier for bell curve solar smoothing. 0 disables smoothing entirely</Field.Description>
-                        </Field.Root>
-
-                        <Field.Root className="form-group">
-                            <Field.Label>Solar Fully Charge Headroom (%)</Field.Label>
-                            <Input
-                                id="solarFullyChargeHeadroomBatterySOC"
-                                type="number"
-                                step="1"
-                                value={settings.solarFullyChargeHeadroomBatterySOC}
-                                onChange={(e) => handleChange('solarFullyChargeHeadroomBatterySOC', parseFloat(e.target.value))}
-                            />
-                            <Field.Description>
-                                Battery percentage to leave as headroom during solar charging when export is disabled. Negative values will remove the headroom and ignore solar curtailment.
-                            </Field.Description>
-                        </Field.Root>
-
-                        {settings.utilityRateOptions?.netMeteringCredits && (
+                        <div className="grid-strategy-grid">
                             <Field.Root className="form-group">
-                                <Field.Label>Solar Net Metering Credits Value</Field.Label>
-                                <Select.Root
-                                    value={settings.solarNetMeteringCreditsValue || ""}
-                                    onValueChange={(value) => handleChange('solarNetMeteringCreditsValue', value || '')}
-                                >
-                                    <Select.Trigger className="select-trigger" id="solarNetMeteringCreditsValue">
-                                        <Select.Value>
-                                            {
-                                                settings.solarNetMeteringCreditsValue === 'highest' ? 'Highest Price' :
-                                                settings.solarNetMeteringCreditsValue === 'none' ? 'None' :
-                                                settings.solarNetMeteringCreditsValue === 'lowest' ? 'Lowest Price' :
-                                                'Lowest / Default'
-                                            }
-                                        </Select.Value>
-                                        <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
-                                            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                                <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                                            </svg>
-                                        </Select.Icon>
-                                    </Select.Trigger>
-                                    <Select.Portal>
-                                        <Select.Positioner className="select-positioner">
-                                            <Select.Popup className="select-popup">
-                                                <Select.Item className="select-item" value="">
-                                                    <Select.ItemText>Lowest / Default</Select.ItemText>
-                                                </Select.Item>
-                                                <Select.Item className="select-item" value="lowest">
-                                                    <Select.ItemText>Lowest Price</Select.ItemText>
-                                                </Select.Item>
-                                                <Select.Item className="select-item" value="highest">
-                                                    <Select.ItemText>Highest Price</Select.ItemText>
-                                                </Select.Item>
-                                                <Select.Item className="select-item" value="none">
-                                                    <Select.ItemText>None</Select.ItemText>
-                                                </Select.Item>
-                                            </Select.Popup>
-                                        </Select.Positioner>
-                                    </Select.Portal>
-                                </Select.Root>
+                                <Field.Label htmlFor="alwaysChargeUnder">Always Charge Below ($/kWh)</Field.Label>
+                                <Input
+                                    id="alwaysChargeUnder"
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    value={settings.alwaysChargeUnderDollarsPerKWH}
+                                    onChange={(e) => handleChange('alwaysChargeUnderDollarsPerKWH', parseFloat(e.target.value))}
+                                />
+                                <Field.Description>Charge battery whenever the price is less than this threshold.</Field.Description>
+                                {settings.alwaysChargeUnderDollarsPerKWH > 0.05 && (
+                                    <div className="warning-text" style={{ color: 'orange', marginTop: '4px', fontSize: '0.9em' }}>
+                                        Are you sure you want to force charging the batteries from the grid when it's below this price?
+                                    </div>
+                                )}
+                            </Field.Root>
+
+                            <Field.Root className="form-group">
+                                <Field.Label htmlFor="minArbitrage">Minimum Arbitrage Profit ($/kWh)</Field.Label>
+                                <Input
+                                    id="minArbitrage"
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    value={settings.minArbitrageDifferenceDollarsPerKWH}
+                                    onChange={(e) => handleChange('minArbitrageDifferenceDollarsPerKWH', parseFloat(e.target.value))}
+                                />
+                                <Field.Description>Required profit margin to trigger immediate charging to later use/export at a higher prices.</Field.Description>
+                            </Field.Root>
+
+                            <Field.Root className="form-group">
+                                <Field.Label htmlFor="minDeficit">Charge for Deficit ($/kWh)</Field.Label>
+                                <Input
+                                    id="minDeficit"
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    value={settings.minDeficitPriceDifferenceDollarsPerKWH}
+                                    onChange={(e) => handleChange('minDeficitPriceDifferenceDollarsPerKWH', parseFloat(e.target.value))}
+                                />
+                                <Field.Description>Price difference required to justify charging now to avoid a future battery depletion.</Field.Description>
+                            </Field.Root>
+
+                            <Field.Root className="form-group">
+                                <Field.Label htmlFor="minStartChargeMinutes">Minimum Start Charge Duration (minutes)</Field.Label>
+                                <Input
+                                    id="minStartChargeMinutes"
+                                    type="number"
+                                    step="1"
+                                    min="1"
+                                    value={settings.minStartChargeMinutes}
+                                    onChange={(e) => handleChange('minStartChargeMinutes', parseInt(e.target.value, 10))}
+                                />
+                                <Field.Description>Minimum duration in minutes of charging time needed to start charging.</Field.Description>
+                            </Field.Root>
+
+                            <Field.Root className="form-group">
+                                <Field.Label htmlFor="peakSurvivalBufferMinutes">Peak Survival Buffer (minutes)</Field.Label>
+                                <Input
+                                    id="peakSurvivalBufferMinutes"
+                                    type="number"
+                                    step="1"
+                                    min="0"
+                                    value={settings.peakSurvivalBufferMinutes}
+                                    onChange={(e) => handleChange('peakSurvivalBufferMinutes', parseInt(e.target.value, 10))}
+                                />
+                                <Field.Description>Buffer in minutes to attempt to have the battery outlast a peak price period.</Field.Description>
+                            </Field.Root>
+
+                            {settings.release === 'staging' && (
+                                <>
+                                    <Field.Root className="form-group switch-group compact">
+                                        <div className="switch-row">
+                                            <Switch.Root
+                                                id="acUsagePrediction"
+                                                checked={settings.acUsageIncreasePercentPerDegree > 0}
+                                                onCheckedChange={(checked) => {
+                                                    if (checked) {
+                                                        handleChange('acUsageIncreasePercentPerDegree', 9);
+                                                        handleChange('acUsageMaxIncreasePercent', 50);
+                                                    } else {
+                                                        handleChange('acUsageIncreasePercentPerDegree', -1);
+                                                        handleChange('acUsageMaxIncreasePercent', -1);
+                                                    }
+                                                }}
+                                                className="switch-root"
+                                            >
+                                                <Switch.Thumb className="switch-thumb" />
+                                            </Switch.Root>
+                                            <Field.Label htmlFor="acUsagePrediction">Enable A/C Weather Prediction</Field.Label>
+                                        </div>
+                                        <Field.Description>Automatically predict increased load during hotter weather to ensure adequate battery reserves.</Field.Description>
+                                    </Field.Root>
+
+                                    {settings.acUsageIncreasePercentPerDegree > 0 && (
+                                        <Field.Root className="form-group compact">
+                                            <Field.Label htmlFor="acBaseTemperatureF">A/C Base Temperature (°F)</Field.Label>
+                                            <Input
+                                                id="acBaseTemperatureF"
+                                                type="number"
+                                                step="1"
+                                                value={Math.round((settings.acBaseTemperatureC || 24) * 9 / 5 + 32)}
+                                                onChange={(e) => {
+                                                    const f = parseFloat(e.target.value);
+                                                    if (!isNaN(f)) {
+                                                        const c = (f - 32) * 5 / 9;
+                                                        handleChange('acBaseTemperatureC', c);
+                                                    }
+                                                }}
+                                            />
+                                            <Field.Description>Temperature above which A/C is typically used to cool the house.</Field.Description>
+                                        </Field.Root>
+                                    )}
+                                </>
+                            )}
+
+                            <Field.Root className="form-group switch-group compact">
+                                <div className="switch-row">
+                                    <Switch.Root
+                                        id="dryRun"
+                                        checked={settings.dryRun}
+                                        onCheckedChange={(checked) => handleChange('dryRun', checked)}
+                                        className="switch-root"
+                                    >
+                                        <Switch.Thumb className="switch-thumb" />
+                                    </Switch.Root>
+                                    <Field.Label htmlFor="dryRun">Dry Run Mode</Field.Label>
+                                </div>
+                                <Field.Description>Simulate actions without executing them (useful for testing).</Field.Description>
+                            </Field.Root>
+                        </div>
+
+                        <div className="section-header">
+                            <h3>Advanced Solar Settings</h3>
+                        </div>
+                        <div className="grid-strategy-grid">
+                            <Field.Root className="form-group">
+                                <Field.Label htmlFor="solarTrendRatioMax">Solar Trend Ratio Max</Field.Label>
+                                <Input
+                                    id="solarTrendRatioMax"
+                                    type="number"
+                                    step="0.1"
+                                    min="1"
+                                    value={settings.solarTrendRatioMax}
+                                    onChange={(e) => handleChange('solarTrendRatioMax', parseFloat(e.target.value))}
+                                />
+                                <Field.Description>Maximum ratio for solar trend adjustment. Higher values allow more aggressive upward solar predictions.</Field.Description>
+                            </Field.Root>
+                            <Field.Root className="form-group">
+                                <Field.Label htmlFor="solarBellCurveMultiplier">Solar Bell Curve Multiplier</Field.Label>
+                                <Input
+                                    id="solarBellCurveMultiplier"
+                                    type="number"
+                                    step="0.1"
+                                    min="0"
+                                    max="1"
+                                    value={settings.solarBellCurveMultiplier}
+                                    onChange={(e) => handleChange('solarBellCurveMultiplier', parseFloat(e.target.value))}
+                                />
+                                <Field.Description>Multiplier for bell curve solar smoothing. 0 disables smoothing entirely</Field.Description>
+                            </Field.Root>
+
+                            <Field.Root className="form-group">
+                                <Field.Label htmlFor="solarFullyChargeHeadroomBatterySOC">Solar Fully Charge Headroom (%)</Field.Label>
+                                <Input
+                                    id="solarFullyChargeHeadroomBatterySOC"
+                                    type="number"
+                                    step="1"
+                                    value={settings.solarFullyChargeHeadroomBatterySOC}
+                                    onChange={(e) => handleChange('solarFullyChargeHeadroomBatterySOC', parseFloat(e.target.value))}
+                                />
                                 <Field.Description>
-                                    How to value exported solar credits. "Lowest" price of the day, "Highest" price of the day, or value them as nothing.
+                                    Battery percentage to leave as headroom during solar charging when export is disabled. Negative values will remove the headroom and ignore solar curtailment.
                                 </Field.Description>
                             </Field.Root>
-                        )}
+
+                            {settings.utilityRateOptions?.netMeteringCredits && (
+                                <Field.Root className="form-group">
+                                    <Field.Label htmlFor="solarNetMeteringCreditsValue">Solar Net Metering Credits Value</Field.Label>
+                                    <Select.Root
+                                        value={settings.solarNetMeteringCreditsValue || ""}
+                                        onValueChange={(value) => handleChange('solarNetMeteringCreditsValue', value || '')}
+                                    >
+                                        <Select.Trigger className="select-trigger" id="solarNetMeteringCreditsValue">
+                                            <Select.Value>
+                                                {
+                                                    settings.solarNetMeteringCreditsValue === 'highest' ? 'Highest Price' :
+                                                    settings.solarNetMeteringCreditsValue === 'none' ? 'None' :
+                                                    settings.solarNetMeteringCreditsValue === 'lowest' ? 'Lowest Price' :
+                                                    'Lowest / Default'
+                                                }
+                                            </Select.Value>
+                                            <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                    <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                </svg>
+                                            </Select.Icon>
+                                        </Select.Trigger>
+                                        <Select.Portal>
+                                            <Select.Positioner className="select-positioner">
+                                                <Select.Popup className="select-popup">
+                                                    <Select.Item className="select-item" value="">
+                                                        <Select.ItemText>Lowest / Default</Select.ItemText>
+                                                    </Select.Item>
+                                                    <Select.Item className="select-item" value="lowest">
+                                                        <Select.ItemText>Lowest Price</Select.ItemText>
+                                                    </Select.Item>
+                                                    <Select.Item className="select-item" value="highest">
+                                                        <Select.ItemText>Highest Price</Select.ItemText>
+                                                    </Select.Item>
+                                                    <Select.Item className="select-item" value="none">
+                                                        <Select.ItemText>None</Select.ItemText>
+                                                    </Select.Item>
+                                                </Select.Popup>
+                                            </Select.Positioner>
+                                        </Select.Portal>
+                                    </Select.Root>
+                                    <Field.Description>
+                                        How to value exported solar credits. "Lowest" price of the day, "Highest" price of the day, or value them as nothing.
+                                    </Field.Description>
+                                </Field.Root>
+                            )}
+                        </div>
 
                         <div className="section-header">
-                            <h3>Power History Settings</h3>
+                            <h3>Advanced Power History Settings</h3>
                         </div>
-                        <Field.Root className="form-group">
-                            <Field.Label>Ignore Usage Outlier Multiple</Field.Label>
-                            <Input
-                                id="ignoreHourUsageOverMultiple"
-                                type="number"
-                                step="0.1"
-                                min="1"
-                                value={settings.ignoreHourUsageOverMultiple}
-                                onChange={(e) => handleChange('ignoreHourUsageOverMultiple', parseFloat(e.target.value))}
-                            />
-                            <Field.Description>If a single hour's usage is this many times greater than the average of other data points for that hour, ignore it. Must be &ge; 1.</Field.Description>
-                        </Field.Root>
-                    </Collapsible.Panel>
-                </Collapsible.Root>
+                        <div className="grid-strategy-grid">
+                            <Field.Root className="form-group">
+                                <Field.Label htmlFor="ignoreHourUsageOverMultiple">Ignore Usage Outlier Multiple</Field.Label>
+                                <Input
+                                    id="ignoreHourUsageOverMultiple"
+                                    type="number"
+                                    step="0.1"
+                                    min="1"
+                                    value={settings.ignoreHourUsageOverMultiple}
+                                    onChange={(e) => handleChange('ignoreHourUsageOverMultiple', parseFloat(e.target.value))}
+                                />
+                                <Field.Description>If a single hour's usage is this many times greater than the average of other data points for that hour, ignore it. Must be &ge; 1.</Field.Description>
+                            </Field.Root>
+                        </div>
+                    </>
+                )}
 
                 <div className="submit-section">
                     {error && <div className="error-message">{error}</div>}

@@ -138,6 +138,7 @@ func (b *baseTesla) info(ctx context.Context) types.ESSProviderInfo {
 		q.Set("client_id", b.clientID)
 		q.Set("scope", teslaScopes)
 		q.Set("redirect_uri", b.redirectURI(ctx))
+		q.Set("require_requested_scopes", "true")
 		parsed.RawQuery = q.Encode()
 		baseOAuthURL = parsed.String()
 	}
@@ -264,6 +265,20 @@ func (b *baseTesla) newPOSTRequest(ctx context.Context, method, path, token, bas
 	return req, nil
 }
 
+// teslaHTTPError wraps an error from the Tesla API with its HTTP status code.
+type teslaHTTPError struct {
+	StatusCode int
+	Wrapped    error
+}
+
+func (e *teslaHTTPError) Error() string {
+	return e.Wrapped.Error()
+}
+
+func (e *teslaHTTPError) Unwrap() error {
+	return e.Wrapped
+}
+
 func (b *baseTesla) doRequest(req *http.Request, dest any) error {
 	resp, err := b.client.Do(req)
 	if err != nil {
@@ -277,34 +292,44 @@ func (b *baseTesla) doRequest(req *http.Request, dest any) error {
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		var retErr error
 		if len(body) == 0 {
 			if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-				return fmt.Errorf("%w: unexpected tesla response status %d", ErrUnauthorized, resp.StatusCode)
+				retErr = fmt.Errorf("%w: unexpected tesla response status %d", ErrUnauthorized, resp.StatusCode)
+			} else {
+				retErr = fmt.Errorf("unexpected tesla response status %d", resp.StatusCode)
 			}
-			return fmt.Errorf("unexpected tesla response status %d", resp.StatusCode)
-		}
-		var errBody teslaErrorResponse
-		if err := json.Unmarshal(body, &errBody); err == nil && (errBody.Error != "" || errBody.ErrorDescription != "") {
-			errStr := errBody.ErrorDescription
-			if errStr == "" {
-				errStr = errBody.Error
+		} else {
+			var errBody teslaErrorResponse
+			if err := json.Unmarshal(body, &errBody); err == nil && (errBody.Error != "" || errBody.ErrorDescription != "") {
+				errStr := errBody.ErrorDescription
+				if errStr == "" {
+					errStr = errBody.Error
+				}
+				originalErr := fmt.Errorf("unexpected tesla response status %d: %s", resp.StatusCode, errStr)
+				errStrLower := strings.ToLower(errStr)
+				if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden ||
+					strings.Contains(errStrLower, "unauthorized") || strings.Contains(errStrLower, "missing scopes") || strings.Contains(errStrLower, "invalid_token") {
+					retErr = fmt.Errorf("%w: %w", ErrUnauthorized, originalErr)
+				} else {
+					retErr = originalErr
+				}
+			} else {
+				if len(body) > 256 {
+					body = body[:256]
+				}
+				originalErr := fmt.Errorf("unexpected tesla response status %d: %s", resp.StatusCode, string(body))
+				if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+					retErr = fmt.Errorf("%w: %w", ErrUnauthorized, originalErr)
+				} else {
+					retErr = originalErr
+				}
 			}
-			originalErr := fmt.Errorf("unexpected tesla response status %d: %s", resp.StatusCode, errStr)
-			errStrLower := strings.ToLower(errStr)
-			if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden ||
-				strings.Contains(errStrLower, "unauthorized") || strings.Contains(errStrLower, "missing scopes") || strings.Contains(errStrLower, "invalid_token") {
-				return fmt.Errorf("%w: %w", ErrUnauthorized, originalErr)
-			}
-			return originalErr
 		}
-		if len(body) > 256 {
-			body = body[:256]
+		return &teslaHTTPError{
+			StatusCode: resp.StatusCode,
+			Wrapped:    retErr,
 		}
-		originalErr := fmt.Errorf("unexpected tesla response status %d: %s", resp.StatusCode, string(body))
-		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			return fmt.Errorf("%w: %w", ErrUnauthorized, originalErr)
-		}
-		return originalErr
 	}
 
 	if dest != nil {
@@ -354,11 +379,17 @@ type Tesla struct {
 	energySiteID   int64
 	siteInfoCache  teslaSiteInfoResponse
 	siteInfoExpiry time.Time
+
+	// retry delays for live_status 424 failures
+	retryDelay1 time.Duration
+	retryDelay2 time.Duration
 }
 
 func newTesla(b *baseTesla) *Tesla {
 	return &Tesla{
-		base: b,
+		base:        b,
+		retryDelay1: 1 * time.Second,
+		retryDelay2: 3 * time.Second,
 	}
 }
 
@@ -402,6 +433,7 @@ func (b *Tesla) Authenticate(ctx context.Context, creds types.Credentials) (type
 		log.Ctx(ctx).InfoContext(ctx, "submitting auth code to tesla to get access token", slog.String("region", region))
 		res, err := b.exchangeCodeForToken(ctx, baseURL, creds.Tesla.AuthCode)
 		if err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to exchange auth code", slog.String("authCode", creds.Tesla.AuthCode), slog.Any("error", err))
 			return creds, false, fmt.Errorf("failed to exchange auth code: %w", err)
 		}
 		creds.Tesla.AccessToken = res.AccessToken
@@ -569,11 +601,31 @@ func (b *Tesla) getDefaultSiteID(ctx context.Context) (int64, error) {
 	}
 	return 0, fmt.Errorf("no energy site found")
 }
-
 func (b *Tesla) getSiteInfo(ctx context.Context) (teslaSiteInfoResponse, error) {
 	siteInfoPath := fmt.Sprintf("api/1/energy_sites/%d/site_info", b.energySiteID)
 	var siteInfo teslaSiteInfoResponse
-	if err := b.doGETRequest(ctx, siteInfoPath, nil, &siteInfo); err != nil {
+	for attempt := 1; attempt <= 3; attempt++ {
+		err := b.doGETRequest(ctx, siteInfoPath, nil, &siteInfo)
+		if err == nil {
+			break
+		}
+
+		var httpErr *teslaHTTPError
+		if errors.As(err, &httpErr) && httpErr.StatusCode == 500 {
+			delay := b.retryDelay1
+			if attempt == 2 {
+				delay = b.retryDelay2
+			}
+			if attempt < 3 {
+				log.Ctx(ctx).WarnContext(ctx, "tesla site_info failed with 500, retrying", slog.Any("error", err), slog.Duration("delay", delay))
+				select {
+				case <-time.After(delay):
+				case <-ctx.Done():
+					return teslaSiteInfoResponse{}, ctx.Err()
+				}
+				continue
+			}
+		}
 		return teslaSiteInfoResponse{}, err
 	}
 	return siteInfo, nil
@@ -605,7 +657,28 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 
 	liveStatusPath := fmt.Sprintf("api/1/energy_sites/%d/live_status", b.energySiteID)
 	var liveStatus teslaLiveStatusResponse
-	if err := b.doGETRequest(ctx, liveStatusPath, nil, &liveStatus); err != nil {
+	for attempt := 1; attempt <= 3; attempt++ {
+		err := b.doGETRequest(ctx, liveStatusPath, nil, &liveStatus)
+		if err == nil {
+			break
+		}
+
+		var httpErr *teslaHTTPError
+		if errors.As(err, &httpErr) && httpErr.StatusCode == 424 {
+			delay := b.retryDelay1
+			if attempt == 2 {
+				delay = b.retryDelay2
+			}
+			if attempt < 3 {
+				log.Ctx(ctx).WarnContext(ctx, "tesla live_status failed with 424, retrying", slog.Any("error", err), slog.Duration("delay", delay))
+				select {
+				case <-time.After(delay):
+				case <-ctx.Done():
+					return types.SystemStatus{}, ctx.Err()
+				}
+				continue
+			}
+		}
 		return types.SystemStatus{}, err
 	}
 

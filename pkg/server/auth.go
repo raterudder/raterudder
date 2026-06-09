@@ -173,7 +173,6 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 						authSuccess = true
 					}
 				} else if !allowNoLogin {
-					log.Ctx(ctx).WarnContext(ctx, "no auth cookie found")
 					writeJSONError(w, "missing auth cookie", http.StatusUnauthorized)
 					return
 				}
