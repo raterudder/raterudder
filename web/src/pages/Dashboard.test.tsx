@@ -859,4 +859,196 @@ describe('Dashboard', () => {
         });
         expect(localStorage.getItem('whats_new_banner_version')).toBe(whatsNewVersion.toString());
     });
+
+    it('shows grid restrictions warning banner when all features are unchecked and utility is present', async () => {
+        localStorage.clear();
+        mockActionsAndSavings([]);
+        (fetchSettings as any).mockResolvedValue({
+            utilityProvider: 'comed',
+            gridChargeBatteries: false,
+            gridExportSolar: false,
+            gridExportBatteries: false,
+        });
+
+        renderWithRouter(<Dashboard siteID="site1" />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('grid-restrictions-warning-banner')).toBeInTheDocument();
+            expect(screen.getByText(/All grid features are disabled/i)).toBeInTheDocument();
+        });
+    });
+
+    it('does not show grid restrictions warning banner when utility is missing', async () => {
+        localStorage.clear();
+        mockActionsAndSavings([]);
+        (fetchSettings as any).mockResolvedValue({
+            utilityProvider: '',
+            gridChargeBatteries: false,
+            gridExportSolar: false,
+            gridExportBatteries: false,
+        });
+
+        renderWithRouter(<Dashboard siteID="site1" />);
+
+        await waitFor(() => {
+            expect(screen.queryByText('Loading day...')).not.toBeInTheDocument();
+        });
+
+        expect(screen.queryByTestId('grid-restrictions-warning-banner')).not.toBeInTheDocument();
+    });
+
+    it('can dismiss the grid restrictions warning banner', async () => {
+        const user = userEvent.setup();
+        localStorage.clear();
+        mockActionsAndSavings([]);
+        (fetchSettings as any).mockResolvedValue({
+            utilityProvider: 'comed',
+            gridChargeBatteries: false,
+            gridExportSolar: false,
+            gridExportBatteries: false,
+        });
+
+        renderWithRouter(<Dashboard siteID="site1" />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('grid-restrictions-warning-banner')).toBeInTheDocument();
+        });
+
+        const dismissBtn = screen.getByRole('button', { name: /Dismiss grid restrictions warning/i });
+        await user.click(dismissBtn);
+
+        await waitFor(() => {
+            expect(screen.queryByTestId('grid-restrictions-warning-banner')).not.toBeInTheDocument();
+        });
+        expect(localStorage.getItem('grid_restrictions_warning_dismissed_site1')).toBe('true');
+    });
+
+    it('shows location warning banner when location is missing and utility is present', async () => {
+        localStorage.clear();
+        mockActionsAndSavings([]);
+        (fetchSettings as any).mockResolvedValue({
+            utilityProvider: 'comed',
+            countryCode: '',
+            postalCode: '',
+        });
+
+        renderWithRouter(<Dashboard siteID="site1" />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('location-warning-banner')).toBeInTheDocument();
+            expect(screen.getByText(/Location is not specified/i)).toBeInTheDocument();
+        });
+    });
+
+    it('does not show location warning banner when utility is missing', async () => {
+        localStorage.clear();
+        mockActionsAndSavings([]);
+        (fetchSettings as any).mockResolvedValue({
+            utilityProvider: '',
+            countryCode: '',
+            postalCode: '',
+        });
+
+        renderWithRouter(<Dashboard siteID="site1" />);
+
+        await waitFor(() => {
+            expect(screen.queryByText('Loading day...')).not.toBeInTheDocument();
+        });
+
+        expect(screen.queryByTestId('location-warning-banner')).not.toBeInTheDocument();
+    });
+
+    it('can dismiss the location warning banner', async () => {
+        const user = userEvent.setup();
+        localStorage.clear();
+        mockActionsAndSavings([]);
+        (fetchSettings as any).mockResolvedValue({
+            utilityProvider: 'comed',
+            countryCode: '',
+            postalCode: '',
+        });
+
+        renderWithRouter(<Dashboard siteID="site1" />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('location-warning-banner')).toBeInTheDocument();
+        });
+
+        const dismissBtn = screen.getByRole('button', { name: /Dismiss location warning/i });
+        await user.click(dismissBtn);
+
+        await waitFor(() => {
+            expect(screen.queryByTestId('location-warning-banner')).not.toBeInTheDocument();
+        });
+        expect(localStorage.getItem('location_warning_dismissed_site1')).toBe('true');
+    });
+
+    it('shows warning when ESS is connected and automation is paused', async () => {
+        mockActionsAndSavings([]);
+        (fetchSettings as any).mockResolvedValue({
+            ess: 'franklin',
+            hasCredentials: { franklin: true },
+            pause: true,
+            dryRun: false,
+        });
+
+        renderWithRouter(<Dashboard siteID="site1" />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('automation-paused-dryrun-warning-banner')).toBeInTheDocument();
+            expect(screen.getByText(/Automation is paused\. The system will not perform any automated actions/i)).toBeInTheDocument();
+        });
+    });
+
+    it('shows warning when ESS is connected and dry run is enabled', async () => {
+        mockActionsAndSavings([]);
+        (fetchSettings as any).mockResolvedValue({
+            ess: 'franklin',
+            hasCredentials: { franklin: true },
+            pause: false,
+            dryRun: true,
+        });
+
+        renderWithRouter(<Dashboard siteID="site1" />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('automation-paused-dryrun-warning-banner')).toBeInTheDocument();
+            expect(screen.getByText(/Dry Run is enabled\. The system will simulate actions but will not write/i)).toBeInTheDocument();
+        });
+    });
+
+    it('shows combined warning when ESS is connected and both pause and dry run are active', async () => {
+        mockActionsAndSavings([]);
+        (fetchSettings as any).mockResolvedValue({
+            ess: 'franklin',
+            hasCredentials: { franklin: true },
+            pause: true,
+            dryRun: true,
+        });
+
+        renderWithRouter(<Dashboard siteID="site1" />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('automation-paused-dryrun-warning-banner')).toBeInTheDocument();
+            expect(screen.getByText(/Automation is paused and Dry Run is enabled/i)).toBeInTheDocument();
+        });
+    });
+
+    it('does not show paused/dryrun warning when ESS is not connected', async () => {
+        mockActionsAndSavings([]);
+        (fetchSettings as any).mockResolvedValue({
+            ess: 'franklin',
+            hasCredentials: { franklin: false },
+            pause: true,
+            dryRun: true,
+        });
+
+        renderWithRouter(<Dashboard siteID="site1" />);
+
+        await waitFor(() => {
+            expect(screen.queryByText('Loading day...')).not.toBeInTheDocument();
+        });
+
+        expect(screen.queryByTestId('automation-paused-dryrun-warning-banner')).not.toBeInTheDocument();
+    });
 });

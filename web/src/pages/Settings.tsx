@@ -795,6 +795,12 @@ const Settings = ({ siteID }: { siteID?: string }) => {
                             <Field.Label htmlFor="gridExportBatteries">Export Battery to Grid</Field.Label>
                         </div>
                     </Field.Root>
+
+                    {!settings.gridChargeBatteries && !settings.gridExportSolar && !settings.gridExportBatteries && (
+                        <div className="warning-notice" style={{ gridColumn: '1 / -1', marginTop: 0 }} data-testid="grid-restrictions-warning">
+                            Warning: All grid interactions are disabled. The system will only charge from solar and will not charge from the grid or export any energy.
+                        </div>
+                    )}
                 </div>
 
                 {/* ESS Configuration Section */}

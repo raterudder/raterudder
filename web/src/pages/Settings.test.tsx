@@ -1038,6 +1038,31 @@ describe('App & Settings', () => {
 
         windowOpenSpy.mockRestore();
     });
+
+    it('shows a warning below checkboxes when all grid strategy settings are unchecked', async () => {
+        await navigateToSettings();
+
+        // Warning should not be shown initially (gridChargeBatteries is true by default)
+        expect(screen.queryByTestId('grid-restrictions-warning')).not.toBeInTheDocument();
+
+        // Toggle "Grid Can Charge Battery" to false (so all three grid settings are false)
+        const chargeSwitch = await screen.findByRole('switch', { name: /Grid Can Charge Battery/i });
+        fireEvent.click(chargeSwitch);
+
+        // Warning should be displayed now
+        await waitFor(() => {
+            expect(screen.getByTestId('grid-restrictions-warning')).toBeInTheDocument();
+            expect(screen.getByText(/Warning: All grid interactions are disabled/i)).toBeInTheDocument();
+        });
+
+        // Toggle it back on
+        fireEvent.click(chargeSwitch);
+
+        // Warning should disappear
+        await waitFor(() => {
+            expect(screen.queryByTestId('grid-restrictions-warning')).not.toBeInTheDocument();
+        });
+    });
 });
 
 

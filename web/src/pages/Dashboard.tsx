@@ -37,6 +37,8 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
     const [error, setError] = useState<string | null>(null);
 
     const [showWhatsNew, setShowWhatsNew] = useState(false);
+    const [showGridWarning, setShowGridWarning] = useState(false);
+    const [showLocationWarning, setShowLocationWarning] = useState(false);
 
     useEffect(() => {
         const storedVersion = localStorage.getItem('whats_new_banner_version');
@@ -48,6 +50,37 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
     const dismissWhatsNew = () => {
         localStorage.setItem('whats_new_banner_version', whatsNewVersion.toString());
         setShowWhatsNew(false);
+    };
+
+    useEffect(() => {
+        if (settings) {
+            const hasUtility = !!settings.utilityProvider && settings.utilityProvider !== "";
+
+            const gridKey = siteID ? `grid_restrictions_warning_dismissed_${siteID}` : 'grid_restrictions_warning_dismissed';
+            const isGridDismissed = localStorage.getItem(gridKey) === 'true';
+            const allUnchecked = !settings.gridChargeBatteries && !settings.gridExportSolar && !settings.gridExportBatteries;
+            setShowGridWarning(hasUtility && allUnchecked && !isGridDismissed);
+
+            const locationKey = siteID ? `location_warning_dismissed_${siteID}` : 'location_warning_dismissed';
+            const isLocationDismissed = localStorage.getItem(locationKey) === 'true';
+            const missingLocation = !settings.countryCode || !settings.postalCode;
+            setShowLocationWarning(hasUtility && missingLocation && !isLocationDismissed);
+        } else {
+            setShowGridWarning(false);
+            setShowLocationWarning(false);
+        }
+    }, [settings, siteID]);
+
+    const dismissGridWarning = () => {
+        const key = siteID ? `grid_restrictions_warning_dismissed_${siteID}` : 'grid_restrictions_warning_dismissed';
+        localStorage.setItem(key, 'true');
+        setShowGridWarning(false);
+    };
+
+    const dismissLocationWarning = () => {
+        const key = siteID ? `location_warning_dismissed_${siteID}` : 'location_warning_dismissed';
+        localStorage.setItem(key, 'true');
+        setShowLocationWarning(false);
     };
 
     const currentDate = useMemo(() => {
@@ -316,6 +349,39 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
                             <p>
                                 <span><strong>Warning:</strong> Energy Storage System authentication failed {settings.essAuthStatus.consecutiveFailures} time(s).{' '}
                                 <Link href="/settings">Update your credentials in Settings</Link> to ensure automation continues.</span>
+                            </p>
+                        </div>
+                    )}
+                    {showGridWarning && (
+                        <div className="banner warning-banner" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} data-testid="grid-restrictions-warning-banner">
+                            <p>
+                                <span><strong>Warning:</strong> All grid features are disabled. The battery can only charge from solar. <Link href="/settings">Change this in Settings</Link></span>
+                            </p>
+                            <button onClick={dismissGridWarning} className="banner-dismiss-btn" aria-label="Dismiss grid restrictions warning">
+                                <span aria-hidden="true">&times;</span>
+                            </button>
+                        </div>
+                    )}
+                    {showLocationWarning && (
+                        <div className="banner warning-banner" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} data-testid="location-warning-banner">
+                            <p>
+                                <span><strong>Warning:</strong> Location is not specified. <Link href="/settings">Configure it in Settings</Link> to improve solar forecasting accuracy.</span>
+                            </p>
+                            <button onClick={dismissLocationWarning} className="banner-dismiss-btn" aria-label="Dismiss location warning">
+                                <span aria-hidden="true">&times;</span>
+                            </button>
+                        </div>
+                    )}
+                    {settings && settings.ess && settings.hasCredentials?.[settings.ess] && (settings.pause || settings.dryRun) && (
+                        <div className="banner warning-banner" data-testid="automation-paused-dryrun-warning-banner">
+                            <p>
+                                <span><strong>Warning:</strong> {
+                                    settings.pause && settings.dryRun 
+                                        ? "Automation is paused and Dry Run is enabled. The system will not write states to your hardware." 
+                                        : settings.pause 
+                                            ? "Automation is paused. The system will not perform any automated actions." 
+                                            : "Dry Run is enabled. The system will simulate actions but will not write them to your hardware."
+                                } <Link href="/settings">Change this in Settings</Link></span>
                             </p>
                         </div>
                     )}
