@@ -770,11 +770,16 @@ func CalibrateSolarScaleFactor(
 	}
 
 	// Compute weight w
-	// If stdDevRatio <= 0.08, w = 0 (100% static, no shading)
-	// If stdDevRatio >= 0.16, w = 1.0 (100% hourly, full shading)
+	// We use a lower threshold of 0.03 (down from 0.08) and an upper threshold of 0.11.
+	// This prevents the model from completely regularizing out systematic, time-dependent
+	// geometric variations (such as panel tilt/azimuth configuration errors, angle-of-incidence
+	// Fresnel reflection losses, and local albedo) on roofs with little to no physical shading.
+	// An efficiency standard deviation of >3% represents a real geometric signature, not noise.
+	// If stdDevRatio <= 0.03, w = 0 (100% static, no shading/geometric variation)
+	// If stdDevRatio >= 0.11, w = 1.0 (100% hourly, full shading/geometric variation)
 	w := 0.0
-	if stdDevRatio > 0.08 {
-		w = (stdDevRatio - 0.08) / (0.16 - 0.08)
+	if stdDevRatio > 0.03 {
+		w = (stdDevRatio - 0.03) / (0.11 - 0.03)
 		if w > 1.0 {
 			w = 1.0
 		}
