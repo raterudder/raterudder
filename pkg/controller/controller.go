@@ -1568,7 +1568,11 @@ func (c *Controller) evaluatePlannedCharge(
 	if !summary.HitFutureCapacityAt.IsZero() && (scanUntil.IsZero() || summary.HitFutureCapacityAt.Before(scanUntil)) {
 		scanUntil = summary.HitFutureCapacityAt
 	}
-	mustStandbyForPeak, peakTime, peakCost, peakPrice := c.checkPeakSurvival(simData, scanUntil, gridChargeNowCost, hitAboveDeficitAt, settings)
+	bufferMinutes := 0
+	if currentStatus.ElevatedMinBatterySOC {
+		bufferMinutes = settings.PeakSurvivalBufferMinutes
+	}
+	mustStandbyForPeak, peakTime, peakCost, peakPrice := c.checkPeakSurvival(simData, scanUntil, gridChargeNowCost, hitAboveDeficitAt, bufferMinutes)
 
 	if isCheapNow || mustStandbyForPeak {
 		var reason types.ActionReason
@@ -1698,6 +1702,18 @@ func (c *Controller) evaluateFallback(
 		hitDeficitAt = summary.HitDeficitAt
 	}
 
+	// Add Hysteresis:
+	// If the current actual status of the battery is already in standby (ElevatedMinBatterySOC),
+	// it means we are actively mitigating a deficit. We should only clear the deficit
+	// if the battery's projected energy is comfortably above the minimum (HitAboveDeficitAt).
+	// This prevents toggling the mode on and off due to 0.1% SOC prediction fluctuations.
+	isMitigatingDeficit := currentStatus.ElevatedMinBatterySOC
+	if isMitigatingDeficit {
+		if !summary.HitAboveDeficitAt.IsZero() {
+			hitDeficitAt = summary.HitAboveDeficitAt
+		}
+	}
+
 	gridChargeNowCost := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
 
 	// 1. Minimum Reserve Enforcement:
@@ -1720,47 +1736,24 @@ func (c *Controller) evaluateFallback(
 		}
 	}
 
-	// 2. Projected Deficit Fallback Handling:
-	// If a future deficit is predicted and we have no active planned charge (e.g. grid charging is disabled):
-	if !hitDeficitAt.IsZero() {
-		// If the simulation indicates the battery will hit capacity from solar strictly in the future (After(now))
-		// before hitting a deficit, it is safe to discharge now (Load) to cover home load and prevent solar curtailment.
-		// We use HitSolarCapacityAt (which only tracks future capacity hits) because a capacity hit at 'now' only
-		// tells us the battery is currently full, not whether it will refill in the future if we choose to discharge
-		// it now.
-		// If solar exporting is enabled, hitting capacity does not result in curtailment (the excess solar is exported),
-		// so we do not discharge early, preserving the battery energy for high-value peak periods.
-		if !summary.HitSolarCapacityAt.IsZero() && summary.HitSolarCapacityAt.Before(hitAboveDeficitAt) {
-			reason := types.ActionReasonPreventSolarCurtailment
-			loadReason := fmt.Sprintf("Solar curtailment likely at %s before deficit at %s.", summary.HitSolarCapacityAt.Format(time.Kitchen), hitAboveDeficitAt.Format(time.Kitchen))
-
-			log.Ctx(ctx).DebugContext(
-				ctx,
-				"deficit predicted but will refill to capacity before then",
-				slog.Time("hitCapacityAt", summary.HitCapacityAt),
-				slog.Time("hitSolarCapacityAt", summary.HitSolarCapacityAt),
-				slog.Time("hitDeficitAt", hitAboveDeficitAt),
-				slog.String("reason", string(reason)),
-			)
-			return &DecisionResult{
-				BatteryMode: types.BatteryModeLoad,
-				Reason:      reason,
-				Description: loadReason,
-			}
-		}
-
-		// Standby to Save for Peak:
-		// We reach this block when a future deficit is predicted but evaluateDeficit did not plan a charge
-		// (which happens when grid charging is disabled, e.g. settings.GridChargeBatteries is false or
-		// BatteryChargingDisabled is true, meaning we cannot refill the battery from the grid).
-		// In this case, we must conserve whatever energy we currently have. If the current price is cheap,
-		// but there is an upcoming peak hour that is more expensive, we standby now.
-		// Preserving the battery's energy for that future peak hour is far more valuable than discharging it now.
+	// 2. Peak Survival Standby:
+	// If we drop below our above-deficit threshold (minKWH + 1% capacity) before or during a future peak price period,
+	// we standby now to conserve the battery's energy specifically for that peak.
+	// We check this even if no hard deficit (HitDeficitAt) is predicted, to ensure we respect PeakSurvivalBufferMinutes.
+	var peakCost float64
+	if !hitAboveDeficitAt.IsZero() {
 		var scanUntil time.Time
 		if !summary.HitFutureCapacityAt.IsZero() {
 			scanUntil = summary.HitFutureCapacityAt
 		}
-		mustStandbyForPeak, peakTime, peakCost, peakPrice := c.checkPeakSurvival(simData, scanUntil, gridChargeNowCost, hitAboveDeficitAt, settings)
+		bufferMinutes := 0
+		if currentStatus.ElevatedMinBatterySOC {
+			bufferMinutes = settings.PeakSurvivalBufferMinutes
+		}
+		var mustStandbyForPeak bool
+		var peakTime time.Time
+		var peakPrice *types.Price
+		mustStandbyForPeak, peakTime, peakCost, peakPrice = c.checkPeakSurvival(simData, scanUntil, gridChargeNowCost, hitAboveDeficitAt, bufferMinutes)
 
 		if mustStandbyForPeak {
 			standbyReason := fmt.Sprintf(
@@ -1789,9 +1782,39 @@ func (c *Controller) evaluateFallback(
 				FuturePrice: peakPrice,
 			}
 		}
+	}
 
-		// If current price is already peak, or there are flat prices (no more expensive peak hour coming),
-		// we discharge now because holding energy indefinitely under flat/peak rates yields no economic benefit.
+	// 3. Projected Deficit Fallback Handling:
+	// If a future deficit is predicted and we have no active planned charge (e.g. grid charging is disabled):
+	if !hitDeficitAt.IsZero() {
+		// If the simulation indicates the battery will hit capacity from solar strictly in the future (After(now))
+		// before hitting a deficit, it is safe to discharge now (Load) to cover home load and prevent solar curtailment.
+		// We use HitSolarCapacityAt (which only tracks future capacity hits) because a capacity hit at 'now' only
+		// tells us the battery is currently full, not whether it will refill in the future if we choose to discharge
+		// it now.
+		// If solar exporting is enabled, hitting capacity does not result in curtailment (the excess solar is exported),
+		// so we do not discharge early, preserving the battery energy for high-value peak periods.
+		if !summary.HitSolarCapacityAt.IsZero() && summary.HitSolarCapacityAt.Before(hitAboveDeficitAt) {
+			reason := types.ActionReasonPreventSolarCurtailment
+			loadReason := fmt.Sprintf("Solar curtailment likely at %s before deficit at %s.", summary.HitSolarCapacityAt.Format(time.Kitchen), hitAboveDeficitAt.Format(time.Kitchen))
+
+			log.Ctx(ctx).DebugContext(
+				ctx,
+				"deficit predicted but will refill to capacity before then",
+				slog.Time("hitCapacityAt", summary.HitCapacityAt),
+				slog.Time("hitSolarCapacityAt", summary.HitSolarCapacityAt),
+				slog.Time("hitDeficitAt", hitAboveDeficitAt),
+				slog.String("reason", string(reason)),
+			)
+			return &DecisionResult{
+				BatteryMode: types.BatteryModeLoad,
+				Reason:      reason,
+				Description: loadReason,
+			}
+		}
+
+		// Since we didn't standby for peak, we must be in a peak hour or peak survival is not required.
+		// We fall back to discharging to cover load.
 		log.Ctx(ctx).DebugContext(
 			ctx,
 			"deficit predicted but at peak price or flat prices",
@@ -1806,7 +1829,7 @@ func (c *Controller) evaluateFallback(
 		}
 	}
 
-	// 3. Fallback when there is no deficit: discharge to cover load.
+	// 4. Fallback when there is no deficit: discharge to cover load.
 	log.Ctx(ctx).DebugContext(
 		ctx,
 		"no deficit predicted, using battery",
@@ -2025,7 +2048,7 @@ func (c *Controller) checkPeakSurvival(
 	scanUntil time.Time,
 	gridChargeNowCost float64,
 	hitAboveDeficitAt time.Time,
-	settings types.Settings,
+	bufferMinutes int,
 ) (mustStandby bool, peakTime time.Time, peakCost float64, peakPrice *types.Price) {
 	var peakEnd time.Time
 
@@ -2056,7 +2079,7 @@ func (c *Controller) checkPeakSurvival(
 	}
 
 	if !peakEnd.IsZero() && !hitAboveDeficitAt.IsZero() {
-		if !hitAboveDeficitAt.After(peakEnd.Add(time.Duration(settings.PeakSurvivalBufferMinutes) * time.Minute)) {
+		if !hitAboveDeficitAt.After(peakEnd.Add(time.Duration(bufferMinutes) * time.Minute)) {
 			mustStandby = true
 		}
 	}
