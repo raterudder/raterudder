@@ -613,7 +613,7 @@
 
 .landing-page .timeline-line {
     position: absolute;
-    left: 160px;
+    left: 177px;
     top: 0;
     bottom: 0;
     width: 2px;
@@ -623,9 +623,10 @@
 
 .landing-page .timeline-item {
     display: flex;
-    gap: 3rem;
+    gap: 3.5rem;
     margin-bottom: 4rem;
     position: relative;
+    padding-left: 0;
 }
 
 .landing-page .timeline-item:last-child {
@@ -633,7 +634,7 @@
 }
 
 .landing-page .timeline-meta {
-    width: 130px;
+    width: 150px;
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
@@ -647,6 +648,8 @@
     font-weight: 800;
     color: var(--on-surface);
     font-family: var(--font-mono);
+    white-space: nowrap;
+    width: auto;
 }
 
 .landing-page .timeline-action-badge {
@@ -685,7 +688,7 @@
 
 .landing-page .timeline-marker {
     position: absolute;
-    left: 152px;
+    left: 169px;
     top: 1.25rem;
     width: 18px;
     height: 18px;
@@ -976,16 +979,23 @@
     .landing-page .timeline-item {
         flex-direction: column;
         gap: 1rem;
-        padding-left: 2rem;
+        padding-left: 3rem;
     }
 
     .landing-page .timeline-meta {
         width: auto;
-        align-items: flex-start;
+        align-items: center;
         text-align: left;
         flex-direction: row;
         padding-top: 0;
         gap: 1rem;
+    }
+
+    .landing-page .timeline-time {
+        position: static;
+        width: auto;
+        text-align: left;
+        padding-right: 0;
     }
 }
 
