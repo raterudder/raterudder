@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import Dashboard, { whatsNewVersion } from './Dashboard';
+import Dashboard, { whatsNewVersion, whatsNewText, whatsNewLinkText } from './Dashboard';
 import { Router } from 'wouter';
 import * as api from '../api';
 import { setupDefaultApiMocks } from '../test/apiMocks';
@@ -828,16 +828,19 @@ describe('Dashboard', () => {
         expect(document.querySelector('.action-list')).not.toBeInTheDocument();
     });
 
-    it("shows What's New banner with a link to settings when not dismissed", async () => {
+    it("shows What's New banner when not dismissed", async () => {
         localStorage.clear();
         mockActionsAndSavings([]);
         renderWithRouter(<Dashboard />);
 
         await waitFor(() => {
             expect(screen.getByText("What's New:")).toBeInTheDocument();
-            const link = screen.getByRole('link', { name: /Make sure to add your zip code/i });
-            expect(link).toBeInTheDocument();
-            expect(link).toHaveAttribute('href', '/settings');
+            expect(screen.getByText((content) => content.includes(whatsNewText))).toBeInTheDocument();
+            if (whatsNewLinkText) {
+                const link = screen.getByRole('link', { name: whatsNewLinkText });
+                expect(link).toBeInTheDocument();
+                expect(link).toHaveAttribute('href', '/settings');
+            }
         });
     });
 

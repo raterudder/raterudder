@@ -12,9 +12,9 @@ import {
     type SummaryType
 } from '../utils/dashboardUtils';
 
-export const whatsNewVersion = 4;
-const whatsNewText = "Updated deficit vs arbitrage logic significantly improving savings. Added support for more zip codes.";
-const whatsNewLinkText = "Make sure to add your zip code in Settings!";
+export const whatsNewVersion = 5;
+export const whatsNewText = "Big improvements to home load and solar forecast. Updated settings page.";
+export const whatsNewLinkText = "";
 
 const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ siteID, settings: propSettings }) => {
     const [location, navigate] = useLocation();
@@ -378,10 +378,10 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                         <div className="banner warning-banner" data-testid="automation-paused-dryrun-warning-banner">
                             <p>
                                 <span><strong>Warning:</strong> {
-                                    settings.pause && settings.dryRun 
-                                        ? "Automation is paused and Dry Run is enabled. The system will not write states to your hardware." 
-                                        : settings.pause 
-                                            ? "Automation is paused. The system will not perform any automated actions." 
+                                    settings.pause && settings.dryRun
+                                        ? "Automation is paused and Dry Run is enabled. The system will not write states to your hardware."
+                                        : settings.pause
+                                            ? "Automation is paused. The system will not perform any automated actions."
                                             : "Dry Run is enabled. The system will simulate actions but will not write them to your hardware."
                                 } <Link href="/settings">Change this in Settings</Link></span>
                             </p>

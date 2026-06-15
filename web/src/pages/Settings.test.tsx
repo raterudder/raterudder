@@ -1206,7 +1206,7 @@ describe('App & Settings', () => {
 
             // Should navigate to dashboard
             await waitFor(() => {
-                expect(screen.getByText(/Home/i)).toBeInTheDocument(); // Header link
+                expect(screen.getByText('Home Usage')).toBeInTheDocument();
             });
         });
 
