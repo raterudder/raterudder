@@ -21,7 +21,7 @@
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  margin-top: 2.5rem;
+  margin-top: 1rem;
   margin-bottom: 1.25rem;
 }
 
@@ -50,7 +50,7 @@
 
 /* Collapsible Section Header */
 .advanced-section-collapsible {
-  margin-top: 3.5rem;
+  margin-top: 1.5rem;
 }
 
 .advanced-section-header {
@@ -186,7 +186,7 @@
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  margin-top: 3.5rem;
+  margin-top: 1.5rem;
   margin-bottom: 1.5rem;
   border-bottom: 1px solid var(--outline-variant);
   padding-bottom: 0.75rem;
@@ -207,7 +207,7 @@
   border: 0;
   height: 1px;
   background: var(--outline-variant);
-  margin-top: 3.5rem;
+  margin-top: 1.5rem;
   margin-bottom: 2rem;
   opacity: 0.5;
 }
@@ -385,4 +385,298 @@
   color: var(--primary-glow);
   background: rgba(14, 165, 233, 0.1);
 }
+
+/* ============================================
+   Onboarding Wizard & Checklist Banner
+   ============================================ */
+
+.wizard-container {
+  max-width: 650px;
+  margin: 3rem auto;
+}
+
+.wizard-card {
+  background: var(--surface);
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-xl);
+  padding: 2.5rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2), 0 1px 3px rgba(0, 0, 0, 0.1);
+  position: relative;
+  overflow: hidden;
+  backdrop-filter: blur(10px);
+}
+
+/* Glassmorphism top line effect */
+.wizard-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(90deg, var(--primary), var(--accent));
+}
+
+.wizard-step-indicators {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 2.5rem;
+  gap: 0.5rem;
+}
+
+.wizard-step-bubble {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+  border: 2px solid var(--outline);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--text-muted);
+  background: var(--surface-container);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.wizard-step-bubble.active {
+  border-color: var(--primary);
+  color: var(--primary);
+  box-shadow: 0 0 15px rgba(14, 165, 233, 0.3);
+  background: rgba(14, 165, 233, 0.05);
+}
+
+.wizard-step-bubble.completed {
+  border-color: var(--accent);
+  color: var(--on-primary);
+  background: var(--accent);
+  box-shadow: 0 0 15px rgba(0, 255, 194, 0.3);
+}
+
+.wizard-step-line {
+  flex: 1;
+  max-width: 4rem;
+  height: 2px;
+  background: var(--outline-variant);
+  transition: background 0.3s ease;
+}
+
+.wizard-header {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.wizard-header h2 {
+  font-size: 1.75rem;
+  font-weight: 800;
+  color: var(--on-surface);
+  margin-bottom: 0.5rem;
+  letter-spacing: -0.02em;
+}
+
+.wizard-subtitle {
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.wizard-step-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  margin-bottom: 2.5rem;
+  background: var(--surface-container-low);
+  padding: 1.75rem;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--outline-variant);
+}
+
+.wizard-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
+  margin-top: 2rem;
+}
+
+.wizard-actions button {
+  min-width: 8rem;
+}
+
+.wizard-footer {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--outline-variant);
+  text-align: center;
+}
+
+.wizard-skip-link {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  text-decoration: underline;
+  transition: color 0.2s;
+}
+
+.wizard-skip-link:hover {
+  color: var(--primary);
+  background: none;
+}
+
+/* Checklist Banner */
+.checklist-banner {
+  background: var(--surface-container);
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-lg);
+  padding: 1rem 2rem 1.5rem;
+  margin-bottom: 2.5rem;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  position: relative;
+  overflow: hidden;
+}
+
+.checklist-banner::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--primary);
+}
+
+.checklist-banner h4 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--on-surface);
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+}
+
+.checklist-banner p {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  margin-bottom: 1.25rem;
+}
+
+.checklist-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2rem;
+}
+
+.checklist-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.checklist-item:hover {
+  text-decoration: underline;
+  opacity: 0.9;
+}
+
+.checklist-item.checked {
+  color: var(--accent);
+}
+
+.checklist-item.pending {
+  color: var(--text-muted);
+}
+
+.checklist-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 50%;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.checklist-item.checked .checklist-icon {
+  background: rgba(0, 255, 194, 0.1);
+  color: var(--accent);
+}
+
+.checklist-item.pending .checklist-icon {
+  border: 1.5px solid var(--outline);
+  color: var(--outline);
+}
+
+/* Highlighted Sections */
+.settings-section {
+  transition: all 0.4s ease;
+  border-radius: var(--radius-lg);
+  padding: 0;
+  margin-bottom: 1.5rem;
+}
+
+.settings-section.highlighted-section {
+  background: rgba(14, 165, 233, 0.03);
+  border: 2px dashed var(--primary);
+  padding: 1.5rem;
+  box-shadow: 0 0 20px rgba(14, 165, 233, 0.05);
+  animation: pulse-border 2s infinite alternate;
+}
+
+@keyframes pulse-border {
+  0% {
+    border-color: rgba(14, 165, 233, 0.4);
+    box-shadow: 0 0 10px rgba(14, 165, 233, 0.05);
+  }
+  100% {
+    border-color: rgba(14, 165, 233, 0.8);
+    box-shadow: 0 0 20px rgba(14, 165, 233, 0.15);
+  }
+}
+
+/* Onboarding Wizard Mobile Responsiveness */
+@media (max-width: 600px) {
+  .wizard-container {
+    margin: 1.5rem auto;
+  }
+
+  .wizard-card {
+    padding: 1.5rem 0;
+  }
+
+  .wizard-header,
+  .wizard-step-indicators,
+  .wizard-actions,
+  .wizard-footer {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .wizard-card .error-message,
+  .wizard-card .success-message {
+    margin-left: 1rem;
+    margin-right: 1rem;
+  }
+
+  .wizard-step-fields {
+    border-left: none;
+    border-right: none;
+    border-radius: 0;
+    padding: 1.5rem 1rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .wizard-actions {
+    flex-direction: column-reverse;
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+  }
+
+  .wizard-actions button {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
 

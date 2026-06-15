@@ -42,6 +42,7 @@ func TestHandleListUtilities(t *testing.T) {
 		resp := w.Result()
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
+		assert.Equal(t, "private, max-age=300", resp.Header.Get("Cache-Control"))
 
 		var utilities []types.UtilityProviderInfo
 		err := json.NewDecoder(w.Body).Decode(&utilities)

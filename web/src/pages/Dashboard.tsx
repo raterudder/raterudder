@@ -16,7 +16,7 @@ export const whatsNewVersion = 4;
 const whatsNewText = "Updated deficit vs arbitrage logic significantly improving savings. Added support for more zip codes.";
 const whatsNewLinkText = "Make sure to add your zip code in Settings!";
 
-const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
+const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ siteID, settings: propSettings }) => {
     const [location, navigate] = useLocation();
     const search = useSearch();
     const searchParams = useMemo(() => new URLSearchParams(search), [search]);
@@ -30,7 +30,8 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
     const dateQuery = searchParams.get('date');
     const [actions, setActions] = useState<Action[]>([]);
     const [savings, setSavings] = useState<SavingsStats | null>(null);
-    const [settings, setSettings] = useState<Settings | null>(null);
+    const [localSettings, setLocalSettings] = useState<Settings | null>(null);
+    const settings = propSettings !== undefined ? propSettings : localSettings;
     const settingsRef = useRef<Settings | null>(null);
     const loadedSiteIDRef = useRef<string | undefined>(undefined);
     const [loading, setLoading] = useState(true);
@@ -107,12 +108,11 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 const end = new Date(currentDate);
                 end.setHours(23, 59, 59, 999);
 
-                const shouldFetchSettings = siteID !== 'ALL' && (settingsRef.current === null || loadedSiteIDRef.current !== siteID);
+                const shouldFetchSettings = propSettings === undefined && siteID !== 'ALL' && (settingsRef.current === null || loadedSiteIDRef.current !== siteID);
                 const fetchSettingsPromise = shouldFetchSettings
                     ? fetchSettings(siteID)
-                    : (siteID === 'ALL' ? Promise.resolve(null) : Promise.resolve(settingsRef.current));
+                    : Promise.resolve(settingsRef.current);
 
-                // Fetch actions and savings in a single call, and settings if needed
                 const [actionsAndSavingsData, settingsData] = await Promise.all([
                     fetchActionsAndSavings(start, end, siteID),
                     fetchSettingsPromise
@@ -120,8 +120,10 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
 
                 setActions(actionsAndSavingsData.actions || []);
                 setSavings(actionsAndSavingsData.savings);
-                setSettings(settingsData);
-                settingsRef.current = settingsData;
+                if (settingsData) {
+                    setLocalSettings(settingsData);
+                    settingsRef.current = settingsData;
+                }
                 loadedSiteIDRef.current = siteID;
             } catch (err) {
                 console.error(err);
@@ -132,7 +134,7 @@ const Dashboard: React.FC<{ siteID?: string }> = ({ siteID }) => {
         };
 
         loadData();
-    }, [currentDate, siteID]);
+    }, [currentDate, siteID, propSettings]);
 
     const handleDateChange = useCallback((days: number) => {
         const newDate = new Date(currentDate);

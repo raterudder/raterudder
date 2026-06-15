@@ -26,6 +26,19 @@ const navigateToSettings = async () => {
     fireEvent.click(screen.getByText(/Log In/));
     await waitFor(() => expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument());
     fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
+    
+    // If onboarding wizard renders, skip it so the standard settings inputs are available
+    await waitFor(() => {
+        const hasSettingsHeading = screen.queryByRole('heading', { name: /^Settings$/i });
+        const skipBtn = screen.queryByRole('button', { name: /Skip/i });
+        expect(hasSettingsHeading || skipBtn).toBeTruthy();
+    });
+
+    const skipBtn = screen.queryByRole('button', { name: /Skip/i });
+    if (skipBtn) {
+        fireEvent.click(skipBtn);
+    }
+
     await screen.findByRole('heading', { name: /^Settings$/i });
 };
 
@@ -1061,6 +1074,339 @@ describe('App & Settings', () => {
         // Warning should disappear
         await waitFor(() => {
             expect(screen.queryByTestId('grid-restrictions-warning')).not.toBeInTheDocument();
+        });
+    });
+
+    describe('Onboarding Wizard & Checklist Flow', () => {
+        it('renders onboarding wizard and walks through steps to completion', async () => {
+            const user = userEvent.setup();
+            (fetchAuthStatus as any).mockResolvedValueOnce({
+                ...defaultAuthStatus,
+                loggedIn: false
+            }).mockResolvedValueOnce({
+                ...defaultAuthStatus,
+                loggedIn: true
+            });
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                countryCode: '',
+                postalCode: '',
+                utilityProvider: '',
+                utilityRate: '',
+                ess: '',
+                hasCredentials: {}
+            });
+
+            render(<App />);
+            fireEvent.click(screen.getByText(/Log In/));
+
+            await waitFor(() => {
+                expect(screen.getByText('Google Sign In')).toBeInTheDocument();
+            });
+            fireEvent.click(screen.getByText('Google Sign In'));
+
+            // Automatically redirected to settings onboarding wizard Step 1
+            await screen.findByRole('heading', { name: /Step 1: Set Location/i });
+
+            // Fill Location
+            const zipInput = screen.getByLabelText(/Zip\/Postal Code/i);
+            await user.clear(zipInput);
+            await user.type(zipInput, '90210');
+
+            (updateSettings as any).mockResolvedValue(undefined);
+
+            const nextBtn1 = screen.getByRole('button', { name: /Save & Continue/i });
+            await user.click(nextBtn1);
+
+            // Verify updateSettings was not called yet
+            expect(updateSettings).not.toHaveBeenCalled();
+
+            // Step 2 Utility should be shown
+            await screen.findByRole('heading', { name: /Step 2: Choose Utility/i });
+
+            // Select Utility Provider
+            const providerSelect = screen.getByRole('combobox', { name: /Utility Provider/i });
+            await user.click(providerSelect);
+            const comedOption = await screen.findByRole('option', { name: 'Commonwealth Edison (ComEd)' });
+            await user.click(comedOption);
+
+            // Select Utility Rate
+            const rateSelect = await screen.findByRole('combobox', { name: /Rate Plan/i });
+            await user.click(rateSelect);
+            const rateOption = await screen.findByRole('option', { name: 'Hourly Pricing Program (BESH)' });
+            await user.click(rateOption);
+
+            // Verify grid restrictions exist in step 2 and toggle them
+            const chargeSwitch = screen.getByRole('switch', { name: /Grid Can Charge Battery/i });
+            const exportSolarSwitch = screen.getByRole('switch', { name: /Export Solar to Grid/i });
+            const exportBatterySwitch = screen.getByRole('switch', { name: /Export Battery to Grid/i });
+
+            expect(chargeSwitch).toBeChecked();
+            expect(exportSolarSwitch).not.toBeChecked();
+            expect(exportBatterySwitch).not.toBeChecked();
+
+            await user.click(chargeSwitch);
+            await user.click(exportSolarSwitch);
+            await user.click(exportBatterySwitch);
+
+            const nextBtn2 = screen.getByRole('button', { name: /Save & Continue/i });
+            await user.click(nextBtn2);
+
+            // Verify updateSettings was still not called
+            expect(updateSettings).not.toHaveBeenCalled();
+
+            // Step 3 ESS should be shown
+            await screen.findByRole('heading', { name: /Step 3: Connect Battery/i });
+
+            // Select ESS Provider
+            const essSelect = await screen.findByRole('combobox', { name: /System Type/i });
+            await user.click(essSelect);
+            const franklinOption = await screen.findByRole('option', { name: 'FranklinWH' });
+            await user.click(franklinOption);
+
+            // Type credentials
+            const emailInput = await screen.findByPlaceholderText(/Enter Email/i);
+            const passInput = await screen.findByPlaceholderText(/Enter Password/i);
+            await user.type(emailInput, 'test@franklin.com');
+            await user.type(passInput, 'secretPass');
+
+            // Mock refetch return for completion
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                countryCode: 'US',
+                postalCode: '90210',
+                utilityProvider: 'comed',
+                utilityRate: 'comed_besh',
+                ess: 'franklin',
+                gridChargeBatteries: false,
+                gridExportSolar: true,
+                gridExportBatteries: true,
+                hasCredentials: { franklin: true }
+            });
+
+            const doneBtn = screen.getByRole('button', { name: /Complete Setup/i });
+            await user.click(doneBtn);
+
+            // Verify final updateSettings call (called once with all collected settings)
+            expect(updateSettings).toHaveBeenCalledTimes(1);
+            expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+                postalCode: '90210',
+                utilityProvider: 'comed',
+                utilityRate: 'comed_besh',
+                ess: 'franklin',
+                gridChargeBatteries: false,
+                gridExportSolar: true,
+                gridExportBatteries: true
+            }), expect.any(String), expect.objectContaining({
+                franklin: expect.objectContaining({
+                    username: 'test@franklin.com',
+                    password: 'secretPass'
+                })
+            }));
+
+            // Should navigate to dashboard
+            await waitFor(() => {
+                expect(screen.getByText(/Home/i)).toBeInTheDocument(); // Header link
+            });
+        });
+
+        it('allows navigating back in the onboarding wizard and retains entered input', async () => {
+            const user = userEvent.setup();
+            (fetchAuthStatus as any).mockResolvedValueOnce({
+                ...defaultAuthStatus,
+                loggedIn: false
+            }).mockResolvedValueOnce({
+                ...defaultAuthStatus,
+                loggedIn: true
+            });
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                countryCode: '',
+                postalCode: '',
+                utilityProvider: '',
+                utilityRate: '',
+                ess: '',
+                hasCredentials: {}
+            });
+
+            render(<App />);
+            fireEvent.click(screen.getByText(/Log In/));
+
+            await waitFor(() => {
+                expect(screen.getByText('Google Sign In')).toBeInTheDocument();
+            });
+            fireEvent.click(screen.getByText('Google Sign In'));
+
+            // Automatically redirected to settings onboarding wizard Step 1
+            await screen.findByRole('heading', { name: /Step 1: Set Location/i });
+
+            // Fill Location
+            const zipInput = screen.getByLabelText(/Zip\/Postal Code/i);
+            await user.clear(zipInput);
+            await user.type(zipInput, '12345');
+
+            const nextBtn1 = screen.getByRole('button', { name: /Save & Continue/i });
+            await user.click(nextBtn1);
+
+            // Step 2 Utility should be shown
+            await screen.findByRole('heading', { name: /Step 2: Choose Utility/i });
+
+            // Click Back
+            const backBtn = screen.getByRole('button', { name: 'Back' });
+            await user.click(backBtn);
+
+            // Step 1 Location should be shown again
+            await screen.findByRole('heading', { name: /Step 1: Set Location/i });
+
+            // Check that zip code is retained
+            expect(screen.getByLabelText(/Zip\/Postal Code/i)).toHaveValue('12345');
+        });
+
+        it('shows getting started checklist and highlights incomplete sections in checklist mode', async () => {
+            (fetchAuthStatus as any).mockResolvedValue({ ...defaultAuthStatus });
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                countryCode: '',
+                postalCode: '',
+                utilityProvider: 'comed',
+                utilityRate: 'comed_besh',
+                ess: '',
+                hasCredentials: {}
+            });
+
+            render(<App />);
+            fireEvent.click(screen.getByText(/Log In/));
+
+            // Navigate to Settings
+            await waitFor(() => expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument());
+            fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
+
+            // Checklist banner should be visible
+            await screen.findByTestId('checklist-banner');
+            expect(screen.getByText('Set Location')).toBeInTheDocument();
+            expect(screen.getByText('Choose Utility')).toBeInTheDocument();
+            expect(screen.getByText('Connect Battery (ESS)')).toBeInTheDocument();
+
+            // Assert Location section is highlighted and incomplete
+            expect(screen.getByTestId('location-section')).toHaveClass('highlighted-section');
+            // Assert ESS section is highlighted and incomplete
+            expect(screen.getByTestId('ess-section')).toHaveClass('highlighted-section');
+            // Assert Utility section is NOT highlighted (since it is configured)
+            expect(screen.getByTestId('utility-section')).not.toHaveClass('highlighted-section');
+        });
+
+        it('allows skipping onboarding wizard and going directly to all settings', async () => {
+            const user = userEvent.setup();
+            (fetchAuthStatus as any).mockResolvedValueOnce({
+                ...defaultAuthStatus,
+                loggedIn: false
+            }).mockResolvedValueOnce({
+                ...defaultAuthStatus,
+                loggedIn: true
+            });
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                utilityProvider: '',
+                utilityRate: '',
+                ess: '',
+                hasCredentials: {}
+            });
+
+            render(<App />);
+            fireEvent.click(screen.getByText(/Log In/));
+
+            await waitFor(() => {
+                expect(screen.getByText('Google Sign In')).toBeInTheDocument();
+            });
+            fireEvent.click(screen.getByText('Google Sign In'));
+
+            await screen.findByRole('heading', { name: /Step 1: Set Location/i });
+
+            const skipBtn = screen.getByRole('button', { name: /Skip setup wizard/i });
+            await user.click(skipBtn);
+
+            // Standard settings form should render now
+            await screen.findByLabelText(/Minimum Battery %/i);
+            expect(screen.queryByRole('heading', { name: /Step 1: Set Location/i })).not.toBeInTheDocument();
+        });
+
+        it('scrolls to the corresponding section when a checklist item is clicked', async () => {
+            const scrollIntoViewMock = vi.fn();
+            window.HTMLElement.prototype.scrollIntoView = scrollIntoViewMock;
+
+            (fetchAuthStatus as any).mockResolvedValue({ ...defaultAuthStatus });
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                countryCode: '',
+                postalCode: '',
+                utilityProvider: 'comed',
+                utilityRate: 'comed_besh',
+                ess: '',
+                hasCredentials: {}
+            });
+
+            render(<App />);
+            fireEvent.click(screen.getByText(/Log In/));
+
+            await waitFor(() => expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument());
+            fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
+
+            // Click "Set Location"
+            const locationItem = await screen.findByText('Set Location');
+            fireEvent.click(locationItem);
+            expect(scrollIntoViewMock).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' });
+
+            scrollIntoViewMock.mockClear();
+
+            // Click "Connect Battery (ESS)"
+            const essItem = screen.getByText('Connect Battery (ESS)');
+            fireEvent.click(essItem);
+            expect(scrollIntoViewMock).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' });
+        });
+
+        it('shows a warning in the onboarding wizard when all grid restrictions are unchecked', async () => {
+            const user = userEvent.setup();
+            (fetchAuthStatus as any).mockResolvedValue({ ...defaultAuthStatus, loggedIn: true });
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                countryCode: 'US',
+                postalCode: '90210',
+                utilityProvider: '',
+                utilityRate: '',
+                ess: '',
+                hasCredentials: {}
+            });
+
+            render(<App />);
+            fireEvent.click(screen.getByText(/Log In/));
+            await waitFor(() => expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument());
+            fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
+
+            // Navigate to step 2 of wizard by saving step 1
+            const nextBtn1 = await screen.findByRole('button', { name: /Save & Continue/i });
+            await user.click(nextBtn1);
+
+            await screen.findByRole('heading', { name: /Step 2: Choose Utility/i });
+
+            // Initially warning is not visible
+            expect(screen.queryByTestId('wizard-grid-restrictions-warning')).not.toBeInTheDocument();
+
+            // Uncheck "Grid Can Charge Battery" (the only one checked by default)
+            const chargeSwitch = screen.getByRole('switch', { name: /Grid Can Charge Battery/i });
+            expect(chargeSwitch).toBeChecked();
+            await user.click(chargeSwitch);
+
+            // Warning should be displayed
+            await waitFor(() => {
+                expect(screen.getByTestId('wizard-grid-restrictions-warning')).toBeInTheDocument();
+                expect(screen.getByText(/Warning: All grid interactions are disabled/i)).toBeInTheDocument();
+            });
+
+            // Toggle back on
+            await user.click(chargeSwitch);
+            await waitFor(() => {
+                expect(screen.queryByTestId('wizard-grid-restrictions-warning')).not.toBeInTheDocument();
+            });
         });
     });
 });

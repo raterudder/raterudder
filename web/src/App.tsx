@@ -6,7 +6,7 @@ import Header from './components/Header';
 import Footer from './components/Footer';
 import FeedbackWidget from './components/FeedbackWidget';
 import './App.css';
-import { fetchAuthStatus, login, logout, type AuthStatus, type UserSite } from './api';
+import { fetchAuthStatus, login, logout, fetchSettings, type AuthStatus, type UserSite, type Settings as SettingsType } from './api';
 
 import LandingPage from './pages/LandingPage';
 import Dashboard from './pages/Dashboard';
@@ -56,16 +56,92 @@ function AppContent() {
     const [loading, setLoading] = useState(() => window.location.pathname !== '/');
     const [hasAttemptedFetch, setHasAttemptedFetch] = useState(false);
 
+    const [settings, setSettings] = useState<SettingsType | null>(null);
+    const [settingsSiteID, setSettingsSiteID] = useState<string>("");
+
     const [location, navigate] = useLocation();
     const isHome = location === '/';
 
-    const applyStatus = React.useCallback((status: AuthStatus, redirectOnLogin: boolean) => {
+    const effectiveSiteID = viewSiteOverride || selectedSiteID;
+
+    const loadSettings = React.useCallback(async (siteID: string, force = false) => {
+        if (!siteID || siteID === 'ALL') {
+            setSettings(null);
+            setSettingsSiteID("");
+            return;
+        }
+        if (!force && settings && settingsSiteID === siteID) {
+            return;
+        }
+        try {
+            const data = await fetchSettings(siteID);
+            setSettings(data);
+            setSettingsSiteID(siteID);
+        } catch (err) {
+            console.error("Failed to fetch settings", err);
+            setSettings(null);
+            setSettingsSiteID("");
+        }
+    }, [settings, settingsSiteID]);
+
+    const handleSettingsSaved = React.useCallback(async () => {
+        if (effectiveSiteID) {
+            await loadSettings(effectiveSiteID, true);
+        }
+    }, [loadSettings, effectiveSiteID]);
+
+    useEffect(() => {
+        if (!loggedIn || !effectiveSiteID || effectiveSiteID === 'ALL') {
+            return;
+        }
+
+        let active = true;
+
+        const load = async () => {
+            try {
+                const data = await fetchSettings(effectiveSiteID);
+                if (active) {
+                    setSettings(data);
+                    setSettingsSiteID(effectiveSiteID);
+                }
+            } catch (err) {
+                console.error("Failed to fetch settings", err);
+                if (active) {
+                    setSettings(null);
+                    setSettingsSiteID("");
+                }
+            }
+        };
+
+        load();
+
+        return () => {
+            active = false;
+        };
+    }, [loggedIn, effectiveSiteID]);
+
+    const selectedSiteIDRef = React.useRef(selectedSiteID);
+    useEffect(() => {
+        selectedSiteIDRef.current = selectedSiteID;
+    }, [selectedSiteID]);
+
+    const viewSiteOverrideRef = React.useRef(viewSiteOverride);
+    useEffect(() => {
+        viewSiteOverrideRef.current = viewSiteOverride;
+    }, [viewSiteOverride]);
+
+    const applyStatus = React.useCallback(async (status: AuthStatus, redirectOnLogin: boolean) => {
         setAuthRequired(status.authRequired);
         setLoggedIn(status.loggedIn);
         setClientIDs(status.clientIDs || {});
 
         const newSites = status.sites || [];
         setSites(newSites);
+
+        if (!status.loggedIn) {
+            setSettings(null);
+            setSettingsSiteID("");
+        }
 
         // Default select first site if not selected or invalid
         if (newSites.length > 0) {
@@ -75,17 +151,43 @@ function AppContent() {
                 }
                 return current;
             });
+        } else {
+            setSelectedSiteID("");
+            setSettings(null);
+            setSettingsSiteID("");
         }
 
         setHasAttemptedFetch(true);
 
         if (redirectOnLogin && status.loggedIn) {
-            const queryParams = new URLSearchParams(window.location.search);
-            const from = queryParams.get('from');
-            if (from && from.startsWith('/')) {
-                navigate(from);
+            if (newSites.length === 0) {
+                navigate('/welcome');
             } else {
-                navigate('/dashboard');
+                const targetSiteID = viewSiteOverrideRef.current || (
+                    newSites.length > 0
+                        ? (selectedSiteIDRef.current && newSites.some(site => site.id === selectedSiteIDRef.current) ? selectedSiteIDRef.current : newSites[0].id)
+                        : ""
+                );
+                try {
+                    const settingsData = await fetchSettings(targetSiteID);
+                    setSettings(settingsData);
+                    setSettingsSiteID(targetSiteID);
+
+                    if (!settingsData.utilityProvider || !settingsData.ess) {
+                        navigate('/settings');
+                    } else {
+                        const queryParams = new URLSearchParams(window.location.search);
+                        const from = queryParams.get('from');
+                        if (from && from.startsWith('/')) {
+                            navigate(from);
+                        } else {
+                            navigate('/dashboard');
+                        }
+                    }
+                } catch (err) {
+                    console.error("Failed to fetch settings during redirect check", err);
+                    navigate('/settings');
+                }
             }
         }
     }, [navigate]);
@@ -158,6 +260,8 @@ function AppContent() {
             checkStatus();
             setSites([]);
             setSelectedSiteID("");
+            setSettings(null);
+            setSettingsSiteID("");
             navigate('/'); // Go back to landing page on logout
         } catch (err) {
             console.error("Logout failed", err);
@@ -166,7 +270,6 @@ function AppContent() {
 
     const showLoading = (loading || (!isHome && !hasAttemptedFetch)) && !isHome;
 
-    const effectiveSiteID = viewSiteOverride || selectedSiteID;
     const effectiveSites = viewSiteOverride && !sites.some(site => site.id === viewSiteOverride)
         ? [...sites, { id: viewSiteOverride, name: "" }]
         : sites;
@@ -177,6 +280,9 @@ function AppContent() {
         if (id === 'ALL') {
             navigate('/dashboard');
         }
+        // Immediately reset settings when switching sites to prevent stale flashes
+        setSettings(null);
+        setSettingsSiteID("");
     };
 
     return (
@@ -241,7 +347,7 @@ function AppContent() {
                                     {!effectiveSiteID && effectiveSites.length === 0 ? (
                                         <Redirect to="/welcome" replace />
                                     ) : (
-                                        <Dashboard siteID={effectiveSiteID} />
+                                        <Dashboard siteID={effectiveSiteID} settings={settings} />
                                     )}
                                 </ProtectedRoute>
                             </Route>
@@ -268,7 +374,7 @@ function AppContent() {
                                     {!effectiveSiteID && effectiveSites.length === 0 ? (
                                         <Redirect to="/welcome" replace />
                                     ) : (
-                                        <Settings siteID={effectiveSiteID} />
+                                        <Settings siteID={effectiveSiteID} settings={settings} onSettingsSaved={handleSettingsSaved} />
                                     )}
                                 </ProtectedRoute>
                             </Route>

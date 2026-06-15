@@ -15,6 +15,7 @@ func (s *Server) handleListUtilities(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "private, max-age=300")
 	if err := json.NewEncoder(w).Encode(utilities); err != nil {
 		writeJSONError(w, "internal server error", http.StatusInternalServerError)
 		return
