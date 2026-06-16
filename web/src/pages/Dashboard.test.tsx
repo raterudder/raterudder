@@ -1,3 +1,4 @@
+import React from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
@@ -11,9 +12,21 @@ const { fetchActionsAndSavings, fetchSettings, ActionReason } = api;
 vi.mock('../api');
 
 const renderWithRouter = (component: React.ReactNode) => {
+    let element = component;
+    if (React.isValidElement(element) && element.type === Dashboard) {
+        const props = element.props as any;
+        element = React.cloneElement(element, {
+            settings: props.settings !== undefined ? props.settings : {
+                minBatterySOC: 10,
+                ess: 'franklinwh',
+                hasCredentials: { franklinwh: true },
+                utilityProvider: 'comed_besh',
+            }
+        } as any);
+    }
     return render(
         <Router>
-            {component}
+            {element}
         </Router>
     );
 };
@@ -119,7 +132,7 @@ describe('Dashboard', () => {
              const expectedDate = new Date(now);
              expectedDate.setDate(expectedDate.getDate() - 1);
              expect(startArg.getDate()).toBe(expectedDate.getDate());
-             expect((fetchSettings as any).mock.calls.length).toBe(1);
+             expect((fetchSettings as any).mock.calls.length).toBe(0);
          });
     });
 
@@ -358,14 +371,16 @@ describe('Dashboard', () => {
 
     it('shows banner when ESS credentials are missing', async () => {
         mockActionsAndSavings([], null);
-        (fetchSettings as any).mockResolvedValue({
+        const settings = {
             minBatterySOC: 10,
             ess: 'franklin',
             hasCredentials: { franklin: false },
-            utilityProvider: 'comed_besh'
-        });
+            utilityProvider: 'comed_besh',
+            countryCode: 'US',
+            postalCode: '60601'
+        };
 
-        renderWithRouter(<Dashboard />);
+        renderWithRouter(<Dashboard settings={settings as any} />);
 
         await waitFor(() => {
             expect(screen.getByText(/Energy Storage System is not connected/i)).toBeInTheDocument();
@@ -375,7 +390,7 @@ describe('Dashboard', () => {
 
     it('shows ESS authentication warning banner when consecutive failures >= 3', async () => {
         mockActionsAndSavings([]);
-        (fetchSettings as any).mockResolvedValue({
+        const settings = {
             minBatterySOC: 10,
             utilityProvider: 'test',
             ess: 'franklinwh',
@@ -384,9 +399,9 @@ describe('Dashboard', () => {
                 consecutiveFailures: 3,
                 lastAttempt: '2023-01-01T12:00:00Z'
             }
-        });
+        };
 
-        renderWithRouter(<Dashboard />);
+        renderWithRouter(<Dashboard settings={settings as any} />);
 
         await waitFor(() => {
             const warningTags = screen.getAllByText(/Warning:/);
@@ -398,7 +413,7 @@ describe('Dashboard', () => {
 
     it('does not show ESS authentication warning banner when consecutive failures < 3', async () => {
         mockActionsAndSavings([]);
-        (fetchSettings as any).mockResolvedValue({
+        const settings = {
             minBatterySOC: 10,
             utilityProvider: 'test',
             ess: 'franklinwh',
@@ -407,9 +422,9 @@ describe('Dashboard', () => {
                 consecutiveFailures: 2,
                 lastAttempt: '2023-01-01T12:00:00Z'
             }
-        });
+        };
 
-        renderWithRouter(<Dashboard />);
+        renderWithRouter(<Dashboard settings={settings as any} />);
 
         await waitFor(() => {
             expect(screen.queryByText(/Warning:/)).not.toBeInTheDocument();
@@ -419,14 +434,14 @@ describe('Dashboard', () => {
 
     it('does not show banner when ESS credentials are present', async () => {
         mockActionsAndSavings([], null);
-        (fetchSettings as any).mockResolvedValue({
+        const settings = {
             minBatterySOC: 10,
             ess: 'franklin',
             hasCredentials: { franklin: true },
             utilityProvider: 'comed_besh'
-        });
+        };
 
-        renderWithRouter(<Dashboard />);
+        renderWithRouter(<Dashboard settings={settings as any} />);
 
         await waitFor(() => {
             // Need to wait for loading to finish
@@ -438,14 +453,14 @@ describe('Dashboard', () => {
 
     it('shows banner when Utility Provider is missing', async () => {
         mockActionsAndSavings([], null);
-        (fetchSettings as any).mockResolvedValue({
+        const settings = {
             minBatterySOC: 10,
             ess: 'franklin',
             hasCredentials: { franklin: true },
             utilityProvider: ''
-        });
+        };
 
-        renderWithRouter(<Dashboard />);
+        renderWithRouter(<Dashboard settings={settings as any} />);
 
         await waitFor(() => {
             expect(screen.getByText(/Utility Provider is not configured/i)).toBeInTheDocument();
@@ -455,14 +470,14 @@ describe('Dashboard', () => {
 
     it('does not show banner when Utility Provider is present', async () => {
         mockActionsAndSavings([], null);
-        (fetchSettings as any).mockResolvedValue({
+        const settings = {
             minBatterySOC: 10,
             ess: 'franklin',
             hasCredentials: { franklin: true },
             utilityProvider: 'comed_besh'
-        });
+        };
 
-        renderWithRouter(<Dashboard />);
+        renderWithRouter(<Dashboard settings={settings as any} />);
 
         await waitFor(() => {
             expect(screen.queryByText('Loading day...')).not.toBeInTheDocument();
@@ -813,9 +828,8 @@ describe('Dashboard', () => {
             batteryUsed: 10,
         };
         mockActionsAndSavings([{ description: 'Should not show' }], savingsData);
-        (fetchSettings as any).mockResolvedValue({ utilityProvider: 'test' });
 
-        renderWithRouter(<Dashboard siteID="ALL" />);
+        renderWithRouter(<Dashboard siteID="ALL" settings={null} />);
 
         await waitFor(() => {
             expect(screen.getByText('Savings Today')).toBeInTheDocument();
@@ -866,14 +880,14 @@ describe('Dashboard', () => {
     it('shows grid restrictions warning banner when all features are unchecked and utility is present', async () => {
         localStorage.clear();
         mockActionsAndSavings([]);
-        (fetchSettings as any).mockResolvedValue({
+        const settings = {
             utilityProvider: 'comed',
             gridChargeBatteries: false,
             gridExportSolar: false,
             gridExportBatteries: false,
-        });
+        };
 
-        renderWithRouter(<Dashboard siteID="site1" />);
+        renderWithRouter(<Dashboard siteID="site1" settings={settings as any} />);
 
         await waitFor(() => {
             expect(screen.getByTestId('grid-restrictions-warning-banner')).toBeInTheDocument();
@@ -884,14 +898,14 @@ describe('Dashboard', () => {
     it('does not show grid restrictions warning banner when utility is missing', async () => {
         localStorage.clear();
         mockActionsAndSavings([]);
-        (fetchSettings as any).mockResolvedValue({
+        const settings = {
             utilityProvider: '',
             gridChargeBatteries: false,
             gridExportSolar: false,
             gridExportBatteries: false,
-        });
+        };
 
-        renderWithRouter(<Dashboard siteID="site1" />);
+        renderWithRouter(<Dashboard siteID="site1" settings={settings as any} />);
 
         await waitFor(() => {
             expect(screen.queryByText('Loading day...')).not.toBeInTheDocument();
@@ -904,14 +918,14 @@ describe('Dashboard', () => {
         const user = userEvent.setup();
         localStorage.clear();
         mockActionsAndSavings([]);
-        (fetchSettings as any).mockResolvedValue({
+        const settings = {
             utilityProvider: 'comed',
             gridChargeBatteries: false,
             gridExportSolar: false,
             gridExportBatteries: false,
-        });
+        };
 
-        renderWithRouter(<Dashboard siteID="site1" />);
+        renderWithRouter(<Dashboard siteID="site1" settings={settings as any} />);
 
         await waitFor(() => {
             expect(screen.getByTestId('grid-restrictions-warning-banner')).toBeInTheDocument();
@@ -929,13 +943,13 @@ describe('Dashboard', () => {
     it('shows location warning banner when location is missing and utility is present', async () => {
         localStorage.clear();
         mockActionsAndSavings([]);
-        (fetchSettings as any).mockResolvedValue({
+        const settings = {
             utilityProvider: 'comed',
             countryCode: '',
             postalCode: '',
-        });
+        };
 
-        renderWithRouter(<Dashboard siteID="site1" />);
+        renderWithRouter(<Dashboard siteID="site1" settings={settings as any} />);
 
         await waitFor(() => {
             expect(screen.getByTestId('location-warning-banner')).toBeInTheDocument();
@@ -946,13 +960,13 @@ describe('Dashboard', () => {
     it('does not show location warning banner when utility is missing', async () => {
         localStorage.clear();
         mockActionsAndSavings([]);
-        (fetchSettings as any).mockResolvedValue({
+        const settings = {
             utilityProvider: '',
             countryCode: '',
             postalCode: '',
-        });
+        };
 
-        renderWithRouter(<Dashboard siteID="site1" />);
+        renderWithRouter(<Dashboard siteID="site1" settings={settings as any} />);
 
         await waitFor(() => {
             expect(screen.queryByText('Loading day...')).not.toBeInTheDocument();
@@ -965,13 +979,13 @@ describe('Dashboard', () => {
         const user = userEvent.setup();
         localStorage.clear();
         mockActionsAndSavings([]);
-        (fetchSettings as any).mockResolvedValue({
+        const settings = {
             utilityProvider: 'comed',
             countryCode: '',
             postalCode: '',
-        });
+        };
 
-        renderWithRouter(<Dashboard siteID="site1" />);
+        renderWithRouter(<Dashboard siteID="site1" settings={settings as any} />);
 
         await waitFor(() => {
             expect(screen.getByTestId('location-warning-banner')).toBeInTheDocument();
@@ -988,14 +1002,14 @@ describe('Dashboard', () => {
 
     it('shows warning when ESS is connected and automation is paused', async () => {
         mockActionsAndSavings([]);
-        (fetchSettings as any).mockResolvedValue({
+        const settings = {
             ess: 'franklin',
             hasCredentials: { franklin: true },
             pause: true,
             dryRun: false,
-        });
+        };
 
-        renderWithRouter(<Dashboard siteID="site1" />);
+        renderWithRouter(<Dashboard siteID="site1" settings={settings as any} />);
 
         await waitFor(() => {
             expect(screen.getByTestId('automation-paused-dryrun-warning-banner')).toBeInTheDocument();
@@ -1005,14 +1019,14 @@ describe('Dashboard', () => {
 
     it('shows warning when ESS is connected and dry run is enabled', async () => {
         mockActionsAndSavings([]);
-        (fetchSettings as any).mockResolvedValue({
+        const settings = {
             ess: 'franklin',
             hasCredentials: { franklin: true },
             pause: false,
             dryRun: true,
-        });
+        };
 
-        renderWithRouter(<Dashboard siteID="site1" />);
+        renderWithRouter(<Dashboard siteID="site1" settings={settings as any} />);
 
         await waitFor(() => {
             expect(screen.getByTestId('automation-paused-dryrun-warning-banner')).toBeInTheDocument();
@@ -1022,14 +1036,14 @@ describe('Dashboard', () => {
 
     it('shows combined warning when ESS is connected and both pause and dry run are active', async () => {
         mockActionsAndSavings([]);
-        (fetchSettings as any).mockResolvedValue({
+        const settings = {
             ess: 'franklin',
             hasCredentials: { franklin: true },
             pause: true,
             dryRun: true,
-        });
+        };
 
-        renderWithRouter(<Dashboard siteID="site1" />);
+        renderWithRouter(<Dashboard siteID="site1" settings={settings as any} />);
 
         await waitFor(() => {
             expect(screen.getByTestId('automation-paused-dryrun-warning-banner')).toBeInTheDocument();
@@ -1039,14 +1053,14 @@ describe('Dashboard', () => {
 
     it('does not show paused/dryrun warning when ESS is not connected', async () => {
         mockActionsAndSavings([]);
-        (fetchSettings as any).mockResolvedValue({
+        const settings = {
             ess: 'franklin',
             hasCredentials: { franklin: false },
             pause: true,
             dryRun: true,
-        });
+        };
 
-        renderWithRouter(<Dashboard siteID="site1" />);
+        renderWithRouter(<Dashboard siteID="site1" settings={settings as any} />);
 
         await waitFor(() => {
             expect(screen.queryByText('Loading day...')).not.toBeInTheDocument();

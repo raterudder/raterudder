@@ -58,7 +58,6 @@ function AppContent() {
 
     const [settings, setSettings] = useState<SettingsType | null>(null);
     const [settingsSiteID, setSettingsSiteID] = useState<string>("");
-    const [settingsLoaded, setSettingsLoaded] = useState(false);
 
     const [location, navigate] = useLocation();
     const isHome = location === '/';
@@ -81,7 +80,7 @@ function AppContent() {
         } catch (err) {
             console.error("Failed to fetch settings", err);
             setSettings(null);
-            setSettingsSiteID("");
+            setSettingsSiteID(siteID);
         }
     }, [settings, settingsSiteID]);
 
@@ -93,17 +92,14 @@ function AppContent() {
 
     useEffect(() => {
         if (!loggedIn || !effectiveSiteID || effectiveSiteID === 'ALL') {
-            setSettingsLoaded(true);
             return;
         }
 
-        if (settings && settingsSiteID === effectiveSiteID) {
-            setSettingsLoaded(true);
+        if (settingsSiteID === effectiveSiteID) {
             return;
         }
 
         let active = true;
-        setSettingsLoaded(false);
 
         const load = async () => {
             try {
@@ -116,11 +112,7 @@ function AppContent() {
                 console.error("Failed to fetch settings", err);
                 if (active) {
                     setSettings(null);
-                    setSettingsSiteID("");
-                }
-            } finally {
-                if (active) {
-                    setSettingsLoaded(true);
+                    setSettingsSiteID(effectiveSiteID);
                 }
             }
         };
@@ -130,7 +122,7 @@ function AppContent() {
         return () => {
             active = false;
         };
-    }, [loggedIn, effectiveSiteID, settings, settingsSiteID]);
+    }, [loggedIn, effectiveSiteID, settingsSiteID]);
 
     const selectedSiteIDRef = React.useRef(selectedSiteID);
     useEffect(() => {
@@ -280,7 +272,8 @@ function AppContent() {
         }
     };
 
-    const showLoading = (loading || (!isHome && !hasAttemptedFetch) || (loggedIn && !settingsLoaded)) && !isHome;
+    const settingsLoading = !!(loggedIn && effectiveSiteID && effectiveSiteID !== 'ALL' && settingsSiteID !== effectiveSiteID);
+    const showLoading = (loading || (!isHome && !hasAttemptedFetch) || settingsLoading) && !isHome;
 
     const effectiveSites = viewSiteOverride && !sites.some(site => site.id === viewSiteOverride)
         ? [...sites, { id: viewSiteOverride, name: "" }]
@@ -295,7 +288,6 @@ function AppContent() {
         // Immediately reset settings when switching sites to prevent stale flashes
         setSettings(null);
         setSettingsSiteID("");
-        setSettingsLoaded(id === 'ALL');
     };
 
     return (

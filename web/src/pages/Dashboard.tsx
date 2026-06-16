@@ -1,6 +1,6 @@
-import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { useLocation, useSearch, Link } from 'wouter';
-import { type Action, type SavingsStats, type Settings, fetchActionsAndSavings, fetchSettings, BatteryMode } from '../api';
+import { type Action, type SavingsStats, type Settings, fetchActionsAndSavings, BatteryMode } from '../api';
 import CurrentStatus from '../components/CurrentStatus';
 import SavingsHero from '../components/SavingsHero';
 import ActionTimeline from '../components/ActionTimeline';
@@ -16,7 +16,7 @@ export const whatsNewVersion = 5;
 export const whatsNewText = "Big improvements to home load and solar forecast. Updated settings page.";
 export const whatsNewLinkText = "";
 
-const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ siteID, settings: propSettings }) => {
+const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ siteID, settings = null }) => {
     const [location, navigate] = useLocation();
     const search = useSearch();
     const searchParams = useMemo(() => new URLSearchParams(search), [search]);
@@ -30,12 +30,6 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
     const dateQuery = searchParams.get('date');
     const [actions, setActions] = useState<Action[]>([]);
     const [savings, setSavings] = useState<SavingsStats | null>(null);
-    const [localSettings, setLocalSettings] = useState<Settings | null>(null);
-    const settings = propSettings !== undefined ? propSettings : localSettings;
-    const propSettingsRef = useRef(propSettings);
-    propSettingsRef.current = propSettings;
-    const settingsRef = useRef<Settings | null>(null);
-    const loadedSiteIDRef = useRef<string | undefined>(undefined);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -110,23 +104,10 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                 const end = new Date(currentDate);
                 end.setHours(23, 59, 59, 999);
 
-                const shouldFetchSettings = propSettingsRef.current === undefined && siteID !== 'ALL' && (settingsRef.current === null || loadedSiteIDRef.current !== siteID);
-                const fetchSettingsPromise = shouldFetchSettings
-                    ? fetchSettings(siteID)
-                    : Promise.resolve(settingsRef.current);
-
-                const [actionsAndSavingsData, settingsData] = await Promise.all([
-                    fetchActionsAndSavings(start, end, siteID),
-                    fetchSettingsPromise
-                ]);
+                const actionsAndSavingsData = await fetchActionsAndSavings(start, end, siteID);
 
                 setActions(actionsAndSavingsData.actions || []);
                 setSavings(actionsAndSavingsData.savings);
-                if (settingsData) {
-                    setLocalSettings(settingsData);
-                    settingsRef.current = settingsData;
-                }
-                loadedSiteIDRef.current = siteID;
             } catch (err) {
                 console.error(err);
                 setError(err instanceof Error ? err.message : 'Failed to load data');
