@@ -58,6 +58,7 @@ function AppContent() {
 
     const [settings, setSettings] = useState<SettingsType | null>(null);
     const [settingsSiteID, setSettingsSiteID] = useState<string>("");
+    const [settingsLoaded, setSettingsLoaded] = useState(false);
 
     const [location, navigate] = useLocation();
     const isHome = location === '/';
@@ -92,10 +93,17 @@ function AppContent() {
 
     useEffect(() => {
         if (!loggedIn || !effectiveSiteID || effectiveSiteID === 'ALL') {
+            setSettingsLoaded(true);
+            return;
+        }
+
+        if (settings && settingsSiteID === effectiveSiteID) {
+            setSettingsLoaded(true);
             return;
         }
 
         let active = true;
+        setSettingsLoaded(false);
 
         const load = async () => {
             try {
@@ -110,6 +118,10 @@ function AppContent() {
                     setSettings(null);
                     setSettingsSiteID("");
                 }
+            } finally {
+                if (active) {
+                    setSettingsLoaded(true);
+                }
             }
         };
 
@@ -118,7 +130,7 @@ function AppContent() {
         return () => {
             active = false;
         };
-    }, [loggedIn, effectiveSiteID]);
+    }, [loggedIn, effectiveSiteID, settings, settingsSiteID]);
 
     const selectedSiteIDRef = React.useRef(selectedSiteID);
     useEffect(() => {
@@ -268,7 +280,7 @@ function AppContent() {
         }
     };
 
-    const showLoading = (loading || (!isHome && !hasAttemptedFetch)) && !isHome;
+    const showLoading = (loading || (!isHome && !hasAttemptedFetch) || (loggedIn && !settingsLoaded)) && !isHome;
 
     const effectiveSites = viewSiteOverride && !sites.some(site => site.id === viewSiteOverride)
         ? [...sites, { id: viewSiteOverride, name: "" }]
@@ -283,6 +295,7 @@ function AppContent() {
         // Immediately reset settings when switching sites to prevent stale flashes
         setSettings(null);
         setSettingsSiteID("");
+        setSettingsLoaded(id === 'ALL');
     };
 
     return (

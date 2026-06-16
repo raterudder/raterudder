@@ -180,6 +180,10 @@ func (c *Controller) Decide(
 
 	// Helper to build the final Decision object using the summary's computed times.
 	buildFinalDecision := func(dr *DecisionResult) Decision {
+		hitDeficitAt := summary.HitDeficitAt
+		if hitDeficitAt.IsZero() {
+			hitDeficitAt = summary.HitAboveDeficitAt
+		}
 		return Decision{
 			Action: types.Action{
 				Timestamp:         now.UTC(),
@@ -190,7 +194,7 @@ func (c *Controller) Decide(
 				CurrentPrice:      &currentPrice,
 				FuturePrice:       dr.FuturePrice,
 				SystemStatus:      currentStatus,
-				HitDeficitAt:      summary.HitDeficitAt,
+				HitDeficitAt:      hitDeficitAt,
 				HitBelowDeficitAt: summary.HitBelowDeficitAt,
 				HitAboveDeficitAt: summary.HitAboveDeficitAt,
 				HitCapacityAt:     summary.HitCapacityAt,

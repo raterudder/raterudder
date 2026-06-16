@@ -32,6 +32,8 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
     const [savings, setSavings] = useState<SavingsStats | null>(null);
     const [localSettings, setLocalSettings] = useState<Settings | null>(null);
     const settings = propSettings !== undefined ? propSettings : localSettings;
+    const propSettingsRef = useRef(propSettings);
+    propSettingsRef.current = propSettings;
     const settingsRef = useRef<Settings | null>(null);
     const loadedSiteIDRef = useRef<string | undefined>(undefined);
     const [loading, setLoading] = useState(true);
@@ -108,7 +110,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                 const end = new Date(currentDate);
                 end.setHours(23, 59, 59, 999);
 
-                const shouldFetchSettings = propSettings === undefined && siteID !== 'ALL' && (settingsRef.current === null || loadedSiteIDRef.current !== siteID);
+                const shouldFetchSettings = propSettingsRef.current === undefined && siteID !== 'ALL' && (settingsRef.current === null || loadedSiteIDRef.current !== siteID);
                 const fetchSettingsPromise = shouldFetchSettings
                     ? fetchSettings(siteID)
                     : Promise.resolve(settingsRef.current);
@@ -134,7 +136,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
         };
 
         loadData();
-    }, [currentDate, siteID, propSettings]);
+    }, [currentDate, siteID]);
 
     const handleDateChange = useCallback((days: number) => {
         const newDate = new Date(currentDate);

@@ -2250,6 +2250,55 @@ func TestDecide(t *testing.T) {
 		// (avoiding deficit and maximizing arbitrage export capacity), rather than standby.
 		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
 	})
+
+	t.Run("DeficitAt fallback to HitAboveDeficitAt if HitDeficitAt is empty", func(t *testing.T) {
+		settings := baseSettings
+		settings.PeakSurvivalBufferMinutes = 30
+		settings.MinBatterySOC = 20.0
+		settings.GridChargeBatteries = false
+
+		// Current price is $0.10.
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}
+		// Peak starts at Hour 4 ($0.50).
+		futurePrices := []types.Price{
+			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.10},
+			{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(3 * time.Hour), DollarsPerKWH: 0.10},
+			{TSStart: now.Add(3 * time.Hour), TSEnd: now.Add(4 * time.Hour), DollarsPerKWH: 0.10},
+			{TSStart: now.Add(4 * time.Hour), TSEnd: now.Add(5 * time.Hour), DollarsPerKWH: 0.50}, // Peak
+		}
+		for i := 5; i <= 24; i++ {
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: 0.10,
+			})
+		}
+
+		// Battery starts at 20.3% SOC (above 20% deficit reserve, but below 20.5% safety buffer reserve)
+		status := baseStatus
+		status.BatterySOC = 20.3
+		status.HomeKW = 1.0
+		status.ElevatedMinBatterySOC = true // Currently in Standby mode
+
+		customHistory := []types.EnergyStats{}
+		ts := now.Add(-24 * time.Hour)
+		for i := 0; i < 48; i++ {
+			customHistory = append(customHistory, types.EnergyStats{
+				TSHourStart: ts,
+				HomeKWH:     1.0,
+				SolarKWH:    0.0,
+			})
+			ts = ts.Add(1 * time.Hour)
+		}
+
+		decision, err := c.Decide(ctx, status, currentPrice, futurePrices, customHistory, nil, settings)
+		require.NoError(t, err)
+
+		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Action.Reason)
+		// HitDeficitAt is fallback to HitAboveDeficitAt, which should be now
+		assert.Equal(t, now, decision.Action.HitDeficitAt)
+	})
 }
 
 func TestSimulateStandby(t *testing.T) {

@@ -71,7 +71,14 @@ export const getReasonText = (action: Action): string => {
     const futureCost = futurePrice ? gridChargeCost(futurePrice) : null;
     const nowCostStr = nowCost !== null ? formatPrice(nowCost) : '';
     const futureCostStr = futureCost !== null ? formatPrice(futureCost) : '';
-    const deficitTimeStr = action.deficitAt ? formatTime(action.deficitAt) : '';
+    const getDeficitTimeStr = (act: Action) => {
+        const isZero = (ts?: string) => !ts || ts === '0001-01-01T00:00:00Z';
+        if (!isZero(act.deficitAt)) return formatTime(act.deficitAt!);
+        if (!isZero(act.hitBelowDeficitAt)) return formatTime(act.hitBelowDeficitAt!);
+        if (!isZero(act.hitAboveDeficitAt)) return formatTime(act.hitAboveDeficitAt!);
+        return '';
+    };
+    const deficitTimeStr = getDeficitTimeStr(action);
     const capacityTimeStr = action.capacityAt ? formatTime(action.capacityAt) : '';
     const isNegativePrice = currentPrice && currentPrice.dollarsPerKWH < 0;
     const solarMode = action.targetSolarMode || action.solarMode ;
@@ -107,10 +114,11 @@ export const getReasonText = (action: Action): string => {
             } else {
                 costComparison = `Charging now${nowCostStr ? ` at ${nowCostStr}` : ''} is cheaper than the cheapest future charging window${futureCostStr ? ` (${futureCostStr})` : ''}.`;
             }
-            const parts = [
-                `If we do not charge, the battery would deplete${deficitTimeStr ? ` around ${deficitTimeStr}` : ''}.`,
-                costComparison,
-            ];
+            const parts: string[] = [];
+            if (deficitTimeStr) {
+                parts.push(`If we do not charge, the battery would deplete around ${deficitTimeStr}.`);
+            }
+            parts.push(costComparison);
             if (delta !== null && delta >= 0.01) parts.push(`Estimated savings: ${formatPrice(delta)}.`);
             return parts.concat(suffixParts).join(' ');
         }
@@ -143,10 +151,11 @@ export const getReasonText = (action: Action): string => {
         case ActionReason.DeficitSave:
         case ActionReason.DeficitSaveForPeak: {
             const delta = nowCost !== null && futureCost !== null ? futureCost - nowCost : null;
-            const parts = [
-                `If discharged, the battery would deplete${deficitTimeStr ? ` around ${deficitTimeStr}` : ''}.`,
-                `Since electricity prices now (${nowCostStr}) are cheap and are expected to remain cheap before the deficit, we can delay charging for now. We are keeping the battery in standby to preserve its remaining energy for the peak period${futureCostStr ? ` (${futureCostStr})` : ''}.`,
-            ];
+            const parts: string[] = [];
+            if (deficitTimeStr) {
+                parts.push(`If discharged, the battery would deplete around ${deficitTimeStr}.`);
+            }
+            parts.push(`Since electricity prices now (${nowCostStr}) are cheap and are expected to remain cheap before the deficit, we can delay charging for now. We are keeping the battery in standby to preserve its remaining energy for the peak period${futureCostStr ? ` (${futureCostStr})` : ''}.`);
             if (delta !== null && delta >= 0.01) parts.push(`Estimated savings: ${formatPrice(delta)}.`);
             return parts.concat(suffixParts).join(' ');
         }
@@ -204,10 +213,11 @@ export const getReasonText = (action: Action): string => {
             }
 
             const refillWindowStr = nowCost !== null && futureCost !== null && Math.abs(nowCost - futureCost) < 0.01 ? 'that window' : 'the cheaper window';
-            const parts = [
-                `If discharged, the battery would deplete${deficitTimeStr ? ` around ${deficitTimeStr}` : ''}${comparisonStr}.`,
-                `Discharging the battery now to power the home, and waiting to refill it during ${refillWindowStr}.`,
-            ];
+            const parts: string[] = [];
+            if (deficitTimeStr) {
+                parts.push(`If discharged, the battery would deplete around ${deficitTimeStr}${comparisonStr}.`);
+            }
+            parts.push(`Discharging the battery now to power the home, and waiting to refill it during ${refillWindowStr}.`);
 
             if (delta !== null && delta >= 0.01) {
                 parts.push(`Estimated savings: ${formatPrice(delta)}.`);
