@@ -442,12 +442,53 @@ func (c *baseComEdHourly) GetCurrentPrice(ctx context.Context) (types.Price, err
 		// 6 hours back should be plenty to get full hours even with delays.
 		start := now.Add(-6 * time.Hour).Truncate(time.Hour)
 		prices, err := c.fetchPricesRange(ctx, start, now)
-		if err != nil {
-			return types.Price{}, err
-		}
+		if err != nil || len(prices) == 0 {
+			fetchErr := err
+			if fetchErr == nil {
+				fetchErr = fmt.Errorf("no prices returned for current window")
+			}
 
-		if len(prices) == 0 {
-			return types.Price{}, fmt.Errorf("no prices returned for current window")
+			var hasLatest bool
+			var latest types.Price
+			c.mu.Lock()
+			if len(c.cachedPrices) > 0 {
+				latest = c.cachedPrices[len(c.cachedPrices)-1]
+				if now.Sub(latest.TSEnd) <= time.Hour {
+					hasLatest = true
+				}
+			}
+			c.mu.Unlock()
+
+			if hasLatest {
+				log.Ctx(ctx).WarnContext(ctx, "comed api down or empty, falling back to memory cached price",
+					slog.Any("error", fetchErr),
+					slog.Time("cachedStart", latest.TSStart),
+					slog.Time("cachedEnd", latest.TSEnd),
+					slog.Float64("price", latest.DollarsPerKWH))
+				return latest, nil
+			}
+
+			if c.db != nil {
+				// fetch up to 1 hour back as a fallback
+				dbStart := now.Truncate(time.Hour).Add(-1 * time.Hour)
+				dbPrices, dbErr := c.db.GetUtilityPrices(ctx, "comed", dbStart, now)
+				if dbErr == nil && len(dbPrices) > 0 {
+					sort.Slice(dbPrices, func(i, j int) bool {
+						return dbPrices[i].TSStart.Before(dbPrices[j].TSStart)
+					})
+					latest := dbPrices[len(dbPrices)-1]
+					if now.Sub(latest.TSEnd) <= time.Hour {
+						log.Ctx(ctx).WarnContext(ctx, "comed api down or empty, falling back to database cached price",
+							slog.Any("error", fetchErr),
+							slog.Time("cachedStart", latest.TSStart),
+							slog.Time("cachedEnd", latest.TSEnd),
+							slog.Float64("price", latest.DollarsPerKWH))
+						return latest.Price, nil
+					}
+				}
+			}
+
+			return types.Price{}, fetchErr
 		}
 
 		rawPrices := make([]types.Price, len(prices))

@@ -211,6 +211,9 @@ func TestComEd(t *testing.T) {
 			}
 			time.Sleep(1 * time.Second)
 		}
+		if err != nil && strings.Contains(err.Error(), "comed api returned status: 5") {
+			t.Skipf("comed API returned 5xx error: %v", err)
+		}
 		require.NoError(t, err)
 
 		// Basic sanity checks
@@ -698,6 +701,105 @@ func TestComEd(t *testing.T) {
 		if assert.NotNil(t, opecBESTNonsummer) {
 			assert.InDelta(t, 0.05269, opecBESTNonsummer.DollarsPerKWH, 0.00001)
 		}
+	})
+
+	t.Run("GetCurrentPrice API Down Memory Fallback", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer ts.Close()
+
+		now := time.Now()
+		c := &baseComEdHourly{
+			apiURL:           ts.URL,
+			client:           ts.Client(),
+			historicalPrices: make(map[int64]types.Price),
+			cachedPrices: []types.Price{
+				{
+					Provider:      "comed_besh",
+					TSStart:       now.Add(-90 * time.Minute),
+					TSEnd:         now.Add(-30 * time.Minute),
+					DollarsPerKWH: 0.045,
+				},
+			},
+			lastFetchTime: now.Add(-10 * time.Minute),
+		}
+
+		price, err := c.GetCurrentPrice(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, 0.045, price.DollarsPerKWH)
+	})
+
+	t.Run("GetCurrentPrice API Down DB Fallback", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer ts.Close()
+
+		m := &storagemock.MockDatabase{}
+		now := time.Now().In(ctLocation)
+
+		c := configuredComEdHourly(m)
+		c.apiURL = ts.URL
+		c.client = ts.Client()
+
+		dbStart := now.Truncate(time.Hour).Add(-1 * time.Hour)
+		dbPrices := []types.PriceState{
+			{
+				Price: types.Price{
+					Provider:      "comed_besh",
+					TSStart:       now.Truncate(time.Hour).Add(-1 * time.Hour),
+					TSEnd:         now.Truncate(time.Hour),
+					DollarsPerKWH: 0.055,
+				},
+				Confirmed: true,
+				TSUpdated: now.Add(-45 * time.Minute),
+			},
+		}
+
+		m.On("GetUtilityPrices", mock.Anything, "comed", mock.MatchedBy(func(t time.Time) bool {
+			return t.After(now.Truncate(time.Hour).Add(-5*time.Second)) && t.Before(now.Truncate(time.Hour).Add(5*time.Second))
+		}), mock.MatchedBy(func(t time.Time) bool {
+			return t.After(now.Add(-5*time.Second)) && t.Before(now.Add(5*time.Second))
+		})).Return([]types.PriceState{}, nil).Once()
+
+		m.On("GetUtilityPrices", mock.Anything, "comed", mock.MatchedBy(func(t time.Time) bool {
+			return t.After(dbStart.Add(-5*time.Second)) && t.Before(dbStart.Add(5*time.Second))
+		}), mock.MatchedBy(func(t time.Time) bool {
+			return t.After(now.Add(-5*time.Second)) && t.Before(now.Add(5*time.Second))
+		})).Return(dbPrices, nil).Once()
+
+		price, err := c.GetCurrentPrice(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, 0.055, price.DollarsPerKWH)
+		m.AssertExpectations(t)
+	})
+
+	t.Run("GetCurrentPrice API Down Stale Cache No Fallback", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer ts.Close()
+
+		now := time.Now()
+		c := &baseComEdHourly{
+			apiURL:           ts.URL,
+			client:           ts.Client(),
+			historicalPrices: make(map[int64]types.Price),
+			cachedPrices: []types.Price{
+				{
+					Provider:      "comed_besh",
+					TSStart:       now.Add(-3 * time.Hour),
+					TSEnd:         now.Add(-2 * time.Hour),
+					DollarsPerKWH: 0.045,
+				},
+			},
+			lastFetchTime: now.Add(-10 * time.Minute),
+		}
+
+		_, err := c.GetCurrentPrice(context.Background())
+		assert.Error(t, err)
+		assert.ErrorContains(t, err, "comed api returned status: 500")
 	})
 }
 
