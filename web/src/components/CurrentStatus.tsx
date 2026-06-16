@@ -82,6 +82,45 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
     if (mode === BatteryMode.Load || kw > 0.1) state = 'discharging';
     else if (mode === BatteryMode.ChargeAny || mode === BatteryMode.ChargeSolar || kw < -0.1) state = 'charging';
 
+    const capacityAt = action.capacityAt ? new Date(action.capacityAt) : null;
+    const deficitAt = action.deficitAt ? new Date(action.deficitAt) : null;
+
+    const isValidDate = (d: Date | null) => {
+        return d && !isNaN(d.getTime()) && d.getFullYear() > 1970;
+    };
+
+    const formatDuration = (ms: number): string => {
+        const minutes = Math.round(ms / 60000);
+        if (minutes < 1) {
+            return 'less than a minute';
+        }
+        if (minutes < 60) {
+            return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+        }
+        const hours = Math.round(minutes / 60);
+        return `${hours} hour${hours === 1 ? '' : 's'}`;
+    };
+
+    const now = new Date();
+    const capacityMs = (capacityAt && isValidDate(capacityAt)) ? capacityAt.getTime() - now.getTime() : null;
+    const deficitMs = (deficitAt && isValidDate(deficitAt)) ? deficitAt.getTime() - now.getTime() : null;
+
+    let timeRemainingText = '';
+    const capValid = capacityMs !== null && capacityMs > 0;
+    const defValid = deficitMs !== null && deficitMs > 0;
+
+    if (capValid && defValid) {
+        if (capacityMs < deficitMs) {
+            timeRemainingText = `Capacity in ${formatDuration(capacityMs)}`;
+        } else {
+            timeRemainingText = `Deficit in ${formatDuration(deficitMs)}`;
+        }
+    } else if (capValid) {
+        timeRemainingText = `Capacity in ${formatDuration(capacityMs)}`;
+    } else if (defValid) {
+        timeRemainingText = `Deficit in ${formatDuration(deficitMs)}`;
+    }
+
     return (
         <div className={`current-status-card ${state}`}>
             <div className="status-main">
@@ -93,6 +132,9 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
                 <div className="status-info">
                     <span className="status-label">System {state.charAt(0).toUpperCase() + state.slice(1)}</span>
                     <span className="status-value">{getBatteryModeLabel(mode)}</span>
+                    {timeRemainingText && (
+                        <span className="status-subvalue">{timeRemainingText}</span>
+                    )}
                 </div>
             </div>
             <div className="status-metrics">

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import CurrentStatus from './CurrentStatus';
 import { BatteryMode, SolarMode, type Action } from '../api';
@@ -65,5 +65,51 @@ describe('CurrentStatus', () => {
         render(<CurrentStatus action={action} />);
         expect(screen.getByText('Price')).toBeInTheDocument();
         expect(screen.getByText('$ 0.200')).toBeInTheDocument();
+    });
+
+    it('renders time until capacity when capacityAt is set in the future', () => {
+        const mockNow = new Date('2026-06-15T12:00:00Z');
+        vi.useFakeTimers();
+        vi.setSystemTime(mockNow);
+
+        const action: Action = {
+            ...defaultAction,
+            capacityAt: '2026-06-15T17:00:00Z',
+        };
+        render(<CurrentStatus action={action} />);
+        expect(screen.getByText('Capacity in 5 hours')).toBeInTheDocument();
+
+        vi.useRealTimers();
+    });
+
+    it('renders time until deficit when deficitAt is set in the future', () => {
+        const mockNow = new Date('2026-06-15T12:00:00Z');
+        vi.useFakeTimers();
+        vi.setSystemTime(mockNow);
+
+        const action: Action = {
+            ...defaultAction,
+            deficitAt: '2026-06-15T12:45:00Z',
+        };
+        render(<CurrentStatus action={action} />);
+        expect(screen.getByText('Deficit in 45 minutes')).toBeInTheDocument();
+
+        vi.useRealTimers();
+    });
+
+    it('renders sooner of capacityAt or deficitAt when both are in the future', () => {
+        const mockNow = new Date('2026-06-15T12:00:00Z');
+        vi.useFakeTimers();
+        vi.setSystemTime(mockNow);
+
+        const action: Action = {
+            ...defaultAction,
+            capacityAt: '2026-06-15T14:00:00Z',
+            deficitAt: '2026-06-15T15:00:00Z',
+        };
+        render(<CurrentStatus action={action} />);
+        expect(screen.getByText('Capacity in 2 hours')).toBeInTheDocument();
+
+        vi.useRealTimers();
     });
 });

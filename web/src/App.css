@@ -610,6 +610,16 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+.usage-stats-panel-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.stats-toggle-btn {
+  display: none;
+}
+
 .usage-stats-panel {
   flex: 1;
   padding: 1.5rem 2rem;
@@ -763,6 +773,13 @@ button {
   font-size: 1.25rem;
   font-weight: 700;
   color: var(--on-surface);
+}
+
+.status-subvalue {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+  font-weight: 500;
 }
 
 .status-metrics {
@@ -1330,6 +1347,56 @@ button {
   .net-savings-panel {
     flex: none;
     width: 100%;
+  }
+
+  .usage-stats-panel-wrapper {
+    flex: none;
+    width: 100%;
+  }
+
+  .usage-stats-panel-wrapper[data-state="closed"] {
+    display: none !important;
+  }
+
+  .stats-toggle-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.75rem 1rem;
+    background: var(--surface-container-high);
+    border: none;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    color: var(--primary);
+    font-weight: 600;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .stats-toggle-btn:hover {
+    background: var(--surface-container-highest);
+    color: var(--primary-glow);
+  }
+
+  .stats-toggle-btn .arrow {
+    border: solid var(--primary);
+    border-width: 0 2px 2px 0;
+    display: inline-block;
+    padding: 3px;
+    transition: transform 0.2s ease;
+  }
+
+  .stats-toggle-btn .arrow.down {
+    transform: rotate(45deg);
+    margin-bottom: 2px;
+  }
+
+  .stats-toggle-btn .arrow.up {
+    transform: rotate(-135deg);
+    margin-top: 2px;
   }
 }
 

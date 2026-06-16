@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"math"
 	"sync"
 	"testing"
@@ -18,14 +19,14 @@ import (
 var historyFS embed.FS
 
 var fileBaselines = map[string]float64{
-	"site1_march.json":    -4.811,
-	"site1_may.json":      -15.705,
-	"site2_april.json":    1.396,
-	"site2_march.json":    8.941,
-	"site2_may.json":      0.757,
-	"site3_march.json":    -1.865,
-	"site3_may.json":      -6.341,
-	"site4_late-may.json": 0.449,
+	"site1_march.json":    -4.815,
+	"site1_may.json":      -15.745,
+	"site2_april.json":    1.438,
+	"site2_march.json":    8.950,
+	"site2_may.json":      0.640,
+	"site3_march.json":    -1.863,
+	"site3_may.json":      -6.417,
+	"site4_late-may.json": 0.448,
 	"site4_may.json":      3.057,
 }
 
@@ -287,6 +288,39 @@ func TestDecideHistory(t *testing.T) {
 
 				// enable for debugging
 				if false {
+					if (tCurrent.Day() == 27 && tCurrent.Hour() == 6) || (tCurrent.Day() == 28 && (tCurrent.Hour() == 1 || tCurrent.Hour() == 2)) {
+						simData := c.SimulateState(ctx, tCurrent, simStatus, currentPrice, futurePrices, mockHistory, mockWeather, settings)
+						summary := c.analyzeSimulation(ctx, tCurrent, currentPrice, settings, simData)
+						evalDef := c.evaluateDeficit(ctx, tCurrent, simStatus, currentPrice, settings, simData, summary)
+						evalExp := c.evaluateExportArbitrage(ctx, tCurrent, simStatus, currentPrice, settings, simData, summary)
+
+						var defPlanStr, expPlanStr string
+						if evalDef != nil && evalDef.Plan != nil {
+							defPlanStr = fmt.Sprintf("Plan={Time:%s Cost:%.3f}", evalDef.Plan.ChargeTime.Format("15:04"), evalDef.Plan.ChargeCost)
+						} else {
+							defPlanStr = "Plan=nil"
+						}
+						if evalExp != nil && evalExp.Plan != nil {
+							expPlanStr = fmt.Sprintf("Plan={Time:%s Cost:%.3f}", evalExp.Plan.ChargeTime.Format("15:04"), evalExp.Plan.ChargeCost)
+						} else {
+							expPlanStr = "Plan=nil"
+						}
+
+						t.Logf("DEBUG %d_%02d:%02d | SOC: %.2f | Deficit: Dec=%+v %s | Export: Dec=%+v %s",
+							tCurrent.Day(), tCurrent.Hour(), tCurrent.Minute(), simSOC,
+							func() interface{} {
+								if evalDef != nil {
+									return evalDef.Decision
+								}
+								return nil
+							}(), defPlanStr,
+							func() interface{} {
+								if evalExp != nil {
+									return evalExp.Decision
+								}
+								return nil
+							}(), expPlanStr)
+					}
 					if tCurrent.Day() == 20 && tCurrent.Hour() == 18 && tCurrent.Minute() == 33 {
 						simData := c.SimulateState(ctx, tCurrent, simStatus, currentPrice, futurePrices, mockHistory, mockWeather, settings)
 						t.Logf("=== SIMULATION SLOTS AT 18:33 ===")

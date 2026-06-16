@@ -962,13 +962,30 @@ func (c *Controller) evaluateExportArbitrage(
 	// Standby Simulation for Arbitrage:
 	// We simulate the battery behavior assuming we standby during cheap hours (preserving energy)
 	// and discharge only during the target peak hours.
-	standbyHitCapacityAt, standbyHitAboveDeficitAt, _ := c.simulateStandby(
+	standbyRes := c.simulateStandby(
 		simData,
 		targetValue-minArbitrageDiff,
 		currentEnergyKWH,
 		capacityKWH,
 		minKWH,
+		targetAt,
 	)
+	standbyHitCapacityAt := standbyRes.HitCapacityAt
+	standbyHitAboveDeficitAt := standbyRes.HitAboveDeficitAt
+	standbyImportCost := standbyRes.TotalImportCost
+	standbyNetLoadKWH := standbyRes.TotalNetLoadKWH
+	standbyEnergyAtPeakStart := standbyRes.StandbyEnergyAtPeakStart
+
+	loadEnergyAtPeakStart := currentEnergyKWH
+	for _, slot := range simData {
+		if slot.TS.Before(targetAt) {
+			loadEnergyAtPeakStart = slot.BatteryKWH
+		} else {
+			break
+		}
+	}
+
+	extraEnergy := max(0.0, standbyEnergyAtPeakStart-loadEnergyAtPeakStart)
 
 	// Solar Capacity Offset Value Adjustment:
 	// If the standby simulation indicates the battery will hit capacity (e.g. from solar)
@@ -1188,24 +1205,17 @@ func (c *Controller) evaluateExportArbitrage(
 
 	// Simulate Case A (standby/no grid charging before peak) and Case B (with grid charging requiredChargeEnergy before peak)
 	// to check if we will actually export the grid-charged energy.
-	standbyEnergyAtPeakStart := currentEnergyKWH
-	for _, slot := range simData {
-		if slot.TS.Add(time.Hour).Equal(targetAt) {
-			standbyEnergyAtPeakStart = slot.BatteryKWH
-			break
-		}
-	}
 
 	// Cap requiredChargeEnergy by the physical battery headroom at the start of the peak.
 	// Since we cannot grid-charge the battery beyond its physical capacity, the maximum
 	// grid energy we can store before the peak is limited by this headroom.
-	standbyHeadroom := max(0.0, capacityKWH-standbyEnergyAtPeakStart)
+	standbyHeadroom := max(0.0, capacityKWH-loadEnergyAtPeakStart)
 	if requiredChargeEnergy > standbyHeadroom {
 		requiredChargeEnergy = standbyHeadroom
 	}
 
 	// Case A: Standby (no grid charging)
-	energyA := standbyEnergyAtPeakStart
+	energyA := loadEnergyAtPeakStart
 	exportA := 0.0
 	inPeakWindowSim := false
 	for _, slot := range simData {
@@ -1235,7 +1245,7 @@ func (c *Controller) evaluateExportArbitrage(
 	}
 
 	// Case B: With grid charging
-	energyB := standbyEnergyAtPeakStart + requiredChargeEnergy
+	energyB := loadEnergyAtPeakStart + requiredChargeEnergy
 	if energyB > capacityKWH {
 		energyB = capacityKWH
 	}
@@ -1345,6 +1355,13 @@ func (c *Controller) evaluateExportArbitrage(
 		slog.Float64("exportB", exportB),
 		slog.Float64("exportA", exportA),
 		slog.Float64("standbyEnergyAtPeakStart", standbyEnergyAtPeakStart),
+		slog.Time("standbyHitCapacityAt", standbyHitCapacityAt),
+		slog.Time("standbyHitAboveDeficitAt", standbyHitAboveDeficitAt),
+		slog.Time("standbyHitBelowDeficitAt", standbyRes.HitBelowDeficitAt),
+		slog.Float64("standbyImportCost", standbyImportCost),
+		slog.Float64("standbyNetLoadKWH", standbyNetLoadKWH),
+		slog.Float64("loadEnergyAtPeakStart", loadEnergyAtPeakStart),
+		slog.Float64("extraEnergy", extraEnergy),
 	)
 
 	if shouldDelayOverCharge {
@@ -1417,7 +1434,7 @@ func (c *Controller) evaluateExportArbitrage(
 	//    before the target export hour (standbyHitAboveDeficitAt.IsZero() || standbyHitAboveDeficitAt.After(targetAt)).
 	//    We do NOT check summary.HitBelowDeficitAt here because that deficit prediction assumes the battery is actively
 	//    discharging to cover home load, which is false if we decide to stay in standby.
-	canStandbyNow := effectiveExportValue >= chargeCostNow && (standbyHitAboveDeficitAt.IsZero() || standbyHitAboveDeficitAt.After(targetAt))
+	canStandbyNow := effectiveExportValue > chargeCostNow && (standbyHitAboveDeficitAt.IsZero() || standbyHitAboveDeficitAt.After(targetAt))
 
 	// If the target is NOW, we don't hold! We want to discharge if it's profitable!
 	if !targetAt.After(now) {
@@ -1493,24 +1510,39 @@ func (c *Controller) evaluateExportArbitrage(
 		)
 		reason := types.ActionReasonArbitrageHoldExport
 
-		heldEnergy := currentEnergyKWH - minKWH
-		if heldEnergy < 0 {
-			heldEnergy = 0
+		weightedImportRate := chargeCostNow
+		if standbyNetLoadKWH > 0 {
+			weightedImportRate = standbyImportCost / standbyNetLoadKWH
 		}
-		benefit := heldEnergy * (effectiveExportValue - chargeCostNow)
+		benefit := extraEnergy * (effectiveExportValue - weightedImportRate)
+		if benefit < 0 {
+			benefit = 0
+		}
 
-		log.Ctx(ctx).DebugContext(ctx, "Arbitrage standby evaluated", slog.Float64("standbyBenefit", benefit), slog.String("reason", string(reason)))
+		log.Ctx(ctx).DebugContext(ctx, "arbitrage standby evaluated",
+			slog.Float64("standbyBenefit", benefit),
+			slog.String("reason", string(reason)),
+			slog.Float64("weightedImportRate", weightedImportRate),
+			slog.Float64("extraEnergy", extraEnergy),
+			slog.Float64("standbyImportCost", standbyImportCost),
+			slog.Float64("standbyNetLoadKWH", standbyNetLoadKWH),
+		)
 
 		if benefit > 0 {
 			log.Ctx(ctx).DebugContext(ctx, "evaluateExportArbitrage returning standby strategy",
 				slog.Float64("standbyBenefit", benefit),
-				slog.Float64("heldEnergy", heldEnergy),
+				slog.Float64("extraEnergy", extraEnergy),
 				slog.String("reason", string(reason)),
 				slog.Float64("effectiveExportValue", effectiveExportValue),
 				slog.Float64("chargeCostNow", chargeCostNow),
+				slog.Float64("weightedImportRate", weightedImportRate),
+				slog.Float64("standbyImportCost", standbyImportCost),
+				slog.Float64("standbyNetLoadKWH", standbyNetLoadKWH),
+				slog.Float64("loadEnergyAtPeakStart", loadEnergyAtPeakStart),
 				slog.Bool("solarFillsDuringPeak", solarFillsDuringPeak),
 				slog.Time("standbyHitCapacityAt", standbyHitCapacityAt),
 				slog.Time("standbyHitAboveDeficitAt", standbyHitAboveDeficitAt),
+				slog.Time("standbyHitBelowDeficitAt", standbyRes.HitBelowDeficitAt),
 			)
 			return &StrategyEvaluation{
 				Decision: &DecisionResult{
@@ -1895,18 +1927,32 @@ func (c *Controller) findCheapestPlan(
 	return
 }
 
+type standbySimulationResult struct {
+	HitCapacityAt            time.Time
+	HitAboveDeficitAt        time.Time
+	HitBelowDeficitAt        time.Time
+	TotalImportCost          float64
+	TotalNetLoadKWH          float64
+	StandbyEnergyAtPeakStart float64
+}
+
 // simulateStandby simulates the battery progression under a dynamic standby model.
 // For hours where the price is cheap, we hold the battery in standby (no load discharge, only charge from solar).
 // For hours where the price is expensive, we discharge the battery to cover load.
-// It returns the hitCapacityAt, hitAboveDeficitAt, and hitBelowDeficitAt times under this model.
+// It returns a standbySimulationResult containing the hit times, costs, and battery energy under this model.
 func (c *Controller) simulateStandby(
 	simData []SimHour,
 	dischargeOverCost float64,
 	currentEnergyKWH float64,
 	capacityKWH float64,
 	minKWH float64,
-) (hitCapacityAt, hitAboveDeficitAt, hitBelowDeficitAt time.Time) {
+	targetAt time.Time,
+) standbySimulationResult {
 	batteryEnergy := currentEnergyKWH
+	standbyEnergyAtPeakStart := currentEnergyKWH
+	var hitCapacityAt, hitAboveDeficitAt, hitBelowDeficitAt time.Time
+	var totalImportCost, totalNetLoadKWH float64
+
 	// We default to a 98% capacity threshold to avoid rapid start/stop controller
 	// oscillations when the battery is nearly full, or use the pre-calculated threshold from slot.
 	capacityThresholdKWH := capacityKWH * 0.98
@@ -1915,6 +1961,10 @@ func (c *Controller) simulateStandby(
 	}
 
 	for _, slot := range simData {
+		if !targetAt.IsZero() && slot.TS.Equal(targetAt) {
+			standbyEnergyAtPeakStart = batteryEnergy
+		}
+
 		// Use the pre-calculated EnergyApplyRatio from simulation (e.g. for fractional first hours).
 		// If it is 0.0 (like in manually constructed test fixtures), default to 1.0 (full hour).
 		simEnergyApplyRatio := slot.EnergyApplyRatio
@@ -1938,6 +1988,7 @@ func (c *Controller) simulateStandby(
 			}
 		}
 
+		batteryEnergyBeforeStep := batteryEnergy
 		// Calculate simulated energy at the end of the slot based on the apply ratio
 		newEnergy := batteryEnergy - (appliedNetKWH * simEnergyApplyRatio)
 
@@ -2003,13 +2054,45 @@ func (c *Controller) simulateStandby(
 			}
 		}
 
-		// If we've already determined both capacity and deficit hit times, we can stop simulating.
-		if !hitCapacityAt.IsZero() && !hitBelowDeficitAt.IsZero() {
+		// Calculate grid import:
+		// 1. If we should discharge (active load coverage), we discharge as much battery energy
+		//    as possible. However, if the battery runs out of energy mid-hour (hits the minKWH reserve limit),
+		//    any remaining uncovered load must be imported from the grid.
+		// 2. If we should NOT discharge (we are in standby), we hold the battery energy, so the entire
+		//    positive net home load (clampedNetKWH) must be imported from the grid.
+		var importKWH float64
+		if shouldDischarge {
+			if clampedNetKWH > 0 {
+				discharged := batteryEnergyBeforeStep - batteryEnergy
+				importKWH = max(0.0, (clampedNetKWH*simEnergyApplyRatio)-discharged)
+			}
+		} else {
+			if clampedNetKWH > 0 {
+				importKWH = clampedNetKWH * simEnergyApplyRatio
+			}
+		}
+
+		// Accumulate grid import costs up to the target hour
+		if !targetAt.IsZero() && slot.TS.Before(targetAt) {
+			totalImportCost += importKWH * slot.GridChargeDollarsPerKWH
+			totalNetLoadKWH += importKWH
+		}
+
+		// If we've already determined both capacity and deficit hit times, and we've reached or passed targetAt,
+		// we can stop simulating.
+		if !hitCapacityAt.IsZero() && !hitBelowDeficitAt.IsZero() && (targetAt.IsZero() || !slot.TS.Before(targetAt)) {
 			break
 		}
 	}
 
-	return hitCapacityAt, hitAboveDeficitAt, hitBelowDeficitAt
+	return standbySimulationResult{
+		HitCapacityAt:            hitCapacityAt,
+		HitAboveDeficitAt:        hitAboveDeficitAt,
+		HitBelowDeficitAt:        hitBelowDeficitAt,
+		TotalImportCost:          totalImportCost,
+		TotalNetLoadKWH:          totalNetLoadKWH,
+		StandbyEnergyAtPeakStart: standbyEnergyAtPeakStart,
+	}
 }
 
 func drModeString(mode types.BatteryMode) string {
