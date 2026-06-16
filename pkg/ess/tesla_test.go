@@ -88,53 +88,142 @@ func TestTesla(t *testing.T) {
 	})
 
 	t.Run("Authenticate", func(t *testing.T) {
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch r.URL.Path {
-			case "/oauth2/v3/token":
-				err := r.ParseForm()
-				require.NoError(t, err)
-				if assert.Equal(t, "NA_test-code", r.FormValue("code")) {
+		t.Run("Default fallback when no serial number provided", func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/oauth2/v3/token":
+					err := r.ParseForm()
+					require.NoError(t, err)
+					if assert.Equal(t, "NA_test-code", r.FormValue("code")) {
+						json.NewEncoder(w).Encode(map[string]any{
+							"access_token":  "mock-access",
+							"refresh_token": "mock-refresh",
+							"expires_in":    3600,
+						})
+					}
+				case "/api/1/products":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": []map[string]any{
+							{"energy_site_id": 5678, "device_type": "energy", "resource_type": "wall_connector", "id": "wall-connector-5678"},
+							{"energy_site_id": 1234, "device_type": "energy", "resource_type": "battery", "id": "battery-1234"},
+						},
+					})
+				case "/api/1/energy_sites/1234/site_info":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"backup_reserve_percent": 20.0,
+						},
+					})
+				default:
+					t.Logf("Unexpected request: %s", r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer ts.Close()
+
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "test-site", types.Settings{ESS: "tesla"})
+			require.NoError(t, err)
+
+			creds := types.Credentials{
+				Tesla: &types.TeslaCredentials{AuthCode: "NA_test-code"},
+			}
+			updatedCreds, changed, err := sys.Authenticate(ctx, creds)
+			require.NoError(t, err)
+			if assert.True(t, changed) {
+				assert.Equal(t, "mock-access", updatedCreds.Tesla.AccessToken)
+				assert.NotEmpty(t, updatedCreds.Tesla.Expiry)
+				assert.Empty(t, updatedCreds.Tesla.AuthCode)
+				assert.EqualValues(t, 1234, updatedCreds.Tesla.EnergySiteID)
+			}
+		})
+
+		t.Run("Match site via serial number", func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/oauth2/v3/token":
 					json.NewEncoder(w).Encode(map[string]any{
 						"access_token":  "mock-access",
 						"refresh_token": "mock-refresh",
 						"expires_in":    3600,
 					})
+				case "/api/1/products":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": []map[string]any{
+							{"energy_site_id": 1234, "device_type": "energy", "resource_type": "battery", "gateway_id": "Part123_SerialXYZ"},
+							{"energy_site_id": 5678, "device_type": "energy", "resource_type": "battery", "gateway_id": "Part456_SerialABC"},
+						},
+					})
+				case "/api/1/energy_sites/5678/site_info":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"backup_reserve_percent": 20.0,
+							"components": map[string]any{
+								"gateways": []map[string]any{
+									{"serial_number": "SerialABC"},
+								},
+							},
+						},
+					})
+				default:
+					t.Logf("Unexpected request: %s", r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
 				}
-			case "/api/1/products":
-				json.NewEncoder(w).Encode(map[string]any{
-					"response": []map[string]any{
-						{"energy_site_id": 5678, "device_type": "energy", "resource_type": "wall_connector", "id": "wall-connector-5678"},
-						{"energy_site_id": 1234, "device_type": "energy", "resource_type": "battery", "id": "battery-1234"},
-					},
-				})
-			case "/api/1/energy_sites/1234/site_info":
-				json.NewEncoder(w).Encode(map[string]any{
-					"response": map[string]any{
-						"backup_reserve_percent": 20.0,
-					},
-				})
-			default:
-				t.Logf("Unexpected request: %s", r.URL.Path)
-				w.WriteHeader(http.StatusNotFound)
+			}))
+			defer ts.Close()
+
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "test-site", types.Settings{ESS: "tesla"})
+			require.NoError(t, err)
+
+			creds := types.Credentials{
+				Tesla: &types.TeslaCredentials{
+					AuthCode:     "NA_test-code",
+					SerialNumber: "serialabc", // test case-insensitive match
+				},
 			}
-		}))
-		defer ts.Close()
+			updatedCreds, changed, err := sys.Authenticate(ctx, creds)
+			require.NoError(t, err)
+			if assert.True(t, changed) {
+				assert.EqualValues(t, 5678, updatedCreds.Tesla.EnergySiteID)
+			}
+		})
 
-		m := teslaMap(ts)
-		sys, err := m.Site(ctx, "test-site", types.Settings{ESS: "tesla"})
-		require.NoError(t, err)
+		t.Run("Fail when serial number doesn't match", func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/oauth2/v3/token":
+					json.NewEncoder(w).Encode(map[string]any{
+						"access_token":  "mock-access",
+						"refresh_token": "mock-refresh",
+						"expires_in":    3600,
+					})
+				case "/api/1/products":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": []map[string]any{
+							{"energy_site_id": 1234, "device_type": "energy", "resource_type": "battery", "gateway_id": "Part123_SerialXYZ"},
+						},
+					})
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer ts.Close()
 
-		creds := types.Credentials{
-			Tesla: &types.TeslaCredentials{AuthCode: "NA_test-code"},
-		}
-		updatedCreds, changed, err := sys.Authenticate(ctx, creds)
-		require.NoError(t, err)
-		if assert.True(t, changed) {
-			assert.Equal(t, "mock-access", updatedCreds.Tesla.AccessToken)
-			assert.NotEmpty(t, updatedCreds.Tesla.Expiry)
-			assert.Empty(t, updatedCreds.Tesla.AuthCode)
-			assert.EqualValues(t, 1234, updatedCreds.Tesla.EnergySiteID)
-		}
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "test-site", types.Settings{ESS: "tesla"})
+			require.NoError(t, err)
+
+			creds := types.Credentials{
+				Tesla: &types.TeslaCredentials{
+					AuthCode:     "NA_test-code",
+					SerialNumber: "non-existent-serial",
+				},
+			}
+			_, _, err = sys.Authenticate(ctx, creds)
+			assert.Error(t, err)
+			assert.ErrorContains(t, err, "no energy site found matching serial number")
+		})
 	})
 
 	t.Run("GetStatus Basic", func(t *testing.T) {

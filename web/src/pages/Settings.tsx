@@ -877,6 +877,11 @@ const Settings = ({ siteID, settings: parentSettings, onSettingsSaved }: { siteI
                     }
 
                     if (cred.required && (val === undefined || val === null || val === "")) {
+                        // TODO: we should probably have the backend define better errors
+                        if (cred.field === 'authCode') {
+                            setEditESS(true);
+                            throw new Error('Login to connect your energy system.');
+                        }
                         throw new Error(`The ${cred.name} field is required.`);
                     }
                     if (val !== undefined && val !== null && val !== "") {
@@ -1012,6 +1017,10 @@ const Settings = ({ siteID, settings: parentSettings, onSettingsSaved }: { siteI
                     }
 
                     if (cred.required && (val === undefined || val === null || val === "")) {
+                        if (cred.field === 'authCode') {
+                            setEditESS(true);
+                            throw new Error('Login to connect your energy system.');
+                        }
                         throw new Error(`The ${cred.name} field is required.`);
                     }
                     if (val !== undefined && val !== null && val !== "") {

@@ -159,11 +159,11 @@ func (b *baseTesla) info(ctx context.Context) types.ESSProviderInfo {
 				OneTime:  true,
 			},
 			{
-				Field:       "energySiteID",
-				Name:        "Energy Site ID (Optional)",
+				Field:       "serialNumber",
+				Name:        "Serial Number (Optional)",
 				Type:        types.ESSCredentialFieldTypeString,
 				Required:    false,
-				Description: "If left empty, RateRudder will attempt to auto-discover the site ID.",
+				Description: "If left empty, RateRudder will choose the first system available.",
 			},
 		},
 	}
@@ -446,11 +446,11 @@ func (b *Tesla) Authenticate(ctx context.Context, creds types.Credentials) (type
 
 		// fill in the default energy site ID if it wasn't sent
 		if creds.Tesla.EnergySiteID == 0 {
-			id, err := b.getDefaultSiteID(ctx)
+			id, err := b.getDefaultSiteID(ctx, creds.Tesla.SerialNumber)
 			if err != nil {
 				return creds, false, fmt.Errorf("failed to get default site id: %w", err)
 			}
-			log.Ctx(ctx).InfoContext(ctx, "automatically selected site", slog.Int64("energySiteID", id))
+			log.Ctx(ctx).InfoContext(ctx, "automatically selected site", slog.Int64("energySiteID", id), slog.String("serialNumber", creds.Tesla.SerialNumber))
 			creds.Tesla.EnergySiteID = id
 		}
 		changed = true
@@ -481,10 +481,6 @@ func (b *Tesla) Authenticate(ctx context.Context, creds types.Credentials) (type
 			// use the existing token
 			b.token = creds.Tesla.AccessToken
 		}
-	}
-
-	if creds.Tesla.EnergySiteID == 0 {
-		return creds, false, fmt.Errorf("missing energy site ID: %w", ErrCredentialsMissing)
 	}
 
 	b.energySiteID = creds.Tesla.EnergySiteID
@@ -589,15 +585,26 @@ func (b *Tesla) doGETRequest(ctx context.Context, path string, params url.Values
 	return nil
 }
 
-func (b *Tesla) getDefaultSiteID(ctx context.Context) (int64, error) {
+func (b *Tesla) getDefaultSiteID(ctx context.Context, serialNumber string) (int64, error) {
 	var res teslaProductsResponse
 	if err := b.doGETRequest(ctx, "api/1/products", nil, &res); err != nil {
 		return 0, err
 	}
 	for _, p := range res {
 		if p.DeviceType == "energy" && p.ResourceType == "battery" && p.EnergySiteID != 0 {
-			return p.EnergySiteID, nil
+			if serialNumber != "" && p.GatewayID != "" {
+				gwLower := strings.ToLower(p.GatewayID)
+				snLower := strings.ToLower(serialNumber)
+				if strings.EqualFold(p.GatewayID, serialNumber) || strings.Contains(gwLower, snLower) {
+					return p.EnergySiteID, nil
+				}
+			} else {
+				return p.EnergySiteID, nil
+			}
 		}
+	}
+	if serialNumber != "" {
+		return 0, fmt.Errorf("no energy site found matching serial number: %s", serialNumber)
 	}
 	return 0, fmt.Errorf("no energy site found")
 }
@@ -1174,6 +1181,7 @@ type teslaProduct struct {
 	EnergySiteID int64  `json:"energy_site_id"`
 	DeviceType   string `json:"device_type"`
 	ResourceType string `json:"resource_type"`
+	GatewayID    string `json:"gateway_id"`
 	// this is sometimes a string and sometimes a number
 	ID interface{} `json:"id"`
 }

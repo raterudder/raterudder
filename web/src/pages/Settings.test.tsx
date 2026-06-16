@@ -26,7 +26,7 @@ const navigateToSettings = async () => {
     fireEvent.click(screen.getByText(/Log In/));
     await waitFor(() => expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument());
     fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
-    
+
     // If onboarding wizard renders, skip it so the standard settings inputs are available
     await waitFor(() => {
         const hasSettingsHeading = screen.queryByRole('heading', { name: /^Settings$/i });
@@ -929,7 +929,7 @@ describe('App & Settings', () => {
         // Click save again - now it should fail because authCode was cleared and is required
         await user.click(saveBtn);
         await waitFor(() => {
-            expect(screen.getByText('The Authorization Code field is required.')).toBeInTheDocument();
+            expect(screen.getByText('Login to connect your energy system.')).toBeInTheDocument();
         });
     });
 

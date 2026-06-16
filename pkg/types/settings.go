@@ -135,6 +135,7 @@ type TeslaCredentials struct {
 	RefreshToken string    `json:"refreshToken,omitempty"`
 	Expiry       time.Time `json:"expiry,omitempty"`
 	EnergySiteID int64     `json:"energySiteID,omitempty"`
+	SerialNumber string    `json:"serialNumber,omitempty"`
 }
 
 // MockCredentials for simulated ESS
