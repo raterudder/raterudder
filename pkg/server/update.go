@@ -2,10 +2,13 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"slices"
 	"sync"
@@ -83,9 +86,18 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: later accept an argument that includes which update group ids to grab.
-	// This will allow us to update sites in smaller batches.
-	settingsMap, versionsMap, err := s.storage.ListSitesSettings(ctx, []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16})
+	cronParam := r.URL.Query().Get("cron")
+	if cronParam != "" && cronParam != "1" && cronParam != "2" {
+		writeJSONError(w, "invalid cron parameter", http.StatusBadRequest)
+		return
+	}
+
+	groups := getCronGroups(s.now(), cronParam)
+	log.Ctx(ctx).DebugContext(ctx, "handling update sites",
+		slog.String("cron", cronParam),
+		slog.Any("groups", groups),
+	)
+	settingsMap, versionsMap, err := s.storage.ListSitesSettings(ctx, groups)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to list sites settings", slog.Any("error", err))
 		writeJSONError(w, "failed to list sites settings", http.StatusInternalServerError)
@@ -1082,4 +1094,27 @@ func flattenDailyEnergyStats(daily []types.DailyEnergyStats) []types.EnergyStats
 		flat = append(flat, d.Hourly...)
 	}
 	return flat
+}
+
+func getCronGroups(nowTime time.Time, cronParam string) []int {
+	allGroups := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+	if cronParam == "" {
+		return allGroups
+	}
+
+	seedString := nowTime.UTC().Format("2006-01-02-15")
+	h := sha256.Sum256([]byte(seedString))
+	seed1 := binary.BigEndian.Uint64(h[0:8])
+	seed2 := binary.BigEndian.Uint64(h[8:16])
+	pcg := rand.NewPCG(seed1, seed2)
+	r := rand.New(pcg)
+
+	r.Shuffle(len(allGroups), func(i, j int) {
+		allGroups[i], allGroups[j] = allGroups[j], allGroups[i]
+	})
+
+	if cronParam == "1" {
+		return allGroups[0:8]
+	}
+	return allGroups[8:16]
 }

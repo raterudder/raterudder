@@ -1054,6 +1054,59 @@ func TestHandleUpdateSites(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "skipped: ESS rate limited", results["site-write-rate-limited"])
 	})
+
+	t.Run("Cron Partitioning", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil).Maybe()
+
+		var capturedGroups []int
+		mockS.On("ListSitesSettings", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			capturedGroups = args.Get(1).([]int)
+		}).Return(map[string]types.Settings{}, map[string]int{}, nil)
+
+		srv := &Server{
+			storage:    mockS,
+			release:    "production",
+			bypassAuth: true,
+			nowFunc:    func() time.Time { return time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC) },
+		}
+
+		t.Run("Valid cron=1 sets groups", func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/api/updateSites?cron=1", nil)
+			w := httptest.NewRecorder()
+			srv.handleUpdateSites(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			if assert.Len(t, capturedGroups, 8) {
+				expected := getCronGroups(srv.now(), "1")
+				assert.Equal(t, expected, capturedGroups)
+			}
+		})
+
+		t.Run("Valid cron=2 sets groups", func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/api/updateSites?cron=2", nil)
+			w := httptest.NewRecorder()
+			srv.handleUpdateSites(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			if assert.Len(t, capturedGroups, 8) {
+				expected := getCronGroups(srv.now(), "2")
+				assert.Equal(t, expected, capturedGroups)
+			}
+		})
+
+		t.Run("Invalid cron returns bad request", func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/api/updateSites?cron=3", nil)
+			w := httptest.NewRecorder()
+			srv.handleUpdateSites(w, req)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			var resp map[string]string
+			err := json.NewDecoder(w.Body).Decode(&resp)
+			require.NoError(t, err)
+			assert.Contains(t, resp["error"], "invalid cron parameter")
+		})
+	})
 }
 
 // Helpers for Recording Mocks
@@ -1818,5 +1871,48 @@ func TestSetESSModes(t *testing.T) {
 		assert.ErrorIs(t, err, otherErr)
 		mockS.AssertNotCalled(t, "SetSettings")
 		mockES.AssertExpectations(t)
+	})
+}
+
+func TestGetCronGroups(t *testing.T) {
+	t.Run("Empty cron param returns all 16 groups", func(t *testing.T) {
+		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		groups := getCronGroups(now, "")
+		assert.Len(t, groups, 16)
+		for i := 1; i <= 16; i++ {
+			assert.Contains(t, groups, i)
+		}
+	})
+
+	t.Run("Cron 1 and Cron 2 partition all 16 groups exactly", func(t *testing.T) {
+		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		g1 := getCronGroups(now, "1")
+		g2 := getCronGroups(now, "2")
+
+		assert.Len(t, g1, 8)
+		assert.Len(t, g2, 8)
+
+		all := make(map[int]bool)
+		for _, g := range g1 {
+			all[g] = true
+		}
+		for _, g := range g2 {
+			all[g] = true
+		}
+
+		assert.Len(t, all, 16)
+		for i := 1; i <= 16; i++ {
+			assert.True(t, all[i], "missing group %d", i)
+		}
+	})
+
+	t.Run("Groups change when hour changes", func(t *testing.T) {
+		t1 := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		t2 := time.Date(2026, 6, 5, 13, 0, 0, 0, time.UTC)
+
+		g1_t1 := getCronGroups(t1, "1")
+		g1_t2 := getCronGroups(t2, "1")
+
+		assert.NotEqual(t, g1_t1, g1_t2)
 	})
 }
