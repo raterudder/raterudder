@@ -5945,6 +5945,59 @@ func TestEvaluateFallback(t *testing.T) {
 			assert.Equal(t, types.ActionReasonDischargeAtPeak, decision.Reason)
 		}
 	})
+
+	t.Run("Cheap Price Window Preceding Peak Deficit Under 10-Minute Lookahead -> Discharge at Peak", func(t *testing.T) {
+		startNow := time.Date(2026, 6, 17, 10, 53, 15, 0, time.UTC)
+		currentPrice := types.Price{
+			TSStart:       time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC),
+			TSEnd:         time.Date(2026, 6, 17, 11, 0, 0, 0, time.UTC),
+			DollarsPerKWH: 0.055,
+		}
+
+		status := types.SystemStatus{
+			Timestamp:          startNow,
+			BatterySOC:         34.947,
+			BatteryCapacityKWH: 15.0,
+			MaxBatteryChargeKW: 5.0,
+			HomeKW:             1.0,
+			BatteryAboveMinSOC: true,
+		}
+
+		settings := baseSettings
+		settings.MinBatterySOC = 20.0
+
+		// There is a peak starting in 6m 45s (at 11:00 UTC) with cost 0.10481 extending until 14:00 UTC
+		simData := []SimHour{
+			{TS: startNow.Truncate(time.Hour), GridChargeDollarsPerKWH: 0.055, Price: currentPrice},
+			{TS: time.Date(2026, 6, 17, 11, 0, 0, 0, time.UTC), GridChargeDollarsPerKWH: 0.10481, Price: types.Price{
+				TSStart:       time.Date(2026, 6, 17, 11, 0, 0, 0, time.UTC),
+				TSEnd:         time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC),
+				DollarsPerKWH: 0.10481,
+			}},
+			{TS: time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC), GridChargeDollarsPerKWH: 0.10481, Price: types.Price{
+				TSStart:       time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC),
+				TSEnd:         time.Date(2026, 6, 17, 13, 0, 0, 0, time.UTC),
+				DollarsPerKWH: 0.10481,
+			}},
+			{TS: time.Date(2026, 6, 17, 13, 0, 0, 0, time.UTC), GridChargeDollarsPerKWH: 0.10481, Price: types.Price{
+				TSStart:       time.Date(2026, 6, 17, 13, 0, 0, 0, time.UTC),
+				TSEnd:         time.Date(2026, 6, 17, 14, 0, 0, 0, time.UTC),
+				DollarsPerKWH: 0.10481,
+			}},
+		}
+
+		summary := simulationSummary{
+			HitDeficitAt:      startNow.Add(2 * time.Hour), // 12:53:15
+			HitBelowDeficitAt: time.Time{},                 // SOC never drops below 18%
+			HitAboveDeficitAt: startNow.Add(2 * time.Hour),
+		}
+
+		decision := c.evaluateFallback(ctx, startNow, status, currentPrice, settings, simData, summary)
+		if assert.NotNil(t, decision) {
+			assert.Equal(t, types.BatteryModeLoad, decision.BatteryMode)
+			assert.Equal(t, types.ActionReasonDischargeAtPeak, decision.Reason)
+		}
+	})
 }
 
 func TestFindCheapestPlan(t *testing.T) {
