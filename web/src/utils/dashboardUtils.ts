@@ -226,6 +226,8 @@ export const getReasonText = (action: Action): string => {
         }
         case ActionReason.GridUnavailable:
             return 'Grid is currently unavailable. The system is standing by to protect the battery and ensure power is available for the home.';
+        case ActionReason.VPPActive:
+            return 'Virtual Power Plant (VPP) event is currently active. Automation is temporarily disabled to allow grid services to run.';
         case ActionReason.BatteryAtReserve: {
             const parts = [
                 'Battery is at reserve. Using remaining energy because standby is not meaningful (battery is already held at reserve).',

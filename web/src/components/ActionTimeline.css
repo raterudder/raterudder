@@ -70,6 +70,7 @@
 .timeline-item.mode-load .timeline-marker { border-color: var(--accent); }
 .timeline-item.mode-standby .timeline-marker { border-color: var(--warning); }
 .timeline-item.mode-fault .timeline-marker { border-color: var(--danger); background: var(--danger); }
+.timeline-item.mode-vpp .timeline-marker { border-color: #a855f7; background: #a855f7; }
 
 /* Marker indicator for grouped actions */
 .timeline-item.is-grouped .timeline-marker::after {

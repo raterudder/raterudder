@@ -239,14 +239,16 @@ func TestTesla(t *testing.T) {
 			case "/api/1/energy_sites/1234/live_status":
 				json.NewEncoder(w).Encode(map[string]any{
 					"response": map[string]any{
-						"solar_power":        1200.0,
-						"battery_power":      -500.0,
-						"grid_power":         700.0,
-						"load_power":         1400.0,
-						"percentage_charged": 55.4,
-						"grid_status":        "Active",
-						"island_status":      "on_grid",
-						"storm_mode_active":  true,
+						"solar_power":          1200.0,
+						"battery_power":        -500.0,
+						"grid_power":           700.0,
+						"load_power":           1400.0,
+						"percentage_charged":   55.4,
+						"grid_status":          "Active",
+						"island_status":        "on_grid",
+						"storm_mode_active":    true,
+						"grid_services_active": true,
+						"grid_services_power":  5200.0,
 					},
 				})
 			default:
@@ -279,6 +281,8 @@ func TestTesla(t *testing.T) {
 		assert.False(t, status.ElevatedMinBatterySOC)
 		assert.True(t, status.BatteryAboveMinSOC)
 		assert.True(t, status.EmergencyMode)
+		assert.True(t, status.VPPActive)
+		assert.Equal(t, 5.2, status.VPPKW)
 	})
 
 	t.Run("GetStatus Gateways Fallback", func(t *testing.T) {
@@ -714,6 +718,7 @@ func TestTesla(t *testing.T) {
 										"total_solar_generation":                2000.0,
 										"total_battery_charge":                  500.0,
 										"total_grid_energy_exported":            250.0,
+										"grid_services_energy_exported":         500.0,
 									},
 									{
 										"timestamp":                             "2026-03-12T11:00:00-05:00",
@@ -731,6 +736,7 @@ func TestTesla(t *testing.T) {
 										"total_solar_generation":                3000.0,
 										"total_battery_charge":                  1500.0,
 										"total_grid_energy_exported":            250.0,
+										"grid_services_energy_exported":         1000.0,
 									},
 									{
 										"timestamp":                             "2026-03-12T12:00:00-05:00",
@@ -863,6 +869,7 @@ func TestTesla(t *testing.T) {
 			assert.Equal(t, 2.0, s.BatteryUsedKWH)
 			assert.Equal(t, 3.0, s.GridImportKWH)
 			assert.Equal(t, 0.5, s.GridExportKWH)
+			assert.Equal(t, 1.5, s.VPPExportKWH)
 			assert.Equal(t, 7.25, s.HomeKWH)
 			assert.Equal(t, 2.7, s.SolarToHomeKWH)
 			assert.Equal(t, 0.75, s.SolarToBatteryKWH)

@@ -747,6 +747,8 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		BatteryAboveMinSOC:    liveStatus.PercentageCharged >= siteInfo.BackupReservePercent,
 		EmergencyMode:         liveStatus.StormModeActive,
 		GridUnavailable:       liveStatus.GridStatus != "Active",
+		VPPActive:             liveStatus.GridServicesActive,
+		VPPKW:                 liveStatus.GridServicesPowerW / 1000.0,
 		// TODO: how do we know when battery charging is disabled
 		// TODO: what about alarms?
 	}
@@ -1039,6 +1041,7 @@ func (b *Tesla) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]t
 			s.BatteryUsedKWH += ts.BatteryEnergyExportedWH / 1000.0
 			s.GridImportKWH += ts.GridEnergyImportedWH / 1000.0
 			s.GridExportKWH += (ts.GridEnergyExportedFromSolarWH + ts.GridEnergyExportedFromBatteryWH) / 1000.0
+			s.VPPExportKWH += ts.GridServicesEnergyExportedWH / 1000.0
 			s.HomeKWH += (ts.ConsumerEnergyImportedFromGridWH + ts.ConsumerEnergyImportedFromSolarWH + ts.ConsumerEnergyImportedFromBatteryWH) / 1000.0
 			s.SolarToHomeKWH += ts.ConsumerEnergyImportedFromSolarWH / 1000.0
 			s.SolarToBatteryKWH += ts.BatteryEnergyImportedFromSolarWH / 1000.0
@@ -1250,12 +1253,14 @@ type teslaSiteComponentsBattery struct {
 }
 
 type teslaLiveStatusResponse struct {
-	SolarPowerW       float64 `json:"solar_power"`
-	BatteryPowerW     float64 `json:"battery_power"`
-	GridPowerW        float64 `json:"grid_power"`
-	LoadPowerW        float64 `json:"load_power"`
-	PercentageCharged float64 `json:"percentage_charged"`
-	StormModeActive   bool    `json:"storm_mode_active"`
+	SolarPowerW        float64 `json:"solar_power"`
+	BatteryPowerW      float64 `json:"battery_power"`
+	GridPowerW         float64 `json:"grid_power"`
+	LoadPowerW         float64 `json:"load_power"`
+	PercentageCharged  float64 `json:"percentage_charged"`
+	StormModeActive    bool    `json:"storm_mode_active"`
+	GridServicesActive bool    `json:"grid_services_active"`
+	GridServicesPowerW float64 `json:"grid_services_power"`
 	// GridStatus can be "Active", not sure what else
 	GridStatus string `json:"grid_status"`
 	// IslandStatus can be "on_grid", not sure what else
@@ -1287,6 +1292,7 @@ type teslaCalendarHistoryTimeSeries struct {
 	TotalSolarGenerationWH              float64 `json:"total_solar_generation"`
 	TotalBatteryChargeWH                float64 `json:"total_battery_charge"`
 	TotalGridEnergyExportedWH           float64 `json:"total_grid_energy_exported"`
+	GridServicesEnergyExportedWH        float64 `json:"grid_services_energy_exported"`
 }
 
 type teslaCalendarHistoryResponse struct {

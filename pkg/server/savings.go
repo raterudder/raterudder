@@ -94,7 +94,7 @@ func getIgnoredFraction(hStart time.Time, actions []types.Action) float64 {
 
 	for _, a := range actions {
 		if a.Timestamp.Before(hStart) {
-			lastStatePausedOrEmergency = a.Paused || a.Reason == types.ActionReasonEmergencyMode || a.SystemStatus.EmergencyMode
+			lastStatePausedOrEmergency = a.Paused || a.Reason == types.ActionReasonEmergencyMode || a.SystemStatus.EmergencyMode || a.Reason == types.ActionReasonVPPActive || a.SystemStatus.VPPActive
 			lastActionTime = a.Timestamp
 		} else if a.Timestamp.Before(hEnd) {
 			// This action falls within the hour
@@ -106,7 +106,7 @@ func getIgnoredFraction(hStart time.Time, actions []types.Action) float64 {
 				}
 				ignoredDuration += a.Timestamp.Sub(startPeriod)
 			}
-			lastStatePausedOrEmergency = a.Paused || a.Reason == types.ActionReasonEmergencyMode || a.SystemStatus.EmergencyMode
+			lastStatePausedOrEmergency = a.Paused || a.Reason == types.ActionReasonEmergencyMode || a.SystemStatus.EmergencyMode || a.Reason == types.ActionReasonVPPActive || a.SystemStatus.VPPActive
 			lastActionTime = a.Timestamp
 		} else {
 			// action is at or after hEnd, we just evaluate the remaining part of the hour

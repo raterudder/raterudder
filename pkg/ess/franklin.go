@@ -680,6 +680,7 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		MaxBatteryDischargeKW:   maxBatteryDischargeKW,
 		Alarms:                  alarms,
 		Storms:                  storms,
+		VPPActive:               rd.RuntimeData.RunStatus == 9,
 	}
 
 	log.Ctx(ctx).DebugContext(ctx, "franklin system status", slog.Any("status", status))
@@ -1417,6 +1418,8 @@ type franklinRuntimeData struct {
 	// 5 is off-grid standby
 	// 6 is off-grid charging
 	// 7 is off-grid discharging
+	// 8 is debug mode
+	// 9 is VPP active
 	RunStatus int `json:"run_status"`
 
 	// 0 means on-grid

@@ -343,6 +343,22 @@ func (s *Server) performSiteUpdate(
 		return &action, "paused", nil
 	}
 
+	// don't update if we're in a VPP event
+	if status.VPPActive {
+		log.Ctx(ctx).InfoContext(ctx, "update: VPP event active")
+		action := types.Action{
+			Timestamp:    s.now(),
+			Description:  "VPP event active",
+			Reason:       types.ActionReasonVPPActive,
+			SystemStatus: status,
+			CurrentPrice: &currentPrice,
+		}
+		if err := s.storage.InsertAction(ctx, siteID, action); err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to insert action", slog.Any("error", err))
+		}
+		return &action, "vpp event", nil
+	}
+
 	// don't update if we're in emergency mode
 	if status.EmergencyMode {
 		log.Ctx(ctx).InfoContext(ctx, "update: emergency mode")

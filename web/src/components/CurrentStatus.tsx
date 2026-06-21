@@ -72,6 +72,40 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
         );
     }
 
+    if (action.systemStatus?.vppActive) {
+        const vppKW = action.systemStatus?.vppKW || 0;
+        return (
+            <div className="current-status-card vpp">
+                <div className="status-main">
+                    <div className="status-icon">
+                        <span className="icon" aria-hidden="true">🔌</span>
+                    </div>
+                    <div className="status-info">
+                        <span className="status-label">VPP Event Active</span>
+                        <span className="status-value">Grid Services active ({vppKW.toFixed(1)} kW)</span>
+                    </div>
+                </div>
+                <div className="status-metrics">
+                    <div className="metric">
+                        <span className="metric-label">Battery</span>
+                        <span className="metric-value">{soc.toFixed(1)}%</span>
+                        <Meter.Root className="battery-bar" value={soc} min={0} max={100} aria-label="Battery Percentage">
+                            <Meter.Track className="battery-track">
+                                <Meter.Indicator className="battery-fill" />
+                            </Meter.Track>
+                        </Meter.Root>
+                    </div>
+                    {hasPrice && (
+                        <div className="metric">
+                            <span className="metric-label">Price</span>
+                            <span className="metric-value">$ {price.toFixed(3)}<small>/kWh</small></span>
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+    }
+
     const effectiveBatteryMode = action.targetBatteryMode
         ? action.targetBatteryMode
         : action.batteryMode;

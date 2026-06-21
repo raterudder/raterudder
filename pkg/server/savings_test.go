@@ -723,4 +723,18 @@ func TestGetIgnoredFraction(t *testing.T) {
 		}
 		assert.Equal(t, 0.5, getIgnoredFraction(hStart, actions))
 	})
+
+	t.Run("Action Reason VPP Active", func(t *testing.T) {
+		actions := []types.Action{
+			{Timestamp: hStart.Add(30 * time.Minute), Reason: types.ActionReasonVPPActive},
+		}
+		assert.Equal(t, 0.5, getIgnoredFraction(hStart, actions))
+	})
+
+	t.Run("System Status VPP Active", func(t *testing.T) {
+		actions := []types.Action{
+			{Timestamp: hStart.Add(30 * time.Minute), SystemStatus: types.SystemStatus{VPPActive: true}},
+		}
+		assert.Equal(t, 0.5, getIgnoredFraction(hStart, actions))
+	})
 }

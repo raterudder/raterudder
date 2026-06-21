@@ -56,6 +56,7 @@ const (
 	ActionReasonWaitingToCharge             ActionReason = "waitingToCharge"
 	ActionReasonPreventSolarCurtailment     ActionReason = "preventSolarCurtailment"
 	ActionReasonBatteryAtReserve            ActionReason = "batteryAtReserve"
+	ActionReasonVPPActive                   ActionReason = "vppActive"
 
 	// Deprecated - we don't use these anymore but we don't delete them so we know they were used
 	ActionReasonArbitrageHoldSave   ActionReason = "arbitrageHoldSave"
@@ -107,6 +108,7 @@ type EnergyStats struct {
 	HomeKWH           float64 `json:"homeKWH"`
 	GridExportKWH     float64 `json:"gridExportKWH"`
 	GridImportKWH     float64 `json:"gridImportKWH"`
+	VPPExportKWH      float64 `json:"vppExportKWH,omitempty"`
 
 	// Source to destination
 	BatteryToHomeKWH  float64 `json:"batteryToHomeKWH"`
@@ -140,6 +142,13 @@ type Storm struct {
 	TSEnd       time.Time `json:"tsEnd"`
 }
 
+// VPPEvent represents a virtual power plant event.
+type VPPEvent struct {
+	Description string    `json:"description"`
+	TSStart     time.Time `json:"tsStart"`
+	TSEnd       time.Time `json:"tsEnd"`
+}
+
 // SystemStatus represents the current system status.
 type SystemStatus struct {
 	Timestamp               time.Time     `json:"timestamp"`
@@ -158,6 +167,9 @@ type SystemStatus struct {
 	BatteryChargingDisabled bool          `json:"batteryChargingDisabled,omitempty"` // True if battery charging is disabled due to alarms
 	Alarms                  []SystemAlarm `json:"alarms,omitempty"`
 	Storms                  []Storm       `json:"storms,omitempty"`
+	VPPActive               bool          `json:"vppActive,omitempty"`
+	VPPKW                   float64       `json:"vppKW,omitempty"`
+	VPPEvents               []VPPEvent    `json:"vppEvents,omitempty"`
 }
 
 // BatteryMode represents the mode of the battery.

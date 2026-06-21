@@ -29,8 +29,13 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
                 const hasStorms = action.systemStatus?.storms && action.systemStatus.storms.length > 0;
                 const isEmergency = hasStorms || action.reason === ActionReason.EmergencyMode;
 
+                const isVPP = !!action.systemStatus?.vppActive || action.reason === ActionReason.VPPActive;
+
                 const reasonText = getReasonText(action);
-                const batteryModeClass = getBatteryModeClass(action.batteryMode);
+                let batteryModeClass = getBatteryModeClass(action.batteryMode);
+                if (isVPP) {
+                    batteryModeClass = 'vpp';
+                }
                 const isNegPrice = action.currentPrice && (action.currentPrice.dollarsPerKWH + (action.currentPrice.gridUseDollarsPerKWH || 0)) < 0;
 
                 // Determine Title
@@ -47,6 +52,9 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
                 }
                 if (action.reason === ActionReason.ArbitrageHoldExport || action.reason === ActionReason.ArbitrageHoldSave || action.reason === ActionReason.ArbitrageHold) {
                     title = 'Hold for Arbitrage';
+                }
+                if (isVPP) {
+                    title = 'VPP Event Active';
                 }
 
                 const showDeficitTag = action.deficitAt && action.deficitAt !== '0001-01-01T00:00:00Z';

@@ -723,6 +723,10 @@ button {
   border-left: 6px solid var(--outline-variant);
 }
 
+.current-status-card.vpp {
+  border-left: 6px solid #a855f7;
+}
+
 .status-main {
   display: flex;
   align-items: center;
@@ -754,6 +758,11 @@ button {
 .current-status-card.standby .status-icon {
   background: rgba(255, 184, 0, 0.1);
   color: var(--warning);
+}
+
+.current-status-card.vpp .status-icon {
+  background: rgba(168, 85, 247, 0.1);
+  color: #a855f7;
 }
 
 .status-info {
@@ -1121,6 +1130,12 @@ button {
   background: rgba(255, 184, 0, 0.1);
   color: var(--warning);
   border: 1px solid rgba(255, 184, 0, 0.2);
+}
+
+.tag.mode-vpp {
+  background: rgba(168, 85, 247, 0.1);
+  color: #a855f7;
+  border: 1px solid rgba(168, 85, 247, 0.2);
 }
 
 .tag.mode-no_change {

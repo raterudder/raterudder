@@ -151,6 +151,11 @@ describe('dashboardUtils', () => {
             expect(getReasonText(action)).toContain('Grid is currently unavailable');
         });
 
+        it('handles VPPActive', () => {
+            const action = { ...baseAction, reason: ActionReason.VPPActive };
+            expect(getReasonText(action)).toContain('Virtual Power Plant (VPP) event is currently active');
+        });
+
         it('handles DeficitSaveForPeak with valid deficitAt', () => {
             const action = {
                 ...baseAction,

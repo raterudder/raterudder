@@ -35,6 +35,7 @@ export const ActionReason = {
     WaitingToCharge: 'waitingToCharge',
     PreventSolarCurtailment: 'preventSolarCurtailment',
     BatteryAtReserve: 'batteryAtReserve',
+    VPPActive: 'vppActive',
     ArbitrageHoldExport: 'arbitrageHoldExport',
     ArbitrageHoldSave: 'arbitrageHoldSave',
     // deprecated - but we don't delete them because old actions still have them
@@ -568,6 +569,7 @@ export interface EnergyStats {
     homeKWH: number;
     gridExportKWH: number;
     gridImportKWH: number;
+    vppExportKWH?: number;
     batteryToHomeKWH: number;
     solarToHomeKWH: number;
     solarToBatteryKWH: number;

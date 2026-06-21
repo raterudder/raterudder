@@ -180,6 +180,39 @@ describe('Dashboard', () => {
         });
     });
 
+    it('renders VPP active state in current status and timeline', async () => {
+        const actions = [{
+            reason: ActionReason.VPPActive,
+            description: 'VPP Active test',
+            timestamp: new Date().toISOString(),
+            batteryMode: 1, // Standby
+            solarMode: 1, // NoExport
+            currentPrice: { dollarsPerKWH: 0.12, tsStart: '', tsEnd: '' },
+            systemStatus: {
+                batterySOC: 75.0,
+                vppActive: true,
+                vppKW: 5.4,
+            }
+        }];
+        mockActionsAndSavings(actions);
+
+        renderWithRouter(<Dashboard />);
+
+        await waitFor(() => {
+            // Verify current status card
+            const statusCard = document.querySelector('.current-status-card.vpp');
+            expect(statusCard).toBeInTheDocument();
+            expect(statusCard).toHaveTextContent('VPP Event Active');
+            expect(statusCard).toHaveTextContent('Grid Services active (5.4 kW)');
+            
+            // Verify timeline item
+            const timelineItem = document.querySelector('.timeline-item.mode-vpp');
+            expect(timelineItem).toBeInTheDocument();
+            expect(timelineItem).toHaveTextContent('VPP Event Active');
+            expect(timelineItem).toHaveTextContent('Virtual Power Plant (VPP) event is currently active. Automation is temporarily disabled to allow grid services to run.');
+        });
+    });
+
     it('hides no change badges', async () => {
         const actions = [{
             description: 'Mixed modes test',
