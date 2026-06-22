@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"math"
-	"slices"
 	"sort"
 	"time"
 
@@ -26,103 +25,6 @@ type WeatherSolar struct {
 	SnowFactor     float64
 	TCell          float64
 	Irradiance     float64
-}
-
-// CalculateWeatherSolar estimates solar generation for each weather hour by:
-//  1. Calibrating robust hourly efficiency factors from filtered historical actual solar vs. irradiance data.
-//  2. Tracking snow accumulation and melt sequentially to derive a snow attenuation factor.
-//  3. Applying NOCT-based cell temperature estimation to correct for temperature-dependent efficiency.
-//  4. Projecting forward (and backward for history comparison) using the calibrated efficiency.
-//
-// Returns a map keyed by Unix timestamp (seconds) of each weather hour's computed improvedSolar.
-func CalculateWeatherSolar(
-	ctx context.Context,
-	now time.Time,
-	history []types.EnergyStats,
-	weather []types.Weather,
-	locInfo types.SiteLocation,
-) map[int64]WeatherSolar {
-
-	// Index weather by timestamp; later hours overwrite earlier for the same slot (dedup).
-	weatherByHour := make(map[int64]types.HourlyWeather)
-	for _, w := range weather {
-		for _, hw := range w.ForecastHours {
-			weatherByHour[hw.TSHourStart.Unix()] = hw
-		}
-	}
-
-	// 2. Process hours chronologically so snow state carries forward correctly.
-	timestamps := make([]int64, 0, len(weatherByHour))
-	for ts := range weatherByHour {
-		timestamps = append(timestamps, ts)
-	}
-	slices.Sort(timestamps)
-
-	// Identify the best irradiance source (GTI if available, fallback to GHI)
-	var anyGTI bool
-	var anyGHI bool
-	for _, hw := range weatherByHour {
-		if hw.GTI > 0 {
-			anyGTI = true
-			break
-		}
-		if hw.GHI > 0 {
-			anyGHI = true
-		}
-	}
-	useGTI := anyGTI || !anyGHI // if no GHI either, doesn't matter, but if we have GTI use it.
-
-	getIrr := func(hw types.HourlyWeather) float64 {
-		if useGTI {
-			return hw.GTI
-		}
-		return hw.GHI
-	}
-
-	timeLoc, err := time.LoadLocation(locInfo.TimeZone)
-	if err != nil {
-		timeLoc = time.UTC
-	}
-
-	hourlyEffs, clippingCap := CalibrateSolarScaleFactor(ctx, now, history, weather, locInfo, getIrr)
-
-	results := make(map[int64]WeatherSolar, len(timestamps))
-
-	// Project solar generation for every weather hour using the calibrated
-	// efficiency unless we don't have any efficiency data.
-	for _, ts := range timestamps {
-		hw := weatherByHour[ts]
-		h := WeatherSolar{TSHourStart: ts}
-
-		h.Irradiance = getIrr(hw)
-
-		// Estimated cell temperature via NOCT model:
-		//   Tcell = Tamb + (Irradiance / 800) * (NOCT - 20)
-		h.TCell = hw.TemperatureC + (h.Irradiance/800.0)*(nominalOperatingCellTemperature-20.0)
-
-		// Use direct snow depth from API which is an average from this hour to the next
-		h.SnowDepth = hw.SnowDepthCM
-
-		// Calculate factor based on cell difference compared to STC (25C cell temp).
-		h.TCell = min(max(h.TCell, -40), 80)
-		h.TempFactor = 1.0 - (h.TCell-25)*powerTemperatureCoefficient
-
-		h.SnowFactor = calculateSnowFactor(h.SnowDepth)
-
-		localHour := time.Unix(ts, 0).In(timeLoc).Hour()
-		eff := hourlyEffs[localHour]
-
-		if eff > 0 && h.Irradiance > 0 {
-			h.UnclippedSolar = h.Irradiance * eff * h.TempFactor * h.SnowFactor
-			h.ImprovedSolar = h.UnclippedSolar
-			if clippingCap > 0 && h.ImprovedSolar > clippingCap {
-				h.ImprovedSolar = clippingCap
-			}
-		}
-		results[ts] = h
-	}
-
-	return results
 }
 
 // CalculateSmoothedSolar averages usage and solar by hour of day from history and fits a bell curve.
@@ -360,6 +262,17 @@ func calculateGTI(dni, dhi, elevation, sunAzimuth, arrayTilt, arrayAzimuth float
 		return 0.0
 	}
 
+	if arrayAzimuth < 0 {
+		// East-West Split.
+		// The absolute value of arrayAzimuth is the fraction of panels facing East.
+		// (e.g. -0.5 is 50% East / 50% West, -0.4 is 40% East / 60% West)
+		eastFraction := -arrayAzimuth
+		westFraction := 1.0 - eastFraction
+		gtiEast := calculateGTI(dni, dhi, elevation, sunAzimuth, arrayTilt, 90.0)
+		gtiWest := calculateGTI(dni, dhi, elevation, sunAzimuth, arrayTilt, 270.0)
+		return eastFraction*gtiEast + westFraction*gtiWest
+	}
+
 	aoi := calculateAngleOfIncidence(elevation, sunAzimuth, arrayTilt, arrayAzimuth)
 	cosAOI := math.Cos(aoi)
 	if cosAOI < 0 {
@@ -385,31 +298,10 @@ func calculateGTI(dni, dhi, elevation, sunAzimuth, arrayTilt, arrayAzimuth float
 	return direct + diffuse
 }
 
-// CalibrateSolarScaleFactor calculates the calibrated solar scale factor (efficiency) by comparing
-// historical actual solar production against theoretical irradiance.
-func CalibrateSolarScaleFactor(
-	ctx context.Context,
-	now time.Time,
-	history []types.EnergyStats,
-	weather []types.Weather,
-	locInfo types.SiteLocation,
-	getIrradiance func(hw types.HourlyWeather) float64,
-) (hourlyEffs [24]float64, clippingCap float64) {
-	const (
-		clippingEps = 0.05 // kWh epsilon for detecting a plateau
-	)
-
-	// Gather all forecast hours across all days in weather
-	var forecastHours []types.HourlyWeather
-	for _, w := range weather {
-		forecastHours = append(forecastHours, w.ForecastHours...)
-	}
-
-	// 1. Index historical actual solar by hour timestamp for O(1) lookup.
-	statsByHour := make(map[int64]types.EnergyStats, len(history))
+// calculateSolarClippingCap estimates the inverter's clipping limit in kWh based on historical production.
+func calculateSolarClippingCap(ctx context.Context, history []types.EnergyStats) float64 {
 	maxSolarKWH := 0.0
 	for _, h := range history {
-		statsByHour[h.TSHourStart.Unix()] = h
 		if h.SolarKWH > maxSolarKWH {
 			maxSolarKWH = h.SolarKWH
 		}
@@ -505,17 +397,63 @@ func CalibrateSolarScaleFactor(
 	// We allow a small tolerance (e.g. 5% and 0.3 kWh) for minor hourly fluctuations or sensor noise.
 	if hourlyClippingCap > 0 {
 		if maxSolarKWH > hourlyClippingCap*1.05 && maxSolarKWH > hourlyClippingCap+0.3 {
-			log.Ctx(ctx).DebugContext(
-				ctx,
-				"rejected learned clipping cap (proven higher peak exists)",
-				slog.Float64("learnedCap", hourlyClippingCap),
-				slog.Float64("maxSolarKWH", maxSolarKWH),
-			)
 			hourlyClippingCap = 0
 		}
 	}
 
-	clippingCap = hourlyClippingCap
+	log.Ctx(ctx).DebugContext(
+		ctx,
+		"estimated solar inverter clipping cap",
+		slog.Float64("maxSolarKWH", maxSolarKWH),
+		slog.Float64("clippingCapKWH", hourlyClippingCap),
+	)
+
+	return hourlyClippingCap
+}
+
+type hourScaleFactorLog struct {
+	HourOfDay  int     `json:"hourOfDay"`
+	Efficiency float64 `json:"efficiency"`
+	NumPoints  int     `json:"numPoints"`
+}
+
+// SolarCalibration holds the calibrated solar scale factors for each hour of the day.
+type SolarCalibration struct {
+	HourlyEffs           [24]float64
+	StaticEff            float64
+	StdDevRatio          float64
+	RegularizationWeight float64
+	hourScaleFactors     []hourScaleFactorLog
+}
+
+// CalibrateSolarScaleFactor calculates the calibrated solar scale factor (efficiency) by comparing
+// historical actual solar production against theoretical irradiance.
+func CalibrateSolarScaleFactor(
+	ctx context.Context,
+	now time.Time,
+	history []types.EnergyStats,
+	weather []types.Weather,
+	timeZone string,
+	clippingCap float64,
+	getIrradiance func(hw types.HourlyWeather) float64,
+) SolarCalibration {
+	const (
+		clippingEps = 0.05 // kWh epsilon for detecting a plateau
+	)
+
+	var hourlyEffs [24]float64
+
+	// Gather all forecast hours across all days in weather
+	var forecastHours []types.HourlyWeather
+	for _, w := range weather {
+		forecastHours = append(forecastHours, w.ForecastHours...)
+	}
+
+	// 1. Index historical actual solar by hour timestamp for O(1) lookup.
+	statsByHour := make(map[int64]types.EnergyStats, len(history))
+	for _, h := range history {
+		statsByHour[h.TSHourStart.Unix()] = h
+	}
 
 	// Index weather by timestamp; later hours overwrite earlier for the same slot (dedup).
 	weatherByHour := make(map[int64]types.HourlyWeather)
@@ -523,7 +461,7 @@ func CalibrateSolarScaleFactor(
 		weatherByHour[hw.TSHourStart.Unix()] = hw
 	}
 
-	timeLoc, err := time.LoadLocation(locInfo.TimeZone)
+	timeLoc, err := time.LoadLocation(timeZone)
 	if err != nil {
 		timeLoc = time.UTC
 	}
@@ -600,14 +538,6 @@ func CalibrateSolarScaleFactor(
 		staticEff = totalSolarKWH / totalTheoreticalIrrad
 	}
 
-	log.Ctx(ctx).DebugContext(
-		ctx,
-		"calculated daily static scale factor using ratio estimator",
-		slog.Float64("staticEfficiency", staticEff),
-		slog.Float64("totalSolarKWH", totalSolarKWH),
-		slog.Float64("totalTheoreticalIrrad", totalTheoreticalIrrad),
-	)
-
 	// Per-hour scale factor calibration
 	// Re-calculate minClippedIrradiance using the updated clippingCap if not already set
 	if minClippedIrradiance == 0.0 && clippingCap > 0 {
@@ -671,34 +601,10 @@ func CalibrateSolarScaleFactor(
 	}
 
 	validHours := make(map[int]float64)
-	type hourScaleFactorLog struct {
-		HourOfDay  int     `json:"hourOfDay"`
-		Efficiency float64 `json:"efficiency"`
-		NumPoints  int     `json:"numPoints"`
-	}
 	var hourScaleFactors []hourScaleFactorLog
-
 	for h := 0; h < 24; h++ {
 		acc := efficienciesByHourOfDay[h]
 		if acc.count < 3 {
-			if acc.count > 0 {
-				// Only log if this hour ever has daylight during our forecast period
-				hasDaylight := false
-				for _, hw := range weatherByHour {
-					if hw.TSHourStart.In(timeLoc).Hour() == h && getIrradiance(hw) >= 25 {
-						hasDaylight = true
-						break
-					}
-				}
-				if hasDaylight {
-					log.Ctx(ctx).DebugContext(
-						ctx,
-						"solar scale factor hour invalid (not enough points)",
-						slog.Int("hourOfDay", h),
-						slog.Int("numPoints", acc.count),
-					)
-				}
-			}
 			continue
 		}
 
@@ -711,14 +617,6 @@ func CalibrateSolarScaleFactor(
 				NumPoints:  acc.count,
 			})
 		}
-	}
-
-	if len(hourScaleFactors) > 0 {
-		log.Ctx(ctx).DebugContext(
-			ctx,
-			"stage 3: hour valid scale factors",
-			slog.Any("factors", hourScaleFactors),
-		)
 	}
 
 	// If we have at least 4 valid hours, interpolate the rest.
@@ -791,34 +689,37 @@ func CalibrateSolarScaleFactor(
 			val = staticEff
 		}
 
-		// Clamp values that are physically unrealistic (i.e. efficiency way above staticEff)
-		if val > 1.15*staticEff && staticEff > 0 {
-			val = 1.15 * staticEff
-		}
+		// Note: We previously clamped values above 1.15*staticEff here to prevent unrealistic efficiencies,
+		// but this was removed as it caused systematic underprediction during peak Sun hours on unshaded roofs.
+		// The 0.5*staticEff to 1.5*staticEff hourly outlier filter in stage 3 is sufficient to handle weather anomalies.
 
 		hourlyEffs[h] = w*val + (1.0-w)*staticEff
 	}
 
-	log.Ctx(ctx).DebugContext(
-		ctx,
-		"calibrated per-hour scale factors with adaptive regularization",
-		slog.Any("hourlyEfficiencies", hourlyEffs),
-		slog.Float64("stdDevRatio", stdDevRatio),
-		slog.Float64("regularizationWeight", w),
-		slog.Float64("staticEfficiency", staticEff),
-	)
-
-	return hourlyEffs, clippingCap
+	return SolarCalibration{
+		HourlyEffs:           hourlyEffs,
+		StaticEff:            staticEff,
+		StdDevRatio:          stdDevRatio,
+		RegularizationWeight: w,
+		hourScaleFactors:     hourScaleFactors,
+	}
 }
 
-// CalculateWeatherSolar1h calculates the solar generation using hourly mean DNI/DHI values.
-func CalculateWeatherSolar1h(
+// CalculateWeatherSolar projects future solar generation based on forecast and historical calibration.
+// It performs on-the-fly compass search to detect the optimal panel azimuth and tilt, then:
+//  1. Calibrates robust hourly efficiency factors from filtered historical actual solar vs. irradiance data.
+//  2. Tracks snow depth and melt attenuation.
+//  3. Applies NOCT-based cell temperature estimation to correct for temperature-dependent efficiency.
+//  4. Projects forward using the calibrated efficiency and optimal layout configurations.
+//
+// Returns a map keyed by Unix timestamp (seconds) of each weather hour's computed improvedSolar.
+func CalculateWeatherSolar(
 	ctx context.Context,
 	now time.Time,
 	history []types.EnergyStats,
 	weather []types.Weather,
 	locInfo types.SiteLocation,
-) map[int64]WeatherSolar {
+) (map[int64]WeatherSolar, types.SimulationParams) {
 
 	// Collect all forecast hours across all days in weather
 	var forecastHours []types.HourlyWeather
@@ -831,65 +732,323 @@ func CalculateWeatherSolar1h(
 		timeLoc = time.UTC
 	}
 
-	// Calculate our custom GTI for each forecast hour
-	gtiByHour := make(map[int64]float64)
+	clippingCap := calculateSolarClippingCap(ctx, history)
+
+	// Pre-compute sun positions for all forecast hours
+	type sunPosition struct {
+		Elevation float64
+		Azimuth   float64
+	}
+	sunPosByHour := make(map[int64]sunPosition, len(forecastHours))
 	for _, hw := range forecastHours {
 		ts := hw.TSHourStart.Unix()
-		// Compute sun position at the middle of the hour
 		tMid := hw.TSHourStart.Add(30 * time.Minute)
 		el, az := calculateSunPosition(tMid, locInfo.Latitude, locInfo.Longitude)
-		gtiByHour[ts] = calculateGTI(hw.DNI, hw.DHI, el, az, locInfo.SolarTilt, locInfo.SolarAzimuth)
+		sunPosByHour[ts] = sunPosition{Elevation: el, Azimuth: az}
 	}
 
-	// Calibrate scale factor using our self-calculated GTI
-	getIrr := func(hw types.HourlyWeather) float64 {
-		return gtiByHour[hw.TSHourStart.Unix()]
-	}
-	hourlyEffs, clippingCap := CalibrateSolarScaleFactor(ctx, now, history, weather, locInfo, getIrr)
-
-	results := make(map[int64]WeatherSolar)
-	var anyEff bool
-	for _, eff := range hourlyEffs {
-		if eff > 0 {
-			anyEff = true
-			break
-		}
+	weatherByHour := make(map[int64]types.HourlyWeather, len(forecastHours))
+	for _, hw := range forecastHours {
+		weatherByHour[hw.TSHourStart.Unix()] = hw
 	}
 
-	if anyEff {
-		for _, hw := range forecastHours {
+	type evalResult struct {
+		mae   float64
+		calib SolarCalibration
+		ok    bool
+	}
+
+	// Helper to evaluate daylight MAE for a candidate azimuth and tilt using hourly calibrated efficiencies
+	evaluateAzimuthWithTilt := func(testAz, testTilt float64) evalResult {
+		getIrr := func(hw types.HourlyWeather) float64 {
 			ts := hw.TSHourStart.Unix()
-			gti := gtiByHour[ts]
+			pos := sunPosByHour[ts]
+			return calculateGTI(hw.DNI, hw.DHI, pos.Elevation, pos.Azimuth, testTilt, testAz)
+		}
+		calib := CalibrateSolarScaleFactor(ctx, now, history, weather, locInfo.TimeZone, clippingCap, getIrr)
+
+		var sumAbsErr float64
+		var count int
+
+		for _, he := range history {
+			ts := he.TSHourStart.Unix()
+			hw, ok := weatherByHour[ts]
+			if !ok {
+				continue
+			}
+			gti := getIrr(hw)
+			if gti < 50 {
+				continue
+			}
+			if isSolarCurtailed(he) || hw.SnowDepthCM > 0.2 || ts == now.Truncate(time.Hour).Unix() {
+				continue
+			}
+			if he.SolarKWH <= 0.5 {
+				continue
+			}
+
 			tCell := hw.TemperatureC + (gti/800.0)*(nominalOperatingCellTemperature-20.0)
 			tCell = min(max(tCell, -40), 80)
 			tempFactor := 1.0 - (tCell-25.0)*powerTemperatureCoefficient
+			snowFactor := calculateSnowFactor(hw.SnowDepthCM)
 
-			snowDepth := hw.SnowDepthCM
-			snowFactor := calculateSnowFactor(snowDepth)
+			localHour := he.TSHourStart.In(timeLoc).Hour()
+			eff := calib.HourlyEffs[localHour]
 
-			localHour := hw.TSHourStart.In(timeLoc).Hour()
-			eff := hourlyEffs[localHour]
-
-			unclipped := gti * eff * tempFactor * snowFactor
-			improved := unclipped
-			if clippingCap > 0 && improved > clippingCap {
-				improved = clippingCap
+			pred := gti * eff * tempFactor * snowFactor
+			if clippingCap > 0 && pred > clippingCap {
+				pred = clippingCap
 			}
+			sumAbsErr += math.Abs(pred - he.SolarKWH)
+			count++
+		}
 
-			results[ts] = WeatherSolar{
-				TSHourStart:    ts,
-				ImprovedSolar:  improved,
-				UnclippedSolar: unclipped,
-				SnowDepth:      snowDepth,
-				TempFactor:     tempFactor,
-				SnowFactor:     snowFactor,
-				TCell:          tCell,
-				Irradiance:     gti,
+		if count < 5 {
+			return evalResult{mae: 99999.0, calib: calib, ok: false}
+		}
+		return evalResult{mae: sumAbsErr / float64(count), calib: calib, ok: true}
+	}
+
+	evaluateAzimuth := func(testAz float64) evalResult {
+		return evaluateAzimuthWithTilt(testAz, locInfo.SolarTilt)
+	}
+
+	// Heuristic Compass Search Strategy:
+	// Instead of blindly evaluating all 8 directions, we use a decision tree based on solar physics.
+	// In the Northern Hemisphere, South (180°) is the baseline optimal direction and most common layout.
+	// We first evaluate South (180°) and East (90°):
+	// - If East is better than South: the array is East-facing. We search the Eastern quadrant (135°, 45°, 0°).
+	// - If East is worse than South: we evaluate West (270°).
+	//   - If West is better than South: the array is West-facing. We search the Western quadrant (225°, 315°, 0°).
+	//   - If West is also worse than South: both East and West are worse, meaning the array is South-facing.
+	//     We can stop immediately, saving evaluations for the remaining 5 directions.
+	//
+	// This heuristic cuts search evaluations from 8 down to 3 in the most common case (South is best),
+	// and down to 5 or 6 for East/West configurations, drastically reducing CPU load during calibration.
+	bestAzimuth := locInfo.SolarAzimuth
+	bestTilt := locInfo.SolarTilt
+	bestMae := 99999.0
+	var gotCalib bool
+	var bestCalib SolarCalibration
+
+	if resSouth := evaluateAzimuth(180.0); resSouth.ok {
+		bestAzimuth = 180.0
+		bestMae = resSouth.mae
+		bestCalib = resSouth.calib
+		gotCalib = true
+
+		if resEast := evaluateAzimuth(90.0); resEast.ok {
+			if resEast.mae < resSouth.mae {
+				// East-facing branch: search Southeast (135°), Northeast (45°), and North (0°)
+				bestAzimuth = 90.0
+				bestMae = resEast.mae
+				bestCalib = resEast.calib
+
+				for _, az := range []float64{135.0, 45.0, 0.0} {
+					res := evaluateAzimuth(az)
+					if res.ok && res.mae < bestMae {
+						bestMae = res.mae
+						bestAzimuth = az
+						bestCalib = res.calib
+					}
+				}
+			} else {
+				// West-facing or South-facing check: check West (270°)
+				if resWest := evaluateAzimuth(270.0); resWest.ok {
+					if resWest.mae < resSouth.mae {
+						// West-facing branch: search Southwest (225°), Northwest (315°), and North (0°)
+						bestAzimuth = 270.0
+						bestMae = resWest.mae
+						bestCalib = resWest.calib
+
+						for _, az := range []float64{225.0, 315.0, 0.0} {
+							res := evaluateAzimuth(az)
+							if res.ok && res.mae < bestMae {
+								bestMae = res.mae
+								bestAzimuth = az
+								bestCalib = res.calib
+							}
+						}
+					}
+					// If resWest.mae >= resSouth.mae, both East and West are worse than South.
+					// South is the winner, and we skip evaluating the remaining directions.
+				}
 			}
 		}
 	}
 
-	return results
+	// Evaluate if the site has an East-West split configuration.
+	// We represent East-West split using a negative sentinel azimuth where the absolute value
+	// is the fraction of the array facing East (e.g. -0.5 represents 50% East / 50% West).
+	// To minimize CPU overhead, we first evaluate the symmetric 50/50 split (-0.5).
+	// If the 50/50 split is promising (within 5% of the best single direction), we evaluate
+	// asymmetric splits: -0.3 (30% East / 70% West) and -0.7 (70% East / 30% West).
+	var maeSplit float64
+	var bestSplitAzimuth float64
+	var bestSplitCalib SolarCalibration
+	var hasEnoughSplit bool
+	if res5050 := evaluateAzimuth(-0.5); res5050.ok {
+		maeSplit = res5050.mae
+		bestSplitAzimuth = -0.5
+		bestSplitCalib = res5050.calib
+		hasEnoughSplit = true
+
+		// Only search asymmetric splits if the symmetric split is a reasonably good fit.
+		// We proceed if the 50/50 split is within 5% of bestMae, or within 0.15 kWh absolute MAE tolerance
+		// to handle near-zero bestMae values stable in simulated test data.
+		if res5050.mae <= bestMae*1.05 || res5050.mae <= bestMae+0.15 {
+			for _, frac := range []float64{0.3, 0.7} {
+				res := evaluateAzimuth(-frac)
+				if res.ok && res.mae < maeSplit {
+					maeSplit = res.mae
+					bestSplitAzimuth = -frac
+					bestSplitCalib = res.calib
+				}
+			}
+		}
+	}
+
+	// Evaluate if the site has a Flat (0° tilt) panel configuration.
+	resFlat := evaluateAzimuthWithTilt(0.0, 0.0)
+
+	// Choose the configuration with the absolute lowest MAE.
+	if hasEnoughSplit && maeSplit < bestMae {
+		bestMae = maeSplit
+		bestAzimuth = bestSplitAzimuth
+		bestTilt = locInfo.SolarTilt
+		if bestTilt <= 0 {
+			bestTilt = 25.0
+		}
+		bestCalib = bestSplitCalib
+		gotCalib = true
+	}
+
+	if resFlat.ok && resFlat.mae < bestMae {
+		bestMae = resFlat.mae
+		bestTilt = 0.0
+		bestAzimuth = 180.0
+		bestCalib = resFlat.calib
+		gotCalib = true
+	}
+
+	log.Ctx(ctx).DebugContext(
+		ctx,
+		"determined best solar azimuth and tilt on-the-fly",
+		slog.Float64("configuredAzimuth", locInfo.SolarAzimuth),
+		slog.Float64("bestAzimuth", bestAzimuth),
+		slog.Float64("configuredTilt", locInfo.SolarTilt),
+		slog.Float64("bestTilt", bestTilt),
+		slog.Float64("bestMAE", bestMae),
+		slog.Bool("different", bestAzimuth != locInfo.SolarAzimuth || bestTilt != locInfo.SolarTilt),
+	)
+
+	// Identify the best irradiance source (GTI if available, fallback to GHI)
+	var anyGTI bool
+	var anyGHI bool
+	for _, hw := range forecastHours {
+		if hw.GTI > 0 {
+			anyGTI = true
+			break
+		}
+		if hw.GHI > 0 {
+			anyGHI = true
+		}
+	}
+	useGTI := anyGTI || !anyGHI
+
+	getForecastIrr := func(hw types.HourlyWeather) float64 {
+		if useGTI {
+			return hw.GTI
+		}
+		return hw.GHI
+	}
+
+	gtiByHour := make(map[int64]float64, len(forecastHours))
+	for _, hw := range forecastHours {
+		ts := hw.TSHourStart.Unix()
+		pos := sunPosByHour[ts]
+		if hw.DNI > 0 || hw.DHI > 0 {
+			gtiByHour[ts] = calculateGTI(hw.DNI, hw.DHI, pos.Elevation, pos.Azimuth, bestTilt, bestAzimuth)
+		} else {
+			gtiByHour[ts] = getForecastIrr(hw)
+		}
+	}
+
+	var hourlyEffs [24]float64
+	var finalCalib SolarCalibration
+	if !gotCalib {
+		// Fallback to configured settings calibration if we didn't find enough telemetry for any candidate
+		finalCalib = CalibrateSolarScaleFactor(ctx, now, history, weather, locInfo.TimeZone, clippingCap, func(hw types.HourlyWeather) float64 {
+			return gtiByHour[hw.TSHourStart.Unix()]
+		})
+		hourlyEffs = finalCalib.HourlyEffs
+	} else {
+		finalCalib = bestCalib
+		hourlyEffs = bestCalib.HourlyEffs
+	}
+
+	log.Ctx(ctx).DebugContext(
+		ctx,
+		"calibrated per-hour scale factors",
+		slog.Any("hourlyEfficiencies", hourlyEffs),
+		slog.Float64("stdDevRatio", finalCalib.StdDevRatio),
+		slog.Float64("regularizationWeight", finalCalib.RegularizationWeight),
+		slog.Float64("staticEfficiency", finalCalib.StaticEff),
+		slog.Any("hourScaleFactors", finalCalib.hourScaleFactors),
+	)
+
+	results := make(map[int64]WeatherSolar)
+	for _, hw := range forecastHours {
+		ts := hw.TSHourStart.Unix()
+		gti := gtiByHour[ts]
+		tCell := hw.TemperatureC + (gti/800.0)*(nominalOperatingCellTemperature-20.0)
+		tCell = min(max(tCell, -40), 80)
+		tempFactor := 1.0 - (tCell-25.0)*powerTemperatureCoefficient
+
+		snowDepth := hw.SnowDepthCM
+		snowFactor := calculateSnowFactor(snowDepth)
+
+		localHour := hw.TSHourStart.In(timeLoc).Hour()
+		eff := hourlyEffs[localHour]
+
+		unclipped := gti * eff * tempFactor * snowFactor
+		improved := unclipped
+		if clippingCap > 0 && improved > clippingCap {
+			improved = clippingCap
+		}
+
+		results[ts] = WeatherSolar{
+			TSHourStart:    ts,
+			ImprovedSolar:  improved,
+			UnclippedSolar: unclipped,
+			SnowDepth:      snowDepth,
+			TempFactor:     tempFactor,
+			SnowFactor:     snowFactor,
+			TCell:          tCell,
+			Irradiance:     gti,
+		}
+	}
+
+	var sumEff float64
+	var countEff int
+	for _, eff := range hourlyEffs {
+		if eff > 0 {
+			sumEff += eff
+			countEff++
+		}
+	}
+	var avgEff float64
+	if countEff > 0 {
+		avgEff = sumEff / float64(countEff)
+	}
+
+	params := types.SimulationParams{
+		ClippingCapKWH:         clippingCap,
+		PanelAzimuth:           bestAzimuth,
+		PanelTilt:              bestTilt,
+		AverageSolarEfficiency: avgEff,
+	}
+	return results, params
 }
 
 // interpolateHourlyEfficiencies performs circular linear interpolation over the 24 hours of the day.

@@ -14,7 +14,8 @@ import (
 
 // Decision represents the result of the decision logic.
 type Decision struct {
-	Action types.Action
+	Action           types.Action
+	SimulationParams types.SimulationParams
 }
 
 // Controller handles the decision-making logic for the ESS.
@@ -112,7 +113,7 @@ func (c *Controller) Decide(
 		solarMode = types.SolarModeNoExport
 	}
 
-	simData := c.SimulateState(ctx, now, currentStatus, currentPrice, futurePrices, history, weather, settings)
+	simData, simParams := c.SimulateState(ctx, now, currentStatus, currentPrice, futurePrices, history, weather, settings)
 
 	if len(simData) > 0 && simData[0].TS.After(now) {
 		log.Ctx(ctx).WarnContext(ctx, "simulation started in the future", slog.Time("simTime", simData[0].TS))
@@ -138,6 +139,7 @@ func (c *Controller) Decide(
 				CurrentPrice: &currentPrice,
 				SystemStatus: currentStatus,
 			},
+			SimulationParams: simParams,
 		}, nil
 	}
 
@@ -170,6 +172,7 @@ func (c *Controller) Decide(
 				CurrentPrice: &currentPrice,
 				SystemStatus: currentStatus,
 			},
+			SimulationParams: simParams,
 		}, nil
 	}
 
@@ -199,6 +202,7 @@ func (c *Controller) Decide(
 				HitAboveDeficitAt: summary.HitAboveDeficitAt,
 				HitCapacityAt:     summary.HitCapacityAt,
 			},
+			SimulationParams: simParams,
 		}
 	}
 

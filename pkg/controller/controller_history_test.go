@@ -289,7 +289,7 @@ func TestDecideHistory(t *testing.T) {
 				// enable for debugging
 				if false {
 					if (tCurrent.Day() == 27 && tCurrent.Hour() == 6) || (tCurrent.Day() == 28 && (tCurrent.Hour() == 1 || tCurrent.Hour() == 2)) {
-						simData := c.SimulateState(ctx, tCurrent, simStatus, currentPrice, futurePrices, mockHistory, mockWeather, settings)
+						simData, _ := c.SimulateState(ctx, tCurrent, simStatus, currentPrice, futurePrices, mockHistory, mockWeather, settings)
 						summary := c.analyzeSimulation(ctx, tCurrent, currentPrice, settings, simData)
 						evalDef := c.evaluateDeficit(ctx, tCurrent, simStatus, currentPrice, settings, simData, summary)
 						evalExp := c.evaluateExportArbitrage(ctx, tCurrent, simStatus, currentPrice, settings, simData, summary)
@@ -322,7 +322,7 @@ func TestDecideHistory(t *testing.T) {
 							}(), expPlanStr)
 					}
 					if tCurrent.Day() == 20 && tCurrent.Hour() == 18 && tCurrent.Minute() == 33 {
-						simData := c.SimulateState(ctx, tCurrent, simStatus, currentPrice, futurePrices, mockHistory, mockWeather, settings)
+						simData, _ := c.SimulateState(ctx, tCurrent, simStatus, currentPrice, futurePrices, mockHistory, mockWeather, settings)
 						t.Logf("=== SIMULATION SLOTS AT 18:33 ===")
 						for idx, slot := range simData {
 							t.Logf("  Slot %d: TS=%s, NetLoadSolar=%.3f, BatteryKWH=%.3f, HitCapacity=%s, HitDeficit=%s, ClampedNet=%.3f",

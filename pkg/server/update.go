@@ -456,6 +456,7 @@ func (s *Server) performSiteUpdate(
 	}
 
 	action := decision.Action
+	action.SimulationParams = decision.SimulationParams
 	// Ensure timestamps match if not set
 	if action.Timestamp.IsZero() {
 		action.Timestamp = s.now()

@@ -90,7 +90,7 @@ const LocationForm = ({ settings, onChange }: LocationFormProps) => {
                 />
             </Field.Root>
 
-            <Field.Root className="form-group">
+            <Field.Root className="form-group" style={{ display: 'none' }}>
                 <Field.Label htmlFor="solarDirection">Roof Solar Panel Direction</Field.Label>
                 <Select.Root
                     value={(settings.solarTilt && settings.solarTilt > 0) ? (settings.solarAzimuth?.toString() || "") : ""}

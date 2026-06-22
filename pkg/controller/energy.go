@@ -161,7 +161,7 @@ func (c *Controller) BuildImprovedHourlyEnergyModel(
 			Longitude: weather[0].Longitude,
 			TimeZone:  weather[0].TimeLocation,
 		}
-		weatherSolar = CalculateWeatherSolar(ctx, now, history, weather, locInfo)
+		weatherSolar, _ = CalculateWeatherSolar(ctx, now, history, weather, locInfo)
 	} else {
 		smoothedSolar = CalculateSmoothedSolar(ctx, now, history, settings)
 	}

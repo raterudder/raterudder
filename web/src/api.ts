@@ -53,6 +53,13 @@ export interface PriceInfo {
     gridUseDollarsPerKWH: number; // delivery adder; true grid charge cost = dollarsPerKWH + gridUseDollarsPerKWH
 }
 
+export interface SimulationParams {
+    clippingCapKWH: number;
+    panelAzimuth: number;
+    panelTilt: number;
+    averageSolarEfficiency: number;
+}
+
 export interface Action {
     timestamp: string;
     batteryMode: number;
@@ -71,6 +78,7 @@ export interface Action {
     dryRun?: boolean;
     fault?: boolean;
     paused?: boolean;
+    simulationParams?: SimulationParams;
 }
 
 export const BatteryMode = {

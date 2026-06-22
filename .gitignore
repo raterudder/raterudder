@@ -8,3 +8,4 @@ raterudder
 raterudder.exe
 *.pem
 /utilities
+/scratch

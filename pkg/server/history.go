@@ -70,7 +70,7 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 	// hour (which only has partial generation telemetry) so that it doesn't skew learned solar efficiencies.
 	var improvedSolarMap map[int64]controller.WeatherSolar
 	if settings.Location != nil {
-		improvedSolarMap = controller.CalculateWeatherSolar(ctx, s.now(), flatEnergy, weatherHistory, *settings.Location)
+		improvedSolarMap, _ = controller.CalculateWeatherSolar(ctx, s.now(), flatEnergy, weatherHistory, *settings.Location)
 	}
 
 	loc := time.UTC
@@ -140,7 +140,7 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 	var solar1hRes []WeatherRes
 
 	if settings.Location != nil && len(weatherHistory) > 0 {
-		solar1hMap := controller.CalculateWeatherSolar1h(ctx, s.now(), flatEnergy, weatherHistory, *settings.Location)
+		solar1hMap, _ := controller.CalculateWeatherSolar(ctx, s.now(), flatEnergy, weatherHistory, *settings.Location)
 
 		for _, w := range weatherHistory {
 			if w.TSDayStart.Format("2006-01-02") != dateStr {

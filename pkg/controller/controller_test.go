@@ -2123,7 +2123,7 @@ func TestDecide(t *testing.T) {
 			ts = ts.Add(1 * time.Hour)
 		}
 
-		simData := c.SimulateState(ctx, now, status, currentPrice, futurePrices, customHistory, nil, settings)
+		simData, _ := c.SimulateState(ctx, now, status, currentPrice, futurePrices, customHistory, nil, settings)
 		summary := c.analyzeSimulation(ctx, now, currentPrice, settings, simData)
 		evalDef := c.evaluateDeficit(ctx, now, status, currentPrice, settings, simData, summary)
 		evalExport := c.evaluateExportArbitrage(ctx, now, status, currentPrice, settings, simData, summary)
@@ -3338,7 +3338,7 @@ func TestEvaluateDeficit(t *testing.T) {
 			ts = ts.Add(1 * time.Hour)
 		}
 
-		simData := c.SimulateState(ctx, now, lowBattStatus, currentPrice, futurePrices, history, nil, settings)
+		simData, _ := c.SimulateState(ctx, now, lowBattStatus, currentPrice, futurePrices, history, nil, settings)
 		summary := c.analyzeSimulation(ctx, now, currentPrice, settings, simData)
 		eval := c.evaluateDeficit(ctx, now, lowBattStatus, currentPrice, settings, simData, summary)
 
@@ -3390,7 +3390,7 @@ func TestEvaluateDeficit(t *testing.T) {
 			ts = ts.Add(1 * time.Hour)
 		}
 
-		simData := c.SimulateState(ctx, now, lowBattStatus, currentPrice, futurePrices, history, nil, settings)
+		simData, _ := c.SimulateState(ctx, now, lowBattStatus, currentPrice, futurePrices, history, nil, settings)
 		summary := c.analyzeSimulation(ctx, now, currentPrice, settings, simData)
 		eval := c.evaluateDeficit(ctx, now, lowBattStatus, currentPrice, settings, simData, summary)
 
@@ -3435,7 +3435,7 @@ func TestEvaluateDeficit(t *testing.T) {
 			ts = ts.Add(1 * time.Hour)
 		}
 
-		simData := c.SimulateState(ctx, now, lowBattStatus, currentPrice, futurePrices, history, nil, settings)
+		simData, _ := c.SimulateState(ctx, now, lowBattStatus, currentPrice, futurePrices, history, nil, settings)
 		summary := c.analyzeSimulation(ctx, now, currentPrice, settings, simData)
 		eval := c.evaluateDeficit(ctx, now, lowBattStatus, currentPrice, settings, simData, summary)
 
@@ -3493,7 +3493,7 @@ func TestEvaluateDeficit(t *testing.T) {
 		settings := baseSettings
 		settings.MinArbitrageDifferenceDollarsPerKWH = 0.10
 
-		simData := c.SimulateState(ctx, now, lowBattStatus, currentPrice, futurePrices, customHistory, nil, settings)
+		simData, _ := c.SimulateState(ctx, now, lowBattStatus, currentPrice, futurePrices, customHistory, nil, settings)
 		summary := c.analyzeSimulation(ctx, now, currentPrice, settings, simData)
 		eval := c.evaluateDeficit(ctx, now, lowBattStatus, currentPrice, settings, simData, summary)
 
@@ -3506,7 +3506,7 @@ func TestEvaluateDeficit(t *testing.T) {
 
 		// And if we change the current price to less than the min diff it should save/plan for peak
 		currentPrice.DollarsPerKWH = 0.095
-		simData = c.SimulateState(ctx, now, lowBattStatus, currentPrice, futurePrices, customHistory, nil, settings)
+		simData, _ = c.SimulateState(ctx, now, lowBattStatus, currentPrice, futurePrices, customHistory, nil, settings)
 		summary = c.analyzeSimulation(ctx, now, currentPrice, settings, simData)
 		eval = c.evaluateDeficit(ctx, now, lowBattStatus, currentPrice, settings, simData, summary)
 		require.NotNil(t, eval)
@@ -3518,7 +3518,7 @@ func TestEvaluateDeficit(t *testing.T) {
 
 		// But if we make it even lower then it should charge now
 		currentPrice.DollarsPerKWH = 0.08
-		simData = c.SimulateState(ctx, now, lowBattStatus, currentPrice, futurePrices, customHistory, nil, settings)
+		simData, _ = c.SimulateState(ctx, now, lowBattStatus, currentPrice, futurePrices, customHistory, nil, settings)
 		summary = c.analyzeSimulation(ctx, now, currentPrice, settings, simData)
 		eval = c.evaluateDeficit(ctx, now, lowBattStatus, currentPrice, settings, simData, summary)
 		require.NotNil(t, eval)
@@ -3570,7 +3570,7 @@ func TestEvaluateDeficit(t *testing.T) {
 		settings.AlwaysChargeUnderDollarsPerKWH = 0.01
 		settings.GridChargeBatteries = true
 
-		simData := c.SimulateState(ctx, now, lowBattStatus, currentPrice, futurePrices, customHistory, nil, settings)
+		simData, _ := c.SimulateState(ctx, now, lowBattStatus, currentPrice, futurePrices, customHistory, nil, settings)
 		summary := c.analyzeSimulation(ctx, now, currentPrice, settings, simData)
 		eval := c.evaluateDeficit(ctx, now, lowBattStatus, currentPrice, settings, simData, summary)
 
@@ -3635,7 +3635,7 @@ func TestEvaluateDeficit(t *testing.T) {
 		settings := baseSettings
 		settings.MinArbitrageDifferenceDollarsPerKWH = 0.10
 
-		simData := c.SimulateState(ctx, now, lowBattStatus, currentPrice, futurePrices, customHistory, nil, settings)
+		simData, _ := c.SimulateState(ctx, now, lowBattStatus, currentPrice, futurePrices, customHistory, nil, settings)
 		summary := c.analyzeSimulation(ctx, now, currentPrice, settings, simData)
 		eval := c.evaluateDeficit(ctx, now, lowBattStatus, currentPrice, settings, simData, summary)
 
@@ -3648,7 +3648,7 @@ func TestEvaluateDeficit(t *testing.T) {
 
 		// and if we change the current price to be as cheap it should charge now
 		currentPrice.DollarsPerKWH = 0.05
-		simData = c.SimulateState(ctx, now, lowBattStatus, currentPrice, futurePrices, customHistory, nil, settings)
+		simData, _ = c.SimulateState(ctx, now, lowBattStatus, currentPrice, futurePrices, customHistory, nil, settings)
 		summary = c.analyzeSimulation(ctx, now, currentPrice, settings, simData)
 		eval = c.evaluateDeficit(ctx, now, lowBattStatus, currentPrice, settings, simData, summary)
 		require.NotNil(t, eval)
@@ -3687,7 +3687,7 @@ func TestEvaluateDeficit(t *testing.T) {
 			ts = ts.Add(1 * time.Hour)
 		}
 
-		simData := c.SimulateState(ctx, now, lowBattStatus, currentPrice, futurePrices, smallLoadHistory, nil, baseSettings)
+		simData, _ := c.SimulateState(ctx, now, lowBattStatus, currentPrice, futurePrices, smallLoadHistory, nil, baseSettings)
 		summary := c.analyzeSimulation(ctx, now, currentPrice, baseSettings, simData)
 		eval := c.evaluateDeficit(ctx, now, lowBattStatus, currentPrice, baseSettings, simData, summary)
 
@@ -4370,7 +4370,7 @@ func TestEvaluateArbitrage(t *testing.T) {
 
 		// Since settings.MinArbitrageDifferenceDollarsPerKWH = 0.40, and arbitrage profit is 0.50 - 0.20 = 0.30 < 0.40:
 		// evaluateExportArbitrage should return nil (no charge/standby decided here).
-		simData := c.SimulateState(ctx, now, status, currentPrice, futurePrices, history, nil, settings)
+		simData, _ := c.SimulateState(ctx, now, status, currentPrice, futurePrices, history, nil, settings)
 		summary := c.analyzeSimulation(ctx, now, currentPrice, settings, simData)
 		eval := c.evaluateExportArbitrage(ctx, now, status, currentPrice, settings, simData, summary)
 
@@ -4395,7 +4395,7 @@ func TestEvaluateArbitrage(t *testing.T) {
 		status := baseStatus
 		status.BatteryChargingDisabled = true
 
-		simData := c.SimulateState(ctx, now, status, currentPrice, futurePrices, solarArbitrageHistory, nil, baseSettings)
+		simData, _ := c.SimulateState(ctx, now, status, currentPrice, futurePrices, solarArbitrageHistory, nil, baseSettings)
 		summary := c.analyzeSimulation(ctx, now, currentPrice, baseSettings, simData)
 		eval := c.evaluateExportArbitrage(ctx, now, status, currentPrice, baseSettings, simData, summary)
 
@@ -4427,7 +4427,7 @@ func TestEvaluateArbitrage(t *testing.T) {
 		almostFullStatus.MaxBatteryChargeKW = 5.0
 		almostFullStatus.BatteryCapacityKWH = 10.0
 
-		simData := c.SimulateState(ctx, now, almostFullStatus, currentPrice, futurePrices, solarArbitrageHistory, nil, baseSettings)
+		simData, _ := c.SimulateState(ctx, now, almostFullStatus, currentPrice, futurePrices, solarArbitrageHistory, nil, baseSettings)
 		summary := c.analyzeSimulation(ctx, now, currentPrice, baseSettings, simData)
 		eval := c.evaluateExportArbitrage(ctx, now, almostFullStatus, currentPrice, baseSettings, simData, summary)
 
@@ -4476,7 +4476,7 @@ func TestEvaluateArbitrage(t *testing.T) {
 			ts = ts.Add(1 * time.Hour)
 		}
 
-		simData := c.SimulateState(ctx, testNow, almostFullStatus, currentPrice, futurePrices, customHistory, nil, baseSettings)
+		simData, _ := c.SimulateState(ctx, testNow, almostFullStatus, currentPrice, futurePrices, customHistory, nil, baseSettings)
 		summary := c.analyzeSimulation(ctx, testNow, currentPrice, baseSettings, simData)
 		eval := c.evaluateExportArbitrage(ctx, testNow, almostFullStatus, currentPrice, baseSettings, simData, summary)
 
@@ -4536,7 +4536,7 @@ func TestEvaluateArbitrage(t *testing.T) {
 		settings.GridChargeBatteries = true
 		settings.GridExportSolar = true
 
-		simData := c.SimulateState(ctx, now, status, currentPrice, futurePrices, customHistory, nil, settings)
+		simData, _ := c.SimulateState(ctx, now, status, currentPrice, futurePrices, customHistory, nil, settings)
 		summary := c.analyzeSimulation(ctx, now, currentPrice, settings, simData)
 		eval := c.evaluateExportArbitrage(ctx, now, status, currentPrice, settings, simData, summary)
 
@@ -4594,7 +4594,7 @@ func TestEvaluateArbitrage(t *testing.T) {
 		settings.GridChargeBatteries = true
 		settings.GridExportSolar = true
 
-		simData := c.SimulateState(ctx, now, status, currentPrice, futurePrices, customHistory, nil, settings)
+		simData, _ := c.SimulateState(ctx, now, status, currentPrice, futurePrices, customHistory, nil, settings)
 		summary := c.analyzeSimulation(ctx, now, currentPrice, settings, simData)
 		eval := c.evaluateExportArbitrage(ctx, now, status, currentPrice, settings, simData, summary)
 
@@ -4665,7 +4665,7 @@ func TestEvaluateArbitrage(t *testing.T) {
 		settings.GridChargeBatteries = true
 		settings.GridExportSolar = true
 
-		simData := c.SimulateState(ctx, nightTime, statusNight, currentPriceNight, futurePrices, customHistory, nil, settings)
+		simData, _ := c.SimulateState(ctx, nightTime, statusNight, currentPriceNight, futurePrices, customHistory, nil, settings)
 		summary := c.analyzeSimulation(ctx, nightTime, currentPriceNight, settings, simData)
 		eval := c.evaluateExportArbitrage(ctx, nightTime, statusNight, currentPriceNight, settings, simData, summary)
 
@@ -4731,7 +4731,7 @@ func TestEvaluateArbitrage(t *testing.T) {
 		for i := 1; i <= 24; i++ {
 			futurePrices = append(futurePrices, getPriceAt(nowTime.Add(time.Duration(i)*time.Hour)))
 		}
-		simData := c.SimulateState(ctx, nowTime, status, getPriceAt(nowTime), futurePrices, customHistory, nil, settings)
+		simData, _ := c.SimulateState(ctx, nowTime, status, getPriceAt(nowTime), futurePrices, customHistory, nil, settings)
 		summary := c.analyzeSimulation(ctx, nowTime, getPriceAt(nowTime), settings, simData)
 		eval := c.evaluateExportArbitrage(ctx, nowTime, status, getPriceAt(nowTime), settings, simData, summary)
 

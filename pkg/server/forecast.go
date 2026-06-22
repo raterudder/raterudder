@@ -127,7 +127,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	flatEnergyHistory := flattenDailyEnergyStats(energyHistory)
 
 	// 7. Run Simulation
-	simHours := s.controller.SimulateState(ctx, now, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings)
+	simHours, _ := s.controller.SimulateState(ctx, now, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings)
 
 	// Fetch data for the previous day for history display
 	histStart24 := now.AddDate(0, 0, -1).Truncate(time.Hour)
@@ -184,7 +184,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 			todayMidnight := time.Date(now.In(timeLoc).Year(), now.In(timeLoc).Month(), now.In(timeLoc).Day(), 0, 0, 0, 0, timeLoc)
 			tomorrowEnd := todayMidnight.AddDate(0, 0, 2)
 
-			solar1hMap := controller.CalculateWeatherSolar1h(ctx, now, flatEnergyHistory, weatherHistory, *settings.Location)
+			solar1hMap, _ := controller.CalculateWeatherSolar(ctx, now, flatEnergyHistory, weatherHistory, *settings.Location)
 
 			// Find matching forecast hours
 			var allForecastHours []types.HourlyWeather

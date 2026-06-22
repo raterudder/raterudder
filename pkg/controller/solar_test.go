@@ -12,7 +12,13 @@ import (
 
 func TestCalculateWeatherSolar(t *testing.T) {
 	ctx := context.Background()
-	loc := types.SiteLocation{TimeZone: "America/Chicago"}
+	loc := types.SiteLocation{
+		Latitude:     41.8781,
+		Longitude:    -87.6298,
+		TimeZone:     "America/Chicago",
+		SolarTilt:    25,
+		SolarAzimuth: 180,
+	}
 
 	t.Run("basic projection", func(t *testing.T) {
 		history := []types.EnergyStats{
@@ -27,7 +33,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 			},
 		}
 
-		results := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
+		results, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		assert.NotEmpty(t, results)
 
 		// 12:00 has history, so it should calibrate efficiency
@@ -54,7 +60,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 			},
 		}
 
-		results := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
+		results, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		val12 := results[time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC).Unix()]
 		// Should learn clipping cap of 5.0
 		assert.LessOrEqual(t, val12.ImprovedSolar, 5.0001)
@@ -77,7 +83,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 			},
 		}
 
-		results := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
+		results, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		val12 := results[time.Date(2024, 1, 4, 12, 0, 0, 0, time.UTC).Unix()]
 		// Should learn clipping cap of 10.0, so the forecast for GTI=1500 is capped at 10.0.
 		assert.LessOrEqual(t, val12.ImprovedSolar, 10.0001)
@@ -98,7 +104,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 			},
 		}
 
-		results := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
+		results, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		val12 := results[time.Date(2024, 1, 4, 12, 0, 0, 0, time.UTC).Unix()]
 		// With only 2 occurrences, no clipping cap is learned, so ImprovedSolar should be unclipped (~15.0).
 		assert.Greater(t, val12.ImprovedSolar, 14.0)
@@ -120,7 +126,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 				},
 			},
 		}
-		results := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
+		results, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		// Efficiency should be learned ONLY from 12:00 (10.0 / 800 * ...)
 		// Not from 11:00 (which would drag efficiency down)
 		val13 := results[time.Date(2024, 1, 1, 13, 0, 0, 0, time.UTC).Unix()]
@@ -146,7 +152,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 			},
 		}
 
-		results := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
+		results, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		assert.Equal(t, 0.0, results[time.Date(2024, 1, 1, 13, 0, 0, 0, time.UTC).Unix()].SnowFactor)
 		assert.Equal(t, 0.1, results[time.Date(2024, 1, 1, 14, 0, 0, 0, time.UTC).Unix()].SnowFactor)
 		assert.Equal(t, 0.7, results[time.Date(2024, 1, 1, 15, 0, 0, 0, time.UTC).Unix()].SnowFactor)
@@ -172,7 +178,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 			},
 		}
 
-		results := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
+		results, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		// Should use GHI for calculation
 		val12 := results[time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC).Unix()]
 		val13 := results[time.Date(2024, 1, 1, 13, 0, 0, 0, time.UTC).Unix()]
@@ -204,7 +210,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 			},
 		}
 
-		results := CalculateWeatherSolar(ctx, currentHour, history, weather, loc)
+		results, _ := CalculateWeatherSolar(ctx, currentHour, history, weather, loc)
 		assert.NotEmpty(t, results)
 
 		valYesterday := results[yesterdayHour.Unix()]
@@ -218,6 +224,563 @@ func TestCalculateWeatherSolar(t *testing.T) {
 		assert.InDelta(t, 10.0, valYesterday.ImprovedSolar, 0.1)
 		assert.InDelta(t, 10.0, valCurrent.ImprovedSolar, 0.1)
 		assert.InDelta(t, 10.0, valFuture.ImprovedSolar, 0.1)
+	})
+
+	t.Run("empty history and weather", func(t *testing.T) {
+		results, _ := CalculateWeatherSolar(ctx, time.Time{}, nil, nil, loc)
+		assert.Empty(t, results)
+	})
+
+	t.Run("empty history with weather", func(t *testing.T) {
+		weather := []types.Weather{
+			{
+				ForecastHours: []types.HourlyWeather{
+					{TSHourStart: time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC), GTI: 800, TemperatureC: 25},
+				},
+			},
+		}
+		results, _ := CalculateWeatherSolar(ctx, time.Time{}, nil, weather, loc)
+		// Should have entries but with zero solar (no calibration data)
+		assert.Len(t, results, 1)
+		val := results[time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC).Unix()]
+		assert.Equal(t, 0.0, val.ImprovedSolar, "no history means no efficiency, so zero projection")
+	})
+
+	t.Run("history with no matching weather", func(t *testing.T) {
+		history := []types.EnergyStats{
+			{TSHourStart: time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC), SolarKWH: 10.0, GridExportKWH: 5.0},
+		}
+		weather := []types.Weather{
+			{
+				ForecastHours: []types.HourlyWeather{
+					// Different timestamp than history
+					{TSHourStart: time.Date(2024, 2, 1, 12, 0, 0, 0, time.UTC), GTI: 800, TemperatureC: 25},
+				},
+			},
+		}
+		results, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
+		// Weather hour exists but no matching history, so no calibrated efficiency
+		assert.Len(t, results, 1)
+		val := results[time.Date(2024, 2, 1, 12, 0, 0, 0, time.UTC).Unix()]
+		assert.Equal(t, 0.0, val.ImprovedSolar)
+	})
+
+	t.Run("zero irradiance produces zero solar", func(t *testing.T) {
+		history := []types.EnergyStats{
+			{TSHourStart: time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC), SolarKWH: 10.0, GridExportKWH: 5.0},
+		}
+		weather := []types.Weather{
+			{
+				ForecastHours: []types.HourlyWeather{
+					{TSHourStart: time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC), GTI: 800, TemperatureC: 25},
+					{TSHourStart: time.Date(2024, 1, 1, 13, 0, 0, 0, time.UTC), GTI: 0, TemperatureC: 25},
+				},
+			},
+		}
+		results, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
+		val13 := results[time.Date(2024, 1, 1, 13, 0, 0, 0, time.UTC).Unix()]
+		assert.Equal(t, 0.0, val13.ImprovedSolar, "zero irradiance should produce zero solar")
+	})
+
+	t.Run("invalid timezone falls back to UTC", func(t *testing.T) {
+		badLoc := types.SiteLocation{TimeZone: "Invalid/Timezone"}
+		history := []types.EnergyStats{
+			{TSHourStart: time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC), SolarKWH: 10.0, GridExportKWH: 5.0},
+		}
+		weather := []types.Weather{
+			{
+				ForecastHours: []types.HourlyWeather{
+					{TSHourStart: time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC), GTI: 800, TemperatureC: 25},
+				},
+			},
+		}
+		// Should not panic, just fall back to UTC
+		results, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, badLoc)
+		assert.NotEmpty(t, results)
+	})
+
+	t.Run("1h projection with DNI and DHI", func(t *testing.T) {
+		// Use a summer afternoon hour where sun is well above the horizon
+		// June 21 at 18:00 UTC = ~1PM CDT (good solar production)
+		calibHour := time.Date(2024, 6, 21, 18, 0, 0, 0, time.UTC)
+		forecastHour := time.Date(2024, 6, 21, 19, 0, 0, 0, time.UTC)
+
+		history := []types.EnergyStats{
+			{TSHourStart: calibHour, SolarKWH: 8.0, GridExportKWH: 5.0},
+		}
+		weather := []types.Weather{
+			{
+				ForecastHours: []types.HourlyWeather{
+					{TSHourStart: calibHour, DNI: 700, DHI: 150, TemperatureC: 30},
+					{TSHourStart: forecastHour, DNI: 700, DHI: 150, TemperatureC: 30},
+				},
+			},
+		}
+
+		results, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
+		assert.NotEmpty(t, results)
+
+		// Both hours have same DNI/DHI/temp but different sun positions, so
+		// GTI will differ (sun angle changes). The calibration hour and forecast hour
+		// may have slightly different projected values due to the sun position change.
+		valCalib := results[calibHour.Unix()]
+		valForecast := results[forecastHour.Unix()]
+
+		assert.Greater(t, valCalib.ImprovedSolar, 0.0, "calibration hour should have positive solar")
+		assert.Greater(t, valForecast.ImprovedSolar, 0.0, "forecast hour should have positive solar")
+		assert.Greater(t, valCalib.Irradiance, 0.0, "GTI should be positive during daytime")
+		assert.Greater(t, valForecast.Irradiance, 0.0, "GTI should be positive during daytime")
+	})
+
+	t.Run("1h night hours produce zero", func(t *testing.T) {
+		// Calibrate with a daytime hour, forecast a night hour
+		calibHour := time.Date(2024, 6, 21, 18, 0, 0, 0, time.UTC)
+		nightHour := time.Date(2024, 6, 22, 6, 0, 0, 0, time.UTC) // midnight CDT
+
+		history := []types.EnergyStats{
+			{TSHourStart: calibHour, SolarKWH: 8.0, GridExportKWH: 5.0},
+		}
+		weather := []types.Weather{
+			{
+				ForecastHours: []types.HourlyWeather{
+					{TSHourStart: calibHour, DNI: 700, DHI: 150, TemperatureC: 30},
+					{TSHourStart: nightHour, DNI: 0, DHI: 0, TemperatureC: 20},
+				},
+			},
+		}
+
+		results, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
+		valNight := results[nightHour.Unix()]
+		assert.Equal(t, 0.0, valNight.ImprovedSolar, "night should produce zero solar")
+	})
+
+	t.Run("auto detect azimuth: East panels", func(t *testing.T) {
+		history := []types.EnergyStats{}
+		weatherHours := []types.HourlyWeather{}
+
+		base := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+		for d := 0; d < 10; d++ {
+			day := base.AddDate(0, 0, d)
+			for h := 8; h <= 16; h++ {
+				ts := day.Add(time.Duration(h) * time.Hour)
+				tMid := ts.Add(30 * time.Minute)
+				el, sunAz := calculateSunPosition(tMid, loc.Latitude, loc.Longitude)
+				gti := calculateGTI(800.0, 100.0, el, sunAz, 25.0, 90.0) // East physical layout
+
+				weatherHours = append(weatherHours, types.HourlyWeather{
+					TSHourStart:  ts,
+					DNI:          800.0,
+					DHI:          100.0,
+					TemperatureC: 25.0,
+				})
+
+				tCell := 25.0 + (gti/800.0)*(45.0-20.0)
+				tempFactor := 1.0 - (tCell-25.0)*0.0035
+				history = append(history, types.EnergyStats{
+					TSHourStart:   ts,
+					SolarKWH:      gti * 0.0015 * tempFactor,
+					GridExportKWH: 1.0,
+				})
+			}
+		}
+
+		// Add one forecast hour
+		forecastHour := base.AddDate(0, 0, 10).Add(12 * time.Hour) // noon on Day 11
+		weatherHours = append(weatherHours, types.HourlyWeather{
+			TSHourStart:  forecastHour,
+			DNI:          800.0,
+			DHI:          100.0,
+			TemperatureC: 25.0,
+		})
+
+		weather := []types.Weather{{ForecastHours: weatherHours}}
+		// Pass loc with South in settings, should auto-detect East (90)
+		testLoc := loc
+		testLoc.SolarAzimuth = 180.0
+		testLoc.SolarTilt = 25.0
+
+		results, _ := CalculateWeatherSolar(ctx, base.AddDate(0, 0, 10), history, weather, testLoc)
+		wsForecast := results[forecastHour.Unix()]
+
+		tMid := forecastHour.Add(30 * time.Minute)
+		el, sunAz := calculateSunPosition(tMid, loc.Latitude, loc.Longitude)
+		expectedGTI := calculateGTI(800.0, 100.0, el, sunAz, 25.0, 90.0) // should match East GTI
+
+		if assert.Greater(t, wsForecast.Irradiance, 0.0) {
+			assert.InDelta(t, expectedGTI, wsForecast.Irradiance, 0.1)
+		}
+	})
+
+	t.Run("auto detect azimuth: West panels", func(t *testing.T) {
+		history := []types.EnergyStats{}
+		weatherHours := []types.HourlyWeather{}
+
+		base := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+		for d := 0; d < 10; d++ {
+			day := base.AddDate(0, 0, d)
+			for h := 8; h <= 16; h++ {
+				ts := day.Add(time.Duration(h) * time.Hour)
+				tMid := ts.Add(30 * time.Minute)
+				el, sunAz := calculateSunPosition(tMid, loc.Latitude, loc.Longitude)
+				gti := calculateGTI(800.0, 100.0, el, sunAz, 25.0, 270.0) // West physical layout
+
+				weatherHours = append(weatherHours, types.HourlyWeather{
+					TSHourStart:  ts,
+					DNI:          800.0,
+					DHI:          100.0,
+					TemperatureC: 25.0,
+				})
+
+				tCell := 25.0 + (gti/800.0)*(45.0-20.0)
+				tempFactor := 1.0 - (tCell-25.0)*0.0035
+				history = append(history, types.EnergyStats{
+					TSHourStart:   ts,
+					SolarKWH:      gti * 0.0015 * tempFactor,
+					GridExportKWH: 1.0,
+				})
+			}
+		}
+
+		forecastHour := base.AddDate(0, 0, 10).Add(14 * time.Hour) // 2PM on Day 11
+		weatherHours = append(weatherHours, types.HourlyWeather{
+			TSHourStart:  forecastHour,
+			DNI:          800.0,
+			DHI:          100.0,
+			TemperatureC: 25.0,
+		})
+
+		weather := []types.Weather{{ForecastHours: weatherHours}}
+		testLoc := loc
+		testLoc.SolarAzimuth = 180.0
+		testLoc.SolarTilt = 25.0
+
+		results, _ := CalculateWeatherSolar(ctx, base.AddDate(0, 0, 10), history, weather, testLoc)
+		wsForecast := results[forecastHour.Unix()]
+
+		tMid := forecastHour.Add(30 * time.Minute)
+		el, sunAz := calculateSunPosition(tMid, loc.Latitude, loc.Longitude)
+		expectedGTI := calculateGTI(800.0, 100.0, el, sunAz, 25.0, 270.0)
+
+		if assert.Greater(t, wsForecast.Irradiance, 0.0) {
+			assert.InDelta(t, expectedGTI, wsForecast.Irradiance, 0.1)
+		}
+	})
+
+	t.Run("auto detect azimuth: South panels", func(t *testing.T) {
+		history := []types.EnergyStats{}
+		weatherHours := []types.HourlyWeather{}
+
+		base := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+		for d := 0; d < 10; d++ {
+			day := base.AddDate(0, 0, d)
+			for h := 8; h <= 16; h++ {
+				ts := day.Add(time.Duration(h) * time.Hour)
+				tMid := ts.Add(30 * time.Minute)
+				el, sunAz := calculateSunPosition(tMid, loc.Latitude, loc.Longitude)
+				gti := calculateGTI(800.0, 100.0, el, sunAz, 25.0, 180.0) // South physical layout
+
+				weatherHours = append(weatherHours, types.HourlyWeather{
+					TSHourStart:  ts,
+					DNI:          800.0,
+					DHI:          100.0,
+					TemperatureC: 25.0,
+				})
+
+				tCell := 25.0 + (gti/800.0)*(45.0-20.0)
+				tempFactor := 1.0 - (tCell-25.0)*0.0035
+				history = append(history, types.EnergyStats{
+					TSHourStart:   ts,
+					SolarKWH:      gti * 0.0015 * tempFactor,
+					GridExportKWH: 1.0,
+				})
+			}
+		}
+
+		forecastHour := base.AddDate(0, 0, 10).Add(12 * time.Hour)
+		weatherHours = append(weatherHours, types.HourlyWeather{
+			TSHourStart:  forecastHour,
+			DNI:          800.0,
+			DHI:          100.0,
+			TemperatureC: 25.0,
+		})
+
+		weather := []types.Weather{{ForecastHours: weatherHours}}
+		testLoc := loc
+		testLoc.SolarAzimuth = 90.0 // pass East, should correct to South (180)
+
+		results, _ := CalculateWeatherSolar(ctx, base.AddDate(0, 0, 10), history, weather, testLoc)
+		wsForecast := results[forecastHour.Unix()]
+
+		tMid := forecastHour.Add(30 * time.Minute)
+		el, sunAz := calculateSunPosition(tMid, loc.Latitude, loc.Longitude)
+		expectedGTI := calculateGTI(800.0, 100.0, el, sunAz, 25.0, 180.0)
+
+		if assert.Greater(t, wsForecast.Irradiance, 0.0) {
+			assert.InDelta(t, expectedGTI, wsForecast.Irradiance, 0.1)
+		}
+	})
+
+	t.Run("auto detect layout: Flat panels", func(t *testing.T) {
+		history := []types.EnergyStats{}
+		weatherHours := []types.HourlyWeather{}
+
+		base := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+		for d := 0; d < 10; d++ {
+			day := base.AddDate(0, 0, d)
+			for h := 8; h <= 16; h++ {
+				ts := day.Add(time.Duration(h) * time.Hour)
+				tMid := ts.Add(30 * time.Minute)
+				el, sunAz := calculateSunPosition(tMid, loc.Latitude, loc.Longitude)
+				gti := calculateGTI(800.0, 100.0, el, sunAz, 0.0, 0.0) // Flat physical layout
+
+				weatherHours = append(weatherHours, types.HourlyWeather{
+					TSHourStart:  ts,
+					DNI:          800.0,
+					DHI:          100.0,
+					TemperatureC: 25.0,
+				})
+
+				tCell := 25.0 + (gti/800.0)*(45.0-20.0)
+				tempFactor := 1.0 - (tCell-25.0)*0.0035
+				history = append(history, types.EnergyStats{
+					TSHourStart:   ts,
+					SolarKWH:      gti * 0.0015 * tempFactor,
+					GridExportKWH: 1.0,
+				})
+			}
+		}
+
+		forecastHour := base.AddDate(0, 0, 10).Add(12 * time.Hour)
+		weatherHours = append(weatherHours, types.HourlyWeather{
+			TSHourStart:  forecastHour,
+			DNI:          800.0,
+			DHI:          100.0,
+			TemperatureC: 25.0,
+		})
+
+		weather := []types.Weather{{ForecastHours: weatherHours}}
+		testLoc := loc
+		testLoc.SolarAzimuth = 180.0
+		testLoc.SolarTilt = 25.0 // Tilted settings passed, should auto-detect Flat (0.0 tilt)
+
+		results, params := CalculateWeatherSolar(ctx, base.AddDate(0, 0, 10), history, weather, testLoc)
+		assert.Equal(t, 0.0, params.PanelTilt)
+		assert.Equal(t, 180.0, params.PanelAzimuth)
+		assert.Greater(t, params.AverageSolarEfficiency, 0.0)
+		wsForecast := results[forecastHour.Unix()]
+
+		tMid := forecastHour.Add(30 * time.Minute)
+		el, sunAz := calculateSunPosition(tMid, loc.Latitude, loc.Longitude)
+		expectedGTI := calculateGTI(800.0, 100.0, el, sunAz, 0.0, 0.0) // flat layout expected
+
+		if assert.Greater(t, wsForecast.Irradiance, 0.0) {
+			assert.InDelta(t, expectedGTI, wsForecast.Irradiance, 0.1)
+		}
+	})
+
+	t.Run("auto detect layout: East-West Split 50/50", func(t *testing.T) {
+		history := []types.EnergyStats{}
+		weatherHours := []types.HourlyWeather{}
+
+		base := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+		for d := 0; d < 10; d++ {
+			day := base.AddDate(0, 0, d)
+			for h := 8; h <= 16; h++ {
+				ts := day.Add(time.Duration(h) * time.Hour)
+				tMid := ts.Add(30 * time.Minute)
+				el, sunAz := calculateSunPosition(tMid, loc.Latitude, loc.Longitude)
+
+				// Generate telemetry for a sloped East-West Split array (tilt 25)
+				gtiEast := calculateGTI(800.0, 100.0, el, sunAz, 25.0, 90.0)
+				gtiWest := calculateGTI(800.0, 100.0, el, sunAz, 25.0, 270.0)
+				gti := 0.5*gtiEast + 0.5*gtiWest
+
+				weatherHours = append(weatherHours, types.HourlyWeather{
+					TSHourStart:  ts,
+					DNI:          800.0,
+					DHI:          100.0,
+					TemperatureC: 25.0,
+				})
+
+				tCell := 25.0 + (gti/800.0)*(45.0-20.0)
+				tempFactor := 1.0 - (tCell-25.0)*0.0035
+				history = append(history, types.EnergyStats{
+					TSHourStart:   ts,
+					SolarKWH:      gti * 0.0015 * tempFactor,
+					GridExportKWH: 1.0,
+				})
+			}
+		}
+
+		forecastHour := base.AddDate(0, 0, 10).Add(12 * time.Hour)
+		weatherHours = append(weatherHours, types.HourlyWeather{
+			TSHourStart:  forecastHour,
+			DNI:          800.0,
+			DHI:          100.0,
+			TemperatureC: 25.0,
+		})
+
+		weather := []types.Weather{{ForecastHours: weatherHours}}
+		testLoc := loc
+		testLoc.SolarAzimuth = 180.0
+		testLoc.SolarTilt = 25.0 // Tilted settings passed, should auto-detect East-West Split (-0.5 azimuth)
+
+		results, params := CalculateWeatherSolar(ctx, base.AddDate(0, 0, 10), history, weather, testLoc)
+		assert.Equal(t, 25.0, params.PanelTilt)
+		assert.Equal(t, -0.5, params.PanelAzimuth)
+		assert.Greater(t, params.AverageSolarEfficiency, 0.0)
+		wsForecast := results[forecastHour.Unix()]
+
+		tMid := forecastHour.Add(30 * time.Minute)
+		el, sunAz := calculateSunPosition(tMid, loc.Latitude, loc.Longitude)
+		expectedGTI := calculateGTI(800.0, 100.0, el, sunAz, 25.0, -0.5)
+
+		if assert.Greater(t, wsForecast.Irradiance, 0.0) {
+			assert.InDelta(t, expectedGTI, wsForecast.Irradiance, 0.1)
+		}
+	})
+
+	t.Run("auto detect layout: East-West Split 30/70", func(t *testing.T) {
+		history := []types.EnergyStats{}
+		weatherHours := []types.HourlyWeather{}
+
+		base := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+		for d := 0; d < 10; d++ {
+			day := base.AddDate(0, 0, d)
+			for h := 8; h <= 16; h++ {
+				ts := day.Add(time.Duration(h) * time.Hour)
+				tMid := ts.Add(30 * time.Minute)
+				el, sunAz := calculateSunPosition(tMid, loc.Latitude, loc.Longitude)
+
+				// Generate telemetry for a sloped 30/70 East-West Split array (tilt 25)
+				gtiEast := calculateGTI(800.0, 100.0, el, sunAz, 25.0, 90.0)
+				gtiWest := calculateGTI(800.0, 100.0, el, sunAz, 25.0, 270.0)
+				gti := 0.3*gtiEast + 0.7*gtiWest
+
+				weatherHours = append(weatherHours, types.HourlyWeather{
+					TSHourStart:  ts,
+					DNI:          800.0,
+					DHI:          100.0,
+					TemperatureC: 25.0,
+				})
+
+				tCell := 25.0 + (gti/800.0)*(45.0-20.0)
+				tempFactor := 1.0 - (tCell-25.0)*0.0035
+				history = append(history, types.EnergyStats{
+					TSHourStart:   ts,
+					SolarKWH:      gti * 0.0015 * tempFactor,
+					GridExportKWH: 1.0,
+				})
+			}
+		}
+
+		forecastHour := base.AddDate(0, 0, 10).Add(12 * time.Hour)
+		weatherHours = append(weatherHours, types.HourlyWeather{
+			TSHourStart:  forecastHour,
+			DNI:          800.0,
+			DHI:          100.0,
+			TemperatureC: 25.0,
+		})
+
+		weather := []types.Weather{{ForecastHours: weatherHours}}
+		testLoc := loc
+		testLoc.SolarAzimuth = 180.0
+		testLoc.SolarTilt = 25.0 // Tilted settings passed, should auto-detect East-West Split (-0.3 azimuth)
+
+		results, params := CalculateWeatherSolar(ctx, base.AddDate(0, 0, 10), history, weather, testLoc)
+		assert.Equal(t, 25.0, params.PanelTilt)
+		assert.Equal(t, -0.3, params.PanelAzimuth)
+		assert.Greater(t, params.AverageSolarEfficiency, 0.0)
+		wsForecast := results[forecastHour.Unix()]
+
+		tMid := forecastHour.Add(30 * time.Minute)
+		el, sunAz := calculateSunPosition(tMid, loc.Latitude, loc.Longitude)
+		expectedGTI := calculateGTI(800.0, 100.0, el, sunAz, 25.0, -0.3)
+
+		if assert.Greater(t, wsForecast.Irradiance, 0.0) {
+			assert.InDelta(t, expectedGTI, wsForecast.Irradiance, 0.1)
+		}
+	})
+
+	t.Run("auto detect layout: East-West Split 70/30", func(t *testing.T) {
+		history := []types.EnergyStats{}
+		weatherHours := []types.HourlyWeather{}
+
+		base := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+		for d := 0; d < 10; d++ {
+			day := base.AddDate(0, 0, d)
+			for h := 8; h <= 16; h++ {
+				ts := day.Add(time.Duration(h) * time.Hour)
+				tMid := ts.Add(30 * time.Minute)
+				el, sunAz := calculateSunPosition(tMid, loc.Latitude, loc.Longitude)
+
+				// Generate telemetry for a sloped 70/30 East-West Split array (tilt 25)
+				gtiEast := calculateGTI(800.0, 100.0, el, sunAz, 25.0, 90.0)
+				gtiWest := calculateGTI(800.0, 100.0, el, sunAz, 25.0, 270.0)
+				gti := 0.7*gtiEast + 0.3*gtiWest
+
+				weatherHours = append(weatherHours, types.HourlyWeather{
+					TSHourStart:  ts,
+					DNI:          800.0,
+					DHI:          100.0,
+					TemperatureC: 25.0,
+				})
+
+				tCell := 25.0 + (gti/800.0)*(45.0-20.0)
+				tempFactor := 1.0 - (tCell-25.0)*0.0035
+				history = append(history, types.EnergyStats{
+					TSHourStart:   ts,
+					SolarKWH:      gti * 0.0015 * tempFactor,
+					GridExportKWH: 1.0,
+				})
+			}
+		}
+
+		forecastHour := base.AddDate(0, 0, 10).Add(12 * time.Hour)
+		weatherHours = append(weatherHours, types.HourlyWeather{
+			TSHourStart:  forecastHour,
+			DNI:          800.0,
+			DHI:          100.0,
+			TemperatureC: 25.0,
+		})
+
+		weather := []types.Weather{{ForecastHours: weatherHours}}
+		testLoc := loc
+		testLoc.SolarAzimuth = 180.0
+		testLoc.SolarTilt = 25.0 // Tilted settings passed, should auto-detect East-West Split (-0.7 azimuth)
+
+		results, params := CalculateWeatherSolar(ctx, base.AddDate(0, 0, 10), history, weather, testLoc)
+		assert.Equal(t, 25.0, params.PanelTilt)
+		assert.Equal(t, -0.7, params.PanelAzimuth)
+		assert.Greater(t, params.AverageSolarEfficiency, 0.0)
+		wsForecast := results[forecastHour.Unix()]
+
+		tMid := forecastHour.Add(30 * time.Minute)
+		el, sunAz := calculateSunPosition(tMid, loc.Latitude, loc.Longitude)
+		expectedGTI := calculateGTI(800.0, 100.0, el, sunAz, 25.0, -0.7)
+
+		if assert.Greater(t, wsForecast.Irradiance, 0.0) {
+			assert.InDelta(t, expectedGTI, wsForecast.Irradiance, 0.1)
+		}
+	})
+
+	t.Run("simulation params", func(t *testing.T) {
+		history := []types.EnergyStats{
+			{TSHourStart: time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC), SolarKWH: 10.0, GridExportKWH: 5.0},
+		}
+		weather := []types.Weather{
+			{
+				ForecastHours: []types.HourlyWeather{
+					{TSHourStart: time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC), GTI: 800, TemperatureC: 25},
+				},
+			},
+		}
+
+		results, params := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
+		assert.NotEmpty(t, results)
+		assert.Equal(t, 25.0, params.PanelTilt)
+		assert.Equal(t, 180.0, params.PanelAzimuth)
+		assert.Greater(t, params.AverageSolarEfficiency, 0.0)
 	})
 }
 
@@ -326,7 +889,7 @@ func TestSolarCalculations(t *testing.T) {
 			TimeZone:  "America/Chicago",
 		}
 
-		res1h := CalculateWeatherSolar1h(ctx, time.Time{}, history, weather, loc)
+		res1h, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		assert.NotEmpty(t, res1h)
 	})
 }
@@ -413,7 +976,7 @@ func TestHourlyScaleFactorCalibration(t *testing.T) {
 			},
 		}
 
-		res := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
+		res, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		t.Logf("res map size: %d", len(res))
 		val11 := res[baseDate.Add(11*time.Hour).Unix()]
 		val12 := res[baseDate.Add(12*time.Hour).Unix()]
@@ -467,7 +1030,7 @@ func TestHourlyScaleFactorCalibration(t *testing.T) {
 			},
 		}
 
-		res := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
+		res, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		// Since we only had 3 valid hours, Stage 3 falls back to staticEff for all hours.
 		// staticEff is based on daily total:
 		// Daily actual = 12 + 13 + 14 = 39.0
@@ -526,7 +1089,7 @@ func TestHourlyScaleFactorCalibration(t *testing.T) {
 			},
 		}
 
-		res := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
+		res, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		// Hour 12 is invalid due to high noise.
 		// The valid hours are 10, 11, 13, 14, 15 (5 valid hours >= 4).
 		// So Hour 12 should be interpolated between 11 (12.0) and 13 (14.0) -> ~13.0.
@@ -580,7 +1143,7 @@ func TestHourlyScaleFactorCalibration(t *testing.T) {
 			},
 		}
 
-		res := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
+		res, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		// Hour 12 is invalid due to being unphysically high.
 		// The valid hours are 10, 11, 13, 14, 15 (5 valid hours >= 4).
 		// So Hour 12 should be interpolated between 11 (12.0) and 13 (14.0) -> ~13.0.
@@ -681,7 +1244,7 @@ func TestTemperatureEffects(t *testing.T) {
 			},
 		}
 
-		results := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
+		results, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		val12 := results[time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC).Unix()]
 		val13 := results[time.Date(2024, 1, 1, 13, 0, 0, 0, time.UTC).Unix()]
 
@@ -704,7 +1267,7 @@ func TestTemperatureEffects(t *testing.T) {
 			},
 		}
 
-		results := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
+		results, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		val12 := results[time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC).Unix()]
 		val13 := results[time.Date(2024, 1, 1, 13, 0, 0, 0, time.UTC).Unix()]
 
@@ -732,7 +1295,7 @@ func TestTemperatureEffects(t *testing.T) {
 			},
 		}
 
-		results := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
+		results, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		val12 := results[time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC).Unix()]
 
 		// At Tamb=0°C and GTI=800: Tcell = 0 + (800/800)*(45-20) = 25°C → TempFactor = 1.0
@@ -756,7 +1319,7 @@ func TestTemperatureEffects(t *testing.T) {
 			},
 		}
 
-		results := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
+		results, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		val13 := results[time.Date(2024, 1, 1, 13, 0, 0, 0, time.UTC).Unix()]
 		val14 := results[time.Date(2024, 1, 1, 14, 0, 0, 0, time.UTC).Unix()]
 
@@ -857,177 +1420,26 @@ func TestCalculateSunPosition(t *testing.T) {
 	})
 }
 
-func TestCalculateWeatherSolarEdgeCases(t *testing.T) {
+func TestCalculateSolarClippingCap(t *testing.T) {
 	ctx := context.Background()
-	loc := types.SiteLocation{TimeZone: "America/Chicago"}
-
-	t.Run("empty history and weather", func(t *testing.T) {
-		results := CalculateWeatherSolar(ctx, time.Time{}, nil, nil, loc)
-		assert.Empty(t, results)
-	})
-
-	t.Run("empty history with weather", func(t *testing.T) {
-		weather := []types.Weather{
-			{
-				ForecastHours: []types.HourlyWeather{
-					{TSHourStart: time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC), GTI: 800, TemperatureC: 25},
-				},
-			},
-		}
-		results := CalculateWeatherSolar(ctx, time.Time{}, nil, weather, loc)
-		// Should have entries but with zero solar (no calibration data)
-		assert.Len(t, results, 1)
-		val := results[time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC).Unix()]
-		assert.Equal(t, 0.0, val.ImprovedSolar, "no history means no efficiency, so zero projection")
-	})
-
-	t.Run("history with no matching weather", func(t *testing.T) {
-		history := []types.EnergyStats{
-			{TSHourStart: time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC), SolarKWH: 10.0, GridExportKWH: 5.0},
-		}
-		weather := []types.Weather{
-			{
-				ForecastHours: []types.HourlyWeather{
-					// Different timestamp than history
-					{TSHourStart: time.Date(2024, 2, 1, 12, 0, 0, 0, time.UTC), GTI: 800, TemperatureC: 25},
-				},
-			},
-		}
-		results := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
-		// Weather hour exists but no matching history, so no calibrated efficiency
-		assert.Len(t, results, 1)
-		val := results[time.Date(2024, 2, 1, 12, 0, 0, 0, time.UTC).Unix()]
-		assert.Equal(t, 0.0, val.ImprovedSolar)
-	})
-
-	t.Run("zero irradiance produces zero solar", func(t *testing.T) {
-		history := []types.EnergyStats{
-			{TSHourStart: time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC), SolarKWH: 10.0, GridExportKWH: 5.0},
-		}
-		weather := []types.Weather{
-			{
-				ForecastHours: []types.HourlyWeather{
-					{TSHourStart: time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC), GTI: 800, TemperatureC: 25},
-					{TSHourStart: time.Date(2024, 1, 1, 13, 0, 0, 0, time.UTC), GTI: 0, TemperatureC: 25},
-				},
-			},
-		}
-		results := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
-		val13 := results[time.Date(2024, 1, 1, 13, 0, 0, 0, time.UTC).Unix()]
-		assert.Equal(t, 0.0, val13.ImprovedSolar, "zero irradiance should produce zero solar")
-	})
-
-	t.Run("invalid timezone falls back to UTC", func(t *testing.T) {
-		badLoc := types.SiteLocation{TimeZone: "Invalid/Timezone"}
-		history := []types.EnergyStats{
-			{TSHourStart: time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC), SolarKWH: 10.0, GridExportKWH: 5.0},
-		}
-		weather := []types.Weather{
-			{
-				ForecastHours: []types.HourlyWeather{
-					{TSHourStart: time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC), GTI: 800, TemperatureC: 25},
-				},
-			},
-		}
-		// Should not panic, just fall back to UTC
-		results := CalculateWeatherSolar(ctx, time.Time{}, history, weather, badLoc)
-		assert.NotEmpty(t, results)
-	})
-}
-
-func TestCalculateWeatherSolar1h(t *testing.T) {
-	ctx := context.Background()
-	loc := types.SiteLocation{
-		Latitude:     41.8781,
-		Longitude:    -87.6298,
-		TimeZone:     "America/Chicago",
-		SolarTilt:    0,
-		SolarAzimuth: 180,
-	}
-
-	t.Run("1h projection with DNI and DHI", func(t *testing.T) {
-		// Use a summer afternoon hour where sun is well above the horizon
-		// June 21 at 18:00 UTC = ~1PM CDT (good solar production)
-		calibHour := time.Date(2024, 6, 21, 18, 0, 0, 0, time.UTC)
-		forecastHour := time.Date(2024, 6, 21, 19, 0, 0, 0, time.UTC)
-
-		history := []types.EnergyStats{
-			{TSHourStart: calibHour, SolarKWH: 8.0, GridExportKWH: 5.0},
-		}
-		weather := []types.Weather{
-			{
-				ForecastHours: []types.HourlyWeather{
-					{TSHourStart: calibHour, DNI: 700, DHI: 150, TemperatureC: 30},
-					{TSHourStart: forecastHour, DNI: 700, DHI: 150, TemperatureC: 30},
-				},
-			},
-		}
-
-		results := CalculateWeatherSolar1h(ctx, time.Time{}, history, weather, loc)
-		assert.NotEmpty(t, results)
-
-		// Both hours have same DNI/DHI/temp but different sun positions, so
-		// GTI will differ (sun angle changes). The calibration hour and forecast hour
-		// may have slightly different projected values due to the sun position change.
-		valCalib := results[calibHour.Unix()]
-		valForecast := results[forecastHour.Unix()]
-
-		assert.Greater(t, valCalib.ImprovedSolar, 0.0, "calibration hour should have positive solar")
-		assert.Greater(t, valForecast.ImprovedSolar, 0.0, "forecast hour should have positive solar")
-		assert.Greater(t, valCalib.Irradiance, 0.0, "GTI should be positive during daytime")
-		assert.Greater(t, valForecast.Irradiance, 0.0, "GTI should be positive during daytime")
-	})
-
-	t.Run("1h night hours produce zero", func(t *testing.T) {
-		// Calibrate with a daytime hour, forecast a night hour
-		calibHour := time.Date(2024, 6, 21, 18, 0, 0, 0, time.UTC)
-		nightHour := time.Date(2024, 6, 22, 6, 0, 0, 0, time.UTC) // midnight CDT
-
-		history := []types.EnergyStats{
-			{TSHourStart: calibHour, SolarKWH: 8.0, GridExportKWH: 5.0},
-		}
-		weather := []types.Weather{
-			{
-				ForecastHours: []types.HourlyWeather{
-					{TSHourStart: calibHour, DNI: 700, DHI: 150, TemperatureC: 30},
-					{TSHourStart: nightHour, DNI: 0, DHI: 0, TemperatureC: 20},
-				},
-			},
-		}
-
-		results := CalculateWeatherSolar1h(ctx, time.Time{}, history, weather, loc)
-		valNight := results[nightHour.Unix()]
-		assert.Equal(t, 0.0, valNight.ImprovedSolar, "night should produce zero solar")
-	})
-}
-
-func TestCalibrateSolarScaleFactor(t *testing.T) {
-	ctx := context.Background()
-	loc := types.SiteLocation{TimeZone: "America/Chicago"}
-	getIrr := func(hw types.HourlyWeather) float64 {
-		return hw.GTI
-	}
 	baseTime := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
-	evalTime := baseTime.AddDate(0, 0, 10) // 10 days later, so no currentHour is hit
-	timeLoc, err := time.LoadLocation(loc.TimeZone)
-	if err != nil {
-		t.Fatalf("failed to load timezone: %v", err)
-	}
 
-	t.Run("no false clipping", func(t *testing.T) {
+	t.Run("basic threshold logic under 2.0", func(t *testing.T) {
+		history := []types.EnergyStats{
+			{TSHourStart: baseTime, SolarKWH: 1.5},
+			{TSHourStart: baseTime.Add(time.Hour), SolarKWH: 1.8},
+		}
+		capVal := calculateSolarClippingCap(ctx, history)
+		assert.Equal(t, 0.0, capVal)
+	})
+
+	t.Run("no false clipping (bell curve peak)", func(t *testing.T) {
 		history := []types.EnergyStats{}
-		weatherHours := []types.HourlyWeather{}
 		for d := 0; d < 5; d++ {
 			day := baseTime.AddDate(0, 0, d)
 			peaks := []float64{5.0, 5.8, 5.2, 5.5, 6.0}
 			for h := 8; h <= 16; h++ {
 				ts := day.Add(time.Duration(h-12) * time.Hour)
-				weatherHours = append(weatherHours, types.HourlyWeather{
-					TSHourStart:  ts,
-					GTI:          1000.0,
-					TemperatureC: 25.0,
-				})
-				// Bell curve peak
 				val := 0.0
 				if h == 12 {
 					val = peaks[d]
@@ -1043,10 +1455,119 @@ func TestCalibrateSolarScaleFactor(t *testing.T) {
 				})
 			}
 		}
-		weather := []types.Weather{{ForecastHours: weatherHours}}
-		_, clippingCap := CalibrateSolarScaleFactor(ctx, evalTime, history, weather, loc, getIrr)
-		assert.Equal(t, 0.0, clippingCap)
+		capVal := calculateSolarClippingCap(ctx, history)
+		assert.Equal(t, 0.0, capVal)
 	})
+
+	t.Run("clipping cap learned from day plateaus", func(t *testing.T) {
+		history := []types.EnergyStats{}
+		// 5 days of history
+		for d := 0; d < 5; d++ {
+			day := baseTime.AddDate(0, 0, d)
+			for h := 8; h <= 16; h++ {
+				ts := day.Add(time.Duration(h-12) * time.Hour)
+				val := 2.0
+				if h == 11 || h == 12 || h == 13 {
+					val = 5.0 // plateau at 5.0
+				} else if h == 10 || h == 14 {
+					val = 4.0
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: ts,
+					SolarKWH:    val,
+				})
+			}
+		}
+		capVal := calculateSolarClippingCap(ctx, history)
+		assert.InDelta(t, 5.0, capVal, 0.01)
+	})
+
+	t.Run("clipping cap learned from 2-hour day plateau", func(t *testing.T) {
+		history := []types.EnergyStats{}
+		for d := 0; d < 5; d++ {
+			day := baseTime.AddDate(0, 0, d)
+			for h := 8; h <= 16; h++ {
+				ts := day.Add(time.Duration(h-12) * time.Hour)
+				val := 1.0
+				if h == 12 || h == 13 {
+					val = 6.0 // 2-hour plateau at 6.0
+				} else if h == 11 || h == 14 {
+					val = 4.0
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: ts,
+					SolarKWH:    val,
+				})
+			}
+		}
+		capVal := calculateSolarClippingCap(ctx, history)
+		assert.InDelta(t, 6.0, capVal, 0.01)
+	})
+
+	t.Run("fallback to frequency count with 3 occurrences", func(t *testing.T) {
+		history := []types.EnergyStats{
+			{TSHourStart: baseTime.AddDate(0, 0, 1), SolarKWH: 8.0},
+			{TSHourStart: baseTime.AddDate(0, 0, 2), SolarKWH: 8.0},
+			{TSHourStart: baseTime.AddDate(0, 0, 3), SolarKWH: 8.0},
+		}
+		capVal := calculateSolarClippingCap(ctx, history)
+		assert.InDelta(t, 8.0, capVal, 0.01)
+	})
+
+	t.Run("fallback to frequency count with 2 occurrences rejected", func(t *testing.T) {
+		history := []types.EnergyStats{
+			{TSHourStart: baseTime.AddDate(0, 0, 1), SolarKWH: 8.0},
+			{TSHourStart: baseTime.AddDate(0, 0, 2), SolarKWH: 8.0},
+		}
+		capVal := calculateSolarClippingCap(ctx, history)
+		assert.Equal(t, 0.0, capVal)
+	})
+
+	t.Run("rejecting false clipping when max is significantly higher", func(t *testing.T) {
+		history := []types.EnergyStats{}
+		for d := 0; d < 5; d++ {
+			day := baseTime.AddDate(0, 0, d)
+			for h := 10; h <= 14; h++ {
+				ts := day.Add(time.Duration(h-12) * time.Hour)
+				var val float64
+				if d == 0 {
+					if h == 12 {
+						val = 10.0 // higher peak
+					} else {
+						val = 5.0
+					}
+				} else {
+					if h == 11 || h == 12 || h == 13 {
+						val = 6.0 // plateau at 6.0
+					} else {
+						val = 3.0
+					}
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart:   ts,
+					SolarKWH:      val,
+					GridExportKWH: 1.0,
+				})
+			}
+		}
+		capVal := calculateSolarClippingCap(ctx, history)
+		// The 6.0 plateau should be rejected because maxSolarKWH is 10.0 (10.0 > 6.0*1.05 and 10.0 > 6.0+0.3)
+		assert.Equal(t, 0.0, capVal)
+	})
+}
+
+func TestCalibrateSolarScaleFactor(t *testing.T) {
+	ctx := context.Background()
+	loc := types.SiteLocation{TimeZone: "America/Chicago"}
+	getIrr := func(hw types.HourlyWeather) float64 {
+		return hw.GTI
+	}
+	baseTime := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
+	evalTime := baseTime.AddDate(0, 0, 10) // 10 days later, so no currentHour is hit
+	timeLoc, err := time.LoadLocation(loc.TimeZone)
+	if err != nil {
+		t.Fatalf("failed to load timezone: %v", err)
+	}
 
 	t.Run("ignoring low generation", func(t *testing.T) {
 		history := []types.EnergyStats{}
@@ -1072,11 +1593,12 @@ func TestCalibrateSolarScaleFactor(t *testing.T) {
 			}
 		}
 		weather := []types.Weather{{ForecastHours: weatherHours}}
-		effs, _ := CalibrateSolarScaleFactor(ctx, evalTime, history, weather, loc, getIrr)
+		clippingCap := calculateSolarClippingCap(ctx, history)
+		calib := CalibrateSolarScaleFactor(ctx, evalTime, history, weather, loc.TimeZone, clippingCap, getIrr)
 		localHour10 := baseTime.Add(-2 * time.Hour).In(timeLoc).Hour() // 10:00 UTC
 		// Since hour 10 was ignored, it is circularly interpolated.
 		// Its efficiency should be close to ~0.00112, not ~0.07.
-		assert.Less(t, effs[localHour10], 0.005)
+		assert.Less(t, calib.HourlyEffs[localHour10], 0.005)
 	})
 
 	t.Run("evaluating scale factors across hours", func(t *testing.T) {
@@ -1108,7 +1630,8 @@ func TestCalibrateSolarScaleFactor(t *testing.T) {
 			}
 		}
 		weather := []types.Weather{{ForecastHours: weatherHours}}
-		effs, _ := CalibrateSolarScaleFactor(ctx, evalTime, history, weather, loc, getIrr)
+		clippingCap := calculateSolarClippingCap(ctx, history)
+		calib := CalibrateSolarScaleFactor(ctx, evalTime, history, weather, loc.TimeZone, clippingCap, getIrr)
 
 		// Expected staticEff calculated using ratio estimator sum/sum:
 		// On Day 1: gti = 200. Tcell = 25 + (200/800)*25 = 31.25. TempFactor = 1 - 6.25*0.0035 = 0.978125.
@@ -1116,7 +1639,7 @@ func TestCalibrateSolarScaleFactor(t *testing.T) {
 		// Total Solar = 0.2 * 3 + 1.5 * 3 * 4 = 18.6.
 		// Total Denom = 3 * (200 * 0.978125) + 12 * (1000 * 0.890625) = 11274.375.
 		// Expected staticEff = 18.6 / 11274.375 = 0.0016497.
-		assert.InDelta(t, 0.0016497, effs[0], 0.0001)
+		assert.InDelta(t, 0.0016497, calib.HourlyEffs[0], 0.0001)
 	})
 
 	t.Run("rejecting outliers", func(t *testing.T) {
@@ -1154,51 +1677,12 @@ func TestCalibrateSolarScaleFactor(t *testing.T) {
 			}
 		}
 		weather := []types.Weather{{ForecastHours: weatherHours}}
-		effs, _ := CalibrateSolarScaleFactor(ctx, evalTime, history, weather, loc, getIrr)
+		clippingCap := calculateSolarClippingCap(ctx, history)
+		calib := CalibrateSolarScaleFactor(ctx, evalTime, history, weather, loc.TimeZone, clippingCap, getIrr)
 		localHour12 := baseTime.In(timeLoc).Hour() // 12:00 UTC
 		// Since hour 12 is an outlier, it should be thrown away and interpolated between hour 11 and 13.
 		// Expected efficiency at hour 12: interpolated between hour 11 (~0.01347) and hour 13 (~0.01572) -> ~0.0146.
-		assert.InDelta(t, 0.0146, effs[localHour12], 0.001)
-	})
-
-	t.Run("rejecting false clipping", func(t *testing.T) {
-		history := []types.EnergyStats{}
-		weatherHours := []types.HourlyWeather{}
-		for d := 0; d < 5; d++ {
-			day := baseTime.AddDate(0, 0, d)
-			for h := 10; h <= 14; h++ {
-				ts := day.Add(time.Duration(h-12) * time.Hour)
-				weatherHours = append(weatherHours, types.HourlyWeather{
-					TSHourStart:  ts,
-					GTI:          1000.0,
-					TemperatureC: 25.0,
-				})
-
-				var val float64
-				if d == 0 {
-					if h == 12 {
-						val = 10.0
-					} else {
-						val = 5.0
-					}
-				} else {
-					if h == 11 || h == 12 || h == 13 {
-						val = 6.0 // plateau at 6.0
-					} else {
-						val = 3.0
-					}
-				}
-				history = append(history, types.EnergyStats{
-					TSHourStart:   ts,
-					SolarKWH:      val,
-					GridExportKWH: 1.0,
-				})
-			}
-		}
-		weather := []types.Weather{{ForecastHours: weatherHours}}
-		_, clippingCap := CalibrateSolarScaleFactor(ctx, evalTime, history, weather, loc, getIrr)
-		// The 6.0 plateau should be rejected because maxSolarKWH is 10.0 (10.0 > 6.0*1.05 and 10.0 > 6.0+0.3)
-		assert.Equal(t, 0.0, clippingCap)
+		assert.InDelta(t, 0.0146, calib.HourlyEffs[localHour12], 0.001)
 	})
 
 	t.Run("ignoring snowy hours", func(t *testing.T) {
@@ -1230,10 +1714,11 @@ func TestCalibrateSolarScaleFactor(t *testing.T) {
 			}
 		}
 		weather := []types.Weather{{ForecastHours: weatherHours}}
-		effs, _ := CalibrateSolarScaleFactor(ctx, evalTime, history, weather, loc, getIrr)
+		clippingCap := calculateSolarClippingCap(ctx, history)
+		calib := CalibrateSolarScaleFactor(ctx, evalTime, history, weather, loc.TimeZone, clippingCap, getIrr)
 		localHour12 := baseTime.In(timeLoc).Hour() // 12:00 UTC
 		// Snowy hour 12 should be ignored and interpolated, so its efficiency should remain close to ~0.00112.
-		assert.Greater(t, effs[localHour12], 0.0008)
+		assert.Greater(t, calib.HourlyEffs[localHour12], 0.0008)
 	})
 
 	t.Run("ignoring curtailed hours", func(t *testing.T) {
@@ -1266,10 +1751,11 @@ func TestCalibrateSolarScaleFactor(t *testing.T) {
 			}
 		}
 		weather := []types.Weather{{ForecastHours: weatherHours}}
-		effs, _ := CalibrateSolarScaleFactor(ctx, evalTime, history, weather, loc, getIrr)
+		clippingCap := calculateSolarClippingCap(ctx, history)
+		calib := CalibrateSolarScaleFactor(ctx, evalTime, history, weather, loc.TimeZone, clippingCap, getIrr)
 		localHour12 := baseTime.In(timeLoc).Hour() // 12:00 UTC
 		// Curtailed hour 12 should be ignored and interpolated, so its efficiency should remain close to ~0.00112.
-		assert.Greater(t, effs[localHour12], 0.0008)
+		assert.Greater(t, calib.HourlyEffs[localHour12], 0.0008)
 	})
 
 	t.Run("linear interpolate hours", func(t *testing.T) {
@@ -1307,12 +1793,13 @@ func TestCalibrateSolarScaleFactor(t *testing.T) {
 			}
 		}
 		weather := []types.Weather{{ForecastHours: weatherHours}}
-		effs, _ := CalibrateSolarScaleFactor(ctx, evalTime, history, weather, loc, getIrr)
+		clippingCap := calculateSolarClippingCap(ctx, history)
+		calib := CalibrateSolarScaleFactor(ctx, evalTime, history, weather, loc.TimeZone, clippingCap, getIrr)
 		localHour12 := baseTime.In(timeLoc).Hour() // 12:00 UTC
 		localHour11 := baseTime.Add(-1 * time.Hour).In(timeLoc).Hour()
 		localHour13 := baseTime.Add(1 * time.Hour).In(timeLoc).Hour()
-		expectedEff12 := (effs[localHour11] + effs[localHour13]) / 2.0
-		assert.InDelta(t, expectedEff12, effs[localHour12], 0.0001)
+		expectedEff12 := (calib.HourlyEffs[localHour11] + calib.HourlyEffs[localHour13]) / 2.0
+		assert.InDelta(t, expectedEff12, calib.HourlyEffs[localHour12], 0.0001)
 	})
 
 	t.Run("detect shading", func(t *testing.T) {
@@ -1342,15 +1829,15 @@ func TestCalibrateSolarScaleFactor(t *testing.T) {
 			}
 		}
 		weather := []types.Weather{{ForecastHours: weatherHours}}
-		effs, clippingCap := CalibrateSolarScaleFactor(ctx, evalTime, history, weather, loc, getIrr)
-		t.Logf("DIAGNOSTIC: clippingCap=%.2f, effs[7]=%.6f, effs[6]=%.6f", clippingCap, effs[7], effs[6])
+		clippingCap := calculateSolarClippingCap(ctx, history)
+		calib := CalibrateSolarScaleFactor(ctx, evalTime, history, weather, loc.TimeZone, clippingCap, getIrr)
 		localHour12 := baseTime.In(timeLoc).Hour() // 12:00 UTC
 		localHour11 := baseTime.Add(-1 * time.Hour).In(timeLoc).Hour()
 		// Since it has shading, weight w = 1.0, so the efficiency at hour 12 remains low compared to hour 11.
 		// Hour 11 efficiency: ~1.8 / 890.625 = 0.00202
 		// Hour 12 efficiency: ~1.0 / 890.625 = 0.00112
-		assert.InDelta(t, 0.00112, effs[localHour12], 0.0001)
-		assert.InDelta(t, 0.00202, effs[localHour11], 0.0001)
+		assert.InDelta(t, 0.00112, calib.HourlyEffs[localHour12], 0.0001)
+		assert.InDelta(t, 0.00202, calib.HourlyEffs[localHour11], 0.0001)
 	})
 
 	t.Run("detect no shading", func(t *testing.T) {
@@ -1382,11 +1869,12 @@ func TestCalibrateSolarScaleFactor(t *testing.T) {
 			}
 		}
 		weather := []types.Weather{{ForecastHours: weatherHours}}
-		effs, _ := CalibrateSolarScaleFactor(ctx, evalTime, history, weather, loc, getIrr)
+		clippingCap := calculateSolarClippingCap(ctx, history)
+		calib := CalibrateSolarScaleFactor(ctx, evalTime, history, weather, loc.TimeZone, clippingCap, getIrr)
 		localHour12 := baseTime.In(timeLoc).Hour() // 12:00 UTC
 		localHour11 := baseTime.Add(-1 * time.Hour).In(timeLoc).Hour()
 		// Since it has no shading, weight w = 0.0, so the efficiencies of all hours are flattened to static efficiency.
-		assert.InDelta(t, effs[localHour11], effs[localHour12], 0.00001)
+		assert.InDelta(t, calib.HourlyEffs[localHour11], calib.HourlyEffs[localHour12], 0.00001)
 	})
 
 	t.Run("rejecting too low hours for scale factors", func(t *testing.T) {
@@ -1427,15 +1915,62 @@ func TestCalibrateSolarScaleFactor(t *testing.T) {
 			}
 		}
 		weather := []types.Weather{{ForecastHours: weatherHours}}
-		effs, _ := CalibrateSolarScaleFactor(ctx, evalTime, history, weather, loc, getIrr)
+		clippingCap := calculateSolarClippingCap(ctx, history)
+		calib := CalibrateSolarScaleFactor(ctx, evalTime, history, weather, loc.TimeZone, clippingCap, getIrr)
 		localHour12 := baseTime.In(timeLoc).Hour() // 12:00 UTC
 		localHour11 := baseTime.Add(-1 * time.Hour).In(timeLoc).Hour()
 		localHour13 := baseTime.Add(1 * time.Hour).In(timeLoc).Hour()
 
 		// Since hour 12 had < 3 points, it should be rejected and interpolated between 11 and 13.
-		expectedEff12 := (effs[localHour11] + effs[localHour13]) / 2.0
-		assert.InDelta(t, expectedEff12, effs[localHour12], 0.0001)
+		expectedEff12 := (calib.HourlyEffs[localHour11] + calib.HourlyEffs[localHour13]) / 2.0
+		assert.InDelta(t, expectedEff12, calib.HourlyEffs[localHour12], 0.0001)
 		// It should not be close to the raw high efficiency of 5.0 / 890.625 ≈ 0.0056
-		assert.Less(t, effs[localHour12], 0.002)
+		assert.Less(t, calib.HourlyEffs[localHour12], 0.002)
+	})
+
+	t.Run("no global clamping on peak hours", func(t *testing.T) {
+		history := []types.EnergyStats{}
+		weatherHours := []types.HourlyWeather{}
+		for d := 0; d < 5; d++ {
+			day := baseTime.AddDate(0, 0, d)
+			for h := 10; h <= 14; h++ {
+				ts := day.Add(time.Duration(h-12) * time.Hour)
+				weatherHours = append(weatherHours, types.HourlyWeather{
+					TSHourStart:  ts,
+					GTI:          1000.0,
+					TemperatureC: 25.0,
+				})
+
+				var val float64
+				switch h {
+				case 10:
+					val = 0.85 // low efficiency to pull down staticEff
+				case 11:
+					val = 0.85
+				case 12:
+					val = 1.35 // peak efficiency (1.35 / 0.95 = 1.42x staticEff, within 1.5x outlier limit)
+				case 13:
+					val = 0.85
+				case 14:
+					val = 0.85
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart:   ts,
+					SolarKWH:      val,
+					GridExportKWH: 1.0,
+				})
+			}
+		}
+		weather := []types.Weather{{ForecastHours: weatherHours}}
+		clippingCap := calculateSolarClippingCap(ctx, history)
+		calib := CalibrateSolarScaleFactor(ctx, evalTime, history, weather, loc.TimeZone, clippingCap, getIrr)
+		localHour12 := baseTime.In(timeLoc).Hour() // 12:00 UTC
+
+		// Total Solar = (0.85*4 + 1.35) * 5 = 4.75 * 5 = 23.75
+		// Total Denom = 5 * 5 * 890.625 = 22265.625
+		// staticEff = 23.75 / 22265.625 ≈ 0.001066
+		// Hour 12 raw eff = 1.35 / 890.625 ≈ 0.001515 ≈ 1.42 * staticEff
+		staticEff := 23.75 / 22265.625
+		assert.Greater(t, calib.HourlyEffs[localHour12], 1.30*staticEff)
 	})
 }

@@ -28,7 +28,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		// Avg Load: (1+3)/2 = 2.0. Solar: 0 (no solar at night).
 		// The 0.05 values are ignored.
-		model := c.buildHourlyEnergyModel(ctx, time.Now().UTC(), history, nil, types.Settings{IgnoreHourUsageOverMultiple: 0.0})
+		model, _ := c.buildHourlyEnergyModel(ctx, time.Now().UTC(), history, nil, types.Settings{IgnoreHourUsageOverMultiple: 0.0})
 		assert.InDelta(t, 2.0, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
 		assert.InDelta(t, 0.0, model[h1.Hour()].AvgSolarKWH, 0.001)
 	})
@@ -40,7 +40,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			{TSHourStart: h1, HomeKWH: 0.05, SolarKWH: 0.05},
 		}
 
-		model := c.buildHourlyEnergyModel(ctx, time.Now().UTC(), history, nil, types.Settings{IgnoreHourUsageOverMultiple: 0.0})
+		model, _ := c.buildHourlyEnergyModel(ctx, time.Now().UTC(), history, nil, types.Settings{IgnoreHourUsageOverMultiple: 0.0})
 		// Should be 0.0 because all filtered
 		assert.InDelta(t, 0.0, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
 		assert.InDelta(t, 0.0, model[h1.Hour()].AvgSolarKWH, 0.001)
@@ -57,7 +57,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			{TSHourStart: h2, HomeKWH: 1.2, SolarKWH: 0.0},
 			{TSHourStart: h3, HomeKWH: 10.0, SolarKWH: 0.0}, // Outlier
 		}
-		model := c.buildHourlyEnergyModel(ctx, time.Now().UTC(), history, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
+		model, _ := c.buildHourlyEnergyModel(ctx, time.Now().UTC(), history, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
 		// (1.0 + 1.2) / 2 = 1.1
 		assert.InDelta(t, 1.1, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
 
@@ -67,7 +67,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			{TSHourStart: h2, HomeKWH: 10.0, SolarKWH: 0.0}, // Outlier 1
 			{TSHourStart: h3, HomeKWH: 12.0, SolarKWH: 0.0}, // Outlier 2
 		}
-		modelMulti := c.buildHourlyEnergyModel(ctx, time.Now().UTC(), historyMulti, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
+		modelMulti, _ := c.buildHourlyEnergyModel(ctx, time.Now().UTC(), historyMulti, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
 		// (1.0 + 10.0 + 12.0) / 3 = 7.666...
 		assert.InDelta(t, 7.666, modelMulti[h1.Hour()].AvgHomeLoadKWH, 0.001)
 
@@ -76,7 +76,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			{TSHourStart: h1, HomeKWH: 1.0, SolarKWH: 0.0},
 			{TSHourStart: h2, HomeKWH: 10.0, SolarKWH: 0.0},
 		}
-		modelFew := c.buildHourlyEnergyModel(ctx, time.Now().UTC(), historyFew, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
+		modelFew, _ := c.buildHourlyEnergyModel(ctx, time.Now().UTC(), historyFew, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
 		// (1.0 + 10.0) / 2 = 5.5
 		assert.InDelta(t, 5.5, modelFew[h1.Hour()].AvgHomeLoadKWH, 0.001)
 	})
@@ -131,7 +131,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			GridExportSolar:          false,
 			SolarBellCurveMultiplier: 1.0,
 		}
-		model := c.buildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _ := c.buildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Controller will detect 6-20. mu=13.5, sigma=3.75.
 		// It will see valid data at 6,7,8,9,10, 16,17,18,19,20.
@@ -152,7 +152,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		for i := range history {
 			history[i].SolarKWH = 0.05
 		}
-		modelNoData := c.buildHourlyEnergyModel(ctx, now, history, nil, settings)
+		modelNoData, _ := c.buildHourlyEnergyModel(ctx, now, history, nil, settings)
 		// Should be 0.0 (filtered) and no smoothing (no valid max)
 		assert.Equal(t, 0.0, modelNoData[13].AvgSolarKWH)
 	})
@@ -173,7 +173,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 
 		settings := types.Settings{GridExportSolar: false, SolarBellCurveMultiplier: 1.0}
-		model := c.buildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _ := c.buildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// No solar detected, should not smooth
 		for h := 0; h < 24; h++ {
@@ -204,7 +204,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 
 		settings := types.Settings{GridExportSolar: false, SolarBellCurveMultiplier: 1.0}
-		model := c.buildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _ := c.buildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// All data is curtailed (SOC=99%, no export), so the first pass finds nothing.
 		// The fallback pass should still find valid data and smooth.
@@ -250,7 +250,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 
 		settings := types.Settings{GridExportSolar: true, SolarBellCurveMultiplier: 1.0}
-		model := c.buildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _ := c.buildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// maxOriginalPeak = 10.0 (at hour 9)
 		// factor at hour 9 = 0.47 (calculated above)
@@ -303,7 +303,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			GridExportSolar:          true,
 			SolarBellCurveMultiplier: 1.0,
 		}
-		model := c.buildHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _ := c.buildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// The new logic should pick the hour with the most valid data points.
 		// All hours have 6 valid data points (1 outlier, 5 normal).
@@ -474,7 +474,7 @@ func TestSimulateState(t *testing.T) {
 		currentPrice := types.Price{DollarsPerKWH: 0.10, TSStart: now, TSEnd: now.Add(time.Hour)}
 		futurePrices := []types.Price{}
 
-		simData := c.SimulateState(ctx, now, currentStatus, currentPrice, futurePrices, history, nil, settings)
+		simData, _ := c.SimulateState(ctx, now, currentStatus, currentPrice, futurePrices, history, nil, settings)
 
 		// Verify first few hours
 		// Hour 0: Start 5.0. Net -1. End 4.0.
@@ -576,7 +576,7 @@ func TestSimulateState(t *testing.T) {
 		}
 
 		// Run simulation
-		simData := c.SimulateState(ctx, now, currentStatus, currentPrice, futurePrices, history, nil, settings)
+		simData, _ := c.SimulateState(ctx, now, currentStatus, currentPrice, futurePrices, history, nil, settings)
 
 		// Day 1: 2pm (Hour index 4, since starting at 10am: 10, 11, 12, 13, 14)
 		// simData[0] is 10am. simData[4] is 2pm.
@@ -628,7 +628,7 @@ func TestSimulateState(t *testing.T) {
 		currentStatus := types.SystemStatus{BatteryCapacityKWH: 10, BatterySOC: 50, Timestamp: now}
 		currentPrice := futurePrices[0]
 
-		simData := c.SimulateState(ctx, now, currentStatus, currentPrice, futurePrices, history, nil, settings)
+		simData, _ := c.SimulateState(ctx, now, currentStatus, currentPrice, futurePrices, history, nil, settings)
 
 		for _, hour := range simData {
 			if hour.TS.Year() == now.Year() && hour.TS.YearDay() == now.YearDay() {
@@ -727,7 +727,7 @@ func TestSimulateState(t *testing.T) {
 					SolarNetMeteringCreditsValue: tt.nmValueSetting,
 				}
 
-				simData := c.SimulateState(ctx, now, currentStatus, currentPrice, []types.Price{futurePrice}, nil, nil, settings)
+				simData, _ := c.SimulateState(ctx, now, currentStatus, currentPrice, []types.Price{futurePrice}, nil, nil, settings)
 				assert.NotEmpty(t, simData)
 				assert.InDelta(t, tt.expectedOppCost, simData[0].SolarOppDollarsPerKWH, 0.001)
 			})
@@ -835,7 +835,7 @@ func TestSimulateState(t *testing.T) {
 					SolarNetMeteringCreditsValue: tt.nmValue,
 				}
 
-				simData := c.SimulateState(ctx, now, currentStatus, price, futurePrices, nil, nil, settings)
+				simData, _ := c.SimulateState(ctx, now, currentStatus, price, futurePrices, nil, nil, settings)
 				assert.NotEmpty(t, simData)
 				// there should be 2 because one for the current hour and one for the next hour
 				if assert.Len(t, simData, 2) {
@@ -914,7 +914,7 @@ func TestSimulateState(t *testing.T) {
 					SolarNetMeteringCreditsValue: tt.nmValue,
 				}
 
-				simData := c.SimulateState(ctx, now, currentStatus, price, nil, nil, nil, settings)
+				simData, _ := c.SimulateState(ctx, now, currentStatus, price, nil, nil, nil, settings)
 				assert.NotEmpty(t, simData)
 				assert.InDelta(t, tt.expectedOppCost, simData[0].SolarOppDollarsPerKWH, 0.0001)
 			})
@@ -948,7 +948,7 @@ func TestSimulateState(t *testing.T) {
 			GridExportSolar: true,
 		}
 
-		simData := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
+		simData, _ := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
 
 		if assert.NotEmpty(t, simData) {
 			assert.False(t, simData[0].HitCapacityAt.IsZero())
@@ -986,7 +986,7 @@ func TestSimulateState(t *testing.T) {
 			SolarFullyChargeHeadroomBatterySOC: 10.0,
 		}
 
-		simData := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
+		simData, _ := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
 
 		if assert.NotEmpty(t, simData) {
 			assert.False(t, simData[0].HitSolarCapacityAt.IsZero())
@@ -1028,7 +1028,7 @@ func TestSimulateState(t *testing.T) {
 			GridExportSolar: true,
 		}
 
-		simData := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
+		simData, _ := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
 
 		if assert.NotEmpty(t, simData) && assert.Len(t, simData, 24) {
 			// Normal battery discharges during hour 12: 5.0 - 2.0 = 3.0 kWh.
@@ -1082,7 +1082,7 @@ func TestSimulateState(t *testing.T) {
 			MinBatterySOC: 0.0,
 		}
 
-		simData := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
+		simData, _ := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
 
 		// Verification:
 		// Hour 12 (first hour): Start 5.0. 30 mins (0.5 hrs) left.
@@ -1120,7 +1120,7 @@ func TestSimulateState(t *testing.T) {
 		// Current price covers the first hour
 		currentPrice := futurePrices[0]
 
-		simData := c.SimulateState(ctx, now, currentStatus, currentPrice, futurePrices, nil, nil, types.Settings{})
+		simData, _ := c.SimulateState(ctx, now, currentStatus, currentPrice, futurePrices, nil, nil, types.Settings{})
 
 		// Should only simulate 12 hours, not 24
 		assert.Len(t, simData, 12)
@@ -1167,7 +1167,7 @@ func TestSimulateState(t *testing.T) {
 			MinBatterySOC:   20.0, // minKWH = 2.0 kWh
 		}
 
-		simData := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
+		simData, _ := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
 
 		if assert.NotEmpty(t, simData) && assert.GreaterOrEqual(t, len(simData), 2) {
 			// Hour 12: Hits capacity, deficitKWH reset to 0.0
@@ -1227,7 +1227,7 @@ func TestSimulateState(t *testing.T) {
 			MinBatterySOC:   20.0,
 		}
 
-		simData := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
+		simData, _ := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
 
 		for idx, sd := range simData {
 			t.Logf("Hour %d (%s): BatteryKWH=%.3f, Deficit=%.3f, HitDeficitAt=%s",
@@ -1294,7 +1294,7 @@ func TestSimulateState(t *testing.T) {
 			MinBatterySOC:   20.0,
 		}
 
-		simData := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
+		simData, _ := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
 
 		if assert.NotEmpty(t, simData) && assert.GreaterOrEqual(t, len(simData), 3) {
 			// Hour 0: Drains 0.4 kWh. Drops below 1.8 kWh (deficit threshold).

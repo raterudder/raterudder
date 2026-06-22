@@ -53,7 +53,7 @@ func (c *Controller) SimulateState(
 	history []types.EnergyStats,
 	weather []types.Weather,
 	settings types.Settings,
-) []SimHour {
+) ([]SimHour, types.SimulationParams) {
 	capacityKWH := currentStatus.BatteryCapacityKWH
 	capacityThresholdKWH := capacityKWH * 0.98
 	currentSOC := currentStatus.BatterySOC
@@ -64,7 +64,7 @@ func (c *Controller) SimulateState(
 	var deficitKWH float64
 
 	// Build Energy Models
-	model := c.buildHourlyEnergyModel(ctx, now, history, weather, settings)
+	model, simParams := c.buildHourlyEnergyModel(ctx, now, history, weather, settings)
 	improvedModel := c.BuildImprovedHourlyEnergyModel(ctx, now, history, weather, settings)
 	minKWH := capacityKWH * (min(settings.MinBatterySOC+1.0, 100.0) / 100.0)
 
@@ -367,7 +367,7 @@ func (c *Controller) SimulateState(
 		simTime = simTime.Add(1 * time.Hour).Truncate(time.Hour)
 	}
 
-	return simData
+	return simData, simParams
 }
 
 type TimeProfile struct {
@@ -378,7 +378,7 @@ type TimeProfile struct {
 
 // buildHourlyEnergyModel averages usage and solar by hour of day from history.
 // It filters out outliers if ignoreHourUsageOverMultiple is set and > 0.
-func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, history []types.EnergyStats, weather []types.Weather, settings types.Settings) map[int]TimeProfile {
+func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, history []types.EnergyStats, weather []types.Weather, settings types.Settings) (map[int]TimeProfile, types.SimulationParams) {
 	type dataPoint struct {
 		load float64
 	}
@@ -395,14 +395,11 @@ func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, 
 			load: h.HomeKWH,
 		})
 	}
-	numHistoryDays := len(uniqueDays)
-	if numHistoryDays == 0 {
-		numHistoryDays = 5
-	}
 
 	// Calculate solar predictions
 	var weatherSolar map[int64]WeatherSolar
 	var smoothedSolar map[int]float64
+	var params types.SimulationParams
 
 	if len(weather) > 0 {
 		// Construct location from weather data
@@ -411,7 +408,7 @@ func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, 
 			Longitude: weather[0].Longitude,
 			TimeZone:  weather[0].TimeLocation,
 		}
-		weatherSolar = CalculateWeatherSolar(ctx, now, history, weather, loc)
+		weatherSolar, params = CalculateWeatherSolar(ctx, now, history, weather, loc)
 	} else {
 		smoothedSolar = CalculateSmoothedSolar(ctx, now, history, settings)
 	}
@@ -503,7 +500,7 @@ func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, 
 
 	// if they disabled solar bell curve fitting return early
 	if settings.SolarBellCurveMultiplier == 0 {
-		return result
+		return result, params
 	}
 
 	// determine "Daylight Hours" range
@@ -520,7 +517,7 @@ func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, 
 		}
 	}
 
-	return result
+	return result, params
 }
 
 func (c *Controller) calculateSolarTrend(ctx context.Context, now time.Time, history []types.EnergyStats, model map[int]TimeProfile, settings types.Settings) float64 {
