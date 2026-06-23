@@ -462,8 +462,14 @@ func (f *FirestoreProvider) GetWeather(ctx context.Context, siteID string, start
 	if err != nil {
 		return nil, err
 	}
+	// Subtract 23 hours from start to handle timezone shifts and late-in-day queries.
+	// Stored daily records have tsDayStart representing midnight in their respective
+	// timezones. A query start time later in the day (or from a different timezone)
+	// could fall after the stored record's tsDayStart timestamp in UTC, which would
+	// incorrectly exclude the record for that day.
+	queryStart := start.Add(-23 * time.Hour)
 	iter := coll.
-		Where("tsDayStart", ">=", start).
+		Where("tsDayStart", ">=", queryStart).
 		Where("tsDayStart", "<", end).
 		OrderBy("tsDayStart", firestore.Asc).
 		Documents(ctx)
@@ -509,8 +515,14 @@ func (f *FirestoreProvider) GetEnergyHistory(ctx context.Context, siteID string,
 		return nil, err
 	}
 
+	// Subtract 23 hours from start to handle timezone shifts and late-in-day queries.
+	// Stored daily records have tsDayStart representing midnight in their respective
+	// timezones. A query start time later in the day (or from a different timezone)
+	// could fall after the stored record's tsDayStart timestamp in UTC, which would
+	// incorrectly exclude the record for that day.
+	queryStart := start.Add(-23 * time.Hour)
 	iter := coll.
-		Where("tsDayStart", ">=", start).
+		Where("tsDayStart", ">=", queryStart).
 		Where("tsDayStart", "<", end).
 		OrderBy("tsDayStart", firestore.Asc).
 		Documents(ctx)

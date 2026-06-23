@@ -112,10 +112,10 @@ func (c *Controller) SimulateState(
 			hoursUntilEnd := int(math.Ceil(lastFuturePriceTime.Sub(now).Hours()))
 			if hoursUntilEnd > 0 && hoursUntilEnd < simHours {
 				simHours = hoursUntilEnd
-				if hoursUntilEnd < 12 {
+				if hoursUntilEnd < 10 {
 					log.Ctx(ctx).WarnContext(
 						ctx,
-						"simulation running with less than 12 hours",
+						"simulation running with less than 10 hours",
 						slog.Int("simHours", simHours),
 						slog.Time("lastFuturePriceTime", lastFuturePriceTime),
 					)

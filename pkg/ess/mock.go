@@ -308,7 +308,7 @@ func (m *MockESS) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		return types.SystemStatus{}, err
 	}
 
-	now := time.Now()
+	now := time.Now().In(m.location)
 	batteryKW, solarKW, homeKW, gridKW := m.advanceState(&state, now)
 
 	if err := mockDB.UpdateESSMockState(ctx, m.siteID, state); err != nil {

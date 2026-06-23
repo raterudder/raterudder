@@ -299,6 +299,53 @@ func TestFirestoreProvider(t *testing.T) {
 				assert.Equal(t, int(types.CurrentEnergyStatsVersion), version)
 			}
 		})
+
+		t.Run("GetEnergyHistoryTimezoneShift", func(t *testing.T) {
+			locChicago, err := time.LoadLocation("America/Chicago")
+			require.NoError(t, err)
+			locLA, err := time.LoadLocation("America/Los_Angeles")
+			require.NoError(t, err)
+
+			// Test case 1: Chicago timezone
+			chicagoMidnight := time.Date(2024, 6, 22, 0, 0, 0, 0, locChicago)
+			chicagoStartQuery := time.Date(2024, 6, 22, 16, 0, 0, 0, locChicago)
+
+			statsChicago := types.DailyEnergyStats{
+				TSDayStart: chicagoMidnight,
+				Hourly: []types.EnergyStats{
+					{
+						TSHourStart: chicagoMidnight.Add(10 * time.Hour),
+						SolarKWH:    10.0,
+					},
+				},
+			}
+			err = f.UpsertEnergyHistories(ctx, "test-site-chicago-eh-tz", []types.DailyEnergyStats{statsChicago}, types.CurrentEnergyStatsVersion)
+			require.NoError(t, err)
+
+			resChicago, err := f.GetEnergyHistory(ctx, "test-site-chicago-eh-tz", chicagoStartQuery, chicagoStartQuery.Add(24*time.Hour))
+			require.NoError(t, err)
+			assert.Len(t, resChicago, 1, "should retrieve energy history for Chicago when querying at 4pm")
+
+			// Test case 2: Los Angeles timezone
+			laMidnight := time.Date(2024, 6, 22, 0, 0, 0, 0, locLA)
+			laStartQuery := time.Date(2024, 6, 22, 16, 0, 0, 0, locLA)
+
+			statsLA := types.DailyEnergyStats{
+				TSDayStart: laMidnight,
+				Hourly: []types.EnergyStats{
+					{
+						TSHourStart: laMidnight.Add(10 * time.Hour),
+						SolarKWH:    15.0,
+					},
+				},
+			}
+			err = f.UpsertEnergyHistories(ctx, "test-site-la-eh-tz", []types.DailyEnergyStats{statsLA}, types.CurrentEnergyStatsVersion)
+			require.NoError(t, err)
+
+			resLA, err := f.GetEnergyHistory(ctx, "test-site-la-eh-tz", laStartQuery, laStartQuery.Add(24*time.Hour))
+			require.NoError(t, err)
+			assert.Len(t, resLA, 1, "should retrieve energy history for LA when querying at 4pm")
+		})
 	})
 
 	t.Run("Sites", func(t *testing.T) {
@@ -704,6 +751,47 @@ func TestFirestoreProvider(t *testing.T) {
 			assert.Equal(t, start, latestTime)
 			assert.Equal(t, updatedTime, lastUpdated.UTC())
 			assert.Equal(t, int(types.CurrentWeatherVersion), version)
+		})
+
+		t.Run("GetWeatherTimezoneShift", func(t *testing.T) {
+			locChicago, err := time.LoadLocation("America/Chicago")
+			require.NoError(t, err)
+			locLA, err := time.LoadLocation("America/Los_Angeles")
+			require.NoError(t, err)
+
+			// Test case 1: Chicago timezone
+			chicagoMidnight := time.Date(2024, 6, 22, 0, 0, 0, 0, locChicago)
+			chicagoStartQuery := time.Date(2024, 6, 22, 16, 0, 0, 0, locChicago)
+
+			wChicago := types.Weather{
+				TSDayStart:   chicagoMidnight,
+				TimeLocation: "America/Chicago",
+				Latitude:     41.8781,
+				Longitude:    -87.6298,
+			}
+			err = f.UpsertWeather(ctx, "test-site-chicago-tz", []types.Weather{wChicago}, types.CurrentWeatherVersion)
+			require.NoError(t, err)
+
+			resChicago, err := f.GetWeather(ctx, "test-site-chicago-tz", chicagoStartQuery, chicagoStartQuery.Add(24*time.Hour))
+			require.NoError(t, err)
+			assert.Len(t, resChicago, 1, "should retrieve weather for Chicago when querying at 4pm")
+
+			// Test case 2: Los Angeles timezone
+			laMidnight := time.Date(2024, 6, 22, 0, 0, 0, 0, locLA)
+			laStartQuery := time.Date(2024, 6, 22, 16, 0, 0, 0, locLA)
+
+			wLA := types.Weather{
+				TSDayStart:   laMidnight,
+				TimeLocation: "America/Los_Angeles",
+				Latitude:     34.0522,
+				Longitude:    -118.2437,
+			}
+			err = f.UpsertWeather(ctx, "test-site-la-tz", []types.Weather{wLA}, types.CurrentWeatherVersion)
+			require.NoError(t, err)
+
+			resLA, err := f.GetWeather(ctx, "test-site-la-tz", laStartQuery, laStartQuery.Add(24*time.Hour))
+			require.NoError(t, err)
+			assert.Len(t, resLA, 1, "should retrieve weather for LA when querying at 4pm")
 		})
 	})
 
