@@ -5,7 +5,7 @@ import { Field } from '@base-ui/react/field';
 import { Input } from '@base-ui/react/input';
 
 interface JoinPageProps {
-    onJoinSuccess: () => void;
+    onJoinSuccess: (siteID: string) => void;
 }
 
 const JoinPage: React.FC<JoinPageProps> = ({ onJoinSuccess }) => {
@@ -26,8 +26,8 @@ const JoinPage: React.FC<JoinPageProps> = ({ onJoinSuccess }) => {
 
         setLoading(true);
         try {
-            await joinSite(siteID.trim(), inviteCode.trim(), name.trim());
-            onJoinSuccess();
+            const joinedSiteID = await joinSite(siteID.trim(), inviteCode.trim(), name.trim());
+            onJoinSuccess(joinedSiteID);
         } catch (err: any) {
             setError(err.message || 'Failed to join site');
         } finally {

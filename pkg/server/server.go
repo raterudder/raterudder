@@ -222,6 +222,8 @@ func (s *Server) setupHandler() http.Handler {
 	apiMux.HandleFunc("GET /api/history/actionsAndSavings", s.handleHistoryActionsAndSavings)
 	apiMux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	apiMux.HandleFunc("POST /api/settings", s.handleUpdateSettings)
+	apiMux.HandleFunc("POST /api/delete/site", s.handleDeleteSite)
+	apiMux.HandleFunc("POST /api/delete/user", s.handleDeleteUser)
 	apiMux.HandleFunc("GET /api/auth/status", s.handleAuthStatus)
 	apiMux.HandleFunc("POST /api/auth/login", s.handleLogin)
 	apiMux.HandleFunc("POST /api/auth/logout", s.handleLogout)

@@ -4,7 +4,7 @@ import { Field } from '@base-ui/react/field';
 import { createSite } from '../api';
 
 export interface NewSitePageProps {
-    onJoinSuccess: () => void;
+    onJoinSuccess: (siteID: string) => void;
 }
 
 const NewSitePage = ({ onJoinSuccess }: NewSitePageProps) => {
@@ -23,8 +23,8 @@ const NewSitePage = ({ onJoinSuccess }: NewSitePageProps) => {
 
         setIsSubmitting(true);
         try {
-            await createSite(name.trim());
-            onJoinSuccess();
+            const newSiteID = await createSite(name.trim());
+            onJoinSuccess(newSiteID);
         } catch (err: any) {
             setError(err.message || 'Failed to create site');
             setIsSubmitting(false);

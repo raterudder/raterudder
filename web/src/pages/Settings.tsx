@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useLocation } from 'wouter';
-import { updateSettings, fetchUtilities, fetchESSList, submitESSStage, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type ESSProviderInfo, type ESSCredentialField, type CredentialsPayload } from '../api';
+import { updateSettings, fetchUtilities, fetchESSList, submitESSStage, deleteSite, deleteUser, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type ESSProviderInfo, type ESSCredentialField, type CredentialsPayload, type UserSite } from '../api';
 import { Field } from '@base-ui/react/field';
 import { Input } from '@base-ui/react/input';
 import { Button } from '@base-ui/react/button';
@@ -708,7 +708,7 @@ const ESSForm = ({
     );
 };
 
-const Settings = ({ siteID, settings: parentSettings, onSettingsSaved }: { siteID?: string, settings: SettingsType | null, onSettingsSaved?: () => Promise<void> }) => {
+const Settings = ({ siteID, settings: parentSettings, onSettingsSaved, sites = [] }: { siteID?: string, settings: SettingsType | null, onSettingsSaved?: () => Promise<void>, sites?: UserSite[] }) => {
     const [settings, setSettings] = useState<SettingsType | null>(null);
     const [isUtilityDirty, setIsUtilityDirty] = useState(false);
     const [isESSDirty, setIsESSDirty] = useState(false);
@@ -757,6 +757,39 @@ const Settings = ({ siteID, settings: parentSettings, onSettingsSaved }: { siteI
     const [editUtility, setEditUtility] = useState(false);
     const [editESS, setEditESS] = useState(false);
     const [showAdvanced, setShowAdvanced] = useState(false);
+
+    const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+    const [deleteAccountChecked, setDeleteAccountChecked] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
+    const [deleteError, setDeleteError] = useState<string | null>(null);
+
+    const isLastSite = sites.length <= 1;
+
+    const handleConfirmDelete = async () => {
+        if (!siteID) return;
+        setIsDeleting(true);
+        setDeleteError(null);
+        try {
+            await deleteSite(siteID);
+
+            if (deleteAccountChecked && isLastSite) {
+                await deleteUser();
+                window.location.href = '/';
+                return;
+            }
+
+            const remainingSites = sites.filter(s => s.id !== siteID);
+            if (remainingSites.length === 0) {
+                window.location.href = '/welcome';
+            } else {
+                window.location.href = '/dashboard';
+            }
+        } catch (err: any) {
+            console.error("Deletion failed", err);
+            setDeleteError(err.message || "An error occurred during deletion");
+            setIsDeleting(false);
+        }
+    };
 
     useEffect(() => {
         if (!siteID) return;
@@ -1804,6 +1837,70 @@ const Settings = ({ siteID, settings: parentSettings, onSettingsSaved }: { siteI
                     )}
                 </div>
             </form>
+
+            <div className="settings-section delete-site-section" data-testid="delete-section">
+                <div className="section-header">
+                    <h3>Danger Zone</h3>
+                </div>
+                <div className="danger-zone-content">
+                    <p className="section-description">Deleting this site will stop all automation and delete all associated data permanently.</p>
+                    <Dialog.Root open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+                        <Dialog.Trigger className="btn btn-danger" type="button">
+                            Delete Site
+                        </Dialog.Trigger>
+                        <Dialog.Portal>
+                            <Dialog.Backdrop className="dialog-backdrop" />
+                            <Dialog.Popup className="dialog-popup">
+                                <Dialog.Title className="dialog-title">Delete Site</Dialog.Title>
+                                <Dialog.Description className="dialog-description">
+                                    Are you sure you want to delete this site? All of the data is irrecoverable and your automation will stop.
+                                </Dialog.Description>
+
+                                <div className="delete-account-wrapper">
+                                    <Field.Root className={`form-group switch-group compact ${!isLastSite ? 'disabled' : ''}`}>
+                                        <div className="switch-row" title={!isLastSite ? "All sites must be deleted first" : undefined}>
+                                            <Switch.Root
+                                                id="deleteAccount"
+                                                checked={deleteAccountChecked}
+                                                onCheckedChange={setDeleteAccountChecked}
+                                                disabled={!isLastSite}
+                                                className="switch-root"
+                                            >
+                                                <Switch.Thumb className="switch-thumb" />
+                                            </Switch.Root>
+                                            <Field.Label htmlFor="deleteAccount" style={{ cursor: isLastSite ? 'pointer' : 'not-allowed' }}>
+                                                Delete Account
+                                            </Field.Label>
+                                        </div>
+                                        <Field.Description>
+                                            {!isLastSite
+                                                ? "All sites must be deleted first."
+                                                : "Also completely delete your user account."}
+                                        </Field.Description>
+                                    </Field.Root>
+                                </div>
+
+                                {deleteError && <div className="delete-dialog-error">{deleteError}</div>}
+
+                                <div className="delete-dialog-buttons">
+                                    <Dialog.Close className="btn btn-secondary" type="button" disabled={isDeleting}>
+                                        Cancel
+                                    </Dialog.Close>
+                                    <button
+                                        type="button"
+                                        className="btn btn-danger"
+                                        onClick={handleConfirmDelete}
+                                        disabled={isDeleting}
+                                    >
+                                        {isDeleting && <span className="loading-spinner" aria-hidden="true" style={{ marginRight: '0.5rem' }}></span>}
+                                        {isDeleting ? 'Deleting...' : 'Delete'}
+                                    </button>
+                                </div>
+                            </Dialog.Popup>
+                        </Dialog.Portal>
+                    </Dialog.Root>
+                </div>
+            </div>
         </div>
     );
 };

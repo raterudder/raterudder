@@ -432,6 +432,35 @@ func TestFirestoreProvider(t *testing.T) {
 			assert.Equal(t, 3, filteredSettings["site-group-3"].UpdateGroup)
 			assert.Equal(t, 1, filteredVersions["site-group-3"])
 		})
+
+		t.Run("DeleteSite", func(t *testing.T) {
+			siteID := "delete-site-test"
+			site := types.Site{
+				ID:         siteID,
+				InviteCode: "invite-del",
+			}
+			require.NoError(t, f.UpdateSite(ctx, siteID, site))
+
+			// Create some settings (subcollection config)
+			require.NoError(t, f.SetSettings(ctx, siteID, types.Settings{UpdateGroup: 5}, 1))
+
+			// Verify site exists
+			gotSite, err := f.GetSite(ctx, siteID)
+			require.NoError(t, err)
+			assert.Equal(t, siteID, gotSite.ID)
+
+			// Delete site
+			require.NoError(t, f.DeleteSite(ctx, siteID))
+
+			// Verify site document is deleted
+			_, err = f.GetSite(ctx, siteID)
+			assert.ErrorContains(t, err, "site not found")
+
+			// Verify config/settings is deleted
+			_, ver, err := f.GetSettings(ctx, siteID)
+			require.NoError(t, err)
+			assert.Equal(t, 0, ver)
+		})
 	})
 
 	t.Run("Users", func(t *testing.T) {
@@ -491,6 +520,26 @@ func TestFirestoreProvider(t *testing.T) {
 
 		t.Run("GetUserNotFound", func(t *testing.T) {
 			_, err := f.GetUser(ctx, "nonexistent@test.com")
+			assert.ErrorContains(t, err, "user not found")
+		})
+
+		t.Run("DeleteUser", func(t *testing.T) {
+			userID := "delete-me@test.com"
+			user := types.User{
+				ID:    userID,
+				Email: userID,
+			}
+			require.NoError(t, f.CreateUser(ctx, user))
+
+			// Verify user exists
+			_, err := f.GetUser(ctx, userID)
+			require.NoError(t, err)
+
+			// Delete user
+			require.NoError(t, f.DeleteUser(ctx, userID))
+
+			// Verify user no longer exists
+			_, err = f.GetUser(ctx, userID)
 			assert.ErrorContains(t, err, "user not found")
 		})
 	})

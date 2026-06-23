@@ -55,9 +55,11 @@ type Database interface {
 	ListSites(ctx context.Context) ([]types.Site, error)
 	CreateSite(ctx context.Context, siteID string, site types.Site) error
 	UpdateSite(ctx context.Context, siteID string, site types.Site) error
+	DeleteSite(ctx context.Context, siteID string) error
 	GetUser(ctx context.Context, userID string) (types.User, error)
 	CreateUser(ctx context.Context, user types.User) error
 	UpdateUser(ctx context.Context, user types.User) error
+	DeleteUser(ctx context.Context, userID string) error
 
 	// Feedback
 	InsertFeedback(ctx context.Context, feedback types.Feedback) error

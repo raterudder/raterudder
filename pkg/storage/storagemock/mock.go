@@ -242,3 +242,13 @@ func (m *MockDatabase) UpdateHistorySummary(ctx context.Context, siteID string, 
 	}
 	return newSummary, nil
 }
+
+func (m *MockDatabase) DeleteSite(ctx context.Context, siteID string) error {
+	args := m.Called(ctx, siteID)
+	return args.Error(0)
+}
+
+func (m *MockDatabase) DeleteUser(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}

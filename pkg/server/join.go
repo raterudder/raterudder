@@ -239,5 +239,12 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Ctx(ctx).InfoContext(ctx, "user joined site", slog.String("siteID", req.JoinSiteID))
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	err := json.NewEncoder(w).Encode(map[string]any{
+		"siteID": req.JoinSiteID,
+	})
+	if err != nil {
+		panic(http.ErrAbortHandler)
+	}
 }

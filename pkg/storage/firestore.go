@@ -1516,3 +1516,95 @@ func (f *FirestoreProvider) UpdateHistorySummary(ctx context.Context, siteID str
 
 	return mergedSummary, nil
 }
+
+// DeleteSite deletes a site document and recursively deletes all its associated subcollections using BulkWriter, with config deleted last.
+func (f *FirestoreProvider) DeleteSite(ctx context.Context, siteID string) error {
+	if siteID == "" {
+		return fmt.Errorf("siteID cannot be empty for site deletion")
+	}
+
+	// 1. Delete updateGroup field from config/settings so we don't accidentally run update anymore.
+	configColl, err := f.getCollection(siteID, "config")
+	if err != nil {
+		return err
+	}
+	_, err = configColl.Doc("settings").Update(ctx, []firestore.Update{
+		{Path: "updateGroup", Value: firestore.Delete},
+	})
+	if err != nil && status.Code(err) != codes.NotFound {
+		log.Ctx(ctx).WarnContext(ctx, "failed to delete updateGroup field, proceeding with site deletion", slog.String("siteID", siteID), slog.Any("error", err))
+	}
+
+	// 2. Cleanup all of the collections, with config coming last
+	subcollsIter := f.client.Collection("sites").Doc(siteID).Collections(ctx)
+	var configCollRef *firestore.CollectionRef
+	for {
+		collRef, err := subcollsIter.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("failed to list subcollections: %w", err)
+		}
+		if collRef.ID == "config" {
+			configCollRef = collRef
+			continue
+		}
+		if err := f.deleteCollection(ctx, collRef); err != nil {
+			return fmt.Errorf("failed to delete subcollection %s of site %s: %w", collRef.ID, siteID, err)
+		}
+	}
+	if configCollRef != nil {
+		if err := f.deleteCollection(ctx, configCollRef); err != nil {
+			return fmt.Errorf("failed to delete config subcollection of site %s: %w", siteID, err)
+		}
+	}
+
+	// 3. Delete the site document itself
+	_, err = f.client.Collection("sites").Doc(siteID).Delete(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to delete site document %s: %w", siteID, err)
+	}
+
+	return nil
+}
+
+// DeleteUser deletes the user document.
+func (f *FirestoreProvider) DeleteUser(ctx context.Context, userID string) error {
+	if userID == "" {
+		return fmt.Errorf("userID cannot be empty for user deletion")
+	}
+	_, err := f.client.Collection("users").Doc(userID).Delete(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to delete user %s: %w", userID, err)
+	}
+	return nil
+}
+
+// deleteCollection deletes all documents in a collection using BulkWriter.
+func (f *FirestoreProvider) deleteCollection(ctx context.Context, coll *firestore.CollectionRef) error {
+	iter := coll.DocumentRefs(ctx)
+	bw := f.client.BulkWriter(ctx)
+	var jobs []*firestore.BulkWriterJob
+	for {
+		docRef, err := iter.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		job, err := bw.Delete(docRef)
+		if err != nil {
+			return err
+		}
+		jobs = append(jobs, job)
+	}
+	bw.End()
+	for _, job := range jobs {
+		if _, err := job.Results(); err != nil {
+			return err
+		}
+	}
+	return nil
+}

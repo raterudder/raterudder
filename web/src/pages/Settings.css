@@ -679,4 +679,66 @@
   }
 }
 
+.delete-site-section {
+  margin-top: 3rem;
+}
+
+.delete-site-section .section-header h3 {
+  color: var(--danger);
+}
+
+.delete-site-section .section-description {
+  color: var(--text-secondary);
+  margin-bottom: 1.5rem;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.btn-danger {
+  background: var(--danger);
+  color: #ffffff;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #ff3333;
+  box-shadow: 0 4px 12px rgba(255, 75, 75, 0.3);
+}
+
+.btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.delete-dialog-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.delete-dialog-error {
+  color: var(--danger);
+  margin-bottom: 1rem;
+  font-size: 0.875rem;
+}
+
+.delete-account-wrapper {
+  margin-top: 1.5rem;
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  background: var(--surface-container-high);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.switch-group.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.switch-group.disabled .switch-root {
+  pointer-events: none;
+}
+
+
 

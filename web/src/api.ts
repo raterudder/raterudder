@@ -372,6 +372,31 @@ export const logout = async (): Promise<void> => {
     }
 };
 
+export const deleteSite = async (siteID: string): Promise<void> => {
+    const response = await fetch('/api/delete/site', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ siteID }),
+    });
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Failed to delete site'));
+    }
+};
+
+export const deleteUser = async (): Promise<void> => {
+    const response = await fetch('/api/delete/user', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+    });
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Failed to delete user'));
+    }
+};
+
 export interface AdminSite extends Site {
     lastAction?: Action;
 }
@@ -413,7 +438,7 @@ export const fetchModeling = async (siteID?: string): Promise<ForecastResponse> 
     return response.json();
 };
 
-export const joinSite = async (joinSiteID: string, inviteCode: string, name: string): Promise<void> => {
+export const joinSite = async (joinSiteID: string, inviteCode: string, name: string): Promise<string> => {
     const response = await fetch('/api/join', {
         method: 'POST',
         headers: {
@@ -424,9 +449,11 @@ export const joinSite = async (joinSiteID: string, inviteCode: string, name: str
     if (!response.ok) {
         throw new Error(await extractError(response, 'Failed to join site'));
     }
+    const data = await response.json();
+    return data.siteID;
 };
 
-export const createSite = async (name: string): Promise<void> => {
+export const createSite = async (name: string): Promise<string> => {
     const response = await fetch('/api/join', {
         method: 'POST',
         headers: {
@@ -437,6 +464,8 @@ export const createSite = async (name: string): Promise<void> => {
     if (!response.ok) {
         throw new Error(await extractError(response, 'Failed to create site'));
     }
+    const data = await response.json();
+    return data.siteID;
 };
 
 export const fetchUtilities = async (siteID?: string): Promise<UtilityProviderInfo[]> => {

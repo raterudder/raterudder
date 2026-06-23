@@ -247,6 +247,11 @@ function AppContent() {
             });
     };
 
+    const handleJoinSuccess = (newSiteID: string) => {
+        setSelectedSiteID(newSiteID);
+        checkStatus(true);
+    };
+
     const handleLoginSuccess = async (credentialResponse: { credential?: string }, client?: string) => {
         try {
             if (credentialResponse.credential) {
@@ -337,16 +342,16 @@ function AppContent() {
                                     )}
                                 </ProtectedRoute>
                             </Route>
-                            <Route path="/new-site">
-                                <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
-                                    <NewSitePage onJoinSuccess={() => checkStatus(true)} />
-                                </ProtectedRoute>
-                            </Route>
-                            <Route path="/join-site">
-                                <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
-                                    <JoinSitePage onJoinSuccess={() => checkStatus(true)} />
-                                </ProtectedRoute>
-                            </Route>
+                             <Route path="/new-site">
+                                 <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
+                                     <NewSitePage onJoinSuccess={handleJoinSuccess} />
+                                 </ProtectedRoute>
+                             </Route>
+                             <Route path="/join-site">
+                                 <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
+                                     <JoinSitePage onJoinSuccess={handleJoinSuccess} />
+                                 </ProtectedRoute>
+                             </Route>
                             <Route path="/dashboard">
                                 <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
                                     {!effectiveSiteID && effectiveSites.length === 0 ? (
@@ -379,7 +384,7 @@ function AppContent() {
                                     {!effectiveSiteID && effectiveSites.length === 0 ? (
                                         <Redirect to="/welcome" replace />
                                     ) : (
-                                        <Settings siteID={effectiveSiteID} settings={settings} onSettingsSaved={handleSettingsSaved} />
+                                         <Settings siteID={effectiveSiteID} settings={settings} onSettingsSaved={handleSettingsSaved} sites={effectiveSites} />
                                     )}
                                 </ProtectedRoute>
                             </Route>

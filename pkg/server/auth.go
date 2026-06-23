@@ -41,6 +41,7 @@ var routeAuthAttributes = map[string]pathAttributes{
 	"/api/interest":       {ignoreUserNotFound: true, ignoreSiteID: true},
 	"/api/list/ess":       {ignoreSiteID: true, ignoreUserNotFound: true},
 	"/api/list/utilities": {ignoreSiteID: true, ignoreUserNotFound: true},
+	"/api/delete/user":    {ignoreSiteID: true},
 }
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {

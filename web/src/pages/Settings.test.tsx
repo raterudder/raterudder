@@ -5,7 +5,7 @@ import App from '../App';
 import * as api from '../api';
 import { setupDefaultApiMocks, defaultAuthStatus, defaultSettings, defaultESSProviders } from '../test/apiMocks';
 
-const { fetchAuthStatus, fetchSettings, updateSettings, login, logout } = api;
+const { fetchAuthStatus, fetchSettings, updateSettings, login, logout, deleteSite, deleteUser } = api;
 
 vi.mock('../api');
 
@@ -20,8 +20,8 @@ vi.mock('@react-oauth/google', () => ({
 }));
 
 // Helper to navigate to settings page
-const navigateToSettings = async () => {
-    (fetchAuthStatus as any).mockResolvedValue({ ...defaultAuthStatus });
+const navigateToSettings = async (authStatus = defaultAuthStatus) => {
+    (fetchAuthStatus as any).mockResolvedValue({ ...authStatus });
     render(<App />);
     fireEvent.click(screen.getByText(/Log In/));
     await waitFor(() => expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument());
@@ -1406,6 +1406,119 @@ describe('App & Settings', () => {
             await user.click(chargeSwitch);
             await waitFor(() => {
                 expect(screen.queryByTestId('wizard-grid-restrictions-warning')).not.toBeInTheDocument();
+            });
+        });
+    });
+
+    describe('Site and Account Deletion', () => {
+        beforeEach(() => {
+            (deleteSite as any).mockResolvedValue(undefined);
+            (deleteUser as any).mockResolvedValue(undefined);
+            // Mock window.location
+            vi.stubGlobal('location', {
+                ...window.location,
+                href: '',
+            });
+        });
+
+        it('shows confirmation dialog when Delete Site button is clicked', async () => {
+            await navigateToSettings();
+
+            const deleteSiteBtn = screen.getByRole('button', { name: /Delete Site/i });
+            fireEvent.click(deleteSiteBtn);
+
+            await waitFor(() => {
+                expect(screen.getByRole('heading', { name: 'Delete Site' })).toBeInTheDocument();
+                expect(screen.getByText(/Are you sure you want to delete this site?/i)).toBeInTheDocument();
+            });
+        });
+
+        it('enables Delete Account checkbox when user has only 1 site', async () => {
+            const status = {
+                ...defaultAuthStatus,
+                sites: [{ id: 'site1', name: 'Site 1' }]
+            };
+            await navigateToSettings(status);
+
+            const deleteSiteBtn = screen.getByRole('button', { name: /Delete Site/i });
+            fireEvent.click(deleteSiteBtn);
+
+            await waitFor(() => {
+                const deleteAccountSwitch = screen.getByRole('switch', { name: /Delete Account/i });
+                expect(deleteAccountSwitch).not.toBeDisabled();
+            });
+        });
+
+        it('disables Delete Account checkbox with hover tooltip when user has multiple sites', async () => {
+            const status = {
+                ...defaultAuthStatus,
+                sites: [
+                    { id: 'site1', name: 'Site 1' },
+                    { id: 'site2', name: 'Site 2' }
+                ]
+            };
+            await navigateToSettings(status);
+
+            const deleteSiteBtn = screen.getByRole('button', { name: /Delete Site/i });
+            fireEvent.click(deleteSiteBtn);
+
+            await waitFor(() => {
+                const deleteAccountSwitch = screen.getByRole('switch', { name: /Delete Account/i });
+                expect(deleteAccountSwitch).toHaveAttribute('aria-disabled', 'true');
+                
+                const switchRow = deleteAccountSwitch.closest('.switch-row');
+                expect(switchRow).toHaveAttribute('title', 'All sites must be deleted first');
+            });
+        });
+
+        it('calls deleteSite and redirects to dashboard/welcome on success', async () => {
+            const status = {
+                ...defaultAuthStatus,
+                sites: [
+                    { id: 'site1', name: 'Site 1' },
+                    { id: 'site2', name: 'Site 2' }
+                ]
+            };
+            await navigateToSettings(status);
+
+            const deleteSiteBtn = screen.getByRole('button', { name: /Delete Site/i });
+            fireEvent.click(deleteSiteBtn);
+
+            await waitFor(() => {
+                expect(screen.getByRole('button', { name: /^Delete$/i })).toBeInTheDocument();
+            });
+
+            fireEvent.click(screen.getByRole('button', { name: /^Delete$/i }));
+
+            await waitFor(() => {
+                expect(deleteSite).toHaveBeenCalledWith('site1');
+                expect(window.location.href).toBe('/dashboard');
+            });
+        });
+
+        it('calls deleteUser when deleteAccount is checked and redirects to homepage', async () => {
+            const status = {
+                ...defaultAuthStatus,
+                sites: [{ id: 'site1', name: 'Site 1' }]
+            };
+            await navigateToSettings(status);
+
+            const deleteSiteBtn = screen.getByRole('button', { name: /Delete Site/i });
+            fireEvent.click(deleteSiteBtn);
+
+            await waitFor(() => {
+                expect(screen.getByRole('button', { name: /^Delete$/i })).toBeInTheDocument();
+            });
+
+            const deleteAccountSwitch = screen.getByRole('switch', { name: /Delete Account/i });
+            fireEvent.click(deleteAccountSwitch);
+
+            fireEvent.click(screen.getByRole('button', { name: /^Delete$/i }));
+
+            await waitFor(() => {
+                expect(deleteSite).toHaveBeenCalledWith('site1');
+                expect(deleteUser).toHaveBeenCalled();
+                expect(window.location.href).toBe('/');
             });
         });
     });
