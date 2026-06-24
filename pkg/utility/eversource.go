@@ -46,59 +46,143 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 		// ==========================================
 		case "eversource_ct_rate_1":
 			// CT Residential Flat (Rate 1)
-			// Total rate: $0.24666/kWh
+			// Total rate: $0.24666/kWh (before July 1, 2026), $0.23602/kWh (starting July 1, 2026)
 			// Exports: Renewable Energy Solutions Rider applies a -$0.0402/kWh adjustment fee
-			simplified := []touSimplifiedPeriod{
-				{
-					Year:                                   year,
-					MonthStart:                             time.January,
-					MonthEnd:                               time.December,
-					OtherDollarsPerKWH:                     0.24666,
-					OtherDescription:                       "Eversource CT Rate 1 Flat",
-					OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
-				},
+			var simplified []touSimplifiedPeriod
+			if year == 2026 {
+				simplified = []touSimplifiedPeriod{
+					{
+						Year:                                   year,
+						MonthStart:                             time.January,
+						MonthEnd:                               time.June,
+						OtherDollarsPerKWH:                     0.24666,
+						OtherDescription:                       "Eversource CT Rate 1 Flat",
+						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+					},
+					{
+						Year:                                   year,
+						MonthStart:                             time.July,
+						MonthEnd:                               time.December,
+						OtherDollarsPerKWH:                     0.23602,
+						OtherDescription:                       "Eversource CT Rate 1 Flat",
+						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+					},
+				}
+			} else {
+				simplified = []touSimplifiedPeriod{
+					{
+						Year:                                   year,
+						MonthStart:                             time.January,
+						MonthEnd:                               time.December,
+						OtherDollarsPerKWH:                     0.23602,
+						OtherDescription:                       "Eversource CT Rate 1 Flat",
+						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+					},
+				}
 			}
 			periods = append(periods, buildPeriods(locStr, simplified)...)
 
 		case "eversource_ct_rate_5":
 			// CT Residential Heating (Rate 5)
-			// Total rate: $0.22277/kWh
+			// Total rate: $0.22277/kWh (before July 1, 2026), $0.21213/kWh (starting July 1, 2026)
 			// Exports: Renewable Energy Solutions Rider applies a -$0.0402/kWh adjustment fee
-			simplified := []touSimplifiedPeriod{
-				{
-					Year:                                   year,
-					MonthStart:                             time.January,
-					MonthEnd:                               time.December,
-					OtherDollarsPerKWH:                     0.22277,
-					OtherDescription:                       "Eversource CT Rate 5 Heating Flat",
-					OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
-				},
+			var simplified []touSimplifiedPeriod
+			if year == 2026 {
+				simplified = []touSimplifiedPeriod{
+					{
+						Year:                                   year,
+						MonthStart:                             time.January,
+						MonthEnd:                               time.June,
+						OtherDollarsPerKWH:                     0.22277,
+						OtherDescription:                       "Eversource CT Rate 5 Heating Flat",
+						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+					},
+					{
+						Year:                                   year,
+						MonthStart:                             time.July,
+						MonthEnd:                               time.December,
+						OtherDollarsPerKWH:                     0.21213,
+						OtherDescription:                       "Eversource CT Rate 5 Heating Flat",
+						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+					},
+				}
+			} else {
+				simplified = []touSimplifiedPeriod{
+					{
+						Year:                                   year,
+						MonthStart:                             time.January,
+						MonthEnd:                               time.December,
+						OtherDollarsPerKWH:                     0.21213,
+						OtherDescription:                       "Eversource CT Rate 5 Heating Flat",
+						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+					},
+				}
 			}
 			periods = append(periods, buildPeriods(locStr, simplified)...)
 
 		case "eversource_ct_rate_7":
 			// CT Residential Time-of-Day (Rate 7)
-			// On-Peak: Weekdays 12 Noon – 8 p.m. Rate: $0.31099/kWh
-			// Off-Peak: All other hours. Rate: $0.21871/kWh
+			// On-Peak: Weekdays 12 Noon – 8 p.m. Rate: $0.31099/kWh (before July 1, 2026), $0.29982/kWh (starting July 1, 2026)
+			// Off-Peak: All other hours. Rate: $0.21871/kWh (before July 1, 2026), $0.20754/kWh (starting July 1, 2026)
 			// Exports: Renewable Energy Solutions Rider applies a -$0.0402/kWh adjustment fee
-			simplified := []touSimplifiedPeriod{
-				{
-					Year:       year,
-					MonthStart: time.January,
-					MonthEnd:   time.December,
-					HoursAndDays: []touSimplifiedHoursAndDays{
-						{
-							Hours:                             []types.UtilityHourPeriod{{HourStart: 12, HourEnd: 20}},
-							Weekday:                           true,
-							DollarsPerKWH:                     0.31099,
-							Description:                       "Eversource CT Rate 7 On-Peak",
-							GenerationAdjustmentDollarsPerKWH: -0.0402,
+			var simplified []touSimplifiedPeriod
+			if year == 2026 {
+				simplified = []touSimplifiedPeriod{
+					{
+						Year:       year,
+						MonthStart: time.January,
+						MonthEnd:   time.June,
+						HoursAndDays: []touSimplifiedHoursAndDays{
+							{
+								Hours:                             []types.UtilityHourPeriod{{HourStart: 12, HourEnd: 20}},
+								Weekday:                           true,
+								DollarsPerKWH:                     0.31099,
+								Description:                       "Eversource CT Rate 7 On-Peak",
+								GenerationAdjustmentDollarsPerKWH: -0.0402,
+							},
 						},
+						OtherDollarsPerKWH:                     0.21871,
+						OtherDescription:                       "Eversource CT Rate 7 Off-Peak",
+						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
 					},
-					OtherDollarsPerKWH:                     0.21871,
-					OtherDescription:                       "Eversource CT Rate 7 Off-Peak",
-					OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
-				},
+					{
+						Year:       year,
+						MonthStart: time.July,
+						MonthEnd:   time.December,
+						HoursAndDays: []touSimplifiedHoursAndDays{
+							{
+								Hours:                             []types.UtilityHourPeriod{{HourStart: 12, HourEnd: 20}},
+								Weekday:                           true,
+								DollarsPerKWH:                     0.29982,
+								Description:                       "Eversource CT Rate 7 On-Peak",
+								GenerationAdjustmentDollarsPerKWH: -0.0402,
+							},
+						},
+						OtherDollarsPerKWH:                     0.20754,
+						OtherDescription:                       "Eversource CT Rate 7 Off-Peak",
+						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+					},
+				}
+			} else {
+				simplified = []touSimplifiedPeriod{
+					{
+						Year:       year,
+						MonthStart: time.January,
+						MonthEnd:   time.December,
+						HoursAndDays: []touSimplifiedHoursAndDays{
+							{
+								Hours:                             []types.UtilityHourPeriod{{HourStart: 12, HourEnd: 20}},
+								Weekday:                           true,
+								DollarsPerKWH:                     0.29982,
+								Description:                       "Eversource CT Rate 7 On-Peak",
+								GenerationAdjustmentDollarsPerKWH: -0.0402,
+							},
+						},
+						OtherDollarsPerKWH:                     0.20754,
+						OtherDescription:                       "Eversource CT Rate 7 Off-Peak",
+						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+					},
+				}
 			}
 			periods = append(periods, buildPeriods(locStr, simplified)...)
 
@@ -107,52 +191,132 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 		// ==========================================
 		case "eversource_nh_rate_r":
 			// NH Residential Standard (Rate R)
-			// Total rate: $0.23128/kWh
+			// Total rate: $0.23128/kWh (before Feb 1, 2026), $0.23390/kWh (starting Feb 1, 2026)
 			// Plain 1:1 net metering (no adjustment)
-			simplified := []touSimplifiedPeriod{
-				{
-					Year:               year,
-					MonthStart:         time.January,
-					MonthEnd:           time.December,
-					OtherDollarsPerKWH: 0.23128,
-					OtherDescription:   "Eversource NH Rate R Flat",
-				},
+			var simplified []touSimplifiedPeriod
+			if year == 2026 {
+				simplified = []touSimplifiedPeriod{
+					{
+						Year:               year,
+						MonthStart:         time.January,
+						MonthEnd:           time.January,
+						OtherDollarsPerKWH: 0.23128,
+						OtherDescription:   "Eversource NH Rate R Flat",
+					},
+					{
+						Year:               year,
+						MonthStart:         time.February,
+						MonthEnd:           time.December,
+						OtherDollarsPerKWH: 0.23390,
+						OtherDescription:   "Eversource NH Rate R Flat",
+					},
+				}
+			} else { // 2027+
+				simplified = []touSimplifiedPeriod{
+					{
+						Year:               year,
+						MonthStart:         time.January,
+						MonthEnd:           time.December,
+						OtherDollarsPerKWH: 0.23390,
+						OtherDescription:   "Eversource NH Rate R Flat",
+					},
+				}
 			}
 			periods = append(periods, buildPeriods(locStr, simplified)...)
 
 		case "eversource_nh_rate_r_otod":
 			// NH Residential Time-of-Day (Rate R-OTOD, maps to active R-OTOD 2)
-			// On-Peak: Weekdays 1 p.m. – 7 p.m. excluding holidays. Rate: $0.34792/kWh
-			// Off-Peak: All other hours. Rate: $0.19583/kWh
+			// On-Peak: Weekdays 1 p.m. – 7 p.m. excluding holidays. Rate: $0.34792/kWh (before Feb 1, 2026), $0.35054/kWh (starting Feb 1, 2026)
+			// Off-Peak: All other hours. Rate: $0.19583/kWh (before Feb 1, 2026), $0.19845/kWh (starting Feb 1, 2026)
 			// Plain 1:1 net metering (no adjustment)
-			simplified := []touSimplifiedPeriod{
-				// Holidays are Off-Peak
-				{
-					Year:               year,
-					MonthStart:         time.January,
-					MonthEnd:           time.December,
-					SpecificDates:      holidays,
-					OtherDollarsPerKWH: 0.19583,
-					OtherDescription:   "Eversource NH Rate R-OTOD Off-Peak (Holiday)",
-				},
-				// Weekdays and Weekends
-				{
-					Year:             year,
-					MonthStart:       time.January,
-					MonthEnd:         time.December,
-					SpecificDates:    holidays,
-					SpecificDatesNot: true,
-					HoursAndDays: []touSimplifiedHoursAndDays{
-						{
-							Hours:         []types.UtilityHourPeriod{{HourStart: 13, HourEnd: 19}},
-							Weekday:       true,
-							DollarsPerKWH: 0.34792,
-							Description:   "Eversource NH Rate R-OTOD On-Peak",
-						},
+			var simplified []touSimplifiedPeriod
+			if year == 2026 {
+				simplified = []touSimplifiedPeriod{
+					// Holidays are Off-Peak (January)
+					{
+						Year:               year,
+						MonthStart:         time.January,
+						MonthEnd:           time.January,
+						SpecificDates:      holidays,
+						OtherDollarsPerKWH: 0.19583,
+						OtherDescription:   "Eversource NH Rate R-OTOD Off-Peak (Holiday)",
 					},
-					OtherDollarsPerKWH: 0.19583,
-					OtherDescription:   "Eversource NH Rate R-OTOD Off-Peak",
-				},
+					// Weekdays and Weekends (January)
+					{
+						Year:             year,
+						MonthStart:       time.January,
+						MonthEnd:         time.January,
+						SpecificDates:    holidays,
+						SpecificDatesNot: true,
+						HoursAndDays: []touSimplifiedHoursAndDays{
+							{
+								Hours:         []types.UtilityHourPeriod{{HourStart: 13, HourEnd: 19}},
+								Weekday:       true,
+								DollarsPerKWH: 0.34792,
+								Description:   "Eversource NH Rate R-OTOD On-Peak",
+							},
+						},
+						OtherDollarsPerKWH: 0.19583,
+						OtherDescription:   "Eversource NH Rate R-OTOD Off-Peak",
+					},
+					// Holidays are Off-Peak (February - December)
+					{
+						Year:               year,
+						MonthStart:         time.February,
+						MonthEnd:           time.December,
+						SpecificDates:      holidays,
+						OtherDollarsPerKWH: 0.19845,
+						OtherDescription:   "Eversource NH Rate R-OTOD Off-Peak (Holiday)",
+					},
+					// Weekdays and Weekends (February - December)
+					{
+						Year:             year,
+						MonthStart:       time.February,
+						MonthEnd:         time.December,
+						SpecificDates:    holidays,
+						SpecificDatesNot: true,
+						HoursAndDays: []touSimplifiedHoursAndDays{
+							{
+								Hours:         []types.UtilityHourPeriod{{HourStart: 13, HourEnd: 19}},
+								Weekday:       true,
+								DollarsPerKWH: 0.35054,
+								Description:   "Eversource NH Rate R-OTOD On-Peak",
+							},
+						},
+						OtherDollarsPerKWH: 0.19845,
+						OtherDescription:   "Eversource NH Rate R-OTOD Off-Peak",
+					},
+				}
+			} else { // 2027+
+				simplified = []touSimplifiedPeriod{
+					// Holidays are Off-Peak
+					{
+						Year:               year,
+						MonthStart:         time.January,
+						MonthEnd:           time.December,
+						SpecificDates:      holidays,
+						OtherDollarsPerKWH: 0.19845,
+						OtherDescription:   "Eversource NH Rate R-OTOD Off-Peak (Holiday)",
+					},
+					// Weekdays and Weekends
+					{
+						Year:             year,
+						MonthStart:       time.January,
+						MonthEnd:         time.December,
+						SpecificDates:    holidays,
+						SpecificDatesNot: true,
+						HoursAndDays: []touSimplifiedHoursAndDays{
+							{
+								Hours:         []types.UtilityHourPeriod{{HourStart: 13, HourEnd: 19}},
+								Weekday:       true,
+								DollarsPerKWH: 0.35054,
+								Description:   "Eversource NH Rate R-OTOD On-Peak",
+							},
+						},
+						OtherDollarsPerKWH: 0.19845,
+						OtherDescription:   "Eversource NH Rate R-OTOD Off-Peak",
+					},
+				}
 			}
 			periods = append(periods, buildPeriods(locStr, simplified)...)
 
@@ -224,17 +388,149 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 		// ==========================================
 		case "eversource_ma_residential":
 			// MA Residential Standard (Rate R-1)
-			// Total rate: $0.30471/kWh
-			// Plain 1:1 net metering (no adjustment)
+			// Technical note: Delivery rates vary slightly by area in Massachusetts (typically by a cent or less),
+			// so we use Greater Boston delivery rates ($0.18580/kWh) for simplicity.
+			// Supply rates are added based on the user's selected Supply Rate Option (Fixed vs Monthly Variable).
 			// We do not support the SMART program yet because it requires enrollment in the ConnectedSolutions demand response program.
-			simplified := []touSimplifiedPeriod{
-				{
-					Year:               year,
-					MonthStart:         time.January,
-					MonthEnd:           time.December,
-					OtherDollarsPerKWH: 0.30471,
-					OtherDescription:   "Eversource MA Rate R-1 Flat",
-				},
+			// Delivery and Supply charges are combined here to ensure exactly one base period exists per hour,
+			// satisfying utility rate structure assertions in tests.
+			var simplified []touSimplifiedPeriod
+			genRate := opts.GenerationRate
+			if genRate == "" || genRate == "fixed" {
+				if year == 2026 {
+					simplified = []touSimplifiedPeriod{
+						{
+							Year:               year,
+							MonthStart:         time.January,
+							MonthEnd:           time.January,
+							OtherDollarsPerKWH: 0.30471,
+							OtherDescription:   "Eversource MA Rate R-1 Flat",
+						},
+						{
+							Year:               year,
+							MonthStart:         time.February,
+							MonthEnd:           time.July,
+							OtherDollarsPerKWH: 0.34209, // $0.18580 delivery + $0.15629 supply
+							OtherDescription:   "Eversource MA Rate R-1 Flat",
+						},
+						{
+							Year:               year,
+							MonthStart:         time.August,
+							MonthEnd:           time.December,
+							OtherDollarsPerKWH: 0.35903, // $0.18580 delivery + $0.17323 supply
+							OtherDescription:   "Eversource MA Rate R-1 Flat",
+						},
+					}
+				} else { // 2027+
+					simplified = []touSimplifiedPeriod{
+						{
+							Year:               year,
+							MonthStart:         time.January,
+							MonthEnd:           time.December,
+							OtherDollarsPerKWH: 0.35903, // $0.18580 delivery + $0.17323 supply
+							OtherDescription:   "Eversource MA Rate R-1 Flat",
+						},
+					}
+				}
+			} else if genRate == "monthly" {
+				if year == 2026 {
+					simplified = []touSimplifiedPeriod{
+						{
+							Year:               year,
+							MonthStart:         time.January,
+							MonthEnd:           time.January,
+							OtherDollarsPerKWH: 0.30471,
+							OtherDescription:   "Eversource MA Rate R-1 Flat",
+						},
+						{
+							Year:               year,
+							MonthStart:         time.February,
+							MonthEnd:           time.February,
+							OtherDollarsPerKWH: 0.40198, // $0.18580 delivery + $0.21618 supply
+							OtherDescription:   "Eversource MA Rate R-1 Flat",
+						},
+						{
+							Year:               year,
+							MonthStart:         time.March,
+							MonthEnd:           time.March,
+							OtherDollarsPerKWH: 0.33788, // $0.18580 delivery + $0.15208 supply
+							OtherDescription:   "Eversource MA Rate R-1 Flat",
+						},
+						{
+							Year:               year,
+							MonthStart:         time.April,
+							MonthEnd:           time.April,
+							OtherDollarsPerKWH: 0.31882, // $0.18580 delivery + $0.13302 supply
+							OtherDescription:   "Eversource MA Rate R-1 Flat",
+						},
+						{
+							Year:               year,
+							MonthStart:         time.May,
+							MonthEnd:           time.May,
+							OtherDollarsPerKWH: 0.31118, // $0.18580 delivery + $0.12538 supply
+							OtherDescription:   "Eversource MA Rate R-1 Flat",
+						},
+						{
+							Year:               year,
+							MonthStart:         time.June,
+							MonthEnd:           time.June,
+							OtherDollarsPerKWH: 0.31642, // $0.18580 delivery + $0.13062 supply
+							OtherDescription:   "Eversource MA Rate R-1 Flat",
+						},
+						{
+							Year:               year,
+							MonthStart:         time.July,
+							MonthEnd:           time.July,
+							OtherDollarsPerKWH: 0.34797, // $0.18580 delivery + $0.16217 supply
+							OtherDescription:   "Eversource MA Rate R-1 Flat",
+						},
+						{
+							Year:               year,
+							MonthStart:         time.August,
+							MonthEnd:           time.August,
+							OtherDollarsPerKWH: 0.32835, // $0.18580 delivery + $0.14255 supply
+							OtherDescription:   "Eversource MA Rate R-1 Flat",
+						},
+						{
+							Year:               year,
+							MonthStart:         time.September,
+							MonthEnd:           time.September,
+							OtherDollarsPerKWH: 0.31468, // $0.18580 delivery + $0.12888 supply
+							OtherDescription:   "Eversource MA Rate R-1 Flat",
+						},
+						{
+							Year:               year,
+							MonthStart:         time.October,
+							MonthEnd:           time.October,
+							OtherDollarsPerKWH: 0.31582, // $0.18580 delivery + $0.13002 supply
+							OtherDescription:   "Eversource MA Rate R-1 Flat",
+						},
+						{
+							Year:               year,
+							MonthStart:         time.November,
+							MonthEnd:           time.November,
+							OtherDollarsPerKWH: 0.33395, // $0.18580 delivery + $0.14815 supply
+							OtherDescription:   "Eversource MA Rate R-1 Flat",
+						},
+						{
+							Year:               year,
+							MonthStart:         time.December,
+							MonthEnd:           time.December,
+							OtherDollarsPerKWH: 0.39634, // $0.18580 delivery + $0.21054 supply
+							OtherDescription:   "Eversource MA Rate R-1 Flat",
+						},
+					}
+				} else { // 2027+
+					simplified = []touSimplifiedPeriod{
+						{
+							Year:               year,
+							MonthStart:         time.January,
+							MonthEnd:           time.December,
+							OtherDollarsPerKWH: 0.44090, // $0.18580 delivery + $0.25510 supply
+							OtherDescription:   "Eversource MA Rate R-1 Flat",
+						},
+					}
+				}
 			}
 			periods = append(periods, buildPeriods(locStr, simplified)...)
 		}
@@ -296,6 +592,19 @@ func eversourceUtilityInfo() types.UtilityProviderInfo {
 			{
 				ID:   "eversource_ma_residential",
 				Name: "MA Residential Standard (Rate R-1)",
+				Options: []types.UtilityRateOption{
+					{
+						Field:       "generationRate",
+						Name:        "Supply Rate Option",
+						Type:        types.UtilityOptionTypeSelect,
+						Description: "Select your Eversource Basic Service supply rate type.",
+						Choices: []types.UtilityOptionChoice{
+							{Value: "fixed", Name: "Fixed Supply Rate"},
+							{Value: "monthly", Name: "Monthly Supply Rate"},
+						},
+						Default: "fixed",
+					},
+				},
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 					return eversourcePeriods("eversource_ma_residential", opts, []int{2026, 2027}), nil
 				},
