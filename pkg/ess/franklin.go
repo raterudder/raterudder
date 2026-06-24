@@ -579,7 +579,7 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 			slog.Time("time", t),
 			slog.String("code", alarm.AlarmCode),
 		)
-		if alarm.Name == "SIM card not inserted" {
+		if alarm.Name == "SIM card not inserted" || alarm.Name == "4G module not connected" {
 			continue
 		}
 		if alarm.Name == "No PV Current Detected" {
