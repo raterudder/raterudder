@@ -810,6 +810,39 @@ describe('Dashboard', () => {
         });
     });
 
+    it('does not group VPPActive actions with sufficientBattery actions', async () => {
+        const now = new Date();
+        const actions = [
+            {
+                reason: 'sufficientBattery',
+                description: 'Normal action',
+                timestamp: new Date(now.getTime() - 60000).toISOString(),
+                batteryMode: 4, // Load
+                solarMode: 0,
+                currentPrice: { dollarsPerKWH: 0.10, tsStart: '', tsEnd: '' },
+                paused: false,
+            },
+            {
+                reason: 'vppActive',
+                description: 'VPP event active',
+                timestamp: now.toISOString(),
+                batteryMode: 0, // NoChange
+                solarMode: 0,
+                currentPrice: { dollarsPerKWH: 0.12, tsStart: '', tsEnd: '' },
+                paused: false,
+            }
+        ];
+        mockActionsAndSavings(actions);
+
+        renderWithRouter(<Dashboard />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/The battery has enough stored energy/)).toBeInTheDocument();
+            expect(screen.getByText(/Virtual Power Plant/)).toBeInTheDocument();
+        });
+    });
+
+
     it('shows paused indicator in CurrentStatus when last action is paused', async () => {
         const now = new Date();
         const actions = [

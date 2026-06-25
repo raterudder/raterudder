@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { useLocation, useSearch, Link } from 'wouter';
-import { type Action, type SavingsStats, type Settings, fetchActionsAndSavings, BatteryMode } from '../api';
+import { type Action, type SavingsStats, type Settings, fetchActionsAndSavings, BatteryMode, ActionReason } from '../api';
 import CurrentStatus from '../components/CurrentStatus';
 import SavingsHero from '../components/SavingsHero';
 import ActionTimeline from '../components/ActionTimeline';
@@ -141,7 +141,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
         let currentSummary: ActionSummaryAccumulator | null = null;
 
         for (const action of visibleActions) {
-            const isFault = !!action.fault;
+            const isFault = !!action.fault || action.reason === ActionReason.VPPActive || !!action.systemStatus?.vppActive;
             const hasPrice = !!action.currentPrice && action.currentPrice.tsStart !== "0001-01-01T00:00:00Z";
             const price = action.currentPrice ? gridChargeCost(action.currentPrice) : 0;
 
@@ -199,6 +199,9 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                     }
                     if (action.systemStatus && action.systemStatus.gridUnavailable) {
                         action.reason = "gridUnavailable" as any;
+                    }
+                    if (action.systemStatus && action.systemStatus.vppActive) {
+                        action.reason = ActionReason.VPPActive;
                     }
                 }
                 if (currentSummary && currentSummary.type === 'fault' && currentSummary.reason === action.reason) {

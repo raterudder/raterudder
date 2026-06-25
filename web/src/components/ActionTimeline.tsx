@@ -61,7 +61,7 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
                 const showCapacityTag = action.capacityAt && action.capacityAt !== '0001-01-01T00:00:00Z';
 
                 return (
-                    <li key={index} className={`timeline-item mode-${isFault ? 'fault' : batteryModeClass} ${summary ? 'is-grouped' : ''}`}>
+                    <li key={index} className={`timeline-item mode-${(isFault && !isVPP) ? 'fault' : batteryModeClass} ${summary ? 'is-grouped' : ''}`}>
                         <div className="timeline-marker" aria-hidden="true"></div>
 
                         <div className="timeline-time">
@@ -92,7 +92,7 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
                                     </>
                                 ) : isFault ? (
                                     <div className="fault-details">
-                                        {action.reason === ActionReason.GridUnavailable || action.systemStatus?.gridUnavailable ? (
+                                        {action.reason === ActionReason.GridUnavailable || action.systemStatus?.gridUnavailable || isVPP ? (
                                             <p>{reasonText}</p>
                                         ) : (
                                             <p className="fault-alarms">
