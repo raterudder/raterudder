@@ -34,6 +34,9 @@ type Utility interface {
 
 	// ApplySettings updates the system using the provided global settings.
 	ApplySettings(ctx context.Context, settings types.Settings) error
+
+	// GetVPPInfo returns the VPP info for the utility provider.
+	GetVPPInfo(ctx context.Context) (types.UtilityVPPInfo, error)
 }
 
 // Configured sets up the utility providers and returns a Map.
@@ -166,6 +169,17 @@ var (
 		}
 		return out
 	}()
+	utilityRateVPPMap = func() map[string]func(types.UtilityRateOptions) (types.UtilityVPPInfo, error) {
+		out := make(map[string]func(types.UtilityRateOptions) (types.UtilityVPPInfo, error))
+		for _, u := range allUtilities {
+			for _, r := range u.Rates {
+				if r.GetVPP != nil {
+					out[r.ID] = r.GetVPP
+				}
+			}
+		}
+		return out
+	}()
 )
 
 func getUtilityRateFees(rate string, options types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
@@ -186,6 +200,26 @@ func getUtilityRateFees(rate string, options types.UtilityRateOptions) ([]types.
 		return nil, nil
 	}
 	return fees(options)
+}
+
+func getUtilityVPPInfo(rate string, options types.UtilityRateOptions) (types.UtilityVPPInfo, error) {
+	if rate == "gp_tou_oa_14" {
+		rate = "gp_tou_oa"
+	} else if rate == "gp_tou_rd_11" {
+		rate = "gp_tou_rd"
+	} else if rate == "gp_tou_reo_18" {
+		rate = "gp_tou_reo"
+	}
+
+	getVPP, ok := utilityRateVPPMap[rate]
+	if !ok {
+		// not every rate supports VPP so we ignore when one isn't found
+		return types.UtilityVPPInfo{}, nil
+	}
+	if getVPP == nil {
+		return types.UtilityVPPInfo{}, nil
+	}
+	return getVPP(options)
 }
 
 // ListUtilities returns metadata for all supported utility providers.

@@ -1311,4 +1311,290 @@ func TestSimulateState(t *testing.T) {
 		}
 	})
 
+	t.Run("VPPEvents", func(t *testing.T) {
+		t.Run("VPP Charging Blackout Discharging and Restore", func(t *testing.T) {
+			now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+
+			history := []types.EnergyStats{}
+			for i := 1; i <= 3; i++ {
+				pastDay := now.Add(time.Duration(-24*i) * time.Hour)
+				for h := 0; h < 24; h++ {
+					history = append(history, types.EnergyStats{
+						TSHourStart: pastDay.Add(time.Duration(h) * time.Hour),
+						SolarKWH:    0,
+						HomeKWH:     1.0,
+					})
+				}
+			}
+
+			currentStatus := types.SystemStatus{
+				BatteryCapacityKWH:    10.0,
+				BatterySOC:            50.0, // 5.0 kWh
+				BatteryKW:             0,
+				Timestamp:             now,
+				MaxBatteryChargeKW:    2.0,
+				MaxBatteryDischargeKW: 5.0,
+				VPPEvents: []types.VPPEvent{
+					{
+						Description: "VPP Test Event",
+						TSStart:     now.Add(5 * time.Hour), // 17:00
+						TSEnd:       now.Add(8 * time.Hour), // 20:00
+						VPPSoc:      10.0,                   // 10% SOC = 1.0 kWh reserve during event
+					},
+				},
+			}
+
+			settings := types.Settings{
+				MinBatterySOC:            20.0, // 2.1 kWh regular reserve
+				SolarTrendRatioMax:       3.0,
+				SolarBellCurveMultiplier: 0,
+				GridChargeBatteries:      false,
+				GridExportSolar:          true,
+			}
+
+			simData, _ := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
+
+			if assert.Len(t, simData, 24) {
+				// starting at 13:00, with 1 kW load and 2 kW max charge rate,
+				// the start charging time is calculated to be 13:24 (24 minutes past 13:00).
+				assert.WithinDuration(t, now.Add(1*time.Hour).Add(24*time.Minute), simData[1].StartedVPPChargingAt, time.Second)
+
+				// Hour 4 (16:00-17:00): Blackout window starts at 16:00.
+				// Battery cannot discharge during this hour.
+				assert.Equal(t, now.Add(4*time.Hour), simData[4].VPPBlackoutAt)
+				assert.InDelta(t, 9.8, simData[4].BatteryKWH, 0.001) // held at 9.8 kWh
+
+				// Hour 5 (17:00-18:00): VPP Event starts.
+				assert.InDelta(t, 4.8, simData[5].BatteryKWH, 0.001)
+
+				// Hour 6 (18:00-19:00): VPP Event continues.
+				assert.InDelta(t, 1.0, simData[6].BatteryKWH, 0.001)
+
+				// Hour 8 (20:00-21:00): VPP Event is over (ended at 20:00).
+				assert.True(t, simData[8].VPPBlackoutAt.IsZero())
+				assert.InDelta(t, 2.1, simData[8].BatteryKWH, 0.001)
+				assert.Greater(t, simData[8].TotalBatteryDeficitKWH, 0.0)
+			}
+		})
+
+		t.Run("VPP No Charging Needed", func(t *testing.T) {
+			now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+			history := []types.EnergyStats{}
+			for i := 1; i <= 3; i++ {
+				pastDay := now.Add(time.Duration(-24*i) * time.Hour)
+				for h := 0; h < 24; h++ {
+					history = append(history, types.EnergyStats{
+						TSHourStart: pastDay.Add(time.Duration(h) * time.Hour),
+						SolarKWH:    0,
+						HomeKWH:     0,
+					})
+				}
+			}
+
+			currentStatus := types.SystemStatus{
+				BatteryCapacityKWH:    10.0,
+				BatterySOC:            100.0,
+				BatteryKW:             0,
+				Timestamp:             now,
+				MaxBatteryChargeKW:    2.0,
+				MaxBatteryDischargeKW: 5.0,
+				VPPEvents: []types.VPPEvent{
+					{
+						Description: "VPP Test Event",
+						TSStart:     now.Add(3 * time.Hour),
+						TSEnd:       now.Add(5 * time.Hour),
+						VPPSoc:      20.0,
+					},
+				},
+			}
+
+			settings := types.Settings{
+				MinBatterySOC:            20.0,
+				SolarTrendRatioMax:       3.0,
+				SolarBellCurveMultiplier: 0,
+				GridChargeBatteries:      false,
+				GridExportSolar:          true,
+			}
+
+			simData, _ := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
+			if assert.Len(t, simData, 24) {
+				assert.True(t, simData[0].StartedVPPChargingAt.IsZero() || simData[0].StartedVPPChargingAt.Equal(now.Add(3*time.Hour).Add(-30*time.Minute)))
+			}
+		})
+
+		t.Run("Multiple VPP Events", func(t *testing.T) {
+			now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+			history := []types.EnergyStats{}
+			for i := 1; i <= 3; i++ {
+				pastDay := now.Add(time.Duration(-24*i) * time.Hour)
+				for h := 0; h < 24; h++ {
+					history = append(history, types.EnergyStats{
+						TSHourStart: pastDay.Add(time.Duration(h) * time.Hour),
+						SolarKWH:    0,
+						HomeKWH:     0.5,
+					})
+				}
+			}
+
+			currentStatus := types.SystemStatus{
+				BatteryCapacityKWH:    10.0,
+				BatterySOC:            80.0,
+				BatteryKW:             0,
+				Timestamp:             now,
+				MaxBatteryChargeKW:    2.0,
+				MaxBatteryDischargeKW: 5.0,
+				VPPEvents: []types.VPPEvent{
+					{
+						Description: "VPP Event 1",
+						TSStart:     now.Add(3 * time.Hour),
+						TSEnd:       now.Add(5 * time.Hour),
+						VPPSoc:      20.0,
+					},
+					{
+						Description: "VPP Event 2",
+						TSStart:     now.Add(9 * time.Hour),
+						TSEnd:       now.Add(11 * time.Hour),
+						VPPSoc:      20.0,
+					},
+				},
+			}
+
+			settings := types.Settings{
+				MinBatterySOC:            20.0,
+				SolarTrendRatioMax:       3.0,
+				SolarBellCurveMultiplier: 0,
+				GridChargeBatteries:      false,
+				GridExportSolar:          true,
+			}
+
+			simData, _ := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
+			if assert.Len(t, simData, 24) {
+				assert.Equal(t, now.Add(2*time.Hour), simData[2].VPPBlackoutAt)
+				assert.Equal(t, now.Add(5*time.Hour), simData[2].VPPEndAt)
+				assert.True(t, simData[6].VPPBlackoutAt.IsZero())
+				assert.Equal(t, now.Add(8*time.Hour), simData[8].VPPBlackoutAt)
+				assert.Equal(t, now.Add(11*time.Hour), simData[8].VPPEndAt)
+			}
+		})
+
+		t.Run("Solar Clamping in Pre-VPP States", func(t *testing.T) {
+			now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+
+			// We define a history that has solar generation.
+			history := []types.EnergyStats{}
+			for i := 1; i <= 3; i++ {
+				pastDay := now.Add(time.Duration(-24*i) * time.Hour)
+				for h := 0; h < 24; h++ {
+					history = append(history, types.EnergyStats{
+						TSHourStart: pastDay.Add(time.Duration(h) * time.Hour),
+						SolarKWH:    4.0, // High solar generation
+						HomeKWH:     0.5,
+					})
+				}
+			}
+
+			currentStatus := types.SystemStatus{
+				BatteryCapacityKWH:    10.0,
+				BatterySOC:            85.0, // 8.5 kWh
+				BatteryKW:             0,
+				Timestamp:             now,
+				MaxBatteryChargeKW:    2.0,
+				MaxBatteryDischargeKW: 5.0,
+				VPPEvents: []types.VPPEvent{
+					{
+						Description: "VPP Solar Clamping Test",
+						TSStart:     now.Add(4 * time.Hour), // 16:00
+						TSEnd:       now.Add(7 * time.Hour), // 19:00
+						VPPSoc:      20.0,
+					},
+				},
+			}
+
+			settings := types.Settings{
+				MinBatterySOC:                      20.0,
+				SolarTrendRatioMax:                 3.0,
+				SolarBellCurveMultiplier:           0.0,
+				GridChargeBatteries:                false,
+				GridExportSolar:                    false, // EXPORT DISABLED -> solar clamping active!
+				SolarFullyChargeHeadroomBatterySOC: 10.0,  // Headroom of 10% (curtailed at 90% SOC = 9.0 kWh)
+			}
+
+			simData, _ := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
+			if assert.Len(t, simData, 24) {
+				// The pre-VPP charging phase or pre-VPP standby phase should reach 9.0 kWh and trigger solar clamping.
+				// Since we start at 8.5 kWh, generating 4.0 kWh - 0.5 kWh load = 3.5 kWh net solar per hour.
+				// We should quickly cross the 90% SOC threshold (9.0 kWh) during the very first hour (12:00-13:00).
+				// Let's verify that HitSolarCapacityAt is not zero.
+				if assert.False(t, simData[0].HitSolarCapacityAt.IsZero(), "Should record solar capacity limit hit") {
+					// Solar capacity limit is 9.0 kWh.
+					// We start at 8.5 kWh. Net charging rate is solar - load = 4.0 - 0.5 = 3.5 kW,
+					// but clamped at MaxBatteryChargeKW = 2.0 kW.
+					// Time to reach 9.0 kWh: (9.0 - 8.5) / 2.0 = 0.25 hours = 15 minutes past 12:00.
+					expectedHitTime := now.Add(15 * time.Minute)
+					assert.WithinDuration(t, expectedHitTime, simData[0].HitSolarCapacityAt, time.Second)
+				}
+			}
+		})
+
+		t.Run("VPP Discharging Limit", func(t *testing.T) {
+			now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+			history := []types.EnergyStats{}
+			for i := 1; i <= 3; i++ {
+				pastDay := now.Add(time.Duration(-24*i) * time.Hour)
+				for h := 0; h < 24; h++ {
+					history = append(history, types.EnergyStats{
+						TSHourStart: pastDay.Add(time.Duration(h) * time.Hour),
+						SolarKWH:    0,
+						HomeKWH:     1.0,
+					})
+				}
+			}
+
+			currentStatus := types.SystemStatus{
+				BatteryCapacityKWH:    10.0,
+				BatterySOC:            50.0, // 5.0 kWh
+				BatteryKW:             0,
+				Timestamp:             now,
+				MaxBatteryChargeKW:    2.0,
+				MaxBatteryDischargeKW: 2.0,
+				VPPEvents: []types.VPPEvent{
+					{
+						Description: "Active VPP",
+						TSStart:     now.Add(-1 * time.Hour), // Started at 11:00
+						TSEnd:       now.Add(2 * time.Hour),  // Ends at 14:00
+						VPPSoc:      20.0,                    // 20% SOC = 2.0 kWh target
+					},
+				},
+			}
+
+			settings := types.Settings{
+				MinBatterySOC:            30.0, // Regular reserve is 30% (3.0 kWh)
+				SolarTrendRatioMax:       3.0,
+				SolarBellCurveMultiplier: 0,
+				GridChargeBatteries:      false,
+				GridExportSolar:          true,
+			}
+
+			simData, _ := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
+			if assert.Len(t, simData, 24) {
+				// Hour 0 (12:00-13:00): Battery starts at 5.0 kWh.
+				// Max discharge power is 2.0 kW. Load is 1.0 kW.
+				// Since we are in a VPP event, the battery discharges to cover load + export at MaxDischarge = 2.0 kW.
+				// Ending energy: 5.0 - 2.0 = 3.0 kWh.
+				assert.InDelta(t, 3.0, simData[0].BatteryKWH, 0.001)
+
+				// Hour 1 (13:00-14:00): Battery starts at 3.0 kWh.
+				// Since VPP target is 2.0 kWh, we can only discharge 1.0 kWh.
+				// Discharge power is limited to 1.0 kW.
+				// Ending energy: 3.0 - 1.0 = 2.0 kWh.
+				assert.InDelta(t, 2.0, simData[1].BatteryKWH, 0.001)
+
+				// Hour 2 (14:00-15:00): VPP is over. Regular reserve is 30% + 1% buffer = 3.1 kWh.
+				// We now have immediate deficit charging back to 3.1 kWh.
+				assert.InDelta(t, 3.1, simData[2].BatteryKWH, 0.001)
+				assert.InDelta(t, 2.1, simData[2].TotalBatteryDeficitKWH, 0.001)
+			}
+		})
+	})
+
 }

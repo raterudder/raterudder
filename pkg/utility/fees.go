@@ -43,6 +43,11 @@ func (s *SiteFees) ApplySettings(ctx context.Context, settings types.Settings) e
 	return nil
 }
 
+// GetVPPInfo implements the Utility interface. No VPP info is supported atm.
+func (s *SiteFees) GetVPPInfo(context.Context) (types.UtilityVPPInfo, error) {
+	return types.UtilityVPPInfo{}, nil
+}
+
 func (s *SiteFees) applyFees(p types.Price) (types.Price, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

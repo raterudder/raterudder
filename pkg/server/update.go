@@ -236,6 +236,14 @@ func (s *Server) performSiteUpdate(
 
 	log.Ctx(ctx).DebugContext(ctx, "update: current price fetched", slog.Any("price", currentPrice))
 
+	// merge utility mandatory VPP events
+	vppInfo, err := utility.GetVPPInfo(ctx)
+	if err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to get utility VPP info", slog.Any("error", err))
+	} else {
+		status = s.mergeUtilityVPPEvents(ctx, status, vppInfo)
+	}
+
 	// get History for Controller (Last 35 days from monthly summaries + today's/tomorrow's unsummarized data)
 	now := s.now().In(status.Timestamp.Location())
 	historyStart := now.AddDate(0, 0, -forecastHistoryDays).Truncate(time.Hour)
@@ -490,6 +498,93 @@ func (s *Server) performSiteUpdate(
 	}
 
 	return &action, "", nil
+}
+
+func (s *Server) mergeUtilityVPPEvents(ctx context.Context, status types.SystemStatus, vppInfo types.UtilityVPPInfo) types.SystemStatus {
+	nowTime := s.now()
+	limitTime := nowTime.Add(24 * time.Hour)
+
+	for _, period := range vppInfo.Mandatory {
+		var inEvent bool
+		var eventStart time.Time
+
+		scanStart := nowTime.Truncate(time.Hour).Add(-24 * time.Hour)
+		scanEnd := nowTime.Add(48 * time.Hour).Truncate(time.Hour)
+
+		for h := scanStart; !h.After(scanEnd); h = h.Add(time.Hour) {
+			contains, err := period.Contains(h)
+			if err != nil {
+				contains = false
+			}
+			if contains {
+				if !inEvent {
+					inEvent = true
+					eventStart = period.Start
+				}
+			} else if inEvent {
+				eventEnd := period.End
+
+				if !eventStart.Before(nowTime) && !eventStart.After(limitTime) {
+					candidate := types.VPPEvent{
+						Description: "Mandatory Utility VPP Event",
+						TSStart:     eventStart,
+						TSEnd:       eventEnd,
+						VPPSoc:      period.ReserveSOC,
+					}
+
+					var overlapsVPP bool
+					var overlapEvent types.VPPEvent
+					for _, existing := range status.VPPEvents {
+						if candidate.TSStart.Before(existing.TSEnd) && existing.TSStart.Before(candidate.TSEnd) {
+							overlapsVPP = true
+							overlapEvent = existing
+							break
+						}
+					}
+					if overlapsVPP {
+						// vpp events returned from ess override utility ones
+						log.Ctx(ctx).InfoContext(ctx, "ignoring mandatory utility VPP event because it overlaps with an existing ESS VPP event",
+							slog.Any("utilityEvent", candidate),
+							slog.Any("existingEvent", overlapEvent),
+						)
+						inEvent = false
+						continue
+					}
+
+					var overlapsStorm bool
+					var overlapStorm types.Storm
+					for _, storm := range status.Storms {
+						if candidate.TSStart.Before(storm.TSEnd) && storm.TSStart.Before(candidate.TSEnd) {
+							overlapsStorm = true
+							overlapStorm = storm
+							break
+						}
+					}
+					if overlapsStorm {
+						// storms override vpp events even if they're mandatory
+						log.Ctx(ctx).InfoContext(ctx, "ignoring mandatory utility VPP event because it overlaps with a storm warning",
+							slog.Any("utilityEvent", candidate),
+							slog.Any("storm", overlapStorm),
+						)
+						inEvent = false
+						continue
+					}
+
+					status.VPPEvents = append(status.VPPEvents, candidate)
+					log.Ctx(ctx).DebugContext(ctx,
+						"added utility mandatory VPP event to SystemStatus",
+						slog.Any("event", candidate),
+					)
+				}
+				inEvent = false
+			}
+		}
+	}
+
+	slices.SortFunc(status.VPPEvents, func(a, b types.VPPEvent) int {
+		return a.TSStart.Compare(b.TSStart)
+	})
+	return status
 }
 
 func (s *Server) updatePriceHistory(ctx context.Context, siteID string, provider utility.Utility, refreshNow bool) error {

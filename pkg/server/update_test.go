@@ -28,6 +28,7 @@ func TestHandleUpdate(t *testing.T) {
 	mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.15, TSStart: time.Now()}, nil)
 	mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{{DollarsPerKWH: 0.15, TSStart: time.Now().Add(time.Hour)}}, nil)
 	mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+	mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
 	mockS := &mockStorage{}
 	mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
@@ -86,6 +87,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: time.Now()}, nil)
 		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{{DollarsPerKWH: 0.15, TSStart: time.Now().Add(time.Hour)}}, nil)
 		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
 		mockS := &mockStorage{}
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
@@ -283,6 +285,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: time.Now()}, nil)
 		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{{DollarsPerKWH: 0.15, TSStart: time.Now().Add(time.Hour)}}, nil)
 		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
 		mockUMap := utility.NewMap(mockS)
 		mockUMap.SetProvider(types.SiteIDNone, mockU)
@@ -358,6 +361,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: time.Now()}, nil)
 		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
 		mockUMap := utility.NewMap(mockS)
 		mockUMap.SetProvider(types.SiteIDNone, mockU)
@@ -419,6 +423,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: time.Now()}, nil)
 		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
 		mockUMap := utility.NewMap(mockS)
 		mockUMap.SetProvider(types.SiteIDNone, mockU)
@@ -478,6 +483,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: time.Now()}, nil)
 		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
 		mockUMap := utility.NewMap(mockS)
 		mockUMap.SetProvider(types.SiteIDNone, mockU)
@@ -540,6 +546,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: time.Now()}, nil)
 		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
 		mockUMap := utility.NewMap(mockS)
 		mockUMap.SetProvider(types.SiteIDNone, mockU)
@@ -607,6 +614,7 @@ func TestHandleUpdate(t *testing.T) {
 			mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{}, nil)
 			mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{{DollarsPerKWH: 0.15, TSStart: time.Now().Add(time.Hour)}}, nil)
 			mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+			mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
 			mockUMap := utility.NewMap(mockS)
 			mockUMap.SetProvider(types.SiteIDNone, mockU)
@@ -683,6 +691,7 @@ func TestHandleUpdate(t *testing.T) {
 			mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{}, nil)
 			mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{{DollarsPerKWH: 0.15, TSStart: time.Now().Add(time.Hour)}}, nil)
 			mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+			mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
 			mockUMap := utility.NewMap(mockS)
 			mockUMap.SetProvider(types.SiteIDNone, mockU)
@@ -716,6 +725,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.15, TSStart: time.Now()}, nil)
 		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{{DollarsPerKWH: 0.15, TSStart: time.Now().Add(time.Hour)}}, nil)
 		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
 		mockS := &mockStorage{}
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
@@ -798,6 +808,7 @@ func TestHandleUpdateSites(t *testing.T) {
 	mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.15, TSStart: time.Now()}, nil)
 	mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{{DollarsPerKWH: 0.15, TSStart: time.Now().Add(time.Hour)}}, nil)
 	mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+	mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
 	mockS := &mockStorage{}
 	mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
@@ -965,6 +976,7 @@ func TestHandleUpdateSites(t *testing.T) {
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.15, TSStart: time.Now()}, nil)
 		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{{DollarsPerKWH: 0.15, TSStart: time.Now().Add(time.Hour)}}, nil)
 		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
 		mockUMap := utility.NewMap(mockS)
 		mockUMap.SetProvider("site1", mockU)
@@ -1095,6 +1107,7 @@ func TestHandleUpdateSites(t *testing.T) {
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.15, TSStart: time.Now()}, nil)
 		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
 		mockUMap := utility.NewMap(mockS)
 		mockUMap.SetProvider("site-write-rate-limited", mockU)
@@ -1546,6 +1559,7 @@ func TestUpdateEnergyHistory(t *testing.T) {
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: now}, nil)
 		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{}, nil) // Trigger fallback
 		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
 		mockUMap := utility.NewMap(mockS)
 		mockUMap.SetProvider("site1", mockU)
@@ -1976,5 +1990,144 @@ func TestGetCronGroups(t *testing.T) {
 		g1_t2 := getCronGroups(t2, "1")
 
 		assert.NotEqual(t, g1_t1, g1_t2)
+	})
+}
+
+func TestMergeUtilityVPPEvents(t *testing.T) {
+	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+
+	t.Run("basic merge within 24 hours", func(t *testing.T) {
+		srv := &Server{
+			nowFunc: func() time.Time {
+				return now
+			},
+		}
+
+		status := types.SystemStatus{
+			Timestamp: now,
+		}
+
+		vppInfo := types.UtilityVPPInfo{
+			Mandatory: []types.UtilityVPPPeriod{
+				{
+					UtilityPeriod: types.UtilityPeriod{
+						Start: now.Add(2 * time.Hour),
+						End:   now.Add(5 * time.Hour),
+					},
+					ReserveSOC: 20.0,
+				},
+			},
+		}
+
+		status = srv.mergeUtilityVPPEvents(context.Background(), status, vppInfo)
+
+		if assert.Len(t, status.VPPEvents, 1) {
+			assert.Equal(t, "Mandatory Utility VPP Event", status.VPPEvents[0].Description)
+			assert.True(t, status.VPPEvents[0].TSStart.Equal(now.Add(2*time.Hour)))
+			assert.True(t, status.VPPEvents[0].TSEnd.Equal(now.Add(5*time.Hour)))
+			assert.Equal(t, 20.0, status.VPPEvents[0].VPPSoc)
+		}
+	})
+
+	t.Run("ignore overlapping with ESS VPP events", func(t *testing.T) {
+		srv := &Server{
+			nowFunc: func() time.Time {
+				return now
+			},
+		}
+
+		status := types.SystemStatus{
+			Timestamp: now,
+			VPPEvents: []types.VPPEvent{
+				{
+					Description: "ESS VPP Event",
+					TSStart:     now.Add(2 * time.Hour),
+					TSEnd:       now.Add(4 * time.Hour),
+					VPPSoc:      15.0,
+				},
+			},
+		}
+
+		vppInfo := types.UtilityVPPInfo{
+			Mandatory: []types.UtilityVPPPeriod{
+				{
+					UtilityPeriod: types.UtilityPeriod{
+						Start: now.Add(3 * time.Hour),
+						End:   now.Add(5 * time.Hour),
+					},
+					ReserveSOC: 40.0,
+				},
+			},
+		}
+
+		status = srv.mergeUtilityVPPEvents(context.Background(), status, vppInfo)
+
+		if assert.Len(t, status.VPPEvents, 1) {
+			assert.Equal(t, "ESS VPP Event", status.VPPEvents[0].Description)
+			assert.Equal(t, 15.0, status.VPPEvents[0].VPPSoc)
+		}
+	})
+
+	t.Run("ignore overlapping with storm warnings", func(t *testing.T) {
+		srv := &Server{
+			nowFunc: func() time.Time {
+				return now
+			},
+		}
+
+		status := types.SystemStatus{
+			Timestamp: now,
+			Storms: []types.Storm{
+				{
+					Description: "Stormy weather",
+					TSStart:     now.Add(2 * time.Hour),
+					TSEnd:       now.Add(5 * time.Hour),
+				},
+			},
+		}
+
+		vppInfo := types.UtilityVPPInfo{
+			Mandatory: []types.UtilityVPPPeriod{
+				{
+					UtilityPeriod: types.UtilityPeriod{
+						Start: now.Add(3 * time.Hour),
+						End:   now.Add(4 * time.Hour),
+					},
+					ReserveSOC: 40.0,
+				},
+			},
+		}
+
+		status = srv.mergeUtilityVPPEvents(context.Background(), status, vppInfo)
+
+		assert.Empty(t, status.VPPEvents)
+	})
+
+	t.Run("filter out events starting after 24 hours", func(t *testing.T) {
+		srv := &Server{
+			nowFunc: func() time.Time {
+				return now
+			},
+		}
+
+		status := types.SystemStatus{
+			Timestamp: now,
+		}
+
+		vppInfo := types.UtilityVPPInfo{
+			Mandatory: []types.UtilityVPPPeriod{
+				{
+					UtilityPeriod: types.UtilityPeriod{
+						Start: now.Add(25 * time.Hour),
+						End:   now.Add(27 * time.Hour),
+					},
+					ReserveSOC: 50.0,
+				},
+			},
+		}
+
+		status = srv.mergeUtilityVPPEvents(context.Background(), status, vppInfo)
+
+		assert.Empty(t, status.VPPEvents)
 	})
 }

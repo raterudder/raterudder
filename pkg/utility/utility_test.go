@@ -77,6 +77,10 @@ func (m *mockUtility) ApplySettings(ctx context.Context, settings types.Settings
 	return m.settingsErr
 }
 
+func (m *mockUtility) GetVPPInfo(context.Context) (types.UtilityVPPInfo, error) {
+	return types.UtilityVPPInfo{}, nil
+}
+
 func TestMap(t *testing.T) {
 	ctx := context.Background()
 

@@ -20,6 +20,7 @@ type UtilityRateInfo struct {
 	Name    string                                                `json:"name"`
 	Options []UtilityRateOption                                   `json:"options"`
 	GetFees func(UtilityRateOptions) ([]UtilityFeesPeriod, error) `json:"-"`
+	GetVPP  func(UtilityRateOptions) (UtilityVPPInfo, error)      `json:"-"`
 }
 
 // UtilityOptionType defines the type of input field for a utility option.
@@ -103,6 +104,7 @@ type UtilityRateOptions struct {
 	GenerationRate       string `json:"generationRate,omitempty"`
 	Location             string `json:"location,omitempty"`
 	EVCredit             bool   `json:"evCredit,omitempty"`
+	VPPProgram           string `json:"vppProgram,omitempty"`
 }
 
 type UtilityHourPeriod struct {
@@ -284,4 +286,15 @@ func ApplyUtilityFeesPeriods(p Price, periods []UtilityFeesPeriod) (Price, error
 		}
 	}
 	return newPrice, nil
+}
+
+// UtilityVPPPeriod represents a period of time with utility-mandated VPP events.
+type UtilityVPPPeriod struct {
+	UtilityPeriod
+	ReserveSOC float64 `json:"reserveSOC"`
+}
+
+// UtilityVPPInfo holds VPP events information.
+type UtilityVPPInfo struct {
+	Mandatory []UtilityVPPPeriod `json:"mandatory"`
 }

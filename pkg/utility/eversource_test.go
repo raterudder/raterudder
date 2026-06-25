@@ -429,3 +429,89 @@ func TestEversourceUtilityInfo(t *testing.T) {
 		}
 	})
 }
+
+func TestEversourceVPP(t *testing.T) {
+	etLoc, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	t.Run("default options return no VPP periods", func(t *testing.T) {
+		u := &genericTOU{}
+		err := u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "eversource",
+			UtilityRate:     "eversource_ct_rate_1",
+		})
+		require.NoError(t, err)
+
+		vppInfo, err := u.GetVPPInfo(context.Background())
+		require.NoError(t, err)
+		assert.Empty(t, vppInfo.Mandatory)
+	})
+
+	t.Run("ess-passive option returns correct periods", func(t *testing.T) {
+		u := &genericTOU{}
+		err := u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "eversource",
+			UtilityRate:     "eversource_ct_rate_1",
+			UtilityRateOptions: types.UtilityRateOptions{
+				VPPProgram: "ess-passive",
+			},
+		})
+		require.NoError(t, err)
+
+		vppInfo, err := u.GetVPPInfo(context.Background())
+		require.NoError(t, err)
+		// 3 months (June, July, August) per year * 2 years (2026, 2027) = 6 periods
+		require.Len(t, vppInfo.Mandatory, 6)
+
+		for _, p := range vppInfo.Mandatory {
+			assert.Equal(t, 20.0, p.ReserveSOC)
+			assert.Equal(t, "America/New_York", p.Location)
+			require.Len(t, p.Hours, 1)
+			assert.Equal(t, 17, p.Hours[0].HourStart)
+			assert.Equal(t, 20, p.Hours[0].HourEnd)
+			assert.Equal(t, []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday}, p.DaysOfTheWeek)
+		}
+
+		// Helper to check if a specific time is covered by VPP periods
+		isVPPHour := func(tVal time.Time) bool {
+			for _, p := range vppInfo.Mandatory {
+				contains, err := p.Contains(tVal)
+				if err == nil && contains {
+					return true
+				}
+			}
+			return false
+		}
+
+		// 2026 tests (Juneteenth June 19 is Friday -> holiday, Independence Day July 4 is Saturday -> holiday)
+		// June 18, 2026 is Thursday, 6 PM -> Weekday, VPP hour -> should be VPP
+		assert.True(t, isVPPHour(time.Date(2026, time.June, 18, 18, 0, 0, 0, etLoc)))
+		// June 18, 2026 is Thursday, 4 PM -> outside hours -> should NOT be VPP
+		assert.False(t, isVPPHour(time.Date(2026, time.June, 18, 16, 0, 0, 0, etLoc)))
+		// June 18, 2026 is Thursday, 9 PM -> outside hours -> should NOT be VPP
+		assert.False(t, isVPPHour(time.Date(2026, time.June, 18, 21, 0, 0, 0, etLoc)))
+
+		// Weekend check: June 20, 2026 is Saturday, 6 PM -> weekend -> should NOT be VPP
+		assert.False(t, isVPPHour(time.Date(2026, time.June, 20, 18, 0, 0, 0, etLoc)))
+
+		// Holiday check 2026: Juneteenth June 19, 2026 is a Friday -> holiday -> should NOT be VPP
+		assert.False(t, isVPPHour(time.Date(2026, time.June, 19, 18, 0, 0, 0, etLoc)))
+
+		// July 3, 2026 is Friday, 6 PM -> not holiday -> should be VPP
+		assert.True(t, isVPPHour(time.Date(2026, time.July, 3, 18, 0, 0, 0, etLoc)))
+		// July 4, 2026 is Saturday -> weekend + holiday -> should NOT be VPP
+		assert.False(t, isVPPHour(time.Date(2026, time.July, 4, 18, 0, 0, 0, etLoc)))
+		// July 6, 2026 is Monday -> not holiday -> should be VPP
+		assert.True(t, isVPPHour(time.Date(2026, time.July, 6, 18, 0, 0, 0, etLoc)))
+
+		// 2027 tests (July 4, 2027 is Sunday -> not shifted, so July 4 is the holiday, and July 5 is a regular weekday VPP day)
+		// July 2, 2027 is Friday, 6 PM -> should be VPP
+		assert.True(t, isVPPHour(time.Date(2027, time.July, 2, 18, 0, 0, 0, etLoc)))
+		// July 4, 2027 is Sunday -> weekend -> should NOT be VPP
+		assert.False(t, isVPPHour(time.Date(2027, time.July, 4, 18, 0, 0, 0, etLoc)))
+		// July 5, 2027 is Monday -> regular weekday VPP day (July 4 not shifted to Monday for VPP) -> should be VPP
+		assert.True(t, isVPPHour(time.Date(2027, time.July, 5, 18, 0, 0, 0, etLoc)))
+		// July 6, 2027 is Tuesday, 6 PM -> should be VPP
+		assert.True(t, isVPPHour(time.Date(2027, time.July, 6, 18, 0, 0, 0, etLoc)))
+	})
+}

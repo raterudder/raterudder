@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/log"
@@ -40,6 +41,9 @@ type SimHour struct {
 	HitBelowDeficitAt       time.Time   `json:"hitBelowDeficitAt"`
 	HitAboveDeficitAt       time.Time   `json:"hitAboveDeficitAt"`
 	Price                   types.Price `json:"price"`
+	StartedVPPChargingAt    time.Time   `json:"startedVPPChargingAt"`
+	VPPBlackoutAt           time.Time   `json:"vppBlackoutAt"`
+	VPPEndAt                time.Time   `json:"vppEndAt"`
 }
 
 // SimulateState builds a 24-hour simulation of energy state and prices.
@@ -97,6 +101,9 @@ func (c *Controller) SimulateState(
 	var simAboveDeficitAt time.Time
 	var simCapacityAt time.Time
 	var simSolarCapacityAt time.Time
+	var startedVPPChargingAt time.Time
+	var currentVPPEventEnd time.Time
+	var wasInVPPEvent bool
 	simTime := now
 	nowRatioIntoHour := float64(now.Minute()) / 60.0
 
@@ -198,90 +205,371 @@ func (c *Controller) SimulateState(
 
 		predictedAvgSolarKWH := profile.AvgSolarKWH * currentSolarTrend
 		netLoadSolarKWH := profile.AvgHomeLoadKWH - predictedAvgSolarKWH
-		clampedNetKWH := netLoadSolarKWH
 		// if we're in the first hour only apply the remaining fraction of the hour
 		simEnergyApplyRatio := 1.0
 		if i == 0 {
 			simEnergyApplyRatio = 1.0 - nowRatioIntoHour
 		}
-		// update simulated energy state
-		if netLoadSolarKWH > 0 {
-			// Load > Solar: We consume battery
-			// make sure we don't simulate discharging more than we can
-			if currentStatus.MaxBatteryDischargeKW > 0 && clampedNetKWH > currentStatus.MaxBatteryDischargeKW {
-				clampedNetKWH = currentStatus.MaxBatteryDischargeKW
-			}
 
-			newSimEnergy := simEnergyKWH - (clampedNetKWH * simEnergyApplyRatio)
-
-			// 1. Calculate HitDeficitAt (no buffer, i.e., drops below minKWH reserve SOC).
-			// We check this to track when the battery physically runs out of usable energy to cover load.
-			if newSimEnergy < minKWH {
-				if simDeficitAt.IsZero() {
-					remainingBeforeMin := simEnergyKWH - minKWH
-					if clampedNetKWH > 0 && remainingBeforeMin > 0 {
-						fraction := max(remainingBeforeMin/clampedNetKWH, 0)
-						simDeficitAt = simTime.Add(time.Duration(fraction * float64(time.Hour)))
-					} else {
-						simDeficitAt = simTime
-					}
-				}
+		// Find the next active or upcoming VPP event that ends after the current simulation hour starts.
+		// VPPEvents are assumed to be sorted by start time.
+		var nextVPP *types.VPPEvent
+		for _, ev := range currentStatus.VPPEvents {
+			if simTime.Before(ev.TSEnd) {
+				nextVPP = &ev
+				break
 			}
+		}
 
-			// 2. Calculate HitAboveDeficitAt (with 1% safety buffer above reserve, i.e., drops below aboveDeficitThresholdKWH).
-			// We check this for peak survival checks to stop discharging and preserve battery energy early.
-			aboveDeficitThresholdKWH := minKWH + (capacityKWH * 0.01)
-			if newSimEnergy < aboveDeficitThresholdKWH {
-				if simAboveDeficitAt.IsZero() {
-					remainingBeforeAbove := simEnergyKWH - aboveDeficitThresholdKWH
-					if clampedNetKWH > 0 && remainingBeforeAbove > 0 {
-						fraction := max(remainingBeforeAbove/clampedNetKWH, 0)
-						simAboveDeficitAt = simTime.Add(time.Duration(fraction * float64(time.Hour)))
-					} else {
-						simAboveDeficitAt = simTime
-					}
-				}
+		// Track and reset the startedVPPChargingAt timestamp if we have moved past the end
+		// of the previously monitored VPP event, so we don't carry over the charging start time.
+		if nextVPP != nil {
+			if !currentVPPEventEnd.IsZero() && !simTime.Before(currentVPPEventEnd) {
+				startedVPPChargingAt = time.Time{}
 			}
-
-			// 3. Calculate HitBelowDeficitAt (with 3% hysteresis buffer below reserve, i.e., drops below deficitThresholdKWH).
-			// We only count it as a deficit and trigger grid charging if it goes below this threshold
-			// to avoid micro-charging the battery for trivial, noise-level SOC fluctuations.
-			deficitThresholdKWH := max(minKWH-(capacityKWH*deficitThresholdOffsetCapacityRatio), 0.0)
-			if newSimEnergy < deficitThresholdKWH || (!simBelowDeficitAt.IsZero() && newSimEnergy < minKWH) {
-				if simBelowDeficitAt.IsZero() {
-					remainingBeforeDeficit := simEnergyKWH - deficitThresholdKWH
-					if clampedNetKWH > 0 && remainingBeforeDeficit > 0 {
-						fraction := max(remainingBeforeDeficit/clampedNetKWH, 0)
-						simBelowDeficitAt = simTime.Add(time.Duration(fraction * float64(time.Hour)))
-					} else {
-						simBelowDeficitAt = simTime
-					}
-				}
-				deficitKWH += minKWH - newSimEnergy
-				simEnergyKWH = minKWH
-			} else {
-				simEnergyKWH = newSimEnergy
-			}
+			currentVPPEventEnd = nextVPP.TSEnd
 		} else {
-			// Solar > Load: We charge battery
-			// make sure we don't simulate charging more than we can
-			if currentStatus.MaxBatteryChargeKW > 0 && clampedNetKWH < -currentStatus.MaxBatteryChargeKW {
-				clampedNetKWH = -currentStatus.MaxBatteryChargeKW
+			if !currentVPPEventEnd.IsZero() && !simTime.Before(currentVPPEventEnd) {
+				startedVPPChargingAt = time.Time{}
+			}
+			currentVPPEventEnd = time.Time{}
+		}
+
+		// Note that for i = 0, simTime is exactly "now" (which has a non-zero minute component),
+		// while for i > 0 it is truncated to the hour.
+		hourEnd := simTime.Add(1 * time.Hour).Truncate(time.Hour)
+
+		// We want to reach capacity exactly at the bufferStart (30 mins before VPP).
+		// Over the remaining duration to the buffer start, we will have load pulling
+		// from the battery, and when charging starts we will charge at
+		// MaxBatteryChargeKW.
+		var chargeStart time.Time
+		if nextVPP != nil {
+			eventStart := nextVPP.TSStart
+			bufferStart := eventStart.Add(-30 * time.Minute)
+
+			if simEnergyKWH < capacityThresholdKWH {
+				chargeDuration := bufferStart.Sub(simTime).Hours()
+				if chargeDuration > 0 {
+					numerator := simEnergyKWH + currentStatus.MaxBatteryChargeKW*chargeDuration - capacityThresholdKWH
+					denominator := netLoadSolarKWH + currentStatus.MaxBatteryChargeKW
+					if denominator > 0 {
+						x := numerator / denominator
+						chargeStart = simTime.Add(time.Duration(x * float64(time.Hour)))
+					} else {
+						// Fallback if charge rate is zero/negative
+						chargeStart = bufferStart
+					}
+				} else {
+					// We are already past the buffer start time, start charging immediately
+					chargeStart = bufferStart
+				}
+			} else {
+				// Already fully charged, no pre-charging needed prior to the buffer start
+				chargeStart = bufferStart
 			}
 
-			newSimEnergy := simEnergyKWH - (clampedNetKWH * simEnergyApplyRatio)
-			// If solar export is disabled, we might be curtailed if we hit capacity.
+			// If we haven't recorded the pre-charging start time yet, check if the calculated
+			// chargeStart falls within this hourly simulation window.
+			if startedVPPChargingAt.IsZero() && simEnergyKWH < capacityThresholdKWH {
+				if !hourEnd.Before(chargeStart) && simTime.Before(bufferStart) {
+					startedVPPChargingAt = chargeStart
+				}
+			}
+		}
+
+		// To accurately model state transitions (charging start, blackout start, VPP event start/end)
+		// that happen in the middle of a simulation hour, we split the hour into sub-intervals.
+		transitions := []time.Time{simTime}
+		if nextVPP != nil {
+			eventStart := nextVPP.TSStart
+			eventEnd := nextVPP.TSEnd
+			blackoutStart := eventStart.Add(-1 * time.Hour)
+			bufferStart := eventStart.Add(-30 * time.Minute)
+
+			candidates := []time.Time{chargeStart, blackoutStart, bufferStart, eventStart, eventEnd}
+			for _, ts := range candidates {
+				if !ts.IsZero() && ts.After(simTime) && ts.Before(hourEnd) {
+					found := false
+					for _, existing := range transitions {
+						if existing.Equal(ts) {
+							found = true
+							break
+						}
+					}
+					if !found {
+						transitions = append(transitions, ts)
+					}
+				}
+			}
+		}
+		transitions = append(transitions, hourEnd)
+		slices.SortFunc(transitions, func(a, b time.Time) int {
+			return a.Compare(b)
+		})
+
+		var hourlyClampedNetKWH float64
+		var simBlackoutAt time.Time
+		var simVPPEndAt time.Time
+		if nextVPP != nil {
+			blackoutStart := nextVPP.TSStart.Add(-1 * time.Hour)
+			if blackoutStart.Before(hourEnd) {
+				simBlackoutAt = blackoutStart
+				simVPPEndAt = nextVPP.TSEnd
+			}
+		}
+
+		// Iterate through each sub-interval and simulate battery dynamics.
+		for j := 0; j < len(transitions)-1; j++ {
+			subStart := transitions[j]
+			subEnd := transitions[j+1]
+			subDt := subEnd.Sub(subStart).Hours()
+			if subDt <= 0 {
+				continue
+			}
+			// Use the midpoint of the sub-interval to determine the active simulation state.
+			subMid := subStart.Add(subEnd.Sub(subStart) / 2)
+			startEnergy := simEnergyKWH
+
+			// Determine which VPP phase applies to this sub-interval.
+			var inVPPEvent, inPreVPPStandby, inPreVPPCharging bool
+			var subVPP *types.VPPEvent
+			if nextVPP != nil {
+				eventStart := nextVPP.TSStart
+				eventEnd := nextVPP.TSEnd
+				blackoutStart := eventStart.Add(-1 * time.Hour)
+				bufferStart := eventStart.Add(-30 * time.Minute)
+
+				// Recalculate chargeStart based on the current energy at the start of the sub-interval
+				var subChargeStart time.Time
+				if startEnergy < capacityThresholdKWH {
+					subD := bufferStart.Sub(subStart).Hours()
+					if subD > 0 {
+						num := startEnergy + currentStatus.MaxBatteryChargeKW*subD - capacityThresholdKWH
+						den := netLoadSolarKWH + currentStatus.MaxBatteryChargeKW
+						if den > 0 {
+							subChargeStart = subStart.Add(time.Duration((num / den) * float64(time.Hour)))
+						} else {
+							subChargeStart = bufferStart
+						}
+					} else {
+						subChargeStart = bufferStart
+					}
+				} else {
+					subChargeStart = bufferStart
+				}
+
+				if !subMid.Before(eventStart) && subMid.Before(eventEnd) {
+					inVPPEvent = true
+					subVPP = nextVPP
+				}
+				if !subMid.Before(blackoutStart) && subMid.Before(eventStart) {
+					inPreVPPStandby = true
+					subVPP = nextVPP
+				}
+				if !subChargeStart.IsZero() && !subMid.Before(subChargeStart) && subMid.Before(bufferStart) {
+					inPreVPPCharging = true
+					subVPP = nextVPP
+				}
+			}
+
+			// The minimum SOC threshold is normally the configured minimum reserve SOC.
+			// During a VPP event, the battery is permitted to discharge down to the VPP target SOC.
+			var subMinKWH float64
+			if inVPPEvent && subVPP != nil {
+				subMinKWH = capacityKWH * (subVPP.VPPSoc / 100.0)
+			} else {
+				subMinKWH = minKWH
+			}
+
+			// Once a VPP discharge event ends, the ESS system immediately prioritizes
+			// charging the battery back up to the user-configured minimum backup reserve SOC (subMinKWH).
+			// Since typical charging rates are high (e.g. 5-10 kW), this refill generally takes less
+			// than an hour, justifying the assumption of immediate restoration in the simulation.
+			// We add this energy difference to deficitKWH to correctly model the grid import cost of
+			// refilling the battery reserve. If we did not add it, the battery would "magically"
+			// obtain free energy in the simulation, skewing the overall cost and savings calculations.
+			// While this charging is inevitable regardless of controller actions, representing it as
+			// a deficit ensures the simulator accurately captures the economic cost of VPP participation.
+			if wasInVPPEvent && !inVPPEvent {
+				if simEnergyKWH < subMinKWH {
+					deficitKWH += subMinKWH - simEnergyKWH
+					simEnergyKWH = subMinKWH
+					startEnergy = subMinKWH
+				}
+			}
+			wasInVPPEvent = inVPPEvent
+
+			var subClampedNetKWH float64
+
+			switch {
+			case inVPPEvent:
+				// VPP Event Phase:
+				// The battery discharges down to the VPP target SOC (vppSocEnergy) at MaxBatteryDischargeKW.
+				// Home load is covered by solar first. Remaining home load is covered by the battery (as part of
+				// its discharge). It does not make sense to pull from the grid when exporting, so we only
+				// import once the battery has reached its VPP minimum SOC limit.
+				vppSocEnergy := subMinKWH
+				maxDischargePower := currentStatus.MaxBatteryDischargeKW
+				dischargePower := 0.0
+				if startEnergy > vppSocEnergy && maxDischargePower > 0 {
+					dischargePower = min(maxDischargePower, (startEnergy-vppSocEnergy)/subDt)
+				}
+				subClampedNetKWH = dischargePower
+				simEnergyKWH = startEnergy - subClampedNetKWH*subDt
+
+				// Discharge the standby battery capacity similarly.
+				standbyDischargePower := 0.0
+				if standbyEnergyKWH > vppSocEnergy && maxDischargePower > 0 {
+					standbyDischargePower = min(maxDischargePower, (standbyEnergyKWH-vppSocEnergy)/subDt)
+				}
+				standbyEnergyKWH -= standbyDischargePower * subDt
+
+			case inPreVPPCharging:
+				// Pre-charging Phase:
+				// Charge the battery at maximum power (MaxBatteryChargeKW) up to the 98% threshold.
+				maxChargePower := currentStatus.MaxBatteryChargeKW
+				chargePower := 0.0
+				if startEnergy < capacityThresholdKWH && maxChargePower > 0 {
+					chargePower = min(maxChargePower, (capacityThresholdKWH-startEnergy)/subDt)
+				}
+				subClampedNetKWH = -chargePower
+				simEnergyKWH = startEnergy - subClampedNetKWH*subDt
+
+				// Charge the standby battery capacity similarly.
+				standbyChargePower := 0.0
+				if standbyEnergyKWH < capacityThresholdKWH && maxChargePower > 0 {
+					standbyChargePower = min(maxChargePower, (capacityThresholdKWH-standbyEnergyKWH)/subDt)
+				}
+				standbyEnergyKWH += standbyChargePower * subDt
+
+			case inPreVPPStandby:
+				// Pre-VPP Standby Phase (1 hour before VPP event):
+				// The battery is prevented from discharging to ensure we enter the VPP event with maximum capacity.
+				// However, if there is surplus solar (load < solar), we still allow the battery to charge from it.
+				if netLoadSolarKWH <= 0 {
+					clampedNetKWH := netLoadSolarKWH
+					if currentStatus.MaxBatteryChargeKW > 0 && clampedNetKWH < -currentStatus.MaxBatteryChargeKW {
+						clampedNetKWH = -currentStatus.MaxBatteryChargeKW
+					}
+					subClampedNetKWH = clampedNetKWH
+					simEnergyKWH = startEnergy - subClampedNetKWH*subDt
+
+					// Standby capacity charges from surplus solar too.
+					newStandbyEnergy := standbyEnergyKWH - subClampedNetKWH*subDt
+					if newStandbyEnergy > capacityKWH {
+						standbyEnergyKWH = capacityKWH
+					} else {
+						standbyEnergyKWH = newStandbyEnergy
+					}
+				} else {
+					subClampedNetKWH = 0.0
+				}
+
+			default:
+				// Normal Simulation Phase:
+				// Standard operation where the battery discharges to cover home load or charges from surplus solar/grid.
+				clampedNetKWH := netLoadSolarKWH
+				if netLoadSolarKWH > 0 {
+					// Discharging to cover load.
+					if currentStatus.MaxBatteryDischargeKW > 0 && clampedNetKWH > currentStatus.MaxBatteryDischargeKW {
+						clampedNetKWH = currentStatus.MaxBatteryDischargeKW
+					}
+					subClampedNetKWH = clampedNetKWH
+					newSimEnergy := startEnergy - subClampedNetKWH*subDt
+
+					// Handle discharging below minimum SOC or deficit threshold buffers.
+					if newSimEnergy < subMinKWH {
+						deficitThresholdKWH := max(subMinKWH-(capacityKWH*deficitThresholdOffsetCapacityRatio), 0.0)
+						if newSimEnergy < deficitThresholdKWH || (!simBelowDeficitAt.IsZero() && newSimEnergy < subMinKWH) {
+							if simBelowDeficitAt.IsZero() {
+								remainingBeforeDeficit := startEnergy - deficitThresholdKWH
+								if clampedNetKWH > 0 && remainingBeforeDeficit > 0 {
+									fraction := max(remainingBeforeDeficit/clampedNetKWH, 0)
+									simBelowDeficitAt = subStart.Add(time.Duration(fraction * float64(time.Hour)))
+								} else {
+									simBelowDeficitAt = subStart
+								}
+							}
+							deficitKWH += subMinKWH - newSimEnergy
+							simEnergyKWH = subMinKWH
+						} else {
+							simEnergyKWH = newSimEnergy
+						}
+					} else {
+						simEnergyKWH = newSimEnergy
+					}
+
+					// Record when the battery crosses the minimum SOC and when it rises above deficit buffers.
+					if newSimEnergy < subMinKWH {
+						if simDeficitAt.IsZero() {
+							remainingBeforeMin := startEnergy - subMinKWH
+							if clampedNetKWH > 0 && remainingBeforeMin > 0 {
+								fraction := max(remainingBeforeMin/clampedNetKWH, 0)
+								simDeficitAt = subStart.Add(time.Duration(fraction * float64(time.Hour)))
+							} else {
+								simDeficitAt = subStart
+							}
+						}
+					}
+					aboveDeficitThresholdKWH := subMinKWH + (capacityKWH * 0.01)
+					if newSimEnergy < aboveDeficitThresholdKWH {
+						if simAboveDeficitAt.IsZero() {
+							remainingBeforeAbove := startEnergy - aboveDeficitThresholdKWH
+							if clampedNetKWH > 0 && remainingBeforeAbove > 0 {
+								fraction := max(remainingBeforeAbove/clampedNetKWH, 0)
+								simAboveDeficitAt = subStart.Add(time.Duration(fraction * float64(time.Hour)))
+							} else {
+								simAboveDeficitAt = subStart
+							}
+						}
+					}
+
+				} else {
+					// Charging from surplus solar/grid.
+					if currentStatus.MaxBatteryChargeKW > 0 && clampedNetKWH < -currentStatus.MaxBatteryChargeKW {
+						clampedNetKWH = -currentStatus.MaxBatteryChargeKW
+					}
+					subClampedNetKWH = clampedNetKWH
+					simEnergyKWH = startEnergy - subClampedNetKWH*subDt
+				}
+
+				// Simulate standby capacity charging from surplus solar as well.
+				clampedStandbyNetKWH := clampedNetKWH
+				if clampedStandbyNetKWH > 0 {
+					clampedStandbyNetKWH = 0.0 // standby doesn't discharge to cover net load
+				}
+				newStandbyEnergy := standbyEnergyKWH - (clampedStandbyNetKWH * subDt)
+				if (clampedStandbyNetKWH < 0 && newStandbyEnergy >= capacityThresholdKWH) || newStandbyEnergy > capacityKWH {
+					if simStandbyCapacityAt.IsZero() {
+						remainingBeforeCapacity := capacityThresholdKWH - standbyEnergyKWH
+						if remainingBeforeCapacity > 0 {
+							fraction := max(remainingBeforeCapacity/-clampedStandbyNetKWH, 0)
+							simStandbyCapacityAt = subStart.Add(time.Duration(fraction * float64(time.Hour)))
+						} else {
+							simStandbyCapacityAt = subStart
+						}
+					}
+					standbyEnergyKWH = capacityKWH
+				} else {
+					standbyEnergyKWH = newStandbyEnergy
+				}
+
+			}
+
+			newSimEnergy := startEnergy - subClampedNetKWH*subDt
+
+			// Check for Solar charge limits / headroom limits if configured.
 			if !settings.GridExportSolar && predictedAvgSolarKWH > 0.1 {
 				if settings.SolarFullyChargeHeadroomBatterySOC > -99.0 {
 					solarCapacityKWH := capacityKWH * (1.0 - settings.SolarFullyChargeHeadroomBatterySOC/100.0)
 					if newSimEnergy > solarCapacityKWH && simSolarCapacityAt.IsZero() {
-						// estimate when into the hour we hit the deficit
-						remainingBeforeCapacity := solarCapacityKWH - simEnergyKWH
-						if clampedNetKWH < 0 && remainingBeforeCapacity > 0 {
-							fraction := max(remainingBeforeCapacity/-clampedNetKWH, 0)
-							simSolarCapacityAt = simTime.Add(time.Duration(fraction * float64(time.Hour)))
+						remainingBeforeCapacity := solarCapacityKWH - startEnergy
+						if subClampedNetKWH < 0 && remainingBeforeCapacity > 0 {
+							fraction := max(remainingBeforeCapacity/-subClampedNetKWH, 0)
+							simSolarCapacityAt = subStart.Add(time.Duration(fraction * float64(time.Hour)))
 						} else {
-							simSolarCapacityAt = simTime
+							simSolarCapacityAt = subStart
 						}
 					}
 				}
@@ -291,16 +579,15 @@ func (c *Controller) SimulateState(
 			// rather than strictly 100%. This acts as a conservative buffer that prevents
 			// feedback loops (rapidly oscillating between charge, standby, and load) when
 			// the battery is nearly full. We only trigger this capacity hit if we are
-			// actively charging (clampedNetKWH < 0) or if the energy exceeds capacity.
-			if (clampedNetKWH < 0 && newSimEnergy >= capacityThresholdKWH) || newSimEnergy > capacityKWH {
+			// actively charging (subClampedNetKWH < 0) or if the energy exceeds capacity.
+			if (subClampedNetKWH < 0 && newSimEnergy >= capacityThresholdKWH) || newSimEnergy > capacityKWH {
 				if simCapacityAt.IsZero() {
-					// estimate when into the hour we hit the capacity threshold
-					remainingBeforeCapacity := capacityThresholdKWH - simEnergyKWH
+					remainingBeforeCapacity := capacityThresholdKWH - startEnergy
 					if remainingBeforeCapacity > 0 {
-						fraction := max(remainingBeforeCapacity/-clampedNetKWH, 0)
-						simCapacityAt = simTime.Add(time.Duration(fraction * float64(time.Hour)))
+						fraction := max(remainingBeforeCapacity/-subClampedNetKWH, 0)
+						simCapacityAt = subStart.Add(time.Duration(fraction * float64(time.Hour)))
 					} else {
-						simCapacityAt = simTime
+						simCapacityAt = subStart
 					}
 				}
 				deficitKWH = 0.0
@@ -310,39 +597,18 @@ func (c *Controller) SimulateState(
 			}
 
 			// Still cap physical energy at 100% capacity
-			if newSimEnergy > capacityKWH {
+			if simEnergyKWH > capacityKWH {
 				simEnergyKWH = capacityKWH
-			} else {
-				simEnergyKWH = newSimEnergy
 			}
-		}
 
-		// Simulate standby capacity progression: standby holds battery energy but still charges from surplus solar.
-		clampedStandbyNetKWH := clampedNetKWH
-		if clampedStandbyNetKWH > 0 {
-			clampedStandbyNetKWH = 0.0 // standby doesn't discharge to cover net load
-		}
-		newStandbyEnergy := standbyEnergyKWH - (clampedStandbyNetKWH * simEnergyApplyRatio)
-		if (clampedStandbyNetKWH < 0 && newStandbyEnergy >= capacityThresholdKWH) || newStandbyEnergy > capacityKWH {
-			if simStandbyCapacityAt.IsZero() {
-				remainingBeforeCapacity := capacityThresholdKWH - standbyEnergyKWH
-				if remainingBeforeCapacity > 0 {
-					fraction := max(remainingBeforeCapacity/-clampedStandbyNetKWH, 0)
-					simStandbyCapacityAt = simTime.Add(time.Duration(fraction * float64(time.Hour)))
-				} else {
-					simStandbyCapacityAt = simTime
-				}
-			}
-			standbyEnergyKWH = capacityKWH
-		} else {
-			standbyEnergyKWH = newStandbyEnergy
+			hourlyClampedNetKWH += subClampedNetKWH * subDt
 		}
 
 		simData = append(simData, SimHour{
 			TS:                      simTime,
 			Hour:                    h,
 			NetLoadSolarKWH:         netLoadSolarKWH,
-			ClampedNetLoadSolarKWH:  clampedNetKWH,
+			ClampedNetLoadSolarKWH:  hourlyClampedNetKWH / simEnergyApplyRatio,
 			GridChargeDollarsPerKWH: gridChargeCost,
 			SolarOppDollarsPerKWH:   solarOppCost,
 			AvgHomeLoadKWH:          profile.AvgHomeLoadKWH,
@@ -363,6 +629,9 @@ func (c *Controller) SimulateState(
 			HitBelowDeficitAt:       simBelowDeficitAt,
 			HitAboveDeficitAt:       simAboveDeficitAt,
 			Price:                   price,
+			StartedVPPChargingAt:    startedVPPChargingAt,
+			VPPBlackoutAt:           simBlackoutAt,
+			VPPEndAt:                simVPPEndAt,
 		})
 		simTime = simTime.Add(1 * time.Hour).Truncate(time.Hour)
 	}

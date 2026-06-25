@@ -16,6 +16,7 @@ type genericTOU struct {
 	periods []types.UtilityFeesPeriod
 	name    string
 	options types.UtilityRateOptions
+	vppInfo types.UtilityVPPInfo
 }
 
 func (t *genericTOU) Name() string {
@@ -29,10 +30,21 @@ func (t *genericTOU) ApplySettings(ctx context.Context, settings types.Settings)
 	if err != nil {
 		return err
 	}
+	vppInfo, err := getUtilityVPPInfo(settings.UtilityRate, settings.UtilityRateOptions)
+	if err != nil {
+		return err
+	}
 	t.periods = fees
 	t.name = settings.UtilityRate
 	t.options = settings.UtilityRateOptions
+	t.vppInfo = vppInfo
 	return nil
+}
+
+func (t *genericTOU) GetVPPInfo(context.Context) (types.UtilityVPPInfo, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.vppInfo, nil
 }
 
 func (t *genericTOU) priceForTime(target time.Time) (types.Price, error) {

@@ -50,6 +50,13 @@ func (m *mockUtility) ApplySettings(ctx context.Context, settings types.Settings
 	args := m.Called(ctx, settings)
 	return args.Error(0)
 }
+func (m *mockUtility) GetVPPInfo(ctx context.Context) (types.UtilityVPPInfo, error) {
+	args := m.Called(ctx)
+	if len(args) > 0 {
+		return args.Get(0).(types.UtilityVPPInfo), args.Error(1)
+	}
+	return types.UtilityVPPInfo{}, nil
+}
 
 type mockESS struct {
 	mock.Mock

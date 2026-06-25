@@ -32,6 +32,55 @@ func getEversourceHolidays(year int) []string {
 	return formatHolidays(holidays, year)
 }
 
+// eversourceVPPPeriods generates the VPP periods for CT Eversource.
+func eversourceVPPPeriods(opts types.UtilityRateOptions, years []int) (types.UtilityVPPInfo, error) {
+	if opts.VPPProgram != "ess-passive" {
+		return types.UtilityVPPInfo{}, nil
+	}
+
+	var periods []types.UtilityVPPPeriod
+	locStr := etLocation.String()
+
+	for _, year := range years {
+		june19 := juneteenth(year)
+		july4 := independenceDay(year)
+
+		holidays := []string{
+			june19.Format("2006-01-02"),
+			july4.Format("2006-01-02"),
+		}
+
+		for _, month := range []time.Month{time.June, time.July, time.August} {
+			p := types.UtilityVPPPeriod{
+				UtilityPeriod: types.UtilityPeriod{
+					Start: time.Date(year, month, 1, 0, 0, 0, 0, etLocation),
+					End:   time.Date(year, month+1, 1, 0, 0, 0, 0, etLocation),
+					Hours: []types.UtilityHourPeriod{
+						{HourStart: 17, HourEnd: 20},
+					},
+					DaysOfTheWeek: []time.Weekday{
+						time.Monday,
+						time.Tuesday,
+						time.Wednesday,
+						time.Thursday,
+						time.Friday,
+					},
+					SpecificDates:    holidays,
+					SpecificDatesNot: true,
+					Location:         locStr,
+					LocationPtr:      etLocation,
+				},
+				ReserveSOC: 20,
+			}
+			periods = append(periods, p)
+		}
+	}
+
+	return types.UtilityVPPInfo{
+		Mandatory: periods,
+	}, nil
+}
+
 // eversourcePeriods generates the fees period slice for a specific Eversource rate plan.
 func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
@@ -540,30 +589,55 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 
 // eversourceUtilityInfo returns the metadata and rate options for Eversource.
 func eversourceUtilityInfo() types.UtilityProviderInfo {
+	eversourceCTOptions := []types.UtilityRateOption{
+		{
+			Field:       "vppProgram",
+			Name:        "Mandatory VPP Events",
+			Type:        types.UtilityOptionTypeSelect,
+			Description: "Select your Virtual Power Plant (VPP) program.",
+			Choices: []types.UtilityOptionChoice{
+				{Value: "none", Name: "None"},
+				{Value: "ess-passive", Name: "Energy Storage Solutions Legacy Passive Dispatch"},
+			},
+			Default: "none",
+		},
+	}
 	return types.UtilityProviderInfo{
 		ID:   "eversource",
 		Name: "Eversource",
 		Rates: []types.UtilityRateInfo{
 			// Connecticut
 			{
-				ID:   "eversource_ct_rate_1",
-				Name: "CT Residential Flat (Rate 1)",
+				ID:      "eversource_ct_rate_1",
+				Name:    "CT Residential Flat (Rate 1)",
+				Options: eversourceCTOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 					return eversourcePeriods("eversource_ct_rate_1", opts, []int{2026, 2027}), nil
 				},
-			},
-			{
-				ID:   "eversource_ct_rate_5",
-				Name: "CT Residential Heating (Rate 5)",
-				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return eversourcePeriods("eversource_ct_rate_5", opts, []int{2026, 2027}), nil
+				GetVPP: func(opts types.UtilityRateOptions) (types.UtilityVPPInfo, error) {
+					return eversourceVPPPeriods(opts, []int{2026, 2027})
 				},
 			},
 			{
-				ID:   "eversource_ct_rate_7",
-				Name: "CT Residential Time-of-Day (Rate 7)",
+				ID:      "eversource_ct_rate_5",
+				Name:    "CT Residential Heating (Rate 5)",
+				Options: eversourceCTOptions,
+				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+					return eversourcePeriods("eversource_ct_rate_5", opts, []int{2026, 2027}), nil
+				},
+				GetVPP: func(opts types.UtilityRateOptions) (types.UtilityVPPInfo, error) {
+					return eversourceVPPPeriods(opts, []int{2026, 2027})
+				},
+			},
+			{
+				ID:      "eversource_ct_rate_7",
+				Name:    "CT Residential Time-of-Day (Rate 7)",
+				Options: eversourceCTOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 					return eversourcePeriods("eversource_ct_rate_7", opts, []int{2026, 2027}), nil
+				},
+				GetVPP: func(opts types.UtilityRateOptions) (types.UtilityVPPInfo, error) {
+					return eversourceVPPPeriods(opts, []int{2026, 2027})
 				},
 			},
 			// New Hampshire
