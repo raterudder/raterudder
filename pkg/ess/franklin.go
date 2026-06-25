@@ -329,9 +329,10 @@ func (f *Franklin) doRequest(req *http.Request, dest any) error {
 		req.Header.Set("logintoken", f.tokenStr)
 	}
 
-	// TODO: should we set softwareversion, lang, optsystemversion, opttime, optdevicename, optsource, optdevice
+	// TODO: should we set softwareversion, optsystemversion, opttime, optdevicename, optsource, optdevice
 	// we don't know what to set them as for now but at some point we should consider setting them
 	// once we better understand how Franklin expects them
+	req.Header.Set("lang", "EN_US")
 
 	resp, err := f.client.Do(req)
 	if err != nil {
@@ -603,6 +604,7 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 	}
 
 	stormHedge := rd.RuntimeData.TOUID == 6
+	vppActive := rd.RuntimeData.TOUID == 9
 
 	var storms []types.Storm
 	if stormHedge {
@@ -663,6 +665,63 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		maxBatteryDischargeKW = 10.0 * float64(len(rd.RuntimeData.EachSOC))
 	}
 
+	var vppEvents []types.VPPEvent
+	if modes.VPPApplicable {
+		// TODO: instead could we look at todayVppVo? but we don't know what the
+		// structure is in the wild so we'll have to just use queryProgramDetails for now
+		pd, err := f.queryProgramDetails(ctx)
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to query program details", slog.Any("error", err))
+		} else if pd.LatestEventStartTime != "" && pd.LatestEventEndTime != "" {
+			// check to see if the latest event is in the future and if it is then
+			// we need to know about it for forecasting
+			startTime, err1 := time.ParseInLocation("2006-01-02 15:04:05", pd.LatestEventStartTime, di.location)
+			endTime, err2 := time.ParseInLocation("2006-01-02 15:04:05", pd.LatestEventEndTime, di.location)
+			if err1 != nil || err2 != nil {
+				log.Ctx(ctx).WarnContext(ctx, "failed to parse VPP event times",
+					slog.String("startTime", pd.LatestEventStartTime),
+					slog.String("endTime", pd.LatestEventEndTime),
+					slog.Any("err1", err1),
+					slog.Any("err2", err2),
+				)
+			} else if startTime.After(time.Now()) {
+				vppSoc := pd.VPPSoc
+				if ehEvents, err := f.queryEHEvents(ctx); err != nil {
+					log.Ctx(ctx).WarnContext(ctx, "failed to query EH events", slog.Any("error", err))
+				} else {
+					var found bool
+					for _, ev := range ehEvents {
+						if ev.EventID == pd.LatestEventID {
+							vppSoc = ev.VPPSoc
+							found = true
+							log.Ctx(ctx).DebugContext(
+								ctx,
+								"found latest VPP event",
+								slog.String("eventID", ev.EventID),
+								slog.Any("event", ev),
+							)
+							break
+						}
+					}
+					if !found {
+						log.Ctx(ctx).WarnContext(
+							ctx,
+							"VPP event not found in EH events",
+							slog.String("eventID", pd.LatestEventID),
+						)
+					}
+				}
+
+				vppEvents = append(vppEvents, types.VPPEvent{
+					Description: pd.ProgramName,
+					TSStart:     startTime,
+					TSEnd:       endTime,
+					VPPSoc:      vppSoc,
+				})
+			}
+		}
+	}
+
 	status := types.SystemStatus{
 		Timestamp:               time.Now().In(di.location),
 		BatterySOC:              rd.RuntimeData.SOC,
@@ -680,11 +739,49 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		MaxBatteryDischargeKW:   maxBatteryDischargeKW,
 		Alarms:                  alarms,
 		Storms:                  storms,
-		VPPActive:               rd.RuntimeData.RunStatus == 9,
+		VPPActive:               vppActive,
+		VPPSOC:                  modes.VPPSOC,
+		VPPEvents:               vppEvents,
 	}
 
 	log.Ctx(ctx).DebugContext(ctx, "franklin system status", slog.Any("status", status))
 	return status, nil
+}
+
+func (f *Franklin) queryProgramDetails(ctx context.Context) (franklinProgramDetailsResult, error) {
+	params := url.Values{}
+	params.Set("gatewayId", f.gatewayID)
+
+	req, err := f.newGetRequest(ctx, "hes-gateway/terminal/queryProgramDetails", params)
+	if err != nil {
+		return franklinProgramDetailsResult{}, err
+	}
+
+	var res franklinProgramDetailsResult
+	if err := f.doRequest(req, &res); err != nil {
+		return franklinProgramDetailsResult{}, err
+	}
+
+	return res, nil
+}
+
+func (f *Franklin) queryEHEvents(ctx context.Context) ([]franklinEHEvent, error) {
+	params := url.Values{}
+	params.Set("gatewayId", f.gatewayID)
+	params.Set("pageNum", "1")
+	params.Set("pageSize", "10")
+
+	req, err := f.newGetRequest(ctx, "hes-gateway/terminal/queryEHEvents", params)
+	if err != nil {
+		return nil, err
+	}
+
+	var res []franklinEHEvent
+	if err := f.doRequest(req, &res); err != nil {
+		return nil, err
+	}
+
+	return res, nil
 }
 
 func (f *Franklin) getPowerControl(ctx context.Context) (franklinGetPowerControlSettingResult, error) {
@@ -752,6 +849,8 @@ type availableModes struct {
 	selfConsumption   franklinMode
 	currentMode       franklinMode
 	stormHedgeEnabled int
+	VPPSOC            float64
+	VPPApplicable     bool
 }
 
 func (f *Franklin) getAvailableModes(ctx context.Context) (availableModes, error) {
@@ -826,6 +925,8 @@ func (f *Franklin) getAvailableModes(ctx context.Context) (availableModes, error
 		selfConsumption:   sc,
 		stormHedgeEnabled: res.StormHedgeEnabled,
 		currentMode:       current,
+		VPPSOC:            res.VPPSOC.VPPSoc,
+		VPPApplicable:     res.VPPSOC.VPPApplicable,
 	}, nil
 }
 
@@ -1408,6 +1509,8 @@ type franklinDeviceCompositeInfoResult struct {
 }
 
 type franklinRuntimeData struct {
+	// 6 is storm hedge active
+	// 9 is VPP active
 	TOUID    int    `json:"mode"`
 	ModeName string `json:"name"`
 
@@ -1419,7 +1522,6 @@ type franklinRuntimeData struct {
 	// 6 is off-grid charging
 	// 7 is off-grid discharging
 	// 8 is debug mode
-	// 9 is VPP active
 	RunStatus int `json:"run_status"`
 
 	// 0 means on-grid
@@ -1515,11 +1617,33 @@ type franklinGetPowerControlSettingResult struct {
 }
 
 type franklinGatewayTouListV2Result struct {
-	CurrentID int               `json:"currendId"` // yes, it's misspelled
-	List      []franklinTouItem `json:"list"`
+	CurrentID   int               `json:"currendId"` // yes, it's misspelled
+	List        []franklinTouItem `json:"list"`
+	VPPSOC      franklinVPPSOC    `json:"vppSocVo"`
+	TodayVPPSOC franklinTodayVPP  `json:"todayVppVo"`
 
 	// TODO: validate this
 	StormHedgeEnabled int `json:"stromEn"`
+
+	// TODO: what does stopMode mean?
+	// TODO: what does gridChargeEn mean?
+}
+
+type franklinVPPSOC struct {
+	VPPMaxSoc float64 `json:"vppMaxSoc"`
+	VPPMinSoc float64 `json:"vppMinSoc"`
+	VPPSoc    float64 `json:"vppSoc"`
+	// it's not clear if this means they're actively enrolled or just that VPP
+	// is available
+	VPPApplicable bool `json:"vppSocDisplayFlag"`
+}
+
+type franklinTodayVPP struct {
+	StartTime  *string `json:"startTime"`
+	EndTime    *string `json:"endTime"`
+	ShowVPPTip bool    `json:"showVppTipFlag"`
+
+	// TODO: what about vppStatus, vppId, vppFlag, programFlag
 }
 
 type franklinTouItem struct {
@@ -1536,9 +1660,6 @@ type franklinTouItem struct {
 	TimerStartTimeUnix string  `json:"timerStartTimeZero"`
 
 	// TODO: what does multiSOCFlag mean?
-	// TODO: what does stopMode mean?
-	// TODO: what does gridChargeEn mean?
-	// TODO: what do vppSocVo, todayVppVo mean?
 }
 
 type franklinFHPPowerByDayResult struct {
@@ -1585,4 +1706,29 @@ type franklinEnergyPoint struct {
 	BatteryToGridKWHRate  float64
 	BatteryToHomeKWHRate  float64
 	BatterySOC            float64
+}
+
+type franklinProgramDetailsResult struct {
+	ProgramAttendingStatus int    `json:"programAttendingStatus"`
+	UpdateTime             string `json:"updateTime"`
+	LatestEventID          string `json:"latestEventId"`
+	// 2 means completed
+	LatestEventStatus    int     `json:"latestEventStatus"`
+	LatestEventStartTime string  `json:"latestEventStartTime"`
+	LatestEventEndTime   string  `json:"latestEventEndTime"`
+	ProgramID            int     `json:"programId"`
+	ProgramName          string  `json:"programName"`
+	PartnerID            int     `json:"partnerId"`
+	PartnerName          string  `json:"partnerName"`
+	VPPSoc               float64 `json:"vppSoc"`
+	VPPMinSoc            float64 `json:"vppMinSoc"`
+	VPPMaxSoc            float64 `json:"vppMaxSoc"`
+}
+
+type franklinEHEvent struct {
+	ID        int     `json:"id"`
+	EventID   string  `json:"eventId"`
+	VPPSoc    float64 `json:"vppSoc"`
+	StartTime string  `json:"startTime"`
+	EndTime   string  `json:"endTime"`
 }

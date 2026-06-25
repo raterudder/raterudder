@@ -233,8 +233,8 @@ func TestFranklin(t *testing.T) {
 					"result": map[string]any{
 						"valid": true,
 						"runtimeData": map[string]any{
-							"soc":        75.0,
-							"run_status": 9,
+							"soc":  75.0,
+							"mode": 9,
 						},
 					},
 				})
@@ -253,6 +253,109 @@ func TestFranklin(t *testing.T) {
 		status, err := f.GetStatus(context.Background())
 		require.NoError(t, err)
 		assert.True(t, status.VPPActive)
+	})
+
+	t.Run("GetStatus VPP Applicable and Future Event", func(t *testing.T) {
+		var futureEventStart string
+		var futureEventEnd string
+
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"totalCap": 30.0, "timeZone": "UTC"},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  []map[string]any{},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"list": []map[string]any{},
+						"vppSocVo": map[string]any{
+							"vppSocDisplayFlag": true,
+							"vppSoc":            20.0,
+						},
+					},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"valid": true,
+						"runtimeData": map[string]any{
+							"soc": 75.0,
+						},
+					},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/queryProgramDetails" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"latestEventId":        "def9ae16-24d0-4333-9d5d-d6cf8452d64a",
+						"latestEventStartTime": futureEventStart,
+						"latestEventEndTime":   futureEventEnd,
+						"programName":          "Eversource-ess",
+						"vppSoc":               20.0,
+					},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/queryEHEvents" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": []map[string]any{
+						{
+							"eventId": "def9ae16-24d0-4333-9d5d-d6cf8452d64a",
+							"vppSoc":  15.0,
+						},
+					},
+				})
+				return
+			}
+			http.Error(w, "not found: "+r.URL.Path, 404)
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:    ts.Client(),
+			baseURL:   ts.URL,
+			gatewayID: "g",
+		}
+
+		// 1. With a future event and successful queryEHEvents match
+		futureEventStart = time.Now().UTC().Add(2 * time.Hour).Format("2006-01-02 15:04:05")
+		futureEventEnd = time.Now().UTC().Add(4 * time.Hour).Format("2006-01-02 15:04:05")
+		status, err := f.GetStatus(context.Background())
+		require.NoError(t, err)
+		if assert.Len(t, status.VPPEvents, 1) {
+			assert.Equal(t, "Eversource-ess", status.VPPEvents[0].Description)
+			assert.Equal(t, 15.0, status.VPPEvents[0].VPPSoc)
+		}
+
+		// 2. With a past event
+		futureEventStart = time.Now().UTC().Add(-4 * time.Hour).Format("2006-01-02 15:04:05")
+		futureEventEnd = time.Now().UTC().Add(-2 * time.Hour).Format("2006-01-02 15:04:05")
+		status, err = f.GetStatus(context.Background())
+		require.NoError(t, err)
+		assert.Empty(t, status.VPPEvents)
 	})
 
 	t.Run("GetStatus Alarms", func(t *testing.T) {

@@ -161,6 +161,7 @@ type VPPEvent struct {
 	Description string    `json:"description"`
 	TSStart     time.Time `json:"tsStart"`
 	TSEnd       time.Time `json:"tsEnd"`
+	VPPSoc      float64   `json:"vppSoc"`
 }
 
 // SystemStatus represents the current system status.
@@ -181,8 +182,9 @@ type SystemStatus struct {
 	BatteryChargingDisabled bool          `json:"batteryChargingDisabled,omitempty"` // True if battery charging is disabled due to alarms
 	Alarms                  []SystemAlarm `json:"alarms,omitempty"`
 	Storms                  []Storm       `json:"storms,omitempty"`
-	VPPActive               bool          `json:"vppActive,omitempty"`
-	VPPKW                   float64       `json:"vppKW,omitempty"`
+	VPPActive               bool          `json:"vppActive,omitempty"` // True if VPP is currently controlling
+	VPPKW                   float64       `json:"vppKW,omitempty"`     // Power going to/from the VPP
+	VPPSOC                  float64       `json:"vppSOC,omitempty"`    // VPP target SOC
 	VPPEvents               []VPPEvent    `json:"vppEvents,omitempty"`
 }
 
