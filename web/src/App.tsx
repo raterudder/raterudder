@@ -1,13 +1,12 @@
 
 import React, { useEffect, useState } from 'react';
-import { Route, Switch, Redirect, useLocation, Router } from 'wouter';
-
+import { Route, Switch, Redirect, useLocation, Router, useSearch } from 'wouter';
+import { useBrowserLocation } from 'wouter/use-browser-location';
 import Header from './components/Header';
 import Footer from './components/Footer';
 import FeedbackWidget from './components/FeedbackWidget';
 import './App.css';
 import { fetchAuthStatus, login, logout, fetchSettings, type AuthStatus, type UserSite, type Settings as SettingsType } from './api';
-
 import LandingPage from './pages/LandingPage';
 import Dashboard from './pages/Dashboard';
 import Settings from './pages/Settings';
@@ -21,6 +20,42 @@ import AdminPage from './pages/AdminPage';
 import PrivacyPolicy from './pages/PrivacyPolicy';
 import TermsOfService from './pages/TermsOfService';
 import TeslaCallback from './pages/TeslaCallback';
+
+// Custom location hook that preserves the ?viewSite query parameter
+const useLocationWithViewSite = () => {
+    const [path, navigate] = useBrowserLocation();
+
+    const customNavigate = React.useCallback((
+        to: string | URL,
+        options?: { replace?: boolean; state?: any; preserveViewSite?: boolean }
+    ) => {
+        const queryParams = new URLSearchParams(window.location.search);
+        const viewSite = queryParams.get('viewSite');
+        const shouldPreserve = options?.preserveViewSite ?? true;
+
+        if (viewSite && shouldPreserve) {
+            let target = typeof to === 'string' ? to : to.toString();
+            try {
+                const url = new URL(target, window.location.origin);
+                if (url.origin === window.location.origin && !url.searchParams.has('viewSite')) {
+                    url.searchParams.set('viewSite', viewSite);
+                    if (target.startsWith('/')) {
+                        target = url.pathname + url.search;
+                    } else {
+                        target = url.toString();
+                    }
+                }
+            } catch {
+                // Ignore parsing errors for relative/invalid paths
+            }
+            navigate(target, options);
+        } else {
+            navigate(to, options);
+        }
+    }, [navigate]);
+
+    return [path, customNavigate] as [string, typeof customNavigate];
+};
 
 // Protected Route Wrapper
 const ProtectedRoute = ({ children, loggedIn, loading }: { children: React.ReactElement, loggedIn: boolean, loading: boolean }) => {
@@ -37,7 +72,7 @@ const ProtectedRoute = ({ children, loggedIn, loading }: { children: React.React
 
     if (!loggedIn) {
          // Redirect them to the login page, but save the current location they were trying to go to
-        return <Redirect to={`/login?from=${encodeURIComponent(location)}`} replace />;
+        return <Redirect to={`/login?from=${encodeURIComponent(location + window.location.search)}`} replace />;
     }
 
     return children;
@@ -49,17 +84,18 @@ function AppContent() {
     const [clientIDs, setClientIDs] = useState<Record<string, string>>({});
     const [sites, setSites] = useState<UserSite[]>([]);
     const [selectedSiteID, setSelectedSiteID] = useState<string>("");
-    const [viewSiteOverride, setViewSiteOverride] = useState<string | null>(() => {
-        const queryParams = new URLSearchParams(window.location.search);
+    const search = useSearch();
+    const viewSiteOverride = React.useMemo(() => {
+        const queryParams = new URLSearchParams(search);
         return queryParams.get('viewSite');
-    });
+    }, [search]);
     const [loading, setLoading] = useState(() => window.location.pathname !== '/');
     const [hasAttemptedFetch, setHasAttemptedFetch] = useState(false);
 
     const [settings, setSettings] = useState<SettingsType | null>(null);
     const [settingsSiteID, setSettingsSiteID] = useState<string>("");
 
-    const [location, navigate] = useLocation();
+    const [location, navigate] = useLocationWithViewSite();
     const isHome = location === '/';
 
     const effectiveSiteID = viewSiteOverride || selectedSiteID;
@@ -271,7 +307,7 @@ function AppContent() {
             setSelectedSiteID("");
             setSettings(null);
             setSettingsSiteID("");
-            navigate('/'); // Go back to landing page on logout
+            navigate('/', { preserveViewSite: false }); // Go back to landing page on logout
         } catch (err) {
             console.error("Logout failed", err);
         }
@@ -285,11 +321,14 @@ function AppContent() {
         : sites;
 
     const handleSiteChange = (id: string) => {
-        if (viewSiteOverride) setViewSiteOverride(null);
+        const params = new URLSearchParams(window.location.search);
+        params.delete('viewSite');
+        const searchStr = params.toString();
+        const nextLocation = id === 'ALL' ? '/dashboard' : location;
+        navigate(nextLocation + (searchStr ? '?' + searchStr : ''), { preserveViewSite: false });
+
         setSelectedSiteID(id);
-        if (id === 'ALL') {
-            navigate('/dashboard');
-        }
+
         // Immediately reset settings when switching sites to prevent stale flashes
         setSettings(null);
         setSettingsSiteID("");
@@ -417,7 +456,7 @@ function AppContent() {
 
 function App() {
   return (
-    <Router>
+    <Router hook={useLocationWithViewSite}>
         <AppContent />
     </Router>
   );
