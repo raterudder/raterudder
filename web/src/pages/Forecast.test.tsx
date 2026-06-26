@@ -25,7 +25,6 @@ function makeSimHours(): ModelingHour[] {
             gridChargeDollarsPerKWH: 0.10 + i * 0.005,
             solarOppDollarsPerKWH: 0.08,
             avgHomeLoadKWH: 1.5,
-            avgHomeLoadImprovedKWH: 1.5,
             predictedSolarKWH: Math.max(0, 3.0 * Math.sin((i / 24) * Math.PI)),
             batteryKWH: 5.0 - i * 0.2,
             startBatteryKWH: 5.0 - i * 0.2,

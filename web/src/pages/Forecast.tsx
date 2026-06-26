@@ -166,10 +166,6 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs }: { dat
                             let displayName = config.title;
                             if (name === 'rawSolarKWH') {
                                 displayName = 'Raw Model';
-                            } else if (name === 'avgHomeLoadImprovedKWH') {
-                                displayName = 'Improved Model';
-                            } else if (name === 'avgHomeLoadKWH') {
-                                displayName = 'Current Model';
                             }
                             return [
                                 config.unit.includes('$')
@@ -344,7 +340,6 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
             const prevH = idx > 0 ? modelingData[idx - 1] : null;
             const predictedSolarKWH = prevH ? prevH.predictedSolarKWH : 0;
             const avgHomeLoadKWH = prevH ? prevH.avgHomeLoadKWH : 0;
-            const avgHomeLoadImprovedKWH = prevH ? prevH.avgHomeLoadImprovedKWH : 0;
             const todaySolarTrend = prevH ? prevH.todaySolarTrend : 1.0;
 
             let displayBatteryKWH = h.batteryKWH;
@@ -364,7 +359,6 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     ? todaySolarTrend
                     : 0,
                 avgHomeLoadKWH: Math.floor((avgHomeLoadKWH || 0) * 10) / 10,
-                avgHomeLoadImprovedKWH: Math.floor((avgHomeLoadImprovedKWH || 0) * 10) / 10,
             };
         });
     }, [rawModelingData, includeHistory]);
@@ -428,18 +422,9 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 })}
             </p>
             <div className="modeling-charts">
-                {charts.map((c) => {
-                    const config = { ...c };
-                    if (config.dataKey === 'avgHomeLoadKWH' && settings?.release === 'staging') {
-                        config.additionalLines = [
-                            ...(config.additionalLines || []),
-                            { dataKey: 'avgHomeLoadImprovedKWH', color: '#ec4899', strokeDasharray: '4 4' }
-                        ];
-                    }
-                    return (
-                        <ForecastChart key={config.dataKey} data={data} config={config} isMobile={isMobile} showCurrentTime={includeHistory} nowMs={nowMs} />
-                    );
-                })}
+                {charts.map((config) => (
+                    <ForecastChart key={config.dataKey} data={data} config={config} isMobile={isMobile} showCurrentTime={includeHistory} nowMs={nowMs} />
+                ))}
             </div>
             {settings?.release === 'staging' && (
                 <>

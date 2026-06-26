@@ -599,7 +599,7 @@ func TestDecide(t *testing.T) {
 			load := 0.0
 			h := ts.Hour()
 			if h >= 10 && h <= 23 {
-				load = 0.5
+				load = 0.4
 			}
 			customHistory = append(customHistory, types.EnergyStats{
 				TSHourStart: ts,
@@ -900,7 +900,7 @@ func TestDecide(t *testing.T) {
 			Timestamp:             now,
 			BatterySOC:            50.0,
 			BatteryCapacityKWH:    10.0,
-			MaxBatteryChargeKW:    5.0,
+			MaxBatteryChargeKW:    6.0,
 			MaxBatteryDischargeKW: 5.0,
 			HomeKW:                0.0, // No load so no deficit
 			BatteryAboveMinSOC:    true,
@@ -923,7 +923,7 @@ func TestDecide(t *testing.T) {
 		}
 
 		settings := baseSettings
-		settings.MinBatterySOC = 20.0
+		settings.MinBatterySOC = 50.0
 		settings.MinDeficitPriceDifferenceDollarsPerKWH = 0.02
 		settings.GridChargeBatteries = true
 		settings.GridExportSolar = true
@@ -975,7 +975,7 @@ func TestDecide(t *testing.T) {
 		for i := 0; i < 48; i++ {
 			solar := 0.0
 			if ts.Hour() == 15 {
-				solar = 5.0
+				solar = 7.0
 			}
 			customHistory = append(customHistory, types.EnergyStats{
 				TSHourStart: ts,
@@ -3466,7 +3466,7 @@ func TestEvaluateDeficit(t *testing.T) {
 
 		lowBattStatus := baseStatus
 		lowBattStatus.BatterySOC = 25.0
-		lowBattStatus.BatteryCapacityKWH = 10.0
+		lowBattStatus.BatteryCapacityKWH = 5.0
 		lowBattStatus.MaxBatteryChargeKW = 2.0
 		lowBattStatus.HomeKW = 1.0
 		lowBattStatus.SolarKW = 0.0
@@ -4509,7 +4509,7 @@ func TestEvaluateArbitrage(t *testing.T) {
 			Timestamp:             now,
 			BatterySOC:            50.0,
 			BatteryCapacityKWH:    10.0,
-			MaxBatteryChargeKW:    5.0,
+			MaxBatteryChargeKW:    6.0,
 			MaxBatteryDischargeKW: 5.0,
 			HomeKW:                0.0,
 			BatteryAboveMinSOC:    true,
@@ -4531,7 +4531,7 @@ func TestEvaluateArbitrage(t *testing.T) {
 		}
 
 		settings := baseSettings
-		settings.MinBatterySOC = 20.0
+		settings.MinBatterySOC = 50.0
 		settings.MinDeficitPriceDifferenceDollarsPerKWH = 0.02
 		settings.GridChargeBatteries = true
 		settings.GridExportSolar = true
@@ -4578,7 +4578,7 @@ func TestEvaluateArbitrage(t *testing.T) {
 		for i := 0; i < 48; i++ {
 			solar := 0.0
 			if ts.Hour() == 15 {
-				solar = 5.0
+				solar = 7.0
 			}
 			customHistory = append(customHistory, types.EnergyStats{
 				TSHourStart: ts,

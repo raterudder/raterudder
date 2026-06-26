@@ -17,13 +17,16 @@ describe('ActionTimeline', () => {
         expect(screen.getByText('Test action')).toBeInTheDocument();
     });
 
-    it('renders action summaries', () => {
+    it('renders action summaries with time range if start and end times differ', () => {
+        const startTime = new Date('2026-06-25T12:00:00Z');
+        const endTime = new Date('2026-06-25T12:30:00Z');
         const summary: ActionSummary = {
             isSummary: true,
             type: 'no_change',
-            startTime: new Date().toISOString(),
+            startTime: startTime.toISOString(),
+            endTime: endTime.toISOString(),
             latestAction: {
-                timestamp: new Date().toISOString(),
+                timestamp: endTime.toISOString(),
                 batteryMode: BatteryMode.NoChange,
                 solarMode: SolarMode.NoChange,
                 reason: ActionReason.SufficientBattery
@@ -44,6 +47,11 @@ describe('ActionTimeline', () => {
         expect(screen.getByText('No Change')).toBeInTheDocument();
         expect(screen.getByText('(5x)')).toBeInTheDocument();
         expect(screen.getByText(/battery has enough stored energy/)).toBeInTheDocument();
+
+        const startFormatted = startTime.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+        const endFormatted = endTime.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+        expect(screen.getByText(startFormatted)).toBeInTheDocument();
+        expect(screen.getByText(endFormatted)).toBeInTheDocument();
     });
 
     it('renders VPP Prep action items correctly', () => {

@@ -99,7 +99,7 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	improvedModel := s.controller.BuildImprovedHourlyEnergyModel(ctx, targetDateLocal, priorEnergy, weatherHistory, settings.Settings)
+	model, _ := s.controller.BuildHourlyEnergyModel(ctx, targetDateLocal, priorEnergy, weatherHistory, settings.Settings)
 
 	// Filter results for the target day
 	dayStats := make([]types.EnergyStats, 0, 24)
@@ -130,7 +130,7 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 				wr.Irradiance = improved.Irradiance
 			}
 			localHour := h.TSHourStart.In(loc).Hour()
-			if profile, ok := improvedModel[localHour]; ok {
+			if profile, ok := model[localHour]; ok {
 				wr.ImprovedHomeLoad = profile.AvgHomeLoadKWH
 			}
 			dayWeather = append(dayWeather, wr)

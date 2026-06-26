@@ -68,7 +68,14 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
                         <div className="timeline-marker" aria-hidden="true"></div>
 
                         <div className="timeline-time">
-                            {formatTime(isSummary ? summary!.startTime : action.timestamp)}
+                            {isSummary && summary!.endTime && formatTime(summary!.endTime) !== formatTime(summary!.startTime) ? (
+                                <div className="time-range">
+                                    <span className="time-end">{formatTime(summary!.endTime)}</span>
+                                    <span className="time-start">{formatTime(summary!.startTime)}</span>
+                                </div>
+                            ) : (
+                                formatTime(isSummary ? summary!.startTime : action.timestamp)
+                            )}
                         </div>
 
                         <div className="timeline-content">

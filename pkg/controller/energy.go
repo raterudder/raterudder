@@ -28,18 +28,18 @@ type hourPoint struct {
 	Load float64 `json:"load"`
 }
 
-// BuildImprovedHourlyEnergyModel averages usage and solar by hour of day from history,
+// BuildHourlyEnergyModel averages usage and solar by hour of day from history,
 // taking into account weekend days and day-of-the-week differences, while ignoring outlier days
 // (e.g. vacation days with significantly below-average usage) and aligning AC temperature baseline calculations.
 // It implements an adaptive baseline shifting algorithm that reacts to structural changes in load
 // (e.g. guests in town) while remaining robust against intermittent, unpredictable loads (e.g. EV charging).
-func (c *Controller) BuildImprovedHourlyEnergyModel(
+func (c *Controller) BuildHourlyEnergyModel(
 	ctx context.Context,
 	now time.Time,
 	history []types.EnergyStats,
 	weather []types.Weather,
 	settings types.Settings,
-) map[int]TimeProfile {
+) (map[int]TimeProfile, types.SimulationParams) {
 	loc := now.Location()
 	for _, h := range history {
 		if !h.TSHourStart.IsZero() {
@@ -155,13 +155,15 @@ func (c *Controller) BuildImprovedHourlyEnergyModel(
 	var weatherSolar map[int64]WeatherSolar
 	var smoothedSolar map[int]float64
 
+	var params types.SimulationParams
+
 	if len(weather) > 0 {
 		locInfo := types.SiteLocation{
 			Latitude:  weather[0].Latitude,
 			Longitude: weather[0].Longitude,
 			TimeZone:  weather[0].TimeLocation,
 		}
-		weatherSolar, _ = CalculateWeatherSolar(ctx, now, history, weather, locInfo)
+		weatherSolar, params = CalculateWeatherSolar(ctx, now, history, weather, locInfo)
 	} else {
 		smoothedSolar = CalculateSmoothedSolar(ctx, now, history, settings)
 	}
@@ -592,7 +594,7 @@ func (c *Controller) BuildImprovedHourlyEnergyModel(
 		}
 	}
 
-	return result
+	return result, params
 }
 
 func getMedian(vals []float64) float64 {

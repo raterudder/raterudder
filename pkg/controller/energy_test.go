@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -9,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestBuildImprovedHourlyEnergyModel(t *testing.T) {
+func TestBuildHourlyEnergyModel(t *testing.T) {
 	c := NewController()
 	ctx := context.Background()
 
@@ -48,7 +49,7 @@ func TestBuildImprovedHourlyEnergyModel(t *testing.T) {
 			IgnoreHourUsageOverMultiple: 0.0, // Disable hourly outlier filtering
 		}
 
-		model := c.BuildImprovedHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		if assert.Contains(t, model, 14) {
 			assert.InDelta(t, 10.0, model[14].AvgHomeLoadKWH, 0.001)
@@ -90,7 +91,7 @@ func TestBuildImprovedHourlyEnergyModel(t *testing.T) {
 			IgnoreHourUsageOverMultiple: 0.0,
 		}
 
-		model := c.BuildImprovedHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// The vacation day should be filtered out, so the average load is 2.0.
 		if assert.Contains(t, model, 12) {
@@ -128,7 +129,7 @@ func TestBuildImprovedHourlyEnergyModel(t *testing.T) {
 			IgnoreHourUsageOverMultiple: 0.0,
 		}
 
-		model := c.BuildImprovedHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// The high outlier day should be filtered out, so the average load is 2.0.
 		if assert.Contains(t, model, 12) {
@@ -165,7 +166,7 @@ func TestBuildImprovedHourlyEnergyModel(t *testing.T) {
 			IgnoreHourUsageOverMultiple: 0.0,
 		}
 
-		model := c.BuildImprovedHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Without filtering, average is (2.0 + 2.0 + 0.2)/3 = 1.4.
 		if assert.Contains(t, model, 12) {
@@ -212,7 +213,7 @@ func TestBuildImprovedHourlyEnergyModel(t *testing.T) {
 			IgnoreHourUsageOverMultiple: 0.0,
 		}
 
-		model := c.BuildImprovedHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Saturday target hour 12:
 		// Saturday count = 1 (< 3).
@@ -257,7 +258,7 @@ func TestBuildImprovedHourlyEnergyModel(t *testing.T) {
 			IgnoreHourUsageOverMultiple: 0.0,
 		}
 
-		model := c.BuildImprovedHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Monday target hour 12:
 		// Monday count = 1 (< 3).
@@ -301,7 +302,7 @@ func TestBuildImprovedHourlyEnergyModel(t *testing.T) {
 			IgnoreHourUsageFloorKWH:     0.5,
 		}
 
-		model := c.BuildImprovedHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// The 8.0 KWH charge should be filtered out because the median is 1.0, and limit is 3.0.
 		// So the prediction should reflect the baseline (1.0).
@@ -342,7 +343,7 @@ func TestBuildImprovedHourlyEnergyModel(t *testing.T) {
 			IgnoreHourUsageFloorKWH:     0.5,
 		}
 
-		model := c.BuildImprovedHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Since all days have 8.0 KWH at 11am, the median is 8.0 KWH.
 		// Limit is 8.0 * 3.0 = 24.0 KWH, so no points are filtered out.
@@ -387,7 +388,7 @@ func TestBuildImprovedHourlyEnergyModel(t *testing.T) {
 			IgnoreHourUsageOverMultiple: 0.0,
 		}
 
-		model := c.BuildImprovedHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Expected baseline load for Mon is ~1.0 KWH.
 		// Since the last 4 days consistently average 2.0 KWH, the forecast should shift up.
@@ -429,7 +430,7 @@ func TestBuildImprovedHourlyEnergyModel(t *testing.T) {
 			IgnoreHourUsageOverMultiple: 0.0,
 		}
 
-		model := c.BuildImprovedHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Expected baseline load for Mon is ~2.0 KWH.
 		// Since the last 4 days consistently average 1.0 KWH, the forecast should shift down.
@@ -464,7 +465,7 @@ func TestBuildImprovedHourlyEnergyModel(t *testing.T) {
 			IgnoreHourUsageOverMultiple: 0.0,
 		}
 
-		model := c.BuildImprovedHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// The last 4 days match the baseline exactly, so the shift should be 0.
 		if assert.Contains(t, model, 12) {
@@ -524,7 +525,7 @@ func TestBuildImprovedHourlyEnergyModel(t *testing.T) {
 			ACUsageMaxIncreasePercent:       50.0,
 		}
 
-		model := c.BuildImprovedHourlyEnergyModel(ctx, now, history, weather, settings)
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, weather, settings)
 
 		if assert.Contains(t, model, 12) {
 			assert.InDelta(t, 2.0, model[12].AvgHomeLoadKWH, 0.001)
@@ -584,7 +585,7 @@ func TestBuildImprovedHourlyEnergyModel(t *testing.T) {
 			ACUsageMaxIncreasePercent:       50.0,
 		}
 
-		model := c.BuildImprovedHourlyEnergyModel(ctx, now, history, weather, settings)
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, weather, settings)
 
 		// Inside deadband, no adjustment.
 		if assert.Contains(t, model, 12) {
@@ -644,7 +645,7 @@ func TestBuildImprovedHourlyEnergyModel(t *testing.T) {
 			ACUsageMaxIncreasePercent:       50.0,
 		}
 
-		model := c.BuildImprovedHourlyEnergyModel(ctx, now, history, weather, settings)
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, weather, settings)
 
 		// Effective increase: 28.0 - Max(24.0, 22.0) = 4.0 degrees.
 		// Increase = 4.0 * 10% = 40%.
@@ -706,7 +707,7 @@ func TestBuildImprovedHourlyEnergyModel(t *testing.T) {
 			ACUsageMaxIncreasePercent:       50.0,
 		}
 
-		model := c.BuildImprovedHourlyEnergyModel(ctx, now, history, weather, settings)
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, weather, settings)
 
 		// Baseline rolling temp: 24.0. Today's rolling temp: 20.0.
 		// Diff is -4.0C (outside 1.0C deadband).
@@ -770,7 +771,7 @@ func TestBuildImprovedHourlyEnergyModel(t *testing.T) {
 			ACUsageMaxIncreasePercent:       30.0, // cap at 30% reduction
 		}
 
-		model := c.BuildImprovedHourlyEnergyModel(ctx, now, history, weather, settings)
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, weather, settings)
 
 		// effDec = 28.0 - Max(18.0, 22.0) = 6.0C.
 		// uncapped reduction = 60%.
@@ -815,7 +816,7 @@ func TestBuildImprovedHourlyEnergyModel(t *testing.T) {
 			IgnoreHourUsageFloorKWH:     0.5,
 		}
 
-		model := c.BuildImprovedHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Expected average load at 11am: (8.0 + 8.0 + 1.0 + 1.0 + 1.0) / 5 = 3.8.
 		if assert.Contains(t, model, 11) {
@@ -854,7 +855,7 @@ func TestBuildImprovedHourlyEnergyModel(t *testing.T) {
 			IgnoreHourUsageFloorKWH:     0.5, // Floor is 0.5, so 0.3 is not filtered since 0.3 <= Max(0.1, 0.5) * 2
 		}
 
-		model := c.BuildImprovedHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// Expected average load: (0.3 + 0.1 + 0.1) / 3 = 0.1667
 		if assert.Contains(t, model, 11) {
@@ -898,11 +899,255 @@ func TestBuildImprovedHourlyEnergyModel(t *testing.T) {
 			IgnoreHourUsageFloorKWH:     0.5,
 		}
 
-		model := c.BuildImprovedHourlyEnergyModel(ctx, now, history, nil, settings)
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		// The consistent Thursday peak of 3.0 should be retained and average to 3.0.
 		if assert.Contains(t, model, 19) {
 			assert.InDelta(t, 3.0, model[19].AvgHomeLoadKWH, 0.001)
 		}
+	})
+
+	t.Run("Basic Average with Filter", func(t *testing.T) {
+		h1 := time.Date(2025, 6, 15, 2, 0, 0, 0, time.UTC)
+		h2 := h1.Add(-24 * time.Hour)
+		h3 := h1.Add(-48 * time.Hour)
+
+		history := []types.EnergyStats{
+			{TSHourStart: h1, HomeKWH: 1.0, SolarKWH: 0.0},
+			{TSHourStart: h2, HomeKWH: 3.0, SolarKWH: 0.0},
+			{TSHourStart: h3, HomeKWH: 0.0, SolarKWH: 0.0}, // Should be filtered (<= 0.0)
+		}
+
+		model, _ := c.BuildHourlyEnergyModel(ctx, time.Now().UTC(), history, nil, types.Settings{IgnoreHourUsageOverMultiple: 0.0})
+		assert.InDelta(t, 2.0, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
+		assert.InDelta(t, 0.0, model[h1.Hour()].AvgSolarKWH, 0.001)
+	})
+
+	t.Run("Basic Average All Low", func(t *testing.T) {
+		h1 := time.Date(2025, 6, 15, 2, 0, 0, 0, time.UTC)
+		history := []types.EnergyStats{
+			{TSHourStart: h1, HomeKWH: 0.0, SolarKWH: 0.0},
+		}
+
+		model, _ := c.BuildHourlyEnergyModel(ctx, time.Now().UTC(), history, nil, types.Settings{IgnoreHourUsageOverMultiple: 0.0})
+		assert.InDelta(t, 0.1, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
+		assert.InDelta(t, 0.0, model[h1.Hour()].AvgSolarKWH, 0.001)
+	})
+
+	t.Run("Ignore Outliers", func(t *testing.T) {
+		h1 := time.Date(2025, 6, 15, 2, 0, 0, 0, time.UTC)
+		h2 := h1.Add(-24 * time.Hour)
+		h3 := h1.Add(-48 * time.Hour)
+
+		// Case 1: Exactly 1 outlier above 3x
+		history := []types.EnergyStats{
+			{TSHourStart: h1, HomeKWH: 1.0, SolarKWH: 0.0},
+			{TSHourStart: h2, HomeKWH: 1.2, SolarKWH: 0.0},
+			{TSHourStart: h3, HomeKWH: 10.0, SolarKWH: 0.0}, // Outlier
+		}
+		model, _ := c.BuildHourlyEnergyModel(ctx, time.Now().UTC(), history, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
+		assert.InDelta(t, 1.1, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
+
+		// Case 2: Multiple outliers (not removed)
+		historyMulti := []types.EnergyStats{
+			{TSHourStart: h1, HomeKWH: 1.0, SolarKWH: 0.0},
+			{TSHourStart: h2, HomeKWH: 10.0, SolarKWH: 0.0}, // Outlier 1
+			{TSHourStart: h3, HomeKWH: 12.0, SolarKWH: 0.0}, // Outlier 2
+		}
+		modelMulti, _ := c.BuildHourlyEnergyModel(ctx, time.Now().UTC(), historyMulti, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
+		assert.InDelta(t, 7.666, modelMulti[h1.Hour()].AvgHomeLoadKWH, 0.001)
+
+		// Case 3: Not enough points (min 3)
+		historyFew := []types.EnergyStats{
+			{TSHourStart: h1, HomeKWH: 1.0, SolarKWH: 0.0},
+			{TSHourStart: h2, HomeKWH: 10.0, SolarKWH: 0.0},
+		}
+		modelFew, _ := c.BuildHourlyEnergyModel(ctx, time.Now().UTC(), historyFew, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
+		assert.InDelta(t, 5.5, modelFew[h1.Hour()].AvgHomeLoadKWH, 0.001)
+	})
+
+	t.Run("Smoothes Solar With Bell Curve", func(t *testing.T) {
+		c := NewController()
+		ctx := context.Background()
+		now := time.Now()
+		start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local).Add(-24 * time.Hour)
+
+		history := []types.EnergyStats{}
+		mu := 13.5
+		sigma := 5.0
+		peak := 5.0
+
+		for h := 0; h < 24; h++ {
+			solar := 0.0
+			if h >= 6 && h <= 20 {
+				solar = peak * math.Exp(-math.Pow(float64(h)-mu, 2)/(2*math.Pow(sigma, 2)))
+			}
+
+			batterySOC := 50.0
+			gridExport := 0.0
+			if h >= 11 && h <= 15 {
+				batterySOC = 99.0
+				solar = 0.5 // Curtailed
+			} else {
+				if solar > 0 {
+					batterySOC = 80.0
+				}
+			}
+
+			history = append(history, types.EnergyStats{
+				TSHourStart:   start.Add(time.Duration(h) * time.Hour),
+				SolarKWH:      solar,
+				HomeKWH:       0.5,
+				MaxBatterySOC: batterySOC,
+				GridExportKWH: gridExport,
+			})
+		}
+
+		settings := types.Settings{
+			GridExportSolar:          false,
+			SolarBellCurveMultiplier: 1.0,
+		}
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+
+		assert.Greater(t, model[13].AvgSolarKWH, 4.8, "Should reconstruct bell curve peak to ~5.0 using off-peak data")
+		assert.Less(t, model[13].AvgSolarKWH, 5.2, "Should be around 5.0")
+
+		for i := range history {
+			history[i].SolarKWH = 0.05
+		}
+		modelNoData, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+		assert.Equal(t, 0.0, modelNoData[13].AvgSolarKWH)
+	})
+
+	t.Run("No Daylight In History", func(t *testing.T) {
+		c := NewController()
+		ctx := context.Background()
+		now := time.Now()
+		start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local).Add(-24 * time.Hour)
+
+		history := []types.EnergyStats{}
+		for h := 0; h < 24; h++ {
+			history = append(history, types.EnergyStats{
+				TSHourStart: start.Add(time.Duration(h) * time.Hour),
+				SolarKWH:    0.0,
+				HomeKWH:     1.0,
+			})
+		}
+
+		settings := types.Settings{GridExportSolar: false, SolarBellCurveMultiplier: 1.0}
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+
+		for h := 0; h < 24; h++ {
+			assert.InDelta(t, 0.0, model[h].AvgSolarKWH, 0.001, "Hour %d should have no solar", h)
+		}
+	})
+
+	t.Run("Fallback To Raw Data When All Curtailed", func(t *testing.T) {
+		c := NewController()
+		ctx := context.Background()
+		now := time.Now()
+		start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local).Add(-24 * time.Hour)
+
+		history := []types.EnergyStats{}
+		for h := 0; h < 24; h++ {
+			solar := 0.0
+			if h >= 8 && h <= 18 {
+				solar = 3.0
+			}
+
+			history = append(history, types.EnergyStats{
+				TSHourStart:   start.Add(time.Duration(h) * time.Hour),
+				SolarKWH:      solar,
+				HomeKWH:       1.0,
+				MaxBatterySOC: 99.0,
+				GridExportKWH: 0.0,
+			})
+		}
+
+		settings := types.Settings{GridExportSolar: false, SolarBellCurveMultiplier: 1.0}
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+
+		assert.GreaterOrEqual(t, model[13].AvgSolarKWH, 3.0, "Should use fallback data and maintain at least the raw average")
+	})
+
+	t.Run("Noisy Edge Data", func(t *testing.T) {
+		c := NewController()
+		ctx := context.Background()
+		now := time.Now()
+		start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local).Add(-24 * time.Hour)
+
+		history := []types.EnergyStats{}
+		mu := 13.5
+		sigma := 11.0 / 3.0
+
+		for h := 0; h < 24; h++ {
+			solar := 0.0
+			hourFactor := math.Exp(-math.Pow(float64(h)-mu, 2) / (2 * math.Pow(sigma, 2)))
+
+			if h >= 8 && h <= 18 {
+				solar = 2.0 * hourFactor
+			}
+
+			if h == 9 {
+				solar = 10.0
+			}
+
+			history = append(history, types.EnergyStats{
+				TSHourStart:   start.Add(time.Duration(h) * time.Hour),
+				SolarKWH:      solar,
+				HomeKWH:       1.0,
+				MaxBatterySOC: 50.0,
+				GridExportKWH: 2.0,
+			})
+		}
+
+		settings := types.Settings{GridExportSolar: true, SolarBellCurveMultiplier: 1.0}
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+
+		assert.Less(t, model[13].AvgSolarKWH, 25.0, "Peak should not explode from noisy edge data")
+		assert.Greater(t, model[13].AvgSolarKWH, 5.0, "Should still boost above the baseline peak of 2.0")
+	})
+
+	t.Run("Solar Peak Estimation With Outliers", func(t *testing.T) {
+		c := NewController()
+		ctx := context.Background()
+		now := time.Now()
+		start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local).Add(-7 * 24 * time.Hour)
+
+		history := []types.EnergyStats{}
+		mu := 13.5
+		sigma := 5.0
+
+		for day := 0; day < 6; day++ {
+			peak := 5.0
+			if day == 0 {
+				peak = 10.0
+			}
+
+			dayStart := start.Add(time.Duration(day) * 24 * time.Hour)
+			for h := 0; h < 24; h++ {
+				solar := 0.0
+				if h >= 6 && h <= 20 {
+					solar = peak * math.Exp(-math.Pow(float64(h)-mu, 2)/(2*math.Pow(sigma, 2)))
+				}
+
+				history = append(history, types.EnergyStats{
+					TSHourStart:   dayStart.Add(time.Duration(h) * time.Hour),
+					SolarKWH:      solar,
+					HomeKWH:       0.5,
+					MaxBatterySOC: 50.0,
+					GridExportKWH: 2.0,
+				})
+			}
+		}
+
+		settings := types.Settings{
+			GridExportSolar:          true,
+			SolarBellCurveMultiplier: 1.0,
+		}
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+
+		assert.Less(t, model[13].AvgSolarKWH, 7.0, "Should be closer to 5.0 than 10.0")
+		assert.Greater(t, model[13].AvgSolarKWH, 5.0, "Should capture the average including outlier")
 	})
 }

@@ -419,7 +419,6 @@ export interface ModelingHour {
     gridChargeDollarsPerKWH: number;
     solarOppDollarsPerKWH: number;
     avgHomeLoadKWH: number;
-    avgHomeLoadImprovedKWH: number;
     predictedSolarKWH: number;
     batteryKWH: number;
     startBatteryKWH?: number;

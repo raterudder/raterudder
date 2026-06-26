@@ -30,7 +30,6 @@ type SimHour struct {
 	GridChargeDollarsPerKWH float64     `json:"gridChargeDollarsPerKWH"`
 	SolarOppDollarsPerKWH   float64     `json:"solarOppDollarsPerKWH"`
 	AvgHomeLoadKWH          float64     `json:"avgHomeLoadKWH"`
-	AvgHomeLoadImprovedKWH  float64     `json:"avgHomeLoadImprovedKWH"`
 	PredictedSolarKWH       float64     `json:"predictedSolarKWH"`
 	BatteryKWH              float64     `json:"batteryKWH"`
 	StartBatteryKWH         float64     `json:"startBatteryKWH"`
@@ -75,8 +74,7 @@ func (c *Controller) SimulateState(
 	var deficitKWH float64
 
 	// Build Energy Models
-	model, simParams := c.buildHourlyEnergyModel(ctx, now, history, weather, settings)
-	improvedModel := c.BuildImprovedHourlyEnergyModel(ctx, now, history, weather, settings)
+	model, simParams := c.BuildHourlyEnergyModel(ctx, now, history, weather, settings)
 	minKWH := capacityKWH * (min(settings.MinBatterySOC+1.0, 100.0) / 100.0)
 
 	// simulate our energy state and prices for the next 24 hours
@@ -201,7 +199,6 @@ func (c *Controller) SimulateState(
 		}
 
 		profile := model[h]
-		improvedProfile := improvedModel[h]
 
 		// Determine solar trend for this hour
 		currentSolarTrend := todaySolarTrend
@@ -620,7 +617,6 @@ func (c *Controller) SimulateState(
 			GridChargeDollarsPerKWH: gridChargeCost,
 			SolarOppDollarsPerKWH:   solarOppCost,
 			AvgHomeLoadKWH:          profile.AvgHomeLoadKWH,
-			AvgHomeLoadImprovedKWH:  improvedProfile.AvgHomeLoadKWH,
 			PredictedSolarKWH:       predictedAvgSolarKWH,
 			BatteryKWH:              simEnergyKWH,
 			StartBatteryKWH:         startBatteryKWH,
@@ -652,150 +648,6 @@ type TimeProfile struct {
 	Hour           int
 	AvgSolarKWH    float64
 	AvgHomeLoadKWH float64
-}
-
-// buildHourlyEnergyModel averages usage and solar by hour of day from history.
-// It filters out outliers if ignoreHourUsageOverMultiple is set and > 0.
-func (c *Controller) buildHourlyEnergyModel(ctx context.Context, now time.Time, history []types.EnergyStats, weather []types.Weather, settings types.Settings) (map[int]TimeProfile, types.SimulationParams) {
-	type dataPoint struct {
-		load float64
-	}
-	hourlyData := make(map[int][]dataPoint)
-	uniqueDays := make(map[string]bool)
-	// Regroup history by hour
-	for _, h := range history {
-		if h.TSHourStart.IsZero() {
-			continue
-		}
-		uniqueDays[h.TSHourStart.Format("2006-01-02")] = true
-		hour := h.TSHourStart.Hour()
-		hourlyData[hour] = append(hourlyData[hour], dataPoint{
-			load: h.HomeKWH,
-		})
-	}
-
-	// Calculate solar predictions
-	var weatherSolar map[int64]WeatherSolar
-	var smoothedSolar map[int]float64
-	var params types.SimulationParams
-
-	if len(weather) > 0 {
-		// Construct location from weather data
-		loc := types.SiteLocation{
-			Latitude:  weather[0].Latitude,
-			Longitude: weather[0].Longitude,
-			TimeZone:  weather[0].TimeLocation,
-		}
-		weatherSolar, params = CalculateWeatherSolar(ctx, now, history, weather, loc)
-	} else {
-		smoothedSolar = CalculateSmoothedSolar(ctx, now, history, settings)
-	}
-
-	result := make(map[int]TimeProfile)
-	for h, points := range hourlyData {
-		if len(points) == 0 {
-			continue
-		}
-
-		validPoints := points
-		if len(points) >= 3 && settings.IgnoreHourUsageOverMultiple > 1 {
-			// find outlierIdx by comparing each point to every other point.
-			var outlierIdx []int
-			for i, p := range points {
-				isOutlier := true
-				for j, other := range points {
-					if i == j {
-						continue
-					}
-					// if the point is NOT greater than another point * multiple, it's not an outlier
-					if p.load <= other.load*settings.IgnoreHourUsageOverMultiple {
-						isOutlier = false
-						break
-					}
-				}
-
-				if isOutlier {
-					outlierIdx = append(outlierIdx, i)
-				}
-			}
-
-			if len(outlierIdx) == 1 {
-				// We found exactly one outlier, ignore it
-				log.Ctx(ctx).DebugContext(
-					ctx,
-					"ignoring outlier data point",
-					slog.Int("hour", h),
-					slog.Float64("outlierLoad", points[outlierIdx[0]].load),
-				)
-				// Rebuild valid points excluding this one
-				validPoints = make([]dataPoint, 0, len(points)-1)
-				for i, p := range points {
-					if i != outlierIdx[0] {
-						validPoints = append(validPoints, p)
-					}
-				}
-			}
-		}
-
-		// Now calculate averages from valid points
-		var totalLoad float64
-		var countLoad float64
-		for _, p := range validPoints {
-			if p.load > 0.1 {
-				totalLoad += p.load
-				countLoad++
-			}
-		}
-
-		avgHomeLoad := 0.0
-		if countLoad > 0 {
-			avgHomeLoad = totalLoad / countLoad
-		}
-
-		avgSolar := 0.0
-		if len(weather) > 0 {
-			// Find solar for this hour of the upcoming 24h simulation
-			simTime := now.In(now.Location())
-			for i := 0; i < 24; i++ {
-				if simTime.Hour() == h {
-					if ws, ok := weatherSolar[simTime.Truncate(time.Hour).Unix()]; ok {
-						avgSolar = ws.ImprovedSolar
-					}
-					break
-				}
-				simTime = simTime.Add(time.Hour)
-			}
-		} else {
-			avgSolar = smoothedSolar[h]
-		}
-
-		result[h] = TimeProfile{
-			Hour:           h,
-			AvgSolarKWH:    avgSolar,
-			AvgHomeLoadKWH: avgHomeLoad,
-		}
-	}
-
-	// if they disabled solar bell curve fitting return early
-	if settings.SolarBellCurveMultiplier == 0 {
-		return result, params
-	}
-
-	// determine "Daylight Hours" range
-	startSolarHour := -1
-	endSolarHour := -1
-	for h, profile := range result {
-		if profile.AvgSolarKWH > 0.1 {
-			if startSolarHour == -1 || h < startSolarHour {
-				startSolarHour = h
-			}
-			if h > endSolarHour {
-				endSolarHour = h
-			}
-		}
-	}
-
-	return result, params
 }
 
 func (c *Controller) calculateSolarTrend(ctx context.Context, now time.Time, history []types.EnergyStats, model map[int]TimeProfile, settings types.Settings) float64 {

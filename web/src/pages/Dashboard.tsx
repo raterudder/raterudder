@@ -284,7 +284,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                 } as ActionSummary;
             }
             return item;
-        });
+        }).reverse();
     }, [visibleActions]);
 
     return (
