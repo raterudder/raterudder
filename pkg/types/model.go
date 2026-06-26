@@ -57,6 +57,7 @@ const (
 	ActionReasonPreventSolarCurtailment     ActionReason = "preventSolarCurtailment"
 	ActionReasonBatteryAtReserve            ActionReason = "batteryAtReserve"
 	ActionReasonVPPActive                   ActionReason = "vppActive"
+	ActionReasonVPPPrep                     ActionReason = "vppPrep"
 
 	// Deprecated - we don't use these anymore but we don't delete them so we know they were used
 	ActionReasonArbitrageHoldSave   ActionReason = "arbitrageHoldSave"

@@ -15,6 +15,12 @@ import (
 // below the reserve percent before we count/accumulate it as a deficit.
 const deficitThresholdOffsetCapacityRatio = 0.03
 
+// TODO: Put vppPrepChargingBuffer in settings after clarification from Franklin.
+const vppPrepChargingBuffer = 2 * time.Hour
+
+// TODO: Decide if vppStandbyDuration should be combined with vppPrepChargingBuffer.
+const vppStandbyDuration = 2 * time.Hour
+
 // SimHour represents one hour of simulated energy state.
 type SimHour struct {
 	TS                      time.Time   `json:"ts"`
@@ -27,6 +33,7 @@ type SimHour struct {
 	AvgHomeLoadImprovedKWH  float64     `json:"avgHomeLoadImprovedKWH"`
 	PredictedSolarKWH       float64     `json:"predictedSolarKWH"`
 	BatteryKWH              float64     `json:"batteryKWH"`
+	StartBatteryKWH         float64     `json:"startBatteryKWH"`
 	BatteryCapacityKWH      float64     `json:"batteryCapacityKWH"`
 	CapacityThresholdKWH    float64     `json:"capacityThresholdKWH"`
 	BatteryReserveKWH       float64     `json:"batteryReserveKWH"`
@@ -42,7 +49,7 @@ type SimHour struct {
 	HitAboveDeficitAt       time.Time   `json:"hitAboveDeficitAt"`
 	Price                   types.Price `json:"price"`
 	StartedVPPChargingAt    time.Time   `json:"startedVPPChargingAt"`
-	VPPBlackoutAt           time.Time   `json:"vppBlackoutAt"`
+	VPPStandbyAt            time.Time   `json:"vppStandbyAt"`
 	VPPEndAt                time.Time   `json:"vppEndAt"`
 }
 
@@ -135,6 +142,7 @@ func (c *Controller) SimulateState(
 
 	for i := 0; i < simHours; i++ {
 		h := simTime.Hour()
+		startBatteryKWH := simEnergyKWH
 
 		var price types.Price
 		if currentPrice.Contains(simTime) {
@@ -239,14 +247,14 @@ func (c *Controller) SimulateState(
 		// while for i > 0 it is truncated to the hour.
 		hourEnd := simTime.Add(1 * time.Hour).Truncate(time.Hour)
 
-		// We want to reach capacity exactly at the bufferStart (30 mins before VPP).
+		// We want to reach capacity exactly at the bufferStart (vppPrepChargingBuffer before VPP).
 		// Over the remaining duration to the buffer start, we will have load pulling
 		// from the battery, and when charging starts we will charge at
 		// MaxBatteryChargeKW.
 		var chargeStart time.Time
 		if nextVPP != nil {
 			eventStart := nextVPP.TSStart
-			bufferStart := eventStart.Add(-30 * time.Minute)
+			bufferStart := eventStart.Add(-vppPrepChargingBuffer)
 
 			if simEnergyKWH < capacityThresholdKWH {
 				chargeDuration := bufferStart.Sub(simTime).Hours()
@@ -284,10 +292,10 @@ func (c *Controller) SimulateState(
 		if nextVPP != nil {
 			eventStart := nextVPP.TSStart
 			eventEnd := nextVPP.TSEnd
-			blackoutStart := eventStart.Add(-1 * time.Hour)
-			bufferStart := eventStart.Add(-30 * time.Minute)
+			vppStandbyStart := eventStart.Add(-vppStandbyDuration)
+			vppBufferStart := eventStart.Add(-vppPrepChargingBuffer)
 
-			candidates := []time.Time{chargeStart, blackoutStart, bufferStart, eventStart, eventEnd}
+			candidates := []time.Time{chargeStart, vppStandbyStart, vppBufferStart, eventStart, eventEnd}
 			for _, ts := range candidates {
 				if !ts.IsZero() && ts.After(simTime) && ts.Before(hourEnd) {
 					found := false
@@ -312,9 +320,9 @@ func (c *Controller) SimulateState(
 		var simBlackoutAt time.Time
 		var simVPPEndAt time.Time
 		if nextVPP != nil {
-			blackoutStart := nextVPP.TSStart.Add(-1 * time.Hour)
-			if blackoutStart.Before(hourEnd) {
-				simBlackoutAt = blackoutStart
+			vppStandbyStart := nextVPP.TSStart.Add(-vppStandbyDuration)
+			if vppStandbyStart.Before(hourEnd) {
+				simBlackoutAt = vppStandbyStart
 				simVPPEndAt = nextVPP.TSEnd
 			}
 		}
@@ -337,37 +345,37 @@ func (c *Controller) SimulateState(
 			if nextVPP != nil {
 				eventStart := nextVPP.TSStart
 				eventEnd := nextVPP.TSEnd
-				blackoutStart := eventStart.Add(-1 * time.Hour)
-				bufferStart := eventStart.Add(-30 * time.Minute)
+				vppStandbyStart := eventStart.Add(-vppStandbyDuration)
+				vppBufferStart := eventStart.Add(-vppPrepChargingBuffer)
 
 				// Recalculate chargeStart based on the current energy at the start of the sub-interval
 				var subChargeStart time.Time
 				if startEnergy < capacityThresholdKWH {
-					subD := bufferStart.Sub(subStart).Hours()
+					subD := vppBufferStart.Sub(subStart).Hours()
 					if subD > 0 {
 						num := startEnergy + currentStatus.MaxBatteryChargeKW*subD - capacityThresholdKWH
 						den := netLoadSolarKWH + currentStatus.MaxBatteryChargeKW
 						if den > 0 {
 							subChargeStart = subStart.Add(time.Duration((num / den) * float64(time.Hour)))
 						} else {
-							subChargeStart = bufferStart
+							subChargeStart = vppBufferStart
 						}
 					} else {
-						subChargeStart = bufferStart
+						subChargeStart = vppBufferStart
 					}
 				} else {
-					subChargeStart = bufferStart
+					subChargeStart = vppBufferStart
 				}
 
 				if !subMid.Before(eventStart) && subMid.Before(eventEnd) {
 					inVPPEvent = true
 					subVPP = nextVPP
 				}
-				if !subMid.Before(blackoutStart) && subMid.Before(eventStart) {
+				if !subMid.Before(vppStandbyStart) && subMid.Before(eventStart) {
 					inPreVPPStandby = true
 					subVPP = nextVPP
 				}
-				if !subChargeStart.IsZero() && !subMid.Before(subChargeStart) && subMid.Before(bufferStart) {
+				if !subChargeStart.IsZero() && !subMid.Before(subChargeStart) && subMid.Before(vppBufferStart) {
 					inPreVPPCharging = true
 					subVPP = nextVPP
 				}
@@ -615,6 +623,7 @@ func (c *Controller) SimulateState(
 			AvgHomeLoadImprovedKWH:  improvedProfile.AvgHomeLoadKWH,
 			PredictedSolarKWH:       predictedAvgSolarKWH,
 			BatteryKWH:              simEnergyKWH,
+			StartBatteryKWH:         startBatteryKWH,
 			BatteryCapacityKWH:      capacityKWH,
 			CapacityThresholdKWH:    capacityThresholdKWH,
 			BatteryReserveKWH:       minKWH,
@@ -630,7 +639,7 @@ func (c *Controller) SimulateState(
 			HitAboveDeficitAt:       simAboveDeficitAt,
 			Price:                   price,
 			StartedVPPChargingAt:    startedVPPChargingAt,
-			VPPBlackoutAt:           simBlackoutAt,
+			VPPStandbyAt:            simBlackoutAt,
 			VPPEndAt:                simVPPEndAt,
 		})
 		simTime = simTime.Add(1 * time.Hour).Truncate(time.Hour)

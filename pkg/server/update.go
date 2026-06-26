@@ -519,10 +519,14 @@ func (s *Server) mergeUtilityVPPEvents(ctx context.Context, status types.SystemS
 			if contains {
 				if !inEvent {
 					inEvent = true
-					eventStart = period.Start
+					// h represents the hour boundary. This assumes that the VPP event
+					// starts on the 0th minute, which is all we support right now.
+					eventStart = h
 				}
 			} else if inEvent {
-				eventEnd := period.End
+				// h represents the hour boundary. This assumes that the VPP event
+				// starts on the 0th minute, which is all we support right now.
+				eventEnd := h
 
 				if !eventStart.Before(nowTime) && !eventStart.After(limitTime) {
 					candidate := types.VPPEvent{

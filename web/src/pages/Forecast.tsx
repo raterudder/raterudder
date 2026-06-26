@@ -13,6 +13,7 @@ import {
     Tooltip,
     ReferenceLine,
     Line,
+    ReferenceArea,
 } from 'recharts';
 import './Forecast.css';
 
@@ -93,6 +94,39 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs }: { dat
         }
         return closest;
     }, [data, showCurrentTime, nowMs]);
+
+    const vppTicks = React.useMemo(() => {
+        if (config.dataKey !== 'batterySOCIfUsed') return null;
+
+        const isZeroTime = (ts: string | undefined | null) => {
+            if (!ts) return true;
+            const date = new Date(ts);
+            return isNaN(date.getTime()) || date.getFullYear() <= 1;
+        };
+
+        let startIdx = -1;
+        let endIdx = -1;
+        for (let i = 0; i < data.length; i++) {
+            const start = data[i].vppStandbyAt;
+            const end = data[i].vppEndAt;
+            if (start && !isZeroTime(start)) {
+                if (startIdx === -1) {
+                    startIdx = i;
+                }
+            }
+            if (end && !isZeroTime(end)) {
+                endIdx = i;
+            }
+        }
+        if (startIdx !== -1 && endIdx !== -1) {
+            const endHourIdx = Math.min(endIdx + 1, data.length - 1);
+            return {
+                start: data[startIdx].ts,
+                end: data[endHourIdx].ts
+            };
+        }
+        return null;
+    }, [data, config.dataKey]);
 
     return (
         <div className="chart-card">
@@ -200,6 +234,34 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs }: { dat
                             }}
                         />
                     )}
+                    {vppTicks && (
+                        <ReferenceArea
+                            x1={vppTicks.start}
+                            x2={vppTicks.end}
+                            fill="rgba(59, 130, 246, 0.08)"
+                            label={{
+                                value: 'VPP Event',
+                                position: 'insideTopLeft',
+                                fill: '#3b82f6',
+                                fontSize: 10,
+                                fontWeight: 'bold',
+                            }}
+                        />
+                    )}
+                    {vppTicks && (
+                        <ReferenceLine
+                            x={vppTicks.start}
+                            stroke="#3b82f6"
+                            strokeDasharray="3 3"
+                        />
+                    )}
+                    {vppTicks && (
+                        <ReferenceLine
+                            x={vppTicks.end}
+                            stroke="#3b82f6"
+                            strokeDasharray="3 3"
+                        />
+                    )}
                 </AreaChart>
             </ResponsiveContainer>
         </div>
@@ -270,6 +332,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     gridChargeDollarsPerKWH: price ? price.dollarsPerKWH + (price.gridUseDollarsPerKWH || 0) : 0,
                     netLoadSolarKWH: -h.solarKWH,
                     solarOppDollarsPerKWH: 0,
+                    isHistory: true,
                 };
             });
 
@@ -277,33 +340,57 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
         }
 
         // Pre-process data
-        return modelingData.map((h: any) => ({
-            ...h,
-            batterySOCIfUsed: (h.batteryKWH / h.batteryCapacityKWH) * 100,
-            batteryReserveSOC: (h.batteryReserveKWH / h.batteryCapacityKWH) * 100,
-            // Avoid division by zero
-            rawSolarKWH: h.todaySolarTrend > 0.001
-                ? h.predictedSolarKWH / h.todaySolarTrend
-                : 0,
-            solarTrendRatio: h.todaySolarTrend > 0 && h.todaySolarTrend !== 1.0
-                ? h.todaySolarTrend
-                : 0,
-            avgHomeLoadKWH: Math.floor((h.avgHomeLoadKWH || 0) * 10) / 10,
-            avgHomeLoadImprovedKWH: Math.floor((h.avgHomeLoadImprovedKWH || 0) * 10) / 10,
-        }));
+        return modelingData.map((h: any, idx: number) => {
+            const prevH = idx > 0 ? modelingData[idx - 1] : null;
+            const predictedSolarKWH = prevH ? prevH.predictedSolarKWH : 0;
+            const avgHomeLoadKWH = prevH ? prevH.avgHomeLoadKWH : 0;
+            const avgHomeLoadImprovedKWH = prevH ? prevH.avgHomeLoadImprovedKWH : 0;
+            const todaySolarTrend = prevH ? prevH.todaySolarTrend : 1.0;
+
+            let displayBatteryKWH = h.batteryKWH;
+            if (!h.isHistory) {
+                displayBatteryKWH = h.startBatteryKWH !== undefined ? h.startBatteryKWH : h.batteryKWH;
+            }
+            return {
+                ...h,
+                batterySOCIfUsed: (displayBatteryKWH / h.batteryCapacityKWH) * 100,
+                batteryReserveSOC: (h.batteryReserveKWH / h.batteryCapacityKWH) * 100,
+                predictedSolarKWH,
+                // Avoid division by zero
+                rawSolarKWH: todaySolarTrend > 0.001
+                    ? predictedSolarKWH / todaySolarTrend
+                    : 0,
+                solarTrendRatio: todaySolarTrend > 0 && todaySolarTrend !== 1.0
+                    ? todaySolarTrend
+                    : 0,
+                avgHomeLoadKWH: Math.floor((avgHomeLoadKWH || 0) * 10) / 10,
+                avgHomeLoadImprovedKWH: Math.floor((avgHomeLoadImprovedKWH || 0) * 10) / 10,
+            };
+        });
     }, [rawModelingData, includeHistory]);
 
     const todayStr = useMemo(() => new Date(nowMs).toDateString(), [nowMs]);
 
-    const todaySolar1h = useMemo(() => {
+    const shiftedSolar1hForecast = useMemo(() => {
         if (!rawModelingData?.solar1hForecast) return [];
-        return rawModelingData.solar1hForecast.filter((h: any) => new Date(h.tsHourStart).toDateString() === todayStr);
-    }, [rawModelingData, todayStr]);
+        const forecast = rawModelingData.solar1hForecast;
+        return forecast.map((h: any, idx: number) => {
+            const prevH = idx > 0 ? forecast[idx - 1] : null;
+            return {
+                ...h,
+                unclippedSolarGeneration: prevH ? prevH.unclippedSolarGeneration : 0,
+                improvedSolarGeneration: prevH ? prevH.improvedSolarGeneration : 0,
+            };
+        });
+    }, [rawModelingData?.solar1hForecast]);
+
+    const todaySolar1h = useMemo(() => {
+        return shiftedSolar1hForecast.filter((h: any) => new Date(h.tsHourStart).toDateString() === todayStr);
+    }, [shiftedSolar1hForecast, todayStr]);
 
     const tomorrowSolar1h = useMemo(() => {
-        if (!rawModelingData?.solar1hForecast) return [];
-        return rawModelingData.solar1hForecast.filter((h: any) => new Date(h.tsHourStart).toDateString() !== todayStr);
-    }, [rawModelingData, todayStr]);
+        return shiftedSolar1hForecast.filter((h: any) => new Date(h.tsHourStart).toDateString() !== todayStr);
+    }, [shiftedSolar1hForecast, todayStr]);
 
     if (loading) return (
         <div className="loading-screen">

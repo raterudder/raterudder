@@ -19,14 +19,14 @@ import (
 var historyFS embed.FS
 
 var fileBaselines = map[string]float64{
-	"site1_march.json":    -4.815,
-	"site1_may.json":      -15.745,
-	"site2_april.json":    1.438,
-	"site2_march.json":    8.950,
-	"site2_may.json":      0.640,
-	"site3_march.json":    -1.863,
+	"site1_march.json":    -4.867,
+	"site1_may.json":      -15.767,
+	"site2_april.json":    1.431,
+	"site2_march.json":    8.932,
+	"site2_may.json":      0.630,
+	"site3_march.json":    -1.870,
 	"site3_may.json":      -6.417,
-	"site4_late-may.json": 0.448,
+	"site4_late-may.json": 0.299,
 	"site4_may.json":      3.057,
 }
 
@@ -117,8 +117,14 @@ func TestDecideHistory(t *testing.T) {
 			require.NoError(t, err)
 
 			// Load boundaries directly from the JSON dataset
-			simStart := dataset.SimStart.In(loc)
-			simEnd := dataset.SimEnd.In(loc)
+			fileLoc := loc
+			if dataset.SiteID == "site5" {
+				var err error
+				fileLoc, err = time.LoadLocation("America/New_York")
+				require.NoError(t, err)
+			}
+			simStart := dataset.SimStart.In(fileLoc)
+			simEnd := dataset.SimEnd.In(fileLoc)
 
 			// Find initial state from first action in the range
 			var initialSOC float64 = 50.0
@@ -129,7 +135,7 @@ func TestDecideHistory(t *testing.T) {
 			var firstActionTime time.Time
 
 			for _, action := range dataset.ActionHistory {
-				tsLocal := action.Timestamp.In(loc)
+				tsLocal := action.Timestamp.In(fileLoc)
 				if !tsLocal.Before(simStart) && tsLocal.Before(simEnd) {
 					initialSOC = action.SystemStatus.BatterySOC
 					if action.SystemStatus.BatteryCapacityKWH > 0 {
@@ -152,7 +158,7 @@ func TestDecideHistory(t *testing.T) {
 			}
 
 			// Adjust simStart to the hour of the first action to align the evaluation window
-			simStart = firstActionTime.In(loc).Truncate(time.Hour)
+			simStart = firstActionTime.In(fileLoc).Truncate(time.Hour)
 
 			// Instantiate default settings
 			settings := types.Settings{}
@@ -160,7 +166,12 @@ func TestDecideHistory(t *testing.T) {
 			require.NoError(t, err)
 
 			// Site-specific settings overrides
-			settings.Location = &types.SiteLocation{TimeZone: "America/Chicago"}
+			if dataset.SiteID == "site5" {
+				settings.Location = &types.SiteLocation{TimeZone: "America/New_York"}
+				settings.UtilityRateOptions.VPPProgram = "ess-passive"
+			} else {
+				settings.Location = &types.SiteLocation{TimeZone: "America/Chicago"}
+			}
 			settings.GridChargeBatteries = true
 			settings.GridExportSolar = true
 
@@ -176,7 +187,7 @@ func TestDecideHistory(t *testing.T) {
 			// Filter actions that fall within the simulation range
 			var activeActions []types.Action
 			for _, a := range dataset.ActionHistory {
-				tsLocal := a.Timestamp.In(loc)
+				tsLocal := a.Timestamp.In(fileLoc)
 				if !tsLocal.Before(simStart) && tsLocal.Before(simEnd) {
 					activeActions = append(activeActions, a)
 				}
@@ -226,7 +237,7 @@ func TestDecideHistory(t *testing.T) {
 				var mockHistory []types.EnergyStats
 				for k := 0; k < 24; k++ {
 					tFuture := tCurrent.Truncate(time.Hour).Add(time.Duration(k) * time.Hour)
-					stat, _ := findEnergyStats(dataset.EnergyHistory, tFuture, loc)
+					stat, _ := findEnergyStats(dataset.EnergyHistory, tFuture, fileLoc)
 					mockHistory = append(mockHistory, types.EnergyStats{
 						TSHourStart:   tFuture,
 						HomeKWH:       stat.HomeKWH,
@@ -242,7 +253,7 @@ func TestDecideHistory(t *testing.T) {
 				var lastSolarTime time.Time
 				for k := 0; k < 24; k++ {
 					tFuture := tCurrent.Truncate(time.Hour).Add(time.Duration(k) * time.Hour)
-					stat, _ := findEnergyStats(dataset.EnergyHistory, tFuture, loc)
+					stat, _ := findEnergyStats(dataset.EnergyHistory, tFuture, fileLoc)
 					if stat.SolarKWH > 0.05 {
 						if firstSolarTime.IsZero() {
 							firstSolarTime = tFuture
@@ -265,8 +276,8 @@ func TestDecideHistory(t *testing.T) {
 
 				mockWeather := []types.Weather{
 					{
-						TSDayStart:    tCurrent.In(loc).Truncate(24 * time.Hour),
-						TimeLocation:  "America/Chicago",
+						TSDayStart:    tCurrent.In(fileLoc).Truncate(24 * time.Hour),
+						TimeLocation:  settings.Location.TimeZone,
 						TSSunrise:     firstSolarTime,
 						TSSunset:      lastSolarTime,
 						ForecastHours: forecastHours,
@@ -288,6 +299,25 @@ func TestDecideHistory(t *testing.T) {
 
 				// enable for debugging
 				if false {
+					if dataset.SiteID == "site5" {
+						var futPriceStr string
+						if decision.Action.FuturePrice != nil {
+							futPriceStr = fmt.Sprintf("$%.3f", decision.Action.FuturePrice.DollarsPerKWH+decision.Action.FuturePrice.GridUseDollarsPerKWH)
+						} else {
+							futPriceStr = "none"
+						}
+						t.Logf("[%s] SOC: %.2f%% | Sim Mode: %s (%s) vs Base Mode: %s (%s) | Price: $%.3f/kWh | FutPrice: %s | Description: %s",
+							tCurrent.In(fileLoc).Format("06-02 15:04"),
+							simSOC,
+							drModeString(decision.Action.BatteryMode),
+							decision.Action.Reason,
+							drModeString(action.BatteryMode),
+							action.Reason,
+							currentPrice.DollarsPerKWH+currentPrice.GridUseDollarsPerKWH,
+							futPriceStr,
+							decision.Action.Description,
+						)
+					}
 					if (tCurrent.Day() == 27 && tCurrent.Hour() == 6) || (tCurrent.Day() == 28 && (tCurrent.Hour() == 1 || tCurrent.Hour() == 2)) {
 						simData, _ := c.SimulateState(ctx, tCurrent, simStatus, currentPrice, futurePrices, mockHistory, mockWeather, settings)
 						summary := c.analyzeSimulation(ctx, tCurrent, currentPrice, settings, simData)
@@ -484,7 +514,7 @@ func TestDecideHistory(t *testing.T) {
 
 				for h := 0; h < hourSteps; h++ {
 					tHour := simStart.Add(time.Duration(h) * time.Hour)
-					stat, _ := findEnergyStats(dataset.EnergyHistory, tHour, loc)
+					stat, _ := findEnergyStats(dataset.EnergyHistory, tHour, fileLoc)
 					pMin, okHour := findPrice(dataset.PriceHistory, tHour)
 
 					var gridImportPrice float64

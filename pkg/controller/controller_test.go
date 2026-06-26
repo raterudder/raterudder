@@ -5998,6 +5998,80 @@ func TestEvaluateFallback(t *testing.T) {
 			assert.Equal(t, types.ActionReasonDischargeAtPeak, decision.Reason)
 		}
 	})
+
+	t.Run("Decide - VPP Prep Charge Now wins over future deficit after VPP", func(t *testing.T) {
+		status := baseStatus
+		status.BatterySOC = 50.0
+		status.BatteryCapacityKWH = 10.0
+		status.MaxBatteryChargeKW = 5.0
+		status.HomeKW = 1.0
+
+		// VPP event at hour 3
+		vppStart := now.Add(4 * time.Hour)
+		vppEnd := now.Add(6 * time.Hour)
+		status.VPPEvents = []types.VPPEvent{
+			{
+				TSStart: vppStart,
+				TSEnd:   vppEnd,
+				VPPSoc:  20.0,
+			},
+		}
+
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05}
+		futurePrices := []types.Price{
+			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.10},
+			// Hour 2 is the VPP pre-charge start hour (VPP starts at hour 4, prep-charge starts 2h before)
+			{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(3 * time.Hour), DollarsPerKWH: 0.15},
+			{TSStart: now.Add(3 * time.Hour), TSEnd: now.Add(4 * time.Hour), DollarsPerKWH: 0.15},
+			{TSStart: now.Add(4 * time.Hour), TSEnd: now.Add(5 * time.Hour), DollarsPerKWH: 0.15},
+			{TSStart: now.Add(5 * time.Hour), TSEnd: now.Add(6 * time.Hour), DollarsPerKWH: 0.15},
+			// Deficit hour after VPP
+			{TSStart: now.Add(6 * time.Hour), TSEnd: now.Add(7 * time.Hour), DollarsPerKWH: 0.20},
+		}
+
+		// Local history
+		localHistory := []types.EnergyStats{}
+		decision, err := c.Decide(ctx, status, currentPrice, futurePrices, localHistory, nil, baseSettings)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonVPPPrep, decision.Action.Reason)
+	})
+
+	t.Run("Decide - VPP Prep Charge Future Plan", func(t *testing.T) {
+		status := baseStatus
+		status.BatterySOC = 50.0
+		status.BatteryCapacityKWH = 10.0
+		status.MaxBatteryChargeKW = 5.0
+		status.HomeKW = 1.0
+
+		// VPP event at hour 5
+		vppStart := now.Add(5 * time.Hour)
+		vppEnd := now.Add(7 * time.Hour)
+		status.VPPEvents = []types.VPPEvent{
+			{
+				TSStart: vppStart,
+				TSEnd:   vppEnd,
+				VPPSoc:  20.0,
+			},
+		}
+
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.12}
+		futurePrices := []types.Price{
+			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.05},
+			{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(3 * time.Hour), DollarsPerKWH: 0.10},
+			{TSStart: now.Add(3 * time.Hour), TSEnd: now.Add(4 * time.Hour), DollarsPerKWH: 0.15}, // forced pre-charging starts in Hour 13 (Hour 3)
+			{TSStart: now.Add(4 * time.Hour), TSEnd: now.Add(5 * time.Hour), DollarsPerKWH: 0.15},
+			{TSStart: now.Add(5 * time.Hour), TSEnd: now.Add(6 * time.Hour), DollarsPerKWH: 0.15},
+			{TSStart: now.Add(6 * time.Hour), TSEnd: now.Add(7 * time.Hour), DollarsPerKWH: 0.15},
+		}
+
+		// Local history
+		localHistory := []types.EnergyStats{}
+		decision, err := c.Decide(ctx, status, currentPrice, futurePrices, localHistory, nil, baseSettings)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonSufficientBatteryTillCharge, decision.Action.Reason)
+	})
 }
 
 func TestFindCheapestPlan(t *testing.T) {
@@ -6110,5 +6184,213 @@ func TestCheckPeakSurvival(t *testing.T) {
 	t.Run("Empty sim data -> Load", func(t *testing.T) {
 		mustStandby, _, _, _ := c.checkPeakSurvival([]SimHour{}, time.Time{}, gridChargeNowCost, now, settings.PeakSurvivalBufferMinutes)
 		assert.False(t, mustStandby)
+	})
+}
+
+func TestEvaluateVPPEvent(t *testing.T) {
+	c := NewController()
+	ctx := context.Background()
+
+	baseSettings := types.Settings{
+		MinBatterySOC:                          20.0,
+		GridChargeBatteries:                    true,
+		MinDeficitPriceDifferenceDollarsPerKWH: 0.01,
+	}
+
+	now := time.Date(2026, 5, 20, 10, 0, 0, 0, time.UTC)
+	baseStatus := types.SystemStatus{
+		Timestamp:          now,
+		BatterySOC:         50.0,
+		BatteryCapacityKWH: 10.0,
+		MaxBatteryChargeKW: 5.0,
+		HomeKW:             1.0,
+		BatteryAboveMinSOC: true,
+	}
+
+	// Create dummy history for 1kW load constant
+	history := []types.EnergyStats{}
+	ts := now.Add(-24 * time.Hour)
+	for i := 0; i < 48; i++ {
+		history = append(history, types.EnergyStats{
+			TSHourStart:    ts,
+			GridImportKWH:  1.0,
+			SolarKWH:       0.0,
+			BatteryUsedKWH: 0.0,
+			HomeKWH:        1.0,
+		})
+		ts = ts.Add(1 * time.Hour)
+	}
+
+	t.Run("No upcoming VPP event -> returns nil", func(t *testing.T) {
+		summary := simulationSummary{}
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.10},
+		}
+		eval := c.evaluateVPPEvent(ctx, now, baseStatus, types.Price{}, baseSettings, simData, summary)
+		assert.Nil(t, eval)
+	})
+
+	t.Run("Forced pre-charging is cheaper now than future -> charge now", func(t *testing.T) {
+		summary := simulationSummary{
+			SoonestVPPChargingAt: now.Add(2 * time.Hour),
+		}
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.05, Price: types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05}},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.10, Price: types.Price{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.10}},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.15, Price: types.Price{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(3 * time.Hour), DollarsPerKWH: 0.15}},
+		}
+
+		eval := c.evaluateVPPEvent(ctx, now, baseStatus, types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05}, baseSettings, simData, summary)
+		if assert.NotNil(t, eval) {
+			if assert.NotNil(t, eval.Decision) {
+				assert.Equal(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode)
+				assert.Equal(t, types.ActionReasonVPPPrep, eval.Decision.Reason)
+			}
+			assert.InDelta(t, 0.48, eval.BenefitDollars, 0.001)
+		}
+	})
+
+	t.Run("Future hour is cheaper -> plan future charge", func(t *testing.T) {
+		summary := simulationSummary{
+			SoonestVPPChargingAt: now.Add(2 * time.Hour),
+		}
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.10, Price: types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.05, Price: types.Price{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.05}},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.15, Price: types.Price{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(3 * time.Hour), DollarsPerKWH: 0.15}},
+		}
+
+		eval := c.evaluateVPPEvent(ctx, now, baseStatus, types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}, baseSettings, simData, summary)
+		if assert.NotNil(t, eval) {
+			assert.Nil(t, eval.Decision)
+			if assert.NotNil(t, eval.Plan) {
+				assert.Equal(t, now.Add(time.Hour), eval.Plan.ChargeTime)
+				assert.Equal(t, 0.05, eval.Plan.ChargeCost)
+			}
+			assert.InDelta(t, 0.48, eval.BenefitDollars, 0.001)
+		}
+	})
+
+	t.Run("Solar fills battery before VPP -> returns nil", func(t *testing.T) {
+		summary := simulationSummary{
+			SoonestVPPChargingAt: now.Add(2 * time.Hour),
+		}
+		simData := []SimHour{
+			{
+				TS:                      now,
+				GridChargeDollarsPerKWH: 0.10,
+				NetLoadSolarKWH:         -6.0,
+				ClampedNetLoadSolarKWH:  -6.0,
+				HitSolarCapacityAt:      now.Add(30 * time.Minute),
+			},
+			{
+				TS:                      now.Add(time.Hour),
+				GridChargeDollarsPerKWH: 0.10,
+				NetLoadSolarKWH:         0.0,
+			},
+			{
+				TS:                      now.Add(2 * time.Hour),
+				GridChargeDollarsPerKWH: 0.15,
+			},
+		}
+
+		eval := c.evaluateVPPEvent(ctx, now, baseStatus, types.Price{TSStart: now, DollarsPerKWH: 0.10}, baseSettings, simData, summary)
+		assert.Nil(t, eval)
+	})
+
+	t.Run("Price is cheaper during VPP prep charging -> returns nil", func(t *testing.T) {
+		summary := simulationSummary{
+			SoonestVPPChargingAt: now.Add(2 * time.Hour),
+		}
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.10, Price: types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.10, Price: types.Price{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.10}},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.05, Price: types.Price{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(3 * time.Hour), DollarsPerKWH: 0.05}},
+		}
+
+		eval := c.evaluateVPPEvent(ctx, now, baseStatus, types.Price{TSStart: now, DollarsPerKWH: 0.10}, baseSettings, simData, summary)
+		assert.Nil(t, eval)
+	})
+
+	t.Run("Price is barely different -> returns nil", func(t *testing.T) {
+		summary := simulationSummary{
+			SoonestVPPChargingAt: now.Add(2 * time.Hour),
+		}
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.095, Price: types.Price{TSStart: now, DollarsPerKWH: 0.095}},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.10, Price: types.Price{TSStart: now.Add(time.Hour), DollarsPerKWH: 0.10}},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.10, Price: types.Price{TSStart: now.Add(2 * time.Hour), DollarsPerKWH: 0.10}},
+		}
+
+		settingsWithArbitrage := baseSettings
+		settingsWithArbitrage.MinArbitrageDifferenceDollarsPerKWH = 0.01
+
+		eval := c.evaluateVPPEvent(ctx, now, baseStatus, types.Price{TSStart: now, DollarsPerKWH: 0.095}, settingsWithArbitrage, simData, summary)
+		assert.Nil(t, eval)
+	})
+
+	t.Run("Need very small charge and battery almost full -> should not charge now", func(t *testing.T) {
+		summary := simulationSummary{
+			SoonestVPPChargingAt: now.Add(2 * time.Hour),
+		}
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.05, Price: types.Price{TSStart: now, DollarsPerKWH: 0.05}},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.10, Price: types.Price{TSStart: now.Add(time.Hour), DollarsPerKWH: 0.10}},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.15, Price: types.Price{TSStart: now.Add(2 * time.Hour), DollarsPerKWH: 0.15}},
+		}
+
+		almostFullStatus := baseStatus
+		almostFullStatus.BatterySOC = 99.0 // Only needs 0.1 kWh to be full
+		almostFullStatus.BatteryKW = 0.0   // Not currently charging
+
+		eval := c.evaluateVPPEvent(ctx, now, almostFullStatus, types.Price{TSStart: now, DollarsPerKWH: 0.05}, baseSettings, simData, summary)
+		assert.Nil(t, eval)
+	})
+
+	t.Run("Already charging and same price later -> keep charging now", func(t *testing.T) {
+		summary := simulationSummary{
+			SoonestVPPChargingAt: now.Add(2 * time.Hour),
+		}
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.05, Price: types.Price{TSStart: now, DollarsPerKWH: 0.05}},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.05, Price: types.Price{TSStart: now.Add(time.Hour), DollarsPerKWH: 0.05}},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.15, Price: types.Price{TSStart: now.Add(2 * time.Hour), DollarsPerKWH: 0.15}},
+		}
+
+		chargingStatus := baseStatus
+		chargingStatus.BatteryKW = -2.0 // Active charging
+		chargingStatus.GridKW = 3.0
+
+		eval := c.evaluateVPPEvent(ctx, now, chargingStatus, types.Price{TSStart: now, DollarsPerKWH: 0.05}, baseSettings, simData, summary)
+		if assert.NotNil(t, eval) {
+			if assert.NotNil(t, eval.Decision) {
+				assert.Equal(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode)
+				assert.Equal(t, types.ActionReasonVPPPrep, eval.Decision.Reason)
+			}
+		}
+	})
+
+	t.Run("Already charging but cheaper later -> delay charging till later", func(t *testing.T) {
+		summary := simulationSummary{
+			SoonestVPPChargingAt: now.Add(2 * time.Hour),
+		}
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.10, Price: types.Price{TSStart: now, DollarsPerKWH: 0.10}},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.05, Price: types.Price{TSStart: now.Add(time.Hour), DollarsPerKWH: 0.05}},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.15, Price: types.Price{TSStart: now.Add(2 * time.Hour), DollarsPerKWH: 0.15}},
+		}
+
+		chargingStatus := baseStatus
+		chargingStatus.BatteryKW = -2.0 // Active charging
+		chargingStatus.GridKW = 3.0
+
+		eval := c.evaluateVPPEvent(ctx, now, chargingStatus, types.Price{TSStart: now, DollarsPerKWH: 0.10}, baseSettings, simData, summary)
+		if assert.NotNil(t, eval) {
+			assert.Nil(t, eval.Decision)
+			if assert.NotNil(t, eval.Plan) {
+				assert.Equal(t, now.Add(time.Hour), eval.Plan.ChargeTime)
+				assert.Equal(t, 0.05, eval.Plan.ChargeCost)
+			}
+		}
 	})
 }

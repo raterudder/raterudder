@@ -45,4 +45,35 @@ describe('ActionTimeline', () => {
         expect(screen.getByText('(5x)')).toBeInTheDocument();
         expect(screen.getByText(/battery has enough stored energy/)).toBeInTheDocument();
     });
+
+    it('renders VPP Prep action items correctly', () => {
+        const actions: Action[] = [{
+            timestamp: new Date().toISOString(),
+            batteryMode: BatteryMode.ChargeAny,
+            solarMode: SolarMode.NoExport,
+            reason: ActionReason.VPPPrep,
+            description: 'Upcoming VPP Event prep charging'
+        }];
+        const { container } = render(<ActionTimeline groupedActions={actions} />);
+        expect(screen.getByText('VPP Pre-Charging')).toBeInTheDocument();
+        expect(screen.getByText(/Virtual Power Plant/)).toBeInTheDocument();
+        const li = container.querySelector('li');
+        expect(li).toHaveClass('mode-charge_any');
+    });
+
+    it('renders VPP Active action items correctly', () => {
+        const actions: Action[] = [{
+            timestamp: new Date().toISOString(),
+            batteryMode: BatteryMode.Standby,
+            solarMode: SolarMode.NoExport,
+            reason: ActionReason.VPPActive,
+            description: 'Active VPP Event'
+        }];
+        const { container } = render(<ActionTimeline groupedActions={actions} />);
+        expect(screen.getByText('VPP Event Active')).toBeInTheDocument();
+        expect(screen.getByText(/Virtual Power Plant/)).toBeInTheDocument();
+        const li = container.querySelector('li');
+        expect(li).toHaveClass('mode-vpp');
+    });
 });
+

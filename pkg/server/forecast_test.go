@@ -25,6 +25,7 @@ func TestHandleForecast(t *testing.T) {
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: now}, nil)
 		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil)
 
 		mockS := &mockStorage{}
 		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil)
@@ -186,6 +187,7 @@ func TestHandleForecast(t *testing.T) {
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: now}, nil)
 		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil)
 
 		mockS := &mockStorage{}
 		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil)
@@ -244,6 +246,7 @@ func TestHandleForecast(t *testing.T) {
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: now}, nil)
 		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil)
 
 		pastHour1 := now.Add(-1 * time.Hour)
 		pastHour2 := now.Add(-2 * time.Hour)
@@ -340,5 +343,85 @@ func TestHandleForecast(t *testing.T) {
 				assert.Equal(t, 60.0, eh.AvgBatterySOC) // (50+70)/2
 			}
 		}
+	})
+
+	t.Run("Applies Utility VPP Events", func(t *testing.T) {
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: now}, nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{}, nil)
+
+		vppInfo := types.UtilityVPPInfo{
+			Mandatory: []types.UtilityVPPPeriod{
+				{
+					UtilityPeriod: types.UtilityPeriod{
+						Start: now.Add(2 * time.Hour),
+						End:   now.Add(5 * time.Hour),
+					},
+					ReserveSOC: 20.0,
+				},
+			},
+		}
+		mockU.On("GetVPPInfo", mock.Anything).Return(vppInfo, nil)
+
+		mockS := &mockStorage{}
+		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil)
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			MinBatterySOC:   5.0,
+			UtilityProvider: "test",
+			ESS:             "mock",
+		}, types.CurrentSettingsVersion, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil)
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{
+			BatterySOC:         50,
+			BatteryCapacityKWH: 10.0,
+			Timestamp:          now,
+		}, nil)
+
+		mockP := ess.NewMap()
+		mockP.SetSystem(types.SiteIDNone, mockES)
+
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			controller: controller.NewController(),
+			bypassAuth: true,
+			nowFunc:    func() time.Time { return now },
+		}
+
+		req := httptest.NewRequest("GET", "/api/forecast", nil)
+		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
+		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv.handleForecast(w, req)
+
+		resp := w.Result()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var data ForecastRes
+		err := json.NewDecoder(resp.Body).Decode(&data)
+		require.NoError(t, err)
+
+		mockU.AssertCalled(t, "GetVPPInfo", mock.Anything)
+
+		var vppEventReflected bool
+		for _, simHour := range data.Simulation {
+			if simHour.TS.Equal(now.Add(2*time.Hour)) || simHour.TS.Equal(now.Add(3*time.Hour)) || simHour.TS.Equal(now.Add(4*time.Hour)) {
+				assert.Equal(t, now.Add(5*time.Hour), simHour.VPPEndAt)
+				vppEventReflected = true
+			}
+		}
+		assert.True(t, vppEventReflected, "Expected simulation to reflect the VPP event")
 	})
 }

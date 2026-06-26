@@ -1714,97 +1714,108 @@ const Settings = ({ siteID, settings: parentSettings, onSettingsSaved, sites = [
                             </Field.Root>
                         </div>
 
-                        <div className="section-header">
-                            <h3>Advanced Solar Settings</h3>
-                        </div>
-                        <div className="grid-strategy-grid">
-                            <Field.Root className="form-group">
-                                <Field.Label htmlFor="solarTrendRatioMax">Solar Trend Ratio Max</Field.Label>
-                                <Input
-                                    id="solarTrendRatioMax"
-                                    type="number"
-                                    step="0.1"
-                                    min="1"
-                                    value={settings.solarTrendRatioMax}
-                                    onChange={(e) => handleChange('solarTrendRatioMax', parseFloat(e.target.value))}
-                                />
-                                <Field.Description>Maximum ratio for solar trend adjustment. Higher values allow more aggressive upward solar predictions.</Field.Description>
-                            </Field.Root>
-                            <Field.Root className="form-group">
-                                <Field.Label htmlFor="solarBellCurveMultiplier">Solar Bell Curve Multiplier</Field.Label>
-                                <Input
-                                    id="solarBellCurveMultiplier"
-                                    type="number"
-                                    step="0.1"
-                                    min="0"
-                                    max="1"
-                                    value={settings.solarBellCurveMultiplier}
-                                    onChange={(e) => handleChange('solarBellCurveMultiplier', parseFloat(e.target.value))}
-                                />
-                                <Field.Description>Multiplier for bell curve solar smoothing. 0 disables smoothing entirely</Field.Description>
-                            </Field.Root>
+                        {!(settings.postalCode?.trim() && settings.gridExportSolar) && (
+                            <>
+                                <div className="section-header">
+                                    <h3>Advanced Solar Settings</h3>
+                                </div>
+                                <div className="grid-strategy-grid">
+                                    {!settings.postalCode?.trim() && (
+                                        <>
+                                            <Field.Root className="form-group">
+                                                <Field.Label htmlFor="solarTrendRatioMax">Solar Trend Ratio Max</Field.Label>
+                                                <Input
+                                                    id="solarTrendRatioMax"
+                                                    type="number"
+                                                    step="0.1"
+                                                    min="1"
+                                                    value={settings.solarTrendRatioMax}
+                                                    onChange={(e) => handleChange('solarTrendRatioMax', parseFloat(e.target.value))}
+                                                />
+                                                <Field.Description>Maximum ratio for solar trend adjustment. Higher values allow more aggressive upward solar predictions.</Field.Description>
+                                            </Field.Root>
+                                            <Field.Root className="form-group">
+                                                <Field.Label htmlFor="solarBellCurveMultiplier">Solar Bell Curve Multiplier</Field.Label>
+                                                <Input
+                                                    id="solarBellCurveMultiplier"
+                                                    type="number"
+                                                    step="0.1"
+                                                    min="0"
+                                                    max="1"
+                                                    value={settings.solarBellCurveMultiplier}
+                                                    onChange={(e) => handleChange('solarBellCurveMultiplier', parseFloat(e.target.value))}
+                                                />
+                                                <Field.Description>Multiplier for bell curve solar smoothing. 0 disables smoothing entirely</Field.Description>
+                                            </Field.Root>
+                                        </>
+                                    )}
 
-                            <Field.Root className="form-group">
-                                <Field.Label htmlFor="solarFullyChargeHeadroomBatterySOC">Solar Fully Charge Headroom (%)</Field.Label>
-                                <Input
-                                    id="solarFullyChargeHeadroomBatterySOC"
-                                    type="number"
-                                    step="1"
-                                    value={settings.solarFullyChargeHeadroomBatterySOC}
-                                    onChange={(e) => handleChange('solarFullyChargeHeadroomBatterySOC', parseFloat(e.target.value))}
-                                />
-                                <Field.Description>
-                                    Battery percentage to leave as headroom during solar charging when export is disabled. Negative values will remove the headroom and ignore solar curtailment.
-                                </Field.Description>
-                            </Field.Root>
+                                    {!settings.gridExportSolar && (
+                                        <Field.Root className="form-group">
+                                            <Field.Label htmlFor="solarFullyChargeHeadroomBatterySOC">Solar Fully Charge Headroom (%)</Field.Label>
+                                            <Input
+                                                id="solarFullyChargeHeadroomBatterySOC"
+                                                type="number"
+                                                step="1"
+                                                value={settings.solarFullyChargeHeadroomBatterySOC}
+                                                onChange={(e) => handleChange('solarFullyChargeHeadroomBatterySOC', parseFloat(e.target.value))}
+                                            />
+                                            <Field.Description>
+                                                Battery percentage to leave as headroom during solar charging when export is disabled. Negative values will remove the headroom and ignore solar curtailment.
+                                            </Field.Description>
+                                        </Field.Root>
+                                    )}
 
-                            {settings.utilityRateOptions?.netMeteringCredits && (
-                                <Field.Root className="form-group">
-                                    <Field.Label htmlFor="solarNetMeteringCreditsValue">Solar Net Metering Credits Value</Field.Label>
-                                    <Select.Root
-                                        value={settings.solarNetMeteringCreditsValue || ""}
-                                        onValueChange={(value) => handleChange('solarNetMeteringCreditsValue', value || '')}
-                                    >
-                                        <Select.Trigger className="select-trigger" id="solarNetMeteringCreditsValue">
-                                            <Select.Value>
-                                                {
-                                                    settings.solarNetMeteringCreditsValue === 'highest' ? 'Highest Price' :
-                                                    settings.solarNetMeteringCreditsValue === 'none' ? 'None' :
-                                                    settings.solarNetMeteringCreditsValue === 'lowest' ? 'Lowest Price' :
-                                                    'Lowest / Default'
-                                                }
-                                            </Select.Value>
-                                            <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
-                                                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                                    <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                                                </svg>
-                                            </Select.Icon>
-                                        </Select.Trigger>
-                                        <Select.Portal>
-                                            <Select.Positioner className="select-positioner">
-                                                <Select.Popup className="select-popup">
-                                                    <Select.Item className="select-item" value="">
-                                                        <Select.ItemText>Lowest / Default</Select.ItemText>
-                                                    </Select.Item>
-                                                    <Select.Item className="select-item" value="lowest">
-                                                        <Select.ItemText>Lowest Price</Select.ItemText>
-                                                    </Select.Item>
-                                                    <Select.Item className="select-item" value="highest">
-                                                        <Select.ItemText>Highest Price</Select.ItemText>
-                                                    </Select.Item>
-                                                    <Select.Item className="select-item" value="none">
-                                                        <Select.ItemText>None</Select.ItemText>
-                                                    </Select.Item>
-                                                </Select.Popup>
-                                            </Select.Positioner>
-                                        </Select.Portal>
-                                    </Select.Root>
-                                    <Field.Description>
-                                        How to value exported solar credits. "Lowest" price of the day, "Highest" price of the day, or value them as nothing.
-                                    </Field.Description>
-                                </Field.Root>
-                            )}
-                        </div>
+                                    {settings.utilityRateOptions?.netMeteringCredits && (
+                                        <Field.Root className="form-group">
+                                            <Field.Label htmlFor="solarNetMeteringCreditsValue">Solar Net Metering Credits Value</Field.Label>
+                                            <Select.Root
+                                                value={settings.solarNetMeteringCreditsValue || ""}
+                                                onValueChange={(value) => handleChange('solarNetMeteringCreditsValue', value || '')}
+                                            >
+                                                <Select.Trigger className="select-trigger" id="solarNetMeteringCreditsValue">
+                                                    <Select.Value>
+                                                        {
+                                                            settings.solarNetMeteringCreditsValue === 'highest' ? 'Highest Price' :
+                                                            settings.solarNetMeteringCreditsValue === 'none' ? 'None' :
+                                                            settings.solarNetMeteringCreditsValue === 'lowest' ? 'Lowest Price' :
+                                                            'Lowest / Default'
+                                                        }
+                                                    </Select.Value>
+                                                    <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                            <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                        </svg>
+                                                    </Select.Icon>
+                                                </Select.Trigger>
+                                                <Select.Portal>
+                                                    <Select.Positioner className="select-positioner">
+                                                        <Select.Popup className="select-popup">
+                                                            <Select.Item className="select-item" value="">
+                                                                <Select.ItemText>Lowest / Default</Select.ItemText>
+                                                            </Select.Item>
+                                                            <Select.Item className="select-item" value="lowest">
+                                                                <Select.ItemText>Lowest Price</Select.ItemText>
+                                                            </Select.Item>
+                                                            <Select.Item className="select-item" value="highest">
+                                                                <Select.ItemText>Highest Price</Select.ItemText>
+                                                            </Select.Item>
+                                                            <Select.Item className="select-item" value="none">
+                                                                <Select.ItemText>None</Select.ItemText>
+                                                            </Select.Item>
+                                                        </Select.Popup>
+                                                    </Select.Positioner>
+                                                </Select.Portal>
+                                            </Select.Root>
+                                            <Field.Description>
+                                                How to value exported solar credits. "Lowest" price of the day, "Highest" price of the day, or value them as nothing.
+                                            </Field.Description>
+                                        </Field.Root>
+                                    )}
+                                </div>
+                            </>
+                        )}
+
 
                         <div className="section-header">
                             <h3>Advanced Power History Settings</h3>

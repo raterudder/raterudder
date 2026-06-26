@@ -2011,8 +2011,11 @@ func TestMergeUtilityVPPEvents(t *testing.T) {
 			Mandatory: []types.UtilityVPPPeriod{
 				{
 					UtilityPeriod: types.UtilityPeriod{
-						Start: now.Add(2 * time.Hour),
-						End:   now.Add(5 * time.Hour),
+						Start: now.Add(-24 * time.Hour),
+						End:   now.Add(48 * time.Hour),
+						Hours: []types.UtilityHourPeriod{
+							{HourStart: 14, HourEnd: 17},
+						},
 					},
 					ReserveSOC: 20.0,
 				},

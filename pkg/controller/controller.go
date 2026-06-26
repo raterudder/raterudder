@@ -82,6 +82,9 @@ type simulationSummary struct {
 	MinFutureGridChargeCost    float64
 	MinEnergy                  float64
 	MaxEnergy                  float64
+	SoonestVPPChargingAt       time.Time
+	SoonestVPPStandbyAt        time.Time
+	SoonestVPPEndAt            time.Time
 }
 
 // Decide determines the best action to take based on current state and history.
@@ -161,7 +164,11 @@ func (c *Controller) Decide(
 		if solarMode == types.SolarModeNoExport {
 			desc += " (Export Disabled)"
 		}
-		log.Ctx(ctx).DebugContext(ctx, "price below always charge threshold", slog.Float64("price", gridChargeNowCost), slog.Float64("threshold", settings.AlwaysChargeUnderDollarsPerKWH))
+		log.Ctx(ctx).DebugContext(ctx,
+			"price below always charge threshold",
+			slog.Float64("price", gridChargeNowCost),
+			slog.Float64("threshold", settings.AlwaysChargeUnderDollarsPerKWH),
+		)
 		return Decision{
 			Action: types.Action{
 				Timestamp:    now.UTC(),
@@ -208,9 +215,10 @@ func (c *Controller) Decide(
 
 	evalDeficit := c.evaluateDeficit(ctx, now, currentStatus, currentPrice, settings, simData, summary)
 	evalExport := c.evaluateExportArbitrage(ctx, now, currentStatus, currentPrice, settings, simData, summary)
+	evalVPPEvent := c.evaluateVPPEvent(ctx, now, currentStatus, currentPrice, settings, simData, summary)
 
 	var bestImmediate *StrategyEvaluation
-	evals := []*StrategyEvaluation{evalDeficit, evalExport}
+	evals := []*StrategyEvaluation{evalDeficit, evalExport, evalVPPEvent}
 	for _, e := range evals {
 		if e != nil && e.Decision != nil {
 			if bestImmediate == nil || e.BenefitDollars > bestImmediate.BenefitDollars {
@@ -231,41 +239,48 @@ func (c *Controller) Decide(
 	if evalExport != nil && evalExport.Plan != nil {
 		exportPlanDesc = evalExport.Plan.Description
 	}
+	var vppPlanDesc string
+	if evalVPPEvent != nil && evalVPPEvent.Plan != nil {
+		vppPlanDesc = evalVPPEvent.Plan.Description
+	}
 
-	if evalDeficit != nil && evalDeficit.Plan != nil && (evalExport == nil || evalExport.Plan == nil) {
-		bestPlan = evalDeficit
-		chosenPlanType = "deficit"
-		planChoiceReason = "only deficit plan is available"
-	} else if evalExport != nil && evalExport.Plan != nil && (evalDeficit == nil || evalDeficit.Plan == nil) {
-		bestPlan = evalExport
-		chosenPlanType = "export_arbitrage"
-		planChoiceReason = "only export arbitrage plan is available"
-	} else if evalDeficit != nil && evalDeficit.Plan != nil && evalExport != nil && evalExport.Plan != nil {
-		// Both plans exist, compare them
-		deficitTime := evalDeficit.Plan.ChargeTime
-		exportTime := evalExport.Plan.ChargeTime
-		if exportTime.Before(deficitTime) {
-			bestPlan = evalExport
-			chosenPlanType = "export_arbitrage"
-			planChoiceReason = fmt.Sprintf("export arbitrage plan is earlier than deficit plan (%s vs %s)",
-				exportTime.Format("15:04"), deficitTime.Format("15:04"))
-		} else if deficitTime.Before(exportTime) {
-			bestPlan = evalDeficit
-			chosenPlanType = "deficit"
-			planChoiceReason = fmt.Sprintf("deficit plan is earlier than export arbitrage plan (%s vs %s)",
-				deficitTime.Format("15:04"), exportTime.Format("15:04"))
+	type planInfo struct {
+		eval     *StrategyEvaluation
+		planType string
+	}
+	var plans []planInfo
+	if evalDeficit != nil && evalDeficit.Plan != nil {
+		plans = append(plans, planInfo{eval: evalDeficit, planType: "deficit"})
+	}
+	if evalExport != nil && evalExport.Plan != nil {
+		plans = append(plans, planInfo{eval: evalExport, planType: "export_arbitrage"})
+	}
+	if evalVPPEvent != nil && evalVPPEvent.Plan != nil {
+		plans = append(plans, planInfo{eval: evalVPPEvent, planType: "vpp_prep"})
+	}
+
+	for _, p := range plans {
+		if bestPlan == nil {
+			bestPlan = p.eval
+			chosenPlanType = p.planType
+			planChoiceReason = fmt.Sprintf("only %s plan is available", p.planType)
+			continue
+		}
+		bestTime := bestPlan.Plan.ChargeTime
+		pTime := p.eval.Plan.ChargeTime
+		if pTime.Before(bestTime) {
+			bestPlan = p.eval
+			chosenPlanType = p.planType
+			planChoiceReason = fmt.Sprintf("%s plan is earlier than %s plan (%s vs %s)",
+				p.planType, chosenPlanType, pTime.Format("15:04"), bestTime.Format("15:04"))
+		} else if bestTime.Before(pTime) {
+			// keep current best
 		} else {
-			// Same charge time, compare benefit
-			if evalExport.BenefitDollars > evalDeficit.BenefitDollars {
-				bestPlan = evalExport
-				chosenPlanType = "export_arbitrage"
-				planChoiceReason = fmt.Sprintf("same charge time (%s), but export arbitrage has higher benefit ($%.4f vs $%.4f)",
-					exportTime.Format("15:04"), evalExport.BenefitDollars, evalDeficit.BenefitDollars)
-			} else {
-				bestPlan = evalDeficit
-				chosenPlanType = "deficit"
-				planChoiceReason = fmt.Sprintf("same charge time (%s), but deficit has higher or equal benefit ($%.4f vs $%.4f)",
-					deficitTime.Format("15:04"), evalDeficit.BenefitDollars, evalExport.BenefitDollars)
+			if p.eval.BenefitDollars > bestPlan.BenefitDollars {
+				bestPlan = p.eval
+				chosenPlanType = p.planType
+				planChoiceReason = fmt.Sprintf("same charge time (%s), but %s has higher benefit ($%.4f vs $%.4f)",
+					pTime.Format("15:04"), p.planType, p.eval.BenefitDollars, bestPlan.BenefitDollars)
 			}
 		}
 	}
@@ -288,6 +303,7 @@ func (c *Controller) Decide(
 			slog.String("description", activePlan.Description),
 			slog.String("deficitPlan", deficitPlanDesc),
 			slog.String("exportPlan", exportPlanDesc),
+			slog.String("vppPlan", vppPlanDesc),
 		)
 	} else {
 		log.Ctx(ctx).DebugContext(ctx, "evaluated planned charges",
@@ -390,6 +406,15 @@ func (c *Controller) analyzeSimulation(
 		}
 		if !slot.HitSolarCapacityAt.IsZero() && slot.HitSolarCapacityAt.After(now) && summary.HitSolarCapacityAt.IsZero() {
 			summary.HitSolarCapacityAt = slot.HitSolarCapacityAt
+		}
+		if !slot.StartedVPPChargingAt.IsZero() && slot.StartedVPPChargingAt.After(now) && summary.SoonestVPPChargingAt.IsZero() {
+			summary.SoonestVPPChargingAt = slot.StartedVPPChargingAt
+		}
+		if !slot.VPPStandbyAt.IsZero() && slot.VPPStandbyAt.After(now) && summary.SoonestVPPStandbyAt.IsZero() {
+			summary.SoonestVPPStandbyAt = slot.VPPStandbyAt
+		}
+		if !slot.VPPEndAt.IsZero() && slot.VPPEndAt.After(now) && summary.SoonestVPPEndAt.IsZero() {
+			summary.SoonestVPPEndAt = slot.VPPEndAt
 		}
 	}
 	if !summary.HitSolarCapacityAt.IsZero() && (summary.HitCapacityAt.IsZero() || summary.HitSolarCapacityAt.Before(summary.HitCapacityAt)) {
@@ -543,8 +568,8 @@ func (c *Controller) evaluateDeficit(
 	}
 
 	currentEnergyKWH := currentStatus.BatterySOC * capacityKWH / 100.0
-	canChargeNow := currentEnergyKWH+allowedHeadroom < capacityKWH && settings.GridChargeBatteries && !currentStatus.BatteryChargingDisabled
-	canChargeFuture := settings.GridChargeBatteries && !currentStatus.BatteryChargingDisabled
+	canCharge := settings.GridChargeBatteries && !currentStatus.BatteryChargingDisabled
+	canChargeNow := currentEnergyKWH+allowedHeadroom < capacityKWH && canCharge
 
 	minDeficitDiff := max(0.001, settings.MinDeficitPriceDifferenceDollarsPerKWH)
 
@@ -553,11 +578,26 @@ func (c *Controller) evaluateDeficit(
 	// filter out minor fluctuations and avoid micro-charging the battery.
 	// We fall back to HitDeficitAt (the exact reserve threshold crossing) if
 	// HitBelowDeficitAt is zero.
+	var vppCutoff time.Time
+	if !summary.SoonestVPPChargingAt.IsZero() {
+		vppCutoff = summary.SoonestVPPChargingAt
+	}
+	if !summary.SoonestVPPStandbyAt.IsZero() {
+		if vppCutoff.IsZero() || summary.SoonestVPPStandbyAt.Before(vppCutoff) {
+			vppCutoff = summary.SoonestVPPStandbyAt
+		}
+	}
+
 	hitDeficitAt := summary.HitBelowDeficitAt
 	if hitDeficitAt.IsZero() {
 		hitDeficitAt = summary.HitDeficitAt
 	}
 	if hitDeficitAt.IsZero() {
+		return nil
+	}
+
+	// If the deficit is at or after the VPP event prep charging cutoff, we cannot prevent it by charging now.
+	if !vppCutoff.IsZero() && !hitDeficitAt.Before(vppCutoff) {
 		return nil
 	}
 
@@ -574,6 +614,10 @@ func (c *Controller) evaluateDeficit(
 	for _, slot := range simData {
 		// If the battery hits capacity, any subsequent deficits cannot be prevented by charging now.
 		if !summary.HitCapacityAt.IsZero() && !slot.TS.Before(summary.HitCapacityAt) {
+			break
+		}
+		// Deficits after the VPP cutoff cannot be prevented by charging now.
+		if !vppCutoff.IsZero() && !slot.TS.Before(vppCutoff) {
 			break
 		}
 		marginalDeficit := slot.TotalBatteryDeficitKWH - lastDeficitKWH
@@ -625,10 +669,13 @@ func (c *Controller) evaluateDeficit(
 	var planBenefitDollars float64
 
 	for i, slot := range simData {
+		if !vppCutoff.IsZero() && !slot.TS.Before(vppCutoff) {
+			break
+		}
 		deficitAmount := slot.TotalBatteryDeficitKWH
 		hasDeficit := deficitAmount > 0
 
-		if hasDeficit && canChargeFuture {
+		if hasDeficit && canCharge {
 			simInFuture := i > 0
 			var simPrevChargeCostsFuture []simPriceSlot
 			var simPrevChargeCostsAll []simPriceSlot
@@ -998,6 +1045,7 @@ func (c *Controller) evaluateExportArbitrage(
 		targetAt,
 	)
 	standbyHitCapacityAt := standbyRes.HitCapacityAt
+	standbyHitSolarCapacityAt := standbyRes.HitSolarCapacityAt
 	standbyHitAboveDeficitAt := standbyRes.HitAboveDeficitAt
 	standbyImportCost := standbyRes.TotalImportCost
 	standbyNetLoadKWH := standbyRes.TotalNetLoadKWH
@@ -1021,12 +1069,12 @@ func (c *Controller) evaluateExportArbitrage(
 	// In either case, the opportunity cost of filling the battery from the grid is the value of the
 	// solar energy at the time of the capacity hit. We adjust effectiveExportValue to this rate.
 	effectiveExportValue := targetValue
-	if !standbyHitCapacityAt.IsZero() && !standbyHitCapacityAt.After(targetAt) {
+	if !standbyHitSolarCapacityAt.IsZero() && !standbyHitSolarCapacityAt.After(targetAt) {
 		var exportValueAtCapacity float64
 		var exportValueAtCapacityTime time.Time
 		buffer := 1 * time.Hour
-		windowStart := standbyHitCapacityAt
-		windowEnd := standbyHitCapacityAt.Add(buffer)
+		windowStart := standbyHitSolarCapacityAt
+		windowEnd := standbyHitSolarCapacityAt.Add(buffer)
 
 		for _, slot := range simData {
 			slotStart := slot.TS
@@ -1120,7 +1168,8 @@ func (c *Controller) evaluateExportArbitrage(
 
 	// canChargeNowReal checks if we physically have enough headroom (considering the startChargeHeadroom buffer
 	// to prevent short-cycling) and if grid charging is enabled in user settings and on the ESS.
-	canChargeNowReal := currentEnergyKWH+startChargeHeadroom < capacityKWH && settings.GridChargeBatteries && !currentStatus.BatteryChargingDisabled
+	canCharge := settings.GridChargeBatteries && !currentStatus.BatteryChargingDisabled
+	canChargeNowReal := currentEnergyKWH+startChargeHeadroom < capacityKWH && canCharge
 
 	// Calculate the energy that would be added to the battery in a single step duration.
 	stepEnergyKWH := chargeKW * minChargeDurationHours
@@ -1132,7 +1181,7 @@ func (c *Controller) evaluateExportArbitrage(
 	// canChargeArbitrage combines the capacity buffer limit check with general battery charging availability.
 	canChargeArbitrage := simEnergyLessThanCapacity && canChargeNowReal
 
-	standbySolarFillsBatteryBeforePeak := !standbyHitCapacityAt.IsZero() && !standbyHitCapacityAt.After(targetAt)
+	standbySolarFillsBatteryBeforePeak := !standbyHitSolarCapacityAt.IsZero() && !standbyHitSolarCapacityAt.After(targetAt)
 
 	// futureArbitrageProfitable determines if charging during the cheapest future slot will yield an export
 	// rate-arbitrage profit that exceeds the minimum required arbitrage price difference.
@@ -1332,13 +1381,12 @@ func (c *Controller) evaluateExportArbitrage(
 
 	// canDelay determines if we can safely postpone grid charging to a future cheap window.
 	// Delaying is allowed if:
-	// 1. Grid charging is enabled in user settings and is not disabled on the ESS (gridChargingAllowed).
+	// 1. Grid charging is enabled in user settings and is not disabled on the ESS (canCharge).
 	// 2. Arbitrage is profitable in the future (futureArbitrageProfitable).
 	// 3. Solar is not already projected to fill the battery before the peak (solarFillsBattery).
 	// 4. Postponing charging is allowed based on price comparison and charging state (delayAllowed).
 	// 5. The economic benefit of delaying is greater than or equal to charging now (netGain <= 0).
-	gridChargingAllowed := settings.GridChargeBatteries && !currentStatus.BatteryChargingDisabled
-	canDelay := gridChargingAllowed &&
+	canDelay := canCharge &&
 		futureArbitrageProfitable &&
 		!standbySolarFillsBatteryBeforePeak &&
 		delayAllowed &&
@@ -1422,7 +1470,7 @@ func (c *Controller) evaluateExportArbitrage(
 	// solarFillsDuringPeak checks if solar is predicted to fill the battery during the peak export window itself
 	// (before peakEnd). Even if the battery is not full at the start of the peak, if solar fills it during
 	// the peak, we can still capture and export that energy.
-	solarFillsDuringPeak := !standbyHitCapacityAt.IsZero() && standbyHitCapacityAt.After(targetAt) && !standbyHitCapacityAt.After(peakEnd)
+	solarFillsDuringPeak := !standbyHitSolarCapacityAt.IsZero() && standbyHitSolarCapacityAt.After(targetAt) && !standbyHitSolarCapacityAt.After(peakEnd)
 
 	// We check if the battery has any usable energy above the reserve limit.
 	// If the battery is empty (<= minKWH), we cannot grid-charge, and solar won't fill it
@@ -1944,6 +1992,7 @@ func (c *Controller) findCheapestPlan(
 
 type standbySimulationResult struct {
 	HitCapacityAt            time.Time
+	HitSolarCapacityAt       time.Time
 	HitAboveDeficitAt        time.Time
 	HitBelowDeficitAt        time.Time
 	TotalImportCost          float64
@@ -1965,7 +2014,7 @@ func (c *Controller) simulateStandby(
 ) standbySimulationResult {
 	batteryEnergy := currentEnergyKWH
 	standbyEnergyAtPeakStart := currentEnergyKWH
-	var hitCapacityAt, hitAboveDeficitAt, hitBelowDeficitAt time.Time
+	var hitCapacityAt, hitSolarCapacityAt, hitAboveDeficitAt, hitBelowDeficitAt time.Time
 	var totalImportCost, totalNetLoadKWH float64
 
 	// We default to a 98% capacity threshold to avoid rapid start/stop controller
@@ -1978,6 +2027,13 @@ func (c *Controller) simulateStandby(
 	for _, slot := range simData {
 		if !targetAt.IsZero() && slot.TS.Equal(targetAt) {
 			standbyEnergyAtPeakStart = batteryEnergy
+		}
+
+		// If we are currently in or before a VPP event, reset capacity hits because the VPP event
+		// will discharge the battery and reset its state, wiping out any prior capacity hits.
+		if !slot.VPPEndAt.IsZero() && slot.TS.Before(slot.VPPEndAt) {
+			hitCapacityAt = time.Time{}
+			hitSolarCapacityAt = time.Time{}
 		}
 
 		// Use the pre-calculated EnergyApplyRatio from simulation (e.g. for fractional first hours).
@@ -2007,6 +2063,12 @@ func (c *Controller) simulateStandby(
 		// Calculate simulated energy at the end of the slot based on the apply ratio
 		newEnergy := batteryEnergy - (appliedNetKWH * simEnergyApplyRatio)
 
+		// We only trigger solar capacity hit if we are charging from solar (clampedNetKWH < 0)
+		var isSolarCharging bool
+		if clampedNetKWH < 0 && slot.NetLoadSolarKWH < 0 {
+			isSolarCharging = true
+		}
+
 		// Check if solar charging pushes us above the capacity threshold.
 		// If so, interpolate the exact fraction of the hour when the threshold was crossed.
 		if (appliedNetKWH < 0 && newEnergy >= capacityThresholdKWH) || newEnergy > capacityKWH {
@@ -2018,6 +2080,15 @@ func (c *Controller) simulateStandby(
 					hitCapacityAt = slot.TS.Add(time.Duration(math.Round(fraction * float64(time.Hour))))
 				} else {
 					hitCapacityAt = slot.TS
+				}
+			}
+			if isSolarCharging && hitSolarCapacityAt.IsZero() {
+				remainingBeforeCapacity := capacityThresholdKWH - batteryEnergy
+				if remainingBeforeCapacity > 0 && appliedNetKWH < 0 {
+					fraction := remainingBeforeCapacity / -appliedNetKWH
+					hitSolarCapacityAt = slot.TS.Add(time.Duration(math.Round(fraction * float64(time.Hour))))
+				} else {
+					hitSolarCapacityAt = slot.TS
 				}
 			}
 			hitAboveDeficitAt = time.Time{}
@@ -2102,6 +2173,7 @@ func (c *Controller) simulateStandby(
 
 	return standbySimulationResult{
 		HitCapacityAt:            hitCapacityAt,
+		HitSolarCapacityAt:       hitSolarCapacityAt,
 		HitAboveDeficitAt:        hitAboveDeficitAt,
 		HitBelowDeficitAt:        hitBelowDeficitAt,
 		TotalImportCost:          totalImportCost,
@@ -2182,4 +2254,214 @@ func (c *Controller) checkPeakSurvival(
 		}
 	}
 	return
+}
+
+func (c *Controller) evaluateVPPEvent(
+	ctx context.Context,
+	now time.Time,
+	currentStatus types.SystemStatus,
+	currentPrice types.Price,
+	settings types.Settings,
+	simData []SimHour,
+	summary simulationSummary,
+) *StrategyEvaluation {
+	if summary.SoonestVPPChargingAt.IsZero() {
+		return nil
+	}
+
+	var forcedChargePrice float64
+	var forcedChargeSlotPrice types.Price
+	var found bool
+	for _, slot := range simData {
+		if !slot.TS.After(summary.SoonestVPPChargingAt) && slot.TS.Add(time.Hour).After(summary.SoonestVPPChargingAt) {
+			forcedChargePrice = slot.GridChargeDollarsPerKWH
+			forcedChargeSlotPrice = slot.Price
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil
+	}
+
+	capacityKWH := currentStatus.BatteryCapacityKWH
+	currentEnergyKWH := currentStatus.BatterySOC * capacityKWH / 100.0
+	minKWH := capacityKWH * (min(settings.MinBatterySOC+1.0, 100.0) / 100.0)
+	minArbitrageDiff := max(0.001, settings.MinArbitrageDifferenceDollarsPerKWH)
+
+	standbyRes := c.simulateStandby(
+		simData,
+		forcedChargePrice-minArbitrageDiff,
+		currentEnergyKWH,
+		capacityKWH,
+		minKWH,
+		summary.SoonestVPPChargingAt,
+	)
+
+	// If solar is predicted to fill the battery to capacity before VPP pre-charging starts, we exit.
+	if !standbyRes.HitSolarCapacityAt.IsZero() && !standbyRes.HitSolarCapacityAt.After(summary.SoonestVPPChargingAt) {
+		return nil
+	}
+
+	capacityThresholdKWH := capacityKWH * 0.98
+	neededEnergy := capacityThresholdKWH - standbyRes.StandbyEnergyAtPeakStart
+	if neededEnergy <= 0 {
+		return nil
+	}
+
+	chargeKW := currentStatus.MaxBatteryChargeKW
+	if chargeKW <= 0 {
+		chargeKW = capacityKWH / 3.0
+	}
+
+	neededDurationHours := neededEnergy / chargeKW
+
+	isAlreadyChargingGrid := currentStatus.BatteryKW < -1.0 && currentStatus.GridKW > 0
+	effectiveGridChargeNowCost := c.getEffectiveGridChargeNowCost(ctx, now, currentStatus, currentPrice, simData, isAlreadyChargingGrid, true)
+	gridChargeNowCost := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
+
+	var simPrevChargeCosts []simPriceSlot
+	var simPrevChargeCostsFuture []simPriceSlot
+	for i, slot := range simData {
+		if !slot.TS.Before(summary.SoonestVPPChargingAt) {
+			break
+		}
+		cost := slot.GridChargeDollarsPerKWH
+		if i == 0 {
+			cost = effectiveGridChargeNowCost
+		}
+		entry := simPriceSlot{
+			cost:  cost,
+			ts:    slot.TS,
+			price: slot.Price,
+		}
+		simPrevChargeCosts = append(simPrevChargeCosts, entry)
+		if i > 0 {
+			simPrevChargeCostsFuture = append(simPrevChargeCostsFuture, entry)
+		}
+	}
+
+	if len(simPrevChargeCosts) == 0 {
+		return nil
+	}
+
+	cheapestTime, cheapestPrice, cheapestCost, cheapestCandidateSlot := c.findCheapestPlan(simPrevChargeCosts, neededDurationHours)
+
+	if forcedChargePrice-cheapestCost < minArbitrageDiff {
+		return nil
+	}
+
+	// We call findCheapestPlan a second time, this time specifically excluding 'now'
+	// (using only simPrevChargeCostsFuture) to find the cheapest future charging slot.
+	// This allows us to compare the cost of starting a charge session now against the
+	// best possible future opportunity. If a future hour is significantly cheaper,
+	// or if we have enough future cheap hours to safely delay charging, we will plan the charge
+	// for the future instead of starting it now.
+	var cheapestFutureChargeSlot simPriceSlot
+	hasFutureSlot := len(simPrevChargeCostsFuture) > 0
+	if hasFutureSlot {
+		_, _, _, cheapestFutureChargeSlot = c.findCheapestPlan(simPrevChargeCostsFuture, neededDurationHours)
+	}
+
+	isSignificantlyCheaperNow := false
+	if hasFutureSlot {
+		if effectiveGridChargeNowCost > gridChargeNowCost {
+			isSignificantlyCheaperNow = cheapestFutureChargeSlot.cost-effectiveGridChargeNowCost > minArbitrageDiff
+		} else {
+			isSignificantlyCheaperNow = cheapestFutureChargeSlot.cost-effectiveGridChargeNowCost >= minArbitrageDiff
+		}
+	} else {
+		isSignificantlyCheaperNow = true
+	}
+
+	futureCheapHours := 0
+	for _, slot := range simPrevChargeCostsFuture {
+		if !cheapestTime.IsZero() && slot.ts.Before(cheapestTime) {
+			continue
+		}
+		if slot.cost <= cheapestFutureChargeSlot.cost+minArbitrageDiff {
+			futureCheapHours++
+		}
+	}
+
+	isSignificantlyCheaperThanForcedNow := forcedChargePrice-gridChargeNowCost >= minArbitrageDiff
+	isTiedCheapest := equalCosts(cheapestCandidateSlot.cost, effectiveGridChargeNowCost) && equalCosts(effectiveGridChargeNowCost, gridChargeNowCost)
+	isCheapNow := (isTiedCheapest && isSignificantlyCheaperThanForcedNow) || isSignificantlyCheaperNow
+
+	isCheapestWindow := equalCosts(cheapestCandidateSlot.cost, gridChargeNowCost) && gridChargeNowCost <= forcedChargePrice
+	isAlreadyChargingSamePrice := isAlreadyChargingGrid && isCheapestWindow && isSignificantlyCheaperThanForcedNow
+
+	minStartChargeDurationHours := float64(settings.MinStartChargeMinutes) / 60.0
+	startChargeHeadroom := chargeKW * minStartChargeDurationHours
+	if startChargeHeadroom < 0.3 {
+		startChargeHeadroom = 0.3
+	}
+	var allowedHeadroom float64
+	if isAlreadyChargingGrid {
+		allowedHeadroom = 0.1
+	} else {
+		allowedHeadroom = startChargeHeadroom
+	}
+	canCharge := settings.GridChargeBatteries && !currentStatus.BatteryChargingDisabled
+	canChargeNowReal := currentEnergyKWH+allowedHeadroom < capacityKWH && canCharge
+	futureIsCheaperOrEqual := cheapestFutureChargeSlot.cost <= effectiveGridChargeNowCost+0.001
+	canDelay := !isAlreadyChargingSamePrice && futureIsCheaperOrEqual && futureCheapHours > 0 && float64(futureCheapHours)*chargeKW >= neededEnergy
+
+	log.Ctx(ctx).DebugContext(ctx, "vpp prep evaluation variables",
+		slog.Time("soonestVPPChargingAt", summary.SoonestVPPChargingAt),
+		slog.Float64("forcedChargePrice", forcedChargePrice),
+		slog.Float64("currentEnergyKWH", currentEnergyKWH),
+		slog.Float64("neededEnergy", neededEnergy),
+		slog.Float64("neededDurationHours", neededDurationHours),
+		slog.Float64("effectiveGridChargeNowCost", effectiveGridChargeNowCost),
+		slog.Float64("gridChargeNowCost", gridChargeNowCost),
+		slog.Bool("canCharge", canCharge),
+		slog.Bool("canChargeNowReal", canChargeNowReal),
+		slog.Bool("canDelay", canDelay),
+		slog.Bool("hasFutureSlot", hasFutureSlot),
+		slog.Int("futureCheapHours", futureCheapHours),
+		slog.Float64("cheapestCost", cheapestCost),
+		slog.Time("cheapestTime", cheapestTime),
+	)
+
+	if canCharge && canDelay {
+		benefit := neededEnergy * (forcedChargePrice - cheapestCost)
+		log.Ctx(ctx).DebugContext(ctx, "vpp prep: delaying charge (planning future charge)",
+			slog.Time("until", cheapestTime),
+			slog.Float64("cost", cheapestCost),
+			slog.Float64("benefit", benefit),
+		)
+		return &StrategyEvaluation{
+			Plan: &futurePlan{
+				ChargeTime:  cheapestTime,
+				ChargePrice: cheapestPrice,
+				ChargeCost:  cheapestCost,
+				Description: fmt.Sprintf("VPP Prep: planned charge at %s ($%.3f) before forced VPP charge ($%.3f)",
+					cheapestTime.Format("15:04"), cheapestCost, forcedChargePrice),
+			},
+			BenefitDollars: benefit,
+		}
+	}
+
+	shouldChargeNow := canChargeNowReal && (isCheapNow || isAlreadyChargingSamePrice)
+	if shouldChargeNow {
+		benefit := neededEnergy * (forcedChargePrice - effectiveGridChargeNowCost)
+		log.Ctx(ctx).DebugContext(ctx, "vpp prep: charging now",
+			slog.Float64("costNow", effectiveGridChargeNowCost),
+			slog.Float64("forcedPrice", forcedChargePrice),
+			slog.Float64("benefit", benefit),
+		)
+		return &StrategyEvaluation{
+			Decision: &DecisionResult{
+				BatteryMode: types.BatteryModeChargeAny,
+				Reason:      types.ActionReasonVPPPrep,
+				Description: fmt.Sprintf("VPP Prep: forced charge at %s is expensive ($%.3f). Charge now ($%.3f).",
+					summary.SoonestVPPChargingAt.Format("15:04"), forcedChargePrice, effectiveGridChargeNowCost),
+				FuturePrice: &forcedChargeSlotPrice,
+			},
+			BenefitDollars: benefit,
+		}
+	}
+
+	return nil
 }

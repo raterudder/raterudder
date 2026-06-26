@@ -28,6 +28,7 @@ function makeSimHours(): ModelingHour[] {
             avgHomeLoadImprovedKWH: 1.5,
             predictedSolarKWH: Math.max(0, 3.0 * Math.sin((i / 24) * Math.PI)),
             batteryKWH: 5.0 - i * 0.2,
+            startBatteryKWH: 5.0 - i * 0.2,
             batteryCapacityKWH: 10.0,
             batteryReserveKWH: 0.5,
             todaySolarTrend: 1.0,
@@ -179,5 +180,28 @@ describe('Forecast Page', () => {
         });
     });
 
-});
+    it('renders VPP event reference area and reference lines when VPP data is present in the simulation', async () => {
+        const data = makeSimHours();
+        // Set VPP data on some hours
+        data[2].vppStandbyAt = data[2].ts;
+        data[3].vppStandbyAt = data[2].ts;
+        data[4].vppStandbyAt = data[2].ts;
+        data[2].vppEndAt = data[5].ts;
+        data[3].vppEndAt = data[5].ts;
+        data[4].vppEndAt = data[5].ts;
 
+        (fetchModeling as any).mockResolvedValue({
+            simulation: data,
+            energyHistory: [],
+            priceHistory: [],
+            weather: []
+        });
+
+        renderForecast();
+
+        await waitFor(() => {
+            const vppLabels = screen.getAllByText('VPP Event');
+            expect(vppLabels.length).toBe(1);
+        });
+    });
+});

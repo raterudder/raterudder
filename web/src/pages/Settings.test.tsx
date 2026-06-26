@@ -195,6 +195,10 @@ describe('App & Settings', () => {
     });
 
     it('renders solar settings inputs on settings page', async () => {
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            postalCode: ''
+        });
         await navigateToSettings();
 
         // Expand advanced tuning settings
@@ -210,6 +214,10 @@ describe('App & Settings', () => {
     });
 
     it('can update solar bell curve multiplier', async () => {
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            postalCode: ''
+        });
         await navigateToSettings();
 
         // Expand advanced tuning settings
@@ -229,6 +237,103 @@ describe('App & Settings', () => {
             }), expect.any(String), undefined);
         });
     });
+
+    it('hides solar trend ratio max and solar bell curve multiplier when zip code is entered', async () => {
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            postalCode: ''
+        });
+        await navigateToSettings();
+
+        // Expand advanced tuning settings
+        const advancedBtn = await screen.findByText('Show Advanced Settings');
+        fireEvent.click(advancedBtn);
+
+        // They should be visible initially because zip code is empty
+        await waitFor(() => {
+            expect(screen.getByLabelText(/Solar Trend Ratio Max/i)).toBeInTheDocument();
+            expect(screen.getByLabelText(/Solar Bell Curve Multiplier/i)).toBeInTheDocument();
+        });
+
+        // Now enter a zip code in the Zip/Postal Code field
+        const zipInput = screen.getByLabelText(/Zip\/Postal Code/i);
+        fireEvent.change(zipInput, { target: { value: '90210' } });
+
+        // They should be hidden now
+        await waitFor(() => {
+            expect(screen.queryByLabelText(/Solar Trend Ratio Max/i)).not.toBeInTheDocument();
+            expect(screen.queryByLabelText(/Solar Bell Curve Multiplier/i)).not.toBeInTheDocument();
+        });
+
+        // Now clear the zip code
+        fireEvent.change(zipInput, { target: { value: '' } });
+
+        // They should show up again
+        await waitFor(() => {
+            expect(screen.getByLabelText(/Solar Trend Ratio Max/i)).toBeInTheDocument();
+            expect(screen.getByLabelText(/Solar Bell Curve Multiplier/i)).toBeInTheDocument();
+        });
+    });
+
+    it('hides headroom when solar exporting is enabled, and hides entire advanced solar settings when both are true', async () => {
+        // Mock settings without postalCode and without gridExportSolar so everything is visible
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            postalCode: '',
+            gridExportSolar: false
+        });
+        await navigateToSettings();
+
+        // Expand advanced tuning settings
+        const advancedBtn = await screen.findByText('Show Advanced Settings');
+        fireEvent.click(advancedBtn);
+
+        // All should be visible initially
+        await waitFor(() => {
+            expect(screen.getByLabelText(/Solar Trend Ratio Max/i)).toBeInTheDocument();
+            expect(screen.getByLabelText(/Solar Bell Curve Multiplier/i)).toBeInTheDocument();
+            expect(screen.getByLabelText(/Solar Fully Charge Headroom/i)).toBeInTheDocument();
+            expect(screen.getByRole('heading', { name: /Advanced Solar Settings/i })).toBeInTheDocument();
+        });
+
+        // 1. Toggle solar exporting on
+        const exportSwitch = screen.getByRole('switch', { name: /Export Solar to Grid/i });
+        fireEvent.click(exportSwitch);
+
+        // Headroom should be hidden
+        await waitFor(() => {
+            expect(screen.queryByLabelText(/Solar Fully Charge Headroom/i)).not.toBeInTheDocument();
+            // Trend ratio and bell curve should still be visible because postalCode is empty
+            expect(screen.getByLabelText(/Solar Trend Ratio Max/i)).toBeInTheDocument();
+            expect(screen.getByLabelText(/Solar Bell Curve Multiplier/i)).toBeInTheDocument();
+            expect(screen.getByRole('heading', { name: /Advanced Solar Settings/i })).toBeInTheDocument();
+        });
+
+        // 2. Now enter a zip code as well (both are now true)
+        const zipInput = screen.getByLabelText(/Zip\/Postal Code/i);
+        fireEvent.change(zipInput, { target: { value: '90210' } });
+
+        // The entire Advanced Solar Settings section should be hidden
+        await waitFor(() => {
+            expect(screen.queryByRole('heading', { name: /Advanced Solar Settings/i })).not.toBeInTheDocument();
+            expect(screen.queryByLabelText(/Solar Trend Ratio Max/i)).not.toBeInTheDocument();
+            expect(screen.queryByLabelText(/Solar Bell Curve Multiplier/i)).not.toBeInTheDocument();
+            expect(screen.queryByLabelText(/Solar Fully Charge Headroom/i)).not.toBeInTheDocument();
+        });
+
+        // 3. Clear zip code again
+        fireEvent.change(zipInput, { target: { value: '' } });
+
+        // Section header and trend/bell curve should come back (headroom still hidden since solar exporting is enabled)
+        await waitFor(() => {
+            expect(screen.getByRole('heading', { name: /Advanced Solar Settings/i })).toBeInTheDocument();
+            expect(screen.getByLabelText(/Solar Trend Ratio Max/i)).toBeInTheDocument();
+            expect(screen.getByLabelText(/Solar Bell Curve Multiplier/i)).toBeInTheDocument();
+            expect(screen.queryByLabelText(/Solar Fully Charge Headroom/i)).not.toBeInTheDocument();
+        });
+    });
+
+
 
     it('shows location settings only when release is staging', async () => {
         const stagingSettings = { release: 'staging', minArbitrageDifferenceDollarsPerKWH: 0.05, minBatterySOC: 20, minLoadForSolarHedgeKWH: 2.0, ess: 'mock', hasCredentials: { mock: true } };

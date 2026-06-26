@@ -114,6 +114,14 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		// Continue with empty future prices
 	}
 
+	// merge utility mandatory VPP events
+	vppInfo, err := utility.GetVPPInfo(ctx)
+	if err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to get utility VPP info", slog.Any("error", err))
+	} else {
+		status = s.mergeUtilityVPPEvents(ctx, status, vppInfo)
+	}
+
 	// 5. Get History (Last x days from monthly summaries + today's/tomorrow's unsummarized data)
 	now := status.Timestamp
 	historyStart := now.AddDate(0, 0, -forecastHistoryDays).Truncate(time.Hour)

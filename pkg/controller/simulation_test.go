@@ -479,26 +479,32 @@ func TestSimulateState(t *testing.T) {
 		// Verify first few hours
 		// Hour 0: Start 5.0. Net -1. End 4.0.
 		assert.Equal(t, 0, simData[0].Hour)
+		assert.InDelta(t, 5.0, simData[0].StartBatteryKWH, 0.01, "Hour 0: Start should be 5.0")
 		assert.InDelta(t, 4.0, simData[0].BatteryKWH, 0.01, "Hour 0: Should drain to 4.0")
 
 		// Hour 1: Start 4.0. Net -1. End 3.0.
 		assert.Equal(t, 1, simData[1].Hour)
+		assert.InDelta(t, 4.0, simData[1].StartBatteryKWH, 0.01, "Hour 1: Start should be 4.0")
 		assert.InDelta(t, 3.0, simData[1].BatteryKWH, 0.01, "Hour 1: Should drain to 3.0")
 
 		// Hour 2: Start 3.0. Net -1. End 2.0.
 		assert.Equal(t, 2, simData[2].Hour)
+		assert.InDelta(t, 3.0, simData[2].StartBatteryKWH, 0.01, "Hour 2: Start should be 3.0")
 		assert.InDelta(t, 2.0, simData[2].BatteryKWH, 0.01, "Hour 2: Should drain to 2.0")
 
 		// Hour 3: Start 2.0. Net +1. End 3.0.
 		assert.Equal(t, 3, simData[3].Hour)
+		assert.InDelta(t, 2.0, simData[3].StartBatteryKWH, 0.01, "Hour 3: Start should be 2.0")
 		assert.InDelta(t, 3.0, simData[3].BatteryKWH, 0.01, "Hour 3: Should charge to 3.0")
 
 		// Hour 4: Start 3.0. Net +1. End 4.0.
 		assert.Equal(t, 4, simData[4].Hour)
+		assert.InDelta(t, 3.0, simData[4].StartBatteryKWH, 0.01, "Hour 4: Start should be 3.0")
 		assert.InDelta(t, 4.0, simData[4].BatteryKWH, 0.01, "Hour 4: Should charge to 4.0")
 
 		// Hour 5: Start 4.0. Net +1. End 5.0.
 		assert.Equal(t, 5, simData[5].Hour)
+		assert.InDelta(t, 4.0, simData[5].StartBatteryKWH, 0.01, "Hour 5: Start should be 4.0")
 		assert.InDelta(t, 5.0, simData[5].BatteryKWH, 0.01, "Hour 5: Should charge to 5.0")
 	})
 
@@ -1355,23 +1361,43 @@ func TestSimulateState(t *testing.T) {
 			simData, _ := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
 
 			if assert.Len(t, simData, 24) {
-				// starting at 13:00, with 1 kW load and 2 kW max charge rate,
-				// the start charging time is calculated to be 13:24 (24 minutes past 13:00).
-				assert.WithinDuration(t, now.Add(1*time.Hour).Add(24*time.Minute), simData[1].StartedVPPChargingAt, time.Second)
+				// starting at 12:00, with 1 kW load and 2 kW max charge rate,
+				// the start charging time is calculated to be 12:24 (24 minutes past 12:00).
+				assert.WithinDuration(t, now.Add(24*time.Minute), simData[0].StartedVPPChargingAt, time.Second)
+				assert.InDelta(t, 5.0, simData[0].StartBatteryKWH, 0.001)
 
-				// Hour 4 (16:00-17:00): Blackout window starts at 16:00.
+				// Hour 1: Charging continues
+				assert.InDelta(t, 5.8, simData[1].StartBatteryKWH, 0.001)
+
+				// Hour 2: Charging completes
+				assert.InDelta(t, 7.8, simData[2].StartBatteryKWH, 0.001)
+
+				// Hour 3 (15:00-16:00): Blackout window starts at 15:00.
 				// Battery cannot discharge during this hour.
-				assert.Equal(t, now.Add(4*time.Hour), simData[4].VPPBlackoutAt)
+				assert.Equal(t, now.Add(3*time.Hour), simData[3].VPPStandbyAt)
+				assert.InDelta(t, 9.8, simData[3].StartBatteryKWH, 0.001)
+				assert.InDelta(t, 9.8, simData[3].BatteryKWH, 0.001) // held at 9.8 kWh
+
+				// Hour 4 (16:00-17:00): Blackout window continues.
+				assert.Equal(t, now.Add(3*time.Hour), simData[4].VPPStandbyAt)
+				assert.InDelta(t, 9.8, simData[4].StartBatteryKWH, 0.001)
 				assert.InDelta(t, 9.8, simData[4].BatteryKWH, 0.001) // held at 9.8 kWh
 
 				// Hour 5 (17:00-18:00): VPP Event starts.
+				assert.InDelta(t, 9.8, simData[5].StartBatteryKWH, 0.001)
 				assert.InDelta(t, 4.8, simData[5].BatteryKWH, 0.001)
 
 				// Hour 6 (18:00-19:00): VPP Event continues.
+				assert.InDelta(t, 4.8, simData[6].StartBatteryKWH, 0.001)
 				assert.InDelta(t, 1.0, simData[6].BatteryKWH, 0.001)
 
+				// Hour 7 (19:00-20:00): VPP Event finishes discharge
+				assert.InDelta(t, 1.0, simData[7].StartBatteryKWH, 0.001)
+				assert.InDelta(t, 1.0, simData[7].BatteryKWH, 0.001)
+
 				// Hour 8 (20:00-21:00): VPP Event is over (ended at 20:00).
-				assert.True(t, simData[8].VPPBlackoutAt.IsZero())
+				assert.True(t, simData[8].VPPStandbyAt.IsZero())
+				assert.InDelta(t, 1.0, simData[8].StartBatteryKWH, 0.001)
 				assert.InDelta(t, 2.1, simData[8].BatteryKWH, 0.001)
 				assert.Greater(t, simData[8].TotalBatteryDeficitKWH, 0.0)
 			}
@@ -1469,10 +1495,10 @@ func TestSimulateState(t *testing.T) {
 
 			simData, _ := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
 			if assert.Len(t, simData, 24) {
-				assert.Equal(t, now.Add(2*time.Hour), simData[2].VPPBlackoutAt)
+				assert.Equal(t, now.Add(1*time.Hour), simData[2].VPPStandbyAt)
 				assert.Equal(t, now.Add(5*time.Hour), simData[2].VPPEndAt)
-				assert.True(t, simData[6].VPPBlackoutAt.IsZero())
-				assert.Equal(t, now.Add(8*time.Hour), simData[8].VPPBlackoutAt)
+				assert.True(t, simData[6].VPPStandbyAt.IsZero())
+				assert.Equal(t, now.Add(7*time.Hour), simData[8].VPPStandbyAt)
 				assert.Equal(t, now.Add(11*time.Hour), simData[8].VPPEndAt)
 			}
 		})

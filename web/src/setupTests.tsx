@@ -24,7 +24,13 @@ vi.mock('recharts', async () => {
         // Chart components should NOT render children to avoid rendering SVG elements (like <stop>)
         // directly into a <div> (since we are mocking these as divs), which causes browser/jsdom warnings.
         // We render a simple div with a data-testid for identification if needed.
-        AreaChart: () => <div data-testid="area-chart" />,
+        AreaChart: ({ children }: { children: React.ReactNode }) => (
+            <div data-testid="area-chart">
+                {React.Children.toArray(children).filter(
+                    (child: any) => child && child.type !== 'defs'
+                )}
+            </div>
+        ),
         LineChart: () => <div data-testid="line-chart" />,
         BarChart: () => <div data-testid="bar-chart" />,
         PieChart: () => <div data-testid="pie-chart" />,
@@ -38,5 +44,15 @@ vi.mock('recharts', async () => {
         CartesianGrid: () => <div data-testid="cartesian-grid" />,
         Tooltip: () => <div data-testid="tooltip" />,
         Legend: () => <div data-testid="legend" />,
+        ReferenceArea: ({ label }: any) => (
+            <div data-testid="reference-area">
+                {label && typeof label === 'object' ? label.value : label}
+            </div>
+        ),
+        ReferenceLine: ({ label }: any) => (
+            <div data-testid="reference-line">
+                {label && typeof label === 'object' ? label.value : label}
+            </div>
+        ),
     };
 });

@@ -156,6 +156,18 @@ describe('dashboardUtils', () => {
             expect(getReasonText(action)).toContain('Virtual Power Plant (VPP) event is currently active');
         });
 
+        it('handles VPPPrep', () => {
+            const action = {
+                ...baseAction,
+                reason: ActionReason.VPPPrep,
+                currentPrice: { dollarsPerKWH: 0.08, gridUseDollarsPerKWH: 0.02, tsStart: '', tsEnd: '' },
+                futurePrice: { dollarsPerKWH: 0.25, gridUseDollarsPerKWH: 0.05, tsStart: '', tsEnd: '' }
+            };
+            const text = getReasonText(action);
+            expect(text).toContain('Preparing for upcoming Virtual Power Plant (VPP) event.');
+            expect(text).toContain('Charging the battery now at $ 0.100/kWh is cheaper than charging later before the event at $ 0.300/kWh');
+        });
+
         it('handles DeficitSaveForPeak with valid deficitAt', () => {
             const action = {
                 ...baseAction,

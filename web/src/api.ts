@@ -36,6 +36,7 @@ export const ActionReason = {
     PreventSolarCurtailment: 'preventSolarCurtailment',
     BatteryAtReserve: 'batteryAtReserve',
     VPPActive: 'vppActive',
+    VPPPrep: 'vppPrep',
     ArbitrageHoldExport: 'arbitrageHoldExport',
     ArbitrageHoldSave: 'arbitrageHoldSave',
     // deprecated - but we don't delete them because old actions still have them
@@ -421,9 +422,13 @@ export interface ModelingHour {
     avgHomeLoadImprovedKWH: number;
     predictedSolarKWH: number;
     batteryKWH: number;
+    startBatteryKWH?: number;
     batteryCapacityKWH: number;
     batteryReserveKWH: number;
     todaySolarTrend: number;
+    startedVPPChargingAt?: string;
+    vppStandbyAt?: string;
+    vppEndAt?: string;
 }
 
 export const fetchModeling = async (siteID?: string): Promise<ForecastResponse> => {
