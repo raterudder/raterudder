@@ -6326,7 +6326,9 @@ func TestEvaluateVPPEvent(t *testing.T) {
 		settingsWithArbitrage.MinArbitrageDifferenceDollarsPerKWH = 0.01
 
 		eval := c.evaluateVPPEvent(ctx, now, baseStatus, types.Price{TSStart: now, DollarsPerKWH: 0.095}, settingsWithArbitrage, simData, summary)
-		assert.Nil(t, eval)
+		if assert.NotNil(t, eval) {
+			assert.Equal(t, types.BatteryModeStandby, eval.Decision.BatteryMode)
+		}
 	})
 
 	t.Run("Need very small charge and battery almost full -> should not charge now", func(t *testing.T) {

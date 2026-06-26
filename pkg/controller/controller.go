@@ -2348,7 +2348,23 @@ func (c *Controller) evaluateVPPEvent(
 	cheapestTime, cheapestPrice, cheapestCost, cheapestCandidateSlot := c.findCheapestPlan(simPrevChargeCosts, neededDurationHours)
 
 	if forcedChargePrice-cheapestCost < minArbitrageDiff {
-		return nil
+		// Even if active grid pre-charging is not economically profitable, we must
+		// still respect VPP prep. If the current price is significantly more
+		// expensive than the future pre-charging price, we can discharge (Load) and
+		// refill later.
+		if gridChargeNowCost >= forcedChargePrice+minArbitrageDiff {
+			return nil
+		}
+		// Otherwise, standby to conserve energy and avoid unnecessary cycling.
+		return &StrategyEvaluation{
+			Decision: &DecisionResult{
+				BatteryMode: types.BatteryModeStandby,
+				Reason:      types.ActionReasonVPPPrep,
+				Description: fmt.Sprintf("VPP Prep: standby to avoid unnecessary grid charge later at same/higher price ($%.3f).",
+					forcedChargePrice),
+			},
+			BenefitDollars: 0.0,
+		}
 	}
 
 	// We call findCheapestPlan a second time, this time specifically excluding 'now'
