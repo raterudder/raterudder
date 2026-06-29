@@ -19,8 +19,6 @@ interface HistoryDataPoint extends EnergyStats {
     irradiance?: number;
     improvedSolarGeneration?: number;
     improvedHomeLoad?: number;
-    solar1hImproved?: number;
-    solar1hUnclipped?: number;
 }
 
 type ChartConfig = {
@@ -167,7 +165,6 @@ const History: React.FC<{ siteID?: string }> = ({ siteID }) => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
-    const [hasSolar1h, setHasSolar1h] = useState(false);
 
     useEffect(() => {
         const handleResize = () => setIsMobile(window.innerWidth < 768);
@@ -198,16 +195,11 @@ const History: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     const w = res.weather.find(weather =>
                         new Date(weather.tsHourStart).getTime() === new Date(e.tsHourStart).getTime()
                     );
-                    const s1h = res.solar1hForecast?.find(weather =>
-                        new Date(weather.tsHourStart).getTime() === new Date(e.tsHourStart).getTime()
-                    );
                     return {
                         ...e,
                         irradiance: w?.irradiance,
                         improvedSolarGeneration: w?.improvedSolarGeneration,
                         improvedHomeLoad: w?.improvedHomeLoad !== undefined ? Math.floor(w.improvedHomeLoad * 10) / 10 : undefined,
-                        solar1hImproved: s1h?.improvedSolarGeneration,
-                        solar1hUnclipped: s1h?.unclippedSolarGeneration,
                         homeKWH: Math.floor((e.homeKWH || 0) * 10) / 10,
                         gridImportKWH: Math.floor((e.gridImportKWH || 0) * 10) / 10,
                         gridExportKWH: Math.floor((e.gridExportKWH || 0) * 10) / 10,
@@ -215,7 +207,6 @@ const History: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 });
 
                 setData(merged.sort((a, b) => new Date(a.tsHourStart).getTime() - new Date(b.tsHourStart).getTime()));
-                setHasSolar1h(!!(res.solar1hForecast && res.solar1hForecast.length > 0));
             } catch (err) {
                 setError(err instanceof Error ? err.message : 'Failed to load history');
             } finally {
@@ -251,20 +242,8 @@ const History: React.FC<{ siteID?: string }> = ({ siteID }) => {
             return true;
         });
 
-        if (hasSolar1h) {
-            filtered.push({
-                title: 'Solar Forecast Comparison (1h Forecast) (kWh)',
-                unit: ' kWh',
-                dataKeys: [
-                    { key: 'solarKWH', color: 'var(--warning)', label: 'Actual Solar', type: 'area' },
-                    { key: 'solar1hImproved', color: '#f59e0b', label: 'Forecast (1h)', type: 'line' },
-                    { key: 'solar1hUnclipped', color: 'var(--text-muted)', label: 'Unclipped (1h)', type: 'line', strokeDasharray: '4 4' }
-                ]
-            });
-        }
-
         return filtered;
-    }, [settings, hasSolar1h]);
+    }, [settings]);
 
     const isToday = currentDate.toDateString() === new Date().toDateString();
 

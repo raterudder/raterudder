@@ -14,9 +14,8 @@ import (
 
 // HistoryEnergyRes represents the response for the history energy endpoint.
 type HistoryEnergyRes struct {
-	Energy          []types.EnergyStats `json:"energy"`
-	Weather         []WeatherRes        `json:"weather"`
-	Solar1hForecast []WeatherRes        `json:"solar1hForecast,omitempty"`
+	Energy  []types.EnergyStats `json:"energy"`
+	Weather []WeatherRes        `json:"weather"`
 }
 
 func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
@@ -137,39 +136,9 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var solar1hRes []WeatherRes
-
-	if settings.Location != nil && len(weatherHistory) > 0 {
-		solar1hMap, _ := controller.CalculateWeatherSolar(ctx, s.now(), flatEnergy, weatherHistory, *settings.Location)
-
-		for _, w := range weatherHistory {
-			if w.TSDayStart.Format("2006-01-02") != dateStr {
-				continue
-			}
-			for _, h := range w.ForecastHours {
-				ts := h.TSHourStart.Unix()
-				if ws, ok := solar1hMap[ts]; ok {
-					solar1hRes = append(solar1hRes, WeatherRes{
-						TSHourStart:              h.TSHourStart,
-						ImprovedSolarGeneration:  ws.ImprovedSolar,
-						UnclippedSolarGeneration: ws.UnclippedSolar,
-						SnowDepthCM:              ws.SnowDepth,
-						TempFactor:               ws.TempFactor,
-						SnowFactor:               ws.SnowFactor,
-						TemperatureC:             h.TemperatureC,
-						TemperatureCellC:         ws.TCell,
-						Irradiance:               ws.Irradiance,
-						SnowfallCM:               h.SnowfallCM,
-					})
-				}
-			}
-		}
-	}
-
 	res := HistoryEnergyRes{
-		Energy:          dayStats,
-		Weather:         dayWeather,
-		Solar1hForecast: solar1hRes,
+		Energy:  dayStats,
+		Weather: dayWeather,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

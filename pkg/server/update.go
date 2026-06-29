@@ -1029,6 +1029,42 @@ func (s *Server) getCombinedHistory(
 		return a.TSDayStart.Compare(b.TSDayStart)
 	})
 
+	// Deduplicate energy stats by date
+	if len(combinedEnergy) > 0 {
+		seen := make(map[string]int)
+		var deduped []types.DailyEnergyStats
+		for _, day := range combinedEnergy {
+			dateStr := day.TSDayStart.Format("2006-01-02")
+			if idx, ok := seen[dateStr]; ok {
+				if len(day.Hourly) >= len(deduped[idx].Hourly) {
+					deduped[idx] = day
+				}
+			} else {
+				seen[dateStr] = len(deduped)
+				deduped = append(deduped, day)
+			}
+		}
+		combinedEnergy = deduped
+	}
+
+	// Deduplicate weather by date
+	if len(combinedWeather) > 0 {
+		seen := make(map[string]int)
+		var deduped []types.Weather
+		for _, w := range combinedWeather {
+			dateStr := w.TSDayStart.Format("2006-01-02")
+			if idx, ok := seen[dateStr]; ok {
+				if len(w.ForecastHours) >= len(deduped[idx].ForecastHours) {
+					deduped[idx] = w
+				}
+			} else {
+				seen[dateStr] = len(deduped)
+				deduped = append(deduped, w)
+			}
+		}
+		combinedWeather = deduped
+	}
+
 	return combinedEnergy, combinedWeather, nil
 }
 

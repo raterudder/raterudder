@@ -97,41 +97,5 @@ describe('History', () => {
         });
     });
 
-    it('renders comparison charts when solar1hForecast is present', async () => {
-        const mockData = {
-            energy: [
-                {
-                    tsHourStart: '2023-10-27T10:00:00Z',
-                    maxBatterySOC: 80,
-                    solarKWH: 2.5,
-                    homeKWH: 1.2,
-                    gridImportKWH: 0.5,
-                    gridExportKWH: 0
-                }
-            ],
-            weather: [
-                {
-                    tsHourStart: '2023-10-27T10:00:00Z',
-                    irradiance: 500,
-                    improvedSolarGeneration: 2.4
-                }
-            ],
-            solar1hForecast: [
-                {
-                    tsHourStart: '2023-10-27T10:00:00Z',
-                    improvedSolarGeneration: 2.3,
-                    unclippedSolarGeneration: 2.6
-                }
-            ]
-        };
-        (fetchHistoryEnergy as any).mockResolvedValue(mockData);
-        (fetchSettings as any).mockResolvedValue({ release: 'production' });
-
-        renderWithRouter(<History />);
-
-        await waitFor(() => {
-            expect(screen.getByText('Solar Forecast Comparison (1h Forecast) (kWh)')).toBeInTheDocument();
-        });
-    });
 });
 
