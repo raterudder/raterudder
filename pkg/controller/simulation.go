@@ -43,6 +43,7 @@ type SimHour struct {
 	HitCapacityAt           time.Time   `json:"hitCapacityAt"`
 	HitStandbyCapacityAt    time.Time   `json:"hitStandbyCapacityAt"`
 	HitSolarCapacityAt      time.Time   `json:"hitSolarCapacityAt"`
+	HitVPPCapacityAt        time.Time   `json:"hitVPPCapacityAt"`
 	HitDeficitAt            time.Time   `json:"hitDeficitAt"`
 	HitBelowDeficitAt       time.Time   `json:"hitBelowDeficitAt"`
 	HitAboveDeficitAt       time.Time   `json:"hitAboveDeficitAt"`
@@ -106,6 +107,7 @@ func (c *Controller) SimulateState(
 	var simAboveDeficitAt time.Time
 	var simCapacityAt time.Time
 	var simSolarCapacityAt time.Time
+	var simVPPCapacityAt time.Time
 	var startedVPPChargingAt time.Time
 	var currentVPPEventEnd time.Time
 	var wasInVPPEvent bool
@@ -588,11 +590,14 @@ func (c *Controller) SimulateState(
 			if (subClampedNetKWH < 0 && newSimEnergy >= capacityThresholdKWH) || newSimEnergy > capacityKWH {
 				if simCapacityAt.IsZero() {
 					remainingBeforeCapacity := capacityThresholdKWH - startEnergy
+					var fraction float64
 					if remainingBeforeCapacity > 0 {
-						fraction := max(remainingBeforeCapacity/-subClampedNetKWH, 0)
-						simCapacityAt = subStart.Add(time.Duration(fraction * float64(time.Hour)))
-					} else {
-						simCapacityAt = subStart
+						fraction = max(remainingBeforeCapacity/-subClampedNetKWH, 0)
+					}
+					hitTime := subStart.Add(time.Duration(fraction * float64(time.Hour)))
+					simCapacityAt = hitTime
+					if inPreVPPCharging {
+						simVPPCapacityAt = hitTime
 					}
 				}
 				deficitKWH = 0.0
@@ -630,6 +635,7 @@ func (c *Controller) SimulateState(
 			HitCapacityAt:           simCapacityAt,
 			HitStandbyCapacityAt:    simStandbyCapacityAt,
 			HitSolarCapacityAt:      simSolarCapacityAt,
+			HitVPPCapacityAt:        simVPPCapacityAt,
 			HitDeficitAt:            simDeficitAt,
 			HitBelowDeficitAt:       simBelowDeficitAt,
 			HitAboveDeficitAt:       simAboveDeficitAt,

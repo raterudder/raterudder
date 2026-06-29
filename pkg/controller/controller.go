@@ -69,6 +69,7 @@ type simulationSummary struct {
 	HitFutureCapacityAt        time.Time
 	HitStandbyCapacityAt       time.Time
 	HitSolarCapacityAt         time.Time
+	HitVPPCapacityAt           time.Time
 	HitDeficitAt               time.Time
 	HitBelowDeficitAt          time.Time
 	HitAboveDeficitAt          time.Time
@@ -407,6 +408,9 @@ func (c *Controller) analyzeSimulation(
 		if !slot.HitSolarCapacityAt.IsZero() && slot.HitSolarCapacityAt.After(now) && summary.HitSolarCapacityAt.IsZero() {
 			summary.HitSolarCapacityAt = slot.HitSolarCapacityAt
 		}
+		if !slot.HitVPPCapacityAt.IsZero() && slot.HitVPPCapacityAt.After(now) && summary.HitVPPCapacityAt.IsZero() {
+			summary.HitVPPCapacityAt = slot.HitVPPCapacityAt
+		}
 		if !slot.StartedVPPChargingAt.IsZero() && slot.StartedVPPChargingAt.After(now) && summary.SoonestVPPChargingAt.IsZero() {
 			summary.SoonestVPPChargingAt = slot.StartedVPPChargingAt
 		}
@@ -422,6 +426,12 @@ func (c *Controller) analyzeSimulation(
 	}
 	if !summary.HitSolarCapacityAt.IsZero() && (summary.HitFutureCapacityAt.IsZero() || summary.HitSolarCapacityAt.Before(summary.HitFutureCapacityAt)) {
 		summary.HitFutureCapacityAt = summary.HitSolarCapacityAt
+	}
+	if !summary.HitVPPCapacityAt.IsZero() && (summary.HitCapacityAt.IsZero() || summary.HitVPPCapacityAt.Before(summary.HitCapacityAt)) {
+		summary.HitCapacityAt = summary.HitVPPCapacityAt
+	}
+	if !summary.HitVPPCapacityAt.IsZero() && (summary.HitFutureCapacityAt.IsZero() || summary.HitVPPCapacityAt.Before(summary.HitFutureCapacityAt)) {
+		summary.HitFutureCapacityAt = summary.HitVPPCapacityAt
 	}
 
 	gridChargeNowCost := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
@@ -580,7 +590,7 @@ func (c *Controller) evaluateDeficit(
 	// HitBelowDeficitAt is zero.
 	var vppCutoff time.Time
 	if !summary.SoonestVPPChargingAt.IsZero() {
-		vppCutoff = summary.SoonestVPPChargingAt
+		vppCutoff = summary.SoonestVPPChargingAt.Add(-time.Duration(settings.PeakSurvivalBufferMinutes) * time.Minute)
 	}
 	if !summary.SoonestVPPStandbyAt.IsZero() {
 		if vppCutoff.IsZero() || summary.SoonestVPPStandbyAt.Before(vppCutoff) {
@@ -1889,22 +1899,32 @@ func (c *Controller) evaluateFallback(
 		// it now.
 		// If solar exporting is enabled, hitting capacity does not result in curtailment (the excess solar is exported),
 		// so we do not discharge early, preserving the battery energy for high-value peak periods.
-		if !summary.HitSolarCapacityAt.IsZero() && summary.HitSolarCapacityAt.Before(hitAboveDeficitAt) {
-			reason := types.ActionReasonPreventSolarCurtailment
-			loadReason := fmt.Sprintf("Solar curtailment likely at %s before deficit at %s.", summary.HitSolarCapacityAt.Format(time.Kitchen), hitAboveDeficitAt.Format(time.Kitchen))
+		if !summary.HitCapacityAt.IsZero() && summary.HitCapacityAt.Before(hitAboveDeficitAt) {
+			var reason types.ActionReason
+			var loadReason string
+			if !summary.HitSolarCapacityAt.IsZero() && !summary.HitSolarCapacityAt.After(summary.HitCapacityAt) {
+				reason = types.ActionReasonPreventSolarCurtailment
+				loadReason = fmt.Sprintf("Solar curtailment likely at %s before deficit at %s.", summary.HitSolarCapacityAt.Format(time.Kitchen), hitAboveDeficitAt.Format(time.Kitchen))
+			} else if !summary.HitVPPCapacityAt.IsZero() && !summary.HitVPPCapacityAt.After(summary.HitCapacityAt) {
+				reason = types.ActionReasonSufficientBattery
+				loadReason = fmt.Sprintf("Battery will hit capacity at %s from VPP prep before deficit at %s.", summary.HitVPPCapacityAt.Format(time.Kitchen), hitAboveDeficitAt.Format(time.Kitchen))
+			}
 
-			log.Ctx(ctx).DebugContext(
-				ctx,
-				"deficit predicted but will refill to capacity before then",
-				slog.Time("hitCapacityAt", summary.HitCapacityAt),
-				slog.Time("hitSolarCapacityAt", summary.HitSolarCapacityAt),
-				slog.Time("hitDeficitAt", hitAboveDeficitAt),
-				slog.String("reason", string(reason)),
-			)
-			return &DecisionResult{
-				BatteryMode: types.BatteryModeLoad,
-				Reason:      reason,
-				Description: loadReason,
+			if reason != "" {
+				log.Ctx(ctx).DebugContext(
+					ctx,
+					"deficit predicted but will refill to capacity before then",
+					slog.Time("hitCapacityAt", summary.HitCapacityAt),
+					slog.Time("hitSolarCapacityAt", summary.HitSolarCapacityAt),
+					slog.Time("hitVPPCapacityAt", summary.HitVPPCapacityAt),
+					slog.Time("hitDeficitAt", hitAboveDeficitAt),
+					slog.String("reason", string(reason)),
+				)
+				return &DecisionResult{
+					BatteryMode: types.BatteryModeLoad,
+					Reason:      reason,
+					Description: loadReason,
+				}
 			}
 		}
 
@@ -2269,6 +2289,8 @@ func (c *Controller) evaluateVPPEvent(
 		return nil
 	}
 
+	vppChargingDeadline := summary.SoonestVPPChargingAt.Add(-time.Duration(settings.PeakSurvivalBufferMinutes) * time.Minute)
+
 	var forcedChargePrice float64
 	var forcedChargeSlotPrice types.Price
 	var found bool
@@ -2295,11 +2317,11 @@ func (c *Controller) evaluateVPPEvent(
 		currentEnergyKWH,
 		capacityKWH,
 		minKWH,
-		summary.SoonestVPPChargingAt,
+		vppChargingDeadline,
 	)
 
 	// If solar is predicted to fill the battery to capacity before VPP pre-charging starts, we exit.
-	if !standbyRes.HitSolarCapacityAt.IsZero() && !standbyRes.HitSolarCapacityAt.After(summary.SoonestVPPChargingAt) {
+	if !standbyRes.HitSolarCapacityAt.IsZero() && !standbyRes.HitSolarCapacityAt.After(vppChargingDeadline) {
 		return nil
 	}
 
@@ -2323,7 +2345,7 @@ func (c *Controller) evaluateVPPEvent(
 	var simPrevChargeCosts []simPriceSlot
 	var simPrevChargeCostsFuture []simPriceSlot
 	for i, slot := range simData {
-		if !slot.TS.Before(summary.SoonestVPPChargingAt) {
+		if !slot.TS.Before(vppChargingDeadline) {
 			break
 		}
 		cost := slot.GridChargeDollarsPerKWH

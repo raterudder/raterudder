@@ -5580,6 +5580,27 @@ func TestEvaluateFallback(t *testing.T) {
 		}
 	})
 
+	t.Run("VPPCapacityHit -> SufficientBattery", func(t *testing.T) {
+		status := baseStatus
+		status.BatterySOC = 95.0
+
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}
+		summary := simulationSummary{
+			HitBelowDeficitAt:  now.Add(5 * time.Hour),
+			HitAboveDeficitAt:  now.Add(5 * time.Hour),
+			HitCapacityAt:      now.Add(2 * time.Hour), // Hit capacity due to VPP pre-charging
+			HitSolarCapacityAt: time.Time{},            // Not from solar
+			HitVPPCapacityAt:   now.Add(2 * time.Hour),
+		}
+
+		decision := c.evaluateFallback(ctx, now, status, currentPrice, baseSettings, nil, summary)
+		if assert.NotNil(t, decision) {
+			assert.Equal(t, types.BatteryModeLoad, decision.BatteryMode)
+			assert.Equal(t, types.ActionReasonSufficientBattery, decision.Reason)
+			assert.Contains(t, decision.Description, "from VPP prep before deficit")
+		}
+	})
+
 	t.Run("Currently at 99% SOC (curtailed) and will hit solar capacity again later -> PreventSolarCurtailment", func(t *testing.T) {
 		status := baseStatus
 		status.BatterySOC = 99.0
@@ -6392,6 +6413,42 @@ func TestEvaluateVPPEvent(t *testing.T) {
 			if assert.NotNil(t, eval.Plan) {
 				assert.Equal(t, now.Add(time.Hour), eval.Plan.ChargeTime)
 				assert.Equal(t, 0.05, eval.Plan.ChargeCost)
+			}
+		}
+	})
+
+	t.Run("VPP Prep Charge respecting PeakSurvivalBufferMinutes", func(t *testing.T) {
+		summary := simulationSummary{
+			SoonestVPPChargingAt: now.Add(2 * time.Hour),
+		}
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.10, Price: types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.05, Price: types.Price{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.05}},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.15, Price: types.Price{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(3 * time.Hour), DollarsPerKWH: 0.15}},
+		}
+
+		almostFullStatus := baseStatus
+		almostFullStatus.BatterySOC = 80.0        // Needs 2.0 kWh
+		almostFullStatus.MaxBatteryChargeKW = 5.0 // charge rate 5kW (needs 0.4h, i.e., 1 slot)
+
+		// 1. Without buffer: can delay to Hour 1
+		evalNoBuffer := c.evaluateVPPEvent(ctx, now, almostFullStatus, types.Price{TSStart: now, DollarsPerKWH: 0.10}, baseSettings, simData, summary)
+		if assert.NotNil(t, evalNoBuffer) {
+			assert.Nil(t, evalNoBuffer.Decision)
+			if assert.NotNil(t, evalNoBuffer.Plan) {
+				assert.Equal(t, now.Add(time.Hour), evalNoBuffer.Plan.ChargeTime)
+			}
+		}
+
+		// 2. With 90-minute buffer: cannot delay because Hour 1 starts after the 12:30 PM deadline (VPP prep start at 2:00 PM - 90 mins = 12:30 PM)
+		settingsWithBuffer := baseSettings
+		settingsWithBuffer.PeakSurvivalBufferMinutes = 90
+		evalWithBuffer := c.evaluateVPPEvent(ctx, now, almostFullStatus, types.Price{TSStart: now, DollarsPerKWH: 0.10}, settingsWithBuffer, simData, summary)
+		if assert.NotNil(t, evalWithBuffer) {
+			assert.Nil(t, evalWithBuffer.Plan)
+			if assert.NotNil(t, evalWithBuffer.Decision) {
+				assert.Equal(t, types.BatteryModeChargeAny, evalWithBuffer.Decision.BatteryMode)
+				assert.Equal(t, types.ActionReasonVPPPrep, evalWithBuffer.Decision.Reason)
 			}
 		}
 	})
