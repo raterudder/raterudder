@@ -163,6 +163,7 @@ type VPPEvent struct {
 	TSStart     time.Time `json:"tsStart"`
 	TSEnd       time.Time `json:"tsEnd"`
 	VPPSoc      float64   `json:"vppSoc"`
+	OptOut      bool      `json:"optOut"`
 }
 
 // SystemStatus represents the current system status.

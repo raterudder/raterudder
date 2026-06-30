@@ -1311,6 +1311,64 @@ func TestSimulateState(t *testing.T) {
 				assert.InDelta(t, 2.1, simData[2].TotalBatteryDeficitKWH, 0.001)
 			}
 		})
+
+		t.Run("VPP Event Opt-Out is Ignored", func(t *testing.T) {
+			now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+			history := []types.EnergyStats{}
+			for i := 1; i <= 3; i++ {
+				pastDay := now.Add(time.Duration(-24*i) * time.Hour)
+				for h := 0; h < 24; h++ {
+					history = append(history, types.EnergyStats{
+						TSHourStart: pastDay.Add(time.Duration(h) * time.Hour),
+						SolarKWH:    0,
+						HomeKWH:     1.0,
+					})
+				}
+			}
+
+			currentStatus := types.SystemStatus{
+				BatteryCapacityKWH:    10.0,
+				BatterySOC:            50.0, // 5.0 kWh
+				BatteryKW:             0,
+				Timestamp:             now,
+				MaxBatteryChargeKW:    2.0,
+				MaxBatteryDischargeKW: 2.0,
+				VPPEvents: []types.VPPEvent{
+					{
+						Description: "Opted Out VPP",
+						TSStart:     now.Add(-1 * time.Hour), // Started at 11:00
+						TSEnd:       now.Add(2 * time.Hour),  // Ends at 14:00
+						VPPSoc:      20.0,                    // 20% SOC = 2.0 kWh target
+						OptOut:      true,
+					},
+				},
+			}
+
+			settings := types.Settings{
+				MinBatterySOC:            30.0, // Regular reserve is 30% (3.0 kWh)
+				SolarTrendRatioMax:       3.0,
+				SolarBellCurveMultiplier: 0,
+				GridChargeBatteries:      false,
+				GridExportSolar:          true,
+			}
+
+			simData, _ := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
+			if assert.Len(t, simData, 24) {
+				// Since VPP is opted out, it should be ignored.
+				// Regular reserve is 30% + 1% buffer = 31% (3.1 kWh).
+				// In Hour 0, the battery starts at 5.0 kWh.
+				// Since VPP is ignored and we are above the min SOC (3.1 kWh),
+				// the battery should only discharge to cover the home load (1.0 kW).
+				// We should NOT export extra energy as if VPP was active.
+				// Ending energy: 5.0 - 1.0 = 4.0 kWh.
+				assert.InDelta(t, 4.0, simData[0].BatteryKWH, 0.001)
+
+				// Ensure no VPP charging start time or VPP event ends are tracked since the event was ignored.
+				for _, slot := range simData {
+					assert.True(t, slot.StartedVPPChargingAt.IsZero())
+				}
+			}
+		})
 	})
 
 }

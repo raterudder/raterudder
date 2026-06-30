@@ -686,6 +686,7 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 				)
 			} else if startTime.After(time.Now()) {
 				vppSoc := pd.VPPSoc
+				optOut := pd.LatestEventStatus == 3 || pd.LatestEventStatus == 4
 				if ehEvents, err := f.queryEHEvents(ctx); err != nil {
 					log.Ctx(ctx).WarnContext(ctx, "failed to query EH events", slog.Any("error", err))
 				} else {
@@ -693,6 +694,7 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 					for _, ev := range ehEvents {
 						if ev.EventID == pd.LatestEventID {
 							vppSoc = ev.VPPSoc
+							optOut = ev.EventStatus == 3 || ev.EventStatus == 4
 							found = true
 							log.Ctx(ctx).DebugContext(
 								ctx,
@@ -717,6 +719,7 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 					TSStart:     startTime,
 					TSEnd:       endTime,
 					VPPSoc:      vppSoc,
+					OptOut:      optOut,
 				})
 			}
 		}
@@ -1731,4 +1734,7 @@ type franklinEHEvent struct {
 	VPPSoc    float64 `json:"vppSoc"`
 	StartTime string  `json:"startTime"`
 	EndTime   string  `json:"endTime"`
+	// EventStatus 2 means completed, 3 means cancelled, 4 means opt-out
+	// TODO: determine the rest of the statuses
+	EventStatus int `json:"eventStatus"`
 }

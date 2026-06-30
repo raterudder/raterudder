@@ -222,6 +222,9 @@ func (c *Controller) SimulateState(
 		// VPPEvents are assumed to be sorted by start time.
 		var nextVPP *types.VPPEvent
 		for _, ev := range currentStatus.VPPEvents {
+			if ev.OptOut {
+				continue
+			}
 			if simTime.Before(ev.TSEnd) {
 				nextVPP = &ev
 				break
