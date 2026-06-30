@@ -267,11 +267,11 @@ func (e *Enphase) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 
 		if maxLen > 0 {
 			latestIndex := maxLen - 1
-			whToKW := func(val int) float64 {
-				return (float64(val) / 1000.0) / (float64(intervalSecs) / 3600.0)
+			whToKW := func(val float64) float64 {
+				return (val / 1000.0) / (float64(intervalSecs) / 3600.0)
 			}
 
-			getPowerVal := func(arr []int) float64 {
+			getPowerVal := func(arr []float64) float64 {
 				if latestIndex < len(arr) {
 					return whToKW(arr[latestIndex])
 				}
@@ -344,9 +344,7 @@ func (e *Enphase) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		}
 	}
 
-	drEventActive := data.State.BatteryConfig.DrEventActive
-	severeWeatherWatch := data.State.BatteryConfig.SevereWeatherWatch == "enabled"
-	emergencyMode := drEventActive || severeWeatherWatch
+	emergencyMode := data.State.BatteryConfig.Usage == "backup_only"
 
 	backupReserveSOC := float64(data.State.BatteryConfig.BatteryBackupPercentage)
 
@@ -359,7 +357,9 @@ func (e *Enphase) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 			Description: "Severe weather alert active",
 		})
 	}
-
+	if data.State.BatteryConfig.DrEventActive {
+		log.Ctx(ctx).InfoContext(ctx, "active demand response (VPP) event", slog.String("drEventMode", data.State.BatteryConfig.DrEventMode))
+	}
 	var alarms []types.SystemAlarm
 	var batteryChargingDisabled bool
 	offlineBatteries := 0
@@ -416,6 +416,7 @@ func (e *Enphase) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		BatteryChargingDisabled: batteryChargingDisabled,
 		Alarms:                  alarms,
 		Storms:                  storms,
+		VPPActive:               data.State.BatteryConfig.DrEventActive,
 	}
 
 	log.Ctx(ctx).DebugContext(ctx, "enphase system status", slog.Any("status", status))
@@ -436,12 +437,10 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 		return err
 	}
 
-	drEventActive := data.State.BatteryConfig.DrEventActive
-	severeWeatherWatch := data.State.BatteryConfig.SevereWeatherWatch == "enabled"
-	if drEventActive || severeWeatherWatch {
+	severeWeatherWatchActive := data.State.BatteryConfig.SevereWeatherWatch == "active"
+	if severeWeatherWatchActive {
 		log.Ctx(ctx).InfoContext(ctx, "device is in storm mode, skipping set modes",
-			slog.Bool("drEventActive", drEventActive),
-			slog.Bool("severeWeatherWatch", severeWeatherWatch),
+			slog.String("severeWeatherWatch", data.State.BatteryConfig.SevereWeatherWatch),
 		)
 		return errors.New("device is in storm mode")
 	}
@@ -672,9 +671,9 @@ func (e *Enphase) GetEnergyHistory(ctx context.Context, start, end time.Time) ([
 				hourlyStatsMap[hourStart] = s
 			}
 
-			getVal := func(arr []int) float64 {
+			getVal := func(arr []float64) float64 {
 				if i < len(arr) {
-					return float64(arr[i]) / 1000.0
+					return arr[i] / 1000.0
 				}
 				return 0
 			}
@@ -865,23 +864,23 @@ func (e *Enphase) getDataWithCache(ctx context.Context, force bool) (enphaseData
 type enphaseTodayResponse struct {
 	StartDate string `json:"start_date"`
 	Stats     []struct {
-		Production       []int `json:"production"`
-		Consumption      []int `json:"consumption"`
-		Import           []int `json:"import"`
-		Export           []int `json:"export"`
-		GridImport       []int `json:"grid_import"`
-		SolarHome        []int `json:"solar_home"`
-		SolarBattery     []int `json:"solar_battery"`
-		SolarGrid        []int `json:"solar_grid"`
-		GeneratorHome    []int `json:"generator_home"`
-		GeneratorBattery []int `json:"generator_battery"`
-		GeneratorGrid    []int `json:"generator_grid"`
-		BatteryHome      []int `json:"battery_home"`
-		BatteryGrid      []int `json:"battery_grid"`
-		GridBattery      []int `json:"grid_battery"`
-		GridHome         []int `json:"grid_home"`
-		StartTime        int64 `json:"start_time"`
-		IntervalLength   int   `json:"interval_length"`
+		Production       []float64 `json:"production"`
+		Consumption      []float64 `json:"consumption"`
+		Import           []float64 `json:"import"`
+		Export           []float64 `json:"export"`
+		GridImport       []float64 `json:"grid_import"`
+		SolarHome        []float64 `json:"solar_home"`
+		SolarBattery     []float64 `json:"solar_battery"`
+		SolarGrid        []float64 `json:"solar_grid"`
+		GeneratorHome    []float64 `json:"generator_home"`
+		GeneratorBattery []float64 `json:"generator_battery"`
+		GeneratorGrid    []float64 `json:"generator_grid"`
+		BatteryHome      []float64 `json:"battery_home"`
+		BatteryGrid      []float64 `json:"battery_grid"`
+		GridBattery      []float64 `json:"grid_battery"`
+		GridHome         []float64 `json:"grid_home"`
+		StartTime        int64     `json:"start_time"`
+		IntervalLength   int       `json:"interval_length"`
 	} `json:"stats"`
 }
 
@@ -1034,14 +1033,14 @@ type enphaseBatteryConfig struct {
 	PrevBatteryBackupPercentage      enphaseBatteryBackupPercentage       `json:"prev_battery_backup_percentage"`
 	SevereWeatherWatch               string                               `json:"severe_weather_watch"`
 	ShowSevereWeatherAlert           bool                                 `json:"show_severe_weather_alert"`
-	StormAlertMessage                map[string]any                       `json:"storm_alert_message"`
+	StormAlertMessage                *enphaseStormAlertMessage            `json:"storm_alert_message"`
 	Usage                            string                               `json:"usage"`
 	VeryLowSoc                       int                                  `json:"very_low_soc"`
 	EnvStorageSettings               map[string]enphaseEnvStorageSettings `json:"env_storage_settings"`
 }
 
 type enphaseBatteryBackupPercentage struct {
-	SelfConsumption int `json:"self_consumption"`
+	SelfConsumption int `json:"self-consumption"`
 	CostSavings     int `json:"cost_savings"`
 	BackupOnly      int `json:"backup_only"`
 	Expert          int `json:"expert"`
@@ -1065,4 +1064,11 @@ type enphaseBatterySchedulesPayload struct {
 	BatteryBackupPercentage int    `json:"battery_backup_percentage"`
 	ChargeFromGrid          bool   `json:"charge_from_grid"`
 	BatteryGridMode         string `json:"battery_grid_mode,omitempty"`
+}
+
+type enphaseStormAlertMessage struct {
+	Critical  bool   `json:"critical"`
+	AlertName string `json:"alert_name"`
+	StartTime any    `json:"start_time"`
+	EndTime   any    `json:"end_time"`
 }

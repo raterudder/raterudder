@@ -177,10 +177,10 @@ func TestEnphase(t *testing.T) {
 						"start_date": "2026-04-13",
 						"stats": []map[string]any{
 							map[string]any{
-								"production":      []int{0, 0, 0, 1000}, // 4th interval has 1000Wh
-								"consumption":     []int{0, 0, 0, 0},
-								"solar_home":      []int{0, 0, 0, 500},
-								"solar_grid":      []int{0, 0, 0, 500},
+								"production":      []float64{0, 0, 0, 1000}, // 4th interval has 1000Wh
+								"consumption":     []float64{0, 0, 0, 0},
+								"solar_home":      []float64{0, 0, 0, 500},
+								"solar_grid":      []float64{0, 0, 0, 500},
 								"start_time":      1776038400, // 2026-04-13T00:00:00Z
 								"interval_length": 900,
 							},
@@ -329,11 +329,11 @@ func TestEnphase(t *testing.T) {
 						},
 						BatteryConfig: enphaseBatteryConfig{
 							BatteryBackupPercentage: 30,
-							DrEventActive:           false,
+							DrEventActive:           true,
 							SevereWeatherWatch:      "disabled",
 							ShowSevereWeatherAlert:  true,
-							StormAlertMessage: map[string]any{
-								"message": "Blizzard Warning",
+							StormAlertMessage: &enphaseStormAlertMessage{
+								AlertName: "Blizzard Warning",
 							},
 							EnvStorageSettings: map[string]enphaseEnvStorageSettings{
 								"envoy1": {SOC: 75, Mode: "self-consumption"},
@@ -395,6 +395,7 @@ func TestEnphase(t *testing.T) {
 		assert.True(t, status.ElevatedMinBatterySOC)
 		assert.True(t, status.BatteryAboveMinSOC)
 		assert.False(t, status.EmergencyMode)
+		assert.True(t, status.VPPActive)
 
 		assert.Len(t, status.Storms, 1)
 		assert.Equal(t, "Severe weather alert active", status.Storms[0].Description)
@@ -482,7 +483,7 @@ func TestEnphase(t *testing.T) {
 					State: enphaseState{
 						SiteID: 123,
 						BatteryConfig: enphaseBatteryConfig{
-							SevereWeatherWatch: "enabled",
+							SevereWeatherWatch: "active",
 						},
 					},
 				}
