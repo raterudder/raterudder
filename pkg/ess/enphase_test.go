@@ -597,6 +597,7 @@ func TestEnphase(t *testing.T) {
 			if r.URL.Path == "/service/batteryConfig/api/v1/batterySettings/123" {
 				assert.Equal(t, "123456", r.URL.Query().Get("userId"))
 				if r.Method == "GET" {
+					w.Header().Set("X-Csrf-Token", "settings_csrf_123")
 					w.WriteHeader(http.StatusOK)
 					chargeVal := "false"
 					if settingsChargeFromGrid {
@@ -628,6 +629,7 @@ func TestEnphase(t *testing.T) {
 					return
 				}
 				if r.Method == "PUT" {
+					assert.Equal(t, "settings_csrf_123", r.Header.Get("X-Xsrf-Token"))
 					var body struct {
 						ChargeFromGrid                bool   `json:"chargeFromGrid"`
 						ChargeFromGridScheduleEnabled bool   `json:"chargeFromGridScheduleEnabled"`
@@ -646,8 +648,18 @@ func TestEnphase(t *testing.T) {
 			}
 
 			if r.URL.Path == "/service/batteryConfig/api/v1/profile/123" {
+				if r.Method == "GET" {
+					assert.Equal(t, "123456", r.URL.Query().Get("userId"))
+					assert.Equal(t, "enho", r.URL.Query().Get("source"))
+					assert.Equal(t, "en", r.URL.Query().Get("locale"))
+					w.Header().Set("X-Csrf-Token", "profile_csrf_123")
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(`{"data": {}}`))
+					return
+				}
 				if r.Method == "PUT" {
 					assert.Empty(t, r.URL.Query().Get("userId"))
+					assert.Equal(t, "profile_csrf_123", r.Header.Get("X-Xsrf-Token"))
 					var body struct {
 						Profile                 string `json:"profile"`
 						BatteryBackupPercentage int    `json:"batteryBackupPercentage"`

@@ -28,18 +28,19 @@ import (
 var errEnphaseUnauthorized = errors.New("unauthorized")
 
 type Enphase struct {
-	client       *http.Client
-	baseURL      *url.URL
-	mu           sync.Mutex
-	settings     types.Settings
-	username     string
-	password     string
-	sessionID    string
-	managerToken string
-	systemID     int
-	userID       int
-	dataCache    enphaseDataResult
-	dataExpiry   time.Time
+	client        *http.Client
+	baseURL       *url.URL
+	mu            sync.Mutex
+	settings      types.Settings
+	username      string
+	password      string
+	sessionID     string
+	managerToken  string
+	systemID      int
+	userID        int
+	dataCache     enphaseDataResult
+	dataExpiry    time.Time
+	lastCSRFToken map[string]string
 }
 
 func newEnphase() *Enphase {
@@ -57,7 +58,8 @@ func newEnphase() *Enphase {
 			Timeout:   time.Minute,
 			Jar:       jar,
 		},
-		baseURL: u,
+		baseURL:       u,
+		lastCSRFToken: make(map[string]string),
 	}
 }
 
@@ -460,20 +462,20 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 		return fmt.Errorf("failed to get battery settings: %w", err)
 	}
 
-	currentChargeFromGrid := settingsData.Data.ChargeFromGrid
-	currentChargeFromGridScheduleEnabled := settingsData.Data.ChargeFromGridScheduleEnabled
-	currentReserveSOC := float64(settingsData.Data.BatteryBackupPercentage)
-	currentProfile := settingsData.Data.Profile
+	currentChargeFromGrid := settingsData.ChargeFromGrid
+	currentChargeFromGridScheduleEnabled := settingsData.ChargeFromGridScheduleEnabled
+	currentReserveSOC := float64(settingsData.BatteryBackupPercentage)
+	currentProfile := settingsData.Profile
 
-	if settingsData.Data.RequestedConfig != (enphaseRequestedConfig{}) {
-		currentChargeFromGrid = settingsData.Data.RequestedConfig.ChargeFromGrid
-		currentChargeFromGridScheduleEnabled = settingsData.Data.RequestedConfig.ChargeFromGridScheduleEnabled
-		currentReserveSOC = float64(settingsData.Data.RequestedConfig.BatteryBackupPercentage)
-		currentProfile = settingsData.Data.RequestedConfig.Profile
+	if settingsData.RequestedConfig != (enphaseRequestedConfig{}) {
+		currentChargeFromGrid = settingsData.RequestedConfig.ChargeFromGrid
+		currentChargeFromGridScheduleEnabled = settingsData.RequestedConfig.ChargeFromGridScheduleEnabled
+		currentReserveSOC = float64(settingsData.RequestedConfig.BatteryBackupPercentage)
+		currentProfile = settingsData.RequestedConfig.Profile
 	}
 
-	isBackupCurrent := settingsData.Data.Profile == "backup_only"
-	isBackupPending := settingsData.Data.RequestedConfig.Profile == "backup_only"
+	isBackupCurrent := settingsData.Profile == "backup_only"
+	isBackupPending := settingsData.RequestedConfig.Profile == "backup_only"
 	if isBackupCurrent || isBackupPending {
 		log.Ctx(ctx).InfoContext(ctx, "device is in backup mode, skipping set modes")
 		return errors.New("device is in backup mode")
@@ -546,9 +548,6 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 			payload := enphaseBatterySettingsPayload{
 				ChargeFromGrid:                newChargeFromGrid,
 				ChargeFromGridScheduleEnabled: false,
-				AcceptedItcDisclaimer:         settingsData.Data.AcceptedItcDisclaimer,
-				ChargeBeginTime:               settingsData.Data.ChargeBeginTime,
-				ChargeEndTime:                 settingsData.Data.ChargeEndTime,
 			}
 			if err := e.updateBatterySettings(ctx, payload); err != nil {
 				return err
@@ -604,23 +603,35 @@ func (e *Enphase) getBatterySettings(ctx context.Context) (enphaseBatterySetting
 		return enphaseBatterySettingsResponse{}, err
 	}
 
-	var res enphaseBatterySettingsResponse
+	var res struct {
+		Data enphaseBatterySettingsResponse `json:"data"`
+	}
 	if err := e.doRequest(req, &res); err != nil {
 		return enphaseBatterySettingsResponse{}, err
 	}
-	return res, nil
+	return res.Data, nil
 }
 
 type enphaseBatterySettingsPayload struct {
-	ChargeFromGrid                bool   `json:"chargeFromGrid"`
-	ChargeFromGridScheduleEnabled bool   `json:"chargeFromGridScheduleEnabled"`
-	AcceptedItcDisclaimer         string `json:"acceptedItcDisclaimer,omitempty"`
-	ChargeBeginTime               int    `json:"chargeBeginTime,omitempty"`
-	ChargeEndTime                 int    `json:"chargeEndTime,omitempty"`
+	ChargeFromGrid                bool `json:"chargeFromGrid"`
+	ChargeFromGridScheduleEnabled bool `json:"chargeFromGridScheduleEnabled"`
 }
 
 func (e *Enphase) updateBatterySettings(ctx context.Context, payload enphaseBatterySettingsPayload) error {
-	u := e.baseURL.JoinPath(fmt.Sprintf("service/batteryConfig/api/v1/batterySettings/%d", e.systemID))
+	path := fmt.Sprintf("/service/batteryConfig/api/v1/batterySettings/%d", e.systemID)
+	csrfToken := e.lastCSRFToken[path]
+	if csrfToken == "" {
+		if _, err := e.getBatterySettings(ctx); err != nil {
+			return err
+		}
+		csrfToken = e.lastCSRFToken[path]
+		if csrfToken == "" {
+			return errors.New("missing CSRF token for battery settings")
+		}
+	}
+	delete(e.lastCSRFToken, path)
+
+	u := e.baseURL.JoinPath(path)
 	if e.userID != 0 {
 		q := u.Query()
 		q.Set("userId", fmt.Sprintf("%d", e.userID))
@@ -636,6 +647,7 @@ func (e *Enphase) updateBatterySettings(ctx context.Context, payload enphaseBatt
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Xsrf-Token", csrfToken)
 
 	var res struct {
 		Message string `json:"message"`
@@ -649,13 +661,50 @@ func (e *Enphase) updateBatterySettings(ctx context.Context, payload enphaseBatt
 	return nil
 }
 
+func (e *Enphase) getBatteryProfile(ctx context.Context) (enphaseBatteryProfileResponse, error) {
+	path := fmt.Sprintf("/service/batteryConfig/api/v1/profile/%d", e.systemID)
+	u := e.baseURL.JoinPath(path)
+	q := u.Query()
+	q.Set("source", "enho")
+	q.Set("locale", "en")
+	if e.userID != 0 {
+		q.Set("userId", fmt.Sprintf("%d", e.userID))
+	}
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+	if err != nil {
+		return enphaseBatteryProfileResponse{}, err
+	}
+	var res struct {
+		Data enphaseBatteryProfileResponse `json:"data"`
+	}
+	if err := e.doRequest(req, &res); err != nil {
+		return enphaseBatteryProfileResponse{}, err
+	}
+	return res.Data, nil
+}
+
 type enphaseBatteryProfilePayload struct {
 	Profile                 string `json:"profile"`
 	BatteryBackupPercentage int    `json:"batteryBackupPercentage"`
 }
 
 func (e *Enphase) updateBatteryProfile(ctx context.Context, payload enphaseBatteryProfilePayload) error {
-	u := e.baseURL.JoinPath(fmt.Sprintf("service/batteryConfig/api/v1/profile/%d", e.systemID))
+	path := fmt.Sprintf("/service/batteryConfig/api/v1/profile/%d", e.systemID)
+	csrfToken := e.lastCSRFToken[path]
+	if csrfToken == "" {
+		if _, err := e.getBatteryProfile(ctx); err != nil {
+			return err
+		}
+		csrfToken = e.lastCSRFToken[path]
+		if csrfToken == "" {
+			return errors.New("missing CSRF token for battery profile")
+		}
+	}
+	delete(e.lastCSRFToken, path)
+
+	u := e.baseURL.JoinPath(path)
 	jsonBytes, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("failed to marshal battery profile payload: %w", err)
@@ -666,6 +715,7 @@ func (e *Enphase) updateBatteryProfile(ctx context.Context, payload enphaseBatte
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Xsrf-Token", csrfToken)
 
 	var res struct {
 		Message string `json:"message"`
@@ -1056,6 +1106,14 @@ func (e *Enphase) doRequest(req *http.Request, dest any) error {
 	}
 	defer resp.Body.Close()
 
+	csrfToken := resp.Header.Get("X-Csrf-Token")
+	if csrfToken != "" {
+		if e.lastCSRFToken == nil {
+			e.lastCSRFToken = make(map[string]string)
+		}
+		e.lastCSRFToken[req.URL.Path] = csrfToken
+	}
+
 	// If we get redirected to a login page, treat it as unauthorized
 	if resp.Request != nil && !strings.Contains(req.URL.Path, "/login") && strings.Contains(resp.Request.URL.Path, "/login") {
 		return errEnphaseUnauthorized
@@ -1217,14 +1275,23 @@ type enphaseStormAlertMessage struct {
 }
 
 type enphaseBatterySettingsResponse struct {
-	Data struct {
-		ChargeFromGrid                bool                   `json:"chargeFromGrid"`
-		ChargeFromGridScheduleEnabled bool                   `json:"chargeFromGridScheduleEnabled"`
-		Profile                       string                 `json:"profile"`
-		BatteryBackupPercentage       int                    `json:"batteryBackupPercentage"`
-		AcceptedItcDisclaimer         string                 `json:"acceptedItcDisclaimer"`
-		ChargeBeginTime               int                    `json:"chargeBeginTime"`
-		ChargeEndTime                 int                    `json:"chargeEndTime"`
-		RequestedConfig               enphaseRequestedConfig `json:"requestedConfig"`
-	} `json:"data"`
+	ChargeFromGrid                bool                   `json:"chargeFromGrid"`
+	ChargeFromGridScheduleEnabled bool                   `json:"chargeFromGridScheduleEnabled"`
+	Profile                       string                 `json:"profile"`
+	BatteryBackupPercentage       int                    `json:"batteryBackupPercentage"`
+	ChargeBeginTime               int                    `json:"chargeBeginTime"`
+	ChargeEndTime                 int                    `json:"chargeEndTime"`
+	RequestedConfig               enphaseRequestedConfig `json:"requestedConfig"`
+	BatteryBackupPercentageMin    int                    `json:"batteryBackupPercentageMin"`
+	BatteryBackupPercentageMax    int                    `json:"batteryBackupPercentageMax"`
+	VeryLowSOC                    int                    `json:"veryLowSoc"`
+}
+
+type enphaseBatteryProfileResponse struct {
+	Profile                    string                 `json:"profile"`
+	RequestedConfig            enphaseRequestedConfig `json:"requestedConfig"`
+	BatteryBackupPercentage    int                    `json:"batteryBackupPercentage"`
+	BatteryBackupPercentageMin int                    `json:"batteryBackupPercentageMin"`
+	BatteryBackupPercentageMax int                    `json:"batteryBackupPercentageMax"`
+	VeryLowSOC                 int                    `json:"veryLowSoc"`
 }
