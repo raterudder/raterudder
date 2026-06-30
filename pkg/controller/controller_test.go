@@ -3727,6 +3727,58 @@ func TestEvaluateDeficit(t *testing.T) {
 			assert.Equal(t, 0.055, eval.Plan.ChargeCost)
 		}
 	})
+
+	t.Run("Morning capacity hit buffer in evaluateDeficit", func(t *testing.T) {
+		status := baseStatus
+		status.BatterySOC = 50.0 // 5.0 kWh
+		status.BatteryCapacityKWH = 10.0
+		status.MaxBatteryChargeKW = 5.0
+		status.HomeKW = 1.0
+
+		// Capacity hit in 2 hours
+		summary := simulationSummary{
+			HitBelowDeficitAt:   now.Add(3 * time.Hour),
+			HitAboveDeficitAt:   now.Add(3 * time.Hour),
+			HitCapacityAt:       now.Add(2 * time.Hour),
+			HitFutureCapacityAt: now.Add(2 * time.Hour),
+		}
+
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}
+		futurePrices := []types.Price{
+			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.10},
+			{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(3 * time.Hour), DollarsPerKWH: 0.10},
+			{TSStart: now.Add(3 * time.Hour), TSEnd: now.Add(4 * time.Hour), DollarsPerKWH: 0.20}, // Deficit hour
+		}
+
+		// simData
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.05, Price: currentPrice},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.05, Price: futurePrices[0]},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.05, Price: futurePrices[1]},
+			{TS: now.Add(3 * time.Hour), GridChargeDollarsPerKWH: 0.20, TotalBatteryDeficitKWH: 2.0, Price: futurePrices[2], BatteryReserveKWH: 2.0},
+		}
+
+		// 1. Without buffer: HitCapacityAt (now + 2h) is the cutoff.
+		// Since loop checks !slot.TS.Before(HitCapacityAt), the slot at now + 3h is excluded.
+		// So totalDeficitKWH = 0.
+		// So benefit is 0 (or no plan is created because there is no deficit).
+		settingsNoBuffer := baseSettings
+		settingsNoBuffer.PeakSurvivalBufferMinutes = 0
+		evalNoBuffer := c.evaluateDeficit(ctx, now, status, currentPrice, settingsNoBuffer, simData, summary)
+		assert.Nil(t, evalNoBuffer)
+
+		// 2. With 90-minute buffer: bufferedHitCapacityAt is now + 3.5h.
+		// The slot at now + 3h is before now + 3.5h. So it is included!
+		// Deficit is 2.0 kWh. Average cost is 0.20. Planned cost is 0.05.
+		// Benefit = 2.0 * (0.20 - 0.05) = 0.30.
+		settingsWithBuffer := baseSettings
+		settingsWithBuffer.PeakSurvivalBufferMinutes = 90
+		evalWithBuffer := c.evaluateDeficit(ctx, now, status, currentPrice, settingsWithBuffer, simData, summary)
+		if assert.NotNil(t, evalWithBuffer) {
+			assert.NotNil(t, evalWithBuffer.Plan)
+			assert.InDelta(t, 0.30, evalWithBuffer.BenefitDollars, 0.001)
+		}
+	})
 }
 
 func TestEvaluateArbitrage(t *testing.T) {
@@ -6092,6 +6144,39 @@ func TestEvaluateFallback(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonSufficientBatteryTillCharge, decision.Action.Reason)
+	})
+
+	t.Run("Morning Capacity Hit with PeakSurvivalBufferMinutes", func(t *testing.T) {
+		status := baseStatus
+		status.BatterySOC = 95.0
+
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}
+		// Without buffer: HitCapacityAt (11:00) is before hitAboveDeficitAt (11:15), so it discharges.
+		// With buffer (30m): bufferedHitCapacityAt is 11:30, which is NOT before 11:15, so it does not discharge early.
+		summary := simulationSummary{
+			HitBelowDeficitAt:  now.Add(11 * time.Hour),
+			HitAboveDeficitAt:  now.Add(11*time.Hour + 15*time.Minute),
+			HitCapacityAt:      now.Add(11 * time.Hour),
+			HitSolarCapacityAt: now.Add(11 * time.Hour),
+		}
+
+		// 1. Without buffer: discharges early to prevent solar curtailment
+		settingsNoBuffer := baseSettings
+		settingsNoBuffer.PeakSurvivalBufferMinutes = 0
+		decisionNoBuffer := c.evaluateFallback(ctx, now, status, currentPrice, settingsNoBuffer, nil, summary)
+		if assert.NotNil(t, decisionNoBuffer) {
+			assert.Equal(t, types.BatteryModeLoad, decisionNoBuffer.BatteryMode)
+			assert.Equal(t, types.ActionReasonPreventSolarCurtailment, decisionNoBuffer.Reason)
+		}
+
+		// 2. With 30-minute buffer: does not discharge early, falls back to standby (or dischargeAtPeak if peak survival is not required/no peak)
+		settingsWithBuffer := baseSettings
+		settingsWithBuffer.PeakSurvivalBufferMinutes = 30
+		decisionWithBuffer := c.evaluateFallback(ctx, now, status, currentPrice, settingsWithBuffer, nil, summary)
+		if assert.NotNil(t, decisionWithBuffer) {
+			assert.Equal(t, types.BatteryModeLoad, decisionWithBuffer.BatteryMode)
+			assert.Equal(t, types.ActionReasonDischargeAtPeak, decisionWithBuffer.Reason)
+		}
 	})
 }
 

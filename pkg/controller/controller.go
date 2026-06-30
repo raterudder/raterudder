@@ -606,6 +606,15 @@ func (c *Controller) evaluateDeficit(
 		return nil
 	}
 
+	bufferedHitCapacityAt := summary.HitCapacityAt
+	if !summary.HitCapacityAt.IsZero() {
+		bufferedHitCapacityAt = summary.HitCapacityAt.Add(time.Duration(settings.PeakSurvivalBufferMinutes) * time.Minute)
+	}
+	bufferedHitFutureCapacityAt := summary.HitFutureCapacityAt
+	if !summary.HitFutureCapacityAt.IsZero() {
+		bufferedHitFutureCapacityAt = summary.HitFutureCapacityAt.Add(time.Duration(settings.PeakSurvivalBufferMinutes) * time.Minute)
+	}
+
 	// If the deficit is at or after the VPP event prep charging cutoff, we cannot prevent it by charging now.
 	if !vppCutoff.IsZero() && !hitDeficitAt.Before(vppCutoff) {
 		return nil
@@ -623,7 +632,7 @@ func (c *Controller) evaluateDeficit(
 	lastDeficitKWH := 0.0
 	for _, slot := range simData {
 		// If the battery hits capacity, any subsequent deficits cannot be prevented by charging now.
-		if !summary.HitCapacityAt.IsZero() && !slot.TS.Before(summary.HitCapacityAt) {
+		if !bufferedHitCapacityAt.IsZero() && !slot.TS.Before(bufferedHitCapacityAt) {
 			break
 		}
 		// Deficits after the VPP cutoff cannot be prevented by charging now.
@@ -700,7 +709,7 @@ func (c *Controller) evaluateDeficit(
 						continue
 					}
 					// Ensure we're on the same side of capacity
-					if !summary.HitCapacityAt.IsZero() && slot.TS.After(summary.HitCapacityAt) && !candidateTS.After(summary.HitCapacityAt) {
+					if !bufferedHitCapacityAt.IsZero() && slot.TS.After(bufferedHitCapacityAt) && !candidateTS.After(bufferedHitCapacityAt) {
 						continue
 					}
 					var cost float64
@@ -738,7 +747,7 @@ func (c *Controller) evaluateDeficit(
 			// for all future slots. Even if full now, the battery will discharge, and we must be allowed to charge
 			// it later if a deficit arises after it discharges.
 			canChargeNowForSlot := canChargeNow
-			if !summary.HitFutureCapacityAt.IsZero() && slot.TS.After(summary.HitFutureCapacityAt) {
+			if !bufferedHitFutureCapacityAt.IsZero() && slot.TS.After(bufferedHitFutureCapacityAt) {
 				canChargeNowForSlot = false
 			}
 
@@ -800,7 +809,7 @@ func (c *Controller) evaluateDeficit(
 						if isFutureDeficit && candidateTS.After(hitDeficitAt) {
 							continue
 						}
-						if !summary.HitCapacityAt.IsZero() && slot.TS.After(summary.HitCapacityAt) && !candidateTS.After(summary.HitCapacityAt) {
+						if !bufferedHitCapacityAt.IsZero() && slot.TS.After(bufferedHitCapacityAt) && !candidateTS.After(bufferedHitCapacityAt) {
 							continue
 						}
 						if simData[j].GridChargeDollarsPerKWH <= cheapestFutureChargeSlot.cost+minDeficitDiff {
@@ -1899,7 +1908,12 @@ func (c *Controller) evaluateFallback(
 		// it now.
 		// If solar exporting is enabled, hitting capacity does not result in curtailment (the excess solar is exported),
 		// so we do not discharge early, preserving the battery energy for high-value peak periods.
-		if !summary.HitCapacityAt.IsZero() && summary.HitCapacityAt.Before(hitAboveDeficitAt) {
+		bufferedHitCapacityAt := summary.HitCapacityAt
+		if !summary.HitCapacityAt.IsZero() {
+			bufferedHitCapacityAt = summary.HitCapacityAt.Add(time.Duration(settings.PeakSurvivalBufferMinutes) * time.Minute)
+		}
+
+		if !summary.HitCapacityAt.IsZero() && bufferedHitCapacityAt.Before(hitAboveDeficitAt) {
 			var reason types.ActionReason
 			var loadReason string
 			if !summary.HitSolarCapacityAt.IsZero() && !summary.HitSolarCapacityAt.After(summary.HitCapacityAt) {
