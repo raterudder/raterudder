@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"golang.org/x/net/publicsuffix"
-	"golang.org/x/time/rate"
 
 	"github.com/raterudder/raterudder/pkg/common"
 	"github.com/raterudder/raterudder/pkg/log"
@@ -233,18 +232,17 @@ func (e *Enphase) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		loc = time.UTC
 	}
 
-	// Get current SOC from EnvStorageSettings if available
-	var currentSOC float64
-	for _, settings := range data.State.BatteryConfig.EnvStorageSettings {
-		currentSOC = settings.SOC
-		break
-	}
-
-	// Fetch today's stats to estimate live powers
+	// Fetch today's stats to estimate live powers and get actual state of charge
 	todayStats, err := e.getToday(ctx, time.Now().In(loc))
 	if err != nil {
-		log.Ctx(ctx).WarnContext(ctx, "failed to get enphase today stats, continuing without live powers", slog.Any("error", err))
+		return types.SystemStatus{}, fmt.Errorf("failed to get enphase today stats: %w", err)
 	}
+
+	if todayStats.BatteryDetails == nil {
+		return types.SystemStatus{}, errors.New("enphase today stats missing battery details")
+	}
+
+	currentSOC := todayStats.BatteryDetails.AggregateSOC
 
 	var solarKW, gridKW, homeKW, batteryKW float64
 	if len(todayStats.Stats) > 0 {
@@ -576,6 +574,81 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 	return nil
 }
 
+func parseDailyStats(stat enphaseTodayStats, dayStart time.Time, loc *time.Location) types.DailyEnergyStats {
+	startTime := time.Unix(stat.StartTime, 0).In(loc)
+
+	hourlyStatsMap := make(map[time.Time]*types.EnergyStats)
+	maxLen := len(stat.Consumption)
+	if len(stat.GridImport) > maxLen {
+		maxLen = len(stat.GridImport)
+	}
+	if len(stat.Production) > maxLen {
+		maxLen = len(stat.Production)
+	}
+
+	intervalSecs := stat.IntervalLength
+	if intervalSecs == 0 {
+		intervalSecs = 900 // default to 15m
+	}
+
+	getVal := func(arr []float64, i int) float64 {
+		if i < len(arr) {
+			return arr[i] / 1000.0
+		}
+		return 0
+	}
+
+	for i := 0; i < maxLen; i++ {
+		intervalTime := startTime.Add(time.Duration(i*intervalSecs) * time.Second)
+		hourStart := intervalTime.Truncate(time.Hour)
+
+		s, ok := hourlyStatsMap[hourStart]
+		if !ok {
+			s = &types.EnergyStats{
+				TSHourStart: hourStart,
+			}
+			hourlyStatsMap[hourStart] = s
+		}
+
+		solarHome := getVal(stat.SolarHome, i)
+		solarBat := getVal(stat.SolarBattery, i)
+		solarGrid := getVal(stat.SolarGrid, i)
+
+		gridBat := getVal(stat.GridBattery, i)
+		gridHome := getVal(stat.GridHome, i)
+
+		batHome := getVal(stat.BatteryHome, i)
+		batGrid := getVal(stat.BatteryGrid, i)
+
+		s.SolarKWH += solarHome + solarBat + solarGrid
+		s.BatteryChargedKWH += solarBat + gridBat
+		s.BatteryUsedKWH += batHome + batGrid
+		s.GridImportKWH += gridHome + gridBat
+		s.GridExportKWH += solarGrid + batGrid
+		s.HomeKWH += solarHome + batHome + gridHome
+
+		s.BatteryToHomeKWH += batHome
+		s.BatteryToGridKWH += batGrid
+		s.SolarToHomeKWH += solarHome
+		s.SolarToBatteryKWH += solarBat
+		s.SolarToGridKWH += solarGrid
+	}
+
+	var hourly []types.EnergyStats
+	for _, hs := range hourlyStatsMap {
+		hourly = append(hourly, *hs)
+	}
+	// Sort hourly stats
+	sort.Slice(hourly, func(i, j int) bool {
+		return hourly[i].TSHourStart.Before(hourly[j].TSHourStart)
+	})
+
+	return types.DailyEnergyStats{
+		TSDayStart: dayStart,
+		Hourly:     hourly,
+	}
+}
+
 func (e *Enphase) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]types.DailyEnergyStats, error) {
 	log.Ctx(ctx).DebugContext(ctx, "getting enphase energy history", slog.Time("start", start), slog.Time("end", end))
 	e.mu.Lock()
@@ -606,138 +679,60 @@ func (e *Enphase) GetEnergyHistory(ctx context.Context, start, end time.Time) ([
 		lastDayToFetch = nextDay
 	}
 
-	var result []types.DailyEnergyStats
+	var dailyStats []types.DailyEnergyStats
 
-	limiter := rate.NewLimiter(rate.Limit(4), 4)
-	for current := startDay; !current.After(lastDayToFetch); current = current.AddDate(0, 0, 1) {
-		if current.After(time.Now()) {
-			break
+	todayLocal := time.Now().In(loc)
+	todayMidnight := time.Date(todayLocal.Year(), todayLocal.Month(), todayLocal.Day(), 0, 0, 0, 0, loc)
+	yesterday := todayMidnight.AddDate(0, 0, -1)
+
+	// 1. Fetch historical range (from startDay up to yesterday, if startDay is not after yesterday)
+	if !startDay.After(yesterday) {
+		histEndDay := lastDayToFetch
+		if histEndDay.After(yesterday) {
+			histEndDay = yesterday
 		}
 
-		if err := limiter.Wait(ctx); err != nil {
-			return nil, err
-		}
-
-		res, err := e.getToday(ctx, current)
+		res, err := e.getDailyEnergy(ctx, startDay, histEndDay)
 		if err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to get enphase today data", slog.Time("date", current), slog.Any("error", err))
+			log.Ctx(ctx).ErrorContext(ctx, "failed to get enphase daily energy data",
+				slog.Time("start", startDay),
+				slog.Time("end", histEndDay),
+				slog.Any("error", err),
+			)
 			return nil, err
 		}
 
-		if len(res.Stats) == 0 {
-			log.Ctx(ctx).WarnContext(ctx, "no stats found for date", slog.Time("date", current))
-			continue
+		for _, stat := range res.Stats {
+			statStartTime := time.Unix(stat.StartTime, 0).In(loc)
+			statDay := time.Date(statStartTime.Year(), statStartTime.Month(), statStartTime.Day(), 0, 0, 0, 0, loc)
+			dailyStats = append(dailyStats, parseDailyStats(stat, statDay, loc))
 		}
+	}
 
-		stat := res.Stats[0]
-
-		// let's make sure the time is midnight
-		startTime := time.Unix(stat.StartTime, 0).In(loc)
-		if !startTime.Equal(current) {
-			log.Ctx(ctx).WarnContext(
-				ctx,
-				"start time is not midnight",
-				slog.Time("start_time", startTime),
-				slog.Time("current", current),
+	// 2. Fetch today's data (if lastDayToFetch includes today)
+	if !lastDayToFetch.Before(todayMidnight) {
+		res, err := e.getToday(ctx, todayMidnight)
+		if err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to get enphase today data",
+				slog.Time("date", todayMidnight),
+				slog.Any("error", err),
 			)
+			return nil, err
 		}
 
-		hourlyStatsMap := make(map[time.Time]*types.EnergyStats)
-		maxLen := len(stat.Consumption)
-		if len(stat.Consumption) > maxLen {
-			maxLen = len(stat.Consumption)
+		if len(res.Stats) > 0 {
+			dailyStats = append(dailyStats, parseDailyStats(res.Stats[0], todayMidnight, loc))
 		}
-		if len(stat.GridImport) > maxLen {
-			maxLen = len(stat.GridImport)
-		}
-		if len(stat.Production) > maxLen {
-			maxLen = len(stat.Production)
-		}
-
-		intervalSecs := stat.IntervalLength
-		if intervalSecs == 0 {
-			intervalSecs = 900 // default to 15m
-		}
-
-		for i := 0; i < maxLen; i++ {
-			intervalTime := startTime.Add(time.Duration(i*intervalSecs) * time.Second)
-			hourStart := intervalTime.Truncate(time.Hour)
-
-			s, ok := hourlyStatsMap[hourStart]
-			if !ok {
-				s = &types.EnergyStats{
-					TSHourStart: hourStart,
-				}
-				hourlyStatsMap[hourStart] = s
-			}
-
-			getVal := func(arr []float64) float64 {
-				if i < len(arr) {
-					return arr[i] / 1000.0
-				}
-				return 0
-			}
-
-			prod := getVal(stat.Production)
-			solarHome := getVal(stat.SolarHome)
-			solarBat := getVal(stat.SolarBattery)
-			solarGrid := getVal(stat.SolarGrid)
-
-			gridBat := getVal(stat.GridBattery)
-			gridHome := getVal(stat.GridHome)
-
-			batHome := getVal(stat.BatteryHome)
-			batGrid := getVal(stat.BatteryGrid)
-
-			s.SolarKWH += solarHome + solarBat + solarGrid
-			if s.SolarKWH < prod {
-				log.Ctx(ctx).WarnContext(
-					ctx,
-					"solar kWh is less than production",
-					slog.Float64("solarKWH", s.SolarKWH),
-					slog.Float64("production", prod),
-					slog.Float64("solarHome", solarHome),
-					slog.Float64("solarBat", solarBat),
-					slog.Float64("solarGrid", solarGrid),
-				)
-			}
-
-			s.BatteryChargedKWH += solarBat + gridBat
-			s.BatteryUsedKWH += batHome + batGrid
-			// TODO: should we use import or is that in dollars?
-			s.GridImportKWH += gridHome + gridBat
-			// TODO: should we use export or is that in dollars?
-			s.GridExportKWH += solarGrid + batGrid
-			// TODO: should we use consumption?
-			s.HomeKWH += solarHome + batHome + gridHome
-
-			s.BatteryToHomeKWH += batHome
-			s.BatteryToGridKWH += batGrid
-			s.SolarToHomeKWH += solarHome
-			s.SolarToBatteryKWH += solarBat
-			s.SolarToGridKWH += solarGrid
-		}
-
-		var hourly []types.EnergyStats
-		for _, s := range hourlyStatsMap {
-			hourly = append(hourly, *s)
-		}
-
-		result = append(result, types.DailyEnergyStats{
-			TSDayStart: current,
-			Hourly:     hourly,
-		})
 	}
 
-	for i := range result {
-		sort.Slice(result[i].Hourly, func(j, k int) bool {
-			return result[i].Hourly[j].TSHourStart.Before(result[i].Hourly[k].TSHourStart)
-		})
-	}
+	// Sort final dailyStats chronologically by TSDayStart to ensure consistent ordering
+	sort.Slice(dailyStats, func(i, j int) bool {
+		return dailyStats[i].TSDayStart.Before(dailyStats[j].TSDayStart)
+	})
 
 	// Filter based on requested start and end bounds
 	var filtered []types.DailyEnergyStats
-	for _, r := range result {
+	for _, r := range dailyStats {
 		if !r.TSDayStart.Before(startDay) && !r.TSDayStart.After(endDay) {
 			filtered = append(filtered, r)
 		}
@@ -861,33 +856,58 @@ func (e *Enphase) getDataWithCache(ctx context.Context, force bool) (enphaseData
 	return res, nil
 }
 
+type enphaseTodayStats struct {
+	Production       []float64 `json:"production"`
+	Consumption      []float64 `json:"consumption"`
+	Import           []float64 `json:"import"`
+	Export           []float64 `json:"export"`
+	GridImport       []float64 `json:"grid_import"`
+	SolarHome        []float64 `json:"solar_home"`
+	SolarBattery     []float64 `json:"solar_battery"`
+	SolarGrid        []float64 `json:"solar_grid"`
+	GeneratorHome    []float64 `json:"generator_home"`
+	GeneratorBattery []float64 `json:"generator_battery"`
+	GeneratorGrid    []float64 `json:"generator_grid"`
+	BatteryHome      []float64 `json:"battery_home"`
+	BatteryGrid      []float64 `json:"battery_grid"`
+	GridBattery      []float64 `json:"grid_battery"`
+	GridHome         []float64 `json:"grid_home"`
+	SOC              []float64 `json:"soc"`
+	StartTime        int64     `json:"start_time"`
+	IntervalLength   int       `json:"interval_length"`
+}
+
 type enphaseTodayResponse struct {
-	StartDate string `json:"start_date"`
-	Stats     []struct {
-		Production       []float64 `json:"production"`
-		Consumption      []float64 `json:"consumption"`
-		Import           []float64 `json:"import"`
-		Export           []float64 `json:"export"`
-		GridImport       []float64 `json:"grid_import"`
-		SolarHome        []float64 `json:"solar_home"`
-		SolarBattery     []float64 `json:"solar_battery"`
-		SolarGrid        []float64 `json:"solar_grid"`
-		GeneratorHome    []float64 `json:"generator_home"`
-		GeneratorBattery []float64 `json:"generator_battery"`
-		GeneratorGrid    []float64 `json:"generator_grid"`
-		BatteryHome      []float64 `json:"battery_home"`
-		BatteryGrid      []float64 `json:"battery_grid"`
-		GridBattery      []float64 `json:"grid_battery"`
-		GridHome         []float64 `json:"grid_home"`
-		StartTime        int64     `json:"start_time"`
-		IntervalLength   int       `json:"interval_length"`
-	} `json:"stats"`
+	StartDate      string              `json:"start_date"`
+	Stats          []enphaseTodayStats `json:"stats"`
+	BatteryDetails *struct {
+		AggregateSOC float64 `json:"aggregate_soc"`
+	} `json:"battery_details"`
 }
 
 func (e *Enphase) getToday(ctx context.Context, date time.Time) (enphaseTodayResponse, error) {
 	u := e.baseURL.JoinPath(fmt.Sprintf("pv/systems/%d/today", e.systemID))
 	q := u.Query()
 	q.Set("date", date.Format("2006-01-02"))
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+	if err != nil {
+		return enphaseTodayResponse{}, err
+	}
+
+	var res enphaseTodayResponse
+	if err := e.doRequest(req, &res); err != nil {
+		return enphaseTodayResponse{}, err
+	}
+	return res, nil
+}
+
+func (e *Enphase) getDailyEnergy(ctx context.Context, start, end time.Time) (enphaseTodayResponse, error) {
+	u := e.baseURL.JoinPath(fmt.Sprintf("pv/systems/%d/daily_energy", e.systemID))
+	q := u.Query()
+	q.Set("start_date", start.Format("2006-01-02"))
+	q.Set("end_date", end.Format("2006-01-02"))
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
@@ -937,22 +957,22 @@ func (e *Enphase) doRequest(req *http.Request, dest any) error {
 		return fmt.Errorf("enphase request failed with status %d", resp.StatusCode)
 	}
 
+	var result json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return err
+	}
+
+	if !strings.HasSuffix(req.URL.Path, "/login.json") && !strings.HasSuffix(req.URL.Path, "/generate_login_otp.json") {
+		log.Ctx(req.Context()).DebugContext(
+			req.Context(),
+			"enphase result",
+			slog.String("url", req.URL.String()),
+			slog.String("method", req.Method),
+			slog.Any("body", result),
+		)
+	}
+
 	if dest != nil {
-		var result json.RawMessage
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			return err
-		}
-
-		if !strings.HasSuffix(req.URL.Path, "/login.json") && !strings.HasSuffix(req.URL.Path, "/generate_login_otp.json") {
-			log.Ctx(req.Context()).DebugContext(
-				req.Context(),
-				"enphase result",
-				slog.String("url", req.URL.String()),
-				slog.String("method", req.Method),
-				slog.Any("body", result),
-			)
-		}
-
 		if err := json.Unmarshal(result, dest); err != nil {
 			return fmt.Errorf("failed to decode enphase response: %w", err)
 		}

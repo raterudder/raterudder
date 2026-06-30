@@ -161,6 +161,11 @@ func TestEnphase(t *testing.T) {
 	})
 
 	t.Run("GetEnergyHistory", func(t *testing.T) {
+		today := time.Now().UTC()
+		todayStr := today.Format("2006-01-02")
+		yesterday := today.AddDate(0, 0, -1)
+		yesterdayStr := yesterday.Format("2006-01-02")
+
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/app-api/123/data.json" {
 				json.NewEncoder(w).Encode(map[string]any{
@@ -172,23 +177,86 @@ func TestEnphase(t *testing.T) {
 			}
 			if r.URL.Path == "/pv/systems/123/today" {
 				date := r.URL.Query().Get("date")
-				if date == "2026-04-13" {
+				if date == todayStr {
 					json.NewEncoder(w).Encode(map[string]any{
-						"start_date": "2026-04-13",
+						"start_date": todayStr,
 						"stats": []map[string]any{
-							map[string]any{
-								"production":      []float64{0, 0, 0, 1000}, // 4th interval has 1000Wh
+							{
+								"production":      []float64{0, 0, 0, 800},
 								"consumption":     []float64{0, 0, 0, 0},
-								"solar_home":      []float64{0, 0, 0, 500},
-								"solar_grid":      []float64{0, 0, 0, 500},
-								"start_time":      1776038400, // 2026-04-13T00:00:00Z
+								"solar_home":      []float64{0, 0, 0, 400},
+								"solar_grid":      []float64{0, 0, 0, 400},
+								"start_time":      today.Truncate(24 * time.Hour).Unix(),
 								"interval_length": 900,
 							},
 						},
 					})
 					return
 				}
-				json.NewEncoder(w).Encode(map[string]any{}) // empty
+			}
+			if r.URL.Path == "/pv/systems/123/daily_energy" {
+				startDate := r.URL.Query().Get("start_date")
+				endDate := r.URL.Query().Get("end_date")
+
+				var stats []map[string]any
+				if startDate == "2026-04-13" && endDate == "2026-04-14" {
+					stats = append(stats, map[string]any{
+						"production":      []float64{0, 0, 0, 1000},
+						"consumption":     []float64{0, 0, 0, 0},
+						"solar_home":      []float64{0, 0, 0, 500},
+						"solar_grid":      []float64{0, 0, 0, 500},
+						"start_time":      1776038400, // 2026-04-13T00:00:00Z
+						"interval_length": 900,
+					})
+					stats = append(stats, map[string]any{
+						"production":      []float64{0, 0, 0, 1200},
+						"consumption":     []float64{0, 0, 0, 0},
+						"solar_home":      []float64{0, 0, 0, 600},
+						"solar_grid":      []float64{0, 0, 0, 600},
+						"start_time":      1776124800, // 2026-04-14T00:00:00Z
+						"interval_length": 900,
+					})
+				} else if startDate == "2026-04-13" && endDate == "2026-04-15" {
+					stats = append(stats, map[string]any{
+						"production":      []float64{0, 0, 0, 1000},
+						"consumption":     []float64{0, 0, 0, 0},
+						"solar_home":      []float64{0, 0, 0, 500},
+						"solar_grid":      []float64{0, 0, 0, 500},
+						"start_time":      1776038400, // 2026-04-13T00:00:00Z
+						"interval_length": 900,
+					})
+					stats = append(stats, map[string]any{
+						"production":      []float64{0, 0, 0, 1200},
+						"consumption":     []float64{0, 0, 0, 0},
+						"solar_home":      []float64{0, 0, 0, 600},
+						"solar_grid":      []float64{0, 0, 0, 600},
+						"start_time":      1776124800, // 2026-04-14T00:00:00Z
+						"interval_length": 900,
+					})
+					stats = append(stats, map[string]any{
+						"production":      []float64{0, 0, 0, 1400},
+						"consumption":     []float64{0, 0, 0, 0},
+						"solar_home":      []float64{0, 0, 0, 700},
+						"solar_grid":      []float64{0, 0, 0, 700},
+						"start_time":      1776211200, // 2026-04-15T00:00:00Z
+						"interval_length": 900,
+					})
+				} else if startDate == yesterdayStr && endDate == yesterdayStr {
+					stats = append(stats, map[string]any{
+						"production":      []float64{0, 0, 0, 600},
+						"consumption":     []float64{0, 0, 0, 0},
+						"solar_home":      []float64{0, 0, 0, 300},
+						"solar_grid":      []float64{0, 0, 0, 300},
+						"start_time":      yesterday.Truncate(24 * time.Hour).Unix(),
+						"interval_length": 900,
+					})
+				}
+
+				json.NewEncoder(w).Encode(map[string]any{
+					"start_date": startDate,
+					"end_date":   endDate,
+					"stats":      stats,
+				})
 				return
 			}
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -201,23 +269,80 @@ func TestEnphase(t *testing.T) {
 		e.systemID = 123
 		e.sessionID = "session123"
 
-		start := time.Date(2026, 4, 13, 0, 0, 0, 0, time.UTC)
-		end := time.Date(2026, 4, 13, 23, 59, 59, 0, time.UTC)
+		t.Run("HistoricalOnly_SingleDay", func(t *testing.T) {
+			start := time.Date(2026, 4, 13, 0, 0, 0, 0, time.UTC)
+			end := time.Date(2026, 4, 13, 23, 59, 59, 0, time.UTC)
 
-		stats, err := e.GetEnergyHistory(context.Background(), start, end)
-		require.NoError(t, err)
+			stats, err := e.GetEnergyHistory(context.Background(), start, end)
+			require.NoError(t, err)
 
-		require.Len(t, stats, 1)
-		assert.Equal(t, start, stats[0].TSDayStart)
+			if assert.Len(t, stats, 1) {
+				assert.Equal(t, start, stats[0].TSDayStart)
+				if assert.Len(t, stats[0].Hourly, 1) {
+					hourStat := stats[0].Hourly[0]
+					assert.Equal(t, start, hourStat.TSHourStart)
+					assert.Equal(t, 1.0, hourStat.SolarKWH)
+					assert.Equal(t, 0.5, hourStat.SolarToHomeKWH)
+					assert.Equal(t, 0.5, hourStat.SolarToGridKWH)
+					assert.Equal(t, 0.5, hourStat.HomeKWH)
+				}
+			}
+		})
 
-		require.Len(t, stats[0].Hourly, 1)
-		hourStat := stats[0].Hourly[0]
-		assert.Equal(t, start, hourStat.TSHourStart)
+		t.Run("HistoricalOnly_MultipleDays", func(t *testing.T) {
+			start := time.Date(2026, 4, 13, 0, 0, 0, 0, time.UTC)
+			end := time.Date(2026, 4, 14, 23, 59, 59, 0, time.UTC)
 
-		assert.Equal(t, 1.0, hourStat.SolarKWH)
-		assert.Equal(t, 0.5, hourStat.SolarToHomeKWH)
-		assert.Equal(t, 0.5, hourStat.SolarToGridKWH)
-		assert.Equal(t, 0.5, hourStat.HomeKWH)
+			stats, err := e.GetEnergyHistory(context.Background(), start, end)
+			require.NoError(t, err)
+
+			if assert.Len(t, stats, 2) {
+				assert.Equal(t, time.Date(2026, 4, 13, 0, 0, 0, 0, time.UTC), stats[0].TSDayStart)
+				assert.Equal(t, time.Date(2026, 4, 14, 0, 0, 0, 0, time.UTC), stats[1].TSDayStart)
+
+				if assert.Len(t, stats[0].Hourly, 1) {
+					assert.Equal(t, 1.0, stats[0].Hourly[0].SolarKWH)
+				}
+				if assert.Len(t, stats[1].Hourly, 1) {
+					assert.Equal(t, 1.2, stats[1].Hourly[0].SolarKWH)
+				}
+			}
+		})
+
+		t.Run("TodayOnly", func(t *testing.T) {
+			start := today.Truncate(24 * time.Hour)
+			end := start.Add(23*time.Hour + 59*time.Minute + 59*time.Second)
+
+			stats, err := e.GetEnergyHistory(context.Background(), start, end)
+			require.NoError(t, err)
+
+			if assert.Len(t, stats, 1) {
+				assert.Equal(t, start, stats[0].TSDayStart)
+				if assert.Len(t, stats[0].Hourly, 1) {
+					assert.Equal(t, 0.8, stats[0].Hourly[0].SolarKWH)
+				}
+			}
+		})
+
+		t.Run("HistoricalAndToday", func(t *testing.T) {
+			start := yesterday.Truncate(24 * time.Hour)
+			end := today.Truncate(24 * time.Hour).Add(23*time.Hour + 59*time.Minute + 59*time.Second)
+
+			stats, err := e.GetEnergyHistory(context.Background(), start, end)
+			require.NoError(t, err)
+
+			if assert.Len(t, stats, 2) {
+				assert.Equal(t, yesterday.Truncate(24*time.Hour), stats[0].TSDayStart)
+				assert.Equal(t, today.Truncate(24*time.Hour), stats[1].TSDayStart)
+
+				if assert.Len(t, stats[0].Hourly, 1) {
+					assert.Equal(t, 0.6, stats[0].Hourly[0].SolarKWH)
+				}
+				if assert.Len(t, stats[1].Hourly, 1) {
+					assert.Equal(t, 0.8, stats[1].Hourly[0].SolarKWH)
+				}
+			}
+		})
 	})
 
 	t.Run("Authenticate trigger OTP", func(t *testing.T) {
@@ -350,6 +475,9 @@ func TestEnphase(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte(`{
 					"start_date": "2026-06-06",
+					"battery_details": {
+						"aggregate_soc": 75
+					},
 					"stats": [{
 						"production": [1000],
 						"consumption": [800],
@@ -437,6 +565,7 @@ func TestEnphase(t *testing.T) {
 				lastPayload = &payload
 				postCalled = true
 				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{}`))
 				return
 			}
 

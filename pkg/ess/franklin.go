@@ -379,18 +379,18 @@ func (f *Franklin) doRequest(req *http.Request, dest any) error {
 		return fmt.Errorf("franklin api error: %s", fr.Message)
 	}
 
-	if dest != nil {
-		// debug log the whole response which will aid in debugging but not if its a login response
-		if !isLogin {
-			log.Ctx(req.Context()).DebugContext(
-				req.Context(),
-				"franklin result",
-				slog.String("url", req.URL.String()),
-				slog.String("method", req.Method),
-				slog.Any("response", fr.Result),
-			)
-		}
+	// debug log the whole response which will aid in debugging but not if its a login response
+	if !isLogin {
+		log.Ctx(req.Context()).DebugContext(
+			req.Context(),
+			"franklin result",
+			slog.String("url", req.URL.String()),
+			slog.String("method", req.Method),
+			slog.Any("response", fr.Result),
+		)
+	}
 
+	if dest != nil {
 		if err := json.Unmarshal(fr.Result, dest); err != nil {
 			log.Ctx(req.Context()).ErrorContext(req.Context(), "failed to decode franklin result", slog.Any("error", err))
 			return fmt.Errorf("failed to decode franklin result: %w", err)
