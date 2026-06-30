@@ -44,6 +44,9 @@ func TestEnphase(t *testing.T) {
 				assert.Contains(t, r.Header.Get("Cookie"), "enlighten_manager_token_production=token123")
 
 				res := enphaseDataResult{
+					App: enphaseApp{
+						UserID: 987654,
+					},
 					State: enphaseState{
 						SiteID: 123,
 					},
@@ -74,6 +77,7 @@ func TestEnphase(t *testing.T) {
 		assert.Equal(t, "session123", updatedCreds.Enphase.SessionID)
 		assert.Equal(t, "token123", updatedCreds.Enphase.ManagerToken)
 		assert.Equal(t, 123456789, updatedCreds.Enphase.SystemID)
+		assert.Equal(t, 987654, updatedCreds.Enphase.UserID)
 	})
 
 	t.Run("Authenticate restored credentials", func(t *testing.T) {
@@ -591,6 +595,7 @@ func TestEnphase(t *testing.T) {
 			}
 
 			if r.URL.Path == "/service/batteryConfig/api/v1/batterySettings/123" {
+				assert.Equal(t, "123456", r.URL.Query().Get("userId"))
 				if r.Method == "GET" {
 					w.WriteHeader(http.StatusOK)
 					chargeVal := "false"
@@ -641,7 +646,7 @@ func TestEnphase(t *testing.T) {
 			}
 
 			if r.URL.Path == "/service/batteryConfig/api/v1/profile/123" {
-				if r.Method == "POST" {
+				if r.Method == "PUT" {
 					assert.Empty(t, r.URL.Query().Get("userId"))
 					var body struct {
 						Profile                 string `json:"profile"`
@@ -668,6 +673,7 @@ func TestEnphase(t *testing.T) {
 		e := newEnphase()
 		e.baseURL, _ = url.Parse(server.URL)
 		e.systemID = 123
+		e.userID = 123456
 		e.settings = types.Settings{
 			MinBatterySOC:       20,
 			GridChargeBatteries: true,

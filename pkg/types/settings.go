@@ -165,6 +165,7 @@ type EnphaseCredentials struct {
 	SessionID    string `json:"sessionID,omitempty"`
 	ManagerToken string `json:"managerToken,omitempty"`
 	SystemID     int    `json:"systemID,omitempty"`
+	UserID       int    `json:"userID,omitempty"`
 }
 
 // MigrateSettings migrates the settings to the current version.

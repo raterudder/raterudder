@@ -37,6 +37,7 @@ type Enphase struct {
 	sessionID    string
 	managerToken string
 	systemID     int
+	userID       int
 	dataCache    enphaseDataResult
 	dataExpiry   time.Time
 }
@@ -168,13 +169,14 @@ func (e *Enphase) Authenticate(ctx context.Context, creds types.Credentials) (ty
 		e.sessionID = creds.Enphase.SessionID
 		e.managerToken = creds.Enphase.ManagerToken
 		e.systemID = creds.Enphase.SystemID
+		e.userID = creds.Enphase.UserID
 	}
 
 	// Ensure cookies are in the jar
 	e.syncCookies()
 
 	// Validate by fetching data.json
-	if _, err := e.getDataWithCache(ctx, true); err != nil {
+	if res, err := e.getDataWithCache(ctx, true); err != nil {
 		// If we didn't just login and we got a 401, try to login and retry
 		if !needLogin && errors.Is(err, errEnphaseUnauthorized) {
 			if e.password != "" {
@@ -207,6 +209,9 @@ func (e *Enphase) Authenticate(ctx context.Context, creds types.Credentials) (ty
 			log.Ctx(ctx).WarnContext(ctx, "enphase credential validation failed", slog.Any("error", err))
 			return creds, false, fmt.Errorf("credential validation failed: %w", err)
 		}
+	} else if res.App.UserID != 0 && creds.Enphase.UserID != res.App.UserID {
+		creds.Enphase.UserID = res.App.UserID
+		changed = true
 	}
 
 	return creds, changed, nil
@@ -460,7 +465,7 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 	currentReserveSOC := float64(settingsData.Data.BatteryBackupPercentage)
 	currentProfile := settingsData.Data.Profile
 
-	if settingsData.Data.RequestedConfig != nil {
+	if settingsData.Data.RequestedConfig != (enphaseRequestedConfig{}) {
 		currentChargeFromGrid = settingsData.Data.RequestedConfig.ChargeFromGrid
 		currentChargeFromGridScheduleEnabled = settingsData.Data.RequestedConfig.ChargeFromGridScheduleEnabled
 		currentReserveSOC = float64(settingsData.Data.RequestedConfig.BatteryBackupPercentage)
@@ -468,7 +473,7 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 	}
 
 	isBackupCurrent := settingsData.Data.Profile == "backup_only"
-	isBackupPending := settingsData.Data.RequestedConfig != nil && settingsData.Data.RequestedConfig.Profile == "backup_only"
+	isBackupPending := settingsData.Data.RequestedConfig.Profile == "backup_only"
 	if isBackupCurrent || isBackupPending {
 		log.Ctx(ctx).InfoContext(ctx, "device is in backup mode, skipping set modes")
 		return errors.New("device is in backup mode")
@@ -505,8 +510,8 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 	}
 
 	if bat != types.BatteryModeNoChange {
-		if newReserveSOC < 5 {
-			newReserveSOC = 5
+		if newReserveSOC < 10 {
+			newReserveSOC = 10
 		}
 		if newReserveSOC > 100 {
 			newReserveSOC = 100
@@ -589,6 +594,11 @@ type enphaseRequestedConfig struct {
 
 func (e *Enphase) getBatterySettings(ctx context.Context) (enphaseBatterySettingsResponse, error) {
 	u := e.baseURL.JoinPath(fmt.Sprintf("service/batteryConfig/api/v1/batterySettings/%d", e.systemID))
+	if e.userID != 0 {
+		q := u.Query()
+		q.Set("userId", fmt.Sprintf("%d", e.userID))
+		u.RawQuery = q.Encode()
+	}
 	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
 	if err != nil {
 		return enphaseBatterySettingsResponse{}, err
@@ -611,6 +621,11 @@ type enphaseBatterySettingsPayload struct {
 
 func (e *Enphase) updateBatterySettings(ctx context.Context, payload enphaseBatterySettingsPayload) error {
 	u := e.baseURL.JoinPath(fmt.Sprintf("service/batteryConfig/api/v1/batterySettings/%d", e.systemID))
+	if e.userID != 0 {
+		q := u.Query()
+		q.Set("userId", fmt.Sprintf("%d", e.userID))
+		u.RawQuery = q.Encode()
+	}
 	jsonBytes, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("failed to marshal battery settings payload: %w", err)
@@ -646,7 +661,7 @@ func (e *Enphase) updateBatteryProfile(ctx context.Context, payload enphaseBatte
 		return fmt.Errorf("failed to marshal battery profile payload: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", u.String(), bytes.NewReader(jsonBytes))
+	req, err := http.NewRequestWithContext(ctx, "PUT", u.String(), bytes.NewReader(jsonBytes))
 	if err != nil {
 		return err
 	}
@@ -1111,6 +1126,7 @@ type enphaseDataResult struct {
 }
 
 type enphaseApp struct {
+	UserID   int           `json:"userId"`
 	Timezone string        `json:"timezone"`
 	Tariff   enphaseTariff `json:"tariff"`
 }
@@ -1202,13 +1218,13 @@ type enphaseStormAlertMessage struct {
 
 type enphaseBatterySettingsResponse struct {
 	Data struct {
-		ChargeFromGrid                bool                    `json:"chargeFromGrid"`
-		ChargeFromGridScheduleEnabled bool                    `json:"chargeFromGridScheduleEnabled"`
-		Profile                       string                  `json:"profile"`
-		BatteryBackupPercentage       int                     `json:"batteryBackupPercentage"`
-		AcceptedItcDisclaimer         string                  `json:"acceptedItcDisclaimer"`
-		ChargeBeginTime               int                     `json:"chargeBeginTime"`
-		ChargeEndTime                 int                     `json:"chargeEndTime"`
-		RequestedConfig               *enphaseRequestedConfig `json:"requestedConfig"`
+		ChargeFromGrid                bool                   `json:"chargeFromGrid"`
+		ChargeFromGridScheduleEnabled bool                   `json:"chargeFromGridScheduleEnabled"`
+		Profile                       string                 `json:"profile"`
+		BatteryBackupPercentage       int                    `json:"batteryBackupPercentage"`
+		AcceptedItcDisclaimer         string                 `json:"acceptedItcDisclaimer"`
+		ChargeBeginTime               int                    `json:"chargeBeginTime"`
+		ChargeEndTime                 int                    `json:"chargeEndTime"`
+		RequestedConfig               enphaseRequestedConfig `json:"requestedConfig"`
 	} `json:"data"`
 }
