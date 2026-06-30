@@ -186,6 +186,7 @@ func TestEnphase(t *testing.T) {
 								"consumption":     []float64{0, 0, 0, 0},
 								"solar_home":      []float64{0, 0, 0, 400},
 								"solar_grid":      []float64{0, 0, 0, 400},
+								"soc":             []float64{30, 35, 40, 45},
 								"start_time":      today.Truncate(24 * time.Hour).Unix(),
 								"interval_length": 900,
 							},
@@ -205,6 +206,7 @@ func TestEnphase(t *testing.T) {
 						"consumption":     []float64{0, 0, 0, 0},
 						"solar_home":      []float64{0, 0, 0, 500},
 						"solar_grid":      []float64{0, 0, 0, 500},
+						"soc":             []float64{10, 15, 20, 25},
 						"start_time":      1776038400, // 2026-04-13T00:00:00Z
 						"interval_length": 900,
 					})
@@ -213,6 +215,7 @@ func TestEnphase(t *testing.T) {
 						"consumption":     []float64{0, 0, 0, 0},
 						"solar_home":      []float64{0, 0, 0, 600},
 						"solar_grid":      []float64{0, 0, 0, 600},
+						"soc":             []float64{20, 25, 30, 35},
 						"start_time":      1776124800, // 2026-04-14T00:00:00Z
 						"interval_length": 900,
 					})
@@ -222,6 +225,7 @@ func TestEnphase(t *testing.T) {
 						"consumption":     []float64{0, 0, 0, 0},
 						"solar_home":      []float64{0, 0, 0, 500},
 						"solar_grid":      []float64{0, 0, 0, 500},
+						"soc":             []float64{10, 15, 20, 25},
 						"start_time":      1776038400, // 2026-04-13T00:00:00Z
 						"interval_length": 900,
 					})
@@ -230,6 +234,7 @@ func TestEnphase(t *testing.T) {
 						"consumption":     []float64{0, 0, 0, 0},
 						"solar_home":      []float64{0, 0, 0, 600},
 						"solar_grid":      []float64{0, 0, 0, 600},
+						"soc":             []float64{20, 25, 30, 35},
 						"start_time":      1776124800, // 2026-04-14T00:00:00Z
 						"interval_length": 900,
 					})
@@ -238,6 +243,7 @@ func TestEnphase(t *testing.T) {
 						"consumption":     []float64{0, 0, 0, 0},
 						"solar_home":      []float64{0, 0, 0, 700},
 						"solar_grid":      []float64{0, 0, 0, 700},
+						"soc":             []float64{30, 35, 40, 45},
 						"start_time":      1776211200, // 2026-04-15T00:00:00Z
 						"interval_length": 900,
 					})
@@ -247,6 +253,7 @@ func TestEnphase(t *testing.T) {
 						"consumption":     []float64{0, 0, 0, 0},
 						"solar_home":      []float64{0, 0, 0, 300},
 						"solar_grid":      []float64{0, 0, 0, 300},
+						"soc":             []float64{5, 10, 15, 20},
 						"start_time":      yesterday.Truncate(24 * time.Hour).Unix(),
 						"interval_length": 900,
 					})
@@ -285,6 +292,8 @@ func TestEnphase(t *testing.T) {
 					assert.Equal(t, 0.5, hourStat.SolarToHomeKWH)
 					assert.Equal(t, 0.5, hourStat.SolarToGridKWH)
 					assert.Equal(t, 0.5, hourStat.HomeKWH)
+					assert.Equal(t, 10.0, hourStat.MinBatterySOC)
+					assert.Equal(t, 25.0, hourStat.MaxBatterySOC)
 				}
 			}
 		})
@@ -302,9 +311,13 @@ func TestEnphase(t *testing.T) {
 
 				if assert.Len(t, stats[0].Hourly, 1) {
 					assert.Equal(t, 1.0, stats[0].Hourly[0].SolarKWH)
+					assert.Equal(t, 10.0, stats[0].Hourly[0].MinBatterySOC)
+					assert.Equal(t, 25.0, stats[0].Hourly[0].MaxBatterySOC)
 				}
 				if assert.Len(t, stats[1].Hourly, 1) {
 					assert.Equal(t, 1.2, stats[1].Hourly[0].SolarKWH)
+					assert.Equal(t, 20.0, stats[1].Hourly[0].MinBatterySOC)
+					assert.Equal(t, 35.0, stats[1].Hourly[0].MaxBatterySOC)
 				}
 			}
 		})
@@ -320,6 +333,8 @@ func TestEnphase(t *testing.T) {
 				assert.Equal(t, start, stats[0].TSDayStart)
 				if assert.Len(t, stats[0].Hourly, 1) {
 					assert.Equal(t, 0.8, stats[0].Hourly[0].SolarKWH)
+					assert.Equal(t, 30.0, stats[0].Hourly[0].MinBatterySOC)
+					assert.Equal(t, 45.0, stats[0].Hourly[0].MaxBatterySOC)
 				}
 			}
 		})
@@ -337,9 +352,13 @@ func TestEnphase(t *testing.T) {
 
 				if assert.Len(t, stats[0].Hourly, 1) {
 					assert.Equal(t, 0.6, stats[0].Hourly[0].SolarKWH)
+					assert.Equal(t, 5.0, stats[0].Hourly[0].MinBatterySOC)
+					assert.Equal(t, 20.0, stats[0].Hourly[0].MaxBatterySOC)
 				}
 				if assert.Len(t, stats[1].Hourly, 1) {
 					assert.Equal(t, 0.8, stats[1].Hourly[0].SolarKWH)
+					assert.Equal(t, 30.0, stats[1].Hourly[0].MinBatterySOC)
+					assert.Equal(t, 45.0, stats[1].Hourly[0].MaxBatterySOC)
 				}
 			}
 		})
@@ -536,6 +555,20 @@ func TestEnphase(t *testing.T) {
 	t.Run("SetModes", func(t *testing.T) {
 		var lastPayload *enphaseBatterySchedulesPayload
 		var postCalled bool
+		var settingsChargeFromGrid bool
+		var settingsScheduleEnabled bool
+		var useRequestedConfig bool
+		var settingsProfile string = "self-consumption"
+		var requestedProfile string = "self-consumption"
+		var putCalled bool
+		var lastSettingsPut *struct {
+			ChargeFromGrid                bool   `json:"chargeFromGrid"`
+			ChargeFromGridScheduleEnabled bool   `json:"chargeFromGridScheduleEnabled"`
+			AcceptedItcDisclaimer         string `json:"acceptedItcDisclaimer"`
+			ChargeBeginTime               int    `json:"chargeBeginTime"`
+			ChargeEndTime                 int    `json:"chargeEndTime"`
+		}
+
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/app-api/123/data.json" {
 				res := enphaseDataResult{
@@ -557,16 +590,74 @@ func TestEnphase(t *testing.T) {
 				return
 			}
 
-			if r.URL.Path == "/pv/systems/123/battery_schedules" {
-				assert.Equal(t, "POST", r.Method)
-				var payload enphaseBatterySchedulesPayload
-				err := json.NewDecoder(r.Body).Decode(&payload)
-				assert.NoError(t, err)
-				lastPayload = &payload
-				postCalled = true
-				w.WriteHeader(http.StatusOK)
-				w.Write([]byte(`{}`))
-				return
+			if r.URL.Path == "/service/batteryConfig/api/v1/batterySettings/123" {
+				if r.Method == "GET" {
+					w.WriteHeader(http.StatusOK)
+					chargeVal := "false"
+					if settingsChargeFromGrid {
+						chargeVal = "true"
+					}
+					schedVal := "false"
+					if settingsScheduleEnabled {
+						schedVal = "true"
+					}
+					requestedJson := ""
+					if useRequestedConfig {
+						requestedJson = `, "requestedConfig": {` +
+							`"chargeFromGrid": true,` +
+							`"chargeFromGridScheduleEnabled": false,` +
+							`"profile": "` + requestedProfile + `",` +
+							`"batteryBackupPercentage": 20` +
+							`}`
+					}
+					w.Write([]byte(`{"data": {` +
+						`"chargeFromGrid": ` + chargeVal + `,` +
+						`"chargeFromGridScheduleEnabled": ` + schedVal + `,` +
+						`"profile": "` + settingsProfile + `",` +
+						`"batteryBackupPercentage": 30,` +
+						`"acceptedItcDisclaimer": "2026-04-04T03:00:41.108Z",` +
+						`"chargeBeginTime": 60,` +
+						`"chargeEndTime": 240` +
+						requestedJson +
+						`}}`))
+					return
+				}
+				if r.Method == "PUT" {
+					var body struct {
+						ChargeFromGrid                bool   `json:"chargeFromGrid"`
+						ChargeFromGridScheduleEnabled bool   `json:"chargeFromGridScheduleEnabled"`
+						AcceptedItcDisclaimer         string `json:"acceptedItcDisclaimer"`
+						ChargeBeginTime               int    `json:"chargeBeginTime"`
+						ChargeEndTime                 int    `json:"chargeEndTime"`
+					}
+					err := json.NewDecoder(r.Body).Decode(&body)
+					assert.NoError(t, err)
+					lastSettingsPut = &body
+					putCalled = true
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(`{"message":"success"}`))
+					return
+				}
+			}
+
+			if r.URL.Path == "/service/batteryConfig/api/v1/profile/123" {
+				if r.Method == "POST" {
+					assert.Empty(t, r.URL.Query().Get("userId"))
+					var body struct {
+						Profile                 string `json:"profile"`
+						BatteryBackupPercentage int    `json:"batteryBackupPercentage"`
+					}
+					err := json.NewDecoder(r.Body).Decode(&body)
+					assert.NoError(t, err)
+					lastPayload = &enphaseBatterySchedulesPayload{
+						Usage:                   body.Profile,
+						BatteryBackupPercentage: body.BatteryBackupPercentage,
+					}
+					postCalled = true
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(`{"message":"success"}`))
+					return
+				}
 			}
 
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -588,21 +679,83 @@ func TestEnphase(t *testing.T) {
 		require.NoError(t, err)
 		if assert.True(t, postCalled) {
 			assert.Equal(t, 80, lastPayload.BatteryBackupPercentage)
-			assert.False(t, lastPayload.ChargeFromGrid)
-			assert.Equal(t, "NoImportOrExport", lastPayload.BatteryGridMode)
 			assert.Equal(t, "self-consumption", lastPayload.Usage)
 		}
+		assert.False(t, putCalled)
 
 		postCalled = false
 		lastPayload = nil
+		putCalled = false
+		lastSettingsPut = nil
 
 		err = e.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeNoChange)
 		require.NoError(t, err)
 		if assert.True(t, postCalled) {
 			assert.Equal(t, 100, lastPayload.BatteryBackupPercentage)
-			assert.True(t, lastPayload.ChargeFromGrid)
-			assert.Empty(t, lastPayload.BatteryGridMode)
 		}
+		if assert.True(t, putCalled) {
+			assert.True(t, lastSettingsPut.ChargeFromGrid)
+			assert.False(t, lastSettingsPut.ChargeFromGridScheduleEnabled)
+		}
+
+		// Test disabling schedules
+		postCalled = false
+		lastPayload = nil
+		putCalled = false
+		lastSettingsPut = nil
+		settingsChargeFromGrid = false
+		settingsScheduleEnabled = true
+		e.settings.GridChargeBatteries = false
+
+		err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange)
+		require.NoError(t, err)
+		if assert.True(t, postCalled) {
+			assert.Equal(t, 20, lastPayload.BatteryBackupPercentage)
+		}
+		if assert.True(t, putCalled) {
+			assert.False(t, lastSettingsPut.ChargeFromGrid)
+			assert.False(t, lastSettingsPut.ChargeFromGridScheduleEnabled)
+		}
+
+		// Test requestedConfig checks
+		postCalled = false
+		lastPayload = nil
+		putCalled = false
+		lastSettingsPut = nil
+		settingsChargeFromGrid = false
+		settingsScheduleEnabled = false
+		useRequestedConfig = true
+		e.settings.GridChargeBatteries = true
+
+		err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange)
+		require.NoError(t, err)
+		assert.False(t, postCalled)
+		assert.False(t, putCalled)
+
+		// Test backup mode guard (current profile is backup_only)
+		postCalled = false
+		lastPayload = nil
+		putCalled = false
+		lastSettingsPut = nil
+		settingsChargeFromGrid = false
+		settingsScheduleEnabled = false
+		useRequestedConfig = false
+		settingsProfile = "backup_only"
+
+		err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange)
+		require.ErrorContains(t, err, "device is in backup mode")
+		assert.False(t, postCalled)
+		assert.False(t, putCalled)
+
+		// Test backup mode guard (pending profile is backup_only)
+		settingsProfile = "self-consumption"
+		requestedProfile = "backup_only"
+		useRequestedConfig = true
+
+		err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange)
+		require.ErrorContains(t, err, "device is in backup mode")
+		assert.False(t, postCalled)
+		assert.False(t, putCalled)
 	})
 
 	t.Run("SetModes storm mode guard", func(t *testing.T) {

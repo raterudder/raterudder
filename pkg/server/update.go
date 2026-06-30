@@ -1213,7 +1213,9 @@ func (s *Server) syncHistorySummaryRange(
 			}
 			summariesByMonth[monthKey] = summary
 		}
-		summary.Energy = append(summary.Energy, dailyStat)
+		if hasData {
+			summary.Energy = append(summary.Energy, dailyStat)
+		}
 		if weather, ok := weatherStatsByDate[dateStr]; ok {
 			summary.Weather = append(summary.Weather, weather)
 		}

@@ -449,16 +449,38 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 		break
 	}
 
-	currentReserveSOC := float64(data.State.BatteryConfig.BatteryBackupPercentage)
+	// Fetch current battery settings (chargeFromGrid, schedule, etc.)
+	settingsData, err := e.getBatterySettings(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get battery settings: %w", err)
+	}
+
+	currentChargeFromGrid := settingsData.Data.ChargeFromGrid
+	currentChargeFromGridScheduleEnabled := settingsData.Data.ChargeFromGridScheduleEnabled
+	currentReserveSOC := float64(settingsData.Data.BatteryBackupPercentage)
+	currentProfile := settingsData.Data.Profile
+
+	if settingsData.Data.RequestedConfig != nil {
+		currentChargeFromGrid = settingsData.Data.RequestedConfig.ChargeFromGrid
+		currentChargeFromGridScheduleEnabled = settingsData.Data.RequestedConfig.ChargeFromGridScheduleEnabled
+		currentReserveSOC = float64(settingsData.Data.RequestedConfig.BatteryBackupPercentage)
+		currentProfile = settingsData.Data.RequestedConfig.Profile
+	}
+
+	isBackupCurrent := settingsData.Data.Profile == "backup_only"
+	isBackupPending := settingsData.Data.RequestedConfig != nil && settingsData.Data.RequestedConfig.Profile == "backup_only"
+	if isBackupCurrent || isBackupPending {
+		log.Ctx(ctx).InfoContext(ctx, "device is in backup mode, skipping set modes")
+		return errors.New("device is in backup mode")
+	}
+
 	newReserveSOC := currentReserveSOC
-
-	currentChargeFromGrid := data.State.BatteryConfig.ChargeFromGrid
 	newChargeFromGrid := currentChargeFromGrid
-
+	newProfile := "self-consumption"
 	switch bat {
 	case types.BatteryModeChargeAny:
 		// If they want to charge the battery, set the backup reserve SOC to 100% to
-		// force it to charge. Allow charging from the grid if configured.
+		// force it to charge.
 		newReserveSOC = 100
 		newChargeFromGrid = e.settings.GridChargeBatteries
 	case types.BatteryModeChargeSolar:
@@ -495,61 +517,133 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 		}
 	}
 
-	currentGridMode := data.State.BatteryGridMode
-	newGridMode := currentGridMode
-
-	switch sol {
-	case types.SolarModeAny:
-		if e.settings.GridExportSolar && e.settings.GridExportBatteries {
-			newGridMode = "ImportAndExport"
-		} else {
-			newGridMode = "NoImportOrExport"
-		}
-	case types.SolarModeNoExport:
-		newGridMode = "NoImportOrExport"
-	case types.SolarModeNoChange:
-		// Keep existing values
-	default:
-		return fmt.Errorf("unknown solar mode: %v", sol)
-	}
-
 	updatedSOC := math.Round(newReserveSOC) != math.Round(currentReserveSOC)
-	updatedCharge := newChargeFromGrid != currentChargeFromGrid
-	updatedGridMode := sol != types.SolarModeNoChange && newGridMode != currentGridMode
+	updatedChargeFromGrid := newChargeFromGrid != currentChargeFromGrid
+	disableSchedule := currentChargeFromGridScheduleEnabled
 
-	if !updatedSOC && !updatedCharge && !updatedGridMode {
-		log.Ctx(ctx).DebugContext(ctx, "no enphase modes or reserve SOC updates required")
+	if !updatedSOC && !updatedChargeFromGrid && !disableSchedule {
+		log.Ctx(ctx).DebugContext(ctx, "no enphase reserve SOC, charge settings, or schedule updates required")
 		return nil
 	}
 
-	usage := data.State.BatteryConfig.Usage
-	if usage == "" {
-		usage = "self-consumption"
+	// Update batterySettings if chargeFromGrid or schedules need to change/disable
+	if updatedChargeFromGrid || disableSchedule {
+		if e.settings.DryRun {
+			log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated enphase battery settings",
+				slog.Bool("chargeFromGrid", newChargeFromGrid),
+				slog.Bool("chargeFromGridScheduleEnabled", false),
+			)
+		} else {
+			log.Ctx(ctx).InfoContext(ctx, "updating enphase battery settings",
+				slog.Bool("chargeFromGrid", newChargeFromGrid),
+				slog.Bool("chargeFromGridScheduleEnabled", false),
+			)
+			payload := enphaseBatterySettingsPayload{
+				ChargeFromGrid:                newChargeFromGrid,
+				ChargeFromGridScheduleEnabled: false,
+				AcceptedItcDisclaimer:         settingsData.Data.AcceptedItcDisclaimer,
+				ChargeBeginTime:               settingsData.Data.ChargeBeginTime,
+				ChargeEndTime:                 settingsData.Data.ChargeEndTime,
+			}
+			if err := e.updateBatterySettings(ctx, payload); err != nil {
+				return err
+			}
+		}
 	}
 
-	if e.settings.DryRun {
-		log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated enphase battery schedules",
-			slog.String("usage", usage),
-			slog.Int("batteryBackupPercentage", int(math.Round(newReserveSOC))),
-			slog.Bool("chargeFromGrid", newChargeFromGrid),
-			slog.String("batteryGridMode", newGridMode),
-		)
-		return nil
+	// Update batteryProfile if backup reserve SOC needs to change
+	if updatedSOC {
+		if e.settings.DryRun {
+			log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated enphase battery profile",
+				slog.String("currentProfile", currentProfile),
+				slog.String("newProfile", newProfile),
+				slog.Int("batteryBackupPercentage", int(math.Round(newReserveSOC))),
+			)
+		} else {
+			log.Ctx(ctx).InfoContext(ctx, "updating enphase battery profile",
+				slog.String("currentProfile", currentProfile),
+				slog.String("newProfile", newProfile),
+				slog.Int("batteryBackupPercentage", int(math.Round(newReserveSOC))),
+			)
+			payload := enphaseBatteryProfilePayload{
+				Profile:                 newProfile,
+				BatteryBackupPercentage: int(math.Round(newReserveSOC)),
+			}
+			if err := e.updateBatteryProfile(ctx, payload); err != nil {
+				log.Ctx(ctx).ErrorContext(ctx, "failed to update enphase battery profile", slog.Any("error", err))
+				return err
+			}
+		}
 	}
 
-	payload := enphaseBatterySchedulesPayload{
-		Usage:                   usage,
-		BatteryBackupPercentage: int(math.Round(newReserveSOC)),
-		ChargeFromGrid:          newChargeFromGrid,
-	}
-	if sol != types.SolarModeNoChange {
-		payload.BatteryGridMode = newGridMode
+	e.dataExpiry = time.Time{}
+	return nil
+}
+
+type enphaseRequestedConfig struct {
+	ChargeFromGrid                bool   `json:"chargeFromGrid"`
+	ChargeFromGridScheduleEnabled bool   `json:"chargeFromGridScheduleEnabled"`
+	Profile                       string `json:"profile"`
+	BatteryBackupPercentage       int    `json:"batteryBackupPercentage"`
+}
+
+func (e *Enphase) getBatterySettings(ctx context.Context) (enphaseBatterySettingsResponse, error) {
+	u := e.baseURL.JoinPath(fmt.Sprintf("service/batteryConfig/api/v1/batterySettings/%d", e.systemID))
+	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+	if err != nil {
+		return enphaseBatterySettingsResponse{}, err
 	}
 
-	u := e.baseURL.JoinPath(fmt.Sprintf("pv/systems/%d/battery_schedules", e.systemID))
+	var res enphaseBatterySettingsResponse
+	if err := e.doRequest(req, &res); err != nil {
+		return enphaseBatterySettingsResponse{}, err
+	}
+	return res, nil
+}
+
+type enphaseBatterySettingsPayload struct {
+	ChargeFromGrid                bool   `json:"chargeFromGrid"`
+	ChargeFromGridScheduleEnabled bool   `json:"chargeFromGridScheduleEnabled"`
+	AcceptedItcDisclaimer         string `json:"acceptedItcDisclaimer,omitempty"`
+	ChargeBeginTime               int    `json:"chargeBeginTime,omitempty"`
+	ChargeEndTime                 int    `json:"chargeEndTime,omitempty"`
+}
+
+func (e *Enphase) updateBatterySettings(ctx context.Context, payload enphaseBatterySettingsPayload) error {
+	u := e.baseURL.JoinPath(fmt.Sprintf("service/batteryConfig/api/v1/batterySettings/%d", e.systemID))
 	jsonBytes, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("failed to marshal enphase battery schedules payload: %w", err)
+		return fmt.Errorf("failed to marshal battery settings payload: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "PUT", u.String(), bytes.NewReader(jsonBytes))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var res struct {
+		Message string `json:"message"`
+	}
+	if err := e.doRequest(req, &res); err != nil {
+		return fmt.Errorf("failed to update battery settings: %w", err)
+	}
+	if res.Message != "success" && res.Message != "" {
+		return fmt.Errorf("battery settings update failed: %s", res.Message)
+	}
+	return nil
+}
+
+type enphaseBatteryProfilePayload struct {
+	Profile                 string `json:"profile"`
+	BatteryBackupPercentage int    `json:"batteryBackupPercentage"`
+}
+
+func (e *Enphase) updateBatteryProfile(ctx context.Context, payload enphaseBatteryProfilePayload) error {
+	u := e.baseURL.JoinPath(fmt.Sprintf("service/batteryConfig/api/v1/profile/%d", e.systemID))
+	jsonBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal battery profile payload: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", u.String(), bytes.NewReader(jsonBytes))
@@ -558,19 +652,15 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	log.Ctx(ctx).InfoContext(ctx, "updating enphase battery schedules",
-		slog.String("usage", usage),
-		slog.Int("batteryBackupPercentage", payload.BatteryBackupPercentage),
-		slog.Bool("chargeFromGrid", payload.ChargeFromGrid),
-		slog.String("batteryGridMode", payload.BatteryGridMode),
-	)
-
-	if err := e.doRequest(req, nil); err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to update enphase battery schedules", slog.Any("error", err))
-		return err
+	var res struct {
+		Message string `json:"message"`
 	}
-
-	e.dataExpiry = time.Time{}
+	if err := e.doRequest(req, &res); err != nil {
+		return fmt.Errorf("failed to update battery profile: %w", err)
+	}
+	if res.Message != "success" && res.Message != "" {
+		return fmt.Errorf("battery profile update failed: %s", res.Message)
+	}
 	return nil
 }
 
@@ -598,6 +688,7 @@ func parseDailyStats(stat enphaseTodayStats, dayStart time.Time, loc *time.Locat
 		return 0
 	}
 
+	hourInitializedSOC := make(map[time.Time]bool)
 	for i := 0; i < maxLen; i++ {
 		intervalTime := startTime.Add(time.Duration(i*intervalSecs) * time.Second)
 		hourStart := intervalTime.Truncate(time.Hour)
@@ -608,6 +699,22 @@ func parseDailyStats(stat enphaseTodayStats, dayStart time.Time, loc *time.Locat
 				TSHourStart: hourStart,
 			}
 			hourlyStatsMap[hourStart] = s
+		}
+
+		if i < len(stat.SOC) {
+			socVal := stat.SOC[i]
+			if !hourInitializedSOC[hourStart] {
+				s.MinBatterySOC = socVal
+				s.MaxBatterySOC = socVal
+				hourInitializedSOC[hourStart] = true
+			} else {
+				if socVal < s.MinBatterySOC {
+					s.MinBatterySOC = socVal
+				}
+				if socVal > s.MaxBatterySOC {
+					s.MaxBatterySOC = socVal
+				}
+			}
 		}
 
 		solarHome := getVal(stat.SolarHome, i)
@@ -1091,4 +1198,17 @@ type enphaseStormAlertMessage struct {
 	AlertName string `json:"alert_name"`
 	StartTime any    `json:"start_time"`
 	EndTime   any    `json:"end_time"`
+}
+
+type enphaseBatterySettingsResponse struct {
+	Data struct {
+		ChargeFromGrid                bool                    `json:"chargeFromGrid"`
+		ChargeFromGridScheduleEnabled bool                    `json:"chargeFromGridScheduleEnabled"`
+		Profile                       string                  `json:"profile"`
+		BatteryBackupPercentage       int                     `json:"batteryBackupPercentage"`
+		AcceptedItcDisclaimer         string                  `json:"acceptedItcDisclaimer"`
+		ChargeBeginTime               int                     `json:"chargeBeginTime"`
+		ChargeEndTime                 int                     `json:"chargeEndTime"`
+		RequestedConfig               *enphaseRequestedConfig `json:"requestedConfig"`
+	} `json:"data"`
 }
