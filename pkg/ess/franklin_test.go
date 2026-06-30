@@ -259,8 +259,7 @@ func TestFranklin(t *testing.T) {
 		var futureEventStart string
 		var futureEventEnd string
 		var latestEventStatus int
-		var ehEventStatus int
-		var emptyEHEvents bool
+		var ehEventsResult []map[string]any
 
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
@@ -322,20 +321,10 @@ func TestFranklin(t *testing.T) {
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/queryEHEvents" {
-				var result []map[string]any
-				if !emptyEHEvents {
-					result = []map[string]any{
-						{
-							"eventId":     "def9ae16-24d0-4333-9d5d-d6cf8452d64a",
-							"vppSoc":      15.0,
-							"eventStatus": ehEventStatus,
-						},
-					}
-				}
 				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  result,
+					"result":  ehEventsResult,
 				})
 				return
 			}
@@ -349,12 +338,19 @@ func TestFranklin(t *testing.T) {
 			gatewayID: "g",
 		}
 
-		// 1. With a future event and successful queryEHEvents match (status = 2, OptOut = false)
+		// 1. One future event in program details, matching one in queryEHEvents (status = 2, OptOut = false)
 		futureEventStart = time.Now().UTC().Add(2 * time.Hour).Format("2006-01-02 15:04:05")
 		futureEventEnd = time.Now().UTC().Add(4 * time.Hour).Format("2006-01-02 15:04:05")
 		latestEventStatus = 2
-		ehEventStatus = 2
-		emptyEHEvents = false
+		ehEventsResult = []map[string]any{
+			{
+				"eventId":     "def9ae16-24d0-4333-9d5d-d6cf8452d64a",
+				"vppSoc":      15.0,
+				"startTime":   futureEventStart,
+				"endTime":     futureEventEnd,
+				"eventStatus": 2,
+			},
+		}
 		status, err := f.GetStatus(context.Background())
 		require.NoError(t, err)
 		if assert.Len(t, status.VPPEvents, 1) {
@@ -363,43 +359,73 @@ func TestFranklin(t *testing.T) {
 			assert.False(t, status.VPPEvents[0].OptOut)
 		}
 
-		// 2. With a future event and successful queryEHEvents match (status = 3, OptOut = true)
-		ehEventStatus = 3
-		status, err = f.GetStatus(context.Background())
-		require.NoError(t, err)
-		if assert.Len(t, status.VPPEvents, 1) {
-			assert.True(t, status.VPPEvents[0].OptOut)
-		}
-
-		// 3. With a future event and successful queryEHEvents match (status = 4, OptOut = true)
-		ehEventStatus = 4
-		status, err = f.GetStatus(context.Background())
-		require.NoError(t, err)
-		if assert.Len(t, status.VPPEvents, 1) {
-			assert.True(t, status.VPPEvents[0].OptOut)
-		}
-
-		// 4. With a future event and queryEHEvents not found (latestEventStatus = 2, OptOut = false)
-		emptyEHEvents = true
+		// 2. Multiple upcoming events in queryEHEvents (deduplicated against program details and sorted by TSStart)
+		futureEventStart = time.Now().UTC().Add(5 * time.Hour).Format("2006-01-02 15:04:05")
+		futureEventEnd = time.Now().UTC().Add(7 * time.Hour).Format("2006-01-02 15:04:05")
 		latestEventStatus = 2
+		ehEventsResult = []map[string]any{
+			{
+				"eventId":     "id1",
+				"vppSoc":      20.0,
+				"startTime":   time.Now().UTC().Add(3 * time.Hour).Format("2006-01-02 15:04:05"),
+				"endTime":     time.Now().UTC().Add(5 * time.Hour).Format("2006-01-02 15:04:05"),
+				"eventStatus": 3, // OptOut = true
+			},
+			{
+				"eventId":     "id2",
+				"vppSoc":      25.0,
+				"startTime":   time.Now().UTC().Add(1 * time.Hour).Format("2006-01-02 15:04:05"),
+				"endTime":     time.Now().UTC().Add(3 * time.Hour).Format("2006-01-02 15:04:05"),
+				"eventStatus": 2, // OptOut = false
+			},
+			{
+				"eventId":     "def9ae16-24d0-4333-9d5d-d6cf8452d64a",
+				"vppSoc":      30.0,
+				"startTime":   futureEventStart,
+				"endTime":     futureEventEnd,
+				"eventStatus": 0, // OptOut = false
+			},
+		}
 		status, err = f.GetStatus(context.Background())
 		require.NoError(t, err)
-		if assert.Len(t, status.VPPEvents, 1) {
-			assert.Equal(t, 20.0, status.VPPEvents[0].VPPSoc) // should fallback to pd.VPPSoc
+		if assert.Len(t, status.VPPEvents, 3) {
+			// Sorting order verification:
+			// Event id2 (1 hour out) -> Event id1 (3 hours out) -> Event def9ae16 (5 hours out)
+			assert.Equal(t, 25.0, status.VPPEvents[0].VPPSoc)
 			assert.False(t, status.VPPEvents[0].OptOut)
+
+			assert.Equal(t, 20.0, status.VPPEvents[1].VPPSoc)
+			assert.True(t, status.VPPEvents[1].OptOut)
+
+			assert.Equal(t, 30.0, status.VPPEvents[2].VPPSoc)
+			assert.False(t, status.VPPEvents[2].OptOut)
 		}
 
-		// 5. With a future event and queryEHEvents not found (latestEventStatus = 4, OptOut = true)
-		latestEventStatus = 4
+		// 3. Fallback to queryProgramDetails if queryEHEvents is empty
+		futureEventStart = time.Now().UTC().Add(2 * time.Hour).Format("2006-01-02 15:04:05")
+		futureEventEnd = time.Now().UTC().Add(4 * time.Hour).Format("2006-01-02 15:04:05")
+		latestEventStatus = 4 // OptOut = true
+		ehEventsResult = []map[string]any{}
 		status, err = f.GetStatus(context.Background())
 		require.NoError(t, err)
 		if assert.Len(t, status.VPPEvents, 1) {
+			assert.Equal(t, 20.0, status.VPPEvents[0].VPPSoc)
 			assert.True(t, status.VPPEvents[0].OptOut)
 		}
 
-		// 6. With a past event
+		// 4. Past latest event (no events returned even if queryEHEvents has future events)
 		futureEventStart = time.Now().UTC().Add(-4 * time.Hour).Format("2006-01-02 15:04:05")
 		futureEventEnd = time.Now().UTC().Add(-2 * time.Hour).Format("2006-01-02 15:04:05")
+		latestEventStatus = 2
+		ehEventsResult = []map[string]any{
+			{
+				"eventId":     "id1",
+				"vppSoc":      20.0,
+				"startTime":   time.Now().UTC().Add(3 * time.Hour).Format("2006-01-02 15:04:05"),
+				"endTime":     time.Now().UTC().Add(5 * time.Hour).Format("2006-01-02 15:04:05"),
+				"eventStatus": 2,
+			},
+		}
 		status, err = f.GetStatus(context.Background())
 		require.NoError(t, err)
 		assert.Empty(t, status.VPPEvents)

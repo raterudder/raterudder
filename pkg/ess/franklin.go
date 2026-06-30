@@ -685,41 +685,56 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 					slog.Any("err2", err2),
 				)
 			} else if startTime.After(time.Now()) {
-				vppSoc := pd.VPPSoc
-				optOut := pd.LatestEventStatus == 3 || pd.LatestEventStatus == 4
-				if ehEvents, err := f.queryEHEvents(ctx); err != nil {
-					log.Ctx(ctx).WarnContext(ctx, "failed to query EH events", slog.Any("error", err))
-				} else {
-					var found bool
-					for _, ev := range ehEvents {
-						if ev.EventID == pd.LatestEventID {
-							vppSoc = ev.VPPSoc
-							optOut = ev.EventStatus == 3 || ev.EventStatus == 4
-							found = true
-							log.Ctx(ctx).DebugContext(
-								ctx,
-								"found latest VPP event",
-								slog.String("eventID", ev.EventID),
-								slog.Any("event", ev),
-							)
-							break
-						}
+				ehEvents, ehErr := f.queryEHEvents(ctx)
+				if ehErr != nil {
+					log.Ctx(ctx).WarnContext(ctx, "failed to query EH events", slog.Any("error", ehErr))
+				}
+
+				seenEvents := map[string]bool{}
+				// 1. Process all upcoming events from queryEHEvents
+				for _, ev := range ehEvents {
+					if ev.EventID == "" {
+						continue
 					}
-					if !found {
-						log.Ctx(ctx).WarnContext(
-							ctx,
-							"VPP event not found in EH events",
-							slog.String("eventID", pd.LatestEventID),
+					st, err1 := time.ParseInLocation("2006-01-02 15:04:05", ev.StartTime, di.location)
+					et, err2 := time.ParseInLocation("2006-01-02 15:04:05", ev.EndTime, di.location)
+					if err1 != nil || err2 != nil {
+						log.Ctx(ctx).WarnContext(ctx, "failed to parse VPP event times from EH events",
+							slog.String("startTime", ev.StartTime),
+							slog.String("endTime", ev.EndTime),
+							slog.Any("err1", err1),
+							slog.Any("err2", err2),
 						)
+						continue
+					}
+					// Only keep future/upcoming events
+					if st.After(time.Now()) {
+						vppEvents = append(vppEvents, types.VPPEvent{
+							Description: pd.ProgramName,
+							TSStart:     st,
+							TSEnd:       et,
+							VPPSoc:      ev.VPPSoc,
+							OptOut:      ev.EventStatus == 3 || ev.EventStatus == 4,
+						})
+						seenEvents[ev.EventID] = true
 					}
 				}
 
-				vppEvents = append(vppEvents, types.VPPEvent{
-					Description: pd.ProgramName,
-					TSStart:     startTime,
-					TSEnd:       endTime,
-					VPPSoc:      vppSoc,
-					OptOut:      optOut,
+				// 2. Process pd.LatestEvent if not already added
+				if pd.LatestEventID != "" && !seenEvents[pd.LatestEventID] {
+					optOut := pd.LatestEventStatus == 3 || pd.LatestEventStatus == 4
+					vppEvents = append(vppEvents, types.VPPEvent{
+						Description: pd.ProgramName,
+						TSStart:     startTime,
+						TSEnd:       endTime,
+						VPPSoc:      pd.VPPSoc,
+						OptOut:      optOut,
+					})
+				}
+
+				// 3. Sort the events by TSStart
+				sort.Slice(vppEvents, func(i, j int) bool {
+					return vppEvents[i].TSStart.Before(vppEvents[j].TSStart)
 				})
 			}
 		}
@@ -1734,7 +1749,7 @@ type franklinEHEvent struct {
 	VPPSoc    float64 `json:"vppSoc"`
 	StartTime string  `json:"startTime"`
 	EndTime   string  `json:"endTime"`
-	// EventStatus 2 means completed, 3 means cancelled, 4 means opt-out
+	// EventStatus 0 means pending, 2 means completed, 3 means cancelled, 4 means opt-out
 	// TODO: determine the rest of the statuses
 	EventStatus int `json:"eventStatus"`
 }
