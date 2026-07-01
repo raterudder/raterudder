@@ -627,6 +627,11 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
 		mockS.On("UpsertEnergyHistories", mock.Anything, types.SiteIDNone, energyHistories, types.CurrentEnergyStatsVersion).Return(nil)
 
+		// Mock the storage calls during history summary backfill
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(energyHistories, nil).Maybe()
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Maybe()
+
 		// Expect SetSettings to be called
 		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
 			return s.ESS == "mock" && len(s.EncryptedCredentials) > 0
@@ -832,6 +837,11 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockS.On("GetLatestWeatherTime", mock.Anything, types.SiteIDNone).Return(time.Time{}, time.Time{}, 0, nil)
 		mockS.On("GetWeather", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
 		mockS.On("UpsertWeather", mock.Anything, types.SiteIDNone, weather, types.CurrentWeatherVersion).Return(nil)
+
+		// Mock the storage calls during history summary backfill
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+		mockS.On("UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Maybe()
+
 		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
 			return s.Location != nil && s.Location.PostalCode == "90210"
 		}), types.CurrentSettingsVersion).Return(nil)
@@ -955,6 +965,10 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockS.On("GetLatestWeatherTime", mock.Anything, mock.Anything).Return(time.Time{}, time.Time{}, 0, nil)
 		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
 		mockS.On("UpsertWeather", mock.Anything, types.SiteIDNone, weather, types.CurrentWeatherVersion).Return(nil)
+
+		// Mock the storage calls during history summary backfill
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+		mockS.On("UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Maybe()
 
 		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
 			// Verify that the new azimuth and tilt are preserved despite a zip change re-fetching location
@@ -1462,6 +1476,99 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
 
 		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockU.AssertExpectations(t))
+	})
+
+	t.Run("Update Settings - Triggers History Summary Update Once when Weather and Price are Updated Concurrently", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockW := &mockWeather{}
+		mockU := &mockUtility{}
+
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			storage:   mockS,
+			weather:   mockW,
+			utilities: mockUMap,
+		}
+
+		// Change ZIP code (weather backfill) and utility settings (price update)
+		bodyData := types.Settings{
+			PostalCode:                  "60601",
+			CountryCode:                 "US",
+			UtilityProvider:             "new-utility",
+			UtilityRate:                 "mock",
+			IgnoreHourUsageOverMultiple: 1.0,
+			SolarTrendRatioMax:          1.0,
+		}
+		body, err := json.Marshal(bodyData)
+		require.NoError(t, err)
+		req := httptest.NewRequest(http.MethodPost, "/api/settings", bytes.NewBuffer(body))
+		req = withUser(req, "test@test.com", true)
+
+		// Mock existing settings to have old ZIP code and old utility provider
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+			PostalCode:      "90210",
+			CountryCode:     "US",
+			UtilityProvider: "old-utility",
+			Location: &types.SiteLocation{
+				PostalCode:  "90210",
+				CountryCode: "US",
+				Latitude:    34.0736,
+				Longitude:   -118.4004,
+			},
+		}, types.CurrentSettingsVersion, nil).Once()
+
+		// 1. Weather setup
+		newLoc := types.SiteLocation{
+			PostalCode:  "60601",
+			CountryCode: "US",
+			Latitude:    41.8818,
+			Longitude:   -87.6231,
+		}
+		mockW.On("Location", mock.Anything, "US", "60601").Return(newLoc, nil).Once()
+		weather := []types.Weather{
+			{
+				TSDayStart:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+				TimeLocation: "UTC",
+				ForecastHours: []types.HourlyWeather{
+					{
+						TSHourStart: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+						GHI:         800,
+					},
+				},
+			},
+		}
+		mockW.On("Forecast", mock.Anything, newLoc, mock.Anything, mock.Anything).Return(weather, nil)
+		mockS.On("GetLatestWeatherTime", mock.Anything, mock.Anything).Return(time.Time{}, time.Time{}, 0, nil)
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("UpsertWeather", mock.Anything, types.SiteIDNone, weather, types.CurrentWeatherVersion).Return(nil)
+
+		// 2. Price setup
+		mockU.On("ApplySettings", mock.Anything, mock.MatchedBy(func(set types.Settings) bool {
+			return set.UtilityProvider == "new-utility"
+		})).Return(nil).Once()
+		prices := []types.Price{{DollarsPerKWH: 0.1, TSStart: time.Now()}}
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return(prices, nil)
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, types.SiteIDNone).Return(time.Now().Add(8*time.Hour), types.CurrentPriceHistoryVersion, nil).Once()
+		mockS.On("UpsertPrices", mock.Anything, types.SiteIDNone, prices, types.CurrentPriceHistoryVersion).Return(nil)
+
+		// 3. SetSettings expectation
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+			return s.Location != nil && s.Location.PostalCode == "60601" && s.UtilityProvider == "new-utility"
+		}), types.CurrentSettingsVersion).Return(nil).Once()
+
+		// 4. History Summary mocks (should be called exactly once since they are waiting for both to finish)
+		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockS.On("UpdateHistorySummary", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Once()
+
+		w := httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockW.AssertExpectations(t))
 		assert.True(t, mockU.AssertExpectations(t))
 	})
 }

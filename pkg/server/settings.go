@@ -248,6 +248,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var wg sync.WaitGroup
+	var updatedWeather, updatedEnergy bool
 	// normally we would just do defer wg.Wait() but then we write out the response
 	// before we actually finish which makes tests difficult and also could cause
 	// cloud run to shutdown before we're done
@@ -303,6 +304,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			loc.SolarAzimuth = newSettings.SolarAzimuth
 			loc.SolarTilt = newSettings.SolarTilt
 
+			updatedWeather = true
 			wg.Go(func() {
 				log.Ctx(ctx).InfoContext(ctx, "fetching initial weather for new location")
 				if err := s.updateWeatherHistory(context.WithoutCancel(ctx), siteID, loc); err != nil {
@@ -450,6 +452,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			if shouldBackfillHistory {
 				// this goroutine is okay because we use a waitgroup to block the return
 				// of the call until it finishes
+				updatedEnergy = true
 				wg.Go(func() {
 					log.Ctx(ctx).InfoContext(ctx, "backfilling energy history for new credentials")
 					if err := s.updateEnergyHistory(context.WithoutCancel(ctx), siteID, essSystem); err != nil {
@@ -516,6 +519,14 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	wg.Wait()
 	finishedWaiting = true
+
+	if updatedWeather || updatedEnergy {
+		log.Ctx(ctx).InfoContext(ctx, "triggering history summary update after settings backfill")
+		if _, err := s.backfillHistorySummaries(context.WithoutCancel(ctx), siteID, s.now()); err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to backfill history summaries after settings update", slog.Any("error", err))
+		}
+	}
+
 	w.WriteHeader(http.StatusOK)
 }
 
