@@ -28,19 +28,22 @@ import (
 var errEnphaseUnauthorized = errors.New("unauthorized")
 
 type Enphase struct {
-	client        *http.Client
-	baseURL       *url.URL
-	mu            sync.Mutex
-	settings      types.Settings
-	username      string
-	password      string
-	sessionID     string
-	managerToken  string
-	systemID      int
-	userID        int
-	dataCache     enphaseDataResult
-	dataExpiry    time.Time
-	lastCSRFToken map[string]string
+	client           *http.Client
+	baseURL          *url.URL
+	mu               sync.Mutex
+	settings         types.Settings
+	username         string
+	password         string
+	sessionID        string
+	managerToken     string
+	systemID         int
+	userID           int
+	dataCache        enphaseDataResult
+	dataExpiry       time.Time
+	lastCSRFToken    map[string]string
+	todayCache       enphaseTodayResponse
+	todayCacheDate   string
+	todayCacheExpiry time.Time
 }
 
 func newEnphase() *Enphase {
@@ -589,6 +592,7 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 	}
 
 	e.dataExpiry = time.Time{}
+	e.todayCacheExpiry = time.Time{}
 	return nil
 }
 
@@ -774,8 +778,8 @@ func parseDailyStats(stat enphaseTodayStats, dayStart time.Time, loc *time.Locat
 			hourlyStatsMap[hourStart] = s
 		}
 
-		if i < len(stat.SOC) {
-			socVal := stat.SOC[i]
+		if i < len(stat.SOC) && stat.SOC[i] != nil {
+			socVal := *stat.SOC[i]
 			if !hourInitializedSOC[hourStart] {
 				s.MinBatterySOC = socVal
 				s.MaxBatterySOC = socVal
@@ -1036,39 +1040,15 @@ func (e *Enphase) getDataWithCache(ctx context.Context, force bool) (enphaseData
 	return res, nil
 }
 
-type enphaseTodayStats struct {
-	Production       []float64 `json:"production"`
-	Consumption      []float64 `json:"consumption"`
-	Import           []float64 `json:"import"`
-	Export           []float64 `json:"export"`
-	GridImport       []float64 `json:"grid_import"`
-	SolarHome        []float64 `json:"solar_home"`
-	SolarBattery     []float64 `json:"solar_battery"`
-	SolarGrid        []float64 `json:"solar_grid"`
-	GeneratorHome    []float64 `json:"generator_home"`
-	GeneratorBattery []float64 `json:"generator_battery"`
-	GeneratorGrid    []float64 `json:"generator_grid"`
-	BatteryHome      []float64 `json:"battery_home"`
-	BatteryGrid      []float64 `json:"battery_grid"`
-	GridBattery      []float64 `json:"grid_battery"`
-	GridHome         []float64 `json:"grid_home"`
-	SOC              []float64 `json:"soc"`
-	StartTime        int64     `json:"start_time"`
-	IntervalLength   int       `json:"interval_length"`
-}
-
-type enphaseTodayResponse struct {
-	StartDate      string              `json:"start_date"`
-	Stats          []enphaseTodayStats `json:"stats"`
-	BatteryDetails *struct {
-		AggregateSOC float64 `json:"aggregate_soc"`
-	} `json:"battery_details"`
-}
-
 func (e *Enphase) getToday(ctx context.Context, date time.Time) (enphaseTodayResponse, error) {
+	dateStr := date.Format("2006-01-02")
+	if dateStr == e.todayCacheDate && time.Now().Before(e.todayCacheExpiry) {
+		return e.todayCache, nil
+	}
+
 	u := e.baseURL.JoinPath(fmt.Sprintf("pv/systems/%d/today", e.systemID))
 	q := u.Query()
-	q.Set("date", date.Format("2006-01-02"))
+	q.Set("date", dateStr)
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
@@ -1080,6 +1060,13 @@ func (e *Enphase) getToday(ctx context.Context, date time.Time) (enphaseTodayRes
 	if err := e.doRequest(req, &res); err != nil {
 		return enphaseTodayResponse{}, err
 	}
+
+	filterFutureIntervals(ctx, &res, time.Now())
+
+	e.todayCache = res
+	e.todayCacheDate = dateStr
+	e.todayCacheExpiry = time.Now().Add(time.Minute)
+
 	return res, nil
 }
 
@@ -1099,7 +1086,78 @@ func (e *Enphase) getDailyEnergy(ctx context.Context, start, end time.Time) (enp
 	if err := e.doRequest(req, &res); err != nil {
 		return enphaseTodayResponse{}, err
 	}
+
+	filterFutureIntervals(ctx, &res, time.Now())
+
 	return res, nil
+}
+
+func filterFutureIntervals(ctx context.Context, res *enphaseTodayResponse, now time.Time) {
+	for i := range res.Stats {
+		stat := &res.Stats[i]
+		intervalSecs := stat.IntervalLength
+		if intervalSecs == 0 {
+			intervalSecs = 900
+		}
+
+		lastValidOtherIdx := 0
+		lastValidSOCIdx := 0
+		maxLen := max(len(stat.Consumption), len(stat.Consumption), len(stat.Production), len(stat.SOC))
+
+		for idx := 0; idx < maxLen; idx++ {
+			intervalStartTime := stat.StartTime + int64(idx*intervalSecs)
+			if intervalStartTime > now.Unix() {
+				break
+			}
+			if idx < len(stat.SOC) && stat.SOC[idx] != nil {
+				lastValidSOCIdx = idx
+			} else {
+				// check if we have any other data because maybe the SOC is null for some
+				// other reason
+				if (idx < len(stat.GridImport) && stat.GridImport[idx] > 0) ||
+					(idx < len(stat.BatteryHome) && stat.BatteryHome[idx] > 0) ||
+					(idx < len(stat.GridHome) && stat.GridHome[idx] > 0) ||
+					(idx < len(stat.GridBattery) && stat.GridBattery[idx] > 0) ||
+					(idx < len(stat.SolarHome) && stat.SolarHome[idx] > 0) ||
+					(idx < len(stat.Production) && stat.Production[idx] > 0) {
+					lastValidOtherIdx = idx
+				}
+			}
+		}
+		if lastValidOtherIdx > lastValidSOCIdx {
+			log.Ctx(ctx).WarnContext(ctx, "enphase: missing soc data for past/present hours",
+				slog.Int("lastValidOtherIdx", lastValidOtherIdx),
+				slog.Int("lastValidSOCIdx", lastValidSOCIdx),
+			)
+		}
+		validLen := max(lastValidOtherIdx, lastValidSOCIdx) + 1
+		truncateSlice := func(slice []float64) []float64 {
+			if len(slice) > validLen {
+				return slice[:validLen]
+			}
+			return slice
+		}
+
+		stat.Production = truncateSlice(stat.Production)
+		stat.Consumption = truncateSlice(stat.Consumption)
+		stat.Import = truncateSlice(stat.Import)
+		stat.Export = truncateSlice(stat.Export)
+		stat.GridImport = truncateSlice(stat.GridImport)
+		stat.SolarHome = truncateSlice(stat.SolarHome)
+		stat.SolarBattery = truncateSlice(stat.SolarBattery)
+		stat.SolarGrid = truncateSlice(stat.SolarGrid)
+		stat.GeneratorHome = truncateSlice(stat.GeneratorHome)
+		stat.GeneratorBattery = truncateSlice(stat.GeneratorBattery)
+		stat.GeneratorGrid = truncateSlice(stat.GeneratorGrid)
+		stat.BatteryHome = truncateSlice(stat.BatteryHome)
+		stat.BatteryGrid = truncateSlice(stat.BatteryGrid)
+		stat.GridBattery = truncateSlice(stat.GridBattery)
+		stat.GridHome = truncateSlice(stat.GridHome)
+
+		if len(stat.SOC) > validLen {
+			stat.SOC = stat.SOC[:validLen]
+		}
+	}
 }
 
 func (e *Enphase) doRequest(req *http.Request, dest any) error {
@@ -1302,4 +1360,33 @@ type enphaseBatteryProfileResponse struct {
 	BatteryBackupPercentageMin int                    `json:"batteryBackupPercentageMin"`
 	BatteryBackupPercentageMax int                    `json:"batteryBackupPercentageMax"`
 	VeryLowSOC                 int                    `json:"veryLowSoc"`
+}
+
+type enphaseTodayStats struct {
+	Production       []float64  `json:"production"`
+	Consumption      []float64  `json:"consumption"`
+	Import           []float64  `json:"import"`
+	Export           []float64  `json:"export"`
+	GridImport       []float64  `json:"grid_import"`
+	SolarHome        []float64  `json:"solar_home"`
+	SolarBattery     []float64  `json:"solar_battery"`
+	SolarGrid        []float64  `json:"solar_grid"`
+	GeneratorHome    []float64  `json:"generator_home"`
+	GeneratorBattery []float64  `json:"generator_battery"`
+	GeneratorGrid    []float64  `json:"generator_grid"`
+	BatteryHome      []float64  `json:"battery_home"`
+	BatteryGrid      []float64  `json:"battery_grid"`
+	GridBattery      []float64  `json:"grid_battery"`
+	GridHome         []float64  `json:"grid_home"`
+	SOC              []*float64 `json:"soc"`
+	StartTime        int64      `json:"start_time"`
+	IntervalLength   int        `json:"interval_length"`
+}
+
+type enphaseTodayResponse struct {
+	StartDate      string              `json:"start_date"`
+	Stats          []enphaseTodayStats `json:"stats"`
+	BatteryDetails *struct {
+		AggregateSOC float64 `json:"aggregate_soc"`
+	} `json:"battery_details"`
 }

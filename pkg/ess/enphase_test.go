@@ -3,6 +3,7 @@ package ess
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -898,5 +899,67 @@ func TestEnphase(t *testing.T) {
 		}
 		assert.True(t, putCalled)
 		assert.True(t, lastSettingsPut.ChargeFromGrid)
+	})
+
+	t.Run("getToday future intervals truncated and null SOC handled and cached", func(t *testing.T) {
+		calls := 0
+		now := time.Now()
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/pv/systems/123/today" {
+				calls++
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(fmt.Sprintf(`{
+					"start_date": "2026-07-01",
+					"stats": [{
+						"production": [1000, 2000, 3000],
+						"consumption": [800, 900, 1000],
+						"solar_home": [400, 500, 600],
+						"solar_battery": [400, 500, 600],
+						"solar_grid": [200, 300, 400],
+						"battery_home": [100, 200, 300],
+						"battery_grid": [0, 0, 0],
+						"grid_battery": [0, 0, 0],
+						"grid_home": [300, 400, 500],
+						"soc": [75, null, 80],
+						"start_time": %d,
+						"interval_length": 900
+					}]
+				}`, now.Unix()-1000)))
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		e := newEnphase()
+		e.baseURL, _ = url.Parse(server.URL)
+		e.systemID = 123
+
+		res, err := e.getToday(context.Background(), now)
+		require.NoError(t, err)
+		assert.Equal(t, 1, calls)
+
+		if assert.Len(t, res.Stats, 1) {
+			stat := res.Stats[0]
+			assert.Len(t, stat.Production, 2)
+			assert.Len(t, stat.Consumption, 2)
+			if assert.Len(t, stat.SOC, 2) {
+				assert.NotNil(t, stat.SOC[0])
+				assert.Equal(t, 75.0, *stat.SOC[0])
+				assert.Nil(t, stat.SOC[1])
+			}
+		}
+
+		res2, err := e.getToday(context.Background(), now)
+		require.NoError(t, err)
+		assert.Equal(t, 1, calls)
+
+		assert.Equal(t, res.StartDate, res2.StartDate)
+
+		e.todayCacheExpiry = time.Time{}
+		res3, err := e.getToday(context.Background(), now)
+		require.NoError(t, err)
+		assert.Equal(t, 2, calls)
+		_ = res3
 	})
 }
