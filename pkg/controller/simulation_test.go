@@ -888,14 +888,14 @@ func TestSimulateState(t *testing.T) {
 		}
 	})
 
-	t.Run("DeficitThresholdBuffer3Percent", func(t *testing.T) {
+	t.Run("DeficitThresholdBufferPercent", func(t *testing.T) {
 		// Scenario:
 		// 10.0 kWh capacity. MinBatterySOC = 20.0%.
 		// minKWH = 10.0 * 21% = 2.1 kWh.
-		// deficitThresholdKWH = 2.1 - 10.0 * 0.03 = 1.8 kWh.
+		// deficitThresholdKWH = 2.1 - 10.0 * 0.015 = 1.95 kWh.
 		// Start SOC = 20.5% (2.05 kWh).
-		// Hour 0: Load 1.0 kW. Ends at 1.05 kWh (below 1.8, deficit!).
-		// HitDeficitAt should be Hour 0 start + 15 minutes (fraction = (2.05 - 1.8) / 1.0 = 0.25 hours = 15 minutes).
+		// Hour 0: Load 1.0 kW. Ends at 1.05 kWh (below 1.95, deficit!).
+		// HitDeficitAt should be Hour 0 start + 6 minutes (fraction = (2.05 - 1.95) / 1.0 = 0.1 hours = 6 minutes).
 		now := time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)
 		capacityKWH := 10.0
 		currentStatus := types.SystemStatus{
@@ -924,19 +924,13 @@ func TestSimulateState(t *testing.T) {
 		}
 
 		simData, _ := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
-
-		for idx, sd := range simData {
-			t.Logf("Hour %d (%s): BatteryKWH=%.3f, Deficit=%.3f, HitDeficitAt=%s",
-				idx, sd.TS.Format("15:04"), sd.BatteryKWH, sd.TotalBatteryDeficitKWH, sd.HitDeficitAt.Format("15:04:05"))
-		}
-
 		assert.NotEmpty(t, simData)
 		// Hour 0: Deficit is registered
 		assert.Greater(t, simData[0].TotalBatteryDeficitKWH, 0.0)
 
 		// Starts at 2.05 kWh.
 		// minKWH is 2.1 kWh, so it is already below minKWH at start.
-		// aboveDeficitThresholdKWH is 2.2 kWh, so it is already below that at start.
+		// aboveDeficitThresholdKWH is 2.25 kWh, so it is already below that at start.
 		// Thus, HitAboveDeficitAt and HitDeficitAt should hit immediately (at now).
 		if assert.False(t, simData[0].HitAboveDeficitAt.IsZero()) {
 			assert.Equal(t, now, simData[0].HitAboveDeficitAt)
@@ -945,9 +939,9 @@ func TestSimulateState(t *testing.T) {
 			assert.Equal(t, now, simData[0].HitDeficitAt)
 		}
 
-		// deficitThresholdKWH is 1.8 kWh, so we hit it at 15 minutes.
+		// deficitThresholdKWH is 1.95 kWh, so we hit it at 6 minutes.
 		if assert.False(t, simData[0].HitBelowDeficitAt.IsZero()) {
-			expectedHitTime := now.Add(15 * time.Minute)
+			expectedHitTime := now.Add(6 * time.Minute)
 			assert.WithinDuration(t, expectedHitTime, simData[0].HitBelowDeficitAt, time.Second)
 		}
 	})

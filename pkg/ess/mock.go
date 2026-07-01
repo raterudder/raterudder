@@ -217,14 +217,26 @@ func (m *MockESS) advanceState(state *types.ESSMockState, now time.Time) (batter
 			stepGridKW = remainingDeficit
 		}
 
+		targetSOC := 100
+		if state.ChargeToSOC != 0 {
+			targetSOC = state.ChargeToSOC
+		}
 		// if we're supposed to be charging, or if we're below min SOC, pull from the grid
 		// whatever solar isn't giving us
-		if (state.BatteryMode == types.BatteryModeChargeAny && state.BatterySOC < 100) || state.BatterySOC < m.settings.MinBatterySOC {
+		if (state.BatteryMode == types.BatteryModeChargeAny && state.BatterySOC < float64(targetSOC)) || state.BatterySOC < m.settings.MinBatterySOC {
 			currentChargeKW := -stepBatteryKW
 			if currentChargeKW < maxChargeRateKW {
 				extraChargeKW := maxChargeRateKW - currentChargeKW
-				if extraChargeKW*durationHours > maxChargeKWH {
-					extraChargeKW = maxChargeKWH / durationHours
+				spaceToTargetSOC := (float64(targetSOC) - state.BatterySOC) / 100.0 * capacityKWH
+				if spaceToTargetSOC < 0 {
+					spaceToTargetSOC = 0
+				}
+				limitKWH := spaceToTargetSOC
+				if state.BatterySOC < m.settings.MinBatterySOC {
+					limitKWH = maxChargeKWH
+				}
+				if extraChargeKW*durationHours > limitKWH {
+					extraChargeKW = limitKWH / durationHours
 				}
 				stepBatteryKW -= extraChargeKW
 				stepGridKW += extraChargeKW
@@ -331,7 +343,7 @@ func (m *MockESS) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 }
 
 // SetModes updates the stored battery and solar target modes the mock should adhere to.
-func (m *MockESS) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode) error {
+func (m *MockESS) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode, opts types.ModesOptions) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -346,6 +358,7 @@ func (m *MockESS) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 	// now set the modes so the next time we can apply them
 	state.BatteryMode = bat
 	state.SolarMode = sol
+	state.ChargeToSOC = opts.ChargeToSOC
 
 	return mockDB.UpdateESSMockState(ctx, m.siteID, state)
 }

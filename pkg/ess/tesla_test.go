@@ -1018,7 +1018,7 @@ func TestTesla(t *testing.T) {
 			})
 			defer ts.Close()
 
-			err := sys.SetModes(ctx, types.BatteryModeLoad, types.SolarModeAny)
+			err := sys.SetModes(ctx, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{})
 			require.NoError(t, err)
 			assert.False(t, *mode)
 			assert.False(t, *backup)
@@ -1029,7 +1029,7 @@ func TestTesla(t *testing.T) {
 			sys, ts, mode, backup, grid, _ := setupTesla(t, "autonomous", 20.0, true, "pv_only", 50.0, false, types.Settings{ESS: "tesla"})
 			defer ts.Close()
 
-			err := sys.SetModes(ctx, types.BatteryModeNoChange, types.SolarModeNoChange)
+			err := sys.SetModes(ctx, types.BatteryModeNoChange, types.SolarModeNoChange, types.ModesOptions{})
 			require.NoError(t, err)
 			assert.False(t, *mode)
 			assert.False(t, *backup)
@@ -1045,7 +1045,7 @@ func TestTesla(t *testing.T) {
 			})
 			defer ts.Close()
 
-			err := sys.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeAny)
+			err := sys.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{})
 			require.NoError(t, err)
 			assert.True(t, *mode)
 			assert.True(t, *backup)
@@ -1060,7 +1060,7 @@ func TestTesla(t *testing.T) {
 			sys, ts, _, backup, grid, lastReq := setupTesla(t, "self_consumption", 20.0, false, "battery_ok", 50.0, false, types.Settings{ESS: "tesla"})
 			defer ts.Close()
 
-			err := sys.SetModes(ctx, types.BatteryModeChargeSolar, types.SolarModeNoExport)
+			err := sys.SetModes(ctx, types.BatteryModeChargeSolar, types.SolarModeNoExport, types.ModesOptions{})
 			require.NoError(t, err)
 			assert.True(t, *backup)
 			assert.True(t, *grid)
@@ -1075,7 +1075,7 @@ func TestTesla(t *testing.T) {
 			})
 			defer ts.Close()
 
-			err := sys.SetModes(ctx, types.BatteryModeStandby, types.SolarModeNoChange)
+			err := sys.SetModes(ctx, types.BatteryModeStandby, types.SolarModeNoChange, types.ModesOptions{})
 			require.NoError(t, err)
 			// Target is floor(15) = 15, which is < 20, so target should be 20.
 			// Since initial SOC is already 20, backup update should NOT be called.
@@ -1091,7 +1091,7 @@ func TestTesla(t *testing.T) {
 			})
 			defer ts.Close()
 
-			err := sys.SetModes(ctx, types.BatteryModeStandby, types.SolarModeNoChange)
+			err := sys.SetModes(ctx, types.BatteryModeStandby, types.SolarModeNoChange, types.ModesOptions{})
 			require.NoError(t, err)
 			// Target is math.Floor(55.6) = 55.0. Since old SOC is 55.0, the diff is <= 1.0.
 			// We avoid updating backup reserve percent, but we still update grid import export.
@@ -1107,7 +1107,7 @@ func TestTesla(t *testing.T) {
 			})
 			defer ts.Close()
 
-			err := sys.SetModes(ctx, types.BatteryModeStandby, types.SolarModeNoChange)
+			err := sys.SetModes(ctx, types.BatteryModeStandby, types.SolarModeNoChange, types.ModesOptions{})
 			require.NoError(t, err)
 			assert.True(t, *backup)
 			assert.True(t, *grid)
@@ -1118,9 +1118,24 @@ func TestTesla(t *testing.T) {
 			sys, ts, _, _, _, _ := setupTesla(t, "self_consumption", 20.0, false, "pv_only", 55.0, true, types.Settings{ESS: "tesla"})
 			defer ts.Close()
 
-			err := sys.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeAny)
+			err := sys.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{})
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "device is in storm mode")
+		})
+
+		t.Run("ChargeToSOC respected", func(t *testing.T) {
+			sys, ts, _, backup, _, lastReq := setupTesla(t, "autonomous", 20.0, true, "pv_only", 50.0, false, types.Settings{
+				ESS:                 "tesla",
+				GridChargeBatteries: true,
+				GridExportSolar:     true,
+				GridExportBatteries: true,
+			})
+			defer ts.Close()
+
+			err := sys.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{ChargeToSOC: 85})
+			require.NoError(t, err)
+			assert.True(t, *backup)
+			assert.Equal(t, 85.0, (*lastReq)["backup_reserve_percent"])
 		})
 	})
 

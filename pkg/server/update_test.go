@@ -55,7 +55,7 @@ func TestHandleUpdate(t *testing.T) {
 	mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 	mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 80}, nil)
 	// We might need strict matching for SetModes later, but for now:
-	mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	mockP := ess.NewMap()
 	mockP.SetSystem(types.SiteIDNone, mockES)
@@ -114,7 +114,7 @@ func TestHandleUpdate(t *testing.T) {
 			mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
 			mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 			mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 50}, nil)
-			mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+			mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 			mockP := ess.NewMap()
 			mockP.SetSystem(types.SiteIDNone, mockES)
@@ -598,7 +598,7 @@ func TestHandleUpdate(t *testing.T) {
 			mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 			mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
 			mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 50}, nil)
-			mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+			mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 			// Capture arguments to Verify start time
 			var startTimes []time.Time
@@ -675,7 +675,7 @@ func TestHandleUpdate(t *testing.T) {
 			mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 			mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
 			mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 50}, nil)
-			mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+			mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 			// Capture arguments to Verify start time
 			mockES.On("GetEnergyHistory", mock.Anything, mock.MatchedBy(func(start time.Time) bool {
@@ -772,7 +772,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
 		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 80}, nil)
-		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 		mockP := ess.NewMap()
 		mockP.SetSystem(types.SiteIDNone, mockES)
@@ -838,7 +838,7 @@ func TestHandleUpdateSites(t *testing.T) {
 	mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
 	mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 	mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 80}, nil)
-	mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	mockP := ess.NewMap()
 	mockP.SetSystem("site1", mockES)
@@ -966,7 +966,7 @@ func TestHandleUpdateSites(t *testing.T) {
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
 		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 80}, nil)
-		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 		mockP := ess.NewMap()
 		mockP.SetSystem("site1", mockES)
@@ -1191,8 +1191,9 @@ type RecordingMockESS struct {
 	setModes      bool
 	setBatMode    types.BatteryMode
 	setSolMode    types.SolarMode
+	setOpts       types.ModesOptions
 	GetStatusFunc func(ctx context.Context) (types.SystemStatus, error)
-	SetModesFunc  func(ctx context.Context, bat types.BatteryMode, sol types.SolarMode) error
+	SetModesFunc  func(ctx context.Context, bat types.BatteryMode, sol types.SolarMode, opts types.ModesOptions) error
 }
 
 func (m *RecordingMockESS) GetStatus(ctx context.Context) (types.SystemStatus, error) {
@@ -1202,13 +1203,14 @@ func (m *RecordingMockESS) GetStatus(ctx context.Context) (types.SystemStatus, e
 	return m.status, nil
 }
 
-func (m *RecordingMockESS) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode) error {
+func (m *RecordingMockESS) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode, opts types.ModesOptions) error {
 	if m.SetModesFunc != nil {
-		return m.SetModesFunc(ctx, bat, sol)
+		return m.SetModesFunc(ctx, bat, sol, opts)
 	}
 	m.setModes = true
 	m.setBatMode = bat
 	m.setSolMode = sol
+	m.setOpts = opts
 	return nil
 }
 
@@ -1553,7 +1555,7 @@ func TestUpdateEnergyHistory(t *testing.T) {
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
 		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 50}, nil)
 		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
-		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: now}, nil)
@@ -1861,7 +1863,7 @@ func TestSetESSModes(t *testing.T) {
 		mockES := &mockESS{}
 
 		// Expect SetModes to succeed
-		mockES.On("SetModes", mock.Anything, types.BatteryModeChargeAny, types.SolarModeAny).Return(nil)
+		mockES.On("SetModes", mock.Anything, types.BatteryModeChargeAny, types.SolarModeAny, mock.Anything).Return(nil)
 
 		// Expect settings to be saved with ConsecutiveSetFailures reset to 0
 		mockS.On("SetSettings", mock.Anything, "test-site", mock.MatchedBy(func(s types.Settings) bool {
@@ -1882,7 +1884,7 @@ func TestSetESSModes(t *testing.T) {
 			version: 1,
 		}
 
-		err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeChargeAny, settings)
+		err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeChargeAny, types.ModesOptions{}, settings)
 		assert.NoError(t, err)
 		mockS.AssertExpectations(t)
 		mockES.AssertExpectations(t)
@@ -1893,7 +1895,7 @@ func TestSetESSModes(t *testing.T) {
 		mockES := &mockESS{}
 
 		// Expect SetModes to return unauthorized
-		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny).Return(ess.ErrUnauthorized)
+		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(ess.ErrUnauthorized)
 
 		// Expect settings to be saved with ConsecutiveSetFailures incremented
 		mockS.On("SetSettings", mock.Anything, "test-site", mock.MatchedBy(func(s types.Settings) bool {
@@ -1914,7 +1916,7 @@ func TestSetESSModes(t *testing.T) {
 			version: 1,
 		}
 
-		err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeLoad, settings)
+		err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeLoad, types.ModesOptions{}, settings)
 		assert.ErrorIs(t, err, ess.ErrUnauthorized)
 		mockS.AssertExpectations(t)
 		mockES.AssertExpectations(t)
@@ -1926,7 +1928,7 @@ func TestSetESSModes(t *testing.T) {
 
 		// Expect SetModes to return some other error
 		otherErr := fmt.Errorf("network timeout")
-		mockES.On("SetModes", mock.Anything, types.BatteryModeStandby, types.SolarModeAny).Return(otherErr)
+		mockES.On("SetModes", mock.Anything, types.BatteryModeStandby, types.SolarModeAny, mock.Anything).Return(otherErr)
 
 		// SetSettings should NOT be called since it is not an unauthorized error
 		srv := &Server{
@@ -1943,7 +1945,7 @@ func TestSetESSModes(t *testing.T) {
 			version: 1,
 		}
 
-		err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeStandby, settings)
+		err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeStandby, types.ModesOptions{}, settings)
 		assert.ErrorIs(t, err, otherErr)
 		mockS.AssertNotCalled(t, "SetSettings")
 		mockES.AssertExpectations(t)

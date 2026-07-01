@@ -91,7 +91,32 @@ func TestMockESS(t *testing.T) {
 			return s.BatteryMode == types.BatteryModeStandby && s.SolarMode == types.SolarModeNoExport
 		})).Return(nil).Once()
 
-		err = ess.SetModes(ctx, types.BatteryModeStandby, types.SolarModeNoExport)
+		err = ess.SetModes(ctx, types.BatteryModeStandby, types.SolarModeNoExport, types.ModesOptions{})
+		require.NoError(t, err)
+
+		db.AssertExpectations(t)
+	})
+
+	t.Run("SetModes with ChargeToSOC", func(t *testing.T) {
+		ctx := context.Background()
+		db := new(mockStorage)
+		ConfigureMock(db)
+		ess := newMock("test-site")
+		_, _, err := ess.Authenticate(ctx, types.Credentials{Mock: &types.MockCredentials{Strategy: "simple", Location: "America/Chicago"}})
+		require.NoError(t, err)
+
+		initialState := types.ESSMockState{
+			Timestamp:  time.Now().Add(-time.Hour),
+			BatterySOC: 50.0,
+		}
+
+		db.On("GetESSMockState", ctx, "test-site").Return(initialState, nil).Once()
+
+		db.On("UpdateESSMockState", ctx, "test-site", mock.MatchedBy(func(s types.ESSMockState) bool {
+			return s.BatteryMode == types.BatteryModeChargeAny && s.ChargeToSOC == 85
+		})).Return(nil).Once()
+
+		err = ess.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{ChargeToSOC: 85})
 		require.NoError(t, err)
 
 		db.AssertExpectations(t)

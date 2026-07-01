@@ -949,8 +949,8 @@ func (f *Franklin) getAvailableModes(ctx context.Context) (availableModes, error
 }
 
 // SetModes sets the battery and solar modes for the franklin system
-func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode) error {
-	log.Ctx(ctx).DebugContext(ctx, "SetModes called", slog.Any("batteryMode", bat), slog.Any("solarMode", sol))
+func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode, opts types.ModesOptions) error {
+	log.Ctx(ctx).DebugContext(ctx, "SetModes called", slog.Any("batteryMode", bat), slog.Any("solarMode", sol), slog.Any("opts", opts))
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -1006,7 +1006,11 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 			log.Ctx(ctx).WarnContext(ctx, "cannot edit reserve SOC")
 			return errors.New("cannot edit reserve SOC")
 		}
-		newReserveSOC = 100
+		targetSOC := 100
+		if opts.ChargeToSOC != 0 {
+			targetSOC = opts.ChargeToSOC
+		}
+		newReserveSOC = float64(targetSOC)
 		if f.settings.GridChargeBatteries {
 			if pc.GridMaxFlag != franklinGridMaxFlagChargeFromGrid {
 				pc.GridMaxFlag = franklinGridMaxFlagChargeFromGrid
@@ -1027,7 +1031,11 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 			log.Ctx(ctx).WarnContext(ctx, "cannot edit reserve SOC")
 			return errors.New("cannot edit reserve SOC")
 		}
-		newReserveSOC = 100
+		targetSOC := 100
+		if opts.ChargeToSOC != 0 {
+			targetSOC = opts.ChargeToSOC
+		}
+		newReserveSOC = float64(targetSOC)
 		if pc.GridMaxFlag != franklinGridMaxFlagNoChargeFromGrid {
 			pc.GridMaxFlag = franklinGridMaxFlagNoChargeFromGrid
 			updatedPC = true

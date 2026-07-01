@@ -760,8 +760,8 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 }
 
 // SetModes sets the operating modes of the system.
-func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode) error {
-	log.Ctx(ctx).DebugContext(ctx, "SetModes called", slog.Any("batteryMode", bat), slog.Any("solarMode", sol))
+func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode, opts types.ModesOptions) error {
+	log.Ctx(ctx).DebugContext(ctx, "SetModes called", slog.Any("batteryMode", bat), slog.Any("solarMode", sol), slog.Any("opts", opts))
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -795,7 +795,11 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 	case types.BatteryModeChargeAny:
 		// if they want to charge the battery then set the SOC to 100 to force it to
 		// charge if its not charging already
-		newReserveSOC = 100
+		targetSOC := 100
+		if opts.ChargeToSOC != 0 {
+			targetSOC = opts.ChargeToSOC
+		}
+		newReserveSOC = float64(targetSOC)
 		if b.settings.GridChargeBatteries {
 			if !allowGridCharge {
 				allowGridCharge = true
@@ -810,7 +814,11 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 	case types.BatteryModeChargeSolar:
 		// we disallow charging from the grid if they only want to charge via solar
 		// and otherwise set the SOC to 100
-		newReserveSOC = 100
+		targetSOC := 100
+		if opts.ChargeToSOC != 0 {
+			targetSOC = opts.ChargeToSOC
+		}
+		newReserveSOC = float64(targetSOC)
 		if allowGridCharge {
 			allowGridCharge = false
 			updatedGrid = true

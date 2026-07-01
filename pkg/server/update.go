@@ -481,7 +481,7 @@ func (s *Server) performSiteUpdate(
 	)
 
 	// execute Action
-	err = s.setESSModes(ctx, siteID, essSystem, action.BatteryMode, settings)
+	err = s.setESSModes(ctx, siteID, essSystem, action.BatteryMode, types.ModesOptions{ChargeToSOC: action.ChargeToSOC}, settings)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to set mode", slog.Any("error", err))
 		action.Description += fmt.Sprintf(" (FAILED: %v)", err)
@@ -855,6 +855,7 @@ func (s *Server) setESSModes(
 	siteID string,
 	essSystem ess.System,
 	batteryMode types.BatteryMode,
+	opts types.ModesOptions,
 	settings settingsWithVersion,
 ) error {
 	if err := s.canSetModes(settings); err != nil {
@@ -864,12 +865,12 @@ func (s *Server) setESSModes(
 	var err error
 	switch batteryMode {
 	case types.BatteryModeChargeAny:
-		err = essSystem.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeAny) // Force charge
+		err = essSystem.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeAny, opts) // Force charge
 	case types.BatteryModeLoad:
-		err = essSystem.SetModes(ctx, types.BatteryModeLoad, types.SolarModeAny) // Use battery
+		err = essSystem.SetModes(ctx, types.BatteryModeLoad, types.SolarModeAny, opts) // Use battery
 	case types.BatteryModeStandby:
 		// "self_consumption" is usually safe for idle too (just don't force charge)
-		err = essSystem.SetModes(ctx, types.BatteryModeStandby, types.SolarModeAny)
+		err = essSystem.SetModes(ctx, types.BatteryModeStandby, types.SolarModeAny, opts)
 	}
 
 	if err != nil {

@@ -19,15 +19,18 @@ import (
 var historyFS embed.FS
 
 var fileBaselines = map[string]float64{
-	"site1_march.json":    -4.867,
-	"site1_may.json":      -15.767,
-	"site2_april.json":    1.431,
-	"site2_march.json":    8.932,
-	"site2_may.json":      0.630,
-	"site3_march.json":    -1.870,
+	"site1_march.json":    -4.939,
+	"site1_may.json":      -16.290,
+	"site2_april.json":    1.344,
+	"site2_march.json":    8.492,
+	"site2_may.json":      0.595,
+	"site3_march.json":    -2.041,
 	"site3_may.json":      -6.417,
-	"site4_late-may.json": 0.299,
-	"site4_may.json":      3.057,
+	"site4_late-may.json": 0.283,
+	"site4_may.json":      3.025,
+	"site5_june.json":     23.036,
+	"site7_june.json":     24.127,
+	"site8_june.json":     -2.707,
 }
 
 func findEnergyStats(history []types.DailyEnergyStats, ts time.Time, loc *time.Location) (types.EnergyStats, bool) {
@@ -182,6 +185,11 @@ func TestDecideHistory(t *testing.T) {
 				if fileName == "site2_march.json" || fileName == "site2_april.json" || fileName == "site2_may.json" {
 					settings.GridExportSolar = false
 				}
+			} else if dataset.SiteID == "site7" {
+				settings.GridChargeBatteries = false
+			} else if dataset.SiteID == "site8" {
+				settings.GridChargeBatteries = false
+				settings.GridExportBatteries = true
 			}
 
 			// Filter actions that fall within the simulation range
@@ -297,28 +305,10 @@ func TestDecideHistory(t *testing.T) {
 				decision, err := c.Decide(ctx, simStatus, currentPrice, futurePrices, mockHistory, mockWeather, settings)
 				require.NoError(t, err)
 
-				// enable for debugging
+				// enable for debugging and set back to false when done debugging!
 				if false {
-					if dataset.SiteID == "site5" {
-						var futPriceStr string
-						if decision.Action.FuturePrice != nil {
-							futPriceStr = fmt.Sprintf("$%.3f", decision.Action.FuturePrice.DollarsPerKWH+decision.Action.FuturePrice.GridUseDollarsPerKWH)
-						} else {
-							futPriceStr = "none"
-						}
-						t.Logf("[%s] SOC: %.2f%% | Sim Mode: %s (%s) vs Base Mode: %s (%s) | Price: $%.3f/kWh | FutPrice: %s | Description: %s",
-							tCurrent.In(fileLoc).Format("06-02 15:04"),
-							simSOC,
-							drModeString(decision.Action.BatteryMode),
-							decision.Action.Reason,
-							drModeString(action.BatteryMode),
-							action.Reason,
-							currentPrice.DollarsPerKWH+currentPrice.GridUseDollarsPerKWH,
-							futPriceStr,
-							decision.Action.Description,
-						)
-					}
-					if (tCurrent.Day() == 27 && tCurrent.Hour() == 6) || (tCurrent.Day() == 28 && (tCurrent.Hour() == 1 || tCurrent.Hour() == 2)) {
+					//if (tCurrent.Day() == 27 && tCurrent.Hour() == 6) || (tCurrent.Day() == 28 && (tCurrent.Hour() == 1 || tCurrent.Hour() == 2)) {
+					if false {
 						simData, _ := c.SimulateState(ctx, tCurrent, simStatus, currentPrice, futurePrices, mockHistory, mockWeather, settings)
 						summary := c.analyzeSimulation(ctx, tCurrent, currentPrice, settings, simData)
 						evalDef := c.evaluateDeficit(ctx, tCurrent, simStatus, currentPrice, settings, simData, summary)
@@ -351,19 +341,20 @@ func TestDecideHistory(t *testing.T) {
 								return nil
 							}(), expPlanStr)
 					}
-					if tCurrent.Day() == 20 && tCurrent.Hour() == 18 && tCurrent.Minute() == 33 {
+					if tCurrent.Day() == 24 && tCurrent.Hour() == 2 && tCurrent.Minute() == 33 {
 						simData, _ := c.SimulateState(ctx, tCurrent, simStatus, currentPrice, futurePrices, mockHistory, mockWeather, settings)
-						t.Logf("=== SIMULATION SLOTS AT 18:33 ===")
+						t.Logf("=== SIMULATION SLOTS AT 15:33 ===")
 						for idx, slot := range simData {
-							t.Logf("  Slot %d: TS=%s, NetLoadSolar=%.3f, BatteryKWH=%.3f, HitCapacity=%s, HitDeficit=%s, ClampedNet=%.3f",
-								idx, slot.TS.Format("15:04"), slot.NetLoadSolarKWH, slot.BatteryKWH, slot.HitCapacityAt.Format("15:04"), slot.HitDeficitAt.Format("15:04"), slot.ClampedNetLoadSolarKWH)
+							t.Logf("  Slot %d: TS=%s, NetLoadSolar=%.3f, BatteryKWH=%.3f, HitCapacity=%s, HitDeficit=%s, ClampedNet=%.3f, Cost=%.3f, Export=%.3f",
+								idx, slot.TS.Format("15:04"), slot.NetLoadSolarKWH, slot.BatteryKWH, slot.HitCapacityAt.Format("15:04"), slot.HitDeficitAt.Format("15:04"), slot.ClampedNetLoadSolarKWH, slot.GridChargeDollarsPerKWH, slot.SolarOppDollarsPerKWH)
 						}
 					}
-					if tCurrent.Day() == 20 && tCurrent.Hour() >= 1 && tCurrent.Hour() <= 6 {
-						t.Logf("[%s] Mode: %s(%s) vs Base: %s(%s) | Price: %.3f, SOC: %.2f, DeficitAt: %s, CapacityAt: %s",
+					if tCurrent.Day() == 24 && (tCurrent.Hour() == 2 || tCurrent.Hour() == 3) {
+						t.Logf("[%s] Mode: %s(%s) (%s) vs Base: %s(%s) | Price: %.3f, SOC: %.2f, DeficitAt: %s, CapacityAt: %s",
 							tCurrent.Format("15:04"),
 							drModeString(decision.Action.BatteryMode),
 							decision.Action.Reason,
+							decision.Action.Description,
 							drModeString(action.BatteryMode),
 							action.Reason,
 							currentPrice.DollarsPerKWH+currentPrice.GridUseDollarsPerKWH,
@@ -371,7 +362,7 @@ func TestDecideHistory(t *testing.T) {
 							decision.Action.HitDeficitAt.Format("15:04"),
 							decision.Action.HitCapacityAt.Format("15:04"),
 						)
-					} else if decision.Action.BatteryMode != action.BatteryMode {
+					} else if false {
 						var futPrice float64
 						if decision.Action.FuturePrice != nil {
 							futPrice = decision.Action.FuturePrice.DollarsPerKWH + decision.Action.FuturePrice.GridUseDollarsPerKWH
@@ -450,16 +441,32 @@ func TestDecideHistory(t *testing.T) {
 					var pBattDischarge float64
 
 					switch decidedMode {
-					case types.BatteryModeChargeAny:
-						targetCharge := math.Min(maxChargeKW, (capacityKWH-energy)/dt)
-						surplusSolar := math.Max(0.0, solarKW-homeKW)
-						solarCharge := math.Min(targetCharge, surplusSolar)
-						gridCharge := 0.0
-						if settings.GridChargeBatteries {
-							gridCharge = targetCharge - solarCharge
-						}
-						pBattCharge = solarCharge + gridCharge
+					case types.BatteryModeChargeAny, types.BatteryModeChargeSolar:
+						// ESS systems do not discharge in charge modes
 						pBattDischarge = 0.0
+
+						// Solar charging is always allowed up to 100% capacity
+						surplusSolar := math.Max(0.0, solarKW-homeKW)
+						solarCharge := math.Min(maxChargeKW, surplusSolar)
+
+						// Grid charging is only allowed up to ChargeToSOC, and only in ChargeAny mode
+						gridCharge := 0.0
+						if decidedMode == types.BatteryModeChargeAny && settings.GridChargeBatteries {
+							targetSOC := 100
+							if decision.Action.ChargeToSOC > 0 {
+								targetSOC = decision.Action.ChargeToSOC
+							}
+							targetEnergyLimit := capacityKWH * float64(targetSOC) / 100.0
+							if energy < targetEnergyLimit {
+								targetGridCharge := math.Max(0.0, (targetEnergyLimit-energy)/dt)
+								gridCharge = math.Min(maxChargeKW, targetGridCharge)
+								// Grid charge only supplies whatever solar isn't giving us
+								gridCharge = math.Max(0.0, gridCharge-solarCharge)
+							}
+						}
+						// Total battery charging is solar + grid charge, capped by maxChargeKW and remaining headroom
+						pBattCharge = math.Min(maxChargeKW, solarCharge+gridCharge)
+						pBattCharge = math.Min(pBattCharge, (capacityKWH-energy)/dt)
 
 					case types.BatteryModeLoad:
 						netLoad := homeKW - solarKW
@@ -472,7 +479,7 @@ func TestDecideHistory(t *testing.T) {
 							pBattDischarge = 0.0
 						}
 
-					default: // Standby, ChargeSolar, etc.
+					default: // Standby, etc.
 						netLoad := homeKW - solarKW
 						if netLoad < 0 {
 							surplusSolar := solarKW - homeKW
@@ -503,6 +510,7 @@ func TestDecideHistory(t *testing.T) {
 						}
 					}
 				}
+				//t.Logf("%v: cost %f, SOC %f", tCurrent, simCost-simCredit, simSOC)
 			}
 
 			baseNetCost, hasBaseline := fileBaselines[fileName]

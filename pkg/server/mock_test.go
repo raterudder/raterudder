@@ -76,8 +76,8 @@ func (m *mockESS) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 	}
 	return types.SystemStatus{}, nil
 }
-func (m *mockESS) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode) error {
-	args := m.Called(ctx, bat, sol)
+func (m *mockESS) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode, opts types.ModesOptions) error {
+	args := m.Called(ctx, bat, sol, opts)
 	return args.Error(0)
 }
 func (m *mockESS) ApplySettings(ctx context.Context, settings types.Settings) error {

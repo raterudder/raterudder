@@ -511,7 +511,7 @@ func TestDecide(t *testing.T) {
 		})
 	})
 
-	t.Run("Deficit Charge Now -> Ignore If Almost Full (< 10 mins left)", func(t *testing.T) {
+	t.Run("Deficit Charge Now -> Charge If Almost Full (TargetSOC Handles Overcharging)", func(t *testing.T) {
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05}
 		futurePrices := []types.Price{}
 		for i := 1; i <= 24; i++ {
@@ -535,9 +535,9 @@ func TestDecide(t *testing.T) {
 		decision, err := c.Decide(ctx, almostFullStatus, currentPrice, futurePrices, history, nil, baseSettings)
 		require.NoError(t, err)
 
-		// It should NOT charge because the deficit charge duration (headroom-limited) is < 10 minutes.
-		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
-		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Action.Reason)
+		// It should charge because we now have target SOC to prevent overcharging.
+		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonDeficitChargeNow, decision.Action.Reason)
 	})
 
 	t.Run("Deficit Charge Now -> Continue Charge When Already Charging", func(t *testing.T) {
@@ -569,7 +569,7 @@ func TestDecide(t *testing.T) {
 		assert.Equal(t, types.ActionReasonDeficitChargeNow, decision.Action.Reason)
 	})
 
-	t.Run("Deficit Charge Now -> Ignore if Deficit is < 10 mins", func(t *testing.T) {
+	t.Run("Deficit Charge Now -> Charge if Deficit is Small (TargetSOC Handles Overcharging)", func(t *testing.T) {
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05}
 		futurePrices := []types.Price{}
 		for i := 1; i <= 24; i++ {
@@ -612,10 +612,9 @@ func TestDecide(t *testing.T) {
 		decision, err := c.Decide(ctx, smallDeficitStatus, currentPrice, futurePrices, customHistory, nil, baseSettings)
 		require.NoError(t, err)
 
-		// It should NOT charge because the deficit requires < 10 minutes of charging.
-		// Since future prices are expensive, it should standby to save battery for the peak.
-		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
-		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Action.Reason)
+		// It should charge because we now have target SOC to prevent overcharging.
+		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonDeficitChargeNow, decision.Action.Reason)
 	})
 
 	t.Run("Grid Charging Hysteresis -> No Charge unless sufficient headroom, continue if already charging", func(t *testing.T) {
@@ -843,10 +842,10 @@ func TestDecide(t *testing.T) {
 		// We want to run out in exactly 3 hours with 2.0 kW load.
 		// Usable energy needed = 3 * 2.0 = 6.0 kWh.
 		// Total energy needed = 6.0 + 3.0 = 9.0 kWh.
-		// SOC = 9.0 / 15.0 = 60.0%.
+		// SOC = 9.15 / 15.0 = 61.0%.
 		status := types.SystemStatus{
 			Timestamp:             now,
-			BatterySOC:            60.0,
+			BatterySOC:            61.0,
 			BatteryCapacityKWH:    15.0,
 			MaxBatteryChargeKW:    8.0,
 			MaxBatteryDischargeKW: 10.0,
@@ -898,7 +897,7 @@ func TestDecide(t *testing.T) {
 
 		status := types.SystemStatus{
 			Timestamp:             now,
-			BatterySOC:            50.0,
+			BatterySOC:            52.0,
 			BatteryCapacityKWH:    10.0,
 			MaxBatteryChargeKW:    6.0,
 			MaxBatteryDischargeKW: 5.0,
@@ -1199,82 +1198,6 @@ func TestDecide(t *testing.T) {
 
 			simTime = simTime.Add(15 * time.Minute)
 		}
-	})
-
-	t.Run("Boundary Price Shift Avoids Bleeding", func(t *testing.T) {
-		// Scenario:
-		// - current time is 12:55 PM
-		// - current price is $0.05 (ends in 5 minutes, i.e., at 1:00 PM)
-		// - next price (Hour 1: 1:00 PM - 2:00 PM) is $0.10
-		// - Hour 2 (2:00 PM - 3:00 PM) is $0.06
-		// - Hour 3 (3:00 PM - 4:00 PM) is $0.30 (peak/deficit)
-		// - Deficit happens later (e.g. at 3:00 PM).
-		//
-		// Since there is < 10 mins left in the current price slot ($0.05) and the next slot ($0.10) is more expensive,
-		// and there is a cheaper slot later (Hour 2 at $0.06) before the deficit, we should block charging now
-		// because we would bleed into the more expensive next slot.
-		// Instead, we plan to charge later (at 2:00 PM) and remain in Standby now.
-
-		testNow := time.Date(2026, 5, 20, 12, 55, 0, 0, time.UTC)
-		currentPrice := types.Price{
-			TSStart:       testNow.Add(-55 * time.Minute),
-			TSEnd:         testNow.Add(5 * time.Minute),
-			DollarsPerKWH: 0.05,
-		}
-
-		futurePrices := []types.Price{
-			// Hour 1: 1:00 PM - 2:00 PM ($0.10)
-			{
-				TSStart:       testNow.Add(5 * time.Minute),
-				TSEnd:         testNow.Add(1*time.Hour + 5*time.Minute),
-				DollarsPerKWH: 0.10,
-			},
-			// Hour 2: 2:00 PM - 3:00 PM ($0.06)
-			{
-				TSStart:       testNow.Add(1*time.Hour + 5*time.Minute),
-				TSEnd:         testNow.Add(2*time.Hour + 5*time.Minute),
-				DollarsPerKWH: 0.06,
-			},
-			// Hour 3: 3:00 PM - 4:00 PM ($0.30 - Peak/Deficit)
-			{
-				TSStart:       testNow.Add(2*time.Hour + 5*time.Minute),
-				TSEnd:         testNow.Add(3*time.Hour + 5*time.Minute),
-				DollarsPerKWH: 0.30,
-			},
-		}
-
-		// Configure battery status: sufficient battery to reach Hour 2, but deficit later
-		status := baseStatus
-		status.Timestamp = testNow
-		status.BatterySOC = 50.0
-		status.BatteryCapacityKWH = 10.0
-		status.MaxBatteryChargeKW = 5.0
-		status.HomeKW = 2.0 // 2 kW constant load
-
-		// Create weather & history
-		weather := []types.Weather{}
-		customHistory := []types.EnergyStats{}
-		for i := 0; i < 48; i++ {
-			customHistory = append(customHistory, types.EnergyStats{
-				TSHourStart: testNow.Add(time.Duration(i-24) * time.Hour),
-				HomeKWH:     2.0, // 2 kW load
-			})
-		}
-
-		decision, err := c.Decide(ctx, status, currentPrice, futurePrices, customHistory, weather, baseSettings)
-		require.NoError(t, err)
-
-		// Without the safety check:
-		// - chargeNowCost is $0.05.
-		// - cheapest future slot is Hour 2 (cost $0.06).
-		// - cheapestFutureCost - chargeNowCost = 0.01 >= minDeficitDiff (0.01).
-		// - So the controller would choose to charge now (types.BatteryModeChargeAny).
-		//
-		// With the safety check:
-		// - Since TSEnd - now = 5 mins < 10 mins, and the next slot ($0.10) is more expensive,
-		//   and Hour 2 ($0.06) is cheaper than the next slot ($0.10) and before the deficit,
-		//   the controller blocks charging now and decides to wait (Standby now).
-		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
 	})
 
 	t.Run("User Scenario: Price $0.10 -> $0.01 -> Export $0.11", func(t *testing.T) {
@@ -1832,7 +1755,7 @@ func TestDecide(t *testing.T) {
 
 		decision, err := c.Decide(ctx, status, currentPrice, futurePrices, customHistory, nil, settings)
 		require.NoError(t, err)
-		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
+		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
 	})
 
 	t.Run("Simulation Solar Change 1: Clear Sky to Stormy (Forecast Drop)", func(t *testing.T) {
@@ -2331,10 +2254,8 @@ func TestSimulateStandby(t *testing.T) {
 			minKWH,
 			time.Time{},
 		)
-		hitCapacityAt, hitAboveDeficitAt, hitBelowDeficitAt := res.HitCapacityAt, res.HitAboveDeficitAt, res.HitBelowDeficitAt
-
-		assert.Zero(t, hitAboveDeficitAt)
-		assert.Zero(t, hitBelowDeficitAt)
+		hitCapacityAt, hitDeficitAt := res.HitCapacityAt, res.HitDeficitAt
+		assert.Zero(t, hitDeficitAt)
 		if assert.False(t, hitCapacityAt.IsZero()) {
 			expected := now.Add(2*time.Hour + 24*time.Minute)
 			assert.Equal(t, expected, hitCapacityAt)
@@ -2366,16 +2287,12 @@ func TestSimulateStandby(t *testing.T) {
 			minKWH,
 			time.Time{},
 		)
-		hitCapacityAt, hitAboveDeficitAt, hitBelowDeficitAt := res.HitCapacityAt, res.HitAboveDeficitAt, res.HitBelowDeficitAt
+		hitCapacityAt, hitDeficitAt := res.HitCapacityAt, res.HitDeficitAt
 
 		assert.Zero(t, hitCapacityAt)
-		if assert.False(t, hitAboveDeficitAt.IsZero()) {
-			expected := now.Add(2*time.Hour + 43*time.Minute + 30*time.Second)
-			assert.Equal(t, expected, hitAboveDeficitAt)
-		}
-		if assert.False(t, hitBelowDeficitAt.IsZero()) {
-			expected := now.Add(2*time.Hour + 49*time.Minute + 30*time.Second)
-			assert.Equal(t, expected, hitBelowDeficitAt)
+		if assert.False(t, hitDeficitAt.IsZero()) {
+			expected := now.Add(2*time.Hour + 45*time.Minute)
+			assert.Equal(t, expected, hitDeficitAt)
 		}
 	})
 
@@ -2400,10 +2317,8 @@ func TestSimulateStandby(t *testing.T) {
 			minKWH,
 			time.Time{},
 		)
-		hitCapacityAt, hitAboveDeficitAt, hitBelowDeficitAt := res.HitCapacityAt, res.HitAboveDeficitAt, res.HitBelowDeficitAt
-
-		assert.Zero(t, hitAboveDeficitAt)
-		assert.Zero(t, hitBelowDeficitAt)
+		hitCapacityAt, hitDeficitAt := res.HitCapacityAt, res.HitDeficitAt
+		assert.Zero(t, hitDeficitAt)
 		assert.Zero(t, hitCapacityAt)
 	})
 
@@ -2430,10 +2345,8 @@ func TestSimulateStandby(t *testing.T) {
 			minKWH,
 			time.Time{},
 		)
-		hitCapacityAt, hitAboveDeficitAt, hitBelowDeficitAt := res.HitCapacityAt, res.HitAboveDeficitAt, res.HitBelowDeficitAt
-
-		assert.Zero(t, hitAboveDeficitAt)
-		assert.Zero(t, hitBelowDeficitAt)
+		hitCapacityAt, hitDeficitAt := res.HitCapacityAt, res.HitDeficitAt
+		assert.Zero(t, hitDeficitAt)
 		if assert.False(t, hitCapacityAt.IsZero()) {
 			expected := testNow.Add(1*time.Hour + 12*time.Minute)
 			assert.Equal(t, expected, hitCapacityAt)
@@ -2456,14 +2369,10 @@ func TestSimulateStandby(t *testing.T) {
 			minKWH,
 			time.Time{},
 		)
-		hitCapacityAt, hitAboveDeficitAt, hitBelowDeficitAt := res.HitCapacityAt, res.HitAboveDeficitAt, res.HitBelowDeficitAt
-
+		hitCapacityAt, hitDeficitAt := res.HitCapacityAt, res.HitDeficitAt
 		assert.Zero(t, hitCapacityAt)
-		if assert.False(t, hitAboveDeficitAt.IsZero()) {
-			assert.Equal(t, now, hitAboveDeficitAt)
-		}
-		if assert.False(t, hitBelowDeficitAt.IsZero()) {
-			assert.Equal(t, now.Add(9*time.Minute), hitBelowDeficitAt)
+		if assert.False(t, hitDeficitAt.IsZero()) {
+			assert.Equal(t, now, hitDeficitAt)
 		}
 	})
 
@@ -2483,10 +2392,8 @@ func TestSimulateStandby(t *testing.T) {
 			minKWH,
 			time.Time{},
 		)
-		hitCapacityAt, hitAboveDeficitAt, hitBelowDeficitAt := res.HitCapacityAt, res.HitAboveDeficitAt, res.HitBelowDeficitAt
-
-		assert.Zero(t, hitAboveDeficitAt)
-		assert.Zero(t, hitBelowDeficitAt)
+		hitCapacityAt, hitDeficitAt := res.HitCapacityAt, res.HitDeficitAt
+		assert.Zero(t, hitDeficitAt)
 		if assert.False(t, hitCapacityAt.IsZero()) {
 			assert.Equal(t, now, hitCapacityAt)
 		}
@@ -2512,11 +2419,9 @@ func TestSimulateStandby(t *testing.T) {
 			minKWH,
 			now.Add(2*time.Hour),
 		)
-		hitCapacityAt, hitAboveDeficitAt, hitBelowDeficitAt := res.HitCapacityAt, res.HitAboveDeficitAt, res.HitBelowDeficitAt
-
+		hitCapacityAt, hitDeficitAt := res.HitCapacityAt, res.HitDeficitAt
 		assert.Zero(t, hitCapacityAt)
-		assert.Zero(t, hitAboveDeficitAt)
-		assert.Zero(t, hitBelowDeficitAt)
+		assert.Zero(t, hitDeficitAt)
 		assert.InDelta(t, 0.30, res.TotalImportCost, 1e-9)
 		assert.InDelta(t, 6.0, res.TotalNetLoadKWH, 1e-9)
 		assert.InDelta(t, 5.0, res.StandbyEnergyAtPeakStart, 1e-9)
@@ -2545,16 +2450,11 @@ func TestSimulateStandby(t *testing.T) {
 			minKWH,
 			now.Add(2*time.Hour),
 		)
-		hitCapacityAt, hitAboveDeficitAt, hitBelowDeficitAt := res.HitCapacityAt, res.HitAboveDeficitAt, res.HitBelowDeficitAt
-
+		hitCapacityAt, hitDeficitAt := res.HitCapacityAt, res.HitDeficitAt
 		assert.Zero(t, hitCapacityAt)
-		if assert.False(t, hitAboveDeficitAt.IsZero()) {
-			expected := now.Add(2*time.Hour + 27*time.Minute)
-			assert.Equal(t, expected, hitAboveDeficitAt)
-		}
-		if assert.False(t, hitBelowDeficitAt.IsZero()) {
-			expected := now.Add(2*time.Hour + 39*time.Minute)
-			assert.Equal(t, expected, hitBelowDeficitAt)
+		if assert.False(t, hitDeficitAt.IsZero()) {
+			expected := now.Add(2*time.Hour + 30*time.Minute)
+			assert.Equal(t, expected, hitDeficitAt)
 		}
 		assert.InDelta(t, 0.178, res.TotalImportCost, 1e-9)
 		assert.InDelta(t, 2.0, res.TotalNetLoadKWH, 1e-9)
@@ -2577,14 +2477,10 @@ func TestSimulateStandby(t *testing.T) {
 			minKWH,
 			time.Time{},
 		)
-		hitCapacityAt, hitAboveDeficitAt, hitBelowDeficitAt := res.HitCapacityAt, res.HitAboveDeficitAt, res.HitBelowDeficitAt
-
+		hitCapacityAt, hitDeficitAt := res.HitCapacityAt, res.HitDeficitAt
 		assert.Zero(t, hitCapacityAt)
-		if assert.False(t, hitAboveDeficitAt.IsZero()) {
-			assert.Equal(t, now, hitAboveDeficitAt)
-		}
-		if assert.False(t, hitBelowDeficitAt.IsZero()) {
-			assert.Equal(t, now, hitBelowDeficitAt)
+		if assert.False(t, hitDeficitAt.IsZero()) {
+			assert.Equal(t, now, hitDeficitAt)
 		}
 	})
 
@@ -2609,10 +2505,8 @@ func TestSimulateStandby(t *testing.T) {
 			minKWH,
 			time.Time{},
 		)
-		hitCapacityAt, hitAboveDeficitAt, hitBelowDeficitAt := res.HitCapacityAt, res.HitAboveDeficitAt, res.HitBelowDeficitAt
-
-		assert.Zero(t, hitAboveDeficitAt)
-		assert.Zero(t, hitBelowDeficitAt)
+		hitCapacityAt, hitDeficitAt := res.HitCapacityAt, res.HitDeficitAt
+		assert.Zero(t, hitDeficitAt)
 		if assert.False(t, hitCapacityAt.IsZero()) {
 			expected := now.Add(2*time.Minute + 24*time.Second)
 			assert.Equal(t, expected, hitCapacityAt)
@@ -2643,10 +2537,8 @@ func TestSimulateStandby(t *testing.T) {
 			minKWH,
 			time.Time{},
 		)
-		hitCapacityAt, hitAboveDeficitAt, hitBelowDeficitAt := res.HitCapacityAt, res.HitAboveDeficitAt, res.HitBelowDeficitAt
-
-		assert.Zero(t, hitAboveDeficitAt)
-		assert.Zero(t, hitBelowDeficitAt)
+		hitCapacityAt, hitDeficitAt := res.HitCapacityAt, res.HitDeficitAt
+		assert.Zero(t, hitDeficitAt)
 		if assert.False(t, hitCapacityAt.IsZero()) {
 			expected := testNow.Add(1*time.Hour + 1*time.Minute)
 			assert.Equal(t, expected, hitCapacityAt)
@@ -2802,6 +2694,7 @@ func TestEvaluateDeficit(t *testing.T) {
 		}
 
 		summary := simulationSummary{
+			HitDeficitAt:            now.Add(time.Hour),
 			HitBelowDeficitAt:       now.Add(time.Hour),
 			MinFutureGridChargeCost: 0.50,
 		}
@@ -2821,6 +2714,7 @@ func TestEvaluateDeficit(t *testing.T) {
 		if assert.NotNil(t, decision) {
 			assert.Equal(t, types.BatteryModeChargeAny, decision.BatteryMode)
 			assert.Equal(t, types.ActionReasonDeficitChargeNow, decision.Reason)
+			assert.Equal(t, 70, decision.ChargeToSOC)
 		}
 		assert.Nil(t, plan)
 	})
@@ -2835,6 +2729,7 @@ func TestEvaluateDeficit(t *testing.T) {
 		}
 
 		summary := simulationSummary{
+			HitDeficitAt:            now.Add(2 * time.Hour),
 			HitBelowDeficitAt:       now.Add(2 * time.Hour),
 			MinFutureGridChargeCost: 0.10,
 		}
@@ -2855,6 +2750,7 @@ func TestEvaluateDeficit(t *testing.T) {
 		if assert.NotNil(t, decision) {
 			assert.Equal(t, types.BatteryModeChargeAny, decision.BatteryMode)
 			assert.Equal(t, types.ActionReasonDeficitChargeNow, decision.Reason)
+			assert.Equal(t, 70, decision.ChargeToSOC)
 		}
 		assert.Nil(t, plan)
 	})
@@ -2869,6 +2765,7 @@ func TestEvaluateDeficit(t *testing.T) {
 		}
 
 		summary := simulationSummary{
+			HitDeficitAt:            now.Add(2 * time.Hour),
 			HitBelowDeficitAt:       now.Add(2 * time.Hour),
 			MinFutureGridChargeCost: 0.05,
 		}
@@ -2913,6 +2810,7 @@ func TestEvaluateDeficit(t *testing.T) {
 		}
 
 		summary := simulationSummary{
+			HitDeficitAt:            now,
 			HitBelowDeficitAt:       now,
 			MinFutureGridChargeCost: 0.055,
 		}
@@ -2947,44 +2845,6 @@ func TestEvaluateDeficit(t *testing.T) {
 		}
 	})
 
-	t.Run("Deficit Charge Now -> Blocked Close to Peak", func(t *testing.T) {
-		// Current time is 10:53 AM
-		testNow := time.Date(2026, 5, 20, 10, 53, 0, 0, time.UTC)
-		currentPrice := types.Price{TSStart: testNow.Add(-53 * time.Minute), TSEnd: testNow.Add(7 * time.Minute), DollarsPerKWH: 0.10}
-
-		// Peak starts at 11:00 AM (7 minutes from now)
-		futurePrices := []types.Price{
-			{TSStart: testNow.Add(7 * time.Minute), TSEnd: testNow.Add(2*time.Hour + 7*time.Minute), DollarsPerKWH: 0.50},
-		}
-
-		summary := simulationSummary{
-			HitBelowDeficitAt:       testNow.Add(7 * time.Minute),
-			MinFutureGridChargeCost: 0.50,
-		}
-
-		simData := []SimHour{
-			{TS: testNow, GridChargeDollarsPerKWH: 0.10, Price: currentPrice},
-			{TS: testNow.Add(7 * time.Minute), GridChargeDollarsPerKWH: 0.50, TotalBatteryDeficitKWH: 2.0, Price: futurePrices[0], BatteryReserveKWH: 2.0},
-		}
-
-		status := baseStatus
-		status.Timestamp = testNow
-		status.BatterySOC = 25.0
-
-		evalDef_5 := c.evaluateDeficit(ctx, testNow, status, currentPrice, baseSettings, simData, summary)
-		var decision *DecisionResult
-		var plan *futurePlan
-		if evalDef_5 != nil {
-			decision = evalDef_5.Decision
-			plan = evalDef_5.Plan
-		}
-		if assert.NotNil(t, decision) {
-			assert.Equal(t, types.BatteryModeStandby, decision.BatteryMode)
-			assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Reason)
-		}
-		assert.Nil(t, plan)
-	})
-
 	t.Run("Battery Charging Disabled -> No Deficit Charge", func(t *testing.T) {
 		status := baseStatus
 		status.BatteryChargingDisabled = true
@@ -2995,6 +2855,7 @@ func TestEvaluateDeficit(t *testing.T) {
 		}
 
 		summary := simulationSummary{
+			HitDeficitAt:            now.Add(time.Hour),
 			HitBelowDeficitAt:       now.Add(time.Hour),
 			MinFutureGridChargeCost: 0.50,
 		}
@@ -3030,6 +2891,7 @@ func TestEvaluateDeficit(t *testing.T) {
 		}
 
 		summary := simulationSummary{
+			HitDeficitAt:            now.Add(2 * time.Hour),
 			HitBelowDeficitAt:       now.Add(2 * time.Hour),
 			MinFutureGridChargeCost: 0.075,
 		}
@@ -3050,6 +2912,7 @@ func TestEvaluateDeficit(t *testing.T) {
 		if assert.NotNil(t, decision) {
 			assert.Equal(t, types.BatteryModeChargeAny, decision.BatteryMode)
 			assert.Equal(t, types.ActionReasonDeficitChargeNow, decision.Reason)
+			assert.Equal(t, 70, decision.ChargeToSOC)
 		}
 		assert.Nil(t, plan)
 	})
@@ -3066,6 +2929,7 @@ func TestEvaluateDeficit(t *testing.T) {
 		}
 
 		summary := simulationSummary{
+			HitDeficitAt:            now.Add(2 * time.Hour),
 			HitBelowDeficitAt:       now.Add(2 * time.Hour),
 			MinFutureGridChargeCost: 0.075,
 		}
@@ -3114,6 +2978,7 @@ func TestEvaluateDeficit(t *testing.T) {
 		}
 
 		summary := simulationSummary{
+			HitDeficitAt:            now.Add(time.Hour),
 			HitBelowDeficitAt:       now.Add(time.Hour),
 			HitCapacityAt:           now.Add(2 * time.Hour),
 			MinFutureGridChargeCost: 0.50,
@@ -3156,6 +3021,7 @@ func TestEvaluateDeficit(t *testing.T) {
 		}
 
 		summary := simulationSummary{
+			HitDeficitAt:            now.Add(2 * time.Hour),
 			HitBelowDeficitAt:       now.Add(2 * time.Hour),
 			MinFutureGridChargeCost: 0.05,
 		}
@@ -3203,6 +3069,7 @@ func TestEvaluateDeficit(t *testing.T) {
 		}
 
 		summary := simulationSummary{
+			HitDeficitAt:            now.Add(time.Hour),
 			HitBelowDeficitAt:       now.Add(time.Hour),
 			MinFutureGridChargeCost: 0.50,
 		}
@@ -3218,86 +3085,6 @@ func TestEvaluateDeficit(t *testing.T) {
 		assert.Equal(t, types.BatteryModeStandby, eval.Decision.BatteryMode)
 		// Assert calculated BenefitDollars is exactly 1.05
 		assert.InDelta(t, 1.05, eval.BenefitDollars, 0.001)
-	})
-
-	t.Run("Hysteresis Prevention - Bypass lookahead penalty and maintain active charge", func(t *testing.T) {
-		// Scenario A: Next hour is more expensive (0.15 vs 0.05).
-		// We are 5 minutes before the end of the hour (10:55:00).
-		// If NOT already charging, we should NOT start charging now (penalty applies, we delay).
-		// If ARE already charging, we should continue charging now (no penalty).
-
-		currentPrice := types.Price{
-			TSStart:       now,
-			TSEnd:         now.Add(time.Hour),
-			DollarsPerKWH: 0.05,
-		}
-
-		futurePricesA := []types.Price{
-			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.15},
-			{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(3 * time.Hour), DollarsPerKWH: 0.50},
-		}
-
-		summaryA := simulationSummary{
-			HitBelowDeficitAt:       now.Add(2 * time.Hour),
-			MinFutureGridChargeCost: 0.05,
-		}
-
-		simDataA := []SimHour{
-			{TS: now.Add(55 * time.Minute), GridChargeDollarsPerKWH: 0.05, Price: currentPrice},
-			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.15, Price: futurePricesA[0], BatteryReserveKWH: 2.0},
-			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.50, TotalBatteryDeficitKWH: 3.0, Price: futurePricesA[1], BatteryReserveKWH: 2.0},
-		}
-
-		statusNotCharging := baseStatus
-		statusNotCharging.Timestamp = now.Add(55 * time.Minute)
-		statusNotCharging.BatteryKW = 0.0
-		statusNotCharging.GridKW = 0.0
-
-		statusCharging := baseStatus
-		statusCharging.Timestamp = now.Add(55 * time.Minute)
-		statusCharging.BatteryKW = -5.0 // battery charging
-		statusCharging.GridKW = 5.0     // import from grid
-
-		// Scenario A - Not Charging: Lookahead penalty applies, so we delay.
-		evalA_NotCharging := c.evaluateDeficit(ctx, now.Add(55*time.Minute), statusNotCharging, currentPrice, baseSettings, simDataA, summaryA)
-		assert.True(t, evalA_NotCharging == nil || evalA_NotCharging.Decision == nil || evalA_NotCharging.Decision.BatteryMode != types.BatteryModeChargeAny)
-
-		// Scenario A - Charging: Lookahead penalty is bypassed, so we continue charging.
-		evalA_Charging := c.evaluateDeficit(ctx, now.Add(55*time.Minute), statusCharging, currentPrice, baseSettings, simDataA, summaryA)
-		require.NotNil(t, evalA_Charging)
-		require.NotNil(t, evalA_Charging.Decision)
-		assert.Equal(t, types.BatteryModeChargeAny, evalA_Charging.Decision.BatteryMode)
-
-		// Scenario B: Next hour is the same cheap price (0.05 vs 0.05).
-		// We are 5 minutes before the end of the hour (10:55:00).
-		// If NOT already charging, we do NOT start charging now (we wait until the next hour).
-		// If ARE already charging, we continue charging (hysteresis keeps us charging to prevent toggle).
-
-		futurePricesB := []types.Price{
-			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.05},
-			{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(3 * time.Hour), DollarsPerKWH: 0.50},
-		}
-
-		summaryB := simulationSummary{
-			HitBelowDeficitAt:       now.Add(2 * time.Hour),
-			MinFutureGridChargeCost: 0.05,
-		}
-
-		simDataB := []SimHour{
-			{TS: now.Add(55 * time.Minute), GridChargeDollarsPerKWH: 0.05, Price: currentPrice},
-			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.05, Price: futurePricesB[0], BatteryReserveKWH: 2.0},
-			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.50, TotalBatteryDeficitKWH: 3.0, Price: futurePricesB[1], BatteryReserveKWH: 2.0},
-		}
-
-		// Scenario B - Not Charging: We delay to the next hour.
-		evalB_NotCharging := c.evaluateDeficit(ctx, now.Add(55*time.Minute), statusNotCharging, currentPrice, baseSettings, simDataB, summaryB)
-		assert.True(t, evalB_NotCharging == nil || evalB_NotCharging.Decision == nil || evalB_NotCharging.Decision.BatteryMode != types.BatteryModeChargeAny)
-
-		// Scenario B - Charging: We continue charging (hysteresis).
-		evalB_Charging := c.evaluateDeficit(ctx, now.Add(55*time.Minute), statusCharging, currentPrice, baseSettings, simDataB, summaryB)
-		require.NotNil(t, evalB_Charging)
-		require.NotNil(t, evalB_Charging.Decision)
-		assert.Equal(t, types.BatteryModeChargeAny, evalB_Charging.Decision.BatteryMode)
 	})
 
 	t.Run("Charge Survive Peak - Charge Now", func(t *testing.T) {
@@ -3695,7 +3482,7 @@ func TestEvaluateDeficit(t *testing.T) {
 		assert.Nil(t, eval)
 	})
 
-	t.Run("Off-by-one: current hour cheap slot is planned when tiny deficit charge is skipped", func(t *testing.T) {
+	t.Run("Off-by-one: current hour cheap slot is charged when tiny deficit charge check is removed", func(t *testing.T) {
 		status := baseStatus
 		status.BatterySOC = 20.0
 		// Current price is cheap ($0.055)
@@ -3707,13 +3494,12 @@ func TestEvaluateDeficit(t *testing.T) {
 
 		// Hit deficit at hour 1 (now + 1 hour).
 		summary := simulationSummary{
+			HitDeficitAt:            now.Add(time.Hour),
 			HitBelowDeficitAt:       now.Add(time.Hour),
 			MinFutureGridChargeCost: 0.10,
 		}
 
 		// Deficit is very small: 0.5 kWh.
-		// chargeKW = 5.0, so duration = 0.5 / 5.0 = 0.1 hours = 6 minutes (< 10 minutes).
-		// So immediate charge will be skipped as tiny deficit charge.
 		simData := []SimHour{
 			{TS: now, GridChargeDollarsPerKWH: 0.055, Price: currentPrice},
 			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.10, TotalBatteryDeficitKWH: 0.5, Price: futurePrices[0], BatteryReserveKWH: 2.0},
@@ -3721,10 +3507,11 @@ func TestEvaluateDeficit(t *testing.T) {
 
 		eval := c.evaluateDeficit(ctx, now, status, currentPrice, baseSettings, simData, summary)
 		require.NotNil(t, eval)
-		assert.Nil(t, eval.Decision, "Should skip immediate charge because deficit is tiny (< 10 minutes)")
-		if assert.NotNil(t, eval.Plan) {
-			assert.Equal(t, now, eval.Plan.ChargeTime, "Should plan charge for the current cheapest hour (now)")
-			assert.Equal(t, 0.055, eval.Plan.ChargeCost)
+		assert.Nil(t, eval.Plan)
+		if assert.NotNil(t, eval.Decision) {
+			assert.Equal(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode)
+			assert.Equal(t, types.ActionReasonDeficitChargeNow, eval.Decision.Reason)
+			assert.Equal(t, 25, eval.Decision.ChargeToSOC)
 		}
 	})
 
@@ -3737,6 +3524,7 @@ func TestEvaluateDeficit(t *testing.T) {
 
 		// Capacity hit in 2 hours
 		summary := simulationSummary{
+			HitDeficitAt:        now.Add(3 * time.Hour),
 			HitBelowDeficitAt:   now.Add(3 * time.Hour),
 			HitAboveDeficitAt:   now.Add(3 * time.Hour),
 			HitCapacityAt:       now.Add(2 * time.Hour),
@@ -3777,6 +3565,85 @@ func TestEvaluateDeficit(t *testing.T) {
 		if assert.NotNil(t, evalWithBuffer) {
 			assert.NotNil(t, evalWithBuffer.Plan)
 			assert.InDelta(t, 0.30, evalWithBuffer.BenefitDollars, 0.001)
+		}
+	})
+
+	t.Run("Deficit Target SOC with PeakSurvivalBufferMinutes", func(t *testing.T) {
+		status := baseStatus
+		status.BatterySOC = 50.0 // 5.0 kWh
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}
+
+		futurePrices := []types.Price{
+			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.50},     // expensive
+			{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(3 * time.Hour), DollarsPerKWH: 0.50}, // peak
+			{TSStart: now.Add(3 * time.Hour), TSEnd: now.Add(4 * time.Hour), DollarsPerKWH: 0.50}, // peak
+		}
+
+		summary := simulationSummary{
+			HitDeficitAt:            now.Add(2 * time.Hour),
+			HitBelowDeficitAt:       now.Add(2 * time.Hour),
+			MinFutureGridChargeCost: 0.10,
+		}
+
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.10, Price: currentPrice},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.50, Price: futurePrices[0], BatteryReserveKWH: 2.0},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.50, TotalBatteryDeficitKWH: 2.0, Price: futurePrices[1], BatteryReserveKWH: 2.0, AvgHomeLoadKWH: 1.0},
+			{TS: now.Add(3 * time.Hour), GridChargeDollarsPerKWH: 0.50, TotalBatteryDeficitKWH: 2.0, Price: futurePrices[2], BatteryReserveKWH: 2.0, AvgHomeLoadKWH: 1.2},
+		}
+
+		// 1. PeakSurvivalBufferMinutes = 0 -> neededEnergy = 2.0 -> targetSOC = 70%
+		settingsNoBuffer := baseSettings
+		settingsNoBuffer.PeakSurvivalBufferMinutes = 0
+		evalNoBuffer := c.evaluateDeficit(ctx, now, status, currentPrice, settingsNoBuffer, simData, summary)
+		require.NotNil(t, evalNoBuffer)
+		if assert.NotNil(t, evalNoBuffer.Decision) {
+			assert.Equal(t, 70, evalNoBuffer.Decision.ChargeToSOC)
+		}
+
+		// 2. PeakSurvivalBufferMinutes = 30 -> neededEnergy = 2.0 + 30/60 * 1.2 = 2.6 -> targetSOC = 76%
+		settingsWithBuffer := baseSettings
+		settingsWithBuffer.PeakSurvivalBufferMinutes = 30
+		evalWithBuffer := c.evaluateDeficit(ctx, now, status, currentPrice, settingsWithBuffer, simData, summary)
+		require.NotNil(t, evalWithBuffer)
+		if assert.NotNil(t, evalWithBuffer.Decision) {
+			assert.Equal(t, 76, evalWithBuffer.Decision.ChargeToSOC)
+		}
+	})
+
+	t.Run("Not enough cheap time -> Charge Now with benefit calculated based on allocated energy", func(t *testing.T) {
+		summary := simulationSummary{
+			MinEnergy:         8.0,
+			HitDeficitAt:      now.Add(5 * time.Hour),
+			HitBelowDeficitAt: now.Add(5 * time.Hour),
+		}
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.05, Price: types.Price{TSStart: now, DollarsPerKWH: 0.05}},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.05, Price: types.Price{TSStart: now.Add(time.Hour), DollarsPerKWH: 0.05}},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.20, Price: types.Price{TSStart: now.Add(2 * time.Hour), DollarsPerKWH: 0.20}},
+			{TS: now.Add(3 * time.Hour), GridChargeDollarsPerKWH: 0.20, Price: types.Price{TSStart: now.Add(3 * time.Hour), DollarsPerKWH: 0.20}},
+			{TS: now.Add(4 * time.Hour), GridChargeDollarsPerKWH: 0.20, Price: types.Price{TSStart: now.Add(4 * time.Hour), DollarsPerKWH: 0.20}},
+			{TS: now.Add(5 * time.Hour), GridChargeDollarsPerKWH: 0.50, TotalBatteryDeficitKWH: 6.0, BatteryReserveKWH: 2.0, Price: types.Price{TSStart: now.Add(5 * time.Hour), DollarsPerKWH: 0.50}},
+		}
+
+		status := types.SystemStatus{
+			Timestamp:          now,
+			BatterySOC:         20.0, // 2.0 kWh
+			BatteryCapacityKWH: 10.0,
+			MaxBatteryChargeKW: 2.0, // chargeKW = 2.0, so 6.0 kWh needs 3 hours
+			HomeKW:             0.0,
+		}
+
+		eval := c.evaluateDeficit(ctx, now, status, types.Price{TSStart: now, DollarsPerKWH: 0.05}, baseSettings, simData, summary)
+		require.NotNil(t, eval)
+		// Decision to charge now because futureCheapHours = 1 (only Hour 1 is cheap), which can only collect 2.0 kWh < 6.0 kWh needed
+		if assert.NotNil(t, eval.Decision) {
+			assert.Equal(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode)
+			assert.Equal(t, 80, eval.Decision.ChargeToSOC) // 8.0 kWh = 80% SOC
+			// Rationale benefit: 3.0 hours allocated (Hour 0, Hour 1, Hour 2).
+			// average cost of the plan = (1.0 * 0.05 + 1.0 * 0.05 + 1.0 * 0.20) / 3.0 = 0.10.
+			// benefit = (3.0 * 2.0) * (0.50 - 0.10) = 6.0 * 0.40 = $2.40.
+			assert.InDelta(t, 2.40, eval.BenefitDollars, 0.001)
 		}
 	})
 }
@@ -4333,69 +4200,6 @@ func TestEvaluateArbitrage(t *testing.T) {
 		assert.Nil(t, evalArb)
 	})
 
-	t.Run("Arbitrage Charge - 10-Minute Boundary Lookahead Bypass When Already Charging", func(t *testing.T) {
-		settings := baseSettings
-		settings.MinArbitrageDifferenceDollarsPerKWH = 0.03
-		settings.GridChargeBatteries = true
-		settings.GridExportSolar = true
-
-		// We evaluate at 55 minutes past the hour.
-		now55 := now.Add(55 * time.Minute)
-
-		// Current price is $0.10, ending in 5 minutes.
-		currentPrice := types.Price{
-			TSStart:       now,
-			TSEnd:         now.Add(time.Hour),
-			DollarsPerKWH: 0.10,
-		}
-		// Next price is $0.30 (more expensive).
-		futurePriceH1 := types.Price{
-			TSStart:       now.Add(time.Hour),
-			TSEnd:         now.Add(2 * time.Hour),
-			DollarsPerKWH: 0.30,
-		}
-		// Peak price is $0.15 (at Hour 2).
-		futurePriceH2 := types.Price{
-			TSStart:       now.Add(2 * time.Hour),
-			TSEnd:         now.Add(3 * time.Hour),
-			DollarsPerKWH: 0.15,
-		}
-
-		simData := []SimHour{
-			{TS: now55, GridChargeDollarsPerKWH: 0.10, Price: currentPrice, ClampedNetLoadSolarKWH: 0.0, CapacityThresholdKWH: 9.8, BatteryKWH: 5.0},
-			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.30, Price: futurePriceH1, ClampedNetLoadSolarKWH: 0.0, CapacityThresholdKWH: 9.8, BatteryKWH: 5.0},
-			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.15, Price: futurePriceH2, ClampedNetLoadSolarKWH: 0.0, CapacityThresholdKWH: 9.8, SolarOppDollarsPerKWH: 0.15, NetLoadSolarKWH: -6.0, BatteryKWH: 5.0}, // mock solar surplus
-		}
-
-		summary := simulationSummary{
-			SoonestExportAt:    now.Add(2 * time.Hour),
-			SoonestExportValue: 0.15,
-			SoonestExportPrice: futurePriceH2,
-		}
-
-		// Scenario A: Not already charging.
-		// The 10-minute lookahead penalty applies, so effective cost = $0.30.
-		// Arbitrage value ($0.15) - cost ($0.30) < 0.03, so we do NOT charge (returns nil).
-		statusNotCharging := baseStatus
-		statusNotCharging.Timestamp = now55
-		statusNotCharging.BatteryKW = 0.0
-		statusNotCharging.GridKW = 0.0
-		evalNotCharging := c.evaluateExportArbitrage(ctx, now55, statusNotCharging, currentPrice, settings, simData, summary)
-		assert.Nil(t, evalNotCharging)
-
-		// Scenario B - Charging: We continue charging (hysteresis).
-		statusCharging := baseStatus
-		statusCharging.Timestamp = now55
-		statusCharging.BatteryKW = -5.0
-		statusCharging.GridKW = 5.0
-		evalCharging := c.evaluateExportArbitrage(ctx, now55, statusCharging, currentPrice, settings, simData, summary)
-		if assert.NotNil(t, evalCharging) {
-			assert.NotNil(t, evalCharging.Decision)
-			assert.Equal(t, types.BatteryModeChargeAny, evalCharging.Decision.BatteryMode)
-			assert.Equal(t, types.ActionReasonArbitrageChargeExport, evalCharging.Decision.Reason)
-		}
-	})
-
 	t.Run("Arbitrage Constraint -> Standby", func(t *testing.T) {
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.20, GridUseDollarsPerKWH: 0.20}
 		futurePrices := []types.Price{}
@@ -4820,7 +4624,7 @@ func TestEvaluateArbitrage(t *testing.T) {
 		assert.Nil(t, evalArb.Decision)
 		if assert.NotNil(t, evalArb.Plan) {
 			assert.Equal(t, now.Add(time.Hour), evalArb.Plan.ChargeTime)
-			assert.Equal(t, 0.10, evalArb.Plan.ChargeCost)
+			assert.InDelta(t, 0.10, evalArb.Plan.ChargeCost, 0.0001)
 		}
 
 		// When ALREADY charging, we should NOT delay (hysteresis should keep it charging)
@@ -4834,6 +4638,45 @@ func TestEvaluateArbitrage(t *testing.T) {
 		if assert.NotNil(t, evalArbCharging.Decision) {
 			assert.Equal(t, types.BatteryModeChargeAny, evalArbCharging.Decision.BatteryMode)
 			assert.Equal(t, types.ActionReasonArbitrageChargeExport, evalArbCharging.Decision.Reason)
+		}
+	})
+
+	t.Run("Not enough cheap time -> Charge Now with benefit calculated based on allocated energy", func(t *testing.T) {
+		summary := simulationSummary{
+			SoonestExportAt:    now.Add(5 * time.Hour),
+			SoonestExportPrice: types.Price{TSStart: now.Add(5 * time.Hour), DollarsPerKWH: 0.15},
+			SoonestExportValue: 0.15,
+		}
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.10, Price: types.Price{TSStart: now, TSEnd: now.Add(15 * time.Minute), DollarsPerKWH: 0.10}, BatteryKWH: 2.0},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.10, Price: types.Price{TSStart: now.Add(time.Hour), DollarsPerKWH: 0.10}, BatteryKWH: 2.0},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.14, Price: types.Price{TSStart: now.Add(2 * time.Hour), DollarsPerKWH: 0.14}, BatteryKWH: 2.0},
+			{TS: now.Add(3 * time.Hour), GridChargeDollarsPerKWH: 0.14, Price: types.Price{TSStart: now.Add(3 * time.Hour), DollarsPerKWH: 0.14}, BatteryKWH: 2.0},
+			{TS: now.Add(4 * time.Hour), GridChargeDollarsPerKWH: 0.14, Price: types.Price{TSStart: now.Add(4 * time.Hour), DollarsPerKWH: 0.14}, BatteryKWH: 2.0},
+			{TS: now.Add(5 * time.Hour), GridChargeDollarsPerKWH: 0.15, Price: types.Price{TSStart: now.Add(5 * time.Hour), DollarsPerKWH: 0.15}, SolarOppDollarsPerKWH: 0.15, NetLoadSolarKWH: -8.0, ClampedNetLoadSolarKWH: -8.0, BatteryKWH: 2.0},
+		}
+
+		status := types.SystemStatus{
+			Timestamp:          now,
+			BatterySOC:         20.0,
+			BatteryCapacityKWH: 10.0,
+			MaxBatteryChargeKW: 4.0, // chargeKW = 4.0, so 8.0 kWh needs 2.0 hours
+			HomeKW:             0.0,
+		}
+
+		settings := baseSettings
+		settings.MinArbitrageDifferenceDollarsPerKWH = 0.03
+
+		eval := c.evaluateExportArbitrage(ctx, now, status, types.Price{TSStart: now, TSEnd: now.Add(15 * time.Minute), DollarsPerKWH: 0.10}, settings, simData, summary)
+		require.NotNil(t, eval)
+		// Since we don't have enough cheap future capacity (futureCheapHours = 1 which can only cover 4.0 kWh), we should charge now.
+		if assert.NotNil(t, eval.Decision) {
+			assert.Equal(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode)
+			assert.Equal(t, 100, eval.Decision.ChargeToSOC)
+			// Rationale benefit: we can only collect 1.25 hours in profitable slots (0.25h now + 1.0h future)
+			// energy collected = 1.25 hours * 4.0 kW = 5.0 kWh
+			// savings = 5.0 * (0.15 - 0.10) = $0.25
+			assert.InDelta(t, 0.25, eval.BenefitDollars, 0.001)
 		}
 	})
 }
@@ -4947,10 +4790,10 @@ func TestEvaluatePlannedCharge(t *testing.T) {
 		}
 	})
 
-	t.Run("Small Price Difference with Future Export -> Standby (No Cycle)", func(t *testing.T) {
+	t.Run("Current price higher than plan cost -> Load (Discharge)", func(t *testing.T) {
 		status := baseStatus
 		status.BatterySOC = 80.0
-		// current price = $0.02, plan cost = $0.01. Diff = 0.01 < 0.02 (minDiff)
+		// current price = $0.02, plan cost = $0.01. Since 0.02 > 0.01, it is strictly higher than plan, so we discharge.
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.02}
 		settings := baseSettings
 		settings.MinDeficitPriceDifferenceDollarsPerKWH = 0.02
@@ -4974,8 +4817,8 @@ func TestEvaluatePlannedCharge(t *testing.T) {
 
 		decision := c.evaluatePlannedCharge(ctx, now, status, currentPrice, settings, simData, summary, plan)
 		if assert.NotNil(t, decision) {
-			assert.Equal(t, types.BatteryModeStandby, decision.BatteryMode)
-			assert.Equal(t, types.ActionReasonWaitingToCharge, decision.Reason)
+			assert.Equal(t, types.BatteryModeLoad, decision.BatteryMode)
+			assert.Equal(t, types.ActionReasonSufficientBatteryTillCharge, decision.Reason)
 		}
 	})
 
@@ -5115,6 +4958,34 @@ func TestEvaluatePlannedCharge(t *testing.T) {
 		if assert.NotNil(t, decision) {
 			assert.Equal(t, types.BatteryModeLoad, decision.BatteryMode)
 			assert.Equal(t, types.ActionReasonSufficientBatteryTillCharge, decision.Reason)
+		}
+	})
+
+	t.Run("Waiting To Charge (Cheap or Equal Now)", func(t *testing.T) {
+		status := baseStatus
+		status.BatterySOC = 80.0
+		// current price = $0.05, plan cost = $0.05. Diff is 0, which is <= priceEpsilonForEquality.
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05}
+		summary := simulationSummary{
+			HitDeficitAt:      time.Time{},
+			HitBelowDeficitAt: time.Time{},
+			HitAboveDeficitAt: time.Time{},
+		}
+		plan := PlannedCharge{
+			Time:  now.Add(2 * time.Hour),
+			Price: types.Price{DollarsPerKWH: 0.05},
+			Cost:  0.05,
+		}
+		simData := []SimHour{
+			{TS: now, ClampedNetLoadSolarKWH: 1.0, GridChargeDollarsPerKWH: 0.05},
+			{TS: now.Add(time.Hour), ClampedNetLoadSolarKWH: 1.0, GridChargeDollarsPerKWH: 0.05},
+			{TS: now.Add(2 * time.Hour), ClampedNetLoadSolarKWH: 1.0, GridChargeDollarsPerKWH: 0.05},
+		}
+
+		decision := c.evaluatePlannedCharge(ctx, now, status, currentPrice, baseSettings, simData, summary, plan)
+		if assert.NotNil(t, decision) {
+			assert.Equal(t, types.BatteryModeStandby, decision.BatteryMode)
+			assert.Equal(t, types.ActionReasonWaitingToCharge, decision.Reason)
 		}
 	})
 }
@@ -5973,7 +5844,7 @@ func TestEvaluateFallback(t *testing.T) {
 		settings.PeakSurvivalBufferMinutes = 30
 
 		summary := simulationSummary{
-			HitDeficitAt:      time.Time{},
+			HitDeficitAt:      now.Add(5*time.Hour + 15*time.Minute),
 			HitBelowDeficitAt: time.Time{},
 			HitAboveDeficitAt: now.Add(5*time.Hour + 15*time.Minute),
 		}
@@ -6013,59 +5884,6 @@ func TestEvaluateFallback(t *testing.T) {
 		}
 
 		decision := c.evaluateFallback(ctx, now, status, currentPrice, settings, simData, summary)
-		if assert.NotNil(t, decision) {
-			assert.Equal(t, types.BatteryModeLoad, decision.BatteryMode)
-			assert.Equal(t, types.ActionReasonDischargeAtPeak, decision.Reason)
-		}
-	})
-
-	t.Run("Cheap Price Window Preceding Peak Deficit Under 10-Minute Lookahead -> Discharge at Peak", func(t *testing.T) {
-		startNow := time.Date(2026, 6, 17, 10, 53, 15, 0, time.UTC)
-		currentPrice := types.Price{
-			TSStart:       time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC),
-			TSEnd:         time.Date(2026, 6, 17, 11, 0, 0, 0, time.UTC),
-			DollarsPerKWH: 0.055,
-		}
-
-		status := types.SystemStatus{
-			Timestamp:          startNow,
-			BatterySOC:         34.947,
-			BatteryCapacityKWH: 15.0,
-			MaxBatteryChargeKW: 5.0,
-			HomeKW:             1.0,
-			BatteryAboveMinSOC: true,
-		}
-
-		settings := baseSettings
-		settings.MinBatterySOC = 20.0
-
-		// There is a peak starting in 6m 45s (at 11:00 UTC) with cost 0.10481 extending until 14:00 UTC
-		simData := []SimHour{
-			{TS: startNow.Truncate(time.Hour), GridChargeDollarsPerKWH: 0.055, Price: currentPrice},
-			{TS: time.Date(2026, 6, 17, 11, 0, 0, 0, time.UTC), GridChargeDollarsPerKWH: 0.10481, Price: types.Price{
-				TSStart:       time.Date(2026, 6, 17, 11, 0, 0, 0, time.UTC),
-				TSEnd:         time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC),
-				DollarsPerKWH: 0.10481,
-			}},
-			{TS: time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC), GridChargeDollarsPerKWH: 0.10481, Price: types.Price{
-				TSStart:       time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC),
-				TSEnd:         time.Date(2026, 6, 17, 13, 0, 0, 0, time.UTC),
-				DollarsPerKWH: 0.10481,
-			}},
-			{TS: time.Date(2026, 6, 17, 13, 0, 0, 0, time.UTC), GridChargeDollarsPerKWH: 0.10481, Price: types.Price{
-				TSStart:       time.Date(2026, 6, 17, 13, 0, 0, 0, time.UTC),
-				TSEnd:         time.Date(2026, 6, 17, 14, 0, 0, 0, time.UTC),
-				DollarsPerKWH: 0.10481,
-			}},
-		}
-
-		summary := simulationSummary{
-			HitDeficitAt:      startNow.Add(2 * time.Hour), // 12:53:15
-			HitBelowDeficitAt: time.Time{},                 // SOC never drops below 18%
-			HitAboveDeficitAt: startNow.Add(2 * time.Hour),
-		}
-
-		decision := c.evaluateFallback(ctx, startNow, status, currentPrice, settings, simData, summary)
 		if assert.NotNil(t, decision) {
 			assert.Equal(t, types.BatteryModeLoad, decision.BatteryMode)
 			assert.Equal(t, types.ActionReasonDischargeAtPeak, decision.Reason)
@@ -6154,6 +5972,7 @@ func TestEvaluateFallback(t *testing.T) {
 		// Without buffer: HitCapacityAt (11:00) is before hitAboveDeficitAt (11:15), so it discharges.
 		// With buffer (30m): bufferedHitCapacityAt is 11:30, which is NOT before 11:15, so it does not discharge early.
 		summary := simulationSummary{
+			HitDeficitAt:       now.Add(11 * time.Hour),
 			HitBelowDeficitAt:  now.Add(11 * time.Hour),
 			HitAboveDeficitAt:  now.Add(11*time.Hour + 15*time.Minute),
 			HitCapacityAt:      now.Add(11 * time.Hour),
@@ -6186,50 +6005,73 @@ func TestFindCheapestPlan(t *testing.T) {
 
 	// Setup a list of slots with different costs
 	slots := []simPriceSlot{
-		{cost: 0.10, ts: now.Add(2 * time.Hour)},
-		{cost: 0.05, ts: now},
-		{cost: 0.15, ts: now.Add(3 * time.Hour)},
-		{cost: 0.07, ts: now.Add(time.Hour)},
+		{cost: 0.10, ts: now.Add(2 * time.Hour), maxDuration: 1.0},
+		{cost: 0.05, ts: now, maxDuration: 1.0},
+		{cost: 0.15, ts: now.Add(3 * time.Hour), maxDuration: 1.0},
+		{cost: 0.07, ts: now.Add(time.Hour), maxDuration: 1.0},
 	}
 
-	t.Run("Needs 0.25 hours (15 mins) -> rounds to 1 slot (index 0, cost 0.05)", func(t *testing.T) {
-		// 0.25 + 50/60 = 1.08 -> floor is 1. We expect index 0 (cost 0.05).
+	t.Run("Needs 0.25 hours (15 mins) -> fits inside cheapest slot", func(t *testing.T) {
 		slotsCopy := make([]simPriceSlot, len(slots))
 		copy(slotsCopy, slots)
-		_, _, _, marginal := c.findCheapestPlan(slotsCopy, 0.25)
+		cheapestTime, _, cheapestCost, marginal, allocatedHours := c.findCheapestPlan(slotsCopy, 0.25, true)
+		assert.Equal(t, now, cheapestTime)
+		assert.InDelta(t, 0.05, cheapestCost, 0.0001)
 		assert.Equal(t, 0.05, marginal.cost)
+		assert.Equal(t, 0.25, allocatedHours)
 	})
 
-	t.Run("Needs 1.10 hours (1h 6m) -> rounds down to 1 slot (index 0, cost 0.05)", func(t *testing.T) {
-		// 1.10 + 50/60 = 1.93 -> floor is 1. We expect index 0 (cost 0.05).
+	t.Run("Needs 1.25 hours -> spans to second cheapest slot", func(t *testing.T) {
 		slotsCopy := make([]simPriceSlot, len(slots))
 		copy(slotsCopy, slots)
-		_, _, _, marginal := c.findCheapestPlan(slotsCopy, 1.10)
-		assert.Equal(t, 0.05, marginal.cost)
-	})
-
-	t.Run("Needs 1.20 hours (1h 12m) -> rounds up to 2 slots (index 1, cost 0.07)", func(t *testing.T) {
-		// 1.20 + 50/60 = 2.03 -> floor is 2. We expect index 1 (cost 0.07).
-		slotsCopy := make([]simPriceSlot, len(slots))
-		copy(slotsCopy, slots)
-		_, _, _, marginal := c.findCheapestPlan(slotsCopy, 1.20)
+		cheapestTime, _, cheapestCost, marginal, allocatedHours := c.findCheapestPlan(slotsCopy, 1.25, true)
+		assert.Equal(t, now, cheapestTime)
+		// Expected cost: (1.0 * 0.05 + 0.25 * 0.07) / 1.25 = 0.054
+		assert.InDelta(t, 0.054, cheapestCost, 0.0001)
 		assert.Equal(t, 0.07, marginal.cost)
+		assert.Equal(t, 1.25, allocatedHours)
 	})
 
-	t.Run("Needs 2.15 hours -> rounds up to 2 slots (index 1, cost 0.07)", func(t *testing.T) {
-		// 2.15 + 50/60 = 2.98 -> floor is 2. We expect index 1 (cost 0.07).
-		slotsCopy := make([]simPriceSlot, len(slots))
-		copy(slotsCopy, slots)
-		_, _, _, marginal := c.findCheapestPlan(slotsCopy, 2.15)
+	t.Run("Current hour duration is limited -> spans to second cheapest slot for remainder", func(t *testing.T) {
+		// Set current hour maxDuration to 0.1 hours (6 mins left)
+		slotsCopy := []simPriceSlot{
+			{cost: 0.10, ts: now.Add(2 * time.Hour), maxDuration: 1.0},
+			{cost: 0.05, ts: now, maxDuration: 0.1},
+			{cost: 0.15, ts: now.Add(3 * time.Hour), maxDuration: 1.0},
+			{cost: 0.07, ts: now.Add(time.Hour), maxDuration: 1.0},
+		}
+		cheapestTime, _, cheapestCost, marginal, allocatedHours := c.findCheapestPlan(slotsCopy, 1.0, true)
+		assert.Equal(t, now, cheapestTime)
+		// Expected cost: (0.1 * 0.05 + 0.9 * 0.07) / 1.0 = 0.068
+		assert.InDelta(t, 0.068, cheapestCost, 0.0001)
 		assert.Equal(t, 0.07, marginal.cost)
+		assert.Equal(t, 1.0, allocatedHours)
 	})
 
-	t.Run("Needs 2.20 hours -> rounds up to 3 slots (index 2, cost 0.10)", func(t *testing.T) {
-		// 2.20 + 50/60 = 3.03 -> floor is 3. We expect index 2 (cost 0.10).
-		slotsCopy := make([]simPriceSlot, len(slots))
-		copy(slotsCopy, slots)
-		_, _, _, marginal := c.findCheapestPlan(slotsCopy, 2.20)
-		assert.Equal(t, 0.10, marginal.cost)
+	t.Run("Flat cheap window -> preferEarlier controls ascending vs descending chronological sorting", func(t *testing.T) {
+		flatSlots := []simPriceSlot{
+			{cost: 0.05, ts: now.Add(2 * time.Hour), maxDuration: 1.0},
+			{cost: 0.05, ts: now, maxDuration: 1.0},
+			{cost: 0.05, ts: now.Add(time.Hour), maxDuration: 1.0},
+		}
+
+		// When preferEarlier is true (already active session):
+		// Slots should sort chronologically ascending: now, now+1h, now+2h.
+		// For 1.5 hours needed, it selects now (1.0h) and now+1h (0.5h).
+		// Earliest slot is now.
+		cheapestTimeTrue, _, cheapestCostTrue, _, allocatedHoursTrue := c.findCheapestPlan(flatSlots, 1.5, true)
+		assert.Equal(t, now, cheapestTimeTrue)
+		assert.InDelta(t, 0.05, cheapestCostTrue, 0.0001)
+		assert.Equal(t, 1.5, allocatedHoursTrue)
+
+		// When preferEarlier is false (not charging, want to delay as much as possible):
+		// Slots should sort chronologically descending: now+2h, now+1h, now.
+		// For 1.5 hours needed, it selects now+2h (1.0h) and now+1h (0.5h).
+		// Earliest slot is now+1h.
+		cheapestTimeFalse, _, cheapestCostFalse, _, allocatedHoursFalse := c.findCheapestPlan(flatSlots, 1.5, false)
+		assert.Equal(t, now.Add(time.Hour), cheapestTimeFalse)
+		assert.InDelta(t, 0.05, cheapestCostFalse, 0.0001)
+		assert.Equal(t, 1.5, allocatedHoursFalse)
 	})
 }
 
@@ -6253,7 +6095,7 @@ func TestCheckPeakSurvival(t *testing.T) {
 	t.Run("Peak occurs and hit deficit before peak ends + buffer -> Standby", func(t *testing.T) {
 		hitAboveDeficitAt := now.Add(4 * time.Hour).Add(10 * time.Minute)
 
-		mustStandby, peakTime, peakCost, peakPrice := c.checkPeakSurvival(simData, time.Time{}, gridChargeNowCost, hitAboveDeficitAt, settings.PeakSurvivalBufferMinutes)
+		mustStandby, peakTime, peakCost, peakPrice := c.checkPeakSurvival(simData, time.Time{}, gridChargeNowCost, hitAboveDeficitAt, settings.PeakSurvivalBufferMinutes, 0.02)
 		assert.True(t, mustStandby)
 		assert.Equal(t, now.Add(2*time.Hour), peakTime)
 		assert.Equal(t, 0.30, peakCost)
@@ -6263,7 +6105,7 @@ func TestCheckPeakSurvival(t *testing.T) {
 	t.Run("Peak occurs and hit deficit strictly after peak ends + buffer -> Load", func(t *testing.T) {
 		hitAboveDeficitAt := now.Add(4 * time.Hour).Add(45 * time.Minute)
 
-		mustStandby, _, _, _ := c.checkPeakSurvival(simData, time.Time{}, gridChargeNowCost, hitAboveDeficitAt, settings.PeakSurvivalBufferMinutes)
+		mustStandby, _, _, _ := c.checkPeakSurvival(simData, time.Time{}, gridChargeNowCost, hitAboveDeficitAt, settings.PeakSurvivalBufferMinutes, 0.02)
 		assert.False(t, mustStandby)
 	})
 
@@ -6275,7 +6117,7 @@ func TestCheckPeakSurvival(t *testing.T) {
 		}
 		hitAboveDeficitAt := now.Add(1 * time.Hour)
 
-		mustStandby, _, _, _ := c.checkPeakSurvival(flatSimData, time.Time{}, gridChargeNowCost, hitAboveDeficitAt, settings.PeakSurvivalBufferMinutes)
+		mustStandby, _, _, _ := c.checkPeakSurvival(flatSimData, time.Time{}, gridChargeNowCost, hitAboveDeficitAt, settings.PeakSurvivalBufferMinutes, 0.02)
 		assert.False(t, mustStandby)
 	})
 
@@ -6283,12 +6125,12 @@ func TestCheckPeakSurvival(t *testing.T) {
 		hitAboveDeficitAt := now.Add(4 * time.Hour).Add(10 * time.Minute)
 		scanUntil := now.Add(1 * time.Hour).Add(30 * time.Minute) // Stop scanning before peak
 
-		mustStandby, _, _, _ := c.checkPeakSurvival(simData, scanUntil, gridChargeNowCost, hitAboveDeficitAt, settings.PeakSurvivalBufferMinutes)
+		mustStandby, _, _, _ := c.checkPeakSurvival(simData, scanUntil, gridChargeNowCost, hitAboveDeficitAt, settings.PeakSurvivalBufferMinutes, 0.02)
 		assert.False(t, mustStandby)
 	})
 
 	t.Run("Empty sim data -> Load", func(t *testing.T) {
-		mustStandby, _, _, _ := c.checkPeakSurvival([]SimHour{}, time.Time{}, gridChargeNowCost, now, settings.PeakSurvivalBufferMinutes)
+		mustStandby, _, _, _ := c.checkPeakSurvival([]SimHour{}, time.Time{}, gridChargeNowCost, now, settings.PeakSurvivalBufferMinutes, 0.02)
 		assert.False(t, mustStandby)
 	})
 }
@@ -6311,20 +6153,6 @@ func TestEvaluateVPPEvent(t *testing.T) {
 		MaxBatteryChargeKW: 5.0,
 		HomeKW:             1.0,
 		BatteryAboveMinSOC: true,
-	}
-
-	// Create dummy history for 1kW load constant
-	history := []types.EnergyStats{}
-	ts := now.Add(-24 * time.Hour)
-	for i := 0; i < 48; i++ {
-		history = append(history, types.EnergyStats{
-			TSHourStart:    ts,
-			GridImportKWH:  1.0,
-			SolarKWH:       0.0,
-			BatteryUsedKWH: 0.0,
-			HomeKWH:        1.0,
-		})
-		ts = ts.Add(1 * time.Hour)
 	}
 
 	t.Run("No upcoming VPP event -> returns nil", func(t *testing.T) {
@@ -6351,6 +6179,7 @@ func TestEvaluateVPPEvent(t *testing.T) {
 			if assert.NotNil(t, eval.Decision) {
 				assert.Equal(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode)
 				assert.Equal(t, types.ActionReasonVPPPrep, eval.Decision.Reason)
+				assert.Equal(t, 98, eval.Decision.ChargeToSOC)
 			}
 			assert.InDelta(t, 0.48, eval.BenefitDollars, 0.001)
 		}
@@ -6535,6 +6364,40 @@ func TestEvaluateVPPEvent(t *testing.T) {
 				assert.Equal(t, types.BatteryModeChargeAny, evalWithBuffer.Decision.BatteryMode)
 				assert.Equal(t, types.ActionReasonVPPPrep, evalWithBuffer.Decision.Reason)
 			}
+		}
+	})
+
+	t.Run("Not enough cheap time -> Charge Now with benefit calculated based on allocated energy", func(t *testing.T) {
+		summary := simulationSummary{
+			SoonestVPPChargingAt: now.Add(5 * time.Hour),
+		}
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.05, Price: types.Price{TSStart: now, TSEnd: now.Add(30 * time.Minute), DollarsPerKWH: 0.05}},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.05, Price: types.Price{TSStart: now.Add(time.Hour), DollarsPerKWH: 0.05}},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.25, Price: types.Price{TSStart: now.Add(2 * time.Hour), DollarsPerKWH: 0.25}},
+			{TS: now.Add(3 * time.Hour), GridChargeDollarsPerKWH: 0.25, Price: types.Price{TSStart: now.Add(3 * time.Hour), DollarsPerKWH: 0.25}},
+			{TS: now.Add(4 * time.Hour), GridChargeDollarsPerKWH: 0.25, Price: types.Price{TSStart: now.Add(4 * time.Hour), DollarsPerKWH: 0.25}},
+			{TS: now.Add(5 * time.Hour), GridChargeDollarsPerKWH: 0.20, Price: types.Price{TSStart: now.Add(5 * time.Hour), DollarsPerKWH: 0.20}},
+		}
+
+		status := baseStatus
+		status.BatterySOC = 20.0 // 2.0 kWh
+		status.BatteryCapacityKWH = 10.0
+		status.MaxBatteryChargeKW = 3.0 // chargeKW = 3.0, target VPP prep is 9.8 kWh, so neededEnergy = 7.8 kWh -> needs 2.6 hours
+
+		settings := baseSettings
+		settings.MinArbitrageDifferenceDollarsPerKWH = 0.01
+
+		eval := c.evaluateVPPEvent(ctx, now, status, types.Price{TSStart: now, TSEnd: now.Add(30 * time.Minute), DollarsPerKWH: 0.05}, settings, simData, summary)
+		require.NotNil(t, eval)
+		// Decision to charge now because futureCheapHours = 1 (only Hour 1 is cheap), which can only cover 3.0 kWh < 7.8 kWh needed
+		if assert.NotNil(t, eval.Decision) {
+			assert.Equal(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode)
+			assert.Equal(t, 98, eval.Decision.ChargeToSOC) // 98% target SOC
+			// Rationale benefit: we can only collect 1.5 hours in profitable slots (0.5h now + 1.0h future)
+			// energy collected = 1.5 hours * 3.0 kW = 4.5 kWh
+			// savings = 4.5 * (0.20 - 0.05) = $0.675
+			assert.InDelta(t, 0.675, eval.BenefitDollars, 0.001)
 		}
 	})
 }

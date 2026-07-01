@@ -693,7 +693,7 @@ func TestEnphase(t *testing.T) {
 			GridExportBatteries: false,
 		}
 
-		err := e.SetModes(context.Background(), types.BatteryModeStandby, types.SolarModeAny)
+		err := e.SetModes(context.Background(), types.BatteryModeStandby, types.SolarModeAny, types.ModesOptions{})
 		require.NoError(t, err)
 		if assert.True(t, postCalled) {
 			assert.Equal(t, 80, lastPayload.BatteryBackupPercentage)
@@ -706,7 +706,7 @@ func TestEnphase(t *testing.T) {
 		putCalled = false
 		lastSettingsPut = nil
 
-		err = e.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeNoChange)
+		err = e.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err)
 		if assert.True(t, postCalled) {
 			assert.Equal(t, 100, lastPayload.BatteryBackupPercentage)
@@ -725,7 +725,7 @@ func TestEnphase(t *testing.T) {
 		settingsScheduleEnabled = true
 		e.settings.GridChargeBatteries = false
 
-		err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange)
+		err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err)
 		if assert.True(t, postCalled) {
 			assert.Equal(t, 20, lastPayload.BatteryBackupPercentage)
@@ -745,7 +745,7 @@ func TestEnphase(t *testing.T) {
 		useRequestedConfig = true
 		e.settings.GridChargeBatteries = true
 
-		err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange)
+		err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err)
 		assert.False(t, postCalled)
 		assert.False(t, putCalled)
@@ -760,7 +760,7 @@ func TestEnphase(t *testing.T) {
 		useRequestedConfig = false
 		settingsProfile = "backup_only"
 
-		err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange)
+		err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
 		require.ErrorContains(t, err, "device is in backup mode")
 		assert.False(t, postCalled)
 		assert.False(t, putCalled)
@@ -770,7 +770,7 @@ func TestEnphase(t *testing.T) {
 		requestedProfile = "backup_only"
 		useRequestedConfig = true
 
-		err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange)
+		err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
 		require.ErrorContains(t, err, "device is in backup mode")
 		assert.False(t, postCalled)
 		assert.False(t, putCalled)
@@ -800,7 +800,103 @@ func TestEnphase(t *testing.T) {
 		e.baseURL, _ = url.Parse(server.URL)
 		e.systemID = 123
 
-		err := e.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny)
+		err := e.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{})
 		require.ErrorContains(t, err, "device is in storm mode")
+	})
+
+	t.Run("SetModes respects ChargeToSOC", func(t *testing.T) {
+		var postCalled bool
+		var lastPayload *enphaseBatterySchedulesPayload
+		var putCalled bool
+		var lastSettingsPut *enphaseBatterySettingsPayload
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/app-api/123/data.json" {
+				res := enphaseDataResult{
+					State: enphaseState{
+						SiteID: 123,
+						BatteryConfig: enphaseBatteryConfig{
+							BatteryBackupPercentage: 30,
+							Usage:                   "self-consumption",
+							ChargeFromGrid:          false,
+							EnvStorageSettings: map[string]enphaseEnvStorageSettings{
+								"envoy1": {SOC: 80},
+							},
+						},
+					},
+				}
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(res)
+				return
+			}
+			if r.URL.Path == "/service/batteryConfig/api/v1/batterySettings/123" {
+				if r.Method == "GET" {
+					w.Header().Set("X-Csrf-Token", "settings_csrf_123")
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(`{"data": {
+						"chargeFromGrid": false,
+						"chargeFromGridScheduleEnabled": false,
+						"profile": "self-consumption",
+						"batteryBackupPercentage": 30
+					}}`))
+					return
+				}
+				if r.Method == "PUT" {
+					assert.Equal(t, "settings_csrf_123", r.Header.Get("X-Xsrf-Token"))
+					var body enphaseBatterySettingsPayload
+					err := json.NewDecoder(r.Body).Decode(&body)
+					assert.NoError(t, err)
+					lastSettingsPut = &body
+					putCalled = true
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(`{"message":"success"}`))
+					return
+				}
+			}
+			if r.URL.Path == "/service/batteryConfig/api/v1/profile/123" {
+				if r.Method == "GET" {
+					w.Header().Set("X-Csrf-Token", "profile_csrf_123")
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(`{"data": {}}`))
+					return
+				}
+				if r.Method == "PUT" {
+					assert.Equal(t, "profile_csrf_123", r.Header.Get("X-Xsrf-Token"))
+					var body struct {
+						Profile                 string `json:"profile"`
+						BatteryBackupPercentage int    `json:"batteryBackupPercentage"`
+					}
+					err := json.NewDecoder(r.Body).Decode(&body)
+					assert.NoError(t, err)
+					lastPayload = &enphaseBatterySchedulesPayload{
+						Usage:                   body.Profile,
+						BatteryBackupPercentage: body.BatteryBackupPercentage,
+					}
+					postCalled = true
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(`{"message":"success"}`))
+					return
+				}
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		e := newEnphase()
+		e.baseURL, _ = url.Parse(server.URL)
+		e.systemID = 123
+		e.settings = types.Settings{
+			MinBatterySOC:       20,
+			GridChargeBatteries: true,
+		}
+
+		err := e.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{ChargeToSOC: 85})
+		require.NoError(t, err)
+		if assert.True(t, postCalled) {
+			assert.Equal(t, 85, lastPayload.BatteryBackupPercentage)
+			assert.Equal(t, "self-consumption", lastPayload.Usage)
+		}
+		assert.True(t, putCalled)
+		assert.True(t, lastSettingsPut.ChargeFromGrid)
 	})
 }

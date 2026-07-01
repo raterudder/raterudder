@@ -26,7 +26,7 @@ type System interface {
 	GetStatus(ctx context.Context) (types.SystemStatus, error)
 
 	// SetModes sets the operating modes of the system.
-	SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode) error
+	SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode, opts types.ModesOptions) error
 
 	// ApplySettings updates the system using the provided global settings.
 	ApplySettings(ctx context.Context, settings types.Settings) error

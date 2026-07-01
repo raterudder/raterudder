@@ -428,8 +428,8 @@ func (e *Enphase) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 	return status, nil
 }
 
-func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode) error {
-	log.Ctx(ctx).DebugContext(ctx, "SetModes called", slog.Any("batteryMode", bat), slog.Any("solarMode", sol))
+func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode, opts types.ModesOptions) error {
+	log.Ctx(ctx).DebugContext(ctx, "SetModes called", slog.Any("batteryMode", bat), slog.Any("solarMode", sol), slog.Any("opts", opts))
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -488,12 +488,20 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 	case types.BatteryModeChargeAny:
 		// If they want to charge the battery, set the backup reserve SOC to 100% to
 		// force it to charge.
-		newReserveSOC = 100
+		targetSOC := 100
+		if opts.ChargeToSOC != 0 {
+			targetSOC = opts.ChargeToSOC
+		}
+		newReserveSOC = float64(targetSOC)
 		newChargeFromGrid = e.settings.GridChargeBatteries
 	case types.BatteryModeChargeSolar:
 		// Force charging by setting reserve SOC to 100%, but disallow charging
 		// from the grid so it only charges using solar power.
-		newReserveSOC = 100
+		targetSOC := 100
+		if opts.ChargeToSOC != 0 {
+			targetSOC = opts.ChargeToSOC
+		}
+		newReserveSOC = float64(targetSOC)
 		newChargeFromGrid = false
 	case types.BatteryModeLoad:
 		// Set the reserve SOC to the configured minimum battery SOC to begin discharging

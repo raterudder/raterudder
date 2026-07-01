@@ -700,7 +700,7 @@ func TestFranklin(t *testing.T) {
 		err := f.ApplySettings(context.Background(), types.Settings{MinBatterySOC: 20})
 		require.NoError(t, err, "ApplySettings should succeed")
 
-		err = f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeAny)
+		err = f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{})
 		require.NoError(t, err, "SetModes should succeed")
 
 		// Verify the expected call was made
@@ -787,7 +787,7 @@ func TestFranklin(t *testing.T) {
 		// SetModes(ChargeAny)
 		err := f.ApplySettings(context.Background(), types.Settings{GridChargeBatteries: true})
 		require.NoError(t, err, "ApplySettings should succeed")
-		err = f.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny)
+		err = f.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{})
 		require.NoError(t, err, "SetModes should succeed")
 
 		// Verify both calls were made
@@ -877,7 +877,7 @@ func TestFranklin(t *testing.T) {
 		require.NoError(t, err)
 
 		// This should update both SOC (to 100 for charging) AND power control (to enable solar export)
-		err = f.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny)
+		err = f.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{})
 		require.NoError(t, err, "SetModes should succeed")
 
 		// Verify both API calls were made
@@ -901,7 +901,7 @@ func TestFranklin(t *testing.T) {
 			tokenStr:  "valid-token",
 			gatewayID: "anything",
 		}
-		err := f.SetModes(context.Background(), types.BatteryModeNoChange, types.SolarModeNoChange)
+		err := f.SetModes(context.Background(), types.BatteryModeNoChange, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err, "SetModes should succeed (noop)")
 	})
 
@@ -971,7 +971,7 @@ func TestFranklin(t *testing.T) {
 			gatewayID:   "g",
 		}
 
-		err := f.SetModes(context.Background(), types.BatteryModeNoChange, types.SolarModeAny)
+		err := f.SetModes(context.Background(), types.BatteryModeNoChange, types.SolarModeAny, types.ModesOptions{})
 		require.NoError(t, err, "SetModes should succeed")
 
 		// Verify only setPowerControlV2 was called (BatteryModeNoChange doesn't update mode/SOC)
@@ -1053,7 +1053,7 @@ func TestFranklin(t *testing.T) {
 		err := f.ApplySettings(context.Background(), types.Settings{MinBatterySOC: 20})
 		require.NoError(t, err)
 
-		err = f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange)
+		err = f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err, "SetModes should succeed")
 
 		// Verify only updateSocV2 was called (not updateTouModeV2)
@@ -1127,7 +1127,7 @@ func TestFranklin(t *testing.T) {
 		err := f.ApplySettings(context.Background(), types.Settings{MinBatterySOC: 20})
 		require.NoError(t, err)
 
-		err = f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange)
+		err = f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err, "SetModes should succeed despite the warning response")
 
 		require.Len(t, callOrder, 1, "updateSocV2 should be called")
@@ -1210,7 +1210,7 @@ func TestFranklin(t *testing.T) {
 		err := f.ApplySettings(context.Background(), types.Settings{MinBatterySOC: 20})
 		require.NoError(t, err)
 
-		err = f.SetModes(context.Background(), types.BatteryModeStandby, types.SolarModeNoChange)
+		err = f.SetModes(context.Background(), types.BatteryModeStandby, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err, "SetModes should succeed")
 
 		require.Empty(t, callOrder, "no updates should be called")
@@ -1282,7 +1282,7 @@ func TestFranklin(t *testing.T) {
 		err := f.ApplySettings(context.Background(), types.Settings{MinBatterySOC: 20})
 		require.NoError(t, err)
 
-		err = f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange)
+		err = f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
 		assert.ErrorContains(t, err, "device is in storm hedge mode")
 	})
 
@@ -1349,7 +1349,7 @@ func TestFranklin(t *testing.T) {
 		err := f.ApplySettings(context.Background(), types.Settings{MinBatterySOC: 20})
 		require.NoError(t, err)
 
-		err = f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange)
+		err = f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
 		assert.ErrorContains(t, err, "device is in backup mode")
 	})
 
@@ -2002,12 +2002,97 @@ func TestFranklin(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		err = f.SetModes(context.Background(), types.BatteryModeNoChange, types.SolarModeAny)
+		err = f.SetModes(context.Background(), types.BatteryModeNoChange, types.SolarModeAny, types.ModesOptions{})
 		require.NoError(t, err, "SetModes should succeed")
 
 		// Verify setPowerControlV2 was called
 		require.Len(t, callOrder, 1, "setPowerControlV2 should be called")
 		assert.Equal(t, "setPowerControlV2", callOrder[0])
+	})
+
+	t.Run("SetModes Charge with ChargeToSOC", func(t *testing.T) {
+		var callOrder []string
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"valid": true},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
+				list := []map[string]any{
+					{"id": 10.0, "workMode": 1},
+					{"id": 20.0, "workMode": 2, "editSocFlag": true},
+					{"id": 30.0, "workMode": 3},
+				}
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"list": list},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": []map[string]any{
+						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
+					},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"gridMaxFlag": 0, "gridFeedMaxFlag": 3},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/setPowerControlV2" {
+				callOrder = append(callOrder, "setPowerControlV2")
+				var data map[string]any
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&data))
+				assert.EqualValues(t, 2, data["gridMaxFlag"], "gridMaxFlag should be 2")
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/updateTouModeV2" {
+				callOrder = append(callOrder, "updateTouModeV2")
+				require.NoError(t, r.ParseForm())
+				// Expect ChargeToSOC (85)
+				assert.Equal(t, "85", r.Form.Get("soc"), "soc should be 85")
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
+				return
+			}
+			http.Error(w, "not found "+r.URL.Path, 404)
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:      ts.Client(),
+			baseURL:     ts.URL,
+			username:    "u",
+			md5Password: "p",
+			gatewayID:   "g",
+		}
+
+		err := f.ApplySettings(context.Background(), types.Settings{GridChargeBatteries: true})
+		require.NoError(t, err)
+
+		err = f.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{ChargeToSOC: 85})
+		require.NoError(t, err)
+
+		require.Len(t, callOrder, 2)
+		assert.Equal(t, "updateTouModeV2", callOrder[0])
+		assert.Equal(t, "setPowerControlV2", callOrder[1])
 	})
 
 	t.Run("GetEnergyHistory Deduplication and Next Day", func(t *testing.T) {

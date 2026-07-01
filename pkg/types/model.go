@@ -67,11 +67,17 @@ const (
 	ActionReasonDeficitSave         ActionReason = "deficitSave"
 )
 
+// ModesOptions contains options for setting the operating modes.
+type ModesOptions struct {
+	ChargeToSOC int `json:"chargeToSoc,omitempty"`
+}
+
 // Action represents a control decision made by the system.
 type Action struct {
 	Timestamp              time.Time        `json:"timestamp"`
 	BatteryMode            BatteryMode      `json:"batteryMode"`
 	SolarMode              SolarMode        `json:"solarMode"`
+	ChargeToSOC            int              `json:"chargeToSoc,omitempty"`
 	Reason                 ActionReason     `json:"reason"`
 	Description            string           `json:"description"`
 	CurrentPrice           *Price           `json:"currentPrice,omitempty"`
