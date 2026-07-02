@@ -27,6 +27,11 @@ import (
 
 var errEnphaseUnauthorized = errors.New("unauthorized")
 
+type enphaseCSRFToken struct {
+	Token     string
+	CreatedAt time.Time
+}
+
 type Enphase struct {
 	client           *http.Client
 	baseURL          *url.URL
@@ -40,7 +45,7 @@ type Enphase struct {
 	userID           int
 	dataCache        enphaseDataResult
 	dataExpiry       time.Time
-	lastCSRFToken    map[string]string
+	lastCSRFToken    map[string]enphaseCSRFToken
 	todayCache       enphaseTodayResponse
 	todayCacheDate   string
 	todayCacheExpiry time.Time
@@ -62,8 +67,23 @@ func newEnphase() *Enphase {
 			Jar:       jar,
 		},
 		baseURL:       u,
-		lastCSRFToken: make(map[string]string),
+		lastCSRFToken: make(map[string]enphaseCSRFToken),
 	}
+}
+
+func (e *Enphase) getCSRFToken(ctx context.Context, path string, fetchFunc func() error) (string, error) {
+	tokenObj, ok := e.lastCSRFToken[path]
+	if !ok || tokenObj.Token == "" || time.Since(tokenObj.CreatedAt) > 60*time.Second {
+		if err := fetchFunc(); err != nil {
+			return "", err
+		}
+		tokenObj = e.lastCSRFToken[path]
+		if tokenObj.Token == "" {
+			return "", fmt.Errorf("missing CSRF token for path: %s", path)
+		}
+	}
+	delete(e.lastCSRFToken, path)
+	return tokenObj.Token, nil
 }
 
 func enphaseInfo() types.ESSProviderInfo {
@@ -232,6 +252,16 @@ func (e *Enphase) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		return types.SystemStatus{}, err
 	}
 
+	if data.LastReportDate > 0 {
+		lastReportTime := time.Unix(data.LastReportDate, 0)
+		if time.Since(lastReportTime) > 15*time.Minute {
+			log.Ctx(ctx).WarnContext(ctx, "enphase: last report is more than 15 minutes old, power estimation may be inaccurate",
+				slog.Time("lastReportTime", lastReportTime),
+				slog.Duration("age", time.Since(lastReportTime)),
+			)
+		}
+	}
+
 	batteryStatus, err := e.getBatteryStatus(ctx)
 	if err != nil {
 		return types.SystemStatus{}, fmt.Errorf("failed to get enphase battery status: %w", err)
@@ -248,7 +278,7 @@ func (e *Enphase) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 	}
 
 	// Fetch today's stats to estimate live powers and get actual state of charge
-	todayStats, err := e.getToday(ctx, time.Now().In(loc))
+	todayStats, err := e.getToday(ctx, time.Now().In(loc), true)
 	if err != nil {
 		return types.SystemStatus{}, fmt.Errorf("failed to get enphase today stats: %w", err)
 	}
@@ -280,8 +310,18 @@ func (e *Enphase) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 
 		if maxLen > 0 {
 			latestIndex := maxLen - 1
+
+			var latestIntervalDuration float64 = float64(intervalSecs)
+			intervalStartTime := stat.StartTime + int64(latestIndex*intervalSecs)
+			if data.LastReportDate > intervalStartTime && data.LastReportDate < intervalStartTime+int64(intervalSecs) {
+				latestIntervalDuration = float64(data.LastReportDate - intervalStartTime)
+				if latestIntervalDuration < 5 {
+					latestIntervalDuration = 5
+				}
+			}
+
 			whToKW := func(val float64) float64 {
-				return (val / 1000.0) / (float64(intervalSecs) / 3600.0)
+				return (val / 1000.0) / (latestIntervalDuration / 3600.0)
 			}
 
 			getPowerVal := func(arr []float64) float64 {
@@ -417,11 +457,25 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 		return errors.New("device is in storm mode")
 	}
 
-	var currentSOC float64
-	for _, settings := range data.State.BatteryConfig.EnvStorageSettings {
-		currentSOC = settings.SOC
-		break
+	tz := data.App.Timezone
+	if tz == "" {
+		tz = "UTC"
 	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		loc = time.UTC
+	}
+
+	todayStatsRaw, err := e.getToday(ctx, time.Now().In(loc), true)
+	if err != nil {
+		return fmt.Errorf("failed to get enphase today stats in SetModes: %w", err)
+	}
+
+	if todayStatsRaw.BatteryDetails == nil {
+		return errors.New("enphase today stats missing battery details in SetModes")
+	}
+
+	currentSOC := todayStatsRaw.BatteryDetails.AggregateSOC
 
 	// Fetch current battery settings (chargeFromGrid, schedule, etc.)
 	settingsData, err := e.getBatterySettings(ctx)
@@ -609,17 +663,13 @@ type enphaseBatterySettingsPayload struct {
 
 func (e *Enphase) updateBatterySettings(ctx context.Context, payload enphaseBatterySettingsPayload) error {
 	path := fmt.Sprintf("/service/batteryConfig/api/v1/batterySettings/%d", e.systemID)
-	csrfToken := e.lastCSRFToken[path]
-	if csrfToken == "" {
-		if _, err := e.getBatterySettings(ctx); err != nil {
-			return err
-		}
-		csrfToken = e.lastCSRFToken[path]
-		if csrfToken == "" {
-			return errors.New("missing CSRF token for battery settings")
-		}
+	csrfToken, err := e.getCSRFToken(ctx, path, func() error {
+		_, err := e.getBatterySettings(ctx)
+		return err
+	})
+	if err != nil {
+		return err
 	}
-	delete(e.lastCSRFToken, path)
 
 	u := e.baseURL.JoinPath(path)
 	if e.userID != 0 {
@@ -682,19 +732,20 @@ type enphaseBatteryProfilePayload struct {
 
 func (e *Enphase) updateBatteryProfile(ctx context.Context, payload enphaseBatteryProfilePayload) error {
 	path := fmt.Sprintf("/service/batteryConfig/api/v1/profile/%d", e.systemID)
-	csrfToken := e.lastCSRFToken[path]
-	if csrfToken == "" {
-		if _, err := e.getBatteryProfile(ctx); err != nil {
-			return err
-		}
-		csrfToken = e.lastCSRFToken[path]
-		if csrfToken == "" {
-			return errors.New("missing CSRF token for battery profile")
-		}
+	csrfToken, err := e.getCSRFToken(ctx, path, func() error {
+		_, err := e.getBatteryProfile(ctx)
+		return err
+	})
+	if err != nil {
+		return err
 	}
-	delete(e.lastCSRFToken, path)
 
 	u := e.baseURL.JoinPath(path)
+	if e.userID != 0 {
+		q := u.Query()
+		q.Set("userId", fmt.Sprintf("%d", e.userID))
+		u.RawQuery = q.Encode()
+	}
 	jsonBytes, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("failed to marshal battery profile payload: %w", err)
@@ -873,7 +924,7 @@ func (e *Enphase) GetEnergyHistory(ctx context.Context, start, end time.Time) ([
 
 	// 2. Fetch today's data (if lastDayToFetch includes today)
 	if !lastDayToFetch.Before(todayMidnight) {
-		res, err := e.getToday(ctx, todayMidnight)
+		res, err := e.getToday(ctx, todayMidnight, false)
 		if err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to get enphase today data",
 				slog.Time("date", todayMidnight),
@@ -1018,32 +1069,39 @@ func (e *Enphase) getDataWithCache(ctx context.Context, force bool) (enphaseData
 	return res, nil
 }
 
-func (e *Enphase) getToday(ctx context.Context, date time.Time) (enphaseTodayResponse, error) {
+func (e *Enphase) getToday(ctx context.Context, date time.Time, includeNow bool) (enphaseTodayResponse, error) {
 	dateStr := date.Format("2006-01-02")
+	var rawRes enphaseTodayResponse
 	if dateStr == e.todayCacheDate && time.Now().Before(e.todayCacheExpiry) {
-		return e.todayCache, nil
+		rawRes = e.todayCache
+	} else {
+		u := e.baseURL.JoinPath(fmt.Sprintf("pv/systems/%d/today", e.systemID))
+		q := u.Query()
+		q.Set("date", dateStr)
+		u.RawQuery = q.Encode()
+
+		req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+		if err != nil {
+			return enphaseTodayResponse{}, err
+		}
+
+		if err := e.doRequest(req, &rawRes); err != nil {
+			return enphaseTodayResponse{}, err
+		}
+
+		e.todayCache = rawRes
+		e.todayCacheDate = dateStr
+		e.todayCacheExpiry = time.Now().Add(time.Minute)
 	}
 
-	u := e.baseURL.JoinPath(fmt.Sprintf("pv/systems/%d/today", e.systemID))
-	q := u.Query()
-	q.Set("date", dateStr)
-	u.RawQuery = q.Encode()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
-	if err != nil {
-		return enphaseTodayResponse{}, err
+	res := copyTodayResponse(rawRes)
+	var lastReportTime time.Time
+	if e.dataCache.LastReportDate > 0 {
+		lastReportTime = time.Unix(e.dataCache.LastReportDate, 0)
+	} else {
+		lastReportTime = time.Now()
 	}
-
-	var res enphaseTodayResponse
-	if err := e.doRequest(req, &res); err != nil {
-		return enphaseTodayResponse{}, err
-	}
-
-	filterFutureIntervals(ctx, &res, time.Now())
-
-	e.todayCache = res
-	e.todayCacheDate = dateStr
-	e.todayCacheExpiry = time.Now().Add(time.Minute)
+	filterFutureIntervals(ctx, &res, lastReportTime, includeNow)
 
 	return res, nil
 }
@@ -1065,12 +1123,27 @@ func (e *Enphase) getDailyEnergy(ctx context.Context, start, end time.Time) (enp
 		return enphaseTodayResponse{}, err
 	}
 
-	filterFutureIntervals(ctx, &res, time.Now())
+	var lastReportTime time.Time
+	if e.dataCache.LastReportDate > 0 {
+		lastReportTime = time.Unix(e.dataCache.LastReportDate, 0)
+	} else {
+		lastReportTime = time.Now()
+	}
+	filterFutureIntervals(ctx, &res, lastReportTime, false)
 
 	return res, nil
 }
 
-func filterFutureIntervals(ctx context.Context, res *enphaseTodayResponse, now time.Time) {
+func copyTodayResponse(res enphaseTodayResponse) enphaseTodayResponse {
+	copied := res
+	if res.Stats != nil {
+		copied.Stats = make([]enphaseTodayStats, len(res.Stats))
+		copy(copied.Stats, res.Stats)
+	}
+	return copied
+}
+
+func filterFutureIntervals(ctx context.Context, res *enphaseTodayResponse, lastReportTime time.Time, includeNow bool) {
 	for i := range res.Stats {
 		stat := &res.Stats[i]
 		intervalSecs := stat.IntervalLength
@@ -1078,18 +1151,19 @@ func filterFutureIntervals(ctx context.Context, res *enphaseTodayResponse, now t
 			intervalSecs = 900
 		}
 
-		lastValidOtherIdx := 0
-		lastValidSOCIdx := 0
-		maxLen := max(len(stat.Consumption), len(stat.Consumption), len(stat.Production), len(stat.SOC))
+		lastValidOtherIdx := -1
+		lastValidSOCIdx := -1
+		maxLen := max(len(stat.Consumption), len(stat.GridImport), len(stat.Production), len(stat.SOC))
 
 		for idx := 0; idx < maxLen; idx++ {
 			intervalStartTime := stat.StartTime + int64(idx*intervalSecs)
-			if intervalStartTime > now.Unix() {
+			if intervalStartTime > lastReportTime.Unix() {
 				break
 			}
+			isCompletedInterval := intervalStartTime+int64(intervalSecs) <= lastReportTime.Unix()
 			if idx < len(stat.SOC) && stat.SOC[idx] != nil {
 				lastValidSOCIdx = idx
-			} else {
+			} else if isCompletedInterval {
 				// check if we have any other data because maybe the SOC is null for some
 				// other reason
 				if (idx < len(stat.GridImport) && stat.GridImport[idx] > 0) ||
@@ -1109,6 +1183,26 @@ func filterFutureIntervals(ctx context.Context, res *enphaseTodayResponse, now t
 			)
 		}
 		validLen := max(lastValidOtherIdx, lastValidSOCIdx) + 1
+
+		if includeNow {
+			for idx := validLen; idx < maxLen; idx++ {
+				intervalStartTime := stat.StartTime + int64(idx*intervalSecs)
+				if intervalStartTime > lastReportTime.Unix() {
+					break
+				}
+				hasAnyData := (idx < len(stat.GridImport) && stat.GridImport[idx] > 0) ||
+					(idx < len(stat.BatteryHome) && stat.BatteryHome[idx] > 0) ||
+					(idx < len(stat.GridHome) && stat.GridHome[idx] > 0) ||
+					(idx < len(stat.GridBattery) && stat.GridBattery[idx] > 0) ||
+					(idx < len(stat.SolarHome) && stat.SolarHome[idx] > 0) ||
+					(idx < len(stat.Production) && stat.Production[idx] > 0) ||
+					(idx < len(stat.SOC) && stat.SOC[idx] != nil)
+				if hasAnyData {
+					validLen = idx + 1
+				}
+			}
+		}
+
 		truncateSlice := func(slice []float64) []float64 {
 			if len(slice) > validLen {
 				return slice[:validLen]
@@ -1153,9 +1247,12 @@ func (e *Enphase) doRequest(req *http.Request, dest any) error {
 	csrfToken := resp.Header.Get("X-Csrf-Token")
 	if csrfToken != "" {
 		if e.lastCSRFToken == nil {
-			e.lastCSRFToken = make(map[string]string)
+			e.lastCSRFToken = make(map[string]enphaseCSRFToken)
 		}
-		e.lastCSRFToken[req.URL.Path] = csrfToken
+		e.lastCSRFToken[req.URL.Path] = enphaseCSRFToken{
+			Token:     csrfToken,
+			CreatedAt: time.Now(),
+		}
 	}
 
 	// If we get redirected to a login page, treat it as unauthorized
@@ -1223,8 +1320,9 @@ func (e *Enphase) syncCookies() {
 
 // Internal structs for data.json
 type enphaseDataResult struct {
-	App   enphaseApp   `json:"app"`
-	State enphaseState `json:"state"`
+	App            enphaseApp   `json:"app"`
+	State          enphaseState `json:"state"`
+	LastReportDate int64        `json:"last_report_date"`
 }
 
 type enphaseApp struct {

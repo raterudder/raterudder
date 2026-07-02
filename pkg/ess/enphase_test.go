@@ -566,6 +566,97 @@ func TestEnphase(t *testing.T) {
 		assert.Contains(t, status.Alarms[0].Description, "offline or in status")
 	})
 
+	t.Run("GetStatus partial interval power calculation", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/app-api/123/data.json" {
+				res := enphaseDataResult{
+					App: enphaseApp{
+						Timezone: "America/Chicago",
+					},
+					State: enphaseState{
+						SiteID: 123,
+						BatteryInfo: enphaseBatteryInfo{
+							NumberOfBatteries: 2,
+							TotalCapacityWH:   6720,
+						},
+						HasBatteries:    true,
+						BatteryGridMode: "NoImportOrExport",
+						IsEncharge5P:    false,
+						Devices: []enphaseDevice{
+							{Name: "IQ Battery 3", SerialNumber: "1", Connected: true, Status: "normal"},
+						},
+						BatteryConfig: enphaseBatteryConfig{
+							BatteryBackupPercentage: 30,
+						},
+					},
+					LastReportDate: 1776038430, // 30 seconds after start_time
+				}
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(res)
+				return
+			}
+
+			if r.URL.Path == "/pv/systems/123/today" {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{
+					"start_date": "2026-06-06",
+					"battery_details": {
+						"aggregate_soc": 75
+					},
+					"stats": [{
+						"production": [10],
+						"consumption": [8],
+						"solar_home": [4],
+						"solar_battery": [4],
+						"solar_grid": [2],
+						"battery_home": [1],
+						"battery_grid": [0],
+						"grid_battery": [0],
+						"grid_home": [3],
+						"start_time": 1776038400,
+						"interval_length": 900
+					}]
+				}`))
+				return
+			}
+
+			if r.URL.Path == "/pv/settings/123/battery_status.json" {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{
+					"max_capacity": 6.72,
+					"available_power": 2.56
+				}`))
+				return
+			}
+
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		e := newEnphase()
+		e.baseURL, _ = url.Parse(server.URL)
+		e.systemID = 123
+		e.settings = types.Settings{
+			MinBatterySOC: 20,
+		}
+
+		status, err := e.GetStatus(context.Background())
+		require.NoError(t, err)
+
+		// Calculations:
+		// latestIntervalDuration = 1776038430 - 1776038400 = 30 seconds.
+		// whToKW(val) = (val / 1000.0) / (30 / 3600.0) = (val / 1000.0) * 120 = val * 0.12.
+		// prod = 10 -> SolarKW = prod * 0.12 = 1.2 kW.
+		// batteryKW = (1 + 0 - 0 - 4) * 0.12 = -0.36 kW.
+		// gridKW = (3 + 0 - 2 - 0) * 0.12 = 0.12 kW.
+		// homeKW = (4 + 1 + 3) * 0.12 = 0.96 kW.
+		assert.InDelta(t, 1.2, status.SolarKW, 0.0001)
+		assert.InDelta(t, -0.36, status.BatteryKW, 0.0001)
+		assert.InDelta(t, 0.12, status.GridKW, 0.0001)
+		assert.InDelta(t, 0.96, status.HomeKW, 0.0001)
+	})
+
 	t.Run("SetModes", func(t *testing.T) {
 		var lastPayload *enphaseBatterySchedulesPayload
 		var postCalled bool
@@ -601,6 +692,18 @@ func TestEnphase(t *testing.T) {
 				}
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(res)
+				return
+			}
+
+			if r.URL.Path == "/pv/systems/123/today" {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{
+					"start_date": "2026-06-06",
+					"battery_details": {
+						"aggregate_soc": 80
+					},
+					"stats": []
+				}`))
 				return
 			}
 
@@ -668,7 +771,7 @@ func TestEnphase(t *testing.T) {
 					return
 				}
 				if r.Method == "PUT" {
-					assert.Empty(t, r.URL.Query().Get("userId"))
+					assert.Equal(t, "123456", r.URL.Query().Get("userId"))
 					assert.Equal(t, "profile_csrf_123", r.Header.Get("X-Xsrf-Token"))
 					var body struct {
 						Profile                 string `json:"profile"`
@@ -839,6 +942,19 @@ func TestEnphase(t *testing.T) {
 				json.NewEncoder(w).Encode(res)
 				return
 			}
+
+			if r.URL.Path == "/pv/systems/123/today" {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{
+					"start_date": "2026-06-06",
+					"battery_details": {
+						"aggregate_soc": 80
+					},
+					"stats": []
+				}`))
+				return
+			}
+
 			if r.URL.Path == "/service/batteryConfig/api/v1/batterySettings/123" {
 				if r.Method == "GET" {
 					w.Header().Set("X-Csrf-Token", "settings_csrf_123")
@@ -944,7 +1060,7 @@ func TestEnphase(t *testing.T) {
 		e.baseURL, _ = url.Parse(server.URL)
 		e.systemID = 123
 
-		res, err := e.getToday(context.Background(), now)
+		res, err := e.getToday(context.Background(), now, true)
 		require.NoError(t, err)
 		assert.Equal(t, 1, calls)
 
@@ -959,14 +1075,14 @@ func TestEnphase(t *testing.T) {
 			}
 		}
 
-		res2, err := e.getToday(context.Background(), now)
+		res2, err := e.getToday(context.Background(), now, true)
 		require.NoError(t, err)
 		assert.Equal(t, 1, calls)
 
 		assert.Equal(t, res.StartDate, res2.StartDate)
 
 		e.todayCacheExpiry = time.Time{}
-		res3, err := e.getToday(context.Background(), now)
+		res3, err := e.getToday(context.Background(), now, true)
 		require.NoError(t, err)
 		assert.Equal(t, 2, calls)
 		_ = res3
