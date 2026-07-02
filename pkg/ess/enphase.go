@@ -232,6 +232,11 @@ func (e *Enphase) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		return types.SystemStatus{}, err
 	}
 
+	batteryStatus, err := e.getBatteryStatus(ctx)
+	if err != nil {
+		return types.SystemStatus{}, fmt.Errorf("failed to get enphase battery status: %w", err)
+	}
+
 	tz := data.App.Timezone
 	if tz == "" {
 		tz = "UTC"
@@ -310,50 +315,9 @@ func (e *Enphase) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		}
 	}
 
-	// TotalCapacity is reported in Wh, convert to kWh.
-	capacityKWH := float64(data.State.BatteryInfo.TotalCapacity) / 1000.0
-	var maxPower float64
-
-	// Determine continuous charge/discharge power limits based on battery models.
-	if data.State.IsEncharge5P {
-		// Encharge 5P is rated at 3.84 kW charge/discharge per battery unit.
-		num5P := data.State.BatteryInfo.NumberOfBatteries
-		if num5P == 0 && capacityKWH > 0 {
-			num5P = int(math.Round(capacityKWH / 5.0))
-		}
-		if num5P == 0 {
-			num5P = 1
-		}
-		maxPower = float64(num5P) * 3.84
-	} else {
-		// Older models: IQ Battery 3 (3.36 kWh capacity, 1.28 kW power) and IQ Battery 10 (10.08 kWh capacity).
-		// IQ Battery 10 is modularly composed of 3x IQ Battery 3 modules. We determine the count of modules
-		// by dividing the total capacity by the capacity of a single IQ 3 module (3.36 kWh).
-		u3 := int(math.Round(capacityKWH / 3.36))
-		if u3 > 0 {
-			n10 := u3 / 3
-			n3 := u3 % 3
-
-			// Distinguish between IQ Battery 10 (3.84 kW) and IQ Battery 10C (7.08 kW).
-			// If any device name in the list contains "10c" (case-insensitive), we assume the 10C model.
-			has10C := false
-			for _, dev := range data.State.Devices {
-				if strings.Contains(strings.ToLower(dev.Name), "10c") {
-					has10C = true
-					break
-				}
-			}
-
-			power10 := 3.84
-			if has10C {
-				power10 = 7.08
-			}
-			maxPower = float64(n10)*power10 + float64(n3)*1.28
-		}
-	}
-
+	capacityKWH := batteryStatus.MaxCapacity
+	maxPower := batteryStatus.AvailablePower
 	emergencyMode := data.State.BatteryConfig.Usage == "backup_only"
-
 	backupReserveSOC := float64(data.State.BatteryConfig.BatteryBackupPercentage)
 
 	var storms []types.Storm
@@ -601,6 +565,20 @@ type enphaseRequestedConfig struct {
 	ChargeFromGridScheduleEnabled bool   `json:"chargeFromGridScheduleEnabled"`
 	Profile                       string `json:"profile"`
 	BatteryBackupPercentage       int    `json:"batteryBackupPercentage"`
+}
+
+func (e *Enphase) getBatteryStatus(ctx context.Context) (enphaseBatteryStatusResponse, error) {
+	u := e.baseURL.JoinPath(fmt.Sprintf("pv/settings/%d/battery_status.json", e.systemID))
+	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+	if err != nil {
+		return enphaseBatteryStatusResponse{}, err
+	}
+
+	var res enphaseBatteryStatusResponse
+	if err := e.doRequest(req, &res); err != nil {
+		return enphaseBatteryStatusResponse{}, err
+	}
+	return res, nil
 }
 
 func (e *Enphase) getBatterySettings(ctx context.Context) (enphaseBatterySettingsResponse, error) {
@@ -1268,13 +1246,14 @@ type enphaseStorageSettings struct {
 }
 
 type enphaseState struct {
-	SiteID          int                  `json:"siteId"`
-	BatteryConfig   enphaseBatteryConfig `json:"batteryConfig"`
-	Devices         []enphaseDevice      `json:"devices"`
-	BatteryInfo     enphaseBatteryInfo   `json:"battery_info"`
-	HasBatteries    bool                 `json:"hasBatteries"`
-	BatteryGridMode string               `json:"batteryGridMode"`
-	IsEncharge5P    bool                 `json:"isEncharge5P"`
+	SiteID                     int                  `json:"siteId"`
+	BatteryConfig              enphaseBatteryConfig `json:"batteryConfig"`
+	Devices                    []enphaseDevice      `json:"devices"`
+	BatteryInfo                enphaseBatteryInfo   `json:"battery_info"`
+	HasBatteries               bool                 `json:"hasBatteries"`
+	BatteryGridMode            string               `json:"batteryGridMode"`
+	IsEncharge5P               bool                 `json:"isEncharge5P"`
+	ReducedEnchargeCapacityKWH float64              `json:"reducedEnchargeCapacity"`
 }
 
 type enphaseEnvStorageSettings struct {
@@ -1322,8 +1301,7 @@ type enphaseDevice struct {
 
 type enphaseBatteryInfo struct {
 	NumberOfBatteries int `json:"no_of_batteries"`
-	// TODO: kwh?
-	TotalCapacity int `json:"total_capacity"`
+	TotalCapacityWH   int `json:"total_capacity"`
 }
 
 type enphaseBatterySchedulesPayload struct {
@@ -1389,4 +1367,9 @@ type enphaseTodayResponse struct {
 	BatteryDetails *struct {
 		AggregateSOC float64 `json:"aggregate_soc"`
 	} `json:"battery_details"`
+}
+
+type enphaseBatteryStatusResponse struct {
+	MaxCapacity    float64 `json:"max_capacity"`
+	AvailablePower float64 `json:"available_power"`
 }

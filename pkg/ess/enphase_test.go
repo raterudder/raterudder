@@ -467,7 +467,7 @@ func TestEnphase(t *testing.T) {
 						SiteID: 123,
 						BatteryInfo: enphaseBatteryInfo{
 							NumberOfBatteries: 2,
-							TotalCapacity:     6720,
+							TotalCapacityWH:   6720,
 						},
 						HasBatteries:    true,
 						BatteryGridMode: "NoImportOrExport",
@@ -515,6 +515,15 @@ func TestEnphase(t *testing.T) {
 						"start_time": 1776038400,
 						"interval_length": 900
 					}]
+				}`))
+				return
+			}
+
+			if r.URL.Path == "/pv/settings/123/battery_status.json" {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{
+					"max_capacity": 6.72,
+					"available_power": 2.56
 				}`))
 				return
 			}
