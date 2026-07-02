@@ -639,6 +639,7 @@ func (c *Controller) evaluateDeficit(
 	var plannedChargeTime time.Time
 	var plannedChargePrice types.Price
 	var plannedChargeCost float64
+	cheapestPlanCost := gridChargeNowCost
 	var shouldCharge bool
 	var chargeDescription string
 	var chargeActionReason types.ActionReason
@@ -812,7 +813,12 @@ func (c *Controller) evaluateDeficit(
 					// 2. The current hour is expensive/not cheap (so we shouldn't charge now anyway).
 					enoughFutureHours := float64(futureCheapHours)*chargeKW >= neededEnergy
 					futureIsCheaperOrEqual := cheapestFutureCost <= cheapestCost+priceEpsilonForEquality
-					shouldDelay := !isAlreadyChargingSamePrice && ((futureIsCheaperOrEqual && enoughFutureHours) || !isCheapNow)
+					var shouldDelay bool
+					if isCheapestWindowNow {
+						shouldDelay = !isAlreadyChargingSamePrice && futureIsCheaperOrEqual && enoughFutureHours
+					} else {
+						shouldDelay = !isAlreadyChargingSamePrice && ((futureIsCheaperOrEqual && enoughFutureHours) || !isCheapNow)
+					}
 
 					if shouldDelay {
 						if plannedChargeTime.IsZero() || cheapestFutureCost < plannedChargeCost {
@@ -838,6 +844,7 @@ func (c *Controller) evaluateDeficit(
 						if neededEnergy > neededDeficitEnergy {
 							neededDeficitEnergy = neededEnergy
 							shouldCharge = true
+							cheapestPlanCost = cheapestCost
 							laterCost := cheapestFutureCost
 							if !hasFutureSlot {
 								laterCost = averageDeficitRateDollarsPerKWH
@@ -931,6 +938,30 @@ func (c *Controller) evaluateDeficit(
 		targetSOC := int(math.Ceil(((currentEnergyKWH + neededDeficitEnergy) / capacityKWH * 100.0) - targetSOCEpsilonToAvoidLargeCeil))
 		if targetSOC > 100 {
 			targetSOC = 100
+		}
+
+		// We use cheapestPlanCost (average cost of the plan) instead of averageDeficitRate as the cheap threshold.
+		// While any slot below averageDeficitRate is profitable, using cheapestPlanCost prevents us from
+		// pre-committing to charge at higher prices in the current cycle. If future slots are slightly more
+		// expensive but still profitable, subsequent controller cycles will dynamically raise the target SOC
+		// when those hours are actually reached. This protects against unexpected price hikes in future hours.
+		consecutiveCheapDuration := c.getConsecutiveCheapDuration(now, currentPrice, simData, cheapestPlanCost+priceEpsilonForEquality)
+		maxEnergyInCheapWindow := consecutiveCheapDuration * chargeKW
+		maxCheapSOC := currentStatus.BatterySOC + (maxEnergyInCheapWindow/capacityKWH)*100.0
+		clampedSOC := int(math.Ceil(maxCheapSOC))
+		if clampedSOC < int(settings.MinBatterySOC) {
+			clampedSOC = int(settings.MinBatterySOC)
+		}
+		if clampedSOC > 100 {
+			clampedSOC = 100
+		}
+		if targetSOC > clampedSOC {
+			log.Ctx(ctx).DebugContext(ctx, "deficit charge: clamping targetSOC to prevent leakage into expensive hours",
+				slog.Int("originalTargetSOC", targetSOC),
+				slog.Int("clampedSOC", clampedSOC),
+				slog.Float64("consecutiveCheapDurationHours", consecutiveCheapDuration),
+			)
+			targetSOC = clampedSOC
 		}
 		log.Ctx(ctx).DebugContext(
 			ctx,
@@ -1549,6 +1580,30 @@ func (c *Controller) evaluateExportArbitrage(
 		if targetSOC > 100 {
 			targetSOC = 100
 		}
+
+		// We use cheapestCost (average cost of the plan) instead of effectiveExportValue as the cheap threshold.
+		// While any slot below effectiveExportValue is theoretically profitable, using cheapestCost prevents us
+		// from pre-committing to charge at higher prices in the current cycle. If future slots are slightly more
+		// expensive but still profitable, subsequent controller cycles will dynamically raise the target SOC
+		// when those hours are actually reached. This protects against unexpected price hikes in future hours.
+		consecutiveCheapDuration := c.getConsecutiveCheapDuration(now, currentPrice, simData, cheapestCost+priceEpsilonForEquality)
+		maxEnergyInCheapWindow := consecutiveCheapDuration * chargeKW
+		maxCheapSOC := currentStatus.BatterySOC + (maxEnergyInCheapWindow/capacityKWH)*100.0
+		clampedSOC := int(math.Ceil(maxCheapSOC))
+		if clampedSOC < int(settings.MinBatterySOC) {
+			clampedSOC = int(settings.MinBatterySOC)
+		}
+		if clampedSOC > 100 {
+			clampedSOC = 100
+		}
+		if targetSOC > clampedSOC {
+			log.Ctx(ctx).DebugContext(ctx, "export arbitrage charge: clamping targetSOC to prevent leakage into expensive hours",
+				slog.Int("originalTargetSOC", targetSOC),
+				slog.Int("clampedSOC", clampedSOC),
+				slog.Float64("consecutiveCheapDurationHours", consecutiveCheapDuration),
+			)
+			targetSOC = clampedSOC
+		}
 		log.Ctx(ctx).DebugContext(ctx, "evaluateExportArbitrage returning charge strategy",
 			slog.Float64("chargeBenefit", chargeBenefit),
 			slog.Float64("requiredChargeEnergy", requiredChargeEnergy),
@@ -2111,6 +2166,44 @@ func (c *Controller) findCheapestPlan(
 	return
 }
 
+func (c *Controller) getConsecutiveCheapDuration(
+	now time.Time,
+	currentPrice types.Price,
+	simData []SimHour,
+	cheapThreshold float64,
+) float64 {
+	if len(simData) == 0 {
+		return 0.0
+	}
+	gridChargeNowCost := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
+	threshold := max(gridChargeNowCost+priceEpsilonForEquality, cheapThreshold)
+
+	// Remaining duration in the current hour
+	var currentDur float64 = 1.0
+	if !currentPrice.TSEnd.IsZero() {
+		currentDur = currentPrice.TSEnd.Sub(now).Hours()
+		if currentDur < 0.0 {
+			currentDur = 0.0
+		}
+		if currentDur > 1.0 {
+			currentDur = 1.0
+		}
+	}
+
+	totalDur := currentDur
+
+	// Scan future slots (index 1 onwards) as long as they are cheap (below or equal to threshold)
+	for j := 1; j < len(simData); j++ {
+		if simData[j].GridChargeDollarsPerKWH <= threshold {
+			totalDur += 1.0
+		} else {
+			break
+		}
+	}
+
+	return totalDur
+}
+
 type standbySimulationResult struct {
 	HitCapacityAt            time.Time
 	HitSolarCapacityAt       time.Time
@@ -2536,7 +2629,12 @@ func (c *Controller) evaluateVPPEvent(
 	canChargeNowReal := currentEnergyKWH+allowedHeadroom < capacityKWH && canCharge
 	enoughFutureHours := float64(futureCheapHours)*chargeKW >= neededEnergy
 	futureIsCheaperOrEqual := cheapestFutureCost <= cheapestCost+priceEpsilonForEquality
-	shouldDelay := !isAlreadyChargingSamePrice && ((futureIsCheaperOrEqual && enoughFutureHours) || !isCheapNow)
+	var shouldDelay bool
+	if isCheapestWindowNow {
+		shouldDelay = !isAlreadyChargingSamePrice && futureIsCheaperOrEqual && enoughFutureHours
+	} else {
+		shouldDelay = !isAlreadyChargingSamePrice && ((futureIsCheaperOrEqual && enoughFutureHours) || !isCheapNow)
+	}
 
 	log.Ctx(ctx).DebugContext(ctx, "vpp prep evaluation variables",
 		slog.Time("soonestVPPChargingAt", summary.SoonestVPPChargingAt),
@@ -2583,6 +2681,30 @@ func (c *Controller) evaluateVPPEvent(
 		targetSOC := int(math.Ceil(((currentEnergyKWH + neededEnergy) / capacityKWH * 100.0) - targetSOCEpsilonToAvoidLargeCeil))
 		if targetSOC > 100 {
 			targetSOC = 100
+		}
+
+		// We use cheapestCost (average cost of the plan) instead of forcedChargePrice as the cheap threshold.
+		// While any slot below forcedChargePrice is profitable, using cheapestCost prevents us from
+		// pre-committing to charge at higher prices in the current cycle. If future slots are slightly more
+		// expensive but still profitable, subsequent controller cycles will dynamically raise the target SOC
+		// when those hours are actually reached. This protects against unexpected price hikes in future hours.
+		consecutiveCheapDuration := c.getConsecutiveCheapDuration(now, currentPrice, simData, cheapestCost+priceEpsilonForEquality)
+		maxEnergyInCheapWindow := consecutiveCheapDuration * chargeKW
+		maxCheapSOC := currentStatus.BatterySOC + (maxEnergyInCheapWindow/capacityKWH)*100.0
+		clampedSOC := int(math.Ceil(maxCheapSOC))
+		if clampedSOC < int(settings.MinBatterySOC) {
+			clampedSOC = int(settings.MinBatterySOC)
+		}
+		if clampedSOC > 100 {
+			clampedSOC = 100
+		}
+		if targetSOC > clampedSOC {
+			log.Ctx(ctx).DebugContext(ctx, "vpp prep charge: clamping targetSOC to prevent leakage into expensive hours",
+				slog.Int("originalTargetSOC", targetSOC),
+				slog.Int("clampedSOC", clampedSOC),
+				slog.Float64("consecutiveCheapDurationHours", consecutiveCheapDuration),
+			)
+			targetSOC = clampedSOC
 		}
 		// We calculate benefit only for the energy actually collected during the cheap slots starting now.
 		// Multiplying the entire needed energy would artificially inflate the benefit if the cheapest plan

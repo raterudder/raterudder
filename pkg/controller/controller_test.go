@@ -3639,11 +3639,68 @@ func TestEvaluateDeficit(t *testing.T) {
 		// Decision to charge now because futureCheapHours = 1 (only Hour 1 is cheap), which can only collect 2.0 kWh < 6.0 kWh needed
 		if assert.NotNil(t, eval.Decision) {
 			assert.Equal(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode)
-			assert.Equal(t, 80, eval.Decision.ChargeToSOC) // 8.0 kWh = 80% SOC
+			assert.Equal(t, 60, eval.Decision.ChargeToSOC) // Clamped to cheap window: 6.0 kWh -> 60% SOC
 			// Rationale benefit: 3.0 hours allocated (Hour 0, Hour 1, Hour 2).
 			// average cost of the plan = (1.0 * 0.05 + 1.0 * 0.05 + 1.0 * 0.20) / 3.0 = 0.10.
 			// benefit = (3.0 * 2.0) * (0.50 - 0.10) = 6.0 * 0.40 = $2.40.
 			assert.InDelta(t, 2.40, eval.BenefitDollars, 0.001)
+		}
+	})
+
+	t.Run("Cheapest Window is Now but future is more expensive within buffer -> Charge Now (No Delay)", func(t *testing.T) {
+		summary := simulationSummary{
+			HitDeficitAt:      now.Add(2 * time.Hour),
+			HitBelowDeficitAt: now.Add(2 * time.Hour),
+		}
+		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.10}
+		settings := baseSettings
+		settings.MinDeficitPriceDifferenceDollarsPerKWH = 0.02
+
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.10, Price: currentPrice},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.11, Price: types.Price{TSStart: now.Add(time.Hour), DollarsPerKWH: 0.11}},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.50, TotalBatteryDeficitKWH: 1.0, Price: types.Price{TSStart: now.Add(2 * time.Hour), DollarsPerKWH: 0.50}, BatteryReserveKWH: 2.0},
+		}
+
+		status := baseStatus
+		status.BatterySOC = 20.0
+
+		eval := c.evaluateDeficit(ctx, now, status, currentPrice, settings, simData, summary)
+		require.NotNil(t, eval)
+		if assert.NotNil(t, eval.Decision) {
+			assert.Equal(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode)
+			assert.Equal(t, types.ActionReasonDeficitChargeNow, eval.Decision.Reason)
+		}
+		assert.Nil(t, eval.Plan)
+	})
+
+	t.Run("Fractional hour cheap window -> clamp targetSOC to prevent leakage", func(t *testing.T) {
+		summary := simulationSummary{
+			HitDeficitAt:      now.Add(2 * time.Hour),
+			HitBelowDeficitAt: now.Add(2 * time.Hour),
+		}
+		// 10 minutes left in current hour
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(10 * time.Minute), DollarsPerKWH: 0.10}
+		settings := baseSettings
+
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.10, Price: currentPrice},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.50, Price: types.Price{TSStart: now.Add(time.Hour), DollarsPerKWH: 0.50}},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.50, TotalBatteryDeficitKWH: 5.0, Price: types.Price{TSStart: now.Add(2 * time.Hour), DollarsPerKWH: 0.50}, BatteryReserveKWH: 2.0},
+		}
+
+		status := baseStatus
+		status.BatterySOC = 20.0
+		status.MaxBatteryChargeKW = 5.0
+		status.BatteryCapacityKWH = 10.0
+
+		eval := c.evaluateDeficit(ctx, now, status, currentPrice, settings, simData, summary)
+		require.NotNil(t, eval)
+		if assert.NotNil(t, eval.Decision) {
+			assert.Equal(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode)
+			// Target SOC without clamp: ceil((2.0 + 5.0)/10 * 100) = 70.
+			// Target SOC with clamp: ceil(20.0 + (10/60 * 5.0 / 10.0 * 100)) = ceil(20 + 8.33) = 29.
+			assert.Equal(t, 29, eval.Decision.ChargeToSOC)
 		}
 	})
 }
@@ -4672,11 +4729,46 @@ func TestEvaluateArbitrage(t *testing.T) {
 		// Since we don't have enough cheap future capacity (futureCheapHours = 1 which can only cover 4.0 kWh), we should charge now.
 		if assert.NotNil(t, eval.Decision) {
 			assert.Equal(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode)
-			assert.Equal(t, 100, eval.Decision.ChargeToSOC)
+			assert.Equal(t, 70, eval.Decision.ChargeToSOC)
 			// Rationale benefit: we can only collect 1.25 hours in profitable slots (0.25h now + 1.0h future)
 			// energy collected = 1.25 hours * 4.0 kW = 5.0 kWh
 			// savings = 5.0 * (0.15 - 0.10) = $0.25
 			assert.InDelta(t, 0.25, eval.BenefitDollars, 0.001)
+		}
+	})
+
+	t.Run("Fractional hour cheap window -> clamp targetSOC to prevent leakage", func(t *testing.T) {
+		summary := simulationSummary{
+			SoonestExportAt:    now.Add(2 * time.Hour),
+			SoonestExportPrice: types.Price{TSStart: now.Add(2 * time.Hour), DollarsPerKWH: 0.50},
+			SoonestExportValue: 0.50,
+		}
+		// 10 minutes left in current hour
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(10 * time.Minute), DollarsPerKWH: 0.10}
+		settings := baseSettings
+		settings.MinArbitrageDifferenceDollarsPerKWH = 0.02
+
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.10, Price: currentPrice, BatteryKWH: 2.0},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.50, Price: types.Price{TSStart: now.Add(time.Hour), DollarsPerKWH: 0.50}, BatteryKWH: 2.0},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.50, SolarOppDollarsPerKWH: 0.50, NetLoadSolarKWH: -10.0, ClampedNetLoadSolarKWH: -10.0, BatteryKWH: 2.0, Price: types.Price{TSStart: now.Add(2 * time.Hour), DollarsPerKWH: 0.50}},
+		}
+
+		status := types.SystemStatus{
+			Timestamp:          now,
+			BatterySOC:         20.0,
+			BatteryCapacityKWH: 10.0,
+			MaxBatteryChargeKW: 5.0,
+			HomeKW:             0.0,
+		}
+
+		eval := c.evaluateExportArbitrage(ctx, now, status, currentPrice, settings, simData, summary)
+		require.NotNil(t, eval)
+		if assert.NotNil(t, eval.Decision) {
+			assert.Equal(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode)
+			// Target SOC without clamp: ceil((2.0 + 5.0)/10 * 100) = 70.
+			// Target SOC with clamp: ceil(20.0 + (10/60 * 5.0 / 10.0 * 100)) = ceil(20 + 8.33) = 29.
+			assert.Equal(t, 29, eval.Decision.ChargeToSOC)
 		}
 	})
 }
@@ -6393,11 +6485,68 @@ func TestEvaluateVPPEvent(t *testing.T) {
 		// Decision to charge now because futureCheapHours = 1 (only Hour 1 is cheap), which can only cover 3.0 kWh < 7.8 kWh needed
 		if assert.NotNil(t, eval.Decision) {
 			assert.Equal(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode)
-			assert.Equal(t, 98, eval.Decision.ChargeToSOC) // 98% target SOC
+			assert.Equal(t, 65, eval.Decision.ChargeToSOC) // 65% target SOC
 			// Rationale benefit: we can only collect 1.5 hours in profitable slots (0.5h now + 1.0h future)
 			// energy collected = 1.5 hours * 3.0 kW = 4.5 kWh
 			// savings = 4.5 * (0.20 - 0.05) = $0.675
 			assert.InDelta(t, 0.675, eval.BenefitDollars, 0.001)
+		}
+	})
+
+	t.Run("Cheapest Window is Now but future is more expensive within buffer -> Charge Now (No Delay)", func(t *testing.T) {
+		summary := simulationSummary{
+			SoonestVPPChargingAt: now.Add(2 * time.Hour),
+		}
+		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.10}
+		settings := baseSettings
+		settings.MinArbitrageDifferenceDollarsPerKWH = 0.02
+
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.10, Price: currentPrice},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.11, Price: types.Price{TSStart: now.Add(time.Hour), DollarsPerKWH: 0.11}},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.20, Price: types.Price{TSStart: now.Add(2 * time.Hour), DollarsPerKWH: 0.20}},
+		}
+
+		almostFullStatus := baseStatus
+		almostFullStatus.BatterySOC = 80.0        // Needs 2.0 kWh
+		almostFullStatus.MaxBatteryChargeKW = 5.0 // charge rate 5kW (needs 0.4h, i.e., 1 slot)
+
+		eval := c.evaluateVPPEvent(ctx, now, almostFullStatus, currentPrice, settings, simData, summary)
+		require.NotNil(t, eval)
+		if assert.NotNil(t, eval.Decision) {
+			assert.Equal(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode)
+			assert.Equal(t, types.ActionReasonVPPPrep, eval.Decision.Reason)
+		}
+		assert.Nil(t, eval.Plan)
+	})
+
+	t.Run("Fractional hour cheap window -> clamp targetSOC to prevent leakage", func(t *testing.T) {
+		summary := simulationSummary{
+			SoonestVPPChargingAt: now.Add(2 * time.Hour),
+		}
+		// 10 minutes left in current hour
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(10 * time.Minute), DollarsPerKWH: 0.10}
+		settings := baseSettings
+		settings.MinArbitrageDifferenceDollarsPerKWH = 0.02
+
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.10, Price: currentPrice},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.50, Price: types.Price{TSStart: now.Add(time.Hour), DollarsPerKWH: 0.50}},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.20, Price: types.Price{TSStart: now.Add(2 * time.Hour), DollarsPerKWH: 0.20}},
+		}
+
+		status := baseStatus
+		status.BatterySOC = 20.0
+		status.MaxBatteryChargeKW = 5.0
+		status.BatteryCapacityKWH = 10.0
+
+		eval := c.evaluateVPPEvent(ctx, now, status, currentPrice, settings, simData, summary)
+		require.NotNil(t, eval)
+		if assert.NotNil(t, eval.Decision) {
+			assert.Equal(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode)
+			// Target SOC without clamp: VPP prep target is 98% (9.8 kWh) -> needed is 7.8 kWh. Target SOC is 98%.
+			// Target SOC with clamp: ceil(20.0 + (10/60 * 5.0 / 10.0 * 100)) = ceil(20 + 8.33) = 29.
+			assert.Equal(t, 29, eval.Decision.ChargeToSOC)
 		}
 	})
 }

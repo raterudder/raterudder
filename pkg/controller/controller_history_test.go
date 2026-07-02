@@ -4,7 +4,6 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
-	"fmt"
 	"math"
 	"sync"
 	"testing"
@@ -19,15 +18,15 @@ import (
 var historyFS embed.FS
 
 var fileBaselines = map[string]float64{
-	"site1_march.json":    -4.939,
-	"site1_may.json":      -16.290,
+	"site1_march.json":    -4.993,
+	"site1_may.json":      -16.310,
 	"site2_april.json":    1.344,
 	"site2_march.json":    8.492,
 	"site2_may.json":      0.595,
-	"site3_march.json":    -2.041,
+	"site3_march.json":    -2.021,
 	"site3_may.json":      -6.417,
 	"site4_late-may.json": 0.283,
-	"site4_may.json":      3.025,
+	"site4_may.json":      3.119,
 	"site5_june.json":     23.036,
 	"site7_june.json":     24.127,
 	"site8_june.json":     -2.707,
@@ -305,45 +304,21 @@ func TestDecideHistory(t *testing.T) {
 				decision, err := c.Decide(ctx, simStatus, currentPrice, futurePrices, mockHistory, mockWeather, settings)
 				require.NoError(t, err)
 
-				// enable for debugging and set back to false when done debugging!
+				// === DEBUGGING STRATEGY FOR HISTORY TESTS ===
+				// To debug a specific test dataset (e.g. site1_march.json) at a specific time/hour:
+				// 1. Run only that specific test case by using:
+				//    go test ./pkg/controller -run TestDecideHistory/site1_march.json -v
+				// 2. Locate where the simulated behavior/cost/SOC deviates from baseline.
+				// 3. Set the `if false` check below to `if true` and modify the day/hour/minute
+				//    conditions to match the target timeframe.
+				//    Example: if tCurrent.Day() == 19 && tCurrent.Hour() == 6
+				// 4. This will call `SimulateState` for the exact controller state and print the
+				//    simulated hours (slots), allowing you to verify forecast, deficits, capacity hits,
+				//    prices, and target SOC limits (clamping).
 				if false {
-					//if (tCurrent.Day() == 27 && tCurrent.Hour() == 6) || (tCurrent.Day() == 28 && (tCurrent.Hour() == 1 || tCurrent.Hour() == 2)) {
-					if false {
+					if tCurrent.Day() == 19 && tCurrent.Hour() == 6 {
 						simData, _ := c.SimulateState(ctx, tCurrent, simStatus, currentPrice, futurePrices, mockHistory, mockWeather, settings)
-						summary := c.analyzeSimulation(ctx, tCurrent, currentPrice, settings, simData)
-						evalDef := c.evaluateDeficit(ctx, tCurrent, simStatus, currentPrice, settings, simData, summary)
-						evalExp := c.evaluateExportArbitrage(ctx, tCurrent, simStatus, currentPrice, settings, simData, summary)
-
-						var defPlanStr, expPlanStr string
-						if evalDef != nil && evalDef.Plan != nil {
-							defPlanStr = fmt.Sprintf("Plan={Time:%s Cost:%.3f}", evalDef.Plan.ChargeTime.Format("15:04"), evalDef.Plan.ChargeCost)
-						} else {
-							defPlanStr = "Plan=nil"
-						}
-						if evalExp != nil && evalExp.Plan != nil {
-							expPlanStr = fmt.Sprintf("Plan={Time:%s Cost:%.3f}", evalExp.Plan.ChargeTime.Format("15:04"), evalExp.Plan.ChargeCost)
-						} else {
-							expPlanStr = "Plan=nil"
-						}
-
-						t.Logf("DEBUG %d_%02d:%02d | SOC: %.2f | Deficit: Dec=%+v %s | Export: Dec=%+v %s",
-							tCurrent.Day(), tCurrent.Hour(), tCurrent.Minute(), simSOC,
-							func() interface{} {
-								if evalDef != nil {
-									return evalDef.Decision
-								}
-								return nil
-							}(), defPlanStr,
-							func() interface{} {
-								if evalExp != nil {
-									return evalExp.Decision
-								}
-								return nil
-							}(), expPlanStr)
-					}
-					if tCurrent.Day() == 24 && tCurrent.Hour() == 2 && tCurrent.Minute() == 33 {
-						simData, _ := c.SimulateState(ctx, tCurrent, simStatus, currentPrice, futurePrices, mockHistory, mockWeather, settings)
-						t.Logf("=== SIMULATION SLOTS AT 15:33 ===")
+						t.Logf("=== SIMULATION SLOTS AT %02d:%02d ===", tCurrent.Hour(), tCurrent.Minute())
 						for idx, slot := range simData {
 							t.Logf("  Slot %d: TS=%s, NetLoadSolar=%.3f, BatteryKWH=%.3f, HitCapacity=%s, HitDeficit=%s, ClampedNet=%.3f, Cost=%.3f, Export=%.3f",
 								idx, slot.TS.Format("15:04"), slot.NetLoadSolarKWH, slot.BatteryKWH, slot.HitCapacityAt.Format("15:04"), slot.HitDeficitAt.Format("15:04"), slot.ClampedNetLoadSolarKWH, slot.GridChargeDollarsPerKWH, slot.SolarOppDollarsPerKWH)
@@ -384,6 +359,7 @@ func TestDecideHistory(t *testing.T) {
 				}
 
 				decidedMode := decision.Action.BatteryMode
+				t.Logf("%v: Decided mode: %v, reason: %v, targetSOC: %d", tCurrent, decidedMode, decision.Action.Reason, decision.Action.ChargeToSOC)
 
 				// Run minute-by-minute simulation for the interval [tCurrent, tNext]
 				stepMinutes := int(math.Ceil(duration.Minutes()))
@@ -510,7 +486,10 @@ func TestDecideHistory(t *testing.T) {
 						}
 					}
 				}
-				//t.Logf("%v: cost %f, SOC %f", tCurrent, simCost-simCredit, simSOC)
+				// enable to help debug the cost over time
+				if false {
+					t.Logf("%v: cost %f, SOC %f, mode %v, targetSOC %d", tCurrent, simCost-simCredit, simSOC, decidedMode, decision.Action.ChargeToSOC)
+				}
 			}
 
 			baseNetCost, hasBaseline := fileBaselines[fileName]
