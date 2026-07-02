@@ -3703,6 +3703,42 @@ func TestEvaluateDeficit(t *testing.T) {
 			assert.Equal(t, 29, eval.Decision.ChargeToSOC)
 		}
 	})
+
+	t.Run("Cumulative deficit without marginal increase -> do not charge prematurely", func(t *testing.T) {
+		status := baseStatus
+		status.BatterySOC = 20.0
+		status.BatteryCapacityKWH = 10.0
+		status.MaxBatteryChargeKW = 5.0
+		status.HomeKW = 1.0
+
+		// Current price is cheap ($0.05)
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05}
+		futurePrices := []types.Price{
+			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.05},
+			{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(3 * time.Hour), DollarsPerKWH: 0.12}, // peak starts
+		}
+
+		summary := simulationSummary{
+			HitDeficitAt:            now.Add(time.Hour),
+			HitBelowDeficitAt:       now.Add(time.Hour),
+			MinFutureGridChargeCost: 0.05,
+		}
+
+		// Deficit starts at Hour 1 (0.5 kWh) and does NOT grow at Hour 2 (still 0.5 kWh, e.g. because of solar).
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.05, Price: currentPrice},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.05, TotalBatteryDeficitKWH: 0.5, Price: futurePrices[0], BatteryReserveKWH: 2.0},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.12, TotalBatteryDeficitKWH: 0.5, Price: futurePrices[1], BatteryReserveKWH: 2.0},
+		}
+
+		eval := c.evaluateDeficit(ctx, now, status, currentPrice, baseSettings, simData, summary)
+		// Should return a plan to charge later (nil decision, non-nil plan), NOT charge now
+		// because at Hour 1 (marginalDeficit > 0), the price is $0.05 (same as now), so we should delay.
+		// At Hour 2, the price is $0.12 (expensive), but marginalDeficit is 0, so we should NOT charge now for it.
+		require.NotNil(t, eval)
+		assert.Nil(t, eval.Decision)
+		assert.NotNil(t, eval.Plan)
+	})
 }
 
 func TestEvaluateArbitrage(t *testing.T) {

@@ -606,6 +606,11 @@ func (c *Controller) evaluateDeficit(
 	totalDeficitCost := 0.0
 	totalDeficitKWH := 0.0
 	lastDeficitKWH := 0.0
+	// We keep these two loops separate because the first loop needs to calculate the global weighted
+	// averageDeficitRateDollarsPerKWH over the entire simulation window before the second loop runs.
+	// The second loop relies on this pre-calculated average rate for slot-by-slot price comparisons
+	// and benefit calculations. Combining them would mean individual slots wouldn't have access to
+	// the true global average deficit rate of future hours.
 	for _, slot := range simData {
 		// If the battery hits capacity, any subsequent deficits cannot be prevented by charging now.
 		if !bufferedHitCapacityAt.IsZero() && !slot.TS.Before(bufferedHitCapacityAt) {
@@ -652,6 +657,7 @@ func (c *Controller) evaluateDeficit(
 	var wasAlreadyChargingSamePrice bool
 	var hadFutureCheapHours int
 
+	lastDeficitKWH = 0.0
 	for i, slot := range simData {
 		if !bufferedHitCapacityAt.IsZero() && !slot.TS.Before(bufferedHitCapacityAt) {
 			break
@@ -659,8 +665,14 @@ func (c *Controller) evaluateDeficit(
 		if !vppCutoff.IsZero() && !slot.TS.Before(vppCutoff) {
 			break
 		}
-		deficitAmount := slot.TotalBatteryDeficitKWH
-		hasDeficit := deficitAmount > 0
+		marginalDeficit := slot.TotalBatteryDeficitKWH - lastDeficitKWH
+		if marginalDeficit > 0 {
+			lastDeficitKWH = slot.TotalBatteryDeficitKWH
+		}
+		// We keep hasDeficit cumulative (TotalBatteryDeficitKWH > 0) so that we continue to run lookahead planning
+		// and scan all cheap future slots. If we restricted hasDeficit to marginalDeficit > 0, we would skip
+		// scanning subsequent flat deficit slots, missing the cheapest future plan windows.
+		hasDeficit := slot.TotalBatteryDeficitKWH > 0
 
 		if hasDeficit && canCharge {
 			simInFuture := i > 0
@@ -731,7 +743,7 @@ func (c *Controller) evaluateDeficit(
 					bufferEnergyKWH = (float64(bufferMinutes) / 60.0) * nextSlot.AvgHomeLoadKWH
 				}
 			}
-			neededEnergy := deficitAmount + bufferEnergyKWH
+			neededEnergy := slot.TotalBatteryDeficitKWH + bufferEnergyKWH
 			if neededEnergy > maxHeadroom {
 				neededEnergy = maxHeadroom
 			}
@@ -820,6 +832,12 @@ func (c *Controller) evaluateDeficit(
 						shouldDelay = !isAlreadyChargingSamePrice && ((futureIsCheaperOrEqual && enoughFutureHours) || !isCheapNow)
 					}
 
+					// We only check marginalDeficit when shouldDelay is false (in the else block).
+					// If shouldDelay is true, we are planning a future charge. Even if the deficit is flat
+					// (marginalDeficit == 0), we still want to update our future plans to find the cheapest
+					// slots for the cumulative deficit. But we only trigger immediate charging (shouldCharge = true)
+					// if we cannot delay AND the deficit is actively growing (marginalDeficit > 0), because flat
+					// deficits were already handled by the hour that originally introduced them.
 					if shouldDelay {
 						if plannedChargeTime.IsZero() || cheapestFutureCost < plannedChargeCost {
 							plannedChargeTime = cheapestFutureTime
@@ -843,29 +861,34 @@ func (c *Controller) evaluateDeficit(
 						// targetSOC required to survive the entire deficit sequence.
 						if neededEnergy > neededDeficitEnergy {
 							neededDeficitEnergy = neededEnergy
-							shouldCharge = true
-							cheapestPlanCost = cheapestCost
-							laterCost := cheapestFutureCost
-							if !hasFutureSlot {
-								laterCost = averageDeficitRateDollarsPerKWH
+							// Only trigger grid charging now if this slot introduces a new or growing deficit (marginalDeficit > 0).
+							// If the cumulative deficit is flat, that amount is already covered/evaluated by earlier hours,
+							// so we avoid triggering a premature charge decision (especially if the current time is flat/expensive).
+							if marginalDeficit > 0 {
+								shouldCharge = true
+								cheapestPlanCost = cheapestCost
+								laterCost := cheapestFutureCost
+								if !hasFutureSlot {
+									laterCost = averageDeficitRateDollarsPerKWH
+								}
+								chargeDescription = fmt.Sprintf(
+									"Projected Deficit at %s. Charge Now ($%.3f) <= Later ($%.3f).",
+									hitDeficitAt.Format(time.Kitchen),
+									cheapestCost,
+									laterCost,
+								)
+								futurePrice = &cheapestPrice
+								chargeActionReason = types.ActionReasonDeficitChargeNow
+								// We calculate benefit only for the energy actually collected during the cheap slots starting now.
+								// Multiplying the entire needed deficit energy would artificially inflate the benefit if the cheapest plan
+								// only has enough slot duration to cover a fraction of that energy.
+								chargeBenefitDollars = min(neededEnergy, allocatedHours*chargeKW) * (averageDeficitRateDollarsPerKWH - cheapestCost)
+								wasSignificantlyCheaperFuture = isSignificantlyCheaperFuture
+								wasSignificantlyCheaperThanDeficit = isSignificantlyCheaperThanDeficit
+								wasSignificantlyCheaperThanDeficitNow = isSignificantlyCheaperThanDeficitNow
+								wasAlreadyChargingSamePrice = isAlreadyChargingSamePrice
+								hadFutureCheapHours = futureCheapHours
 							}
-							chargeDescription = fmt.Sprintf(
-								"Projected Deficit at %s. Charge Now ($%.3f) <= Later ($%.3f).",
-								hitDeficitAt.Format(time.Kitchen),
-								cheapestCost,
-								laterCost,
-							)
-							futurePrice = &cheapestPrice
-							chargeActionReason = types.ActionReasonDeficitChargeNow
-							// We calculate benefit only for the energy actually collected during the cheap slots starting now.
-							// Multiplying the entire needed deficit energy would artificially inflate the benefit if the cheapest plan
-							// only has enough slot duration to cover a fraction of that energy.
-							chargeBenefitDollars = min(neededEnergy, allocatedHours*chargeKW) * (averageDeficitRateDollarsPerKWH - cheapestCost)
-							wasSignificantlyCheaperFuture = isSignificantlyCheaperFuture
-							wasSignificantlyCheaperThanDeficit = isSignificantlyCheaperThanDeficit
-							wasSignificantlyCheaperThanDeficitNow = isSignificantlyCheaperThanDeficitNow
-							wasAlreadyChargingSamePrice = isAlreadyChargingSamePrice
-							hadFutureCheapHours = futureCheapHours
 						}
 					}
 				}
