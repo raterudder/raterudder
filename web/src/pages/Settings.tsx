@@ -1821,6 +1821,7 @@ const Settings = ({ siteID, settings: parentSettings, onSettingsSaved, sites = [
                             <h3>Advanced Power History Settings</h3>
                         </div>
                         <div className="grid-strategy-grid">
+                            {/*
                             <Field.Root className="form-group">
                                 <Field.Label htmlFor="ignoreHourUsageOverMultiple">Ignore Usage Outlier Multiple</Field.Label>
                                 <Input
@@ -1832,6 +1833,46 @@ const Settings = ({ siteID, settings: parentSettings, onSettingsSaved, sites = [
                                     onChange={(e) => handleChange('ignoreHourUsageOverMultiple', parseFloat(e.target.value))}
                                 />
                                 <Field.Description>If a single hour's usage is this many times greater than the average of other data points for that hour, ignore it. Must be &ge; 1.</Field.Description>
+                            </Field.Root>
+                            */}
+
+                            <Field.Root className="form-group">
+                                <Field.Label htmlFor="homeLoadPredictionStrategy">Home Load Prediction Strategy</Field.Label>
+                                <Select.Root
+                                    value={settings.homeLoadPredictionStrategy || 'default'}
+                                    onValueChange={(value) => handleChange('homeLoadPredictionStrategy', value || 'default')}
+                                >
+                                    <Select.Trigger className="select-trigger" id="homeLoadPredictionStrategy" aria-label="Home Load Prediction Strategy">
+                                        <Select.Value>
+                                            {settings.homeLoadPredictionStrategy === 'conservative'
+                                                ? 'Conservative (High Protection)'
+                                                : 'Default (Responsive/Optimized)'}
+                                        </Select.Value>
+                                        <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                            </svg>
+                                        </Select.Icon>
+                                    </Select.Trigger>
+                                    <Select.Portal>
+                                        <Select.Positioner className="select-positioner">
+                                            <Select.Popup className="select-popup">
+                                                <Select.Item className="select-item" value="default">
+                                                    <Select.ItemText>Default (Responsive/Optimized)</Select.ItemText>
+                                                </Select.Item>
+                                                <Select.Item className="select-item" value="conservative">
+                                                    <Select.ItemText>Conservative (High Protection)</Select.ItemText>
+                                                </Select.Item>
+                                            </Select.Popup>
+                                        </Select.Positioner>
+                                    </Select.Portal>
+                                </Select.Root>
+                                <Field.Description>Select how conservative the system is when predicting future home load.</Field.Description>
+                                {settings.homeLoadPredictionStrategy === 'conservative' && (
+                                    <div className="warning-notice" style={{ marginTop: '0.5rem' }} data-testid="conservative-strategy-warning">
+                                        Caution: Conservative mode will result in more grid charging and higher electricity costs, but reduces the chance of running out of battery during periodic higher usage.
+                                    </div>
+                                )}
                             </Field.Root>
                         </div>
                     </>

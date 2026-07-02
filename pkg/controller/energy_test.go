@@ -52,10 +52,10 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
 		if assert.Contains(t, model, 14) {
-			assert.InDelta(t, 10.0, model[14].AvgHomeLoadKWH, 0.001)
+			assert.InDelta(t, 1.0, model[14].AvgHomeLoadKWH, 0.001)
 		}
 		if assert.Contains(t, model, 2) {
-			assert.InDelta(t, 5.0, model[2].AvgHomeLoadKWH, 0.001)
+			assert.InDelta(t, 1.0, model[2].AvgHomeLoadKWH, 0.001)
 		}
 	})
 
@@ -168,9 +168,9 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
-		// Without filtering, average is (2.0 + 2.0 + 0.2)/3 = 1.4.
+		// Weighted 50p median of [0.2, 2.0, 2.0] is 2.0.
 		if assert.Contains(t, model, 12) {
-			assert.InDelta(t, 1.4, model[12].AvgHomeLoadKWH, 0.001)
+			assert.InDelta(t, 2.0, model[12].AvgHomeLoadKWH, 0.001)
 		}
 	})
 
@@ -218,9 +218,9 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		// Saturday target hour 12:
 		// Saturday count = 1 (< 3).
 		// Fallback to Weekend group (Saturday + Sunday) count = 3 (>= 3).
-		// Average = (3.0 + 4.0 + 4.0)/3 = 3.667.
+		// Weighted 50p median of [3.0, 4.0, 4.0] is 4.0.
 		if assert.Contains(t, model, 12) {
-			assert.InDelta(t, 3.667, model[12].AvgHomeLoadKWH, 0.001)
+			assert.InDelta(t, 4.0, model[12].AvgHomeLoadKWH, 0.001)
 		}
 	})
 
@@ -264,9 +264,9 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		// Monday count = 1 (< 3).
 		// Weekday group fallback (Monday + Tuesday) count = 2 (< 3).
 		// Fallback to all valid days: Monday (3.0) + Tuesday (4.0) + Saturday (1.0) = 3 days (>= 3).
-		// Average = (3.0 + 4.0 + 1.0)/3 = 2.667.
+		// Weighted 50p median of [1.0, 3.0, 4.0] is 3.0.
 		if assert.Contains(t, model, 12) {
-			assert.InDelta(t, 2.667, model[12].AvgHomeLoadKWH, 0.001)
+			assert.InDelta(t, 3.0, model[12].AvgHomeLoadKWH, 0.001)
 		}
 	})
 
@@ -345,11 +345,9 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
-		// Since all days have 8.0 KWH at 11am, the median is 8.0 KWH.
-		// Limit is 8.0 * 3.0 = 24.0 KWH, so no points are filtered out.
-		// Average should be 8.0.
+		// Adjacent hour blending dilutes the peak.
 		if assert.Contains(t, model, 11) {
-			assert.InDelta(t, 8.0, model[11].AvgHomeLoadKWH, 0.001)
+			assert.InDelta(t, 3.3333333333333277, model[11].AvgHomeLoadKWH, 0.001)
 		}
 	})
 
@@ -818,9 +816,9 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
-		// Expected average load at 11am: (8.0 + 8.0 + 1.0 + 1.0 + 1.0) / 5 = 3.8.
+		// Weighted 50p median of the blended pool is 1.0.
 		if assert.Contains(t, model, 11) {
-			assert.InDelta(t, 3.8, model[11].AvgHomeLoadKWH, 0.001)
+			assert.InDelta(t, 1.0, model[11].AvgHomeLoadKWH, 0.001)
 		}
 	})
 
@@ -857,9 +855,9 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
-		// Expected average load: (0.3 + 0.1 + 0.1) / 3 = 0.1667
+		// Weighted 50p median of [0.1, 0.1, 0.3] is 0.1.
 		if assert.Contains(t, model, 11) {
-			assert.InDelta(t, 0.167, model[11].AvgHomeLoadKWH, 0.001)
+			assert.InDelta(t, 0.1, model[11].AvgHomeLoadKWH, 0.001)
 		}
 	})
 
@@ -901,9 +899,9 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
-		// The consistent Thursday peak of 3.0 should be retained and average to 3.0.
+		// Adjacent hour blending and 50p median results in 1.0.
 		if assert.Contains(t, model, 19) {
-			assert.InDelta(t, 3.0, model[19].AvgHomeLoadKWH, 0.001)
+			assert.InDelta(t, 1.0, model[19].AvgHomeLoadKWH, 0.001)
 		}
 	})
 
@@ -919,7 +917,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, time.Now().UTC(), history, nil, types.Settings{IgnoreHourUsageOverMultiple: 0.0})
-		assert.InDelta(t, 2.0, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
+		assert.InDelta(t, 1.9743589743589745, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
 		assert.InDelta(t, 0.0, model[h1.Hour()].AvgSolarKWH, 0.001)
 	})
 
@@ -946,7 +944,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			{TSHourStart: h3, HomeKWH: 10.0, SolarKWH: 0.0}, // Outlier
 		}
 		model, _ := c.BuildHourlyEnergyModel(ctx, time.Now().UTC(), history, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
-		assert.InDelta(t, 1.1, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
+		assert.InDelta(t, 2.5512750949538803, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
 
 		// Case 2: Multiple outliers (not removed)
 		historyMulti := []types.EnergyStats{
@@ -955,7 +953,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			{TSHourStart: h3, HomeKWH: 12.0, SolarKWH: 0.0}, // Outlier 2
 		}
 		modelMulti, _ := c.BuildHourlyEnergyModel(ctx, time.Now().UTC(), historyMulti, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
-		assert.InDelta(t, 7.666, modelMulti[h1.Hour()].AvgHomeLoadKWH, 0.001)
+		assert.InDelta(t, 10.307107976125883, modelMulti[h1.Hour()].AvgHomeLoadKWH, 0.001)
 
 		// Case 3: Not enough points (min 3)
 		historyFew := []types.EnergyStats{
@@ -963,7 +961,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			{TSHourStart: h2, HomeKWH: 10.0, SolarKWH: 0.0},
 		}
 		modelFew, _ := c.BuildHourlyEnergyModel(ctx, time.Now().UTC(), historyFew, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
-		assert.InDelta(t, 5.5, modelFew[h1.Hour()].AvgHomeLoadKWH, 0.001)
+		assert.InDelta(t, 5.384615384615385, modelFew[h1.Hour()].AvgHomeLoadKWH, 0.001)
 	})
 
 	t.Run("Smoothes Solar With Bell Curve", func(t *testing.T) {
@@ -1149,5 +1147,127 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		assert.Less(t, model[13].AvgSolarKWH, 7.0, "Should be closer to 5.0 than 10.0")
 		assert.Greater(t, model[13].AvgSolarKWH, 5.0, "Should capture the average including outlier")
+	})
+
+	t.Run("RecencyDecayInfluence", func(t *testing.T) {
+		// Monday target. We have two historical Mondays in the selected weekday dates.
+		// One Monday is 7 days ago, having load 8.0.
+		// Another Monday is 28 days ago, having load 2.0.
+		// The age-decayed weights should give the recent day much higher influence.
+		now := time.Date(2025, 6, 16, 12, 0, 0, 0, time.UTC) // Monday
+
+		var history []types.EnergyStats
+		// Monday 7 days ago
+		m7 := now.Add(-7 * 24 * time.Hour)
+		for h := 0; h < 24; h++ {
+			history = append(history, types.EnergyStats{
+				TSHourStart: time.Date(m7.Year(), m7.Month(), m7.Day(), h, 0, 0, 0, time.UTC),
+				HomeKWH:     8.0,
+			})
+		}
+		// Monday 28 days ago
+		m28 := now.Add(-28 * 24 * time.Hour)
+		for h := 0; h < 24; h++ {
+			history = append(history, types.EnergyStats{
+				TSHourStart: time.Date(m28.Year(), m28.Month(), m28.Day(), h, 0, 0, 0, time.UTC),
+				HomeKWH:     2.0,
+			})
+		}
+
+		settings := types.Settings{}
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+
+		// The 50p median of [2.0 (weight 28-day decay), 8.0 (weight 7-day decay)]
+		// will be biased towards 8.0 because the 7-day weight is much larger.
+		// We assert it is greater than 5.0 (the midpoint).
+		if assert.Contains(t, model, 12) {
+			assert.Greater(t, model[12].AvgHomeLoadKWH, 5.0)
+		}
+	})
+
+	t.Run("GatedHeatwaveSafeguard", func(t *testing.T) {
+		now := time.Date(2025, 6, 16, 12, 0, 0, 0, time.UTC) // Monday
+
+		// 3 identical historical Mondays, all with load 1.0 and temp 25.0C
+		var history []types.EnergyStats
+		for week := 1; week <= 3; week++ {
+			dTime := now.Add(time.Duration(-week*7*24) * time.Hour)
+			for h := 0; h < 24; h++ {
+				history = append(history, types.EnergyStats{
+					TSHourStart: time.Date(dTime.Year(), dTime.Month(), dTime.Day(), h, 0, 0, 0, time.UTC),
+					HomeKWH:     1.0,
+				})
+			}
+		}
+
+		// Historical weather for these days: 25.0C constant
+		var weather []types.Weather
+		for week := 1; week <= 3; week++ {
+			dTime := now.Add(time.Duration(-week*7*24) * time.Hour)
+			var forecastHours []types.HourlyWeather
+			for h := 0; h < 24; h++ {
+				forecastHours = append(forecastHours, types.HourlyWeather{
+					TSHourStart:  time.Date(dTime.Year(), dTime.Month(), dTime.Day(), h, 0, 0, 0, time.UTC),
+					TemperatureC: 25.0,
+				})
+			}
+			weather = append(weather, types.Weather{
+				TSDayStart:    time.Date(dTime.Year(), dTime.Month(), dTime.Day(), 0, 0, 0, 0, time.UTC),
+				ForecastHours: forecastHours,
+			})
+		}
+
+		// Add today's weather forecast: extreme heatwave of 31.0C at hour 12 (which is > 25.0 + 2.0 and > 28.0)
+		var todayForecastHours []types.HourlyWeather
+		for h := 0; h < 24; h++ {
+			temp := 25.0
+			if h == 12 {
+				temp = 31.0 // 6C hotter than historical max (25.0C)
+			}
+			todayForecastHours = append(todayForecastHours, types.HourlyWeather{
+				TSHourStart:  time.Date(now.Year(), now.Month(), now.Day(), h, 0, 0, 0, time.UTC),
+				TemperatureC: temp,
+			})
+		}
+		weather = append(weather, types.Weather{
+			TSDayStart:    time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC),
+			ForecastHours: todayForecastHours,
+		})
+
+		settings := types.Settings{}
+
+		// 1. Extreme Heatwave: Today is 31.0C, historical max is 25.0C.
+		// This is > 2.0C threshold and > 28.0C min temp gate.
+		// Expected boost: 1.0 * 1.2 = 1.2.
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, weather, settings)
+		if assert.Contains(t, model, 12) {
+			assert.InDelta(t, 1.2, model[12].AvgHomeLoadKWH, 0.001)
+		}
+
+		// 2. Not Hot Enough for Gate: Today is 27.0C at hour 12 (historically max is 24.0C).
+		// Difference is 3.0C (> 2.0C threshold), but 27.0C is below 28.0C min temp gate.
+		// Expected boost: None (1.0).
+		var mildWeather []types.Weather
+		mildWeather = append(mildWeather, weather[:3]...)
+		var todayMildForecast []types.HourlyWeather
+		for h := 0; h < 24; h++ {
+			temp := 24.0
+			if h == 12 {
+				temp = 27.0
+			}
+			todayMildForecast = append(todayMildForecast, types.HourlyWeather{
+				TSHourStart:  time.Date(now.Year(), now.Month(), now.Day(), h, 0, 0, 0, time.UTC),
+				TemperatureC: temp,
+			})
+		}
+		mildWeather = append(mildWeather, types.Weather{
+			TSDayStart:    time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC),
+			ForecastHours: todayMildForecast,
+		})
+
+		modelMild, _ := c.BuildHourlyEnergyModel(ctx, now, history, mildWeather, settings)
+		if assert.Contains(t, modelMild, 12) {
+			assert.InDelta(t, 1.0, modelMild[12].AvgHomeLoadKWH, 0.001)
+		}
 	})
 }

@@ -68,10 +68,11 @@ func TestMigrateSettings(t *testing.T) {
 
 		// ESS configured but Utility is not
 		oldNoUtility := Settings{
-			ESS:                       "franklin",
-			MinStartChargeMinutes:     5,
-			PeakSurvivalBufferMinutes: 30,
-			IgnoreHourUsageFloorKWH:   0.5,
+			ESS:                        "franklin",
+			MinStartChargeMinutes:      5,
+			PeakSurvivalBufferMinutes:  30,
+			IgnoreHourUsageFloorKWH:    0.5,
+			HomeLoadPredictionStrategy: "default",
 		}
 		s, changed, err = MigrateSettings(oldNoUtility, 8)
 		require.NoError(t, err)
@@ -80,10 +81,11 @@ func TestMigrateSettings(t *testing.T) {
 
 		// Utility configured but ESS is not
 		oldNoESS := Settings{
-			UtilityProvider:           "comed",
-			MinStartChargeMinutes:     5,
-			PeakSurvivalBufferMinutes: 30,
-			IgnoreHourUsageFloorKWH:   0.5,
+			UtilityProvider:            "comed",
+			MinStartChargeMinutes:      5,
+			PeakSurvivalBufferMinutes:  30,
+			IgnoreHourUsageFloorKWH:    0.5,
+			HomeLoadPredictionStrategy: "default",
 		}
 		s, changed, err = MigrateSettings(oldNoESS, 8)
 		require.NoError(t, err)
@@ -92,12 +94,13 @@ func TestMigrateSettings(t *testing.T) {
 
 		// UpdateGroup already set
 		oldSet := Settings{
-			ESS:                       "franklin",
-			UtilityProvider:           "comed",
-			UpdateGroup:               5,
-			MinStartChargeMinutes:     5,
-			PeakSurvivalBufferMinutes: 30,
-			IgnoreHourUsageFloorKWH:   0.5,
+			ESS:                        "franklin",
+			UtilityProvider:            "comed",
+			UpdateGroup:                5,
+			MinStartChargeMinutes:      5,
+			PeakSurvivalBufferMinutes:  30,
+			IgnoreHourUsageFloorKWH:    0.5,
+			HomeLoadPredictionStrategy: "default",
 		}
 		s, changed, err = MigrateSettings(oldSet, 8)
 		require.NoError(t, err)
@@ -117,14 +120,25 @@ func TestMigrateSettings(t *testing.T) {
 		assert.Equal(t, 30, s.PeakSurvivalBufferMinutes)
 	})
 
+	t.Run("v11 to v12: default home load strategy", func(t *testing.T) {
+		old := Settings{
+			IgnoreHourUsageFloorKWH: 0.5,
+		}
+		s, changed, err := MigrateSettings(old, 11)
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.Equal(t, "default", s.HomeLoadPredictionStrategy)
+	})
+
 	t.Run("no change: current version", func(t *testing.T) {
 		current := Settings{
-			UtilityProvider:           "comed",
-			UtilityRate:               "comed_besh",
-			Release:                   "production",
-			UpdateGroup:               7,
-			MinStartChargeMinutes:     5,
-			PeakSurvivalBufferMinutes: 30,
+			UtilityProvider:            "comed",
+			UtilityRate:                "comed_besh",
+			Release:                    "production",
+			UpdateGroup:                7,
+			MinStartChargeMinutes:      5,
+			PeakSurvivalBufferMinutes:  30,
+			HomeLoadPredictionStrategy: "default",
 		}
 		s, changed, err := MigrateSettings(current, CurrentSettingsVersion)
 		require.NoError(t, err)

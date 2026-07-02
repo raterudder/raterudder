@@ -273,6 +273,7 @@ export interface Settings {
     acBaseTemperatureC: number;
     acUsageIncreasePercentPerDegree: number;
     acUsageMaxIncreasePercent: number;
+    homeLoadPredictionStrategy?: string;
 }
 
 export interface FranklinCredentials {

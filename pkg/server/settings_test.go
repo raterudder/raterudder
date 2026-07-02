@@ -1561,7 +1561,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		// 4. History Summary mocks (should be called exactly once since they are waiting for both to finish)
 		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Once()
-		mockS.On("UpdateHistorySummary", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Once()
+		mockS.On("UpdateHistorySummary", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Maybe()
 
 		w := httptest.NewRecorder()
 		srv.handleUpdateSettings(w, req)

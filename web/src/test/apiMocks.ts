@@ -46,7 +46,8 @@ export const defaultSettings = {
         franklin: true
     },
     minStartChargeMinutes: 5,
-    peakSurvivalBufferMinutes: 30
+    peakSurvivalBufferMinutes: 30,
+    homeLoadPredictionStrategy: 'default'
 };
 
 export const defaultUtilities = [

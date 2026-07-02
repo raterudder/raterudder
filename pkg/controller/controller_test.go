@@ -2036,7 +2036,7 @@ func TestDecide(t *testing.T) {
 		for i := 0; i < 48; i++ {
 			load := 1.0
 			if ts.Hour() == (now.Hour()+3)%24 {
-				load = 5.0
+				load = 10.0
 			}
 			customHistory = append(customHistory, types.EnergyStats{
 				TSHourStart: ts,

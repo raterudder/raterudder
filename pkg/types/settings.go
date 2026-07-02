@@ -8,7 +8,7 @@ import (
 
 // CurrentSettingsVersion is the current version of the settings struct.
 // Increment this value only if you need to set a default value other than the Go default for that value.
-const CurrentSettingsVersion = 11
+const CurrentSettingsVersion = 12
 
 // Settings represents the configuration stored in the database.
 // These are dynamic settings that can be changed without redeploying.
@@ -98,6 +98,8 @@ type Settings struct {
 	ACBaseTemperatureC              float64 `json:"acBaseTemperatureC"`
 	ACUsageIncreasePercentPerDegree float64 `json:"acUsageIncreasePercentPerDegree"`
 	ACUsageMaxIncreasePercent       float64 `json:"acUsageMaxIncreasePercent"`
+	// Home load prediction strategy ("default", "conservative")
+	HomeLoadPredictionStrategy string `json:"homeLoadPredictionStrategy"`
 }
 
 // ESSAuthStatus represents the status of ESS authentication for the site.
@@ -258,6 +260,12 @@ func MigrateSettings(s Settings, currentVersion int) (Settings, bool, error) {
 			// version 11: add IgnoreHourUsageFloorKWH default
 			if s.IgnoreHourUsageFloorKWH == 0 {
 				s.IgnoreHourUsageFloorKWH = 0.5
+				migrated = true
+			}
+		case 12:
+			// version 12: add default HomeLoadPredictionStrategy
+			if s.HomeLoadPredictionStrategy == "" {
+				s.HomeLoadPredictionStrategy = "default"
 				migrated = true
 			}
 		default:

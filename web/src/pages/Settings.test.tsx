@@ -238,6 +238,43 @@ describe('App & Settings', () => {
         });
     });
 
+    it('can update home load prediction strategy', async () => {
+        const user = userEvent.setup();
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            homeLoadPredictionStrategy: 'default'
+        });
+        await navigateToSettings();
+
+        // Expand advanced tuning settings
+        const advancedBtn = await screen.findByText('Show Advanced Settings');
+        fireEvent.click(advancedBtn);
+
+        // Find strategy select trigger by label
+        const strategySelect = await screen.findByRole('combobox', { name: /Home Load Prediction Strategy/i });
+        
+        // Caution message should not be visible initially
+        expect(screen.queryByTestId('conservative-strategy-warning')).not.toBeInTheDocument();
+
+        // Open select and choose Conservative
+        await user.click(strategySelect);
+        const conservativeOption = await screen.findByRole('option', { name: 'Conservative (High Protection)' });
+        await user.click(conservativeOption);
+
+        // Caution message should show now
+        expect(screen.getByTestId('conservative-strategy-warning')).toBeInTheDocument();
+
+        // Save
+        (updateSettings as any).mockResolvedValue(undefined);
+        fireEvent.click(screen.getByText('Save Settings'));
+
+        await waitFor(() => {
+            expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+                homeLoadPredictionStrategy: 'conservative'
+            }), expect.any(String), undefined);
+        });
+    });
+
     it('hides solar trend ratio max and solar bell curve multiplier when zip code is entered', async () => {
         (fetchSettings as any).mockResolvedValue({
             ...defaultSettings,
