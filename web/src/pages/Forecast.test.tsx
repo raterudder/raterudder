@@ -119,6 +119,28 @@ describe('Forecast Page', () => {
         });
     });
 
+    it('shows page subtitle with updated timestamp from backend if present', async () => {
+        const updatedTimeStr = '2026-02-11T12:00:00Z';
+        (fetchModeling as any).mockResolvedValue({
+            simulation: makeSimHours(),
+            energyHistory: [],
+            priceHistory: [],
+            weather: [],
+            updated: updatedTimeStr,
+        });
+
+        renderForecast();
+
+        await waitFor(() => {
+            const expectedTime = new Date(updatedTimeStr).toLocaleTimeString([], {
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true,
+            });
+            expect(screen.getByText(new RegExp("starting from.*" + expectedTime))).toBeInTheDocument();
+        });
+    });
+
     it('shows error state when fetch fails', async () => {
         (fetchModeling as any).mockRejectedValue(new Error('Network error'));
 

@@ -452,7 +452,7 @@ func (f *Franklin) getRuntimeDataWithCache(ctx context.Context, refresh bool) (f
 	f.runtimeDataCache = rd
 	// we are really only trying to keep this around for the update call which
 	// calls SetMode and GetStatus
-	f.runtimeDataExpiry = time.Now().Add(5 * time.Second)
+	f.runtimeDataExpiry = time.Now().Add(time.Minute)
 	return rd, nil
 }
 
@@ -1471,9 +1471,9 @@ func (f *Franklin) aggregatePointsIntoHours(points []franklinEnergyPoint, loc *t
 		// collect all relevant stats for the time
 		// and convert them all to KWH from the rate of kwh in that duration
 		hours := duration.Hours()
-		solarToHome := p.SolarToHomeKWHRate * hours
-		solarToGrid := p.SolarToGridKWHRate * hours
-		solarToBat := p.SolarToBatteryKWHRate * hours
+		solarToHome := max(0, p.SolarToHomeKWHRate) * hours
+		solarToGrid := max(0, p.SolarToGridKWHRate) * hours
+		solarToBat := max(0, p.SolarToBatteryKWHRate) * hours
 		gridToBat := p.GridToBatteryKWHRate * hours
 		gridToHome := p.GridToHomeKWHRate * hours
 		batToGrid := p.BatteryToGridKWHRate * hours

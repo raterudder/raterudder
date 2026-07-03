@@ -51,6 +51,7 @@ type ForecastRes struct {
 	EnergyHistory   []EnergyHistoryRes   `json:"energyHistory"`
 	PriceHistory    []PriceHistoryRes    `json:"priceHistory"`
 	Solar1hForecast []WeatherRes         `json:"solar1hForecast,omitempty"`
+	Updated         time.Time            `json:"updated"`
 }
 
 func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
@@ -83,12 +84,35 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Fetch current ESS status
-	// TODO: skip fetching this and use the latest action instead
-	status, err := essSystem.GetStatus(ctx)
+	var status types.SystemStatus
+	var updatedTime time.Time
+	useRealtime := true
+
+	latestAction, err := s.storage.GetLatestAction(ctx, siteID)
 	if err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to get ess status", slog.Any("error", err))
-		writeJSONError(w, "failed to get ess status", http.StatusInternalServerError)
-		return
+		log.Ctx(ctx).ErrorContext(ctx, "failed to get latest action", slog.Any("error", err))
+	} else if latestAction != nil {
+		since := s.now().Sub(latestAction.Timestamp)
+		if since >= 0 && since <= time.Hour {
+			status = latestAction.SystemStatus
+			updatedTime = latestAction.Timestamp
+			useRealtime = false
+		}
+	}
+
+	if useRealtime {
+		// don't bother warning if we didn't find an action
+		if latestAction != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to get action in the last hour, fetching realtime status", slog.Any("latestAction", latestAction))
+		}
+		realtimeStatus, err := essSystem.GetStatus(ctx)
+		if err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to get ess status", slog.Any("error", err))
+			writeJSONError(w, "failed to get ess status", http.StatusInternalServerError)
+			return
+		}
+		status = realtimeStatus
+		updatedTime = status.Timestamp
 	}
 
 	// get utility
@@ -170,7 +194,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		energyRes = append(energyRes, EnergyHistoryRes{
 			TSHourStart:   h.TSHourStart,
 			AvgBatterySOC: avgSoc,
-			SolarKWH:      h.SolarKWH,
+			SolarKWH:      max(0, h.SolarKWH),
 			HomeLoadKWH:   h.HomeKWH,
 		})
 	}
@@ -231,6 +255,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		EnergyHistory:   energyRes,
 		PriceHistory:    priceRes,
 		Solar1hForecast: solar1hRes,
+		Updated:         updatedTime,
 	}
 
 	w.Header().Set("Cache-Control", "private, max-age=300")

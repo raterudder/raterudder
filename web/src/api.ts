@@ -600,6 +600,7 @@ export interface ForecastResponse {
     priceHistory: PriceHistoryRes[];
     weather: WeatherRes[];
     solar1hForecast?: WeatherRes[];
+    updated?: string;
 }
 export interface EnergyStats {
     tsHourStart: string;

@@ -415,11 +415,18 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
             </div>
             <p className="forecast-subtitle">
                 Predicted energy state <strong>assuming no action is taken</strong> starting from{' '}
-                {new Date(data[0].ts).toLocaleTimeString([], {
-                    hour: 'numeric',
-                    minute: '2-digit',
-                    hour12: true,
-                })}
+                {(() => {
+                    const date = rawModelingData?.updated
+                        ? new Date(rawModelingData.updated)
+                        : (rawModelingData?.simulation?.[0] ? new Date(rawModelingData.simulation[0].ts) : null);
+                    return date && !isNaN(date.getTime())
+                        ? date.toLocaleTimeString([], {
+                              hour: 'numeric',
+                              minute: '2-digit',
+                              hour12: true,
+                          })
+                        : '';
+                })()}
             </p>
             <div className="modeling-charts">
                 {charts.map((config) => (
