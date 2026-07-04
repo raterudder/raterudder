@@ -916,7 +916,8 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			{TSHourStart: h3, HomeKWH: 0.0, SolarKWH: 0.0}, // Should be filtered (<= 0.0)
 		}
 
-		model, _ := c.BuildHourlyEnergyModel(ctx, time.Now().UTC(), history, nil, types.Settings{IgnoreHourUsageOverMultiple: 0.0})
+		testNow := time.Date(2026, 7, 3, 2, 0, 0, 0, time.UTC)
+		model, _ := c.BuildHourlyEnergyModel(ctx, testNow, history, nil, types.Settings{IgnoreHourUsageOverMultiple: 0.0})
 		assert.InDelta(t, 1.9743589743589745, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
 		assert.InDelta(t, 0.0, model[h1.Hour()].AvgSolarKWH, 0.001)
 	})
@@ -927,7 +928,8 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			{TSHourStart: h1, HomeKWH: 0.0, SolarKWH: 0.0},
 		}
 
-		model, _ := c.BuildHourlyEnergyModel(ctx, time.Now().UTC(), history, nil, types.Settings{IgnoreHourUsageOverMultiple: 0.0})
+		testNow := time.Date(2026, 7, 3, 2, 0, 0, 0, time.UTC)
+		model, _ := c.BuildHourlyEnergyModel(ctx, testNow, history, nil, types.Settings{IgnoreHourUsageOverMultiple: 0.0})
 		assert.InDelta(t, 0.1, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
 		assert.InDelta(t, 0.0, model[h1.Hour()].AvgSolarKWH, 0.001)
 	})
@@ -943,7 +945,8 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			{TSHourStart: h2, HomeKWH: 1.2, SolarKWH: 0.0},
 			{TSHourStart: h3, HomeKWH: 10.0, SolarKWH: 0.0}, // Outlier
 		}
-		model, _ := c.BuildHourlyEnergyModel(ctx, time.Now().UTC(), history, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
+		testNow := time.Date(2026, 7, 3, 2, 0, 0, 0, time.UTC)
+		model, _ := c.BuildHourlyEnergyModel(ctx, testNow, history, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
 		assert.InDelta(t, 2.5512750949538803, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
 
 		// Case 2: Multiple outliers (not removed)
@@ -952,7 +955,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			{TSHourStart: h2, HomeKWH: 10.0, SolarKWH: 0.0}, // Outlier 1
 			{TSHourStart: h3, HomeKWH: 12.0, SolarKWH: 0.0}, // Outlier 2
 		}
-		modelMulti, _ := c.BuildHourlyEnergyModel(ctx, time.Now().UTC(), historyMulti, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
+		modelMulti, _ := c.BuildHourlyEnergyModel(ctx, testNow, historyMulti, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
 		assert.InDelta(t, 10.307107976125883, modelMulti[h1.Hour()].AvgHomeLoadKWH, 0.001)
 
 		// Case 3: Not enough points (min 3)
@@ -960,7 +963,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			{TSHourStart: h1, HomeKWH: 1.0, SolarKWH: 0.0},
 			{TSHourStart: h2, HomeKWH: 10.0, SolarKWH: 0.0},
 		}
-		modelFew, _ := c.BuildHourlyEnergyModel(ctx, time.Now().UTC(), historyFew, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
+		modelFew, _ := c.BuildHourlyEnergyModel(ctx, testNow, historyFew, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
 		assert.InDelta(t, 5.384615384615385, modelFew[h1.Hour()].AvgHomeLoadKWH, 0.001)
 	})
 
