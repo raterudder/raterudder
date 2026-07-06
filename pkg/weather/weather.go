@@ -23,6 +23,7 @@ type Service interface {
 func Configured() Service {
 	geocodingBaseURL := lflag.String("open-meteo-geocoding-url", "https://geocoding-api.open-meteo.com/v1/search", "Open-Meteo geocoding API URL")
 	forecastBaseURL := lflag.String("open-meteo-forecast-url", "https://api.open-meteo.com/v1/forecast", "Open-Meteo forecast API URL")
+	openMeteoAPIKey := lflag.String("open-meteo-api-key", "", "Open-Meteo API key")
 	googleGeocodingV4BaseURL := lflag.String("google-geocoding-url", "https://geocode.googleapis.com/v4/geocode/address", "Google Geocoding v4 API URL")
 	googleTimezoneURL := lflag.String("google-timezone-url", "https://maps.googleapis.com/maps/api/timezone/json", "Google Timezone API URL")
 	googleMapsAPIKey := lflag.String("google-maps-api-key", "", "Google API key for Geocoding and Time Zone APIs")
@@ -43,7 +44,6 @@ func Configured() Service {
 			os.Exit(1)
 		}
 		om.GeocodingURL = geoOMURL
-
 		forecastOMURL, err := url.Parse(*forecastBaseURL)
 		if err != nil {
 			log.Ctx(context.Background()).Error("failed to parse open-meteo-forecast-url",
@@ -53,6 +53,7 @@ func Configured() Service {
 			os.Exit(1)
 		}
 		om.ForecastURL = forecastOMURL
+		om.APIKey = *openMeteoAPIKey
 
 		if *googleMapsAPIKey != "" {
 			geoURL, err := url.Parse(*googleGeocodingV4BaseURL)

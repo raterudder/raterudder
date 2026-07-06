@@ -19,6 +19,7 @@ type OpenMeteo struct {
 	GeocodingURL *url.URL
 	ForecastURL  *url.URL
 	HTTPClient   *http.Client
+	APIKey       string
 }
 
 type geocodingResponse struct {
@@ -43,6 +44,9 @@ func (s *OpenMeteo) Location(ctx context.Context, countryCode, postalCode string
 	u := *s.GeocodingURL
 
 	q := u.Query()
+	if s.APIKey != "" {
+		q.Set("apikey", s.APIKey)
+	}
 	q.Set("name", postalCode)
 	q.Set("count", "10")
 	q.Set("format", "json")
@@ -145,6 +149,9 @@ func (s *OpenMeteo) Forecast(
 	u := *s.ForecastURL
 
 	q := u.Query()
+	if s.APIKey != "" {
+		q.Set("apikey", s.APIKey)
+	}
 	q.Set("latitude", fmt.Sprintf("%f", loc.Latitude))
 	q.Set("longitude", fmt.Sprintf("%f", loc.Longitude))
 	hourly := []string{"shortwave_radiation", "diffuse_radiation", "direct_normal_irradiance", "snow_depth", "snowfall", "cloud_cover", "temperature_2m"}

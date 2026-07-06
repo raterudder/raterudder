@@ -257,6 +257,79 @@ func TestOpenMeteoService(t *testing.T) {
 		})
 	})
 
+	t.Run("APIKey", func(t *testing.T) {
+		apiKey := "test-api-key"
+
+		t.Run("Location with APIKey", func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, apiKey, r.URL.Query().Get("apikey"))
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(geocodingResponse{
+					Results: []struct {
+						Name        string  `json:"name"`
+						Latitude    float64 `json:"latitude"`
+						Longitude   float64 `json:"longitude"`
+						CountryCode string  `json:"country_code"`
+						Timezone    string  `json:"timezone"`
+						Elevation   float64 `json:"elevation"`
+						Population  int     `json:"population"`
+					}{
+						{
+							Name:        "Beverly Hills",
+							CountryCode: "US",
+							Latitude:    34.0736,
+							Longitude:   -118.4004,
+							Timezone:    "America/Los_Angeles",
+							Elevation:   79,
+							Population:  34000,
+						},
+					},
+				})
+			}))
+			defer ts.Close()
+
+			geoURL, err := url.Parse(ts.URL + "/v1/search")
+			require.NoError(t, err)
+
+			s := &OpenMeteo{
+				GeocodingURL: geoURL,
+				HTTPClient:   ts.Client(),
+				APIKey:       apiKey,
+			}
+
+			_, err = s.Location(context.Background(), "US", "90210")
+			require.NoError(t, err)
+		})
+
+		t.Run("Forecast with APIKey", func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, apiKey, r.URL.Query().Get("apikey"))
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(weatherForecastResponse{})
+			}))
+			defer ts.Close()
+
+			forecastURL, err := url.Parse(ts.URL + "/v1/forecast")
+			require.NoError(t, err)
+
+			s := &OpenMeteo{
+				ForecastURL: forecastURL,
+				HTTPClient:  ts.Client(),
+				APIKey:      apiKey,
+			}
+
+			timezone := "America/Los_Angeles"
+			loc, err := time.LoadLocation(timezone)
+			require.NoError(t, err)
+			targetDay := time.Now().In(loc)
+			startDay := targetDay.AddDate(0, 0, -1)
+			endDay := targetDay.AddDate(0, 0, 1)
+
+			_, err = s.Forecast(context.Background(), types.SiteLocation{Latitude: 34.0, Longitude: -118.0, TimeZone: timezone}, startDay, endDay)
+			require.NoError(t, err)
+		})
+	})
+
 	t.Run("Integration_RealAPI_GetLocationData", func(t *testing.T) {
 		if testing.Short() {
 			t.Skip("Skipping integration test in short mode")
