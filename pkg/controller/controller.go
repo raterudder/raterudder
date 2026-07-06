@@ -930,7 +930,9 @@ func (c *Controller) evaluateDeficit(
 	standbyThreshold := refillRateDollarsPerKWH - priceEpsilonForEquality
 
 	if gridChargeNowCost <= standbyThreshold {
-		standbyBenefit = currentEnergyKWH * (averageDeficitRateDollarsPerKWH - gridChargeNowCost)
+		minKWH := capacityKWH * (settings.MinBatterySOC / 100.0)
+		usableEnergyKWH := max(0.0, currentEnergyKWH-minKWH)
+		standbyBenefit = usableEnergyKWH * (averageDeficitRateDollarsPerKWH - gridChargeNowCost)
 
 		if !plannedChargeTime.IsZero() {
 			standbyReason = fmt.Sprintf("Projected Deficit at %s. Waiting to charge.", hitDeficitAt.Format(time.Kitchen))

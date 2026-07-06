@@ -3083,8 +3083,8 @@ func TestEvaluateDeficit(t *testing.T) {
 		require.NotNil(t, eval)
 		require.NotNil(t, eval.Decision)
 		assert.Equal(t, types.BatteryModeStandby, eval.Decision.BatteryMode)
-		// Assert calculated BenefitDollars is exactly 1.05
-		assert.InDelta(t, 1.05, eval.BenefitDollars, 0.001)
+		// Assert calculated BenefitDollars is exactly 0.35 (based on 1.0 kWh usable energy above 2.0 kWh reserve)
+		assert.InDelta(t, 0.35, eval.BenefitDollars, 0.001)
 	})
 
 	t.Run("Charge Survive Peak - Charge Now", func(t *testing.T) {
@@ -3778,6 +3778,40 @@ func TestEvaluateDeficit(t *testing.T) {
 		assert.Nil(t, eval.Decision)
 		assert.NotNil(t, eval.Plan)
 		assert.InDelta(t, 0.05, eval.Plan.ChargeCost, 0.0001)
+	})
+
+	t.Run("No deficitSaveForPeak when battery is at minimum reserve SOC", func(t *testing.T) {
+		status := baseStatus
+		status.BatterySOC = 20.0 // Exactly at min reserve (MinBatterySOC = 20.0)
+		status.BatteryCapacityKWH = 10.0
+		status.MaxBatteryChargeKW = 5.0
+		status.HomeKW = 1.0
+
+		// Current price is $0.05
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05}
+		// Future price is expensive
+		futurePrices := []types.Price{
+			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.50},
+		}
+
+		summary := simulationSummary{
+			HitDeficitAt:            now.Add(time.Hour),
+			HitBelowDeficitAt:       now.Add(time.Hour),
+			MinFutureGridChargeCost: 0.05,
+		}
+
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.05, Price: currentPrice},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.50, TotalBatteryDeficitKWH: 2.0, Price: futurePrices[0], BatteryReserveKWH: 2.0},
+		}
+
+		eval := c.evaluateDeficit(ctx, now, status, currentPrice, baseSettings, simData, summary)
+		// Because the battery is at reserve SOC, usableEnergyKWH is 0, so standbyBenefit is 0.
+		// evaluateDeficit should NOT return a Standby decision (deficitSaveForPeak), but instead
+		// return nil (or a plan).
+		if eval != nil && eval.Decision != nil {
+			assert.NotEqual(t, types.BatteryModeStandby, eval.Decision.BatteryMode)
+		}
 	})
 }
 
