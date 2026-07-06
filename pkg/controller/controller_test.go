@@ -3739,6 +3739,46 @@ func TestEvaluateDeficit(t *testing.T) {
 		assert.Nil(t, eval.Decision)
 		assert.NotNil(t, eval.Plan)
 	})
+
+	t.Run("Future cheap hours counted past deficit hour to allow delay", func(t *testing.T) {
+		status := baseStatus
+		status.BatterySOC = 20.0
+		status.BatteryCapacityKWH = 10.0
+		status.MaxBatteryChargeKW = 5.0
+		status.HomeKW = 1.0
+
+		// Current price is cheap ($0.05)
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05}
+		futurePrices := []types.Price{
+			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.05},
+			{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(3 * time.Hour), DollarsPerKWH: 0.05},
+			{TSStart: now.Add(3 * time.Hour), TSEnd: now.Add(4 * time.Hour), DollarsPerKWH: 0.15}, // expensive transition
+		}
+
+		// Deficit is at Hour 1.
+		// If we stop counting cheap hours at Hour 1, we have 0 future cheap hours.
+		// Since we need to cover 2.0 kWh deficit, and chargeKW is 5.0, we would need at least 1 future cheap hour.
+		// But since we keep counting cheap hours past the deficit (until the expensive transition), we find 2 cheap hours (Hour 1 and Hour 2).
+		// 2 * 5.0 = 10.0 kWh >= 2.0 kWh deficit, so we can safely delay.
+		summary := simulationSummary{
+			HitDeficitAt:            now.Add(time.Hour),
+			HitBelowDeficitAt:       now.Add(time.Hour),
+			MinFutureGridChargeCost: 0.05,
+		}
+
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.05, Price: currentPrice},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.05, TotalBatteryDeficitKWH: 2.0, Price: futurePrices[0], BatteryReserveKWH: 2.0},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.05, TotalBatteryDeficitKWH: 2.0, Price: futurePrices[1], BatteryReserveKWH: 2.0},
+			{TS: now.Add(3 * time.Hour), GridChargeDollarsPerKWH: 0.15, TotalBatteryDeficitKWH: 2.0, Price: futurePrices[2], BatteryReserveKWH: 2.0},
+		}
+
+		eval := c.evaluateDeficit(ctx, now, status, currentPrice, baseSettings, simData, summary)
+		require.NotNil(t, eval)
+		assert.Nil(t, eval.Decision)
+		assert.NotNil(t, eval.Plan)
+		assert.InDelta(t, 0.05, eval.Plan.ChargeCost, 0.0001)
+	})
 }
 
 func TestEvaluateArbitrage(t *testing.T) {
@@ -4720,7 +4760,7 @@ func TestEvaluateArbitrage(t *testing.T) {
 			assert.InDelta(t, 0.10, evalArb.Plan.ChargeCost, 0.0001)
 		}
 
-		// When ALREADY charging, we should NOT delay (hysteresis should keep it charging)
+		// When ALREADY charging, hysteresis keeps it charging (we do NOT prioritize standby over already charging)
 		statusCharging := status
 		statusCharging.BatteryKW = -5.0
 		statusCharging.GridKW = 1.0

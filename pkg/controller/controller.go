@@ -802,22 +802,21 @@ func (c *Controller) evaluateDeficit(
 				if simInFuture && canChargeNowForSlot && (isCheapNow || isAlreadyChargingSamePrice) {
 					// Count how many future cheap hours are available to decide if we can safely delay.
 					futureCheapHours := 0
-					for j := 1; j < i; j++ {
+					for j := 1; j < len(simData); j++ {
 						candidateTS := simData[j].TS
-						// Ensure we don't plan to charge after we've already hit the first deficit,
-						// because we cannot delay charging past the deficit hour.
-						// However, if the first deficit is happening right now, we do not skip future hours.
-						isFutureDeficit := !hitDeficitAt.IsZero() && hitDeficitAt.After(now.Add(time.Hour))
-						if isFutureDeficit && candidateTS.After(hitDeficitAt) {
-							continue
-						}
 						if !bufferedHitCapacityAt.IsZero() && slot.TS.After(bufferedHitCapacityAt) && !candidateTS.After(bufferedHitCapacityAt) {
 							continue
 						}
-						// A future slot is cheap enough to delay to if its price is at or below the cheapest future cost threshold.
-						if simData[j].GridChargeDollarsPerKWH <= cheapestFutureCost+minDeficitDiff {
-							futureCheapHours++
+						isExpensive := simData[j].GridChargeDollarsPerKWH > cheapestFutureCost+minDeficitDiff
+						if isExpensive {
+							// We can skip expensive hours before the deficit (the simulation already proved the battery survives them).
+							// But we must stop counting if we hit an expensive hour after the deficit.
+							if !hitDeficitAt.IsZero() && candidateTS.After(hitDeficitAt) {
+								break
+							}
+							continue
 						}
+						futureCheapHours++
 					}
 
 					// We delay charging if we are not already charging at a tied cheapest price, AND:
@@ -1447,6 +1446,8 @@ func (c *Controller) evaluateExportArbitrage(
 		}
 	}
 
+	enoughFutureHours := float64(futureCheapHours)*chargeKW >= requiredChargeEnergy
+
 	// isSignificantlyCheaperFuture determines if there is a future charging window before the target time
 	// that offers a price reduction at least as large as minDeficitDiff compared to charging right now.
 	isSignificantlyCheaperFuture := hasFutureSlot && gridChargeNowCost-cheapestFutureCost >= minDeficitDiff
@@ -1475,7 +1476,7 @@ func (c *Controller) evaluateExportArbitrage(
 		delayAllowed &&
 		futureCheapHours > 0
 
-	shouldDelayOverCharge := canDelay && float64(futureCheapHours)*chargeKW >= requiredChargeEnergy
+	shouldDelayOverCharge := canDelay && enoughFutureHours
 
 	// If no charge is needed, we should neither delay nor charge.
 	if requiredChargeEnergy <= 0 {
@@ -1563,7 +1564,6 @@ func (c *Controller) evaluateExportArbitrage(
 
 	isSignificantArbitrageNow := effectiveExportValue-gridChargeNowCost >= minArbitrageDiff
 	isCheapestWindowNow := gridChargeNowCost <= cheapestCost+priceEpsilonForEquality
-	enoughFutureHours := float64(futureCheapHours)*chargeKW >= requiredChargeEnergy
 	// canChargeNow determines if we should grid-charge the battery right now.
 	// We charge now if:
 	// 1. Exporting at the target peak is profitable enough after subtracting the current charge cost (including arbitrage difference).
