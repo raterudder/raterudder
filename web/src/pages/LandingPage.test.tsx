@@ -27,8 +27,12 @@ describe('LandingPage Component', () => {
         // Check for new hero text
         expect(screen.getByText((content) => content.startsWith('RateRudder learns your home'))).toBeInTheDocument();
 
+        // Check for new simulator and chart sections
+        expect(screen.getByText('Decision Factors')).toBeInTheDocument();
+        expect(screen.getByText('Daily Optimization')).toBeInTheDocument();
+
         // Check for FAQ section
-        expect(screen.getByText('Frequently Asked Questions')).toBeInTheDocument();
+        expect(screen.getByText('Common Questions')).toBeInTheDocument();
     });
 
     it('does not have a login CTA button', () => {

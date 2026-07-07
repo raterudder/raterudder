@@ -182,7 +182,7 @@
 }
 
 /* Section Headers */
-.section-header {
+.settings-container .section-header {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -192,7 +192,7 @@
   padding-bottom: 0.75rem;
 }
 
-.section-header h3 {
+.settings-container .section-header h3 {
   margin: 0;
   border: none;
   padding: 0;
