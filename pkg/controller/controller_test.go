@@ -3813,6 +3813,72 @@ func TestEvaluateDeficit(t *testing.T) {
 			assert.NotEqual(t, types.BatteryModeStandby, eval.Decision.BatteryMode)
 		}
 	})
+
+	t.Run("Future cheap hours past deficit hour are not skipped for future deficits", func(t *testing.T) {
+		status := baseStatus
+		status.BatterySOC = 70.0
+		status.BatteryCapacityKWH = 15.0
+		status.MaxBatteryChargeKW = 5.0
+		status.HomeKW = 1.0
+
+		// Current price is $0.105
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.105}
+
+		// Future prices:
+		// Slot 1 (8:00 PM): $0.105
+		// Slot 2 (9:00 PM): $0.105
+		// Slot 3 (10:00 PM): $0.055 (cheap night starts)
+		// ...
+		// Slot 18 (tomorrow 1:00 PM): $0.314 (tomorrow's peak)
+		futurePrices := make([]types.Price, 24)
+		for j := 1; j <= 24; j++ {
+			price := 0.055
+			if j == 1 || j == 2 {
+				price = 0.105
+			} else if j == 18 {
+				price = 0.314
+			}
+			futurePrices[j-1] = types.Price{
+				TSStart:       now.Add(time.Duration(j) * time.Hour),
+				TSEnd:         now.Add(time.Duration(j+1) * time.Hour),
+				DollarsPerKWH: price,
+			}
+		}
+
+		summary := simulationSummary{
+			HitDeficitAt:            now.Add(time.Hour + 25*time.Minute), // Deficit at 8:25 PM
+			HitBelowDeficitAt:       now.Add(time.Hour + 25*time.Minute),
+			MinFutureGridChargeCost: 0.055,
+		}
+
+		simData := make([]SimHour, 25)
+		simData[0] = SimHour{TS: now, GridChargeDollarsPerKWH: 0.105, Price: currentPrice}
+		for j := 1; j <= 24; j++ {
+			deficit := 0.0
+			var hitDeficit time.Time
+			if j == 18 {
+				deficit = 5.0
+				hitDeficit = now.Add(time.Duration(j) * time.Hour)
+			} else if j == 1 || j == 2 {
+				hitDeficit = now.Add(time.Hour + 25*time.Minute)
+			}
+			simData[j] = SimHour{
+				TS:                      now.Add(time.Duration(j) * time.Hour),
+				GridChargeDollarsPerKWH: futurePrices[j-1].DollarsPerKWH,
+				Price:                   futurePrices[j-1],
+				TotalBatteryDeficitKWH:  deficit,
+				BatteryReserveKWH:       3.0,
+				HitDeficitAt:            hitDeficit,
+			}
+		}
+
+		eval := c.evaluateDeficit(ctx, now, status, currentPrice, baseSettings, simData, summary)
+		require.NotNil(t, eval)
+		require.NotNil(t, eval.Plan)
+		// The planned charge should be scheduled in the cheap $0.055 window, not the expensive $0.105 window
+		assert.InDelta(t, 0.055, eval.Plan.ChargeCost, 0.0001)
+		assert.Equal(t, now.Add(17*time.Hour), eval.Plan.ChargeTime)
+	})
 }
 
 func TestEvaluateArbitrage(t *testing.T) {
@@ -6216,7 +6282,7 @@ func TestFindCheapestPlan(t *testing.T) {
 	t.Run("Needs 0.25 hours (15 mins) -> fits inside cheapest slot", func(t *testing.T) {
 		slotsCopy := make([]simPriceSlot, len(slots))
 		copy(slotsCopy, slots)
-		cheapestTime, _, cheapestCost, marginal, allocatedHours := c.findCheapestPlan(slotsCopy, 0.25, true)
+		cheapestTime, _, cheapestCost, marginal, allocatedHours := c.findCheapestPlan(slotsCopy, 0.25, true, 0.0)
 		assert.Equal(t, now, cheapestTime)
 		assert.InDelta(t, 0.05, cheapestCost, 0.0001)
 		assert.Equal(t, 0.05, marginal.cost)
@@ -6226,7 +6292,7 @@ func TestFindCheapestPlan(t *testing.T) {
 	t.Run("Needs 1.25 hours -> spans to second cheapest slot", func(t *testing.T) {
 		slotsCopy := make([]simPriceSlot, len(slots))
 		copy(slotsCopy, slots)
-		cheapestTime, _, cheapestCost, marginal, allocatedHours := c.findCheapestPlan(slotsCopy, 1.25, true)
+		cheapestTime, _, cheapestCost, marginal, allocatedHours := c.findCheapestPlan(slotsCopy, 1.25, true, 0.0)
 		assert.Equal(t, now, cheapestTime)
 		// Expected cost: (1.0 * 0.05 + 0.25 * 0.07) / 1.25 = 0.054
 		assert.InDelta(t, 0.054, cheapestCost, 0.0001)
@@ -6242,7 +6308,7 @@ func TestFindCheapestPlan(t *testing.T) {
 			{cost: 0.15, ts: now.Add(3 * time.Hour), maxDuration: 1.0},
 			{cost: 0.07, ts: now.Add(time.Hour), maxDuration: 1.0},
 		}
-		cheapestTime, _, cheapestCost, marginal, allocatedHours := c.findCheapestPlan(slotsCopy, 1.0, true)
+		cheapestTime, _, cheapestCost, marginal, allocatedHours := c.findCheapestPlan(slotsCopy, 1.0, true, 0.0)
 		assert.Equal(t, now, cheapestTime)
 		// Expected cost: (0.1 * 0.05 + 0.9 * 0.07) / 1.0 = 0.068
 		assert.InDelta(t, 0.068, cheapestCost, 0.0001)
@@ -6261,7 +6327,7 @@ func TestFindCheapestPlan(t *testing.T) {
 		// Slots should sort chronologically ascending: now, now+1h, now+2h.
 		// For 1.5 hours needed, it selects now (1.0h) and now+1h (0.5h).
 		// Earliest slot is now.
-		cheapestTimeTrue, _, cheapestCostTrue, _, allocatedHoursTrue := c.findCheapestPlan(flatSlots, 1.5, true)
+		cheapestTimeTrue, _, cheapestCostTrue, _, allocatedHoursTrue := c.findCheapestPlan(flatSlots, 1.5, true, 0.0)
 		assert.Equal(t, now, cheapestTimeTrue)
 		assert.InDelta(t, 0.05, cheapestCostTrue, 0.0001)
 		assert.Equal(t, 1.5, allocatedHoursTrue)
@@ -6270,10 +6336,24 @@ func TestFindCheapestPlan(t *testing.T) {
 		// Slots should sort chronologically descending: now+2h, now+1h, now.
 		// For 1.5 hours needed, it selects now+2h (1.0h) and now+1h (0.5h).
 		// Earliest slot is now+1h.
-		cheapestTimeFalse, _, cheapestCostFalse, _, allocatedHoursFalse := c.findCheapestPlan(flatSlots, 1.5, false)
+		cheapestTimeFalse, _, cheapestCostFalse, _, allocatedHoursFalse := c.findCheapestPlan(flatSlots, 1.5, false, 0.0)
 		assert.Equal(t, now.Add(time.Hour), cheapestTimeFalse)
 		assert.InDelta(t, 0.05, cheapestCostFalse, 0.0001)
 		assert.Equal(t, 1.5, allocatedHoursFalse)
+	})
+
+	t.Run("Filters out slots >= maxAllowedCost", func(t *testing.T) {
+		slotsCopy := make([]simPriceSlot, len(slots))
+		copy(slotsCopy, slots)
+
+		// Exclude anything >= 0.10. Slots left: 0.05 (now) and 0.07 (now+1h).
+		// For 2.0 hours needed, it can only allocate 2.0 hours (since 0.10 and 0.15 are skipped).
+		cheapestTime, _, cheapestCost, marginal, allocatedHours := c.findCheapestPlan(slotsCopy, 3.0, true, 0.10)
+		assert.Equal(t, now, cheapestTime)
+		// Expected cost: (1.0 * 0.05 + 1.0 * 0.07) / 2.0 = 0.06
+		assert.InDelta(t, 0.06, cheapestCost, 0.0001)
+		assert.Equal(t, 0.07, marginal.cost)
+		assert.Equal(t, 2.0, allocatedHours)
 	})
 }
 

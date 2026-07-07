@@ -659,6 +659,7 @@ func (c *Controller) evaluateDeficit(
 
 	lastDeficitKWH = 0.0
 	for i, slot := range simData {
+		var cutoff time.Time
 		if !bufferedHitCapacityAt.IsZero() && !slot.TS.Before(bufferedHitCapacityAt) {
 			break
 		}
@@ -679,13 +680,24 @@ func (c *Controller) evaluateDeficit(
 			var simPrevChargeCostsFuture []simPriceSlot
 			var simPrevChargeCostsAll []simPriceSlot
 			if simInFuture {
+				blockStart := simData[i].HitDeficitAt
+				if blockStart.IsZero() {
+					blockStart = hitDeficitAt
+				}
+				// To cover the deficit at slot `i` and prevent the battery from entering or staying in
+				// this deficit block, candidate slots must be scheduled before the cutoff.
+				// - If slot `i` is the first hour of the deficit block, we must charge before the block start time.
+				// - Otherwise, we can charge at any time before slot `i` begins.
+				if !blockStart.IsZero() && !slot.TS.After(blockStart.Truncate(time.Hour)) {
+					cutoff = blockStart
+				} else {
+					cutoff = slot.TS
+				}
+
 				for j := 0; j <= i; j++ {
 					candidateTS := simData[j].TS
-					// Ensure we don't plan to charge after we've already hit the first deficit,
-					// because we cannot delay charging past the deficit hour.
-					// However, if the first deficit is happening right now, we do not skip future hours.
-					isFutureDeficit := !hitDeficitAt.IsZero() && hitDeficitAt.After(now.Add(time.Hour))
-					if isFutureDeficit && candidateTS.After(hitDeficitAt) {
+					isFutureDeficit := !cutoff.IsZero() && cutoff.After(now.Add(time.Hour))
+					if isFutureDeficit && candidateTS.After(cutoff) {
 						continue
 					}
 					// Ensure we're on the same side of capacity
@@ -760,27 +772,26 @@ func (c *Controller) evaluateDeficit(
 				canChargeNowForSlot = false
 			}
 
+			// If we are looking at a future deficit slot `i`, we try to find the cheapest plan until `i`
 			if simInFuture && len(simPrevChargeCostsAll) > 0 {
 				var cheapestPrice types.Price
 				var cheapestCost float64
 				var allocatedHours float64
-				_, cheapestPrice, cheapestCost, _, allocatedHours = c.findCheapestPlan(simPrevChargeCostsAll, chargeDurationHours, isAlreadyChargingGrid)
+				_, cheapestPrice, cheapestCost, _, allocatedHours = c.findCheapestPlan(simPrevChargeCostsAll, chargeDurationHours, isAlreadyChargingGrid, slot.GridChargeDollarsPerKWH)
 
 				var cheapestFutureTime time.Time
 				var cheapestFuturePrice types.Price
 				var cheapestFutureCost float64
 				var futureAllocatedHours float64
-				hasFutureSlot := len(simPrevChargeCostsFuture) > 0
-				if hasFutureSlot {
-					cheapestFutureTime, cheapestFuturePrice, cheapestFutureCost, _, futureAllocatedHours = c.findCheapestPlan(simPrevChargeCostsFuture, chargeDurationHours, isAlreadyChargingGrid)
-				}
+				cheapestFutureTime, cheapestFuturePrice, cheapestFutureCost, _, futureAllocatedHours = c.findCheapestPlan(simPrevChargeCostsFuture, chargeDurationHours, isAlreadyChargingGrid, slot.GridChargeDollarsPerKWH)
+				hasFutureSlot := !cheapestFutureTime.IsZero()
 
 				isSignificantlyCheaperNow := false
 				if simInFuture {
-					if !hasFutureSlot {
-						isSignificantlyCheaperNow = true
-					} else {
+					if hasFutureSlot {
 						isSignificantlyCheaperNow = cheapestFutureCost-gridChargeNowCost >= minDeficitDiff
+					} else {
+						isSignificantlyCheaperNow = slot.GridChargeDollarsPerKWH-gridChargeNowCost >= minDeficitDiff
 					}
 				}
 
@@ -799,21 +810,21 @@ func (c *Controller) evaluateDeficit(
 				// we keep charging. This prevents starting and stopping charging when multiple hours are equally cheap.
 				isAlreadyChargingSamePrice := canChargeNow && isAlreadyChargingGrid && isCheapestWindowNow && isSignificantlyCheaperThanDeficitNow
 				isCheapNow := isSignificantlyCheaperNow || (isCheapestWindowNow && isSignificantlyCheaperThanDeficitNow)
+				// If the current hour is cheap/valid compared to the future candidates, we evaluate
+				// whether we should start grid charging now or delay it.
 				if simInFuture && canChargeNowForSlot && (isCheapNow || isAlreadyChargingSamePrice) {
 					// Count how many future cheap hours are available to decide if we can safely delay.
 					futureCheapHours := 0
 					for j := 1; j < len(simData); j++ {
 						candidateTS := simData[j].TS
+						if !cutoff.IsZero() && candidateTS.After(cutoff) {
+							break
+						}
 						if !bufferedHitCapacityAt.IsZero() && slot.TS.After(bufferedHitCapacityAt) && !candidateTS.After(bufferedHitCapacityAt) {
 							continue
 						}
 						isExpensive := simData[j].GridChargeDollarsPerKWH > cheapestFutureCost+minDeficitDiff
 						if isExpensive {
-							// We can skip expensive hours before the deficit (the simulation already proved the battery survives them).
-							// But we must stop counting if we hit an expensive hour after the deficit.
-							if !hitDeficitAt.IsZero() && candidateTS.After(hitDeficitAt) {
-								break
-							}
 							continue
 						}
 						futureCheapHours++
@@ -838,7 +849,9 @@ func (c *Controller) evaluateDeficit(
 					// if we cannot delay AND the deficit is actively growing (marginalDeficit > 0), because flat
 					// deficits were already handled by the hour that originally introduced them.
 					if shouldDelay {
-						if plannedChargeTime.IsZero() || cheapestFutureCost < plannedChargeCost {
+						// To cover deficits in chronological order and prevent earlier deficits from being skipped,
+						// we prioritize the earliest required planned charge time among the evaluated future slots.
+						if plannedChargeTime.IsZero() || cheapestFutureTime.Before(plannedChargeTime) {
 							plannedChargeTime = cheapestFutureTime
 							plannedChargePrice = cheapestFuturePrice
 							plannedChargeCost = cheapestFutureCost
@@ -892,10 +905,17 @@ func (c *Controller) evaluateDeficit(
 					}
 				}
 
+				// Even if the current time is NOT a cheap/valid window to start charging (meaning we skipped
+				// the delay-evaluation block above and chose not to charge immediately), we still want to
+				// schedule/record a future planned charge for this deficit slot `i`.
+				// If a future slot is significantly cheaper than charging now (or cheaper than the peak deficit itself),
+				// we record it as the planned charge time so that the controller can standby now and wait for it.
 				if simInFuture {
 					isSignificantlyCheaper := isSignificantlyCheaperFuture ||
 						(cheapestFutureCost <= cheapestCost && isSignificantlyCheaperThanDeficit)
-					if isSignificantlyCheaper && (plannedChargeTime.IsZero() || cheapestFutureCost < plannedChargeCost) {
+					// To cover deficits in chronological order and prevent earlier deficits from being skipped,
+					// we prioritize the earliest required planned charge time among the evaluated future slots.
+					if isSignificantlyCheaper && (plannedChargeTime.IsZero() || cheapestFutureTime.Before(plannedChargeTime)) {
 						plannedChargeTime = cheapestFutureTime
 						plannedChargePrice = cheapestFuturePrice
 						plannedChargeCost = cheapestFutureCost
@@ -1219,12 +1239,6 @@ func (c *Controller) evaluateExportArbitrage(
 				}
 			}
 		}
-		// Skip slots that are not profitable for export arbitrage. If a slot's cost is higher than
-		// the export value minus minArbitrageDiff, we cannot economically charge in it. Excluding it
-		// here prevents findCheapestPlan from blending in unprofitable hours to meet the requested duration.
-		if cost > effectiveExportValue-minArbitrageDiff {
-			continue
-		}
 		slotEntry := simPriceSlot{
 			cost:        cost,
 			ts:          slot.TS,
@@ -1239,18 +1253,14 @@ func (c *Controller) evaluateExportArbitrage(
 
 	var cheapestCost float64
 	var allocatedHours float64
-	if len(simPrevChargeCostsAll) > 0 {
-		_, _, cheapestCost, _, allocatedHours = c.findCheapestPlan(simPrevChargeCostsAll, neededDurationHours, isAlreadyChargingGrid)
-	}
+	_, _, cheapestCost, _, allocatedHours = c.findCheapestPlan(simPrevChargeCostsAll, neededDurationHours, isAlreadyChargingGrid, effectiveExportValue-minArbitrageDiff)
 
 	var cheapestFutureTime time.Time
 	var cheapestFuturePrice types.Price
 	var cheapestFutureCost float64
 	var futureAllocatedHours float64
-	hasFutureSlot := len(simPrevChargeCostsFuture) > 0
-	if hasFutureSlot {
-		cheapestFutureTime, cheapestFuturePrice, cheapestFutureCost, _, futureAllocatedHours = c.findCheapestPlan(simPrevChargeCostsFuture, neededDurationHours, isAlreadyChargingGrid)
-	}
+	cheapestFutureTime, cheapestFuturePrice, cheapestFutureCost, _, futureAllocatedHours = c.findCheapestPlan(simPrevChargeCostsFuture, neededDurationHours, isAlreadyChargingGrid, effectiveExportValue-minArbitrageDiff)
+	hasFutureSlot := !cheapestFutureTime.IsZero()
 
 	// minStartChargeDurationHours defines the required starting headroom in hours of charging time.
 	minStartChargeDurationHours := float64(settings.MinStartChargeMinutes) / 60.0
@@ -2130,11 +2140,12 @@ func (c *Controller) evaluateFallback(
 	}
 }
 
-// findCheapestPlan finds the planned charge details and the marginal cheapest slot from candidate slots.
+// findCheapestPlan finds the planned charge details and the marginal cheapest slot from candidate slots, filtering out slots >= maxAllowedCost.
 func (c *Controller) findCheapestPlan(
 	simPrevChargeCosts []simPriceSlot,
 	neededDurationHours float64,
 	preferEarlier bool,
+	maxAllowedCost float64,
 ) (cheapestTime time.Time, cheapestPrice types.Price, cheapestCost float64, marginalSlot simPriceSlot, allocatedHours float64) {
 	if len(simPrevChargeCosts) == 0 || neededDurationHours <= 0 {
 		return
@@ -2159,6 +2170,9 @@ func (c *Controller) findCheapestPlan(
 	// or the remaining fraction of the current hour for the "now" slot).
 	// We accumulate duration and weighted cost until neededDurationHours is completely met.
 	for _, slot := range simPrevChargeCosts {
+		if maxAllowedCost > 0.0 && slot.cost >= maxAllowedCost {
+			continue
+		}
 		if remainingHours <= 0 {
 			break
 		}
@@ -2176,7 +2190,9 @@ func (c *Controller) findCheapestPlan(
 
 	// Calculate the exact weighted average unit cost of the selected charging plan.
 	allocatedHours = neededDurationHours - remainingHours
-	cheapestCost = totalCost / allocatedHours
+	if allocatedHours > 0 {
+		cheapestCost = totalCost / allocatedHours
+	}
 
 	if len(selectedSlots) > 0 {
 		cheapestTime = selectedSlots[0].ts
@@ -2558,12 +2574,6 @@ func (c *Controller) evaluateVPPEvent(
 				}
 			}
 		}
-		// Skip slots that are not profitable for VPP prep charging. If a slot's cost is higher than or equal
-		// to the forced charge price during the VPP event, pre-charging during that hour is economically
-		// worse than just drawing/charging during the VPP event.
-		if cost >= forcedChargePrice {
-			continue
-		}
 		entry := simPriceSlot{
 			cost:        cost,
 			ts:          slot.TS,
@@ -2576,12 +2586,12 @@ func (c *Controller) evaluateVPPEvent(
 		}
 	}
 
-	if len(simPrevChargeCosts) == 0 {
+	var allocatedHours float64
+	cheapestTime, _, cheapestCost, _, allocatedHours := c.findCheapestPlan(simPrevChargeCosts, neededDurationHours, isAlreadyChargingGrid, forcedChargePrice)
+
+	if cheapestTime.IsZero() {
 		return nil
 	}
-
-	var allocatedHours float64
-	cheapestTime, _, cheapestCost, _, allocatedHours := c.findCheapestPlan(simPrevChargeCosts, neededDurationHours, isAlreadyChargingGrid)
 
 	if forcedChargePrice-cheapestCost < minArbitrageDiff {
 		// Even if active grid pre-charging is not economically profitable, we must
@@ -2613,10 +2623,8 @@ func (c *Controller) evaluateVPPEvent(
 	var cheapestFuturePrice types.Price
 	var cheapestFutureCost float64
 	var futureAllocatedHours float64
-	hasFutureSlot := len(simPrevChargeCostsFuture) > 0
-	if hasFutureSlot {
-		cheapestFutureTime, cheapestFuturePrice, cheapestFutureCost, _, futureAllocatedHours = c.findCheapestPlan(simPrevChargeCostsFuture, neededDurationHours, isAlreadyChargingGrid)
-	}
+	cheapestFutureTime, cheapestFuturePrice, cheapestFutureCost, _, futureAllocatedHours = c.findCheapestPlan(simPrevChargeCostsFuture, neededDurationHours, isAlreadyChargingGrid, forcedChargePrice)
+	hasFutureSlot := !cheapestFutureTime.IsZero()
 
 	isSignificantlyCheaperNow := false
 	if hasFutureSlot {
