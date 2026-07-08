@@ -47,9 +47,6 @@ func TestGetEversourceHolidays(t *testing.T) {
 }
 
 func TestEversourceUtilityInfo(t *testing.T) {
-	etLoc, err := time.LoadLocation("America/New_York")
-	require.NoError(t, err)
-
 	u := &genericTOU{}
 
 	t.Run("CT Residential Flat Rate 1", func(t *testing.T) {
@@ -60,7 +57,7 @@ func TestEversourceUtilityInfo(t *testing.T) {
 		require.NoError(t, err)
 
 		// Before July 1st, 2026
-		targetBefore := time.Date(2026, time.June, 15, 12, 0, 0, 0, etLoc)
+		targetBefore := time.Date(2026, time.June, 15, 12, 0, 0, 0, etLocation)
 		pBefore, err := u.priceForTime(targetBefore)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.24666, pBefore.DollarsPerKWH, 1e-6)
@@ -68,7 +65,7 @@ func TestEversourceUtilityInfo(t *testing.T) {
 		}
 
 		// After July 1st, 2026
-		targetAfter := time.Date(2026, time.July, 15, 12, 0, 0, 0, etLoc)
+		targetAfter := time.Date(2026, time.July, 15, 12, 0, 0, 0, etLocation)
 		pAfter, err := u.priceForTime(targetAfter)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.23602, pAfter.DollarsPerKWH, 1e-6)
@@ -76,7 +73,7 @@ func TestEversourceUtilityInfo(t *testing.T) {
 		}
 
 		// In 2027
-		target2027 := time.Date(2027, time.June, 15, 12, 0, 0, 0, etLoc)
+		target2027 := time.Date(2027, time.June, 15, 12, 0, 0, 0, etLocation)
 		p2027, err := u.priceForTime(target2027)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.23602, p2027.DollarsPerKWH, 1e-6)
@@ -92,7 +89,7 @@ func TestEversourceUtilityInfo(t *testing.T) {
 		require.NoError(t, err)
 
 		// Before July 1st, 2026
-		targetBefore := time.Date(2026, time.June, 15, 12, 0, 0, 0, etLoc)
+		targetBefore := time.Date(2026, time.June, 15, 12, 0, 0, 0, etLocation)
 		pBefore, err := u.priceForTime(targetBefore)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.22277, pBefore.DollarsPerKWH, 1e-6)
@@ -100,7 +97,7 @@ func TestEversourceUtilityInfo(t *testing.T) {
 		}
 
 		// After July 1st, 2026
-		targetAfter := time.Date(2026, time.July, 15, 12, 0, 0, 0, etLoc)
+		targetAfter := time.Date(2026, time.July, 15, 12, 0, 0, 0, etLocation)
 		pAfter, err := u.priceForTime(targetAfter)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.21213, pAfter.DollarsPerKWH, 1e-6)
@@ -108,7 +105,7 @@ func TestEversourceUtilityInfo(t *testing.T) {
 		}
 
 		// In 2027
-		target2027 := time.Date(2027, time.June, 15, 12, 0, 0, 0, etLoc)
+		target2027 := time.Date(2027, time.June, 15, 12, 0, 0, 0, etLocation)
 		p2027, err := u.priceForTime(target2027)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.21213, p2027.DollarsPerKWH, 1e-6)
@@ -125,7 +122,7 @@ func TestEversourceUtilityInfo(t *testing.T) {
 
 		// --- Before July 1st, 2026 ---
 		// On-peak: Weekdays 12 Noon - 8 p.m.
-		onPeakBefore := time.Date(2026, time.June, 15, 13, 0, 0, 0, etLoc) // Monday 1 PM
+		onPeakBefore := time.Date(2026, time.June, 15, 13, 0, 0, 0, etLocation) // Monday 1 PM
 		pOnBefore, err := u.priceForTime(onPeakBefore)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.31099, pOnBefore.DollarsPerKWH, 1e-6)
@@ -133,7 +130,7 @@ func TestEversourceUtilityInfo(t *testing.T) {
 		}
 
 		// Off-peak: Weekdays other hours
-		offPeakBefore := time.Date(2026, time.June, 15, 9, 0, 0, 0, etLoc) // Monday 9 AM
+		offPeakBefore := time.Date(2026, time.June, 15, 9, 0, 0, 0, etLocation) // Monday 9 AM
 		pOffBefore, err := u.priceForTime(offPeakBefore)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.21871, pOffBefore.DollarsPerKWH, 1e-6)
@@ -142,7 +139,7 @@ func TestEversourceUtilityInfo(t *testing.T) {
 
 		// --- After July 1st, 2026 ---
 		// On-peak: Weekdays 12 Noon - 8 p.m.
-		onPeakAfter := time.Date(2026, time.July, 15, 13, 0, 0, 0, etLoc) // Wednesday 1 PM
+		onPeakAfter := time.Date(2026, time.July, 15, 13, 0, 0, 0, etLocation) // Wednesday 1 PM
 		pOnAfter, err := u.priceForTime(onPeakAfter)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.29982, pOnAfter.DollarsPerKWH, 1e-6)
@@ -150,7 +147,7 @@ func TestEversourceUtilityInfo(t *testing.T) {
 		}
 
 		// Off-peak: Weekdays other hours
-		offPeakAfter := time.Date(2026, time.July, 15, 9, 0, 0, 0, etLoc) // Wednesday 9 AM
+		offPeakAfter := time.Date(2026, time.July, 15, 9, 0, 0, 0, etLocation) // Wednesday 9 AM
 		pOffAfter, err := u.priceForTime(offPeakAfter)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.20754, pOffAfter.DollarsPerKWH, 1e-6)
@@ -158,7 +155,7 @@ func TestEversourceUtilityInfo(t *testing.T) {
 		}
 
 		// Off-peak: Weekend
-		weekendAfter := time.Date(2026, time.July, 12, 13, 0, 0, 0, etLoc) // Sunday 1 PM
+		weekendAfter := time.Date(2026, time.July, 12, 13, 0, 0, 0, etLocation) // Sunday 1 PM
 		pWeAfter, err := u.priceForTime(weekendAfter)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.20754, pWeAfter.DollarsPerKWH, 1e-6)
@@ -167,7 +164,7 @@ func TestEversourceUtilityInfo(t *testing.T) {
 
 		// --- In 2027 ---
 		// On-peak: Weekdays 12 Noon - 8 p.m.
-		onPeak2027 := time.Date(2027, time.June, 15, 13, 0, 0, 0, etLoc) // Tuesday 1 PM
+		onPeak2027 := time.Date(2027, time.June, 15, 13, 0, 0, 0, etLocation) // Tuesday 1 PM
 		pOn2027, err := u.priceForTime(onPeak2027)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.29982, pOn2027.DollarsPerKWH, 1e-6)
@@ -175,7 +172,7 @@ func TestEversourceUtilityInfo(t *testing.T) {
 		}
 
 		// Off-peak: Weekdays other hours
-		offPeak2027 := time.Date(2027, time.June, 15, 9, 0, 0, 0, etLoc) // Tuesday 9 AM
+		offPeak2027 := time.Date(2027, time.June, 15, 9, 0, 0, 0, etLocation) // Tuesday 9 AM
 		pOff2027, err := u.priceForTime(offPeak2027)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.20754, pOff2027.DollarsPerKWH, 1e-6)
@@ -191,21 +188,21 @@ func TestEversourceUtilityInfo(t *testing.T) {
 		require.NoError(t, err)
 
 		// Before Feb 1, 2026 (January)
-		pJan, err := u.priceForTime(time.Date(2026, time.January, 15, 12, 0, 0, 0, etLoc))
+		pJan, err := u.priceForTime(time.Date(2026, time.January, 15, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.23128, pJan.DollarsPerKWH, 1e-6)
 			assert.InDelta(t, 0.0, pJan.GenerationAdjustmentDollarsPerKWH, 1e-6)
 		}
 
 		// After Feb 1, 2026 (June)
-		pJun, err := u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, etLoc))
+		pJun, err := u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.23390, pJun.DollarsPerKWH, 1e-6)
 			assert.InDelta(t, 0.0, pJun.GenerationAdjustmentDollarsPerKWH, 1e-6)
 		}
 
 		// 2027
-		p2027, err := u.priceForTime(time.Date(2027, time.June, 15, 12, 0, 0, 0, etLoc))
+		p2027, err := u.priceForTime(time.Date(2027, time.June, 15, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.23390, p2027.DollarsPerKWH, 1e-6)
 			assert.InDelta(t, 0.0, p2027.GenerationAdjustmentDollarsPerKWH, 1e-6)
@@ -221,14 +218,14 @@ func TestEversourceUtilityInfo(t *testing.T) {
 
 		// --- Before Feb 1, 2026 (January) ---
 		// On-peak: Weekdays 1 PM - 7 PM (excluding holidays)
-		onPeakJan := time.Date(2026, time.January, 15, 14, 0, 0, 0, etLoc) // Thursday 2 PM
+		onPeakJan := time.Date(2026, time.January, 15, 14, 0, 0, 0, etLocation) // Thursday 2 PM
 		pOnJan, err := u.priceForTime(onPeakJan)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.34792, pOnJan.DollarsPerKWH, 1e-6)
 		}
 
 		// Off-peak: Weekday morning
-		offPeakJan := time.Date(2026, time.January, 15, 10, 0, 0, 0, etLoc) // Thursday 10 AM
+		offPeakJan := time.Date(2026, time.January, 15, 10, 0, 0, 0, etLocation) // Thursday 10 AM
 		pOffJan, err := u.priceForTime(offPeakJan)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.19583, pOffJan.DollarsPerKWH, 1e-6)
@@ -236,28 +233,28 @@ func TestEversourceUtilityInfo(t *testing.T) {
 
 		// --- After Feb 1, 2026 (June) ---
 		// On-peak: Weekdays 1 PM - 7 PM (excluding holidays)
-		onPeakJun := time.Date(2026, time.June, 15, 14, 0, 0, 0, etLoc) // Monday 2 PM
+		onPeakJun := time.Date(2026, time.June, 15, 14, 0, 0, 0, etLocation) // Monday 2 PM
 		pOnJun, err := u.priceForTime(onPeakJun)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.35054, pOnJun.DollarsPerKWH, 1e-6)
 		}
 
 		// Off-peak: Weekday morning
-		offPeakJun := time.Date(2026, time.June, 15, 10, 0, 0, 0, etLoc) // Monday 10 AM
+		offPeakJun := time.Date(2026, time.June, 15, 10, 0, 0, 0, etLocation) // Monday 10 AM
 		pOffJun, err := u.priceForTime(offPeakJun)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.19845, pOffJun.DollarsPerKWH, 1e-6)
 		}
 
 		// Off-peak: Weekend
-		weekendJun := time.Date(2026, time.June, 14, 14, 0, 0, 0, etLoc) // Sunday 2 PM
+		weekendJun := time.Date(2026, time.June, 14, 14, 0, 0, 0, etLocation) // Sunday 2 PM
 		pWeJun, err := u.priceForTime(weekendJun)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.19845, pWeJun.DollarsPerKWH, 1e-6)
 		}
 
 		// Off-peak: Holiday (e.g. New Year's Day, Jan 1st 2027 is Friday)
-		holiday2027 := time.Date(2027, time.January, 1, 14, 0, 0, 0, etLoc) // 2 PM
+		holiday2027 := time.Date(2027, time.January, 1, 14, 0, 0, 0, etLocation) // 2 PM
 		pHol2027, err := u.priceForTime(holiday2027)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.19845, pHol2027.DollarsPerKWH, 1e-6)
@@ -265,7 +262,7 @@ func TestEversourceUtilityInfo(t *testing.T) {
 
 		// --- In 2027 ---
 		// On-peak
-		onPeak2027 := time.Date(2027, time.June, 15, 14, 0, 0, 0, etLoc) // Tuesday 2 PM
+		onPeak2027 := time.Date(2027, time.June, 15, 14, 0, 0, 0, etLocation) // Tuesday 2 PM
 		pOn2027, err := u.priceForTime(onPeak2027)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.35054, pOn2027.DollarsPerKWH, 1e-6)
@@ -280,54 +277,54 @@ func TestEversourceUtilityInfo(t *testing.T) {
 		require.NoError(t, err)
 
 		// On-Peak: Weekdays 2 p.m. – 7 p.m. excluding holidays
-		onPeak := time.Date(2026, time.June, 15, 15, 0, 0, 0, etLoc) // Monday 3 PM
+		onPeak := time.Date(2026, time.June, 15, 15, 0, 0, 0, etLocation) // Monday 3 PM
 		pOn, err := u.priceForTime(onPeak)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.33000, pOn.DollarsPerKWH, 1e-6)
 		}
 
 		// Mid-Peak: Weekdays 7 a.m. – 2 p.m.
-		midPeak1 := time.Date(2026, time.June, 15, 10, 0, 0, 0, etLoc) // Monday 10 AM
+		midPeak1 := time.Date(2026, time.June, 15, 10, 0, 0, 0, etLocation) // Monday 10 AM
 		pMid1, err := u.priceForTime(midPeak1)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.21000, pMid1.DollarsPerKWH, 1e-6)
 		}
 
 		// Mid-Peak: Weekdays 7 p.m. – 11 p.m.
-		midPeak2 := time.Date(2026, time.June, 15, 20, 0, 0, 0, etLoc) // Monday 8 PM
+		midPeak2 := time.Date(2026, time.June, 15, 20, 0, 0, 0, etLocation) // Monday 8 PM
 		pMid2, err := u.priceForTime(midPeak2)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.21000, pMid2.DollarsPerKWH, 1e-6)
 		}
 
 		// Mid-Peak: Weekends 7 a.m. – 11 p.m.
-		midPeakWe := time.Date(2026, time.June, 14, 12, 0, 0, 0, etLoc) // Sunday 12 PM
+		midPeakWe := time.Date(2026, time.June, 14, 12, 0, 0, 0, etLocation) // Sunday 12 PM
 		pMidWe, err := u.priceForTime(midPeakWe)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.21000, pMidWe.DollarsPerKWH, 1e-6)
 		}
 
 		// Mid-Peak: Holidays 7 a.m. – 11 p.m.
-		midPeakHol := time.Date(2026, time.January, 1, 12, 0, 0, 0, etLoc) // Jan 1st 12 PM
+		midPeakHol := time.Date(2026, time.January, 1, 12, 0, 0, 0, etLocation) // Jan 1st 12 PM
 		pMidHol, err := u.priceForTime(midPeakHol)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.21000, pMidHol.DollarsPerKWH, 1e-6)
 		}
 
 		// Off-Peak: Daily 11 p.m. – 7 a.m.
-		offPeak1 := time.Date(2026, time.June, 15, 2, 0, 0, 0, etLoc) // Monday 2 AM
+		offPeak1 := time.Date(2026, time.June, 15, 2, 0, 0, 0, etLocation) // Monday 2 AM
 		pOff1, err := u.priceForTime(offPeak1)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.11000, pOff1.DollarsPerKWH, 1e-6)
 		}
 
-		offPeakWe := time.Date(2026, time.June, 14, 2, 0, 0, 0, etLoc) // Sunday 2 AM
+		offPeakWe := time.Date(2026, time.June, 14, 2, 0, 0, 0, etLocation) // Sunday 2 AM
 		pOffWe, err := u.priceForTime(offPeakWe)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.11000, pOffWe.DollarsPerKWH, 1e-6)
 		}
 
-		offPeakHol := time.Date(2026, time.January, 1, 2, 0, 0, 0, etLoc) // Holiday 2 AM
+		offPeakHol := time.Date(2026, time.January, 1, 2, 0, 0, 0, etLocation) // Holiday 2 AM
 		pOffHol, err := u.priceForTime(offPeakHol)
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.11000, pOffHol.DollarsPerKWH, 1e-6)
@@ -342,25 +339,25 @@ func TestEversourceUtilityInfo(t *testing.T) {
 		require.NoError(t, err)
 
 		// January 2026 (fallback)
-		pJan, err := u.priceForTime(time.Date(2026, time.January, 15, 12, 0, 0, 0, etLoc))
+		pJan, err := u.priceForTime(time.Date(2026, time.January, 15, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.30471, pJan.DollarsPerKWH, 1e-6)
 		}
 
 		// June 2026 (Feb-Jul period)
-		pJun, err := u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, etLoc))
+		pJun, err := u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.34209, pJun.DollarsPerKWH, 1e-6)
 		}
 
 		// August 2026 (Aug-Dec period)
-		pAug, err := u.priceForTime(time.Date(2026, time.August, 15, 12, 0, 0, 0, etLoc))
+		pAug, err := u.priceForTime(time.Date(2026, time.August, 15, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.35903, pAug.DollarsPerKWH, 1e-6)
 		}
 
 		// June 2027 (2027+ projection)
-		p2027, err := u.priceForTime(time.Date(2027, time.June, 15, 12, 0, 0, 0, etLoc))
+		p2027, err := u.priceForTime(time.Date(2027, time.June, 15, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.35903, p2027.DollarsPerKWH, 1e-6)
 		}
@@ -376,7 +373,7 @@ func TestEversourceUtilityInfo(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		pJun, err := u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, etLoc))
+		pJun, err := u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.34209, pJun.DollarsPerKWH, 1e-6)
 		}
@@ -393,37 +390,37 @@ func TestEversourceUtilityInfo(t *testing.T) {
 		require.NoError(t, err)
 
 		// January 2026 (fallback)
-		pJan, err := u.priceForTime(time.Date(2026, time.January, 15, 12, 0, 0, 0, etLoc))
+		pJan, err := u.priceForTime(time.Date(2026, time.January, 15, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.30471, pJan.DollarsPerKWH, 1e-6)
 		}
 
 		// February 2026
-		pFeb, err := u.priceForTime(time.Date(2026, time.February, 15, 12, 0, 0, 0, etLoc))
+		pFeb, err := u.priceForTime(time.Date(2026, time.February, 15, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.40198, pFeb.DollarsPerKWH, 1e-6)
 		}
 
 		// June 2026
-		pJun, err := u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, etLoc))
+		pJun, err := u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.31642, pJun.DollarsPerKWH, 1e-6)
 		}
 
 		// August 2026
-		pAug, err := u.priceForTime(time.Date(2026, time.August, 15, 12, 0, 0, 0, etLoc))
+		pAug, err := u.priceForTime(time.Date(2026, time.August, 15, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.32835, pAug.DollarsPerKWH, 1e-6)
 		}
 
 		// January 2027
-		pJan2027, err := u.priceForTime(time.Date(2027, time.January, 15, 12, 0, 0, 0, etLoc))
+		pJan2027, err := u.priceForTime(time.Date(2027, time.January, 15, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.44090, pJan2027.DollarsPerKWH, 1e-6)
 		}
 
 		// June 2027 (2027+ projection)
-		pJun2027, err := u.priceForTime(time.Date(2027, time.June, 15, 12, 0, 0, 0, etLoc))
+		pJun2027, err := u.priceForTime(time.Date(2027, time.June, 15, 12, 0, 0, 0, etLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.44090, pJun2027.DollarsPerKWH, 1e-6)
 		}
@@ -431,9 +428,6 @@ func TestEversourceUtilityInfo(t *testing.T) {
 }
 
 func TestEversourceVPP(t *testing.T) {
-	etLoc, err := time.LoadLocation("America/New_York")
-	require.NoError(t, err)
-
 	t.Run("default options return no VPP periods", func(t *testing.T) {
 		u := &genericTOU{}
 		err := u.ApplySettings(context.Background(), types.Settings{
@@ -465,7 +459,6 @@ func TestEversourceVPP(t *testing.T) {
 
 		for _, p := range vppInfo.Mandatory {
 			assert.Equal(t, 20.0, p.ReserveSOC)
-			assert.Equal(t, "America/New_York", p.Location)
 			require.Len(t, p.Hours, 1)
 			assert.Equal(t, 17, p.Hours[0].HourStart)
 			assert.Equal(t, 20, p.Hours[0].HourEnd)
@@ -475,7 +468,7 @@ func TestEversourceVPP(t *testing.T) {
 		// Helper to check if a specific time is covered by VPP periods
 		isVPPHour := func(tVal time.Time) bool {
 			for _, p := range vppInfo.Mandatory {
-				contains, err := p.Contains(tVal)
+				contains, _, err := p.Contains(tVal)
 				if err == nil && contains {
 					return true
 				}
@@ -485,33 +478,33 @@ func TestEversourceVPP(t *testing.T) {
 
 		// 2026 tests (Juneteenth June 19 is Friday -> holiday, Independence Day July 4 is Saturday -> holiday)
 		// June 18, 2026 is Thursday, 6 PM -> Weekday, VPP hour -> should be VPP
-		assert.True(t, isVPPHour(time.Date(2026, time.June, 18, 18, 0, 0, 0, etLoc)))
+		assert.True(t, isVPPHour(time.Date(2026, time.June, 18, 18, 0, 0, 0, etLocation)))
 		// June 18, 2026 is Thursday, 4 PM -> outside hours -> should NOT be VPP
-		assert.False(t, isVPPHour(time.Date(2026, time.June, 18, 16, 0, 0, 0, etLoc)))
+		assert.False(t, isVPPHour(time.Date(2026, time.June, 18, 16, 0, 0, 0, etLocation)))
 		// June 18, 2026 is Thursday, 9 PM -> outside hours -> should NOT be VPP
-		assert.False(t, isVPPHour(time.Date(2026, time.June, 18, 21, 0, 0, 0, etLoc)))
+		assert.False(t, isVPPHour(time.Date(2026, time.June, 18, 21, 0, 0, 0, etLocation)))
 
 		// Weekend check: June 20, 2026 is Saturday, 6 PM -> weekend -> should NOT be VPP
-		assert.False(t, isVPPHour(time.Date(2026, time.June, 20, 18, 0, 0, 0, etLoc)))
+		assert.False(t, isVPPHour(time.Date(2026, time.June, 20, 18, 0, 0, 0, etLocation)))
 
 		// Holiday check 2026: Juneteenth June 19, 2026 is a Friday -> holiday -> should NOT be VPP
-		assert.False(t, isVPPHour(time.Date(2026, time.June, 19, 18, 0, 0, 0, etLoc)))
+		assert.False(t, isVPPHour(time.Date(2026, time.June, 19, 18, 0, 0, 0, etLocation)))
 
 		// July 3, 2026 is Friday, 6 PM -> not holiday -> should be VPP
-		assert.True(t, isVPPHour(time.Date(2026, time.July, 3, 18, 0, 0, 0, etLoc)))
+		assert.True(t, isVPPHour(time.Date(2026, time.July, 3, 18, 0, 0, 0, etLocation)))
 		// July 4, 2026 is Saturday -> weekend + holiday -> should NOT be VPP
-		assert.False(t, isVPPHour(time.Date(2026, time.July, 4, 18, 0, 0, 0, etLoc)))
+		assert.False(t, isVPPHour(time.Date(2026, time.July, 4, 18, 0, 0, 0, etLocation)))
 		// July 6, 2026 is Monday -> not holiday -> should be VPP
-		assert.True(t, isVPPHour(time.Date(2026, time.July, 6, 18, 0, 0, 0, etLoc)))
+		assert.True(t, isVPPHour(time.Date(2026, time.July, 6, 18, 0, 0, 0, etLocation)))
 
 		// 2027 tests (July 4, 2027 is Sunday -> not shifted, so July 4 is the holiday, and July 5 is a regular weekday VPP day)
 		// July 2, 2027 is Friday, 6 PM -> should be VPP
-		assert.True(t, isVPPHour(time.Date(2027, time.July, 2, 18, 0, 0, 0, etLoc)))
+		assert.True(t, isVPPHour(time.Date(2027, time.July, 2, 18, 0, 0, 0, etLocation)))
 		// July 4, 2027 is Sunday -> weekend -> should NOT be VPP
-		assert.False(t, isVPPHour(time.Date(2027, time.July, 4, 18, 0, 0, 0, etLoc)))
+		assert.False(t, isVPPHour(time.Date(2027, time.July, 4, 18, 0, 0, 0, etLocation)))
 		// July 5, 2027 is Monday -> regular weekday VPP day (July 4 not shifted to Monday for VPP) -> should be VPP
-		assert.True(t, isVPPHour(time.Date(2027, time.July, 5, 18, 0, 0, 0, etLoc)))
+		assert.True(t, isVPPHour(time.Date(2027, time.July, 5, 18, 0, 0, 0, etLocation)))
 		// July 6, 2027 is Tuesday, 6 PM -> should be VPP
-		assert.True(t, isVPPHour(time.Date(2027, time.July, 6, 18, 0, 0, 0, etLoc)))
+		assert.True(t, isVPPHour(time.Date(2027, time.July, 6, 18, 0, 0, 0, etLocation)))
 	})
 }

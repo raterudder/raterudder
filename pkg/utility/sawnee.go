@@ -16,7 +16,6 @@ func getSawneeHolidays(year int) []string {
 // sawneePeriods generates pricing periods for Sawnee EMC.
 func sawneePeriods(plan string, opts types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	locStr := etLocation.String() // Sawnee is in Georgia (Eastern Time)
 
 	for _, year := range years {
 		holidays := getSawneeHolidays(year)
@@ -34,7 +33,7 @@ func sawneePeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 					OtherDescription:   "Sawnee Schedule H Base Rate",
 				},
 			}
-			periods = append(periods, buildPeriods(locStr, simplified)...)
+			periods = append(periods, buildPeriods(etLocation, simplified)...)
 
 		case "sawnee_tu":
 			// Schedule TU-28 (Residential Time-of-Use)
@@ -87,7 +86,7 @@ func sawneePeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				OtherDescription:   "Sawnee Schedule TU Off-Peak",
 			}
 
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				summerHolidayPeriod,
 				summerRegularPeriod,
 				winterPeriod1,
@@ -145,7 +144,7 @@ func sawneePeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				OtherDescription:   "Sawnee Schedule CPPR Off-Peak",
 			}
 
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				summerHolidayPeriod,
 				summerRegularPeriod,
 				winterPeriod1,

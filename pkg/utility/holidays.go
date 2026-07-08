@@ -45,6 +45,8 @@ func goodFriday(year int) time.Time {
 	var month time.Month
 	var day int
 	switch year {
+	case 2025:
+		month, day = time.April, 18
 	case 2026:
 		month, day = time.April, 3
 	case 2027:

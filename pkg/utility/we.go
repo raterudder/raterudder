@@ -31,7 +31,6 @@ func getWEHolidays(year int) []string {
 
 func wePeriods(plan string, opts types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	locStr := ctLocation.String() // WE Energies is in Wisconsin (Central Time)
 
 	for _, year := range years {
 		holidays := getWEHolidays(year)
@@ -61,7 +60,7 @@ func wePeriods(plan string, opts types.UtilityRateOptions, years []int) []types.
 				})
 			}
 
-			periods = append(periods, buildPeriods(locStr, simplified)...)
+			periods = append(periods, buildPeriods(ctLocation, simplified)...)
 
 		case "we_rg2":
 			// RG2: Time-of-Use Rate
@@ -121,7 +120,7 @@ func wePeriods(plan string, opts types.UtilityRateOptions, years []int) []types.
 					OtherDescription:   "WE Energies RG2 Off-Peak",
 				},
 			}
-			periods = append(periods, buildPeriods(locStr, simplifiedConsumption)...)
+			periods = append(periods, buildPeriods(ctLocation, simplifiedConsumption)...)
 
 			// CGS Generation Credit Periods (only if CGS scheme chosen)
 			if opts.NetMeteringScheme == "cgs" {
@@ -185,7 +184,7 @@ func wePeriods(plan string, opts types.UtilityRateOptions, years []int) []types.
 						OtherDescription:                   "WE Energies CGS Non-Summer Off-Peak Credit",
 					},
 				}
-				periods = append(periods, buildPeriods(locStr, simplifiedCGS)...)
+				periods = append(periods, buildPeriods(ctLocation, simplifiedCGS)...)
 			}
 		}
 
@@ -195,7 +194,7 @@ func wePeriods(plan string, opts types.UtilityRateOptions, years []int) []types.
 			if plan == "we_rg2" {
 				evDiscount = -0.01000
 			}
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{
 				{
 					Year:       year,
 					MonthStart: time.January,

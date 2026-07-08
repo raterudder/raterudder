@@ -7,7 +7,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/types"
 )
 
-// Xcel Energy Texas Net Billing monthly rates by year
+// Xcel Energy Texas Net Billing monthly rates by year which are based on the "Texas Fuel Factors"
 // Link to Texas rate books: https://www.xcelenergy.com/company/rates_and_regulations/rates/rate_books
 var xcelTXNetBillingRates = map[int]map[time.Month]float64{
 	2026: {
@@ -16,6 +16,8 @@ var xcelTXNetBillingRates = map[int]map[time.Month]float64{
 		time.March:    0.016221,
 		time.April:    0.009824,
 		time.May:      0.009824,
+		time.June:     0.009824,
+		time.July:     0.009824,
 	},
 }
 
@@ -150,7 +152,6 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 		switch plan {
 		// --- COLORADO (America/Denver) ---
 		case "xcel_co_tou":
-			coLoc := "America/Denver"
 			// Summer (June 1 - Sept 30)
 			summerHolidayPeriod := touSimplifiedPeriod{
 				Year:               year,
@@ -205,11 +206,11 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 				OtherDollarsPerKWH: 0.08218,
 				OtherDescription:   "Winter Off-Peak",
 			}
-			periods = append(periods, buildPeriods(coLoc, []touSimplifiedPeriod{summerHolidayPeriod, summerRegularPeriod, winterHolidayPeriod, winterRegularPeriod})...)
+			periods = append(periods, buildPeriods(mtLocation, []touSimplifiedPeriod{summerHolidayPeriod, summerRegularPeriod, winterHolidayPeriod, winterRegularPeriod})...)
 
 		// --- MINNESOTA (America/Chicago) ---
 		case "xcel_mn_standard":
-			periods = append(periods, buildPeriods("America/Chicago", []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.June,
@@ -227,7 +228,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			})...)
 
 		case "xcel_mn_standard_heating":
-			periods = append(periods, buildPeriods("America/Chicago", []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.June,
@@ -245,7 +246,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			})...)
 
 		case "xcel_mn_tou":
-			periods = append(periods, buildPeriods("America/Chicago", []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.June,
@@ -299,7 +300,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			})...)
 
 		case "xcel_mn_tou_heating":
-			periods = append(periods, buildPeriods("America/Chicago", []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.June,
@@ -354,7 +355,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 
 		// --- NORTH DAKOTA (America/Chicago) ---
 		case "xcel_nd_standard":
-			periods = append(periods, buildPeriods("America/Chicago", []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.June,
@@ -372,7 +373,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			})...)
 
 		case "xcel_nd_standard_heating":
-			periods = append(periods, buildPeriods("America/Chicago", []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.June,
@@ -390,7 +391,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			})...)
 
 		case "xcel_nd_tou":
-			periods = append(periods, buildPeriods("America/Chicago", []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.June,
@@ -444,7 +445,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			})...)
 
 		case "xcel_nd_tou_heating":
-			periods = append(periods, buildPeriods("America/Chicago", []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.June,
@@ -500,7 +501,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 		// --- SOUTH DAKOTA (America/Chicago) ---
 		case "xcel_sd_standard":
 			// Winter rate assumes usage is < 1000 kWh per request, yielding a flat $0.09585.
-			periods = append(periods, buildPeriods("America/Chicago", []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.June,
@@ -518,7 +519,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			})...)
 
 		case "xcel_sd_tou":
-			periods = append(periods, buildPeriods("America/Chicago", []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.June,
@@ -572,7 +573,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			})...)
 
 		case "xcel_sd_tou_heating":
-			periods = append(periods, buildPeriods("America/Chicago", []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.June,
@@ -668,10 +669,9 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 
 			// Generate on-peak and off-peak supply periods based on option
 			peakHours := getXcelMIPeakHours(options.PeakPeriodOption)
-			miLoc := ctLocation.String()
 
 			// Weekday Non-Holiday On-Peak
-			periods = append(periods, buildPeriods(miLoc, []touSimplifiedPeriod{{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{{
 				Year:             year,
 				MonthStart:       time.January,
 				MonthEnd:         time.December,
@@ -688,7 +688,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			}})...)
 
 			// Holidays and Weekends Off-Peak
-			periods = append(periods, buildPeriods(miLoc, []touSimplifiedPeriod{{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{{
 				Year:               year,
 				MonthStart:         time.January,
 				MonthEnd:           time.December,
@@ -699,20 +699,18 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 
 		// --- WISCONSIN (America/Chicago) ---
 		case "xcel_wi_standard":
-			wiLoc := ctLocation.String()
-			wiLocPtr := ctLocation
 			periods = append(periods, types.UtilityFeesPeriod{
 				UtilityPeriod: types.UtilityPeriod{
-					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, wiLocPtr),
-					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, wiLocPtr),
-					LocationPtr: wiLocPtr,
+					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, ctLocation),
+					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, ctLocation),
+					LocationPtr: ctLocation,
 				},
 				DollarsPerKWH:  0.065500,
 				GridAdditional: true,
 				Description:    "Wisconsin Delivery Charge",
 			})
 
-			periods = append(periods, buildPeriods(wiLoc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.June,
@@ -730,20 +728,18 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			})...)
 
 		case "xcel_wi_tou":
-			wiLoc := ctLocation.String()
-			wiLocPtr := ctLocation
 			periods = append(periods, types.UtilityFeesPeriod{
 				UtilityPeriod: types.UtilityPeriod{
-					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, wiLocPtr),
-					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, wiLocPtr),
-					LocationPtr: wiLocPtr,
+					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, ctLocation),
+					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, ctLocation),
+					LocationPtr: ctLocation,
 				},
 				DollarsPerKWH:  0.065500,
 				GridAdditional: true,
 				Description:    "Wisconsin Delivery Charge",
 			})
 
-			periods = append(periods, buildPeriods(wiLoc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.June,
@@ -798,8 +794,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 
 		// --- TEXAS (America/Chicago) ---
 		case "xcel_tx_standard":
-			txLoc := ctLocation.String()
-			periods = append(periods, buildPeriods(txLoc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.June,
@@ -817,7 +812,6 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			})...)
 
 		case "xcel_tx_tou":
-			txLoc := ctLocation.String()
 			// Summer (June 1 - Sept 30)
 			summerHolidayPeriod := touSimplifiedPeriod{
 				Year:               year,
@@ -853,13 +847,24 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 				OtherDollarsPerKWH: 0.082251,
 				OtherDescription:   "Texas Supply Winter Off-Peak",
 			}
-			periods = append(periods, buildPeriods(txLoc, []touSimplifiedPeriod{summerHolidayPeriod, summerRegularPeriod, winterPeriod})...)
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{summerHolidayPeriod, summerRegularPeriod, winterPeriod})...)
+		}
+
+		if plan == "xcel_tx_standard" || plan == "xcel_tx_tou" {
+			periods = append(periods, types.UtilityFeesPeriod{
+				UtilityPeriod: types.UtilityPeriod{
+					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, ctLocation),
+					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, ctLocation),
+					LocationPtr: ctLocation,
+				},
+				DollarsPerKWH:  0.014978,
+				GridAdditional: true,
+				Description:    "Texas Fuel Cost Recovery Factor",
+			})
 		}
 	}
 
 	// --- SOLAR EXPORT PLANS (Separate Generation Credits) ---
-	loc := ctLocation.String()
-	locPtr := ctLocation
 
 	switch options.NetMeteringScheme {
 	case "mn_occasional":
@@ -867,9 +872,9 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 		for _, year := range years {
 			periods = append(periods, types.UtilityFeesPeriod{
 				UtilityPeriod: types.UtilityPeriod{
-					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, locPtr),
-					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, locPtr),
-					LocationPtr: locPtr,
+					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, ctLocation),
+					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, ctLocation),
+					LocationPtr: ctLocation,
 				},
 				DollarsPerKWH:            0.0360,
 				SeparateGenerationCredit: true,
@@ -883,7 +888,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			holidays := getXcelNSPHolidays(year)
 
 			// Holidays and Weekends Off-Peak
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{{
 				Year:                               year,
 				MonthStart:                         time.January,
 				MonthEnd:                           time.December,
@@ -894,7 +899,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			}})...)
 
 			// Regular Days On-Peak and Off-Peak
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{{
 				Year:                         year,
 				MonthStart:                   time.January,
 				MonthEnd:                     time.December,
@@ -925,7 +930,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 
 			// --- Summer (June 1 - Sep 30) ---
 			// Summer Holidays and Weekends Off-Peak
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{{
 				Year:                               year,
 				MonthStart:                         time.June,
 				MonthEnd:                           time.September,
@@ -936,7 +941,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			}})...)
 
 			// Summer Regular Days
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{{
 				Year:                         year,
 				MonthStart:                   time.June,
 				MonthEnd:                     time.September,
@@ -955,7 +960,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 
 			// --- Winter (Oct 1 - May 31) ---
 			// Winter Holidays and Weekends Off-Peak
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{{
 				Year:                               year,
 				MonthStart:                         time.October,
 				MonthEnd:                           time.May,
@@ -966,7 +971,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			}})...)
 
 			// Winter Regular Days
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{{
 				Year:                         year,
 				MonthStart:                   time.October,
 				MonthEnd:                     time.May,
@@ -989,9 +994,9 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 		for _, year := range years {
 			periods = append(periods, types.UtilityFeesPeriod{
 				UtilityPeriod: types.UtilityPeriod{
-					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, locPtr),
-					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, locPtr),
-					LocationPtr: locPtr,
+					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, ctLocation),
+					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, ctLocation),
+					LocationPtr: ctLocation,
 				},
 				DollarsPerKWH:            0.0316,
 				SeparateGenerationCredit: true,
@@ -1005,7 +1010,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			holidays := getXcelNSPHolidays(year)
 
 			// Holidays and Weekends Off-Peak
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{{
 				Year:                               year,
 				MonthStart:                         time.January,
 				MonthEnd:                           time.December,
@@ -1016,7 +1021,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			}})...)
 
 			// Regular Days On-Peak and Off-Peak
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{{
 				Year:                         year,
 				MonthStart:                   time.January,
 				MonthEnd:                     time.December,
@@ -1039,9 +1044,9 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 		for _, year := range years {
 			periods = append(periods, types.UtilityFeesPeriod{
 				UtilityPeriod: types.UtilityPeriod{
-					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, locPtr),
-					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, locPtr),
-					LocationPtr: locPtr,
+					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, ctLocation),
+					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, ctLocation),
+					LocationPtr: ctLocation,
 				},
 				DollarsPerKWH:            0.03646,
 				SeparateGenerationCredit: true,
@@ -1058,7 +1063,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 
 			// --- Summer (June 1 - Sept 30) ---
 			// Summer Holidays and Weekends Off-Peak
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{{
 				Year:                               year,
 				MonthStart:                         time.June,
 				MonthEnd:                           time.September,
@@ -1069,7 +1074,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			}})...)
 
 			// Summer Regular Days
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{{
 				Year:                         year,
 				MonthStart:                   time.June,
 				MonthEnd:                     time.September,
@@ -1088,7 +1093,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 
 			// --- Winter (Oct 1 - May 31) ---
 			// Winter Holidays and Weekends Off-Peak
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{{
 				Year:                               year,
 				MonthStart:                         time.October,
 				MonthEnd:                           time.May,
@@ -1099,7 +1104,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			}})...)
 
 			// Winter Regular Days
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{{
+			periods = append(periods, buildPeriods(ctLocation, []touSimplifiedPeriod{{
 				Year:                         year,
 				MonthStart:                   time.October,
 				MonthEnd:                     time.May,
@@ -1123,14 +1128,14 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 		for _, year := range years {
 			for month := time.January; month <= time.December; month++ {
 				rate := getXcelTXNetBillingRate(year, month)
-				startMonth := time.Date(year, month, 1, 0, 0, 0, 0, locPtr)
-				endMonth := time.Date(year, month+1, 1, 0, 0, 0, 0, locPtr)
+				startMonth := time.Date(year, month, 1, 0, 0, 0, 0, ctLocation)
+				endMonth := time.Date(year, month+1, 1, 0, 0, 0, 0, ctLocation)
 
 				periods = append(periods, types.UtilityFeesPeriod{
 					UtilityPeriod: types.UtilityPeriod{
 						Start:       startMonth,
 						End:         endMonth,
-						LocationPtr: locPtr,
+						LocationPtr: ctLocation,
 					},
 					DollarsPerKWH:            rate,
 					SeparateGenerationCredit: true,

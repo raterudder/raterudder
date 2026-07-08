@@ -37,7 +37,6 @@ func getPECOHolidays(year int) []string {
 // pecoPeriods generates pricing periods for PECO.
 func pecoPeriods(plan string, opts types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	locStr := etLocation.String() // PECO operates in Pennsylvania (Eastern Time)
 
 	for _, year := range years {
 		holidays := getPECOHolidays(year)
@@ -75,7 +74,7 @@ func pecoPeriods(plan string, opts types.UtilityRateOptions, years []int) []type
 				})
 			}
 
-			periods = append(periods, buildPeriods(locStr, simplified)...)
+			periods = append(periods, buildPeriods(etLocation, simplified)...)
 
 		case "peco_tou":
 			// Time-of-Use Option (Rate R/RH TOU)
@@ -146,7 +145,7 @@ func pecoPeriods(plan string, opts types.UtilityRateOptions, years []int) []type
 					OtherDescription:   "PECO TOU Off-Peak (" + s.desc + ")",
 				}
 
-				periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+				periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 					holidayPeriod,
 					regularPeriod,
 				})...)

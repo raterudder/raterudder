@@ -33,7 +33,6 @@ func getBGEHolidays(year int) []string {
 
 func bgePeriods(plan string, opts types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	locStr := etLocation.String() // BGE is in Maryland (Eastern Time)
 
 	for _, year := range years {
 		holidays := getBGEHolidays(year)
@@ -66,7 +65,7 @@ func bgePeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 					},
 				},
 			}
-			periods = append(periods, buildPeriods(locStr, simplified)...)
+			periods = append(periods, buildPeriods(etLocation, simplified)...)
 
 		case "bge_rl":
 			// Schedule RL (Residential Optional TOU)
@@ -140,7 +139,7 @@ func bgePeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 					OtherDescription:   "BGE Schedule RL Non-Summer Off-Peak",
 				},
 			}
-			periods = append(periods, buildPeriods(locStr, simplified)...)
+			periods = append(periods, buildPeriods(etLocation, simplified)...)
 
 		case "bge_ev":
 			// Schedule EV (Residential EV TOU)
@@ -202,7 +201,7 @@ func bgePeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 					OtherDescription:   "BGE Schedule EV Non-Summer Off-Peak",
 				},
 			}
-			periods = append(periods, buildPeriods(locStr, simplified)...)
+			periods = append(periods, buildPeriods(etLocation, simplified)...)
 
 		case "bge_rd":
 			// Schedule RD (Residential Delivery & Energy TOU)
@@ -264,7 +263,7 @@ func bgePeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 					OtherDescription:   "BGE Schedule RD Non-Summer Off-Peak",
 				},
 			}
-			periods = append(periods, buildPeriods(locStr, simplified)...)
+			periods = append(periods, buildPeriods(etLocation, simplified)...)
 		}
 	}
 	return periods

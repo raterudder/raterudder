@@ -384,23 +384,17 @@ AMIL.BGS6,Loadzone,LMP,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,
 }
 
 func TestAmerenBGSAndLossFactor(t *testing.T) {
-	ct, err := time.LoadLocation("America/Chicago")
-	require.NoError(t, err)
-
-	et, err := time.LoadLocation("America/New_York")
-	require.NoError(t, err)
-
 	t.Run("Loss factor transitions", func(t *testing.T) {
 		// Before June 1, 2026 (EST/EDT) -> 1.05009
-		t1 := time.Date(2026, time.May, 31, 23, 0, 0, 0, et)
+		t1 := time.Date(2026, time.May, 31, 23, 0, 0, 0, etLocation)
 		assert.Equal(t, 1.05009, amerenLossFactor(t1))
 
 		// On/After June 1, 2026 -> 1.04895
-		t2 := time.Date(2026, time.June, 1, 0, 0, 0, 0, et)
+		t2 := time.Date(2026, time.June, 1, 0, 0, 0, 0, etLocation)
 		assert.Equal(t, 1.04895, amerenLossFactor(t2))
 
 		// Later in 2026
-		t3 := time.Date(2026, time.December, 15, 12, 0, 0, 0, et)
+		t3 := time.Date(2026, time.December, 15, 12, 0, 0, 0, etLocation)
 		assert.Equal(t, 1.04895, amerenLossFactor(t3))
 	})
 
@@ -413,13 +407,13 @@ func TestAmerenBGSAndLossFactor(t *testing.T) {
 		require.NoError(t, err)
 
 		// 1. Summer BGS-1 (July 15, 2026)
-		// Supply: $0.08409
+		// Supply: $0.08413
 		// Transmission (June 2026+): $0.02765
 		// Distribution Delivery (Summer 2026): $0.07811
-		// Total: 0.08409 + 0.02765 + 0.07811 = 0.18985
-		pSummer, err := u.priceForTime(time.Date(2026, time.July, 15, 12, 0, 0, 0, ct))
+		// Total: 0.08413 + 0.02765 + 0.07811 = 0.18989
+		pSummer, err := u.priceForTime(time.Date(2026, time.July, 15, 12, 0, 0, 0, ctLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.08409, pSummer.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.08413, pSummer.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.02765+0.07811, pSummer.GridUseDollarsPerKWH, 1e-6)
 
 		// 2. Non-Summer BGS-1 (November 15, 2026)
@@ -427,7 +421,7 @@ func TestAmerenBGSAndLossFactor(t *testing.T) {
 		// Transmission: $0.02765
 		// Distribution Delivery (Non-summer 2026): $0.04572
 		// Total: 0.07283 + 0.02765 + 0.04572 = 0.14620
-		pNonSummer, err := u.priceForTime(time.Date(2026, time.November, 15, 12, 0, 0, 0, ct))
+		pNonSummer, err := u.priceForTime(time.Date(2026, time.November, 15, 12, 0, 0, 0, ctLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.07283, pNonSummer.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.02765+0.04572, pNonSummer.GridUseDollarsPerKWH, 1e-6)
@@ -441,8 +435,8 @@ func TestAmerenBGSAndLossFactor(t *testing.T) {
 		// Check transmission charge before and after June 1, 2026
 		// We can test this by applying fees on a dummy price
 		p1 := types.Price{
-			TSStart: time.Date(2026, time.May, 1, 12, 0, 0, 0, ct),
-			TSEnd:   time.Date(2026, time.May, 1, 13, 0, 0, 0, ct),
+			TSStart: time.Date(2026, time.May, 1, 12, 0, 0, 0, ctLocation),
+			TSEnd:   time.Date(2026, time.May, 1, 13, 0, 0, 0, ctLocation),
 		}
 		p1Applied, err := types.ApplyUtilityFeesPeriods(p1, fees)
 		require.NoError(t, err)
@@ -450,8 +444,8 @@ func TestAmerenBGSAndLossFactor(t *testing.T) {
 		assert.InDelta(t, 0.02629+0.04572, p1Applied.GridUseDollarsPerKWH, 1e-6)
 
 		p2 := types.Price{
-			TSStart: time.Date(2026, time.June, 15, 12, 0, 0, 0, ct),
-			TSEnd:   time.Date(2026, time.June, 15, 13, 0, 0, 0, ct),
+			TSStart: time.Date(2026, time.June, 15, 12, 0, 0, 0, ctLocation),
+			TSEnd:   time.Date(2026, time.June, 15, 13, 0, 0, 0, ctLocation),
 		}
 		p2Applied, err := types.ApplyUtilityFeesPeriods(p2, fees)
 		require.NoError(t, err)

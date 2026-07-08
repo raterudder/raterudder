@@ -39,7 +39,6 @@ func getRockyHolidays(year int) []string {
 
 func rockyPeriods(plan string, options types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	loc := mtLocation.String()
 	isNetBilling := options.NetMeteringScheme == "net_billing" || options.NetMeteringScheme == ""
 
 	for _, year := range years {
@@ -56,7 +55,7 @@ func rockyPeriods(plan string, options types.UtilityRateOptions, years []int) []
 				genCreditWinter = 0.04033
 			}
 
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mtLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.June,
@@ -175,7 +174,7 @@ func rockyPeriods(plan string, options types.UtilityRateOptions, years []int) []
 				OtherDescription:                   "Utah Winter TOU Off-Peak",
 			}
 
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{summerHoliday, summerRegular, winterHoliday, winterRegular})...)
+			periods = append(periods, buildPeriods(mtLocation, []touSimplifiedPeriod{summerHoliday, summerRegular, winterHoliday, winterRegular})...)
 
 		case "rocky_mountain_power_idaho_residential":
 			// Idaho Residential Service (flat-ish tiered rate, using first-tier values)
@@ -193,7 +192,7 @@ func rockyPeriods(plan string, options types.UtilityRateOptions, years []int) []
 			}
 
 			// First, the retail import rate periods (which are flat for each season)
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mtLocation, []touSimplifiedPeriod{
 				{
 					Year:       year,
 					MonthStart: time.June,
@@ -220,7 +219,7 @@ func rockyPeriods(plan string, options types.UtilityRateOptions, years []int) []
 
 			// If Net Billing is chosen, add the separate generation credit periods
 			if isNetBilling {
-				periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+				periods = append(periods, buildPeriods(mtLocation, []touSimplifiedPeriod{
 					// Summer Net Billing Credits (June - Oct)
 					{
 						Year:                         year,
@@ -262,7 +261,7 @@ func rockyPeriods(plan string, options types.UtilityRateOptions, years []int) []
 		case "rocky_mountain_power_wyoming_residential":
 			// Wyoming Residential Service (flat rate)
 			// Total: $0.08136/kWh
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mtLocation, []touSimplifiedPeriod{
 				{
 					Year:       year,
 					MonthStart: time.January,

@@ -2046,22 +2046,6 @@ func TestDecide(t *testing.T) {
 			ts = ts.Add(1 * time.Hour)
 		}
 
-		simData, _ := c.SimulateState(ctx, now, status, currentPrice, futurePrices, customHistory, nil, settings)
-		summary := c.analyzeSimulation(ctx, now, currentPrice, settings, simData)
-		evalDef := c.evaluateDeficit(ctx, now, status, currentPrice, settings, simData, summary)
-		evalExport := c.evaluateExportArbitrage(ctx, now, status, currentPrice, settings, simData, summary)
-
-		t.Logf("evalDef: %+v", evalDef)
-		if evalDef != nil {
-			t.Logf("evalDef.Decision: %+v", evalDef.Decision)
-			t.Logf("evalDef.Plan: %+v", evalDef.Plan)
-		}
-		t.Logf("evalExport: %+v", evalExport)
-		if evalExport != nil {
-			t.Logf("evalExport.Decision: %+v", evalExport.Decision)
-			t.Logf("evalExport.Plan: %+v", evalExport.Plan)
-		}
-
 		decision, err := c.Decide(ctx, status, currentPrice, futurePrices, customHistory, nil, settings)
 		require.NoError(t, err)
 

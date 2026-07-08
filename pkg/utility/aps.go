@@ -53,8 +53,6 @@ func getAPSHolidays(year int) []string {
 
 func apsPeriods(plan string, options types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	locStr := mstLocation.String()
-
 	isNetBilling := options.NetMeteringScheme != "net"
 
 	for _, year := range years {
@@ -71,7 +69,7 @@ func apsPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 				rate = 0.15418
 			}
 
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.January,
@@ -87,7 +85,7 @@ func apsPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			// Winter (Nov-Apr): On-Peak $0.32543, Off-Peak $0.12351, Super Off-Peak $0.03495
 
 			// Summer Holidays (Off-Peak all day)
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.May,
@@ -99,7 +97,7 @@ func apsPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Summer Regular
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:             year,
 					MonthStart:       time.May,
@@ -120,7 +118,7 @@ func apsPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Winter Holidays (Off-Peak all day)
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.November,
@@ -132,7 +130,7 @@ func apsPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Winter Regular
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:             year,
 					MonthStart:       time.November,
@@ -164,7 +162,7 @@ func apsPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			// Winter: On-Peak $0.09932, Off-Peak $0.05938, Super Off-Peak $0.03495
 
 			// Summer Holidays
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.May,
@@ -176,7 +174,7 @@ func apsPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Summer Regular
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:             year,
 					MonthStart:       time.May,
@@ -197,7 +195,7 @@ func apsPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Winter Holidays
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.November,
@@ -209,7 +207,7 @@ func apsPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Winter Regular
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:             year,
 					MonthStart:       time.November,
@@ -241,7 +239,7 @@ func apsPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			// Winter: On-Peak $0.34820, Off-Peak $0.12351, Overnight $0.08468, Super Off-Peak $0.03495
 
 			// Summer Holidays
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.May,
@@ -253,7 +251,7 @@ func apsPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Summer Regular
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:             year,
 					MonthStart:       time.May,
@@ -283,7 +281,7 @@ func apsPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Winter Holidays
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.November,
@@ -295,7 +293,7 @@ func apsPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Winter Regular
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:             year,
 					MonthStart:       time.November,
@@ -333,7 +331,7 @@ func apsPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 
 		// Export credit
 		if isNetBilling {
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                               year,
 					MonthStart:                         time.January,

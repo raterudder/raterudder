@@ -41,9 +41,6 @@ func TestFPLHolidays(t *testing.T) {
 }
 
 func TestFPLRates(t *testing.T) {
-	ny, err := time.LoadLocation("America/New_York")
-	require.NoError(t, err)
-
 	u := &genericTOU{}
 
 	t.Run("RS-1 Flat Rate", func(t *testing.T) {
@@ -54,11 +51,11 @@ func TestFPLRates(t *testing.T) {
 		require.NoError(t, err)
 
 		// Flat rate should be $0.12298 for any time
-		p, err := u.priceForTime(time.Date(2026, time.July, 15, 15, 0, 0, 0, ny))
+		p, err := u.priceForTime(time.Date(2026, time.July, 15, 15, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.12298, p.DollarsPerKWH, 1e-6)
 
-		p2, err := u.priceForTime(time.Date(2026, time.December, 15, 2, 0, 0, 0, ny))
+		p2, err := u.priceForTime(time.Date(2026, time.December, 15, 2, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.12298, p2.DollarsPerKWH, 1e-6)
 	})
@@ -72,48 +69,48 @@ func TestFPLRates(t *testing.T) {
 
 		// --- Summer (April 1 - October 31) ---
 		// 1. Summer weekday On-Peak (Wednesday, July 15, 2026 at 3:00 PM) -> 26.934¢
-		p, err := u.priceForTime(time.Date(2026, time.July, 15, 15, 0, 0, 0, ny))
+		p, err := u.priceForTime(time.Date(2026, time.July, 15, 15, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.26934, p.DollarsPerKWH, 1e-6)
 
 		// 2. Summer weekday Off-Peak (Wednesday, July 15, 2026 at 10:00 AM) -> 6.043¢
-		p, err = u.priceForTime(time.Date(2026, time.July, 15, 10, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.July, 15, 10, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.06043, p.DollarsPerKWH, 1e-6)
 
 		// 3. Summer weekend Off-Peak (Saturday, July 18, 2026 at 3:00 PM) -> 6.043¢
-		p, err = u.priceForTime(time.Date(2026, time.July, 18, 15, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.July, 18, 15, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.06043, p.DollarsPerKWH, 1e-6)
 
 		// 4. Summer Holiday Off-Peak (Labor Day Monday, Sep 7, 2026 at 3:00 PM) -> 6.043¢
-		p, err = u.priceForTime(time.Date(2026, time.September, 7, 15, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.September, 7, 15, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.06043, p.DollarsPerKWH, 1e-6)
 
 		// --- Winter (November 1 - March 31) ---
 		// 5. Winter weekday Morning On-Peak (Tuesday, Dec 15, 2026 at 8:00 AM) -> 26.934¢
-		p, err = u.priceForTime(time.Date(2026, time.December, 15, 8, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.December, 15, 8, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.26934, p.DollarsPerKWH, 1e-6)
 
 		// 6. Winter weekday Evening On-Peak (Tuesday, Dec 15, 2026 at 8:00 PM / 20:00) -> 26.934¢
-		p, err = u.priceForTime(time.Date(2026, time.December, 15, 20, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.December, 15, 20, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.26934, p.DollarsPerKWH, 1e-6)
 
 		// 7. Winter weekday Off-Peak (Tuesday, Dec 15, 2026 at 12:00 PM) -> 6.043¢
-		p, err = u.priceForTime(time.Date(2026, time.December, 15, 12, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.December, 15, 12, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.06043, p.DollarsPerKWH, 1e-6)
 
 		// 8. Winter weekend Off-Peak (Saturday, Dec 19, 2026 at 8:00 AM) -> 6.043¢
-		p, err = u.priceForTime(time.Date(2026, time.December, 19, 8, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.December, 19, 8, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.06043, p.DollarsPerKWH, 1e-6)
 
 		// 9. Winter Holiday Off-Peak (Christmas Day Friday, Dec 25, 2026 at 8:00 AM) -> 6.043¢
-		p, err = u.priceForTime(time.Date(2026, time.December, 25, 8, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.December, 25, 8, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.06043, p.DollarsPerKWH, 1e-6)
 	})

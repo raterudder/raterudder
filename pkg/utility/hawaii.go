@@ -83,7 +83,6 @@ var hawaiiSmartExportRates = map[string]float64{
 // hawaiiPeriods generates the pricing periods for Hawaiian Electric companies.
 func hawaiiPeriods(providerID string, plan string, options types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	locStr := hstLocation.String()
 
 	// Resolve island location from provider and options
 	var location string
@@ -116,7 +115,7 @@ func hawaiiPeriods(providerID string, plan string, options types.UtilityRateOpti
 		// 1. Consumption/Import Periods
 		if !isTOU {
 			rate := hawaiiFlatRates[location]
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(hstLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.January,
@@ -127,7 +126,7 @@ func hawaiiPeriods(providerID string, plan string, options types.UtilityRateOpti
 			})...)
 		} else {
 			rates := hawaiiTOURatesMap[location]
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(hstLocation, []touSimplifiedPeriod{
 				{
 					Year:       year,
 					MonthStart: time.January,
@@ -154,7 +153,7 @@ func hawaiiPeriods(providerID string, plan string, options types.UtilityRateOpti
 		switch netMeteringScheme {
 		case "sre_export":
 			sreRates := hawaiiSREExportRates[location]
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(hstLocation, []touSimplifiedPeriod{
 				{
 					Year:                         year,
 					MonthStart:                   time.January,
@@ -179,7 +178,7 @@ func hawaiiPeriods(providerID string, plan string, options types.UtilityRateOpti
 
 		case "cgs_plus":
 			flatCredit := hawaiiCGSPlusRates[location]
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(hstLocation, []touSimplifiedPeriod{
 				{
 					Year:                               year,
 					MonthStart:                         time.January,
@@ -192,7 +191,7 @@ func hawaiiPeriods(providerID string, plan string, options types.UtilityRateOpti
 
 		case "cgs":
 			flatCredit := hawaiiCGSRates[location]
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(hstLocation, []touSimplifiedPeriod{
 				{
 					Year:                               year,
 					MonthStart:                         time.January,
@@ -205,7 +204,7 @@ func hawaiiPeriods(providerID string, plan string, options types.UtilityRateOpti
 
 		case "smart_export":
 			exportCredit := hawaiiSmartExportRates[location]
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(hstLocation, []touSimplifiedPeriod{
 				{
 					Year:                         year,
 					MonthStart:                   time.January,

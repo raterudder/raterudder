@@ -15,9 +15,13 @@ func TestUtilityPeriodContains(t *testing.T) {
 		}
 		// Any time should be contained if within the hour range
 		now := time.Now()
-		contained, err := p.Contains(now)
+		contained, startEnd, err := p.Contains(now)
 		require.NoError(t, err)
 		assert.True(t, contained)
+		expectedStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		expectedEnd := time.Date(now.Year(), now.Month(), now.Day(), 24, 0, 0, 0, now.Location())
+		assert.Equal(t, expectedStart, startEnd.Start)
+		assert.Equal(t, expectedEnd, startEnd.End)
 	})
 
 	t.Run("empty period", func(t *testing.T) {
@@ -30,9 +34,11 @@ func TestUtilityPeriodContains(t *testing.T) {
 			time.Date(2099, 12, 31, 23, 59, 59, 0, time.UTC),
 		}
 		for _, ts := range times {
-			contained, err := p.Contains(ts)
+			contained, startEnd, err := p.Contains(ts)
 			require.NoError(t, err)
 			assert.True(t, contained, "Empty period should contain %v", ts)
+			assert.True(t, startEnd.Start.IsZero())
+			assert.True(t, startEnd.End.IsZero())
 		}
 	})
 
@@ -46,22 +52,24 @@ func TestUtilityPeriodContains(t *testing.T) {
 		}
 
 		// Exactly at start
-		contained, err := p.Contains(start)
+		contained, startEnd, err := p.Contains(start)
 		require.NoError(t, err)
 		assert.True(t, contained)
+		assert.Equal(t, start, startEnd.Start)
+		assert.Equal(t, time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC), startEnd.End)
 
 		// Exactly at end does NOT contain since the end is exclusive
-		contained, err = p.Contains(end)
+		contained, _, err = p.Contains(end)
 		require.NoError(t, err)
 		assert.False(t, contained)
 
 		// Before start
-		contained, err = p.Contains(start.Add(-time.Second))
+		contained, _, err = p.Contains(start.Add(-time.Second))
 		require.NoError(t, err)
 		assert.False(t, contained)
 
 		// After end
-		contained, err = p.Contains(end.Add(time.Second))
+		contained, _, err = p.Contains(end.Add(time.Second))
 		require.NoError(t, err)
 		assert.False(t, contained)
 	})
@@ -72,22 +80,26 @@ func TestUtilityPeriodContains(t *testing.T) {
 		}
 
 		// 9:00 AM (at Start)
-		contained, err := p.Contains(time.Date(2024, 1, 1, 9, 0, 0, 0, time.UTC))
+		contained, startEnd, err := p.Contains(time.Date(2024, 1, 1, 9, 0, 0, 0, time.UTC))
 		require.NoError(t, err)
 		assert.True(t, contained)
+		assert.Equal(t, time.Date(2024, 1, 1, 9, 0, 0, 0, time.UTC), startEnd.Start)
+		assert.Equal(t, time.Date(2024, 1, 1, 17, 0, 0, 0, time.UTC), startEnd.End)
 
 		// 4:59 PM (within range)
-		contained, err = p.Contains(time.Date(2024, 1, 1, 16, 59, 59, 0, time.UTC))
+		contained, startEnd, err = p.Contains(time.Date(2024, 1, 1, 16, 59, 59, 0, time.UTC))
 		require.NoError(t, err)
 		assert.True(t, contained)
+		assert.Equal(t, time.Date(2024, 1, 1, 9, 0, 0, 0, time.UTC), startEnd.Start)
+		assert.Equal(t, time.Date(2024, 1, 1, 17, 0, 0, 0, time.UTC), startEnd.End)
 
 		// 5:00 PM (at End - exclusive)
-		contained, err = p.Contains(time.Date(2024, 1, 1, 17, 0, 0, 0, time.UTC))
+		contained, _, err = p.Contains(time.Date(2024, 1, 1, 17, 0, 0, 0, time.UTC))
 		require.NoError(t, err)
 		assert.False(t, contained)
 
 		// 8:59 AM (before Start)
-		contained, err = p.Contains(time.Date(2024, 1, 1, 8, 59, 59, 0, time.UTC))
+		contained, _, err = p.Contains(time.Date(2024, 1, 1, 8, 59, 59, 0, time.UTC))
 		require.NoError(t, err)
 		assert.False(t, contained)
 	})
@@ -99,80 +111,83 @@ func TestUtilityPeriodContains(t *testing.T) {
 		}
 
 		// Monday
-		contained, err := p.Contains(time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)) // 2024-01-01 is Monday
+		contained, startEnd, err := p.Contains(time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)) // 2024-01-01 is Monday
 		require.NoError(t, err)
 		assert.True(t, contained)
+		assert.Equal(t, time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), startEnd.Start)
+		assert.Equal(t, time.Date(2024, 1, 1, 24, 0, 0, 0, time.UTC), startEnd.End)
 
 		// Tuesday
-		contained, err = p.Contains(time.Date(2024, 1, 2, 12, 0, 0, 0, time.UTC))
+		contained, _, err = p.Contains(time.Date(2024, 1, 2, 12, 0, 0, 0, time.UTC))
 		require.NoError(t, err)
 		assert.False(t, contained)
 
 		// Wednesday
-		contained, err = p.Contains(time.Date(2024, 1, 3, 12, 0, 0, 0, time.UTC))
+		contained, startEnd, err = p.Contains(time.Date(2024, 1, 3, 12, 0, 0, 0, time.UTC))
 		require.NoError(t, err)
 		assert.True(t, contained)
+		assert.Equal(t, time.Date(2024, 1, 3, 0, 0, 0, 0, time.UTC), startEnd.Start)
+		assert.Equal(t, time.Date(2024, 1, 3, 24, 0, 0, 0, time.UTC), startEnd.End)
 
 		// Sunday
-		contained, err = p.Contains(time.Date(2023, 12, 31, 12, 0, 0, 0, time.UTC)) // 2023-12-31 is Sunday
+		contained, _, err = p.Contains(time.Date(2023, 12, 31, 12, 0, 0, 0, time.UTC)) // 2023-12-31 is Sunday
 		require.NoError(t, err)
 		assert.False(t, contained)
 	})
 
 	t.Run("location", func(t *testing.T) {
+		chi, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
 		p := &UtilityPeriod{
-			Location: "America/Chicago",
-			Hours:    []UtilityHourPeriod{{HourStart: 9, HourEnd: 17}},
+			LocationPtr: chi,
+			Hours:       []UtilityHourPeriod{{HourStart: 9, HourEnd: 17}},
 		}
 
 		// 10:00 AM Central is 16:00 UTC (Standard Time)
 		t1 := time.Date(2024, 1, 1, 16, 0, 0, 0, time.UTC)
-		contained, err := p.Contains(t1)
+		contained, startEnd, err := p.Contains(t1)
 		require.NoError(t, err)
 		assert.True(t, contained)
+		assert.Equal(t, time.Date(2024, 1, 1, 9, 0, 0, 0, chi), startEnd.Start)
+		assert.Equal(t, time.Date(2024, 1, 1, 17, 0, 0, 0, chi), startEnd.End)
 
 		// 8:00 AM Central is 14:00 UTC
 		t2 := time.Date(2024, 1, 1, 14, 0, 0, 0, time.UTC)
-		contained, err = p.Contains(t2)
+		contained, _, err = p.Contains(t2)
 		require.NoError(t, err)
 		assert.False(t, contained)
 	})
 
-	t.Run("invalid location", func(t *testing.T) {
-		p := &UtilityPeriod{
-			Location: "Invalid/Location",
-		}
-		_, err := p.Contains(time.Now())
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to load location")
-	})
-
 	t.Run("combination", func(t *testing.T) {
+		chi, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
 		p := &UtilityPeriod{
 			Start:         time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 			End:           time.Date(2024, 12, 31, 23, 59, 59, 0, time.UTC),
 			Hours:         []UtilityHourPeriod{{HourStart: 9, HourEnd: 17}},
 			DaysOfTheWeek: []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday},
-			Location:      "America/Chicago",
+			LocationPtr:   chi,
 		}
 
 		// Monday Jan 1, 2024 10:00 AM Central (16:00 UTC) -> Should be true
-		contained, err := p.Contains(time.Date(2024, 1, 1, 16, 0, 0, 0, time.UTC))
+		contained, startEnd, err := p.Contains(time.Date(2024, 1, 1, 16, 0, 0, 0, time.UTC))
 		require.NoError(t, err)
 		assert.True(t, contained)
+		assert.Equal(t, time.Date(2024, 1, 1, 9, 0, 0, 0, chi), startEnd.Start)
+		assert.Equal(t, time.Date(2024, 1, 1, 17, 0, 0, 0, chi), startEnd.End)
 
 		// Saturday Jan 6, 2024 10:00 AM Central -> Should be false (wrong day)
-		contained, err = p.Contains(time.Date(2024, 1, 6, 16, 0, 0, 0, time.UTC))
+		contained, _, err = p.Contains(time.Date(2024, 1, 6, 16, 0, 0, 0, time.UTC))
 		require.NoError(t, err)
 		assert.False(t, contained)
 
 		// Monday Jan 1, 2024 8:00 AM Central -> Should be false (wrong hour)
-		contained, err = p.Contains(time.Date(2024, 1, 1, 14, 0, 0, 0, time.UTC))
+		contained, _, err = p.Contains(time.Date(2024, 1, 1, 14, 0, 0, 0, time.UTC))
 		require.NoError(t, err)
 		assert.False(t, contained)
 
 		// Monday Jan 1, 2023 10:00 AM Central -> Should be false (before Start)
-		contained, err = p.Contains(time.Date(2023, 1, 1, 16, 0, 0, 0, time.UTC))
+		contained, _, err = p.Contains(time.Date(2023, 1, 1, 16, 0, 0, 0, time.UTC))
 		require.NoError(t, err)
 		assert.False(t, contained)
 	})
@@ -182,7 +197,7 @@ func TestUtilityPeriodContains(t *testing.T) {
 			DaysOfTheWeek: []time.Weekday{},
 			Hours:         []UtilityHourPeriod{{HourStart: 0, HourEnd: 24}},
 		}
-		contained, err := p.Contains(time.Now())
+		contained, _, err := p.Contains(time.Now())
 		require.NoError(t, err)
 		assert.True(t, contained)
 	})
@@ -194,17 +209,18 @@ func TestUtilityPeriodContains(t *testing.T) {
 		}
 
 		// 8:00 AM (Outside 9-17, should be true because HoursNot is true)
-		contained, err := p.Contains(time.Date(2024, 1, 1, 8, 0, 0, 0, time.UTC))
+		contained, startEnd, err := p.Contains(time.Date(2024, 1, 1, 8, 0, 0, 0, time.UTC))
 		require.NoError(t, err)
 		assert.True(t, contained)
+		assert.True(t, startEnd.Start.IsZero())
 
 		// 10:00 AM (Inside 9-17, should be false)
-		contained, err = p.Contains(time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC))
+		contained, _, err = p.Contains(time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC))
 		require.NoError(t, err)
 		assert.False(t, contained)
 
 		// 5:00 PM (Start of exclusive end, should be true)
-		contained, err = p.Contains(time.Date(2024, 1, 1, 17, 0, 0, 0, time.UTC))
+		contained, _, err = p.Contains(time.Date(2024, 1, 1, 17, 0, 0, 0, time.UTC))
 		require.NoError(t, err)
 		assert.True(t, contained)
 	})
@@ -218,19 +234,23 @@ func TestUtilityPeriodContains(t *testing.T) {
 		}
 
 		// 8:00 AM (in first range)
-		contained, err := p.Contains(time.Date(2024, 1, 1, 8, 0, 0, 0, time.UTC))
+		contained, startEnd, err := p.Contains(time.Date(2024, 1, 1, 8, 0, 0, 0, time.UTC))
 		require.NoError(t, err)
 		assert.True(t, contained)
+		assert.Equal(t, time.Date(2024, 1, 1, 7, 0, 0, 0, time.UTC), startEnd.Start)
+		assert.Equal(t, time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC), startEnd.End)
 
 		// 12:00 PM (out of range)
-		contained, err = p.Contains(time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC))
+		contained, _, err = p.Contains(time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC))
 		require.NoError(t, err)
 		assert.False(t, contained)
 
 		// 7:00 PM (in second range)
-		contained, err = p.Contains(time.Date(2024, 1, 1, 19, 0, 0, 0, time.UTC))
+		contained, startEnd, err = p.Contains(time.Date(2024, 1, 1, 19, 0, 0, 0, time.UTC))
 		require.NoError(t, err)
 		assert.True(t, contained)
+		assert.Equal(t, time.Date(2024, 1, 1, 17, 0, 0, 0, time.UTC), startEnd.Start)
+		assert.Equal(t, time.Date(2024, 1, 1, 21, 0, 0, 0, time.UTC), startEnd.End)
 	})
 
 	t.Run("Overlapping hour ranges", func(t *testing.T) {
@@ -240,33 +260,36 @@ func TestUtilityPeriodContains(t *testing.T) {
 				{HourStart: 12, HourEnd: 17},
 			},
 		}
-		// 14:00 (In both ranges)
-		contained, _ := p.Contains(time.Date(2024, 1, 1, 14, 0, 0, 0, time.UTC))
+		// 14:00 (In both ranges, should pick the one that contains it first)
+		contained, startEnd, _ := p.Contains(time.Date(2024, 1, 1, 14, 0, 0, 0, time.UTC))
 		assert.True(t, contained)
+		assert.Equal(t, time.Date(2024, 1, 1, 9, 0, 0, 0, time.UTC), startEnd.Start)
+		assert.Equal(t, time.Date(2024, 1, 1, 15, 0, 0, 0, time.UTC), startEnd.End)
 
 		// 16:00 (In second range only)
-		contained, _ = p.Contains(time.Date(2024, 1, 1, 16, 0, 0, 0, time.UTC))
+		contained, startEnd, _ = p.Contains(time.Date(2024, 1, 1, 16, 0, 0, 0, time.UTC))
 		assert.True(t, contained)
+		assert.Equal(t, time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC), startEnd.Start)
+		assert.Equal(t, time.Date(2024, 1, 1, 17, 0, 0, 0, time.UTC), startEnd.End)
 	})
 
 	t.Run("DST Transition - America/Chicago Spring Forward", func(t *testing.T) {
 		// March 10, 2024: 02:00:00 -> 03:00:00
-		chi, _ := time.LoadLocation("America/Chicago")
+		chi, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
 		p := &UtilityPeriod{
-			Location: "America/Chicago",
-			Hours:    []UtilityHourPeriod{{HourStart: 2, HourEnd: 3}},
+			LocationPtr: chi,
+			Hours:       []UtilityHourPeriod{{HourStart: 2, HourEnd: 3}},
 		}
 
 		// 1:59 AM (should be false)
 		t1 := time.Date(2024, 3, 10, 1, 59, 0, 0, chi)
-		contained, _ := p.Contains(t1)
+		contained, _, _ := p.Contains(t1)
 		assert.False(t, contained)
 
 		// 3:00 AM (The hour 2:00-3:00 is skipped, so 3:00 is the first valid hour after 1:59)
-		// Wait, if I ask for 2:30 AM on that day, Go's time.Date and time.Parse will give me something else.
-		// Usually it's better to test the boundaries.
 		t2 := time.Date(2024, 3, 10, 3, 0, 0, 0, chi)
-		contained, _ = p.Contains(t2)
+		contained, _, _ = p.Contains(t2)
 		assert.False(t, contained, "Hour 3 is outside range [2, 3)")
 	})
 
@@ -276,17 +299,18 @@ func TestUtilityPeriodContains(t *testing.T) {
 		}
 
 		// Matching date
-		contained, err := p.Contains(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+		contained, startEnd, err := p.Contains(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
 		require.NoError(t, err)
 		assert.True(t, contained)
+		assert.True(t, startEnd.Start.IsZero())
 
 		// Another matching date
-		contained, err = p.Contains(time.Date(2026, 12, 25, 8, 0, 0, 0, time.UTC))
+		contained, _, err = p.Contains(time.Date(2026, 12, 25, 8, 0, 0, 0, time.UTC))
 		require.NoError(t, err)
 		assert.True(t, contained)
 
 		// Non-matching date
-		contained, err = p.Contains(time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
+		contained, _, err = p.Contains(time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
 		require.NoError(t, err)
 		assert.False(t, contained)
 	})
@@ -298,14 +322,59 @@ func TestUtilityPeriodContains(t *testing.T) {
 		}
 
 		// Matching date (should be excluded)
-		contained, err := p.Contains(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+		contained, _, err := p.Contains(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
 		require.NoError(t, err)
 		assert.False(t, contained)
 
 		// Non-matching date (should be included)
-		contained, err = p.Contains(time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
+		contained, _, err = p.Contains(time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
 		require.NoError(t, err)
 		assert.True(t, contained)
+	})
+
+	t.Run("sub-hour and 15-minute periods", func(t *testing.T) {
+		p := &UtilityPeriod{
+			Hours: []UtilityHourPeriod{
+				{HourStart: 6, MinuteStart: 30, HourEnd: 9, MinuteEnd: 0},
+				{HourStart: 10, MinuteStart: 15, HourEnd: 10, MinuteEnd: 45},
+			},
+		}
+
+		// 6:15 AM (before range 1)
+		contained, _, err := p.Contains(time.Date(2024, 1, 1, 6, 15, 0, 0, time.UTC))
+		require.NoError(t, err)
+		assert.False(t, contained)
+
+		// 6:30 AM (exactly at range 1 start)
+		contained, startEnd, err := p.Contains(time.Date(2024, 1, 1, 6, 30, 0, 0, time.UTC))
+		require.NoError(t, err)
+		assert.True(t, contained)
+		assert.Equal(t, time.Date(2024, 1, 1, 6, 30, 0, 0, time.UTC), startEnd.Start)
+		assert.Equal(t, time.Date(2024, 1, 1, 9, 0, 0, 0, time.UTC), startEnd.End)
+
+		// 8:59 AM (within range 1)
+		contained, startEnd, err = p.Contains(time.Date(2024, 1, 1, 8, 59, 0, 0, time.UTC))
+		require.NoError(t, err)
+		assert.True(t, contained)
+		assert.Equal(t, time.Date(2024, 1, 1, 6, 30, 0, 0, time.UTC), startEnd.Start)
+		assert.Equal(t, time.Date(2024, 1, 1, 9, 0, 0, 0, time.UTC), startEnd.End)
+
+		// 9:00 AM (at range 1 end - exclusive)
+		contained, _, err = p.Contains(time.Date(2024, 1, 1, 9, 0, 0, 0, time.UTC))
+		require.NoError(t, err)
+		assert.False(t, contained)
+
+		// 10:15 AM (exactly at range 2 start)
+		contained, startEnd, err = p.Contains(time.Date(2024, 1, 1, 10, 15, 0, 0, time.UTC))
+		require.NoError(t, err)
+		assert.True(t, contained)
+		assert.Equal(t, time.Date(2024, 1, 1, 10, 15, 0, 0, time.UTC), startEnd.Start)
+		assert.Equal(t, time.Date(2024, 1, 1, 10, 45, 0, 0, time.UTC), startEnd.End)
+
+		// 10:45 AM (at range 2 end - exclusive)
+		contained, _, err = p.Contains(time.Date(2024, 1, 1, 10, 45, 0, 0, time.UTC))
+		require.NoError(t, err)
+		assert.False(t, contained)
 	})
 }
 
@@ -459,10 +528,12 @@ func TestUtilityFeesPeriodApply(t *testing.T) {
 		// testTime is 12:00 UTC.
 		// America/Chicago is UTC-6 (Standard) or UTC-5 (Daylight).
 		// Jan 1st is Standard Time. 12:00 UTC is 6:00 AM CST.
+		chi, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
 		up := UtilityFeesPeriod{
 			UtilityPeriod: UtilityPeriod{
-				Location: "America/Chicago",
-				Hours:    []UtilityHourPeriod{{HourStart: 9, HourEnd: 17}},
+				LocationPtr: chi,
+				Hours:       []UtilityHourPeriod{{HourStart: 9, HourEnd: 17}},
 			},
 			DollarsPerKWH: 0.10,
 		}

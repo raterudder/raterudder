@@ -221,14 +221,13 @@ func buildDukeTOUPeriods(year int, holidays []string, onPeakRate, offPeakRate, d
 // dukeCarolinasNCPeriods returns pricing periods for Duke Energy Carolinas (North Carolina)
 func dukeCarolinasNCPeriods(plan string, options types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	loc := etLocation.String()
 
 	for _, year := range years {
 		holidays := getDukeHolidays(year)
 
 		switch plan {
 		case "duke_carolinas_nc_rs":
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.January,
@@ -239,7 +238,7 @@ func dukeCarolinasNCPeriods(plan string, options types.UtilityRateOptions, years
 			})...)
 
 		case "duke_carolinas_nc_re":
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.January,
@@ -250,10 +249,10 @@ func dukeCarolinasNCPeriods(plan string, options types.UtilityRateOptions, years
 			})...)
 
 		case "duke_carolinas_nc_rt":
-			periods = append(periods, buildPeriods(loc, buildDukeTOUPeriods(year, holidays, 0.171204, 0.078411, 0.053929))...)
+			periods = append(periods, buildPeriods(etLocation, buildDukeTOUPeriods(year, holidays, 0.171204, 0.078411, 0.053929))...)
 
 		case "duke_carolinas_nc_rt_ev":
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				{
 					Year:       year,
 					MonthStart: time.January,
@@ -275,11 +274,11 @@ func dukeCarolinasNCPeriods(plan string, options types.UtilityRateOptions, years
 
 		case "duke_carolinas_nc_rstc":
 			// TODO: no support for Critical Peak pricing notifications
-			periods = append(periods, buildPeriods(loc, buildDukeTOUPeriods(year, holidays, 0.234984, 0.102875, 0.074375))...)
+			periods = append(periods, buildPeriods(etLocation, buildDukeTOUPeriods(year, holidays, 0.234984, 0.102875, 0.074375))...)
 
 		case "duke_carolinas_nc_retc":
 			// TODO: no support for Critical Peak pricing notifications
-			periods = append(periods, buildPeriods(loc, buildDukeTOUPeriods(year, holidays, 0.213412, 0.097428, 0.070480))...)
+			periods = append(periods, buildPeriods(etLocation, buildDukeTOUPeriods(year, holidays, 0.213412, 0.097428, 0.070480))...)
 		}
 	}
 
@@ -299,14 +298,13 @@ func dukeCarolinasNCPeriods(plan string, options types.UtilityRateOptions, years
 // dukeCarolinasSCPeriods returns pricing periods for Duke Energy Carolinas (South Carolina)
 func dukeCarolinasSCPeriods(plan string, options types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	loc := etLocation.String()
 
 	for _, year := range years {
 		holidays := getDukeHolidays(year)
 
 		switch plan {
 		case "duke_carolinas_sc_rs":
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.January,
@@ -317,7 +315,7 @@ func dukeCarolinasSCPeriods(plan string, options types.UtilityRateOptions, years
 			})...)
 
 		case "duke_carolinas_sc_re":
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.January,
@@ -329,12 +327,12 @@ func dukeCarolinasSCPeriods(plan string, options types.UtilityRateOptions, years
 
 		case "duke_carolinas_sc_rt":
 			// TODO: no support for Critical Peak pricing notifications
-			periods = append(periods, buildPeriods(loc, buildDukeTOUPeriods(year, holidays, 0.216118, 0.096597, 0.059814))...)
+			periods = append(periods, buildPeriods(etLocation, buildDukeTOUPeriods(year, holidays, 0.216118, 0.096597, 0.059814))...)
 
 		case "duke_carolinas_sc_r_stou":
 			// Solar TOU Schedule R-STOU
 			// TODO: no support for Critical Peak pricing notifications
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				// Non-Winter Months (March - November)
 				{
 					Year:          year,
@@ -413,11 +411,11 @@ func dukeCarolinasSCPeriods(plan string, options types.UtilityRateOptions, years
 
 		case "duke_carolinas_sc_rstc":
 			// TODO: no support for Critical Peak pricing notifications
-			periods = append(periods, buildPeriods(loc, buildDukeTOUPeriods(year, holidays, 0.264869, 0.131171, 0.088409))...)
+			periods = append(periods, buildPeriods(etLocation, buildDukeTOUPeriods(year, holidays, 0.264869, 0.131171, 0.088409))...)
 
 		case "duke_carolinas_sc_retc":
 			// TODO: no support for Critical Peak pricing notifications
-			periods = append(periods, buildPeriods(loc, buildDukeTOUPeriods(year, holidays, 0.257296, 0.123157, 0.080971))...)
+			periods = append(periods, buildPeriods(etLocation, buildDukeTOUPeriods(year, holidays, 0.257296, 0.123157, 0.080971))...)
 		}
 	}
 
@@ -434,14 +432,13 @@ func dukeCarolinasSCPeriods(plan string, options types.UtilityRateOptions, years
 // dukeProgressNCPeriods returns pricing periods for Duke Energy Progress (North Carolina)
 func dukeProgressNCPeriods(plan string, options types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	loc := etLocation.String()
 
 	for _, year := range years {
 		holidays := getDukeHolidays(year)
 
 		switch plan {
 		case "duke_progress_nc_res":
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.January,
@@ -453,11 +450,11 @@ func dukeProgressNCPeriods(plan string, options types.UtilityRateOptions, years 
 
 		case "duke_progress_nc_r_tou":
 			// TODO: no support for Critical Peak pricing notifications
-			periods = append(periods, buildPeriods(loc, buildDukeTOUPeriods(year, holidays, 0.29905, 0.11321, 0.07372))...)
+			periods = append(periods, buildPeriods(etLocation, buildDukeTOUPeriods(year, holidays, 0.29905, 0.11321, 0.07372))...)
 
 		case "duke_progress_nc_r_tou_cpp":
 			// TODO: no support for Critical Peak pricing notifications
-			periods = append(periods, buildPeriods(loc, buildDukeTOUPeriods(year, holidays, 0.21952, 0.11000, 0.08274))...)
+			periods = append(periods, buildPeriods(etLocation, buildDukeTOUPeriods(year, holidays, 0.21952, 0.11000, 0.08274))...)
 		}
 	}
 
@@ -478,12 +475,11 @@ func dukeProgressNCPeriods(plan string, options types.UtilityRateOptions, years 
 // dukeProgressSCPeriods returns pricing periods for Duke Energy Progress (South Carolina)
 func dukeProgressSCPeriods(plan string, options types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	loc := etLocation.String()
 
 	for _, year := range years {
 		switch plan {
 		case "duke_progress_sc_res":
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.January,
@@ -494,7 +490,7 @@ func dukeProgressSCPeriods(plan string, options types.UtilityRateOptions, years 
 			})...)
 
 		case "duke_progress_sc_r_tou_ev":
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				{
 					Year:       year,
 					MonthStart: time.January,
@@ -577,15 +573,13 @@ func isDEIWinter(t time.Time) bool {
 // dukeIndianaPeriods returns pricing periods for Duke Energy Indiana (DEI)
 func dukeIndianaPeriods(plan string, options types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	loc := etLocation.String()
-	locPtr := etLocation
 
 	for _, year := range years {
 		holidays := getIndianaHolidays(year)
 
 		switch plan {
 		case "duke_indiana_rs":
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.January,
@@ -602,8 +596,8 @@ func dukeIndianaPeriods(plan string, options types.UtilityRateOptions, years []i
 			//   Non-Winter: Mon-Fri 5 pm - 9 pm
 			//   Winter: Mon-Fri 6 am - 8 am AND 5 pm - 9 pm
 			// Winter: On and after the first Sunday in November to the second Sunday in March
-			startDay := time.Date(year, time.January, 1, 0, 0, 0, 0, locPtr)
-			endDay := time.Date(year+1, time.January, 1, 0, 0, 0, 0, locPtr)
+			startDay := time.Date(year, time.January, 1, 0, 0, 0, 0, etLocation)
+			endDay := time.Date(year+1, time.January, 1, 0, 0, 0, 0, etLocation)
 
 			for d := startDay; d.Before(endDay); d = d.AddDate(0, 0, 1) {
 				dateStr := d.Format("2006-01-02")
@@ -617,7 +611,7 @@ func dukeIndianaPeriods(plan string, options types.UtilityRateOptions, years []i
 						Start:       d,
 						End:         d.AddDate(0, 0, 1),
 						Hours:       []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 4}},
-						LocationPtr: locPtr,
+						LocationPtr: etLocation,
 					},
 					DollarsPerKWH: 0.085679,
 					Description:   "DEI Discount Hours",
@@ -635,7 +629,7 @@ func dukeIndianaPeriods(plan string, options types.UtilityRateOptions, years []i
 									{HourStart: 6, HourEnd: 8},
 									{HourStart: 17, HourEnd: 21},
 								},
-								LocationPtr: locPtr,
+								LocationPtr: etLocation,
 							},
 							DollarsPerKWH: 0.214198,
 							Description:   "DEI Winter On-Peak",
@@ -649,7 +643,7 @@ func dukeIndianaPeriods(plan string, options types.UtilityRateOptions, years []i
 								Hours: []types.UtilityHourPeriod{
 									{HourStart: 17, HourEnd: 21},
 								},
-								LocationPtr: locPtr,
+								LocationPtr: etLocation,
 							},
 							DollarsPerKWH: 0.214198,
 							Description:   "DEI Summer On-Peak",
@@ -689,7 +683,7 @@ func dukeIndianaPeriods(plan string, options types.UtilityRateOptions, years []i
 						Start:       d,
 						End:         d.AddDate(0, 0, 1),
 						Hours:       offPeakGaps,
-						LocationPtr: locPtr,
+						LocationPtr: etLocation,
 					},
 					DollarsPerKWH: 0.142799,
 					Description:   "DEI Off-Peak",
@@ -848,7 +842,7 @@ func buildDECNCPPExportPeriods(year int, holidays []string) []types.UtilityFeesP
 		},
 	}
 
-	periods = append(periods, buildPeriods(etLocation.String(), simplified)...)
+	periods = append(periods, buildPeriods(etLocation, simplified)...)
 	return periods
 }
 
@@ -979,7 +973,7 @@ func buildDEPNCPPExportPeriods(year int, holidays []string) []types.UtilityFeesP
 		},
 	}
 
-	periods = append(periods, buildPeriods(etLocation.String(), simplified)...)
+	periods = append(periods, buildPeriods(etLocation, simplified)...)
 	return periods
 }
 
@@ -1107,7 +1101,199 @@ func buildDEPSCPPExportPeriods(year int, holidays []string) []types.UtilityFeesP
 		},
 	}
 
-	periods = append(periods, buildPeriods(etLocation.String(), simplified)...)
+	periods = append(periods, buildPeriods(etLocation, simplified)...)
+	return periods
+}
+
+// getDukeFLHolidays returns Duke's holiday calendar for Florida (identical to Indiana)
+func getDukeFLHolidays(year int) []string {
+	return getIndianaHolidays(year)
+}
+
+func buildDukeFLRST1Periods(year int, holidays []string) []touSimplifiedPeriod {
+	onPeak := 0.11090
+	offPeak := 0.08215
+	discount := 0.04984
+
+	return []touSimplifiedPeriod{
+		// === WINTER (December - February) ===
+		// 1. Weekday Winter (except holidays)
+		{
+			Year:             year,
+			MonthStart:       time.December,
+			MonthEnd:         time.February,
+			SpecificDates:    holidays,
+			SpecificDatesNot: true,
+			HoursAndDays: []touSimplifiedHoursAndDays{
+				{
+					Hours:         []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 3}},
+					Weekday:       true,
+					DollarsPerKWH: discount,
+					Description:   "RST-1 Winter Weekday Discount",
+				},
+				{
+					Hours:         []types.UtilityHourPeriod{{HourStart: 5, HourEnd: 10}, {HourStart: 18, HourEnd: 21}},
+					Weekday:       true,
+					DollarsPerKWH: onPeak,
+					Description:   "RST-1 Winter Weekday On-Peak",
+				},
+				{
+					Hours:         []types.UtilityHourPeriod{{HourStart: 3, HourEnd: 5}, {HourStart: 10, HourEnd: 18}, {HourStart: 21, HourEnd: 24}},
+					Weekday:       true,
+					DollarsPerKWH: offPeak,
+					Description:   "RST-1 Winter Weekday Off-Peak",
+				},
+			},
+		},
+		// 2. Weekend Winter (Saturdays/Sundays)
+		{
+			Year:       year,
+			MonthStart: time.December,
+			MonthEnd:   time.February,
+			HoursAndDays: []touSimplifiedHoursAndDays{
+				{
+					Hours:         []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 3}},
+					Weekend:       true,
+					DollarsPerKWH: discount,
+					Description:   "RST-1 Winter Weekend Discount",
+				},
+				{
+					Hours:         []types.UtilityHourPeriod{{HourStart: 3, HourEnd: 24}},
+					Weekend:       true,
+					DollarsPerKWH: offPeak,
+					Description:   "RST-1 Winter Weekend Off-Peak",
+				},
+			},
+		},
+		// 3. Holiday Winter
+		{
+			Year:             year,
+			MonthStart:       time.December,
+			MonthEnd:         time.February,
+			SpecificDates:    holidays,
+			SpecificDatesNot: false,
+			HoursAndDays: []touSimplifiedHoursAndDays{
+				{
+					Hours:         []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 3}},
+					Weekday:       true,
+					DollarsPerKWH: discount,
+					Description:   "RST-1 Winter Holiday Discount",
+				},
+				{
+					Hours:         []types.UtilityHourPeriod{{HourStart: 3, HourEnd: 24}},
+					Weekday:       true,
+					DollarsPerKWH: offPeak,
+					Description:   "RST-1 Winter Holiday Off-Peak",
+				},
+			},
+		},
+
+		// === NON-WINTER (March - November) ===
+		// 4. Weekday Non-Winter (except holidays)
+		{
+			Year:             year,
+			MonthStart:       time.March,
+			MonthEnd:         time.November,
+			SpecificDates:    holidays,
+			SpecificDatesNot: true,
+			HoursAndDays: []touSimplifiedHoursAndDays{
+				{
+					Hours:         []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 6}},
+					Weekday:       true,
+					DollarsPerKWH: discount,
+					Description:   "RST-1 Non-Winter Weekday Discount",
+				},
+				{
+					Hours:         []types.UtilityHourPeriod{{HourStart: 18, HourEnd: 21}},
+					Weekday:       true,
+					DollarsPerKWH: onPeak,
+					Description:   "RST-1 Non-Winter Weekday On-Peak",
+				},
+				{
+					Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 18}, {HourStart: 21, HourEnd: 24}},
+					Weekday:       true,
+					DollarsPerKWH: offPeak,
+					Description:   "RST-1 Non-Winter Weekday Off-Peak",
+				},
+			},
+		},
+		// 5. Weekend Non-Winter (Saturdays/Sundays)
+		{
+			Year:       year,
+			MonthStart: time.March,
+			MonthEnd:   time.November,
+			HoursAndDays: []touSimplifiedHoursAndDays{
+				{
+					Hours:         []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 6}},
+					Weekend:       true,
+					DollarsPerKWH: discount,
+					Description:   "RST-1 Non-Winter Weekend Discount",
+				},
+				{
+					Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 24}},
+					Weekend:       true,
+					DollarsPerKWH: offPeak,
+					Description:   "RST-1 Non-Winter Weekend Off-Peak",
+				},
+			},
+		},
+		// 6. Holiday Non-Winter
+		{
+			Year:             year,
+			MonthStart:       time.March,
+			MonthEnd:         time.November,
+			SpecificDates:    holidays,
+			SpecificDatesNot: false,
+			HoursAndDays: []touSimplifiedHoursAndDays{
+				{
+					Hours:         []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 6}},
+					Weekday:       true,
+					DollarsPerKWH: discount,
+					Description:   "RST-1 Non-Winter Holiday Discount",
+				},
+				{
+					Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 24}},
+					Weekday:       true,
+					DollarsPerKWH: offPeak,
+					Description:   "RST-1 Non-Winter Holiday Off-Peak",
+				},
+			},
+		},
+	}
+}
+
+func dukeFloridaPeriods(plan string, options types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
+	var periods []types.UtilityFeesPeriod
+
+	for _, year := range years {
+		holidays := getDukeFLHolidays(year)
+
+		switch plan {
+		case "duke_florida_rs":
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
+				// Winter (December - February)
+				{
+					Year:               year,
+					MonthStart:         time.December,
+					MonthEnd:           time.February,
+					OtherDollarsPerKWH: 0.087540,
+					OtherDescription:   "Residential Service RS-1 Winter (Dec-Feb)",
+				},
+				// Non-Winter (March - November)
+				{
+					Year:               year,
+					MonthStart:         time.March,
+					MonthEnd:           time.November,
+					OtherDollarsPerKWH: 0.076860,
+					OtherDescription:   "Residential Service RS-1 Non-Winter (Mar-Nov)",
+				},
+			})...)
+
+		case "duke_florida_rst":
+			periods = append(periods, buildPeriods(etLocation, buildDukeFLRST1Periods(year, holidays))...)
+		}
+	}
+
 	return periods
 }
 
@@ -1121,127 +1307,105 @@ func depSCPPAvoidedCost(primary, backup float64) float64 {
 
 // dukeUtilityInfo returns the UtilityProviderInfo slice for Duke Energy
 func dukeUtilityInfo() []types.UtilityProviderInfo {
+	ncOptions := []types.UtilityRateOption{
+		{
+			Field:       "netMeteringScheme",
+			Name:        "Export Scheme / Rider",
+			Type:        types.UtilityOptionTypeSelect,
+			Description: "Select your solar export rider.",
+			Choices: []types.UtilityOptionChoice{
+				{Value: "rsc", Name: "Residential Solar Choice (RSC)"},
+				{Value: "scg", Name: "Small Customer Generator (SCG)"},
+			},
+			Default: "rsc",
+		},
+	}
+	scOptions := []types.UtilityRateOption{
+		{
+			Field:       "netMeteringScheme",
+			Name:        "Export Scheme / Rider",
+			Type:        types.UtilityOptionTypeSelect,
+			Description: "Select your solar export rider.",
+			Choices: []types.UtilityOptionChoice{
+				{Value: "rsc", Name: "Residential Solar Choice (RSC)"},
+				{Value: "rnm", Name: "Renewable Net Metering (RNM)"},
+			},
+			Default: "rsc",
+		},
+	}
+	inOptions := []types.UtilityRateOption{
+		{
+			Field:       "netMeteringScheme",
+			Name:        "Export Scheme / Rider",
+			Type:        types.UtilityOptionTypeSelect,
+			Description: "Select your solar export scheme.",
+			Choices: []types.UtilityOptionChoice{
+				{Value: "edg", Name: "Excess Distributed Generation (EDG)"},
+				{Value: "net", Name: "Standard Net Metering (1:1)"},
+			},
+			Default: "edg",
+		},
+	}
+	flOptions := []types.UtilityRateOption{
+		{
+			Field:       "netMeteringCredits",
+			Name:        "Net Metering",
+			Type:        types.UtilityOptionTypeSwitch,
+			Description: "Florida net metering tracks energy exports as kWh 1:1 credits.",
+			Default:     true,
+			Hidden:      true,
+		},
+	}
+
 	return []types.UtilityProviderInfo{
 		{
 			ID:   "duke_carolinas_nc",
 			Name: "Duke Energy Carolinas (North Carolina)",
 			Rates: []types.UtilityRateInfo{
 				{
-					ID:   "duke_carolinas_nc_rs",
-					Name: "Standard Residential",
-					Options: []types.UtilityRateOption{
-						{
-							Field:       "netMeteringScheme",
-							Name:        "Export Scheme / Rider",
-							Type:        types.UtilityOptionTypeSelect,
-							Description: "Select your solar export rider.",
-							Choices: []types.UtilityOptionChoice{
-								{Value: "rsc", Name: "Residential Solar Choice (RSC)"},
-								{Value: "scg", Name: "Small Customer Generator (SCG)"},
-							},
-							Default: "rsc",
-						},
-					},
+					ID:      "duke_carolinas_nc_rs",
+					Name:    "Standard Residential",
+					Options: ncOptions,
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						return dukeCarolinasNCPeriods("duke_carolinas_nc_rs", opts, []int{2026, 2027}), nil
 					},
 				},
 				{
-					ID:   "duke_carolinas_nc_re",
-					Name: "Residential Space Conditioning & Water Heating",
-					Options: []types.UtilityRateOption{
-						{
-							Field:       "netMeteringScheme",
-							Name:        "Export Scheme / Rider",
-							Type:        types.UtilityOptionTypeSelect,
-							Description: "Select your solar export rider.",
-							Choices: []types.UtilityOptionChoice{
-								{Value: "rsc", Name: "Residential Solar Choice (RSC)"},
-								{Value: "scg", Name: "Small Customer Generator (SCG)"},
-							},
-							Default: "rsc",
-						},
-					},
+					ID:      "duke_carolinas_nc_re",
+					Name:    "Residential Space Conditioning & Water Heating",
+					Options: ncOptions,
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						return dukeCarolinasNCPeriods("duke_carolinas_nc_re", opts, []int{2026, 2027}), nil
 					},
 				},
 				{
-					ID:   "duke_carolinas_nc_rt",
-					Name: "Residential Time-of-Use",
-					Options: []types.UtilityRateOption{
-						{
-							Field:       "netMeteringScheme",
-							Name:        "Export Scheme / Rider",
-							Type:        types.UtilityOptionTypeSelect,
-							Description: "Select your solar export rider.",
-							Choices: []types.UtilityOptionChoice{
-								{Value: "rsc", Name: "Residential Solar Choice (RSC)"},
-								{Value: "scg", Name: "Small Customer Generator (SCG)"},
-							},
-							Default: "rsc",
-						},
-					},
+					ID:      "duke_carolinas_nc_rt",
+					Name:    "Residential Time-of-Use",
+					Options: ncOptions,
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						return dukeCarolinasNCPeriods("duke_carolinas_nc_rt", opts, []int{2026, 2027}), nil
 					},
 				},
 				{
-					ID:   "duke_carolinas_nc_rt_ev",
-					Name: "Time-of-Use Electric Vehicle",
-					Options: []types.UtilityRateOption{
-						{
-							Field:       "netMeteringScheme",
-							Name:        "Export Scheme / Rider",
-							Type:        types.UtilityOptionTypeSelect,
-							Description: "Select your solar export rider.",
-							Choices: []types.UtilityOptionChoice{
-								{Value: "rsc", Name: "Residential Solar Choice (RSC)"},
-								{Value: "scg", Name: "Small Customer Generator (SCG)"},
-							},
-							Default: "rsc",
-						},
-					},
+					ID:      "duke_carolinas_nc_rt_ev",
+					Name:    "Time-of-Use Electric Vehicle",
+					Options: ncOptions,
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						return dukeCarolinasNCPeriods("duke_carolinas_nc_rt_ev", opts, []int{2026, 2027}), nil
 					},
 				},
 				{
-					ID:   "duke_carolinas_nc_rstc",
-					Name: "Residential Time-of-Use (Critical Peak)",
-					Options: []types.UtilityRateOption{
-						{
-							Field:       "netMeteringScheme",
-							Name:        "Export Scheme / Rider",
-							Type:        types.UtilityOptionTypeSelect,
-							Description: "Select your solar export rider.",
-							Choices: []types.UtilityOptionChoice{
-								{Value: "rsc", Name: "Residential Solar Choice (RSC)"},
-								{Value: "scg", Name: "Small Customer Generator (SCG)"},
-							},
-							Default: "rsc",
-						},
-					},
+					ID:      "duke_carolinas_nc_rstc",
+					Name:    "Residential Time-of-Use (Critical Peak)",
+					Options: ncOptions,
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						return dukeCarolinasNCPeriods("duke_carolinas_nc_rstc", opts, []int{2026, 2027}), nil
 					},
 				},
 				{
-					ID:   "duke_carolinas_nc_retc",
-					Name: "Residential All-Electric Time-of-Use (Critical Peak)",
-					Options: []types.UtilityRateOption{
-						{
-							Field:       "netMeteringScheme",
-							Name:        "Export Scheme / Rider",
-							Type:        types.UtilityOptionTypeSelect,
-							Description: "Select your solar export rider.",
-							Choices: []types.UtilityOptionChoice{
-								{Value: "rsc", Name: "Residential Solar Choice (RSC)"},
-								{Value: "scg", Name: "Small Customer Generator (SCG)"},
-							},
-							Default: "rsc",
-						},
-					},
+					ID:      "duke_carolinas_nc_retc",
+					Name:    "Residential All-Electric Time-of-Use (Critical Peak)",
+					Options: ncOptions,
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						return dukeCarolinasNCPeriods("duke_carolinas_nc_retc", opts, []int{2026, 2027}), nil
 					},
@@ -1253,121 +1417,49 @@ func dukeUtilityInfo() []types.UtilityProviderInfo {
 			Name: "Duke Energy Carolinas (South Carolina)",
 			Rates: []types.UtilityRateInfo{
 				{
-					ID:   "duke_carolinas_sc_rs",
-					Name: "Standard Residential",
-					Options: []types.UtilityRateOption{
-						{
-							Field:       "netMeteringScheme",
-							Name:        "Export Scheme / Rider",
-							Type:        types.UtilityOptionTypeSelect,
-							Description: "Select your solar export rider.",
-							Choices: []types.UtilityOptionChoice{
-								{Value: "rsc", Name: "Residential Solar Choice (RSC)"},
-								{Value: "rnm", Name: "Renewable Net Metering (RNM)"},
-							},
-							Default: "rsc",
-						},
-					},
+					ID:      "duke_carolinas_sc_rs",
+					Name:    "Standard Residential",
+					Options: scOptions,
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						return dukeCarolinasSCPeriods("duke_carolinas_sc_rs", opts, []int{2026, 2027}), nil
 					},
 				},
 				{
-					ID:   "duke_carolinas_sc_re",
-					Name: "Residential Space Conditioning & Water Heating",
-					Options: []types.UtilityRateOption{
-						{
-							Field:       "netMeteringScheme",
-							Name:        "Export Scheme / Rider",
-							Type:        types.UtilityOptionTypeSelect,
-							Description: "Select your solar export rider.",
-							Choices: []types.UtilityOptionChoice{
-								{Value: "rsc", Name: "Residential Solar Choice (RSC)"},
-								{Value: "rnm", Name: "Renewable Net Metering (RNM)"},
-							},
-							Default: "rsc",
-						},
-					},
+					ID:      "duke_carolinas_sc_re",
+					Name:    "Residential Space Conditioning & Water Heating",
+					Options: scOptions,
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						return dukeCarolinasSCPeriods("duke_carolinas_sc_re", opts, []int{2026, 2027}), nil
 					},
 				},
 				{
-					ID:   "duke_carolinas_sc_rt",
-					Name: "Residential Time-of-Use",
-					Options: []types.UtilityRateOption{
-						{
-							Field:       "netMeteringScheme",
-							Name:        "Export Scheme / Rider",
-							Type:        types.UtilityOptionTypeSelect,
-							Description: "Select your solar export rider.",
-							Choices: []types.UtilityOptionChoice{
-								{Value: "rsc", Name: "Residential Solar Choice (RSC)"},
-								{Value: "rnm", Name: "Renewable Net Metering (RNM)"},
-							},
-							Default: "rsc",
-						},
-					},
+					ID:      "duke_carolinas_sc_rt",
+					Name:    "Residential Time-of-Use",
+					Options: scOptions,
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						return dukeCarolinasSCPeriods("duke_carolinas_sc_rt", opts, []int{2026, 2027}), nil
 					},
 				},
 				{
-					ID:   "duke_carolinas_sc_r_stou",
-					Name: "Solar Time-of-Use",
-					Options: []types.UtilityRateOption{
-						{
-							Field:       "netMeteringScheme",
-							Name:        "Export Scheme / Rider",
-							Type:        types.UtilityOptionTypeSelect,
-							Description: "Select your solar export rider.",
-							Choices: []types.UtilityOptionChoice{
-								{Value: "rsc", Name: "Residential Solar Choice (RSC)"},
-								{Value: "rnm", Name: "Renewable Net Metering (RNM)"},
-							},
-							Default: "rsc",
-						},
-					},
+					ID:      "duke_carolinas_sc_r_stou",
+					Name:    "Solar Time-of-Use",
+					Options: scOptions,
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						return dukeCarolinasSCPeriods("duke_carolinas_sc_r_stou", opts, []int{2026, 2027}), nil
 					},
 				},
 				{
-					ID:   "duke_carolinas_sc_rstc",
-					Name: "Residential Time-of-Use (Critical Peak)",
-					Options: []types.UtilityRateOption{
-						{
-							Field:       "netMeteringScheme",
-							Name:        "Export Scheme / Rider",
-							Type:        types.UtilityOptionTypeSelect,
-							Description: "Select your solar export rider.",
-							Choices: []types.UtilityOptionChoice{
-								{Value: "rsc", Name: "Residential Solar Choice (RSC)"},
-								{Value: "rnm", Name: "Renewable Net Metering (RNM)"},
-							},
-							Default: "rsc",
-						},
-					},
+					ID:      "duke_carolinas_sc_rstc",
+					Name:    "Residential Time-of-Use (Critical Peak)",
+					Options: scOptions,
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						return dukeCarolinasSCPeriods("duke_carolinas_sc_rstc", opts, []int{2026, 2027}), nil
 					},
 				},
 				{
-					ID:   "duke_carolinas_sc_retc",
-					Name: "Residential All-Electric Time-of-Use (Critical Peak)",
-					Options: []types.UtilityRateOption{
-						{
-							Field:       "netMeteringScheme",
-							Name:        "Export Scheme / Rider",
-							Type:        types.UtilityOptionTypeSelect,
-							Description: "Select your solar export rider.",
-							Choices: []types.UtilityOptionChoice{
-								{Value: "rsc", Name: "Residential Solar Choice (RSC)"},
-								{Value: "rnm", Name: "Renewable Net Metering (RNM)"},
-							},
-							Default: "rsc",
-						},
-					},
+					ID:      "duke_carolinas_sc_retc",
+					Name:    "Residential All-Electric Time-of-Use (Critical Peak)",
+					Options: scOptions,
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						return dukeCarolinasSCPeriods("duke_carolinas_sc_retc", opts, []int{2026, 2027}), nil
 					},
@@ -1379,61 +1471,25 @@ func dukeUtilityInfo() []types.UtilityProviderInfo {
 			Name: "Duke Energy Progress (North Carolina)",
 			Rates: []types.UtilityRateInfo{
 				{
-					ID:   "duke_progress_nc_res",
-					Name: "Standard Residential",
-					Options: []types.UtilityRateOption{
-						{
-							Field:       "netMeteringScheme",
-							Name:        "Export Scheme / Rider",
-							Type:        types.UtilityOptionTypeSelect,
-							Description: "Select your solar export rider.",
-							Choices: []types.UtilityOptionChoice{
-								{Value: "rsc", Name: "Residential Solar Choice (RSC)"},
-								{Value: "scg", Name: "Small Customer Generator (SCG)"},
-							},
-							Default: "rsc",
-						},
-					},
+					ID:      "duke_progress_nc_res",
+					Name:    "Standard Residential",
+					Options: ncOptions,
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						return dukeProgressNCPeriods("duke_progress_nc_res", opts, []int{2026, 2027}), nil
 					},
 				},
 				{
-					ID:   "duke_progress_nc_r_tou",
-					Name: "Residential Time-of-Use",
-					Options: []types.UtilityRateOption{
-						{
-							Field:       "netMeteringScheme",
-							Name:        "Export Scheme / Rider",
-							Type:        types.UtilityOptionTypeSelect,
-							Description: "Select your solar export rider.",
-							Choices: []types.UtilityOptionChoice{
-								{Value: "rsc", Name: "Residential Solar Choice (RSC)"},
-								{Value: "scg", Name: "Small Customer Generator (SCG)"},
-							},
-							Default: "rsc",
-						},
-					},
+					ID:      "duke_progress_nc_r_tou",
+					Name:    "Residential Time-of-Use",
+					Options: ncOptions,
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						return dukeProgressNCPeriods("duke_progress_nc_r_tou", opts, []int{2026, 2027}), nil
 					},
 				},
 				{
-					ID:   "duke_progress_nc_r_tou_cpp",
-					Name: "Residential Time-of-Use (Critical Peak)",
-					Options: []types.UtilityRateOption{
-						{
-							Field:       "netMeteringScheme",
-							Name:        "Export Scheme / Rider",
-							Type:        types.UtilityOptionTypeSelect,
-							Description: "Select your solar export rider.",
-							Choices: []types.UtilityOptionChoice{
-								{Value: "rsc", Name: "Residential Solar Choice (RSC)"},
-								{Value: "scg", Name: "Small Customer Generator (SCG)"},
-							},
-							Default: "rsc",
-						},
-					},
+					ID:      "duke_progress_nc_r_tou_cpp",
+					Name:    "Residential Time-of-Use (Critical Peak)",
+					Options: ncOptions,
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						return dukeProgressNCPeriods("duke_progress_nc_r_tou_cpp", opts, []int{2026, 2027}), nil
 					},
@@ -1445,41 +1501,17 @@ func dukeUtilityInfo() []types.UtilityProviderInfo {
 			Name: "Duke Energy Progress (South Carolina)",
 			Rates: []types.UtilityRateInfo{
 				{
-					ID:   "duke_progress_sc_res",
-					Name: "Standard Residential",
-					Options: []types.UtilityRateOption{
-						{
-							Field:       "netMeteringScheme",
-							Name:        "Export Scheme / Rider",
-							Type:        types.UtilityOptionTypeSelect,
-							Description: "Select your solar export rider.",
-							Choices: []types.UtilityOptionChoice{
-								{Value: "rsc", Name: "Residential Solar Choice (RSC)"},
-								{Value: "scg", Name: "Small Customer Generator (SCG)"},
-							},
-							Default: "rsc",
-						},
-					},
+					ID:      "duke_progress_sc_res",
+					Name:    "Standard Residential",
+					Options: ncOptions,
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						return dukeProgressSCPeriods("duke_progress_sc_res", opts, []int{2026, 2027}), nil
 					},
 				},
 				{
-					ID:   "duke_progress_sc_r_tou_ev",
-					Name: "Time-of-Use Electric Vehicle",
-					Options: []types.UtilityRateOption{
-						{
-							Field:       "netMeteringScheme",
-							Name:        "Export Scheme / Rider",
-							Type:        types.UtilityOptionTypeSelect,
-							Description: "Select your solar export rider.",
-							Choices: []types.UtilityOptionChoice{
-								{Value: "rsc", Name: "Residential Solar Choice (RSC)"},
-								{Value: "scg", Name: "Small Customer Generator (SCG)"},
-							},
-							Default: "rsc",
-						},
-					},
+					ID:      "duke_progress_sc_r_tou_ev",
+					Name:    "Time-of-Use Electric Vehicle",
+					Options: ncOptions,
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						return dukeProgressSCPeriods("duke_progress_sc_r_tou_ev", opts, []int{2026, 2027}), nil
 					},
@@ -1491,43 +1523,41 @@ func dukeUtilityInfo() []types.UtilityProviderInfo {
 			Name: "Duke Energy Indiana",
 			Rates: []types.UtilityRateInfo{
 				{
-					ID:   "duke_indiana_rs",
-					Name: "Standard Residential",
-					Options: []types.UtilityRateOption{
-						{
-							Field:       "netMeteringScheme",
-							Name:        "Export Scheme / Rider",
-							Type:        types.UtilityOptionTypeSelect,
-							Description: "Select your solar export scheme.",
-							Choices: []types.UtilityOptionChoice{
-								{Value: "edg", Name: "Excess Distributed Generation (EDG)"},
-								{Value: "net", Name: "Standard Net Metering (1:1)"},
-							},
-							Default: "edg",
-						},
-					},
+					ID:      "duke_indiana_rs",
+					Name:    "Standard Residential",
+					Options: inOptions,
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						return dukeIndianaPeriods("duke_indiana_rs", opts, []int{2026, 2027}), nil
 					},
 				},
 				{
-					ID:   "duke_indiana_rs_tou",
-					Name: "Time-of-Use (Optional)",
-					Options: []types.UtilityRateOption{
-						{
-							Field:       "netMeteringScheme",
-							Name:        "Export Scheme / Rider",
-							Type:        types.UtilityOptionTypeSelect,
-							Description: "Select your solar export scheme.",
-							Choices: []types.UtilityOptionChoice{
-								{Value: "edg", Name: "Excess Distributed Generation (EDG)"},
-								{Value: "net", Name: "Standard Net Metering (1:1)"},
-							},
-							Default: "edg",
-						},
-					},
+					ID:      "duke_indiana_rs_tou",
+					Name:    "Time-of-Use (Optional)",
+					Options: inOptions,
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						return dukeIndianaPeriods("duke_indiana_rs_tou", opts, []int{2026, 2027}), nil
+					},
+				},
+			},
+		},
+		{
+			ID:   "duke_florida",
+			Name: "Duke Energy Florida",
+			Rates: []types.UtilityRateInfo{
+				{
+					ID:      "duke_florida_rs",
+					Name:    "Residential Service (RS-1)",
+					Options: flOptions,
+					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+						return dukeFloridaPeriods("duke_florida_rs", opts, []int{2025, 2026, 2027, 2028}), nil
+					},
+				},
+				{
+					ID:      "duke_florida_rst",
+					Name:    "Residential Service TOU (RST-1)",
+					Options: flOptions,
+					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+						return dukeFloridaPeriods("duke_florida_rst", opts, []int{2025, 2026, 2027, 2028}), nil
 					},
 				},
 			},

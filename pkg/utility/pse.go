@@ -42,7 +42,6 @@ func getPSEHolidays(year int) []string {
 // psePeriods generates pricing periods for Puget Sound Energy (PSE).
 func psePeriods(plan string, opts types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	locStr := ptLocation.String() // PSE operates in Washington State (Pacific Time)
 
 	for _, year := range years {
 		holidays := getPSEHolidays(year)
@@ -60,7 +59,7 @@ func psePeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 					OtherDescription:   "PSE Schedule 7 Residential Service",
 				},
 			}
-			periods = append(periods, buildPeriods(locStr, simplified)...)
+			periods = append(periods, buildPeriods(ptLocation, simplified)...)
 
 		case "pse_307":
 			// Schedule 307: Residential Service Time-of-Use
@@ -154,7 +153,7 @@ func psePeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 				OtherDescription:   "PSE Schedule 307 Summer Off-Peak",
 			}
 
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(ptLocation, []touSimplifiedPeriod{
 				winterHols1, winterReg1,
 				winterHols2, winterReg2,
 				summerHols, summerReg,
@@ -250,7 +249,7 @@ func psePeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 				OtherDescription:   "PSE Schedule 327 Summer Off-Peak",
 			}
 
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(ptLocation, []touSimplifiedPeriod{
 				winterHols1, winterReg1,
 				winterHols2, winterReg2,
 				summerHols, summerReg,

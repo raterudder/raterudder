@@ -29,6 +29,7 @@ func getJEAHolidays(year int) []string {
 	return formatHolidays(holidays, year)
 }
 
+// Comes from https://www.jea.com/rates "Fuel Rates"
 func getJEAFuelCharge(year int, month time.Month) float64 {
 	if year == 2026 {
 		switch month {
@@ -42,15 +43,18 @@ func getJEAFuelCharge(year int, month time.Month) float64 {
 			return 0.05968
 		case time.May:
 			return 0.05863
+		case time.June:
+			return 0.04494
+		case time.July:
+			return 0.04386
 		}
 	}
 	// June 2026 and later defaults to 0.04494
-	return 0.04494
+	return 0.04386
 }
 
 func jeaPeriods(plan string, opts types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	locStr := etLocation.String() // Jacksonville, FL is Eastern Time
 
 	for _, year := range years {
 		holidays := getJEAHolidays(year)
@@ -82,7 +86,7 @@ func jeaPeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 					})
 				}
 
-				periods = append(periods, buildPeriods(locStr, simplified)...)
+				periods = append(periods, buildPeriods(etLocation, simplified)...)
 
 			case "jea_gst":
 				// Rate GST (General Service Time-of-Day)
@@ -139,7 +143,7 @@ func jeaPeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 					})
 				}
 
-				periods = append(periods, buildPeriods(locStr, simplified)...)
+				periods = append(periods, buildPeriods(etLocation, simplified)...)
 			}
 		}
 	}

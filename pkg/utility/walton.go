@@ -12,7 +12,6 @@ import (
 // waltonPeriods generates pricing periods for Walton EMC.
 func waltonPeriods(plan string, opts types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	locStr := etLocation.String() // Walton EMC is in Georgia (Eastern Time)
 
 	for _, year := range years {
 		switch plan {
@@ -43,7 +42,7 @@ func waltonPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 					OtherDescription:   "Walton Schedule A-15 Winter Base Rate",
 				},
 			}
-			periods = append(periods, buildPeriods(locStr, simplified)...)
+			periods = append(periods, buildPeriods(etLocation, simplified)...)
 
 		case "walton_tu5":
 			// Schedule TU-5 (Residential Time-of-Use Service)
@@ -138,7 +137,7 @@ func waltonPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				OtherDescription:   "Walton Schedule TU-5 Off-Peak",
 			}
 
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				offPeakMonths1,
 				offPeakMonths2,
 				summerHoliday,

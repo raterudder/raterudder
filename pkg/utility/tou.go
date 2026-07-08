@@ -2,6 +2,7 @@ package utility
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sync"
 	"time"
@@ -54,35 +55,51 @@ func (t *genericTOU) priceForTime(target time.Time) (types.Price, error) {
 
 	// check if all of the periods have the same timezone and if they do then
 	// apply that timezone to the type timestamps
-	var timeZone string
 	var lastLoc *time.Location
 	for i := range periods {
-		var tz string
-		if periods[i].LocationPtr != nil {
-			lastLoc = periods[i].LocationPtr
-			tz = periods[i].LocationPtr.String()
-		} else if periods[i].Location != "" {
-			tz = periods[i].Location
+		if periods[i].LocationPtr == nil {
+			continue
 		}
-		if timeZone == "" {
-			timeZone = tz
-		} else if timeZone != tz {
-			timeZone = ""
+		if lastLoc == nil {
+			lastLoc = periods[i].LocationPtr
+		} else if lastLoc != periods[i].LocationPtr && lastLoc.String() != periods[i].LocationPtr.String() {
 			lastLoc = nil
 			break
 		}
 	}
-	if timeZone != "" {
+	if lastLoc != nil {
 		target = target.In(lastLoc)
 	}
 
 	// Truncate to the start of the hour in the target's location
 	start := time.Date(target.Year(), target.Month(), target.Day(), target.Hour(), 0, 0, 0, target.Location())
+	end := start.Add(time.Hour)
+
+	// check all periods for an overlapping price period
+	for _, period := range periods {
+		if ok, startEnd, _ := period.Contains(target); ok {
+			if startEnd.Start.After(start) && startEnd.Start.Before(end) {
+				start = startEnd.Start
+			}
+			if startEnd.End.Before(end) && startEnd.End.After(start) {
+				end = startEnd.End
+			}
+		}
+	}
+
+	// we do not check for other periods, if it's 6:15pm and there's a new period
+	// that starts at 6:30pm then we assume the current period is defined as ending
+	// at 6:30pm. similarly if it's 6:45pm and a new period started at 6:30pm we
+	// assume that the current period starts at 6:30pm.
+
+	if !end.After(start) {
+		return types.Price{}, fmt.Errorf("invalid price segment duration: start %v, end %v", start, end)
+	}
 
 	p := types.Price{
 		Provider:      "tou",
 		TSStart:       start,
-		TSEnd:         start.Add(time.Hour),
+		TSEnd:         end,
 		DollarsPerKWH: 0,
 	}
 
@@ -107,6 +124,22 @@ func (t *genericTOU) GetFuturePrices(ctx context.Context) ([]types.Price, error)
 			return nil, err
 		}
 		prices = append(prices, p)
+		end := target.Add(time.Hour)
+		// if the returned price doesn't cover the full hour, retrieve the rest
+		for p.TSEnd.Before(end) {
+			p2, err := t.priceForTime(p.TSEnd)
+			if err != nil {
+				return nil, err
+			}
+			// the new period should be strictly AFTER the previous period end but
+			// since the start is inclusive and end is exclusive, it's okay if the
+			// start equals the previous end
+			if p2.TSStart.Before(p.TSEnd) || !p2.TSEnd.After(p.TSEnd) {
+				return nil, fmt.Errorf("invalid next price segment duration: prev end %v, next start %v", p.TSEnd, p2.TSStart)
+			}
+			prices = append(prices, p2)
+			p = p2
+		}
 	}
 
 	return prices, nil
@@ -130,8 +163,12 @@ func (t *genericTOU) GetConfirmedPrices(ctx context.Context, start, end time.Tim
 		if !p.TSStart.Before(start) && p.TSStart.Before(end) {
 			prices = append(prices, p)
 		}
-
-		current = current.Add(time.Hour)
+		next := current.Add(time.Hour)
+		if p.TSEnd.Before(next) {
+			current = p.TSEnd
+		} else {
+			current = next
+		}
 	}
 
 	return prices, nil
@@ -194,11 +231,7 @@ type touSimplifiedPeriod struct {
 	SpecificDatesNot bool
 }
 
-func buildPeriods(loc string, simplified []touSimplifiedPeriod) []types.UtilityFeesPeriod {
-	locPtr, err := time.LoadLocation(loc)
-	if err != nil {
-		panic(err)
-	}
+func buildPeriods(loc *time.Location, simplified []touSimplifiedPeriod) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
 	for _, s := range simplified {
 		var ps []types.UtilityPeriod
@@ -213,20 +246,20 @@ func buildPeriods(loc string, simplified []touSimplifiedPeriod) []types.UtilityF
 			// this means it wraps around and we need to make 2 periods
 			if s.MonthStart > s.MonthEnd {
 				ps = append(ps, types.UtilityPeriod{
-					Start:       time.Date(s.Year, s.MonthStart, 1, 0, 0, 0, 0, locPtr),
-					End:         time.Date(s.Year+1, time.January, 1, 0, 0, 0, 0, locPtr),
-					LocationPtr: locPtr,
+					Start:       time.Date(s.Year, s.MonthStart, 1, 0, 0, 0, 0, loc),
+					End:         time.Date(s.Year+1, time.January, 1, 0, 0, 0, 0, loc),
+					LocationPtr: loc,
 				})
 				ps = append(ps, types.UtilityPeriod{
-					Start:       time.Date(s.Year, time.January, 1, 0, 0, 0, 0, locPtr),
-					End:         time.Date(s.Year, s.MonthEnd+1, 1, 0, 0, 0, 0, locPtr),
-					LocationPtr: locPtr,
+					Start:       time.Date(s.Year, time.January, 1, 0, 0, 0, 0, loc),
+					End:         time.Date(s.Year, s.MonthEnd+1, 1, 0, 0, 0, 0, loc),
+					LocationPtr: loc,
 				})
 			} else {
 				ps = append(ps, types.UtilityPeriod{
-					Start:       time.Date(s.Year, s.MonthStart, 1, 0, 0, 0, 0, locPtr),
-					End:         time.Date(s.Year, s.MonthEnd+1, 1, 0, 0, 0, 0, locPtr),
-					LocationPtr: locPtr,
+					Start:       time.Date(s.Year, s.MonthStart, 1, 0, 0, 0, 0, loc),
+					End:         time.Date(s.Year, s.MonthEnd+1, 1, 0, 0, 0, 0, loc),
+					LocationPtr: loc,
 				})
 			}
 		} else if len(s.Months) > 0 {
@@ -235,14 +268,14 @@ func buildPeriods(loc string, simplified []touSimplifiedPeriod) []types.UtilityF
 			}
 			for _, m := range s.Months {
 				ps = append(ps, types.UtilityPeriod{
-					Start:       time.Date(s.Year, m, 1, 0, 0, 0, 0, locPtr),
-					End:         time.Date(s.Year, m+1, 1, 0, 0, 0, 0, locPtr),
-					LocationPtr: locPtr,
+					Start:       time.Date(s.Year, m, 1, 0, 0, 0, 0, loc),
+					End:         time.Date(s.Year, m+1, 1, 0, 0, 0, 0, loc),
+					LocationPtr: loc,
 				})
 			}
 		} else {
 			ps = append(ps, types.UtilityPeriod{
-				LocationPtr: locPtr,
+				LocationPtr: loc,
 			})
 		}
 
@@ -300,12 +333,12 @@ func buildPeriods(loc string, simplified []touSimplifiedPeriod) []types.UtilityF
 			for i := range ps {
 				// to group days with identical gaps, we'll map bitmasks to days containing
 				// all of the existing covered periods
-				type hourBitmask [24]bool
-				maskToDays := make(map[hourBitmask][]time.Weekday)
+				type minuteBitmask [1440]bool
+				maskToDays := make(map[minuteBitmask][]time.Weekday)
 
 				// loop over each day and check if it matches any of the hours and days
 				for d := time.Sunday; d <= time.Saturday; d++ {
-					var mask hourBitmask
+					var mask minuteBitmask
 					for _, hd := range s.HoursAndDays {
 						matches := false
 						if len(hd.DaysOfTheWeek) > 0 {
@@ -318,18 +351,20 @@ func buildPeriods(loc string, simplified []touSimplifiedPeriod) []types.UtilityF
 							matches = true
 						}
 
-						// if the day matches then add the hours to the mask
+						// if the day matches then add the minutes to the mask
 						if matches {
 							if len(hd.Hours) == 0 {
 								// if hours is empty, the period applies to all day
 								// so mark everything
-								for h := range 24 {
-									mask[h] = true
+								for m := range 1440 {
+									mask[m] = true
 								}
 							} else {
 								for _, hRange := range hd.Hours {
-									for h := hRange.HourStart; h < hRange.HourEnd; h++ {
-										mask[h] = true
+									startMin := hRange.HourStart*60 + hRange.MinuteStart
+									endMin := hRange.HourEnd*60 + hRange.MinuteEnd
+									for m := startMin; m < endMin; m++ {
+										mask[m] = true
 									}
 								}
 							}
@@ -342,24 +377,33 @@ func buildPeriods(loc string, simplified []touSimplifiedPeriod) []types.UtilityF
 					// identify any gaps in this mask to make a new period
 					var gaps []types.UtilityHourPeriod
 					start := -1
-					for h := range 24 {
-						// if the hour is not in the mask, then it's a start of a gap
-						if !mask[h] {
+					for m := range 1440 {
+						// if the minute is not in the mask, then it's a start of a gap
+						if !mask[m] {
 							if start == -1 {
-								start = h
+								start = m
 							}
 						} else {
-							// if the hour is in the mask, then it's the end of a gap
+							// if the minute is in the mask, then it's the end of a gap
 							if start != -1 {
-								gaps = append(gaps, types.UtilityHourPeriod{HourStart: start, HourEnd: h})
+								gaps = append(gaps, types.UtilityHourPeriod{
+									HourStart:   start / 60,
+									MinuteStart: start % 60,
+									HourEnd:     m / 60,
+									MinuteEnd:   m % 60,
+								})
 								start = -1
 							}
 						}
 					}
-					// if start is still -1, then the gap is the whole day and we can leave
-					// hours empty but otherwise we need to make the gap for the rest of the day
+					// if start is not -1, then we need to make the gap for the rest of the day
 					if start != -1 {
-						gaps = append(gaps, types.UtilityHourPeriod{HourStart: start, HourEnd: 24})
+						gaps = append(gaps, types.UtilityHourPeriod{
+							HourStart:   start / 60,
+							MinuteStart: start % 60,
+							HourEnd:     24,
+							MinuteEnd:   0,
+						})
 					}
 
 					if len(gaps) > 0 {
@@ -451,6 +495,44 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 						},
 					),
 				},
+				{
+					ID:   "tou_example_2",
+					Name: "TOU Example 2 (6:30 AM Split)",
+					GetFees: getStaticGetFees(
+						[]types.UtilityFeesPeriod{
+							{
+								UtilityPeriod: types.UtilityPeriod{
+									Hours: []types.UtilityHourPeriod{
+										{HourStart: 0, HourEnd: 6, MinuteEnd: 30},
+									},
+									LocationPtr: etLocation,
+								},
+								DollarsPerKWH: 0.01,
+								Description:   "Night",
+							},
+							{
+								UtilityPeriod: types.UtilityPeriod{
+									Hours: []types.UtilityHourPeriod{
+										{HourStart: 6, MinuteStart: 30, HourEnd: 12},
+									},
+									LocationPtr: etLocation,
+								},
+								DollarsPerKWH: 0.15,
+								Description:   "Peak Morning",
+							},
+							{
+								UtilityPeriod: types.UtilityPeriod{
+									Hours: []types.UtilityHourPeriod{
+										{HourStart: 12, HourEnd: 24},
+									},
+									LocationPtr: etLocation,
+								},
+								DollarsPerKWH: 0.05,
+								Description:   "Afternoon/Evening",
+							},
+						},
+					),
+				},
 			},
 		},
 		{
@@ -462,7 +544,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 					Name: "Time of Day Service",
 					GetFees: getStaticGetFees(
 						buildPeriods(
-							"America/New_York",
+							etLocation,
 							[]touSimplifiedPeriod{
 								// May - September
 								{
@@ -570,7 +652,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 					Name: "Standard Residential Rate",
 					GetFees: getStaticGetFees(
 						buildPeriods(
-							"America/Los_Angeles",
+							ptLocation,
 							[]touSimplifiedPeriod{
 								{
 									Year:               2026,
@@ -602,7 +684,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 					Name: "Time-of-Use (TOU) Residential",
 					GetFees: getStaticGetFees(
 						buildPeriods(
-							"America/Los_Angeles",
+							ptLocation,
 							[]touSimplifiedPeriod{
 								{
 									Year:       2026,
@@ -900,7 +982,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						// Rate 16.01: Flat Residential Rate
 						// Energy rate: $0.12475/kWh
-						return buildPeriods(mtLocation.String(), []touSimplifiedPeriod{
+						return buildPeriods(mtLocation, []touSimplifiedPeriod{
 							{
 								Year:               2026,
 								MonthStart:         time.January,
@@ -920,7 +1002,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 						// On-Peak energy rate: $0.32371/kWh
 						// Off-Peak energy rate (all other hours/days): $0.08346/kWh
 						peakHours := []types.UtilityHourPeriod{{HourStart: 17, HourEnd: 21}}
-						return buildPeriods(mtLocation.String(), []touSimplifiedPeriod{
+						return buildPeriods(mtLocation, []touSimplifiedPeriod{
 							{
 								Year:       2026,
 								MonthStart: time.January,
@@ -984,7 +1066,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 					Options: novecOptions,
 					GetFees: getStaticGetFees(
 						buildPeriods(
-							"America/New_York",
+							etLocation,
 							[]touSimplifiedPeriod{
 								{
 									OtherDollarsPerKWH: 0.11079,
@@ -1000,7 +1082,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 					Options: novecOptions,
 					GetFees: getStaticGetFees(
 						buildPeriods(
-							"America/New_York",
+							etLocation,
 							[]touSimplifiedPeriod{
 								{
 									HoursAndDays: []touSimplifiedHoursAndDays{
@@ -1056,7 +1138,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 							},
 						}
 
-						periods := buildPeriods(ctLocation.String(), simplified)
+						periods := buildPeriods(ctLocation, simplified)
 
 						// Export Credits
 						scheme := opts.NetMeteringScheme
@@ -1094,6 +1176,8 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 		engieUtilityInfo(),
 		originUtilityInfo(),
 		globirdUtilityInfo(),
+		epbUtilityInfo(),
+		pepcoDCUtilityInfo(),
 	},
 		append(hawaiiUtilityInfo(), dukeUtilityInfo()...)...,
 	)

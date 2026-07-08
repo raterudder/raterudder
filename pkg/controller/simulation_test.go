@@ -1363,6 +1363,89 @@ func TestSimulateState(t *testing.T) {
 				}
 			}
 		})
+
+		t.Run("Sub-Hourly Dynamic Stepping", func(t *testing.T) {
+			now := time.Date(2026, 6, 25, 11, 0, 0, 0, time.UTC)
+			history := []types.EnergyStats{}
+			for i := 1; i <= 3; i++ {
+				pastDay := now.Add(time.Duration(-24*i) * time.Hour)
+				for h := 0; h < 24; h++ {
+					history = append(history, types.EnergyStats{
+						TSHourStart: pastDay.Add(time.Duration(h) * time.Hour),
+						SolarKWH:    0,
+						HomeKWH:     1.0,
+					})
+				}
+			}
+
+			currentStatus := types.SystemStatus{
+				BatteryCapacityKWH:    10.0,
+				BatterySOC:            50.0, // 5.0 kWh
+				BatteryKW:             0,
+				Timestamp:             now,
+				MaxBatteryChargeKW:    2.0,
+				MaxBatteryDischargeKW: 2.0,
+			}
+
+			settings := types.Settings{
+				MinBatterySOC:            30.0,
+				SolarTrendRatioMax:       3.0,
+				SolarBellCurveMultiplier: 0,
+				GridChargeBatteries:      false,
+				GridExportSolar:          true,
+			}
+
+			// Define prices with a split at 12:30
+			currentPrice := types.Price{
+				Provider:      "tou",
+				TSStart:       now,
+				TSEnd:         now.Add(time.Hour),
+				DollarsPerKWH: 0.10,
+			}
+
+			futurePrices := []types.Price{
+				{
+					Provider:      "tou",
+					TSStart:       now.Add(time.Hour),                       // 12:00
+					TSEnd:         now.Add(time.Hour).Add(30 * time.Minute), // 12:30
+					DollarsPerKWH: 0.05,
+				},
+				{
+					Provider:      "tou",
+					TSStart:       now.Add(time.Hour).Add(30 * time.Minute), // 12:30
+					TSEnd:         now.Add(2 * time.Hour),                   // 13:00
+					DollarsPerKWH: 0.25,
+				},
+			}
+			// Fill remaining future prices up to 24 hours
+			for i := 2; i < 24; i++ {
+				hStart := now.Add(time.Duration(i) * time.Hour)
+				futurePrices = append(futurePrices, types.Price{
+					Provider:      "tou",
+					TSStart:       hStart,
+					TSEnd:         hStart.Add(time.Hour),
+					DollarsPerKWH: 0.10,
+				})
+			}
+
+			simData, _ := c.SimulateState(ctx, now, currentStatus, currentPrice, futurePrices, history, nil, settings)
+			// Total steps should be 25 (24 standard steps, plus 1 extra due to the 30-min split)
+			assert.Len(t, simData, 25)
+
+			// Step 0: 11:00 to 12:00
+			assert.Equal(t, 0.10, simData[0].GridChargeDollarsPerKWH)
+			assert.Equal(t, 1.0, simData[0].EnergyApplyRatio)
+
+			// Step 1: 12:00 to 12:30 (Split - 30 minutes)
+			assert.Equal(t, 0.05, simData[1].GridChargeDollarsPerKWH)
+			assert.Equal(t, 0.5, simData[1].EnergyApplyRatio)
+			assert.Equal(t, now.Add(time.Hour), simData[1].TS)
+
+			// Step 2: 12:30 to 13:00 (Split - 30 minutes)
+			assert.Equal(t, 0.25, simData[2].GridChargeDollarsPerKWH)
+			assert.Equal(t, 0.5, simData[2].EnergyApplyRatio)
+			assert.Equal(t, now.Add(time.Hour).Add(30*time.Minute), simData[2].TS)
+		})
 	})
 
 }

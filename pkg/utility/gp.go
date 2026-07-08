@@ -147,7 +147,6 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 	}
 
 	var periods []types.UtilityFeesPeriod
-	loc := etLocation
 
 	for _, year := range years {
 		holidays := getGPHolidays(year)
@@ -248,7 +247,7 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 						OtherDescription:   "Summer Super Off-Peak",
 					}
 
-					periods = append(periods, buildPeriods(loc.String(), []touSimplifiedPeriod{summerHolidayPeriod, summerRegularPeriod})...)
+					periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{summerHolidayPeriod, summerRegularPeriod})...)
 				}
 
 				if len(winterIntersection) > 0 {
@@ -267,7 +266,7 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 						OtherDescription:   "Winter Super Off-Peak",
 					}
 
-					periods = append(periods, buildPeriods(loc.String(), []touSimplifiedPeriod{winterPeriod})...)
+					periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{winterPeriod})...)
 				}
 
 			case "gp_tou_rd":
@@ -306,7 +305,7 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 						OtherDescription:   "Summer Off-Peak",
 					}
 
-					periods = append(periods, buildPeriods(loc.String(), []touSimplifiedPeriod{summerHolidayPeriod, summerRegularPeriod})...)
+					periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{summerHolidayPeriod, summerRegularPeriod})...)
 				}
 
 				if len(winterIntersection) > 0 {
@@ -317,7 +316,7 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 						OtherDescription:   "Winter Off-Peak",
 					}
 
-					periods = append(periods, buildPeriods(loc.String(), []touSimplifiedPeriod{winterPeriod})...)
+					periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{winterPeriod})...)
 				}
 
 			case "gp_tou_reo":
@@ -356,7 +355,7 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 						OtherDescription:   "Summer Off-Peak",
 					}
 
-					periods = append(periods, buildPeriods(loc.String(), []touSimplifiedPeriod{summerHolidayPeriod, summerRegularPeriod})...)
+					periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{summerHolidayPeriod, summerRegularPeriod})...)
 				}
 
 				if len(winterIntersection) > 0 {
@@ -367,7 +366,7 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 						OtherDescription:   "Winter Off-Peak",
 					}
 
-					periods = append(periods, buildPeriods(loc.String(), []touSimplifiedPeriod{winterPeriod})...)
+					periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{winterPeriod})...)
 				}
 			}
 
@@ -386,9 +385,9 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 			}
 			periods = append(periods, types.UtilityFeesPeriod{
 				UtilityPeriod: types.UtilityPeriod{
-					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, loc),
-					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, loc),
-					LocationPtr: loc,
+					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, etLocation),
+					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, etLocation),
+					LocationPtr: etLocation,
 				},
 				DollarsPerKWH:            rate,
 				SeparateGenerationCredit: true,
@@ -411,7 +410,6 @@ func gpFCRPeriods(plan string, year int, months []time.Month, versionDiff int, h
 	}
 
 	var periods []types.UtilityFeesPeriod
-	loc := etLocation
 
 	if plan == "gp_tou_oa" {
 		var onPeakRate, offPeakRate, superOffPeakRate float64
@@ -475,7 +473,7 @@ func gpFCRPeriods(plan string, year int, months []time.Month, versionDiff int, h
 				OtherDescription:   "Summer FCR Super Off-Peak" + suffix,
 			}
 
-			periods = append(periods, buildPeriods(loc.String(), []touSimplifiedPeriod{summerHolidayPeriod, summerRegularPeriod})...)
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{summerHolidayPeriod, summerRegularPeriod})...)
 		}
 
 		if len(winterIntersection) > 0 {
@@ -493,7 +491,7 @@ func gpFCRPeriods(plan string, year int, months []time.Month, versionDiff int, h
 				OtherDescription:   "Winter FCR Super Off-Peak" + suffix,
 			}
 
-			periods = append(periods, buildPeriods(loc.String(), []touSimplifiedPeriod{winterPeriod})...)
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{winterPeriod})...)
 		}
 	} else {
 		// two-part FCR (TOU-FCR-6 / TOU-FCR-7) for RD and REO
@@ -536,7 +534,7 @@ func gpFCRPeriods(plan string, year int, months []time.Month, versionDiff int, h
 				OtherDescription:   "Summer FCR Off-Peak" + suffix,
 			}
 
-			periods = append(periods, buildPeriods(loc.String(), []touSimplifiedPeriod{summerHolidayPeriod, summerRegularPeriod})...)
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{summerHolidayPeriod, summerRegularPeriod})...)
 		}
 
 		if len(winterIntersection) > 0 {
@@ -547,7 +545,7 @@ func gpFCRPeriods(plan string, year int, months []time.Month, versionDiff int, h
 				OtherDescription:   "Winter FCR Off-Peak" + suffix,
 			}
 
-			periods = append(periods, buildPeriods(loc.String(), []touSimplifiedPeriod{winterPeriod})...)
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{winterPeriod})...)
 		}
 	}
 

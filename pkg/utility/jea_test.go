@@ -11,9 +11,6 @@ import (
 )
 
 func TestJEA(t *testing.T) {
-	ny, err := time.LoadLocation("America/New_York")
-	require.NoError(t, err)
-
 	t.Run("Rate R Residential Service Flat", func(t *testing.T) {
 		u := &genericTOU{}
 		err := u.ApplySettings(context.Background(), types.Settings{
@@ -26,14 +23,14 @@ func TestJEA(t *testing.T) {
 		require.NoError(t, err)
 
 		// Jan 2026: Tier 1 ($0.07237) + Fuel ($0.04224) = $0.11461
-		p, err := u.priceForTime(time.Date(2026, time.January, 15, 12, 0, 0, 0, ny))
+		p, err := u.priceForTime(time.Date(2026, time.January, 15, 12, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		if assert.InDelta(t, 0.11461, p.DollarsPerKWH, 1e-6) {
 			assert.False(t, p.SeparateGenerationCredit)
 		}
 
 		// June 2026: Tier 1 ($0.07237) + Fuel ($0.04494) = $0.11731
-		p, err = u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		if assert.InDelta(t, 0.11731, p.DollarsPerKWH, 1e-6) {
 			assert.False(t, p.SeparateGenerationCredit)
@@ -52,7 +49,7 @@ func TestJEA(t *testing.T) {
 		require.NoError(t, err)
 
 		// Jan 2026: Consumption = $0.11461, Export Credit = $0.04224 (fuel only)
-		p, err := u.priceForTime(time.Date(2026, time.January, 15, 12, 0, 0, 0, ny))
+		p, err := u.priceForTime(time.Date(2026, time.January, 15, 12, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		if assert.InDelta(t, 0.11461, p.DollarsPerKWH, 1e-6) {
 			assert.True(t, p.SeparateGenerationCredit)
@@ -73,13 +70,13 @@ func TestJEA(t *testing.T) {
 
 		// Winter Peak (Jan 12, 2026 is Monday)
 		// On-peak 6-10 AM, 6-10 PM. On-peak base: $0.13776 + Jan fuel $0.04224 = $0.18000
-		p, err := u.priceForTime(time.Date(2026, time.January, 12, 8, 0, 0, 0, ny))
+		p, err := u.priceForTime(time.Date(2026, time.January, 12, 8, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		if assert.InDelta(t, 0.18000, p.DollarsPerKWH, 1e-6) {
 			assert.False(t, p.SeparateGenerationCredit)
 		}
 
-		p, err = u.priceForTime(time.Date(2026, time.January, 12, 19, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.January, 12, 19, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		if assert.InDelta(t, 0.18000, p.DollarsPerKWH, 1e-6) {
 			assert.False(t, p.SeparateGenerationCredit)
@@ -87,14 +84,14 @@ func TestJEA(t *testing.T) {
 
 		// Winter Off-peak (Jan 12, 2026 at 12 PM)
 		// Off-peak base: $0.04535 + Jan fuel $0.04224 = $0.08759
-		p, err = u.priceForTime(time.Date(2026, time.January, 12, 12, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.January, 12, 12, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		if assert.InDelta(t, 0.08759, p.DollarsPerKWH, 1e-6) {
 			assert.False(t, p.SeparateGenerationCredit)
 		}
 
 		// Winter Weekend Off-peak (Jan 17, 2026 is Saturday)
-		p, err = u.priceForTime(time.Date(2026, time.January, 17, 8, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.January, 17, 8, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		if assert.InDelta(t, 0.08759, p.DollarsPerKWH, 1e-6) {
 			assert.False(t, p.SeparateGenerationCredit)
@@ -114,7 +111,7 @@ func TestJEA(t *testing.T) {
 
 		// Summer Peak (June 15, 2026 is Monday)
 		// On-peak 12 PM - 9 PM. On-peak base: $0.13776 + June fuel $0.04494 = $0.18270
-		p, err := u.priceForTime(time.Date(2026, time.June, 15, 14, 0, 0, 0, ny))
+		p, err := u.priceForTime(time.Date(2026, time.June, 15, 14, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		if assert.InDelta(t, 0.18270, p.DollarsPerKWH, 1e-6) {
 			assert.False(t, p.SeparateGenerationCredit)
@@ -122,7 +119,7 @@ func TestJEA(t *testing.T) {
 
 		// Summer Off-peak (June 15, 2026 at 8 AM)
 		// Off-peak base: $0.04535 + June fuel $0.04494 = $0.09029
-		p, err = u.priceForTime(time.Date(2026, time.June, 15, 8, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.June, 15, 8, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		if assert.InDelta(t, 0.09029, p.DollarsPerKWH, 1e-6) {
 			assert.False(t, p.SeparateGenerationCredit)
@@ -142,9 +139,9 @@ func TestJEA(t *testing.T) {
 
 		// Independence Day: Saturday July 4th, 2026 (observed Friday July 3rd, 2026)
 		// Friday July 3rd at 2:00 PM (normally summer peak, but should be holiday off-peak)
-		p, err := u.priceForTime(time.Date(2026, time.July, 3, 14, 0, 0, 0, ny))
+		p, err := u.priceForTime(time.Date(2026, time.July, 3, 14, 0, 0, 0, etLocation))
 		require.NoError(t, err)
-		if assert.InDelta(t, 0.09029, p.DollarsPerKWH, 1e-6) {
+		if assert.InDelta(t, 0.08921, p.DollarsPerKWH, 1e-6) {
 			assert.False(t, p.SeparateGenerationCredit)
 		}
 	})
@@ -161,7 +158,7 @@ func TestJEA(t *testing.T) {
 		require.NoError(t, err)
 
 		// June On-Peak: consumption = $0.18270, export credit = $0.04494 (fuel only)
-		p, err := u.priceForTime(time.Date(2026, time.June, 15, 14, 0, 0, 0, ny))
+		p, err := u.priceForTime(time.Date(2026, time.June, 15, 14, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		if assert.InDelta(t, 0.18270, p.DollarsPerKWH, 1e-6) {
 			assert.True(t, p.SeparateGenerationCredit)

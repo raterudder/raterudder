@@ -34,7 +34,6 @@ func getSECOHolidays(year int) []string {
 // secoPeriods generates pricing periods for SECO Energy.
 func secoPeriods(plan string, opts types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	locStr := etLocation.String() // SECO operates in Florida (Eastern Time)
 
 	for _, year := range years {
 		holidays := getSECOHolidays(year)
@@ -52,7 +51,7 @@ func secoPeriods(plan string, opts types.UtilityRateOptions, years []int) []type
 					OtherDescription:   "SECO Schedule RS Base Rate",
 				},
 			}
-			periods = append(periods, buildPeriods(locStr, simplified)...)
+			periods = append(periods, buildPeriods(etLocation, simplified)...)
 
 		case "seco_rs_tou":
 			// Schedule RS-TOU: Residential Service Time-of-Use
@@ -185,7 +184,7 @@ func secoPeriods(plan string, opts types.UtilityRateOptions, years []int) []type
 				OtherDescription:   "SECO Schedule RS-TOU Winter Off-Peak",
 			}
 
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				summerHols, summerReg,
 				winterHols1, winterReg1,
 				winterHols2, winterReg2,

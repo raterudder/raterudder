@@ -39,7 +39,6 @@ func getPSEGLIHolidays(year int) []string {
 // psegliPeriods generates pricing periods for PSEG Long Island (PSEGLI).
 func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	locStr := etLocation.String() // PSEGLI operates in Eastern Time (America/New_York)
 
 	for _, year := range years {
 		holidays := getPSEGLIHolidays(year)
@@ -129,7 +128,7 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				OtherDescription:   "PSEGLI Rate 194 Winter Off-Peak",
 			}
 
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				summerHols, summerReg,
 				winterHols1, winterReg1,
 				winterHols2, winterReg2,
@@ -256,7 +255,7 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				OtherDescription:   "PSEGLI Rate 195 Winter Off-Peak",
 			}
 
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				summerHols, summerReg,
 				winterHols1, winterReg1,
 				winterHols2, winterReg2,
@@ -304,7 +303,7 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				{time.October, time.November},
 			}
 			for _, s := range shoulderPeriods {
-				periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+				periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 					{
 						Year:          year,
 						MonthStart:    s.mStart,
@@ -340,7 +339,7 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				{time.December, time.December},
 			}
 			for _, w := range winterPeriods {
-				periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+				periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 					{
 						Year:          year,
 						MonthStart:    w.mStart,
@@ -368,7 +367,7 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				})...)
 			}
 
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				summerHols, summerReg,
 			})...)
 
@@ -414,7 +413,7 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				{time.October, time.November},
 			}
 			for _, s := range shoulderPeriods {
-				periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+				periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 					{
 						Year:          year,
 						MonthStart:    s.mStart,
@@ -450,7 +449,7 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				{time.December, time.December},
 			}
 			for _, w := range winterPeriods {
-				periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+				periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 					{
 						Year:          year,
 						MonthStart:    w.mStart,
@@ -478,7 +477,7 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				})...)
 			}
 
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				summerHols, summerReg,
 			})...)
 
@@ -524,7 +523,7 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				{time.October, time.November},
 			}
 			for _, s := range shoulderPeriods {
-				periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+				periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 					{
 						Year:          year,
 						MonthStart:    s.mStart,
@@ -560,7 +559,7 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				{time.December, time.December},
 			}
 			for _, w := range winterPeriods {
-				periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+				periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 					{
 						Year:          year,
 						MonthStart:    w.mStart,
@@ -588,7 +587,7 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				})...)
 			}
 
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				summerHols, summerReg,
 			})...)
 
@@ -646,7 +645,7 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				OtherDescription:   "PSEGLI Rate 193 Winter Day",
 			}
 
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				summer, winter1, winter2,
 			})...)
 		}

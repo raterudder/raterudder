@@ -662,7 +662,6 @@ func getPGEHolidays(year int) []string {
 // pgEPeriods generates the Pricing periods for PG&E (Pacific Gas & Electric).
 func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	loc := ptLocation.String()
 
 	for _, year := range years {
 		holidays := getPGEHolidays(year)
@@ -673,7 +672,7 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			// Total Bundled Tier 1: $0.32561
 			// Base = $0.32561 - $0.01230 (NBC) = $0.31331
 			// Note: We assume the customer stays within the baseline and therefore we apply the baseline credit rate.
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(ptLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.January,
@@ -689,7 +688,7 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			// Winter (Oct - May): Peak = $0.39757, Off-Peak = $0.36757. Baseline credit = ($0.08140)
 			// Note: We assume the customer stays within the baseline and therefore we apply the baseline credit subtraction.
 			touCBaselineCredit := 0.08140
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(ptLocation, []touSimplifiedPeriod{
 				// Summer (June - Sept)
 				{
 					Year:       year,
@@ -726,7 +725,7 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			// E-TOU-D (Peak 5-8 PM Weekdays, Off-Peak weekends/holidays)
 			// Summer (June - Sept): Peak = $0.47708, Off-Peak = $0.34212
 			// Winter (Oct - May): Peak = $0.38747, Off-Peak = $0.34886
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(ptLocation, []touSimplifiedPeriod{
 				// Summer (June - Sept) - Holidays (Off-Peak all day)
 				{
 					Year:               year,
@@ -787,7 +786,7 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			// E-ELEC (Electric Home TOU)
 			// Summer (June - Sept): Peak (4-9 PM) = $0.55214, Part-Peak (3-4 PM & 9-12 AM) = $0.39026, Off-Peak = $0.33358
 			// Winter (Oct - May): Peak (4-9 PM) = $0.32063, Part-Peak (3-4 PM & 9-12 AM) = $0.29854, Off-Peak = $0.28468
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(ptLocation, []touSimplifiedPeriod{
 				// Summer (June - Sept)
 				{
 					Year:       year,
@@ -840,7 +839,7 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			// EV2-A (EV Home Charging)
 			// Summer (June - Sept): Peak (4-9 PM) = $0.53809, Part-Peak (3-4 PM & 9-12 AM) = $0.42760, Off-Peak = $0.22558
 			// Winter (Oct - May): Peak (4-9 PM) = $0.41099, Part-Peak (3-4 PM & 9-12 AM) = $0.39428, Off-Peak = $0.22558
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(ptLocation, []touSimplifiedPeriod{
 				// Summer (June - Sept)
 				{
 					Year:       year,
@@ -894,7 +893,6 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 	// Add Non-Bypassable Charges (NBCs) unconditionally for all PG&E rates as GridUse fee.
 	periods = append(periods, types.UtilityFeesPeriod{
 		UtilityPeriod: types.UtilityPeriod{
-			Location:    loc,
 			LocationPtr: ptLocation,
 		},
 		DollarsPerKWH:  pgeNBC,

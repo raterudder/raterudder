@@ -31,7 +31,6 @@ func getIdahoHolidays(year int) []string {
 // idahoPeriods generates pricing periods for Idaho Power.
 func idahoPeriods(plan string, opts types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	locStr := mtLocation.String() // Idaho Power operates in Mountain Time (America/Denver)
 
 	for _, year := range years {
 		holidays := getIdahoHolidays(year)
@@ -64,7 +63,7 @@ func idahoPeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 					OtherDescription:   "Idaho Power Standard Plan Non-Summer Rate",
 				},
 			}
-			periods = append(periods, buildPeriods(locStr, simplified)...)
+			periods = append(periods, buildPeriods(mtLocation, simplified)...)
 
 		case "idaho_tou":
 			// Schedule 6 (Time-of-Use Plan)
@@ -165,7 +164,7 @@ func idahoPeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 				OtherDescription:   "Idaho Power TOU Non-Summer Off-Peak",
 			}
 
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mtLocation, []touSimplifiedPeriod{
 				summerHoliday,
 				summerRegular,
 				winterHoliday1,
@@ -233,7 +232,7 @@ func idahoPeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 				OtherDescription:                   "Idaho Power Net Billing Non-Summer Export Credit",
 			}
 
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mtLocation, []touSimplifiedPeriod{
 				summerExportHoliday,
 				summerExportRegular,
 				winterExport1,

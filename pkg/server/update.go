@@ -511,22 +511,23 @@ func (s *Server) mergeUtilityVPPEvents(ctx context.Context, status types.SystemS
 		scanStart := nowTime.Truncate(time.Hour).Add(-24 * time.Hour)
 		scanEnd := nowTime.Add(48 * time.Hour).Truncate(time.Hour)
 
+		var lastEnd time.Time
 		for h := scanStart; !h.After(scanEnd); h = h.Add(time.Hour) {
-			contains, err := period.Contains(h)
+			contains, startEnd, err := period.Contains(h)
 			if err != nil {
 				contains = false
 			}
 			if contains {
 				if !inEvent {
 					inEvent = true
-					// h represents the hour boundary. This assumes that the VPP event
-					// starts on the 0th minute, which is all we support right now.
-					eventStart = h
+					eventStart = startEnd.Start
 				}
+				lastEnd = startEnd.End
 			} else if inEvent {
-				// h represents the hour boundary. This assumes that the VPP event
-				// starts on the 0th minute, which is all we support right now.
-				eventEnd := h
+				eventEnd := lastEnd
+				if eventEnd.IsZero() {
+					eventEnd = h
+				}
 
 				if !eventStart.Before(nowTime) && !eventStart.After(limitTime) {
 					candidate := types.VPPEvent{

@@ -1021,8 +1021,21 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 		return nil, err
 	}
 
+	// These are all GridAdditional: false
+	// Under Rider POGNM NM2/NM5 (BESH), and NM8/NM11 (BESH+DG Rebate):
+	// (1) the sum of the (a) HEC for each such hour, (b) related PJM Services
+	// Charges, (c) related Miscellaneous Procurement Components Charges, and (d)
+	// the HPEA, as each such charge or factor is described in the Monthly Charges
+	// section of Rate BESH or the Charges section of Rider PPO, as applicable,
+	// multiplied by (2) the net output, in kWh
+
+	// To update these go to https://icc.illinois.gov/chief-clerk-office/filings/list?dts=7&ft=3&dt=-9999
+	// Then filter to Tarif Filing -> "Electric Rate Memo" (if that's not an option then go back a week)
+	// Look for something from "Commonwealth Edison Company"
+	// Look for "Filing of the Purchased Electricity Adjustment Factor"
 	beshFees := []types.UtilityFeesPeriod{
-		// PSC (Transmission, GridAdditional: true)
+		// PSC (Transmission, GridAdditional: false)
+		// AKA PJM Services Charge
 		{
 			UtilityPeriod: types.UtilityPeriod{
 				Start:       time.Date(2026, 1, 1, 0, 0, 0, 0, ctLocation),
@@ -1030,7 +1043,7 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 				LocationPtr: ctLocation,
 			},
 			DollarsPerKWH:  1.083 / 100,
-			GridAdditional: true,
+			GridAdditional: false,
 			Description:    "Transmission Services Charge (PSC) (Jan-May 2026)",
 		},
 		{
@@ -1040,9 +1053,10 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 				LocationPtr: ctLocation,
 			},
 			DollarsPerKWH:  1.074 / 100,
-			GridAdditional: true,
+			GridAdditional: false,
 			Description:    "Transmission Services Charge (PSC) (June 2026 - May 2027)",
 		},
+
 		// MPCC (Supply, GridAdditional: true)
 		{
 			UtilityPeriod: types.UtilityPeriod{
@@ -1051,7 +1065,7 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 				LocationPtr: ctLocation,
 			},
 			DollarsPerKWH:  0.062 / 100,
-			GridAdditional: true,
+			GridAdditional: false,
 			Description:    "Miscellaneous Procurement Components Charge (MPCC) (Jan-May 2026)",
 		},
 		{
@@ -1061,9 +1075,10 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 				LocationPtr: ctLocation,
 			},
 			DollarsPerKWH:  0.134 / 100,
-			GridAdditional: true,
+			GridAdditional: false,
 			Description:    "Miscellaneous Procurement Components Charge (MPCC) (June 2026 - May 2027)",
 		},
+
 		// HPEA (Supply, GridAdditional: true)
 		{
 			UtilityPeriod: types.UtilityPeriod{
@@ -1072,7 +1087,7 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 				LocationPtr: ctLocation,
 			},
 			DollarsPerKWH:  0.743 / 100,
-			GridAdditional: true,
+			GridAdditional: false,
 			Description:    "Hourly Purchased Electricity Adjustment (HPEA) (Jan 2026)",
 		},
 		{
@@ -1082,7 +1097,7 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 				LocationPtr: ctLocation,
 			},
 			DollarsPerKWH:  -0.189 / 100,
-			GridAdditional: true,
+			GridAdditional: false,
 			Description:    "Hourly Purchased Electricity Adjustment (HPEA) (Feb 2026)",
 		},
 		{
@@ -1092,7 +1107,7 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 				LocationPtr: ctLocation,
 			},
 			DollarsPerKWH:  -1.528 / 100,
-			GridAdditional: true,
+			GridAdditional: false,
 			Description:    "Hourly Purchased Electricity Adjustment (HPEA) (Mar 2026)",
 		},
 		{
@@ -1102,7 +1117,7 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 				LocationPtr: ctLocation,
 			},
 			DollarsPerKWH:  1.773 / 100,
-			GridAdditional: true,
+			GridAdditional: false,
 			Description:    "Hourly Purchased Electricity Adjustment (HPEA) (Apr 2026)",
 		},
 		{
@@ -1112,7 +1127,7 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 				LocationPtr: ctLocation,
 			},
 			DollarsPerKWH:  8.032 / 100,
-			GridAdditional: true,
+			GridAdditional: false,
 			Description:    "Hourly Purchased Electricity Adjustment (HPEA) (May 2026)",
 		},
 		{
@@ -1122,8 +1137,30 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 				LocationPtr: ctLocation,
 			},
 			DollarsPerKWH:  -0.191 / 100,
-			GridAdditional: true,
+			GridAdditional: false,
 			Description:    "Hourly Purchased Electricity Adjustment (HPEA) (June 2026)",
+		},
+		// July 2026: 0.690 ¢/kWh
+		{
+			UtilityPeriod: types.UtilityPeriod{
+				Start:       time.Date(2026, time.July, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.August, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  0.690 / 100,
+			GridAdditional: false,
+			Description:    "Hourly Purchased Electricity Adjustment (HPEA) (July 2026)",
+		},
+		// fallback
+		{
+			UtilityPeriod: types.UtilityPeriod{
+				Start:       time.Date(2026, time.August, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  0.690 / 100,
+			GridAdditional: false,
+			Description:    "Hourly Purchased Electricity Adjustment (HPEA) (July 2026)",
 		},
 	}
 
@@ -1136,6 +1173,8 @@ func getComEdBESFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, er
 		return nil, err
 	}
 
+	// if you're on BES and have net metering its 1:1
+
 	besFees := []types.UtilityFeesPeriod{
 		// PSC (Transmission, GridAdditional: true)
 		{
@@ -1145,7 +1184,7 @@ func getComEdBESFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, er
 				LocationPtr: ctLocation,
 			},
 			DollarsPerKWH:  1.819 / 100,
-			GridAdditional: true,
+			GridAdditional: false,
 			Description:    "Transmission Services Charge (PSC) (Jan-May 2026)",
 		},
 		{
@@ -1155,89 +1194,34 @@ func getComEdBESFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, er
 				LocationPtr: ctLocation,
 			},
 			DollarsPerKWH:  1.722 / 100,
-			GridAdditional: true,
+			GridAdditional: false,
 			Description:    "Transmission Services Charge (PSC) (June 2026 - May 2027)",
 		},
 
-		// Combined PEC + PEA (Supply, GridAdditional: false)
-		// January 2026: 7.841 + 0.357 = 8.198 ¢/kWh
+		// Electricity Supply Charge (PEC) (Supply, GridAdditional: false)
+		// Nonsummer PEC (Jan 2026 - May 2026): 7.841 ¢/kWh
 		{
 			UtilityPeriod: types.UtilityPeriod{
 				Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
-				End:         time.Date(2026, time.February, 1, 0, 0, 0, 0, ctLocation),
-				LocationPtr: ctLocation,
-			},
-			DollarsPerKWH:  8.198 / 100,
-			GridAdditional: false,
-			Description:    "Electricity Supply Charge (PEC) & Adjustment (PEA) (Jan 2026)",
-		},
-		// February 2026: 7.841 + 0.889 = 8.730 ¢/kWh
-		{
-			UtilityPeriod: types.UtilityPeriod{
-				Start:       time.Date(2026, time.February, 1, 0, 0, 0, 0, ctLocation),
-				End:         time.Date(2026, time.March, 1, 0, 0, 0, 0, ctLocation),
-				LocationPtr: ctLocation,
-			},
-			DollarsPerKWH:  8.730 / 100,
-			GridAdditional: false,
-			Description:    "Electricity Supply Charge (PEC) & Adjustment (PEA) (Feb 2026)",
-		},
-		// March 2026: 7.841 - 0.151 = 7.690 ¢/kWh
-		{
-			UtilityPeriod: types.UtilityPeriod{
-				Start:       time.Date(2026, time.March, 1, 0, 0, 0, 0, ctLocation),
-				End:         time.Date(2026, time.April, 1, 0, 0, 0, 0, ctLocation),
-				LocationPtr: ctLocation,
-			},
-			DollarsPerKWH:  7.690 / 100,
-			GridAdditional: false,
-			Description:    "Electricity Supply Charge (PEC) & Adjustment (PEA) (Mar 2026)",
-		},
-		// April 2026: 7.841 + 1.159 = 9.000 ¢/kWh
-		{
-			UtilityPeriod: types.UtilityPeriod{
-				Start:       time.Date(2026, time.April, 1, 0, 0, 0, 0, ctLocation),
-				End:         time.Date(2026, time.May, 1, 0, 0, 0, 0, ctLocation),
-				LocationPtr: ctLocation,
-			},
-			DollarsPerKWH:  9.000 / 100,
-			GridAdditional: false,
-			Description:    "Electricity Supply Charge (PEC) & Adjustment (PEA) (Apr 2026)",
-		},
-		// May 2026: 7.841 + 8.166 = 16.007 ¢/kWh
-		{
-			UtilityPeriod: types.UtilityPeriod{
-				Start:       time.Date(2026, time.May, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH:  16.007 / 100,
+			DollarsPerKWH:  7.841 / 100,
 			GridAdditional: false,
-			Description:    "Electricity Supply Charge (PEC) & Adjustment (PEA) (May 2026)",
+			Description:    "Electricity Supply Charge (PEC) (Nonsummer Jan-May 2026)",
 		},
-		// June 2026: 8.677 + 0.230 = 8.907 ¢/kWh
+		// Summer PEC (June 2026 - Sept 2026): 8.677 ¢/kWh
 		{
 			UtilityPeriod: types.UtilityPeriod{
 				Start:       time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
-				End:         time.Date(2026, time.July, 1, 0, 0, 0, 0, ctLocation),
-				LocationPtr: ctLocation,
-			},
-			DollarsPerKWH:  8.907 / 100,
-			GridAdditional: false,
-			Description:    "Electricity Supply Charge (PEC) & Adjustment (PEA) (June 2026)",
-		},
-		// July - September 2026: 8.677 ¢/kWh (Summer PEC)
-		{
-			UtilityPeriod: types.UtilityPeriod{
-				Start:       time.Date(2026, time.July, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
 			DollarsPerKWH:  8.677 / 100,
 			GridAdditional: false,
-			Description:    "Electricity Supply Charge (PEC) (Summer July-Sept 2026)",
+			Description:    "Electricity Supply Charge (PEC) (Summer June-Sept 2026)",
 		},
-		// October 2026 - May 2027: 8.241 ¢/kWh (Nonsummer PEC)
+		// Nonsummer PEC (Oct 2026 - May 2027): 8.241 ¢/kWh
 		{
 			UtilityPeriod: types.UtilityPeriod{
 				Start:       time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
@@ -1247,6 +1231,96 @@ func getComEdBESFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, er
 			DollarsPerKWH:  8.241 / 100,
 			GridAdditional: false,
 			Description:    "Electricity Supply Charge (PEC) (Nonsummer Oct 2026 - May 2027)",
+		},
+
+		// Purchased Electricity Adjustment (PEA) (Supply, GridAdditional: false)
+		// January 2026: 0.357 ¢/kWh
+		{
+			UtilityPeriod: types.UtilityPeriod{
+				Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.February, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  0.357 / 100,
+			GridAdditional: false,
+			Description:    "Purchased Electricity Adjustment (PEA) (Jan 2026)",
+		},
+		// February 2026: 0.889 ¢/kWh
+		{
+			UtilityPeriod: types.UtilityPeriod{
+				Start:       time.Date(2026, time.February, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.March, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  0.889 / 100,
+			GridAdditional: false,
+			Description:    "Purchased Electricity Adjustment (PEA) (Feb 2026)",
+		},
+		// March 2026: -0.151 ¢/kWh
+		{
+			UtilityPeriod: types.UtilityPeriod{
+				Start:       time.Date(2026, time.March, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.April, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  -0.151 / 100,
+			GridAdditional: false,
+			Description:    "Purchased Electricity Adjustment (PEA) (Mar 2026)",
+		},
+		// April 2026: 1.159 ¢/kWh
+		{
+			UtilityPeriod: types.UtilityPeriod{
+				Start:       time.Date(2026, time.April, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.May, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  1.159 / 100,
+			GridAdditional: false,
+			Description:    "Purchased Electricity Adjustment (PEA) (Apr 2026)",
+		},
+		// May 2026: 8.166 ¢/kWh
+		{
+			UtilityPeriod: types.UtilityPeriod{
+				Start:       time.Date(2026, time.May, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  8.166 / 100,
+			GridAdditional: false,
+			Description:    "Purchased Electricity Adjustment (PEA) (May 2026)",
+		},
+		// June 2026: 0.230 ¢/kWh
+		{
+			UtilityPeriod: types.UtilityPeriod{
+				Start:       time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.July, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  0.230 / 100,
+			GridAdditional: false,
+			Description:    "Purchased Electricity Adjustment (PEA) (June 2026)",
+		},
+		// July 2026: 0.247 ¢/kWh
+		{
+			UtilityPeriod: types.UtilityPeriod{
+				Start:       time.Date(2026, time.July, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.August, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  0.247 / 100,
+			GridAdditional: false,
+			Description:    "Purchased Electricity Adjustment (PEA) (July 2026)",
+		},
+		// fallback
+		{
+			UtilityPeriod: types.UtilityPeriod{
+				Start:       time.Date(2026, time.August, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  0.247 / 100,
+			GridAdditional: false,
+			Description:    "Purchased Electricity Adjustment (PEA) (July 2026)",
 		},
 	}
 
@@ -1262,8 +1336,28 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 		return nil, err
 	}
 
+	// Rider POGNM NM15 (BEST+DG Rebate) says:
+	// (1) the sum, in dollars per kWh ($/kWh), of the (a) Electricity Charge
+	// applicable to such retail customer is applied on a $/kWh basis, (b) PJM
+	// Services and Miscellaneous Procurement Components kWh Charge, (c) Rate
+	// BEST Purchased Electricity Adjustment Factor (TPEA), as each such charge or
+	// factor is described in the Monthly Charges section of Rate BEST, as
+	// applicable, multiplied by (2) the net output, in kWhs
+
 	bestFees := []types.UtilityFeesPeriod{
-		// --- BESTECs + PJM Components (Supply, GridAdditional: false) ---
+		// PJM Component (Supply, GridAdditional: false)
+		{
+			UtilityPeriod: types.UtilityPeriod{
+				Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  1.875 / 100,
+			GridAdditional: false,
+			Description:    "PJM Capacity & Transmission Component",
+		},
+
+		// --- BESTECs Components (Supply, GridAdditional: false) ---
 		// Prior to June 1, 2026 (Nonsummer)
 		{
 			UtilityPeriod: types.UtilityPeriod{
@@ -1274,8 +1368,9 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 				},
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH: 6.643 / 100,
-			Description:   "BEST Nonsummer Morning Period Electricity Charge (MPEC) + PJM",
+			DollarsPerKWH:  4.768 / 100,
+			GridAdditional: false,
+			Description:    "BEST Nonsummer Morning Period Electricity Charge (MPEC)",
 		},
 		{
 			UtilityPeriod: types.UtilityPeriod{
@@ -1286,8 +1381,8 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 				},
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH: 16.574 / 100,
-			Description:   "BEST Nonsummer Mid-Day Peak Period Electricity Charge (MDPPEC) + PJM",
+			DollarsPerKWH: 14.699 / 100,
+			Description:   "BEST Nonsummer Mid-Day Peak Period Electricity Charge (MDPPEC)",
 		},
 		{
 			UtilityPeriod: types.UtilityPeriod{
@@ -1298,8 +1393,9 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 				},
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH: 7.884 / 100,
-			Description:   "BEST Nonsummer Evening Period Electricity Charge (EPEC) + PJM",
+			DollarsPerKWH:  6.009 / 100,
+			GridAdditional: false,
+			Description:    "BEST Nonsummer Evening Period Electricity Charge (EPEC)",
 		},
 		{
 			UtilityPeriod: types.UtilityPeriod{
@@ -1311,8 +1407,9 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 				},
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH: 5.269 / 100,
-			Description:   "BEST Nonsummer Overnight Period Electricity Charge (OPEC) + PJM",
+			DollarsPerKWH:  3.394 / 100,
+			GridAdditional: false,
+			Description:    "BEST Nonsummer Overnight Period Electricity Charge (OPEC)",
 		},
 
 		// Summer: June 1, 2026 to Oct 1, 2026
@@ -1325,8 +1422,9 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 				},
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH: 5.653 / 100,
-			Description:   "BEST Summer Morning Period Electricity Charge (MPEC) + PJM",
+			DollarsPerKWH:  3.778 / 100,
+			GridAdditional: false,
+			Description:    "BEST Summer Morning Period Electricity Charge (MPEC)",
 		},
 		{
 			UtilityPeriod: types.UtilityPeriod{
@@ -1337,8 +1435,9 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 				},
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH: 18.469 / 100,
-			Description:   "BEST Summer Mid-Day Peak Period Electricity Charge (MDPPEC) + PJM",
+			DollarsPerKWH:  16.594 / 100,
+			GridAdditional: false,
+			Description:    "BEST Summer Mid-Day Peak Period Electricity Charge (MDPPEC)",
 		},
 		{
 			UtilityPeriod: types.UtilityPeriod{
@@ -1349,8 +1448,9 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 				},
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH: 7.668 / 100,
-			Description:   "BEST Summer Evening Period Electricity Charge (EPEC) + PJM",
+			DollarsPerKWH:  5.793 / 100,
+			GridAdditional: false,
+			Description:    "BEST Summer Evening Period Electricity Charge (EPEC)",
 		},
 		{
 			UtilityPeriod: types.UtilityPeriod{
@@ -1362,8 +1462,9 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 				},
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH: 4.704 / 100,
-			Description:   "BEST Summer Overnight Period Electricity Charge (OPEC) + PJM",
+			DollarsPerKWH:  2.829 / 100,
+			GridAdditional: false,
+			Description:    "BEST Summer Overnight Period Electricity Charge (OPEC)",
 		},
 
 		// Nonsummer: Oct 1, 2026 to June 1, 2027
@@ -1376,8 +1477,9 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 				},
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH: 6.643 / 100,
-			Description:   "BEST Nonsummer Morning Period Electricity Charge (MPEC) + PJM",
+			DollarsPerKWH:  4.768 / 100,
+			GridAdditional: false,
+			Description:    "BEST Nonsummer Morning Period Electricity Charge (MPEC)",
 		},
 		{
 			UtilityPeriod: types.UtilityPeriod{
@@ -1388,8 +1490,9 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 				},
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH: 16.574 / 100,
-			Description:   "BEST Nonsummer Mid-Day Peak Period Electricity Charge (MDPPEC) + PJM",
+			DollarsPerKWH:  14.699 / 100,
+			GridAdditional: false,
+			Description:    "BEST Nonsummer Mid-Day Peak Period Electricity Charge (MDPPEC)",
 		},
 		{
 			UtilityPeriod: types.UtilityPeriod{
@@ -1400,8 +1503,9 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 				},
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH: 7.884 / 100,
-			Description:   "BEST Nonsummer Evening Period Electricity Charge (EPEC) + PJM",
+			DollarsPerKWH:  6.009 / 100,
+			GridAdditional: false,
+			Description:    "BEST Nonsummer Evening Period Electricity Charge (EPEC)",
 		},
 		{
 			UtilityPeriod: types.UtilityPeriod{
@@ -1413,8 +1517,9 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 				},
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH: 5.269 / 100,
-			Description:   "BEST Nonsummer Overnight Period Electricity Charge (OPEC) + PJM",
+			DollarsPerKWH:  3.394 / 100,
+			GridAdditional: false,
+			Description:    "BEST Nonsummer Overnight Period Electricity Charge (OPEC)",
 		},
 	}
 

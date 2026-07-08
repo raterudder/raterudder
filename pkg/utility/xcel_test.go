@@ -57,11 +57,6 @@ func TestXcelMichiganPeakHours(t *testing.T) {
 }
 
 func TestXcelPricing(t *testing.T) {
-	chi, err := time.LoadLocation("America/Chicago")
-	require.NoError(t, err)
-	den, err := time.LoadLocation("America/Denver")
-	require.NoError(t, err)
-
 	t.Run("Colorado TOU pricing summer on-peak", func(t *testing.T) {
 		u := &genericTOU{}
 		err := u.ApplySettings(context.Background(), types.Settings{
@@ -70,7 +65,7 @@ func TestXcelPricing(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		target := time.Date(2026, time.July, 15, 16, 0, 0, 0, den) // 4 PM
+		target := time.Date(2026, time.July, 15, 16, 0, 0, 0, mtLocation) // 4 PM
 		p, err := u.priceForTime(target)
 		require.NoError(t, err)
 		assert.InDelta(t, 0.16430, p.DollarsPerKWH, 1e-6)
@@ -84,7 +79,7 @@ func TestXcelPricing(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		target := time.Date(2026, time.July, 15, 12, 0, 0, 0, chi)
+		target := time.Date(2026, time.July, 15, 12, 0, 0, 0, ctLocation)
 		p, err := u.priceForTime(target)
 		require.NoError(t, err)
 		assert.InDelta(t, 0.13069, p.DollarsPerKWH, 1e-6)
@@ -98,7 +93,7 @@ func TestXcelPricing(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		target := time.Date(2026, time.December, 15, 12, 0, 0, 0, chi)
+		target := time.Date(2026, time.December, 15, 12, 0, 0, 0, ctLocation)
 		p, err := u.priceForTime(target)
 		require.NoError(t, err)
 		assert.InDelta(t, 0.09585, p.DollarsPerKWH, 1e-6)
@@ -115,7 +110,7 @@ func TestXcelPricing(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		target := time.Date(2026, time.July, 15, 9, 0, 0, 0, chi) // 9 AM weekday (on-peak)
+		target := time.Date(2026, time.July, 15, 9, 0, 0, 0, ctLocation) // 9 AM weekday (on-peak)
 		p, err := u.priceForTime(target)
 		require.NoError(t, err)
 		assert.InDelta(t, 0.1607, p.DollarsPerKWH, 1e-6)
@@ -130,14 +125,14 @@ func TestXcelPricing(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		target := time.Date(2026, time.July, 15, 12, 0, 0, 0, chi)
+		target := time.Date(2026, time.July, 15, 12, 0, 0, 0, ctLocation)
 		p, err := u.priceForTime(target)
 		require.NoError(t, err)
 		assert.InDelta(t, 0.097900, p.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.065500, p.GridUseDollarsPerKWH, 1e-6)
 	})
 
-	t.Run("Texas TOU peak surcharge", func(t *testing.T) {
+	t.Run("Texas TOU peak surcharge and fuel cost recovery factor", func(t *testing.T) {
 		u := &genericTOU{}
 		err := u.ApplySettings(context.Background(), types.Settings{
 			UtilityProvider: "xcel",
@@ -145,17 +140,30 @@ func TestXcelPricing(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		target := time.Date(2026, time.July, 15, 14, 0, 0, 0, chi) // 2 PM weekday
+		target := time.Date(2026, time.July, 15, 14, 0, 0, 0, ctLocation) // 2 PM weekday
 		p, err := u.priceForTime(target)
 		require.NoError(t, err)
 		assert.InDelta(t, 0.25826, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.014978, p.GridUseDollarsPerKWH, 1e-6)
+	})
+
+	t.Run("Texas Standard service and fuel cost recovery factor", func(t *testing.T) {
+		u := &genericTOU{}
+		err := u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "xcel",
+			UtilityRate:     "xcel_tx_standard",
+		})
+		require.NoError(t, err)
+
+		target := time.Date(2026, time.July, 15, 12, 0, 0, 0, ctLocation)
+		p, err := u.priceForTime(target)
+		require.NoError(t, err)
+		assert.InDelta(t, 0.114967, p.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.014978, p.GridUseDollarsPerKWH, 1e-6)
 	})
 }
 
 func TestXcelExportRates(t *testing.T) {
-	chi, err := time.LoadLocation("America/Chicago")
-	require.NoError(t, err)
-
 	t.Run("Minnesota Occasional Delivery", func(t *testing.T) {
 		u := &genericTOU{}
 		err := u.ApplySettings(context.Background(), types.Settings{
@@ -167,7 +175,7 @@ func TestXcelExportRates(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		target := time.Date(2026, time.July, 15, 12, 0, 0, 0, chi)
+		target := time.Date(2026, time.July, 15, 12, 0, 0, 0, ctLocation)
 		p, err := u.priceForTime(target)
 		require.NoError(t, err)
 		if assert.True(t, p.SeparateGenerationCredit) {
@@ -186,7 +194,7 @@ func TestXcelExportRates(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		target := time.Date(2026, time.July, 15, 10, 0, 0, 0, chi) // 10 AM weekday
+		target := time.Date(2026, time.July, 15, 10, 0, 0, 0, ctLocation) // 10 AM weekday
 		p, err := u.priceForTime(target)
 		require.NoError(t, err)
 		if assert.True(t, p.SeparateGenerationCredit) {
@@ -205,7 +213,7 @@ func TestXcelExportRates(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		target := time.Date(2026, time.July, 15, 8, 0, 0, 0, chi) // 8 AM weekday
+		target := time.Date(2026, time.July, 15, 8, 0, 0, 0, ctLocation) // 8 AM weekday
 		p, err := u.priceForTime(target)
 		require.NoError(t, err)
 		if assert.True(t, p.SeparateGenerationCredit) {
@@ -224,7 +232,7 @@ func TestXcelExportRates(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		target := time.Date(2026, time.July, 15, 12, 0, 0, 0, chi)
+		target := time.Date(2026, time.July, 15, 12, 0, 0, 0, ctLocation)
 		p, err := u.priceForTime(target)
 		require.NoError(t, err)
 		if assert.True(t, p.SeparateGenerationCredit) {
@@ -243,7 +251,7 @@ func TestXcelExportRates(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		target := time.Date(2026, time.July, 15, 10, 0, 0, 0, chi) // 10 AM weekday (on-peak)
+		target := time.Date(2026, time.July, 15, 10, 0, 0, 0, ctLocation) // 10 AM weekday (on-peak)
 		p, err := u.priceForTime(target)
 		require.NoError(t, err)
 		if assert.True(t, p.SeparateGenerationCredit) {
@@ -262,7 +270,7 @@ func TestXcelExportRates(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		target := time.Date(2026, time.December, 15, 22, 0, 0, 0, chi) // 10 PM winter weekday (off-peak)
+		target := time.Date(2026, time.December, 15, 22, 0, 0, 0, ctLocation) // 10 PM winter weekday (off-peak)
 		p, err := u.priceForTime(target)
 		require.NoError(t, err)
 		if assert.True(t, p.SeparateGenerationCredit) {
@@ -281,7 +289,7 @@ func TestXcelExportRates(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		target := time.Date(2026, time.July, 15, 12, 0, 0, 0, chi)
+		target := time.Date(2026, time.July, 15, 12, 0, 0, 0, ctLocation)
 		p, err := u.priceForTime(target)
 		require.NoError(t, err)
 		if assert.True(t, p.SeparateGenerationCredit) {
@@ -300,7 +308,7 @@ func TestXcelExportRates(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		target := time.Date(2026, time.July, 15, 10, 0, 0, 0, chi) // 10 AM weekday
+		target := time.Date(2026, time.July, 15, 10, 0, 0, 0, ctLocation) // 10 AM weekday
 		p, err := u.priceForTime(target)
 		require.NoError(t, err)
 		if assert.True(t, p.SeparateGenerationCredit) {
@@ -319,7 +327,7 @@ func TestXcelExportRates(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		target := time.Date(2026, time.July, 15, 23, 0, 0, 0, chi) // 11 PM weekday
+		target := time.Date(2026, time.July, 15, 23, 0, 0, 0, ctLocation) // 11 PM weekday
 		p, err := u.priceForTime(target)
 		require.NoError(t, err)
 		if assert.True(t, p.SeparateGenerationCredit) {
@@ -339,7 +347,7 @@ func TestXcelExportRates(t *testing.T) {
 		require.NoError(t, err)
 
 		// January (defined)
-		targetJan := time.Date(2026, time.January, 15, 12, 0, 0, 0, chi)
+		targetJan := time.Date(2026, time.January, 15, 12, 0, 0, 0, ctLocation)
 		pJan, err := u.priceForTime(targetJan)
 		require.NoError(t, err)
 		if assert.True(t, pJan.SeparateGenerationCredit) {
@@ -347,7 +355,7 @@ func TestXcelExportRates(t *testing.T) {
 		}
 
 		// July (undefined, fallback to May)
-		targetJuly := time.Date(2026, time.July, 15, 12, 0, 0, 0, chi)
+		targetJuly := time.Date(2026, time.July, 15, 12, 0, 0, 0, ctLocation)
 		pJuly, err := u.priceForTime(targetJuly)
 		require.NoError(t, err)
 		if assert.True(t, pJuly.SeparateGenerationCredit) {

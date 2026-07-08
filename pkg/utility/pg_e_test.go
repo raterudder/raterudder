@@ -11,9 +11,6 @@ import (
 )
 
 func TestPacificGasAndElectric(t *testing.T) {
-	la, err := time.LoadLocation("America/Los_Angeles")
-	require.NoError(t, err)
-
 	t.Run("E-1 flat rate calculation", func(t *testing.T) {
 		u := &genericTOU{}
 		err := u.ApplySettings(context.Background(), types.Settings{
@@ -25,7 +22,7 @@ func TestPacificGasAndElectric(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		targetTime := time.Date(2026, time.July, 15, 12, 0, 0, 0, la)
+		targetTime := time.Date(2026, time.July, 15, 12, 0, 0, 0, ptLocation)
 		p, err := u.priceForTime(targetTime)
 		require.NoError(t, err)
 
@@ -52,7 +49,7 @@ func TestPacificGasAndElectric(t *testing.T) {
 		// Summer On-Peak: July 15, 2026, 5:00 PM (17:00).
 		// Peak = $0.52240. Baseline credit = $0.08140. NBC = $0.01230.
 		// DollarsPerKWH = 0.52240 - 0.08140 - 0.01230 = 0.42870.
-		targetTime := time.Date(2026, time.July, 15, 17, 0, 0, 0, la)
+		targetTime := time.Date(2026, time.July, 15, 17, 0, 0, 0, ptLocation)
 		p, err := u.priceForTime(targetTime)
 		require.NoError(t, err)
 
@@ -78,7 +75,7 @@ func TestPacificGasAndElectric(t *testing.T) {
 		// New Year's Day 2026 (Jan 1) is a Thursday.
 		// Winter Off-Peak: $0.34886. NBC = $0.01230.
 		// DollarsPerKWH = 0.34886 - 0.01230 = 0.33656.
-		targetTime := time.Date(2026, time.January, 1, 17, 0, 0, 0, la) // 5 PM on holiday
+		targetTime := time.Date(2026, time.January, 1, 17, 0, 0, 0, ptLocation) // 5 PM on holiday
 		p, err := u.priceForTime(targetTime)
 		require.NoError(t, err)
 
@@ -101,7 +98,7 @@ func TestPacificGasAndElectric(t *testing.T) {
 		// Winter Part-Peak: Dec 15, 2026, 3:00 PM (15:00).
 		// Part-Peak = $0.29854. NBC = $0.01230.
 		// DollarsPerKWH = 0.29854 - 0.01230 = 0.28624.
-		targetTime := time.Date(2026, time.December, 15, 15, 0, 0, 0, la)
+		targetTime := time.Date(2026, time.December, 15, 15, 0, 0, 0, ptLocation)
 		p, err := u.priceForTime(targetTime)
 		require.NoError(t, err)
 
@@ -123,7 +120,7 @@ func TestPacificGasAndElectric(t *testing.T) {
 		// Summer On-Peak: July 15, 2026, 6:00 PM (18:00).
 		// Peak = $0.53809. NBC = $0.01230.
 		// DollarsPerKWH = 0.53809 - 0.01230 = 0.52579.
-		tPeak := time.Date(2026, time.July, 15, 18, 0, 0, 0, la)
+		tPeak := time.Date(2026, time.July, 15, 18, 0, 0, 0, ptLocation)
 		pPeak, err := u.priceForTime(tPeak)
 		require.NoError(t, err)
 		assert.InDelta(t, 0.52579, pPeak.DollarsPerKWH, 1e-6)
@@ -131,7 +128,7 @@ func TestPacificGasAndElectric(t *testing.T) {
 		// Summer Off-Peak: July 15, 2026, 8:00 AM (08:00).
 		// Off-Peak = $0.22558. NBC = $0.01230.
 		// DollarsPerKWH = 0.22558 - 0.01230 = 0.21328.
-		tOff := time.Date(2026, time.July, 15, 8, 0, 0, 0, la)
+		tOff := time.Date(2026, time.July, 15, 8, 0, 0, 0, ptLocation)
 		pOff, err := u.priceForTime(tOff)
 		require.NoError(t, err)
 		assert.InDelta(t, 0.21328, pOff.DollarsPerKWH, 1e-6)
@@ -164,23 +161,20 @@ func TestPGEHolidays(t *testing.T) {
 }
 
 func TestGetPGENBTExportRate(t *testing.T) {
-	la, err := time.LoadLocation("America/Los_Angeles")
-	require.NoError(t, err)
-
 	t.Run("Get rate for regular weekday", func(t *testing.T) {
-		target := time.Date(2026, time.July, 15, 17, 0, 0, 0, la)
+		target := time.Date(2026, time.July, 15, 17, 0, 0, 0, ptLocation)
 		rate := getPGENBTExportRate(target)
 		assert.InDelta(t, 0.32547, rate, 1e-6)
 	})
 
 	t.Run("Get rate for weekend", func(t *testing.T) {
-		target := time.Date(2026, time.July, 18, 17, 0, 0, 0, la)
+		target := time.Date(2026, time.July, 18, 17, 0, 0, 0, ptLocation)
 		rate := getPGENBTExportRate(target)
 		assert.InDelta(t, 0.05085, rate, 1e-6)
 	})
 
 	t.Run("Get rate for holiday on weekday", func(t *testing.T) {
-		target := time.Date(2026, time.January, 1, 17, 0, 0, 0, la)
+		target := time.Date(2026, time.January, 1, 17, 0, 0, 0, ptLocation)
 		rate := getPGENBTExportRate(target)
 		assert.InDelta(t, 0.10588, rate, 1e-6)
 	})

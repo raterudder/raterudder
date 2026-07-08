@@ -37,7 +37,6 @@ func getDLCHolidays(year int) []string {
 // dlcPeriods generates the pricing periods for Duquesne Light Co. (DLC).
 func dlcPeriods(plan string, options types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	loc := etLocation.String()
 
 	// Effective June 1, 2026:
 	// - Distribution Energy Charge: 8.2479 ¢/kWh = $0.082479/kWh
@@ -67,7 +66,7 @@ func dlcPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 		case "dlc_rs":
 			// RS Flat Rate: Total charge = baseDSS + nonSupply
 			rate := baseDSS + nonSupply
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.January,
@@ -149,7 +148,7 @@ func dlcPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 				OtherDescription:   "DLC TOU Off-Peak",
 			}
 
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				holidayPeriod,
 				regularPeriod,
 			})...)

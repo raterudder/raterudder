@@ -112,7 +112,6 @@ func (c *Controller) SimulateState(
 	var currentVPPEventEnd time.Time
 	var wasInVPPEvent bool
 	simTime := now
-	nowRatioIntoHour := float64(now.Minute()) / 60.0
 
 	simHours := 24
 	if len(futurePrices) > 0 {
@@ -140,7 +139,10 @@ func (c *Controller) SimulateState(
 		log.Ctx(ctx).WarnContext(ctx, "no future prices provided, simulated prices will be 0")
 	}
 
-	for i := 0; i < simHours; i++ {
+	simEnd := now.Truncate(time.Hour).Add(time.Duration(simHours) * time.Hour)
+	simTime = now
+
+	for simTime.Before(simEnd) {
 		h := simTime.Hour()
 		startBatteryKWH := simEnergyKWH
 
@@ -160,6 +162,7 @@ func (c *Controller) SimulateState(
 			if !found && len(futurePrices) > 0 {
 				log.Ctx(ctx).WarnContext(ctx, "missing future price for simulation hour", slog.Time("simTime", simTime))
 				// just use the last price for the last hour instead if we have it
+				// note: this won't exactly work if there are sub-hour prices
 				lastHour := simTime.Add(-time.Hour)
 				for _, fp := range futurePrices {
 					if fp.Contains(lastHour) {
@@ -212,11 +215,19 @@ func (c *Controller) SimulateState(
 
 		predictedAvgSolarKWH := profile.AvgSolarKWH * currentSolarTrend
 		netLoadSolarKWH := profile.AvgHomeLoadKWH - predictedAvgSolarKWH
-		// if we're in the first hour only apply the remaining fraction of the hour
-		simEnergyApplyRatio := 1.0
-		if i == 0 {
-			simEnergyApplyRatio = 1.0 - nowRatioIntoHour
+
+		// Determine the next step's end boundary
+		nextHour := simTime.Add(1 * time.Hour).Truncate(time.Hour)
+		stepEnd := nextHour
+		if !price.TSEnd.IsZero() && price.TSEnd.Before(nextHour) && price.TSEnd.After(simTime) {
+			stepEnd = price.TSEnd
 		}
+		if stepEnd.After(simEnd) {
+			stepEnd = simEnd
+		}
+
+		stepDuration := stepEnd.Sub(simTime)
+		simEnergyApplyRatio := stepDuration.Hours()
 
 		// Find the next active or upcoming VPP event that ends after the current simulation hour starts.
 		// VPPEvents are assumed to be sorted by start time.
@@ -244,10 +255,6 @@ func (c *Controller) SimulateState(
 			}
 			currentVPPEventEnd = time.Time{}
 		}
-
-		// Note that for i = 0, simTime is exactly "now" (which has a non-zero minute component),
-		// while for i > 0 it is truncated to the hour.
-		hourEnd := simTime.Add(1 * time.Hour).Truncate(time.Hour)
 
 		// We want to reach capacity exactly at the bufferStart (vppPrepChargingBuffer before VPP).
 		// Over the remaining duration to the buffer start, we will have load pulling
@@ -282,7 +289,7 @@ func (c *Controller) SimulateState(
 			// If we haven't recorded the pre-charging start time yet, check if the calculated
 			// chargeStart falls within this hourly simulation window.
 			if startedVPPChargingAt.IsZero() && simEnergyKWH < capacityThresholdKWH {
-				if !hourEnd.Before(chargeStart) && simTime.Before(bufferStart) {
+				if !stepEnd.Before(chargeStart) && simTime.Before(bufferStart) {
 					startedVPPChargingAt = chargeStart
 				}
 			}
@@ -299,7 +306,7 @@ func (c *Controller) SimulateState(
 
 			candidates := []time.Time{chargeStart, vppStandbyStart, vppBufferStart, eventStart, eventEnd}
 			for _, ts := range candidates {
-				if !ts.IsZero() && ts.After(simTime) && ts.Before(hourEnd) {
+				if !ts.IsZero() && ts.After(simTime) && ts.Before(stepEnd) {
 					found := false
 					for _, existing := range transitions {
 						if existing.Equal(ts) {
@@ -313,7 +320,7 @@ func (c *Controller) SimulateState(
 				}
 			}
 		}
-		transitions = append(transitions, hourEnd)
+		transitions = append(transitions, stepEnd)
 		slices.SortFunc(transitions, func(a, b time.Time) int {
 			return a.Compare(b)
 		})
@@ -323,7 +330,7 @@ func (c *Controller) SimulateState(
 		var simVPPEndAt time.Time
 		if nextVPP != nil {
 			vppStandbyStart := nextVPP.TSStart.Add(-vppStandbyDuration)
-			if vppStandbyStart.Before(hourEnd) {
+			if vppStandbyStart.Before(stepEnd) {
 				simBlackoutAt = vppStandbyStart
 				simVPPEndAt = nextVPP.TSEnd
 			}
@@ -647,7 +654,7 @@ func (c *Controller) SimulateState(
 			VPPStandbyAt:            simBlackoutAt,
 			VPPEndAt:                simVPPEndAt,
 		})
-		simTime = simTime.Add(1 * time.Hour).Truncate(time.Hour)
+		simTime = stepEnd
 	}
 
 	return simData, simParams

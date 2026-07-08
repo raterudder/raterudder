@@ -565,27 +565,27 @@ func TestComEd(t *testing.T) {
 
 		if assert.NotNil(t, pscJanMay) {
 			assert.InDelta(t, 0.01083, pscJanMay.DollarsPerKWH, 0.00001)
-			assert.True(t, pscJanMay.GridAdditional)
+			assert.False(t, pscJanMay.GridAdditional)
 		}
 		if assert.NotNil(t, pscJune2026) {
 			assert.InDelta(t, 0.01074, pscJune2026.DollarsPerKWH, 0.00001)
-			assert.True(t, pscJune2026.GridAdditional)
+			assert.False(t, pscJune2026.GridAdditional)
 		}
 		if assert.NotNil(t, mpccJanMay) {
 			assert.InDelta(t, 0.00062, mpccJanMay.DollarsPerKWH, 0.00001)
-			assert.True(t, mpccJanMay.GridAdditional)
+			assert.False(t, mpccJanMay.GridAdditional)
 		}
 		if assert.NotNil(t, mpccJune2026) {
 			assert.InDelta(t, 0.00134, mpccJune2026.DollarsPerKWH, 0.00001)
-			assert.True(t, mpccJune2026.GridAdditional)
+			assert.False(t, mpccJune2026.GridAdditional)
 		}
 		if assert.NotNil(t, hpeaJan) {
 			assert.InDelta(t, 0.00743, hpeaJan.DollarsPerKWH, 0.00001)
-			assert.True(t, hpeaJan.GridAdditional)
+			assert.False(t, hpeaJan.GridAdditional)
 		}
 		if assert.NotNil(t, hpeaJune) {
 			assert.InDelta(t, -0.00191, hpeaJune.DollarsPerKWH, 0.00001)
-			assert.True(t, hpeaJune.GridAdditional)
+			assert.False(t, hpeaJune.GridAdditional)
 		}
 
 		// BES Fees
@@ -594,8 +594,8 @@ func TestComEd(t *testing.T) {
 		assert.NotEmpty(t, besFees)
 
 		var pscBESJanMay, pscBESJune2026 *types.UtilityFeesPeriod
-		var pecPEAJan, pecPEAJune *types.UtilityFeesPeriod
-		var pecSummer, pecNonsummer *types.UtilityFeesPeriod
+		var peaJan, peaJune *types.UtilityFeesPeriod
+		var pecSummer, pecNonsummerJanMay, pecNonsummerOctMay *types.UtilityFeesPeriod
 
 		for i := range besFees {
 			f := &besFees[i]
@@ -606,18 +606,20 @@ func TestComEd(t *testing.T) {
 					pscBESJune2026 = f
 				}
 			}
-			if strings.Contains(f.Description, "Electricity Supply Charge (PEC) & Adjustment (PEA)") {
+			if strings.Contains(f.Description, "Purchased Electricity Adjustment (PEA)") {
 				if f.Start.Month() == time.January {
-					pecPEAJan = f
+					peaJan = f
 				} else if f.Start.Month() == time.June {
-					pecPEAJune = f
+					peaJune = f
 				}
 			}
-			if strings.Contains(f.Description, "Electricity Supply Charge (PEC)") && !strings.Contains(f.Description, "& Adjustment") {
+			if strings.Contains(f.Description, "Electricity Supply Charge (PEC)") {
 				if strings.Contains(f.Description, "Summer") {
 					pecSummer = f
-				} else if strings.Contains(f.Description, "Nonsummer") {
-					pecNonsummer = f
+				} else if strings.Contains(f.Description, "Nonsummer Jan-May") {
+					pecNonsummerJanMay = f
+				} else if strings.Contains(f.Description, "Nonsummer Oct") {
+					pecNonsummerOctMay = f
 				}
 			}
 		}
@@ -628,17 +630,20 @@ func TestComEd(t *testing.T) {
 		if assert.NotNil(t, pscBESJune2026) {
 			assert.InDelta(t, 0.01722, pscBESJune2026.DollarsPerKWH, 0.00001)
 		}
-		if assert.NotNil(t, pecPEAJan) {
-			assert.InDelta(t, 0.08198, pecPEAJan.DollarsPerKWH, 0.00001)
+		if assert.NotNil(t, peaJan) {
+			assert.InDelta(t, 0.00357, peaJan.DollarsPerKWH, 0.00001)
 		}
-		if assert.NotNil(t, pecPEAJune) {
-			assert.InDelta(t, 0.08907, pecPEAJune.DollarsPerKWH, 0.00001)
+		if assert.NotNil(t, peaJune) {
+			assert.InDelta(t, 0.00230, peaJune.DollarsPerKWH, 0.00001)
 		}
 		if assert.NotNil(t, pecSummer) {
 			assert.InDelta(t, 0.08677, pecSummer.DollarsPerKWH, 0.00001)
 		}
-		if assert.NotNil(t, pecNonsummer) {
-			assert.InDelta(t, 0.08241, pecNonsummer.DollarsPerKWH, 0.00001)
+		if assert.NotNil(t, pecNonsummerJanMay) {
+			assert.InDelta(t, 0.07841, pecNonsummerJanMay.DollarsPerKWH, 0.00001)
+		}
+		if assert.NotNil(t, pecNonsummerOctMay) {
+			assert.InDelta(t, 0.08241, pecNonsummerOctMay.DollarsPerKWH, 0.00001)
 		}
 
 		// BEST Fees
@@ -648,9 +653,13 @@ func TestComEd(t *testing.T) {
 
 		var mpecBESTSummer, mdppecBESTSummer, epecBESTSummer, opecBESTSummer *types.UtilityFeesPeriod
 		var mpecBESTNonsummer, mdppecBESTNonsummer, epecBESTNonsummer, opecBESTNonsummer *types.UtilityFeesPeriod
+		var pjmBEST *types.UtilityFeesPeriod
 
 		for i := range bestFees {
 			f := &bestFees[i]
+			if strings.Contains(f.Description, "PJM Capacity & Transmission") {
+				pjmBEST = f
+			}
 			if strings.Contains(f.Description, "BEST Summer Morning") {
 				mpecBESTSummer = f
 			}
@@ -677,29 +686,32 @@ func TestComEd(t *testing.T) {
 			}
 		}
 
+		if assert.NotNil(t, pjmBEST) {
+			assert.InDelta(t, 0.01875, pjmBEST.DollarsPerKWH, 0.00001)
+		}
 		if assert.NotNil(t, mpecBESTSummer) {
-			assert.InDelta(t, 0.05653, mpecBESTSummer.DollarsPerKWH, 0.00001)
+			assert.InDelta(t, 0.03778, mpecBESTSummer.DollarsPerKWH, 0.00001)
 		}
 		if assert.NotNil(t, mdppecBESTSummer) {
-			assert.InDelta(t, 0.18469, mdppecBESTSummer.DollarsPerKWH, 0.00001)
+			assert.InDelta(t, 0.16594, mdppecBESTSummer.DollarsPerKWH, 0.00001)
 		}
 		if assert.NotNil(t, epecBESTSummer) {
-			assert.InDelta(t, 0.07668, epecBESTSummer.DollarsPerKWH, 0.00001)
+			assert.InDelta(t, 0.05793, epecBESTSummer.DollarsPerKWH, 0.00001)
 		}
 		if assert.NotNil(t, opecBESTSummer) {
-			assert.InDelta(t, 0.04704, opecBESTSummer.DollarsPerKWH, 0.00001)
+			assert.InDelta(t, 0.02829, opecBESTSummer.DollarsPerKWH, 0.00001)
 		}
 		if assert.NotNil(t, mpecBESTNonsummer) {
-			assert.InDelta(t, 0.06643, mpecBESTNonsummer.DollarsPerKWH, 0.00001)
+			assert.InDelta(t, 0.04768, mpecBESTNonsummer.DollarsPerKWH, 0.00001)
 		}
 		if assert.NotNil(t, mdppecBESTNonsummer) {
-			assert.InDelta(t, 0.16574, mdppecBESTNonsummer.DollarsPerKWH, 0.00001)
+			assert.InDelta(t, 0.14699, mdppecBESTNonsummer.DollarsPerKWH, 0.00001)
 		}
 		if assert.NotNil(t, epecBESTNonsummer) {
-			assert.InDelta(t, 0.07884, epecBESTNonsummer.DollarsPerKWH, 0.00001)
+			assert.InDelta(t, 0.06009, epecBESTNonsummer.DollarsPerKWH, 0.00001)
 		}
 		if assert.NotNil(t, opecBESTNonsummer) {
-			assert.InDelta(t, 0.05269, opecBESTNonsummer.DollarsPerKWH, 0.00001)
+			assert.InDelta(t, 0.03394, opecBESTNonsummer.DollarsPerKWH, 0.00001)
 		}
 	})
 

@@ -11,60 +11,57 @@ import (
 )
 
 func TestPortlandGeneralElectric(t *testing.T) {
-	la, err := time.LoadLocation("America/Los_Angeles")
-	require.NoError(t, err)
-
 	u := &genericTOU{}
-	err = u.ApplySettings(context.Background(), types.Settings{
+	err := u.ApplySettings(context.Background(), types.Settings{
 		UtilityProvider: "portland_general_electric",
 		UtilityRate:     "portland_general_electric_tod",
 	})
 	require.NoError(t, err)
 
 	t.Run("Weekday On-Peak", func(t *testing.T) {
-		p, err := u.priceForTime(time.Date(2026, time.May, 18, 18, 0, 0, 0, la)) // Monday 6:00 PM
+		p, err := u.priceForTime(time.Date(2026, time.May, 18, 18, 0, 0, 0, ptLocation)) // Monday 6:00 PM
 		require.NoError(t, err)
 		assert.Equal(t, 0.4365, p.DollarsPerKWH)
 	})
 
 	t.Run("Weekday Mid-Peak", func(t *testing.T) {
-		p, err := u.priceForTime(time.Date(2026, time.May, 18, 10, 0, 0, 0, la)) // Monday 10:00 AM
+		p, err := u.priceForTime(time.Date(2026, time.May, 18, 10, 0, 0, 0, ptLocation)) // Monday 10:00 AM
 		require.NoError(t, err)
 		assert.Equal(t, 0.1689, p.DollarsPerKWH)
 	})
 
 	t.Run("Weekday Off-Peak evening", func(t *testing.T) {
-		p, err := u.priceForTime(time.Date(2026, time.May, 18, 22, 0, 0, 0, la)) // Monday 10:00 PM
+		p, err := u.priceForTime(time.Date(2026, time.May, 18, 22, 0, 0, 0, ptLocation)) // Monday 10:00 PM
 		require.NoError(t, err)
 		assert.Equal(t, 0.0901, p.DollarsPerKWH)
 	})
 
 	t.Run("Weekday Off-Peak morning", func(t *testing.T) {
-		p, err := u.priceForTime(time.Date(2026, time.May, 18, 4, 0, 0, 0, la)) // Monday 4:00 AM
+		p, err := u.priceForTime(time.Date(2026, time.May, 18, 4, 0, 0, 0, ptLocation)) // Monday 4:00 AM
 		require.NoError(t, err)
 		assert.Equal(t, 0.0901, p.DollarsPerKWH)
 	})
 
 	t.Run("Weekend Off-Peak", func(t *testing.T) {
-		p, err := u.priceForTime(time.Date(2026, time.May, 23, 14, 0, 0, 0, la)) // Saturday 2:00 PM
+		p, err := u.priceForTime(time.Date(2026, time.May, 23, 14, 0, 0, 0, ptLocation)) // Saturday 2:00 PM
 		require.NoError(t, err)
 		assert.Equal(t, 0.0901, p.DollarsPerKWH)
 	})
 
 	t.Run("Holiday Off-Peak (Memorial Day)", func(t *testing.T) {
-		p, err := u.priceForTime(time.Date(2026, time.May, 25, 18, 0, 0, 0, la)) // Monday 6:00 PM
+		p, err := u.priceForTime(time.Date(2026, time.May, 25, 18, 0, 0, 0, ptLocation)) // Monday 6:00 PM
 		require.NoError(t, err)
 		assert.Equal(t, 0.0901, p.DollarsPerKWH)
 	})
 
 	t.Run("Holiday Weekend Shift (Saturday Independence Day shifts to Friday)", func(t *testing.T) {
-		p, err := u.priceForTime(time.Date(2026, time.July, 3, 18, 0, 0, 0, la)) // Friday 6:00 PM
+		p, err := u.priceForTime(time.Date(2026, time.July, 3, 18, 0, 0, 0, ptLocation)) // Friday 6:00 PM
 		require.NoError(t, err)
 		assert.Equal(t, 0.0901, p.DollarsPerKWH)
 	})
 
 	t.Run("Regular Friday (not holiday)", func(t *testing.T) {
-		p, err := u.priceForTime(time.Date(2026, time.July, 10, 18, 0, 0, 0, la)) // Friday 6:00 PM
+		p, err := u.priceForTime(time.Date(2026, time.July, 10, 18, 0, 0, 0, ptLocation)) // Friday 6:00 PM
 		require.NoError(t, err)
 		assert.Equal(t, 0.4365, p.DollarsPerKWH)
 	})

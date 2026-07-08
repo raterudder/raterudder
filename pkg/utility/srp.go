@@ -44,7 +44,6 @@ func adjustSRPPrice(price float64, month time.Month, year int) float64 {
 
 func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	loc := "America/Phoenix"
 	isNetBilling := options.NetMeteringScheme != "net"
 
 	var genCredit float64
@@ -73,7 +72,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			//   On-Peak rate: $0.1425, Off-Peak rate: $0.1041
 
 			// 1. Summer Holiday period (Off-Peak all day)
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.May,
@@ -105,7 +104,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// 2. Summer Regular Period
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.May,
@@ -149,7 +148,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// 3. Summer Peak Holiday Period
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.July,
@@ -167,7 +166,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// 4. Summer Peak Regular Period
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.July,
@@ -191,7 +190,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// 5. Winter Holiday Period
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.November,
@@ -209,7 +208,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// 6. Winter Regular Period
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.November,
@@ -248,7 +247,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			//   On-Peak rate: $0.1425, Off-Peak rate: $0.1177, Super Off-Peak rate: $0.0792
 
 			// Summer E-14 Holidays:
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.May,
@@ -288,7 +287,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Summer E-14 Regular Days:
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.May,
@@ -344,7 +343,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Summer Peak E-14 Holidays:
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.July,
@@ -366,7 +365,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Summer Peak E-14 Regular Days:
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.July,
@@ -396,7 +395,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Winter E-14 Holidays:
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.November,
@@ -418,7 +417,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Winter E-14 Regular Days:
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.November,
@@ -463,7 +462,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			//   On-Peak rate: $0.1119, Off-Peak rate: $0.0994, Super Off-Peak rate: $0.0438
 
 			// Summer E-16 Holidays:
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.May,
@@ -503,7 +502,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Summer E-16 Regular Days:
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.May,
@@ -559,7 +558,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Summer Peak E-16 Holidays:
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.July,
@@ -581,7 +580,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Summer Peak E-16 Regular Days:
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.July,
@@ -611,7 +610,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Winter E-16 Holidays:
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.November,
@@ -633,7 +632,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Winter E-16 Regular Days:
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.November,
@@ -678,7 +677,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			//   On-Peak rate: $0.1508, Off-Peak rate: $0.1355, Super Off-Peak rate: $0.0432
 
 			// Summer E-28 Holidays:
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.May,
@@ -718,7 +717,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Summer E-28 Regular Days:
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.May,
@@ -774,7 +773,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Summer Peak E-28 Holidays:
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.July,
@@ -796,7 +795,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Summer Peak E-28 Regular Days:
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.July,
@@ -826,7 +825,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Winter E-28 Holidays:
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.November,
@@ -848,7 +847,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 			})...)
 
 			// Winter E-28 Regular Days:
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
 				{
 					Year:                     year,
 					MonthStart:               time.November,

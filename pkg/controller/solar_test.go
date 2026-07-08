@@ -977,7 +977,6 @@ func TestHourlyScaleFactorCalibration(t *testing.T) {
 		}
 
 		res, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
-		t.Logf("res map size: %d", len(res))
 		val11 := res[baseDate.Add(11*time.Hour).Unix()]
 		val12 := res[baseDate.Add(12*time.Hour).Unix()]
 		val16 := res[baseDate.Add(16*time.Hour).Unix()]

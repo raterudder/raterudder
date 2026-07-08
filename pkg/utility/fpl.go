@@ -37,7 +37,6 @@ func getFPLHolidays(year int) []string {
 // fplPeriods generates the pricing periods for FPL Florida Power & Light.
 func fplPeriods(plan string, options types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	loc := etLocation.String()
 
 	// As per user feedback, we assume the customer is always under 1,000 kWh (first tier).
 	// Base Energy Charge: 7.865 ¢/kWh = $0.07865/kWh
@@ -63,7 +62,7 @@ func fplPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 		case "fpl_rs1":
 			// RS-1: Flat residential rate.
 			rate := baseEnergy + baseFuel + flatAdjustments + transitionRate
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				{
 					Year:               year,
 					MonthStart:         time.January,
@@ -145,7 +144,7 @@ func fplPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 				OtherDescription:   "FPL RTR-1 Winter Off-Peak",
 			}
 
-			periods = append(periods, buildPeriods(loc, []touSimplifiedPeriod{
+			periods = append(periods, buildPeriods(etLocation, []touSimplifiedPeriod{
 				summerHoliday,
 				summerRegular,
 				winterHoliday,

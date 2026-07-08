@@ -1,7 +1,6 @@
 package types
 
 import (
-	"fmt"
 	"slices"
 	"time"
 )
@@ -113,10 +112,16 @@ type UtilityHourPeriod struct {
 	// have been checked.
 	HourStart int `json:"hourStart"`
 
+	// MinuteStart is the optional inclusive minute of the start hour.
+	MinuteStart int `json:"minuteStart,omitempty"`
+
 	// HourEnd is the optional exclusive hour of the applicable period. If it is zero,
 	// then it applies to all hours. This is checked after the Start and End times
 	// have been checked.
 	HourEnd int `json:"hourEnd"`
+
+	// MinuteEnd is the optional exclusive minute of the end hour.
+	MinuteEnd int `json:"minuteEnd,omitempty"`
 }
 
 // UtilityPeriod defines a particular schedule for some utility rate or fee
@@ -139,9 +144,8 @@ type UtilityPeriod struct {
 	// Start and End times have been checked.
 	DaysOfTheWeek []time.Weekday `json:"daysOfTheWeek,omitempty"`
 
-	// Location is the location of the period. If it is empty then we won't change
+	// LocationPtr is the location of the period. If it is empty then we won't change
 	// the time zone of the sent time
-	Location    string         `json:"location,omitempty"`
 	LocationPtr *time.Location `json:"-"`
 
 	// HoursNot means it applies to all hours except the hours in Hours.
@@ -154,23 +158,22 @@ type UtilityPeriod struct {
 	SpecificDatesNot bool `json:"specificDatesNot,omitempty"`
 }
 
+type UtilityPeriodStartEnd struct {
+	Start time.Time
+	End   time.Time
+}
+
 // Contains checks if a time is within the period.
-func (p *UtilityPeriod) Contains(t time.Time) (bool, error) {
+func (p *UtilityPeriod) Contains(t time.Time) (bool, UtilityPeriodStartEnd, error) {
 	if p.LocationPtr != nil {
 		t = t.In(p.LocationPtr)
-	} else if p.Location != "" {
-		loc, err := time.LoadLocation(p.Location)
-		if err != nil {
-			return false, fmt.Errorf("failed to load location %s: %w", p.Location, err)
-		}
-		t = t.In(loc)
 	}
 	if !p.Start.IsZero() && t.Before(p.Start) {
-		return false, nil
+		return false, UtilityPeriodStartEnd{}, nil
 	}
 	// period.End is exclusive: skip if the price starts at or after End
 	if !p.End.IsZero() && !t.Before(p.End) {
-		return false, nil
+		return false, UtilityPeriodStartEnd{}, nil
 	}
 
 	if len(p.SpecificDates) > 0 {
@@ -178,20 +181,34 @@ func (p *UtilityPeriod) Contains(t time.Time) (bool, error) {
 		containsDate := slices.Contains(p.SpecificDates, dateStr)
 		if p.SpecificDatesNot {
 			if containsDate {
-				return false, nil
+				return false, UtilityPeriodStartEnd{}, nil
 			}
 		} else {
 			if !containsDate {
-				return false, nil
+				return false, UtilityPeriodStartEnd{}, nil
 			}
 		}
 	}
 
+	startEnd := UtilityPeriodStartEnd{
+		Start: p.Start,
+		End:   p.End,
+	}
 	if len(p.Hours) > 0 {
-		h := t.Hour()
+		tMin := t.Hour()*60 + t.Minute()
 		inRange := false
 		for _, hour := range p.Hours {
-			if h >= hour.HourStart && h < hour.HourEnd {
+			startMin := hour.HourStart*60 + hour.MinuteStart
+			endMin := hour.HourEnd*60 + hour.MinuteEnd
+			if tMin >= startMin && tMin < endMin {
+				hStart := time.Date(t.Year(), t.Month(), t.Day(), hour.HourStart, hour.MinuteStart, 0, 0, t.Location())
+				hEnd := time.Date(t.Year(), t.Month(), t.Day(), hour.HourEnd, hour.MinuteEnd, 0, 0, t.Location())
+				if startEnd.Start.IsZero() || hStart.After(startEnd.Start) {
+					startEnd.Start = hStart
+				}
+				if startEnd.End.IsZero() || hEnd.Before(startEnd.End) {
+					startEnd.End = hEnd
+				}
 				inRange = true
 				break
 			}
@@ -200,14 +217,14 @@ func (p *UtilityPeriod) Contains(t time.Time) (bool, error) {
 			inRange = !inRange
 		}
 		if !inRange {
-			return false, nil
+			return false, UtilityPeriodStartEnd{}, nil
 		}
 	}
 
 	if len(p.DaysOfTheWeek) > 0 && !slices.Contains(p.DaysOfTheWeek, t.Weekday()) {
-		return false, nil
+		return false, UtilityPeriodStartEnd{}, nil
 	}
-	return true, nil
+	return true, startEnd, nil
 }
 
 // UtilityFeesPeriod represents a period of time with a fee.
@@ -243,7 +260,7 @@ type UtilityFeesPeriod struct {
 // p is the accumulated Price, while originalPrice is the original price before any fees
 // were applied and is used to calculate fees that are a multiple of the base price.
 func (up *UtilityFeesPeriod) Apply(p Price, originalPrice Price) (Price, error) {
-	contains, err := up.Contains(p.TSStart)
+	contains, _, err := up.Contains(p.TSStart)
 	if err != nil {
 		return Price{}, err
 	}

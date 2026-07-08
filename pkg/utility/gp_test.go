@@ -39,9 +39,6 @@ func TestGPHolidays(t *testing.T) {
 }
 
 func TestGeorgiaPowerRates(t *testing.T) {
-	ny, err := time.LoadLocation("America/New_York")
-	require.NoError(t, err)
-
 	u := &genericTOU{}
 	const mffMultiplier = 1.011995
 
@@ -57,7 +54,7 @@ func TestGeorgiaPowerRates(t *testing.T) {
 		// 1. Summer weekday On-Peak (Wednesday, July 15, 2026 at 3:00 PM)
 		// Base: 30.3495¢ * 1.130205 = 34.3011¢
 		// FCR (GridUse): 5.2269¢ = $0.052269
-		p, err := u.priceForTime(time.Date(2026, time.July, 15, 15, 0, 0, 0, ny))
+		p, err := u.priceForTime(time.Date(2026, time.July, 15, 15, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.303495*1.130205*mffMultiplier, p.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.052269*mffMultiplier, p.GridUseDollarsPerKWH, 1e-6)
@@ -65,7 +62,7 @@ func TestGeorgiaPowerRates(t *testing.T) {
 		// 2. Summer weekday Off-Peak (Wednesday, July 15, 2026 at 10:00 AM)
 		// Base: 10.3598¢ * 1.130205 = 11.7087¢
 		// FCR (GridUse): 3.8690¢ = $0.038690
-		p, err = u.priceForTime(time.Date(2026, time.July, 15, 10, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.July, 15, 10, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.103598*1.130205*mffMultiplier, p.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.038690*mffMultiplier, p.GridUseDollarsPerKWH, 1e-6)
@@ -73,31 +70,31 @@ func TestGeorgiaPowerRates(t *testing.T) {
 		// 3. Summer weekday Super Off-Peak (Wednesday, July 15, 2026 at 2:00 AM)
 		// Base: 2.2272¢ * 1.130205 = 2.51719¢
 		// FCR (GridUse): 3.4747¢ = $0.034747
-		p, err = u.priceForTime(time.Date(2026, time.July, 15, 2, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.July, 15, 2, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.022272*1.130205*mffMultiplier, p.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.034747*mffMultiplier, p.GridUseDollarsPerKWH, 1e-6)
 
 		// 4. Summer weekend Off-Peak (Saturday, July 18, 2026 at 3:00 PM)
-		p, err = u.priceForTime(time.Date(2026, time.July, 18, 15, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.July, 18, 15, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.103598*1.130205*mffMultiplier, p.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.038690*mffMultiplier, p.GridUseDollarsPerKWH, 1e-6)
 
 		// 5. Summer Holiday Off-Peak (Labor Day Monday, Sep 7, 2026 at 3:00 PM)
-		p, err = u.priceForTime(time.Date(2026, time.September, 7, 15, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.September, 7, 15, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.103598*1.130205*mffMultiplier, p.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.038690*mffMultiplier, p.GridUseDollarsPerKWH, 1e-6)
 
 		// 6. Winter daily Off-Peak (Tuesday, Dec 15, 2026 at 3:00 PM)
-		p, err = u.priceForTime(time.Date(2026, time.December, 15, 15, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.December, 15, 15, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.103598*1.130205*mffMultiplier, p.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.038690*mffMultiplier, p.GridUseDollarsPerKWH, 1e-6)
 
 		// 7. Winter daily Super Off-Peak (Tuesday, Dec 15, 2026 at 2:00 AM)
-		p, err = u.priceForTime(time.Date(2026, time.December, 15, 2, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.December, 15, 2, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.022272*1.130205*mffMultiplier, p.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.034747*mffMultiplier, p.GridUseDollarsPerKWH, 1e-6)
@@ -107,7 +104,7 @@ func TestGeorgiaPowerRates(t *testing.T) {
 		// 8. Winter weekday Off-Peak (Wednesday, January 15, 2026 at 3:00 PM)
 		// Base: 10.1676¢ * 1.132343 = 11.5132¢
 		// FCR (GridUse): 4.4284¢ = $0.044284
-		p, err = u.priceForTime(time.Date(2026, time.January, 15, 15, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.January, 15, 15, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.101676*1.132343*mffMultiplier, p.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.044284*mffMultiplier, p.GridUseDollarsPerKWH, 1e-6)
@@ -115,7 +112,7 @@ func TestGeorgiaPowerRates(t *testing.T) {
 		// 9. Winter weekday Super Off-Peak (Wednesday, January 15, 2026 at 2:00 AM)
 		// Base: 2.1859¢ * 1.132343 = 2.47519¢
 		// FCR (GridUse): 3.8252¢ = $0.038252
-		p, err = u.priceForTime(time.Date(2026, time.January, 15, 2, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.January, 15, 2, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.021859*1.132343*mffMultiplier, p.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.038252*mffMultiplier, p.GridUseDollarsPerKWH, 1e-6)
@@ -133,7 +130,7 @@ func TestGeorgiaPowerRates(t *testing.T) {
 		// 1. Summer weekday On-Peak (Wednesday, July 15, 2026 at 3:00 PM)
 		// Base: 14.5620¢ * 1.130205 = 16.4580¢
 		// FCR (GridUse): 5.2269¢ = $0.052269
-		p, err := u.priceForTime(time.Date(2026, time.July, 15, 15, 0, 0, 0, ny))
+		p, err := u.priceForTime(time.Date(2026, time.July, 15, 15, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.145620*1.130205*mffMultiplier, p.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.052269*mffMultiplier, p.GridUseDollarsPerKWH, 1e-6)
@@ -141,13 +138,13 @@ func TestGeorgiaPowerRates(t *testing.T) {
 		// 2. Summer weekday Off-Peak (Wednesday, July 15, 2026 at 10:00 AM)
 		// Base: 1.5569¢ * 1.130205 = 1.7596¢
 		// FCR (GridUse): 3.7441¢ = $0.037441
-		p, err = u.priceForTime(time.Date(2026, time.July, 15, 10, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.July, 15, 10, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.015569*1.130205*mffMultiplier, p.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.037441*mffMultiplier, p.GridUseDollarsPerKWH, 1e-6)
 
 		// 3. Winter weekday Off-Peak (Tuesday, Dec 15, 2026 at 3:00 PM)
-		p, err = u.priceForTime(time.Date(2026, time.December, 15, 15, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.December, 15, 15, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.015569*1.130205*mffMultiplier, p.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.037441*mffMultiplier, p.GridUseDollarsPerKWH, 1e-6)
@@ -157,7 +154,7 @@ func TestGeorgiaPowerRates(t *testing.T) {
 		// 4. Winter weekday Off-Peak (Wednesday, January 15, 2026 at 3:00 PM)
 		// Base: 1.5288¢ * 1.132343 = 1.73113¢
 		// FCR (GridUse): 4.2398¢ = $0.042398
-		p, err = u.priceForTime(time.Date(2026, time.January, 15, 15, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.January, 15, 15, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.015288*1.132343*mffMultiplier, p.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.042398*mffMultiplier, p.GridUseDollarsPerKWH, 1e-6)
@@ -174,20 +171,20 @@ func TestGeorgiaPowerRates(t *testing.T) {
 
 		// 1. Summer weekday On-Peak (Wednesday, July 15, 2026 at 3:00 PM)
 		// Base: 30.3495¢ * 1.130205 = 34.3011¢
-		p, err := u.priceForTime(time.Date(2026, time.July, 15, 15, 0, 0, 0, ny))
+		p, err := u.priceForTime(time.Date(2026, time.July, 15, 15, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.303495*1.130205*mffMultiplier, p.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.052269*mffMultiplier, p.GridUseDollarsPerKWH, 1e-6)
 
 		// 2. Summer weekday Off-Peak (Wednesday, July 15, 2026 at 10:00 AM)
 		// Base: 7.7702¢ * 1.130205 = 8.7819¢
-		p, err = u.priceForTime(time.Date(2026, time.July, 15, 10, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.July, 15, 10, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.077702*1.130205*mffMultiplier, p.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.037441*mffMultiplier, p.GridUseDollarsPerKWH, 1e-6)
 
 		// 3. Winter weekday Off-Peak (Tuesday, Dec 15, 2026 at 3:00 PM)
-		p, err = u.priceForTime(time.Date(2026, time.December, 15, 15, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.December, 15, 15, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.077702*1.130205*mffMultiplier, p.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.037441*mffMultiplier, p.GridUseDollarsPerKWH, 1e-6)
@@ -197,7 +194,7 @@ func TestGeorgiaPowerRates(t *testing.T) {
 		// 4. Winter weekday Off-Peak (Wednesday, January 15, 2026 at 3:00 PM)
 		// Base: 7.6281¢ * 1.132343 = 8.6376¢
 		// FCR (GridUse): 4.2398¢ = $0.042398
-		p, err = u.priceForTime(time.Date(2026, time.January, 15, 15, 0, 0, 0, ny))
+		p, err = u.priceForTime(time.Date(2026, time.January, 15, 15, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.076281*1.132343*mffMultiplier, p.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.042398*mffMultiplier, p.GridUseDollarsPerKWH, 1e-6)
@@ -211,7 +208,7 @@ func TestGeorgiaPowerRates(t *testing.T) {
 		require.NoError(t, err)
 
 		// Summer weekday On-Peak should work identical to gp_tou_oa
-		p, err := u.priceForTime(time.Date(2026, time.July, 15, 15, 0, 0, 0, ny))
+		p, err := u.priceForTime(time.Date(2026, time.July, 15, 15, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.303495*1.130205*mffMultiplier, p.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.052269*mffMultiplier, p.GridUseDollarsPerKWH, 1e-6)
@@ -224,7 +221,7 @@ func TestGeorgiaPowerRates(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		p, err := u.priceForTime(time.Date(2026, time.July, 15, 15, 0, 0, 0, ny))
+		p, err := u.priceForTime(time.Date(2026, time.July, 15, 15, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.145620*1.130205*mffMultiplier, p.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.052269*mffMultiplier, p.GridUseDollarsPerKWH, 1e-6)
@@ -237,7 +234,7 @@ func TestGeorgiaPowerRates(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		p, err := u.priceForTime(time.Date(2026, time.July, 15, 15, 0, 0, 0, ny))
+		p, err := u.priceForTime(time.Date(2026, time.July, 15, 15, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.303495*1.130205*mffMultiplier, p.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.052269*mffMultiplier, p.GridUseDollarsPerKWH, 1e-6)
@@ -245,11 +242,6 @@ func TestGeorgiaPowerRates(t *testing.T) {
 }
 
 func TestGPExportRates(t *testing.T) {
-	ny, err := time.LoadLocation("America/Low_Angeles") // load timezone
-	if err != nil {
-		ny, _ = time.LoadLocation("America/New_York")
-	}
-
 	u := &genericTOU{}
 
 	t.Run("RNR-Instantaneous Netting 2026", func(t *testing.T) {
@@ -262,7 +254,7 @@ func TestGPExportRates(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		target := time.Date(2026, time.July, 15, 15, 0, 0, 0, ny)
+		target := time.Date(2026, time.July, 15, 15, 0, 0, 0, etLocation)
 		p, err := u.priceForTime(target)
 		require.NoError(t, err)
 		if assert.True(t, p.SeparateGenerationCredit) {
@@ -280,7 +272,7 @@ func TestGPExportRates(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		target := time.Date(2027, time.July, 15, 15, 0, 0, 0, ny)
+		target := time.Date(2027, time.July, 15, 15, 0, 0, 0, etLocation)
 		p, err := u.priceForTime(target)
 		require.NoError(t, err)
 		if assert.True(t, p.SeparateGenerationCredit) {
@@ -298,7 +290,7 @@ func TestGPExportRates(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		target := time.Date(2026, time.July, 15, 15, 0, 0, 0, ny)
+		target := time.Date(2026, time.July, 15, 15, 0, 0, 0, etLocation)
 		p, err := u.priceForTime(target)
 		require.NoError(t, err)
 		assert.False(t, p.SeparateGenerationCredit)

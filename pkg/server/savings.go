@@ -83,11 +83,11 @@ func (s *Server) handleHistorySavings(w http.ResponseWriter, r *http.Request) {
 // getIgnoredFraction calculates the fraction of the hour [hStart, hStart+1h)
 // where the system was paused or in emergency mode (storm hedge).
 // It assumes actions are sorted by timestamp.
-func getIgnoredFraction(hStart time.Time, actions []types.Action) float64 {
-	hEnd := hStart.Add(time.Hour)
+func getIgnoredFraction(hStart time.Time, dur time.Duration, actions []types.Action) float64 {
+	hEnd := hStart.Add(dur)
 	ignoredDuration := time.Duration(0)
 
-	// We evaluate the state piece-wise over the hour.
+	// We evaluate the state piece-wise over the interval.
 	// To know the state at hStart, we find the last action before hStart.
 	var lastStatePausedOrEmergency bool
 	var lastActionTime time.Time
@@ -97,7 +97,7 @@ func getIgnoredFraction(hStart time.Time, actions []types.Action) float64 {
 			lastStatePausedOrEmergency = a.Paused || a.Reason == types.ActionReasonEmergencyMode || a.SystemStatus.EmergencyMode || a.Reason == types.ActionReasonVPPActive || a.SystemStatus.VPPActive
 			lastActionTime = a.Timestamp
 		} else if a.Timestamp.Before(hEnd) {
-			// This action falls within the hour
+			// This action falls within the interval
 			if lastStatePausedOrEmergency {
 				// The time from max(hStart, lastActionTime) up to a.Timestamp was ignored
 				startPeriod := hStart
@@ -109,12 +109,12 @@ func getIgnoredFraction(hStart time.Time, actions []types.Action) float64 {
 			lastStatePausedOrEmergency = a.Paused || a.Reason == types.ActionReasonEmergencyMode || a.SystemStatus.EmergencyMode || a.Reason == types.ActionReasonVPPActive || a.SystemStatus.VPPActive
 			lastActionTime = a.Timestamp
 		} else {
-			// action is at or after hEnd, we just evaluate the remaining part of the hour
+			// action is at or after hEnd, we just evaluate the remaining part of the interval
 			break
 		}
 	}
 
-	// Handle the remainder of the hour up to hEnd
+	// Handle the remainder of the interval up to hEnd
 	if lastStatePausedOrEmergency {
 		startPeriod := hStart
 		if lastActionTime.After(hStart) {
@@ -125,7 +125,7 @@ func getIgnoredFraction(hStart time.Time, actions []types.Action) float64 {
 		}
 	}
 
-	fraction := float64(ignoredDuration) / float64(time.Hour)
+	fraction := float64(ignoredDuration) / float64(dur)
 
 	// EDGE CASE NOTE:
 	// If there is no action preceding hStart within the query results, we assume the initial
@@ -214,179 +214,236 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 	var chargeStack []energyChunk
 	var stats types.SavingsStats
 	stats.Timestamp = start
+	type statSubInterval struct {
+		stat     types.EnergyStats
+		price    types.Price
+		duration float64 // Fraction of the hour (e.g. 0.5)
+	}
+
 	for _, stat := range energyStats {
 		ts := stat.TSHourStart.Truncate(time.Hour)
-		inRequestedPeriod := !ts.Before(start) && ts.Before(end)
 
-		var currentPrice types.Price
-		var found bool
+		// Check if we have sub-hourly prices for this hour
+		var hourPrices []types.Price
 		for _, p := range prices {
-			if p.Contains(ts) {
-				currentPrice = p
-				found = true
-				break
+			if !p.TSStart.Before(ts) && p.TSStart.Before(ts.Add(time.Hour)) {
+				hourPrices = append(hourPrices, p)
 			}
 		}
 
-		if !found {
-			// If no price found, we can't calculate savings for this hour
-			continue
+		var intervals []statSubInterval
+		if len(hourPrices) > 1 {
+			// Sort hour prices chronologically
+			sort.Slice(hourPrices, func(i, j int) bool {
+				return hourPrices[i].TSStart.Before(hourPrices[j].TSStart)
+			})
+			for _, hp := range hourPrices {
+				dur := hp.TSEnd.Sub(hp.TSStart).Hours()
+				scaledStat := types.EnergyStats{
+					TSHourStart:       hp.TSStart,
+					MinBatterySOC:     stat.MinBatterySOC,
+					MaxBatterySOC:     stat.MaxBatterySOC,
+					BatteryChargedKWH: stat.BatteryChargedKWH * dur,
+					BatteryUsedKWH:    stat.BatteryUsedKWH * dur,
+					SolarKWH:          stat.SolarKWH * dur,
+					HomeKWH:           stat.HomeKWH * dur,
+					GridExportKWH:     stat.GridExportKWH * dur,
+					GridImportKWH:     stat.GridImportKWH * dur,
+					VPPExportKWH:      stat.VPPExportKWH * dur,
+					BatteryToHomeKWH:  stat.BatteryToHomeKWH * dur,
+					SolarToHomeKWH:    stat.SolarToHomeKWH * dur,
+					SolarToBatteryKWH: stat.SolarToBatteryKWH * dur,
+					SolarToGridKWH:    stat.SolarToGridKWH * dur,
+					BatteryToGridKWH:  stat.BatteryToGridKWH * dur,
+					Alarms:            stat.Alarms,
+				}
+				intervals = append(intervals, statSubInterval{
+					stat:     scaledStat,
+					price:    hp,
+					duration: dur,
+				})
+			}
+		} else {
+			var currentPrice types.Price
+			var found bool
+			for _, p := range prices {
+				if p.Contains(ts) {
+					currentPrice = p
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+			intervals = append(intervals, statSubInterval{
+				stat:     stat,
+				price:    currentPrice,
+				duration: 1.0,
+			})
 		}
 
-		gridImportPrice := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
-		var gridExportPrice float64
+		for _, interval := range intervals {
+			subStat := interval.stat
+			subPrice := interval.price
+			subTS := subStat.TSHourStart
+			inRequestedPeriod := !subTS.Before(start) && subTS.Before(end)
 
-		if !settings.GridExportSolar {
-			gridExportPrice = 0
-		} else if settings.UtilityRateOptions.NetMeteringCredits || settings.UtilityRateOptions.NetMeteringScheme == "net" {
-			// For net metering, we value the export based on the min/max price of the day (24h window)
-			maxPrice := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
-			minPrice := maxPrice
-			windowEnd := ts.Add(24 * time.Hour)
-			for _, p := range prices {
-				if !p.TSStart.Before(ts) && p.TSStart.Before(windowEnd) {
-					cost := p.DollarsPerKWH + p.GridUseDollarsPerKWH
-					if cost > maxPrice {
-						maxPrice = cost
+			gridImportPrice := subPrice.DollarsPerKWH + subPrice.GridUseDollarsPerKWH
+			var gridExportPrice float64
+
+			if !settings.GridExportSolar {
+				gridExportPrice = 0
+			} else if settings.UtilityRateOptions.NetMeteringCredits || settings.UtilityRateOptions.NetMeteringScheme == "net" {
+				// For net metering, we value the export based on the min/max price of the day (24h window)
+				maxPrice := subPrice.DollarsPerKWH + subPrice.GridUseDollarsPerKWH
+				minPrice := maxPrice
+				windowEnd := subTS.Add(24 * time.Hour)
+				for _, p := range prices {
+					if !p.TSStart.Before(subTS) && p.TSStart.Before(windowEnd) {
+						cost := p.DollarsPerKWH + p.GridUseDollarsPerKWH
+						if cost > maxPrice {
+							maxPrice = cost
+						}
+						if cost < minPrice {
+							minPrice = cost
+						}
 					}
-					if cost < minPrice {
-						minPrice = cost
-					}
+				}
+
+				switch settings.SolarNetMeteringCreditsValue {
+				case "highest":
+					gridExportPrice = maxPrice
+				case "none":
+					gridExportPrice = 0
+				default:
+					// Default to conservative value ("lowest")
+					gridExportPrice = minPrice
+				}
+				if gridExportPrice != 0 {
+					// Apply generation adjustment if net metering is active and not valued at 0.
+					gridExportPrice += subPrice.GenerationAdjustmentDollarsPerKWH
+				}
+			} else if subPrice.SeparateGenerationCredit {
+				// Post-2025 style: utility pays a distinct generation credit rate for
+				// solar exported to the grid, separate from the supply rate.
+				gridExportPrice = subPrice.GenerationCreditDollarsPerKWH
+			} else {
+				// Default export price should NOT include the gridUse fees, but includes the generation adjustment (if any).
+				gridExportPrice = subPrice.DollarsPerKWH + subPrice.GenerationAdjustmentDollarsPerKWH
+			}
+
+			ignoredFraction := getIgnoredFraction(subTS, time.Duration(interval.duration*float64(time.Hour)), actions)
+			activeFraction := 1.0 - ignoredFraction
+
+			activeGridToBattery := math.Max(0, subStat.BatteryChargedKWH-subStat.SolarToBatteryKWH) * activeFraction
+			activeSolarToBattery := math.Min(subStat.BatteryChargedKWH, subStat.SolarToBatteryKWH) * activeFraction
+			// Emergency/paused charging: the energy still enters the battery, but
+			// we treat it as $0 cost since it was forced (storm hedge, pause, etc.)
+			// and not a deliberate arbitrage decision.
+			ignoredGridToBattery := math.Max(0, subStat.BatteryChargedKWH-subStat.SolarToBatteryKWH) * ignoredFraction
+			ignoredSolarToBattery := math.Min(subStat.BatteryChargedKWH, subStat.SolarToBatteryKWH) * ignoredFraction
+
+			// Push to LIFO stack if we charged the battery.
+			// We push 'active' first then 'ignored' so that the 'ignored' portion
+			// (which often happens later in the hour, e.g. storm starts) is popped first (LIFO).
+			if activeGridToBattery > 0 {
+				chargeStack = append(chargeStack, energyChunk{
+					amount:  activeGridToBattery,
+					price:   gridImportPrice,
+					ignored: false,
+				})
+			}
+			if activeSolarToBattery > 0 {
+				chargeStack = append(chargeStack, energyChunk{
+					amount:  activeSolarToBattery,
+					price:   0.0, // Solar costs $0
+					ignored: false,
+				})
+			}
+			if ignoredGridToBattery > 0 {
+				chargeStack = append(chargeStack, energyChunk{
+					amount:  ignoredGridToBattery,
+					price:   gridImportPrice, // Track matching rate, but flag as ignored
+					ignored: true,
+				})
+			}
+			if ignoredSolarToBattery > 0 {
+				chargeStack = append(chargeStack, energyChunk{
+					amount:  ignoredSolarToBattery,
+					price:   0.0,
+					ignored: true,
+				})
+			}
+
+			activeBatteryToHome := subStat.BatteryToHomeKWH * activeFraction
+
+			// Pop from LIFO stack to determine cost of the used battery energy.
+			// We pop the TOTAL amount to keep our inventory stack in sync with the physical battery,
+			// but we separate 'ignored' volume from 'active' cost.
+			activeDischargeCost := 0.0
+			ignoredDischargeKWH := 0.0
+			amountToDischarge := subStat.BatteryUsedKWH
+			for amountToDischarge > 0 && len(chargeStack) > 0 {
+				top := &chargeStack[len(chargeStack)-1]
+				take := math.Min(amountToDischarge, top.amount)
+				if !top.ignored {
+					activeDischargeCost += take * top.price
+				} else {
+					ignoredDischargeKWH += take
+				}
+				top.amount -= take
+				amountToDischarge -= take
+				if top.amount <= 0 {
+					chargeStack = chargeStack[:len(chargeStack)-1]
 				}
 			}
 
-			switch settings.SolarNetMeteringCreditsValue {
-			case "highest":
-				gridExportPrice = maxPrice
-			case "none":
-				gridExportPrice = 0
-			default:
-				// Default to conservative value ("lowest")
-				gridExportPrice = minPrice
+			// Calculate performance metrics by subtracting ignored volume from raterudder's results.
+			// We subtract ignored volume from both used and to-home (conservative assumption).
+			ignoredUsedForHome := math.Min(subStat.BatteryToHomeKWH, ignoredDischargeKWH)
+			effBatteryToHome := (subStat.BatteryToHomeKWH - ignoredUsedForHome) * activeFraction
+			effBatteryUsed := (subStat.BatteryUsedKWH - ignoredDischargeKWH) * activeFraction
+
+			// Calculate charging cost for home based on the active (non-ignored) portion.
+			chargingCostForHome := 0.0
+			if effBatteryUsed > 0 {
+				chargingCostForHome = activeDischargeCost * (effBatteryToHome / effBatteryUsed)
 			}
-			if gridExportPrice != 0 {
-				// Apply generation adjustment if net metering is active and not valued at 0.
-				gridExportPrice += currentPrice.GenerationAdjustmentDollarsPerKWH
+
+			avoided := effBatteryToHome * gridImportPrice
+
+			// Accumulate Energy Amounts (raw, unscaled for general stats)
+			if inRequestedPeriod {
+				stats.HomeUsed += subStat.HomeKWH
+				stats.SolarGenerated += subStat.SolarKWH
+				stats.GridImported += subStat.GridImportKWH
+				stats.GridExported += subStat.GridExportKWH
+				stats.BatteryUsed += subStat.BatteryUsedKWH
+
+				// Cost and Credit
+				stats.Cost += subStat.GridImportKWH * gridImportPrice
+				stats.Credit += subStat.GridExportKWH * gridExportPrice
+
+				stats.AvoidedCost += avoided
+				stats.ChargingCost += chargingCostForHome
+
+				solarToHome := subStat.SolarToHomeKWH
+				solarSavings := solarToHome * gridImportPrice
+				stats.SolarSavings += solarSavings
+
+				stats.HourlyDebugging = append(stats.HourlyDebugging, types.HourlySavingsStatsDebugging{
+					ExportPrice:     gridExportPrice,
+					ImportPrice:     gridImportPrice,
+					BatteryToHome:   activeBatteryToHome,
+					Avoided:         avoided,
+					GridToBattery:   activeGridToBattery,
+					ChargingCost:    chargingCostForHome,
+					SolarToHome:     solarToHome,
+					SolarSavings:    solarSavings,
+					IgnoredFraction: ignoredFraction,
+				})
 			}
-		} else if currentPrice.SeparateGenerationCredit {
-			// Post-2025 style: utility pays a distinct generation credit rate for
-			// solar exported to the grid, separate from the supply rate.
-			gridExportPrice = currentPrice.GenerationCreditDollarsPerKWH
-		} else {
-			// Default export price should NOT include the gridUse fees, but includes the generation adjustment (if any).
-			gridExportPrice = currentPrice.DollarsPerKWH + currentPrice.GenerationAdjustmentDollarsPerKWH
-		}
-
-		ignoredFraction := getIgnoredFraction(ts, actions)
-		activeFraction := 1.0 - ignoredFraction
-
-		activeGridToBattery := math.Max(0, stat.BatteryChargedKWH-stat.SolarToBatteryKWH) * activeFraction
-		activeSolarToBattery := math.Min(stat.BatteryChargedKWH, stat.SolarToBatteryKWH) * activeFraction
-		// Emergency/paused charging: the energy still enters the battery, but
-		// we treat it as $0 cost since it was forced (storm hedge, pause, etc.)
-		// and not a deliberate arbitrage decision.
-		ignoredGridToBattery := math.Max(0, stat.BatteryChargedKWH-stat.SolarToBatteryKWH) * ignoredFraction
-		ignoredSolarToBattery := math.Min(stat.BatteryChargedKWH, stat.SolarToBatteryKWH) * ignoredFraction
-
-		// Push to LIFO stack if we charged the battery.
-		// We push 'active' first then 'ignored' so that the 'ignored' portion
-		// (which often happens later in the hour, e.g. storm starts) is popped first (LIFO).
-		if activeGridToBattery > 0 {
-			chargeStack = append(chargeStack, energyChunk{
-				amount:  activeGridToBattery,
-				price:   gridImportPrice,
-				ignored: false,
-			})
-		}
-		if activeSolarToBattery > 0 {
-			chargeStack = append(chargeStack, energyChunk{
-				amount:  activeSolarToBattery,
-				price:   0.0, // Solar costs $0
-				ignored: false,
-			})
-		}
-		if ignoredGridToBattery > 0 {
-			chargeStack = append(chargeStack, energyChunk{
-				amount:  ignoredGridToBattery,
-				price:   gridImportPrice, // Track matching rate, but flag as ignored
-				ignored: true,
-			})
-		}
-		if ignoredSolarToBattery > 0 {
-			chargeStack = append(chargeStack, energyChunk{
-				amount:  ignoredSolarToBattery,
-				price:   0.0,
-				ignored: true,
-			})
-		}
-
-		activeBatteryToHome := stat.BatteryToHomeKWH * activeFraction
-
-		// Pop from LIFO stack to determine cost of the used battery energy.
-		// We pop the TOTAL amount to keep our inventory stack in sync with the physical battery,
-		// but we separate 'ignored' volume from 'active' cost.
-		activeDischargeCost := 0.0
-		ignoredDischargeKWH := 0.0
-		amountToDischarge := stat.BatteryUsedKWH
-		for amountToDischarge > 0 && len(chargeStack) > 0 {
-			top := &chargeStack[len(chargeStack)-1]
-			take := math.Min(amountToDischarge, top.amount)
-			if !top.ignored {
-				activeDischargeCost += take * top.price
-			} else {
-				ignoredDischargeKWH += take
-			}
-			top.amount -= take
-			amountToDischarge -= take
-			if top.amount <= 0 {
-				chargeStack = chargeStack[:len(chargeStack)-1]
-			}
-		}
-
-		// Calculate performance metrics by subtracting ignored volume from raterudder's results.
-		// We subtract ignored volume from both used and to-home (conservative assumption).
-		ignoredUsedForHome := math.Min(stat.BatteryToHomeKWH, ignoredDischargeKWH)
-		effBatteryToHome := (stat.BatteryToHomeKWH - ignoredUsedForHome) * activeFraction
-		effBatteryUsed := (stat.BatteryUsedKWH - ignoredDischargeKWH) * activeFraction
-
-		// Calculate charging cost for home based on the active (non-ignored) portion.
-		chargingCostForHome := 0.0
-		if effBatteryUsed > 0 {
-			chargingCostForHome = activeDischargeCost * (effBatteryToHome / effBatteryUsed)
-		}
-
-		avoided := effBatteryToHome * gridImportPrice
-
-		// Accumulate Energy Amounts (raw, unscaled for general stats)
-		if inRequestedPeriod {
-			stats.HomeUsed += stat.HomeKWH
-			stats.SolarGenerated += stat.SolarKWH
-			stats.GridImported += stat.GridImportKWH
-			stats.GridExported += stat.GridExportKWH
-			stats.BatteryUsed += stat.BatteryUsedKWH
-
-			// Cost and Credit
-			stats.Cost += stat.GridImportKWH * gridImportPrice
-			stats.Credit += stat.GridExportKWH * gridExportPrice
-
-			stats.AvoidedCost += avoided
-			stats.ChargingCost += chargingCostForHome
-
-			solarToHome := stat.SolarToHomeKWH
-			solarSavings := solarToHome * gridImportPrice
-			stats.SolarSavings += solarSavings
-
-			stats.HourlyDebugging = append(stats.HourlyDebugging, types.HourlySavingsStatsDebugging{
-				ExportPrice:     gridExportPrice,
-				ImportPrice:     gridImportPrice,
-				BatteryToHome:   activeBatteryToHome,
-				Avoided:         avoided,
-				GridToBattery:   activeGridToBattery,
-				ChargingCost:    chargingCostForHome,
-				SolarToHome:     solarToHome,
-				SolarSavings:    solarSavings,
-				IgnoredFraction: ignoredFraction,
-			})
 		}
 	}
 

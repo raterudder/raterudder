@@ -50,7 +50,6 @@ func getBWPHolidays(year int) []string {
 
 func bwpPeriods(plan string, opts types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	locStr := ptLocation.String() // America/Los_Angeles (Pacific Time)
 
 	for _, year := range years {
 		holidays := getBWPHolidays(year)
@@ -68,7 +67,7 @@ func bwpPeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 					OtherDescription:   "BWP Residential Flat Rate",
 				},
 			}
-			periods = append(periods, buildPeriods(locStr, simplified)...)
+			periods = append(periods, buildPeriods(ptLocation, simplified)...)
 
 			// Solar Net Billing export credit: $0.0455/kWh
 			if opts.NetMeteringScheme == "net_billing" {
@@ -82,7 +81,7 @@ func bwpPeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 						OtherDescription:                   "BWP Solar Net Billing Export Credit",
 					},
 				}
-				periods = append(periods, buildPeriods(locStr, simplifiedExport)...)
+				periods = append(periods, buildPeriods(ptLocation, simplifiedExport)...)
 			}
 
 		case "bwp_res_tou_ev":
@@ -179,7 +178,7 @@ func bwpPeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 					OtherDescription:   "BWP R-TOU-EV Winter Off-Peak",
 				},
 			}
-			periods = append(periods, buildPeriods(locStr, simplifiedConsumption)...)
+			periods = append(periods, buildPeriods(ptLocation, simplifiedConsumption)...)
 
 			// Solar Net Billing export credit: $0.0455/kWh
 			if opts.NetMeteringScheme == "net_billing" {
@@ -193,7 +192,7 @@ func bwpPeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 						OtherDescription:                   "BWP Solar Net Billing Export Credit",
 					},
 				}
-				periods = append(periods, buildPeriods(locStr, simplifiedExport)...)
+				periods = append(periods, buildPeriods(ptLocation, simplifiedExport)...)
 			}
 		}
 	}

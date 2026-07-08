@@ -244,13 +244,12 @@ func TestSiteFees(t *testing.T) {
 
 		t.Run("DaysOfTheWeek filtering via Contains", func(t *testing.T) {
 			// Period only applies on weekdays (Mon-Fri)
-			weekdayLoc, _ := time.LoadLocation("America/Chicago")
 			weekdayS := &SiteFees{
 				periods: []types.UtilityFeesPeriod{
 					{
 						UtilityPeriod: types.UtilityPeriod{
 							DaysOfTheWeek: []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday},
-							LocationPtr:   weekdayLoc,
+							LocationPtr:   ctLocation,
 						},
 						DollarsPerKWH: 0.05,
 						Description:   "Weekday Fee",
@@ -258,9 +257,9 @@ func TestSiteFees(t *testing.T) {
 				},
 			}
 			// 2026-03-09 is a Monday
-			monday := time.Date(2026, 3, 9, 10, 0, 0, 0, weekdayLoc)
+			monday := time.Date(2026, 3, 9, 10, 0, 0, 0, ctLocation)
 			// 2026-03-08 is a Sunday
-			sunday := time.Date(2026, 3, 8, 10, 0, 0, 0, weekdayLoc)
+			sunday := time.Date(2026, 3, 8, 10, 0, 0, 0, ctLocation)
 
 			mondayResult, err := weekdayS.applyFees(types.Price{TSStart: monday, DollarsPerKWH: 0.10})
 			require.NoError(t, err)
@@ -276,7 +275,7 @@ func TestSiteFees(t *testing.T) {
 				periods: []types.UtilityFeesPeriod{
 					{
 						UtilityPeriod: types.UtilityPeriod{
-							Location:      "America/Chicago",
+							LocationPtr:   ctLocation,
 							DaysOfTheWeek: []time.Weekday{time.Monday, time.Wednesday, time.Friday},
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 14, HourEnd: 18},
@@ -287,7 +286,7 @@ func TestSiteFees(t *testing.T) {
 					},
 					{
 						UtilityPeriod: types.UtilityPeriod{
-							Location:      "America/Chicago",
+							LocationPtr:   ctLocation,
 							DaysOfTheWeek: []time.Weekday{time.Saturday, time.Sunday},
 						},
 						DollarsPerKWH: 0.05,
@@ -315,21 +314,6 @@ func TestSiteFees(t *testing.T) {
 			t4 := time.Date(2026, 3, 8, 10, 0, 0, 0, ctLocation)
 			res4, _ := s.applyFees(types.Price{TSStart: t4, DollarsPerKWH: 0.10})
 			assert.InDelta(t, 0.15, res4.DollarsPerKWH, 0.0001, "Sun should have weekend fee")
-		})
-
-		t.Run("invalid location error", func(t *testing.T) {
-			s := &SiteFees{
-				periods: []types.UtilityFeesPeriod{
-					{
-						UtilityPeriod: types.UtilityPeriod{
-							Location: "Invalid/Location",
-						},
-					},
-				},
-			}
-			_, err := s.applyFees(types.Price{TSStart: time.Now()})
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), "failed to load location")
 		})
 
 		t.Run("DollarsPerKWHPreMultiple cases", func(t *testing.T) {

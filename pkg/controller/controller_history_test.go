@@ -359,7 +359,6 @@ func TestDecideHistory(t *testing.T) {
 				}
 
 				decidedMode := decision.Action.BatteryMode
-				t.Logf("%v: Decided mode: %v, reason: %v, targetSOC: %d", tCurrent, decidedMode, decision.Action.Reason, decision.Action.ChargeToSOC)
 
 				// Run minute-by-minute simulation for the interval [tCurrent, tNext]
 				stepMinutes := int(math.Ceil(duration.Minutes()))

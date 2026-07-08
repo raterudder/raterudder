@@ -261,7 +261,7 @@ func TestRatesCoverAllTime(t *testing.T) {
 					hasBound = true
 				}
 
-				// If all period started/ended before our default UTC year then
+				// If all periods started/ended before our default UTC year then
 				// move the loop bounds to match. We check this because minStart
 				// and maxEnd were initialized to 2026 UTC.
 				for _, p := range periods {
@@ -279,6 +279,7 @@ func TestRatesCoverAllTime(t *testing.T) {
 				first := true
 				var hasSolar bool
 				var hasAdditional bool
+				var hasSubHourly bool
 				for _, p := range periods {
 					if p.LocationPtr != nil {
 						if first {
@@ -286,7 +287,6 @@ func TestRatesCoverAllTime(t *testing.T) {
 							first = false
 						} else if p.LocationPtr.String() != candidateLoc.String() {
 							candidateLoc = nil
-							break
 						}
 					}
 					if p.SeparateGenerationCredit {
@@ -294,6 +294,11 @@ func TestRatesCoverAllTime(t *testing.T) {
 					}
 					if p.GridAdditional {
 						hasAdditional = true
+					}
+					for _, hr := range p.Hours {
+						if hr.MinuteStart != 0 || hr.MinuteEnd != 0 {
+							hasSubHourly = true
+						}
 					}
 				}
 				if candidateLoc != nil {
@@ -362,56 +367,82 @@ func TestRatesCoverAllTime(t *testing.T) {
 				}
 
 				var failures int
-				for ts := minStart.In(loopLoc); ts.Before(maxEnd); ts = ts.Add(time.Hour) {
-					dateStr := ts.Format("2006-01-02")
+				for d := startDay; d.Before(maxEnd); d = d.AddDate(0, 0, 1) {
+					dateStr := d.Format("2006-01-02")
 					if !testedDates[dateStr] {
 						continue
 					}
 
-					var applicableNames []string
-					var applicableSolarNames []string
-					var additionalNames []string
-					for _, p := range periods {
-						ok, err := p.Contains(ts)
-						require.NoError(t, err)
-						if ok {
-							if p.SeparateGenerationCredit {
-								applicableSolarNames = append(applicableSolarNames, p.Description)
-							} else if p.GridAdditional {
-								additionalNames = append(additionalNames, p.Description)
-							} else {
-								applicableNames = append(applicableNames, p.Description)
+					for hour := 0; hour < 24; hour++ {
+						minutes := []int{0}
+						if hasSubHourly {
+							minutes = []int{0, 15, 30, 45}
+						}
+						for _, minute := range minutes {
+							ts := d.Add(time.Duration(hour)*time.Hour + time.Duration(minute)*time.Minute)
+							if ts.Before(minStart) || !ts.Before(maxEnd) {
+								continue
+							}
+
+							var applicableNames []string
+							var applicableSolarNames []string
+							var additionalNames []string
+							for i := range periods {
+								ok, _, err := periods[i].Contains(ts)
+								// require.NoError is slow in tight loops so we only check inside
+								// of the if
+								if err != nil {
+									require.NoError(t, err)
+								}
+								if ok {
+									if periods[i].SeparateGenerationCredit {
+										applicableSolarNames = append(applicableSolarNames, periods[i].Description)
+									} else if periods[i].GridAdditional {
+										additionalNames = append(additionalNames, periods[i].Description)
+									} else {
+										applicableNames = append(applicableNames, periods[i].Description)
+									}
+								}
+							}
+							expectBase := 1
+							if rate.ID == "comed_besh" || rate.ID == "ameren_psp" {
+								expectBase = 0
+							}
+							isMatch := len(applicableNames) == expectBase
+							if rate.ID == "comed_bes" || rate.ID == "comed_besh" {
+								// PSC, PEC/MPCC, and PEA/HPEA are GridAdditional: false.
+								// PEA/HPEA fallback ends Jan 1, 2027, so it has 3 before Jan 1 2027 and 2 after.
+								isMatch = len(applicableNames) == 2 || len(applicableNames) == 3
+							} else if rate.ID == "comed_best" {
+								// PJM Component and BEST TOU charge are both GridAdditional: false
+								isMatch = len(applicableNames) == 2
+							}
+							if !isMatch {
+								failures++
+								if failures > 10 {
+									assert.Fail(t, "too many failures")
+									return
+								}
+								assert.Fail(t, "missing or overlapping base periods", "Hour %v should have %v period (found %v)", ts, expectBase, applicableNames)
+							}
+							if hasSolar && len(applicableSolarNames) != 1 {
+								failures++
+								if failures > 10 {
+									assert.Fail(t, "too many failures")
+									return
+								}
+								assert.Fail(t, "missing or overlapping solar periods", "Hour %v should have 1 period (found %v)", ts, applicableSolarNames)
+							}
+							// we allow multiple additional periods
+							if hasAdditional && len(additionalNames) < 1 {
+								failures++
+								if failures > 10 {
+									assert.Fail(t, "too many failures")
+									return
+								}
+								assert.Fail(t, "missing or overlapping additional periods", "Hour %v should have at least 1 period (found %v)", ts, additionalNames)
 							}
 						}
-					}
-					expectBase := 1
-					if rate.ID == "comed_besh" || rate.ID == "ameren_psp" {
-						expectBase = 0
-					}
-					if len(applicableNames) != expectBase {
-						failures++
-						if failures > 10 {
-							assert.Fail(t, "too many failures")
-							return
-						}
-						assert.Fail(t, "missing or overlapping base periods", "Hour %v should have %v period (found %v)", ts, expectBase, applicableNames)
-					}
-					if hasSolar && len(applicableSolarNames) != 1 {
-						failures++
-						if failures > 10 {
-							assert.Fail(t, "too many failures")
-							return
-						}
-						assert.Fail(t, "missing or overlapping solar periods", "Hour %v should have 1 period (found %v)", ts, applicableSolarNames)
-					}
-					// we allow multiple additional periods
-					if hasAdditional && len(additionalNames) < 1 {
-						failures++
-						if failures > 10 {
-							assert.Fail(t, "too many failures")
-							return
-						}
-						assert.Fail(t, "missing or overlapping additional periods", "Hour %v should have at least 1 period (found %v)", ts, additionalNames)
 					}
 				}
 			})

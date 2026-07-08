@@ -93,7 +93,7 @@ func portlandGeneralPeriods(years []int) []types.UtilityFeesPeriod {
 		}
 
 		// PGE timezone is Pacific Time (America/Los_Angeles)
-		periods = append(periods, buildPeriods(ptLocation.String(), []touSimplifiedPeriod{holidayPeriod, regularPeriod})...)
+		periods = append(periods, buildPeriods(ptLocation, []touSimplifiedPeriod{holidayPeriod, regularPeriod})...)
 	}
 	return periods
 }

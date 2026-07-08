@@ -135,6 +135,42 @@ func TestHandleHistorySavings(t *testing.T) {
 		assert.InDelta(t, 0.0, savings.SolarSavings, 0.001, "SolarSavings mismatch")
 	})
 
+	t.Run("Sub-Hourly Dynamic Price Split", func(t *testing.T) {
+		savings := runTest(t, func(m *mockSavingsStorage) {
+			m.prices = []types.Price{
+				// Split the first hour [start, start+1h] at 30 minutes
+				{TSStart: start, TSEnd: start.Add(30 * time.Minute), DollarsPerKWH: 0.10},
+				{TSStart: start.Add(30 * time.Minute), TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.30},
+				// Second hour is standard hourly pricing
+				{TSStart: start.Add(time.Hour), TSEnd: start.Add(2 * time.Hour), DollarsPerKWH: 0.40},
+			}
+			m.stats = []types.EnergyStats{
+				{
+					TSHourStart:       start, // Charge 10kWh in this split hour
+					GridImportKWH:     10,
+					BatteryChargedKWH: 10,
+				},
+				{
+					TSHourStart:      start.Add(time.Hour), // Discharge 5kWh in the second hour
+					HomeKWH:          5,
+					BatteryUsedKWH:   5,
+					BatteryToHomeKWH: 5,
+				},
+			}
+		})
+		// First hour: 10kWh split into 5kWh @ $0.10 ($0.50) and 5kWh @ $0.30 ($1.50) = $2.00 total cost
+		assert.InDelta(t, 2.00, savings.Cost, 0.001, "Cost mismatch")
+		assert.InDelta(t, 0.0, savings.Credit, 0.001, "Credit mismatch")
+
+		// Second hour avoided cost: 5kWh * $0.40 = $2.00
+		assert.InDelta(t, 2.00, savings.AvoidedCost, 0.001, "AvoidedCost mismatch")
+
+		// Charging cost: LIFO pops the last charged segment first (which is 12:30-13:00 charge @ $0.30)
+		// So 5kWh * $0.30 = $1.50 charging cost
+		assert.InDelta(t, 1.50, savings.ChargingCost, 0.001, "ChargingCost mismatch")
+		assert.InDelta(t, 0.50, savings.BatterySavings, 0.001, "BatterySavings mismatch")
+	})
+
 	t.Run("Charge Only - No Battery Savings Penalty", func(t *testing.T) {
 		savings := runTest(t, func(m *mockSavingsStorage) {
 			m.prices = []types.Price{
@@ -671,14 +707,14 @@ func TestGetIgnoredFraction(t *testing.T) {
 	hStart := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	t.Run("No Actions", func(t *testing.T) {
-		assert.Equal(t, 0.0, getIgnoredFraction(hStart, nil))
+		assert.Equal(t, 0.0, getIgnoredFraction(hStart, time.Hour, nil))
 	})
 
 	t.Run("Always Paused from Before", func(t *testing.T) {
 		actions := []types.Action{
 			{Timestamp: hStart.Add(-time.Hour), Paused: true},
 		}
-		assert.Equal(t, 1.0, getIgnoredFraction(hStart, actions))
+		assert.Equal(t, 1.0, getIgnoredFraction(hStart, time.Hour, actions))
 	})
 
 	t.Run("Paused Halfway", func(t *testing.T) {
@@ -687,7 +723,7 @@ func TestGetIgnoredFraction(t *testing.T) {
 		}
 		// Before 12:30 it was not paused (assuming no prior actions).
 		// After 12:30 it is paused.
-		assert.Equal(t, 0.5, getIgnoredFraction(hStart, actions))
+		assert.Equal(t, 0.5, getIgnoredFraction(hStart, time.Hour, actions))
 	})
 
 	t.Run("Unpaused Halfway", func(t *testing.T) {
@@ -697,7 +733,7 @@ func TestGetIgnoredFraction(t *testing.T) {
 		}
 		// Before 12:30 it was paused.
 		// After 12:30 it is unpaused.
-		assert.Equal(t, 0.5, getIgnoredFraction(hStart, actions))
+		assert.Equal(t, 0.5, getIgnoredFraction(hStart, time.Hour, actions))
 	})
 
 	t.Run("Multiple Changes Within Hour", func(t *testing.T) {
@@ -707,34 +743,34 @@ func TestGetIgnoredFraction(t *testing.T) {
 			{Timestamp: hStart.Add(45 * time.Minute), Paused: true},  // 45-60 paused
 		}
 		// Paused for 15-30 and 45-60 = 30 minutes total = 0.5
-		assert.Equal(t, 0.5, getIgnoredFraction(hStart, actions))
+		assert.Equal(t, 0.5, getIgnoredFraction(hStart, time.Hour, actions))
 	})
 
 	t.Run("Emergency Mode", func(t *testing.T) {
 		actions := []types.Action{
 			{Timestamp: hStart.Add(30 * time.Minute), Reason: types.ActionReasonEmergencyMode},
 		}
-		assert.Equal(t, 0.5, getIgnoredFraction(hStart, actions))
+		assert.Equal(t, 0.5, getIgnoredFraction(hStart, time.Hour, actions))
 	})
 
 	t.Run("System Status Emergency Mode", func(t *testing.T) {
 		actions := []types.Action{
 			{Timestamp: hStart.Add(30 * time.Minute), SystemStatus: types.SystemStatus{EmergencyMode: true}},
 		}
-		assert.Equal(t, 0.5, getIgnoredFraction(hStart, actions))
+		assert.Equal(t, 0.5, getIgnoredFraction(hStart, time.Hour, actions))
 	})
 
 	t.Run("Action Reason VPP Active", func(t *testing.T) {
 		actions := []types.Action{
 			{Timestamp: hStart.Add(30 * time.Minute), Reason: types.ActionReasonVPPActive},
 		}
-		assert.Equal(t, 0.5, getIgnoredFraction(hStart, actions))
+		assert.Equal(t, 0.5, getIgnoredFraction(hStart, time.Hour, actions))
 	})
 
 	t.Run("System Status VPP Active", func(t *testing.T) {
 		actions := []types.Action{
 			{Timestamp: hStart.Add(30 * time.Minute), SystemStatus: types.SystemStatus{VPPActive: true}},
 		}
-		assert.Equal(t, 0.5, getIgnoredFraction(hStart, actions))
+		assert.Equal(t, 0.5, getIgnoredFraction(hStart, time.Hour, actions))
 	})
 }

@@ -1254,7 +1254,6 @@ func getSCEHolidays(year int) []string {
 
 func scePeriods(plan string, options types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	locStr := ptLocation.String()
 
 	// SCE specific Non-Bypassable Charges (NBCs)
 	const nbc = 0.0274
@@ -1340,8 +1339,8 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					OtherDescription:   "Winter Daily Off-Peak",
 				},
 			}
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{summerPeriod})...)
-			periods = append(periods, buildPeriods(locStr, winterPeriods)...)
+			periods = append(periods, buildPeriods(ptLocation, []touSimplifiedPeriod{summerPeriod})...)
+			periods = append(periods, buildPeriods(ptLocation, winterPeriods)...)
 
 		case "sce_tou_d_5_8pm":
 			summerPeriod = touSimplifiedPeriod{
@@ -1419,8 +1418,8 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					OtherDescription:   "Winter Daily Off-Peak",
 				},
 			}
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{summerPeriod})...)
-			periods = append(periods, buildPeriods(locStr, winterPeriods)...)
+			periods = append(periods, buildPeriods(ptLocation, []touSimplifiedPeriod{summerPeriod})...)
+			periods = append(periods, buildPeriods(ptLocation, winterPeriods)...)
 
 		case "sce_tou_d_prime":
 			summerPeriod = touSimplifiedPeriod{
@@ -1498,15 +1497,15 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					OtherDescription:   "Winter Daily Off-Peak",
 				},
 			}
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{summerPeriod})...)
-			periods = append(periods, buildPeriods(locStr, winterPeriods)...)
+			periods = append(periods, buildPeriods(ptLocation, []touSimplifiedPeriod{summerPeriod})...)
+			periods = append(periods, buildPeriods(ptLocation, winterPeriods)...)
 		}
 	}
 
 	// Add one global NBC period that applies to all imports
 	periods = append(periods, types.UtilityFeesPeriod{
 		UtilityPeriod: types.UtilityPeriod{
-			Location: locStr,
+			LocationPtr: ptLocation,
 		},
 		DollarsPerKWH:  nbc,
 		GridAdditional: true,
@@ -1515,16 +1514,14 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 
 	// Add dynamic NBT export rates for SBP scheme (NEM 3.0)
 	if options.NetMeteringScheme == "sbp" || options.NetMeteringScheme == "" {
-		loc := ptLocation
-
 		for _, year := range years {
 			holidays := getSCEHolidays(year)
 			for month := time.January; month <= time.December; month++ {
 				monthStr := month.String()[:3] // "Jan", "Feb", etc.
 
 				// Month boundary times
-				startMonth := time.Date(year, month, 1, 0, 0, 0, 0, loc)
-				endMonth := time.Date(year, month+1, 1, 0, 0, 0, 0, loc)
+				startMonth := time.Date(year, month, 1, 0, 0, 0, 0, ptLocation)
+				endMonth := time.Date(year, month+1, 1, 0, 0, 0, 0, ptLocation)
 
 				for hour := range 24 {
 					// 1. Weekday non-holiday period
@@ -1541,7 +1538,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 						UtilityPeriod: types.UtilityPeriod{
 							Start:            startMonth,
 							End:              endMonth,
-							LocationPtr:      loc,
+							LocationPtr:      ptLocation,
 							DaysOfTheWeek:    []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday},
 							SpecificDates:    holidays,
 							SpecificDatesNot: true,
@@ -1566,7 +1563,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 						UtilityPeriod: types.UtilityPeriod{
 							Start:         startMonth,
 							End:           endMonth,
-							LocationPtr:   loc,
+							LocationPtr:   ptLocation,
 							DaysOfTheWeek: []time.Weekday{time.Saturday, time.Sunday},
 							Hours:         []types.UtilityHourPeriod{{HourStart: hour, HourEnd: hour + 1}},
 						},
@@ -1580,7 +1577,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 						UtilityPeriod: types.UtilityPeriod{
 							Start:            startMonth,
 							End:              endMonth,
-							LocationPtr:      loc,
+							LocationPtr:      ptLocation,
 							DaysOfTheWeek:    []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday},
 							SpecificDates:    holidays,
 							SpecificDatesNot: false,

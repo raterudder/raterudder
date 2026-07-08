@@ -39,7 +39,6 @@ func eversourceVPPPeriods(opts types.UtilityRateOptions, years []int) (types.Uti
 	}
 
 	var periods []types.UtilityVPPPeriod
-	locStr := etLocation.String()
 
 	for _, year := range years {
 		june19 := juneteenth(year)
@@ -67,7 +66,6 @@ func eversourceVPPPeriods(opts types.UtilityRateOptions, years []int) (types.Uti
 					},
 					SpecificDates:    holidays,
 					SpecificDatesNot: true,
-					Location:         locStr,
 					LocationPtr:      etLocation,
 				},
 				ReserveSOC: 20,
@@ -84,7 +82,6 @@ func eversourceVPPPeriods(opts types.UtilityRateOptions, years []int) (types.Uti
 // eversourcePeriods generates the fees period slice for a specific Eversource rate plan.
 func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	locStr := etLocation.String() // America/New_York (Eastern Time)
 
 	for _, year := range years {
 		holidays := getEversourceHolidays(year)
@@ -129,7 +126,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 					},
 				}
 			}
-			periods = append(periods, buildPeriods(locStr, simplified)...)
+			periods = append(periods, buildPeriods(etLocation, simplified)...)
 
 		case "eversource_ct_rate_5":
 			// CT Residential Heating (Rate 5)
@@ -167,7 +164,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 					},
 				}
 			}
-			periods = append(periods, buildPeriods(locStr, simplified)...)
+			periods = append(periods, buildPeriods(etLocation, simplified)...)
 
 		case "eversource_ct_rate_7":
 			// CT Residential Time-of-Day (Rate 7)
@@ -233,7 +230,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 					},
 				}
 			}
-			periods = append(periods, buildPeriods(locStr, simplified)...)
+			periods = append(periods, buildPeriods(etLocation, simplified)...)
 
 		// ==========================================
 		// NEW HAMPSHIRE (NH) PLANS
@@ -271,7 +268,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 					},
 				}
 			}
-			periods = append(periods, buildPeriods(locStr, simplified)...)
+			periods = append(periods, buildPeriods(etLocation, simplified)...)
 
 		case "eversource_nh_rate_r_otod":
 			// NH Residential Time-of-Day (Rate R-OTOD, maps to active R-OTOD 2)
@@ -367,7 +364,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 					},
 				}
 			}
-			periods = append(periods, buildPeriods(locStr, simplified)...)
+			periods = append(periods, buildPeriods(etLocation, simplified)...)
 
 		case "eversource_nh_rate_r_ev":
 			// NH Residential Plug-in EV & Battery Storage Time-of-Day (Rate R-EV)
@@ -430,7 +427,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 					OtherDescription:   "Eversource NH Rate R-EV Off-Peak",
 				},
 			}
-			periods = append(periods, buildPeriods(locStr, simplified)...)
+			periods = append(periods, buildPeriods(etLocation, simplified)...)
 
 		// ==========================================
 		// MASSACHUSETTS (MA) PLANS
@@ -581,7 +578,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 					}
 				}
 			}
-			periods = append(periods, buildPeriods(locStr, simplified)...)
+			periods = append(periods, buildPeriods(etLocation, simplified)...)
 		}
 	}
 	return periods

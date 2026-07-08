@@ -42,9 +42,6 @@ func TestAPSHolidays(t *testing.T) {
 }
 
 func TestAPSRates(t *testing.T) {
-	mst, err := time.LoadLocation("America/Phoenix")
-	require.NoError(t, err)
-
 	u := &genericTOU{}
 
 	t.Run("Schedule R-1 Flat rates", func(t *testing.T) {
@@ -58,7 +55,7 @@ func TestAPSRates(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		p, err := u.priceForTime(time.Date(2026, time.July, 15, 12, 0, 0, 0, mst))
+		p, err := u.priceForTime(time.Date(2026, time.July, 15, 12, 0, 0, 0, mstLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.12925, p.DollarsPerKWH, 1e-6)
 
@@ -72,7 +69,7 @@ func TestAPSRates(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		p, err = u.priceForTime(time.Date(2026, time.July, 15, 12, 0, 0, 0, mst))
+		p, err = u.priceForTime(time.Date(2026, time.July, 15, 12, 0, 0, 0, mstLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.14052, p.DollarsPerKWH, 1e-6)
 
@@ -86,7 +83,7 @@ func TestAPSRates(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		p, err = u.priceForTime(time.Date(2026, time.July, 15, 12, 0, 0, 0, mst))
+		p, err = u.priceForTime(time.Date(2026, time.July, 15, 12, 0, 0, 0, mstLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.15418, p.DollarsPerKWH, 1e-6)
 	})
@@ -99,37 +96,37 @@ func TestAPSRates(t *testing.T) {
 		require.NoError(t, err)
 
 		// Summer weekday On-Peak (Wed, July 15, 2026, 5:00 PM) -> $0.34396
-		p, err := u.priceForTime(time.Date(2026, time.July, 15, 17, 0, 0, 0, mst))
+		p, err := u.priceForTime(time.Date(2026, time.July, 15, 17, 0, 0, 0, mstLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.34396, p.DollarsPerKWH, 1e-6)
 
 		// Summer weekday Off-Peak (Wed, July 15, 2026, 9:00 AM) -> $0.12345
-		p, err = u.priceForTime(time.Date(2026, time.July, 15, 9, 0, 0, 0, mst))
+		p, err = u.priceForTime(time.Date(2026, time.July, 15, 9, 0, 0, 0, mstLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.12345, p.DollarsPerKWH, 1e-6)
 
 		// Winter weekday On-Peak (Wed, Dec 16, 2026, 5:00 PM) -> $0.32543
-		p, err = u.priceForTime(time.Date(2026, time.December, 16, 17, 0, 0, 0, mst))
+		p, err = u.priceForTime(time.Date(2026, time.December, 16, 17, 0, 0, 0, mstLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.32543, p.DollarsPerKWH, 1e-6)
 
 		// Winter weekday Super Off-Peak (Wed, Dec 16, 2026, 12:00 PM) -> $0.03495
-		p, err = u.priceForTime(time.Date(2026, time.December, 16, 12, 0, 0, 0, mst))
+		p, err = u.priceForTime(time.Date(2026, time.December, 16, 12, 0, 0, 0, mstLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.03495, p.DollarsPerKWH, 1e-6)
 
 		// Winter weekday Off-Peak (Wed, Dec 16, 2026, 8:00 AM) -> $0.12351
-		p, err = u.priceForTime(time.Date(2026, time.December, 16, 8, 0, 0, 0, mst))
+		p, err = u.priceForTime(time.Date(2026, time.December, 16, 8, 0, 0, 0, mstLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.12351, p.DollarsPerKWH, 1e-6)
 
 		// Summer Weekend (Sat, July 18, 2026, 5:00 PM) -> Off-Peak $0.12345
-		p, err = u.priceForTime(time.Date(2026, time.July, 18, 17, 0, 0, 0, mst))
+		p, err = u.priceForTime(time.Date(2026, time.July, 18, 17, 0, 0, 0, mstLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.12345, p.DollarsPerKWH, 1e-6)
 
 		// Summer Holiday (Labor Day Monday, Sep 7, 2026, 5:00 PM) -> Off-Peak $0.12345
-		p, err = u.priceForTime(time.Date(2026, time.September, 7, 17, 0, 0, 0, mst))
+		p, err = u.priceForTime(time.Date(2026, time.September, 7, 17, 0, 0, 0, mstLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.12345, p.DollarsPerKWH, 1e-6)
 	})
@@ -142,17 +139,17 @@ func TestAPSRates(t *testing.T) {
 		require.NoError(t, err)
 
 		// Summer weekday On-Peak (Wed, July 15, 2026, 5:00 PM) -> $0.14227
-		p, err := u.priceForTime(time.Date(2026, time.July, 15, 17, 0, 0, 0, mst))
+		p, err := u.priceForTime(time.Date(2026, time.July, 15, 17, 0, 0, 0, mstLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.14227, p.DollarsPerKWH, 1e-6)
 
 		// Summer weekday Off-Peak (Wed, July 15, 2026, 9:00 AM) -> $0.05943
-		p, err = u.priceForTime(time.Date(2026, time.July, 15, 9, 0, 0, 0, mst))
+		p, err = u.priceForTime(time.Date(2026, time.July, 15, 9, 0, 0, 0, mstLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.05943, p.DollarsPerKWH, 1e-6)
 
 		// Winter weekday On-Peak (Wed, Dec 16, 2026, 5:00 PM) -> $0.09932
-		p, err = u.priceForTime(time.Date(2026, time.December, 16, 17, 0, 0, 0, mst))
+		p, err = u.priceForTime(time.Date(2026, time.December, 16, 17, 0, 0, 0, mstLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.09932, p.DollarsPerKWH, 1e-6)
 	})
@@ -165,26 +162,23 @@ func TestAPSRates(t *testing.T) {
 		require.NoError(t, err)
 
 		// Summer weekday On-Peak (Wed, July 15, 2026, 5:00 PM) -> $0.36824
-		p, err := u.priceForTime(time.Date(2026, time.July, 15, 17, 0, 0, 0, mst))
+		p, err := u.priceForTime(time.Date(2026, time.July, 15, 17, 0, 0, 0, mstLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.36824, p.DollarsPerKWH, 1e-6)
 
 		// Summer weekday Overnight (Wed, July 15, 2026, 2:00 AM) -> $0.08468
-		p, err = u.priceForTime(time.Date(2026, time.July, 15, 2, 0, 0, 0, mst))
+		p, err = u.priceForTime(time.Date(2026, time.July, 15, 2, 0, 0, 0, mstLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.08468, p.DollarsPerKWH, 1e-6)
 
 		// Summer Weekend Overnight (Sat, July 18, 2026, 2:00 AM) -> Off-Peak $0.12345 (Overnight is weekdays only)
-		p, err = u.priceForTime(time.Date(2026, time.July, 18, 2, 0, 0, 0, mst))
+		p, err = u.priceForTime(time.Date(2026, time.July, 18, 2, 0, 0, 0, mstLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.12345, p.DollarsPerKWH, 1e-6)
 	})
 }
 
 func TestAPSExportRates(t *testing.T) {
-	mst, err := time.LoadLocation("America/Phoenix")
-	require.NoError(t, err)
-
 	u := &genericTOU{}
 
 	t.Run("RCP Net Billing scheme", func(t *testing.T) {
@@ -197,7 +191,7 @@ func TestAPSExportRates(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		p, err := u.priceForTime(time.Date(2026, time.July, 15, 12, 0, 0, 0, mst))
+		p, err := u.priceForTime(time.Date(2026, time.July, 15, 12, 0, 0, 0, mstLocation))
 		require.NoError(t, err)
 		assert.True(t, p.SeparateGenerationCredit)
 		assert.InDelta(t, 0.06171, p.GenerationCreditDollarsPerKWH, 1e-6)
@@ -213,7 +207,7 @@ func TestAPSExportRates(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		p, err := u.priceForTime(time.Date(2026, time.July, 15, 12, 0, 0, 0, mst))
+		p, err := u.priceForTime(time.Date(2026, time.July, 15, 12, 0, 0, 0, mstLocation))
 		require.NoError(t, err)
 		assert.False(t, p.SeparateGenerationCredit)
 		assert.Equal(t, 0.0, p.GenerationCreditDollarsPerKWH)

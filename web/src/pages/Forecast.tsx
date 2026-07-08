@@ -64,7 +64,12 @@ const charts: ChartConfig[] = [
 
 function formatHour(ts: string): string {
     const d = new Date(ts);
-    return d.toLocaleTimeString([], { hour: 'numeric', hour12: true });
+    const minutes = d.getMinutes();
+    return d.toLocaleTimeString([], {
+        hour: 'numeric',
+        minute: minutes !== 0 ? '2-digit' : undefined,
+        hour12: true
+    });
 }
 
 // Extended interface adding calculated fields

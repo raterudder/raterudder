@@ -46,7 +46,6 @@ func getSDGEHolidays(year int) []string {
 // sdgePeriods generates the pricing periods for SDG&E / SDCP.
 func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
-	locStr := ptLocation.String()
 
 	// Default options if empty
 	genRate := options.GenerationRate
@@ -229,7 +228,7 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 				}
 			}
 
-			periods = append(periods, buildPeriods(locStr, []touSimplifiedPeriod{holidayPeriod, regularPeriod})...)
+			periods = append(periods, buildPeriods(ptLocation, []touSimplifiedPeriod{holidayPeriod, regularPeriod})...)
 		}
 	}
 
