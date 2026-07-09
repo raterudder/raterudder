@@ -552,6 +552,7 @@ func (c *Controller) evaluateDeficit(
 	currentEnergyKWH := currentStatus.BatterySOC * capacityKWH / 100.0
 	canCharge := settings.GridChargeBatteries && !currentStatus.BatteryChargingDisabled
 	canChargeNow := currentEnergyKWH+allowedHeadroom < capacityKWH && canCharge
+	capacityThresholdKWH := capacityKWH * batteryCapacityBuffer
 
 	minDeficitDiff := max(priceEpsilonForEquality, settings.MinDeficitPriceDifferenceDollarsPerKWH)
 
@@ -656,6 +657,7 @@ func (c *Controller) evaluateDeficit(
 	var wasSignificantlyCheaperThanDeficitNow bool
 	var wasAlreadyChargingSamePrice bool
 	var hadFutureCheapHours int
+	var usedMinHeadroom float64
 
 	lastDeficitKWH = 0.0
 	for i, slot := range simData {
@@ -758,6 +760,21 @@ func (c *Controller) evaluateDeficit(
 			neededEnergy := slot.TotalBatteryDeficitKWH + bufferEnergyKWH
 			if neededEnergy > maxHeadroom {
 				neededEnergy = maxHeadroom
+			}
+
+			// Cap neededEnergy by the minimum headroom of all hours between now and slot `i`
+			minHeadroom := maxHeadroom
+			for k := 0; k <= i; k++ {
+				headroom := capacityThresholdKWH - simData[k].BatteryKWH
+				if headroom < 0 {
+					headroom = 0
+				}
+				if headroom < minHeadroom {
+					minHeadroom = headroom
+				}
+			}
+			if neededEnergy > minHeadroom {
+				neededEnergy = minHeadroom
 			}
 			chargeDurationHours := neededEnergy / chargeKW
 
@@ -865,6 +882,7 @@ func (c *Controller) evaluateDeficit(
 								wasSignificantlyCheaperThanDeficitNow = isSignificantlyCheaperThanDeficitNow
 								wasAlreadyChargingSamePrice = isAlreadyChargingSamePrice
 								hadFutureCheapHours = futureCheapHours
+								usedMinHeadroom = minHeadroom
 							}
 						}
 					} else {
@@ -900,6 +918,7 @@ func (c *Controller) evaluateDeficit(
 								wasSignificantlyCheaperThanDeficitNow = isSignificantlyCheaperThanDeficitNow
 								wasAlreadyChargingSamePrice = isAlreadyChargingSamePrice
 								hadFutureCheapHours = futureCheapHours
+								usedMinHeadroom = minHeadroom
 							}
 						}
 					}
@@ -923,6 +942,13 @@ func (c *Controller) evaluateDeficit(
 						// Multiplying the entire needed deficit energy would artificially inflate the benefit if the cheapest plan
 						// only has enough slot duration to cover a fraction of that energy.
 						planBenefitDollars = min(neededEnergy, futureAllocatedHours*chargeKW) * (averageDeficitRateDollarsPerKWH - plannedChargeCost)
+						if !shouldCharge {
+							wasSignificantlyCheaperFuture = isSignificantlyCheaperFuture
+							wasSignificantlyCheaperThanDeficit = isSignificantlyCheaperThanDeficit
+							wasSignificantlyCheaperThanDeficitNow = isSignificantlyCheaperThanDeficitNow
+							wasAlreadyChargingSamePrice = isAlreadyChargingSamePrice
+							usedMinHeadroom = minHeadroom
+						}
 					}
 				}
 			}
@@ -1025,6 +1051,7 @@ func (c *Controller) evaluateDeficit(
 			slog.Int("futureCheapHours", hadFutureCheapHours),
 			slog.Float64("gridChargeNowCost", gridChargeNowCost),
 			slog.Int("bufferMinutes", bufferMinutes),
+			slog.Float64("minHeadroom", usedMinHeadroom),
 		)
 		decision = &DecisionResult{
 			BatteryMode: types.BatteryModeChargeAny,
@@ -1046,6 +1073,7 @@ func (c *Controller) evaluateDeficit(
 			slog.Time("plannedChargeTime", plannedChargeTime),
 			slog.Float64("planBenefitDollars", planBenefitDollars),
 			slog.Int("bufferMinutes", bufferMinutes),
+			slog.Float64("minHeadroom", usedMinHeadroom),
 			slog.Float64("standbyThreshold", standbyThreshold),
 			slog.Float64("gridChargeNowCost", gridChargeNowCost),
 		)
@@ -2271,9 +2299,7 @@ func (c *Controller) simulateStandby(
 	var hitCapacityAt, hitSolarCapacityAt, hitDeficitAt time.Time
 	var totalImportCost, totalNetLoadKWH float64
 
-	// We default to a 98% capacity threshold to avoid rapid start/stop controller
-	// oscillations when the battery is nearly full, or use the pre-calculated threshold from slot.
-	capacityThresholdKWH := capacityKWH * 0.98
+	capacityThresholdKWH := capacityKWH * batteryCapacityBuffer
 	if len(simData) > 0 && simData[0].CapacityThresholdKWH > 0 {
 		capacityThresholdKWH = simData[0].CapacityThresholdKWH
 	}
@@ -2538,7 +2564,7 @@ func (c *Controller) evaluateVPPEvent(
 		return nil
 	}
 
-	capacityThresholdKWH := capacityKWH * 0.98
+	capacityThresholdKWH := capacityKWH * batteryCapacityBuffer
 	neededEnergy := capacityThresholdKWH - standbyRes.StandbyEnergyAtPeakStart
 	if neededEnergy <= 0 {
 		return nil

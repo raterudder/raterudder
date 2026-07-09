@@ -3222,8 +3222,8 @@ func TestEvaluateDeficit(t *testing.T) {
 	t.Run("Charging Prevention (Avoid premature charging on deficit growth)", func(t *testing.T) {
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.12, GridUseDollarsPerKWH: 0.0}
 		futurePrices := []types.Price{
-			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.096, GridUseDollarsPerKWH: 0.0},
-			{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(3 * time.Hour), DollarsPerKWH: 0.097, GridUseDollarsPerKWH: 0.0},
+			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.0958, GridUseDollarsPerKWH: 0.0},
+			{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(3 * time.Hour), DollarsPerKWH: 0.0968, GridUseDollarsPerKWH: 0.0},
 			{TSStart: now.Add(3 * time.Hour), TSEnd: now.Add(4 * time.Hour), DollarsPerKWH: 0.12, GridUseDollarsPerKWH: 0.0},
 			{TSStart: now.Add(4 * time.Hour), TSEnd: now.Add(5 * time.Hour), DollarsPerKWH: 0.15, GridUseDollarsPerKWH: 0.0},
 		}
@@ -3862,6 +3862,92 @@ func TestEvaluateDeficit(t *testing.T) {
 		// The planned charge should be scheduled in the cheap $0.055 window, not the expensive $0.105 window
 		assert.InDelta(t, 0.055, eval.Plan.ChargeCost, 0.0001)
 		assert.Equal(t, now.Add(17*time.Hour), eval.Plan.ChargeTime)
+	})
+
+	t.Run("Solar and Non-Solar Headroom Capping", func(t *testing.T) {
+		// Scenario 1: Active Solar Hour caps headroom
+		status := baseStatus
+		status.BatterySOC = 20.0 // 2.0 kWh
+		status.BatteryCapacityKWH = 10.0
+		status.MaxBatteryChargeKW = 5.0
+		status.HomeKW = 1.0
+
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.05}
+		futurePrices := []types.Price{
+			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.10},
+			{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(3 * time.Hour), DollarsPerKWH: 0.50}, // peak/deficit hour
+		}
+
+		summary := simulationSummary{
+			HitDeficitAt:            now.Add(2 * time.Hour),
+			HitBelowDeficitAt:       now.Add(2 * time.Hour),
+			MinFutureGridChargeCost: 0.10,
+		}
+
+		simDataSolar := []SimHour{
+			{
+				TS:                      now,
+				GridChargeDollarsPerKWH: 0.05,
+				Price:                   currentPrice,
+			},
+			{
+				TS:                      now.Add(time.Hour),
+				GridChargeDollarsPerKWH: 0.10,
+				Price:                   futurePrices[0],
+				PredictedSolarKWH:       5.0, // active solar hour
+				BatteryKWH:              7.0, // battery level during this hour
+				BatteryReserveKWH:       2.0,
+			},
+			{
+				TS:                      now.Add(2 * time.Hour),
+				GridChargeDollarsPerKWH: 0.50,
+				TotalBatteryDeficitKWH:  4.0,
+				Price:                   futurePrices[1],
+				BatteryReserveKWH:       2.0,
+			},
+		}
+
+		evalSolar := c.evaluateDeficit(ctx, now, status, currentPrice, baseSettings, simDataSolar, summary)
+		require.NotNil(t, evalSolar)
+		if assert.NotNil(t, evalSolar.Decision) {
+			assert.Equal(t, types.BatteryModeChargeAny, evalSolar.Decision.BatteryMode)
+			// Target SOC should be capped at 48% (current 2.0 kWh + 2.8 kWh headroom = 4.8 kWh / 10 kWh = 48%)
+			// capacityThresholdKWH = 10.0 * 0.98 = 9.8. BatteryKWH = 7.0. Headroom = 9.8 - 7.0 = 2.8.
+			// TargetSOC should be 48.
+			assert.Equal(t, 48, evalSolar.Decision.ChargeToSOC)
+		}
+
+		// Scenario 2: Non-Solar Hour also caps headroom (since we physically cannot exceed battery capacity)
+		simDataNonSolar := []SimHour{
+			{
+				TS:                      now,
+				GridChargeDollarsPerKWH: 0.05,
+				Price:                   currentPrice,
+			},
+			{
+				TS:                      now.Add(time.Hour),
+				GridChargeDollarsPerKWH: 0.10,
+				Price:                   futurePrices[0],
+				PredictedSolarKWH:       0.0, // non-solar hour!
+				BatteryKWH:              7.0, // battery level during this hour
+				BatteryReserveKWH:       2.0,
+			},
+			{
+				TS:                      now.Add(2 * time.Hour),
+				GridChargeDollarsPerKWH: 0.50,
+				TotalBatteryDeficitKWH:  4.0,
+				Price:                   futurePrices[1],
+				BatteryReserveKWH:       2.0,
+			},
+		}
+
+		evalNonSolar := c.evaluateDeficit(ctx, now, status, currentPrice, baseSettings, simDataNonSolar, summary)
+		require.NotNil(t, evalNonSolar)
+		if assert.NotNil(t, evalNonSolar.Decision) {
+			assert.Equal(t, types.BatteryModeChargeAny, evalNonSolar.Decision.BatteryMode)
+			// Target SOC should also be capped at 48% because the headroom check applies to non-solar hours too.
+			assert.Equal(t, 48, evalNonSolar.Decision.ChargeToSOC)
+		}
 	})
 }
 

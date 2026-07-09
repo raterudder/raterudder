@@ -21,6 +21,10 @@ const vppPrepChargingBuffer = 2 * time.Hour
 // TODO: Decide if vppStandbyDuration should be combined with vppPrepChargingBuffer.
 const vppStandbyDuration = 2 * time.Hour
 
+// batteryCapacityBuffer prevents us from trying to charge the battery to exactly
+// 100% which isn't possible
+const batteryCapacityBuffer = 0.98
+
 // SimHour represents one hour of simulated energy state.
 type SimHour struct {
 	TS                      time.Time   `json:"ts"`
@@ -66,7 +70,7 @@ func (c *Controller) SimulateState(
 	settings types.Settings,
 ) ([]SimHour, types.SimulationParams) {
 	capacityKWH := currentStatus.BatteryCapacityKWH
-	capacityThresholdKWH := capacityKWH * 0.98
+	capacityThresholdKWH := capacityKWH * batteryCapacityBuffer
 	currentSOC := currentStatus.BatterySOC
 	// simulate battery energy over the 24 hours
 	simEnergyKWH := capacityKWH * (currentSOC / 100.0)
