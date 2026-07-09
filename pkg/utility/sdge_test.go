@@ -46,20 +46,23 @@ func TestSDGERates(t *testing.T) {
 		// Summer Weekday On-Peak (July 7, 2026 17:00, Tuesday)
 		p1, err := u.priceForTime(time.Date(2026, 7, 7, 17, 0, 0, 0, loc))
 		require.NoError(t, err)
-		// Expected: UDC 0.32682 + NBC 0.00591 + EECC 0.47019 = 0.80292
-		assert.InDelta(t, 0.80292, p1.DollarsPerKWH, 0.0001)
+		// Expected: UDC 0.32682 + EECC 0.47019 = 0.79701 (NBC 0.00591 as GridUse)
+		assert.InDelta(t, 0.79701, p1.DollarsPerKWH, 0.0001)
+		assert.InDelta(t, 0.00591, p1.GridUseDollarsPerKWH, 0.0001)
 
 		// Summer Weekday Super Off-Peak (July 7, 2026 11:00 AM)
 		p2, err := u.priceForTime(time.Date(2026, 7, 7, 11, 0, 0, 0, loc))
 		require.NoError(t, err)
-		// Expected: UDC 0.04114 + NBC 0.00591 + EECC 0.08147 = 0.12852
-		assert.InDelta(t, 0.12852, p2.DollarsPerKWH, 0.0001)
+		// Expected: UDC 0.04114 + EECC 0.08147 = 0.12261 (NBC 0.00591 as GridUse)
+		assert.InDelta(t, 0.12261, p2.DollarsPerKWH, 0.0001)
+		assert.InDelta(t, 0.00591, p2.GridUseDollarsPerKWH, 0.0001)
 
 		// Winter Weekday On-Peak (Jan 6, 2026 17:00, Tuesday)
 		p3, err := u.priceForTime(time.Date(2026, 1, 6, 17, 0, 0, 0, loc))
 		require.NoError(t, err)
-		// Expected: UDC 0.32682 + NBC 0.00591 + EECC 0.19990 = 0.53263
-		assert.InDelta(t, 0.53263, p3.DollarsPerKWH, 0.0001)
+		// Expected: UDC 0.32682 + EECC 0.19990 = 0.52672 (NBC 0.00591 as GridUse)
+		assert.InDelta(t, 0.52672, p3.DollarsPerKWH, 0.0001)
+		assert.InDelta(t, 0.00591, p3.GridUseDollarsPerKWH, 0.0001)
 	})
 
 	t.Run("SDCP PowerOn EV-TOU-5 Rates (San Diego Location)", func(t *testing.T) {
@@ -76,14 +79,16 @@ func TestSDGERates(t *testing.T) {
 		// Summer Weekday On-Peak (July 7, 2026 17:00, Tuesday)
 		p1, err := u.priceForTime(time.Date(2026, 7, 7, 17, 0, 0, 0, loc))
 		require.NoError(t, err)
-		// Expected: UDC 0.32682 + NBC 0.00591 + PCIA 0.04987 + SDCP 0.41063 = 0.79323
-		assert.InDelta(t, 0.79323, p1.DollarsPerKWH, 0.0001)
+		// Expected: UDC 0.32682 + PCIA 0.04987 + SDCP 0.41063 = 0.78732 (NBC 0.00591 as GridUse)
+		assert.InDelta(t, 0.78732, p1.DollarsPerKWH, 0.0001)
+		assert.InDelta(t, 0.00591, p1.GridUseDollarsPerKWH, 0.0001)
 
 		// Summer Weekday Super Off-Peak (July 7, 2026 11:00 AM)
 		p2, err := u.priceForTime(time.Date(2026, 7, 7, 11, 0, 0, 0, loc))
 		require.NoError(t, err)
-		// Expected: UDC 0.04114 + NBC 0.00591 + PCIA 0.04987 + SDCP 0.04168 = 0.13860
-		assert.InDelta(t, 0.13860, p2.DollarsPerKWH, 0.0001)
+		// Expected: UDC 0.04114 + PCIA 0.04987 + SDCP 0.04168 = 0.13269 (NBC 0.00591 as GridUse)
+		assert.InDelta(t, 0.13269, p2.DollarsPerKWH, 0.0001)
+		assert.InDelta(t, 0.00591, p2.GridUseDollarsPerKWH, 0.0001)
 	})
 
 	t.Run("SDCP PowerBase EV-TOU-5 Rates (Unincorporated Location)", func(t *testing.T) {
@@ -100,8 +105,9 @@ func TestSDGERates(t *testing.T) {
 		// Summer Weekday On-Peak (July 7, 2026 17:00, Tuesday)
 		p1, err := u.priceForTime(time.Date(2026, 7, 7, 17, 0, 0, 0, loc))
 		require.NoError(t, err)
-		// Expected: UDC 0.32682 + NBC 0.00591 + PCIA 0.04987 + SDCP 0.38801 = 0.77061
-		assert.InDelta(t, 0.77061, p1.DollarsPerKWH, 0.0001)
+		// Expected: UDC 0.32682 + PCIA 0.04987 + SDCP 0.38801 = 0.76470 (NBC 0.00591 as GridUse)
+		assert.InDelta(t, 0.76470, p1.DollarsPerKWH, 0.0001)
+		assert.InDelta(t, 0.00591, p1.GridUseDollarsPerKWH, 0.0001)
 	})
 
 	t.Run("SDCP Power100 EV-TOU-5 Rates (San Diego Location)", func(t *testing.T) {
@@ -118,8 +124,9 @@ func TestSDGERates(t *testing.T) {
 		// Summer Weekday On-Peak (July 7, 2026 17:00, Tuesday)
 		p1, err := u.priceForTime(time.Date(2026, 7, 7, 17, 0, 0, 0, loc))
 		require.NoError(t, err)
-		// Expected: UDC 0.32682 + NBC 0.00591 + PCIA 0.04987 + (SDCP PowerOn 0.41063 + Premium 0.01) = 0.80323
-		assert.InDelta(t, 0.80323, p1.DollarsPerKWH, 0.0001)
+		// Expected: UDC 0.32682 + PCIA 0.04987 + (SDCP PowerOn 0.41063 + Premium 0.01) = 0.79732 (NBC 0.00591 as GridUse)
+		assert.InDelta(t, 0.79732, p1.DollarsPerKWH, 0.0001)
+		assert.InDelta(t, 0.00591, p1.GridUseDollarsPerKWH, 0.0001)
 	})
 
 	t.Run("TOU-DR2 2-Period TOU Rates", func(t *testing.T) {
@@ -135,13 +142,57 @@ func TestSDGERates(t *testing.T) {
 		// Summer Weekday On-Peak (July 7, 2026 17:00)
 		p1, err := u.priceForTime(time.Date(2026, 7, 7, 17, 0, 0, 0, loc))
 		require.NoError(t, err)
-		// Expected UDC 0.34510 + NBC 0.00591 + EECC 0.34920 = 0.70021
-		assert.InDelta(t, 0.70021, p1.DollarsPerKWH, 0.0001)
+		// Expected UDC 0.34510 + EECC 0.34920 = 0.69430 (NBC 0.00591 as GridUse)
+		assert.InDelta(t, 0.69430, p1.DollarsPerKWH, 0.0001)
+		assert.InDelta(t, 0.00591, p1.GridUseDollarsPerKWH, 0.0001)
 
 		// Summer Weekday Off-Peak (July 7, 2026 11:00 AM)
 		p2, err := u.priceForTime(time.Date(2026, 7, 7, 11, 0, 0, 0, loc))
 		require.NoError(t, err)
-		// Expected UDC 0.33863 + NBC 0.00591 + EECC 0.08432 = 0.42886
-		assert.InDelta(t, 0.42886, p2.DollarsPerKWH, 0.0001)
+		// Expected UDC 0.33863 + EECC 0.08432 = 0.42295 (NBC 0.00591 as GridUse)
+		assert.InDelta(t, 0.42295, p2.DollarsPerKWH, 0.0001)
+		assert.InDelta(t, 0.00591, p2.GridUseDollarsPerKWH, 0.0001)
+	})
+}
+
+func TestGetSDGENBTExportRate(t *testing.T) {
+	loc := ptLocation
+
+	t.Run("Weekday, Weekend, Holiday rates in 2026", func(t *testing.T) {
+		// New Year's Day (Jan 1, 2026) is a Thursday but observed holiday -> Weekend rates
+		rate1 := getSDGENBTExportRate(time.Date(2026, 1, 1, 0, 0, 0, 0, loc))
+		assert.InDelta(t, 0.087919, rate1, 0.000001)
+
+		// Jan 2, 2026 (Friday) -> Weekday rates
+		rate2 := getSDGENBTExportRate(time.Date(2026, 1, 2, 0, 0, 0, 0, loc))
+		assert.InDelta(t, 0.088830, rate2, 0.000001)
+
+		// April 4, 2026 (Saturday) -> Weekend rates
+		rate3 := getSDGENBTExportRate(time.Date(2026, 4, 4, 0, 0, 0, 0, loc))
+		assert.InDelta(t, 0.064273, rate3, 0.000001)
+	})
+}
+
+func TestSDGENBTPeriods(t *testing.T) {
+	t.Run("NEM 3.0 Export Credit Periods", func(t *testing.T) {
+		// Get fees with NetMeteringScheme set to "sbp"
+		opts := types.UtilityRateOptions{
+			NetMeteringScheme: "sbp",
+			GenerationRate:    "sdge",
+		}
+		periods := sdgePeriods("sdge_ev_tou_5", opts, []int{2026})
+
+		// Assert that we have dynamic NBT export credit periods
+		foundNBT := false
+		for _, p := range periods {
+			if p.SeparateGenerationCredit && p.Description == "SDG&E NBT Weekday Export Credit (Hour 0)" {
+				foundNBT = true
+				// Expected weekday April Hour 0 NBT export rate is 0.073861
+				if p.Start.Month() == time.April {
+					assert.InDelta(t, 0.073861, p.DollarsPerKWH, 0.000001)
+				}
+			}
+		}
+		assert.True(t, foundNBT, "expected to find SDG&E NBT Weekday Export Credit period")
 	})
 }
