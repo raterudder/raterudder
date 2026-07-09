@@ -190,6 +190,7 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, "failed to create user", http.StatusInternalServerError)
 			return
 		}
+		log.Ctx(ctx).InfoContext(ctx, "user created", slog.String("userID", userID), slog.String("email", email))
 	} else {
 		// Existing user — add site to their list if not already there
 		existingUser, err := s.storage.GetUser(ctx, userID)
@@ -238,7 +239,7 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	log.Ctx(ctx).InfoContext(ctx, "user joined site", slog.String("siteID", req.JoinSiteID))
+	log.Ctx(ctx).InfoContext(ctx, "user joined site", slog.String("siteID", req.JoinSiteID), slog.String("userID", userID), slog.String("email", email))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	err := json.NewEncoder(w).Encode(map[string]any{
