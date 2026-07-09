@@ -1664,6 +1664,110 @@ describe('App & Settings', () => {
             });
         });
     });
+
+    describe('ESS Credentials Tutorial Dialog Integration', () => {
+        it('shows tutorial dialog when saving ESS credentials for the first time', async () => {
+            const user = userEvent.setup();
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                ess: '',
+                hasCredentials: {}
+            });
+
+            await navigateToSettings();
+
+            const selectEl = await screen.findByRole('combobox', { name: /System Type/i });
+            await user.click(selectEl);
+            const teslaOption = await screen.findByRole('option', { name: 'Tesla' });
+            await user.click(teslaOption);
+
+            const windowOpenSpy = vi.spyOn(window, 'open').mockReturnValue({ closed: false } as any);
+            const linkBtn = await screen.findByRole('button', { name: /Login to link account/i });
+            await user.click(linkBtn);
+
+            act(() => {
+                window.dispatchEvent(new MessageEvent('message', {
+                    origin: window.location.origin,
+                    data: { type: 'OAUTH_CODE', code: 'mock-code', state: 'site1' }
+                }));
+            });
+
+            await waitFor(() => {
+                expect(screen.getByText('Received code! Save Settings below to complete.')).toBeInTheDocument();
+            });
+
+            windowOpenSpy.mockRestore();
+
+            (updateSettings as any).mockResolvedValue(undefined);
+
+            const saveBtn = screen.getByText('Save Settings');
+            await user.click(saveBtn);
+
+            await waitFor(() => {
+                expect(screen.getByText('Welcome to RateRudder! 🚀')).toBeInTheDocument();
+            });
+
+            const nextBtn = screen.getByRole('button', { name: /Next/i });
+            await user.click(nextBtn);
+
+            expect(screen.getByText('Manual Charging 💡')).toBeInTheDocument();
+            
+            const gotItBtn = screen.getByRole('button', { name: /Got It/i });
+            await user.click(gotItBtn);
+
+            await waitFor(() => {
+                expect(screen.queryByText('Manual Charging 💡')).not.toBeInTheDocument();
+            });
+        });
+
+        it('does not show tutorial dialog when ESS credentials are saved but pause is enabled', async () => {
+            const user = userEvent.setup();
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                ess: '',
+                hasCredentials: {}
+            });
+
+            await navigateToSettings();
+
+            const selectEl = await screen.findByRole('combobox', { name: /System Type/i });
+            await user.click(selectEl);
+            const teslaOption = await screen.findByRole('option', { name: 'Tesla' });
+            await user.click(teslaOption);
+
+            const windowOpenSpy = vi.spyOn(window, 'open').mockReturnValue({ closed: false } as any);
+            const linkBtn = await screen.findByRole('button', { name: /Login to link account/i });
+            await user.click(linkBtn);
+
+            act(() => {
+                window.dispatchEvent(new MessageEvent('message', {
+                    origin: window.location.origin,
+                    data: { type: 'OAUTH_CODE', code: 'mock-code', state: 'site1' }
+                }));
+            });
+
+            await waitFor(() => {
+                expect(screen.getByText('Received code! Save Settings below to complete.')).toBeInTheDocument();
+            });
+
+            windowOpenSpy.mockRestore();
+
+            const pauseSwitch = await screen.findByRole('switch', { name: /Pause Automation/i });
+            fireEvent.click(pauseSwitch);
+
+
+
+            (updateSettings as any).mockResolvedValue(undefined);
+
+            const saveBtn = screen.getByText('Save Settings');
+            await user.click(saveBtn);
+
+            await waitFor(() => {
+                expect(screen.getByText('Settings saved successfully')).toBeInTheDocument();
+            });
+            expect(screen.queryByText('Welcome to RateRudder! 🚀')).not.toBeInTheDocument();
+        });
+    });
 });
 
 

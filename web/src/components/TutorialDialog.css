@@ -1,0 +1,113 @@
+.tutorial-dialog-popup {
+  max-width: 450px;
+  background: var(--surface-container-low);
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-lg);
+  padding: 2.25rem 2.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  box-shadow: var(--shadow-lg), 0 0 40px rgba(0, 0, 0, 0.5);
+  animation: scaleUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tutorial-title {
+  text-align: center;
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: var(--on-surface);
+  margin: 0;
+}
+
+.tutorial-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  text-align: center;
+}
+
+.tutorial-illustration {
+  margin: 1rem 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 90px;
+  height: 90px;
+  background: rgba(75, 142, 255, 0.1);
+  border: 2px solid var(--primary);
+  border-radius: 50%;
+  font-size: 2.5rem;
+  box-shadow: 0 0 20px rgba(75, 142, 255, 0.2);
+  animation: float 3s ease-in-out infinite;
+}
+
+.icon-pulse {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.tutorial-desc {
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.tutorial-desc strong {
+  color: var(--primary-glow);
+  font-weight: 600;
+}
+
+.tutorial-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 0.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--outline-variant);
+  width: 100%;
+}
+
+.tutorial-steps {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.step-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--outline-variant);
+  transition: all 0.3s ease;
+}
+
+.step-dot.active {
+  background: var(--primary);
+  width: 20px;
+  border-radius: 4px;
+}
+
+.tutorial-buttons {
+  display: flex;
+  gap: 0.75rem;
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+}

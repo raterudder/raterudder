@@ -5,6 +5,7 @@ import { useBrowserLocation } from 'wouter/use-browser-location';
 import Header from './components/Header';
 import Footer from './components/Footer';
 import FeedbackWidget from './components/FeedbackWidget';
+import { TutorialDialog } from './components/TutorialDialog';
 import './App.css';
 import { fetchAuthStatus, login, logout, fetchSettings, type AuthStatus, type UserSite, type Settings as SettingsType } from './api';
 import LandingPage from './pages/LandingPage';
@@ -94,6 +95,7 @@ function AppContent() {
 
     const [settings, setSettings] = useState<SettingsType | null>(null);
     const [settingsSiteID, setSettingsSiteID] = useState<string>("");
+    const [showTutorial, setShowTutorial] = useState(false);
 
     const [location, navigate] = useLocationWithViewSite();
     const isHome = location === '/';
@@ -423,7 +425,7 @@ function AppContent() {
                                     {!effectiveSiteID && effectiveSites.length === 0 ? (
                                         <Redirect to="/welcome" replace />
                                     ) : (
-                                         <Settings siteID={effectiveSiteID} settings={settings} onSettingsSaved={handleSettingsSaved} sites={effectiveSites} />
+                                         <Settings siteID={effectiveSiteID} settings={settings} onSettingsSaved={handleSettingsSaved} onShowTutorial={() => setShowTutorial(true)} sites={effectiveSites} />
                                     )}
                                 </ProtectedRoute>
                             </Route>
@@ -448,6 +450,8 @@ function AppContent() {
                 {loggedIn && (
                     <FeedbackWidget siteID={effectiveSiteID} />
                 )}
+
+                <TutorialDialog open={showTutorial} onClose={() => setShowTutorial(false)} settings={settings} />
             </div>
         </>
     );

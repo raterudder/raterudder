@@ -708,7 +708,19 @@ const ESSForm = ({
     );
 };
 
-const Settings = ({ siteID, settings: parentSettings, onSettingsSaved, sites = [] }: { siteID?: string, settings: SettingsType | null, onSettingsSaved?: () => Promise<void>, sites?: UserSite[] }) => {
+const Settings = ({
+    siteID,
+    settings: parentSettings,
+    onSettingsSaved,
+    onShowTutorial,
+    sites = []
+}: {
+    siteID?: string,
+    settings: SettingsType | null,
+    onSettingsSaved?: () => Promise<void>,
+    onShowTutorial?: () => void,
+    sites?: UserSite[]
+}) => {
     const [settings, setSettings] = useState<SettingsType | null>(null);
     const [isUtilityDirty, setIsUtilityDirty] = useState(false);
     const [isESSDirty, setIsESSDirty] = useState(false);
@@ -877,6 +889,8 @@ const Settings = ({ siteID, settings: parentSettings, onSettingsSaved, sites = [
             return;
         }
 
+        const isESSAlreadyConfigured = settings ? (!!settings.ess && settings.ess !== "" && !!settings.hasCredentials?.[settings.ess]) : false;
+
         try {
             savingRef.current = true;
             setIsSaving(true);
@@ -944,6 +958,14 @@ const Settings = ({ siteID, settings: parentSettings, onSettingsSaved, sites = [
                     [finalSettings.ess]: true
                 }
             } : finalSettings;
+
+            const isESSNowConfigured = updatedSettings ? (!!updatedSettings.ess && updatedSettings.ess !== "" && !!updatedSettings.hasCredentials?.[updatedSettings.ess]) : false;
+
+            if (!isESSAlreadyConfigured && isESSNowConfigured && !updatedSettings.pause) {
+                if (onShowTutorial) {
+                    onShowTutorial();
+                }
+            }
 
             if (credentialsPayload && settings.ess) {
                 setSettings(updatedSettings);
@@ -1030,6 +1052,8 @@ const Settings = ({ siteID, settings: parentSettings, onSettingsSaved, sites = [
             return;
         }
 
+        const isESSAlreadyConfigured = settings ? (!!settings.ess && settings.ess !== "" && !!settings.hasCredentials?.[settings.ess]) : false;
+
         let success = false;
         try {
             savingRef.current = true;
@@ -1074,6 +1098,14 @@ const Settings = ({ siteID, settings: parentSettings, onSettingsSaved, sites = [
 
             if (onSettingsSaved) {
                 await onSettingsSaved();
+            }
+
+            const isESSNowConfigured = !!finalSettings.ess && finalSettings.ess !== "" && (!!finalSettings.hasCredentials?.[finalSettings.ess] || !!credentialsPayload?.[finalSettings.ess]);
+
+            if (!isESSAlreadyConfigured && isESSNowConfigured && !finalSettings.pause) {
+                if (onShowTutorial) {
+                    onShowTutorial();
+                }
             }
 
             if (credentialsPayload && finalSettings.ess) {
