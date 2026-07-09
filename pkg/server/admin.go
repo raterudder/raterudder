@@ -14,6 +14,7 @@ import (
 type AdminSite struct {
 	types.Site
 	LastAction *types.Action `json:"lastAction,omitempty"`
+	Alias      string        `json:"alias,omitempty"`
 }
 
 func (s *Server) handleListSites(w http.ResponseWriter, r *http.Request) {
@@ -36,6 +37,13 @@ func (s *Server) handleListSites(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	adminSettings, err := s.storage.GetAdminSettings(ctx)
+	if err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to get admin settings", slog.Any("error", err))
+		writeJSONError(w, "failed to list sites", http.StatusInternalServerError)
+		return
+	}
+
 	adminSites := make([]AdminSite, len(sites))
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(5)
@@ -49,6 +57,7 @@ func (s *Server) handleListSites(w http.ResponseWriter, r *http.Request) {
 			adminSites[i] = AdminSite{
 				Site:       site,
 				LastAction: action,
+				Alias:      adminSettings.Aliases[site.ID],
 			}
 			return nil
 		})
@@ -61,6 +70,88 @@ func (s *Server) handleListSites(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(adminSites); err != nil {
+		panic(http.ErrAbortHandler)
+	}
+}
+
+func (s *Server) handleSetSiteAlias(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := s.getUser(r)
+
+	// Check if user is an admin
+	if !s.isMultiSiteAdmin(user) && !s.bypassAuth {
+		log.Ctx(ctx).WarnContext(ctx, "unauthorized access to set site alias", slog.String("email", user.Email))
+		writeJSONError(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	var req struct {
+		SiteID string `json:"siteID"`
+		Alias  string `json:"alias"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.SiteID == "" {
+		writeJSONError(w, "siteID is required", http.StatusBadRequest)
+		return
+	}
+
+	adminSettings, err := s.storage.GetAdminSettings(ctx)
+	if err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to get admin settings", slog.Any("error", err))
+		writeJSONError(w, "failed to set site alias", http.StatusInternalServerError)
+		return
+	}
+
+	if adminSettings.Aliases == nil {
+		adminSettings.Aliases = make(map[string]string)
+	}
+
+	if req.Alias == "" {
+		delete(adminSettings.Aliases, req.SiteID)
+	} else {
+		adminSettings.Aliases[req.SiteID] = req.Alias
+	}
+
+	if err := s.storage.UpdateAdminSettings(ctx, adminSettings); err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to update admin settings", slog.Any("error", err))
+		writeJSONError(w, "failed to set site alias", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleListUserSites(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := s.getUser(r)
+
+	// Check if user is an admin
+	if !s.isMultiSiteAdmin(user) && !s.bypassAuth {
+		log.Ctx(ctx).WarnContext(ctx, "unauthorized access to list user sites", slog.String("email", user.Email))
+		writeJSONError(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	users, err := s.storage.ListUsers(ctx)
+	if err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to list users for user sites", slog.Any("error", err))
+		writeJSONError(w, "failed to list user sites", http.StatusInternalServerError)
+		return
+	}
+
+	var userSites []types.UserSite
+	for _, u := range users {
+		for _, us := range u.Sites {
+			userSites = append(userSites, us)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(userSites); err != nil {
 		panic(http.ErrAbortHandler)
 	}
 }

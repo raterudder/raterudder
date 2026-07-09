@@ -1049,6 +1049,89 @@ func (f *FirestoreProvider) UpdateUser(ctx context.Context, user types.User) err
 	return nil
 }
 
+// ListUsers retrieves all users from the "users" collection.
+func (f *FirestoreProvider) ListUsers(ctx context.Context) ([]types.User, error) {
+	iter := f.client.Collection("users").Documents(ctx)
+	defer iter.Stop()
+
+	var users []types.User
+	for {
+		doc, err := iter.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("error iterating users: %w", err)
+		}
+
+		val, err := doc.DataAt("json")
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "user doc missing json", slog.String("userID", doc.Ref.ID))
+			continue
+		}
+		jsonStr, ok := val.(string)
+		if !ok {
+			log.Ctx(ctx).WarnContext(ctx, "user doc json not string", slog.String("userID", doc.Ref.ID))
+			continue
+		}
+
+		var user types.User
+		if err := json.Unmarshal([]byte(jsonStr), &user); err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal user", slog.String("userID", doc.Ref.ID), slog.Any("err", err))
+			continue
+		}
+		users = append(users, user)
+	}
+	return users, nil
+}
+
+// GetAdminSettings retrieves global system configuration for admin functions.
+func (f *FirestoreProvider) GetAdminSettings(ctx context.Context) (types.AdminSettings, error) {
+	doc, err := f.client.Collection("admin").Doc("settings").Get(ctx)
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return types.AdminSettings{Aliases: make(map[string]string)}, nil
+		}
+		return types.AdminSettings{}, fmt.Errorf("failed to fetch admin settings: %w", err)
+	}
+
+	val, err := doc.DataAt("json")
+	if err != nil {
+		return types.AdminSettings{Aliases: make(map[string]string)}, nil
+	}
+
+	jsonStr, ok := val.(string)
+	if !ok {
+		return types.AdminSettings{}, fmt.Errorf("admin settings JSON is not a string")
+	}
+
+	var settings types.AdminSettings
+	if err := json.Unmarshal([]byte(jsonStr), &settings); err != nil {
+		return types.AdminSettings{}, fmt.Errorf("failed to unmarshal admin settings JSON: %w", err)
+	}
+	return settings, nil
+}
+
+// UpdateAdminSettings saves global system configuration for admin functions.
+func (f *FirestoreProvider) UpdateAdminSettings(ctx context.Context, settings types.AdminSettings) error {
+	if settings.Aliases == nil {
+		settings.Aliases = make(map[string]string)
+	}
+
+	jsonBytes, err := json.Marshal(settings)
+	if err != nil {
+		return fmt.Errorf("failed to marshal admin settings: %w", err)
+	}
+
+	_, err = f.client.Collection("admin").Doc("settings").Set(ctx, map[string]any{
+		"json": string(jsonBytes),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to save admin settings: %w", err)
+	}
+	return nil
+}
+
 // UpdateESSMockState saves the internal state of a mock ESS provider.
 
 func (f *FirestoreProvider) UpdateESSMockState(ctx context.Context, siteID string, state types.ESSMockState) error {

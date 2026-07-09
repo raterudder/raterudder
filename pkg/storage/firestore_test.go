@@ -542,6 +542,49 @@ func TestFirestoreProvider(t *testing.T) {
 			_, err = f.GetUser(ctx, userID)
 			assert.ErrorContains(t, err, "user not found")
 		})
+
+		t.Run("ListUsers", func(t *testing.T) {
+			users, err := f.ListUsers(ctx)
+			require.NoError(t, err)
+
+			// We should find the "newuser@test.com" we created earlier
+			found := false
+			for _, u := range users {
+				if u.ID == "newuser@test.com" {
+					found = true
+					break
+				}
+			}
+			assert.True(t, found, "ListUsers should return newuser@test.com")
+		})
+	})
+
+	t.Run("AdminSettings", func(t *testing.T) {
+		t.Run("GetAdminSettingsDefault", func(t *testing.T) {
+			// Clean up settings if they exist to test default
+			_, _ = f.client.Collection("admin").Doc("settings").Delete(ctx)
+
+			settings, err := f.GetAdminSettings(ctx)
+			require.NoError(t, err)
+			assert.NotNil(t, settings.Aliases)
+			assert.Empty(t, settings.Aliases)
+		})
+
+		t.Run("UpdateAndGetAdminSettings", func(t *testing.T) {
+			settings := types.AdminSettings{
+				Aliases: map[string]string{
+					"site1": "alias1",
+					"site2": "alias2",
+				},
+			}
+			err := f.UpdateAdminSettings(ctx, settings)
+			require.NoError(t, err)
+
+			got, err := f.GetAdminSettings(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, "alias1", got.Aliases["site1"])
+			assert.Equal(t, "alias2", got.Aliases["site2"])
+		})
 	})
 
 	t.Run("Feedback", func(t *testing.T) {

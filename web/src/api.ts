@@ -401,6 +401,7 @@ export const deleteUser = async (): Promise<void> => {
 
 export interface AdminSite extends Site {
     lastAction?: Action;
+    alias?: string;
 }
 
 export const listSites = async (): Promise<AdminSite[]> => {
@@ -409,6 +410,29 @@ export const listSites = async (): Promise<AdminSite[]> => {
     });
     if (!response.ok) {
         throw new Error(await extractError(response, 'Failed to list sites'));
+    }
+    return response.json();
+};
+
+export const setSiteAlias = async (siteID: string, alias: string): Promise<void> => {
+    const response = await fetch('/api/site/alias', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ siteID, alias }),
+    });
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Failed to update site alias'));
+    }
+};
+
+export const listUserSites = async (): Promise<UserSite[]> => {
+    const response = await fetch('/api/list/userSites', {
+        method: 'GET',
+    });
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Failed to list user sites'));
     }
     return response.json();
 };

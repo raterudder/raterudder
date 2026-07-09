@@ -60,6 +60,9 @@ type Database interface {
 	CreateUser(ctx context.Context, user types.User) error
 	UpdateUser(ctx context.Context, user types.User) error
 	DeleteUser(ctx context.Context, userID string) error
+	ListUsers(ctx context.Context) ([]types.User, error)
+	GetAdminSettings(ctx context.Context) (types.AdminSettings, error)
+	UpdateAdminSettings(ctx context.Context, settings types.AdminSettings) error
 
 	// Feedback
 	InsertFeedback(ctx context.Context, feedback types.Feedback) error

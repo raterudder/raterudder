@@ -252,3 +252,24 @@ func (m *MockDatabase) DeleteUser(ctx context.Context, userID string) error {
 	args := m.Called(ctx, userID)
 	return args.Error(0)
 }
+
+func (m *MockDatabase) ListUsers(ctx context.Context) ([]types.User, error) {
+	args := m.Called(ctx)
+	if len(args) > 0 {
+		return args.Get(0).([]types.User), args.Error(1)
+	}
+	return nil, nil
+}
+
+func (m *MockDatabase) GetAdminSettings(ctx context.Context) (types.AdminSettings, error) {
+	args := m.Called(ctx)
+	if len(args) > 0 {
+		return args.Get(0).(types.AdminSettings), args.Error(1)
+	}
+	return types.AdminSettings{}, nil
+}
+
+func (m *MockDatabase) UpdateAdminSettings(ctx context.Context, settings types.AdminSettings) error {
+	args := m.Called(ctx, settings)
+	return args.Error(0)
+}
