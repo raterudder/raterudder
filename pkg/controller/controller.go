@@ -72,27 +72,29 @@ type StrategyEvaluation struct {
 
 // simulationSummary holds structural markers extracted from simulation data.
 type simulationSummary struct {
-	HitCapacityAt              time.Time
-	HitFutureCapacityAt        time.Time
-	HitStandbyCapacityAt       time.Time
-	HitSolarCapacityAt         time.Time
-	HitVPPCapacityAt           time.Time
-	HitDeficitAt               time.Time
-	HitBelowDeficitAt          time.Time
-	HitAboveDeficitAt          time.Time
-	PredictedSolarAtDeficitKWH float64
-	SoonestExportAt            time.Time
-	SoonestExportValue         float64
-	SoonestExportPrice         types.Price
-	SoonestSaveAt              time.Time
-	SoonestSaveValue           float64
-	SoonestSavePrice           types.Price
-	MinFutureGridChargeCost    float64
-	MinEnergy                  float64
-	MaxEnergy                  float64
-	SoonestVPPChargingAt       time.Time
-	SoonestVPPStandbyAt        time.Time
-	SoonestVPPEndAt            time.Time
+	HitCapacityAt               time.Time
+	HitFutureCapacityAt         time.Time
+	HitStandbyCapacityAt        time.Time
+	HitSolarCapacityAt          time.Time
+	HitVPPCapacityAt            time.Time
+	HitDeficitAt                time.Time
+	HitBelowDeficitAt           time.Time
+	HitAboveDeficitAt           time.Time
+	PredictedSolarAtDeficitKWH  float64
+	SoonestExportAt             time.Time
+	SoonestExportValue          float64
+	SoonestExportPrice          types.Price
+	SoonestSaveAt               time.Time
+	SoonestSaveValue            float64
+	SoonestSavePrice            types.Price
+	MinFutureGridChargeCost     float64
+	MinEnergy                   float64
+	MaxEnergy                   float64
+	SoonestVPPChargingAt        time.Time
+	SoonestVPPStandbyAt         time.Time
+	SoonestVPPEndAt             time.Time
+	BufferedHitCapacityAt       time.Time
+	BufferedHitFutureCapacityAt time.Time
 }
 
 // Decide determines the best action to take based on current state and history.
@@ -123,7 +125,6 @@ func (c *Controller) Decide(
 	if !settings.GridExportSolar {
 		solarMode = types.SolarModeNoExport
 	}
-
 	simData, simParams := c.SimulateState(ctx, now, currentStatus, currentPrice, futurePrices, history, weather, settings)
 
 	if len(simData) > 0 && simData[0].TS.After(now) {
@@ -427,6 +428,12 @@ func (c *Controller) analyzeSimulation(
 		if !slot.VPPEndAt.IsZero() && slot.VPPEndAt.After(now) && summary.SoonestVPPEndAt.IsZero() {
 			summary.SoonestVPPEndAt = slot.VPPEndAt
 		}
+		if !slot.BufferedHitCapacityAt.IsZero() && summary.BufferedHitCapacityAt.IsZero() {
+			summary.BufferedHitCapacityAt = slot.BufferedHitCapacityAt
+		}
+		if !slot.BufferedHitCapacityAt.IsZero() && slot.BufferedHitCapacityAt.After(now) && summary.BufferedHitFutureCapacityAt.IsZero() {
+			summary.BufferedHitFutureCapacityAt = slot.BufferedHitCapacityAt
+		}
 	}
 	if !summary.HitSolarCapacityAt.IsZero() && (summary.HitCapacityAt.IsZero() || summary.HitSolarCapacityAt.Before(summary.HitCapacityAt)) {
 		summary.HitCapacityAt = summary.HitSolarCapacityAt
@@ -517,6 +524,8 @@ func (c *Controller) evaluateDeficit(
 	simData []SimHour,
 	summary simulationSummary,
 ) *StrategyEvaluation {
+	bufferedHitCapacityAt := summary.BufferedHitCapacityAt
+	bufferedHitFutureCapacityAt := summary.BufferedHitFutureCapacityAt
 	chargeKW := currentStatus.MaxBatteryChargeKW
 	if chargeKW <= 0 {
 		chargeKW = currentStatus.BatteryCapacityKWH / 3.0
@@ -581,15 +590,6 @@ func (c *Controller) evaluateDeficit(
 	}
 	if hitDeficitAt.IsZero() {
 		return nil
-	}
-
-	bufferedHitCapacityAt := summary.HitCapacityAt
-	if !summary.HitCapacityAt.IsZero() {
-		bufferedHitCapacityAt = summary.HitCapacityAt.Add(time.Duration(bufferMinutes) * time.Minute)
-	}
-	bufferedHitFutureCapacityAt := summary.HitFutureCapacityAt
-	if !summary.HitFutureCapacityAt.IsZero() {
-		bufferedHitFutureCapacityAt = summary.HitFutureCapacityAt.Add(time.Duration(bufferMinutes) * time.Minute)
 	}
 
 	// If the deficit is at or after the VPP event prep charging cutoff, we cannot prevent it by charging now.
@@ -739,25 +739,32 @@ func (c *Controller) evaluateDeficit(
 			if maxHeadroom < 0 {
 				maxHeadroom = 0
 			}
+			// Calculate the safety buffer energy in kWh by greedily accumulating the preceding home load.
+			// If bufferMinutes is 100, we consume 100% of the first preceding hour's load and the remaining
+			// 40 minutes (40/60) fraction of the second preceding hour's load.
 			bufferEnergyKWH := 0.0
-			if bufferMinutes > 0 && i+1 < len(simData) {
-				nextSlot := simData[i+1]
-				nextSlotValid := true
-				if !vppCutoff.IsZero() && !nextSlot.TS.Before(vppCutoff) {
-					nextSlotValid = false
+			if bufferMinutes > 0 {
+				remainingMinutes := float64(bufferMinutes)
+				for k := i - 1; k >= 0 && remainingMinutes > 0; k-- {
+					fraction := min(remainingMinutes, 60.0) / 60.0
+					bufferEnergyKWH += fraction * simData[k].AvgHomeLoadKWH
+					remainingMinutes -= 60.0
 				}
-				if !bufferedHitCapacityAt.IsZero() && !nextSlot.TS.Before(bufferedHitCapacityAt) {
-					nextSlotValid = false
-				}
-				if nextSlotValid {
-					// If PeakSurvivalBufferMinutes is configured, we add a comfort buffer representing the home load
-					// during the next hour. This ensures the battery survives the deficit with the requested margin.
-					// We only do this if the next hour does not hit capacity or VPP, to avoid double-buffering
-					// (as those events already add comfort buffers or refill the battery).
-					bufferEnergyKWH = (float64(bufferMinutes) / 60.0) * nextSlot.AvgHomeLoadKWH
+				if remainingMinutes > 0 {
+					bufferEnergyKWH += (remainingMinutes / 60.0) * slot.AvgHomeLoadKWH
 				}
 			}
-			neededEnergy := slot.TotalBatteryDeficitKWH + bufferEnergyKWH
+			// We subtract surplusBatteryKWH (the battery's charge above reserve) from the deficit/buffer.
+			// This ensures we only plan to import energy for the portion of the deficit/buffer that
+			// cannot be covered by the battery's existing surplus charge.
+			surplusBatteryKWH := slot.BatteryKWH - slot.BatteryReserveKWH
+			if surplusBatteryKWH < 0 {
+				surplusBatteryKWH = 0
+			}
+			neededEnergy := slot.TotalBatteryDeficitKWH + bufferEnergyKWH - surplusBatteryKWH
+			if neededEnergy < 0 {
+				neededEnergy = 0
+			}
 			if neededEnergy > maxHeadroom {
 				neededEnergy = maxHeadroom
 			}
@@ -789,8 +796,11 @@ func (c *Controller) evaluateDeficit(
 				canChargeNowForSlot = false
 			}
 
-			// If we are looking at a future deficit slot `i`, we try to find the cheapest plan until `i`
-			if simInFuture && len(simPrevChargeCostsAll) > 0 {
+			// If we are looking at a future deficit slot `i`, we try to find the cheapest plan until `i`.
+			// We only evaluate lookahead planning if neededEnergy > 0. If the slot has no deficit/buffer
+			// needs (neededEnergy == 0), lookahead planning would find a dummy zero-duration charge,
+			// causing plannedChargeTime to falsely reset to the zero time (0001-01-01).
+			if neededEnergy > 0 && simInFuture && len(simPrevChargeCostsAll) > 0 {
 				var cheapestPrice types.Price
 				var cheapestCost float64
 				var allocatedHours float64
@@ -1994,6 +2004,7 @@ func (c *Controller) evaluateFallback(
 	simData []SimHour,
 	summary simulationSummary,
 ) *DecisionResult {
+	bufferedHitCapacityAt := summary.BufferedHitCapacityAt
 	gridChargeNowCost := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
 
 	// 1. Minimum Reserve Enforcement:
@@ -2100,11 +2111,6 @@ func (c *Controller) evaluateFallback(
 		refillDeficitAt := summary.HitDeficitAt
 		if bufferMinutes == 0 && !summary.HitAboveDeficitAt.IsZero() {
 			refillDeficitAt = summary.HitAboveDeficitAt
-		}
-
-		bufferedHitCapacityAt := summary.HitCapacityAt
-		if !summary.HitCapacityAt.IsZero() {
-			bufferedHitCapacityAt = summary.HitCapacityAt.Add(time.Duration(bufferMinutes) * time.Minute)
 		}
 
 		if !summary.HitCapacityAt.IsZero() && bufferedHitCapacityAt.Before(refillDeficitAt) {
@@ -2508,8 +2514,47 @@ func (c *Controller) checkPeakSurvival(
 	}
 
 	if !peakEnd.IsZero() && !hitDeficitAt.IsZero() {
-		if !hitDeficitAt.After(peakEnd.Add(time.Duration(bufferMinutes) * time.Minute)) {
-			mustStandby = true
+		// Find the slot where the peak ends (slot.TS + 1 hour == peakEnd)
+		var peakEndSlot *SimHour
+		peakEndSlotIdx := -1
+		for idx, slot := range simData {
+			if slot.TS.Add(time.Hour).Equal(peakEnd) {
+				peakEndSlot = &simData[idx]
+				peakEndSlotIdx = idx
+				break
+			}
+		}
+
+		if peakEndSlot != nil {
+			// Deficit occurs before or during the peak -> must standby
+			if !hitDeficitAt.After(peakEnd) {
+				mustStandby = true
+			} else {
+				// To hedge against peak survival buffer deficits, we calculate the energy equivalent
+				// of bufferMinutes using a greedy look-back. If bufferMinutes is 100, we consume 100% of the
+				// first previous hour's load and the remaining 40 minutes (40/60) fraction of the second previous hour's load.
+				bufferEnergyKWH := 0.0
+				remainingMinutes := float64(bufferMinutes)
+				for k := peakEndSlotIdx; k >= 0 && remainingMinutes > 0; k-- {
+					fraction := min(remainingMinutes, 60.0) / 60.0
+					bufferEnergyKWH += fraction * simData[k].AvgHomeLoadKWH
+					remainingMinutes -= 60.0
+				}
+				if remainingMinutes > 0 {
+					bufferEnergyKWH += (remainingMinutes / 60.0) * peakEndSlot.AvgHomeLoadKWH
+				}
+
+				// If the battery energy at the end of the peak is less than reserve + bufferEnergyKWH,
+				// we do not survive the peak with the required safety buffer, so we must standby.
+				if peakEndSlot.BatteryKWH < peakEndSlot.BatteryReserveKWH+bufferEnergyKWH {
+					mustStandby = true
+				}
+			}
+		} else {
+			// Fallback to simple time-based check if slot is not found
+			if !hitDeficitAt.After(peakEnd.Add(time.Duration(bufferMinutes) * time.Minute)) {
+				mustStandby = true
+			}
 		}
 	}
 	return

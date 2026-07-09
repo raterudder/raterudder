@@ -27,34 +27,36 @@ const batteryCapacityBuffer = 0.98
 
 // SimHour represents one hour of simulated energy state.
 type SimHour struct {
-	TS                      time.Time   `json:"ts"`
-	Hour                    int         `json:"hour"`
-	NetLoadSolarKWH         float64     `json:"netLoadSolarKWH"`
-	ClampedNetLoadSolarKWH  float64     `json:"clampedNetLoadSolarKWH"`
-	GridChargeDollarsPerKWH float64     `json:"gridChargeDollarsPerKWH"`
-	SolarOppDollarsPerKWH   float64     `json:"solarOppDollarsPerKWH"`
-	AvgHomeLoadKWH          float64     `json:"avgHomeLoadKWH"`
-	PredictedSolarKWH       float64     `json:"predictedSolarKWH"`
-	BatteryKWH              float64     `json:"batteryKWH"`
-	StartBatteryKWH         float64     `json:"startBatteryKWH"`
-	BatteryCapacityKWH      float64     `json:"batteryCapacityKWH"`
-	CapacityThresholdKWH    float64     `json:"capacityThresholdKWH"`
-	BatteryReserveKWH       float64     `json:"batteryReserveKWH"`
-	StandbyBatteryKWH       float64     `json:"standbyBatteryKWH"`
-	TotalBatteryDeficitKWH  float64     `json:"totalBatteryDeficitKWH"`
-	TodaySolarTrend         float64     `json:"todaySolarTrend"`
-	EnergyApplyRatio        float64     `json:"energyApplyRatio"`
-	HitCapacityAt           time.Time   `json:"hitCapacityAt"`
-	HitStandbyCapacityAt    time.Time   `json:"hitStandbyCapacityAt"`
-	HitSolarCapacityAt      time.Time   `json:"hitSolarCapacityAt"`
-	HitVPPCapacityAt        time.Time   `json:"hitVPPCapacityAt"`
-	HitDeficitAt            time.Time   `json:"hitDeficitAt"`
-	HitBelowDeficitAt       time.Time   `json:"hitBelowDeficitAt"`
-	HitAboveDeficitAt       time.Time   `json:"hitAboveDeficitAt"`
-	Price                   types.Price `json:"price"`
-	StartedVPPChargingAt    time.Time   `json:"startedVPPChargingAt"`
-	VPPStandbyAt            time.Time   `json:"vppStandbyAt"`
-	VPPEndAt                time.Time   `json:"vppEndAt"`
+	TS                        time.Time   `json:"ts"`
+	Hour                      int         `json:"hour"`
+	NetLoadSolarKWH           float64     `json:"netLoadSolarKWH"`
+	ClampedNetLoadSolarKWH    float64     `json:"clampedNetLoadSolarKWH"`
+	GridChargeDollarsPerKWH   float64     `json:"gridChargeDollarsPerKWH"`
+	SolarOppDollarsPerKWH     float64     `json:"solarOppDollarsPerKWH"`
+	AvgHomeLoadKWH            float64     `json:"avgHomeLoadKWH"`
+	PredictedSolarKWH         float64     `json:"predictedSolarKWH"`
+	BufferedPredictedSolarKWH float64     `json:"bufferedPredictedSolarKWH"`
+	BatteryKWH                float64     `json:"batteryKWH"`
+	StartBatteryKWH           float64     `json:"startBatteryKWH"`
+	BatteryCapacityKWH        float64     `json:"batteryCapacityKWH"`
+	CapacityThresholdKWH      float64     `json:"capacityThresholdKWH"`
+	BatteryReserveKWH         float64     `json:"batteryReserveKWH"`
+	StandbyBatteryKWH         float64     `json:"standbyBatteryKWH"`
+	TotalBatteryDeficitKWH    float64     `json:"totalBatteryDeficitKWH"`
+	TodaySolarTrend           float64     `json:"todaySolarTrend"`
+	EnergyApplyRatio          float64     `json:"energyApplyRatio"`
+	HitCapacityAt             time.Time   `json:"hitCapacityAt"`
+	BufferedHitCapacityAt     time.Time   `json:"bufferedHitCapacityAt"`
+	HitStandbyCapacityAt      time.Time   `json:"hitStandbyCapacityAt"`
+	HitSolarCapacityAt        time.Time   `json:"hitSolarCapacityAt"`
+	HitVPPCapacityAt          time.Time   `json:"hitVPPCapacityAt"`
+	HitDeficitAt              time.Time   `json:"hitDeficitAt"`
+	HitBelowDeficitAt         time.Time   `json:"hitBelowDeficitAt"`
+	HitAboveDeficitAt         time.Time   `json:"hitAboveDeficitAt"`
+	Price                     types.Price `json:"price"`
+	StartedVPPChargingAt      time.Time   `json:"startedVPPChargingAt"`
+	VPPStandbyAt              time.Time   `json:"vppStandbyAt"`
+	VPPEndAt                  time.Time   `json:"vppEndAt"`
 }
 
 // SimulateState builds a 24-hour simulation of energy state and prices.
@@ -74,8 +76,14 @@ func (c *Controller) SimulateState(
 	currentSOC := currentStatus.BatterySOC
 	// simulate battery energy over the 24 hours
 	simEnergyKWH := capacityKWH * (currentSOC / 100.0)
+	// bufferedSimEnergyKWH tracks a parallel battery SOC simulated using the safety-shifted
+	// solar (bufferedPredictedSolarKWH) specifically to determine safety-buffered capacity hit times
+	// without impacting the primary optimal cost simulation (which uses unshifted solar).
+	bufferedSimEnergyKWH := simEnergyKWH
 	standbyEnergyKWH := simEnergyKWH
 	var simStandbyCapacityAt time.Time
+	// simBufferedCapacityAt records when the safety-buffered battery hits capacity.
+	var simBufferedCapacityAt time.Time
 	var deficitKWH float64
 
 	// Build Energy Models
@@ -218,7 +226,29 @@ func (c *Controller) SimulateState(
 		}
 
 		predictedAvgSolarKWH := profile.AvgSolarKWH * currentSolarTrend
+
+		bufferedAvgSolarKWH := profile.AvgSolarKWH
+		if settings.PeakSurvivalBufferMinutes > 0 {
+			shiftHours := settings.PeakSurvivalBufferMinutes / 60
+			shiftMinutes := settings.PeakSurvivalBufferMinutes % 60
+
+			baseHour := (h - shiftHours + 24) % 24
+			prevHour := (baseHour - 1 + 24) % 24
+
+			fraction := float64(shiftMinutes) / 60.0
+			shiftedSolar := (1.0-fraction)*model[baseHour].AvgSolarKWH + fraction*model[prevHour].AvgSolarKWH
+
+			// Clamp by unshifted solar to prevent "ghost solar" after sunset
+			if profile.AvgSolarKWH < shiftedSolar {
+				bufferedAvgSolarKWH = profile.AvgSolarKWH
+			} else {
+				bufferedAvgSolarKWH = shiftedSolar
+			}
+		}
+		bufferedPredictedSolarKWH := bufferedAvgSolarKWH * currentSolarTrend
+
 		netLoadSolarKWH := profile.AvgHomeLoadKWH - predictedAvgSolarKWH
+		bufferedNetLoadSolarKWH := profile.AvgHomeLoadKWH - bufferedPredictedSolarKWH
 
 		// Determine the next step's end boundary
 		nextHour := simTime.Add(1 * time.Hour).Truncate(time.Hour)
@@ -351,6 +381,7 @@ func (c *Controller) SimulateState(
 			// Use the midpoint of the sub-interval to determine the active simulation state.
 			subMid := subStart.Add(subEnd.Sub(subStart) / 2)
 			startEnergy := simEnergyKWH
+			bufferedStartEnergy := bufferedSimEnergyKWH
 
 			// Determine which VPP phase applies to this sub-interval.
 			var inVPPEvent, inPreVPPStandby, inPreVPPCharging bool
@@ -422,6 +453,7 @@ func (c *Controller) SimulateState(
 			wasInVPPEvent = inVPPEvent
 
 			var subClampedNetKWH float64
+			var bufferedSubClampedNetKWH float64
 
 			switch {
 			case inVPPEvent:
@@ -446,6 +478,13 @@ func (c *Controller) SimulateState(
 				}
 				standbyEnergyKWH -= standbyDischargePower * subDt
 
+				// Buffered simulation
+				bufferedDischargePower := 0.0
+				if bufferedStartEnergy > vppSocEnergy && maxDischargePower > 0 {
+					bufferedDischargePower = min(maxDischargePower, (bufferedStartEnergy-vppSocEnergy)/subDt)
+				}
+				bufferedSubClampedNetKWH = bufferedDischargePower
+
 			case inPreVPPCharging:
 				// Pre-charging Phase:
 				// Charge the battery at maximum power (MaxBatteryChargeKW) up to the 98% threshold.
@@ -463,6 +502,13 @@ func (c *Controller) SimulateState(
 					standbyChargePower = min(maxChargePower, (capacityThresholdKWH-standbyEnergyKWH)/subDt)
 				}
 				standbyEnergyKWH += standbyChargePower * subDt
+
+				// Buffered simulation
+				bufferedChargePower := 0.0
+				if bufferedStartEnergy < capacityThresholdKWH && maxChargePower > 0 {
+					bufferedChargePower = min(maxChargePower, (capacityThresholdKWH-bufferedStartEnergy)/subDt)
+				}
+				bufferedSubClampedNetKWH = -bufferedChargePower
 
 			case inPreVPPStandby:
 				// Pre-VPP Standby Phase (1 hour before VPP event):
@@ -485,6 +531,17 @@ func (c *Controller) SimulateState(
 					}
 				} else {
 					subClampedNetKWH = 0.0
+				}
+
+				// Buffered simulation
+				if bufferedNetLoadSolarKWH <= 0 {
+					clampedNetKWH := bufferedNetLoadSolarKWH
+					if currentStatus.MaxBatteryChargeKW > 0 && clampedNetKWH < -currentStatus.MaxBatteryChargeKW {
+						clampedNetKWH = -currentStatus.MaxBatteryChargeKW
+					}
+					bufferedSubClampedNetKWH = clampedNetKWH
+				} else {
+					bufferedSubClampedNetKWH = 0.0
 				}
 
 			default:
@@ -555,6 +612,19 @@ func (c *Controller) SimulateState(
 					simEnergyKWH = startEnergy - subClampedNetKWH*subDt
 				}
 
+				// Buffered simulation
+				bufferedClampedNetKWH := bufferedNetLoadSolarKWH
+				if bufferedNetLoadSolarKWH > 0 {
+					if currentStatus.MaxBatteryDischargeKW > 0 && bufferedClampedNetKWH > currentStatus.MaxBatteryDischargeKW {
+						bufferedClampedNetKWH = currentStatus.MaxBatteryDischargeKW
+					}
+				} else {
+					if currentStatus.MaxBatteryChargeKW > 0 && bufferedClampedNetKWH < -currentStatus.MaxBatteryChargeKW {
+						bufferedClampedNetKWH = -currentStatus.MaxBatteryChargeKW
+					}
+				}
+				bufferedSubClampedNetKWH = bufferedClampedNetKWH
+
 				// Simulate standby capacity charging from surplus solar as well.
 				clampedStandbyNetKWH := clampedNetKWH
 				if clampedStandbyNetKWH > 0 {
@@ -579,6 +649,10 @@ func (c *Controller) SimulateState(
 			}
 
 			newSimEnergy := startEnergy - subClampedNetKWH*subDt
+			newBufferedSimEnergy := bufferedStartEnergy - bufferedSubClampedNetKWH*subDt
+			if newBufferedSimEnergy < subMinKWH {
+				newBufferedSimEnergy = subMinKWH
+			}
 
 			// Check for Solar charge limits / headroom limits if configured.
 			if !settings.GridExportSolar && predictedAvgSolarKWH > 0.1 {
@@ -620,6 +694,26 @@ func (c *Controller) SimulateState(
 				simAboveDeficitAt = time.Time{}
 			}
 
+			// Capacity hit check for buffered safety battery:
+			// We check when the parallel safety-buffered battery hits capacity to find the safety-buffered capacity hit time.
+			// This represents the capacity hit under the safety-shifted solar profile.
+			// Since we don't track deficits/alarms for this parallel run, we only clamp it to min reserve subMinKWH
+			// and cap it to capacityKWH.
+			// Capacity hit check for buffered safety battery
+			if (bufferedSubClampedNetKWH < 0 && newBufferedSimEnergy >= capacityThresholdKWH) || newBufferedSimEnergy > capacityKWH {
+				if simBufferedCapacityAt.IsZero() {
+					remainingBeforeCapacity := capacityThresholdKWH - bufferedStartEnergy
+					var fraction float64
+					if remainingBeforeCapacity > 0 && bufferedSubClampedNetKWH < 0 {
+						fraction = max(remainingBeforeCapacity/-bufferedSubClampedNetKWH, 0)
+					}
+					simBufferedCapacityAt = subStart.Add(time.Duration(fraction * float64(time.Hour)))
+				}
+				bufferedSimEnergyKWH = capacityKWH
+			} else {
+				bufferedSimEnergyKWH = newBufferedSimEnergy
+			}
+
 			// Still cap physical energy at 100% capacity
 			if simEnergyKWH > capacityKWH {
 				simEnergyKWH = capacityKWH
@@ -629,34 +723,36 @@ func (c *Controller) SimulateState(
 		}
 
 		simData = append(simData, SimHour{
-			TS:                      simTime,
-			Hour:                    h,
-			NetLoadSolarKWH:         netLoadSolarKWH,
-			ClampedNetLoadSolarKWH:  hourlyClampedNetKWH / simEnergyApplyRatio,
-			GridChargeDollarsPerKWH: gridChargeCost,
-			SolarOppDollarsPerKWH:   solarOppCost,
-			AvgHomeLoadKWH:          profile.AvgHomeLoadKWH,
-			PredictedSolarKWH:       predictedAvgSolarKWH,
-			BatteryKWH:              simEnergyKWH,
-			StartBatteryKWH:         startBatteryKWH,
-			BatteryCapacityKWH:      capacityKWH,
-			CapacityThresholdKWH:    capacityThresholdKWH,
-			BatteryReserveKWH:       minKWH,
-			StandbyBatteryKWH:       standbyEnergyKWH,
-			TotalBatteryDeficitKWH:  deficitKWH,
-			TodaySolarTrend:         currentSolarTrend,
-			EnergyApplyRatio:        simEnergyApplyRatio,
-			HitCapacityAt:           simCapacityAt,
-			HitStandbyCapacityAt:    simStandbyCapacityAt,
-			HitSolarCapacityAt:      simSolarCapacityAt,
-			HitVPPCapacityAt:        simVPPCapacityAt,
-			HitDeficitAt:            simDeficitAt,
-			HitBelowDeficitAt:       simBelowDeficitAt,
-			HitAboveDeficitAt:       simAboveDeficitAt,
-			Price:                   price,
-			StartedVPPChargingAt:    startedVPPChargingAt,
-			VPPStandbyAt:            simBlackoutAt,
-			VPPEndAt:                simVPPEndAt,
+			TS:                        simTime,
+			Hour:                      h,
+			NetLoadSolarKWH:           netLoadSolarKWH,
+			ClampedNetLoadSolarKWH:    hourlyClampedNetKWH / simEnergyApplyRatio,
+			GridChargeDollarsPerKWH:   gridChargeCost,
+			SolarOppDollarsPerKWH:     solarOppCost,
+			AvgHomeLoadKWH:            profile.AvgHomeLoadKWH,
+			PredictedSolarKWH:         predictedAvgSolarKWH,
+			BufferedPredictedSolarKWH: bufferedPredictedSolarKWH,
+			BatteryKWH:                simEnergyKWH,
+			StartBatteryKWH:           startBatteryKWH,
+			BatteryCapacityKWH:        capacityKWH,
+			CapacityThresholdKWH:      capacityThresholdKWH,
+			BatteryReserveKWH:         minKWH,
+			StandbyBatteryKWH:         standbyEnergyKWH,
+			TotalBatteryDeficitKWH:    deficitKWH,
+			TodaySolarTrend:           currentSolarTrend,
+			EnergyApplyRatio:          simEnergyApplyRatio,
+			HitCapacityAt:             simCapacityAt,
+			BufferedHitCapacityAt:     simBufferedCapacityAt,
+			HitStandbyCapacityAt:      simStandbyCapacityAt,
+			HitSolarCapacityAt:        simSolarCapacityAt,
+			HitVPPCapacityAt:          simVPPCapacityAt,
+			HitDeficitAt:              simDeficitAt,
+			HitBelowDeficitAt:         simBelowDeficitAt,
+			HitAboveDeficitAt:         simAboveDeficitAt,
+			Price:                     price,
+			StartedVPPChargingAt:      startedVPPChargingAt,
+			VPPStandbyAt:              simBlackoutAt,
+			VPPEndAt:                  simVPPEndAt,
 		})
 		simTime = stepEnd
 	}

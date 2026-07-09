@@ -1446,6 +1446,81 @@ func TestSimulateState(t *testing.T) {
 			assert.Equal(t, 0.5, simData[2].EnergyApplyRatio)
 			assert.Equal(t, now.Add(time.Hour).Add(30*time.Minute), simData[2].TS)
 		})
-	})
 
+		t.Run("BufferedPredictedSolarInterpolation", func(t *testing.T) {
+			now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+			// Setup history with different solar for Hour 10, Hour 11, Hour 12
+			history := []types.EnergyStats{}
+			for i := 1; i <= 3; i++ {
+				pastDay := now.Add(time.Duration(-24*i) * time.Hour)
+				// Hour 10: 4.0 kWh
+				history = append(history, types.EnergyStats{
+					TSHourStart: pastDay.Truncate(24 * time.Hour).Add(10 * time.Hour),
+					SolarKWH:    4.0,
+					HomeKWH:     1.0,
+				})
+				// Hour 11: 8.0 kWh
+				history = append(history, types.EnergyStats{
+					TSHourStart: pastDay.Truncate(24 * time.Hour).Add(11 * time.Hour),
+					SolarKWH:    8.0,
+					HomeKWH:     1.0,
+				})
+				// Hour 12: 12.0 kWh
+				history = append(history, types.EnergyStats{
+					TSHourStart: pastDay.Truncate(24 * time.Hour).Add(12 * time.Hour),
+					SolarKWH:    12.0,
+					HomeKWH:     1.0,
+				})
+			}
+
+			currentStatus := types.SystemStatus{
+				BatteryCapacityKWH:    10.0,
+				BatterySOC:            50.0,
+				Timestamp:             now,
+				MaxBatteryChargeKW:    5.0,
+				MaxBatteryDischargeKW: 5.0,
+			}
+
+			currentPrice := types.Price{DollarsPerKWH: 0.10, TSStart: now, TSEnd: now.Add(time.Hour)}
+			futurePrices := make([]types.Price, 24)
+			for i := 0; i < 24; i++ {
+				futurePrices[i] = types.Price{
+					DollarsPerKWH: 0.10,
+					TSStart:       now.Add(time.Duration(i) * time.Hour),
+					TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				}
+			}
+
+			// Scenario A: bufferMinutes = 30
+			settings30 := types.Settings{
+				PeakSurvivalBufferMinutes: 30,
+				SolarTrendRatioMax:        3.0,
+				SolarBellCurveMultiplier:  0,
+			}
+			simData30, _ := c.SimulateState(ctx, now, currentStatus, currentPrice, futurePrices, history, nil, settings30)
+
+			// For Hour 12 (index 0 of simData30 since we start at 12:00)
+			// targetFractionalHour = 12.0 - 0.5 = 11.5
+			// Shifted solar is 50/50 between Hour 11 (8.0) and Hour 12 (12.0) = 10.0
+			assert.InDelta(t, 10.0, simData30[0].BufferedPredictedSolarKWH, 0.01)
+			// Unshifted is Hour 12 (12.0)
+			assert.InDelta(t, 12.0, simData30[0].PredictedSolarKWH, 0.01)
+
+			// Scenario B: bufferMinutes = 100 (1 hour 40 minutes)
+			settings100 := types.Settings{
+				PeakSurvivalBufferMinutes: 100,
+				SolarTrendRatioMax:        3.0,
+				SolarBellCurveMultiplier:  0,
+			}
+			simData100, _ := c.SimulateState(ctx, now, currentStatus, currentPrice, futurePrices, history, nil, settings100)
+
+			// targetFractionalHour = 12.0 - 1.67 = 10.33
+			// Shifted solar is interpolated between Hour 10 (4.0) and Hour 11 (8.0)
+			// fraction = 0.3333
+			// shiftedSolar = 0.6667 * 4.0 + 0.3333 * 8.0 = 2.6667 + 2.6667 = 5.333
+			assert.InDelta(t, 5.33, simData100[0].BufferedPredictedSolarKWH, 0.01)
+			assert.InDelta(t, 12.0, simData100[0].PredictedSolarKWH, 0.01)
+		})
+	})
 }
