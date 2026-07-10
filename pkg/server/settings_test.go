@@ -1571,6 +1571,53 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.True(t, mockW.AssertExpectations(t))
 		assert.True(t, mockU.AssertExpectations(t))
 	})
+
+	t.Run("Update Settings - NetMetering Scheme Unsets Credits", func(t *testing.T) {
+		mockS := &mockStorage{}
+		srv := &Server{
+			storage:       mockS,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
+		s := types.Settings{
+			ESS:                         "mock",
+			MinBatterySOC:               20,
+			IgnoreHourUsageOverMultiple: 2,
+			SolarTrendRatioMax:          3,
+			SolarBellCurveMultiplier:    1,
+			UtilityRateOptions: types.UtilityRateOptions{
+				NetMeteringScheme:  "nem2",
+				NetMeteringCredits: true,
+			},
+		}
+
+		body := struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials"`
+		}{
+			Settings: s,
+		}
+
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+		user := types.User{ID: "admin@example.com", Email: "admin@example.com", Admin: true}
+		req = req.WithContext(context.WithValue(context.WithValue(req.Context(), userContextKey, user), siteIDContextKey, types.SiteIDNone))
+
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+			ESS: "mock",
+		}, types.CurrentSettingsVersion, nil)
+
+		// Assert that SetSettings receives the updated settings with NetMeteringCredits unset (false)
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+			return s.UtilityRateOptions.NetMeteringScheme == "nem2" && !s.UtilityRateOptions.NetMeteringCredits
+		}), types.CurrentSettingsVersion).Return(nil).Once()
+
+		w := httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+		assert.True(t, mockS.AssertExpectations(t))
+	})
 }
 
 func TestGetSettingsWithMigration(t *testing.T) {

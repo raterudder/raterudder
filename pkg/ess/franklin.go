@@ -536,7 +536,7 @@ func (f *Franklin) getPowerCapacityConfigWithCache(ctx context.Context) ([]frank
 		return nil, err
 	}
 	f.powerCapConfigCache = pc
-	f.powerCapConfigExpiry = time.Now().Add(time.Hour)
+	f.powerCapConfigExpiry = time.Now().Add(24 * time.Hour)
 	return pc, nil
 }
 

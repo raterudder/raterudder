@@ -188,6 +188,12 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	newSettings := req.Settings
 
+	// if a utility switched from netMeteringCredits switch to a netMeteringScheme select
+	// we need to make sure we are unsetting netMeteringCredits
+	if newSettings.UtilityRateOptions.NetMeteringScheme != "" {
+		newSettings.UtilityRateOptions.NetMeteringCredits = false
+	}
+
 	if newSettings.MinArbitrageDifferenceDollarsPerKWH < 0 {
 		writeJSONError(w, "minimum arbitrage difference cannot be negative", http.StatusBadRequest)
 		return
