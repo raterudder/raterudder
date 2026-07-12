@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import CurrentStatus from './CurrentStatus';
-import { BatteryMode, SolarMode, type Action } from '../api';
+import { BatteryMode, SolarMode, ActionReason, type Action } from '../api';
 
 describe('CurrentStatus', () => {
     const defaultAction: Action = {
@@ -31,16 +31,16 @@ describe('CurrentStatus', () => {
             targetBatteryMode: BatteryMode.Load
         };
         render(<CurrentStatus action={action} />);
-        expect(screen.getByText('Use Battery')).toBeInTheDocument();
+        expect(screen.getByText('Self-Powered')).toBeInTheDocument();
+        expect(screen.getByText('Rely on Solar & Battery')).toBeInTheDocument();
     });
 
-    it('renders charging state when batteryPower is positive', () => {
+    it('renders charging state when batteryMode is ChargeAny', () => {
         const action: Action = {
             ...defaultAction,
             batteryMode: BatteryMode.ChargeAny,
             systemStatus: {
                 ...defaultAction.systemStatus!,
-                batteryPower: 2000
             }
         };
         render(<CurrentStatus action={action} />);
@@ -97,7 +97,7 @@ describe('CurrentStatus', () => {
         vi.useRealTimers();
     });
 
-    it('renders sooner of capacityAt or deficitAt when both are in the future', () => {
+    it('prefers deficitAt over capacityAt when both are in the future', () => {
         const mockNow = new Date('2026-06-15T12:00:00Z');
         vi.useFakeTimers();
         vi.setSystemTime(mockNow);
@@ -108,8 +108,24 @@ describe('CurrentStatus', () => {
             deficitAt: '2026-06-15T15:00:00Z',
         };
         render(<CurrentStatus action={action} />);
-        expect(screen.getByText('Capacity in 2 hours')).toBeInTheDocument();
+        expect(screen.getByText('Deficit in 3 hours')).toBeInTheDocument();
 
         vi.useRealTimers();
+    });
+
+    it('renders battery at reserve status correctly', () => {
+        const action: Action = {
+            ...defaultAction,
+            reason: ActionReason.BatteryAtReserve,
+            batteryMode: BatteryMode.Load,
+            systemStatus: {
+                ...defaultAction.systemStatus!,
+                batterySOC: 20.0
+            }
+        };
+        render(<CurrentStatus action={action} />);
+        expect(screen.getByText('Battery At Reserve')).toBeInTheDocument();
+        expect(screen.getByText('Holding Reserve')).toBeInTheDocument();
+        expect(screen.getByText('🔋')).toBeInTheDocument();
     });
 });

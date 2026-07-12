@@ -12,8 +12,8 @@ import {
     type SummaryType
 } from '../utils/dashboardUtils';
 
-export const whatsNewVersion = 5;
-export const whatsNewText = "Big improvements to home load and solar forecast. Updated settings page.";
+export const whatsNewVersion = 6;
+export const whatsNewText = "Improved home prediction including vacation, heatwave, and guests-in-town detection.";
 export const whatsNewLinkText = "";
 
 const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ siteID, settings = null }) => {

@@ -5,7 +5,7 @@ export const getBatteryModeLabel = (mode: number) => {
         case BatteryMode.Standby: return 'Hold Battery';
         case BatteryMode.ChargeAny: return 'Charge From Solar+Grid';
         case BatteryMode.ChargeSolar: return 'Charge From Solar';
-        case BatteryMode.Load: return 'Use Battery';
+        case BatteryMode.Load: return 'Solar first, then battery';
         case BatteryMode.NoChange: return 'No Change';
         default: return 'Unknown';
     }
@@ -144,7 +144,7 @@ export const getReasonText = (action: Action): string => {
         case ActionReason.DischargeBeforeCapacity: {
             const parts = [
                 `Solar generation is forecast to fully charge the battery${capacityTimeStr ? ` by ${capacityTimeStr}` : ''} before the next predicted deficit${deficitTimeStr ? ` at ${deficitTimeStr}` : ''}.`,
-                `Using the battery now to power the home, since it will refill anyway.`,
+                `Relying on solar and battery now to power the home, since the battery will refill anyway.`,
             ];
             return parts.concat(suffixParts).join(' ');
         }
@@ -153,7 +153,7 @@ export const getReasonText = (action: Action): string => {
             const delta = nowCost !== null && futureCost !== null ? futureCost - nowCost : null;
             const parts: string[] = [];
             if (deficitTimeStr) {
-                parts.push(`If discharged, the battery would deplete around ${deficitTimeStr}.`);
+                parts.push(`If we rely on the battery, it would deplete around ${deficitTimeStr}.`);
             }
             parts.push(`Since electricity prices now (${nowCostStr}) are cheap and are expected to remain cheap before the deficit, we can delay charging for now. We are keeping the battery in standby to preserve its remaining energy for the peak period${futureCostStr ? ` (${futureCostStr})` : ''}.`);
             if (delta !== null && delta >= 0.01) parts.push(`Estimated savings: ${formatPrice(delta)}.`);
@@ -180,19 +180,19 @@ export const getReasonText = (action: Action): string => {
         case ActionReason.PreventSolarCurtailment: {
             const parts = [
                 `Solar generation is forecast to exceed battery capacity${capacityTimeStr ? ` by ${capacityTimeStr}` : ''}.`,
-                `Discharging the battery now to create headroom, ensuring we can capture all solar production later without curtailment.`,
+                `Relying on solar and battery now to power the home to create headroom, ensuring we can capture all solar production later without curtailment.`,
             ];
             return parts.concat(suffixParts).join(' ');
         }
         case ActionReason.ArbitrageSave: {
             const parts = [
-                `Electricity prices are currently at their peak${nowCostStr ? ` (${nowCostStr})` : ''}. Discharging the battery to power the home, avoiding expensive grid imports.`
+                `Electricity prices are currently at their peak${nowCostStr ? ` (${nowCostStr})` : ''}. Relying on solar and battery to power the home, avoiding expensive grid imports.`
             ];
             return parts.concat(suffixParts).join(' ');
         }
         case ActionReason.SufficientBattery: {
             const parts = [
-                'The battery has enough stored energy to meet predicted demand. Discharging the battery to cover home load and minimize grid imports.'
+                'The battery has enough stored energy to meet predicted demand. Relying on solar and battery to cover home load and minimize grid imports.'
             ];
             return parts.concat(suffixParts).join(' ');
         }
@@ -215,9 +215,9 @@ export const getReasonText = (action: Action): string => {
             const refillWindowStr = nowCost !== null && futureCost !== null && Math.abs(nowCost - futureCost) < 0.01 ? 'that window' : 'the cheaper window';
             const parts: string[] = [];
             if (deficitTimeStr) {
-                parts.push(`If discharged, the battery would deplete around ${deficitTimeStr}${comparisonStr}.`);
+                parts.push(`If we rely on the battery, it would deplete around ${deficitTimeStr}${comparisonStr}.`);
             }
-            parts.push(`Discharging the battery now to power the home, and waiting to refill it during ${refillWindowStr}.`);
+            parts.push(`Relying on solar and battery now to power the home, and waiting to refill it during ${refillWindowStr}.`);
 
             if (delta !== null && delta >= 0.01) {
                 parts.push(`Estimated savings: ${formatPrice(delta)}.`);

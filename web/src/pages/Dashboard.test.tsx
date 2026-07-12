@@ -686,8 +686,8 @@ describe('Dashboard', () => {
         renderWithRouter(<Dashboard />);
 
         await waitFor(() => {
-            // Should show "Use Battery" and "No Export" pills
-            const useBatteryPills = screen.getAllByText('Use Battery');
+            // Should show "Solar first, then battery" and "No Export" pills
+            const useBatteryPills = screen.getAllByText('Solar first, then battery');
             expect(useBatteryPills.some(p => p.classList.contains('tag'))).toBe(true);
 
             const noExportPills = screen.getAllByText('Use & No Export');

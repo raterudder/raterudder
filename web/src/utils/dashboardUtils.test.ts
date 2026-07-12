@@ -71,7 +71,7 @@ describe('dashboardUtils', () => {
                 futurePrice: { dollarsPerKWH: 0.05, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
             };
             const text = getReasonText(action);
-            expect(text).toContain('If discharged, the battery would deplete');
+            expect(text).toContain('If we rely on the battery, it would deplete');
             expect(text).toContain('cheaper charging window is coming up');
             expect(text).toContain('$ 0.050');
             expect(text).toContain('$ 0.150');
@@ -177,7 +177,7 @@ describe('dashboardUtils', () => {
                 futurePrice: { dollarsPerKWH: 0.10, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
             };
             const text = getReasonText(action);
-            expect(text).toContain('If discharged, the battery would deplete around');
+            expect(text).toContain('If we rely on the battery, it would deplete around');
             expect(text).toContain('Since electricity prices now ($ 0.050/kWh) are cheap');
         });
 
@@ -191,7 +191,7 @@ describe('dashboardUtils', () => {
                 futurePrice: { dollarsPerKWH: 0.10, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
             };
             const text = getReasonText(action);
-            expect(text).toContain('If discharged, the battery would deplete around');
+            expect(text).toContain('If we rely on the battery, it would deplete around');
             expect(text).toContain('Since electricity prices now ($ 0.050/kWh) are cheap');
         });
 
@@ -206,7 +206,7 @@ describe('dashboardUtils', () => {
                 futurePrice: { dollarsPerKWH: 0.10, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
             };
             const text = getReasonText(action);
-            expect(text).not.toContain('If discharged, the battery would deplete');
+            expect(text).not.toContain('If we rely on the battery, it would deplete');
             expect(text).toContain('Since electricity prices now ($ 0.050/kWh) are cheap');
         });
 

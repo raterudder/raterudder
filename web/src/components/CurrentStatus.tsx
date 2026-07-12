@@ -1,6 +1,6 @@
 import React from 'react';
 import { Meter } from '@base-ui/react/meter';
-import { type Action, BatteryMode } from '../api';
+import { type Action, BatteryMode, ActionReason } from '../api';
 import { getBatteryModeLabel } from '../utils/dashboardUtils';
 
 interface CurrentStatusProps {
@@ -106,15 +106,21 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
         );
     }
 
+    const isBatteryAtReserve = action.reason === ActionReason.BatteryAtReserve;
+
     const effectiveBatteryMode = action.targetBatteryMode
         ? action.targetBatteryMode
         : action.batteryMode;
     const mode = effectiveBatteryMode;
-    const kw = action.systemStatus?.batteryKW || 0;
 
     let state: 'charging' | 'discharging' | 'standby' = 'standby';
-    if (mode === BatteryMode.Load || kw > 0.1) state = 'discharging';
-    else if (mode === BatteryMode.ChargeAny || mode === BatteryMode.ChargeSolar || kw < -0.1) state = 'charging';
+    if (isBatteryAtReserve) {
+        state = 'standby';
+    } else if (mode === BatteryMode.Load) {
+        state = 'discharging';
+    } else if (mode === BatteryMode.ChargeAny || mode === BatteryMode.ChargeSolar) {
+        state = 'charging';
+    }
 
     const capacityAt = action.capacityAt ? new Date(action.capacityAt) : null;
     const deficitAt = action.deficitAt ? new Date(action.deficitAt) : null;
@@ -143,29 +149,41 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
     const capValid = capacityMs !== null && capacityMs > 0;
     const defValid = deficitMs !== null && deficitMs > 0;
 
-    if (capValid && defValid) {
-        if (capacityMs < deficitMs) {
-            timeRemainingText = `Capacity in ${formatDuration(capacityMs)}`;
-        } else {
-            timeRemainingText = `Deficit in ${formatDuration(deficitMs)}`;
-        }
+    if (defValid) {
+        timeRemainingText = `Deficit in ${formatDuration(deficitMs)}`;
     } else if (capValid) {
         timeRemainingText = `Capacity in ${formatDuration(capacityMs)}`;
-    } else if (defValid) {
-        timeRemainingText = `Deficit in ${formatDuration(deficitMs)}`;
     }
+
+    const statusLabel = isBatteryAtReserve
+        ? 'Battery At Reserve'
+        : state === 'discharging'
+        ? 'Self-Powered'
+        : `System ${state.charAt(0).toUpperCase() + state.slice(1)}`;
+
+    const statusValue = isBatteryAtReserve
+        ? 'Holding Reserve'
+        : state === 'discharging'
+        ? 'Rely on Solar & Battery'
+        : getBatteryModeLabel(mode);
 
     return (
         <div className={`current-status-card ${state}`}>
             <div className="status-main">
                 <div className="status-icon">
-                    {state === 'charging' && <span className="icon" aria-hidden="true">⚡</span>}
-                    {state === 'discharging' && <span className="icon" aria-hidden="true">🏠</span>}
-                    {state === 'standby' && <span className="icon" aria-hidden="true">⏲️</span>}
+                    {isBatteryAtReserve ? (
+                        <span className="icon" aria-hidden="true">🔋</span>
+                    ) : (
+                        <>
+                            {state === 'charging' && <span className="icon" aria-hidden="true">⚡</span>}
+                            {state === 'discharging' && <span className="icon" aria-hidden="true">🏠</span>}
+                            {state === 'standby' && <span className="icon" aria-hidden="true">⏲️</span>}
+                        </>
+                    )}
                 </div>
                 <div className="status-info">
-                    <span className="status-label">System {state.charAt(0).toUpperCase() + state.slice(1)}</span>
-                    <span className="status-value">{getBatteryModeLabel(mode)}</span>
+                    <span className="status-label">{statusLabel}</span>
+                    <span className="status-value">{statusValue}</span>
                     {timeRemainingText && (
                         <span className="status-subvalue">{timeRemainingText}</span>
                     )}
