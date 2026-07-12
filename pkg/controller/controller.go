@@ -106,6 +106,7 @@ func (c *Controller) Decide(
 	history []types.EnergyStats,
 	weather []types.Weather,
 	settings types.Settings,
+	lastAction *types.Action,
 ) (Decision, error) {
 	log.Ctx(ctx).DebugContext(ctx, "controller decide started",
 		slog.Float64("soc", currentStatus.BatterySOC),
@@ -224,9 +225,9 @@ func (c *Controller) Decide(
 		}
 	}
 
-	evalDeficit := c.evaluateDeficit(ctx, now, currentStatus, currentPrice, settings, simData, summary)
-	evalExport := c.evaluateExportArbitrage(ctx, now, currentStatus, currentPrice, settings, simData, summary)
-	evalVPPEvent := c.evaluateVPPEvent(ctx, now, currentStatus, currentPrice, settings, simData, summary)
+	evalDeficit := c.evaluateDeficit(ctx, now, currentStatus, currentPrice, settings, simData, summary, lastAction)
+	evalExport := c.evaluateExportArbitrage(ctx, now, currentStatus, currentPrice, settings, simData, summary, lastAction)
+	evalVPPEvent := c.evaluateVPPEvent(ctx, now, currentStatus, currentPrice, settings, simData, summary, lastAction)
 
 	var bestImmediate *StrategyEvaluation
 	evals := []*StrategyEvaluation{evalDeficit, evalExport, evalVPPEvent}
@@ -343,7 +344,7 @@ func (c *Controller) Decide(
 	}
 
 	if activePlan != nil {
-		planDecision := c.evaluatePlannedCharge(ctx, now, currentStatus, currentPrice, settings, simData, summary, *activePlan)
+		planDecision := c.evaluatePlannedCharge(ctx, now, currentStatus, currentPrice, settings, simData, summary, *activePlan, lastAction)
 		log.Ctx(ctx).DebugContext(ctx, "executing active planned charge",
 			slog.Time("planTime", activePlan.Time),
 			slog.Float64("planCost", activePlan.Cost),
@@ -358,7 +359,7 @@ func (c *Controller) Decide(
 		return dec, nil
 	}
 
-	fallbackDecision := c.evaluateFallback(ctx, now, currentStatus, currentPrice, settings, simData, summary)
+	fallbackDecision := c.evaluateFallback(ctx, now, currentStatus, currentPrice, settings, simData, summary, lastAction)
 	log.Ctx(ctx).DebugContext(ctx, "falling back to economical decision",
 		slog.String("mode", drModeString(fallbackDecision.BatteryMode)),
 		slog.String("reason", string(fallbackDecision.Reason)),
@@ -523,6 +524,7 @@ func (c *Controller) evaluateDeficit(
 	settings types.Settings,
 	simData []SimHour,
 	summary simulationSummary,
+	lastAction *types.Action,
 ) *StrategyEvaluation {
 	bufferedHitCapacityAt := summary.BufferedHitCapacityAt
 	bufferedHitFutureCapacityAt := summary.BufferedHitFutureCapacityAt
@@ -532,11 +534,7 @@ func (c *Controller) evaluateDeficit(
 	}
 	capacityKWH := currentStatus.BatteryCapacityKWH
 	gridChargeNowCost := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
-	// isAlreadyChargingGrid indicates if the system is currently actively drawing power from the grid
-	// to charge the battery. To prevent phantom draw from trickling us into thinking we're charging,
-	// and to ensure solar-only charging doesn't confuse us, we require the battery charging rate
-	// to be more than 1 kW (BatteryKW < -1.0) and grid import to be positive (GridKW > 0).
-	isAlreadyChargingGrid := currentStatus.BatteryKW < -1.0 && currentStatus.GridKW > 0
+	isAlreadyChargingGrid := lastAction != nil && lastAction.BatteryMode == types.BatteryModeChargeAny
 
 	// Charge Hysteresis & Anti-Oscillation:
 	// We calculate the minimum required physical battery capacity headroom (in kWh) before initiating a charge.
@@ -836,6 +834,18 @@ func (c *Controller) evaluateDeficit(
 				// Hysteresis: If we are already charging from grid and right now is tied for the cheapest window,
 				// we keep charging. This prevents starting and stopping charging when multiple hours are equally cheap.
 				isAlreadyChargingSamePrice := canChargeNow && isAlreadyChargingGrid && isCheapestWindowNow && isSignificantlyCheaperThanDeficitNow
+				if isAlreadyChargingSamePrice && lastAction != nil && lastAction.CurrentPrice != nil {
+					lastCost := lastAction.CurrentPrice.DollarsPerKWH + lastAction.CurrentPrice.GridUseDollarsPerKWH
+					if gridChargeNowCost > lastCost+priceEpsilonForEquality {
+						log.Ctx(ctx).DebugContext(
+							ctx,
+							"ignoring charge hysteresis override in deficit evaluation due to price change since last action",
+							slog.Float64("currentPrice", gridChargeNowCost),
+							slog.Float64("lastActionCost", lastCost),
+						)
+						isAlreadyChargingSamePrice = false
+					}
+				}
 				isCheapNow := isSignificantlyCheaperNow || (isCheapestWindowNow && isSignificantlyCheaperThanDeficitNow)
 				// If the current hour is cheap/valid compared to the future candidates, we evaluate
 				// whether we should start grid charging now or delay it.
@@ -1150,6 +1160,7 @@ func (c *Controller) evaluateExportArbitrage(
 	settings types.Settings,
 	simData []SimHour,
 	summary simulationSummary,
+	lastAction *types.Action,
 ) *StrategyEvaluation {
 	if !settings.GridExportSolar || summary.SoonestExportValue <= 0 {
 		return nil
@@ -1249,10 +1260,7 @@ func (c *Controller) evaluateExportArbitrage(
 	}
 
 	// isAlreadyChargingGrid indicates if the system is currently actively drawing power from the grid
-	// to charge the battery. To prevent phantom draw from tricking us into thinking we're charging,
-	// and to ensure solar-only charging doesn't confuse us, we require the battery charging rate
-	// to be more than 1 kW (BatteryKW < -1.0) and grid import to be positive (GridKW > 0).
-	isAlreadyChargingGrid := currentStatus.BatteryKW < -1.0 && currentStatus.GridKW > 0
+	isAlreadyChargingGrid := lastAction != nil && lastAction.BatteryMode == types.BatteryModeChargeAny
 
 	headroom := capacityKWH - currentEnergyKWH
 	neededDurationHours := headroom / chargeKW
@@ -1813,8 +1821,9 @@ func (c *Controller) evaluatePlannedCharge(
 	simData []SimHour,
 	summary simulationSummary,
 	plan PlannedCharge,
+	lastAction *types.Action,
 ) *DecisionResult {
-	isAlreadyChargingGrid := currentStatus.BatteryKW < -1.0 && currentStatus.GridKW > 0
+	isAlreadyChargingGrid := lastAction != nil && lastAction.BatteryMode == types.BatteryModeChargeAny
 
 	// We almost ALWAYS use HitDeficitAt. However, if we are already charging from the grid, we use
 	// HitAboveDeficitAt as a hysteresis buffer so we do not stop charging prematurely when
@@ -2003,6 +2012,7 @@ func (c *Controller) evaluateFallback(
 	settings types.Settings,
 	simData []SimHour,
 	summary simulationSummary,
+	lastAction *types.Action,
 ) *DecisionResult {
 	bufferedHitCapacityAt := summary.BufferedHitCapacityAt
 	gridChargeNowCost := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
@@ -2049,7 +2059,11 @@ func (c *Controller) evaluateFallback(
 			scanUntil = summary.HitFutureCapacityAt
 		}
 		minDiff := max(priceEpsilonForEquality, settings.MinDeficitPriceDifferenceDollarsPerKWH)
-		mustStandbyForPeak, peakTime, peakCost, peakPrice := c.checkPeakSurvival(simData, scanUntil, gridChargeNowCost, peakSurvivalDeficitAt, bufferMinutes, minDiff)
+		scanBufferMinutes := bufferMinutes
+		if lastAction != nil && lastAction.BatteryMode == types.BatteryModeLoad && !currentStatus.ElevatedMinBatterySOC {
+			scanBufferMinutes = bufferMinutes / 2
+		}
+		mustStandbyForPeak, peakTime, peakCost, peakPrice := c.checkPeakSurvival(simData, scanUntil, gridChargeNowCost, peakSurvivalDeficitAt, scanBufferMinutes, minDiff)
 
 		if mustStandbyForPeak {
 			standbyReason := fmt.Sprintf(
@@ -2070,7 +2084,7 @@ func (c *Controller) evaluateFallback(
 				slog.Time("peakTime", peakTime),
 				slog.Time("hitDeficitAt", peakSurvivalDeficitAt),
 				slog.Float64("gridChargeNowCost", gridChargeNowCost),
-				slog.Int("bufferMinutes", bufferMinutes),
+				slog.Int("bufferMinutes", scanBufferMinutes),
 			)
 			return &DecisionResult{
 				BatteryMode: types.BatteryModeStandby,
@@ -2122,6 +2136,9 @@ func (c *Controller) evaluateFallback(
 			} else if !summary.HitVPPCapacityAt.IsZero() && !summary.HitVPPCapacityAt.After(summary.HitCapacityAt) {
 				reason = types.ActionReasonSufficientBattery
 				loadReason = fmt.Sprintf("Battery will hit capacity at %s from VPP prep before deficit at %s.", summary.HitVPPCapacityAt.Format(time.Kitchen), refillDeficitAt.Format(time.Kitchen))
+			} else {
+				reason = types.ActionReasonDischargeBeforeCapacityNow
+				loadReason = fmt.Sprintf("Battery will hit capacity at %s before deficit at %s.", summary.HitCapacityAt.Format(time.Kitchen), refillDeficitAt.Format(time.Kitchen))
 			}
 
 			if reason != "" {
@@ -2568,6 +2585,7 @@ func (c *Controller) evaluateVPPEvent(
 	settings types.Settings,
 	simData []SimHour,
 	summary simulationSummary,
+	lastAction *types.Action,
 ) *StrategyEvaluation {
 	if summary.SoonestVPPChargingAt.IsZero() {
 		return nil
@@ -2622,7 +2640,7 @@ func (c *Controller) evaluateVPPEvent(
 
 	neededDurationHours := neededEnergy / chargeKW
 
-	isAlreadyChargingGrid := currentStatus.BatteryKW < -1.0 && currentStatus.GridKW > 0
+	isAlreadyChargingGrid := lastAction != nil && lastAction.BatteryMode == types.BatteryModeChargeAny
 	gridChargeNowCost := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
 
 	var simPrevChargeCosts []simPriceSlot
@@ -2717,6 +2735,18 @@ func (c *Controller) evaluateVPPEvent(
 	isCheapNow := isSignificantlyCheaperNow || (isCheapestWindowNow && isSignificantlyCheaperThanForcedNow)
 
 	isAlreadyChargingSamePrice := isAlreadyChargingGrid && isCheapestWindowNow && isSignificantlyCheaperThanForcedNow
+	if isAlreadyChargingSamePrice && lastAction != nil && lastAction.CurrentPrice != nil {
+		lastCost := lastAction.CurrentPrice.DollarsPerKWH + lastAction.CurrentPrice.GridUseDollarsPerKWH
+		if gridChargeNowCost > lastCost+priceEpsilonForEquality {
+			log.Ctx(ctx).DebugContext(
+				ctx,
+				"ignoring charge hysteresis override in forced evaluation due to price change since last action",
+				slog.Float64("currentPrice", gridChargeNowCost),
+				slog.Float64("lastActionCost", lastCost),
+			)
+			isAlreadyChargingSamePrice = false
+		}
+	}
 
 	minStartChargeDurationHours := float64(settings.MinStartChargeMinutes) / 60.0
 	startChargeHeadroom := chargeKW * minStartChargeDurationHours

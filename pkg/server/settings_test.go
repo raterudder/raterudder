@@ -24,6 +24,7 @@ func TestHandleGetSettings(t *testing.T) {
 	mockU := &mockUtility{}
 	mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
 	mockS := &mockStorage{}
+	mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 	// Default setup for most tests
 	mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil)
 	mockS.On("UpdateSite", mock.Anything, mock.Anything, mock.Anything).Return(nil)
@@ -183,6 +184,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 	t.Run("getESSSystem Backoff Logic", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		essMap := ess.NewMap()
 		mockES := &mockESS{}
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
@@ -274,6 +276,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 	t.Run("getESSSystem Authentication Failure", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		essMap := ess.NewMap()
 		mockES := &mockESS{}
 
@@ -324,6 +327,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 	t.Run("getESSSystem Authentication Failure - Max Failures Reached", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		essMap := ess.NewMap()
 		mockES := &mockESS{}
 
@@ -361,6 +365,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 	t.Run("getESSSystem Backoff Logic - Tiered Backoffs", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		essMap := ess.NewMap()
 
 		testTime := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
@@ -505,6 +510,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 	t.Run("Update Settings - Success", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		// Default setup for most tests
 		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
 			DryRun:        false,
@@ -560,6 +566,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 	t.Run("Update Settings - Backfills History on New Credentials", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		// Default setup for most tests
 		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
 			DryRun:        false,
@@ -646,6 +653,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 	t.Run("Update Settings - Fails with Missing Credentials", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		// Default setup for most tests
 		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
 			DryRun:        false,
@@ -700,6 +708,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 	t.Run("Update Settings - Does Not Backfill History on Unchanged Credentials", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockES := &mockESS{}
 		essMap := ess.NewMap()
 		essMap.SetSystem(types.SiteIDNone, mockES)
@@ -757,6 +766,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 	t.Run("Update Settings - Rate Options Validation Failure", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockU := &mockUtility{}
 		uMap := utility.NewMap(mockS)
 		uMap.SetProvider(types.SiteIDNone, mockU)
@@ -796,6 +806,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 	t.Run("Update Site Location With Postal Code", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{}, types.CurrentSettingsVersion, nil)
 		mockW := &mockWeather{}
 
@@ -856,6 +867,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 	t.Run("Update Solar Direction - Preservation", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 
 		existingLoc := types.SiteLocation{
 			PostalCode:   "90210",
@@ -908,6 +920,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 	t.Run("Update Solar Direction - With Zip Change", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockW := &mockWeather{}
 
 		srv := &Server{
@@ -989,6 +1002,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 	t.Run("ESS Rate Limit First Retry Allowed (200)", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockES := &mockESS{}
 
 		essMap := ess.NewMap()
@@ -1058,6 +1072,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 	t.Run("Rate Limit Active (429) after 2 Failures", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockES := &mockESS{}
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		essMap := ess.NewMap()
@@ -1126,6 +1141,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 	t.Run("Rate Limit Active (429) after 2 Failures Even With Different Credentials", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockES := &mockESS{}
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		essMap := ess.NewMap()
@@ -1194,6 +1210,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 	t.Run("Rate Limit Expired (200) after 5 Minutes", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockES := &mockESS{}
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, true, nil)
@@ -1268,6 +1285,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		uMap := utility.NewMap(nil)
 		uMap.SetProvider(types.SiteIDNone, mockU)
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 
 		srv := &Server{
 			utilities: uMap,
@@ -1317,6 +1335,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 	t.Run("Update Settings - Transition to Configured Utility Clears Interest", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockU := &mockUtility{}
 		uMap := utility.NewMap(mockS)
 		uMap.SetProvider(types.SiteIDNone, mockU)
@@ -1368,6 +1387,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 	t.Run("Update Settings - Transition to Configured Utility Sets UpdateGroup when ESS is already configured", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockU := &mockUtility{}
 		uMap := utility.NewMap(mockS)
 		uMap.SetProvider(types.SiteIDNone, mockU)
@@ -1431,6 +1451,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 	t.Run("Update Settings - Already Configured Utility Does Not Clear Interest", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockU := &mockUtility{}
 		uMap := utility.NewMap(mockS)
 		uMap.SetProvider(types.SiteIDNone, mockU)
@@ -1481,6 +1502,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 	t.Run("Update Settings - Triggers History Summary Update Once when Weather and Price are Updated Concurrently", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockW := &mockWeather{}
 		mockU := &mockUtility{}
 
@@ -1574,6 +1596,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 	t.Run("Update Settings - NetMetering Scheme Unsets Credits", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		srv := &Server{
 			storage:       mockS,
 			encryptionKey: "test-secret-key-1234567890123456",
@@ -1623,6 +1646,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 func TestGetSettingsWithMigration(t *testing.T) {
 	t.Run("Returns Settings And Decrypts Credentials", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		srv := &Server{
 			storage:       mockS,
 			encryptionKey: "test-secret-key-1234567890123456",
@@ -1653,6 +1677,7 @@ func TestGetSettingsWithMigration(t *testing.T) {
 
 	t.Run("Migrates Settings Below Current Version And Saves", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		srv := &Server{
 			storage: mockS,
 		}
@@ -1690,6 +1715,7 @@ func TestGetSettingsWithMigration(t *testing.T) {
 
 	t.Run("Returns Migrated Settings Even If Save Fails", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		srv := &Server{
 			storage: mockS,
 		}
@@ -1725,6 +1751,7 @@ func TestGetSettingsWithMigration(t *testing.T) {
 
 	t.Run("Fails to Decrypt Invalid Credentials", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		srv := &Server{
 			storage:       mockS,
 			encryptionKey: "test-secret-key-1234567890123456",
@@ -1786,6 +1813,7 @@ func TestHandleESSStage(t *testing.T) {
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		return &Server{
 			ess:           essMap,
 			storage:       mockS,

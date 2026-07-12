@@ -301,7 +301,7 @@ func TestDecideHistory(t *testing.T) {
 				simStatus.MaxBatteryDischargeKW = maxDischargeKW
 
 				// Call Decide
-				decision, err := c.Decide(ctx, simStatus, currentPrice, futurePrices, mockHistory, mockWeather, settings)
+				decision, err := c.Decide(ctx, simStatus, currentPrice, futurePrices, mockHistory, mockWeather, settings, nil)
 				require.NoError(t, err)
 
 				// === DEBUGGING STRATEGY FOR HISTORY TESTS ===

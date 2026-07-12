@@ -456,9 +456,15 @@ func (s *Server) performSiteUpdate(
 		return nil, "", fmt.Errorf("insufficient future pricing data")
 	}
 
+	latestAction, err := s.storage.GetLatestAction(ctx, siteID)
+	if err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to get latest action from storage, using nil", slog.Any("error", err))
+		latestAction = nil
+	}
+
 	// decide Action
 	flatEnergyHistory := flattenDailyEnergyStats(energyHistory)
-	decision, err := s.controller.Decide(ctx, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings)
+	decision, err := s.controller.Decide(ctx, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings, latestAction)
 	if err != nil {
 		return nil, "", fmt.Errorf("controller decision failed: %w", err)
 	}

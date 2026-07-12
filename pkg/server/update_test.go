@@ -31,6 +31,7 @@ func TestHandleUpdate(t *testing.T) {
 	mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
 	mockS := &mockStorage{}
+	mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 	mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 		{
 			Energy: []types.DailyEnergyStats{
@@ -90,6 +91,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
 				Energy: []types.DailyEnergyStats{
@@ -255,6 +257,7 @@ func TestHandleUpdate(t *testing.T) {
 
 	t.Run("Paused Updates", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
 				Energy: []types.DailyEnergyStats{
@@ -331,6 +334,7 @@ func TestHandleUpdate(t *testing.T) {
 
 	t.Run("Action - Emergency Mode", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
 				Energy: []types.DailyEnergyStats{
@@ -391,6 +395,7 @@ func TestHandleUpdate(t *testing.T) {
 
 	t.Run("Action - Alarms Present", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
 				Energy: []types.DailyEnergyStats{
@@ -453,6 +458,7 @@ func TestHandleUpdate(t *testing.T) {
 
 	t.Run("Action - Grid Unavailable", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
 				Energy: []types.DailyEnergyStats{
@@ -513,6 +519,7 @@ func TestHandleUpdate(t *testing.T) {
 
 	t.Run("Action - VPP Event Active", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
 				Energy: []types.DailyEnergyStats{
@@ -577,6 +584,7 @@ func TestHandleUpdate(t *testing.T) {
 	t.Run("Handle Update - Backfill Logic", func(t *testing.T) {
 		t.Run("Version Mismatch - Backfill Triggered", func(t *testing.T) {
 			mockS := &mockStorage{}
+			mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 			mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 				{
 					Energy: []types.DailyEnergyStats{
@@ -656,6 +664,7 @@ func TestHandleUpdate(t *testing.T) {
 
 		t.Run("Version Match - No Backfill", func(t *testing.T) {
 			mockS := &mockStorage{}
+			mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 			mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 				{
 					Energy: []types.DailyEnergyStats{
@@ -728,6 +737,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
 				Energy: []types.DailyEnergyStats{
@@ -811,6 +821,7 @@ func TestHandleUpdateSites(t *testing.T) {
 	mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
 	mockS := &mockStorage{}
+	mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 	mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 		{
 			Energy: []types.DailyEnergyStats{
@@ -897,6 +908,7 @@ func TestHandleUpdateSites(t *testing.T) {
 
 	t.Run("No ESS Configured", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
 				Energy: []types.DailyEnergyStats{
@@ -939,6 +951,7 @@ func TestHandleUpdateSites(t *testing.T) {
 		token := generateTestToken(t, oidcSrv.URL, priv, updateEmail, "updater")
 
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
 				Energy: []types.DailyEnergyStats{
@@ -1032,6 +1045,7 @@ func TestHandleUpdateSites(t *testing.T) {
 
 	t.Run("ESS Rate Limited", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
 				Energy: []types.DailyEnergyStats{
@@ -1070,6 +1084,7 @@ func TestHandleUpdateSites(t *testing.T) {
 
 	t.Run("ESS Write Rate Limited", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
 				Energy: []types.DailyEnergyStats{
@@ -1132,6 +1147,7 @@ func TestHandleUpdateSites(t *testing.T) {
 
 	t.Run("Cron Partitioning", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil).Maybe()
 
 		var capturedGroups []int
@@ -1242,6 +1258,7 @@ func TestUpdateSitePrices(t *testing.T) {
 		}, nil).Once()
 
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site1").Return(time.Time{}, 0, nil)
 		mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -1279,6 +1296,7 @@ func TestUpdateSitePrices(t *testing.T) {
 		}).Return([]types.Price{}, nil).Once()
 
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site1").Return(lastTime, types.CurrentPriceHistoryVersion, nil)
 
 		mockUMap := utility.NewMap(mockS)
@@ -1308,6 +1326,7 @@ func TestUpdateSitePrices(t *testing.T) {
 		}), mock.Anything).Return([]types.Price{}, nil)
 
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site1").Return(lastTime, types.CurrentPriceHistoryVersion, nil)
 
 		mockUMap := utility.NewMap(mockS)
@@ -1341,6 +1360,7 @@ func TestUpdateSitePrices(t *testing.T) {
 		}).Return([]types.Price{}, nil).Once()
 
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site1").Return(lastTime, oldVersion, nil)
 
 		mockUMap := utility.NewMap(mockS)
@@ -1378,6 +1398,7 @@ func TestUpdateSitePrices(t *testing.T) {
 		}).Return([]types.Price{}, nil).Once()
 
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site1").Return(lastTime, types.CurrentPriceHistoryVersion, nil)
 
 		mockUMap := utility.NewMap(mockS)
@@ -1400,6 +1421,7 @@ func TestUpdateSitePrices(t *testing.T) {
 func TestUpdateEnergyHistory(t *testing.T) {
 	t.Run("Backfill - No History", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, "site1").Return(time.Time{}, 0, nil)
 		mockS.On("UpsertEnergyHistories", mock.Anything, "site1", mock.Anything, mock.Anything).Return(nil)
 
@@ -1431,6 +1453,7 @@ func TestUpdateEnergyHistory(t *testing.T) {
 
 	t.Run("Incremental Update - Recent History", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		lastTime := time.Now().Add(-2 * time.Hour).Truncate(time.Hour)
 		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, "site1").Return(lastTime, types.CurrentEnergyStatsVersion, nil)
 		mockS.On("UpsertEnergyHistories", mock.Anything, "site1", mock.Anything, mock.Anything).Return(nil)
@@ -1459,6 +1482,7 @@ func TestUpdateEnergyHistory(t *testing.T) {
 
 	t.Run("Version Mismatch - Partial Backfill", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
 				Energy: []types.DailyEnergyStats{
@@ -1499,6 +1523,7 @@ func TestUpdateEnergyHistory(t *testing.T) {
 
 	t.Run("Future Time - No Update", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
 				Energy: []types.DailyEnergyStats{
@@ -1527,6 +1552,7 @@ func TestUpdateEnergyHistory(t *testing.T) {
 
 	t.Run("Future Price Fallback", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
 				Energy: []types.DailyEnergyStats{
@@ -1599,6 +1625,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 
 	t.Run("Update Missing History", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockW := &mockWeather{}
 
 		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(time.Time{}, time.Time{}, 0, nil)
@@ -1632,6 +1659,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 
 	t.Run("Backfill on Version Mismatch", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockW := &mockWeather{}
 
 		// Old version history exists
@@ -1669,6 +1697,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 
 	t.Run("No Update If Already Recent", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockW := &mockWeather{}
 
 		now := testTime.In(loc)
@@ -1690,6 +1719,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 
 	t.Run("Resume From Last Weather Time", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockW := &mockWeather{}
 
 		// Recent history exists — should always re-fetch from today midnight
@@ -1725,6 +1755,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 
 	t.Run("Should Not Fetch Anything When Up To Date", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockW := &mockWeather{}
 
 		// lastWeatherTime is exactly tomorrow midnight (fully up to date for today)
@@ -1747,6 +1778,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 
 	t.Run("Scheduled UTC Slots Refresh - normal hour (Today & Tomorrow)", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockW := &mockWeather{}
 
 		// 8:30am UTC is hour 8 slot.
@@ -1780,6 +1812,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 
 	t.Run("Scheduled UTC Slots Refresh - 10:00pm UTC (Next Day Only)", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockW := &mockWeather{}
 
 		utcLoc := time.UTC
@@ -1817,6 +1850,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 
 	t.Run("Scheduled UTC Slots Refresh - 11:00pm CST (6/4) updates 6/5 only", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockW := &mockWeather{}
 
 		cstLoc, err := time.LoadLocation("America/Chicago")
@@ -1860,6 +1894,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 func TestSetESSModes(t *testing.T) {
 	t.Run("Success clears ConsecutiveSetFailures", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockES := &mockESS{}
 
 		// Expect SetModes to succeed
@@ -1892,6 +1927,7 @@ func TestSetESSModes(t *testing.T) {
 
 	t.Run("Unauthorized error increments ConsecutiveSetFailures", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockES := &mockESS{}
 
 		// Expect SetModes to return unauthorized
@@ -1924,6 +1960,7 @@ func TestSetESSModes(t *testing.T) {
 
 	t.Run("Other error does not increment ConsecutiveSetFailures", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockES := &mockESS{}
 
 		// Expect SetModes to return some other error
