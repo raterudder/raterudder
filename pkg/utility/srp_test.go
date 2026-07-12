@@ -158,6 +158,36 @@ func TestSRPRates(t *testing.T) {
 		require.NoError(t, err)
 		assert.InDelta(t, 0.0623, t2027SOP.DollarsPerKWH, 1e-6)
 	})
+
+	t.Run("E-27 Customer Gen Plan 2026 Discounted vs 2027 Normal", func(t *testing.T) {
+		u := &genericTOU{}
+		err := u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "srp",
+			UtilityRate:     "srp_e27",
+			UtilityRateOptions: types.UtilityRateOptions{
+				NetMeteringScheme: "net",
+			},
+		})
+		require.NoError(t, err)
+
+		// 1. Summer On-Peak 2026 (July 15, 2026 3:00 PM MST) - Should have 2026 discount of $0.0038
+		// Base: $0.0823 -> Discounted: $0.0785
+		t2026Peak, err := u.priceForTime(time.Date(2026, time.July, 15, 15, 0, 0, 0, phoenix))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.0785, t2026Peak.DollarsPerKWH, 1e-6)
+
+		// 2. Summer On-Peak 2027 (July 15, 2027 3:00 PM MST) - No discount
+		// Base: $0.0823
+		t2027Peak, err := u.priceForTime(time.Date(2027, time.July, 15, 15, 0, 0, 0, phoenix))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.0823, t2027Peak.DollarsPerKWH, 1e-6)
+
+		// 3. Winter On-Peak 2026 (December 15, 2026 6:00 AM MST) - Winter is not discounted
+		// Base: $0.0673
+		t2026WinterPeak, err := u.priceForTime(time.Date(2026, time.December, 15, 6, 0, 0, 0, phoenix))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.0673, t2026WinterPeak.DollarsPerKWH, 1e-6)
+	})
 }
 
 func TestSRPExportCredits(t *testing.T) {
@@ -229,5 +259,38 @@ func TestSRPExportCredits(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, pNet.SeparateGenerationCredit)
 		assert.InDelta(t, 0.0, pNet.GenerationCreditDollarsPerKWH, 1e-6)
+	})
+
+	t.Run("E-27 Net Metering Export Credits", func(t *testing.T) {
+		uNet := &genericTOU{}
+		err := uNet.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "srp",
+			UtilityRate:     "srp_e27",
+			UtilityRateOptions: types.UtilityRateOptions{
+				NetMeteringScheme: "net",
+			},
+		})
+		require.NoError(t, err)
+
+		pNet, err := uNet.priceForTime(time.Date(2027, time.July, 15, 15, 0, 0, 0, phoenix))
+		require.NoError(t, err)
+		assert.False(t, pNet.SeparateGenerationCredit)
+		assert.InDelta(t, 0.0, pNet.GenerationCreditDollarsPerKWH, 1e-6)
+
+		// Even if options request net_billing, E-27 should override to net metering
+		uNetBilling := &genericTOU{}
+		err = uNetBilling.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "srp",
+			UtilityRate:     "srp_e27",
+			UtilityRateOptions: types.UtilityRateOptions{
+				NetMeteringScheme: "net_billing",
+			},
+		})
+		require.NoError(t, err)
+
+		pNetBilling, err := uNetBilling.priceForTime(time.Date(2027, time.July, 15, 15, 0, 0, 0, phoenix))
+		require.NoError(t, err)
+		assert.False(t, pNetBilling.SeparateGenerationCredit)
+		assert.InDelta(t, 0.0, pNetBilling.GenerationCreditDollarsPerKWH, 1e-6)
 	})
 }

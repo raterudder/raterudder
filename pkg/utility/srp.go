@@ -45,6 +45,9 @@ func adjustSRPPrice(price float64, month time.Month, year int) float64 {
 func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
 	isNetBilling := options.NetMeteringScheme != "net"
+	if plan == "srp_e27" {
+		isNetBilling = false
+	}
 
 	var genCredit float64
 	if isNetBilling {
@@ -875,6 +878,177 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					OtherDescription:                   "SRP Winter Conserve Off-Peak",
 				},
 			})...)
+		case "srp_e27":
+			// E-27 Customer Generation Price Plan
+			// Summer (May, June, September, October):
+			//   On-Peak: 2 p.m. to 8 p.m. weekdays, except holidays
+			//   On-Peak rate: $0.0662, Off-Peak rate: $0.0560
+			// Summer Peak (July, August):
+			//   On-Peak: 2 p.m. to 8 p.m. weekdays, except holidays
+			//   On-Peak rate: $0.0823, Off-Peak rate: $0.0613
+			// Winter (November through April):
+			//   On-Peak: 5 a.m. to 9 a.m. and 5 p.m. to 9 p.m. weekdays, except holidays
+			//   On-Peak rate: $0.0673, Off-Peak rate: $0.0634
+
+			// 1. Summer Holiday period (Off-Peak all day)
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
+				{
+					Year:                     year,
+					MonthStart:               time.May,
+					MonthEnd:                 time.June,
+					SpecificDates:            holidays,
+					SeparateGenerationCredit: isNetBilling,
+					HoursAndDays: []touSimplifiedHoursAndDays{
+						{
+							DollarsPerKWH:                 adjustSRPPrice(0.0560, time.May, year),
+							GenerationCreditDollarsPerKWH: genCredit,
+							Description:                   "SRP Summer Customer Gen Holiday Off-Peak",
+						},
+					},
+				},
+				{
+					Year:                     year,
+					MonthStart:               time.September,
+					MonthEnd:                 time.October,
+					SpecificDates:            holidays,
+					SeparateGenerationCredit: isNetBilling,
+					HoursAndDays: []touSimplifiedHoursAndDays{
+						{
+							DollarsPerKWH:                 adjustSRPPrice(0.0560, time.September, year),
+							GenerationCreditDollarsPerKWH: genCredit,
+							Description:                   "SRP Summer Customer Gen Holiday Off-Peak",
+						},
+					},
+				},
+			})...)
+
+			// 2. Summer Regular Period
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
+				{
+					Year:                     year,
+					MonthStart:               time.May,
+					MonthEnd:                 time.June,
+					SpecificDates:            holidays,
+					SpecificDatesNot:         true,
+					SeparateGenerationCredit: isNetBilling,
+					HoursAndDays: []touSimplifiedHoursAndDays{
+						{
+							Hours:                         []types.UtilityHourPeriod{{HourStart: 14, HourEnd: 20}},
+							Weekday:                       true,
+							DollarsPerKWH:                 adjustSRPPrice(0.0662, time.May, year),
+							GenerationCreditDollarsPerKWH: genCredit,
+							Description:                   "SRP Summer Customer Gen On-Peak",
+						},
+					},
+					OtherDollarsPerKWH:                 adjustSRPPrice(0.0560, time.May, year),
+					OtherGenerationCreditDollarsPerKWH: genCredit,
+					OtherDescription:                   "SRP Summer Customer Gen Off-Peak",
+				},
+				{
+					Year:                     year,
+					MonthStart:               time.September,
+					MonthEnd:                 time.October,
+					SpecificDates:            holidays,
+					SpecificDatesNot:         true,
+					SeparateGenerationCredit: isNetBilling,
+					HoursAndDays: []touSimplifiedHoursAndDays{
+						{
+							Hours:                         []types.UtilityHourPeriod{{HourStart: 14, HourEnd: 20}},
+							Weekday:                       true,
+							DollarsPerKWH:                 adjustSRPPrice(0.0662, time.September, year),
+							GenerationCreditDollarsPerKWH: genCredit,
+							Description:                   "SRP Summer Customer Gen On-Peak",
+						},
+					},
+					OtherDollarsPerKWH:                 adjustSRPPrice(0.0560, time.September, year),
+					OtherGenerationCreditDollarsPerKWH: genCredit,
+					OtherDescription:                   "SRP Summer Customer Gen Off-Peak",
+				},
+			})...)
+
+			// 3. Summer Peak Holiday Period
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
+				{
+					Year:                     year,
+					MonthStart:               time.July,
+					MonthEnd:                 time.August,
+					SpecificDates:            holidays,
+					SeparateGenerationCredit: isNetBilling,
+					HoursAndDays: []touSimplifiedHoursAndDays{
+						{
+							DollarsPerKWH:                 adjustSRPPrice(0.0613, time.July, year),
+							GenerationCreditDollarsPerKWH: genCredit,
+							Description:                   "SRP Summer Peak Customer Gen Holiday Off-Peak",
+						},
+					},
+				},
+			})...)
+
+			// 4. Summer Peak Regular Period
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
+				{
+					Year:                     year,
+					MonthStart:               time.July,
+					MonthEnd:                 time.August,
+					SpecificDates:            holidays,
+					SpecificDatesNot:         true,
+					SeparateGenerationCredit: isNetBilling,
+					HoursAndDays: []touSimplifiedHoursAndDays{
+						{
+							Hours:                         []types.UtilityHourPeriod{{HourStart: 14, HourEnd: 20}},
+							Weekday:                       true,
+							DollarsPerKWH:                 adjustSRPPrice(0.0823, time.July, year),
+							GenerationCreditDollarsPerKWH: genCredit,
+							Description:                   "SRP Summer Peak Customer Gen On-Peak",
+						},
+					},
+					OtherDollarsPerKWH:                 adjustSRPPrice(0.0613, time.July, year),
+					OtherGenerationCreditDollarsPerKWH: genCredit,
+					OtherDescription:                   "SRP Summer Peak Customer Gen Off-Peak",
+				},
+			})...)
+
+			// 5. Winter Holiday Period
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
+				{
+					Year:                     year,
+					MonthStart:               time.November,
+					MonthEnd:                 time.April,
+					SpecificDates:            holidays,
+					SeparateGenerationCredit: isNetBilling,
+					HoursAndDays: []touSimplifiedHoursAndDays{
+						{
+							DollarsPerKWH:                 adjustSRPPrice(0.0634, time.November, year),
+							GenerationCreditDollarsPerKWH: genCredit,
+							Description:                   "SRP Winter Customer Gen Holiday Off-Peak",
+						},
+					},
+				},
+			})...)
+
+			// 6. Winter Regular Period
+			periods = append(periods, buildPeriods(mstLocation, []touSimplifiedPeriod{
+				{
+					Year:                     year,
+					MonthStart:               time.November,
+					MonthEnd:                 time.April,
+					SpecificDates:            holidays,
+					SpecificDatesNot:         true,
+					SeparateGenerationCredit: isNetBilling,
+					HoursAndDays: []touSimplifiedHoursAndDays{
+						{
+							Hours:                         []types.UtilityHourPeriod{{HourStart: 5, HourEnd: 9}, {HourStart: 17, HourEnd: 21}},
+							Weekday:                       true,
+							DollarsPerKWH:                 adjustSRPPrice(0.0673, time.November, year),
+							GenerationCreditDollarsPerKWH: genCredit,
+							Description:                   "SRP Winter Customer Gen On-Peak",
+						},
+					},
+					OtherDollarsPerKWH:                 adjustSRPPrice(0.0634, time.November, year),
+					OtherGenerationCreditDollarsPerKWH: genCredit,
+					OtherDescription:                   "SRP Winter Customer Gen Off-Peak",
+				},
+			})...)
 		}
 	}
 
@@ -900,6 +1074,17 @@ func srpUtilityInfo() types.UtilityProviderInfo {
 			Choices:     choices,
 			Default:     defaultScheme,
 		}
+	}
+
+	netMeteringOnlyOption := types.UtilityRateOption{
+		Field:       "netMeteringScheme",
+		Name:        "Net Metering / Export Scheme",
+		Type:        types.UtilityOptionTypeSelect,
+		Description: "Select your net metering or solar billing plan program.",
+		Choices: []types.UtilityOptionChoice{
+			{Value: "net", Name: "Net Metering (1:1 retail credit)"},
+		},
+		Default: "net",
 	}
 
 	return types.UtilityProviderInfo{
@@ -928,6 +1113,14 @@ func srpUtilityInfo() types.UtilityProviderInfo {
 				Options: []types.UtilityRateOption{netBillingOption("net_billing", true)},
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 					return srpPeriods("srp_e16", opts, []int{2026, 2027}), nil
+				},
+			},
+			{
+				ID:      "srp_e27",
+				Name:    "Customer Generation Price Plan (E-27)",
+				Options: []types.UtilityRateOption{netMeteringOnlyOption},
+				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+					return srpPeriods("srp_e27", opts, []int{2026, 2027}), nil
 				},
 			},
 			{
