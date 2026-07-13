@@ -18,17 +18,17 @@ import (
 var historyFS embed.FS
 
 var fileBaselines = map[string]float64{
-	"site1_march.json":    -4.960,
-	"site1_may.json":      -16.243,
-	"site2_april.json":    1.555,
-	"site2_march.json":    8.412,
-	"site2_may.json":      0.553,
-	"site3_march.json":    -2.120,
+	"site1_march.json":    -4.950,
+	"site1_may.json":      -16.234,
+	"site2_april.json":    1.446,
+	"site2_march.json":    8.542,
+	"site2_may.json":      0.639,
+	"site3_march.json":    -2.122,
 	"site3_may.json":      -6.417,
-	"site4_late-may.json": 0.323,
-	"site4_may.json":      3.125,
-	"site5_june.json":     22.972,
-	"site7_june.json":     24.136,
+	"site4_late-may.json": 0.364,
+	"site4_may.json":      2.735,
+	"site5_june.json":     23.026,
+	"site7_june.json":     24.222,
 	"site8_june.json":     -2.995,
 }
 
@@ -342,7 +342,7 @@ func TestDecideHistory(t *testing.T) {
 						if decision.Action.FuturePrice != nil {
 							futPrice = decision.Action.FuturePrice.DollarsPerKWH + decision.Action.FuturePrice.GridUseDollarsPerKWH
 						}
-						t.Logf("[%s] DIFF! Base: %s(%s) -> Sim: %s(%s) (Price: %.3f, SOC: %.2f, FutPrice: %.3f, DeficitAt: %s, BelowDef: %s, AboveDef: %s)",
+						t.Logf("[%s] DIFF! Base: %s(%s) -> Sim: %s(%s) (Price: %.3f, SOC: %.2f, FutPrice: %.3f, DeficitAt: %s, BufferedDef: %s)",
 							tCurrent.Format("02_15:04"),
 							drModeString(action.BatteryMode)[:3],
 							action.Reason,
@@ -352,8 +352,7 @@ func TestDecideHistory(t *testing.T) {
 							simSOC,
 							futPrice,
 							decision.Action.HitDeficitAt.Format("15:04"),
-							decision.Action.HitBelowDeficitAt.Format("15:04"),
-							decision.Action.HitAboveDeficitAt.Format("15:04"),
+							decision.Action.HitBufferedDeficitAt.Format("15:04"),
 						)
 					}
 				}

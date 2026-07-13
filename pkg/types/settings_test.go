@@ -76,8 +76,10 @@ func TestMigrateSettings(t *testing.T) {
 		}
 		s, changed, err = MigrateSettings(oldNoUtility, 8)
 		require.NoError(t, err)
-		assert.False(t, changed)
+		assert.True(t, changed)
 		assert.Equal(t, 0, s.UpdateGroup)
+		assert.Equal(t, 4.0, s.SOCBufferPercent)
+		assert.Equal(t, 20, s.PeakSurvivalBufferMinutes)
 
 		// Utility configured but ESS is not
 		oldNoESS := Settings{
@@ -89,8 +91,10 @@ func TestMigrateSettings(t *testing.T) {
 		}
 		s, changed, err = MigrateSettings(oldNoESS, 8)
 		require.NoError(t, err)
-		assert.False(t, changed)
+		assert.True(t, changed)
 		assert.Equal(t, 0, s.UpdateGroup)
+		assert.Equal(t, 4.0, s.SOCBufferPercent)
+		assert.Equal(t, 20, s.PeakSurvivalBufferMinutes)
 
 		// UpdateGroup already set
 		oldSet := Settings{
@@ -104,8 +108,10 @@ func TestMigrateSettings(t *testing.T) {
 		}
 		s, changed, err = MigrateSettings(oldSet, 8)
 		require.NoError(t, err)
-		assert.False(t, changed)
+		assert.True(t, changed)
 		assert.Equal(t, 5, s.UpdateGroup)
+		assert.Equal(t, 4.0, s.SOCBufferPercent)
+		assert.Equal(t, 20, s.PeakSurvivalBufferMinutes)
 	})
 
 	t.Run("v9 to v10: default timing values", func(t *testing.T) {
@@ -117,7 +123,8 @@ func TestMigrateSettings(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.Equal(t, 5, s.MinStartChargeMinutes)
-		assert.Equal(t, 30, s.PeakSurvivalBufferMinutes)
+		assert.Equal(t, 20, s.PeakSurvivalBufferMinutes)
+		assert.Equal(t, 4.0, s.SOCBufferPercent)
 	})
 
 	t.Run("v11 to v12: default home load strategy", func(t *testing.T) {
@@ -130,6 +137,44 @@ func TestMigrateSettings(t *testing.T) {
 		assert.Equal(t, "default", s.HomeLoadPredictionStrategy)
 	})
 
+	t.Run("v12 to v13: split buffer settings", func(t *testing.T) {
+		// Case 1: PeakSurvivalBufferMinutes = 30 -> Balanced
+		oldBalanced := Settings{
+			PeakSurvivalBufferMinutes: 30,
+		}
+		s, changed, err := MigrateSettings(oldBalanced, 12)
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.Equal(t, 4.0, s.SOCBufferPercent)
+		assert.Equal(t, 20, s.PeakSurvivalBufferMinutes)
+		assert.Equal(t, 10, s.SolarCapacityBufferMinutes)
+		assert.Equal(t, 20, s.VPPChargingBufferMinutes)
+
+		// Case 2: PeakSurvivalBufferMinutes > 30 -> Conservative
+		oldConservative := Settings{
+			PeakSurvivalBufferMinutes: 45,
+		}
+		s2, changed2, err2 := MigrateSettings(oldConservative, 12)
+		require.NoError(t, err2)
+		assert.True(t, changed2)
+		assert.Equal(t, 8.0, s2.SOCBufferPercent)
+		assert.Equal(t, 40, s2.PeakSurvivalBufferMinutes)
+		assert.Equal(t, 30, s2.SolarCapacityBufferMinutes)
+		assert.Equal(t, 40, s2.VPPChargingBufferMinutes)
+
+		// Case 3: PeakSurvivalBufferMinutes < 30 -> Aggressive
+		oldAggressive := Settings{
+			PeakSurvivalBufferMinutes: 15,
+		}
+		s3, changed3, err3 := MigrateSettings(oldAggressive, 12)
+		require.NoError(t, err3)
+		assert.True(t, changed3)
+		assert.Equal(t, 2.0, s3.SOCBufferPercent)
+		assert.Equal(t, 10, s3.PeakSurvivalBufferMinutes)
+		assert.Equal(t, 0, s3.SolarCapacityBufferMinutes)
+		assert.Equal(t, 10, s3.VPPChargingBufferMinutes)
+	})
+
 	t.Run("no change: current version", func(t *testing.T) {
 		current := Settings{
 			UtilityProvider:            "comed",
@@ -137,7 +182,10 @@ func TestMigrateSettings(t *testing.T) {
 			Release:                    "production",
 			UpdateGroup:                7,
 			MinStartChargeMinutes:      5,
-			PeakSurvivalBufferMinutes:  30,
+			PeakSurvivalBufferMinutes:  20,
+			SOCBufferPercent:           4.0,
+			SolarCapacityBufferMinutes: 10,
+			VPPChargingBufferMinutes:   20,
 			HomeLoadPredictionStrategy: "default",
 		}
 		s, changed, err := MigrateSettings(current, CurrentSettingsVersion)

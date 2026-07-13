@@ -228,6 +228,22 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "peak survival buffer minutes cannot be negative", http.StatusBadRequest)
 		return
 	}
+	if newSettings.SOCBufferPercent < 0 {
+		writeJSONError(w, "SOC buffer percent cannot be negative", http.StatusBadRequest)
+		return
+	}
+	if newSettings.SOCBufferPercent > 90 {
+		writeJSONError(w, "SOC buffer percent cannot be greater than 90", http.StatusBadRequest)
+		return
+	}
+	if newSettings.SolarCapacityBufferMinutes < 0 {
+		writeJSONError(w, "solar capacity buffer minutes cannot be negative", http.StatusBadRequest)
+		return
+	}
+	if newSettings.VPPChargingBufferMinutes < 0 {
+		writeJSONError(w, "VPP charging buffer minutes cannot be negative", http.StatusBadRequest)
+		return
+	}
 	if newSettings.ACBaseTemperatureC < 0 || newSettings.ACBaseTemperatureC > 50 {
 		writeJSONError(w, "ac base temperature must be between 0 and 50", http.StatusBadRequest)
 		return

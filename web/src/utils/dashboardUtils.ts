@@ -74,8 +74,8 @@ export const getReasonText = (action: Action): string => {
     const getDeficitTimeStr = (act: Action) => {
         const isZero = (ts?: string) => !ts || ts === '0001-01-01T00:00:00Z';
         if (!isZero(act.deficitAt)) return formatTime(act.deficitAt!);
-        if (!isZero(act.hitBelowDeficitAt)) return formatTime(act.hitBelowDeficitAt!);
-        if (!isZero(act.hitAboveDeficitAt)) return formatTime(act.hitAboveDeficitAt!);
+        if (!isZero(act.hitBufferedDeficitAt)) return formatTime(act.hitBufferedDeficitAt!);
+        if (!isZero(act.hitThresholdDeficitAt)) return formatTime(act.hitThresholdDeficitAt!);
         return '';
     };
     const deficitTimeStr = getDeficitTimeStr(action);

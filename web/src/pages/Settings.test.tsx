@@ -1008,7 +1008,8 @@ describe('App & Settings', () => {
         });
     });
 
-    it('can update new timing settings: minStartChargeMinutes and peakSurvivalBufferMinutes', async () => {
+    it('can update new timing settings: minStartChargeMinutes and bufferProfile', async () => {
+        const user = userEvent.setup();
         await navigateToSettings();
 
         // Expand advanced tuning settings
@@ -1017,17 +1018,20 @@ describe('App & Settings', () => {
 
         await waitFor(() => {
             expect(screen.getByLabelText(/Minimum Start Charge Duration/i)).toBeInTheDocument();
-            expect(screen.getByLabelText(/Peak Survival Buffer/i)).toBeInTheDocument();
+            expect(screen.getByRole('combobox', { name: /Overcharge Profile/i })).toBeInTheDocument();
         });
 
         const minStartInput = screen.getByLabelText(/Minimum Start Charge Duration/i);
-        const peakBufferInput = screen.getByLabelText(/Peak Survival Buffer/i);
+        const bufferSelect = screen.getByRole('combobox', { name: /Overcharge Profile/i });
 
         expect(minStartInput).toHaveValue(5);
-        expect(peakBufferInput).toHaveValue(30);
+        expect(bufferSelect).toHaveTextContent('Default');
 
         fireEvent.change(minStartInput, { target: { value: '10' } });
-        fireEvent.change(peakBufferInput, { target: { value: '45' } });
+        
+        await user.click(bufferSelect);
+        const aggressiveOption = await screen.findByRole('option', { name: 'Tiny' });
+        await user.click(aggressiveOption);
 
         (updateSettings as any).mockResolvedValue(undefined);
         const saveBtn = screen.getByText('Save Settings');
@@ -1037,7 +1041,10 @@ describe('App & Settings', () => {
             expect(screen.getByText('Settings saved successfully')).toBeInTheDocument();
             expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
                 minStartChargeMinutes: 10,
-                peakSurvivalBufferMinutes: 45
+                socBufferPercent: 2,
+                peakSurvivalBufferMinutes: 10,
+                solarCapacityBufferMinutes: 0,
+                vppChargingBufferMinutes: 10
             }), expect.any(String), undefined);
         });
     });

@@ -1614,6 +1614,70 @@ const Settings = ({
 
                         <div className="grid-strategy-grid">
                             <Field.Root className="form-group">
+                                <Field.Label htmlFor="bufferProfile">Overcharge Profile</Field.Label>
+                                <Select.Root
+                                    value={settings.socBufferPercent === 2 ? "tiny" : settings.socBufferPercent === 8 ? "conservative" : "default"}
+                                    onValueChange={(val) => {
+                                         if (val === 'tiny') {
+                                             handleChange('socBufferPercent', 2);
+                                             handleChange('peakSurvivalBufferMinutes', 10);
+                                             handleChange('solarCapacityBufferMinutes', 0);
+                                             handleChange('vppChargingBufferMinutes', 10);
+                                         } else if (val === 'conservative') {
+                                             handleChange('socBufferPercent', 8);
+                                             handleChange('peakSurvivalBufferMinutes', 40);
+                                             handleChange('solarCapacityBufferMinutes', 30);
+                                             handleChange('vppChargingBufferMinutes', 40);
+                                         } else {
+                                             handleChange('socBufferPercent', 4);
+                                             handleChange('peakSurvivalBufferMinutes', 20);
+                                             handleChange('solarCapacityBufferMinutes', 10);
+                                             handleChange('vppChargingBufferMinutes', 20);
+                                         }
+                                     }}
+                                >
+                                    <Select.Trigger className="select-trigger" id="bufferProfile" aria-label="Overcharge Profile">
+                                        <Select.Value>
+                                            {settings.socBufferPercent === 2 ? "Tiny" : settings.socBufferPercent === 8 ? "Conservative" : "Default"}
+                                        </Select.Value>
+                                        <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                            </svg>
+                                        </Select.Icon>
+                                    </Select.Trigger>
+                                    <Select.Portal>
+                                        <Select.Positioner className="select-positioner">
+                                            <Select.Popup className="select-popup">
+                                                <Select.Item className="select-item" value="tiny">
+                                                    <Select.ItemText>Tiny</Select.ItemText>
+                                                </Select.Item>
+                                                <Select.Item className="select-item" value="default">
+                                                    <Select.ItemText>Default</Select.ItemText>
+                                                </Select.Item>
+                                                <Select.Item className="select-item" value="conservative">
+                                                    <Select.ItemText>Conservative</Select.ItemText>
+                                                </Select.Item>
+                                            </Select.Popup>
+                                        </Select.Positioner>
+                                    </Select.Portal>
+                                </Select.Root>
+                                <Field.Description>
+                                    How much we over charge to handle unexpected solar/usage fluctuations.
+                                </Field.Description>
+                                {settings.socBufferPercent === 2 && (
+                                    <div className="warning-text" style={{ color: 'orange', marginTop: '4px', fontSize: '0.9em' }}>
+                                        Warning: A tiny profile may cause the battery to deplete unexpectedly during usage/solar fluctuations.
+                                    </div>
+                                )}
+                                {settings.socBufferPercent === 8 && (
+                                    <div className="warning-text" style={{ color: 'orange', marginTop: '4px', fontSize: '0.9em' }}>
+                                        Warning: A conservative profile will reduce your financial savings by holding more energy in reserve.
+                                    </div>
+                                )}
+                            </Field.Root>
+
+                            <Field.Root className="form-group">
                                 <Field.Label htmlFor="alwaysChargeUnder">Always Charge Below ($/kWh)</Field.Label>
                                 <Input
                                     id="alwaysChargeUnder"
@@ -1668,19 +1732,6 @@ const Settings = ({
                                     onChange={(e) => handleChange('minStartChargeMinutes', parseInt(e.target.value, 10))}
                                 />
                                 <Field.Description>Minimum duration in minutes of charging time needed to start charging.</Field.Description>
-                            </Field.Root>
-
-                            <Field.Root className="form-group">
-                                <Field.Label htmlFor="peakSurvivalBufferMinutes">Peak Survival Buffer (minutes)</Field.Label>
-                                <Input
-                                    id="peakSurvivalBufferMinutes"
-                                    type="number"
-                                    step="1"
-                                    min="0"
-                                    value={settings.peakSurvivalBufferMinutes}
-                                    onChange={(e) => handleChange('peakSurvivalBufferMinutes', parseInt(e.target.value, 10))}
-                                />
-                                <Field.Description>Buffer in minutes to attempt to have the battery outlast a peak price period.</Field.Description>
                             </Field.Root>
 
                             {settings.release === 'staging' && (
@@ -1848,9 +1899,8 @@ const Settings = ({
                             </>
                         )}
 
-
                         <div className="section-header">
-                            <h3>Advanced Power History Settings</h3>
+                            <h3>Advanced Home Usage Settings</h3>
                         </div>
                         <div className="grid-strategy-grid">
                             {/*
@@ -1899,7 +1949,7 @@ const Settings = ({
                                         </Select.Positioner>
                                     </Select.Portal>
                                 </Select.Root>
-                                <Field.Description>Select how conservative the system is when predicting future home load.</Field.Description>
+                                <Field.Description>How conservative the system is when predicting future home load.</Field.Description>
                                 {settings.homeLoadPredictionStrategy === 'conservative' && (
                                     <div className="warning-notice" style={{ marginTop: '0.5rem' }} data-testid="conservative-strategy-warning">
                                         Caution: Conservative mode will result in more grid charging and higher electricity costs, but reduces the chance of running out of battery during periodic higher usage.

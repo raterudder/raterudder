@@ -181,12 +181,12 @@ describe('dashboardUtils', () => {
             expect(text).toContain('Since electricity prices now ($ 0.050/kWh) are cheap');
         });
 
-        it('handles DeficitSaveForPeak falling back to hitAboveDeficitAt when deficitAt is zero', () => {
+        it('handles DeficitSaveForPeak falling back to hitBufferedDeficitAt when deficitAt is zero', () => {
             const action = {
                 ...baseAction,
                 reason: ActionReason.DeficitSaveForPeak,
                 deficitAt: '0001-01-01T00:00:00Z',
-                hitAboveDeficitAt: '2026-06-16T08:33:00Z',
+                hitBufferedDeficitAt: '2026-06-16T08:33:00Z',
                 currentPrice: { dollarsPerKWH: 0.05, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
                 futurePrice: { dollarsPerKWH: 0.10, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
             };
@@ -200,8 +200,8 @@ describe('dashboardUtils', () => {
                 ...baseAction,
                 reason: ActionReason.DeficitSaveForPeak,
                 deficitAt: '0001-01-01T00:00:00Z',
-                hitBelowDeficitAt: '0001-01-01T00:00:00Z',
-                hitAboveDeficitAt: '0001-01-01T00:00:00Z',
+                hitThresholdDeficitAt: '0001-01-01T00:00:00Z',
+                hitBufferedDeficitAt: '0001-01-01T00:00:00Z',
                 currentPrice: { dollarsPerKWH: 0.05, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
                 futurePrice: { dollarsPerKWH: 0.10, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
             };

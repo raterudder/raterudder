@@ -46,7 +46,10 @@ export const defaultSettings = {
         franklin: true
     },
     minStartChargeMinutes: 5,
-    peakSurvivalBufferMinutes: 30,
+    peakSurvivalBufferMinutes: 20,
+    socBufferPercent: 4,
+    solarCapacityBufferMinutes: 10,
+    vppChargingBufferMinutes: 20,
     homeLoadPredictionStrategy: 'default'
 };
 

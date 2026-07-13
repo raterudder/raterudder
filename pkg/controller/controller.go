@@ -72,29 +72,31 @@ type StrategyEvaluation struct {
 
 // simulationSummary holds structural markers extracted from simulation data.
 type simulationSummary struct {
-	HitCapacityAt               time.Time
-	HitFutureCapacityAt         time.Time
-	HitStandbyCapacityAt        time.Time
-	HitSolarCapacityAt          time.Time
-	HitVPPCapacityAt            time.Time
-	HitDeficitAt                time.Time
-	HitBelowDeficitAt           time.Time
-	HitAboveDeficitAt           time.Time
-	PredictedSolarAtDeficitKWH  float64
-	SoonestExportAt             time.Time
-	SoonestExportValue          float64
-	SoonestExportPrice          types.Price
-	SoonestSaveAt               time.Time
-	SoonestSaveValue            float64
-	SoonestSavePrice            types.Price
-	MinFutureGridChargeCost     float64
-	MinEnergy                   float64
-	MaxEnergy                   float64
-	SoonestVPPChargingAt        time.Time
-	SoonestVPPStandbyAt         time.Time
-	SoonestVPPEndAt             time.Time
-	BufferedHitCapacityAt       time.Time
-	BufferedHitFutureCapacityAt time.Time
+	HitCapacityAt                time.Time
+	HitFutureCapacityAt          time.Time
+	HitStandbyCapacityAt         time.Time
+	HitSolarCapacityAt           time.Time
+	HitVPPCapacityAt             time.Time
+	HitDeficitAt                 time.Time
+	HitBufferedDeficitAt         time.Time
+	HitThresholdDeficitAt        time.Time
+	PredictedSolarAtDeficitKWH   float64
+	SoonestExportAt              time.Time
+	SoonestExportValue           float64
+	SoonestExportPrice           types.Price
+	SoonestSaveAt                time.Time
+	SoonestSaveValue             float64
+	SoonestSavePrice             types.Price
+	MinFutureGridChargeCost      float64
+	MinEnergy                    float64
+	MaxEnergy                    float64
+	SoonestVPPChargingAt         time.Time
+	SoonestVPPStandbyAt          time.Time
+	SoonestVPPEndAt              time.Time
+	HitBufferedCapacityAt        time.Time
+	HitBufferedFutureCapacityAt  time.Time
+	HitThresholdCapacityAt       time.Time
+	HitThresholdFutureCapacityAt time.Time
 }
 
 // Decide determines the best action to take based on current state and history.
@@ -203,23 +205,23 @@ func (c *Controller) Decide(
 	buildFinalDecision := func(dr *DecisionResult) Decision {
 		hitDeficitAt := summary.HitDeficitAt
 		if hitDeficitAt.IsZero() {
-			hitDeficitAt = summary.HitAboveDeficitAt
+			hitDeficitAt = summary.HitBufferedDeficitAt
 		}
 		return Decision{
 			Action: types.Action{
-				Timestamp:         now.UTC(),
-				BatteryMode:       dr.BatteryMode,
-				SolarMode:         solarMode,
-				Reason:            dr.Reason,
-				Description:       dr.Description,
-				CurrentPrice:      &currentPrice,
-				FuturePrice:       dr.FuturePrice,
-				SystemStatus:      currentStatus,
-				HitDeficitAt:      hitDeficitAt,
-				HitBelowDeficitAt: summary.HitBelowDeficitAt,
-				HitAboveDeficitAt: summary.HitAboveDeficitAt,
-				HitCapacityAt:     summary.HitCapacityAt,
-				ChargeToSOC:       dr.ChargeToSOC,
+				Timestamp:             now.UTC(),
+				BatteryMode:           dr.BatteryMode,
+				SolarMode:             solarMode,
+				Reason:                dr.Reason,
+				Description:           dr.Description,
+				CurrentPrice:          &currentPrice,
+				FuturePrice:           dr.FuturePrice,
+				SystemStatus:          currentStatus,
+				HitDeficitAt:          hitDeficitAt,
+				HitBufferedDeficitAt:  summary.HitBufferedDeficitAt,
+				HitThresholdDeficitAt: summary.HitThresholdDeficitAt,
+				HitCapacityAt:         summary.HitCapacityAt,
+				ChargeToSOC:           dr.ChargeToSOC,
 			},
 			SimulationParams: simParams,
 		}
@@ -429,11 +431,17 @@ func (c *Controller) analyzeSimulation(
 		if !slot.VPPEndAt.IsZero() && slot.VPPEndAt.After(now) && summary.SoonestVPPEndAt.IsZero() {
 			summary.SoonestVPPEndAt = slot.VPPEndAt
 		}
-		if !slot.BufferedHitCapacityAt.IsZero() && summary.BufferedHitCapacityAt.IsZero() {
-			summary.BufferedHitCapacityAt = slot.BufferedHitCapacityAt
+		if !slot.HitBufferedCapacityAt.IsZero() && summary.HitBufferedCapacityAt.IsZero() {
+			summary.HitBufferedCapacityAt = slot.HitBufferedCapacityAt
 		}
-		if !slot.BufferedHitCapacityAt.IsZero() && slot.BufferedHitCapacityAt.After(now) && summary.BufferedHitFutureCapacityAt.IsZero() {
-			summary.BufferedHitFutureCapacityAt = slot.BufferedHitCapacityAt
+		if !slot.HitBufferedCapacityAt.IsZero() && slot.HitBufferedCapacityAt.After(now) && summary.HitBufferedFutureCapacityAt.IsZero() {
+			summary.HitBufferedFutureCapacityAt = slot.HitBufferedCapacityAt
+		}
+		if !slot.HitThresholdCapacityAt.IsZero() && summary.HitThresholdCapacityAt.IsZero() {
+			summary.HitThresholdCapacityAt = slot.HitThresholdCapacityAt
+		}
+		if !slot.HitThresholdCapacityAt.IsZero() && slot.HitThresholdCapacityAt.After(now) && summary.HitThresholdFutureCapacityAt.IsZero() {
+			summary.HitThresholdFutureCapacityAt = slot.HitThresholdCapacityAt
 		}
 	}
 	if !summary.HitSolarCapacityAt.IsZero() && (summary.HitCapacityAt.IsZero() || summary.HitSolarCapacityAt.Before(summary.HitCapacityAt)) {
@@ -476,16 +484,16 @@ func (c *Controller) analyzeSimulation(
 			summary.MaxEnergy = slot.BatteryKWH
 		}
 
-		hasDeficit := slot.TotalBatteryDeficitKWH > 0
+		hasDeficit := slot.TotalBufferedDeficitKWH > 0
 
-		// Populate HitBelowDeficitAt if a deficit is predicted (with the 3% buffer)
-		if hasDeficit && !slot.HitBelowDeficitAt.IsZero() && summary.HitBelowDeficitAt.IsZero() {
-			summary.HitBelowDeficitAt = slot.HitBelowDeficitAt
+		// Populate HitBufferedDeficitAt if a deficit is predicted (with the SOC buffer)
+		if hasDeficit && !slot.HitBufferedDeficitAt.IsZero() && summary.HitBufferedDeficitAt.IsZero() {
+			summary.HitBufferedDeficitAt = slot.HitBufferedDeficitAt
 			summary.PredictedSolarAtDeficitKWH = slot.PredictedSolarKWH
 		}
-		// Populate HitAboveDeficitAt if we drop below reserve (with the 1% safety buffer)
-		if !slot.HitAboveDeficitAt.IsZero() && summary.HitAboveDeficitAt.IsZero() {
-			summary.HitAboveDeficitAt = slot.HitAboveDeficitAt
+		// Populate HitThresholdDeficitAt if we drop below threshold (with half the SOC buffer)
+		if !slot.HitThresholdDeficitAt.IsZero() && summary.HitThresholdDeficitAt.IsZero() {
+			summary.HitThresholdDeficitAt = slot.HitThresholdDeficitAt
 		}
 		// Populate HitDeficitAt if we drop below reserve exactly (no buffer)
 		if !slot.HitDeficitAt.IsZero() && summary.HitDeficitAt.IsZero() {
@@ -526,8 +534,8 @@ func (c *Controller) evaluateDeficit(
 	summary simulationSummary,
 	lastAction *types.Action,
 ) *StrategyEvaluation {
-	bufferedHitCapacityAt := summary.BufferedHitCapacityAt
-	bufferedHitFutureCapacityAt := summary.BufferedHitFutureCapacityAt
+	bufferedHitCapacityAt := summary.HitBufferedCapacityAt
+	bufferedHitFutureCapacityAt := summary.HitBufferedFutureCapacityAt
 	chargeKW := currentStatus.MaxBatteryChargeKW
 	if chargeKW <= 0 {
 		chargeKW = currentStatus.BatteryCapacityKWH / 3.0
@@ -563,14 +571,9 @@ func (c *Controller) evaluateDeficit(
 
 	minDeficitDiff := max(priceEpsilonForEquality, settings.MinDeficitPriceDifferenceDollarsPerKWH)
 
-	bufferMinutes := 0
-	if settings.PeakSurvivalBufferMinutes > 0 {
-		bufferMinutes = settings.PeakSurvivalBufferMinutes
-	}
-
 	var vppCutoff time.Time
 	if !summary.SoonestVPPChargingAt.IsZero() {
-		vppCutoff = summary.SoonestVPPChargingAt.Add(-time.Duration(bufferMinutes) * time.Minute)
+		vppCutoff = summary.SoonestVPPChargingAt.Add(-time.Duration(settings.VPPChargingBufferMinutes) * time.Minute)
 	}
 	if !summary.SoonestVPPStandbyAt.IsZero() {
 		if vppCutoff.IsZero() || summary.SoonestVPPStandbyAt.Before(vppCutoff) {
@@ -578,13 +581,12 @@ func (c *Controller) evaluateDeficit(
 		}
 	}
 
-	// We look for a deficit hit in the future. We almost ALWAYS use HitDeficitAt.
-	// However, if we are already charging from the grid, we use HitAboveDeficitAt
-	// as a hysteresis buffer so we do not stop charging prematurely if we just barely
-	// rose above the MinBatterySOC threshold (avoiding rapid on/off toggling).
-	hitDeficitAt := summary.HitDeficitAt
-	if isAlreadyChargingGrid && !summary.HitAboveDeficitAt.IsZero() {
-		hitDeficitAt = summary.HitAboveDeficitAt
+	// We look for a deficit hit in the future. Check ThresholdHitDeficitAt to decide if we should start charging.
+	// Check BufferedHitDeficitAt if we are already charging or standby holding a deficit.
+	isMitigatingDeficit := isAlreadyChargingGrid || currentStatus.ElevatedMinBatterySOC || (lastAction != nil && (lastAction.BatteryMode == types.BatteryModeStandby || lastAction.BatteryMode == types.BatteryModeChargeAny))
+	hitDeficitAt := summary.HitThresholdDeficitAt
+	if isMitigatingDeficit && !summary.HitBufferedDeficitAt.IsZero() {
+		hitDeficitAt = summary.HitBufferedDeficitAt
 	}
 	if hitDeficitAt.IsZero() {
 		return nil
@@ -619,11 +621,11 @@ func (c *Controller) evaluateDeficit(
 		if !vppCutoff.IsZero() && !slot.TS.Before(vppCutoff) {
 			break
 		}
-		marginalDeficit := slot.TotalBatteryDeficitKWH - lastDeficitKWH
+		marginalDeficit := slot.TotalBufferedDeficitKWH - lastDeficitKWH
 		if marginalDeficit > 0 {
 			totalDeficitCost += marginalDeficit * slot.GridChargeDollarsPerKWH
 			totalDeficitKWH += marginalDeficit
-			lastDeficitKWH = slot.TotalBatteryDeficitKWH
+			lastDeficitKWH = slot.TotalBufferedDeficitKWH
 		}
 	}
 	averageDeficitRateDollarsPerKWH := gridChargeNowCost
@@ -666,21 +668,24 @@ func (c *Controller) evaluateDeficit(
 		if !vppCutoff.IsZero() && !slot.TS.Before(vppCutoff) {
 			break
 		}
-		marginalDeficit := slot.TotalBatteryDeficitKWH - lastDeficitKWH
+		marginalDeficit := slot.TotalBufferedDeficitKWH - lastDeficitKWH
 		if marginalDeficit > 0 {
-			lastDeficitKWH = slot.TotalBatteryDeficitKWH
+			lastDeficitKWH = slot.TotalBufferedDeficitKWH
 		}
-		// We keep hasDeficit cumulative (TotalBatteryDeficitKWH > 0) so that we continue to run lookahead planning
+		// We keep hasDeficit cumulative (TotalBufferedDeficitKWH > 0) so that we continue to run lookahead planning
 		// and scan all cheap future slots. If we restricted hasDeficit to marginalDeficit > 0, we would skip
 		// scanning subsequent flat deficit slots, missing the cheapest future plan windows.
-		hasDeficit := slot.TotalBatteryDeficitKWH > 0
+		hasDeficit := slot.TotalBufferedDeficitKWH > 0
 
 		if hasDeficit && canCharge {
 			simInFuture := i > 0
 			var simPrevChargeCostsFuture []simPriceSlot
 			var simPrevChargeCostsAll []simPriceSlot
 			if simInFuture {
-				blockStart := simData[i].HitDeficitAt
+				blockStart := simData[i].HitThresholdDeficitAt
+				if isAlreadyChargingGrid {
+					blockStart = simData[i].HitBufferedDeficitAt
+				}
 				if blockStart.IsZero() {
 					blockStart = hitDeficitAt
 				}
@@ -737,29 +742,14 @@ func (c *Controller) evaluateDeficit(
 			if maxHeadroom < 0 {
 				maxHeadroom = 0
 			}
-			// Calculate the safety buffer energy in kWh by greedily accumulating the preceding home load.
-			// If bufferMinutes is 100, we consume 100% of the first preceding hour's load and the remaining
-			// 40 minutes (40/60) fraction of the second preceding hour's load.
-			bufferEnergyKWH := 0.0
-			if bufferMinutes > 0 {
-				remainingMinutes := float64(bufferMinutes)
-				for k := i - 1; k >= 0 && remainingMinutes > 0; k-- {
-					fraction := min(remainingMinutes, 60.0) / 60.0
-					bufferEnergyKWH += fraction * simData[k].AvgHomeLoadKWH
-					remainingMinutes -= 60.0
-				}
-				if remainingMinutes > 0 {
-					bufferEnergyKWH += (remainingMinutes / 60.0) * slot.AvgHomeLoadKWH
-				}
-			}
-			// We subtract surplusBatteryKWH (the battery's charge above reserve) from the deficit/buffer.
-			// This ensures we only plan to import energy for the portion of the deficit/buffer that
+			// We subtract surplusBatteryKWH (the battery's charge above reserve) from the deficit.
+			// This ensures we only plan to import energy for the portion of the deficit that
 			// cannot be covered by the battery's existing surplus charge.
 			surplusBatteryKWH := slot.BatteryKWH - slot.BatteryReserveKWH
 			if surplusBatteryKWH < 0 {
 				surplusBatteryKWH = 0
 			}
-			neededEnergy := slot.TotalBatteryDeficitKWH + bufferEnergyKWH - surplusBatteryKWH
+			neededEnergy := slot.TotalBufferedDeficitKWH - surplusBatteryKWH
 			if neededEnergy < 0 {
 				neededEnergy = 0
 			}
@@ -1069,8 +1059,7 @@ func (c *Controller) evaluateDeficit(
 			slog.Bool("isSignificantlyCheaperThanDeficitNow", wasSignificantlyCheaperThanDeficitNow),
 			slog.Bool("isAlreadyChargingSamePrice", wasAlreadyChargingSamePrice),
 			slog.Int("futureCheapHours", hadFutureCheapHours),
-			slog.Float64("gridChargeNowCost", gridChargeNowCost),
-			slog.Int("bufferMinutes", bufferMinutes),
+			slog.Float64("socBufferPercent", settings.SOCBufferPercent),
 			slog.Float64("minHeadroom", usedMinHeadroom),
 		)
 		decision = &DecisionResult{
@@ -1091,8 +1080,7 @@ func (c *Controller) evaluateDeficit(
 			slog.Any("standbyFuturePrice", standbyFuturePrice),
 			slog.Float64("refillRateDollarsPerKWH", refillRateDollarsPerKWH),
 			slog.Time("plannedChargeTime", plannedChargeTime),
-			slog.Float64("planBenefitDollars", planBenefitDollars),
-			slog.Int("bufferMinutes", bufferMinutes),
+			slog.Float64("socBufferPercent", settings.SOCBufferPercent),
 			slog.Float64("minHeadroom", usedMinHeadroom),
 			slog.Float64("standbyThreshold", standbyThreshold),
 			slog.Float64("gridChargeNowCost", gridChargeNowCost),
@@ -1112,15 +1100,13 @@ func (c *Controller) evaluateDeficit(
 			slog.Time("plannedChargeTime", plannedChargeTime),
 			slog.Float64("plannedChargeCost", plannedChargeCost),
 			slog.Float64("planBenefitDollars", planBenefitDollars),
-			slog.Time("hitDeficitAt", hitDeficitAt),
-			slog.Int("bufferMinutes", bufferMinutes),
+			slog.Float64("socBufferPercent", settings.SOCBufferPercent),
 			slog.Bool("isSignificantlyCheaperFuture", wasSignificantlyCheaperFuture),
 			slog.Bool("isSignificantlyCheaperThanDeficit", wasSignificantlyCheaperThanDeficit),
 			slog.Bool("isSignificantlyCheaperThanDeficitNow", wasSignificantlyCheaperThanDeficitNow),
 			slog.Bool("isAlreadyChargingSamePrice", wasAlreadyChargingSamePrice),
 			slog.Int("futureCheapHours", hadFutureCheapHours),
 			slog.Float64("gridChargeNowCost", gridChargeNowCost),
-			slog.Int("bufferMinutes", bufferMinutes),
 		)
 		plan = &futurePlan{
 			ChargeTime:  plannedChargeTime,
@@ -1181,6 +1167,9 @@ func (c *Controller) evaluateExportArbitrage(
 	minArbitrageDiff := max(priceEpsilonForEquality, settings.MinArbitrageDifferenceDollarsPerKWH)
 	minDeficitDiff := max(priceEpsilonForEquality, settings.MinDeficitPriceDifferenceDollarsPerKWH)
 
+	// isAlreadyChargingGrid indicates if the system is currently actively drawing power from the grid
+	isAlreadyChargingGrid := lastAction != nil && lastAction.BatteryMode == types.BatteryModeChargeAny
+
 	// Standby Simulation for Arbitrage:
 	// We simulate the battery behavior assuming we standby during cheap hours (preserving energy)
 	// and discharge only during the target peak hours.
@@ -1191,12 +1180,14 @@ func (c *Controller) evaluateExportArbitrage(
 		capacityKWH,
 		minKWH,
 		targetAt,
+		settings,
 	)
-	standbyHitCapacityAt := standbyRes.HitCapacityAt
-	standbyHitSolarCapacityAt := standbyRes.HitSolarCapacityAt
-	// We use standbyHitDeficitAt (exact MinBatterySOC crossing) for the standby check
-	// because we are not overriding an existing charge action prematurely.
-	standbyHitDeficitAt := standbyRes.HitDeficitAt
+	standbyHitCapacityAt := standbyRes.HitThresholdCapacityAt
+	standbyHitDeficitAt := standbyRes.HitThresholdDeficitAt
+	if isAlreadyChargingGrid {
+		standbyHitCapacityAt = standbyRes.HitBufferedCapacityAt
+		standbyHitDeficitAt = standbyRes.HitBufferedDeficitAt
+	}
 	standbyImportCost := standbyRes.TotalImportCost
 	standbyNetLoadKWH := standbyRes.TotalNetLoadKWH
 	standbyEnergyAtPeakStart := standbyRes.StandbyEnergyAtPeakStart
@@ -1219,12 +1210,12 @@ func (c *Controller) evaluateExportArbitrage(
 	// In either case, the opportunity cost of filling the battery from the grid is the value of the
 	// solar energy at the time of the capacity hit. We adjust effectiveExportValue to this rate.
 	effectiveExportValue := targetValue
-	if !standbyHitSolarCapacityAt.IsZero() && !standbyHitSolarCapacityAt.After(targetAt) {
+	if !standbyHitCapacityAt.IsZero() && !standbyHitCapacityAt.After(targetAt) {
 		var exportValueAtCapacity float64
 		var exportValueAtCapacityTime time.Time
 		buffer := 1 * time.Hour
-		windowStart := standbyHitSolarCapacityAt
-		windowEnd := standbyHitSolarCapacityAt.Add(buffer)
+		windowStart := standbyHitCapacityAt
+		windowEnd := standbyHitCapacityAt.Add(buffer)
 
 		for _, slot := range simData {
 			slotStart := slot.TS
@@ -1258,9 +1249,6 @@ func (c *Controller) evaluateExportArbitrage(
 			slog.Time("standbyHitCapacityAt", standbyHitCapacityAt),
 		)
 	}
-
-	// isAlreadyChargingGrid indicates if the system is currently actively drawing power from the grid
-	isAlreadyChargingGrid := lastAction != nil && lastAction.BatteryMode == types.BatteryModeChargeAny
 
 	headroom := capacityKWH - currentEnergyKWH
 	neededDurationHours := headroom / chargeKW
@@ -1324,7 +1312,7 @@ func (c *Controller) evaluateExportArbitrage(
 	canCharge := settings.GridChargeBatteries && !currentStatus.BatteryChargingDisabled
 	canChargeArbitrage := currentEnergyKWH+startChargeHeadroom < capacityKWH && canCharge
 
-	standbySolarFillsBatteryBeforePeak := !standbyHitSolarCapacityAt.IsZero() && !standbyHitSolarCapacityAt.After(targetAt)
+	standbySolarFillsBatteryBeforePeak := !standbyHitCapacityAt.IsZero() && !standbyHitCapacityAt.After(targetAt)
 
 	// futureArbitrageProfitable determines if charging during the cheapest future slot will yield an export
 	// rate-arbitrage profit that exceeds the minimum required arbitrage price difference.
@@ -1563,6 +1551,7 @@ func (c *Controller) evaluateExportArbitrage(
 		slog.Float64("standbyNetLoadKWH", standbyNetLoadKWH),
 		slog.Float64("loadEnergyAtPeakStart", loadEnergyAtPeakStart),
 		slog.Float64("extraEnergy", extraEnergy),
+		slog.Int("solarCapacityBufferMinutes", settings.SolarCapacityBufferMinutes),
 	)
 
 	if shouldDelayOverCharge {
@@ -1610,7 +1599,7 @@ func (c *Controller) evaluateExportArbitrage(
 	// solarFillsDuringPeak checks if solar is predicted to fill the battery during the peak export window itself
 	// (before peakEnd). Even if the battery is not full at the start of the peak, if solar fills it during
 	// the peak, we can still capture and export that energy.
-	solarFillsDuringPeak := !standbyHitSolarCapacityAt.IsZero() && standbyHitSolarCapacityAt.After(targetAt) && !standbyHitSolarCapacityAt.After(peakEnd)
+	solarFillsDuringPeak := !standbyHitCapacityAt.IsZero() && standbyHitCapacityAt.After(targetAt) && !standbyHitCapacityAt.After(peakEnd)
 
 	// We check if the battery has any usable energy above the reserve limit.
 	// If the battery is empty (<= minKWH), we cannot grid-charge, and solar won't fill it
@@ -1702,6 +1691,7 @@ func (c *Controller) evaluateExportArbitrage(
 			slog.Float64("requiredChargeEnergy", requiredChargeEnergy),
 			slog.Float64("effectiveExportValue", effectiveExportValue),
 			slog.Float64("cheapestCost", cheapestCost),
+			slog.Int("solarCapacityBufferMinutes", settings.SolarCapacityBufferMinutes),
 		)
 		return &StrategyEvaluation{
 			Decision: &DecisionResult{
@@ -1731,6 +1721,7 @@ func (c *Controller) evaluateExportArbitrage(
 			slog.Float64("requiredChargeEnergy", requiredChargeEnergy),
 			slog.Float64("effectiveExportValue", effectiveExportValue),
 			slog.Float64("cheapestFutureCost", cheapestFutureCost),
+			slog.Int("solarCapacityBufferMinutes", settings.SolarCapacityBufferMinutes),
 		)
 		// We calculate benefit only for the energy actually collected during the cheap future hours.
 		// Multiplying the entire required charge energy would artificially inflate the benefit if the cheapest plan
@@ -1794,6 +1785,7 @@ func (c *Controller) evaluateExportArbitrage(
 			slog.Bool("isSignificantArbitrageNow", isSignificantArbitrageNow),
 			slog.Bool("isCheapestWindowNow", isCheapestWindowNow),
 			slog.Bool("solarFillsDuringPeak", solarFillsDuringPeak),
+			slog.Int("solarCapacityBufferMinutes", settings.SolarCapacityBufferMinutes),
 		)
 
 		if benefit > 0 {
@@ -1825,12 +1817,12 @@ func (c *Controller) evaluatePlannedCharge(
 ) *DecisionResult {
 	isAlreadyChargingGrid := lastAction != nil && lastAction.BatteryMode == types.BatteryModeChargeAny
 
-	// We almost ALWAYS use HitDeficitAt. However, if we are already charging from the grid, we use
-	// HitAboveDeficitAt as a hysteresis buffer so we do not stop charging prematurely when
-	// we barely got above reserve.
-	hitDeficitAt := summary.HitDeficitAt
-	if isAlreadyChargingGrid && !summary.HitAboveDeficitAt.IsZero() {
-		hitDeficitAt = summary.HitAboveDeficitAt
+	// We almost ALWAYS use HitThresholdDeficitAt. However, if we are already charging or standby holding a deficit,
+	// we use HitBufferedDeficitAt as a hysteresis buffer so we do not stop charging/standby prematurely.
+	isMitigatingDeficit := isAlreadyChargingGrid || currentStatus.ElevatedMinBatterySOC || (lastAction != nil && (lastAction.BatteryMode == types.BatteryModeStandby || lastAction.BatteryMode == types.BatteryModeChargeAny))
+	hitDeficitAt := summary.HitThresholdDeficitAt
+	if isMitigatingDeficit && !summary.HitBufferedDeficitAt.IsZero() {
+		hitDeficitAt = summary.HitBufferedDeficitAt
 	}
 
 	gridChargeNowCost := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
@@ -1849,7 +1841,7 @@ func (c *Controller) evaluatePlannedCharge(
 	// Future Peak Preservation scanning:
 	// We scan the simulated hours between now and the planned charge time to identify if there are any peak hours
 	// that are more expensive than our current price.
-	// If we would hit a deficit (HitAboveDeficitAt) before or during that future peak, discharging the battery now
+	// If we would hit a deficit (HitBufferedDeficitAt) before or during that future peak, discharging the battery now
 	// to cover home load would deplete it prematurely, forcing us to buy from the grid at those higher peak rates.
 	// Thus, we force Standby now to preserve the battery's energy specifically to offset the highest upcoming peak.
 	// If the planned charge time is now or in the past (e.g. we decided to skip it), we scan the entire simulation window.
@@ -1860,20 +1852,14 @@ func (c *Controller) evaluatePlannedCharge(
 	if !summary.HitFutureCapacityAt.IsZero() && (scanUntil.IsZero() || summary.HitFutureCapacityAt.Before(scanUntil)) {
 		scanUntil = summary.HitFutureCapacityAt
 	}
-	bufferMinutes := 0
-	if currentStatus.ElevatedMinBatterySOC {
+	var bufferMinutes int
+	if isMitigatingDeficit {
 		bufferMinutes = settings.PeakSurvivalBufferMinutes
+	} else {
+		bufferMinutes = settings.PeakSurvivalBufferMinutes / 2
 	}
 
-	// We almost ALWAYS use HitDeficitAt for peak survival scanning. But we use HitAboveDeficitAt
-	// in two cases to prevent premature action:
-	// 1. We are already grid-charging and want to avoid stopping prematurely when just barely above reserve.
-	// 2. We are not using time-based buffer minutes (bufferMinutes == 0), so we use the SOC-based safety
-	// threshold instead of stacking them.
 	peakSurvivalDeficitAt := hitDeficitAt
-	if (isAlreadyChargingGrid || bufferMinutes == 0) && !summary.HitAboveDeficitAt.IsZero() {
-		peakSurvivalDeficitAt = summary.HitAboveDeficitAt
-	}
 
 	minDiff := max(priceEpsilonForEquality, settings.MinDeficitPriceDifferenceDollarsPerKWH)
 	mustStandbyForPeak, peakTime, peakCost, peakPrice := c.checkPeakSurvival(simData, scanUntil, gridChargeNowCost, peakSurvivalDeficitAt, bufferMinutes, minDiff)
@@ -1890,6 +1876,7 @@ func (c *Controller) evaluatePlannedCharge(
 		slog.Bool("mustStandbyForPeak", mustStandbyForPeak),
 		slog.Bool("isCheapOrEqualNow", isCheapOrEqualNow),
 		slog.Time("hitDeficitAt", hitDeficitAt),
+		slog.Float64("socBufferPercent", settings.SOCBufferPercent),
 	)
 	if isCheapOrEqualNow || mustStandbyForPeak {
 		var reason types.ActionReason
@@ -2014,8 +2001,8 @@ func (c *Controller) evaluateFallback(
 	summary simulationSummary,
 	lastAction *types.Action,
 ) *DecisionResult {
-	bufferedHitCapacityAt := summary.BufferedHitCapacityAt
 	gridChargeNowCost := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
+	bufferMinutes := settings.PeakSurvivalBufferMinutes
 
 	// 1. Minimum Reserve Enforcement:
 	// If the battery is already at or near its minimum reserve limit (either because BatteryAboveMinSOC is false
@@ -2040,17 +2027,15 @@ func (c *Controller) evaluateFallback(
 	// 2. Peak Survival Standby:
 	// If we drop below our deficit threshold before or during a future peak price period,
 	// we standby now to conserve the battery's energy specifically for that peak.
-	// We check this even if no hard deficit (HitDeficitAt) is predicted, to ensure we respect PeakSurvivalBufferMinutes.
-	bufferMinutes := 0
-	if settings.PeakSurvivalBufferMinutes > 0 {
-		bufferMinutes = settings.PeakSurvivalBufferMinutes
-	}
-	// We almost ALWAYS use HitDeficitAt (MinBatterySOC) for peak survival scanning.
-	// But we use HitAboveDeficitAt if we are not using time-based buffer minutes,
-	// ensuring we still have a safety margin without stacking buffers.
-	peakSurvivalDeficitAt := summary.HitDeficitAt
-	if bufferMinutes == 0 && !summary.HitAboveDeficitAt.IsZero() {
-		peakSurvivalDeficitAt = summary.HitAboveDeficitAt
+	isAlreadyActive := currentStatus.ElevatedMinBatterySOC || (lastAction != nil && (lastAction.BatteryMode == types.BatteryModeStandby || lastAction.BatteryMode == types.BatteryModeChargeAny))
+	var peakSurvivalDeficitAt time.Time
+	var scanBufferMinutes int
+	if isAlreadyActive {
+		peakSurvivalDeficitAt = summary.HitBufferedDeficitAt
+		scanBufferMinutes = settings.PeakSurvivalBufferMinutes
+	} else {
+		peakSurvivalDeficitAt = summary.HitThresholdDeficitAt
+		scanBufferMinutes = settings.PeakSurvivalBufferMinutes / 2
 	}
 
 	if !peakSurvivalDeficitAt.IsZero() {
@@ -2059,10 +2044,6 @@ func (c *Controller) evaluateFallback(
 			scanUntil = summary.HitFutureCapacityAt
 		}
 		minDiff := max(priceEpsilonForEquality, settings.MinDeficitPriceDifferenceDollarsPerKWH)
-		scanBufferMinutes := bufferMinutes
-		if lastAction != nil && lastAction.BatteryMode == types.BatteryModeLoad && !currentStatus.ElevatedMinBatterySOC {
-			scanBufferMinutes = bufferMinutes / 2
-		}
 		mustStandbyForPeak, peakTime, peakCost, peakPrice := c.checkPeakSurvival(simData, scanUntil, gridChargeNowCost, peakSurvivalDeficitAt, scanBufferMinutes, minDiff)
 
 		if mustStandbyForPeak {
@@ -2083,8 +2064,12 @@ func (c *Controller) evaluateFallback(
 				slog.Float64("peakCost", peakCost),
 				slog.Time("peakTime", peakTime),
 				slog.Time("hitDeficitAt", peakSurvivalDeficitAt),
+				slog.Time("hitThresholdDeficitAt", summary.HitThresholdDeficitAt),
+				slog.Time("hitFutureCapacityAt", summary.HitFutureCapacityAt),
+				slog.Time("hitBufferedDeficitAt", summary.HitBufferedDeficitAt),
 				slog.Float64("gridChargeNowCost", gridChargeNowCost),
 				slog.Int("bufferMinutes", scanBufferMinutes),
+				slog.Float64("socBufferPercent", settings.SOCBufferPercent),
 			)
 			return &DecisionResult{
 				BatteryMode: types.BatteryModeStandby,
@@ -2098,15 +2083,11 @@ func (c *Controller) evaluateFallback(
 	// Hysteresis Check:
 	// If we are currently actively mitigating a deficit (ElevatedMinBatterySOC is true),
 	// we should only clear the standby mode if the battery has risen above the hysteresis threshold.
-	// We check HitAboveDeficitAt to verify if the battery will drop below the threshold;
+	// We check HitBufferedDeficitAt to verify if the battery will drop below the threshold;
 	// if it does, we continue to standby.
-	hitDeficitAt := summary.HitBelowDeficitAt
-	if currentStatus.ElevatedMinBatterySOC {
-		if !summary.HitAboveDeficitAt.IsZero() {
-			hitDeficitAt = summary.HitAboveDeficitAt
-		}
-	} else if hitDeficitAt.IsZero() {
-		hitDeficitAt = summary.HitDeficitAt
+	hitDeficitAt := summary.HitThresholdDeficitAt
+	if isAlreadyActive {
+		hitDeficitAt = summary.HitBufferedDeficitAt
 	}
 
 	// 3. Projected Deficit Fallback Handling:
@@ -2119,37 +2100,55 @@ func (c *Controller) evaluateFallback(
 		// it now.
 		// If solar exporting is enabled, hitting capacity does not result in curtailment (the excess solar is exported),
 		// so we do not discharge early, preserving the battery energy for high-value peak periods.
-		// We almost ALWAYS use HitDeficitAt for capacity-refill checks.
-		// But we use HitAboveDeficitAt if we are not using time-based buffer minutes (bufferMinutes == 0),
-		// ensuring we still have a safety margin without stacking buffers.
-		refillDeficitAt := summary.HitDeficitAt
-		if bufferMinutes == 0 && !summary.HitAboveDeficitAt.IsZero() {
-			refillDeficitAt = summary.HitAboveDeficitAt
-		}
 
-		if !summary.HitCapacityAt.IsZero() && bufferedHitCapacityAt.Before(refillDeficitAt) {
+		// We use the raw physical depletion time (HitDeficitAt) for refillDeficitAt.
+		// Since capacityHitAt is already buffered/threshold to handle solar uncertainty,
+		// using a buffered/threshold deficit here would double-buffer the safety margin.
+		// We fallback to threshold/buffered deficits only if HitDeficitAt is zero,
+		// preserving backwards compatibility for manually mocked unit tests.
+		refillDeficitAt := summary.HitDeficitAt
+		if refillDeficitAt.IsZero() {
+			refillDeficitAt = summary.HitThresholdDeficitAt
+		}
+		if refillDeficitAt.IsZero() {
+			refillDeficitAt = summary.HitBufferedDeficitAt
+		}
+		capacityHitAt := summary.HitThresholdCapacityAt
+		if isAlreadyActive {
+			capacityHitAt = summary.HitBufferedCapacityAt
+		}
+		if capacityHitAt.IsZero() {
+			capacityHitAt = summary.HitCapacityAt
+		}
+		if !capacityHitAt.IsZero() && capacityHitAt.Before(refillDeficitAt) {
 			var reason types.ActionReason
 			var loadReason string
-			if !summary.HitSolarCapacityAt.IsZero() && !summary.HitSolarCapacityAt.After(summary.HitCapacityAt) {
+			if !summary.HitSolarCapacityAt.IsZero() && !summary.HitSolarCapacityAt.After(capacityHitAt) {
 				reason = types.ActionReasonPreventSolarCurtailment
-				loadReason = fmt.Sprintf("Solar curtailment likely at %s before deficit at %s.", summary.HitSolarCapacityAt.Format(time.Kitchen), refillDeficitAt.Format(time.Kitchen))
-			} else if !summary.HitVPPCapacityAt.IsZero() && !summary.HitVPPCapacityAt.After(summary.HitCapacityAt) {
+				loadReason = fmt.Sprintf("Solar curtailment likely at %s before deficit at %s.", summary.HitSolarCapacityAt.Format(time.Kitchen), hitDeficitAt.Format(time.Kitchen))
+			} else if !summary.HitVPPCapacityAt.IsZero() && !summary.HitVPPCapacityAt.After(capacityHitAt) {
 				reason = types.ActionReasonSufficientBattery
-				loadReason = fmt.Sprintf("Battery will hit capacity at %s from VPP prep before deficit at %s.", summary.HitVPPCapacityAt.Format(time.Kitchen), refillDeficitAt.Format(time.Kitchen))
+				loadReason = fmt.Sprintf("Battery will hit capacity at %s from VPP prep before deficit at %s.", summary.HitVPPCapacityAt.Format(time.Kitchen), hitDeficitAt.Format(time.Kitchen))
 			} else {
 				reason = types.ActionReasonDischargeBeforeCapacityNow
-				loadReason = fmt.Sprintf("Battery will hit capacity at %s before deficit at %s.", summary.HitCapacityAt.Format(time.Kitchen), refillDeficitAt.Format(time.Kitchen))
+				loadReason = fmt.Sprintf("Battery will hit capacity at %s before deficit at %s.", capacityHitAt.Format(time.Kitchen), hitDeficitAt.Format(time.Kitchen))
 			}
 
 			if reason != "" {
 				log.Ctx(ctx).DebugContext(
 					ctx,
 					"deficit predicted but will refill to capacity before then",
-					slog.Time("hitCapacityAt", summary.HitCapacityAt),
+					slog.Time("hitCapacityAt", capacityHitAt),
 					slog.Time("hitSolarCapacityAt", summary.HitSolarCapacityAt),
 					slog.Time("hitVPPCapacityAt", summary.HitVPPCapacityAt),
+					slog.Int("vppChargingBufferMinutes", settings.VPPChargingBufferMinutes),
 					slog.Time("hitDeficitAt", hitDeficitAt),
 					slog.Int("bufferMinutes", bufferMinutes),
+					slog.Time("hitThresholdDeficitAt", summary.HitThresholdDeficitAt),
+					slog.Time("hitFutureCapacityAt", summary.HitFutureCapacityAt),
+					slog.Time("hitBufferedDeficitAt", summary.HitBufferedDeficitAt),
+					slog.Float64("gridChargeNowCost", gridChargeNowCost),
+					slog.Float64("socBufferPercent", settings.SOCBufferPercent),
 					slog.String("reason", string(reason)),
 				)
 				return &DecisionResult{
@@ -2169,6 +2168,11 @@ func (c *Controller) evaluateFallback(
 			slog.Time("hitDeficitAt", hitDeficitAt),
 			slog.Float64("gridChargeNowCost", gridChargeNowCost),
 			slog.Int("bufferMinutes", bufferMinutes),
+			slog.Time("hitThresholdDeficitAt", summary.HitThresholdDeficitAt),
+			slog.Time("hitFutureCapacityAt", summary.HitFutureCapacityAt),
+			slog.Time("hitBufferedDeficitAt", summary.HitBufferedDeficitAt),
+			slog.Float64("gridChargeNowCost", gridChargeNowCost),
+			slog.Float64("socBufferPercent", settings.SOCBufferPercent),
 		)
 		return &DecisionResult{
 			BatteryMode: types.BatteryModeLoad,
@@ -2183,6 +2187,12 @@ func (c *Controller) evaluateFallback(
 		"no deficit predicted, using battery",
 		slog.Float64("minEnergy", summary.MinEnergy),
 		slog.Float64("maxEnergy", summary.MaxEnergy),
+		slog.Time("hitDeficitAt", hitDeficitAt),
+		slog.Float64("gridChargeNowCost", gridChargeNowCost),
+		slog.Time("hitThresholdDeficitAt", summary.HitThresholdDeficitAt),
+		slog.Time("hitFutureCapacityAt", summary.HitFutureCapacityAt),
+		slog.Time("hitBufferedDeficitAt", summary.HitBufferedDeficitAt),
+		slog.Float64("socBufferPercent", settings.SOCBufferPercent),
 	)
 	return &DecisionResult{
 		BatteryMode: types.BatteryModeLoad,
@@ -2292,14 +2302,16 @@ func (c *Controller) getConsecutiveCheapDuration(
 			break
 		}
 	}
-
 	return totalDur
 }
 
 type standbySimulationResult struct {
 	HitCapacityAt            time.Time
-	HitSolarCapacityAt       time.Time
 	HitDeficitAt             time.Time
+	HitBufferedCapacityAt    time.Time
+	HitBufferedDeficitAt     time.Time
+	HitThresholdCapacityAt   time.Time
+	HitThresholdDeficitAt    time.Time
 	TotalImportCost          float64
 	TotalNetLoadKWH          float64
 	StandbyEnergyAtPeakStart float64
@@ -2316,10 +2328,15 @@ func (c *Controller) simulateStandby(
 	capacityKWH float64,
 	minKWH float64,
 	targetAt time.Time,
+	settings types.Settings,
 ) standbySimulationResult {
 	batteryEnergy := currentEnergyKWH
+	bufferedBatteryEnergy := currentEnergyKWH
+	thresholdBatteryEnergy := currentEnergyKWH
 	standbyEnergyAtPeakStart := currentEnergyKWH
-	var hitCapacityAt, hitSolarCapacityAt, hitDeficitAt time.Time
+	var hitCapacityAt, hitDeficitAt time.Time
+	var bufferedHitCapacityAt, bufferedHitDeficitAt time.Time
+	var thresholdHitCapacityAt, thresholdHitDeficitAt time.Time
 	var totalImportCost, totalNetLoadKWH float64
 
 	capacityThresholdKWH := capacityKWH * batteryCapacityBuffer
@@ -2336,7 +2353,8 @@ func (c *Controller) simulateStandby(
 		// will discharge the battery and reset its state, wiping out any prior capacity hits.
 		if !slot.VPPEndAt.IsZero() && slot.TS.Before(slot.VPPEndAt) {
 			hitCapacityAt = time.Time{}
-			hitSolarCapacityAt = time.Time{}
+			bufferedHitCapacityAt = time.Time{}
+			thresholdHitCapacityAt = time.Time{}
 		}
 
 		// Use the pre-calculated EnergyApplyRatio from simulation (e.g. for fractional first hours).
@@ -2346,34 +2364,27 @@ func (c *Controller) simulateStandby(
 			simEnergyApplyRatio = 1.0
 		}
 
-		clampedNetKWH := slot.ClampedNetLoadSolarKWH
-
-		// We only standby if the simulated hour's price is cheap compared to the target export price.
 		shouldDischarge := slot.GridChargeDollarsPerKWH >= dischargeOverCost
 
+		bufferedMinKWH := minKWH + capacityKWH*(settings.SOCBufferPercent/100.0)
+		thresholdMinKWH := minKWH + capacityKWH*((settings.SOCBufferPercent/2.0)/100.0)
+
+		// 1. Primary / Unbuffered run
+		clampedNetKWH := slot.ClampedNetLoadSolarKWH
 		var appliedNetKWH float64
 		if shouldDischarge {
-			appliedNetKWH = clampedNetKWH // cover home load (discharging if positive, solar charging if negative)
+			appliedNetKWH = clampedNetKWH
 		} else {
 			if clampedNetKWH < 0 {
-				appliedNetKWH = clampedNetKWH // standby holds energy but still charges from solar surplus
+				appliedNetKWH = clampedNetKWH
 			} else {
-				appliedNetKWH = 0.0 // standby holds energy; do not discharge to cover load
+				appliedNetKWH = 0.0
 			}
 		}
 
 		batteryEnergyBeforeStep := batteryEnergy
-		// Calculate simulated energy at the end of the slot based on the apply ratio
 		newEnergy := batteryEnergy - (appliedNetKWH * simEnergyApplyRatio)
 
-		// We only trigger solar capacity hit if we are charging from solar (clampedNetKWH < 0)
-		var isSolarCharging bool
-		if clampedNetKWH < 0 && slot.NetLoadSolarKWH < 0 {
-			isSolarCharging = true
-		}
-
-		// Check if solar charging pushes us above the capacity threshold.
-		// If so, interpolate the exact fraction of the hour when the threshold was crossed.
 		if (appliedNetKWH < 0 && newEnergy >= capacityThresholdKWH) || newEnergy > capacityKWH {
 			if hitCapacityAt.IsZero() {
 				remainingBeforeCapacity := capacityThresholdKWH - batteryEnergy
@@ -2383,15 +2394,6 @@ func (c *Controller) simulateStandby(
 					hitCapacityAt = slot.TS.Add(time.Duration(math.Round(fraction * float64(time.Hour))))
 				} else {
 					hitCapacityAt = slot.TS
-				}
-			}
-			if isSolarCharging && hitSolarCapacityAt.IsZero() {
-				remainingBeforeCapacity := capacityThresholdKWH - batteryEnergy
-				if remainingBeforeCapacity > 0 && appliedNetKWH < 0 {
-					fraction := remainingBeforeCapacity / -appliedNetKWH
-					hitSolarCapacityAt = slot.TS.Add(time.Duration(math.Round(fraction * float64(time.Hour))))
-				} else {
-					hitSolarCapacityAt = slot.TS
 				}
 			}
 			hitDeficitAt = time.Time{}
@@ -2416,6 +2418,32 @@ func (c *Controller) simulateStandby(
 			} else {
 				batteryEnergy = newEnergy
 			}
+
+			// Buffered deficit hit check using unshifted optimal run
+			if newEnergy < bufferedMinKWH {
+				if bufferedHitDeficitAt.IsZero() {
+					remainingBeforeMin := batteryEnergyBeforeStep - bufferedMinKWH
+					if remainingBeforeMin > 0 {
+						fraction := remainingBeforeMin / appliedNetKWH
+						bufferedHitDeficitAt = slot.TS.Add(time.Duration(math.Round(fraction * float64(time.Hour))))
+					} else {
+						bufferedHitDeficitAt = slot.TS
+					}
+				}
+			}
+
+			// Threshold deficit hit check using unshifted optimal run
+			if newEnergy < thresholdMinKWH {
+				if thresholdHitDeficitAt.IsZero() {
+					remainingBeforeMin := batteryEnergyBeforeStep - thresholdMinKWH
+					if remainingBeforeMin > 0 {
+						fraction := remainingBeforeMin / appliedNetKWH
+						thresholdHitDeficitAt = slot.TS.Add(time.Duration(math.Round(fraction * float64(time.Hour))))
+					} else {
+						thresholdHitDeficitAt = slot.TS
+					}
+				}
+			}
 		} else {
 			// Charging or holding
 			// Clamped at maximum battery capacity.
@@ -2426,12 +2454,95 @@ func (c *Controller) simulateStandby(
 			}
 		}
 
-		// Calculate grid import:
-		// 1. If we should discharge (active load coverage), we discharge as much battery energy
-		//    as possible. However, if the battery runs out of energy mid-hour (hits the minKWH reserve limit),
-		//    any remaining uncovered load must be imported from the grid.
-		// 2. If we should NOT discharge (we are in standby), we hold the battery energy, so the entire
-		//    positive net home load (clampedNetKWH) must be imported from the grid.
+		// 2. Buffered run
+		bufferedClampedNetKWH := slot.BufferedClampedNetLoadSolarKWH
+		if bufferedClampedNetKWH == 0 && slot.ClampedNetLoadSolarKWH != 0 {
+			bufferedClampedNetKWH = slot.ClampedNetLoadSolarKWH
+		}
+		var bufferedAppliedNetKWH float64
+		if shouldDischarge {
+			bufferedAppliedNetKWH = bufferedClampedNetKWH
+		} else {
+			if bufferedClampedNetKWH < 0 {
+				bufferedAppliedNetKWH = bufferedClampedNetKWH
+			} else {
+				bufferedAppliedNetKWH = 0.0
+			}
+		}
+
+		newBufferedEnergy := bufferedBatteryEnergy - (bufferedAppliedNetKWH * simEnergyApplyRatio)
+
+		if (bufferedAppliedNetKWH < 0 && newBufferedEnergy >= capacityThresholdKWH) || newBufferedEnergy > capacityKWH {
+			if bufferedHitCapacityAt.IsZero() {
+				remainingBeforeCapacity := capacityThresholdKWH - bufferedBatteryEnergy
+				if remainingBeforeCapacity > 0 && bufferedAppliedNetKWH < 0 {
+					fraction := remainingBeforeCapacity / -bufferedAppliedNetKWH
+					bufferedHitCapacityAt = slot.TS.Add(time.Duration(math.Round(fraction * float64(time.Hour))))
+				} else {
+					bufferedHitCapacityAt = slot.TS
+				}
+			}
+		}
+
+		if bufferedAppliedNetKWH > 0 {
+			if newBufferedEnergy < bufferedMinKWH {
+				bufferedBatteryEnergy = bufferedMinKWH
+			} else {
+				bufferedBatteryEnergy = newBufferedEnergy
+			}
+		} else {
+			if newBufferedEnergy > capacityKWH {
+				bufferedBatteryEnergy = capacityKWH
+			} else {
+				bufferedBatteryEnergy = newBufferedEnergy
+			}
+		}
+
+		// 3. Threshold run
+		thresholdClampedNetKWH := slot.ThresholdClampedNetLoadSolarKWH
+		if thresholdClampedNetKWH == 0 && slot.ClampedNetLoadSolarKWH != 0 {
+			thresholdClampedNetKWH = slot.ClampedNetLoadSolarKWH
+		}
+		var thresholdAppliedNetKWH float64
+		if shouldDischarge {
+			thresholdAppliedNetKWH = thresholdClampedNetKWH
+		} else {
+			if thresholdClampedNetKWH < 0 {
+				thresholdAppliedNetKWH = thresholdClampedNetKWH
+			} else {
+				thresholdAppliedNetKWH = 0.0
+			}
+		}
+
+		newThresholdEnergy := thresholdBatteryEnergy - (thresholdAppliedNetKWH * simEnergyApplyRatio)
+
+		if (thresholdAppliedNetKWH < 0 && newThresholdEnergy >= capacityThresholdKWH) || newThresholdEnergy > capacityKWH {
+			if thresholdHitCapacityAt.IsZero() {
+				remainingBeforeCapacity := capacityThresholdKWH - thresholdBatteryEnergy
+				if remainingBeforeCapacity > 0 && thresholdAppliedNetKWH < 0 {
+					fraction := remainingBeforeCapacity / -thresholdAppliedNetKWH
+					thresholdHitCapacityAt = slot.TS.Add(time.Duration(math.Round(fraction * float64(time.Hour))))
+				} else {
+					thresholdHitCapacityAt = slot.TS
+				}
+			}
+		}
+
+		if thresholdAppliedNetKWH > 0 {
+			if newThresholdEnergy < thresholdMinKWH {
+				thresholdBatteryEnergy = thresholdMinKWH
+			} else {
+				thresholdBatteryEnergy = newThresholdEnergy
+			}
+		} else {
+			if newThresholdEnergy > capacityKWH {
+				thresholdBatteryEnergy = capacityKWH
+			} else {
+				thresholdBatteryEnergy = newThresholdEnergy
+			}
+		}
+
+		// Calculate grid import
 		var importKWH float64
 		if shouldDischarge {
 			if clampedNetKWH > 0 {
@@ -2450,17 +2561,22 @@ func (c *Controller) simulateStandby(
 			totalNetLoadKWH += importKWH
 		}
 
-		// If we've already determined both capacity and deficit hit times, and we've reached or passed targetAt,
+		// If we've already determined capacity and deficit hit times for all three, and we've reached or passed targetAt,
 		// we can stop simulating.
-		if !hitCapacityAt.IsZero() && !hitDeficitAt.IsZero() && (targetAt.IsZero() || !slot.TS.Before(targetAt)) {
+		allCapacityFilled := !hitCapacityAt.IsZero() && !bufferedHitCapacityAt.IsZero() && !thresholdHitCapacityAt.IsZero()
+		allDeficitsFilled := !hitDeficitAt.IsZero() && !bufferedHitDeficitAt.IsZero() && !thresholdHitDeficitAt.IsZero()
+		if allCapacityFilled && allDeficitsFilled && (targetAt.IsZero() || !slot.TS.Before(targetAt)) {
 			break
 		}
 	}
 
 	return standbySimulationResult{
 		HitCapacityAt:            hitCapacityAt,
-		HitSolarCapacityAt:       hitSolarCapacityAt,
 		HitDeficitAt:             hitDeficitAt,
+		HitBufferedCapacityAt:    bufferedHitCapacityAt,
+		HitBufferedDeficitAt:     bufferedHitDeficitAt,
+		HitThresholdCapacityAt:   thresholdHitCapacityAt,
+		HitThresholdDeficitAt:    thresholdHitDeficitAt,
 		TotalImportCost:          totalImportCost,
 		TotalNetLoadKWH:          totalNetLoadKWH,
 		StandbyEnergyAtPeakStart: standbyEnergyAtPeakStart,
@@ -2591,7 +2707,7 @@ func (c *Controller) evaluateVPPEvent(
 		return nil
 	}
 
-	vppChargingDeadline := summary.SoonestVPPChargingAt.Add(-time.Duration(settings.PeakSurvivalBufferMinutes) * time.Minute)
+	vppChargingDeadline := summary.SoonestVPPChargingAt.Add(-time.Duration(settings.VPPChargingBufferMinutes) * time.Minute)
 
 	var forcedChargePrice float64
 	var forcedChargeSlotPrice types.Price
@@ -2613,6 +2729,8 @@ func (c *Controller) evaluateVPPEvent(
 	minKWH := capacityKWH * (min(settings.MinBatterySOC+1.0, 100.0) / 100.0)
 	minArbitrageDiff := max(priceEpsilonForEquality, settings.MinArbitrageDifferenceDollarsPerKWH)
 
+	isAlreadyChargingGrid := lastAction != nil && lastAction.BatteryMode == types.BatteryModeChargeAny
+
 	standbyRes := c.simulateStandby(
 		simData,
 		forcedChargePrice-minArbitrageDiff,
@@ -2620,10 +2738,15 @@ func (c *Controller) evaluateVPPEvent(
 		capacityKWH,
 		minKWH,
 		vppChargingDeadline,
+		settings,
 	)
 
 	// If solar is predicted to fill the battery to capacity before VPP pre-charging starts, we exit.
-	if !standbyRes.HitSolarCapacityAt.IsZero() && !standbyRes.HitSolarCapacityAt.After(vppChargingDeadline) {
+	standbyHitCapacityAt := standbyRes.HitThresholdCapacityAt
+	if isAlreadyChargingGrid {
+		standbyHitCapacityAt = standbyRes.HitBufferedCapacityAt
+	}
+	if !standbyHitCapacityAt.IsZero() && !standbyHitCapacityAt.After(vppChargingDeadline) {
 		return nil
 	}
 
@@ -2639,8 +2762,6 @@ func (c *Controller) evaluateVPPEvent(
 	}
 
 	neededDurationHours := neededEnergy / chargeKW
-
-	isAlreadyChargingGrid := lastAction != nil && lastAction.BatteryMode == types.BatteryModeChargeAny
 	gridChargeNowCost := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
 
 	var simPrevChargeCosts []simPriceSlot

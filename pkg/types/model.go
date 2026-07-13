@@ -84,8 +84,8 @@ type Action struct {
 	FuturePrice            *Price           `json:"futurePrice,omitempty"`
 	SystemStatus           SystemStatus     `json:"systemStatus"`
 	HitDeficitAt           time.Time        `json:"deficitAt"`
-	HitBelowDeficitAt      time.Time        `json:"hitBelowDeficitAt"`
-	HitAboveDeficitAt      time.Time        `json:"hitAboveDeficitAt"`
+	HitBufferedDeficitAt   time.Time        `json:"hitBufferedDeficitAt"`
+	HitThresholdDeficitAt  time.Time        `json:"hitThresholdDeficitAt"`
 	HitCapacityAt          time.Time        `json:"capacityAt"`
 	StrategyBenefitDollars float64          `json:"strategyBenefitDollars,omitempty"`
 	DryRun                 bool             `json:"dryRun,omitempty"`

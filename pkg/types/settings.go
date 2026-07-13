@@ -8,7 +8,7 @@ import (
 
 // CurrentSettingsVersion is the current version of the settings struct.
 // Increment this value only if you need to set a default value other than the Go default for that value.
-const CurrentSettingsVersion = 12
+const CurrentSettingsVersion = 13
 
 // Settings represents the configuration stored in the database.
 // These are dynamic settings that can be changed without redeploying.
@@ -91,8 +91,11 @@ type Settings struct {
 	UpdateGroup int `json:"updateGroup"`
 
 	// Hysteresis & timing thresholds
-	MinStartChargeMinutes     int `json:"minStartChargeMinutes"`
-	PeakSurvivalBufferMinutes int `json:"peakSurvivalBufferMinutes"`
+	MinStartChargeMinutes      int     `json:"minStartChargeMinutes"`
+	PeakSurvivalBufferMinutes  int     `json:"peakSurvivalBufferMinutes"`
+	SOCBufferPercent           float64 `json:"socBufferPercent"`
+	SolarCapacityBufferMinutes int     `json:"solarCapacityBufferMinutes"`
+	VPPChargingBufferMinutes   int     `json:"vppChargingBufferMinutes"`
 
 	// A/C Energy Estimation Settings
 	ACBaseTemperatureC              float64 `json:"acBaseTemperatureC"`
@@ -268,6 +271,27 @@ func MigrateSettings(s Settings, currentVersion int) (Settings, bool, error) {
 				s.HomeLoadPredictionStrategy = "default"
 				migrated = true
 			}
+		case 13:
+			// version 13: split buffer settings based on existing PeakSurvivalBufferMinutes
+			existingBuffer := s.PeakSurvivalBufferMinutes
+			if existingBuffer == 30 || existingBuffer == 0 {
+				s.SOCBufferPercent = 4.0
+				s.PeakSurvivalBufferMinutes = 20
+				s.SolarCapacityBufferMinutes = 10
+				s.VPPChargingBufferMinutes = 20
+			} else if existingBuffer > 30 {
+				s.SOCBufferPercent = 8.0
+				s.PeakSurvivalBufferMinutes = 40
+				s.SolarCapacityBufferMinutes = 30
+				s.VPPChargingBufferMinutes = 40
+			} else {
+				// existingBuffer < 30
+				s.SOCBufferPercent = 2.0
+				s.PeakSurvivalBufferMinutes = 10
+				s.SolarCapacityBufferMinutes = 0
+				s.VPPChargingBufferMinutes = 10
+			}
+			migrated = true
 		default:
 			return s, false, fmt.Errorf("unknown settings version: %d", version)
 		}

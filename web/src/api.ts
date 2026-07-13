@@ -72,8 +72,8 @@ export interface Action {
     currentPrice?: PriceInfo;
     futurePrice?: PriceInfo;
     deficitAt?: string;
-    hitBelowDeficitAt?: string;
-    hitAboveDeficitAt?: string;
+    hitBufferedDeficitAt?: string;
+    hitThresholdDeficitAt?: string;
     capacityAt?: string;
     systemStatus?: SystemStatus;
     dryRun?: boolean;
@@ -270,6 +270,9 @@ export interface Settings {
     solarTilt?: number;
     minStartChargeMinutes: number;
     peakSurvivalBufferMinutes: number;
+    socBufferPercent: number;
+    solarCapacityBufferMinutes: number;
+    vppChargingBufferMinutes: number;
     acBaseTemperatureC: number;
     acUsageIncreasePercentPerDegree: number;
     acUsageMaxIncreasePercent: number;
