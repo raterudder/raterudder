@@ -67,6 +67,22 @@
   border-color: var(--primary);
 }
 
+.site-badge-header {
+  background: var(--surface-container-low);
+  border: 1px solid var(--border);
+  color: var(--on-surface-variant);
+  padding: 0.5rem 0.875rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  font-family: inherit;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  text-align: left;
+  user-select: none;
+}
+
 .site-name-header {
   font-size: 0.85rem;
   color: var(--text-muted);

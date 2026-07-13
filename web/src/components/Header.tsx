@@ -61,6 +61,11 @@ const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSite
                             </Select.Portal>
                         </Select.Root>
                     )}
+                    {loggedIn && sites.length === 1 && (
+                        <div className="site-badge-header" data-testid="header-site-name">
+                            {sites[0].name || sites[0].id}
+                        </div>
+                    )}
                 </div>
 
                 {loggedIn && (

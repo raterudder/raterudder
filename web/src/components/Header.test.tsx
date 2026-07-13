@@ -63,4 +63,45 @@ describe('Header Component', () => {
         expect(menuButton).toHaveAttribute('aria-controls', 'mobile-menu-content');
         expect(menuButton).toHaveAttribute('aria-expanded', 'false');
     });
+
+    it('shows static site badge when there is only one site', () => {
+        const { hook } = memoryLocation({ static: true, path: '/dashboard' });
+        render(
+            <Router hook={hook}>
+                <Header
+                    loggedIn={true}
+                    sites={[{ id: 'site1', name: 'Only Site' }]}
+                    selectedSiteID="site1"
+                    onSiteChange={mockOnSiteChange}
+                    onLogout={mockOnLogout}
+                />
+            </Router>
+        );
+
+        const siteNameElement = screen.getByTestId('header-site-name');
+        expect(siteNameElement).toBeInTheDocument();
+        expect(siteNameElement).toHaveTextContent('Only Site');
+        expect(screen.queryByLabelText('Select Site')).not.toBeInTheDocument();
+    });
+
+    it('shows site selector dropdown when there are multiple sites', () => {
+        const { hook } = memoryLocation({ static: true, path: '/dashboard' });
+        render(
+            <Router hook={hook}>
+                <Header
+                    loggedIn={true}
+                    sites={[
+                        { id: 'site1', name: 'Site 1' },
+                        { id: 'site2', name: 'Site 2' },
+                    ]}
+                    selectedSiteID="site1"
+                    onSiteChange={mockOnSiteChange}
+                    onLogout={mockOnLogout}
+                />
+            </Router>
+        );
+
+        expect(screen.queryByTestId('header-site-name')).not.toBeInTheDocument();
+        expect(screen.getByLabelText('Select Site')).toBeInTheDocument();
+    });
 });
