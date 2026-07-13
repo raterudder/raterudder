@@ -1114,13 +1114,33 @@ func TestTesla(t *testing.T) {
 			assert.Equal(t, 55.0, (*lastReq)["backup_reserve_percent"])
 		})
 
-		t.Run("Storm mode active", func(t *testing.T) {
-			sys, ts, _, _, _, _ := setupTesla(t, "self_consumption", 20.0, false, "pv_only", 55.0, true, types.Settings{ESS: "tesla"})
+		t.Run("Storm mode active grid charge change", func(t *testing.T) {
+			sys, ts, mode, backup, grid, lastReq := setupTesla(t, "self_consumption", 20.0, true, "pv_only", 55.0, true, types.Settings{
+				ESS:                 "tesla",
+				GridChargeBatteries: true,
+			})
 			defer ts.Close()
 
 			err := sys.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{})
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "device is in storm mode")
+			require.NoError(t, err)
+			assert.False(t, *mode)
+			assert.False(t, *backup)
+			assert.True(t, *grid)
+			assert.False(t, (*lastReq)["disallow_charge_from_grid_with_solar_installed"].(bool))
+		})
+
+		t.Run("Storm mode active no change needed", func(t *testing.T) {
+			sys, ts, mode, backup, grid, _ := setupTesla(t, "self_consumption", 20.0, false, "pv_only", 55.0, true, types.Settings{
+				ESS:                 "tesla",
+				GridChargeBatteries: true,
+			})
+			defer ts.Close()
+
+			err := sys.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{})
+			require.NoError(t, err)
+			assert.False(t, *mode)
+			assert.False(t, *backup)
+			assert.False(t, *grid)
 		})
 
 		t.Run("ChargeToSOC respected", func(t *testing.T) {

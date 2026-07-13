@@ -963,20 +963,59 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		return err
 	}
 
-	// 6 means storm hedge
-	if rd.RuntimeData.TOUID == 6 {
-		log.Ctx(ctx).InfoContext(ctx, "device is in storm hedge mode, skipping set modes")
-		return errors.New("device is in storm hedge mode")
-	}
-
 	modes, err := f.getAvailableModes(ctx)
 	if err != nil {
 		return err
 	}
 
-	if modes.currentMode.WorkMode == 3 {
-		log.Ctx(ctx).InfoContext(ctx, "device is in backup mode, skipping set modes")
-		return errors.New("device is in backup mode")
+	isStormHedge := rd.RuntimeData.TOUID == 6
+	isBackup := modes.currentMode.WorkMode == 3
+
+	if isStormHedge || isBackup {
+		if bat == types.BatteryModeNoChange {
+			return nil
+		}
+		var targetGridMaxFlag franklinGridMaxFlag
+		switch bat {
+		case types.BatteryModeChargeAny, types.BatteryModeLoad:
+			if f.settings.GridChargeBatteries {
+				targetGridMaxFlag = franklinGridMaxFlagChargeFromGrid
+			} else {
+				targetGridMaxFlag = franklinGridMaxFlagNoChargeFromGrid
+			}
+		case types.BatteryModeChargeSolar, types.BatteryModeStandby:
+			targetGridMaxFlag = franklinGridMaxFlagNoChargeFromGrid
+		default:
+			return fmt.Errorf("unknown battery mode: %v", bat)
+		}
+
+		pc, err := f.getPowerControl(ctx)
+		if err != nil {
+			return err
+		}
+
+		if pc.GridMaxFlag != targetGridMaxFlag {
+			log.Ctx(ctx).InfoContext(ctx, "fixing grid charge mode in storm/backup mode",
+				slog.Int("oldGridMaxFlag", int(pc.GridMaxFlag)),
+				slog.Int("newGridMaxFlag", int(targetGridMaxFlag)),
+				slog.Bool("isStormHedge", isStormHedge),
+				slog.Bool("isBackup", isBackup),
+			)
+			pc.GridMaxFlag = targetGridMaxFlag
+			if f.settings.DryRun {
+				log.Ctx(ctx).DebugContext(ctx, "dry run: would've set power control in storm/backup mode",
+					slog.Int("gridMaxFlag", int(pc.GridMaxFlag)),
+				)
+			} else {
+				if err := f.setPowerControl(ctx, pc); err != nil {
+					log.Ctx(ctx).ErrorContext(ctx, "failed to set power control in storm/backup mode", slog.Any("error", err))
+					return err
+				}
+			}
+		} else {
+			log.Ctx(ctx).DebugContext(ctx, "grid charge mode already set correctly in storm/backup mode", slog.Int("gridMaxFlag", int(pc.GridMaxFlag)))
+		}
+		return nil
 	}
 
 	if modes.selfConsumption == (franklinMode{}) {

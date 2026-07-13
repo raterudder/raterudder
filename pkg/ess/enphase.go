@@ -449,14 +449,6 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 		return err
 	}
 
-	severeWeatherWatchActive := data.State.BatteryConfig.SevereWeatherWatch == "active"
-	if severeWeatherWatchActive {
-		log.Ctx(ctx).InfoContext(ctx, "device is in storm mode, skipping set modes",
-			slog.String("severeWeatherWatch", data.State.BatteryConfig.SevereWeatherWatch),
-		)
-		return errors.New("device is in storm mode")
-	}
-
 	tz := data.App.Timezone
 	if tz == "" {
 		tz = "UTC"
@@ -495,11 +487,57 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 		currentProfile = settingsData.RequestedConfig.Profile
 	}
 
+	severeWeatherWatchActive := data.State.BatteryConfig.SevereWeatherWatch == "active"
 	isBackupCurrent := settingsData.Profile == "backup_only"
 	isBackupPending := settingsData.RequestedConfig.Profile == "backup_only"
-	if isBackupCurrent || isBackupPending {
-		log.Ctx(ctx).InfoContext(ctx, "device is in backup mode, skipping set modes")
-		return errors.New("device is in backup mode")
+	isBackup := isBackupCurrent || isBackupPending
+
+	if severeWeatherWatchActive || isBackup {
+		if bat == types.BatteryModeNoChange {
+			return nil
+		}
+		var targetChargeFromGrid bool
+		switch bat {
+		case types.BatteryModeChargeAny, types.BatteryModeLoad:
+			targetChargeFromGrid = e.settings.GridChargeBatteries
+		case types.BatteryModeChargeSolar, types.BatteryModeStandby:
+			targetChargeFromGrid = false
+		default:
+			return fmt.Errorf("unknown battery mode: %v", bat)
+		}
+
+		updatedChargeFromGrid := targetChargeFromGrid != currentChargeFromGrid
+		disableSchedule := currentChargeFromGridScheduleEnabled
+
+		if updatedChargeFromGrid || disableSchedule {
+			if e.settings.DryRun {
+				log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated enphase battery settings in storm/backup mode",
+					slog.Bool("chargeFromGrid", targetChargeFromGrid),
+					slog.Bool("chargeFromGridScheduleEnabled", false),
+					slog.Bool("severeWeatherWatchActive", severeWeatherWatchActive),
+					slog.Bool("isBackup", isBackup),
+				)
+			} else {
+				log.Ctx(ctx).InfoContext(ctx, "updating enphase battery settings in storm/backup mode",
+					slog.Bool("chargeFromGrid", targetChargeFromGrid),
+					slog.Bool("chargeFromGridScheduleEnabled", false),
+					slog.Bool("severeWeatherWatchActive", severeWeatherWatchActive),
+					slog.Bool("isBackup", isBackup),
+				)
+				payload := enphaseBatterySettingsPayload{
+					ChargeFromGrid:                targetChargeFromGrid,
+					ChargeFromGridScheduleEnabled: false,
+				}
+				if err := e.updateBatterySettings(ctx, payload); err != nil {
+					return err
+				}
+			}
+		} else {
+			log.Ctx(ctx).DebugContext(ctx, "grid charge mode already set correctly in storm/backup mode",
+				slog.Bool("chargeFromGrid", targetChargeFromGrid),
+			)
+		}
+		return nil
 	}
 
 	newReserveSOC := currentReserveSOC

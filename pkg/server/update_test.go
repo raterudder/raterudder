@@ -352,6 +352,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
 		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{EmergencyMode: true}, nil)
+		mockES.On("SetModes", mock.Anything, types.BatteryModeChargeAny, types.SolarModeNoChange, types.ModesOptions{}).Return(nil).Once()
 
 		mockP := ess.NewMap()
 		mockP.SetSystem(types.SiteIDNone, mockES)
@@ -390,7 +391,7 @@ func TestHandleUpdate(t *testing.T) {
 		assert.Equal(t, "emergency mode", resp["status"])
 
 		mockU.AssertCalled(t, "GetCurrentPrice", mock.Anything)
-		mockES.AssertNotCalled(t, "SetModes")
+		mockES.AssertExpectations(t)
 	})
 
 	t.Run("Action - Alarms Present", func(t *testing.T) {

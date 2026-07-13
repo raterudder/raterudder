@@ -369,7 +369,14 @@ func (s *Server) performSiteUpdate(
 
 	// don't update if we're in emergency mode
 	if status.EmergencyMode {
-		log.Ctx(ctx).InfoContext(ctx, "update: emergency mode")
+		log.Ctx(ctx).InfoContext(ctx, "update: emergency mode, ensuring grid charge is enabled")
+
+		// If storm hedge is enabled, but grid charge was previously disabled, storm hedge won't work.
+		// We call SetModes to ensure grid charging is configured correctly.
+		if err := essSystem.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeNoChange, types.ModesOptions{}); err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to set modes in emergency mode", slog.Any("error", err))
+		}
+
 		action := types.Action{
 			Timestamp:    s.now(),
 			Description:  "In emergency mode",

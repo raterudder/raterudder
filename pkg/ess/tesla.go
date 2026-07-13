@@ -781,8 +781,47 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 	}
 
 	if liveStatus.StormModeActive {
-		log.Ctx(ctx).InfoContext(ctx, "device is in storm mode, skipping set modes")
-		return errors.New("device is in storm mode")
+		if bat == types.BatteryModeNoChange {
+			return nil
+		}
+		var targetAllowGridCharge bool
+		switch bat {
+		case types.BatteryModeChargeAny, types.BatteryModeLoad:
+			targetAllowGridCharge = b.settings.GridChargeBatteries
+		case types.BatteryModeChargeSolar, types.BatteryModeStandby:
+			targetAllowGridCharge = false
+		default:
+			return fmt.Errorf("unknown battery mode: %v", bat)
+		}
+
+		allowGridCharge := !siteInfo.Components.DisallowChargeFromGridWithSolarInstalled
+		if allowGridCharge != targetAllowGridCharge {
+			log.Ctx(ctx).InfoContext(ctx, "fixing grid charge mode in storm mode",
+				slog.Bool("oldAllowGridCharge", allowGridCharge),
+				slog.Bool("newAllowGridCharge", targetAllowGridCharge),
+			)
+			allowGridCharge = targetAllowGridCharge
+			if b.settings.DryRun {
+				log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated grid import export in storm mode", slog.Bool("allowGridCharge", allowGridCharge))
+			} else {
+				path := fmt.Sprintf("api/1/energy_sites/%d/grid_import_export", b.energySiteID)
+				payload := map[string]any{
+					"disallow_charge_from_grid_with_solar_installed": !allowGridCharge,
+					"customer_preferred_export_rule":                 siteInfo.Components.CustomerPreferredExportRule,
+				}
+				req, err := b.base.newPOSTRequest(ctx, "POST", path, b.token, b.baseURL, payload)
+				if err != nil {
+					return err
+				}
+				if err := b.base.doRequest(req, nil); err != nil {
+					log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla grid import export in storm mode", slog.Any("error", err))
+					return err
+				}
+			}
+		} else {
+			log.Ctx(ctx).DebugContext(ctx, "grid charge mode already set correctly in storm mode", slog.Bool("allowGridCharge", allowGridCharge))
+		}
+		return nil
 	}
 
 	reserveSOC := siteInfo.BackupReservePercent

@@ -863,7 +863,7 @@ func TestEnphase(t *testing.T) {
 		assert.False(t, postCalled)
 		assert.False(t, putCalled)
 
-		// Test backup mode guard (current profile is backup_only)
+		// Test backup mode grid charge update (current profile is backup_only)
 		postCalled = false
 		lastPayload = nil
 		putCalled = false
@@ -872,24 +872,42 @@ func TestEnphase(t *testing.T) {
 		settingsScheduleEnabled = false
 		useRequestedConfig = false
 		settingsProfile = "backup_only"
+		e.settings.GridChargeBatteries = true
 
 		err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
-		require.ErrorContains(t, err, "device is in backup mode")
+		require.NoError(t, err)
 		assert.False(t, postCalled)
-		assert.False(t, putCalled)
+		if assert.True(t, putCalled) {
+			assert.True(t, lastSettingsPut.ChargeFromGrid)
+		}
 
-		// Test backup mode guard (pending profile is backup_only)
+		// Test backup mode grid charge update (pending profile is backup_only)
+		postCalled = false
+		lastPayload = nil
+		putCalled = false
+		lastSettingsPut = nil
+		settingsChargeFromGrid = true
+		settingsScheduleEnabled = false
 		settingsProfile = "self-consumption"
 		requestedProfile = "backup_only"
 		useRequestedConfig = true
+		e.settings.GridChargeBatteries = false
 
 		err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
-		require.ErrorContains(t, err, "device is in backup mode")
+		require.NoError(t, err)
 		assert.False(t, postCalled)
-		assert.False(t, putCalled)
+		if assert.True(t, putCalled) {
+			assert.False(t, lastSettingsPut.ChargeFromGrid)
+		}
 	})
 
-	t.Run("SetModes storm mode guard", func(t *testing.T) {
+	t.Run("SetModes storm mode grid charge", func(t *testing.T) {
+		putCalled := false
+		var lastPayload *struct {
+			ChargeFromGrid                bool `json:"chargeFromGrid"`
+			ChargeFromGridScheduleEnabled bool `json:"chargeFromGridScheduleEnabled"`
+		}
+
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/app-api/123/data.json" {
 				res := enphaseDataResult{
@@ -904,6 +922,42 @@ func TestEnphase(t *testing.T) {
 				json.NewEncoder(w).Encode(res)
 				return
 			}
+			if r.URL.Path == "/pv/systems/123/today" {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{
+					"start_date": "2026-06-06",
+					"battery_details": {
+						"aggregate_soc": 80
+					},
+					"stats": []
+				}`))
+				return
+			}
+			if r.URL.Path == "/service/batteryConfig/api/v1/batterySettings/123" && r.Method == "GET" {
+				w.Header().Set("X-Csrf-Token", "settings_csrf_123")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"data": {
+					"chargeFromGrid": false,
+					"chargeFromGridScheduleEnabled": false,
+					"profile": "self-consumption",
+					"batteryBackupPercentage": 30
+				}}`))
+				return
+			}
+			if r.URL.Path == "/service/batteryConfig/api/v1/batterySettings/123" && r.Method == "PUT" {
+				assert.Equal(t, "settings_csrf_123", r.Header.Get("X-Xsrf-Token"))
+				var body struct {
+					ChargeFromGrid                bool `json:"chargeFromGrid"`
+					ChargeFromGridScheduleEnabled bool `json:"chargeFromGridScheduleEnabled"`
+				}
+				err := json.NewDecoder(r.Body).Decode(&body)
+				assert.NoError(t, err)
+				lastPayload = &body
+				putCalled = true
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"message":"success"}`))
+				return
+			}
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
 		}))
@@ -912,9 +966,16 @@ func TestEnphase(t *testing.T) {
 		e := newEnphase()
 		e.baseURL, _ = url.Parse(server.URL)
 		e.systemID = 123
+		e.settings = types.Settings{
+			MinBatterySOC:       20,
+			GridChargeBatteries: true,
+		}
 
 		err := e.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{})
-		require.ErrorContains(t, err, "device is in storm mode")
+		require.NoError(t, err)
+		if assert.True(t, putCalled) {
+			assert.True(t, lastPayload.ChargeFromGrid)
+		}
 	})
 
 	t.Run("SetModes respects ChargeToSOC", func(t *testing.T) {
