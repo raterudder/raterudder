@@ -1730,4 +1730,58 @@ func TestSimulateState(t *testing.T) {
 			assert.Equal(t, now, simData[1].HitBufferedDeficitAt)
 		}
 	})
+
+	t.Run("ShiftedEnergyClampingAndCapacityHit", func(t *testing.T) {
+		// Scenario: Verify that thresholdShiftedEnergyKWH is correctly clamped
+		// and does not get overridden when capacity is not hit. We detect this
+		// by verifying the exact hit capacity time on the threshold shifted trajectory.
+		now := time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)
+		capacityKWH := 10.0
+		currentStatus := types.SystemStatus{
+			BatteryCapacityKWH:    capacityKWH,
+			BatterySOC:            26.0, // 2.6 kWh
+			Timestamp:             now,
+			MaxBatteryChargeKW:    5.0,
+			MaxBatteryDischargeKW: 5.0,
+		}
+
+		history := []types.EnergyStats{}
+		for i := 1; i <= 3; i++ {
+			pastDay := now.Add(time.Duration(-24*i) * time.Hour).Truncate(time.Hour)
+			for h := 0; h < 24; h++ {
+				solar := 0.0
+				load := 0.0
+				if h == 10 {
+					load = 2.0 // Drains battery
+				} else if h == 11 || h == 12 {
+					solar = 10.0 // Charges battery
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: time.Date(pastDay.Year(), pastDay.Month(), pastDay.Day(), h, 0, 0, 0, time.UTC),
+					SolarKWH:    solar,
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		settings := types.Settings{
+			GridExportSolar:            true,
+			MinBatterySOC:              20.0, // minKWH = 2.0
+			SOCBufferPercent:           10.0, // thresholdMinKWH = 2.5
+			SolarCapacityBufferMinutes: 0,    // no shifting of solar to keep math simple
+		}
+
+		simData, _ := c.SimulateState(context.Background(), now, currentStatus, types.Price{}, nil, history, nil, settings)
+		if assert.NotEmpty(t, simData) && assert.GreaterOrEqual(t, len(simData), 3) {
+			// Without the bug, thresholdShiftedEnergyKWH starts Hour 1 (11:00) at 2.5 kWh
+			// (clamped from 2.6 - 2.0 = 0.6 to threshold reserve 2.5? Wait, starting SOC is 2.6, load 2.0 -> clamped to 2.5 (or actually 2.6 because thresholdMinKWH = 2.1 + 0.5 = 2.6).
+			// Yes: threshold reserve is 2.1 + 0.5 = 2.6. So starting Hour 1 (11:00) is 2.6.
+			// During Hour 1, it charges 5.0 kWh to end Hour 1 at 7.6 kWh.
+			// During Hour 2 (12:00), it charges from 7.6 kWh to capacity threshold 9.8 kWh.
+			// Time to reach capacity: (9.8 - 7.6) / 5.0 = 0.44 hours (26.4 minutes).
+			// Expected HitThresholdCapacityAt is 10:00 + 2 hours + 26.4 minutes = 12:26:24.
+			expectedTime := now.Add(2*time.Hour + 26*time.Minute + 24*time.Second)
+			assert.WithinDuration(t, expectedTime, simData[2].HitThresholdCapacityAt, 2*time.Second)
+		}
+	})
 }

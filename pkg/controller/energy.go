@@ -193,7 +193,9 @@ func (c *Controller) BuildHourlyEnergyModel(
 		for dateStr, avg := range dayAveragesMap {
 			if (detectedShift != "none" && (dateStr == todayStr || dateStr == yesterdayStr)) || (avg >= lowerBound && avg <= upperBound) {
 				validDaysMap[dateStr] = true
-			} else {
+			}
+			// this was logging too much
+			/*else {
 				// Debug log now includes the entire dailyAverages dataset and sorted values
 				// to allow developers to inspect the distribution and bounds calculation.
 				log.Ctx(ctx).DebugContext(
@@ -210,7 +212,7 @@ func (c *Controller) BuildHourlyEnergyModel(
 					slog.Any("dailyAverages", dailyAverages),
 					slog.Any("sortedAverages", sortedAverages),
 				)
-			}
+			}*/
 		}
 	} else {
 		// Fallback: If we have fewer than 4 days of history, we cannot establish standard deviation or IQR safely.

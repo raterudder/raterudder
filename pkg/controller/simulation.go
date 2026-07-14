@@ -803,11 +803,32 @@ func (c *Controller) SimulateState(
 			}
 
 			// Shifted runs (used for capacity hits)
-			if newBufferedShiftedEnergy < bufferedMinLimit {
-				newBufferedShiftedEnergy = bufferedMinLimit
+			if bufferedShiftedSubClampedNetKWH > 0 {
+				if newBufferedShiftedEnergy < bufferedMinLimit {
+					bufferedShiftedEnergyKWH = bufferedMinLimit
+				} else {
+					bufferedShiftedEnergyKWH = newBufferedShiftedEnergy
+				}
+			} else {
+				if newBufferedShiftedEnergy > capacityKWH {
+					bufferedShiftedEnergyKWH = capacityKWH
+				} else {
+					bufferedShiftedEnergyKWH = newBufferedShiftedEnergy
+				}
 			}
-			if newThresholdShiftedEnergy < thresholdMinLimit {
-				newThresholdShiftedEnergy = thresholdMinLimit
+
+			if thresholdShiftedSubClampedNetKWH > 0 {
+				if newThresholdShiftedEnergy < thresholdMinLimit {
+					thresholdShiftedEnergyKWH = thresholdMinLimit
+				} else {
+					thresholdShiftedEnergyKWH = newThresholdShiftedEnergy
+				}
+			} else {
+				if newThresholdShiftedEnergy > capacityKWH {
+					thresholdShiftedEnergyKWH = capacityKWH
+				} else {
+					thresholdShiftedEnergyKWH = newThresholdShiftedEnergy
+				}
 			}
 
 			// Check for Solar charge limits / headroom limits if configured.
@@ -868,8 +889,6 @@ func (c *Controller) SimulateState(
 					simBufferedCapacityAt = subStart.Add(time.Duration(fraction * float64(time.Hour)))
 				}
 				bufferedShiftedEnergyKWH = capacityKWH
-			} else {
-				bufferedShiftedEnergyKWH = newBufferedShiftedEnergy
 			}
 
 			// Capacity hit check for threshold safety battery
@@ -883,8 +902,6 @@ func (c *Controller) SimulateState(
 					simThresholdHitCapacityAt = subStart.Add(time.Duration(fraction * float64(time.Hour)))
 				}
 				thresholdShiftedEnergyKWH = capacityKWH
-			} else {
-				thresholdShiftedEnergyKWH = newThresholdShiftedEnergy
 			}
 
 			// Still cap physical energy at 100% capacity

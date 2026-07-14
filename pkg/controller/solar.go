@@ -398,15 +398,14 @@ func calculateSolarClippingCap(ctx context.Context, history []types.EnergyStats)
 	if hourlyClippingCap > 0 {
 		if maxSolarKWH > hourlyClippingCap*1.05 && maxSolarKWH > hourlyClippingCap+0.3 {
 			hourlyClippingCap = 0
+			log.Ctx(ctx).DebugContext(
+				ctx,
+				"resetting hourly inverter clipping cap due to high max solar",
+				slog.Float64("maxSolarKWH", maxSolarKWH),
+				slog.Float64("hourlyClippingCap", hourlyClippingCap),
+			)
 		}
 	}
-
-	log.Ctx(ctx).DebugContext(
-		ctx,
-		"estimated solar inverter clipping cap",
-		slog.Float64("maxSolarKWH", maxSolarKWH),
-		slog.Float64("clippingCapKWH", hourlyClippingCap),
-	)
 
 	return hourlyClippingCap
 }

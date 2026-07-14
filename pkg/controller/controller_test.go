@@ -1002,6 +1002,74 @@ func TestDecide(t *testing.T) {
 		assert.Equal(t, types.ActionReasonArbitrageChargeExport, decision.Action.Reason)
 	})
 
+	t.Run("Arbitrage Peak With Early Home Load", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.06}
+
+		futurePrices := []types.Price{}
+		for i := 1; i <= 24; i++ {
+			price := 0.06
+			if i == 2 || i == 3 || i == 4 {
+				price = 0.30 // Peak export window (Hours 2 to 4)
+			}
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: price,
+			})
+		}
+
+		status := types.SystemStatus{
+			Timestamp:             now,
+			BatterySOC:            10.0,
+			BatteryCapacityKWH:    10.0,
+			MaxBatteryChargeKW:    5.0,
+			MaxBatteryDischargeKW: 5.0,
+			HomeKW:                0.0,
+			BatteryAboveMinSOC:    true,
+		}
+
+		// Historical solar/load data to match forecast:
+		// Hour 2: net load = -5.0 (surplus!) -> targetAt (SoonestExportAt)
+		// Hour 3: net load = +1.0 (positive net load)
+		// Hour 4: net load = -5.0 (surplus!)
+		customHistory := []types.EnergyStats{}
+		ts := now.Add(-24 * time.Hour)
+		for i := 0; i < 48; i++ {
+			solar := 0.0
+			home := 0.0
+			if ts.Hour() == now.Add(2*time.Hour).Hour() {
+				solar = 5.0
+			}
+			if ts.Hour() == now.Add(3*time.Hour).Hour() {
+				home = 1.0
+			}
+			if ts.Hour() == now.Add(4*time.Hour).Hour() {
+				solar = 5.0
+			}
+			customHistory = append(customHistory, types.EnergyStats{
+				TSHourStart: ts,
+				HomeKWH:     home,
+				SolarKWH:    solar,
+			})
+			ts = ts.Add(1 * time.Hour)
+		}
+
+		settings := baseSettings
+		settings.MinBatterySOC = 20.0
+		settings.MinDeficitPriceDifferenceDollarsPerKWH = 0.02
+		settings.GridChargeBatteries = true
+		settings.GridExportSolar = true
+
+		decision, err := c.Decide(ctx, status, currentPrice, futurePrices, customHistory, nil, settings, nil)
+		require.NoError(t, err)
+
+		// It should charge now (BatteryModeChargeAny) for arbitrage to prepare for Hour 4 surplus,
+		// despite Hour 3 having a positive net load, and it should target the full 89% SOC.
+		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonArbitrageChargeExport, decision.Action.Reason)
+		assert.Equal(t, 89, decision.Action.ChargeToSOC)
+	})
+
 	t.Run("Arbitrage Hold With Capacity Refill", func(t *testing.T) {
 		// Mock user scenario:
 		// - Battery is full (SOC 99%).
@@ -1590,19 +1658,15 @@ func TestDecide(t *testing.T) {
 			require.NoError(t, err)
 
 			expectedMode := types.BatteryModeLoad
-			if step == 1 || step == 4 {
+			if step == 0 || step == 1 || step == 4 {
 				expectedMode = types.BatteryModeChargeAny
 				currentSOC = math.Min(currentSOC+30.0, 100.0)
 			} else if step == 2 || step == 5 {
 				expectedMode = types.BatteryModeLoad
 				currentSOC = math.Max(currentSOC-30.0, 20.0)
-			} else {
-				assert.NotEqual(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
 			}
 
-			if step == 1 || step == 4 || step == 2 || step == 5 {
-				assert.Equal(t, expectedMode, decision.Action.BatteryMode, "Step %d", step)
-			}
+			assert.Equal(t, expectedMode, decision.Action.BatteryMode, "Step %d", step)
 		}
 	})
 
@@ -5173,6 +5237,92 @@ func TestEvaluateArbitrage(t *testing.T) {
 			// Target SOC without clamp: ceil((2.0 + 5.0)/10 * 100) = 70.
 			// Target SOC with clamp: ceil(20.0 + (10/60 * 5.0 / 10.0 * 100)) = ceil(20 + 8.33) = 29.
 			assert.Equal(t, 29, eval.Decision.ChargeToSOC)
+		}
+	})
+
+	t.Run("ExportArbitrage_CheaperFutureWindowInvalidatesEarlyCharge", func(t *testing.T) {
+		settings := baseSettings
+		settings.MinBatterySOC = 6.0
+		settings.MinArbitrageDifferenceDollarsPerKWH = 0.01
+		settings.GridChargeBatteries = true
+		settings.GridExportSolar = true
+
+		status := types.SystemStatus{
+			Timestamp:          now,
+			BatterySOC:         6.0, // 0.9 kWh
+			BatteryCapacityKWH: 15.0,
+			MaxBatteryChargeKW: 5.0,
+			HomeKW:             0.0,
+		}
+
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.139}
+
+		// Future min cost is 0.01
+		summary := simulationSummary{
+			SoonestExportValue:      0.505,
+			SoonestExportAt:         now.Add(4 * time.Hour),
+			SoonestExportPrice:      types.Price{TSStart: now.Add(4 * time.Hour), DollarsPerKWH: 0.505},
+			MinFutureGridChargeCost: 0.01,
+		}
+
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.139, Price: currentPrice, BatteryKWH: 0.9, BatteryReserveKWH: 0.9, BatteryCapacityKWH: 15.0},
+			{TS: now.Add(1 * time.Hour), GridChargeDollarsPerKWH: 0.01, Price: types.Price{TSStart: now.Add(1 * time.Hour), DollarsPerKWH: 0.01}, BatteryKWH: 0.9, BatteryReserveKWH: 0.9, BatteryCapacityKWH: 15.0},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.139, BatteryKWH: 0.9, BatteryReserveKWH: 0.9, BatteryCapacityKWH: 15.0},
+			{TS: now.Add(3 * time.Hour), GridChargeDollarsPerKWH: 0.139, BatteryKWH: 0.9, BatteryReserveKWH: 0.9, BatteryCapacityKWH: 15.0},
+			{TS: now.Add(4 * time.Hour), GridChargeDollarsPerKWH: 0.505, SolarOppDollarsPerKWH: 0.505, NetLoadSolarKWH: -1.0, ClampedNetLoadSolarKWH: -1.0, BatteryKWH: 0.9, BatteryReserveKWH: 0.9, BatteryCapacityKWH: 15.0, Price: types.Price{TSStart: now.Add(4 * time.Hour), DollarsPerKWH: 0.505}},
+		}
+
+		eval := c.evaluateExportArbitrage(ctx, now, status, currentPrice, settings, simData, summary, nil)
+		if eval != nil && eval.Decision != nil {
+			t.Logf("CheaperFuture: mode = %v, targetSOC = %v, benefit = %v", eval.Decision.BatteryMode, eval.Decision.ChargeToSOC, eval.BenefitDollars)
+			assert.NotEqual(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode)
+		} else {
+			t.Logf("CheaperFuture: eval is nil")
+		}
+	})
+
+	t.Run("ExportArbitrage_NoCheaperFutureWindowValidatesEarlyCharge", func(t *testing.T) {
+		settings := baseSettings
+		settings.MinBatterySOC = 6.0
+		settings.MinArbitrageDifferenceDollarsPerKWH = 0.01
+		settings.GridChargeBatteries = true
+		settings.GridExportSolar = true
+
+		status := types.SystemStatus{
+			Timestamp:          now,
+			BatterySOC:         6.0, // 0.9 kWh
+			BatteryCapacityKWH: 15.0,
+			MaxBatteryChargeKW: 5.0,
+			HomeKW:             0.0,
+		}
+
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.139}
+
+		// Future min cost is 0.139 (same as now)
+		summary := simulationSummary{
+			SoonestExportValue:      0.505,
+			SoonestExportAt:         now.Add(2 * time.Hour),
+			SoonestExportPrice:      types.Price{TSStart: now.Add(2 * time.Hour), DollarsPerKWH: 0.505},
+			MinFutureGridChargeCost: 0.139,
+		}
+
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.139, Price: currentPrice, BatteryKWH: 0.9, BatteryReserveKWH: 0.9, BatteryCapacityKWH: 15.0},
+			{TS: now.Add(1 * time.Hour), GridChargeDollarsPerKWH: 0.139, Price: types.Price{TSStart: now.Add(1 * time.Hour), DollarsPerKWH: 0.139}, BatteryKWH: 0.9, BatteryReserveKWH: 0.9, BatteryCapacityKWH: 15.0},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.505, SolarOppDollarsPerKWH: 0.505, NetLoadSolarKWH: -10.0, ClampedNetLoadSolarKWH: -10.0, BatteryKWH: 0.9, BatteryReserveKWH: 0.9, BatteryCapacityKWH: 15.0, Price: types.Price{TSStart: now.Add(2 * time.Hour), DollarsPerKWH: 0.505}},
+		}
+
+		eval := c.evaluateExportArbitrage(ctx, now, status, currentPrice, settings, simData, summary, nil)
+		if eval != nil && eval.Decision != nil {
+			t.Logf("NoCheaperFuture: mode = %v, targetSOC = %v, benefit = %v", eval.Decision.BatteryMode, eval.Decision.ChargeToSOC, eval.BenefitDollars)
+		} else {
+			t.Logf("NoCheaperFuture: eval is nil")
+		}
+		require.NotNil(t, eval)
+		if assert.NotNil(t, eval.Decision) {
+			assert.Equal(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode)
+			assert.Equal(t, 73, eval.Decision.ChargeToSOC)
 		}
 	})
 }

@@ -1363,39 +1363,6 @@ func (c *Controller) evaluateExportArbitrage(
 	}
 	requiredChargeEnergy := max(0.0, headroom+totalNetLoadKWH)
 
-	// Limit requiredChargeEnergy by the estimated useful solar export opportunity during the peak.
-	// Since export arbitrage only grid-charges to enable solar export, we only care about solar surplus
-	// after home load is met (net load < 0) during the peak window. Home load reduces solar surplus first,
-	// so tracking only solar surplus after home load is met is economically correct.
-	// Rather than assuming a contiguous block of slots using a pre-calculated peakEnd, we look at
-	// every opportunity where there is solar surplus (NetLoadSolarKWH <= 0) and the price is high enough
-	// (GridChargeDollarsPerKWH >= targetValue - minArbitrageDiff). As soon as we hit a slot where either
-	// condition is not met (low price or home load > 0), we stop. This is because we will re-evaluate
-	// at that future hour whether to charge up and export again.
-	peakOpportunityKWH := 0.0
-	inPeakWindowOpt := false
-	for _, slot := range simData {
-		if slot.TS.Before(targetAt) {
-			continue
-		}
-		if slot.TS.Equal(targetAt) {
-			inPeakWindowOpt = true
-		}
-		if inPeakWindowOpt {
-			if slot.GridChargeDollarsPerKWH >= targetValue-minArbitrageDiff && slot.NetLoadSolarKWH <= 0 {
-				applyRatio := slot.EnergyApplyRatio
-				if applyRatio == 0.0 {
-					applyRatio = 1.0
-				}
-				solarSurplus := -slot.NetLoadSolarKWH
-				peakOpportunityKWH += solarSurplus * applyRatio
-			} else {
-				break
-			}
-		}
-	}
-	requiredChargeEnergy = min(requiredChargeEnergy, peakOpportunityKWH)
-
 	// Simulate Case A (standby/no grid charging before peak) and Case B (with grid charging requiredChargeEnergy before peak)
 	// to check if we will actually export the grid-charged energy.
 
@@ -1419,18 +1386,34 @@ func (c *Controller) evaluateExportArbitrage(
 			inPeakWindowSim = true
 		}
 		if inPeakWindowSim {
-			if slot.GridChargeDollarsPerKWH >= targetValue-minArbitrageDiff && slot.NetLoadSolarKWH <= 0 {
+			// We check slot.GridChargeDollarsPerKWH (import rate) here because:
+			// 1. Discharging the battery to cover home load (slot.NetLoadSolarKWH > 0) offsets imports,
+			//    so the value of that battery energy is the import rate.
+			// 2. Import and export rates are highly correlated on TOU/net-metered plans. Checking that
+			//    the import rate is high ensures we are still within the high-value peak window.
+			if slot.GridChargeDollarsPerKWH >= targetValue-minArbitrageDiff {
 				applyRatio := slot.EnergyApplyRatio
 				if applyRatio == 0.0 {
 					applyRatio = 1.0
 				}
-				netLoad := slot.NetLoadSolarKWH * applyRatio
-				// Since NetLoadSolarKWH <= 0, netLoad is negative or zero, representing solar surplus.
-				// Solar surplus charges battery first, any excess is exported.
-				chargeAmount := min(-netLoad, capacityKWH-energyA)
-				energyA += chargeAmount
-				// We only export what didn't go in the battery
-				exportA += -netLoad - chargeAmount
+				if slot.NetLoadSolarKWH > 0 {
+					dischargeAmount := min(slot.NetLoadSolarKWH*applyRatio, energyA-minKWH)
+					if dischargeAmount < 0 {
+						dischargeAmount = 0
+					}
+					energyA -= dischargeAmount
+				} else {
+					// Since NetLoadSolarKWH <= 0, netLoad is negative or zero, representing solar surplus.
+					// Solar surplus charges battery first, any excess is exported.
+					netLoad := slot.NetLoadSolarKWH * applyRatio
+					chargeAmount := min(-netLoad, capacityKWH-energyA)
+					if chargeAmount < 0 {
+						chargeAmount = 0
+					}
+					energyA += chargeAmount
+					// We only export what didn't go in the battery
+					exportA += -netLoad - chargeAmount
+				}
 			} else {
 				break
 			}
@@ -1452,18 +1435,34 @@ func (c *Controller) evaluateExportArbitrage(
 			inPeakWindowSim = true
 		}
 		if inPeakWindowSim {
-			if slot.GridChargeDollarsPerKWH >= targetValue-minArbitrageDiff && slot.NetLoadSolarKWH <= 0 {
+			// We check slot.GridChargeDollarsPerKWH (import rate) here because:
+			// 1. Discharging the battery to cover home load (slot.NetLoadSolarKWH > 0) offsets imports,
+			//    so the value of that battery energy is the import rate.
+			// 2. Import and export rates are highly correlated on TOU/net-metered plans. Checking that
+			//    the import rate is high ensures we are still within the high-value peak window.
+			if slot.GridChargeDollarsPerKWH >= targetValue-minArbitrageDiff {
 				applyRatio := slot.EnergyApplyRatio
 				if applyRatio == 0.0 {
 					applyRatio = 1.0
 				}
-				netLoad := slot.NetLoadSolarKWH * applyRatio
-				// Since NetLoadSolarKWH <= 0, netLoad is negative or zero, representing solar surplus.
-				// Solar surplus charges battery first, any excess is exported.
-				chargeAmount := min(-netLoad, capacityKWH-energyB)
-				energyB += chargeAmount
-				// We only export what didn't go in the battery
-				exportB += -netLoad - chargeAmount
+				if slot.NetLoadSolarKWH > 0 {
+					dischargeAmount := min(slot.NetLoadSolarKWH*applyRatio, energyB-minKWH)
+					if dischargeAmount < 0 {
+						dischargeAmount = 0
+					}
+					energyB -= dischargeAmount
+				} else {
+					// Since NetLoadSolarKWH <= 0, netLoad is negative or zero, representing solar surplus.
+					// Solar surplus charges battery first, any excess is exported.
+					netLoad := slot.NetLoadSolarKWH * applyRatio
+					chargeAmount := min(-netLoad, capacityKWH-energyB)
+					if chargeAmount < 0 {
+						chargeAmount = 0
+					}
+					energyB += chargeAmount
+					// We only export what didn't go in the battery
+					exportB += -netLoad - chargeAmount
+				}
 			} else {
 				break
 			}
@@ -1473,8 +1472,15 @@ func (c *Controller) evaluateExportArbitrage(
 	// Calculate the increase we get by grid charging versus staying standby
 	exportIncrease := exportB - exportA
 
-	// We only grid-charge if the estimated export increase at the peak is at least the required charge energy.
-	if requiredChargeEnergy > 0 && exportIncrease < requiredChargeEnergy-0.01 {
+	// Value leftover battery energy at the cheapest rate available over the next 24 hours.
+	leftoverRate := gridChargeNowCost
+	if summary.MinFutureGridChargeCost < leftoverRate {
+		leftoverRate = summary.MinFutureGridChargeCost
+	}
+
+	totalChargeCost := requiredChargeEnergy * gridChargeNowCost
+	benefitIncrease := exportIncrease*effectiveExportValue + (energyB-energyA)*leftoverRate
+	if requiredChargeEnergy > 0 && benefitIncrease < totalChargeCost-priceEpsilonForEquality {
 		requiredChargeEnergy = 0.0
 	}
 
@@ -1544,6 +1550,12 @@ func (c *Controller) evaluateExportArbitrage(
 		slog.Float64("cheapestFutureCost", cheapestFutureCost),
 		slog.Float64("exportB", exportB),
 		slog.Float64("exportA", exportA),
+		slog.Float64("exportIncrease", exportIncrease),
+		slog.Float64("leftoverRate", leftoverRate),
+		slog.Float64("totalChargeCost", totalChargeCost),
+		slog.Float64("benefitIncrease", benefitIncrease),
+		slog.Float64("energyA", energyA),
+		slog.Float64("energyB", energyB),
 		slog.Float64("standbyEnergyAtPeakStart", standbyEnergyAtPeakStart),
 		slog.Time("standbyHitCapacityAt", standbyHitCapacityAt),
 		slog.Time("standbyHitDeficitAt", standbyHitDeficitAt),
@@ -1568,7 +1580,9 @@ func (c *Controller) evaluateExportArbitrage(
 				Description: fmt.Sprintf("export arbitrage peak at %s, planned charge at %s ($%.3f)",
 					targetAt.Format("15:04"), cheapestFutureTime.Format("15:04"), cheapestFutureCost),
 			},
-			BenefitDollars: requiredChargeEnergy * (effectiveExportValue - cheapestFutureCost),
+			// The benefit is based on the portion of the export increase that can physically
+			// be charged during the future cheap window, valued at the net rate difference.
+			BenefitDollars: min(exportIncrease, futureAllocatedHours*chargeKW) * (effectiveExportValue - cheapestFutureCost),
 		}
 	}
 
@@ -1643,7 +1657,7 @@ func (c *Controller) evaluateExportArbitrage(
 		// We calculate benefit only for the energy actually collected during the cheap slots starting now.
 		// Multiplying the entire required charge energy would artificially inflate the benefit if the cheapest plan
 		// only has enough slot duration to cover a fraction of that energy (e.g. only 5 minutes left in the current cheap hour).
-		chargeBenefit := min(requiredChargeEnergy, allocatedHours*chargeKW) * (effectiveExportValue - cheapestCost)
+		chargeBenefit := min(exportIncrease, allocatedHours*chargeKW) * (effectiveExportValue - cheapestCost)
 		// We subtract a tiny epsilon to prevent floating-point precision noise
 		// from rounding up exact integers (e.g. 98.00000000000001 rounding up to 99).
 		targetSOC := int(math.Ceil(((currentEnergyKWH + requiredChargeEnergy) / capacityKWH * 100.0) - targetSOCEpsilonToAvoidLargeCeil))
@@ -1726,7 +1740,7 @@ func (c *Controller) evaluateExportArbitrage(
 		// We calculate benefit only for the energy actually collected during the cheap future hours.
 		// Multiplying the entire required charge energy would artificially inflate the benefit if the cheapest plan
 		// only has enough slot duration to cover a fraction of that energy.
-		delayBenefit := min(requiredChargeEnergy, futureAllocatedHours*chargeKW) * (effectiveExportValue - cheapestFutureCost)
+		delayBenefit := min(exportIncrease, futureAllocatedHours*chargeKW) * (effectiveExportValue - cheapestFutureCost)
 		return &StrategyEvaluation{
 			Plan: &futurePlan{
 				ChargeTime:  cheapestFutureTime,
