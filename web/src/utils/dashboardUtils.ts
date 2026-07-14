@@ -148,14 +148,23 @@ export const getReasonText = (action: Action): string => {
             ];
             return parts.concat(suffixParts).join(' ');
         }
-        case ActionReason.DeficitSave:
-        case ActionReason.DeficitSaveForPeak: {
+        case ActionReason.DeficitSave: {
             const delta = nowCost !== null && futureCost !== null ? futureCost - nowCost : null;
             const parts: string[] = [];
             if (deficitTimeStr) {
                 parts.push(`If we rely on the battery, it would deplete around ${deficitTimeStr}.`);
             }
             parts.push(`Since electricity prices now (${nowCostStr}) are cheap and are expected to remain cheap before the deficit, we can delay charging for now. We are keeping the battery in standby to preserve its remaining energy for the peak period${futureCostStr ? ` (${futureCostStr})` : ''}.`);
+            if (delta !== null && delta >= 0.01) parts.push(`Estimated savings: ${formatPrice(delta)}.`);
+            return parts.concat(suffixParts).join(' ');
+        }
+        case ActionReason.DeficitSaveForPeak: {
+            const delta = nowCost !== null && futureCost !== null ? futureCost - nowCost : null;
+            const parts: string[] = [];
+            if (deficitTimeStr) {
+                parts.push(`If we rely on the battery, it would deplete around ${deficitTimeStr}.`);
+            }
+            parts.push(`Since electricity prices now (${nowCostStr}) are cheap, we are keeping the battery in standby to preserve its remaining energy for the peak period${futureCostStr ? ` (${futureCostStr})` : ''}.`);
             if (delta !== null && delta >= 0.01) parts.push(`Estimated savings: ${formatPrice(delta)}.`);
             return parts.concat(suffixParts).join(' ');
         }
