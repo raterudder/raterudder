@@ -2649,7 +2649,7 @@ func (c *Controller) checkPeakSurvival(
 ) (mustStandby bool, peakTime time.Time, peakCost float64, peakPrice *types.Price) {
 	var peakEnd time.Time
 
-	for _, slot := range simData {
+	for idx, slot := range simData {
 		// Stop looking once we reach the bounding time (e.g., planned charge time, or refilling to capacity).
 		// If we hit capacity before the peak price, we will have a full battery at the peak anyway,
 		// so there is no reason to standby now (we should discharge now to utilize the battery and headroom).
@@ -2658,6 +2658,13 @@ func (c *Controller) checkPeakSurvival(
 		// That would immediately break the loop on the first slot, preventing us from scanning for peak prices.
 		// Since the battery will discharge as time passes, we only care about future capacity hits that refill it later.
 		if !scanUntil.IsZero() && !slot.TS.Before(scanUntil) {
+			break
+		}
+
+		// Stop looking if we reach a future cheap price slot where we could recharge the battery,
+		// because any peak after this slot can be covered by charging during this slot instead
+		// of standing by now.
+		if idx > 0 && slot.GridChargeDollarsPerKWH < gridChargeNowCost {
 			break
 		}
 

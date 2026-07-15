@@ -5860,6 +5860,33 @@ func TestEvaluateFallback(t *testing.T) {
 		}
 	})
 
+	t.Run("Deficit predicted + Cheap now + Future Cheap Window -> Load (Discharge)", func(t *testing.T) {
+		status := baseStatus
+		status.BatterySOC = 99.0
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.20}
+		summary := simulationSummary{
+			HitDeficitAt:         now.Add(12 * time.Hour),
+			HitBufferedDeficitAt: now.Add(12 * time.Hour), HitThresholdDeficitAt: now.Add(12 * time.Hour),
+		}
+		// simData:
+		// Hour 0: 0.20
+		// Hour 3: 0.50 (peak today)
+		// Hour 6: 0.15 (cheap tonight)
+		// Hour 15: 0.60 (tomorrow peak)
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.20, BatteryKWH: 9.9, BatteryReserveKWH: 2.0},
+			{TS: now.Add(3 * time.Hour), GridChargeDollarsPerKWH: 0.50, Price: types.Price{DollarsPerKWH: 0.50}, BatteryKWH: 8.0, BatteryReserveKWH: 2.0},
+			{TS: now.Add(6 * time.Hour), GridChargeDollarsPerKWH: 0.15, BatteryKWH: 6.0, BatteryReserveKWH: 2.0}, // cheap charging hour breaks peak survival scan
+			{TS: now.Add(15 * time.Hour), GridChargeDollarsPerKWH: 0.60, Price: types.Price{DollarsPerKWH: 0.60}, BatteryKWH: 2.1, BatteryReserveKWH: 2.0},
+		}
+
+		decision := c.evaluateFallback(ctx, now, status, currentPrice, baseSettings, simData, summary, nil)
+		if assert.NotNil(t, decision) {
+			assert.Equal(t, types.BatteryModeLoad, decision.BatteryMode)
+			assert.Equal(t, types.ActionReasonDischargeAtPeak, decision.Reason)
+		}
+	})
+
 	t.Run("Arbitrage and Deficit Hysteresis Oscillation", func(t *testing.T) {
 		loc := time.FixedZone("EDT", -4*60*60)
 		startNow := time.Date(2026, 5, 28, 22, 53, 14, 0, loc)
@@ -7017,6 +7044,22 @@ func TestCheckPeakSurvival(t *testing.T) {
 
 	t.Run("Empty sim data -> Load", func(t *testing.T) {
 		mustStandby, _, _, _ := c.checkPeakSurvival([]SimHour{}, time.Time{}, gridChargeNowCost, now, settings.PeakSurvivalBufferMinutes, 0.02)
+		assert.False(t, mustStandby)
+	})
+
+	t.Run("Stop scanning once reaching a future cheaper price slot", func(t *testing.T) {
+		simDataCheaper := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.20, AvgHomeLoadKWH: 1.0, BatteryReserveKWH: 2.0},
+			{TS: now.Add(1 * time.Hour), GridChargeDollarsPerKWH: 0.20, AvgHomeLoadKWH: 1.0, BatteryReserveKWH: 2.0},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.50, AvgHomeLoadKWH: 1.0, BatteryReserveKWH: 2.0},
+			{TS: now.Add(3 * time.Hour), GridChargeDollarsPerKWH: 0.15, AvgHomeLoadKWH: 1.0, BatteryReserveKWH: 2.0},
+			{TS: now.Add(4 * time.Hour), GridChargeDollarsPerKWH: 0.60, AvgHomeLoadKWH: 1.0, BatteryReserveKWH: 2.0},
+		}
+
+		hitAboveDeficitAt := now.Add(4 * time.Hour)
+		simDataCheaper[2].BatteryKWH = 2.8
+
+		mustStandby, _, _, _ := c.checkPeakSurvival(simDataCheaper, time.Time{}, 0.20, hitAboveDeficitAt, settings.PeakSurvivalBufferMinutes, 0.02)
 		assert.False(t, mustStandby)
 	})
 }
