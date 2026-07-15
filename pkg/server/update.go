@@ -832,13 +832,18 @@ func (s *Server) updateEnergyHistory(ctx context.Context, siteID string, essSyst
 		)
 	}
 
-	if !syncStart.Before(now) {
+	// we sync up until the current hour
+	syncEnd := now.Truncate(time.Hour)
+	// syncEnd is the start of the current hour but we don't want to fetch the
+	// current hour and we truncated the lastEnergyTime so we subtract an hour here
+	// to make sure that we have more than an hour to fetch
+	if !syncStart.Before(syncEnd.Add(-time.Hour)) {
 		return nil
 	}
 
-	log.Ctx(ctx).DebugContext(ctx, "syncing energy history", slog.Any("since", syncStart), slog.Any("to", now))
+	log.Ctx(ctx).DebugContext(ctx, "syncing energy history", slog.Any("since", syncStart), slog.Any("to", syncEnd))
 
-	newHistory, err := essSystem.GetEnergyHistory(ctx, syncStart, now)
+	newHistory, err := essSystem.GetEnergyHistory(ctx, syncStart, syncEnd)
 	if err != nil {
 		return fmt.Errorf("failed to get energy history: %w", err)
 	}

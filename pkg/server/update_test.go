@@ -1449,7 +1449,7 @@ func TestUpdateEnergyHistory(t *testing.T) {
 		fourteenDaysAgo := now.Add(-14 * 24 * time.Hour)
 		expectedStart := time.Date(fourteenDaysAgo.Year(), fourteenDaysAgo.Month(), fourteenDaysAgo.Day(), 0, 0, 0, 0, fourteenDaysAgo.Location())
 		assert.True(t, expectedStart.Equal(startTime), "Expected start time %v, got %v", expectedStart, startTime)
-		assert.WithinDuration(t, now, endTime, time.Second)
+		assert.WithinDuration(t, now.Truncate(time.Hour), endTime, time.Second)
 	})
 
 	t.Run("Incremental Update - Recent History", func(t *testing.T) {
@@ -1478,7 +1478,7 @@ func TestUpdateEnergyHistory(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.True(t, startTime.Equal(lastTime))
-		assert.WithinDuration(t, time.Now(), endTime, time.Second)
+		assert.WithinDuration(t, time.Now().Truncate(time.Hour), endTime, time.Second)
 	})
 
 	t.Run("Version Mismatch - Partial Backfill", func(t *testing.T) {
@@ -1519,7 +1519,7 @@ func TestUpdateEnergyHistory(t *testing.T) {
 		fourteenDaysAgo := now.Add(-14 * 24 * time.Hour)
 		expectedStart := time.Date(fourteenDaysAgo.Year(), fourteenDaysAgo.Month(), fourteenDaysAgo.Day(), 0, 0, 0, 0, fourteenDaysAgo.Location())
 		assert.True(t, expectedStart.Equal(startTime), "Expected start time %v, got %v", expectedStart, startTime)
-		assert.WithinDuration(t, now, endTime, time.Second)
+		assert.WithinDuration(t, now.Truncate(time.Hour), endTime, time.Second)
 	})
 
 	t.Run("Future Time - No Update", func(t *testing.T) {
