@@ -17,6 +17,8 @@ const (
 	priceEpsilonForEquality          = 1e-3
 )
 
+const fastTrackChargeWithin = 15 * time.Minute
+
 // Decision represents the result of the decision logic.
 type Decision struct {
 	Action           types.Action
@@ -869,6 +871,12 @@ func (c *Controller) evaluateDeficit(
 						shouldDelay = !isAlreadyChargingSamePrice && ((futureIsCheaperOrEqual && enoughFutureHours) || !isCheapNow)
 					}
 
+					// if we plan to delay for less than 15 minutes we will just charge now
+					// since we might run again after we should've already started
+					if shouldDelay && !cheapestFutureTime.IsZero() && cheapestFutureTime.Sub(now) < fastTrackChargeWithin && gridChargeNowCost <= cheapestFutureCost+priceEpsilonForEquality {
+						shouldDelay = false
+					}
+
 					// We only check marginalDeficit when shouldDelay is false (in the else block).
 					// If shouldDelay is true, we are planning a future charge. Even if the deficit is flat
 					// (marginalDeficit == 0), we still want to update our future plans to find the cheapest
@@ -1532,6 +1540,13 @@ func (c *Controller) evaluateExportArbitrage(
 
 	// If no charge is needed, we should neither delay nor charge.
 	if requiredChargeEnergy <= 0 {
+		canDelay = false
+		shouldDelayOverCharge = false
+	}
+
+	// if we plan to delay for less than 15 minutes we will just charge now
+	// since we might run again after we should've already started
+	if (canDelay || shouldDelayOverCharge) && !cheapestFutureTime.IsZero() && cheapestFutureTime.Sub(now) < fastTrackChargeWithin && gridChargeNowCost <= cheapestFutureCost+priceEpsilonForEquality {
 		canDelay = false
 		shouldDelayOverCharge = false
 	}
@@ -2903,6 +2918,12 @@ func (c *Controller) evaluateVPPEvent(
 		shouldDelay = !isAlreadyChargingSamePrice && futureIsCheaperOrEqual && enoughFutureHours
 	} else {
 		shouldDelay = !isAlreadyChargingSamePrice && ((futureIsCheaperOrEqual && enoughFutureHours) || !isCheapNow)
+	}
+
+	// if we plan to delay for less than 15 minutes we will just charge now
+	// since we might run again after we should've already started
+	if shouldDelay && !cheapestFutureTime.IsZero() && cheapestFutureTime.Sub(now) < fastTrackChargeWithin && gridChargeNowCost <= cheapestFutureCost+priceEpsilonForEquality {
+		shouldDelay = false
 	}
 
 	log.Ctx(ctx).DebugContext(ctx, "vpp prep evaluation variables",
