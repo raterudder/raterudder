@@ -66,6 +66,10 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if overrideStrategy := r.URL.Query().Get("overrideHomeLoadPredictionStrategy"); overrideStrategy != "" {
+		settings.HomeLoadPredictionStrategy = overrideStrategy
+	}
+
 	if settings.ESS == "" {
 		writeJSONError(w, "no ESS configured", http.StatusBadRequest)
 		return

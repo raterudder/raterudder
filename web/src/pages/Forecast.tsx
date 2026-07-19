@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { fetchModeling, fetchSettings } from '../api';
 import type { ForecastResponse, ModelingHour, Settings } from '../api';
 import { Switch } from '@base-ui/react/switch';
@@ -47,7 +47,7 @@ const charts: ChartConfig[] = [
         ],
     },
     {
-        title: 'Avg Home Load (kWh)',
+        title: 'Predicted Home Load (kWh)',
         dataKey: 'avgHomeLoadKWH',
         color: '#a855f7',
         gradientId: 'loadGrad',
@@ -79,7 +79,7 @@ interface ProcessedModelingHour extends ModelingHour {
     rawSolarKWH: number;
 }
 
-function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs }: { data: ProcessedModelingHour[]; config: ChartConfig; isMobile: boolean; showCurrentTime: boolean; nowMs: number }) {
+function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerAction }: { data: ProcessedModelingHour[]; config: ChartConfig; isMobile: boolean; showCurrentTime: boolean; nowMs: number; headerAction?: React.ReactNode }) {
     // Compute reference value if applicable
     const refValue = config.referenceLine
         ? (data[0]?.[config.referenceLine.dataKey as keyof ProcessedModelingHour] as number)
@@ -135,7 +135,10 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs }: { dat
 
     return (
         <div className="chart-card">
-            <h3>{config.title}</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <h3 style={{ margin: 0 }}>{config.title}</h3>
+                {headerAction}
+            </div>
             <ResponsiveContainer width="100%" height={200}>
                 <AreaChart data={data} syncId="forecast" margin={{ top: 5, right: isMobile ? 0 : 20, left: 0, bottom: 5 }}>
                     <defs>
@@ -272,6 +275,9 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs }: { dat
 const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
     const [rawModelingData, setRawModelingData] = useState<ForecastResponse | null>(null);
     const [settings, setSettings] = useState<Settings | null>(null);
+    const [loadPredictionMode, setLoadPredictionMode] = useState<'default' | 'conservative'>('default');
+    const [initialized, setInitialized] = useState(false);
+    const lastFetchedStrategyRef = useRef<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [nowMs] = useState(() => Date.now());
     const [error, setError] = useState<string | null>(null);
@@ -284,24 +290,52 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
         return () => window.removeEventListener('resize', handleResize);
     }, []);
 
+    // Initial load on siteID change: fetch settings first, then fetch matching modeling.
     useEffect(() => {
-        const loadRawData = async () => {
+        const loadInitialData = async () => {
             setLoading(true);
+            setInitialized(false);
             try {
-                const [mod, sett] = await Promise.all([
-                    fetchModeling(siteID),
-                    fetchSettings(siteID),
-                ]);
-                setRawModelingData(mod);
+                const sett = await fetchSettings(siteID);
+                const strategy = sett.homeLoadPredictionStrategy === 'conservative' ? 'conservative' : 'default';
+                
+                // Fetch modeling using the resolved settings strategy
+                const mod = await fetchModeling(siteID, strategy);
+                
+                // Update states together
                 setSettings(sett);
+                setLoadPredictionMode(strategy);
+                lastFetchedStrategyRef.current = strategy;
+                setRawModelingData(mod);
+                setInitialized(true);
             } catch (error) {
                 setError(error instanceof Error ? error.message : 'Unknown error');
             } finally {
                 setLoading(false);
             }
         };
-        loadRawData();
+        loadInitialData();
     }, [siteID]);
+
+    // Re-fetch modeling only when toggle is manually flipped by user after initialization
+    useEffect(() => {
+        if (!initialized) return;
+        if (lastFetchedStrategyRef.current === loadPredictionMode) return;
+
+        const loadModelingOverride = async () => {
+            setLoading(true);
+            try {
+                lastFetchedStrategyRef.current = loadPredictionMode;
+                const mod = await fetchModeling(siteID, loadPredictionMode);
+                setRawModelingData(mod);
+            } catch (error) {
+                setError(error instanceof Error ? error.message : 'Unknown error');
+            } finally {
+                setLoading(false);
+            }
+        };
+        loadModelingOverride();
+    }, [loadPredictionMode, initialized, siteID]);
 
     const data = useMemo(() => {
         if (!rawModelingData) return [];
@@ -434,9 +468,35 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 })()}
             </p>
             <div className="modeling-charts">
-                {charts.map((config) => (
-                    <ForecastChart key={config.dataKey} data={data} config={config} isMobile={isMobile} showCurrentTime={includeHistory} nowMs={nowMs} />
-                ))}
+                {charts.map((config) => {
+                    const headerAction = config.dataKey === 'avgHomeLoadKWH' ? (
+                        <Field.Root className="form-group switch-group compact" style={{ margin: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                                <Switch.Root
+                                     id="loadPredictionModeToggle"
+                                     aria-label="Conservative"
+                                     checked={loadPredictionMode === 'conservative'}
+                                     onCheckedChange={(checked) => setLoadPredictionMode(checked ? 'conservative' : 'default')}
+                                     className="switch-root"
+                                >
+                                    <Switch.Thumb className="switch-thumb" />
+                                </Switch.Root>
+                                <span style={{ color: loadPredictionMode === 'conservative' ? 'var(--primary)' : 'inherit', fontWeight: loadPredictionMode === 'conservative' ? 600 : 400 }}>Conservative</span>
+                            </div>
+                        </Field.Root>
+                    ) : undefined;
+                    return (
+                        <ForecastChart
+                            key={config.dataKey}
+                            data={data}
+                            config={config}
+                            isMobile={isMobile}
+                            showCurrentTime={includeHistory}
+                            nowMs={nowMs}
+                            headerAction={headerAction}
+                        />
+                    );
+                })}
             </div>
             {settings?.release === 'staging' && (
                 <>

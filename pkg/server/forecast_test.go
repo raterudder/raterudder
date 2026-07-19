@@ -85,6 +85,100 @@ func TestHandleForecast(t *testing.T) {
 		mockS.AssertCalled(t, "GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	})
 
+	t.Run("Overrides Home Load Prediction Strategy", func(t *testing.T) {
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: now}, nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil)
+
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil)
+		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil)
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			MinBatterySOC:              5.0,
+			UtilityProvider:            "test",
+			ESS:                        "mock",
+			HomeLoadPredictionStrategy: "default",
+		}, types.CurrentSettingsVersion, nil)
+
+		// Generate mock history with high load variance at hour 12
+		history := []types.EnergyStats{}
+		baseTime := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -10)
+		for day := 0; day < 10; day++ {
+			for hour := 0; hour < 24; hour++ {
+				ts := baseTime.AddDate(0, 0, day).Add(time.Duration(hour) * time.Hour)
+				load := 1.0
+				if hour == 12 {
+					load = float64(day + 1)
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: ts,
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		dailyHistory := []types.DailyEnergyStats{
+			{
+				TSDayStart: baseTime,
+				Hourly:     history,
+			},
+		}
+
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(dailyHistory, nil)
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil)
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{
+			BatterySOC:         50,
+			BatteryCapacityKWH: 10.0,
+			Timestamp:          now,
+		}, nil)
+
+		mockP := ess.NewMap()
+		mockP.SetSystem(types.SiteIDNone, mockES)
+
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			controller: controller.NewController(),
+			bypassAuth: true,
+		}
+
+		// Make request with query param overrideHomeLoadPredictionStrategy=conservative
+		req := httptest.NewRequest("GET", "/api/forecast?overrideHomeLoadPredictionStrategy=conservative", nil)
+		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
+		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv.handleForecast(w, req)
+
+		resp := w.Result()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var data ForecastRes
+		err := json.NewDecoder(resp.Body).Decode(&data)
+		require.NoError(t, err)
+
+		// Check the predicted load for hour 12.
+		var foundHour12 bool
+		for _, hour := range data.Simulation {
+			if hour.Hour == 12 {
+				foundHour12 = true
+				assert.Greater(t, hour.AvgHomeLoadKWH, 5.2, "should override home load prediction strategy to conservative")
+			}
+		}
+		assert.True(t, foundHour12, "should find hour 12 in simulation")
+	})
+
 	t.Run("Settings Error Returns 500", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil)

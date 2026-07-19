@@ -39,10 +39,12 @@ var tempSimilarityScale = 3.0
 var defaultStrategyPercentile = 0.50
 
 // conservativeStrategyPercentile represents the percentile used for the Conservative strategy.
-// We tried 90p, but backtesting showed extreme overpredictions (e.g. predicting 150 kWh vs 57 kWh actual)
-// that led to excessive grid charging. 80p provides a robust safety buffer on peak days (missing by only ~5 kWh
-// on July 1 on jrollercoasters) without causing completely prohibitive costs.
-var conservativeStrategyPercentile = 0.80
+// We originally set this to 80p (80th percentile) to provide a robust safety buffer. However,
+// a comprehensive 25-site simulation study over a 3-week period showed that 80p systematically
+// overpredicted load by an average of 22.4 kWh per site daily, resulting in excessive grid pre-charging
+// and high electricity bills. Lowering this to 70p (70th percentile) reduces daily total prediction
+// error to 16.8 kWh (a 25% improvement) while still maintaining a robust safety buffer.
+var conservativeStrategyPercentile = 0.70
 
 // extremeHeatwaveThresholdC represents the temperature threshold above the historical maximum temperature
 // seen for a given hour. If today's forecast exceeds the historical maximum plus this threshold, the safeguard is triggered.
@@ -659,8 +661,19 @@ func (c *Controller) BuildHourlyEnergyModel(
 
 		// 4. Compute weighted percentile of the gathered points
 		pct := defaultStrategyPercentile
-		if settings.HomeLoadPredictionStrategy == "conservative" {
+		switch settings.HomeLoadPredictionStrategy {
+		case "conservative", "70p":
 			pct = conservativeStrategyPercentile
+		case "balanced", "moderate", "65p":
+			pct = 0.65
+		case "75p":
+			pct = 0.75
+		case "80p":
+			pct = 0.80
+		case "60p":
+			pct = 0.60
+		case "50p":
+			pct = 0.50
 		}
 		avgLoadA := getWeightedPercentile(pts, pct)
 

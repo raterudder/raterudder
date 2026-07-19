@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Router } from 'wouter';
 import Forecast from './Forecast';
@@ -69,7 +70,7 @@ describe('Forecast Page', () => {
             expect(screen.getByText('Battery (if used) (%)')).toBeInTheDocument();
             expect(screen.getByText('Predicted Solar (kWh)')).toBeInTheDocument();
             expect(screen.queryByText('Estimated Irradiance (W/m²)')).not.toBeInTheDocument();
-            expect(screen.getByText('Avg Home Load (kWh)')).toBeInTheDocument();
+            expect(screen.getByText('Predicted Home Load (kWh)')).toBeInTheDocument();
             expect(screen.getByText('Grid Charge Cost ($/kWh)')).toBeInTheDocument();
         });
     });
@@ -98,9 +99,54 @@ describe('Forecast Page', () => {
 
         await waitFor(() => {
             expect(screen.getByText('Battery (if used) (%)')).toBeInTheDocument();
-            expect(screen.getByText('Avg Home Load (kWh)')).toBeInTheDocument();
+            expect(screen.getByText('Predicted Home Load (kWh)')).toBeInTheDocument();
             expect(screen.getByText('Grid Charge Cost ($/kWh)')).toBeInTheDocument();
         });
+    });
+
+    it('allows toggling between Default and Conservative home load prediction strategy', async () => {
+        const user = userEvent.setup();
+        const data = makeSimHours();
+        (fetchModeling as any).mockResolvedValue({
+            simulation: data,
+            energyHistory: [],
+            priceHistory: [],
+            weather: []
+        });
+
+        renderForecast();
+
+        // Check toggle switch is present
+        const toggle = await screen.findByRole('switch', { name: /Conservative/i });
+        expect(toggle).toBeInTheDocument();
+        expect(toggle).not.toBeChecked();
+
+        // Toggle to conservative
+        await user.click(toggle);
+
+        // Verify fetchModeling was called with override 'conservative'
+        await waitFor(() => {
+            expect(fetchModeling).toHaveBeenLastCalledWith(undefined, 'conservative');
+        });
+    });
+
+    it('defaults the toggle to checked if settings strategy is conservative', async () => {
+        (fetchSettings as any).mockResolvedValue({
+            homeLoadPredictionStrategy: 'conservative'
+        });
+        const data = makeSimHours();
+        (fetchModeling as any).mockResolvedValue({
+            simulation: data,
+            energyHistory: [],
+            priceHistory: [],
+            weather: []
+        });
+
+        renderForecast();
+
+        // Check toggle switch is present and checked
+        const toggle = await screen.findByRole('switch', { name: /Conservative/i });
+        expect(toggle).toBeChecked();
     });
 
     it('shows page heading and subtitle', async () => {
@@ -223,6 +269,45 @@ describe('Forecast Page', () => {
         await waitFor(() => {
             const vppLabels = screen.getAllByText('VPP Event');
             expect(vppLabels.length).toBe(1);
+        });
+    });
+
+    it('does not make duplicate fetchModeling calls on initial load or toggle', async () => {
+        const user = userEvent.setup();
+        const data = makeSimHours();
+        (fetchSettings as any).mockResolvedValue({
+            homeLoadPredictionStrategy: 'conservative'
+        });
+        (fetchModeling as any).mockResolvedValue({
+            simulation: data,
+            energyHistory: [],
+            priceHistory: [],
+            weather: []
+        });
+
+        renderForecast();
+
+        // 1. Initial load should happen once. Wait for the loading screen to disappear.
+        await waitFor(() => {
+            expect(screen.getByText('Battery (if used) (%)')).toBeInTheDocument();
+        });
+
+        // The initial request to settings and modeling should be exactly 1.
+        expect(fetchSettings).toHaveBeenCalledTimes(1);
+        expect(fetchModeling).toHaveBeenCalledTimes(1);
+        expect(fetchModeling).toHaveBeenLastCalledWith(undefined, 'conservative');
+
+        // Check toggle switch is checked by default
+        const toggle = screen.getByRole('switch', { name: /Conservative/i });
+        expect(toggle).toBeChecked();
+
+        // 2. Toggle to default strategy
+        await user.click(toggle);
+
+        // Fetch modeling should be called a second time (total 2 times) with 'default'.
+        await waitFor(() => {
+            expect(fetchModeling).toHaveBeenCalledTimes(2);
+            expect(fetchModeling).toHaveBeenLastCalledWith(undefined, 'default');
         });
     });
 });
