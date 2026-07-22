@@ -339,11 +339,12 @@ func (s *Server) performSiteUpdate(
 	if settings.Pause {
 		log.Ctx(ctx).InfoContext(ctx, "update: paused")
 		action := types.Action{
-			Timestamp:    s.now(),
-			Description:  "Automation is paused",
-			SystemStatus: status,
-			CurrentPrice: &currentPrice,
-			Paused:       true,
+			Timestamp:       s.now(),
+			SystemTimestamp: s.now().In(status.Timestamp.Location()),
+			Description:     "Automation is paused",
+			SystemStatus:    status,
+			CurrentPrice:    &currentPrice,
+			Paused:          true,
 		}
 		if err := s.storage.InsertAction(ctx, siteID, action); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to insert paused action", slog.Any("error", err))
@@ -355,11 +356,12 @@ func (s *Server) performSiteUpdate(
 	if status.VPPActive {
 		log.Ctx(ctx).InfoContext(ctx, "update: VPP event active")
 		action := types.Action{
-			Timestamp:    s.now(),
-			Description:  "VPP event active",
-			Reason:       types.ActionReasonVPPActive,
-			SystemStatus: status,
-			CurrentPrice: &currentPrice,
+			Timestamp:       s.now(),
+			SystemTimestamp: s.now().In(status.Timestamp.Location()),
+			Description:     "VPP event active",
+			Reason:          types.ActionReasonVPPActive,
+			SystemStatus:    status,
+			CurrentPrice:    &currentPrice,
 		}
 		if err := s.storage.InsertAction(ctx, siteID, action); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to insert action", slog.Any("error", err))
@@ -378,12 +380,13 @@ func (s *Server) performSiteUpdate(
 		}
 
 		action := types.Action{
-			Timestamp:    s.now(),
-			Description:  "In emergency mode",
-			Reason:       types.ActionReasonEmergencyMode,
-			SystemStatus: status,
-			Fault:        true,
-			CurrentPrice: &currentPrice,
+			Timestamp:       s.now(),
+			SystemTimestamp: s.now().In(status.Timestamp.Location()),
+			Description:     "In emergency mode",
+			Reason:          types.ActionReasonEmergencyMode,
+			SystemStatus:    status,
+			Fault:           true,
+			CurrentPrice:    &currentPrice,
 		}
 		if err := s.storage.InsertAction(ctx, siteID, action); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to insert action", slog.Any("error", err))
@@ -394,12 +397,13 @@ func (s *Server) performSiteUpdate(
 	if len(status.Alarms) > 0 {
 		log.Ctx(ctx).InfoContext(ctx, "update: alarms present", slog.Any("alarms", status.Alarms))
 		action := types.Action{
-			Timestamp:    s.now(),
-			Description:  fmt.Sprintf("%d alarms present", len(status.Alarms)),
-			Reason:       types.ActionReasonHasAlarms,
-			SystemStatus: status,
-			Fault:        true,
-			CurrentPrice: &currentPrice,
+			Timestamp:       s.now(),
+			SystemTimestamp: s.now().In(status.Timestamp.Location()),
+			Description:     fmt.Sprintf("%d alarms present", len(status.Alarms)),
+			Reason:          types.ActionReasonHasAlarms,
+			SystemStatus:    status,
+			Fault:           true,
+			CurrentPrice:    &currentPrice,
 		}
 		if err := s.storage.InsertAction(ctx, siteID, action); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to insert action", slog.Any("error", err))
@@ -410,12 +414,13 @@ func (s *Server) performSiteUpdate(
 	if status.GridUnavailable {
 		log.Ctx(ctx).InfoContext(ctx, "update: grid unavailable")
 		action := types.Action{
-			Timestamp:    s.now(),
-			Description:  "Grid is unavailable",
-			Reason:       types.ActionReasonGridUnavailable,
-			SystemStatus: status,
-			Fault:        true,
-			CurrentPrice: &currentPrice,
+			Timestamp:       s.now(),
+			SystemTimestamp: s.now().In(status.Timestamp.Location()),
+			Description:     "Grid is unavailable",
+			Reason:          types.ActionReasonGridUnavailable,
+			SystemStatus:    status,
+			Fault:           true,
+			CurrentPrice:    &currentPrice,
 		}
 		if err := s.storage.InsertAction(ctx, siteID, action); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to insert action", slog.Any("error", err))
@@ -481,6 +486,9 @@ func (s *Server) performSiteUpdate(
 	// Ensure timestamps match if not set
 	if action.Timestamp.IsZero() {
 		action.Timestamp = s.now()
+	}
+	if action.SystemTimestamp.IsZero() {
+		action.SystemTimestamp = action.Timestamp.In(status.Timestamp.Location())
 	}
 
 	log.Ctx(ctx).InfoContext(

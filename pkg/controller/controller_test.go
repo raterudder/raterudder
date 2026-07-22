@@ -376,6 +376,7 @@ func TestDecide(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode,
 			"Should load (discharge) because battery will refill from solar")
+		assert.Equal(t, now, decision.Action.SystemTimestamp)
 	})
 
 	t.Run("PreventSolarCurtailment", func(t *testing.T) {

@@ -104,7 +104,10 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 	dayStats := make([]types.EnergyStats, 0, 24)
 	for _, day := range allStats {
 		if day.TSDayStart.Format("2006-01-02") == dateStr {
-			dayStats = append(dayStats, day.Hourly...)
+			for _, h := range day.Hourly {
+				h.TSHourStart = h.TSHourStart.In(loc)
+				dayStats = append(dayStats, h)
+			}
 		}
 	}
 
@@ -115,7 +118,7 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, h := range w.ForecastHours {
 			wr := WeatherRes{
-				TSHourStart:  h.TSHourStart,
+				TSHourStart:  h.TSHourStart.In(loc),
 				TemperatureC: h.TemperatureC,
 				SnowfallCM:   h.SnowfallCM,
 			}

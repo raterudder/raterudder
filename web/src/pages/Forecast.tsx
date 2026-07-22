@@ -62,14 +62,12 @@ const charts: ChartConfig[] = [
     },
 ];
 
-function formatHour(ts: string): string {
-    const d = new Date(ts);
-    const minutes = d.getMinutes();
-    return d.toLocaleTimeString([], {
-        hour: 'numeric',
-        minute: minutes !== 0 ? '2-digit' : undefined,
-        hour12: true
-    });
+import { formatTime } from '../utils/dashboardUtils';
+
+function formatHour(ts: string, referenceTs?: string): string {
+    if (!ts) return '';
+    const formatted = formatTime(ts, referenceTs);
+    return formatted.replace(':00 ', ' ');
 }
 
 // Extended interface adding calculated fields
@@ -150,7 +148,7 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--outline-variant)" vertical={false} opacity={0.4} />
                     <XAxis
                         dataKey="ts"
-                        tickFormatter={formatHour}
+                        tickFormatter={(ts) => formatHour(ts, data[0]?.ts)}
                         tick={{ fontSize: isMobile ? 10 : 12 }}
                         stroke="var(--outline-variant)"
                         axisLine={false}
@@ -167,7 +165,7 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                         }
                     />
                     <Tooltip
-                        labelFormatter={(label) => formatHour(String(label))}
+                        labelFormatter={(label) => formatHour(String(label), data[0]?.ts)}
                         formatter={(value: number | string | undefined, name: string | number | undefined) => {
                             const v = Number(value ?? 0);
                             const lineUnit = config.unit;
@@ -455,16 +453,8 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
             <p className="forecast-subtitle">
                 Predicted energy state <strong>assuming no action is taken</strong> starting from{' '}
                 {(() => {
-                    const date = rawModelingData?.updated
-                        ? new Date(rawModelingData.updated)
-                        : (rawModelingData?.simulation?.[0] ? new Date(rawModelingData.simulation[0].ts) : null);
-                    return date && !isNaN(date.getTime())
-                        ? date.toLocaleTimeString([], {
-                              hour: 'numeric',
-                              minute: '2-digit',
-                              hour12: true,
-                          })
-                        : '';
+                    const startTs = rawModelingData?.updated || rawModelingData?.simulation?.[0]?.ts;
+                    return startTs ? formatTime(startTs, data[0]?.ts) : '';
                 })()}
             </p>
             <div className="modeling-charts">

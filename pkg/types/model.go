@@ -75,6 +75,7 @@ type ModesOptions struct {
 // Action represents a control decision made by the system.
 type Action struct {
 	Timestamp              time.Time        `json:"timestamp"`
+	SystemTimestamp        time.Time        `json:"systemTimestamp,omitempty"`
 	BatteryMode            BatteryMode      `json:"batteryMode"`
 	SolarMode              SolarMode        `json:"solarMode"`
 	ChargeToSOC            int              `json:"chargeToSoc,omitempty"`

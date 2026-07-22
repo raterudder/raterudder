@@ -4,7 +4,12 @@ import {
     formatPrice,
     formatCurrency,
     gridChargeCost,
-    getReasonText
+    getReasonText,
+    formatTime,
+    extractOffsetMinutes,
+    formatTimeInOffset,
+    getActionTimestamp,
+    isZeroTime
 } from './dashboardUtils';
 import { BatteryMode, SolarMode, ActionReason, type Action } from '../api';
 
@@ -245,6 +250,44 @@ describe('dashboardUtils', () => {
                 currentPrice: { dollarsPerKWH: -0.05, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
             };
             expect(getReasonText(action)).toContain('Disabled solar export');
+        });
+    });
+
+    describe('formatTime & offset helpers', () => {
+        it('extracts offset minutes correctly', () => {
+            expect(extractOffsetMinutes('2026-07-21T20:39:04-05:00')).toBe(-300);
+            expect(extractOffsetMinutes('2026-07-21T20:39:04+02:00')).toBe(120);
+            expect(extractOffsetMinutes('2026-07-21T20:39:04Z')).toBeNull();
+            expect(extractOffsetMinutes('')).toBeNull();
+        });
+
+        it('formats ISO string with explicit offset minutes', () => {
+            expect(formatTimeInOffset('2026-07-22T01:39:04Z', -300)).toBe('8:39 PM');
+            expect(formatTimeInOffset('2026-07-22T14:30:00Z', 120)).toBe('4:30 PM');
+            expect(formatTimeInOffset('2026-07-22T05:05:00Z', -300)).toBe('12:05 AM');
+        });
+
+        it('formatTime uses offset embedded in timestamp or reference timestamp', () => {
+            expect(formatTime('2026-07-21T20:39:04-05:00')).toBe('8:39 PM');
+            expect(formatTime('2026-07-22T01:39:04Z', '2026-07-21T20:39:04-05:00')).toBe('8:39 PM');
+            expect(formatTime('')).toBe('');
+        });
+
+        it('ignores zero systemTimestamp (0001-01-01) and falls back to systemStatus timestamp offset', () => {
+            const action: Action = {
+                timestamp: '2026-07-22T04:09:26.947167547Z',
+                systemTimestamp: '0001-01-01T00:00:00Z',
+                batteryMode: 1,
+                solarMode: 2,
+                description: 'test',
+                systemStatus: {
+                    timestamp: '2026-07-22T00:09:26.947167547-04:00'
+                }
+            };
+            const refTs = (action.systemTimestamp && !isZeroTime(action.systemTimestamp)) ? action.systemTimestamp : action.systemStatus?.timestamp;
+            const targetTs = getActionTimestamp(action);
+            expect(targetTs).toBe('2026-07-22T04:09:26.947167547Z');
+            expect(formatTime(targetTs, refTs)).toBe('12:09 AM');
         });
     });
 });

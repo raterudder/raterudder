@@ -81,6 +81,12 @@ func TestHandleUpdate(t *testing.T) {
 
 	resp := w.Result()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	var res updateResult
+	err := json.NewDecoder(resp.Body).Decode(&res)
+	require.NoError(t, err)
+	if assert.NotNil(t, res.Action) {
+		assert.False(t, res.Action.SystemTimestamp.IsZero())
+	}
 
 	t.Run("Handle Update - Auth", func(t *testing.T) {
 		mockU := &mockUtility{}

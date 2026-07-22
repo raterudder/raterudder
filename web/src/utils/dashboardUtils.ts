@@ -47,12 +47,56 @@ export const formatCurrency = (amount: number, forceSign: boolean = false) => {
     return `${sign}$ ${Math.abs(amount).toFixed(2)}`;
 };
 
-export const formatTime = (ts: string) => {
-    try {
-        return new Date(ts).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-    } catch {
-        return ts;
+export const isZeroTime = (ts?: string): boolean => {
+    return !ts || ts.startsWith('0001-01-01');
+};
+
+export const getActionTimestamp = (action: Action): string => {
+    if (action.systemTimestamp && !isZeroTime(action.systemTimestamp)) {
+        return action.systemTimestamp;
     }
+    return action.timestamp;
+};
+
+export const extractOffsetMinutes = (isoStr?: string): number | null => {
+    if (!isoStr || isZeroTime(isoStr) || isoStr.endsWith('Z')) return null;
+    const match = isoStr.match(/([+-])(\d{2}):?(\d{2})$/);
+    if (!match) return null;
+    const sign = match[1] === '+' ? 1 : -1;
+    const hours = parseInt(match[2], 10);
+    const minutes = parseInt(match[3] || '0', 10);
+    return sign * (hours * 60 + minutes);
+};
+
+export const formatTimeInOffset = (isoStr?: string, offsetMinutes?: number | null): string => {
+    if (!isoStr || isZeroTime(isoStr)) return '';
+    try {
+        if (offsetMinutes !== null && offsetMinutes !== undefined) {
+            const d = new Date(isoStr);
+            if (isNaN(d.getTime())) return isoStr;
+            const targetMs = d.getTime() + (offsetMinutes * 60 * 1000);
+            const targetDate = new Date(targetMs);
+            let hour = targetDate.getUTCHours();
+            const min = String(targetDate.getUTCMinutes()).padStart(2, '0');
+            const ampm = hour >= 12 ? 'PM' : 'AM';
+            hour = hour % 12;
+            if (hour === 0) hour = 12;
+            return `${hour}:${min} ${ampm}`;
+        }
+        const directOffset = extractOffsetMinutes(isoStr);
+        if (directOffset !== null) {
+            return formatTimeInOffset(isoStr, directOffset);
+        }
+        return new Date(isoStr).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    } catch {
+        return isoStr;
+    }
+};
+
+export const formatTime = (ts?: string, referenceTs?: string): string => {
+    if (!ts || isZeroTime(ts)) return '';
+    const offset = extractOffsetMinutes(ts) ?? extractOffsetMinutes(referenceTs);
+    return formatTimeInOffset(ts, offset);
 };
 
 // gridChargeCost returns the effective grid charging cost (base price + delivery adder).
@@ -71,15 +115,15 @@ export const getReasonText = (action: Action): string => {
     const futureCost = futurePrice ? gridChargeCost(futurePrice) : null;
     const nowCostStr = nowCost !== null ? formatPrice(nowCost) : '';
     const futureCostStr = futureCost !== null ? formatPrice(futureCost) : '';
+    const refTs = (!action.systemTimestamp || isZeroTime(action.systemTimestamp)) ? action.systemStatus?.timestamp : action.systemTimestamp;
     const getDeficitTimeStr = (act: Action) => {
-        const isZero = (ts?: string) => !ts || ts === '0001-01-01T00:00:00Z';
-        if (!isZero(act.deficitAt)) return formatTime(act.deficitAt!);
-        if (!isZero(act.hitBufferedDeficitAt)) return formatTime(act.hitBufferedDeficitAt!);
-        if (!isZero(act.hitThresholdDeficitAt)) return formatTime(act.hitThresholdDeficitAt!);
+        if (!isZeroTime(act.deficitAt)) return formatTime(act.deficitAt!, refTs);
+        if (!isZeroTime(act.hitBufferedDeficitAt)) return formatTime(act.hitBufferedDeficitAt!, refTs);
+        if (!isZeroTime(act.hitThresholdDeficitAt)) return formatTime(act.hitThresholdDeficitAt!, refTs);
         return '';
     };
     const deficitTimeStr = getDeficitTimeStr(action);
-    const capacityTimeStr = action.capacityAt ? formatTime(action.capacityAt) : '';
+    const capacityTimeStr = !isZeroTime(action.capacityAt) ? formatTime(action.capacityAt, refTs) : '';
     const isNegativePrice = currentPrice && currentPrice.dollarsPerKWH < 0;
     const solarMode = action.targetSolarMode || action.solarMode ;
 

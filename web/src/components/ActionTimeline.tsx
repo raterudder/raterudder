@@ -6,6 +6,8 @@ import {
     getSolarModeClass,
     formatPrice,
     formatTime,
+    getActionTimestamp,
+    isZeroTime,
     getReasonText,
     gridChargeCost,
     type ActionSummary
@@ -60,21 +62,22 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
                     title = 'VPP Event Active';
                 }
 
-                const showDeficitTag = action.deficitAt && action.deficitAt !== '0001-01-01T00:00:00Z';
-                const showCapacityTag = action.capacityAt && action.capacityAt !== '0001-01-01T00:00:00Z';
+                const showDeficitTag = !isZeroTime(action.deficitAt);
+                const showCapacityTag = !isZeroTime(action.capacityAt);
+                const refTs = (action.systemTimestamp && !isZeroTime(action.systemTimestamp)) ? action.systemTimestamp : action.systemStatus?.timestamp;
 
                 return (
                     <li key={index} className={`timeline-item mode-${(isFault && !isVPP) ? 'fault' : batteryModeClass} ${summary ? 'is-grouped' : ''}`}>
                         <div className="timeline-marker" aria-hidden="true"></div>
 
                         <div className="timeline-time">
-                            {isSummary && summary!.endTime && formatTime(summary!.endTime) !== formatTime(summary!.startTime) ? (
+                            {isSummary && summary!.endTime && formatTime(summary!.endTime, refTs) !== formatTime(summary!.startTime, refTs) ? (
                                 <div className="time-range">
-                                    <span className="time-end">{formatTime(summary!.endTime)}</span>
-                                    <span className="time-start">{formatTime(summary!.startTime)}</span>
+                                    <span className="time-end">{formatTime(summary!.endTime, refTs)}</span>
+                                    <span className="time-start">{formatTime(summary!.startTime, refTs)}</span>
                                 </div>
                             ) : (
-                                formatTime(isSummary ? summary!.startTime : action.timestamp)
+                                formatTime(isSummary ? summary!.startTime : getActionTimestamp(action), refTs)
                             )}
                         </div>
 
@@ -96,7 +99,7 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
                                         )}
                                         {hasStorms && (
                                             <p className="storm-time">
-                                                Storm Duration: {formatTime(isSummary && summary ? summary.stormStart?.toISOString() || '' : action.systemStatus?.storms?.[0]?.tsStart || '')} - {formatTime(isSummary && summary ? summary.stormEnd?.toISOString() || '' : action.systemStatus?.storms?.[0]?.tsEnd || '')}
+                                                Storm Duration: {formatTime(isSummary && summary ? summary.stormStart?.toISOString() || '' : action.systemStatus?.storms?.[0]?.tsStart || '', refTs)} - {formatTime(isSummary && summary ? summary.stormEnd?.toISOString() || '' : action.systemStatus?.storms?.[0]?.tsEnd || '', refTs)}
                                             </p>
                                         )}
                                     </>
@@ -127,10 +130,10 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
                                     </span>
                                 )}
                                 {showDeficitTag && (
-                                    <span className="tag tag-info">Deficit: {formatTime(action.deficitAt!)}</span>
+                                    <span className="tag tag-info">Deficit: {formatTime(action.deficitAt!, refTs)}</span>
                                 )}
                                 {showCapacityTag && (
-                                    <span className="tag tag-info">Capacity: {formatTime(action.capacityAt!)}</span>
+                                    <span className="tag tag-info">Capacity: {formatTime(action.capacityAt!, refTs)}</span>
                                 )}
                                 {isNegPrice && (
                                     <span className="tag tag-warning">Negative Price</span>

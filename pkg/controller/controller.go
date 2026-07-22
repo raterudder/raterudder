@@ -148,13 +148,14 @@ func (c *Controller) Decide(
 	if capacityKWH <= 0 {
 		return Decision{
 			Action: types.Action{
-				Timestamp:    now.UTC(),
-				BatteryMode:  types.BatteryModeStandby,
-				SolarMode:    solarMode,
-				Reason:       types.ActionReasonMissingBattery,
-				Description:  "Battery Config Missing or Capacity 0. Standby.",
-				CurrentPrice: &currentPrice,
-				SystemStatus: currentStatus,
+				Timestamp:       now.UTC(),
+				SystemTimestamp: now,
+				BatteryMode:     types.BatteryModeStandby,
+				SolarMode:       solarMode,
+				Reason:          types.ActionReasonMissingBattery,
+				Description:     "Battery Config Missing or Capacity 0. Standby.",
+				CurrentPrice:    &currentPrice,
+				SystemStatus:    currentStatus,
 			},
 			SimulationParams: simParams,
 		}, nil
@@ -185,14 +186,15 @@ func (c *Controller) Decide(
 		)
 		return Decision{
 			Action: types.Action{
-				Timestamp:    now.UTC(),
-				BatteryMode:  types.BatteryModeChargeAny,
-				SolarMode:    solarMode,
-				Reason:       types.ActionReasonAlwaysChargeBelowThreshold,
-				Description:  desc,
-				CurrentPrice: &currentPrice,
-				SystemStatus: currentStatus,
-				ChargeToSOC:  100,
+				Timestamp:       now.UTC(),
+				SystemTimestamp: now,
+				BatteryMode:     types.BatteryModeChargeAny,
+				SolarMode:       solarMode,
+				Reason:          types.ActionReasonAlwaysChargeBelowThreshold,
+				Description:     desc,
+				CurrentPrice:    &currentPrice,
+				SystemStatus:    currentStatus,
+				ChargeToSOC:     100,
 			},
 			SimulationParams: simParams,
 		}, nil
@@ -212,6 +214,7 @@ func (c *Controller) Decide(
 		return Decision{
 			Action: types.Action{
 				Timestamp:             now.UTC(),
+				SystemTimestamp:       now,
 				BatteryMode:           dr.BatteryMode,
 				SolarMode:             solarMode,
 				Reason:                dr.Reason,

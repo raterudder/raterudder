@@ -67,9 +67,12 @@ const historyCharts: ChartConfig[] = [
     }
 ];
 
-function formatHour(ts: string): string {
-    const d = new Date(ts);
-    return d.toLocaleTimeString([], { hour: 'numeric', hour12: true });
+import { formatTime } from '../utils/dashboardUtils';
+
+function formatHour(ts: string, referenceTs?: string): string {
+    if (!ts) return '';
+    const formatted = formatTime(ts, referenceTs);
+    return formatted.replace(':00 ', ' ');
 }
 
 function HistoryChart({ data, config, isMobile }: { data: HistoryDataPoint[]; config: ChartConfig; isMobile: boolean }) {
@@ -89,7 +92,7 @@ function HistoryChart({ data, config, isMobile }: { data: HistoryDataPoint[]; co
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--outline-variant)" vertical={false} opacity={0.4} />
                     <XAxis
                         dataKey="tsHourStart"
-                        tickFormatter={formatHour}
+                        tickFormatter={(ts) => formatHour(ts, data[0]?.tsHourStart)}
                         tick={{ fontSize: isMobile ? 10 : 12 }}
                         stroke="var(--outline-variant)"
                         axisLine={false}
@@ -104,7 +107,7 @@ function HistoryChart({ data, config, isMobile }: { data: HistoryDataPoint[]; co
                         tickFormatter={(v: number) => v.toFixed(1)}
                     />
                     <Tooltip
-                        labelFormatter={(label) => formatHour(String(label))}
+                        labelFormatter={(label) => formatHour(String(label), data[0]?.tsHourStart)}
                         contentStyle={{
                             backgroundColor: 'var(--surface-container-high)',
                             border: '1px solid var(--border)',

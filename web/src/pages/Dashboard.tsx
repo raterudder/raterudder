@@ -7,6 +7,7 @@ import ActionTimeline from '../components/ActionTimeline';
 import DateSelector from '../components/DateSelector';
 import {
     gridChargeCost,
+    getActionTimestamp,
     type ActionSummary,
     type ActionSummaryAccumulator,
     type SummaryType
@@ -172,7 +173,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                     type: type,
                     reason: action.reason,
                     latestAction: action,
-                    startTime: action.timestamp,
+                    startTime: getActionTimestamp(action),
                     count: 1,
                     alarms: new Set<string>(),
                     storms: new Set<string>(),
@@ -278,7 +279,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                 const { priceTotal, priceCount, socTotal, socCount, ...rest } = summary;
                 return {
                     ...rest,
-                    endTime: summary.latestAction.timestamp,
+                    endTime: getActionTimestamp(summary.latestAction),
                     avgPrice: priceCount > 0 ? priceTotal / priceCount : 0,
                     avgSOC: socCount > 0 ? socTotal / socCount : 0
                 } as ActionSummary;

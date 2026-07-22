@@ -63,6 +63,7 @@ export interface SimulationParams {
 
 export interface Action {
     timestamp: string;
+    systemTimestamp?: string;
     batteryMode: number;
     solarMode: number;
     targetBatteryMode?: number;

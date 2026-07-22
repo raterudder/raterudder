@@ -152,6 +152,9 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 
 	// 5. Get History (Last x days from monthly summaries + today's/tomorrow's unsummarized data)
 	now := status.Timestamp
+	if now.IsZero() {
+		now = s.now()
+	}
 	historyStart := now.AddDate(0, 0, -forecastHistoryDays).Truncate(time.Hour)
 	energyHistory, weatherHistory, err := s.getCombinedHistory(ctx, siteID, settings, historyStart, now, nil)
 	if err != nil {
