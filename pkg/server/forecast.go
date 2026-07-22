@@ -40,7 +40,6 @@ type WeatherRes struct {
 	TempFactor               float64   `json:"tempFactor,omitempty"`
 	SnowFactor               float64   `json:"snowFactor,omitempty"`
 	TemperatureC             float64   `json:"temperatureC,omitempty"`
-	TemperatureCellC         float64   `json:"temperatureCellC,omitempty"`
 	Irradiance               float64   `json:"irradiance,omitempty"`
 	SnowfallCM               float64   `json:"snowfallCM,omitempty"`
 }
@@ -247,7 +246,6 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 							TempFactor:               ws.TempFactor,
 							SnowFactor:               ws.SnowFactor,
 							TemperatureC:             hw.TemperatureC,
-							TemperatureCellC:         ws.TCell,
 							Irradiance:               ws.Irradiance,
 							SnowfallCM:               hw.SnowfallCM,
 						})

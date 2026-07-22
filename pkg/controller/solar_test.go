@@ -1323,11 +1323,9 @@ func TestTemperatureEffects(t *testing.T) {
 		val14 := results[time.Date(2024, 1, 1, 14, 0, 0, 0, time.UTC).Unix()]
 
 		// Clamped to -40: TempFactor = 1.0 - (-40 - 25) * 0.0035 = 1.2275
-		assert.InDelta(t, -40.0, val13.TCell, 0.001)
 		assert.InDelta(t, 1.2275, val13.TempFactor, 0.001)
 
 		// Clamped to 80: TempFactor = 1.0 - (80 - 25) * 0.0035 = 0.8075
-		assert.InDelta(t, 80.0, val14.TCell, 0.001)
 		assert.InDelta(t, 0.8075, val14.TempFactor, 0.001)
 	})
 }
@@ -1969,7 +1967,168 @@ func TestCalibrateSolarScaleFactor(t *testing.T) {
 		// Total Denom = 5 * 5 * 890.625 = 22265.625
 		// staticEff = 23.75 / 22265.625 ≈ 0.001066
 		// Hour 12 raw eff = 1.35 / 890.625 ≈ 0.001515 ≈ 1.42 * staticEff
+		// Total Solar = (0.85*4 + 1.35) * 5 = 4.75 * 5 = 23.75
+		// Total Denom = 5 * 5 * 890.625 = 22265.625
+		// staticEff = 23.75 / 22265.625 ≈ 0.001066
+		// Hour 12 raw eff = 1.35 / 890.625 ≈ 0.001515 ≈ 1.42 * staticEff
 		staticEff := 23.75 / 22265.625
 		assert.Greater(t, calib.HourlyEffs[localHour12], 1.30*staticEff)
+	})
+
+	t.Run("retaining low-light morning generation", func(t *testing.T) {
+		history := []types.EnergyStats{}
+		weatherHours := []types.HourlyWeather{}
+		for d := 0; d < 5; d++ {
+			day := baseTime.AddDate(0, 0, d)
+			for h := 6; h <= 8; h++ {
+				ts := day.Add(time.Duration(h-12) * time.Hour)
+				weatherHours = append(weatherHours, types.HourlyWeather{
+					TSHourStart:  ts,
+					GTI:          100.0, // low irradiance
+					TemperatureC: 20.0,
+				})
+				history = append(history, types.EnergyStats{
+					TSHourStart:   ts,
+					SolarKWH:      0.08, // low-light morning generation > 0.02 kWh
+					GridExportKWH: 0.08,
+				})
+			}
+		}
+		weather := []types.Weather{{ForecastHours: weatherHours}}
+		calib := CalibrateSolarScaleFactor(ctx, evalTime, history, weather, loc.TimeZone, 0, getIrr)
+		localHour6 := baseTime.Add(-6 * time.Hour).In(timeLoc).Hour()
+		// Low-light morning efficiency should be learned (~0.08 / 100 = 0.0008), not zeroed or ignored
+		assert.Greater(t, calib.HourlyEffs[localHour6], 0.0005)
+	})
+}
+
+func TestCalculateSimilarityEfficiency(t *testing.T) {
+	timeLoc := time.UTC
+	now := time.Date(2024, 6, 15, 12, 0, 0, 0, time.UTC)
+	localHour := 9
+	getIrr := func(hw types.HourlyWeather) float64 { return hw.GTI }
+
+	t.Run("3-hour minimum threshold fallback", func(t *testing.T) {
+		weatherByHour := make(map[int64]types.HourlyWeather)
+		statsByTs := make(map[int64]types.EnergyStats)
+
+		// Create only 2 matching historical days for hour 9 (count = 2 < 3)
+		for d := 1; d <= 2; d++ {
+			ts := now.AddDate(0, 0, -d).Truncate(24 * time.Hour).Add(9 * time.Hour).Unix()
+			weatherByHour[ts] = types.HourlyWeather{TSHourStart: time.Unix(ts, 0), GTI: 400.0, TemperatureC: 25.0}
+			statsByTs[ts] = types.EnergyStats{TSHourStart: time.Unix(ts, 0), SolarKWH: 3.0, GridExportKWH: 3.0}
+		}
+
+		cacheByHour, _ := buildHistoricalCache(now, timeLoc, weatherByHour, statsByTs, getIrr)
+		fallbackEff := 0.0080
+		eff := calculateSimilarityEfficiency(400.0, cacheByHour[localHour], 0.0080, fallbackEff)
+		// Should fall back because count = 2 < 3
+		assert.Equal(t, fallbackEff, eff)
+
+		// Add a 3rd historical day (count = 3 >= 3)
+		ts3 := now.AddDate(0, 0, -3).Truncate(24 * time.Hour).Add(9 * time.Hour).Unix()
+		weatherByHour[ts3] = types.HourlyWeather{TSHourStart: time.Unix(ts3, 0), GTI: 400.0, TemperatureC: 25.0}
+		statsByTs[ts3] = types.EnergyStats{TSHourStart: time.Unix(ts3, 0), SolarKWH: 3.0, GridExportKWH: 3.0}
+
+		cacheByHour3, _ := buildHistoricalCache(now, timeLoc, weatherByHour, statsByTs, getIrr)
+		eff3 := calculateSimilarityEfficiency(400.0, cacheByHour3[localHour], 0.0080, fallbackEff)
+		// Should calculate weighted efficiency (not fallback)
+		assert.NotEqual(t, fallbackEff, eff3)
+		assert.InDelta(t, 0.00784, eff3, 0.0005)
+	})
+
+	t.Run("weighting for similar irradiance", func(t *testing.T) {
+		weatherByHour := make(map[int64]types.HourlyWeather)
+		statsByTs := make(map[int64]types.EnergyStats)
+
+		// Target forecast is 200 W/m² (cloudy morning)
+		forecastIrr := 200.0
+
+		// Add 3 historical days with irr = 200 W/m² (solar = 0.5 kWh, eff ≈ 0.0025)
+		for d := 1; d <= 3; d++ {
+			ts := now.AddDate(0, 0, -d).Truncate(24 * time.Hour).Add(9 * time.Hour).Unix()
+			weatherByHour[ts] = types.HourlyWeather{TSHourStart: time.Unix(ts, 0), GTI: 200.0, TemperatureC: 25.0}
+			statsByTs[ts] = types.EnergyStats{TSHourStart: time.Unix(ts, 0), SolarKWH: 0.5, GridExportKWH: 0.5}
+		}
+		// Add 3 historical days with irr = 800 W/m² (clear sky, solar = 7.0 kWh, eff ≈ 0.0098)
+		for d := 4; d <= 6; d++ {
+			ts := now.AddDate(0, 0, -d).Truncate(24 * time.Hour).Add(9 * time.Hour).Unix()
+			weatherByHour[ts] = types.HourlyWeather{TSHourStart: time.Unix(ts, 0), GTI: 800.0, TemperatureC: 25.0}
+			statsByTs[ts] = types.EnergyStats{TSHourStart: time.Unix(ts, 0), SolarKWH: 7.0, GridExportKWH: 7.0}
+		}
+
+		cacheByHour, _ := buildHistoricalCache(now, timeLoc, weatherByHour, statsByTs, getIrr)
+		eff := calculateSimilarityEfficiency(forecastIrr, cacheByHour[localHour], 0.0050, 0.0050)
+		// Should be dominated by the 200 W/m² points (eff ~ 0.0025), isolating clear sky (0.0098)
+		assert.Less(t, eff, 0.0040)
+	})
+
+	t.Run("recency decay weighting", func(t *testing.T) {
+		weatherByHour := make(map[int64]types.HourlyWeather)
+		statsByTs := make(map[int64]types.EnergyStats)
+
+		// 3 Recent points (1-3 days old) with lower efficiency (solar = 2.0)
+		for d := 1; d <= 3; d++ {
+			ts := now.AddDate(0, 0, -d).Truncate(24 * time.Hour).Add(9 * time.Hour).Unix()
+			weatherByHour[ts] = types.HourlyWeather{TSHourStart: time.Unix(ts, 0), GTI: 500.0, TemperatureC: 25.0}
+			statsByTs[ts] = types.EnergyStats{TSHourStart: time.Unix(ts, 0), SolarKWH: 2.0, GridExportKWH: 2.0}
+		}
+		// 3 Older points (12-14 days old) with higher efficiency (solar = 5.0)
+		for d := 12; d <= 14; d++ {
+			ts := now.AddDate(0, 0, -d).Truncate(24 * time.Hour).Add(9 * time.Hour).Unix()
+			weatherByHour[ts] = types.HourlyWeather{TSHourStart: time.Unix(ts, 0), GTI: 500.0, TemperatureC: 25.0}
+			statsByTs[ts] = types.EnergyStats{TSHourStart: time.Unix(ts, 0), SolarKWH: 5.0, GridExportKWH: 5.0}
+		}
+
+		cacheByHour, _ := buildHistoricalCache(now, timeLoc, weatherByHour, statsByTs, getIrr)
+		eff := calculateSimilarityEfficiency(500.0, cacheByHour[localHour], 0.0070, 0.0070)
+		// Because recent points have weight 0.95^1..3 vs older points 0.95^12..14 (~0.50),
+		// eff should be closer to recent efficiency (2.0 / (500*0.8906) ≈ 0.00449) than older (0.0112)
+		assert.Less(t, eff, 0.0070)
+	})
+
+	t.Run("outlier rejection and low irradiance threshold", func(t *testing.T) {
+		weatherByHour := make(map[int64]types.HourlyWeather)
+		statsByTs := make(map[int64]types.EnergyStats)
+		staticEff := 0.0080
+
+		// Add 3 valid low-irradiance points (150 W/m², solar = 0.15 kWh -> eff = 0.00112 > 0.1 * staticEff)
+		for d := 1; d <= 3; d++ {
+			ts := now.AddDate(0, 0, -d).Truncate(24 * time.Hour).Add(9 * time.Hour).Unix()
+			weatherByHour[ts] = types.HourlyWeather{TSHourStart: time.Unix(ts, 0), GTI: 150.0, TemperatureC: 25.0}
+			statsByTs[ts] = types.EnergyStats{TSHourStart: time.Unix(ts, 0), SolarKWH: 0.15, GridExportKWH: 0.15}
+		}
+		// Add 1 extreme outlier point (solar = 30.0 kWh -> eff > 1.5 * staticEff)
+		tsOutlier := now.AddDate(0, 0, -4).Truncate(24 * time.Hour).Add(9 * time.Hour).Unix()
+		weatherByHour[tsOutlier] = types.HourlyWeather{TSHourStart: time.Unix(tsOutlier, 0), GTI: 150.0, TemperatureC: 25.0}
+		statsByTs[tsOutlier] = types.EnergyStats{TSHourStart: time.Unix(tsOutlier, 0), SolarKWH: 30.0, GridExportKWH: 30.0}
+
+		cacheByHour, _ := buildHistoricalCache(now, timeLoc, weatherByHour, statsByTs, getIrr)
+		eff := calculateSimilarityEfficiency(150.0, cacheByHour[localHour], staticEff, staticEff)
+		// The 30.0 kWh outlier must be rejected, keeping eff near low-irradiance value (~0.00112)
+		assert.Less(t, eff, 0.0030)
+	})
+
+	t.Run("skipping curtailed hours", func(t *testing.T) {
+		weatherByHour := make(map[int64]types.HourlyWeather)
+		statsByTs := make(map[int64]types.EnergyStats)
+
+		// 3 Curtailed days (export <= 0.1 and SOC >= 98.0)
+		for d := 1; d <= 3; d++ {
+			ts := now.AddDate(0, 0, -d).Truncate(24 * time.Hour).Add(9 * time.Hour).Unix()
+			weatherByHour[ts] = types.HourlyWeather{TSHourStart: time.Unix(ts, 0), GTI: 500.0, TemperatureC: 25.0}
+			statsByTs[ts] = types.EnergyStats{
+				TSHourStart:   time.Unix(ts, 0),
+				SolarKWH:      0.1,
+				GridExportKWH: 0.0,
+				MaxBatterySOC: 100.0,
+			}
+		}
+
+		cacheByHour, _ := buildHistoricalCache(now, timeLoc, weatherByHour, statsByTs, getIrr)
+		fallbackEff := 0.0080
+		eff := calculateSimilarityEfficiency(500.0, cacheByHour[localHour], 0.0080, fallbackEff)
+		// Since all 3 points were curtailed and skipped, count = 0 < 3 -> returns fallbackEff
+		assert.Equal(t, fallbackEff, eff)
 	})
 }

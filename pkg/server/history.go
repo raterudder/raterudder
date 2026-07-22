@@ -128,7 +128,6 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 				wr.SnowDepthCM = improved.SnowDepth
 				wr.TempFactor = improved.TempFactor
 				wr.SnowFactor = improved.SnowFactor
-				wr.TemperatureCellC = improved.TCell
 				wr.Irradiance = improved.Irradiance
 			}
 			localHour := h.TSHourStart.In(loc).Hour()

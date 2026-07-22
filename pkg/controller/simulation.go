@@ -11,10 +11,6 @@ import (
 	"github.com/raterudder/raterudder/pkg/types"
 )
 
-// deficitThresholdOffsetCapacityRatio represents the capacity threshold ratio
-// below the reserve percent before we count/accumulate it as a deficit.
-const deficitThresholdOffsetCapacityRatio = 0.015
-
 // TODO: Put vppPrepChargingBuffer in settings after clarification from Franklin.
 const vppPrepChargingBuffer = 2 * time.Hour
 

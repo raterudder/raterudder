@@ -13,8 +13,8 @@ import {
     type SummaryType
 } from '../utils/dashboardUtils';
 
-export const whatsNewVersion = 6;
-export const whatsNewText = "Improved home prediction including vacation, heatwave, and guests-in-town detection.";
+export const whatsNewVersion = 7;
+export const whatsNewText = "Better morning/cloudy solar forecasting. Dashboard times now shown in site timezone.";
 export const whatsNewLinkText = "";
 
 const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ siteID, settings = null }) => {
