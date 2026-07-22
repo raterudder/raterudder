@@ -710,5 +710,7 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+	if _, err := w.Write([]byte(`{"success":true}`)); err != nil {
+		panic(http.ErrAbortHandler)
+	}
 }

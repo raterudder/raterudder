@@ -145,9 +145,7 @@ func (s *Server) handleListUserSites(w http.ResponseWriter, r *http.Request) {
 
 	var userSites []types.UserSite
 	for _, u := range users {
-		for _, us := range u.Sites {
-			userSites = append(userSites, us)
-		}
+		userSites = append(userSites, u.Sites...)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
