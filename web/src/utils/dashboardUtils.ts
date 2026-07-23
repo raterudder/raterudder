@@ -4,7 +4,6 @@ export const getBatteryModeLabel = (mode: number) => {
     switch (mode) {
         case BatteryMode.Standby: return 'Hold Battery';
         case BatteryMode.ChargeAny: return 'Charge From Solar+Grid';
-        case BatteryMode.ChargeSolar: return 'Charge From Solar';
         case BatteryMode.Load: return 'Solar first, then battery';
         case BatteryMode.NoChange: return 'No Change';
         default: return 'Unknown';
@@ -15,7 +14,6 @@ export const getBatteryModeClass = (mode: number) => {
     switch (mode) {
         case BatteryMode.Standby: return 'standby';
         case BatteryMode.ChargeAny: return 'charge_any';
-        case BatteryMode.ChargeSolar: return 'charge_solar';
         case BatteryMode.Load: return 'load';
         case BatteryMode.NoChange: return 'no_change';
         default: return 'unknown';

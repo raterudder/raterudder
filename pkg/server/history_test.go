@@ -416,7 +416,7 @@ func TestHandleHistoryActions(t *testing.T) {
 		expectedActions := []types.Action{
 			{
 				Timestamp:         now.Add(-30 * time.Minute),
-				BatteryMode:       types.BatteryModeChargeSolar,
+				BatteryMode:       types.BatteryModeChargeAny,
 				SolarMode:         types.SolarModeAny,
 				TargetBatteryMode: types.BatteryModeStandby,
 				TargetSolarMode:   types.SolarModeNoExport,
@@ -651,7 +651,7 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 			},
 			{
 				Timestamp:   now.Add(-30 * time.Minute),
-				BatteryMode: types.BatteryModeChargeSolar,
+				BatteryMode: types.BatteryModeChargeAny,
 				Reason:      types.ActionReasonSufficientBattery,
 				Description: "Solar charging",
 			},

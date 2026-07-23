@@ -2623,8 +2623,6 @@ func drModeString(mode types.BatteryMode) string {
 		return "Standby"
 	case types.BatteryModeChargeAny:
 		return "ChargeAny"
-	case types.BatteryModeChargeSolar:
-		return "ChargeSolar"
 	case types.BatteryModeLoad:
 		return "Load"
 	default:

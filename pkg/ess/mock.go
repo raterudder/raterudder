@@ -202,7 +202,7 @@ func (m *MockESS) advanceState(state *types.ESSMockState, now time.Time) (batter
 		} else {
 			absNet := -net
 			// if we have a deficit, do we have enough battery to cover it?
-			if state.BatteryMode == types.BatteryModeStandby || state.BatteryMode == types.BatteryModeChargeAny || state.BatteryMode == types.BatteryModeChargeSolar {
+			if state.BatteryMode == types.BatteryModeStandby || state.BatteryMode == types.BatteryModeChargeAny {
 				stepBatteryKW = 0
 			} else {
 				tryDischargeKW := min(absNet, maxDischargeRateKW)

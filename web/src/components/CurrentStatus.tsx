@@ -118,7 +118,7 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
         state = 'standby';
     } else if (mode === BatteryMode.Load) {
         state = 'discharging';
-    } else if (mode === BatteryMode.ChargeAny || mode === BatteryMode.ChargeSolar) {
+    } else if (mode === BatteryMode.ChargeAny) {
         state = 'charging';
     }
 

@@ -201,11 +201,10 @@ type SystemStatus struct {
 type BatteryMode int
 
 const (
-	BatteryModeNoChange    BatteryMode = 0
-	BatteryModeStandby     BatteryMode = 1
-	BatteryModeChargeAny   BatteryMode = 2
-	BatteryModeChargeSolar BatteryMode = 3
-	BatteryModeLoad        BatteryMode = -1
+	BatteryModeNoChange  BatteryMode = 0
+	BatteryModeStandby   BatteryMode = 1
+	BatteryModeChargeAny BatteryMode = 2
+	BatteryModeLoad      BatteryMode = -1
 )
 
 // SolarMode represents the mode of the solar panels.

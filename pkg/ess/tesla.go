@@ -786,10 +786,8 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 		}
 		var targetAllowGridCharge bool
 		switch bat {
-		case types.BatteryModeChargeAny, types.BatteryModeLoad:
+		case types.BatteryModeChargeAny, types.BatteryModeLoad, types.BatteryModeStandby:
 			targetAllowGridCharge = b.settings.GridChargeBatteries
-		case types.BatteryModeChargeSolar, types.BatteryModeStandby:
-			targetAllowGridCharge = false
 		default:
 			return fmt.Errorf("unknown battery mode: %v", bat)
 		}
@@ -830,6 +828,12 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 	var updatedGrid bool
 	var updatedMode bool
 
+	if b.settings.GridChargeBatteries && !allowGridCharge {
+		log.Ctx(ctx).InfoContext(ctx, "grid charging is disabled on tesla, enabling grid charge to match site settings")
+		allowGridCharge = true
+		updatedGrid = true
+	}
+
 	switch bat {
 	case types.BatteryModeChargeAny:
 		// if they want to charge the battery then set the SOC to 100 to force it to
@@ -839,54 +843,16 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 			targetSOC = opts.ChargeToSOC
 		}
 		newReserveSOC = float64(targetSOC)
-		if b.settings.GridChargeBatteries {
-			if !allowGridCharge {
-				allowGridCharge = true
-				updatedGrid = true
-			}
-		} else {
-			if allowGridCharge {
-				allowGridCharge = false
-				updatedGrid = true
-			}
-		}
-	case types.BatteryModeChargeSolar:
-		// we disallow charging from the grid if they only want to charge via solar
-		// and otherwise set the SOC to 100
-		targetSOC := 100
-		if opts.ChargeToSOC != 0 {
-			targetSOC = opts.ChargeToSOC
-		}
-		newReserveSOC = float64(targetSOC)
-		if allowGridCharge {
-			allowGridCharge = false
-			updatedGrid = true
-		}
 	case types.BatteryModeLoad:
 		// we set the SOC to the minimum battery SOC to ensure we start discharging
 		// if we're somehow less than this soc, we'll charge from the solar, unless
 		// solar is unavailable then it'll charge from the grid
 		newReserveSOC = b.settings.MinBatterySOC
-		if b.settings.GridChargeBatteries {
-			if !allowGridCharge {
-				allowGridCharge = true
-				updatedGrid = true
-			}
-		} else {
-			if allowGridCharge {
-				allowGridCharge = false
-				updatedGrid = true
-			}
-		}
 	case types.BatteryModeStandby:
 		// we floor the SOC to ensure we don't set it to a value that would cause the
 		// battery to charge
 		// make sure we don't set it to less than the minimum battery SOC
 		newReserveSOC = math.Max(math.Floor(liveStatus.PercentageCharged), b.settings.MinBatterySOC)
-		if allowGridCharge {
-			allowGridCharge = false
-			updatedGrid = true
-		}
 	case types.BatteryModeNoChange:
 		// Do not change battery settings
 	default:
@@ -1001,7 +967,6 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 		}
 		if err := b.base.doRequest(req, nil); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla grid import export", slog.Any("error", err))
-			return err
 		}
 	}
 

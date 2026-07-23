@@ -414,8 +414,9 @@ func TestHandleUpdate(t *testing.T) {
 		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
 		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
 		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
 
-		mockES := &mockESS{}
+		mockES := &mockESS{MockName: "franklin"}
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
 		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
@@ -426,11 +427,23 @@ func TestHandleUpdate(t *testing.T) {
 		mockP.SetSystem(types.SiteIDNone, mockES)
 
 		mockS.On("InsertAction", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+		var futurePrices []types.Price
+		now := time.Now()
+		for i := 0; i < 48; i++ {
+			futurePrices = append(futurePrices, types.Price{
+				DollarsPerKWH: 0.10,
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+			})
+		}
 
 		mockU := &mockUtility{}
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
-		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: time.Now()}, nil)
-		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: now}, nil)
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return(futurePrices[:24], nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return(futurePrices, nil).Maybe()
 		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
 		mockUMap := utility.NewMap(mockS)

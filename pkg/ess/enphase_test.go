@@ -812,7 +812,9 @@ func TestEnphase(t *testing.T) {
 			assert.Equal(t, 80, lastPayload.BatteryBackupPercentage)
 			assert.Equal(t, "self-consumption", lastPayload.Usage)
 		}
-		assert.False(t, putCalled)
+		if assert.True(t, putCalled) {
+			assert.True(t, lastSettingsPut.ChargeFromGrid)
+		}
 
 		postCalled = false
 		lastPayload = nil
@@ -823,10 +825,6 @@ func TestEnphase(t *testing.T) {
 		require.NoError(t, err)
 		if assert.True(t, postCalled) {
 			assert.Equal(t, 100, lastPayload.BatteryBackupPercentage)
-		}
-		if assert.True(t, putCalled) {
-			assert.True(t, lastSettingsPut.ChargeFromGrid)
-			assert.False(t, lastSettingsPut.ChargeFromGridScheduleEnabled)
 		}
 
 		// Test disabling schedules

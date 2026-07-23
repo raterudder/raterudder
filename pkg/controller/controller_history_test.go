@@ -415,7 +415,7 @@ func TestDecideHistory(t *testing.T) {
 					var pBattDischarge float64
 
 					switch decidedMode {
-					case types.BatteryModeChargeAny, types.BatteryModeChargeSolar:
+					case types.BatteryModeChargeAny:
 						// ESS systems do not discharge in charge modes
 						pBattDischarge = 0.0
 

@@ -1021,18 +1021,6 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 			}
 			newReserveSOC = float64(targetSOC)
 		}
-	case types.BatteryModeChargeSolar:
-		// note: since we're not setting emergency backup mode solar will still be
-		// used to power the home first then spill over into the battery
-		if !sc.CanEditReserveSOC {
-			log.Ctx(ctx).WarnContext(ctx, "cannot edit reserve SOC")
-			return errors.New("cannot edit reserve SOC")
-		}
-		targetSOC := 100
-		if opts.ChargeToSOC != 0 {
-			targetSOC = opts.ChargeToSOC
-		}
-		newReserveSOC = float64(targetSOC)
 	case types.BatteryModeLoad:
 		// we set the SOC to the minimum battery SOC to ensure we start discharging
 		// if we're somehow less than this soc, we'll charge from the solar, unless

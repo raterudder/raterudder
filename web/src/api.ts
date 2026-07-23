@@ -87,7 +87,6 @@ export const BatteryMode = {
     NoChange: 0,
     Standby: 1,
     ChargeAny: 2,
-    ChargeSolar: 3,
     Load: -1,
 } as const;
 

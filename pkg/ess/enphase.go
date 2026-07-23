@@ -498,10 +498,8 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 		}
 		var targetChargeFromGrid bool
 		switch bat {
-		case types.BatteryModeChargeAny, types.BatteryModeLoad:
+		case types.BatteryModeChargeAny, types.BatteryModeLoad, types.BatteryModeStandby:
 			targetChargeFromGrid = e.settings.GridChargeBatteries
-		case types.BatteryModeChargeSolar, types.BatteryModeStandby:
-			targetChargeFromGrid = false
 		default:
 			return fmt.Errorf("unknown battery mode: %v", bat)
 		}
@@ -542,6 +540,10 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 
 	newReserveSOC := currentReserveSOC
 	newChargeFromGrid := currentChargeFromGrid
+	if e.settings.GridChargeBatteries && !currentChargeFromGrid {
+		log.Ctx(ctx).InfoContext(ctx, "grid charging is disabled on enphase, enabling grid charge to match site settings")
+		newChargeFromGrid = true
+	}
 	newProfile := "self-consumption"
 	switch bat {
 	case types.BatteryModeChargeAny:
@@ -552,26 +554,14 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 			targetSOC = opts.ChargeToSOC
 		}
 		newReserveSOC = float64(targetSOC)
-		newChargeFromGrid = e.settings.GridChargeBatteries
-	case types.BatteryModeChargeSolar:
-		// Force charging by setting reserve SOC to 100%, but disallow charging
-		// from the grid so it only charges using solar power.
-		targetSOC := 100
-		if opts.ChargeToSOC != 0 {
-			targetSOC = opts.ChargeToSOC
-		}
-		newReserveSOC = float64(targetSOC)
-		newChargeFromGrid = false
 	case types.BatteryModeLoad:
 		// Set the reserve SOC to the configured minimum battery SOC to begin discharging
-		// and covering home loads. Allow grid charging if configured.
+		// and covering home loads.
 		newReserveSOC = e.settings.MinBatterySOC
-		newChargeFromGrid = e.settings.GridChargeBatteries
 	case types.BatteryModeStandby:
 		// Set reserve SOC to the floored current SOC to prevent discharging further,
-		// without setting it higher which would force a charge. Disallow grid charging.
+		// without setting it higher which would force a charge.
 		newReserveSOC = math.Max(math.Floor(currentSOC), e.settings.MinBatterySOC)
-		newChargeFromGrid = false
 	case types.BatteryModeNoChange:
 		// Keep existing values
 	default:
@@ -617,7 +607,7 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 				ChargeFromGridScheduleEnabled: false,
 			}
 			if err := e.updateBatterySettings(ctx, payload); err != nil {
-				return err
+				log.Ctx(ctx).ErrorContext(ctx, "failed to set enphase battery settings", slog.Any("error", err))
 			}
 		}
 	}
