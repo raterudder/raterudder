@@ -369,8 +369,12 @@ func (s *Server) performSiteUpdate(
 		return &action, "vpp event", nil
 	}
 
-	// don't update if we're in emergency mode
-	if status.EmergencyMode {
+	// don't update if we're in emergency mode (except Franklin systems where
+	// emergency mode is used as fallback for grid charging)
+	// TODO: Temporarily skip emergency mode bailout for Franklin systems because
+	// Franklin disabled power control grid charge toggles, requiring emergency
+	// backup mode to force charging. Revisit to reverse when fixed.
+	if status.EmergencyMode && settings.ESS != "franklin" {
 		log.Ctx(ctx).InfoContext(ctx, "update: emergency mode, ensuring grid charge is enabled")
 
 		// If storm hedge is enabled, but grid charge was previously disabled, storm hedge won't work.

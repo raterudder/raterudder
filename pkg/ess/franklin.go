@@ -865,6 +865,7 @@ func (f *Franklin) setPowerControl(ctx context.Context, pc franklinGetPowerContr
 type availableModes struct {
 	list              []franklinMode
 	selfConsumption   franklinMode
+	backup            franklinMode
 	currentMode       franklinMode
 	stormHedgeEnabled int
 	VPPSOC            float64
@@ -887,6 +888,7 @@ func (f *Franklin) getAvailableModes(ctx context.Context) (availableModes, error
 	}
 
 	var sc franklinMode
+	var backup franklinMode
 	var current franklinMode
 	var first franklinMode
 	foundIDs := make([]string, len(res.List))
@@ -909,6 +911,7 @@ func (f *Franklin) getAvailableModes(ctx context.Context) (availableModes, error
 			sc = modes[i]
 		case 3: // backup
 			modes[i] = m
+			backup = modes[i]
 		default:
 			log.Ctx(ctx).WarnContext(
 				ctx,
@@ -941,6 +944,7 @@ func (f *Franklin) getAvailableModes(ctx context.Context) (availableModes, error
 	return availableModes{
 		list:              modes,
 		selfConsumption:   sc,
+		backup:            backup,
 		stormHedgeEnabled: res.StormHedgeEnabled,
 		currentMode:       current,
 		VPPSOC:            res.VPPSOC.VPPSoc,
@@ -970,51 +974,14 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 
 	isStormHedge := rd.RuntimeData.TOUID == 6
 	isBackup := modes.currentMode.WorkMode == 3
+	// TODO: restore checking isBackup when we are no longer using backup as a workaround
+	_ = isBackup
 
-	if isStormHedge || isBackup {
+	if isStormHedge {
 		if bat == types.BatteryModeNoChange {
 			return nil
 		}
-		var targetGridMaxFlag franklinGridMaxFlag
-		switch bat {
-		case types.BatteryModeChargeAny, types.BatteryModeLoad:
-			if f.settings.GridChargeBatteries {
-				targetGridMaxFlag = franklinGridMaxFlagChargeFromGrid
-			} else {
-				targetGridMaxFlag = franklinGridMaxFlagNoChargeFromGrid
-			}
-		case types.BatteryModeChargeSolar, types.BatteryModeStandby:
-			targetGridMaxFlag = franklinGridMaxFlagNoChargeFromGrid
-		default:
-			return fmt.Errorf("unknown battery mode: %v", bat)
-		}
-
-		pc, err := f.getPowerControl(ctx)
-		if err != nil {
-			return err
-		}
-
-		if pc.GridMaxFlag != targetGridMaxFlag {
-			log.Ctx(ctx).InfoContext(ctx, "fixing grid charge mode in storm/backup mode",
-				slog.Int("oldGridMaxFlag", int(pc.GridMaxFlag)),
-				slog.Int("newGridMaxFlag", int(targetGridMaxFlag)),
-				slog.Bool("isStormHedge", isStormHedge),
-				slog.Bool("isBackup", isBackup),
-			)
-			pc.GridMaxFlag = targetGridMaxFlag
-			if f.settings.DryRun {
-				log.Ctx(ctx).DebugContext(ctx, "dry run: would've set power control in storm/backup mode",
-					slog.Int("gridMaxFlag", int(pc.GridMaxFlag)),
-				)
-			} else {
-				if err := f.setPowerControl(ctx, pc); err != nil {
-					log.Ctx(ctx).ErrorContext(ctx, "failed to set power control in storm/backup mode", slog.Any("error", err))
-					return err
-				}
-			}
-		} else {
-			log.Ctx(ctx).DebugContext(ctx, "grid charge mode already set correctly in storm/backup mode", slog.Int("gridMaxFlag", int(pc.GridMaxFlag)))
-		}
+		log.Ctx(ctx).DebugContext(ctx, "storm hedge active, skipping mode change", slog.Any("batteryMode", bat))
 		return nil
 	}
 
@@ -1023,47 +990,38 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		return errors.New("self consumption mode not available")
 	}
 	sc := modes.selfConsumption
-	alreadySC := sc.ID == modes.currentMode.ID
-
-	reserveSOC := sc.ReserveSOC
-	newReserveSOC := reserveSOC
-
-	log.Ctx(ctx).DebugContext(ctx, "existing reserve SOC", slog.Float64("reserveSOC", sc.ReserveSOC))
 
 	pc, err := f.getPowerControl(ctx)
 	if err != nil {
 		return err
 	}
-	var updatedPC bool
+
+	targetMode := sc
+	newReserveSOC := sc.ReserveSOC
+
 	switch bat {
 	case types.BatteryModeChargeAny:
-		// if they want to charge the battery then set the SOC to 100 to force it to
-		// charge if its not charging already
-		// note: since we're not setting emergency backup mode solar will still be
-		// used to power the home first then spill over into the battery
-		if !sc.CanEditReserveSOC {
-			log.Ctx(ctx).WarnContext(ctx, "cannot edit reserve SOC")
-			return errors.New("cannot edit reserve SOC")
-		}
-		targetSOC := 100
-		if opts.ChargeToSOC != 0 {
-			targetSOC = opts.ChargeToSOC
-		}
-		newReserveSOC = float64(targetSOC)
-		if f.settings.GridChargeBatteries {
-			if pc.GridMaxFlag != franklinGridMaxFlagChargeFromGrid {
-				pc.GridMaxFlag = franklinGridMaxFlagChargeFromGrid
-				updatedPC = true
+		if f.settings.GridChargeBatteries && pc.GridMaxFlag != franklinGridMaxFlagChargeFromGrid {
+			log.Ctx(ctx).WarnContext(ctx, "grid charging is disabled in power control, setting emergency backup mode to charge", slog.Any("opts", opts))
+			if modes.backup == (franklinMode{}) {
+				log.Ctx(ctx).ErrorContext(ctx, "backup mode not available", slog.Any("modes", modes))
+				return errors.New("backup mode not available")
 			}
+			targetMode = modes.backup
 		} else {
-			if pc.GridMaxFlag != franklinGridMaxFlagNoChargeFromGrid {
-				pc.GridMaxFlag = franklinGridMaxFlagNoChargeFromGrid
-				updatedPC = true
+			// note: since we're not setting emergency backup mode solar will still be
+			// used to power the home first then spill over into the battery
+			if !sc.CanEditReserveSOC {
+				log.Ctx(ctx).WarnContext(ctx, "cannot edit reserve SOC")
+				return errors.New("cannot edit reserve SOC")
 			}
+			targetSOC := 100
+			if opts.ChargeToSOC != 0 {
+				targetSOC = opts.ChargeToSOC
+			}
+			newReserveSOC = float64(targetSOC)
 		}
 	case types.BatteryModeChargeSolar:
-		// we disallow charging from the grid if they only want to charge via solar
-		// and otherwise set the SOC to 100
 		// note: since we're not setting emergency backup mode solar will still be
 		// used to power the home first then spill over into the battery
 		if !sc.CanEditReserveSOC {
@@ -1075,27 +1033,12 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 			targetSOC = opts.ChargeToSOC
 		}
 		newReserveSOC = float64(targetSOC)
-		if pc.GridMaxFlag != franklinGridMaxFlagNoChargeFromGrid {
-			pc.GridMaxFlag = franklinGridMaxFlagNoChargeFromGrid
-			updatedPC = true
-		}
 	case types.BatteryModeLoad:
 		// we set the SOC to the minimum battery SOC to ensure we start discharging
 		// if we're somehow less than this soc, we'll charge from the solar, unless
 		// solar is unavailable then it'll charge from the grid
 		// it seems like this accepts an int value
 		newReserveSOC = f.settings.MinBatterySOC
-		if f.settings.GridChargeBatteries {
-			if pc.GridMaxFlag != franklinGridMaxFlagChargeFromGrid {
-				pc.GridMaxFlag = franklinGridMaxFlagChargeFromGrid
-				updatedPC = true
-			}
-		} else {
-			if pc.GridMaxFlag != franklinGridMaxFlagNoChargeFromGrid {
-				pc.GridMaxFlag = franklinGridMaxFlagNoChargeFromGrid
-				updatedPC = true
-			}
-		}
 	case types.BatteryModeStandby:
 		// we floor the SOC to ensure we don't set it to a value that would cause the
 		// battery to charge
@@ -1105,91 +1048,93 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		}
 		// make sure we don't set it to less than the minimum battery SOC
 		newReserveSOC = math.Max(math.Floor(rd.RuntimeData.SOC), f.settings.MinBatterySOC)
-		if pc.GridMaxFlag != franklinGridMaxFlagNoChargeFromGrid {
-			pc.GridMaxFlag = franklinGridMaxFlagNoChargeFromGrid
-			updatedPC = true
-		}
 	case types.BatteryModeNoChange:
-		// Do not change battery settings
+		targetMode = modes.currentMode
 	default:
 		return fmt.Errorf("unknown battery mode: %v", bat)
 	}
 
-	// we can't set it below 5
-	if newReserveSOC < 5 {
-		newReserveSOC = 5
+	if targetMode.WorkMode == 2 {
+		// we can't set it below 5
+		if newReserveSOC < 5 {
+			newReserveSOC = 5
+		}
+
+		// if franklin overshot our reserve SOC by less than 1 percent, ignore it
+		if math.Abs(newReserveSOC-sc.ReserveSOC) <= 1.0 {
+			newReserveSOC = sc.ReserveSOC
+		}
 	}
 
-	// if franklin overshot our reserve SOC by less than 1 percent, ignore it
-	if math.Abs(newReserveSOC-reserveSOC) <= 1.0 {
-		newReserveSOC = reserveSOC
-	}
+	/*
+		PREVIOUS POWER CONTROL LOGIC (REMOVED):
+		Previously, Franklin allowed updating power control settings via setPowerControl
+		We used to dynamically toggle grid charging and solar export flags:
 
-	updatedSOC := math.Round(newReserveSOC) != math.Round(reserveSOC)
+		// Grid charging control (in BatteryMode switch):
+		// - BatteryModeChargeAny / BatteryModeLoad:
+		//     if f.settings.GridChargeBatteries { pc.GridMaxFlag = franklinGridMaxFlagChargeFromGrid }
+		//     else { pc.GridMaxFlag = franklinGridMaxFlagNoChargeFromGrid }
+		// - BatteryModeChargeSolar / BatteryModeStandby:
+		//     pc.GridMaxFlag = franklinGridMaxFlagNoChargeFromGrid
 
+		// Solar export control (in SolarMode switch):
+		// - SolarModeAny:
+		//     if f.settings.GridExportSolar && f.settings.GridExportBatteries { pc.GridFeedMaxFlag = franklinGridFeedMaxFlagBatteryAndSolar }
+		//     else if f.settings.GridExportSolar { pc.GridFeedMaxFlag = franklinGridFeedMaxFlagSolarOnly }
+		//     else { pc.GridFeedMaxFlag = franklinGridFeedMaxFlagNoExport }
+		// - SolarModeNoExport:
+		//     pc.GridFeedMaxFlag = franklinGridFeedMaxFlagNoExport
+
+		// if updatedPC { f.setPowerControl(ctx, pc) }
+
+		REASON FOR REMOVAL:
+		Franklin has disabled the ability to update control power settings
+		We can no longer freely enable or disable grid charging or export settings
+		via power control updates.
+		Instead, if grid charging is disabled in Franklin's power control settings
+		and we need to charge, we must fall back to
+		Emergency Backup Mode (workMode: 3).
+	*/
 	switch sol {
-	case types.SolarModeAny:
-		// if settings allow us to export solar then we start exporting solar
-		// this will prefer home, then charge, then export
-		if f.settings.GridExportSolar && f.settings.GridExportBatteries {
-			if pc.GridFeedMaxFlag != franklinGridFeedMaxFlagBatteryAndSolar {
-				pc.GridFeedMaxFlag = franklinGridFeedMaxFlagBatteryAndSolar
-				updatedPC = true
-			}
-		} else if f.settings.GridExportSolar {
-			if pc.GridFeedMaxFlag != franklinGridFeedMaxFlagSolarOnly {
-				pc.GridFeedMaxFlag = franklinGridFeedMaxFlagSolarOnly
-				updatedPC = true
-			}
-		} else {
-			if pc.GridFeedMaxFlag != franklinGridFeedMaxFlagNoExport {
-				pc.GridFeedMaxFlag = franklinGridFeedMaxFlagNoExport
-				updatedPC = true
-			}
-		}
-	case types.SolarModeNoExport:
-		// set the flag to not export solar
-		if pc.GridFeedMaxFlag != franklinGridFeedMaxFlagNoExport {
-			pc.GridFeedMaxFlag = franklinGridFeedMaxFlagNoExport
-			updatedPC = true
-		}
-	case types.SolarModeNoChange:
-		// Do nothing for solar
+	case types.SolarModeAny, types.SolarModeNoExport, types.SolarModeNoChange:
+		// Power control updates are disabled by Franklin, so solar export settings cannot be updated via setPowerControl.
 	default:
 		return fmt.Errorf("unknown solar mode: %v", sol)
 	}
 
-	if !alreadySC || updatedSOC {
+	modeChanged := modes.currentMode.WorkMode != targetMode.WorkMode
+	socChanged := targetMode.WorkMode == 2 && math.Round(newReserveSOC) != math.Round(sc.ReserveSOC)
+
+	if modeChanged || socChanged {
 		if f.settings.DryRun {
-			if alreadySC {
+			if !modeChanged {
 				log.Ctx(ctx).DebugContext(
 					ctx,
 					"dry run: would've updated just soc",
 					slog.Int("soc", int(math.Round(newReserveSOC))),
-					slog.Int("workMode", sc.WorkMode),
+					slog.Int("workMode", targetMode.WorkMode),
 				)
 			} else {
 				log.Ctx(ctx).DebugContext(
 					ctx,
 					"dry run: would've tou mode",
 					slog.Int("soc", int(math.Round(newReserveSOC))),
-					slog.Int("workMode", sc.WorkMode),
+					slog.Int("workMode", targetMode.WorkMode),
 				)
 			}
 		} else {
-			if alreadySC {
+			if !modeChanged && targetMode.WorkMode == 2 {
 				log.Ctx(ctx).InfoContext(
 					ctx,
 					"updating franklin soc",
 					slog.Int("soc", int(math.Round(newReserveSOC))),
-					slog.Int("workMode", sc.WorkMode),
+					slog.Int("workMode", targetMode.WorkMode),
 				)
 				params := url.Values{}
 				params.Set("gatewayId", f.gatewayID)
-				params.Set("workMode", strconv.Itoa(sc.WorkMode))
-				params.Set("electricityType", strconv.Itoa(sc.ElectricityType))
-				// round to the nearest integer to minimize the chance of the battery charging
-				// or discharging when we don't want it to
+				params.Set("workMode", strconv.Itoa(targetMode.WorkMode))
+				params.Set("electricityType", strconv.Itoa(targetMode.ElectricityType))
 				params.Set("soc", strconv.Itoa(int(math.Round(newReserveSOC))))
 
 				req, err := f.newPostQueryRequest(ctx, "hes-gateway/terminal/tou/updateSocV2", params)
@@ -1205,16 +1150,15 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 					ctx,
 					"updating franklin tou mode",
 					slog.Float64("soc", newReserveSOC),
-					slog.Float64("previous", reserveSOC),
-					slog.Int("workMode", sc.WorkMode),
+					slog.Int("workMode", targetMode.WorkMode),
 				)
 
 				params := url.Values{}
 				params.Set("gatewayId", f.gatewayID)
-				params.Set("currendId", fmt.Sprint(sc.ID)) // yes, this is misspelled
-				params.Set("workMode", fmt.Sprint(sc.WorkMode))
-				params.Set("electricityType", fmt.Sprint(sc.ElectricityType))
-				params.Set("oldIndex", fmt.Sprint(sc.OldIndex))
+				params.Set("currendId", fmt.Sprint(targetMode.ID))
+				params.Set("workMode", fmt.Sprint(targetMode.WorkMode))
+				params.Set("electricityType", fmt.Sprint(targetMode.ElectricityType))
+				params.Set("oldIndex", fmt.Sprint(targetMode.OldIndex))
 				params.Set("stromEn", fmt.Sprint(modes.stormHedgeEnabled))
 				// round to the nearest integer to minimize the chance of the battery charging
 				// or discharging when we don't want it to
@@ -1228,25 +1172,6 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 					log.Ctx(ctx).ErrorContext(ctx, "failed to update tou mode", slog.Any("error", err))
 					return err
 				}
-			}
-		}
-	}
-
-	if updatedPC {
-		if f.settings.DryRun {
-			log.Ctx(ctx).DebugContext(
-				ctx,
-				"dry run: would've set power control",
-				slog.Float64("gridMax", pc.GridMax),
-				slog.Int("gridMaxFlag", int(pc.GridMaxFlag)),
-				slog.Float64("gridFeedMax", pc.GridFeedMax),
-				slog.Int("gridFeedMaxFlag", int(pc.GridFeedMaxFlag)),
-			)
-		} else {
-			err := f.setPowerControl(ctx, pc)
-			if err != nil {
-				log.Ctx(ctx).ErrorContext(ctx, "failed to set power control", slog.Any("error", err))
-				return err
 			}
 		}
 	}

@@ -400,6 +400,63 @@ func TestHandleUpdate(t *testing.T) {
 		mockES.AssertExpectations(t)
 	})
 
+	t.Run("Action - Emergency Mode Franklin Bypass", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(time.Now()).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil)
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{ESS: "franklin", UtilityProvider: "test"}, types.CurrentSettingsVersion, nil)
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{EmergencyMode: true}, nil)
+		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+		mockP := ess.NewMap()
+		mockP.SetSystem(types.SiteIDNone, mockES)
+
+		mockS.On("InsertAction", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: time.Now()}, nil)
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
+
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			listenAddr: ":8080",
+			controller: controller.NewController(),
+			bypassAuth: true,
+		}
+
+		req := httptest.NewRequest("GET", "/api/update", nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
+		w := httptest.NewRecorder()
+		srv.handleUpdate(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+		var resp map[string]any
+		_ = json.NewDecoder(w.Body).Decode(&resp)
+		// Should NOT be emergency mode status because Franklin bypasses bailout and continues update logic
+		assert.NotEqual(t, "emergency mode", resp["status"])
+	})
+
 	t.Run("Action - Alarms Present", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()

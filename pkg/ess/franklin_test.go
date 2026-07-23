@@ -708,7 +708,7 @@ func TestFranklin(t *testing.T) {
 		assert.Equal(t, "updateTouModeV2", callOrder[0])
 	})
 
-	t.Run("SetModes Charge", func(t *testing.T) {
+	t.Run("SetModes Charge Fallback Backup", func(t *testing.T) {
 		var callOrder []string
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
@@ -728,92 +728,6 @@ func TestFranklin(t *testing.T) {
 					{"id": 10.0, "workMode": 1},
 					{"id": 20.0, "workMode": 2, "editSocFlag": true},
 					{"id": 30.0, "workMode": 3},
-				}
-				json.NewEncoder(w).Encode(map[string]any{
-					"code":    200,
-					"success": true,
-					"result":  map[string]any{"list": list},
-				})
-				return
-			}
-			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
-				json.NewEncoder(w).Encode(map[string]any{
-					"code":    200,
-					"success": true,
-					"result": []map[string]any{
-						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
-						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
-					},
-				})
-				return
-			}
-			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
-				json.NewEncoder(w).Encode(map[string]any{
-					"code":    200,
-					"success": true,
-					"result":  map[string]any{"gridMaxFlag": 0, "gridFeedMaxFlag": 3},
-				})
-				return
-			}
-			if r.URL.Path == "/hes-gateway/terminal/tou/setPowerControlV2" {
-				callOrder = append(callOrder, "setPowerControlV2")
-				// We expect it to enable generic grid charging (flag=2)
-				var data map[string]any
-				require.NoError(t, json.NewDecoder(r.Body).Decode(&data))
-				assert.EqualValues(t, 2, data["gridMaxFlag"], "gridMaxFlag should be 2")
-				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
-				return
-			}
-			if r.URL.Path == "/hes-gateway/terminal/tou/updateTouModeV2" {
-				callOrder = append(callOrder, "updateTouModeV2")
-				require.NoError(t, r.ParseForm())
-				// ChargeAny sets SOC to 100
-				assert.Equal(t, "100", r.Form.Get("soc"), "soc should be 100")
-				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
-				return
-			}
-			http.Error(w, "not found "+r.URL.Path, 404)
-		}))
-		defer ts.Close()
-
-		f := &Franklin{
-			client:      ts.Client(),
-			baseURL:     ts.URL,
-			username:    "u",
-			md5Password: "p",
-			gatewayID:   "g",
-		}
-
-		// SetModes(ChargeAny)
-		err := f.ApplySettings(context.Background(), types.Settings{GridChargeBatteries: true})
-		require.NoError(t, err, "ApplySettings should succeed")
-		err = f.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{})
-		require.NoError(t, err, "SetModes should succeed")
-
-		// Verify both calls were made
-		require.Len(t, callOrder, 2, "both updateTouModeV2 and setPowerControlV2 should be called")
-		assert.Equal(t, "updateTouModeV2", callOrder[0], "updateTouModeV2 should be called first")
-		assert.Equal(t, "setPowerControlV2", callOrder[1], "setPowerControlV2 should be called second")
-	})
-
-	t.Run("SetModes Both Mode and PowerControl Updates", func(t *testing.T) {
-		var callOrder []string
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
-				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
-				return
-			}
-			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
-				json.NewEncoder(w).Encode(map[string]any{
-					"code":    200,
-					"success": true,
-					"result":  map[string]any{"valid": true},
-				})
-				return
-			}
-			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
-				list := []map[string]any{
-					{"id": 20.0, "workMode": 2, "electricityType": 1, "editSocFlag": true},
 				}
 				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
@@ -841,6 +755,81 @@ func TestFranklin(t *testing.T) {
 				})
 				return
 			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/updateTouModeV2" {
+				callOrder = append(callOrder, "updateTouModeV2")
+				require.NoError(t, r.ParseForm())
+				// Fallback to Backup Mode (workMode 3) when gridMaxFlag is 1 (disabled)
+				assert.Equal(t, "3", r.Form.Get("workMode"), "workMode should be 3 for backup fallback")
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
+				return
+			}
+			http.Error(w, "not found "+r.URL.Path, 404)
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:      ts.Client(),
+			baseURL:     ts.URL,
+			username:    "u",
+			md5Password: "p",
+			gatewayID:   "g",
+		}
+
+		err := f.ApplySettings(context.Background(), types.Settings{GridChargeBatteries: true})
+		require.NoError(t, err, "ApplySettings should succeed")
+		err = f.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{})
+		require.NoError(t, err, "SetModes should succeed")
+
+		require.Len(t, callOrder, 1, "updateTouModeV2 should be called")
+		assert.Equal(t, "updateTouModeV2", callOrder[0])
+	})
+
+	t.Run("SetModes Both Mode and PowerControl Updates", func(t *testing.T) {
+		var callOrder []string
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"valid": true},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
+				list := []map[string]any{
+					{"id": 20.0, "workMode": 2, "electricityType": 1, "editSocFlag": true},
+					{"id": 30.0, "workMode": 3},
+				}
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"list": list, "currendId": 20.0},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": []map[string]any{
+						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
+						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
+					},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"gridMaxFlag": 2, "gridFeedMaxFlag": 3},
+				})
+				return
+			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/updateSocV2" {
 				callOrder = append(callOrder, "updateSocV2")
 				require.NoError(t, r.ParseForm())
@@ -852,7 +841,6 @@ func TestFranklin(t *testing.T) {
 				callOrder = append(callOrder, "setPowerControlV2")
 				var data map[string]any
 				require.NoError(t, json.NewDecoder(r.Body).Decode(&data))
-				// Should set gridFeedMaxFlag to 1 (solar only export)
 				assert.EqualValues(t, 1, data["gridFeedMaxFlag"], "gridFeedMaxFlag should be 1 for SolarModeAny with GridExportSolar=true")
 				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
 				return
@@ -869,21 +857,17 @@ func TestFranklin(t *testing.T) {
 			gatewayID:   "g",
 		}
 
-		// Set settings to enable grid export for solar
 		err := f.ApplySettings(context.Background(), types.Settings{
 			MinBatterySOC:   20,
 			GridExportSolar: true,
 		})
 		require.NoError(t, err)
 
-		// This should update both SOC (to 100 for charging) AND power control (to enable solar export)
 		err = f.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{})
 		require.NoError(t, err, "SetModes should succeed")
 
-		// Verify both API calls were made
-		require.Len(t, callOrder, 2, "both updateSocV2 and setPowerControlV2 should be called")
-		assert.Equal(t, "updateSocV2", callOrder[0], "updateSocV2 should be called first")
-		assert.Equal(t, "setPowerControlV2", callOrder[1], "setPowerControlV2 should be called second")
+		require.Len(t, callOrder, 1, "updateSocV2 should be called")
+		assert.Equal(t, "updateSocV2", callOrder[0])
 	})
 
 	t.Run("SetModes NoChange", func(t *testing.T) {
@@ -974,9 +958,8 @@ func TestFranklin(t *testing.T) {
 		err := f.SetModes(context.Background(), types.BatteryModeNoChange, types.SolarModeAny, types.ModesOptions{})
 		require.NoError(t, err, "SetModes should succeed")
 
-		// Verify only setPowerControlV2 was called (BatteryModeNoChange doesn't update mode/SOC)
-		require.Len(t, callOrder, 1, "only setPowerControlV2 should be called")
-		assert.Equal(t, "setPowerControlV2", callOrder[0])
+		// Verify no calls were made (BatteryModeNoChange and power control updates disabled)
+		require.Empty(t, callOrder, "no power control update calls should be made")
 	})
 
 	t.Run("SetModes UpdateSOC Only", func(t *testing.T) {
@@ -1217,10 +1200,6 @@ func TestFranklin(t *testing.T) {
 	})
 
 	t.Run("SetModes Storm Hedge Grid Charge", func(t *testing.T) {
-		getPowerControlCalled := false
-		setPowerControlCalled := false
-		var lastPayload map[string]any
-
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
 				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
@@ -1232,7 +1211,7 @@ func TestFranklin(t *testing.T) {
 					"success": true,
 					"result": map[string]any{
 						"valid":       true,
-						"runtimeData": map[string]any{"mode": 6},
+						"runtimeData": map[string]any{"mode": 6}, // Storm Hedge (TOUID == 6)
 					},
 				})
 				return
@@ -1248,38 +1227,7 @@ func TestFranklin(t *testing.T) {
 				})
 				return
 			}
-			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
-				json.NewEncoder(w).Encode(map[string]any{
-					"code":    200,
-					"success": true,
-					"result": []map[string]any{
-						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
-						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
-					},
-				})
-				return
-			}
-			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
-				getPowerControlCalled = true
-				json.NewEncoder(w).Encode(map[string]any{
-					"code":    200,
-					"success": true,
-					"result": map[string]any{
-						"gridFeedMax":     -1.0,
-						"gridFeedMaxFlag": 3,
-						"gridMax":         -1.0,
-						"gridMaxFlag":     1, // No charge from grid initially
-					},
-				})
-				return
-			}
-			if r.URL.Path == "/hes-gateway/terminal/tou/setPowerControlV2" {
-				setPowerControlCalled = true
-				json.NewDecoder(r.Body).Decode(&lastPayload)
-				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true})
-				return
-			}
-			http.Error(w, "not found "+r.URL.Path, 404)
+			http.Error(w, "should not be called: "+r.URL.Path, 404)
 		}))
 		defer ts.Close()
 
@@ -1299,18 +1247,10 @@ func TestFranklin(t *testing.T) {
 
 		err = f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err)
-		assert.True(t, getPowerControlCalled)
-		assert.True(t, setPowerControlCalled)
-		if assert.NotNil(t, lastPayload) {
-			assert.Equal(t, 2.0, lastPayload["gridMaxFlag"])
-		}
 	})
 
-	t.Run("SetModes Backup Grid Charge", func(t *testing.T) {
-		getPowerControlCalled := false
-		setPowerControlCalled := false
-		var lastPayload map[string]any
-
+	t.Run("SetModes Backup Transition To SelfConsumption", func(t *testing.T) {
+		var callOrder []string
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
 				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
@@ -1326,12 +1266,13 @@ func TestFranklin(t *testing.T) {
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
 				list := []map[string]any{
-					{"id": 11.0, "workMode": 3, "electricityType": 1},
+					{"id": 20.0, "workMode": 2, "electricityType": 1},
+					{"id": 30.0, "workMode": 3, "electricityType": 1},
 				}
 				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]any{"list": list, "currendId": 11.0},
+					"result":  map[string]any{"list": list, "currendId": 30.0}, // currently in backup mode 3
 				})
 				return
 			}
@@ -1341,13 +1282,11 @@ func TestFranklin(t *testing.T) {
 					"success": true,
 					"result": []map[string]any{
 						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
-						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
 					},
 				})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
-				getPowerControlCalled = true
 				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
@@ -1355,14 +1294,16 @@ func TestFranklin(t *testing.T) {
 						"gridFeedMax":     -1.0,
 						"gridFeedMaxFlag": 3,
 						"gridMax":         -1.0,
-						"gridMaxFlag":     2, // Charge from grid initially
+						"gridMaxFlag":     1,
 					},
 				})
 				return
 			}
-			if r.URL.Path == "/hes-gateway/terminal/tou/setPowerControlV2" {
-				setPowerControlCalled = true
-				json.NewDecoder(r.Body).Decode(&lastPayload)
+			if r.URL.Path == "/hes-gateway/terminal/tou/updateTouModeV2" {
+				callOrder = append(callOrder, "updateTouModeV2")
+				require.NoError(t, r.ParseForm())
+				assert.Equal(t, "2", r.Form.Get("workMode"), "should transition workMode to 2 (self consumption)")
+				assert.Equal(t, "20", r.Form.Get("soc"), "should set reserve soc to MinBatterySOC 20")
 				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true})
 				return
 			}
@@ -1386,11 +1327,8 @@ func TestFranklin(t *testing.T) {
 
 		err = f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err)
-		assert.True(t, getPowerControlCalled)
-		assert.True(t, setPowerControlCalled)
-		if assert.NotNil(t, lastPayload) {
-			assert.Equal(t, 1.0, lastPayload["gridMaxFlag"])
-		}
+		require.Len(t, callOrder, 1)
+		assert.Equal(t, "updateTouModeV2", callOrder[0])
 	})
 
 	t.Run("GetEnergyHistory", func(t *testing.T) {
@@ -2045,9 +1983,8 @@ func TestFranklin(t *testing.T) {
 		err = f.SetModes(context.Background(), types.BatteryModeNoChange, types.SolarModeAny, types.ModesOptions{})
 		require.NoError(t, err, "SetModes should succeed")
 
-		// Verify setPowerControlV2 was called
-		require.Len(t, callOrder, 1, "setPowerControlV2 should be called")
-		assert.Equal(t, "setPowerControlV2", callOrder[0])
+		// Verify no calls were made since power control updates are disabled
+		require.Empty(t, callOrder)
 	})
 
 	t.Run("SetModes Charge with ChargeToSOC", func(t *testing.T) {
@@ -2092,22 +2029,13 @@ func TestFranklin(t *testing.T) {
 				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]any{"gridMaxFlag": 0, "gridFeedMaxFlag": 3},
+					"result":  map[string]any{"gridMaxFlag": 2, "gridFeedMaxFlag": 3},
 				})
-				return
-			}
-			if r.URL.Path == "/hes-gateway/terminal/tou/setPowerControlV2" {
-				callOrder = append(callOrder, "setPowerControlV2")
-				var data map[string]any
-				require.NoError(t, json.NewDecoder(r.Body).Decode(&data))
-				assert.EqualValues(t, 2, data["gridMaxFlag"], "gridMaxFlag should be 2")
-				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
 				return
 			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/updateTouModeV2" {
 				callOrder = append(callOrder, "updateTouModeV2")
 				require.NoError(t, r.ParseForm())
-				// Expect ChargeToSOC (85)
 				assert.Equal(t, "85", r.Form.Get("soc"), "soc should be 85")
 				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
 				return
@@ -2124,15 +2052,17 @@ func TestFranklin(t *testing.T) {
 			gatewayID:   "g",
 		}
 
-		err := f.ApplySettings(context.Background(), types.Settings{GridChargeBatteries: true})
+		err := f.ApplySettings(context.Background(), types.Settings{
+			GridChargeBatteries: true,
+			GridExportSolar:     true,
+		})
 		require.NoError(t, err)
 
 		err = f.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{ChargeToSOC: 85})
 		require.NoError(t, err)
 
-		require.Len(t, callOrder, 2)
+		require.Len(t, callOrder, 1)
 		assert.Equal(t, "updateTouModeV2", callOrder[0])
-		assert.Equal(t, "setPowerControlV2", callOrder[1])
 	})
 
 	t.Run("GetEnergyHistory Deduplication and Next Day", func(t *testing.T) {
