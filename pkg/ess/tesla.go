@@ -388,8 +388,8 @@ type Tesla struct {
 func newTesla(b *baseTesla) *Tesla {
 	return &Tesla{
 		base:        b,
-		retryDelay1: 1 * time.Second,
-		retryDelay2: 3 * time.Second,
+		retryDelay1: 3 * time.Second,
+		retryDelay2: 5 * time.Second,
 	}
 }
 

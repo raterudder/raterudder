@@ -146,6 +146,71 @@ func TestFranklin(t *testing.T) {
 		assert.ErrorContains(t, err, "getDeviceCompositeInfo returned invalid status")
 	})
 
+	t.Run("GetStatus Invalid Status Retry Success", func(t *testing.T) {
+		var compositeAttempts int
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"totalCap": 30.0},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": []map[string]any{
+						{"id": 1, "modelName": "aPower X", "peHwVersion": 0, "ratedCap": 13600, "chargePower": 5000, "dischargePower": 5000, "derateFlag": 0},
+					},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"list": []map[string]any{}}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+				compositeAttempts++
+				if compositeAttempts < 3 {
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result": map[string]any{
+							"valid": false,
+						},
+					})
+				} else {
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result": map[string]any{
+							"valid": true,
+							"runtimeData": map[string]any{
+								"soc": 75.0,
+							},
+						},
+					})
+				}
+				return
+			}
+			http.Error(w, "not found: "+r.URL.Path, 404)
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:    ts.Client(),
+			baseURL:   ts.URL,
+			gatewayID: "g",
+		}
+
+		status, err := f.GetStatus(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, 75.0, status.BatterySOC)
+		assert.Equal(t, 3, compositeAttempts)
+	})
+
 	t.Run("GetStatus Grid Status", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {

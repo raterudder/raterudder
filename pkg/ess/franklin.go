@@ -44,6 +44,10 @@ type Franklin struct {
 	powerCapConfigExpiry time.Time
 	runtimeDataCache     franklinDeviceCompositeInfoResult
 	runtimeDataExpiry    time.Time
+
+	// retry delays for getDeviceCompositeInfo valid: false failures
+	retryDelay1 time.Duration
+	retryDelay2 time.Duration
 }
 
 type franklinMode struct {
@@ -58,8 +62,10 @@ type franklinMode struct {
 
 func newFranklin() *Franklin {
 	return &Franklin{
-		client:  common.HTTPClient(time.Minute),
-		baseURL: "https://energy.franklinwh.com",
+		client:      common.HTTPClient(time.Minute),
+		baseURL:     "https://energy.franklinwh.com",
+		retryDelay1: 3 * time.Second,
+		retryDelay2: 5 * time.Second,
 	}
 }
 
@@ -406,14 +412,39 @@ func (f *Franklin) getRuntimeData(ctx context.Context) (franklinDeviceCompositeI
 	// when it was set to 0 we got some weird data for some sites
 	params.Set("refreshFlag", "1")
 
-	req, err := f.newGetRequest(ctx, "hes-gateway/terminal/getDeviceCompositeInfo", params)
-	if err != nil {
-		return franklinDeviceCompositeInfoResult{}, err
-	}
-
 	var res franklinDeviceCompositeInfoResult
-	if err := f.doRequest(req, &res); err != nil {
-		return franklinDeviceCompositeInfoResult{}, fmt.Errorf("getDeviceCompositeInfo failed: %w", err)
+	for attempt := 1; attempt <= 3; attempt++ {
+		req, err := f.newGetRequest(ctx, "hes-gateway/terminal/getDeviceCompositeInfo", params)
+		if err != nil {
+			return franklinDeviceCompositeInfoResult{}, err
+		}
+
+		res = franklinDeviceCompositeInfoResult{}
+		if err := f.doRequest(req, &res); err != nil {
+			return franklinDeviceCompositeInfoResult{}, fmt.Errorf("getDeviceCompositeInfo failed: %w", err)
+		}
+
+		if res.Valid {
+			break
+		}
+
+		if attempt < 3 {
+			delay := f.retryDelay1
+			if attempt == 2 {
+				delay = f.retryDelay2
+			}
+			log.Ctx(ctx).WarnContext(
+				ctx,
+				"getDeviceCompositeInfo returned invalid status, retrying",
+				slog.Int("attempt", attempt),
+				slog.Duration("delay", delay),
+			)
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return franklinDeviceCompositeInfoResult{}, ctx.Err()
+			}
+		}
 	}
 
 	if !res.Valid {

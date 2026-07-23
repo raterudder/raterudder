@@ -117,7 +117,10 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 
-			ctx := log.With(gCtx, log.Ctx(gCtx).With(slog.Group("update", slog.String("siteID", siteID))))
+			siteCtx, cancel := context.WithTimeout(gCtx, 30*time.Second)
+			defer cancel()
+
+			ctx := log.With(siteCtx, log.Ctx(siteCtx).With(slog.Group("update", slog.String("siteID", siteID))))
 
 			sv, creds, err := s.migrateAndDecryptSettings(ctx, siteID, settings, version)
 			if err != nil {
