@@ -359,6 +359,9 @@ func (m *MockESS) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 	state.BatteryMode = bat
 	state.SolarMode = sol
 	state.ChargeToSOC = opts.ChargeToSOC
+	if opts.MinimumSOC != 0 {
+		state.MinimumSOC = opts.MinimumSOC
+	}
 
 	return mockDB.UpdateESSMockState(ctx, m.siteID, state)
 }

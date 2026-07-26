@@ -175,4 +175,5 @@ export const setupDefaultApiMocks = (api: any) => {
     if (typeof api.login?.mockResolvedValue === 'function') api.login.mockResolvedValue(undefined);
     if (typeof api.logout?.mockResolvedValue === 'function') api.logout.mockResolvedValue(undefined);
     if (typeof api.fetchModeling?.mockResolvedValue === 'function') api.fetchModeling.mockResolvedValue([]);
+    if (typeof api.fetchUtilityPeriods?.mockResolvedValue === 'function') api.fetchUtilityPeriods.mockResolvedValue([]);
 };

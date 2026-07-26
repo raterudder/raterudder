@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"math/rand/v2"
 	"net/http"
 	"slices"
@@ -380,9 +381,8 @@ func (s *Server) performSiteUpdate(
 	if status.EmergencyMode && settings.ESS != "franklin" {
 		log.Ctx(ctx).InfoContext(ctx, "update: emergency mode, ensuring grid charge is enabled")
 
-		// If storm hedge is enabled, but grid charge was previously disabled, storm hedge won't work.
-		// We call SetModes to ensure grid charging is configured correctly.
-		if err := essSystem.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeNoChange, types.ModesOptions{}); err != nil {
+		minSOC := int(math.Round(settings.Settings.GetMinBatterySOC(ctx, s.now(), currentPrice)))
+		if err := essSystem.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeNoChange, types.ModesOptions{MinimumSOC: minSOC}); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to set modes in emergency mode", slog.Any("error", err))
 		}
 
@@ -509,7 +509,8 @@ func (s *Server) performSiteUpdate(
 	)
 
 	// execute Action
-	err = s.setESSModes(ctx, siteID, essSystem, action.BatteryMode, types.ModesOptions{ChargeToSOC: action.ChargeToSOC}, settings)
+	minSOC := int(math.Round(settings.Settings.GetMinBatterySOC(ctx, s.now(), currentPrice)))
+	err = s.setESSModes(ctx, siteID, essSystem, action.BatteryMode, types.ModesOptions{ChargeToSOC: action.ChargeToSOC, MinimumSOC: minSOC}, settings)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to set mode", slog.Any("error", err))
 		action.Description += fmt.Sprintf(" (FAILED: %v)", err)

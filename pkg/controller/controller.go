@@ -997,7 +997,8 @@ func (c *Controller) evaluateDeficit(
 	standbyThreshold := refillRateDollarsPerKWH - priceEpsilonForEquality
 
 	if gridChargeNowCost <= standbyThreshold {
-		minKWH := capacityKWH * (settings.MinBatterySOC / 100.0)
+		curMinSOC := settings.GetMinBatterySOC(ctx, now, currentPrice)
+		minKWH := capacityKWH * (curMinSOC / 100.0)
 		usableEnergyKWH := max(0.0, currentEnergyKWH-minKWH)
 		standbyBenefit = usableEnergyKWH * (averageDeficitRateDollarsPerKWH - gridChargeNowCost)
 
@@ -1040,8 +1041,9 @@ func (c *Controller) evaluateDeficit(
 		maxEnergyInCheapWindow := consecutiveCheapDuration * chargeKW
 		maxCheapSOC := currentStatus.BatterySOC + (maxEnergyInCheapWindow/capacityKWH)*100.0
 		clampedSOC := int(math.Ceil(maxCheapSOC))
-		if clampedSOC < int(settings.MinBatterySOC) {
-			clampedSOC = int(settings.MinBatterySOC)
+		curMinSOC := settings.GetMinBatterySOC(ctx, now, currentPrice)
+		if clampedSOC < int(curMinSOC) {
+			clampedSOC = int(curMinSOC)
 		}
 		if clampedSOC > 100 {
 			clampedSOC = 100
@@ -1174,7 +1176,8 @@ func (c *Controller) evaluateExportArbitrage(
 		chargeKW = capacityKWH / 3.0
 	}
 	gridChargeNowCost := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
-	minKWH := capacityKWH * (min(settings.MinBatterySOC+1.0, 100.0) / 100.0)
+	curMinSOC := settings.GetMinBatterySOC(ctx, now, currentPrice)
+	minKWH := capacityKWH * (min(curMinSOC+1.0, 100.0) / 100.0)
 	minArbitrageDiff := max(priceEpsilonForEquality, settings.MinArbitrageDifferenceDollarsPerKWH)
 	minDeficitDiff := max(priceEpsilonForEquality, settings.MinDeficitPriceDifferenceDollarsPerKWH)
 
@@ -1692,8 +1695,9 @@ func (c *Controller) evaluateExportArbitrage(
 		maxEnergyInCheapWindow := consecutiveCheapDuration * chargeKW
 		maxCheapSOC := currentStatus.BatterySOC + (maxEnergyInCheapWindow/capacityKWH)*100.0
 		clampedSOC := int(math.Ceil(maxCheapSOC))
-		if clampedSOC < int(settings.MinBatterySOC) {
-			clampedSOC = int(settings.MinBatterySOC)
+		curMinSOC := settings.GetMinBatterySOC(ctx, now, currentPrice)
+		if clampedSOC < int(curMinSOC) {
+			clampedSOC = int(curMinSOC)
 		}
 		if clampedSOC > 100 {
 			clampedSOC = 100
@@ -2398,8 +2402,12 @@ func (c *Controller) simulateStandby(
 
 		shouldDischarge := slot.GridChargeDollarsPerKWH >= dischargeOverCost
 
-		bufferedMinKWH := minKWH + capacityKWH*(settings.SOCBufferPercent/100.0)
-		thresholdMinKWH := minKWH + capacityKWH*((settings.SOCBufferPercent/2.0)/100.0)
+		stepMinKWH := slot.BatteryReserveKWH
+		if stepMinKWH <= 0 {
+			stepMinKWH = minKWH
+		}
+		bufferedMinKWH := stepMinKWH + capacityKWH*(settings.SOCBufferPercent/100.0)
+		thresholdMinKWH := stepMinKWH + capacityKWH*((settings.SOCBufferPercent/2.0)/100.0)
 
 		// 1. Primary / Unbuffered run
 		clampedNetKWH := slot.ClampedNetLoadSolarKWH
@@ -2435,9 +2443,9 @@ func (c *Controller) simulateStandby(
 			// Draining/Discharging
 			// Check if we will drop below the minimum reserve limit.
 			// If so, interpolate the exact fraction of the hour when we hit the reserve.
-			if newEnergy < minKWH {
+			if newEnergy < stepMinKWH {
 				if hitDeficitAt.IsZero() {
-					remainingBeforeMin := batteryEnergy - minKWH
+					remainingBeforeMin := batteryEnergy - stepMinKWH
 					if remainingBeforeMin > 0 {
 						fraction := remainingBeforeMin / appliedNetKWH
 						hitDeficitAt = slot.TS.Add(time.Duration(math.Round(fraction * float64(time.Hour))))
@@ -2445,8 +2453,8 @@ func (c *Controller) simulateStandby(
 						hitDeficitAt = slot.TS
 					}
 				}
-				// Clamped at minimum reserve limit; battery cannot physically drain below minKWH.
-				batteryEnergy = minKWH
+				// Clamped at minimum reserve limit; battery cannot physically drain below stepMinKWH.
+				batteryEnergy = stepMinKWH
 			} else {
 				batteryEnergy = newEnergy
 			}
@@ -2763,7 +2771,8 @@ func (c *Controller) evaluateVPPEvent(
 
 	capacityKWH := currentStatus.BatteryCapacityKWH
 	currentEnergyKWH := currentStatus.BatterySOC * capacityKWH / 100.0
-	minKWH := capacityKWH * (min(settings.MinBatterySOC+1.0, 100.0) / 100.0)
+	curMinSOC := settings.GetMinBatterySOC(ctx, now, currentPrice)
+	minKWH := capacityKWH * (min(curMinSOC+1.0, 100.0) / 100.0)
 	minArbitrageDiff := max(priceEpsilonForEquality, settings.MinArbitrageDifferenceDollarsPerKWH)
 
 	isAlreadyChargingGrid := lastAction != nil && lastAction.BatteryMode == types.BatteryModeChargeAny
@@ -2990,8 +2999,9 @@ func (c *Controller) evaluateVPPEvent(
 		maxEnergyInCheapWindow := consecutiveCheapDuration * chargeKW
 		maxCheapSOC := currentStatus.BatterySOC + (maxEnergyInCheapWindow/capacityKWH)*100.0
 		clampedSOC := int(math.Ceil(maxCheapSOC))
-		if clampedSOC < int(settings.MinBatterySOC) {
-			clampedSOC = int(settings.MinBatterySOC)
+		curMinSOC := settings.GetMinBatterySOC(ctx, now, currentPrice)
+		if clampedSOC < int(curMinSOC) {
+			clampedSOC = int(curMinSOC)
 		}
 		if clampedSOC > 100 {
 			clampedSOC = 100

@@ -7,6 +7,7 @@ import (
 
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCalculateSolarTrend(t *testing.T) {
@@ -1615,7 +1616,7 @@ func TestSimulateState(t *testing.T) {
 			assert.Equal(t, now.Hour(), firstHour.Hour)
 			assert.Equal(t, capacityKWH, firstHour.BatteryCapacityKWH)
 			assert.Equal(t, 9.8, firstHour.CapacityThresholdKWH)
-			assert.Equal(t, 2.1, firstHour.BatteryReserveKWH)
+			assert.Equal(t, 2.0, firstHour.BatteryReserveKWH)
 			assert.Equal(t, 5.0, firstHour.StartBatteryKWH)
 			assert.Equal(t, 0.15, firstHour.GridChargeDollarsPerKWH)
 			assert.Equal(t, 1.0, firstHour.AvgHomeLoadKWH)
@@ -1640,6 +1641,9 @@ func TestSimulateState(t *testing.T) {
 			}
 			assert.True(t, foundVPPStandby, "Should have marked VPP standby window")
 			assert.True(t, foundVPPActive, "Should have marked VPP end time")
+			for _, hour := range simData {
+				assert.True(t, hour.HitDeficitAt.IsZero(), "HitDeficitAt should not be set due to VPP event discharge ending")
+			}
 		})
 	})
 
@@ -1783,5 +1787,183 @@ func TestSimulateState(t *testing.T) {
 			expectedTime := now.Add(2*time.Hour + 26*time.Minute + 24*time.Second)
 			assert.WithinDuration(t, expectedTime, simData[2].HitThresholdCapacityAt, 2*time.Second)
 		}
+	})
+
+	t.Run("VariableMinSOC", func(t *testing.T) {
+		now := time.Date(2026, 5, 20, 10, 0, 0, 0, time.UTC)
+		capacityKWH := 10.0
+
+		t.Run("TimeBasedReserveStepIncrease_DeficitRecordedAndBatteryRaised", func(t *testing.T) {
+			status := types.SystemStatus{
+				BatteryCapacityKWH:    capacityKWH,
+				BatterySOC:            10.0, // 1.0 kWh
+				Timestamp:             now,
+				MaxBatteryChargeKW:    5.0,
+				MaxBatteryDischargeKW: 5.0,
+			}
+
+			settings := types.Settings{
+				MinBatterySOC: 10.0,
+				MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+					{
+						TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 11}}},
+						MinBatterySOC: 10.0,
+					},
+					{
+						TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 11, HourEnd: 24}}},
+						MinBatterySOC: 30.0,
+					},
+				},
+			}
+
+			simData, _ := c.SimulateState(context.Background(), now, status, types.Price{}, nil, nil, nil, settings)
+			require.NotEmpty(t, simData)
+
+			// Hour 0 (10:00 - 11:00): Min SOC is 10%
+			assert.InDelta(t, 10.0*0.10, simData[0].BatteryReserveKWH, 0.01)
+
+			// Hour 1 (11:00 - 12:00): Min SOC jumps to 30%.
+			// Battery was simulated at 1.0 kWh, so step deficit is accumulated.
+			assert.Greater(t, simData[1].TotalBatteryDeficitKWH, 0.0)
+			assert.GreaterOrEqual(t, simData[1].BatteryKWH, 10.0*0.30-0.01)
+		})
+
+		t.Run("NameBasedReserve_PeriodNameMatchesPrice", func(t *testing.T) {
+			status := types.SystemStatus{
+				BatteryCapacityKWH:    capacityKWH,
+				BatterySOC:            50.0,
+				Timestamp:             now,
+				MaxBatteryChargeKW:    5.0,
+				MaxBatteryDischargeKW: 5.0,
+			}
+
+			settings := types.Settings{
+				MinBatterySOC: 20.0,
+				MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+					{UtilityPeriodName: "Off-Peak", MinBatterySOC: 15.0},
+					{UtilityPeriodName: "Peak", MinBatterySOC: 60.0},
+				},
+			}
+
+			curPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10, PeriodName: "Off-Peak"}
+			futurePrices := []types.Price{
+				{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.40, PeriodName: "Peak"},
+			}
+
+			simData, _ := c.SimulateState(context.Background(), now, status, curPrice, futurePrices, nil, nil, settings)
+			require.GreaterOrEqual(t, len(simData), 2)
+
+			assert.InDelta(t, 10.0*0.15, simData[0].BatteryReserveKWH, 0.01)
+			assert.InDelta(t, 10.0*0.60, simData[1].BatteryReserveKWH, 0.01)
+		})
+
+		t.Run("ReserveDrop_BatteryNaturallyDischargesToNewLowerMinimum", func(t *testing.T) {
+			status := types.SystemStatus{
+				BatteryCapacityKWH:    capacityKWH,
+				BatterySOC:            50.0, // 5.0 kWh
+				Timestamp:             now,
+				MaxBatteryChargeKW:    5.0,
+				MaxBatteryDischargeKW: 5.0,
+			}
+
+			// History provides 1.0 kWh/hr home load, 0 solar
+			history := []types.EnergyStats{}
+			for i := 1; i <= 3; i++ {
+				pastDay := now.Add(time.Duration(-24*i) * time.Hour).Truncate(time.Hour)
+				for h := 0; h < 24; h++ {
+					history = append(history, types.EnergyStats{
+						TSHourStart: time.Date(pastDay.Year(), pastDay.Month(), pastDay.Day(), h, 0, 0, 0, time.UTC),
+						SolarKWH:    0.0,
+						HomeKWH:     1.0,
+					})
+				}
+			}
+
+			settings := types.Settings{
+				GridExportSolar: true,
+				MinBatterySOC:   20.0,
+				MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+					{
+						TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 11}}},
+						MinBatterySOC: 50.0, // 5.0 kWh reserve until 11:00
+					},
+					{
+						TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 11, HourEnd: 24}}},
+						MinBatterySOC: 20.0, // 2.0 kWh reserve after 11:00
+					},
+				},
+			}
+
+			simData, _ := c.SimulateState(context.Background(), now, status, types.Price{}, nil, history, nil, settings)
+			require.GreaterOrEqual(t, len(simData), 4)
+
+			// Hour 0 (10:00): Reserve 5.0 kWh, load 1.0 kWh, clamped at unbuffered min reserve 5.1 kWh, 1.1 kWh deficit
+			assert.InDelta(t, 5.0, simData[0].BatteryReserveKWH, 0.01)
+			assert.InDelta(t, 5.1, simData[0].BatteryKWH, 0.01)
+
+			// Hour 1 (11:00): Reserve drops to 2.0 kWh. Battery starts at 5.1 kWh, load 1.0 kWh -> ends at 4.1 kWh. No deficit!
+			assert.InDelta(t, 2.0, simData[1].BatteryReserveKWH, 0.01)
+			assert.InDelta(t, 4.1, simData[1].BatteryKWH, 0.01)
+			assert.InDelta(t, 0.0, simData[1].TotalBatteryDeficitKWH-simData[0].TotalBatteryDeficitKWH, 0.01)
+
+			// Hour 2 (12:00): Battery starts at 4.1 kWh, load 1.0 kWh -> ends at 3.1 kWh. No deficit!
+			assert.InDelta(t, 2.0, simData[2].BatteryReserveKWH, 0.01)
+			assert.InDelta(t, 3.1, simData[2].BatteryKWH, 0.01)
+			assert.InDelta(t, 0.0, simData[2].TotalBatteryDeficitKWH-simData[0].TotalBatteryDeficitKWH, 0.01)
+
+			// Hour 3 (13:00): Battery starts at 3.1 kWh, load 1.0 kWh -> reaches new lower reserve 2.1 kWh cleanly!
+			assert.InDelta(t, 2.0, simData[3].BatteryReserveKWH, 0.01)
+			assert.InDelta(t, 2.1, simData[3].BatteryKWH, 0.01)
+		})
+
+		t.Run("OvernightReserveSchedule_CrossesMidnight", func(t *testing.T) {
+			tLate := time.Date(2026, 5, 20, 23, 0, 0, 0, time.UTC)
+			status := types.SystemStatus{
+				BatteryCapacityKWH:    capacityKWH,
+				BatterySOC:            50.0,
+				Timestamp:             tLate,
+				MaxBatteryChargeKW:    5.0,
+				MaxBatteryDischargeKW: 5.0,
+			}
+
+			settings := types.Settings{
+				MinBatterySOC: 20.0,
+				MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+					{
+						TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 22, HourEnd: 6}}},
+						MinBatterySOC: 40.0, // 4.0 kWh overnight reserve
+					},
+					{
+						TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 22}}},
+						MinBatterySOC: 20.0, // 2.0 kWh day reserve
+					},
+				},
+			}
+
+			var futurePrices []types.Price
+			for i := 1; i <= 10; i++ {
+				ts := tLate.Add(time.Duration(i) * time.Hour)
+				futurePrices = append(futurePrices, types.Price{
+					TSStart:       ts,
+					TSEnd:         ts.Add(time.Hour),
+					DollarsPerKWH: 0.15,
+				})
+			}
+
+			simData, _ := c.SimulateState(context.Background(), tLate, status, types.Price{TSStart: tLate, TSEnd: tLate.Add(time.Hour)}, futurePrices, nil, nil, settings)
+			require.GreaterOrEqual(t, len(simData), 8)
+
+			// 23:00 (before midnight): Overnight reserve 4.0 kWh (40%)
+			assert.InDelta(t, 4.0, simData[0].BatteryReserveKWH, 0.01)
+
+			// 00:00 (after midnight): Overnight reserve remains 4.0 kWh (40%)
+			assert.InDelta(t, 4.0, simData[1].BatteryReserveKWH, 0.01)
+
+			// 05:00: Overnight reserve remains 4.0 kWh (40%)
+			assert.InDelta(t, 4.0, simData[6].BatteryReserveKWH, 0.01)
+
+			// 06:00: Day reserve starts, reserve drops to 2.0 kWh (20%)
+			assert.InDelta(t, 2.0, simData[7].BatteryReserveKWH, 0.01)
+		})
 	})
 }

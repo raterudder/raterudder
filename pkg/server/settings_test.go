@@ -496,6 +496,106 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
 		assert.Contains(t, w.Body.String(), "solar trend ratio max must be at least 1")
 
+		// Uncovered hours
+		sUncovered := base
+		sUncovered.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+			{
+				TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 12}}},
+				MinBatterySOC: 20.0,
+			},
+		}
+		bUncovered, _ := json.Marshal(sUncovered)
+		req = httptest.NewRequest("POST", "/api/settings", bytes.NewReader(bUncovered))
+		req = withUser(req, "admin@example.com", true)
+		w = httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+		assert.Contains(t, w.Body.String(), "reserve SOC periods must cover all 24 hours")
+
+		// Overlapping periods
+		sOverlap := base
+		sOverlap.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+			{
+				TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 18}}},
+				MinBatterySOC: 20.0,
+			},
+			{
+				TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 12, HourEnd: 24}}},
+				MinBatterySOC: 40.0,
+			},
+		}
+		bOverlap, _ := json.Marshal(sOverlap)
+		req = httptest.NewRequest("POST", "/api/settings", bytes.NewReader(bOverlap))
+		req = withUser(req, "admin@example.com", true)
+		w = httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+		assert.Contains(t, w.Body.String(), "reserve SOC periods cannot overlap")
+
+		// Invalid period SOC value (negative)
+		sPeriodNeg := base
+		sPeriodNeg.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+			{
+				TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 24}}},
+				MinBatterySOC: -10.0,
+			},
+		}
+		bPeriodNeg, _ := json.Marshal(sPeriodNeg)
+		req = httptest.NewRequest("POST", "/api/settings", bytes.NewReader(bPeriodNeg))
+		req = withUser(req, "admin@example.com", true)
+		w = httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+		assert.Contains(t, w.Body.String(), "minimum battery SOC period value must be between 0 and 100")
+
+		// Invalid period SOC value (> 100)
+		sPeriodHigh := base
+		sPeriodHigh.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+			{
+				TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 24}}},
+				MinBatterySOC: 110.0,
+			},
+		}
+		bPeriodHigh, _ := json.Marshal(sPeriodHigh)
+		req = httptest.NewRequest("POST", "/api/settings", bytes.NewReader(bPeriodHigh))
+		req = withUser(req, "admin@example.com", true)
+		w = httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+		assert.Contains(t, w.Body.String(), "minimum battery SOC period value must be between 0 and 100")
+
+		// Period specifying non-zero minutes
+		sNonZeroMin := base
+		sNonZeroMin.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+			{
+				TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 0, MinuteStart: 15, HourEnd: 24, MinuteEnd: 0}}},
+				MinBatterySOC: 20.0,
+			},
+		}
+		bNonZeroMin, _ := json.Marshal(sNonZeroMin)
+		req = httptest.NewRequest("POST", "/api/settings", bytes.NewReader(bNonZeroMin))
+		req = withUser(req, "admin@example.com", true)
+		w = httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+		assert.Contains(t, w.Body.String(), "reserve SOC period start and end minutes must be 0")
+
+		// Period specifying zero hours
+		sNoHours := base
+		sNoHours.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+			{
+				TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{}},
+				MinBatterySOC: 20.0,
+			},
+		}
+		bNoHours, _ := json.Marshal(sNoHours)
+		req = httptest.NewRequest("POST", "/api/settings", bytes.NewReader(bNoHours))
+		req = withUser(req, "admin@example.com", true)
+		w = httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+		assert.Contains(t, w.Body.String(), "reserve SOC period must specify hours")
+
 		// Invalid value (Release mismatch)
 		s6 := base
 		s6.Release = "wrong"
@@ -2045,5 +2145,159 @@ func TestHandleESSStage(t *testing.T) {
 		req2 = withUser(req2, "admin@example.com", true)
 		srv2.handleESSStage(w2, req2)
 		assert.Equal(t, http.StatusOK, w2.Result().StatusCode)
+	})
+}
+
+func TestValidateAndCalculateMinBatterySOCPeriods(t *testing.T) {
+	ctx := context.Background()
+	srv := &Server{}
+
+	t.Run("EmptyPeriodsReturnsDefaultSOC", func(t *testing.T) {
+		s := types.Settings{MinBatterySOC: 25.0}
+		minSOC, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		require.NoError(t, err)
+		assert.Equal(t, 25.0, minSOC)
+	})
+
+	t.Run("ValidCustomPeriodsCalculatesMinSOC", func(t *testing.T) {
+		s := types.Settings{
+			MinBatterySOC: 10.0,
+			MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+				{
+					TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 12}}},
+					MinBatterySOC: 50.0,
+				},
+				{
+					TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 12, HourEnd: 24}}},
+					MinBatterySOC: 20.0,
+				},
+			},
+		}
+		minSOC, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		require.NoError(t, err)
+		assert.Equal(t, 20.0, minSOC)
+	})
+
+	t.Run("InvalidSOCValueNegative", func(t *testing.T) {
+		s := types.Settings{
+			MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+				{
+					TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 24}}},
+					MinBatterySOC: -5.0,
+				},
+			},
+		}
+		_, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		assert.ErrorContains(t, err, "minimum battery SOC period value must be between 0 and 100")
+	})
+
+	t.Run("InvalidSOCValueOver100", func(t *testing.T) {
+		s := types.Settings{
+			MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+				{
+					TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 24}}},
+					MinBatterySOC: 105.0,
+				},
+			},
+		}
+		_, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		assert.ErrorContains(t, err, "minimum battery SOC period value must be between 0 and 100")
+	})
+
+	t.Run("NonZeroStartMinutes", func(t *testing.T) {
+		s := types.Settings{
+			MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+				{
+					TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 0, MinuteStart: 15, HourEnd: 24, MinuteEnd: 0}}},
+					MinBatterySOC: 20.0,
+				},
+			},
+		}
+		_, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		assert.ErrorContains(t, err, "reserve SOC period start and end minutes must be 0")
+	})
+
+	t.Run("NonZeroEndMinutes", func(t *testing.T) {
+		s := types.Settings{
+			MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+				{
+					TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 0, MinuteStart: 0, HourEnd: 24, MinuteEnd: 30}}},
+					MinBatterySOC: 20.0,
+				},
+			},
+		}
+		_, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		assert.ErrorContains(t, err, "reserve SOC period start and end minutes must be 0")
+	})
+
+	t.Run("EmptyHoursInPeriod", func(t *testing.T) {
+		s := types.Settings{
+			MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+				{
+					TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{}},
+					MinBatterySOC: 20.0,
+				},
+			},
+		}
+		_, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		assert.ErrorContains(t, err, "reserve SOC period must specify hours")
+	})
+
+	t.Run("Uncovered24Hours", func(t *testing.T) {
+		s := types.Settings{
+			MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+				{
+					TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 12}}},
+					MinBatterySOC: 20.0,
+				},
+			},
+		}
+		_, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		assert.ErrorContains(t, err, "reserve SOC periods must cover all 24 hours of the day (hour 12 is not covered)")
+	})
+
+	t.Run("OverlappingHours", func(t *testing.T) {
+		s := types.Settings{
+			MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+				{
+					TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 18}}},
+					MinBatterySOC: 20.0,
+				},
+				{
+					TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 12, HourEnd: 24}}},
+					MinBatterySOC: 40.0,
+				},
+			},
+		}
+		_, err := srv.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		assert.ErrorContains(t, err, "reserve SOC periods cannot overlap (hour 12 has multiple periods defined)")
+	})
+
+	t.Run("RateBasedMinSOC_UtilityHasNoPeriods_ReturnsError", func(t *testing.T) {
+		mockUMap := utility.NewMap(nil)
+		sTest := &Server{utilities: mockUMap}
+		s := types.Settings{
+			UtilityProvider: "comed",
+			UtilityRate:     "comed_bes",
+			MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+				{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
+			},
+		}
+		_, err := sTest.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		assert.ErrorContains(t, err, "configured utility has no TOU rate periods for rate-based minimum SOC")
+	})
+
+	t.Run("RateBasedMinSOC_MissingPeriodName_ReturnsError", func(t *testing.T) {
+		mockUMap := utility.NewMap(nil)
+		sTest := &Server{utilities: mockUMap}
+		s := types.Settings{
+			UtilityProvider: "pg_e",
+			UtilityRate:     "pg_e_e_tou_c",
+			MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+				{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
+			},
+		}
+		_, err := sTest.validateAndCalculateMinBatterySOCPeriods(ctx, "site1", s)
+		assert.ErrorContains(t, err, "missing minimum battery SOC for utility period name:")
 	})
 }

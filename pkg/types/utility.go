@@ -206,7 +206,15 @@ func (p *TimePeriod) Contains(t time.Time) (bool, UtilityPeriodStartEnd, error) 
 		for _, hour := range p.Hours {
 			startMin := hour.HourStart*60 + hour.MinuteStart
 			endMin := hour.HourEnd*60 + hour.MinuteEnd
-			if tMin >= startMin && tMin < endMin {
+			match := false
+			if startMin < endMin {
+				match = tMin >= startMin && tMin < endMin
+			} else if startMin > endMin {
+				match = tMin >= startMin || tMin < endMin
+			} else {
+				match = true
+			}
+			if match {
 				hStart := time.Date(t.Year(), t.Month(), t.Day(), hour.HourStart, hour.MinuteStart, 0, 0, t.Location())
 				hEnd := time.Date(t.Year(), t.Month(), t.Day(), hour.HourEnd, hour.MinuteEnd, 0, 0, t.Location())
 				if startEnd.Start.IsZero() || hStart.After(startEnd.Start) {
@@ -314,6 +322,13 @@ func ApplyUtilityFeesPeriods(p Price, periods []UtilityFeesPeriod) (Price, error
 		}
 	}
 	return newPrice, nil
+}
+
+// MinBatterySOCPeriod defines a minimum battery reserve SOC (%) for a specific time period or utility rate period name.
+type MinBatterySOCPeriod struct {
+	TimePeriod
+	MinBatterySOC     float64 `json:"minBatterySOC"`
+	UtilityPeriodName string  `json:"utilityPeriodName,omitempty"`
 }
 
 // UtilityVPPPeriod represents a period of time with utility-mandated VPP events.

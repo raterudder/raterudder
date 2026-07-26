@@ -74,6 +74,7 @@ func (s *Server) handleGetPeriods(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "private, max-age=60")
 	if err := json.NewEncoder(w).Encode(periods); err != nil {
 		panic(http.ErrAbortHandler)
 	}

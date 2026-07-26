@@ -152,23 +152,15 @@ describe('App & Settings', () => {
 
     it('can toggle pause setting', async () => {
          await navigateToSettings();
-
-         // Toggle Pause switch
-         const switchEl = await screen.findByRole('switch', { name: /Pause Automation/i });
-         fireEvent.click(switchEl);
-
-         // Mock update success
          (updateSettings as any).mockResolvedValue(undefined);
 
-         // Helper to click save
-         const saveBtn = screen.getByText('Save Settings');
-         fireEvent.click(saveBtn);
+         const pauseBtn = await screen.findByRole('button', { name: /^Pause$/i });
+         fireEvent.click(pauseBtn);
 
          await waitFor(() => {
-             expect(screen.getByText('Settings saved successfully')).toBeInTheDocument();
              expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
                  pause: true
-             }), expect.any(String), undefined);
+             }), expect.any(String));
          });
     });
 
@@ -1734,8 +1726,16 @@ describe('App & Settings', () => {
                 ess: '',
                 hasCredentials: {}
             });
+            (updateSettings as any).mockResolvedValue(undefined);
 
             await navigateToSettings();
+
+            const pauseBtn = await screen.findByRole('button', { name: /^Pause$/i });
+            fireEvent.click(pauseBtn);
+
+            await waitFor(() => {
+                expect(screen.getByRole('button', { name: /^Resume$/i })).toBeInTheDocument();
+            });
 
             const selectEl = await screen.findByRole('combobox', { name: /System Type/i });
             await user.click(selectEl);
@@ -1759,9 +1759,6 @@ describe('App & Settings', () => {
 
             windowOpenSpy.mockRestore();
 
-            const pauseSwitch = await screen.findByRole('switch', { name: /Pause Automation/i });
-            fireEvent.click(pauseSwitch);
-
 
 
             (updateSettings as any).mockResolvedValue(undefined);
@@ -1773,6 +1770,254 @@ describe('App & Settings', () => {
                 expect(screen.getByText('Settings saved successfully')).toBeInTheDocument();
             });
             expect(screen.queryByText('Welcome to RateRudder! 🚀')).not.toBeInTheDocument();
+        });
+
+        it('hides Advanced button when in production release without ?variable=true', async () => {
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                release: 'production',
+                minBatterySOCPeriods: undefined,
+            });
+            await navigateToSettings();
+
+            expect(screen.queryByRole('button', { name: /^Advanced$/i })).not.toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /^Change$/i })).toBeInTheDocument();
+        });
+
+        it('shows Advanced button when URL contains ?variable=true even in production release', async () => {
+            const originalLocation = window.location;
+            delete (window as any).location;
+            (window as any).location = new URL('http://localhost/settings?variable=true');
+
+            try {
+                (api.fetchSettings as any).mockResolvedValue({
+                    ...defaultSettings,
+                    release: 'production',
+                    minBatterySOCPeriods: undefined,
+                });
+                await navigateToSettings();
+
+                expect(screen.getByRole('button', { name: /^Advanced$/i })).toBeInTheDocument();
+            } finally {
+                (window as any).location = originalLocation;
+            }
+        });
+
+        it('allows editing existing custom or rate-based schedule even in production release without ?variable=true', async () => {
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                release: 'production',
+                minBatterySOCPeriods: [
+                    { utilityPeriodName: 'Peak', minBatterySOC: 50 },
+                    { utilityPeriodName: 'Off-Peak', minBatterySOC: 20 },
+                ],
+            });
+            (api.fetchUtilityPeriods as any).mockResolvedValue([
+                { name: 'Peak' },
+                { name: 'Off-Peak' }
+            ]);
+            await navigateToSettings();
+
+            const changeBtn = screen.getByRole('button', { name: /^Change$/i });
+            fireEvent.click(changeBtn);
+
+            await waitFor(() => {
+                expect(screen.getByLabelText(/Peak Reserve %/i)).toBeInTheDocument();
+                expect(screen.getByLabelText(/Off-Peak Reserve %/i)).toBeInTheDocument();
+                expect(screen.getByRole('button', { name: /^Revert to Simple$/i })).toBeInTheDocument();
+            });
+        });
+
+        it('configures rate period reserve schedule by default when Advanced button clicked', async () => {
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                release: 'staging',
+            });
+            (api.fetchUtilityPeriods as any).mockResolvedValue([
+                { name: 'On-Peak' },
+                { name: 'Off-Peak' }
+            ]);
+            await navigateToSettings();
+
+            const configBtn = await screen.findByRole('button', { name: /^Advanced$/i });
+            fireEvent.click(configBtn);
+
+            await waitFor(() => {
+                expect(screen.getByLabelText(/On-Peak Reserve %/i)).toBeInTheDocument();
+                expect(screen.getByLabelText(/Off-Peak Reserve %/i)).toBeInTheDocument();
+            });
+
+            // Header Advanced button disappears when editing
+            expect(screen.queryByRole('button', { name: /^Advanced$/i })).not.toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /^Done$/i })).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /^Revert to Simple$/i })).toBeInTheDocument();
+        });
+
+        it('switches to custom time reserve schedule when button is clicked', async () => {
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                release: 'staging',
+            });
+            (api.fetchUtilityPeriods as any).mockResolvedValue([
+                { name: 'On-Peak' },
+                { name: 'Off-Peak' }
+            ]);
+            await navigateToSettings();
+
+            const configBtn = await screen.findByRole('button', { name: /^Advanced$/i });
+            fireEvent.click(configBtn);
+
+            await waitFor(() => {
+                expect(screen.getByRole('button', { name: /^Custom Mode$/i })).toBeInTheDocument();
+            });
+
+            const switchCustomBtn = screen.getByRole('button', { name: /^Custom Mode$/i });
+            fireEvent.click(switchCustomBtn);
+
+            await waitFor(() => {
+                expect(screen.getByText('From:')).toBeInTheDocument();
+                expect(screen.getByText('To:')).toBeInTheDocument();
+            });
+        });
+
+        it('reverts to simple reserve schedule when Revert to Simple button is clicked', async () => {
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                release: 'staging',
+            });
+            (api.fetchUtilityPeriods as any).mockResolvedValue([]);
+            await navigateToSettings();
+
+            const configBtn = await screen.findByRole('button', { name: /^Advanced$/i });
+            fireEvent.click(configBtn);
+
+            await waitFor(() => {
+                expect(screen.getByRole('button', { name: /^Revert to Simple$/i })).toBeInTheDocument();
+            });
+
+            const revertBtn = screen.getByRole('button', { name: /^Revert to Simple$/i });
+            fireEvent.click(revertBtn);
+
+            await waitFor(() => {
+                expect(screen.getByLabelText(/Minimum Battery %/i)).toBeInTheDocument();
+            });
+        });
+
+        it('toggles pause and immediately updates settings when Pause/Resume button is clicked', async () => {
+            await navigateToSettings();
+            const pauseBtn = await screen.findByRole('button', { name: /^Pause$/i });
+            fireEvent.click(pauseBtn);
+
+            await waitFor(() => {
+                expect(api.updateSettings).toHaveBeenCalled();
+                expect(screen.getByRole('button', { name: /^Resume$/i })).toBeInTheDocument();
+            });
+
+            const resumeBtn = screen.getByRole('button', { name: /^Resume$/i });
+            fireEvent.click(resumeBtn);
+
+            await waitFor(() => {
+                expect(screen.getByRole('button', { name: /^Pause$/i })).toBeInTheDocument();
+            });
+        });
+
+        it('expands battery section and shows error when changing utility plan results in period without defined minimum', async () => {
+            (api.fetchUtilities as any).mockResolvedValue([
+                { id: 'pg_e', name: 'Pacific Gas & Electric (PG&E)', rates: [{ id: 'pg_e_e_tou_c', name: 'E-TOU-C' }] },
+                { id: 'comed', name: 'Commonwealth Edison (ComEd)', rates: [{ id: 'comed_bes', name: 'Hourly' }] },
+            ]);
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                release: 'staging',
+                utilityProvider: 'pg_e',
+                utilityRate: 'pg_e_e_tou_c',
+                minBatterySOCPeriods: [
+                    { utilityPeriodName: 'Peak', minBatterySOC: 50 },
+                    { utilityPeriodName: 'Off-Peak', minBatterySOC: 20 },
+                ],
+            });
+            (api.fetchUtilityPeriods as any).mockImplementation((_siteID?: string, provider?: string) => {
+                if (provider === 'comed') {
+                    return Promise.resolve([]);
+                }
+                return Promise.resolve([
+                    { name: 'Peak' },
+                    { name: 'Off-Peak' },
+                ]);
+            });
+
+            await navigateToSettings();
+
+            expect(screen.queryByTestId('battery-period-error')).not.toBeInTheDocument();
+
+            const editUtilBtn = screen.getByRole('button', { name: 'Change Utility Service' });
+            fireEvent.click(editUtilBtn);
+
+            const utilInput = await screen.findByPlaceholderText(/Select a service.../i);
+            fireEvent.change(utilInput, { target: { value: 'ComEd' } });
+            fireEvent.keyDown(utilInput, { key: 'ArrowDown' });
+
+            const item = await screen.findByText(/ComEd/i);
+            fireEvent.click(item);
+
+            await waitFor(() => {
+                expect(api.fetchUtilityPeriods).toHaveBeenCalledWith(
+                    expect.anything(),
+                    'comed',
+                    expect.anything(),
+                    expect.anything()
+                );
+            });
+
+            await waitFor(() => {
+                expect(screen.getByTestId('battery-period-error')).toBeInTheDocument();
+                expect(screen.getByText(/The selected utility rate plan has no rate periods/i)).toBeInTheDocument();
+            });
+        });
+
+        it('updates period labels automatically when changing to utility with different period names (e.g. FPL On-Peak/Off-Peak)', async () => {
+            (api.fetchUtilities as any).mockResolvedValue([
+                { id: 'pg_e', name: 'Pacific Gas & Electric (PG&E)', rates: [{ id: 'pg_e_e_tou_c', name: 'E-TOU-C' }] },
+                { id: 'fpl', name: 'Florida Power & Light (FPL)', rates: [{ id: 'fpl_tou', name: 'FPL TOU' }] },
+            ]);
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                utilityProvider: 'pg_e',
+                utilityRate: 'pg_e_e_tou_c',
+                minBatterySOCPeriods: [
+                    { utilityPeriodName: 'Peak', minBatterySOC: 50 },
+                    { utilityPeriodName: 'Off-Peak', minBatterySOC: 20 },
+                ],
+            });
+            (api.fetchUtilityPeriods as any).mockImplementation((_siteID?: string, provider?: string) => {
+                if (provider === 'fpl') {
+                    return Promise.resolve([
+                        { name: 'On-Peak' },
+                        { name: 'Off-Peak' },
+                    ]);
+                }
+                return Promise.resolve([
+                    { name: 'Peak' },
+                    { name: 'Off-Peak' },
+                ]);
+            });
+
+            await navigateToSettings();
+
+            const editUtilBtn = screen.getByRole('button', { name: 'Change Utility Service' });
+            fireEvent.click(editUtilBtn);
+
+            const utilInput = await screen.findByPlaceholderText(/Select a service.../i);
+            fireEvent.change(utilInput, { target: { value: 'Florida' } });
+            fireEvent.keyDown(utilInput, { key: 'ArrowDown' });
+
+            const item = await screen.findByText(/Florida Power & Light/i);
+            fireEvent.click(item);
+
+            await waitFor(() => {
+                expect(screen.getByText(/On-Peak: 50%/i)).toBeInTheDocument();
+                expect(screen.getByText(/Off-Peak: 20%/i)).toBeInTheDocument();
+            });
         });
     });
 });

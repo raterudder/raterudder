@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useLocation } from 'wouter';
-import { updateSettings, fetchUtilities, fetchESSList, submitESSStage, deleteSite, deleteUser, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type ESSProviderInfo, type ESSCredentialField, type CredentialsPayload, type UserSite } from '../api';
+import { updateSettings, fetchUtilities, fetchESSList, submitESSStage, deleteSite, deleteUser, fetchUtilityPeriods, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type ESSProviderInfo, type ESSCredentialField, type CredentialsPayload, type UserSite, type TimePeriod, type MinBatterySOCPeriod } from '../api';
 import { Field } from '@base-ui/react/field';
 import { Input } from '@base-ui/react/input';
 import { Button } from '@base-ui/react/button';
@@ -152,6 +152,7 @@ interface UtilityFormProps {
     setEditUtility?: (val: boolean) => void;
     isUtilityDirty?: boolean;
     setIsUtilityDirty?: (val: boolean) => void;
+    onUtilityChange?: (provider: string, rate: string, options: Record<string, any>) => void;
 }
 
 const UtilityForm = ({
@@ -162,7 +163,8 @@ const UtilityForm = ({
     editUtility = false,
     setEditUtility,
     isUtilityDirty = false,
-    setIsUtilityDirty
+    setIsUtilityDirty,
+    onUtilityChange
 }: UtilityFormProps) => {
     const sortedUtilities = utilities
         .filter(u => !u.hidden || u.id === settings.utilityProvider)
@@ -202,6 +204,9 @@ const UtilityForm = ({
                         onChange('utilityProvider', newSettings.utilityProvider);
                         onChange('utilityRate', newSettings.utilityRate);
                         onChange('utilityRateOptions', newSettings.utilityRateOptions);
+                        if (onUtilityChange) {
+                            onUtilityChange(newSettings.utilityProvider, newSettings.utilityRate, newSettings.utilityRateOptions);
+                        }
                     }}
                     items={sortedUtilities}
                     itemToStringLabel={(val) => utilities.find(u => u.id === val)?.name || val}
@@ -254,8 +259,10 @@ const UtilityForm = ({
                                     newOpts[opt.field] = opt.default;
                                 });
                                 onChange('utilityRateOptions', newOpts);
+                                if (onUtilityChange) onUtilityChange(settings.utilityProvider, rateID, newOpts);
                             } else {
                                 onChange('utilityRateOptions', {});
+                                if (onUtilityChange) onUtilityChange(settings.utilityProvider, rateID, {});
                             }
                         }}
                     >
@@ -747,6 +754,178 @@ const Settings = ({
             setIsInWizard(!isUtility && !isESS);
         }
     }, [settings, isInWizard]);
+
+    const [utilityPeriods, setUtilityPeriods] = useState<TimePeriod[] | null>(null);
+    const [loadingPeriods, setLoadingPeriods] = useState(false);
+    const [scheduleMode, setScheduleMode] = useState<'named' | 'custom'>('named');
+    const [editBattery, setEditBattery] = useState(false);
+    const [batteryError, setBatteryError] = useState<string | null>(null);
+
+    const isVariableFeatureEnabled = settings?.release === 'staging' || (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('variable') === 'true');
+
+    const validateUtilityAndPeriods = async (
+        newProvider: string,
+        newRate: string,
+        newOpts: Record<string, any>
+    ) => {
+        if (!newProvider || !newRate) {
+            setBatteryError(null);
+            return;
+        }
+        try {
+            const fetched = await fetchUtilityPeriods(siteID, newProvider, newRate, newOpts);
+            setUtilityPeriods(fetched);
+
+            setSettings(prevSettings => {
+                if (!prevSettings) return prevSettings;
+                const isRateBased = scheduleMode === 'named' || (prevSettings.minBatterySOCPeriods && prevSettings.minBatterySOCPeriods.some((p: MinBatterySOCPeriod) => !!p.utilityPeriodName));
+                if (isRateBased) {
+                    const fetchedNames = fetched ? fetched.filter((p: TimePeriod) => p.name && p.name !== '').map((p: TimePeriod) => p.name!) : [];
+                    const uniqueFetchedNames = Array.from(new Set(fetchedNames));
+
+                    if (uniqueFetchedNames.length === 0) {
+                        setBatteryError("The selected utility rate plan has no rate periods. Switch to Custom or Simple.");
+                        setEditBattery(true);
+                        return prevSettings;
+                    } else {
+                        const currentPeriods = prevSettings.minBatterySOCPeriods || [];
+                        const reconciledPeriods: MinBatterySOCPeriod[] = uniqueFetchedNames.map(name => {
+                            const exact = currentPeriods.find(p => p.utilityPeriodName === name);
+                            if (exact) {
+                                return { utilityPeriodName: name, minBatterySOC: exact.minBatterySOC };
+                            }
+                            const fuzzy = currentPeriods.find(p =>
+                                p.utilityPeriodName && (
+                                    p.utilityPeriodName.toLowerCase().includes(name.toLowerCase()) ||
+                                    name.toLowerCase().includes(p.utilityPeriodName.toLowerCase())
+                                )
+                            );
+                            return {
+                                utilityPeriodName: name,
+                                minBatterySOC: fuzzy ? fuzzy.minBatterySOC : (prevSettings.minBatterySOC ?? 20),
+                            };
+                        });
+
+                        setBatteryError(null);
+                        const minVal = Math.min(...reconciledPeriods.map(p => p.minBatterySOC ?? 0));
+                        return {
+                            ...prevSettings,
+                            minBatterySOCPeriods: reconciledPeriods,
+                            minBatterySOC: isFinite(minVal) ? minVal : (prevSettings.minBatterySOC ?? 20),
+                        };
+                    }
+                } else {
+                    setBatteryError(null);
+                    return prevSettings;
+                }
+            });
+        } catch (err) {
+            console.error("Failed to re-validate utility periods", err);
+        }
+    };
+
+    useEffect(() => {
+        if (settings?.minBatterySOCPeriods && settings.minBatterySOCPeriods.length > 0) {
+            const hasNamed = settings.minBatterySOCPeriods.some((p: MinBatterySOCPeriod) => p.utilityPeriodName);
+            setScheduleMode(hasNamed ? 'named' : 'custom');
+        }
+    }, [settings?.minBatterySOCPeriods]);
+
+    const handleOpenReserveSchedule = async () => {
+        setLoadingPeriods(true);
+        try {
+            const fetched = await fetchUtilityPeriods(siteID);
+            setUtilityPeriods(fetched);
+            const fetchedNames = fetched ? fetched.filter((p: TimePeriod) => p.name && p.name !== '').map((p: TimePeriod) => p.name!) : [];
+            if (fetchedNames.length === 0) {
+                setBatteryError("The selected utility rate plan has no rate periods. Switch to Custom or Simple.");
+                setScheduleMode('custom');
+                const custom: MinBatterySOCPeriod[] = [
+                    { hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: settings?.minBatterySOC ?? 20 }
+                ];
+                updateMinBatterySOCPeriods(custom);
+                return;
+            }
+            const uniqueNames = Array.from(new Set(fetchedNames));
+            const initialPeriods: MinBatterySOCPeriod[] = uniqueNames.map(name => ({
+                utilityPeriodName: name,
+                minBatterySOC: settings?.minBatterySOC ?? 20,
+            }));
+            updateMinBatterySOCPeriods(initialPeriods);
+            setScheduleMode('named');
+            setBatteryError(null);
+        } catch {
+            setScheduleMode('custom');
+            const custom: MinBatterySOCPeriod[] = [
+                { hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: settings?.minBatterySOC ?? 20 }
+            ];
+            updateMinBatterySOCPeriods(custom);
+        } finally {
+            setLoadingPeriods(false);
+        }
+    };
+
+    const updateMinBatterySOCPeriods = (newPeriods: MinBatterySOCPeriod[] | undefined) => {
+        if (!newPeriods || newPeriods.length === 0) {
+            handleChange('minBatterySOCPeriods', undefined);
+            return;
+        }
+        const minVal = Math.min(...newPeriods.map(p => p.minBatterySOC ?? 0));
+        const updated = {
+            ...settings!,
+            minBatterySOCPeriods: newPeriods,
+            minBatterySOC: isFinite(minVal) ? minVal : (settings?.minBatterySOC ?? 20),
+        };
+        setSettings(updated);
+    };
+
+    const validate24HourCoverage = (periods: MinBatterySOCPeriod[]) => {
+        const counts = new Array(24).fill(0);
+        for (const p of periods) {
+            if (p.utilityPeriodName) continue;
+            for (const hp of p.hours || []) {
+                const start = hp.hourStart;
+                const end = hp.hourEnd;
+                for (let h = 0; h < 24; h++) {
+                    if (start < end) {
+                        if (h >= start && h < end) counts[h]++;
+                    } else if (start > end) {
+                        if (h >= start || h < end) counts[h]++;
+                    } else {
+                        counts[h]++;
+                    }
+                }
+            }
+        }
+        const uncovered = counts.some(c => c === 0);
+        const overlapping = counts.some(c => c > 1);
+        if (uncovered || overlapping) {
+            return "⚠️ Reserve SOC periods must cover all 24 hours without gaps or overlaps.";
+        }
+        return null;
+    };
+
+    const handleTogglePause = async () => {
+        if (!settings) return;
+        const newPause = !settings.pause;
+        const nextSettings = { ...settings, pause: newPause };
+        setSettings(nextSettings);
+        try {
+            setIsSaving(true);
+            setError(null);
+            await updateSettings(nextSettings, siteID);
+            setSuccessMessage(newPause ? 'Automation paused' : 'Automation resumed');
+            if (onSettingsSaved) {
+                await onSettingsSaved();
+            }
+            setTimeout(() => setSuccessMessage(null), 3000);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to update pause state');
+            setSettings(prev => prev ? ({ ...prev, pause: !newPause }) : null);
+        } finally {
+            setIsSaving(false);
+        }
+    };
 
     const [essCredentials, setEssCredentials] = useState<Record<string, string>>({});
     const [oauthStatus, setOauthStatus] = useState<'idle' | 'popup_open' | 'success'>('idle');
@@ -1286,6 +1465,9 @@ const Settings = ({
                                     onChange={handleChange}
                                     utilities={utilities}
                                     isWizard={true}
+                                    isUtilityDirty={isUtilityDirty}
+                                    setIsUtilityDirty={setIsUtilityDirty}
+                                    onUtilityChange={validateUtilityAndPeriods}
                                 />
 
                                 <div className="grid-strategy-section" style={{ marginTop: '0.5rem', borderTop: '1px solid var(--outline-variant)', paddingTop: '1rem' }}>
@@ -1444,38 +1626,340 @@ const Settings = ({
             )}
             <h2>Settings</h2>
             <form onSubmit={handleSubmit}>
-                {/* Quick Settings at the top */}
-                <div className="section-header">
-                    <h3>Quick Settings</h3>
-                </div>
-                <div className="form-grid compact-grid">
-                    <Field.Root className="form-group switch-group compact">
-                        <div className="switch-row">
-                            <Switch.Root
-                                checked={settings.pause}
-                                onCheckedChange={(checked) => handleChange('pause', checked)}
-                                className="switch-root"
-                            >
-                                <Switch.Thumb className="switch-thumb" />
-                            </Switch.Root>
-                            <Field.Label>Pause Automation</Field.Label>
-                        </div>
-                        <Field.Description>If enabled, stop changing states but continue monitoring.</Field.Description>
-                    </Field.Root>
+                {/* Battery section at the top */}
+                <div className="settings-section" data-testid="battery-section">
+                    <div className="section-header">
+                        <h3>Battery</h3>
+                        {!editBattery && (
+                            (!settings.minBatterySOCPeriods || settings.minBatterySOCPeriods.length === 0) ? (
+                                isVariableFeatureEnabled ? (
+                                    <button
+                                        type="button"
+                                        className="text-button"
+                                        id="configureReserveScheduleBtn"
+                                        onClick={() => {
+                                            setEditBattery(true);
+                                            handleOpenReserveSchedule();
+                                        }}
+                                        disabled={loadingPeriods}
+                                    >
+                                        {loadingPeriods ? 'Loading...' : 'Advanced'}
+                                    </button>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        className="text-button"
+                                        onClick={() => setEditBattery(true)}
+                                    >
+                                        Change
+                                    </button>
+                                )
+                            ) : (
+                                <button
+                                    type="button"
+                                    className="text-button"
+                                    onClick={() => setEditBattery(true)}
+                                >
+                                    Change
+                                </button>
+                            )
+                        )}
+                    </div>
 
-                    <Field.Root className="form-group compact">
-                        <Field.Label htmlFor="minBatterySOC">Minimum Battery %</Field.Label>
-                        <Input
-                            id="minBatterySOC"
-                            type="number"
-                            step="1"
-                            min="0"
-                            max="100"
-                            value={settings.minBatterySOC}
-                            onChange={(e) => handleChange('minBatterySOC', parseFloat(e.target.value))}
-                        />
-                        <Field.Description>Maintain battery charge at or above this level at all costs.</Field.Description>
-                    </Field.Root>
+                    {!editBattery && settings.minBatterySOCPeriods && settings.minBatterySOCPeriods.length > 0 ? (
+                        <button type="button" className="configured-summary" onClick={() => setEditBattery(true)} aria-label="Edit Battery settings">
+                            <div className="summary-info">
+                                <span className="summary-label">Variable Reserve Schedule ({scheduleMode === 'named' ? 'Rate Periods' : 'Custom Hours'})</span>
+                                <span className="summary-sublabel">
+                                    {settings.minBatterySOCPeriods.map(p =>
+                                        p.utilityPeriodName ? `${p.utilityPeriodName}: ${p.minBatterySOC}%` : `${p.hours?.[0]?.hourStart ?? 0}:00-${p.hours?.[0]?.hourEnd ?? 24}:00: ${p.minBatterySOC}%`
+                                    ).join(' | ')}
+                                </span>
+                            </div>
+                        </button>
+                    ) : (
+                        <div className="form-grid compact-grid" data-testid="variable-reserve-section">
+                            {batteryError && (
+                                <div style={{ gridColumn: '1 / -1', color: 'var(--error, #ef4444)', fontSize: '0.85rem', marginBottom: '0.75rem', fontWeight: 600 }} data-testid="battery-period-error">
+                                    ⚠️ {batteryError}
+                                </div>
+                            )}
+                            {(!settings.minBatterySOCPeriods || settings.minBatterySOCPeriods.length === 0) && (
+                                <Field.Root className="form-group compact">
+                                    <Field.Label htmlFor="minBatterySOC">Minimum Battery %</Field.Label>
+                                    <Input
+                                        id="minBatterySOC"
+                                        type="number"
+                                        step="1"
+                                        min="0"
+                                        max="100"
+                                        value={settings.minBatterySOC}
+                                        onChange={(e) => handleChange('minBatterySOC', parseFloat(e.target.value))}
+                                    />
+                                    <Field.Description>Maintain battery charge at or above this level at all costs.</Field.Description>
+                                </Field.Root>
+                            )}
+
+                            {settings.minBatterySOCPeriods && settings.minBatterySOCPeriods.length > 0 && (
+                                <>
+                                    {scheduleMode === 'named' ? (
+                                        <>
+                                            {settings.minBatterySOCPeriods.map((p, idx) => (
+                                                <Field.Root key={p.utilityPeriodName || idx} className="form-group compact">
+                                                    <Field.Label htmlFor={`period-${p.utilityPeriodName}`}>
+                                                        {p.utilityPeriodName} Reserve %
+                                                    </Field.Label>
+                                                    <Input
+                                                        id={`period-${p.utilityPeriodName}`}
+                                                        type="number"
+                                                        step="1"
+                                                        min="0"
+                                                        max="100"
+                                                        value={p.minBatterySOC}
+                                                        onChange={(e) => {
+                                                            const val = parseFloat(e.target.value);
+                                                            const next = [...settings.minBatterySOCPeriods!];
+                                                            next[idx] = { ...next[idx], minBatterySOC: isNaN(val) ? 0 : val };
+                                                            updateMinBatterySOCPeriods(next);
+                                                        }}
+                                                    />
+                                                </Field.Root>
+                                            ))}
+                                        </>
+                                    ) : (
+                                        <div style={{ gridColumn: '1 / -1' }}>
+                                            {(() => {
+                                                const coverageError = validate24HourCoverage(settings.minBatterySOCPeriods);
+                                                return (
+                                                    <>
+                                                        {coverageError && (
+                                                            <div style={{ color: 'var(--error, #ef4444)', fontSize: '0.85rem', marginBottom: '0.75rem', fontWeight: 600 }}>
+                                                                {coverageError}
+                                                            </div>
+                                                        )}
+                                                        {settings.minBatterySOCPeriods.map((p, idx) => {
+                                                            const hp = p.hours?.[0] || { hourStart: 0, hourEnd: 24 };
+                                                            return (
+                                                                <div key={idx} style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+                                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                                                        <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>From:</span>
+                                                                        <select
+                                                                            value={hp.hourStart}
+                                                                            onChange={(e) => {
+                                                                                const start = parseInt(e.target.value, 10);
+                                                                                const next = [...settings.minBatterySOCPeriods!];
+                                                                                next[idx] = {
+                                                                                    ...next[idx],
+                                                                                    hours: [{ hourStart: start, minuteStart: 0, hourEnd: hp.hourEnd, minuteEnd: 0 }],
+                                                                                };
+                                                                                updateMinBatterySOCPeriods(next);
+                                                                            }}
+                                                                            className="select-trigger"
+                                                                            style={{ padding: '0.4rem 0.625rem', height: '36px', borderRadius: 'var(--radius-md)', boxSizing: 'border-box' }}
+                                                                        >
+                                                                            {Array.from({ length: 24 }, (_, i) => (
+                                                                                <option key={i} value={i}>{String(i).padStart(2, '0')}:00</option>
+                                                                            ))}
+                                                                        </select>
+                                                                    </div>
+                                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                                                        <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>To:</span>
+                                                                        <select
+                                                                            value={hp.hourEnd}
+                                                                            onChange={(e) => {
+                                                                                const end = parseInt(e.target.value, 10);
+                                                                                const next = [...settings.minBatterySOCPeriods!];
+                                                                                next[idx] = {
+                                                                                    ...next[idx],
+                                                                                    hours: [{ hourStart: hp.hourStart, minuteStart: 0, hourEnd: end, minuteEnd: 0 }],
+                                                                                };
+                                                                                updateMinBatterySOCPeriods(next);
+                                                                            }}
+                                                                            className="select-trigger"
+                                                                            style={{ padding: '0.4rem 0.625rem', height: '36px', borderRadius: 'var(--radius-md)', boxSizing: 'border-box' }}
+                                                                        >
+                                                                            {Array.from({ length: 25 }, (_, i) => (
+                                                                                <option key={i} value={i}>{String(i === 24 ? 24 : i).padStart(2, '0')}:00</option>
+                                                                            ))}
+                                                                        </select>
+                                                                    </div>
+                                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                                                        <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>SOC %:</span>
+                                                                        <Input
+                                                                            type="number"
+                                                                            step="1"
+                                                                            min="0"
+                                                                            max="100"
+                                                                            className="input"
+                                                                            style={{ width: '80px', height: '36px', padding: '0.4rem 0.625rem', boxSizing: 'border-box' }}
+                                                                            value={p.minBatterySOC}
+                                                                            onChange={(e) => {
+                                                                                const val = parseFloat(e.target.value);
+                                                                                const next = [...settings.minBatterySOCPeriods!];
+                                                                                next[idx] = { ...next[idx], minBatterySOC: isNaN(val) ? 0 : val };
+                                                                                updateMinBatterySOCPeriods(next);
+                                                                            }}
+                                                                        />
+                                                                    </div>
+                                                                    {(settings.minBatterySOCPeriods?.length ?? 0) > 1 && (
+                                                                        <button
+                                                                            type="button"
+                                                                            className="text-button danger"
+                                                                            onClick={() => {
+                                                                                const next = settings.minBatterySOCPeriods!.filter((_, i) => i !== idx);
+                                                                                updateMinBatterySOCPeriods(next);
+                                                                            }}
+                                                                        >
+                                                                            Remove
+                                                                        </button>
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                        <button
+                                                            type="button"
+                                                            className="text-button"
+                                                            onClick={() => {
+                                                                const lastEnd = settings.minBatterySOCPeriods![settings.minBatterySOCPeriods!.length - 1]?.hours?.[0]?.hourEnd || 0;
+                                                                const next = [
+                                                                    ...settings.minBatterySOCPeriods!,
+                                                                    { hours: [{ hourStart: lastEnd < 24 ? lastEnd : 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: settings.minBatterySOC || 20 }
+                                                                ];
+                                                                updateMinBatterySOCPeriods(next);
+                                                            }}
+                                                        >
+                                                            + Add Period
+                                                        </button>
+                                                    </>
+                                                );
+                                            })()}
+                                        </div>
+                                    )}
+
+                                    <p className="section-description" style={{ gridColumn: '1 / -1', marginTop: '0.75rem', marginBottom: 0 }}>
+                                        {scheduleMode === 'named'
+                                            ? "Maintain battery charge at or above the level for each rate period at all costs."
+                                            : "Maintain battery charge at or above the level for each time period at all costs."}
+                                    </p>
+                                </>
+                            )}
+
+                            {editBattery && (
+                                <div style={{ gridColumn: '1 / -1', marginTop: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                    <button
+                                        type="button"
+                                        className="text-button cancel-button"
+                                        onClick={() => setEditBattery(false)}
+                                    >
+                                        Done
+                                    </button>
+
+                                    <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                                        {(!settings.minBatterySOCPeriods || settings.minBatterySOCPeriods.length === 0) ? (
+                                            isVariableFeatureEnabled && (
+                                                <>
+                                                    <button
+                                                        type="button"
+                                                        className="text-button"
+                                                        onClick={async () => {
+                                                            let periods = utilityPeriods;
+                                                            if (!periods) {
+                                                                periods = await fetchUtilityPeriods(siteID);
+                                                                setUtilityPeriods(periods);
+                                                            }
+                                                            const fetchedNames = periods ? periods.filter(p => p.name && p.name !== '').map(p => p.name!) : [];
+                                                            if (fetchedNames.length === 0) {
+                                                                setBatteryError("The selected utility rate plan has no rate periods. Switch to Custom or Simple.");
+                                                                return;
+                                                            }
+                                                            const uniqueNames = Array.from(new Set(fetchedNames));
+                                                            const initialPeriods: MinBatterySOCPeriod[] = uniqueNames.map(name => ({
+                                                                utilityPeriodName: name,
+                                                                minBatterySOC: settings.minBatterySOC || 20,
+                                                            }));
+                                                            updateMinBatterySOCPeriods(initialPeriods);
+                                                            setScheduleMode('named');
+                                                            setBatteryError(null);
+                                                        }}
+                                                    >
+                                                        Rates Mode
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        className="text-button"
+                                                        onClick={() => {
+                                                            setScheduleMode('custom');
+                                                            const custom: MinBatterySOCPeriod[] = [
+                                                                { hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: settings.minBatterySOC || 20 }
+                                                            ];
+                                                            updateMinBatterySOCPeriods(custom);
+                                                        }}
+                                                    >
+                                                        Custom Mode
+                                                    </button>
+                                                </>
+                                            )
+                                        ) : (
+                                            <>
+                                                {scheduleMode === 'named' ? (
+                                                    <button
+                                                        type="button"
+                                                        className="text-button"
+                                                        onClick={() => {
+                                                            setScheduleMode('custom');
+                                                            const custom: MinBatterySOCPeriod[] = [
+                                                                { hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: settings.minBatterySOC || 20 }
+                                                            ];
+                                                            updateMinBatterySOCPeriods(custom);
+                                                        }}
+                                                    >
+                                                        Custom Mode
+                                                    </button>
+                                                ) : (
+                                                    <button
+                                                        type="button"
+                                                        className="text-button"
+                                                        onClick={async () => {
+                                                            let periods = utilityPeriods;
+                                                            if (!periods) {
+                                                                periods = await fetchUtilityPeriods(siteID);
+                                                                setUtilityPeriods(periods);
+                                                            }
+                                                            const fetchedNames = periods ? periods.filter(p => p.name && p.name !== '').map(p => p.name!) : [];
+                                                            if (fetchedNames.length === 0) {
+                                                                setBatteryError("The selected utility rate plan has no rate periods. Switch to Custom or Simple.");
+                                                                return;
+                                                            }
+                                                            const uniqueNames = Array.from(new Set(fetchedNames));
+                                                            const initialPeriods: MinBatterySOCPeriod[] = uniqueNames.map(name => ({
+                                                                utilityPeriodName: name,
+                                                                minBatterySOC: settings.minBatterySOC || 20,
+                                                            }));
+                                                            updateMinBatterySOCPeriods(initialPeriods);
+                                                            setScheduleMode('named');
+                                                            setBatteryError(null);
+                                                        }}
+                                                    >
+                                                        Rates Mode
+                                                    </button>
+                                                )}
+
+                                                <button
+                                                    type="button"
+                                                    className="text-button danger"
+                                                    onClick={() => {
+                                                        updateMinBatterySOCPeriods(undefined);
+                                                    }}
+                                                >
+                                                    Revert to Simple
+                                                </button>
+                                            </>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
 
                 {/* Location directly under Quick Settings */}
@@ -1505,11 +1989,11 @@ const Settings = ({
                     settings={settings}
                     onChange={handleChange}
                     utilities={utilities}
-                    isWizard={false}
                     editUtility={editUtility}
                     setEditUtility={setEditUtility}
                     isUtilityDirty={isUtilityDirty}
                     setIsUtilityDirty={setIsUtilityDirty}
+                    onUtilityChange={validateUtilityAndPeriods}
                 />
 
                 <div className="grid-strategy-grid">
@@ -1971,6 +2455,30 @@ const Settings = ({
                     )}
                 </div>
             </form>
+
+            {/* Pause Automation Section right above Danger Zone */}
+            <div className="settings-section" data-testid="pause-section" style={{ marginTop: '2rem' }}>
+                <div className="section-header">
+                    <h3>Pause Automation</h3>
+                </div>
+                <div className="pause-section-content" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                    <p className="section-description" style={{ margin: 0, flex: 1 }}>
+                        {settings.pause
+                            ? "Automation is currently paused. The system will continue monitoring but will not change battery or solar modes."
+                            : "If enabled, stop changing states but continue monitoring."}
+                    </p>
+                    <button
+                        type="button"
+                        className={`btn ${settings.pause ? 'btn-primary' : 'btn-secondary'}`}
+                        id="pauseAutomationBtn"
+                        onClick={handleTogglePause}
+                        disabled={isSaving}
+                        style={{ minWidth: '100px' }}
+                    >
+                        {settings.pause ? 'Resume' : 'Pause'}
+                    </button>
+                </div>
+            </div>
 
             <div className="settings-section delete-site-section" data-testid="delete-section">
                 <div className="section-header">

@@ -277,7 +277,55 @@ export interface Settings {
     acUsageIncreasePercentPerDegree: number;
     acUsageMaxIncreasePercent: number;
     homeLoadPredictionStrategy?: string;
+    minBatterySOCPeriods?: MinBatterySOCPeriod[];
 }
+
+export interface UtilityHourPeriod {
+    hourStart: number;
+    minuteStart?: number;
+    hourEnd: number;
+    minuteEnd?: number;
+}
+
+export interface TimePeriod {
+    name?: string;
+    start?: string;
+    end?: string;
+    hours?: UtilityHourPeriod[];
+    daysOfTheWeek?: number[];
+    specificDates?: string[];
+}
+
+export interface MinBatterySOCPeriod extends TimePeriod {
+    minBatterySOC: number;
+    utilityPeriodName?: string;
+}
+
+export const fetchUtilityPeriods = async (
+    siteID?: string,
+    utilityProvider?: string,
+    utilityRate?: string,
+    utilityRateOptions?: Record<string, any>
+): Promise<TimePeriod[] | null> => {
+    const query = new URLSearchParams();
+    if (siteID) {
+        query.append('siteID', siteID);
+    }
+    if (utilityProvider) {
+        query.append('utilityProvider', utilityProvider);
+    }
+    if (utilityRate) {
+        query.append('utilityRate', utilityRate);
+    }
+    if (utilityRateOptions && Object.keys(utilityRateOptions).length > 0) {
+        query.append('utilityRateOptions', JSON.stringify(utilityRateOptions));
+    }
+    const response = await fetch(`/api/utility/periods${query.toString() ? `?${query.toString()}` : ''}`);
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Failed to fetch utility periods'));
+    }
+    return response.json();
+};
 
 export interface FranklinCredentials {
     username: string;

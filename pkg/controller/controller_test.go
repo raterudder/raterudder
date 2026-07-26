@@ -2285,6 +2285,98 @@ func TestDecide(t *testing.T) {
 		// HitDeficitAt is fallback to HitBufferedDeficitAt, which should be now
 		assert.Equal(t, now, decision.Action.HitDeficitAt)
 	})
+
+	t.Run("VariableMinSOC_OffPeakPrechargeToPeakReserve", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10, PeriodName: "Off-Peak"}
+		settings := baseSettings
+		settings.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+			{UtilityPeriodName: "Off-Peak", MinBatterySOC: 20.0},
+			{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
+		}
+
+		var futurePrices []types.Price
+		for i := 1; i <= 3; i++ {
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: 0.10,
+				PeriodName:    "Off-Peak",
+			})
+		}
+		// Peak starts at +4h
+		for i := 4; i <= 8; i++ {
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: 0.50,
+				PeriodName:    "Peak",
+			})
+		}
+
+		status := baseStatus
+		status.BatterySOC = 20.0 // 2.0 kWh
+
+		decision, err := c.Decide(ctx, status, currentPrice, futurePrices, history, nil, settings, nil)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonWaitingToCharge, decision.Action.Reason)
+	})
+
+	t.Run("VariableMinSOC_PeakNoGridChargeSolarPrimary", func(t *testing.T) {
+		peakTime := now.Add(4 * time.Hour)
+		currentPrice := types.Price{TSStart: peakTime, TSEnd: peakTime.Add(time.Hour), DollarsPerKWH: 0.50, PeriodName: "Peak"}
+		settings := baseSettings
+		settings.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+			{UtilityPeriodName: "Off-Peak", MinBatterySOC: 20.0},
+			{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
+		}
+
+		var futurePrices []types.Price
+		for i := 1; i <= 6; i++ {
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       peakTime.Add(time.Duration(i) * time.Hour),
+				TSEnd:         peakTime.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: 0.50,
+				PeriodName:    "Peak",
+			})
+		}
+
+		status := baseStatus
+		status.Timestamp = peakTime
+		status.BatterySOC = 30.0 // 3.0 kWh (below 50% Peak reserve)
+
+		decision, err := c.Decide(ctx, status, currentPrice, futurePrices, history, nil, settings, nil)
+		require.NoError(t, err)
+
+		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
+	})
+
+	t.Run("VariableMinSOC_TransitionToLowerReserve", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10, PeriodName: "Off-Peak"}
+		settings := baseSettings
+		settings.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+			{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
+			{UtilityPeriodName: "Off-Peak", MinBatterySOC: 20.0},
+		}
+
+		var futurePrices []types.Price
+		for i := 1; i <= 6; i++ {
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+				DollarsPerKWH: 0.10,
+				PeriodName:    "Off-Peak",
+			})
+		}
+
+		status := baseStatus
+		status.BatterySOC = 40.0 // 4.0 kWh (above 20% Off-Peak reserve)
+
+		decision, err := c.Decide(ctx, status, currentPrice, futurePrices, history, nil, settings, nil)
+		require.NoError(t, err)
+
+		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
+	})
 }
 
 func TestSimulateStandby(t *testing.T) {
@@ -2773,6 +2865,26 @@ func TestSimulateStandby(t *testing.T) {
 		assert.Equal(t, now.Add(27*time.Minute), res.HitCapacityAt)
 		assert.Equal(t, now.Add(54*time.Minute), res.HitBufferedCapacityAt)
 		assert.Equal(t, now.Add(36*time.Minute), res.HitThresholdCapacityAt)
+	})
+
+	t.Run("VariableMinSOC_DynamicReserveThresholds", func(t *testing.T) {
+		simData := []SimHour{
+			{TS: now, ClampedNetLoadSolarKWH: 1.5, GridChargeDollarsPerKWH: 0.50, BatteryReserveKWH: 2.0},
+			{TS: now.Add(time.Hour), ClampedNetLoadSolarKWH: 0.5, GridChargeDollarsPerKWH: 0.50, BatteryReserveKWH: 5.0},
+		}
+
+		res := c.simulateStandby(
+			simData,
+			0.10,
+			3.0,
+			capacityKWH,
+			minKWH,
+			time.Time{},
+			settings,
+		)
+		if assert.False(t, res.HitDeficitAt.IsZero()) {
+			assert.WithinDuration(t, now.Add(40*time.Minute), res.HitDeficitAt, time.Minute)
+		}
 	})
 }
 
@@ -4232,6 +4344,95 @@ func TestEvaluateDeficit(t *testing.T) {
 			assert.Equal(t, now.Add(10*time.Minute), eval.Plan.ChargeTime)
 		}
 	})
+
+	t.Run("VariableMinSOC_PrechargeBeforePeak", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.10, PeriodName: "Off-Peak"}
+		settings := baseSettings
+		settings.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+			{UtilityPeriodName: "Off-Peak", MinBatterySOC: 20.0},
+			{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
+		}
+
+		peakStart := now.Add(4 * time.Hour)
+		summary := simulationSummary{
+			HitBufferedDeficitAt:  peakStart,
+			HitThresholdDeficitAt: peakStart,
+			HitDeficitAt:          peakStart,
+		}
+
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.10, BatteryReserveKWH: 2.0, Price: currentPrice, TotalBufferedDeficitKWH: 0.0},
+			{TS: now.Add(1 * time.Hour), GridChargeDollarsPerKWH: 0.10, BatteryReserveKWH: 2.0, Price: currentPrice, TotalBufferedDeficitKWH: 0.0},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.10, BatteryReserveKWH: 2.0, Price: currentPrice, TotalBufferedDeficitKWH: 0.0},
+			{TS: now.Add(3 * time.Hour), GridChargeDollarsPerKWH: 0.10, BatteryReserveKWH: 2.0, Price: currentPrice, TotalBufferedDeficitKWH: 0.0},
+			{TS: peakStart, GridChargeDollarsPerKWH: 0.50, BatteryReserveKWH: 5.0, Price: types.Price{TSStart: peakStart, DollarsPerKWH: 0.50, PeriodName: "Peak"}, TotalBufferedDeficitKWH: 3.0},
+		}
+
+		status := baseStatus
+		status.BatterySOC = 20.0 // 2.0 kWh
+		status.BatteryCapacityKWH = 10.0
+		status.MaxBatteryChargeKW = 5.0
+
+		eval := c.evaluateDeficit(ctx, now, status, currentPrice, settings, simData, summary, nil)
+		require.NotNil(t, eval)
+		assert.Nil(t, eval.Decision)
+		require.NotNil(t, eval.Plan)
+		assert.Equal(t, now.Add(3*time.Hour), eval.Plan.ChargeTime)
+	})
+
+	t.Run("VariableMinSOC_NoGridChargeDuringPeak", func(t *testing.T) {
+		peakTime := now.Add(4 * time.Hour)
+		currentPrice := types.Price{TSStart: peakTime, DollarsPerKWH: 0.50, PeriodName: "Peak"}
+		settings := baseSettings
+		settings.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+			{UtilityPeriodName: "Off-Peak", MinBatterySOC: 20.0},
+			{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
+		}
+
+		summary := simulationSummary{
+			HitDeficitAt:          peakTime,
+			HitBufferedDeficitAt:  peakTime,
+			HitThresholdDeficitAt: peakTime,
+		}
+
+		simData := []SimHour{
+			{TS: peakTime, GridChargeDollarsPerKWH: 0.50, BatteryReserveKWH: 5.0, Price: currentPrice},
+			{TS: peakTime.Add(1 * time.Hour), GridChargeDollarsPerKWH: 0.50, BatteryReserveKWH: 5.0, Price: currentPrice},
+		}
+
+		status := baseStatus
+		status.Timestamp = peakTime
+		status.BatterySOC = 30.0 // 3.0 kWh (below 50% Peak reserve)
+		status.BatteryCapacityKWH = 10.0
+		status.MaxBatteryChargeKW = 5.0
+
+		eval := c.evaluateDeficit(ctx, peakTime, status, currentPrice, settings, simData, summary, nil)
+		assert.Nil(t, eval)
+	})
+
+	t.Run("VariableMinSOC_ReserveDropNoCharging", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.10, PeriodName: "Off-Peak"}
+		settings := baseSettings
+		settings.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+			{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
+			{UtilityPeriodName: "Off-Peak", MinBatterySOC: 20.0},
+		}
+
+		summary := simulationSummary{
+			HitDeficitAt: time.Time{}, // zero
+		}
+
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.10, BatteryReserveKWH: 2.0, Price: currentPrice},
+		}
+
+		status := baseStatus
+		status.BatterySOC = 35.0 // 3.5 kWh (above 20% Off-Peak reserve)
+		status.BatteryCapacityKWH = 10.0
+
+		eval := c.evaluateDeficit(ctx, now, status, currentPrice, settings, simData, summary, nil)
+		assert.Nil(t, eval)
+	})
 }
 
 func TestEvaluateArbitrage(t *testing.T) {
@@ -5426,6 +5627,39 @@ func TestEvaluateArbitrage(t *testing.T) {
 		}
 		assert.Nil(t, eval.Plan)
 	})
+
+	t.Run("VariableMinSOC_ExportArbitrageRespectsActiveReserve", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.10, PeriodName: "Off-Peak"}
+		settings := baseSettings
+		settings.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+			{UtilityPeriodName: "Off-Peak", MinBatterySOC: 30.0},
+			{UtilityPeriodName: "Peak", MinBatterySOC: 60.0},
+		}
+
+		summary := simulationSummary{
+			SoonestExportValue:      0.50,
+			SoonestExportAt:         now.Add(2 * time.Hour),
+			SoonestExportPrice:      types.Price{TSStart: now.Add(2 * time.Hour), DollarsPerKWH: 0.50, PeriodName: "Peak"},
+			MinFutureGridChargeCost: 0.10,
+		}
+
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.10, BatteryReserveKWH: 3.0, Price: currentPrice, BatteryKWH: 3.0, ClampedNetLoadSolarKWH: 0.0},
+			{TS: now.Add(1 * time.Hour), GridChargeDollarsPerKWH: 0.10, BatteryReserveKWH: 3.0, Price: currentPrice, BatteryKWH: 3.0, ClampedNetLoadSolarKWH: 0.0},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.50, BatteryReserveKWH: 6.0, Price: types.Price{TSStart: now.Add(2 * time.Hour), DollarsPerKWH: 0.50, PeriodName: "Peak"}, BatteryKWH: 6.0},
+		}
+
+		status := baseStatus
+		status.BatterySOC = 30.0 // 3.0 kWh (at active 30% Off-Peak reserve)
+		status.BatteryCapacityKWH = 10.0
+		status.MaxBatteryChargeKW = 5.0
+
+		eval := c.evaluateExportArbitrage(ctx, now, status, currentPrice, settings, simData, summary, nil)
+		require.NotNil(t, eval)
+		require.NotNil(t, eval.Decision)
+		assert.Equal(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode)
+		assert.Equal(t, 100, eval.Decision.ChargeToSOC)
+	})
 }
 
 func TestEvaluatePlannedCharge(t *testing.T) {
@@ -5726,6 +5960,35 @@ func TestEvaluatePlannedCharge(t *testing.T) {
 			assert.Equal(t, types.BatteryModeStandby, decision.BatteryMode)
 			assert.Equal(t, types.ActionReasonWaitingToCharge, decision.Reason)
 		}
+	})
+
+	t.Run("VariableMinSOC_PlannedChargeTarget", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.10, PeriodName: "Off-Peak"}
+		settings := baseSettings
+		settings.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+			{UtilityPeriodName: "Off-Peak", MinBatterySOC: 20.0},
+			{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
+		}
+
+		summary := simulationSummary{}
+		plan := PlannedCharge{
+			Time:  now.Add(2 * time.Hour),
+			Price: types.Price{TSStart: now.Add(2 * time.Hour), DollarsPerKWH: 0.05, PeriodName: "Off-Peak"},
+			Cost:  0.05,
+		}
+		simData := []SimHour{
+			{TS: now, ClampedNetLoadSolarKWH: 1.0, GridChargeDollarsPerKWH: 0.10, BatteryReserveKWH: 2.0},
+			{TS: now.Add(time.Hour), ClampedNetLoadSolarKWH: 1.0, GridChargeDollarsPerKWH: 0.10, BatteryReserveKWH: 2.0},
+			{TS: now.Add(2 * time.Hour), ClampedNetLoadSolarKWH: 1.0, GridChargeDollarsPerKWH: 0.05, BatteryReserveKWH: 2.0},
+		}
+
+		status := baseStatus
+		status.BatterySOC = 80.0
+
+		decision := c.evaluatePlannedCharge(ctx, now, status, currentPrice, settings, simData, summary, plan, nil)
+		require.NotNil(t, decision)
+		assert.Equal(t, types.BatteryModeLoad, decision.BatteryMode)
+		assert.Equal(t, types.ActionReasonSufficientBatteryTillCharge, decision.Reason)
 	})
 }
 
@@ -7462,5 +7725,35 @@ func TestEvaluateVPPEvent(t *testing.T) {
 			assert.Equal(t, types.ActionReasonVPPPrep, eval.Decision.Reason)
 		}
 		assert.Nil(t, eval.Plan)
+	})
+
+	t.Run("VariableMinSOC_VPPPrepClamping", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.10, PeriodName: "Off-Peak"}
+		settings := baseSettings
+		settings.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+			{UtilityPeriodName: "Off-Peak", MinBatterySOC: 40.0},
+			{UtilityPeriodName: "Peak", MinBatterySOC: 60.0},
+		}
+
+		summary := simulationSummary{
+			SoonestVPPChargingAt: now.Add(2 * time.Hour),
+		}
+
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.10, Price: currentPrice},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.10, Price: currentPrice},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.50, Price: types.Price{TSStart: now.Add(2 * time.Hour), DollarsPerKWH: 0.50}},
+		}
+
+		status := baseStatus
+		status.BatterySOC = 30.0 // 3.0 kWh (below active 40% Off-Peak reserve)
+		status.BatteryCapacityKWH = 10.0
+		status.MaxBatteryChargeKW = 5.0
+
+		eval := c.evaluateVPPEvent(ctx, now, status, currentPrice, settings, simData, summary, nil)
+		require.NotNil(t, eval)
+		require.NotNil(t, eval.Decision)
+		assert.Equal(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode)
+		assert.GreaterOrEqual(t, eval.Decision.ChargeToSOC, 40, "Target SOC should respect or exceed active 40% reserve")
 	})
 }

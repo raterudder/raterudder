@@ -1,7 +1,9 @@
 package types
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -252,5 +254,128 @@ func TestCredentialsHas(t *testing.T) {
 		for key, v := range hasMap {
 			assert.True(t, v, "Expected %s to be true", key)
 		}
+	})
+}
+
+func TestGetMinBatterySOC(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 5, 20, 10, 0, 0, 0, time.UTC)
+
+	t.Run("EmptyPeriods_ReturnsDefaultMinBatterySOC", func(t *testing.T) {
+		s := Settings{MinBatterySOC: 20.0}
+		soc := s.GetMinBatterySOC(ctx, now, Price{})
+		assert.Equal(t, 20.0, soc)
+	})
+
+	t.Run("PeriodNameMatch_ReturnsMatchingSOC", func(t *testing.T) {
+		s := Settings{
+			MinBatterySOC: 20.0,
+			MinBatterySOCPeriods: []MinBatterySOCPeriod{
+				{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
+				{UtilityPeriodName: "Off-Peak", MinBatterySOC: 15.0},
+			},
+		}
+		p := Price{PeriodName: "Peak"}
+		soc := s.GetMinBatterySOC(ctx, now, p)
+		assert.Equal(t, 50.0, soc)
+	})
+
+	t.Run("PeriodNameMatch_FallbackOnUnknownName", func(t *testing.T) {
+		s := Settings{
+			MinBatterySOC: 20.0,
+			MinBatterySOCPeriods: []MinBatterySOCPeriod{
+				{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
+			},
+		}
+		p := Price{PeriodName: "Super Off-Peak"}
+		soc := s.GetMinBatterySOC(ctx, now, p)
+		assert.Equal(t, 20.0, soc)
+	})
+
+	t.Run("PeriodNameMatch_EmptyPricePeriodNameLogsErrorAndFallsBack", func(t *testing.T) {
+		s := Settings{
+			MinBatterySOC: 20.0,
+			MinBatterySOCPeriods: []MinBatterySOCPeriod{
+				{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
+			},
+		}
+		soc := s.GetMinBatterySOC(ctx, now, Price{})
+		assert.Equal(t, 20.0, soc)
+	})
+
+	t.Run("CustomScheduleMatch_ReturnsTimeSOC", func(t *testing.T) {
+		s := Settings{
+			MinBatterySOC: 20.0,
+			MinBatterySOCPeriods: []MinBatterySOCPeriod{
+				{
+					TimePeriod:    TimePeriod{Hours: []UtilityHourPeriod{{HourStart: 0, HourEnd: 12}}},
+					MinBatterySOC: 10.0,
+				},
+				{
+					TimePeriod:    TimePeriod{Hours: []UtilityHourPeriod{{HourStart: 12, HourEnd: 24}}},
+					MinBatterySOC: 40.0,
+				},
+			},
+		}
+		tMorning := time.Date(2026, 5, 20, 9, 0, 0, 0, time.UTC)
+		socM := s.GetMinBatterySOC(ctx, tMorning, Price{})
+		assert.Equal(t, 10.0, socM)
+
+		tAfternoon := time.Date(2026, 5, 20, 14, 0, 0, 0, time.UTC)
+		socA := s.GetMinBatterySOC(ctx, tAfternoon, Price{})
+		assert.Equal(t, 40.0, socA)
+	})
+
+	t.Run("CustomScheduleMatch_OvernightHours", func(t *testing.T) {
+		s := Settings{
+			MinBatterySOC: 20.0,
+			MinBatterySOCPeriods: []MinBatterySOCPeriod{
+				{
+					TimePeriod:    TimePeriod{Hours: []UtilityHourPeriod{{HourStart: 22, HourEnd: 6}}},
+					MinBatterySOC: 30.0,
+				},
+			},
+		}
+		tNight := time.Date(2026, 5, 20, 23, 0, 0, 0, time.UTC)
+		socN := s.GetMinBatterySOC(ctx, tNight, Price{})
+		assert.Equal(t, 30.0, socN)
+
+		tEarly := time.Date(2026, 5, 20, 4, 0, 0, 0, time.UTC)
+		socE := s.GetMinBatterySOC(ctx, tEarly, Price{})
+		assert.Equal(t, 30.0, socE)
+	})
+
+	t.Run("CustomScheduleMatch_UnmatchedTimeLogsErrorAndFallsBack", func(t *testing.T) {
+		s := Settings{
+			MinBatterySOC: 20.0,
+			MinBatterySOCPeriods: []MinBatterySOCPeriod{
+				{
+					TimePeriod:    TimePeriod{Hours: []UtilityHourPeriod{{HourStart: 0, HourEnd: 6}}},
+					MinBatterySOC: 30.0,
+				},
+			},
+		}
+		tNoon := time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC)
+		soc := s.GetMinBatterySOC(ctx, tNoon, Price{})
+		assert.Equal(t, 20.0, soc)
+	})
+
+	t.Run("Precedence_PeriodNameOverTime", func(t *testing.T) {
+		s := Settings{
+			MinBatterySOC: 20.0,
+			MinBatterySOCPeriods: []MinBatterySOCPeriod{
+				{
+					TimePeriod:    TimePeriod{Hours: []UtilityHourPeriod{{HourStart: 0, HourEnd: 24}}},
+					MinBatterySOC: 15.0,
+				},
+				{
+					UtilityPeriodName: "Peak",
+					MinBatterySOC:     60.0,
+				},
+			},
+		}
+		p := Price{PeriodName: "Peak"}
+		soc := s.GetMinBatterySOC(ctx, now, p)
+		assert.Equal(t, 60.0, soc)
 	})
 }

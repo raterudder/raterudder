@@ -1,9 +1,13 @@
 package types
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"time"
+
+	"github.com/raterudder/raterudder/pkg/log"
 )
 
 // CurrentSettingsVersion is the current version of the settings struct.
@@ -46,6 +50,9 @@ type Settings struct {
 
 	// The minimum battery SOC should be charged to at all times.
 	MinBatterySOC float64 `json:"minBatterySOC"`
+
+	// Optional variable minimum battery SOC periods (time-based or TOU period-name based).
+	MinBatterySOCPeriods []MinBatterySOCPeriod `json:"minBatterySOCPeriods,omitempty"`
 
 	// Grid Settings
 	// Maximum Grid Use (in kW) (not supported yet since we don't change limits)
@@ -298,4 +305,65 @@ func MigrateSettings(s Settings, currentVersion int) (Settings, bool, error) {
 	}
 
 	return s, migrated, nil
+}
+
+// GetMinBatterySOC calculates the active minimum battery reserve SOC (%) for a given time and price.
+// It prioritizes period-name matching (if price has a PeriodName and a matching MinBatterySOCPeriod exists),
+// then custom time schedule matching, falling back to settings.MinBatterySOC.
+// If matching fails or mismatched periods are configured, an error is logged to ctx.
+func (s Settings) GetMinBatterySOC(ctx context.Context, t time.Time, price Price) float64 {
+	if len(s.MinBatterySOCPeriods) == 0 {
+		return s.MinBatterySOC
+	}
+
+	hasNamedPeriods := false
+	for _, p := range s.MinBatterySOCPeriods {
+		if p.UtilityPeriodName != "" {
+			hasNamedPeriods = true
+			break
+		}
+	}
+
+	if hasNamedPeriods {
+		if price.PeriodName == "" {
+			log.Ctx(ctx).ErrorContext(
+				ctx,
+				"min battery SOC schedule is name-based but given price has no period name",
+				slog.Time("time", t),
+				slog.Any("price", price),
+				slog.Any("periods", s.MinBatterySOCPeriods),
+			)
+			return s.MinBatterySOC
+		}
+		for _, p := range s.MinBatterySOCPeriods {
+			if p.UtilityPeriodName != "" && p.UtilityPeriodName == price.PeriodName {
+				return p.MinBatterySOC
+			}
+		}
+		log.Ctx(ctx).ErrorContext(
+			ctx,
+			"no min battery SOC period found matching utility period name",
+			slog.Any("price", price),
+			slog.Time("time", t),
+			slog.Any("periods", s.MinBatterySOCPeriods),
+		)
+		return s.MinBatterySOC
+	}
+
+	// Time-based schedule matching
+	for _, p := range s.MinBatterySOCPeriods {
+		if p.UtilityPeriodName == "" {
+			if ok, _, _ := p.Contains(t); ok {
+				return p.MinBatterySOC
+			}
+		}
+	}
+
+	log.Ctx(ctx).ErrorContext(
+		ctx,
+		"no min battery SOC period found matching time",
+		slog.Time("time", t),
+		slog.Any("periods", s.MinBatterySOCPeriods),
+	)
+	return s.MinBatterySOC
 }

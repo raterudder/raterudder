@@ -1030,6 +1030,11 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 	targetMode := sc
 	newReserveSOC := sc.ReserveSOC
 
+	minSOC := f.settings.MinBatterySOC
+	if opts.MinimumSOC != 0 {
+		minSOC = float64(opts.MinimumSOC)
+	}
+
 	switch bat {
 	case types.BatteryModeChargeAny:
 		if f.settings.GridChargeBatteries && pc.GridMaxFlag != franklinGridMaxFlagChargeFromGrid {
@@ -1057,7 +1062,7 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		// if we're somehow less than this soc, we'll charge from the solar, unless
 		// solar is unavailable then it'll charge from the grid
 		// it seems like this accepts an int value
-		newReserveSOC = f.settings.MinBatterySOC
+		newReserveSOC = minSOC
 	case types.BatteryModeStandby:
 		// we floor the SOC to ensure we don't set it to a value that would cause the
 		// battery to charge
@@ -1066,7 +1071,7 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 			return errors.New("cannot edit reserve SOC")
 		}
 		// make sure we don't set it to less than the minimum battery SOC
-		newReserveSOC = math.Max(math.Floor(rd.RuntimeData.SOC), f.settings.MinBatterySOC)
+		newReserveSOC = math.Max(math.Floor(rd.RuntimeData.SOC), minSOC)
 	case types.BatteryModeNoChange:
 		targetMode = modes.currentMode
 	default:

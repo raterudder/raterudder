@@ -277,6 +277,7 @@ func TestHandleGetPeriods(t *testing.T) {
 		resp := w.Result()
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
+		assert.Equal(t, "private, max-age=60", resp.Header.Get("Cache-Control"))
 
 		var periods []types.TimePeriod
 		err := json.NewDecoder(w.Body).Decode(&periods)
@@ -311,6 +312,8 @@ func TestHandleGetPeriods(t *testing.T) {
 		resp := w.Result()
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, "null\n", w.Body.String())
+		assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
+		assert.Equal(t, "private, max-age=60", resp.Header.Get("Cache-Control"))
 	})
 
 	t.Run("Returns periods for overridden utility rate via query params", func(t *testing.T) {
@@ -338,6 +341,7 @@ func TestHandleGetPeriods(t *testing.T) {
 		resp := w.Result()
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
+		assert.Equal(t, "private, max-age=60", resp.Header.Get("Cache-Control"))
 
 		var periods []types.TimePeriod
 		err := json.NewDecoder(w.Body).Decode(&periods)

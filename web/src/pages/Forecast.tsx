@@ -24,7 +24,7 @@ type ChartConfig = {
     gradientId: string;
     unit: string;
     referenceLine?: { dataKey: string; label: string; color: string };
-    additionalLines?: { dataKey: string; color: string; strokeDasharray?: string }[];
+    additionalLines?: { dataKey: string; color: string; strokeDasharray?: string; type?: 'monotone' | 'step' | 'stepAfter' | 'stepBefore' }[];
 };
 
 const charts: ChartConfig[] = [
@@ -34,7 +34,9 @@ const charts: ChartConfig[] = [
         color: 'var(--accent)',
         gradientId: 'batteryGrad',
         unit: '%',
-        referenceLine: { dataKey: 'batteryReserveSOC', label: 'Reserve', color: '#ef4444' },
+        additionalLines: [
+            { dataKey: 'batteryReserveSOC', color: '#ef4444', strokeDasharray: '6 4', type: 'stepAfter' },
+        ],
     },
     {
         title: 'Predicted Solar (kWh)',
@@ -172,6 +174,8 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                             let displayName = config.title;
                             if (name === 'rawSolarKWH') {
                                 displayName = 'Raw Model';
+                            } else if (name === 'batteryReserveSOC') {
+                                displayName = 'Reserve SOC';
                             }
                             return [
                                 config.unit.includes('$')
@@ -202,7 +206,7 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                     {config.additionalLines?.map((line) => (
                         <Line
                             key={line.dataKey}
-                            type="monotone"
+                            type={line.type || 'monotone'}
                             dataKey={line.dataKey}
                             stroke={line.color}
                             strokeWidth={2}

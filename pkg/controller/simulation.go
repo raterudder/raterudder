@@ -102,7 +102,6 @@ func (c *Controller) SimulateState(
 
 	// Build Energy Models
 	model, simParams := c.BuildHourlyEnergyModel(ctx, now, history, weather, settings)
-	minKWH := capacityKWH * (min(settings.MinBatterySOC+1.0, 100.0) / 100.0)
 
 	// simulate our energy state and prices for the next 24 hours
 	simData := make([]SimHour, 0, 24)
@@ -393,6 +392,8 @@ func (c *Controller) SimulateState(
 			return a.Compare(b)
 		})
 
+		stepMinSOC := settings.GetMinBatterySOC(ctx, simTime, price)
+
 		var hourlyClampedNetKWH float64
 		var hourlyBufferedShiftedClampedNetKWH float64
 		var hourlyThresholdShiftedClampedNetKWH float64
@@ -458,38 +459,52 @@ func (c *Controller) SimulateState(
 				}
 			}
 
-			// The minimum SOC threshold is normally the configured minimum reserve SOC.
+			// The minimum SOC threshold is normally the configured minimum reserve SOC for this period.
 			// During a VPP event, the battery is permitted to discharge down to the VPP target SOC.
+			stepMinKWH := capacityKWH * (min(stepMinSOC+1.0, 100.0) / 100.0)
+
 			var subMinKWH float64
 			if inVPPEvent && subVPP != nil {
 				subMinKWH = capacityKWH * (subVPP.VPPSoc / 100.0)
 			} else {
-				subMinKWH = minKWH
+				subMinKWH = stepMinKWH
 			}
 
 			unbufferedMinKWH := subMinKWH
 			bufferedMinKWH := subMinKWH + capacityKWH*(settings.SOCBufferPercent/100.0)
 			thresholdMinKWH := subMinKWH + capacityKWH*((settings.SOCBufferPercent/2.0)/100.0)
 
-			// Once a VPP discharge event ends, the ESS system immediately prioritizes
-			// charging the battery back up to the user-configured minimum backup reserve SOC (bufferedMinKWH).
-			// Since typical charging rates are high (e.g. 5-10 kW), this refill generally takes less
-			// than an hour, justifying the assumption of immediate restoration in the simulation.
-			// We add this energy difference to deficitKWH to correctly model the grid import cost of
-			// refilling the battery reserve. If we did not add it, the battery would "magically"
-			// obtain free energy in the simulation, skewing the overall cost and savings calculations.
-			// While this charging is inevitable regardless of controller actions, representing it as
-			// a deficit ensures the simulator accurately captures the economic cost of VPP participation.
-			if wasInVPPEvent && !inVPPEvent {
+			// Once a VPP discharge event ends, or when a new higher reserve SOC period begins,
+			// the ESS system prioritizes restoring the battery up to the required reserve SOC.
+			// If the current simulated energy is below the required reserve, we immediately add
+			// the difference to deficitKWH and raise simEnergyKWH to unbufferedMinKWH so the simulation
+			// accounts for the deficit cost and continues with the battery at or above the reserve.
+			//
+			// Note: We deliberately do NOT set simHitDeficitAt/simBufferedHitDeficitAt/simThresholdHitDeficitAt
+			// when restoring battery energy immediately after a VPP discharge event (isPostVPP).
+			// The battery was intentionally discharged down to the VPP target SOC during the event,
+			// so flagging a deficit hit timestamp right post-VPP would complicate pre-VPP decision logic,
+			// as no amount of standby or charging prior to the VPP event could prevent the VPP event discharge.
+			isPostVPP := wasInVPPEvent && !inVPPEvent
+			if isPostVPP || simEnergyKWH < unbufferedMinKWH {
 				if simEnergyKWH < unbufferedMinKWH {
+					if !isPostVPP && simHitDeficitAt.IsZero() {
+						simHitDeficitAt = subStart
+					}
 					deficitKWH += unbufferedMinKWH - simEnergyKWH
 					simEnergyKWH = unbufferedMinKWH
 				}
 				if bufferedEnergyKWH < bufferedMinKWH {
+					if !isPostVPP && simBufferedHitDeficitAt.IsZero() {
+						simBufferedHitDeficitAt = subStart
+					}
 					bufferedDeficitKWH += bufferedMinKWH - bufferedEnergyKWH
 					bufferedEnergyKWH = bufferedMinKWH
 				}
 				if thresholdEnergyKWH < thresholdMinKWH {
+					if !isPostVPP && simThresholdHitDeficitAt.IsZero() {
+						simThresholdHitDeficitAt = subStart
+					}
 					thresholdDeficitKWH += thresholdMinKWH - thresholdEnergyKWH
 					thresholdEnergyKWH = thresholdMinKWH
 				}
@@ -946,7 +961,7 @@ func (c *Controller) SimulateState(
 			StartBatteryKWH:                 startBatteryKWH,
 			BatteryCapacityKWH:              capacityKWH,
 			CapacityThresholdKWH:            capacityThresholdKWH,
-			BatteryReserveKWH:               minKWH,
+			BatteryReserveKWH:               capacityKWH * (stepMinSOC / 100.0),
 			StandbyBatteryKWH:               standbyEnergyKWH,
 			TotalBatteryDeficitKWH:          deficitKWH,
 			TotalBufferedDeficitKWH:         bufferedDeficitKWH,

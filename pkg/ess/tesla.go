@@ -834,6 +834,11 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 		updatedGrid = true
 	}
 
+	minSOC := b.settings.MinBatterySOC
+	if opts.MinimumSOC != 0 {
+		minSOC = float64(opts.MinimumSOC)
+	}
+
 	switch bat {
 	case types.BatteryModeChargeAny:
 		// if they want to charge the battery then set the SOC to 100 to force it to
@@ -847,12 +852,12 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 		// we set the SOC to the minimum battery SOC to ensure we start discharging
 		// if we're somehow less than this soc, we'll charge from the solar, unless
 		// solar is unavailable then it'll charge from the grid
-		newReserveSOC = b.settings.MinBatterySOC
+		newReserveSOC = minSOC
 	case types.BatteryModeStandby:
 		// we floor the SOC to ensure we don't set it to a value that would cause the
 		// battery to charge
 		// make sure we don't set it to less than the minimum battery SOC
-		newReserveSOC = math.Max(math.Floor(liveStatus.PercentageCharged), b.settings.MinBatterySOC)
+		newReserveSOC = math.Max(math.Floor(liveStatus.PercentageCharged), minSOC)
 	case types.BatteryModeNoChange:
 		// Do not change battery settings
 	default:

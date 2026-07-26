@@ -202,6 +202,16 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "minimum battery SOC must be between 0 and 100", http.StatusBadRequest)
 		return
 	}
+
+	if len(newSettings.MinBatterySOCPeriods) > 0 {
+		minSOC, err := s.validateAndCalculateMinBatterySOCPeriods(ctx, siteID, newSettings)
+		if err != nil {
+			writeJSONError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		newSettings.MinBatterySOC = minSOC
+	}
+
 	if newSettings.IgnoreHourUsageOverMultiple < 1 {
 		writeJSONError(w, "ignore hour usage over multiple must be at least 1", http.StatusBadRequest)
 		return
@@ -713,4 +723,99 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 	if _, err := w.Write([]byte(`{"success":true}`)); err != nil {
 		panic(http.ErrAbortHandler)
 	}
+}
+
+func (s *Server) validateAndCalculateMinBatterySOCPeriods(ctx context.Context, siteID string, newSettings types.Settings) (float64, error) {
+	if len(newSettings.MinBatterySOCPeriods) == 0 {
+		return newSettings.MinBatterySOC, nil
+	}
+
+	minPeriodSOC := 100.0
+	isNameBased := false
+	for _, p := range newSettings.MinBatterySOCPeriods {
+		if p.MinBatterySOC < 0 || p.MinBatterySOC > 100 {
+			return 0, errors.New("minimum battery SOC period value must be between 0 and 100")
+		}
+		if p.MinBatterySOC < minPeriodSOC {
+			minPeriodSOC = p.MinBatterySOC
+		}
+		if p.UtilityPeriodName != "" {
+			isNameBased = true
+		}
+	}
+
+	if isNameBased {
+		if newSettings.UtilityProvider != "" && s.utilities != nil {
+			u, err := s.utilities.Site(ctx, siteID, newSettings)
+			if err != nil || u == nil {
+				return 0, errors.New("configured utility has no TOU rate periods for rate-based minimum SOC")
+			}
+			periods, err := u.GetPeriods(ctx)
+			if err != nil || len(periods) == 0 {
+				return 0, errors.New("configured utility has no TOU rate periods for rate-based minimum SOC")
+			}
+			configuredNames := map[string]bool{}
+			for _, p := range newSettings.MinBatterySOCPeriods {
+				if p.UtilityPeriodName != "" {
+					configuredNames[p.UtilityPeriodName] = true
+				}
+			}
+			hasNamedPeriods := false
+			for _, p := range periods {
+				if p.Name != "" {
+					hasNamedPeriods = true
+					if !configuredNames[p.Name] {
+						return 0, fmt.Errorf("missing minimum battery SOC for utility period name: %s", p.Name)
+					}
+				}
+			}
+			if !hasNamedPeriods {
+				return 0, errors.New("configured utility has no TOU rate periods for rate-based minimum SOC")
+			}
+		}
+	} else {
+		// Custom schedule 24-hour validation
+		for _, p := range newSettings.MinBatterySOCPeriods {
+			if len(p.Hours) == 0 {
+				return 0, errors.New("reserve SOC period must specify hours")
+			}
+			for _, hp := range p.Hours {
+				if hp.MinuteStart != 0 || hp.MinuteEnd != 0 {
+					return 0, errors.New("reserve SOC period start and end minutes must be 0")
+				}
+				duration := (hp.HourEnd - hp.HourStart + 24) % 24
+				if hp.HourStart != hp.HourEnd && duration < 1 {
+					return 0, errors.New("reserve SOC period minimum duration is 1 hour")
+				}
+			}
+		}
+
+		for h := 0; h < 24; h++ {
+			count := 0
+			for _, p := range newSettings.MinBatterySOCPeriods {
+				for _, hp := range p.Hours {
+					if hp.HourStart < hp.HourEnd {
+						if h >= hp.HourStart && h < hp.HourEnd {
+							count++
+						}
+					} else if hp.HourStart > hp.HourEnd {
+						if h >= hp.HourStart || h < hp.HourEnd {
+							count++
+						}
+					} else {
+						// HourStart == HourEnd (covers 24h)
+						count++
+					}
+				}
+			}
+			if count == 0 {
+				return 0, fmt.Errorf("reserve SOC periods must cover all 24 hours of the day (hour %d is not covered)", h)
+			}
+			if count > 1 {
+				return 0, fmt.Errorf("reserve SOC periods cannot overlap (hour %d has multiple periods defined)", h)
+			}
+		}
+	}
+
+	return minPeriodSOC, nil
 }

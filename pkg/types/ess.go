@@ -48,5 +48,6 @@ type ESSMockState struct {
 	BatteryMode  BatteryMode            `json:"batteryMode"`
 	SolarMode    SolarMode              `json:"solarMode"`
 	ChargeToSOC  int                    `json:"chargeToSoc,omitempty"`
+	MinimumSOC   int                    `json:"minimumSoc,omitempty"`
 	DailyHistory map[string]EnergyStats `json:"dailyHistory"`
 }

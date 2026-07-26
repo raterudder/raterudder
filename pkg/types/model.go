@@ -70,6 +70,7 @@ const (
 // ModesOptions contains options for setting the operating modes.
 type ModesOptions struct {
 	ChargeToSOC int `json:"chargeToSoc,omitempty"`
+	MinimumSOC  int `json:"minimumSoc,omitempty"`
 }
 
 // Action represents a control decision made by the system.
