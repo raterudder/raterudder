@@ -2126,7 +2126,7 @@ func TestMergeUtilityVPPEvents(t *testing.T) {
 		vppInfo := types.UtilityVPPInfo{
 			Mandatory: []types.UtilityVPPPeriod{
 				{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
 						Start: now.Add(-24 * time.Hour),
 						End:   now.Add(48 * time.Hour),
 						Hours: []types.UtilityHourPeriod{
@@ -2170,7 +2170,7 @@ func TestMergeUtilityVPPEvents(t *testing.T) {
 		vppInfo := types.UtilityVPPInfo{
 			Mandatory: []types.UtilityVPPPeriod{
 				{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
 						Start: now.Add(3 * time.Hour),
 						End:   now.Add(5 * time.Hour),
 					},
@@ -2208,7 +2208,7 @@ func TestMergeUtilityVPPEvents(t *testing.T) {
 		vppInfo := types.UtilityVPPInfo{
 			Mandatory: []types.UtilityVPPPeriod{
 				{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
 						Start: now.Add(3 * time.Hour),
 						End:   now.Add(4 * time.Hour),
 					},
@@ -2236,7 +2236,7 @@ func TestMergeUtilityVPPEvents(t *testing.T) {
 		vppInfo := types.UtilityVPPInfo{
 			Mandatory: []types.UtilityVPPPeriod{
 				{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
 						Start: now.Add(25 * time.Hour),
 						End:   now.Add(27 * time.Hour),
 					},

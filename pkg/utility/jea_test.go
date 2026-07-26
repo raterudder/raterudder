@@ -35,6 +35,10 @@ func TestJEA(t *testing.T) {
 		if assert.InDelta(t, 0.11731, p.DollarsPerKWH, 1e-6) {
 			assert.False(t, p.SeparateGenerationCredit)
 		}
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.NotEmpty(t, periods)
 	})
 
 	t.Run("Rate R Residential Service DG", func(t *testing.T) {
@@ -67,6 +71,15 @@ func TestJEA(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		names := make(map[string]bool)
+		for _, p := range periods {
+			names[p.Name] = true
+		}
+		assert.True(t, names["On-Peak"])
+		assert.True(t, names["Off-Peak"])
 
 		// Winter Peak (Jan 12, 2026 is Monday)
 		// On-peak 6-10 AM, 6-10 PM. On-peak base: $0.13776 + Jan fuel $0.04224 = $0.18000

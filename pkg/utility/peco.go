@@ -112,11 +112,13 @@ func pecoPeriods(plan string, opts types.UtilityRateOptions, years []int) []type
 					SpecificDates: holidays,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "Super Off-Peak",
 							Hours:         superOffPeakHours,
 							DollarsPerKWH: s.superOffPeak,
 							Description:   "PECO TOU Super Off-Peak (" + s.desc + " Holiday)",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: s.offPeak,
 					OtherDescription:   "PECO TOU Off-Peak (" + s.desc + " Holiday)",
 				}
@@ -130,17 +132,20 @@ func pecoPeriods(plan string, opts types.UtilityRateOptions, years []int) []type
 					SpecificDatesNot: true,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "Super Off-Peak",
 							Hours:         superOffPeakHours,
 							DollarsPerKWH: s.superOffPeak,
 							Description:   "PECO TOU Super Off-Peak (" + s.desc + ")",
 						},
 						{
+							Name:          "On-Peak",
 							Hours:         peakHours,
 							Weekday:       true,
 							DollarsPerKWH: s.peak,
-							Description:   "PECO TOU Weekday Peak (" + s.desc + ")",
+							Description:   "PECO TOU Peak (" + s.desc + ")",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: s.offPeak,
 					OtherDescription:   "PECO TOU Off-Peak (" + s.desc + ")",
 				}

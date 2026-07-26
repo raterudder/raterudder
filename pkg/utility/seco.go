@@ -75,11 +75,13 @@ func secoPeriods(plan string, opts types.UtilityRateOptions, years []int) []type
 				SpecificDates: holidays,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "Super Off-Peak",
 						Hours:         superOffPeakHours,
 						DollarsPerKWH: 0.0770,
 						Description:   "SECO Schedule RS-TOU Summer Holiday Super Off-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0970,
 				OtherDescription:   "SECO Schedule RS-TOU Summer Holiday Off-Peak",
 			}
@@ -91,17 +93,20 @@ func secoPeriods(plan string, opts types.UtilityRateOptions, years []int) []type
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "Super Off-Peak",
 						Hours:         superOffPeakHours,
 						DollarsPerKWH: 0.0770,
 						Description:   "SECO Schedule RS-TOU Summer Super Off-Peak",
 					},
 					{
+						Name:          "On-Peak",
 						Hours:         summerPeakHours,
 						Weekday:       true,
 						DollarsPerKWH: 0.2370,
 						Description:   "SECO Schedule RS-TOU Summer Weekday On-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0970,
 				OtherDescription:   "SECO Schedule RS-TOU Summer Off-Peak",
 			}
@@ -114,11 +119,13 @@ func secoPeriods(plan string, opts types.UtilityRateOptions, years []int) []type
 				SpecificDates: holidays,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "Super Off-Peak",
 						Hours:         superOffPeakHours,
 						DollarsPerKWH: 0.0770,
 						Description:   "SECO Schedule RS-TOU Winter Holiday Super Off-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0970,
 				OtherDescription:   "SECO Schedule RS-TOU Winter Holiday Off-Peak",
 			}
@@ -130,17 +137,20 @@ func secoPeriods(plan string, opts types.UtilityRateOptions, years []int) []type
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "Super Off-Peak",
 						Hours:         superOffPeakHours,
 						DollarsPerKWH: 0.0770,
 						Description:   "SECO Schedule RS-TOU Winter Super Off-Peak",
 					},
 					{
+						Name:          "On-Peak",
 						Hours:         winterPeakHours,
 						Weekday:       true,
 						DollarsPerKWH: 0.2370,
 						Description:   "SECO Schedule RS-TOU Winter Weekday On-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0970,
 				OtherDescription:   "SECO Schedule RS-TOU Winter Off-Peak",
 			}
@@ -153,11 +163,13 @@ func secoPeriods(plan string, opts types.UtilityRateOptions, years []int) []type
 				SpecificDates: holidays,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "Super Off-Peak",
 						Hours:         superOffPeakHours,
 						DollarsPerKWH: 0.0770,
 						Description:   "SECO Schedule RS-TOU Winter Holiday Super Off-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0970,
 				OtherDescription:   "SECO Schedule RS-TOU Winter Holiday Off-Peak",
 			}
@@ -169,17 +181,20 @@ func secoPeriods(plan string, opts types.UtilityRateOptions, years []int) []type
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "Super Off-Peak",
 						Hours:         superOffPeakHours,
 						DollarsPerKWH: 0.0770,
 						Description:   "SECO Schedule RS-TOU Winter Super Off-Peak",
 					},
 					{
+						Name:          "On-Peak",
 						Hours:         winterPeakHours,
 						Weekday:       true,
 						DollarsPerKWH: 0.2370,
 						Description:   "SECO Schedule RS-TOU Winter Weekday On-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0970,
 				OtherDescription:   "SECO Schedule RS-TOU Winter Off-Peak",
 			}
@@ -195,7 +210,7 @@ func secoPeriods(plan string, opts types.UtilityRateOptions, years []int) []type
 		// Fixed at $0.095/kWh year-round.
 		// Note: Wholesale Power Cost Adjustment (PCA) is currently -$0.003/kWh and is ignored for now since we do not have future PCA rates.
 		periods = append(periods, types.UtilityFeesPeriod{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, etLocation),
 				End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, etLocation),
 				LocationPtr: etLocation,

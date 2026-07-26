@@ -117,7 +117,8 @@ func globirdFour4FreePeriods(cfg globirdRateConfig, years []int) []types.Utility
 
 		// Peak (4 PM to 11 PM) everyday
 		periods = append(periods, types.UtilityFeesPeriod{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
+				Name:        "On-Peak",
 				Start:       allYearStart,
 				End:         allYearEnd,
 				LocationPtr: cfg.Timezone,
@@ -134,7 +135,8 @@ func globirdFour4FreePeriods(cfg globirdRateConfig, years []int) []types.Utility
 		// does not exceed this limit, hence we statically set the rate to $0.00/kWh.
 		// ====================================================================================
 		periods = append(periods, types.UtilityFeesPeriod{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
+				Name:        "Super Off-Peak",
 				Start:       allYearStart,
 				End:         allYearEnd,
 				LocationPtr: cfg.Timezone,
@@ -146,7 +148,8 @@ func globirdFour4FreePeriods(cfg globirdRateConfig, years []int) []types.Utility
 
 		// Shoulder (all other times) everyday
 		periods = append(periods, types.UtilityFeesPeriod{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
+				Name:        "Shoulder",
 				Start:       allYearStart,
 				End:         allYearEnd,
 				LocationPtr: cfg.Timezone,
@@ -158,7 +161,7 @@ func globirdFour4FreePeriods(cfg globirdRateConfig, years []int) []types.Utility
 
 		// Export Peak (4 PM to 11 PM) everyday
 		periods = append(periods, types.UtilityFeesPeriod{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       allYearStart,
 				End:         allYearEnd,
 				LocationPtr: cfg.Timezone,
@@ -171,7 +174,7 @@ func globirdFour4FreePeriods(cfg globirdRateConfig, years []int) []types.Utility
 
 		// Export Off-Peak (all other times) everyday
 		periods = append(periods, types.UtilityFeesPeriod{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       allYearStart,
 				End:         allYearEnd,
 				LocationPtr: cfg.Timezone,
@@ -200,7 +203,7 @@ func globirdSolarPlusPeriods(loc string, cfg globirdRateConfig, years []int) []t
 			// hence we use the first tier rate of $0.4939/kWh as a flat rate.
 			// ====================================================================================
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start:       allYearStart,
 					End:         allYearEnd,
 					LocationPtr: cfg.Timezone,
@@ -211,7 +214,8 @@ func globirdSolarPlusPeriods(loc string, cfg globirdRateConfig, years []int) []t
 		} else if loc == "endeavour" {
 			// Weekday Peak (1 PM to 8 PM)
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
+					Name:          "On-Peak",
 					Start:         allYearStart,
 					End:           allYearEnd,
 					LocationPtr:   cfg.Timezone,
@@ -224,7 +228,8 @@ func globirdSolarPlusPeriods(loc string, cfg globirdRateConfig, years []int) []t
 
 			// Weekday Off-Peak (other times)
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
+					Name:          "Off-Peak",
 					Start:         allYearStart,
 					End:           allYearEnd,
 					LocationPtr:   cfg.Timezone,
@@ -237,7 +242,8 @@ func globirdSolarPlusPeriods(loc string, cfg globirdRateConfig, years []int) []t
 
 			// Weekend Off-Peak (All Day)
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
+					Name:          "Off-Peak",
 					Start:         allYearStart,
 					End:           allYearEnd,
 					LocationPtr:   cfg.Timezone,
@@ -250,7 +256,8 @@ func globirdSolarPlusPeriods(loc string, cfg globirdRateConfig, years []int) []t
 		} else if loc == "energex" {
 			// Peak Everyday (4 PM to 9 PM)
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
+					Name:        "On-Peak",
 					Start:       allYearStart,
 					End:         allYearEnd,
 					LocationPtr: cfg.Timezone,
@@ -262,7 +269,8 @@ func globirdSolarPlusPeriods(loc string, cfg globirdRateConfig, years []int) []t
 
 			// Off-Peak Everyday (all other times)
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
+					Name:        "Off-Peak",
 					Start:       allYearStart,
 					End:         allYearEnd,
 					LocationPtr: cfg.Timezone,
@@ -280,7 +288,7 @@ func globirdSolarPlusPeriods(loc string, cfg globirdRateConfig, years []int) []t
 		// and statically apply the flat lower feed-in rate of $0.02/kWh.
 		// ====================================================================================
 		periods = append(periods, types.UtilityFeesPeriod{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       allYearStart,
 				End:         allYearEnd,
 				LocationPtr: cfg.Timezone,

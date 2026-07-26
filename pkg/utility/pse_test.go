@@ -29,6 +29,10 @@ func TestPSEUtility(t *testing.T) {
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.187465, p.DollarsPerKWH, 1e-6)
 		}
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.NotEmpty(t, periods)
 	})
 
 	t.Run("Schedule 307 TOU Prices", func(t *testing.T) {
@@ -38,6 +42,15 @@ func TestPSEUtility(t *testing.T) {
 			UtilityRate:     "pse_307",
 		})
 		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		names := make(map[string]bool)
+		for _, p := range periods {
+			names[p.Name] = true
+		}
+		assert.True(t, names["On-Peak"])
+		assert.True(t, names["Off-Peak"])
 
 		// Winter (Oct - Mar): Tue, Jan 20, 2026
 		winterTue := time.Date(2026, time.January, 20, 0, 0, 0, 0, ptLocation)

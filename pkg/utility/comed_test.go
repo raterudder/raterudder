@@ -18,6 +18,13 @@ import (
 )
 
 func TestComEd(t *testing.T) {
+	t.Run("GetPeriods returns nil nil", func(t *testing.T) {
+		s := &SiteFees{}
+		periods, err := s.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.Nil(t, periods)
+	})
+
 	t.Run("GetCurrentPrice Parsing", func(t *testing.T) {
 		// Mock server returning a sample response
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

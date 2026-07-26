@@ -112,6 +112,7 @@ func jeaPeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 						Year:               year,
 						Months:             []time.Month{month},
 						SpecificDates:      holidays,
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: offPeakRate,
 						OtherDescription:   "JEA GST Off-Peak (Holiday)",
 					},
@@ -122,12 +123,14 @@ func jeaPeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 						SpecificDatesNot: true,
 						HoursAndDays: []touSimplifiedHoursAndDays{
 							{
+								Name:          "On-Peak",
 								Hours:         onPeakHours,
 								Weekday:       true,
 								DollarsPerKWH: onPeakRate,
 								Description:   "JEA GST On-Peak",
 							},
 						},
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: offPeakRate,
 						OtherDescription:   "JEA GST Off-Peak",
 					},

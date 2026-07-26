@@ -49,6 +49,10 @@ func TestBWPUtility(t *testing.T) {
 			assert.True(t, p.SeparateGenerationCredit)
 			assert.InDelta(t, 0.0455, p.GenerationCreditDollarsPerKWH, 1e-6)
 		}
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.NotEmpty(t, periods)
 	})
 
 	t.Run("Residential TOU EV R-TOU-EV Pricing and Seasons", func(t *testing.T) {
@@ -61,6 +65,15 @@ func TestBWPUtility(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		names := make(map[string]bool)
+		for _, p := range periods {
+			names[p.Name] = true
+		}
+		assert.True(t, names["On-Peak"])
+		assert.True(t, names["Off-Peak"])
 
 		// 1. Summer On-Peak (4:00 PM - 7:00 PM, weekday)
 		p, err := u.priceForTime(time.Date(2026, time.June, 15, 17, 0, 0, 0, ptLocation)) // Monday

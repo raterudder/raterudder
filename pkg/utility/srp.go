@@ -84,6 +84,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Off-Peak",
 							DollarsPerKWH:                 adjustSRPPrice(0.1118, time.May, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer TOU Holiday Off-Peak",
@@ -98,6 +99,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Off-Peak",
 							DollarsPerKWH:                 adjustSRPPrice(0.1118, time.September, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer TOU Holiday Off-Peak",
@@ -117,6 +119,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "On-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 14, HourEnd: 20}},
 							Weekday:                       true,
 							DollarsPerKWH:                 adjustSRPPrice(0.2083, time.May, year),
@@ -124,6 +127,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:                   "SRP Summer TOU On-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.1118, time.May, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer TOU Off-Peak",
@@ -137,6 +141,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "On-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 14, HourEnd: 20}},
 							Weekday:                       true,
 							DollarsPerKWH:                 adjustSRPPrice(0.2083, time.September, year),
@@ -144,6 +149,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:                   "SRP Summer TOU On-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.1118, time.September, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer TOU Off-Peak",
@@ -160,6 +166,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Off-Peak",
 							DollarsPerKWH:                 adjustSRPPrice(0.1119, time.July, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer Peak TOU Holiday Off-Peak",
@@ -179,6 +186,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "On-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 14, HourEnd: 20}},
 							Weekday:                       true,
 							DollarsPerKWH:                 adjustSRPPrice(0.2338, time.July, year),
@@ -186,6 +194,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:                   "SRP Summer Peak TOU On-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.1119, time.July, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer Peak TOU Off-Peak",
@@ -202,6 +211,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Off-Peak",
 							DollarsPerKWH:                 adjustSRPPrice(0.1041, time.November, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Winter TOU Holiday Off-Peak",
@@ -221,6 +231,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "On-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 5, HourEnd: 9}, {HourStart: 17, HourEnd: 21}},
 							Weekday:                       true,
 							DollarsPerKWH:                 adjustSRPPrice(0.1425, time.November, year),
@@ -228,6 +239,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:                   "SRP Winter TOU On-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.1041, time.November, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Winter TOU Off-Peak",
@@ -259,12 +271,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 23, HourEnd: 24}, {HourStart: 0, HourEnd: 5}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0793, time.May, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer EV TOU Holiday Super Off-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.1230, time.May, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer EV TOU Holiday Off-Peak",
@@ -277,12 +291,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 23, HourEnd: 24}, {HourStart: 0, HourEnd: 5}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0793, time.September, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer EV TOU Holiday Super Off-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.1230, time.September, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer EV TOU Holiday Off-Peak",
@@ -300,12 +316,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 23, HourEnd: 24}, {HourStart: 0, HourEnd: 5}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0793, time.May, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer EV TOU Super Off-Peak",
 						},
 						{
+							Name:                          "On-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 14, HourEnd: 20}},
 							Weekday:                       true,
 							DollarsPerKWH:                 adjustSRPPrice(0.2083, time.May, year),
@@ -313,6 +331,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:                   "SRP Summer EV TOU On-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.1230, time.May, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer EV TOU Off-Peak",
@@ -326,12 +345,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 23, HourEnd: 24}, {HourStart: 0, HourEnd: 5}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0793, time.September, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer EV TOU Super Off-Peak",
 						},
 						{
+							Name:                          "On-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 14, HourEnd: 20}},
 							Weekday:                       true,
 							DollarsPerKWH:                 adjustSRPPrice(0.2083, time.September, year),
@@ -339,6 +360,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:                   "SRP Summer EV TOU On-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.1230, time.September, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer EV TOU Off-Peak",
@@ -355,12 +377,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 23, HourEnd: 24}, {HourStart: 0, HourEnd: 5}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0794, time.July, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer Peak EV TOU Holiday Super Off-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.1222, time.July, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer Peak EV TOU Holiday Off-Peak",
@@ -378,12 +402,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 23, HourEnd: 24}, {HourStart: 0, HourEnd: 5}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0794, time.July, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer Peak EV TOU Super Off-Peak",
 						},
 						{
+							Name:                          "On-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 14, HourEnd: 20}},
 							Weekday:                       true,
 							DollarsPerKWH:                 adjustSRPPrice(0.2338, time.July, year),
@@ -391,6 +417,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:                   "SRP Summer Peak EV TOU On-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.1222, time.July, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer Peak EV TOU Off-Peak",
@@ -407,12 +434,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 23, HourEnd: 24}, {HourStart: 0, HourEnd: 5}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0792, time.November, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Winter EV TOU Holiday Super Off-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.1177, time.November, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Winter EV TOU Holiday Off-Peak",
@@ -430,12 +459,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 23, HourEnd: 24}, {HourStart: 0, HourEnd: 5}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0792, time.November, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Winter EV TOU Super Off-Peak",
 						},
 						{
+							Name:                          "On-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 5, HourEnd: 9}, {HourStart: 17, HourEnd: 21}},
 							Weekday:                       true,
 							DollarsPerKWH:                 adjustSRPPrice(0.1425, time.November, year),
@@ -443,6 +474,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:                   "SRP Winter EV TOU On-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.1177, time.November, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Winter EV TOU Off-Peak",
@@ -474,12 +506,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 8, HourEnd: 15}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0355, time.May, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer Demand Holiday Super Off-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.0957, time.May, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer Demand Holiday Off-Peak",
@@ -492,12 +526,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 8, HourEnd: 15}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0355, time.September, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer Demand Holiday Super Off-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.0957, time.September, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer Demand Holiday Off-Peak",
@@ -515,12 +551,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 8, HourEnd: 15}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0355, time.May, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer Demand Super Off-Peak",
 						},
 						{
+							Name:                          "On-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 17, HourEnd: 22}},
 							Weekday:                       true,
 							DollarsPerKWH:                 adjustSRPPrice(0.1219, time.May, year),
@@ -528,6 +566,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:                   "SRP Summer Demand On-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.0957, time.May, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer Demand Off-Peak",
@@ -541,12 +580,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 8, HourEnd: 15}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0355, time.September, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer Demand Super Off-Peak",
 						},
 						{
+							Name:                          "On-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 17, HourEnd: 22}},
 							Weekday:                       true,
 							DollarsPerKWH:                 adjustSRPPrice(0.1219, time.September, year),
@@ -554,6 +595,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:                   "SRP Summer Demand On-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.0957, time.September, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer Demand Off-Peak",
@@ -570,12 +612,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 8, HourEnd: 15}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0584, time.July, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer Peak Demand Holiday Super Off-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.0958, time.July, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer Peak Demand Holiday Off-Peak",
@@ -593,12 +637,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 8, HourEnd: 15}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0584, time.July, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer Peak Demand Super Off-Peak",
 						},
 						{
+							Name:                          "On-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 17, HourEnd: 22}},
 							Weekday:                       true,
 							DollarsPerKWH:                 adjustSRPPrice(0.1616, time.July, year),
@@ -606,6 +652,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:                   "SRP Summer Peak Demand On-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.0958, time.July, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer Peak Demand Off-Peak",
@@ -622,12 +669,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 8, HourEnd: 15}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0438, time.November, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Winter Demand Holiday Super Off-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.0994, time.November, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Winter Demand Holiday Off-Peak",
@@ -645,12 +694,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 8, HourEnd: 15}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0438, time.November, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Winter Demand Super Off-Peak",
 						},
 						{
+							Name:                          "On-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 17, HourEnd: 22}},
 							Weekday:                       true,
 							DollarsPerKWH:                 adjustSRPPrice(0.1119, time.November, year),
@@ -658,6 +709,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:                   "SRP Winter Demand On-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.0994, time.November, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Winter Demand Off-Peak",
@@ -689,12 +741,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 8, HourEnd: 15}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0357, time.May, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer Conserve Holiday Super Off-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.1468, time.May, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer Conserve Holiday Off-Peak",
@@ -707,12 +761,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 8, HourEnd: 15}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0357, time.September, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer Conserve Holiday Super Off-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.1468, time.September, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer Conserve Holiday Off-Peak",
@@ -730,12 +786,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 8, HourEnd: 15}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0357, time.May, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer Conserve Super Off-Peak",
 						},
 						{
+							Name:                          "On-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 18, HourEnd: 21}},
 							Weekday:                       true,
 							DollarsPerKWH:                 adjustSRPPrice(0.1847, time.May, year),
@@ -743,6 +801,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:                   "SRP Summer Conserve On-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.1468, time.May, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer Conserve Off-Peak",
@@ -756,12 +815,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 8, HourEnd: 15}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0357, time.September, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer Conserve Super Off-Peak",
 						},
 						{
+							Name:                          "On-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 18, HourEnd: 21}},
 							Weekday:                       true,
 							DollarsPerKWH:                 adjustSRPPrice(0.1847, time.September, year),
@@ -769,6 +830,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:                   "SRP Summer Conserve On-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.1468, time.September, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer Conserve Off-Peak",
@@ -785,12 +847,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 8, HourEnd: 15}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0623, time.July, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer Peak Conserve Holiday Super Off-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.1238, time.July, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer Peak Conserve Holiday Off-Peak",
@@ -808,12 +872,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 8, HourEnd: 15}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0623, time.July, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer Peak Conserve Super Off-Peak",
 						},
 						{
+							Name:                          "On-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 18, HourEnd: 21}},
 							Weekday:                       true,
 							DollarsPerKWH:                 adjustSRPPrice(0.3982, time.July, year),
@@ -821,6 +887,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:                   "SRP Summer Peak Conserve On-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.1238, time.July, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer Peak Conserve Off-Peak",
@@ -837,12 +904,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 8, HourEnd: 15}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0432, time.November, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Winter Conserve Holiday Super Off-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.1355, time.November, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Winter Conserve Holiday Off-Peak",
@@ -860,12 +929,14 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Super Off-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 8, HourEnd: 15}},
 							DollarsPerKWH:                 adjustSRPPrice(0.0432, time.November, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Winter Conserve Super Off-Peak",
 						},
 						{
+							Name:                          "On-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 18, HourEnd: 21}},
 							Weekday:                       true,
 							DollarsPerKWH:                 adjustSRPPrice(0.1508, time.November, year),
@@ -873,6 +944,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:                   "SRP Winter Conserve On-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.1355, time.November, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Winter Conserve Off-Peak",
@@ -900,6 +972,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Off-Peak",
 							DollarsPerKWH:                 adjustSRPPrice(0.0560, time.May, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer Customer Gen Holiday Off-Peak",
@@ -914,6 +987,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Off-Peak",
 							DollarsPerKWH:                 adjustSRPPrice(0.0560, time.September, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer Customer Gen Holiday Off-Peak",
@@ -933,6 +1007,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "On-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 14, HourEnd: 20}},
 							Weekday:                       true,
 							DollarsPerKWH:                 adjustSRPPrice(0.0662, time.May, year),
@@ -940,6 +1015,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:                   "SRP Summer Customer Gen On-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.0560, time.May, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer Customer Gen Off-Peak",
@@ -953,6 +1029,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "On-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 14, HourEnd: 20}},
 							Weekday:                       true,
 							DollarsPerKWH:                 adjustSRPPrice(0.0662, time.September, year),
@@ -960,6 +1037,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:                   "SRP Summer Customer Gen On-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.0560, time.September, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer Customer Gen Off-Peak",
@@ -976,6 +1054,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Off-Peak",
 							DollarsPerKWH:                 adjustSRPPrice(0.0613, time.July, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Summer Peak Customer Gen Holiday Off-Peak",
@@ -995,6 +1074,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "On-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 14, HourEnd: 20}},
 							Weekday:                       true,
 							DollarsPerKWH:                 adjustSRPPrice(0.0823, time.July, year),
@@ -1002,6 +1082,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:                   "SRP Summer Peak Customer Gen On-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.0613, time.July, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Summer Peak Customer Gen Off-Peak",
@@ -1018,6 +1099,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "Off-Peak",
 							DollarsPerKWH:                 adjustSRPPrice(0.0634, time.November, year),
 							GenerationCreditDollarsPerKWH: genCredit,
 							Description:                   "SRP Winter Customer Gen Holiday Off-Peak",
@@ -1037,6 +1119,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SeparateGenerationCredit: isNetBilling,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:                          "On-Peak",
 							Hours:                         []types.UtilityHourPeriod{{HourStart: 5, HourEnd: 9}, {HourStart: 17, HourEnd: 21}},
 							Weekday:                       true,
 							DollarsPerKWH:                 adjustSRPPrice(0.0673, time.November, year),
@@ -1044,6 +1127,7 @@ func srpPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:                   "SRP Winter Customer Gen On-Peak",
 						},
 					},
+					OtherName:                          "Off-Peak",
 					OtherDollarsPerKWH:                 adjustSRPPrice(0.0634, time.November, year),
 					OtherGenerationCreditDollarsPerKWH: genCredit,
 					OtherDescription:                   "SRP Winter Customer Gen Off-Peak",

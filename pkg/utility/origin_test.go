@@ -78,6 +78,16 @@ func TestOriginUtility(t *testing.T) {
 		})
 		require.NoError(t, err)
 
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		names := make(map[string]bool)
+		for _, p := range periods {
+			names[p.Name] = true
+		}
+		assert.True(t, names["On-Peak"])
+		assert.True(t, names["Shoulder"])
+		assert.True(t, names["Off-Peak"])
+
 		// Weekday: Wednesday, Jan 14, 2026
 		weekday := time.Date(2026, time.January, 14, 0, 0, 0, 0, bneLocation)
 

@@ -36,7 +36,7 @@ func sawneePeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 			periods = append(periods, buildPeriods(etLocation, simplified)...)
 
 		case "sawnee_tu":
-			// Schedule TU-28 (Residential Time-of-Use)
+			// Schedule TU-14 (Time of Use - Residential)
 			// On-Peak: $0.335/kWh (Monday - Friday, 2 PM - 8 PM, June 1 - August 31, excluding July 4)
 			// Off-Peak: $0.0445/kWh (all other hours)
 			peakHours := []types.UtilityHourPeriod{{HourStart: 14, HourEnd: 20}}
@@ -47,6 +47,7 @@ func sawneePeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				MonthStart:         time.June,
 				MonthEnd:           time.August,
 				SpecificDates:      holidays,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0445,
 				OtherDescription:   "Sawnee Schedule TU Summer Holiday Off-Peak",
 			}
@@ -60,12 +61,14 @@ func sawneePeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "On-Peak",
 						Hours:         peakHours,
 						Weekday:       true,
 						DollarsPerKWH: 0.335,
 						Description:   "Sawnee Schedule TU Summer On-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0445,
 				OtherDescription:   "Sawnee Schedule TU Summer Off-Peak",
 			}
@@ -75,6 +78,7 @@ func sawneePeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				Year:               year,
 				MonthStart:         time.January,
 				MonthEnd:           time.May,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0445,
 				OtherDescription:   "Sawnee Schedule TU Off-Peak",
 			}
@@ -82,6 +86,7 @@ func sawneePeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				Year:               year,
 				MonthStart:         time.September,
 				MonthEnd:           time.December,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0445,
 				OtherDescription:   "Sawnee Schedule TU Off-Peak",
 			}
@@ -105,6 +110,7 @@ func sawneePeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				MonthStart:         time.June,
 				MonthEnd:           time.August,
 				SpecificDates:      holidays,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0425,
 				OtherDescription:   "Sawnee Schedule CPPR Summer Holiday Off-Peak",
 			}
@@ -118,12 +124,14 @@ func sawneePeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "On-Peak",
 						Hours:         peakHours,
 						Weekday:       true,
 						DollarsPerKWH: 0.286,
 						Description:   "Sawnee Schedule CPPR Summer On-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0425,
 				OtherDescription:   "Sawnee Schedule CPPR Summer Off-Peak",
 			}
@@ -133,6 +141,7 @@ func sawneePeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				Year:               year,
 				MonthStart:         time.January,
 				MonthEnd:           time.May,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0425,
 				OtherDescription:   "Sawnee Schedule CPPR Off-Peak",
 			}
@@ -140,6 +149,7 @@ func sawneePeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				Year:               year,
 				MonthStart:         time.September,
 				MonthEnd:           time.December,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0425,
 				OtherDescription:   "Sawnee Schedule CPPR Off-Peak",
 			}
@@ -155,7 +165,7 @@ func sawneePeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 		// Export Credits under Net Metering Rider NEM-18
 		// Solar Photovoltaic: Flat $0.0379/kWh year-round
 		periods = append(periods, types.UtilityFeesPeriod{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, etLocation),
 				End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, etLocation),
 				LocationPtr: etLocation,

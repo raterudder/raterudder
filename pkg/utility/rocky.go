@@ -107,6 +107,7 @@ func rockyPeriods(plan string, options types.UtilityRateOptions, years []int) []
 				SeparateGenerationCredit: isNetBilling,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:                          "Off-Peak",
 						DollarsPerKWH:                 0.071296,
 						GenerationCreditDollarsPerKWH: genCreditSummer,
 						Description:                   "Utah Summer TOU Holiday Off-Peak",
@@ -124,6 +125,7 @@ func rockyPeriods(plan string, options types.UtilityRateOptions, years []int) []
 				SeparateGenerationCredit: isNetBilling,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:                          "On-Peak",
 						Hours:                         []types.UtilityHourPeriod{{HourStart: 18, HourEnd: 22}},
 						Weekday:                       true,
 						DollarsPerKWH:                 0.320834,
@@ -131,6 +133,7 @@ func rockyPeriods(plan string, options types.UtilityRateOptions, years []int) []
 						Description:                   "Utah Summer TOU On-Peak",
 					},
 				},
+				OtherName:                          "Off-Peak",
 				OtherDollarsPerKWH:                 0.071296,
 				OtherGenerationCreditDollarsPerKWH: genCreditSummer,
 				OtherDescription:                   "Utah Summer TOU Off-Peak",
@@ -145,6 +148,7 @@ func rockyPeriods(plan string, options types.UtilityRateOptions, years []int) []
 				SeparateGenerationCredit: isNetBilling,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:                          "Off-Peak",
 						DollarsPerKWH:                 0.063094,
 						GenerationCreditDollarsPerKWH: genCreditWinter,
 						Description:                   "Utah Winter TOU Holiday Off-Peak",
@@ -162,6 +166,7 @@ func rockyPeriods(plan string, options types.UtilityRateOptions, years []int) []
 				SeparateGenerationCredit: isNetBilling,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:                          "On-Peak",
 						Hours:                         []types.UtilityHourPeriod{{HourStart: 18, HourEnd: 22}},
 						Weekday:                       true,
 						DollarsPerKWH:                 0.283924,
@@ -169,6 +174,7 @@ func rockyPeriods(plan string, options types.UtilityRateOptions, years []int) []
 						Description:                   "Utah Winter TOU On-Peak",
 					},
 				},
+				OtherName:                          "Off-Peak",
 				OtherDollarsPerKWH:                 0.063094,
 				OtherGenerationCreditDollarsPerKWH: genCreditWinter,
 				OtherDescription:                   "Utah Winter TOU Off-Peak",

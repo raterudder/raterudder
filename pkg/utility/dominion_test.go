@@ -28,6 +28,10 @@ func TestDominion(t *testing.T) {
 		p, err = u.priceForTime(time.Date(2026, time.November, 15, 12, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.075454, p.DollarsPerKWH, 1e-6)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.NotEmpty(t, periods)
 	})
 
 	t.Run("Schedule 1G TOU Summer", func(t *testing.T) {
@@ -37,6 +41,12 @@ func TestDominion(t *testing.T) {
 			UtilityRate:     "dominion_1g",
 		})
 		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		if assert.NotEmpty(t, periods) {
+			assert.Equal(t, "On-Peak", periods[0].Name)
+		}
 
 		// Summer Weekday On-Peak (Monday July 13, 2026 at 4:00 PM) -> 3 PM to 6 PM
 		p, err := u.priceForTime(time.Date(2026, time.July, 13, 16, 0, 0, 0, etLocation))

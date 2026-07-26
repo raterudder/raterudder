@@ -50,6 +50,64 @@ func TestTOUUtility(t *testing.T) {
 		}
 	})
 
+	t.Run("GetPeriods returns all non-export non-grid-additional periods", func(t *testing.T) {
+		u := &genericTOU{
+			periods: []types.UtilityFeesPeriod{
+				{DollarsPerKWH: 0.10},
+				{DollarsPerKWH: 0.05, SeparateGenerationCredit: true},
+				{DollarsPerKWH: 0.02, GridAdditional: true},
+			},
+		}
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.Len(t, periods, 1)
+	})
+
+	t.Run("GetPeriods TOU returns named periods excluding separate generation credits", func(t *testing.T) {
+		u := &genericTOU{
+			periods: []types.UtilityFeesPeriod{
+				{TimePeriod: types.TimePeriod{Name: "On-Peak"}, DollarsPerKWH: 0.20},
+				{TimePeriod: types.TimePeriod{Name: "Off-Peak"}, DollarsPerKWH: 0.10},
+				{TimePeriod: types.TimePeriod{Name: "Export"}, DollarsPerKWH: 0.05, SeparateGenerationCredit: true},
+			},
+		}
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		if assert.Len(t, periods, 2) {
+			assert.Equal(t, "On-Peak", periods[0].Name)
+			assert.Equal(t, "Off-Peak", periods[1].Name)
+		}
+	})
+
+	t.Run("All TOU rates with defined hours have period names assigned", func(t *testing.T) {
+		ctx := context.Background()
+		for _, provider := range touUtilities {
+			for _, rate := range provider.Rates {
+				fees, err := rate.GetFees(types.UtilityRateOptions{})
+				require.NoError(t, err, "rate.GetFees failed for provider %s rate %s", provider.ID, rate.ID)
+				u := &genericTOU{
+					siteID:  "test-site",
+					periods: fees,
+					name:    rate.ID,
+				}
+				periods, err := u.GetPeriods(ctx)
+				require.NoError(t, err, "GetPeriods failed for provider %s rate %s", provider.ID, rate.ID)
+				for i, p := range periods {
+					hasSpecificHours := false
+					for _, h := range p.Hours {
+						if !(h.HourStart == 0 && h.HourEnd == 24 && (len(p.DaysOfTheWeek) == 0 || len(p.DaysOfTheWeek) == 7)) {
+							hasSpecificHours = true
+							break
+						}
+					}
+					if hasSpecificHours {
+						assert.NotEmpty(t, p.Name, "Provider %s rate %s period %d (hours %+v) has empty Name", provider.ID, rate.ID, i, p.Hours)
+					}
+				}
+			}
+		}
+	})
+
 	t.Run("GenerationCredit period sets GenerationCreditDollarsPerKWH", func(t *testing.T) {
 		u := &genericTOU{
 			name: "test",
@@ -95,13 +153,13 @@ func TestTOUUtility(t *testing.T) {
 		u := &genericTOU{
 			periods: []types.UtilityFeesPeriod{
 				{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
 						LocationPtr: ctLocation,
 					},
 					DollarsPerKWH: 0.10,
 				},
 				{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
 						LocationPtr: ctLocation,
 					},
 					DollarsPerKWH:  0.05,
@@ -124,13 +182,13 @@ func TestTOUUtility(t *testing.T) {
 		u := &genericTOU{
 			periods: []types.UtilityFeesPeriod{
 				{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
 						LocationPtr: ctLocation,
 					},
 					DollarsPerKWH: 0.10,
 				},
 				{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
 						LocationPtr: etLocation,
 					},
 					DollarsPerKWH:  0.05,
@@ -430,7 +488,7 @@ func TestTOUUtility(t *testing.T) {
 			name: "15min_test",
 			periods: []types.UtilityFeesPeriod{
 				{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
 						Hours: []types.UtilityHourPeriod{
 							{HourStart: 0, HourEnd: 8, MinuteEnd: 15},
 						},
@@ -440,7 +498,7 @@ func TestTOUUtility(t *testing.T) {
 					Description:   "Base Morning",
 				},
 				{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
 						Hours: []types.UtilityHourPeriod{
 							{HourStart: 8, MinuteStart: 15, HourEnd: 8, MinuteEnd: 45},
 						},
@@ -450,7 +508,7 @@ func TestTOUUtility(t *testing.T) {
 					Description:   "Peak 15-Min",
 				},
 				{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
 						Hours: []types.UtilityHourPeriod{
 							{HourStart: 8, MinuteStart: 45, HourEnd: 24},
 						},

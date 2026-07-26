@@ -247,3 +247,103 @@ func TestHandleListUtilities(t *testing.T) {
 		assert.True(t, mockStorage.AssertExpectations(t))
 	})
 }
+
+func TestHandleGetPeriods(t *testing.T) {
+	mockUMap := utility.NewMap(&mockStorage{})
+	mockE := ess.NewMap()
+
+	t.Run("Returns periods for TOU rate", func(t *testing.T) {
+		mockStorage := &mockStorage{}
+		mockStorage.On("GetSettings", mock.Anything, "test-site").Return(types.Settings{
+			UtilityProvider: "pg_e",
+			UtilityRate:     "pg_e_e_tou_c",
+		}, types.CurrentSettingsVersion, nil)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockE,
+			storage:    mockStorage,
+			controller: controller.NewController(),
+			bypassAuth: true,
+			singleSite: true,
+		}
+
+		req := httptest.NewRequest("GET", "/api/utility/periods", nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, "test-site"))
+		w := httptest.NewRecorder()
+
+		srv.handleGetPeriods(w, req)
+
+		resp := w.Result()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
+
+		var periods []types.TimePeriod
+		err := json.NewDecoder(w.Body).Decode(&periods)
+		require.NoError(t, err)
+		if assert.NotEmpty(t, periods) {
+			assert.NotEmpty(t, periods[0].Name)
+		}
+	})
+
+	t.Run("Returns null for non-TOU rate", func(t *testing.T) {
+		mockStorage := &mockStorage{}
+		mockStorage.On("GetSettings", mock.Anything, "test-site").Return(types.Settings{
+			UtilityProvider: "comed",
+			UtilityRate:     "comed_besh",
+		}, types.CurrentSettingsVersion, nil)
+
+		srv := &Server{
+			utilities:  utility.Configured(mockStorage),
+			ess:        mockE,
+			storage:    mockStorage,
+			controller: controller.NewController(),
+			bypassAuth: true,
+			singleSite: true,
+		}
+
+		req := httptest.NewRequest("GET", "/api/utility/periods", nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, "test-site"))
+		w := httptest.NewRecorder()
+
+		srv.handleGetPeriods(w, req)
+
+		resp := w.Result()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "null\n", w.Body.String())
+	})
+
+	t.Run("Returns periods for overridden utility rate via query params", func(t *testing.T) {
+		mockStorage := &mockStorage{}
+		mockStorage.On("GetSettings", mock.Anything, "test-site").Return(types.Settings{
+			UtilityProvider: "comed",
+			UtilityRate:     "comed_bes",
+		}, types.CurrentSettingsVersion, nil)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockE,
+			storage:    mockStorage,
+			controller: controller.NewController(),
+			bypassAuth: true,
+			singleSite: true,
+		}
+
+		req := httptest.NewRequest("GET", "/api/utility/periods?utilityProvider=pg_e&utilityRate=pg_e_e_tou_c", nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, "test-site"))
+		w := httptest.NewRecorder()
+
+		srv.handleGetPeriods(w, req)
+
+		resp := w.Result()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
+
+		var periods []types.TimePeriod
+		err := json.NewDecoder(w.Body).Decode(&periods)
+		require.NoError(t, err)
+		if assert.NotEmpty(t, periods) {
+			assert.NotEmpty(t, periods[0].Name)
+		}
+	})
+}

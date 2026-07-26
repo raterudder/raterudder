@@ -78,6 +78,7 @@ func psePeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 				MonthStart:         time.January,
 				MonthEnd:           time.March,
 				SpecificDates:      holidays,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.108197,
 				OtherDescription:   "PSE Schedule 307 Winter Holiday Off-Peak",
 			}
@@ -89,12 +90,14 @@ func psePeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "On-Peak",
 						Hours:         peakHoursWinter,
 						DaysOfTheWeek: []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday, time.Saturday},
 						DollarsPerKWH: 0.532445,
 						Description:   "PSE Schedule 307 Winter Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.108197,
 				OtherDescription:   "PSE Schedule 307 Winter Off-Peak",
 			}
@@ -105,6 +108,7 @@ func psePeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 				MonthStart:         time.October,
 				MonthEnd:           time.December,
 				SpecificDates:      holidays,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.108197,
 				OtherDescription:   "PSE Schedule 307 Winter Holiday Off-Peak",
 			}
@@ -116,12 +120,14 @@ func psePeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "On-Peak",
 						Hours:         peakHoursWinter,
 						DaysOfTheWeek: []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday, time.Saturday},
 						DollarsPerKWH: 0.532445,
 						Description:   "PSE Schedule 307 Winter Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.108197,
 				OtherDescription:   "PSE Schedule 307 Winter Off-Peak",
 			}
@@ -132,6 +138,7 @@ func psePeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 				MonthStart:         time.April,
 				MonthEnd:           time.September,
 				SpecificDates:      holidays,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.108197,
 				OtherDescription:   "PSE Schedule 307 Summer Holiday Off-Peak",
 			}
@@ -143,12 +150,14 @@ func psePeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "On-Peak",
 						Hours:         peakHoursSummer,
 						DaysOfTheWeek: []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday, time.Saturday},
 						DollarsPerKWH: 0.335186,
 						Description:   "PSE Schedule 307 Summer Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.108197,
 				OtherDescription:   "PSE Schedule 307 Summer Off-Peak",
 			}
@@ -178,8 +187,14 @@ func psePeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 				MonthEnd:      time.March,
 				SpecificDates: holidays,
 				HoursAndDays: []touSimplifiedHoursAndDays{
-					{Hours: superOffPeakHours, DollarsPerKWH: 0.075542, Description: "PSE Schedule 327 Winter Holiday Super Off-Peak"},
+					{
+						Name:          "Super Off-Peak",
+						Hours:         superOffPeakHours,
+						DollarsPerKWH: 0.075542,
+						Description:   "PSE Schedule 327 Winter Holiday Super Off-Peak",
+					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.127088,
 				OtherDescription:   "PSE Schedule 327 Winter Holiday Off-Peak",
 			}
@@ -190,9 +205,21 @@ func psePeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 				SpecificDates:    holidays,
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
-					{Hours: superOffPeakHours, DollarsPerKWH: 0.075542, Description: "PSE Schedule 327 Winter Super Off-Peak"},
-					{Hours: peakHours, DaysOfTheWeek: []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday, time.Saturday}, DollarsPerKWH: 0.503575, Description: "PSE Schedule 327 Winter Peak"},
+					{
+						Name:          "Super Off-Peak",
+						Hours:         superOffPeakHours,
+						DollarsPerKWH: 0.075542,
+						Description:   "PSE Schedule 327 Winter Super Off-Peak",
+					},
+					{
+						Name:          "On-Peak",
+						Hours:         peakHours,
+						DaysOfTheWeek: []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday, time.Saturday},
+						DollarsPerKWH: 0.503575,
+						Description:   "PSE Schedule 327 Winter Peak",
+					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.127088,
 				OtherDescription:   "PSE Schedule 327 Winter Off-Peak",
 			}
@@ -204,8 +231,14 @@ func psePeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 				MonthEnd:      time.December,
 				SpecificDates: holidays,
 				HoursAndDays: []touSimplifiedHoursAndDays{
-					{Hours: superOffPeakHours, DollarsPerKWH: 0.075542, Description: "PSE Schedule 327 Winter Holiday Super Off-Peak"},
+					{
+						Name:          "Super Off-Peak",
+						Hours:         superOffPeakHours,
+						DollarsPerKWH: 0.075542,
+						Description:   "PSE Schedule 327 Winter Holiday Super Off-Peak",
+					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.127088,
 				OtherDescription:   "PSE Schedule 327 Winter Holiday Off-Peak",
 			}
@@ -216,9 +249,21 @@ func psePeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 				SpecificDates:    holidays,
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
-					{Hours: superOffPeakHours, DollarsPerKWH: 0.075542, Description: "PSE Schedule 327 Winter Super Off-Peak"},
-					{Hours: peakHours, DaysOfTheWeek: []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday, time.Saturday}, DollarsPerKWH: 0.503575, Description: "PSE Schedule 327 Winter Peak"},
+					{
+						Name:          "Super Off-Peak",
+						Hours:         superOffPeakHours,
+						DollarsPerKWH: 0.075542,
+						Description:   "PSE Schedule 327 Winter Super Off-Peak",
+					},
+					{
+						Name:          "On-Peak",
+						Hours:         peakHours,
+						DaysOfTheWeek: []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday, time.Saturday},
+						DollarsPerKWH: 0.503575,
+						Description:   "PSE Schedule 327 Winter Peak",
+					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.127088,
 				OtherDescription:   "PSE Schedule 327 Winter Off-Peak",
 			}
@@ -230,8 +275,14 @@ func psePeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 				MonthEnd:      time.September,
 				SpecificDates: holidays,
 				HoursAndDays: []touSimplifiedHoursAndDays{
-					{Hours: superOffPeakHours, DollarsPerKWH: 0.075542, Description: "PSE Schedule 327 Summer Holiday Super Off-Peak"},
+					{
+						Name:          "Super Off-Peak",
+						Hours:         superOffPeakHours,
+						DollarsPerKWH: 0.075542,
+						Description:   "PSE Schedule 327 Summer Holiday Super Off-Peak",
+					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.122055,
 				OtherDescription:   "PSE Schedule 327 Summer Holiday Off-Peak",
 			}
@@ -242,9 +293,21 @@ func psePeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 				SpecificDates:    holidays,
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
-					{Hours: superOffPeakHours, DollarsPerKWH: 0.075542, Description: "PSE Schedule 327 Summer Super Off-Peak"},
-					{Hours: peakHours, DaysOfTheWeek: []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday, time.Saturday}, DollarsPerKWH: 0.271839, Description: "PSE Schedule 327 Summer Peak"},
+					{
+						Name:          "Super Off-Peak",
+						Hours:         superOffPeakHours,
+						DollarsPerKWH: 0.075542,
+						Description:   "PSE Schedule 327 Summer Super Off-Peak",
+					},
+					{
+						Name:          "On-Peak",
+						Hours:         peakHours,
+						DaysOfTheWeek: []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday, time.Saturday},
+						DollarsPerKWH: 0.271839,
+						Description:   "PSE Schedule 327 Summer Peak",
+					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.122055,
 				OtherDescription:   "PSE Schedule 327 Summer Off-Peak",
 			}

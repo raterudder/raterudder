@@ -48,6 +48,7 @@ func portlandGeneralPeriods(years []int) []types.UtilityFeesPeriod {
 			SpecificDates: holidays,
 			HoursAndDays: []touSimplifiedHoursAndDays{
 				{
+					Name: "Off-Peak",
 					// All day (empty Hours means all day)
 					DollarsPerKWH: 9.01 / 100.0,
 					Description:   "Off-Peak (Holiday)",
@@ -64,6 +65,7 @@ func portlandGeneralPeriods(years []int) []types.UtilityFeesPeriod {
 			SpecificDatesNot: true,
 			HoursAndDays: []touSimplifiedHoursAndDays{
 				{
+					Name: "On-Peak",
 					// On-Peak: 5-9 p.m. Monday-Friday (17:00 to 21:00)
 					Hours: []types.UtilityHourPeriod{
 						{HourStart: 17, HourEnd: 21},
@@ -73,6 +75,7 @@ func portlandGeneralPeriods(years []int) []types.UtilityFeesPeriod {
 					Description:   "On-Peak",
 				},
 				{
+					Name: "Mid-Peak",
 					// Mid-Peak: 7 a.m. to 5 p.m. Monday-Friday (07:00 to 17:00)
 					Hours: []types.UtilityHourPeriod{
 						{HourStart: 7, HourEnd: 17},
@@ -82,12 +85,14 @@ func portlandGeneralPeriods(years []int) []types.UtilityFeesPeriod {
 					Description:   "Mid-Peak",
 				},
 				{
+					Name: "Off-Peak",
 					// Weekend: Saturday and Sunday all-day Off-Peak
 					Weekend:       true,
 					DollarsPerKWH: 9.01 / 100.0,
 					Description:   "Off-Peak (Weekend)",
 				},
 			},
+			OtherName:          "Off-Peak",
 			OtherDollarsPerKWH: 9.01 / 100.0,
 			OtherDescription:   "Off-Peak",
 		}

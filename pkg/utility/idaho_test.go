@@ -39,6 +39,10 @@ func TestIdahoUtility(t *testing.T) {
 			// Non-summer export credit: $0.029019
 			assert.InDelta(t, 0.029019, p.GenerationCreditDollarsPerKWH, 1e-6)
 		}
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.NotEmpty(t, periods)
 	})
 
 	t.Run("Schedule 6 TOU Rates", func(t *testing.T) {
@@ -51,6 +55,15 @@ func TestIdahoUtility(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		names := make(map[string]bool)
+		for _, p := range periods {
+			names[p.Name] = true
+		}
+		assert.True(t, names["On-Peak"])
+		assert.True(t, names["Off-Peak"])
 
 		// --- SUMMER PERIODS (June 1 - Sept 30) ---
 		summerMon := time.Date(2026, time.June, 15, 0, 0, 0, 0, mtLocation)

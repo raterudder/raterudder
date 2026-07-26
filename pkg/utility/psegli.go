@@ -45,7 +45,7 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 
 		switch plan {
 		case "psegli_194":
-			// Rate 194: Residential, Time-of-Day, Off-Peak
+			// Rate 194: Residential, Time-of-Day
 			// Summer (June 1 - Sept 30): Peak weekdays 3 PM - 7 PM ($0.2217), Off-Peak all other hours ($0.1093)
 			// Winter (Oct 1 - May 31): Peak weekdays 3 PM - 7 PM ($0.1885), Off-Peak all other hours ($0.0929)
 			peakHours := []types.UtilityHourPeriod{{HourStart: 15, HourEnd: 19}}
@@ -55,6 +55,7 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				MonthStart:         time.June,
 				MonthEnd:           time.September,
 				SpecificDates:      holidays,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.1093,
 				OtherDescription:   "PSEGLI Rate 194 Summer Holiday Off-Peak",
 			}
@@ -66,12 +67,14 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "On-Peak",
 						Hours:         peakHours,
 						Weekday:       true,
 						DollarsPerKWH: 0.2217,
 						Description:   "PSEGLI Rate 194 Summer Weekday On-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.1093,
 				OtherDescription:   "PSEGLI Rate 194 Summer Off-Peak",
 			}
@@ -81,6 +84,7 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				MonthStart:         time.January,
 				MonthEnd:           time.May,
 				SpecificDates:      holidays,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0929,
 				OtherDescription:   "PSEGLI Rate 194 Winter Holiday Off-Peak",
 			}
@@ -92,12 +96,14 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "On-Peak",
 						Hours:         peakHours,
 						Weekday:       true,
 						DollarsPerKWH: 0.1885,
 						Description:   "PSEGLI Rate 194 Winter Weekday On-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0929,
 				OtherDescription:   "PSEGLI Rate 194 Winter Off-Peak",
 			}
@@ -107,6 +113,7 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				MonthStart:         time.October,
 				MonthEnd:           time.December,
 				SpecificDates:      holidays,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0929,
 				OtherDescription:   "PSEGLI Rate 194 Winter Holiday Off-Peak",
 			}
@@ -118,12 +125,14 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "On-Peak",
 						Hours:         peakHours,
 						Weekday:       true,
 						DollarsPerKWH: 0.1885,
 						Description:   "PSEGLI Rate 194 Winter Weekday On-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0929,
 				OtherDescription:   "PSEGLI Rate 194 Winter Off-Peak",
 			}
@@ -148,11 +157,13 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				SpecificDates: holidays,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "Super Off-Peak",
 						Hours:         superOffPeakHours,
 						DollarsPerKWH: 0.0452,
 						Description:   "PSEGLI Rate 195 Summer Holiday Super Off-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.1388,
 				OtherDescription:   "PSEGLI Rate 195 Summer Holiday Off-Peak",
 			}
@@ -164,17 +175,20 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "Super Off-Peak",
 						Hours:         superOffPeakHours,
 						DollarsPerKWH: 0.0452,
 						Description:   "PSEGLI Rate 195 Summer Super Off-Peak",
 					},
 					{
+						Name:          "On-Peak",
 						Hours:         peakHours,
 						Weekday:       true,
 						DollarsPerKWH: 0.2979,
 						Description:   "PSEGLI Rate 195 Summer Weekday On-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.1388,
 				OtherDescription:   "PSEGLI Rate 195 Summer Off-Peak",
 			}
@@ -186,11 +200,13 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				SpecificDates: holidays,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "Super Off-Peak",
 						Hours:         superOffPeakHours,
 						DollarsPerKWH: 0.0450,
 						Description:   "PSEGLI Rate 195 Winter Holiday Super Off-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0929,
 				OtherDescription:   "PSEGLI Rate 195 Winter Holiday Off-Peak",
 			}
@@ -202,17 +218,20 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "Super Off-Peak",
 						Hours:         superOffPeakHours,
 						DollarsPerKWH: 0.0450,
 						Description:   "PSEGLI Rate 195 Winter Super Off-Peak",
 					},
 					{
+						Name:          "On-Peak",
 						Hours:         peakHours,
 						Weekday:       true,
 						DollarsPerKWH: 0.2440,
 						Description:   "PSEGLI Rate 195 Winter Weekday On-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0929,
 				OtherDescription:   "PSEGLI Rate 195 Winter Off-Peak",
 			}
@@ -224,11 +243,13 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				SpecificDates: holidays,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "Super Off-Peak",
 						Hours:         superOffPeakHours,
 						DollarsPerKWH: 0.0450,
 						Description:   "PSEGLI Rate 195 Winter Holiday Super Off-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0929,
 				OtherDescription:   "PSEGLI Rate 195 Winter Holiday Off-Peak",
 			}
@@ -240,17 +261,20 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "Super Off-Peak",
 						Hours:         superOffPeakHours,
 						DollarsPerKWH: 0.0450,
 						Description:   "PSEGLI Rate 195 Winter Super Off-Peak",
 					},
 					{
+						Name:          "On-Peak",
 						Hours:         peakHours,
 						Weekday:       true,
 						DollarsPerKWH: 0.2440,
 						Description:   "PSEGLI Rate 195 Winter Weekday On-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0929,
 				OtherDescription:   "PSEGLI Rate 195 Winter Off-Peak",
 			}
@@ -276,8 +300,14 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				MonthEnd:      time.September,
 				SpecificDates: holidays,
 				HoursAndDays: []touSimplifiedHoursAndDays{
-					{Hours: superOffPeakHours, DollarsPerKWH: 0.0694, Description: "PSEGLI Rate 190 Summer Holiday Super Off-Peak"},
+					{
+						Name:          "Super Off-Peak",
+						Hours:         superOffPeakHours,
+						DollarsPerKWH: 0.0694,
+						Description:   "PSEGLI Rate 190 Summer Holiday Super Off-Peak",
+					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.1157,
 				OtherDescription:   "PSEGLI Rate 190 Summer Holiday Off-Peak",
 			}
@@ -288,9 +318,21 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				SpecificDates:    holidays,
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
-					{Hours: superOffPeakHours, DollarsPerKWH: 0.0694, Description: "PSEGLI Rate 190 Summer Super Off-Peak"},
-					{Hours: peakHours, Weekday: true, DollarsPerKWH: 0.2697, Description: "PSEGLI Rate 190 Summer Weekday On-Peak"},
+					{
+						Name:          "Super Off-Peak",
+						Hours:         superOffPeakHours,
+						DollarsPerKWH: 0.0694,
+						Description:   "PSEGLI Rate 190 Summer Super Off-Peak",
+					},
+					{
+						Name:          "On-Peak",
+						Hours:         peakHours,
+						Weekday:       true,
+						DollarsPerKWH: 0.2697,
+						Description:   "PSEGLI Rate 190 Summer Weekday On-Peak",
+					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.1157,
 				OtherDescription:   "PSEGLI Rate 190 Summer Off-Peak",
 			}
@@ -310,8 +352,14 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 						MonthEnd:      s.mEnd,
 						SpecificDates: holidays,
 						HoursAndDays: []touSimplifiedHoursAndDays{
-							{Hours: superOffPeakHours, DollarsPerKWH: 0.0694, Description: "PSEGLI Rate 190 Shoulder Holiday Super Off-Peak"},
+							{
+								Name:          "Super Off-Peak",
+								Hours:         superOffPeakHours,
+								DollarsPerKWH: 0.0694,
+								Description:   "PSEGLI Rate 190 Shoulder Holiday Super Off-Peak",
+							},
 						},
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: 0.1157,
 						OtherDescription:   "PSEGLI Rate 190 Shoulder Holiday Off-Peak",
 					},
@@ -322,9 +370,21 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 						SpecificDates:    holidays,
 						SpecificDatesNot: true,
 						HoursAndDays: []touSimplifiedHoursAndDays{
-							{Hours: superOffPeakHours, DollarsPerKWH: 0.0694, Description: "PSEGLI Rate 190 Shoulder Super Off-Peak"},
-							{Hours: peakHours, Weekday: true, DollarsPerKWH: 0.1698, Description: "PSEGLI Rate 190 Shoulder Weekday On-Peak"},
+							{
+								Name:          "Super Off-Peak",
+								Hours:         superOffPeakHours,
+								DollarsPerKWH: 0.0694,
+								Description:   "PSEGLI Rate 190 Shoulder Super Off-Peak",
+							},
+							{
+								Name:          "On-Peak",
+								Hours:         peakHours,
+								Weekday:       true,
+								DollarsPerKWH: 0.1698,
+								Description:   "PSEGLI Rate 190 Shoulder Weekday On-Peak",
+							},
 						},
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: 0.1157,
 						OtherDescription:   "PSEGLI Rate 190 Shoulder Off-Peak",
 					},
@@ -346,8 +406,14 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 						MonthEnd:      w.mEnd,
 						SpecificDates: holidays,
 						HoursAndDays: []touSimplifiedHoursAndDays{
-							{Hours: superOffPeakHours, DollarsPerKWH: 0.0694, Description: "PSEGLI Rate 190 Winter Holiday Super Off-Peak"},
+							{
+								Name:          "Super Off-Peak",
+								Hours:         superOffPeakHours,
+								DollarsPerKWH: 0.0694,
+								Description:   "PSEGLI Rate 190 Winter Holiday Super Off-Peak",
+							},
 						},
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: 0.1157,
 						OtherDescription:   "PSEGLI Rate 190 Winter Holiday Off-Peak",
 					},
@@ -358,9 +424,21 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 						SpecificDates:    holidays,
 						SpecificDatesNot: true,
 						HoursAndDays: []touSimplifiedHoursAndDays{
-							{Hours: superOffPeakHours, DollarsPerKWH: 0.0694, Description: "PSEGLI Rate 190 Winter Super Off-Peak"},
-							{Hours: peakHours, Weekday: true, DollarsPerKWH: 0.2222, Description: "PSEGLI Rate 190 Winter Weekday On-Peak"},
+							{
+								Name:          "Super Off-Peak",
+								Hours:         superOffPeakHours,
+								DollarsPerKWH: 0.0694,
+								Description:   "PSEGLI Rate 190 Winter Super Off-Peak",
+							},
+							{
+								Name:          "On-Peak",
+								Hours:         peakHours,
+								Weekday:       true,
+								DollarsPerKWH: 0.2222,
+								Description:   "PSEGLI Rate 190 Winter Weekday On-Peak",
+							},
 						},
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: 0.1157,
 						OtherDescription:   "PSEGLI Rate 190 Winter Off-Peak",
 					},
@@ -386,8 +464,14 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				MonthEnd:      time.September,
 				SpecificDates: holidays,
 				HoursAndDays: []touSimplifiedHoursAndDays{
-					{Hours: superOffPeakHours, DollarsPerKWH: 0.0694, Description: "PSEGLI Rate 191 Summer Holiday Super Off-Peak"},
+					{
+						Name:          "Super Off-Peak",
+						Hours:         superOffPeakHours,
+						DollarsPerKWH: 0.0694,
+						Description:   "PSEGLI Rate 191 Summer Holiday Super Off-Peak",
+					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.1157,
 				OtherDescription:   "PSEGLI Rate 191 Summer Holiday Off-Peak",
 			}
@@ -398,9 +482,21 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				SpecificDates:    holidays,
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
-					{Hours: superOffPeakHours, DollarsPerKWH: 0.0694, Description: "PSEGLI Rate 191 Summer Super Off-Peak"},
-					{Hours: peakHours, Weekday: true, DollarsPerKWH: 0.2324, Description: "PSEGLI Rate 191 Summer Weekday On-Peak"},
+					{
+						Name:          "Super Off-Peak",
+						Hours:         superOffPeakHours,
+						DollarsPerKWH: 0.0694,
+						Description:   "PSEGLI Rate 191 Summer Super Off-Peak",
+					},
+					{
+						Name:          "On-Peak",
+						Hours:         peakHours,
+						Weekday:       true,
+						DollarsPerKWH: 0.2324,
+						Description:   "PSEGLI Rate 191 Summer Weekday On-Peak",
+					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.1157,
 				OtherDescription:   "PSEGLI Rate 191 Summer Off-Peak",
 			}
@@ -420,8 +516,14 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 						MonthEnd:      s.mEnd,
 						SpecificDates: holidays,
 						HoursAndDays: []touSimplifiedHoursAndDays{
-							{Hours: superOffPeakHours, DollarsPerKWH: 0.0694, Description: "PSEGLI Rate 191 Shoulder Holiday Super Off-Peak"},
+							{
+								Name:          "Super Off-Peak",
+								Hours:         superOffPeakHours,
+								DollarsPerKWH: 0.0694,
+								Description:   "PSEGLI Rate 191 Shoulder Holiday Super Off-Peak",
+							},
 						},
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: 0.1157,
 						OtherDescription:   "PSEGLI Rate 191 Shoulder Holiday Off-Peak",
 					},
@@ -432,9 +534,21 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 						SpecificDates:    holidays,
 						SpecificDatesNot: true,
 						HoursAndDays: []touSimplifiedHoursAndDays{
-							{Hours: superOffPeakHours, DollarsPerKWH: 0.0694, Description: "PSEGLI Rate 191 Shoulder Super Off-Peak"},
-							{Hours: peakHours, Weekday: true, DollarsPerKWH: 0.1466, Description: "PSEGLI Rate 191 Shoulder Weekday On-Peak"},
+							{
+								Name:          "Super Off-Peak",
+								Hours:         superOffPeakHours,
+								DollarsPerKWH: 0.0694,
+								Description:   "PSEGLI Rate 191 Shoulder Super Off-Peak",
+							},
+							{
+								Name:          "On-Peak",
+								Hours:         peakHours,
+								Weekday:       true,
+								DollarsPerKWH: 0.1466,
+								Description:   "PSEGLI Rate 191 Shoulder Weekday On-Peak",
+							},
 						},
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: 0.1157,
 						OtherDescription:   "PSEGLI Rate 191 Shoulder Off-Peak",
 					},
@@ -456,8 +570,14 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 						MonthEnd:      w.mEnd,
 						SpecificDates: holidays,
 						HoursAndDays: []touSimplifiedHoursAndDays{
-							{Hours: superOffPeakHours, DollarsPerKWH: 0.0694, Description: "PSEGLI Rate 191 Winter Holiday Super Off-Peak"},
+							{
+								Name:          "Super Off-Peak",
+								Hours:         superOffPeakHours,
+								DollarsPerKWH: 0.0694,
+								Description:   "PSEGLI Rate 191 Winter Holiday Super Off-Peak",
+							},
 						},
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: 0.1157,
 						OtherDescription:   "PSEGLI Rate 191 Winter Holiday Off-Peak",
 					},
@@ -468,9 +588,21 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 						SpecificDates:    holidays,
 						SpecificDatesNot: true,
 						HoursAndDays: []touSimplifiedHoursAndDays{
-							{Hours: superOffPeakHours, DollarsPerKWH: 0.0694, Description: "PSEGLI Rate 191 Winter Super Off-Peak"},
-							{Hours: peakHours, Weekday: true, DollarsPerKWH: 0.1862, Description: "PSEGLI Rate 191 Winter Weekday On-Peak"},
+							{
+								Name:          "Super Off-Peak",
+								Hours:         superOffPeakHours,
+								DollarsPerKWH: 0.0694,
+								Description:   "PSEGLI Rate 191 Winter Super Off-Peak",
+							},
+							{
+								Name:          "On-Peak",
+								Hours:         peakHours,
+								Weekday:       true,
+								DollarsPerKWH: 0.1862,
+								Description:   "PSEGLI Rate 191 Winter Weekday On-Peak",
+							},
 						},
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: 0.1157,
 						OtherDescription:   "PSEGLI Rate 191 Winter Off-Peak",
 					},
@@ -496,8 +628,14 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				MonthEnd:      time.September,
 				SpecificDates: holidays,
 				HoursAndDays: []touSimplifiedHoursAndDays{
-					{Hours: superOffPeakHours, DollarsPerKWH: 0.0694, Description: "PSEGLI Rate 192 Summer Holiday Super Off-Peak"},
+					{
+						Name:          "Super Off-Peak",
+						Hours:         superOffPeakHours,
+						DollarsPerKWH: 0.0694,
+						Description:   "PSEGLI Rate 192 Summer Holiday Super Off-Peak",
+					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.1157,
 				OtherDescription:   "PSEGLI Rate 192 Summer Holiday Off-Peak",
 			}
@@ -508,9 +646,21 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				SpecificDates:    holidays,
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
-					{Hours: superOffPeakHours, DollarsPerKWH: 0.0694, Description: "PSEGLI Rate 192 Summer Super Off-Peak"},
-					{Hours: peakHours, Weekday: true, DollarsPerKWH: 0.2336, Description: "PSEGLI Rate 192 Summer Weekday On-Peak"},
+					{
+						Name:          "Super Off-Peak",
+						Hours:         superOffPeakHours,
+						DollarsPerKWH: 0.0694,
+						Description:   "PSEGLI Rate 192 Summer Super Off-Peak",
+					},
+					{
+						Name:          "On-Peak",
+						Hours:         peakHours,
+						Weekday:       true,
+						DollarsPerKWH: 0.2336,
+						Description:   "PSEGLI Rate 192 Summer Weekday On-Peak",
+					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.1157,
 				OtherDescription:   "PSEGLI Rate 192 Summer Off-Peak",
 			}
@@ -530,8 +680,14 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 						MonthEnd:      s.mEnd,
 						SpecificDates: holidays,
 						HoursAndDays: []touSimplifiedHoursAndDays{
-							{Hours: superOffPeakHours, DollarsPerKWH: 0.0694, Description: "PSEGLI Rate 192 Shoulder Holiday Super Off-Peak"},
+							{
+								Name:          "Super Off-Peak",
+								Hours:         superOffPeakHours,
+								DollarsPerKWH: 0.0694,
+								Description:   "PSEGLI Rate 192 Shoulder Holiday Super Off-Peak",
+							},
 						},
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: 0.1157,
 						OtherDescription:   "PSEGLI Rate 192 Shoulder Holiday Off-Peak",
 					},
@@ -542,9 +698,21 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 						SpecificDates:    holidays,
 						SpecificDatesNot: true,
 						HoursAndDays: []touSimplifiedHoursAndDays{
-							{Hours: superOffPeakHours, DollarsPerKWH: 0.0694, Description: "PSEGLI Rate 192 Shoulder Super Off-Peak"},
-							{Hours: peakHours, Weekday: true, DollarsPerKWH: 0.1578, Description: "PSEGLI Rate 192 Shoulder Weekday On-Peak"},
+							{
+								Name:          "Super Off-Peak",
+								Hours:         superOffPeakHours,
+								DollarsPerKWH: 0.0694,
+								Description:   "PSEGLI Rate 192 Shoulder Super Off-Peak",
+							},
+							{
+								Name:          "On-Peak",
+								Hours:         peakHours,
+								Weekday:       true,
+								DollarsPerKWH: 0.1578,
+								Description:   "PSEGLI Rate 192 Shoulder Weekday On-Peak",
+							},
 						},
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: 0.1157,
 						OtherDescription:   "PSEGLI Rate 192 Shoulder Off-Peak",
 					},
@@ -566,8 +734,14 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 						MonthEnd:      w.mEnd,
 						SpecificDates: holidays,
 						HoursAndDays: []touSimplifiedHoursAndDays{
-							{Hours: superOffPeakHours, DollarsPerKWH: 0.0694, Description: "PSEGLI Rate 192 Winter Holiday Super Off-Peak"},
+							{
+								Name:          "Super Off-Peak",
+								Hours:         superOffPeakHours,
+								DollarsPerKWH: 0.0694,
+								Description:   "PSEGLI Rate 192 Winter Holiday Super Off-Peak",
+							},
 						},
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: 0.1157,
 						OtherDescription:   "PSEGLI Rate 192 Winter Holiday Off-Peak",
 					},
@@ -578,9 +752,21 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 						SpecificDates:    holidays,
 						SpecificDatesNot: true,
 						HoursAndDays: []touSimplifiedHoursAndDays{
-							{Hours: superOffPeakHours, DollarsPerKWH: 0.0694, Description: "PSEGLI Rate 192 Winter Super Off-Peak"},
-							{Hours: peakHours, Weekday: true, DollarsPerKWH: 0.1972, Description: "PSEGLI Rate 192 Winter Weekday On-Peak"},
+							{
+								Name:          "Super Off-Peak",
+								Hours:         superOffPeakHours,
+								DollarsPerKWH: 0.0694,
+								Description:   "PSEGLI Rate 192 Winter Super Off-Peak",
+							},
+							{
+								Name:          "On-Peak",
+								Hours:         peakHours,
+								Weekday:       true,
+								DollarsPerKWH: 0.1972,
+								Description:   "PSEGLI Rate 192 Winter Weekday On-Peak",
+							},
 						},
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: 0.1157,
 						OtherDescription:   "PSEGLI Rate 192 Winter Off-Peak",
 					},
@@ -604,11 +790,13 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				MonthEnd:   time.September,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "Super Off-Peak",
 						Hours:         nightHours,
 						DollarsPerKWH: 0.0694,
 						Description:   "PSEGLI Rate 193 Summer Night",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.1438,
 				OtherDescription:   "PSEGLI Rate 193 Summer Day",
 			}
@@ -620,11 +808,13 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				MonthEnd:   time.May,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "Super Off-Peak",
 						Hours:         nightHours,
 						DollarsPerKWH: 0.0694,
 						Description:   "PSEGLI Rate 193 Winter Night",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.1173,
 				OtherDescription:   "PSEGLI Rate 193 Winter Day",
 			}
@@ -636,11 +826,13 @@ func psegliPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				MonthEnd:   time.December,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "Super Off-Peak",
 						Hours:         nightHours,
 						DollarsPerKWH: 0.0694,
 						Description:   "PSEGLI Rate 193 Winter Night",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.1173,
 				OtherDescription:   "PSEGLI Rate 193 Winter Day",
 			}

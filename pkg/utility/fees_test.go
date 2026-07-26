@@ -90,7 +90,7 @@ func TestSiteFees(t *testing.T) {
 	t.Run("applyFees logic", func(t *testing.T) {
 		periods := []types.UtilityFeesPeriod{
 			{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Hours: []types.UtilityHourPeriod{
 						{HourStart: 14, HourEnd: 18},
 					},
@@ -99,7 +99,7 @@ func TestSiteFees(t *testing.T) {
 				Description:   "Peak Fee",
 			},
 			{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					// End is exclusive: summer ends at the start of Sept 1, so Aug 31 is the last covered day.
 					Start: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 					End:   time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
@@ -163,7 +163,7 @@ func TestSiteFees(t *testing.T) {
 			boundedS := &SiteFees{
 				periods: []types.UtilityFeesPeriod{
 					{
-						UtilityPeriod: types.UtilityPeriod{
+						TimePeriod: types.TimePeriod{
 							Start: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 							End:   endTime, // exclusive
 						},
@@ -247,7 +247,7 @@ func TestSiteFees(t *testing.T) {
 			weekdayS := &SiteFees{
 				periods: []types.UtilityFeesPeriod{
 					{
-						UtilityPeriod: types.UtilityPeriod{
+						TimePeriod: types.TimePeriod{
 							DaysOfTheWeek: []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday},
 							LocationPtr:   ctLocation,
 						},
@@ -274,7 +274,7 @@ func TestSiteFees(t *testing.T) {
 			s := &SiteFees{
 				periods: []types.UtilityFeesPeriod{
 					{
-						UtilityPeriod: types.UtilityPeriod{
+						TimePeriod: types.TimePeriod{
 							LocationPtr:   ctLocation,
 							DaysOfTheWeek: []time.Weekday{time.Monday, time.Wednesday, time.Friday},
 							Hours: []types.UtilityHourPeriod{
@@ -285,7 +285,7 @@ func TestSiteFees(t *testing.T) {
 						Description:   "MWF Peak",
 					},
 					{
-						UtilityPeriod: types.UtilityPeriod{
+						TimePeriod: types.TimePeriod{
 							LocationPtr:   ctLocation,
 							DaysOfTheWeek: []time.Weekday{time.Saturday, time.Sunday},
 						},

@@ -453,7 +453,7 @@ func TestHandleForecast(t *testing.T) {
 		vppInfo := types.UtilityVPPInfo{
 			Mandatory: []types.UtilityVPPPeriod{
 				{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
 						Start: now.Add(2 * time.Hour),
 						End:   now.Add(5 * time.Hour),
 					},

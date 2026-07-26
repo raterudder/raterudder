@@ -19,6 +19,15 @@ func TestPortlandGeneralElectric(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("Weekday On-Peak", func(t *testing.T) {
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		names := make(map[string]bool)
+		for _, p := range periods {
+			names[p.Name] = true
+		}
+		assert.True(t, names["On-Peak"])
+		assert.True(t, names["Off-Peak"])
+
 		p, err := u.priceForTime(time.Date(2026, time.May, 18, 18, 0, 0, 0, ptLocation)) // Monday 6:00 PM
 		require.NoError(t, err)
 		assert.Equal(t, 0.4365, p.DollarsPerKWH)

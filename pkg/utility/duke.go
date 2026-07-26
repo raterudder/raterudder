@@ -131,6 +131,7 @@ func buildDukeTOUPeriods(year int, holidays []string, onPeakRate, offPeakRate, d
 			SpecificDates: holidays,
 			HoursAndDays: []touSimplifiedHoursAndDays{
 				{
+					Name: "Discount",
 					// Discount period applies to holidays too
 					Hours: []types.UtilityHourPeriod{
 						{HourStart: 1, HourEnd: 6},
@@ -139,6 +140,7 @@ func buildDukeTOUPeriods(year int, holidays []string, onPeakRate, offPeakRate, d
 					Description:   "Summer Holiday Discount",
 				},
 			},
+			OtherName:          "Off-Peak",
 			OtherDollarsPerKWH: offPeakRate,
 			OtherDescription:   "Summer Holiday Off-Peak",
 		},
@@ -150,6 +152,7 @@ func buildDukeTOUPeriods(year int, holidays []string, onPeakRate, offPeakRate, d
 			SpecificDatesNot: true,
 			HoursAndDays: []touSimplifiedHoursAndDays{
 				{
+					Name: "On-Peak",
 					Hours: []types.UtilityHourPeriod{
 						{HourStart: 18, HourEnd: 21},
 					},
@@ -158,6 +161,7 @@ func buildDukeTOUPeriods(year int, holidays []string, onPeakRate, offPeakRate, d
 					Description:   "Summer Weekday On-Peak",
 				},
 				{
+					Name: "Discount",
 					Hours: []types.UtilityHourPeriod{
 						{HourStart: 1, HourEnd: 6},
 					},
@@ -165,6 +169,7 @@ func buildDukeTOUPeriods(year int, holidays []string, onPeakRate, offPeakRate, d
 					Description:   "Summer Discount",
 				},
 			},
+			OtherName:          "Off-Peak",
 			OtherDollarsPerKWH: offPeakRate,
 			OtherDescription:   "Summer Off-Peak",
 		},
@@ -177,6 +182,7 @@ func buildDukeTOUPeriods(year int, holidays []string, onPeakRate, offPeakRate, d
 			SpecificDates: holidays,
 			HoursAndDays: []touSimplifiedHoursAndDays{
 				{
+					Name: "Discount",
 					Hours: []types.UtilityHourPeriod{
 						{HourStart: 1, HourEnd: 3},
 						{HourStart: 11, HourEnd: 16},
@@ -185,6 +191,7 @@ func buildDukeTOUPeriods(year int, holidays []string, onPeakRate, offPeakRate, d
 					Description:   "Winter Holiday Discount",
 				},
 			},
+			OtherName:          "Off-Peak",
 			OtherDollarsPerKWH: offPeakRate,
 			OtherDescription:   "Winter Holiday Off-Peak",
 		},
@@ -196,6 +203,7 @@ func buildDukeTOUPeriods(year int, holidays []string, onPeakRate, offPeakRate, d
 			SpecificDatesNot: true,
 			HoursAndDays: []touSimplifiedHoursAndDays{
 				{
+					Name: "On-Peak",
 					Hours: []types.UtilityHourPeriod{
 						{HourStart: 6, HourEnd: 9},
 					},
@@ -204,6 +212,7 @@ func buildDukeTOUPeriods(year int, holidays []string, onPeakRate, offPeakRate, d
 					Description:   "Winter Weekday On-Peak",
 				},
 				{
+					Name: "Discount",
 					Hours: []types.UtilityHourPeriod{
 						{HourStart: 1, HourEnd: 3},
 						{HourStart: 11, HourEnd: 16},
@@ -212,6 +221,7 @@ func buildDukeTOUPeriods(year int, holidays []string, onPeakRate, offPeakRate, d
 					Description:   "Winter Discount",
 				},
 			},
+			OtherName:          "Off-Peak",
 			OtherDollarsPerKWH: offPeakRate,
 			OtherDescription:   "Winter Off-Peak",
 		},
@@ -259,6 +269,7 @@ func dukeCarolinasNCPeriods(plan string, options types.UtilityRateOptions, years
 					MonthEnd:   time.December,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name: "Super Off-Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 23, HourEnd: 24},
 								{HourStart: 0, HourEnd: 5},
@@ -267,6 +278,7 @@ func dukeCarolinasNCPeriods(plan string, options types.UtilityRateOptions, years
 							Description:   "Discount Charging Period",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.123504,
 					OtherDescription:   "Standard Charging Period",
 				},
@@ -341,6 +353,7 @@ func dukeCarolinasSCPeriods(plan string, options types.UtilityRateOptions, years
 					SpecificDates: holidays,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name: "Super Off-Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 0, HourEnd: 6},
 							},
@@ -348,6 +361,7 @@ func dukeCarolinasSCPeriods(plan string, options types.UtilityRateOptions, years
 							Description:   "Non-Winter Holiday Super Off-Peak",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.128191,
 					OtherDescription:   "Non-Winter Holiday Off-Peak",
 				},
@@ -359,6 +373,7 @@ func dukeCarolinasSCPeriods(plan string, options types.UtilityRateOptions, years
 					SpecificDatesNot: true,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name: "On-Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 18, HourEnd: 21},
 							},
@@ -367,6 +382,7 @@ func dukeCarolinasSCPeriods(plan string, options types.UtilityRateOptions, years
 							Description:   "Non-Winter Weekday On-Peak",
 						},
 						{
+							Name: "Super Off-Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 0, HourEnd: 6},
 							},
@@ -374,6 +390,7 @@ func dukeCarolinasSCPeriods(plan string, options types.UtilityRateOptions, years
 							Description:   "Non-Winter Super Off-Peak",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.128191,
 					OtherDescription:   "Non-Winter Off-Peak",
 				},
@@ -384,6 +401,7 @@ func dukeCarolinasSCPeriods(plan string, options types.UtilityRateOptions, years
 					MonthStart:         time.December,
 					MonthEnd:           time.February,
 					SpecificDates:      holidays,
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.128191,
 					OtherDescription:   "Winter Holiday Off-Peak",
 				},
@@ -395,6 +413,7 @@ func dukeCarolinasSCPeriods(plan string, options types.UtilityRateOptions, years
 					SpecificDatesNot: true,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name: "On-Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 6, HourEnd: 9},
 								{HourStart: 18, HourEnd: 21},
@@ -404,6 +423,7 @@ func dukeCarolinasSCPeriods(plan string, options types.UtilityRateOptions, years
 							Description:   "Winter Weekday On-Peak",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.128191,
 					OtherDescription:   "Winter Off-Peak",
 				},
@@ -497,6 +517,7 @@ func dukeProgressSCPeriods(plan string, options types.UtilityRateOptions, years 
 					MonthEnd:   time.December,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name: "Super Off-Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 23, HourEnd: 24},
 								{HourStart: 0, HourEnd: 5},
@@ -505,6 +526,7 @@ func dukeProgressSCPeriods(plan string, options types.UtilityRateOptions, years 
 							Description:   "Discount Charging Period",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.15127,
 					OtherDescription:   "Standard Charging Period",
 				},
@@ -607,7 +629,8 @@ func dukeIndianaPeriods(plan string, options types.UtilityRateOptions, years []i
 
 				// Discount period: 12 am - 4 am (all days)
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:        "Super Off-Peak",
 						Start:       d,
 						End:         d.AddDate(0, 0, 1),
 						Hours:       []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 4}},
@@ -622,7 +645,8 @@ func dukeIndianaPeriods(plan string, options types.UtilityRateOptions, years []i
 					if isWinter {
 						// On-Peak in Winter: 6 am - 8 am AND 5 pm - 9 pm
 						periods = append(periods, types.UtilityFeesPeriod{
-							UtilityPeriod: types.UtilityPeriod{
+							TimePeriod: types.TimePeriod{
+								Name:  "On-Peak",
 								Start: d,
 								End:   d.AddDate(0, 0, 1),
 								Hours: []types.UtilityHourPeriod{
@@ -637,7 +661,8 @@ func dukeIndianaPeriods(plan string, options types.UtilityRateOptions, years []i
 					} else {
 						// On-Peak in Non-Winter: 5 pm - 9 pm
 						periods = append(periods, types.UtilityFeesPeriod{
-							UtilityPeriod: types.UtilityPeriod{
+							TimePeriod: types.TimePeriod{
+								Name:  "On-Peak",
 								Start: d,
 								End:   d.AddDate(0, 0, 1),
 								Hours: []types.UtilityHourPeriod{
@@ -679,7 +704,8 @@ func dukeIndianaPeriods(plan string, options types.UtilityRateOptions, years []i
 				}
 
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:        "Off-Peak",
 						Start:       d,
 						End:         d.AddDate(0, 0, 1),
 						Hours:       offPeakGaps,
@@ -705,7 +731,7 @@ func buildExportCreditPeriod(years []int, rate float64, description string) []ty
 	var periods []types.UtilityFeesPeriod
 	for _, year := range years {
 		periods = append(periods, types.UtilityFeesPeriod{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, etLocation),
 				End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, etLocation),
 				LocationPtr: etLocation,
@@ -1126,18 +1152,21 @@ func buildDukeFLRST1Periods(year int, holidays []string) []touSimplifiedPeriod {
 			SpecificDatesNot: true,
 			HoursAndDays: []touSimplifiedHoursAndDays{
 				{
+					Name:          "Super Off-Peak",
 					Hours:         []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 3}},
 					Weekday:       true,
 					DollarsPerKWH: discount,
 					Description:   "RST-1 Winter Weekday Discount",
 				},
 				{
+					Name:          "On-Peak",
 					Hours:         []types.UtilityHourPeriod{{HourStart: 5, HourEnd: 10}, {HourStart: 18, HourEnd: 21}},
 					Weekday:       true,
 					DollarsPerKWH: onPeak,
 					Description:   "RST-1 Winter Weekday On-Peak",
 				},
 				{
+					Name:          "Off-Peak",
 					Hours:         []types.UtilityHourPeriod{{HourStart: 3, HourEnd: 5}, {HourStart: 10, HourEnd: 18}, {HourStart: 21, HourEnd: 24}},
 					Weekday:       true,
 					DollarsPerKWH: offPeak,
@@ -1152,12 +1181,14 @@ func buildDukeFLRST1Periods(year int, holidays []string) []touSimplifiedPeriod {
 			MonthEnd:   time.February,
 			HoursAndDays: []touSimplifiedHoursAndDays{
 				{
+					Name:          "Super Off-Peak",
 					Hours:         []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 3}},
 					Weekend:       true,
 					DollarsPerKWH: discount,
 					Description:   "RST-1 Winter Weekend Discount",
 				},
 				{
+					Name:          "Off-Peak",
 					Hours:         []types.UtilityHourPeriod{{HourStart: 3, HourEnd: 24}},
 					Weekend:       true,
 					DollarsPerKWH: offPeak,
@@ -1174,12 +1205,14 @@ func buildDukeFLRST1Periods(year int, holidays []string) []touSimplifiedPeriod {
 			SpecificDatesNot: false,
 			HoursAndDays: []touSimplifiedHoursAndDays{
 				{
+					Name:          "Super Off-Peak",
 					Hours:         []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 3}},
 					Weekday:       true,
 					DollarsPerKWH: discount,
 					Description:   "RST-1 Winter Holiday Discount",
 				},
 				{
+					Name:          "Off-Peak",
 					Hours:         []types.UtilityHourPeriod{{HourStart: 3, HourEnd: 24}},
 					Weekday:       true,
 					DollarsPerKWH: offPeak,
@@ -1198,18 +1231,21 @@ func buildDukeFLRST1Periods(year int, holidays []string) []touSimplifiedPeriod {
 			SpecificDatesNot: true,
 			HoursAndDays: []touSimplifiedHoursAndDays{
 				{
+					Name:          "Super Off-Peak",
 					Hours:         []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 6}},
 					Weekday:       true,
 					DollarsPerKWH: discount,
 					Description:   "RST-1 Non-Winter Weekday Discount",
 				},
 				{
+					Name:          "On-Peak",
 					Hours:         []types.UtilityHourPeriod{{HourStart: 18, HourEnd: 21}},
 					Weekday:       true,
 					DollarsPerKWH: onPeak,
 					Description:   "RST-1 Non-Winter Weekday On-Peak",
 				},
 				{
+					Name:          "Off-Peak",
 					Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 18}, {HourStart: 21, HourEnd: 24}},
 					Weekday:       true,
 					DollarsPerKWH: offPeak,
@@ -1224,12 +1260,14 @@ func buildDukeFLRST1Periods(year int, holidays []string) []touSimplifiedPeriod {
 			MonthEnd:   time.November,
 			HoursAndDays: []touSimplifiedHoursAndDays{
 				{
+					Name:          "Super Off-Peak",
 					Hours:         []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 6}},
 					Weekend:       true,
 					DollarsPerKWH: discount,
 					Description:   "RST-1 Non-Winter Weekend Discount",
 				},
 				{
+					Name:          "Off-Peak",
 					Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 24}},
 					Weekend:       true,
 					DollarsPerKWH: offPeak,
@@ -1246,12 +1284,14 @@ func buildDukeFLRST1Periods(year int, holidays []string) []touSimplifiedPeriod {
 			SpecificDatesNot: false,
 			HoursAndDays: []touSimplifiedHoursAndDays{
 				{
+					Name:          "Super Off-Peak",
 					Hours:         []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 6}},
 					Weekday:       true,
 					DollarsPerKWH: discount,
 					Description:   "RST-1 Non-Winter Holiday Discount",
 				},
 				{
+					Name:          "Off-Peak",
 					Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 24}},
 					Weekday:       true,
 					DollarsPerKWH: offPeak,

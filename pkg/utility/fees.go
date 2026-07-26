@@ -48,6 +48,11 @@ func (s *SiteFees) GetVPPInfo(context.Context) (types.UtilityVPPInfo, error) {
 	return types.UtilityVPPInfo{}, nil
 }
 
+// GetPeriods implements the Utility interface for real-time rates (returns nil, nil).
+func (s *SiteFees) GetPeriods(context.Context) ([]types.TimePeriod, error) {
+	return nil, nil
+}
+
 func (s *SiteFees) applyFees(p types.Price) (types.Price, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

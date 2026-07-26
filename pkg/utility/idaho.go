@@ -79,6 +79,7 @@ func idahoPeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 				MonthStart:         time.June,
 				MonthEnd:           time.September,
 				SpecificDates:      holidays,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.074797,
 				OtherDescription:   "Idaho Power TOU Summer Holiday Off-Peak",
 			}
@@ -90,18 +91,21 @@ func idahoPeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "On-Peak",
 						Hours:         []types.UtilityHourPeriod{{HourStart: 19, HourEnd: 23}},
 						DaysOfTheWeek: []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday, time.Saturday},
 						DollarsPerKWH: 0.299185,
 						Description:   "Idaho Power TOU Summer On-Peak",
 					},
 					{
+						Name:          "Mid-Peak",
 						Hours:         []types.UtilityHourPeriod{{HourStart: 15, HourEnd: 19}},
 						DaysOfTheWeek: []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday, time.Saturday},
 						DollarsPerKWH: 0.149594,
 						Description:   "Idaho Power TOU Summer Mid-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.074797,
 				OtherDescription:   "Idaho Power TOU Summer Off-Peak",
 			}
@@ -111,6 +115,7 @@ func idahoPeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 				MonthStart:         time.January,
 				MonthEnd:           time.May,
 				SpecificDates:      holidays,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.092231,
 				OtherDescription:   "Idaho Power TOU Non-Summer Holiday Off-Peak",
 			}
@@ -122,6 +127,7 @@ func idahoPeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name: "On-Peak",
 						Hours: []types.UtilityHourPeriod{
 							{HourStart: 6, HourEnd: 9},
 							{HourStart: 17, HourEnd: 20},
@@ -131,6 +137,7 @@ func idahoPeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 						Description:   "Idaho Power TOU Non-Summer On-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.092231,
 				OtherDescription:   "Idaho Power TOU Non-Summer Off-Peak",
 			}
@@ -140,6 +147,7 @@ func idahoPeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 				MonthStart:         time.October,
 				MonthEnd:           time.December,
 				SpecificDates:      holidays,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.092231,
 				OtherDescription:   "Idaho Power TOU Non-Summer Holiday Off-Peak",
 			}
@@ -151,6 +159,7 @@ func idahoPeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name: "On-Peak",
 						Hours: []types.UtilityHourPeriod{
 							{HourStart: 6, HourEnd: 9},
 							{HourStart: 17, HourEnd: 20},
@@ -160,6 +169,7 @@ func idahoPeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 						Description:   "Idaho Power TOU Non-Summer On-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.092231,
 				OtherDescription:   "Idaho Power TOU Non-Summer Off-Peak",
 			}

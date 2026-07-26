@@ -49,6 +49,15 @@ func TestGeorgiaPowerRates(t *testing.T) {
 		})
 		require.NoError(t, err)
 
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		names := make(map[string]bool)
+		for _, p := range periods {
+			names[p.Name] = true
+		}
+		assert.True(t, names["On-Peak"])
+		assert.True(t, names["Off-Peak"])
+
 		// --- Regime 2 (On/After June 1, 2026): ECCR-15p (13.0205% surcharge), FCR-27 ($0.052269 / $0.038690 / $0.034747) ---
 
 		// 1. Summer weekday On-Peak (Wednesday, July 15, 2026 at 3:00 PM)

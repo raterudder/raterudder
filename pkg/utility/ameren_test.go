@@ -16,6 +16,13 @@ import (
 )
 
 func TestAmeren(t *testing.T) {
+	t.Run("GetPeriods returns nil nil", func(t *testing.T) {
+		s := &SiteFees{}
+		periods, err := s.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.Nil(t, periods)
+	})
+
 	now := time.Now().In(etLocation)
 	todayStr := now.Format("20060102")
 	tomorrowStr := now.Add(24 * time.Hour).Format("20060102")

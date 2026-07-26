@@ -202,12 +202,14 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 						SpecificDates: holidays,
 						HoursAndDays: []touSimplifiedHoursAndDays{
 							{
+								Name: "Off-Peak",
 								// Off-Peak: 7 AM - 11 PM
 								Hours:         []types.UtilityHourPeriod{{HourStart: 7, HourEnd: 23}},
 								DollarsPerKWH: offPeakRate,
 								Description:   "Summer Holiday Off-Peak",
 							},
 						},
+						OtherName:          "Super Off-Peak",
 						OtherDollarsPerKWH: superOffPeakRate,
 						OtherDescription:   "Summer Holiday Super Off-Peak",
 					}
@@ -219,6 +221,7 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 						SpecificDatesNot: true,
 						HoursAndDays: []touSimplifiedHoursAndDays{
 							{
+								Name: "On-Peak",
 								// On-Peak: 2 PM - 7 PM, weekdays
 								Hours:         []types.UtilityHourPeriod{{HourStart: 14, HourEnd: 19}},
 								Weekday:       true,
@@ -226,6 +229,7 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 								Description:   "Summer On-Peak",
 							},
 							{
+								Name: "Off-Peak",
 								// Off-Peak: 7 AM - 2 PM, 7 PM - 11 PM weekdays
 								Hours: []types.UtilityHourPeriod{
 									{HourStart: 7, HourEnd: 14},
@@ -236,6 +240,7 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 								Description:   "Summer Weekday Off-Peak",
 							},
 							{
+								Name: "Off-Peak",
 								// Off-Peak: 7 AM - 11 PM weekends
 								Hours:         []types.UtilityHourPeriod{{HourStart: 7, HourEnd: 23}},
 								Weekend:       true,
@@ -243,6 +248,7 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 								Description:   "Summer Weekend Off-Peak",
 							},
 						},
+						OtherName:          "Super Off-Peak",
 						OtherDollarsPerKWH: superOffPeakRate,
 						OtherDescription:   "Summer Super Off-Peak",
 					}
@@ -256,12 +262,14 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 						Months: winterIntersection,
 						HoursAndDays: []touSimplifiedHoursAndDays{
 							{
+								Name: "Off-Peak",
 								// Off-Peak: 7 AM - 11 PM
 								Hours:         []types.UtilityHourPeriod{{HourStart: 7, HourEnd: 23}},
 								DollarsPerKWH: winterOffPeakRate,
 								Description:   "Winter Off-Peak",
 							},
 						},
+						OtherName:          "Super Off-Peak",
 						OtherDollarsPerKWH: winterSuperOffPeakRate,
 						OtherDescription:   "Winter Super Off-Peak",
 					}
@@ -283,6 +291,7 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 						Year:               year,
 						Months:             summerIntersection,
 						SpecificDates:      holidays,
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: offPeakRate,
 						OtherDescription:   "Summer Holiday Off-Peak",
 					}
@@ -294,6 +303,7 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 						SpecificDatesNot: true,
 						HoursAndDays: []touSimplifiedHoursAndDays{
 							{
+								Name: "On-Peak",
 								// On-Peak: 2 PM - 7 PM weekdays
 								Hours:         []types.UtilityHourPeriod{{HourStart: 14, HourEnd: 19}},
 								Weekday:       true,
@@ -301,6 +311,7 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 								Description:   "Summer On-Peak",
 							},
 						},
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: offPeakRate,
 						OtherDescription:   "Summer Off-Peak",
 					}
@@ -312,6 +323,7 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 					winterPeriod := touSimplifiedPeriod{
 						Year:               year,
 						Months:             winterIntersection,
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: winterOffPeakRate,
 						OtherDescription:   "Winter Off-Peak",
 					}
@@ -333,6 +345,7 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 						Year:               year,
 						Months:             summerIntersection,
 						SpecificDates:      holidays,
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: offPeakRate,
 						OtherDescription:   "Summer Holiday Off-Peak",
 					}
@@ -344,6 +357,7 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 						SpecificDatesNot: true,
 						HoursAndDays: []touSimplifiedHoursAndDays{
 							{
+								Name: "On-Peak",
 								// On-Peak: 2 PM - 7 PM weekdays
 								Hours:         []types.UtilityHourPeriod{{HourStart: 14, HourEnd: 19}},
 								Weekday:       true,
@@ -351,6 +365,7 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 								Description:   "Summer On-Peak",
 							},
 						},
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: offPeakRate,
 						OtherDescription:   "Summer Off-Peak",
 					}
@@ -362,6 +377,7 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 					winterPeriod := touSimplifiedPeriod{
 						Year:               year,
 						Months:             winterIntersection,
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: winterOffPeakRate,
 						OtherDescription:   "Winter Off-Peak",
 					}
@@ -384,7 +400,7 @@ func gpPeriods(plan string, options types.UtilityRateOptions, years []int) []typ
 				rate = gpInstantaneousRates[2026] // fallback
 			}
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, etLocation),
 					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, etLocation),
 					LocationPtr: etLocation,

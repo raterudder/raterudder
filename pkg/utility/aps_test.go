@@ -86,6 +86,10 @@ func TestAPSRates(t *testing.T) {
 		p, err = u.priceForTime(time.Date(2026, time.July, 15, 12, 0, 0, 0, mstLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.15418, p.DollarsPerKWH, 1e-6)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.NotEmpty(t, periods)
 	})
 
 	t.Run("Schedule TOU-E rates", func(t *testing.T) {
@@ -94,6 +98,15 @@ func TestAPSRates(t *testing.T) {
 			UtilityRate:     "aps_tou_e",
 		})
 		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		names := make(map[string]bool)
+		for _, p := range periods {
+			names[p.Name] = true
+		}
+		assert.True(t, names["On-Peak"])
+		assert.True(t, names["Off-Peak"])
 
 		// Summer weekday On-Peak (Wed, July 15, 2026, 5:00 PM) -> $0.34396
 		p, err := u.priceForTime(time.Date(2026, time.July, 15, 17, 0, 0, 0, mstLocation))

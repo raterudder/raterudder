@@ -57,6 +57,7 @@ func waltonPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				Year:               year,
 				MonthStart:         time.January,
 				MonthEnd:           time.May,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0885,
 				OtherDescription:   "Walton Schedule TU-5 Off-Peak",
 			}
@@ -64,6 +65,7 @@ func waltonPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				Year:               year,
 				MonthStart:         time.October,
 				MonthEnd:           time.December,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0885,
 				OtherDescription:   "Walton Schedule TU-5 Off-Peak",
 			}
@@ -74,6 +76,7 @@ func waltonPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				MonthStart:         time.June,
 				MonthEnd:           time.August,
 				SpecificDates:      []string{july4Str},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0885,
 				OtherDescription:   "Walton Schedule TU-5 Summer Holiday Off-Peak",
 			}
@@ -85,12 +88,14 @@ func waltonPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "On-Peak",
 						Hours:         peakHours,
 						Weekday:       true,
 						DollarsPerKWH: 0.3225,
 						Description:   "Walton Schedule TU-5 Summer On-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0885,
 				OtherDescription:   "Walton Schedule TU-5 Summer Off-Peak",
 			}
@@ -111,12 +116,14 @@ func waltonPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				SpecificDates: septPeakDates,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "On-Peak",
 						Hours:         peakHours,
 						Weekday:       true,
 						DollarsPerKWH: 0.3225,
 						Description:   "Walton Schedule TU-5 Summer On-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0885,
 				OtherDescription:   "Walton Schedule TU-5 Summer Off-Peak",
 			}
@@ -133,6 +140,7 @@ func waltonPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 				MonthStart:         time.September,
 				MonthEnd:           time.September,
 				SpecificDates:      septOffPeakDates,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0885,
 				OtherDescription:   "Walton Schedule TU-5 Off-Peak",
 			}
@@ -150,7 +158,7 @@ func waltonPeriods(plan string, opts types.UtilityRateOptions, years []int) []ty
 		// Export Credits - Avoided Energy Cost
 		// Avoided Energy Cost rate: Flat $0.026/kWh year-round
 		periods = append(periods, types.UtilityFeesPeriod{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, etLocation),
 				End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, etLocation),
 				LocationPtr: etLocation,

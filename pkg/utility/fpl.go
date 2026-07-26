@@ -91,6 +91,7 @@ func fplPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 				MonthStart:         time.April,
 				MonthEnd:           time.October,
 				SpecificDates:      holidays,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: offPeakRate,
 				OtherDescription:   "FPL RTR-1 Summer Holiday Off-Peak",
 			}
@@ -102,12 +103,14 @@ func fplPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name:          "On-Peak",
 						Hours:         []types.UtilityHourPeriod{{HourStart: 12, HourEnd: 21}},
 						Weekday:       true,
 						DollarsPerKWH: onPeakRate,
 						Description:   "FPL RTR-1 Summer Weekday On-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: offPeakRate,
 				OtherDescription:   "FPL RTR-1 Summer Off-Peak",
 			}
@@ -120,6 +123,7 @@ func fplPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 				MonthStart:         time.November,
 				MonthEnd:           time.March,
 				SpecificDates:      holidays,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: offPeakRate,
 				OtherDescription:   "FPL RTR-1 Winter Holiday Off-Peak",
 			}
@@ -131,6 +135,7 @@ func fplPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name: "On-Peak",
 						Hours: []types.UtilityHourPeriod{
 							{HourStart: 6, HourEnd: 10},
 							{HourStart: 18, HourEnd: 22},
@@ -140,6 +145,7 @@ func fplPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 						Description:   "FPL RTR-1 Winter Weekday On-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: offPeakRate,
 				OtherDescription:   "FPL RTR-1 Winter Off-Peak",
 			}

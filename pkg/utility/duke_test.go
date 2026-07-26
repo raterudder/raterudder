@@ -84,6 +84,16 @@ func TestDuke(t *testing.T) {
 		assert.Equal(t, 0.117845, pRE.DollarsPerKWH)
 	})
 
+	t.Run("GetPeriods TOU and non-TOU for Duke", func(t *testing.T) {
+		periods := dukeCarolinasNCPeriods("duke_carolinas_nc_rt", types.UtilityRateOptions{}, []int{2026})
+		names := make(map[string]bool)
+		for _, p := range periods {
+			names[p.Name] = true
+		}
+		assert.True(t, names["On-Peak"])
+		assert.True(t, names["Off-Peak"])
+	})
+
 	t.Run("duke_carolinas_nc_rt seasons and hours", func(t *testing.T) {
 		periods := dukeCarolinasNCPeriods("duke_carolinas_nc_rt", types.UtilityRateOptions{}, []int{2026})
 

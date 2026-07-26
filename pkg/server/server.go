@@ -230,6 +230,7 @@ func (s *Server) setupHandler() http.Handler {
 	apiMux.HandleFunc("GET /api/forecast", s.handleForecast)
 	apiMux.HandleFunc("POST /api/join", s.handleJoin)
 	apiMux.HandleFunc("GET /api/list/utilities", s.handleListUtilities)
+	apiMux.HandleFunc("GET /api/utility/periods", s.handleGetPeriods)
 	apiMux.HandleFunc("GET /api/list/ess", s.handleListESS)
 	apiMux.HandleFunc("POST /api/ess/stage", s.handleESSStage)
 	apiMux.HandleFunc("GET /api/list/sites", s.handleListSites)

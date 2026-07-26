@@ -346,7 +346,8 @@ func originPeriods(plan string, opts types.UtilityRateOptions, years []int) ([]t
 			// 3-Period Weekday/Weekend TOU (e.g., Energex Go and Go Solar Variable)
 			// Import Weekdays
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
+					Name:          "On-Peak",
 					Start:         allYearStart,
 					End:           allYearEnd,
 					LocationPtr:   cfg.Timezone,
@@ -357,7 +358,8 @@ func originPeriods(plan string, opts types.UtilityRateOptions, years []int) ([]t
 				Description:   fmt.Sprintf("%s Weekday Peak Rate", planToName(plan)),
 			})
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
+					Name:          "Shoulder",
 					Start:         allYearStart,
 					End:           allYearEnd,
 					LocationPtr:   cfg.Timezone,
@@ -370,7 +372,8 @@ func originPeriods(plan string, opts types.UtilityRateOptions, years []int) ([]t
 
 			// Import Weekends
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
+					Name:          "Shoulder",
 					Start:         allYearStart,
 					End:           allYearEnd,
 					LocationPtr:   cfg.Timezone,
@@ -383,7 +386,8 @@ func originPeriods(plan string, opts types.UtilityRateOptions, years []int) ([]t
 
 			// Import Off-Peak (All Week)
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
+					Name:        "Off-Peak",
 					Start:       allYearStart,
 					End:         allYearEnd,
 					LocationPtr: cfg.Timezone,
@@ -401,7 +405,7 @@ func originPeriods(plan string, opts types.UtilityRateOptions, years []int) ([]t
 				// We statically use the uncapped standard feed-in tariff of $0.03/kWh.
 				// ====================================================================================
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
 						Start:       allYearStart,
 						End:         allYearEnd,
 						LocationPtr: cfg.Timezone,
@@ -412,7 +416,7 @@ func originPeriods(plan string, opts types.UtilityRateOptions, years []int) ([]t
 				})
 			} else {
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
 						Start:       allYearStart,
 						End:         allYearEnd,
 						LocationPtr: cfg.Timezone,
@@ -427,7 +431,8 @@ func originPeriods(plan string, opts types.UtilityRateOptions, years []int) ([]t
 			// 3-Period Everyday TOU (e.g., Energex Solar Boost)
 			// Import
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
+					Name:        "On-Peak",
 					Start:       allYearStart,
 					End:         allYearEnd,
 					LocationPtr: cfg.Timezone,
@@ -437,7 +442,8 @@ func originPeriods(plan string, opts types.UtilityRateOptions, years []int) ([]t
 				Description:   fmt.Sprintf("%s Peak Rate", planToName(plan)),
 			})
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
+					Name:        "Off-Peak",
 					Start:       allYearStart,
 					End:         allYearEnd,
 					LocationPtr: cfg.Timezone,
@@ -447,7 +453,8 @@ func originPeriods(plan string, opts types.UtilityRateOptions, years []int) ([]t
 				Description:   fmt.Sprintf("%s Off-Peak Rate", planToName(plan)),
 			})
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
+					Name:        "Shoulder",
 					Start:       allYearStart,
 					End:         allYearEnd,
 					LocationPtr: cfg.Timezone,
@@ -464,7 +471,7 @@ func originPeriods(plan string, opts types.UtilityRateOptions, years []int) ([]t
 			// We statically use the uncapped standard feed-in tariff of $0.03/kWh.
 			// ====================================================================================
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start:       allYearStart,
 					End:         allYearEnd,
 					LocationPtr: cfg.Timezone,
@@ -478,7 +485,8 @@ func originPeriods(plan string, opts types.UtilityRateOptions, years []int) ([]t
 			// 2-Period Everyday TOU (e.g., Maximiser/Starter or Citipower Go/Go Solar/Solar Boost)
 			// Import
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
+					Name:        "On-Peak",
 					Start:       allYearStart,
 					End:         allYearEnd,
 					LocationPtr: cfg.Timezone,
@@ -488,7 +496,8 @@ func originPeriods(plan string, opts types.UtilityRateOptions, years []int) ([]t
 				Description:   fmt.Sprintf("%s Peak Rate", planToName(plan)),
 			})
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
+					Name:        "Off-Peak",
 					Start:       allYearStart,
 					End:         allYearEnd,
 					LocationPtr: cfg.Timezone,
@@ -507,7 +516,7 @@ func originPeriods(plan string, opts types.UtilityRateOptions, years []int) ([]t
 					// We statically use the uncapped standard feed-in tariff of $0.01/kWh.
 					// ====================================================================================
 					periods = append(periods, types.UtilityFeesPeriod{
-						UtilityPeriod: types.UtilityPeriod{
+						TimePeriod: types.TimePeriod{
 							Start:       allYearStart,
 							End:         allYearEnd,
 							LocationPtr: cfg.Timezone,
@@ -523,7 +532,7 @@ func originPeriods(plan string, opts types.UtilityRateOptions, years []int) ([]t
 					// We statically use the uncapped standard feed-in tariff of $0.01/kWh.
 					// ====================================================================================
 					periods = append(periods, types.UtilityFeesPeriod{
-						UtilityPeriod: types.UtilityPeriod{
+						TimePeriod: types.TimePeriod{
 							Start:       allYearStart,
 							End:         allYearEnd,
 							LocationPtr: cfg.Timezone,
@@ -534,7 +543,7 @@ func originPeriods(plan string, opts types.UtilityRateOptions, years []int) ([]t
 					})
 				} else {
 					periods = append(periods, types.UtilityFeesPeriod{
-						UtilityPeriod: types.UtilityPeriod{
+						TimePeriod: types.TimePeriod{
 							Start:       allYearStart,
 							End:         allYearEnd,
 							LocationPtr: cfg.Timezone,
@@ -546,7 +555,7 @@ func originPeriods(plan string, opts types.UtilityRateOptions, years []int) ([]t
 				}
 			} else {
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
 						Start:       allYearStart,
 						End:         allYearEnd,
 						LocationPtr: cfg.Timezone,
@@ -557,7 +566,7 @@ func originPeriods(plan string, opts types.UtilityRateOptions, years []int) ([]t
 					Description:              fmt.Sprintf("%s Solar Export Peak Tariff", planToName(plan)),
 				})
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
 						Start:       allYearStart,
 						End:         allYearEnd,
 						LocationPtr: cfg.Timezone,
@@ -691,7 +700,8 @@ func ausgridSeasonalPeriods(plan string, cfg originRateConfig, years []int) ([]t
 			if s.isSummer {
 				// Weekday Peak
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:          "On-Peak",
 						Start:         s.start,
 						End:           s.end,
 						LocationPtr:   sydLocation,
@@ -703,7 +713,8 @@ func ausgridSeasonalPeriods(plan string, cfg originRateConfig, years []int) ([]t
 				})
 				// Weekday Shoulder
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:          "Shoulder",
 						Start:         s.start,
 						End:           s.end,
 						LocationPtr:   sydLocation,
@@ -715,7 +726,8 @@ func ausgridSeasonalPeriods(plan string, cfg originRateConfig, years []int) ([]t
 				})
 				// Weekend Shoulder
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:          "Shoulder",
 						Start:         s.start,
 						End:           s.end,
 						LocationPtr:   sydLocation,
@@ -728,7 +740,8 @@ func ausgridSeasonalPeriods(plan string, cfg originRateConfig, years []int) ([]t
 			} else if s.isWinter {
 				// Weekday Peak
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:          "On-Peak",
 						Start:         s.start,
 						End:           s.end,
 						LocationPtr:   sydLocation,
@@ -740,7 +753,8 @@ func ausgridSeasonalPeriods(plan string, cfg originRateConfig, years []int) ([]t
 				})
 				// Weekday Shoulder
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:          "Shoulder",
 						Start:         s.start,
 						End:           s.end,
 						LocationPtr:   sydLocation,
@@ -752,7 +766,8 @@ func ausgridSeasonalPeriods(plan string, cfg originRateConfig, years []int) ([]t
 				})
 				// Weekend Shoulder
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:          "Shoulder",
 						Start:         s.start,
 						End:           s.end,
 						LocationPtr:   sydLocation,
@@ -765,7 +780,8 @@ func ausgridSeasonalPeriods(plan string, cfg originRateConfig, years []int) ([]t
 			} else if s.isShoulder {
 				// All week Shoulder
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:        "Shoulder",
 						Start:       s.start,
 						End:         s.end,
 						LocationPtr: sydLocation,
@@ -778,7 +794,8 @@ func ausgridSeasonalPeriods(plan string, cfg originRateConfig, years []int) ([]t
 
 			// Off-Peak (all week, all seasons)
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
+					Name:        "Off-Peak",
 					Start:       s.start,
 					End:         s.end,
 					LocationPtr: sydLocation,
@@ -796,7 +813,7 @@ func ausgridSeasonalPeriods(plan string, cfg originRateConfig, years []int) ([]t
 			// because it requires tracking daily cumulative solar exports in the fee calculation.
 			// We statically use the uncapped standard feed-in tariff of $0.03/kWh.
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, sydLocation),
 					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, sydLocation),
 					LocationPtr: sydLocation,
@@ -810,7 +827,7 @@ func ausgridSeasonalPeriods(plan string, cfg originRateConfig, years []int) ([]t
 			// because it requires tracking daily cumulative solar exports in the fee calculation.
 			// We statically use the uncapped standard feed-in tariff of $0.03/kWh.
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, sydLocation),
 					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, sydLocation),
 					LocationPtr: sydLocation,
@@ -821,7 +838,7 @@ func ausgridSeasonalPeriods(plan string, cfg originRateConfig, years []int) ([]t
 			})
 		} else {
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, sydLocation),
 					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, sydLocation),
 					LocationPtr: sydLocation,
@@ -845,7 +862,8 @@ func endeavourWeekdayWeekendPeriods(plan string, cfg originRateConfig, years []i
 
 		// Weekday Peak (1 PM to 8 PM)
 		periods = append(periods, types.UtilityFeesPeriod{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
+				Name:          "On-Peak",
 				Start:         allYearStart,
 				End:           allYearEnd,
 				LocationPtr:   cfg.Timezone,
@@ -858,7 +876,8 @@ func endeavourWeekdayWeekendPeriods(plan string, cfg originRateConfig, years []i
 
 		// Weekday Shoulder (7 AM to 1 PM & 8 PM to 10 PM)
 		periods = append(periods, types.UtilityFeesPeriod{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
+				Name:          "Shoulder",
 				Start:         allYearStart,
 				End:           allYearEnd,
 				LocationPtr:   cfg.Timezone,
@@ -871,7 +890,8 @@ func endeavourWeekdayWeekendPeriods(plan string, cfg originRateConfig, years []i
 
 		// Weekday Off-Peak (10 PM to 7 AM)
 		periods = append(periods, types.UtilityFeesPeriod{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
+				Name:          "Off-Peak",
 				Start:         allYearStart,
 				End:           allYearEnd,
 				LocationPtr:   cfg.Timezone,
@@ -884,7 +904,8 @@ func endeavourWeekdayWeekendPeriods(plan string, cfg originRateConfig, years []i
 
 		// Weekend Off-Peak (All Day)
 		periods = append(periods, types.UtilityFeesPeriod{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
+				Name:          "Off-Peak",
 				Start:         allYearStart,
 				End:           allYearEnd,
 				LocationPtr:   cfg.Timezone,
@@ -902,7 +923,7 @@ func endeavourWeekdayWeekendPeriods(plan string, cfg originRateConfig, years []i
 			// because it requires tracking daily cumulative solar exports in the fee calculation.
 			// We statically use the uncapped standard feed-in tariff of $0.03/kWh.
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start:       allYearStart,
 					End:         allYearEnd,
 					LocationPtr: cfg.Timezone,
@@ -916,7 +937,7 @@ func endeavourWeekdayWeekendPeriods(plan string, cfg originRateConfig, years []i
 			// because it requires tracking daily cumulative solar exports in the fee calculation.
 			// We statically use the uncapped standard feed-in tariff of $0.03/kWh.
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start:       allYearStart,
 					End:         allYearEnd,
 					LocationPtr: cfg.Timezone,
@@ -927,7 +948,7 @@ func endeavourWeekdayWeekendPeriods(plan string, cfg originRateConfig, years []i
 			})
 		} else {
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start:       allYearStart,
 					End:         allYearEnd,
 					LocationPtr: cfg.Timezone,

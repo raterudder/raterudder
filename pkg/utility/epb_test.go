@@ -31,6 +31,10 @@ func TestEPB(t *testing.T) {
 		p, err = u.priceForTime(time.Date(2026, time.January, 15, 12, 0, 0, 0, ny))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.12521, p.DollarsPerKWH+p.GridUseDollarsPerKWH, 1e-6)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.NotEmpty(t, periods)
 	})
 
 	t.Run("Time Shift Plan", func(t *testing.T) {
@@ -40,6 +44,12 @@ func TestEPB(t *testing.T) {
 			UtilityRate:     "epb_time_shift",
 		})
 		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		if assert.NotEmpty(t, periods) {
+			assert.Equal(t, "On-Peak", periods[0].Name)
+		}
 
 		// Summer Weekday On-Peak (Monday July 13, 2026 at 4:00 PM) -> base ($0.177) + July FCA ($0.02825) = $0.20525
 		p, err := u.priceForTime(time.Date(2026, time.July, 13, 16, 0, 0, 0, ny))

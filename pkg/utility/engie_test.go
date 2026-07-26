@@ -29,6 +29,10 @@ func TestEngieUtility(t *testing.T) {
 			assert.True(t, p.SeparateGenerationCredit)
 			assert.InDelta(t, 0.0300, p.GenerationCreditDollarsPerKWH, 1e-6)
 		}
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.NotEmpty(t, periods)
 	})
 
 	t.Run("Solar Elec Single Rate - Endeavour", func(t *testing.T) {
@@ -126,7 +130,7 @@ func TestEngieUtility(t *testing.T) {
 		}
 	})
 
-	t.Run("Solar Elec TOU Rate - Ausgrid Summer Peak", func(t *testing.T) {
+	t.Run("Solar Elec TOU Rate - Ausgrid Summer", func(t *testing.T) {
 		u := &genericTOU{}
 		err := u.ApplySettings(context.Background(), types.Settings{
 			UtilityProvider: "engie",
@@ -136,6 +140,12 @@ func TestEngieUtility(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		if assert.NotEmpty(t, periods) {
+			assert.Equal(t, "On-Peak", periods[0].Name)
+		}
 
 		// Summer Peak Season (Jan 15, 2026)
 		summerDay := time.Date(2026, time.January, 15, 0, 0, 0, 0, sydLocation)

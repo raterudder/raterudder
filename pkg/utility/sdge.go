@@ -1303,12 +1303,14 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 				SpecificDates: holidays,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name: "On-Peak",
 						// On-Peak: 4:00 PM - 9:00 PM (16:00 to 21:00)
 						Hours:         []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
 						DollarsPerKWH: getUDCRate(plan, season, "On-Peak") + getGenRate("On-Peak"),
 						Description:   fmt.Sprintf("SDG&E %s %s Holiday/Weekend On-Peak", plan, season),
 					},
 					{
+						Name: "Off-Peak",
 						// Off-Peak: 2:00 PM - 4:00 PM & 9:00 PM - 12:00 AM (14:00 to 16:00 & 21:00 to 24:00)
 						Hours: []types.UtilityHourPeriod{
 							{HourStart: 14, HourEnd: 16},
@@ -1319,6 +1321,7 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					},
 				},
 				// Super Off-Peak: Midnight - 2:00 PM (00:00 to 14:00)
+				OtherName:          "Super Off-Peak",
 				OtherDollarsPerKWH: getUDCRate(plan, season, "Super Off-Peak") + getGenRate("Super Off-Peak"),
 				OtherDescription:   fmt.Sprintf("SDG&E %s %s Holiday/Weekend Super Off-Peak", plan, season),
 			}
@@ -1332,6 +1335,7 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name: "On-Peak",
 						// On-Peak: 4:00 PM - 9:00 PM (16:00 to 21:00) Weekdays
 						Hours:         []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
 						Weekday:       true,
@@ -1339,6 +1343,7 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 						Description:   fmt.Sprintf("SDG&E %s %s Weekday On-Peak", plan, season),
 					},
 					{
+						Name: "Super Off-Peak",
 						// Super Off-Peak: Midnight - 6:00 AM & 10:00 AM - 2:00 PM Weekdays
 						Hours: []types.UtilityHourPeriod{
 							{HourStart: 0, HourEnd: 6},
@@ -1349,6 +1354,7 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 						Description:   fmt.Sprintf("SDG&E %s %s Weekday Super Off-Peak", plan, season),
 					},
 					{
+						Name: "Super Off-Peak",
 						// Weekend behavior for regular weekends (handled by holidayPeriod since specificDates only has holidays)
 						Weekend:       true,
 						DollarsPerKWH: getUDCRate(plan, season, "Super Off-Peak") + getGenRate("Super Off-Peak"), // fallback/default to super off-peak, buildPeriods handles weekday/weekend separation
@@ -1356,6 +1362,7 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					},
 				},
 				// Off-Peak: All other hours Weekdays (6-10 AM, 2-4 PM, 9-12 AM)
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: getUDCRate(plan, season, "Off-Peak") + getGenRate("Off-Peak"),
 				OtherDescription:   fmt.Sprintf("SDG&E %s %s Weekday Off-Peak", plan, season),
 			}
@@ -1363,6 +1370,7 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			// Adjust regularPeriod weekend behavior to match holidayPeriod exactly
 			regularPeriod.HoursAndDays = []touSimplifiedHoursAndDays{
 				{
+					Name: "On-Peak",
 					// On-Peak: 4:00 PM - 9:00 PM Weekdays
 					Hours:         []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
 					Weekday:       true,
@@ -1370,6 +1378,7 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					Description:   fmt.Sprintf("SDG&E %s %s Weekday On-Peak", plan, season),
 				},
 				{
+					Name: "Super Off-Peak",
 					// Super Off-Peak: Midnight - 6:00 AM & 10:00 AM - 2:00 PM Weekdays
 					Hours: []types.UtilityHourPeriod{
 						{HourStart: 0, HourEnd: 6},
@@ -1380,6 +1389,7 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					Description:   fmt.Sprintf("SDG&E %s %s Weekday Super Off-Peak", plan, season),
 				},
 				{
+					Name: "On-Peak",
 					// Weekend On-Peak: 4:00 PM - 9:00 PM Weekends
 					Hours:         []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
 					Weekend:       true,
@@ -1387,6 +1397,7 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					Description:   fmt.Sprintf("SDG&E %s %s Weekend On-Peak", plan, season),
 				},
 				{
+					Name: "Off-Peak",
 					// Weekend Off-Peak: 2:00 PM - 4:00 PM & 9:00 PM - 12:00 AM Weekends
 					Hours: []types.UtilityHourPeriod{
 						{HourStart: 14, HourEnd: 16},
@@ -1398,6 +1409,7 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 				},
 			}
 			// Regular Period Weekend Other (Midnight - 2:00 PM)
+			regularPeriod.OtherName = "Off-Peak"
 			regularPeriod.OtherDollarsPerKWH = getUDCRate(plan, season, "Off-Peak") + getGenRate("Off-Peak")
 			regularPeriod.OtherDescription = fmt.Sprintf("SDG&E %s %s Weekday Off-Peak", plan, season)
 
@@ -1410,11 +1422,13 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					SpecificDates: holidays,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
 							DollarsPerKWH: getUDCRate(plan, season, "On-Peak") + getGenRate("On-Peak"),
 							Description:   fmt.Sprintf("SDG&E %s %s Holiday/Weekend On-Peak", plan, season),
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: getUDCRate(plan, season, "Off-Peak") + getGenRate("Off-Peak"),
 					OtherDescription:   fmt.Sprintf("SDG&E %s %s Holiday/Weekend Off-Peak", plan, season),
 				}
@@ -1426,11 +1440,13 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					SpecificDatesNot: true,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
 							DollarsPerKWH: getUDCRate(plan, season, "On-Peak") + getGenRate("On-Peak"),
 							Description:   fmt.Sprintf("SDG&E %s %s Daily On-Peak", plan, season),
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: getUDCRate(plan, season, "Off-Peak") + getGenRate("Off-Peak"),
 					OtherDescription:   fmt.Sprintf("SDG&E %s %s Daily Off-Peak", plan, season),
 				}
@@ -1463,7 +1479,7 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					}
 
 					periods = append(periods, types.UtilityFeesPeriod{
-						UtilityPeriod: types.UtilityPeriod{
+						TimePeriod: types.TimePeriod{
 							Start:            startMonth,
 							End:              endMonth,
 							LocationPtr:      ptLocation,
@@ -1488,7 +1504,7 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					}
 
 					periods = append(periods, types.UtilityFeesPeriod{
-						UtilityPeriod: types.UtilityPeriod{
+						TimePeriod: types.TimePeriod{
 							Start:         startMonth,
 							End:           endMonth,
 							LocationPtr:   ptLocation,
@@ -1502,7 +1518,7 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 
 					// 3. Holiday period (restrict to weekdays Monday-Friday)
 					periods = append(periods, types.UtilityFeesPeriod{
-						UtilityPeriod: types.UtilityPeriod{
+						TimePeriod: types.TimePeriod{
 							Start:            startMonth,
 							End:              endMonth,
 							LocationPtr:      ptLocation,
@@ -1522,7 +1538,7 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 
 	// Add Non-Bypassable Charges (NBCs) unconditionally for all SDG&E imports as GridUse fee (GridAdditional).
 	periods = append(periods, types.UtilityFeesPeriod{
-		UtilityPeriod: types.UtilityPeriod{
+		TimePeriod: types.TimePeriod{
 			LocationPtr: ptLocation,
 		},
 		DollarsPerKWH:  nbc,

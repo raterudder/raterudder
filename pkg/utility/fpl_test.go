@@ -58,6 +58,10 @@ func TestFPLRates(t *testing.T) {
 		p2, err := u.priceForTime(time.Date(2026, time.December, 15, 2, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.12298, p2.DollarsPerKWH, 1e-6)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.NotEmpty(t, periods)
 	})
 
 	t.Run("RTR-1 TOU Rate", func(t *testing.T) {
@@ -66,6 +70,15 @@ func TestFPLRates(t *testing.T) {
 			UtilityRate:     "fpl_rtr1",
 		})
 		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		names := make(map[string]bool)
+		for _, p := range periods {
+			names[p.Name] = true
+		}
+		assert.True(t, names["On-Peak"])
+		assert.True(t, names["Off-Peak"])
 
 		// --- Summer (April 1 - October 31) ---
 		// 1. Summer weekday On-Peak (Wednesday, July 15, 2026 at 3:00 PM) -> 26.934¢

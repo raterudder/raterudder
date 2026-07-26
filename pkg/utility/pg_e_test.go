@@ -33,6 +33,10 @@ func TestPacificGasAndElectric(t *testing.T) {
 		assert.InDelta(t, 0.31331, p.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.01230, p.GridUseDollarsPerKWH, 1e-6)
 		assert.False(t, p.SeparateGenerationCredit)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.NotEmpty(t, periods)
 	})
 
 	t.Run("E-TOU-C summer peak with baseline credit", func(t *testing.T) {
@@ -45,6 +49,15 @@ func TestPacificGasAndElectric(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		names := make(map[string]bool)
+		for _, p := range periods {
+			names[p.Name] = true
+		}
+		assert.True(t, names["On-Peak"])
+		assert.True(t, names["Off-Peak"])
 
 		// Summer On-Peak: July 15, 2026, 5:00 PM (17:00).
 		// Peak = $0.52240. Baseline credit = $0.08140. NBC = $0.01230.
@@ -94,6 +107,16 @@ func TestPacificGasAndElectric(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		names := make(map[string]bool)
+		for _, p := range periods {
+			names[p.Name] = true
+		}
+		assert.True(t, names["On-Peak"])
+		assert.True(t, names["Partial Peak"])
+		assert.True(t, names["Off-Peak"])
 
 		// Winter Part-Peak: Dec 15, 2026, 3:00 PM (15:00).
 		// Part-Peak = $0.29854. NBC = $0.01230.

@@ -105,6 +105,7 @@ func dlcPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 				SpecificDates: holidays,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name: "Super Off-Peak",
 						Hours: []types.UtilityHourPeriod{
 							{HourStart: 0, HourEnd: 6},
 							{HourStart: 23, HourEnd: 24},
@@ -113,6 +114,7 @@ func dlcPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 						Description:   "DLC TOU Holiday Super Off-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: offPeakRate,
 				OtherDescription:   "DLC TOU Holiday Off-Peak",
 			}
@@ -126,6 +128,7 @@ func dlcPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name: "Super Off-Peak",
 						// Super Off-Peak applies daily (weekdays + weekends)
 						Hours: []types.UtilityHourPeriod{
 							{HourStart: 0, HourEnd: 6},
@@ -135,6 +138,7 @@ func dlcPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 						Description:   "DLC TOU Super Off-Peak",
 					},
 					{
+						Name: "On-Peak",
 						// Peak applies to weekdays only
 						Hours: []types.UtilityHourPeriod{
 							{HourStart: 15, HourEnd: 21},
@@ -144,6 +148,7 @@ func dlcPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 						Description:   "DLC TOU Weekday Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: offPeakRate,
 				OtherDescription:   "DLC TOU Off-Peak",
 			}

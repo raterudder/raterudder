@@ -125,7 +125,7 @@ func engiePeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 		switch plan {
 		case "engie_solar_elec_single":
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start:       allYearStart,
 					End:         allYearEnd,
 					LocationPtr: cfg.Timezone,
@@ -142,7 +142,8 @@ func engiePeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 
 				// Segment 1: Summer Peak (Jan 1 - Mar 30, inclusive)
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:        "On-Peak",
 						Start:       allYearStart,
 						End:         time.Date(year, time.March, 31, 0, 0, 0, 0, cfg.Timezone),
 						LocationPtr: cfg.Timezone,
@@ -152,7 +153,8 @@ func engiePeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 					Description:   "Ausgrid ENGIE Summer Peak Rate",
 				})
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:        "Off-Peak",
 						Start:       allYearStart,
 						End:         time.Date(year, time.March, 31, 0, 0, 0, 0, cfg.Timezone),
 						LocationPtr: cfg.Timezone,
@@ -164,7 +166,8 @@ func engiePeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 
 				// Segment 2: Non-Summer Non-Winter (Mar 31 - May 30, inclusive)
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:        "Off-Peak",
 						Start:       time.Date(year, time.March, 31, 0, 0, 0, 0, cfg.Timezone),
 						End:         time.Date(year, time.May, 31, 0, 0, 0, 0, cfg.Timezone),
 						LocationPtr: cfg.Timezone,
@@ -175,7 +178,8 @@ func engiePeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 
 				// Segment 3: Winter Peak (May 31 - Aug 30, inclusive)
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:        "On-Peak",
 						Start:       time.Date(year, time.May, 31, 0, 0, 0, 0, cfg.Timezone),
 						End:         time.Date(year, time.August, 31, 0, 0, 0, 0, cfg.Timezone),
 						LocationPtr: cfg.Timezone,
@@ -185,7 +189,8 @@ func engiePeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 					Description:   "Ausgrid ENGIE Winter Peak Rate",
 				})
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:        "Off-Peak",
 						Start:       time.Date(year, time.May, 31, 0, 0, 0, 0, cfg.Timezone),
 						End:         time.Date(year, time.August, 31, 0, 0, 0, 0, cfg.Timezone),
 						LocationPtr: cfg.Timezone,
@@ -197,7 +202,8 @@ func engiePeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 
 				// Segment 4: Non-Summer Non-Winter (Aug 31 - Oct 30, inclusive)
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:        "Off-Peak",
 						Start:       time.Date(year, time.August, 31, 0, 0, 0, 0, cfg.Timezone),
 						End:         time.Date(year, time.October, 31, 0, 0, 0, 0, cfg.Timezone),
 						LocationPtr: cfg.Timezone,
@@ -208,7 +214,8 @@ func engiePeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 
 				// Segment 5: Summer Peak (Oct 31 - Dec 31, inclusive)
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:        "On-Peak",
 						Start:       time.Date(year, time.October, 31, 0, 0, 0, 0, cfg.Timezone),
 						End:         allYearEnd,
 						LocationPtr: cfg.Timezone,
@@ -218,7 +225,8 @@ func engiePeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 					Description:   "Ausgrid ENGIE Summer Peak Rate",
 				})
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:        "Off-Peak",
 						Start:       time.Date(year, time.October, 31, 0, 0, 0, 0, cfg.Timezone),
 						End:         allYearEnd,
 						LocationPtr: cfg.Timezone,
@@ -246,7 +254,8 @@ func engiePeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 				for _, sp := range summerPeriods {
 					// Weekday Peak
 					periods = append(periods, types.UtilityFeesPeriod{
-						UtilityPeriod: types.UtilityPeriod{
+						TimePeriod: types.TimePeriod{
+							Name:          "On-Peak",
 							Start:         sp.start,
 							End:           sp.end,
 							LocationPtr:   cfg.Timezone,
@@ -259,7 +268,8 @@ func engiePeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 
 					// Weekday Off-Peak
 					periods = append(periods, types.UtilityFeesPeriod{
-						UtilityPeriod: types.UtilityPeriod{
+						TimePeriod: types.TimePeriod{
+							Name:          "Off-Peak",
 							Start:         sp.start,
 							End:           sp.end,
 							LocationPtr:   cfg.Timezone,
@@ -272,7 +282,8 @@ func engiePeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 
 					// Weekend Off-Peak (All Day)
 					periods = append(periods, types.UtilityFeesPeriod{
-						UtilityPeriod: types.UtilityPeriod{
+						TimePeriod: types.TimePeriod{
+							Name:          "Off-Peak",
 							Start:         sp.start,
 							End:           sp.end,
 							LocationPtr:   cfg.Timezone,
@@ -294,7 +305,8 @@ func engiePeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 					peakRate = cfg.ImportPeakRate
 				}
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:          "On-Peak",
 						Start:         winterStart,
 						End:           winterEnd,
 						LocationPtr:   cfg.Timezone,
@@ -307,7 +319,8 @@ func engiePeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 
 				// Weekday Off-Peak
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:          "Off-Peak",
 						Start:         winterStart,
 						End:           winterEnd,
 						LocationPtr:   cfg.Timezone,
@@ -320,7 +333,8 @@ func engiePeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 
 				// Weekend Off-Peak (All Day)
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:          "Off-Peak",
 						Start:         winterStart,
 						End:           winterEnd,
 						LocationPtr:   cfg.Timezone,
@@ -335,7 +349,8 @@ func engiePeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 				// Energex 3-Period Everyday TOU
 				// Peak: 4 PM - 9 PM
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:        "On-Peak",
 						Start:       allYearStart,
 						End:         allYearEnd,
 						LocationPtr: cfg.Timezone,
@@ -347,7 +362,8 @@ func engiePeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 
 				// Off-Peak: 11 AM - 4 PM
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:        "Off-Peak",
 						Start:       allYearStart,
 						End:         allYearEnd,
 						LocationPtr: cfg.Timezone,
@@ -359,7 +375,8 @@ func engiePeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 
 				// Shoulder: 9 PM - 11 AM
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:        "Mid-Peak",
 						Start:       allYearStart,
 						End:         allYearEnd,
 						LocationPtr: cfg.Timezone,
@@ -373,7 +390,8 @@ func engiePeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 				// VIC (Citipower, Powercor, United Energy, Jemena): 2-Period Everyday TOU
 				// Peak: 3 PM - 9 PM
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:        "On-Peak",
 						Start:       allYearStart,
 						End:         allYearEnd,
 						LocationPtr: cfg.Timezone,
@@ -385,7 +403,8 @@ func engiePeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 
 				// Off-Peak: all other times
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
+						Name:        "Off-Peak",
 						Start:       allYearStart,
 						End:         allYearEnd,
 						LocationPtr: cfg.Timezone,
@@ -404,7 +423,7 @@ func engiePeriods(plan string, opts types.UtilityRateOptions, years []int) []typ
 		// Therefore, we statically apply the flat lower feed-in rate (3c/kWh or 1c/kWh).
 		// ====================================================================================
 		periods = append(periods, types.UtilityFeesPeriod{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       allYearStart,
 				End:         allYearEnd,
 				LocationPtr: cfg.Timezone,

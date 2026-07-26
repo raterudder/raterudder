@@ -20,7 +20,15 @@ func TestGloBirdUtility(t *testing.T) {
 				Location: "ausgrid",
 			},
 		})
+		periods, err := u.GetPeriods(context.Background())
 		require.NoError(t, err)
+		names := make(map[string]bool)
+		for _, p := range periods {
+			names[p.Name] = true
+		}
+		assert.True(t, names["On-Peak"])
+		assert.True(t, names["Super Off-Peak"])
+		assert.True(t, names["Shoulder"])
 
 		// Peak (4 PM - 11 PM): 6:00 PM -> $0.5995, export $0.0800
 		p, err := u.priceForTime(time.Date(2026, time.January, 15, 18, 0, 0, 0, sydLocation))

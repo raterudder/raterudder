@@ -158,6 +158,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 				MonthStart:         time.June,
 				MonthEnd:           time.September,
 				SpecificDates:      coHolidays,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.08218,
 				OtherDescription:   "Summer Holiday Off-Peak",
 			}
@@ -169,6 +170,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name: "On-Peak",
 						// On-Peak: 3 PM - 9 PM weekdays
 						Hours:         []types.UtilityHourPeriod{{HourStart: 15, HourEnd: 21}},
 						Weekday:       true,
@@ -176,6 +178,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 						Description:   "Summer On-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.08218,
 				OtherDescription:   "Summer Off-Peak",
 			}
@@ -185,6 +188,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 				MonthStart:         time.October,
 				MonthEnd:           time.May,
 				SpecificDates:      coHolidays,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.08218,
 				OtherDescription:   "Winter Holiday Off-Peak",
 			}
@@ -196,6 +200,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name: "On-Peak",
 						// On-Peak: 5 PM - 9 PM weekdays
 						Hours:         []types.UtilityHourPeriod{{HourStart: 17, HourEnd: 21}},
 						Weekday:       true,
@@ -203,6 +208,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 						Description:   "Winter On-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.08218,
 				OtherDescription:   "Winter Off-Peak",
 			}
@@ -252,6 +258,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					MonthStart:         time.June,
 					MonthEnd:           time.September,
 					SpecificDates:      nspHolidays,
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.05171,
 					OtherDescription:   "Summer Holiday Off-Peak",
 				},
@@ -263,12 +270,14 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					SpecificDatesNot: true,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 9, HourEnd: 21}},
 							Weekday:       true,
 							DollarsPerKWH: 0.25879,
 							Description:   "Summer On-Peak",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.05171,
 					OtherDescription:   "Summer Off-Peak",
 				},
@@ -277,6 +286,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					MonthStart:         time.October,
 					MonthEnd:           time.May,
 					SpecificDates:      nspHolidays,
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.05171,
 					OtherDescription:   "Winter Holiday Off-Peak",
 				},
@@ -288,12 +298,14 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					SpecificDatesNot: true,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 9, HourEnd: 21}},
 							Weekday:       true,
 							DollarsPerKWH: 0.21408,
 							Description:   "Winter On-Peak",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.05171,
 					OtherDescription:   "Winter Off-Peak",
 				},
@@ -306,6 +318,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					MonthStart:         time.June,
 					MonthEnd:           time.September,
 					SpecificDates:      nspHolidays,
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.05171,
 					OtherDescription:   "Summer Holiday Off-Peak",
 				},
@@ -317,12 +330,14 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					SpecificDatesNot: true,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 9, HourEnd: 21}},
 							Weekday:       true,
 							DollarsPerKWH: 0.25879,
 							Description:   "Summer On-Peak",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.05171,
 					OtherDescription:   "Summer Off-Peak",
 				},
@@ -331,6 +346,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					MonthStart:         time.October,
 					MonthEnd:           time.May,
 					SpecificDates:      nspHolidays,
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.05171,
 					OtherDescription:   "Winter Holiday Off-Peak",
 				},
@@ -342,12 +358,14 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					SpecificDatesNot: true,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 9, HourEnd: 21}},
 							Weekday:       true,
 							DollarsPerKWH: 0.13577,
 							Description:   "Winter Heating On-Peak",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.05171,
 					OtherDescription:   "Winter Off-Peak",
 				},
@@ -397,6 +415,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					MonthStart:         time.June,
 					MonthEnd:           time.September,
 					SpecificDates:      nspHolidays,
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.04365,
 					OtherDescription:   "Summer Holiday Off-Peak",
 				},
@@ -408,12 +427,14 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					SpecificDatesNot: true,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 9, HourEnd: 21}},
 							Weekday:       true,
 							DollarsPerKWH: 0.18180,
 							Description:   "Summer On-Peak",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.04365,
 					OtherDescription:   "Summer Off-Peak",
 				},
@@ -422,6 +443,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					MonthStart:         time.October,
 					MonthEnd:           time.May,
 					SpecificDates:      nspHolidays,
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.04365,
 					OtherDescription:   "Winter Holiday Off-Peak",
 				},
@@ -433,12 +455,14 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					SpecificDatesNot: true,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 9, HourEnd: 21}},
 							Weekday:       true,
 							DollarsPerKWH: 0.13908,
 							Description:   "Winter On-Peak",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.04365,
 					OtherDescription:   "Winter Off-Peak",
 				},
@@ -451,6 +475,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					MonthStart:         time.June,
 					MonthEnd:           time.September,
 					SpecificDates:      nspHolidays,
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.04365,
 					OtherDescription:   "Summer Holiday Off-Peak",
 				},
@@ -462,12 +487,14 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					SpecificDatesNot: true,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 9, HourEnd: 21}},
 							Weekday:       true,
 							DollarsPerKWH: 0.18180,
 							Description:   "Summer On-Peak",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.05171,
 					OtherDescription:   "Summer Off-Peak",
 				},
@@ -476,6 +503,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					MonthStart:         time.October,
 					MonthEnd:           time.May,
 					SpecificDates:      nspHolidays,
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.04365,
 					OtherDescription:   "Winter Holiday Off-Peak",
 				},
@@ -487,12 +515,14 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					SpecificDatesNot: true,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 9, HourEnd: 21}},
 							Weekday:       true,
 							DollarsPerKWH: 0.12418,
 							Description:   "Winter Heating On-Peak",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.04365,
 					OtherDescription:   "Winter Off-Peak",
 				},
@@ -525,6 +555,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					MonthStart:         time.June,
 					MonthEnd:           time.September,
 					SpecificDates:      nspHolidays,
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.04610,
 					OtherDescription:   "Summer Holiday Off-Peak",
 				},
@@ -536,12 +567,14 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					SpecificDatesNot: true,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 9, HourEnd: 21}},
 							Weekday:       true,
 							DollarsPerKWH: 0.21806,
 							Description:   "Summer On-Peak",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.04610,
 					OtherDescription:   "Summer Off-Peak",
 				},
@@ -550,6 +583,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					MonthStart:         time.October,
 					MonthEnd:           time.May,
 					SpecificDates:      nspHolidays,
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.04610,
 					OtherDescription:   "Winter Holiday Off-Peak",
 				},
@@ -561,12 +595,14 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					SpecificDatesNot: true,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 9, HourEnd: 21}},
 							Weekday:       true,
 							DollarsPerKWH: 0.17590,
 							Description:   "Winter On-Peak",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.04610,
 					OtherDescription:   "Winter Off-Peak",
 				},
@@ -579,6 +615,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					MonthStart:         time.June,
 					MonthEnd:           time.September,
 					SpecificDates:      nspHolidays,
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.04610,
 					OtherDescription:   "Summer Holiday Off-Peak",
 				},
@@ -590,12 +627,14 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					SpecificDatesNot: true,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 9, HourEnd: 21}},
 							Weekday:       true,
 							DollarsPerKWH: 0.21806,
 							Description:   "Summer On-Peak",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.04610,
 					OtherDescription:   "Summer Off-Peak",
 				},
@@ -604,6 +643,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					MonthStart:         time.October,
 					MonthEnd:           time.May,
 					SpecificDates:      nspHolidays,
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.04610,
 					OtherDescription:   "Winter Holiday Off-Peak",
 				},
@@ -615,12 +655,14 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					SpecificDatesNot: true,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 9, HourEnd: 21}},
 							Weekday:       true,
 							DollarsPerKWH: 0.15839,
 							Description:   "Winter Heating On-Peak",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.04610,
 					OtherDescription:   "Winter Off-Peak",
 				},
@@ -631,7 +673,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			// Supply = $0.09425, GridUse (delivery + PSCR) = $0.0581 - $0.01009 = $0.04801
 			miLocPtr := ctLocation
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, miLocPtr),
 					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, miLocPtr),
 					LocationPtr: miLocPtr,
@@ -640,7 +682,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 				Description:   "Michigan Standard Supply Rate",
 			})
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, miLocPtr),
 					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, miLocPtr),
 					LocationPtr: miLocPtr,
@@ -657,7 +699,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			// This means Supply is base rate (On-Peak: $0.1607, Off-Peak: $0.0402), and GridUse is delivery + PSCR ($0.04801).
 			miLocPtr := ctLocation
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, miLocPtr),
 					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, miLocPtr),
 					LocationPtr: miLocPtr,
@@ -678,11 +720,13 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 				SpecificDates:    nspHolidays,
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{{
+					Name:          "On-Peak",
 					Hours:         []types.UtilityHourPeriod{peakHours},
 					Weekday:       true,
 					DollarsPerKWH: 0.1607,
 					Description:   "Michigan Supply On-Peak",
 				}},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0402,
 				OtherDescription:   "Michigan Supply Off-Peak",
 			}})...)
@@ -693,6 +737,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 				MonthStart:         time.January,
 				MonthEnd:           time.December,
 				SpecificDates:      nspHolidays,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.0402,
 				OtherDescription:   "Michigan Supply Holiday Off-Peak",
 			}})...)
@@ -700,7 +745,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 		// --- WISCONSIN (America/Chicago) ---
 		case "xcel_wi_standard":
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, ctLocation),
 					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, ctLocation),
 					LocationPtr: ctLocation,
@@ -729,7 +774,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 
 		case "xcel_wi_tou":
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, ctLocation),
 					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, ctLocation),
 					LocationPtr: ctLocation,
@@ -745,6 +790,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					MonthStart:         time.June,
 					MonthEnd:           time.September,
 					SpecificDates:      nspHolidays,
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.037500,
 					OtherDescription:   "Wisconsin Supply Holiday Off-Peak",
 				},
@@ -756,12 +802,14 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					SpecificDatesNot: true,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 9, HourEnd: 21}},
 							Weekday:       true,
 							DollarsPerKWH: 0.185500,
 							Description:   "Wisconsin Supply Summer On-Peak",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.037500,
 					OtherDescription:   "Wisconsin Supply Summer Off-Peak",
 				},
@@ -770,6 +818,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					MonthStart:         time.October,
 					MonthEnd:           time.May,
 					SpecificDates:      nspHolidays,
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.037500,
 					OtherDescription:   "Wisconsin Supply Holiday Off-Peak",
 				},
@@ -781,12 +830,14 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					SpecificDatesNot: true,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 9, HourEnd: 21}},
 							Weekday:       true,
 							DollarsPerKWH: 0.158300,
 							Description:   "Wisconsin Supply Winter On-Peak",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.037500,
 					OtherDescription:   "Wisconsin Supply Winter Off-Peak",
 				},
@@ -818,6 +869,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 				MonthStart:         time.June,
 				MonthEnd:           time.September,
 				SpecificDates:      nspHolidays,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.082251,
 				OtherDescription:   "Texas Supply Summer Holiday Off-Peak",
 			}
@@ -829,6 +881,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 				SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name: "On-Peak",
 						// On-Peak: 1 PM - 7 PM weekdays
 						Hours:         []types.UtilityHourPeriod{{HourStart: 13, HourEnd: 19}},
 						Weekday:       true,
@@ -836,6 +889,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 						Description:   "Texas Supply Summer On-Peak",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.082251,
 				OtherDescription:   "Texas Supply Summer Off-Peak",
 			}
@@ -844,6 +898,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 				Year:               year,
 				MonthStart:         time.October,
 				MonthEnd:           time.May,
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.082251,
 				OtherDescription:   "Texas Supply Winter Off-Peak",
 			}
@@ -852,7 +907,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 
 		if plan == "xcel_tx_standard" || plan == "xcel_tx_tou" {
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, ctLocation),
 					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, ctLocation),
 					LocationPtr: ctLocation,
@@ -871,7 +926,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 		// flat credit of $0.0360/kWh for all hours
 		for _, year := range years {
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, ctLocation),
 					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, ctLocation),
 					LocationPtr: ctLocation,
@@ -993,7 +1048,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 		// flat credit of $0.0316/kWh for all hours
 		for _, year := range years {
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, ctLocation),
 					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, ctLocation),
 					LocationPtr: ctLocation,
@@ -1043,7 +1098,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 		// flat credit of $0.03646/kWh for all hours
 		for _, year := range years {
 			periods = append(periods, types.UtilityFeesPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, ctLocation),
 					End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, ctLocation),
 					LocationPtr: ctLocation,
@@ -1132,7 +1187,7 @@ func xcelPeriods(plan string, options types.UtilityRateOptions, years []int) []t
 				endMonth := time.Date(year, month+1, 1, 0, 0, 0, 0, ctLocation)
 
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod: types.UtilityPeriod{
+					TimePeriod: types.TimePeriod{
 						Start:       startMonth,
 						End:         endMonth,
 						LocationPtr: ctLocation,

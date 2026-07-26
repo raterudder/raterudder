@@ -27,6 +27,10 @@ func TestHawaiiRates(t *testing.T) {
 		p1, err := u.priceForTime(time.Date(2026, 7, 7, 12, 0, 0, 0, loc))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.412922, p1.DollarsPerKWH, 0.00001)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.NotEmpty(t, periods)
 	})
 
 	t.Run("HELCO Hawaii Schedule R Flat Rate", func(t *testing.T) {
@@ -65,6 +69,16 @@ func TestHawaiiRates(t *testing.T) {
 			UtilityRate:     "heco_ard_tou_r",
 		})
 		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		names := make(map[string]bool)
+		for _, p := range periods {
+			names[p.Name] = true
+		}
+		assert.True(t, names["Daytime"])
+		assert.True(t, names["Evening Peak"])
+		assert.True(t, names["Overnight"])
 
 		// Daytime (e.g. 12:00 PM)
 		p1, err := u.priceForTime(time.Date(2026, 7, 7, 12, 0, 0, 0, loc))

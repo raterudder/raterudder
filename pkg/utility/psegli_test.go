@@ -19,6 +19,15 @@ func TestPSEGLIUtility(t *testing.T) {
 		})
 		require.NoError(t, err)
 
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		names := make(map[string]bool)
+		for _, p := range periods {
+			names[p.Name] = true
+		}
+		assert.True(t, names["On-Peak"])
+		assert.True(t, names["Off-Peak"])
+
 		// Summer: Mon, Jun 15, 2026
 		summerMon := time.Date(2026, time.June, 15, 0, 0, 0, 0, etLocation)
 

@@ -51,7 +51,7 @@ func eversourceVPPPeriods(opts types.UtilityRateOptions, years []int) (types.Uti
 
 		for _, month := range []time.Month{time.June, time.July, time.August} {
 			p := types.UtilityVPPPeriod{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start: time.Date(year, month, 1, 0, 0, 0, 0, etLocation),
 					End:   time.Date(year, month+1, 1, 0, 0, 0, 0, etLocation),
 					Hours: []types.UtilityHourPeriod{
@@ -180,6 +180,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 						MonthEnd:   time.June,
 						HoursAndDays: []touSimplifiedHoursAndDays{
 							{
+								Name:                              "On-Peak",
 								Hours:                             []types.UtilityHourPeriod{{HourStart: 12, HourEnd: 20}},
 								Weekday:                           true,
 								DollarsPerKWH:                     0.31099,
@@ -187,6 +188,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 								GenerationAdjustmentDollarsPerKWH: -0.0402,
 							},
 						},
+						OtherName:                              "Off-Peak",
 						OtherDollarsPerKWH:                     0.21871,
 						OtherDescription:                       "Eversource CT Rate 7 Off-Peak",
 						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
@@ -197,6 +199,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 						MonthEnd:   time.December,
 						HoursAndDays: []touSimplifiedHoursAndDays{
 							{
+								Name:                              "On-Peak",
 								Hours:                             []types.UtilityHourPeriod{{HourStart: 12, HourEnd: 20}},
 								Weekday:                           true,
 								DollarsPerKWH:                     0.29982,
@@ -204,6 +207,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 								GenerationAdjustmentDollarsPerKWH: -0.0402,
 							},
 						},
+						OtherName:                              "Off-Peak",
 						OtherDollarsPerKWH:                     0.20754,
 						OtherDescription:                       "Eversource CT Rate 7 Off-Peak",
 						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
@@ -217,6 +221,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 						MonthEnd:   time.December,
 						HoursAndDays: []touSimplifiedHoursAndDays{
 							{
+								Name:                              "On-Peak",
 								Hours:                             []types.UtilityHourPeriod{{HourStart: 12, HourEnd: 20}},
 								Weekday:                           true,
 								DollarsPerKWH:                     0.29982,
@@ -224,6 +229,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 								GenerationAdjustmentDollarsPerKWH: -0.0402,
 							},
 						},
+						OtherName:                              "Off-Peak",
 						OtherDollarsPerKWH:                     0.20754,
 						OtherDescription:                       "Eversource CT Rate 7 Off-Peak",
 						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
@@ -284,6 +290,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 						MonthStart:         time.January,
 						MonthEnd:           time.January,
 						SpecificDates:      holidays,
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: 0.19583,
 						OtherDescription:   "Eversource NH Rate R-OTOD Off-Peak (Holiday)",
 					},
@@ -296,12 +303,14 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 						SpecificDatesNot: true,
 						HoursAndDays: []touSimplifiedHoursAndDays{
 							{
+								Name:          "On-Peak",
 								Hours:         []types.UtilityHourPeriod{{HourStart: 13, HourEnd: 19}},
 								Weekday:       true,
 								DollarsPerKWH: 0.34792,
 								Description:   "Eversource NH Rate R-OTOD On-Peak",
 							},
 						},
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: 0.19583,
 						OtherDescription:   "Eversource NH Rate R-OTOD Off-Peak",
 					},
@@ -311,6 +320,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 						MonthStart:         time.February,
 						MonthEnd:           time.December,
 						SpecificDates:      holidays,
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: 0.19845,
 						OtherDescription:   "Eversource NH Rate R-OTOD Off-Peak (Holiday)",
 					},
@@ -323,12 +333,14 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 						SpecificDatesNot: true,
 						HoursAndDays: []touSimplifiedHoursAndDays{
 							{
+								Name:          "On-Peak",
 								Hours:         []types.UtilityHourPeriod{{HourStart: 13, HourEnd: 19}},
 								Weekday:       true,
 								DollarsPerKWH: 0.35054,
 								Description:   "Eversource NH Rate R-OTOD On-Peak",
 							},
 						},
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: 0.19845,
 						OtherDescription:   "Eversource NH Rate R-OTOD Off-Peak",
 					},
@@ -341,6 +353,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 						MonthStart:         time.January,
 						MonthEnd:           time.December,
 						SpecificDates:      holidays,
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: 0.19845,
 						OtherDescription:   "Eversource NH Rate R-OTOD Off-Peak (Holiday)",
 					},
@@ -353,12 +366,14 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 						SpecificDatesNot: true,
 						HoursAndDays: []touSimplifiedHoursAndDays{
 							{
+								Name:          "On-Peak",
 								Hours:         []types.UtilityHourPeriod{{HourStart: 13, HourEnd: 19}},
 								Weekday:       true,
 								DollarsPerKWH: 0.35054,
 								Description:   "Eversource NH Rate R-OTOD On-Peak",
 							},
 						},
+						OtherName:          "Off-Peak",
 						OtherDollarsPerKWH: 0.19845,
 						OtherDescription:   "Eversource NH Rate R-OTOD Off-Peak",
 					},
@@ -382,11 +397,13 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 					SpecificDates: holidays,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "Mid-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 7, HourEnd: 23}},
 							DollarsPerKWH: 0.21000,
 							Description:   "Eversource NH Rate R-EV Mid-Peak (Holiday)",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.11000,
 					OtherDescription:   "Eversource NH Rate R-EV Off-Peak (Holiday)",
 				},
@@ -400,6 +417,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						// On-Peak weekdays
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 14, HourEnd: 19}},
 							Weekday:       true,
 							DollarsPerKWH: 0.33000,
@@ -407,6 +425,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 						},
 						// Mid-Peak weekdays
 						{
+							Name: "Mid-Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 7, HourEnd: 14},
 								{HourStart: 19, HourEnd: 23},
@@ -417,12 +436,14 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 						},
 						// Mid-Peak weekends
 						{
+							Name:          "Mid-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 7, HourEnd: 23}},
 							Weekend:       true,
 							DollarsPerKWH: 0.21000,
 							Description:   "Eversource NH Rate R-EV Mid-Peak (Weekend)",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.11000,
 					OtherDescription:   "Eversource NH Rate R-EV Off-Peak",
 				},

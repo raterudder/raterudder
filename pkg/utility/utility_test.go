@@ -81,6 +81,10 @@ func (m *mockUtility) GetVPPInfo(context.Context) (types.UtilityVPPInfo, error) 
 	return types.UtilityVPPInfo{}, nil
 }
 
+func (m *mockUtility) GetPeriods(context.Context) ([]types.TimePeriod, error) {
+	return nil, nil
+}
+
 func TestMap(t *testing.T) {
 	ctx := context.Background()
 

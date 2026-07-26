@@ -92,12 +92,14 @@ func buildPepcoDCRPIVPeriods(year int, holidays []string, summer bool) []touSimp
 			SpecificDatesNot: true,
 			HoursAndDays: []touSimplifiedHoursAndDays{
 				{
+					Name:          "On-Peak",
 					Hours:         []types.UtilityHourPeriod{{HourStart: 12, HourEnd: 20}},
 					Weekday:       true,
 					DollarsPerKWH: onPeak,
 					Description:   descOn,
 				},
 				{
+					Name:          "Off-Peak",
 					Hours:         []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 12}, {HourStart: 20, HourEnd: 24}},
 					Weekday:       true,
 					DollarsPerKWH: offPeak,
@@ -112,6 +114,7 @@ func buildPepcoDCRPIVPeriods(year int, holidays []string, summer bool) []touSimp
 			MonthEnd:   endMonth,
 			HoursAndDays: []touSimplifiedHoursAndDays{
 				{
+					Name:          "Off-Peak",
 					Hours:         []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 24}},
 					Weekend:       true,
 					DollarsPerKWH: offPeak,
@@ -128,6 +131,7 @@ func buildPepcoDCRPIVPeriods(year int, holidays []string, summer bool) []touSimp
 			SpecificDatesNot: false,
 			HoursAndDays: []touSimplifiedHoursAndDays{
 				{
+					Name:          "Off-Peak",
 					Hours:         []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 24}},
 					Weekday:       true,
 					DollarsPerKWH: offPeak,

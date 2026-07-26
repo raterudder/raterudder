@@ -48,6 +48,19 @@ func (t *genericTOU) GetVPPInfo(context.Context) (types.UtilityVPPInfo, error) {
 	return t.vppInfo, nil
 }
 
+func (t *genericTOU) GetPeriods(ctx context.Context) ([]types.TimePeriod, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	var res []types.TimePeriod
+	for _, p := range t.periods {
+		if !p.SeparateGenerationCredit && !p.GridAdditional {
+			res = append(res, p.TimePeriod)
+		}
+	}
+	return res, nil
+}
+
 func (t *genericTOU) priceForTime(target time.Time) (types.Price, error) {
 	t.mu.Lock()
 	periods := t.periods
@@ -193,6 +206,7 @@ type touSimplifiedHoursAndDays struct {
 	GenerationCreditDollarsPerKWH     float64
 	GenerationAdjustmentDollarsPerKWH float64
 	Description                       string
+	Name                              string
 }
 
 type touSimplifiedPeriod struct {
@@ -213,6 +227,7 @@ type touSimplifiedPeriod struct {
 	OtherGenerationCreditDollarsPerKWH     float64
 	OtherGenerationAdjustmentDollarsPerKWH float64
 	OtherDescription                       string
+	OtherName                              string
 
 	// SeparateGenerationCredit is true if this period also contains solar
 	// generation credit pricing. GenerationCreditDollarsPerKWH will be used
@@ -234,7 +249,7 @@ type touSimplifiedPeriod struct {
 func buildPeriods(loc *time.Location, simplified []touSimplifiedPeriod) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
 	for _, s := range simplified {
-		var ps []types.UtilityPeriod
+		var ps []types.TimePeriod
 		// first handle months
 		if s.MonthStart != 0 || s.MonthEnd != 0 {
 			if s.MonthStart == 0 || s.MonthEnd == 0 {
@@ -245,18 +260,18 @@ func buildPeriods(loc *time.Location, simplified []touSimplifiedPeriod) []types.
 			}
 			// this means it wraps around and we need to make 2 periods
 			if s.MonthStart > s.MonthEnd {
-				ps = append(ps, types.UtilityPeriod{
+				ps = append(ps, types.TimePeriod{
 					Start:       time.Date(s.Year, s.MonthStart, 1, 0, 0, 0, 0, loc),
 					End:         time.Date(s.Year+1, time.January, 1, 0, 0, 0, 0, loc),
 					LocationPtr: loc,
 				})
-				ps = append(ps, types.UtilityPeriod{
+				ps = append(ps, types.TimePeriod{
 					Start:       time.Date(s.Year, time.January, 1, 0, 0, 0, 0, loc),
 					End:         time.Date(s.Year, s.MonthEnd+1, 1, 0, 0, 0, 0, loc),
 					LocationPtr: loc,
 				})
 			} else {
-				ps = append(ps, types.UtilityPeriod{
+				ps = append(ps, types.TimePeriod{
 					Start:       time.Date(s.Year, s.MonthStart, 1, 0, 0, 0, 0, loc),
 					End:         time.Date(s.Year, s.MonthEnd+1, 1, 0, 0, 0, 0, loc),
 					LocationPtr: loc,
@@ -267,14 +282,14 @@ func buildPeriods(loc *time.Location, simplified []touSimplifiedPeriod) []types.
 				panic("Year must be set when Months are set")
 			}
 			for _, m := range s.Months {
-				ps = append(ps, types.UtilityPeriod{
+				ps = append(ps, types.TimePeriod{
 					Start:       time.Date(s.Year, m, 1, 0, 0, 0, 0, loc),
 					End:         time.Date(s.Year, m+1, 1, 0, 0, 0, 0, loc),
 					LocationPtr: loc,
 				})
 			}
 		} else {
-			ps = append(ps, types.UtilityPeriod{
+			ps = append(ps, types.TimePeriod{
 				LocationPtr: loc,
 			})
 		}
@@ -298,6 +313,10 @@ func buildPeriods(loc *time.Location, simplified []touSimplifiedPeriod) []types.
 					p.DaysOfTheWeek = []time.Weekday{time.Saturday, time.Sunday}
 				}
 
+				if hd.Name != "" {
+					p.Name = hd.Name
+				}
+
 				dollarsPerKWH := hd.DollarsPerKWH
 				if s.OnlySeparateGenerationCredit {
 					dollarsPerKWH = hd.GenerationCreditDollarsPerKWH
@@ -308,7 +327,7 @@ func buildPeriods(loc *time.Location, simplified []touSimplifiedPeriod) []types.
 				}
 
 				periods = append(periods, types.UtilityFeesPeriod{
-					UtilityPeriod:                     p,
+					TimePeriod:                        p,
 					DollarsPerKWH:                     dollarsPerKWH,
 					Description:                       hd.Description,
 					SeparateGenerationCredit:          s.OnlySeparateGenerationCredit,
@@ -316,7 +335,7 @@ func buildPeriods(loc *time.Location, simplified []touSimplifiedPeriod) []types.
 				})
 				if !s.OnlySeparateGenerationCredit && s.SeparateGenerationCredit {
 					periods = append(periods, types.UtilityFeesPeriod{
-						UtilityPeriod:                     p,
+						TimePeriod:                        p,
 						DollarsPerKWH:                     hd.GenerationCreditDollarsPerKWH,
 						Description:                       hd.Description,
 						SeparateGenerationCredit:          true,
@@ -411,13 +430,17 @@ func buildPeriods(loc *time.Location, simplified []touSimplifiedPeriod) []types.
 						period.Hours = gaps
 						period.DaysOfTheWeek = dows
 
+						if s.OtherName != "" {
+							period.Name = s.OtherName
+						}
+
 						dollarsPerKWH := s.OtherDollarsPerKWH
 						if s.OnlySeparateGenerationCredit {
 							dollarsPerKWH = s.OtherGenerationCreditDollarsPerKWH
 						}
 
 						periods = append(periods, types.UtilityFeesPeriod{
-							UtilityPeriod:                     period,
+							TimePeriod:                        period,
 							DollarsPerKWH:                     dollarsPerKWH,
 							Description:                       s.OtherDescription,
 							SeparateGenerationCredit:          s.OnlySeparateGenerationCredit,
@@ -425,7 +448,7 @@ func buildPeriods(loc *time.Location, simplified []touSimplifiedPeriod) []types.
 						})
 						if !s.OnlySeparateGenerationCredit && s.SeparateGenerationCredit {
 							periods = append(periods, types.UtilityFeesPeriod{
-								UtilityPeriod:                     period,
+								TimePeriod:                        period,
 								DollarsPerKWH:                     s.OtherGenerationCreditDollarsPerKWH,
 								Description:                       s.OtherDescription,
 								SeparateGenerationCredit:          true,
@@ -463,7 +486,8 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 					GetFees: getStaticGetFees(
 						[]types.UtilityFeesPeriod{
 							{
-								UtilityPeriod: types.UtilityPeriod{
+								TimePeriod: types.TimePeriod{
+									Name: "Night",
 									Hours: []types.UtilityHourPeriod{
 										{HourStart: 0, HourEnd: 6},
 									},
@@ -473,7 +497,8 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 								Description:   "Night",
 							},
 							{
-								UtilityPeriod: types.UtilityPeriod{
+								TimePeriod: types.TimePeriod{
+									Name: "Morning",
 									Hours: []types.UtilityHourPeriod{
 										{HourStart: 6, HourEnd: 12},
 									},
@@ -483,7 +508,8 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 								Description:   "Morning",
 							},
 							{
-								UtilityPeriod: types.UtilityPeriod{
+								TimePeriod: types.TimePeriod{
+									Name: "Afternoon/Evening",
 									Hours: []types.UtilityHourPeriod{
 										{HourStart: 12, HourEnd: 24},
 									},
@@ -501,7 +527,8 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 					GetFees: getStaticGetFees(
 						[]types.UtilityFeesPeriod{
 							{
-								UtilityPeriod: types.UtilityPeriod{
+								TimePeriod: types.TimePeriod{
+									Name: "Night",
 									Hours: []types.UtilityHourPeriod{
 										{HourStart: 0, HourEnd: 6, MinuteEnd: 30},
 									},
@@ -511,7 +538,8 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 								Description:   "Night",
 							},
 							{
-								UtilityPeriod: types.UtilityPeriod{
+								TimePeriod: types.TimePeriod{
+									Name: "Peak Morning",
 									Hours: []types.UtilityHourPeriod{
 										{HourStart: 6, MinuteStart: 30, HourEnd: 12},
 									},
@@ -521,7 +549,8 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 								Description:   "Peak Morning",
 							},
 							{
-								UtilityPeriod: types.UtilityPeriod{
+								TimePeriod: types.TimePeriod{
+									Name: "Afternoon/Evening",
 									Hours: []types.UtilityHourPeriod{
 										{HourStart: 12, HourEnd: 24},
 									},
@@ -553,6 +582,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 									MonthEnd:   time.September,
 									HoursAndDays: []touSimplifiedHoursAndDays{
 										{
+											Name: "On-Peak",
 											Hours: []types.UtilityHourPeriod{
 												{HourStart: 13, HourEnd: 19},
 											},
@@ -562,6 +592,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 											Description:                   "May - September On-Peak",
 										},
 										{
+											Name: "Super Off-Peak",
 											Hours: []types.UtilityHourPeriod{
 												{HourStart: 0, HourEnd: 5},
 												{HourStart: 22, HourEnd: 24},
@@ -571,6 +602,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 											Description:                   "May - September Super Off-Peak",
 										},
 									},
+									OtherName:                          "Off-Peak",
 									OtherDollarsPerKWH:                 10.481 / 100.0,
 									OtherGenerationCreditDollarsPerKWH: 0.02375,
 									OtherDescription:                   "May - September Off-Peak",
@@ -582,6 +614,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 									Months: []time.Month{time.October, time.April},
 									HoursAndDays: []touSimplifiedHoursAndDays{
 										{
+											Name: "On-Peak",
 											Hours: []types.UtilityHourPeriod{
 												{HourStart: 7, HourEnd: 9},
 												{HourStart: 13, HourEnd: 19},
@@ -592,6 +625,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 											Description:                   "October and April On-Peak",
 										},
 										{
+											Name: "Super Off-Peak",
 											Hours: []types.UtilityHourPeriod{
 												{HourStart: 0, HourEnd: 5},
 												{HourStart: 22, HourEnd: 24},
@@ -601,6 +635,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 											Description:                   "October and April Super Off-Peak",
 										},
 									},
+									OtherName:                          "Off-Peak",
 									OtherDollarsPerKWH:                 10.481 / 100.0,
 									OtherGenerationCreditDollarsPerKWH: 0.02375,
 									OtherDescription:                   "October and April Off-Peak",
@@ -613,6 +648,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 									MonthEnd:   time.March,
 									HoursAndDays: []touSimplifiedHoursAndDays{
 										{
+											Name: "On-Peak",
 											Hours: []types.UtilityHourPeriod{
 												{HourStart: 7, HourEnd: 9},
 											},
@@ -622,6 +658,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 											Description:                   "November - March On-Peak",
 										},
 										{
+											Name: "Super Off-Peak",
 											Hours: []types.UtilityHourPeriod{
 												{HourStart: 0, HourEnd: 5},
 												{HourStart: 22, HourEnd: 24},
@@ -631,6 +668,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 											Description:                   "November - March Super Off-Peak",
 										},
 									},
+									OtherName:                          "Off-Peak",
 									OtherDollarsPerKWH:                 10.481 / 100.0,
 									OtherGenerationCreditDollarsPerKWH: 0.02375,
 									OtherDescription:                   "November - March Off-Peak",
@@ -692,6 +730,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 									MonthEnd:   time.March,
 									HoursAndDays: []touSimplifiedHoursAndDays{
 										{
+											Name: "High Peak",
 											Hours: []types.UtilityHourPeriod{
 												{HourStart: 13, HourEnd: 17},
 											},
@@ -700,6 +739,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 											Description:   "January - March Total Consumption Charge High Peak",
 										},
 										{
+											Name: "Low Peak",
 											Hours: []types.UtilityHourPeriod{
 												{HourStart: 10, HourEnd: 13},
 												{HourStart: 17, HourEnd: 20},
@@ -709,6 +749,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 											Description:   "January - March Total Consumption Charge Low Peak",
 										},
 									},
+									OtherName:          "Off-Peak",
 									OtherDollarsPerKWH: 0.25293,
 									OtherDescription:   "January - March Total Consumption Charge Base",
 								},
@@ -718,6 +759,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 									MonthEnd:   time.May,
 									HoursAndDays: []touSimplifiedHoursAndDays{
 										{
+											Name: "High Peak",
 											Hours: []types.UtilityHourPeriod{
 												{HourStart: 13, HourEnd: 17},
 											},
@@ -726,6 +768,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 											Description:   "April - May Total Consumption Charge High Peak",
 										},
 										{
+											Name: "Low Peak",
 											Hours: []types.UtilityHourPeriod{
 												{HourStart: 10, HourEnd: 13},
 												{HourStart: 17, HourEnd: 20},
@@ -735,6 +778,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 											Description:   "April - May Total Consumption Charge Low Peak",
 										},
 									},
+									OtherName:          "Off-Peak",
 									OtherDollarsPerKWH: 0.24884,
 									OtherDescription:   "April - May Total Consumption Charge Base",
 								},
@@ -743,6 +787,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 									Months: []time.Month{time.June},
 									HoursAndDays: []touSimplifiedHoursAndDays{
 										{
+											Name: "High Peak",
 											Hours: []types.UtilityHourPeriod{
 												{HourStart: 13, HourEnd: 17},
 											},
@@ -751,6 +796,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 											Description:   "June Total Consumption Charge High Peak",
 										},
 										{
+											Name: "Low Peak",
 											Hours: []types.UtilityHourPeriod{
 												{HourStart: 10, HourEnd: 13},
 												{HourStart: 17, HourEnd: 20},
@@ -760,6 +806,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 											Description:   "June Total Consumption Charge Low Peak",
 										},
 									},
+									OtherName:          "Off-Peak",
 									OtherDollarsPerKWH: 0.24494,
 									OtherDescription:   "June Total Consumption Charge Base",
 								},
@@ -1009,6 +1056,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 								MonthEnd:   time.December,
 								HoursAndDays: []touSimplifiedHoursAndDays{
 									{
+										Name:  "On-Peak",
 										Hours: peakHours,
 										DaysOfTheWeek: []time.Weekday{
 											time.Monday,
@@ -1022,6 +1070,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 										Description:   "MVEA 16.05 On-Peak",
 									},
 								},
+								OtherName:          "Off-Peak",
 								OtherDollarsPerKWH: 0.08346,
 								OtherDescription:   "MVEA 16.05 Off-Peak",
 							},
@@ -1087,11 +1136,13 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 								{
 									HoursAndDays: []touSimplifiedHoursAndDays{
 										{
+											Name:          "On-Peak",
 											Hours:         []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 23}},
 											DollarsPerKWH: 0.12694,
 											Description:   "NOVEC Schedule R-1-EV On-Peak",
 										},
 									},
+									OtherName:          "Off-Peak",
 									OtherDollarsPerKWH: 0.07320,
 									OtherDescription:   "NOVEC Schedule R-1-EV Off-Peak",
 								},
@@ -1149,7 +1200,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 						if scheme == "edg" {
 							for _, year := range []int{2026} {
 								periods = append(periods, types.UtilityFeesPeriod{
-									UtilityPeriod: types.UtilityPeriod{
+									TimePeriod: types.TimePeriod{
 										Start:       time.Date(year, time.January, 1, 0, 0, 0, 0, ctLocation),
 										End:         time.Date(year+1, time.January, 1, 0, 0, 0, 0, ctLocation),
 										LocationPtr: ctLocation,

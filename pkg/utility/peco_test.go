@@ -37,6 +37,10 @@ func TestPECOUtility(t *testing.T) {
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.11759, p.DollarsPerKWH, 1e-6)
 		}
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.NotEmpty(t, periods)
 	})
 
 	t.Run("TOU Rate", func(t *testing.T) {
@@ -46,6 +50,15 @@ func TestPECOUtility(t *testing.T) {
 			UtilityRate:     "peco_tou",
 		})
 		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		names := make(map[string]bool)
+		for _, p := range periods {
+			names[p.Name] = true
+		}
+		assert.True(t, names["On-Peak"])
+		assert.True(t, names["Off-Peak"])
 
 		// Dec 2025 (Winter 2025)
 		// Monday, Dec 15, 2025

@@ -70,6 +70,10 @@ func TestRockyMountainPowerRates(t *testing.T) {
 		if assert.True(t, pWinter.SeparateGenerationCredit) {
 			assert.InDelta(t, 0.04033, pWinter.GenerationCreditDollarsPerKWH, 1e-6)
 		}
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.NotEmpty(t, periods)
 	})
 
 	t.Run("Utah Residential Service flat rate with 1:1 Net Metering Schedule 135", func(t *testing.T) {
@@ -100,6 +104,15 @@ func TestRockyMountainPowerRates(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		names := make(map[string]bool)
+		for _, p := range periods {
+			names[p.Name] = true
+		}
+		assert.True(t, names["On-Peak"])
+		assert.True(t, names["Off-Peak"])
 
 		targetSummerPeak := time.Date(2026, time.July, 15, 19, 0, 0, 0, mtLocation)
 		pSummerPeak, err := u.priceForTime(targetSummerPeak)

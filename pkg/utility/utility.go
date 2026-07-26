@@ -37,6 +37,10 @@ type Utility interface {
 
 	// GetVPPInfo returns the VPP info for the utility provider.
 	GetVPPInfo(ctx context.Context) (types.UtilityVPPInfo, error)
+
+	// GetPeriods returns the periods for the utility provider. This might return
+	// an empty list if the utility doesn't have any pre-defined periods.
+	GetPeriods(ctx context.Context) ([]types.TimePeriod, error)
 }
 
 // Configured sets up the utility providers and returns a Map.

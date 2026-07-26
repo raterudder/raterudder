@@ -79,6 +79,9 @@ type Price struct {
 	// this adjustment is added to the base rate for export credits (i.e. DollarsPerKWH + GenerationAdjustmentDollarsPerKWH).
 	// If NetMetering is active (e.g. min/max price valuation), this adjustment is applied to the max or min price (excluding 0).
 	GenerationAdjustmentDollarsPerKWH float64 `json:"generationAdjustmentDollarsPerKWH,omitempty"`
+
+	// PeriodName is the name of the utility pricing period for this interval (e.g. "Peak", "Off-Peak").
+	PeriodName string `json:"periodName,omitempty"`
 }
 
 // PriceState embeds Price and adds a Confirmed flag.
@@ -124,8 +127,11 @@ type UtilityHourPeriod struct {
 	MinuteEnd int `json:"minuteEnd,omitempty"`
 }
 
-// UtilityPeriod defines a particular schedule for some utility rate or fee
-type UtilityPeriod struct {
+// TimePeriod defines a particular time-based period
+type TimePeriod struct {
+	// Name is a short human-friendly name to identify the period
+	Name string `json:"name,omitempty"`
+
 	// Start is the optional inclusive start time of the applicable period. If it is zero,
 	// then it applies from the beginning of time.
 	Start time.Time `json:"start,omitempty"`
@@ -164,7 +170,7 @@ type UtilityPeriodStartEnd struct {
 }
 
 // Contains checks if a time is within the period.
-func (p *UtilityPeriod) Contains(t time.Time) (bool, UtilityPeriodStartEnd, error) {
+func (p *TimePeriod) Contains(t time.Time) (bool, UtilityPeriodStartEnd, error) {
 	if p.LocationPtr != nil {
 		t = t.In(p.LocationPtr)
 	}
@@ -229,7 +235,7 @@ func (p *UtilityPeriod) Contains(t time.Time) (bool, UtilityPeriodStartEnd, erro
 
 // UtilityFeesPeriod represents a period of time with a fee.
 type UtilityFeesPeriod struct {
-	UtilityPeriod
+	TimePeriod
 
 	// DollarsPerKWH is the fee per kWh in the time interval.
 	DollarsPerKWH float64 `json:"dollarsPerKWH,omitempty"`
@@ -288,6 +294,11 @@ func (up *UtilityFeesPeriod) Apply(p Price, originalPrice Price) (Price, error) 
 		p.DollarsPerKWH += up.DollarsPerKWH
 	}
 
+	// ignore names for export periods and fees periods
+	if !up.SeparateGenerationCredit && !up.GridAdditional && up.Name != "" {
+		p.PeriodName = up.Name
+	}
+
 	return p, nil
 }
 
@@ -307,7 +318,7 @@ func ApplyUtilityFeesPeriods(p Price, periods []UtilityFeesPeriod) (Price, error
 
 // UtilityVPPPeriod represents a period of time with utility-mandated VPP events.
 type UtilityVPPPeriod struct {
-	UtilityPeriod
+	TimePeriod
 	ReserveSOC float64 `json:"reserveSOC"`
 }
 

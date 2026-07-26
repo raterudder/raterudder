@@ -39,6 +39,29 @@ func TestPepcoDC(t *testing.T) {
 		assert.InDelta(t, 0.19487, pWinter.DollarsPerKWH, 1e-6)
 	})
 
+	t.Run("GetPeriods TOU and non-TOU for Pepco DC", func(t *testing.T) {
+		u := &genericTOU{}
+		err := u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "pepco",
+			UtilityRate:     "pepco_dc_r",
+		})
+		require.NoError(t, err)
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.NotEmpty(t, periods)
+
+		err = u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "pepco",
+			UtilityRate:     "pepco_dc_r_piv",
+		})
+		require.NoError(t, err)
+		periods, err = u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		if assert.NotEmpty(t, periods) {
+			assert.Equal(t, "On-Peak", periods[0].Name)
+		}
+	})
+
 	t.Run("pepco_dc_r_piv plug-in vehicle rates and schedules", func(t *testing.T) {
 		periods := pepcoDCPeriods("pepco_dc_r_piv", types.UtilityRateOptions{}, []int{2026})
 

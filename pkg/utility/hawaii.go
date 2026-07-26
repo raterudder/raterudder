@@ -133,16 +133,19 @@ func hawaiiPeriods(providerID string, plan string, options types.UtilityRateOpti
 					MonthEnd:   time.December,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "Daytime",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 9, HourEnd: 17}},
 							DollarsPerKWH: rates.daytime,
 							Description:   "Hawaiian Electric ARD TOU R Daytime",
 						},
 						{
+							Name:          "Evening Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 17, HourEnd: 21}},
 							DollarsPerKWH: rates.eveningPeak,
 							Description:   "Hawaiian Electric ARD TOU R Evening Peak",
 						},
 					},
+					OtherName:          "Overnight",
 					OtherDollarsPerKWH: rates.overnight,
 					OtherDescription:   "Hawaiian Electric ARD TOU R Overnight",
 				},

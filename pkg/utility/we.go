@@ -98,6 +98,7 @@ func wePeriods(plan string, opts types.UtilityRateOptions, years []int) []types.
 					MonthStart:         time.January,
 					MonthEnd:           time.December,
 					SpecificDates:      holidays,
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: offPeakRate,
 					OtherDescription:   "WE Energies RG2 Off-Peak (Holiday)",
 				},
@@ -110,12 +111,14 @@ func wePeriods(plan string, opts types.UtilityRateOptions, years []int) []types.
 					SpecificDatesNot: true,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         peakHours,
 							Weekday:       true,
 							DollarsPerKWH: onPeakRate,
 							Description:   "WE Energies RG2 On-Peak",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: offPeakRate,
 					OtherDescription:   "WE Energies RG2 Off-Peak",
 				},

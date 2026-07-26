@@ -57,6 +57,13 @@ func (m *mockUtility) GetVPPInfo(ctx context.Context) (types.UtilityVPPInfo, err
 	}
 	return types.UtilityVPPInfo{}, nil
 }
+func (m *mockUtility) GetPeriods(ctx context.Context) ([]types.TimePeriod, error) {
+	args := m.Called(ctx)
+	if len(args) > 0 {
+		return args.Get(0).([]types.TimePeriod), args.Error(1)
+	}
+	return nil, nil
+}
 
 type mockESS struct {
 	mock.Mock

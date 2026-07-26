@@ -79,6 +79,10 @@ func TestEversourceUtilityInfo(t *testing.T) {
 			assert.InDelta(t, 0.23602, p2027.DollarsPerKWH, 1e-6)
 			assert.InDelta(t, -0.0402, p2027.GenerationAdjustmentDollarsPerKWH, 1e-6)
 		}
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.NotEmpty(t, periods)
 	})
 
 	t.Run("CT Residential Heating Rate 5", func(t *testing.T) {
@@ -111,6 +115,10 @@ func TestEversourceUtilityInfo(t *testing.T) {
 			assert.InDelta(t, 0.21213, p2027.DollarsPerKWH, 1e-6)
 			assert.InDelta(t, -0.0402, p2027.GenerationAdjustmentDollarsPerKWH, 1e-6)
 		}
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.NotEmpty(t, periods)
 	})
 
 	t.Run("CT Residential TOU Rate 7", func(t *testing.T) {
@@ -119,6 +127,15 @@ func TestEversourceUtilityInfo(t *testing.T) {
 			UtilityRate:     "eversource_ct_rate_7",
 		})
 		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		names := make(map[string]bool)
+		for _, p := range periods {
+			names[p.Name] = true
+		}
+		assert.True(t, names["On-Peak"])
+		assert.True(t, names["Off-Peak"])
 
 		// --- Before July 1st, 2026 ---
 		// On-peak: Weekdays 12 Noon - 8 p.m.
@@ -207,6 +224,10 @@ func TestEversourceUtilityInfo(t *testing.T) {
 			assert.InDelta(t, 0.23390, p2027.DollarsPerKWH, 1e-6)
 			assert.InDelta(t, 0.0, p2027.GenerationAdjustmentDollarsPerKWH, 1e-6)
 		}
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.NotEmpty(t, periods)
 	})
 
 	t.Run("NH Residential TOU Rate R-OTOD", func(t *testing.T) {
@@ -215,6 +236,15 @@ func TestEversourceUtilityInfo(t *testing.T) {
 			UtilityRate:     "eversource_nh_rate_r_otod",
 		})
 		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		names := make(map[string]bool)
+		for _, p := range periods {
+			names[p.Name] = true
+		}
+		assert.True(t, names["On-Peak"])
+		assert.True(t, names["Off-Peak"])
 
 		// --- Before Feb 1, 2026 (January) ---
 		// On-peak: Weekdays 1 PM - 7 PM (excluding holidays)
@@ -275,6 +305,16 @@ func TestEversourceUtilityInfo(t *testing.T) {
 			UtilityRate:     "eversource_nh_rate_r_ev",
 		})
 		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		names := make(map[string]bool)
+		for _, p := range periods {
+			names[p.Name] = true
+		}
+		assert.True(t, names["On-Peak"])
+		assert.True(t, names["Mid-Peak"])
+		assert.True(t, names["Off-Peak"])
 
 		// On-Peak: Weekdays 2 p.m. – 7 p.m. excluding holidays
 		onPeak := time.Date(2026, time.June, 15, 15, 0, 0, 0, etLocation) // Monday 3 PM
@@ -337,6 +377,10 @@ func TestEversourceUtilityInfo(t *testing.T) {
 			UtilityRate:     "eversource_ma_residential",
 		})
 		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.NotEmpty(t, periods)
 
 		// January 2026 (fallback)
 		pJan, err := u.priceForTime(time.Date(2026, time.January, 15, 12, 0, 0, 0, etLocation))

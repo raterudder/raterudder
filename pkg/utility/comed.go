@@ -906,7 +906,7 @@ func getComEdDeliveryFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPerio
 
 		return []types.UtilityFeesPeriod{
 			{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
 					End:         time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 					LocationPtr: ctLocation,
@@ -956,7 +956,7 @@ func getComEdDeliveryFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPerio
 			// night (midnight - 6am)
 			// night (9pm - midnight)
 			{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start: time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
 					End:   time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 					Hours: []types.UtilityHourPeriod{
@@ -971,7 +971,7 @@ func getComEdDeliveryFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPerio
 			},
 			// morning (6am - 1pm)
 			{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start: time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
 					End:   time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 					Hours: []types.UtilityHourPeriod{
@@ -985,7 +985,7 @@ func getComEdDeliveryFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPerio
 			},
 			// mid day (1pm - 7pm)
 			{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start: time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
 					End:   time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 					Hours: []types.UtilityHourPeriod{
@@ -999,7 +999,7 @@ func getComEdDeliveryFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPerio
 			},
 			// evening (7pm - 9pm)
 			{
-				UtilityPeriod: types.UtilityPeriod{
+				TimePeriod: types.TimePeriod{
 					Start: time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
 					End:   time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 					Hours: []types.UtilityHourPeriod{
@@ -1037,7 +1037,7 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 		// PSC (Transmission, GridAdditional: false)
 		// AKA PJM Services Charge
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, 1, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1047,7 +1047,7 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 			Description:    "Transmission Services Charge (PSC) (Jan-May 2026)",
 		},
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1059,7 +1059,7 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 
 		// MPCC (Supply, GridAdditional: true)
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, 1, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1069,7 +1069,7 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 			Description:    "Miscellaneous Procurement Components Charge (MPCC) (Jan-May 2026)",
 		},
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1081,7 +1081,7 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 
 		// HPEA (Supply, GridAdditional: true)
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.February, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1091,7 +1091,7 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 			Description:    "Hourly Purchased Electricity Adjustment (HPEA) (Jan 2026)",
 		},
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.February, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.March, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1101,7 +1101,7 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 			Description:    "Hourly Purchased Electricity Adjustment (HPEA) (Feb 2026)",
 		},
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.March, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.April, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1111,7 +1111,7 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 			Description:    "Hourly Purchased Electricity Adjustment (HPEA) (Mar 2026)",
 		},
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.April, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.May, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1121,7 +1121,7 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 			Description:    "Hourly Purchased Electricity Adjustment (HPEA) (Apr 2026)",
 		},
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.May, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1131,7 +1131,7 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 			Description:    "Hourly Purchased Electricity Adjustment (HPEA) (May 2026)",
 		},
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.July, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1142,7 +1142,7 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 		},
 		// July 2026: 0.690 ¢/kWh
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.July, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.August, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1153,7 +1153,7 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 		},
 		// fallback
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.August, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1178,7 +1178,7 @@ func getComEdBESFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, er
 	besFees := []types.UtilityFeesPeriod{
 		// PSC (Transmission, GridAdditional: true)
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, 1, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1188,7 +1188,7 @@ func getComEdBESFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, er
 			Description:    "Transmission Services Charge (PSC) (Jan-May 2026)",
 		},
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1201,7 +1201,7 @@ func getComEdBESFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, er
 		// Electricity Supply Charge (PEC) (Supply, GridAdditional: false)
 		// Nonsummer PEC (Jan 2026 - May 2026): 7.841 ¢/kWh
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1212,7 +1212,7 @@ func getComEdBESFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, er
 		},
 		// Summer PEC (June 2026 - Sept 2026): 8.677 ¢/kWh
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1223,7 +1223,7 @@ func getComEdBESFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, er
 		},
 		// Nonsummer PEC (Oct 2026 - May 2027): 8.241 ¢/kWh
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1236,7 +1236,7 @@ func getComEdBESFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, er
 		// Purchased Electricity Adjustment (PEA) (Supply, GridAdditional: false)
 		// January 2026: 0.357 ¢/kWh
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.February, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1247,7 +1247,7 @@ func getComEdBESFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, er
 		},
 		// February 2026: 0.889 ¢/kWh
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.February, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.March, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1258,7 +1258,7 @@ func getComEdBESFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, er
 		},
 		// March 2026: -0.151 ¢/kWh
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.March, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.April, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1269,7 +1269,7 @@ func getComEdBESFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, er
 		},
 		// April 2026: 1.159 ¢/kWh
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.April, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.May, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1280,7 +1280,7 @@ func getComEdBESFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, er
 		},
 		// May 2026: 8.166 ¢/kWh
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.May, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1291,7 +1291,7 @@ func getComEdBESFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, er
 		},
 		// June 2026: 0.230 ¢/kWh
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.July, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1302,7 +1302,7 @@ func getComEdBESFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, er
 		},
 		// July 2026: 0.247 ¢/kWh
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.July, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2026, time.August, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1313,7 +1313,7 @@ func getComEdBESFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, er
 		},
 		// fallback
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.August, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1347,7 +1347,7 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 	bestFees := []types.UtilityFeesPeriod{
 		// PJM Component (Supply, GridAdditional: false)
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
@@ -1360,7 +1360,7 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 		// --- BESTECs Components (Supply, GridAdditional: false) ---
 		// Prior to June 1, 2026 (Nonsummer)
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				Hours: []types.UtilityHourPeriod{
@@ -1373,7 +1373,7 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 			Description:    "BEST Nonsummer Morning Period Electricity Charge (MPEC)",
 		},
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				Hours: []types.UtilityHourPeriod{
@@ -1385,7 +1385,7 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 			Description:   "BEST Nonsummer Mid-Day Peak Period Electricity Charge (MDPPEC)",
 		},
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				Hours: []types.UtilityHourPeriod{
@@ -1398,7 +1398,7 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 			Description:    "BEST Nonsummer Evening Period Electricity Charge (EPEC)",
 		},
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				Hours: []types.UtilityHourPeriod{
@@ -1414,7 +1414,7 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 
 		// Summer: June 1, 2026 to Oct 1, 2026
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
 				Hours: []types.UtilityHourPeriod{
@@ -1427,7 +1427,7 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 			Description:    "BEST Summer Morning Period Electricity Charge (MPEC)",
 		},
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
 				Hours: []types.UtilityHourPeriod{
@@ -1440,7 +1440,7 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 			Description:    "BEST Summer Mid-Day Peak Period Electricity Charge (MDPPEC)",
 		},
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
 				Hours: []types.UtilityHourPeriod{
@@ -1453,7 +1453,7 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 			Description:    "BEST Summer Evening Period Electricity Charge (EPEC)",
 		},
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
 				Hours: []types.UtilityHourPeriod{
@@ -1469,7 +1469,7 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 
 		// Nonsummer: Oct 1, 2026 to June 1, 2027
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 				Hours: []types.UtilityHourPeriod{
@@ -1482,7 +1482,7 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 			Description:    "BEST Nonsummer Morning Period Electricity Charge (MPEC)",
 		},
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 				Hours: []types.UtilityHourPeriod{
@@ -1495,7 +1495,7 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 			Description:    "BEST Nonsummer Mid-Day Peak Period Electricity Charge (MDPPEC)",
 		},
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 				Hours: []types.UtilityHourPeriod{
@@ -1508,7 +1508,7 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 			Description:    "BEST Nonsummer Evening Period Electricity Charge (EPEC)",
 		},
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 				Hours: []types.UtilityHourPeriod{

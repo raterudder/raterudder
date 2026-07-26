@@ -54,6 +54,10 @@ func TestDLCRates(t *testing.T) {
 		p2, err := u.priceForTime(time.Date(2026, time.December, 15, 2, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.241769, p2.DollarsPerKWH, 1e-6)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.NotEmpty(t, periods)
 	})
 
 	t.Run("TOU Supply Rate Pilot", func(t *testing.T) {
@@ -62,6 +66,15 @@ func TestDLCRates(t *testing.T) {
 			UtilityRate:     "dlc_tou",
 		})
 		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		names := make(map[string]bool)
+		for _, p := range periods {
+			names[p.Name] = true
+		}
+		assert.True(t, names["On-Peak"])
+		assert.True(t, names["Off-Peak"])
 
 		// 1. Weekday On-Peak (Wednesday, July 15, 2026 at 4:00 PM) -> 44.7740¢
 		p, err := u.priceForTime(time.Date(2026, time.July, 15, 16, 0, 0, 0, etLocation))

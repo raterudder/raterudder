@@ -696,11 +696,13 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					MonthEnd:   time.September,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
 							DollarsPerKWH: 0.52240 - touCBaselineCredit - pgeNBC,
 							Description:   "E-TOU-C Summer Peak (4-9 PM)",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.39940 - touCBaselineCredit - pgeNBC,
 					OtherDescription:   "E-TOU-C Summer Off-Peak",
 				},
@@ -711,11 +713,13 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					MonthEnd:   time.May,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
 							DollarsPerKWH: 0.39757 - touCBaselineCredit - pgeNBC,
 							Description:   "E-TOU-C Winter Peak (4-9 PM)",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.36757 - touCBaselineCredit - pgeNBC,
 					OtherDescription:   "E-TOU-C Winter Off-Peak",
 				},
@@ -732,6 +736,7 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					MonthStart:         time.June,
 					MonthEnd:           time.September,
 					SpecificDates:      holidays,
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.34212 - pgeNBC,
 					OtherDescription:   "E-TOU-D Summer Holiday Off-Peak",
 				},
@@ -744,12 +749,14 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SpecificDatesNot: true,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 17, HourEnd: 20}},
 							Weekday:       true,
 							DollarsPerKWH: 0.47708 - pgeNBC,
 							Description:   "E-TOU-D Summer Weekday Peak (5-8 PM)",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.34212 - pgeNBC,
 					OtherDescription:   "E-TOU-D Summer Off-Peak",
 				},
@@ -759,6 +766,7 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					MonthStart:         time.October,
 					MonthEnd:           time.May,
 					SpecificDates:      holidays,
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.34886 - pgeNBC,
 					OtherDescription:   "E-TOU-D Winter Holiday Off-Peak",
 				},
@@ -771,12 +779,14 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					SpecificDatesNot: true,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 17, HourEnd: 20}},
 							Weekday:       true,
 							DollarsPerKWH: 0.38747 - pgeNBC,
 							Description:   "E-TOU-D Winter Weekday Peak (5-8 PM)",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.34886 - pgeNBC,
 					OtherDescription:   "E-TOU-D Winter Off-Peak",
 				},
@@ -794,11 +804,13 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					MonthEnd:   time.September,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
 							DollarsPerKWH: 0.55214 - pgeNBC,
 							Description:   "E-ELEC Summer Peak (4-9 PM)",
 						},
 						{
+							Name: "Partial Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 15, HourEnd: 16},
 								{HourStart: 21, HourEnd: 24},
@@ -807,6 +819,7 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:   "E-ELEC Summer Part-Peak",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.33358 - pgeNBC,
 					OtherDescription:   "E-ELEC Summer Off-Peak",
 				},
@@ -817,11 +830,13 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					MonthEnd:   time.May,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
 							DollarsPerKWH: 0.32063 - pgeNBC,
 							Description:   "E-ELEC Winter Peak (4-9 PM)",
 						},
 						{
+							Name: "Partial Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 15, HourEnd: 16},
 								{HourStart: 21, HourEnd: 24},
@@ -830,6 +845,7 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:   "E-ELEC Winter Part-Peak",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.28468 - pgeNBC,
 					OtherDescription:   "E-ELEC Winter Off-Peak",
 				},
@@ -847,11 +863,13 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					MonthEnd:   time.September,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
 							DollarsPerKWH: 0.53809 - pgeNBC,
 							Description:   "EV2 Summer Peak (4-9 PM)",
 						},
 						{
+							Name: "Partial Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 15, HourEnd: 16},
 								{HourStart: 21, HourEnd: 24},
@@ -860,6 +878,7 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:   "EV2 Summer Part-Peak",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.22558 - pgeNBC,
 					OtherDescription:   "EV2 Summer Off-Peak",
 				},
@@ -870,11 +889,13 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					MonthEnd:   time.May,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name:          "On-Peak",
 							Hours:         []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
 							DollarsPerKWH: 0.41099 - pgeNBC,
 							Description:   "EV2 Winter Peak (4-9 PM)",
 						},
 						{
+							Name: "Partial Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 15, HourEnd: 16},
 								{HourStart: 21, HourEnd: 24},
@@ -883,6 +904,7 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:   "EV2 Winter Part-Peak",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.22558 - pgeNBC,
 					OtherDescription:   "EV2 Winter Off-Peak",
 				},
@@ -892,7 +914,7 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 
 	// Add Non-Bypassable Charges (NBCs) unconditionally for all PG&E rates as GridUse fee.
 	periods = append(periods, types.UtilityFeesPeriod{
-		UtilityPeriod: types.UtilityPeriod{
+		TimePeriod: types.TimePeriod{
 			LocationPtr: ptLocation,
 		},
 		DollarsPerKWH:  pgeNBC,
@@ -922,7 +944,7 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					}
 
 					periods = append(periods, types.UtilityFeesPeriod{
-						UtilityPeriod: types.UtilityPeriod{
+						TimePeriod: types.TimePeriod{
 							Start:            startMonth,
 							End:              endMonth,
 							LocationPtr:      locPtr,
@@ -947,7 +969,7 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					}
 
 					periods = append(periods, types.UtilityFeesPeriod{
-						UtilityPeriod: types.UtilityPeriod{
+						TimePeriod: types.TimePeriod{
 							Start:         startMonth,
 							End:           endMonth,
 							LocationPtr:   locPtr,
@@ -961,7 +983,7 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 
 					// 3. Holiday period (restrict to weekdays Monday-Friday)
 					periods = append(periods, types.UtilityFeesPeriod{
-						UtilityPeriod: types.UtilityPeriod{
+						TimePeriod: types.TimePeriod{
 							Start:            startMonth,
 							End:              endMonth,
 							LocationPtr:      locPtr,

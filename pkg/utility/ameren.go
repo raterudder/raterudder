@@ -414,7 +414,7 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPerio
 		// ── Transmission Service Charge ──────────────────────────────────
 		// Applies all hours, both summer and non-summer.
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 			},
@@ -423,7 +423,7 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPerio
 			Description:    "Ameren IL Transmission Service Charge (Jan-May 2026)",
 		},
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2028, time.January, 1, 0, 0, 0, 0, ctLocation),
 			},
@@ -434,7 +434,7 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPerio
 
 		// ── 2026 Distribution Delivery Charge ────────────────────────────────
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 			},
@@ -443,7 +443,7 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPerio
 			Description:    "Rate DS-1 Distribution Delivery Charge (Non-summer 2026)",
 		},
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
 			},
@@ -452,7 +452,7 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPerio
 			Description:    "Rate DS-1 Distribution Delivery Charge (Summer 2026)",
 		},
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
 			},
@@ -463,7 +463,7 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPerio
 
 		// ── 2027 Distribution Delivery Charge ────────────────────────────────
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 			},
@@ -472,7 +472,7 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPerio
 			Description:    "Rate DS-1 Distribution Delivery Charge (Non-summer 2027)",
 		},
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2027, time.October, 1, 0, 0, 0, 0, ctLocation),
 			},
@@ -481,7 +481,7 @@ func getAmerenAdditionalFees(types.UtilityRateOptions) ([]types.UtilityFeesPerio
 			Description:    "Rate DS-1 Distribution Delivery Charge (Summer 2027)",
 		},
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2027, time.October, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2028, time.January, 1, 0, 0, 0, 0, ctLocation),
 			},
@@ -505,7 +505,7 @@ func getAmerenBGSFees(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod,
 	bgsSupply := []types.UtilityFeesPeriod{
 		// Summer 2026 Supply Charge
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
 			},
@@ -514,7 +514,7 @@ func getAmerenBGSFees(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod,
 		},
 		// Non-Summer 2026 (Jan - May) Supply Charge
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2026, time.June, 1, 0, 0, 0, 0, ctLocation),
 			},
@@ -523,7 +523,7 @@ func getAmerenBGSFees(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod,
 		},
 		// Non-Summer 2026 (Oct - Dec) Supply Charge
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
 			},
@@ -532,7 +532,7 @@ func getAmerenBGSFees(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod,
 		},
 		// Summer 2027 Supply Charge
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2027, time.October, 1, 0, 0, 0, 0, ctLocation),
 			},
@@ -541,7 +541,7 @@ func getAmerenBGSFees(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod,
 		},
 		// Non-Summer 2027 (Jan - May) Supply Charge
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 			},
@@ -550,7 +550,7 @@ func getAmerenBGSFees(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod,
 		},
 		// Non-Summer 2027 (Oct - Dec) Supply Charge
 		{
-			UtilityPeriod: types.UtilityPeriod{
+			TimePeriod: types.TimePeriod{
 				Start: time.Date(2027, time.October, 1, 0, 0, 0, 0, ctLocation),
 				End:   time.Date(2028, time.January, 1, 0, 0, 0, 0, ctLocation),
 			},

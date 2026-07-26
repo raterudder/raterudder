@@ -1270,6 +1270,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 				MonthEnd:   time.September,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name: "On-Peak",
 						Hours: []types.UtilityHourPeriod{
 							{HourStart: 16, HourEnd: 21},
 						},
@@ -1278,6 +1279,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 						Description:   "Summer Weekday On-Peak (4-9 PM)",
 					},
 					{
+						Name: "Mid-Peak",
 						Hours: []types.UtilityHourPeriod{
 							{HourStart: 16, HourEnd: 21},
 						},
@@ -1286,6 +1288,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 						Description:   "Summer Weekend Mid-Peak (4-9 PM)",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.34 - nbc,
 				OtherDescription:   "Summer Off-Peak",
 			}
@@ -1298,6 +1301,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					MonthEnd:   time.May,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name: "Mid-Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 16, HourEnd: 21},
 							},
@@ -1305,6 +1309,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:   "Winter Daily Mid-Peak (4-9 PM)",
 						},
 						{
+							Name: "Super Off-Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 8, HourEnd: 16},
 							},
@@ -1312,6 +1317,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:   "Winter Daily Super Off-Peak (8 AM - 4 PM)",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.37 - nbc,
 					OtherDescription:   "Winter Daily Off-Peak",
 				},
@@ -1321,6 +1327,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					MonthEnd:   time.December,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name: "Mid-Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 16, HourEnd: 21},
 							},
@@ -1328,6 +1335,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:   "Winter Daily Mid-Peak (4-9 PM)",
 						},
 						{
+							Name: "Super Off-Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 8, HourEnd: 16},
 							},
@@ -1335,6 +1343,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:   "Winter Daily Super Off-Peak (8 AM - 4 PM)",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.37 - nbc,
 					OtherDescription:   "Winter Daily Off-Peak",
 				},
@@ -1349,6 +1358,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 				MonthEnd:   time.September,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name: "On-Peak",
 						Hours: []types.UtilityHourPeriod{
 							{HourStart: 17, HourEnd: 20},
 						},
@@ -1357,6 +1367,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 						Description:   "Summer Weekday On-Peak (5-8 PM)",
 					},
 					{
+						Name: "Mid-Peak",
 						Hours: []types.UtilityHourPeriod{
 							{HourStart: 17, HourEnd: 20},
 						},
@@ -1365,6 +1376,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 						Description:   "Summer Weekend Mid-Peak (5-8 PM)",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.34 - nbc,
 				OtherDescription:   "Summer Off-Peak",
 			}
@@ -1377,6 +1389,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					MonthEnd:   time.May,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name: "Mid-Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 17, HourEnd: 20},
 							},
@@ -1384,6 +1397,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:   "Winter Daily Mid-Peak (5-8 PM)",
 						},
 						{
+							Name: "Super Off-Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 8, HourEnd: 16},
 							},
@@ -1391,6 +1405,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:   "Winter Daily Super Off-Peak (8 AM - 4 PM)",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.38 - nbc,
 					OtherDescription:   "Winter Daily Off-Peak",
 				},
@@ -1400,6 +1415,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					MonthEnd:   time.December,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name: "Mid-Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 17, HourEnd: 20},
 							},
@@ -1407,6 +1423,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:   "Winter Daily Mid-Peak (5-8 PM)",
 						},
 						{
+							Name: "Super Off-Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 8, HourEnd: 16},
 							},
@@ -1414,6 +1431,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:   "Winter Daily Super Off-Peak (8 AM - 4 PM)",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.38 - nbc,
 					OtherDescription:   "Winter Daily Off-Peak",
 				},
@@ -1428,6 +1446,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 				MonthEnd:   time.September,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
+						Name: "On-Peak",
 						Hours: []types.UtilityHourPeriod{
 							{HourStart: 16, HourEnd: 21},
 						},
@@ -1436,6 +1455,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 						Description:   "Summer Weekday On-Peak (4-9 PM)",
 					},
 					{
+						Name: "Mid-Peak",
 						Hours: []types.UtilityHourPeriod{
 							{HourStart: 16, HourEnd: 21},
 						},
@@ -1444,6 +1464,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 						Description:   "Summer Weekend Mid-Peak (4-9 PM)",
 					},
 				},
+				OtherName:          "Off-Peak",
 				OtherDollarsPerKWH: 0.26 - nbc,
 				OtherDescription:   "Summer Off-Peak",
 			}
@@ -1456,6 +1477,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					MonthEnd:   time.May,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name: "Mid-Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 16, HourEnd: 21},
 							},
@@ -1463,6 +1485,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:   "Winter Daily Mid-Peak (4-9 PM)",
 						},
 						{
+							Name: "Super Off-Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 8, HourEnd: 16},
 							},
@@ -1470,6 +1493,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:   "Winter Daily Super Off-Peak (8 AM - 4 PM)",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.24 - nbc,
 					OtherDescription:   "Winter Daily Off-Peak",
 				},
@@ -1479,6 +1503,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					MonthEnd:   time.December,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
+							Name: "Mid-Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 16, HourEnd: 21},
 							},
@@ -1486,6 +1511,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:   "Winter Daily Mid-Peak (4-9 PM)",
 						},
 						{
+							Name: "Super Off-Peak",
 							Hours: []types.UtilityHourPeriod{
 								{HourStart: 8, HourEnd: 16},
 							},
@@ -1493,6 +1519,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 							Description:   "Winter Daily Super Off-Peak (8 AM - 4 PM)",
 						},
 					},
+					OtherName:          "Off-Peak",
 					OtherDollarsPerKWH: 0.24 - nbc,
 					OtherDescription:   "Winter Daily Off-Peak",
 				},
@@ -1504,7 +1531,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 
 	// Add one global NBC period that applies to all imports
 	periods = append(periods, types.UtilityFeesPeriod{
-		UtilityPeriod: types.UtilityPeriod{
+		TimePeriod: types.TimePeriod{
 			LocationPtr: ptLocation,
 		},
 		DollarsPerKWH:  nbc,
@@ -1535,7 +1562,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					}
 
 					periods = append(periods, types.UtilityFeesPeriod{
-						UtilityPeriod: types.UtilityPeriod{
+						TimePeriod: types.TimePeriod{
 							Start:            startMonth,
 							End:              endMonth,
 							LocationPtr:      ptLocation,
@@ -1560,7 +1587,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 					}
 
 					periods = append(periods, types.UtilityFeesPeriod{
-						UtilityPeriod: types.UtilityPeriod{
+						TimePeriod: types.TimePeriod{
 							Start:         startMonth,
 							End:           endMonth,
 							LocationPtr:   ptLocation,
@@ -1574,7 +1601,7 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 
 					// 3. Holiday period (restrict to weekdays Monday-Friday)
 					periods = append(periods, types.UtilityFeesPeriod{
-						UtilityPeriod: types.UtilityPeriod{
+						TimePeriod: types.TimePeriod{
 							Start:            startMonth,
 							End:              endMonth,
 							LocationPtr:      ptLocation,

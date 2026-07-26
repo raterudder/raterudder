@@ -28,6 +28,10 @@ func TestBGE(t *testing.T) {
 		p, err = u.priceForTime(time.Date(2026, time.November, 15, 12, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.19103, p.DollarsPerKWH, 1e-6)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		assert.NotEmpty(t, periods)
 	})
 
 	t.Run("Schedule RL Residential Optional TOU", func(t *testing.T) {
@@ -37,6 +41,16 @@ func TestBGE(t *testing.T) {
 			UtilityRate:     "bge_rl",
 		})
 		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		names := make(map[string]bool)
+		for _, p := range periods {
+			names[p.Name] = true
+		}
+		assert.True(t, names["On-Peak"])
+		assert.True(t, names["Inter-Peak"])
+		assert.True(t, names["Off-Peak"])
 
 		// Summer Peak: Weekday (Monday July 13, 2026 at 12:00 PM) -> 10 AM to 8 PM
 		p, err := u.priceForTime(time.Date(2026, time.July, 13, 12, 0, 0, 0, etLocation))
