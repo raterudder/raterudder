@@ -84,9 +84,6 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
                         <div className="timeline-content">
                             <h3>
                                 {title}
-                                {summary && summary.count > 1 && (
-                                    <span className="count">({summary.count}x)</span>
-                                )}
                             </h3>
 
                             <div className="reason">

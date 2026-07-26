@@ -45,7 +45,6 @@ describe('ActionTimeline', () => {
         };
         render(<ActionTimeline groupedActions={[summary]} />);
         expect(screen.getByText('No Change')).toBeInTheDocument();
-        expect(screen.getByText('(5x)')).toBeInTheDocument();
         expect(screen.getByText(/battery has enough stored energy/)).toBeInTheDocument();
 
         const startFormatted = startTime.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });

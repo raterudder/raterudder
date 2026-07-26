@@ -204,7 +204,7 @@ describe('Dashboard', () => {
             expect(statusCard).toBeInTheDocument();
             expect(statusCard).toHaveTextContent('VPP Event Active');
             expect(statusCard).toHaveTextContent('Grid Services active (5.4 kW)');
-            
+
             // Verify timeline item
             const timelineItem = document.querySelector('.timeline-item.mode-vpp');
             expect(timelineItem).toBeInTheDocument();
@@ -271,8 +271,6 @@ describe('Dashboard', () => {
             // Since we add GridFault then InverterFault, it should be "GridFault, InverterFault"
             // However, regex is safer if order is not guaranteed, but usually it is for Sets of strings added in order.
             expect(screen.getByText(/Alarms: GridFault, InverterFault/)).toBeInTheDocument();
-            // Should show count
-            expect(screen.getByText('(2x)')).toBeInTheDocument();
         });
     });
 
@@ -308,8 +306,6 @@ describe('Dashboard', () => {
             expect(screen.getByText(/\$ 0.150\/kWh/)).toBeInTheDocument();
             // Should show range: 0.10 - 0.20
             expect(screen.getByText(/Range: \$ 0.100 - \$ 0.200/)).toBeInTheDocument();
-            // Should show count in title
-            expect(screen.getByText('(2x)')).toBeInTheDocument();
         });
     });
 
