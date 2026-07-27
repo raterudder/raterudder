@@ -200,6 +200,33 @@ func TestWebHandler(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 	})
 
+	t.Run("Serve Assetlinks on .well-known", func(t *testing.T) {
+		fs := fstest.MapFS{
+			".well-known/assetlinks.json": {Data: []byte("[]\n")},
+		}
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			listenAddr: ":8080",
+			controller: controller.NewController(),
+		}
+
+		mux := http.NewServeMux()
+		fileServer := http.FileServer(http.FS(fs))
+		mux.Handle("/", srv.webHandler(fs, fileServer))
+
+		req := httptest.NewRequest("GET", "/.well-known/assetlinks.json", nil)
+		w := httptest.NewRecorder()
+
+		mux.ServeHTTP(w, req)
+
+		resp := w.Result()
+		if assert.Equal(t, http.StatusOK, resp.StatusCode) {
+			assert.Equal(t, "[]\n", w.Body.String())
+		}
+	})
+
 	t.Run("Server Header", func(t *testing.T) {
 		srv := &Server{
 			utilities:  mockUMap,
