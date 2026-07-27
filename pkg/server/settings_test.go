@@ -548,6 +548,28 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
 		assert.Contains(t, w.Body.String(), "minimum battery SOC period value must be between 0 and 100")
 
+		// Valid 24-hour custom period (0 to 24)
+		mockStorage := &mockStorage{}
+		mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(base, 1, nil)
+		mockStorage.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		srvValid := &Server{
+			storage: mockStorage,
+			release: "test",
+		}
+		s24h := base
+		s24h.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+			{
+				TimePeriod:    types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 24}}},
+				MinBatterySOC: 20.0,
+			},
+		}
+		b24h, _ := json.Marshal(s24h)
+		req = httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b24h))
+		req = withUser(req, "admin@example.com", true)
+		w = httptest.NewRecorder()
+		srvValid.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
 		// Invalid period SOC value (> 100)
 		sPeriodHigh := base
 		sPeriodHigh.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{

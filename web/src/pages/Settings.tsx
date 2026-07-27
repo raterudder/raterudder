@@ -775,11 +775,17 @@ const Settings = ({
         }
         try {
             const fetched = await fetchUtilityPeriods(siteID, newProvider, newRate, newOpts);
-            setUtilityPeriods(fetched);
+            setUtilityPeriods(fetched || []);
 
             setSettings(prevSettings => {
                 if (!prevSettings) return prevSettings;
-                const isRateBased = scheduleMode === 'named' || (prevSettings.minBatterySOCPeriods && prevSettings.minBatterySOCPeriods.some((p: MinBatterySOCPeriod) => !!p.utilityPeriodName));
+                const hasExistingPeriods = prevSettings.minBatterySOCPeriods && prevSettings.minBatterySOCPeriods.length > 0;
+                if (!hasExistingPeriods) {
+                    setBatteryError(null);
+                    return prevSettings;
+                }
+
+                const isRateBased = scheduleMode === 'named' || prevSettings.minBatterySOCPeriods?.some((p: MinBatterySOCPeriod) => !!p.utilityPeriodName);
                 if (isRateBased) {
                     const fetchedNames = fetched ? fetched.filter((p: TimePeriod) => p.name && p.name !== '').map((p: TimePeriod) => p.name!) : [];
                     const uniqueFetchedNames = Array.from(new Set(fetchedNames));
@@ -843,7 +849,7 @@ const Settings = ({
     useEffect(() => {
         if (siteID && settings?.utilityProvider && settings?.utilityRate) {
             fetchUtilityPeriods(siteID, settings.utilityProvider, settings.utilityRate, settings.utilityRateOptions)
-                .then(periods => setUtilityPeriods(periods))
+                .then(periods => setUtilityPeriods(periods || []))
                 .catch(() => setUtilityPeriods([]));
         }
     }, [siteID, settings?.utilityProvider, settings?.utilityRate, settings?.utilityRateOptions, rateOptionsKey]);
@@ -852,7 +858,7 @@ const Settings = ({
         setLoadingPeriods(true);
         try {
             const fetched = await fetchUtilityPeriods(siteID);
-            setUtilityPeriods(fetched);
+            setUtilityPeriods(fetched || []);
             const fetchedNames = fetched ? fetched.filter((p: TimePeriod) => p.name && p.name !== '').map((p: TimePeriod) => p.name!) : [];
             if (fetchedNames.length === 0) {
                 setBatteryError(null);
@@ -1948,7 +1954,7 @@ const Settings = ({
                                                                 let periods = utilityPeriods;
                                                                 if (!periods) {
                                                                     periods = await fetchUtilityPeriods(siteID);
-                                                                    setUtilityPeriods(periods);
+                                                                    setUtilityPeriods(periods || []);
                                                                 }
                                                                 const fetchedNames = periods ? periods.filter(p => p.name && p.name !== '').map(p => p.name!) : [];
                                                                 if (fetchedNames.length === 0) {

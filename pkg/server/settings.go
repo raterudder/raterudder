@@ -783,8 +783,14 @@ func (s *Server) validateAndCalculateMinBatterySOCPeriods(ctx context.Context, s
 				if hp.MinuteStart != 0 || hp.MinuteEnd != 0 {
 					return 0, errors.New("reserve SOC period start and end minutes must be 0")
 				}
-				duration := (hp.HourEnd - hp.HourStart + 24) % 24
-				if hp.HourStart != hp.HourEnd && duration < 1 {
+				duration := hp.HourEnd - hp.HourStart
+				if hp.HourEnd < hp.HourStart {
+					duration += 24
+				}
+				if hp.HourStart == hp.HourEnd {
+					duration = 24
+				}
+				if duration < 1 {
 					return 0, errors.New("reserve SOC period minimum duration is 1 hour")
 				}
 			}
