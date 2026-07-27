@@ -762,6 +762,7 @@ const Settings = ({
     const [batteryError, setBatteryError] = useState<string | null>(null);
 
     const isVariableFeatureEnabled = settings?.release === 'staging' || (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('variable') === 'true');
+    const hasNamedRatePeriods = utilityPeriods !== null ? utilityPeriods.some(p => p.name && p.name !== '') : true;
 
     const validateUtilityAndPeriods = async (
         newProvider: string,
@@ -784,9 +785,16 @@ const Settings = ({
                     const uniqueFetchedNames = Array.from(new Set(fetchedNames));
 
                     if (uniqueFetchedNames.length === 0) {
-                        setBatteryError("The selected utility rate plan has no rate periods. Switch to Custom or Simple.");
-                        setEditBattery(true);
-                        return prevSettings;
+                        setBatteryError(null);
+                        setScheduleMode('custom');
+                        const custom: MinBatterySOCPeriod[] = [
+                            { hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: prevSettings.minBatterySOC ?? 20 }
+                        ];
+                        return {
+                            ...prevSettings,
+                            minBatterySOCPeriods: custom,
+                            minBatterySOC: prevSettings.minBatterySOC ?? 20,
+                        };
                     } else {
                         const currentPeriods = prevSettings.minBatterySOCPeriods || [];
                         const reconciledPeriods: MinBatterySOCPeriod[] = uniqueFetchedNames.map(name => {
@@ -831,6 +839,15 @@ const Settings = ({
         }
     }, [settings?.minBatterySOCPeriods]);
 
+    const rateOptionsKey = JSON.stringify(settings?.utilityRateOptions);
+    useEffect(() => {
+        if (siteID && settings?.utilityProvider && settings?.utilityRate) {
+            fetchUtilityPeriods(siteID, settings.utilityProvider, settings.utilityRate, settings.utilityRateOptions)
+                .then(periods => setUtilityPeriods(periods))
+                .catch(() => setUtilityPeriods([]));
+        }
+    }, [siteID, settings?.utilityProvider, settings?.utilityRate, settings?.utilityRateOptions, rateOptionsKey]);
+
     const handleOpenReserveSchedule = async () => {
         setLoadingPeriods(true);
         try {
@@ -838,7 +855,7 @@ const Settings = ({
             setUtilityPeriods(fetched);
             const fetchedNames = fetched ? fetched.filter((p: TimePeriod) => p.name && p.name !== '').map((p: TimePeriod) => p.name!) : [];
             if (fetchedNames.length === 0) {
-                setBatteryError("The selected utility rate plan has no rate periods. Switch to Custom or Simple.");
+                setBatteryError(null);
                 setScheduleMode('custom');
                 const custom: MinBatterySOCPeriod[] = [
                     { hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: settings?.minBatterySOC ?? 20 }
@@ -1858,32 +1875,39 @@ const Settings = ({
                                         {(!settings.minBatterySOCPeriods || settings.minBatterySOCPeriods.length === 0) ? (
                                             isVariableFeatureEnabled && (
                                                 <>
-                                                    <button
-                                                        type="button"
-                                                        className="text-button"
-                                                        onClick={async () => {
-                                                            let periods = utilityPeriods;
-                                                            if (!periods) {
-                                                                periods = await fetchUtilityPeriods(siteID);
-                                                                setUtilityPeriods(periods);
-                                                            }
-                                                            const fetchedNames = periods ? periods.filter(p => p.name && p.name !== '').map(p => p.name!) : [];
-                                                            if (fetchedNames.length === 0) {
-                                                                setBatteryError("The selected utility rate plan has no rate periods. Switch to Custom or Simple.");
-                                                                return;
-                                                            }
-                                                            const uniqueNames = Array.from(new Set(fetchedNames));
-                                                            const initialPeriods: MinBatterySOCPeriod[] = uniqueNames.map(name => ({
-                                                                utilityPeriodName: name,
-                                                                minBatterySOC: settings.minBatterySOC || 20,
-                                                            }));
-                                                            updateMinBatterySOCPeriods(initialPeriods);
-                                                            setScheduleMode('named');
-                                                            setBatteryError(null);
-                                                        }}
-                                                    >
-                                                        Rates Mode
-                                                    </button>
+                                                    {hasNamedRatePeriods && (
+                                                        <button
+                                                            type="button"
+                                                            className="text-button"
+                                                            onClick={async () => {
+                                                                let periods = utilityPeriods;
+                                                                if (!periods) {
+                                                                    periods = await fetchUtilityPeriods(siteID);
+                                                                    setUtilityPeriods(periods);
+                                                                }
+                                                                const fetchedNames = periods ? periods.filter(p => p.name && p.name !== '').map(p => p.name!) : [];
+                                                                if (fetchedNames.length === 0) {
+                                                                    setBatteryError(null);
+                                                                    setScheduleMode('custom');
+                                                                    const custom: MinBatterySOCPeriod[] = [
+                                                                        { hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: settings.minBatterySOC || 20 }
+                                                                    ];
+                                                                    updateMinBatterySOCPeriods(custom);
+                                                                    return;
+                                                                }
+                                                                const uniqueNames = Array.from(new Set(fetchedNames));
+                                                                const initialPeriods: MinBatterySOCPeriod[] = uniqueNames.map(name => ({
+                                                                    utilityPeriodName: name,
+                                                                    minBatterySOC: settings.minBatterySOC || 20,
+                                                                }));
+                                                                updateMinBatterySOCPeriods(initialPeriods);
+                                                                setScheduleMode('named');
+                                                                setBatteryError(null);
+                                                            }}
+                                                        >
+                                                            Rates Mode
+                                                        </button>
+                                                    )}
                                                     <button
                                                         type="button"
                                                         className="text-button"
@@ -1916,32 +1940,39 @@ const Settings = ({
                                                         Custom Mode
                                                     </button>
                                                 ) : (
-                                                    <button
-                                                        type="button"
-                                                        className="text-button"
-                                                        onClick={async () => {
-                                                            let periods = utilityPeriods;
-                                                            if (!periods) {
-                                                                periods = await fetchUtilityPeriods(siteID);
-                                                                setUtilityPeriods(periods);
-                                                            }
-                                                            const fetchedNames = periods ? periods.filter(p => p.name && p.name !== '').map(p => p.name!) : [];
-                                                            if (fetchedNames.length === 0) {
-                                                                setBatteryError("The selected utility rate plan has no rate periods. Switch to Custom or Simple.");
-                                                                return;
-                                                            }
-                                                            const uniqueNames = Array.from(new Set(fetchedNames));
-                                                            const initialPeriods: MinBatterySOCPeriod[] = uniqueNames.map(name => ({
-                                                                utilityPeriodName: name,
-                                                                minBatterySOC: settings.minBatterySOC || 20,
-                                                            }));
-                                                            updateMinBatterySOCPeriods(initialPeriods);
-                                                            setScheduleMode('named');
-                                                            setBatteryError(null);
-                                                        }}
-                                                    >
-                                                        Rates Mode
-                                                    </button>
+                                                    hasNamedRatePeriods && (
+                                                        <button
+                                                            type="button"
+                                                            className="text-button"
+                                                            onClick={async () => {
+                                                                let periods = utilityPeriods;
+                                                                if (!periods) {
+                                                                    periods = await fetchUtilityPeriods(siteID);
+                                                                    setUtilityPeriods(periods);
+                                                                }
+                                                                const fetchedNames = periods ? periods.filter(p => p.name && p.name !== '').map(p => p.name!) : [];
+                                                                if (fetchedNames.length === 0) {
+                                                                    setBatteryError(null);
+                                                                    setScheduleMode('custom');
+                                                                    const custom: MinBatterySOCPeriod[] = [
+                                                                        { hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: settings.minBatterySOC || 20 }
+                                                                    ];
+                                                                    updateMinBatterySOCPeriods(custom);
+                                                                    return;
+                                                                }
+                                                                const uniqueNames = Array.from(new Set(fetchedNames));
+                                                                const initialPeriods: MinBatterySOCPeriod[] = uniqueNames.map(name => ({
+                                                                    utilityPeriodName: name,
+                                                                    minBatterySOC: settings.minBatterySOC || 20,
+                                                                }));
+                                                                updateMinBatterySOCPeriods(initialPeriods);
+                                                                setScheduleMode('named');
+                                                                setBatteryError(null);
+                                                            }}
+                                                        >
+                                                            Rates Mode
+                                                        </button>
+                                                    )
                                                 )}
 
                                                 <button

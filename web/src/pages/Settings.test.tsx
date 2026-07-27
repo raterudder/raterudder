@@ -1822,8 +1822,8 @@ describe('App & Settings', () => {
             fireEvent.click(changeBtn);
 
             await waitFor(() => {
-                expect(screen.getByLabelText(/Peak Reserve %/i)).toBeInTheDocument();
-                expect(screen.getByLabelText(/Off-Peak Reserve %/i)).toBeInTheDocument();
+                expect(screen.getAllByLabelText(/Peak Reserve %/i)[0]).toBeInTheDocument();
+                expect(screen.getAllByLabelText(/Off-Peak Reserve %/i)[0]).toBeInTheDocument();
                 expect(screen.getByRole('button', { name: /^Revert to Simple$/i })).toBeInTheDocument();
             });
         });
@@ -1921,10 +1921,10 @@ describe('App & Settings', () => {
             });
         });
 
-        it('expands battery section and shows error when changing utility plan results in period without defined minimum', async () => {
+        it('skips straight to custom mode without error when utility has no rate periods', async () => {
             (api.fetchUtilities as any).mockResolvedValue([
                 { id: 'pg_e', name: 'Pacific Gas & Electric (PG&E)', rates: [{ id: 'pg_e_e_tou_c', name: 'E-TOU-C' }] },
-                { id: 'comed', name: 'Commonwealth Edison (ComEd)', rates: [{ id: 'comed_bes', name: 'Hourly' }] },
+                { id: 'comed', name: 'Commonwealth Edison (ComEd)', rates: [{ id: 'comed_besh', name: 'BESH' }] },
             ]);
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
@@ -1948,8 +1948,6 @@ describe('App & Settings', () => {
 
             await navigateToSettings();
 
-            expect(screen.queryByTestId('battery-period-error')).not.toBeInTheDocument();
-
             const editUtilBtn = screen.getByRole('button', { name: 'Change Utility Service' });
             fireEvent.click(editUtilBtn);
 
@@ -1970,8 +1968,17 @@ describe('App & Settings', () => {
             });
 
             await waitFor(() => {
-                expect(screen.getByTestId('battery-period-error')).toBeInTheDocument();
-                expect(screen.getByText(/The selected utility rate plan has no rate periods/i)).toBeInTheDocument();
+                expect(screen.queryByTestId('battery-period-error')).not.toBeInTheDocument();
+                expect(screen.getByText(/Custom Hours/i)).toBeInTheDocument();
+            });
+
+            const summaryBtn = screen.getByRole('button', { name: 'Edit Battery settings' });
+            fireEvent.click(summaryBtn);
+
+            await waitFor(() => {
+                expect(screen.getByText('From:')).toBeInTheDocument();
+                expect(screen.getByText('To:')).toBeInTheDocument();
+                expect(screen.queryByRole('button', { name: /^Rates Mode$/i })).not.toBeInTheDocument();
             });
         });
 
