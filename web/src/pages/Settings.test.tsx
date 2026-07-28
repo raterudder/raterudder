@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import App from '../App';
@@ -1006,7 +1006,7 @@ describe('App & Settings', () => {
 
         // Expand advanced tuning settings
         const advancedBtn = await screen.findByText('Show Advanced Settings');
-        fireEvent.click(advancedBtn);
+        await user.click(advancedBtn);
 
         await waitFor(() => {
             expect(screen.getByLabelText(/Minimum Start Charge Duration/i)).toBeInTheDocument();
@@ -2025,6 +2025,47 @@ describe('App & Settings', () => {
                 expect(screen.getByText(/On-Peak: 50%/i)).toBeInTheDocument();
                 expect(screen.getByText(/Off-Peak: 20%/i)).toBeInTheDocument();
             });
+        });
+
+        it('opens help dialog when help button next to Minimum Battery % is clicked', async () => {
+            const user = userEvent.setup();
+            await navigateToSettings();
+
+            const helpBtns = screen.getAllByRole('button', { name: /more info/i });
+            const helpBtn = helpBtns[0];
+            expect(helpBtn).toBeInTheDocument();
+
+            await user.click(helpBtn);
+
+            expect(await screen.findByRole('dialog')).toBeInTheDocument();
+            expect(screen.getByText(/Sets the minimum state-of-charge \(SOC\) level/i)).toBeInTheDocument();
+        });
+
+        it('opens help dialog when help button in variable reserve schedule section (advanced mode) is clicked', async () => {
+            const user = userEvent.setup();
+            const settingsWithPeriods = {
+                ...defaultSettings,
+                minBatterySOCPeriods: [
+                    { utilityPeriodName: 'On-Peak', minBatterySOC: 50 },
+                    { utilityPeriodName: 'Off-Peak', minBatterySOC: 20 },
+                ],
+            };
+            (api.fetchSettings as any).mockResolvedValue(settingsWithPeriods);
+            await navigateToSettings();
+
+            expect(screen.getByText(/Variable Reserve Schedule/i)).toBeInTheDocument();
+            const batterySection = screen.getByTestId('battery-section');
+            const editBtn = within(batterySection).getByText('Change');
+            await user.click(editBtn);
+
+            const helpBtns = screen.getAllByRole('button', { name: /more info/i });
+            const helpBtn = helpBtns[0];
+            expect(helpBtn).toBeInTheDocument();
+
+            await user.click(helpBtn);
+
+            expect(await screen.findByRole('dialog')).toBeInTheDocument();
+            expect(screen.getByText(/Rate Period Reserve Schedule/i)).toBeInTheDocument();
         });
     });
 });

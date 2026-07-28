@@ -254,18 +254,6 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "VPP charging buffer minutes cannot be negative", http.StatusBadRequest)
 		return
 	}
-	if newSettings.ACBaseTemperatureC < 0 || newSettings.ACBaseTemperatureC > 50 {
-		writeJSONError(w, "ac base temperature must be between 0 and 50", http.StatusBadRequest)
-		return
-	}
-	if newSettings.ACUsageIncreasePercentPerDegree < -1 {
-		writeJSONError(w, "ac usage increase percent cannot be less than -1", http.StatusBadRequest)
-		return
-	}
-	if newSettings.ACUsageMaxIncreasePercent < -1 {
-		writeJSONError(w, "ac max usage increase percent cannot be less than -1", http.StatusBadRequest)
-		return
-	}
 	// this should never really happen in practice but makes tests easier
 	if newSettings.Release == "" {
 		newSettings.Release = s.release

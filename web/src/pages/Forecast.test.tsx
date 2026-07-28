@@ -310,4 +310,30 @@ describe('Forecast Page', () => {
             expect(fetchModeling).toHaveBeenLastCalledWith(undefined, 'default');
         });
     });
+
+    it('opens help dialog when help button on a forecast chart is clicked', async () => {
+        const data = makeSimHours();
+        (fetchModeling as any).mockResolvedValue({
+            simulation: data,
+            energyHistory: [],
+            priceHistory: [],
+            weather: [],
+        });
+
+        const user = userEvent.setup();
+        renderForecast();
+
+        await waitFor(() => {
+            expect(screen.getByText('Battery (if used) (%)')).toBeInTheDocument();
+        });
+
+        const helpBtns = screen.getAllByRole('button', { name: /more info/i });
+        const helpBtn = helpBtns[0];
+        expect(helpBtn).toBeInTheDocument();
+
+        await user.click(helpBtn);
+
+        expect(await screen.findByRole('dialog')).toBeInTheDocument();
+        expect(screen.getByText(/if RateRudder did nothing to optimize your system/i)).toBeInTheDocument();
+    });
 });

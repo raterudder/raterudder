@@ -1,0 +1,76 @@
+.help-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--surface-container-high, rgba(255, 255, 255, 0.1));
+  border: 1px solid var(--outline-variant, rgba(255, 255, 255, 0.2));
+  color: var(--text-muted, #94a3b8);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  margin-left: 0.4rem;
+  vertical-align: middle;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  flex-shrink: 0;
+}
+
+.help-btn:hover {
+  background: var(--primary, #3b82f6);
+  border-color: var(--primary, #3b82f6);
+  color: #ffffff;
+  transform: scale(1.1);
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.4);
+}
+
+.help-btn:focus-visible {
+  outline: 2px solid var(--primary, #3b82f6);
+  outline-offset: 2px;
+}
+
+.help-dialog-popup {
+  max-width: 480px;
+}
+
+.help-dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.help-dialog-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.help-dialog-content {
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--on-surface-variant, #cbd5e1);
+}
+
+.help-dialog-content p {
+  margin: 0 0 0.75rem 0;
+}
+
+.help-dialog-content p:last-child {
+  margin-bottom: 0;
+}
+
+.help-dialog-content ul {
+  margin: 0.5rem 0 0.75rem 1.25rem;
+  padding: 0;
+}
+
+.help-dialog-content li {
+  margin-bottom: 0.35rem;
+}
+
+.help-dialog-content strong {
+  color: var(--on-surface, #f8fafc);
+}

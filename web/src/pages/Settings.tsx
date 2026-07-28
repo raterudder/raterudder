@@ -9,6 +9,7 @@ import { Select } from '@base-ui/react/select';
 import { Combobox } from '@base-ui/react/combobox';
 import { Dialog } from '@base-ui/react/dialog';
 import { InterestForm } from '../components/InterestForm';
+import { HelpButton } from '../components/HelpButton';
 import './Settings.css';
 
 const countries = [
@@ -1709,7 +1710,13 @@ const Settings = ({
                             )}
                             {(!settings.minBatterySOCPeriods || settings.minBatterySOCPeriods.length === 0) && (
                                 <Field.Root className="form-group compact">
-                                    <Field.Label htmlFor="minBatterySOC">Minimum Battery %</Field.Label>
+                                    <Field.Label htmlFor="minBatterySOC">
+                                        Minimum Battery %
+                                        <HelpButton
+                                            title="Minimum Battery Reserve %"
+                                            description="Sets the minimum state-of-charge (SOC) level that RateRudder must preserve in your battery. RateRudder will avoid discharging the battery below this reserve to protect against power outages and grid disruptions."
+                                        />
+                                    </Field.Label>
                                     <Input
                                         id="minBatterySOC"
                                         type="number"
@@ -1725,6 +1732,22 @@ const Settings = ({
 
                             {settings.minBatterySOCPeriods && settings.minBatterySOCPeriods.length > 0 && (
                                 <>
+                                    <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '0.25rem', marginBottom: '0.5rem' }}>
+                                        <span style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--on-surface)' }}>
+                                            Variable Reserve Schedule ({scheduleMode === 'named' ? 'Rate Periods' : 'Custom Hours'})
+                                        </span>
+                                        {scheduleMode === 'named' ? (
+                                            <HelpButton
+                                                title="Rate Period Reserve Schedule"
+                                                description="Configures specific minimum battery reserve percentages for each utility rate period (e.g. On-Peak, Off-Peak). RateRudder ensures your battery holds higher reserves during expensive peak hours while allowing lower reserves during cheap off-peak hours for maximum savings."
+                                            />
+                                        ) : (
+                                            <HelpButton
+                                                title="Custom Hourly Reserve Schedule"
+                                                description="Allows you to define custom 24-hour time windows and assign individual minimum battery reserve percentages to each window. RateRudder enforces these SOC thresholds strictly throughout the day according to your custom schedule."
+                                            />
+                                        )}
+                                    </div>
                                     {scheduleMode === 'named' ? (
                                         <>
                                             {settings.minBatterySOCPeriods.map((p, idx) => (
@@ -1889,7 +1912,7 @@ const Settings = ({
                                                                 let periods = utilityPeriods;
                                                                 if (!periods) {
                                                                     periods = await fetchUtilityPeriods(siteID);
-                                                                    setUtilityPeriods(periods);
+                                                                    setUtilityPeriods(periods || []);
                                                                 }
                                                                 const fetchedNames = periods ? periods.filter(p => p.name && p.name !== '').map(p => p.name!) : [];
                                                                 if (fetchedNames.length === 0) {
@@ -2135,7 +2158,22 @@ const Settings = ({
 
                         <div className="grid-strategy-grid">
                             <Field.Root className="form-group">
-                                <Field.Label htmlFor="bufferProfile">Overcharge Profile</Field.Label>
+                                <Field.Label htmlFor="bufferProfile">
+                                    Overcharge Profile
+                                    <HelpButton
+                                        title="Overcharge Profile"
+                                        description={
+                                            <>
+                                                <p>Determines how much battery headroom RateRudder includes beyond baseline requirement to absorb usage spikes or cloudy weather:</p>
+                                                <ul>
+                                                    <li><strong>Tiny:</strong> Maximizes immediate savings, but risks temporary depletion during load spikes.</li>
+                                                    <li><strong>Default:</strong> Balanced optimization and safety buffer.</li>
+                                                    <li><strong>Conservative:</strong> Holds higher energy reserves at the expense of lower savings.</li>
+                                                </ul>
+                                            </>
+                                        }
+                                    />
+                                </Field.Label>
                                 <Select.Root
                                     value={settings.socBufferPercent === 2 ? "tiny" : settings.socBufferPercent === 8 ? "conservative" : "default"}
                                     onValueChange={(val) => {
@@ -2199,7 +2237,13 @@ const Settings = ({
                             </Field.Root>
 
                             <Field.Root className="form-group">
-                                <Field.Label htmlFor="alwaysChargeUnder">Always Charge Below ($/kWh)</Field.Label>
+                                <Field.Label htmlFor="alwaysChargeUnder">
+                                    Always Charge Below ($/kWh)
+                                    <HelpButton
+                                        title="Always Charge Below Price"
+                                        description="Sets an absolute electricity price threshold ($/kWh). Whenever the grid electricity rate drops below this price (e.g. during negative pricing or extreme off-peak rates), RateRudder will force-charge the battery regardless. Generally should not be used unless your utility has unpredictable rates."
+                                    />
+                                </Field.Label>
                                 <Input
                                     id="alwaysChargeUnder"
                                     type="number"
@@ -2217,7 +2261,13 @@ const Settings = ({
                             </Field.Root>
 
                             <Field.Root className="form-group">
-                                <Field.Label htmlFor="minArbitrage">Minimum Arbitrage Profit ($/kWh)</Field.Label>
+                                <Field.Label htmlFor="minArbitrage">
+                                    Minimum Arbitrage Profit ($/kWh)
+                                    <HelpButton
+                                        title="Minimum Arbitrage Profit"
+                                        description="The minimum price difference ($/kWh) required between charging hours and later export hours to justify charging the battery from the grid for arbitrage."
+                                    />
+                                </Field.Label>
                                 <Input
                                     id="minArbitrage"
                                     type="number"
@@ -2230,7 +2280,13 @@ const Settings = ({
                             </Field.Root>
 
                             <Field.Root className="form-group">
-                                <Field.Label htmlFor="minDeficit">Charge for Deficit ($/kWh)</Field.Label>
+                                <Field.Label htmlFor="minDeficit">
+                                    Charge for Deficit ($/kWh)
+                                    <HelpButton
+                                        title="Charge for Deficit Threshold"
+                                        description="The price difference threshold ($/kWh) required to justify pre-charging the battery from the grid when RateRudder forecasts that solar generation alone won't cover your upcoming home usage during peak rate hours."
+                                    />
+                                </Field.Label>
                                 <Input
                                     id="minDeficit"
                                     type="number"
@@ -2243,7 +2299,13 @@ const Settings = ({
                             </Field.Root>
 
                             <Field.Root className="form-group">
-                                <Field.Label htmlFor="minStartChargeMinutes">Minimum Start Charge Duration (minutes)</Field.Label>
+                                <Field.Label htmlFor="minStartChargeMinutes">
+                                    Minimum Start Charge Duration (minutes)
+                                    <HelpButton
+                                        title="Minimum Start Charge Duration"
+                                        description="The minimum continuous duration (in minutes) of low-cost grid pricing required before starting a battery charge cycle. This prevents inefficient short-cycling of your battery system."
+                                    />
+                                </Field.Label>
                                 <Input
                                     id="minStartChargeMinutes"
                                     type="number"
@@ -2254,53 +2316,6 @@ const Settings = ({
                                 />
                                 <Field.Description>Minimum duration in minutes of charging time needed to start charging.</Field.Description>
                             </Field.Root>
-
-                            {settings.release === 'staging' && (
-                                <>
-                                    <Field.Root className="form-group switch-group compact">
-                                        <div className="switch-row">
-                                            <Switch.Root
-                                                id="acUsagePrediction"
-                                                checked={settings.acUsageIncreasePercentPerDegree > 0}
-                                                onCheckedChange={(checked) => {
-                                                    if (checked) {
-                                                        handleChange('acUsageIncreasePercentPerDegree', 9);
-                                                        handleChange('acUsageMaxIncreasePercent', 50);
-                                                    } else {
-                                                        handleChange('acUsageIncreasePercentPerDegree', -1);
-                                                        handleChange('acUsageMaxIncreasePercent', -1);
-                                                    }
-                                                }}
-                                                className="switch-root"
-                                            >
-                                                <Switch.Thumb className="switch-thumb" />
-                                            </Switch.Root>
-                                            <Field.Label htmlFor="acUsagePrediction">Enable A/C Weather Prediction</Field.Label>
-                                        </div>
-                                        <Field.Description>Automatically predict increased load during hotter weather to ensure adequate battery reserves.</Field.Description>
-                                    </Field.Root>
-
-                                    {settings.acUsageIncreasePercentPerDegree > 0 && (
-                                        <Field.Root className="form-group compact">
-                                            <Field.Label htmlFor="acBaseTemperatureF">A/C Base Temperature (°F)</Field.Label>
-                                            <Input
-                                                id="acBaseTemperatureF"
-                                                type="number"
-                                                step="1"
-                                                value={Math.round((settings.acBaseTemperatureC || 24) * 9 / 5 + 32)}
-                                                onChange={(e) => {
-                                                    const f = parseFloat(e.target.value);
-                                                    if (!isNaN(f)) {
-                                                        const c = (f - 32) * 5 / 9;
-                                                        handleChange('acBaseTemperatureC', c);
-                                                    }
-                                                }}
-                                            />
-                                            <Field.Description>Temperature above which A/C is typically used to cool the house.</Field.Description>
-                                        </Field.Root>
-                                    )}
-                                </>
-                            )}
 
                             <Field.Root className="form-group switch-group compact">
                                 <div className="switch-row">
@@ -2327,7 +2342,13 @@ const Settings = ({
                                     {!settings.postalCode?.trim() && (
                                         <>
                                             <Field.Root className="form-group">
-                                                <Field.Label htmlFor="solarTrendRatioMax">Solar Trend Ratio Max</Field.Label>
+                                                <Field.Label htmlFor="solarTrendRatioMax">
+                                                    Solar Trend Ratio Max
+                                                    <HelpButton
+                                                        title="Solar Trend Ratio Max"
+                                                        description="Limits the maximum scaling factor applied when real-time solar generation exceeds baseline model expectations. Higher values allow more aggressive upward solar predictions on clear, high-performing days."
+                                                    />
+                                                </Field.Label>
                                                 <Input
                                                     id="solarTrendRatioMax"
                                                     type="number"
@@ -2339,7 +2360,13 @@ const Settings = ({
                                                 <Field.Description>Maximum ratio for solar trend adjustment. Higher values allow more aggressive upward solar predictions.</Field.Description>
                                             </Field.Root>
                                             <Field.Root className="form-group">
-                                                <Field.Label htmlFor="solarBellCurveMultiplier">Solar Bell Curve Multiplier</Field.Label>
+                                                <Field.Label htmlFor="solarBellCurveMultiplier">
+                                                    Solar Bell Curve Multiplier
+                                                    <HelpButton
+                                                        title="Solar Bell Curve Multiplier"
+                                                        description="Controls the bell-curve smoothing factor for solar generation modeling across daylight hours. A value of 1 provides full bell-curve smoothing, while 0 disables model smoothing."
+                                                    />
+                                                </Field.Label>
                                                 <Input
                                                     id="solarBellCurveMultiplier"
                                                     type="number"
@@ -2356,7 +2383,13 @@ const Settings = ({
 
                                     {!settings.gridExportSolar && (
                                         <Field.Root className="form-group">
-                                            <Field.Label htmlFor="solarFullyChargeHeadroomBatterySOC">Solar Fully Charge Headroom (%)</Field.Label>
+                                            <Field.Label htmlFor="solarFullyChargeHeadroomBatterySOC">
+                                                Solar Fully Charge Headroom (%)
+                                                <HelpButton
+                                                    title="Solar Fully Charge Headroom"
+                                                    description="Percentage of battery capacity left open as headroom during solar charging when grid export is disabled, preventing premature solar power curtailment."
+                                                />
+                                            </Field.Label>
                                             <Input
                                                 id="solarFullyChargeHeadroomBatterySOC"
                                                 type="number"
@@ -2372,7 +2405,22 @@ const Settings = ({
 
                                     {settings.utilityRateOptions?.netMeteringCredits && (
                                         <Field.Root className="form-group">
-                                            <Field.Label htmlFor="solarNetMeteringCreditsValue">Solar Net Metering Credits Value</Field.Label>
+                                            <Field.Label htmlFor="solarNetMeteringCreditsValue">
+                                                Solar Net Metering Credits Value
+                                                <HelpButton
+                                                    title="Solar Net Metering Credits Value"
+                                                    description={
+                                                        <>
+                                                            <p>Specifies how your utility values exported solar energy credits:</p>
+                                                            <ul>
+                                                                <li><strong>Lowest / Default:</strong> Values exported energy at the lowest rate of the day.</li>
+                                                                <li><strong>Highest:</strong> Values credits at peak rates of the day.</li>
+                                                                <li><strong>None:</strong> Treats exported solar energy as uncredited.</li>
+                                                            </ul>
+                                                        </>
+                                                    }
+                                                />
+                                            </Field.Label>
                                             <Select.Root
                                                 value={settings.solarNetMeteringCreditsValue || ""}
                                                 onValueChange={(value) => handleChange('solarNetMeteringCreditsValue', value || '')}
@@ -2440,7 +2488,21 @@ const Settings = ({
                             */}
 
                             <Field.Root className="form-group">
-                                <Field.Label htmlFor="homeLoadPredictionStrategy">Home Load Prediction Strategy</Field.Label>
+                                <Field.Label htmlFor="homeLoadPredictionStrategy">
+                                    Home Load Prediction Strategy
+                                    <HelpButton
+                                        title="Home Load Prediction Strategy"
+                                        description={
+                                            <>
+                                                <p>Controls how conservative RateRudder is when forecasting future household electricity consumption:</p>
+                                                <ul>
+                                                    <li><strong>Default (Responsive/Optimized):</strong> Optimizes for maximum financial savings based on historical averages.</li>
+                                                    <li><strong>Conservative (High Protection):</strong> Over-predicts consumption to ensure higher battery reserves during heavy household usage.</li>
+                                                </ul>
+                                            </>
+                                        }
+                                    />
+                                </Field.Label>
                                 <Select.Root
                                     value={settings.homeLoadPredictionStrategy || 'default'}
                                     onValueChange={(value) => handleChange('homeLoadPredictionStrategy', value || 'default')}

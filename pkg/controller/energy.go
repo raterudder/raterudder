@@ -251,22 +251,6 @@ func (c *Controller) BuildHourlyEnergyModel(
 		}
 	}
 
-	// Home thermal mass lags behind ambient outdoor temperature. To model AC load response,
-	// we use a 3-hour weighted rolling average temperature window:
-	// - 30% weight for hour (T-1)
-	// - 50% weight for hour (T-2)
-	// - 20% weight for hour (T-3)
-	// If any of these preceding hours are missing from the forecast, we cannot compute the lag.
-	getRollingTemp := func(targetTime time.Time) (float64, bool) {
-		t1, ok1 := weatherByHour[targetTime.Add(-1*time.Hour).UTC()]
-		t2, ok2 := weatherByHour[targetTime.Add(-2*time.Hour).UTC()]
-		t3, ok3 := weatherByHour[targetTime.Add(-3*time.Hour).UTC()]
-		if !ok1 || !ok2 || !ok3 {
-			return 0, false
-		}
-		return (0.3 * t1) + (0.5 * t2) + (0.2 * t3), true
-	}
-
 	// Find the last 7 valid days in history (reverse chronological order) to evaluate recent trends.
 	var sortedValidDates []string
 	for dateStr, ok := range validDaysMap {
@@ -684,96 +668,12 @@ func (c *Controller) BuildHourlyEnergyModel(
 			avgLoadA *= extremeHeatwaveLoadMultiplier
 		}
 
-		// We adjust baseline home load based on temperature deviations from the historical baseline.
-		//
-		// Gating conditions:
-		// 1. AC settings are active (increase percent > 0, max increase > 0).
-		// 2. Weather forecast is available.
-		// 3. We have at least minRequiredTemps historical rolling temperature readings for the same hour.
-		//
-		// Why we restrict past temperatures to selectedDayDatesA:
-		// To align the temperature baseline exactly with the load prediction days. If we are predicting for
-		// a Sunday, the historical temperature baseline should be calculated ONLY from Sundays, preventing
-		// weekday temperature profiles from distorting the reference point.
-		//
-		// Rationale for Two-Way Correction:
-		// Historically, the model acted as a one-way ratchet (only increasing load if today was hotter).
-		// If history contained a heatwave and today is a cold front, we would over-predict load.
-		// We now apply correction in both directions:
-		// - Shifting load up if today is hotter (AC runs more).
-		// - Shifting load down if today is colder (AC runs less or is off).
-		// We define a 1.0°C deadband to avoid making micro-adjustments for negligible temp differences.
-		// We enforce a safety cap (max 50% decrease or settings.ACUsageMaxIncreasePercent) to ensure we do
-		// not over-reduce the load, maintaining a realistic home standby/base load profile.
-		avgLoadAACAdj := avgLoadA
-		if settings.ACUsageIncreasePercentPerDegree > 0 && settings.ACUsageMaxIncreasePercent > 0 && len(weather) > 0 {
-			todayTemp, hasTodayTemp := getRollingTemp(targetTime)
-
-			var pastTemps []float64
-			for _, dateStr := range selectedDayDatesA {
-				pastDayTime, err := time.ParseInLocation("2006-01-02", dateStr, loc)
-				if err == nil {
-					pastHourTime := time.Date(pastDayTime.Year(), pastDayTime.Month(), pastDayTime.Day(), h, 0, 0, 0, loc)
-					if ptemp, ok := getRollingTemp(pastHourTime); ok {
-						pastTemps = append(pastTemps, ptemp)
-					}
-				}
-			}
-
-			minRequiredTemps := 3
-			if len(selectedDayDatesA) < minRequiredTemps {
-				minRequiredTemps = len(selectedDayDatesA)
-			}
-			if minRequiredTemps < 2 {
-				minRequiredTemps = 2
-			}
-
-			if hasTodayTemp && len(pastTemps) >= minRequiredTemps {
-				var sumPastTemp float64
-				for _, t := range pastTemps {
-					sumPastTemp += t
-				}
-				baselineTemp := sumPastTemp / float64(len(pastTemps))
-
-				const tempDeadband = 3.0
-
-				if todayTemp > baselineTemp+tempDeadband {
-					// Hotter today than historical baseline -> scale load up
-					if todayTemp > settings.ACBaseTemperatureC {
-						effInc := todayTemp - math.Max(baselineTemp, settings.ACBaseTemperatureC)
-						if effInc > 0 {
-							ratio := (settings.ACUsageIncreasePercentPerDegree / 100.0) * effInc
-							maxRatio := settings.ACUsageMaxIncreasePercent / 100.0
-							if ratio > maxRatio {
-								ratio = maxRatio
-							}
-							avgLoadAACAdj = avgLoadA + (avgLoadA * ratio)
-						}
-					}
-				} else if todayTemp < baselineTemp-tempDeadband {
-					// Cooler today than historical baseline -> scale load down (AC is running less/off)
-					if baselineTemp > settings.ACBaseTemperatureC {
-						effDec := baselineTemp - math.Max(todayTemp, settings.ACBaseTemperatureC)
-						if effDec > 0 {
-							ratio := (settings.ACUsageIncreasePercentPerDegree / 100.0) * effDec
-							// Safety limit: cap reduction at 50% or the configured max increase percent
-							maxDecRatio := math.Min(0.5, settings.ACUsageMaxIncreasePercent/100.0)
-							if ratio > maxDecRatio {
-								ratio = maxDecRatio
-							}
-							avgLoadAACAdj = avgLoadA - (avgLoadA * ratio)
-						}
-					}
-				}
-			}
-		}
-
 		// Solar prediction.
 		// WeatherSolar uses forecasted values (preferred), falling back to SmoothedSolar if forecast is absent.
 		avgSolar := 0.0
 		if len(weather) > 0 {
 			if ws, ok := weatherSolar[targetTime.Truncate(time.Hour).Unix()]; ok {
-				avgSolar = ws.ImprovedSolar
+				avgSolar = ws.SolarKWH
 			}
 		} else {
 			avgSolar = smoothedSolar[h]
@@ -781,7 +681,7 @@ func (c *Controller) BuildHourlyEnergyModel(
 
 		// Apply the adaptive shift derived via Option G.
 		// We enforce a minimum load floor of 0.1 KWH to avoid predicting negative or zero usage.
-		finalHomeLoadACAdj := math.Max(0.1, avgLoadAACAdj+appliedShift)
+		finalHomeLoadACAdj := math.Max(0.1, avgLoadA+appliedShift)
 
 		result[h] = TimeProfile{
 			Hour:           h,

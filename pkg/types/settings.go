@@ -104,10 +104,6 @@ type Settings struct {
 	SolarCapacityBufferMinutes int     `json:"solarCapacityBufferMinutes"`
 	VPPChargingBufferMinutes   int     `json:"vppChargingBufferMinutes"`
 
-	// A/C Energy Estimation Settings
-	ACBaseTemperatureC              float64 `json:"acBaseTemperatureC"`
-	ACUsageIncreasePercentPerDegree float64 `json:"acUsageIncreasePercentPerDegree"`
-	ACUsageMaxIncreasePercent       float64 `json:"acUsageMaxIncreasePercent"`
 	// Home load prediction strategy ("default", "conservative")
 	HomeLoadPredictionStrategy string `json:"homeLoadPredictionStrategy"`
 }

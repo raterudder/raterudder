@@ -15,6 +15,7 @@ import {
     Line,
     ReferenceArea,
 } from 'recharts';
+import { HelpButton } from '../components/HelpButton';
 import './Forecast.css';
 
 type ChartConfig = {
@@ -23,6 +24,7 @@ type ChartConfig = {
     color: string;
     gradientId: string;
     unit: string;
+    helpDescription?: React.ReactNode;
     referenceLine?: { dataKey: string; label: string; color: string };
     additionalLines?: { dataKey: string; color: string; strokeDasharray?: string; type?: 'monotone' | 'step' | 'stepAfter' | 'stepBefore' }[];
 };
@@ -34,6 +36,13 @@ const charts: ChartConfig[] = [
         color: 'var(--accent)',
         gradientId: 'batteryGrad',
         unit: '%',
+        helpDescription: (
+            <p>
+                Displays the forecasted State of Charge (SOC) of your battery if RateRudder did nothing to optimize your system.
+                It shows how battery levels would naturally change based solely on home load and solar generation without automated charging, discharging, or grid arbitrage interventions.
+                The dashed red line represents your Minimum Reserve SOC threshold.
+            </p>
+        ),
         additionalLines: [
             { dataKey: 'batteryReserveSOC', color: '#ef4444', strokeDasharray: '6 4', type: 'stepAfter' },
         ],
@@ -44,9 +53,11 @@ const charts: ChartConfig[] = [
         color: 'var(--warning)',
         gradientId: 'solarGrad',
         unit: ' kWh',
-        additionalLines: [
-            { dataKey: 'rawSolarKWH', color: 'var(--text-muted)', strokeDasharray: '4 4' },
-        ],
+        helpDescription: (
+            <p>
+                Forecasts expected hourly solar generation in kilowatt-hours (kWh) for your system based on weather predictions, historical calibration, and panel orientation. RateRudder uses this forecast to optimize battery charging and grid usage.
+            </p>
+        ),
     },
     {
         title: 'Predicted Home Load (kWh)',
@@ -54,6 +65,11 @@ const charts: ChartConfig[] = [
         color: '#a855f7',
         gradientId: 'loadGrad',
         unit: ' kWh',
+        helpDescription: (
+            <p>
+                Forecasts expected hourly electricity usage (in kWh) for your home based on historical consumption patterns, day of week, and temperature predictions.
+            </p>
+        ),
     },
     {
         title: 'Grid Charge Cost ($/kWh)',
@@ -61,6 +77,11 @@ const charts: ChartConfig[] = [
         color: '#10b981',
         gradientId: 'priceGrad',
         unit: ' $/kWh',
+        helpDescription: (
+            <p>
+                Displays hourly electricity import prices ($/kWh) according to your utility rate plan. RateRudder uses these rates to schedule low-cost grid charging and avoid expensive peak pricing.
+            </p>
+        ),
     },
 ];
 
@@ -76,7 +97,6 @@ function formatHour(ts: string, referenceTs?: string): string {
 interface ProcessedModelingHour extends ModelingHour {
     batterySOCIfUsed: number;
     batteryReserveSOC: number;
-    rawSolarKWH: number;
 }
 
 function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerAction }: { data: ProcessedModelingHour[]; config: ChartConfig; isMobile: boolean; showCurrentTime: boolean; nowMs: number; headerAction?: React.ReactNode }) {
@@ -136,7 +156,12 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
     return (
         <div className="chart-card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                <h3 style={{ margin: 0 }}>{config.title}</h3>
+                <h3 style={{ margin: 0, display: 'flex', alignItems: 'center' }}>
+                    {config.title}
+                    {config.helpDescription && (
+                        <HelpButton title={config.title} description={config.helpDescription} />
+                    )}
+                </h3>
                 {headerAction}
             </div>
             <ResponsiveContainer width="100%" height={200}>
@@ -172,9 +197,7 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                             const v = Number(value ?? 0);
                             const lineUnit = config.unit;
                             let displayName = config.title;
-                            if (name === 'rawSolarKWH') {
-                                displayName = 'Raw Model';
-                            } else if (name === 'batteryReserveSOC') {
+                            if (name === 'batteryReserveSOC') {
                                 displayName = 'Reserve SOC';
                             }
                             return [
@@ -300,10 +323,10 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
             try {
                 const sett = await fetchSettings(siteID);
                 const strategy = sett.homeLoadPredictionStrategy === 'conservative' ? 'conservative' : 'default';
-                
+
                 // Fetch modeling using the resolved settings strategy
                 const mod = await fetchModeling(siteID, strategy);
-                
+
                 // Update states together
                 setSettings(sett);
                 setLoadPredictionMode(strategy);
@@ -392,10 +415,6 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 batterySOCIfUsed: (displayBatteryKWH / h.batteryCapacityKWH) * 100,
                 batteryReserveSOC: (h.batteryReserveKWH / h.batteryCapacityKWH) * 100,
                 predictedSolarKWH,
-                // Avoid division by zero
-                rawSolarKWH: todaySolarTrend > 0.001
-                    ? predictedSolarKWH / todaySolarTrend
-                    : 0,
                 solarTrendRatio: todaySolarTrend > 0 && todaySolarTrend !== 1.0
                     ? todaySolarTrend
                     : 0,
@@ -504,7 +523,6 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                                         ts: h.tsHourStart,
                                         batterySOCIfUsed: 0,
                                         batteryReserveSOC: 0,
-                                        rawSolarKWH: h.unclippedSolarGeneration,
                                         predictedSolarKWH: h.improvedSolarGeneration,
                                         todaySolarTrend: 1.0,
                                         avgHomeLoadKWH: 0,
@@ -518,9 +536,6 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                                         color: '#f59e0b',
                                         gradientId: 'solar1hGradToday',
                                         unit: ' kWh',
-                                        additionalLines: [
-                                            { dataKey: 'rawSolarKWH', color: 'var(--text-muted)', strokeDasharray: '4 4' },
-                                        ],
                                     }}
                                     isMobile={isMobile}
                                     showCurrentTime={false}
@@ -539,7 +554,6 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                                         ts: h.tsHourStart,
                                         batterySOCIfUsed: 0,
                                         batteryReserveSOC: 0,
-                                        rawSolarKWH: h.unclippedSolarGeneration,
                                         predictedSolarKWH: h.improvedSolarGeneration,
                                         todaySolarTrend: 1.0,
                                         avgHomeLoadKWH: 0,
@@ -553,9 +567,6 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                                         color: '#f59e0b',
                                         gradientId: 'solar1hGradTomorrow',
                                         unit: ' kWh',
-                                        additionalLines: [
-                                            { dataKey: 'rawSolarKWH', color: 'var(--text-muted)', strokeDasharray: '4 4' },
-                                        ],
                                     }}
                                     isMobile={isMobile}
                                     showCurrentTime={false}

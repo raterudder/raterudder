@@ -247,6 +247,7 @@ export interface Settings {
     minArbitrageDifferenceDollarsPerKWH: number;
     minDeficitPriceDifferenceDollarsPerKWH: number;
     minBatterySOC: number;
+    minBatterySOCPeriods?: MinBatterySOCPeriod[];
     ignoreHourUsageOverMultiple: number;
     gridChargeBatteries: boolean;
     gridExportSolar: boolean;
@@ -273,11 +274,7 @@ export interface Settings {
     socBufferPercent: number;
     solarCapacityBufferMinutes: number;
     vppChargingBufferMinutes: number;
-    acBaseTemperatureC: number;
-    acUsageIncreasePercentPerDegree: number;
-    acUsageMaxIncreasePercent: number;
     homeLoadPredictionStrategy?: string;
-    minBatterySOCPeriods?: MinBatterySOCPeriod[];
 }
 
 export interface UtilityHourPeriod {

@@ -123,8 +123,7 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 				SnowfallCM:   h.SnowfallCM,
 			}
 			if improved, ok := improvedSolarMap[h.TSHourStart.Unix()]; ok {
-				wr.ImprovedSolarGeneration = improved.ImprovedSolar
-				wr.UnclippedSolarGeneration = improved.UnclippedSolar
+				wr.ImprovedSolarGeneration = improved.SolarKWH
 				wr.SnowDepthCM = improved.SnowDepth
 				wr.TempFactor = improved.TempFactor
 				wr.SnowFactor = improved.SnowFactor

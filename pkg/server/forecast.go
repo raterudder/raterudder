@@ -32,16 +32,15 @@ type PriceHistoryRes struct {
 
 // WeatherRes represents the solar forecast data for a specific hour in a response.
 type WeatherRes struct {
-	TSHourStart              time.Time `json:"tsHourStart"`
-	ImprovedSolarGeneration  float64   `json:"improvedSolarGeneration,omitempty"`
-	UnclippedSolarGeneration float64   `json:"unclippedSolarGeneration,omitempty"`
-	ImprovedHomeLoad         float64   `json:"improvedHomeLoad,omitempty"`
-	SnowDepthCM              float64   `json:"snowDepthCM,omitempty"`
-	TempFactor               float64   `json:"tempFactor,omitempty"`
-	SnowFactor               float64   `json:"snowFactor,omitempty"`
-	TemperatureC             float64   `json:"temperatureC,omitempty"`
-	Irradiance               float64   `json:"irradiance,omitempty"`
-	SnowfallCM               float64   `json:"snowfallCM,omitempty"`
+	TSHourStart             time.Time `json:"tsHourStart"`
+	ImprovedSolarGeneration float64   `json:"improvedSolarGeneration,omitempty"`
+	ImprovedHomeLoad        float64   `json:"improvedHomeLoad,omitempty"`
+	SnowDepthCM             float64   `json:"snowDepthCM,omitempty"`
+	TempFactor              float64   `json:"tempFactor,omitempty"`
+	SnowFactor              float64   `json:"snowFactor,omitempty"`
+	TemperatureC            float64   `json:"temperatureC,omitempty"`
+	Irradiance              float64   `json:"irradiance,omitempty"`
+	SnowfallCM              float64   `json:"snowfallCM,omitempty"`
 }
 
 // ForecastRes represents the complete response for the forecast endpoint, including histories.
@@ -239,15 +238,14 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 					ts := hw.TSHourStart.Unix()
 					if ws, ok := solar1hMap[ts]; ok {
 						solar1hRes = append(solar1hRes, WeatherRes{
-							TSHourStart:              hw.TSHourStart,
-							ImprovedSolarGeneration:  ws.ImprovedSolar,
-							UnclippedSolarGeneration: ws.UnclippedSolar,
-							SnowDepthCM:              ws.SnowDepth,
-							TempFactor:               ws.TempFactor,
-							SnowFactor:               ws.SnowFactor,
-							TemperatureC:             hw.TemperatureC,
-							Irradiance:               ws.Irradiance,
-							SnowfallCM:               hw.SnowfallCM,
+							TSHourStart:             hw.TSHourStart,
+							ImprovedSolarGeneration: ws.SolarKWH,
+							SnowDepthCM:             ws.SnowDepth,
+							TempFactor:              ws.TempFactor,
+							SnowFactor:              ws.SnowFactor,
+							TemperatureC:            hw.TemperatureC,
+							Irradiance:              ws.Irradiance,
+							SnowfallCM:              hw.SnowfallCM,
 						})
 					}
 				}

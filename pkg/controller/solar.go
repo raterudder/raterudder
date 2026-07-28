@@ -34,13 +34,12 @@ var solarIrradianceSimilarityScale = 150.0
 
 // WeatherSolar contains the solar generation data for a given hour.
 type WeatherSolar struct {
-	TSHourStart    int64
-	ImprovedSolar  float64
-	UnclippedSolar float64
-	SnowDepth      float64
-	TempFactor     float64
-	SnowFactor     float64
-	Irradiance     float64
+	TSHourStart int64
+	SolarKWH    float64
+	SnowDepth   float64
+	TempFactor  float64
+	SnowFactor  float64
+	Irradiance  float64
 }
 
 // CalculateSunPosition is an exported wrapper for calculateSunPosition.
@@ -1011,13 +1010,12 @@ func CalculateWeatherSolar(
 		}
 
 		results[ts] = WeatherSolar{
-			TSHourStart:    ts,
-			ImprovedSolar:  improved,
-			UnclippedSolar: unclipped,
-			SnowDepth:      snowDepth,
-			TempFactor:     tempFactor,
-			SnowFactor:     snowFactor,
-			Irradiance:     gti,
+			TSHourStart: ts,
+			SolarKWH:    improved,
+			SnowDepth:   snowDepth,
+			TempFactor:  tempFactor,
+			SnowFactor:  snowFactor,
+			Irradiance:  gti,
 		}
 	}
 

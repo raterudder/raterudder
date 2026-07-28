@@ -40,7 +40,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 		// Irradiance 800, Solar 10 -> Efficiency = 10 / (800 * TempFactor(1) * SnowFactor(1)) = 0.0125
 		// 13:00 projection: 400 * 0.0125 = 5.0
 		val13 := results[time.Date(2024, 1, 1, 13, 0, 0, 0, time.UTC).Unix()]
-		assert.InDelta(t, 5.24, val13.ImprovedSolar, 0.1)
+		assert.InDelta(t, 5.24, val13.SolarKWH, 0.1)
 	})
 
 	t.Run("clipping cap", func(t *testing.T) {
@@ -63,7 +63,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 		results, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		val12 := results[time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC).Unix()]
 		// Should learn clipping cap of 5.0
-		assert.LessOrEqual(t, val12.ImprovedSolar, 5.0001)
+		assert.LessOrEqual(t, val12.SolarKWH, 5.0001)
 	})
 
 	t.Run("clipping cap learned with 3 occurrences", func(t *testing.T) {
@@ -86,7 +86,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 		results, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		val12 := results[time.Date(2024, 1, 4, 12, 0, 0, 0, time.UTC).Unix()]
 		// Should learn clipping cap of 10.0, so the forecast for GTI=1500 is capped at 10.0.
-		assert.LessOrEqual(t, val12.ImprovedSolar, 10.0001)
+		assert.LessOrEqual(t, val12.SolarKWH, 10.0001)
 	})
 
 	t.Run("clipping cap not learned with 2 occurrences", func(t *testing.T) {
@@ -107,7 +107,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 		results, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		val12 := results[time.Date(2024, 1, 4, 12, 0, 0, 0, time.UTC).Unix()]
 		// With only 2 occurrences, no clipping cap is learned, so ImprovedSolar should be unclipped (~15.0).
-		assert.Greater(t, val12.ImprovedSolar, 14.0)
+		assert.Greater(t, val12.SolarKWH, 14.0)
 	})
 
 	t.Run("curtailed history ignored", func(t *testing.T) {
@@ -130,7 +130,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 		// Efficiency should be learned ONLY from 12:00 (10.0 / 800 * ...)
 		// Not from 11:00 (which would drag efficiency down)
 		val13 := results[time.Date(2024, 1, 1, 13, 0, 0, 0, time.UTC).Unix()]
-		assert.InDelta(t, 10.0, val13.ImprovedSolar, 0.1)
+		assert.InDelta(t, 10.0, val13.SolarKWH, 0.1)
 	})
 
 	t.Run("snow effects", func(t *testing.T) {
@@ -158,10 +158,10 @@ func TestCalculateWeatherSolar(t *testing.T) {
 		assert.Equal(t, 0.7, results[time.Date(2024, 1, 1, 15, 0, 0, 0, time.UTC).Unix()].SnowFactor)
 
 		// Ensure output generation scales down accordingly
-		baseSolar := results[time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC).Unix()].ImprovedSolar
-		assert.Equal(t, 0.0, results[time.Date(2024, 1, 1, 13, 0, 0, 0, time.UTC).Unix()].ImprovedSolar)
-		assert.InDelta(t, baseSolar*0.1, results[time.Date(2024, 1, 1, 14, 0, 0, 0, time.UTC).Unix()].ImprovedSolar, 0.01)
-		assert.InDelta(t, baseSolar*0.7, results[time.Date(2024, 1, 1, 15, 0, 0, 0, time.UTC).Unix()].ImprovedSolar, 0.01)
+		baseSolar := results[time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC).Unix()].SolarKWH
+		assert.Equal(t, 0.0, results[time.Date(2024, 1, 1, 13, 0, 0, 0, time.UTC).Unix()].SolarKWH)
+		assert.InDelta(t, baseSolar*0.1, results[time.Date(2024, 1, 1, 14, 0, 0, 0, time.UTC).Unix()].SolarKWH, 0.01)
+		assert.InDelta(t, baseSolar*0.7, results[time.Date(2024, 1, 1, 15, 0, 0, 0, time.UTC).Unix()].SolarKWH, 0.01)
 	})
 
 	t.Run("fallback to GHI", func(t *testing.T) {
@@ -185,7 +185,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 
 		assert.Equal(t, 800.0, val12.Irradiance)
 		assert.Equal(t, 400.0, val13.Irradiance)
-		assert.InDelta(t, 5.24, val13.ImprovedSolar, 0.1) // proportional to 10
+		assert.InDelta(t, 5.24, val13.SolarKWH, 0.1) // proportional to 10
 	})
 
 	t.Run("ignore current hour", func(t *testing.T) {
@@ -221,9 +221,9 @@ func TestCalculateWeatherSolar(t *testing.T) {
 		// 1. Learned efficiency is based ONLY on yesterday (which yields 10.0 ImprovedSolar).
 		// 2. Both currentHour and futureHour (both having GTI 800) should project exactly around 10.0 ImprovedSolar.
 		// 3. Neither should be 50.0 (the actual value of current hour), and neither should be 0.0.
-		assert.InDelta(t, 10.0, valYesterday.ImprovedSolar, 0.1)
-		assert.InDelta(t, 10.0, valCurrent.ImprovedSolar, 0.1)
-		assert.InDelta(t, 10.0, valFuture.ImprovedSolar, 0.1)
+		assert.InDelta(t, 10.0, valYesterday.SolarKWH, 0.1)
+		assert.InDelta(t, 10.0, valCurrent.SolarKWH, 0.1)
+		assert.InDelta(t, 10.0, valFuture.SolarKWH, 0.1)
 	})
 
 	t.Run("empty history and weather", func(t *testing.T) {
@@ -243,7 +243,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 		// Should have entries but with zero solar (no calibration data)
 		assert.Len(t, results, 1)
 		val := results[time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC).Unix()]
-		assert.Equal(t, 0.0, val.ImprovedSolar, "no history means no efficiency, so zero projection")
+		assert.Equal(t, 0.0, val.SolarKWH, "no history means no efficiency, so zero projection")
 	})
 
 	t.Run("history with no matching weather", func(t *testing.T) {
@@ -262,7 +262,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 		// Weather hour exists but no matching history, so no calibrated efficiency
 		assert.Len(t, results, 1)
 		val := results[time.Date(2024, 2, 1, 12, 0, 0, 0, time.UTC).Unix()]
-		assert.Equal(t, 0.0, val.ImprovedSolar)
+		assert.Equal(t, 0.0, val.SolarKWH)
 	})
 
 	t.Run("zero irradiance produces zero solar", func(t *testing.T) {
@@ -279,7 +279,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 		}
 		results, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		val13 := results[time.Date(2024, 1, 1, 13, 0, 0, 0, time.UTC).Unix()]
-		assert.Equal(t, 0.0, val13.ImprovedSolar, "zero irradiance should produce zero solar")
+		assert.Equal(t, 0.0, val13.SolarKWH, "zero irradiance should produce zero solar")
 	})
 
 	t.Run("invalid timezone falls back to UTC", func(t *testing.T) {
@@ -326,8 +326,8 @@ func TestCalculateWeatherSolar(t *testing.T) {
 		valCalib := results[calibHour.Unix()]
 		valForecast := results[forecastHour.Unix()]
 
-		assert.Greater(t, valCalib.ImprovedSolar, 0.0, "calibration hour should have positive solar")
-		assert.Greater(t, valForecast.ImprovedSolar, 0.0, "forecast hour should have positive solar")
+		assert.Greater(t, valCalib.SolarKWH, 0.0, "calibration hour should have positive solar")
+		assert.Greater(t, valForecast.SolarKWH, 0.0, "forecast hour should have positive solar")
 		assert.Greater(t, valCalib.Irradiance, 0.0, "GTI should be positive during daytime")
 		assert.Greater(t, valForecast.Irradiance, 0.0, "GTI should be positive during daytime")
 	})
@@ -351,7 +351,7 @@ func TestCalculateWeatherSolar(t *testing.T) {
 
 		results, _ := CalculateWeatherSolar(ctx, time.Time{}, history, weather, loc)
 		valNight := results[nightHour.Unix()]
-		assert.Equal(t, 0.0, valNight.ImprovedSolar, "night should produce zero solar")
+		assert.Equal(t, 0.0, valNight.SolarKWH, "night should produce zero solar")
 	})
 
 	t.Run("auto detect azimuth: East panels", func(t *testing.T) {
@@ -981,9 +981,9 @@ func TestHourlyScaleFactorCalibration(t *testing.T) {
 		val12 := res[baseDate.Add(12*time.Hour).Unix()]
 		val16 := res[baseDate.Add(16*time.Hour).Unix()]
 
-		assert.InDelta(t, 12.0, val11.ImprovedSolar, 0.5)
-		assert.InDelta(t, 6.0, val12.ImprovedSolar, 0.5)
-		assert.InDelta(t, 11.0, val16.ImprovedSolar, 0.5)
+		assert.InDelta(t, 12.0, val11.SolarKWH, 0.5)
+		assert.InDelta(t, 6.0, val12.SolarKWH, 0.5)
+		assert.InDelta(t, 11.0, val16.SolarKWH, 0.5)
 	})
 
 	t.Run("fallback to staticEff when < 4 valid hours", func(t *testing.T) {
@@ -1037,7 +1037,7 @@ func TestHourlyScaleFactorCalibration(t *testing.T) {
 		// staticEff = 39.0 / 2934.375 = 0.013291
 		// For hour 15, expected solar = 1000 * 0.013291 * 0.978125 = 13.0
 		val15 := res[baseDate.Add(15*time.Hour).Unix()]
-		assert.InDelta(t, 13.0, val15.ImprovedSolar, 0.5)
+		assert.InDelta(t, 13.0, val15.SolarKWH, 0.5)
 	})
 
 	t.Run("outlier hour (noisy) thrown away and interpolated", func(t *testing.T) {
@@ -1093,7 +1093,7 @@ func TestHourlyScaleFactorCalibration(t *testing.T) {
 		// The valid hours are 10, 11, 13, 14, 15 (5 valid hours >= 4).
 		// So Hour 12 should be interpolated between 11 (12.0) and 13 (14.0) -> ~13.0.
 		val12 := res[baseDate.Add(12*time.Hour).Unix()]
-		assert.InDelta(t, 13.0, val12.ImprovedSolar, 0.5)
+		assert.InDelta(t, 13.0, val12.SolarKWH, 0.5)
 	})
 
 	t.Run("unphysically high hour thrown away and interpolated", func(t *testing.T) {
@@ -1147,7 +1147,7 @@ func TestHourlyScaleFactorCalibration(t *testing.T) {
 		// The valid hours are 10, 11, 13, 14, 15 (5 valid hours >= 4).
 		// So Hour 12 should be interpolated between 11 (12.0) and 13 (14.0) -> ~13.0.
 		val12 := res[baseDate.Add(12*time.Hour).Unix()]
-		assert.InDelta(t, 13.0, val12.ImprovedSolar, 0.5)
+		assert.InDelta(t, 13.0, val12.SolarKWH, 0.5)
 	})
 }
 
@@ -1248,7 +1248,7 @@ func TestTemperatureEffects(t *testing.T) {
 		val13 := results[time.Date(2024, 1, 1, 13, 0, 0, 0, time.UTC).Unix()]
 
 		// Hot temperature should reduce output
-		assert.Greater(t, val12.ImprovedSolar, val13.ImprovedSolar, "hot temp should produce less")
+		assert.Greater(t, val12.SolarKWH, val13.SolarKWH, "hot temp should produce less")
 		assert.Greater(t, val12.TempFactor, val13.TempFactor, "hot temp should have lower tempFactor")
 	})
 
@@ -1271,7 +1271,7 @@ func TestTemperatureEffects(t *testing.T) {
 		val13 := results[time.Date(2024, 1, 1, 13, 0, 0, 0, time.UTC).Unix()]
 
 		// Cold temperature should increase output (higher tempFactor)
-		assert.Less(t, val12.ImprovedSolar, val13.ImprovedSolar, "cold temp should produce more")
+		assert.Less(t, val12.SolarKWH, val13.SolarKWH, "cold temp should produce more")
 		assert.Less(t, val12.TempFactor, val13.TempFactor, "cold temp should have higher tempFactor")
 	})
 
