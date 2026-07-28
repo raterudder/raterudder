@@ -10,6 +10,56 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGetPGEAdjustments(t *testing.T) {
+	t.Run("2025 adjustments", func(t *testing.T) {
+		t2025 := time.Date(2025, time.June, 15, 12, 0, 0, 0, ptLocation)
+
+		onPeakAdj := getPGEAdjustments(t2025, "On-Peak")
+		midPeakAdj := getPGEAdjustments(t2025, "Mid-Peak")
+		offPeakAdj := getPGEAdjustments(t2025, "Off-Peak")
+
+		assert.InDelta(t, 0.14340, onPeakAdj, 1e-6)
+		assert.InDelta(t, 0.06807, midPeakAdj, 1e-6)
+		assert.InDelta(t, 0.04604, offPeakAdj, 1e-6)
+	})
+
+	t.Run("April 2026 adjustments", func(t *testing.T) {
+		tApr := time.Date(2026, time.April, 15, 12, 0, 0, 0, ptLocation)
+
+		onPeakAdj := getPGEAdjustments(tApr, "On-Peak")
+		midPeakAdj := getPGEAdjustments(tApr, "Mid-Peak")
+		offPeakAdj := getPGEAdjustments(tApr, "Off-Peak")
+
+		assert.InDelta(t, 0.14104, onPeakAdj, 1e-6)
+		assert.InDelta(t, 0.06705, midPeakAdj, 1e-6)
+		assert.InDelta(t, 0.04541, offPeakAdj, 1e-6)
+	})
+
+	t.Run("May 2026 adjustments", func(t *testing.T) {
+		tMay := time.Date(2026, time.May, 18, 12, 0, 0, 0, ptLocation)
+
+		onPeakAdj := getPGEAdjustments(tMay, "On-Peak")
+		midPeakAdj := getPGEAdjustments(tMay, "Mid-Peak")
+		offPeakAdj := getPGEAdjustments(tMay, "Off-Peak")
+
+		assert.InDelta(t, 0.14102, onPeakAdj, 1e-6)
+		assert.InDelta(t, 0.06703, midPeakAdj, 1e-6)
+		assert.InDelta(t, 0.04539, offPeakAdj, 1e-6)
+	})
+
+	t.Run("July 8 2026 onwards adjustments", func(t *testing.T) {
+		tJul := time.Date(2026, time.July, 10, 12, 0, 0, 0, ptLocation)
+
+		onPeakAdj := getPGEAdjustments(tJul, "On-Peak")
+		midPeakAdj := getPGEAdjustments(tJul, "Mid-Peak")
+		offPeakAdj := getPGEAdjustments(tJul, "Off-Peak")
+
+		assert.InDelta(t, 0.13942, onPeakAdj, 1e-6)
+		assert.InDelta(t, 0.06629, midPeakAdj, 1e-6)
+		assert.InDelta(t, 0.04490, offPeakAdj, 1e-6)
+	})
+}
+
 func TestPortlandGeneralElectric(t *testing.T) {
 	u := &genericTOU{}
 	err := u.ApplySettings(context.Background(), types.Settings{
@@ -18,7 +68,13 @@ func TestPortlandGeneralElectric(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	t.Run("Weekday On-Peak", func(t *testing.T) {
+	t.Run("2025 Weekday On-Peak", func(t *testing.T) {
+		p, err := u.priceForTime(time.Date(2025, time.May, 19, 18, 0, 0, 0, ptLocation)) // Monday 6:00 PM
+		require.NoError(t, err)
+		assert.InDelta(t, 0.44974, p.DollarsPerKWH, 1e-5)
+	})
+
+	t.Run("Weekday On-Peak (May 2026)", func(t *testing.T) {
 		periods, err := u.GetPeriods(context.Background())
 		require.NoError(t, err)
 		names := make(map[string]bool)
@@ -30,49 +86,61 @@ func TestPortlandGeneralElectric(t *testing.T) {
 
 		p, err := u.priceForTime(time.Date(2026, time.May, 18, 18, 0, 0, 0, ptLocation)) // Monday 6:00 PM
 		require.NoError(t, err)
-		assert.Equal(t, 0.4365, p.DollarsPerKWH)
+		assert.InDelta(t, 0.44731, p.DollarsPerKWH, 1e-5)
 	})
 
-	t.Run("Weekday Mid-Peak", func(t *testing.T) {
+	t.Run("Weekday Mid-Peak (May 2026)", func(t *testing.T) {
 		p, err := u.priceForTime(time.Date(2026, time.May, 18, 10, 0, 0, 0, ptLocation)) // Monday 10:00 AM
 		require.NoError(t, err)
-		assert.Equal(t, 0.1689, p.DollarsPerKWH)
+		assert.InDelta(t, 0.17968, p.DollarsPerKWH, 1e-5)
 	})
 
-	t.Run("Weekday Off-Peak evening", func(t *testing.T) {
+	t.Run("Weekday Off-Peak evening (May 2026)", func(t *testing.T) {
 		p, err := u.priceForTime(time.Date(2026, time.May, 18, 22, 0, 0, 0, ptLocation)) // Monday 10:00 PM
 		require.NoError(t, err)
-		assert.Equal(t, 0.0901, p.DollarsPerKWH)
+		assert.InDelta(t, 0.10097, p.DollarsPerKWH, 1e-5)
 	})
 
-	t.Run("Weekday Off-Peak morning", func(t *testing.T) {
+	t.Run("Weekday Off-Peak morning (May 2026)", func(t *testing.T) {
 		p, err := u.priceForTime(time.Date(2026, time.May, 18, 4, 0, 0, 0, ptLocation)) // Monday 4:00 AM
 		require.NoError(t, err)
-		assert.Equal(t, 0.0901, p.DollarsPerKWH)
+		assert.InDelta(t, 0.10097, p.DollarsPerKWH, 1e-5)
 	})
 
-	t.Run("Weekend Off-Peak", func(t *testing.T) {
+	t.Run("Weekend Off-Peak (May 2026)", func(t *testing.T) {
 		p, err := u.priceForTime(time.Date(2026, time.May, 23, 14, 0, 0, 0, ptLocation)) // Saturday 2:00 PM
 		require.NoError(t, err)
-		assert.Equal(t, 0.0901, p.DollarsPerKWH)
+		assert.InDelta(t, 0.10097, p.DollarsPerKWH, 1e-5)
 	})
 
-	t.Run("Holiday Off-Peak (Memorial Day)", func(t *testing.T) {
+	t.Run("Holiday Off-Peak (Memorial Day 2026)", func(t *testing.T) {
 		p, err := u.priceForTime(time.Date(2026, time.May, 25, 18, 0, 0, 0, ptLocation)) // Monday 6:00 PM
 		require.NoError(t, err)
-		assert.Equal(t, 0.0901, p.DollarsPerKWH)
+		assert.InDelta(t, 0.10097, p.DollarsPerKWH, 1e-5)
 	})
 
-	t.Run("Holiday Weekend Shift (Saturday Independence Day shifts to Friday)", func(t *testing.T) {
+	t.Run("Holiday Weekend Shift (Independence Day observed July 3 2026)", func(t *testing.T) {
 		p, err := u.priceForTime(time.Date(2026, time.July, 3, 18, 0, 0, 0, ptLocation)) // Friday 6:00 PM
 		require.NoError(t, err)
-		assert.Equal(t, 0.0901, p.DollarsPerKWH)
+		assert.InDelta(t, 0.10097, p.DollarsPerKWH, 1e-5)
 	})
 
-	t.Run("Regular Friday (not holiday)", func(t *testing.T) {
+	t.Run("Post-July 8 2026 Weekday On-Peak", func(t *testing.T) {
 		p, err := u.priceForTime(time.Date(2026, time.July, 10, 18, 0, 0, 0, ptLocation)) // Friday 6:00 PM
 		require.NoError(t, err)
-		assert.Equal(t, 0.4365, p.DollarsPerKWH)
+		assert.InDelta(t, 0.44205, p.DollarsPerKWH, 1e-5)
+	})
+
+	t.Run("Post-July 8 2026 Weekday Mid-Peak", func(t *testing.T) {
+		p, err := u.priceForTime(time.Date(2026, time.July, 10, 10, 0, 0, 0, ptLocation)) // Friday 10:00 AM
+		require.NoError(t, err)
+		assert.InDelta(t, 0.17772, p.DollarsPerKWH, 1e-5)
+	})
+
+	t.Run("Post-July 8 2026 Weekday Off-Peak", func(t *testing.T) {
+		p, err := u.priceForTime(time.Date(2026, time.July, 10, 22, 0, 0, 0, ptLocation)) // Friday 10:00 PM
+		require.NoError(t, err)
+		assert.InDelta(t, 0.10004, p.DollarsPerKWH, 1e-5)
 	})
 }
 

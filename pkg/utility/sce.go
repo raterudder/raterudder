@@ -1621,3 +1621,76 @@ func scePeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 
 	return periods
 }
+
+// sceUtilityInfo returns metadata and options for SCE
+func sceUtilityInfo() types.UtilityProviderInfo {
+	return types.UtilityProviderInfo{
+		ID:   "sce",
+		Name: "Southern California Edison (SCE)",
+		Rates: []types.UtilityRateInfo{
+			{
+				ID:   "sce_tou_d_4_9pm",
+				Name: "Time-of-Use Peak 4-9 PM (TOU-D-4-9PM)",
+				Options: []types.UtilityRateOption{
+					{
+						Field:       "netMeteringScheme",
+						Name:        "Net Metering / Export Scheme",
+						Type:        types.UtilityOptionTypeSelect,
+						Description: "Select your net metering or solar billing plan program.",
+						Choices: []types.UtilityOptionChoice{
+							{Value: "net", Name: "NEM 1.0 (installs before June 2016)"},
+							{Value: "nem2", Name: "NEM 2.0 (installs between June 2016 and April 15, 2023)"},
+							{Value: "sbp", Name: "Solar Billing Plan (NEM 3.0) (installs after April 15, 2023)"},
+						},
+						Default: "sbp",
+					},
+				},
+				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+					return scePeriods("sce_tou_d_4_9pm", opts, []int{2026, 2027}), nil
+				},
+			},
+			{
+				ID:   "sce_tou_d_5_8pm",
+				Name: "Time-of-Use Peak 5-8 PM (TOU-D-5-8PM)",
+				Options: []types.UtilityRateOption{
+					{
+						Field:       "netMeteringScheme",
+						Name:        "Net Metering / Export Scheme",
+						Type:        types.UtilityOptionTypeSelect,
+						Description: "Select your net metering or solar billing plan program.",
+						Choices: []types.UtilityOptionChoice{
+							{Value: "net", Name: "NEM 1.0 (installs before June 2016)"},
+							{Value: "nem2", Name: "NEM 2.0 (installs between June 2016 and April 15, 2023)"},
+							{Value: "sbp", Name: "Solar Billing Plan (NEM 3.0) (installs after April 15, 2023)"},
+						},
+						Default: "sbp",
+					},
+				},
+				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+					return scePeriods("sce_tou_d_5_8pm", opts, []int{2026, 2027}), nil
+				},
+			},
+			{
+				ID:   "sce_tou_d_prime",
+				Name: "Time-of-Use Prime (TOU-D-PRIME)",
+				Options: []types.UtilityRateOption{
+					{
+						Field:       "netMeteringScheme",
+						Name:        "Net Metering / Export Scheme",
+						Type:        types.UtilityOptionTypeSelect,
+						Description: "Select your net metering or solar billing plan program.",
+						Choices: []types.UtilityOptionChoice{
+							{Value: "net", Name: "NEM 1.0 (installs before June 2016)"},
+							{Value: "nem2", Name: "NEM 2.0 (installs between June 2016 and April 15, 2023)"},
+							{Value: "sbp", Name: "Solar Billing Plan (NEM 3.0) (installs after April 15, 2023)"},
+						},
+						Default: "sbp",
+					},
+				},
+				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+					return scePeriods("sce_tou_d_prime", opts, []int{2026, 2027}), nil
+				},
+			},
+		},
+	}
+}

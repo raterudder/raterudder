@@ -1003,3 +1003,118 @@ func pgEPeriods(plan string, options types.UtilityRateOptions, years []int) []ty
 
 	return periods
 }
+
+// pgEUtilityInfo returns the utility info for PG&E.
+func pgEUtilityInfo() types.UtilityProviderInfo {
+	return types.UtilityProviderInfo{
+		ID:   "pg_e",
+		Name: "Pacific Gas and Electric (PG&E)",
+		Rates: []types.UtilityRateInfo{
+			{
+				ID:   "pg_e_e1",
+				Name: "Standard Residential (E-1)",
+				Options: []types.UtilityRateOption{
+					{
+						Field:       "netMeteringScheme",
+						Name:        "Net Metering / Export Scheme",
+						Type:        types.UtilityOptionTypeSelect,
+						Description: "Select your net metering or solar billing plan program.",
+						Choices: []types.UtilityOptionChoice{
+							{Value: "net", Name: "NEM 1.0 (installs before June 2016)"},
+							{Value: "nem2", Name: "NEM 2.0 (installs between June 2016 and April 15, 2023)"},
+							{Value: "sbp", Name: "Solar Billing Plan (NEM 3.0) (installs after April 15, 2023)"},
+						},
+						Default: "sbp",
+					},
+				},
+				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+					return pgEPeriods("pg_e_e1", opts, []int{2026, 2027}), nil
+				},
+			},
+			{
+				ID:   "pg_e_e_tou_c",
+				Name: "Time-of-Use Peak 4-9 PM Everyday (E-TOU-C)",
+				Options: []types.UtilityRateOption{
+					{
+						Field:       "netMeteringScheme",
+						Name:        "Net Metering / Export Scheme",
+						Type:        types.UtilityOptionTypeSelect,
+						Description: "Select your net metering or solar billing plan program.",
+						Choices: []types.UtilityOptionChoice{
+							{Value: "net", Name: "NEM 1.0 (installs before June 2016)"},
+							{Value: "nem2", Name: "NEM 2.0 (installs between June 2016 and April 15, 2023)"},
+							{Value: "sbp", Name: "Solar Billing Plan (NEM 3.0) (installs after April 15, 2023)"},
+						},
+						Default: "sbp",
+					},
+				},
+				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+					return pgEPeriods("pg_e_e_tou_c", opts, []int{2026, 2027}), nil
+				},
+			},
+			{
+				ID:   "pg_e_e_tou_d",
+				Name: "Time-of-Use Peak 5-8 PM Weekdays (E-TOU-D)",
+				Options: []types.UtilityRateOption{
+					{
+						Field:       "netMeteringScheme",
+						Name:        "Net Metering / Export Scheme",
+						Type:        types.UtilityOptionTypeSelect,
+						Description: "Select your net metering or solar billing plan program.",
+						Choices: []types.UtilityOptionChoice{
+							{Value: "net", Name: "NEM 1.0 (installs before June 2016)"},
+							{Value: "nem2", Name: "NEM 2.0 (installs between June 2016 and April 15, 2023)"},
+							{Value: "sbp", Name: "Solar Billing Plan (NEM 3.0) (installs after April 15, 2023)"},
+						},
+						Default: "sbp",
+					},
+				},
+				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+					return pgEPeriods("pg_e_e_tou_d", opts, []int{2026, 2027}), nil
+				},
+			},
+			{
+				ID:   "pg_e_e_elec",
+				Name: "Electric Home (E-ELEC)",
+				Options: []types.UtilityRateOption{
+					{
+						Field:       "netMeteringScheme",
+						Name:        "Net Metering / Export Scheme",
+						Type:        types.UtilityOptionTypeSelect,
+						Description: "Select your net metering or solar billing plan program.",
+						Choices: []types.UtilityOptionChoice{
+							{Value: "net", Name: "NEM 1.0 (installs before June 2016)"},
+							{Value: "nem2", Name: "NEM 2.0 (installs between June 2016 and April 15, 2023)"},
+							{Value: "sbp", Name: "Solar Billing Plan (NEM 3.0) (installs after April 15, 2023)"},
+						},
+						Default: "sbp",
+					},
+				},
+				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+					return pgEPeriods("pg_e_e_elec", opts, []int{2026, 2027}), nil
+				},
+			},
+			{
+				ID:   "pg_e_ev2",
+				Name: "EV Home Charging (EV2-A)",
+				Options: []types.UtilityRateOption{
+					{
+						Field:       "netMeteringScheme",
+						Name:        "Net Metering / Export Scheme",
+						Type:        types.UtilityOptionTypeSelect,
+						Description: "Select your net metering or solar billing plan program.",
+						Choices: []types.UtilityOptionChoice{
+							{Value: "net", Name: "NEM 1.0 (installs before June 2016)"},
+							{Value: "nem2", Name: "NEM 2.0 (installs between June 2016 and April 15, 2023)"},
+							{Value: "sbp", Name: "Solar Billing Plan (NEM 3.0) (installs after April 15, 2023)"},
+						},
+						Default: "sbp",
+					},
+				},
+				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+					return pgEPeriods("pg_e_ev2", opts, []int{2026, 2027}), nil
+				},
+			},
+		},
+	}
+}
