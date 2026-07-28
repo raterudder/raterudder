@@ -139,4 +139,24 @@ describe('BetaInterstitialPage Component', () => {
 
         expect(navigateMock).toHaveBeenCalledWith('/new-site');
     });
+
+    it('shows hidden ESS provider when present in enabled localStorage', async () => {
+        const user = userEvent.setup();
+        localStorage.setItem('enabled', 'enphase');
+        vi.mocked(fetchESSList).mockResolvedValue([
+            { id: 'franklin', name: 'FranklinWH' },
+            { id: 'enphase', name: 'Enphase', hidden: true }
+        ] as any);
+        (useLocation as ReturnType<typeof vi.fn>).mockReturnValue(['/welcome', vi.fn()]);
+        render(<BetaInterstitialPage />);
+
+        await waitFor(() => {
+            expect(screen.getByRole('combobox', { name: /Battery System/i })).toBeInTheDocument();
+        });
+
+        const batterySelect = screen.getByRole('combobox', { name: /Battery System/i });
+        await user.click(batterySelect);
+
+        expect(await screen.findByRole('option', { name: 'Enphase' })).toBeInTheDocument();
+    });
 });

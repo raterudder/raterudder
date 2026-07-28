@@ -21,6 +21,7 @@ import AdminPage from './pages/AdminPage';
 import PrivacyPolicy from './pages/PrivacyPolicy';
 import TermsOfService from './pages/TermsOfService';
 import TeslaCallback from './pages/TeslaCallback';
+import { checkAndStoreEnabledParam } from './utils/enabledProviders';
 
 // Custom location hook that preserves the ?viewSite query parameter
 const useLocationWithViewSite = () => {
@@ -86,6 +87,11 @@ function AppContent() {
     const [sites, setSites] = useState<UserSite[]>([]);
     const [selectedSiteID, setSelectedSiteID] = useState<string>("");
     const search = useSearch();
+
+    useEffect(() => {
+        checkAndStoreEnabledParam(search);
+    }, [search]);
+
     const viewSiteOverride = React.useMemo(() => {
         const queryParams = new URLSearchParams(search);
         return queryParams.get('viewSite');

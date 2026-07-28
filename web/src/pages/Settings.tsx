@@ -10,6 +10,7 @@ import { Combobox } from '@base-ui/react/combobox';
 import { Dialog } from '@base-ui/react/dialog';
 import { InterestForm } from '../components/InterestForm';
 import { HelpButton } from '../components/HelpButton';
+import { isESSEnabled } from '../utils/enabledProviders';
 import './Settings.css';
 
 const countries = [
@@ -515,7 +516,7 @@ const ESSForm = ({
                                 <Select.Item className="select-item" value="">
                                     <Select.ItemText>Select a system type...</Select.ItemText>
                                 </Select.Item>
-                                {essProviders.filter(p => !p.hidden || p.id === settings.ess).map(p => (
+                                {essProviders.filter(p => !p.hidden || p.id === settings.ess || isESSEnabled(p.id)).map(p => (
                                     <Select.Item key={p.id} className="select-item" value={p.id}>
                                         <Select.ItemText>{p.name}</Select.ItemText>
                                     </Select.Item>

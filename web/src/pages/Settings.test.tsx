@@ -617,6 +617,23 @@ describe('App & Settings', () => {
         expect(screen.queryByRole('option', { name: 'Secret ESS' })).not.toBeInTheDocument();
     });
 
+    it('shows hidden ESS providers if present in enabled localStorage', async () => {
+        const user = userEvent.setup();
+        localStorage.setItem('enabled', 'hidden_ess');
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            utilityProvider: '',
+            ess: '',
+        });
+
+        await navigateToSettings();
+
+        const essSelect = await screen.findByLabelText(/System Type/i);
+        await user.click(essSelect);
+        await waitFor(() => expect(screen.getByRole('option', { name: 'FranklinWH' })).toBeInTheDocument());
+        expect(screen.getByRole('option', { name: 'Secret ESS' })).toBeInTheDocument();
+    });
+
     it('shows hidden providers if they are currently configured', async () => {
          const user = userEvent.setup();
          (fetchSettings as any).mockResolvedValue({

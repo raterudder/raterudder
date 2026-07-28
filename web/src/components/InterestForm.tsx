@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Select } from '@base-ui/react/select';
 import { Combobox } from '@base-ui/react/combobox';
 import { submitInterest, type UtilityProviderInfo, type ESSProviderInfo } from '../api';
+import { isESSEnabled } from '../utils/enabledProviders';
 
 interface InterestFormProps {
     utilitiesList: UtilityProviderInfo[];
@@ -132,7 +133,7 @@ export const InterestForm: React.FC<InterestFormProps> = ({
                                 <Select.Portal>
                                     <Select.Positioner style={{ zIndex: 3000, width: 'var(--anchor-width)' }}>
                                         <Select.Popup className="select-popup">
-                                            {essList.filter(e => !e.hidden).map(e => (
+                                            {essList.filter(e => !e.hidden || isESSEnabled(e.id)).map(e => (
                                                 <Select.Item key={e.id} value={e.id} className="select-item">
                                                     <Select.ItemText>{e.name}</Select.ItemText>
                                                 </Select.Item>
