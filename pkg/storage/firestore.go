@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"slices"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -1481,6 +1482,18 @@ func (f *FirestoreProvider) GetHistorySummaries(ctx context.Context, siteID stri
 	return summaries, nil
 }
 
+func isTransactionExpiredErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if st, ok := status.FromError(err); ok {
+		if st.Code() == codes.InvalidArgument && strings.Contains(st.Message(), "referenced transaction has expired") {
+			return true
+		}
+	}
+	return false
+}
+
 // UpdateHistorySummary reads the existing summary, merges it with newSummary (overwriting matching days), and saves it.
 func (f *FirestoreProvider) UpdateHistorySummary(ctx context.Context, siteID string, month string, newSummary types.HistorySummary) (types.HistorySummary, error) {
 	coll, err := f.getCollection(siteID, "history_summary")
@@ -1489,115 +1502,139 @@ func (f *FirestoreProvider) UpdateHistorySummary(ctx context.Context, siteID str
 	}
 	docRef := coll.Doc(month)
 
-	var mergedSummary types.HistorySummary
+	maxRetries := 3
+	backoff := 100 * time.Millisecond
 
-	err = f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-		doc, err := tx.Get(docRef)
-		var existing types.HistorySummary
-		exists := true
-		if err != nil {
-			if status.Code(err) == codes.NotFound {
-				exists = false
-			} else {
-				return err
-			}
-		}
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		var mergedSummary types.HistorySummary
 
-		if exists {
-			val, err := doc.DataAt("json")
+		err = f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+			doc, err := tx.Get(docRef)
+			var existing types.HistorySummary
+			exists := true
 			if err != nil {
-				return fmt.Errorf("history summary doc missing 'json' field: %w", err)
-			}
-			jsonStr, ok := val.(string)
-			if !ok {
-				return fmt.Errorf("history summary doc 'json' field is not string")
-			}
-			if err := json.Unmarshal([]byte(jsonStr), &existing); err != nil {
-				return fmt.Errorf("failed to unmarshal history summary: %w", err)
-			}
-		}
-
-		// Merge Energy data, favoring the newSummary's days.
-		energyMap := make(map[string]types.DailyEnergyStats)
-		for _, e := range existing.Energy {
-			energyMap[e.TSDayStart.Format("2006-01-02")] = e
-		}
-		for _, e := range newSummary.Energy {
-			energyMap[e.TSDayStart.Format("2006-01-02")] = e
-		}
-		var mergedEnergy []types.DailyEnergyStats
-		for _, e := range energyMap {
-			mergedEnergy = append(mergedEnergy, e)
-		}
-		slices.SortFunc(mergedEnergy, func(a, b types.DailyEnergyStats) int {
-			return a.TSDayStart.Compare(b.TSDayStart)
-		})
-
-		// Merge Weather data, favoring the newSummary's days.
-		weatherMap := make(map[string]types.Weather)
-		for _, w := range existing.Weather {
-			weatherMap[w.TSDayStart.Format("2006-01-02")] = w
-		}
-		for _, w := range newSummary.Weather {
-			weatherMap[w.TSDayStart.Format("2006-01-02")] = w
-		}
-		var mergedWeather []types.Weather
-		for _, w := range weatherMap {
-			mergedWeather = append(mergedWeather, w)
-		}
-		slices.SortFunc(mergedWeather, func(a, b types.Weather) int {
-			return a.TSDayStart.Compare(b.TSDayStart)
-		})
-
-		var monthStart time.Time
-		if monthTime, err := time.Parse("2006-01", month); err == nil {
-			monthStart = monthTime
-		}
-
-		mergedSummary = types.HistorySummary{
-			TSMonthStart: monthStart,
-			Energy:       mergedEnergy,
-			Weather:      mergedWeather,
-		}
-
-		// Determine latestDate and earliestDate.
-		var latestDate, earliestDate time.Time
-		if len(mergedSummary.Energy) > 0 {
-			earliestDate = mergedSummary.Energy[0].TSDayStart
-			latestDate = mergedSummary.Energy[0].TSDayStart
-			for _, day := range mergedSummary.Energy {
-				if day.TSDayStart.Before(earliestDate) {
-					earliestDate = day.TSDayStart
-				}
-				if day.TSDayStart.After(latestDate) {
-					latestDate = day.TSDayStart
+				if status.Code(err) == codes.NotFound {
+					exists = false
+				} else {
+					return err
 				}
 			}
+
+			if exists {
+				val, err := doc.DataAt("json")
+				if err != nil {
+					return fmt.Errorf("history summary doc missing 'json' field: %w", err)
+				}
+				jsonStr, ok := val.(string)
+				if !ok {
+					return fmt.Errorf("history summary doc 'json' field is not string")
+				}
+				if err := json.Unmarshal([]byte(jsonStr), &existing); err != nil {
+					return fmt.Errorf("failed to unmarshal history summary: %w", err)
+				}
+			}
+
+			// Merge Energy data, favoring the newSummary's days.
+			energyMap := make(map[string]types.DailyEnergyStats)
+			for _, e := range existing.Energy {
+				energyMap[e.TSDayStart.Format("2006-01-02")] = e
+			}
+			for _, e := range newSummary.Energy {
+				energyMap[e.TSDayStart.Format("2006-01-02")] = e
+			}
+			var mergedEnergy []types.DailyEnergyStats
+			for _, e := range energyMap {
+				mergedEnergy = append(mergedEnergy, e)
+			}
+			slices.SortFunc(mergedEnergy, func(a, b types.DailyEnergyStats) int {
+				return a.TSDayStart.Compare(b.TSDayStart)
+			})
+
+			// Merge Weather data, favoring the newSummary's days.
+			weatherMap := make(map[string]types.Weather)
+			for _, w := range existing.Weather {
+				weatherMap[w.TSDayStart.Format("2006-01-02")] = w
+			}
+			for _, w := range newSummary.Weather {
+				weatherMap[w.TSDayStart.Format("2006-01-02")] = w
+			}
+			var mergedWeather []types.Weather
+			for _, w := range weatherMap {
+				mergedWeather = append(mergedWeather, w)
+			}
+			slices.SortFunc(mergedWeather, func(a, b types.Weather) int {
+				return a.TSDayStart.Compare(b.TSDayStart)
+			})
+
+			var monthStart time.Time
+			if monthTime, err := time.Parse("2006-01", month); err == nil {
+				monthStart = monthTime
+			}
+
+			mergedSummary = types.HistorySummary{
+				TSMonthStart: monthStart,
+				Energy:       mergedEnergy,
+				Weather:      mergedWeather,
+			}
+
+			// Determine latestDate and earliestDate.
+			var latestDate, earliestDate time.Time
+			if len(mergedSummary.Energy) > 0 {
+				earliestDate = mergedSummary.Energy[0].TSDayStart
+				latestDate = mergedSummary.Energy[0].TSDayStart
+				for _, day := range mergedSummary.Energy {
+					if day.TSDayStart.Before(earliestDate) {
+						earliestDate = day.TSDayStart
+					}
+					if day.TSDayStart.After(latestDate) {
+						latestDate = day.TSDayStart
+					}
+				}
+			}
+
+			jsonBytes, err := json.Marshal(mergedSummary)
+			if err != nil {
+				return fmt.Errorf("failed to marshal history summary: %w", err)
+			}
+
+			data := map[string]any{
+				"json": string(jsonBytes),
+			}
+			if !latestDate.IsZero() {
+				data["latestDate"] = latestDate
+			}
+			if !earliestDate.IsZero() {
+				data["earliestDate"] = earliestDate
+			}
+
+			return tx.Set(docRef, data)
+		})
+
+		if err == nil {
+			return mergedSummary, nil
 		}
 
-		jsonBytes, err := json.Marshal(mergedSummary)
-		if err != nil {
-			return fmt.Errorf("failed to marshal history summary: %w", err)
+		lastErr = err
+		if isTransactionExpiredErr(err) && attempt < maxRetries-1 {
+			log.Ctx(ctx).WarnContext(ctx, "history summary transaction expired, retrying",
+				slog.String("siteID", siteID),
+				slog.String("month", month),
+				slog.Int("attempt", attempt+1),
+				slog.Any("error", err),
+			)
+			select {
+			case <-ctx.Done():
+				return types.HistorySummary{}, ctx.Err()
+			case <-time.After(backoff):
+				backoff *= 2
+				continue
+			}
 		}
-
-		data := map[string]any{
-			"json": string(jsonBytes),
-		}
-		if !latestDate.IsZero() {
-			data["latestDate"] = latestDate
-		}
-		if !earliestDate.IsZero() {
-			data["earliestDate"] = earliestDate
-		}
-
-		return tx.Set(docRef, data)
-	})
-
-	if err != nil {
-		return types.HistorySummary{}, err
+		break
 	}
 
-	return mergedSummary, nil
+	return types.HistorySummary{}, lastErr
 }
 
 // DeleteSite deletes a site document and recursively deletes all its associated subcollections using BulkWriter, with config deleted last.
