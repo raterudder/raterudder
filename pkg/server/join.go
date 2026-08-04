@@ -84,7 +84,7 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 		}
 
 		usePrefix := false
-		if len(prefix) >= 8 {
+		if len(prefix) >= 5 {
 			existingSites, err := s.storage.ListSites(ctx)
 			if err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "join: failed to list sites", slog.Any("error", err))
@@ -94,10 +94,15 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 					siteIDs[st.ID] = struct{}{}
 				}
 
+				minDigits := 8 - len(prefix) - 1
+				if minDigits < 1 {
+					minDigits = 1
+				}
+
 				for i := 0; i < 10; i++ {
 					try := prefix
-					if i > 0 {
-						try = fmt.Sprintf("%s_%d", prefix, i)
+					if i > 0 || len(prefix) < 8 {
+						try = fmt.Sprintf("%s_%0*d", prefix, minDigits, i)
 					}
 					if _, exists := siteIDs[try]; !exists {
 						prefix = try
@@ -106,6 +111,8 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
+		} else {
+			log.Ctx(ctx).WarnContext(ctx, "join: email prefix is less than 5 characters", slog.String("prefix", prefix), slog.String("email", email))
 		}
 
 		if usePrefix {

@@ -274,17 +274,14 @@ func TestHandleJoin(t *testing.T) {
 		store.AssertNotCalled(t, "CreateSite")
 	})
 
-	t.Run("CreateNewSite", func(t *testing.T) {
+	t.Run("CreateNewSitePrefixTooShortFallback", func(t *testing.T) {
 		store := &mockStorage{}
 
-		// Expect GetSite for "short" prefix, which won't be used
-
-		// Expect CreateSite with randomly generated 8-byte hex string since "short" is < 8
+		// Prefix "user" is 4 chars (< 5), so it falls back to randomly generated 8-byte hex string (16 hex chars)
 		store.On("CreateSite", mock.Anything, mock.MatchedBy(func(id string) bool { return len(id) == 16 }), mock.MatchedBy(func(site types.Site) bool {
 			return site.InviteCode == "" && len(site.Permissions) == 1 && site.Permissions[0].UserID == "user@test.com"
 		})).Return(nil)
 
-		// Expect GetUser lookup for existing user (we'll simulate auth as existing user)
 		store.On("GetUser", mock.Anything, "user@test.com").Return(types.User{
 			ID:    "user@test.com",
 			Email: "user@test.com",
@@ -296,13 +293,85 @@ func TestHandleJoin(t *testing.T) {
 			},
 		}, nil)
 		store.On("UpdateUser", mock.Anything, mock.MatchedBy(func(user types.User) bool {
-			return len(user.Sites) == 2 && user.Sites[0].ID == "site1" && user.Sites[1].Name == "My New Site"
+			return len(user.Sites) == 2 && user.Sites[0].ID == "site1" && user.Sites[1].Name == "My New Site" && len(user.Sites[1].ID) == 16
 		})).Return(nil)
 
 		s := newServer(store)
 		body := `{"create":true,"name":"My New Site"}`
 		req := httptest.NewRequest(http.MethodPost, "/api/join", bytes.NewBufferString(body))
 		req = withUser(req, "user@test.com", "user@test.com")
+		w := httptest.NewRecorder()
+
+		s.handleJoin(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+		store.AssertExpectations(t)
+	})
+
+	t.Run("CreateNewSiteShortEmailPrefix", func(t *testing.T) {
+		store := &mockStorage{}
+
+		store.On("ListSites", mock.Anything).Return([]types.Site{}, nil)
+
+		// Prefix "short" is 5 chars (>= 5 and < 8), padded with _00 to make 8 chars: "short_00"
+		store.On("CreateSite", mock.Anything, "short_00", mock.MatchedBy(func(site types.Site) bool {
+			return site.InviteCode == "" && len(site.Permissions) == 1 && site.Permissions[0].UserID == "short@test.com"
+		})).Return(nil)
+
+		store.On("GetUser", mock.Anything, "short@test.com").Return(types.User{
+			ID:    "short@test.com",
+			Email: "short@test.com",
+			Sites: []types.UserSite{
+				{
+					ID:   "site1",
+					Name: "My Site",
+				},
+			},
+		}, nil)
+		store.On("UpdateUser", mock.Anything, mock.MatchedBy(func(user types.User) bool {
+			return len(user.Sites) == 2 && user.Sites[0].ID == "site1" && user.Sites[1].Name == "My New Site" && user.Sites[1].ID == "short_00"
+		})).Return(nil)
+
+		s := newServer(store)
+		body := `{"create":true,"name":"My New Site"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/join", bytes.NewBufferString(body))
+		req = withUser(req, "short@test.com", "short@test.com")
+		w := httptest.NewRecorder()
+
+		s.handleJoin(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+		store.AssertExpectations(t)
+	})
+
+	t.Run("CreateNewSiteShortEmailPrefixCollision", func(t *testing.T) {
+		store := &mockStorage{}
+
+		store.On("ListSites", mock.Anything).Return([]types.Site{
+			{ID: "short_00"},
+		}, nil)
+
+		// Expect CreateSite with "short_01"
+		store.On("CreateSite", mock.Anything, "short_01", mock.MatchedBy(func(site types.Site) bool {
+			return site.InviteCode == "" && len(site.Permissions) == 1 && site.Permissions[0].UserID == "short@test.com"
+		})).Return(nil)
+
+		store.On("GetUser", mock.Anything, "short@test.com").Return(types.User{
+			ID:    "short@test.com",
+			Email: "short@test.com",
+			Sites: []types.UserSite{
+				{
+					ID:   "site1",
+					Name: "My Site",
+				},
+			},
+		}, nil)
+		store.On("UpdateUser", mock.Anything, mock.MatchedBy(func(user types.User) bool {
+			return len(user.Sites) == 2 && user.Sites[1].ID == "short_01"
+		})).Return(nil)
+
+		s := newServer(store)
+		body := `{"create":true,"name":"My New Site"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/join", bytes.NewBufferString(body))
+		req = withUser(req, "short@test.com", "short@test.com")
 		w := httptest.NewRecorder()
 
 		s.handleJoin(w, req)
