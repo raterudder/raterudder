@@ -139,19 +139,83 @@ func TestSDGERates(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// Summer Weekday On-Peak (July 7, 2026 17:00)
+		// Summer Weekday On-Peak Pre-Aug 2026 (July 7, 2026 17:00)
 		p1, err := u.priceForTime(time.Date(2026, 7, 7, 17, 0, 0, 0, loc))
 		require.NoError(t, err)
 		// Expected UDC 0.34510 + EECC 0.34920 = 0.69430 (NBC 0.00591 as GridUse)
 		assert.InDelta(t, 0.69430, p1.DollarsPerKWH, 0.0001)
 		assert.InDelta(t, 0.00591, p1.GridUseDollarsPerKWH, 0.0001)
 
-		// Summer Weekday Off-Peak (July 7, 2026 11:00 AM)
+		// Summer Weekday Off-Peak Pre-Aug 2026 (July 7, 2026 11:00 AM)
 		p2, err := u.priceForTime(time.Date(2026, 7, 7, 11, 0, 0, 0, loc))
 		require.NoError(t, err)
 		// Expected UDC 0.33863 + EECC 0.08432 = 0.42295 (NBC 0.00591 as GridUse)
 		assert.InDelta(t, 0.42295, p2.DollarsPerKWH, 0.0001)
 		assert.InDelta(t, 0.00591, p2.GridUseDollarsPerKWH, 0.0001)
+
+		// Summer Weekday On-Peak Post-Aug 1, 2026 (August 2, 2026 17:00)
+		p3, err := u.priceForTime(time.Date(2026, 8, 2, 17, 0, 0, 0, loc))
+		require.NoError(t, err)
+		// Expected UDC 0.33063 + EECC 0.35943 = 0.69006 (NBC 0.00591 as GridUse)
+		assert.InDelta(t, 0.69006, p3.DollarsPerKWH, 0.0001)
+
+		// Summer Weekday Off-Peak Post-Aug 1, 2026 (August 2, 2026 11:00 AM)
+		p4, err := u.priceForTime(time.Date(2026, 8, 2, 11, 0, 0, 0, loc))
+		require.NoError(t, err)
+		// Expected UDC 0.32397 + EECC 0.08678 = 0.41075 (NBC 0.00591 as GridUse)
+		assert.InDelta(t, 0.41075, p4.DollarsPerKWH, 0.0001)
+	})
+
+	t.Run("August 1 2026 EV-TOU-5 & Weekend Super Off-Peak", func(t *testing.T) {
+		err := u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "sdge",
+			UtilityRate:     "sdge_ev_tou_5",
+			UtilityRateOptions: types.UtilityRateOptions{
+				GenerationRate: "sdge",
+			},
+		})
+		require.NoError(t, err)
+
+		// Post-Aug 1, 2026 On-Peak (August 2, 2026 17:00)
+		p1, err := u.priceForTime(time.Date(2026, 8, 2, 17, 0, 0, 0, loc))
+		require.NoError(t, err)
+		// Expected: UDC 0.31218 + EECC 0.48396 = 0.79614
+		assert.InDelta(t, 0.79614, p1.DollarsPerKWH, 0.0001)
+
+		// Post-Aug 1, 2026 Super Off-Peak (August 2, 2026 11:00 AM)
+		p2, err := u.priceForTime(time.Date(2026, 8, 2, 11, 0, 0, 0, loc))
+		require.NoError(t, err)
+		// Expected: UDC 0.04114 + EECC 0.08385 = 0.12499
+		assert.InDelta(t, 0.12499, p2.DollarsPerKWH, 0.0001)
+
+		// Saturday August 1, 2026 01:00 AM (Weekend Midnight - 2:00 PM) -> Super Off-Peak
+		p3, err := u.priceForTime(time.Date(2026, 8, 1, 1, 0, 0, 0, loc))
+		require.NoError(t, err)
+		assert.Equal(t, "Super Off-Peak", p3.PeriodName)
+		assert.InDelta(t, 0.12499, p3.DollarsPerKWH, 0.0001)
+	})
+
+	t.Run("August 1 2026 Schedule DR-SES Rates", func(t *testing.T) {
+		err := u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "sdge",
+			UtilityRate:     "sdge_dr_ses",
+			UtilityRateOptions: types.UtilityRateOptions{
+				GenerationRate: "sdge",
+			},
+		})
+		require.NoError(t, err)
+
+		// Post-Aug 1, 2026 On-Peak (August 2, 2026 17:00)
+		p1, err := u.priceForTime(time.Date(2026, 8, 2, 17, 0, 0, 0, loc))
+		require.NoError(t, err)
+		// Expected UDC 0.25957 + EECC 0.48396 = 0.74353
+		assert.InDelta(t, 0.74353, p1.DollarsPerKWH, 0.0001)
+
+		// Post-Aug 1, 2026 Super Off-Peak (August 2, 2026 11:00 AM)
+		p2, err := u.priceForTime(time.Date(2026, 8, 2, 11, 0, 0, 0, loc))
+		require.NoError(t, err)
+		// Expected UDC 0.25957 + EECC 0.08385 = 0.34342
+		assert.InDelta(t, 0.34342, p2.DollarsPerKWH, 0.0001)
 	})
 }
 

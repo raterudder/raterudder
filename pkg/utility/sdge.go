@@ -1251,6 +1251,7 @@ func getSDGENBTExportRate(t time.Time) float64 {
 	return 0.05 // safe fallback
 }
 
+// Time-of-Use time period definitions and schedules sourced from https://www.sdge.com/residential/pricing-plans
 // sdgePeriods generates the pricing periods for SDG&E / SDCP.
 func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
@@ -1266,154 +1267,132 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 	}
 
 	const nbc = 0.00591
-	const pcia = 0.04987
 
 	for _, year := range years {
 		holidays := getSDGEHolidays(year)
 
-		// Define seasonal periods
-		// Summer: June 1 - October 31
-		// Winter: November 1 - May 31
-		for _, season := range []string{"summer", "winter"} {
-			var monthStart, monthEnd time.Month
-			if season == "summer" {
-				monthStart = time.June
-				monthEnd = time.October
-			} else {
-				// Winter wraps around from November to May
-				monthStart = time.November
-				monthEnd = time.May
-			}
+		type sdgeSubSeason struct {
+			season        string
+			monthStart    time.Month
+			monthEnd      time.Month
+			effectiveDate time.Time
+		}
 
-			// Helper to get generation rate
+		var subSeasons []sdgeSubSeason
+		if year < 2026 {
+			subSeasons = []sdgeSubSeason{
+				{season: "summer", monthStart: time.June, monthEnd: time.October, effectiveDate: time.Date(year, time.June, 1, 0, 0, 0, 0, ptLocation)},
+				{season: "winter", monthStart: time.November, monthEnd: time.May, effectiveDate: time.Date(year, time.November, 1, 0, 0, 0, 0, ptLocation)},
+			}
+		} else if year == 2026 {
+			subSeasons = []sdgeSubSeason{
+				{season: "winter", monthStart: time.January, monthEnd: time.May, effectiveDate: time.Date(2026, time.January, 1, 0, 0, 0, 0, ptLocation)},
+				{season: "summer", monthStart: time.June, monthEnd: time.July, effectiveDate: time.Date(2026, time.June, 1, 0, 0, 0, 0, ptLocation)},
+				{season: "summer", monthStart: time.August, monthEnd: time.October, effectiveDate: time.Date(2026, time.August, 1, 0, 0, 0, 0, ptLocation)},
+				{season: "winter", monthStart: time.November, monthEnd: time.December, effectiveDate: time.Date(2026, time.November, 1, 0, 0, 0, 0, ptLocation)},
+			}
+		} else {
+			subSeasons = []sdgeSubSeason{
+				{season: "summer", monthStart: time.June, monthEnd: time.October, effectiveDate: time.Date(year, time.June, 1, 0, 0, 0, 0, ptLocation)},
+				{season: "winter", monthStart: time.November, monthEnd: time.May, effectiveDate: time.Date(year, time.November, 1, 0, 0, 0, 0, ptLocation)},
+			}
+		}
+
+		for _, ss := range subSeasons {
+			season := ss.season
+			monthStart := ss.monthStart
+			monthEnd := ss.monthEnd
+			effectiveDate := ss.effectiveDate
+			pcia := getSDGEPCIA(effectiveDate)
+
 			getGenRate := func(touPeriod string) float64 {
 				if genRate == "sdge" {
-					return getSDGEBundledEECC(plan, season, touPeriod)
+					return getSDGEBundledEECC(plan, season, touPeriod, effectiveDate)
 				}
-				// SDCP Rate: Base / On / 100
-				baseRate := getSDCPRate(plan, location, genRate, season, touPeriod)
-				return baseRate + pcia
+				return getSDCPRate(plan, location, genRate, season, touPeriod) + pcia
 			}
 
 			// 1. Holiday / Weekend Period (Weekends and observed holidays)
 			holidayPeriod := touSimplifiedPeriod{
-				Year:          year,
-				MonthStart:    monthStart,
-				MonthEnd:      monthEnd,
-				SpecificDates: holidays,
+				Year: year, MonthStart: monthStart, MonthEnd: monthEnd, SpecificDates: holidays,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
-						Name: "On-Peak",
-						// On-Peak: 4:00 PM - 9:00 PM (16:00 to 21:00)
+						Name:          "On-Peak",
 						Hours:         []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
-						DollarsPerKWH: getUDCRate(plan, season, "On-Peak") + getGenRate("On-Peak"),
+						DollarsPerKWH: getUDCRate(plan, season, "On-Peak", effectiveDate) + getGenRate("On-Peak"),
 						Description:   fmt.Sprintf("SDG&E %s %s Holiday/Weekend On-Peak", plan, season),
 					},
 					{
-						Name: "Off-Peak",
-						// Off-Peak: 2:00 PM - 4:00 PM & 9:00 PM - 12:00 AM (14:00 to 16:00 & 21:00 to 24:00)
-						Hours: []types.UtilityHourPeriod{
-							{HourStart: 14, HourEnd: 16},
-							{HourStart: 21, HourEnd: 24},
-						},
-						DollarsPerKWH: getUDCRate(plan, season, "Off-Peak") + getGenRate("Off-Peak"),
+						Name:          "Off-Peak",
+						Hours:         []types.UtilityHourPeriod{{HourStart: 14, HourEnd: 16}, {HourStart: 21, HourEnd: 24}},
+						DollarsPerKWH: getUDCRate(plan, season, "Off-Peak", effectiveDate) + getGenRate("Off-Peak"),
 						Description:   fmt.Sprintf("SDG&E %s %s Holiday/Weekend Off-Peak", plan, season),
 					},
+					{
+						Name:          "Super Off-Peak",
+						Hours:         []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 14}},
+						DollarsPerKWH: getUDCRate(plan, season, "Super Off-Peak", effectiveDate) + getGenRate("Super Off-Peak"),
+						Description:   fmt.Sprintf("SDG&E %s %s Holiday/Weekend Super Off-Peak", plan, season),
+					},
 				},
-				// Super Off-Peak: Midnight - 2:00 PM (00:00 to 14:00)
-				OtherName:          "Super Off-Peak",
-				OtherDollarsPerKWH: getUDCRate(plan, season, "Super Off-Peak") + getGenRate("Super Off-Peak"),
-				OtherDescription:   fmt.Sprintf("SDG&E %s %s Holiday/Weekend Super Off-Peak", plan, season),
+				OtherName:          "Off-Peak",
+				OtherDollarsPerKWH: getUDCRate(plan, season, "Off-Peak", effectiveDate) + getGenRate("Off-Peak"),
+				OtherDescription:   fmt.Sprintf("SDG&E %s %s Holiday/Weekend Off-Peak", plan, season),
 			}
 
 			// 2. Regular Days (non-holidays)
+			// Weekday Super Off-Peak: Midnight - 6:00 AM & 10:00 AM - 2:00 PM for all 3-period plans
+			weekdaySuperOffPeakHours := []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 6}, {HourStart: 10, HourEnd: 14}}
+
 			regularPeriod := touSimplifiedPeriod{
-				Year:             year,
-				MonthStart:       monthStart,
-				MonthEnd:         monthEnd,
-				SpecificDates:    holidays,
-				SpecificDatesNot: true,
+				Year: year, MonthStart: monthStart, MonthEnd: monthEnd, SpecificDates: holidays, SpecificDatesNot: true,
 				HoursAndDays: []touSimplifiedHoursAndDays{
+					// Weekday On-Peak (4:00 PM - 9:00 PM)
 					{
-						Name: "On-Peak",
-						// On-Peak: 4:00 PM - 9:00 PM (16:00 to 21:00) Weekdays
+						Name:          "On-Peak",
 						Hours:         []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
 						Weekday:       true,
-						DollarsPerKWH: getUDCRate(plan, season, "On-Peak") + getGenRate("On-Peak"),
+						DollarsPerKWH: getUDCRate(plan, season, "On-Peak", effectiveDate) + getGenRate("On-Peak"),
 						Description:   fmt.Sprintf("SDG&E %s %s Weekday On-Peak", plan, season),
 					},
+					// Weekday Super Off-Peak
 					{
-						Name: "Super Off-Peak",
-						// Super Off-Peak: Midnight - 6:00 AM & 10:00 AM - 2:00 PM Weekdays
-						Hours: []types.UtilityHourPeriod{
-							{HourStart: 0, HourEnd: 6},
-							{HourStart: 10, HourEnd: 14},
-						},
+						Name:          "Super Off-Peak",
+						Hours:         weekdaySuperOffPeakHours,
 						Weekday:       true,
-						DollarsPerKWH: getUDCRate(plan, season, "Super Off-Peak") + getGenRate("Super Off-Peak"),
+						DollarsPerKWH: getUDCRate(plan, season, "Super Off-Peak", effectiveDate) + getGenRate("Super Off-Peak"),
 						Description:   fmt.Sprintf("SDG&E %s %s Weekday Super Off-Peak", plan, season),
 					},
+					// Weekend On-Peak (4:00 PM - 9:00 PM)
 					{
-						Name: "Super Off-Peak",
-						// Weekend behavior for regular weekends (handled by holidayPeriod since specificDates only has holidays)
+						Name:          "On-Peak",
+						Hours:         []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
 						Weekend:       true,
-						DollarsPerKWH: getUDCRate(plan, season, "Super Off-Peak") + getGenRate("Super Off-Peak"), // fallback/default to super off-peak, buildPeriods handles weekday/weekend separation
+						DollarsPerKWH: getUDCRate(plan, season, "On-Peak", effectiveDate) + getGenRate("On-Peak"),
+						Description:   fmt.Sprintf("SDG&E %s %s Weekend On-Peak", plan, season),
+					},
+					// Weekend Off-Peak (2:00 PM - 4:00 PM & 9:00 PM - 12:00 AM)
+					{
+						Name:          "Off-Peak",
+						Hours:         []types.UtilityHourPeriod{{HourStart: 14, HourEnd: 16}, {HourStart: 21, HourEnd: 24}},
+						Weekend:       true,
+						DollarsPerKWH: getUDCRate(plan, season, "Off-Peak", effectiveDate) + getGenRate("Off-Peak"),
+						Description:   fmt.Sprintf("SDG&E %s %s Weekend Off-Peak", plan, season),
+					},
+					// Weekend Super Off-Peak (Midnight - 2:00 PM)
+					{
+						Name:          "Super Off-Peak",
+						Hours:         []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 14}},
+						Weekend:       true,
+						DollarsPerKWH: getUDCRate(plan, season, "Super Off-Peak", effectiveDate) + getGenRate("Super Off-Peak"),
 						Description:   fmt.Sprintf("SDG&E %s %s Weekend Super Off-Peak", plan, season),
 					},
 				},
-				// Off-Peak: All other hours Weekdays (6-10 AM, 2-4 PM, 9-12 AM)
 				OtherName:          "Off-Peak",
-				OtherDollarsPerKWH: getUDCRate(plan, season, "Off-Peak") + getGenRate("Off-Peak"),
-				OtherDescription:   fmt.Sprintf("SDG&E %s %s Weekday Off-Peak", plan, season),
+				OtherDollarsPerKWH: getUDCRate(plan, season, "Off-Peak", effectiveDate) + getGenRate("Off-Peak"),
+				OtherDescription:   fmt.Sprintf("SDG&E %s %s Off-Peak", plan, season),
 			}
 
-			// Adjust regularPeriod weekend behavior to match holidayPeriod exactly
-			regularPeriod.HoursAndDays = []touSimplifiedHoursAndDays{
-				{
-					Name: "On-Peak",
-					// On-Peak: 4:00 PM - 9:00 PM Weekdays
-					Hours:         []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
-					Weekday:       true,
-					DollarsPerKWH: getUDCRate(plan, season, "On-Peak") + getGenRate("On-Peak"),
-					Description:   fmt.Sprintf("SDG&E %s %s Weekday On-Peak", plan, season),
-				},
-				{
-					Name: "Super Off-Peak",
-					// Super Off-Peak: Midnight - 6:00 AM & 10:00 AM - 2:00 PM Weekdays
-					Hours: []types.UtilityHourPeriod{
-						{HourStart: 0, HourEnd: 6},
-						{HourStart: 10, HourEnd: 14},
-					},
-					Weekday:       true,
-					DollarsPerKWH: getUDCRate(plan, season, "Super Off-Peak") + getGenRate("Super Off-Peak"),
-					Description:   fmt.Sprintf("SDG&E %s %s Weekday Super Off-Peak", plan, season),
-				},
-				{
-					Name: "On-Peak",
-					// Weekend On-Peak: 4:00 PM - 9:00 PM Weekends
-					Hours:         []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
-					Weekend:       true,
-					DollarsPerKWH: getUDCRate(plan, season, "On-Peak") + getGenRate("On-Peak"),
-					Description:   fmt.Sprintf("SDG&E %s %s Weekend On-Peak", plan, season),
-				},
-				{
-					Name: "Off-Peak",
-					// Weekend Off-Peak: 2:00 PM - 4:00 PM & 9:00 PM - 12:00 AM Weekends
-					Hours: []types.UtilityHourPeriod{
-						{HourStart: 14, HourEnd: 16},
-						{HourStart: 21, HourEnd: 24},
-					},
-					Weekend:       true,
-					DollarsPerKWH: getUDCRate(plan, season, "Off-Peak") + getGenRate("Off-Peak"),
-					Description:   fmt.Sprintf("SDG&E %s %s Weekend Off-Peak", plan, season),
-				},
-			}
-			// Regular Period Weekend Other (Midnight - 2:00 PM)
-			regularPeriod.OtherName = "Off-Peak"
-			regularPeriod.OtherDollarsPerKWH = getUDCRate(plan, season, "Off-Peak") + getGenRate("Off-Peak")
-			regularPeriod.OtherDescription = fmt.Sprintf("SDG&E %s %s Weekday Off-Peak", plan, season)
-
-			// TOU-DR2 is a simpler 2-period rate (On-Peak and Off-Peak)
 			if plan == "sdge_tou_dr2" {
 				holidayPeriod = touSimplifiedPeriod{
 					Year:          year,
@@ -1422,14 +1401,13 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					SpecificDates: holidays,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
-							Name:          "On-Peak",
-							Hours:         []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
-							DollarsPerKWH: getUDCRate(plan, season, "On-Peak") + getGenRate("On-Peak"),
+							Name: "On-Peak", Hours: []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
+							DollarsPerKWH: getUDCRate(plan, season, "On-Peak", effectiveDate) + getGenRate("On-Peak"),
 							Description:   fmt.Sprintf("SDG&E %s %s Holiday/Weekend On-Peak", plan, season),
 						},
 					},
 					OtherName:          "Off-Peak",
-					OtherDollarsPerKWH: getUDCRate(plan, season, "Off-Peak") + getGenRate("Off-Peak"),
+					OtherDollarsPerKWH: getUDCRate(plan, season, "Off-Peak", effectiveDate) + getGenRate("Off-Peak"),
 					OtherDescription:   fmt.Sprintf("SDG&E %s %s Holiday/Weekend Off-Peak", plan, season),
 				}
 				regularPeriod = touSimplifiedPeriod{
@@ -1440,44 +1418,32 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 					SpecificDatesNot: true,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
-							Name:          "On-Peak",
-							Hours:         []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
-							DollarsPerKWH: getUDCRate(plan, season, "On-Peak") + getGenRate("On-Peak"),
+							Name: "On-Peak", Hours: []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}},
+							DollarsPerKWH: getUDCRate(plan, season, "On-Peak", effectiveDate) + getGenRate("On-Peak"),
 							Description:   fmt.Sprintf("SDG&E %s %s Daily On-Peak", plan, season),
 						},
 					},
 					OtherName:          "Off-Peak",
-					OtherDollarsPerKWH: getUDCRate(plan, season, "Off-Peak") + getGenRate("Off-Peak"),
+					OtherDollarsPerKWH: getUDCRate(plan, season, "Off-Peak", effectiveDate) + getGenRate("Off-Peak"),
 					OtherDescription:   fmt.Sprintf("SDG&E %s %s Daily Off-Peak", plan, season),
 				}
 			}
-
 			periods = append(periods, buildPeriods(ptLocation, []touSimplifiedPeriod{holidayPeriod, regularPeriod})...)
 		}
 	}
 
-	// Add dynamic NBT export rates for SDG&E Solar Billing Plan (NEM 3.0)
 	if options.NetMeteringScheme == "sbp" {
 		for _, year := range years {
 			holidays := getSDGEHolidays(year)
 			for month := time.January; month <= time.December; month++ {
-				monthStr := month.String()[:3] // "Jan", "Feb", etc.
-
-				// Month boundary times
 				startMonth := time.Date(year, month, 1, 0, 0, 0, 0, ptLocation)
-				endMonth := time.Date(year, month+1, 1, 0, 0, 0, 0, ptLocation)
-
-				for hour := range 24 {
-					// 1. Weekday non-holiday period
-					weekdayKey := fmt.Sprintf("%s_Weekday_%d", monthStr, hour)
-					var weekdayVal float64
-					if yearMap, ok := sdgeNBTData[year]; ok {
-						weekdayVal = yearMap[weekdayKey]
+				endMonth := startMonth.AddDate(0, 1, 0)
+				for hour := 0; hour < 24; hour++ {
+					targetWeekday := startMonth.Add(time.Duration(hour) * time.Hour)
+					for targetWeekday.Weekday() == time.Saturday || targetWeekday.Weekday() == time.Sunday {
+						targetWeekday = targetWeekday.AddDate(0, 0, 1)
 					}
-					if weekdayVal == 0 {
-						weekdayVal = sdgeNBTData[2026][weekdayKey]
-					}
-
+					weekdayVal := getSDGENBTExportRate(targetWeekday)
 					periods = append(periods, types.UtilityFeesPeriod{
 						TimePeriod: types.TimePeriod{
 							Start:            startMonth,
@@ -1492,31 +1458,24 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 						SeparateGenerationCredit: true,
 						Description:              fmt.Sprintf("SDG&E NBT Weekday Export Credit (Hour %d)", hour),
 					})
-
-					// 2. Weekend period
-					weekendKey := fmt.Sprintf("%s_Weekend_%d", monthStr, hour)
-					var weekendVal float64
-					if yearMap, ok := sdgeNBTData[year]; ok {
-						weekendVal = yearMap[weekendKey]
+					targetWeekend := startMonth.Add(time.Duration(hour) * time.Hour)
+					for targetWeekend.Weekday() != time.Saturday && targetWeekend.Weekday() != time.Sunday {
+						targetWeekend = targetWeekend.AddDate(0, 0, 1)
 					}
-					if weekendVal == 0 {
-						weekendVal = sdgeNBTData[2026][weekendKey]
-					}
-
+					weekendVal := getSDGENBTExportRate(targetWeekend)
 					periods = append(periods, types.UtilityFeesPeriod{
 						TimePeriod: types.TimePeriod{
-							Start:         startMonth,
-							End:           endMonth,
-							LocationPtr:   ptLocation,
-							DaysOfTheWeek: []time.Weekday{time.Saturday, time.Sunday},
-							Hours:         []types.UtilityHourPeriod{{HourStart: hour, HourEnd: hour + 1}},
+							Start:            startMonth,
+							End:              endMonth,
+							LocationPtr:      ptLocation,
+							DaysOfTheWeek:    []time.Weekday{time.Saturday, time.Sunday},
+							SpecificDatesNot: false,
+							Hours:            []types.UtilityHourPeriod{{HourStart: hour, HourEnd: hour + 1}},
 						},
 						DollarsPerKWH:            weekendVal,
 						SeparateGenerationCredit: true,
 						Description:              fmt.Sprintf("SDG&E NBT Weekend Export Credit (Hour %d)", hour),
 					})
-
-					// 3. Holiday period (restrict to weekdays Monday-Friday)
 					periods = append(periods, types.UtilityFeesPeriod{
 						TimePeriod: types.TimePeriod{
 							Start:            startMonth,
@@ -1527,7 +1486,7 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 							SpecificDatesNot: false,
 							Hours:            []types.UtilityHourPeriod{{HourStart: hour, HourEnd: hour + 1}},
 						},
-						DollarsPerKWH:            weekendVal, // Holidays use weekend rates
+						DollarsPerKWH:            weekendVal,
 						SeparateGenerationCredit: true,
 						Description:              fmt.Sprintf("SDG&E NBT Holiday Export Credit (Hour %d)", hour),
 					})
@@ -1535,56 +1494,97 @@ func sdgePeriods(plan string, options types.UtilityRateOptions, years []int) []t
 			}
 		}
 	}
-
-	// Add Non-Bypassable Charges (NBCs) unconditionally for all SDG&E imports as GridUse fee (GridAdditional).
-	periods = append(periods, types.UtilityFeesPeriod{
-		TimePeriod: types.TimePeriod{
-			LocationPtr: ptLocation,
-		},
-		DollarsPerKWH:  nbc,
-		GridAdditional: true,
-		Description:    "SDG&E Non-Bypassable Charges",
-	})
-
+	periods = append(periods, types.UtilityFeesPeriod{TimePeriod: types.TimePeriod{LocationPtr: ptLocation}, DollarsPerKWH: nbc, GridAdditional: true, Description: "SDG&E Non-Bypassable Charges"})
 	return periods
 }
 
-// getUDCRate returns the UDC rate component for SDG&E rate sheets.
-func getUDCRate(plan, season, period string) float64 {
+func getSDGEPCIA(t time.Time) float64 {
+	august12026 := time.Date(2026, time.August, 1, 0, 0, 0, 0, ptLocation)
+	if !t.Before(august12026) {
+		return 0.04771 // 8/1/2026 PCIA
+	}
+	return 0.04987 // 4/1/2026 PCIA
+}
+
+func getUDCRate(plan, season, period string, t time.Time) float64 {
+	august12026 := time.Date(2026, time.August, 1, 0, 0, 0, 0, ptLocation)
+	if !t.Before(august12026) {
+		switch plan {
+		case "sdge_ev_tou":
+			switch period {
+			case "On-Peak", "Off-Peak":
+				return 0.37290
+			case "Super Off-Peak":
+				return 0.21887
+			}
+		case "sdge_ev_tou_2":
+			switch period {
+			case "On-Peak", "Off-Peak":
+				return 0.29905
+			case "Super Off-Peak":
+				return 0.16139
+			}
+		case "sdge_ev_tou_5":
+			switch period {
+			case "On-Peak", "Off-Peak":
+				return 0.31218
+			case "Super Off-Peak":
+				return 0.04114
+			}
+		case "sdge_tou_dr", "sdge_tou_dr1":
+			switch period {
+			case "On-Peak", "Off-Peak", "Super Off-Peak":
+				return 0.32601
+			}
+		case "sdge_tou_dr2":
+			switch period {
+			case "On-Peak":
+				if season == "summer" {
+					return 0.33063
+				}
+				return 0.32601
+			case "Off-Peak":
+				if season == "summer" {
+					return 0.32397
+				}
+				return 0.32601
+			}
+		case "sdge_tou_elec":
+			switch period {
+			case "On-Peak", "Off-Peak", "Super Off-Peak":
+				return 0.24970
+			}
+		case "sdge_dr_ses":
+			switch period {
+			case "On-Peak", "Off-Peak", "Super Off-Peak":
+				return 0.25957
+			}
+		}
+		return 0.0
+	}
 	switch plan {
 	case "sdge_ev_tou":
 		switch period {
-		case "On-Peak":
-			return 0.38692
-		case "Off-Peak":
+		case "On-Peak", "Off-Peak":
 			return 0.38692
 		case "Super Off-Peak":
 			return 0.23027
 		}
 	case "sdge_ev_tou_2":
 		switch period {
-		case "On-Peak":
-			return 0.31343
-		case "Off-Peak":
+		case "On-Peak", "Off-Peak":
 			return 0.31343
 		case "Super Off-Peak":
 			return 0.17246
 		}
 	case "sdge_ev_tou_5":
 		switch period {
-		case "On-Peak":
-			return 0.32682
-		case "Off-Peak":
+		case "On-Peak", "Off-Peak":
 			return 0.32682
 		case "Super Off-Peak":
 			return 0.04114
 		}
-	case "sdge_tou_dr":
-		switch period {
-		case "On-Peak", "Off-Peak", "Super Off-Peak":
-			return 0.34061
-		}
-	case "sdge_tou_dr1":
+	case "sdge_tou_dr", "sdge_tou_dr1":
 		switch period {
 		case "On-Peak", "Off-Peak", "Super Off-Peak":
 			return 0.34061
@@ -1607,14 +1607,100 @@ func getUDCRate(plan, season, period string) float64 {
 		case "On-Peak", "Off-Peak", "Super Off-Peak":
 			return 0.26288
 		}
+	case "sdge_dr_ses":
+		switch period {
+		case "On-Peak", "Off-Peak", "Super Off-Peak":
+			return 0.25957
+		}
 	}
 	return 0.0
 }
 
-// getSDGEBundledEECC returns the commodity generation rate for SDG&E bundled service.
-func getSDGEBundledEECC(plan, season, period string) float64 {
+func getSDGEBundledEECC(plan, season, period string, t time.Time) float64 {
+	august12026 := time.Date(2026, time.August, 1, 0, 0, 0, 0, ptLocation)
+	if !t.Before(august12026) {
+		switch plan {
+		case "sdge_ev_tou", "sdge_ev_tou_2", "sdge_ev_tou_5", "sdge_tou_elec", "sdge_dr_ses":
+			if season == "summer" {
+				switch period {
+				case "On-Peak":
+					return 0.48396
+				case "Off-Peak":
+					return 0.17818
+				case "Super Off-Peak":
+					return 0.08385
+				}
+			} else {
+				switch period {
+				case "On-Peak":
+					return 0.20574
+				case "Off-Peak":
+					return 0.14757
+				case "Super Off-Peak":
+					return 0.07627
+				}
+			}
+		case "sdge_tou_dr":
+			if season == "summer" {
+				switch period {
+				case "On-Peak":
+					return 0.23565
+				case "Off-Peak":
+					return 0.17504
+				case "Super Off-Peak":
+					return 0.11792
+				}
+			} else {
+				switch period {
+				case "On-Peak":
+					return 0.28256
+				case "Off-Peak":
+					return 0.19852
+				case "Super Off-Peak":
+					return 0.10519
+				}
+			}
+		case "sdge_tou_dr1":
+			if season == "summer" {
+				switch period {
+				case "On-Peak":
+					return 0.35943
+				case "Off-Peak":
+					return 0.13229
+				case "Super Off-Peak":
+					return 0.04241
+				}
+			} else {
+				switch period {
+				case "On-Peak":
+					return 0.28279
+				case "Off-Peak":
+					return 0.19868
+				case "Super Off-Peak":
+					return 0.10527
+				}
+			}
+		case "sdge_tou_dr2":
+			if season == "summer" {
+				switch period {
+				case "On-Peak":
+					return 0.35943
+				case "Off-Peak":
+					return 0.08678
+				}
+			} else {
+				switch period {
+				case "On-Peak":
+					return 0.28279
+				case "Off-Peak":
+					return 0.14180
+				}
+			}
+		}
+		return 0.0
+	}
 	switch plan {
-	case "sdge_ev_tou", "sdge_ev_tou_2", "sdge_ev_tou_5":
+	case "sdge_ev_tou", "sdge_ev_tou_2", "sdge_ev_tou_5", "sdge_dr_ses":
 		if season == "summer" {
 			switch period {
 			case "On-Peak":
@@ -1731,7 +1817,7 @@ func getSDCPRate(plan, location, tier, season, period string) float64 {
 		sdcpPlan = "TOU-DR-1"
 	case "sdge_tou_dr2":
 		sdcpPlan = "TOU-DR-2"
-	case "sdge_tou_elec":
+	case "sdge_tou_elec", "sdge_dr_ses":
 		sdcpPlan = "TOU-ELEC"
 	default:
 		return 0.0
@@ -2009,6 +2095,14 @@ func sdgeUtilityInfo() types.UtilityProviderInfo {
 				Options: sdgeOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 					return sdgePeriods("sdge_tou_elec", opts, []int{2026, 2027}), nil
+				},
+			},
+			{
+				ID:      "sdge_dr_ses",
+				Name:    "Schedule DR-SES (Domestic TOU for Solar Systems)",
+				Options: sdgeOptions,
+				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+					return sdgePeriods("sdge_dr_ses", opts, []int{2026, 2027}), nil
 				},
 			},
 		},
