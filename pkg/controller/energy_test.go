@@ -410,10 +410,16 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			now.Add(-56 * 24 * time.Hour), // Mon 8 (baseline reference) -> load 2.0
 		}
 
+		// Add standby baseline history
+		history = append(history, types.EnergyStats{
+			TSHourStart: now.Add(-60 * 24 * time.Hour),
+			HomeKWH:     0.1,
+		})
+
 		for idx, m := range mondays {
 			load := 2.0
 			if idx < 4 {
-				load = 1.0
+				load = 1.2
 			}
 			for h := 0; h < 24; h++ {
 				ts := time.Date(m.Year(), m.Month(), m.Day(), h, 0, 0, 0, time.UTC)
@@ -621,7 +627,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		testNow := time.Date(2026, 7, 3, 2, 0, 0, 0, time.UTC)
 		model, _ := c.BuildHourlyEnergyModel(ctx, testNow, history, nil, types.Settings{IgnoreHourUsageOverMultiple: 0.0})
-		assert.InDelta(t, 0.1, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
+		assert.InDelta(t, 0.09, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
 		assert.InDelta(t, 0.0, model[h1.Hour()].AvgSolarKWH, 0.001)
 	})
 
@@ -656,6 +662,120 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 		modelFew, _ := c.BuildHourlyEnergyModel(ctx, testNow, historyFew, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
 		assert.InDelta(t, 5.384615384615385, modelFew[h1.Hour()].AvgHomeLoadKWH, 0.001)
+	})
+
+	t.Run("PostVacationRecovery", func(t *testing.T) {
+		// Verify that historical vacation days are excluded when detectedShift == "none" (normal mode),
+		// ensuring load predictions immediately recover to normal baseline levels on Day +1 after returning from vacation.
+		c := NewController()
+		ctx := context.Background()
+
+		// Construct history: 14 normal days (2.0 kWh/hr), followed by 7 vacation days (0.3 kWh/hr)
+		baseDate := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+
+		// 14 normal days (July 1 - July 14)
+		for d := 0; d < 14; d++ {
+			dayTime := baseDate.AddDate(0, 0, d)
+			for h := 0; h < 24; h++ {
+				history = append(history, types.EnergyStats{
+					TSHourStart: dayTime.Add(time.Duration(h) * time.Hour),
+					HomeKWH:     2.0,
+				})
+			}
+		}
+
+		// 7 vacation days (July 15 - July 21)
+		for d := 14; d < 21; d++ {
+			dayTime := baseDate.AddDate(0, 0, d)
+			for h := 0; h < 24; h++ {
+				history = append(history, types.EnergyStats{
+					TSHourStart: dayTime.Add(time.Duration(h) * time.Hour),
+					HomeKWH:     0.3,
+				})
+			}
+		}
+
+		t.Run("DayPlusOne", func(t *testing.T) {
+			// Day 1 after returning from vacation (July 22 at 12:00 PM).
+			// Today (July 22) has high morning consumption (2.0 kWh/hr), so detectedShift is "none".
+			nowDayPlusOne := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+
+			// Add today's morning points (7 AM to 11 AM at 2.0 kWh/hr)
+			var fullHistory []types.EnergyStats
+			fullHistory = append(fullHistory, history...)
+			for h := 0; h < 12; h++ {
+				fullHistory = append(fullHistory, types.EnergyStats{
+					TSHourStart: nowDayPlusOne.Truncate(24 * time.Hour).Add(time.Duration(h) * time.Hour),
+					HomeKWH:     2.0,
+				})
+			}
+
+			model, params := c.BuildHourlyEnergyModel(ctx, nowDayPlusOne, fullHistory, nil, types.Settings{})
+			assert.Equal(t, "none", params.DetectedShift)
+
+			// Because past vacation days (July 15-21) are excluded from the prediction pool,
+			// the predicted load for hour 14 is close to normal baseline 2.0 kWh/hr (not dragged down to ~0.3)
+			assert.GreaterOrEqual(t, model[14].AvgHomeLoadKWH, 1.8)
+		})
+
+		t.Run("DayPlusTwo", func(t *testing.T) {
+			// Day 2 after returning from vacation (July 23 at 12:00 PM).
+			nowDayPlusTwo := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+
+			// Add July 22 (full normal day) and July 23 morning
+			var fullHistory []types.EnergyStats
+			fullHistory = append(fullHistory, history...)
+			for h := 0; h < 24; h++ {
+				fullHistory = append(fullHistory, types.EnergyStats{
+					TSHourStart: time.Date(2026, 7, 22, h, 0, 0, 0, time.UTC),
+					HomeKWH:     2.0,
+				})
+			}
+			for h := 0; h < 12; h++ {
+				fullHistory = append(fullHistory, types.EnergyStats{
+					TSHourStart: nowDayPlusTwo.Truncate(24 * time.Hour).Add(time.Duration(h) * time.Hour),
+					HomeKWH:     2.0,
+				})
+			}
+
+			model, params := c.BuildHourlyEnergyModel(ctx, nowDayPlusTwo, fullHistory, nil, types.Settings{})
+			assert.Equal(t, "none", params.DetectedShift)
+			assert.GreaterOrEqual(t, model[14].AvgHomeLoadKWH, 1.8)
+		})
+
+		t.Run("ActiveVacationPreservation", func(t *testing.T) {
+			// While ON vacation (e.g. July 17 at 12:00 PM), yesterday (July 16) was low and today morning is low.
+			// detectedShift is "down". Past vacation days ARE retained to keep predictions low.
+			nowOnVacation := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+
+			var fullHistory []types.EnergyStats
+			// Include up to July 16 full day and July 17 morning (0.3 kWh/hr)
+			for d := 0; d < 16; d++ {
+				dayTime := baseDate.AddDate(0, 0, d)
+				val := 2.0
+				if d >= 14 {
+					val = 0.3
+				}
+				for h := 0; h < 24; h++ {
+					fullHistory = append(fullHistory, types.EnergyStats{
+						TSHourStart: dayTime.Add(time.Duration(h) * time.Hour),
+						HomeKWH:     val,
+					})
+				}
+			}
+			for h := 0; h < 12; h++ {
+				fullHistory = append(fullHistory, types.EnergyStats{
+					TSHourStart: nowOnVacation.Truncate(24 * time.Hour).Add(time.Duration(h) * time.Hour),
+					HomeKWH:     0.3,
+				})
+			}
+
+			model, params := c.BuildHourlyEnergyModel(ctx, nowOnVacation, fullHistory, nil, types.Settings{})
+			assert.Equal(t, "down", params.DetectedShift)
+			// While on vacation, load prediction remains low (< 0.5 kWh/hr)
+			assert.LessOrEqual(t, model[14].AvgHomeLoadKWH, 0.5)
+		})
 	})
 
 	t.Run("Smoothes Solar With Bell Curve", func(t *testing.T) {
@@ -1011,53 +1131,6 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			assert.Less(t, model[15].AvgHomeLoadKWH, 1.0)
 		}
 	})
-
-	t.Run("VisitorModeShift", func(t *testing.T) {
-		// History baseline has load 1.0.
-		// Yesterday is high (4.0), and today is also high (4.0).
-		// Visitor mode should trigger and predict high load.
-		now := time.Date(2025, 6, 16, 12, 0, 0, 0, time.UTC) // Monday, 12 PM
-
-		var history []types.EnergyStats
-		startDate := now.Add(-35 * 24 * time.Hour)
-		for d := 0; d < 35; d++ {
-			dayTime := startDate.Add(time.Duration(d) * 24 * time.Hour)
-			dateStr := dayTime.Format("2006-01-02")
-			todayStr := now.Format("2006-01-02")
-			yesterdayStr := now.Add(-24 * time.Hour).Format("2006-01-02")
-
-			load := 1.0
-			if dateStr == yesterdayStr {
-				load = 4.0
-			} else if dateStr == todayStr {
-				continue
-			}
-
-			for h := 0; h < 24; h++ {
-				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
-				history = append(history, types.EnergyStats{
-					TSHourStart: ts,
-					HomeKWH:     load,
-				})
-			}
-		}
-
-		// Today's loads before 12 PM are also high (4.0)
-		for h := 0; h < 12; h++ {
-			history = append(history, types.EnergyStats{
-				TSHourStart: time.Date(now.Year(), now.Month(), now.Day(), h, 0, 0, 0, time.UTC),
-				HomeKWH:     4.0,
-			})
-		}
-
-		settings := types.Settings{}
-		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
-
-		// Model for remaining hours (e.g. 15:00) should be close to 4.0.
-		if assert.Contains(t, model, 15) {
-			assert.Greater(t, model[15].AvgHomeLoadKWH, 3.0)
-		}
-	})
 }
 
 func TestDetectLoadShift(t *testing.T) {
@@ -1119,46 +1192,9 @@ func TestDetectLoadShift(t *testing.T) {
 		}
 		dayMap[todayStr] = &dayPoints{date: todayStr, points: tPts, loads: tLoads}
 
-		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 12)
+		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 12, 0.1)
 		assert.Equal(t, "down", shift)
 	})
-
-	t.Run("VisitorModeDetection", func(t *testing.T) {
-		now := time.Date(2025, 6, 16, 12, 0, 0, 0, time.UTC)
-		todayStr := "2025-06-16"
-		yesterdayStr := "2025-06-15"
-
-		dayMap, dayAveragesMap := createBaseData(1.0)
-
-		// Yesterday is high (4.0)
-		dayAveragesMap[yesterdayStr] = 4.0
-		var yPts []types.EnergyStats
-		var yLoads []float64
-		for h := 0; h < 24; h++ {
-			yPts = append(yPts, types.EnergyStats{
-				TSHourStart: time.Date(2025, 6, 15, h, 0, 0, 0, time.UTC),
-				HomeKWH:     4.0,
-			})
-			yLoads = append(yLoads, 4.0)
-		}
-		dayMap[yesterdayStr] = &dayPoints{date: yesterdayStr, points: yPts, loads: yLoads}
-
-		// Today before 12 PM has high load (4.0)
-		var tPts []types.EnergyStats
-		var tLoads []float64
-		for h := 0; h < 12; h++ {
-			tPts = append(tPts, types.EnergyStats{
-				TSHourStart: time.Date(2025, 6, 16, h, 0, 0, 0, time.UTC),
-				HomeKWH:     4.0,
-			})
-			tLoads = append(tLoads, 4.0)
-		}
-		dayMap[todayStr] = &dayPoints{date: todayStr, points: tPts, loads: tLoads}
-
-		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 12)
-		assert.Equal(t, "up", shift)
-	})
-
 	t.Run("FourHourEscape", func(t *testing.T) {
 		now := time.Date(2025, 6, 16, 12, 0, 0, 0, time.UTC)
 		todayStr := "2025-06-16"
@@ -1195,7 +1231,7 @@ func TestDetectLoadShift(t *testing.T) {
 		}
 		dayMap[todayStr] = &dayPoints{date: todayStr, points: tPts, loads: tLoads}
 
-		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 12)
+		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 12, 0.1)
 		assert.Equal(t, "none", shift)
 	})
 
@@ -1231,7 +1267,36 @@ func TestDetectLoadShift(t *testing.T) {
 		}
 		dayMap[todayStr] = &dayPoints{date: todayStr, points: tPts, loads: tLoads}
 
-		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 12)
+		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 12, 0.1)
+		assert.Equal(t, "none", shift)
+	})
+
+	t.Run("MissingTelemetry_NoShift", func(t *testing.T) {
+		now := time.Date(2025, 6, 16, 12, 0, 0, 0, time.UTC)
+		todayStr := "2025-06-16"
+		yesterdayStr := "2025-06-15"
+
+		dayMap, dayAveragesMap := createBaseData(2.0)
+
+		// Yesterday is low (0.5)
+		dayAveragesMap[yesterdayStr] = 0.5
+		var yPts []types.EnergyStats
+		var yLoads []float64
+		for h := 0; h < 24; h++ {
+			yPts = append(yPts, types.EnergyStats{
+				TSHourStart: time.Date(2025, 6, 15, h, 0, 0, 0, time.UTC),
+				HomeKWH:     0.5,
+			})
+			yLoads = append(yLoads, 0.5)
+		}
+		dayMap[yesterdayStr] = &dayPoints{date: yesterdayStr, points: yPts, loads: yLoads}
+
+		// Today has no data (missing telemetry)
+		var tPts []types.EnergyStats
+		var tLoads []float64
+		dayMap[todayStr] = &dayPoints{date: todayStr, points: tPts, loads: tLoads}
+
+		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 12, 0.1)
 		assert.Equal(t, "none", shift)
 	})
 
@@ -1279,7 +1344,7 @@ func TestDetectLoadShift(t *testing.T) {
 		}
 		dayMap[todayStr] = &dayPoints{date: todayStr, points: tPts, loads: []float64{0.5}}
 
-		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 12)
+		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 12, 0.1)
 		assert.Equal(t, "none", shift)
 	})
 
@@ -1317,7 +1382,7 @@ func TestDetectLoadShift(t *testing.T) {
 		}
 		dayMap[todayStr] = &dayPoints{date: todayStr, points: tPts, loads: []float64{0.5}}
 
-		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 8)
+		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 8, 0.1)
 		assert.Equal(t, "none", shift)
 	})
 
@@ -1355,7 +1420,7 @@ func TestDetectLoadShift(t *testing.T) {
 		}
 		dayMap[todayStr] = &dayPoints{date: todayStr, points: tPts, loads: []float64{0.5}}
 
-		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 2)
+		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 2, 0.1)
 		assert.Equal(t, "none", shift)
 	})
 
@@ -1390,7 +1455,422 @@ func TestDetectLoadShift(t *testing.T) {
 		}
 		dayMap[todayStr] = &dayPoints{date: todayStr, points: tPts, loads: []float64{0.5}}
 
-		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 2)
+		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 2, 0.1)
+		assert.Equal(t, "none", shift)
+	})
+
+	t.Run("VacationFloorContained", func(t *testing.T) {
+		// Tests that a vacation still triggers under a high-variance (high IQR) history
+		// because of the 0.02 absolute floor.
+		now := time.Date(2025, 6, 16, 12, 0, 0, 0, time.UTC)
+		todayStr := "2025-06-16"
+		yesterdayStr := "2025-06-15"
+
+		dayMap := make(map[string]*dayPoints)
+		dayAveragesMap := make(map[string]float64)
+
+		// Create 6 highly variable baseline days: 1.0, 1.5, 8.0, 10.0, 2.0, 5.0
+		// Sorted: 1.0, 1.5, 2.0, 5.0, 8.0, 10.0
+		// Q1 = 1.5, Q3 = 8.0, IQR = 6.5
+		// Q1 - 1.2*IQR = -6.3 -> Capped at 0.02 absolute floor.
+		baselineVals := []float64{1.0, 1.5, 8.0, 10.0, 2.0, 5.0}
+		for i, val := range baselineVals {
+			dateStr := time.Date(2025, 5, 1+i, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
+			dayAveragesMap[dateStr] = val
+			// Populate hourly loads so baselineSums calculation works
+			var pts []types.EnergyStats
+			for h := 0; h < 24; h++ {
+				pts = append(pts, types.EnergyStats{
+					TSHourStart: time.Date(2025, 5, 1+i, h, 0, 0, 0, time.UTC),
+					HomeKWH:     val, // Flat load equal to daily average
+				})
+			}
+			dayMap[dateStr] = &dayPoints{date: dateStr, points: pts}
+		}
+
+		// Yesterday is low (0.1 -> active energy 0.0, which is < 0.02 bound)
+		dayAveragesMap[yesterdayStr] = 0.1
+		var yPts []types.EnergyStats
+		for h := 0; h < 24; h++ {
+			yPts = append(yPts, types.EnergyStats{
+				TSHourStart: time.Date(2025, 6, 15, h, 0, 0, 0, time.UTC),
+				HomeKWH:     0.1,
+			})
+		}
+		dayMap[yesterdayStr] = &dayPoints{date: yesterdayStr, points: yPts}
+
+		// Today is also low (0.1 -> active energy 0.0, which is < 0.02 bound)
+		var tPts []types.EnergyStats
+		for h := 0; h < 12; h++ {
+			tPts = append(tPts, types.EnergyStats{
+				TSHourStart: time.Date(2025, 6, 16, h, 0, 0, 0, time.UTC),
+				HomeKWH:     0.1,
+			})
+		}
+		dayMap[todayStr] = &dayPoints{date: todayStr, points: tPts}
+
+		// Standby load is 0.1
+		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 12, 0.1)
+		assert.Equal(t, "down", shift)
+	})
+
+	t.Run("VacationCeilingContained", func(t *testing.T) {
+		// Tests that a small dip (e.g. 10%) on a highly consistent baseline (IQR = 0)
+		// does NOT trigger a vacation because of the q1 * 0.4 ceiling constraint.
+		now := time.Date(2025, 6, 16, 12, 0, 0, 0, time.UTC)
+		todayStr := "2025-06-16"
+		yesterdayStr := "2025-06-15"
+
+		dayMap := make(map[string]*dayPoints)
+		dayAveragesMap := make(map[string]float64)
+
+		// Create 6 highly consistent baseline days: 2.1 (all equal, standby 0.1 -> active average 2.0)
+		// Q1 = 2.0, IQR = 0.
+		// Standard formula: Q1 - 1.2*IQR = 2.0.
+		// Ceiling constraint: Q1 * 0.4 = 0.8.
+		// Lower bound becomes 0.8.
+		for i := 0; i < 6; i++ {
+			dateStr := time.Date(2025, 5, 1+i, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
+			dayAveragesMap[dateStr] = 2.1
+			var pts []types.EnergyStats
+			for h := 0; h < 24; h++ {
+				pts = append(pts, types.EnergyStats{
+					TSHourStart: time.Date(2025, 5, 1+i, h, 0, 0, 0, time.UTC),
+					HomeKWH:     2.1,
+				})
+			}
+			dayMap[dateStr] = &dayPoints{date: dateStr, points: pts}
+		}
+
+		// Yesterday average has a 10% dip: 1.9 (active average 1.8).
+		// Since 1.8 is NOT < 0.8, it should NOT trigger a vacation.
+		dayAveragesMap[yesterdayStr] = 1.9
+		var yPts []types.EnergyStats
+		for h := 0; h < 24; h++ {
+			yPts = append(yPts, types.EnergyStats{
+				TSHourStart: time.Date(2025, 6, 15, h, 0, 0, 0, time.UTC),
+				HomeKWH:     1.9,
+			})
+		}
+		dayMap[yesterdayStr] = &dayPoints{date: yesterdayStr, points: yPts}
+
+		// Today also has 1.9 load
+		var tPts []types.EnergyStats
+		for h := 0; h < 12; h++ {
+			tPts = append(tPts, types.EnergyStats{
+				TSHourStart: time.Date(2025, 6, 16, h, 0, 0, 0, time.UTC),
+				HomeKWH:     1.9,
+			})
+		}
+		dayMap[todayStr] = &dayPoints{date: todayStr, points: tPts}
+
+		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 12, 0.1)
+		assert.Equal(t, "none", shift)
+	})
+
+	t.Run("OutlierFilteringBaselineDays", func(t *testing.T) {
+		// Tests that a past high visitor day is correctly filtered out from baselineDays.
+		// If we only provide 4 historical baseline days and 1 is a high outlier, it gets
+		// filtered, leaving only 3 baseline days, which is less than dailyAveragesRequired (4),
+		// so it should immediately abort and return "none".
+		now := time.Date(2025, 6, 16, 12, 0, 0, 0, time.UTC)
+		todayStr := "2025-06-16"
+		yesterdayStr := "2025-06-15"
+
+		dayMap := make(map[string]*dayPoints)
+		dayAveragesMap := make(map[string]float64)
+
+		// 3 normal days (2.1 average -> 2.0 active) and 1 visitor day (10.1 average -> 10.0 active)
+		// Q1 = 2.0, Q3 = 2.0 (since 3 out of 4 are 2.0), IQR = 0.
+		// Upper bound is Q3 + 1.2*IQR = 2.0. The 10.0 active day is a high outlier (> 2.0) and should be filtered out.
+		baselineVals := []float64{2.1, 2.1, 2.1, 10.1}
+		for i, val := range baselineVals {
+			dateStr := time.Date(2025, 5, 1+i, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
+			dayAveragesMap[dateStr] = val
+			var pts []types.EnergyStats
+			for h := 0; h < 24; h++ {
+				pts = append(pts, types.EnergyStats{
+					TSHourStart: time.Date(2025, 5, 1+i, h, 0, 0, 0, time.UTC),
+					HomeKWH:     val,
+				})
+			}
+			dayMap[dateStr] = &dayPoints{date: dateStr, points: pts}
+		}
+
+		// Yesterday is low (0.1 average -> 0.0 active)
+		dayAveragesMap[yesterdayStr] = 0.1
+		var yPts []types.EnergyStats
+		for h := 0; h < 24; h++ {
+			yPts = append(yPts, types.EnergyStats{
+				TSHourStart: time.Date(2025, 6, 15, h, 0, 0, 0, time.UTC),
+				HomeKWH:     0.1,
+			})
+		}
+		dayMap[yesterdayStr] = &dayPoints{date: yesterdayStr, points: yPts}
+
+		// Today is low (0.1 average -> 0.0 active)
+		var tPts []types.EnergyStats
+		for h := 0; h < 12; h++ {
+			tPts = append(tPts, types.EnergyStats{
+				TSHourStart: time.Date(2025, 6, 16, h, 0, 0, 0, time.UTC),
+				HomeKWH:     0.1,
+			})
+		}
+		dayMap[todayStr] = &dayPoints{date: todayStr, points: tPts}
+
+		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 12, 0.1)
+		// Because the visitor day was filtered, baselineDays count is 3 < 4, so it returns "none"
+		assert.Equal(t, "none", shift)
+	})
+
+	t.Run("VacationFloorFractionContained", func(t *testing.T) {
+		// Tests that floorFraction * Q1 is used as the lower bound when IQR is very large
+		// and active energy is below that floor fraction (e.g. 0.4 active avg, Q1 active avg is 2.0, floor is 0.5).
+		now := time.Date(2025, 6, 16, 12, 0, 0, 0, time.UTC)
+		todayStr := "2025-06-16"
+		yesterdayStr := "2025-06-15"
+
+		dayMap := make(map[string]*dayPoints)
+		dayAveragesMap := make(map[string]float64)
+
+		// Create 6 variable baseline days: 2.1, 2.1, 2.1, 7.1, 7.1, 7.1 (standby 0.1 -> active 2.0 and 7.0)
+		// Sorted active: 2.0, 2.0, 2.0, 7.0, 7.0, 7.0
+		// Q1 = 2.0, Q3 = 7.0, IQR = 5.0
+		// q1 - 1.2*iqr = 2.0 - 6.0 = -4.0
+		// floorFraction * Q1 = 0.25 * 2.0 = 0.5
+		// standbyActiveEnergyFloor = 0.02
+		// Lower bound = min(2.0*0.55, max(0.02, 0.5, -4.0)) = min(1.1, 0.5) = 0.5
+		baselineVals := []float64{2.1, 2.1, 2.1, 7.1, 7.1, 7.1}
+		for i, val := range baselineVals {
+			dateStr := time.Date(2025, 5, 1+i, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
+			dayAveragesMap[dateStr] = val
+			var pts []types.EnergyStats
+			for h := 0; h < 24; h++ {
+				pts = append(pts, types.EnergyStats{
+					TSHourStart: time.Date(2025, 5, 1+i, h, 0, 0, 0, time.UTC),
+					HomeKWH:     val,
+				})
+			}
+			dayMap[dateStr] = &dayPoints{date: dateStr, points: pts}
+		}
+
+		// Yesterday is low (0.5 average -> 0.4 active, which is < 0.5 bound)
+		dayAveragesMap[yesterdayStr] = 0.5
+		var yPts []types.EnergyStats
+		for h := 0; h < 24; h++ {
+			yPts = append(yPts, types.EnergyStats{
+				TSHourStart: time.Date(2025, 6, 15, h, 0, 0, 0, time.UTC),
+				HomeKWH:     0.5,
+			})
+		}
+		dayMap[yesterdayStr] = &dayPoints{date: yesterdayStr, points: yPts}
+
+		// Today is low (0.5 average -> 0.4 active, which is < 0.5 bound)
+		var tPts []types.EnergyStats
+		for h := 0; h < 12; h++ {
+			tPts = append(tPts, types.EnergyStats{
+				TSHourStart: time.Date(2025, 6, 16, h, 0, 0, 0, time.UTC),
+				HomeKWH:     0.5,
+			})
+		}
+		dayMap[todayStr] = &dayPoints{date: todayStr, points: tPts}
+
+		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 12, 0.1)
+		assert.Equal(t, "down", shift)
+	})
+
+	t.Run("NoShiftUpAllowed", func(t *testing.T) {
+		// Confirm that even if yesterday was high and today is high, detectLoadShift returns "none".
+		now := time.Date(2025, 6, 16, 12, 0, 0, 0, time.UTC)
+		todayStr := "2025-06-16"
+		yesterdayStr := "2025-06-15"
+
+		dayMap, dayAveragesMap := createBaseData(2.0)
+
+		// Yesterday is high (6.0)
+		dayAveragesMap[yesterdayStr] = 6.0
+		var yPts []types.EnergyStats
+		for h := 0; h < 24; h++ {
+			yPts = append(yPts, types.EnergyStats{
+				TSHourStart: time.Date(2025, 6, 15, h, 0, 0, 0, time.UTC),
+				HomeKWH:     6.0,
+			})
+		}
+		dayMap[yesterdayStr] = &dayPoints{date: yesterdayStr, points: yPts}
+
+		// Today is also high (6.0)
+		var tPts []types.EnergyStats
+		for h := 0; h < 12; h++ {
+			tPts = append(tPts, types.EnergyStats{
+				TSHourStart: time.Date(2025, 6, 16, h, 0, 0, 0, time.UTC),
+				HomeKWH:     6.0,
+			})
+		}
+		dayMap[todayStr] = &dayPoints{date: todayStr, points: tPts}
+
+		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 12, 0.1)
+		assert.Equal(t, "none", shift)
+	})
+
+	t.Run("StdDevLowLoadVacationTrip", func(t *testing.T) {
+		// Moderate active load (< 50% Q1) with flat StdDev (< 0.25 * Q1StdDev) triggers vacation mode
+		now := time.Date(2025, 6, 16, 12, 0, 0, 0, time.UTC)
+		todayStr := "2025-06-16"
+		yesterdayStr := "2025-06-15"
+
+		dayMap := make(map[string]*dayPoints)
+		dayAveragesMap := make(map[string]float64)
+
+		// 6 baseline days with high volatility: 1.0 to 3.0 (avg 2.0, Q1 ~2.0, Q1StdDev ~0.8)
+		for i := 0; i < 6; i++ {
+			dateStr := time.Date(2025, 5, 1+i, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
+			dayAveragesMap[dateStr] = 2.0
+			var pts []types.EnergyStats
+			for h := 0; h < 24; h++ {
+				val := 1.0
+				if h%2 == 0 {
+					val = 3.0
+				}
+				pts = append(pts, types.EnergyStats{
+					TSHourStart: time.Date(2025, 5, 1+i, h, 0, 0, 0, time.UTC),
+					HomeKWH:     val,
+				})
+			}
+			dayMap[dateStr] = &dayPoints{date: dateStr, points: pts}
+		}
+
+		// Yesterday is moderately low (0.8 kWh/hr, which is < 50% of Q1 active) and flat (StdDev = 0.0)
+		dayAveragesMap[yesterdayStr] = 0.8
+		var yPts []types.EnergyStats
+		for h := 0; h < 24; h++ {
+			yPts = append(yPts, types.EnergyStats{
+				TSHourStart: time.Date(2025, 6, 15, h, 0, 0, 0, time.UTC),
+				HomeKWH:     0.8,
+			})
+		}
+		dayMap[yesterdayStr] = &dayPoints{date: yesterdayStr, points: yPts}
+
+		// Today morning is also flat (0.8 kWh/hr)
+		var tPts []types.EnergyStats
+		for h := 0; h < 12; h++ {
+			tPts = append(tPts, types.EnergyStats{
+				TSHourStart: time.Date(2025, 6, 16, h, 0, 0, 0, time.UTC),
+				HomeKWH:     0.8,
+			})
+		}
+		dayMap[todayStr] = &dayPoints{date: todayStr, points: tPts}
+
+		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 12, 0.1)
+		assert.Equal(t, "down", shift)
+	})
+
+	t.Run("StdDevHighUsageEVSafeguard", func(t *testing.T) {
+		// Continuous high EV charging (7.2 kW all day) has zero StdDev, but high active load (> 50% Q1).
+		// Must be BLOCKED from triggering vacation mode!
+		now := time.Date(2025, 6, 16, 12, 0, 0, 0, time.UTC)
+		todayStr := "2025-06-16"
+		yesterdayStr := "2025-06-15"
+
+		dayMap := make(map[string]*dayPoints)
+		dayAveragesMap := make(map[string]float64)
+
+		// 6 baseline normal days (avg 2.0)
+		for i := 0; i < 6; i++ {
+			dateStr := time.Date(2025, 5, 1+i, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
+			dayAveragesMap[dateStr] = 2.0
+			var pts []types.EnergyStats
+			for h := 0; h < 24; h++ {
+				val := 1.0
+				if h%2 == 0 {
+					val = 3.0
+				}
+				pts = append(pts, types.EnergyStats{
+					TSHourStart: time.Date(2025, 5, 1+i, h, 0, 0, 0, time.UTC),
+					HomeKWH:     val,
+				})
+			}
+			dayMap[dateStr] = &dayPoints{date: dateStr, points: pts}
+		}
+
+		// Yesterday is continuous flat EV charging at 7.2 kW (StdDev = 0.0, but yActive = 7.1 > 50% Q1)
+		dayAveragesMap[yesterdayStr] = 7.2
+		var yPts []types.EnergyStats
+		for h := 0; h < 24; h++ {
+			yPts = append(yPts, types.EnergyStats{
+				TSHourStart: time.Date(2025, 6, 15, h, 0, 0, 0, time.UTC),
+				HomeKWH:     7.2,
+			})
+		}
+		dayMap[yesterdayStr] = &dayPoints{date: yesterdayStr, points: yPts}
+
+		// Today morning is also 7.2 kW
+		var tPts []types.EnergyStats
+		for h := 0; h < 12; h++ {
+			tPts = append(tPts, types.EnergyStats{
+				TSHourStart: time.Date(2025, 6, 16, h, 0, 0, 0, time.UTC),
+				HomeKWH:     7.2,
+			})
+		}
+		dayMap[todayStr] = &dayPoints{date: todayStr, points: tPts}
+
+		shift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, 12, 0.1)
+		assert.Equal(t, "none", shift)
+	})
+
+	t.Run("MidnightWrapEscape", func(t *testing.T) {
+		// Test currentHour = 2 (2 AM) with loadShiftEscapeHours = 4 across midnight.
+		// Hours checked are today h=1, h=0 and yesterday h=23, h=22.
+		// Prevents checkHour negative index out-of-bounds or zero-value map lookup bugs.
+		now := time.Date(2025, 6, 16, 2, 0, 0, 0, time.UTC)
+		todayStr := "2025-06-16"
+		yesterdayStr := "2025-06-15"
+
+		dayMap := make(map[string]*dayPoints)
+		dayAveragesMap := make(map[string]float64)
+
+		// 6 baseline normal days
+		for i := 0; i < 6; i++ {
+			dateStr := time.Date(2025, 5, 1+i, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
+			dayAveragesMap[dateStr] = 2.0
+			var pts []types.EnergyStats
+			for h := 0; h < 24; h++ {
+				pts = append(pts, types.EnergyStats{
+					TSHourStart: time.Date(2025, 5, 1+i, h, 0, 0, 0, time.UTC),
+					HomeKWH:     2.0,
+				})
+			}
+			dayMap[dateStr] = &dayPoints{date: dateStr, points: pts}
+		}
+
+		// Yesterday was low (0.3) for hours 0-17, but high (3.5) for hours 18-23 (returned home at 6 PM yesterday)
+		dayAveragesMap[yesterdayStr] = 0.5
+		var yPts []types.EnergyStats
+		for h := 0; h < 24; h++ {
+			val := 0.3
+			if h >= 18 {
+				val = 3.5 // Returned home at 6 PM
+			}
+			yPts = append(yPts, types.EnergyStats{
+				TSHourStart: time.Date(2025, 6, 15, h, 0, 0, 0, time.UTC),
+				HomeKWH:     val,
+			})
+		}
+		dayMap[yesterdayStr] = &dayPoints{date: yesterdayStr, points: yPts}
+
+		// Today hours 0-1 are also high (3.5)
+		var tPts []types.EnergyStats
+		for h := 0; h < 2; h++ {
+			tPts = append(tPts, types.EnergyStats{
+				TSHourStart: time.Date(2025, 6, 16, h, 0, 0, 0, time.UTC),
+				HomeKWH:     3.5,
+			})
+		}
+		dayMap[todayStr] = &dayPoints{date: todayStr, points: tPts}
+
+		// At currentHour = 2, lookback = 4 hours:
+		// h=1 (today, 2.5), h=0 (today, 2.5), h=23 (yesterday, 2.5), h=22 (yesterday, 2.5).
+		// All 4 hours are >= Q1 (2.0), so early escape triggers, returning "none".
+		shift := detectLoadShift(ctx, now, time.UTC, dayMap, dayAveragesMap, todayStr, yesterdayStr, 2, 0.1)
 		assert.Equal(t, "none", shift)
 	})
 }
@@ -1428,4 +1908,133 @@ func TestDualTimezoneHistoryAndSimulation(t *testing.T) {
 	model, _ := c.BuildHourlyEnergyModel(ctx, nowChicago, history, nil, settings)
 	// Hour 20 should have aggregated both 8 PM local points
 	assert.Contains(t, model, 20)
+}
+
+func TestIdentifyHistoricalVacationDays(t *testing.T) {
+	ctx := context.Background()
+	todayStr := "2025-06-16"
+	yesterdayStr := "2025-06-15"
+	standbyLoad := 0.1
+
+	t.Run("MagnitudeDropVacation", func(t *testing.T) {
+		dayAveragesMap := map[string]float64{
+			"2025-06-01": 2.0,
+			"2025-06-02": 2.2,
+			"2025-06-03": 2.1,
+			"2025-06-04": 2.3,
+			"2025-06-05": 0.2, // Active avg = 0.1 (well below 25% of Q3 active 2.0 = 0.5)
+			"2025-06-15": 2.0,
+			"2025-06-16": 2.0,
+		}
+		var dailyAverages []float64
+		for _, avg := range dayAveragesMap {
+			dailyAverages = append(dailyAverages, avg)
+		}
+		dayMap := make(map[string]*dayPoints)
+
+		vacDays := identifyHistoricalVacationDays(ctx, dailyAverages, dayAveragesMap, dayMap, todayStr, yesterdayStr, standbyLoad)
+		assert.True(t, vacDays["2025-06-05"])
+		assert.False(t, vacDays["2025-06-01"])
+		assert.False(t, vacDays["2025-06-02"])
+	})
+
+	t.Run("GatedVolatilityVacation", func(t *testing.T) {
+		dayAveragesMap := map[string]float64{
+			"2025-06-01": 2.0,
+			"2025-06-02": 2.2,
+			"2025-06-03": 2.1,
+			"2025-06-04": 2.3,
+			"2025-06-05": 0.8, // Active avg 0.7 < 55% of Q3 (1.1). Flat stddev = 0.02 (< 0.25 * q1StdDev)
+			"2025-06-15": 2.0,
+			"2025-06-16": 2.0,
+		}
+		var dailyAverages []float64
+		for _, avg := range dayAveragesMap {
+			dailyAverages = append(dailyAverages, avg)
+		}
+		dayMap := make(map[string]*dayPoints)
+
+		// Create 24 hours of loads for normal days with volatility, and flat loads for 2025-06-05
+		for dStr, avg := range dayAveragesMap {
+			var loads []float64
+			var pts []types.EnergyStats
+			for h := 0; h < 24; h++ {
+				l := avg
+				if dStr != "2025-06-05" && h%4 == 0 {
+					l += 2.0 // Add normal daily volatility
+				}
+				loads = append(loads, l)
+				pts = append(pts, types.EnergyStats{HomeKWH: l})
+			}
+			dayMap[dStr] = &dayPoints{date: dStr, loads: loads, points: pts}
+		}
+
+		vacDays := identifyHistoricalVacationDays(ctx, dailyAverages, dayAveragesMap, dayMap, todayStr, yesterdayStr, standbyLoad)
+		assert.True(t, vacDays["2025-06-05"])
+		assert.False(t, vacDays["2025-06-01"])
+	})
+
+	t.Run("NormalOccupancyNoVacation", func(t *testing.T) {
+		dayAveragesMap := map[string]float64{
+			"2025-06-01": 2.0,
+			"2025-06-02": 2.2,
+			"2025-06-03": 2.1,
+			"2025-06-04": 2.3,
+			"2025-06-05": 1.9,
+			"2025-06-15": 2.0,
+			"2025-06-16": 2.0,
+		}
+		var dailyAverages []float64
+		for _, avg := range dayAveragesMap {
+			dailyAverages = append(dailyAverages, avg)
+		}
+		dayMap := make(map[string]*dayPoints)
+
+		vacDays := identifyHistoricalVacationDays(ctx, dailyAverages, dayAveragesMap, dayMap, todayStr, yesterdayStr, standbyLoad)
+		assert.Empty(t, vacDays)
+	})
+
+	t.Run("PostVacationRecoveryOptionGNoFalseFloor", func(t *testing.T) {
+		now := time.Date(2025, 6, 16, 12, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+
+		// Generate 30 days of history:
+		// Days 7-11 ago were a 5-day vacation (0.1 kWh flat).
+		// All other days (including yesterday & today) are normal occupancy (2.5 kWh baseline).
+		startDate := now.Add(-30 * 24 * time.Hour)
+		for d := 0; d < 30; d++ {
+			dayTime := startDate.Add(time.Duration(d) * 24 * time.Hour)
+			daysAgo := int(now.Sub(dayTime).Hours() / 24)
+
+			load := 2.5
+			if daysAgo >= 7 && daysAgo <= 11 {
+				load = 0.1 // 5-day vacation
+			}
+
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				history = append(history, types.EnergyStats{
+					TSHourStart: ts,
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		settings := types.Settings{
+			HomeLoadPredictionStrategy: "default",
+		}
+
+		c := NewController()
+		model, params := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+
+		assert.Equal(t, "none", params.DetectedShift)
+		// Option G must NOT drag predictions down to the 0.09 kWh floor.
+		// Forecast for all hours must remain near normal baseline (>= 2.0 kWh).
+		if assert.Contains(t, model, 17) {
+			assert.Greater(t, model[17].AvgHomeLoadKWH, 2.0)
+		}
+		if assert.Contains(t, model, 2) {
+			assert.Greater(t, model[2].AvgHomeLoadKWH, 2.0)
+		}
+	})
 }

@@ -1081,7 +1081,7 @@ func (c *Controller) calculateSolarTrend(ctx context.Context, now time.Time, his
 
 	if diff/modelSolar > 0.10 {
 		// cap the ratio at the configured maximum
-		return math.Min(settings.SolarTrendRatioMax, recentSolar/modelSolar)
+		return min(settings.SolarTrendRatioMax, recentSolar/modelSolar)
 	}
 
 	return 1.0

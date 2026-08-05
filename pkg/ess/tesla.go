@@ -858,7 +858,7 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 		// we floor the SOC to ensure we don't set it to a value that would cause the
 		// battery to charge
 		// make sure we don't set it to less than the minimum battery SOC
-		newReserveSOC = math.Max(math.Floor(liveStatus.PercentageCharged), minSOC)
+		newReserveSOC = max(math.Floor(liveStatus.PercentageCharged), minSOC)
 	case types.BatteryModeNoChange:
 		// Do not change battery settings
 	default:

@@ -336,13 +336,13 @@ func (s *Server) getSiteSavings(ctx context.Context, siteID string, start, end t
 			ignoredFraction := getIgnoredFraction(subTS, time.Duration(interval.duration*float64(time.Hour)), actions)
 			activeFraction := 1.0 - ignoredFraction
 
-			activeGridToBattery := math.Max(0, subStat.BatteryChargedKWH-subStat.SolarToBatteryKWH) * activeFraction
-			activeSolarToBattery := math.Min(subStat.BatteryChargedKWH, subStat.SolarToBatteryKWH) * activeFraction
+			activeGridToBattery := max(0, subStat.BatteryChargedKWH-subStat.SolarToBatteryKWH) * activeFraction
+			activeSolarToBattery := min(subStat.BatteryChargedKWH, subStat.SolarToBatteryKWH) * activeFraction
 			// Emergency/paused charging: the energy still enters the battery, but
 			// we treat it as $0 cost since it was forced (storm hedge, pause, etc.)
 			// and not a deliberate arbitrage decision.
-			ignoredGridToBattery := math.Max(0, subStat.BatteryChargedKWH-subStat.SolarToBatteryKWH) * ignoredFraction
-			ignoredSolarToBattery := math.Min(subStat.BatteryChargedKWH, subStat.SolarToBatteryKWH) * ignoredFraction
+			ignoredGridToBattery := max(0, subStat.BatteryChargedKWH-subStat.SolarToBatteryKWH) * ignoredFraction
+			ignoredSolarToBattery := min(subStat.BatteryChargedKWH, subStat.SolarToBatteryKWH) * ignoredFraction
 
 			// Push to LIFO stack if we charged the battery.
 			// We push 'active' first then 'ignored' so that the 'ignored' portion

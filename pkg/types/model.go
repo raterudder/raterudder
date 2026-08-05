@@ -114,6 +114,8 @@ type SimulationParams struct {
 	PanelTilt float64 `json:"panelTilt"`
 	// AverageSolarEfficiency is the average efficiency calculated across all non-zero generation hours.
 	AverageSolarEfficiency float64 `json:"averageSolarEfficiency"`
+	// DetectedShift represents any detected structural load shift ("none", "down", "up").
+	DetectedShift string `json:"detectedShift,omitempty"`
 }
 
 // EnergyStats represents aggregated energy statistics for an hourly period.

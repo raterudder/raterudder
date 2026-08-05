@@ -1072,7 +1072,7 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 			return errors.New("cannot edit reserve SOC")
 		}
 		// make sure we don't set it to less than the minimum battery SOC
-		newReserveSOC = math.Max(math.Floor(rd.RuntimeData.SOC), minSOC)
+		newReserveSOC = max(math.Floor(rd.RuntimeData.SOC), minSOC)
 	case types.BatteryModeNoChange:
 		targetMode = modes.currentMode
 	default:

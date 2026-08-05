@@ -567,7 +567,7 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 	case types.BatteryModeStandby:
 		// Set reserve SOC to the floored current SOC to prevent discharging further,
 		// without setting it higher which would force a charge.
-		newReserveSOC = math.Max(math.Floor(currentSOC), minSOC)
+		newReserveSOC = max(math.Floor(currentSOC), minSOC)
 	case types.BatteryModeNoChange:
 		// Keep existing values
 	default:

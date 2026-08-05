@@ -420,8 +420,8 @@ func TestDecideHistory(t *testing.T) {
 						pBattDischarge = 0.0
 
 						// Solar charging is always allowed up to 100% capacity
-						surplusSolar := math.Max(0.0, solarKW-homeKW)
-						solarCharge := math.Min(maxChargeKW, surplusSolar)
+						surplusSolar := max(0.0, solarKW-homeKW)
+						solarCharge := min(maxChargeKW, surplusSolar)
 
 						// Grid charging is only allowed up to ChargeToSOC, and only in ChargeAny mode
 						gridCharge := 0.0
@@ -432,24 +432,24 @@ func TestDecideHistory(t *testing.T) {
 							}
 							targetEnergyLimit := capacityKWH * float64(targetSOC) / 100.0
 							if energy < targetEnergyLimit {
-								targetGridCharge := math.Max(0.0, (targetEnergyLimit-energy)/dt)
-								gridCharge = math.Min(maxChargeKW, targetGridCharge)
+								targetGridCharge := max(0.0, (targetEnergyLimit-energy)/dt)
+								gridCharge = min(maxChargeKW, targetGridCharge)
 								// Grid charge only supplies whatever solar isn't giving us
-								gridCharge = math.Max(0.0, gridCharge-solarCharge)
+								gridCharge = max(0.0, gridCharge-solarCharge)
 							}
 						}
 						// Total battery charging is solar + grid charge, capped by maxChargeKW and remaining headroom
-						pBattCharge = math.Min(maxChargeKW, solarCharge+gridCharge)
-						pBattCharge = math.Min(pBattCharge, (capacityKWH-energy)/dt)
+						pBattCharge = min(maxChargeKW, solarCharge+gridCharge)
+						pBattCharge = min(pBattCharge, (capacityKWH-energy)/dt)
 
 					case types.BatteryModeLoad:
 						netLoad := homeKW - solarKW
 						if netLoad > 0 {
-							pBattDischarge = math.Min(netLoad, math.Min(maxDischargeKW, math.Max(0.0, (energy-minEnergy)/dt)))
+							pBattDischarge = min(netLoad, min(maxDischargeKW, max(0.0, (energy-minEnergy)/dt)))
 							pBattCharge = 0.0
 						} else {
 							surplusSolar := solarKW - homeKW
-							pBattCharge = math.Min(surplusSolar, math.Min(maxChargeKW, (capacityKWH-energy)/dt))
+							pBattCharge = min(surplusSolar, min(maxChargeKW, (capacityKWH-energy)/dt))
 							pBattDischarge = 0.0
 						}
 
@@ -457,7 +457,7 @@ func TestDecideHistory(t *testing.T) {
 						netLoad := homeKW - solarKW
 						if netLoad < 0 {
 							surplusSolar := solarKW - homeKW
-							pBattCharge = math.Min(surplusSolar, math.Min(maxChargeKW, (capacityKWH-energy)/dt))
+							pBattCharge = min(surplusSolar, min(maxChargeKW, (capacityKWH-energy)/dt))
 						} else {
 							pBattCharge = 0.0
 						}

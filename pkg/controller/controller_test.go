@@ -1266,7 +1266,7 @@ func TestDecide(t *testing.T) {
 			// Between 10:00 AM and 1:00 PM, 1.0 kW solar - 0.3 kW home load = 0.7 kW charging.
 			// 0.7 kW * 0.25 hours = 0.175 kWh -> 1.75% SOC increase per step.
 			if simTime.Hour() >= 10 && simTime.Hour() < 13 {
-				currentSOC = math.Min(currentSOC+1.75, 100.0)
+				currentSOC = min(currentSOC+1.75, 100.0)
 			}
 
 			simTime = simTime.Add(15 * time.Minute)
@@ -1661,10 +1661,10 @@ func TestDecide(t *testing.T) {
 			expectedMode := types.BatteryModeLoad
 			if step == 0 || step == 1 || step == 4 {
 				expectedMode = types.BatteryModeChargeAny
-				currentSOC = math.Min(currentSOC+30.0, 100.0)
+				currentSOC = min(currentSOC+30.0, 100.0)
 			} else if step == 2 || step == 5 {
 				expectedMode = types.BatteryModeLoad
-				currentSOC = math.Max(currentSOC-30.0, 20.0)
+				currentSOC = max(currentSOC-30.0, 20.0)
 			}
 
 			assert.Equal(t, expectedMode, decision.Action.BatteryMode, "Step %d", step)

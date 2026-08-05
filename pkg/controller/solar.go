@@ -520,7 +520,7 @@ func CalibrateSolarScaleFactor(
 		if h.isValid {
 			effectiveIrradiance := h.gti
 			if h.isClipped && minClippedIrradiance > 0 {
-				effectiveIrradiance = math.Min(h.gti, minClippedIrradiance)
+				effectiveIrradiance = min(h.gti, minClippedIrradiance)
 			}
 
 			dayStr := time.Unix(h.ts, 0).In(timeLoc).Format("2006-01-02")
@@ -1146,7 +1146,7 @@ func calculateRecencyWeight(ts int64, now time.Time) float64 {
 	if solarPredictionRecencyDecay >= 1.0 {
 		return 1.0
 	}
-	ageDays := math.Max(0.0, now.Sub(time.Unix(ts, 0)).Hours()/24.0)
+	ageDays := max(0.0, now.Sub(time.Unix(ts, 0)).Hours()/24.0)
 	if ageDays <= 0 {
 		return 1.0
 	}

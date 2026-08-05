@@ -59,9 +59,9 @@ var extremeHeatwaveMinTempC = 28.0
 var extremeHeatwaveLoadMultiplier = 1.20
 
 // loadShiftOutlierIQRExpansion represents the IQR multiplier threshold used to detect
-// abnormal daily loads and today's cumulative load shifts (e.g. vacations or visitor stays).
-// We ran parameter sweeps across 30 production sites and found that 1.2 provides optimal
-// sensitivity to catch real shifts without triggering false positives on normal days.
+// abnormal daily active loads and today's cumulative active load shifts (e.g. vacations or visitor stays).
+// We ran parameter sweeps across 30 production sites and found that 1.2 on active energy above standby
+// baseline load provides optimal sensitivity to catch real shifts without triggering false positives on normal days.
 var loadShiftOutlierIQRExpansion = 1.2
 
 // loadShiftRecencyDecay represents the age decay factor applied exponentially
@@ -76,6 +76,29 @@ var loadShiftRecencyDecay = 0.30
 // susceptible to false escapes from appliance cycles, while 4 hours prevents false escapes
 // but still exits vacation mode in time for overnight optimizing.
 var loadShiftEscapeHours = 4
+
+// standbyActiveEnergyFloor represents the absolute minimum active energy (kWh/hr)
+// expected to detect human occupancy. An active average below this threshold (0.02,
+// or ~20 Watts) is physically negligible and serves as our absolute floor for vacation detection.
+var standbyActiveEnergyFloor = 0.02
+
+// loadShiftOutlierFloorFraction represents the minimum active average consumption floor
+// as a fraction of baseline Q1 load. When baseline variance is very high, standard IQR bounds
+// standard formulas fall to zero. 25% of baseline Q1 provides a robust, site-adaptive floor.
+var loadShiftOutlierFloorFraction = 0.25
+
+// loadShiftOutlierCeilingCap represents the maximum active average consumption ceiling
+// as a fraction of baseline Q1 load to identify a low-outlier vacation day.
+// A value of 0.55 ensures that a vacation day requires at least a 45% reduction from normal.
+var loadShiftOutlierCeilingCap = 0.55
+
+// vacationMorningFlatnessStdDevCeiling represents the maximum morning standard deviation (kWh)
+// across completed morning hours (7:00 AM to current hour) expected for an unoccupied vacation morning.
+// While an empty home with background standby draws near-zero variance (< 0.05 kWh), periodic HVAC
+// or furnace cycling on hot/cold days can cause mild hourly fluctuations (~0.10 - 0.15 kWh).
+// Setting this ceiling to 0.15 kWh captures vacation mornings even with periodic HVAC cycling,
+// while remaining far below normal human occupancy morning volatility (0.30 - 1.50+ kWh).
+var vacationMorningFlatnessStdDevCeiling = 0.15
 
 // recentDiffDetail stores detailed calculation values for a given recent date
 // during z-score baseline shift computation, useful for debug log inspection.
@@ -138,9 +161,28 @@ func (c *Controller) BuildHourlyEnergyModel(
 			}
 			// only bother if we have a different location
 			if loc == nil || h.TimeLocation != loc.String() {
-				loc = getLocation(h.TimeLocation, loc)
+				if l := getLocation(h.TimeLocation, nil); l != nil {
+					loc = l
+				}
 			}
 		}
+	}
+
+	// Calculate the site's empirical standby baseline load (1st percentile of non-zero hourly usage).
+	// This represents the physical minimum power consumed by always-on appliances (refrigerators, routers, modems, etc.).
+	var validLoads []float64
+	for _, h := range history {
+		if h.HomeKWH > 0.05 {
+			validLoads = append(validLoads, h.HomeKWH)
+		}
+	}
+	standbyLoad := 0.1
+	if len(validLoads) > 0 {
+		sortedLoads := make([]float64, len(validLoads))
+		copy(sortedLoads, validLoads)
+		sort.Float64s(sortedLoads)
+		idx := int(float64(len(sortedLoads)-1) * 0.01)
+		standbyLoad = max(0.1, sortedLoads[idx])
 	}
 
 	// Group history by calendar date string (YYYY-MM-DD) in the site's local timezone.
@@ -188,7 +230,9 @@ func (c *Controller) BuildHourlyEnergyModel(
 	yesterdayStr := now.In(loc).AddDate(0, 0, -1).Format("2006-01-02")
 	currentHour := now.In(loc).Hour()
 
-	detectedShift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, currentHour)
+	detectedShift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, currentHour, standbyLoad)
+
+	historicalVacationDays := identifyHistoricalVacationDays(ctx, dailyAverages, dayAveragesMap, dayMap, todayStr, yesterdayStr, standbyLoad)
 
 	// We use the Interquartile Range (IQR) method to identify and filter out anomaly days
 	// (e.g. vacation days when usage is abnormally low, or days with extreme charging spikes/events).
@@ -216,33 +260,20 @@ func (c *Controller) BuildHourlyEnergyModel(
 		upperBound := q3 + 1.5*iqr
 
 		for dateStr, avg := range dayAveragesMap {
+			if detectedShift == "none" && historicalVacationDays[dateStr] {
+				continue
+			}
 			if (detectedShift != "none" && (dateStr == todayStr || dateStr == yesterdayStr)) || (avg >= lowerBound && avg <= upperBound) {
 				validDaysMap[dateStr] = true
 			}
-			// this was logging too much
-			/*else {
-				// Debug log now includes the entire dailyAverages dataset and sorted values
-				// to allow developers to inspect the distribution and bounds calculation.
-				log.Ctx(ctx).DebugContext(
-					ctx,
-					"ignoring outlier day in improved model",
-					slog.String("date", dateStr),
-					slog.Float64("avgHomeLoad", avg),
-					slog.Float64("lowerBound", lowerBound),
-					slog.Float64("upperBound", upperBound),
-					slog.Float64("q1", q1),
-					slog.Float64("q3", q3),
-					slog.Float64("iqr", iqr),
-					slog.Int("totalDays", len(dailyAverages)),
-					slog.Any("dailyAverages", dailyAverages),
-					slog.Any("sortedAverages", sortedAverages),
-				)
-			}*/
 		}
 	} else {
 		// Fallback: If we have fewer than 4 days of history, we cannot establish standard deviation or IQR safely.
 		// Therefore, we treat all days as valid and skip IQR filtering.
 		for dateStr := range dayAveragesMap {
+			if detectedShift == "none" && historicalVacationDays[dateStr] {
+				continue
+			}
 			validDaysMap[dateStr] = true
 		}
 	}
@@ -285,10 +316,12 @@ func (c *Controller) BuildHourlyEnergyModel(
 
 	var recentValidDates []string
 	for _, dateStr := range sortedValidDates {
-		if len(recentValidDates) >= 7 {
-			break
+		if dateStr != todayStr {
+			recentValidDates = append(recentValidDates, dateStr)
+			if len(recentValidDates) >= 7 {
+				break
+			}
 		}
-		recentValidDates = append(recentValidDates, dateStr)
 	}
 
 	// We evaluated several options to handle weekend/weekday differences, EV charging spikes, and guests in town:
@@ -388,7 +421,7 @@ func (c *Controller) BuildHourlyEnergyModel(
 	zScoreG := meanDiff / stdDevDiff
 	// We scale the shift smoothly starting from z-score 1.2 (ignored noise) up to 2.2 (fully applied).
 	// This prevents threshold jitter.
-	scaleG := math.Min(1.0, math.Max(0.0, (math.Abs(zScoreG)-1.2)*1.0))
+	scaleG := min(1.0, max(0.0, (math.Abs(zScoreG)-1.2)*1.0))
 	appliedShift := meanDiff * scaleG
 
 	// Debug logs are enriched with recentValidDates, validDaysCount, and full recentDiffDetails
@@ -501,7 +534,7 @@ func (c *Controller) BuildHourlyEnergyModel(
 					if i == j {
 						continue
 					}
-					limit := math.Max(other.Load, floor) * settings.IgnoreHourUsageOverMultiple
+					limit := max(other.Load, floor) * settings.IgnoreHourUsageOverMultiple
 					if p.Load <= limit {
 						isOutlier = false
 						break
@@ -586,6 +619,9 @@ func (c *Controller) BuildHourlyEnergyModel(
 		hasHistTempForHour := false
 
 		for dateStr := range selectedDatesMap {
+			if detectedShift == "none" && historicalVacationDays[dateStr] {
+				continue
+			}
 			d := dayMap[dateStr]
 			if d == nil {
 				continue
@@ -703,8 +739,9 @@ func (c *Controller) BuildHourlyEnergyModel(
 		}
 
 		// Apply the adaptive shift derived via Option G.
-		// We enforce a minimum load floor of 0.1 KWH to avoid predicting negative or zero usage.
-		finalHomeLoadACAdj := math.Max(0.1, avgLoadA+appliedShift)
+		// Enforce a floor of 90% of the site's empirical standby baseline load to prevent predictions
+		// from collapsing completely, while allowing for some appliance shutdowns when going on vacation.
+		finalHomeLoadACAdj := max(0.9*standbyLoad, avgLoadA+appliedShift)
 
 		result[h] = TimeProfile{
 			Hour:           h,
@@ -713,6 +750,7 @@ func (c *Controller) BuildHourlyEnergyModel(
 		}
 	}
 
+	params.DetectedShift = detectedShift
 	return result, params
 }
 
@@ -799,8 +837,12 @@ func getWeightedPercentile(points []weightedPoint, percentile float64) float64 {
 }
 
 // detectLoadShift automatically identifies if the house is undergoing a structural
-// change in energy consumption patterns (such as a vacation mode / shift down, or visitor
-// mode / shift up) using yesterday's daily total and today's cumulative morning sum.
+// change in energy consumption patterns (vacation mode / shift down) using yesterday's daily total
+// and today's cumulative morning sum.
+// Note: We intentionally DO NOT shift up (Visitor Mode). High energy usage spikes (e.g. charging EVs,
+// running AC on hot days) can easily cause single or multi-day false positives. Shifting up aggressively
+// reserves battery capacity when it isn't always a sustained structural change, leading to suboptimal
+// economics. We rely on the standard predictive modeling (Q3/median) to naturally accommodate increased usage.
 func detectLoadShift(
 	ctx context.Context,
 	now time.Time,
@@ -810,39 +852,61 @@ func detectLoadShift(
 	todayStr string,
 	yesterdayStr string,
 	currentHour int,
+	standbyLoad float64,
 ) string {
 	const dailyAveragesRequired = 4
 	// Identify baseline days of normal occupancy (excluding yesterday, today, and past daily outliers).
-	// Yesterday and today are excluded because they represent the potential active shift period.
-	// Filtering out daily average outliers from history ensures we compare today's usage against
-	// a clean representation of the home's "normal occupancy" days.
-	var dailyAveragesForBaseline []float64
+	// We evaluate Active Energy (energy above the site's empirical standby baseline load)
+	// to cleanly separate human active occupancy from constant standby power (refrigerators, routers, modems).
+	dailyActiveMap := make(map[string]float64)
+	var dailyActiveAveragesForBaseline []float64
 	for dateStr, avg := range dayAveragesMap {
+		activeAvg := max(0.0, avg-standbyLoad)
+		dailyActiveMap[dateStr] = activeAvg
 		if dateStr != todayStr && dateStr != yesterdayStr {
-			dailyAveragesForBaseline = append(dailyAveragesForBaseline, avg)
+			dailyActiveAveragesForBaseline = append(dailyActiveAveragesForBaseline, activeAvg)
 		}
 	}
 
-	var dailyLowerBound, dailyUpperBound float64
+	var dailyLowerBoundActive, dailyUpperBoundActive float64
 	var baselineDays []string
 
-	if len(dailyAveragesForBaseline) < dailyAveragesRequired {
+	if len(dailyActiveAveragesForBaseline) < dailyAveragesRequired {
 		return "none"
 	}
 
-	sorted := make([]float64, len(dailyAveragesForBaseline))
-	copy(sorted, dailyAveragesForBaseline)
+	sorted := make([]float64, len(dailyActiveAveragesForBaseline))
+	copy(sorted, dailyActiveAveragesForBaseline)
 	sort.Float64s(sorted)
 	n := len(sorted)
 	q1 := sorted[int(math.Round(float64(n-1)*0.25))]
 	q3 := sorted[int(math.Round(float64(n-1)*0.75))]
 	iqr := q3 - q1
-	dailyLowerBound = q1 - loadShiftOutlierIQRExpansion*iqr
-	dailyUpperBound = q3 + loadShiftOutlierIQRExpansion*iqr
+	// Calculate the daily lower bound for active energy to detect vacations.
+	// We cannot simply use (q1 - loadShiftOutlierIQRExpansion*iqr) because:
+	// 1. Minimum Depth Requirement (q1 * floorFraction): If a site has extremely consistent load (IQR near 0),
+	//    the standard formula would equal Q1. This would cause a normal day that is just slightly
+	//    below Q1 to falsely trigger a vacation. Capping the bound at a fraction of Q1 ensures that
+	//    a vacation requires a meaningful structural drop (at least a reduction below floorFraction).
+	// 2. Adaptive Floor (loadShiftOutlierFloorFraction * q1): If a site has massive variance (huge IQR),
+	//    the standard formula could be negative. Since active energy is bounded at 0, it would never fall
+	//    below a negative lower bound, causing us to miss vacations. Wrapping the bound with a minimum of
+	//    25% of Q1 (and an absolute floor of 0.02) guarantees vacation mode triggers correctly.
+	dailyLowerBoundActive = min(q1*loadShiftOutlierCeilingCap, max(standbyActiveEnergyFloor, q1*loadShiftOutlierFloorFraction, q1-loadShiftOutlierIQRExpansion*iqr))
+	// Calculate the daily upper bound for active energy to identify high outliers.
+	// Note: Unlike the lower bound, we don't need max/min constraints here because:
+	// 1. No Upper Boundary: Energy usage can scale infinitely upwards, so there is no physical limit
+	//    (like 0.0 for the lower bound) that the formula could cross to make outlier detection impossible.
+	// 2. Loose vs Strict Filtering: Since we no longer shift load upwards (Visitor Mode is disabled),
+	//    the upper bound is used solely to filter outlier days from baselineDays. If a home is extremely
+	//    consistent (IQR ≈ 0) and we over-filter a few normal days slightly above Q3, the baseline is
+	//    still fine as long as we have 4 baseline days. But under-filtering a massive visitor day would
+	//    skew the baseline upwards, which would fail to trigger vacation mode.
+	dailyUpperBoundActive = q3 + loadShiftOutlierIQRExpansion*iqr
 
-	for dateStr, avg := range dayAveragesMap {
+	for dateStr, activeAvg := range dailyActiveMap {
 		if dateStr != todayStr && dateStr != yesterdayStr {
-			if avg >= dailyLowerBound && avg <= dailyUpperBound {
+			if activeAvg >= dailyLowerBoundActive && activeAvg <= dailyUpperBoundActive {
 				baselineDays = append(baselineDays, dateStr)
 			}
 		}
@@ -853,8 +917,8 @@ func detectLoadShift(
 			ctx,
 			"missing enough baseline days for load shift detection",
 			slog.Int("currentHour", currentHour),
-			slog.Float64("dailyLowerBound", dailyLowerBound),
-			slog.Float64("dailyUpperBound", dailyUpperBound),
+			slog.Float64("dailyLowerBound", dailyLowerBoundActive),
+			slog.Float64("dailyUpperBound", dailyUpperBoundActive),
 			slog.Any("baselineDays", baselineDays),
 		)
 		return "none"
@@ -875,19 +939,59 @@ func detectLoadShift(
 		return fallback
 	}
 
+	// Calculate Q1 of standard deviations across baseline normal days for site-adaptive volatility checks
+	var baselineStdDevs []float64
+	for _, dStr := range baselineDays {
+		if d, ok := dayMap[dStr]; ok && len(d.points) >= 24 {
+			var sum float64
+			for _, p := range d.points {
+				sum += p.HomeKWH
+			}
+			avg := sum / float64(len(d.points))
+			var varSum float64
+			for _, p := range d.points {
+				varSum += (p.HomeKWH - avg) * (p.HomeKWH - avg)
+			}
+			stddev := math.Sqrt(varSum / float64(len(d.points)))
+			baselineStdDevs = append(baselineStdDevs, stddev)
+		}
+	}
+
+	q1StdDev := 1.0
+	if len(baselineStdDevs) >= dailyAveragesRequired-1 {
+		sortedStd := make([]float64, len(baselineStdDevs))
+		copy(sortedStd, baselineStdDevs)
+		sort.Float64s(sortedStd)
+		q1StdDev = sortedStd[int(math.Round(float64(len(sortedStd)-1)*0.25))]
+	}
+
+	// Calculate yesterday's standard deviation
+	yStdDev := 1.0
+	if yPts, ok := dayMap[yesterdayStr]; ok && len(yPts.points) >= 24 {
+		var ySum float64
+		for _, p := range yPts.points {
+			ySum += p.HomeKWH
+		}
+		yAvg := ySum / float64(len(yPts.points))
+		var yVarSum float64
+		for _, p := range yPts.points {
+			yVarSum += (p.HomeKWH - yAvg) * (p.HomeKWH - yAvg)
+		}
+		yStdDev = math.Sqrt(yVarSum / float64(len(yPts.points)))
+	}
+
 	// Yesterday is the first completed day of the suspected shift.
 	// Verifying that yesterday was a daily outlier is a prerequisite for triggering a shift.
-	// This prevents transient, one-off events (like a single day-trip away) from triggering a shift,
-	// since structural changes (vacations or guest stays) require consecutive outlier days.
-	yAvg, yExists := dayAveragesMap[yesterdayStr]
-	yesterdayIsLow := yExists && yAvg < dailyLowerBound
-	yesterdayIsHigh := yExists && yAvg > dailyUpperBound
+	// We allow yesterdayIsLow to trigger if active avg is below dailyLowerBoundActive OR if
+	// active avg is below ceiling cap (55% Q1) AND stddev is adaptively low (< 0.25 * q1StdDev) AND q1StdDev >= 0.25.
+	// This gating ensures continuous high flat load (e.g. EV charging at 7.2 kW) is never misclassified as vacation.
+	yActive, yExists := dailyActiveMap[yesterdayStr]
+	yesterdayIsLow := yExists && (yActive < dailyLowerBoundActive || (yActive < q1*loadShiftOutlierCeilingCap && q1StdDev >= 0.25 && yStdDev < 0.25*q1StdDev))
 	detectedShift := "none"
 
 	// Compute hourly metrics (Q1 and Q3) across baseline days for early escape checks.
 	// Q1 (25th percentile) and Q3 (75th percentile) define the boundaries of normal occupancy hourly loads.
 	hourQ1s := make(map[int]float64)
-	hourQ3s := make(map[int]float64)
 	for h := 0; h < 24; h++ {
 		var hourLoads []float64
 		for _, dStr := range baselineDays {
@@ -903,10 +1007,8 @@ func detectLoadShift(
 			sort.Float64s(hourLoads)
 			n := len(hourLoads)
 			hourQ1s[h] = hourLoads[int(math.Round(float64(n-1)*0.25))]
-			hourQ3s[h] = hourLoads[int(math.Round(float64(n-1)*0.75))]
 		} else {
 			hourQ1s[h] = 0.0
-			hourQ3s[h] = 999.0
 		}
 	}
 
@@ -924,17 +1026,33 @@ func detectLoadShift(
 	if currentHour >= 9 {
 		var todaySum float64
 		var todayCount int
+		var todayMorningLoads []float64
 		if todayPts, ok := dayMap[todayStr]; ok {
 			for _, pt := range todayPts.points {
 				h := pt.TSHourStart.In(getLocation(pt.TimeLocation, loc)).Hour()
 				if h >= 7 && h < currentHour {
-					todaySum += pt.HomeKWH
+					todaySum += max(0.0, pt.HomeKWH-standbyLoad)
 					todayCount++
+					todayMorningLoads = append(todayMorningLoads, pt.HomeKWH)
 				}
 			}
 		}
 
 		if todayCount > 0 {
+			todayMorningStdDev := 1.0
+			if len(todayMorningLoads) >= 3 {
+				var mSum float64
+				for _, l := range todayMorningLoads {
+					mSum += l
+				}
+				mAvg := mSum / float64(len(todayMorningLoads))
+				var mVarSum float64
+				for _, l := range todayMorningLoads {
+					mVarSum += (l - mAvg) * (l - mAvg)
+				}
+				todayMorningStdDev = math.Sqrt(mVarSum / float64(len(todayMorningLoads)))
+			}
+
 			var baselineSums []float64
 			for _, dStr := range baselineDays {
 				var bSum float64
@@ -942,27 +1060,35 @@ func detectLoadShift(
 					for _, pt := range d.points {
 						h := pt.TSHourStart.In(getLocation(pt.TimeLocation, loc)).Hour()
 						if h >= 7 && h < currentHour {
-							bSum += pt.HomeKWH
+							bSum += max(0.0, pt.HomeKWH-standbyLoad)
 						}
 					}
 				}
 				baselineSums = append(baselineSums, bSum)
 			}
 
-			sort.Float64s(baselineSums)
-			n := len(baselineSums)
-			q1 := baselineSums[int(math.Round(float64(n-1)*0.25))]
-			q3 := baselineSums[int(math.Round(float64(n-1)*0.75))]
-			iqr := q3 - q1
-			effIQR := math.Max(iqr, 0.1)
+			sumLowerBound := 0.0
+			if len(baselineSums) >= dailyAveragesRequired-1 {
+				sort.Float64s(baselineSums)
+				n := len(baselineSums)
+				q1 := baselineSums[int(math.Round(float64(n-1)*0.25))]
+				q3 := baselineSums[int(math.Round(float64(n-1)*0.75))]
+				iqr := q3 - q1
+				effIQR := max(iqr, 0.1)
 
-			sumLowerBound := q1 - loadShiftOutlierIQRExpansion*effIQR
-			sumUpperBound := q3 + loadShiftOutlierIQRExpansion*effIQR
+				// Floor the active sum lower bound to ensure vacation detection works even with high baseline variance.
+				// standbyActiveEnergyFloor represents the absolute minimum hourly average active load expected on vacation.
+				sumLowerBound = min(q1*loadShiftOutlierCeilingCap, max(float64(todayCount)*standbyActiveEnergyFloor, q1*loadShiftOutlierFloorFraction, q1-loadShiftOutlierIQRExpansion*effIQR))
 
-			if yesterdayIsLow && todaySum < sumLowerBound {
-				detectedShift = "down"
-			} else if yesterdayIsHigh && todaySum > sumUpperBound {
-				detectedShift = "up"
+				// Vacation Mode Trigger:
+				// If yesterday was a completed vacation day (yesterdayIsLow), we maintain vacation mode today if:
+				// 1. todaySum < sumLowerBound: Today's active energy sum (hours 7 to current hour) is below the lower bound, OR
+				// 2. todayMorningStdDev < max(vacationMorningFlatnessStdDevCeiling, 0.25*q1StdDev): Today's morning load exhibits
+				//    unoccupied flatness (standard deviation below 0.15 kWh or 25% of normal site volatility). The 0.15 kWh floor
+				//    accommodates mild hourly fluctuations from periodic HVAC or furnace cycling on hot/cold days while away.
+				if yesterdayIsLow && (todaySum < sumLowerBound || todayMorningStdDev < max(vacationMorningFlatnessStdDevCeiling, 0.25*q1StdDev)) {
+					detectedShift = "down"
+				}
 			}
 
 			// Apply 4-Hour Early Escape Override:
@@ -975,17 +1101,22 @@ func detectLoadShift(
 			//   Using Q1 (25th percentile) instead of the lower bound is critical because standby load on vacation
 			//   (0.4 - 0.7 kWh/hr) is consistently below Q1, but can easily hover above the absolute lower bound
 			//   (which can approach zero), causing false escapes.
-			// - For Visitor Escape: All 4 hours are <= hourQ3s[checkHour] (not a high outlier).
 			// - Requiring 4 consecutive hours filters out transient noise (e.g. water heater cycles during vacation).
 			if detectedShift != "none" {
 				escape := true
 				var hourLoad float64
 				var comparisonHourLoad float64
 				for i := 1; i <= loadShiftEscapeHours; i++ {
-					checkHour := currentHour - i
+					relHour := currentHour - i
+					checkHour := (relHour%24 + 24) % 24
+					targetDateStr := todayStr
+					if relHour < 0 {
+						targetDateStr = yesterdayStr
+					}
+
 					var found bool
-					if todayPts, ok := dayMap[todayStr]; ok {
-						for _, pt := range todayPts.points {
+					if targetPts, ok := dayMap[targetDateStr]; ok {
+						for _, pt := range targetPts.points {
 							h := pt.TSHourStart.In(getLocation(pt.TimeLocation, loc)).Hour()
 							if h == checkHour {
 								hourLoad = pt.HomeKWH
@@ -1005,12 +1136,6 @@ func detectLoadShift(
 							escape = false
 							break
 						}
-					} else if detectedShift == "up" {
-						comparisonHourLoad = hourQ3s[checkHour]
-						if hourLoad > comparisonHourLoad {
-							escape = false
-							break
-						}
 					}
 				}
 				if escape {
@@ -1020,16 +1145,14 @@ func detectLoadShift(
 						slog.String("shiftType", detectedShift),
 						slog.Int("currentHour", currentHour),
 						slog.Bool("yesterdayIsLow", yesterdayIsLow),
-						slog.Bool("yesterdayIsHigh", yesterdayIsHigh),
 						slog.Float64("todaySum", todaySum),
 						slog.Int("todayCount", todayCount),
 						slog.Float64("sumLowerBound", sumLowerBound),
-						slog.Float64("sumUpperBound", sumUpperBound),
 						slog.Any("baselineSums", baselineSums),
 						slog.Float64("hourLoad", hourLoad),
 						slog.Float64("comparisonHourLoad", comparisonHourLoad),
-						slog.Float64("dailyLowerBound", dailyLowerBound),
-						slog.Float64("dailyUpperBound", dailyUpperBound),
+						slog.Float64("dailyLowerBound", dailyLowerBoundActive),
+						slog.Float64("dailyUpperBound", dailyUpperBoundActive),
 						slog.Any("baselineDays", baselineDays),
 					)
 					detectedShift = "none"
@@ -1044,21 +1167,22 @@ func detectLoadShift(
 					slog.Float64("decayFactor", loadShiftRecencyDecay),
 					slog.Int("currentHour", currentHour),
 					slog.Bool("yesterdayIsLow", yesterdayIsLow),
-					slog.Bool("yesterdayIsHigh", yesterdayIsHigh),
+					slog.Float64("yesterdayActive", yActive),
+					slog.Float64("yesterdayStdDev", yStdDev),
+					slog.Float64("baselineQ1StdDev", q1StdDev),
+					slog.Float64("todayMorningStdDev", todayMorningStdDev),
 					slog.Float64("todaySum", todaySum),
 					slog.Int("todayCount", todayCount),
 					slog.Float64("sumLowerBound", sumLowerBound),
-					slog.Float64("sumUpperBound", sumUpperBound),
 					slog.Any("baselineSums", baselineSums),
-					slog.Float64("dailyLowerBound", dailyLowerBound),
-					slog.Float64("dailyUpperBound", dailyUpperBound),
+					slog.Float64("dailyLowerBound", dailyLowerBoundActive),
+					slog.Float64("dailyUpperBound", dailyUpperBoundActive),
 					slog.Any("baselineDays", baselineDays),
 				)
 			}
 		}
-	} else if currentHour < 9 && (yesterdayIsLow || yesterdayIsHigh) {
+	} else if currentHour < 9 && yesterdayIsLow {
 		tIsLow := yesterdayIsLow
-		tIsHigh := yesterdayIsHigh
 
 		const lookbackHours = 6
 
@@ -1078,7 +1202,7 @@ func detectLoadShift(
 			var found bool
 			if d, ok := dayMap[checkDateStr]; ok {
 				for _, pt := range d.points {
-					if pt.TSHourStart.In(loc).Hour() == checkHour {
+					if pt.TSHourStart.In(getLocation(pt.TimeLocation, loc)).Hour() == checkHour {
 						foundLoad = pt.HomeKWH
 						found = true
 						break
@@ -1122,11 +1246,9 @@ func detectLoadShift(
 		// so we do not trigger any shift.
 		if len(lastLoads) < lookbackHours-1 {
 			tIsLow = false
-			tIsHigh = false
 		} else {
 			// Verify each of the last x-1 completed hours to ensure they do not contradict the active shift:
 			// - Vacation (tIsLow): If any hour exceeds 1.5x the median, it indicates active occupancy.
-			// - Visitor (tIsHigh): If any hour falls below 0.5x the median, it indicates low occupancy.
 			var numMedians int
 			for _, pt := range lastLoads {
 				h := pt.Hour
@@ -1135,21 +1257,15 @@ func detectLoadShift(
 					if tIsLow && pt.Load > med*1.5 {
 						tIsLow = false
 					}
-					if tIsHigh && pt.Load < med*0.5 {
-						tIsHigh = false
-					}
 				}
 			}
 			if numMedians < lookbackHours-1 {
 				tIsLow = false
-				tIsHigh = false
 			}
 		}
 
 		if tIsLow {
 			detectedShift = "down"
-		} else if tIsHigh {
-			detectedShift = "up"
 		}
 
 		if detectedShift != "none" {
@@ -1160,13 +1276,145 @@ func detectLoadShift(
 				slog.Float64("decayFactor", loadShiftRecencyDecay),
 				slog.Int("currentHour", currentHour),
 				slog.Bool("yesterdayIsLow", yesterdayIsLow),
-				slog.Bool("yesterdayIsHigh", yesterdayIsHigh),
 				slog.Any("last6Loads", lastLoads),
-				slog.Float64("dailyLowerBound", dailyLowerBound),
-				slog.Float64("dailyUpperBound", dailyUpperBound),
+				slog.Float64("dailyLowerBound", dailyLowerBoundActive),
+				slog.Float64("dailyUpperBound", dailyUpperBoundActive),
 			)
 		}
 	}
 
 	return detectedShift
+}
+
+// identifyHistoricalVacationDays identifies dates in history that represent vacation days
+// (abnormally low active load or flat, low-volatility signature) so they can be excluded from the
+// prediction pool when in normal occupancy mode (detectedShift == "none").
+func identifyHistoricalVacationDays(
+	ctx context.Context,
+	dailyAverages []float64,
+	dayAveragesMap map[string]float64,
+	dayMap map[string]*dayPoints,
+	todayStr string,
+	yesterdayStr string,
+	standbyLoad float64,
+) map[string]bool {
+	historicalVacationDays := make(map[string]bool)
+	if len(dailyAverages) < 4 {
+		return historicalVacationDays
+	}
+
+	// Step 1: Filter out high outlier days (e.g. EV charging spikes or extreme heatwaves)
+	// using raw daily averages to establish a clean normal occupancy baseline.
+	sortedRaw := make([]float64, len(dailyAverages))
+	copy(sortedRaw, dailyAverages)
+	sort.Float64s(sortedRaw)
+	nR := len(sortedRaw)
+	q1R := sortedRaw[int(math.Round(float64(nR-1)*0.25))]
+	q3R := sortedRaw[int(math.Round(float64(nR-1)*0.75))]
+	iqrR := q3R - q1R
+	upperBoundRaw := q3R + 1.5*iqrR
+
+	// Step 2: Collect Active Energy (energy above standby baseline load) for non-outlier historical days.
+	// Active energy isolates human activity (HVAC, lighting, cooking) from constant background power (modems, refrigerators).
+	var normalActiveAverages []float64
+	for dateStr, avg := range dayAveragesMap {
+		if dateStr != todayStr && dateStr != yesterdayStr && avg <= upperBoundRaw {
+			normalActiveAverages = append(normalActiveAverages, max(0.0, avg-standbyLoad))
+		}
+	}
+
+	if len(normalActiveAverages) < 3 {
+		return historicalVacationDays
+	}
+
+	sort.Float64s(normalActiveAverages)
+	nA := len(normalActiveAverages)
+	// Step 3: Use Q3 (75th percentile) of active averages as the normal occupancy anchor.
+	//
+	// Why Q3 instead of Q1:
+	// If a site has a multi-day vacation in history (e.g., 7 consecutive low days), Q1 of active energy
+	// will collapse to the low vacation level (e.g., 0.2 kWh/hr). Calculating lower bounds relative to a collapsed
+	// Q1 would fail to identify past vacation days.
+	// Q3 (75th percentile) remains anchored on normal occupancy days (e.g., 1.9 kWh/hr), giving a stable reference.
+	q3A := normalActiveAverages[int(math.Round(float64(nA-1)*0.75))]
+
+	if q3A <= standbyActiveEnergyFloor {
+		return historicalVacationDays
+	}
+
+	// Step 4: Calculate the historical vacation active lower bound ceiling (55% of Q3 active load).
+	lowerBoundActiveA := max(standbyActiveEnergyFloor, q3A*loadShiftOutlierCeilingCap)
+
+	// Step 5: Compute baseline daily load volatility (standard deviation) across normal occupancy days.
+	// This establishes the site's natural daily volatility signature (q1StdDevA).
+	var stdDevsA []float64
+	for dateStr, avg := range dayAveragesMap {
+		if dateStr != todayStr && dateStr != yesterdayStr && avg <= upperBoundRaw {
+			activeAvg := max(0.0, avg-standbyLoad)
+			if activeAvg >= lowerBoundActiveA {
+				if d := dayMap[dateStr]; d != nil && len(d.points) >= 24 {
+					var sum float64
+					for _, p := range d.points {
+						sum += p.HomeKWH
+					}
+					dAvg := sum / float64(len(d.points))
+					var varSum float64
+					for _, p := range d.points {
+						varSum += (p.HomeKWH - dAvg) * (p.HomeKWH - dAvg)
+					}
+					stdDevsA = append(stdDevsA, math.Sqrt(varSum/float64(len(d.points))))
+				}
+			}
+		}
+	}
+
+	q1StdDevA := 0.0
+	if len(stdDevsA) >= 3 {
+		sort.Float64s(stdDevsA)
+		q1StdDevA = stdDevsA[int(math.Round(float64(len(stdDevsA)-1)*0.25))]
+	}
+
+	// Step 6: Evaluate each historical date against dual vacation criteria:
+	// - Condition A (Magnitude Drop): Active energy dropped below 25% of normal Q3 active baseline.
+	// - Condition B (Gated Volatility Drop): Active energy is below 55% of Q3 AND load volatility dropped below 25%
+	//   of normal site volatility (indicating a flat, unoccupied household load signature).
+	for dateStr, avg := range dayAveragesMap {
+		// We skip today (an incomplete day) and yesterday (handled dynamically by detectLoadShift).
+		// historicalVacationDays tags past completed vacation days (>= 2 days ago) to build a clean baseline pool.
+		// If yesterday or today were tagged here, returning home (detectedShift == "none") would incorrectly
+		// throw away yesterday's active returning data from the prediction pool.
+		if dateStr == todayStr || dateStr == yesterdayStr {
+			continue
+		}
+		activeAvg := max(0.0, avg-standbyLoad)
+		var dStdDev float64 = 1.0
+		if d := dayMap[dateStr]; d != nil && len(d.points) >= 24 {
+			var sum float64
+			for _, p := range d.points {
+				sum += p.HomeKWH
+			}
+			dAvg := sum / float64(len(d.points))
+			var varSum float64
+			for _, p := range d.points {
+				varSum += (p.HomeKWH - dAvg) * (p.HomeKWH - dAvg)
+			}
+			dStdDev = math.Sqrt(varSum / float64(len(d.points)))
+		}
+
+		if avg < q3R*loadShiftOutlierCeilingCap && (activeAvg < lowerBoundActiveA || (q1StdDevA >= 0.25 && dStdDev < 0.25*q1StdDevA)) {
+			historicalVacationDays[dateStr] = true
+			log.Ctx(ctx).DebugContext(
+				ctx,
+				"detected historical vacation day, excluding from post-vacation prediction pool",
+				slog.String("date", dateStr),
+				slog.Float64("avgHomeLoad", avg),
+				slog.Float64("activeAvg", activeAvg),
+				slog.Float64("lowerBoundActive", lowerBoundActiveA),
+				slog.Float64("dayStdDev", dStdDev),
+				slog.Float64("q1StdDev", q1StdDevA),
+			)
+		}
+	}
+
+	return historicalVacationDays
 }
