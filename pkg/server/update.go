@@ -850,10 +850,7 @@ func (s *Server) updateEnergyHistory(ctx context.Context, siteID string, essSyst
 
 	// we sync up until the current hour
 	syncEnd := now.Truncate(time.Hour)
-	// syncEnd is the start of the current hour but we don't want to fetch the
-	// current hour and we truncated the lastEnergyTime so we subtract an hour here
-	// to make sure that we have more than an hour to fetch
-	if !syncStart.Before(syncEnd.Add(-time.Hour)) {
+	if !syncStart.Before(syncEnd) {
 		return nil
 	}
 

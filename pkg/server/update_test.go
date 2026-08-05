@@ -1557,6 +1557,32 @@ func TestUpdateEnergyHistory(t *testing.T) {
 		assert.WithinDuration(t, time.Now().Truncate(time.Hour), endTime, time.Second)
 	})
 
+	t.Run("Incremental Update - Last Hour", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+		lastTime := time.Now().Add(-1 * time.Hour).Truncate(time.Hour)
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, "site1").Return(lastTime, types.CurrentEnergyStatsVersion, nil)
+		mockS.On("UpsertEnergyHistories", mock.Anything, "site1", mock.Anything, mock.Anything).Return(nil)
+
+		mockES := &mockESS{}
+		var startTime time.Time
+		var endTime time.Time
+		mockES.On("GetEnergyHistory", mock.Anything, lastTime, mock.Anything).Run(func(args mock.Arguments) {
+			startTime = args.Get(1).(time.Time)
+			endTime = args.Get(2).(time.Time)
+		}).Return([]types.DailyEnergyStats{{}}, nil).Once()
+
+		srv := &Server{
+			storage: mockS,
+		}
+
+		err := srv.updateEnergyHistory(context.Background(), "site1", mockES)
+		require.NoError(t, err)
+
+		assert.True(t, startTime.Equal(lastTime))
+		assert.WithinDuration(t, time.Now().Truncate(time.Hour), endTime, time.Second)
+	})
+
 	t.Run("Version Mismatch - Partial Backfill", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
