@@ -135,6 +135,49 @@ func TestDeleteHandlers(t *testing.T) {
 
 			store.AssertExpectations(t)
 		})
+
+		t.Run("MultiSiteAdminSuccess", func(t *testing.T) {
+			store := &mockStorage{}
+			s := &Server{
+				storage:     store,
+				adminEmails: []string{"admin@example.com"},
+			}
+
+			siteID := "site-to-delete"
+			site := types.Site{
+				ID: siteID,
+				Permissions: []types.SitePermissions{
+					{UserID: "otheruser"},
+				},
+			}
+
+			adminUser := types.User{
+				ID:    "admin1",
+				Email: "admin@example.com",
+				Admin: false, // will be recognized via adminEmails
+			}
+
+			otherUser := types.User{
+				ID:    "otheruser",
+				Sites: []types.UserSite{{ID: "site-to-delete", Name: "Deleted Site"}},
+			}
+
+			store.On("GetSite", mock.Anything, siteID).Return(site, nil).Once()
+			store.On("GetUser", mock.Anything, "otheruser").Return(otherUser, nil).Once()
+			store.On("UpdateUser", mock.Anything, mock.MatchedBy(func(u types.User) bool {
+				return u.ID == "otheruser" && len(u.Sites) == 0
+			})).Return(nil).Once()
+			store.On("DeleteSite", mock.Anything, siteID).Return(nil).Once()
+
+			req := httptest.NewRequest(http.MethodPost, "/api/delete/site", nil)
+			req = withUser(req, adminUser)
+			req = withSiteID(req, siteID)
+			w := httptest.NewRecorder()
+
+			s.handleDeleteSite(w, req)
+			assert.Equal(t, http.StatusOK, w.Code)
+			store.AssertExpectations(t)
+		})
 	})
 
 	t.Run("DeleteUser", func(t *testing.T) {

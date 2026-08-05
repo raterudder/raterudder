@@ -332,6 +332,46 @@ func (b *baseTesla) doRequest(req *http.Request, dest any) error {
 		}
 	}
 
+	var logResponse any
+	var envelope struct {
+		Response json.RawMessage `json:"response"`
+	}
+	if err := json.Unmarshal(body, &envelope); err == nil && len(envelope.Response) > 0 {
+		var responseMap map[string]any
+		if err := json.Unmarshal(envelope.Response, &responseMap); err == nil {
+			if _, hasTariff := responseMap["tariff_content"]; hasTariff {
+				responseMap["tariff_content"] = "removed: unnecessary and causes logs to be truncated"
+			}
+			if _, hasTariff2 := responseMap["tariff_content_v2"]; hasTariff2 {
+				responseMap["tariff_content_v2"] = "removed: unnecessary and causes logs to be truncated"
+			}
+			logResponse = responseMap
+		} else {
+			var respAny any
+			if err := json.Unmarshal(envelope.Response, &respAny); err == nil {
+				logResponse = respAny
+			} else {
+				logResponse = string(envelope.Response)
+			}
+		}
+	} else {
+		var bodyAny any
+		if err := json.Unmarshal(body, &bodyAny); err == nil {
+			logResponse = bodyAny
+		} else {
+			logResponse = string(body)
+		}
+	}
+
+	if !strings.Contains(req.URL.Path, "/oauth") && !strings.Contains(req.URL.Path, "token") {
+		log.Ctx(req.Context()).DebugContext(req.Context(),
+			"tesla result",
+			slog.String("url", req.URL.String()),
+			slog.String("method", req.Method),
+			slog.Any("response", logResponse),
+		)
+	}
+
 	if dest != nil {
 		if err := json.Unmarshal(body, dest); err != nil {
 			if len(body) > 256 {
@@ -552,25 +592,6 @@ func (b *Tesla) doGETRequest(ctx context.Context, path string, params url.Values
 		return fmt.Errorf("failed to decode tesla envelope: %w", err)
 	}
 
-	// debug log the whole response which will aid in debugging
-	var logResponse any = response.Response
-	var responseMap map[string]any
-	if err := json.Unmarshal(response.Response, &responseMap); err == nil {
-		if _, hasTariff := responseMap["tariff_content"]; hasTariff {
-			responseMap["tariff_content"] = "removed: unnecessary and causes logs to be truncated"
-		}
-		if _, hasTariff2 := responseMap["tariff_content_v2"]; hasTariff2 {
-			responseMap["tariff_content_v2"] = "removed: unnecessary and causes logs to be truncated"
-		}
-		logResponse = responseMap
-	}
-
-	log.Ctx(ctx).DebugContext(ctx,
-		"tesla result",
-		slog.String("url", req.URL.String()),
-		slog.String("method", req.Method),
-		slog.Any("response", logResponse),
-	)
 	if dest != nil {
 		if err := json.Unmarshal(response.Response, dest); err != nil {
 			// We encountered cases where the response field is a string like ""
@@ -705,7 +726,7 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 	if len(validBatteries) > 0 {
 		var totalBatteryEnergyWH float64
 		for _, b := range validBatteries {
-			totalChargeKW += b.NameplateMaxChargePowerW / 1000.0
+			totalChargeKW += 3.3
 			totalDischargeKW += b.NameplateMaxDischargePowerW / 1000.0
 			totalBatteryEnergyWH += b.NameplateEnergyWH
 		}
@@ -715,14 +736,15 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 	} else if len(siteInfo.Components.Gateways) > 0 {
 		var totalGatewayEnergyWH float64
 		for _, gw := range siteInfo.Components.Gateways {
-			// TODO: find a better way to get charge power. nameplate_power_watts is just the discharge power.
-			totalChargeKW += 5.0
+			totalChargeKW += 3.3
 			totalDischargeKW += gw.NameplatePowerWatts / 1000.0
 			totalGatewayEnergyWH += gw.NameplateEnergyWatts
 		}
 		if capacityKWH == 0 {
 			capacityKWH = totalGatewayEnergyWH / 1000.0
 		}
+	} else {
+		totalChargeKW = 3.3
 	}
 
 	tz := siteInfo.InstallationTimeZone
@@ -826,19 +848,19 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 	reserveSOC := siteInfo.BackupReservePercent
 	newReserveSOC := reserveSOC
 	allowGridCharge := !siteInfo.Components.DisallowChargeFromGridWithSolarInstalled
+	targetAllowGridCharge := allowGridCharge
+	if b.settings.GridChargeBatteries && !allowGridCharge {
+		targetAllowGridCharge = true
+	}
 	var updatedGrid bool
 	var updatedMode bool
-
-	if b.settings.GridChargeBatteries && !allowGridCharge {
-		log.Ctx(ctx).InfoContext(ctx, "grid charging is disabled on tesla, enabling grid charge to match site settings")
-		allowGridCharge = true
-		updatedGrid = true
-	}
 
 	minSOC := b.settings.MinBatterySOC
 	if opts.MinimumSOC != 0 {
 		minSOC = float64(opts.MinimumSOC)
 	}
+
+	targetMode := siteInfo.DefaultRealMode
 
 	switch bat {
 	case types.BatteryModeChargeAny:
@@ -848,8 +870,21 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 		if opts.ChargeToSOC != 0 {
 			targetSOC = opts.ChargeToSOC
 		}
-		newReserveSOC = float64(targetSOC)
+		socDelta := float64(targetSOC) - liveStatus.PercentageCharged
+		if socDelta > 10.0 {
+			log.Ctx(ctx).DebugContext(ctx, "using backup mode to reach target SOC",
+				slog.Int("targetSOC", targetSOC),
+				slog.Float64("liveSOC", liveStatus.PercentageCharged),
+				slog.Float64("socDelta", socDelta),
+			)
+			targetMode = "backup"
+			newReserveSOC = 100.0
+		} else {
+			targetMode = "self_consumption"
+			newReserveSOC = float64(targetSOC)
+		}
 	case types.BatteryModeLoad:
+		targetMode = "self_consumption"
 		// we set the SOC to the minimum battery SOC to ensure we start discharging
 		// if we're somehow less than this soc, we'll charge from the solar, unless
 		// solar is unavailable then it'll charge from the grid
@@ -859,10 +894,33 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 		// battery to charge
 		// make sure we don't set it to less than the minimum battery SOC
 		newReserveSOC = max(math.Floor(liveStatus.PercentageCharged), minSOC)
+		if newReserveSOC >= 99 {
+			newReserveSOC = 100.0
+			targetMode = "self_consumption"
+		} else if newReserveSOC > 80 {
+			log.Ctx(ctx).DebugContext(ctx, "using backup mode with grid charging disabled for standby between 81% and 98% SOC",
+				slog.Float64("soc", newReserveSOC),
+				slog.Float64("liveSOC", liveStatus.PercentageCharged),
+			)
+			targetMode = "backup"
+			newReserveSOC = 100.0
+			targetAllowGridCharge = false
+		} else {
+			targetMode = "self_consumption"
+		}
 	case types.BatteryModeNoChange:
-		// Do not change battery settings
+		targetAllowGridCharge = allowGridCharge
 	default:
 		return fmt.Errorf("unknown battery mode: %v", bat)
+	}
+
+	if bat != types.BatteryModeNoChange && allowGridCharge != targetAllowGridCharge {
+		log.Ctx(ctx).DebugContext(ctx, "updating tesla grid charge mode",
+			slog.Bool("oldAllowGridCharge", allowGridCharge),
+			slog.Bool("newAllowGridCharge", targetAllowGridCharge),
+		)
+		allowGridCharge = targetAllowGridCharge
+		updatedGrid = true
 	}
 
 	if newReserveSOC < 5 {
@@ -875,6 +933,58 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 	}
 
 	updatedSOC := math.Round(newReserveSOC) != math.Round(reserveSOC)
+
+	// Detect unexpected grid charging when in load or standby mode.
+	// If the hardware was already configured in self_consumption, SOC is above the configured reserve,
+	// and the battery is unexpectedly charging from the grid, log a warning and force re-posting reserve/mode settings.
+	if (bat == types.BatteryModeLoad || bat == types.BatteryModeStandby) &&
+		siteInfo.DefaultRealMode == "self_consumption" &&
+		liveStatus.BatteryPowerW < -100 &&
+		(-liveStatus.BatteryPowerW)-liveStatus.SolarPowerW > 100 &&
+		liveStatus.PercentageCharged > reserveSOC+1.0 {
+		log.Ctx(ctx).WarnContext(ctx, "unexpected battery grid charging detected, force updating backup reserve setting",
+			slog.Float64("batteryPowerW", liveStatus.BatteryPowerW),
+			slog.Float64("solarPowerW", liveStatus.SolarPowerW),
+			slog.Float64("gridPowerW", liveStatus.GridPowerW),
+			slog.Float64("batterySOC", liveStatus.PercentageCharged),
+			slog.Float64("configuredReserve", reserveSOC),
+			slog.Float64("targetReserve", newReserveSOC),
+			slog.Any("batteryMode", bat),
+			slog.String("defaultRealMode", siteInfo.DefaultRealMode),
+		)
+		updatedSOC = true
+		if targetMode != "" {
+			updatedMode = true
+		}
+	}
+
+	// Detect unexpected non-discharging when in load mode.
+	// If in BatteryModeLoad, hardware is configured in self_consumption, SOC is above configured reserve (+1%),
+	// home load is pulling from grid, but the battery is not discharging (> 100W),
+	// log a warning and force re-posting reserve/mode settings.
+	netUnservedLoadW := liveStatus.LoadPowerW - liveStatus.SolarPowerW
+	if bat == types.BatteryModeLoad &&
+		siteInfo.DefaultRealMode == "self_consumption" &&
+		liveStatus.PercentageCharged > reserveSOC+1.0 &&
+		liveStatus.BatteryPowerW <= 100 &&
+		liveStatus.GridPowerW > 200 &&
+		netUnservedLoadW > 200 {
+		log.Ctx(ctx).WarnContext(ctx, "unexpected battery non-discharge detected when battery should be powering load",
+			slog.Float64("batteryPowerW", liveStatus.BatteryPowerW),
+			slog.Float64("solarPowerW", liveStatus.SolarPowerW),
+			slog.Float64("gridPowerW", liveStatus.GridPowerW),
+			slog.Float64("loadPowerW", liveStatus.LoadPowerW),
+			slog.Float64("batterySOC", liveStatus.PercentageCharged),
+			slog.Float64("configuredReserve", reserveSOC),
+			slog.Float64("targetReserve", newReserveSOC),
+			slog.Any("batteryMode", bat),
+			slog.String("defaultRealMode", siteInfo.DefaultRealMode),
+		)
+		updatedSOC = true
+		if targetMode != "" {
+			updatedMode = true
+		}
+	}
 
 	exportRule := siteInfo.Components.CustomerPreferredExportRule
 	switch sol {
@@ -906,13 +1016,13 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 		return fmt.Errorf("unknown solar mode: %v", sol)
 	}
 
-	if siteInfo.DefaultRealMode != "self_consumption" {
+	if bat != types.BatteryModeNoChange && targetMode != "" && siteInfo.DefaultRealMode != targetMode {
 		updatedMode = true
 	}
 
 	if b.settings.DryRun {
 		if updatedMode {
-			log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated operation mode", slog.String("mode", "self_consumption"))
+			log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated operation mode", slog.String("mode", targetMode))
 		}
 		if updatedSOC {
 			log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated backup reserve", slog.Float64("soc", newReserveSOC))
@@ -924,9 +1034,9 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 	}
 
 	if updatedMode {
-		log.Ctx(ctx).InfoContext(ctx, "updating tesla operation mode", slog.String("mode", "self_consumption"))
+		log.Ctx(ctx).InfoContext(ctx, "updating tesla operation mode", slog.String("mode", targetMode))
 		path := fmt.Sprintf("api/1/energy_sites/%d/operation", b.energySiteID)
-		payload := map[string]string{"default_real_mode": "self_consumption"}
+		payload := map[string]string{"default_real_mode": targetMode}
 		req, err := b.base.newPOSTRequest(ctx, "POST", path, b.token, b.baseURL, payload)
 		if err != nil {
 			return err

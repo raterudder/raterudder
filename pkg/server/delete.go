@@ -19,7 +19,7 @@ func (s *Server) handleDeleteSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !user.Admin {
+	if !user.Admin && !s.isMultiSiteAdmin(user) {
 		log.Ctx(ctx).WarnContext(ctx, "unauthorized for site deletion", slog.String("userID", user.ID), slog.String("email", user.Email))
 		writeJSONError(w, "unauthorized", http.StatusForbidden)
 		return
