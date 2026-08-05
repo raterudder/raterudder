@@ -77,6 +77,13 @@ func (c *Controller) SimulateState(
 	weather []types.Weather,
 	settings types.Settings,
 ) ([]SimHour, types.SimulationParams) {
+	// convert now if it has a default location
+	if nowl := now.Location(); (nowl == nil || nowl == time.UTC || nowl.String() == "") && currentStatus.TimeLocation != "" {
+		if statusLoc, err := time.LoadLocation(currentStatus.TimeLocation); err == nil {
+			now = now.In(statusLoc)
+		}
+	}
+
 	capacityKWH := currentStatus.BatteryCapacityKWH
 	capacityThresholdKWH := capacityKWH * batteryCapacityBuffer
 	currentSOC := currentStatus.BatterySOC

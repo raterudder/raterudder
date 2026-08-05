@@ -413,6 +413,7 @@ func (e *Enphase) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 
 	status := types.SystemStatus{
 		Timestamp:             time.Now().In(loc),
+		TimeLocation:          loc.String(),
 		BatterySOC:            currentSOC,
 		BatteryKW:             batteryKW,
 		BatteryCapacityKWH:    capacityKWH,
@@ -835,7 +836,8 @@ func parseDailyStats(stat enphaseTodayStats, dayStart time.Time, loc *time.Locat
 		s, ok := hourlyStatsMap[hourStart]
 		if !ok {
 			s = &types.EnergyStats{
-				TSHourStart: hourStart,
+				TSHourStart:  hourStart,
+				TimeLocation: loc.String(),
 			}
 			hourlyStatsMap[hourStart] = s
 		}
@@ -890,8 +892,9 @@ func parseDailyStats(stat enphaseTodayStats, dayStart time.Time, loc *time.Locat
 	})
 
 	return types.DailyEnergyStats{
-		TSDayStart: dayStart,
-		Hourly:     hourly,
+		TSDayStart:   dayStart,
+		TimeLocation: loc.String(),
+		Hourly:       hourly,
 	}
 }
 

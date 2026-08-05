@@ -113,10 +113,33 @@ func (c *Controller) BuildHourlyEnergyModel(
 	settings types.Settings,
 ) (map[int]TimeProfile, types.SimulationParams) {
 	loc := now.Location()
-	for _, h := range history {
-		if !h.TSHourStart.IsZero() {
-			loc = h.TSHourStart.Location()
-			break
+	hasSpecificLocation := loc != nil && loc != time.UTC && loc.String() != ""
+
+	locCache := make(map[string]*time.Location)
+	getLocation := func(tz string, fallback *time.Location) *time.Location {
+		if tz == "" {
+			return fallback
+		}
+		if l, ok := locCache[tz]; ok && l != nil {
+			return l
+		}
+		if l, err := time.LoadLocation(tz); err == nil {
+			locCache[tz] = l
+			return l
+		}
+		return fallback
+	}
+
+	// try to update the loc to the latest history point's location
+	if !hasSpecificLocation {
+		for _, h := range history {
+			if h.TSHourStart.IsZero() || h.TimeLocation == "" {
+				continue
+			}
+			// only bother if we have a different location
+			if loc == nil || h.TimeLocation != loc.String() {
+				loc = getLocation(h.TimeLocation, loc)
+			}
 		}
 	}
 
@@ -128,7 +151,7 @@ func (c *Controller) BuildHourlyEnergyModel(
 		if h.TSHourStart.IsZero() {
 			continue
 		}
-		dateStr := h.TSHourStart.In(loc).Format("2006-01-02")
+		dateStr := h.TSHourStart.In(getLocation(h.TimeLocation, loc)).Format("2006-01-02")
 
 		d, exists := dayMap[dateStr]
 		if !exists {
@@ -592,7 +615,7 @@ func (c *Controller) BuildHourlyEnergyModel(
 				if pt.HomeKWH <= 0.0 {
 					continue
 				}
-				hpLocalHour := pt.TSHourStart.In(loc).Hour()
+				hpLocalHour := pt.TSHourStart.In(getLocation(pt.TimeLocation, loc)).Hour()
 
 				// Calculate hour position weight multiplier.
 				// We blend adjacent hours (h-1, h+1) with a 0.50 multiplier, and the exact hour h with 1.0.
@@ -837,6 +860,21 @@ func detectLoadShift(
 		return "none"
 	}
 
+	locCache := make(map[string]*time.Location)
+	getLocation := func(tz string, fallback *time.Location) *time.Location {
+		if tz == "" {
+			return fallback
+		}
+		if l, ok := locCache[tz]; ok && l != nil {
+			return l
+		}
+		if l, err := time.LoadLocation(tz); err == nil {
+			locCache[tz] = l
+			return l
+		}
+		return fallback
+	}
+
 	// Yesterday is the first completed day of the suspected shift.
 	// Verifying that yesterday was a daily outlier is a prerequisite for triggering a shift.
 	// This prevents transient, one-off events (like a single day-trip away) from triggering a shift,
@@ -855,7 +893,7 @@ func detectLoadShift(
 		for _, dStr := range baselineDays {
 			if d, ok := dayMap[dStr]; ok {
 				for _, pt := range d.points {
-					if pt.TSHourStart.In(loc).Hour() == h && pt.HomeKWH > 0 {
+					if pt.TSHourStart.In(getLocation(pt.TimeLocation, loc)).Hour() == h && pt.HomeKWH > 0 {
 						hourLoads = append(hourLoads, pt.HomeKWH)
 					}
 				}
@@ -888,7 +926,7 @@ func detectLoadShift(
 		var todayCount int
 		if todayPts, ok := dayMap[todayStr]; ok {
 			for _, pt := range todayPts.points {
-				h := pt.TSHourStart.In(loc).Hour()
+				h := pt.TSHourStart.In(getLocation(pt.TimeLocation, loc)).Hour()
 				if h >= 7 && h < currentHour {
 					todaySum += pt.HomeKWH
 					todayCount++
@@ -902,7 +940,7 @@ func detectLoadShift(
 				var bSum float64
 				if d, ok := dayMap[dStr]; ok {
 					for _, pt := range d.points {
-						h := pt.TSHourStart.In(loc).Hour()
+						h := pt.TSHourStart.In(getLocation(pt.TimeLocation, loc)).Hour()
 						if h >= 7 && h < currentHour {
 							bSum += pt.HomeKWH
 						}
@@ -948,7 +986,7 @@ func detectLoadShift(
 					var found bool
 					if todayPts, ok := dayMap[todayStr]; ok {
 						for _, pt := range todayPts.points {
-							h := pt.TSHourStart.In(loc).Hour()
+							h := pt.TSHourStart.In(getLocation(pt.TimeLocation, loc)).Hour()
 							if h == checkHour {
 								hourLoad = pt.HomeKWH
 								found = true

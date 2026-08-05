@@ -1394,3 +1394,38 @@ func TestDetectLoadShift(t *testing.T) {
 		assert.Equal(t, "none", shift)
 	})
 }
+
+func TestDualTimezoneHistoryAndSimulation(t *testing.T) {
+	chicagoLoc, err := time.LoadLocation("America/Chicago")
+	assert.NoError(t, err)
+	laLoc, err := time.LoadLocation("America/Los_Angeles")
+	assert.NoError(t, err)
+
+	ctx := context.Background()
+	c := NewController()
+
+	// 1. History point in Chicago timezone (8 PM CDT = 01:00 UTC next day)
+	chicagoTime := time.Date(2026, 8, 3, 20, 0, 0, 0, chicagoLoc)
+	h1 := types.EnergyStats{
+		TSHourStart:  chicagoTime.UTC(),
+		TimeLocation: "America/Chicago",
+		HomeKWH:      2.5,
+	}
+
+	// 2. History point in LA timezone (8 PM PDT = 03:00 UTC next day)
+	laTime := time.Date(2026, 8, 3, 20, 0, 0, 0, laLoc)
+	h2 := types.EnergyStats{
+		TSHourStart:  laTime.UTC(),
+		TimeLocation: "America/Los_Angeles",
+		HomeKWH:      3.5,
+	}
+
+	// Build model using Chicago as latest site location
+	nowChicago := time.Date(2026, 8, 4, 10, 0, 0, 0, chicagoLoc)
+	history := []types.EnergyStats{h1, h2}
+	settings := types.Settings{}
+
+	model, _ := c.BuildHourlyEnergyModel(ctx, nowChicago, history, nil, settings)
+	// Hour 20 should have aggregated both 8 PM local points
+	assert.Contains(t, model, 20)
+}

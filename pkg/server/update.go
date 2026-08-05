@@ -479,6 +479,12 @@ func (s *Server) performSiteUpdate(
 	if err != nil {
 		log.Ctx(ctx).WarnContext(ctx, "failed to get latest action from storage, using nil", slog.Any("error", err))
 		latestAction = nil
+	} else if latestAction != nil && latestAction.SystemStatus.TimeLocation != "" {
+		if loc, err := time.LoadLocation(latestAction.SystemStatus.TimeLocation); err == nil {
+			latestAction.Timestamp = latestAction.Timestamp.In(loc)
+			latestAction.SystemTimestamp = latestAction.SystemTimestamp.In(loc)
+			latestAction.SystemStatus.Timestamp = latestAction.SystemStatus.Timestamp.In(loc)
+		}
 	}
 
 	// decide Action
@@ -954,6 +960,21 @@ func (s *Server) getCombinedHistory(
 	var latestSummaryEnergyDay time.Time
 	var latestSummaryWeatherDay time.Time
 
+	locCache := make(map[string]*time.Location)
+	getLocation := func(tz string, fallback *time.Location) *time.Location {
+		if tz == "" {
+			return fallback
+		}
+		if l, ok := locCache[tz]; ok && l != nil {
+			return l
+		}
+		if l, err := time.LoadLocation(tz); err == nil {
+			locCache[tz] = l
+			return l
+		}
+		return fallback
+	}
+
 	for _, summary := range summaries {
 		// Filter and append energy stats from the summaries
 		for _, day := range summary.Energy {
@@ -961,10 +982,11 @@ func (s *Server) getCombinedHistory(
 			// We explicitly ignore filtering by historyStart (the request range's lower bound)
 			// because the entire monthly summary document was already loaded from Firestore.
 			// Filtering out the early days of the month would discard data we have already paid to read.
-			if day.TSDayStart.Before(todayStart) {
+			dLoc := getLocation(day.TimeLocation, now.Location())
+			if day.TSDayStart.In(dLoc).Before(todayStart) {
 				combinedEnergy = append(combinedEnergy, day)
-				if latestSummaryEnergyDay.IsZero() || day.TSDayStart.After(latestSummaryEnergyDay) {
-					latestSummaryEnergyDay = day.TSDayStart
+				if latestSummaryEnergyDay.IsZero() || day.TSDayStart.In(dLoc).After(latestSummaryEnergyDay) {
+					latestSummaryEnergyDay = day.TSDayStart.In(dLoc)
 				}
 			}
 		}
@@ -1204,9 +1226,25 @@ func (s *Server) syncHistorySummaryRange(
 		weatherStatsByDate[stat.TSDayStart.Format("2006-01-02")] = stat
 	}
 
+	locCache := make(map[string]*time.Location)
+	getLocation := func(tz string, fallback *time.Location) *time.Location {
+		if tz == "" {
+			return fallback
+		}
+		if l, ok := locCache[tz]; ok && l != nil {
+			return l
+		}
+		if l, err := time.LoadLocation(tz); err == nil {
+			locCache[tz] = l
+			return l
+		}
+		return fallback
+	}
+
 	energyStatsByDate := make(map[string]types.DailyEnergyStats)
 	for _, stat := range energyStats {
-		energyStatsByDate[stat.TSDayStart.Format("2006-01-02")] = stat
+		sLoc := getLocation(stat.TimeLocation, loc)
+		energyStatsByDate[stat.TSDayStart.In(sLoc).Format("2006-01-02")] = stat
 	}
 
 	summariesByMonth := make(map[string]*types.HistorySummary)
@@ -1217,9 +1255,11 @@ func (s *Server) syncHistorySummaryRange(
 		// check to see if the 23:00 hour for this day is recorded
 		var hasLastHour bool
 		if hasData {
-			targetHour := time.Date(d.Year(), d.Month(), d.Day(), 23, 0, 0, 0, loc)
+			dLoc := getLocation(dailyStat.TimeLocation, loc)
+			targetHour := time.Date(d.Year(), d.Month(), d.Day(), 23, 0, 0, 0, dLoc)
 			for _, h := range dailyStat.Hourly {
-				if h.TSHourStart.Equal(targetHour) {
+				hLoc := getLocation(h.TimeLocation, dLoc)
+				if h.TSHourStart.In(hLoc).Equal(targetHour) {
 					hasLastHour = true
 					break
 				}

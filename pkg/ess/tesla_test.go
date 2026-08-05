@@ -283,6 +283,7 @@ func TestTesla(t *testing.T) {
 		assert.True(t, status.EmergencyMode)
 		assert.True(t, status.VPPActive)
 		assert.Equal(t, 5.2, status.VPPKW)
+		assert.NotEmpty(t, status.TimeLocation, "TimeLocation should be populated")
 	})
 
 	t.Run("GetStatus Gateways Fallback", func(t *testing.T) {
@@ -857,12 +858,14 @@ func TestTesla(t *testing.T) {
 		stats, err := sys.GetEnergyHistory(ctx, start, end)
 		require.NoError(t, err)
 		if assert.Len(t, stats, 1) { // 1 day
+			assert.Equal(t, "America/Chicago", stats[0].TimeLocation)
 			hourly := stats[0].Hourly
 			sort.Slice(hourly, func(i, j int) bool {
 				return hourly[i].TSHourStart.Before(hourly[j].TSHourStart)
 			})
 			// Hour 10: aggregated from two entries (2000+3000=5000 Wh solar, etc)
 			s := hourly[0]
+			assert.Equal(t, "America/Chicago", s.TimeLocation)
 			assert.Equal(t, time.Date(2026, 3, 12, 10, 0, 0, 0, loc), s.TSHourStart)
 			assert.Equal(t, 5.0, s.SolarKWH)
 			assert.Equal(t, 1.0, s.BatteryChargedKWH)

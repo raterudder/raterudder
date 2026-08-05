@@ -118,7 +118,8 @@ type SimulationParams struct {
 
 // EnergyStats represents aggregated energy statistics for an hourly period.
 type EnergyStats struct {
-	TSHourStart time.Time `json:"tsHourStart"`
+	TSHourStart  time.Time `json:"tsHourStart"`
+	TimeLocation string    `json:"timeLocation,omitempty"`
 
 	// Battery Stats
 	MinBatterySOC float64 `json:"minBatterySOC"`
@@ -146,8 +147,9 @@ type EnergyStats struct {
 
 // DailyEnergyStats represents aggregated energy statistics for a day.
 type DailyEnergyStats struct {
-	TSDayStart time.Time     `json:"tsDayStart"`
-	Hourly     []EnergyStats `json:"hourly"`
+	TSDayStart   time.Time     `json:"tsDayStart"`
+	TimeLocation string        `json:"timeLocation,omitempty"`
+	Hourly       []EnergyStats `json:"hourly"`
 }
 
 // SystemAlarm represents a single alarm condition.
@@ -177,6 +179,7 @@ type VPPEvent struct {
 // SystemStatus represents the current system status.
 type SystemStatus struct {
 	Timestamp               time.Time     `json:"timestamp"`
+	TimeLocation            string        `json:"timeLocation,omitempty"`
 	BatterySOC              float64       `json:"batterySOC"`            // 0-100
 	BatteryKW               float64       `json:"batteryKW"`             // Positive for discharge, negative for charge
 	BatteryCapacityKWH      float64       `json:"batteryCapacityKWH"`    // Total capacity of the battery (kWh)

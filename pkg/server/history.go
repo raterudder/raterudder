@@ -72,13 +72,34 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 		improvedSolarMap, _ = controller.CalculateWeatherSolar(ctx, s.now(), flatEnergy, weatherHistory, *settings.Location)
 	}
 
+	locCache := make(map[string]*time.Location)
+	getLocation := func(tz string, fallback *time.Location) *time.Location {
+		if tz == "" {
+			return fallback
+		}
+		if l, ok := locCache[tz]; ok && l != nil {
+			return l
+		}
+		if l, err := time.LoadLocation(tz); err == nil {
+			locCache[tz] = l
+			return l
+		}
+		return fallback
+	}
+
 	loc := time.UTC
 	for _, day := range allStats {
-		if !day.TSDayStart.IsZero() {
+		if day.TimeLocation != "" {
+			loc = getLocation(day.TimeLocation, time.UTC)
+			if loc != time.UTC {
+				break
+			}
+		} else if !day.TSDayStart.IsZero() && day.TSDayStart.Location() != time.UTC && day.TSDayStart.Location().String() != "" {
 			loc = day.TSDayStart.Location()
 			break
 		}
 	}
+
 	var targetDateLocal time.Time
 	targetDateLocal, err = time.ParseInLocation("2006-01-02", dateStr, loc)
 	if err != nil {
@@ -93,7 +114,8 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 	// This prevents data leakage (using actual load from the target day to predict the target day).
 	var priorEnergy []types.EnergyStats
 	for _, h := range flatEnergy {
-		if !h.TSHourStart.IsZero() && h.TSHourStart.Before(targetDateLocal) {
+		hLoc := getLocation(h.TimeLocation, loc)
+		if !h.TSHourStart.IsZero() && h.TSHourStart.In(hLoc).Before(targetDateLocal) {
 			priorEnergy = append(priorEnergy, h)
 		}
 	}
@@ -103,9 +125,11 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 	// Filter results for the target day
 	dayStats := make([]types.EnergyStats, 0, 24)
 	for _, day := range allStats {
-		if day.TSDayStart.Format("2006-01-02") == dateStr {
+		dayLoc := getLocation(day.TimeLocation, loc)
+		if day.TSDayStart.In(dayLoc).Format("2006-01-02") == dateStr {
 			for _, h := range day.Hourly {
-				h.TSHourStart = h.TSHourStart.In(loc)
+				hLoc := getLocation(h.TimeLocation, dayLoc)
+				h.TSHourStart = h.TSHourStart.In(hLoc)
 				dayStats = append(dayStats, h)
 			}
 		}

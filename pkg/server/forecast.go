@@ -94,6 +94,13 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get latest action", slog.Any("error", err))
 	} else if latestAction != nil {
+		if latestAction.SystemStatus.TimeLocation != "" {
+			if loc, err := time.LoadLocation(latestAction.SystemStatus.TimeLocation); err == nil {
+				latestAction.Timestamp = latestAction.Timestamp.In(loc)
+				latestAction.SystemTimestamp = latestAction.SystemTimestamp.In(loc)
+				latestAction.SystemStatus.Timestamp = latestAction.SystemStatus.Timestamp.In(loc)
+			}
+		}
 		since := s.now().Sub(latestAction.Timestamp)
 		if since >= 0 && since <= time.Hour {
 			status = latestAction.SystemStatus
@@ -216,38 +223,42 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	var solar1hRes []WeatherRes
 
 	if settings.Location != nil && len(weatherHistory) > 0 {
+		// since this is weather-related we can use the location from settings
 		timeLoc, err := time.LoadLocation(settings.Location.TimeZone)
-		if err == nil {
-			todayMidnight := time.Date(now.In(timeLoc).Year(), now.In(timeLoc).Month(), now.In(timeLoc).Day(), 0, 0, 0, 0, timeLoc)
-			tomorrowEnd := todayMidnight.AddDate(0, 0, 2)
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to load timezone", slog.String("timezone", settings.Location.TimeZone), slog.Any("error", err))
+			// fallback to pulling from the latest action's system status location
+			timeLoc = now.Location()
+		}
+		todayMidnight := time.Date(now.In(timeLoc).Year(), now.In(timeLoc).Month(), now.In(timeLoc).Day(), 0, 0, 0, 0, timeLoc)
+		tomorrowEnd := todayMidnight.AddDate(0, 0, 2)
 
-			solar1hMap, _ := controller.CalculateWeatherSolar(ctx, now, flatEnergyHistory, weatherHistory, *settings.Location)
+		solar1hMap, _ := controller.CalculateWeatherSolar(ctx, now, flatEnergyHistory, weatherHistory, *settings.Location)
 
-			// Find matching forecast hours
-			var allForecastHours []types.HourlyWeather
-			for _, w := range weatherHistory {
-				allForecastHours = append(allForecastHours, w.ForecastHours...)
-			}
-			// Sort them chronologically
-			slices.SortFunc(allForecastHours, func(a, b types.HourlyWeather) int {
-				return a.TSHourStart.Compare(b.TSHourStart)
-			})
+		// Find matching forecast hours
+		var allForecastHours []types.HourlyWeather
+		for _, w := range weatherHistory {
+			allForecastHours = append(allForecastHours, w.ForecastHours...)
+		}
+		// Sort them chronologically
+		slices.SortFunc(allForecastHours, func(a, b types.HourlyWeather) int {
+			return a.TSHourStart.Compare(b.TSHourStart)
+		})
 
-			for _, hw := range allForecastHours {
-				if !hw.TSHourStart.Before(todayMidnight) && hw.TSHourStart.Before(tomorrowEnd) {
-					ts := hw.TSHourStart.Unix()
-					if ws, ok := solar1hMap[ts]; ok {
-						solar1hRes = append(solar1hRes, WeatherRes{
-							TSHourStart:             hw.TSHourStart,
-							ImprovedSolarGeneration: ws.SolarKWH,
-							SnowDepthCM:             ws.SnowDepth,
-							TempFactor:              ws.TempFactor,
-							SnowFactor:              ws.SnowFactor,
-							TemperatureC:            hw.TemperatureC,
-							Irradiance:              ws.Irradiance,
-							SnowfallCM:              hw.SnowfallCM,
-						})
-					}
+		for _, hw := range allForecastHours {
+			if !hw.TSHourStart.Before(todayMidnight) && hw.TSHourStart.Before(tomorrowEnd) {
+				ts := hw.TSHourStart.Unix()
+				if ws, ok := solar1hMap[ts]; ok {
+					solar1hRes = append(solar1hRes, WeatherRes{
+						TSHourStart:             hw.TSHourStart,
+						ImprovedSolarGeneration: ws.SolarKWH,
+						SnowDepthCM:             ws.SnowDepth,
+						TempFactor:              ws.TempFactor,
+						SnowFactor:              ws.SnowFactor,
+						TemperatureC:            hw.TemperatureC,
+						Irradiance:              ws.Irradiance,
+						SnowfallCM:              hw.SnowfallCM,
+					})
 				}
 			}
 		}

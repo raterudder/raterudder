@@ -29,6 +29,7 @@ func TestMockESS(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotEqual(t, 50.0, status.BatterySOC)
 		assert.Equal(t, 10.0, status.BatteryCapacityKWH)
+		assert.NotEmpty(t, status.TimeLocation, "TimeLocation should be populated")
 
 		// 2. Test subsequent run (with state)
 		lastTime := time.Now().Add(-1 * time.Hour)
@@ -201,7 +202,9 @@ func TestMockESS(t *testing.T) {
 
 		foundDetailed := false
 		for _, ds := range history {
+			assert.NotEmpty(t, ds.TimeLocation, "DailyEnergyStats TimeLocation should be populated")
 			for _, stat := range ds.Hourly {
+				assert.NotEmpty(t, stat.TimeLocation, "EnergyStats TimeLocation should be populated")
 				// check if we have any hour with both solar and battery activity
 				if stat.SolarKWH > 0 && (stat.SolarToBatteryKWH > 0 || stat.SolarToGridKWH > 0 || stat.SolarToHomeKWH > 0) {
 					foundDetailed = true

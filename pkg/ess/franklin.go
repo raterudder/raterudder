@@ -773,6 +773,7 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 
 	status := types.SystemStatus{
 		Timestamp:               time.Now().In(di.location),
+		TimeLocation:            di.location.String(),
 		BatterySOC:              rd.RuntimeData.SOC,
 		BatteryKW:               rd.RuntimeData.PowerBattery,
 		SolarKW:                 rd.RuntimeData.PowerSolar,
@@ -1292,8 +1293,9 @@ func (f *Franklin) GetEnergyHistory(ctx context.Context, start, end time.Time) (
 		}
 
 		result = append(result, types.DailyEnergyStats{
-			TSDayStart: dayStart,
-			Hourly:     dailyMap[key],
+			TSDayStart:   dayStart,
+			TimeLocation: di.location.String(),
+			Hourly:       dailyMap[key],
 		})
 	}
 
@@ -1449,6 +1451,7 @@ func (f *Franklin) aggregatePointsIntoHours(points []franklinEnergyPoint, loc *t
 		if _, exists := hourlyStats[hourKey]; !exists {
 			hourlyStats[hourKey] = &types.EnergyStats{
 				TSHourStart:   time.Date(bucketT.Year(), bucketT.Month(), bucketT.Day(), bucketT.Hour(), 0, 0, 0, loc),
+				TimeLocation:  loc.String(),
 				MinBatterySOC: p.BatterySOC,
 				MaxBatterySOC: p.BatterySOC,
 			}

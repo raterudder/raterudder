@@ -737,6 +737,7 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 
 	status := types.SystemStatus{
 		Timestamp:             time.Now().In(loc),
+		TimeLocation:          loc.String(),
 		BatterySOC:            liveStatus.PercentageCharged,
 		BatteryKW:             liveStatus.BatteryPowerW / 1000.0,
 		BatteryCapacityKWH:    capacityKWH,
@@ -1050,7 +1051,8 @@ func (b *Tesla) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]t
 			hourKey := bucketT.Truncate(time.Hour).Format(time.RFC3339)
 			if _, exists := hourlyStats[hourKey]; !exists {
 				hourlyStats[hourKey] = &types.EnergyStats{
-					TSHourStart: bucketT.Truncate(time.Hour),
+					TSHourStart:  bucketT.Truncate(time.Hour),
+					TimeLocation: loc.String(),
 				}
 			}
 			s := hourlyStats[hourKey]
@@ -1093,6 +1095,7 @@ func (b *Tesla) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]t
 						// SOE entry for hour without energy data; create a bucket
 						s = &types.EnergyStats{
 							TSHourStart:   tInLoc.Truncate(time.Hour),
+							TimeLocation:  loc.String(),
 							MinBatterySOC: soeEntry.SOE,
 							MaxBatterySOC: soeEntry.SOE,
 						}
@@ -1154,8 +1157,9 @@ func (b *Tesla) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]t
 		}
 
 		result = append(result, types.DailyEnergyStats{
-			TSDayStart: dayStart,
-			Hourly:     dailyMap[key],
+			TSDayStart:   dayStart,
+			TimeLocation: loc.String(),
+			Hourly:       dailyMap[key],
 		})
 	}
 

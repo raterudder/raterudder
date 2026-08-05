@@ -1092,7 +1092,7 @@ func TestEnphase(t *testing.T) {
 			if r.URL.Path == "/pv/systems/123/today" {
 				calls++
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte(fmt.Sprintf(`{
+				fmt.Fprintf(w, `{
 					"start_date": "2026-07-01",
 					"stats": [{
 						"production": [1000, 2000, 3000],
@@ -1108,7 +1108,7 @@ func TestEnphase(t *testing.T) {
 						"start_time": %d,
 						"interval_length": 900
 					}]
-				}`, now.Unix()-1000)))
+				}`, now.Unix()-1000)
 				return
 			}
 			w.WriteHeader(http.StatusNotFound)

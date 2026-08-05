@@ -257,6 +257,7 @@ func (m *MockESS) advanceState(state *types.ESSMockState, now time.Time) (batter
 		stats := state.DailyHistory[hourKey]
 		if stats.TSHourStart.IsZero() {
 			stats.TSHourStart = tsHourStart
+			stats.TimeLocation = m.location.String()
 			stats.MinBatterySOC = 100.0
 		}
 
@@ -329,6 +330,7 @@ func (m *MockESS) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 
 	return types.SystemStatus{
 		Timestamp:             now,
+		TimeLocation:          m.location.String(),
 		BatterySOC:            state.BatterySOC,
 		BatteryKW:             batteryKW,
 		SolarKW:               solarKW,
@@ -457,8 +459,9 @@ func (m *MockESS) GetEnergyHistory(ctx context.Context, start, end time.Time) ([
 		}
 
 		history = append(history, types.DailyEnergyStats{
-			TSDayStart: dayStart,
-			Hourly:     dailyMap[key],
+			TSDayStart:   dayStart,
+			TimeLocation: m.location.String(),
+			Hourly:       dailyMap[key],
 		})
 	}
 

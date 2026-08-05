@@ -101,6 +101,7 @@ func TestFranklin(t *testing.T) {
 		assert.Equal(t, 15.0, status.MaxBatteryDischargeKW, "MaxBatteryDischargeKW should match 5kW + 10kW")
 		assert.True(t, status.ElevatedMinBatterySOC, "ElevatedMinBatterySOC should be true")
 		assert.True(t, status.BatteryAboveMinSOC, "BatteryAboveMinSOC should be true")
+		assert.NotEmpty(t, status.TimeLocation, "TimeLocation should be populated")
 	})
 
 	t.Run("GetStatus Invalid", func(t *testing.T) {
@@ -2238,6 +2239,10 @@ func TestFranklin(t *testing.T) {
 		// Collect flat list to verify
 		var flatStats []types.EnergyStats
 		for _, ds := range stats {
+			assert.NotEmpty(t, ds.TimeLocation, "DailyEnergyStats TimeLocation should be populated")
+			for _, h := range ds.Hourly {
+				assert.NotEmpty(t, h.TimeLocation, "EnergyStats TimeLocation should be populated")
+			}
 			flatStats = append(flatStats, ds.Hourly...)
 		}
 
