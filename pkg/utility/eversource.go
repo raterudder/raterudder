@@ -238,6 +238,46 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 			}
 			periods = append(periods, buildPeriods(etLocation, simplified)...)
 
+		case "eversource_ct_vpp":
+			// CT Residential Variable Peak Pricing (Rate 7 VPP)
+			// Delivery fee + FMCC-Generation Charge:
+			// Before July 1, 2026: Delivery $0.12228 - FMCC $0.00150 = $0.12078/kWh
+			// Starting July 1, 2026: Delivery $0.11111 - FMCC $0.00210 = $0.10901/kWh
+			// Renewable Energy Solutions Rider applies a -$0.0402/kWh adjustment fee
+			var simplified []touSimplifiedPeriod
+			if year == 2026 {
+				simplified = []touSimplifiedPeriod{
+					{
+						Year:                                   year,
+						MonthStart:                             time.January,
+						MonthEnd:                               time.June,
+						OtherDollarsPerKWH:                     0.12078,
+						OtherDescription:                       "Eversource CT Rate 7 Delivery & FMCC Adjustment",
+						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+					},
+					{
+						Year:                                   year,
+						MonthStart:                             time.July,
+						MonthEnd:                               time.December,
+						OtherDollarsPerKWH:                     0.10901,
+						OtherDescription:                       "Eversource CT Rate 7 Delivery & FMCC Adjustment",
+						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+					},
+				}
+			} else {
+				simplified = []touSimplifiedPeriod{
+					{
+						Year:                                   year,
+						MonthStart:                             time.January,
+						MonthEnd:                               time.December,
+						OtherDollarsPerKWH:                     0.10901,
+						OtherDescription:                       "Eversource CT Rate 7 Delivery & FMCC Adjustment",
+						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+					},
+				}
+			}
+			periods = append(periods, buildPeriods(etLocation, simplified)...)
+
 		// ==========================================
 		// NEW HAMPSHIRE (NH) PLANS
 		// ==========================================
@@ -653,6 +693,17 @@ func eversourceUtilityInfo() types.UtilityProviderInfo {
 				Options: eversourceCTOptions,
 				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 					return eversourcePeriods("eversource_ct_rate_7", opts, []int{2026, 2027}), nil
+				},
+				GetVPP: func(opts types.UtilityRateOptions) (types.UtilityVPPInfo, error) {
+					return eversourceVPPPeriods(opts, []int{2026, 2027})
+				},
+			},
+			{
+				ID:      "eversource_ct_vpp",
+				Name:    "CT Residential Variable Peak Pricing (Rate 7 VPP)",
+				Options: eversourceCTOptions,
+				GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+					return eversourcePeriods("eversource_ct_vpp", opts, []int{2026, 2027}), nil
 				},
 				GetVPP: func(opts types.UtilityRateOptions) (types.UtilityVPPInfo, error) {
 					return eversourceVPPPeriods(opts, []int{2026, 2027})

@@ -49,16 +49,18 @@ func Configured(db storage.Database) *Map {
 	// Initialize supported providers
 	m.baseComEdHourly = configuredComEdHourly(db)
 	m.baseAmerenSmart = configuredAmerenSmart(db)
+	m.baseEversourceVPP = configuredEversourceVPP(db)
 	return m
 }
 
 // Map manages utility providers.
 type Map struct {
-	mu              sync.Mutex
-	db              storage.Database
-	baseComEdHourly *baseComEdHourly
-	baseAmerenSmart *baseAmerenSmart
-	utilities       map[string]Utility
+	mu                sync.Mutex
+	db                storage.Database
+	baseComEdHourly   *baseComEdHourly
+	baseAmerenSmart   *baseAmerenSmart
+	baseEversourceVPP *baseEversourceVPP
+	utilities         map[string]Utility
 }
 
 // NewMap creates a new Utility Map.
@@ -120,6 +122,26 @@ func (m *Map) Site(ctx context.Context, siteID string, settings types.Settings) 
 			}
 			u = &SiteFees{
 				base:   m.baseAmerenSmart,
+				siteID: siteID,
+			}
+			if err := u.ApplySettings(ctx, settings); err != nil {
+				return nil, err
+			}
+		}
+	case "eversource":
+		if settings.UtilityRate == "eversource_ct_vpp" {
+			if m.baseEversourceVPP == nil {
+				return nil, fmt.Errorf("eversource vpp provider not configured")
+			}
+			u = &SiteFees{
+				base:   m.baseEversourceVPP,
+				siteID: siteID,
+			}
+			if err := u.ApplySettings(ctx, settings); err != nil {
+				return nil, err
+			}
+		} else {
+			u = &genericTOU{
 				siteID: siteID,
 			}
 			if err := u.ApplySettings(ctx, settings); err != nil {
