@@ -806,8 +806,9 @@ func TestEnphase(t *testing.T) {
 			GridExportBatteries: false,
 		}
 
-		err := e.SetModes(context.Background(), types.BatteryModeStandby, types.SolarModeAny, types.ModesOptions{})
+		changed, err := e.SetModes(context.Background(), types.BatteryModeStandby, types.SolarModeAny, types.ModesOptions{})
 		require.NoError(t, err)
+		assert.True(t, changed)
 		if assert.True(t, postCalled) {
 			assert.Equal(t, 80, lastPayload.BatteryBackupPercentage)
 			assert.Equal(t, "self-consumption", lastPayload.Usage)
@@ -821,8 +822,9 @@ func TestEnphase(t *testing.T) {
 		putCalled = false
 		lastSettingsPut = nil
 
-		err = e.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeNoChange, types.ModesOptions{})
+		changed, err = e.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err)
+		assert.True(t, changed)
 		if assert.True(t, postCalled) {
 			assert.Equal(t, 100, lastPayload.BatteryBackupPercentage)
 		}
@@ -836,8 +838,9 @@ func TestEnphase(t *testing.T) {
 		settingsScheduleEnabled = true
 		e.settings.GridChargeBatteries = false
 
-		err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
+		changed, err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err)
+		assert.True(t, changed)
 		if assert.True(t, postCalled) {
 			assert.Equal(t, 20, lastPayload.BatteryBackupPercentage)
 		}
@@ -856,8 +859,9 @@ func TestEnphase(t *testing.T) {
 		useRequestedConfig = true
 		e.settings.GridChargeBatteries = true
 
-		err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
+		changed, err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err)
+		assert.False(t, changed)
 		assert.False(t, postCalled)
 		assert.False(t, putCalled)
 
@@ -872,8 +876,9 @@ func TestEnphase(t *testing.T) {
 		settingsProfile = "backup_only"
 		e.settings.GridChargeBatteries = true
 
-		err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
+		changed, err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err)
+		assert.True(t, changed)
 		assert.False(t, postCalled)
 		if assert.True(t, putCalled) {
 			assert.True(t, lastSettingsPut.ChargeFromGrid)
@@ -891,8 +896,9 @@ func TestEnphase(t *testing.T) {
 		useRequestedConfig = true
 		e.settings.GridChargeBatteries = false
 
-		err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
+		changed, err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err)
+		assert.True(t, changed)
 		assert.False(t, postCalled)
 		if assert.True(t, putCalled) {
 			assert.False(t, lastSettingsPut.ChargeFromGrid)
@@ -969,8 +975,9 @@ func TestEnphase(t *testing.T) {
 			GridChargeBatteries: true,
 		}
 
-		err := e.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{})
+		changed, err := e.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{})
 		require.NoError(t, err)
+		assert.True(t, changed)
 		if assert.True(t, putCalled) {
 			assert.True(t, lastPayload.ChargeFromGrid)
 		}
@@ -1075,8 +1082,9 @@ func TestEnphase(t *testing.T) {
 			GridChargeBatteries: true,
 		}
 
-		err := e.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{ChargeToSOC: 85})
+		changed, err := e.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{ChargeToSOC: 85})
 		require.NoError(t, err)
+		assert.True(t, changed)
 		if assert.True(t, postCalled) {
 			assert.Equal(t, 85, lastPayload.BatteryBackupPercentage)
 			assert.Equal(t, "self-consumption", lastPayload.Usage)

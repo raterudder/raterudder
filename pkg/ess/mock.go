@@ -345,14 +345,16 @@ func (m *MockESS) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 }
 
 // SetModes updates the stored battery and solar target modes the mock should adhere to.
-func (m *MockESS) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode, opts types.ModesOptions) error {
+func (m *MockESS) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode, opts types.ModesOptions) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	state, err := mockDB.GetESSMockState(ctx, m.siteID)
 	if err != nil {
-		return err
+		return false, err
 	}
+
+	changed := state.BatteryMode != bat || state.SolarMode != sol || state.ChargeToSOC != opts.ChargeToSOC || (opts.MinimumSOC != 0 && state.MinimumSOC != opts.MinimumSOC)
 
 	// advance time to now with current modes before switching
 	m.advanceState(&state, time.Now())
@@ -365,7 +367,10 @@ func (m *MockESS) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 		state.MinimumSOC = opts.MinimumSOC
 	}
 
-	return mockDB.UpdateESSMockState(ctx, m.siteID, state)
+	if err := mockDB.UpdateESSMockState(ctx, m.siteID, state); err != nil {
+		return false, err
+	}
+	return changed, nil
 }
 
 // GetEnergyHistory returns historical daily energy data between a start and end time.

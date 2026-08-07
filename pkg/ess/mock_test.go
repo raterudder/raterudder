@@ -92,8 +92,9 @@ func TestMockESS(t *testing.T) {
 			return s.BatteryMode == types.BatteryModeStandby && s.SolarMode == types.SolarModeNoExport
 		})).Return(nil).Once()
 
-		err = ess.SetModes(ctx, types.BatteryModeStandby, types.SolarModeNoExport, types.ModesOptions{})
+		changed, err := ess.SetModes(ctx, types.BatteryModeStandby, types.SolarModeNoExport, types.ModesOptions{})
 		require.NoError(t, err)
+		assert.True(t, changed)
 
 		db.AssertExpectations(t)
 	})
@@ -117,8 +118,9 @@ func TestMockESS(t *testing.T) {
 			return s.BatteryMode == types.BatteryModeChargeAny && s.ChargeToSOC == 85
 		})).Return(nil).Once()
 
-		err = ess.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{ChargeToSOC: 85})
+		changed, err := ess.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{ChargeToSOC: 85})
 		require.NoError(t, err)
+		assert.True(t, changed)
 
 		db.AssertExpectations(t)
 	})

@@ -436,18 +436,18 @@ func (e *Enphase) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 	return status, nil
 }
 
-func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode, opts types.ModesOptions) error {
+func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode, opts types.ModesOptions) (bool, error) {
 	log.Ctx(ctx).DebugContext(ctx, "SetModes called", slog.Any("batteryMode", bat), slog.Any("solarMode", sol), slog.Any("opts", opts))
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	if bat == types.BatteryModeNoChange && sol == types.SolarModeNoChange {
-		return nil
+		return false, nil
 	}
 
 	data, err := e.getDataWithCache(ctx, false)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	tz := data.App.Timezone
@@ -461,11 +461,11 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 
 	todayStatsRaw, err := e.getToday(ctx, time.Now().In(loc), true)
 	if err != nil {
-		return fmt.Errorf("failed to get enphase today stats in SetModes: %w", err)
+		return false, fmt.Errorf("failed to get enphase today stats in SetModes: %w", err)
 	}
 
 	if todayStatsRaw.BatteryDetails == nil {
-		return errors.New("enphase today stats missing battery details in SetModes")
+		return false, errors.New("enphase today stats missing battery details in SetModes")
 	}
 
 	currentSOC := todayStatsRaw.BatteryDetails.AggregateSOC
@@ -473,7 +473,7 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 	// Fetch current battery settings (chargeFromGrid, schedule, etc.)
 	settingsData, err := e.getBatterySettings(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get battery settings: %w", err)
+		return false, fmt.Errorf("failed to get battery settings: %w", err)
 	}
 
 	currentChargeFromGrid := settingsData.ChargeFromGrid
@@ -495,14 +495,14 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 
 	if severeWeatherWatchActive || isBackup {
 		if bat == types.BatteryModeNoChange {
-			return nil
+			return false, nil
 		}
 		var targetChargeFromGrid bool
 		switch bat {
 		case types.BatteryModeChargeAny, types.BatteryModeLoad, types.BatteryModeStandby:
 			targetChargeFromGrid = e.settings.GridChargeBatteries
 		default:
-			return fmt.Errorf("unknown battery mode: %v", bat)
+			return false, fmt.Errorf("unknown battery mode: %v", bat)
 		}
 
 		updatedChargeFromGrid := targetChargeFromGrid != currentChargeFromGrid
@@ -528,15 +528,16 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 					ChargeFromGridScheduleEnabled: false,
 				}
 				if err := e.updateBatterySettings(ctx, payload); err != nil {
-					return err
+					return false, err
 				}
+				return true, nil
 			}
 		} else {
 			log.Ctx(ctx).DebugContext(ctx, "grid charge mode already set correctly in storm/backup mode",
 				slog.Bool("chargeFromGrid", targetChargeFromGrid),
 			)
 		}
-		return nil
+		return false, nil
 	}
 
 	newReserveSOC := currentReserveSOC
@@ -571,7 +572,7 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 	case types.BatteryModeNoChange:
 		// Keep existing values
 	default:
-		return fmt.Errorf("unknown battery mode: %v", bat)
+		return false, fmt.Errorf("unknown battery mode: %v", bat)
 	}
 
 	if bat != types.BatteryModeNoChange {
@@ -593,9 +594,10 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 
 	if !updatedSOC && !updatedChargeFromGrid && !disableSchedule {
 		log.Ctx(ctx).DebugContext(ctx, "no enphase reserve SOC, charge settings, or schedule updates required")
-		return nil
+		return false, nil
 	}
 
+	var changed bool
 	// Update batterySettings if chargeFromGrid or schedules need to change/disable
 	if updatedChargeFromGrid || disableSchedule {
 		if e.settings.DryRun {
@@ -614,6 +616,8 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 			}
 			if err := e.updateBatterySettings(ctx, payload); err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to set enphase battery settings", slog.Any("error", err))
+			} else {
+				changed = true
 			}
 		}
 	}
@@ -638,14 +642,15 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 			}
 			if err := e.updateBatteryProfile(ctx, payload); err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to update enphase battery profile", slog.Any("error", err))
-				return err
+				return false, err
 			}
+			changed = true
 		}
 	}
 
 	e.dataExpiry = time.Time{}
 	e.todayCacheExpiry = time.Time{}
-	return nil
+	return changed, nil
 }
 
 type enphaseRequestedConfig struct {

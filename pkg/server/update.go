@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/raterudder/raterudder/pkg/common"
 	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
@@ -29,7 +30,9 @@ type updateResult struct {
 }
 
 func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	var wg sync.WaitGroup
+	ctx := common.CtxWithWaitGroup(r.Context(), &wg)
+
 	siteID := s.getSiteID(r)
 
 	// 1. Get Settings and Credentials
@@ -51,6 +54,10 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "update failed", http.StatusInternalServerError)
 		return
 	}
+
+	// Wait for any background verification goroutines before writing the HTTP response
+	// so Cloud Run considers the HTTP request active and does not throttle CPU.
+	wg.Wait()
 
 	w.WriteHeader(http.StatusOK)
 	var result updateResult
@@ -75,7 +82,8 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	var wg sync.WaitGroup
+	ctx := common.CtxWithWaitGroup(r.Context(), &wg)
 
 	if s.updateSpecificEmail != "" {
 		if !s.getUpdateSpecificAuth(r) {
@@ -178,6 +186,10 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "failed to run site updates in parallel", http.StatusInternalServerError)
 		return
 	}
+
+	// Wait for any background verification goroutines before writing the HTTP response
+	// so Cloud Run considers the HTTP request active and does not throttle CPU.
+	wg.Wait()
 
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(results); err != nil {
@@ -383,7 +395,7 @@ func (s *Server) performSiteUpdate(
 		log.Ctx(ctx).InfoContext(ctx, "update: emergency mode, ensuring grid charge is enabled")
 
 		minSOC := int(math.Round(settings.Settings.GetMinBatterySOC(ctx, s.now(), currentPrice)))
-		if err := essSystem.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeNoChange, types.ModesOptions{MinimumSOC: minSOC}); err != nil {
+		if _, err := essSystem.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeNoChange, types.ModesOptions{MinimumSOC: minSOC}); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to set modes in emergency mode", slog.Any("error", err))
 		}
 
@@ -517,12 +529,15 @@ func (s *Server) performSiteUpdate(
 
 	// execute Action
 	minSOC := int(math.Round(settings.Settings.GetMinBatterySOC(ctx, s.now(), currentPrice)))
-	err = s.setESSModes(ctx, siteID, essSystem, action.BatteryMode, types.ModesOptions{ChargeToSOC: action.ChargeToSOC, MinimumSOC: minSOC}, settings)
+	modesChanged, err := s.setESSModes(ctx, siteID, essSystem, action.BatteryMode, types.ModesOptions{ChargeToSOC: action.ChargeToSOC, MinimumSOC: minSOC}, settings)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to set mode", slog.Any("error", err))
 		action.Description += fmt.Sprintf(" (FAILED: %v)", err)
 		action.Failed = true
 		action.Error = err.Error()
+	}
+	if modesChanged {
+		log.Ctx(ctx).InfoContext(ctx, "ess modes updated", slog.String("siteID", siteID))
 	}
 	if settings.DryRun {
 		action.DryRun = true
@@ -896,20 +911,21 @@ func (s *Server) setESSModes(
 	batteryMode types.BatteryMode,
 	opts types.ModesOptions,
 	settings settingsWithVersion,
-) error {
+) (bool, error) {
 	if err := s.canSetModes(settings); err != nil {
-		return err
+		return false, err
 	}
 
+	var changed bool
 	var err error
 	switch batteryMode {
 	case types.BatteryModeChargeAny:
-		err = essSystem.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeAny, opts) // Force charge
+		changed, err = essSystem.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeAny, opts) // Force charge
 	case types.BatteryModeLoad:
-		err = essSystem.SetModes(ctx, types.BatteryModeLoad, types.SolarModeAny, opts) // Use battery
+		changed, err = essSystem.SetModes(ctx, types.BatteryModeLoad, types.SolarModeAny, opts) // Use battery
 	case types.BatteryModeStandby:
 		// "self_consumption" is usually safe for idle too (just don't force charge)
-		err = essSystem.SetModes(ctx, types.BatteryModeStandby, types.SolarModeAny, opts)
+		changed, err = essSystem.SetModes(ctx, types.BatteryModeStandby, types.SolarModeAny, opts)
 	}
 
 	if err != nil {
@@ -920,7 +936,7 @@ func (s *Server) setESSModes(
 				log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status after set modes failure", slog.Any("error", dbErr))
 			}
 		}
-		return err
+		return false, err
 	}
 
 	if settings.ESSAuthStatus.ConsecutiveSetFailures > 0 {
@@ -930,7 +946,7 @@ func (s *Server) setESSModes(
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status after set modes success", slog.Any("error", dbErr))
 		}
 	}
-	return nil
+	return changed, nil
 }
 
 // getCombinedHistory retrieves weather and energy histories by querying the monthly summaries in Firestore,

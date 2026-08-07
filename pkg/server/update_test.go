@@ -6,18 +6,19 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/raterudder/raterudder/pkg/common"
 	"github.com/raterudder/raterudder/pkg/controller"
+	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/types"
+	"github.com/raterudder/raterudder/pkg/utility"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-
-	"github.com/raterudder/raterudder/pkg/ess"
-	"github.com/raterudder/raterudder/pkg/utility"
 )
 
 func TestHandleUpdate(t *testing.T) {
@@ -2022,7 +2023,7 @@ func TestSetESSModes(t *testing.T) {
 			version: 1,
 		}
 
-		err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeChargeAny, types.ModesOptions{}, settings)
+		_, err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeChargeAny, types.ModesOptions{}, settings)
 		assert.NoError(t, err)
 		mockS.AssertExpectations(t)
 		mockES.AssertExpectations(t)
@@ -2034,7 +2035,7 @@ func TestSetESSModes(t *testing.T) {
 		mockES := &mockESS{}
 
 		// Expect SetModes to return unauthorized
-		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(ess.ErrUnauthorized)
+		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, ess.ErrUnauthorized)
 
 		// Expect settings to be saved with ConsecutiveSetFailures incremented
 		mockS.On("SetSettings", mock.Anything, "test-site", mock.MatchedBy(func(s types.Settings) bool {
@@ -2055,7 +2056,7 @@ func TestSetESSModes(t *testing.T) {
 			version: 1,
 		}
 
-		err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeLoad, types.ModesOptions{}, settings)
+		_, err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeLoad, types.ModesOptions{}, settings)
 		assert.ErrorIs(t, err, ess.ErrUnauthorized)
 		mockS.AssertExpectations(t)
 		mockES.AssertExpectations(t)
@@ -2068,7 +2069,7 @@ func TestSetESSModes(t *testing.T) {
 
 		// Expect SetModes to return some other error
 		otherErr := fmt.Errorf("network timeout")
-		mockES.On("SetModes", mock.Anything, types.BatteryModeStandby, types.SolarModeAny, mock.Anything).Return(otherErr)
+		mockES.On("SetModes", mock.Anything, types.BatteryModeStandby, types.SolarModeAny, mock.Anything).Return(false, otherErr)
 
 		// SetSettings should NOT be called since it is not an unauthorized error
 		srv := &Server{
@@ -2085,10 +2086,32 @@ func TestSetESSModes(t *testing.T) {
 			version: 1,
 		}
 
-		err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeStandby, types.ModesOptions{}, settings)
+		_, err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeStandby, types.ModesOptions{}, settings)
 		assert.ErrorIs(t, err, otherErr)
 		mockS.AssertNotCalled(t, "SetSettings")
 		mockES.AssertExpectations(t)
+	})
+
+	t.Run("Context WaitGroup populated in handleUpdate", func(t *testing.T) {
+		var wgFound bool
+		mockES := &mockESS{}
+		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			ctx := args.Get(0).(context.Context)
+			if common.CtxWaitGroup(ctx) != nil {
+				wgFound = true
+			}
+		}).Return(true, nil)
+
+		settings := settingsWithVersion{
+			Settings: types.Settings{ESS: "tesla"},
+			version:  1,
+		}
+
+		srv := &Server{}
+		modesChanged, err := srv.setESSModes(common.CtxWithWaitGroup(context.Background(), &sync.WaitGroup{}), "test-site", mockES, types.BatteryModeLoad, types.ModesOptions{}, settings)
+		require.NoError(t, err)
+		assert.True(t, modesChanged)
+		assert.True(t, wgFound)
 	})
 }
 

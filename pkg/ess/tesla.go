@@ -411,18 +411,21 @@ func (b *baseTesla) getBaseURL(region string) (string, error) {
 
 // Tesla implements the System interface for Tesla Fleet API.
 type Tesla struct {
-	base           *baseTesla
-	settings       types.Settings
-	mu             sync.Mutex
-	token          string
-	baseURL        string
-	energySiteID   int64
-	siteInfoCache  teslaSiteInfoResponse
-	siteInfoExpiry time.Time
+	base             *baseTesla
+	settings         types.Settings
+	mu               sync.Mutex
+	token            string
+	baseURL          string
+	energySiteID     int64
+	siteInfoCache    teslaSiteInfoResponse
+	siteInfoExpiry   time.Time
+	liveStatusCache  teslaLiveStatusResponse
+	liveStatusExpiry time.Time
 
 	// retry delays for live_status 424 failures
 	retryDelay1 time.Duration
 	retryDelay2 time.Duration
+	verifyDelay time.Duration
 }
 
 func newTesla(b *baseTesla) *Tesla {
@@ -430,6 +433,7 @@ func newTesla(b *baseTesla) *Tesla {
 		base:        b,
 		retryDelay1: 3 * time.Second,
 		retryDelay2: 5 * time.Second,
+		verifyDelay: 2 * time.Minute,
 	}
 }
 
@@ -674,17 +678,7 @@ func (b *Tesla) getSiteInfoWithCache(ctx context.Context, refresh bool) (teslaSi
 	return si, nil
 }
 
-// GetStatus returns the current status of the system.
-func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
-	log.Ctx(ctx).DebugContext(ctx, "getting tesla system status")
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	siteInfo, err := b.getSiteInfoWithCache(ctx, false)
-	if err != nil {
-		return types.SystemStatus{}, err
-	}
-
+func (b *Tesla) getLiveStatus(ctx context.Context) (teslaLiveStatusResponse, error) {
 	liveStatusPath := fmt.Sprintf("api/1/energy_sites/%d/live_status", b.energySiteID)
 	var liveStatus teslaLiveStatusResponse
 	for attempt := 1; attempt <= 3; attempt++ {
@@ -704,11 +698,42 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 				select {
 				case <-time.After(delay):
 				case <-ctx.Done():
-					return types.SystemStatus{}, ctx.Err()
+					return teslaLiveStatusResponse{}, ctx.Err()
 				}
 				continue
 			}
 		}
+		return teslaLiveStatusResponse{}, err
+	}
+	return liveStatus, nil
+}
+
+func (b *Tesla) getLiveStatusWithCache(ctx context.Context, refresh bool) (teslaLiveStatusResponse, error) {
+	if !refresh && time.Now().Before(b.liveStatusExpiry) {
+		return b.liveStatusCache, nil
+	}
+	ls, err := b.getLiveStatus(ctx)
+	if err != nil {
+		return teslaLiveStatusResponse{}, err
+	}
+	b.liveStatusCache = ls
+	b.liveStatusExpiry = time.Now().Add(time.Minute)
+	return ls, nil
+}
+
+// GetStatus returns the current status of the system.
+func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
+	log.Ctx(ctx).DebugContext(ctx, "getting tesla system status")
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	siteInfo, err := b.getSiteInfoWithCache(ctx, false)
+	if err != nil {
+		return types.SystemStatus{}, err
+	}
+
+	liveStatus, err := b.getLiveStatusWithCache(ctx, false)
+	if err != nil {
 		return types.SystemStatus{}, err
 	}
 
@@ -783,36 +808,35 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 }
 
 // SetModes sets the operating modes of the system.
-func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode, opts types.ModesOptions) error {
+func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode, opts types.ModesOptions) (bool, error) {
 	log.Ctx(ctx).DebugContext(ctx, "SetModes called", slog.Any("batteryMode", bat), slog.Any("solarMode", sol), slog.Any("opts", opts))
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	if bat == types.BatteryModeNoChange && sol == types.SolarModeNoChange {
-		return nil
+		return false, nil
 	}
 
 	siteInfo, err := b.getSiteInfoWithCache(ctx, false)
 	if err != nil {
-		return err
+		return false, err
 	}
 
-	liveStatusPath := fmt.Sprintf("api/1/energy_sites/%d/live_status", b.energySiteID)
-	var liveStatus teslaLiveStatusResponse
-	if err := b.doGETRequest(ctx, liveStatusPath, nil, &liveStatus); err != nil {
-		return err
+	liveStatus, err := b.getLiveStatusWithCache(ctx, false)
+	if err != nil {
+		return false, err
 	}
 
 	if liveStatus.StormModeActive {
 		if bat == types.BatteryModeNoChange {
-			return nil
+			return false, nil
 		}
 		var targetAllowGridCharge bool
 		switch bat {
 		case types.BatteryModeChargeAny, types.BatteryModeLoad, types.BatteryModeStandby:
 			targetAllowGridCharge = b.settings.GridChargeBatteries
 		default:
-			return fmt.Errorf("unknown battery mode: %v", bat)
+			return false, fmt.Errorf("unknown battery mode: %v", bat)
 		}
 
 		allowGridCharge := !siteInfo.Components.DisallowChargeFromGridWithSolarInstalled
@@ -832,17 +856,18 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 				}
 				req, err := b.base.newPOSTRequest(ctx, "POST", path, b.token, b.baseURL, payload)
 				if err != nil {
-					return err
+					return false, err
 				}
 				if err := b.base.doRequest(req, nil); err != nil {
 					log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla grid import export in storm mode", slog.Any("error", err))
-					return err
+					return false, err
 				}
+				return true, nil
 			}
 		} else {
 			log.Ctx(ctx).DebugContext(ctx, "grid charge mode already set correctly in storm mode", slog.Bool("allowGridCharge", allowGridCharge))
 		}
-		return nil
+		return false, nil
 	}
 
 	reserveSOC := siteInfo.BackupReservePercent
@@ -911,7 +936,7 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 	case types.BatteryModeNoChange:
 		targetAllowGridCharge = allowGridCharge
 	default:
-		return fmt.Errorf("unknown battery mode: %v", bat)
+		return false, fmt.Errorf("unknown battery mode: %v", bat)
 	}
 
 	if bat != types.BatteryModeNoChange && allowGridCharge != targetAllowGridCharge {
@@ -1013,7 +1038,7 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 	case types.SolarModeNoChange:
 		// Do nothing
 	default:
-		return fmt.Errorf("unknown solar mode: %v", sol)
+		return false, fmt.Errorf("unknown solar mode: %v", sol)
 	}
 
 	if bat != types.BatteryModeNoChange && targetMode != "" && siteInfo.DefaultRealMode != targetMode {
@@ -1030,7 +1055,7 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 		if updatedGrid {
 			log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated grid import export", slog.Bool("allowGridCharge", allowGridCharge), slog.String("exportRule", exportRule))
 		}
-		return nil
+		return false, nil
 	}
 
 	if updatedMode {
@@ -1039,11 +1064,11 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 		payload := map[string]string{"default_real_mode": targetMode}
 		req, err := b.base.newPOSTRequest(ctx, "POST", path, b.token, b.baseURL, payload)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if err := b.base.doRequest(req, nil); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla operation mode", slog.Any("error", err))
-			return err
+			return false, err
 		}
 	}
 
@@ -1057,11 +1082,11 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 		payload := map[string]float64{"backup_reserve_percent": newReserveSOC}
 		req, err := b.base.newPOSTRequest(ctx, "POST", path, b.token, b.baseURL, payload)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if err := b.base.doRequest(req, nil); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla backup reserve", slog.Any("error", err))
-			return err
+			return false, err
 		}
 	}
 
@@ -1079,14 +1104,134 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 		}
 		req, err := b.base.newPOSTRequest(ctx, "POST", path, b.token, b.baseURL, payload)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if err := b.base.doRequest(req, nil); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla grid import export", slog.Any("error", err))
 		}
 	}
 
-	return nil
+	changed := updatedMode || updatedSOC || updatedGrid
+
+	if updatedSOC {
+		if wg := common.CtxWaitGroup(ctx); wg != nil {
+			wg.Add(1)
+			go func(asyncCtx context.Context) {
+				defer wg.Done()
+				b.verifyBackupReserve(asyncCtx, bat, newReserveSOC, liveStatus)
+			}(context.WithoutCancel(ctx))
+		}
+	}
+
+	return changed, nil
+}
+
+func (b *Tesla) verifyBackupReserve(
+	ctx context.Context,
+	targetBat types.BatteryMode,
+	expectedReserve float64,
+	prevLiveStatus teslaLiveStatusResponse,
+) {
+	delay := b.verifyDelay
+	if delay == 0 {
+		delay = 2 * time.Minute
+	}
+
+	select {
+	case <-time.After(delay):
+	case <-ctx.Done():
+		return
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	siteInfo, err := b.getSiteInfoWithCache(ctx, true)
+	if err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "tesla backup reserve verification: failed to fetch site_info", slog.Any("error", err))
+		return
+	}
+
+	liveStatus, err := b.getLiveStatusWithCache(ctx, true)
+	if err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "tesla backup reserve verification: failed to fetch live_status", slog.Any("error", err))
+		return
+	}
+
+	currentReserve := siteInfo.BackupReservePercent
+	reserveMatches := math.Abs(currentReserve-expectedReserve) <= 1.0
+
+	var behaviorOk bool
+	switch targetBat {
+	case types.BatteryModeLoad:
+		// In Load mode: if battery SOC is above expected reserve and home has net unserved load (>200W),
+		// but battery is unexpectedly not discharging (<=100W) and grid is importing (>200W),
+		// the battery is failing to power the load.
+		netUnservedLoadW := liveStatus.LoadPowerW - liveStatus.SolarPowerW
+		if liveStatus.PercentageCharged > expectedReserve+1.0 && netUnservedLoadW > 200 && liveStatus.BatteryPowerW <= 100 && liveStatus.GridPowerW > 200 {
+			behaviorOk = false
+		} else {
+			behaviorOk = true
+		}
+	case types.BatteryModeChargeAny:
+		// In ChargeAny mode: if the battery is fully charged (>=99%), no further charging power flow is expected.
+		// If battery is under 80%, it should be actively charging at more than 1 kW (BatteryPowerW < -1000).
+		// Otherwise (80% to 99%), behavior is valid if reserve matches expected or battery is actively charging (<-100W).
+		if liveStatus.PercentageCharged >= 99.0 {
+			behaviorOk = true
+		} else if liveStatus.PercentageCharged < 80.0 {
+			behaviorOk = liveStatus.BatteryPowerW < -1000
+		} else {
+			behaviorOk = liveStatus.BatteryPowerW < -100
+		}
+	case types.BatteryModeStandby:
+		// In Standby mode:
+		// 1. If SOC is above reserve, battery should not be unexpectedly charging from grid (<-100W).
+		// 2. If SOC is at or below expected reserve (-1%), battery should not still be discharging (>100W).
+		if liveStatus.PercentageCharged > expectedReserve+1.0 && liveStatus.BatteryPowerW < -100 && (-liveStatus.BatteryPowerW)-liveStatus.SolarPowerW > 100 {
+			behaviorOk = false
+		} else if liveStatus.PercentageCharged <= expectedReserve-1.0 && liveStatus.BatteryPowerW > 100 {
+			behaviorOk = false
+		} else {
+			behaviorOk = true
+		}
+	default:
+		behaviorOk = true
+	}
+
+	if reserveMatches && behaviorOk {
+		log.Ctx(ctx).InfoContext(
+			ctx,
+			"tesla backup reserve verification succeeded",
+			slog.Float64("expectedReserve", expectedReserve),
+			slog.Float64("actualReserve", currentReserve),
+			slog.Any("prevLiveStatus", prevLiveStatus),
+			slog.Any("liveStatus", liveStatus),
+		)
+		return
+	}
+
+	log.Ctx(ctx).WarnContext(
+		ctx,
+		"tesla backup reserve not applied, retrying backup reserve setting",
+		slog.Float64("expectedReserve", expectedReserve),
+		slog.Float64("actualReserve", currentReserve),
+		slog.Any("prevLiveStatus", prevLiveStatus),
+		slog.Any("liveStatus", liveStatus),
+	)
+
+	path := fmt.Sprintf("api/1/energy_sites/%d/backup", b.energySiteID)
+	payload := map[string]float64{"backup_reserve_percent": expectedReserve}
+	req, err := b.base.newPOSTRequest(ctx, "POST", path, b.token, b.baseURL, payload)
+	if err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "tesla backup reserve verification retry: failed to create request", slog.Any("error", err))
+		return
+	}
+	if err := b.base.doRequest(req, nil); err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "tesla backup reserve verification retry: failed to update tesla backup reserve", slog.Any("error", err))
+	} else {
+		log.Ctx(ctx).InfoContext(ctx, "tesla backup reserve verification retry succeeded in setting backup reserve", slog.Float64("soc", expectedReserve))
+	}
 }
 
 // GetEnergyHistory returns the energy history for the specified period.

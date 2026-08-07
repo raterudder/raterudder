@@ -766,8 +766,9 @@ func TestFranklin(t *testing.T) {
 		err := f.ApplySettings(context.Background(), types.Settings{MinBatterySOC: 20})
 		require.NoError(t, err, "ApplySettings should succeed")
 
-		err = f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{})
+		changed, err := f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{})
 		require.NoError(t, err, "SetModes should succeed")
+		assert.True(t, changed)
 
 		// Verify the expected call was made
 		require.Len(t, callOrder, 1, "updateTouModeV2 should be called")
@@ -843,8 +844,9 @@ func TestFranklin(t *testing.T) {
 
 		err := f.ApplySettings(context.Background(), types.Settings{GridChargeBatteries: true})
 		require.NoError(t, err, "ApplySettings should succeed")
-		err = f.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{})
+		changed, err := f.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{})
 		require.NoError(t, err, "SetModes should succeed")
+		assert.True(t, changed)
 
 		require.Len(t, callOrder, 1, "updateTouModeV2 should be called")
 		assert.Equal(t, "updateTouModeV2", callOrder[0])
@@ -929,8 +931,9 @@ func TestFranklin(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		err = f.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{})
+		changed, err := f.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{})
 		require.NoError(t, err, "SetModes should succeed")
+		assert.True(t, changed)
 
 		require.Len(t, callOrder, 1, "updateSocV2 should be called")
 		assert.Equal(t, "updateSocV2", callOrder[0])
@@ -951,8 +954,9 @@ func TestFranklin(t *testing.T) {
 			tokenStr:  "valid-token",
 			gatewayID: "anything",
 		}
-		err := f.SetModes(context.Background(), types.BatteryModeNoChange, types.SolarModeNoChange, types.ModesOptions{})
+		changed, err := f.SetModes(context.Background(), types.BatteryModeNoChange, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err, "SetModes should succeed (noop)")
+		assert.False(t, changed)
 	})
 
 	t.Run("SetModes Partial NoChange", func(t *testing.T) {
@@ -1021,8 +1025,9 @@ func TestFranklin(t *testing.T) {
 			gatewayID:   "g",
 		}
 
-		err := f.SetModes(context.Background(), types.BatteryModeNoChange, types.SolarModeAny, types.ModesOptions{})
+		changed, err := f.SetModes(context.Background(), types.BatteryModeNoChange, types.SolarModeAny, types.ModesOptions{})
 		require.NoError(t, err, "SetModes should succeed")
+		assert.False(t, changed)
 
 		// Verify no calls were made (BatteryModeNoChange and power control updates disabled)
 		require.Empty(t, callOrder, "no power control update calls should be made")
@@ -1102,8 +1107,9 @@ func TestFranklin(t *testing.T) {
 		err := f.ApplySettings(context.Background(), types.Settings{MinBatterySOC: 20})
 		require.NoError(t, err)
 
-		err = f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
+		changed, err := f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err, "SetModes should succeed")
+		assert.True(t, changed)
 
 		// Verify only updateSocV2 was called (not updateTouModeV2)
 		require.Len(t, callOrder, 1, "only updateSocV2 should be called")
@@ -1176,8 +1182,9 @@ func TestFranklin(t *testing.T) {
 		err := f.ApplySettings(context.Background(), types.Settings{MinBatterySOC: 20})
 		require.NoError(t, err)
 
-		err = f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
+		changed, err := f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err, "SetModes should succeed despite the warning response")
+		assert.True(t, changed)
 
 		require.Len(t, callOrder, 1, "updateSocV2 should be called")
 	})
@@ -1259,8 +1266,9 @@ func TestFranklin(t *testing.T) {
 		err := f.ApplySettings(context.Background(), types.Settings{MinBatterySOC: 20})
 		require.NoError(t, err)
 
-		err = f.SetModes(context.Background(), types.BatteryModeStandby, types.SolarModeNoChange, types.ModesOptions{})
+		changed, err := f.SetModes(context.Background(), types.BatteryModeStandby, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err, "SetModes should succeed")
+		assert.False(t, changed)
 
 		require.Empty(t, callOrder, "no updates should be called")
 	})
@@ -1311,8 +1319,9 @@ func TestFranklin(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		err = f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
+		changed, err := f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err)
+		assert.False(t, changed)
 	})
 
 	t.Run("SetModes Backup Transition To SelfConsumption", func(t *testing.T) {
@@ -1391,8 +1400,9 @@ func TestFranklin(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		err = f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
+		changed, err := f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err)
+		assert.True(t, changed)
 		require.Len(t, callOrder, 1)
 		assert.Equal(t, "updateTouModeV2", callOrder[0])
 	})
@@ -2046,8 +2056,9 @@ func TestFranklin(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		err = f.SetModes(context.Background(), types.BatteryModeNoChange, types.SolarModeAny, types.ModesOptions{})
+		changed, err := f.SetModes(context.Background(), types.BatteryModeNoChange, types.SolarModeAny, types.ModesOptions{})
 		require.NoError(t, err, "SetModes should succeed")
+		assert.False(t, changed)
 
 		// Verify no calls were made since power control updates are disabled
 		require.Empty(t, callOrder)
@@ -2124,8 +2135,9 @@ func TestFranklin(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		err = f.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{ChargeToSOC: 85})
+		changed, err := f.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{ChargeToSOC: 85})
 		require.NoError(t, err)
+		assert.True(t, changed)
 
 		require.Len(t, callOrder, 1)
 		assert.Equal(t, "updateTouModeV2", callOrder[0])

@@ -985,23 +985,23 @@ func (f *Franklin) getAvailableModes(ctx context.Context) (availableModes, error
 }
 
 // SetModes sets the battery and solar modes for the franklin system
-func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode, opts types.ModesOptions) error {
+func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode, opts types.ModesOptions) (bool, error) {
 	log.Ctx(ctx).DebugContext(ctx, "SetModes called", slog.Any("batteryMode", bat), slog.Any("solarMode", sol), slog.Any("opts", opts))
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	if bat == types.BatteryModeNoChange && sol == types.SolarModeNoChange {
-		return nil
+		return false, nil
 	}
 
 	rd, err := f.getRuntimeDataWithCache(ctx, false)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	modes, err := f.getAvailableModes(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	isStormHedge := rd.RuntimeData.TOUID == 6
@@ -1011,21 +1011,21 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 
 	if isStormHedge {
 		if bat == types.BatteryModeNoChange {
-			return nil
+			return false, nil
 		}
 		log.Ctx(ctx).DebugContext(ctx, "storm hedge active, skipping mode change", slog.Any("batteryMode", bat))
-		return nil
+		return false, nil
 	}
 
 	if modes.selfConsumption == (franklinMode{}) {
 		log.Ctx(ctx).ErrorContext(ctx, "self consumption mode not available", slog.Any("modes", modes))
-		return errors.New("self consumption mode not available")
+		return false, errors.New("self consumption mode not available")
 	}
 	sc := modes.selfConsumption
 
 	pc, err := f.getPowerControl(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	targetMode := sc
@@ -1042,7 +1042,7 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 			log.Ctx(ctx).WarnContext(ctx, "grid charging is disabled in power control, setting emergency backup mode to charge", slog.Any("opts", opts))
 			if modes.backup == (franklinMode{}) {
 				log.Ctx(ctx).ErrorContext(ctx, "backup mode not available", slog.Any("modes", modes))
-				return errors.New("backup mode not available")
+				return false, errors.New("backup mode not available")
 			}
 			targetMode = modes.backup
 		} else {
@@ -1050,7 +1050,7 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 			// used to power the home first then spill over into the battery
 			if !sc.CanEditReserveSOC {
 				log.Ctx(ctx).WarnContext(ctx, "cannot edit reserve SOC")
-				return errors.New("cannot edit reserve SOC")
+				return false, errors.New("cannot edit reserve SOC")
 			}
 			targetSOC := 100
 			if opts.ChargeToSOC != 0 {
@@ -1069,14 +1069,14 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		// battery to charge
 		if !sc.CanEditReserveSOC {
 			log.Ctx(ctx).WarnContext(ctx, "cannot edit reserve SOC")
-			return errors.New("cannot edit reserve SOC")
+			return false, errors.New("cannot edit reserve SOC")
 		}
 		// make sure we don't set it to less than the minimum battery SOC
 		newReserveSOC = max(math.Floor(rd.RuntimeData.SOC), minSOC)
 	case types.BatteryModeNoChange:
 		targetMode = modes.currentMode
 	default:
-		return fmt.Errorf("unknown battery mode: %v", bat)
+		return false, fmt.Errorf("unknown battery mode: %v", bat)
 	}
 
 	if targetMode.WorkMode == 2 {
@@ -1125,7 +1125,7 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 	case types.SolarModeAny, types.SolarModeNoExport, types.SolarModeNoChange:
 		// Power control updates are disabled by Franklin, so solar export settings cannot be updated via setPowerControl.
 	default:
-		return fmt.Errorf("unknown solar mode: %v", sol)
+		return false, fmt.Errorf("unknown solar mode: %v", sol)
 	}
 
 	modeChanged := modes.currentMode.WorkMode != targetMode.WorkMode
@@ -1164,11 +1164,11 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 
 				req, err := f.newPostQueryRequest(ctx, "hes-gateway/terminal/tou/updateSocV2", params)
 				if err != nil {
-					return err
+					return false, err
 				}
 				if err := f.doRequest(req, nil); err != nil {
 					log.Ctx(ctx).ErrorContext(ctx, "failed to update soc", slog.Any("error", err))
-					return err
+					return false, err
 				}
 			} else {
 				log.Ctx(ctx).InfoContext(
@@ -1191,17 +1191,18 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 
 				req, err := f.newPostQueryRequest(ctx, "hes-gateway/terminal/tou/updateTouModeV2", params)
 				if err != nil {
-					return err
+					return false, err
 				}
 				if err := f.doRequest(req, nil); err != nil {
 					log.Ctx(ctx).ErrorContext(ctx, "failed to update tou mode", slog.Any("error", err))
-					return err
+					return false, err
 				}
 			}
+			return true, nil
 		}
 	}
 
-	return nil
+	return false, nil
 }
 
 // GetEnergyHistory retrieves energy history for the specified period.

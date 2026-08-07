@@ -310,8 +310,8 @@ func (s *Server) Run(ctx context.Context) error {
 		Addr:              s.listenAddr,
 		Handler:           s.setupHandler(),
 		ReadTimeout:       15 * time.Second,
-		ReadHeaderTimeout: 5 * time.Second, // Prevent slowloris attacks
-		WriteTimeout:      90 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,   // Prevent slowloris attacks
+		WriteTimeout:      300 * time.Second, // Some requests like handleSitesUpdate take a while
 		IdleTimeout:       15 * time.Second,
 	}
 
