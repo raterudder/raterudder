@@ -154,8 +154,8 @@ func (m *MockDatabase) ListSites(ctx context.Context) ([]types.Site, error) {
 	return nil, nil
 }
 
-func (m *MockDatabase) ListSitesSettings(ctx context.Context, updateGroup []int) (map[string]types.Settings, map[string]int, error) {
-	args := m.Called(ctx, updateGroup)
+func (m *MockDatabase) ListSitesSettings(ctx context.Context, release string, updateGroup []int) (map[string]types.Settings, map[string]int, error) {
+	args := m.Called(ctx, release, updateGroup)
 	if len(args) > 0 {
 		return args.Get(0).(map[string]types.Settings), args.Get(1).(map[string]int), args.Error(2)
 	}

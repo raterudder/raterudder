@@ -58,3 +58,34 @@ resource "google_firestore_field" "update_group" {
     }
   }
 }
+
+resource "google_firestore_field" "release" {
+  project    = var.project_id
+  database   = google_firestore_database.default.name
+  collection = "config"
+  field      = "release"
+
+  index_config {
+    indexes {
+      order       = "ASCENDING"
+      query_scope = "COLLECTION_GROUP"
+    }
+  }
+}
+
+resource "google_firestore_index" "config_update_group_release" {
+  project     = var.project_id
+  database    = google_firestore_database.default.name
+  collection  = "config"
+  query_scope = "COLLECTION_GROUP"
+
+  fields {
+    field_path = "release"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "updateGroup"
+    order      = "ASCENDING"
+  }
+}

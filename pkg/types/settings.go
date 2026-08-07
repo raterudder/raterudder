@@ -12,7 +12,7 @@ import (
 
 // CurrentSettingsVersion is the current version of the settings struct.
 // Increment this value only if you need to set a default value other than the Go default for that value.
-const CurrentSettingsVersion = 13
+const CurrentSettingsVersion = 14
 
 // Settings represents the configuration stored in the database.
 // These are dynamic settings that can be changed without redeploying.
@@ -294,6 +294,9 @@ func MigrateSettings(s Settings, currentVersion int) (Settings, bool, error) {
 				s.SolarCapacityBufferMinutes = 0
 				s.VPPChargingBufferMinutes = 10
 			}
+			migrated = true
+		case 14:
+			// version 14: bump version to write top-level release field to firestore settings doc
 			migrated = true
 		default:
 			return s, false, fmt.Errorf("unknown settings version: %d", version)

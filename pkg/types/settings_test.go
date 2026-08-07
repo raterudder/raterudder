@@ -177,6 +177,16 @@ func TestMigrateSettings(t *testing.T) {
 		assert.Equal(t, 10, s3.VPPChargingBufferMinutes)
 	})
 
+	t.Run("v13 to v14: bump version for firestore release field", func(t *testing.T) {
+		old := Settings{
+			Release: "production",
+		}
+		s, changed, err := MigrateSettings(old, 13)
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.Equal(t, "production", s.Release)
+	})
+
 	t.Run("no change: current version", func(t *testing.T) {
 		current := Settings{
 			UtilityProvider:            "comed",

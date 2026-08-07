@@ -403,17 +403,17 @@ func TestFirestoreProvider(t *testing.T) {
 		})
 
 		t.Run("ListSitesSettings", func(t *testing.T) {
-			// Set settings with specific UpdateGroup values
-			set1 := types.Settings{UpdateGroup: 3}
-			set2 := types.Settings{UpdateGroup: 7}
-			set3 := types.Settings{UpdateGroup: 0}
+			// Set settings with specific UpdateGroup and Release values
+			set1 := types.Settings{UpdateGroup: 3, Release: "production"}
+			set2 := types.Settings{UpdateGroup: 7, Release: "staging"}
+			set3 := types.Settings{UpdateGroup: 0, Release: "production"}
 
 			require.NoError(t, f.SetSettings(ctx, "site-group-3", set1, 1))
 			require.NoError(t, f.SetSettings(ctx, "site-group-7", set2, 1))
 			require.NoError(t, f.SetSettings(ctx, "site-group-0", set3, 1))
 
-			// Query with nil updateGroup: should return all
-			allSettings, allVersions, err := f.ListSitesSettings(ctx, nil)
+			// Query with empty release and nil updateGroup: should return all
+			allSettings, allVersions, err := f.ListSitesSettings(ctx, "", nil)
 			require.NoError(t, err)
 			assert.Contains(t, allSettings, "site-group-3")
 			assert.Contains(t, allSettings, "site-group-7")
@@ -423,14 +423,28 @@ func TestFirestoreProvider(t *testing.T) {
 			assert.Equal(t, 0, allSettings["site-group-0"].UpdateGroup)
 			assert.Equal(t, 1, allVersions["site-group-3"])
 
-			// Query with [3, 4] updateGroup: should only return site-group-3
-			filteredSettings, filteredVersions, err := f.ListSitesSettings(ctx, []int{3, 4})
+			// Query with empty release and [3, 4] updateGroup: should only return site-group-3
+			filteredSettings, filteredVersions, err := f.ListSitesSettings(ctx, "", []int{3, 4})
 			require.NoError(t, err)
 			assert.Contains(t, filteredSettings, "site-group-3")
 			assert.NotContains(t, filteredSettings, "site-group-7")
 			assert.NotContains(t, filteredSettings, "site-group-0")
 			assert.Equal(t, 3, filteredSettings["site-group-3"].UpdateGroup)
 			assert.Equal(t, 1, filteredVersions["site-group-3"])
+
+			// Query with release "staging": should only return site-group-7
+			stagingSettings, _, err := f.ListSitesSettings(ctx, "staging", nil)
+			require.NoError(t, err)
+			assert.NotContains(t, stagingSettings, "site-group-3")
+			assert.Contains(t, stagingSettings, "site-group-7")
+			assert.NotContains(t, stagingSettings, "site-group-0")
+
+			// Query with release "production" and updateGroup [3, 4]: should only return site-group-3
+			prodGroupSettings, _, err := f.ListSitesSettings(ctx, "production", []int{3, 4})
+			require.NoError(t, err)
+			assert.Contains(t, prodGroupSettings, "site-group-3")
+			assert.NotContains(t, prodGroupSettings, "site-group-7")
+			assert.NotContains(t, prodGroupSettings, "site-group-0")
 		})
 
 		t.Run("DeleteSite", func(t *testing.T) {

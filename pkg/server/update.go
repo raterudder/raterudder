@@ -98,7 +98,8 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 		slog.String("cron", cronParam),
 		slog.Any("groups", groups),
 	)
-	settingsMap, versionsMap, err := s.storage.ListSitesSettings(ctx, groups)
+	// TODO: change this to s.release
+	settingsMap, versionsMap, err := s.storage.ListSitesSettings(ctx, "", groups)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to list sites settings", slog.Any("error", err))
 		writeJSONError(w, "failed to list sites settings", http.StatusInternalServerError)

@@ -906,7 +906,7 @@ func TestHandleUpdateSites(t *testing.T) {
 			},
 		},
 	}, nil)
-	mockS.On("ListSitesSettings", mock.Anything, mock.Anything).Return(map[string]types.Settings{
+	mockS.On("ListSitesSettings", mock.Anything, "", mock.Anything).Return(map[string]types.Settings{
 		"site1": {ESS: "mock", UtilityProvider: "test", Release: "production"},
 		"site2": {ESS: "mock", UtilityProvider: "test", Release: "staging"},
 		"site3": {ESS: "mock", UtilityProvider: "test", Release: "production"},
@@ -993,7 +993,7 @@ func TestHandleUpdateSites(t *testing.T) {
 				},
 			},
 		}, nil)
-		mockS.On("ListSitesSettings", mock.Anything, mock.Anything).Return(map[string]types.Settings{
+		mockS.On("ListSitesSettings", mock.Anything, "", mock.Anything).Return(map[string]types.Settings{
 			"site-no-ess": {
 				Release: "production",
 				ESS:     "", // Empty ESS
@@ -1036,7 +1036,7 @@ func TestHandleUpdateSites(t *testing.T) {
 				},
 			},
 		}, nil)
-		mockS.On("ListSitesSettings", mock.Anything, mock.Anything).Return(map[string]types.Settings{
+		mockS.On("ListSitesSettings", mock.Anything, "", mock.Anything).Return(map[string]types.Settings{
 			"site1": {
 				Release:         "production",
 				ESS:             "mock",
@@ -1130,7 +1130,7 @@ func TestHandleUpdateSites(t *testing.T) {
 				},
 			},
 		}, nil)
-		mockS.On("ListSitesSettings", mock.Anything, mock.Anything).Return(map[string]types.Settings{
+		mockS.On("ListSitesSettings", mock.Anything, "", mock.Anything).Return(map[string]types.Settings{
 			"site-rate-limited": {
 				Release: "production",
 				ESS:     "mock",
@@ -1169,7 +1169,7 @@ func TestHandleUpdateSites(t *testing.T) {
 				},
 			},
 		}, nil)
-		mockS.On("ListSitesSettings", mock.Anything, mock.Anything).Return(map[string]types.Settings{
+		mockS.On("ListSitesSettings", mock.Anything, "", mock.Anything).Return(map[string]types.Settings{
 			"site-write-rate-limited": {
 				Release: "production",
 				ESS:     "mock",
@@ -1228,8 +1228,8 @@ func TestHandleUpdateSites(t *testing.T) {
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil).Maybe()
 
 		var capturedGroups []int
-		mockS.On("ListSitesSettings", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
-			capturedGroups = args.Get(1).([]int)
+		mockS.On("ListSitesSettings", mock.Anything, "", mock.Anything).Run(func(args mock.Arguments) {
+			capturedGroups = args.Get(2).([]int)
 		}).Return(map[string]types.Settings{}, map[string]int{}, nil)
 
 		srv := &Server{

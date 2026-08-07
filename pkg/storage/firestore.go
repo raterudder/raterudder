@@ -167,6 +167,7 @@ func (f *FirestoreProvider) SetSettings(ctx context.Context, siteID string, sett
 		"json":        string(jsonBytes),
 		"version":     version,
 		"updateGroup": settings.UpdateGroup,
+		"release":     settings.Release,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to save settings: %w", err)
@@ -682,9 +683,14 @@ func (f *FirestoreProvider) ListSites(ctx context.Context) ([]types.Site, error)
 	return sites, nil
 }
 
-// ListSitesSettings retrieves settings for sites, optionally filtered by updateGroup.
-func (f *FirestoreProvider) ListSitesSettings(ctx context.Context, updateGroup []int) (map[string]types.Settings, map[string]int, error) {
+// ListSitesSettings retrieves settings for sites, optionally filtered by updateGroup
+// and release.
+// TODO: if updateGroup is specified, then release must be specified
+func (f *FirestoreProvider) ListSitesSettings(ctx context.Context, release string, updateGroup []int) (map[string]types.Settings, map[string]int, error) {
 	q := f.client.CollectionGroup("config").Query
+	if release != "" {
+		q = q.Where("release", "==", release)
+	}
 	if updateGroup != nil {
 		q = q.Where("updateGroup", "in", updateGroup)
 	}
