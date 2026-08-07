@@ -306,13 +306,19 @@ func MigrateSettings(s Settings, currentVersion int) (Settings, bool, error) {
 	return s, migrated, nil
 }
 
-// GetMinBatterySOC calculates the active minimum battery reserve SOC (%) for a given time and price.
+// GetMinBatterySOC calculates the active minimum battery reserve SOC (%) for a given time, location, and price.
 // It prioritizes period-name matching (if price has a PeriodName and a matching MinBatterySOCPeriod exists),
 // then custom time schedule matching, falling back to settings.MinBatterySOC.
 // If matching fails or mismatched periods are configured, an error is logged to ctx.
-func (s Settings) GetMinBatterySOC(ctx context.Context, t time.Time, price Price) float64 {
+func (s Settings) GetMinBatterySOC(ctx context.Context, t time.Time, loc *time.Location, price Price) float64 {
 	if len(s.MinBatterySOCPeriods) == 0 {
 		return s.MinBatterySOC
+	}
+
+	if loc != nil {
+		t = t.In(loc)
+	} else if !price.TSStart.IsZero() && price.TSStart.Location() != nil {
+		t = t.In(price.TSStart.Location())
 	}
 
 	hasNamedPeriods := false

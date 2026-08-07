@@ -399,7 +399,7 @@ func (c *Controller) SimulateState(
 			return a.Compare(b)
 		})
 
-		stepMinSOC := settings.GetMinBatterySOC(ctx, simTime, price)
+		stepMinSOC := settings.GetMinBatterySOC(ctx, simTime, simTime.Location(), price)
 
 		var hourlyClampedNetKWH float64
 		var hourlyBufferedShiftedClampedNetKWH float64

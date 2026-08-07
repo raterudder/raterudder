@@ -273,7 +273,7 @@ func TestGetMinBatterySOC(t *testing.T) {
 
 	t.Run("EmptyPeriods_ReturnsDefaultMinBatterySOC", func(t *testing.T) {
 		s := Settings{MinBatterySOC: 20.0}
-		soc := s.GetMinBatterySOC(ctx, now, Price{})
+		soc := s.GetMinBatterySOC(ctx, now, nil, Price{})
 		assert.Equal(t, 20.0, soc)
 	})
 
@@ -286,7 +286,7 @@ func TestGetMinBatterySOC(t *testing.T) {
 			},
 		}
 		p := Price{PeriodName: "Peak"}
-		soc := s.GetMinBatterySOC(ctx, now, p)
+		soc := s.GetMinBatterySOC(ctx, now, nil, p)
 		assert.Equal(t, 50.0, soc)
 	})
 
@@ -298,7 +298,7 @@ func TestGetMinBatterySOC(t *testing.T) {
 			},
 		}
 		p := Price{PeriodName: "Super Off-Peak"}
-		soc := s.GetMinBatterySOC(ctx, now, p)
+		soc := s.GetMinBatterySOC(ctx, now, nil, p)
 		assert.Equal(t, 20.0, soc)
 	})
 
@@ -309,7 +309,7 @@ func TestGetMinBatterySOC(t *testing.T) {
 				{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
 			},
 		}
-		soc := s.GetMinBatterySOC(ctx, now, Price{})
+		soc := s.GetMinBatterySOC(ctx, now, nil, Price{})
 		assert.Equal(t, 20.0, soc)
 	})
 
@@ -328,12 +328,38 @@ func TestGetMinBatterySOC(t *testing.T) {
 			},
 		}
 		tMorning := time.Date(2026, 5, 20, 9, 0, 0, 0, time.UTC)
-		socM := s.GetMinBatterySOC(ctx, tMorning, Price{})
+		socM := s.GetMinBatterySOC(ctx, tMorning, nil, Price{})
 		assert.Equal(t, 10.0, socM)
 
 		tAfternoon := time.Date(2026, 5, 20, 14, 0, 0, 0, time.UTC)
-		socA := s.GetMinBatterySOC(ctx, tAfternoon, Price{})
+		socA := s.GetMinBatterySOC(ctx, tAfternoon, nil, Price{})
 		assert.Equal(t, 40.0, socA)
+	})
+
+	t.Run("CustomScheduleMatch_ConvertsToLocation", func(t *testing.T) {
+		loc := time.FixedZone("EDT", -4*3600) // UTC-4
+		s := Settings{
+			MinBatterySOC: 30.0,
+			MinBatterySOCPeriods: []MinBatterySOCPeriod{
+				{
+					TimePeriod:    TimePeriod{Hours: []UtilityHourPeriod{{HourStart: 1, HourEnd: 6}}},
+					MinBatterySOC: 50.0,
+				},
+				{
+					TimePeriod:    TimePeriod{Hours: []UtilityHourPeriod{{HourStart: 6, HourEnd: 1}}},
+					MinBatterySOC: 30.0,
+				},
+			},
+		}
+		// UTC time 05:30 is 01:30 EDT (which is in 1:00-6:00 EDT) -> should evaluate to 50.0
+		tUTC := time.Date(2026, 8, 7, 5, 30, 0, 0, time.UTC)
+		soc1 := s.GetMinBatterySOC(ctx, tUTC, loc, Price{})
+		assert.Equal(t, 50.0, soc1)
+
+		// UTC time 04:30 is 00:30 EDT (which is in 6:00-1:00 EDT) -> should evaluate to 30.0
+		tUTC2 := time.Date(2026, 8, 7, 4, 30, 0, 0, time.UTC)
+		soc2 := s.GetMinBatterySOC(ctx, tUTC2, loc, Price{})
+		assert.Equal(t, 30.0, soc2)
 	})
 
 	t.Run("CustomScheduleMatch_OvernightHours", func(t *testing.T) {
@@ -347,11 +373,11 @@ func TestGetMinBatterySOC(t *testing.T) {
 			},
 		}
 		tNight := time.Date(2026, 5, 20, 23, 0, 0, 0, time.UTC)
-		socN := s.GetMinBatterySOC(ctx, tNight, Price{})
+		socN := s.GetMinBatterySOC(ctx, tNight, nil, Price{})
 		assert.Equal(t, 30.0, socN)
 
 		tEarly := time.Date(2026, 5, 20, 4, 0, 0, 0, time.UTC)
-		socE := s.GetMinBatterySOC(ctx, tEarly, Price{})
+		socE := s.GetMinBatterySOC(ctx, tEarly, nil, Price{})
 		assert.Equal(t, 30.0, socE)
 	})
 
@@ -366,7 +392,7 @@ func TestGetMinBatterySOC(t *testing.T) {
 			},
 		}
 		tNoon := time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC)
-		soc := s.GetMinBatterySOC(ctx, tNoon, Price{})
+		soc := s.GetMinBatterySOC(ctx, tNoon, nil, Price{})
 		assert.Equal(t, 20.0, soc)
 	})
 
@@ -385,7 +411,7 @@ func TestGetMinBatterySOC(t *testing.T) {
 			},
 		}
 		p := Price{PeriodName: "Peak"}
-		soc := s.GetMinBatterySOC(ctx, now, p)
+		soc := s.GetMinBatterySOC(ctx, now, nil, p)
 		assert.Equal(t, 60.0, soc)
 	})
 }

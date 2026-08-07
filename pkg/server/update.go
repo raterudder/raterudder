@@ -394,7 +394,7 @@ func (s *Server) performSiteUpdate(
 	if status.EmergencyMode && settings.ESS != "franklin" {
 		log.Ctx(ctx).InfoContext(ctx, "update: emergency mode, ensuring grid charge is enabled")
 
-		minSOC := int(math.Round(settings.Settings.GetMinBatterySOC(ctx, s.now(), currentPrice)))
+		minSOC := int(math.Round(settings.Settings.GetMinBatterySOC(ctx, s.now(), status.Timestamp.Location(), currentPrice)))
 		if _, err := essSystem.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeNoChange, types.ModesOptions{MinimumSOC: minSOC}); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to set modes in emergency mode", slog.Any("error", err))
 		}
@@ -528,7 +528,7 @@ func (s *Server) performSiteUpdate(
 	)
 
 	// execute Action
-	minSOC := int(math.Round(settings.Settings.GetMinBatterySOC(ctx, s.now(), currentPrice)))
+	minSOC := int(math.Round(settings.Settings.GetMinBatterySOC(ctx, s.now(), status.Timestamp.Location(), currentPrice)))
 	modesChanged, err := s.setESSModes(ctx, siteID, essSystem, action.BatteryMode, types.ModesOptions{ChargeToSOC: action.ChargeToSOC, MinimumSOC: minSOC}, settings)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to set mode", slog.Any("error", err))
