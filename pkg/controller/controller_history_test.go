@@ -18,17 +18,17 @@ import (
 var historyFS embed.FS
 
 var fileBaselines = map[string]float64{
-	"site1_march.json":    -4.950,
-	"site1_may.json":      -16.291,
-	"site2_april.json":    1.399,
-	"site2_march.json":    8.502,
+	"site1_march.json":    -4.953,
+	"site1_may.json":      -16.289,
+	"site2_april.json":    1.437,
+	"site2_march.json":    8.525,
 	"site2_may.json":      0.639,
-	"site3_march.json":    -2.122,
+	"site3_march.json":    -2.108,
 	"site3_may.json":      -6.417,
-	"site4_late-may.json": 0.295,
-	"site4_may.json":      2.605,
-	"site5_june.json":     23.026,
-	"site7_june.json":     23.528,
+	"site4_late-may.json": 0.294,
+	"site4_may.json":      2.614,
+	"site5_june.json":     23.029,
+	"site7_june.json":     23.529,
 	"site8_june.json":     -2.995,
 }
 

@@ -793,7 +793,7 @@ func (c *Controller) evaluateDeficit(
 			// We only evaluate lookahead planning if neededEnergy > 0. If the slot has no deficit/buffer
 			// needs (neededEnergy == 0), lookahead planning would find a dummy zero-duration charge,
 			// causing plannedChargeTime to falsely reset to the zero time (0001-01-01).
-			if neededEnergy > 0 && simInFuture && len(simPrevChargeCostsAll) > 0 {
+			if neededEnergy > 0 && len(simPrevChargeCostsAll) > 0 {
 				var cheapestPrice types.Price
 				var cheapestCost float64
 				var allocatedHours float64
@@ -806,20 +806,16 @@ func (c *Controller) evaluateDeficit(
 				cheapestFutureTime, cheapestFuturePrice, cheapestFutureCost, _, futureAllocatedHours = c.findCheapestPlan(simPrevChargeCostsFuture, chargeDurationHours, isAlreadyChargingGrid, slot.GridChargeDollarsPerKWH)
 				hasFutureSlot := !cheapestFutureTime.IsZero()
 
-				isSignificantlyCheaperNow := false
-				if simInFuture {
-					if hasFutureSlot {
-						isSignificantlyCheaperNow = cheapestFutureCost-gridChargeNowCost >= minDeficitDiff
-					} else {
-						isSignificantlyCheaperNow = slot.GridChargeDollarsPerKWH-gridChargeNowCost >= minDeficitDiff
-					}
+				var isSignificantlyCheaperNow bool
+				if hasFutureSlot {
+					isSignificantlyCheaperNow = cheapestFutureCost-gridChargeNowCost >= minDeficitDiff
+				} else {
+					isSignificantlyCheaperNow = slot.GridChargeDollarsPerKWH-gridChargeNowCost >= minDeficitDiff
 				}
 
 				// Price comparisons for charging decisions:
 				// - isSignificantlyCheaperFuture: True if waiting until a future hour to charge saves us at least minDeficitDiff.
 				// - isSignificantlyCheaperThanDeficit: True if the future cheapest slot is significantly cheaper than the deficit peak price itself.
-				// - isSignificantlyCheaperThanDeficitNow: True if right now is significantly cheaper than the deficit peak price itself. We use this
-				//   for hysteresis checking during active charge sessions so lookahead penalty doesn't prematurely kill them.
 				// - isCheapestWindowNow: True if right now is tied for the absolute cheapest window before the deficit.
 				isSignificantlyCheaperFuture := simInFuture && hasFutureSlot && cheapestCost-cheapestFutureCost >= minDeficitDiff
 				isSignificantlyCheaperThanDeficit := simInFuture && hasFutureSlot && slot.GridChargeDollarsPerKWH-cheapestFutureCost >= minDeficitDiff
@@ -828,7 +824,7 @@ func (c *Controller) evaluateDeficit(
 
 				// Hysteresis: If we are already charging from grid and right now is tied for the cheapest window,
 				// we keep charging. This prevents starting and stopping charging when multiple hours are equally cheap.
-				isAlreadyChargingSamePrice := canChargeNow && isAlreadyChargingGrid && isCheapestWindowNow && isSignificantlyCheaperThanDeficitNow
+				isAlreadyChargingSamePrice := canChargeNow && isAlreadyChargingGrid && isCheapestWindowNow
 				if isAlreadyChargingSamePrice && lastAction != nil && lastAction.CurrentPrice != nil {
 					lastCost := lastAction.CurrentPrice.DollarsPerKWH + lastAction.CurrentPrice.GridUseDollarsPerKWH
 					if gridChargeNowCost > lastCost+priceEpsilonForEquality {
@@ -841,10 +837,12 @@ func (c *Controller) evaluateDeficit(
 						isAlreadyChargingSamePrice = false
 					}
 				}
+				// If now is significantly cheaper than the future charging cost or if
+				// now is the cheapest window and it's significantly cheaper than the deficit
 				isCheapNow := isSignificantlyCheaperNow || (isCheapestWindowNow && isSignificantlyCheaperThanDeficitNow)
 				// If the current hour is cheap/valid compared to the future candidates, we evaluate
 				// whether we should start grid charging now or delay it.
-				if simInFuture && canChargeNowForSlot && (isCheapNow || isAlreadyChargingSamePrice) {
+				if canChargeNowForSlot && (isCheapNow || isAlreadyChargingSamePrice) {
 					// Count how many future cheap hours are available to decide if we can safely delay.
 					futureCheapHours := 0
 					for j := 1; j < len(simData); j++ {
@@ -950,7 +948,7 @@ func (c *Controller) evaluateDeficit(
 				// schedule/record a future planned charge for this deficit slot `i`.
 				// If a future slot is significantly cheaper than charging now (or cheaper than the peak deficit itself),
 				// we record it as the planned charge time so that the controller can standby now and wait for it.
-				if simInFuture {
+				if hasFutureSlot {
 					isSignificantlyCheaper := isSignificantlyCheaperFuture ||
 						(cheapestFutureCost <= cheapestCost && isSignificantlyCheaperThanDeficit)
 					// To cover deficits in chronological order and prevent earlier deficits from being skipped,
@@ -1032,12 +1030,13 @@ func (c *Controller) evaluateDeficit(
 			targetSOC = 100
 		}
 
-		// We use cheapestPlanCost (average cost of the plan) instead of averageDeficitRate as the cheap threshold.
-		// While any slot below averageDeficitRate is profitable, using cheapestPlanCost prevents us from
-		// pre-committing to charge at higher prices in the current cycle. If future slots are slightly more
-		// expensive but still profitable, subsequent controller cycles will dynamically raise the target SOC
-		// when those hours are actually reached. This protects against unexpected price hikes in future hours.
-		consecutiveCheapDuration := c.getConsecutiveCheapDuration(now, currentPrice, simData, cheapestPlanCost+priceEpsilonForEquality)
+		// We use (cheapestPlanCost + minDeficitDiff) as the cheap threshold to define the consecutive cheap charging window.
+		// Any future off-peak slot with a price within minDeficitDiff of the cheapest plan cost is included in the window.
+		// We purposefully do NOT restrict clamping strictly to tied prices or rely on subsequent controller runs to incrementally
+		// raise target SOC. Relying on future runs created flip-flops and premature charge session terminations when minor dynamic
+		// price variations occurred. Including all slots within minDeficitDiff ensures a stable, consistent target SOC across runs.
+		cheapThreshold := cheapestPlanCost + minDeficitDiff
+		consecutiveCheapDuration := c.getConsecutiveCheapDuration(now, currentPrice, simData, cheapThreshold)
 		maxEnergyInCheapWindow := consecutiveCheapDuration * chargeKW
 		maxCheapSOC := currentStatus.BatterySOC + (maxEnergyInCheapWindow/capacityKWH)*100.0
 		clampedSOC := int(math.Ceil(maxCheapSOC))
@@ -1686,12 +1685,13 @@ func (c *Controller) evaluateExportArbitrage(
 			targetSOC = 100
 		}
 
-		// We use cheapestCost (average cost of the plan) instead of effectiveExportValue as the cheap threshold.
-		// While any slot below effectiveExportValue is theoretically profitable, using cheapestCost prevents us
-		// from pre-committing to charge at higher prices in the current cycle. If future slots are slightly more
-		// expensive but still profitable, subsequent controller cycles will dynamically raise the target SOC
-		// when those hours are actually reached. This protects against unexpected price hikes in future hours.
-		consecutiveCheapDuration := c.getConsecutiveCheapDuration(now, currentPrice, simData, cheapestCost+priceEpsilonForEquality)
+		// We use (cheapestCost + minArbitrageDiff) as the cheap threshold to define the consecutive cheap charging window.
+		// Any future off-peak slot with a price within minArbitrageDiff of the cheapest plan cost is included in the window.
+		// We purposefully do NOT restrict clamping strictly to tied prices or rely on subsequent controller runs to incrementally
+		// raise target SOC. Relying on future runs created flip-flops and premature charge session terminations when minor dynamic
+		// price variations occurred. Including all slots within minArbitrageDiff ensures a stable, consistent target SOC across runs.
+		cheapThreshold := cheapestCost + minArbitrageDiff
+		consecutiveCheapDuration := c.getConsecutiveCheapDuration(now, currentPrice, simData, cheapThreshold)
 		maxEnergyInCheapWindow := consecutiveCheapDuration * chargeKW
 		maxCheapSOC := currentStatus.BatterySOC + (maxEnergyInCheapWindow/capacityKWH)*100.0
 		clampedSOC := int(math.Ceil(maxCheapSOC))
@@ -2990,12 +2990,13 @@ func (c *Controller) evaluateVPPEvent(
 			targetSOC = 100
 		}
 
-		// We use cheapestCost (average cost of the plan) instead of forcedChargePrice as the cheap threshold.
-		// While any slot below forcedChargePrice is profitable, using cheapestCost prevents us from
-		// pre-committing to charge at higher prices in the current cycle. If future slots are slightly more
-		// expensive but still profitable, subsequent controller cycles will dynamically raise the target SOC
-		// when those hours are actually reached. This protects against unexpected price hikes in future hours.
-		consecutiveCheapDuration := c.getConsecutiveCheapDuration(now, currentPrice, simData, cheapestCost+priceEpsilonForEquality)
+		// We use (cheapestCost + minArbitrageDiff) as the cheap threshold to define the consecutive cheap charging window.
+		// Any future off-peak slot with a price within minArbitrageDiff of the cheapest plan cost is included in the window.
+		// We purposefully do NOT restrict clamping strictly to tied prices or rely on subsequent controller runs to incrementally
+		// raise target SOC. Relying on future runs created flip-flops and premature charge session terminations when minor dynamic
+		// price variations occurred. Including all slots within minArbitrageDiff ensures a stable, consistent target SOC across runs.
+		cheapThreshold := cheapestCost + minArbitrageDiff
+		consecutiveCheapDuration := c.getConsecutiveCheapDuration(now, currentPrice, simData, cheapThreshold)
 		maxEnergyInCheapWindow := consecutiveCheapDuration * chargeKW
 		maxCheapSOC := currentStatus.BatterySOC + (maxEnergyInCheapWindow/capacityKWH)*100.0
 		clampedSOC := int(math.Ceil(maxCheapSOC))

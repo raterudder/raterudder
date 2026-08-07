@@ -2923,14 +2923,7 @@ func TestEvaluateDeficit(t *testing.T) {
 			{TS: now, GridChargeDollarsPerKWH: 0.10},
 		}
 		evalDef_0 := c.evaluateDeficit(ctx, now, status, currentPrice, baseSettings, simData, summary, nil)
-		var decision *DecisionResult
-		var plan *futurePlan
-		if evalDef_0 != nil {
-			decision = evalDef_0.Decision
-			plan = evalDef_0.Plan
-		}
-		assert.Nil(t, decision)
-		assert.Nil(t, plan)
+		assert.Nil(t, evalDef_0)
 	})
 
 	t.Run("Deficit detected -> Charge Now (Cheapest Option)", func(t *testing.T) {
@@ -2954,18 +2947,12 @@ func TestEvaluateDeficit(t *testing.T) {
 		}
 
 		evalDef_1 := c.evaluateDeficit(ctx, now, status, currentPrice, baseSettings, simData, summary, nil)
-		var decision *DecisionResult
-		var plan *futurePlan
-		if evalDef_1 != nil {
-			decision = evalDef_1.Decision
-			plan = evalDef_1.Plan
-		}
-		if assert.NotNil(t, decision) {
-			assert.Equal(t, types.BatteryModeChargeAny, decision.BatteryMode)
-			assert.Equal(t, types.ActionReasonDeficitChargeNow, decision.Reason)
-			assert.Equal(t, 70, decision.ChargeToSOC)
-		}
-		assert.Nil(t, plan)
+		require.NotNil(t, evalDef_1)
+		require.NotNil(t, evalDef_1.Decision)
+		assert.Equal(t, types.BatteryModeChargeAny, evalDef_1.Decision.BatteryMode)
+		assert.Equal(t, types.ActionReasonDeficitChargeNow, evalDef_1.Decision.Reason)
+		assert.Equal(t, 70, evalDef_1.Decision.ChargeToSOC)
+		assert.Nil(t, evalDef_1.Plan)
 	})
 
 	t.Run("Deficit detected -> Charge Now (Absolute Cheapest Is Now)", func(t *testing.T) {
@@ -2990,18 +2977,12 @@ func TestEvaluateDeficit(t *testing.T) {
 		}
 
 		evalDef_2 := c.evaluateDeficit(ctx, now, status, currentPrice, baseSettings, simData, summary, nil)
-		var decision *DecisionResult
-		var plan *futurePlan
-		if evalDef_2 != nil {
-			decision = evalDef_2.Decision
-			plan = evalDef_2.Plan
-		}
-		if assert.NotNil(t, decision) {
-			assert.Equal(t, types.BatteryModeChargeAny, decision.BatteryMode)
-			assert.Equal(t, types.ActionReasonDeficitChargeNow, decision.Reason)
-			assert.Equal(t, 70, decision.ChargeToSOC)
-		}
-		assert.Nil(t, plan)
+		require.NotNil(t, evalDef_2)
+		require.NotNil(t, evalDef_2.Decision)
+		assert.Equal(t, types.BatteryModeChargeAny, evalDef_2.Decision.BatteryMode)
+		assert.Equal(t, types.ActionReasonDeficitChargeNow, evalDef_2.Decision.Reason)
+		assert.Equal(t, 70, evalDef_2.Decision.ChargeToSOC)
+		assert.Nil(t, evalDef_2.Plan)
 	})
 
 	t.Run("Deficit detected -> Delay Charge (Future is equally cheap)", func(t *testing.T) {
@@ -3026,16 +3007,10 @@ func TestEvaluateDeficit(t *testing.T) {
 		}
 
 		evalDef_3 := c.evaluateDeficit(ctx, now, status, currentPrice, baseSettings, simData, summary, nil)
-		var decision *DecisionResult
-		var plan *futurePlan
-		if evalDef_3 != nil {
-			decision = evalDef_3.Decision
-			plan = evalDef_3.Plan
-		}
-		assert.Nil(t, decision)
-		if assert.NotNil(t, plan) {
-			assert.Equal(t, now.Add(time.Hour), plan.ChargeTime)
-		}
+		require.NotNil(t, evalDef_3)
+		assert.Nil(t, evalDef_3.Decision)
+		require.NotNil(t, evalDef_3.Plan)
+		assert.Equal(t, now.Add(time.Hour), evalDef_3.Plan.ChargeTime)
 	})
 
 	t.Run("Deficit Charge Delay (Delay to the LATEST possible slots in a flat cheap window)", func(t *testing.T) {
@@ -3082,16 +3057,10 @@ func TestEvaluateDeficit(t *testing.T) {
 		}
 
 		evalDef_4 := c.evaluateDeficit(ctx, now, status, currentPrice, baseSettings, simData, summary, nil)
-		var decision *DecisionResult
-		var plan *futurePlan
-		if evalDef_4 != nil {
-			decision = evalDef_4.Decision
-			plan = evalDef_4.Plan
-		}
-		assert.Nil(t, decision)
-		if assert.NotNil(t, plan) {
-			assert.Equal(t, now.Add(11*time.Hour), plan.ChargeTime)
-		}
+		require.NotNil(t, evalDef_4)
+		assert.Nil(t, evalDef_4.Decision)
+		require.NotNil(t, evalDef_4.Plan)
+		assert.Equal(t, now.Add(11*time.Hour), evalDef_4.Plan.ChargeTime)
 	})
 
 	t.Run("Battery Charging Disabled -> No Deficit Charge", func(t *testing.T) {
@@ -3115,17 +3084,11 @@ func TestEvaluateDeficit(t *testing.T) {
 		}
 
 		evalDef_6 := c.evaluateDeficit(ctx, now, status, currentPrice, baseSettings, simData, summary, nil)
-		var decision *DecisionResult
-		var plan *futurePlan
-		if evalDef_6 != nil {
-			decision = evalDef_6.Decision
-			plan = evalDef_6.Plan
-		}
-		if assert.NotNil(t, decision) {
-			assert.Equal(t, types.BatteryModeStandby, decision.BatteryMode)
-			assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Reason)
-		}
-		assert.Nil(t, plan)
+		require.NotNil(t, evalDef_6)
+		require.NotNil(t, evalDef_6.Decision)
+		assert.Equal(t, types.BatteryModeStandby, evalDef_6.Decision.BatteryMode)
+		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, evalDef_6.Decision.Reason)
+		assert.Nil(t, evalDef_6.Plan)
 	})
 
 	t.Run("Cheap Window Preceding Peak Deficit with Equal Planned Cost and Already Charging -> Continue Charging", func(t *testing.T) {
@@ -3157,18 +3120,12 @@ func TestEvaluateDeficit(t *testing.T) {
 		}
 
 		evalDef_7 := c.evaluateDeficit(ctx, now, status, currentPrice, baseSettings, simData, summary, lastAction)
-		var decision *DecisionResult
-		var plan *futurePlan
-		if evalDef_7 != nil {
-			decision = evalDef_7.Decision
-			plan = evalDef_7.Plan
-		}
-		if assert.NotNil(t, decision) {
-			assert.Equal(t, types.BatteryModeChargeAny, decision.BatteryMode)
-			assert.Equal(t, types.ActionReasonDeficitChargeNow, decision.Reason)
-			assert.Equal(t, 70, decision.ChargeToSOC)
-		}
-		assert.Nil(t, plan)
+		require.NotNil(t, evalDef_7)
+		require.NotNil(t, evalDef_7.Decision)
+		assert.Equal(t, types.BatteryModeChargeAny, evalDef_7.Decision.BatteryMode)
+		assert.Equal(t, types.ActionReasonDeficitChargeNow, evalDef_7.Decision.Reason)
+		assert.Equal(t, 70, evalDef_7.Decision.ChargeToSOC)
+		assert.Nil(t, evalDef_7.Plan)
 	})
 
 	t.Run("Cheap Window Preceding Peak Deficit with Equal Planned Cost and Charging from Solar -> Save for Peak", func(t *testing.T) {
@@ -3195,14 +3152,9 @@ func TestEvaluateDeficit(t *testing.T) {
 		}
 
 		evalDef_8 := c.evaluateDeficit(ctx, now, status, currentPrice, baseSettings, simData, summary, nil)
-		var decision *DecisionResult
-		var plan *futurePlan
-		if evalDef_8 != nil {
-			decision = evalDef_8.Decision
-			plan = evalDef_8.Plan
-		}
-		assert.Nil(t, decision)
-		assert.NotNil(t, plan)
+		require.NotNil(t, evalDef_8)
+		assert.Nil(t, evalDef_8.Decision)
+		require.NotNil(t, evalDef_8.Plan)
 	})
 
 	t.Run("BenefitDollars assertions and Capacity Hit breaking", func(t *testing.T) {
@@ -4433,6 +4385,107 @@ func TestEvaluateDeficit(t *testing.T) {
 		eval := c.evaluateDeficit(ctx, now, status, currentPrice, settings, simData, summary, nil)
 		assert.Nil(t, eval)
 	})
+
+	t.Run("FlatOffPeakPrices_NoPreCharge", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.109}
+		summary := simulationSummary{
+			HitThresholdDeficitAt: now.Add(8 * time.Minute), // Deficit at 3:55 AM
+			HitBufferedDeficitAt:  now.Add(8 * time.Minute),
+		}
+
+		// All prices flat at 0.109 through morning
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.109, Price: currentPrice, TotalBufferedDeficitKWH: 1.0, TotalThresholdDeficitKWH: 1.0},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.109, Price: currentPrice, TotalBufferedDeficitKWH: 2.0, TotalThresholdDeficitKWH: 2.0},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.109, Price: currentPrice, TotalBufferedDeficitKWH: 3.0, TotalThresholdDeficitKWH: 3.0},
+		}
+
+		eval := c.evaluateDeficit(ctx, now, baseStatus, currentPrice, baseSettings, simData, summary, nil)
+		assert.Nil(t, eval, "Flat off-peak prices with no peak deficit should return nil (no grid charge)")
+	})
+
+	t.Run("Slot0Deficit_DelaysWhenFutureOffPeakSlotsHaveEqualPriceAndCapacity", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.1085}
+		summary := simulationSummary{
+			HitThresholdDeficitAt: now.Add(8 * time.Minute), // Slot 0 deficit (3:55 AM)
+			HitBufferedDeficitAt:  now.Add(8 * time.Minute),
+		}
+
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.1085, Price: currentPrice, TotalBufferedDeficitKWH: 1.0, TotalThresholdDeficitKWH: 1.0},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.1085, Price: currentPrice, TotalBufferedDeficitKWH: 2.0, TotalThresholdDeficitKWH: 2.0},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.1085, Price: currentPrice, TotalBufferedDeficitKWH: 3.0, TotalThresholdDeficitKWH: 3.0},
+			{TS: now.Add(3 * time.Hour), GridChargeDollarsPerKWH: 0.1085, Price: currentPrice, TotalBufferedDeficitKWH: 4.0, TotalThresholdDeficitKWH: 4.0},
+			{TS: now.Add(4 * time.Hour), GridChargeDollarsPerKWH: 0.1085, Price: currentPrice, TotalBufferedDeficitKWH: 5.0, TotalThresholdDeficitKWH: 5.0},
+			{TS: now.Add(14 * time.Hour), GridChargeDollarsPerKWH: 0.235, Price: types.Price{TSStart: now.Add(14 * time.Hour), DollarsPerKWH: 0.235}, TotalBufferedDeficitKWH: 12.0, TotalThresholdDeficitKWH: 12.0},
+		}
+
+		localStatus := baseStatus
+		localStatus.BatterySOC = 10.8
+		localStatus.BatteryCapacityKWH = 13.5
+		localStatus.MaxBatteryChargeKW = 3.3
+
+		eval := c.evaluateDeficit(ctx, now, localStatus, currentPrice, baseSettings, simData, summary, nil)
+		require.NotNil(t, eval, "Deficit evaluation should yield an evaluation")
+		require.NotNil(t, eval.Plan, "Deficit evaluation should create a planned charge for future off-peak slot rather than forcing immediate ChargeAny")
+		assert.Equal(t, now.Add(time.Hour), eval.Plan.ChargeTime, "Planned charge should be scheduled for the next off-peak slot")
+	})
+
+	t.Run("PeakDeficit_TriggersPreCharge", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, DollarsPerKWH: 0.108}
+		summary := simulationSummary{
+			HitThresholdDeficitAt: now.Add(4 * time.Hour), // Deficit at Peak
+			HitBufferedDeficitAt:  now.Add(4 * time.Hour),
+		}
+
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.108, Price: currentPrice, TotalBufferedDeficitKWH: 0.0},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.108, Price: currentPrice, TotalBufferedDeficitKWH: 0.0},
+			{TS: now.Add(4 * time.Hour), GridChargeDollarsPerKWH: 0.235, Price: types.Price{TSStart: now.Add(4 * time.Hour), DollarsPerKWH: 0.235}, TotalBufferedDeficitKWH: 5.0, TotalThresholdDeficitKWH: 5.0},
+		}
+
+		localStatus := baseStatus
+		localStatus.BatterySOC = 10.8
+		localStatus.BatteryCapacityKWH = 13.5
+		localStatus.MaxBatteryChargeKW = 3.3
+
+		eval := c.evaluateDeficit(ctx, now, localStatus, currentPrice, baseSettings, simData, summary, nil)
+		require.NotNil(t, eval)
+		require.NotNil(t, eval.Decision)
+		assert.Equal(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode, "Pre-charging SHOULD trigger when deficit price is significantly higher")
+	})
+
+	t.Run("ActiveChargeHysteresis_MaintainsCharge", func(t *testing.T) {
+		now409 := now.Add(22 * time.Minute) // 4:09 AM
+		currentPrice := types.Price{TSStart: now409, DollarsPerKWH: 0.108}
+
+		activeStatus := baseStatus
+		activeStatus.Timestamp = now409
+		activeStatus.BatterySOC = 17.0
+		activeStatus.BatteryCapacityKWH = 13.5
+		activeStatus.MaxBatteryChargeKW = 3.3
+
+		lastAction := &types.Action{
+			BatteryMode:  types.BatteryModeChargeAny,
+			CurrentPrice: &types.Price{TSStart: now, DollarsPerKWH: 0.108},
+		}
+
+		summary := simulationSummary{
+			HitThresholdDeficitAt: now409.Add(52 * time.Minute), // Deficit at 5:01 AM
+			HitBufferedDeficitAt:  now409.Add(52 * time.Minute),
+		}
+
+		simData := []SimHour{
+			{TS: now409, GridChargeDollarsPerKWH: 0.108, Price: currentPrice, TotalBufferedDeficitKWH: 0.0},
+			{TS: now409.Add(time.Hour), GridChargeDollarsPerKWH: 0.108, Price: currentPrice, TotalBufferedDeficitKWH: 1.0, TotalThresholdDeficitKWH: 1.0},
+			{TS: now409.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.235, Price: types.Price{TSStart: now409.Add(2 * time.Hour), DollarsPerKWH: 0.235}, TotalBufferedDeficitKWH: 5.0, TotalThresholdDeficitKWH: 5.0},
+		}
+
+		eval := c.evaluateDeficit(ctx, now409, activeStatus, currentPrice, baseSettings, simData, summary, lastAction)
+		require.NotNil(t, eval)
+		require.NotNil(t, eval.Decision)
+		assert.Equal(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode, "Active charge session should remain active under hysteresis when current price is tied for cheapest window")
+	})
 }
 
 func TestEvaluateArbitrage(t *testing.T) {
@@ -4523,17 +4576,41 @@ func TestEvaluateArbitrage(t *testing.T) {
 		}
 
 		evalArb := c.evaluateExportArbitrage(ctx, now, status, currentPrice, baseSettings, simData, summary, nil)
-		var decision *DecisionResult
-		var plan *futurePlan
-		if evalArb != nil {
-			decision = evalArb.Decision
-			plan = evalArb.Plan
+		require.NotNil(t, evalArb)
+		require.NotNil(t, evalArb.Decision)
+		assert.Equal(t, types.BatteryModeChargeAny, evalArb.Decision.BatteryMode)
+		assert.Equal(t, types.ActionReasonArbitrageChargeExport, evalArb.Decision.Reason)
+		assert.Nil(t, evalArb.Plan)
+	})
+
+	t.Run("MinorPriceIncreaseWithinThreshold_IncludesInCheapWindow", func(t *testing.T) {
+		status := baseStatus
+		status.BatterySOC = 20.0 // 2.0 kWh
+		status.BatteryCapacityKWH = 10.0
+		status.MaxBatteryChargeKW = 3.3
+
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.100}
+		futurePrice1 := types.Price{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.105} // minor bump (+0.005 < 0.02)
+		targetPrice := types.Price{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(3 * time.Hour), DollarsPerKWH: 0.500}
+
+		summary := simulationSummary{
+			SoonestExportAt:    now.Add(2 * time.Hour),
+			SoonestExportValue: 0.50,
+			SoonestExportPrice: targetPrice,
 		}
-		if assert.NotNil(t, decision) {
-			assert.Equal(t, types.BatteryModeChargeAny, decision.BatteryMode)
-			assert.Equal(t, types.ActionReasonArbitrageChargeExport, decision.Reason)
+
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.100, Price: currentPrice, SolarOppDollarsPerKWH: 0.100, BatteryKWH: 2.0},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.105, Price: futurePrice1, SolarOppDollarsPerKWH: 0.105, BatteryKWH: 2.0},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.500, Price: targetPrice, SolarOppDollarsPerKWH: 0.500, NetLoadSolarKWH: -8.0, BatteryKWH: 2.0},
 		}
-		assert.Nil(t, plan)
+
+		evalArb := c.evaluateExportArbitrage(ctx, now, status, currentPrice, baseSettings, simData, summary, nil)
+		require.NotNil(t, evalArb)
+		require.NotNil(t, evalArb.Decision)
+		assert.Equal(t, types.BatteryModeChargeAny, evalArb.Decision.BatteryMode)
+		// Should include both hours (2.0 hrs * 3.3 kW = 6.6 kWh), setting target SOC up to 86% rather than clamping to 53%
+		assert.GreaterOrEqual(t, evalArb.Decision.ChargeToSOC, 80, "Target SOC should include minor price increase slot within minArbitrageDiff")
 	})
 
 	t.Run("Arbitrage Hold (Battery Full) -> Standby", func(t *testing.T) {
@@ -7661,6 +7738,39 @@ func TestEvaluateVPPEvent(t *testing.T) {
 			// Target SOC with clamp: ceil(20.0 + (10/60 * 5.0 / 10.0 * 100)) = ceil(20 + 8.33) = 29.
 			assert.Equal(t, 29, eval.Decision.ChargeToSOC)
 		}
+	})
+
+	t.Run("MinorPriceIncreaseWithinThreshold_IncludesInCheapWindow", func(t *testing.T) {
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.100}
+		futurePrice1 := types.Price{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.105} // minor bump (+0.005 < 0.02)
+		vppPrice := types.Price{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(3 * time.Hour), DollarsPerKWH: 0.500}
+
+		summary := simulationSummary{
+			SoonestVPPChargingAt: now.Add(2 * time.Hour),
+		}
+
+		settings := baseSettings
+		settings.MinDeficitPriceDifferenceDollarsPerKWH = 0.02
+		settings.MinArbitrageDifferenceDollarsPerKWH = 0.02
+		settings.VPPChargingBufferMinutes = 0
+
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.100, Price: currentPrice},
+			{TS: now.Add(time.Hour), GridChargeDollarsPerKWH: 0.105, Price: futurePrice1},
+			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.500, Price: vppPrice},
+		}
+
+		status := baseStatus
+		status.BatterySOC = 10.0
+		status.MaxBatteryChargeKW = 3.3
+		status.BatteryCapacityKWH = 10.0
+
+		eval := c.evaluateVPPEvent(ctx, now, status, currentPrice, settings, simData, summary, nil)
+		require.NotNil(t, eval)
+		require.NotNil(t, eval.Decision)
+		assert.Equal(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode)
+		// With 2 cheap hours included in consecutive window (2 * 3.3 kW = 6.6 kWh), target SOC is 76% (clamped from 98% uncapped target)
+		assert.Equal(t, 76, eval.Decision.ChargeToSOC, "VPP Prep Target SOC should include minor price increase slot within minArbitrageDiff")
 	})
 
 	t.Run("Hysteresis Bypass", func(t *testing.T) {
