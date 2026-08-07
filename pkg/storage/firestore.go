@@ -684,14 +684,16 @@ func (f *FirestoreProvider) ListSites(ctx context.Context) ([]types.Site, error)
 }
 
 // ListSitesSettings retrieves settings for sites, optionally filtered by updateGroup
-// and release.
-// TODO: if updateGroup is specified, then release must be specified
+// and release. Release is required if updateGroup is provided.
 func (f *FirestoreProvider) ListSitesSettings(ctx context.Context, release string, updateGroup []int) (map[string]types.Settings, map[string]int, error) {
 	q := f.client.CollectionGroup("config").Query
 	if release != "" {
 		q = q.Where("release", "==", release)
 	}
 	if updateGroup != nil {
+		if release == "" {
+			return nil, nil, errors.New("release cannot be empty when updateGroup is specified")
+		}
 		q = q.Where("updateGroup", "in", updateGroup)
 	}
 	iter := q.Documents(ctx)

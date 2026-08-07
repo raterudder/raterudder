@@ -423,15 +423,6 @@ func TestFirestoreProvider(t *testing.T) {
 			assert.Equal(t, 0, allSettings["site-group-0"].UpdateGroup)
 			assert.Equal(t, 1, allVersions["site-group-3"])
 
-			// Query with empty release and [3, 4] updateGroup: should only return site-group-3
-			filteredSettings, filteredVersions, err := f.ListSitesSettings(ctx, "", []int{3, 4})
-			require.NoError(t, err)
-			assert.Contains(t, filteredSettings, "site-group-3")
-			assert.NotContains(t, filteredSettings, "site-group-7")
-			assert.NotContains(t, filteredSettings, "site-group-0")
-			assert.Equal(t, 3, filteredSettings["site-group-3"].UpdateGroup)
-			assert.Equal(t, 1, filteredVersions["site-group-3"])
-
 			// Query with release "staging": should only return site-group-7
 			stagingSettings, _, err := f.ListSitesSettings(ctx, "staging", nil)
 			require.NoError(t, err)
@@ -445,6 +436,13 @@ func TestFirestoreProvider(t *testing.T) {
 			assert.Contains(t, prodGroupSettings, "site-group-3")
 			assert.NotContains(t, prodGroupSettings, "site-group-7")
 			assert.NotContains(t, prodGroupSettings, "site-group-0")
+
+			// Query with empty release and [3, 4] updateGroup: should error
+			filteredSettings, filteredVersions, err := f.ListSitesSettings(ctx, "", []int{3, 4})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "release cannot be empty")
+			assert.Nil(t, filteredSettings)
+			assert.Nil(t, filteredVersions)
 		})
 
 		t.Run("DeleteSite", func(t *testing.T) {

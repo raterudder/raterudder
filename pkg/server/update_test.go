@@ -907,14 +907,17 @@ func TestHandleUpdateSites(t *testing.T) {
 			},
 		},
 	}, nil)
-	mockS.On("ListSitesSettings", mock.Anything, "", mock.Anything).Return(map[string]types.Settings{
+	mockS.On("ListSitesSettings", mock.Anything, "production", mock.Anything).Return(map[string]types.Settings{
 		"site1": {ESS: "mock", UtilityProvider: "test", Release: "production"},
-		"site2": {ESS: "mock", UtilityProvider: "test", Release: "staging"},
 		"site3": {ESS: "mock", UtilityProvider: "test", Release: "production"},
 	}, map[string]int{
 		"site1": types.CurrentSettingsVersion,
-		"site2": types.CurrentSettingsVersion,
 		"site3": types.CurrentSettingsVersion,
+	}, nil)
+	mockS.On("ListSitesSettings", mock.Anything, "staging", mock.Anything).Return(map[string]types.Settings{
+		"site2": {ESS: "mock", UtilityProvider: "test", Release: "staging"},
+	}, map[string]int{
+		"site2": types.CurrentSettingsVersion,
 	}, nil)
 
 	mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
@@ -931,6 +934,7 @@ func TestHandleUpdateSites(t *testing.T) {
 
 	mockP := ess.NewMap()
 	mockP.SetSystem("site1", mockES)
+	mockP.SetSystem("site2", mockES)
 	mockP.SetSystem("site3", mockES)
 
 	mockUMap := utility.NewMap(mockS)
@@ -994,7 +998,7 @@ func TestHandleUpdateSites(t *testing.T) {
 				},
 			},
 		}, nil)
-		mockS.On("ListSitesSettings", mock.Anything, "", mock.Anything).Return(map[string]types.Settings{
+		mockS.On("ListSitesSettings", mock.Anything, "production", mock.Anything).Return(map[string]types.Settings{
 			"site-no-ess": {
 				Release: "production",
 				ESS:     "", // Empty ESS
@@ -1037,7 +1041,7 @@ func TestHandleUpdateSites(t *testing.T) {
 				},
 			},
 		}, nil)
-		mockS.On("ListSitesSettings", mock.Anything, "", mock.Anything).Return(map[string]types.Settings{
+		mockS.On("ListSitesSettings", mock.Anything, "production", mock.Anything).Return(map[string]types.Settings{
 			"site1": {
 				Release:         "production",
 				ESS:             "mock",
@@ -1131,7 +1135,7 @@ func TestHandleUpdateSites(t *testing.T) {
 				},
 			},
 		}, nil)
-		mockS.On("ListSitesSettings", mock.Anything, "", mock.Anything).Return(map[string]types.Settings{
+		mockS.On("ListSitesSettings", mock.Anything, "production", mock.Anything).Return(map[string]types.Settings{
 			"site-rate-limited": {
 				Release: "production",
 				ESS:     "mock",
@@ -1170,7 +1174,7 @@ func TestHandleUpdateSites(t *testing.T) {
 				},
 			},
 		}, nil)
-		mockS.On("ListSitesSettings", mock.Anything, "", mock.Anything).Return(map[string]types.Settings{
+		mockS.On("ListSitesSettings", mock.Anything, "production", mock.Anything).Return(map[string]types.Settings{
 			"site-write-rate-limited": {
 				Release: "production",
 				ESS:     "mock",
@@ -1229,7 +1233,7 @@ func TestHandleUpdateSites(t *testing.T) {
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil).Maybe()
 
 		var capturedGroups []int
-		mockS.On("ListSitesSettings", mock.Anything, "", mock.Anything).Run(func(args mock.Arguments) {
+		mockS.On("ListSitesSettings", mock.Anything, "production", mock.Anything).Run(func(args mock.Arguments) {
 			capturedGroups = args.Get(2).([]int)
 		}).Return(map[string]types.Settings{}, map[string]int{}, nil)
 
