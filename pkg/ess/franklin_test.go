@@ -64,9 +64,10 @@ func TestFranklin(t *testing.T) {
 			}
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
 				runtimeData := map[string]any{
-					"soc":   88.5,
-					"p_fhp": 1500.0,
-					"mode":  138224.0, // Self consumption ID
+					"soc":       88.5,
+					"p_fhp":     1500.0,
+					"mode":      138224.0, // Self consumption ID
+					"timestamp": time.Now().Unix(),
 				}
 				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
@@ -210,6 +211,70 @@ func TestFranklin(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 75.0, status.BatterySOC)
 		assert.Equal(t, 3, compositeAttempts)
+	})
+
+	t.Run("GetStatus Stale Runtime Data Retry", func(t *testing.T) {
+		var compositeAttempts int
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"totalCap": 30.0}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": []map[string]any{}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"list": []map[string]any{}}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+				compositeAttempts++
+				if compositeAttempts == 1 {
+					assert.Equal(t, "1", r.URL.Query().Get("refreshFlag"))
+					// Stale data timestamp (6 minutes old)
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result": map[string]any{
+							"valid": true,
+							"runtimeData": map[string]any{
+								"soc":       50.0,
+								"timestamp": time.Now().Add(-6 * time.Minute).Unix(),
+							},
+						},
+					})
+				} else {
+					assert.Equal(t, "0", r.URL.Query().Get("refreshFlag"))
+					// Fresh data timestamp
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result": map[string]any{
+							"valid": true,
+							"runtimeData": map[string]any{
+								"soc":       80.0,
+								"timestamp": time.Now().Unix(),
+							},
+						},
+					})
+				}
+				return
+			}
+			http.Error(w, "not found: "+r.URL.Path, 404)
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:    ts.Client(),
+			baseURL:   ts.URL,
+			gatewayID: "g",
+		}
+
+		status, err := f.GetStatus(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, 80.0, status.BatterySOC)
+		assert.Equal(t, 2, compositeAttempts)
 	})
 
 	t.Run("GetStatus Grid Status", func(t *testing.T) {

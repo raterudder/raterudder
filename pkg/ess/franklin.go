@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"sort"
@@ -64,8 +65,8 @@ func newFranklin() *Franklin {
 	return &Franklin{
 		client:      common.HTTPClient(time.Minute),
 		baseURL:     "https://energy.franklinwh.com",
-		retryDelay1: 3 * time.Second,
-		retryDelay2: 5 * time.Second,
+		retryDelay1: 5 * time.Second,
+		retryDelay2: 10 * time.Second,
 	}
 }
 
@@ -406,14 +407,17 @@ func (f *Franklin) doRequest(req *http.Request, dest any) error {
 }
 
 func (f *Franklin) getRuntimeData(ctx context.Context) (franklinDeviceCompositeInfoResult, error) {
-	params := url.Values{}
-	params.Set("gatewayId", f.gatewayID)
-	// 0 is set on the first call and subsequent calls should set to 1
-	// when it was set to 0 we got some weird data for some sites
-	params.Set("refreshFlag", "1")
-
 	var res franklinDeviceCompositeInfoResult
 	for attempt := 1; attempt <= 3; attempt++ {
+		refreshFlag := "1"
+		if attempt == 2 {
+			refreshFlag = "0"
+		}
+
+		params := url.Values{}
+		params.Set("gatewayId", f.gatewayID)
+		params.Set("refreshFlag", refreshFlag)
+
 		req, err := f.newGetRequest(ctx, "hes-gateway/terminal/getDeviceCompositeInfo", params)
 		if err != nil {
 			return franklinDeviceCompositeInfoResult{}, err
@@ -422,6 +426,20 @@ func (f *Franklin) getRuntimeData(ctx context.Context) (franklinDeviceCompositeI
 		res = franklinDeviceCompositeInfoResult{}
 		if err := f.doRequest(req, &res); err != nil {
 			return franklinDeviceCompositeInfoResult{}, fmt.Errorf("getDeviceCompositeInfo failed: %w", err)
+		}
+
+		var dataTime time.Time
+		var age time.Duration
+		isStale := false
+
+		// 0 seems to be returned if refreshFlag=0
+		if res.Valid && res.RuntimeData.Timestamp > 0 {
+			dataTime = time.Unix(res.RuntimeData.Timestamp, 0)
+			age = time.Since(dataTime)
+			if age > 5*time.Minute {
+				isStale = true
+				res.Valid = false
+			}
 		}
 
 		if res.Valid {
@@ -433,11 +451,25 @@ func (f *Franklin) getRuntimeData(ctx context.Context) (franklinDeviceCompositeI
 			if attempt == 2 {
 				delay = f.retryDelay2
 			}
+			if delay > 0 {
+				delay = delay + rand.N(delay)
+			}
+			attrs := []any{
+				slog.Int("attempt", attempt),
+				slog.String("refreshFlag", refreshFlag),
+				slog.Duration("delay", delay),
+			}
+			if isStale {
+				attrs = append(attrs,
+					slog.Bool("stale", true),
+					slog.Duration("age", age),
+					slog.Time("timestamp", dataTime),
+				)
+			}
 			log.Ctx(ctx).WarnContext(
 				ctx,
-				"getDeviceCompositeInfo returned invalid status, retrying",
-				slog.Int("attempt", attempt),
-				slog.Duration("delay", delay),
+				"getDeviceCompositeInfo returned invalid or stale status, retrying",
+				attrs...,
 			)
 			select {
 			case <-time.After(delay):
@@ -467,6 +499,7 @@ func (f *Franklin) getRuntimeData(ctx context.Context) (franklinDeviceCompositeI
 		slog.Float64("batteryKW", res.RuntimeData.PowerBattery),
 		slog.Int("alarms", len(res.CurrentAlarmList)),
 		slog.Int("mode", res.RuntimeData.TOUID),
+		slog.Int64("timestamp", res.RuntimeData.Timestamp),
 	)
 
 	return res, nil
@@ -1546,8 +1579,9 @@ type franklinRuntimeData struct {
 	// unclear what other values mean
 	OffGridFlag int `json:"offGirdFlag"` // misspelled in API
 
-	SOC     float64   `json:"soc"`
-	EachSOC []float64 `json:"fhpSoc"`
+	SOC       float64   `json:"soc"`
+	Timestamp int64     `json:"timestamp"`
+	EachSOC   []float64 `json:"fhpSoc"`
 
 	PowerBattery     float64   `json:"p_fhp"`
 	PowerSolar       float64   `json:"p_sun"`
