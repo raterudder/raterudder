@@ -2037,4 +2037,82 @@ func TestIdentifyHistoricalVacationDays(t *testing.T) {
 			assert.Greater(t, model[2].AvgHomeLoadKWH, 2.0)
 		}
 	})
+
+	t.Run("HistoricalVacationDetectionThresholds", func(t *testing.T) {
+		// Verify that moderately-low usage days with high volatility (spikes/HVAC/EV)
+		// are NOT incorrectly flagged as historical vacation days, while flat low-draw days ARE.
+		now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+
+		// Baseline normal days (Q3 active ~ 2.5 kWh)
+		for d := 1; d <= 20; d++ {
+			dayTime := now.Add(time.Duration(-d) * 24 * time.Hour)
+			load := 3.0
+			if d == 5 || d == 6 {
+				// Real flat vacation day (0.3 kWh flat, low stddev)
+				load = 0.3
+			} else if d == 10 {
+				// Moderate average (1.2 kWh) with high volatility spikes (0.2 to 4.0 kWh)
+				for h := 0; h < 24; h++ {
+					hLoad := 0.2
+					if h%4 == 0 {
+						hLoad = 4.2
+					}
+					ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+					history = append(history, types.EnergyStats{
+						TSHourStart: ts,
+						HomeKWH:     hLoad,
+					})
+				}
+				continue
+			}
+
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				history = append(history, types.EnergyStats{
+					TSHourStart: ts,
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		dayMap := make(map[string]*dayPoints)
+		dayAveragesMap := make(map[string]float64)
+		var dailyAverages []float64
+		for _, h := range history {
+			dateStr := h.TSHourStart.Format("2006-01-02")
+			d, ok := dayMap[dateStr]
+			if !ok {
+				d = &dayPoints{date: dateStr}
+				dayMap[dateStr] = d
+			}
+			d.points = append(d.points, h)
+			d.loads = append(d.loads, h.HomeKWH)
+		}
+		for _, d := range dayMap {
+			var sum float64
+			for _, l := range d.loads {
+				sum += l
+			}
+			avg := sum / float64(len(d.loads))
+			dayAveragesMap[d.date] = avg
+			dailyAverages = append(dailyAverages, avg)
+		}
+
+		todayStr := now.Format("2006-01-02")
+		yesterdayStr := now.AddDate(0, 0, -1).Format("2006-01-02")
+
+		vacationDays := identifyHistoricalVacationDays(ctx, dailyAverages, dayAveragesMap, dayMap, todayStr, yesterdayStr, 0.1)
+
+		day5Str := now.Add(-5 * 24 * time.Hour).Format("2006-01-02")
+		day6Str := now.Add(-6 * 24 * time.Hour).Format("2006-01-02")
+		day10Str := now.Add(-10 * 24 * time.Hour).Format("2006-01-02")
+
+		// Flat vacation days should be detected
+		assert.True(t, vacationDays[day5Str], "day 5 (flat 0.3 kWh) should be detected as historical vacation")
+		assert.True(t, vacationDays[day6Str], "day 6 (flat 0.3 kWh) should be detected as historical vacation")
+
+		// High-volatility day (day 10) must NOT be detected as vacation
+		assert.False(t, vacationDays[day10Str], "day 10 (volatile 1.2 kWh avg with spikes) must NOT be detected as vacation")
+	})
 }

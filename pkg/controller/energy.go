@@ -1342,8 +1342,11 @@ func identifyHistoricalVacationDays(
 		return historicalVacationDays
 	}
 
-	// Step 4: Calculate the historical vacation active lower bound ceiling (55% of Q3 active load).
-	lowerBoundActiveA := max(standbyActiveEnergyFloor, q3A*loadShiftOutlierCeilingCap)
+	// Step 4: Calculate active energy thresholds relative to normal occupancy Q3 active load.
+	// normalOccupancyActiveFloor (55% of Q3): Floor used to collect normal occupancy days for stddev calculation.
+	// magnitudeDropActiveFloor (25% of Q3): Floor used for Condition A magnitude drop detection.
+	normalOccupancyActiveFloor := max(standbyActiveEnergyFloor, q3A*loadShiftOutlierCeilingCap)
+	magnitudeDropActiveFloor := max(standbyActiveEnergyFloor, q3A*loadShiftOutlierFloorFraction)
 
 	// Step 5: Compute baseline daily load volatility (standard deviation) across normal occupancy days.
 	// This establishes the site's natural daily volatility signature (q1StdDevA).
@@ -1351,7 +1354,7 @@ func identifyHistoricalVacationDays(
 	for dateStr, avg := range dayAveragesMap {
 		if dateStr != todayStr && dateStr != yesterdayStr && avg <= upperBoundRaw {
 			activeAvg := max(0.0, avg-standbyLoad)
-			if activeAvg >= lowerBoundActiveA {
+			if activeAvg >= normalOccupancyActiveFloor {
 				if d := dayMap[dateStr]; d != nil && len(d.points) >= 24 {
 					var sum float64
 					for _, p := range d.points {
@@ -1375,7 +1378,7 @@ func identifyHistoricalVacationDays(
 	}
 
 	// Step 6: Evaluate each historical date against dual vacation criteria:
-	// - Condition A (Magnitude Drop): Active energy dropped below 25% of normal Q3 active baseline.
+	// - Condition A (Magnitude Drop): Active energy dropped below 25% of normal Q3 active baseline (magnitudeDropActiveFloor).
 	// - Condition B (Gated Volatility Drop): Active energy is below 55% of Q3 AND load volatility dropped below 25%
 	//   of normal site volatility (indicating a flat, unoccupied household load signature).
 	for dateStr, avg := range dayAveragesMap {
@@ -1401,7 +1404,7 @@ func identifyHistoricalVacationDays(
 			dStdDev = math.Sqrt(varSum / float64(len(d.points)))
 		}
 
-		if avg < q3R*loadShiftOutlierCeilingCap && (activeAvg < lowerBoundActiveA || (q1StdDevA >= 0.25 && dStdDev < 0.25*q1StdDevA)) {
+		if avg < q3R*loadShiftOutlierCeilingCap && (activeAvg < magnitudeDropActiveFloor || (q1StdDevA >= 0.25 && dStdDev < 0.25*q1StdDevA)) {
 			historicalVacationDays[dateStr] = true
 			log.Ctx(ctx).DebugContext(
 				ctx,
@@ -1409,7 +1412,7 @@ func identifyHistoricalVacationDays(
 				slog.String("date", dateStr),
 				slog.Float64("avgHomeLoad", avg),
 				slog.Float64("activeAvg", activeAvg),
-				slog.Float64("lowerBoundActive", lowerBoundActiveA),
+				slog.Float64("magnitudeDropActiveFloor", magnitudeDropActiveFloor),
 				slog.Float64("dayStdDev", dStdDev),
 				slog.Float64("q1StdDev", q1StdDevA),
 			)
