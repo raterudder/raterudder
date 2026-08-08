@@ -1590,9 +1590,14 @@ func TestTesla(t *testing.T) {
 					},
 				})
 			case "/api/1/energy_sites/1234/live_status":
+				liveCalls := siteInfoCalls
+				soc := 50.0
+				if liveCalls > 1 {
+					soc = 50.1
+				}
 				json.NewEncoder(w).Encode(map[string]any{
 					"response": map[string]any{
-						"percentage_charged": 50.0,
+						"percentage_charged": soc,
 						"solar_power":        0.0,
 						"battery_power":      0.0,
 						"grid_power":         0.0,
@@ -1703,6 +1708,7 @@ func TestTesla(t *testing.T) {
 
 	t.Run("SetModes Delayed Verification Standby Discharging Below Reserve Retries", func(t *testing.T) {
 		backupPosts := 0
+		liveStatusCalls := 0
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case "/api/1/energy_sites/1234/site_info":
@@ -1714,10 +1720,15 @@ func TestTesla(t *testing.T) {
 					},
 				})
 			case "/api/1/energy_sites/1234/live_status":
+				liveStatusCalls++
+				soc := 55.4
+				if liveStatusCalls > 1 {
+					soc = 54.0
+				}
 				// SOC is 54.0% (<= expectedReserve 55.0%), but battery is still discharging at 500W
 				json.NewEncoder(w).Encode(map[string]any{
 					"response": map[string]any{
-						"percentage_charged": 54.0,
+						"percentage_charged": soc,
 						"solar_power":        0.0,
 						"battery_power":      500.0,
 						"grid_power":         1000.0,
@@ -1808,6 +1819,7 @@ func TestTesla(t *testing.T) {
 
 	t.Run("SetModes Delayed Verification ChargeAny Under 80% Retries", func(t *testing.T) {
 		backupPosts := 0
+		liveStatusCalls := 0
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case "/api/1/energy_sites/1234/site_info":
@@ -1819,10 +1831,15 @@ func TestTesla(t *testing.T) {
 					},
 				})
 			case "/api/1/energy_sites/1234/live_status":
-				// SOC is 50.0% (<80%), but battery_power is 0.0 (>= -1000.0, i.e. not charging > 1kW)
+				liveStatusCalls++
+				soc := 50.0
+				if liveStatusCalls > 1 {
+					soc = 50.1
+				}
+				// SOC is 50.1% (<80%), but battery_power is 0.0 (>= -1000.0, i.e. not charging > 1kW)
 				json.NewEncoder(w).Encode(map[string]any{
 					"response": map[string]any{
-						"percentage_charged": 50.0,
+						"percentage_charged": soc,
 						"solar_power":        0.0,
 						"battery_power":      0.0,
 						"grid_power":         0.0,
@@ -1867,5 +1884,64 @@ func TestTesla(t *testing.T) {
 
 		wg.Wait()
 		assert.Equal(t, 2, backupPosts, "expected initial backup post plus retry backup post when battery is <80% and not charging at >1kW")
+	})
+
+	t.Run("SetModes Delayed Verification Live Status Unchanged Bails Out", func(t *testing.T) {
+		backupPosts := 0
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/1/energy_sites/1234/site_info":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"backup_reserve_percent": 20.0,
+						"default_real_mode":      "self_consumption",
+						"nameplate_energy":       13500.0,
+					},
+				})
+			case "/api/1/energy_sites/1234/live_status":
+				// Return identical static live status numbers every time
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"percentage_charged": 50.0,
+						"solar_power":        0.0,
+						"battery_power":      0.0,
+						"grid_power":         0.0,
+						"load_power":         0.0,
+					},
+				})
+			case "/api/1/energy_sites/1234/backup":
+				backupPosts++
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{"code": 200},
+				})
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer ts.Close()
+
+		m := teslaMap(ts)
+		sys, err := m.Site(ctx, "test-site", types.Settings{
+			ESS:           "tesla",
+			MinBatterySOC: 20.0,
+		})
+		require.NoError(t, err)
+
+		teslaSys := sys.(*Tesla)
+		teslaSys.token = "mock-access"
+		teslaSys.energySiteID = 1234
+		teslaSys.baseURL = ts.URL
+		teslaSys.verifyDelay = 1 * time.Millisecond
+
+		var wg sync.WaitGroup
+		testCtx := common.CtxWithWaitGroup(ctx, &wg)
+
+		// Expected reserve will be set to 50.0%, but actual site_info will stay at 20.0%
+		changed, err := teslaSys.SetModes(testCtx, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{MinimumSOC: 10})
+		require.NoError(t, err)
+		assert.True(t, changed)
+
+		wg.Wait()
+		assert.Equal(t, 1, backupPosts, "expected initial backup post only; should bail out after live_status fails to update after 2 attempts")
 	})
 }
