@@ -287,6 +287,54 @@ func TestTesla(t *testing.T) {
 		assert.NotEmpty(t, status.TimeLocation, "TimeLocation should be populated")
 	})
 
+	t.Run("GetStatus Max Backup EmergencyMode", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/1/energy_sites/1234/site_info":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"backup_reserve_percent": 20.0,
+						"default_real_mode":      "self_consumption",
+						"battery_count":          1,
+					},
+				})
+			case "/api/1/energy_sites/1234/live_status":
+				// Battery grid charging at 3.05 kW (> 2.0 kW per battery)
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"solar_power":        2230.0,
+						"battery_power":      -3050.0,
+						"grid_power":         4744.0,
+						"load_power":         3924.0,
+						"percentage_charged": 88.5,
+						"grid_status":        "Active",
+						"island_status":      "on_grid",
+						"storm_mode_active":  false,
+					},
+				})
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer ts.Close()
+
+		m := teslaMap(ts)
+		sys, err := m.Site(ctx, "test-site", types.Settings{
+			ESS:           "tesla",
+			MinBatterySOC: 20.0,
+		})
+		require.NoError(t, err)
+
+		teslaSys := sys.(*Tesla)
+		teslaSys.token = "mock-access"
+		teslaSys.energySiteID = 1234
+		teslaSys.baseURL = ts.URL
+
+		status, err := sys.GetStatus(ctx)
+		require.NoError(t, err)
+		assert.True(t, status.EmergencyMode, "EmergencyMode should be true when Max Backup grid charging is active")
+	})
+
 	t.Run("GetStatus Gateways Fallback", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
@@ -1163,7 +1211,7 @@ func TestTesla(t *testing.T) {
 			_, err := sys.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{ChargeToSOC: 85})
 			require.NoError(t, err)
 			assert.True(t, *backup)
-			assert.Equal(t, 85.0, (*lastReq)["backup_reserve_percent"])
+			assert.Equal(t, 100.0, (*lastReq)["backup_reserve_percent"])
 		})
 
 		t.Run("Unexpected grid charging forces reserve update in BatteryModeLoad", func(t *testing.T) {
@@ -1943,5 +1991,239 @@ func TestTesla(t *testing.T) {
 
 		wg.Wait()
 		assert.Equal(t, 1, backupPosts, "expected initial backup post only; should bail out after live_status fails to update after 2 attempts")
+	})
+
+	t.Run("SetModes Suppresses Reserve Override When Max Backup Active (>2kW per battery)", func(t *testing.T) {
+		backupPosts := 0
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/1/energy_sites/1234/site_info":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"backup_reserve_percent": 20.0,
+						"default_real_mode":      "self_consumption",
+						"nameplate_energy":       13500.0,
+						"battery_count":          1,
+						"components": map[string]any{
+							"customer_preferred_export_rule": "never",
+						},
+					},
+				})
+			case "/api/1/energy_sites/1234/live_status":
+				// Battery is grid charging at 3.05 kW (-3050 W > 2.0 kW/battery threshold)
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"percentage_charged": 88.5,
+						"battery_power":      -3050.0,
+						"solar_power":        2230.0,
+						"grid_power":         4744.0,
+						"load_power":         3924.0,
+					},
+				})
+			case "/api/1/energy_sites/1234/backup":
+				backupPosts++
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{"code": 200},
+				})
+			case "/api/1/energy_sites/1234/operation", "/api/1/energy_sites/1234/grid_import_export":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{"code": 200},
+				})
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer ts.Close()
+
+		m := teslaMap(ts)
+		sys, err := m.Site(ctx, "test-site", types.Settings{
+			ESS:           "tesla",
+			MinBatterySOC: 20.0,
+		})
+		require.NoError(t, err)
+
+		teslaSys := sys.(*Tesla)
+		teslaSys.token = "mock-access"
+		teslaSys.energySiteID = 1234
+		teslaSys.baseURL = ts.URL
+
+		changed, err := teslaSys.SetModes(ctx, types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{MinimumSOC: 20})
+		require.NoError(t, err)
+		assert.False(t, changed, "should return false and suppress backup POST when Max Backup (>2kW/battery) is active")
+		assert.Equal(t, 0, backupPosts, "should not send POST /backup when Max Backup is active")
+	})
+
+	t.Run("SetModes Triggers Reserve Override For Unexpected Low-Rate Grid Charging (<=2kW per battery)", func(t *testing.T) {
+		backupPosts := 0
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/1/energy_sites/1234/site_info":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"backup_reserve_percent": 20.0,
+						"default_real_mode":      "self_consumption",
+						"nameplate_energy":       13500.0,
+						"battery_count":          1,
+						"components": map[string]any{
+							"customer_preferred_export_rule": "never",
+						},
+					},
+				})
+			case "/api/1/energy_sites/1234/live_status":
+				// Battery is grid charging at 1.67 kW (-1670 W <= 2.0 kW/battery threshold)
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"percentage_charged": 88.5,
+						"battery_power":      -1670.0,
+						"solar_power":        0.0,
+						"grid_power":         2000.0,
+						"load_power":         330.0,
+					},
+				})
+			case "/api/1/energy_sites/1234/backup":
+				backupPosts++
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{"code": 200},
+				})
+			case "/api/1/energy_sites/1234/operation", "/api/1/energy_sites/1234/grid_import_export":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{"code": 200},
+				})
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer ts.Close()
+
+		m := teslaMap(ts)
+		sys, err := m.Site(ctx, "test-site", types.Settings{
+			ESS:           "tesla",
+			MinBatterySOC: 20.0,
+		})
+		require.NoError(t, err)
+
+		teslaSys := sys.(*Tesla)
+		teslaSys.token = "mock-access"
+		teslaSys.energySiteID = 1234
+		teslaSys.baseURL = ts.URL
+
+		changed, err := teslaSys.SetModes(ctx, types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{MinimumSOC: 20})
+		require.NoError(t, err)
+		assert.True(t, changed, "should return true and trigger backup POST for low-rate unexpected grid charging (<=2kW/battery)")
+		assert.Equal(t, 1, backupPosts, "should send POST /backup for low-rate unexpected grid charging")
+	})
+
+	t.Run("SetModes ChargeAny Rounds Reserve 85+ Up To 100 In Self Consumption", func(t *testing.T) {
+		postedReserve := 0.0
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/1/energy_sites/1234/site_info":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"backup_reserve_percent": 20.0,
+						"default_real_mode":      "self_consumption",
+						"nameplate_energy":       13500.0,
+						"battery_count":          1,
+						"components": map[string]any{
+							"customer_preferred_export_rule": "never",
+						},
+					},
+				})
+			case "/api/1/energy_sites/1234/live_status":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"percentage_charged": 80.0,
+						"battery_power":      0.0,
+						"solar_power":        0.0,
+						"grid_power":         0.0,
+						"load_power":         0.0,
+					},
+				})
+			case "/api/1/energy_sites/1234/backup":
+				var req map[string]float64
+				json.NewDecoder(r.Body).Decode(&req)
+				postedReserve = req["backup_reserve_percent"]
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{"code": 200},
+				})
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer ts.Close()
+
+		m := teslaMap(ts)
+		sys, err := m.Site(ctx, "test-site", types.Settings{
+			ESS:           "tesla",
+			MinBatterySOC: 20.0,
+		})
+		require.NoError(t, err)
+
+		teslaSys := sys.(*Tesla)
+		teslaSys.token = "mock-access"
+		teslaSys.energySiteID = 1234
+		teslaSys.baseURL = ts.URL
+
+		changed, err := teslaSys.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeNoChange, types.ModesOptions{ChargeToSOC: 88})
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.Equal(t, 100.0, postedReserve, "reserve 88% in self_consumption for ChargeAny should round up to 100%")
+	})
+
+	t.Run("SetModes ChargeAny Rounds Reserve 81-84 Down To 80 In Self Consumption", func(t *testing.T) {
+		postedReserve := 0.0
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/1/energy_sites/1234/site_info":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"backup_reserve_percent": 20.0,
+						"default_real_mode":      "self_consumption",
+						"nameplate_energy":       13500.0,
+						"battery_count":          1,
+						"components": map[string]any{
+							"customer_preferred_export_rule": "never",
+						},
+					},
+				})
+			case "/api/1/energy_sites/1234/live_status":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"percentage_charged": 80.0,
+						"battery_power":      0.0,
+						"solar_power":        0.0,
+						"grid_power":         0.0,
+						"load_power":         0.0,
+					},
+				})
+			case "/api/1/energy_sites/1234/backup":
+				var req map[string]float64
+				json.NewDecoder(r.Body).Decode(&req)
+				postedReserve = req["backup_reserve_percent"]
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{"code": 200},
+				})
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer ts.Close()
+
+		m := teslaMap(ts)
+		sys, err := m.Site(ctx, "test-site", types.Settings{
+			ESS:           "tesla",
+			MinBatterySOC: 20.0,
+		})
+		require.NoError(t, err)
+
+		teslaSys := sys.(*Tesla)
+		teslaSys.token = "mock-access"
+		teslaSys.energySiteID = 1234
+		teslaSys.baseURL = ts.URL
+
+		changed, err := teslaSys.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeNoChange, types.ModesOptions{ChargeToSOC: 83})
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.Equal(t, 80.0, postedReserve, "reserve 83% in self_consumption for ChargeAny should round down to 80%")
 	})
 }

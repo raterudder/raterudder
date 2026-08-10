@@ -762,6 +762,7 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		var totalGatewayEnergyWH float64
 		for _, gw := range siteInfo.Components.Gateways {
 			totalChargeKW += 3.3
+			// sometimes a gateway has the total nameplate for the whole system
 			totalDischargeKW += gw.NameplatePowerWatts / 1000.0
 			totalGatewayEnergyWH += gw.NameplateEnergyWatts
 		}
@@ -782,6 +783,9 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		loc = time.UTC
 	}
 
+	batteryCount := getBatteryCount(siteInfo)
+	isMaxBackup := isMaxBackupCharging(siteInfo, liveStatus, batteryCount)
+
 	status := types.SystemStatus{
 		Timestamp:             time.Now().In(loc),
 		TimeLocation:          loc.String(),
@@ -795,7 +799,7 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		HomeKW:                liveStatus.LoadPowerW / 1000.0,
 		ElevatedMinBatterySOC: siteInfo.BackupReservePercent > 0 && siteInfo.BackupReservePercent > b.settings.MinBatterySOC,
 		BatteryAboveMinSOC:    liveStatus.PercentageCharged >= siteInfo.BackupReservePercent,
-		EmergencyMode:         liveStatus.StormModeActive,
+		EmergencyMode:         liveStatus.StormModeActive || isMaxBackup,
 		GridUnavailable:       liveStatus.GridStatus != "Active",
 		VPPActive:             liveStatus.GridServicesActive,
 		VPPKW:                 liveStatus.GridServicesPowerW / 1000.0,
@@ -805,6 +809,29 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 	log.Ctx(ctx).DebugContext(ctx, "tesla system status", slog.Any("status", status))
 
 	return status, nil
+}
+
+func getBatteryCount(siteInfo teslaSiteInfoResponse) float64 {
+	if siteInfo.BatteryCount > 0 {
+		return float64(siteInfo.BatteryCount)
+	}
+	return 1.0
+}
+
+func isMaxBackupCharging(siteInfo teslaSiteInfoResponse, liveStatus teslaLiveStatusResponse, batteryCount float64) bool {
+	if batteryCount <= 0 {
+		batteryCount = 1.0
+	}
+	// In self_consumption mode, grid charge rate is capped at ~1.67 kW (1670 W) per battery.
+	// If the grid-specific charge rate per battery exceeds 2.0 kW (2000 W), this indicates Max Backup or high-rate backup charge mode.
+	solarExcessW := math.Max(0, liveStatus.SolarPowerW-liveStatus.LoadPowerW)
+	totalChargePowerW := math.Max(0, -liveStatus.BatteryPowerW)
+	gridChargePowerW := math.Max(0, totalChargePowerW-solarExcessW)
+	gridChargeRatePerBatteryW := gridChargePowerW / batteryCount
+
+	return siteInfo.DefaultRealMode == "self_consumption" &&
+		liveStatus.BatteryPowerW < -100 &&
+		gridChargeRatePerBatteryW > 2000
 }
 
 // SetModes sets the operating modes of the system.
@@ -907,6 +934,13 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 		} else {
 			targetMode = "self_consumption"
 			newReserveSOC = float64(targetSOC)
+
+			// handle Tesla limitation around 81-99 reserve
+			if newReserveSOC >= 85.0 && newReserveSOC < 100.0 {
+				newReserveSOC = 100.0
+			} else if newReserveSOC > 80.0 && newReserveSOC < 85.0 {
+				newReserveSOC = 80.0
+			}
 		}
 	case types.BatteryModeLoad:
 		targetMode = "self_consumption"
@@ -959,6 +993,9 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 
 	updatedSOC := math.Round(newReserveSOC) != math.Round(reserveSOC)
 
+	batteryCount := getBatteryCount(siteInfo)
+	isMaxBackup := isMaxBackupCharging(siteInfo, liveStatus, batteryCount)
+
 	// Detect unexpected grid charging when in load or standby mode.
 	// If the hardware was already configured in self_consumption, SOC is above the configured reserve,
 	// and the battery is unexpectedly charging from the grid, log a warning and force re-posting reserve/mode settings.
@@ -967,19 +1004,28 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 		liveStatus.BatteryPowerW < -100 &&
 		(-liveStatus.BatteryPowerW)-liveStatus.SolarPowerW > 100 &&
 		liveStatus.PercentageCharged > reserveSOC+1.0 {
-		log.Ctx(ctx).WarnContext(ctx, "unexpected battery grid charging detected, force updating backup reserve setting",
-			slog.Float64("batteryPowerW", liveStatus.BatteryPowerW),
-			slog.Float64("solarPowerW", liveStatus.SolarPowerW),
-			slog.Float64("gridPowerW", liveStatus.GridPowerW),
-			slog.Float64("batterySOC", liveStatus.PercentageCharged),
-			slog.Float64("configuredReserve", reserveSOC),
-			slog.Float64("targetReserve", newReserveSOC),
-			slog.Any("batteryMode", bat),
-			slog.String("defaultRealMode", siteInfo.DefaultRealMode),
-		)
-		updatedSOC = true
-		if targetMode != "" {
-			updatedMode = true
+		if isMaxBackup {
+			log.Ctx(ctx).DebugContext(ctx, "tesla max backup or high-rate charge mode detected, suppressing reserve override",
+				slog.Float64("batteryPowerW", liveStatus.BatteryPowerW),
+				slog.Float64("batteryCount", batteryCount),
+				slog.Float64("batterySOC", liveStatus.PercentageCharged),
+				slog.Float64("configuredReserve", reserveSOC),
+			)
+		} else {
+			log.Ctx(ctx).WarnContext(ctx, "unexpected battery grid charging detected, force updating backup reserve setting",
+				slog.Float64("batteryPowerW", liveStatus.BatteryPowerW),
+				slog.Float64("solarPowerW", liveStatus.SolarPowerW),
+				slog.Float64("gridPowerW", liveStatus.GridPowerW),
+				slog.Float64("batterySOC", liveStatus.PercentageCharged),
+				slog.Float64("configuredReserve", reserveSOC),
+				slog.Float64("targetReserve", newReserveSOC),
+				slog.Any("batteryMode", bat),
+				slog.String("defaultRealMode", siteInfo.DefaultRealMode),
+			)
+			updatedSOC = true
+			if targetMode != "" {
+				updatedMode = true
+			}
 		}
 	}
 
@@ -994,20 +1040,29 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 		liveStatus.BatteryPowerW <= 100 &&
 		liveStatus.GridPowerW > 200 &&
 		netUnservedLoadW > 200 {
-		log.Ctx(ctx).WarnContext(ctx, "unexpected battery non-discharge detected when battery should be powering load",
-			slog.Float64("batteryPowerW", liveStatus.BatteryPowerW),
-			slog.Float64("solarPowerW", liveStatus.SolarPowerW),
-			slog.Float64("gridPowerW", liveStatus.GridPowerW),
-			slog.Float64("loadPowerW", liveStatus.LoadPowerW),
-			slog.Float64("batterySOC", liveStatus.PercentageCharged),
-			slog.Float64("configuredReserve", reserveSOC),
-			slog.Float64("targetReserve", newReserveSOC),
-			slog.Any("batteryMode", bat),
-			slog.String("defaultRealMode", siteInfo.DefaultRealMode),
-		)
-		updatedSOC = true
-		if targetMode != "" {
-			updatedMode = true
+		if isMaxBackup {
+			log.Ctx(ctx).DebugContext(ctx, "tesla max backup or high-rate charge mode detected, suppressing non-discharge override",
+				slog.Float64("batteryPowerW", liveStatus.BatteryPowerW),
+				slog.Float64("batteryCount", batteryCount),
+				slog.Float64("batterySOC", liveStatus.PercentageCharged),
+				slog.Float64("configuredReserve", reserveSOC),
+			)
+		} else {
+			log.Ctx(ctx).WarnContext(ctx, "unexpected battery non-discharge detected when battery should be powering load",
+				slog.Float64("batteryPowerW", liveStatus.BatteryPowerW),
+				slog.Float64("solarPowerW", liveStatus.SolarPowerW),
+				slog.Float64("gridPowerW", liveStatus.GridPowerW),
+				slog.Float64("loadPowerW", liveStatus.LoadPowerW),
+				slog.Float64("batterySOC", liveStatus.PercentageCharged),
+				slog.Float64("configuredReserve", reserveSOC),
+				slog.Float64("targetReserve", newReserveSOC),
+				slog.Any("batteryMode", bat),
+				slog.String("defaultRealMode", siteInfo.DefaultRealMode),
+			)
+			updatedSOC = true
+			if targetMode != "" {
+				updatedMode = true
+			}
 		}
 	}
 
@@ -1116,10 +1171,12 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 	if updatedSOC {
 		if wg := common.CtxWaitGroup(ctx); wg != nil {
 			wg.Add(1)
-			go func(asyncCtx context.Context) {
+			go func(ctx context.Context) {
 				defer wg.Done()
+				asyncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+				defer cancel()
 				b.verifyBackupReserve(asyncCtx, bat, newReserveSOC, liveStatus)
-			}(context.WithoutCancel(ctx))
+			}(ctx)
 		}
 	}
 
@@ -1268,7 +1325,7 @@ func (b *Tesla) verifyBackupReserve(
 		if err := b.base.doRequest(req, nil); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "tesla backup reserve verification retry: failed to update tesla backup reserve", slog.Any("error", err))
 		} else {
-			log.Ctx(ctx).InfoContext(ctx, "tesla backup reserve verification retry succeeded in setting backup reserve", slog.Float64("soc", expectedReserve))
+			log.Ctx(ctx).DebugContext(ctx, "tesla backup reserve verification set reserve again", slog.Float64("soc", expectedReserve))
 		}
 		return
 	}
