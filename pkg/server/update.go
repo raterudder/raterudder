@@ -709,22 +709,21 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 	syncStart := todayMidnight.AddDate(0, 0, -14) // Default to 14 days ago backfill
 	fetchEnd := todayMidnight.AddDate(0, 0, 2)
 
-	// Determine the latest passed UTC slot.
-	// Since the current time might just have rolled past midnight UTC, the latest passed slot
-	// could be a slot from yesterday (e.g. at 22:00 UTC yesterday). To handle this, we check
+	// Determine the latest passed local slot.
+	// Since the current time might just have rolled past midnight, the latest passed slot
+	// could be a slot from yesterday (e.g. at 22:00 local yesterday). To handle this, we check
 	// the scheduled slot hours for both yesterday (dayOffset = -1) and today (dayOffset = 0).
-	nowUTC := s.now().UTC()
-	hours := []int{2, 8, 12, 14, 22}
+	hours := []int{0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16, 20, 22}
 	var lastPassedSlot time.Time
 	for _, dayOffset := range []int{-1, 0} {
-		// targetDay represents the UTC date (yesterday or today) we are evaluating.
-		targetDay := nowUTC.AddDate(0, 0, dayOffset)
+		// targetDay represents the local date (yesterday or today) we are evaluating.
+		targetDay := now.AddDate(0, 0, dayOffset)
 		for _, hr := range hours {
-			// slotTime is the absolute timestamp of the scheduled slot on targetDay in UTC.
-			slotTime := time.Date(targetDay.Year(), targetDay.Month(), targetDay.Day(), hr, 0, 0, 0, time.UTC)
+			// slotTime is the absolute timestamp of the scheduled slot on targetDay in timeLoc.
+			slotTime := time.Date(targetDay.Year(), targetDay.Month(), targetDay.Day(), hr, 0, 0, 0, timeLoc)
 			// Since hours and days are sorted in ascending order, the first slot we find that is
 			// in the future means all subsequent slots will also be in the future.
-			if slotTime.After(nowUTC) {
+			if slotTime.After(now) {
 				break
 			}
 			// Keep the most recent slot that has passed.
@@ -812,14 +811,17 @@ func (s *Server) updateWeatherHistory(ctx context.Context, siteID string, loc ty
 							oldGTIs = append(oldGTIs, oldHw.GTI)
 							newGTIs = append(newGTIs, newHw.GTI)
 
-							if oldHw.GTI > 10 || newHw.GTI > 10 {
-								if oldHw.GTI == 0 {
-									if newHw.GTI > 10 {
-										anySignificantChange = true
-									}
+							diff := newHw.GTI - oldHw.GTI
+							if diff < 0 {
+								diff = -diff
+							}
+
+							if diff > 50 {
+								if oldHw.GTI == 0 || (oldHw.GTI < 50 && newHw.GTI >= 90) {
+									anySignificantChange = true
 								} else {
 									ratio := newHw.GTI / oldHw.GTI
-									if ratio > 1.20 || ratio < 0.80 {
+									if ratio > 1.50 || ratio < 0.50 {
 										anySignificantChange = true
 									}
 								}

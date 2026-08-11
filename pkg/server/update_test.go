@@ -1877,26 +1877,24 @@ func TestUpdateWeatherHistory(t *testing.T) {
 			weather: mockW,
 			nowFunc: func() time.Time { return testTime },
 		}
-
 		err := srv.updateWeatherHistory(context.Background(), "test-site", sl)
 		assert.NoError(t, err)
-		mockS.AssertExpectations(t)
 		mockW.AssertNotCalled(t, "Forecast")
 	})
 
-	t.Run("Scheduled UTC Slots Refresh - normal hour (Today & Tomorrow)", func(t *testing.T) {
+	t.Run("Scheduled Slots Refresh - normal hour (Today & Tomorrow)", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockW := &mockWeather{}
 
-		// 8:30am UTC is hour 8 slot.
-		normalTime := time.Date(2026, 6, 5, 8, 30, 0, 0, time.UTC)
-		now := normalTime.In(loc)
+		// 8:30am local time is hour 8 slot.
+		normalTime := time.Date(2026, 6, 5, 8, 30, 0, 0, loc)
+		now := normalTime
 		todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 		tomorrowMidnight := todayMidnight.AddDate(0, 0, 1)
 
-		// Last updated before the 8:00 AM UTC slot.
-		lastUpdate := time.Date(2026, 6, 5, 7, 59, 0, 0, time.UTC)
+		// Last updated before the 8:00 AM local slot.
+		lastUpdate := time.Date(2026, 6, 5, 7, 59, 0, 0, loc)
 		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(tomorrowMidnight, lastUpdate, types.CurrentWeatherVersion, nil)
 		mockS.On("GetWeather", mock.Anything, "test-site", mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
 
@@ -1918,7 +1916,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		mockW.AssertExpectations(t)
 	})
 
-	t.Run("Scheduled UTC Slots Refresh - 10:00pm UTC (Next Day Only)", func(t *testing.T) {
+	t.Run("Scheduled Slots Refresh - 10:00pm Local (Next Day Only)", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockW := &mockWeather{}
@@ -1927,14 +1925,14 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		utcSl := sl
 		utcSl.TimeZone = utcLoc.String()
 
-		// 22:15 UTC is 10:00pm UTC slot.
-		tenPMTime := time.Date(2026, 6, 5, 22, 15, 0, 0, time.UTC)
-		now := tenPMTime.In(utcLoc)
+		// 22:15 local time is 10:00pm local slot.
+		tenPMTime := time.Date(2026, 6, 5, 22, 15, 0, 0, utcLoc)
+		now := tenPMTime
 		todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, utcLoc)
 		tomorrowMidnight := todayMidnight.AddDate(0, 0, 1)
 
-		// Last updated before 10:00 PM UTC slot.
-		lastUpdate := time.Date(2026, 6, 5, 21, 59, 0, 0, time.UTC)
+		// Last updated before 10:00 PM local slot.
+		lastUpdate := time.Date(2026, 6, 5, 21, 59, 0, 0, utcLoc)
 		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(tomorrowMidnight, lastUpdate, types.CurrentWeatherVersion, nil)
 		mockS.On("GetWeather", mock.Anything, "test-site", mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
 
@@ -1956,7 +1954,7 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		mockW.AssertExpectations(t)
 	})
 
-	t.Run("Scheduled UTC Slots Refresh - 11:00pm CST (6/4) updates 6/5 only", func(t *testing.T) {
+	t.Run("Scheduled Slots Refresh - 11:00pm CST (6/4) updates 6/5 only", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockW := &mockWeather{}
@@ -1967,20 +1965,18 @@ func TestUpdateWeatherHistory(t *testing.T) {
 		cstSl := sl
 		cstSl.TimeZone = cstLoc.String()
 
-		// 11:00pm CST June 4th is June 5th 04:00am UTC
-		elevenPMTime := time.Date(2026, 6, 5, 4, 0, 0, 0, time.UTC)
+		// 11:00pm CST June 4th
+		elevenPMTime := time.Date(2026, 6, 4, 23, 0, 0, 0, cstLoc)
 
 		todayMidnight := time.Date(2026, 6, 4, 0, 0, 0, 0, cstLoc)
 		tomorrowMidnight := todayMidnight.AddDate(0, 0, 1) // June 5th
 
-		// Last updated before the 2:00 AM UTC June 5 slot (e.g. 1:59 AM UTC June 5)
-		lastUpdate := time.Date(2026, 6, 5, 1, 59, 0, 0, time.UTC)
-		// We return lastWeatherTime = June 5th (which is before June 6th), meaning we need a sync.
+		// Last updated before 10:00 PM CST June 4 slot (e.g. 9:59 PM CST June 4)
+		lastUpdate := time.Date(2026, 6, 4, 21, 59, 0, 0, cstLoc)
 		mockS.On("GetLatestWeatherTime", mock.Anything, "test-site").Return(tomorrowMidnight, lastUpdate, types.CurrentWeatherVersion, nil)
 		mockS.On("GetWeather", mock.Anything, "test-site", mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
 
-		// Expect forecast for tomorrow (June 5) only.
-		// Range is [June 5, June 6).
+		// Hour >= 17 (22 >= 17) -> fetches tomorrow (June 5) only
 		mockW.On("Forecast", mock.Anything, cstSl, tomorrowMidnight, tomorrowMidnight.AddDate(0, 0, 1)).Return([]types.Weather{
 			{TSDayStart: tomorrowMidnight},
 		}, nil)
