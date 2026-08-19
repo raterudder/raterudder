@@ -151,6 +151,17 @@ describe('dashboardUtils', () => {
             expect(getReasonText(action)).toContain('exceed battery capacity');
         });
 
+        it('handles HoldSimilarPrice', () => {
+            const action = {
+                ...baseAction,
+                reason: ActionReason.HoldSimilarPrice,
+                currentPrice: { dollarsPerKWH: 0.21, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+            };
+            const text = getReasonText(action);
+            expect(text).toContain('Current electricity price ($ 0.210/kWh) is comparable to the expected export credit');
+            expect(text).toContain('export surplus solar to the grid');
+        });
+
         it('handles GridUnavailable', () => {
             const action = { ...baseAction, reason: ActionReason.GridUnavailable };
             expect(getReasonText(action)).toContain('Grid is currently unavailable');

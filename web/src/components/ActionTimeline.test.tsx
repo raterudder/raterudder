@@ -82,5 +82,21 @@ describe('ActionTimeline', () => {
         const li = container.querySelector('li');
         expect(li).toHaveClass('mode-vpp');
     });
+
+    it('renders Standby for Similar Price action items correctly', () => {
+        const actions: Action[] = [{
+            timestamp: new Date().toISOString(),
+            batteryMode: BatteryMode.Standby,
+            solarMode: SolarMode.Any,
+            reason: ActionReason.HoldSimilarPrice,
+            description: 'Holding battery for solar export',
+            currentPrice: { dollarsPerKWH: 0.21, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+        }];
+        const { container } = render(<ActionTimeline groupedActions={actions} />);
+        expect(screen.getByText('Standby for Similar Price')).toBeInTheDocument();
+        expect(screen.getByText(/comparable to the expected export credit/)).toBeInTheDocument();
+        const li = container.querySelector('li');
+        expect(li).toHaveClass('mode-standby');
+    });
 });
 

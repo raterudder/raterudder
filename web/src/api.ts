@@ -34,6 +34,7 @@ export const ActionReason = {
     GridUnavailable: 'gridUnavailable',
     WaitingToCharge: 'waitingToCharge',
     PreventSolarCurtailment: 'preventSolarCurtailment',
+    HoldSimilarPrice: 'holdSimilarPrice',
     BatteryAtReserve: 'batteryAtReserve',
     VPPActive: 'vppActive',
     VPPPrep: 'vppPrep',
@@ -246,6 +247,7 @@ export interface Settings {
     alwaysChargeUnderDollarsPerKWH: number;
     minArbitrageDifferenceDollarsPerKWH: number;
     minDeficitPriceDifferenceDollarsPerKWH: number;
+    minExportHoldDifferenceDollarsPerKWH: number;
     minBatterySOC: number;
     minBatterySOCPeriods?: MinBatterySOCPeriod[];
     ignoreHourUsageOverMultiple: number;

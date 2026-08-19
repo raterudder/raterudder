@@ -2300,6 +2300,25 @@ const Settings = ({
                             </Field.Root>
 
                             <Field.Root className="form-group">
+                                <Field.Label htmlFor="minExportHold">
+                                    Standby for Similar Export Price ($/kWh)
+                                    <HelpButton
+                                        title="Standby for Similar Price Threshold"
+                                        description="Hold the battery on standby during low-cost grid hours if the grid price is within this amount of the export credit. This avoids battery round-trip cycling losses when grid power is as cheap as the export credits you would forfeit by recharging."
+                                    />
+                                </Field.Label>
+                                <Input
+                                    id="minExportHold"
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    value={settings.minExportHoldDifferenceDollarsPerKWH}
+                                    onChange={(e) => handleChange('minExportHoldDifferenceDollarsPerKWH', parseFloat(e.target.value))}
+                                />
+                                <Field.Description>Max price difference to standby during cheap hours to export solar tomorrow.</Field.Description>
+                            </Field.Root>
+
+                            <Field.Root className="form-group">
                                 <Field.Label htmlFor="minStartChargeMinutes">
                                     Minimum Start Charge Duration (minutes)
                                     <HelpButton

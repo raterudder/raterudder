@@ -55,6 +55,9 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
                 if (action.reason === ActionReason.ArbitrageHoldExport || action.reason === ActionReason.ArbitrageHoldSave || action.reason === ActionReason.ArbitrageHold) {
                     title = 'Hold for Arbitrage';
                 }
+                if (action.reason === ActionReason.HoldSimilarPrice) {
+                    title = 'Standby for Similar Price';
+                }
                 if (action.reason === ActionReason.VPPPrep) {
                     title = 'VPP Pre-Charging';
                 }

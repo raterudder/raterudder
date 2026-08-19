@@ -13,8 +13,8 @@ import {
     type SummaryType
 } from '../utils/dashboardUtils';
 
-export const whatsNewVersion = 8;
-export const whatsNewText = "Improved vacation detection and recovery post-vacation. Removed visitor (high load trend) detection.";
+export const whatsNewVersion = 9;
+export const whatsNewText = "Optimization: standby ahead of solar generation if export price is similar.";
 export const whatsNewLinkText = "";
 
 const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ siteID, settings = null }) => {

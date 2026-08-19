@@ -187,18 +187,29 @@ func TestMigrateSettings(t *testing.T) {
 		assert.Equal(t, "production", s.Release)
 	})
 
+	t.Run("v14 to v15: add default MinExportHoldDifferenceDollarsPerKWH", func(t *testing.T) {
+		old := Settings{
+			Release: "production",
+		}
+		s, changed, err := MigrateSettings(old, 14)
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.Equal(t, 0.02, s.MinExportHoldDifferenceDollarsPerKWH)
+	})
+
 	t.Run("no change: current version", func(t *testing.T) {
 		current := Settings{
-			UtilityProvider:            "comed",
-			UtilityRate:                "comed_besh",
-			Release:                    "production",
-			UpdateGroup:                7,
-			MinStartChargeMinutes:      5,
-			PeakSurvivalBufferMinutes:  20,
-			SOCBufferPercent:           4.0,
-			SolarCapacityBufferMinutes: 10,
-			VPPChargingBufferMinutes:   20,
-			HomeLoadPredictionStrategy: "default",
+			UtilityProvider:                      "comed",
+			UtilityRate:                          "comed_besh",
+			Release:                              "production",
+			UpdateGroup:                          7,
+			MinStartChargeMinutes:                5,
+			PeakSurvivalBufferMinutes:            20,
+			SOCBufferPercent:                     4.0,
+			SolarCapacityBufferMinutes:           10,
+			VPPChargingBufferMinutes:             20,
+			HomeLoadPredictionStrategy:           "default",
+			MinExportHoldDifferenceDollarsPerKWH: 0.02,
 		}
 		s, changed, err := MigrateSettings(current, CurrentSettingsVersion)
 		require.NoError(t, err)

@@ -12,7 +12,7 @@ import (
 
 // CurrentSettingsVersion is the current version of the settings struct.
 // Increment this value only if you need to set a default value other than the Go default for that value.
-const CurrentSettingsVersion = 14
+const CurrentSettingsVersion = 15
 
 // Settings represents the configuration stored in the database.
 // These are dynamic settings that can be changed without redeploying.
@@ -44,6 +44,7 @@ type Settings struct {
 	AlwaysChargeUnderDollarsPerKWH         float64 `json:"alwaysChargeUnderDollarsPerKWH"`
 	MinArbitrageDifferenceDollarsPerKWH    float64 `json:"minArbitrageDifferenceDollarsPerKWH"`
 	MinDeficitPriceDifferenceDollarsPerKWH float64 `json:"minDeficitPriceDifferenceDollarsPerKWH"`
+	MinExportHoldDifferenceDollarsPerKWH   float64 `json:"minExportHoldDifferenceDollarsPerKWH"`
 
 	// How to value solar exports when net metering credits are active. Valid values: "", "lowest", "highest", "none". Default is "lowest".
 	SolarNetMeteringCreditsValue string `json:"solarNetMeteringCreditsValue"`
@@ -298,6 +299,12 @@ func MigrateSettings(s Settings, currentVersion int) (Settings, bool, error) {
 		case 14:
 			// version 14: bump version to write top-level release field to firestore settings doc
 			migrated = true
+		case 15:
+			// version 15: add default MinExportHoldDifferenceDollarsPerKWH
+			if s.MinExportHoldDifferenceDollarsPerKWH == 0 {
+				s.MinExportHoldDifferenceDollarsPerKWH = 0.02
+				migrated = true
+			}
 		default:
 			return s, false, fmt.Errorf("unknown settings version: %d", version)
 		}

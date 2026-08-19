@@ -55,6 +55,7 @@ const (
 	ActionReasonGridUnavailable             ActionReason = "gridUnavailable"
 	ActionReasonWaitingToCharge             ActionReason = "waitingToCharge"
 	ActionReasonPreventSolarCurtailment     ActionReason = "preventSolarCurtailment"
+	ActionReasonHoldSimilarPrice            ActionReason = "holdSimilarPrice"
 	ActionReasonBatteryAtReserve            ActionReason = "batteryAtReserve"
 	ActionReasonVPPActive                   ActionReason = "vppActive"
 	ActionReasonVPPPrep                     ActionReason = "vppPrep"

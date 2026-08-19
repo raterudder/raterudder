@@ -235,6 +235,13 @@ export const getReasonText = (action: Action): string => {
             ];
             return parts.concat(suffixParts).join(' ');
         }
+        case ActionReason.HoldSimilarPrice: {
+            const parts = [
+                `Current electricity price (${nowCostStr}) is comparable to the expected export credit.`,
+                `Keeping the battery in standby to save battery wear and using grid power so the battery can refill to 100% and export surplus solar to the grid.`,
+            ];
+            return parts.concat(suffixParts).join(' ');
+        }
         case ActionReason.ArbitrageSave: {
             const parts = [
                 `Electricity prices are currently at their peak${nowCostStr ? ` (${nowCostStr})` : ''}. Relying on solar and battery to power the home, avoiding expensive grid imports.`

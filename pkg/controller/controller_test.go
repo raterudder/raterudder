@@ -7214,6 +7214,227 @@ func TestEvaluateFallback(t *testing.T) {
 			assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decisionActive.Reason)
 		}
 	})
+
+	t.Run("HoldSimilarPrice_NEM2_OffPeak", func(t *testing.T) {
+		holdNow := time.Date(2026, 8, 17, 0, 9, 0, 0, time.UTC)
+		settings := types.Settings{
+			GridExportSolar:                        true,
+			GridChargeBatteries:                    true,
+			MinBatterySOC:                          20.0,
+			MinExportHoldDifferenceDollarsPerKWH:   0.02,
+			MinArbitrageDifferenceDollarsPerKWH:    0.03,
+			MinDeficitPriceDifferenceDollarsPerKWH: 0.02,
+			SolarNetMeteringCreditsValue:           "lowest",
+			UtilityRateOptions: types.UtilityRateOptions{
+				NetMeteringCredits: true,
+			},
+		}
+		status := types.SystemStatus{
+			Timestamp:          holdNow,
+			BatterySOC:         80.0,
+			BatteryCapacityKWH: 13.5,
+			BatteryAboveMinSOC: true,
+			MaxBatteryChargeKW: 3.3,
+		}
+		currentPrice := types.Price{
+			TSStart:       holdNow,
+			TSEnd:         holdNow.Add(time.Hour),
+			DollarsPerKWH: 0.21,
+			PeriodName:    "Off-Peak",
+		}
+		summary := simulationSummary{
+			HitCapacityAt: holdNow.Add(12 * time.Hour), // Capacity hit at 12:00 PM tomorrow
+			MinEnergy:     8.0,
+			MaxEnergy:     13.5,
+		}
+		simData := []SimHour{
+			{TS: holdNow, GridChargeDollarsPerKWH: 0.21, SolarOppDollarsPerKWH: 0.21, BatteryKWH: 10.8},
+			{TS: holdNow.Add(time.Hour), GridChargeDollarsPerKWH: 0.21, SolarOppDollarsPerKWH: 0.21, BatteryKWH: 10.5},
+			{TS: holdNow.Add(10 * time.Hour), GridChargeDollarsPerKWH: 0.21, SolarOppDollarsPerKWH: 0.21, PredictedSolarKWH: 4.0, NetLoadSolarKWH: -3.0, BatteryKWH: 12.0},
+			{TS: holdNow.Add(12 * time.Hour), GridChargeDollarsPerKWH: 0.21, SolarOppDollarsPerKWH: 0.21, PredictedSolarKWH: 5.0, NetLoadSolarKWH: -4.0, HitCapacityAt: holdNow.Add(12 * time.Hour), BatteryKWH: 13.5},
+		}
+
+		decision := c.evaluateFallback(ctx, holdNow, status, currentPrice, settings, simData, summary, nil)
+		require.NotNil(t, decision)
+		if assert.Equal(t, types.BatteryModeStandby, decision.BatteryMode) {
+			assert.Equal(t, types.ActionReasonHoldSimilarPrice, decision.Reason)
+			assert.Contains(t, decision.Description, "Standby for similar price")
+		}
+	})
+
+	t.Run("HoldSimilarPrice_NEM2_Peak_Discharge", func(t *testing.T) {
+		holdNow := time.Date(2026, 8, 17, 0, 9, 0, 0, time.UTC)
+		settings := types.Settings{
+			GridExportSolar:                        true,
+			GridChargeBatteries:                    true,
+			MinBatterySOC:                          20.0,
+			MinExportHoldDifferenceDollarsPerKWH:   0.02,
+			MinArbitrageDifferenceDollarsPerKWH:    0.03,
+			MinDeficitPriceDifferenceDollarsPerKWH: 0.02,
+			SolarNetMeteringCreditsValue:           "lowest",
+			UtilityRateOptions: types.UtilityRateOptions{
+				NetMeteringCredits: true,
+			},
+		}
+		status := types.SystemStatus{
+			Timestamp:          holdNow,
+			BatterySOC:         80.0,
+			BatteryCapacityKWH: 13.5,
+			BatteryAboveMinSOC: true,
+			MaxBatteryChargeKW: 3.3,
+		}
+		peakPrice := types.Price{
+			TSStart:       holdNow,
+			TSEnd:         holdNow.Add(time.Hour),
+			DollarsPerKWH: 0.53,
+			PeriodName:    "On-Peak",
+		}
+		summary := simulationSummary{
+			HitCapacityAt: holdNow.Add(12 * time.Hour),
+			MinEnergy:     8.0,
+			MaxEnergy:     13.5,
+		}
+		simData := []SimHour{
+			{TS: holdNow, GridChargeDollarsPerKWH: 0.53, SolarOppDollarsPerKWH: 0.21, BatteryKWH: 10.8},
+			{TS: holdNow.Add(10 * time.Hour), GridChargeDollarsPerKWH: 0.21, SolarOppDollarsPerKWH: 0.21, PredictedSolarKWH: 4.0, NetLoadSolarKWH: -3.0, BatteryKWH: 12.0},
+			{TS: holdNow.Add(12 * time.Hour), GridChargeDollarsPerKWH: 0.21, SolarOppDollarsPerKWH: 0.21, PredictedSolarKWH: 5.0, NetLoadSolarKWH: -4.0, HitCapacityAt: holdNow.Add(12 * time.Hour), BatteryKWH: 13.5},
+		}
+
+		decision := c.evaluateFallback(ctx, holdNow, status, peakPrice, settings, simData, summary, nil)
+		require.NotNil(t, decision)
+		if assert.Equal(t, types.BatteryModeLoad, decision.BatteryMode) {
+			assert.Equal(t, types.ActionReasonSufficientBattery, decision.Reason)
+		}
+	})
+
+	t.Run("HoldSimilarPrice_NonExport_Curtailment_Discharge", func(t *testing.T) {
+		holdNow := time.Date(2026, 8, 17, 0, 9, 0, 0, time.UTC)
+		settings := types.Settings{
+			GridExportSolar:                        false,
+			GridChargeBatteries:                    true,
+			MinBatterySOC:                          20.0,
+			MinExportHoldDifferenceDollarsPerKWH:   0.02,
+			MinArbitrageDifferenceDollarsPerKWH:    0.03,
+			MinDeficitPriceDifferenceDollarsPerKWH: 0.02,
+			SolarNetMeteringCreditsValue:           "lowest",
+		}
+		status := types.SystemStatus{
+			Timestamp:          holdNow,
+			BatterySOC:         80.0,
+			BatteryCapacityKWH: 13.5,
+			BatteryAboveMinSOC: true,
+			MaxBatteryChargeKW: 3.3,
+		}
+		currentPrice := types.Price{
+			TSStart:       holdNow,
+			TSEnd:         holdNow.Add(time.Hour),
+			DollarsPerKWH: 0.21,
+			PeriodName:    "Off-Peak",
+		}
+		summary := simulationSummary{
+			HitCapacityAt: holdNow.Add(12 * time.Hour),
+			MinEnergy:     8.0,
+			MaxEnergy:     13.5,
+		}
+		simData := []SimHour{
+			{TS: holdNow, GridChargeDollarsPerKWH: 0.21, SolarOppDollarsPerKWH: 0.0, BatteryKWH: 10.8},
+			{TS: holdNow.Add(12 * time.Hour), GridChargeDollarsPerKWH: 0.21, SolarOppDollarsPerKWH: 0.0, PredictedSolarKWH: 5.0, NetLoadSolarKWH: -4.0, HitCapacityAt: holdNow.Add(12 * time.Hour), BatteryKWH: 13.5},
+		}
+
+		decision := c.evaluateFallback(ctx, holdNow, status, currentPrice, settings, simData, summary, nil)
+		require.NotNil(t, decision)
+		if assert.Equal(t, types.BatteryModeLoad, decision.BatteryMode) {
+			assert.Equal(t, types.ActionReasonSufficientBattery, decision.Reason)
+		}
+	})
+
+	t.Run("HoldSimilarPrice_HighHomeLoad_NoSurplus_Discharge", func(t *testing.T) {
+		holdNow := time.Date(2026, 8, 17, 0, 9, 0, 0, time.UTC)
+		settings := types.Settings{
+			GridExportSolar:                        true,
+			GridChargeBatteries:                    true,
+			MinBatterySOC:                          20.0,
+			MinExportHoldDifferenceDollarsPerKWH:   0.02,
+			MinArbitrageDifferenceDollarsPerKWH:    0.03,
+			MinDeficitPriceDifferenceDollarsPerKWH: 0.02,
+			SolarNetMeteringCreditsValue:           "lowest",
+			UtilityRateOptions: types.UtilityRateOptions{
+				NetMeteringCredits: true,
+			},
+		}
+		status := types.SystemStatus{
+			Timestamp:          holdNow,
+			BatterySOC:         80.0,
+			BatteryCapacityKWH: 13.5,
+			BatteryAboveMinSOC: true,
+			MaxBatteryChargeKW: 3.3,
+		}
+		currentPrice := types.Price{
+			TSStart:       holdNow,
+			TSEnd:         holdNow.Add(time.Hour),
+			DollarsPerKWH: 0.21,
+			PeriodName:    "Off-Peak",
+		}
+		// Solar is produced (4.0 kWh), but Home load is higher (6.0 kWh), so NetLoadSolarKWH is +2.0 (no surplus).
+		summary := simulationSummary{
+			MinEnergy: 4.0,
+			MaxEnergy: 10.8,
+		}
+		simData := []SimHour{
+			{TS: holdNow, GridChargeDollarsPerKWH: 0.21, SolarOppDollarsPerKWH: 0.21, BatteryKWH: 10.8},
+			{TS: holdNow.Add(10 * time.Hour), GridChargeDollarsPerKWH: 0.21, SolarOppDollarsPerKWH: 0.21, PredictedSolarKWH: 4.0, NetLoadSolarKWH: 2.0, BatteryKWH: 10.0},
+			{TS: holdNow.Add(12 * time.Hour), GridChargeDollarsPerKWH: 0.21, SolarOppDollarsPerKWH: 0.21, PredictedSolarKWH: 5.0, NetLoadSolarKWH: 1.0, BatteryKWH: 10.0},
+		}
+
+		decision := c.evaluateFallback(ctx, holdNow, status, currentPrice, settings, simData, summary, nil)
+		require.NotNil(t, decision)
+		if assert.Equal(t, types.BatteryModeLoad, decision.BatteryMode) {
+			assert.Equal(t, types.ActionReasonSufficientBattery, decision.Reason)
+		}
+	})
+
+	t.Run("HoldSimilarPrice_RainyDay_NoSolarRefill_Discharge", func(t *testing.T) {
+		holdNow := time.Date(2026, 8, 17, 0, 9, 0, 0, time.UTC)
+		settings := types.Settings{
+			GridExportSolar:                        true,
+			GridChargeBatteries:                    true,
+			MinBatterySOC:                          20.0,
+			MinExportHoldDifferenceDollarsPerKWH:   0.02,
+			MinArbitrageDifferenceDollarsPerKWH:    0.03,
+			MinDeficitPriceDifferenceDollarsPerKWH: 0.02,
+			SolarNetMeteringCreditsValue:           "lowest",
+			UtilityRateOptions: types.UtilityRateOptions{
+				NetMeteringCredits: true,
+			},
+		}
+		status := types.SystemStatus{
+			Timestamp:          holdNow,
+			BatterySOC:         80.0,
+			BatteryCapacityKWH: 13.5,
+			BatteryAboveMinSOC: true,
+			MaxBatteryChargeKW: 3.3,
+		}
+		currentPrice := types.Price{
+			TSStart:       holdNow,
+			TSEnd:         holdNow.Add(time.Hour),
+			DollarsPerKWH: 0.21,
+			PeriodName:    "Off-Peak",
+		}
+		summary := simulationSummary{
+			MinEnergy: 4.0,
+			MaxEnergy: 10.8,
+		}
+		simData := []SimHour{
+			{TS: holdNow, GridChargeDollarsPerKWH: 0.21, SolarOppDollarsPerKWH: 0.21, BatteryKWH: 10.8},
+			{TS: holdNow.Add(time.Hour), GridChargeDollarsPerKWH: 0.21, SolarOppDollarsPerKWH: 0.21, BatteryKWH: 10.0},
+		}
+
+		decision := c.evaluateFallback(ctx, holdNow, status, currentPrice, settings, simData, summary, nil)
+		require.NotNil(t, decision)
+		if assert.Equal(t, types.BatteryModeLoad, decision.BatteryMode) {
+			assert.Equal(t, types.ActionReasonSufficientBattery, decision.Reason)
+		}
+	})
 }
 
 func TestFindCheapestPlan(t *testing.T) {

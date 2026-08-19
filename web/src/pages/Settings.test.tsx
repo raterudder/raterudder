@@ -513,6 +513,27 @@ describe('App & Settings', () => {
         });
     });
 
+    it('can update standby for similar price field', async () => {
+        await navigateToSettings();
+
+        // Expand advanced tuning settings to see price threshold fields
+        const advancedBtn = await screen.findByText('Show Advanced Settings');
+        fireEvent.click(advancedBtn);
+
+        const holdInput = await screen.findByLabelText(/Standby for Similar Export Price/i);
+        fireEvent.change(holdInput, { target: { value: '0.04' } });
+
+        const saveBtn = screen.getByText('Save Settings');
+        fireEvent.click(saveBtn);
+
+        await waitFor(() => {
+            expect(screen.getByText('Settings saved successfully')).toBeInTheDocument();
+            expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+                minExportHoldDifferenceDollarsPerKWH: 0.04
+            }), expect.any(String), undefined);
+        });
+    });
+
     it('can select utility provider and then rate', async () => {
         const user = userEvent.setup();
         (fetchSettings as any).mockResolvedValue({

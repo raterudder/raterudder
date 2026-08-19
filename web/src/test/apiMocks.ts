@@ -36,6 +36,7 @@ export const defaultSettings = {
     alwaysChargeUnderDollarsPerKWH: 0.05,
     minArbitrageDifferenceDollarsPerKWH: 0.03,
     minDeficitPriceDifferenceDollarsPerKWH: 0.02,
+    minExportHoldDifferenceDollarsPerKWH: 0.02,
     countryCode: 'US',
     postalCode: '90210',
     utilityProvider: 'comed',
