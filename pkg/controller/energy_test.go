@@ -218,9 +218,10 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		// Saturday target hour 12:
 		// Saturday count = 1 (< 3).
 		// Fallback to Weekend group (Saturday + Sunday) count = 3 (>= 3).
-		// Weighted 50p median of [3.0, 4.0, 4.0] is 4.0.
+		// With same-weekday weekly decay 0.90 and 2.5x multiplier, matching Saturday (load 3.0, weight 2.25)
+		// correctly pulls the 50p median to 3.0 rather than being dominated by Sundays (4.0).
 		if assert.Contains(t, model, 12) {
-			assert.InDelta(t, 4.0, model[12].AvgHomeLoadKWH, 0.001)
+			assert.InDelta(t, 3.0, model[12].AvgHomeLoadKWH, 0.001)
 		}
 	})
 
@@ -644,7 +645,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 		testNow := time.Date(2026, 7, 3, 2, 0, 0, 0, time.UTC)
 		model, _ := c.BuildHourlyEnergyModel(ctx, testNow, history, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
-		assert.InDelta(t, 2.5512750949538803, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
+		assert.InDelta(t, 10.0, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
 
 		// Case 2: Multiple outliers (not removed)
 		historyMulti := []types.EnergyStats{
@@ -653,7 +654,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			{TSHourStart: h3, HomeKWH: 12.0, SolarKWH: 0.0}, // Outlier 2
 		}
 		modelMulti, _ := c.BuildHourlyEnergyModel(ctx, testNow, historyMulti, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
-		assert.InDelta(t, 10.307107976125883, modelMulti[h1.Hour()].AvgHomeLoadKWH, 0.001)
+		assert.InDelta(t, 12.0, modelMulti[h1.Hour()].AvgHomeLoadKWH, 0.001)
 
 		// Case 3: Not enough points (min 3)
 		historyFew := []types.EnergyStats{

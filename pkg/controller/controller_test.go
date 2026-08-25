@@ -2086,10 +2086,11 @@ func TestDecide(t *testing.T) {
 		settings.UtilityRateOptions.NetMeteringCredits = true
 
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.055}
-		// Future price has a peak export hour at hour 2
+		// Future price has an arbitrage peak hour at hour 2 ($0.10 vs $0.055 diff 0.045 > 0.03)
+		// and expensive hour 1 ($0.08), so hour 0 ($0.055) is the only cheap charging window before deficit.
 		futurePrices := []types.Price{
-			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.055},
-			{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(3 * time.Hour), DollarsPerKWH: 0.08}, // Arbitrage peak (saves/holds energy)
+			{TSStart: now.Add(time.Hour), TSEnd: now.Add(2 * time.Hour), DollarsPerKWH: 0.08},
+			{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(3 * time.Hour), DollarsPerKWH: 0.10}, // Arbitrage peak (saves/holds energy)
 			{TSStart: now.Add(3 * time.Hour), TSEnd: now.Add(4 * time.Hour), DollarsPerKWH: 0.60}, // Deficit peak (charges now to survive)
 		}
 		for i := 4; i <= 24; i++ {

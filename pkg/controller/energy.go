@@ -16,9 +16,17 @@ import (
 // at ~70% and 14 days ago at ~50%, giving strong bias to recent household usage patterns.
 var homeLoadPredictionRecencyDecay = 0.95
 
-// sameWeekdayWeightMultiplier scales the weight of matching weekdays (e.g. comparing Thursdays to Thursdays)
-// by 1.5x. This helps capture weekly recurring activities (e.g., laundry days) without ignoring other recent days.
-var sameWeekdayWeightMultiplier = 1.5
+// sameWeekdayWeeklyDecay represents the age decay factor applied weekly as
+// Pow(sameWeekdayWeeklyDecay, ageWeeks) for matching weekdays (e.g. comparing Saturdays to Saturdays).
+// Because matching weekdays only occur every 7 days, applying standard daily decay (0.95^ageDays) would
+// cause rapid degradation (0.95^7 ≈ 70% after 1 week, 0.95^14 ≈ 49% after 2 weeks), allowing recent
+// non-matching weekdays to overshadow weekly recurring activities (e.g. weekend chores or laundry days).
+var sameWeekdayWeeklyDecay = 0.90
+
+// sameWeekdayWeightMultiplier scales the weight of matching weekdays (e.g. comparing Saturdays to Saturdays)
+// by 2.5x. Combined with sameWeekdayWeeklyDecay, this ensures recurring weekly activity profiles retain
+// sufficient voting weight in the prediction pool without being overwhelmed by recent non-matching days.
+var sameWeekdayWeightMultiplier = 2.5
 
 // neighborHourWeightMultiplier blends adjacent hours (h-1 and h+1) into the target hour h's prediction pool.
 // We tried 0.25 (which reduced cost regression slightly more on normal days) and 0.00 (which completely disabled
@@ -636,15 +644,17 @@ func (c *Controller) BuildHourlyEnergyModel(
 			}
 
 			// Base weight based on age decay
-			decayFactor := homeLoadPredictionRecencyDecay
+			var baseWeight float64
 			if detectedShift != "none" {
-				decayFactor = loadShiftRecencyDecay
-			}
-			baseWeight := math.Pow(decayFactor, float64(ageDays))
-
-			// Apply same-weekday weight multiplier boost
-			if dTime.Weekday() == wd {
-				baseWeight *= sameWeekdayWeightMultiplier
+				baseWeight = math.Pow(loadShiftRecencyDecay, float64(ageDays))
+				if dTime.Weekday() == wd {
+					baseWeight *= sameWeekdayWeightMultiplier
+				}
+			} else if dTime.Weekday() == wd {
+				ageWeeks := float64(ageDays) / 7.0
+				baseWeight = math.Pow(sameWeekdayWeeklyDecay, ageWeeks) * sameWeekdayWeightMultiplier
+			} else {
+				baseWeight = math.Pow(homeLoadPredictionRecencyDecay, float64(ageDays))
 			}
 
 			for _, pt := range d.points {
