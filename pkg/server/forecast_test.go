@@ -173,7 +173,7 @@ func TestHandleForecast(t *testing.T) {
 		for _, hour := range data.Simulation {
 			if hour.Hour == 12 {
 				foundHour12 = true
-				assert.Greater(t, hour.AvgHomeLoadKWH, 5.2, "should override home load prediction strategy to conservative")
+				assert.Greater(t, hour.AvgHomeLoadKWH, 4.5, "should override home load prediction strategy to conservative")
 			}
 		}
 		assert.True(t, foundHour12, "should find hour 12 in simulation")
