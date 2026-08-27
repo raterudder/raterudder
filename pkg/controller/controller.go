@@ -2126,7 +2126,56 @@ func (c *Controller) evaluateFallback(
 		hitDeficitAt = summary.HitBufferedDeficitAt
 	}
 
-	// 3. Projected Deficit Fallback Handling:
+	// 3. Solar Export Hold / Standby Check:
+	// When solar export is enabled and the battery is projected to refill from solar before any deficit,
+	// discharging the battery to cover cheap off-peak grid load is inefficient due to AC round-trip
+	// efficiency losses and unnecessary battery cycling. If the all-in current grid charge cost is within
+	// MinExportHoldDifferenceDollarsPerKWH of the daytime solar export value, we hold on standby so the home uses cheap grid
+	// power now and exports the surplus solar tomorrow for full export credits.
+	solarWillRefill := !summary.HitSolarCapacityAt.IsZero() || (!summary.HitThresholdCapacityAt.IsZero() && summary.HitThresholdCapacityAt.After(now)) || (!summary.HitCapacityAt.IsZero() && summary.HitCapacityAt.After(now))
+	if settings.GridExportSolar && currentStatus.BatteryAboveMinSOC && solarWillRefill {
+		capacityHitAt := summary.HitThresholdCapacityAt
+		if isAlreadyActive {
+			capacityHitAt = summary.HitBufferedCapacityAt
+		}
+		if capacityHitAt.IsZero() {
+			capacityHitAt = summary.HitSolarCapacityAt
+		}
+		if capacityHitAt.IsZero() {
+			capacityHitAt = summary.HitCapacityAt
+		}
+
+		// We pass capacityHitAt as refillUntil so getSolarExportValue only averages the export credit
+		// of the "refill solar" (the morning solar surplus up to when the pack would reach capacity).
+		// If we hold on standby now instead of discharging, this morning solar is what gets forced to
+		// export to the grid instead of refilling the pack. Later afternoon solar would be exported in
+		// either case, so limiting the evaluation window to capacityHitAt prevents higher afternoon
+		// peak export rates from falsely inflating the perceived credit of morning export.
+		solarExportValue := c.getSolarExportValue(simData, capacityHitAt)
+		minHoldDiff := max(priceEpsilonForEquality, settings.MinExportHoldDifferenceDollarsPerKWH)
+		if solarExportValue > 0 && gridChargeNowCost <= solarExportValue+minHoldDiff {
+			log.Ctx(ctx).DebugContext(
+				ctx,
+				"holding battery on standby for solar export",
+				slog.Float64("gridChargeNowCost", gridChargeNowCost),
+				slog.Float64("solarExportValue", solarExportValue),
+				slog.Float64("minExportHoldDiff", minHoldDiff),
+				slog.Time("hitCapacityAt", summary.HitCapacityAt),
+				slog.Time("hitSolarCapacityAt", summary.HitSolarCapacityAt),
+			)
+			return &DecisionResult{
+				BatteryMode: types.BatteryModeStandby,
+				Reason:      types.ActionReasonHoldSimilarPrice,
+				Description: fmt.Sprintf(
+					"Standby for similar price: Grid price ($%.3f) is close to export credit ($%.3f). Holding energy for export.",
+					gridChargeNowCost,
+					solarExportValue,
+				),
+			}
+		}
+	}
+
+	// 4. Projected Deficit Fallback Handling:
 	// If a future deficit is predicted and we have no active planned charge (e.g. grid charging is disabled):
 	if !hitDeficitAt.IsZero() {
 		// If the simulation indicates the battery will hit capacity from solar strictly in the future (After(now))
@@ -2134,8 +2183,6 @@ func (c *Controller) evaluateFallback(
 		// We use HitSolarCapacityAt (which only tracks future capacity hits) because a capacity hit at 'now' only
 		// tells us the battery is currently full, not whether it will refill in the future if we choose to discharge
 		// it now.
-		// If solar exporting is enabled, hitting capacity does not result in curtailment (the excess solar is exported),
-		// so we do not discharge early, preserving the battery energy for high-value peak periods.
 
 		// We use the raw physical depletion time (HitDeficitAt) for refillDeficitAt.
 		// Since capacityHitAt is already buffered/threshold to handle solar uncertainty,
@@ -2195,11 +2242,11 @@ func (c *Controller) evaluateFallback(
 			}
 		}
 
-		// Since we didn't standby for peak, we must be in a peak hour or peak survival is not required.
-		// We fall back to discharging to cover load.
+		// Since peak survival was not required and solar export hold did not apply,
+		// we discharge the battery to cover home load.
 		log.Ctx(ctx).DebugContext(
 			ctx,
-			"deficit predicted but at peak price or flat prices",
+			"deficit predicted and discharging to cover home load",
 			slog.Float64("currentPrice", currentPrice.DollarsPerKWH),
 			slog.Time("hitDeficitAt", hitDeficitAt),
 			slog.Float64("gridChargeNowCost", gridChargeNowCost),
@@ -2214,39 +2261,6 @@ func (c *Controller) evaluateFallback(
 			BatteryMode: types.BatteryModeLoad,
 			Reason:      types.ActionReasonDischargeAtPeak,
 			Description: "Deficit predicted but current price is Peak.",
-		}
-	}
-
-	// 4. Solar Export Hold / Standby Check:
-	// When solar export is enabled and net metering credits are active, and the battery is projected to refill from solar
-	// before any deficit, discharging the battery to cover cheap off-peak grid load is inefficient due to AC round-trip
-	// efficiency losses and unnecessary battery cycling. If the current grid charge cost is within
-	// MinExportHoldDifferenceDollarsPerKWH of the daytime solar export value, we hold on standby so the home uses cheap grid
-	// power now and exports the surplus solar tomorrow for full export credits.
-	isNetMetered := (settings.UtilityRateOptions.NetMeteringCredits || settings.UtilityRateOptions.NetMeteringScheme == "net") && settings.SolarNetMeteringCreditsValue != "none"
-	solarWillRefill := !summary.HitSolarCapacityAt.IsZero() || (!summary.HitThresholdCapacityAt.IsZero() && summary.HitThresholdCapacityAt.After(now)) || (!summary.HitCapacityAt.IsZero() && summary.HitCapacityAt.After(now))
-	if settings.GridExportSolar && isNetMetered && currentStatus.BatteryAboveMinSOC && solarWillRefill {
-		solarExportValue := c.getSolarExportValue(simData)
-		minHoldDiff := max(priceEpsilonForEquality, settings.MinExportHoldDifferenceDollarsPerKWH)
-		if solarExportValue > 0 && gridChargeNowCost <= solarExportValue+minHoldDiff {
-			log.Ctx(ctx).DebugContext(
-				ctx,
-				"holding battery on standby for solar export",
-				slog.Float64("gridChargeNowCost", gridChargeNowCost),
-				slog.Float64("solarExportValue", solarExportValue),
-				slog.Float64("minExportHoldDiff", minHoldDiff),
-				slog.Time("hitCapacityAt", summary.HitCapacityAt),
-				slog.Time("hitSolarCapacityAt", summary.HitSolarCapacityAt),
-			)
-			return &DecisionResult{
-				BatteryMode: types.BatteryModeStandby,
-				Reason:      types.ActionReasonHoldSimilarPrice,
-				Description: fmt.Sprintf(
-					"Standby for similar price: Grid price ($%.3f) is close to export credit ($%.3f). Holding energy for export.",
-					gridChargeNowCost,
-					solarExportValue,
-				),
-			}
 		}
 	}
 
@@ -2271,10 +2285,10 @@ func (c *Controller) evaluateFallback(
 }
 
 // getSolarExportValue calculates the weighted average solar export credit across predicted daytime hours
-// where net surplus solar exists (solar generation exceeds home load, NetLoadSolarKWH < 0).
-// If home load exceeds solar (NetLoadSolarKWH >= 0), all solar is consumed directly on-site and
-// cannot recharge the battery to capacity or overflow to the grid as export credits.
-func (c *Controller) getSolarExportValue(simData []SimHour) float64 {
+// where net surplus solar exists (solar generation exceeds home load, NetLoadSolarKWH < 0) during the refill period.
+// If refillUntil is provided (and in the future), only surplus solar slots up to refillUntil are included,
+// reflecting the true export value of the solar that would otherwise charge into the battery.
+func (c *Controller) getSolarExportValue(simData []SimHour, refillUntil time.Time) float64 {
 	var totalNetSolarVal, totalNetSurplusKWH float64
 
 	for _, slot := range simData {
@@ -2289,6 +2303,10 @@ func (c *Controller) getSolarExportValue(simData []SimHour) float64 {
 			surplusKWH := -slot.NetLoadSolarKWH
 			totalNetSolarVal += slot.SolarOppDollarsPerKWH * surplusKWH
 			totalNetSurplusKWH += surplusKWH
+
+			if !refillUntil.IsZero() && !slot.TS.Before(refillUntil) {
+				break
+			}
 		}
 	}
 

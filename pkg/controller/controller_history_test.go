@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"math"
 	"sync"
 	"testing"
@@ -18,18 +19,18 @@ import (
 var historyFS embed.FS
 
 var fileBaselines = map[string]float64{
-	"site1_march.json":    -4.953,
-	"site1_may.json":      -16.289,
-	"site2_april.json":    1.437,
-	"site2_march.json":    8.525,
-	"site2_may.json":      0.639,
-	"site3_march.json":    -2.108,
-	"site3_may.json":      -6.417,
-	"site4_late-may.json": 0.294,
-	"site4_may.json":      2.614,
-	"site5_june.json":     23.029,
-	"site7_june.json":     23.529,
-	"site8_june.json":     -2.995,
+	"site1_march.json":    -4.232,
+	"site1_may.json":      -16.132,
+	"site2_april.json":    1.337,
+	"site2_march.json":    8.944,
+	"site2_may.json":      1.267,
+	"site3_march.json":    -2.374,
+	"site3_may.json":      -6.952,
+	"site4_late-may.json": 0.594,
+	"site4_may.json":      2.421,
+	"site5_june.json":     18.621,
+	"site7_june.json":     34.708,
+	"site8_june.json":     -10.191,
 }
 
 func findEnergyStats(history []types.DailyEnergyStats, ts time.Time, loc *time.Location) (types.EnergyStats, bool) {
@@ -204,6 +205,7 @@ func TestDecideHistory(t *testing.T) {
 			simSOC := initialSOC
 			var simCost float64
 			var simCredit float64
+			var lastGridImportPrice float64
 
 			for i := 0; i < len(activeActions); i++ {
 				action := activeActions[i]
@@ -313,49 +315,6 @@ func TestDecideHistory(t *testing.T) {
 				//    conditions to match the target timeframe.
 				//    Example: if tCurrent.Day() == 19 && tCurrent.Hour() == 6
 				// 4. This will call `SimulateState` for the exact controller state and print the
-				//    simulated hours (slots), allowing you to verify forecast, deficits, capacity hits,
-				//    prices, and target SOC limits (clamping).
-				if false {
-					if tCurrent.Day() == 19 && tCurrent.Hour() == 6 {
-						simData, _ := c.SimulateState(ctx, tCurrent, simStatus, currentPrice, futurePrices, mockHistory, mockWeather, settings)
-						t.Logf("=== SIMULATION SLOTS AT %02d:%02d ===", tCurrent.Hour(), tCurrent.Minute())
-						for idx, slot := range simData {
-							t.Logf("  Slot %d: TS=%s, NetLoadSolar=%.3f, BatteryKWH=%.3f, HitCapacity=%s, HitDeficit=%s, ClampedNet=%.3f, Cost=%.3f, Export=%.3f",
-								idx, slot.TS.Format("15:04"), slot.NetLoadSolarKWH, slot.BatteryKWH, slot.HitCapacityAt.Format("15:04"), slot.HitDeficitAt.Format("15:04"), slot.ClampedNetLoadSolarKWH, slot.GridChargeDollarsPerKWH, slot.SolarOppDollarsPerKWH)
-						}
-					}
-					if tCurrent.Day() == 24 && (tCurrent.Hour() == 2 || tCurrent.Hour() == 3) {
-						t.Logf("[%s] Mode: %s(%s) (%s) vs Base: %s(%s) | Price: %.3f, SOC: %.2f, DeficitAt: %s, CapacityAt: %s",
-							tCurrent.Format("15:04"),
-							drModeString(decision.Action.BatteryMode),
-							decision.Action.Reason,
-							decision.Action.Description,
-							drModeString(action.BatteryMode),
-							action.Reason,
-							currentPrice.DollarsPerKWH+currentPrice.GridUseDollarsPerKWH,
-							simSOC,
-							decision.Action.HitDeficitAt.Format("15:04"),
-							decision.Action.HitCapacityAt.Format("15:04"),
-						)
-					} else if false {
-						var futPrice float64
-						if decision.Action.FuturePrice != nil {
-							futPrice = decision.Action.FuturePrice.DollarsPerKWH + decision.Action.FuturePrice.GridUseDollarsPerKWH
-						}
-						t.Logf("[%s] DIFF! Base: %s(%s) -> Sim: %s(%s) (Price: %.3f, SOC: %.2f, FutPrice: %.3f, DeficitAt: %s, BufferedDef: %s)",
-							tCurrent.Format("02_15:04"),
-							drModeString(action.BatteryMode)[:3],
-							action.Reason,
-							drModeString(decision.Action.BatteryMode)[:3],
-							decision.Action.Reason,
-							currentPrice.DollarsPerKWH+currentPrice.GridUseDollarsPerKWH,
-							simSOC,
-							futPrice,
-							decision.Action.HitDeficitAt.Format("15:04"),
-							decision.Action.HitBufferedDeficitAt.Format("15:04"),
-						)
-					}
-				}
 
 				decidedMode := decision.Action.BatteryMode
 
@@ -406,6 +365,7 @@ func TestDecideHistory(t *testing.T) {
 							gridExportPrice = currentPrice.DollarsPerKWH + currentPrice.GenerationAdjustmentDollarsPerKWH
 						}
 					}
+					lastGridImportPrice = gridImportPrice
 
 					// Calculate battery SOC progression
 					energy := simSOC * capacityKWH / 100.0
@@ -558,38 +518,36 @@ func TestDecideHistory(t *testing.T) {
 			}
 
 			simNetCost := simCost - simCredit
+			startEnergyKWH := (initialSOC / 100.0) * capacityKWH
+			endEnergyKWH := (simSOC / 100.0) * capacityKWH
+			deltaEnergyKWH := endEnergyKWH - startEnergyKWH
+			batteryAssetValue := deltaEnergyKWH * lastGridImportPrice
+			simAdjustedNetCost := simNetCost - batteryAssetValue
 
-			savings := baseNetCost - simNetCost
+			savings := baseNetCost - simAdjustedNetCost
 			var pctSavings float64
 			if baseNetCost != 0 {
 				pctSavings = (savings / baseNetCost) * 100.0
 			}
 
-			t.Logf("\n--- Simulation Results for %s ---", fileName)
+			fmt.Printf("%-20s | Cash: $%7.3f | SOC: %5.1f%% -> %5.1f%% (dE: %+6.2f kWh, AssetVal: $%+6.3f) | AdjNetCost: $%7.3f | Sav: $%+6.3f (%5.1f%%)\n",
+				fileName, simNetCost, initialSOC, simSOC, deltaEnergyKWH, batteryAssetValue, simAdjustedNetCost, savings, pctSavings)
 			if !hasBaseline {
-				t.Logf("Baseline Net Cost : $%.3f (Calculated dynamically)", baseNetCost)
-			} else {
-				t.Logf("Baseline Net Cost : $%.3f", baseNetCost)
-			}
-			t.Logf("Simulated Net Cost: $%.3f (Cost: $%.3f, Credit: $%.3f)", simNetCost, simCost, simCredit)
-			t.Logf("Net Savings       : $%.3f (%.2f%%)", savings, pctSavings)
-			t.Logf("Final Simulated SOC: %.2f%%", simSOC)
-			if !hasBaseline {
-				t.Logf("Suggested baseline to add to fileBaselines map: %.3f", simNetCost)
+				t.Logf("Suggested baseline to add to fileBaselines map: %.3f", simAdjustedNetCost)
 			}
 			t.Log("---------------------------------")
 
 			mu.Lock()
-			totalSimCost += simNetCost
+			totalSimCost += simAdjustedNetCost
 			totalBaselineCost += baseNetCost
 			mu.Unlock()
 
 			if hasBaseline {
 				// Round to 3 decimal places to avoid float precision issues when comparing against 3-decimal-place target baselines
-				simNetCostRounded := math.Round(simNetCost*1000.0) / 1000.0
+				simAdjustedNetCostRounded := math.Round(simAdjustedNetCost*1000.0) / 1000.0
 				// Allow up to $0.10 regression per site
 				allowedBuffer := 0.10
-				assert.LessOrEqual(t, simNetCostRounded, baseNetCost+allowedBuffer, "Simulated net cost should be less than or equal to baseline")
+				assert.LessOrEqual(t, simAdjustedNetCostRounded, baseNetCost+allowedBuffer, "Simulated adjusted net cost should be less than or equal to baseline")
 			}
 		})
 	}

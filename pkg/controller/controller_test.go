@@ -484,13 +484,17 @@ func TestDecide(t *testing.T) {
 			TSEnd:                fixedNow.Add(time.Hour),
 		}
 
-		// Future prices: flat at same level (so this is the "peak")
+		// Future prices: peak for first 3 hours, then off-peak
 		futurePrices := []types.Price{}
 		for i := 1; i <= 24; i++ {
+			rate := 0.10
+			if i < 4 {
+				rate = 0.50
+			}
 			futurePrices = append(futurePrices, types.Price{
 				TSStart:       fixedNow.Add(time.Duration(i) * time.Hour),
 				TSEnd:         fixedNow.Add(time.Duration(i+1) * time.Hour),
-				DollarsPerKWH: 0.50, GridUseDollarsPerKWH: 0.10,
+				DollarsPerKWH: rate, GridUseDollarsPerKWH: 0.10,
 			})
 		}
 
@@ -6090,6 +6094,9 @@ func TestEvaluateFallback(t *testing.T) {
 		GridChargeBatteries:                 true,
 		GridExportSolar:                     true,
 		MinArbitrageDifferenceDollarsPerKWH: 0.01,
+		UtilityRateOptions: types.UtilityRateOptions{
+			NetMeteringCredits: true,
+		},
 	}
 
 	t.Run("Sufficient Battery -> Load", func(t *testing.T) {
@@ -6163,19 +6170,67 @@ func TestEvaluateFallback(t *testing.T) {
 		}
 	})
 
-	t.Run("Deficit predicted + Current Price is Peak -> Load", func(t *testing.T) {
+	t.Run("Solar Export Hold + Refill Expected + Export Value comparable to Grid Charge -> Standby", func(t *testing.T) {
 		status := baseStatus
-		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.50}
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}
 		summary := simulationSummary{
-			HitDeficitAt:         now.Add(3 * time.Hour),
-			HitBufferedDeficitAt: now.Add(3 * time.Hour), HitThresholdDeficitAt: now.Add(3 * time.Hour),
+			HitDeficitAt:          now.Add(8 * time.Hour),
+			HitBufferedDeficitAt:  now.Add(8 * time.Hour),
+			HitThresholdDeficitAt: now.Add(8 * time.Hour),
+			HitSolarCapacityAt:    now.Add(4 * time.Hour),
+			HitCapacityAt:         now.Add(4 * time.Hour),
 		}
 		simData := []SimHour{
-			{TS: now, GridChargeDollarsPerKWH: 0.50},
-			{TS: now.Add(3 * time.Hour), GridChargeDollarsPerKWH: 0.50},
+			{TS: now, GridChargeDollarsPerKWH: 0.10},
+			{TS: now.Add(4 * time.Hour), GridChargeDollarsPerKWH: 0.10, SolarOppDollarsPerKWH: 0.10, NetLoadSolarKWH: -5.0},
 		}
 
 		decision := c.evaluateFallback(ctx, now, status, currentPrice, baseSettings, simData, summary, nil)
+		if assert.NotNil(t, decision) {
+			assert.Equal(t, types.BatteryModeStandby, decision.BatteryMode)
+			assert.Equal(t, types.ActionReasonHoldSimilarPrice, decision.Reason)
+		}
+	})
+
+	t.Run("Solar Export Hold + Refill Expected + Grid Charge significantly higher than Export Value -> Load", func(t *testing.T) {
+		status := baseStatus
+		settings := baseSettings
+		settings.MinExportHoldDifferenceDollarsPerKWH = 0.01
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.50}
+		summary := simulationSummary{
+			HitDeficitAt:          now.Add(8 * time.Hour),
+			HitBufferedDeficitAt:  now.Add(8 * time.Hour),
+			HitThresholdDeficitAt: now.Add(8 * time.Hour),
+			HitSolarCapacityAt:    now.Add(4 * time.Hour),
+			HitCapacityAt:         now.Add(4 * time.Hour),
+		}
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.50},
+			{TS: now.Add(4 * time.Hour), GridChargeDollarsPerKWH: 0.10, SolarOppDollarsPerKWH: 0.10, NetLoadSolarKWH: -5.0},
+		}
+
+		decision := c.evaluateFallback(ctx, now, status, currentPrice, settings, simData, summary, nil)
+		if assert.NotNil(t, decision) {
+			assert.Equal(t, types.BatteryModeLoad, decision.BatteryMode)
+			assert.Equal(t, types.ActionReasonPreventSolarCurtailment, decision.Reason)
+		}
+	})
+
+	t.Run("Deficit predicted + No Solar Refill -> Load", func(t *testing.T) {
+		status := baseStatus
+		settings := baseSettings
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}
+		summary := simulationSummary{
+			HitDeficitAt:          now.Add(3 * time.Hour),
+			HitBufferedDeficitAt:  now.Add(3 * time.Hour),
+			HitThresholdDeficitAt: now.Add(3 * time.Hour),
+		}
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.10},
+			{TS: now.Add(3 * time.Hour), GridChargeDollarsPerKWH: 0.10},
+		}
+
+		decision := c.evaluateFallback(ctx, now, status, currentPrice, settings, simData, summary, nil)
 		if assert.NotNil(t, decision) {
 			assert.Equal(t, types.BatteryModeLoad, decision.BatteryMode)
 			assert.Equal(t, types.ActionReasonDischargeAtPeak, decision.Reason)
@@ -7191,14 +7246,14 @@ func TestEvaluateFallback(t *testing.T) {
 			{TS: now.Add(2 * time.Hour), GridChargeDollarsPerKWH: 0.10, Price: types.Price{TSStart: now.Add(2 * time.Hour), DollarsPerKWH: 0.10}, BatteryKWH: 0.0, BatteryReserveKWH: 2.0, AvgHomeLoadKWH: 1.0},
 		}
 
-		// Case 1: With lastAction = Load -> scanBufferMinutes is 15 -> does NOT standby (falls back to Load)
+		// Case 1: With lastAction = Load -> scanBufferMinutes is 15 -> does NOT standby for peak survival -> discharges
 		decisionBypass := c.evaluateFallback(ctx, now, status, currentPrice, settings, simData, summary, lastAction)
 		if assert.NotNil(t, decisionBypass) {
 			assert.Equal(t, types.BatteryModeLoad, decisionBypass.BatteryMode)
 			assert.Equal(t, types.ActionReasonDischargeAtPeak, decisionBypass.Reason)
 		}
 
-		// Case 2: With lastAction = nil -> scanBufferMinutes is 15 -> does NOT standby (falls back to Load)
+		// Case 2: With lastAction = nil -> scanBufferMinutes is 15 -> does NOT standby for peak survival -> discharges
 		decisionStandby := c.evaluateFallback(ctx, now, status, currentPrice, settings, simData, summary, nil)
 		if assert.NotNil(t, decisionStandby) {
 			assert.Equal(t, types.BatteryModeLoad, decisionStandby.BatteryMode)
