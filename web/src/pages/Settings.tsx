@@ -2423,7 +2423,7 @@ const Settings = ({
                                         </Field.Root>
                                     )}
 
-                                    {settings.utilityRateOptions?.netMeteringCredits && (
+                                    {(settings.utilityRateOptions?.netMeteringCredits || settings.utilityRateOptions?.netMeteringScheme === 'net') && (
                                         <Field.Root className="form-group">
                                             <Field.Label htmlFor="solarNetMeteringCreditsValue">
                                                 Solar Net Metering Credits Value

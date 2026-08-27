@@ -534,6 +534,39 @@ describe('App & Settings', () => {
         });
     });
 
+    it('shows solar net metering credits value setting when netMeteringScheme is net', async () => {
+        const user = userEvent.setup();
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            utilityProvider: 'srp',
+            utilityRate: 'srp_e27',
+            utilityRateOptions: {
+                netMeteringScheme: 'net'
+            }
+        });
+        await navigateToSettings();
+
+        const advancedBtn = await screen.findByText('Show Advanced Settings');
+        fireEvent.click(advancedBtn);
+
+        const nmSelect = await screen.findByLabelText(/Solar Net Metering Credits Value/i);
+        expect(nmSelect).toBeInTheDocument();
+        await user.click(nmSelect);
+
+        const highestOption = await screen.findByRole('option', { name: 'Highest Price' });
+        await user.click(highestOption);
+
+        const saveBtn = screen.getByText('Save Settings');
+        fireEvent.click(saveBtn);
+
+        await waitFor(() => {
+            expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+                solarNetMeteringCreditsValue: 'highest'
+            }), expect.any(String), undefined);
+        });
+    });
+
+
     it('can select utility provider and then rate', async () => {
         const user = userEvent.setup();
         (fetchSettings as any).mockResolvedValue({
