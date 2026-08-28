@@ -38,6 +38,7 @@ export const ActionReason = {
     BatteryAtReserve: 'batteryAtReserve',
     VPPActive: 'vppActive',
     VPPPrep: 'vppPrep',
+    EVChargingStandby: 'evChargingStandby',
     ArbitrageHoldExport: 'arbitrageHoldExport',
     ArbitrageHoldSave: 'arbitrageHoldSave',
     // deprecated - but we don't delete them because old actions still have them
@@ -250,6 +251,7 @@ export interface Settings {
     minExportHoldDifferenceDollarsPerKWH: number;
     minBatterySOC: number;
     minBatterySOCPeriods?: MinBatterySOCPeriod[];
+    evChargingPeriods?: TimePeriod[];
     ignoreHourUsageOverMultiple: number;
     gridChargeBatteries: boolean;
     gridExportSolar: boolean;
@@ -765,3 +767,37 @@ export const fetchActionsAndSavings = async (start: Date, end: Date, siteID?: st
     }
     return response.json();
 };
+
+export interface EVSession {
+    tsStartHour: string;
+    tsEndHour: string;
+    durationHr: number;
+    peakKW: number;
+    avgKW: number;
+    totalKWH: number;
+    netStepKW: number;
+}
+
+export interface EVDetectionResult {
+    detected: boolean;
+    recommendedPeriod?: TimePeriod;
+    allDetectedPeriods?: TimePeriod[];
+    estimatedRateKW?: number;
+    sessionsCount?: number;
+    sessions?: EVSession[];
+    message?: string;
+}
+
+export const fetchEstimateEVCharging = async (siteID?: string): Promise<EVDetectionResult> => {
+    const query = new URLSearchParams();
+    if (siteID) {
+        query.append('siteID', siteID);
+    }
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+    const response = await fetch(`/api/history/estimateEVCharging${queryString}`);
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Failed to estimate EV charging'));
+    }
+    return response.json();
+};
+

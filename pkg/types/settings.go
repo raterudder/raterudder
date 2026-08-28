@@ -55,6 +55,10 @@ type Settings struct {
 	// Optional variable minimum battery SOC periods (time-based or TOU period-name based).
 	MinBatterySOCPeriods []MinBatterySOCPeriod `json:"minBatterySOCPeriods,omitempty"`
 
+	// Optional EV charging periods where battery discharge is avoided.
+	// If empty/nil, feature is disabled.
+	EVChargingPeriods []TimePeriod `json:"evChargingPeriods,omitempty"`
+
 	// Grid Settings
 	// Maximum Grid Use (in kW) (not supported yet since we don't change limits)
 	// MaxGridUseKW float64 `json:"maxGridUseKW"`

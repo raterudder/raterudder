@@ -1043,3 +1043,79 @@ func TestHandleHistoryEnergy(t *testing.T) {
 		}
 	})
 }
+
+func TestHandleEstimateEVCharging(t *testing.T) {
+	siteID := "site-ev-test"
+
+	t.Run("NoHistory_ReturnsUndetected", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetEnergyHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockS.On("GetSettings", mock.Anything, siteID).Return(types.Settings{}, 1, nil)
+
+		srv := &Server{
+			storage: mockS,
+			nowFunc: func() time.Time { return time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC) },
+		}
+
+		req := httptest.NewRequest("GET", "/api/history/estimateEVCharging", nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, siteID))
+		w := httptest.NewRecorder()
+
+		srv.handleEstimateEVCharging(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+		var res types.EVDetectionResult
+		err := json.NewDecoder(w.Body).Decode(&res)
+		require.NoError(t, err)
+		assert.False(t, res.Detected)
+	})
+
+	t.Run("WithHistory_ReturnsDetectedEstimate", func(t *testing.T) {
+		mockS := &mockStorage{}
+		startDate := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+		var history []types.DailyEnergyStats
+		for d := 0; d < 10; d++ {
+			dayStart := startDate.AddDate(0, 0, d)
+			var hourly []types.EnergyStats
+			for h := 0; h < 24; h++ {
+				load := 1.0
+				if h == 1 || h == 2 || h == 3 {
+					load = 11.5
+				}
+				hourly = append(hourly, types.EnergyStats{
+					TSHourStart: dayStart.Add(time.Duration(h) * time.Hour),
+					HomeKWH:     load,
+				})
+			}
+			history = append(history, types.DailyEnergyStats{
+				TSDayStart: dayStart,
+				Hourly:     hourly,
+			})
+		}
+
+		mockS.On("GetEnergyHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return(history, nil)
+		mockS.On("GetSettings", mock.Anything, siteID).Return(types.Settings{
+			Location: &types.SiteLocation{TimeZone: "UTC"},
+		}, 1, nil)
+
+		srv := &Server{
+			storage: mockS,
+			nowFunc: func() time.Time { return time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC) },
+		}
+
+		req := httptest.NewRequest("GET", "/api/history/estimateEVCharging", nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, siteID))
+		w := httptest.NewRecorder()
+
+		srv.handleEstimateEVCharging(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+		var res types.EVDetectionResult
+		err := json.NewDecoder(w.Body).Decode(&res)
+		require.NoError(t, err)
+		if assert.True(t, res.Detected) {
+			assert.InDelta(t, 11.5, res.EstimatedRateKW, 0.1)
+			assert.Equal(t, 10, res.SessionsCount)
+		}
+	})
+}

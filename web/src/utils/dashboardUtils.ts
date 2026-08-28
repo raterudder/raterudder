@@ -248,6 +248,13 @@ export const getReasonText = (action: Action): string => {
             ];
             return parts.concat(suffixParts).join(' ');
         }
+        case ActionReason.EVChargingStandby: {
+            const parts = [
+                `EV charging detected during your configured charging period.`,
+                `Keeping the home battery in standby to force EV charging from the grid, preserving battery reserves for morning and peak hours.`,
+            ];
+            return parts.concat(suffixParts).join(' ');
+        }
         case ActionReason.SufficientBattery: {
             const parts = [
                 'The battery has enough stored energy to meet predicted demand. Relying on solar and battery to cover home load and minimize grid imports.'

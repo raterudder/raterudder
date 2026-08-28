@@ -177,4 +177,16 @@ export const setupDefaultApiMocks = (api: any) => {
     if (typeof api.logout?.mockResolvedValue === 'function') api.logout.mockResolvedValue(undefined);
     if (typeof api.fetchModeling?.mockResolvedValue === 'function') api.fetchModeling.mockResolvedValue([]);
     if (typeof api.fetchUtilityPeriods?.mockResolvedValue === 'function') api.fetchUtilityPeriods.mockResolvedValue([]);
+    if (typeof api.fetchEstimateEVCharging?.mockResolvedValue === 'function') {
+        api.fetchEstimateEVCharging.mockResolvedValue({
+            detected: true,
+            recommendedPeriod: {
+                name: 'Nighttime EV Charging',
+                hours: [{ hourStart: 23, minuteStart: 0, hourEnd: 6, minuteEnd: 0 }],
+            },
+            estimatedRateKW: 11.5,
+            sessionsCount: 11,
+        });
+    }
 };
+

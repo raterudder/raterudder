@@ -262,6 +262,16 @@ describe('dashboardUtils', () => {
             };
             expect(getReasonText(action)).toContain('Disabled solar export');
         });
+
+        it('explains EV charging standby correctly', () => {
+            const action = {
+                ...baseAction,
+                reason: ActionReason.EVChargingStandby,
+            };
+            const text = getReasonText(action);
+            expect(text).toContain('EV charging detected');
+            expect(text).toContain('preserving battery reserves');
+        });
     });
 
     describe('formatTime & offset helpers', () => {

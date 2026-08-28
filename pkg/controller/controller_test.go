@@ -2382,6 +2382,138 @@ func TestDecide(t *testing.T) {
 
 		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
 	})
+
+	t.Run("EVCharging", func(t *testing.T) {
+		evNow := time.Date(2026, 8, 20, 23, 15, 0, 0, time.UTC)
+		evCurrentPrice := types.Price{
+			TSStart:       evNow.Truncate(time.Hour),
+			TSEnd:         evNow.Truncate(time.Hour).Add(time.Hour),
+			DollarsPerKWH: 0.15,
+		}
+		evFuturePrices := []types.Price{
+			{
+				TSStart:       evNow.Truncate(time.Hour).Add(time.Hour),
+				TSEnd:         evNow.Truncate(time.Hour).Add(2 * time.Hour),
+				DollarsPerKWH: 0.15,
+			},
+		}
+		evSettings := types.Settings{
+			MinBatterySOC:                          20.0,
+			AlwaysChargeUnderDollarsPerKWH:         0.05,
+			MinDeficitPriceDifferenceDollarsPerKWH: 0.05,
+			MinArbitrageDifferenceDollarsPerKWH:    0.10,
+			GridChargeBatteries:                    true,
+			EVChargingPeriods: []types.TimePeriod{
+				{
+					Name: "Night EV Charging",
+					Hours: []types.UtilityHourPeriod{
+						{
+							HourStart: 23,
+							HourEnd:   6,
+						},
+					},
+				},
+			},
+		}
+		evBaseStatus := types.SystemStatus{
+			Timestamp:             evNow,
+			BatterySOC:            80.0,
+			BatteryCapacityKWH:    13.5,
+			BatteryAboveMinSOC:    true,
+			HomeKW:                1.0,
+			SolarKW:               0.0,
+			MaxBatteryChargeKW:    5.0,
+			MaxBatteryDischargeKW: 5.0,
+		}
+		evHistory := []types.EnergyStats{
+			{TSHourStart: evNow.Add(-1 * time.Hour), HomeKWH: 1.0},
+			{TSHourStart: evNow.Add(-2 * time.Hour), HomeKWH: 1.1},
+			{TSHourStart: evNow.Add(-3 * time.Hour), HomeKWH: 0.9},
+		}
+
+		t.Run("WithinPeriod_EVDetected_SetsStandby", func(t *testing.T) {
+			status := evBaseStatus
+			status.HomeKW = 11.5
+
+			decision, err := c.Decide(ctx, status, evCurrentPrice, evFuturePrices, evHistory, nil, evSettings, nil)
+			require.NoError(t, err)
+			if assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode) {
+				assert.Equal(t, types.ActionReasonEVChargingStandby, decision.Action.Reason)
+				assert.Contains(t, decision.Action.Description, "EV Charging Detected")
+			}
+		})
+
+		t.Run("WithinPeriod_NoEV_NormalLoadFollowing", func(t *testing.T) {
+			status := evBaseStatus
+			status.HomeKW = 1.2
+
+			decision, err := c.Decide(ctx, status, evCurrentPrice, evFuturePrices, evHistory, nil, evSettings, nil)
+			require.NoError(t, err)
+			assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
+			assert.Equal(t, types.ActionReasonSufficientBattery, decision.Action.Reason)
+		})
+
+		t.Run("OutsidePeriod_EVActive_NoStandby", func(t *testing.T) {
+			midday := time.Date(2026, 8, 20, 14, 0, 0, 0, time.UTC)
+			middayPrice := types.Price{TSStart: midday, DollarsPerKWH: 0.15}
+			status := evBaseStatus
+			status.Timestamp = midday
+			status.HomeKW = 11.5
+
+			decision, err := c.Decide(ctx, status, middayPrice, nil, evHistory, nil, evSettings, nil)
+			require.NoError(t, err)
+			assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
+			assert.NotEqual(t, types.ActionReasonEVChargingStandby, decision.Action.Reason)
+		})
+
+		t.Run("AlwaysChargeUnderPrice_OverridesEVStandby", func(t *testing.T) {
+			status := evBaseStatus
+			status.HomeKW = 11.5
+			cheapPrice := types.Price{
+				TSStart:       evNow.Truncate(time.Hour),
+				DollarsPerKWH: 0.02,
+			}
+
+			decision, err := c.Decide(ctx, status, cheapPrice, evFuturePrices, evHistory, nil, evSettings, nil)
+			require.NoError(t, err)
+			if assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode) {
+				assert.Equal(t, types.ActionReasonAlwaysChargeBelowThreshold, decision.Action.Reason)
+			}
+		})
+
+		t.Run("ArbitrageCharge_OverridesEVStandby", func(t *testing.T) {
+			status := evBaseStatus
+			status.BatterySOC = 40.0
+			status.HomeKW = 11.5
+
+			spikePrice := []types.Price{
+				{
+					TSStart:       evNow.Truncate(time.Hour).Add(time.Hour),
+					DollarsPerKWH: 0.80,
+				},
+			}
+
+			decision, err := c.Decide(ctx, status, evCurrentPrice, spikePrice, evHistory, nil, evSettings, nil)
+			require.NoError(t, err)
+			assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
+			assert.NotEqual(t, types.ActionReasonEVChargingStandby, decision.Action.Reason)
+		})
+
+		t.Run("EVCompletes_ReleasesStandby", func(t *testing.T) {
+			status := evBaseStatus
+			status.HomeKW = 0.9
+
+			lastAction := &types.Action{
+				BatteryMode: types.BatteryModeStandby,
+				Reason:      types.ActionReasonEVChargingStandby,
+			}
+
+			decision, err := c.Decide(ctx, status, evCurrentPrice, evFuturePrices, evHistory, nil, evSettings, lastAction)
+			require.NoError(t, err)
+			assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
+			assert.Equal(t, types.ActionReasonSufficientBattery, decision.Action.Reason)
+		})
+	})
 }
 
 func TestSimulateStandby(t *testing.T) {
@@ -8142,5 +8274,149 @@ func TestEvaluateVPPEvent(t *testing.T) {
 		require.NotNil(t, eval.Decision)
 		assert.Equal(t, types.BatteryModeChargeAny, eval.Decision.BatteryMode)
 		assert.GreaterOrEqual(t, eval.Decision.ChargeToSOC, 40, "Target SOC should respect or exceed active 40% reserve")
+	})
+}
+
+func TestEvaluateEVCharging(t *testing.T) {
+	ctx := context.Background()
+	c := NewController()
+
+	loc := time.UTC
+	now := time.Date(2026, 8, 20, 23, 30, 0, 0, loc)
+
+	baseSettings := types.Settings{
+		EVChargingPeriods: []types.TimePeriod{
+			{
+				Name: "Night EV Charging",
+				Hours: []types.UtilityHourPeriod{
+					{
+						HourStart: 23,
+						HourEnd:   6,
+					},
+				},
+			},
+		},
+	}
+
+	baseStatus := types.SystemStatus{
+		Timestamp: now,
+		HomeKW:    1.0,
+	}
+
+	history := []types.EnergyStats{
+		{TSHourStart: now.Add(-1 * time.Hour), HomeKWH: 1.0},
+		{TSHourStart: now.Add(-2 * time.Hour), HomeKWH: 1.1},
+		{TSHourStart: now.Add(-3 * time.Hour), HomeKWH: 0.9},
+	}
+
+	t.Run("NoConfiguredPeriods_ReturnsNil", func(t *testing.T) {
+		settings := types.Settings{}
+		status := baseStatus
+		status.HomeKW = 11.5
+		result := c.evaluateEVCharging(ctx, now, status, history, settings)
+		assert.Nil(t, result)
+	})
+
+	t.Run("OutsideConfiguredPeriod_ReturnsNil", func(t *testing.T) {
+		daytime := time.Date(2026, 8, 20, 14, 0, 0, 0, loc)
+		status := baseStatus
+		status.Timestamp = daytime
+		status.HomeKW = 11.5
+		result := c.evaluateEVCharging(ctx, daytime, status, history, baseSettings)
+		assert.Nil(t, result)
+	})
+
+	t.Run("WithinPeriod_LoadBelowThreshold_ReturnsNil", func(t *testing.T) {
+		status := baseStatus
+		status.HomeKW = 3.8 // below 4.8 kW threshold
+		result := c.evaluateEVCharging(ctx, now, status, history, baseSettings)
+		assert.Nil(t, result)
+	})
+
+	t.Run("WithinPeriod_LoadHighNoStep_ReturnsNil", func(t *testing.T) {
+		// Heavy continuous baseline (e.g. AC 4.2 kW) and load is 5.5 kW (step only 1.3 kW)
+		acHistory := []types.EnergyStats{
+			{TSHourStart: now.Add(-1 * time.Hour), HomeKWH: 4.2},
+			{TSHourStart: now.Add(-2 * time.Hour), HomeKWH: 4.1},
+			{TSHourStart: now.Add(-3 * time.Hour), HomeKWH: 4.3},
+		}
+		status := baseStatus
+		status.HomeKW = 5.5
+		result := c.evaluateEVCharging(ctx, now, status, acHistory, baseSettings)
+		assert.Nil(t, result, "Should return nil when step is only 1.3 kW (e.g. laundry coinciding with AC)")
+	})
+
+	t.Run("WithinPeriod_48ACharging_ReturnsStandby", func(t *testing.T) {
+		status := baseStatus
+		status.HomeKW = 11.5 // 48A charger
+		result := c.evaluateEVCharging(ctx, now, status, history, baseSettings)
+		require.NotNil(t, result)
+		assert.Equal(t, types.BatteryModeStandby, result.BatteryMode)
+		assert.Equal(t, types.ActionReasonEVChargingStandby, result.Reason)
+		assert.Contains(t, result.Description, "EV Charging Detected")
+	})
+
+	t.Run("WithinPeriod_32ACharging_ReturnsStandby", func(t *testing.T) {
+		status := baseStatus
+		status.HomeKW = 7.6 // 32A charger
+		result := c.evaluateEVCharging(ctx, now, status, history, baseSettings)
+		require.NotNil(t, result)
+		assert.Equal(t, types.BatteryModeStandby, result.BatteryMode)
+		assert.Equal(t, types.ActionReasonEVChargingStandby, result.Reason)
+	})
+
+	t.Run("WithinPeriod_24ACharging_ReturnsStandby", func(t *testing.T) {
+		status := baseStatus
+		status.HomeKW = 5.7 // 24A charger
+		result := c.evaluateEVCharging(ctx, now, status, history, baseSettings)
+		require.NotNil(t, result)
+		assert.Equal(t, types.BatteryModeStandby, result.BatteryMode)
+		assert.Equal(t, types.ActionReasonEVChargingStandby, result.Reason)
+	})
+
+	t.Run("WithinPeriod_HeavyACBaseline_StepSufficient_ReturnsStandby", func(t *testing.T) {
+		// AC is 3.5 kW, EV adds 7.0 kW -> total 10.5 kW
+		acHistory := []types.EnergyStats{
+			{TSHourStart: now.Add(-1 * time.Hour), HomeKWH: 3.5},
+			{TSHourStart: now.Add(-2 * time.Hour), HomeKWH: 3.6},
+			{TSHourStart: now.Add(-3 * time.Hour), HomeKWH: 3.4},
+		}
+		status := baseStatus
+		status.HomeKW = 10.5
+		result := c.evaluateEVCharging(ctx, now, status, acHistory, baseSettings)
+		require.NotNil(t, result)
+		assert.Equal(t, types.BatteryModeStandby, result.BatteryMode)
+		assert.Equal(t, types.ActionReasonEVChargingStandby, result.Reason)
+	})
+
+	t.Run("MultiplePeriods_MatchesActivePeriod", func(t *testing.T) {
+		multiPeriodSettings := types.Settings{
+			EVChargingPeriods: []types.TimePeriod{
+				{
+					Name:  "Morning Period",
+					Hours: []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 9}},
+				},
+				{
+					Name:  "Night Period",
+					Hours: []types.UtilityHourPeriod{{HourStart: 23, HourEnd: 6}},
+				},
+			},
+		}
+		status := baseStatus
+		status.HomeKW = 9.6
+		result := c.evaluateEVCharging(ctx, now, status, history, multiPeriodSettings)
+		require.NotNil(t, result)
+		assert.Equal(t, types.BatteryModeStandby, result.BatteryMode)
+	})
+
+	t.Run("OvernightMidnightCrossingPeriod", func(t *testing.T) {
+		// Test at 02:00 AM (after midnight)
+		tAfterMidnight := time.Date(2026, 8, 21, 2, 0, 0, 0, loc)
+		status := baseStatus
+		status.Timestamp = tAfterMidnight
+		status.HomeKW = 11.5
+		result := c.evaluateEVCharging(ctx, tAfterMidnight, status, history, baseSettings)
+		require.NotNil(t, result)
+		assert.Equal(t, types.BatteryModeStandby, result.BatteryMode)
 	})
 }

@@ -59,6 +59,7 @@ const (
 	ActionReasonBatteryAtReserve            ActionReason = "batteryAtReserve"
 	ActionReasonVPPActive                   ActionReason = "vppActive"
 	ActionReasonVPPPrep                     ActionReason = "vppPrep"
+	ActionReasonEVChargingStandby           ActionReason = "evChargingStandby"
 
 	// Deprecated - we don't use these anymore but we don't delete them so we know they were used
 	ActionReasonArbitrageHoldSave   ActionReason = "arbitrageHoldSave"
@@ -278,4 +279,26 @@ type HistorySummary struct {
 	TSMonthStart time.Time          `json:"tsMonthStart"`
 	Energy       []DailyEnergyStats `json:"energy"`
 	Weather      []Weather          `json:"weather"`
+}
+
+// EVSession represents a detected EV charging session.
+type EVSession struct {
+	TSStartHour time.Time `json:"tsStartHour"`
+	TSEndHour   time.Time `json:"tsEndHour"`
+	DurationHr  int       `json:"durationHr"`
+	PeakKW      float64   `json:"peakKW"`
+	AvgKW       float64   `json:"avgKW"`
+	TotalKWH    float64   `json:"totalKWH"`
+	NetStepKW   float64   `json:"netStepKW"`
+}
+
+// EVDetectionResult contains the output of EV charging estimation across history.
+type EVDetectionResult struct {
+	Detected           bool         `json:"detected"`
+	RecommendedPeriod  TimePeriod   `json:"recommendedPeriod"`
+	AllDetectedPeriods []TimePeriod `json:"allDetectedPeriods,omitempty"`
+	EstimatedRateKW    float64      `json:"estimatedRateKW"`
+	SessionsCount      int          `json:"sessionsCount"`
+	Sessions           []EVSession  `json:"sessions,omitempty"`
+	Message            string       `json:"message,omitempty"`
 }

@@ -1966,4 +1966,133 @@ func TestSimulateState(t *testing.T) {
 			assert.InDelta(t, 2.0, simData[7].BatteryReserveKWH, 0.01)
 		})
 	})
+
+	t.Run("EVChargingPeriods", func(t *testing.T) {
+		loc := time.UTC
+		evNow := time.Date(2026, 8, 20, 22, 0, 0, 0, loc)
+
+		evStatus := types.SystemStatus{
+			Timestamp:          evNow,
+			BatterySOC:         80.0,
+			BatteryCapacityKWH: 13.5,
+			BatteryAboveMinSOC: true,
+			HomeKW:             1.0,
+		}
+
+		evCurrentPrice := types.Price{
+			TSStart:       evNow,
+			TSEnd:         evNow.Add(time.Hour),
+			DollarsPerKWH: 0.10,
+		}
+
+		var evFuturePrices []types.Price
+		for i := 1; i <= 24; i++ {
+			tFuture := evNow.Add(time.Duration(i) * time.Hour)
+			evFuturePrices = append(evFuturePrices, types.Price{
+				TSStart:       tFuture,
+				TSEnd:         tFuture.Add(time.Hour),
+				DollarsPerKWH: 0.10,
+			})
+		}
+
+		// Create 14 days of history where midnight to 4 AM had 11.5 kW EV charges
+		var evHistory []types.EnergyStats
+		startHist := evNow.AddDate(0, 0, -14).Truncate(24 * time.Hour)
+		for d := 0; d < 14; d++ {
+			dayStart := startHist.AddDate(0, 0, d)
+			for h := 0; h < 24; h++ {
+				hStart := dayStart.Add(time.Duration(h) * time.Hour)
+				load := 0.8
+				if h >= 0 && h <= 3 {
+					load = 11.5
+				}
+				evHistory = append(evHistory, types.EnergyStats{
+					TSHourStart: hStart,
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		t.Run("WithoutEVChargingPeriods_HighEVLoadPredicted", func(t *testing.T) {
+			settingsWithoutEV := types.Settings{
+				MinBatterySOC: 20.0,
+			}
+			model, _ := c.BuildHourlyEnergyModel(ctx, evNow, evHistory, nil, settingsWithoutEV)
+			// Model predicts heavy 11.5 kW load at midnight
+			assert.GreaterOrEqual(t, model[0].AvgHomeLoadKWH, 5.0)
+		})
+
+		t.Run("WithEVChargingPeriods_EVLoadClampedToBaseline", func(t *testing.T) {
+			settingsWithEV := types.Settings{
+				MinBatterySOC: 20.0,
+				EVChargingPeriods: []types.TimePeriod{
+					{
+						Name: "Night EV Charging",
+						Hours: []types.UtilityHourPeriod{
+							{
+								HourStart: 23,
+								HourEnd:   6,
+							},
+						},
+					},
+				},
+			}
+
+			model, _ := c.BuildHourlyEnergyModel(ctx, evNow, evHistory, nil, settingsWithEV)
+			// Model filters out EV load in window, predicting normal household baseline (~0.8 kW)
+			assert.LessOrEqual(t, model[0].AvgHomeLoadKWH, 2.0)
+
+			simData, _ := c.SimulateState(ctx, evNow, evStatus, evCurrentPrice, evFuturePrices, evHistory, nil, settingsWithEV)
+			require.GreaterOrEqual(t, len(simData), 24)
+
+			// Battery should not be drained to 0 during midnight hours
+			for _, hour := range simData {
+				if hour.Hour >= 0 && hour.Hour <= 5 {
+					assert.GreaterOrEqual(t, hour.BatteryKWH, 3.5)
+				}
+			}
+		})
+
+		t.Run("WithEVChargingPeriods_ClampedToHourSpecificBaseline", func(t *testing.T) {
+			// History where night baseline is 1.5 kW (due to nighttime AC), but midday has 0.1 kW standby
+			var hist []types.EnergyStats
+			for d := 0; d < 14; d++ {
+				dayStart := startHist.AddDate(0, 0, d)
+				for h := 0; h < 24; h++ {
+					hStart := dayStart.Add(time.Duration(h) * time.Hour)
+					load := 1.5 // nighttime baseline
+					if h >= 10 && h <= 16 {
+						load = 0.1 // empty house standby during day
+					}
+					if h >= 0 && h <= 3 {
+						load = 11.5 // 4-hour EV charge
+					}
+					hist = append(hist, types.EnergyStats{
+						TSHourStart: hStart,
+						HomeKWH:     load,
+					})
+				}
+			}
+
+			settingsWithEV := types.Settings{
+				MinBatterySOC: 20.0,
+				EVChargingPeriods: []types.TimePeriod{
+					{
+						Name: "Night EV Charging",
+						Hours: []types.UtilityHourPeriod{
+							{
+								HourStart: 23,
+								HourEnd:   6,
+							},
+						},
+					},
+				},
+			}
+
+			model, _ := c.BuildHourlyEnergyModel(ctx, evNow, hist, nil, settingsWithEV)
+			// For hour 2 (which is hour 3 of the EV charge), it looks back earlier to 23:00 (1.5 kW)
+			// and uses ~1.5 kW instead of 0.1 kW site minimum!
+			assert.InDelta(t, 1.5, model[2].AvgHomeLoadKWH, 0.3)
+		})
+	})
 }

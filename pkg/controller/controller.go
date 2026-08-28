@@ -366,6 +366,10 @@ func (c *Controller) Decide(
 		return dec, nil
 	}
 
+	if evDecision := c.evaluateEVCharging(ctx, now, currentStatus, history, settings); evDecision != nil {
+		return buildFinalDecision(evDecision), nil
+	}
+
 	fallbackDecision := c.evaluateFallback(ctx, now, currentStatus, currentPrice, settings, simData, summary, lastAction)
 	log.Ctx(ctx).DebugContext(ctx, "falling back to economical decision",
 		slog.String("mode", drModeString(fallbackDecision.BatteryMode)),
@@ -1995,6 +1999,43 @@ func (c *Controller) evaluatePlannedCharge(
 		Reason:      types.ActionReasonDischargeAtPeak,
 		Description: loadDescription,
 	}
+}
+
+// evaluateEVCharging checks if EV charging is active within any configured EVChargingPeriods.
+// If active EV charging is detected (load >= 4.8 kW and step >= 3.5 kW above baseline),
+// it returns a DecisionResult with BatteryModeStandby and ActionReasonEVChargingStandby.
+// Otherwise, it returns nil.
+func (c *Controller) evaluateEVCharging(
+	ctx context.Context,
+	now time.Time,
+	currentStatus types.SystemStatus,
+	history []types.EnergyStats,
+	settings types.Settings,
+) *DecisionResult {
+	if len(settings.EVChargingPeriods) == 0 {
+		return nil
+	}
+
+	for _, period := range settings.EVChargingPeriods {
+		inPeriod, _, err := period.Contains(now)
+		if err == nil && inPeriod {
+			if isEV, stepKW := detectEVCharging(ctx, currentStatus.HomeKW, history); isEV {
+				desc := fmt.Sprintf("EV Charging Detected (%.1fkW load, +%.1fkW step). Battery in standby.", currentStatus.HomeKW, stepKW)
+				log.Ctx(ctx).InfoContext(ctx, "ev charging detected, setting battery to standby",
+					slog.Float64("homeKW", currentStatus.HomeKW),
+					slog.Float64("stepKW", stepKW),
+					slog.String("period", period.Name),
+				)
+				return &DecisionResult{
+					BatteryMode: types.BatteryModeStandby,
+					Reason:      types.ActionReasonEVChargingStandby,
+					Description: desc,
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 // evaluateFallback implements the economical fallback battery actions.

@@ -193,6 +193,27 @@ func (c *Controller) BuildHourlyEnergyModel(
 		standbyLoad = max(0.1, sortedLoads[idx])
 	}
 
+	// Index historical load by timestamp for non-EV baseline lookup
+	historyByTime := make(map[time.Time]float64, len(history))
+	for _, h := range history {
+		if !h.TSHourStart.IsZero() {
+			historyByTime[h.TSHourStart.UTC()] = h.HomeKWH
+		}
+	}
+
+	findNonEVBaseline := func(ts time.Time) float64 {
+		utcTS := ts.UTC()
+		for lookback := 1; lookback <= 12; lookback++ {
+			prevTS := utcTS.Add(-time.Duration(lookback) * time.Hour)
+			if load, exists := historyByTime[prevTS]; exists {
+				if load < EVMinThresholdKW && load > 0.05 {
+					return load
+				}
+			}
+		}
+		return standbyLoad
+	}
+
 	// Group history by calendar date string (YYYY-MM-DD) in the site's local timezone.
 	// This helps us analyze overall daily patterns and compute daily averages.
 	dayMap := make(map[string]*dayPoints)
@@ -210,8 +231,18 @@ func (c *Controller) BuildHourlyEnergyModel(
 		}
 		d.points = append(d.points, h)
 		// We only consider positive, active loads (> 0.0 KWH) to filter out telemetry drops or empty hours.
-		if h.HomeKWH > 0.0 {
-			d.loads = append(d.loads, h.HomeKWH)
+		loadVal := h.HomeKWH
+		if len(settings.EVChargingPeriods) > 0 && loadVal >= EVMinThresholdKW {
+			for _, evp := range settings.EVChargingPeriods {
+				inEVPeriod, _, err := evp.Contains(h.TSHourStart)
+				if err == nil && inEVPeriod {
+					loadVal = findNonEVBaseline(h.TSHourStart)
+					break
+				}
+			}
+		}
+		if loadVal > 0.0 {
+			d.loads = append(d.loads, loadVal)
 		}
 	}
 
@@ -704,8 +735,19 @@ func (c *Controller) BuildHourlyEnergyModel(
 						}
 					}
 
+					loadVal := pt.HomeKWH
+					if len(settings.EVChargingPeriods) > 0 && loadVal >= EVMinThresholdKW {
+						for _, evp := range settings.EVChargingPeriods {
+							inEVPeriod, _, err := evp.Contains(pt.TSHourStart)
+							if err == nil && inEVPeriod {
+								loadVal = findNonEVBaseline(pt.TSHourStart)
+								break
+							}
+						}
+					}
+
 					pts = append(pts, weightedPoint{
-						Value:  pt.HomeKWH,
+						Value:  loadVal,
 						Weight: finalWeight,
 					})
 				}

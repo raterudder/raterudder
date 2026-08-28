@@ -220,6 +220,7 @@ func (s *Server) setupHandler() http.Handler {
 	apiMux.HandleFunc("GET /api/history/actions", s.handleHistoryActions)
 	apiMux.HandleFunc("GET /api/history/savings", s.handleHistorySavings)
 	apiMux.HandleFunc("GET /api/history/actionsAndSavings", s.handleHistoryActionsAndSavings)
+	apiMux.HandleFunc("GET /api/history/estimateEVCharging", s.handleEstimateEVCharging)
 	apiMux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	apiMux.HandleFunc("POST /api/settings", s.handleUpdateSettings)
 	apiMux.HandleFunc("POST /api/delete/site", s.handleDeleteSite)

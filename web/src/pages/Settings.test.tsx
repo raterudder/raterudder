@@ -2139,6 +2139,168 @@ describe('App & Settings', () => {
             expect(screen.getByText(/Rate Period Reserve Schedule/i)).toBeInTheDocument();
         });
     });
+
+    describe('EV Charging Battery Protection', () => {
+        it('is hidden when query param ?ev=true is not present and release is production', async () => {
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                release: 'production',
+                evChargingPeriods: undefined,
+            });
+            await navigateToSettings();
+            expect(screen.queryByTestId('ev-charging-section')).not.toBeInTheDocument();
+        });
+
+        it('is visible when ?ev=true is present in query param', async () => {
+            const originalLocation = window.location;
+            delete (window as any).location;
+            (window as any).location = new URL('http://localhost/settings?ev=true');
+
+            try {
+                (api.fetchSettings as any).mockResolvedValue({
+                    ...defaultSettings,
+                    release: 'production',
+                    evChargingPeriods: undefined,
+                });
+                await navigateToSettings();
+                expect(screen.getByTestId('ev-charging-section')).toBeInTheDocument();
+                expect(screen.getByText('Avoid Battery for EV Charging')).toBeInTheDocument();
+            } finally {
+                (window as any).location = originalLocation;
+            }
+        });
+
+        it('is visible when settings release is staging', async () => {
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                release: 'staging',
+                evChargingPeriods: undefined,
+            });
+            await navigateToSettings();
+            expect(screen.getByTestId('ev-charging-section')).toBeInTheDocument();
+        });
+
+        it('toggling switch ON calls fetchEstimateEVCharging and populates default hours', async () => {
+            const user = userEvent.setup();
+            const originalLocation = window.location;
+            delete (window as any).location;
+            (window as any).location = new URL('http://localhost/settings?ev=true');
+
+            try {
+                (api.fetchSettings as any).mockResolvedValue({
+                    ...defaultSettings,
+                    release: 'production',
+                    evChargingPeriods: undefined,
+                });
+                (api.fetchEstimateEVCharging as any).mockResolvedValue({
+                    detected: true,
+                    recommendedPeriod: {
+                        name: 'Nighttime EV Charging',
+                        hours: [{ hourStart: 23, minuteStart: 0, hourEnd: 6, minuteEnd: 0 }],
+                    },
+                    estimatedRateKW: 11.5,
+                    sessionsCount: 11,
+                });
+
+                await navigateToSettings();
+
+                const evSwitch = screen.getByRole('switch', { name: /Avoid Battery for EV Charging/i });
+                expect(evSwitch).not.toBeChecked();
+
+                await user.click(evSwitch);
+
+                expect(api.fetchEstimateEVCharging).toHaveBeenCalled();
+                expect(await screen.findByText(/Auto-detected ~11.5 kW charging based on 11 recent sessions/i)).toBeInTheDocument();
+
+                const startSelect = screen.getByRole('combobox', { name: 'EV Charging Start Time' });
+                const endSelect = screen.getByRole('combobox', { name: 'EV Charging End Time' });
+                expect(startSelect).toHaveValue('23');
+                expect(endSelect).toHaveValue('6');
+            } finally {
+                (window as any).location = originalLocation;
+            }
+        });
+
+        it('shows warning note when auto-estimation fails to detect charging', async () => {
+            const user = userEvent.setup();
+            const originalLocation = window.location;
+            delete (window as any).location;
+            (window as any).location = new URL('http://localhost/settings?ev=true');
+
+            try {
+                (api.fetchSettings as any).mockResolvedValue({
+                    ...defaultSettings,
+                    release: 'production',
+                    evChargingPeriods: undefined,
+                });
+                (api.fetchEstimateEVCharging as any).mockResolvedValue({
+                    detected: false,
+                    message: 'No consistent nighttime EV charging detected.',
+                });
+
+                await navigateToSettings();
+
+                const evSwitch = screen.getByRole('switch', { name: /Avoid Battery for EV Charging/i });
+                await user.click(evSwitch);
+
+                expect(await screen.findByText(/couldn't detect consistent nighttime EV charging/i)).toBeInTheDocument();
+            } finally {
+                (window as any).location = originalLocation;
+            }
+        });
+
+        it('toggling switch OFF clears evChargingPeriods', async () => {
+            const user = userEvent.setup();
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                release: 'staging',
+                evChargingPeriods: [
+                    {
+                        name: 'Nighttime EV Charging',
+                        hours: [{ hourStart: 23, minuteStart: 0, hourEnd: 6, minuteEnd: 0 }],
+                    },
+                ],
+            });
+
+            await navigateToSettings();
+
+            const evSwitch = screen.getByRole('switch', { name: /Avoid Battery for EV Charging/i });
+            expect(evSwitch).toBeChecked();
+
+            await user.click(evSwitch);
+
+            await waitFor(() => {
+                expect(evSwitch).not.toBeChecked();
+            });
+            expect(screen.queryByLabelText('EV Charging Start Time')).not.toBeInTheDocument();
+        });
+
+        it('changing start and end times updates settings', async () => {
+            const user = userEvent.setup();
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                release: 'staging',
+                evChargingPeriods: [
+                    {
+                        name: 'Nighttime EV Charging',
+                        hours: [{ hourStart: 23, minuteStart: 0, hourEnd: 6, minuteEnd: 0 }],
+                    },
+                ],
+            });
+
+            await navigateToSettings();
+
+            const startSelect = screen.getByRole('combobox', { name: 'EV Charging Start Time' });
+            const endSelect = screen.getByRole('combobox', { name: 'EV Charging End Time' });
+
+            await user.selectOptions(startSelect, '0');
+            await user.selectOptions(endSelect, '4');
+
+            expect(startSelect).toHaveValue('0');
+            expect(endSelect).toHaveValue('4');
+        });
+    });
 });
+
 
 
