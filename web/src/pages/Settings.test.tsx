@@ -2138,6 +2138,109 @@ describe('App & Settings', () => {
             expect(await screen.findByRole('dialog')).toBeInTheDocument();
             expect(screen.getByText(/Rate Period Reserve Schedule/i)).toBeInTheDocument();
         });
+
+        it('clearing variable SOC input does not reset to 0 and allows entering new numbers cleanly (rate periods mode)', async () => {
+            const settingsWithPeriods = {
+                ...defaultSettings,
+                minBatterySOCPeriods: [
+                    { utilityPeriodName: 'Peak', minBatterySOC: 50 },
+                    { utilityPeriodName: 'Off-Peak', minBatterySOC: 20 },
+                ],
+            };
+            (api.fetchSettings as any).mockResolvedValue(settingsWithPeriods);
+            (api.fetchUtilityPeriods as any).mockResolvedValue([
+                { name: 'Peak' },
+                { name: 'Off-Peak' }
+            ]);
+            (api.updateSettings as any).mockResolvedValue(undefined);
+            await navigateToSettings();
+
+            const batterySection = screen.getByTestId('battery-section');
+            const editBtn = within(batterySection).getByText('Change');
+            fireEvent.click(editBtn);
+
+            await waitFor(() => {
+                expect(screen.getAllByLabelText(/Peak Reserve %/i)[0]).toBeInTheDocument();
+            });
+
+            const peakInput = screen.getAllByLabelText(/Peak Reserve %/i)[0];
+            expect(peakInput).toHaveValue(50);
+
+            // Clear the input
+            fireEvent.change(peakInput, { target: { value: '' } });
+            expect(peakInput).toHaveValue(null);
+
+            // Type 25
+            fireEvent.change(peakInput, { target: { value: '25' } });
+            expect(peakInput).toHaveValue(25);
+
+            // Save and verify settings payload
+            const saveBtn = screen.getByText('Save Settings');
+            fireEvent.click(saveBtn);
+
+            await waitFor(() => {
+                expect(api.updateSettings).toHaveBeenCalledWith(
+                    expect.objectContaining({
+                        minBatterySOC: 20,
+                        minBatterySOCPeriods: [
+                            { utilityPeriodName: 'Peak', minBatterySOC: 25 },
+                            { utilityPeriodName: 'Off-Peak', minBatterySOC: 20 },
+                        ],
+                    }),
+                    expect.any(String),
+                    undefined
+                );
+            });
+        });
+
+        it('clearing variable SOC input does not reset to 0 and allows entering new numbers cleanly (custom hours mode)', async () => {
+            const settingsWithPeriods = {
+                ...defaultSettings,
+                minBatterySOCPeriods: [
+                    { hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: 50 },
+                ],
+            };
+            (api.fetchSettings as any).mockResolvedValue(settingsWithPeriods);
+            (api.fetchUtilityPeriods as any).mockResolvedValue([]);
+            (api.updateSettings as any).mockResolvedValue(undefined);
+            await navigateToSettings();
+
+            const batterySection = screen.getByTestId('battery-section');
+            const editBtn = within(batterySection).getByText('Change');
+            fireEvent.click(editBtn);
+
+            await waitFor(() => {
+                expect(screen.getByText('SOC %:')).toBeInTheDocument();
+            });
+
+            const socInput = screen.getByDisplayValue('50');
+            expect(socInput).toHaveValue(50);
+
+            // Clear the input
+            fireEvent.change(socInput, { target: { value: '' } });
+            expect(socInput).toHaveValue(null);
+
+            // Type 25
+            fireEvent.change(socInput, { target: { value: '25' } });
+            expect(socInput).toHaveValue(25);
+
+            // Save and verify settings payload
+            const saveBtn = screen.getByText('Save Settings');
+            fireEvent.click(saveBtn);
+
+            await waitFor(() => {
+                expect(api.updateSettings).toHaveBeenCalledWith(
+                    expect.objectContaining({
+                        minBatterySOC: 25,
+                        minBatterySOCPeriods: [
+                            { hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: 25 },
+                        ],
+                    }),
+                    expect.any(String),
+                    undefined
+                );
+            });
+        });
     });
 
     describe('EV Charging Battery Protection', () => {
@@ -2212,10 +2315,10 @@ describe('App & Settings', () => {
                 expect(api.fetchEstimateEVCharging).toHaveBeenCalled();
                 expect(await screen.findByText(/Auto-detected ~11.5 kW charging based on 11 recent sessions/i)).toBeInTheDocument();
 
-                const startSelect = screen.getByRole('combobox', { name: 'EV Charging Start Time' });
-                const endSelect = screen.getByRole('combobox', { name: 'EV Charging End Time' });
-                expect(startSelect).toHaveValue('23');
-                expect(endSelect).toHaveValue('6');
+                const startSelect = screen.getByRole('combobox', { name: /Start Time/i });
+                const endSelect = screen.getByRole('combobox', { name: /End Time/i });
+                expect(startSelect).toHaveTextContent('23:00');
+                expect(endSelect).toHaveTextContent('06:00');
             } finally {
                 (window as any).location = originalLocation;
             }
@@ -2272,7 +2375,7 @@ describe('App & Settings', () => {
             await waitFor(() => {
                 expect(evSwitch).not.toBeChecked();
             });
-            expect(screen.queryByLabelText('EV Charging Start Time')).not.toBeInTheDocument();
+            expect(screen.queryByRole('combobox', { name: /Start Time/i })).not.toBeInTheDocument();
         });
 
         it('changing start and end times updates settings', async () => {
@@ -2290,14 +2393,22 @@ describe('App & Settings', () => {
 
             await navigateToSettings();
 
-            const startSelect = screen.getByRole('combobox', { name: 'EV Charging Start Time' });
-            const endSelect = screen.getByRole('combobox', { name: 'EV Charging End Time' });
+            const startSelect = screen.getByRole('combobox', { name: /Start Time/i });
+            const endSelect = screen.getByRole('combobox', { name: /End Time/i });
 
-            await user.selectOptions(startSelect, '0');
-            await user.selectOptions(endSelect, '4');
+            expect(startSelect).toHaveTextContent('23:00');
+            expect(endSelect).toHaveTextContent('06:00');
 
-            expect(startSelect).toHaveValue('0');
-            expect(endSelect).toHaveValue('4');
+            await user.click(startSelect);
+            const startOption = await screen.findByRole('option', { name: '00:00' });
+            await user.click(startOption);
+
+            await user.click(endSelect);
+            const endOption = await screen.findByRole('option', { name: '04:00' });
+            await user.click(endOption);
+
+            expect(startSelect).toHaveTextContent('00:00');
+            expect(endSelect).toHaveTextContent('04:00');
         });
     });
 });

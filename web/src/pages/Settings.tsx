@@ -899,7 +899,10 @@ const Settings = ({
             handleChange('minBatterySOCPeriods', undefined);
             return;
         }
-        const minVal = Math.min(...newPeriods.map(p => p.minBatterySOC ?? 0));
+        const validSOCs = newPeriods
+            .map(p => typeof p.minBatterySOC === 'number' ? p.minBatterySOC : parseFloat(p.minBatterySOC as any))
+            .filter(v => !isNaN(v));
+        const minVal = validSOCs.length > 0 ? Math.min(...validSOCs) : (settings?.minBatterySOC ?? 20);
         const updated = {
             ...settings!,
             minBatterySOCPeriods: newPeriods,
@@ -1122,6 +1125,19 @@ const Settings = ({
             }
 
             let credentialsPayload: CredentialsPayload | undefined = undefined;
+            if (finalSettings.minBatterySOCPeriods && finalSettings.minBatterySOCPeriods.length > 0) {
+                finalSettings.minBatterySOCPeriods = finalSettings.minBatterySOCPeriods.map(p => {
+                    const parsed = typeof p.minBatterySOC === 'number' ? p.minBatterySOC : parseFloat(p.minBatterySOC as any);
+                    return {
+                        ...p,
+                        minBatterySOC: !isNaN(parsed) ? parsed : (typeof finalSettings.minBatterySOC === 'number' && !isNaN(finalSettings.minBatterySOC) ? finalSettings.minBatterySOC : 20),
+                    };
+                });
+            }
+            if (finalSettings.minBatterySOC !== undefined && finalSettings.minBatterySOC !== null) {
+                const parsed = typeof finalSettings.minBatterySOC === 'number' ? finalSettings.minBatterySOC : parseFloat(finalSettings.minBatterySOC as any);
+                finalSettings.minBatterySOC = !isNaN(parsed) ? parsed : 20;
+            }
             const essProvider = essProviders.find(p => p.id === settings.ess);
             if (essProvider && (isESSDirty || Object.keys(essCredentials).length > 0)) {
                 credentialsPayload = { [essProvider.id]: {} };
@@ -1271,6 +1287,19 @@ const Settings = ({
 
             let credentialsPayload: CredentialsPayload | undefined = undefined;
             const finalSettings = { ...settings };
+            if (finalSettings.minBatterySOCPeriods && finalSettings.minBatterySOCPeriods.length > 0) {
+                finalSettings.minBatterySOCPeriods = finalSettings.minBatterySOCPeriods.map(p => {
+                    const parsed = typeof p.minBatterySOC === 'number' ? p.minBatterySOC : parseFloat(p.minBatterySOC as any);
+                    return {
+                        ...p,
+                        minBatterySOC: !isNaN(parsed) ? parsed : (typeof finalSettings.minBatterySOC === 'number' && !isNaN(finalSettings.minBatterySOC) ? finalSettings.minBatterySOC : 20),
+                    };
+                });
+            }
+            if (finalSettings.minBatterySOC !== undefined && finalSettings.minBatterySOC !== null) {
+                const parsed = typeof finalSettings.minBatterySOC === 'number' ? finalSettings.minBatterySOC : parseFloat(finalSettings.minBatterySOC as any);
+                finalSettings.minBatterySOC = !isNaN(parsed) ? parsed : 20;
+            }
 
             const essProvider = essProviders.find(p => p.id === settings.ess);
             if (essProvider && (isESSDirty || Object.keys(essCredentials).length > 0)) {
@@ -1728,8 +1757,8 @@ const Settings = ({
                                         step="1"
                                         min="0"
                                         max="100"
-                                        value={settings.minBatterySOC}
-                                        onChange={(e) => handleChange('minBatterySOC', parseFloat(e.target.value))}
+                                        value={settings.minBatterySOC ?? ''}
+                                        onChange={(e) => handleChange('minBatterySOC', e.target.value === '' ? ('' as any) : parseFloat(e.target.value))}
                                     />
                                     <Field.Description>Maintain battery charge at or above this level at all costs.</Field.Description>
                                 </Field.Root>
@@ -1766,11 +1795,11 @@ const Settings = ({
                                                         step="1"
                                                         min="0"
                                                         max="100"
-                                                        value={p.minBatterySOC}
+                                                        value={p.minBatterySOC ?? ''}
                                                         onChange={(e) => {
-                                                            const val = parseFloat(e.target.value);
+                                                            const val = e.target.value === '' ? ('' as any) : parseFloat(e.target.value);
                                                             const next = [...settings.minBatterySOCPeriods!];
-                                                            next[idx] = { ...next[idx], minBatterySOC: isNaN(val) ? 0 : val };
+                                                            next[idx] = { ...next[idx], minBatterySOC: val };
                                                             updateMinBatterySOCPeriods(next);
                                                         }}
                                                     />
@@ -1794,10 +1823,10 @@ const Settings = ({
                                                                 <div key={idx} style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
                                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                                                                         <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>From:</span>
-                                                                        <select
-                                                                            value={hp.hourStart}
-                                                                            onChange={(e) => {
-                                                                                const start = parseInt(e.target.value, 10);
+                                                                        <Select.Root
+                                                                            value={String(hp.hourStart)}
+                                                                            onValueChange={(val) => {
+                                                                                const start = parseInt(val as string, 10);
                                                                                 const next = [...settings.minBatterySOCPeriods!];
                                                                                 next[idx] = {
                                                                                     ...next[idx],
@@ -1805,20 +1834,40 @@ const Settings = ({
                                                                                 };
                                                                                 updateMinBatterySOCPeriods(next);
                                                                             }}
-                                                                            className="select-trigger"
-                                                                            style={{ padding: '0.4rem 0.625rem', height: '36px', borderRadius: 'var(--radius-md)', boxSizing: 'border-box' }}
                                                                         >
-                                                                            {Array.from({ length: 24 }, (_, i) => (
-                                                                                <option key={i} value={i}>{String(i).padStart(2, '0')}:00</option>
-                                                                            ))}
-                                                                        </select>
+                                                                            <Select.Trigger
+                                                                                className="select-trigger"
+                                                                                aria-label="Start Hour"
+                                                                                style={{ padding: '0.4rem 0.625rem', height: '36px', borderRadius: 'var(--radius-md)', boxSizing: 'border-box', gap: '0.5rem', width: 'auto' }}
+                                                                            >
+                                                                                <Select.Value>
+                                                                                    {String(hp.hourStart).padStart(2, '0')}:00
+                                                                                </Select.Value>
+                                                                                <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                                                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                                                        <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                                                    </svg>
+                                                                                </Select.Icon>
+                                                                            </Select.Trigger>
+                                                                            <Select.Portal>
+                                                                                <Select.Positioner className="select-positioner">
+                                                                                    <Select.Popup className="select-popup">
+                                                                                        {Array.from({ length: 24 }, (_, i) => (
+                                                                                            <Select.Item key={i} className="select-item" value={String(i)}>
+                                                                                                <Select.ItemText>{String(i).padStart(2, '0')}:00</Select.ItemText>
+                                                                                            </Select.Item>
+                                                                                        ))}
+                                                                                    </Select.Popup>
+                                                                                </Select.Positioner>
+                                                                            </Select.Portal>
+                                                                        </Select.Root>
                                                                     </div>
                                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                                                                         <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>To:</span>
-                                                                        <select
-                                                                            value={hp.hourEnd}
-                                                                            onChange={(e) => {
-                                                                                const end = parseInt(e.target.value, 10);
+                                                                        <Select.Root
+                                                                            value={String(hp.hourEnd)}
+                                                                            onValueChange={(val) => {
+                                                                                const end = parseInt(val as string, 10);
                                                                                 const next = [...settings.minBatterySOCPeriods!];
                                                                                 next[idx] = {
                                                                                     ...next[idx],
@@ -1826,13 +1875,33 @@ const Settings = ({
                                                                                 };
                                                                                 updateMinBatterySOCPeriods(next);
                                                                             }}
-                                                                            className="select-trigger"
-                                                                            style={{ padding: '0.4rem 0.625rem', height: '36px', borderRadius: 'var(--radius-md)', boxSizing: 'border-box' }}
                                                                         >
-                                                                            {Array.from({ length: 25 }, (_, i) => (
-                                                                                <option key={i} value={i}>{String(i === 24 ? 24 : i).padStart(2, '0')}:00</option>
-                                                                            ))}
-                                                                        </select>
+                                                                            <Select.Trigger
+                                                                                className="select-trigger"
+                                                                                aria-label="End Hour"
+                                                                                style={{ padding: '0.4rem 0.625rem', height: '36px', borderRadius: 'var(--radius-md)', boxSizing: 'border-box', gap: '0.5rem', width: 'auto' }}
+                                                                            >
+                                                                                <Select.Value>
+                                                                                    {String(hp.hourEnd === 24 ? 24 : hp.hourEnd).padStart(2, '0')}:00
+                                                                                </Select.Value>
+                                                                                <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                                                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                                                        <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                                                    </svg>
+                                                                                </Select.Icon>
+                                                                            </Select.Trigger>
+                                                                            <Select.Portal>
+                                                                                <Select.Positioner className="select-positioner">
+                                                                                    <Select.Popup className="select-popup">
+                                                                                        {Array.from({ length: 25 }, (_, i) => (
+                                                                                            <Select.Item key={i} className="select-item" value={String(i)}>
+                                                                                                <Select.ItemText>{String(i === 24 ? 24 : i).padStart(2, '0')}:00</Select.ItemText>
+                                                                                            </Select.Item>
+                                                                                        ))}
+                                                                                    </Select.Popup>
+                                                                                </Select.Positioner>
+                                                                            </Select.Portal>
+                                                                        </Select.Root>
                                                                     </div>
                                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                                                                         <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>SOC %:</span>
@@ -1843,11 +1912,11 @@ const Settings = ({
                                                                             max="100"
                                                                             className="input"
                                                                             style={{ width: '80px', height: '36px', padding: '0.4rem 0.625rem', boxSizing: 'border-box' }}
-                                                                            value={p.minBatterySOC}
+                                                                            value={p.minBatterySOC ?? ''}
                                                                             onChange={(e) => {
-                                                                                const val = parseFloat(e.target.value);
+                                                                                const val = e.target.value === '' ? ('' as any) : parseFloat(e.target.value);
                                                                                 const next = [...settings.minBatterySOCPeriods!];
-                                                                                next[idx] = { ...next[idx], minBatterySOC: isNaN(val) ? 0 : val };
+                                                                                next[idx] = { ...next[idx], minBatterySOC: val };
                                                                                 updateMinBatterySOCPeriods(next);
                                                                             }}
                                                                         />
@@ -2025,133 +2094,6 @@ const Settings = ({
                             )}
                         </div>
                     )}
-
-                    {isEVFeatureEnabled && (
-                        <Field.Root className="form-group ev-charging-group" data-testid="ev-charging-section" style={{ marginTop: '20px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                                <div style={{ paddingRight: '1rem' }}>
-                                    <Field.Label htmlFor="avoidBatteryForEV" style={{ fontWeight: 600, fontSize: '15px' }}>
-                                        Avoid Battery for EV Charging
-                                    </Field.Label>
-                                    <p className="setting-description" style={{ margin: '4px 0 0 0', fontSize: '13px', color: 'var(--text-secondary)' }}>
-                                        Designed for nighttime EV charging when solar is unavailable. During the day, excess solar energy naturally powers your vehicle without depleting your home battery.
-                                    </p>
-                                </div>
-                                <Switch.Root
-                                    id="avoidBatteryForEV"
-                                    className="switch-root"
-                                    checked={!!settings.evChargingPeriods && settings.evChargingPeriods.length > 0}
-                                    onCheckedChange={async (checked) => {
-                                        if (!checked) {
-                                            handleChange('evChargingPeriods', undefined);
-                                            setEVEstimationNote(null);
-                                            setEVEstimationError(null);
-                                            return;
-                                        }
-                                        setEstimatingEV(true);
-                                        setEVEstimationError(null);
-                                        setEVEstimationNote(null);
-                                        try {
-                                            const res = await fetchEstimateEVCharging(siteID);
-                                            if (res.detected && res.recommendedPeriod) {
-                                                handleChange('evChargingPeriods', [res.recommendedPeriod]);
-                                                setEVEstimationNote(`Auto-detected ~${res.estimatedRateKW} kW charging based on ${res.sessionsCount} recent sessions.`);
-                                            } else {
-                                                const defaultPeriod: TimePeriod = {
-                                                    name: 'Nighttime EV Charging',
-                                                    hours: [{ hourStart: 23, minuteStart: 0, hourEnd: 6, minuteEnd: 0 }],
-                                                };
-                                                handleChange('evChargingPeriods', [defaultPeriod]);
-                                                setEVEstimationError("We couldn't detect consistent nighttime EV charging in your recent history. Please verify your scheduled hours or leave feedback.");
-                                            }
-                                        } catch {
-                                            const defaultPeriod: TimePeriod = {
-                                                name: 'Nighttime EV Charging',
-                                                hours: [{ hourStart: 23, minuteStart: 0, hourEnd: 6, minuteEnd: 0 }],
-                                            };
-                                            handleChange('evChargingPeriods', [defaultPeriod]);
-                                            setEVEstimationError("Unable to analyze energy history. Please verify your scheduled hours or leave feedback.");
-                                        } finally {
-                                            setEstimatingEV(false);
-                                        }
-                                    }}
-                                    disabled={estimatingEV}
-                                    aria-label="Avoid Battery for EV Charging"
-                                >
-                                    <Switch.Thumb className="switch-thumb" />
-                                </Switch.Root>
-                            </div>
-
-                            {settings.evChargingPeriods && settings.evChargingPeriods.length > 0 && (
-                                <div className="ev-time-selector" style={{ marginTop: '12px', background: 'var(--surface-color)', padding: '12px', borderRadius: 'var(--radius-md)' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-                                        <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>Time Window:</span>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                            <select
-                                                id="evHourStart"
-                                                aria-label="EV Charging Start Time"
-                                                value={settings.evChargingPeriods[0]?.hours?.[0]?.hourStart ?? 23}
-                                                onChange={(e) => {
-                                                    const start = parseInt(e.target.value, 10);
-                                                    const current = settings.evChargingPeriods![0]?.hours?.[0] || { hourStart: 23, hourEnd: 6 };
-                                                    const updated: TimePeriod = {
-                                                        name: 'Nighttime EV Charging',
-                                                        hours: [{ hourStart: start, minuteStart: 0, hourEnd: current.hourEnd, minuteEnd: 0 }],
-                                                    };
-                                                    handleChange('evChargingPeriods', [updated]);
-                                                }}
-                                                className="select-trigger"
-                                                style={{ padding: '0.4rem 0.625rem', height: '36px', borderRadius: 'var(--radius-md)', boxSizing: 'border-box' }}
-                                            >
-                                                {Array.from({ length: 24 }, (_, i) => (
-                                                    <option key={i} value={i}>{String(i).padStart(2, '0')}:00</option>
-                                                ))}
-                                            </select>
-                                            <span>to</span>
-                                            <select
-                                                id="evHourEnd"
-                                                aria-label="EV Charging End Time"
-                                                value={settings.evChargingPeriods[0]?.hours?.[0]?.hourEnd ?? 6}
-                                                onChange={(e) => {
-                                                    const end = parseInt(e.target.value, 10);
-                                                    const current = settings.evChargingPeriods![0]?.hours?.[0] || { hourStart: 23, hourEnd: 6 };
-                                                    const updated: TimePeriod = {
-                                                        name: 'Nighttime EV Charging',
-                                                        hours: [{ hourStart: current.hourStart, minuteStart: 0, hourEnd: end, minuteEnd: 0 }],
-                                                    };
-                                                    handleChange('evChargingPeriods', [updated]);
-                                                }}
-                                                className="select-trigger"
-                                                style={{ padding: '0.4rem 0.625rem', height: '36px', borderRadius: 'var(--radius-md)', boxSizing: 'border-box' }}
-                                            >
-                                                {Array.from({ length: 25 }, (_, i) => (
-                                                    <option key={i} value={i}>{String(i === 24 ? 24 : i).padStart(2, '0')}:00</option>
-                                                ))}
-                                            </select>
-                                        </div>
-                                    </div>
-
-                                    {estimatingEV && (
-                                        <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '8px', marginBottom: 0 }}>
-                                            Analyzing recent energy history to estimate charging schedule...
-                                        </p>
-                                    )}
-
-                                    {evEstimationNote && !estimatingEV && (
-                                        <p style={{ fontSize: '0.85rem', color: 'var(--success-color, #10b981)', marginTop: '8px', marginBottom: 0 }}>
-                                            ✓ {evEstimationNote}
-                                        </p>
-                                    )}
-
-                                    {evEstimationError && !estimatingEV && (
-                                        <p style={{ fontSize: '0.85rem', color: 'var(--warning-color, #f59e0b)', marginTop: '8px', marginBottom: 0 }}>
-                                            ⚠️ {evEstimationError}
-                                        </p>
-                                    )}
-                                </div>
-                            )}
-                        </Field.Root>
-                    )}
                 </div>
 
                 {/* Location directly under Quick Settings */}
@@ -2270,6 +2212,165 @@ const Settings = ({
                     setEditESS={setEditESS}
                 />
                 </div>
+
+                {isEVFeatureEnabled && (
+                    <div className="settings-section" data-testid="ev-charging-section">
+                        <div className="section-header">
+                            <h3>EV Charging</h3>
+                        </div>
+                        <div className="grid-strategy-grid">
+                            <Field.Root className="form-group switch-group compact" style={{ gridColumn: '1 / -1' }}>
+                                <div className="switch-row">
+                                    <Switch.Root
+                                        id="avoidBatteryForEV"
+                                        className="switch-root"
+                                        checked={!!settings.evChargingPeriods && settings.evChargingPeriods.length > 0}
+                                        onCheckedChange={async (checked) => {
+                                            if (!checked) {
+                                                handleChange('evChargingPeriods', undefined);
+                                                setEVEstimationNote(null);
+                                                setEVEstimationError(null);
+                                                return;
+                                            }
+                                            setEstimatingEV(true);
+                                            setEVEstimationError(null);
+                                            setEVEstimationNote(null);
+                                            try {
+                                                const res = await fetchEstimateEVCharging(siteID);
+                                                if (res.detected && res.recommendedPeriod) {
+                                                    handleChange('evChargingPeriods', [res.recommendedPeriod]);
+                                                    setEVEstimationNote(`Auto-detected ~${res.estimatedRateKW} kW charging based on ${res.sessionsCount} recent sessions.`);
+                                                } else {
+                                                    const defaultPeriod: TimePeriod = {
+                                                        name: 'Nighttime EV Charging',
+                                                        hours: [{ hourStart: 23, minuteStart: 0, hourEnd: 6, minuteEnd: 0 }],
+                                                    };
+                                                    handleChange('evChargingPeriods', [defaultPeriod]);
+                                                    setEVEstimationError("We couldn't detect consistent nighttime EV charging in your recent history. Please verify your scheduled hours or leave feedback.");
+                                                }
+                                            } catch {
+                                                const defaultPeriod: TimePeriod = {
+                                                    name: 'Nighttime EV Charging',
+                                                    hours: [{ hourStart: 23, minuteStart: 0, hourEnd: 6, minuteEnd: 0 }],
+                                                };
+                                                handleChange('evChargingPeriods', [defaultPeriod]);
+                                                setEVEstimationError("Unable to analyze energy history. Please verify your scheduled hours or leave feedback.");
+                                            } finally {
+                                                setEstimatingEV(false);
+                                            }
+                                        }}
+                                        disabled={estimatingEV}
+                                        aria-label="Avoid Battery for EV Charging"
+                                    >
+                                        <Switch.Thumb className="switch-thumb" />
+                                    </Switch.Root>
+                                    <Field.Label htmlFor="avoidBatteryForEV">Avoid Battery for EV Charging</Field.Label>
+                                </div>
+                                <Field.Description>
+                                    Designed for nighttime EV charging when solar is unavailable. During the day, excess solar energy naturally powers your vehicle without depleting your home battery.
+                                </Field.Description>
+                            </Field.Root>
+
+                            {settings.evChargingPeriods && settings.evChargingPeriods.length > 0 && (
+                                <>
+                                    <Field.Root className="form-group compact">
+                                        <Field.Label htmlFor="evHourStart">EV Charging Start Time</Field.Label>
+                                        <Select.Root
+                                            value={String(settings.evChargingPeriods[0]?.hours?.[0]?.hourStart ?? 23)}
+                                            onValueChange={(val) => {
+                                                const start = parseInt(val as string, 10);
+                                                const current = settings.evChargingPeriods![0]?.hours?.[0] || { hourStart: 23, hourEnd: 6 };
+                                                const updated: TimePeriod = {
+                                                    name: 'Nighttime EV Charging',
+                                                    hours: [{ hourStart: start, minuteStart: 0, hourEnd: current.hourEnd, minuteEnd: 0 }],
+                                                };
+                                                handleChange('evChargingPeriods', [updated]);
+                                            }}
+                                        >
+                                            <Select.Trigger className="select-trigger" id="evHourStart" aria-label="EV Charging Start Time">
+                                                <Select.Value>
+                                                    {String(settings.evChargingPeriods[0]?.hours?.[0]?.hourStart ?? 23).padStart(2, '0')}:00
+                                                </Select.Value>
+                                                <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                        <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                    </svg>
+                                                </Select.Icon>
+                                            </Select.Trigger>
+                                            <Select.Portal>
+                                                <Select.Positioner className="select-positioner">
+                                                    <Select.Popup className="select-popup">
+                                                        {Array.from({ length: 24 }, (_, i) => (
+                                                            <Select.Item key={i} className="select-item" value={String(i)}>
+                                                                <Select.ItemText>{String(i).padStart(2, '0')}:00</Select.ItemText>
+                                                            </Select.Item>
+                                                        ))}
+                                                    </Select.Popup>
+                                                </Select.Positioner>
+                                            </Select.Portal>
+                                        </Select.Root>
+                                    </Field.Root>
+
+                                    <Field.Root className="form-group compact">
+                                        <Field.Label htmlFor="evHourEnd">EV Charging End Time</Field.Label>
+                                        <Select.Root
+                                            value={String(settings.evChargingPeriods[0]?.hours?.[0]?.hourEnd ?? 6)}
+                                            onValueChange={(val) => {
+                                                const end = parseInt(val as string, 10);
+                                                const current = settings.evChargingPeriods![0]?.hours?.[0] || { hourStart: 23, hourEnd: 6 };
+                                                const updated: TimePeriod = {
+                                                    name: 'Nighttime EV Charging',
+                                                    hours: [{ hourStart: current.hourStart, minuteStart: 0, hourEnd: end, minuteEnd: 0 }],
+                                                };
+                                                handleChange('evChargingPeriods', [updated]);
+                                            }}
+                                        >
+                                            <Select.Trigger className="select-trigger" id="evHourEnd" aria-label="EV Charging End Time">
+                                                <Select.Value>
+                                                    {String((settings.evChargingPeriods[0]?.hours?.[0]?.hourEnd ?? 6) === 24 ? 24 : settings.evChargingPeriods[0]?.hours?.[0]?.hourEnd ?? 6).padStart(2, '0')}:00
+                                                </Select.Value>
+                                                <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                        <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                    </svg>
+                                                </Select.Icon>
+                                            </Select.Trigger>
+                                            <Select.Portal>
+                                                <Select.Positioner className="select-positioner">
+                                                    <Select.Popup className="select-popup">
+                                                        {Array.from({ length: 25 }, (_, i) => (
+                                                            <Select.Item key={i} className="select-item" value={String(i)}>
+                                                                <Select.ItemText>{String(i === 24 ? 24 : i).padStart(2, '0')}:00</Select.ItemText>
+                                                            </Select.Item>
+                                                        ))}
+                                                    </Select.Popup>
+                                                </Select.Positioner>
+                                            </Select.Portal>
+                                        </Select.Root>
+                                    </Field.Root>
+
+                                    {estimatingEV && (
+                                        <div style={{ gridColumn: '1 / -1', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                                            Analyzing recent energy history to estimate charging schedule...
+                                        </div>
+                                    )}
+
+                                    {evEstimationNote && !estimatingEV && (
+                                        <div style={{ gridColumn: '1 / -1', color: 'var(--success-color, #10b981)', fontSize: '0.85rem', fontWeight: 500 }}>
+                                            ✓ {evEstimationNote}
+                                        </div>
+                                    )}
+
+                                    {evEstimationError && !estimatingEV && (
+                                        <div style={{ gridColumn: '1 / -1', color: 'var(--warning-color, #f59e0b)', fontSize: '0.85rem', fontWeight: 500 }}>
+                                            ⚠️ {evEstimationError}
+                                        </div>
+                                    )}
+                                </>
+                            )}
+                        </div>
+                    </div>
+                )}
 
                 {!showAdvanced ? (
                     <div className="advanced-trigger-section">
