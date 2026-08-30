@@ -9,7 +9,9 @@ require (
 	github.com/levenlabs/go-lflag v1.0.2
 	github.com/levenlabs/go-llog v1.0.0
 	github.com/stretchr/testify v1.11.1
+	golang.org/x/crypto v0.47.0
 	golang.org/x/net v0.49.0
+	golang.org/x/oauth2 v0.34.0
 	golang.org/x/sync v0.19.0
 	golang.org/x/time v0.15.0
 	google.golang.org/api v0.264.0
@@ -40,8 +42,6 @@ require (
 	go.opentelemetry.io/otel v1.39.0 // indirect
 	go.opentelemetry.io/otel/metric v1.39.0 // indirect
 	go.opentelemetry.io/otel/trace v1.39.0 // indirect
-	golang.org/x/crypto v0.47.0 // indirect
-	golang.org/x/oauth2 v0.34.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.33.0 // indirect
 	google.golang.org/genproto v0.0.0-20251202230838-ff82c1b0f217 // indirect

@@ -32,8 +32,9 @@ import (
 )
 
 const (
-	authTokenCookie = "auth_token"
-	SiteIDAll       = "ALL"
+	authTokenCookie    = "auth_token"
+	sessionTokenCookie = "session_token"
+	SiteIDAll          = "ALL"
 )
 
 type contextKey string
@@ -44,6 +45,7 @@ const (
 	userContextKey               contextKey = "user"
 	userToRegisterContextKey     contextKey = "userToRegister"
 	updateSpecificAuthContextKey contextKey = "updateSpecificAuth"
+	sessionDataContextKey        contextKey = "sessionData"
 )
 
 // tokenVerifier is a function that validates a Google or Apple ID Token.
@@ -62,17 +64,19 @@ type Server struct {
 	devProxy   string
 	httpServer *http.Server
 
-	updateSpecificEmail string
-	adminEmails         []string
-	oidcAudiences       map[string]string
-	oidcVerifiers       map[string]tokenVerifier
-	bypassAuth          bool
-	singleSite          bool
-	encryptionKey       string
-	release             string
-	serverName          string
-	webCacheDuration    time.Duration
-	showHidden          bool
+	updateSpecificEmail  string
+	adminEmails          []string
+	oidcAudiences        map[string]string
+	oidcVerifiers        map[string]tokenVerifier
+	bypassAuth           bool
+	singleSite           bool
+	encryptionKey        string
+	sessionEncryptionKey string
+	sessionDuration      time.Duration
+	release              string
+	serverName           string
+	webCacheDuration     time.Duration
+	showHidden           bool
 
 	clientLimiters     sync.Map
 	generalRateLimit   rate.Limit
@@ -116,6 +120,8 @@ func Configured(u *utility.Map, e *ess.Map, s storage.Database) *Server {
 	singleSite := lflag.Bool("single-site", false, "Enable single-site mode (disables siteID requirement)")
 	showHidden := lflag.Bool("show-hidden", false, "Expose hidden providers in lists via the API")
 	encryptionKey := lflag.RequiredString("credentials-encryption-key", "Key for encrypting credentials")
+	sessionEncryptionKey := lflag.RequiredString("session-encryption-key", "Key for encrypting session cookies (32 bytes)")
+	sessionDuration := lflag.Duration("session-duration", 7*24*time.Hour, "Session lifetime duration (default 7 days)")
 	release := lflag.String("release", "production", "Release environment (production or staging)")
 	webCacheDuration := lflag.Duration("web-cache-duration", 0, "Duration to cache web files (e.g. 1h, 5m). 0 means no cache.")
 	generalRateLimitPerMin := lflag.Int("general-rate-limit", 30, "General rate limit per minute per IP")
@@ -196,6 +202,13 @@ func Configured(u *utility.Map, e *ess.Map, s storage.Database) *Server {
 			os.Exit(1)
 		}
 		srv.encryptionKey = *encryptionKey
+
+		if len(*sessionEncryptionKey) != 32 {
+			log.Ctx(context.Background()).Error("session-encryption-key must be 32 characters")
+			os.Exit(1)
+		}
+		srv.sessionEncryptionKey = *sessionEncryptionKey
+		srv.sessionDuration = *sessionDuration
 
 		if srv.devProxy != "" && len(srv.oidcAudiences) == 0 && len(srv.adminEmails) == 0 {
 			srv.bypassAuth = true

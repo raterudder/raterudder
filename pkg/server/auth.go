@@ -103,6 +103,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 		var email string
 		var userID string
+		var activeSession *SessionData
 		// user might be a mock/fake user if this is bypassAuth or singleSite
 		var user types.User
 		var authViaUpdateSpecific bool
@@ -154,29 +155,50 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 			// normal user auth (cookie)
 			if !authSuccess {
-				// 1. Authenticate User
-				authCookie, err := r.Cookie(authTokenCookie)
+				// 1. Check sessionTokenCookie
+				sessionCookie, err := r.Cookie(sessionTokenCookie)
 				if err != nil && !errors.Is(err, http.ErrNoCookie) {
-					log.Ctx(ctx).ErrorContext(ctx, "failed to get auth cookie", slog.Any("error", err))
+					log.Ctx(ctx).ErrorContext(ctx, "failed to get session cookie", slog.Any("error", err))
 					writeJSONError(w, "missing auth cookie", http.StatusUnauthorized)
 					return
 				}
-				if authCookie != nil {
-					emailRet, subjectRet, _, err := s.authenticateToken(ctx, authCookie.Value, "")
+				if sessionCookie != nil && sessionCookie.Value != "" {
+					sess, err := s.verifySessionToken(sessionCookie.Value)
 					if err != nil {
-						log.Ctx(ctx).ErrorContext(ctx, "auth token validation failed", slog.Any("error", err))
-						if !allowNoLogin {
-							writeJSONError(w, "invalid auth token", http.StatusUnauthorized)
-							return
-						}
+						log.Ctx(ctx).WarnContext(ctx, "session token validation failed", slog.Any("error", err))
 					} else {
-						email = emailRet
-						userID = subjectRet
+						email = sess.Email
+						userID = sess.UserID
+						activeSession = sess
 						authSuccess = true
 					}
-				} else if !allowNoLogin {
-					writeJSONError(w, "missing auth cookie", http.StatusUnauthorized)
-					return
+				}
+
+				// 2. Fallback: Authenticate via legacy authTokenCookie
+				if !authSuccess {
+					authCookie, err := r.Cookie(authTokenCookie)
+					if err != nil && !errors.Is(err, http.ErrNoCookie) {
+						log.Ctx(ctx).ErrorContext(ctx, "failed to get auth cookie", slog.Any("error", err))
+						writeJSONError(w, "missing auth cookie", http.StatusUnauthorized)
+						return
+					}
+					if authCookie != nil && authCookie.Value != "" {
+						emailRet, subjectRet, _, err := s.authenticateToken(ctx, authCookie.Value, "")
+						if err != nil {
+							log.Ctx(ctx).ErrorContext(ctx, "auth token validation failed", slog.Any("error", err))
+							if !allowNoLogin {
+								writeJSONError(w, "invalid auth token", http.StatusUnauthorized)
+								return
+							}
+						} else {
+							email = emailRet
+							userID = subjectRet
+							authSuccess = true
+						}
+					} else if !allowNoLogin {
+						writeJSONError(w, "missing auth cookie", http.StatusUnauthorized)
+						return
+					}
 				}
 			}
 
@@ -190,23 +212,44 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 						Email: email,
 						Sites: []types.UserSite{{ID: types.SiteIDNone}},
 					}
+					// just take the session secret off the existing session if they have one
+					if activeSession != nil {
+						user.SessionSecret = activeSession.SessionSecret
+					}
 				} else {
 					var err error
 					user, err = s.storage.GetUser(ctx, userID)
 					if err != nil {
 						if ignoreUserNotFound && errors.Is(err, storage.ErrUserNotFound) {
 							log.Ctx(ctx).InfoContext(ctx, "user not found, will register on join", slog.String("userID", userID), slog.String("email", email))
+							// just take the session secret off the existing session if they have one
+							sessionSecret := ""
+							if activeSession != nil {
+								sessionSecret = activeSession.SessionSecret
+							}
 							// Put a stub user in context so the join handler can create it
 							ctx = context.WithValue(ctx, userToRegisterContextKey, types.User{
-								ID:    userID,
-								Email: email,
+								ID:            userID,
+								Email:         email,
+								SessionSecret: sessionSecret,
 							})
 						} else {
 							log.Ctx(ctx).WarnContext(ctx, "user lookup failed", slog.String("userID", userID), slog.String("email", email), slog.Any("error", err))
-							writeJSONError(w, "user lookup failed", http.StatusForbidden)
+							s.clearCookie(w)
+							writeJSONError(w, "user lookup failed", http.StatusUnauthorized)
 							return
 						}
 					} else {
+						// If authenticated via session token, verify per-user SessionSecret
+						if activeSession != nil {
+							if user.SessionSecret == "" || subtle.ConstantTimeCompare([]byte(activeSession.SessionSecret), []byte(user.SessionSecret)) != 1 {
+								log.Ctx(ctx).WarnContext(ctx, "session secret mismatch or revoked", slog.String("userID", userID), slog.String("email", email))
+								s.clearCookie(w)
+								writeJSONError(w, "session invalid or revoked", http.StatusUnauthorized)
+								return
+							}
+						}
+
 						// fill in default siteID if the user only has 1 site
 						if siteID == "" && len(user.Sites) == 1 {
 							siteID = user.Sites[0].ID
@@ -273,6 +316,9 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		ctx = context.WithValue(ctx, allUserSitesContextKey, user.Sites)
 		ctx = context.WithValue(ctx, siteIDContextKey, siteID)
 		ctx = context.WithValue(ctx, updateSpecificAuthContextKey, authViaUpdateSpecific)
+		if activeSession != nil {
+			ctx = context.WithValue(ctx, sessionDataContextKey, activeSession)
+		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -289,7 +335,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	email, subject, expires, err := s.authenticateToken(r.Context(), req.Token, req.Client)
+	email, subject, _, err := s.authenticateToken(r.Context(), req.Token, req.Client)
 	if err != nil {
 		log.Ctx(r.Context()).WarnContext(r.Context(), "failed to validate id token", slog.Any("error", err))
 		writeJSONError(w, "invalid id token", http.StatusUnauthorized)
@@ -304,21 +350,85 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	log.Ctx(r.Context()).InfoContext(r.Context(), "login token validated successfully", slog.String("email", email), slog.String("subject", subject))
 
-	// Set the cookie
+	// Determine or initialize SessionSecret
+	var sessionSecret string
+	if !s.singleSite && s.storage != nil {
+		user, err := s.storage.GetUser(r.Context(), subject)
+		if err == nil {
+			if user.SessionSecret == "" {
+				user.SessionSecret, err = generateSessionSecret()
+				if err != nil {
+					log.Ctx(r.Context()).ErrorContext(r.Context(), "failed to generate session secret", slog.Any("error", err))
+					writeJSONError(w, "internal server error", http.StatusInternalServerError)
+					return
+				}
+				if err := s.storage.UpdateUser(r.Context(), user); err != nil {
+					log.Ctx(r.Context()).ErrorContext(r.Context(), "failed to update user session secret", slog.Any("error", err))
+					writeJSONError(w, "internal server error", http.StatusInternalServerError)
+					return
+				}
+			}
+			sessionSecret = user.SessionSecret
+		} else if errors.Is(err, storage.ErrUserNotFound) {
+			sessionSecret, err = generateSessionSecret()
+			if err != nil {
+				log.Ctx(r.Context()).ErrorContext(r.Context(), "failed to generate session secret", slog.Any("error", err))
+				writeJSONError(w, "internal server error", http.StatusInternalServerError)
+				return
+			}
+		} else {
+			log.Ctx(r.Context()).ErrorContext(r.Context(), "failed to lookup user during login", slog.Any("error", err))
+			writeJSONError(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		sessionSecret, err = generateSessionSecret()
+		if err != nil {
+			log.Ctx(r.Context()).ErrorContext(r.Context(), "failed to generate session secret", slog.Any("error", err))
+			writeJSONError(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	sessionDuration := s.sessionDuration
+	if sessionDuration == 0 {
+		sessionDuration = 7 * 24 * time.Hour
+	}
+
+	sessionToken, err := s.createSessionToken(subject, email, sessionSecret, sessionDuration)
+	if err != nil {
+		log.Ctx(r.Context()).ErrorContext(r.Context(), "failed to create session token", slog.Any("error", err))
+		writeJSONError(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Set session_token cookie and clear legacy auth_token cookie
+	s.setSessionCookie(w, sessionToken, s.now().Add(sessionDuration))
 	http.SetCookie(w, &http.Cookie{
 		Name:     authTokenCookie,
-		Value:    req.Token,
-		Expires:  expires,
+		Value:    "",
+		Expires:  time.Unix(0, 0),
 		HttpOnly: true,
 		Secure:   true,
 		Path:     "/",
 		SameSite: http.SameSiteStrictMode,
+		MaxAge:   -1,
 	})
 
 	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) clearCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionTokenCookie,
+		Value:    "",
+		Expires:  time.Unix(0, 0),
+		HttpOnly: true,
+		Secure:   true,
+		Path:     "/",
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   -1,
+	})
 	http.SetCookie(w, &http.Cookie{
 		Name:     authTokenCookie,
 		Value:    "",
@@ -354,6 +464,34 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 		loggedIn = true
 	}
 	sites := s.getAllUserSites(r)
+
+	// Check if session token should be refreshed (once a day if > 24h duration, or once an hour if <= 24h duration)
+	if sess, ok := r.Context().Value(sessionDataContextKey).(*SessionData); ok && sess != nil {
+		sessionDuration := s.sessionDuration
+		if sessionDuration == 0 {
+			sessionDuration = 7 * 24 * time.Hour
+		}
+		now := s.now().Unix()
+		remaining := time.Duration(sess.ExpiresAt-now) * time.Second
+
+		refreshInterval := 24 * time.Hour
+		if sessionDuration <= 24*time.Hour {
+			if sessionDuration <= 1*time.Hour {
+				refreshInterval = sessionDuration / 2
+			} else {
+				refreshInterval = 1 * time.Hour
+			}
+		}
+		refreshThreshold := sessionDuration - refreshInterval
+		if remaining > 0 && remaining < refreshThreshold {
+			newToken, err := s.createSessionToken(sess.UserID, sess.Email, sess.SessionSecret, sessionDuration)
+			if err == nil {
+				s.setSessionCookie(w, newToken, s.now().Add(sessionDuration))
+			} else {
+				log.Ctx(r.Context()).ErrorContext(r.Context(), "failed to refresh session token", slog.Any("error", err))
+			}
+		}
+	}
 
 	err := json.NewEncoder(w).Encode(authStatusResponse{
 		LoggedIn:     loggedIn,

@@ -30,10 +30,11 @@ type UserSite struct {
 
 // User represents a user of the system.
 type User struct {
-	ID    string     `json:"id"`
-	Email string     `json:"email"`
-	Sites []UserSite `json:"sites"`
-	Admin bool       `json:"-"`
+	ID            string     `json:"id"`
+	Email         string     `json:"email"`
+	Sites         []UserSite `json:"sites"`
+	Admin         bool       `json:"-"`
+	SessionSecret string     `json:"sessionSecret,omitempty"`
 }
 
 // ActionReason represents the type of action taken by the system.

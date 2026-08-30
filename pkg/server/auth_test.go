@@ -91,8 +91,11 @@ func TestAuthMiddleware(t *testing.T) {
 	validToken := generateTestToken(t, srv.URL, priv, "user@example.com", "user@example.com")
 	updaterToken := generateTestTokenWithAudience(t, srv.URL, priv, "updater@example.com", "updater@example.com", "update-audience")
 
+	testKey := "12345678901234567890123456789012"
 	server := &Server{
-		singleSite: false, // Multi-site mode by default for testing
+		singleSite:           false, // Multi-site mode by default for testing
+		sessionEncryptionKey: testKey,
+		sessionDuration:      7 * 24 * time.Hour,
 		oidcAudiences: map[string]string{
 			"google":                 "test-audience",
 			"google_update_specific": "update-audience",
@@ -479,7 +482,7 @@ func TestAuthMiddleware(t *testing.T) {
 
 		server.authMiddleware(testHandler).ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusForbidden, w.Code)
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
 		// Should NOT have user header because userContextKey wasn't set
 		assert.Empty(t, w.Header().Get("X-Email"))
 		assert.Empty(t, w.Header().Get("X-Admin"))
@@ -604,11 +607,109 @@ func TestAuthMiddleware(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 		assert.True(t, mocks.AssertExpectations(t))
 	})
+
+	t.Run("Session Token - Valid Authentication", func(t *testing.T) {
+		mocks := new(mockStorage)
+		server.storage = mocks
+		server.singleSite = false
+
+		sessionToken, err := server.createSessionToken("google:user@example.com", "user@example.com", "valid-secret-123", 7*24*time.Hour)
+		require.NoError(t, err)
+
+		w := httptest.NewRecorder()
+		cookie := &http.Cookie{Name: sessionTokenCookie, Value: sessionToken}
+		req := createReq("GET", "/api/test?siteID=site1", nil, cookie)
+
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:            "google:user@example.com",
+			Email:         "user@example.com",
+			SessionSecret: "valid-secret-123",
+			Sites:         []types.UserSite{{ID: "site1"}},
+		}, nil).Once()
+
+		mocks.On("GetSite", mock.Anything, "site1").Return(types.Site{
+			ID:          "site1",
+			Permissions: []types.SitePermissions{{UserID: "google:user@example.com"}},
+		}, nil).Once()
+
+		server.authMiddleware(testHandler).ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "site1", w.Header().Get("X-Site-ID"))
+		assert.Equal(t, "user@example.com", w.Header().Get("X-Email"))
+		assert.True(t, mocks.AssertExpectations(t))
+	})
+
+	t.Run("Session Token - Secret Mismatch (Revoked) Clears Cookie", func(t *testing.T) {
+		mocks := new(mockStorage)
+		server.storage = mocks
+		server.singleSite = false
+
+		sessionToken, err := server.createSessionToken("google:user@example.com", "user@example.com", "old-revoked-secret", 7*24*time.Hour)
+		require.NoError(t, err)
+
+		w := httptest.NewRecorder()
+		cookie := &http.Cookie{Name: sessionTokenCookie, Value: sessionToken}
+		req := createReq("GET", "/api/test?siteID=site1", nil, cookie)
+
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:            "google:user@example.com",
+			Email:         "user@example.com",
+			SessionSecret: "new-rotated-secret-456",
+			Sites:         []types.UserSite{{ID: "site1"}},
+		}, nil).Once()
+
+		server.authMiddleware(testHandler).ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+
+		cookies := w.Result().Cookies()
+		foundSessionClear := false
+		for _, c := range cookies {
+			if c.Name == sessionTokenCookie && c.Value == "" && c.MaxAge < 0 {
+				foundSessionClear = true
+			}
+		}
+		assert.True(t, foundSessionClear, "session cookie should be cleared on secret mismatch")
+		assert.True(t, mocks.AssertExpectations(t))
+	})
+
+	t.Run("Session Token - User Not Found Clears Cookie", func(t *testing.T) {
+		mocks := new(mockStorage)
+		server.storage = mocks
+		server.singleSite = false
+
+		sessionToken, err := server.createSessionToken("google:user@example.com", "user@example.com", "some-secret", 7*24*time.Hour)
+		require.NoError(t, err)
+
+		w := httptest.NewRecorder()
+		cookie := &http.Cookie{Name: sessionTokenCookie, Value: sessionToken}
+		req := createReq("GET", "/api/test?siteID=site1", nil, cookie)
+
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{}, storage.ErrUserNotFound).Once()
+
+		server.authMiddleware(testHandler).ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+
+		cookies := w.Result().Cookies()
+		foundSessionClear := false
+		for _, c := range cookies {
+			if c.Name == sessionTokenCookie && c.Value == "" && c.MaxAge < 0 {
+				foundSessionClear = true
+			}
+		}
+		assert.True(t, foundSessionClear, "session cookie should be cleared on user not found")
+		assert.True(t, mocks.AssertExpectations(t))
+	})
 }
 
 func TestHandleAuthStatus(t *testing.T) {
+	testKey := "12345678901234567890123456789012"
 	server := &Server{
-		oidcAudiences: map[string]string{"google": "test-audience"},
+		sessionEncryptionKey: testKey,
+		sessionDuration:      7 * 24 * time.Hour,
+		oidcAudiences:        map[string]string{"google": "test-audience"},
 	}
 
 	t.Run("Unregistered User", func(t *testing.T) {
@@ -659,8 +760,10 @@ func TestHandleAuthStatus(t *testing.T) {
 	t.Run("Through Auth Middleware", func(t *testing.T) {
 		mocks := new(mockStorage)
 		serverWithMocks := &Server{
-			storage:       mocks,
-			oidcAudiences: map[string]string{"google": "test-audience"},
+			sessionEncryptionKey: testKey,
+			sessionDuration:      7 * 24 * time.Hour,
+			storage:              mocks,
+			oidcAudiences:        map[string]string{"google": "test-audience"},
 		}
 
 		req := httptest.NewRequest("GET", "/api/auth/status", nil)
@@ -680,6 +783,149 @@ func TestHandleAuthStatus(t *testing.T) {
 		assert.Equal(t, map[string]string{"google": "test-audience"}, resp.ClientIDs)
 		assert.True(t, mocks.AssertExpectations(t))
 	})
+
+	t.Run("Refresh Session Cookie when < 6 days remaining", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/auth/status", nil)
+		user := types.User{Email: "existing@example.com", ID: "user-123", SessionSecret: "sec-1"}
+		// Session expiring in 3 days (< 6 days threshold)
+		sessData := &SessionData{
+			UserID:        user.ID,
+			Email:         user.Email,
+			SessionSecret: user.SessionSecret,
+			ExpiresAt:     time.Now().Add(3 * 24 * time.Hour).Unix(),
+		}
+		ctx := context.WithValue(req.Context(), userContextKey, user)
+		ctx = context.WithValue(ctx, sessionDataContextKey, sessData)
+		req = req.WithContext(ctx)
+
+		w := httptest.NewRecorder()
+		server.handleAuthStatus(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		cookies := w.Result().Cookies()
+		var refreshedCookie *http.Cookie
+		for _, c := range cookies {
+			if c.Name == sessionTokenCookie {
+				refreshedCookie = c
+			}
+		}
+		if assert.NotNil(t, refreshedCookie, "should refresh session_token cookie") {
+			assert.NotEmpty(t, refreshedCookie.Value)
+			// Verify refreshed session token contains same secret and renewed expiration
+			refreshedData, err := server.verifySessionToken(refreshedCookie.Value)
+			require.NoError(t, err)
+			if assert.NotNil(t, refreshedData) {
+				assert.Equal(t, "user-123", refreshedData.UserID)
+				assert.Equal(t, "sec-1", refreshedData.SessionSecret)
+				assert.WithinDuration(t, time.Now().Add(7*24*time.Hour), time.Unix(refreshedData.ExpiresAt, 0), 10*time.Second)
+			}
+		}
+	})
+
+	t.Run("Do Not Refresh Session Cookie when >= 6 days remaining", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/auth/status", nil)
+		user := types.User{Email: "existing@example.com", ID: "user-123", SessionSecret: "sec-1"}
+		// Session expiring in 6.5 days (>= 6 days threshold)
+		sessData := &SessionData{
+			UserID:        user.ID,
+			Email:         user.Email,
+			SessionSecret: user.SessionSecret,
+			ExpiresAt:     time.Now().Add(6*24*time.Hour + 12*time.Hour).Unix(),
+		}
+		ctx := context.WithValue(req.Context(), userContextKey, user)
+		ctx = context.WithValue(ctx, sessionDataContextKey, sessData)
+		req = req.WithContext(ctx)
+
+		w := httptest.NewRecorder()
+		server.handleAuthStatus(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		cookies := w.Result().Cookies()
+		var refreshedCookie *http.Cookie
+		for _, c := range cookies {
+			if c.Name == sessionTokenCookie {
+				refreshedCookie = c
+			}
+		}
+		assert.Nil(t, refreshedCookie, "should NOT refresh session_token cookie when >= 6 days remaining")
+	})
+
+	t.Run("Refresh Session Cookie when <= 24h duration (< 23h remaining)", func(t *testing.T) {
+		shortServer := &Server{
+			sessionEncryptionKey: testKey,
+			sessionDuration:      24 * time.Hour,
+			oidcAudiences:        map[string]string{"google": "test-audience"},
+		}
+
+		req := httptest.NewRequest("GET", "/api/auth/status", nil)
+		user := types.User{Email: "existing@example.com", ID: "user-123", SessionSecret: "sec-1"}
+		// Session expiring in 22 hours (< 23 hours threshold)
+		sessData := &SessionData{
+			UserID:        user.ID,
+			Email:         user.Email,
+			SessionSecret: user.SessionSecret,
+			ExpiresAt:     time.Now().Add(22 * time.Hour).Unix(),
+		}
+		ctx := context.WithValue(req.Context(), userContextKey, user)
+		ctx = context.WithValue(ctx, sessionDataContextKey, sessData)
+		req = req.WithContext(ctx)
+
+		w := httptest.NewRecorder()
+		shortServer.handleAuthStatus(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		cookies := w.Result().Cookies()
+		var refreshedCookie *http.Cookie
+		for _, c := range cookies {
+			if c.Name == sessionTokenCookie {
+				refreshedCookie = c
+			}
+		}
+		if assert.NotNil(t, refreshedCookie, "should refresh session_token cookie when < 23h remaining on 24h session") {
+			assert.NotEmpty(t, refreshedCookie.Value)
+			refreshedData, err := shortServer.verifySessionToken(refreshedCookie.Value)
+			require.NoError(t, err)
+			if assert.NotNil(t, refreshedData) {
+				assert.Equal(t, "user-123", refreshedData.UserID)
+				assert.Equal(t, "sec-1", refreshedData.SessionSecret)
+				assert.WithinDuration(t, time.Now().Add(24*time.Hour), time.Unix(refreshedData.ExpiresAt, 0), 10*time.Second)
+			}
+		}
+	})
+
+	t.Run("Do Not Refresh Session Cookie when <= 24h duration (>= 23h remaining)", func(t *testing.T) {
+		shortServer := &Server{
+			sessionEncryptionKey: testKey,
+			sessionDuration:      24 * time.Hour,
+			oidcAudiences:        map[string]string{"google": "test-audience"},
+		}
+
+		req := httptest.NewRequest("GET", "/api/auth/status", nil)
+		user := types.User{Email: "existing@example.com", ID: "user-123", SessionSecret: "sec-1"}
+		// Session expiring in 23.5 hours (>= 23 hours threshold)
+		sessData := &SessionData{
+			UserID:        user.ID,
+			Email:         user.Email,
+			SessionSecret: user.SessionSecret,
+			ExpiresAt:     time.Now().Add(23*time.Hour + 30*time.Minute).Unix(),
+		}
+		ctx := context.WithValue(req.Context(), userContextKey, user)
+		ctx = context.WithValue(ctx, sessionDataContextKey, sessData)
+		req = req.WithContext(ctx)
+
+		w := httptest.NewRecorder()
+		shortServer.handleAuthStatus(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		cookies := w.Result().Cookies()
+		var refreshedCookie *http.Cookie
+		for _, c := range cookies {
+			if c.Name == sessionTokenCookie {
+				refreshedCookie = c
+			}
+		}
+		assert.Nil(t, refreshedCookie, "should NOT refresh session_token cookie when >= 23h remaining on 24h session")
+	})
 }
 
 func TestHandleLogin(t *testing.T) {
@@ -697,8 +943,11 @@ func TestHandleLogin(t *testing.T) {
 	verifiedEmailToken := generateTestTokenWithEmailVerified(t, srv.URL, priv, "user@example.com", "user@example.com", true)
 	missingVerifiedToken := generateTestTokenMissingEmailVerified(t, srv.URL, priv, "user@example.com", "user@example.com")
 
+	testKey := "12345678901234567890123456789012"
 	server := &Server{
-		singleSite: false,
+		singleSite:           false,
+		sessionEncryptionKey: testKey,
+		sessionDuration:      7 * 24 * time.Hour,
 		oidcAudiences: map[string]string{
 			"google":                 "test-audience",
 			"google_update_specific": "test-audience",
@@ -719,6 +968,12 @@ func TestHandleLogin(t *testing.T) {
 	t.Run("Valid Login", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:            "google:user@example.com",
+			Email:         "user@example.com",
+			SessionSecret: "test-secret-123",
+		}, nil).Once()
+
 		w := httptest.NewRecorder()
 		req := createReq(validToken)
 
@@ -728,27 +983,43 @@ func TestHandleLogin(t *testing.T) {
 		assert.Equal(t, http.StatusOK, result.StatusCode)
 
 		cookies := result.Cookies()
-		found := false
+		var sessionCookie *http.Cookie
+		var authCookieCleared bool
 		for _, c := range cookies {
-			if c.Name == authTokenCookie {
-				found = true
-				assert.Equal(t, validToken, c.Value)
-				assert.True(t, c.HttpOnly)
-				assert.True(t, c.Secure)
-				assert.Equal(t, http.SameSiteStrictMode, c.SameSite)
-				// Check expiry is roughly correct (within an hour)
-				if !c.Expires.IsZero() {
-					assert.WithinDuration(t, time.Now().Add(1*time.Hour), c.Expires, 10*time.Second)
-				}
+			if c.Name == sessionTokenCookie {
+				sessionCookie = c
+			}
+			if c.Name == authTokenCookie && c.Value == "" && c.MaxAge < 0 {
+				authCookieCleared = true
 			}
 		}
-		assert.True(t, found, "auth cookie should be set")
+		if assert.NotNil(t, sessionCookie, "session_token cookie should be set") {
+			assert.NotEmpty(t, sessionCookie.Value)
+			assert.True(t, sessionCookie.HttpOnly)
+			assert.True(t, sessionCookie.Secure)
+			assert.Equal(t, http.SameSiteStrictMode, sessionCookie.SameSite)
+
+			sessionData, err := server.verifySessionToken(sessionCookie.Value)
+			require.NoError(t, err)
+			if assert.NotNil(t, sessionData) {
+				assert.Equal(t, "google:user@example.com", sessionData.UserID)
+				assert.Equal(t, "user@example.com", sessionData.Email)
+				assert.Equal(t, "test-secret-123", sessionData.SessionSecret)
+			}
+		}
+		assert.True(t, authCookieCleared, "legacy auth_token cookie should be cleared")
 		assert.True(t, mocks.AssertExpectations(t))
 	})
 
 	t.Run("Through Auth Middleware", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:            "google:user@example.com",
+			Email:         "user@example.com",
+			SessionSecret: "test-secret-123",
+		}, nil).Once()
+
 		w := httptest.NewRecorder()
 		req := createReq(validToken)
 
@@ -810,6 +1081,12 @@ func TestHandleLogin(t *testing.T) {
 	t.Run("Verified Email", func(t *testing.T) {
 		mocks := new(mockStorage)
 		server.storage = mocks
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:            "google:user@example.com",
+			Email:         "user@example.com",
+			SessionSecret: "test-secret-123",
+		}, nil).Once()
+
 		w := httptest.NewRecorder()
 		req := createReq(verifiedEmailToken)
 
@@ -838,7 +1115,10 @@ func TestHandleLogout(t *testing.T) {
 	t.Run("Logout", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest("POST", "/api/auth/logout", nil)
-		// Set a cookie to be cleared
+		req.AddCookie(&http.Cookie{
+			Name:  sessionTokenCookie,
+			Value: "some-token",
+		})
 		req.AddCookie(&http.Cookie{
 			Name:  authTokenCookie,
 			Value: "some-token",
@@ -850,16 +1130,24 @@ func TestHandleLogout(t *testing.T) {
 		assert.Equal(t, http.StatusOK, result.StatusCode)
 
 		cookies := result.Cookies()
-		found := false
+		foundSession := false
+		foundAuth := false
 		for _, c := range cookies {
+			if c.Name == sessionTokenCookie {
+				foundSession = true
+				assert.Equal(t, "", c.Value)
+				assert.True(t, c.MaxAge < 0)
+				assert.True(t, c.Expires.Before(time.Now()))
+			}
 			if c.Name == authTokenCookie {
-				found = true
+				foundAuth = true
 				assert.Equal(t, "", c.Value)
 				assert.True(t, c.MaxAge < 0)
 				assert.True(t, c.Expires.Before(time.Now()))
 			}
 		}
-		assert.True(t, found, "auth cookie should be cleared")
+		assert.True(t, foundSession, "session cookie should be cleared")
+		assert.True(t, foundAuth, "auth cookie should be cleared")
 	})
 
 	t.Run("Through Auth Middleware", func(t *testing.T) {
@@ -870,13 +1158,11 @@ func TestHandleLogout(t *testing.T) {
 
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest("POST", "/api/auth/logout", nil)
-		// Set a cookie to be cleared.
 		req.AddCookie(&http.Cookie{
-			Name:  authTokenCookie,
+			Name:  sessionTokenCookie,
 			Value: "some-token",
 		})
 
-		// Let's use bypassAuth to skip token validation or provide a valid token.
 		serverWithMocks.bypassAuth = true
 
 		handler := serverWithMocks.authMiddleware(http.HandlerFunc(serverWithMocks.handleLogout))
@@ -886,14 +1172,14 @@ func TestHandleLogout(t *testing.T) {
 		assert.Equal(t, http.StatusOK, result.StatusCode)
 
 		cookies := result.Cookies()
-		found := false
+		foundSession := false
 		for _, c := range cookies {
-			if c.Name == authTokenCookie {
-				found = true
+			if c.Name == sessionTokenCookie {
+				foundSession = true
 				assert.Equal(t, "", c.Value)
 			}
 		}
-		assert.True(t, found, "auth cookie should be cleared")
+		assert.True(t, foundSession, "session cookie should be cleared")
 		assert.True(t, mocks.AssertExpectations(t))
 	})
 
@@ -905,13 +1191,11 @@ func TestHandleLogout(t *testing.T) {
 
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest("POST", "/api/auth/logout", nil)
-		// Set a cookie to be cleared with an invalid token.
 		req.AddCookie(&http.Cookie{
-			Name:  authTokenCookie,
+			Name:  sessionTokenCookie,
 			Value: "invalid-token",
 		})
 
-		// DO NOT use bypassAuth here, we want to ensure the allowNoLogin list correctly lets it through
 		serverWithMocks.bypassAuth = false
 
 		handler := serverWithMocks.authMiddleware(http.HandlerFunc(serverWithMocks.handleLogout))
@@ -921,14 +1205,14 @@ func TestHandleLogout(t *testing.T) {
 		assert.Equal(t, http.StatusOK, result.StatusCode)
 
 		cookies := result.Cookies()
-		found := false
+		foundSession := false
 		for _, c := range cookies {
-			if c.Name == authTokenCookie {
-				found = true
+			if c.Name == sessionTokenCookie {
+				foundSession = true
 				assert.Equal(t, "", c.Value)
 			}
 		}
-		assert.True(t, found, "auth cookie should be cleared")
+		assert.True(t, foundSession, "session cookie should be cleared")
 		assert.True(t, mocks.AssertExpectations(t))
 	})
 }

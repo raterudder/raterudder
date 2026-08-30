@@ -181,10 +181,26 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if isNewUser {
-		// Create the user with this site
+		sessionSecret := ""
+		// pull the session secret from the existing session so we don't immediately
+		// log them out
+		if userToRegister, ok := ctx.Value(userToRegisterContextKey).(types.User); ok && userToRegister.SessionSecret != "" {
+			sessionSecret = userToRegister.SessionSecret
+		} else {
+			var err error
+			sessionSecret, err = generateSessionSecret()
+			if err != nil {
+				log.Ctx(ctx).ErrorContext(ctx, "join: failed to generate session secret", slog.Any("error", err))
+				writeJSONError(w, "failed to create user", http.StatusInternalServerError)
+				return
+			}
+		}
+
+		// Create the user with this site.
 		newUser := types.User{
-			ID:    userID,
-			Email: email,
+			ID:            userID,
+			Email:         email,
+			SessionSecret: sessionSecret,
 			Sites: []types.UserSite{
 				{
 					ID:   req.JoinSiteID,
@@ -198,6 +214,10 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Ctx(ctx).InfoContext(ctx, "user created", slog.String("userID", userID), slog.String("email", email))
+
+		// Note: The session cookie does not need to be updated or re-issued here because
+		// the userID was already deterministically determined during login (from the OIDC
+		// provider subject), and the sessionSecret from the cookie was preserved on newUser.
 	} else {
 		// Existing user — add site to their list if not already there
 		existingUser, err := s.storage.GetUser(ctx, userID)
