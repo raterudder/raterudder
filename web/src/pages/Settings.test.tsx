@@ -1274,6 +1274,29 @@ describe('App & Settings', () => {
         windowOpenSpy.mockRestore();
     });
 
+    it('hides grid strategy switches when connecting an ESS for the first time before saving credentials', async () => {
+        const user = userEvent.setup();
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            ess: '',
+            hasCredentials: {}
+        });
+
+        await navigateToSettings();
+
+        // Select an ESS for the first time
+        const essSelect = await screen.findByLabelText(/System Type/i);
+        await user.click(essSelect);
+        const franklinOption = await screen.findByRole('option', { name: 'FranklinWH' });
+        await user.click(franklinOption);
+
+        // Grid switches and warning should NOT be displayed before credentials are saved
+        expect(screen.queryByRole('switch', { name: /Grid Can Charge Battery/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('switch', { name: /Export Solar to Grid/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('switch', { name: /Export Battery to Grid/i })).not.toBeInTheDocument();
+        expect(screen.queryByTestId('grid-restrictions-warning')).not.toBeInTheDocument();
+    });
+
     it('shows a warning below checkboxes when all grid strategy settings are unchecked', async () => {
         await navigateToSettings();
 

@@ -457,7 +457,10 @@ interface ESSFormProps {
     setEditESS?: (val: boolean) => void;
 }
 
-const getESSGridSummary = (gridCharge?: boolean, exportSolar?: boolean, exportBatteries?: boolean) => {
+const getESSGridSummary = (gridCharge?: boolean, exportSolar?: boolean, exportBatteries?: boolean, hasCredentials?: boolean) => {
+    if (!hasCredentials) {
+        return 'Grid settings will be automatically detected on save';
+    }
     const chargeText = gridCharge ? 'Grid Charging' : 'No Grid Charging';
     let exportText = 'No Export';
     if (exportSolar && exportBatteries) {
@@ -689,7 +692,7 @@ const ESSForm = ({
                     <div className="summary-info">
                         <span className="summary-label">{essProviders.find(p => p.id === settings.ess)?.name || settings.ess || 'Unknown System'}</span>
                         <span className="summary-sublabel">
-                            {getESSGridSummary(settings.gridChargeBatteries, settings.gridExportSolar, settings.gridExportBatteries)}
+                            {getESSGridSummary(settings.gridChargeBatteries, settings.gridExportSolar, settings.gridExportBatteries, !!settings.hasCredentials?.[settings.ess])}
                         </span>
                     </div>
                     <div className={`summary-status ${isESSDirty ? 'pending' : ''}`}>
@@ -700,7 +703,7 @@ const ESSForm = ({
                 <div className={editESS ? "edit-section" : ""}>
                     {renderFormFields()}
 
-                    {!isWizard && settings.ess && (
+                    {!isWizard && settings.ess && settings.hasCredentials?.[settings.ess] && (
                         <div className="grid-strategy-grid" style={{ marginTop: '1rem', borderTop: '1px solid var(--outline-variant)', paddingTop: '1rem' }}>
                             <Field.Root className="form-group switch-group compact">
                                 <div className="switch-row">
