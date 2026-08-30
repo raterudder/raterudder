@@ -424,8 +424,12 @@ func TestBaseEversourceVPP(t *testing.T) {
 		prices, err := c.GetConfirmedPrices(context.Background(), start, end)
 		require.NoError(t, err)
 		assert.True(t, httpCalled, "HTTP server should be called on DB miss")
+		expectedPrice := 0.08
+		if now.Weekday() >= time.Monday && now.Weekday() <= time.Friday {
+			expectedPrice = 0.15
+		}
 		if assert.Len(t, prices, 1) {
-			assert.InDelta(t, 0.15, prices[0].DollarsPerKWH, 1e-6)
+			assert.InDelta(t, expectedPrice, prices[0].DollarsPerKWH, 1e-6)
 		}
 		m.AssertExpectations(t)
 	})
