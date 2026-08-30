@@ -846,7 +846,6 @@ const Settings = ({
     const [editBattery, setEditBattery] = useState(false);
     const [batteryError, setBatteryError] = useState<string | null>(null);
 
-    const isVariableFeatureEnabled = settings?.release === 'staging' || (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('variable') === 'true');
     const isEVFeatureEnabled = settings?.release === 'staging' || (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('ev') === 'true') || (!!settings?.evChargingPeriods && settings.evChargingPeriods.length > 0);
     const [estimatingEV, setEstimatingEV] = useState(false);
     const [evEstimationNote, setEVEstimationNote] = useState<string | null>(null);
@@ -1855,28 +1854,18 @@ const Settings = ({
                         <h3>Battery</h3>
                         {!editBattery && (
                             (!settings.minBatterySOCPeriods || settings.minBatterySOCPeriods.length === 0) ? (
-                                isVariableFeatureEnabled ? (
-                                    <button
-                                        type="button"
-                                        className="text-button"
-                                        id="configureReserveScheduleBtn"
-                                        onClick={() => {
-                                            setEditBattery(true);
-                                            handleOpenReserveSchedule();
-                                        }}
-                                        disabled={loadingPeriods}
-                                    >
-                                        {loadingPeriods ? 'Loading...' : 'Advanced'}
-                                    </button>
-                                ) : (
-                                    <button
-                                        type="button"
-                                        className="text-button"
-                                        onClick={() => setEditBattery(true)}
-                                    >
-                                        Change
-                                    </button>
-                                )
+                                <button
+                                    type="button"
+                                    className="text-button"
+                                    id="configureReserveScheduleBtn"
+                                    onClick={() => {
+                                        setEditBattery(true);
+                                        handleOpenReserveSchedule();
+                                    }}
+                                    disabled={loadingPeriods}
+                                >
+                                    {loadingPeriods ? 'Loading...' : 'Advanced'}
+                                </button>
                             ) : (
                                 <button
                                     type="button"
@@ -2141,56 +2130,54 @@ const Settings = ({
 
                                     <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
                                         {(!settings.minBatterySOCPeriods || settings.minBatterySOCPeriods.length === 0) ? (
-                                            isVariableFeatureEnabled && (
-                                                <>
-                                                    {hasNamedRatePeriods && (
-                                                        <button
-                                                            type="button"
-                                                            className="text-button"
-                                                            onClick={async () => {
-                                                                let periods = utilityPeriods;
-                                                                if (!periods) {
-                                                                    periods = await fetchUtilityPeriods(siteID);
-                                                                    setUtilityPeriods(periods || []);
-                                                                }
-                                                                const fetchedNames = periods ? periods.filter(p => p.name && p.name !== '').map(p => p.name!) : [];
-                                                                if (fetchedNames.length === 0) {
-                                                                    setBatteryError(null);
-                                                                    setScheduleMode('custom');
-                                                                    const custom: MinBatterySOCPeriod[] = [
-                                                                        { hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: settings.minBatterySOC || 20 }
-                                                                    ];
-                                                                    updateMinBatterySOCPeriods(custom);
-                                                                    return;
-                                                                }
-                                                                const uniqueNames = Array.from(new Set(fetchedNames));
-                                                                const initialPeriods: MinBatterySOCPeriod[] = uniqueNames.map(name => ({
-                                                                    utilityPeriodName: name,
-                                                                    minBatterySOC: settings.minBatterySOC || 20,
-                                                                }));
-                                                                updateMinBatterySOCPeriods(initialPeriods);
-                                                                setScheduleMode('named');
-                                                                setBatteryError(null);
-                                                            }}
-                                                        >
-                                                            Rates Mode
-                                                        </button>
-                                                    )}
+                                            <>
+                                                {hasNamedRatePeriods && (
                                                     <button
                                                         type="button"
                                                         className="text-button"
-                                                        onClick={() => {
-                                                            setScheduleMode('custom');
-                                                            const custom: MinBatterySOCPeriod[] = [
-                                                                { hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: settings.minBatterySOC || 20 }
-                                                            ];
-                                                            updateMinBatterySOCPeriods(custom);
+                                                        onClick={async () => {
+                                                            let periods = utilityPeriods;
+                                                            if (!periods) {
+                                                                periods = await fetchUtilityPeriods(siteID);
+                                                                setUtilityPeriods(periods || []);
+                                                            }
+                                                            const fetchedNames = periods ? periods.filter(p => p.name && p.name !== '').map(p => p.name!) : [];
+                                                            if (fetchedNames.length === 0) {
+                                                                setBatteryError(null);
+                                                                setScheduleMode('custom');
+                                                                const custom: MinBatterySOCPeriod[] = [
+                                                                    { hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: settings.minBatterySOC || 20 }
+                                                                ];
+                                                                updateMinBatterySOCPeriods(custom);
+                                                                return;
+                                                            }
+                                                            const uniqueNames = Array.from(new Set(fetchedNames));
+                                                            const initialPeriods: MinBatterySOCPeriod[] = uniqueNames.map(name => ({
+                                                                utilityPeriodName: name,
+                                                                minBatterySOC: settings.minBatterySOC || 20,
+                                                            }));
+                                                            updateMinBatterySOCPeriods(initialPeriods);
+                                                            setScheduleMode('named');
+                                                            setBatteryError(null);
                                                         }}
                                                     >
-                                                        Custom Mode
+                                                        Rates Mode
                                                     </button>
-                                                </>
-                                            )
+                                                )}
+                                                <button
+                                                    type="button"
+                                                    className="text-button"
+                                                    onClick={() => {
+                                                        setScheduleMode('custom');
+                                                        const custom: MinBatterySOCPeriod[] = [
+                                                            { hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: settings.minBatterySOC || 20 }
+                                                        ];
+                                                        updateMinBatterySOCPeriods(custom);
+                                                    }}
+                                                >
+                                                    Custom Mode
+                                                </button>
+                                            </>
                                         ) : (
                                             <>
                                                 {scheduleMode === 'named' ? (

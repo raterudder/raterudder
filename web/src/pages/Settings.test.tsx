@@ -2076,6 +2076,9 @@ describe('App & Settings', () => {
             const saveBtn = screen.getByText('Save Settings');
             await user.click(saveBtn);
 
+            const confirmBtn = await screen.findByRole('button', { name: /Confirm & Finish/i });
+            await user.click(confirmBtn);
+
             await waitFor(() => {
                 expect(screen.getByText('Welcome to RateRudder! 🚀')).toBeInTheDocument();
             });
@@ -2146,7 +2149,7 @@ describe('App & Settings', () => {
             expect(screen.queryByText('Welcome to RateRudder! 🚀')).not.toBeInTheDocument();
         });
 
-        it('hides Advanced button when in production release without ?variable=true', async () => {
+        it('shows Advanced button when in production release without ?variable=true', async () => {
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
                 release: 'production',
@@ -2154,27 +2157,7 @@ describe('App & Settings', () => {
             });
             await navigateToSettings();
 
-            expect(screen.queryByRole('button', { name: /^Advanced$/i })).not.toBeInTheDocument();
-            expect(screen.getByRole('button', { name: /^Change$/i })).toBeInTheDocument();
-        });
-
-        it('shows Advanced button when URL contains ?variable=true even in production release', async () => {
-            const originalLocation = window.location;
-            delete (window as any).location;
-            (window as any).location = new URL('http://localhost/settings?variable=true');
-
-            try {
-                (api.fetchSettings as any).mockResolvedValue({
-                    ...defaultSettings,
-                    release: 'production',
-                    minBatterySOCPeriods: undefined,
-                });
-                await navigateToSettings();
-
-                expect(screen.getByRole('button', { name: /^Advanced$/i })).toBeInTheDocument();
-            } finally {
-                (window as any).location = originalLocation;
-            }
+            expect(screen.getByRole('button', { name: /^Advanced$/i })).toBeInTheDocument();
         });
 
         it('allows editing existing custom or rate-based schedule even in production release without ?variable=true', async () => {
