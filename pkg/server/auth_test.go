@@ -949,17 +949,15 @@ func TestHandleLogin(t *testing.T) {
 		sessionEncryptionKey: testKey,
 		sessionDuration:      7 * 24 * time.Hour,
 		oidcAudiences: map[string]string{
-			"google":                 "test-audience",
-			"google_update_specific": "test-audience",
+			"google": "test-audience",
 		},
 		oidcVerifiers: map[string]tokenVerifier{
-			"google":                 provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
-			"google_update_specific": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
+			"google": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
 		},
 	}
 
 	createReq := func(token string) *http.Request {
-		body := map[string]string{"token": token}
+		body := map[string]string{"token": token, "client": "google"}
 		bodyBytes, _ := json.Marshal(body)
 		r := httptest.NewRequest("POST", "/api/auth/login", bytes.NewBuffer(bodyBytes))
 		return r
