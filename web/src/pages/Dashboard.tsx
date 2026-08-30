@@ -13,8 +13,8 @@ import {
     type SummaryType
 } from '../utils/dashboardUtils';
 
-export const whatsNewVersion = 9;
-export const whatsNewText = "Optimization: standby ahead of solar generation if export price is similar.";
+export const whatsNewVersion = 10;
+export const whatsNewText = "New: variable battery reserve and you no longer need to login so often.";
 export const whatsNewLinkText = "";
 
 const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ siteID, settings = null }) => {
