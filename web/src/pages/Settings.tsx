@@ -457,6 +457,19 @@ interface ESSFormProps {
     setEditESS?: (val: boolean) => void;
 }
 
+const getESSGridSummary = (gridCharge?: boolean, exportSolar?: boolean, exportBatteries?: boolean) => {
+    const chargeText = gridCharge ? 'Grid Charging' : 'No Grid Charging';
+    let exportText = 'No Export';
+    if (exportSolar && exportBatteries) {
+        exportText = 'Export: Solar & Battery';
+    } else if (exportSolar) {
+        exportText = 'Export: Solar Only';
+    } else if (exportBatteries) {
+        exportText = 'Export: Battery Only';
+    }
+    return `${chargeText} • ${exportText}`;
+};
+
 const ESSForm = ({
     settings,
     onChange,
@@ -495,6 +508,7 @@ const ESSForm = ({
                         if (setEditESS) setEditESS(true);
                         setIsESSDirty(true);
                         onChange('ess', value as string);
+                        onChange('customGridSettings', false);
                         setEssCredentials({});
                         setOauthStatus('idle');
                         setCurrentStage(0);
@@ -674,6 +688,9 @@ const ESSForm = ({
                 <button type="button" className="configured-summary" onClick={() => setEditESS && setEditESS(true)} aria-label="Edit Energy Storage System">
                     <div className="summary-info">
                         <span className="summary-label">{essProviders.find(p => p.id === settings.ess)?.name || settings.ess || 'Unknown System'}</span>
+                        <span className="summary-sublabel">
+                            {getESSGridSummary(settings.gridChargeBatteries, settings.gridExportSolar, settings.gridExportBatteries)}
+                        </span>
                     </div>
                     <div className={`summary-status ${isESSDirty ? 'pending' : ''}`}>
                         {isESSDirty ? 'Pending Save' : 'Connected'}
@@ -682,6 +699,67 @@ const ESSForm = ({
             ) : (
                 <div className={editESS ? "edit-section" : ""}>
                     {renderFormFields()}
+
+                    {!isWizard && settings.ess && (
+                        <div className="grid-strategy-grid" style={{ marginTop: '1rem', borderTop: '1px solid var(--outline-variant)', paddingTop: '1rem' }}>
+                            <Field.Root className="form-group switch-group compact">
+                                <div className="switch-row">
+                                    <Switch.Root
+                                        id="gridChargeBatteries"
+                                        checked={settings.gridChargeBatteries}
+                                        onCheckedChange={(checked) => {
+                                            onChange('gridChargeBatteries', checked);
+                                            onChange('customGridSettings', true);
+                                        }}
+                                        className="switch-root"
+                                    >
+                                        <Switch.Thumb className="switch-thumb" />
+                                    </Switch.Root>
+                                    <Field.Label htmlFor="gridChargeBatteries">Grid Can Charge Battery</Field.Label>
+                                </div>
+                            </Field.Root>
+
+                            <Field.Root className="form-group switch-group compact">
+                                <div className="switch-row">
+                                    <Switch.Root
+                                        id="gridExportSolar"
+                                        checked={settings.gridExportSolar}
+                                        onCheckedChange={(checked) => {
+                                            onChange('gridExportSolar', checked);
+                                            onChange('customGridSettings', true);
+                                        }}
+                                        className="switch-root"
+                                    >
+                                        <Switch.Thumb className="switch-thumb" />
+                                    </Switch.Root>
+                                    <Field.Label htmlFor="gridExportSolar">Export Solar to Grid</Field.Label>
+                                </div>
+                            </Field.Root>
+
+                            <Field.Root className="form-group switch-group compact">
+                                <div className="switch-row">
+                                    <Switch.Root
+                                        id="gridExportBatteries"
+                                        checked={settings.gridExportBatteries}
+                                        onCheckedChange={(checked) => {
+                                            onChange('gridExportBatteries', checked);
+                                            onChange('customGridSettings', true);
+                                        }}
+                                        className="switch-root"
+                                    >
+                                        <Switch.Thumb className="switch-thumb" />
+                                    </Switch.Root>
+                                    <Field.Label htmlFor="gridExportBatteries">Export Battery to Grid</Field.Label>
+                                </div>
+                            </Field.Root>
+
+                            {!settings.gridChargeBatteries && !settings.gridExportSolar && !settings.gridExportBatteries && (
+                                <div className="warning-notice" style={{ gridColumn: '1 / -1', marginTop: 0 }} data-testid="grid-restrictions-warning">
+                                    Warning: All grid interactions are disabled. The system will only charge from solar and will not charge from the grid or export any energy.
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     {editESS && (
                         <div className="ess-actions" style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem', alignItems: 'center' }}>
@@ -748,6 +826,8 @@ const Settings = ({
     const [forceFullSettings, setForceFullSettings] = useState(false);
     const [wizardStep, setWizardStep] = useState(1);
     const [isInWizard, setIsInWizard] = useState<boolean | null>(null);
+    const [showTeslaGridModal, setShowTeslaGridModal] = useState(false);
+    const [teslaGridDirty, setTeslaGridDirty] = useState(false);
 
     useEffect(() => {
         if (settings && isInWizard === null) {
@@ -1185,9 +1265,15 @@ const Settings = ({
 
             const isESSNowConfigured = updatedSettings ? (!!updatedSettings.ess && updatedSettings.ess !== "" && !!updatedSettings.hasCredentials?.[updatedSettings.ess]) : false;
 
-            if (!isESSAlreadyConfigured && isESSNowConfigured && !updatedSettings.pause) {
-                if (onShowTutorial) {
-                    onShowTutorial();
+            const isTeslaSetup = !!credentialsPayload?.['tesla'] || (finalSettings.ess === 'tesla' && !finalSettings.customGridSettings && !isESSAlreadyConfigured && isESSNowConfigured);
+            if (isTeslaSetup) {
+                setTeslaGridDirty(false);
+                setShowTeslaGridModal(true);
+            } else {
+                if (!isESSAlreadyConfigured && isESSNowConfigured && !updatedSettings.pause) {
+                    if (onShowTutorial) {
+                        onShowTutorial();
+                    }
                 }
             }
 
@@ -1339,12 +1425,6 @@ const Settings = ({
 
             const isESSNowConfigured = !!finalSettings.ess && finalSettings.ess !== "" && (!!finalSettings.hasCredentials?.[finalSettings.ess] || !!credentialsPayload?.[finalSettings.ess]);
 
-            if (!isESSAlreadyConfigured && isESSNowConfigured && !finalSettings.pause) {
-                if (onShowTutorial) {
-                    onShowTutorial();
-                }
-            }
-
             if (credentialsPayload && finalSettings.ess) {
                 setEditESS(false);
                 setEssCredentials({});
@@ -1352,9 +1432,21 @@ const Settings = ({
             }
             setIsUtilityDirty(false);
             setIsESSDirty(false);
-            setTimeout(() => {
-                navigate('/dashboard');
-            }, 1000);
+            if (finalSettings.ess === 'tesla') {
+                savingRef.current = false;
+                setIsSaving(false);
+                setTeslaGridDirty(false);
+                setShowTeslaGridModal(true);
+            } else {
+                if (!isESSAlreadyConfigured && isESSNowConfigured && !finalSettings.pause) {
+                    if (onShowTutorial) {
+                        onShowTutorial();
+                    }
+                }
+                setTimeout(() => {
+                    navigate('/dashboard');
+                }, 1000);
+            }
             success = true;
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : 'Failed to save settings';
@@ -1364,6 +1456,40 @@ const Settings = ({
                 savingRef.current = false;
                 setIsSaving(false);
             }
+        }
+    };
+
+    const handleConfirmTeslaGridSettings = async () => {
+        if (!settings) return;
+        if (!teslaGridDirty) {
+            setShowTeslaGridModal(false);
+            if (onShowTutorial && !settings.pause) {
+                onShowTutorial();
+            }
+            if (isInWizard) {
+                navigate('/dashboard');
+            }
+            return;
+        }
+
+        try {
+            setIsSaving(true);
+            await updateSettings({ ...settings, customGridSettings: true }, siteID);
+            setShowTeslaGridModal(false);
+            if (onSettingsSaved) {
+                await onSettingsSaved();
+            }
+            if (onShowTutorial && !settings.pause) {
+                onShowTutorial();
+            }
+            if (isInWizard) {
+                navigate('/dashboard');
+            }
+        } catch (err) {
+            const errMsg = err instanceof Error ? err.message : 'Failed to save grid settings';
+            setError(errMsg);
+        } finally {
+            setIsSaving(false);
         }
     };
 
@@ -1475,6 +1601,94 @@ const Settings = ({
     const utilityHighlightClass = showChecklist && !isUtilityConfigured ? "highlighted-section" : "";
     const essHighlightClass = showChecklist && !isESSConfigured ? "highlighted-section" : "";
 
+    const renderTeslaGridModal = () => (
+        <Dialog.Root open={showTeslaGridModal} onOpenChange={(open) => {
+            if (!open) {
+                handleConfirmTeslaGridSettings();
+            }
+        }}>
+            <Dialog.Portal>
+                <Dialog.Backdrop className="dialog-backdrop" />
+                <Dialog.Popup className="dialog-popup" data-testid="tesla-grid-modal">
+                    <Dialog.Title className="dialog-title">Confirm Grid Settings</Dialog.Title>
+                    <Dialog.Description className="dialog-description">
+                        Based on your Tesla Powerwall configuration, we've detected the following grid settings. Please confirm or adjust them:
+                    </Dialog.Description>
+                    {settings && (
+                        <div className="grid-strategy-grid" style={{ marginTop: '1rem', marginBottom: '1.5rem' }}>
+                            <Field.Root className="form-group switch-group compact">
+                                <div className="switch-row">
+                                    <Switch.Root
+                                        id="modal-gridChargeBatteries"
+                                        checked={settings.gridChargeBatteries ?? true}
+                                        onCheckedChange={(checked) => {
+                                            handleChange('gridChargeBatteries', checked);
+                                            setTeslaGridDirty(true);
+                                        }}
+                                        className="switch-root"
+                                    >
+                                        <Switch.Thumb className="switch-thumb" />
+                                    </Switch.Root>
+                                    <Field.Label htmlFor="modal-gridChargeBatteries">Grid Can Charge Battery</Field.Label>
+                                </div>
+                            </Field.Root>
+
+                            <Field.Root className="form-group switch-group compact">
+                                <div className="switch-row">
+                                    <Switch.Root
+                                        id="modal-gridExportSolar"
+                                        checked={settings.gridExportSolar ?? false}
+                                        onCheckedChange={(checked) => {
+                                            handleChange('gridExportSolar', checked);
+                                            setTeslaGridDirty(true);
+                                        }}
+                                        className="switch-root"
+                                    >
+                                        <Switch.Thumb className="switch-thumb" />
+                                    </Switch.Root>
+                                    <Field.Label htmlFor="modal-gridExportSolar">Export Solar to Grid</Field.Label>
+                                </div>
+                            </Field.Root>
+
+                            <Field.Root className="form-group switch-group compact">
+                                <div className="switch-row">
+                                    <Switch.Root
+                                        id="modal-gridExportBatteries"
+                                        checked={settings.gridExportBatteries ?? false}
+                                        onCheckedChange={(checked) => {
+                                            handleChange('gridExportBatteries', checked);
+                                            setTeslaGridDirty(true);
+                                        }}
+                                        className="switch-root"
+                                    >
+                                        <Switch.Thumb className="switch-thumb" />
+                                    </Switch.Root>
+                                    <Field.Label htmlFor="modal-gridExportBatteries">Export Battery to Grid</Field.Label>
+                                </div>
+                            </Field.Root>
+
+                            {!settings.gridChargeBatteries && !settings.gridExportSolar && !settings.gridExportBatteries && (
+                                <div className="warning-notice" style={{ gridColumn: '1 / -1', marginTop: 0 }} data-testid="tesla-grid-modal-warning">
+                                    Warning: All grid interactions are disabled. The system will only charge from solar and will not charge from the grid or export any energy.
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+                        <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={handleConfirmTeslaGridSettings}
+                            disabled={isSaving}
+                        >
+                            {isSaving ? 'Saving...' : 'Confirm & Finish'}
+                        </button>
+                    </div>
+                </Dialog.Popup>
+            </Dialog.Portal>
+        </Dialog.Root>
+    );
+
     if (showWizard) {
         return (
             <div className="content-container settings-container wizard-container">
@@ -1527,59 +1741,6 @@ const Settings = ({
                                     setIsUtilityDirty={setIsUtilityDirty}
                                     onUtilityChange={validateUtilityAndPeriods}
                                 />
-
-                                <div className="grid-strategy-section" style={{ marginTop: '0.5rem', borderTop: '1px solid var(--outline-variant)', paddingTop: '1rem' }}>
-                                    <h4 style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.75rem', marginTop: 0 }}>Grid Restrictions</h4>
-                                    <div className="grid-strategy-grid" style={{ background: 'transparent', border: 'none', padding: 0, marginBottom: 0 }}>
-                                        <Field.Root className="form-group switch-group compact">
-                                            <div className="switch-row">
-                                                <Switch.Root
-                                                    id="wizard-gridChargeBatteries"
-                                                    checked={settings.gridChargeBatteries ?? true}
-                                                    onCheckedChange={(checked) => handleChange('gridChargeBatteries', checked)}
-                                                    className="switch-root"
-                                                >
-                                                    <Switch.Thumb className="switch-thumb" />
-                                                </Switch.Root>
-                                                <Field.Label htmlFor="wizard-gridChargeBatteries">Grid Can Charge Battery</Field.Label>
-                                            </div>
-                                        </Field.Root>
-
-                                        <Field.Root className="form-group switch-group compact">
-                                            <div className="switch-row">
-                                                <Switch.Root
-                                                    id="wizard-gridExportSolar"
-                                                    checked={settings.gridExportSolar ?? false}
-                                                    onCheckedChange={(checked) => handleChange('gridExportSolar', checked)}
-                                                    className="switch-root"
-                                                >
-                                                    <Switch.Thumb className="switch-thumb" />
-                                                </Switch.Root>
-                                                <Field.Label htmlFor="wizard-gridExportSolar">Export Solar to Grid</Field.Label>
-                                            </div>
-                                        </Field.Root>
-
-                                        <Field.Root className="form-group switch-group compact">
-                                            <div className="switch-row">
-                                                <Switch.Root
-                                                    id="wizard-gridExportBatteries"
-                                                    checked={settings.gridExportBatteries ?? false}
-                                                    onCheckedChange={(checked) => handleChange('gridExportBatteries', checked)}
-                                                    className="switch-root"
-                                                >
-                                                    <Switch.Thumb className="switch-thumb" />
-                                                </Switch.Root>
-                                                <Field.Label htmlFor="wizard-gridExportBatteries">Export Battery to Grid</Field.Label>
-                                            </div>
-                                        </Field.Root>
-
-                                        {!settings.gridChargeBatteries && !settings.gridExportSolar && !settings.gridExportBatteries && (
-                                            <div className="warning-notice" style={{ gridColumn: '1 / -1', marginTop: 0 }} data-testid="wizard-grid-restrictions-warning">
-                                                Warning: All grid interactions are disabled. The system will only charge from solar and will not charge from the grid or export any energy.
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
                             </div>
                         )}
 
@@ -1647,6 +1808,7 @@ const Settings = ({
                         </button>
                     </div>
                 </div>
+                {renderTeslaGridModal()}
             </div>
         );
     }
@@ -2129,57 +2291,6 @@ const Settings = ({
                     setIsUtilityDirty={setIsUtilityDirty}
                     onUtilityChange={validateUtilityAndPeriods}
                 />
-
-                <div className="grid-strategy-grid">
-                    <Field.Root className="form-group switch-group compact">
-                        <div className="switch-row">
-                            <Switch.Root
-                                id="gridChargeBatteries"
-                                checked={settings.gridChargeBatteries}
-                                onCheckedChange={(checked) => handleChange('gridChargeBatteries', checked)}
-                                className="switch-root"
-                            >
-                                <Switch.Thumb className="switch-thumb" />
-                            </Switch.Root>
-                            <Field.Label htmlFor="gridChargeBatteries">Grid Can Charge Battery</Field.Label>
-                        </div>
-                    </Field.Root>
-
-                    <Field.Root className="form-group switch-group compact">
-                        <div className="switch-row">
-                            <Switch.Root
-                                id="gridExportSolar"
-                                checked={settings.gridExportSolar}
-                                onCheckedChange={(checked) => handleChange('gridExportSolar', checked)}
-                                className="switch-root"
-                            >
-                                <Switch.Thumb className="switch-thumb" />
-                            </Switch.Root>
-                            <Field.Label htmlFor="gridExportSolar">Export Solar to Grid</Field.Label>
-                        </div>
-                    </Field.Root>
-
-                    <Field.Root className="form-group switch-group compact">
-                        <div className="switch-row">
-                            <Switch.Root
-                                id="gridExportBatteries"
-                                checked={settings.gridExportBatteries}
-                                onCheckedChange={(checked) => handleChange('gridExportBatteries', checked)}
-                                className="switch-root"
-                            >
-                                <Switch.Thumb className="switch-thumb" />
-                            </Switch.Root>
-                            <Field.Label htmlFor="gridExportBatteries">Export Battery to Grid</Field.Label>
-                        </div>
-                    </Field.Root>
-
-                    {!settings.gridChargeBatteries && !settings.gridExportSolar && !settings.gridExportBatteries && (
-                        <div className="warning-notice" style={{ gridColumn: '1 / -1', marginTop: 0 }} data-testid="grid-restrictions-warning">
-                            Warning: All grid interactions are disabled. The system will only charge from solar and will not charge from the grid or export any energy.
-                        </div>
-                    )}
-                </div>
-
                 </div>
 
                 {/* ESS Configuration Section */}
@@ -2894,6 +3005,8 @@ const Settings = ({
                     </Dialog.Root>
                 </div>
             </div>
+
+            {renderTeslaGridModal()}
         </div>
     );
 };

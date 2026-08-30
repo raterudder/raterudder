@@ -811,6 +811,28 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 	return status, nil
 }
 
+// GridSettings returns the grid-related capabilities reported by Tesla.
+func (b *Tesla) GridSettings(ctx context.Context) (types.GridSettings, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	siteInfo, err := b.getSiteInfoWithCache(ctx, false)
+	if err != nil {
+		return types.GridSettings{}, err
+	}
+
+	canCharge := siteInfo.Components.EditSettingGridCharging || !siteInfo.Components.DisallowChargeFromGridWithSolarInstalled
+	canExportSolar := siteInfo.Components.EditSettingPermissionToExport || siteInfo.Components.Solar
+	// this can be changed so it might not represent the actual permissions
+	canExportBatteries := siteInfo.Components.EditSettingEnergyExports || siteInfo.Components.CustomerPreferredExportRule == teslaExportRuleBatteryOk
+
+	return types.GridSettings{
+		GridChargeBatteries: canCharge,
+		GridExportSolar:     canExportSolar,
+		GridExportBatteries: canExportBatteries,
+	}, nil
+}
+
 func getBatteryCount(siteInfo teslaSiteInfoResponse) float64 {
 	if siteInfo.BatteryCount > 0 {
 		return float64(siteInfo.BatteryCount)
@@ -1600,7 +1622,10 @@ type teslaSiteComponents struct {
 	CustomerPreferredExportRule              string `json:"customer_preferred_export_rule"`
 	DisallowChargeFromGridWithSolarInstalled bool   `json:"disallow_charge_from_grid_with_solar_installed"`
 	// can be pv_only or battery_ok
-	NetMeterMode string `json:"net_meter_mode"`
+	NetMeterMode                  string `json:"net_meter_mode"`
+	EditSettingEnergyExports      bool   `json:"edit_setting_energy_exports"`
+	EditSettingGridCharging       bool   `json:"edit_setting_grid_charging"`
+	EditSettingPermissionToExport bool   `json:"edit_setting_permission_to_export"`
 }
 
 type teslaSiteComponentsGateway struct {

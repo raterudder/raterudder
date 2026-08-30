@@ -893,6 +893,23 @@ func (f *Franklin) getPowerControl(ctx context.Context) (franklinGetPowerControl
 	return res, nil
 }
 
+// GridSettings returns the grid-related capabilities and restrictions configured for the FranklinWH gateway.
+func (f *Franklin) GridSettings(ctx context.Context) (types.GridSettings, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	pc, err := f.getPowerControl(ctx)
+	if err != nil {
+		return types.GridSettings{}, err
+	}
+
+	return types.GridSettings{
+		GridChargeBatteries: pc.GridMaxFlag == franklinGridMaxFlagChargeFromGrid,
+		GridExportSolar:     pc.GridFeedMaxFlag == franklinGridFeedMaxFlagSolarOnly || pc.GridFeedMaxFlag == franklinGridFeedMaxFlagBatteryAndSolar,
+		GridExportBatteries: pc.GridFeedMaxFlag == franklinGridFeedMaxFlagBatteryAndSolar,
+	}, nil
+}
+
 func (f *Franklin) setPowerControl(ctx context.Context, pc franklinGetPowerControlSettingResult) error {
 	data := map[string]any{
 		"gatewayId": f.gatewayID,

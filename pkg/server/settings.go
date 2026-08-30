@@ -291,13 +291,15 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Get existing credentials to preserve other fields
-	existing, _, err := s.storage.GetSettings(ctx, siteID)
+	// Get existing credentials with migration to preserve other fields
+	existingSV, existingCreds, err := s.getSettingsWithMigration(ctx, siteID)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get settings", slog.Any("error", err))
 		writeJSONError(w, "failed to get settings", http.StatusInternalServerError)
 		return
 	}
+	existing := existingSV.Settings
+
 	// Preserve existing auth status, encrypted credentials, and update group by default
 	newSettings.ESSAuthStatus = existing.ESSAuthStatus
 	newSettings.EncryptedCredentials = existing.EncryptedCredentials
@@ -343,26 +345,15 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		newSettings.Location = nil
 	}
 
-	var existingCreds types.Credentials
-	var existingCredsOnce sync.Once
-	var credsChanged bool
-	loadExistingCreds := func() {
-		existingCredsOnce.Do(func() {
-			if len(existing.EncryptedCredentials) > 0 {
-				existingCreds, err = s.decryptCredentials(ctx, existing.EncryptedCredentials)
-				if err != nil {
-					log.Ctx(ctx).ErrorContext(ctx, "failed to decrypt credentials", slog.Any("error", err))
-					writeJSONError(w, "failed to decrypt credentials", http.StatusInternalServerError)
-					return
-				}
-			}
-		})
+	// If the existing settings already have custom grid settings and the ESS provider didn't change, preserve it
+	if existing.CustomGridSettings && existing.ESS == newSettings.ESS {
+		newSettings.CustomGridSettings = true
 	}
 
+	var credsChanged bool
 	var changedESS bool
 	// Handle credentials or ESS update
 	if req.Credentials != nil || existing.ESS != newSettings.ESS {
-		loadExistingCreds()
 
 		// check if ESS changed
 		var shouldBackfillHistory bool
@@ -466,6 +457,22 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				newSettings.ESSAuthStatus.ConsecutiveFailures = 0
 				newSettings.ESSAuthStatus.ConsecutiveSetFailures = 0
 				newSettings.ESSAuthStatus.LastAttempt = now
+			}
+
+			// If grid settings have not been manually customized, pull them from the ESS
+			if !newSettings.CustomGridSettings {
+				if gridSettings, err := essSystem.GridSettings(ctx); err != nil {
+					log.Ctx(ctx).WarnContext(ctx, "failed to get grid settings from ESS", slog.Any("error", err))
+				} else {
+					log.Ctx(ctx).InfoContext(ctx, "synced grid settings from ESS",
+						slog.Bool("gridChargeBatteries", gridSettings.GridChargeBatteries),
+						slog.Bool("gridExportSolar", gridSettings.GridExportSolar),
+						slog.Bool("gridExportBatteries", gridSettings.GridExportBatteries),
+					)
+					newSettings.GridChargeBatteries = gridSettings.GridChargeBatteries
+					newSettings.GridExportSolar = gridSettings.GridExportSolar
+					newSettings.GridExportBatteries = gridSettings.GridExportBatteries
+				}
 			}
 
 			// now backfill if we need to since the credentials were verified

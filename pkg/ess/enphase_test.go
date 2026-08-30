@@ -1154,4 +1154,90 @@ func TestEnphase(t *testing.T) {
 		assert.Equal(t, 2, calls)
 		_ = res3
 	})
+
+	t.Run("GridSettings", func(t *testing.T) {
+		t.Run("ImportAndExport", func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/app-api/123/data.json" {
+					json.NewEncoder(w).Encode(map[string]any{
+						"state": map[string]any{
+							"batteryGridMode": "ImportAndExport",
+							"batteryConfig": map[string]any{
+								"charge_from_grid": true,
+							},
+						},
+					})
+					return
+				}
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			defer server.Close()
+
+			e := newEnphase()
+			e.baseURL, _ = url.Parse(server.URL)
+			e.systemID = 123
+
+			gs, err := e.GridSettings(context.Background())
+			require.NoError(t, err)
+			assert.True(t, gs.GridChargeBatteries)
+			assert.True(t, gs.GridExportSolar)
+			assert.True(t, gs.GridExportBatteries)
+		})
+
+		t.Run("ImportOnly", func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/app-api/123/data.json" {
+					json.NewEncoder(w).Encode(map[string]any{
+						"state": map[string]any{
+							"batteryGridMode": "ImportOnly",
+							"batteryConfig": map[string]any{
+								"charge_from_grid": true,
+							},
+						},
+					})
+					return
+				}
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			defer server.Close()
+
+			e := newEnphase()
+			e.baseURL, _ = url.Parse(server.URL)
+			e.systemID = 123
+
+			gs, err := e.GridSettings(context.Background())
+			require.NoError(t, err)
+			assert.True(t, gs.GridChargeBatteries)
+			assert.True(t, gs.GridExportSolar)
+			assert.False(t, gs.GridExportBatteries)
+		})
+
+		t.Run("NoImportOrExport", func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/app-api/123/data.json" {
+					json.NewEncoder(w).Encode(map[string]any{
+						"state": map[string]any{
+							"batteryGridMode": "NoImportOrExport",
+							"batteryConfig": map[string]any{
+								"charge_from_grid": false,
+							},
+						},
+					})
+					return
+				}
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			defer server.Close()
+
+			e := newEnphase()
+			e.baseURL, _ = url.Parse(server.URL)
+			e.systemID = 123
+
+			gs, err := e.GridSettings(context.Background())
+			require.NoError(t, err)
+			assert.False(t, gs.GridChargeBatteries)
+			assert.False(t, gs.GridExportSolar)
+			assert.False(t, gs.GridExportBatteries)
+		})
+	})
 }

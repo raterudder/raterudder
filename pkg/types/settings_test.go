@@ -197,6 +197,26 @@ func TestMigrateSettings(t *testing.T) {
 		assert.Equal(t, 0.02, s.MinExportHoldDifferenceDollarsPerKWH)
 	})
 
+	t.Run("v15 to v16: set CustomGridSettings true for configured ESS", func(t *testing.T) {
+		// Case 1: Configured ESS site
+		configuredSite := Settings{
+			ESS: "tesla",
+		}
+		s1, changed1, err1 := MigrateSettings(configuredSite, 15)
+		require.NoError(t, err1)
+		assert.True(t, changed1)
+		assert.True(t, s1.CustomGridSettings)
+
+		// Case 2: Unconfigured ESS site
+		unconfiguredSite := Settings{
+			ESS: "",
+		}
+		s2, changed2, err2 := MigrateSettings(unconfiguredSite, 15)
+		require.NoError(t, err2)
+		assert.False(t, changed2)
+		assert.False(t, s2.CustomGridSettings)
+	})
+
 	t.Run("no change: current version", func(t *testing.T) {
 		current := Settings{
 			UtilityProvider:                      "comed",
@@ -210,6 +230,7 @@ func TestMigrateSettings(t *testing.T) {
 			VPPChargingBufferMinutes:             20,
 			HomeLoadPredictionStrategy:           "default",
 			MinExportHoldDifferenceDollarsPerKWH: 0.02,
+			CustomGridSettings:                   true,
 		}
 		s, changed, err := MigrateSettings(current, CurrentSettingsVersion)
 		require.NoError(t, err)

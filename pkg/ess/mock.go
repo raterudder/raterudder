@@ -310,6 +310,18 @@ func (m *MockESS) advanceState(state *types.ESSMockState, now time.Time) (batter
 	return batteryKW, solarKW, homeKW, gridKW
 }
 
+// GridSettings returns the grid-related capabilities for the mock ESS.
+func (m *MockESS) GridSettings(ctx context.Context) (types.GridSettings, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return types.GridSettings{
+		GridChargeBatteries: true,
+		GridExportSolar:     true,
+		GridExportBatteries: false,
+	}, nil
+}
+
 // GetStatus computes the current simulated values for home usage, solar generation,
 // and battery status based on elapsed time, then updates and returns that state.
 func (m *MockESS) GetStatus(ctx context.Context) (types.SystemStatus, error) {

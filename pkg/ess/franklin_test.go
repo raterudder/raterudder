@@ -2470,4 +2470,87 @@ func TestFranklin(t *testing.T) {
 		assert.Equal(t, 1, modes.currentMode.WorkMode)
 		assert.Equal(t, "TOU", modes.currentMode.Name)
 	})
+
+	t.Run("GridSettings", func(t *testing.T) {
+		t.Run("ChargeFromGridAndExportAll", func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result":  map[string]any{"gridFeedMaxFlag": 2, "gridMaxFlag": 2},
+					})
+					return
+				}
+				http.Error(w, "not found: "+r.URL.Path, 404)
+			}))
+			defer ts.Close()
+
+			f := &Franklin{
+				client:    ts.Client(),
+				baseURL:   ts.URL,
+				gatewayID: "g",
+			}
+
+			gs, err := f.GridSettings(context.Background())
+			require.NoError(t, err)
+			assert.True(t, gs.GridChargeBatteries)
+			assert.True(t, gs.GridExportSolar)
+			assert.True(t, gs.GridExportBatteries)
+		})
+
+		t.Run("NoChargeFromGridAndSolarOnlyExport", func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result":  map[string]any{"gridFeedMaxFlag": 1, "gridMaxFlag": 1},
+					})
+					return
+				}
+				http.Error(w, "not found: "+r.URL.Path, 404)
+			}))
+			defer ts.Close()
+
+			f := &Franklin{
+				client:    ts.Client(),
+				baseURL:   ts.URL,
+				gatewayID: "g",
+			}
+
+			gs, err := f.GridSettings(context.Background())
+			require.NoError(t, err)
+			assert.False(t, gs.GridChargeBatteries)
+			assert.True(t, gs.GridExportSolar)
+			assert.False(t, gs.GridExportBatteries)
+		})
+
+		t.Run("NoExport", func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
+					json.NewEncoder(w).Encode(map[string]any{
+						"code":    200,
+						"success": true,
+						"result":  map[string]any{"gridFeedMaxFlag": 3, "gridMaxFlag": 1},
+					})
+					return
+				}
+				http.Error(w, "not found: "+r.URL.Path, 404)
+			}))
+			defer ts.Close()
+
+			f := &Franklin{
+				client:    ts.Client(),
+				baseURL:   ts.URL,
+				gatewayID: "g",
+			}
+
+			gs, err := f.GridSettings(context.Background())
+			require.NoError(t, err)
+			assert.False(t, gs.GridChargeBatteries)
+			assert.False(t, gs.GridExportSolar)
+			assert.False(t, gs.GridExportBatteries)
+		})
+	})
 }

@@ -886,6 +886,220 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.True(t, mockS.AssertExpectations(t))
 	})
 
+	t.Run("Update Settings - Syncs Grid Settings from ESS when CustomGridSettings is False", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+		mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Maybe()
+		mockS.On("UpsertHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockES := &mockESS{}
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockES)
+
+		mockUMap := utility.NewMap(mockS)
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:     mockUMap,
+			storage:       mockS,
+			ess:           essMap,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
+		reqBody := struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials,omitempty"`
+		}{
+			Settings: types.Settings{
+				ESS:                         "mock",
+				CustomGridSettings:          false,
+				GridExportSolar:             false,
+				MinBatterySOC:               20,
+				IgnoreHourUsageOverMultiple: 5,
+				SolarTrendRatioMax:          3.0,
+				SolarBellCurveMultiplier:    1.0,
+			},
+			Credentials: &types.Credentials{
+				Mock: &types.MockCredentials{Strategy: "simple"},
+			},
+		}
+		b, err := json.Marshal(reqBody)
+		require.NoError(t, err)
+		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+		req = withUser(req, "admin@example.com", true)
+		w := httptest.NewRecorder()
+
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{Mock: &types.MockCredentials{Strategy: "simple"}}, true, nil)
+		mockES.On("GridSettings", mock.Anything).Return(types.GridSettings{
+			GridChargeBatteries: true,
+			GridExportSolar:     true,
+			GridExportBatteries: true,
+		}, nil)
+
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			ESS: "mock",
+		}, types.CurrentSettingsVersion, nil)
+		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			return s.GridChargeBatteries == true && s.GridExportSolar == true && s.GridExportBatteries == true
+		}), types.CurrentSettingsVersion).Return(nil)
+
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockES.AssertExpectations(t))
+	})
+
+	t.Run("Update Settings - Preserves Manual Grid Settings when CustomGridSettings is True", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+		mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Maybe()
+		mockS.On("UpsertHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockES := &mockESS{}
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockES)
+
+		mockUMap := utility.NewMap(mockS)
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:     mockUMap,
+			storage:       mockS,
+			ess:           essMap,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
+		reqBody := struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials,omitempty"`
+		}{
+			Settings: types.Settings{
+				ESS:                         "mock",
+				CustomGridSettings:          true,
+				GridChargeBatteries:         false,
+				GridExportSolar:             true,
+				GridExportBatteries:         false,
+				MinBatterySOC:               20,
+				IgnoreHourUsageOverMultiple: 5,
+				SolarTrendRatioMax:          3.0,
+				SolarBellCurveMultiplier:    1.0,
+			},
+			Credentials: &types.Credentials{
+				Mock: &types.MockCredentials{Strategy: "simple"},
+			},
+		}
+		b, err := json.Marshal(reqBody)
+		require.NoError(t, err)
+		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+		req = withUser(req, "admin@example.com", true)
+		w := httptest.NewRecorder()
+
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{Mock: &types.MockCredentials{Strategy: "simple"}}, true, nil)
+
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			ESS: "mock",
+		}, types.CurrentSettingsVersion, nil)
+		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			return s.CustomGridSettings == true && s.GridChargeBatteries == false && s.GridExportSolar == true && s.GridExportBatteries == false
+		}), types.CurrentSettingsVersion).Return(nil)
+
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockES.AssertExpectations(t))
+	})
+
+	t.Run("Update Settings - Preserves Existing Grid Settings When Migrating from v15 Configured ESS", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+		mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Maybe()
+		mockS.On("UpsertHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockES := &mockESS{}
+		mockES.On("GridSettings", mock.Anything).Return(types.GridSettings{
+			GridChargeBatteries: true,
+			GridExportSolar:     false,
+			GridExportBatteries: false,
+		}, nil).Maybe()
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockES)
+
+		mockUMap := utility.NewMap(mockS)
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:     mockUMap,
+			storage:       mockS,
+			ess:           essMap,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
+		// Request sent without CustomGridSettings (e.g. from an existing client saving credentials)
+		reqBody := struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials,omitempty"`
+		}{
+			Settings: types.Settings{
+				ESS:                         "mock",
+				GridChargeBatteries:         false,
+				GridExportSolar:             true,
+				GridExportBatteries:         true,
+				MinBatterySOC:               20,
+				IgnoreHourUsageOverMultiple: 5,
+				SolarTrendRatioMax:          3.0,
+				SolarBellCurveMultiplier:    1.0,
+			},
+			Credentials: &types.Credentials{
+				Mock: &types.MockCredentials{Strategy: "simple"},
+			},
+		}
+		b, err := json.Marshal(reqBody)
+		require.NoError(t, err)
+		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+		req = withUser(req, "admin@example.com", true)
+		w := httptest.NewRecorder()
+
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{Mock: &types.MockCredentials{Strategy: "simple"}}, true, nil)
+
+		// Storage returns version 15 settings (CustomGridSettings is false)
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			ESS:                 "mock",
+			GridChargeBatteries: false,
+			GridExportSolar:     true,
+			GridExportBatteries: true,
+		}, 15, nil)
+		// Migration saves migrated settings with CustomGridSettings: true, then handleUpdateSettings saves updated settings
+		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			return s.CustomGridSettings == true && s.GridChargeBatteries == false && s.GridExportSolar == true && s.GridExportBatteries == true
+		}), types.CurrentSettingsVersion).Return(nil).Twice()
+
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockES.AssertExpectations(t))
+	})
+
 	t.Run("Update Settings - Rate Options Validation Failure", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()

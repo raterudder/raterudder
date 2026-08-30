@@ -12,7 +12,7 @@ import (
 
 // CurrentSettingsVersion is the current version of the settings struct.
 // Increment this value only if you need to set a default value other than the Go default for that value.
-const CurrentSettingsVersion = 15
+const CurrentSettingsVersion = 16
 
 // Settings represents the configuration stored in the database.
 // These are dynamic settings that can be changed without redeploying.
@@ -60,6 +60,9 @@ type Settings struct {
 	EVChargingPeriods []TimePeriod `json:"evChargingPeriods,omitempty"`
 
 	// Grid Settings
+	// CustomGridSettings indicates if the grid settings were manually configured.
+	// When false, grid settings are automatically synchronized from the ESS.
+	CustomGridSettings bool `json:"customGridSettings,omitempty"`
 	// Maximum Grid Use (in kW) (not supported yet since we don't change limits)
 	// MaxGridUseKW float64 `json:"maxGridUseKW"`
 	// Can charge batteries from grid
@@ -111,6 +114,13 @@ type Settings struct {
 
 	// Home load prediction strategy ("default", "conservative")
 	HomeLoadPredictionStrategy string `json:"homeLoadPredictionStrategy"`
+}
+
+// GridSettings represents the ESS grid configuration capabilities.
+type GridSettings struct {
+	GridChargeBatteries bool `json:"gridChargeBatteries"`
+	GridExportSolar     bool `json:"gridExportSolar"`
+	GridExportBatteries bool `json:"gridExportBatteries"`
 }
 
 // ESSAuthStatus represents the status of ESS authentication for the site.
@@ -307,6 +317,12 @@ func MigrateSettings(s Settings, currentVersion int) (Settings, bool, error) {
 			// version 15: add default MinExportHoldDifferenceDollarsPerKWH
 			if s.MinExportHoldDifferenceDollarsPerKWH == 0 {
 				s.MinExportHoldDifferenceDollarsPerKWH = 0.02
+				migrated = true
+			}
+		case 16:
+			// version 16: Lock in existing grid settings as custom for already configured ESS sites
+			if s.ESS != "" {
+				s.CustomGridSettings = true
 				migrated = true
 			}
 		default:

@@ -103,11 +103,32 @@ func (m *mockESS) Authenticate(ctx context.Context, creds types.Credentials) (ty
 	return creds, false, nil
 }
 func (m *mockESS) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]types.DailyEnergyStats, error) {
-	args := m.Called(ctx, start, end)
-	if len(args) > 0 {
-		return args.Get(0).([]types.DailyEnergyStats), args.Error(1)
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "GetEnergyHistory" {
+			args := m.Called(ctx, start, end)
+			if len(args) > 0 {
+				return args.Get(0).([]types.DailyEnergyStats), args.Error(1)
+			}
+			return nil, args.Error(0)
+		}
 	}
 	return nil, nil
+}
+func (m *mockESS) GridSettings(ctx context.Context) (types.GridSettings, error) {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "GridSettings" {
+			args := m.Called(ctx)
+			if len(args) > 0 {
+				return args.Get(0).(types.GridSettings), args.Error(1)
+			}
+			return types.GridSettings{}, args.Error(0)
+		}
+	}
+	return types.GridSettings{
+		GridChargeBatteries: true,
+		GridExportSolar:     true,
+		GridExportBatteries: false,
+	}, nil
 }
 func (m *mockESS) Validate() error {
 	args := m.Called()

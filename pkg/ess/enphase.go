@@ -242,6 +242,32 @@ func (e *Enphase) Authenticate(ctx context.Context, creds types.Credentials) (ty
 	return creds, changed, nil
 }
 
+// GridSettings returns the grid-related capabilities reported by Enphase.
+func (e *Enphase) GridSettings(ctx context.Context) (types.GridSettings, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	data, err := e.getDataWithCache(ctx, false)
+	if err != nil {
+		return types.GridSettings{}, err
+	}
+
+	chargeFromGrid := data.State.BatteryConfig.ChargeFromGrid ||
+		data.State.BatteryGridMode == "ImportOnly" ||
+		data.State.BatteryGridMode == "ImportAndExport"
+
+	exportBatteries := data.State.BatteryGridMode == "ImportAndExport" ||
+		data.State.BatteryGridMode == "ExportOnly"
+
+	exportSolar := data.State.BatteryGridMode != "NoImportOrExport"
+
+	return types.GridSettings{
+		GridChargeBatteries: chargeFromGrid,
+		GridExportSolar:     exportSolar,
+		GridExportBatteries: exportBatteries,
+	}, nil
+}
+
 func (e *Enphase) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 	log.Ctx(ctx).DebugContext(ctx, "getting enphase status")
 	e.mu.Lock()

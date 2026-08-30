@@ -253,6 +253,7 @@ export interface Settings {
     minBatterySOCPeriods?: MinBatterySOCPeriod[];
     evChargingPeriods?: TimePeriod[];
     ignoreHourUsageOverMultiple: number;
+    customGridSettings?: boolean;
     gridChargeBatteries: boolean;
     gridExportSolar: boolean;
     gridExportBatteries: boolean;

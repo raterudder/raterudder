@@ -39,6 +39,9 @@ type System interface {
 
 	// GetEnergyHistory returns the energy history for the specified period.
 	GetEnergyHistory(ctx context.Context, start, end time.Time) ([]types.DailyEnergyStats, error)
+
+	// GridSettings returns the grid-related configuration reported by the ESS.
+	GridSettings(ctx context.Context) (types.GridSettings, error)
 }
 
 // Map manages multiple ESS systems.

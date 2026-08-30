@@ -1,6 +1,6 @@
 import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import App from '../App';
 import * as api from '../api';
 import { setupDefaultApiMocks, defaultAuthStatus, defaultSettings, defaultESSProviders } from '../test/apiMocks';
@@ -21,6 +21,7 @@ vi.mock('@react-oauth/google', () => ({
 
 // Helper to navigate to settings page
 const navigateToSettings = async (authStatus = defaultAuthStatus) => {
+    window.history.pushState(null, '', '/');
     (fetchAuthStatus as any).mockResolvedValue({ ...authStatus });
     render(<App />);
     fireEvent.click(screen.getByText(/Log In/));
@@ -44,6 +45,8 @@ const navigateToSettings = async (authStatus = defaultAuthStatus) => {
 
 describe('App & Settings', () => {
     beforeEach(() => {
+        vi.unstubAllGlobals();
+        window.history.pushState(null, '', '/');
         vi.resetAllMocks();
         setupDefaultApiMocks(api);
     });
@@ -167,6 +170,10 @@ describe('App & Settings', () => {
     it('can toggle grid strategy settings', async () => {
          await navigateToSettings();
 
+         // Click Update on ESS to reveal grid strategy switches
+         const updateBtn = await screen.findByRole('button', { name: /Update Energy Storage System/i });
+         fireEvent.click(updateBtn);
+
          // Toggle Export Battery switch
          const switchEl = await screen.findByRole('switch', { name: /Export Battery to Grid/i });
          fireEvent.click(switchEl);
@@ -181,7 +188,8 @@ describe('App & Settings', () => {
          await waitFor(() => {
              expect(screen.getByText('Settings saved successfully')).toBeInTheDocument();
              expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
-                 gridExportBatteries: true
+                 gridExportBatteries: true,
+                 customGridSettings: true
              }), expect.any(String), undefined);
          });
     });
@@ -326,6 +334,8 @@ describe('App & Settings', () => {
         });
 
         // 1. Toggle solar exporting on
+        const updateBtn = await screen.findByRole('button', { name: /Update Energy Storage System/i });
+        fireEvent.click(updateBtn);
         const exportSwitch = screen.getByRole('switch', { name: /Export Solar to Grid/i });
         fireEvent.click(exportSwitch);
 
@@ -1267,6 +1277,10 @@ describe('App & Settings', () => {
     it('shows a warning below checkboxes when all grid strategy settings are unchecked', async () => {
         await navigateToSettings();
 
+        // Open ESS edit mode to reveal grid strategy settings
+        const updateBtn = await screen.findByRole('button', { name: /Update Energy Storage System/i });
+        fireEvent.click(updateBtn);
+
         // Warning should not be shown initially (gridChargeBatteries is true by default)
         expect(screen.queryByTestId('grid-restrictions-warning')).not.toBeInTheDocument();
 
@@ -1348,19 +1362,6 @@ describe('App & Settings', () => {
             const rateOption = await screen.findByRole('option', { name: 'Hourly Pricing Program (BESH)' });
             await user.click(rateOption);
 
-            // Verify grid restrictions exist in step 2 and toggle them
-            const chargeSwitch = screen.getByRole('switch', { name: /Grid Can Charge Battery/i });
-            const exportSolarSwitch = screen.getByRole('switch', { name: /Export Solar to Grid/i });
-            const exportBatterySwitch = screen.getByRole('switch', { name: /Export Battery to Grid/i });
-
-            expect(chargeSwitch).toBeChecked();
-            expect(exportSolarSwitch).not.toBeChecked();
-            expect(exportBatterySwitch).not.toBeChecked();
-
-            await user.click(chargeSwitch);
-            await user.click(exportSolarSwitch);
-            await user.click(exportBatterySwitch);
-
             const nextBtn2 = screen.getByRole('button', { name: /Save & Continue/i });
             await user.click(nextBtn2);
 
@@ -1390,9 +1391,6 @@ describe('App & Settings', () => {
                 utilityProvider: 'comed',
                 utilityRate: 'comed_besh',
                 ess: 'franklin',
-                gridChargeBatteries: false,
-                gridExportSolar: true,
-                gridExportBatteries: true,
                 hasCredentials: { franklin: true }
             });
 
@@ -1406,9 +1404,6 @@ describe('App & Settings', () => {
                 utilityProvider: 'comed',
                 utilityRate: 'comed_besh',
                 ess: 'franklin',
-                gridChargeBatteries: false,
-                gridExportSolar: true,
-                gridExportBatteries: true
             }), expect.any(String), expect.objectContaining({
                 franklin: expect.objectContaining({
                     username: 'test@franklin.com',
@@ -1576,13 +1571,19 @@ describe('App & Settings', () => {
             expect(scrollIntoViewMock).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' });
         });
 
-        it('shows a warning in the onboarding wizard when all grid restrictions are unchecked', async () => {
+        it('shows Tesla grid settings confirmation dialog after onboarding and saves custom settings', async () => {
             const user = userEvent.setup();
-            (fetchAuthStatus as any).mockResolvedValue({ ...defaultAuthStatus, loggedIn: true });
+            (fetchAuthStatus as any).mockResolvedValueOnce({
+                ...defaultAuthStatus,
+                loggedIn: false
+            }).mockResolvedValueOnce({
+                ...defaultAuthStatus,
+                loggedIn: true
+            });
             (fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
-                countryCode: 'US',
-                postalCode: '90210',
+                countryCode: '',
+                postalCode: '',
                 utilityProvider: '',
                 utilityRate: '',
                 ess: '',
@@ -1591,45 +1592,324 @@ describe('App & Settings', () => {
 
             render(<App />);
             fireEvent.click(screen.getByText(/Log In/));
-            await waitFor(() => expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument());
-            fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
+            await waitFor(() => expect(screen.getByText('Google Sign In')).toBeInTheDocument());
+            fireEvent.click(screen.getByText('Google Sign In'));
 
-            // Navigate to step 2 of wizard by saving step 1
-            const nextBtn1 = await screen.findByRole('button', { name: /Save & Continue/i });
+            // Step 1: Location
+            await screen.findByRole('heading', { name: /Step 1: Set Location/i });
+            const zipInput = screen.getByLabelText(/Zip\/Postal Code/i);
+            await user.clear(zipInput);
+            await user.type(zipInput, '90210');
+            const nextBtn1 = screen.getByRole('button', { name: /Save & Continue/i });
             await user.click(nextBtn1);
 
+            // Step 2: Utility
             await screen.findByRole('heading', { name: /Step 2: Choose Utility/i });
+            const providerSelect = screen.getByRole('combobox', { name: /Utility Provider/i });
+            await user.click(providerSelect);
+            const comedOption = await screen.getByRole('option', { name: 'Commonwealth Edison (ComEd)' });
+            await user.click(comedOption);
 
-            // Initially warning is not visible
-            expect(screen.queryByTestId('wizard-grid-restrictions-warning')).not.toBeInTheDocument();
+            const rateSelect = await screen.findByRole('combobox', { name: /Rate Plan/i });
+            await user.click(rateSelect);
+            const rateOption = await screen.findByRole('option', { name: 'Hourly Pricing Program (BESH)' });
+            await user.click(rateOption);
 
-            // Uncheck "Grid Can Charge Battery" (the only one checked by default)
-            const chargeSwitch = screen.getByRole('switch', { name: /Grid Can Charge Battery/i });
-            expect(chargeSwitch).toBeChecked();
-            await user.click(chargeSwitch);
+            const nextBtn2 = screen.getByRole('button', { name: /Save & Continue/i });
+            await user.click(nextBtn2);
 
-            // Warning should be displayed
-            await waitFor(() => {
-                expect(screen.getByTestId('wizard-grid-restrictions-warning')).toBeInTheDocument();
-                expect(screen.getByText(/Warning: All grid interactions are disabled/i)).toBeInTheDocument();
+            // Step 3: ESS Tesla
+            await screen.findByRole('heading', { name: /Step 3: Connect Battery/i });
+            const essSelect = await screen.findByRole('combobox', { name: /System Type/i });
+            await user.click(essSelect);
+            const teslaOption = await screen.findByRole('option', { name: 'Tesla' });
+            await user.click(teslaOption);
+
+            const windowOpenSpy = vi.spyOn(window, 'open').mockReturnValue({ closed: false } as any);
+            const linkBtn = await screen.findByRole('button', { name: /Login to link account/i });
+            await user.click(linkBtn);
+
+            act(() => {
+                window.dispatchEvent(new MessageEvent('message', {
+                    origin: window.location.origin,
+                    data: { type: 'OAUTH_CODE', code: 'mock-code', state: 'site1' }
+                }));
             });
 
-            // Toggle back on
-            await user.click(chargeSwitch);
             await waitFor(() => {
-                expect(screen.queryByTestId('wizard-grid-restrictions-warning')).not.toBeInTheDocument();
+                expect(screen.getByText('Received code! Save Settings below to complete.')).toBeInTheDocument();
+            });
+            windowOpenSpy.mockRestore();
+
+            (updateSettings as any).mockResolvedValue(undefined);
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                countryCode: 'US',
+                postalCode: '90210',
+                utilityProvider: 'comed',
+                utilityRate: 'comed_besh',
+                ess: 'tesla',
+                gridChargeBatteries: true,
+                gridExportSolar: false,
+                gridExportBatteries: false,
+                hasCredentials: { tesla: true }
+            });
+
+            const doneBtn = screen.getByRole('button', { name: /Complete Setup/i });
+            await user.click(doneBtn);
+
+            // Tesla confirmation dialog should be displayed
+            await waitFor(() => {
+                expect(screen.getByText('Confirm Grid Settings')).toBeInTheDocument();
+                expect(screen.getByRole('switch', { name: /Grid Can Charge Battery/i })).toBeInTheDocument();
+            });
+
+            const modalChargeSwitch = screen.getByRole('switch', { name: /Grid Can Charge Battery/i });
+            expect(modalChargeSwitch).toBeChecked();
+            await user.click(modalChargeSwitch);
+
+            const confirmBtn = screen.getByRole('button', { name: /Confirm & Finish/i });
+            await user.click(confirmBtn);
+
+            // Verify updateSettings was called with customGridSettings: true and gridChargeBatteries: false
+            expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+                gridChargeBatteries: false,
+                customGridSettings: true
+            }), expect.any(String));
+
+            await waitFor(() => {
+                expect(screen.getByText('Welcome to RateRudder! 🚀')).toBeInTheDocument();
+            });
+
+            const nextBtn = screen.getByRole('button', { name: /Next/i });
+            await user.click(nextBtn);
+
+            const gotItBtn = screen.getByRole('button', { name: /Got It/i });
+            await user.click(gotItBtn);
+
+            await waitFor(() => {
+                expect(screen.getByText('Home Usage')).toBeInTheDocument();
+            });
+        });
+
+        it('skips saving when Tesla grid settings confirmation dialog is confirmed without changes', async () => {
+            const user = userEvent.setup();
+            (fetchAuthStatus as any).mockResolvedValueOnce({
+                ...defaultAuthStatus,
+                loggedIn: false
+            }).mockResolvedValueOnce({
+                ...defaultAuthStatus,
+                loggedIn: true
+            });
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                countryCode: '',
+                postalCode: '',
+                utilityProvider: '',
+                utilityRate: '',
+                ess: '',
+                hasCredentials: {}
+            });
+
+            render(<App />);
+            fireEvent.click(screen.getByText(/Log In/));
+            await waitFor(() => expect(screen.getByText('Google Sign In')).toBeInTheDocument());
+            fireEvent.click(screen.getByText('Google Sign In'));
+
+            // Step 1: Location
+            await screen.findByRole('heading', { name: /Step 1: Set Location/i });
+            const zipInput = screen.getByLabelText(/Zip\/Postal Code/i);
+            await user.clear(zipInput);
+            await user.type(zipInput, '90210');
+            const nextBtn1 = screen.getByRole('button', { name: /Save & Continue/i });
+            await user.click(nextBtn1);
+
+            // Step 2: Utility
+            await screen.findByRole('heading', { name: /Step 2: Choose Utility/i });
+            const providerSelect = screen.getByRole('combobox', { name: /Utility Provider/i });
+            await user.click(providerSelect);
+            const comedOption = await screen.getByRole('option', { name: 'Commonwealth Edison (ComEd)' });
+            await user.click(comedOption);
+
+            const rateSelect = await screen.findByRole('combobox', { name: /Rate Plan/i });
+            await user.click(rateSelect);
+            const rateOption = await screen.findByRole('option', { name: 'Hourly Pricing Program (BESH)' });
+            await user.click(rateOption);
+
+            const nextBtn2 = screen.getByRole('button', { name: /Save & Continue/i });
+            await user.click(nextBtn2);
+
+            // Step 3: ESS Tesla
+            await screen.findByRole('heading', { name: /Step 3: Connect Battery/i });
+            const essSelect = await screen.findByRole('combobox', { name: /System Type/i });
+            await user.click(essSelect);
+            const teslaOption = await screen.findByRole('option', { name: 'Tesla' });
+            await user.click(teslaOption);
+
+            const windowOpenSpy = vi.spyOn(window, 'open').mockReturnValue({ closed: false } as any);
+            const linkBtn = await screen.findByRole('button', { name: /Login to link account/i });
+            await user.click(linkBtn);
+
+            act(() => {
+                window.dispatchEvent(new MessageEvent('message', {
+                    origin: window.location.origin,
+                    data: { type: 'OAUTH_CODE', code: 'mock-code', state: 'site1' }
+                }));
+            });
+
+            await waitFor(() => {
+                expect(screen.getByText('Received code! Save Settings below to complete.')).toBeInTheDocument();
+            });
+            windowOpenSpy.mockRestore();
+
+            (updateSettings as any).mockResolvedValue(undefined);
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                countryCode: 'US',
+                postalCode: '90210',
+                utilityProvider: 'comed',
+                utilityRate: 'comed_besh',
+                ess: 'tesla',
+                gridChargeBatteries: true,
+                gridExportSolar: false,
+                gridExportBatteries: false,
+                hasCredentials: { tesla: true }
+            });
+
+            const doneBtn = screen.getByRole('button', { name: /Complete Setup/i });
+            await user.click(doneBtn);
+
+            // Tesla confirmation dialog should be displayed
+            await waitFor(() => {
+                expect(screen.getByText('Confirm Grid Settings')).toBeInTheDocument();
+                expect(screen.getByRole('switch', { name: /Grid Can Charge Battery/i })).toBeInTheDocument();
+            });
+
+            // Clear updateSettings mock call history
+            (updateSettings as any).mockClear();
+
+            const confirmBtn = screen.getByRole('button', { name: /Confirm & Finish/i });
+            await user.click(confirmBtn);
+
+            // Verify updateSettings was NOT called because nothing changed
+            expect(updateSettings).not.toHaveBeenCalled();
+
+            await waitFor(() => {
+                expect(screen.getByText('Welcome to RateRudder! 🚀')).toBeInTheDocument();
+            });
+
+            const nextBtn = screen.getByRole('button', { name: /Next/i });
+            await user.click(nextBtn);
+
+            const gotItBtn = screen.getByRole('button', { name: /Got It/i });
+            await user.click(gotItBtn);
+
+            await waitFor(() => {
+                expect(screen.getByText('Home Usage')).toBeInTheDocument();
+            });
+        });
+
+        it('shows Tesla grid settings confirmation dialog when connecting Tesla from regular settings page', async () => {
+            const user = userEvent.setup();
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                countryCode: 'US',
+                postalCode: '90210',
+                utilityProvider: 'comed',
+                utilityRate: 'comed_besh',
+                ess: '',
+                hasCredentials: {}
+            });
+
+            await navigateToSettings();
+
+            // Select Tesla
+            const essSelect = await screen.findByRole('combobox', { name: /System Type/i });
+            await user.click(essSelect);
+            const teslaOption = await screen.findByRole('option', { name: 'Tesla' });
+            await user.click(teslaOption);
+
+            const windowOpenSpy = vi.spyOn(window, 'open').mockReturnValue({ closed: false } as any);
+            const linkBtn = await screen.findByRole('button', { name: /Login to link account/i });
+            await user.click(linkBtn);
+
+            act(() => {
+                window.dispatchEvent(new MessageEvent('message', {
+                    origin: window.location.origin,
+                    data: { type: 'OAUTH_CODE', code: 'mock-code', state: 'site1' }
+                }));
+            });
+
+            await waitFor(() => {
+                expect(screen.getByText('Received code! Save Settings below to complete.')).toBeInTheDocument();
+            });
+            windowOpenSpy.mockRestore();
+
+            (updateSettings as any).mockResolvedValue(undefined);
+            (fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                countryCode: 'US',
+                postalCode: '90210',
+                utilityProvider: 'comed',
+                utilityRate: 'comed_besh',
+                ess: 'tesla',
+                gridChargeBatteries: true,
+                gridExportSolar: true,
+                gridExportBatteries: false,
+                hasCredentials: { tesla: true }
+            });
+
+            const saveBtn = screen.getByText('Save Settings');
+            await user.click(saveBtn);
+
+            // Tesla confirmation dialog should be displayed
+            await waitFor(() => {
+                expect(screen.getByText('Confirm Grid Settings')).toBeInTheDocument();
+                expect(screen.getByRole('switch', { name: /Grid Can Charge Battery/i })).toBeInTheDocument();
+            });
+
+            const confirmBtn = screen.getByRole('button', { name: /Confirm & Finish/i });
+            await user.click(confirmBtn);
+
+            // Should stay on settings page
+            await waitFor(() => {
+                expect(screen.queryByText('Confirm Grid Settings')).not.toBeInTheDocument();
             });
         });
     });
 
     describe('Site and Account Deletion', () => {
+        let hrefValue = '';
+        const originalLocation = window.location;
+
         beforeEach(() => {
             (deleteSite as any).mockResolvedValue(undefined);
             (deleteUser as any).mockResolvedValue(undefined);
-            // Mock window.location
-            vi.stubGlobal('location', {
-                ...window.location,
-                href: '',
+            hrefValue = '';
+            const locationProxy = new Proxy(originalLocation, {
+                get(target, prop) {
+                    if (prop === 'href') return hrefValue || target.href;
+                    return (target as any)[prop];
+                },
+                set(target, prop, value) {
+                    if (prop === 'href') {
+                        hrefValue = value;
+                        return true;
+                    }
+                    (target as any)[prop] = value;
+                    return true;
+                }
+            });
+            Object.defineProperty(window, 'location', {
+                configurable: true,
+                value: locationProxy
+            });
+        });
+
+        afterEach(() => {
+            Object.defineProperty(window, 'location', {
+                configurable: true,
+                value: originalLocation
             });
         });
 

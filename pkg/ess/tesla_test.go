@@ -2226,4 +2226,109 @@ func TestTesla(t *testing.T) {
 		assert.True(t, changed)
 		assert.Equal(t, 80.0, postedReserve, "reserve 83% in self_consumption for ChargeAny should round down to 80%")
 	})
+
+	t.Run("GridSettings", func(t *testing.T) {
+		t.Run("EditSettingFlagsEnabled", func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/1/energy_sites/1234/site_info" {
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"components": map[string]any{
+								"edit_setting_grid_charging":        true,
+								"edit_setting_permission_to_export": true,
+								"edit_setting_energy_exports":       true,
+							},
+						},
+					})
+					return
+				}
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			defer ts.Close()
+
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "test-site", types.Settings{ESS: "tesla"})
+			require.NoError(t, err)
+
+			teslaSys := sys.(*Tesla)
+			teslaSys.token = "mock-access"
+			teslaSys.energySiteID = 1234
+			teslaSys.baseURL = ts.URL
+
+			gs, err := teslaSys.GridSettings(ctx)
+			require.NoError(t, err)
+			assert.True(t, gs.GridChargeBatteries)
+			assert.True(t, gs.GridExportSolar)
+			assert.True(t, gs.GridExportBatteries)
+		})
+
+		t.Run("EditSettingFlagsSolarOnly", func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/1/energy_sites/1234/site_info" {
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"components": map[string]any{
+								"edit_setting_grid_charging":                     false,
+								"edit_setting_permission_to_export":              true,
+								"edit_setting_energy_exports":                    false,
+								"disallow_charge_from_grid_with_solar_installed": true,
+							},
+						},
+					})
+					return
+				}
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			defer ts.Close()
+
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "test-site", types.Settings{ESS: "tesla"})
+			require.NoError(t, err)
+
+			teslaSys := sys.(*Tesla)
+			teslaSys.token = "mock-access"
+			teslaSys.energySiteID = 1234
+			teslaSys.baseURL = ts.URL
+
+			gs, err := teslaSys.GridSettings(ctx)
+			require.NoError(t, err)
+			assert.False(t, gs.GridChargeBatteries)
+			assert.True(t, gs.GridExportSolar)
+			assert.False(t, gs.GridExportBatteries)
+		})
+
+		t.Run("FallbackWhenEditSettingFlagsAbsent", func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/1/energy_sites/1234/site_info" {
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"components": map[string]any{
+								"solar":                          true,
+								"customer_preferred_export_rule": "battery_ok",
+								"disallow_charge_from_grid_with_solar_installed": false,
+							},
+						},
+					})
+					return
+				}
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			defer ts.Close()
+
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "test-site", types.Settings{ESS: "tesla"})
+			require.NoError(t, err)
+
+			teslaSys := sys.(*Tesla)
+			teslaSys.token = "mock-access"
+			teslaSys.energySiteID = 1234
+			teslaSys.baseURL = ts.URL
+
+			gs, err := teslaSys.GridSettings(ctx)
+			require.NoError(t, err)
+			assert.True(t, gs.GridChargeBatteries)
+			assert.True(t, gs.GridExportSolar)
+			assert.True(t, gs.GridExportBatteries)
+		})
+	})
 }
