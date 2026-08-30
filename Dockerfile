@@ -4,8 +4,7 @@ WORKDIR /app/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ .
-ARG VITE_JOIN_FORM_URL
-RUN VITE_JOIN_FORM_URL=$VITE_JOIN_FORM_URL npm run build
+RUN npm run build
 
 
 # Build the backend

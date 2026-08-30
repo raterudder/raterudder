@@ -134,7 +134,7 @@ const LandingPage: React.FC = () => {
         setActivePhase(phaseId);
     };
 
-    const JOIN_FORM_URL = import.meta.env.VITE_JOIN_FORM_URL;
+    const isRateRudder = typeof window !== 'undefined' && (window.location.hostname === 'raterudder.com' || window.location.hostname.endsWith('.raterudder.com'));
 
     // Get current phase details
     const currentPhase = phases[activePhase];
@@ -144,7 +144,7 @@ const LandingPage: React.FC = () => {
             <section className="hero-section">
                 <div className="content-container hero-layout">
                     <div className="hero-content">
-                        {JOIN_FORM_URL && (
+                        {isRateRudder && (
                             <div className="badge">Limited Beta Now Open</div>
                         )}
                         <h1>Your Battery, Just <span className="highlight">Smarter.</span></h1>

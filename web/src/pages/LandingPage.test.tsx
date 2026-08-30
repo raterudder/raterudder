@@ -49,4 +49,61 @@ describe('LandingPage Component', () => {
         render(<App />);
         expect(fetchAuthStatus).not.toHaveBeenCalled();
     });
+
+    it('shows limited beta badge on raterudder.com domain', () => {
+        const originalLocation = window.location;
+        const locationProxy = new Proxy(originalLocation, {
+            get(target, prop) {
+                if (prop === 'hostname') return 'raterudder.com';
+                return (target as any)[prop];
+            },
+        });
+        Object.defineProperty(window, 'location', {
+            configurable: true,
+            value: locationProxy,
+        });
+
+        try {
+            render(
+                <Router>
+                    <LandingPage />
+                </Router>
+            );
+            expect(screen.getByText('Limited Beta Now Open')).toBeInTheDocument();
+        } finally {
+            Object.defineProperty(window, 'location', {
+                configurable: true,
+                value: originalLocation,
+            });
+        }
+    });
+
+    it('hides limited beta badge on localhost domain', () => {
+        const originalLocation = window.location;
+        const locationProxy = new Proxy(originalLocation, {
+            get(target, prop) {
+                if (prop === 'hostname') return 'localhost';
+                return (target as any)[prop];
+            },
+        });
+        Object.defineProperty(window, 'location', {
+            configurable: true,
+            value: locationProxy,
+        });
+
+        try {
+            render(
+                <Router>
+                    <LandingPage />
+                </Router>
+            );
+            expect(screen.queryByText('Limited Beta Now Open')).not.toBeInTheDocument();
+        } finally {
+            Object.defineProperty(window, 'location', {
+                configurable: true,
+                value: originalLocation,
+            });
+        }
+    });
 });
+

@@ -31,11 +31,6 @@ variable "schedule_enabled" {
   default     = true
 }
 
-variable "join_form_url" {
-  description = "The URL for the homepage CTA"
-  type        = string
-  default     = ""
-}
 
 variable "github_connection_name" {
   description = "Name of GitHub connection on https://console.cloud.google.com/cloud-build/repositories/2nd-gen"
