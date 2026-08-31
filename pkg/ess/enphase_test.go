@@ -177,6 +177,7 @@ func TestEnphase(t *testing.T) {
 					"app": map[string]any{
 						"timezone": "UTC",
 					},
+					"last_report_date": today.Truncate(24*time.Hour).Unix() + 3600,
 				})
 				return
 			}
