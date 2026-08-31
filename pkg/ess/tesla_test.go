@@ -115,6 +115,12 @@ func TestTesla(t *testing.T) {
 							"backup_reserve_percent": 20.0,
 						},
 					})
+				case "/api/1/energy_sites/1234/live_status":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"percentage_charged": 55.4,
+						},
+					})
 				default:
 					t.Logf("Unexpected request: %s", r.URL.Path)
 					w.WriteHeader(http.StatusNotFound)
@@ -164,6 +170,12 @@ func TestTesla(t *testing.T) {
 									{"serial_number": "SerialABC"},
 								},
 							},
+						},
+					})
+				case "/api/1/energy_sites/5678/live_status":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"percentage_charged": 55.4,
 						},
 					})
 				default:
@@ -224,6 +236,77 @@ func TestTesla(t *testing.T) {
 			_, _, err = sys.Authenticate(ctx, creds)
 			assert.Error(t, err)
 			assert.ErrorContains(t, err, "no energy site found matching serial number")
+		})
+
+		t.Run("Fail when live_status returns empty string response", func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/1/energy_sites/1234/site_info":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"backup_reserve_percent": 20.0,
+						},
+					})
+				case "/api/1/energy_sites/1234/live_status":
+					// Tesla returning empty string for response field
+					w.Header().Set("Content-Type", "application/json")
+					w.Write([]byte(`{"response":""}`))
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer ts.Close()
+
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "test-site", types.Settings{ESS: "tesla"})
+			require.NoError(t, err)
+
+			creds := types.Credentials{
+				Tesla: &types.TeslaCredentials{
+					AccessToken:  "mock-token",
+					EnergySiteID: 1234,
+					Region:       "NA",
+					Expiry:       time.Now().Add(time.Hour),
+				},
+			}
+			_, _, err = sys.Authenticate(ctx, creds)
+			assert.Error(t, err)
+			assert.ErrorContains(t, err, "credential validation failed")
+			assert.ErrorContains(t, err, "cannot unmarshal string into Go value of type ess.teslaLiveStatusResponse")
+		})
+
+		t.Run("Fail when live_status fails with server error", func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/1/energy_sites/1234/site_info":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"backup_reserve_percent": 20.0,
+						},
+					})
+				case "/api/1/energy_sites/1234/live_status":
+					w.WriteHeader(http.StatusInternalServerError)
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer ts.Close()
+
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "test-site", types.Settings{ESS: "tesla"})
+			require.NoError(t, err)
+
+			creds := types.Credentials{
+				Tesla: &types.TeslaCredentials{
+					AccessToken:  "mock-token",
+					EnergySiteID: 1234,
+					Region:       "NA",
+					Expiry:       time.Now().Add(time.Hour),
+				},
+			}
+			_, _, err = sys.Authenticate(ctx, creds)
+			assert.Error(t, err)
+			assert.ErrorContains(t, err, "credential validation failed")
 		})
 	})
 

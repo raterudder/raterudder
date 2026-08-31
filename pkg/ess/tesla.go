@@ -529,8 +529,13 @@ func (b *Tesla) Authenticate(ctx context.Context, creds types.Credentials) (type
 
 	b.energySiteID = creds.Tesla.EnergySiteID
 
-	// Verify token works by fetching site info
+	// Verify token works by fetching site info and live status
 	if _, err := b.getSiteInfoWithCache(ctx, true); err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "tesla credential validation failed", slog.Any("error", err))
+		return creds, false, fmt.Errorf("credential validation failed: %w", err)
+	}
+
+	if _, err := b.getLiveStatusWithCache(ctx, true); err != nil {
 		log.Ctx(ctx).WarnContext(ctx, "tesla credential validation failed", slog.Any("error", err))
 		return creds, false, fmt.Errorf("credential validation failed: %w", err)
 	}
