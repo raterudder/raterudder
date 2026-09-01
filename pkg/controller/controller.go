@@ -1329,7 +1329,7 @@ func (c *Controller) evaluateExportArbitrage(
 	canCharge := settings.GridChargeBatteries && !currentStatus.BatteryChargingDisabled
 	canChargeArbitrage := currentEnergyKWH+startChargeHeadroom < capacityKWH && canCharge
 
-	standbySolarFillsBatteryBeforePeak := !standbyHitCapacityAt.IsZero() && !standbyHitCapacityAt.After(targetAt)
+	standbySolarFillsBatteryBeforePeak := !standbyHitCapacityAt.IsZero() && standbyHitCapacityAt.Before(targetAt)
 
 	// futureArbitrageProfitable determines if charging during the cheapest future slot will yield an export
 	// rate-arbitrage profit that exceeds the minimum required arbitrage price difference.
@@ -1661,9 +1661,10 @@ func (c *Controller) evaluateExportArbitrage(
 	// canStandbyNow determines if we should hold the battery in standby (preventing it from discharging to cover home load).
 	// We standby now if:
 	// 1. The future export value is higher than or equal to the current grid charge cost (meaning holding is economically viable).
-	// 2. Under the standby simulation model (where we hold during cheap hours), we do not drop below the deficit threshold
+	// 2. Solar is not already projected to fill the battery before the peak (otherwise holding grid energy is redundant).
+	// 3. Under the standby simulation model (where we hold during cheap hours), we do not drop below the deficit threshold
 	//    before the target export hour (standbyHitDeficitAt.IsZero() || standbyHitDeficitAt.After(targetAt)).
-	canStandbyNow := effectiveExportValue > gridChargeNowCost && (standbyHitDeficitAt.IsZero() || standbyHitDeficitAt.After(targetAt))
+	canStandbyNow := effectiveExportValue > gridChargeNowCost && !standbySolarFillsBatteryBeforePeak && (standbyHitDeficitAt.IsZero() || standbyHitDeficitAt.After(targetAt))
 
 	// If the target is NOW, we don't hold! We want to discharge if it's profitable!
 	if !targetAt.After(now) {
@@ -2193,8 +2194,8 @@ func (c *Controller) evaluateFallback(
 		// either case, so limiting the evaluation window to capacityHitAt prevents higher afternoon
 		// peak export rates from falsely inflating the perceived credit of morning export.
 		solarExportValue := c.getSolarExportValue(simData, capacityHitAt)
-		minHoldDiff := max(priceEpsilonForEquality, settings.MinExportHoldDifferenceDollarsPerKWH)
-		if solarExportValue > 0 && gridChargeNowCost <= solarExportValue+minHoldDiff {
+		minHoldDiff := settings.MinExportHoldDifferenceDollarsPerKWH
+		if solarExportValue > 0 && gridChargeNowCost+minHoldDiff <= solarExportValue+priceEpsilonForEquality {
 			log.Ctx(ctx).DebugContext(
 				ctx,
 				"holding battery on standby for solar export",
@@ -2345,7 +2346,17 @@ func (c *Controller) getSolarExportValue(simData []SimHour, refillUntil time.Tim
 		// -NetLoadSolarKWH represents the net surplus solar energy available to recharge the battery
 		// and export to the grid once the battery reaches capacity.
 		if slot.NetLoadSolarKWH < 0 {
-			surplusKWH := -slot.NetLoadSolarKWH
+			fraction := 1.0
+			if !refillUntil.IsZero() && slot.TS.Before(refillUntil) && slot.TS.Add(time.Hour).After(refillUntil) {
+				fraction = refillUntil.Sub(slot.TS).Hours()
+				if fraction < 0.0 {
+					fraction = 0.0
+				} else if fraction > 1.0 {
+					fraction = 1.0
+				}
+			}
+
+			surplusKWH := -slot.NetLoadSolarKWH * fraction
 			totalNetSolarVal += slot.SolarOppDollarsPerKWH * surplusKWH
 			totalNetSurplusKWH += surplusKWH
 		}
