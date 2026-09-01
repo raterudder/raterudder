@@ -7623,6 +7623,97 @@ func TestEvaluateFallback(t *testing.T) {
 			assert.Equal(t, types.ActionReasonSufficientBattery, decision.Reason)
 		}
 	})
+
+	t.Run("HoldSimilarPrice_MorningRefill_OffPeakExport_LowerThanGridImport_Discharge", func(t *testing.T) {
+		holdNow := time.Date(2026, 8, 17, 2, 0, 0, 0, time.UTC)
+		settings := types.Settings{
+			GridExportSolar:                      true,
+			GridChargeBatteries:                  true,
+			MinBatterySOC:                        20.0,
+			MinExportHoldDifferenceDollarsPerKWH: 0.02,
+		}
+		status := types.SystemStatus{
+			Timestamp:          holdNow,
+			BatterySOC:         60.0,
+			BatteryCapacityKWH: 13.5,
+			BatteryAboveMinSOC: true,
+			MaxBatteryChargeKW: 3.3,
+		}
+		currentPrice := types.Price{
+			TSStart:       holdNow,
+			TSEnd:         holdNow.Add(time.Hour),
+			DollarsPerKWH: 0.2187,
+			PeriodName:    "Off-Peak",
+		}
+		// Battery reaches capacity at 11:00 AM before afternoon peak (which starts at 1:00 PM)
+		capHit := holdNow.Add(9 * time.Hour) // 11:00 AM
+		summary := simulationSummary{
+			HitCapacityAt: capHit,
+			MinEnergy:     8.0,
+			MaxEnergy:     13.5,
+		}
+		simData := []SimHour{
+			{TS: holdNow, GridChargeDollarsPerKWH: 0.2187, SolarOppDollarsPerKWH: 0.1785, BatteryKWH: 8.1},
+			// Morning surplus solar slots at Off-Peak export rate ($0.1785)
+			{TS: holdNow.Add(6 * time.Hour), GridChargeDollarsPerKWH: 0.2187, SolarOppDollarsPerKWH: 0.1785, PredictedSolarKWH: 3.0, NetLoadSolarKWH: -2.0, BatteryKWH: 10.1},
+			{TS: holdNow.Add(7 * time.Hour), GridChargeDollarsPerKWH: 0.2187, SolarOppDollarsPerKWH: 0.1785, PredictedSolarKWH: 4.0, NetLoadSolarKWH: -3.0, BatteryKWH: 13.1},
+			{TS: holdNow.Add(8 * time.Hour), GridChargeDollarsPerKWH: 0.2187, SolarOppDollarsPerKWH: 0.1785, PredictedSolarKWH: 4.0, NetLoadSolarKWH: -3.0, HitCapacityAt: capHit, BatteryKWH: 13.5},
+			// Afternoon surplus solar slots at Peak export rate ($0.2708) after capacity hit
+			{TS: holdNow.Add(11 * time.Hour), GridChargeDollarsPerKWH: 0.3110, SolarOppDollarsPerKWH: 0.2708, PredictedSolarKWH: 5.0, NetLoadSolarKWH: -4.0, BatteryKWH: 13.5},
+			{TS: holdNow.Add(12 * time.Hour), GridChargeDollarsPerKWH: 0.3110, SolarOppDollarsPerKWH: 0.2708, PredictedSolarKWH: 5.0, NetLoadSolarKWH: -4.0, BatteryKWH: 13.5},
+		}
+
+		decision := c.evaluateFallback(ctx, holdNow, status, currentPrice, settings, simData, summary, nil)
+		require.NotNil(t, decision)
+		if assert.Equal(t, types.BatteryModeLoad, decision.BatteryMode) {
+			assert.Equal(t, types.ActionReasonSufficientBattery, decision.Reason)
+		}
+	})
+
+	t.Run("HoldSimilarPrice_LateRefill_InsidePeak_AveragesPeakRate", func(t *testing.T) {
+		holdNow := time.Date(2026, 8, 17, 2, 0, 0, 0, time.UTC)
+		settings := types.Settings{
+			GridExportSolar:                      true,
+			GridChargeBatteries:                  true,
+			MinBatterySOC:                        20.0,
+			MinExportHoldDifferenceDollarsPerKWH: 0.02,
+		}
+		status := types.SystemStatus{
+			Timestamp:          holdNow,
+			BatterySOC:         30.0,
+			BatteryCapacityKWH: 13.5,
+			BatteryAboveMinSOC: true,
+			MaxBatteryChargeKW: 3.3,
+		}
+		currentPrice := types.Price{
+			TSStart:       holdNow,
+			TSEnd:         holdNow.Add(time.Hour),
+			DollarsPerKWH: 0.2187,
+			PeriodName:    "Off-Peak",
+		}
+		// Battery does not reach capacity until 3:00 PM (15:00) during Peak (which started at 1:00 PM)
+		capHit := holdNow.Add(13 * time.Hour) // 15:00 PM
+		summary := simulationSummary{
+			HitCapacityAt: capHit,
+			MinEnergy:     4.0,
+			MaxEnergy:     13.5,
+		}
+		simData := []SimHour{
+			{TS: holdNow, GridChargeDollarsPerKWH: 0.2187, SolarOppDollarsPerKWH: 0.1785, BatteryKWH: 4.05},
+			// Morning surplus solar slots at Off-Peak export rate ($0.1785): 2 kWh
+			{TS: holdNow.Add(6 * time.Hour), GridChargeDollarsPerKWH: 0.2187, SolarOppDollarsPerKWH: 0.1785, PredictedSolarKWH: 3.0, NetLoadSolarKWH: -2.0, BatteryKWH: 6.05},
+			// Peak surplus solar slots at Peak export rate ($0.2708): 8 kWh before capacity
+			{TS: holdNow.Add(11 * time.Hour), GridChargeDollarsPerKWH: 0.3110, SolarOppDollarsPerKWH: 0.2708, PredictedSolarKWH: 5.0, NetLoadSolarKWH: -4.0, BatteryKWH: 10.05},
+			{TS: holdNow.Add(12 * time.Hour), GridChargeDollarsPerKWH: 0.3110, SolarOppDollarsPerKWH: 0.2708, PredictedSolarKWH: 5.0, NetLoadSolarKWH: -4.0, HitCapacityAt: capHit, BatteryKWH: 13.5},
+		}
+
+		decision := c.evaluateFallback(ctx, holdNow, status, currentPrice, settings, simData, summary, nil)
+		require.NotNil(t, decision)
+		if assert.Equal(t, types.BatteryModeStandby, decision.BatteryMode) {
+			assert.Equal(t, types.ActionReasonHoldSimilarPrice, decision.Reason)
+			assert.Contains(t, decision.Description, "Standby for similar price")
+		}
+	})
 }
 
 func TestFindCheapestPlan(t *testing.T) {

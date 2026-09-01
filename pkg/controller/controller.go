@@ -2333,6 +2333,10 @@ func (c *Controller) getSolarExportValue(simData []SimHour, refillUntil time.Tim
 	var totalNetSolarVal, totalNetSurplusKWH float64
 
 	for _, slot := range simData {
+		if !refillUntil.IsZero() && slot.TS.After(refillUntil) {
+			break
+		}
+
 		if slot.SolarOppDollarsPerKWH <= 0 {
 			continue
 		}
@@ -2344,10 +2348,6 @@ func (c *Controller) getSolarExportValue(simData []SimHour, refillUntil time.Tim
 			surplusKWH := -slot.NetLoadSolarKWH
 			totalNetSolarVal += slot.SolarOppDollarsPerKWH * surplusKWH
 			totalNetSurplusKWH += surplusKWH
-
-			if !refillUntil.IsZero() && !slot.TS.Before(refillUntil) {
-				break
-			}
 		}
 	}
 
