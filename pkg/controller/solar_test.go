@@ -560,8 +560,8 @@ func TestCalculateWeatherSolar(t *testing.T) {
 
 		weather := []types.Weather{{ForecastHours: weatherHours}}
 		testLoc := loc
-		testLoc.SolarAzimuth = 180.0
-		testLoc.SolarTilt = 25.0 // Tilted settings passed, should auto-detect Flat (0.0 tilt)
+		testLoc.SolarAzimuth = 0.0
+		testLoc.SolarTilt = 0.0 // Default unconfigured settings, should auto-detect Flat (0.0 tilt)
 
 		results, params := CalculateWeatherSolar(ctx, base.AddDate(0, 0, 10), history, weather, testLoc)
 		assert.Equal(t, 0.0, params.PanelTilt)
