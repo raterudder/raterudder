@@ -3,12 +3,92 @@
 
 <head>
   <meta charset="UTF-8" />
-  <link rel="icon" type="image/svg+xml" href="/logo.svg" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RateRudder</title>
+  <link rel="icon" type="image/svg+xml" href="/logo.svg" />
+  <link rel="apple-touch-icon" href="/logo_512.png" />
+
+  <!-- Primary Meta Tags -->
+  <title>RateRudder | Smart Battery & Solar Arbitrage for Tesla Powerwall & FranklinWH</title>
+  <meta name="title" content="RateRudder | Smart Battery & Solar Arbitrage for Tesla Powerwall & FranklinWH" />
+  <meta name="description" content="Automate your home battery to charge during cheap grid rates and export during peak utility credits. Real-time dynamic arbitrage for Tesla Powerwall, FranklinWH, and Enphase." />
+  <meta name="keywords" content="Tesla Powerwall arbitrage, battery storage automation, ComEd hourly pricing battery, FranklinWH smart charging, NEM 3.0 battery optimization, time of use battery scheduler" />
+  <link rel="canonical" href="https://raterudder.com/" />
+
+  <!-- Open Graph / Facebook / LinkedIn / Discord / Slack -->
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://raterudder.com/" />
+  <meta property="og:site_name" content="RateRudder" />
+  <meta property="og:title" content="RateRudder — Automated Battery & Solar Arbitrage" />
+  <meta property="og:description" content="Stop overpaying for electricity. RateRudder intelligently charges your home battery when power is cheap and discharges during peak rates." />
+  <meta property="og:image" content="https://raterudder.com/logo_512.png" />
+  <meta property="og:image:width" content="512" />
+  <meta property="og:image:height" content="512" />
+
+  <!-- Twitter / X -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:url" content="https://raterudder.com/" />
+  <meta name="twitter:title" content="RateRudder — Automated Battery & Solar Arbitrage" />
+  <meta name="twitter:description" content="Maximize your home battery savings with automated 24/7 dynamic electricity rate arbitrage. Compatible with Tesla Powerwall & FranklinWH." />
+  <meta name="twitter:image" content="https://raterudder.com/logo_512.png" />
+
+  <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+
+  <!-- Schema.org JSON-LD Structured Data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebApplication",
+        "@id": "https://raterudder.com/#webapp",
+        "name": "RateRudder",
+        "url": "https://raterudder.com",
+        "applicationCategory": "UtilitiesApplication",
+        "operatingSystem": "All",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD",
+          "description": "Free public beta"
+        },
+        "description": "Intelligent home energy management system designed to optimize energy storage systems based on real-time electricity pricing."
+      },
+      {
+        "@type": "FAQPage",
+        "@id": "https://raterudder.com/#faq",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "How does RateRudder save me money?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "RateRudder intelligently manages your battery to only charge when electricity is cheapest and only when charging is necessary, while discharging during peak hours to power your home."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Does using RateRudder void my battery warranty?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "No. RateRudder requires zero physical modifications or wiring. We communicate exclusively through manufacturer cloud APIs to manage settings, just like their official mobile apps."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "What happens if there's a storm or blackout?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "RateRudder respects your configured emergency backup reserve at all times. It will never discharge your battery below your chosen reserve level, keeping your home protected during outages."
+            }
+          }
+        ]
+      }
+    ]
+  }
+  </script>
 </head>
 
 <body>

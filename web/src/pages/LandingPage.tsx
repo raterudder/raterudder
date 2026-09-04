@@ -90,11 +90,19 @@ const phases = [
 const faqData = [
     {
         question: "How does RateRudder save me money?",
-        answer: "RateRudder intelligently manages your battery to only charge when electricity is cheapest and only when charging is necessary."
+        answer: "RateRudder intelligently manages your battery to only charge when electricity is cheapest and only when charging is necessary, while discharging during peak hours to power your home."
+    },
+    {
+        question: "Does using RateRudder void my battery warranty?",
+        answer: "No. RateRudder requires zero physical hardware changes or electrical work. We communicate exclusively through manufacturer cloud APIs to manage settings, just like their official mobile apps do."
+    },
+    {
+        question: "What happens if there's a storm or blackout?",
+        answer: "RateRudder respects your configured emergency backup reserve at all times. It will never discharge your battery below your chosen reserve level, keeping your home protected during outages."
     },
     {
         question: "Do I need specific hardware?",
-        answer: "Yes, RateRudder currently supports Tesla Powerwall and FranklinWH aPower battery systems. We're looking for testers to help us add support for more battery types soon."
+        answer: "RateRudder currently supports Tesla Powerwall and FranklinWH aPower battery systems, with Enphase support in active development. We're looking for testers to help us add support for more battery types soon."
     },
     {
         question: "Which utilities are supported?",
@@ -147,10 +155,10 @@ const LandingPage: React.FC = () => {
                         {isRateRudder && (
                             <div className="badge">Limited Beta Now Open</div>
                         )}
-                        <h1>Your Battery, Just <span className="highlight">Smarter.</span></h1>
+                        <h1>Your Battery, <span className="highlight">on Autopilot.</span></h1>
                         <p>
-                            RateRudder transforms your home battery into a powerful financial asset.
-                            We intelligently schedule your energy storage to charge on cheap grid power, offset peak rates, and export solar when credits are highest—automatically.
+                            RateRudder automatically charges your battery when power is cheap (or negative!),
+                            powers your home through expensive peak hours, and exports solar when buyback credits surge.
                         </p>
                         <div className="cta-wrapper">
                             <div className="cta-button-container">
@@ -159,6 +167,15 @@ const LandingPage: React.FC = () => {
                                 </a>
                                 <span className="cta-note">Free to sign up during public beta</span>
                             </div>
+                            <div className="compat-badges" aria-label="Supported Systems">
+                                <span className="compat-badge">Powerwall</span>
+                                <span className="compat-bullet" aria-hidden="true">•</span>
+                                <span className="compat-badge">FranklinWH</span>
+                                <span className="compat-bullet" aria-hidden="true">•</span>
+                                <span className="compat-badge">Enphase</span>
+                                <span className="compat-bullet" aria-hidden="true">•</span>
+                                <span className="compat-badge">25+ Utilities</span>
+                            </div>
                         </div>
                     </div>
 
@@ -166,7 +183,6 @@ const LandingPage: React.FC = () => {
                         {/* Decision Factors Card */}
                         <div className="decision-factors-card">
                             <div className="card-header">
-                                <span className="pulse-dot"></span>
                                 <h3>Decision Factors</h3>
                             </div>
                             <p className="card-sub">What RateRudder analyzes before making decisions:</p>
@@ -253,8 +269,8 @@ const LandingPage: React.FC = () => {
                                 <AreaChart data={simulationData} margin={{ top: 20, right: -5, left: -25, bottom: 0 }}>
                                     <defs>
                                         <linearGradient id="priceGradient" x1="0" y1="0" x2="0" y2="1">
-                                            <stop offset="5%" stopColor="var(--warning)" stopOpacity={0.2}/>
-                                            <stop offset="95%" stopColor="var(--warning)" stopOpacity={0}/>
+                                            <stop offset="5%" stopColor="var(--danger)" stopOpacity={0.2}/>
+                                            <stop offset="95%" stopColor="var(--danger)" stopOpacity={0}/>
                                         </linearGradient>
                                         <linearGradient id="socGradient" x1="0" y1="0" x2="0" y2="1">
                                             <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.15}/>
@@ -271,7 +287,7 @@ const LandingPage: React.FC = () => {
                                     />
                                     <YAxis
                                         yAxisId="left"
-                                        stroke="var(--warning)"
+                                        stroke="var(--danger)"
                                         fontSize={10}
                                         tickLine={false}
                                         axisLine={false}
@@ -305,7 +321,7 @@ const LandingPage: React.FC = () => {
                                         yAxisId="left"
                                         type="monotone"
                                         dataKey="price"
-                                        stroke="var(--warning)"
+                                        stroke="var(--danger)"
                                         strokeWidth={2}
                                         fillOpacity={1}
                                         fill="url(#priceGradient)"
@@ -332,9 +348,9 @@ const LandingPage: React.FC = () => {
                         </div>
 
                         {/* Interactive Phase Info Panel */}
-                        <div className="phase-info-panel" style={{ borderLeftColor: currentPhase.color }}>
+                        <div className="phase-info-panel">
                             <div className="panel-header">
-                                <span className="panel-badge" style={{ backgroundColor: `${currentPhase.color}15`, color: currentPhase.color }}>
+                                <span className="panel-badge" style={{ color: currentPhase.color }}>
                                     {currentPhase.action}
                                 </span>
                                 <h3>{currentPhase.title} <span className="time-sub">({currentPhase.timeRange})</span></h3>
@@ -343,7 +359,7 @@ const LandingPage: React.FC = () => {
                             <div className="panel-metrics">
                                 <div className="metric-pill">
                                     <span className="pill-label">Grid Price</span>
-                                    <span className="pill-val text-warning">{currentPhase.priceInfo}</span>
+                                    <span className="pill-val text-price">{currentPhase.priceInfo}</span>
                                 </div>
                                 <div className="metric-pill">
                                     <span className="pill-label">Battery SOC</span>

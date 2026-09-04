@@ -24,15 +24,25 @@ describe('LandingPage Component', () => {
             </Router>
         );
 
-        // Check for new hero text
+        // Check for hero headline, subhead, and compact badges
+        expect(screen.getByRole('heading', { level: 1, name: /Your Battery.*on Autopilot/i })).toBeInTheDocument();
+        expect(screen.getByText(/RateRudder automatically charges your battery when power is cheap/i)).toBeInTheDocument();
+        expect(screen.getByText('Powerwall')).toBeInTheDocument();
+        expect(screen.getByText('FranklinWH')).toBeInTheDocument();
+        expect(screen.getByText('Enphase')).toBeInTheDocument();
+        expect(screen.getByText('25+ Utilities')).toBeInTheDocument();
+
+        // Check for smart charging feature text
         expect(screen.getByText((content) => content.startsWith('RateRudder learns your home'))).toBeInTheDocument();
 
         // Check for new simulator and chart sections
         expect(screen.getByText('Decision Factors')).toBeInTheDocument();
         expect(screen.getByText('Daily Optimization')).toBeInTheDocument();
 
-        // Check for FAQ section
+        // Check for FAQ section and specific questions
         expect(screen.getByText('Common Questions')).toBeInTheDocument();
+        expect(screen.getByText('Does using RateRudder void my battery warranty?')).toBeInTheDocument();
+        expect(screen.getByText("What happens if there's a storm or blackout?")).toBeInTheDocument();
     });
 
     it('does not have a login CTA button', () => {

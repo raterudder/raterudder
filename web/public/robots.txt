@@ -1,2 +1,6 @@
 User-agent: *
+Allow: /
 Disallow: /api/
+Disallow: /callback/
+
+Sitemap: https://raterudder.com/sitemap.xml
