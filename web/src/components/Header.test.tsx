@@ -12,7 +12,7 @@ describe('Header Component', () => {
         vi.restoreAllMocks();
     });
 
-    const renderHeader = (path: string, loggedIn: boolean) => {
+    const renderHeader = (path: string, loggedIn: boolean, hasNotifications?: boolean) => {
         const { hook } = memoryLocation({ static: true, path: path });
         return render(
             <Router hook={hook}>
@@ -22,6 +22,7 @@ describe('Header Component', () => {
                     selectedSiteID="site1"
                     onSiteChange={mockOnSiteChange}
                     onLogout={mockOnLogout}
+                    hasNotifications={hasNotifications}
                 />
             </Router>
         );
@@ -129,6 +130,24 @@ describe('Header Component', () => {
 
     it('opens notification modal when bell button is clicked', async () => {
         renderHeader('/dashboard?notifications=true', true);
+        const bellBtn = screen.getByTestId('header-bell-btn');
+        fireEvent.click(bellBtn);
+
+        expect(await screen.findByText('Notifications')).toBeInTheDocument();
+    });
+
+    it('renders notification bell when hasNotifications is true without query params', () => {
+        renderHeader('/dashboard', true, true);
+        expect(screen.getByTestId('header-bell-btn')).toBeInTheDocument();
+    });
+
+    it('does not render notification bell when hasNotifications is false and no query params', () => {
+        renderHeader('/dashboard', true, false);
+        expect(screen.queryByTestId('header-bell-btn')).not.toBeInTheDocument();
+    });
+
+    it('opens notification modal when bell button is clicked via hasNotifications', async () => {
+        renderHeader('/dashboard', true, true);
         const bellBtn = screen.getByTestId('header-bell-btn');
         fireEvent.click(bellBtn);
 

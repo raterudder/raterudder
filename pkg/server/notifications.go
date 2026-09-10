@@ -2151,14 +2151,19 @@ func (s *Server) handleGetNotificationSettings(w http.ResponseWriter, r *http.Re
 		EveningSummaryFlavor: defaultSummaryFlavor,
 	}
 
-	site, err := s.storage.GetSite(ctx, siteID)
-	if err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to get site for notification settings",
-			slog.String("siteID", siteID),
-			slog.Any("error", err),
-		)
-		writeJSONError(w, "failed to get site for notification settings", http.StatusInternalServerError)
-		return
+	var site types.Site
+	var ok bool
+	if site, ok = s.getSiteFromContext(r); !ok {
+		var err error
+		site, err = s.storage.GetSite(ctx, siteID)
+		if err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to get site for notification settings",
+				slog.String("siteID", siteID),
+				slog.Any("error", err),
+			)
+			writeJSONError(w, "failed to get site for notification settings", http.StatusInternalServerError)
+			return
+		}
 	}
 	if userSettings, ok := site.Notifications[userID]; ok {
 		settings = userSettings

@@ -268,6 +268,7 @@ export interface Settings {
     hasCredentials: {
         [key: string]: boolean;
     };
+    hasNotifications?: boolean;
     essAuthStatus?: {
         consecutiveFailures: number;
         lastAttempt: string;

@@ -178,6 +178,49 @@ func TestDeleteHandlers(t *testing.T) {
 			assert.Equal(t, http.StatusOK, w.Code)
 			store.AssertExpectations(t)
 		})
+
+		t.Run("SuccessWithCachedSite", func(t *testing.T) {
+			store := &mockStorage{}
+			s := newServer(store)
+
+			siteID := "cached-site-to-delete"
+			site := types.Site{
+				ID: siteID,
+				Permissions: []types.SitePermissions{
+					{UserID: "user1"},
+				},
+			}
+
+			user1 := types.User{
+				ID:    "user1",
+				Admin: true,
+				Sites: []types.UserSite{{ID: siteID, Name: "Deleted Site"}},
+			}
+
+			store.On("GetUser", mock.Anything, "user1").Return(user1, nil).Once()
+			store.On("UpdateUser", mock.Anything, mock.MatchedBy(func(u types.User) bool {
+				return u.ID == "user1" && len(u.Sites) == 0
+			})).Return(nil).Once()
+			store.On("DeleteSite", mock.Anything, siteID).Return(nil).Once()
+
+			req := httptest.NewRequest(http.MethodPost, "/api/delete/site", nil)
+			ctx := context.WithValue(req.Context(), userContextKey, types.User{ID: "user1", Admin: true})
+			ctx = context.WithValue(ctx, siteIDContextKey, siteID)
+			ctx = context.WithValue(ctx, siteContextKey, site)
+			req = req.WithContext(ctx)
+			w := httptest.NewRecorder()
+
+			s.handleDeleteSite(w, req)
+			assert.Equal(t, http.StatusOK, w.Code)
+
+			var resp map[string]string
+			err := json.NewDecoder(w.Body).Decode(&resp)
+			require.NoError(t, err)
+			assert.Equal(t, "success", resp["status"])
+
+			store.AssertNotCalled(t, "GetSite", mock.Anything, mock.Anything)
+			store.AssertExpectations(t)
+		})
 	})
 
 	t.Run("DeleteUser", func(t *testing.T) {

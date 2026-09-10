@@ -42,6 +42,7 @@ type contextKey string
 
 const (
 	siteIDContextKey             contextKey = "siteID"
+	siteContextKey               contextKey = "site"
 	allUserSitesContextKey       contextKey = "allUserSites"
 	userContextKey               contextKey = "user"
 	userToRegisterContextKey     contextKey = "userToRegister"
@@ -324,6 +325,13 @@ func (s *Server) getSiteID(r *http.Request) string {
 	}
 	// we want to have a stack trace when this happens
 	panic("no siteID in context")
+}
+
+func (s *Server) getSiteFromContext(r *http.Request) (types.Site, bool) {
+	if site, ok := r.Context().Value(siteContextKey).(types.Site); ok {
+		return site, true
+	}
+	return types.Site{}, false
 }
 
 func (s *Server) getAllUserSites(r *http.Request) []types.UserSite {

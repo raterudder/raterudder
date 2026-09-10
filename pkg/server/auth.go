@@ -299,6 +299,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 						writeJSONError(w, "site access denied", http.StatusForbidden)
 						return
 					}
+					ctx = context.WithValue(ctx, siteContextKey, site)
 				}
 				ctx = context.WithValue(ctx, userContextKey, user)
 			} else if !allowNoLogin {

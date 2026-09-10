@@ -903,6 +903,7 @@ button {
 
 .select-positioner {
   z-index: 3000;
+  min-width: var(--anchor-width);
 }
 
 .select-popup {

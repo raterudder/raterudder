@@ -12,15 +12,16 @@ interface HeaderProps {
     selectedSiteID: string;
     onSiteChange: (siteID: string) => void;
     onLogout: () => void;
+    hasNotifications?: boolean;
 }
 
-const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSiteChange, onLogout }) => {
+const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSiteChange, onLogout, hasNotifications }) => {
     const [isMenuOpen, setIsMenuOpen] = React.useState(false);
     const [isNotificationModalOpen, setIsNotificationModalOpen] = React.useState(false);
     const [location] = useLocation();
     const [searchParams] = useSearchParams();
 
-    const showNotifications = searchParams.get('notifications') === 'true' || isIOSHomeScreen();
+    const showNotifications = searchParams.get('notifications') === 'true' || isIOSHomeScreen() || Boolean(hasNotifications);
 
     const currentSite = sites.find(s => s.id === selectedSiteID) || (sites.length > 0 ? sites[0] : undefined);
     const activeSiteID = currentSite?.id;

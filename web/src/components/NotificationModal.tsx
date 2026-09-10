@@ -675,7 +675,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                                     </Select.Icon>
                                                                 </Select.Trigger>
                                                                 <Select.Portal>
-                                                                    <Select.Positioner className="select-positioner">
+                                                                    <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
                                                                         <Select.Popup className="select-popup">
                                                                             <Select.List>
                                                                                 {Array.from({ length: 24 }, (_, i) => (
@@ -725,7 +725,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                                     </Select.Icon>
                                                                 </Select.Trigger>
                                                                 <Select.Portal>
-                                                                    <Select.Positioner className="select-positioner">
+                                                                    <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
                                                                         <Select.Popup className="select-popup">
                                                                             <Select.List>
                                                                                 {(Object.keys(flavorPreviews) as MorningSummaryFlavor[]).map((flavorKey) => (
@@ -811,7 +811,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                                     </Select.Icon>
                                                                 </Select.Trigger>
                                                                 <Select.Portal>
-                                                                    <Select.Positioner className="select-positioner">
+                                                                    <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
                                                                         <Select.Popup className="select-popup">
                                                                             <Select.List>
                                                                                 {Array.from({ length: 24 }, (_, i) => (
@@ -861,7 +861,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                                     </Select.Icon>
                                                                 </Select.Trigger>
                                                                 <Select.Portal>
-                                                                    <Select.Positioner className="select-positioner">
+                                                                    <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
                                                                         <Select.Popup className="select-popup">
                                                                             <Select.List>
                                                                                 {(Object.keys(eveningFlavorPreviews) as EveningSummaryFlavor[]).map((flavorKey) => (
@@ -981,7 +981,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                         </Select.Icon>
                                                     </Select.Trigger>
                                                     <Select.Portal>
-                                                        <Select.Positioner className="select-positioner">
+                                                        <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
                                                             <Select.Popup className="select-popup">
                                                                 <Select.List>
                                                                     <Select.Item className="select-item" value="disabled">
@@ -1047,7 +1047,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                         </Select.Icon>
                                                     </Select.Trigger>
                                                     <Select.Portal>
-                                                        <Select.Positioner className="select-positioner">
+                                                        <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
                                                             <Select.Popup className="select-popup">
                                                                 <Select.List>
                                                                     <Select.Item className="select-item" value="disabled">

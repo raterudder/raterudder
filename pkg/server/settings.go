@@ -14,6 +14,7 @@ import (
 
 	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/log"
+	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
 )
@@ -133,7 +134,8 @@ func (s *Server) getESSSystem(ctx context.Context, siteID string, settings setti
 // SettingsRes is the response type for GetSettings
 type SettingsRes struct {
 	types.Settings
-	HasCredentials map[string]bool `json:"hasCredentials"`
+	HasCredentials   map[string]bool `json:"hasCredentials"`
+	HasNotifications bool            `json:"hasNotifications"`
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -148,9 +150,21 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	// remove encrypted credentials from response
 	settings.EncryptedCredentials = nil
 
+	var hasNotifications bool
+	if site, ok := s.getSiteFromContext(r); ok {
+		hasNotifications = len(site.Notifications) > 0
+	} else if siteID != "" && siteID != SiteIDAll {
+		if site, err := s.storage.GetSite(ctx, siteID); err == nil {
+			hasNotifications = len(site.Notifications) > 0
+		} else if !errors.Is(err, storage.ErrSiteNotFound) {
+			log.Ctx(ctx).WarnContext(ctx, "failed to get site for notifications check in settings", slog.String("siteID", siteID), slog.Any("error", err))
+		}
+	}
+
 	resp := SettingsRes{
-		Settings:       settings.Settings,
-		HasCredentials: creds.Has(),
+		Settings:         settings.Settings,
+		HasCredentials:   creds.Has(),
+		HasNotifications: hasNotifications,
 	}
 
 	w.Header().Set("Cache-Control", "no-store")

@@ -351,6 +351,7 @@ function AppContent() {
                     selectedSiteID={effectiveSiteID}
                     onSiteChange={handleSiteChange}
                     onLogout={handleLogout}
+                    hasNotifications={settings?.hasNotifications}
                 />
 
                 <main className="main-content">

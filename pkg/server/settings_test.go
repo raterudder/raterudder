@@ -82,6 +82,64 @@ func TestHandleGetSettings(t *testing.T) {
 		// Verify hasCredentials flags accurately reflect the empty mock credentials
 		assert.False(t, resp.HasCredentials["franklin"])
 		assert.False(t, resp.HasCredentials["mock"])
+		assert.False(t, resp.HasNotifications)
+	})
+
+	t.Run("Get Settings with Notifications", func(t *testing.T) {
+		mockSWithNotif := &mockStorage{}
+		srv, _ := newAuthServer("", nil, nil)
+		srv.storage = mockSWithNotif
+
+		mockSWithNotif.On("GetSite", mock.Anything, "site1").Return(types.Site{
+			ID: "site1",
+			Notifications: map[string]types.UserNotificationSettings{
+				"user1": {MorningSummaryEnabled: true},
+			},
+		}, nil)
+		mockSWithNotif.On("GetSettings", mock.Anything, "site1").Return(types.Settings{
+			DryRun: false,
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+
+		req := httptest.NewRequest("GET", "/api/settings", nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, "site1"))
+		w := httptest.NewRecorder()
+
+		srv.handleGetSettings(w, req)
+		if assert.Equal(t, http.StatusOK, w.Result().StatusCode) {
+			var resp SettingsRes
+			err := json.NewDecoder(w.Body).Decode(&resp)
+			require.NoError(t, err)
+			assert.True(t, resp.HasNotifications)
+		}
+	})
+
+	t.Run("Get Settings with Context Site", func(t *testing.T) {
+		mockSContext := &mockStorage{}
+		srv, _ := newAuthServer("", nil, nil)
+		srv.storage = mockSContext
+
+		mockSContext.On("GetSettings", mock.Anything, "site1").Return(types.Settings{
+			DryRun: false,
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+
+		req := httptest.NewRequest("GET", "/api/settings", nil)
+		ctx := context.WithValue(req.Context(), siteIDContextKey, "site1")
+		ctx = context.WithValue(ctx, siteContextKey, types.Site{
+			ID: "site1",
+			Notifications: map[string]types.UserNotificationSettings{
+				"user1": {MorningSummaryEnabled: true},
+			},
+		})
+		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv.handleGetSettings(w, req)
+		if assert.Equal(t, http.StatusOK, w.Result().StatusCode) {
+			var resp SettingsRes
+			err := json.NewDecoder(w.Body).Decode(&resp)
+			require.NoError(t, err)
+			assert.True(t, resp.HasNotifications)
+		}
 	})
 
 	t.Run("Get Settings with Credentials", func(t *testing.T) {

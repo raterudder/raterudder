@@ -32,15 +32,20 @@ func (s *Server) handleDeleteSite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch site to find users with access
-	site, err := s.storage.GetSite(ctx, siteID)
-	if err != nil {
-		if errors.Is(err, storage.ErrSiteNotFound) {
-			writeJSONError(w, "site not found", http.StatusNotFound)
+	var site types.Site
+	var ok bool
+	if site, ok = s.getSiteFromContext(r); !ok {
+		var err error
+		site, err = s.storage.GetSite(ctx, siteID)
+		if err != nil {
+			if errors.Is(err, storage.ErrSiteNotFound) {
+				writeJSONError(w, "site not found", http.StatusNotFound)
+				return
+			}
+			log.Ctx(ctx).ErrorContext(ctx, "failed to get site for deletion", slog.String("siteID", siteID), slog.Any("error", err))
+			writeJSONError(w, "failed to get site", http.StatusInternalServerError)
 			return
 		}
-		log.Ctx(ctx).ErrorContext(ctx, "failed to get site for deletion", slog.String("siteID", siteID), slog.Any("error", err))
-		writeJSONError(w, "failed to get site", http.StatusInternalServerError)
-		return
 	}
 
 	// First, update every user with access to remove the site from their Sites slice.

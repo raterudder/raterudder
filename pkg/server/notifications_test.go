@@ -543,6 +543,44 @@ func TestHandleGetNotificationSettings(t *testing.T) {
 		assert.Equal(t, 20, resp.Settings.EveningSummaryHour)
 		assert.Equal(t, defaultSummaryFlavor, resp.Settings.EveningSummaryFlavor)
 	})
+
+	t.Run("CachedSiteInContext", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		srv, _, _, _ := createTestEndpointsServer(t, mockS)
+
+		siteID := "site-cached-notif"
+		cachedSite := types.Site{
+			ID: siteID,
+			Notifications: map[string]types.UserNotificationSettings{
+				"fake": {
+					MorningSummaryEnabled: true,
+					MorningSummaryHour:    9,
+					MorningSummaryFlavor:  "executive",
+				},
+			},
+		}
+		mockS.On("GetUser", mock.Anything, "fake").Return(types.User{
+			ID: "fake",
+		}, nil).Once()
+
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/notifications/settings?siteID=%s", siteID), nil)
+		ctx := context.WithValue(req.Context(), siteIDContextKey, siteID)
+		ctx = context.WithValue(ctx, userContextKey, types.User{ID: "fake"})
+		ctx = context.WithValue(ctx, siteContextKey, cachedSite)
+		req = req.WithContext(ctx)
+
+		rec := httptest.NewRecorder()
+		srv.handleGetNotificationSettings(rec, req)
+
+		if assert.Equal(t, http.StatusOK, rec.Code) {
+			var resp getNotificationSettingsResponse
+			require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+			assert.True(t, resp.Settings.MorningSummaryEnabled)
+			assert.Equal(t, 9, resp.Settings.MorningSummaryHour)
+			assert.Equal(t, "executive", resp.Settings.MorningSummaryFlavor)
+		}
+		mockS.AssertNotCalled(t, "GetSite", mock.Anything, mock.Anything)
+	})
 }
 
 func TestHandleUpdateNotificationSettings(t *testing.T) {
