@@ -72,7 +72,7 @@ func TestGenerateMorningSummary(t *testing.T) {
 	peakSolarKWH := 40.0
 
 	t.Run("MetricsHeavyWithCapacityETA", func(t *testing.T) {
-		title, body := generateMorningSummary("metrics_heavy", status, 38.4, 33.4, peakSolarKWH, hitCapacityAt, 100.0, loc)
+		title, body := generateMorningSummary(t.Context(), "metrics_heavy", status, 38.4, 33.4, peakSolarKWH, hitCapacityAt, 100.0, loc)
 		assert.Contains(t, title, "74% SOC")
 		assert.Contains(t, title, "10.1 kWh")
 		assert.Contains(t, title, "38.4 kWh Solar")
@@ -81,14 +81,14 @@ func TestGenerateMorningSummary(t *testing.T) {
 	})
 
 	t.Run("MetricsHeavyProjectedPeakHigher", func(t *testing.T) {
-		title, body := generateMorningSummary("metrics_heavy", status, 12.0, 30.0, peakSolarKWH, time.Time{}, 88.0, loc)
+		title, body := generateMorningSummary(t.Context(), "metrics_heavy", status, 12.0, 30.0, peakSolarKWH, time.Time{}, 88.0, loc)
 		assert.Contains(t, title, "74% SOC")
 		assert.Contains(t, body, "-60% vs yesterday")
 		assert.Contains(t, body, "Battery projected to peak at ~88% today.")
 	})
 
 	t.Run("MetricsHeavyProjectedPeakNotCharging", func(t *testing.T) {
-		title, body := generateMorningSummary("metrics_heavy", status, 12.0, 30.0, peakSolarKWH, time.Time{}, 74.0, loc)
+		title, body := generateMorningSummary(t.Context(), "metrics_heavy", status, 12.0, 30.0, peakSolarKWH, time.Time{}, 74.0, loc)
 		assert.Contains(t, title, "74% SOC")
 		assert.Contains(t, body, "-60% vs yesterday")
 		assert.Contains(t, body, "Battery not projected to charge today (currently 74%).")
@@ -96,43 +96,43 @@ func TestGenerateMorningSummary(t *testing.T) {
 
 	t.Run("MetricsHeavyProjectedPeakMarginalNotCharging", func(t *testing.T) {
 		// Battery is at 74%, projected peak is 76% (+2% < 5% min delta). Should be treated as not charging.
-		title, body := generateMorningSummary("metrics_heavy", status, 12.0, 30.0, peakSolarKWH, time.Time{}, 76.0, loc)
+		title, body := generateMorningSummary(t.Context(), "metrics_heavy", status, 12.0, 30.0, peakSolarKWH, time.Time{}, 76.0, loc)
 		assert.Contains(t, title, "74% SOC")
 		assert.Contains(t, body, "Battery not projected to charge today (currently 74%).")
 	})
 
 	t.Run("HomePlannerGreatSolar", func(t *testing.T) {
-		title, body := generateMorningSummary("home_planner", status, 35.0, 30.0, peakSolarKWH, hitCapacityAt, 100.0, loc)
+		title, body := generateMorningSummary(t.Context(), "home_planner", status, 35.0, 30.0, peakSolarKWH, hitCapacityAt, 100.0, loc)
 		assert.Equal(t, "☀️ Great Solar Day Ahead", title)
 		assert.Contains(t, body, "Full battery expected by 1:15 PM")
 	})
 
 	t.Run("HomePlannerClearSkiesAhead", func(t *testing.T) {
-		title, body := generateMorningSummary("home_planner", status, 35.0, 30.0, peakSolarKWH, time.Time{}, 88.0, loc)
+		title, body := generateMorningSummary(t.Context(), "home_planner", status, 35.0, 30.0, peakSolarKWH, time.Time{}, 88.0, loc)
 		assert.Equal(t, "☀️ Clear Skies Ahead", title)
 		assert.Contains(t, body, "Strong solar today (+17% vs yesterday) will help cover daytime home usage.")
 	})
 
 	t.Run("HomePlannerModerateSolar", func(t *testing.T) {
-		title, body := generateMorningSummary("home_planner", status, 24.0, 30.0, peakSolarKWH, time.Time{}, 80.0, loc)
+		title, body := generateMorningSummary(t.Context(), "home_planner", status, 24.0, 30.0, peakSolarKWH, time.Time{}, 80.0, loc)
 		assert.Equal(t, "⛅ Moderate Solar Outlook", title)
 		assert.Contains(t, body, "Moderate solar expected today (-20% vs yesterday)")
 	})
 
 	t.Run("HomePlannerLowSolar", func(t *testing.T) {
-		title, body := generateMorningSummary("home_planner", status, 8.0, 30.0, peakSolarKWH, time.Time{}, 74.0, loc)
+		title, body := generateMorningSummary(t.Context(), "home_planner", status, 8.0, 30.0, peakSolarKWH, time.Time{}, 74.0, loc)
 		assert.Equal(t, "☁️ Low Solar Outlook", title)
 		assert.Contains(t, body, "Solar will be limited today (-73% vs yesterday). Consider avoiding heavy loads.")
 	})
 
 	t.Run("ExecutiveSummary", func(t *testing.T) {
-		title, body := generateMorningSummary("executive", status, 38.0, 38.0, peakSolarKWH, hitCapacityAt, 100.0, loc)
+		title, body := generateMorningSummary(t.Context(), "executive", status, 38.0, 38.0, peakSolarKWH, hitCapacityAt, 100.0, loc)
 		assert.Equal(t, "☀️ 38.0 kWh Solar Expected • 🔋 74% SOC", title)
 		assert.Contains(t, body, "Great solar today; battery will fully top off by 1:15 PM")
 	})
 
 	t.Run("AutonomousPilot", func(t *testing.T) {
-		title, body := generateMorningSummary("pilot", status, 38.0, 30.0, peakSolarKWH, hitCapacityAt, 100.0, loc)
+		title, body := generateMorningSummary(t.Context(), "pilot", status, 38.0, 30.0, peakSolarKWH, hitCapacityAt, 100.0, loc)
 		assert.Equal(t, "🤖 RateRudder: Morning Outlook", title)
 		assert.Contains(t, body, "Forecast shows 38.0 kWh solar refilling battery by 1:15 PM")
 		assert.Contains(t, body, "Optimizing daytime self-consumption")
@@ -152,14 +152,14 @@ func TestGenerateEveningSummary(t *testing.T) {
 	hitDeficitAt := time.Date(2026, 9, 5, 1, 15, 0, 0, loc) // 1:15 AM
 
 	t.Run("HomePlannerNoDeficit", func(t *testing.T) {
-		title, body := generateEveningSummary("home_planner", status, 42.0, 18.0, 20.0, 0.0, 20.0, time.Time{}, loc)
+		title, body := generateEveningSummary(t.Context(), "home_planner", status, 42.0, 18.0, 20.0, 0.0, 20.0, time.Time{}, loc)
 		assert.Equal(t, "🌙 Evening Energy Wrap-up", title)
 		assert.Contains(t, body, "Projected to power home through the night until tomorrow's solar")
 		assert.Contains(t, body, "85%")
 	})
 
 	t.Run("HomePlannerWithDeficitETA", func(t *testing.T) {
-		title, body := generateEveningSummary("home_planner", status, 42.0, 18.0, 20.0, 0.0, 20.0, hitDeficitAt, loc)
+		title, body := generateEveningSummary(t.Context(), "home_planner", status, 42.0, 18.0, 20.0, 0.0, 20.0, hitDeficitAt, loc)
 		assert.Equal(t, "🌙 Evening Energy Wrap-up", title)
 		assert.Contains(t, body, "Projected to supply home until ~1:15 AM before drawing from the grid")
 		assert.Contains(t, body, "85%")
@@ -168,44 +168,44 @@ func TestGenerateEveningSummary(t *testing.T) {
 	t.Run("HomePlannerLowReserve", func(t *testing.T) {
 		lowStatus := status
 		lowStatus.BatterySOC = 18.0
-		title, body := generateEveningSummary("home_planner", lowStatus, 12.0, 25.0, 0.0, 10.0, 20.0, hitDeficitAt, loc)
+		title, body := generateEveningSummary(t.Context(), "home_planner", lowStatus, 12.0, 25.0, 0.0, 10.0, 20.0, hitDeficitAt, loc)
 		assert.Equal(t, "🌙 Evening Energy Wrap-up", title)
 		assert.Contains(t, body, "Reserve is low; home will switch to grid power shortly")
 		assert.Contains(t, body, "18%")
 	})
 
 	t.Run("ExecutiveSummaryWithExport", func(t *testing.T) {
-		title, body := generateEveningSummary("executive", status, 42.1, 18.0, 15.5, 0.0, 20.0, hitDeficitAt, loc)
+		title, body := generateEveningSummary(t.Context(), "executive", status, 42.1, 18.0, 15.5, 0.0, 20.0, hitDeficitAt, loc)
 		assert.Equal(t, "🌙 42.1 kWh Solar Today • 🔋 85% SOC", title)
 		assert.Contains(t, body, "15.5 kWh exported to the grid")
 	})
 
 	t.Run("ExecutiveSummaryFullyCovering", func(t *testing.T) {
-		title, body := generateEveningSummary("executive", status, 25.0, 20.0, 0.0, 0.0, 20.0, hitDeficitAt, loc)
+		title, body := generateEveningSummary(t.Context(), "executive", status, 25.0, 20.0, 0.0, 0.0, 20.0, hitDeficitAt, loc)
 		assert.Equal(t, "🌙 25.0 kWh Solar Today • 🔋 85% SOC", title)
 		assert.Contains(t, body, "fully covering home needs")
 	})
 
 	t.Run("ExecutiveSummaryPartiallyCovering", func(t *testing.T) {
-		title, body := generateEveningSummary("executive", status, 10.0, 20.0, 0.0, 10.0, 20.0, hitDeficitAt, loc)
+		title, body := generateEveningSummary(t.Context(), "executive", status, 10.0, 20.0, 0.0, 10.0, 20.0, hitDeficitAt, loc)
 		assert.Equal(t, "🌙 10.0 kWh Solar Today • 🔋 85% SOC", title)
 		assert.Contains(t, body, "covered 50% of home use")
 	})
 
 	t.Run("AutonomousPilotWithDeficit", func(t *testing.T) {
-		title, body := generateEveningSummary("pilot", status, 42.0, 18.0, 15.0, 0.0, 20.0, hitDeficitAt, loc)
+		title, body := generateEveningSummary(t.Context(), "pilot", status, 42.0, 18.0, 15.0, 0.0, 20.0, hitDeficitAt, loc)
 		assert.Equal(t, "🤖 RateRudder: Evening Wrap-up", title)
 		assert.Contains(t, body, "will supply home until ~1:15 AM before switching to grid")
 	})
 
 	t.Run("AutonomousPilotNoDeficit", func(t *testing.T) {
-		title, body := generateEveningSummary("pilot", status, 42.0, 18.0, 15.0, 0.0, 20.0, time.Time{}, loc)
+		title, body := generateEveningSummary(t.Context(), "pilot", status, 42.0, 18.0, 15.0, 0.0, 20.0, time.Time{}, loc)
 		assert.Equal(t, "🤖 RateRudder: Evening Wrap-up", title)
 		assert.Contains(t, body, "projected to power home through sunrise")
 	})
 
 	t.Run("MetricsHeavyWithDeficit", func(t *testing.T) {
-		title, body := generateEveningSummary("metrics_heavy", status, 42.0, 18.0, 15.0, 0.0, 20.0, hitDeficitAt, loc)
+		title, body := generateEveningSummary(t.Context(), "metrics_heavy", status, 42.0, 18.0, 15.0, 0.0, 20.0, hitDeficitAt, loc)
 		assert.Contains(t, title, "42.0 kWh Solar")
 		assert.Contains(t, title, "85% SOC")
 		assert.Contains(t, body, "42.0 kWh solar")
@@ -215,7 +215,7 @@ func TestGenerateEveningSummary(t *testing.T) {
 	})
 
 	t.Run("MetricsHeavyNoDeficit", func(t *testing.T) {
-		title, body := generateEveningSummary("metrics_heavy", status, 42.0, 18.0, 0.0, 5.0, 20.0, time.Time{}, loc)
+		title, body := generateEveningSummary(t.Context(), "metrics_heavy", status, 42.0, 18.0, 0.0, 5.0, 20.0, time.Time{}, loc)
 		assert.Contains(t, title, "42.0 kWh Solar")
 		assert.Contains(t, title, "85% SOC")
 		assert.Contains(t, body, "5.0 kWh imported")

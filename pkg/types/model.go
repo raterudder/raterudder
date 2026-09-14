@@ -353,7 +353,6 @@ type NotificationLog struct {
 	ID         string            `json:"id"`
 	TSCreated  time.Time         `json:"tsCreated"`
 	UserID     string            `json:"userID"`
-	Endpoint   string            `json:"endpoint"`
 	Type       string            `json:"type"`
 	Flavor     string            `json:"flavor"`
 	Title      string            `json:"title"`

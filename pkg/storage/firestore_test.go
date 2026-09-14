@@ -1308,7 +1308,6 @@ func TestFirestoreProvider(t *testing.T) {
 			ID:         "log-1",
 			TSCreated:  now,
 			UserID:     "user1@test.com",
-			Endpoint:   "https://fcm.googleapis.com/fcm/send/sub-1",
 			Type:       "morning_summary",
 			Flavor:     "metrics_heavy",
 			Title:      "Morning Summary",

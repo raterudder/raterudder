@@ -132,6 +132,7 @@ func parseVAPIDPrivateKey(privateKeyStr string) (*ecdsa.PrivateKey, string, erro
 
 // generateMorningSummary generates copy for the morning summary report based on selected flavor.
 func generateMorningSummary(
+	ctx context.Context,
 	flavor string,
 	currentStatus types.SystemStatus,
 	todayForecastKWH float64,
@@ -141,6 +142,9 @@ func generateMorningSummary(
 	projectedPeakSOC float64,
 	timeLoc *time.Location,
 ) (string, string) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if timeLoc == nil {
 		timeLoc = time.UTC
 	}
@@ -179,9 +183,9 @@ func generateMorningSummary(
 		solarRatio = 1.0
 	}
 
+	var title, body string
 	switch flavor {
 	case "home_planner":
-		var title, body string
 		if solarRatio >= 0.80 {
 			if hitCapacityStr != "" {
 				title = "☀️ Great Solar Day Ahead"
@@ -211,11 +215,9 @@ func generateMorningSummary(
 		} else {
 			body = fmt.Sprintf("Battery at %.0f%%. Solar will be limited today (%s). Consider avoiding heavy loads.", currentStatus.BatterySOC, relWording)
 		}
-		return title, body
 
 	case "executive":
-		title := fmt.Sprintf("☀️ %.1f kWh Solar Expected • 🔋 %.0f%% SOC", todayForecastKWH, currentStatus.BatterySOC)
-		var body string
+		title = fmt.Sprintf("☀️ %.1f kWh Solar Expected • 🔋 %.0f%% SOC", todayForecastKWH, currentStatus.BatterySOC)
 		if hitCapacityStr != "" {
 			if solarRatio >= 0.70 {
 				body = fmt.Sprintf("Great solar today; battery will fully top off by %s.", hitCapacityStr)
@@ -227,11 +229,9 @@ func generateMorningSummary(
 		} else {
 			body = fmt.Sprintf("Solar limited today (%s); battery will supply home without charging.", relWording)
 		}
-		return title, body
 
 	case "pilot":
-		title := "🤖 RateRudder: Morning Outlook"
-		var body string
+		title = "🤖 RateRudder: Morning Outlook"
 		if hitCapacityStr != "" {
 			body = fmt.Sprintf("Battery at %.0f%%. Forecast shows %.1f kWh solar refilling battery by %s. Optimizing daytime self-consumption.", currentStatus.BatterySOC, todayForecastKWH, hitCapacityStr)
 		} else if projectedPeakSOC >= currentStatus.BatterySOC+morningSummaryMinPeakDeltaSOC {
@@ -239,13 +239,11 @@ func generateMorningSummary(
 		} else {
 			body = fmt.Sprintf("Battery at %.0f%%. Solar limited (%.1f kWh). Preserving battery reserve to defend peak pricing hours.", currentStatus.BatterySOC, todayForecastKWH)
 		}
-		return title, body
 
 	case "metrics_heavy":
 		fallthrough
 	default:
-		title := fmt.Sprintf("🔋 %.0f%% SOC (%.1f kWh) • ☀️ %.1f kWh Solar", currentStatus.BatterySOC, currentEnergyKWH, todayForecastKWH)
-		var body string
+		title = fmt.Sprintf("🔋 %.0f%% SOC (%.1f kWh) • ☀️ %.1f kWh Solar", currentStatus.BatterySOC, currentEnergyKWH, todayForecastKWH)
 		if hitCapacityStr != "" {
 			body = fmt.Sprintf("Forecast: %s. Full charge expected by %s.", relWording, hitCapacityStr)
 		} else if projectedPeakSOC >= currentStatus.BatterySOC+morningSummaryMinPeakDeltaSOC {
@@ -253,12 +251,31 @@ func generateMorningSummary(
 		} else {
 			body = fmt.Sprintf("Forecast: %s. Battery not projected to charge today (currently %.0f%%).", relWording, currentStatus.BatterySOC)
 		}
-		return title, body
 	}
+
+	log.Ctx(ctx).DebugContext(ctx, "generated morning summary",
+		slog.String("flavor", flavor),
+		slog.Float64("batterySOC", currentStatus.BatterySOC),
+		slog.Float64("batteryCapacityKWH", currentStatus.BatteryCapacityKWH),
+		slog.Float64("currentEnergyKWH", currentEnergyKWH),
+		slog.Float64("todayForecastKWH", todayForecastKWH),
+		slog.Float64("yesterdayActualKWH", yesterdayActualKWH),
+		slog.Float64("peakSolarKWH", peakSolarKWH),
+		slog.Float64("solarRatio", solarRatio),
+		slog.Float64("deltaPct", deltaPct),
+		slog.String("relWording", relWording),
+		slog.String("hitCapacityAt", hitCapacityStr),
+		slog.Float64("projectedPeakSOC", projectedPeakSOC),
+		slog.String("title", title),
+		slog.String("body", body),
+	)
+
+	return title, body
 }
 
 // generateEveningSummary generates copy for the evening summary report based on selected flavor.
 func generateEveningSummary(
+	ctx context.Context,
 	flavor string,
 	currentStatus types.SystemStatus,
 	todayActualSolarKWH float64,
@@ -269,6 +286,9 @@ func generateEveningSummary(
 	hitDeficitAt time.Time,
 	timeLoc *time.Location,
 ) (string, string) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if timeLoc == nil {
 		timeLoc = time.UTC
 	}
@@ -284,10 +304,10 @@ func generateEveningSummary(
 		reserveThreshold = 20.0
 	}
 
+	var title, body string
 	switch flavor {
 	case "home_planner":
-		title := "🌙 Evening Energy Wrap-up"
-		var body string
+		title = "🌙 Evening Energy Wrap-up"
 		if hitDeficitAt.IsZero() {
 			body = fmt.Sprintf("Battery at %.0f%% (%.1f kWh). Projected to power home through the night until tomorrow's solar.", currentStatus.BatterySOC, currentEnergyKWH)
 		} else if currentStatus.BatterySOC <= reserveThreshold+2.0 || hitDeficitAt.Before(currentStatus.Timestamp.In(timeLoc).Add(30*time.Minute)) {
@@ -295,11 +315,9 @@ func generateEveningSummary(
 		} else {
 			body = fmt.Sprintf("Battery at %.0f%% (%.1f kWh). Projected to supply home until ~%s before drawing from the grid.", currentStatus.BatterySOC, currentEnergyKWH, deficitStr)
 		}
-		return title, body
 
 	case "executive":
-		title := fmt.Sprintf("🌙 %.1f kWh Solar Today • 🔋 %.0f%% SOC", todayActualSolarKWH, currentStatus.BatterySOC)
-		var body string
+		title = fmt.Sprintf("🌙 %.1f kWh Solar Today • 🔋 %.0f%% SOC", todayActualSolarKWH, currentStatus.BatterySOC)
 		if todayGridExportKWH > 0.5 {
 			body = fmt.Sprintf("Solar generated %.1f kWh today with %.1f kWh exported to the grid. Battery entering night at %.0f%%.", todayActualSolarKWH, todayGridExportKWH, currentStatus.BatterySOC)
 		} else if todayHomeUsageKWH > 0 && todayActualSolarKWH >= todayHomeUsageKWH {
@@ -310,11 +328,9 @@ func generateEveningSummary(
 		} else {
 			body = fmt.Sprintf("Home used %.1f kWh today with minimal solar. Battery entering night at %.0f%%.", todayHomeUsageKWH, currentStatus.BatterySOC)
 		}
-		return title, body
 
 	case "pilot":
-		title := "🤖 RateRudder: Evening Wrap-up"
-		var body string
+		title = "🤖 RateRudder: Evening Wrap-up"
 		if hitDeficitAt.IsZero() {
 			if todayActualSolarKWH >= 2.0 {
 				body = fmt.Sprintf("Automated battery managed %.1f kWh solar today. Stored %.1f kWh projected to power home through sunrise.", todayActualSolarKWH, currentEnergyKWH)
@@ -328,13 +344,11 @@ func generateEveningSummary(
 				body = fmt.Sprintf("Stored %.1f kWh will supply home until ~%s before switching to grid.", currentEnergyKWH, deficitStr)
 			}
 		}
-		return title, body
 
 	case "metrics_heavy":
 		fallthrough
 	default:
-		title := fmt.Sprintf("🌙 %.1f kWh Solar • 🔋 %.0f%% SOC (%.1f kWh)", todayActualSolarKWH, currentStatus.BatterySOC, currentEnergyKWH)
-		var body string
+		title = fmt.Sprintf("🌙 %.1f kWh Solar • 🔋 %.0f%% SOC (%.1f kWh)", todayActualSolarKWH, currentStatus.BatterySOC, currentEnergyKWH)
 		var flowStr string
 		if todayGridExportKWH > 0.0 {
 			flowStr = fmt.Sprintf("Today: %.1f kWh solar, %.1f kWh home (%.1f kWh exported).", todayActualSolarKWH, todayHomeUsageKWH, todayGridExportKWH)
@@ -349,8 +363,25 @@ func generateEveningSummary(
 		} else {
 			body = fmt.Sprintf("%s Battery: %.1f kWh powers home until ~%s.", flowStr, currentEnergyKWH, deficitStr)
 		}
-		return title, body
 	}
+
+	log.Ctx(ctx).DebugContext(ctx, "generated evening summary",
+		slog.String("flavor", flavor),
+		slog.Float64("batterySOC", currentStatus.BatterySOC),
+		slog.Float64("batteryCapacityKWH", currentStatus.BatteryCapacityKWH),
+		slog.Float64("currentEnergyKWH", currentEnergyKWH),
+		slog.Float64("todayActualSolarKWH", todayActualSolarKWH),
+		slog.Float64("todayHomeUsageKWH", todayHomeUsageKWH),
+		slog.Float64("todayGridExportKWH", todayGridExportKWH),
+		slog.Float64("todayGridImportKWH", todayGridImportKWH),
+		slog.Float64("minBatterySOC", minBatterySOC),
+		slog.Float64("reserveThreshold", reserveThreshold),
+		slog.String("hitDeficitAt", deficitStr),
+		slog.String("title", title),
+		slog.String("body", body),
+	)
+
+	return title, body
 }
 
 // notificationsEnabled returns true if VAPID keys are properly configured.
@@ -857,12 +888,20 @@ func (s *Server) dispatchPushToUser(
 			}
 		}
 
+		log.Ctx(ctx).InfoContext(ctx, "sent push notification",
+			slog.String("userID", user.ID),
+			slog.String("logID", logID),
+			slog.String("type", notifType),
+			slog.String("flavor", flavor),
+			slog.String("title", title),
+			slog.Int("statusCode", statusCode),
+		)
+
 		// Append log to monthly document
 		logEntry := types.NotificationLog{
 			ID:         logID,
 			TSCreated:  nowUTC,
 			UserID:     user.ID,
-			Endpoint:   sub.Endpoint,
 			Type:       notifType,
 			Flavor:     flavor,
 			Title:      title,
@@ -875,7 +914,6 @@ func (s *Server) dispatchPushToUser(
 
 		if appendErr := s.storage.AppendNotificationLog(ctx, siteID, logEntry); appendErr != nil {
 			log.Ctx(ctx).WarnContext(ctx, "failed to append notification log",
-				slog.String("siteID", siteID),
 				slog.String("userID", user.ID),
 				slog.String("type", notifType),
 				slog.Any("error", appendErr),
@@ -888,7 +926,7 @@ func (s *Server) dispatchPushToUser(
 func (s *Server) getSiteRecentNotifications(ctx context.Context, siteID string, nowLocal time.Time) *siteRecentNotifications {
 	logs, err := s.storage.GetNotificationLogs(ctx, siteID, nowLocal.Add(-24*time.Hour), nowLocal.Add(1*time.Hour))
 	if err != nil {
-		log.Ctx(ctx).WarnContext(ctx, "failed to get recent notification logs", slog.String("siteID", siteID), slog.Any("error", err))
+		log.Ctx(ctx).WarnContext(ctx, "failed to get recent notification logs", slog.Any("error", err))
 	}
 	return &siteRecentNotifications{logs: logs}
 }
@@ -1063,7 +1101,6 @@ func (s *Server) handleMorningSummaryNotifications(
 		user, err := s.storage.GetUser(ctx, userID)
 		if err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to get user for morning summary notification",
-				slog.String("siteID", site.ID),
 				slog.String("userID", userID),
 				slog.Any("error", err),
 			)
@@ -1124,7 +1161,7 @@ func (s *Server) handleMorningSummaryNotifications(
 			metadata["hitCapacityAt"] = hitCapacityAt.In(siteLoc).Format(time.RFC3339)
 		}
 
-		title, body := generateMorningSummary(notifConfig.MorningSummaryFlavor, data.status, todayForecastKWH, yesterdayActualKWH, peakSolarKWH, hitCapacityAt, maxSimSOC, siteLoc)
+		title, body := generateMorningSummary(ctx, notifConfig.MorningSummaryFlavor, data.status, todayForecastKWH, yesterdayActualKWH, peakSolarKWH, hitCapacityAt, maxSimSOC, siteLoc)
 		s.dispatchPushToUser(ctx, site.ID, user, types.NotificationTypeMorningSummary, notifConfig.MorningSummaryFlavor, title, body, "/forecast", metadata)
 	}
 }
@@ -1160,7 +1197,6 @@ func (s *Server) handleEveningSummaryNotifications(
 		user, err := s.storage.GetUser(ctx, userID)
 		if err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to get user for evening summary notification",
-				slog.String("siteID", site.ID),
 				slog.String("userID", userID),
 				slog.Any("error", err),
 			)
@@ -1222,7 +1258,7 @@ func (s *Server) handleEveningSummaryNotifications(
 			"todayGridExportKWH": fmt.Sprintf("%.2f", todayGridExportKWH),
 		}
 
-		title, body := generateEveningSummary(notifConfig.EveningSummaryFlavor, data.status, todayActualSolarKWH, todayHomeUsageKWH, todayGridExportKWH, todayGridImportKWH, minSOC, hitDeficitAt, siteLoc)
+		title, body := generateEveningSummary(ctx, notifConfig.EveningSummaryFlavor, data.status, todayActualSolarKWH, todayHomeUsageKWH, todayGridExportKWH, todayGridImportKWH, minSOC, hitDeficitAt, siteLoc)
 		s.dispatchPushToUser(ctx, site.ID, user, types.NotificationTypeEveningSummary, notifConfig.EveningSummaryFlavor, title, body, "/dashboard", metadata)
 	}
 }
@@ -1248,6 +1284,7 @@ func (s *Server) handleGridOutageNotifications(
 
 	if !status.GridUnavailable {
 		if getNotifState == nil || getNotifState().lastGridEvent() != types.NotificationTypeGridOutage {
+			log.Ctx(ctx).DebugContext(ctx, "skipping grid restored check: previous event was not an outage")
 			return
 		}
 		for userID, notifConfig := range site.Notifications {
@@ -1263,10 +1300,17 @@ func (s *Server) handleGridOutageNotifications(
 			metadata := map[string]string{
 				"currentSOC": fmt.Sprintf("%.1f", status.BatterySOC),
 			}
-			s.dispatchPushToUser(ctx, site.ID, user, types.NotificationTypeGridRestored, "", title, body, "/#dashboard", metadata)
+			log.Ctx(ctx).DebugContext(ctx, "sending grid restored notification",
+				slog.String("userID", user.ID),
+				slog.Float64("batterySOC", status.BatterySOC),
+				slog.String("title", title),
+				slog.String("body", body),
+			)
+			s.dispatchPushToUser(ctx, site.ID, user, types.NotificationTypeGridRestored, "", title, body, "/dashboard", metadata)
 		}
 	} else if status.GridUnavailable && essSystem != nil {
 		if getNotifState != nil && getNotifState().lastGridEvent() == types.NotificationTypeGridOutage {
+			log.Ctx(ctx).DebugContext(ctx, "skipping grid outage check: already in outage state")
 			return
 		}
 		var outageUsers []types.User
@@ -1277,7 +1321,6 @@ func (s *Server) handleGridOutageNotifications(
 			user, err := s.storage.GetUser(ctx, userID)
 			if err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to get user for grid outage notification",
-					slog.String("siteID", site.ID),
 					slog.String("userID", userID),
 					slog.Any("error", err),
 				)
@@ -1296,7 +1339,6 @@ func (s *Server) handleGridOutageNotifications(
 					delay = defaultGridOutageDelay
 				}
 				log.Ctx(ctx).DebugContext(ctx, "grid unavailable detected, launching outage verification",
-					slog.String("siteID", site.ID),
 					slog.Duration("delay", delay),
 				)
 				go func(ctx context.Context) {
@@ -1313,14 +1355,12 @@ func (s *Server) handleGridOutageNotifications(
 					currStatus, err := essSystem.GetStatus(asyncCtx)
 					if err != nil {
 						log.Ctx(asyncCtx).WarnContext(asyncCtx, "failed to re-check grid status after outage delay",
-							slog.String("siteID", site.ID),
 							slog.Any("error", err),
 						)
 						return
 					}
 
 					log.Ctx(asyncCtx).DebugContext(asyncCtx, "grid outage verification result",
-						slog.String("siteID", site.ID),
 						slog.Bool("stillDown", currStatus.GridUnavailable),
 						slog.Float64("batterySOC", currStatus.BatterySOC),
 					)
@@ -1339,12 +1379,18 @@ func (s *Server) handleGridOutageNotifications(
 							"homeKW":     fmt.Sprintf("%.2f", currStatus.HomeKW),
 						}
 						for _, user := range outageUsers {
+							log.Ctx(asyncCtx).DebugContext(asyncCtx, "sending grid outage notification",
+								slog.String("userID", user.ID),
+								slog.Float64("batterySOC", currStatus.BatterySOC),
+								slog.Float64("batteryCapacityKWH", currStatus.BatteryCapacityKWH),
+								slog.Float64("homeKW", currStatus.HomeKW),
+								slog.String("title", title),
+								slog.String("body", body),
+							)
 							s.dispatchPushToUser(asyncCtx, site.ID, user, types.NotificationTypeGridOutage, "", title, body, "/dashboard", metadata)
 						}
 					} else {
-						log.Ctx(asyncCtx).InfoContext(asyncCtx, "grid outage was a temporary blip (<5m), suppressed notification",
-							slog.String("siteID", site.ID),
-						)
+						log.Ctx(asyncCtx).InfoContext(asyncCtx, "grid outage was a temporary blip (<5m), suppressed notification")
 					}
 				}(ctx)
 			}
@@ -1362,7 +1408,6 @@ func (s *Server) handleGridOutageNotifications(
 			user, err := s.storage.GetUser(ctx, userID)
 			if err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to get user for grid restored notification",
-					slog.String("siteID", site.ID),
 					slog.String("userID", userID),
 					slog.Any("error", err),
 				)
@@ -1374,7 +1419,7 @@ func (s *Server) handleGridOutageNotifications(
 				metadata := map[string]string{
 					"currentSOC": fmt.Sprintf("%.1f", status.BatterySOC),
 				}
-				s.dispatchPushToUser(ctx, site.ID, user, types.NotificationTypeGridRestored, "", title, body, "/#dashboard", metadata)
+				s.dispatchPushToUser(ctx, site.ID, user, types.NotificationTypeGridRestored, "", title, body, "/dashboard", metadata)
 			}
 		}
 	}
@@ -1461,7 +1506,6 @@ func (s *Server) handlePriceSpikeNotifications(
 	histPrices, err := s.storage.GetPriceHistory(ctx, site.ID, startHist, endHist)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get price history for price spike notification",
-			slog.String("siteID", site.ID),
 			slog.Any("error", err),
 		)
 		return
@@ -1542,6 +1586,18 @@ func (s *Server) handlePriceSpikeNotifications(
 
 		// If neither the active current price nor the next upcoming hour qualifies as a spike, skip.
 		if !isCurrentSpike && !isFutureSpike {
+			log.Ctx(ctx).DebugContext(ctx, "skipping price spike notification: price does not qualify as spike",
+				slog.String("userID", su.userID),
+				slog.String("sensitivity", su.sensitivity),
+				slog.Float64("currentCost", currentCost),
+				slog.Float64("nextPriceCost", nextPriceCost),
+				slog.Float64("floor", priceSpikeAbsoluteFloorDollarsPerKWH),
+				slog.Float64("pctVal", pctVal),
+				slog.Float64("refPriceCurrent", refPriceCurrent),
+				slog.Float64("refPriceNext", refPriceNext),
+				slog.Float64("minDelta", minDelta),
+				slog.Bool("useTimeOfDayRelative", useTimeOfDayRelative),
+			)
 			continue
 		}
 
@@ -1639,22 +1695,38 @@ func (s *Server) handlePriceSpikeNotifications(
 			if lastLog != nil {
 				timeSince := s.now().Sub(lastLog.TSCreated)
 				if timeSince < 1*time.Hour {
+					log.Ctx(ctx).DebugContext(ctx, "skipping price spike notification: within 1-hour lockout cooldown",
+						slog.String("userID", su.userID),
+						slog.Duration("timeSinceLastAlert", timeSince),
+						slog.Time("lastAlertTime", lastLog.TSCreated),
+						slog.Float64("activeSpikeCost", activeSpikeCost),
+						slog.Float64("maxSpikeCost", maxSpikeCost),
+					)
 					continue
 				}
 
 				prevPeakCost := extractHighestAlertedPrice(lastLog)
+				escalatedPctVal := computePricePercentile(rawCosts, escalatedPercentile)
+				checkCost := activeSpikeCost
+				if maxSpikeCost > checkCost {
+					checkCost = maxSpikeCost
+				}
 				var isSignificantSurge bool
 				if prevPeakCost > 0 {
-					escalatedPctVal := computePricePercentile(rawCosts, escalatedPercentile)
-					checkCost := activeSpikeCost
-					if maxSpikeCost > checkCost {
-						checkCost = maxSpikeCost
-					}
 					isSignificantSurge = (checkCost >= prevPeakCost*priceSpikeSignificantMultiplier) && (checkCost >= escalatedPctVal)
 				}
 
 				if timeSince < 6*time.Hour {
 					if !isSignificantSurge {
+						log.Ctx(ctx).DebugContext(ctx, "skipping price spike notification: price surge not significant since last alert (1-6h window)",
+							slog.String("userID", su.userID),
+							slog.Duration("timeSinceLastAlert", timeSince),
+							slog.Time("lastAlertTime", lastLog.TSCreated),
+							slog.Float64("prevPeakCost", prevPeakCost),
+							slog.Float64("checkCost", checkCost),
+							slog.Float64("requiredCost", prevPeakCost*priceSpikeSignificantMultiplier),
+							slog.Float64("escalatedPctVal", escalatedPctVal),
+						)
 						continue
 					}
 				} else if timeSince < 24*time.Hour {
@@ -1669,6 +1741,14 @@ func (s *Server) handlePriceSpikeNotifications(
 						siteLoc,
 					)
 					if !droppedBelow && !isSignificantSurge {
+						log.Ctx(ctx).DebugContext(ctx, "skipping price spike notification: price did not drop below threshold between alerts and not significant surge (6-24h window)",
+							slog.String("userID", su.userID),
+							slog.Duration("timeSinceLastAlert", timeSince),
+							slog.Time("lastAlertTime", lastLog.TSCreated),
+							slog.Float64("prevPeakCost", prevPeakCost),
+							slog.Float64("checkCost", checkCost),
+							slog.Bool("droppedBelow", droppedBelow),
+						)
 						continue
 					}
 				}
@@ -1678,7 +1758,6 @@ func (s *Server) handlePriceSpikeNotifications(
 		user, err := s.storage.GetUser(ctx, su.userID)
 		if err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to get user for price spike notification",
-				slog.String("siteID", site.ID),
 				slog.String("userID", su.userID),
 				slog.Any("error", err),
 			)
@@ -1802,6 +1881,18 @@ func (s *Server) handlePriceSpikeNotifications(
 		}
 
 		body := fmt.Sprintf("%s %s", firstSentence, secondSentence)
+		log.Ctx(ctx).DebugContext(ctx, "sending price spike notification",
+			slog.String("userID", user.ID),
+			slog.String("sensitivity", su.sensitivity),
+			slog.Float64("activeSpikeCost", activeSpikeCost),
+			slog.Float64("maxSpikeCost", maxSpikeCost),
+			slog.Float64("refPrice", refPrice),
+			slog.Time("spikeStart", spikeStart),
+			slog.Time("spikeEnd", spikeEnd),
+			slog.Float64("currentSOC", currentSOC),
+			slog.String("title", title),
+			slog.String("body", body),
+		)
 		s.dispatchPushToUser(ctx, site.ID, user, types.NotificationTypePriceSpike, su.sensitivity, title, body, "/forecast", metadata)
 	}
 }
@@ -1834,18 +1925,35 @@ func (s *Server) handleSolarUnderproductionNotifications(
 		}
 	}
 	// Restrict evaluation to peak solar hours (11 AM to 3 PM) and suppress during active storms or alarms
-	if !hasAnySolarUser || nowLocal.Hour() < 11 || nowLocal.Hour() > 15 || len(data.status.Storms) > 0 || len(data.status.Alarms) > 0 {
+	if !hasAnySolarUser {
+		return
+	}
+	if nowLocal.Hour() < 11 || nowLocal.Hour() > 15 {
+		log.Ctx(ctx).DebugContext(ctx, "skipping solar underproduction check: outside peak solar hours (11am-3pm)",
+			slog.Int("hour", nowLocal.Hour()),
+		)
+		return
+	}
+	if len(data.status.Storms) > 0 || len(data.status.Alarms) > 0 {
+		log.Ctx(ctx).DebugContext(ctx, "skipping solar underproduction check: active storms or alarms present",
+			slog.Int("storms", len(data.status.Storms)),
+			slog.Int("alarms", len(data.status.Alarms)),
+		)
 		return
 	}
 
 	// Check whether recent weather forecasts indicate heavy cloud cover for this hour
 	isOvercast := false
+	var overcastCloudCover float64
+	var forecastHourStart time.Time
 	for _, w := range data.weatherHistory {
 		for _, hw := range w.ForecastHours {
 			hwLocal := hw.TSHourStart.In(nowLocal.Location())
 			if hwLocal.Year() == nowLocal.Year() && hwLocal.Month() == nowLocal.Month() && hwLocal.Day() == nowLocal.Day() && hwLocal.Hour() == nowLocal.Hour() {
 				if hw.CloudCoverPercent >= solarUnderproductionMaxCloudCoverPercent {
 					isOvercast = true
+					overcastCloudCover = hw.CloudCoverPercent
+					forecastHourStart = hw.TSHourStart
 				}
 				break
 			}
@@ -1855,6 +1963,11 @@ func (s *Server) handleSolarUnderproductionNotifications(
 		}
 	}
 	if isOvercast {
+		log.Ctx(ctx).DebugContext(ctx, "skipping solar underproduction check: overcast weather forecast",
+			slog.Float64("cloudCoverPercent", overcastCloudCover),
+			slog.Float64("maxCloudCoverPercent", solarUnderproductionMaxCloudCoverPercent),
+			slog.Time("forecastHour", forecastHourStart),
+		)
 		return
 	}
 
@@ -1871,6 +1984,10 @@ func (s *Server) handleSolarUnderproductionNotifications(
 
 	// Skip if the forecast for this hour was negligible (< 3.0 kW)
 	if forecastKW < solarUnderproductionMinForecastKW {
+		log.Ctx(ctx).DebugContext(ctx, "skipping solar underproduction check: forecasted solar too low",
+			slog.Float64("forecastKW", forecastKW),
+			slog.Float64("minForecastKW", solarUnderproductionMinForecastKW),
+		)
 		return
 	}
 
@@ -1893,21 +2010,44 @@ func (s *Server) handleSolarUnderproductionNotifications(
 		}
 
 		// Check if actual generation is below the sensitivity ratio AND meets the minimum kW deficit
-		if actualKW < ratio*forecastKW && (forecastKW-actualKW) >= solarUnderproductionMinDeficitKW {
-			if getNotifState != nil && getNotifState().hasSentToday(userID, types.NotificationTypeSolarUnderproduction, todayDateStr, nowLocal.Location()) {
-				continue
+		if actualKW >= ratio*forecastKW || (forecastKW-actualKW) < solarUnderproductionMinDeficitKW {
+			log.Ctx(ctx).DebugContext(ctx, "skipping solar underproduction notification: actual generation within tolerance",
+				slog.String("userID", userID),
+				slog.String("sensitivity", notifConfig.SolarUnderproductionAlert),
+				slog.Float64("actualKW", actualKW),
+				slog.Float64("forecastKW", forecastKW),
+				slog.Float64("ratioThreshold", ratio),
+				slog.Float64("minDeficitKW", solarUnderproductionMinDeficitKW),
+			)
+			continue
+		}
+
+		if getNotifState != nil && getNotifState().hasSentToday(userID, types.NotificationTypeSolarUnderproduction, todayDateStr, nowLocal.Location()) {
+			log.Ctx(ctx).DebugContext(ctx, "skipping solar underproduction notification: already sent today",
+				slog.String("userID", userID),
+				slog.String("date", todayDateStr),
+			)
+			continue
+		}
+		user, err := s.storage.GetUser(ctx, userID)
+		if err == nil && len(user.Subscriptions) > 0 {
+			title := "⚠️ Solar Underproduction Alert"
+			body := fmt.Sprintf("Solar panels are generating %.1f kW, significantly below the %.1f kW forecast for this hour. Check your solar inverter or breakers.", actualKW, forecastKW)
+			metadata := map[string]string{
+				"currentSolarKW":  fmt.Sprintf("%.2f", actualKW),
+				"forecastSolarKW": fmt.Sprintf("%.2f", forecastKW),
+				"deficitKW":       fmt.Sprintf("%.2f", forecastKW-actualKW),
 			}
-			user, err := s.storage.GetUser(ctx, userID)
-			if err == nil && len(user.Subscriptions) > 0 {
-				title := "⚠️ Solar Underproduction Alert"
-				body := fmt.Sprintf("Solar panels are generating %.1f kW, significantly below the %.1f kW forecast for this hour. Check your solar inverter or breakers.", actualKW, forecastKW)
-				metadata := map[string]string{
-					"currentSolarKW":  fmt.Sprintf("%.2f", actualKW),
-					"forecastSolarKW": fmt.Sprintf("%.2f", forecastKW),
-					"deficitKW":       fmt.Sprintf("%.2f", forecastKW-actualKW),
-				}
-				s.dispatchPushToUser(ctx, site.ID, user, types.NotificationTypeSolarUnderproduction, notifConfig.SolarUnderproductionAlert, title, body, "/dashboard", metadata)
-			}
+			log.Ctx(ctx).DebugContext(ctx, "sending solar underproduction notification",
+				slog.String("userID", userID),
+				slog.String("sensitivity", notifConfig.SolarUnderproductionAlert),
+				slog.Float64("actualKW", actualKW),
+				slog.Float64("forecastKW", forecastKW),
+				slog.Float64("deficitKW", forecastKW-actualKW),
+				slog.String("title", title),
+				slog.String("body", body),
+			)
+			s.dispatchPushToUser(ctx, site.ID, user, types.NotificationTypeSolarUnderproduction, notifConfig.SolarUnderproductionAlert, title, body, "/dashboard", metadata)
 		}
 	}
 }
@@ -1963,6 +2103,9 @@ func (s *Server) handleVPPDispatchNotifications(
 		}
 	}
 	if isPlanned {
+		log.Ctx(ctx).DebugContext(ctx, "skipping vpp dispatch notification: event was scheduled",
+			slog.Time("nowLocal", nowLocal),
+		)
 		return
 	}
 
@@ -1971,6 +2114,10 @@ func (s *Server) handleVPPDispatchNotifications(
 			continue
 		}
 		if getNotifState != nil && getNotifState().hasSentWithin(userID, types.NotificationTypeVPPDispatch, vppDispatchDeduplicationWindow, s.now()) {
+			log.Ctx(ctx).DebugContext(ctx, "skipping vpp dispatch notification: within deduplication window",
+				slog.String("userID", userID),
+				slog.Duration("window", vppDispatchDeduplicationWindow),
+			)
 			continue
 		}
 		user, err := s.storage.GetUser(ctx, userID)
@@ -1984,6 +2131,13 @@ func (s *Server) handleVPPDispatchNotifications(
 				"currentSOC": fmt.Sprintf("%.1f", status.BatterySOC),
 				"batteryKW":  fmt.Sprintf("%.2f", status.BatteryKW),
 			}
+			log.Ctx(ctx).DebugContext(ctx, "sending vpp dispatch notification",
+				slog.String("userID", userID),
+				slog.Float64("batterySOC", status.BatterySOC),
+				slog.Float64("batteryKW", status.BatteryKW),
+				slog.String("title", title),
+				slog.String("body", body),
+			)
 			s.dispatchPushToUser(ctx, site.ID, user, types.NotificationTypeVPPDispatch, "", title, body, "/dashboard", metadata)
 		}
 	}
@@ -2071,6 +2225,11 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 				slog.String("userID", userID),
 				slog.Int("statusCode", code),
 				slog.Any("error", err),
+			)
+		} else {
+			log.Ctx(ctx).InfoContext(ctx, "sent test welcome push notification",
+				slog.String("userID", userID),
+				slog.Int("statusCode", code),
 			)
 		}
 	}
