@@ -6,6 +6,7 @@ import Header from './components/Header';
 import Footer from './components/Footer';
 import FeedbackWidget from './components/FeedbackWidget';
 import { TutorialDialog } from './components/TutorialDialog';
+import { NotificationModal } from './components/NotificationModal';
 import './App.css';
 import { fetchAuthStatus, login, logout, fetchSettings, type AuthStatus, type UserSite, type Settings as SettingsType } from './api';
 import LandingPage from './pages/LandingPage';
@@ -102,6 +103,8 @@ function AppContent() {
     const [settings, setSettings] = useState<SettingsType | null>(null);
     const [settingsSiteID, setSettingsSiteID] = useState<string>("");
     const [showTutorial, setShowTutorial] = useState(false);
+    const [isNotificationModalOpen, setIsNotificationModalOpen] = useState(false);
+    const [currentUserID, setCurrentUserID] = useState<string>("");
 
     const [location, navigate] = useLocationWithViewSite();
     const isHome = location === '/';
@@ -182,6 +185,7 @@ function AppContent() {
         setAuthRequired(status.authRequired);
         setLoggedIn(status.loggedIn);
         setClientIDs(status.clientIDs || {});
+        setCurrentUserID(status.userID || "");
 
         const newSites = status.sites || [];
         setSites(newSites);
@@ -189,6 +193,7 @@ function AppContent() {
         if (!status.loggedIn) {
             setSettings(null);
             setSettingsSiteID("");
+            setCurrentUserID("");
         }
 
         // Default select first site if not selected or invalid
@@ -351,7 +356,8 @@ function AppContent() {
                     selectedSiteID={effectiveSiteID}
                     onSiteChange={handleSiteChange}
                     onLogout={handleLogout}
-                    hasNotifications={settings?.hasNotifications}
+                    hasNotifications={Boolean(settings?.notifications && Object.keys(settings.notifications).length > 0)}
+                    onOpenNotifications={() => setIsNotificationModalOpen(true)}
                 />
 
                 <main className="main-content">
@@ -456,6 +462,18 @@ function AppContent() {
 
                 {loggedIn && (
                     <FeedbackWidget siteID={effectiveSiteID} />
+                )}
+
+                {loggedIn && (
+                    <NotificationModal
+                        open={isNotificationModalOpen}
+                        onClose={() => setIsNotificationModalOpen(false)}
+                        siteID={effectiveSiteID}
+                        siteName={effectiveSites.find(s => s.id === effectiveSiteID)?.name || effectiveSiteID}
+                        settings={settings}
+                        currentUserID={currentUserID}
+                        onSaved={handleSettingsSaved}
+                    />
                 )}
 
                 <TutorialDialog open={showTutorial} onClose={() => setShowTutorial(false)} settings={settings} />

@@ -12,10 +12,9 @@ const (
 
 // Site represents a household or location that has a battery and solar panels.
 type Site struct {
-	ID            string                              `json:"id"`
-	InviteCode    string                              `json:"inviteCode"`
-	Permissions   []SitePermissions                   `json:"permissions"`
-	Notifications map[string]UserNotificationSettings `json:"notifications,omitempty"`
+	ID          string            `json:"id"`
+	InviteCode  string            `json:"inviteCode"`
+	Permissions []SitePermissions `json:"permissions"`
 }
 
 // SitePermissions represents the permissions for a user on a site.
@@ -342,10 +341,21 @@ type UserNotificationSettings struct {
 	EveningSummaryHour    int    `json:"eveningSummaryHour"`
 	EveningSummaryFlavor  string `json:"eveningSummaryFlavor"`
 
-	GridOutageAlert           bool   `json:"gridOutageAlert"`
-	PriceSpikeAlert           string `json:"priceSpikeAlert,omitempty"`           // "", "low", "medium", "high"
-	SolarUnderproductionAlert string `json:"solarUnderproductionAlert,omitempty"` // "", "low", "medium", "high"
-	VPPDispatchAlert          bool   `json:"vppDispatchAlert"`
+	GridOutageAlert           bool         `json:"gridOutageAlert"`
+	PriceSpikeAlert           string       `json:"priceSpikeAlert,omitempty"`           // "", "low", "medium", "high"
+	SolarUnderproductionAlert string       `json:"solarUnderproductionAlert,omitempty"` // "", "low", "medium", "high"
+	VPPDispatchAlert          bool         `json:"vppDispatchAlert"`
+	QuietPeriods              []TimePeriod `json:"quietPeriods,omitempty"`
+}
+
+// IsInQuietPeriod returns true if any period in QuietPeriods contains the given time t.
+func (s UserNotificationSettings) IsInQuietPeriod(t time.Time) bool {
+	for i := range s.QuietPeriods {
+		if contains, _, _ := s.QuietPeriods[i].Contains(t); contains {
+			return true
+		}
+	}
+	return false
 }
 
 // NotificationLog records a sent push notification for debugging and click analysis.
@@ -358,6 +368,7 @@ type NotificationLog struct {
 	Title      string            `json:"title"`
 	Body       string            `json:"body"`
 	Success    bool              `json:"success"`
+	Muted      bool              `json:"muted,omitempty"`
 	StatusCode int               `json:"statusCode"`
 	Error      string            `json:"error,omitempty"`
 	Clicked    bool              `json:"clicked,omitempty"`

@@ -8,7 +8,9 @@ vi.mock('../api');
 describe('NotificationModal', () => {
     const mockSiteID = 'test-site-123';
     const mockSiteName = 'Home Battery';
+    const mockUserID = 'test-user-123';
     const mockOnClose = vi.fn();
+    const mockOnSaved = vi.fn();
 
     let mockPushSubscription: any;
     let mockPushManager: any;
@@ -57,21 +59,9 @@ describe('NotificationModal', () => {
             requestPermission: vi.fn().mockResolvedValue('granted'),
         };
 
-        (api.fetchNotificationSettings as any).mockResolvedValue({
-            settings: {
-                morningSummaryEnabled: false,
-                morningSummaryHour: 7,
-                morningSummaryFlavor: 'home_planner',
-                eveningSummaryEnabled: false,
-                eveningSummaryHour: 20,
-                eveningSummaryFlavor: 'home_planner',
-                gridOutageAlert: false,
-                priceSpikeAlert: '',
-                solarUnderproductionAlert: '',
-                vppDispatchAlert: false,
-            },
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
             subscriptions: [],
-            vapidEnabled: true,
+            notificationsEnabled: true,
         });
 
         (api.fetchVAPIDPublicKey as any).mockResolvedValue(new ArrayBuffer(65));
@@ -87,6 +77,7 @@ describe('NotificationModal', () => {
                 onClose={mockOnClose}
                 siteID={mockSiteID}
                 siteName={mockSiteName}
+                currentUserID={mockUserID}
             />
         );
 
@@ -103,10 +94,9 @@ describe('NotificationModal', () => {
     });
 
     it('displays warning banner when VAPID is not configured on server', async () => {
-        (api.fetchNotificationSettings as any).mockResolvedValue({
-            settings: {},
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
             subscriptions: [],
-            vapidEnabled: false,
+            notificationsEnabled: false,
         });
 
         render(
@@ -115,6 +105,7 @@ describe('NotificationModal', () => {
                 onClose={mockOnClose}
                 siteID={mockSiteID}
                 siteName={mockSiteName}
+                currentUserID={mockUserID}
             />
         );
 
@@ -130,6 +121,7 @@ describe('NotificationModal', () => {
                 onClose={mockOnClose}
                 siteID={mockSiteID}
                 siteName={mockSiteName}
+                currentUserID={mockUserID}
             />
         );
 
@@ -152,19 +144,7 @@ describe('NotificationModal', () => {
     });
 
     it('shows multi-device clarity banner and alert options when a device is connected', async () => {
-        (api.fetchNotificationSettings as any).mockResolvedValue({
-            settings: {
-                morningSummaryEnabled: true,
-                morningSummaryHour: 8,
-                morningSummaryFlavor: 'home_planner',
-                eveningSummaryEnabled: true,
-                eveningSummaryHour: 21,
-                eveningSummaryFlavor: 'metrics_heavy',
-                gridOutageAlert: true,
-                priceSpikeAlert: 'medium',
-                solarUnderproductionAlert: 'low',
-                vppDispatchAlert: false,
-            },
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
             subscriptions: [
                 {
                     id: 'sub-iphone',
@@ -174,8 +154,25 @@ describe('NotificationModal', () => {
                     tsCreated: '2026-09-02T08:00:00Z',
                 },
             ],
-            vapidEnabled: true,
+            notificationsEnabled: true,
         });
+
+        const mockSettings = {
+            notifications: {
+                [mockUserID]: {
+                    morningSummaryEnabled: true,
+                    morningSummaryHour: 8,
+                    morningSummaryFlavor: 'home_planner',
+                    eveningSummaryEnabled: true,
+                    eveningSummaryHour: 21,
+                    eveningSummaryFlavor: 'metrics_heavy',
+                    gridOutageAlert: true,
+                    priceSpikeAlert: 'medium',
+                    solarUnderproductionAlert: 'low',
+                    vppDispatchAlert: false,
+                },
+            },
+        } as any;
 
         render(
             <NotificationModal
@@ -183,6 +180,8 @@ describe('NotificationModal', () => {
                 onClose={mockOnClose}
                 siteID={mockSiteID}
                 siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID={mockUserID}
             />
         );
 
@@ -202,13 +201,7 @@ describe('NotificationModal', () => {
     });
 
     it('stages settings locally without calling updateNotificationSettings on toggle', async () => {
-        (api.fetchNotificationSettings as any).mockResolvedValue({
-            settings: {
-                morningSummaryEnabled: false,
-                morningSummaryHour: 7,
-                morningSummaryFlavor: 'metrics_heavy',
-                gridOutageAlert: false,
-            },
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
             subscriptions: [
                 {
                     id: 'sub-iphone',
@@ -217,8 +210,19 @@ describe('NotificationModal', () => {
                     userAgent: 'iPhone',
                 },
             ],
-            vapidEnabled: true,
+            notificationsEnabled: true,
         });
+
+        const mockSettings = {
+            notifications: {
+                [mockUserID]: {
+                    morningSummaryEnabled: false,
+                    morningSummaryHour: 7,
+                    morningSummaryFlavor: 'metrics_heavy',
+                    gridOutageAlert: false,
+                },
+            },
+        } as any;
 
         render(
             <NotificationModal
@@ -226,6 +230,8 @@ describe('NotificationModal', () => {
                 onClose={mockOnClose}
                 siteID={mockSiteID}
                 siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID={mockUserID}
             />
         );
 
@@ -244,13 +250,7 @@ describe('NotificationModal', () => {
     });
 
     it('saves staged preferences and closes modal when Save Preferences is clicked', async () => {
-        (api.fetchNotificationSettings as any).mockResolvedValue({
-            settings: {
-                morningSummaryEnabled: false,
-                morningSummaryHour: 7,
-                morningSummaryFlavor: 'metrics_heavy',
-                gridOutageAlert: false,
-            },
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
             subscriptions: [
                 {
                     id: 'sub-iphone',
@@ -259,8 +259,19 @@ describe('NotificationModal', () => {
                     userAgent: 'iPhone',
                 },
             ],
-            vapidEnabled: true,
+            notificationsEnabled: true,
         });
+
+        const mockSettings = {
+            notifications: {
+                [mockUserID]: {
+                    morningSummaryEnabled: false,
+                    morningSummaryHour: 7,
+                    morningSummaryFlavor: 'metrics_heavy',
+                    gridOutageAlert: false,
+                },
+            },
+        } as any;
 
         render(
             <NotificationModal
@@ -268,6 +279,9 @@ describe('NotificationModal', () => {
                 onClose={mockOnClose}
                 siteID={mockSiteID}
                 siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID={mockUserID}
+                onSaved={mockOnSaved}
             />
         );
 
@@ -289,17 +303,13 @@ describe('NotificationModal', () => {
                     gridOutageAlert: true,
                 })
             );
+            expect(mockOnSaved).toHaveBeenCalled();
             expect(mockOnClose).toHaveBeenCalled();
         });
     });
 
     it('discards staged changes and closes without saving when Cancel is clicked', async () => {
-        (api.fetchNotificationSettings as any).mockResolvedValue({
-            settings: {
-                morningSummaryEnabled: false,
-                morningSummaryHour: 7,
-                morningSummaryFlavor: 'metrics_heavy',
-            },
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
             subscriptions: [
                 {
                     id: 'sub-iphone',
@@ -308,8 +318,18 @@ describe('NotificationModal', () => {
                     userAgent: 'iPhone',
                 },
             ],
-            vapidEnabled: true,
+            notificationsEnabled: true,
         });
+
+        const mockSettings = {
+            notifications: {
+                [mockUserID]: {
+                    morningSummaryEnabled: false,
+                    morningSummaryHour: 7,
+                    morningSummaryFlavor: 'metrics_heavy',
+                },
+            },
+        } as any;
 
         render(
             <NotificationModal
@@ -317,6 +337,8 @@ describe('NotificationModal', () => {
                 onClose={mockOnClose}
                 siteID={mockSiteID}
                 siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID={mockUserID}
             />
         );
 
@@ -336,8 +358,7 @@ describe('NotificationModal', () => {
     it('allows sending a test push notification when subscribed locally', async () => {
         mockPushManager.getSubscription.mockResolvedValue(mockPushSubscription);
 
-        (api.fetchNotificationSettings as any).mockResolvedValue({
-            settings: {},
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
             subscriptions: [
                 {
                     id: 'sub-local',
@@ -346,7 +367,7 @@ describe('NotificationModal', () => {
                     userAgent: 'Chrome',
                 },
             ],
-            vapidEnabled: true,
+            notificationsEnabled: true,
         });
 
         render(
@@ -355,6 +376,7 @@ describe('NotificationModal', () => {
                 onClose={mockOnClose}
                 siteID={mockSiteID}
                 siteName={mockSiteName}
+                currentUserID={mockUserID}
             />
         );
 
@@ -376,8 +398,7 @@ describe('NotificationModal', () => {
     });
 
     it('allows removing an active device from subscriptions list', async () => {
-        (api.fetchNotificationSettings as any).mockResolvedValue({
-            settings: {},
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
             subscriptions: [
                 {
                     id: 'sub-1',
@@ -386,7 +407,7 @@ describe('NotificationModal', () => {
                     userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)',
                 },
             ],
-            vapidEnabled: true,
+            notificationsEnabled: true,
         });
 
         render(
@@ -395,6 +416,7 @@ describe('NotificationModal', () => {
                 onClose={mockOnClose}
                 siteID={mockSiteID}
                 siteName={mockSiteName}
+                currentUserID={mockUserID}
             />
         );
 
@@ -411,15 +433,7 @@ describe('NotificationModal', () => {
     });
 
     it('renders side-by-side Delivery Time and Summary Flavor selects when morning summary is enabled', async () => {
-        (api.fetchNotificationSettings as any).mockResolvedValue({
-            settings: {
-                morningSummaryEnabled: true,
-                morningSummaryHour: 7,
-                morningSummaryFlavor: 'metrics_heavy',
-                eveningSummaryEnabled: true,
-                eveningSummaryHour: 20,
-                eveningSummaryFlavor: 'executive',
-            },
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
             subscriptions: [
                 {
                     id: 'sub-1',
@@ -428,8 +442,21 @@ describe('NotificationModal', () => {
                     userAgent: 'Chrome on Mac',
                 },
             ],
-            vapidEnabled: true,
+            notificationsEnabled: true,
         });
+
+        const mockSettings = {
+            notifications: {
+                [mockUserID]: {
+                    morningSummaryEnabled: true,
+                    morningSummaryHour: 7,
+                    morningSummaryFlavor: 'metrics_heavy',
+                    eveningSummaryEnabled: true,
+                    eveningSummaryHour: 20,
+                    eveningSummaryFlavor: 'executive',
+                },
+            },
+        } as any;
 
         render(
             <NotificationModal
@@ -437,6 +464,8 @@ describe('NotificationModal', () => {
                 onClose={mockOnClose}
                 siteID={mockSiteID}
                 siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID={mockUserID}
             />
         );
 
@@ -454,9 +483,8 @@ describe('NotificationModal', () => {
     it('unsubscribes local browser, turns off switch, and hides alert options when current device is removed', async () => {
         mockPushManager.getSubscription.mockResolvedValue(mockPushSubscription);
 
-        (api.fetchNotificationSettings as any)
+        (api.fetchNotificationSubscriptions as any)
             .mockResolvedValueOnce({
-                settings: { morningSummaryEnabled: true },
                 subscriptions: [
                     {
                         id: 'sub-local',
@@ -465,13 +493,20 @@ describe('NotificationModal', () => {
                         userAgent: 'Chrome on Windows',
                     },
                 ],
-                vapidEnabled: true,
+                notificationsEnabled: true,
             })
             .mockResolvedValueOnce({
-                settings: { morningSummaryEnabled: true },
                 subscriptions: [],
-                vapidEnabled: true,
+                notificationsEnabled: true,
             });
+
+        const mockSettings = {
+            notifications: {
+                [mockUserID]: {
+                    morningSummaryEnabled: true,
+                },
+            },
+        } as any;
 
         render(
             <NotificationModal
@@ -479,6 +514,8 @@ describe('NotificationModal', () => {
                 onClose={mockOnClose}
                 siteID={mockSiteID}
                 siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID={mockUserID}
             />
         );
 
@@ -507,16 +544,8 @@ describe('NotificationModal', () => {
     it('saves preferences with valid defaults after removing the last browser without enabling this browser', async () => {
         mockPushManager.getSubscription.mockResolvedValue(null);
 
-        (api.fetchNotificationSettings as any)
+        (api.fetchNotificationSubscriptions as any)
             .mockResolvedValueOnce({
-                settings: {
-                    morningSummaryEnabled: false,
-                    morningSummaryHour: 0,
-                    morningSummaryFlavor: '',
-                    eveningSummaryEnabled: false,
-                    eveningSummaryHour: 0,
-                    eveningSummaryFlavor: '',
-                },
                 subscriptions: [
                     {
                         id: 'sub-remote',
@@ -525,17 +554,25 @@ describe('NotificationModal', () => {
                         userAgent: 'Safari on iPhone',
                     },
                 ],
-                vapidEnabled: true,
+                notificationsEnabled: true,
             })
             .mockResolvedValueOnce({
-                settings: {
+                subscriptions: [],
+                notificationsEnabled: true,
+            });
+
+        const mockSettings = {
+            notifications: {
+                [mockUserID]: {
                     morningSummaryEnabled: false,
                     morningSummaryHour: 0,
                     morningSummaryFlavor: '',
+                    eveningSummaryEnabled: false,
+                    eveningSummaryHour: 0,
+                    eveningSummaryFlavor: '',
                 },
-                subscriptions: [],
-                vapidEnabled: true,
-            });
+            },
+        } as any;
 
         render(
             <NotificationModal
@@ -543,6 +580,8 @@ describe('NotificationModal', () => {
                 onClose={mockOnClose}
                 siteID={mockSiteID}
                 siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID={mockUserID}
             />
         );
 
@@ -594,18 +633,23 @@ describe('NotificationModal', () => {
         }));
         Object.defineProperty(navigator, 'standalone', { value: false, configurable: true });
 
-        (api.fetchNotificationSettings as any).mockResolvedValue({
-            settings: {
-                morningSummaryEnabled: false,
-                morningSummaryHour: 7,
-                morningSummaryFlavor: 'home_planner',
-                eveningSummaryEnabled: false,
-                eveningSummaryHour: 20,
-                eveningSummaryFlavor: 'home_planner',
-            },
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
             subscriptions: [],
-            vapidEnabled: true,
+            notificationsEnabled: true,
         });
+
+        const mockSettings = {
+            notifications: {
+                [mockUserID]: {
+                    morningSummaryEnabled: false,
+                    morningSummaryHour: 7,
+                    morningSummaryFlavor: 'home_planner',
+                    eveningSummaryEnabled: false,
+                    eveningSummaryHour: 20,
+                    eveningSummaryFlavor: 'home_planner',
+                },
+            },
+        } as any;
 
         render(
             <NotificationModal
@@ -613,6 +657,8 @@ describe('NotificationModal', () => {
                 onClose={mockOnClose}
                 siteID={mockSiteID}
                 siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID={mockUserID}
             />
         );
 
@@ -648,18 +694,23 @@ describe('NotificationModal', () => {
         }));
         Object.defineProperty(navigator, 'standalone', { value: true, configurable: true });
 
-        (api.fetchNotificationSettings as any).mockResolvedValue({
-            settings: {
-                morningSummaryEnabled: false,
-                morningSummaryHour: 7,
-                morningSummaryFlavor: 'home_planner',
-                eveningSummaryEnabled: false,
-                eveningSummaryHour: 20,
-                eveningSummaryFlavor: 'home_planner',
-            },
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
             subscriptions: [],
-            vapidEnabled: true,
+            notificationsEnabled: true,
         });
+
+        const mockSettings = {
+            notifications: {
+                [mockUserID]: {
+                    morningSummaryEnabled: false,
+                    morningSummaryHour: 7,
+                    morningSummaryFlavor: 'home_planner',
+                    eveningSummaryEnabled: false,
+                    eveningSummaryHour: 20,
+                    eveningSummaryFlavor: 'home_planner',
+                },
+            },
+        } as any;
 
         render(
             <NotificationModal
@@ -667,6 +718,8 @@ describe('NotificationModal', () => {
                 onClose={mockOnClose}
                 siteID={mockSiteID}
                 siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID={mockUserID}
             />
         );
 
@@ -679,10 +732,9 @@ describe('NotificationModal', () => {
     it('shows warning banner and hides toggle when push notifications are unsupported in browser', async () => {
         delete (window as any).PushManager;
 
-        (api.fetchNotificationSettings as any).mockResolvedValue({
-            settings: {},
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
             subscriptions: [],
-            vapidEnabled: true,
+            notificationsEnabled: true,
         });
 
         render(
@@ -691,6 +743,7 @@ describe('NotificationModal', () => {
                 onClose={mockOnClose}
                 siteID={mockSiteID}
                 siteName={mockSiteName}
+                currentUserID={mockUserID}
             />
         );
 
@@ -706,10 +759,9 @@ describe('NotificationModal', () => {
         vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)');
         delete (navigator as any).serviceWorker;
 
-        (api.fetchNotificationSettings as any).mockResolvedValue({
-            settings: {},
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
             subscriptions: [],
-            vapidEnabled: true,
+            notificationsEnabled: true,
         });
 
         render(
@@ -718,6 +770,7 @@ describe('NotificationModal', () => {
                 onClose={mockOnClose}
                 siteID={mockSiteID}
                 siteName={mockSiteName}
+                currentUserID={mockUserID}
             />
         );
 
@@ -726,5 +779,119 @@ describe('NotificationModal', () => {
             expect(screen.queryByText('iOS Safari Push Setup')).not.toBeInTheDocument();
             expect(screen.queryByText(/Deliver notifications to this browser/i)).not.toBeInTheDocument();
         });
+    });
+
+    it('toggles quiet period on and off, staging quietPeriods in settings', async () => {
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
+            subscriptions: [
+                {
+                    id: 'sub-iphone',
+                    endpoint: 'https://fcm.googleapis.com/fcm/send/sub-iphone',
+                    keys: { p256dh: 'k1', auth: 'a1' },
+                    userAgent: 'iPhone',
+                },
+            ],
+            notificationsEnabled: true,
+        });
+
+        const mockSettings = {
+            notifications: {
+                [mockUserID]: {
+                    morningSummaryEnabled: false,
+                    morningSummaryHour: 7,
+                    morningSummaryFlavor: 'home_planner',
+                    quietPeriods: [],
+                },
+            },
+        } as any;
+
+        render(
+            <NotificationModal
+                open={true}
+                onClose={mockOnClose}
+                siteID={mockSiteID}
+                siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID={mockUserID}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.getByRole('switch', { name: /Mute Alerts During Quiet Hours/i })).toBeInTheDocument();
+        });
+
+        // Initially quiet hours inputs are not shown
+        expect(screen.queryByLabelText('Quiet Period Start Time')).not.toBeInTheDocument();
+
+        // Toggle Quiet Hours ON
+        fireEvent.click(screen.getByRole('switch', { name: /Mute Alerts During Quiet Hours/i }));
+
+        // Now start and end times should appear with default 10 PM to 7 AM
+        expect(screen.getByLabelText('Quiet Period Start Time')).toBeInTheDocument();
+        expect(screen.getByLabelText('Quiet Period End Time')).toBeInTheDocument();
+        expect(screen.getByText(/Alert-style notifications.*will be suppressed from 10 PM to 7 AM/i)).toBeInTheDocument();
+
+        // Save Preferences
+        fireEvent.click(screen.getByRole('button', { name: /Save Preferences/i }));
+
+        await waitFor(() => {
+            expect(api.updateNotificationSettings).toHaveBeenCalledWith(
+                mockSiteID,
+                expect.objectContaining({
+                    quietPeriods: [
+                        {
+                            hours: [{ hourStart: 22, hourEnd: 7 }]
+                        }
+                    ]
+                })
+            );
+        });
+    });
+
+    it('displays error and disables save button when quiet period start equals end', async () => {
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
+            subscriptions: [
+                {
+                    id: 'sub-iphone',
+                    endpoint: 'https://fcm.googleapis.com/fcm/send/sub-iphone',
+                    keys: { p256dh: 'k1', auth: 'a1' },
+                    userAgent: 'iPhone',
+                },
+            ],
+            notificationsEnabled: true,
+        });
+
+        const mockSettings = {
+            notifications: {
+                [mockUserID]: {
+                    morningSummaryEnabled: false,
+                    morningSummaryHour: 7,
+                    morningSummaryFlavor: 'home_planner',
+                    quietPeriods: [
+                        {
+                            hours: [{ hourStart: 7, hourEnd: 7 }]
+                        }
+                    ],
+                },
+            },
+        } as any;
+
+        render(
+            <NotificationModal
+                open={true}
+                onClose={mockOnClose}
+                siteID={mockSiteID}
+                siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID={mockUserID}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.getByRole('switch', { name: /Mute Alerts During Quiet Hours/i })).toBeInTheDocument();
+        });
+
+        expect(screen.getByText(/Quiet period start and end time cannot be the same/i)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /Save Preferences/i })).toBeDisabled();
     });
 });

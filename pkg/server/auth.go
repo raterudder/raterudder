@@ -47,6 +47,7 @@ var routeAuthAttributes = map[string]pathAttributes{
 	"/api/delete/user":                  {ignoreSiteID: true},
 	"/api/list/userSites":               {ignoreSiteID: true},
 	"/api/notifications/vapidPublicKey": {allowNoLogin: true, ignoreUserNotFound: true, ignoreSiteID: true},
+	"/api/notifications/subscriptions":  {ignoreSiteID: true},
 	"/api/notifications/subscribe":      {ignoreSiteID: true},
 	"/api/notifications/unsubscribe":    {ignoreSiteID: true},
 	"/api/notifications/click":          {allowNoLogin: true, ignoreSiteID: true},
@@ -466,6 +467,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 type authStatusResponse struct {
 	LoggedIn     bool              `json:"loggedIn"`
+	UserID       string            `json:"userID,omitempty"`
 	Email        string            `json:"email"`
 	AuthRequired bool              `json:"authRequired"`
 	ClientIDs    map[string]string `json:"clientIDs"`
@@ -513,6 +515,7 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 
 	err := json.NewEncoder(w).Encode(authStatusResponse{
 		LoggedIn:     loggedIn,
+		UserID:       user.ID,
 		Email:        user.Email,
 		AuthRequired: len(s.oidcAudiences) > 0,
 		ClientIDs:    s.oidcAudiences,

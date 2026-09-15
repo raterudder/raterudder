@@ -1165,6 +1165,8 @@ func TestFirestoreProvider(t *testing.T) {
 		siteID := "site-push-cleanup"
 		require.NoError(t, f.CreateSite(ctx, siteID, types.Site{
 			ID: siteID,
+		}))
+		require.NoError(t, f.SetSettings(ctx, siteID, types.Settings{
 			Notifications: map[string]types.UserNotificationSettings{
 				"push-user@test.com": {
 					MorningSummaryEnabled: true,
@@ -1172,7 +1174,7 @@ func TestFirestoreProvider(t *testing.T) {
 					MorningSummaryFlavor:  "metrics_heavy",
 				},
 			},
-		}))
+		}, 1, time.Time{}))
 
 		userID := "push-user@test.com"
 		user := types.User{
@@ -1219,9 +1221,9 @@ func TestFirestoreProvider(t *testing.T) {
 		if assert.Len(t, gotUser.Subscriptions, 1) {
 			assert.Equal(t, "sub-2", gotUser.Subscriptions[0].ID)
 		}
-		gotSite, err := f.GetSite(ctx, siteID)
+		gotSettings, _, _, err := f.GetSettings(ctx, siteID)
 		require.NoError(t, err)
-		assert.Contains(t, gotSite.Notifications, userID)
+		assert.Contains(t, gotSettings.Notifications, userID)
 
 		// Remove last subscription - user has 0 subscriptions, so site notification settings should be cleaned up!
 		require.NoError(t, f.RemoveUserPushSubscription(ctx, userID, sub2.Endpoint))
@@ -1229,9 +1231,9 @@ func TestFirestoreProvider(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, gotUser.Subscriptions, 0)
 
-		gotSite, err = f.GetSite(ctx, siteID)
+		gotSettings, _, _, err = f.GetSettings(ctx, siteID)
 		require.NoError(t, err)
-		assert.NotContains(t, gotSite.Notifications, userID)
+		assert.NotContains(t, gotSettings.Notifications, userID)
 	})
 
 	t.Run("SiteNotificationSettings", func(t *testing.T) {
@@ -1241,6 +1243,7 @@ func TestFirestoreProvider(t *testing.T) {
 			InviteCode: "invite-123",
 		}
 		require.NoError(t, f.CreateSite(ctx, siteID, site))
+		require.NoError(t, f.SetSettings(ctx, siteID, types.Settings{}, 1, time.Time{}))
 
 		user1 := "user1@test.com"
 		settings1 := types.UserNotificationSettings{
@@ -1250,10 +1253,10 @@ func TestFirestoreProvider(t *testing.T) {
 		}
 		require.NoError(t, f.UpdateSiteNotificationSettings(ctx, siteID, user1, settings1))
 
-		gotSite, err := f.GetSite(ctx, siteID)
+		gotSettings, _, _, err := f.GetSettings(ctx, siteID)
 		require.NoError(t, err)
-		if assert.NotNil(t, gotSite.Notifications) {
-			assert.Equal(t, settings1, gotSite.Notifications[user1])
+		if assert.NotNil(t, gotSettings.Notifications) {
+			assert.Equal(t, settings1, gotSettings.Notifications[user1])
 		}
 
 		user2 := "user2@test.com"
@@ -1264,20 +1267,20 @@ func TestFirestoreProvider(t *testing.T) {
 		}
 		require.NoError(t, f.UpdateSiteNotificationSettings(ctx, siteID, user2, settings2))
 
-		gotSite, err = f.GetSite(ctx, siteID)
+		gotSettings, _, _, err = f.GetSettings(ctx, siteID)
 		require.NoError(t, err)
-		if assert.Len(t, gotSite.Notifications, 2) {
-			assert.Equal(t, settings1, gotSite.Notifications[user1])
-			assert.Equal(t, settings2, gotSite.Notifications[user2])
+		if assert.Len(t, gotSettings.Notifications, 2) {
+			assert.Equal(t, settings1, gotSettings.Notifications[user1])
+			assert.Equal(t, settings2, gotSettings.Notifications[user2])
 		}
 
-		// Update with empty struct deletes user1 from site.Notifications
+		// Update with empty struct deletes user1 from site notifications
 		require.NoError(t, f.UpdateSiteNotificationSettings(ctx, siteID, user1, types.UserNotificationSettings{}))
-		gotSite, err = f.GetSite(ctx, siteID)
+		gotSettings, _, _, err = f.GetSettings(ctx, siteID)
 		require.NoError(t, err)
-		if assert.Len(t, gotSite.Notifications, 1) {
-			assert.NotContains(t, gotSite.Notifications, user1)
-			assert.Equal(t, settings2, gotSite.Notifications[user2])
+		if assert.Len(t, gotSettings.Notifications, 1) {
+			assert.NotContains(t, gotSettings.Notifications, user1)
+			assert.Equal(t, settings2, gotSettings.Notifications[user2])
 		}
 
 		// Setting identical settings is a no-op that succeeds without error
@@ -1285,17 +1288,17 @@ func TestFirestoreProvider(t *testing.T) {
 
 		// Removing a user ID that was not present is a no-op that succeeds without error
 		require.NoError(t, f.UpdateSiteNotificationSettings(ctx, siteID, "nonexistent@test.com", types.UserNotificationSettings{}))
-		gotSite, err = f.GetSite(ctx, siteID)
+		gotSettings, _, _, err = f.GetSettings(ctx, siteID)
 		require.NoError(t, err)
-		if assert.Len(t, gotSite.Notifications, 1) {
-			assert.Equal(t, settings2, gotSite.Notifications[user2])
+		if assert.Len(t, gotSettings.Notifications, 1) {
+			assert.Equal(t, settings2, gotSettings.Notifications[user2])
 		}
 
 		// Update user2 with empty struct deletes user2 and leaves Notifications nil/empty
 		require.NoError(t, f.UpdateSiteNotificationSettings(ctx, siteID, user2, types.UserNotificationSettings{}))
-		gotSite, err = f.GetSite(ctx, siteID)
+		gotSettings, _, _, err = f.GetSettings(ctx, siteID)
 		require.NoError(t, err)
-		assert.Empty(t, gotSite.Notifications)
+		assert.Empty(t, gotSettings.Notifications)
 
 		// Removing a user when Notifications is already empty is also a no-op
 		require.NoError(t, f.UpdateSiteNotificationSettings(ctx, siteID, "nonexistent@test.com", types.UserNotificationSettings{}))

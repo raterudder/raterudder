@@ -7,8 +7,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 describe('Header Component', () => {
     const mockOnSiteChange = vi.fn();
     const mockOnLogout = vi.fn();
+    const mockOnOpenNotifications = vi.fn();
 
     beforeEach(() => {
+        vi.clearAllMocks();
         vi.restoreAllMocks();
     });
 
@@ -22,6 +24,7 @@ describe('Header Component', () => {
                     selectedSiteID="site1"
                     onSiteChange={mockOnSiteChange}
                     onLogout={mockOnLogout}
+                    onOpenNotifications={mockOnOpenNotifications}
                     hasNotifications={hasNotifications}
                 />
             </Router>
@@ -128,12 +131,12 @@ describe('Header Component', () => {
         expect(screen.getByTestId('header-bell-btn')).toBeInTheDocument();
     });
 
-    it('opens notification modal when bell button is clicked', async () => {
+    it('calls onOpenNotifications when bell button is clicked', async () => {
         renderHeader('/dashboard?notifications=true', true);
         const bellBtn = screen.getByTestId('header-bell-btn');
         fireEvent.click(bellBtn);
 
-        expect(await screen.findByText('Notifications')).toBeInTheDocument();
+        expect(mockOnOpenNotifications).toHaveBeenCalledTimes(1);
     });
 
     it('renders notification bell when hasNotifications is true without query params', () => {
@@ -146,11 +149,11 @@ describe('Header Component', () => {
         expect(screen.queryByTestId('header-bell-btn')).not.toBeInTheDocument();
     });
 
-    it('opens notification modal when bell button is clicked via hasNotifications', async () => {
+    it('calls onOpenNotifications when bell button is clicked via hasNotifications', async () => {
         renderHeader('/dashboard', true, true);
         const bellBtn = screen.getByTestId('header-bell-btn');
         fireEvent.click(bellBtn);
 
-        expect(await screen.findByText('Notifications')).toBeInTheDocument();
+        expect(mockOnOpenNotifications).toHaveBeenCalledTimes(1);
     });
 });

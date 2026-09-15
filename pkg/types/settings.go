@@ -114,6 +114,9 @@ type Settings struct {
 
 	// Home load prediction strategy ("default", "conservative")
 	HomeLoadPredictionStrategy string `json:"homeLoadPredictionStrategy"`
+
+	// Notifications maps userID to notification preferences for this site.
+	Notifications map[string]UserNotificationSettings `json:"notifications,omitempty"`
 }
 
 // GridSettings represents the ESS grid configuration capabilities.

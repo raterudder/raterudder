@@ -21,6 +21,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,6 +44,9 @@ const (
 
 	// Default duration to wait before verifying a grid outage isn't a temporary blip.
 	defaultGridOutageDelay = 5 * time.Minute
+
+	// Maximum age of a quiet-period suppressed grid restoration event to still alert upon wakeup.
+	maxDeferredGridRestoredAge = 1 * time.Hour
 
 	// Deduplication window for VPP dispatches (allows separate morning/evening events).
 	vppDispatchDeduplicationWindow = 5 * time.Hour
@@ -645,7 +649,7 @@ func (n *siteRecentNotifications) hasSentToday(userID, notifType, dateStr string
 		loc = time.UTC
 	}
 	for _, l := range n.logs {
-		if l.UserID == userID && l.Type == notifType && l.Success {
+		if l.UserID == userID && l.Type == notifType && (l.Success || l.Muted) {
 			if l.TSCreated.In(loc).Format("2006-01-02") == dateStr {
 				return true
 			}
@@ -657,7 +661,7 @@ func (n *siteRecentNotifications) hasSentToday(userID, notifType, dateStr string
 func (n *siteRecentNotifications) hasSentWithin(userID, notifType string, d time.Duration, now time.Time) bool {
 	cutoff := now.Add(-d)
 	for _, l := range n.logs {
-		if l.UserID == userID && l.Type == notifType && l.Success {
+		if l.UserID == userID && l.Type == notifType && (l.Success || l.Muted) {
 			if l.TSCreated.After(cutoff) {
 				return true
 			}
@@ -666,33 +670,39 @@ func (n *siteRecentNotifications) hasSentWithin(userID, notifType string, d time
 	return false
 }
 
-func (n *siteRecentNotifications) lastGridEvent() string {
+// lastLog returns the most recent notification log matching the given criteria.
+// If userID is non-empty, only logs for that user are returned.
+// If onlyDelivered is true, non-delivered logs (!l.Success || l.Muted) are ignored.
+// If onlyDelivered is false, valid event logs (delivered, muted, or internal audit suppression) are returned,
+// while failed delivery attempts (!l.Success && !l.Muted && l.Error != "") are ignored.
+// If notifTypes is provided, the log's type must match one of the specified types.
+func (n *siteRecentNotifications) lastLog(userID string, onlyDelivered bool, notifTypes ...string) (types.NotificationLog, bool) {
 	var latest time.Time
-	var eventType string
+	var latestLog types.NotificationLog
+	var found bool
 	for _, l := range n.logs {
-		if (l.Type == types.NotificationTypeGridOutage || l.Type == types.NotificationTypeGridRestored) && l.Success {
-			if l.TSCreated.After(latest) {
-				latest = l.TSCreated
-				eventType = l.Type
+		if onlyDelivered {
+			if !l.Success || l.Muted {
+				continue
+			}
+		} else {
+			if !l.Success && !l.Muted && l.Error != "" {
+				continue
 			}
 		}
-	}
-	return eventType
-}
-
-func (n *siteRecentNotifications) lastPriceSpikeLog(userID string) *types.NotificationLog {
-	var latest time.Time
-	var latestLog *types.NotificationLog
-	for i := range n.logs {
-		l := &n.logs[i]
-		if l.UserID == userID && l.Type == types.NotificationTypePriceSpike && l.Success {
-			if l.TSCreated.After(latest) {
-				latest = l.TSCreated
-				latestLog = l
-			}
+		if userID != "" && l.UserID != userID {
+			continue
+		}
+		if len(notifTypes) > 0 && !slices.Contains(notifTypes, l.Type) {
+			continue
+		}
+		if !found || l.TSCreated.After(latest) {
+			latest = l.TSCreated
+			latestLog = l
+			found = true
 		}
 	}
-	return latestLog
+	return latestLog, found
 }
 
 func extractHighestAlertedPrice(l *types.NotificationLog) float64 {
@@ -913,7 +923,7 @@ func (s *Server) dispatchPushToUser(
 		}
 
 		if appendErr := s.storage.AppendNotificationLog(ctx, siteID, logEntry); appendErr != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to append notification log",
+			log.Ctx(ctx).ErrorContext(ctx, "failed to append notification log",
 				slog.String("userID", user.ID),
 				slog.String("type", notifType),
 				slog.Any("error", appendErr),
@@ -922,9 +932,53 @@ func (s *Server) dispatchPushToUser(
 	}
 }
 
-// getSiteRecentNotifications returns recent notification logs for the past 24 hours wrapped in siteRecentNotifications.
+// logMutedNotification records an audit log entry with Muted: true when an alert condition
+// is triggered during a user's quiet period, without dispatching a WebPush notification.
+func (s *Server) logMutedNotification(
+	ctx context.Context,
+	siteID string,
+	userID string,
+	notifType string,
+	flavor string,
+	title string,
+	body string,
+	metadata map[string]string,
+) {
+	nowUTC := s.now().UTC()
+	logID := generateNotificationLogID(siteID, userID, "muted", nowUTC)
+	logEntry := types.NotificationLog{
+		ID:        logID,
+		TSCreated: nowUTC,
+		UserID:    userID,
+		Type:      notifType,
+		Flavor:    flavor,
+		Title:     title,
+		Body:      body,
+		Success:   false,
+		Muted:     true,
+		Metadata:  metadata,
+	}
+
+	log.Ctx(ctx).InfoContext(ctx, "muted push notification due to quiet period",
+		slog.String("userID", userID),
+		slog.String("logID", logID),
+		slog.String("type", notifType),
+		slog.String("flavor", flavor),
+		slog.String("title", title),
+	)
+
+	if appendErr := s.storage.AppendNotificationLog(ctx, siteID, logEntry); appendErr != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to append muted notification log",
+			slog.String("userID", userID),
+			slog.String("type", notifType),
+			slog.Any("error", appendErr),
+		)
+	}
+}
+
+// getSiteRecentNotifications returns recent notification logs for the past 3 days wrapped in siteRecentNotifications.
 func (s *Server) getSiteRecentNotifications(ctx context.Context, siteID string, nowLocal time.Time) *siteRecentNotifications {
-	logs, err := s.storage.GetNotificationLogs(ctx, siteID, nowLocal.Add(-24*time.Hour), nowLocal.Add(1*time.Hour))
+	logs, err := s.storage.GetNotificationLogs(ctx, siteID, nowLocal.AddDate(0, 0, -3), nowLocal.Add(1*time.Hour))
 	if err != nil {
 		log.Ctx(ctx).WarnContext(ctx, "failed to get recent notification logs", slog.Any("error", err))
 	}
@@ -981,19 +1035,16 @@ func (s *Server) handleNotifications(
 		return
 	}
 
+	if data == nil || len(data.settings.Notifications) == 0 {
+		return
+	}
+	notifications := data.settings.Notifications
+
 	siteLoc := data.status.Timestamp.Location()
 	if siteLoc == nil {
 		siteLoc = time.UTC
 	}
 	nowLocal := s.now().In(siteLoc)
-
-	site, err := s.storage.GetSite(ctx, siteID)
-	if err != nil || len(site.Notifications) == 0 {
-		return
-	}
-	if site.ID == "" {
-		site.ID = siteID
-	}
 
 	wg := new(sync.WaitGroup)
 
@@ -1001,32 +1052,32 @@ func (s *Server) handleNotifications(
 
 	// 1. Morning Summary
 	wg.Go(func() {
-		s.handleMorningSummaryNotifications(ctx, site, data, nowLocal, getNotifState)
+		s.handleMorningSummaryNotifications(ctx, siteID, notifications, data, nowLocal, getNotifState)
 	})
 
 	// 2. Evening Summary
 	wg.Go(func() {
-		s.handleEveningSummaryNotifications(ctx, site, data, nowLocal, getNotifState)
+		s.handleEveningSummaryNotifications(ctx, siteID, notifications, data, nowLocal, getNotifState)
 	})
 
 	// 3. Grid Restoration & Outage
 	wg.Go(func() {
-		s.handleGridOutageNotifications(ctx, site, data.status, data.essSystem, getNotifState)
+		s.handleGridOutageNotifications(ctx, siteID, notifications, data.status, data.essSystem, nowLocal, getNotifState)
 	})
 
 	// 4. Real-Time Price Spike
 	wg.Go(func() {
-		s.handlePriceSpikeNotifications(ctx, site, data, nowLocal, getNotifState)
+		s.handlePriceSpikeNotifications(ctx, siteID, notifications, data, nowLocal, getNotifState)
 	})
 
 	// 5. Unexpected Solar Underproduction
 	wg.Go(func() {
-		s.handleSolarUnderproductionNotifications(ctx, site, data, nowLocal, getNotifState)
+		s.handleSolarUnderproductionNotifications(ctx, siteID, notifications, data, nowLocal, getNotifState)
 	})
 
 	// 6. Unplanned VPP Dispatch
 	wg.Go(func() {
-		s.handleVPPDispatchNotifications(ctx, site, data.status, data.vppInfo, nowLocal, getNotifState)
+		s.handleVPPDispatchNotifications(ctx, siteID, notifications, data.status, data.vppInfo, nowLocal, getNotifState)
 	})
 
 	wg.Wait()
@@ -1037,7 +1088,8 @@ func (s *Server) handleNotifications(
 // full battery ETA), and provides tailored advice based on the user's chosen flavor.
 func (s *Server) handleMorningSummaryNotifications(
 	ctx context.Context,
-	site types.Site,
+	siteID string,
+	notifications map[string]types.UserNotificationSettings,
 	data *dataForNotifications,
 	nowLocal time.Time,
 	getNotifState func() *siteRecentNotifications,
@@ -1090,12 +1142,12 @@ func (s *Server) handleMorningSummaryNotifications(
 	}
 
 	// Iterate through all users configured for this site and dispatch their morning summary
-	for userID, notifConfig := range site.Notifications {
+	for userID, notifConfig := range notifications {
 		if !notifConfig.MorningSummaryEnabled || nowLocal.Hour() != notifConfig.MorningSummaryHour {
 			continue
 		}
 		// Ensure only one morning summary is delivered per user per calendar day
-		if getNotifState != nil && getNotifState().hasSentToday(userID, types.NotificationTypeMorningSummary, todayDateStr, siteLoc) {
+		if getNotifState().hasSentToday(userID, types.NotificationTypeMorningSummary, todayDateStr, siteLoc) {
 			continue
 		}
 		user, err := s.storage.GetUser(ctx, userID)
@@ -1111,7 +1163,7 @@ func (s *Server) handleMorningSummaryNotifications(
 		}
 
 		// Retrieve simulation hourly projection data for today
-		simData := data.getSimData(ctx, s, site.ID, nowLocal)
+		simData := data.getSimData(ctx, s, siteID, nowLocal)
 
 		var todayForecastKWH float64
 		var hitCapacityAt time.Time
@@ -1162,7 +1214,7 @@ func (s *Server) handleMorningSummaryNotifications(
 		}
 
 		title, body := generateMorningSummary(ctx, notifConfig.MorningSummaryFlavor, data.status, todayForecastKWH, yesterdayActualKWH, peakSolarKWH, hitCapacityAt, maxSimSOC, siteLoc)
-		s.dispatchPushToUser(ctx, site.ID, user, types.NotificationTypeMorningSummary, notifConfig.MorningSummaryFlavor, title, body, "/forecast", metadata)
+		s.dispatchPushToUser(ctx, siteID, user, types.NotificationTypeMorningSummary, notifConfig.MorningSummaryFlavor, title, body, "/forecast", metadata)
 	}
 }
 
@@ -1171,7 +1223,8 @@ func (s *Server) handleMorningSummaryNotifications(
 // and projects whether the battery will supply the home through the night or hit reserve.
 func (s *Server) handleEveningSummaryNotifications(
 	ctx context.Context,
-	site types.Site,
+	siteID string,
+	notifications map[string]types.UserNotificationSettings,
 	data *dataForNotifications,
 	nowLocal time.Time,
 	getNotifState func() *siteRecentNotifications,
@@ -1186,12 +1239,12 @@ func (s *Server) handleEveningSummaryNotifications(
 
 	todayDateStr := nowLocal.Format("2006-01-02")
 
-	for userID, notifConfig := range site.Notifications {
+	for userID, notifConfig := range notifications {
 		if !notifConfig.EveningSummaryEnabled || nowLocal.Hour() != notifConfig.EveningSummaryHour {
 			continue
 		}
 		// Ensure only one evening summary is delivered per user per calendar day
-		if getNotifState != nil && getNotifState().hasSentToday(userID, types.NotificationTypeEveningSummary, todayDateStr, siteLoc) {
+		if getNotifState().hasSentToday(userID, types.NotificationTypeEveningSummary, todayDateStr, siteLoc) {
 			continue
 		}
 		user, err := s.storage.GetUser(ctx, userID)
@@ -1209,7 +1262,7 @@ func (s *Server) handleEveningSummaryNotifications(
 		// Inspect simulation slots to determine if the battery will hit reserve overnight.
 		// If a deficit is predicted after tomorrow's solar refilling begins, the battery successfully
 		// powers the home through the entire night.
-		simData := data.getSimData(ctx, s, site.ID, nowLocal)
+		simData := data.getSimData(ctx, s, siteID, nowLocal)
 
 		var hitDeficitAt time.Time
 		var tomorrowSolarStart time.Time
@@ -1259,20 +1312,22 @@ func (s *Server) handleEveningSummaryNotifications(
 		}
 
 		title, body := generateEveningSummary(ctx, notifConfig.EveningSummaryFlavor, data.status, todayActualSolarKWH, todayHomeUsageKWH, todayGridExportKWH, todayGridImportKWH, minSOC, hitDeficitAt, siteLoc)
-		s.dispatchPushToUser(ctx, site.ID, user, types.NotificationTypeEveningSummary, notifConfig.EveningSummaryFlavor, title, body, "/dashboard", metadata)
+		s.dispatchPushToUser(ctx, siteID, user, types.NotificationTypeEveningSummary, notifConfig.EveningSummaryFlavor, title, body, "/dashboard", metadata)
 	}
 }
 
 // handleGridOutageNotifications evaluates and sends grid outage and restoration notifications.
 func (s *Server) handleGridOutageNotifications(
 	ctx context.Context,
-	site types.Site,
+	siteID string,
+	notifications map[string]types.UserNotificationSettings,
 	status types.SystemStatus,
 	essSystem ess.System,
+	nowLocal time.Time,
 	getNotifState func() *siteRecentNotifications,
 ) {
 	hasAnyGridOutageUser := false
-	for _, notifConfig := range site.Notifications {
+	for _, notifConfig := range notifications {
 		if notifConfig.GridOutageAlert {
 			hasAnyGridOutageUser = true
 			break
@@ -1281,43 +1336,127 @@ func (s *Server) handleGridOutageNotifications(
 	if !hasAnyGridOutageUser {
 		return
 	}
+	if nowLocal.IsZero() {
+		nowLocal = s.now()
+	}
 
+	// TODO: When the grid is connected and operating normally, this evaluation queries recent notification
+	// logs on every routine cycle to detect transitions from an active outage to power restoration.
+	// Energy history (hourly import/export totals) cannot reliably indicate whether the grid was down,
+	// because homes with solar and storage frequently operate at zero import and zero export while grid-tied.
+	// To avoid querying notification logs on every normal-grid cycle, consider tracking recent grid state
+	// transitions in-memory on the server or persisting a lightweight grid status / transition timestamp
+	// on the site record, so getNotifState() is only called when an actual transition from unavailable
+	// to available has occurred.
 	if !status.GridUnavailable {
-		if getNotifState == nil || getNotifState().lastGridEvent() != types.NotificationTypeGridOutage {
-			log.Ctx(ctx).DebugContext(ctx, "skipping grid restored check: previous event was not an outage")
-			return
-		}
-		for userID, notifConfig := range site.Notifications {
+		for userID, notifConfig := range notifications {
 			if !notifConfig.GridOutageAlert {
 				continue
 			}
-			user, err := s.storage.GetUser(ctx, userID)
-			if err != nil || len(user.Subscriptions) == 0 {
+			lastLog, ok := getNotifState().lastLog(userID, false, types.NotificationTypeGridOutage, types.NotificationTypeGridRestored)
+			if !ok {
 				continue
 			}
+
 			title := "✅ Grid Power Restored"
 			body := "The electric grid is back online. Your system has safely resumed normal grid-tied operation."
 			metadata := map[string]string{
 				"currentSOC": fmt.Sprintf("%.1f", status.BatterySOC),
 			}
-			log.Ctx(ctx).DebugContext(ctx, "sending grid restored notification",
-				slog.String("userID", user.ID),
-				slog.Float64("batterySOC", status.BatterySOC),
-				slog.String("title", title),
-				slog.String("body", body),
-			)
-			s.dispatchPushToUser(ctx, site.ID, user, types.NotificationTypeGridRestored, "", title, body, "/dashboard", metadata)
+
+			// Case 1: Grid just transitioned from an active outage to restored.
+			if lastLog.Type == types.NotificationTypeGridOutage {
+				if notifConfig.IsInQuietPeriod(nowLocal) {
+					// Power returned during quiet hours; mute the alert and record an audit log.
+					s.logMutedNotification(ctx, siteID, userID, types.NotificationTypeGridRestored, "", title, body, metadata)
+					continue
+				}
+
+				// Only fetch user record from storage when we are actually ready to deliver a push notification.
+				user, err := s.storage.GetUser(ctx, userID)
+				if err != nil {
+					log.Ctx(ctx).ErrorContext(ctx, "failed to get user for grid restored notification",
+						slog.String("userID", userID),
+						slog.Any("error", err),
+					)
+					continue
+				}
+				if len(user.Subscriptions) > 0 {
+					log.Ctx(ctx).DebugContext(ctx, "sending grid restored notification",
+						slog.String("userID", user.ID),
+						slog.Float64("batterySOC", status.BatterySOC),
+						slog.String("title", title),
+						slog.String("body", body),
+					)
+					s.dispatchPushToUser(ctx, siteID, user, types.NotificationTypeGridRestored, "", title, body, "/dashboard", metadata)
+				}
+				continue
+			}
+
+			// Case 2: Grid was restored during quiet hours while the user slept.
+			// The immediate notification was muted, leaving a log entry with Type == GridRestored and Muted == true.
+			// We check if it was muted last time because now that quiet hours have ended (or upon wakeup evaluation),
+			// we need to know if there is an unacknowledged overnight power restoration to inform the user about.
+			// If power returned recently (<= 1 hour ago), we deliver a deferred notification upon wakeup.
+			// If power returned several hours ago (> 1 hour ago), the event is stale—the user already woke up
+			// seeing lights and appliances on—so we suppress it without sending a push notification or cluttering
+			// storage with fake unsuccessful logs.
+			if lastLog.Type == types.NotificationTypeGridRestored && lastLog.Muted {
+				if notifConfig.IsInQuietPeriod(nowLocal) {
+					continue
+				}
+				restoredAge := nowLocal.Sub(lastLog.TSCreated)
+				if restoredAge <= maxDeferredGridRestoredAge {
+					user, err := s.storage.GetUser(ctx, userID)
+					if err != nil {
+						log.Ctx(ctx).ErrorContext(ctx, "failed to get user for grid restored notification",
+							slog.String("userID", userID),
+							slog.Any("error", err),
+						)
+						continue
+					}
+					if len(user.Subscriptions) > 0 {
+						log.Ctx(ctx).InfoContext(ctx, "sending deferred grid restored notification after quiet period",
+							slog.String("userID", user.ID),
+							slog.Duration("restoredAge", restoredAge),
+						)
+						s.dispatchPushToUser(ctx, siteID, user, types.NotificationTypeGridRestored, "", title, body, "/dashboard", metadata)
+					}
+				} else {
+					log.Ctx(ctx).InfoContext(ctx, "suppressing stale deferred grid restored notification (> 1h)",
+						slog.String("userID", userID),
+						slog.Duration("restoredAge", restoredAge),
+					)
+				}
+			}
 		}
-	} else if status.GridUnavailable && essSystem != nil {
-		if getNotifState != nil && getNotifState().lastGridEvent() == types.NotificationTypeGridOutage {
-			log.Ctx(ctx).DebugContext(ctx, "skipping grid outage check: already in outage state")
-			return
-		}
+		return
+	}
+
+	if status.GridUnavailable && essSystem != nil {
 		var outageUsers []types.User
-		for userID, notifConfig := range site.Notifications {
+		var mutedOutageUserIDs []string
+		for userID, notifConfig := range notifications {
 			if !notifConfig.GridOutageAlert {
 				continue
 			}
+
+			lastLog, ok := getNotifState().lastLog(userID, false, types.NotificationTypeGridOutage, types.NotificationTypeGridRestored)
+			if ok && lastLog.Type == types.NotificationTypeGridOutage {
+				if !lastLog.Muted {
+					log.Ctx(ctx).DebugContext(ctx, "skipping grid outage check: already alerted for outage", slog.String("userID", userID))
+					continue
+				}
+				if notifConfig.IsInQuietPeriod(nowLocal) {
+					continue
+				}
+			}
+
+			if notifConfig.IsInQuietPeriod(nowLocal) {
+				mutedOutageUserIDs = append(mutedOutageUserIDs, userID)
+				continue
+			}
+
 			user, err := s.storage.GetUser(ctx, userID)
 			if err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to get user for grid outage notification",
@@ -1326,101 +1465,80 @@ func (s *Server) handleGridOutageNotifications(
 				)
 				continue
 			}
+
 			if len(user.Subscriptions) > 0 {
 				outageUsers = append(outageUsers, user)
 			}
 		}
 
-		if len(outageUsers) > 0 {
-			if wg := common.CtxWaitGroup(ctx); wg != nil {
-				wg.Add(1)
-				delay := s.gridOutageDelay
-				if delay == 0 {
-					delay = defaultGridOutageDelay
-				}
-				log.Ctx(ctx).DebugContext(ctx, "grid unavailable detected, launching outage verification",
-					slog.Duration("delay", delay),
-				)
-				go func(ctx context.Context) {
-					defer wg.Done()
-					asyncCtx, cancel := context.WithTimeout(ctx, delay+30*time.Second)
-					defer cancel()
-
-					select {
-					case <-time.After(delay):
-					case <-asyncCtx.Done():
-						return
-					}
-
-					currStatus, err := essSystem.GetStatus(asyncCtx)
-					if err != nil {
-						log.Ctx(asyncCtx).WarnContext(asyncCtx, "failed to re-check grid status after outage delay",
-							slog.Any("error", err),
-						)
-						return
-					}
-
-					log.Ctx(asyncCtx).DebugContext(asyncCtx, "grid outage verification result",
-						slog.Bool("stillDown", currStatus.GridUnavailable),
-						slog.Float64("batterySOC", currStatus.BatterySOC),
-					)
-
-					if currStatus.GridUnavailable {
-						hrsRemainingStr := ""
-						if currStatus.HomeKW > 0.1 && currStatus.BatteryCapacityKWH > 0 {
-							availKWH := currStatus.BatteryCapacityKWH * (currStatus.BatterySOC / 100.0)
-							hrs := availKWH / currStatus.HomeKW
-							hrsRemainingStr = fmt.Sprintf(" (~%.1f hours remaining)", hrs)
-						}
-						title := "⚠️ Grid Outage Detected"
-						body := fmt.Sprintf("Utility grid power is currently down. Battery reserve is at %.0f%%%s.", currStatus.BatterySOC, hrsRemainingStr)
-						metadata := map[string]string{
-							"currentSOC": fmt.Sprintf("%.1f", currStatus.BatterySOC),
-							"homeKW":     fmt.Sprintf("%.2f", currStatus.HomeKW),
-						}
-						for _, user := range outageUsers {
-							log.Ctx(asyncCtx).DebugContext(asyncCtx, "sending grid outage notification",
-								slog.String("userID", user.ID),
-								slog.Float64("batterySOC", currStatus.BatterySOC),
-								slog.Float64("batteryCapacityKWH", currStatus.BatteryCapacityKWH),
-								slog.Float64("homeKW", currStatus.HomeKW),
-								slog.String("title", title),
-								slog.String("body", body),
-							)
-							s.dispatchPushToUser(asyncCtx, site.ID, user, types.NotificationTypeGridOutage, "", title, body, "/dashboard", metadata)
-						}
-					} else {
-						log.Ctx(asyncCtx).InfoContext(asyncCtx, "grid outage was a temporary blip (<5m), suppressed notification")
-					}
-				}(ctx)
-			}
-		}
-	} else {
-		// Grid is available: check if we should send a restored notification
-		if getNotifState == nil || getNotifState().lastGridEvent() != types.NotificationTypeGridOutage {
+		if len(outageUsers) == 0 && len(mutedOutageUserIDs) == 0 {
 			return
 		}
 
-		for userID, notifConfig := range site.Notifications {
-			if !notifConfig.GridOutageAlert {
-				continue
+		if wg := common.CtxWaitGroup(ctx); wg != nil {
+			wg.Add(1)
+			delay := s.gridOutageDelay
+			if delay == 0 {
+				delay = defaultGridOutageDelay
 			}
-			user, err := s.storage.GetUser(ctx, userID)
-			if err != nil {
-				log.Ctx(ctx).ErrorContext(ctx, "failed to get user for grid restored notification",
-					slog.String("userID", userID),
-					slog.Any("error", err),
-				)
-				continue
-			}
-			if len(user.Subscriptions) > 0 {
-				title := "✅ Grid Power Restored"
-				body := fmt.Sprintf("Grid electricity has reconnected. Battery is at %.0f%%. System returned to normal operation.", status.BatterySOC)
-				metadata := map[string]string{
-					"currentSOC": fmt.Sprintf("%.1f", status.BatterySOC),
+			log.Ctx(ctx).DebugContext(ctx, "grid unavailable detected, launching outage verification",
+				slog.Duration("delay", delay),
+			)
+			go func(ctx context.Context) {
+				defer wg.Done()
+				asyncCtx, cancel := context.WithTimeout(ctx, delay+30*time.Second)
+				defer cancel()
+
+				select {
+				case <-time.After(delay):
+				case <-asyncCtx.Done():
+					return
 				}
-				s.dispatchPushToUser(ctx, site.ID, user, types.NotificationTypeGridRestored, "", title, body, "/dashboard", metadata)
-			}
+
+				currStatus, err := essSystem.GetStatus(asyncCtx)
+				if err != nil {
+					log.Ctx(asyncCtx).WarnContext(asyncCtx, "failed to re-check grid status after outage delay",
+						slog.Any("error", err),
+					)
+					return
+				}
+
+				log.Ctx(asyncCtx).DebugContext(asyncCtx, "grid outage verification result",
+					slog.Bool("stillDown", currStatus.GridUnavailable),
+					slog.Float64("batterySOC", currStatus.BatterySOC),
+				)
+
+				if currStatus.GridUnavailable {
+					hrsRemainingStr := ""
+					if currStatus.HomeKW > 0.1 && currStatus.BatteryCapacityKWH > 0 {
+						availKWH := currStatus.BatteryCapacityKWH * (currStatus.BatterySOC / 100.0)
+						hrs := availKWH / currStatus.HomeKW
+						hrsRemainingStr = fmt.Sprintf(" (~%.1f hours remaining)", hrs)
+					}
+					title := "⚠️ Grid Outage Detected"
+					body := fmt.Sprintf("Utility grid power is currently down. Battery reserve is at %.0f%%%s.", currStatus.BatterySOC, hrsRemainingStr)
+					metadata := map[string]string{
+						"currentSOC": fmt.Sprintf("%.1f", currStatus.BatterySOC),
+						"homeKW":     fmt.Sprintf("%.2f", currStatus.HomeKW),
+					}
+					for _, user := range outageUsers {
+						log.Ctx(asyncCtx).DebugContext(asyncCtx, "sending grid outage notification",
+							slog.String("userID", user.ID),
+							slog.Float64("batterySOC", currStatus.BatterySOC),
+							slog.Float64("batteryCapacityKWH", currStatus.BatteryCapacityKWH),
+							slog.Float64("homeKW", currStatus.HomeKW),
+							slog.String("title", title),
+							slog.String("body", body),
+						)
+						s.dispatchPushToUser(asyncCtx, siteID, user, types.NotificationTypeGridOutage, "", title, body, "/dashboard", metadata)
+					}
+					for _, uID := range mutedOutageUserIDs {
+						s.logMutedNotification(asyncCtx, siteID, uID, types.NotificationTypeGridOutage, "", title, body, metadata)
+					}
+				} else {
+					log.Ctx(asyncCtx).InfoContext(asyncCtx, "grid outage was a temporary blip (<5m), suppressed notification")
+				}
+			}(ctx)
 		}
 	}
 }
@@ -1440,7 +1558,8 @@ func (s *Server) handleGridOutageNotifications(
 // - Enforces a tiered anti-flapping cooldown: 1-hour lockout, 1-6h surge threshold, and 6-24h drop-below check.
 func (s *Server) handlePriceSpikeNotifications(
 	ctx context.Context,
-	site types.Site,
+	siteID string,
+	notifications map[string]types.UserNotificationSettings,
 	data *dataForNotifications,
 	nowLocal time.Time,
 	getNotifState func() *siteRecentNotifications,
@@ -1482,13 +1601,18 @@ func (s *Server) handlePriceSpikeNotifications(
 		nowLocal = s.now().In(siteLoc)
 	}
 
-	// Filter users configured to receive price spike alerts for this site
+	// Filter users configured to receive price spike alerts for this site who are not in a quiet period.
+	// Users in their quiet period are skipped early to avoid unnecessary history fetches, simulations,
+	// user lookups, or writing useless muted logs to storage.
 	var spikeUsers []struct {
 		userID      string
 		sensitivity string
 	}
-	for userID, notifConfig := range site.Notifications {
+	for userID, notifConfig := range notifications {
 		if notifConfig.PriceSpikeAlert == "" || notifConfig.PriceSpikeAlert == "disabled" {
+			continue
+		}
+		if notifConfig.IsInQuietPeriod(nowLocal) {
 			continue
 		}
 		spikeUsers = append(spikeUsers, struct {
@@ -1503,7 +1627,7 @@ func (s *Server) handlePriceSpikeNotifications(
 	// Fetch up to 5 days of recent price history to establish the baseline percentile distributions
 	startHist := nowLocal.AddDate(0, 0, -5).UTC()
 	endHist := nowLocal.UTC()
-	histPrices, err := s.storage.GetPriceHistory(ctx, site.ID, startHist, endHist)
+	histPrices, err := s.storage.GetPriceHistory(ctx, siteID, startHist, endHist)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get price history for price spike notification",
 			slog.Any("error", err),
@@ -1690,81 +1814,68 @@ func (s *Server) handlePriceSpikeNotifications(
 		//    If prices stayed continuously elevated for 6+ hours at the same high level, do not re-alert
 		//    about the same price until the next day.
 		// 4. 24h+: Standard alert thresholds apply.
-		if getNotifState != nil {
-			lastLog := getNotifState().lastPriceSpikeLog(su.userID)
-			if lastLog != nil {
-				timeSince := s.now().Sub(lastLog.TSCreated)
-				if timeSince < 1*time.Hour {
-					log.Ctx(ctx).DebugContext(ctx, "skipping price spike notification: within 1-hour lockout cooldown",
+		lastDeliveredLog, hasDelivered := getNotifState().lastLog(su.userID, true, types.NotificationTypePriceSpike)
+
+		if hasDelivered {
+			timeSince := s.now().Sub(lastDeliveredLog.TSCreated)
+			if timeSince < 1*time.Hour {
+				log.Ctx(ctx).DebugContext(ctx, "skipping price spike notification: within 1-hour lockout cooldown",
+					slog.String("userID", su.userID),
+					slog.Duration("timeSinceLastAlert", timeSince),
+					slog.Time("lastAlertTime", lastDeliveredLog.TSCreated),
+					slog.Float64("activeSpikeCost", activeSpikeCost),
+					slog.Float64("maxSpikeCost", maxSpikeCost),
+				)
+				continue
+			}
+
+			prevPeakCost := extractHighestAlertedPrice(&lastDeliveredLog)
+			escalatedPctVal := computePricePercentile(rawCosts, escalatedPercentile)
+			checkCost := activeSpikeCost
+			if maxSpikeCost > checkCost {
+				checkCost = maxSpikeCost
+			}
+			var isSignificantSurge bool
+			if prevPeakCost > 0 {
+				isSignificantSurge = (checkCost >= prevPeakCost*priceSpikeSignificantMultiplier) && (checkCost >= escalatedPctVal)
+			}
+
+			if timeSince < 6*time.Hour {
+				if !isSignificantSurge {
+					log.Ctx(ctx).DebugContext(ctx, "skipping price spike notification: price surge not significant since last alert (1-6h window)",
 						slog.String("userID", su.userID),
 						slog.Duration("timeSinceLastAlert", timeSince),
-						slog.Time("lastAlertTime", lastLog.TSCreated),
-						slog.Float64("activeSpikeCost", activeSpikeCost),
-						slog.Float64("maxSpikeCost", maxSpikeCost),
+						slog.Time("lastAlertTime", lastDeliveredLog.TSCreated),
+						slog.Float64("prevPeakCost", prevPeakCost),
+						slog.Float64("checkCost", checkCost),
+						slog.Float64("requiredCost", prevPeakCost*priceSpikeSignificantMultiplier),
+						slog.Float64("escalatedPctVal", escalatedPctVal),
 					)
 					continue
 				}
-
-				prevPeakCost := extractHighestAlertedPrice(lastLog)
-				escalatedPctVal := computePricePercentile(rawCosts, escalatedPercentile)
-				checkCost := activeSpikeCost
-				if maxSpikeCost > checkCost {
-					checkCost = maxSpikeCost
-				}
-				var isSignificantSurge bool
-				if prevPeakCost > 0 {
-					isSignificantSurge = (checkCost >= prevPeakCost*priceSpikeSignificantMultiplier) && (checkCost >= escalatedPctVal)
-				}
-
-				if timeSince < 6*time.Hour {
-					if !isSignificantSurge {
-						log.Ctx(ctx).DebugContext(ctx, "skipping price spike notification: price surge not significant since last alert (1-6h window)",
-							slog.String("userID", su.userID),
-							slog.Duration("timeSinceLastAlert", timeSince),
-							slog.Time("lastAlertTime", lastLog.TSCreated),
-							slog.Float64("prevPeakCost", prevPeakCost),
-							slog.Float64("checkCost", checkCost),
-							slog.Float64("requiredCost", prevPeakCost*priceSpikeSignificantMultiplier),
-							slog.Float64("escalatedPctVal", escalatedPctVal),
-						)
-						continue
-					}
-				} else if timeSince < 24*time.Hour {
-					droppedBelow := priceDroppedBelowBetween(
-						histPrices,
-						lastLog.TSCreated,
-						spikeStart,
-						rawCosts,
-						reqPercentile,
-						minDelta,
-						useTimeOfDayRelative,
-						siteLoc,
+			} else if timeSince < 24*time.Hour {
+				droppedBelow := priceDroppedBelowBetween(
+					histPrices,
+					lastDeliveredLog.TSCreated,
+					spikeStart,
+					rawCosts,
+					reqPercentile,
+					minDelta,
+					useTimeOfDayRelative,
+					siteLoc,
+				)
+				if !droppedBelow && !isSignificantSurge {
+					log.Ctx(ctx).DebugContext(ctx, "skipping price spike notification: price did not drop below threshold between alerts and not significant surge (6-24h window)",
+						slog.String("userID", su.userID),
+						slog.Duration("timeSinceLastAlert", timeSince),
+						slog.Time("lastAlertTime", lastDeliveredLog.TSCreated),
+						slog.Float64("prevPeakCost", prevPeakCost),
+						slog.Float64("checkCost", checkCost),
+						slog.Bool("droppedBelow", droppedBelow),
 					)
-					if !droppedBelow && !isSignificantSurge {
-						log.Ctx(ctx).DebugContext(ctx, "skipping price spike notification: price did not drop below threshold between alerts and not significant surge (6-24h window)",
-							slog.String("userID", su.userID),
-							slog.Duration("timeSinceLastAlert", timeSince),
-							slog.Time("lastAlertTime", lastLog.TSCreated),
-							slog.Float64("prevPeakCost", prevPeakCost),
-							slog.Float64("checkCost", checkCost),
-							slog.Bool("droppedBelow", droppedBelow),
-						)
-						continue
-					}
+					continue
 				}
 			}
-		}
-
-		user, err := s.storage.GetUser(ctx, su.userID)
-		if err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to get user for price spike notification",
-				slog.String("userID", su.userID),
-				slog.Any("error", err),
-			)
-			continue
-		}
-		if len(user.Subscriptions) == 0 {
-			continue
 		}
 
 		// Construct Notification Title and Opening Sentence:
@@ -1802,7 +1913,7 @@ func (s *Server) handlePriceSpikeNotifications(
 		// 3. If battery will run out of energy before the spike ends: provide the estimated time battery reaches reserve.
 		// 4. If battery lasts through the entire spike: reassure user battery powers home through the whole event.
 		currentSOC := data.status.BatterySOC
-		simData := data.getSimData(ctx, s, site.ID, nowLocal)
+		simData := data.getSimData(ctx, s, siteID, nowLocal)
 		if len(simData) > 0 {
 			var spikeSlots []controller.SimHour
 			for i, slot := range simData {
@@ -1881,8 +1992,21 @@ func (s *Server) handlePriceSpikeNotifications(
 		}
 
 		body := fmt.Sprintf("%s %s", firstSentence, secondSentence)
+
+		user, err := s.storage.GetUser(ctx, su.userID)
+		if err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to get user for price spike notification",
+				slog.String("userID", su.userID),
+				slog.Any("error", err),
+			)
+			continue
+		}
+		if len(user.Subscriptions) == 0 {
+			continue
+		}
+
 		log.Ctx(ctx).DebugContext(ctx, "sending price spike notification",
-			slog.String("userID", user.ID),
+			slog.String("userID", su.userID),
 			slog.String("sensitivity", su.sensitivity),
 			slog.Float64("activeSpikeCost", activeSpikeCost),
 			slog.Float64("maxSpikeCost", maxSpikeCost),
@@ -1893,7 +2017,7 @@ func (s *Server) handlePriceSpikeNotifications(
 			slog.String("title", title),
 			slog.String("body", body),
 		)
-		s.dispatchPushToUser(ctx, site.ID, user, types.NotificationTypePriceSpike, su.sensitivity, title, body, "/forecast", metadata)
+		s.dispatchPushToUser(ctx, siteID, user, types.NotificationTypePriceSpike, su.sensitivity, title, body, "/forecast", metadata)
 	}
 }
 
@@ -1912,13 +2036,14 @@ func (s *Server) handlePriceSpikeNotifications(
 // 5. Absolute deficit requirement: Requires at least 2.5 kW generation shortfall to prevent micro-alerts.
 func (s *Server) handleSolarUnderproductionNotifications(
 	ctx context.Context,
-	site types.Site,
+	siteID string,
+	notifications map[string]types.UserNotificationSettings,
 	data *dataForNotifications,
 	nowLocal time.Time,
 	getNotifState func() *siteRecentNotifications,
 ) {
 	hasAnySolarUser := false
-	for _, notifConfig := range site.Notifications {
+	for _, notifConfig := range notifications {
 		if notifConfig.SolarUnderproductionAlert != "" && notifConfig.SolarUnderproductionAlert != "disabled" {
 			hasAnySolarUser = true
 			break
@@ -1972,7 +2097,7 @@ func (s *Server) handleSolarUnderproductionNotifications(
 	}
 
 	// Locate the forecasted solar generation for the current hour from simulation data
-	simData := data.getSimData(ctx, s, site.ID, nowLocal)
+	simData := data.getSimData(ctx, s, siteID, nowLocal)
 
 	var forecastKW float64
 	for _, slot := range simData {
@@ -1993,7 +2118,7 @@ func (s *Server) handleSolarUnderproductionNotifications(
 
 	todayDateStr := nowLocal.Format("2006-01-02")
 	actualKW := data.status.SolarKW
-	for userID, notifConfig := range site.Notifications {
+	for userID, notifConfig := range notifications {
 		if notifConfig.SolarUnderproductionAlert == "" || notifConfig.SolarUnderproductionAlert == "disabled" {
 			continue
 		}
@@ -2022,22 +2147,34 @@ func (s *Server) handleSolarUnderproductionNotifications(
 			continue
 		}
 
-		if getNotifState != nil && getNotifState().hasSentToday(userID, types.NotificationTypeSolarUnderproduction, todayDateStr, nowLocal.Location()) {
+		if getNotifState().hasSentToday(userID, types.NotificationTypeSolarUnderproduction, todayDateStr, nowLocal.Location()) {
 			log.Ctx(ctx).DebugContext(ctx, "skipping solar underproduction notification: already sent today",
 				slog.String("userID", userID),
 				slog.String("date", todayDateStr),
 			)
 			continue
 		}
+		title := "⚠️ Solar Underproduction Alert"
+		body := fmt.Sprintf("Solar panels are generating %.1f kW, significantly below the %.1f kW forecast for this hour. Check your solar inverter or breakers.", actualKW, forecastKW)
+		metadata := map[string]string{
+			"currentSolarKW":  fmt.Sprintf("%.2f", actualKW),
+			"forecastSolarKW": fmt.Sprintf("%.2f", forecastKW),
+			"deficitKW":       fmt.Sprintf("%.2f", forecastKW-actualKW),
+		}
+		if notifConfig.IsInQuietPeriod(nowLocal) {
+			s.logMutedNotification(ctx, siteID, userID, types.NotificationTypeSolarUnderproduction, notifConfig.SolarUnderproductionAlert, title, body, metadata)
+			continue
+		}
+
 		user, err := s.storage.GetUser(ctx, userID)
-		if err == nil && len(user.Subscriptions) > 0 {
-			title := "⚠️ Solar Underproduction Alert"
-			body := fmt.Sprintf("Solar panels are generating %.1f kW, significantly below the %.1f kW forecast for this hour. Check your solar inverter or breakers.", actualKW, forecastKW)
-			metadata := map[string]string{
-				"currentSolarKW":  fmt.Sprintf("%.2f", actualKW),
-				"forecastSolarKW": fmt.Sprintf("%.2f", forecastKW),
-				"deficitKW":       fmt.Sprintf("%.2f", forecastKW-actualKW),
-			}
+		if err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to get user for solar underproduction notification",
+				slog.String("userID", userID),
+				slog.Any("error", err),
+			)
+			continue
+		}
+		if len(user.Subscriptions) > 0 {
 			log.Ctx(ctx).DebugContext(ctx, "sending solar underproduction notification",
 				slog.String("userID", userID),
 				slog.String("sensitivity", notifConfig.SolarUnderproductionAlert),
@@ -2047,7 +2184,7 @@ func (s *Server) handleSolarUnderproductionNotifications(
 				slog.String("title", title),
 				slog.String("body", body),
 			)
-			s.dispatchPushToUser(ctx, site.ID, user, types.NotificationTypeSolarUnderproduction, notifConfig.SolarUnderproductionAlert, title, body, "/dashboard", metadata)
+			s.dispatchPushToUser(ctx, siteID, user, types.NotificationTypeSolarUnderproduction, notifConfig.SolarUnderproductionAlert, title, body, "/dashboard", metadata)
 		}
 	}
 }
@@ -2056,7 +2193,8 @@ func (s *Server) handleSolarUnderproductionNotifications(
 // (VPP) grid support event is triggered on the user's battery system.
 func (s *Server) handleVPPDispatchNotifications(
 	ctx context.Context,
-	site types.Site,
+	siteID string,
+	notifications map[string]types.UserNotificationSettings,
 	status types.SystemStatus,
 	vppInfo types.UtilityVPPInfo,
 	nowLocal time.Time,
@@ -2067,7 +2205,7 @@ func (s *Server) handleVPPDispatchNotifications(
 	}
 
 	hasAnyVPPUser := false
-	for _, notifConfig := range site.Notifications {
+	for _, notifConfig := range notifications {
 		if notifConfig.VPPDispatchAlert {
 			hasAnyVPPUser = true
 			break
@@ -2109,28 +2247,40 @@ func (s *Server) handleVPPDispatchNotifications(
 		return
 	}
 
-	for userID, notifConfig := range site.Notifications {
+	for userID, notifConfig := range notifications {
 		if !notifConfig.VPPDispatchAlert {
 			continue
 		}
-		if getNotifState != nil && getNotifState().hasSentWithin(userID, types.NotificationTypeVPPDispatch, vppDispatchDeduplicationWindow, s.now()) {
+		if getNotifState().hasSentWithin(userID, types.NotificationTypeVPPDispatch, vppDispatchDeduplicationWindow, s.now()) {
 			log.Ctx(ctx).DebugContext(ctx, "skipping vpp dispatch notification: within deduplication window",
 				slog.String("userID", userID),
 				slog.Duration("window", vppDispatchDeduplicationWindow),
 			)
 			continue
 		}
+		title := "⚡ Virtual Power Plant Active"
+		body := "RateRudder detected an active VPP grid support event on your system."
+		if status.BatteryKW > 0.1 {
+			body = "Your battery is discharging to support the electric grid during an unscheduled VPP event."
+		}
+		metadata := map[string]string{
+			"currentSOC": fmt.Sprintf("%.1f", status.BatterySOC),
+			"batteryKW":  fmt.Sprintf("%.2f", status.BatteryKW),
+		}
+		if notifConfig.IsInQuietPeriod(nowLocal) {
+			s.logMutedNotification(ctx, siteID, userID, types.NotificationTypeVPPDispatch, "", title, body, metadata)
+			continue
+		}
+
 		user, err := s.storage.GetUser(ctx, userID)
-		if err == nil && len(user.Subscriptions) > 0 {
-			title := "⚡ Virtual Power Plant Active"
-			body := "RateRudder detected an active VPP grid support event on your system."
-			if status.BatteryKW > 0.1 {
-				body = "Your battery is discharging to support the electric grid during an unscheduled VPP event."
-			}
-			metadata := map[string]string{
-				"currentSOC": fmt.Sprintf("%.1f", status.BatterySOC),
-				"batteryKW":  fmt.Sprintf("%.2f", status.BatteryKW),
-			}
+		if err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to get user for vpp dispatch notification",
+				slog.String("userID", userID),
+				slog.Any("error", err),
+			)
+			continue
+		}
+		if len(user.Subscriptions) > 0 {
 			log.Ctx(ctx).DebugContext(ctx, "sending vpp dispatch notification",
 				slog.String("userID", userID),
 				slog.Float64("batterySOC", status.BatterySOC),
@@ -2138,7 +2288,7 @@ func (s *Server) handleVPPDispatchNotifications(
 				slog.String("title", title),
 				slog.String("body", body),
 			)
-			s.dispatchPushToUser(ctx, site.ID, user, types.NotificationTypeVPPDispatch, "", title, body, "/dashboard", metadata)
+			s.dispatchPushToUser(ctx, siteID, user, types.NotificationTypeVPPDispatch, "", title, body, "/dashboard", metadata)
 		}
 	}
 }
@@ -2280,88 +2430,6 @@ func (s *Server) handleUnsubscribe(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// getNotificationSettingsResponse payload for fetching user notification settings and active push subscriptions.
-type getNotificationSettingsResponse struct {
-	Settings      types.UserNotificationSettings `json:"settings"`
-	Subscriptions []types.PushSubscription       `json:"subscriptions"`
-	VAPIDEnabled  bool                           `json:"vapidEnabled"`
-}
-
-// handleGetNotificationSettings returns the user's notification preferences for a site along with active push subscriptions.
-func (s *Server) handleGetNotificationSettings(w http.ResponseWriter, r *http.Request) {
-	user := s.getUser(r)
-	if user.ID == "" {
-		writeJSONError(w, "authentication required", http.StatusUnauthorized)
-		return
-	}
-	userID := user.ID
-
-	siteID := s.getSiteID(r)
-	if siteID == "" {
-		writeJSONError(w, "siteID required", http.StatusBadRequest)
-		return
-	}
-
-	ctx := r.Context()
-	settings := types.UserNotificationSettings{
-		MorningSummaryHour:   7,
-		MorningSummaryFlavor: defaultSummaryFlavor,
-		EveningSummaryHour:   20,
-		EveningSummaryFlavor: defaultSummaryFlavor,
-	}
-
-	var site types.Site
-	var ok bool
-	if site, ok = s.getSiteFromContext(r); !ok {
-		var err error
-		site, err = s.storage.GetSite(ctx, siteID)
-		if err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to get site for notification settings",
-				slog.String("siteID", siteID),
-				slog.Any("error", err),
-			)
-			writeJSONError(w, "failed to get site for notification settings", http.StatusInternalServerError)
-			return
-		}
-	}
-	if userSettings, ok := site.Notifications[userID]; ok {
-		settings = userSettings
-		if settings.MorningSummaryFlavor == "" {
-			settings.MorningSummaryFlavor = defaultSummaryFlavor
-		}
-		if settings.MorningSummaryHour == 0 && !settings.MorningSummaryEnabled {
-			settings.MorningSummaryHour = 7
-		}
-		if settings.EveningSummaryFlavor == "" {
-			settings.EveningSummaryFlavor = defaultSummaryFlavor
-		}
-		if settings.EveningSummaryHour == 0 && !settings.EveningSummaryEnabled {
-			settings.EveningSummaryHour = 20
-		}
-	}
-
-	u, err := s.storage.GetUser(ctx, userID)
-	if err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to get user for notification settings",
-			slog.String("userID", userID),
-			slog.Any("error", err),
-		)
-		writeJSONError(w, "failed to get user for notification settings", http.StatusInternalServerError)
-		return
-	}
-
-	resp := getNotificationSettingsResponse{
-		Settings:      settings,
-		Subscriptions: u.Subscriptions,
-		VAPIDEnabled:  s.notificationsEnabled(),
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		panic(http.ErrAbortHandler)
-	}
-}
-
 // updateNotificationSettingsRequest payload for updating user notification preferences on a site.
 type updateNotificationSettingsRequest struct {
 	SiteID   string                         `json:"siteID"`
@@ -2423,6 +2491,18 @@ func (s *Server) handleUpdateNotificationSettings(w http.ResponseWriter, r *http
 		writeJSONError(w, "invalid solar underproduction alert sensitivity", http.StatusBadRequest)
 		return
 	}
+	for _, period := range req.Settings.QuietPeriods {
+		for _, hp := range period.Hours {
+			if hp.HourStart < 0 || hp.HourStart > 23 || hp.HourEnd < 0 || hp.HourEnd > 23 || hp.HourStart == hp.HourEnd {
+				writeJSONError(w, "quiet period start and end hours must be between 0 and 23, and start cannot equal end", http.StatusBadRequest)
+				return
+			}
+			if hp.MinuteStart < 0 || hp.MinuteStart > 59 || hp.MinuteEnd < 0 || hp.MinuteEnd > 59 {
+				writeJSONError(w, "quiet period start and end minutes must be between 0 and 59", http.StatusBadRequest)
+				return
+			}
+		}
+	}
 
 	ctx := r.Context()
 	if err := s.storage.UpdateSiteNotificationSettings(ctx, siteID, userID, req.Settings); err != nil {
@@ -2464,6 +2544,33 @@ func (s *Server) handleNotificationClick(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(map[string]bool{"recorded": true}); err != nil {
+		panic(http.ErrAbortHandler)
+	}
+}
+
+type notificationSubscriptionsResponse struct {
+	Subscriptions        []types.PushSubscription `json:"subscriptions"`
+	NotificationsEnabled bool                     `json:"notificationsEnabled"`
+}
+
+func (s *Server) handleGetNotificationSubscriptions(w http.ResponseWriter, r *http.Request) {
+	user := s.getUser(r)
+	if user.ID == "" {
+		writeJSONError(w, "missing authentication", http.StatusUnauthorized)
+		return
+	}
+
+	subs := user.Subscriptions
+	if subs == nil {
+		subs = []types.PushSubscription{}
+	}
+
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(notificationSubscriptionsResponse{
+		Subscriptions:        subs,
+		NotificationsEnabled: s.notificationsEnabled(),
+	}); err != nil {
 		panic(http.ErrAbortHandler)
 	}
 }

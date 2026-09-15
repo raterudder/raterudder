@@ -282,10 +282,10 @@ func (s *Server) setupHandler() http.Handler {
 	apiMux.HandleFunc("POST /api/report/browser", s.handleReportBrowser)
 	apiMux.HandleFunc("GET /api/tesla/register", s.handleTeslaRegister)
 	apiMux.HandleFunc("GET /api/notifications/vapidPublicKey", s.handleGetVAPIDPublicKey)
+	apiMux.HandleFunc("GET /api/notifications/subscriptions", s.handleGetNotificationSubscriptions)
 	apiMux.HandleFunc("POST /api/notifications/subscribe", s.handleSubscribe)
 	apiMux.HandleFunc("POST /api/notifications/unsubscribe", s.handleUnsubscribe)
-	apiMux.HandleFunc("GET /api/notifications/settings", s.handleGetNotificationSettings)
-	apiMux.HandleFunc("POST /api/notifications/settings", s.handleUpdateNotificationSettings)
+	apiMux.HandleFunc("POST /api/settings/notifications", s.handleUpdateNotificationSettings)
 	apiMux.HandleFunc("POST /api/notifications/click", s.handleNotificationClick)
 
 	mux := http.NewServeMux()

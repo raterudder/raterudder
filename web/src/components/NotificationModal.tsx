@@ -4,11 +4,12 @@ import { Field } from '@base-ui/react/field';
 import { Switch } from '@base-ui/react/switch';
 import { Select } from '@base-ui/react/select';
 import {
-    fetchNotificationSettings,
+    fetchNotificationSubscriptions,
     updateNotificationSettings,
     fetchVAPIDPublicKey,
     subscribePushNotification,
     unsubscribePushNotification,
+    type Settings,
     type UserNotificationSettings,
     type PushSubscription,
     type MorningSummaryFlavor,
@@ -25,6 +26,9 @@ interface NotificationModalProps {
     onClose: () => void;
     siteID?: string;
     siteName?: string;
+    settings?: Settings | null;
+    currentUserID?: string;
+    onSaved?: () => void;
 }
 
 const flavorPreviews: Record<MorningSummaryFlavor, { name: string; desc: string; title: string; body: string }> = {
@@ -154,14 +158,18 @@ const defaultSettingsValues: UserNotificationSettings = {
     gridOutageAlert: false,
     priceSpikeAlert: '',
     solarUnderproductionAlert: '',
-    vppDispatchAlert: false
+    vppDispatchAlert: false,
+    quietPeriods: []
 };
 
 export const NotificationModal: React.FC<NotificationModalProps> = ({
     open,
     onClose,
     siteID,
-    siteName
+    siteName,
+    settings,
+    currentUserID,
+    onSaved
 }) => {
     const [savedSettings, setSavedSettings] = useState<UserNotificationSettings>(defaultSettingsValues);
     const [draftSettings, setDraftSettings] = useState<UserNotificationSettings>(defaultSettingsValues);
@@ -199,8 +207,8 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                     if (!isRegistered) {
                         try {
                             await sub.unsubscribe();
-                        } catch (e) {
-                            console.error('Failed to unsubscribe stale push subscription', e);
+                        } catch {
+                            // ignore cleanup failure
                         }
                         setIsSubscribedLocally(false);
                         return;
@@ -220,8 +228,17 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
         }
         try {
             setLoading(true);
-            const res = await fetchNotificationSettings(siteID);
-            const server = res.settings;
+            const subRes = await fetchNotificationSubscriptions();
+            const serverSubs = subRes.subscriptions || [];
+            setSubscriptions(serverSubs);
+            setVapidEnabled(subRes.notificationsEnabled ?? true);
+
+            const uid = currentUserID || '';
+            const server = (settings?.notifications && uid && settings.notifications[uid])
+                ? settings.notifications[uid]
+                : ((settings?.notifications && Object.values(settings.notifications).length > 0)
+                    ? Object.values(settings.notifications)[0]
+                    : (settings as any)?.settings);
             const initial: UserNotificationSettings = server ? {
                 morningSummaryEnabled: server.morningSummaryEnabled ?? defaultSettingsValues.morningSummaryEnabled,
                 morningSummaryHour: (server.morningSummaryHour !== undefined && server.morningSummaryHour !== null && (server.morningSummaryHour !== 0 || server.morningSummaryEnabled))
@@ -237,19 +254,18 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                 priceSpikeAlert: server.priceSpikeAlert || '',
                 solarUnderproductionAlert: server.solarUnderproductionAlert || '',
                 vppDispatchAlert: server.vppDispatchAlert ?? defaultSettingsValues.vppDispatchAlert,
+                quietPeriods: server.quietPeriods || [],
             } : defaultSettingsValues;
             setSavedSettings(initial);
             setDraftSettings(initial);
-            const serverSubs = res.subscriptions || [];
-            setSubscriptions(serverSubs);
-            setVapidEnabled(res.vapidEnabled);
+
             await checkLocalSubscription(serverSubs);
         } catch (err: any) {
             console.error('Failed to load notification settings', err);
         } finally {
             setLoading(false);
         }
-    }, [siteID, checkLocalSubscription]);
+    }, [siteID, settings, currentUserID, checkLocalSubscription]);
 
     useEffect(() => {
         if (open) {
@@ -302,10 +318,8 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                 }, true);
 
                 setIsSubscribedLocally(true);
-                if (siteID) {
-                    const updated = await fetchNotificationSettings(siteID);
-                    setSubscriptions(updated.subscriptions || []);
-                }
+                const updated = await fetchNotificationSubscriptions();
+                setSubscriptions(updated.subscriptions || []);
             } else {
                 const reg = await navigator.serviceWorker.ready;
                 const sub = await reg.pushManager.getSubscription();
@@ -314,10 +328,8 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                     await unsubscribePushNotification(sub.endpoint);
                 }
                 setIsSubscribedLocally(false);
-                if (siteID) {
-                    const updated = await fetchNotificationSettings(siteID);
-                    setSubscriptions(updated.subscriptions || []);
-                }
+                const updated = await fetchNotificationSubscriptions();
+                setSubscriptions(updated.subscriptions || []);
             }
         } catch (err: any) {
             setError(err.message || 'Failed to update push subscription');
@@ -330,8 +342,48 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
         setDraftSettings(prev => ({ ...prev, ...updates }));
     };
 
+    const quietPeriod = draftSettings.quietPeriods && draftSettings.quietPeriods.length > 0
+        ? draftSettings.quietPeriods[0]
+        : undefined;
+    const quietHour = quietPeriod?.hours && quietPeriod.hours.length > 0
+        ? quietPeriod.hours[0]
+        : undefined;
+
+    const isQuietPeriodEnabled = Boolean(quietPeriod);
+    const quietStartHour = quietHour?.hourStart ?? 22;
+    const quietEndHour = quietHour?.hourEnd ?? 7;
+    const isQuietPeriodInvalid = isQuietPeriodEnabled && quietStartHour === quietEndHour;
+
+    const handleToggleQuietPeriod = (enabled: boolean) => {
+        if (enabled) {
+            handleUpdateDraft({
+                quietPeriods: [{
+                    hours: [{ hourStart: 22, hourEnd: 7 }]
+                }]
+            });
+        } else {
+            handleUpdateDraft({ quietPeriods: [] });
+        }
+    };
+
+    const handleQuietStartHourChange = (hour: number) => {
+        handleUpdateDraft({
+            quietPeriods: [{
+                hours: [{ hourStart: hour, hourEnd: quietEndHour }]
+            }]
+        });
+    };
+
+    const handleQuietEndHourChange = (hour: number) => {
+        handleUpdateDraft({
+            quietPeriods: [{
+                hours: [{ hourStart: quietStartHour, hourEnd: hour }]
+            }]
+        });
+    };
+
     const handleSavePreferences = async () => {
-        if (!siteID) return;
+        if (!siteID || isQuietPeriodInvalid) return;
         setSaving(true);
         setError(null);
 
@@ -341,12 +393,14 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
             morningSummaryHour: draftSettings.morningSummaryHour ?? defaultSettingsValues.morningSummaryHour,
             eveningSummaryFlavor: draftSettings.eveningSummaryFlavor || defaultSettingsValues.eveningSummaryFlavor,
             eveningSummaryHour: draftSettings.eveningSummaryHour ?? defaultSettingsValues.eveningSummaryHour,
+            quietPeriods: draftSettings.quietPeriods || [],
         };
 
         try {
             await updateNotificationSettings(siteID, settingsToSave);
             setSavedSettings(settingsToSave);
             setDraftSettings(settingsToSave);
+            onSaved?.();
             onClose();
         } catch (err: any) {
             setError(err.message || 'Failed to save notification preferences');
@@ -413,12 +467,9 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
             }
 
             await unsubscribePushNotification(endpoint);
-            let updatedSubs: PushSubscription[] = [];
-            if (siteID) {
-                const updated = await fetchNotificationSettings(siteID);
-                updatedSubs = updated.subscriptions || [];
-                setSubscriptions(updatedSubs);
-            }
+            const updated = await fetchNotificationSubscriptions();
+            const updatedSubs = updated.subscriptions || [];
+            setSubscriptions(updatedSubs);
             await checkLocalSubscription(updatedSubs);
         } catch (err: any) {
             setError(err.message || 'Failed to remove device');
@@ -896,6 +947,132 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                             )}
                                         </div>
 
+                                        {/* Quiet Period */}
+                                        <div className="notif-section">
+                                            <Field.Root className="form-group switch-group" style={{ marginBottom: 0 }}>
+                                                <div className="switch-row">
+                                                    <Switch.Root
+                                                        id="quietPeriodToggle"
+                                                        checked={isQuietPeriodEnabled}
+                                                        onCheckedChange={handleToggleQuietPeriod}
+                                                        className="switch-root"
+                                                        aria-label="Mute Alerts During Quiet Hours"
+                                                    >
+                                                        <Switch.Thumb className="switch-thumb" />
+                                                    </Switch.Root>
+                                                    <Field.Label htmlFor="quietPeriodToggle" style={{ cursor: 'pointer' }}>
+                                                        Mute Alerts During Quiet Hours
+                                                    </Field.Label>
+                                                    <HelpButton
+                                                        title="Quiet Period"
+                                                        ariaLabel="More info about quiet period"
+                                                        description={
+                                                            <div>
+                                                                <p>
+                                                                    Set a daily window where real-time push alerts (such as price spikes, solar deficits, VPP dispatches, and grid outages) are muted so you aren&apos;t disturbed while sleeping.
+                                                                </p>
+                                                                <p>
+                                                                    If high prices or a grid outage continue past your quiet period, RateRudder will deliver a notification when quiet hours end.
+                                                                </p>
+                                                                <p>
+                                                                    Scheduled morning and evening summaries are not affected by this window.
+                                                                </p>
+                                                            </div>
+                                                        }
+                                                    />
+                                                </div>
+                                                <Field.Description>
+                                                    Temporarily pause alert-style push notifications during sleeping hours.
+                                                </Field.Description>
+                                            </Field.Root>
+
+                                            {isQuietPeriodEnabled && (
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                                    <div className="notif-row-split">
+                                                        {/* Start Hour Dropdown */}
+                                                        <Field.Root className="form-group compact">
+                                                            <Field.Label htmlFor="quietPeriodStartHour" style={{ marginBottom: '0.35rem', display: 'block' }}>Quiet Time Starts</Field.Label>
+                                                            <Select.Root
+                                                                value={String(quietStartHour)}
+                                                                onValueChange={(val) => handleQuietStartHourChange(parseInt(val as string, 10))}
+                                                            >
+                                                                <Select.Trigger className="select-trigger" id="quietPeriodStartHour" aria-label="Quiet Period Start Time">
+                                                                    <Select.Value>
+                                                                        {formatHour12(quietStartHour)}
+                                                                    </Select.Value>
+                                                                    <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                                            <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                                        </svg>
+                                                                    </Select.Icon>
+                                                                </Select.Trigger>
+                                                                <Select.Portal>
+                                                                    <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
+                                                                        <Select.Popup className="select-popup">
+                                                                            <Select.List>
+                                                                                {Array.from({ length: 24 }, (_, i) => (
+                                                                                    <Select.Item key={i} className="select-item" value={String(i)}>
+                                                                                        <Select.ItemText>{formatHour12(i)}</Select.ItemText>
+                                                                                    </Select.Item>
+                                                                                ))}
+                                                                            </Select.List>
+                                                                        </Select.Popup>
+                                                                    </Select.Positioner>
+                                                                </Select.Portal>
+                                                            </Select.Root>
+                                                        </Field.Root>
+
+                                                        {/* End Hour Dropdown */}
+                                                        <Field.Root className="form-group compact">
+                                                            <Field.Label htmlFor="quietPeriodEndHour" style={{ marginBottom: '0.35rem', display: 'block' }}>Quiet Time Ends</Field.Label>
+                                                            <Select.Root
+                                                                value={String(quietEndHour)}
+                                                                onValueChange={(val) => handleQuietEndHourChange(parseInt(val as string, 10))}
+                                                            >
+                                                                <Select.Trigger className="select-trigger" id="quietPeriodEndHour" aria-label="Quiet Period End Time">
+                                                                    <Select.Value>
+                                                                        {formatHour12(quietEndHour)}
+                                                                    </Select.Value>
+                                                                    <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                                            <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                                        </svg>
+                                                                    </Select.Icon>
+                                                                </Select.Trigger>
+                                                                <Select.Portal>
+                                                                    <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
+                                                                        <Select.Popup className="select-popup">
+                                                                            <Select.List>
+                                                                                {Array.from({ length: 24 }, (_, i) => (
+                                                                                    <Select.Item key={i} className="select-item" value={String(i)}>
+                                                                                        <Select.ItemText>{formatHour12(i)}</Select.ItemText>
+                                                                                    </Select.Item>
+                                                                                ))}
+                                                                            </Select.List>
+                                                                        </Select.Popup>
+                                                                    </Select.Positioner>
+                                                                </Select.Portal>
+                                                            </Select.Root>
+                                                        </Field.Root>
+                                                    </div>
+
+                                                    {isQuietPeriodInvalid && (
+                                                        <div className="quiet-period-error" role="alert">
+                                                            Quiet period start and end time cannot be the same.
+                                                        </div>
+                                                    )}
+
+                                                    <div className="quiet-period-info">
+                                                        <p>
+                                                            Alert-style notifications (price spikes, solar deficits, VPP events, and grid outages) will be suppressed from {formatHour12(quietStartHour)} to {formatHour12(quietEndHour)}.
+                                                            If an alert condition is still active when quiet hours end, you will receive an alert upon wakeup.
+                                                            Daily morning and evening summaries are excluded and follow their scheduled delivery times.
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+
                                         {/* Real-Time Alerts */}
                                         <div className="notif-section">
                                             {/* Grid Outage & Restoration */}
@@ -1150,7 +1327,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                 type="button"
                                 className="btn btn-primary"
                                 onClick={handleSavePreferences}
-                                disabled={saving || loading || !siteID}
+                                disabled={saving || loading || !siteID || isQuietPeriodInvalid}
                             >
                                 {saving ? 'Saving...' : 'Save Preferences'}
                             </button>

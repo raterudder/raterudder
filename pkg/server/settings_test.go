@@ -65,15 +65,27 @@ func TestHandleGetSettings(t *testing.T) {
 
 	t.Run("Get Settings", func(t *testing.T) {
 		srv, _ := newAuthServer("", nil, nil)
+		privB64, _ := generateTestVAPIDKeys(t)
+		privKey, pubKey, err := parseVAPIDPrivateKey(privB64)
+		require.NoError(t, err)
+		srv.vapidKey = privKey
+		srv.vapidPublicKey = pubKey
 		req := httptest.NewRequest("GET", "/api/settings", nil)
-		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
+		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
+		ctx = context.WithValue(ctx, userContextKey, types.User{
+			ID: "user-123",
+			Subscriptions: []types.PushSubscription{
+				{ID: "sub-1", Endpoint: "https://example.com/sub-1"},
+			},
+		})
+		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
 		srv.handleGetSettings(w, req)
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
 
 		var resp SettingsRes
-		err := json.NewDecoder(w.Body).Decode(&resp)
+		err = json.NewDecoder(w.Body).Decode(&resp)
 		require.NoError(t, err)
 		// Verify fields populated by default mockS.GetSettings
 		assert.Equal(t, 10.0, resp.MinBatterySOC)
@@ -82,7 +94,6 @@ func TestHandleGetSettings(t *testing.T) {
 		// Verify hasCredentials flags accurately reflect the empty mock credentials
 		assert.False(t, resp.HasCredentials["franklin"])
 		assert.False(t, resp.HasCredentials["mock"])
-		assert.False(t, resp.HasNotifications)
 	})
 
 	t.Run("Get Settings with Notifications", func(t *testing.T) {
@@ -90,14 +101,11 @@ func TestHandleGetSettings(t *testing.T) {
 		srv, _ := newAuthServer("", nil, nil)
 		srv.storage = mockSWithNotif
 
-		mockSWithNotif.On("GetSite", mock.Anything, "site1").Return(types.Site{
-			ID: "site1",
+		mockSWithNotif.On("GetSettings", mock.Anything, "site1").Return(types.Settings{
+			DryRun: false,
 			Notifications: map[string]types.UserNotificationSettings{
 				"user1": {MorningSummaryEnabled: true},
 			},
-		}, nil)
-		mockSWithNotif.On("GetSettings", mock.Anything, "site1").Return(types.Settings{
-			DryRun: false,
 		}, types.CurrentSettingsVersion, time.Time{}, nil)
 
 		req := httptest.NewRequest("GET", "/api/settings", nil)
@@ -109,36 +117,8 @@ func TestHandleGetSettings(t *testing.T) {
 			var resp SettingsRes
 			err := json.NewDecoder(w.Body).Decode(&resp)
 			require.NoError(t, err)
-			assert.True(t, resp.HasNotifications)
-		}
-	})
-
-	t.Run("Get Settings with Context Site", func(t *testing.T) {
-		mockSContext := &mockStorage{}
-		srv, _ := newAuthServer("", nil, nil)
-		srv.storage = mockSContext
-
-		mockSContext.On("GetSettings", mock.Anything, "site1").Return(types.Settings{
-			DryRun: false,
-		}, types.CurrentSettingsVersion, time.Time{}, nil)
-
-		req := httptest.NewRequest("GET", "/api/settings", nil)
-		ctx := context.WithValue(req.Context(), siteIDContextKey, "site1")
-		ctx = context.WithValue(ctx, siteContextKey, types.Site{
-			ID: "site1",
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1": {MorningSummaryEnabled: true},
-			},
-		})
-		req = req.WithContext(ctx)
-		w := httptest.NewRecorder()
-
-		srv.handleGetSettings(w, req)
-		if assert.Equal(t, http.StatusOK, w.Result().StatusCode) {
-			var resp SettingsRes
-			err := json.NewDecoder(w.Body).Decode(&resp)
-			require.NoError(t, err)
-			assert.True(t, resp.HasNotifications)
+			assert.Len(t, resp.Notifications, 1)
+			assert.True(t, resp.Notifications["user1"].MorningSummaryEnabled)
 		}
 	})
 
@@ -238,6 +218,44 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		srv.handleUpdateSettings(w, req)
 		assert.Equal(t, http.StatusUnauthorized, w.Result().StatusCode)
+	})
+
+	t.Run("Update Settings - Preserves Notifications", func(t *testing.T) {
+		mockS := &mockStorage{}
+		srv := newAuthServer("", nil, nil)
+		srv.storage = mockS
+
+		existingNotifs := map[string]types.UserNotificationSettings{
+			"user1": {MorningSummaryEnabled: true, MorningSummaryHour: 8},
+		}
+		mockS.On("GetSettings", mock.Anything, "site1").Return(types.Settings{
+			DryRun:        false,
+			Notifications: existingNotifs,
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+
+		var savedSettings types.Settings
+		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
+			savedSettings = s
+			return true
+		}), types.CurrentSettingsVersion, mock.Anything).Return(nil)
+
+		newSettings := types.Settings{
+			DryRun:                      true,
+			IgnoreHourUsageOverMultiple: 5,
+			SolarTrendRatioMax:          3.0,
+			SolarBellCurveMultiplier:    1.0,
+		}
+		b, _ := json.Marshal(newSettings)
+		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+		req = withUser(req, "admin@example.com", true)
+		ctx := context.WithValue(req.Context(), siteIDContextKey, "site1")
+		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+		assert.True(t, savedSettings.DryRun)
+		assert.Equal(t, existingNotifs, savedSettings.Notifications)
 	})
 
 	t.Run("getESSSystem Backoff Logic", func(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -2002,7 +2003,7 @@ func (f *FirestoreProvider) RemoveUserPushSubscription(ctx context.Context, user
 	return nil
 }
 
-// UpdateSiteNotificationSettings updates notification preferences for a specific user on a site in a transaction.
+// UpdateSiteNotificationSettings updates notification preferences for a specific user on a site's settings in a transaction.
 // If settings is an empty struct (types.UserNotificationSettings{}), the user's notification entry is deleted.
 func (f *FirestoreProvider) UpdateSiteNotificationSettings(ctx context.Context, siteID string, userID string, settings types.UserNotificationSettings) error {
 	if siteID == "" {
@@ -2011,7 +2012,11 @@ func (f *FirestoreProvider) UpdateSiteNotificationSettings(ctx context.Context, 
 	if userID == "" {
 		return fmt.Errorf("userID cannot be empty")
 	}
-	docRef := f.client.Collection("sites").Doc(siteID)
+	coll, err := f.getCollection(siteID, "config")
+	if err != nil {
+		return err
+	}
+	docRef := coll.Doc("settings")
 
 	return f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
 		doc, err := tx.Get(docRef)
@@ -2019,52 +2024,52 @@ func (f *FirestoreProvider) UpdateSiteNotificationSettings(ctx context.Context, 
 			if status.Code(err) == codes.NotFound {
 				return fmt.Errorf("%w: %s", ErrSiteNotFound, siteID)
 			}
-			return fmt.Errorf("failed to get site %s: %w", siteID, err)
+			return fmt.Errorf("failed to get settings for site %s: %w", siteID, err)
 		}
 
 		val, err := doc.DataAt("json")
 		if err != nil {
-			return fmt.Errorf("site %s missing json: %w", siteID, err)
+			return fmt.Errorf("settings for site %s missing json: %w", siteID, err)
 		}
 		jsonStr, ok := val.(string)
 		if !ok {
-			return fmt.Errorf("site %s json is not a string", siteID)
+			return fmt.Errorf("settings for site %s json is not a string", siteID)
 		}
 
-		var site types.Site
-		if err := json.Unmarshal([]byte(jsonStr), &site); err != nil {
-			return fmt.Errorf("failed to unmarshal site %s: %w", siteID, err)
+		var s types.Settings
+		if err := json.Unmarshal([]byte(jsonStr), &s); err != nil {
+			return fmt.Errorf("failed to unmarshal settings for site %s: %w", siteID, err)
 		}
 
-		if settings == (types.UserNotificationSettings{}) {
-			if site.Notifications == nil {
+		if reflect.DeepEqual(settings, types.UserNotificationSettings{}) {
+			if s.Notifications == nil {
 				return nil
 			}
-			if _, exists := site.Notifications[userID]; !exists {
+			if _, exists := s.Notifications[userID]; !exists {
 				return nil
 			}
-			delete(site.Notifications, userID)
-			if len(site.Notifications) == 0 {
-				site.Notifications = nil
+			delete(s.Notifications, userID)
+			if len(s.Notifications) == 0 {
+				s.Notifications = nil
 			}
 		} else {
-			if site.Notifications != nil {
-				if existing, exists := site.Notifications[userID]; exists && existing == settings {
+			if s.Notifications != nil {
+				if existing, exists := s.Notifications[userID]; exists && reflect.DeepEqual(existing, settings) {
 					return nil
 				}
 			} else {
-				site.Notifications = make(map[string]types.UserNotificationSettings)
+				s.Notifications = make(map[string]types.UserNotificationSettings)
 			}
-			site.Notifications[userID] = settings
+			s.Notifications[userID] = settings
 		}
 
-		siteJSON, err := json.Marshal(site)
+		settingsJSON, err := json.Marshal(s)
 		if err != nil {
-			return fmt.Errorf("failed to marshal site %s: %w", siteID, err)
+			return fmt.Errorf("failed to marshal settings for site %s: %w", siteID, err)
 		}
 
 		return tx.Set(docRef, map[string]any{
-			"json": string(siteJSON),
+			"json": string(settingsJSON),
 		}, firestore.MergeAll)
 	})
 }

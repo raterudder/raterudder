@@ -327,3 +327,24 @@
     flex: 1;
   }
 }
+
+/* Quiet Period Styles */
+.quiet-period-info {
+  background: var(--surface-container, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border, #2e3440);
+  border-radius: var(--radius-md, 8px);
+  padding: 0.75rem 1rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary, #94a3b8);
+  line-height: 1.45;
+}
+
+.quiet-period-info p {
+  margin: 0;
+}
+
+.quiet-period-error {
+  font-size: 0.8rem;
+  color: var(--error, #ef4444);
+  margin-top: 0.25rem;
+}

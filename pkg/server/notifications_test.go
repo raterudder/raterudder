@@ -475,114 +475,6 @@ func TestHandleUnsubscribe(t *testing.T) {
 	})
 }
 
-func TestHandleGetNotificationSettings(t *testing.T) {
-	t.Run("ExistingSettings", func(t *testing.T) {
-		mockS := &storagemock.MockDatabase{}
-		_, handler, _, _ := createTestEndpointsServer(t, mockS)
-
-		siteID := "site-123"
-		mockS.On("GetSite", mock.Anything, siteID).Return(types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"fake": {
-					MorningSummaryEnabled: true,
-					MorningSummaryHour:    8,
-					MorningSummaryFlavor:  "home_planner",
-				},
-			},
-		}, nil).Once()
-		mockS.On("GetUser", mock.Anything, "fake").Return(types.User{
-			ID: "fake",
-			Subscriptions: []types.PushSubscription{
-				{
-					ID:        "sub-1",
-					Endpoint:  "https://fcm.googleapis.com/fcm/send/test",
-					UserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-				},
-			},
-		}, nil).Once()
-
-		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/notifications/settings?siteID=%s", siteID), nil)
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-
-		assert.Equal(t, http.StatusOK, rec.Code)
-		var resp getNotificationSettingsResponse
-		require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
-		assert.True(t, resp.Settings.MorningSummaryEnabled)
-		assert.Equal(t, 8, resp.Settings.MorningSummaryHour)
-		assert.Equal(t, "home_planner", resp.Settings.MorningSummaryFlavor)
-		if assert.Len(t, resp.Subscriptions, 1) {
-			assert.Equal(t, "sub-1", resp.Subscriptions[0].ID)
-		}
-	})
-
-	t.Run("DefaultWhenUnset", func(t *testing.T) {
-		mockS := &storagemock.MockDatabase{}
-		_, handler, _, _ := createTestEndpointsServer(t, mockS)
-
-		siteID := "site-empty-notif"
-		mockS.On("GetSite", mock.Anything, siteID).Return(types.Site{
-			ID: siteID,
-		}, nil).Once()
-		mockS.On("GetUser", mock.Anything, "fake").Return(types.User{
-			ID: "fake",
-		}, nil).Once()
-
-		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/notifications/settings?siteID=%s", siteID), nil)
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-
-		assert.Equal(t, http.StatusOK, rec.Code)
-		var resp getNotificationSettingsResponse
-		require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
-		assert.False(t, resp.Settings.MorningSummaryEnabled)
-		assert.Equal(t, 7, resp.Settings.MorningSummaryHour)
-		assert.Equal(t, defaultSummaryFlavor, resp.Settings.MorningSummaryFlavor)
-		assert.False(t, resp.Settings.EveningSummaryEnabled)
-		assert.Equal(t, 20, resp.Settings.EveningSummaryHour)
-		assert.Equal(t, defaultSummaryFlavor, resp.Settings.EveningSummaryFlavor)
-	})
-
-	t.Run("CachedSiteInContext", func(t *testing.T) {
-		mockS := &storagemock.MockDatabase{}
-		srv, _, _, _ := createTestEndpointsServer(t, mockS)
-
-		siteID := "site-cached-notif"
-		cachedSite := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"fake": {
-					MorningSummaryEnabled: true,
-					MorningSummaryHour:    9,
-					MorningSummaryFlavor:  "executive",
-				},
-			},
-		}
-		mockS.On("GetUser", mock.Anything, "fake").Return(types.User{
-			ID: "fake",
-		}, nil).Once()
-
-		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/notifications/settings?siteID=%s", siteID), nil)
-		ctx := context.WithValue(req.Context(), siteIDContextKey, siteID)
-		ctx = context.WithValue(ctx, userContextKey, types.User{ID: "fake"})
-		ctx = context.WithValue(ctx, siteContextKey, cachedSite)
-		req = req.WithContext(ctx)
-
-		rec := httptest.NewRecorder()
-		srv.handleGetNotificationSettings(rec, req)
-
-		if assert.Equal(t, http.StatusOK, rec.Code) {
-			var resp getNotificationSettingsResponse
-			require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
-			assert.True(t, resp.Settings.MorningSummaryEnabled)
-			assert.Equal(t, 9, resp.Settings.MorningSummaryHour)
-			assert.Equal(t, "executive", resp.Settings.MorningSummaryFlavor)
-		}
-		mockS.AssertNotCalled(t, "GetSite", mock.Anything, mock.Anything)
-	})
-}
-
 func TestHandleUpdateNotificationSettings(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
@@ -602,7 +494,7 @@ func TestHandleUpdateNotificationSettings(t *testing.T) {
 		body, err := json.Marshal(updateReq)
 		require.NoError(t, err)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/notifications/settings", bytes.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/api/settings/notifications", bytes.NewReader(body))
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
@@ -613,7 +505,7 @@ func TestHandleUpdateNotificationSettings(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		_, handler, _, _ := createTestEndpointsServer(t, mockS)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/notifications/settings", bytes.NewReader([]byte("bad json")))
+		req := httptest.NewRequest(http.MethodPost, "/api/settings/notifications", bytes.NewReader([]byte("bad json")))
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
@@ -635,7 +527,7 @@ func TestHandleUpdateNotificationSettings(t *testing.T) {
 		body, err := json.Marshal(updateReq)
 		require.NoError(t, err)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/notifications/settings", bytes.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/api/settings/notifications", bytes.NewReader(body))
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
@@ -658,7 +550,7 @@ func TestHandleUpdateNotificationSettings(t *testing.T) {
 		body, err := json.Marshal(updateReq)
 		require.NoError(t, err)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/notifications/settings", bytes.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/api/settings/notifications", bytes.NewReader(body))
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
@@ -681,7 +573,7 @@ func TestHandleUpdateNotificationSettings(t *testing.T) {
 		body, err := json.Marshal(updateReq)
 		require.NoError(t, err)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/notifications/settings", bytes.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/api/settings/notifications", bytes.NewReader(body))
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
@@ -707,7 +599,7 @@ func TestHandleUpdateNotificationSettings(t *testing.T) {
 		body, err := json.Marshal(updateReq)
 		require.NoError(t, err)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/notifications/settings", bytes.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/api/settings/notifications", bytes.NewReader(body))
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
@@ -733,7 +625,7 @@ func TestHandleUpdateNotificationSettings(t *testing.T) {
 		body, err := json.Marshal(updateReq)
 		require.NoError(t, err)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/notifications/settings", bytes.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/api/settings/notifications", bytes.NewReader(body))
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
@@ -763,7 +655,7 @@ func TestHandleUpdateNotificationSettings(t *testing.T) {
 		body, err := json.Marshal(updateReq)
 		require.NoError(t, err)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/notifications/settings", bytes.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/api/settings/notifications", bytes.NewReader(body))
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
@@ -787,7 +679,7 @@ func TestHandleUpdateNotificationSettings(t *testing.T) {
 		body, err := json.Marshal(updateReq)
 		require.NoError(t, err)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/notifications/settings", bytes.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/api/settings/notifications", bytes.NewReader(body))
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
@@ -811,7 +703,7 @@ func TestHandleUpdateNotificationSettings(t *testing.T) {
 		body, err := json.Marshal(updateReq)
 		require.NoError(t, err)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/notifications/settings", bytes.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/api/settings/notifications", bytes.NewReader(body))
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
@@ -843,7 +735,7 @@ func TestHandleUpdateNotificationSettings(t *testing.T) {
 		body, err := json.Marshal(updateReq)
 		require.NoError(t, err)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/notifications/settings", bytes.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/api/settings/notifications", bytes.NewReader(body))
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
@@ -868,11 +760,137 @@ func TestHandleUpdateNotificationSettings(t *testing.T) {
 		body, err := json.Marshal(updateReq)
 		require.NoError(t, err)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/notifications/settings", bytes.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/api/settings/notifications", bytes.NewReader(body))
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
 		assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	})
+
+	t.Run("ValidQuietPeriods", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		_, handler, _, _ := createTestEndpointsServer(t, mockS)
+
+		siteID := "site-123"
+		mockS.On("UpdateSiteNotificationSettings", mock.Anything, siteID, "fake", mock.MatchedBy(func(s types.UserNotificationSettings) bool {
+			return len(s.QuietPeriods) == 1 && s.QuietPeriods[0].Hours[0].HourStart == 22 && s.QuietPeriods[0].Hours[0].HourEnd == 7
+		})).Return(nil).Once()
+
+		updateReq := updateNotificationSettingsRequest{
+			SiteID: siteID,
+			Settings: types.UserNotificationSettings{
+				QuietPeriods: []types.TimePeriod{
+					{
+						Hours: []types.UtilityHourPeriod{{HourStart: 22, HourEnd: 7}},
+					},
+				},
+			},
+		}
+		body, err := json.Marshal(updateReq)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/settings/notifications", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("InvalidQuietPeriodsEqualHours", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		_, handler, _, _ := createTestEndpointsServer(t, mockS)
+
+		siteID := "site-123"
+		updateReq := updateNotificationSettingsRequest{
+			SiteID: siteID,
+			Settings: types.UserNotificationSettings{
+				QuietPeriods: []types.TimePeriod{
+					{
+						Hours: []types.UtilityHourPeriod{{HourStart: 8, HourEnd: 8}},
+					},
+				},
+			},
+		}
+		body, err := json.Marshal(updateReq)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/settings/notifications", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Contains(t, rec.Body.String(), "quiet period start and end hours must be between 0 and 23, and start cannot equal end")
+	})
+
+	t.Run("InvalidQuietPeriodsOutOfRangeHours", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		_, handler, _, _ := createTestEndpointsServer(t, mockS)
+
+		siteID := "site-123"
+		updateReq := updateNotificationSettingsRequest{
+			SiteID: siteID,
+			Settings: types.UserNotificationSettings{
+				QuietPeriods: []types.TimePeriod{
+					{
+						Hours: []types.UtilityHourPeriod{{HourStart: 25, HourEnd: 7}},
+					},
+				},
+			},
+		}
+		body, err := json.Marshal(updateReq)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/settings/notifications", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Contains(t, rec.Body.String(), "quiet period start and end hours must be between 0 and 23, and start cannot equal end")
+	})
+}
+
+func TestHandleGetNotificationSubscriptions(t *testing.T) {
+	t.Run("SuccessWithSubscriptions", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		srv, _, _, _ := createTestEndpointsServer(t, mockS)
+		privB64, _ := generateTestVAPIDKeys(t)
+		privKey, pubKey, err := parseVAPIDPrivateKey(privB64)
+		require.NoError(t, err)
+		srv.vapidKey = privKey
+		srv.vapidPublicKey = pubKey
+
+		req := httptest.NewRequest(http.MethodGet, "/api/notifications/subscriptions", nil)
+		ctx := context.WithValue(req.Context(), userContextKey, types.User{
+			ID: "user-123",
+			Subscriptions: []types.PushSubscription{
+				{ID: "sub-1", Endpoint: "https://example.com/sub-1"},
+			},
+		})
+		req = req.WithContext(ctx)
+		rec := httptest.NewRecorder()
+		srv.handleGetNotificationSubscriptions(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		var resp notificationSubscriptionsResponse
+		require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+		assert.True(t, resp.NotificationsEnabled)
+		if assert.Len(t, resp.Subscriptions, 1) {
+			assert.Equal(t, "sub-1", resp.Subscriptions[0].ID)
+		}
+	})
+
+	t.Run("Unauthorized", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		srv, _, _, _ := createTestEndpointsServer(t, mockS)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/notifications/subscriptions", nil)
+		ctx := context.WithValue(req.Context(), userContextKey, types.User{})
+		req = req.WithContext(ctx)
+		rec := httptest.NewRecorder()
+		srv.handleGetNotificationSubscriptions(rec, req)
+
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	})
 }
 
@@ -1034,14 +1052,11 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					MorningSummaryEnabled: true,
-					MorningSummaryHour:    7,
-					MorningSummaryFlavor:  "metrics_heavy",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				MorningSummaryEnabled: true,
+				MorningSummaryHour:    7,
+				MorningSummaryFlavor:  "metrics_heavy",
 			},
 		}
 		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
@@ -1051,7 +1066,7 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 		})).Return(nil).Once()
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handleMorningSummaryNotifications(context.Background(), site, notifData, nowMorning, getNotifState)
+		srv.handleMorningSummaryNotifications(context.Background(), siteID, notifications, notifData, nowMorning, getNotifState)
 		mockS.AssertExpectations(t)
 	})
 
@@ -1060,14 +1075,11 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					MorningSummaryEnabled: true,
-					MorningSummaryHour:    7,
-					MorningSummaryFlavor:  "metrics_heavy",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				MorningSummaryEnabled: true,
+				MorningSummaryHour:    7,
+				MorningSummaryFlavor:  "metrics_heavy",
 			},
 		}
 
@@ -1100,7 +1112,7 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handleMorningSummaryNotifications(context.Background(), site, data, nowMorning, getNotifState)
+		srv.handleMorningSummaryNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertExpectations(t)
 	})
 
@@ -1109,14 +1121,11 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					MorningSummaryEnabled: true,
-					MorningSummaryHour:    7,
-					MorningSummaryFlavor:  "metrics_heavy",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				MorningSummaryEnabled: true,
+				MorningSummaryHour:    7,
+				MorningSummaryFlavor:  "metrics_heavy",
 			},
 		}
 
@@ -1149,7 +1158,7 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handleMorningSummaryNotifications(context.Background(), site, data, nowMorning, getNotifState)
+		srv.handleMorningSummaryNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertExpectations(t)
 	})
 
@@ -1158,14 +1167,11 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					MorningSummaryEnabled: true,
-					MorningSummaryHour:    7,
-					MorningSummaryFlavor:  "metrics_heavy",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				MorningSummaryEnabled: true,
+				MorningSummaryHour:    7,
+				MorningSummaryFlavor:  "metrics_heavy",
 			},
 		}
 
@@ -1197,7 +1203,7 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handleMorningSummaryNotifications(context.Background(), site, data, nowMorning, getNotifState)
+		srv.handleMorningSummaryNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertExpectations(t)
 	})
 
@@ -1205,14 +1211,11 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					MorningSummaryEnabled: true,
-					MorningSummaryHour:    7,
-					MorningSummaryFlavor:  "metrics_heavy",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				MorningSummaryEnabled: true,
+				MorningSummaryHour:    7,
+				MorningSummaryFlavor:  "metrics_heavy",
 			},
 		}
 
@@ -1237,7 +1240,8 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 			energyHistory: shortHistory,
 		}
 
-		srv.handleMorningSummaryNotifications(context.Background(), site, shortData, nowMorning, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
+		srv.handleMorningSummaryNotifications(context.Background(), siteID, notifications, shortData, nowMorning, getNotifState)
 		mockS.AssertNotCalled(t, "GetNotificationLogs", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertNotCalled(t, "GetUser", mock.Anything, mock.Anything)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
@@ -1248,14 +1252,11 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					MorningSummaryEnabled: true,
-					MorningSummaryHour:    7,
-					MorningSummaryFlavor:  "metrics_heavy",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				MorningSummaryEnabled: true,
+				MorningSummaryHour:    7,
+				MorningSummaryFlavor:  "metrics_heavy",
 			},
 		}
 		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{
@@ -1270,7 +1271,7 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 		}, nil).Once()
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handleMorningSummaryNotifications(context.Background(), site, notifData, nowMorning, getNotifState)
+		srv.handleMorningSummaryNotifications(context.Background(), siteID, notifications, notifData, nowMorning, getNotifState)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
@@ -1279,43 +1280,18 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					MorningSummaryEnabled: true,
-					MorningSummaryHour:    8, // configured for 8 AM, current is 7 AM
-					MorningSummaryFlavor:  "metrics_heavy",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				MorningSummaryEnabled: true,
+				MorningSummaryHour:    8, // configured for 8 AM, current is 7 AM
+				MorningSummaryFlavor:  "metrics_heavy",
 			},
 		}
 
-		srv.handleMorningSummaryNotifications(context.Background(), site, notifData, nowMorning, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
+		srv.handleMorningSummaryNotifications(context.Background(), siteID, notifications, notifData, nowMorning, getNotifState)
 		mockS.AssertNotCalled(t, "GetNotificationLogs", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
-		mockS.AssertExpectations(t)
-	})
-
-	t.Run("SkipStateCheckWhenNilStateFn", func(t *testing.T) {
-		mockS := &storagemock.MockDatabase{}
-		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
-
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					MorningSummaryEnabled: true,
-					MorningSummaryHour:    7,
-					MorningSummaryFlavor:  "metrics_heavy",
-				},
-			},
-		}
-		mockS.On("GetUser", mock.Anything, "user1@test.com").Return(user, nil).Once()
-		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.Anything).Return(nil).Once()
-
-		srv.handleMorningSummaryNotifications(context.Background(), site, notifData, nowMorning, nil)
-		mockS.AssertNotCalled(t, "GetNotificationLogs", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
 }
@@ -1353,14 +1329,11 @@ func TestHandleEveningSummaryNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowEvening)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					EveningSummaryEnabled: true,
-					EveningSummaryHour:    20,
-					EveningSummaryFlavor:  "executive",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				EveningSummaryEnabled: true,
+				EveningSummaryHour:    20,
+				EveningSummaryFlavor:  "executive",
 			},
 		}
 		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
@@ -1370,7 +1343,7 @@ func TestHandleEveningSummaryNotifications(t *testing.T) {
 		})).Return(nil).Once()
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowEvening)
-		srv.handleEveningSummaryNotifications(context.Background(), site, notifData, nowEvening, getNotifState)
+		srv.handleEveningSummaryNotifications(context.Background(), siteID, notifications, notifData, nowEvening, getNotifState)
 		mockS.AssertExpectations(t)
 	})
 
@@ -1379,14 +1352,11 @@ func TestHandleEveningSummaryNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowEvening)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					EveningSummaryEnabled: true,
-					EveningSummaryHour:    20,
-					EveningSummaryFlavor:  "home_planner",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				EveningSummaryEnabled: true,
+				EveningSummaryHour:    20,
+				EveningSummaryFlavor:  "home_planner",
 			},
 		}
 		deficitAt := nowEvening.Add(4*time.Hour + 30*time.Minute) // 12:45 AM
@@ -1412,7 +1382,7 @@ func TestHandleEveningSummaryNotifications(t *testing.T) {
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowEvening)
-		srv.handleEveningSummaryNotifications(context.Background(), site, plannerData, nowEvening, getNotifState)
+		srv.handleEveningSummaryNotifications(context.Background(), siteID, notifications, plannerData, nowEvening, getNotifState)
 		mockS.AssertExpectations(t)
 	})
 
@@ -1420,14 +1390,11 @@ func TestHandleEveningSummaryNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowEvening)
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					EveningSummaryEnabled: true,
-					EveningSummaryHour:    20,
-					EveningSummaryFlavor:  "executive",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				EveningSummaryEnabled: true,
+				EveningSummaryHour:    20,
+				EveningSummaryFlavor:  "executive",
 			},
 		}
 		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{
@@ -1442,7 +1409,7 @@ func TestHandleEveningSummaryNotifications(t *testing.T) {
 		}, nil).Once()
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowEvening)
-		srv.handleEveningSummaryNotifications(context.Background(), site, notifData, nowEvening, getNotifState)
+		srv.handleEveningSummaryNotifications(context.Background(), siteID, notifications, notifData, nowEvening, getNotifState)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
@@ -1451,43 +1418,18 @@ func TestHandleEveningSummaryNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowEvening)
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					EveningSummaryEnabled: true,
-					EveningSummaryHour:    21, // configured for 9 PM, current is 8 PM
-					EveningSummaryFlavor:  "executive",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				EveningSummaryEnabled: true,
+				EveningSummaryHour:    21, // configured for 9 PM, current is 8 PM
+				EveningSummaryFlavor:  "executive",
 			},
 		}
 
-		srv.handleEveningSummaryNotifications(context.Background(), site, notifData, nowEvening, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowEvening)
+		srv.handleEveningSummaryNotifications(context.Background(), siteID, notifications, notifData, nowEvening, getNotifState)
 		mockS.AssertNotCalled(t, "GetNotificationLogs", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
-		mockS.AssertExpectations(t)
-	})
-
-	t.Run("SkipStateCheckWhenNilStateFn", func(t *testing.T) {
-		mockS := &storagemock.MockDatabase{}
-		srv := createTestNotificationServer(t, mockS, nowEvening)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
-
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					EveningSummaryEnabled: true,
-					EveningSummaryHour:    20,
-					EveningSummaryFlavor:  "executive",
-				},
-			},
-		}
-		mockS.On("GetUser", mock.Anything, "user1@test.com").Return(user, nil).Once()
-		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.Anything).Return(nil).Once()
-
-		srv.handleEveningSummaryNotifications(context.Background(), site, notifData, nowEvening, nil)
-		mockS.AssertNotCalled(t, "GetNotificationLogs", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
 }
@@ -1518,12 +1460,9 @@ func TestHandleGridOutageNotifications(t *testing.T) {
 		srv.gridOutageDelay = 10 * time.Millisecond
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					GridOutageAlert: true,
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				GridOutageAlert: true,
 			},
 		}
 		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
@@ -1543,7 +1482,7 @@ func TestHandleGridOutageNotifications(t *testing.T) {
 		var wg sync.WaitGroup
 		ctxWithWg := common.CtxWithWaitGroup(context.Background(), &wg)
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handleGridOutageNotifications(ctxWithWg, site, statusOutage, mockEss, getNotifState)
+		srv.handleGridOutageNotifications(ctxWithWg, siteID, notifications, statusOutage, mockEss, nowMorning, getNotifState)
 		wg.Wait()
 
 		mockS.AssertExpectations(t)
@@ -1555,12 +1494,9 @@ func TestHandleGridOutageNotifications(t *testing.T) {
 		srv.gridOutageDelay = 10 * time.Millisecond
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					GridOutageAlert: true,
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				GridOutageAlert: true,
 			},
 		}
 		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
@@ -1576,7 +1512,7 @@ func TestHandleGridOutageNotifications(t *testing.T) {
 		var wg sync.WaitGroup
 		ctxWithWg := common.CtxWithWaitGroup(context.Background(), &wg)
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handleGridOutageNotifications(ctxWithWg, site, statusOutage, mockEss, getNotifState)
+		srv.handleGridOutageNotifications(ctxWithWg, siteID, notifications, statusOutage, mockEss, nowMorning, getNotifState)
 		wg.Wait()
 
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
@@ -1587,12 +1523,9 @@ func TestHandleGridOutageNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					GridOutageAlert: true,
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				GridOutageAlert: true,
 			},
 		}
 		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{
@@ -1602,6 +1535,7 @@ func TestHandleGridOutageNotifications(t *testing.T) {
 				UserID:    "user1@test.com",
 				Type:      types.NotificationTypeGridOutage,
 				Success:   true,
+				Muted:     false,
 			},
 		}, nil).Once()
 
@@ -1611,7 +1545,7 @@ func TestHandleGridOutageNotifications(t *testing.T) {
 		}, nil)
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handleGridOutageNotifications(context.Background(), site, statusOutage, mockEss, getNotifState)
+		srv.handleGridOutageNotifications(context.Background(), siteID, notifications, statusOutage, mockEss, nowMorning, getNotifState)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
@@ -1624,12 +1558,9 @@ func TestHandleGridOutageNotifications(t *testing.T) {
 		statusRestored := statusOutage
 		statusRestored.GridUnavailable = false
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					GridOutageAlert: true,
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				GridOutageAlert: true,
 			},
 		}
 		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{
@@ -1643,11 +1574,11 @@ func TestHandleGridOutageNotifications(t *testing.T) {
 		}, nil).Once()
 		mockS.On("GetUser", mock.Anything, "user1@test.com").Return(user, nil).Once()
 		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
-			return l.Type == types.NotificationTypeGridRestored
+			return l.Type == types.NotificationTypeGridRestored && !l.Muted
 		})).Return(nil).Once()
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handleGridOutageNotifications(context.Background(), site, statusRestored, nil, getNotifState)
+		srv.handleGridOutageNotifications(context.Background(), siteID, notifications, statusRestored, nil, nowMorning, getNotifState)
 		mockS.AssertExpectations(t)
 	})
 
@@ -1658,42 +1589,225 @@ func TestHandleGridOutageNotifications(t *testing.T) {
 		statusRestored := statusOutage
 		statusRestored.GridUnavailable = false
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					GridOutageAlert: true,
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				GridOutageAlert: true,
 			},
 		}
 		// No prior outage log
 		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handleGridOutageNotifications(context.Background(), site, statusRestored, nil, getNotifState)
+		srv.handleGridOutageNotifications(context.Background(), siteID, notifications, statusRestored, nil, nowMorning, getNotifState)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
-		mockS.AssertExpectations(t)
 	})
 
-	t.Run("SkipStateCheckWhenNilStateFn", func(t *testing.T) {
+	t.Run("OutageMutedDuringQuietPeriod", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
-		srv := createTestNotificationServer(t, mockS, nowMorning)
-		statusRestored := statusOutage
-		statusRestored.GridUnavailable = false
+		nowQuiet := time.Date(2026, 9, 4, 2, 0, 0, 0, loc)
+		srv := createTestNotificationServer(t, mockS, nowQuiet)
+		srv.gridOutageDelay = 10 * time.Millisecond
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					GridOutageAlert: true,
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				GridOutageAlert: true,
+				QuietPeriods: []types.TimePeriod{
+					{
+						Hours: []types.UtilityHourPeriod{{HourStart: 22, HourEnd: 7}},
+					},
 				},
 			},
 		}
 
-		// When nil state fn is passed for restored grid, skip checking state (no prior outage -> no restore notification)
-		srv.handleGridOutageNotifications(context.Background(), site, statusRestored, nil, nil)
-		mockS.AssertNotCalled(t, "GetNotificationLogs", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
+		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+			return l.Type == types.NotificationTypeGridOutage && l.Muted && !l.Success
+		})).Return(nil).Once()
+
+		mockEss := &mockESS{}
+		mockEss.On("GetStatus", mock.Anything).Return(types.SystemStatus{
+			GridUnavailable:    true,
+			BatterySOC:         50.0,
+			BatteryCapacityKWH: 13.6,
+			HomeKW:             1.0,
+		}, nil)
+
+		var wg sync.WaitGroup
+		ctxWithWg := common.CtxWithWaitGroup(context.Background(), &wg)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowQuiet)
+		srv.handleGridOutageNotifications(ctxWithWg, siteID, notifications, statusOutage, mockEss, nowQuiet, getNotifState)
+		wg.Wait()
+
+		mockS.AssertNotCalled(t, "GetUser", mock.Anything, mock.Anything)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("OutageAlertSentUponWakeup", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		nowWakeup := time.Date(2026, 9, 4, 7, 5, 0, 0, loc)
+		srv := createTestNotificationServer(t, mockS, nowWakeup)
+		srv.gridOutageDelay = 10 * time.Millisecond
+		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				GridOutageAlert: true,
+				QuietPeriods: []types.TimePeriod{
+					{
+						Hours: []types.UtilityHourPeriod{{HourStart: 22, HourEnd: 7}},
+					},
+				},
+			},
+		}
+
+		// Prior log was outage but muted
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{
+			{
+				ID:        "log-outage-1",
+				TSCreated: nowWakeup.Add(-2 * time.Hour).UTC(),
+				UserID:    "user1@test.com",
+				Type:      types.NotificationTypeGridOutage,
+				Success:   false,
+				Muted:     true,
+			},
+		}, nil).Once()
+		mockS.On("GetUser", mock.Anything, "user1@test.com").Return(user, nil).Once()
+		// Now outside quiet period -> should dispatch delivered push!
+		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+			return l.Type == types.NotificationTypeGridOutage && !l.Muted && l.Success
+		})).Return(nil).Once()
+
+		mockEss := &mockESS{}
+		mockEss.On("GetStatus", mock.Anything).Return(types.SystemStatus{
+			GridUnavailable:    true,
+			BatterySOC:         45.0,
+			BatteryCapacityKWH: 13.6,
+			HomeKW:             1.5,
+		}, nil)
+
+		var wg sync.WaitGroup
+		ctxWithWg := common.CtxWithWaitGroup(context.Background(), &wg)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowWakeup)
+		srv.handleGridOutageNotifications(ctxWithWg, siteID, notifications, statusOutage, mockEss, nowWakeup, getNotifState)
+		wg.Wait()
+
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("RestoredMutedDuringQuietPeriod", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		nowQuiet := time.Date(2026, 9, 4, 3, 0, 0, 0, loc)
+		srv := createTestNotificationServer(t, mockS, nowQuiet)
+
+		statusRestored := statusOutage
+		statusRestored.GridUnavailable = false
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				GridOutageAlert: true,
+				QuietPeriods: []types.TimePeriod{
+					{
+						Hours: []types.UtilityHourPeriod{{HourStart: 22, HourEnd: 7}},
+					},
+				},
+			},
+		}
+		// Prior log was outage
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{
+			{
+				ID:        "log-outage-2",
+				TSCreated: nowQuiet.Add(-1 * time.Hour).UTC(),
+				UserID:    "user1@test.com",
+				Type:      types.NotificationTypeGridOutage,
+				Success:   false,
+				Muted:     true,
+			},
+		}, nil).Once()
+		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+			return l.Type == types.NotificationTypeGridRestored && l.Muted && !l.Success
+		})).Return(nil).Once()
+
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowQuiet)
+		srv.handleGridOutageNotifications(context.Background(), siteID, notifications, statusRestored, nil, nowQuiet, getNotifState)
+		mockS.AssertNotCalled(t, "GetUser", mock.Anything, mock.Anything)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("RestoredDeferredAlertSentUponWakeupWhenRecent", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		nowWakeup := time.Date(2026, 9, 4, 7, 5, 0, 0, loc)
+		srv := createTestNotificationServer(t, mockS, nowWakeup)
+		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+
+		statusRestored := statusOutage
+		statusRestored.GridUnavailable = false
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				GridOutageAlert: true,
+				QuietPeriods: []types.TimePeriod{
+					{
+						Hours: []types.UtilityHourPeriod{{HourStart: 22, HourEnd: 7}},
+					},
+				},
+			},
+		}
+		// Restored 20 minutes ago (within 1 hour)
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{
+			{
+				ID:        "log-muted-restored",
+				TSCreated: nowWakeup.Add(-20 * time.Minute).UTC(),
+				UserID:    "user1@test.com",
+				Type:      types.NotificationTypeGridRestored,
+				Success:   false,
+				Muted:     true,
+			},
+		}, nil).Once()
+		mockS.On("GetUser", mock.Anything, "user1@test.com").Return(user, nil).Once()
+		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+			return l.Type == types.NotificationTypeGridRestored && !l.Muted && l.Success
+		})).Return(nil).Once()
+
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowWakeup)
+		srv.handleGridOutageNotifications(context.Background(), siteID, notifications, statusRestored, nil, nowWakeup, getNotifState)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("RestoredDeferredAlertStaleSuppressed", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		nowWakeup := time.Date(2026, 9, 4, 7, 5, 0, 0, loc)
+		srv := createTestNotificationServer(t, mockS, nowWakeup)
+
+		statusRestored := statusOutage
+		statusRestored.GridUnavailable = false
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				GridOutageAlert: true,
+				QuietPeriods: []types.TimePeriod{
+					{
+						Hours: []types.UtilityHourPeriod{{HourStart: 22, HourEnd: 7}},
+					},
+				},
+			},
+		}
+		// Restored 3 hours ago (> 1 hour)
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{
+			{
+				ID:        "log-muted-restored",
+				TSCreated: nowWakeup.Add(-3 * time.Hour).UTC(),
+				UserID:    "user1@test.com",
+				Type:      types.NotificationTypeGridRestored,
+				Success:   false,
+				Muted:     true,
+			},
+		}, nil).Once()
+
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowWakeup)
+		srv.handleGridOutageNotifications(context.Background(), siteID, notifications, statusRestored, nil, nowWakeup, getNotifState)
+		mockS.AssertNotCalled(t, "GetUser", mock.Anything, mock.Anything)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
+		mockS.AssertExpectations(t)
 	})
 }
 
@@ -1714,12 +1828,9 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
 			},
 		}
 		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
@@ -1746,7 +1857,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			futurePrices: futurePrices,
 		}
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, getNotifState)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertExpectations(t)
 	})
 
@@ -1754,12 +1865,9 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
 			},
 		}
 		// Routine peak price at 8 AM was always $0.35/kWh over past 5 days
@@ -1781,7 +1889,8 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			currentPrice: types.Price{DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.05},
 			futurePrices: futurePrices,
 		}
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
@@ -1791,15 +1900,12 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		userHigh := createTestPushUser(t, "user-high@test.com", pushServer.URL+"/push/user-high")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user-low@test.com": {
-					PriceSpikeAlert: "low",
-				},
-				"user-high@test.com": {
-					PriceSpikeAlert: "high",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user-low@test.com": {
+				PriceSpikeAlert: "low",
+			},
+			"user-high@test.com": {
+				PriceSpikeAlert: "high",
 			},
 		}
 		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
@@ -1826,7 +1932,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			futurePrices: futurePrices,
 		}
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, getNotifState)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertNotCalled(t, "GetUser", mock.Anything, "user-low@test.com")
 		mockS.AssertExpectations(t)
 	})
@@ -1835,12 +1941,9 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "high",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "high",
 			},
 		}
 
@@ -1857,7 +1960,8 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			currentPrice: types.Price{DollarsPerKWH: 0.01, GridUseDollarsPerKWH: 0.04},
 			futurePrices: futurePrices,
 		}
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertNotCalled(t, "GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
@@ -1867,12 +1971,9 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
 			},
 		}
 		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
@@ -1902,7 +2003,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			futurePrices: futurePrices,
 		}
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, getNotifState)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
@@ -1912,12 +2013,9 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
 			},
 		}
 		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
@@ -1951,43 +2049,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			futurePrices: futurePrices,
 		}
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, getNotifState)
-		mockS.AssertExpectations(t)
-	})
-
-	t.Run("SkipStateCheckWhenNilStateFn", func(t *testing.T) {
-		mockS := &storagemock.MockDatabase{}
-		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
-
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
-			},
-		}
-		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
-			{TSStart: nowMorning.AddDate(0, 0, -1), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.05},
-		}, nil).Once()
-		mockS.On("GetUser", mock.Anything, "user1@test.com").Return(user, nil).Once()
-		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.Anything).Return(nil).Once()
-
-		futurePrices := []types.Price{
-			{
-				TSStart:              nowMorning.Add(1 * time.Hour),
-				DollarsPerKWH:        0.60,
-				GridUseDollarsPerKWH: 0.05,
-			},
-		}
-
-		data := &dataForNotifications{
-			currentPrice: types.Price{DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.05},
-			futurePrices: futurePrices,
-		}
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, nil)
-		mockS.AssertNotCalled(t, "GetNotificationLogs", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertExpectations(t)
 	})
 
@@ -1996,17 +2058,15 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
 			},
 		}
 		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
 			{TSStart: nowMorning.AddDate(0, 0, -1), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.05},
 		}, nil).Once()
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
 		mockS.On("GetUser", mock.Anything, "user1@test.com").Return(user, nil).Once()
 
 		var recordedLog types.NotificationLog
@@ -2046,7 +2106,8 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			simData: []controller.SimHour{spikeSlot},
 		}
 
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertExpectations(t)
 		if assert.NotEmpty(t, recordedLog.Body) {
 			assert.Contains(t, recordedLog.Body, "Solar is projected to cover your home during the spike without drawing from the battery.")
@@ -2058,17 +2119,15 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
 			},
 		}
 		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
 			{TSStart: nowMorning.AddDate(0, 0, -1), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.05},
 		}, nil).Once()
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
 		mockS.On("GetUser", mock.Anything, "user1@test.com").Return(user, nil).Once()
 
 		var recordedLog types.NotificationLog
@@ -2108,7 +2167,8 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			simData: []controller.SimHour{spikeSlot},
 		}
 
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertExpectations(t)
 		if assert.NotEmpty(t, recordedLog.Body) {
 			assert.NotContains(t, recordedLog.Body, "Solar is projected to cover your home")
@@ -2121,17 +2181,15 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
 			},
 		}
 		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
 			{TSStart: nowMorning.AddDate(0, 0, -1), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.05},
 		}, nil).Once()
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
 		mockS.On("GetUser", mock.Anything, "user1@test.com").Return(user, nil).Once()
 
 		var recordedLog types.NotificationLog
@@ -2171,7 +2229,8 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			simData: []controller.SimHour{spikeSlot},
 		}
 
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertExpectations(t)
 		if assert.NotEmpty(t, recordedLog.Body) {
 			assert.NotContains(t, recordedLog.Body, "Solar is projected to cover your home")
@@ -2184,17 +2243,15 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
 			},
 		}
 		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
 			{TSStart: nowMorning.AddDate(0, 0, -1), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.05},
 		}, nil).Once()
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
 		mockS.On("GetUser", mock.Anything, "user1@test.com").Return(user, nil).Once()
 
 		var recordedLog types.NotificationLog
@@ -2234,7 +2291,8 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			simData: []controller.SimHour{spikeSlot},
 		}
 
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertExpectations(t)
 		if assert.NotEmpty(t, recordedLog.Body) {
 			assert.Contains(t, recordedLog.Body, "Solar is projected to cover your home during the spike without drawing from the battery.")
@@ -2246,17 +2304,15 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
 			},
 		}
 		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
 			{TSStart: nowMorning.AddDate(0, 0, -1), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.05},
 		}, nil).Once()
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
 		mockS.On("GetUser", mock.Anything, "user1@test.com").Return(user, nil).Once()
 
 		var recordedLog types.NotificationLog
@@ -2300,7 +2356,8 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			simData: []controller.SimHour{spikeSlot},
 		}
 
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertExpectations(t)
 		if assert.NotEmpty(t, recordedLog.Body) {
 			assert.Contains(t, recordedLog.Body, "Battery is at 85% and projected to power your home through the entire spike.")
@@ -2312,17 +2369,15 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
 			},
 		}
 		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
 			{TSStart: nowMorning.AddDate(0, 0, -1), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.05},
 		}, nil).Once()
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
 		mockS.On("GetUser", mock.Anything, "user1@test.com").Return(user, nil).Once()
 
 		var recordedLog types.NotificationLog
@@ -2367,7 +2422,8 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			simData: []controller.SimHour{spikeSlot},
 		}
 
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertExpectations(t)
 		if assert.NotEmpty(t, recordedLog.Body) {
 			assert.Contains(t, recordedLog.Body, "Battery is at 35% and projected to reach reserve at ~")
@@ -2380,17 +2436,15 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
 			},
 		}
 		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
 			{TSStart: nowMorning.AddDate(0, 0, -1), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.05},
 		}, nil).Once()
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
 		mockS.On("GetUser", mock.Anything, "user1@test.com").Return(user, nil).Once()
 
 		var recordedLog types.NotificationLog
@@ -2446,7 +2500,8 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			simData: []controller.SimHour{slot1, slot2},
 		}
 
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertExpectations(t)
 		if assert.NotEmpty(t, recordedLog.Body) {
 			assert.Contains(t, recordedLog.Body, "Battery is at 40% and projected to reach reserve at ~8:55 AM before the spike ends.")
@@ -2458,17 +2513,15 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
 			},
 		}
 		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
 			{TSStart: nowMorning.AddDate(0, 0, -1), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.05},
 		}, nil).Once()
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
 		mockS.On("GetUser", mock.Anything, "user1@test.com").Return(user, nil).Once()
 
 		var recordedLog types.NotificationLog
@@ -2511,7 +2564,8 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			simData: []controller.SimHour{spikeSlot},
 		}
 
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertExpectations(t)
 		if assert.NotEmpty(t, recordedLog.Body) {
 			assert.Contains(t, recordedLog.Body, "Battery is currently at 20% reserve; your home will draw from the grid during the spike.")
@@ -2523,12 +2577,9 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
 			},
 		}
 		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
@@ -2536,6 +2587,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			{TSStart: nowMorning.AddDate(0, 0, -2), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.05},
 			{TSStart: nowMorning.AddDate(0, 0, -3), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.05},
 		}, nil).Once()
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
 		mockS.On("GetUser", mock.Anything, "user1@test.com").Return(user, nil).Once()
 
 		var recordedLog types.NotificationLog
@@ -2576,7 +2628,8 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			simData: []controller.SimHour{spikeSlot},
 		}
 
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertExpectations(t)
 		if assert.NotEmpty(t, recordedLog.Body) {
 			assert.Equal(t, "🚨 Price Spike: $0.35/kWh", recordedLog.Title)
@@ -2595,17 +2648,15 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
 			},
 		}
 		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
 			{TSStart: nowMorning.AddDate(0, 0, -1), DollarsPerKWH: 0.10, GridUseDollarsPerKWH: 0.05},
 		}, nil).Once()
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
 		mockS.On("GetUser", mock.Anything, "user1@test.com").Return(user, nil).Once()
 
 		var recordedLog types.NotificationLog
@@ -2637,7 +2688,8 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			futurePrices: futurePrices,
 		}
 
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertExpectations(t)
 		if assert.NotEmpty(t, recordedLog.Body) {
 			assert.Equal(t, "🚨 Price Spike: $0.30/kWh (peaking at $0.50 at 8:10 AM)", recordedLog.Title)
@@ -2653,12 +2705,9 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
 			},
 		}
 		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
@@ -2688,7 +2737,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			},
 		}
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, getNotifState)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
@@ -2698,12 +2747,9 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
 			},
 		}
 		// Baseline historical prices: 19 at $0.15, 1 at $0.30 (95th percentile is $0.30)
@@ -2750,7 +2796,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			},
 		}
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, getNotifState)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertExpectations(t)
 	})
 
@@ -2758,12 +2804,9 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
 			},
 		}
 		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
@@ -2794,7 +2837,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			},
 		}
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, getNotifState)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
@@ -2803,12 +2846,9 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
 			},
 		}
 		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
@@ -2840,7 +2880,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			},
 		}
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, getNotifState)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
@@ -2850,12 +2890,9 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
 			},
 		}
 		// Historical prices include an hour where price dropped back to $0.15 between alerts
@@ -2892,7 +2929,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			},
 		}
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, getNotifState)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertExpectations(t)
 	})
 
@@ -2900,12 +2937,9 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
 			},
 		}
 		// Historical prices: baseline from previous days ($0.15), and all hours between -8h and now stayed elevated at $0.35/kWh
@@ -2946,7 +2980,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			},
 		}
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, getNotifState)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
@@ -2956,12 +2990,9 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "high",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "high",
 			},
 		}
 
@@ -2998,7 +3029,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			},
 		}
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, getNotifState)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertExpectations(t)
 	})
 
@@ -3006,12 +3037,9 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
 			},
 		}
 
@@ -3044,7 +3072,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			},
 		}
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, getNotifState)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
@@ -3054,12 +3082,9 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					PriceSpikeAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
 			},
 		}
 
@@ -3090,7 +3115,88 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			},
 		}
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handlePriceSpikeNotifications(context.Background(), site, data, nowMorning, getNotifState)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("PriceSpikeMutedDuringQuietPeriod", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		nowQuiet := time.Date(2026, 9, 4, 1, 0, 0, 0, loc)
+		srv := createTestNotificationServer(t, mockS, nowQuiet)
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
+				QuietPeriods: []types.TimePeriod{
+					{
+						Hours: []types.UtilityHourPeriod{{HourStart: 22, HourEnd: 7}},
+					},
+				},
+			},
+		}
+
+		data := &dataForNotifications{
+			currentPrice: types.Price{
+				TSStart:              nowQuiet,
+				TSEnd:                nowQuiet.Add(1 * time.Hour),
+				DollarsPerKWH:        0.40,
+				GridUseDollarsPerKWH: 0.05,
+			},
+		}
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowQuiet)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowQuiet, getNotifState)
+		mockS.AssertNotCalled(t, "GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockS.AssertNotCalled(t, "GetNotificationLogs", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockS.AssertNotCalled(t, "GetUser", mock.Anything, mock.Anything)
+		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("PriceSpikeAlertSentUponWakeup", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		nowWakeup := time.Date(2026, 9, 4, 7, 5, 0, 0, loc)
+		srv := createTestNotificationServer(t, mockS, nowWakeup)
+		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
+				QuietPeriods: []types.TimePeriod{
+					{
+						Hours: []types.UtilityHourPeriod{{HourStart: 22, HourEnd: 7}},
+					},
+				},
+			},
+		}
+
+		var hist []types.Price
+		for i := 1; i <= 20; i++ {
+			hist = append(hist, types.Price{
+				TSStart:              nowWakeup.AddDate(0, 0, -i),
+				DollarsPerKWH:        0.10,
+				GridUseDollarsPerKWH: 0.05,
+			})
+		}
+
+		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return(hist, nil).Once()
+		// No delivered alert during quiet period
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
+		mockS.On("GetUser", mock.Anything, "user1@test.com").Return(user, nil).Once()
+		// Wakeup outside quiet period -> dispatches delivered alert!
+		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+			return l.Type == types.NotificationTypePriceSpike && !l.Muted && l.Success
+		})).Return(nil).Once()
+
+		data := &dataForNotifications{
+			currentPrice: types.Price{
+				TSStart:              nowWakeup,
+				TSEnd:                nowWakeup.Add(1 * time.Hour),
+				DollarsPerKWH:        0.45,
+				GridUseDollarsPerKWH: 0.05,
+			},
+		}
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowWakeup)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowWakeup, getNotifState)
 		mockS.AssertExpectations(t)
 	})
 }
@@ -3126,12 +3232,9 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMidday)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					SolarUnderproductionAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				SolarUnderproductionAlert: "medium",
 			},
 		}
 		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
@@ -3150,7 +3253,7 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMidday)
-		srv.handleSolarUnderproductionNotifications(context.Background(), site, data, nowMidday, getNotifState)
+		srv.handleSolarUnderproductionNotifications(context.Background(), siteID, notifications, data, nowMidday, getNotifState)
 		mockS.AssertExpectations(t)
 	})
 
@@ -3158,12 +3261,9 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning) // 7:10 AM (< 11 AM)
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					SolarUnderproductionAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				SolarUnderproductionAlert: "medium",
 			},
 		}
 
@@ -3173,7 +3273,8 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 			status:   statusMorning,
 			settings: settings,
 		}
-		srv.handleSolarUnderproductionNotifications(context.Background(), site, data, nowMorning, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
+		srv.handleSolarUnderproductionNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
@@ -3182,12 +3283,9 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMidday)
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					SolarUnderproductionAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				SolarUnderproductionAlert: "medium",
 			},
 		}
 
@@ -3201,7 +3299,8 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 			simData:  simData,
 		}
 
-		srv.handleSolarUnderproductionNotifications(context.Background(), site, data, nowMidday, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMidday)
+		srv.handleSolarUnderproductionNotifications(context.Background(), siteID, notifications, data, nowMidday, getNotifState)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
@@ -3213,12 +3312,9 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 		statusStorm := statusMid
 		statusStorm.Storms = []types.Storm{{Description: "Severe Thunderstorm"}}
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					SolarUnderproductionAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				SolarUnderproductionAlert: "medium",
 			},
 		}
 		data := &dataForNotifications{
@@ -3226,7 +3322,8 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 			settings: settings,
 		}
 
-		srv.handleSolarUnderproductionNotifications(context.Background(), site, data, nowMidday, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMidday)
+		srv.handleSolarUnderproductionNotifications(context.Background(), siteID, notifications, data, nowMidday, getNotifState)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
@@ -3238,12 +3335,9 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 		statusAlarm := statusMid
 		statusAlarm.Alarms = []types.SystemAlarm{{Code: "501", Description: "Grid sync lost"}}
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					SolarUnderproductionAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				SolarUnderproductionAlert: "medium",
 			},
 		}
 		data := &dataForNotifications{
@@ -3251,7 +3345,8 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 			settings: settings,
 		}
 
-		srv.handleSolarUnderproductionNotifications(context.Background(), site, data, nowMidday, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMidday)
+		srv.handleSolarUnderproductionNotifications(context.Background(), siteID, notifications, data, nowMidday, getNotifState)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
@@ -3260,12 +3355,9 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMidday)
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					SolarUnderproductionAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				SolarUnderproductionAlert: "medium",
 			},
 		}
 
@@ -3281,7 +3373,8 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 			simData:  simData,
 		}
 
-		srv.handleSolarUnderproductionNotifications(context.Background(), site, data, nowMidday, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMidday)
+		srv.handleSolarUnderproductionNotifications(context.Background(), siteID, notifications, data, nowMidday, getNotifState)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
@@ -3290,12 +3383,9 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMidday)
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					SolarUnderproductionAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				SolarUnderproductionAlert: "medium",
 			},
 		}
 		// Already sent earlier today
@@ -3319,7 +3409,7 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMidday)
-		srv.handleSolarUnderproductionNotifications(context.Background(), site, data, nowMidday, getNotifState)
+		srv.handleSolarUnderproductionNotifications(context.Background(), siteID, notifications, data, nowMidday, getNotifState)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
@@ -3335,15 +3425,12 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 		// "low" ratio is 0.50: 2.5 < 3.0 kW -> triggers for low!
 		statusSensitivity.SolarKW = 2.5
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user-high@test.com": {
-					SolarUnderproductionAlert: "high",
-				},
-				"user-low@test.com": {
-					SolarUnderproductionAlert: "low",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user-high@test.com": {
+				SolarUnderproductionAlert: "high",
+			},
+			"user-low@test.com": {
+				SolarUnderproductionAlert: "low",
 			},
 		}
 		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
@@ -3362,7 +3449,7 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMidday)
-		srv.handleSolarUnderproductionNotifications(context.Background(), site, data, nowMidday, getNotifState)
+		srv.handleSolarUnderproductionNotifications(context.Background(), siteID, notifications, data, nowMidday, getNotifState)
 		mockS.AssertNotCalled(t, "GetUser", mock.Anything, "user-high@test.com")
 		mockS.AssertExpectations(t)
 	})
@@ -3374,12 +3461,9 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 		statusOvercast := statusMid
 		statusOvercast.SolarKW = 0.5
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					SolarUnderproductionAlert: "medium",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				SolarUnderproductionAlert: "medium",
 			},
 		}
 
@@ -3404,26 +3488,31 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 			simData:        simData,
 		}
 
-		srv.handleSolarUnderproductionNotifications(context.Background(), site, data, nowMidday, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMidday)
+		srv.handleSolarUnderproductionNotifications(context.Background(), siteID, notifications, data, nowMidday, getNotifState)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
 
-	t.Run("SkipStateCheckWhenNilStateFn", func(t *testing.T) {
+	t.Run("MutedDuringQuietPeriod", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMidday)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					SolarUnderproductionAlert: "medium",
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				SolarUnderproductionAlert: "medium",
+				QuietPeriods: []types.TimePeriod{
+					{
+						Hours: []types.UtilityHourPeriod{{HourStart: 11, HourEnd: 15}},
+					},
 				},
 			},
 		}
-		mockS.On("GetUser", mock.Anything, "user1@test.com").Return(user, nil).Once()
-		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.Anything).Return(nil).Once()
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
+		mockS.AssertNotCalled(t, "GetUser", mock.Anything, mock.Anything)
+		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+			return l.Type == types.NotificationTypeSolarUnderproduction && l.Muted && !l.Success
+		})).Return(nil).Once()
 
 		simData := []controller.SimHour{
 			{TS: nowMidday, PredictedSolarKWH: 4.5},
@@ -3434,8 +3523,8 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 			simData:  simData,
 		}
 
-		srv.handleSolarUnderproductionNotifications(context.Background(), site, data, nowMidday, nil)
-		mockS.AssertNotCalled(t, "GetNotificationLogs", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMidday)
+		srv.handleSolarUnderproductionNotifications(context.Background(), siteID, notifications, data, nowMidday, getNotifState)
 		mockS.AssertExpectations(t)
 	})
 }
@@ -3467,12 +3556,9 @@ func TestHandleVPPDispatchNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					VPPDispatchAlert: true,
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				VPPDispatchAlert: true,
 			},
 		}
 		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
@@ -3484,7 +3570,7 @@ func TestHandleVPPDispatchNotifications(t *testing.T) {
 		vppInfo := types.UtilityVPPInfo{}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handleVPPDispatchNotifications(context.Background(), site, statusVPP, vppInfo, nowMorning, getNotifState)
+		srv.handleVPPDispatchNotifications(context.Background(), siteID, notifications, statusVPP, vppInfo, nowMorning, getNotifState)
 		mockS.AssertExpectations(t)
 	})
 
@@ -3492,12 +3578,9 @@ func TestHandleVPPDispatchNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					VPPDispatchAlert: true,
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				VPPDispatchAlert: true,
 			},
 		}
 
@@ -3513,7 +3596,8 @@ func TestHandleVPPDispatchNotifications(t *testing.T) {
 			},
 		}
 
-		srv.handleVPPDispatchNotifications(context.Background(), site, statusVPP, vppInfo, nowMorning, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
+		srv.handleVPPDispatchNotifications(context.Background(), siteID, notifications, statusVPP, vppInfo, nowMorning, getNotifState)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
@@ -3531,16 +3615,14 @@ func TestHandleVPPDispatchNotifications(t *testing.T) {
 			},
 		}
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					VPPDispatchAlert: true,
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				VPPDispatchAlert: true,
 			},
 		}
 
-		srv.handleVPPDispatchNotifications(context.Background(), site, statusScheduled, types.UtilityVPPInfo{}, nowMorning, nil)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
+		srv.handleVPPDispatchNotifications(context.Background(), siteID, notifications, statusScheduled, types.UtilityVPPInfo{}, nowMorning, getNotifState)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
@@ -3549,12 +3631,9 @@ func TestHandleVPPDispatchNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					VPPDispatchAlert: true,
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				VPPDispatchAlert: true,
 			},
 		}
 		// Sent 2 hours ago
@@ -3571,31 +3650,35 @@ func TestHandleVPPDispatchNotifications(t *testing.T) {
 		vppInfo := types.UtilityVPPInfo{}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
-		srv.handleVPPDispatchNotifications(context.Background(), site, statusVPP, vppInfo, nowMorning, getNotifState)
+		srv.handleVPPDispatchNotifications(context.Background(), siteID, notifications, statusVPP, vppInfo, nowMorning, getNotifState)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
 
-	t.Run("SkipStateCheckWhenNilStateFn", func(t *testing.T) {
+	t.Run("MutedDuringQuietPeriod", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
-		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+		nowQuiet := time.Date(2026, 9, 4, 2, 0, 0, 0, loc)
+		srv := createTestNotificationServer(t, mockS, nowQuiet)
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					VPPDispatchAlert: true,
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				VPPDispatchAlert: true,
+				QuietPeriods: []types.TimePeriod{
+					{
+						Hours: []types.UtilityHourPeriod{{HourStart: 22, HourEnd: 7}},
+					},
 				},
 			},
 		}
-		mockS.On("GetUser", mock.Anything, "user1@test.com").Return(user, nil).Once()
-		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.Anything).Return(nil).Once()
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
+		mockS.AssertNotCalled(t, "GetUser", mock.Anything, mock.Anything)
+		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+			return l.Type == types.NotificationTypeVPPDispatch && l.Muted && !l.Success
+		})).Return(nil).Once()
 
 		vppInfo := types.UtilityVPPInfo{}
-
-		srv.handleVPPDispatchNotifications(context.Background(), site, statusVPP, vppInfo, nowMorning, nil)
-		mockS.AssertNotCalled(t, "GetNotificationLogs", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowQuiet)
+		srv.handleVPPDispatchNotifications(context.Background(), siteID, notifications, statusVPP, vppInfo, nowQuiet, getNotifState)
 		mockS.AssertExpectations(t)
 	})
 }
@@ -3651,25 +3734,23 @@ func TestHandleNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					MorningSummaryEnabled: true,
-					MorningSummaryHour:    7,
-					MorningSummaryFlavor:  "metrics_heavy",
-				},
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				MorningSummaryEnabled: true,
+				MorningSummaryHour:    7,
+				MorningSummaryFlavor:  "metrics_heavy",
 			},
 		}
-		mockS.On("GetSite", mock.Anything, siteID).Return(site, nil).Once()
 		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
 		mockS.On("GetUser", mock.Anything, "user1@test.com").Return(user, nil).Once()
 		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
 			return l.Type == types.NotificationTypeMorningSummary && l.Flavor == "metrics_heavy"
 		})).Return(nil).Once()
 
+		notifSettings := settings
+		notifSettings.Notifications = notifications
 		data := &dataForNotifications{
-			settings:      settings,
+			settings:      notifSettings,
 			status:        statusMorning,
 			energyHistory: mockEnergyHistory,
 		}
@@ -3696,12 +3777,6 @@ func TestHandleNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 
-		site := types.Site{
-			ID:            siteID,
-			Notifications: nil,
-		}
-		mockS.On("GetSite", mock.Anything, siteID).Return(site, nil).Once()
-
 		data := &dataForNotifications{
 			settings: settings,
 			status:   statusMorning,
@@ -3715,23 +3790,20 @@ func TestHandleNotifications(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 
-		site := types.Site{
-			ID: siteID,
-			Notifications: map[string]types.UserNotificationSettings{
-				"user1@test.com": {
-					MorningSummaryEnabled:     false,
-					EveningSummaryEnabled:     false,
-					GridOutageAlert:           false,
-					PriceSpikeAlert:           "",
-					SolarUnderproductionAlert: "",
-					VPPDispatchAlert:          false,
-				},
+		notifSettings := settings
+		notifSettings.Notifications = map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				MorningSummaryEnabled:     false,
+				EveningSummaryEnabled:     false,
+				GridOutageAlert:           false,
+				PriceSpikeAlert:           "",
+				SolarUnderproductionAlert: "",
+				VPPDispatchAlert:          false,
 			},
 		}
-		mockS.On("GetSite", mock.Anything, siteID).Return(site, nil).Once()
 
 		data := &dataForNotifications{
-			settings: settings,
+			settings: notifSettings,
 			status:   statusMorning,
 		}
 		srv.handleNotifications(context.Background(), siteID, data)
@@ -3967,5 +4039,99 @@ func TestComputeTimeOfDayRefPrice(t *testing.T) {
 	t.Run("EmptyHistoryFallsBackToFallback", func(t *testing.T) {
 		ref := computeTimeOfDayRefPrice(nil, targetTime, loc, 0.14)
 		assert.Equal(t, 0.14, ref)
+	})
+}
+
+func TestSiteRecentNotifications(t *testing.T) {
+	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	user1 := "user1@example.com"
+	user2 := "user2@example.com"
+
+	logs := []types.NotificationLog{
+		{
+			ID:        "log-delivered",
+			TSCreated: now.Add(-2 * time.Hour),
+			UserID:    user1,
+			Type:      types.NotificationTypePriceSpike,
+			Success:   true,
+			Muted:     false,
+		},
+		{
+			ID:        "log-muted",
+			TSCreated: now.Add(-1 * time.Hour),
+			UserID:    user1,
+			Type:      types.NotificationTypePriceSpike,
+			Success:   false,
+			Muted:     true,
+		},
+		{
+			ID:        "log-failed",
+			TSCreated: now.Add(-30 * time.Minute),
+			UserID:    user1,
+			Type:      types.NotificationTypePriceSpike,
+			Success:   false,
+			Muted:     false,
+			Error:     "failed to send push",
+		},
+		{
+			ID:        "log-stale-suppressed",
+			TSCreated: now.Add(-15 * time.Minute),
+			UserID:    user1,
+			Type:      types.NotificationTypeGridRestored,
+			Success:   false,
+			Muted:     false,
+			Error:     "",
+		},
+	}
+
+	state := &siteRecentNotifications{logs: logs}
+
+	t.Run("HasSentToday", func(t *testing.T) {
+		dateStr := now.Format("2006-01-02")
+		// user1 PriceSpike has delivered and muted logs today
+		assert.True(t, state.hasSentToday(user1, types.NotificationTypePriceSpike, dateStr, time.UTC))
+		// user2 has no logs
+		assert.False(t, state.hasSentToday(user2, types.NotificationTypePriceSpike, dateStr, time.UTC))
+		// different date
+		assert.False(t, state.hasSentToday(user1, types.NotificationTypePriceSpike, "2026-09-03", time.UTC))
+	})
+
+	t.Run("HasSentWithin", func(t *testing.T) {
+		// within 90 minutes -> log-muted (-1h) is within window
+		assert.True(t, state.hasSentWithin(user1, types.NotificationTypePriceSpike, 90*time.Minute, now))
+		// failed attempt (-30m) does not count as sent
+		// within 45 minutes -> only log-failed is within window, should return false
+		assert.False(t, state.hasSentWithin(user1, types.NotificationTypePriceSpike, 45*time.Minute, now))
+	})
+
+	t.Run("LastLogOnlyDelivered", func(t *testing.T) {
+		// onlyDelivered: true should find log-delivered (-2h), ignoring muted (-1h) and failed (-30m)
+		log, found := state.lastLog(user1, true, types.NotificationTypePriceSpike)
+		assert.True(t, found)
+		assert.Equal(t, "log-delivered", log.ID)
+		assert.True(t, log.Success)
+		assert.False(t, log.Muted)
+	})
+
+	t.Run("LastLogIncludingMuted", func(t *testing.T) {
+		// onlyDelivered: false should find log-muted (-1h), ignoring failed with error (-30m)
+		log, found := state.lastLog(user1, false, types.NotificationTypePriceSpike)
+		assert.True(t, found)
+		assert.Equal(t, "log-muted", log.ID)
+		assert.False(t, log.Success)
+		assert.True(t, log.Muted)
+	})
+
+	t.Run("LastLogAuditSuppressed", func(t *testing.T) {
+		// internal audit suppression log (Success: false, Muted: false, Error: "") is found when onlyDelivered is false
+		log, found := state.lastLog(user1, false, types.NotificationTypeGridRestored)
+		assert.True(t, found)
+		assert.Equal(t, "log-stale-suppressed", log.ID)
+		assert.False(t, log.Success)
+		assert.False(t, log.Muted)
+
+		// but ignored when onlyDelivered is true
+		_, foundDelivered := state.lastLog(user1, true, types.NotificationTypeGridRestored)
+		assert.False(t, foundDelivered)
 	})
 }

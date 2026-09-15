@@ -1,7 +1,6 @@
 import React from 'react';
 import { Link, useLocation, useSearchParams } from 'wouter';
 import { Select } from '@base-ui/react/select';
-import { NotificationModal } from './NotificationModal';
 import { isIOSHomeScreen } from '../utils/pwaUtils';
 import './Header.css';
 import type { UserSite } from '../api';
@@ -13,19 +12,15 @@ interface HeaderProps {
     onSiteChange: (siteID: string) => void;
     onLogout: () => void;
     hasNotifications?: boolean;
+    onOpenNotifications?: () => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSiteChange, onLogout, hasNotifications }) => {
+const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSiteChange, onLogout, hasNotifications, onOpenNotifications }) => {
     const [isMenuOpen, setIsMenuOpen] = React.useState(false);
-    const [isNotificationModalOpen, setIsNotificationModalOpen] = React.useState(false);
     const [location] = useLocation();
     const [searchParams] = useSearchParams();
 
     const showNotifications = searchParams.get('notifications') === 'true' || isIOSHomeScreen() || Boolean(hasNotifications);
-
-    const currentSite = sites.find(s => s.id === selectedSiteID) || (sites.length > 0 ? sites[0] : undefined);
-    const activeSiteID = currentSite?.id;
-    const activeSiteName = currentSite?.name || currentSite?.id;
 
     const toggleMenu = () => {
         setIsMenuOpen(!isMenuOpen);
@@ -117,7 +112,7 @@ const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSite
                                         type="button"
                                         className="notification-bell-btn"
                                         onClick={() => {
-                                            setIsNotificationModalOpen(true);
+                                            onOpenNotifications?.();
                                             setIsMenuOpen(false);
                                         }}
                                         aria-label="Notification settings"
@@ -141,15 +136,6 @@ const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSite
                     </div>
                 </div>
             </div>
-
-            {loggedIn && showNotifications && (
-                <NotificationModal
-                    open={isNotificationModalOpen}
-                    onClose={() => setIsNotificationModalOpen(false)}
-                    siteID={activeSiteID}
-                    siteName={activeSiteName}
-                />
-            )}
         </header>
     );
 };

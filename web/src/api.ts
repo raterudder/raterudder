@@ -268,7 +268,7 @@ export interface Settings {
     hasCredentials: {
         [key: string]: boolean;
     };
-    hasNotifications?: boolean;
+    notifications?: Record<string, UserNotificationSettings>;
     essAuthStatus?: {
         consecutiveFailures: number;
         lastAttempt: string;
@@ -392,6 +392,7 @@ export interface UserSite extends Site {
 
 export interface AuthStatus {
     loggedIn: boolean;
+    userID?: string;
     email: string;
     authRequired: boolean;
     clientIDs: Record<string, string>;
@@ -818,6 +819,7 @@ export interface UserNotificationSettings {
     priceSpikeAlert?: AnomalyAlertSensitivity;
     solarUnderproductionAlert?: AnomalyAlertSensitivity;
     vppDispatchAlert?: boolean;
+    quietPeriods?: TimePeriod[];
 }
 
 export interface PushSubscriptionKeys {
@@ -833,22 +835,16 @@ export interface PushSubscription {
     tsCreated?: string;
 }
 
-export interface GetNotificationSettingsResponse {
-    settings: UserNotificationSettings;
-    subscriptions: PushSubscription[];
-    vapidEnabled: boolean;
-}
-
 export interface NotificationLog {
     id: string;
     tsCreated: string;
     userID: string;
-    endpoint: string;
     type: string;
     flavor: string;
     title: string;
     body: string;
     success: boolean;
+    muted?: boolean;
     statusCode: number;
     error?: string;
     clicked?: boolean;
@@ -861,25 +857,25 @@ export interface MonthlyNotificationLogs {
     logs: NotificationLog[];
 }
 
+export interface NotificationSubscriptionsResponse {
+    subscriptions: PushSubscription[];
+    notificationsEnabled: boolean;
+}
+
+export const fetchNotificationSubscriptions = async (): Promise<NotificationSubscriptionsResponse> => {
+    const response = await fetch('/api/notifications/subscriptions');
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Failed to fetch notification subscriptions'));
+    }
+    return response.json();
+};
+
 export const fetchVAPIDPublicKey = async (): Promise<ArrayBuffer> => {
     const response = await fetch('/api/notifications/vapidPublicKey');
     if (!response.ok) {
         throw new Error(await extractError(response, 'Failed to fetch VAPID public key'));
     }
     return await response.arrayBuffer();
-};
-
-export const fetchNotificationSettings = async (siteID?: string): Promise<GetNotificationSettingsResponse> => {
-    const query = new URLSearchParams();
-    if (siteID) {
-        query.append('siteID', siteID);
-    }
-    const queryString = query.toString() ? `?${query.toString()}` : '';
-    const response = await fetch(`/api/notifications/settings${queryString}`);
-    if (!response.ok) {
-        throw new Error(await extractError(response, 'Failed to fetch notification settings'));
-    }
-    return response.json();
 };
 
 export const subscribePushNotification = async (subscription: PushSubscription, sendTest: boolean = false): Promise<void> => {
@@ -909,7 +905,7 @@ export const unsubscribePushNotification = async (endpoint: string): Promise<voi
 };
 
 export const updateNotificationSettings = async (siteID: string, settings: UserNotificationSettings): Promise<void> => {
-    const response = await fetch('/api/notifications/settings', {
+    const response = await fetch('/api/settings/notifications', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',

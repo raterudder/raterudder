@@ -752,6 +752,7 @@ func TestHandleAuthStatus(t *testing.T) {
 
 		assert.True(t, resp.LoggedIn)
 		assert.Equal(t, "new@example.com", resp.Email)
+		assert.Equal(t, "123", resp.UserID)
 		assert.Empty(t, resp.Sites)
 		// Verify auth settings are exposed to frontend correctly
 		assert.True(t, resp.AuthRequired)
@@ -775,6 +776,7 @@ func TestHandleAuthStatus(t *testing.T) {
 
 		assert.True(t, resp.LoggedIn)
 		assert.Equal(t, "existing@example.com", resp.Email)
+		assert.Equal(t, "456", resp.UserID)
 		assert.Equal(t, []types.UserSite{{ID: "site1"}}, resp.Sites)
 		// Verify auth settings are exposed to frontend correctly
 		assert.True(t, resp.AuthRequired)

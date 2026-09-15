@@ -5,6 +5,7 @@ export const defaultAuthStatus = {
     authRequired: true,
     clientIDs: { google: 'test-client-id' },
     email: 'user@example.com',
+    userID: 'test-user-123',
     sites: [{ id: 'site1', name: 'Site 1' }]
 };
 
@@ -51,7 +52,8 @@ export const defaultSettings = {
     socBufferPercent: 4,
     solarCapacityBufferMinutes: 10,
     vppChargingBufferMinutes: 20,
-    homeLoadPredictionStrategy: 'default'
+    homeLoadPredictionStrategy: 'default',
+    notifications: {},
 };
 
 export const defaultUtilities = [
@@ -188,18 +190,13 @@ export const setupDefaultApiMocks = (api: any) => {
             sessionsCount: 11,
         });
     }
-    if (typeof api.fetchNotificationSettings?.mockResolvedValue === 'function') {
-        api.fetchNotificationSettings.mockResolvedValue({
-            settings: {
-                morningSummaryEnabled: false,
-                morningSummaryHour: 7,
-                morningSummaryFlavor: 'home_planner'
-            },
+    if (typeof api.updateNotificationSettings?.mockResolvedValue === 'function') api.updateNotificationSettings.mockResolvedValue(undefined);
+    if (typeof api.fetchNotificationSubscriptions?.mockResolvedValue === 'function') {
+        api.fetchNotificationSubscriptions.mockResolvedValue({
             subscriptions: [],
-            vapidEnabled: true
+            notificationsEnabled: true,
         });
     }
-    if (typeof api.updateNotificationSettings?.mockResolvedValue === 'function') api.updateNotificationSettings.mockResolvedValue(undefined);
     if (typeof api.fetchVAPIDPublicKey?.mockResolvedValue === 'function') api.fetchVAPIDPublicKey.mockResolvedValue(new ArrayBuffer(65));
     if (typeof api.subscribePushNotification?.mockResolvedValue === 'function') api.subscribePushNotification.mockResolvedValue(undefined);
     if (typeof api.unsubscribePushNotification?.mockResolvedValue === 'function') api.unsubscribePushNotification.mockResolvedValue(undefined);
