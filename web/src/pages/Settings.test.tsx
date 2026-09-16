@@ -2644,8 +2644,8 @@ describe('App & Settings', () => {
 
                 const startSelect = screen.getByRole('combobox', { name: /Start Time/i });
                 const endSelect = screen.getByRole('combobox', { name: /End Time/i });
-                expect(startSelect).toHaveTextContent('23:00');
-                expect(endSelect).toHaveTextContent('06:00');
+                expect(startSelect).toHaveTextContent('11 PM');
+                expect(endSelect).toHaveTextContent('6 AM');
             } finally {
                 (window as any).location = originalLocation;
             }
@@ -2723,19 +2723,43 @@ describe('App & Settings', () => {
             const startSelect = screen.getByRole('combobox', { name: /Start Time/i });
             const endSelect = screen.getByRole('combobox', { name: /End Time/i });
 
-            expect(startSelect).toHaveTextContent('23:00');
-            expect(endSelect).toHaveTextContent('06:00');
+            expect(startSelect).toHaveTextContent('11 PM');
+            expect(endSelect).toHaveTextContent('6 AM');
 
             await user.click(startSelect);
-            const startOption = await screen.findByRole('option', { name: '00:00' });
+            const startOption = await screen.findByRole('option', { name: '12 AM' });
             await user.click(startOption);
 
             await user.click(endSelect);
-            const endOption = await screen.findByRole('option', { name: '04:00' });
+            const endOption = await screen.findByRole('option', { name: '4 AM' });
             await user.click(endOption);
 
-            expect(startSelect).toHaveTextContent('00:00');
-            expect(endSelect).toHaveTextContent('04:00');
+            expect(startSelect).toHaveTextContent('12 AM');
+            expect(endSelect).toHaveTextContent('4 AM');
+        });
+
+        it('displays help dialog explaining why start and end times are required', async () => {
+            const user = userEvent.setup();
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                release: 'staging',
+                evChargingPeriods: [
+                    {
+                        name: 'Nighttime EV Charging',
+                        hours: [{ hourStart: 23, minuteStart: 0, hourEnd: 6, minuteEnd: 0 }],
+                    },
+                ],
+            });
+
+            await navigateToSettings();
+
+            const helpBtn = screen.getByRole('button', { name: /More info about EV charging hours/i });
+            expect(helpBtn).toBeInTheDocument();
+
+            await user.click(helpBtn);
+
+            expect(await screen.findByRole('heading', { name: 'Why specify charging hours?' })).toBeInTheDocument();
+            expect(screen.getByText(/High-power household appliances like air conditioners, clothes dryers, and electric ovens draw electrical loads similar to an EV charger/i)).toBeInTheDocument();
         });
     });
 });

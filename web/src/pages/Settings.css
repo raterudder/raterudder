@@ -186,6 +186,21 @@
   margin-bottom: 0;
 }
 
+.ev-time-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  align-items: start;
+}
+
+@media (max-width: 540px) {
+  .ev-time-row {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+}
+
 /* Configured Summary Card */
 .configured-summary {
   background: var(--surface-container-low);

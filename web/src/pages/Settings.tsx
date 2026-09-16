@@ -11,6 +11,7 @@ import { Dialog } from '@base-ui/react/dialog';
 import { InterestForm } from '../components/InterestForm';
 import { HelpButton } from '../components/HelpButton';
 import { isESSEnabled } from '../utils/enabledProviders';
+import { formatHour12 } from '../utils/dashboardUtils';
 import './Settings.css';
 
 const countries = [
@@ -2452,81 +2453,105 @@ const Settings = ({
 
                             {settings.evChargingPeriods && settings.evChargingPeriods.length > 0 && (
                                 <>
-                                    <Field.Root className="form-group compact">
-                                        <Field.Label htmlFor="evHourStart">EV Charging Start Time</Field.Label>
-                                        <Select.Root
-                                            value={String(settings.evChargingPeriods[0]?.hours?.[0]?.hourStart ?? 23)}
-                                            onValueChange={(val) => {
-                                                const start = parseInt(val as string, 10);
-                                                const current = settings.evChargingPeriods![0]?.hours?.[0] || { hourStart: 23, hourEnd: 6 };
-                                                const updated: TimePeriod = {
-                                                    name: 'Nighttime EV Charging',
-                                                    hours: [{ hourStart: start, minuteStart: 0, hourEnd: current.hourEnd, minuteEnd: 0 }],
-                                                };
-                                                handleChange('evChargingPeriods', [updated]);
-                                            }}
-                                        >
-                                            <Select.Trigger className="select-trigger" id="evHourStart" aria-label="EV Charging Start Time">
-                                                <Select.Value>
-                                                    {String(settings.evChargingPeriods[0]?.hours?.[0]?.hourStart ?? 23).padStart(2, '0')}:00
-                                                </Select.Value>
-                                                <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
-                                                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                                        <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                                                    </svg>
-                                                </Select.Icon>
-                                            </Select.Trigger>
-                                            <Select.Portal>
-                                                <Select.Positioner className="select-positioner">
-                                                    <Select.Popup className="select-popup">
-                                                        {Array.from({ length: 24 }, (_, i) => (
-                                                            <Select.Item key={i} className="select-item" value={String(i)}>
-                                                                <Select.ItemText>{String(i).padStart(2, '0')}:00</Select.ItemText>
-                                                            </Select.Item>
-                                                        ))}
-                                                    </Select.Popup>
-                                                </Select.Positioner>
-                                            </Select.Portal>
-                                        </Select.Root>
-                                    </Field.Root>
+                                    <div className="ev-time-row">
+                                        <Field.Root className="form-group compact">
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.35rem' }}>
+                                                <Field.Label htmlFor="evHourStart">EV Charging Start Time</Field.Label>
+                                                <HelpButton
+                                                    title="Why specify charging hours?"
+                                                    ariaLabel="More info about EV charging hours"
+                                                    description={
+                                                        <>
+                                                            <p>
+                                                                High-power household appliances like air conditioners, clothes dryers, and electric ovens draw electrical loads similar to an EV charger.
+                                                            </p>
+                                                            <p>
+                                                                Setting your charging window to hours when those other large loads are minimal (such as overnight) maximizes detection accuracy and prevents false triggers from other appliances.
+                                                            </p>
+                                                        </>
+                                                    }
+                                                />
+                                            </div>
+                                            <Select.Root
+                                                value={String(settings.evChargingPeriods[0]?.hours?.[0]?.hourStart ?? 23)}
+                                                onValueChange={(val) => {
+                                                    const start = parseInt(val as string, 10);
+                                                    const current = settings.evChargingPeriods![0]?.hours?.[0] || { hourStart: 23, hourEnd: 6 };
+                                                    const updated: TimePeriod = {
+                                                        name: 'Nighttime EV Charging',
+                                                        hours: [{ hourStart: start, minuteStart: 0, hourEnd: current.hourEnd, minuteEnd: 0 }],
+                                                    };
+                                                    handleChange('evChargingPeriods', [updated]);
+                                                }}
+                                            >
+                                                <Select.Trigger className="select-trigger" id="evHourStart" aria-label="EV Charging Start Time">
+                                                    <Select.Value>
+                                                        {formatHour12(settings.evChargingPeriods[0]?.hours?.[0]?.hourStart ?? 23)}
+                                                    </Select.Value>
+                                                    <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                            <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                        </svg>
+                                                    </Select.Icon>
+                                                </Select.Trigger>
+                                                <Select.Portal>
+                                                    <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
+                                                        <Select.Popup className="select-popup">
+                                                            <Select.List>
+                                                                {Array.from({ length: 24 }, (_, i) => (
+                                                                    <Select.Item key={i} className="select-item" value={String(i)}>
+                                                                        <Select.ItemText>{formatHour12(i)}</Select.ItemText>
+                                                                    </Select.Item>
+                                                                ))}
+                                                            </Select.List>
+                                                        </Select.Popup>
+                                                    </Select.Positioner>
+                                                </Select.Portal>
+                                            </Select.Root>
+                                        </Field.Root>
 
-                                    <Field.Root className="form-group compact">
-                                        <Field.Label htmlFor="evHourEnd">EV Charging End Time</Field.Label>
-                                        <Select.Root
-                                            value={String(settings.evChargingPeriods[0]?.hours?.[0]?.hourEnd ?? 6)}
-                                            onValueChange={(val) => {
-                                                const end = parseInt(val as string, 10);
-                                                const current = settings.evChargingPeriods![0]?.hours?.[0] || { hourStart: 23, hourEnd: 6 };
-                                                const updated: TimePeriod = {
-                                                    name: 'Nighttime EV Charging',
-                                                    hours: [{ hourStart: current.hourStart, minuteStart: 0, hourEnd: end, minuteEnd: 0 }],
-                                                };
-                                                handleChange('evChargingPeriods', [updated]);
-                                            }}
-                                        >
-                                            <Select.Trigger className="select-trigger" id="evHourEnd" aria-label="EV Charging End Time">
-                                                <Select.Value>
-                                                    {String((settings.evChargingPeriods[0]?.hours?.[0]?.hourEnd ?? 6) === 24 ? 24 : settings.evChargingPeriods[0]?.hours?.[0]?.hourEnd ?? 6).padStart(2, '0')}:00
-                                                </Select.Value>
-                                                <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
-                                                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                                        <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                                                    </svg>
-                                                </Select.Icon>
-                                            </Select.Trigger>
-                                            <Select.Portal>
-                                                <Select.Positioner className="select-positioner">
-                                                    <Select.Popup className="select-popup">
-                                                        {Array.from({ length: 25 }, (_, i) => (
-                                                            <Select.Item key={i} className="select-item" value={String(i)}>
-                                                                <Select.ItemText>{String(i === 24 ? 24 : i).padStart(2, '0')}:00</Select.ItemText>
-                                                            </Select.Item>
-                                                        ))}
-                                                    </Select.Popup>
-                                                </Select.Positioner>
-                                            </Select.Portal>
-                                        </Select.Root>
-                                    </Field.Root>
+                                        <Field.Root className="form-group compact">
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.35rem' }}>
+                                                <Field.Label htmlFor="evHourEnd">EV Charging End Time</Field.Label>
+                                            </div>
+                                            <Select.Root
+                                                value={String(settings.evChargingPeriods[0]?.hours?.[0]?.hourEnd ?? 6)}
+                                                onValueChange={(val) => {
+                                                    const end = parseInt(val as string, 10);
+                                                    const current = settings.evChargingPeriods![0]?.hours?.[0] || { hourStart: 23, hourEnd: 6 };
+                                                    const updated: TimePeriod = {
+                                                        name: 'Nighttime EV Charging',
+                                                        hours: [{ hourStart: current.hourStart, minuteStart: 0, hourEnd: end, minuteEnd: 0 }],
+                                                    };
+                                                    handleChange('evChargingPeriods', [updated]);
+                                                }}
+                                            >
+                                                <Select.Trigger className="select-trigger" id="evHourEnd" aria-label="EV Charging End Time">
+                                                    <Select.Value>
+                                                        {formatHour12(settings.evChargingPeriods[0]?.hours?.[0]?.hourEnd ?? 6)}
+                                                    </Select.Value>
+                                                    <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                            <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                        </svg>
+                                                    </Select.Icon>
+                                                </Select.Trigger>
+                                                <Select.Portal>
+                                                    <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
+                                                        <Select.Popup className="select-popup">
+                                                            <Select.List>
+                                                                {Array.from({ length: 24 }, (_, i) => (
+                                                                    <Select.Item key={i} className="select-item" value={String(i)}>
+                                                                        <Select.ItemText>{formatHour12(i)}</Select.ItemText>
+                                                                    </Select.Item>
+                                                                ))}
+                                                            </Select.List>
+                                                        </Select.Popup>
+                                                    </Select.Positioner>
+                                                </Select.Portal>
+                                            </Select.Root>
+                                        </Field.Root>
+                                    </div>
 
                                     {estimatingEV && (
                                         <div style={{ gridColumn: '1 / -1', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
