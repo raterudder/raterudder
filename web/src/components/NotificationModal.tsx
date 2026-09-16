@@ -176,13 +176,14 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
     const [subscriptions, setSubscriptions] = useState<PushSubscription[]>([]);
     const [vapidEnabled, setVapidEnabled] = useState(true);
     const [isSubscribedLocally, setIsSubscribedLocally] = useState(false);
+    const [localEndpoint, setLocalEndpoint] = useState<string | null>(null);
+    const [editMorning, setEditMorning] = useState(false);
+    const [editEvening, setEditEvening] = useState(false);
     const [permission, setPermission] = useState<NotificationPermission>(() => {
         return typeof Notification !== 'undefined' ? Notification.permission : 'default';
     });
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
-    const [testing, setTesting] = useState(false);
-    const [testSuccess, setTestSuccess] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
     const hasAnyDeviceConnected = isSubscribedLocally || subscriptions.length > 0;
@@ -199,6 +200,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                 const sub = await reg.pushManager.getSubscription();
                 if (!sub) {
                     setIsSubscribedLocally(false);
+                    setLocalEndpoint(null);
                     return;
                 }
                 // If knownSubscriptions was provided, verify this browser's subscription is registered
@@ -211,12 +213,15 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                             // ignore cleanup failure
                         }
                         setIsSubscribedLocally(false);
+                        setLocalEndpoint(null);
                         return;
                     }
                 }
                 setIsSubscribedLocally(true);
+                setLocalEndpoint(sub.endpoint);
             } catch {
                 setIsSubscribedLocally(false);
+                setLocalEndpoint(null);
             }
         }
     }, []);
@@ -269,11 +274,13 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
 
     useEffect(() => {
         if (open) {
+            setEditMorning(false);
+            setEditEvening(false);
             loadSettings();
         }
     }, [open, loadSettings]);
 
-    const handleToggleLocalPush = async (checked: boolean) => {
+    const handleSubscribeThisDevice = async () => {
         if (!isPushSupported || !hasNotifications) {
             return;
         }
@@ -282,55 +289,44 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
         setSaving(true);
 
         try {
-            if (checked) {
-                let perm = Notification.permission;
-                if (perm === 'denied') {
-                    setError('Notifications are blocked by your browser. Please enable notifications in your browser site settings.');
+            let perm = Notification.permission;
+            if (perm === 'denied') {
+                setError('Notifications are blocked by your browser. Please enable notifications in your browser site settings.');
+                setSaving(false);
+                return;
+            }
+
+            if (perm !== 'granted') {
+                perm = await Notification.requestPermission();
+                setPermission(perm);
+                if (perm !== 'granted') {
+                    setError('Notification permission was not granted.');
                     setSaving(false);
                     return;
                 }
-
-                if (perm !== 'granted') {
-                    perm = await Notification.requestPermission();
-                    setPermission(perm);
-                    if (perm !== 'granted') {
-                        setError('Notification permission was not granted.');
-                        setSaving(false);
-                        return;
-                    }
-                }
-
-                const pubKeyBuffer = await fetchVAPIDPublicKey();
-                const reg = await navigator.serviceWorker.ready;
-                const sub = await reg.pushManager.subscribe({
-                    userVisibleOnly: true,
-                    applicationServerKey: pubKeyBuffer
-                });
-
-                const subJSON = sub.toJSON();
-                await subscribePushNotification({
-                    endpoint: sub.endpoint,
-                    keys: {
-                        p256dh: subJSON.keys?.p256dh || '',
-                        auth: subJSON.keys?.auth || ''
-                    },
-                    userAgent: navigator.userAgent
-                }, true);
-
-                setIsSubscribedLocally(true);
-                const updated = await fetchNotificationSubscriptions();
-                setSubscriptions(updated.subscriptions || []);
-            } else {
-                const reg = await navigator.serviceWorker.ready;
-                const sub = await reg.pushManager.getSubscription();
-                if (sub) {
-                    await sub.unsubscribe();
-                    await unsubscribePushNotification(sub.endpoint);
-                }
-                setIsSubscribedLocally(false);
-                const updated = await fetchNotificationSubscriptions();
-                setSubscriptions(updated.subscriptions || []);
             }
+
+            const pubKeyBuffer = await fetchVAPIDPublicKey();
+            const reg = await navigator.serviceWorker.ready;
+            const sub = await reg.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: pubKeyBuffer
+            });
+
+            const subJSON = sub.toJSON();
+            await subscribePushNotification({
+                endpoint: sub.endpoint,
+                keys: {
+                    p256dh: subJSON.keys?.p256dh || '',
+                    auth: subJSON.keys?.auth || ''
+                },
+                userAgent: navigator.userAgent
+            }, true);
+
+            setIsSubscribedLocally(true);
+            setLocalEndpoint(sub.endpoint);
+            const updated = await fetchNotificationSubscriptions();
+            setSubscriptions(updated.subscriptions || []);
         } catch (err: any) {
             setError(err.message || 'Failed to update push subscription');
         } finally {
@@ -400,6 +396,8 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
             await updateNotificationSettings(siteID, settingsToSave);
             setSavedSettings(settingsToSave);
             setDraftSettings(settingsToSave);
+            setEditMorning(false);
+            setEditEvening(false);
             onSaved?.();
             onClose();
         } catch (err: any) {
@@ -411,43 +409,10 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
 
     const handleCancel = () => {
         setDraftSettings(savedSettings);
+        setEditMorning(false);
+        setEditEvening(false);
         setError(null);
         onClose();
-    };
-
-    // TODO: Remove test notification button before public release
-    const handleSendTest = async () => {
-        setTesting(true);
-        setError(null);
-        setTestSuccess(false);
-
-        try {
-            if (!('serviceWorker' in navigator)) {
-                throw new Error('Service Worker not supported');
-            }
-            const reg = await navigator.serviceWorker.ready;
-            const sub = await reg.pushManager.getSubscription();
-            if (!sub) {
-                throw new Error('This device is not subscribed to push notifications. Enable the toggle above first.');
-            }
-
-            const subJSON = sub.toJSON();
-            await subscribePushNotification({
-                endpoint: sub.endpoint,
-                keys: {
-                    p256dh: subJSON.keys?.p256dh || '',
-                    auth: subJSON.keys?.auth || ''
-                },
-                userAgent: navigator.userAgent
-            }, true);
-
-            setTestSuccess(true);
-            setTimeout(() => setTestSuccess(false), 4000);
-        } catch (err: any) {
-            setError(err.message || 'Failed to send test push notification');
-        } finally {
-            setTesting(false);
-        }
     };
 
     const handleRemoveDevice = async (endpoint: string) => {
@@ -460,6 +425,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                     if (sub && sub.endpoint === endpoint) {
                         await sub.unsubscribe();
                         setIsSubscribedLocally(false);
+                        setLocalEndpoint(null);
                     }
                 } catch (e) {
                     console.error('Failed to unsubscribe local push manager', e);
@@ -578,54 +544,37 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                     </div>
                                 )}
 
-                                {/* Zone A: Device Management */}
-                                <div className="notif-section">
-                                    {isPushSupported && !isIOSWithoutNotifications && (
-                                        <Field.Root className="form-group switch-group" style={{ marginBottom: 0 }}>
-                                            <div className="switch-row">
-                                                <Switch.Root
-                                                    id="pushNotificationsToggle"
-                                                    checked={isSubscribedLocally}
-                                                    onCheckedChange={handleToggleLocalPush}
-                                                    disabled={saving}
-                                                    className="switch-root"
-                                                    aria-label="Deliver notifications to this browser"
-                                                >
-                                                    <Switch.Thumb className="switch-thumb" />
-                                                </Switch.Root>
-                                                <Field.Label htmlFor="pushNotificationsToggle" style={{ cursor: 'pointer', fontWeight: 600 }}>
-                                                    Deliver notifications to this browser
-                                                </Field.Label>
-                                            </div>
-                                            <Field.Description>
-                                                Receive daily summaries and critical grid alerts on this device.
-                                            </Field.Description>
-                                        </Field.Root>
-                                    )}
+                                {/* Segment 1: Subscribed Devices */}
+                                <div className="notif-segment">
+                                    <div className="notif-segment-header">
+                                        <h3 className="notif-segment-title">
+                                            Subscribed Devices ({subscriptions.length})
+                                        </h3>
+                                    </div>
 
-                                    <div>
-                                        <Field.Root className="form-group" style={{ marginBottom: '0.35rem' }}>
-                                            <Field.Label style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>
-                                                Active Subscribed Devices ({subscriptions.length})
-                                            </Field.Label>
-                                        </Field.Root>
-
-                                        {subscriptions.length === 0 ? (
-                                            <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                                                {!isPushSupported
-                                                    ? 'No devices registered yet. Access RateRudder from a supported browser to register for notifications.'
-                                                    : isIOSWithoutNotifications
-                                                    ? 'No devices registered yet. Add RateRudder to your Home Screen to register this device.'
-                                                    : 'No devices registered yet. Enable notifications above to register this browser.'}
-                                            </div>
-                                        ) : (
-                                            <div className="device-list">
-                                                {subscriptions.map((sub, idx) => (
+                                    {subscriptions.length === 0 ? (
+                                        <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                                            {!isPushSupported
+                                                ? 'No devices registered yet. Access RateRudder from a supported browser to register for notifications.'
+                                                : isIOSWithoutNotifications
+                                                ? 'No devices registered yet. Add RateRudder to your Home Screen to register this device.'
+                                                : 'No devices registered yet. Subscribe this device below to enable notifications.'}
+                                        </div>
+                                    ) : (
+                                        <div className="device-list">
+                                            {subscriptions.map((sub, idx) => {
+                                                const isCurrentDevice = Boolean(localEndpoint && sub.endpoint === localEndpoint);
+                                                return (
                                                     <div key={sub.endpoint || idx} className="device-item">
                                                         <div className="device-info">
-                                                            <span className="device-name">{getDeviceName(sub.userAgent)}</span>
+                                                            <div className="device-name-row">
+                                                                <span className="device-name">{getDeviceName(sub.userAgent)}</span>
+                                                                {isCurrentDevice && (
+                                                                    <span className="this-device-badge">This Device</span>
+                                                                )}
+                                                            </div>
                                                             <span className="device-date">
-                                                                 Added {sub.tsCreated ? new Date(sub.tsCreated).toLocaleDateString() : 'recently'}
+                                                                Added {sub.tsCreated ? new Date(sub.tsCreated).toLocaleDateString() : 'recently'}
                                                             </span>
                                                         </div>
                                                         <button
@@ -637,13 +586,27 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                             Remove
                                                         </button>
                                                     </div>
-                                                ))}
-                                            </div>
-                                        )}
-                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+
+                                    {/* Subscribe this device button (shown when current browser is not yet subscribed) */}
+                                    {!isSubscribedLocally && isPushSupported && !isIOSWithoutNotifications && (
+                                        <div style={{ marginTop: subscriptions.length > 0 ? '0.5rem' : '0.25rem' }}>
+                                            <button
+                                                type="button"
+                                                className="btn btn-secondary btn-sm notif-subscribe-btn"
+                                                onClick={handleSubscribeThisDevice}
+                                                disabled={saving}
+                                            >
+                                                {saving ? 'Subscribing...' : 'Subscribe this device to notifications'}
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
 
-                                {/* Zone B: Site Alert Preferences (Shown once at least 1 device is connected) */}
+                                {/* Preferences Area (Shown once at least 1 device is connected) */}
                                 {!hasAnyDeviceConnected ? (
                                     <div className="notif-connect-prompt">
                                         <span className="notif-prompt-icon">🔔</span>
@@ -660,7 +623,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                     ? 'This browser does not support Web Push notifications. Use a supported browser or install to your Home Screen on iOS to enable alerts.'
                                                     : isIOSWithoutNotifications
                                                     ? 'Follow the steps above to add RateRudder to your Home Screen to receive morning summaries, evening wrap-ups, and real-time energy alerts.'
-                                                    : 'Enable push notifications on this device to customize daily morning summaries, evening wrap-ups, and real-time energy alerts.'}
+                                                    : 'Subscribe this device above to customize daily morning summaries, evening wrap-ups, and real-time energy alerts.'}
                                             </p>
                                         </div>
                                     </div>
@@ -675,406 +638,391 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                             </div>
                                         </div>
 
-                                        {/* Morning Summary */}
-                                        <div className="notif-section">
-                                            <Field.Root className="form-group switch-group" style={{ marginBottom: 0 }}>
-                                                <div className="switch-row">
-                                                    <Switch.Root
-                                                        id="morningSummaryToggle"
-                                                        checked={draftSettings.morningSummaryEnabled}
-                                                        onCheckedChange={(val) => handleUpdateDraft({ morningSummaryEnabled: val })}
-                                                        className="switch-root"
-                                                        aria-label="Daily Morning Summary"
-                                                    >
-                                                        <Switch.Thumb className="switch-thumb" />
-                                                    </Switch.Root>
-                                                    <Field.Label htmlFor="morningSummaryToggle" style={{ cursor: 'pointer' }}>
-                                                        Daily Morning Summary
-                                                    </Field.Label>
-                                                    <HelpButton
-                                                        title="Morning Summary"
-                                                        description={
-                                                            <p>
-                                                                A daily morning briefing sent at your chosen hour with your current battery SOC, solar generation forecast for today compared to yesterday, and full-charge ETA.
-                                                            </p>
-                                                        }
-                                                    />
-                                                </div>
-                                                <Field.Description>
-                                                    Get a daily morning wake-up status report with battery charge and solar forecast.
-                                                </Field.Description>
-                                            </Field.Root>
+                                        {/* Segment 2: Daily Summaries */}
+                                        <div className="notif-segment">
+                                            <div className="notif-segment-header">
+                                                <h3 className="notif-segment-title">Daily Summaries</h3>
+                                            </div>
 
-                                            {draftSettings.morningSummaryEnabled && (
-                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                                                    <div className="notif-row-split">
-                                                        {/* Delivery Hour Dropdown */}
-                                                        <Field.Root className="form-group compact">
-                                                            <Field.Label htmlFor="morningSummaryHour" style={{ marginBottom: '0.35rem', display: 'block' }}>Delivery Time</Field.Label>
-                                                            <Select.Root
-                                                                value={String(draftSettings.morningSummaryHour ?? 7)}
-                                                                onValueChange={(val) => handleUpdateDraft({ morningSummaryHour: parseInt(val as string, 10) })}
-                                                            >
-                                                                <Select.Trigger className="select-trigger" id="morningSummaryHour" aria-label="Morning Summary Delivery Time">
-                                                                    <Select.Value>
-                                                                        {formatHour12(draftSettings.morningSummaryHour ?? 7)}
-                                                                    </Select.Value>
-                                                                    <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
-                                                                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                                                            <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                                                                        </svg>
-                                                                    </Select.Icon>
-                                                                </Select.Trigger>
-                                                                <Select.Portal>
-                                                                    <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
-                                                                        <Select.Popup className="select-popup">
-                                                                            <Select.List>
-                                                                                {Array.from({ length: 24 }, (_, i) => (
-                                                                                    <Select.Item key={i} className="select-item" value={String(i)}>
-                                                                                        <Select.ItemText>{formatHour12(i)}</Select.ItemText>
-                                                                                    </Select.Item>
-                                                                                ))}
-                                                                            </Select.List>
-                                                                        </Select.Popup>
-                                                                    </Select.Positioner>
-                                                                </Select.Portal>
-                                                            </Select.Root>
-                                                        </Field.Root>
-
-                                                        {/* Summary Flavor Dropdown */}
-                                                        <Field.Root className="form-group compact">
-                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.35rem' }}>
-                                                                <Field.Label htmlFor="morningSummaryFlavor">Summary Flavor</Field.Label>
-                                                                <HelpButton
-                                                                    title="Morning Summary Flavors"
-                                                                    ariaLabel="More info about morning summary flavors"
-                                                                    description={
-                                                                        <div>
-                                                                            <p>Choose how you want your daily morning briefing presented:</p>
-                                                                            <ul>
-                                                                                <li><strong>Metrics Heavy:</strong> Detailed numerical data including battery SOC (kWh), solar output percentage vs yesterday, and full-charge ETA.</li>
-                                                                                <li><strong>Home Planner:</strong> Practical lifestyle scheduling highlighting optimal hours to run heavy appliances or charge your EV.</li>
-                                                                                <li><strong>Executive Summary:</strong> High-level overview of expected solar harvest and battery status in concise bullet points.</li>
-                                                                                <li><strong>Autonomous Pilot:</strong> RateRudder&apos;s AI reasoning explaining the strategy behind today&apos;s battery automation.</li>
-                                                                            </ul>
-                                                                        </div>
-                                                                    }
-                                                                />
-                                                            </div>
-                                                            <Select.Root
-                                                                value={currentFlavor}
-                                                                onValueChange={(val) => handleUpdateDraft({ morningSummaryFlavor: val as MorningSummaryFlavor })}
-                                                            >
-                                                                <Select.Trigger className="select-trigger" id="morningSummaryFlavor" aria-label="Morning Summary Flavor">
-                                                                    <Select.Value>
-                                                                        {flavorPreviews[currentFlavor]?.name || 'Home Planner'}
-                                                                    </Select.Value>
-                                                                    <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
-                                                                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                                                            <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                                                                        </svg>
-                                                                    </Select.Icon>
-                                                                </Select.Trigger>
-                                                                <Select.Portal>
-                                                                    <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
-                                                                        <Select.Popup className="select-popup">
-                                                                            <Select.List>
-                                                                                {(Object.keys(flavorPreviews) as MorningSummaryFlavor[]).map((flavorKey) => (
-                                                                                    <Select.Item key={flavorKey} className="select-item" value={flavorKey}>
-                                                                                        <Select.ItemText>{flavorPreviews[flavorKey].name}</Select.ItemText>
-                                                                                    </Select.Item>
-                                                                                ))}
-                                                                            </Select.List>
-                                                                        </Select.Popup>
-                                                                    </Select.Positioner>
-                                                                </Select.Portal>
-                                                            </Select.Root>
-                                                        </Field.Root>
+                                            {/* Morning Summary */}
+                                            <div>
+                                                <Field.Root className="form-group switch-group" style={{ marginBottom: 0 }}>
+                                                    <div className="switch-row">
+                                                        <Switch.Root
+                                                            id="morningSummaryToggle"
+                                                            checked={draftSettings.morningSummaryEnabled}
+                                                            onCheckedChange={(val) => {
+                                                                handleUpdateDraft({ morningSummaryEnabled: val });
+                                                                if (!val) setEditMorning(false);
+                                                            }}
+                                                            className="switch-root"
+                                                            aria-label="Daily Morning Summary"
+                                                        >
+                                                            <Switch.Thumb className="switch-thumb" />
+                                                        </Switch.Root>
+                                                        <Field.Label htmlFor="morningSummaryToggle" style={{ cursor: 'pointer' }}>
+                                                            Daily Morning Summary
+                                                        </Field.Label>
+                                                        <HelpButton
+                                                            title="Morning Summary"
+                                                            description={
+                                                                <p>
+                                                                    A daily morning briefing sent at your chosen hour with your current battery SOC, solar generation forecast for today compared to yesterday, and full-charge ETA.
+                                                                </p>
+                                                            }
+                                                        />
                                                     </div>
+                                                    <Field.Description>
+                                                        Get a daily morning wake-up status report with battery charge and solar forecast.
+                                                    </Field.Description>
+                                                </Field.Root>
 
-                                                    {/* Live Notification Preview Box */}
-                                                    <div className="notification-preview-box">
-                                                        <div className="notification-preview-header">
-                                                            <span>Preview on Device</span>
-                                                        </div>
-                                                        <div className="notification-preview-card">
-                                                            <div className="notification-preview-icon">
-                                                                <img src="/logo_192.png" alt="RateRudder" />
+                                                {draftSettings.morningSummaryEnabled && (
+                                                    !editMorning ? (
+                                                        <div
+                                                            className="notif-configured-summary"
+                                                            onClick={() => setEditMorning(true)}
+                                                            role="button"
+                                                            tabIndex={0}
+                                                            onKeyDown={(e) => {
+                                                                if (e.key === 'Enter' || e.key === ' ') {
+                                                                    e.preventDefault();
+                                                                    setEditMorning(true);
+                                                                }
+                                                            }}
+                                                            aria-label="Edit Daily Morning Summary settings"
+                                                        >
+                                                            <div className="summary-info">
+                                                                <span className="summary-label">Delivery Schedule & Flavor</span>
+                                                                <span className="summary-sublabel">
+                                                                    {formatHour12(draftSettings.morningSummaryHour ?? 7)} • {flavorPreviews[currentFlavor]?.name || 'Home Planner'}
+                                                                </span>
                                                             </div>
-                                                            <div className="notification-preview-text">
-                                                                <div className="notification-preview-title">{activePreview.title}</div>
-                                                                <div className="notification-preview-body">{activePreview.body}</div>
+                                                            <button
+                                                                type="button"
+                                                                className="text-button"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    setEditMorning(true);
+                                                                }}
+                                                                aria-label="Change morning summary settings"
+                                                            >
+                                                                Change
+                                                            </button>
+                                                        </div>
+                                                    ) : (
+                                                        <div className="notif-edit-container">
+                                                            <div className="notif-edit-header">
+                                                                <span className="notif-edit-title">Customize Morning Summary</span>
+                                                                <button
+                                                                    type="button"
+                                                                    className="text-button"
+                                                                    onClick={() => setEditMorning(false)}
+                                                                    aria-label="Done editing morning summary"
+                                                                >
+                                                                    Done
+                                                                </button>
+                                                            </div>
+
+                                                            <div className="notif-row-split">
+                                                                {/* Delivery Hour Dropdown */}
+                                                                <Field.Root className="form-group compact">
+                                                                    <Field.Label htmlFor="morningSummaryHour" style={{ marginBottom: '0.35rem', display: 'block' }}>Delivery Time</Field.Label>
+                                                                    <Select.Root
+                                                                        value={String(draftSettings.morningSummaryHour ?? 7)}
+                                                                        onValueChange={(val) => handleUpdateDraft({ morningSummaryHour: parseInt(val as string, 10) })}
+                                                                    >
+                                                                        <Select.Trigger className="select-trigger" id="morningSummaryHour" aria-label="Morning Summary Delivery Time">
+                                                                            <Select.Value>
+                                                                                {formatHour12(draftSettings.morningSummaryHour ?? 7)}
+                                                                            </Select.Value>
+                                                                            <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                                                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                                                    <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                                                </svg>
+                                                                            </Select.Icon>
+                                                                        </Select.Trigger>
+                                                                        <Select.Portal>
+                                                                            <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
+                                                                                <Select.Popup className="select-popup">
+                                                                                    <Select.List>
+                                                                                        {Array.from({ length: 24 }, (_, i) => (
+                                                                                            <Select.Item key={i} className="select-item" value={String(i)}>
+                                                                                                <Select.ItemText>{formatHour12(i)}</Select.ItemText>
+                                                                                            </Select.Item>
+                                                                                        ))}
+                                                                                    </Select.List>
+                                                                                </Select.Popup>
+                                                                            </Select.Positioner>
+                                                                        </Select.Portal>
+                                                                    </Select.Root>
+                                                                </Field.Root>
+
+                                                                {/* Summary Flavor Dropdown */}
+                                                                <Field.Root className="form-group compact">
+                                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.35rem' }}>
+                                                                        <Field.Label htmlFor="morningSummaryFlavor">Summary Flavor</Field.Label>
+                                                                        <HelpButton
+                                                                            title="Morning Summary Flavors"
+                                                                            ariaLabel="More info about morning summary flavors"
+                                                                            description={
+                                                                                <div>
+                                                                                    <p>Choose how you want your daily morning briefing presented:</p>
+                                                                                    <ul>
+                                                                                        <li><strong>Metrics Heavy:</strong> Detailed numerical data including battery SOC (kWh), solar output percentage vs yesterday, and full-charge ETA.</li>
+                                                                                        <li><strong>Home Planner:</strong> Practical lifestyle scheduling highlighting optimal hours to run heavy appliances or charge your EV.</li>
+                                                                                        <li><strong>Executive Summary:</strong> High-level overview of expected solar harvest and battery status in concise bullet points.</li>
+                                                                                        <li><strong>Autonomous Pilot:</strong> RateRudder&apos;s AI reasoning explaining the strategy behind today&apos;s battery automation.</li>
+                                                                                    </ul>
+                                                                                </div>
+                                                                            }
+                                                                        />
+                                                                    </div>
+                                                                    <Select.Root
+                                                                        value={currentFlavor}
+                                                                        onValueChange={(val) => handleUpdateDraft({ morningSummaryFlavor: val as MorningSummaryFlavor })}
+                                                                    >
+                                                                        <Select.Trigger className="select-trigger" id="morningSummaryFlavor" aria-label="Morning Summary Flavor">
+                                                                            <Select.Value>
+                                                                                {flavorPreviews[currentFlavor]?.name || 'Home Planner'}
+                                                                            </Select.Value>
+                                                                            <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                                                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                                                    <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                                                </svg>
+                                                                            </Select.Icon>
+                                                                        </Select.Trigger>
+                                                                        <Select.Portal>
+                                                                            <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
+                                                                                <Select.Popup className="select-popup">
+                                                                                    <Select.List>
+                                                                                        {(Object.keys(flavorPreviews) as MorningSummaryFlavor[]).map((flavorKey) => (
+                                                                                            <Select.Item key={flavorKey} className="select-item" value={flavorKey}>
+                                                                                                <Select.ItemText>{flavorPreviews[flavorKey].name}</Select.ItemText>
+                                                                                            </Select.Item>
+                                                                                        ))}
+                                                                                    </Select.List>
+                                                                                </Select.Popup>
+                                                                            </Select.Positioner>
+                                                                        </Select.Portal>
+                                                                    </Select.Root>
+                                                                </Field.Root>
+                                                            </div>
+
+                                                            {/* Live Notification Preview Box */}
+                                                            <div className="notification-preview-box">
+                                                                <div className="notification-preview-header">
+                                                                    <span>Preview on Device</span>
+                                                                </div>
+                                                                <div className="notification-preview-card">
+                                                                    <div className="notification-preview-icon">
+                                                                        <img src="/logo_192.png" alt="RateRudder" />
+                                                                    </div>
+                                                                    <div className="notification-preview-text">
+                                                                        <div className="notification-preview-title">{activePreview.title}</div>
+                                                                        <div className="notification-preview-body">{activePreview.body}</div>
+                                                                    </div>
+                                                                </div>
                                                             </div>
                                                         </div>
+                                                    )
+                                                )}
+                                            </div>
+
+                                            <hr className="notif-divider" />
+
+                                            {/* Evening Summary */}
+                                            <div>
+                                                <Field.Root className="form-group switch-group" style={{ marginBottom: 0 }}>
+                                                    <div className="switch-row">
+                                                        <Switch.Root
+                                                            id="eveningSummaryToggle"
+                                                            checked={draftSettings.eveningSummaryEnabled ?? false}
+                                                            onCheckedChange={(val) => {
+                                                                handleUpdateDraft({ eveningSummaryEnabled: val });
+                                                                if (!val) setEditEvening(false);
+                                                            }}
+                                                            className="switch-root"
+                                                            aria-label="Daily Evening Summary"
+                                                        >
+                                                            <Switch.Thumb className="switch-thumb" />
+                                                        </Switch.Root>
+                                                        <Field.Label htmlFor="eveningSummaryToggle" style={{ cursor: 'pointer' }}>
+                                                            Daily Evening Summary
+                                                        </Field.Label>
+                                                        <HelpButton
+                                                            title="Evening Summary"
+                                                            description={
+                                                                <p>
+                                                                    A daily evening wrap-up sent at your chosen hour detailing total solar generated today, home consumption, grid energy exported, and battery reserve entering the overnight period.
+                                                                </p>
+                                                            }
+                                                        />
                                                     </div>
-                                                </div>
-                                            )}
+                                                    <Field.Description>
+                                                        Get an evening digest wrapping up today&apos;s solar performance and overnight battery preparedness.
+                                                    </Field.Description>
+                                                </Field.Root>
+
+                                                {draftSettings.eveningSummaryEnabled && (
+                                                    !editEvening ? (
+                                                        <div
+                                                            className="notif-configured-summary"
+                                                            onClick={() => setEditEvening(true)}
+                                                            role="button"
+                                                            tabIndex={0}
+                                                            onKeyDown={(e) => {
+                                                                if (e.key === 'Enter' || e.key === ' ') {
+                                                                    e.preventDefault();
+                                                                    setEditEvening(true);
+                                                                }
+                                                            }}
+                                                            aria-label="Edit Daily Evening Summary settings"
+                                                        >
+                                                            <div className="summary-info">
+                                                                <span className="summary-label">Delivery Schedule & Flavor</span>
+                                                                <span className="summary-sublabel">
+                                                                    {formatHour12(draftSettings.eveningSummaryHour ?? 20)} • {eveningFlavorPreviews[currentEveningFlavor]?.name || 'Home Planner'}
+                                                                </span>
+                                                            </div>
+                                                            <button
+                                                                type="button"
+                                                                className="text-button"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    setEditEvening(true);
+                                                                }}
+                                                                aria-label="Change evening summary settings"
+                                                            >
+                                                                Change
+                                                            </button>
+                                                        </div>
+                                                    ) : (
+                                                        <div className="notif-edit-container">
+                                                            <div className="notif-edit-header">
+                                                                <span className="notif-edit-title">Customize Evening Summary</span>
+                                                                <button
+                                                                    type="button"
+                                                                    className="text-button"
+                                                                    onClick={() => setEditEvening(false)}
+                                                                    aria-label="Done editing evening summary"
+                                                                >
+                                                                    Done
+                                                                </button>
+                                                            </div>
+
+                                                            <div className="notif-row-split">
+                                                                {/* Delivery Hour Dropdown */}
+                                                                <Field.Root className="form-group compact">
+                                                                    <Field.Label htmlFor="eveningSummaryHour" style={{ marginBottom: '0.35rem', display: 'block' }}>Delivery Time</Field.Label>
+                                                                    <Select.Root
+                                                                        value={String(draftSettings.eveningSummaryHour ?? 20)}
+                                                                        onValueChange={(val) => handleUpdateDraft({ eveningSummaryHour: parseInt(val as string, 10) })}
+                                                                    >
+                                                                        <Select.Trigger className="select-trigger" id="eveningSummaryHour" aria-label="Evening Summary Delivery Time">
+                                                                            <Select.Value>
+                                                                                {formatHour12(draftSettings.eveningSummaryHour ?? 20)}
+                                                                            </Select.Value>
+                                                                            <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                                                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                                                    <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                                                </svg>
+                                                                            </Select.Icon>
+                                                                        </Select.Trigger>
+                                                                        <Select.Portal>
+                                                                            <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
+                                                                                <Select.Popup className="select-popup">
+                                                                                    <Select.List>
+                                                                                        {Array.from({ length: 24 }, (_, i) => (
+                                                                                            <Select.Item key={i} className="select-item" value={String(i)}>
+                                                                                                <Select.ItemText>{formatHour12(i)}</Select.ItemText>
+                                                                                            </Select.Item>
+                                                                                        ))}
+                                                                                    </Select.List>
+                                                                                </Select.Popup>
+                                                                            </Select.Positioner>
+                                                                        </Select.Portal>
+                                                                    </Select.Root>
+                                                                </Field.Root>
+
+                                                                {/* Evening Flavor Dropdown */}
+                                                                <Field.Root className="form-group compact">
+                                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.35rem' }}>
+                                                                        <Field.Label htmlFor="eveningSummaryFlavor">Summary Flavor</Field.Label>
+                                                                        <HelpButton
+                                                                            title="Evening Summary Flavors"
+                                                                            ariaLabel="More info about evening summary flavors"
+                                                                            description={
+                                                                                <div>
+                                                                                    <p>Choose how today&apos;s daily wrap-up is delivered:</p>
+                                                                                    <ul>
+                                                                                        <li><strong>Metrics Heavy:</strong> Complete end-of-day accounting of solar generated, household energy consumed, grid export, and battery reserve.</li>
+                                                                                        <li><strong>Home Planner:</strong> Overnight preparedness report advising on evening energy usage until tomorrow&apos;s sunrise.</li>
+                                                                                        <li><strong>Executive Summary:</strong> Concise recap summarizing total solar harvest and battery reserve entering the night.</li>
+                                                                                        <li><strong>Autonomous Pilot:</strong> Recap of automation actions taken during peak rate hours and handover to overnight self-consumption.</li>
+                                                                                    </ul>
+                                                                                </div>
+                                                                            }
+                                                                        />
+                                                                    </div>
+                                                                    <Select.Root
+                                                                        value={currentEveningFlavor}
+                                                                        onValueChange={(val) => handleUpdateDraft({ eveningSummaryFlavor: val as EveningSummaryFlavor })}
+                                                                    >
+                                                                        <Select.Trigger className="select-trigger" id="eveningSummaryFlavor" aria-label="Evening Summary Flavor">
+                                                                            <Select.Value>
+                                                                                {eveningFlavorPreviews[currentEveningFlavor]?.name || 'Home Planner'}
+                                                                            </Select.Value>
+                                                                            <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                                                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                                                    <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                                                </svg>
+                                                                            </Select.Icon>
+                                                                        </Select.Trigger>
+                                                                        <Select.Portal>
+                                                                            <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
+                                                                                <Select.Popup className="select-popup">
+                                                                                    <Select.List>
+                                                                                        {(Object.keys(eveningFlavorPreviews) as EveningSummaryFlavor[]).map((flavorKey) => (
+                                                                                            <Select.Item key={flavorKey} className="select-item" value={flavorKey}>
+                                                                                                <Select.ItemText>{eveningFlavorPreviews[flavorKey].name}</Select.ItemText>
+                                                                                            </Select.Item>
+                                                                                        ))}
+                                                                                    </Select.List>
+                                                                                </Select.Popup>
+                                                                            </Select.Positioner>
+                                                                        </Select.Portal>
+                                                                    </Select.Root>
+                                                                </Field.Root>
+                                                            </div>
+
+                                                            {/* Live Evening Notification Preview Box */}
+                                                            <div className="notification-preview-box">
+                                                                <div className="notification-preview-header">
+                                                                    <span>Preview on Device</span>
+                                                                </div>
+                                                                <div className="notification-preview-card">
+                                                                    <div className="notification-preview-icon">
+                                                                        <img src="/logo_192.png" alt="RateRudder" />
+                                                                    </div>
+                                                                    <div className="notification-preview-text">
+                                                                        <div className="notification-preview-title">{activeEveningPreview.title}</div>
+                                                                        <div className="notification-preview-body">{activeEveningPreview.body}</div>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    )
+                                                )}
+                                            </div>
                                         </div>
 
-                                        {/* Evening Summary */}
-                                        <div className="notif-section">
-                                            <Field.Root className="form-group switch-group" style={{ marginBottom: 0 }}>
-                                                <div className="switch-row">
-                                                    <Switch.Root
-                                                        id="eveningSummaryToggle"
-                                                        checked={draftSettings.eveningSummaryEnabled ?? false}
-                                                        onCheckedChange={(val) => handleUpdateDraft({ eveningSummaryEnabled: val })}
-                                                        className="switch-root"
-                                                        aria-label="Daily Evening Summary"
-                                                    >
-                                                        <Switch.Thumb className="switch-thumb" />
-                                                    </Switch.Root>
-                                                    <Field.Label htmlFor="eveningSummaryToggle" style={{ cursor: 'pointer' }}>
-                                                        Daily Evening Summary
-                                                    </Field.Label>
-                                                    <HelpButton
-                                                        title="Evening Summary"
-                                                        description={
-                                                            <p>
-                                                                A daily evening wrap-up sent at your chosen hour detailing total solar generated today, home consumption, grid energy exported, and battery reserve entering the overnight period.
-                                                            </p>
-                                                        }
-                                                    />
-                                                </div>
-                                                <Field.Description>
-                                                    Get an evening digest wrapping up today&apos;s solar performance and overnight battery preparedness.
-                                                </Field.Description>
-                                            </Field.Root>
+                                        {/* Segment 3: Real-Time Alerts */}
+                                        <div className="notif-segment">
+                                            <div className="notif-segment-header">
+                                                <h3 className="notif-segment-title">Real-Time Alerts</h3>
+                                            </div>
 
-                                            {draftSettings.eveningSummaryEnabled && (
-                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                                                    <div className="notif-row-split">
-                                                        {/* Delivery Hour Dropdown */}
-                                                        <Field.Root className="form-group compact">
-                                                            <Field.Label htmlFor="eveningSummaryHour" style={{ marginBottom: '0.35rem', display: 'block' }}>Delivery Time</Field.Label>
-                                                            <Select.Root
-                                                                value={String(draftSettings.eveningSummaryHour ?? 20)}
-                                                                onValueChange={(val) => handleUpdateDraft({ eveningSummaryHour: parseInt(val as string, 10) })}
-                                                            >
-                                                                <Select.Trigger className="select-trigger" id="eveningSummaryHour" aria-label="Evening Summary Delivery Time">
-                                                                    <Select.Value>
-                                                                        {formatHour12(draftSettings.eveningSummaryHour ?? 20)}
-                                                                    </Select.Value>
-                                                                    <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
-                                                                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                                                            <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                                                                        </svg>
-                                                                    </Select.Icon>
-                                                                </Select.Trigger>
-                                                                <Select.Portal>
-                                                                    <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
-                                                                        <Select.Popup className="select-popup">
-                                                                            <Select.List>
-                                                                                {Array.from({ length: 24 }, (_, i) => (
-                                                                                    <Select.Item key={i} className="select-item" value={String(i)}>
-                                                                                        <Select.ItemText>{formatHour12(i)}</Select.ItemText>
-                                                                                    </Select.Item>
-                                                                                ))}
-                                                                            </Select.List>
-                                                                        </Select.Popup>
-                                                                    </Select.Positioner>
-                                                                </Select.Portal>
-                                                            </Select.Root>
-                                                        </Field.Root>
-
-                                                        {/* Evening Flavor Dropdown */}
-                                                        <Field.Root className="form-group compact">
-                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.35rem' }}>
-                                                                <Field.Label htmlFor="eveningSummaryFlavor">Summary Flavor</Field.Label>
-                                                                <HelpButton
-                                                                    title="Evening Summary Flavors"
-                                                                    ariaLabel="More info about evening summary flavors"
-                                                                    description={
-                                                                        <div>
-                                                                            <p>Choose how today&apos;s daily wrap-up is delivered:</p>
-                                                                            <ul>
-                                                                                <li><strong>Metrics Heavy:</strong> Complete end-of-day accounting of solar generated, household energy consumed, grid export, and battery reserve.</li>
-                                                                                <li><strong>Home Planner:</strong> Overnight preparedness report advising on evening energy usage until tomorrow&apos;s sunrise.</li>
-                                                                                <li><strong>Executive Summary:</strong> Concise recap summarizing total solar harvest and battery reserve entering the night.</li>
-                                                                                <li><strong>Autonomous Pilot:</strong> Recap of automation actions taken during peak rate hours and handover to overnight self-consumption.</li>
-                                                                            </ul>
-                                                                        </div>
-                                                                    }
-                                                                />
-                                                            </div>
-                                                            <Select.Root
-                                                                value={currentEveningFlavor}
-                                                                onValueChange={(val) => handleUpdateDraft({ eveningSummaryFlavor: val as EveningSummaryFlavor })}
-                                                            >
-                                                                <Select.Trigger className="select-trigger" id="eveningSummaryFlavor" aria-label="Evening Summary Flavor">
-                                                                    <Select.Value>
-                                                                        {eveningFlavorPreviews[currentEveningFlavor]?.name || 'Home Planner'}
-                                                                    </Select.Value>
-                                                                    <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
-                                                                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                                                            <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                                                                        </svg>
-                                                                    </Select.Icon>
-                                                                </Select.Trigger>
-                                                                <Select.Portal>
-                                                                    <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
-                                                                        <Select.Popup className="select-popup">
-                                                                            <Select.List>
-                                                                                {(Object.keys(eveningFlavorPreviews) as EveningSummaryFlavor[]).map((flavorKey) => (
-                                                                                    <Select.Item key={flavorKey} className="select-item" value={flavorKey}>
-                                                                                        <Select.ItemText>{eveningFlavorPreviews[flavorKey].name}</Select.ItemText>
-                                                                                    </Select.Item>
-                                                                                ))}
-                                                                            </Select.List>
-                                                                        </Select.Popup>
-                                                                    </Select.Positioner>
-                                                                </Select.Portal>
-                                                            </Select.Root>
-                                                        </Field.Root>
-                                                    </div>
-
-                                                    {/* Live Evening Notification Preview Box */}
-                                                    <div className="notification-preview-box">
-                                                        <div className="notification-preview-header">
-                                                            <span>Preview on Device</span>
-                                                        </div>
-                                                        <div className="notification-preview-card">
-                                                            <div className="notification-preview-icon">
-                                                                <img src="/logo_192.png" alt="RateRudder" />
-                                                            </div>
-                                                            <div className="notification-preview-text">
-                                                                <div className="notification-preview-title">{activeEveningPreview.title}</div>
-                                                                <div className="notification-preview-body">{activeEveningPreview.body}</div>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            )}
-                                        </div>
-
-                                        {/* Quiet Period */}
-                                        <div className="notif-section">
-                                            <Field.Root className="form-group switch-group" style={{ marginBottom: 0 }}>
-                                                <div className="switch-row">
-                                                    <Switch.Root
-                                                        id="quietPeriodToggle"
-                                                        checked={isQuietPeriodEnabled}
-                                                        onCheckedChange={handleToggleQuietPeriod}
-                                                        className="switch-root"
-                                                        aria-label="Mute Alerts During Quiet Hours"
-                                                    >
-                                                        <Switch.Thumb className="switch-thumb" />
-                                                    </Switch.Root>
-                                                    <Field.Label htmlFor="quietPeriodToggle" style={{ cursor: 'pointer' }}>
-                                                        Mute Alerts During Quiet Hours
-                                                    </Field.Label>
-                                                    <HelpButton
-                                                        title="Quiet Period"
-                                                        ariaLabel="More info about quiet period"
-                                                        description={
-                                                            <div>
-                                                                <p>
-                                                                    Set a daily window where real-time push alerts (such as price spikes, solar deficits, VPP dispatches, and grid outages) are muted so you aren&apos;t disturbed while sleeping.
-                                                                </p>
-                                                                <p>
-                                                                    If high prices or a grid outage continue past your quiet period, RateRudder will deliver a notification when quiet hours end.
-                                                                </p>
-                                                                <p>
-                                                                    Scheduled morning and evening summaries are not affected by this window.
-                                                                </p>
-                                                            </div>
-                                                        }
-                                                    />
-                                                </div>
-                                                <Field.Description>
-                                                    Temporarily pause alert-style push notifications during sleeping hours.
-                                                </Field.Description>
-                                            </Field.Root>
-
-                                            {isQuietPeriodEnabled && (
-                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                                                    <div className="notif-row-split">
-                                                        {/* Start Hour Dropdown */}
-                                                        <Field.Root className="form-group compact">
-                                                            <Field.Label htmlFor="quietPeriodStartHour" style={{ marginBottom: '0.35rem', display: 'block' }}>Quiet Time Starts</Field.Label>
-                                                            <Select.Root
-                                                                value={String(quietStartHour)}
-                                                                onValueChange={(val) => handleQuietStartHourChange(parseInt(val as string, 10))}
-                                                            >
-                                                                <Select.Trigger className="select-trigger" id="quietPeriodStartHour" aria-label="Quiet Period Start Time">
-                                                                    <Select.Value>
-                                                                        {formatHour12(quietStartHour)}
-                                                                    </Select.Value>
-                                                                    <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
-                                                                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                                                            <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                                                                        </svg>
-                                                                    </Select.Icon>
-                                                                </Select.Trigger>
-                                                                <Select.Portal>
-                                                                    <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
-                                                                        <Select.Popup className="select-popup">
-                                                                            <Select.List>
-                                                                                {Array.from({ length: 24 }, (_, i) => (
-                                                                                    <Select.Item key={i} className="select-item" value={String(i)}>
-                                                                                        <Select.ItemText>{formatHour12(i)}</Select.ItemText>
-                                                                                    </Select.Item>
-                                                                                ))}
-                                                                            </Select.List>
-                                                                        </Select.Popup>
-                                                                    </Select.Positioner>
-                                                                </Select.Portal>
-                                                            </Select.Root>
-                                                        </Field.Root>
-
-                                                        {/* End Hour Dropdown */}
-                                                        <Field.Root className="form-group compact">
-                                                            <Field.Label htmlFor="quietPeriodEndHour" style={{ marginBottom: '0.35rem', display: 'block' }}>Quiet Time Ends</Field.Label>
-                                                            <Select.Root
-                                                                value={String(quietEndHour)}
-                                                                onValueChange={(val) => handleQuietEndHourChange(parseInt(val as string, 10))}
-                                                            >
-                                                                <Select.Trigger className="select-trigger" id="quietPeriodEndHour" aria-label="Quiet Period End Time">
-                                                                    <Select.Value>
-                                                                        {formatHour12(quietEndHour)}
-                                                                    </Select.Value>
-                                                                    <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
-                                                                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                                                            <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                                                                        </svg>
-                                                                    </Select.Icon>
-                                                                </Select.Trigger>
-                                                                <Select.Portal>
-                                                                    <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
-                                                                        <Select.Popup className="select-popup">
-                                                                            <Select.List>
-                                                                                {Array.from({ length: 24 }, (_, i) => (
-                                                                                    <Select.Item key={i} className="select-item" value={String(i)}>
-                                                                                        <Select.ItemText>{formatHour12(i)}</Select.ItemText>
-                                                                                    </Select.Item>
-                                                                                ))}
-                                                                            </Select.List>
-                                                                        </Select.Popup>
-                                                                    </Select.Positioner>
-                                                                </Select.Portal>
-                                                            </Select.Root>
-                                                        </Field.Root>
-                                                    </div>
-
-                                                    {isQuietPeriodInvalid && (
-                                                        <div className="quiet-period-error" role="alert">
-                                                            Quiet period start and end time cannot be the same.
-                                                        </div>
-                                                    )}
-
-                                                    <div className="quiet-period-info">
-                                                        <p>
-                                                            Alert-style notifications (price spikes, solar deficits, VPP events, and grid outages) will be suppressed from {formatHour12(quietStartHour)} to {formatHour12(quietEndHour)}.
-                                                            If an alert condition is still active when quiet hours end, you will receive an alert upon wakeup.
-                                                            Daily morning and evening summaries are excluded and follow their scheduled delivery times.
-                                                        </p>
-                                                    </div>
-                                                </div>
-                                            )}
-                                        </div>
-
-                                        {/* Real-Time Alerts */}
-                                        <div className="notif-section">
                                             {/* Grid Outage & Restoration */}
                                             <Field.Root className="form-group switch-group" style={{ marginBottom: 0 }}>
                                                 <div className="switch-row">
@@ -1116,6 +1064,8 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                     Alert me if utility grid power is lost for &gt;5 minutes, and when grid power resumes.
                                                 </Field.Description>
                                             </Field.Root>
+
+                                            <hr className="notif-divider" />
 
                                             {/* Price Spike Alert */}
                                             <Field.Root className="form-group" style={{ marginBottom: 0 }}>
@@ -1183,6 +1133,8 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                 </Field.Description>
                                             </Field.Root>
 
+                                            <hr className="notif-divider" />
+
                                             {/* Solar Underproduction Alert */}
                                             <Field.Root className="form-group" style={{ marginBottom: 0 }}>
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.35rem' }}>
@@ -1249,6 +1201,8 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                 </Field.Description>
                                             </Field.Root>
 
+                                            <hr className="notif-divider" />
+
                                             {/* Unplanned VPP Dispatch */}
                                             <Field.Root className="form-group switch-group" style={{ marginBottom: 0 }}>
                                                 <div className="switch-row">
@@ -1285,6 +1239,137 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                     Alert me when battery discharges during an unscheduled grid support event.
                                                 </Field.Description>
                                             </Field.Root>
+
+                                            <hr className="notif-divider" />
+
+                                            {/* Quiet Hours Subsection */}
+                                            <div className="notif-quiet-hours-section">
+                                                <div className="notif-quiet-hours-header">
+                                                    <span className="notif-quiet-hours-title">Quiet Hours</span>
+                                                </div>
+                                                <Field.Root className="form-group switch-group" style={{ marginBottom: 0 }}>
+                                                    <div className="switch-row">
+                                                        <Switch.Root
+                                                            id="quietPeriodToggle"
+                                                            checked={isQuietPeriodEnabled}
+                                                            onCheckedChange={handleToggleQuietPeriod}
+                                                            className="switch-root"
+                                                            aria-label="Mute Alerts During Quiet Hours"
+                                                        >
+                                                            <Switch.Thumb className="switch-thumb" />
+                                                        </Switch.Root>
+                                                        <Field.Label htmlFor="quietPeriodToggle" style={{ cursor: 'pointer' }}>
+                                                            Mute Alerts During Quiet Hours
+                                                        </Field.Label>
+                                                        <HelpButton
+                                                            title="Quiet Period"
+                                                            ariaLabel="More info about quiet period"
+                                                            description={
+                                                                <div>
+                                                                    <p>
+                                                                        Set a daily window where real-time push alerts (such as price spikes, solar deficits, VPP dispatches, and grid outages) are muted so you aren&apos;t disturbed while sleeping.
+                                                                    </p>
+                                                                    <p>
+                                                                        If high prices or a grid outage continue past your quiet period, RateRudder will deliver a notification when quiet hours end.
+                                                                    </p>
+                                                                    <p>
+                                                                        Scheduled morning and evening summaries are not affected by this window.
+                                                                    </p>
+                                                                </div>
+                                                            }
+                                                        />
+                                                    </div>
+                                                    <Field.Description>
+                                                        Temporarily pause alert-style push notifications during sleeping hours.
+                                                    </Field.Description>
+                                                </Field.Root>
+
+                                                {isQuietPeriodEnabled && (
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.25rem' }}>
+                                                        <div className="notif-row-split">
+                                                            {/* Start Hour Dropdown */}
+                                                            <Field.Root className="form-group compact">
+                                                                <Field.Label htmlFor="quietPeriodStartHour" style={{ marginBottom: '0.35rem', display: 'block' }}>Quiet Time Starts</Field.Label>
+                                                                <Select.Root
+                                                                    value={String(quietStartHour)}
+                                                                    onValueChange={(val) => handleQuietStartHourChange(parseInt(val as string, 10))}
+                                                                >
+                                                                    <Select.Trigger className="select-trigger" id="quietPeriodStartHour" aria-label="Quiet Period Start Time">
+                                                                        <Select.Value>
+                                                                            {formatHour12(quietStartHour)}
+                                                                        </Select.Value>
+                                                                        <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                                            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                                                <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                                            </svg>
+                                                                        </Select.Icon>
+                                                                    </Select.Trigger>
+                                                                    <Select.Portal>
+                                                                        <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
+                                                                            <Select.Popup className="select-popup">
+                                                                                <Select.List>
+                                                                                    {Array.from({ length: 24 }, (_, i) => (
+                                                                                        <Select.Item key={i} className="select-item" value={String(i)}>
+                                                                                            <Select.ItemText>{formatHour12(i)}</Select.ItemText>
+                                                                                        </Select.Item>
+                                                                                    ))}
+                                                                                </Select.List>
+                                                                            </Select.Popup>
+                                                                        </Select.Positioner>
+                                                                    </Select.Portal>
+                                                                </Select.Root>
+                                                            </Field.Root>
+
+                                                            {/* End Hour Dropdown */}
+                                                            <Field.Root className="form-group compact">
+                                                                <Field.Label htmlFor="quietPeriodEndHour" style={{ marginBottom: '0.35rem', display: 'block' }}>Quiet Time Ends</Field.Label>
+                                                                <Select.Root
+                                                                    value={String(quietEndHour)}
+                                                                    onValueChange={(val) => handleQuietEndHourChange(parseInt(val as string, 10))}
+                                                                >
+                                                                    <Select.Trigger className="select-trigger" id="quietPeriodEndHour" aria-label="Quiet Period End Time">
+                                                                        <Select.Value>
+                                                                            {formatHour12(quietEndHour)}
+                                                                        </Select.Value>
+                                                                        <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                                            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                                                <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                                            </svg>
+                                                                        </Select.Icon>
+                                                                    </Select.Trigger>
+                                                                    <Select.Portal>
+                                                                        <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
+                                                                            <Select.Popup className="select-popup">
+                                                                                <Select.List>
+                                                                                    {Array.from({ length: 24 }, (_, i) => (
+                                                                                        <Select.Item key={i} className="select-item" value={String(i)}>
+                                                                                            <Select.ItemText>{formatHour12(i)}</Select.ItemText>
+                                                                                        </Select.Item>
+                                                                                    ))}
+                                                                                </Select.List>
+                                                                            </Select.Popup>
+                                                                        </Select.Positioner>
+                                                                    </Select.Portal>
+                                                                </Select.Root>
+                                                            </Field.Root>
+                                                        </div>
+
+                                                        {isQuietPeriodInvalid && (
+                                                            <div className="quiet-period-error" role="alert">
+                                                                Quiet period start and end time cannot be the same.
+                                                            </div>
+                                                        )}
+
+                                                        <div className="quiet-period-info">
+                                                            <p>
+                                                                Alert-style notifications (price spikes, solar deficits, VPP events, and grid outages) will be suppressed from {formatHour12(quietStartHour)} to {formatHour12(quietEndHour)}.
+                                                                If an alert condition is still active when quiet hours end, you will receive an alert upon wakeup.
+                                                                Daily morning and evening summaries are excluded and follow their scheduled delivery times.
+                                                            </p>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
                                 )}
@@ -1294,26 +1379,6 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
 
                     {/* Modal Footer Action Bar */}
                     <div className="modal-footer">
-                        <div className="modal-footer-left">
-                            {/* TODO: Remove test notification button before public release */}
-                            {isSubscribedLocally && (
-                                <>
-                                    <button
-                                        type="button"
-                                        className="btn btn-secondary"
-                                        onClick={handleSendTest}
-                                        disabled={testing}
-                                    >
-                                        {testing ? 'Sending Push...' : 'Send Test Notification'}
-                                    </button>
-                                    {testSuccess && (
-                                        <span style={{ color: 'var(--success-color, #10b981)', fontSize: '0.85rem', fontWeight: 500 }}>
-                                            ✓ Notification sent!
-                                        </span>
-                                    )}
-                                </>
-                            )}
-                        </div>
                         <div className="modal-footer-right">
                             <button
                                 type="button"

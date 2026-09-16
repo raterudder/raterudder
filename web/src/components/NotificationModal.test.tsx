@@ -86,7 +86,7 @@ describe('NotificationModal', () => {
         await waitFor(() => {
             expect(screen.getByText('Notifications')).toBeInTheDocument();
             expect(screen.getByText(/Configuring alerts for Home Battery/i)).toBeInTheDocument();
-            expect(screen.getByText(/Deliver notifications to this browser/i)).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /Subscribe this device to notifications/i })).toBeInTheDocument();
             expect(screen.getByText(/Connect this browser above/i)).toBeInTheDocument();
             // Zone B alert options hidden when no devices connected
             expect(screen.queryByText('Daily Morning Summary')).not.toBeInTheDocument();
@@ -114,7 +114,7 @@ describe('NotificationModal', () => {
         });
     });
 
-    it('subscribes current browser when toggle is clicked', async () => {
+    it('subscribes current browser when subscribe button is clicked', async () => {
         render(
             <NotificationModal
                 open={true}
@@ -126,10 +126,10 @@ describe('NotificationModal', () => {
         );
 
         await waitFor(() => {
-            expect(screen.getByRole('switch', { name: /Deliver notifications to this browser/i })).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /Subscribe this device to notifications/i })).toBeInTheDocument();
         });
 
-        fireEvent.click(screen.getByRole('switch', { name: /Deliver notifications to this browser/i }));
+        fireEvent.click(screen.getByRole('button', { name: /Subscribe this device to notifications/i }));
 
         await waitFor(() => {
             expect(api.fetchVAPIDPublicKey).toHaveBeenCalled();
@@ -191,8 +191,11 @@ describe('NotificationModal', () => {
             expect(banner).toHaveTextContent(/Applies to all your connected devices for Home Battery/i);
             expect(banner).toHaveTextContent(/Other members on this site configure their own notifications/i);
 
+            expect(screen.getByText('Daily Summaries')).toBeInTheDocument();
             expect(screen.getByText('Daily Morning Summary')).toBeInTheDocument();
             expect(screen.getByText('Daily Evening Summary')).toBeInTheDocument();
+            expect(screen.getByText('Quiet Hours')).toBeInTheDocument();
+            expect(screen.getByText('Real-Time Alerts')).toBeInTheDocument();
             expect(screen.getByText('Grid Outage & Restoration')).toBeInTheDocument();
             expect(screen.getByLabelText('Real-Time Price Spike Alert')).toBeInTheDocument();
             expect(screen.getByLabelText('Unexpected Solar Underproduction')).toBeInTheDocument();
@@ -355,48 +358,6 @@ describe('NotificationModal', () => {
         expect(mockOnClose).toHaveBeenCalled();
     });
 
-    it('allows sending a test push notification when subscribed locally', async () => {
-        mockPushManager.getSubscription.mockResolvedValue(mockPushSubscription);
-
-        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
-            subscriptions: [
-                {
-                    id: 'sub-local',
-                    endpoint: 'https://fcm.googleapis.com/fcm/send/test-sub-1',
-                    keys: { p256dh: 'k1', auth: 'a1' },
-                    userAgent: 'Chrome',
-                },
-            ],
-            notificationsEnabled: true,
-        });
-
-        render(
-            <NotificationModal
-                open={true}
-                onClose={mockOnClose}
-                siteID={mockSiteID}
-                siteName={mockSiteName}
-                currentUserID={mockUserID}
-            />
-        );
-
-        await waitFor(() => {
-            expect(screen.getByRole('button', { name: /Send Test Notification/i })).toBeInTheDocument();
-        });
-
-        fireEvent.click(screen.getByRole('button', { name: /Send Test Notification/i }));
-
-        await waitFor(() => {
-            expect(api.subscribePushNotification).toHaveBeenCalledWith(
-                expect.objectContaining({
-                    endpoint: 'https://fcm.googleapis.com/fcm/send/test-sub-1',
-                }),
-                true
-            );
-            expect(screen.getByText(/✓ Notification sent!/i)).toBeInTheDocument();
-        });
-    });
-
     it('allows removing an active device from subscriptions list', async () => {
         (api.fetchNotificationSubscriptions as any).mockResolvedValue({
             subscriptions: [
@@ -432,7 +393,7 @@ describe('NotificationModal', () => {
         });
     });
 
-    it('renders side-by-side Delivery Time and Summary Flavor selects when morning summary is enabled', async () => {
+    it('renders collapsed summary and expands delivery time and flavor selects when Change is clicked', async () => {
         (api.fetchNotificationSubscriptions as any).mockResolvedValue({
             subscriptions: [
                 {
@@ -470,17 +431,41 @@ describe('NotificationModal', () => {
         );
 
         await waitFor(() => {
-            expect(screen.getByLabelText('Morning Summary Delivery Time')).toBeInTheDocument();
-            expect(screen.getByLabelText('Morning Summary Delivery Time')).toHaveTextContent('7 AM');
-            expect(screen.getByLabelText('Morning Summary Flavor')).toBeInTheDocument();
-            expect(screen.getByLabelText('Evening Summary Delivery Time')).toBeInTheDocument();
-            expect(screen.getByLabelText('Evening Summary Delivery Time')).toHaveTextContent('8 PM');
-            expect(screen.getByLabelText('Evening Summary Flavor')).toBeInTheDocument();
-            expect(screen.getAllByText('Preview on Device').length).toBe(2);
+            // Initially both summaries are collapsed
+            expect(screen.getByText(/7 AM • Metrics Heavy/i)).toBeInTheDocument();
+            expect(screen.getByText(/8 PM • Executive Summary/i)).toBeInTheDocument();
+            expect(screen.queryByLabelText('Morning Summary Delivery Time')).not.toBeInTheDocument();
+            expect(screen.queryByLabelText('Evening Summary Delivery Time')).not.toBeInTheDocument();
         });
+
+        // Click "Change" on morning summary
+        fireEvent.click(screen.getByRole('button', { name: /Change morning summary settings/i }));
+
+        expect(screen.getByLabelText('Morning Summary Delivery Time')).toBeInTheDocument();
+        expect(screen.getByLabelText('Morning Summary Delivery Time')).toHaveTextContent('7 AM');
+        expect(screen.getByLabelText('Morning Summary Flavor')).toBeInTheDocument();
+        expect(screen.getAllByText('Preview on Device').length).toBe(1);
+
+        // Click "Done" on morning summary
+        fireEvent.click(screen.getByRole('button', { name: /Done editing morning summary/i }));
+        expect(screen.queryByLabelText('Morning Summary Delivery Time')).not.toBeInTheDocument();
+        expect(screen.getByText(/7 AM • Metrics Heavy/i)).toBeInTheDocument();
+
+        // Click "Change" on evening summary
+        fireEvent.click(screen.getByRole('button', { name: /Change evening summary settings/i }));
+
+        expect(screen.getByLabelText('Evening Summary Delivery Time')).toBeInTheDocument();
+        expect(screen.getByLabelText('Evening Summary Delivery Time')).toHaveTextContent('8 PM');
+        expect(screen.getByLabelText('Evening Summary Flavor')).toBeInTheDocument();
+        expect(screen.getAllByText('Preview on Device').length).toBe(1);
+
+        // Click "Done" on evening summary
+        fireEvent.click(screen.getByRole('button', { name: /Done editing evening summary/i }));
+        expect(screen.queryByLabelText('Evening Summary Delivery Time')).not.toBeInTheDocument();
+        expect(screen.getByText(/8 PM • Executive Summary/i)).toBeInTheDocument();
     });
 
-    it('unsubscribes local browser, turns off switch, and hides alert options when current device is removed', async () => {
+    it('unsubscribes local browser and hides alert options when current device is removed', async () => {
         mockPushManager.getSubscription.mockResolvedValue(mockPushSubscription);
 
         (api.fetchNotificationSubscriptions as any)
@@ -520,9 +505,10 @@ describe('NotificationModal', () => {
         );
 
         await waitFor(() => {
-            expect(screen.getByRole('switch', { name: /Deliver notifications to this browser/i })).toBeChecked();
+            expect(screen.getByText('This Device')).toBeInTheDocument();
             expect(screen.getByText('Daily Morning Summary')).toBeInTheDocument();
             expect(screen.getByRole('button', { name: /Remove/i })).toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: /Subscribe this device to notifications/i })).not.toBeInTheDocument();
         });
 
         // When remove is called on the local browser
@@ -535,8 +521,9 @@ describe('NotificationModal', () => {
         await waitFor(() => {
             expect(mockPushSubscription.unsubscribe).toHaveBeenCalled();
             expect(api.unsubscribePushNotification).toHaveBeenCalledWith('https://fcm.googleapis.com/fcm/send/test-sub-1');
-            expect(screen.getByRole('switch', { name: /Deliver notifications to this browser/i })).not.toBeChecked();
+            expect(screen.queryByText('This Device')).not.toBeInTheDocument();
             expect(screen.queryByText('Daily Morning Summary')).not.toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /Subscribe this device to notifications/i })).toBeInTheDocument();
             expect(screen.getByText(/Connect this browser above/i)).toBeInTheDocument();
         });
     });
@@ -617,7 +604,7 @@ describe('NotificationModal', () => {
         });
     });
 
-    it('shows iOS Safari guidance with share icon and hides browser toggle when on iOS in browser', async () => {
+    it('shows iOS Safari guidance with share icon and hides subscribe button when on iOS in browser', async () => {
         vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)');
         delete (window as any).Notification;
         delete (window as any).PushManager;
@@ -671,8 +658,8 @@ describe('NotificationModal', () => {
             expect(banner).toHaveTextContent(/Add to Home Screen/);
             expect(screen.getByLabelText('Share')).toBeInTheDocument();
 
-            // Toggle should not be rendered
-            expect(screen.queryByText(/Deliver notifications to this browser/i)).not.toBeInTheDocument();
+            // Subscribe button should not be rendered on iOS Safari browser
+            expect(screen.queryByRole('button', { name: /Subscribe this device to notifications/i })).not.toBeInTheDocument();
 
             // Empty device guidance
             expect(screen.getByText(/Add RateRudder to your Home Screen to register this device/i)).toBeInTheDocument();
@@ -680,7 +667,7 @@ describe('NotificationModal', () => {
         });
     });
 
-    it('hides iOS guidance banner and shows browser toggle when installed as an iOS standalone PWA', async () => {
+    it('hides iOS guidance banner and shows subscribe button when installed as an iOS standalone PWA', async () => {
         vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)');
         window.matchMedia = vi.fn().mockImplementation((query) => ({
             matches: query === '(display-mode: standalone)',
@@ -725,11 +712,11 @@ describe('NotificationModal', () => {
 
         await waitFor(() => {
             expect(screen.queryByText('iOS Safari Push Setup')).not.toBeInTheDocument();
-            expect(screen.getByText(/Deliver notifications to this browser/i)).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /Subscribe this device to notifications/i })).toBeInTheDocument();
         });
     });
 
-    it('shows warning banner and hides toggle when push notifications are unsupported in browser', async () => {
+    it('shows warning banner and hides subscribe button when push notifications are unsupported in browser', async () => {
         delete (window as any).PushManager;
 
         (api.fetchNotificationSubscriptions as any).mockResolvedValue({
@@ -750,7 +737,7 @@ describe('NotificationModal', () => {
         await waitFor(() => {
             expect(screen.getByTestId('push-unsupported-banner')).toBeInTheDocument();
             expect(screen.getByText('Push notifications are not supported in this browser.')).toBeInTheDocument();
-            expect(screen.queryByText(/Deliver notifications to this browser/i)).not.toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: /Subscribe this device to notifications/i })).not.toBeInTheDocument();
             expect(screen.getByText('Push notifications unsupported')).toBeInTheDocument();
         });
     });
@@ -777,7 +764,7 @@ describe('NotificationModal', () => {
         await waitFor(() => {
             expect(screen.getByTestId('push-unsupported-banner')).toBeInTheDocument();
             expect(screen.queryByText('iOS Safari Push Setup')).not.toBeInTheDocument();
-            expect(screen.queryByText(/Deliver notifications to this browser/i)).not.toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: /Subscribe this device to notifications/i })).not.toBeInTheDocument();
         });
     });
 
