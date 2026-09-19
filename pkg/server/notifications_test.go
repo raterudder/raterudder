@@ -221,6 +221,31 @@ func TestGenerateEveningSummary(t *testing.T) {
 		assert.Contains(t, body, "5.0 kWh imported")
 		assert.Contains(t, body, "powers home through sunrise")
 	})
+
+	t.Run("MetricsHeavyLowReserve", func(t *testing.T) {
+		lowStatus := status
+		lowStatus.BatterySOC = 12.0
+		title, body := generateEveningSummary(t.Context(), "metrics_heavy", lowStatus, 47.0, 51.7, 7.1, 0.0, 25.0, time.Time{}, loc)
+		assert.Contains(t, title, "47.0 kWh Solar")
+		assert.Contains(t, title, "12% SOC")
+		assert.Contains(t, body, "reserve is low; home will switch to grid power shortly")
+	})
+
+	t.Run("PilotLowReserve", func(t *testing.T) {
+		lowStatus := status
+		lowStatus.BatterySOC = 12.0
+		title, body := generateEveningSummary(t.Context(), "pilot", lowStatus, 47.0, 51.7, 7.1, 0.0, 25.0, time.Time{}, loc)
+		assert.Equal(t, "🤖 RateRudder: Evening Wrap-up", title)
+		assert.Contains(t, body, "Reserve is low; home will switch to grid power shortly")
+	})
+
+	t.Run("HomePlannerLowReserveNoDeficit", func(t *testing.T) {
+		lowStatus := status
+		lowStatus.BatterySOC = 12.0
+		title, body := generateEveningSummary(t.Context(), "home_planner", lowStatus, 47.0, 51.7, 7.1, 0.0, 25.0, time.Time{}, loc)
+		assert.Equal(t, "🌙 Evening Energy Wrap-up", title)
+		assert.Contains(t, body, "Reserve is low; home will switch to grid power shortly")
+	})
 }
 
 func TestEncryptWebPushPayload(t *testing.T) {
@@ -1430,6 +1455,63 @@ func TestHandleEveningSummaryNotifications(t *testing.T) {
 		srv.handleEveningSummaryNotifications(context.Background(), siteID, notifications, notifData, nowEvening, getNotifState)
 		mockS.AssertNotCalled(t, "GetNotificationLogs", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("ImmediateDeficitAtReserve", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, nowEvening)
+		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				EveningSummaryEnabled: true,
+				EveningSummaryHour:    20,
+				EveningSummaryFlavor:  "metrics_heavy",
+			},
+		}
+
+		mockSim := []controller.SimHour{
+			{
+				TS:           nowEvening,
+				HitDeficitAt: nowEvening, // Immediate deficit at start of simulation
+			},
+		}
+
+		lowStatus := statusEvening
+		lowStatus.BatterySOC = 12.0
+		lowStatus.BatteryCapacityKWH = 15.0
+
+		// Settings with a scheduled 25% minimum SOC period covering the evening
+		scheduledSettings := types.Settings{
+			MinBatterySOC: 5.0, // base setting is 5%
+			MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+				{
+					TimePeriod: types.TimePeriod{
+						Hours: []types.UtilityHourPeriod{{HourStart: 19, HourEnd: 23}},
+					},
+					MinBatterySOC: 25.0,
+				},
+			},
+		}
+
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
+		mockS.On("GetUser", mock.Anything, "user1@test.com").Return(user, nil).Once()
+		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+			return l.Type == types.NotificationTypeEveningSummary &&
+				l.Flavor == "metrics_heavy" &&
+				strings.Contains(l.Body, "reserve is low; home will switch to grid power shortly") &&
+				!strings.Contains(l.Body, "powers home through sunrise")
+		})).Return(nil).Once()
+
+		data := &dataForNotifications{
+			status:   lowStatus,
+			settings: scheduledSettings,
+			simData:  mockSim,
+		}
+
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowEvening)
+		srv.handleEveningSummaryNotifications(context.Background(), siteID, notifications, data, nowEvening, getNotifState)
 		mockS.AssertExpectations(t)
 	})
 }

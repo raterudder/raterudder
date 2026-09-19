@@ -308,14 +308,17 @@ func generateEveningSummary(
 		reserveThreshold = 20.0
 	}
 
+	isLowReserve := currentStatus.BatterySOC <= reserveThreshold+2.0 ||
+		(!hitDeficitAt.IsZero() && !currentStatus.Timestamp.IsZero() && hitDeficitAt.Before(currentStatus.Timestamp.In(timeLoc).Add(30*time.Minute)))
+
 	var title, body string
 	switch flavor {
 	case "home_planner":
 		title = "🌙 Evening Energy Wrap-up"
-		if hitDeficitAt.IsZero() {
-			body = fmt.Sprintf("Battery at %.0f%% (%.1f kWh). Projected to power home through the night until tomorrow's solar.", currentStatus.BatterySOC, currentEnergyKWH)
-		} else if currentStatus.BatterySOC <= reserveThreshold+2.0 || hitDeficitAt.Before(currentStatus.Timestamp.In(timeLoc).Add(30*time.Minute)) {
+		if isLowReserve {
 			body = fmt.Sprintf("Battery at %.0f%% (%.1f kWh). Reserve is low; home will switch to grid power shortly.", currentStatus.BatterySOC, currentEnergyKWH)
+		} else if hitDeficitAt.IsZero() {
+			body = fmt.Sprintf("Battery at %.0f%% (%.1f kWh). Projected to power home through the night until tomorrow's solar.", currentStatus.BatterySOC, currentEnergyKWH)
 		} else {
 			body = fmt.Sprintf("Battery at %.0f%% (%.1f kWh). Projected to supply home until ~%s before drawing from the grid.", currentStatus.BatterySOC, currentEnergyKWH, deficitStr)
 		}
@@ -335,7 +338,9 @@ func generateEveningSummary(
 
 	case "pilot":
 		title = "🤖 RateRudder: Evening Wrap-up"
-		if hitDeficitAt.IsZero() {
+		if isLowReserve {
+			body = fmt.Sprintf("Battery at %.0f%% (%.1f kWh). Reserve is low; home will switch to grid power shortly.", currentStatus.BatterySOC, currentEnergyKWH)
+		} else if hitDeficitAt.IsZero() {
 			if todayActualSolarKWH >= 2.0 {
 				body = fmt.Sprintf("Automated battery managed %.1f kWh solar today. Stored %.1f kWh projected to power home through sunrise.", todayActualSolarKWH, currentEnergyKWH)
 			} else {
@@ -362,7 +367,9 @@ func generateEveningSummary(
 			flowStr = fmt.Sprintf("Today: %.1f kWh solar, %.1f kWh home.", todayActualSolarKWH, todayHomeUsageKWH)
 		}
 
-		if hitDeficitAt.IsZero() {
+		if isLowReserve {
+			body = fmt.Sprintf("%s Battery: %.1f kWh (reserve is low; home will switch to grid power shortly).", flowStr, currentEnergyKWH)
+		} else if hitDeficitAt.IsZero() {
 			body = fmt.Sprintf("%s Battery: %.1f kWh powers home through sunrise.", flowStr, currentEnergyKWH)
 		} else {
 			body = fmt.Sprintf("%s Battery: %.1f kWh powers home until ~%s.", flowStr, currentEnergyKWH, deficitStr)
@@ -1259,6 +1266,8 @@ func (s *Server) handleEveningSummaryNotifications(
 			continue
 		}
 
+		minSOC := data.settings.GetMinBatterySOC(ctx, nowLocal, siteLoc, data.currentPrice)
+
 		// Inspect simulation slots to determine if the battery will hit reserve overnight.
 		// If a deficit is predicted after tomorrow's solar refilling begins, the battery successfully
 		// powers the home through the entire night.
@@ -1273,9 +1282,15 @@ func (s *Server) handleEveningSummaryNotifications(
 				tomorrowSolarStart = slot.TS
 			}
 			// Strictly inspect HitDeficitAt without buffering or threshold heuristics
-			if hitDeficitAt.IsZero() && !slot.HitDeficitAt.IsZero() && slot.HitDeficitAt.After(nowLocal) {
+			if hitDeficitAt.IsZero() && !slot.HitDeficitAt.IsZero() {
 				hitDeficitAt = slot.HitDeficitAt
 			}
+		}
+
+		if hitDeficitAt.IsZero() && (data.status.BatterySOC <= minSOC || !data.status.BatteryAboveMinSOC) {
+			hitDeficitAt = nowLocal
+		} else if !hitDeficitAt.IsZero() && hitDeficitAt.Before(nowLocal) {
+			hitDeficitAt = nowLocal
 		}
 
 		// If deficit is predicted only after tomorrow's solar starts refilling the battery,
@@ -1299,8 +1314,6 @@ func (s *Server) handleEveningSummaryNotifications(
 				}
 			}
 		}
-
-		minSOC := data.settings.MinBatterySOC
 
 		// Populate structured metadata for evening summary
 		metadata := map[string]string{
