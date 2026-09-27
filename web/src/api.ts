@@ -41,6 +41,7 @@ export const ActionReason = {
     EVChargingStandby: 'evChargingStandby',
     ArbitrageHoldExport: 'arbitrageHoldExport',
     ArbitrageHoldSave: 'arbitrageHoldSave',
+    DirectExport: 'directExport',
     // deprecated - but we don't delete them because old actions still have them
     DeficitSave: 'deficitSave',
     ArbitrageCharge: 'arbitrageCharge',
@@ -83,6 +84,7 @@ export interface Action {
     fault?: boolean;
     paused?: boolean;
     simulationParams?: SimulationParams;
+    plan?: Plan;
 }
 
 export const BatteryMode = {
@@ -90,6 +92,7 @@ export const BatteryMode = {
     Standby: 1,
     ChargeAny: 2,
     Load: -1,
+    Export: -2,
 } as const;
 
 export type BatteryMode = typeof BatteryMode[keyof typeof BatteryMode];
@@ -98,9 +101,39 @@ export const SolarMode = {
     NoChange: 0,
     NoExport: 1,
     Any: 2,
+    Export: 3,
 } as const;
 
 export type SolarMode = typeof SolarMode[keyof typeof SolarMode];
+
+export interface PlanPeriod {
+    startTime: string;
+    endTime: string;
+    durationHours: number;
+    price: PriceInfo;
+    batteryMode: BatteryMode;
+    solarMode: SolarMode;
+    reason: ActionReason;
+    description: string;
+    startSoc: number;
+    endSoc: number;
+    loadKWH?: number;
+    solarKWH?: number;
+    projectedLoadKW?: number;
+    projectedSolarKW?: number;
+    gridImportKWH: number;
+    gridExportKWH: number;
+    costDollars: number;
+}
+
+export interface Plan {
+    generatedAt: string;
+    horizonHours: number;
+    totalProjectedCost: number;
+    totalExportCredits: number;
+    netEconomicBenefit: number;
+    periods: PlanPeriod[];
+}
 
 async function extractError(response: Response, fallback: string): Promise<string> {
     if (response.status === 401 && !response.url.includes('/api/auth/status')) {
@@ -249,11 +282,13 @@ export interface Settings {
     minArbitrageDifferenceDollarsPerKWH: number;
     minDeficitPriceDifferenceDollarsPerKWH: number;
     minExportHoldDifferenceDollarsPerKWH: number;
+    minBatteryExportDifferenceDollarsPerKWH?: number;
     minBatterySOC: number;
     minBatterySOCPeriods?: MinBatterySOCPeriod[];
     evChargingPeriods?: TimePeriod[];
     ignoreHourUsageOverMultiple: number;
     customGridSettings?: boolean;
+    manageTOUSchedules?: boolean;
     gridChargeBatteries: boolean;
     gridExportSolar: boolean;
     gridExportBatteries: boolean;

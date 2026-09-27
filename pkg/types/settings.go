@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"strings"
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/log"
@@ -12,7 +13,7 @@ import (
 
 // CurrentSettingsVersion is the current version of the settings struct.
 // Increment this value only if you need to set a default value other than the Go default for that value.
-const CurrentSettingsVersion = 16
+const CurrentSettingsVersion = 17
 
 // Settings represents the configuration stored in the database.
 // These are dynamic settings that can be changed without redeploying.
@@ -41,10 +42,11 @@ type Settings struct {
 
 	// Price Settings
 	// Always charge when the price is under this amount (in $/kWh)
-	AlwaysChargeUnderDollarsPerKWH         float64 `json:"alwaysChargeUnderDollarsPerKWH"`
-	MinArbitrageDifferenceDollarsPerKWH    float64 `json:"minArbitrageDifferenceDollarsPerKWH"`
-	MinDeficitPriceDifferenceDollarsPerKWH float64 `json:"minDeficitPriceDifferenceDollarsPerKWH"`
-	MinExportHoldDifferenceDollarsPerKWH   float64 `json:"minExportHoldDifferenceDollarsPerKWH"`
+	AlwaysChargeUnderDollarsPerKWH          float64 `json:"alwaysChargeUnderDollarsPerKWH"`
+	MinArbitrageDifferenceDollarsPerKWH     float64 `json:"minArbitrageDifferenceDollarsPerKWH"`
+	MinDeficitPriceDifferenceDollarsPerKWH  float64 `json:"minDeficitPriceDifferenceDollarsPerKWH"`
+	MinExportHoldDifferenceDollarsPerKWH    float64 `json:"minExportHoldDifferenceDollarsPerKWH"`
+	MinBatteryExportDifferenceDollarsPerKWH float64 `json:"minBatteryExportDifferenceDollarsPerKWH"`
 
 	// How to value solar exports when net metering credits are active. Valid values: "", "lowest", "highest", "none". Default is "lowest".
 	SolarNetMeteringCreditsValue string `json:"solarNetMeteringCreditsValue"`
@@ -73,6 +75,8 @@ type Settings struct {
 	GridExportSolar bool `json:"gridExportSolar"`
 	// Can export batteries to grid
 	GridExportBatteries bool `json:"gridExportBatteries"`
+	// When enabled, RateRudder manages the ESS's Time-Of-Use (TOU) schedules and modes to enable direct solar export without pre-charging to 100%.
+	ManageTOUSchedules bool `json:"manageTOUSchedules"`
 
 	// Location settings
 	CountryCode  string  `json:"countryCode"`
@@ -114,6 +118,10 @@ type Settings struct {
 
 	// Home load prediction strategy ("default", "conservative")
 	HomeLoadPredictionStrategy string `json:"homeLoadPredictionStrategy"`
+
+	// OptimizationProfile controls the risk profile, reserve safety buffers, and round-trip efficiency assumptions.
+	// Valid values: "conservative" (η=0.85, higher reserve buffer), "balanced" (η=0.90, default), "aggressive" (η=0.92).
+	OptimizationProfile string `json:"optimizationProfile,omitempty"`
 
 	// Notifications maps userID to notification preferences for this site.
 	Notifications map[string]UserNotificationSettings `json:"notifications,omitempty"`
@@ -328,6 +336,13 @@ func MigrateSettings(s Settings, currentVersion int) (Settings, bool, error) {
 				s.CustomGridSettings = true
 				migrated = true
 			}
+		case 17:
+			// version 17: add default MinBatteryExportDifferenceDollarsPerKWH
+			if s.MinBatteryExportDifferenceDollarsPerKWH == 0 {
+				// Default is $0.07/kWh (~$1 profit per cycle on a 15 kWh battery).
+				s.MinBatteryExportDifferenceDollarsPerKWH = 0.07
+				migrated = true
+			}
 		default:
 			return s, false, fmt.Errorf("unknown settings version: %d", version)
 		}
@@ -401,4 +416,34 @@ func (s Settings) GetMinBatterySOC(ctx context.Context, t time.Time, loc *time.L
 		slog.Any("periods", s.MinBatterySOCPeriods),
 	)
 	return s.MinBatterySOC
+}
+
+// GetOptimizationParams returns the physical round-trip efficiency (η), active reserve buffer (%),
+// and peak survival buffer (minutes) associated with the configured OptimizationProfile.
+func (s Settings) GetOptimizationParams() (roundTripEfficiency float64, reserveBufferPercent float64, peakSurvivalBufferMinutes int) {
+	switch strings.ToLower(s.OptimizationProfile) {
+	case "conservative":
+		buf := s.SOCBufferPercent
+		if buf <= 0 {
+			buf = 10.0
+		}
+		surv := s.PeakSurvivalBufferMinutes
+		if surv <= 0 {
+			surv = 60
+		}
+		return 0.85, buf, surv
+	case "aggressive":
+		surv := s.PeakSurvivalBufferMinutes
+		if surv <= 0 {
+			surv = 15
+		}
+		return 0.92, 0.0, surv
+	default:
+		// "balanced" or unset: respects the user's configured MinBatterySOC directly
+		surv := s.PeakSurvivalBufferMinutes
+		if surv <= 0 {
+			surv = 30
+		}
+		return 0.90, 0.0, surv
+	}
 }

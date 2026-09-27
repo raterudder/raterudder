@@ -1,6 +1,7 @@
 package types
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -113,5 +114,69 @@ func TestUserNotificationSettings_IsInQuietPeriod(t *testing.T) {
 
 		duringSleep := time.Date(2026, 9, 14, 23, 0, 0, 0, loc)
 		assert.True(t, s.IsInQuietPeriod(duringSleep))
+	})
+}
+
+func TestActionJSONSerialization(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	t.Run("OmitsPlanWhenNil", func(t *testing.T) {
+		t.Parallel()
+
+		act := Action{
+			Timestamp:   now,
+			BatteryMode: BatteryModeChargeAny,
+			SolarMode:   SolarModeAny,
+			Reason:      ActionReasonDeficitChargeNow,
+			Description: "Charging",
+		}
+
+		data, err := json.Marshal(act)
+		assert.NoError(t, err)
+		assert.NotContains(t, string(data), `"plan"`)
+	})
+
+	t.Run("IncludesPlanWhenPresent", func(t *testing.T) {
+		t.Parallel()
+
+		plan := &Plan{
+			GeneratedAt:        now,
+			HorizonHours:       24,
+			TotalProjectedCost: 1.25,
+			Periods: []PlanPeriod{
+				{
+					StartTime:     now,
+					EndTime:       now.Add(time.Hour),
+					DurationHours: 1.0,
+					BatteryMode:   BatteryModeChargeAny,
+					SolarMode:     SolarModeAny,
+					CostDollars:   1.25,
+				},
+			},
+		}
+
+		act := Action{
+			Timestamp:   now,
+			BatteryMode: BatteryModeChargeAny,
+			SolarMode:   SolarModeAny,
+			Reason:      ActionReasonDeficitChargeNow,
+			Description: "Charging",
+			Plan:        plan,
+		}
+
+		data, err := json.Marshal(act)
+		assert.NoError(t, err)
+		assert.Contains(t, string(data), `"plan"`)
+		assert.Contains(t, string(data), `"totalProjectedCost":1.25`)
+
+		var roundTrip Action
+		err = json.Unmarshal(data, &roundTrip)
+		assert.NoError(t, err)
+		assert.NotNil(t, roundTrip.Plan)
+		assert.Equal(t, 24, roundTrip.Plan.HorizonHours)
+		assert.InDelta(t, 1.25, roundTrip.Plan.TotalProjectedCost, 0.001)
+		assert.Len(t, roundTrip.Plan.Periods, 1)
 	})
 }

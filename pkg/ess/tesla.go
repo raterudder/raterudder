@@ -339,11 +339,13 @@ func (b *baseTesla) doRequest(req *http.Request, dest any) error {
 	if err := json.Unmarshal(body, &envelope); err == nil && len(envelope.Response) > 0 {
 		var responseMap map[string]any
 		if err := json.Unmarshal(envelope.Response, &responseMap); err == nil {
-			if _, hasTariff := responseMap["tariff_content"]; hasTariff {
-				responseMap["tariff_content"] = "removed: unnecessary and causes logs to be truncated"
-			}
-			if _, hasTariff2 := responseMap["tariff_content_v2"]; hasTariff2 {
-				responseMap["tariff_content_v2"] = "removed: unnecessary and causes logs to be truncated"
+			for _, k := range []string{"tariff_content", "tariff_content_v2"} {
+				if v, ok := responseMap[k]; ok {
+					b, err := json.Marshal(v)
+					if err == nil && len(b) > 4096 {
+						responseMap[k] = string(b[:4096]) + fmt.Sprintf("... [truncated %d bytes]", len(b)-4096)
+					}
+				}
 			}
 			logResponse = responseMap
 		} else {
@@ -808,6 +810,7 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		GridUnavailable:       liveStatus.GridStatus != "Active",
 		VPPActive:             liveStatus.GridServicesActive,
 		VPPKW:                 liveStatus.GridServicesPowerW / 1000.0,
+		TOUMode:               siteInfo.DefaultRealMode == "autonomous",
 		// TODO: how do we know when battery charging is disabled
 		// TODO: what about alarms?
 	}
@@ -861,6 +864,713 @@ func isMaxBackupCharging(siteInfo teslaSiteInfoResponse, liveStatus teslaLiveSta
 		gridChargeRatePerBatteryW > 2000
 }
 
+// roundTOUPeriodStart rounds a start timestamp for ESS TOU periods down to the nearest 00 or 30 minute boundary.
+// It must always round down (never up) so that the peak period is immediately active and we don't delay solar export.
+func roundTOUPeriodStart(t time.Time) time.Time {
+	truncated := t.Truncate(time.Hour)
+	if t.Minute() < 30 {
+		return truncated
+	}
+	return truncated.Add(30 * time.Minute)
+}
+
+// roundTOUPeriodEnd rounds an ending timestamp for ESS TOU periods to 00 or 30 minutes.
+// Realistically the periods will be either 30 or 60 minute periods.
+// We round up to the next hour if it's 31 minutes or higher, otherwise round down to 30 minutes.
+// If it's less than 15 mins from the start of an hour, round down to 00, otherwise round up to 30.
+// When we run again on the next update, we can stop, but we want to generally round up to make sure we don't miss peak pricing.
+func roundTOUPeriodEnd(t time.Time) time.Time {
+	minute := t.Minute()
+	truncated := t.Truncate(time.Hour)
+	switch {
+	case minute < 15:
+		return truncated
+	case minute <= 30:
+		return truncated.Add(30 * time.Minute)
+	default: // minute >= 31
+		return truncated.Add(time.Hour)
+	}
+}
+
+func (b *Tesla) buildTOUTariffPayload(start time.Time, until time.Time, currentPrice types.Price) map[string]any {
+	roundedStart := roundTOUPeriodStart(start)
+	roundedUntil := roundTOUPeriodEnd(until)
+	if !roundedUntil.After(roundedStart) {
+		roundedUntil = roundedStart.Add(30 * time.Minute)
+	}
+
+	startHour := roundedStart.Hour()
+	startMinute := roundedStart.Minute()
+	endHour := roundedUntil.Hour()
+	endMinute := roundedUntil.Minute()
+
+	startDay := time.Date(roundedStart.Year(), roundedStart.Month(), roundedStart.Day(), 0, 0, 0, 0, roundedStart.Location())
+	untilDay := time.Date(roundedUntil.Year(), roundedUntil.Month(), roundedUntil.Day(), 0, 0, 0, 0, roundedUntil.Location())
+	crossesMidnight := !untilDay.Equal(startDay) && !(roundedUntil.Hour() == 0 && roundedUntil.Minute() == 0)
+
+	day1EndHour := endHour
+	day1EndMinute := endMinute
+	if crossesMidnight || (endHour == 0 && endMinute == 0) || !untilDay.Equal(startDay) {
+		day1EndHour = 24
+		day1EndMinute = 0
+	}
+	if day1EndHour > 24 {
+		day1EndHour = 24
+		day1EndMinute = 0
+	}
+
+	const minRateSpread = 0.15
+
+	onPeakBuy := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
+	if onPeakBuy < 0 {
+		onPeakBuy = 0.0
+	}
+
+	onPeakSell := currentPrice.DollarsPerKWH + currentPrice.GenerationAdjustmentDollarsPerKWH
+	if currentPrice.SeparateGenerationCredit {
+		onPeakSell = currentPrice.GenerationCreditDollarsPerKWH
+	}
+	if onPeakSell < 0 {
+		onPeakSell = 0.0
+	}
+
+	// The Tesla Fleet API requires that buy_rate >= sell_rate at any given time;
+	// if sell_rate > buy_rate, Tesla snaps buy_rate equal to sell_rate.
+	// To ensure the onboard optimizer sees maximum financial incentive to export solar immediately,
+	// we set onPeakBuy and onPeakSell equal to the peak rate (with at least minRateSpread above $0.00 off-peak).
+	peakRate := max(onPeakBuy, onPeakSell, minRateSpread)
+	onPeakBuy = peakRate
+	onPeakSell = peakRate
+
+	offPeakBuy := 0.0
+	offPeakSell := 0.0
+
+	var offPeakPeriods []map[string]any
+	if startHour > 0 || startMinute > 0 {
+		offPeakPeriods = append(offPeakPeriods, map[string]any{
+			"fromDayOfWeek": 0,
+			"toDayOfWeek":   6,
+			"fromHour":      0,
+			"fromMinute":    0,
+			"toHour":        startHour,
+			"toMinute":      startMinute,
+		})
+	}
+	if day1EndHour < 24 {
+		offPeakPeriods = append(offPeakPeriods, map[string]any{
+			"fromDayOfWeek": 0,
+			"toDayOfWeek":   6,
+			"fromHour":      day1EndHour,
+			"fromMinute":    day1EndMinute,
+			"toHour":        0,
+			"toMinute":      0,
+		})
+	}
+
+	onPeakPeriods := []map[string]any{
+		{
+			"fromDayOfWeek": 0,
+			"toDayOfWeek":   6,
+			"fromHour":      startHour,
+			"fromMinute":    startMinute,
+			"toHour":        day1EndHour % 24,
+			"toMinute":      day1EndMinute,
+		},
+	}
+
+	todayTouPeriods := map[string]any{
+		"ON_PEAK": map[string]any{
+			"periods": onPeakPeriods,
+		},
+	}
+	if len(offPeakPeriods) > 0 {
+		todayTouPeriods["OFF_PEAK"] = map[string]any{
+			"periods": offPeakPeriods,
+		}
+	}
+
+	todayBuyRates := map[string]float64{
+		"ON_PEAK": onPeakBuy,
+	}
+	todaySellRates := map[string]float64{
+		"ON_PEAK": onPeakSell,
+	}
+	if len(offPeakPeriods) > 0 {
+		todayBuyRates["OFF_PEAK"] = offPeakBuy
+		todaySellRates["OFF_PEAK"] = offPeakSell
+	}
+
+	nonTodayTouPeriods := map[string]any{
+		"OFF_PEAK": map[string]any{
+			"periods": []map[string]any{
+				{
+					"fromDayOfWeek": 0,
+					"toDayOfWeek":   6,
+					"fromHour":      0,
+					"fromMinute":    0,
+					"toHour":        0,
+					"toMinute":      0,
+				},
+			},
+		},
+	}
+	nonTodayBuyRates := map[string]float64{
+		"OFF_PEAK": 0.0,
+	}
+	nonTodaySellRates := map[string]float64{
+		"OFF_PEAK": 0.0,
+	}
+
+	seasons := map[string]any{}
+	energyCharges := map[string]any{}
+	sellSeasons := map[string]any{}
+	sellEnergyCharges := map[string]any{}
+
+	day1 := roundedStart
+	day1Month := int(day1.Month())
+	day1Day := day1.Day()
+
+	if crossesMidnight {
+		day2 := roundedStart.AddDate(0, 0, 1)
+		day2Month := int(day2.Month())
+		day2Day := day2.Day()
+
+		tomorrowOnPeak := []map[string]any{
+			{
+				"fromDayOfWeek": 0,
+				"toDayOfWeek":   6,
+				"fromHour":      0,
+				"fromMinute":    0,
+				"toHour":        endHour % 24,
+				"toMinute":      endMinute,
+			},
+		}
+		var tomorrowOffPeak []map[string]any
+		if (endHour%24) != 0 || endMinute != 0 {
+			tomorrowOffPeak = append(tomorrowOffPeak, map[string]any{
+				"fromDayOfWeek": 0,
+				"toDayOfWeek":   6,
+				"fromHour":      endHour % 24,
+				"fromMinute":    endMinute,
+				"toHour":        0,
+				"toMinute":      0,
+			})
+		}
+
+		tomorrowTouPeriods := map[string]any{
+			"ON_PEAK": map[string]any{
+				"periods": tomorrowOnPeak,
+			},
+		}
+		if len(tomorrowOffPeak) > 0 {
+			tomorrowTouPeriods["OFF_PEAK"] = map[string]any{
+				"periods": tomorrowOffPeak,
+			}
+		}
+
+		tomorrowBuyRates := map[string]float64{
+			"ON_PEAK": onPeakBuy,
+		}
+		tomorrowSellRates := map[string]float64{
+			"ON_PEAK": onPeakSell,
+		}
+		if len(tomorrowOffPeak) > 0 {
+			tomorrowBuyRates["OFF_PEAK"] = offPeakBuy
+			tomorrowSellRates["OFF_PEAK"] = offPeakSell
+		}
+
+		if day1.Year() != day2.Year() {
+			// Year rollover: Day 1 is Dec 31, Day 2 is Jan 1
+			seasons["TOMORROW"] = map[string]any{
+				"fromMonth":   1,
+				"fromDay":     1,
+				"toMonth":     1,
+				"toDay":       1,
+				"tou_periods": tomorrowTouPeriods,
+			}
+			energyCharges["TOMORROW"] = map[string]any{
+				"rates": tomorrowBuyRates,
+			}
+			sellSeasons["TOMORROW"] = map[string]any{
+				"fromMonth":   1,
+				"fromDay":     1,
+				"toMonth":     1,
+				"toDay":       1,
+				"tou_periods": tomorrowTouPeriods,
+			}
+			sellEnergyCharges["TOMORROW"] = map[string]any{
+				"rates": tomorrowSellRates,
+			}
+
+			seasons["AFTER"] = map[string]any{
+				"fromMonth":   1,
+				"fromDay":     2,
+				"toMonth":     12,
+				"toDay":       30,
+				"tou_periods": nonTodayTouPeriods,
+			}
+			energyCharges["AFTER"] = map[string]any{
+				"rates": nonTodayBuyRates,
+			}
+			sellSeasons["AFTER"] = map[string]any{
+				"fromMonth":   1,
+				"fromDay":     2,
+				"toMonth":     12,
+				"toDay":       30,
+				"tou_periods": nonTodayTouPeriods,
+			}
+			sellEnergyCharges["AFTER"] = map[string]any{
+				"rates": nonTodaySellRates,
+			}
+
+			seasons["TODAY"] = map[string]any{
+				"fromMonth":   12,
+				"fromDay":     31,
+				"toMonth":     12,
+				"toDay":       31,
+				"tou_periods": todayTouPeriods,
+			}
+			energyCharges["TODAY"] = map[string]any{
+				"rates": todayBuyRates,
+			}
+			sellSeasons["TODAY"] = map[string]any{
+				"fromMonth":   12,
+				"fromDay":     31,
+				"toMonth":     12,
+				"toDay":       31,
+				"tou_periods": todayTouPeriods,
+			}
+			sellEnergyCharges["TODAY"] = map[string]any{
+				"rates": todaySellRates,
+			}
+		} else {
+			if !(day1Month == 1 && day1Day == 1) {
+				prevDay := day1.AddDate(0, 0, -1)
+				seasons["BEFORE"] = map[string]any{
+					"fromMonth":   1,
+					"fromDay":     1,
+					"toMonth":     int(prevDay.Month()),
+					"toDay":       prevDay.Day(),
+					"tou_periods": nonTodayTouPeriods,
+				}
+				energyCharges["BEFORE"] = map[string]any{
+					"rates": nonTodayBuyRates,
+				}
+				sellSeasons["BEFORE"] = map[string]any{
+					"fromMonth":   1,
+					"fromDay":     1,
+					"toMonth":     int(prevDay.Month()),
+					"toDay":       prevDay.Day(),
+					"tou_periods": nonTodayTouPeriods,
+				}
+				sellEnergyCharges["BEFORE"] = map[string]any{
+					"rates": nonTodaySellRates,
+				}
+			}
+
+			seasons["TODAY"] = map[string]any{
+				"fromMonth":   day1Month,
+				"fromDay":     day1Day,
+				"toMonth":     day1Month,
+				"toDay":       day1Day,
+				"tou_periods": todayTouPeriods,
+			}
+			energyCharges["TODAY"] = map[string]any{
+				"rates": todayBuyRates,
+			}
+			sellSeasons["TODAY"] = map[string]any{
+				"fromMonth":   day1Month,
+				"fromDay":     day1Day,
+				"toMonth":     day1Month,
+				"toDay":       day1Day,
+				"tou_periods": todayTouPeriods,
+			}
+			sellEnergyCharges["TODAY"] = map[string]any{
+				"rates": todaySellRates,
+			}
+
+			seasons["TOMORROW"] = map[string]any{
+				"fromMonth":   day2Month,
+				"fromDay":     day2Day,
+				"toMonth":     day2Month,
+				"toDay":       day2Day,
+				"tou_periods": tomorrowTouPeriods,
+			}
+			energyCharges["TOMORROW"] = map[string]any{
+				"rates": tomorrowBuyRates,
+			}
+			sellSeasons["TOMORROW"] = map[string]any{
+				"fromMonth":   day2Month,
+				"fromDay":     day2Day,
+				"toMonth":     day2Month,
+				"toDay":       day2Day,
+				"tou_periods": tomorrowTouPeriods,
+			}
+			sellEnergyCharges["TOMORROW"] = map[string]any{
+				"rates": tomorrowSellRates,
+			}
+
+			if !(day2Month == 12 && day2Day == 31) {
+				nextDay := day2.AddDate(0, 0, 1)
+				seasons["AFTER"] = map[string]any{
+					"fromMonth":   int(nextDay.Month()),
+					"fromDay":     nextDay.Day(),
+					"toMonth":     12,
+					"toDay":       31,
+					"tou_periods": nonTodayTouPeriods,
+				}
+				energyCharges["AFTER"] = map[string]any{
+					"rates": nonTodayBuyRates,
+				}
+				sellSeasons["AFTER"] = map[string]any{
+					"fromMonth":   int(nextDay.Month()),
+					"fromDay":     nextDay.Day(),
+					"toMonth":     12,
+					"toDay":       31,
+					"tou_periods": nonTodayTouPeriods,
+				}
+				sellEnergyCharges["AFTER"] = map[string]any{
+					"rates": nonTodaySellRates,
+				}
+			}
+		}
+	} else {
+		if !(day1Month == 1 && day1Day == 1) {
+			prevDay := day1.AddDate(0, 0, -1)
+			seasons["BEFORE"] = map[string]any{
+				"fromMonth":   1,
+				"fromDay":     1,
+				"toMonth":     int(prevDay.Month()),
+				"toDay":       prevDay.Day(),
+				"tou_periods": nonTodayTouPeriods,
+			}
+			energyCharges["BEFORE"] = map[string]any{
+				"rates": nonTodayBuyRates,
+			}
+			sellSeasons["BEFORE"] = map[string]any{
+				"fromMonth":   1,
+				"fromDay":     1,
+				"toMonth":     int(prevDay.Month()),
+				"toDay":       prevDay.Day(),
+				"tou_periods": nonTodayTouPeriods,
+			}
+			sellEnergyCharges["BEFORE"] = map[string]any{
+				"rates": nonTodaySellRates,
+			}
+		}
+
+		seasons["TODAY"] = map[string]any{
+			"fromMonth":   day1Month,
+			"fromDay":     day1Day,
+			"toMonth":     day1Month,
+			"toDay":       day1Day,
+			"tou_periods": todayTouPeriods,
+		}
+		energyCharges["TODAY"] = map[string]any{
+			"rates": todayBuyRates,
+		}
+		sellSeasons["TODAY"] = map[string]any{
+			"fromMonth":   day1Month,
+			"fromDay":     day1Day,
+			"toMonth":     day1Month,
+			"toDay":       day1Day,
+			"tou_periods": todayTouPeriods,
+		}
+		sellEnergyCharges["TODAY"] = map[string]any{
+			"rates": todaySellRates,
+		}
+
+		if !(day1Month == 12 && day1Day == 31) {
+			nextDay := day1.AddDate(0, 0, 1)
+			seasons["AFTER"] = map[string]any{
+				"fromMonth":   int(nextDay.Month()),
+				"fromDay":     nextDay.Day(),
+				"toMonth":     12,
+				"toDay":       31,
+				"tou_periods": nonTodayTouPeriods,
+			}
+			energyCharges["AFTER"] = map[string]any{
+				"rates": nonTodayBuyRates,
+			}
+			sellSeasons["AFTER"] = map[string]any{
+				"fromMonth":   int(nextDay.Month()),
+				"fromDay":     nextDay.Day(),
+				"toMonth":     12,
+				"toDay":       31,
+				"tou_periods": nonTodayTouPeriods,
+			}
+			sellEnergyCharges["AFTER"] = map[string]any{
+				"rates": nonTodaySellRates,
+			}
+		}
+	}
+
+	tariffContent := map[string]any{
+		"name":           "RateRudder Dynamic Solar Export TOU",
+		"currency":       "USD",
+		"utility":        "RateRudder",
+		"daily_charges":  []map[string]any{{"name": "Charge", "amount": 0}},
+		"energy_charges": energyCharges,
+		"sell_tariff": map[string]any{
+			"name":           "RateRudder Dynamic Solar Export TOU",
+			"currency":       "USD",
+			"utility":        "RateRudder",
+			"energy_charges": sellEnergyCharges,
+			"seasons":        sellSeasons,
+		},
+		"seasons": seasons,
+	}
+
+	return map[string]any{
+		"tou_settings": map[string]any{
+			"tariff_content_v2":     tariffContent,
+			"optimization_strategy": "economics",
+		},
+	}
+}
+
+func (b *Tesla) updateTOUSettings(ctx context.Context, start time.Time, until time.Time, currentPrice types.Price) error {
+	payload := b.buildTOUTariffPayload(start, until, currentPrice)
+	if b.settings.DryRun {
+		log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated tesla time_of_use_settings",
+			slog.Time("start", start),
+			slog.Time("until", until),
+		)
+		return nil
+	}
+	path := fmt.Sprintf("api/1/energy_sites/%d/time_of_use_settings", b.energySiteID)
+	req, err := b.base.newPOSTRequest(ctx, "POST", path, b.token, b.baseURL, payload)
+	if err != nil {
+		return err
+	}
+	if err := b.base.doRequest(req, nil); err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla time_of_use_settings", slog.Any("error", err))
+		return err
+	}
+	if touSettings, ok := payload["tou_settings"].(map[string]any); ok {
+		if tc, ok := touSettings["tariff_content_v2"].(map[string]any); ok {
+			b.siteInfoCache.TariffContentV2 = tc
+		}
+	}
+	return nil
+}
+
+func getTeslaTariffInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int(n), true
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case json.Number:
+		i, err := n.Int64()
+		return int(i), err == nil
+	}
+	return 0, false
+}
+
+type teslaTOUPeriod struct {
+	fromDayOfWeek int
+	toDayOfWeek   int
+	fromHour      int
+	fromMinute    int
+	toHour        int
+	toMinute      int
+}
+
+func (p teslaTOUPeriod) coversDayOfWeek(dayOfWeek int) bool {
+	if p.fromDayOfWeek <= p.toDayOfWeek {
+		return dayOfWeek >= p.fromDayOfWeek && dayOfWeek <= p.toDayOfWeek
+	}
+	return dayOfWeek >= p.fromDayOfWeek || dayOfWeek <= p.toDayOfWeek
+}
+
+func seasonCoversDate(seasonMap map[string]any, d time.Time, loc *time.Location) bool {
+	fromMonth, ok1 := getTeslaTariffInt(seasonMap["fromMonth"])
+	fromDay, ok2 := getTeslaTariffInt(seasonMap["fromDay"])
+	toMonth, ok3 := getTeslaTariffInt(seasonMap["toMonth"])
+	toDay, ok4 := getTeslaTariffInt(seasonMap["toDay"])
+	if !ok1 || !ok2 || !ok3 || !ok4 {
+		return false
+	}
+	dInLoc := d.In(loc)
+	if fromMonth < toMonth || (fromMonth == toMonth && fromDay <= toDay) {
+		seasonStart := time.Date(dInLoc.Year(), time.Month(fromMonth), fromDay, 0, 0, 0, 0, loc)
+		seasonEnd := time.Date(dInLoc.Year(), time.Month(toMonth), toDay, 23, 59, 59, 999999999, loc)
+		return !dInLoc.Before(seasonStart) && !dInLoc.After(seasonEnd)
+	}
+	// Wraps around new year
+	seasonStart := time.Date(dInLoc.Year(), time.Month(fromMonth), fromDay, 0, 0, 0, 0, loc)
+	seasonEnd := time.Date(dInLoc.Year(), time.Month(toMonth), toDay, 23, 59, 59, 999999999, loc)
+	return !dInLoc.Before(seasonStart) || !dInLoc.After(seasonEnd)
+}
+
+func getTeslaOnPeakPeriods(seasonMap map[string]any) []teslaTOUPeriod {
+	touPeriods, ok := seasonMap["tou_periods"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	onPeak, ok := touPeriods["ON_PEAK"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	periodsRaw, ok := onPeak["periods"]
+	if !ok {
+		return nil
+	}
+
+	var periodList []map[string]any
+	switch pl := periodsRaw.(type) {
+	case []any:
+		for _, p := range pl {
+			if pm, ok := p.(map[string]any); ok {
+				periodList = append(periodList, pm)
+			}
+		}
+	case []map[string]any:
+		periodList = pl
+	}
+
+	var res []teslaTOUPeriod
+	for _, p := range periodList {
+		fromDayOfWeek, ok1 := getTeslaTariffInt(p["fromDayOfWeek"])
+		toDayOfWeek, ok2 := getTeslaTariffInt(p["toDayOfWeek"])
+		fromHour, ok3 := getTeslaTariffInt(p["fromHour"])
+		fromMinute, ok4 := getTeslaTariffInt(p["fromMinute"])
+		toHour, ok5 := getTeslaTariffInt(p["toHour"])
+		toMinute, ok6 := getTeslaTariffInt(p["toMinute"])
+		if !ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 {
+			continue
+		}
+		res = append(res, teslaTOUPeriod{
+			fromDayOfWeek: fromDayOfWeek,
+			toDayOfWeek:   toDayOfWeek,
+			fromHour:      fromHour,
+			fromMinute:    fromMinute,
+			toHour:        toHour,
+			toMinute:      toMinute,
+		})
+	}
+	return res
+}
+
+func isTeslaScheduleMatch(currentTariff map[string]any, targetUntil time.Time, now time.Time, loc *time.Location) bool {
+	if len(currentTariff) == 0 {
+		return false
+	}
+	seasons, ok := currentTariff["seasons"].(map[string]any)
+	if !ok || len(seasons) == 0 {
+		if sellTariff, ok := currentTariff["sell_tariff"].(map[string]any); ok {
+			seasons, _ = sellTariff["seasons"].(map[string]any)
+		}
+	}
+	if len(seasons) == 0 {
+		return false
+	}
+
+	nowInLoc := now.In(loc)
+	targetUntilInLoc := targetUntil.In(loc)
+	roundedTargetUntil := roundTOUPeriodEnd(targetUntilInLoc)
+
+	startDay := time.Date(nowInLoc.Year(), nowInLoc.Month(), nowInLoc.Day(), 0, 0, 0, 0, loc)
+	targetDay := time.Date(roundedTargetUntil.Year(), roundedTargetUntil.Month(), roundedTargetUntil.Day(), 0, 0, 0, 0, loc)
+	crossesMidnight := !targetDay.Equal(startDay) && !(roundedTargetUntil.Hour() == 0 && roundedTargetUntil.Minute() == 0)
+
+	if crossesMidnight {
+		hasEvening := false
+		hasMorning := false
+
+		// Check season covering nowInLoc (evening segment ending at midnight)
+		for _, sVal := range seasons {
+			seasonMap, ok := sVal.(map[string]any)
+			if !ok || !seasonCoversDate(seasonMap, nowInLoc, loc) {
+				continue
+			}
+			nowDayOfWeek := int(nowInLoc.Weekday())
+			for _, p := range getTeslaOnPeakPeriods(seasonMap) {
+				if !p.coversDayOfWeek(nowDayOfWeek) {
+					continue
+				}
+				schedStart := time.Date(nowInLoc.Year(), nowInLoc.Month(), nowInLoc.Day(), p.fromHour, p.fromMinute, 0, 0, loc)
+				if schedStart.After(nowInLoc) {
+					continue
+				}
+				if p.toHour == 0 && p.toMinute == 0 {
+					hasEvening = true
+					break
+				}
+			}
+			if hasEvening {
+				break
+			}
+		}
+
+		// Check season covering targetUntilInLoc (morning segment starting at midnight)
+		for _, sVal := range seasons {
+			seasonMap, ok := sVal.(map[string]any)
+			if !ok || !seasonCoversDate(seasonMap, targetUntilInLoc, loc) {
+				continue
+			}
+			targetDayOfWeek := int(targetUntilInLoc.Weekday())
+			for _, p := range getTeslaOnPeakPeriods(seasonMap) {
+				if !p.coversDayOfWeek(targetDayOfWeek) {
+					continue
+				}
+				if p.fromHour != 0 || p.fromMinute != 0 {
+					continue
+				}
+				var schedEnd time.Time
+				if p.toHour == 0 && p.toMinute == 0 {
+					schedEnd = targetDay.Add(24 * time.Hour)
+				} else {
+					schedEnd = time.Date(targetDay.Year(), targetDay.Month(), targetDay.Day(), p.toHour, p.toMinute, 0, 0, loc)
+				}
+				if math.Abs(schedEnd.Sub(targetUntilInLoc).Minutes()) <= 10 || math.Abs(schedEnd.Sub(roundedTargetUntil).Minutes()) <= 10 {
+					hasMorning = true
+					break
+				}
+			}
+			if hasMorning {
+				break
+			}
+		}
+
+		return hasEvening && hasMorning
+	}
+
+	// Non-cross-midnight (same day or targetUntil is midnight at end of today)
+	for _, sVal := range seasons {
+		seasonMap, ok := sVal.(map[string]any)
+		if !ok || !seasonCoversDate(seasonMap, nowInLoc, loc) {
+			continue
+		}
+		nowDayOfWeek := int(nowInLoc.Weekday())
+		for _, p := range getTeslaOnPeakPeriods(seasonMap) {
+			if !p.coversDayOfWeek(nowDayOfWeek) {
+				continue
+			}
+			schedStart := time.Date(nowInLoc.Year(), nowInLoc.Month(), nowInLoc.Day(), p.fromHour, p.fromMinute, 0, 0, loc)
+			var schedEnd time.Time
+			if p.toHour == 0 && p.toMinute == 0 {
+				schedEnd = time.Date(nowInLoc.Year(), nowInLoc.Month(), nowInLoc.Day(), 0, 0, 0, 0, loc).Add(24 * time.Hour)
+			} else {
+				schedEnd = time.Date(nowInLoc.Year(), nowInLoc.Month(), nowInLoc.Day(), p.toHour, p.toMinute, 0, 0, loc)
+				if schedEnd.Before(schedStart) {
+					schedEnd = schedEnd.Add(24 * time.Hour)
+				}
+			}
+			if schedStart.After(nowInLoc) || !nowInLoc.Before(schedEnd) {
+				continue
+			}
+			if math.Abs(schedEnd.Sub(targetUntilInLoc).Minutes()) <= 10 || math.Abs(schedEnd.Sub(roundedTargetUntil).Minutes()) <= 10 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // SetModes sets the operating modes of the system.
 func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode, opts types.ModesOptions) (bool, error) {
 	log.Ctx(ctx).DebugContext(ctx, "SetModes called", slog.Any("batteryMode", bat), slog.Any("solarMode", sol), slog.Any("opts", opts))
@@ -887,7 +1597,7 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 		}
 		var targetAllowGridCharge bool
 		switch bat {
-		case types.BatteryModeChargeAny, types.BatteryModeLoad, types.BatteryModeStandby:
+		case types.BatteryModeChargeAny, types.BatteryModeLoad, types.BatteryModeStandby, types.BatteryModeExport:
 			targetAllowGridCharge = b.settings.GridChargeBatteries
 		default:
 			return false, fmt.Errorf("unknown battery mode: %v", bat)
@@ -969,18 +1679,34 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 				newReserveSOC = 80.0
 			}
 		}
+	case types.BatteryModeExport:
+		if b.settings.ManageTOUSchedules {
+			targetMode = "autonomous"
+			newReserveSOC = minSOC
+		} else {
+			targetMode = "self_consumption"
+			newReserveSOC = minSOC
+		}
 	case types.BatteryModeLoad:
-		targetMode = "self_consumption"
-		// we set the SOC to the minimum battery SOC to ensure we start discharging
-		// if we're somehow less than this soc, we'll charge from the solar, unless
-		// solar is unavailable then it'll charge from the grid
-		newReserveSOC = minSOC
+		if b.settings.ManageTOUSchedules && sol == types.SolarModeExport {
+			targetMode = "autonomous"
+			newReserveSOC = minSOC
+		} else {
+			targetMode = "self_consumption"
+			// we set the SOC to the minimum battery SOC to ensure we start discharging
+			// if we're somehow less than this soc, we'll charge from the solar, unless
+			// solar is unavailable then it'll charge from the grid
+			// it seems like this accepts an int value
+			newReserveSOC = minSOC
+		}
 	case types.BatteryModeStandby:
 		// we floor the SOC to ensure we don't set it to a value that would cause the
 		// battery to charge
 		// make sure we don't set it to less than the minimum battery SOC
 		newReserveSOC = max(math.Floor(liveStatus.PercentageCharged), minSOC)
-		if newReserveSOC >= 99 {
+		if b.settings.ManageTOUSchedules && sol == types.SolarModeExport {
+			targetMode = "autonomous"
+		} else if newReserveSOC >= 99 {
 			newReserveSOC = 100.0
 			targetMode = "self_consumption"
 		} else if newReserveSOC > 80 {
@@ -1094,37 +1820,60 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 	}
 
 	exportRule := siteInfo.Components.CustomerPreferredExportRule
-	switch sol {
-	case types.SolarModeAny:
-		if b.settings.GridExportSolar && b.settings.GridExportBatteries {
-			if exportRule != teslaExportRuleBatteryOk {
-				exportRule = teslaExportRuleBatteryOk
-				updatedGrid = true
-			}
-		} else if b.settings.GridExportSolar {
+	if bat == types.BatteryModeExport {
+		if exportRule != teslaExportRuleBatteryOk {
+			exportRule = teslaExportRuleBatteryOk
+			updatedGrid = true
+		}
+	} else {
+		switch sol {
+		case types.SolarModeExport:
 			if exportRule != teslaExportRulePvOnly {
 				exportRule = teslaExportRulePvOnly
 				updatedGrid = true
 			}
-		} else {
-			if exportRule != teslaExportRuleNever {
+		case types.SolarModeAny:
+			targetRule := teslaExportRulePvOnly
+			if b.settings.GridExportBatteries {
+				targetRule = teslaExportRuleBatteryOk
+			}
+			if exportRule != "" && exportRule != targetRule {
+				exportRule = targetRule
+				updatedGrid = true
+			}
+		case types.SolarModeNoExport:
+			if exportRule != "" && exportRule != teslaExportRuleNever {
 				exportRule = teslaExportRuleNever
 				updatedGrid = true
 			}
+		case types.SolarModeNoChange:
+			// Do nothing
+		default:
+			return false, fmt.Errorf("unknown solar mode: %v", sol)
 		}
-	case types.SolarModeNoExport:
-		if exportRule != teslaExportRuleNever {
-			exportRule = teslaExportRuleNever
-			updatedGrid = true
-		}
-	case types.SolarModeNoChange:
-		// Do nothing
-	default:
-		return false, fmt.Errorf("unknown solar mode: %v", sol)
 	}
 
 	if bat != types.BatteryModeNoChange && targetMode != "" && siteInfo.DefaultRealMode != targetMode {
 		updatedMode = true
+	}
+
+	tz := siteInfo.InstallationTimeZone
+	if tz == "" {
+		tz = "UTC"
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		loc = time.UTC
+	}
+	nowInLoc := time.Now().In(loc)
+
+	updatedTOU := false
+	if b.settings.ManageTOUSchedules && (sol == types.SolarModeExport || bat == types.BatteryModeExport) && !opts.TSScheduleModeUntil.IsZero() {
+		untilInLoc := opts.TSScheduleModeUntil.In(loc)
+		// Only upload schedule if it changed or if the operating mode was changed (e.g. restoring control after user intervention)
+		if updatedMode || !isTeslaScheduleMatch(siteInfo.TariffContentV2, untilInLoc, nowInLoc, loc) {
+			updatedTOU = true
+		}
 	}
 
 	if b.settings.DryRun {
@@ -1137,7 +1886,39 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 		if updatedGrid {
 			log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated grid import export", slog.Bool("allowGridCharge", allowGridCharge), slog.String("exportRule", exportRule))
 		}
+		if updatedTOU {
+			log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated tesla time_of_use_settings",
+				slog.Time("start", nowInLoc),
+				slog.Time("until", opts.TSScheduleModeUntil.In(loc)),
+			)
+		}
 		return false, nil
+	}
+
+	if updatedGrid {
+		log.Ctx(ctx).InfoContext(ctx, "updating tesla grid import export", slog.Bool("allowGridCharge", allowGridCharge), slog.String("exportRule", exportRule))
+		path := fmt.Sprintf("api/1/energy_sites/%d/grid_import_export", b.energySiteID)
+		payload := map[string]any{
+			"disallow_charge_from_grid_with_solar_installed": !allowGridCharge,
+			"customer_preferred_export_rule":                 exportRule,
+		}
+		req, err := b.base.newPOSTRequest(ctx, "POST", path, b.token, b.baseURL, payload)
+		if err != nil {
+			return false, err
+		}
+		if err := b.base.doRequest(req, nil); err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla grid import export", slog.Any("error", err))
+			return false, err
+		}
+		b.siteInfoCache.Components.CustomerPreferredExportRule = exportRule
+		b.siteInfoCache.Components.DisallowChargeFromGridWithSolarInstalled = !allowGridCharge
+		b.siteInfoExpiry = time.Time{}
+	}
+
+	if updatedTOU {
+		if err := b.updateTOUSettings(ctx, nowInLoc, opts.TSScheduleModeUntil.In(loc), opts.CurrentPrice); err != nil {
+			return false, err
+		}
 	}
 
 	if updatedMode {
@@ -1152,6 +1933,8 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla operation mode", slog.Any("error", err))
 			return false, err
 		}
+		b.siteInfoCache.DefaultRealMode = targetMode
+		b.siteInfoExpiry = time.Time{}
 	}
 
 	if updatedSOC {
@@ -1170,30 +1953,11 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla backup reserve", slog.Any("error", err))
 			return false, err
 		}
+		b.siteInfoCache.BackupReservePercent = newReserveSOC
+		b.siteInfoExpiry = time.Time{}
 	}
 
-	if updatedGrid {
-		log.Ctx(ctx).InfoContext(
-			ctx,
-			"updating tesla grid import export",
-			slog.Bool("allowGridCharge", allowGridCharge),
-			slog.String("exportRule", exportRule),
-		)
-		path := fmt.Sprintf("api/1/energy_sites/%d/grid_import_export", b.energySiteID)
-		payload := map[string]any{
-			"disallow_charge_from_grid_with_solar_installed": !allowGridCharge,
-			"customer_preferred_export_rule":                 exportRule,
-		}
-		req, err := b.base.newPOSTRequest(ctx, "POST", path, b.token, b.baseURL, payload)
-		if err != nil {
-			return false, err
-		}
-		if err := b.base.doRequest(req, nil); err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to update tesla grid import export", slog.Any("error", err))
-		}
-	}
-
-	changed := updatedMode || updatedSOC || updatedGrid
+	changed := updatedMode || updatedSOC || updatedGrid || updatedTOU
 
 	if updatedSOC {
 		if wg := common.CtxWaitGroup(ctx); wg != nil {
@@ -1606,6 +2370,7 @@ type teslaSiteInfoResponse struct {
 	UserSettings         struct {
 		StormModeEnabled bool `json:"storm_mode_enabled"`
 	} `json:"user_settings"`
+	TariffContentV2 map[string]any `json:"tariff_content_v2"`
 
 	// there's also max_site_meter_power_ac and min_site_meter_power_ac
 }

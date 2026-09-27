@@ -171,6 +171,7 @@ func (c *Controller) SimulateState(
 
 	simEnd := now.Truncate(time.Hour).Add(time.Duration(simHours) * time.Hour)
 	simTime = now
+	var lastSimulatedPrice types.Price = currentPrice
 
 	for simTime.Before(simEnd) {
 		h := simTime.Hour()
@@ -188,20 +189,62 @@ func (c *Controller) SimulateState(
 					break
 				}
 			}
-			// don't log for every hour if we didn't get any prices at all
-			if !found && len(futurePrices) > 0 {
-				log.Ctx(ctx).WarnContext(ctx, "missing future price for simulation hour", slog.Time("simTime", simTime))
-				// just use the last price for the last hour instead if we have it
-				// note: this won't exactly work if there are sub-hour prices
-				lastHour := simTime.Add(-time.Hour)
-				for _, fp := range futurePrices {
-					if fp.Contains(lastHour) {
-						price = fp
-						log.Ctx(ctx).DebugContext(ctx, "using last hour price for simulation hour", slog.Time("simTime", simTime))
-						break
+			if !found {
+				// If simTime is before currentPrice (e.g. simulation starting with a status timestamp slightly in the past),
+				// use currentPrice as fallback.
+				if !currentPrice.TSStart.IsZero() && simTime.Before(currentPrice.TSStart) {
+					log.Ctx(ctx).WarnContext(
+						ctx,
+						"simulation hour before current price",
+						slog.Time("simTime", simTime),
+						slog.Time("priceStart", currentPrice.TSStart),
+					)
+					price = currentPrice
+					found = true
+				} else if len(futurePrices) > 0 {
+					log.Ctx(ctx).WarnContext(
+						ctx,
+						"missing future price for simulation hour",
+						slog.Time("simTime", simTime),
+					)
+					// just use the last price for the last hour instead if we have it
+					// note: this won't exactly work if there are sub-hour prices
+					lastHour := simTime.Add(-time.Hour)
+					if currentPrice.Contains(lastHour) {
+						price = currentPrice
+						found = true
+						log.Ctx(ctx).DebugContext(
+							ctx,
+							"using current price for simulation hour",
+							slog.Time("simTime", simTime),
+						)
+					} else {
+						for _, fp := range futurePrices {
+							if fp.Contains(lastHour) {
+								price = fp
+								found = true
+								log.Ctx(ctx).DebugContext(
+									ctx,
+									"using last hour price for simulation hour",
+									slog.Time("simTime", simTime),
+								)
+								break
+							}
+						}
+					}
+				}
+				// As a last resort, fall back to the last simulated price or currentPrice so price is never empty
+				if !found {
+					if !lastSimulatedPrice.TSStart.IsZero() {
+						price = lastSimulatedPrice
+					} else if !currentPrice.TSStart.IsZero() {
+						price = currentPrice
 					}
 				}
 			}
+		}
+		if !price.TSStart.IsZero() {
+			lastSimulatedPrice = price
 		}
 
 		gridChargeCost := price.DollarsPerKWH + price.GridUseDollarsPerKWH
@@ -472,7 +515,15 @@ func (c *Controller) SimulateState(
 
 			var subMinKWH float64
 			if inVPPEvent && subVPP != nil {
-				subMinKWH = capacityKWH * (subVPP.VPPSoc / 100.0)
+				targetSOC := subVPP.VPPSoc
+				if !subVPP.Mandatory {
+					if stepMinSOC < subVPP.VPPSoc {
+						targetSOC = stepMinSOC
+					}
+				}
+				// For mandatory VPP, we cannot control vppSoc. The utility controls dispatch and the battery
+				// will drain to subVPP.VPPSoc regardless of user reserve settings.
+				subMinKWH = capacityKWH * (targetSOC / 100.0)
 			} else {
 				subMinKWH = stepMinKWH
 			}
@@ -957,8 +1008,8 @@ func (c *Controller) SimulateState(
 			BufferedClampedNetLoadSolarKWH:  hourlyBufferedShiftedClampedNetKWH / simEnergyApplyRatio,
 			ThresholdClampedNetLoadSolarKWH: hourlyThresholdShiftedClampedNetKWH / simEnergyApplyRatio,
 			GridChargeDollarsPerKWH:         gridChargeCost,
-			SolarOppDollarsPerKWH:           solarOppCost,
 			AvgHomeLoadKWH:                  profile.AvgHomeLoadKWH,
+			SolarOppDollarsPerKWH:           solarOppCost,
 			PredictedSolarKWH:               predictedAvgSolarKWH,
 			BufferedPredictedSolarKWH:       bufferedPredictedSolarKWH,
 			ThresholdPredictedSolarKWH:      thresholdPredictedSolarKWH,
@@ -1080,8 +1131,7 @@ func (c *Controller) calculateSolarTrend(ctx context.Context, now time.Time, his
 	}
 
 	if diff/modelSolar > 0.10 {
-		// cap the ratio at the configured maximum
-		return min(settings.SolarTrendRatioMax, recentSolar/modelSolar)
+		return min(settings.SolarTrendRatioMax, max(0.0, recentSolar/modelSolar))
 	}
 
 	return 1.0

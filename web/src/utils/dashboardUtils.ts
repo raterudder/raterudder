@@ -5,6 +5,7 @@ export const getBatteryModeLabel = (mode: number) => {
         case BatteryMode.Standby: return 'Hold Battery';
         case BatteryMode.ChargeAny: return 'Charge From Solar+Grid';
         case BatteryMode.Load: return 'Solar first, then battery';
+        case BatteryMode.Export: return 'Export to Grid';
         case BatteryMode.NoChange: return 'No Change';
         default: return 'Unknown';
     }
@@ -15,6 +16,7 @@ export const getBatteryModeClass = (mode: number) => {
         case BatteryMode.Standby: return 'standby';
         case BatteryMode.ChargeAny: return 'charge_any';
         case BatteryMode.Load: return 'load';
+        case BatteryMode.Export: return 'export';
         case BatteryMode.NoChange: return 'no_change';
         default: return 'unknown';
     }
@@ -24,6 +26,7 @@ export const getSolarModeLabel = (mode: number) => {
     switch (mode) {
         case SolarMode.NoExport: return 'Use & No Export';
         case SolarMode.Any: return 'Use & Export';
+        case SolarMode.Export: return 'Direct Export';
         case SolarMode.NoChange: return 'No Change';
         default: return 'Unknown';
     }
@@ -33,6 +36,7 @@ export const getSolarModeClass = (mode: number) => {
     switch (mode) {
         case SolarMode.NoExport: return 'no_export';
         case SolarMode.Any: return 'export';
+        case SolarMode.Export: return 'direct_export';
         case SolarMode.NoChange: return 'no_change';
         default: return 'unknown';
     }
@@ -314,6 +318,34 @@ export const getReasonText = (action: Action): string => {
         case ActionReason.BatteryAtReserve: {
             const parts = [
                 'Battery is at reserve. Using remaining energy because standby is not meaningful (battery is already held at reserve).',
+            ];
+            return parts.concat(suffixParts).join(' ');
+        }
+        case ActionReason.DirectExport: {
+            if (action.batteryMode === BatteryMode.Export) {
+                if (action.solarMode === SolarMode.Export) {
+                    const parts = [
+                        `High export credit window active${nowCostStr ? ` (${nowCostStr})` : ''}.`,
+                        `Discharging battery and exporting solar to the grid at peak rates.`,
+                    ];
+                    return parts.concat(suffixParts).join(' ');
+                }
+                const parts = [
+                    `High export credit window active${nowCostStr ? ` (${nowCostStr})` : ''}.`,
+                    `Discharging battery directly to the grid at peak rates.`,
+                ];
+                return parts.concat(suffixParts).join(' ');
+            }
+            if (action.batteryMode === BatteryMode.Standby) {
+                const parts = [
+                    `High electricity price window active${nowCostStr ? ` (${nowCostStr})` : ''} and battery reserve is limited.`,
+                    `Holding remaining battery energy in standby to defend against peak grid imports, while solar generation powers the home and exports surplus to the grid.`,
+                ];
+                return parts.concat(suffixParts).join(' ');
+            }
+            const parts = [
+                `High solar export credit window active${nowCostStr ? ` (${nowCostStr})` : ''}.`,
+                `Powering the home from the battery so 100% of solar generation can export directly to the grid at peak rates.`,
             ];
             return parts.concat(suffixParts).join(' ');
         }

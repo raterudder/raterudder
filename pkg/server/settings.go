@@ -200,6 +200,10 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "minimum arbitrage difference cannot be negative", http.StatusBadRequest)
 		return
 	}
+	if newSettings.MinBatteryExportDifferenceDollarsPerKWH < 0 {
+		writeJSONError(w, "minimum battery export difference cannot be negative", http.StatusBadRequest)
+		return
+	}
 	if newSettings.MinBatterySOC < 0 || newSettings.MinBatterySOC > 100 {
 		writeJSONError(w, "minimum battery SOC must be between 0 and 100", http.StatusBadRequest)
 		return

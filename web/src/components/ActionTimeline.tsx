@@ -52,6 +52,15 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
                 if (action.reason === ActionReason.GridUnavailable || action.systemStatus?.gridUnavailable) {
                     title = 'Grid Unavailable';
                 }
+                if (action.reason === ActionReason.DirectExport) {
+                    if (action.batteryMode === BatteryMode.Export) {
+                        title = action.solarMode === SolarMode.Export ? 'Battery & Solar Grid Export' : 'Direct Battery Export';
+                    } else if (action.batteryMode === BatteryMode.Standby) {
+                        title = 'Peak Defense Standby';
+                    } else {
+                        title = 'Direct Solar Export';
+                    }
+                }
                 if (action.reason === ActionReason.ArbitrageHoldExport || action.reason === ActionReason.ArbitrageHoldSave || action.reason === ActionReason.ArbitrageHold) {
                     title = 'Hold for Arbitrage';
                 }
@@ -66,7 +75,7 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
                 }
 
                 const showDeficitTag = !isZeroTime(action.deficitAt);
-                const showCapacityTag = !isZeroTime(action.capacityAt);
+                const showCapacityTag = !isZeroTime(action.capacityAt) && action.reason !== ActionReason.DirectExport;
                 const refTs = (action.systemTimestamp && !isZeroTime(action.systemTimestamp)) ? action.systemTimestamp : action.systemStatus?.timestamp;
 
                 return (

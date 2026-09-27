@@ -452,6 +452,7 @@ func (e *Enphase) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		BatteryAboveMinSOC:    currentSOC >= backupReserveSOC,
 		EmergencyMode:         emergencyMode,
 		// TODO: determine GridUnavailable
+		// TODO: detect TOUMode for Enphase once battery settings (e.g. is_tou) or operation modes are integrated into GetStatus
 		BatteryChargingDisabled: batteryChargingDisabled,
 		Alarms:                  alarms,
 		Storms:                  storms,
@@ -587,7 +588,7 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 			targetSOC = opts.ChargeToSOC
 		}
 		newReserveSOC = float64(targetSOC)
-	case types.BatteryModeLoad:
+	case types.BatteryModeLoad, types.BatteryModeExport:
 		// Set the reserve SOC to the configured minimum battery SOC to begin discharging
 		// and covering home loads.
 		newReserveSOC = minSOC

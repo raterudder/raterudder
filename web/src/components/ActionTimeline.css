@@ -76,6 +76,11 @@
     border-color: #a855f7;
     box-shadow: 0 0 12px rgba(168, 85, 247, 0.4);
 }
+.timeline-item.mode-export .timeline-marker { border-color: #10b981; background: #10b981; }
+.timeline-item.mode-export:hover .timeline-marker {
+    border-color: #10b981;
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.4);
+}
 
 
 /* Marker indicator for grouped actions */

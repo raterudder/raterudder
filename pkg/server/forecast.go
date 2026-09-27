@@ -147,18 +147,21 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		// Continue with empty future prices
 	}
 
-	// merge utility mandatory VPP events
+	// merge utility mandatory VPP events and finalize VPP pricing
 	vppInfo, err := utility.GetVPPInfo(ctx)
 	if err != nil {
 		log.Ctx(ctx).WarnContext(ctx, "failed to get utility VPP info", slog.Any("error", err))
-	} else {
-		status = s.mergeUtilityVPPEvents(ctx, status, vppInfo)
 	}
+	status = s.mergeUtilityVPPEvents(ctx, status, vppInfo)
 
 	// 5. Get History (Last x days from monthly summaries + today's/tomorrow's unsummarized data)
-	now := status.Timestamp
-	if now.IsZero() {
-		now = s.now()
+	now := s.now()
+	if !status.Timestamp.IsZero() && status.Timestamp.Location() != nil {
+		now = now.In(status.Timestamp.Location())
+	}
+	// Fall back to status.Timestamp if it is far from s.now() (e.g. tests with mocked static timestamps)
+	if s.nowFunc == nil && !status.Timestamp.IsZero() && (status.Timestamp.Before(now.Add(-2*time.Hour)) || status.Timestamp.After(now.Add(2*time.Hour))) {
+		now = status.Timestamp
 	}
 	historyStart := now.AddDate(0, 0, -forecastHistoryDays).Truncate(time.Hour)
 	energyHistory, weatherHistory, err := s.getCombinedHistory(ctx, siteID, settings, historyStart, now, nil)

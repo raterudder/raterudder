@@ -624,6 +624,17 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
 		assert.Contains(t, w.Body.String(), "minimum battery SOC period value must be between 0 and 100")
 
+		// Invalid MinBatteryExportDifferenceDollarsPerKWH (negative)
+		sExportNeg := base
+		sExportNeg.MinBatteryExportDifferenceDollarsPerKWH = -0.05
+		bExportNeg, _ := json.Marshal(sExportNeg)
+		req = httptest.NewRequest("POST", "/api/settings", bytes.NewReader(bExportNeg))
+		req = withUser(req, "admin@example.com", true)
+		w = httptest.NewRecorder()
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+		assert.Contains(t, w.Body.String(), "minimum battery export difference cannot be negative")
+
 		// Valid 24-hour custom period (0 to 24)
 		mockStorage := &mockStorage{}
 		mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(base, 1, time.Time{}, nil)

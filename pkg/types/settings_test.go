@@ -209,7 +209,8 @@ func TestMigrateSettings(t *testing.T) {
 
 		// Case 2: Unconfigured ESS site
 		unconfiguredSite := Settings{
-			ESS: "",
+			ESS:                                     "",
+			MinBatteryExportDifferenceDollarsPerKWH: 0.07,
 		}
 		s2, changed2, err2 := MigrateSettings(unconfiguredSite, 15)
 		require.NoError(t, err2)
@@ -217,20 +218,31 @@ func TestMigrateSettings(t *testing.T) {
 		assert.False(t, s2.CustomGridSettings)
 	})
 
+	t.Run("v16 to v17: add default MinBatteryExportDifferenceDollarsPerKWH", func(t *testing.T) {
+		old := Settings{
+			Release: "production",
+		}
+		s, changed, err := MigrateSettings(old, 16)
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.Equal(t, 0.07, s.MinBatteryExportDifferenceDollarsPerKWH)
+	})
+
 	t.Run("no change: current version", func(t *testing.T) {
 		current := Settings{
-			UtilityProvider:                      "comed",
-			UtilityRate:                          "comed_besh",
-			Release:                              "production",
-			UpdateGroup:                          7,
-			MinStartChargeMinutes:                5,
-			PeakSurvivalBufferMinutes:            20,
-			SOCBufferPercent:                     4.0,
-			SolarCapacityBufferMinutes:           10,
-			VPPChargingBufferMinutes:             20,
-			HomeLoadPredictionStrategy:           "default",
-			MinExportHoldDifferenceDollarsPerKWH: 0.02,
-			CustomGridSettings:                   true,
+			UtilityProvider:                         "comed",
+			UtilityRate:                             "comed_besh",
+			Release:                                 "production",
+			UpdateGroup:                             7,
+			MinStartChargeMinutes:                   5,
+			PeakSurvivalBufferMinutes:               20,
+			SOCBufferPercent:                        4.0,
+			SolarCapacityBufferMinutes:              10,
+			VPPChargingBufferMinutes:                20,
+			HomeLoadPredictionStrategy:              "default",
+			MinExportHoldDifferenceDollarsPerKWH:    0.02,
+			CustomGridSettings:                      true,
+			MinBatteryExportDifferenceDollarsPerKWH: 0.07,
 		}
 		s, changed, err := MigrateSettings(current, CurrentSettingsVersion)
 		require.NoError(t, err)
@@ -334,15 +346,26 @@ func TestGetMinBatterySOC(t *testing.T) {
 		assert.Equal(t, 20.0, soc)
 	})
 
-	t.Run("PeriodNameMatch_EmptyPricePeriodNameLogsErrorAndFallsBack", func(t *testing.T) {
+	t.Run("PeriodNameMatch_EmptyPricePeriodNameFallsBack", func(t *testing.T) {
 		s := Settings{
 			MinBatterySOC: 20.0,
 			MinBatterySOCPeriods: []MinBatterySOCPeriod{
 				{UtilityPeriodName: "Peak", MinBatterySOC: 50.0},
 			},
 		}
-		soc := s.GetMinBatterySOC(ctx, now, nil, Price{})
-		assert.Equal(t, 20.0, soc)
+		// Incomplete / empty price data
+		socEmpty := s.GetMinBatterySOC(ctx, now, nil, Price{})
+		assert.Equal(t, 20.0, socEmpty)
+
+		// Future forecast hour with empty period name
+		futureTime := time.Now().Add(4 * time.Hour)
+		socFuture := s.GetMinBatterySOC(ctx, futureTime, nil, Price{TSStart: futureTime})
+		assert.Equal(t, 20.0, socFuture)
+
+		// Present / past time with price but no period name
+		pastTime := time.Now().Add(-1 * time.Hour)
+		socPast := s.GetMinBatterySOC(ctx, pastTime, nil, Price{TSStart: pastTime, DollarsPerKWH: 0.15})
+		assert.Equal(t, 20.0, socPast)
 	})
 
 	t.Run("CustomScheduleMatch_ReturnsTimeSOC", func(t *testing.T) {
