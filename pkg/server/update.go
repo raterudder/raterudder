@@ -12,6 +12,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -258,13 +259,12 @@ func (s *Server) performSiteUpdate(
 
 	log.Ctx(ctx).DebugContext(ctx, "update: current price fetched", slog.Any("price", currentPrice))
 
-	// merge utility mandatory VPP events
+	// merge utility mandatory VPP events and finalize VPP pricing
 	vppInfo, err := utility.GetVPPInfo(ctx)
 	if err != nil {
 		log.Ctx(ctx).WarnContext(ctx, "failed to get utility VPP info", slog.Any("error", err))
-	} else {
-		status = s.mergeUtilityVPPEvents(ctx, status, vppInfo)
 	}
+	status = s.mergeUtilityVPPEvents(ctx, status, vppInfo)
 	notifData.status = status
 	notifData.vppInfo = vppInfo
 
@@ -371,6 +371,17 @@ func (s *Server) performSiteUpdate(
 			SystemStatus:    status,
 			CurrentPrice:    &currentPrice,
 			Paused:          true,
+			BatteryMode:     types.BatteryModeLoad,
+			SolarMode:       types.SolarModeAny,
+		}
+		if status.ManagedTOUMode {
+			minSOC := int(math.Round(settings.Settings.GetMinBatterySOC(ctx, s.now(), status.Timestamp.Location(), currentPrice)))
+			if _, err := s.setESSModes(ctx, siteID, essSystem, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{
+				MinimumSOC:   minSOC,
+				CurrentPrice: currentPrice,
+			}, settings); err != nil {
+				log.Ctx(ctx).ErrorContext(ctx, "failed to set modes while paused", slog.Any("error", err))
+			}
 		}
 		if err := s.storage.InsertAction(ctx, siteID, action); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to insert paused action", slog.Any("error", err))
@@ -524,6 +535,44 @@ func (s *Server) performSiteUpdate(
 	}
 	notifData.simData = decision.SimData
 
+	// When release is staging, call Plan in addition to Decide.
+	// Log a warning if they produce different actions, but always perform the Plan action on staging.
+	if strings.EqualFold(s.release, "staging") {
+		planDecision, _, planErr := s.controller.Plan(ctx, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings, latestAction)
+		if planErr != nil {
+			log.Ctx(ctx).WarnContext(ctx, "controller plan failed on staging", slog.Any("error", planErr))
+		} else {
+			decideAct := decision.Action
+			planAct := planDecision.Action
+			diffMode := decideAct.BatteryMode != planAct.BatteryMode
+			diffSolar := decideAct.SolarMode != planAct.SolarMode
+			diffChargeToSOC := decideAct.ChargeToSOC != planAct.ChargeToSOC
+			diffReason := decideAct.Reason != planAct.Reason
+			if diffMode || diffSolar || diffChargeToSOC || diffReason {
+				log.Ctx(ctx).WarnContext(
+					ctx,
+					"plan and decide produced different actions",
+					slog.String("siteID", siteID),
+					slog.Int("decideBatteryMode", int(decideAct.BatteryMode)),
+					slog.Int("planBatteryMode", int(planAct.BatteryMode)),
+					slog.Int("decideSolarMode", int(decideAct.SolarMode)),
+					slog.Int("planSolarMode", int(planAct.SolarMode)),
+					slog.Int("decideChargeToSOC", decideAct.ChargeToSOC),
+					slog.Int("planChargeToSOC", planAct.ChargeToSOC),
+					slog.String("decideReason", string(decideAct.Reason)),
+					slog.String("planReason", string(planAct.Reason)),
+					slog.String("decideDescription", decideAct.Description),
+					slog.String("planDescription", planAct.Description),
+				)
+			}
+			// Always perform the Plan action on staging
+			if planDecision.SimData == nil {
+				planDecision.SimData = decision.SimData
+			}
+			decision = planDecision
+		}
+	}
+
 	action := decision.Action
 	action.SimulationParams = decision.SimulationParams
 	// Ensure timestamps match if not set
@@ -546,7 +595,15 @@ func (s *Server) performSiteUpdate(
 
 	// execute Action
 	minSOC := int(math.Round(settings.Settings.GetMinBatterySOC(ctx, s.now(), status.Timestamp.Location(), currentPrice)))
-	modesChanged, err := s.setESSModes(ctx, siteID, essSystem, action.BatteryMode, action.SolarMode, types.ModesOptions{ChargeToSOC: action.ChargeToSOC, MinimumSOC: minSOC}, settings)
+	if (action.BatteryMode == types.BatteryModeExport || action.BatteryMode == types.BatteryModeStandby) && action.ChargeToSOC > minSOC {
+		minSOC = action.ChargeToSOC
+	}
+	modesChanged, err := s.setESSModes(ctx, siteID, essSystem, action.BatteryMode, action.SolarMode, types.ModesOptions{
+		ChargeToSOC:         action.ChargeToSOC,
+		MinimumSOC:          minSOC,
+		TSScheduleModeUntil: action.TSScheduleModeUntil,
+		CurrentPrice:        currentPrice,
+	}, settings)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to set mode", slog.Any("error", err))
 		action.Description += fmt.Sprintf(" (FAILED: %v)", err)
@@ -606,14 +663,17 @@ func (s *Server) mergeUtilityVPPEvents(ctx context.Context, status types.SystemS
 						TSStart:     eventStart,
 						TSEnd:       eventEnd,
 						VPPSoc:      period.ReserveSOC,
+						Mandatory:   true,
 					}
 
 					var overlapsVPP bool
 					var overlapEvent types.VPPEvent
-					for _, existing := range status.VPPEvents {
+					for i, existing := range status.VPPEvents {
 						if candidate.TSStart.Before(existing.TSEnd) && existing.TSStart.Before(candidate.TSEnd) {
 							overlapsVPP = true
 							overlapEvent = existing
+							status.VPPEvents[i].Mandatory = true
+							status.VPPEvents[i].DollarsPerKWH = 0
 							break
 						}
 					}
@@ -654,6 +714,13 @@ func (s *Server) mergeUtilityVPPEvents(ctx context.Context, status types.SystemS
 				}
 				inEvent = false
 			}
+		}
+	}
+
+	// TODO: Find a better way to determine the export compensation price per VPP program (e.g. via utility API query or tariff schedule lookup)
+	for i := range status.VPPEvents {
+		if !status.VPPEvents[i].Mandatory && status.VPPEvents[i].DollarsPerKWH == 0 {
+			status.VPPEvents[i].DollarsPerKWH = 2.0
 		}
 	}
 
@@ -953,6 +1020,8 @@ func (s *Server) setESSModes(
 	case types.BatteryModeStandby:
 		// "self_consumption" is usually safe for idle too (just don't force charge)
 		changed, err = essSystem.SetModes(ctx, types.BatteryModeStandby, solarMode, opts)
+	case types.BatteryModeExport:
+		changed, err = essSystem.SetModes(ctx, types.BatteryModeExport, solarMode, opts)
 	}
 
 	if err != nil {

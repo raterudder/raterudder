@@ -129,6 +129,40 @@ describe('CurrentStatus', () => {
         expect(screen.getByText('🔋')).toBeInTheDocument();
     });
 
+    it('renders Direct Solar Export status correctly', () => {
+        const action: Action = {
+            ...defaultAction,
+            reason: ActionReason.DirectExport,
+            batteryMode: BatteryMode.Load,
+            solarMode: SolarMode.Export,
+            systemStatus: {
+                ...defaultAction.systemStatus!,
+                batterySOC: 60.0
+            }
+        };
+        render(<CurrentStatus action={action} />);
+        expect(screen.getByText('Direct Solar Export')).toBeInTheDocument();
+        expect(screen.getByText('Exporting Solar • Home on Battery')).toBeInTheDocument();
+        expect(screen.getByText('☀️')).toBeInTheDocument();
+    });
+
+    it('renders Peak Defense Standby status correctly', () => {
+        const action: Action = {
+            ...defaultAction,
+            reason: ActionReason.DirectExport,
+            batteryMode: BatteryMode.Standby,
+            solarMode: SolarMode.Export,
+            systemStatus: {
+                ...defaultAction.systemStatus!,
+                batterySOC: 25.0
+            }
+        };
+        render(<CurrentStatus action={action} />);
+        expect(screen.getByText('Peak Defense')).toBeInTheDocument();
+        expect(screen.getByText('Holding Reserve • Home on Solar')).toBeInTheDocument();
+        expect(screen.getByText('🛡️')).toBeInTheDocument();
+    });
+
     it('does not render price when currentPrice has uninitialized 0001-01-01 timestamp', () => {
         const action: Action = {
             ...defaultAction,
@@ -156,5 +190,31 @@ describe('CurrentStatus', () => {
         render(<CurrentStatus action={action} />);
         expect(screen.getByText('--')).toBeInTheDocument();
         expect(screen.queryByText('0.0%')).not.toBeInTheDocument();
+    });
+
+    it('suppresses Battery full text when action is DirectExport even with capacityAt set', () => {
+        const mockNow = new Date('2026-06-15T12:00:00Z');
+        vi.useFakeTimers();
+        vi.setSystemTime(mockNow);
+
+        const actionExport: Action = {
+            ...defaultAction,
+            reason: ActionReason.DirectExport,
+            batteryMode: BatteryMode.Load,
+            capacityAt: '2026-06-15T17:00:00Z',
+        };
+        const { rerender } = render(<CurrentStatus action={actionExport} />);
+        expect(screen.queryByText(/Battery full in/)).not.toBeInTheDocument();
+
+        const actionStandby: Action = {
+            ...defaultAction,
+            reason: ActionReason.DirectExport,
+            batteryMode: BatteryMode.Standby,
+            capacityAt: '2026-06-15T17:00:00Z',
+        };
+        rerender(<CurrentStatus action={actionStandby} />);
+        expect(screen.queryByText(/Battery full in/)).not.toBeInTheDocument();
+
+        vi.useRealTimers();
     });
 });

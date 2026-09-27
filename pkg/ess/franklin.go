@@ -51,10 +51,47 @@ type Franklin struct {
 	retryDelay2 time.Duration
 }
 
+type franklinWorkMode int
+
+const (
+	franklinWorkModeTimeOfUse           franklinWorkMode = 1 // Time-of-Use mode (TOU)
+	franklinWorkModeSelfConsumption     franklinWorkMode = 2 // Self-Consumption mode
+	franklinWorkModeEmergencyBackup     franklinWorkMode = 3 // Emergency Backup mode (reserve SOC locked to 100%)
+	franklinWorkModeSmartEnergyDispatch franklinWorkMode = 7 // Smart Energy Dispatch mode (cloud AI-driven optimization)
+
+	// Special runtime overlay mode IDs reported in RuntimeData.TOUID (JSON "mode"):
+	franklinOverlayModeStormHedge franklinWorkMode = 6 // Storm Hedge active override (grid charge, 100% reserve SOC)
+	franklinOverlayModeVPP        franklinWorkMode = 9 // Virtual Power Plant (VPP) demand response event active
+
+	// WorkMode aliases:
+	franklinWorkModeStormHedge    = franklinOverlayModeStormHedge
+	franklinWorkModeVPP           = franklinOverlayModeVPP
+	franklinWorkModeSmartDispatch = franklinWorkModeSmartEnergyDispatch
+)
+
+func (m franklinWorkMode) String() string {
+	switch m {
+	case franklinWorkModeTimeOfUse:
+		return "Time-of-Use"
+	case franklinWorkModeSelfConsumption:
+		return "Self-Consumption"
+	case franklinWorkModeEmergencyBackup:
+		return "Emergency Backup"
+	case franklinWorkModeSmartEnergyDispatch:
+		return "Smart Energy Dispatch"
+	case franklinOverlayModeStormHedge:
+		return "Storm Hedge"
+	case franklinOverlayModeVPP:
+		return "VPP"
+	default:
+		return fmt.Sprintf("WorkMode(%d)", int(m))
+	}
+}
+
 type franklinMode struct {
 	ID                int
 	Name              string
-	WorkMode          int
+	WorkMode          franklinWorkMode
 	OldIndex          int
 	ElectricityType   int
 	ReserveSOC        float64
@@ -498,7 +535,7 @@ func (f *Franklin) getRuntimeData(ctx context.Context) (franklinDeviceCompositeI
 		slog.Float64("loadKW", res.RuntimeData.PowerLoad),
 		slog.Float64("batteryKW", res.RuntimeData.PowerBattery),
 		slog.Int("alarms", len(res.CurrentAlarmList)),
-		slog.Int("mode", res.RuntimeData.TOUID),
+		slog.Int("mode", int(res.RuntimeData.TOUID)),
 		slog.Int64("timestamp", res.RuntimeData.Timestamp),
 	)
 
@@ -667,8 +704,8 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		batteryChargingDisabled = true
 	}
 
-	stormHedge := rd.RuntimeData.TOUID == 6
-	vppActive := rd.RuntimeData.TOUID == 9
+	stormHedge := rd.RuntimeData.TOUID == franklinOverlayModeStormHedge
+	vppActive := rd.RuntimeData.TOUID == franklinOverlayModeVPP
 
 	var storms []types.Storm
 	if stormHedge {
@@ -813,8 +850,8 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		GridKW:                  rd.RuntimeData.PowerGrid,
 		HomeKW:                  rd.RuntimeData.PowerLoad,
 		BatteryCapacityKWH:      di.TotalBatteryCapacityKWH,
-		EmergencyMode:           stormHedge || modes.currentMode.WorkMode == 3,
-		GridUnavailable:         rd.RuntimeData.OffGridFlag != 0,
+		EmergencyMode:           stormHedge || modes.currentMode.WorkMode == franklinWorkModeEmergencyBackup,
+		GridUnavailable:         rd.RuntimeData.OffGridFlag != franklinOffGridFlagOnGrid,
 		ElevatedMinBatterySOC:   modes.currentMode.ReserveSOC > 0 && modes.currentMode.ReserveSOC > f.settings.MinBatterySOC,
 		BatteryAboveMinSOC:      rd.RuntimeData.SOC >= modes.currentMode.ReserveSOC,
 		BatteryChargingDisabled: batteryChargingDisabled,
@@ -825,6 +862,7 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		VPPActive:               vppActive,
 		VPPSOC:                  modes.VPPSOC,
 		VPPEvents:               vppEvents,
+		ManagedTOUMode:          (modes.currentMode.WorkMode == franklinWorkModeTimeOfUse || rd.CurrentWorkMode == franklinWorkModeTimeOfUse) && (modes.currentMode.Name == "Direct Solar Export" || strings.Contains(modes.currentMode.Name, "RateRudder")),
 	}
 
 	log.Ctx(ctx).DebugContext(ctx, "franklin system status", slog.Any("status", status))
@@ -945,13 +983,15 @@ func (f *Franklin) setPowerControl(ctx context.Context, pc franklinGetPowerContr
 }
 
 type availableModes struct {
-	list              []franklinMode
-	selfConsumption   franklinMode
-	backup            franklinMode
-	currentMode       franklinMode
-	stormHedgeEnabled int
-	VPPSOC            float64
-	VPPApplicable     bool
+	list                []franklinMode
+	touMode             franklinMode
+	selfConsumption     franklinMode
+	backup              franklinMode
+	smartEnergyDispatch franklinMode
+	currentMode         franklinMode
+	stormHedgeEnabled   int
+	VPPSOC              float64
+	VPPApplicable       bool
 }
 
 func (f *Franklin) getAvailableModes(ctx context.Context) (availableModes, error) {
@@ -969,8 +1009,10 @@ func (f *Franklin) getAvailableModes(ctx context.Context) (availableModes, error
 		return availableModes{}, err
 	}
 
+	var tou franklinMode
 	var sc franklinMode
 	var backup franklinMode
+	var smartDispatch franklinMode
 	var current franklinMode
 	var first franklinMode
 	foundIDs := make([]string, len(res.List))
@@ -986,21 +1028,25 @@ func (f *Franklin) getAvailableModes(ctx context.Context) (availableModes, error
 			CanEditReserveSOC: item.CanEditReserveSOC,
 		}
 		switch item.WorkMode {
-		case 1: // time-of-use
+		case franklinWorkModeTimeOfUse:
 			modes[i] = m
-		case 2: // self consumption
+			tou = modes[i]
+		case franklinWorkModeSelfConsumption:
 			modes[i] = m
 			sc = modes[i]
-		case 3: // backup
+		case franklinWorkModeEmergencyBackup:
 			modes[i] = m
 			backup = modes[i]
+		case franklinWorkModeSmartEnergyDispatch:
+			modes[i] = m
+			smartDispatch = modes[i]
 		default:
 			log.Ctx(ctx).WarnContext(
 				ctx,
 				"unknown work mode",
 				slog.Int("id", item.ID),
 				slog.String("name", item.Name),
-				slog.Int("workMode", item.WorkMode),
+				slog.Int("workMode", int(item.WorkMode)),
 				slog.Int("oldIndex", item.OldIndex),
 			)
 		}
@@ -1024,17 +1070,362 @@ func (f *Franklin) getAvailableModes(ctx context.Context) (availableModes, error
 	}
 
 	return availableModes{
-		list:              modes,
-		selfConsumption:   sc,
-		backup:            backup,
-		stormHedgeEnabled: res.StormHedgeEnabled,
-		currentMode:       current,
-		VPPSOC:            res.VPPSOC.VPPSoc,
-		VPPApplicable:     res.VPPSOC.VPPApplicable,
+		list:                modes,
+		touMode:             tou,
+		selfConsumption:     sc,
+		backup:              backup,
+		smartEnergyDispatch: smartDispatch,
+		stormHedgeEnabled:   res.StormHedgeEnabled,
+		currentMode:         current,
+		VPPSOC:              res.VPPSOC.VPPSoc,
+		VPPApplicable:       res.VPPSOC.VPPApplicable,
 	}, nil
 }
 
-// SetModes sets the battery and solar modes for the franklin system
+func (f *Franklin) getTOUTemplate(ctx context.Context) (franklinTOUTemplateResponse, error) {
+	params := url.Values{}
+	params.Set("gatewayId", f.gatewayID)
+
+	req, err := f.newGetRequest(ctx, "hes-gateway/terminal/tou/getTouDispatchDetail", params)
+	if err != nil {
+		return franklinTOUTemplateResponse{}, err
+	}
+
+	var res franklinTOUTemplateResponse
+	if err := f.doRequest(req, &res); err != nil {
+		return franklinTOUTemplateResponse{}, err
+	}
+
+	return res, nil
+}
+
+func (f *Franklin) saveExportTouDispatch(ctx context.Context, start time.Time, until time.Time, dispatchID franklinDispatchID) error {
+	roundedStart := roundTOUPeriodStart(start)
+	roundedUntil := roundTOUPeriodEnd(until)
+	if !roundedUntil.After(roundedStart) {
+		roundedUntil = roundedStart.Add(30 * time.Minute)
+	}
+
+	tplRes, err := f.getTOUTemplate(ctx)
+	if err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to get franklin tou dispatch detail, using defaults", slog.Any("error", err))
+	}
+	countryID := tplRes.Template.CountryID
+	if countryID == 0 {
+		countryID = 2 // default to United States
+	}
+	provinceID := tplRes.Template.ProvinceID
+	if provinceID == 0 {
+		provinceID = 39 // default to California
+	}
+
+	if f.settings.DryRun {
+		log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated franklin saveTouDispatch",
+			slog.Time("start", roundedStart),
+			slog.Time("until", roundedUntil),
+			slog.Int("dispatchID", int(dispatchID)),
+			slog.Int("countryID", countryID),
+			slog.Int("provinceID", provinceID),
+		)
+		return nil
+	}
+
+	log.Ctx(ctx).DebugContext(ctx, "saving franklin tou dispatch",
+		slog.Time("start", roundedStart),
+		slog.Time("until", roundedUntil),
+		slog.Int("dispatchID", int(dispatchID)),
+		slog.Int("countryID", countryID),
+		slog.Int("provinceID", provinceID),
+	)
+
+	details := buildExportTouDetails(start, until, dispatchID)
+
+	payload := map[string]any{
+		"template": map[string]any{
+			"gatewayId":          f.gatewayID,
+			"electricCompany":    "RateRudder",
+			"eletricCompanyId":   -1,
+			"name":               "Direct Solar Export",
+			"electricityType":    1,
+			"workMode":           int(franklinWorkModeTimeOfUse),
+			"countryId":          countryID,
+			"provinceId":         provinceID,
+			"eleCompanyFullName": "RateRudder Dynamic Solar Export",
+			"tariffName":         "Direct Solar Export",
+		},
+		"strategyList": []map[string]any{
+			{
+				"seasonName": "All Year",
+				"month":      "1,2,3,4,5,6,7,8,9,10,11,12",
+				"dayTypeVoList": []map[string]any{
+					{
+						"dayName":      "everyDay",
+						"dayType":      3,
+						"detailVoList": details,
+					},
+				},
+			},
+		},
+		"coverContentFlag": false,
+	}
+
+	req, err := f.newPostJSONRequest(ctx, "hes-gateway/terminal/tou/saveTouDispatch", payload)
+	if err != nil {
+		return err
+	}
+	if err := f.doRequest(req, nil); err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to save tou dispatch", slog.Any("error", err))
+		return err
+	}
+	return nil
+}
+
+func buildExportTouDetails(start, until time.Time, dispatchID franklinDispatchID) []franklinDetailVoItem {
+	roundedStart := roundTOUPeriodStart(start)
+	roundedUntil := roundTOUPeriodEnd(until)
+	if !roundedUntil.After(roundedStart) {
+		roundedUntil = roundedStart.Add(30 * time.Minute)
+	}
+
+	startDay := time.Date(roundedStart.Year(), roundedStart.Month(), roundedStart.Day(), 0, 0, 0, 0, roundedStart.Location())
+	untilDay := time.Date(roundedUntil.Year(), roundedUntil.Month(), roundedUntil.Day(), 0, 0, 0, 0, roundedUntil.Location())
+	crossesMidnight := !untilDay.Equal(startDay) && !(roundedUntil.Hour() == 0 && roundedUntil.Minute() == 0)
+	startStr := roundedStart.Format("15:04")
+
+	var details []franklinDetailVoItem
+	if crossesMidnight {
+		nextDayEndStr := roundedUntil.Format("15:04")
+		if nextDayEndStr >= startStr {
+			details = append(details, franklinDetailVoItem{
+				StartHourTime: "00:00",
+				EndHourTime:   "24:00",
+				WaveType:      2,
+				Name:          "On-peak",
+				DispatchID:    int(dispatchID),
+			})
+		} else {
+			details = append(details, franklinDetailVoItem{
+				StartHourTime: "00:00",
+				EndHourTime:   nextDayEndStr,
+				WaveType:      2,
+				Name:          "On-peak",
+				DispatchID:    int(dispatchID),
+			})
+			details = append(details, franklinDetailVoItem{
+				StartHourTime: nextDayEndStr,
+				EndHourTime:   startStr,
+				WaveType:      0,
+				Name:          "Off-peak",
+				DispatchID:    int(franklinDispatchSelfConsumption),
+			})
+			details = append(details, franklinDetailVoItem{
+				StartHourTime: startStr,
+				EndHourTime:   "24:00",
+				WaveType:      2,
+				Name:          "On-peak",
+				DispatchID:    int(dispatchID),
+			})
+		}
+	} else {
+		endStr := roundedUntil.Format("15:04")
+		if (roundedUntil.Hour() == 0 && roundedUntil.Minute() == 0) || roundedUntil.Day() != roundedStart.Day() {
+			endStr = "24:00"
+		}
+		if startStr != "00:00" {
+			details = append(details, franklinDetailVoItem{
+				StartHourTime: "00:00",
+				EndHourTime:   startStr,
+				WaveType:      0,
+				Name:          "Off-peak",
+				DispatchID:    int(franklinDispatchSelfConsumption),
+			})
+		}
+		details = append(details, franklinDetailVoItem{
+			StartHourTime: startStr,
+			EndHourTime:   endStr,
+			WaveType:      2,
+			Name:          "On-peak",
+			DispatchID:    int(dispatchID),
+		})
+		if endStr != "24:00" {
+			details = append(details, franklinDetailVoItem{
+				StartHourTime: endStr,
+				EndHourTime:   "24:00",
+				WaveType:      0,
+				Name:          "Off-peak",
+				DispatchID:    int(franklinDispatchSelfConsumption),
+			})
+		}
+	}
+	return details
+}
+
+func parseTOUTimeOfDay(timeStr string, baseDate time.Time) (time.Time, bool) {
+	if timeStr == "24:00" {
+		return baseDate.Add(24 * time.Hour), true
+	}
+	parts := strings.Split(timeStr, ":")
+	if len(parts) < 2 {
+		return time.Time{}, false
+	}
+	h, err1 := strconv.Atoi(parts[0])
+	m, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return time.Time{}, false
+	}
+	return time.Date(baseDate.Year(), baseDate.Month(), baseDate.Day(), h, m, 0, 0, baseDate.Location()), true
+}
+
+func isFranklinScheduleMatch(strategies []franklinTOUStrategy, targetUntil time.Time, dispatchID franklinDispatchID, now time.Time) bool {
+	// RateRudder TOU schedules always provision a single "All Year" strategy covering all 12 months,
+	// with a single "everyDay" (DayType == 3) day type.
+	// If the existing schedule has multiple seasons or day types, it does not match RateRudder's structure.
+	if len(strategies) != 1 {
+		return false
+	}
+	s := strategies[0]
+	if len(s.DayTypeVoList) != 1 {
+		return false
+	}
+	dt := s.DayTypeVoList[0]
+	if dt.DayType != 3 && !strings.Contains(strings.ToLower(dt.DayName), "every") && !strings.Contains(strings.ToLower(dt.DayName), "all") {
+		return false
+	}
+
+	// Verify all existing segments have expected dispatches and collect on-peak segments.
+	var existingOnPeaks []franklinDetailVoItem
+	for _, d := range dt.DetailVoList {
+		if d.WaveType == 2 {
+			if d.DispatchID != int(dispatchID) {
+				return false
+			}
+			existingOnPeaks = append(existingOnPeaks, d)
+		} else if d.WaveType == 0 {
+			if d.DispatchID != int(franklinDispatchSelfConsumption) && d.DispatchID != 0 {
+				return false
+			}
+		}
+	}
+	if len(existingOnPeaks) == 0 || len(existingOnPeaks) > 2 {
+		return false
+	}
+
+	loc := targetUntil.Location()
+	nowInLoc := now.In(loc)
+	targetUntilInLoc := targetUntil.In(loc)
+	roundedTargetUntil := roundTOUPeriodEnd(targetUntilInLoc)
+
+	targetDetails := buildExportTouDetails(nowInLoc, targetUntilInLoc, dispatchID)
+	var targetOnPeaks []franklinDetailVoItem
+	for _, d := range targetDetails {
+		if d.WaveType == 2 {
+			targetOnPeaks = append(targetOnPeaks, d)
+		}
+	}
+	if len(targetOnPeaks) == 0 {
+		return false
+	}
+
+	// Case 1: Target crosses midnight (has 2 on-peak segments: morning 00:00-morningEnd, evening eveningStart-24:00)
+	if len(targetOnPeaks) == 2 {
+		if len(existingOnPeaks) != 2 {
+			return false
+		}
+		var eMorning, eEvening *franklinDetailVoItem
+		for i := range existingOnPeaks {
+			seg := &existingOnPeaks[i]
+			if seg.StartHourTime == "00:00" {
+				eMorning = seg
+			}
+			if seg.EndHourTime == "24:00" {
+				eEvening = seg
+			}
+		}
+		if eMorning == nil || eEvening == nil || eMorning == eEvening {
+			return false
+		}
+
+		// Morning segment end time check (within 10m of targetUntil or roundedTargetUntil)
+		eMorningEnd, ok1 := parseTOUTimeOfDay(eMorning.EndHourTime, targetUntilInLoc)
+		if !ok1 {
+			return false
+		}
+		if math.Abs(eMorningEnd.Sub(targetUntilInLoc).Minutes()) > 10 && math.Abs(eMorningEnd.Sub(roundedTargetUntil).Minutes()) > 10 {
+			return false
+		}
+
+		// Evening segment start time check (already active or within 15m of target start)
+		var tEvening *franklinDetailVoItem
+		for i := range targetOnPeaks {
+			if targetOnPeaks[i].EndHourTime == "24:00" {
+				tEvening = &targetOnPeaks[i]
+				break
+			}
+		}
+		if tEvening == nil {
+			return false
+		}
+		eEveningStart, ok2 := parseTOUTimeOfDay(eEvening.StartHourTime, nowInLoc)
+		tEveningStart, ok3 := parseTOUTimeOfDay(tEvening.StartHourTime, nowInLoc)
+		if !ok2 || !ok3 {
+			return false
+		}
+		if eEveningStart.After(nowInLoc) && math.Abs(eEveningStart.Sub(tEveningStart).Minutes()) > 15 {
+			return false
+		}
+		return true
+	}
+
+	// Case 2: Target does not cross midnight (1 on-peak segment)
+	tSeg := targetOnPeaks[0]
+	if tSeg.StartHourTime == "00:00" && tSeg.EndHourTime == "24:00" {
+		return len(existingOnPeaks) == 1 && existingOnPeaks[0].StartHourTime == "00:00" && existingOnPeaks[0].EndHourTime == "24:00"
+	}
+
+	// Subcase 2a: Existing has 1 on-peak segment
+	if len(existingOnPeaks) == 1 {
+		eSeg := existingOnPeaks[0]
+		eStartTime, ok1 := parseTOUTimeOfDay(eSeg.StartHourTime, nowInLoc)
+		eEndTime, ok2 := parseTOUTimeOfDay(eSeg.EndHourTime, nowInLoc)
+		tStartTime, ok3 := parseTOUTimeOfDay(tSeg.StartHourTime, nowInLoc)
+		if !ok1 || !ok2 || !ok3 {
+			return false
+		}
+		if math.Abs(eEndTime.Sub(targetUntilInLoc).Minutes()) > 10 && math.Abs(eEndTime.Sub(roundedTargetUntil).Minutes()) > 10 {
+			return false
+		}
+		// Already active: eStartTime <= nowInLoc < eEndTime, or start within 15 mins
+		if (eStartTime.After(nowInLoc) || !nowInLoc.Before(eEndTime)) && math.Abs(eStartTime.Sub(tStartTime).Minutes()) > 15 {
+			return false
+		}
+		return true
+	}
+
+	// Subcase 2b: Existing was provisioned across midnight (2 segments), and now is after midnight during morning segment
+	if len(existingOnPeaks) == 2 {
+		var eMorning *franklinDetailVoItem
+		for i := range existingOnPeaks {
+			if existingOnPeaks[i].StartHourTime == "00:00" {
+				eMorning = &existingOnPeaks[i]
+				break
+			}
+		}
+		if eMorning != nil {
+			eEndTime, ok := parseTOUTimeOfDay(eMorning.EndHourTime, nowInLoc)
+			if ok && !nowInLoc.Before(eEndTime) {
+				// Window already passed
+				return false
+			}
+			if ok && (math.Abs(eEndTime.Sub(targetUntilInLoc).Minutes()) <= 10 || math.Abs(eEndTime.Sub(roundedTargetUntil).Minutes()) <= 10) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// SetModes sets the operating modes of the system.
 func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode, opts types.ModesOptions) (bool, error) {
 	log.Ctx(ctx).DebugContext(ctx, "SetModes called", slog.Any("batteryMode", bat), slog.Any("solarMode", sol), slog.Any("opts", opts))
 	f.mu.Lock()
@@ -1054,8 +1445,8 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		return false, err
 	}
 
-	isStormHedge := rd.RuntimeData.TOUID == 6
-	isBackup := modes.currentMode.WorkMode == 3
+	isStormHedge := rd.RuntimeData.TOUID == franklinOverlayModeStormHedge
+	isBackup := modes.currentMode.WorkMode == franklinWorkModeEmergencyBackup
 	// TODO: restore checking isBackup when we are no longer using backup as a workaround
 	_ = isBackup
 
@@ -1086,100 +1477,153 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		minSOC = float64(opts.MinimumSOC)
 	}
 
-	switch bat {
-	case types.BatteryModeChargeAny:
-		if f.settings.GridChargeBatteries && pc.GridMaxFlag != franklinGridMaxFlagChargeFromGrid {
-			log.Ctx(ctx).WarnContext(ctx, "grid charging is disabled in power control, setting emergency backup mode to charge", slog.Any("opts", opts))
-			if modes.backup == (franklinMode{}) {
-				log.Ctx(ctx).ErrorContext(ctx, "backup mode not available", slog.Any("modes", modes))
-				return false, errors.New("backup mode not available")
-			}
-			targetMode = modes.backup
+	var scheduleChanged bool
+	if f.settings.ManageTOUSchedules && (sol == types.SolarModeExport || bat == types.BatteryModeExport) {
+		dispatchID := franklinDispatchAPowerToHome
+		if bat == types.BatteryModeStandby {
+			dispatchID = franklinDispatchAPowerOnStandby
+			newReserveSOC = max(math.Floor(rd.RuntimeData.SOC), minSOC)
+		} else if bat == types.BatteryModeExport {
+			dispatchID = franklinDispatchAPowerToHomeAndGrid
+			newReserveSOC = minSOC
 		} else {
-			// note: since we're not setting emergency backup mode solar will still be
-			// used to power the home first then spill over into the battery
+			// franklinDispatchAPowerToHome (Code F) has the battery supply home loads while solar exports to the grid.
+			newReserveSOC = minSOC
+		}
+
+		if opts.TSScheduleModeUntil.IsZero() {
+			log.Ctx(ctx).ErrorContext(ctx, "no schedule duration provided", slog.String("gatewayID", f.gatewayID))
+			return false, errors.New("missing schedule duration to provision tou mode")
+		}
+
+		loc := opts.TSScheduleModeUntil.Location()
+		startTime := time.Now().In(loc)
+		if rd.RuntimeData.Timestamp > 0 {
+			startTime = time.Unix(rd.RuntimeData.Timestamp, 0).In(loc)
+		}
+		scheduleMatched := false
+		if modes.touMode != (franklinMode{}) && modes.currentMode.WorkMode == franklinWorkModeTimeOfUse {
+			tplRes, err := f.getTOUTemplate(ctx)
+			if err == nil && isFranklinScheduleMatch(tplRes.StrategyList, opts.TSScheduleModeUntil, dispatchID, startTime) {
+				scheduleMatched = true
+				log.Ctx(ctx).DebugContext(ctx, "franklin tou schedule already matches, skipping saveTouDispatch",
+					slog.Time("until", opts.TSScheduleModeUntil),
+					slog.Int("dispatchID", int(dispatchID)),
+				)
+			}
+		}
+
+		if !scheduleMatched {
+			log.Ctx(ctx).DebugContext(ctx, "saving franklin tou schedule",
+				slog.Time("start", startTime),
+				slog.Time("until", opts.TSScheduleModeUntil),
+				slog.Int("dispatchID", int(dispatchID)),
+			)
+			if err := f.saveExportTouDispatch(ctx, startTime, opts.TSScheduleModeUntil, dispatchID); err != nil {
+				return false, err
+			}
+			scheduleChanged = true
+		}
+
+		if modes.touMode == (franklinMode{}) {
+			if f.settings.DryRun {
+				log.Ctx(ctx).InfoContext(ctx, "dry run: franklin tou mode not configured on gateway, would've provisioned via saveTouDispatch",
+					slog.String("gatewayID", f.gatewayID),
+				)
+				modes.touMode = franklinMode{
+					WorkMode: franklinWorkModeTimeOfUse,
+					Name:     "Direct Solar Export",
+				}
+			} else {
+				log.Ctx(ctx).WarnContext(ctx, "franklin tou mode not configured on gateway, re-fetching modes after saving dispatch",
+					slog.String("gatewayID", f.gatewayID),
+				)
+				refreshedModes, err := f.getAvailableModes(ctx)
+				if err != nil {
+					log.Ctx(ctx).ErrorContext(ctx, "failed to re-fetch available modes after saving tou dispatch", slog.Any("error", err))
+					return false, err
+				}
+				modes = refreshedModes
+			}
+		}
+
+		if modes.touMode == (franklinMode{}) {
+			log.Ctx(ctx).ErrorContext(ctx, "franklin tou mode not available on gateway even after saving tou dispatch",
+				slog.String("gatewayID", f.gatewayID),
+				slog.Any("modes", modes.list),
+			)
+			return false, errors.New("franklin tou mode not available")
+		}
+
+		targetMode = modes.touMode
+	} else {
+		switch bat {
+		case types.BatteryModeChargeAny:
+			if f.settings.GridChargeBatteries && pc.GridMaxFlag != franklinGridMaxFlagChargeFromGrid {
+				log.Ctx(ctx).WarnContext(ctx, "grid charging is disabled in power control, setting emergency backup mode to charge", slog.Any("opts", opts))
+				if modes.backup == (franklinMode{}) {
+					log.Ctx(ctx).ErrorContext(ctx, "backup mode not available", slog.Any("modes", modes))
+					return false, errors.New("backup mode not available")
+				}
+				targetMode = modes.backup
+			} else {
+				// note: since we're not setting emergency backup mode solar will still be
+				// used to power the home first then spill over into the battery
+				if !sc.CanEditReserveSOC {
+					log.Ctx(ctx).WarnContext(ctx, "cannot edit reserve SOC")
+					return false, errors.New("cannot edit reserve SOC")
+				}
+				targetSOC := 100
+				if opts.ChargeToSOC != 0 {
+					targetSOC = opts.ChargeToSOC
+				}
+				newReserveSOC = float64(targetSOC)
+			}
+		case types.BatteryModeLoad, types.BatteryModeExport:
+			// we set the SOC to the minimum battery SOC to ensure we start discharging
+			// if we're somehow less than this soc, we'll charge from the solar, unless
+			// solar is unavailable then it'll charge from the grid
+			// it seems like this accepts an int value
+			newReserveSOC = minSOC
+		case types.BatteryModeStandby:
+			// we floor the SOC to ensure we don't set it to a value that would cause the
+			// battery to charge
 			if !sc.CanEditReserveSOC {
 				log.Ctx(ctx).WarnContext(ctx, "cannot edit reserve SOC")
 				return false, errors.New("cannot edit reserve SOC")
 			}
-			targetSOC := 100
-			if opts.ChargeToSOC != 0 {
-				targetSOC = opts.ChargeToSOC
-			}
-			newReserveSOC = float64(targetSOC)
+			// make sure we don't set it to less than the minimum battery SOC
+			newReserveSOC = max(math.Floor(rd.RuntimeData.SOC), minSOC)
+		case types.BatteryModeNoChange:
+			targetMode = modes.currentMode
+		default:
+			return false, fmt.Errorf("unknown battery mode: %v", bat)
 		}
-	case types.BatteryModeLoad:
-		// we set the SOC to the minimum battery SOC to ensure we start discharging
-		// if we're somehow less than this soc, we'll charge from the solar, unless
-		// solar is unavailable then it'll charge from the grid
-		// it seems like this accepts an int value
-		newReserveSOC = minSOC
-	case types.BatteryModeStandby:
-		// we floor the SOC to ensure we don't set it to a value that would cause the
-		// battery to charge
-		if !sc.CanEditReserveSOC {
-			log.Ctx(ctx).WarnContext(ctx, "cannot edit reserve SOC")
-			return false, errors.New("cannot edit reserve SOC")
-		}
-		// make sure we don't set it to less than the minimum battery SOC
-		newReserveSOC = max(math.Floor(rd.RuntimeData.SOC), minSOC)
-	case types.BatteryModeNoChange:
-		targetMode = modes.currentMode
-	default:
-		return false, fmt.Errorf("unknown battery mode: %v", bat)
 	}
 
-	if targetMode.WorkMode == 2 {
+	if targetMode.WorkMode == franklinWorkModeSelfConsumption || targetMode.WorkMode == franklinWorkModeTimeOfUse {
 		// we can't set it below 5
 		if newReserveSOC < 5 {
 			newReserveSOC = 5
 		}
 
 		// if franklin overshot our reserve SOC by less than 1 percent, ignore it
-		if math.Abs(newReserveSOC-sc.ReserveSOC) <= 1.0 {
-			newReserveSOC = sc.ReserveSOC
+		if math.Abs(newReserveSOC-targetMode.ReserveSOC) <= 1.0 {
+			newReserveSOC = targetMode.ReserveSOC
 		}
 	}
 
-	/*
-		PREVIOUS POWER CONTROL LOGIC (REMOVED):
-		Previously, Franklin allowed updating power control settings via setPowerControl
-		We used to dynamically toggle grid charging and solar export flags:
-
-		// Grid charging control (in BatteryMode switch):
-		// - BatteryModeChargeAny / BatteryModeLoad:
-		//     if f.settings.GridChargeBatteries { pc.GridMaxFlag = franklinGridMaxFlagChargeFromGrid }
-		//     else { pc.GridMaxFlag = franklinGridMaxFlagNoChargeFromGrid }
-		// - BatteryModeChargeSolar / BatteryModeStandby:
-		//     pc.GridMaxFlag = franklinGridMaxFlagNoChargeFromGrid
-
-		// Solar export control (in SolarMode switch):
-		// - SolarModeAny:
-		//     if f.settings.GridExportSolar && f.settings.GridExportBatteries { pc.GridFeedMaxFlag = franklinGridFeedMaxFlagBatteryAndSolar }
-		//     else if f.settings.GridExportSolar { pc.GridFeedMaxFlag = franklinGridFeedMaxFlagSolarOnly }
-		//     else { pc.GridFeedMaxFlag = franklinGridFeedMaxFlagNoExport }
-		// - SolarModeNoExport:
-		//     pc.GridFeedMaxFlag = franklinGridFeedMaxFlagNoExport
-
-		// if updatedPC { f.setPowerControl(ctx, pc) }
-
-		REASON FOR REMOVAL:
-		Franklin has disabled the ability to update control power settings
-		We can no longer freely enable or disable grid charging or export settings
-		via power control updates.
-		Instead, if grid charging is disabled in Franklin's power control settings
-		and we need to charge, we must fall back to
-		Emergency Backup Mode (workMode: 3).
-	*/
 	switch sol {
-	case types.SolarModeAny, types.SolarModeNoExport, types.SolarModeNoChange:
-		// Power control updates are disabled by Franklin, so solar export settings cannot be updated via setPowerControl.
+	case types.SolarModeExport, types.SolarModeAny, types.SolarModeNoExport, types.SolarModeNoChange:
+		// In FranklinWH, PCS power control (setPowerControl/setPowerControlV2) only configures static interconnection
+		// compliance caps (PCS limits, which require installer privileges) and does not command runtime export dispatch.
+		// Runtime export is controlled exclusively via TOU dispatch schedules (saveTouDispatch).
 	default:
 		return false, fmt.Errorf("unknown solar mode: %v", sol)
 	}
 
 	modeChanged := modes.currentMode.WorkMode != targetMode.WorkMode
-	socChanged := targetMode.WorkMode == 2 && math.Round(newReserveSOC) != math.Round(sc.ReserveSOC)
+	socChanged := (targetMode.WorkMode == franklinWorkModeSelfConsumption || targetMode.WorkMode == franklinWorkModeTimeOfUse) && math.Round(newReserveSOC) != math.Round(modes.currentMode.ReserveSOC)
 
 	if modeChanged || socChanged {
 		if f.settings.DryRun {
@@ -1188,27 +1632,27 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 					ctx,
 					"dry run: would've updated just soc",
 					slog.Int("soc", int(math.Round(newReserveSOC))),
-					slog.Int("workMode", targetMode.WorkMode),
+					slog.Int("workMode", int(targetMode.WorkMode)),
 				)
 			} else {
 				log.Ctx(ctx).DebugContext(
 					ctx,
 					"dry run: would've tou mode",
 					slog.Int("soc", int(math.Round(newReserveSOC))),
-					slog.Int("workMode", targetMode.WorkMode),
+					slog.Int("workMode", int(targetMode.WorkMode)),
 				)
 			}
 		} else {
-			if !modeChanged && targetMode.WorkMode == 2 {
+			if !modeChanged && targetMode.WorkMode == franklinWorkModeSelfConsumption {
 				log.Ctx(ctx).InfoContext(
 					ctx,
 					"updating franklin soc",
 					slog.Int("soc", int(math.Round(newReserveSOC))),
-					slog.Int("workMode", targetMode.WorkMode),
+					slog.Int("workMode", int(targetMode.WorkMode)),
 				)
 				params := url.Values{}
 				params.Set("gatewayId", f.gatewayID)
-				params.Set("workMode", strconv.Itoa(targetMode.WorkMode))
+				params.Set("workMode", strconv.Itoa(int(targetMode.WorkMode)))
 				params.Set("electricityType", strconv.Itoa(targetMode.ElectricityType))
 				params.Set("soc", strconv.Itoa(int(math.Round(newReserveSOC))))
 
@@ -1225,13 +1669,13 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 					ctx,
 					"updating franklin tou mode",
 					slog.Float64("soc", newReserveSOC),
-					slog.Int("workMode", targetMode.WorkMode),
+					slog.Int("workMode", int(targetMode.WorkMode)),
 				)
 
 				params := url.Values{}
 				params.Set("gatewayId", f.gatewayID)
 				params.Set("currendId", fmt.Sprint(targetMode.ID))
-				params.Set("workMode", fmt.Sprint(targetMode.WorkMode))
+				params.Set("workMode", strconv.Itoa(int(targetMode.WorkMode)))
 				params.Set("electricityType", fmt.Sprint(targetMode.ElectricityType))
 				params.Set("oldIndex", fmt.Sprint(targetMode.OldIndex))
 				params.Set("stromEn", fmt.Sprint(modes.stormHedgeEnabled))
@@ -1250,6 +1694,10 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 			}
 			return true, nil
 		}
+	}
+
+	if scheduleChanged {
+		return true, nil
 	}
 
 	return false, nil
@@ -1567,7 +2015,7 @@ type franklinCurrentAlarmVO struct {
 }
 
 type franklinDeviceCompositeInfoResult struct {
-	CurrentWorkMode  int                      `json:"currentWorkMode"`
+	CurrentWorkMode  franklinWorkMode         `json:"currentWorkMode"`
 	DeviceStatus     int                      `json:"deviceStatus"`
 	RuntimeData      franklinRuntimeData      `json:"runtimeData"`
 	Valid            bool                     `json:"valid"`
@@ -1577,24 +2025,15 @@ type franklinDeviceCompositeInfoResult struct {
 }
 
 type franklinRuntimeData struct {
-	// 6 is storm hedge active
-	// 9 is VPP active
-	TOUID    int    `json:"mode"`
-	ModeName string `json:"name"`
+	// Mode ID matching the active entry in getGatewayTouListV2 (e.g. 2236 for TOU, 2774 for Self-Consumption, 2775 for Backup).
+	// When special system overlay states are active, the gateway reports:
+	// franklinOverlayModeStormHedge (6) = Storm Hedge active (forces 100% reserve SOC and grid charge)
+	// franklinOverlayModeVPP (9) = VPP active (utility demand response event actively dispatching battery)
+	TOUID    franklinWorkMode `json:"mode"`
+	ModeName string           `json:"name"`
 
-	// 0 is standby
-	// 1 is charging
-	// 2 is discharging
-	// 3 is fault?
-	// 5 is off-grid standby
-	// 6 is off-grid charging
-	// 7 is off-grid discharging
-	// 8 is debug mode
-	RunStatus int `json:"run_status"`
-
-	// 0 means on-grid
-	// unclear what other values mean
-	OffGridFlag int `json:"offGirdFlag"` // misspelled in API
+	RunStatus   franklinRunStatus   `json:"run_status"`
+	OffGridFlag franklinOffGridFlag `json:"offGirdFlag"` // misspelled in API
 
 	SOC       float64   `json:"soc"`
 	Timestamp int64     `json:"timestamp"`
@@ -1659,6 +2098,26 @@ type franklinBatteryInfo struct {
 	PowerW     int    `json:"ratedPwr"`
 }
 
+type franklinOffGridFlag int
+
+const (
+	franklinOffGridFlagOnGrid  franklinOffGridFlag = 0
+	franklinOffGridFlagOffGrid franklinOffGridFlag = 1
+)
+
+type franklinRunStatus int
+
+const (
+	franklinRunStatusStandby            franklinRunStatus = 0
+	franklinRunStatusCharging           franklinRunStatus = 1
+	franklinRunStatusDischarging        franklinRunStatus = 2
+	franklinRunStatusFault              franklinRunStatus = 3
+	franklinRunStatusOffGridStandby     franklinRunStatus = 5
+	franklinRunStatusOffGridCharging    franklinRunStatus = 6
+	franklinRunStatusOffGridDischarging franklinRunStatus = 7
+	franklinRunStatusDebug              franklinRunStatus = 8
+)
+
 type franklinGridMaxFlag int
 
 const (
@@ -1674,28 +2133,86 @@ const (
 	franklinGridFeedMaxFlagBatteryAndSolar franklinGridFeedMaxFlag = 2
 )
 
+type franklinDispatchID int
+
+const (
+	franklinDispatchAPowerToHome           franklinDispatchID = 1 // aPower supplies home, solar exported to grid (code F)
+	franklinDispatchAPowerOnStandby        franklinDispatchID = 2 // aPower on standby, excess solar exported to grid (code B)
+	franklinDispatchAPowerChargesFromSolar franklinDispatchID = 3 // Solar charges aPower, grid supplies home (code E)
+	franklinDispatchSelfConsumption        franklinDispatchID = 6 // Home load priority: solar, aPower, grid (code D)
+	franklinDispatchAPowerToHomeAndGrid    franklinDispatchID = 7 // aPower supplies home & battery exports to grid, solar exported to grid (code H)
+	franklinDispatchAPowerChargesFromGrid  franklinDispatchID = 8 // Solar and grid charge aPower, grid supplies home (code G)
+	franklinDispatchZeroImport             franklinDispatchID = 9 // Zero import: home runs on battery (code I)
+)
+
 type franklinGetPowerControlSettingResult struct {
 	GridFeedMax     float64                 `json:"gridFeedMax"`
 	GridFeedMaxFlag franklinGridFeedMaxFlag `json:"gridFeedMaxFlag"`
 	GridMax         float64                 `json:"gridMax"`
 	GridMaxFlag     franklinGridMaxFlag     `json:"gridMaxFlag"`
 
-	// TODO: what is difference between global and non-global? does it only matter for tou? there is globalGridDischargeMax, globalGridChargeMax, globalSettingStatus (does this being 1 mean we use global instead?)
-	// TODO: what does peakDemandGridMax mean?
-	// TODO: what does isNem3, isCalifornia mean?
+	// Global limits (globalGridDischargeMax, globalGridChargeMax, globalSettingStatus)
+	// represent aggregate power caps across all installed aPower units combined.
+	// PeakDemandGridMax is the grid import power ceiling for peak demand management tariffs.
+	// IsNem3 / IsCalifornia flags indicate California Net Billing Tariff (NEM 3.0) recommendation profiles.
 }
 
 type franklinGatewayTouListV2Result struct {
-	CurrentID   int               `json:"currendId"` // yes, it's misspelled
+	CurrentID   int               `json:"currendId"` // yes, it's misspelled in the Franklin API
 	List        []franklinTouItem `json:"list"`
 	VPPSOC      franklinVPPSOC    `json:"vppSocVo"`
 	TodayVPPSOC franklinTodayVPP  `json:"todayVppVo"`
 
-	// TODO: validate this
+	// StormHedgeEnabled is 1 when Storm Hedge is active, 0 otherwise (misspelled in API).
 	StormHedgeEnabled int `json:"stromEn"`
 
-	// TODO: what does stopMode mean?
-	// TODO: what does gridChargeEn mean?
+	// StopMode is 0 for normal operation, 1 when emergency stop mode is active ("Disconnect the FranklinWH System").
+	StopMode int `json:"stopMode"`
+
+	// GridChargeEnabled is 1 when grid charging is enabled in TOU settings, 0 otherwise.
+	GridChargeEnabled *int `json:"gridChargeEn"`
+}
+
+type franklinTOUTemplateResponse struct {
+	Template     franklinTOUTemplate   `json:"template"`
+	StrategyList []franklinTOUStrategy `json:"strategyList"`
+}
+
+type franklinTOUStrategy struct {
+	ID            int                 `json:"id,omitempty"`
+	SeasonName    string              `json:"seasonName"`
+	Month         string              `json:"month"`
+	TemplateID    int                 `json:"templateId,omitempty"`
+	DayTypeVoList []franklinDayTypeVo `json:"dayTypeVoList"`
+}
+
+type franklinDayTypeVo struct {
+	ID           int                    `json:"id,omitempty"`
+	DayName      string                 `json:"dayName"`
+	DayType      int                    `json:"dayType"`
+	DetailVoList []franklinDetailVoItem `json:"detailVoList"`
+}
+
+type franklinDetailVoItem struct {
+	ID            int    `json:"id,omitempty"`
+	Name          string `json:"name"`
+	StartHourTime string `json:"startHourTime"`
+	EndHourTime   string `json:"endHourTime"`
+	WaveType      int    `json:"waveType"`
+	DispatchID    int    `json:"dispatchId"`
+}
+
+type franklinTOUTemplate struct {
+	ID                 int    `json:"id"`
+	GatewayID          string `json:"gatewayId"`
+	CountryID          int    `json:"countryId"`
+	ProvinceID         int    `json:"provinceId"`
+	CountryEn          string `json:"countryEn"`
+	ProvinceEn         string `json:"provinceEn"`
+	ElectricCompany    string `json:"electricCompany"`
+	EleCompanyFullName string `json:"eleCompanyFullName"`
+	TariffName         string `json:"tariffName"`
+	ElectricityType    int    `json:"electricityType"`
 }
 
 type franklinVPPSOC struct {
@@ -1716,19 +2233,20 @@ type franklinTodayVPP struct {
 }
 
 type franklinTouItem struct {
-	ID                 int     `json:"id"`
-	OldIndex           int     `json:"oldIndex"`
-	Name               string  `json:"name"`
-	ReserveSOC         float64 `json:"soc"`
-	MinSOC             float64 `json:"minSoc"`
-	MaxSOC             float64 `json:"maxSoc"`
-	CanEditReserveSOC  bool    `json:"editSocFlag"`
-	WorkMode           int     `json:"workMode"`
-	ElectricityType    int     `json:"electricityType"`
-	BackupForeverFlag  int     `json:"backupForeverFlag"`
-	TimerStartTimeUnix string  `json:"timerStartTimeZero"`
+	ID                 int              `json:"id"`
+	OldIndex           int              `json:"oldIndex"`
+	Name               string           `json:"name"`
+	ReserveSOC         float64          `json:"soc"`
+	MinSOC             float64          `json:"minSoc"`
+	MaxSOC             float64          `json:"maxSoc"`
+	CanEditReserveSOC  bool             `json:"editSocFlag"`
+	WorkMode           franklinWorkMode `json:"workMode"`
+	ElectricityType    int              `json:"electricityType"`
+	BackupForeverFlag  int              `json:"backupForeverFlag"`
+	TimerStartTimeUnix string           `json:"timerStartTimeZero"`
 
-	// TODO: what does multiSOCFlag mean?
+	// MultiSOCFlag indicates whether per-unit or tiered SOC limits are configured across multiple aPower units.
+	MultiSOCFlag bool `json:"multiSOCFlag"`
 }
 
 type franklinFHPPowerByDayResult struct {

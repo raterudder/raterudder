@@ -98,5 +98,62 @@ describe('ActionTimeline', () => {
         const li = container.querySelector('li');
         expect(li).toHaveClass('mode-standby');
     });
+
+    it('renders DirectExport action items for battery export, solar export, and standby', () => {
+        const actions: Action[] = [
+            {
+                timestamp: new Date().toISOString(),
+                batteryMode: BatteryMode.Export,
+                solarMode: SolarMode.Export,
+                reason: ActionReason.DirectExport,
+                description: 'Battery & Solar Grid Export',
+                currentPrice: { dollarsPerKWH: 0.50, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+            },
+            {
+                timestamp: new Date().toISOString(),
+                batteryMode: BatteryMode.Export,
+                solarMode: SolarMode.NoExport,
+                reason: ActionReason.DirectExport,
+                description: 'Direct Battery Export',
+                currentPrice: { dollarsPerKWH: 0.50, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+            },
+            {
+                timestamp: new Date().toISOString(),
+                batteryMode: BatteryMode.Standby,
+                solarMode: SolarMode.Export,
+                reason: ActionReason.DirectExport,
+                description: 'Peak Defense Standby',
+                currentPrice: { dollarsPerKWH: 0.40, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+            },
+            {
+                timestamp: new Date().toISOString(),
+                batteryMode: BatteryMode.Load,
+                solarMode: SolarMode.Export,
+                reason: ActionReason.DirectExport,
+                description: 'Direct Solar Export',
+                currentPrice: { dollarsPerKWH: 0.35, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+            }
+        ];
+        render(<ActionTimeline groupedActions={actions} />);
+        expect(screen.getByText('Battery & Solar Grid Export')).toBeInTheDocument();
+        expect(screen.getByText('Direct Battery Export')).toBeInTheDocument();
+        expect(screen.getByText('Peak Defense Standby')).toBeInTheDocument();
+        expect(screen.getByText('Direct Solar Export')).toBeInTheDocument();
+    });
+
+    it('suppresses Full tag for DirectExport actions even when capacityAt is set', () => {
+        const actions: Action[] = [
+            {
+                timestamp: new Date().toISOString(),
+                batteryMode: BatteryMode.Export,
+                solarMode: SolarMode.Export,
+                reason: ActionReason.DirectExport,
+                capacityAt: new Date(Date.now() + 3600000).toISOString(),
+                description: 'Direct Export'
+            }
+        ];
+        render(<ActionTimeline groupedActions={actions} />);
+        expect(screen.queryByText(/Full:/)).not.toBeInTheDocument();
+    });
 });
 

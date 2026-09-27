@@ -19,6 +19,16 @@ const (
 
 const fastTrackChargeWithin = 15 * time.Minute
 
+// touScheduleLeadTimeBuffer is the minimum duration a direct solar export or peak defense standby
+// window must remain active for the controller to emit a TOU schedule to the ESS.
+//
+// Systems like Tesla Powerwall and FranklinWH rely on periodic cloud polling and asynchronous
+// synchronization to apply Time-of-Use schedule changes, which can take up to 30 minutes in practice.
+// If a peak window has less than 30 minutes remaining, any newly pushed TOU schedule is likely to
+// take effect after the peak has already ended, resulting in zero economic benefit, battery desynchronization,
+// or leaving the ESS stuck in a stale TOU mode post-peak.
+const touScheduleLeadTimeBuffer = 30 * time.Minute
+
 // Decision represents the result of the decision logic.
 type Decision struct {
 	Action           types.Action
@@ -43,11 +53,16 @@ func NewController() *Controller {
 
 // DecisionResult represents the components of a decision.
 type DecisionResult struct {
-	BatteryMode types.BatteryMode
-	Reason      types.ActionReason
-	Description string
-	FuturePrice *types.Price
-	ChargeToSOC int
+	BatteryMode           types.BatteryMode
+	SolarMode             types.SolarMode
+	Reason                types.ActionReason
+	Description           string
+	FuturePrice           *types.Price
+	ChargeToSOC           int
+	TSScheduleModeUntil   time.Time
+	HitDeficitAt          time.Time
+	HitBufferedDeficitAt  time.Time
+	HitThresholdDeficitAt time.Time
 }
 
 // PlannedCharge represents the details of a planned future charge.
@@ -211,25 +226,44 @@ func (c *Controller) Decide(
 	// Helper to build the final Decision object using the summary's computed times.
 	buildFinalDecision := func(dr *DecisionResult) Decision {
 		hitDeficitAt := summary.HitDeficitAt
-		if hitDeficitAt.IsZero() {
+		if !dr.HitDeficitAt.IsZero() {
+			hitDeficitAt = dr.HitDeficitAt
+		} else if hitDeficitAt.IsZero() {
 			hitDeficitAt = summary.HitBufferedDeficitAt
+		}
+		hitBufferedDeficitAt := summary.HitBufferedDeficitAt
+		if !dr.HitBufferedDeficitAt.IsZero() {
+			hitBufferedDeficitAt = dr.HitBufferedDeficitAt
+		}
+		hitThresholdDeficitAt := summary.HitThresholdDeficitAt
+		if !dr.HitThresholdDeficitAt.IsZero() {
+			hitThresholdDeficitAt = dr.HitThresholdDeficitAt
+		}
+		actSolarMode := solarMode
+		if dr.SolarMode != types.SolarModeNoChange {
+			actSolarMode = dr.SolarMode
+		}
+		hitCapacityAt := summary.HitCapacityAt
+		if dr.Reason == types.ActionReasonDirectExport {
+			hitCapacityAt = time.Time{}
 		}
 		return Decision{
 			Action: types.Action{
 				Timestamp:             now.UTC(),
 				SystemTimestamp:       now,
 				BatteryMode:           dr.BatteryMode,
-				SolarMode:             solarMode,
+				SolarMode:             actSolarMode,
 				Reason:                dr.Reason,
 				Description:           dr.Description,
 				CurrentPrice:          &currentPrice,
 				FuturePrice:           dr.FuturePrice,
 				SystemStatus:          currentStatus,
 				HitDeficitAt:          hitDeficitAt,
-				HitBufferedDeficitAt:  summary.HitBufferedDeficitAt,
-				HitThresholdDeficitAt: summary.HitThresholdDeficitAt,
-				HitCapacityAt:         summary.HitCapacityAt,
+				HitBufferedDeficitAt:  hitBufferedDeficitAt,
+				HitThresholdDeficitAt: hitThresholdDeficitAt,
+				HitCapacityAt:         hitCapacityAt,
 				ChargeToSOC:           dr.ChargeToSOC,
+				TSScheduleModeUntil:   dr.TSScheduleModeUntil,
 			},
 			SimulationParams: simParams,
 			SimData:          simData,
@@ -2804,6 +2838,8 @@ func drModeString(mode types.BatteryMode) string {
 		return "ChargeAny"
 	case types.BatteryModeLoad:
 		return "Load"
+	case types.BatteryModeExport:
+		return "Export"
 	default:
 		return fmt.Sprintf("Unknown(%d)", mode)
 	}

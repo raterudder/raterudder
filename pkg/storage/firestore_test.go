@@ -787,7 +787,7 @@ func TestFirestoreProvider(t *testing.T) {
 		})
 
 		t.Run("Get Empty Range", func(t *testing.T) {
-			start := time.Now().Add(-1000 * 24 * time.Hour).Truncate(24 * time.Hour).UTC()
+			start := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 			results, err := f.GetWeather(ctx, siteID, start, start.Add(24*time.Hour))
 			require.NoError(t, err)
 			assert.Len(t, results, 0)

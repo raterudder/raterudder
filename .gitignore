@@ -9,3 +9,5 @@ raterudder.exe
 *.pem
 /utilities
 /scratch
+/apps
+/downloaded-logs-*.json

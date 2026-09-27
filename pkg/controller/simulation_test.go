@@ -1331,6 +1331,58 @@ func TestSimulateState(t *testing.T) {
 			}
 		})
 
+		t.Run("Mandatory VPP Drains To Target Below User Reserve", func(t *testing.T) {
+			now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+			history := []types.EnergyStats{}
+			for i := 1; i <= 3; i++ {
+				pastDay := now.Add(time.Duration(-24*i) * time.Hour)
+				for h := 0; h < 24; h++ {
+					history = append(history, types.EnergyStats{
+						TSHourStart: pastDay.Add(time.Duration(h) * time.Hour),
+						SolarKWH:    0,
+						HomeKWH:     1.0,
+					})
+				}
+			}
+
+			currentStatus := types.SystemStatus{
+				BatteryCapacityKWH:    10.0,
+				BatterySOC:            50.0, // 5.0 kWh
+				BatteryKW:             0,
+				Timestamp:             now,
+				MaxBatteryChargeKW:    3.0,
+				MaxBatteryDischargeKW: 3.0,
+				VPPEvents: []types.VPPEvent{
+					{
+						Description: "Mandatory VPP Event",
+						TSStart:     now.Add(-1 * time.Hour), // Started at 11:00
+						TSEnd:       now.Add(2 * time.Hour),  // Ends at 14:00
+						VPPSoc:      5.0,                     // 5% SOC = 0.5 kWh target
+						Mandatory:   true,
+					},
+				},
+			}
+
+			settings := types.Settings{
+				MinBatterySOC:            20.0, // Regular reserve is 20% (2.0 kWh)
+				SolarTrendRatioMax:       3.0,
+				SolarBellCurveMultiplier: 0,
+				GridChargeBatteries:      false,
+				GridExportSolar:          true,
+			}
+
+			simData, _ := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
+			if assert.Len(t, simData, 24) {
+				// Hour 0 (12:00-13:00): Starts at 5.0 kWh. Discharges at max 3.0 kW -> 2.0 kWh (20% SOC).
+				assert.InDelta(t, 2.0, simData[0].BatteryKWH, 0.001)
+
+				// Hour 1 (13:00-14:00): Starts at 2.0 kWh.
+				// Even though MinBatterySOC is 20% (2.0 kWh), mandatory VPP has target of 5% (0.5 kWh).
+				// It must drain past 20% down to 0.5 kWh (discharging 1.5 kWh).
+				assert.InDelta(t, 0.5, simData[1].BatteryKWH, 0.001)
+			}
+		})
+
 		t.Run("VPP Event Opt-Out is Ignored", func(t *testing.T) {
 			now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
 			history := []types.EnergyStats{}
@@ -2093,6 +2145,52 @@ func TestSimulateState(t *testing.T) {
 			// For hour 2 (which is hour 3 of the EV charge), it looks back earlier to 23:00 (1.5 kW)
 			// and uses ~1.5 kW instead of 0.1 kW site minimum!
 			assert.InDelta(t, 1.5, model[2].AvgHomeLoadKWH, 0.3)
+		})
+
+		t.Run("PriceFallback_SimulationStartsBeforeCurrentPrice", func(t *testing.T) {
+			simStart := time.Date(2026, 9, 21, 7, 45, 0, 0, time.UTC)
+			hour8 := time.Date(2026, 9, 21, 8, 0, 0, 0, time.UTC)
+			hour9 := time.Date(2026, 9, 21, 9, 0, 0, 0, time.UTC)
+			hour10 := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+
+			status := types.SystemStatus{
+				BatterySOC:         50.0,
+				BatteryCapacityKWH: 13.5,
+				Timestamp:          simStart,
+			}
+
+			currPrice := types.Price{
+				TSStart:       hour8,
+				TSEnd:         hour9,
+				DollarsPerKWH: 0.12,
+				PeriodName:    "Off-Peak",
+				Provider:      "tou",
+			}
+			futurePrices := []types.Price{
+				{
+					TSStart:       hour9,
+					TSEnd:         hour10,
+					DollarsPerKWH: 0.35,
+					PeriodName:    "On-Peak",
+					Provider:      "tou",
+				},
+			}
+
+			settings := types.Settings{
+				MinBatterySOC: 20.0,
+				MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+					{UtilityPeriodName: "Off-Peak", MinBatterySOC: 25.0},
+					{UtilityPeriodName: "On-Peak", MinBatterySOC: 5.0},
+				},
+			}
+
+			simData, _ := c.SimulateState(ctx, simStart, status, currPrice, futurePrices, nil, nil, settings)
+			require.NotEmpty(t, simData)
+			// First step (07:45 to 08:00) should fall back to currPrice rather than empty struct
+			assert.Equal(t, 0.12, simData[0].Price.DollarsPerKWH)
+			assert.Equal(t, "Off-Peak", simData[0].Price.PeriodName)
+			// Should resolve Off-Peak MinBatterySOC (25.0% -> 13.5 * 0.25 = 3.375 kWh) instead of default (20.0% -> 2.70 kWh)
+			assert.InDelta(t, 13.5*0.25, simData[0].BatteryReserveKWH, 0.001)
 		})
 	})
 }

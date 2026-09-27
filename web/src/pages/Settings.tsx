@@ -780,6 +780,33 @@ const ESSForm = ({
                                 </div>
                             </Field.Root>
 
+                            {['tesla', 'franklin'].includes(settings.ess) && (!!settings.manageTOUSchedules || settings.release === 'staging' || (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('export') === 'true')) && (
+                                <Field.Root className="form-group switch-group compact" style={{ gridColumn: '1 / -1' }}>
+                                    <div className="switch-row">
+                                        <Switch.Root
+                                            id="manageTOUSchedules"
+                                            checked={settings.manageTOUSchedules ?? false}
+                                            onCheckedChange={(checked) => {
+                                                onChange('manageTOUSchedules', checked);
+                                                onChange('customGridSettings', true);
+                                            }}
+                                            className="switch-root"
+                                        >
+                                            <Switch.Thumb className="switch-thumb" />
+                                        </Switch.Root>
+                                        <Field.Label htmlFor="manageTOUSchedules">Direct Solar Export Optimization</Field.Label>
+                                    </div>
+                                    <Field.Description>
+                                        Allows excess solar power to export directly to the grid without charging the battery to 100% first.
+                                    </Field.Description>
+                                    {settings.manageTOUSchedules && (
+                                        <div className="warning-notice" style={{ marginTop: '0.5rem' }}>
+                                            ⚠️ Notice: This feature requires RateRudder to manage your battery's Time-Of-Use (TOU) settings, which will overwrite any existing TOU or tariff schedules configured in your manufacturer app.
+                                        </div>
+                                    )}
+                                </Field.Root>
+                            )}
+
                             {!settings.gridChargeBatteries && !settings.gridExportSolar && !settings.gridExportBatteries && (
                                 <div className="warning-notice" style={{ gridColumn: '1 / -1', marginTop: 0 }} data-testid="grid-restrictions-warning">
                                     Warning: All grid interactions are disabled. The system will only charge from solar and will not charge from the grid or export any energy.
@@ -2753,6 +2780,27 @@ const Settings = ({
                                 />
                                 <Field.Description>Max price difference to standby during cheap hours to export solar tomorrow.</Field.Description>
                             </Field.Root>
+
+                            {settings.gridExportBatteries && (
+                                <Field.Root className="form-group">
+                                    <Field.Label htmlFor="minBatteryExportDifference">
+                                        Battery Export Margin ($/kWh)
+                                        <HelpButton
+                                            title="Battery Export Margin"
+                                            description="The minimum profit difference ($/kWh) required between the export credit and the recharging/replacement cost to justify discharging the battery directly to the grid. Defaults to $0.07/kWh."
+                                        />
+                                    </Field.Label>
+                                    <Input
+                                        id="minBatteryExportDifference"
+                                        type="number"
+                                        step="0.01"
+                                        min="0"
+                                        value={settings.minBatteryExportDifferenceDollarsPerKWH ?? 0.07}
+                                        onChange={(e) => handleChange('minBatteryExportDifferenceDollarsPerKWH', parseFloat(e.target.value))}
+                                    />
+                                    <Field.Description>Minimum profit spread required to export battery energy directly to the grid.</Field.Description>
+                                </Field.Root>
+                            )}
 
                             <Field.Root className="form-group">
                                 <Field.Label htmlFor="minStartChargeMinutes">

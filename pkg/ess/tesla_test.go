@@ -1,12 +1,14 @@
 package ess
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -367,7 +369,100 @@ func TestTesla(t *testing.T) {
 		assert.True(t, status.EmergencyMode)
 		assert.True(t, status.VPPActive)
 		assert.Equal(t, 5.2, status.VPPKW)
+		assert.False(t, status.ManagedTOUMode)
 		assert.NotEmpty(t, status.TimeLocation, "TimeLocation should be populated")
+	})
+
+	t.Run("GetStatus ManagedTOUMode Autonomous", func(t *testing.T) {
+		t.Run("RateRudder Tariff", func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/1/energy_sites/1234/site_info":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"backup_reserve_percent": 20.0,
+							"default_real_mode":      "autonomous",
+							"nameplate_energy":       13500.0,
+							"tariff_content_v2": map[string]any{
+								"name":    "RateRudder Dynamic Solar Export TOU",
+								"utility": "RateRudder",
+							},
+						},
+					})
+				case "/api/1/energy_sites/1234/live_status":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"percentage_charged": 80.0,
+							"grid_status":        "Active",
+						},
+					})
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer ts.Close()
+
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "test-site", types.Settings{
+				ESS:           "tesla",
+				MinBatterySOC: 20.0,
+			})
+			require.NoError(t, err)
+
+			teslaSys := sys.(*Tesla)
+			teslaSys.token = "mock-access"
+			teslaSys.energySiteID = 1234
+			teslaSys.baseURL = ts.URL
+
+			status, err := sys.GetStatus(ctx)
+			require.NoError(t, err)
+			assert.True(t, status.ManagedTOUMode)
+		})
+
+		t.Run("Customer Utility Tariff", func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/1/energy_sites/1234/site_info":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"backup_reserve_percent": 20.0,
+							"default_real_mode":      "autonomous",
+							"nameplate_energy":       13500.0,
+							"tariff_content_v2": map[string]any{
+								"name":    "PG&E EV2-A",
+								"utility": "Pacific Gas & Electric",
+							},
+						},
+					})
+				case "/api/1/energy_sites/1234/live_status":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"percentage_charged": 80.0,
+							"grid_status":        "Active",
+						},
+					})
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer ts.Close()
+
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "test-site", types.Settings{
+				ESS:           "tesla",
+				MinBatterySOC: 20.0,
+			})
+			require.NoError(t, err)
+
+			teslaSys := sys.(*Tesla)
+			teslaSys.token = "mock-access"
+			teslaSys.energySiteID = 1234
+			teslaSys.baseURL = ts.URL
+
+			status, err := sys.GetStatus(ctx)
+			require.NoError(t, err)
+			assert.False(t, status.ManagedTOUMode, "Customer utility TOU must not report ManagedTOUMode")
+		})
 	})
 
 	t.Run("GetStatus Max Backup EmergencyMode", func(t *testing.T) {
@@ -1115,6 +1210,9 @@ func TestTesla(t *testing.T) {
 					gridCalled = true
 					json.NewDecoder(r.Body).Decode(&lastReq)
 					json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 200}})
+				case "/api/1/energy_sites/1234/time_of_use_settings":
+					json.NewDecoder(r.Body).Decode(&lastReq)
+					json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 200}})
 				default:
 					w.WriteHeader(http.StatusNotFound)
 				}
@@ -1177,6 +1275,68 @@ func TestTesla(t *testing.T) {
 			// Check one of the payloads to ensure correctness
 			assert.False(t, (*lastReq)["disallow_charge_from_grid_with_solar_installed"].(bool))
 			assert.Equal(t, "battery_ok", (*lastReq)["customer_preferred_export_rule"])
+		})
+
+		t.Run("SolarModeAny with GridExportSolar=true and initial never export sets pv_only", func(t *testing.T) {
+			sys, ts, mode, backup, grid, lastReq := setupTesla(t, "self_consumption", 20.0, false, "never", 50.0, false, types.Settings{
+				ESS:             "tesla",
+				MinBatterySOC:   20.0,
+				GridExportSolar: true,
+			})
+			defer ts.Close()
+
+			_, err := sys.SetModes(ctx, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{})
+			require.NoError(t, err)
+			assert.False(t, *mode)
+			assert.False(t, *backup)
+			assert.True(t, *grid)
+			assert.Equal(t, "pv_only", (*lastReq)["customer_preferred_export_rule"])
+		})
+
+		t.Run("SolarModeAny with GridExportSolar=false and initial never export stays never", func(t *testing.T) {
+			sys, ts, mode, backup, grid, _ := setupTesla(t, "self_consumption", 20.0, false, "never", 50.0, false, types.Settings{
+				ESS:             "tesla",
+				MinBatterySOC:   20.0,
+				GridExportSolar: false,
+			})
+			defer ts.Close()
+
+			_, err := sys.SetModes(ctx, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{})
+			require.NoError(t, err)
+			assert.False(t, *mode)
+			assert.False(t, *backup)
+			assert.False(t, *grid, "Grid export rule should NOT be changed when GridExportSolar is false")
+		})
+
+		t.Run("SolarModeAny with GridExportBatteries sets battery_ok", func(t *testing.T) {
+			sys, ts, mode, backup, grid, lastReq := setupTesla(t, "self_consumption", 20.0, false, "never", 50.0, false, types.Settings{
+				ESS:                 "tesla",
+				MinBatterySOC:       20.0,
+				GridExportBatteries: true,
+			})
+			defer ts.Close()
+
+			_, err := sys.SetModes(ctx, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{})
+			require.NoError(t, err)
+			assert.False(t, *mode)
+			assert.False(t, *backup)
+			assert.True(t, *grid)
+			assert.Equal(t, "battery_ok", (*lastReq)["customer_preferred_export_rule"])
+		})
+
+		t.Run("SolarModeNoExport with initial pv_only sets never", func(t *testing.T) {
+			sys, ts, mode, backup, grid, lastReq := setupTesla(t, "self_consumption", 20.0, false, "pv_only", 50.0, false, types.Settings{
+				ESS:           "tesla",
+				MinBatterySOC: 20.0,
+			})
+			defer ts.Close()
+
+			_, err := sys.SetModes(ctx, types.BatteryModeLoad, types.SolarModeNoExport, types.ModesOptions{})
+			require.NoError(t, err)
+			assert.False(t, *mode)
+			assert.False(t, *backup)
+			assert.True(t, *grid)
+			assert.Equal(t, "never", (*lastReq)["customer_preferred_export_rule"])
 		})
 
 		t.Run("Standby below min SOC", func(t *testing.T) {
@@ -1411,6 +1571,740 @@ func TestTesla(t *testing.T) {
 			require.NoError(t, err)
 			assert.True(t, backupCalled)
 			assert.Equal(t, 20.0, lastReq["backup_reserve_percent"])
+		})
+
+		t.Run("SolarExport State 1 Autonomous", func(t *testing.T) {
+			touCalled := false
+			modePayload := make(map[string]any)
+			backupPayload := make(map[string]any)
+			gridPayload := make(map[string]any)
+			touPayload := make(map[string]any)
+
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/1/energy_sites/1234/site_info":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"backup_reserve_percent": 50.0,
+							"default_real_mode":      "self_consumption",
+							"components": map[string]any{
+								"customer_preferred_export_rule":                 "battery_ok",
+								"disallow_charge_from_grid_with_solar_installed": false,
+							},
+						},
+					})
+				case "/api/1/energy_sites/1234/live_status":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"percentage_charged": 70.0,
+						},
+					})
+				case "/api/1/energy_sites/1234/operation":
+					json.NewDecoder(r.Body).Decode(&modePayload)
+					json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 200}})
+				case "/api/1/energy_sites/1234/backup":
+					json.NewDecoder(r.Body).Decode(&backupPayload)
+					json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 200}})
+				case "/api/1/energy_sites/1234/grid_import_export":
+					json.NewDecoder(r.Body).Decode(&gridPayload)
+					json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 200}})
+				case "/api/1/energy_sites/1234/time_of_use_settings":
+					touCalled = true
+					json.NewDecoder(r.Body).Decode(&touPayload)
+					json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 200}})
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer ts.Close()
+
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "test-site", types.Settings{
+				ESS:                 "tesla",
+				ManageTOUSchedules:  true,
+				MinBatterySOC:       20.0,
+				GridChargeBatteries: true,
+			})
+			require.NoError(t, err)
+
+			teslaSys := sys.(*Tesla)
+			teslaSys.token = "mock-access"
+			teslaSys.energySiteID = 1234
+			teslaSys.baseURL = ts.URL
+
+			until := time.Now().Add(4 * time.Hour)
+			price := types.Price{
+				DollarsPerKWH:                 0.45,
+				GridUseDollarsPerKWH:          0.05,
+				GenerationCreditDollarsPerKWH: 1.15,
+				SeparateGenerationCredit:      true,
+			}
+			changed, err := teslaSys.SetModes(ctx, types.BatteryModeLoad, types.SolarModeExport, types.ModesOptions{
+				TSScheduleModeUntil: until,
+				CurrentPrice:        price,
+			})
+			require.NoError(t, err)
+			assert.True(t, changed)
+			assert.Equal(t, "autonomous", modePayload["default_real_mode"])
+			assert.Equal(t, 20.0, backupPayload["backup_reserve_percent"])
+			assert.Equal(t, "pv_only", gridPayload["customer_preferred_export_rule"])
+			assert.True(t, touCalled)
+
+			tariffContent := touPayload["tou_settings"].(map[string]any)["tariff_content_v2"].(map[string]any)
+			energyCharges := tariffContent["energy_charges"].(map[string]any)["TODAY"].(map[string]any)["rates"].(map[string]any)
+			sellRates := tariffContent["sell_tariff"].(map[string]any)["energy_charges"].(map[string]any)["TODAY"].(map[string]any)["rates"].(map[string]any)
+			assert.Equal(t, 1.15, energyCharges["ON_PEAK"])
+			assert.Equal(t, 0.0, energyCharges["OFF_PEAK"])
+			assert.Equal(t, 1.15, sellRates["ON_PEAK"])
+			assert.Equal(t, 0.0, sellRates["OFF_PEAK"])
+			if beforeCharge, ok := tariffContent["energy_charges"].(map[string]any)["BEFORE"].(map[string]any); ok {
+				beforeRates := beforeCharge["rates"].(map[string]any)
+				assert.Equal(t, 0.0, beforeRates["OFF_PEAK"])
+				assert.Nil(t, beforeRates["ON_PEAK"])
+			}
+			if afterCharge, ok := tariffContent["energy_charges"].(map[string]any)["AFTER"].(map[string]any); ok {
+				afterRates := afterCharge["rates"].(map[string]any)
+				assert.Equal(t, 0.0, afterRates["OFF_PEAK"])
+				assert.Nil(t, afterRates["ON_PEAK"])
+			}
+		})
+
+		t.Run("SolarExport State 2 Standby", func(t *testing.T) {
+			touCalled := false
+			modePayload := make(map[string]any)
+			backupPayload := make(map[string]any)
+			gridPayload := make(map[string]any)
+			var currentTariffContent map[string]any
+			currentMode := "self_consumption"
+			currentReserve := 20.0
+			currentExportRule := "battery_ok"
+
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/1/energy_sites/1234/site_info":
+					resp := map[string]any{
+						"backup_reserve_percent": currentReserve,
+						"default_real_mode":      currentMode,
+						"components": map[string]any{
+							"customer_preferred_export_rule":                 currentExportRule,
+							"disallow_charge_from_grid_with_solar_installed": false,
+						},
+					}
+					if currentTariffContent != nil {
+						resp["tariff_content_v2"] = currentTariffContent
+					}
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": resp,
+					})
+				case "/api/1/energy_sites/1234/live_status":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"percentage_charged": 65.4,
+						},
+					})
+				case "/api/1/energy_sites/1234/operation":
+					json.NewDecoder(r.Body).Decode(&modePayload)
+					if m, ok := modePayload["default_real_mode"].(string); ok {
+						currentMode = m
+					}
+					json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 200}})
+				case "/api/1/energy_sites/1234/backup":
+					json.NewDecoder(r.Body).Decode(&backupPayload)
+					if b, ok := backupPayload["backup_reserve_percent"].(float64); ok {
+						currentReserve = b
+					}
+					json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 200}})
+				case "/api/1/energy_sites/1234/grid_import_export":
+					json.NewDecoder(r.Body).Decode(&gridPayload)
+					if g, ok := gridPayload["customer_preferred_export_rule"].(string); ok {
+						currentExportRule = g
+					}
+					json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 200}})
+				case "/api/1/energy_sites/1234/time_of_use_settings":
+					touCalled = true
+					var payload map[string]any
+					if err := json.NewDecoder(r.Body).Decode(&payload); err == nil {
+						if tsMap, ok := payload["tou_settings"].(map[string]any); ok {
+							if tc, ok := tsMap["tariff_content_v2"].(map[string]any); ok {
+								currentTariffContent = tc
+							}
+						}
+					}
+					json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 200}})
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer ts.Close()
+
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "test-site", types.Settings{
+				ESS:                 "tesla",
+				ManageTOUSchedules:  true,
+				MinBatterySOC:       20.0,
+				GridChargeBatteries: true,
+			})
+			require.NoError(t, err)
+
+			teslaSys := sys.(*Tesla)
+			teslaSys.token = "mock-access"
+			teslaSys.energySiteID = 1234
+			teslaSys.baseURL = ts.URL
+
+			until := time.Now().Add(4 * time.Hour)
+			changed, err := teslaSys.SetModes(ctx, types.BatteryModeStandby, types.SolarModeExport, types.ModesOptions{
+				TSScheduleModeUntil: until,
+			})
+			require.NoError(t, err)
+			assert.True(t, changed)
+			assert.Equal(t, "autonomous", modePayload["default_real_mode"], "mode should be updated to autonomous")
+			assert.Equal(t, 65.0, backupPayload["backup_reserve_percent"], "reserve should lock to floor of current SOC")
+			assert.Equal(t, "pv_only", gridPayload["customer_preferred_export_rule"])
+			assert.True(t, touCalled)
+
+			// Second call: already in autonomous mode, schedule matches -> TOU upload skipped
+			touCalled = false
+			changed2, err2 := teslaSys.SetModes(ctx, types.BatteryModeStandby, types.SolarModeExport, types.ModesOptions{
+				TSScheduleModeUntil: until,
+			})
+			require.NoError(t, err2)
+			assert.False(t, changed2)
+			assert.False(t, touCalled, "TOU settings should not be re-uploaded when schedule is unchanged and already in autonomous mode")
+		})
+
+		t.Run("BatteryExport Autonomous Mode and BatteryOk", func(t *testing.T) {
+			touCalled := false
+			modePayload := make(map[string]any)
+			backupPayload := make(map[string]any)
+			gridPayload := make(map[string]any)
+			currentMode := "self_consumption"
+			currentReserve := 50.0
+			currentExportRule := "pv_only"
+
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/1/energy_sites/1234/site_info":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"backup_reserve_percent": currentReserve,
+							"default_real_mode":      currentMode,
+							"components": map[string]any{
+								"customer_preferred_export_rule":                 currentExportRule,
+								"disallow_charge_from_grid_with_solar_installed": false,
+							},
+						},
+					})
+				case "/api/1/energy_sites/1234/live_status":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"percentage_charged": 85.0,
+						},
+					})
+				case "/api/1/energy_sites/1234/operation":
+					json.NewDecoder(r.Body).Decode(&modePayload)
+					if m, ok := modePayload["default_real_mode"].(string); ok {
+						currentMode = m
+					}
+					json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 200}})
+				case "/api/1/energy_sites/1234/backup":
+					json.NewDecoder(r.Body).Decode(&backupPayload)
+					if b, ok := backupPayload["backup_reserve_percent"].(float64); ok {
+						currentReserve = b
+					}
+					json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 200}})
+				case "/api/1/energy_sites/1234/grid_import_export":
+					json.NewDecoder(r.Body).Decode(&gridPayload)
+					if g, ok := gridPayload["customer_preferred_export_rule"].(string); ok {
+						currentExportRule = g
+					}
+					json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 200}})
+				case "/api/1/energy_sites/1234/time_of_use_settings":
+					touCalled = true
+					json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 200}})
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer ts.Close()
+
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "test-site", types.Settings{
+				ESS:                 "tesla",
+				ManageTOUSchedules:  true,
+				MinBatterySOC:       20.0,
+				GridChargeBatteries: true,
+			})
+			require.NoError(t, err)
+
+			teslaSys := sys.(*Tesla)
+			teslaSys.token = "mock-access"
+			teslaSys.energySiteID = 1234
+			teslaSys.baseURL = ts.URL
+
+			until := time.Now().Add(2 * time.Hour)
+			changed, err := teslaSys.SetModes(ctx, types.BatteryModeExport, types.SolarModeExport, types.ModesOptions{
+				TSScheduleModeUntil: until,
+			})
+			require.NoError(t, err)
+			assert.True(t, changed)
+			assert.Equal(t, "autonomous", modePayload["default_real_mode"], "mode should be updated to autonomous")
+			assert.Equal(t, 20.0, backupPayload["backup_reserve_percent"], "reserve should be set to minSOC")
+			assert.Equal(t, "battery_ok", gridPayload["customer_preferred_export_rule"], "export rule should be battery_ok")
+			assert.True(t, touCalled)
+		})
+
+		t.Run("BatteryExport Grid Rule Failure Aborts Without Entering Autonomous Mode", func(t *testing.T) {
+			touCalled := false
+			modeCalled := false
+			backupCalled := false
+			gridCalled := false
+			currentMode := "self_consumption"
+			currentReserve := 50.0
+			currentExportRule := "pv_only"
+
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/1/energy_sites/1234/site_info":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"backup_reserve_percent": currentReserve,
+							"default_real_mode":      currentMode,
+							"components": map[string]any{
+								"customer_preferred_export_rule":                 currentExportRule,
+								"disallow_charge_from_grid_with_solar_installed": false,
+							},
+						},
+					})
+				case "/api/1/energy_sites/1234/live_status":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"percentage_charged": 85.0,
+						},
+					})
+				case "/api/1/energy_sites/1234/operation":
+					modeCalled = true
+					json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 200}})
+				case "/api/1/energy_sites/1234/backup":
+					backupCalled = true
+					json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 200}})
+				case "/api/1/energy_sites/1234/grid_import_export":
+					gridCalled = true
+					w.WriteHeader(http.StatusForbidden)
+					json.NewEncoder(w).Encode(map[string]any{
+						"error":             "permission_denied",
+						"error_description": "battery export not allowed by utility",
+					})
+				case "/api/1/energy_sites/1234/time_of_use_settings":
+					touCalled = true
+					json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 200}})
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer ts.Close()
+
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "test-site", types.Settings{
+				ESS:                 "tesla",
+				ManageTOUSchedules:  true,
+				MinBatterySOC:       20.0,
+				GridChargeBatteries: true,
+			})
+			require.NoError(t, err)
+
+			teslaSys := sys.(*Tesla)
+			teslaSys.token = "mock-access"
+			teslaSys.energySiteID = 1234
+			teslaSys.baseURL = ts.URL
+
+			until := time.Now().Add(2 * time.Hour)
+			changed, err := teslaSys.SetModes(ctx, types.BatteryModeExport, types.SolarModeExport, types.ModesOptions{
+				TSScheduleModeUntil: until,
+			})
+			require.Error(t, err, "SetModes should return error when grid_import_export fails")
+			assert.False(t, changed)
+			assert.True(t, gridCalled, "grid_import_export should have been attempted")
+			assert.False(t, modeCalled, "operation mode should NOT be updated to autonomous if grid rule fails")
+			assert.False(t, touCalled, "TOU settings should NOT be uploaded if grid rule fails")
+			assert.False(t, backupCalled, "backup reserve should NOT be updated if grid rule fails")
+			assert.Equal(t, "pv_only", teslaSys.siteInfoCache.Components.CustomerPreferredExportRule, "cache should retain original export rule on failure")
+		})
+
+		t.Run("SolarExport Schedule Tariff Payload Verification", func(t *testing.T) {
+			sys := &Tesla{}
+			start := time.Date(2026, 7, 15, 14, 0, 0, 0, time.UTC)
+			until := time.Date(2026, 7, 15, 18, 0, 0, 0, time.UTC)
+
+			t.Run("Periods and Default Rates", func(t *testing.T) {
+				payload := sys.buildTOUTariffPayload(start, until, types.Price{})
+				require.NotNil(t, payload)
+
+				touSettings, ok := payload["tou_settings"].(map[string]any)
+				require.True(t, ok)
+				assert.Equal(t, "economics", touSettings["optimization_strategy"])
+				tariffContent, ok := touSettings["tariff_content_v2"].(map[string]any)
+				require.True(t, ok)
+
+				energyCharges, ok := tariffContent["energy_charges"].(map[string]any)
+				require.True(t, ok)
+				todayCharges, ok := energyCharges["TODAY"].(map[string]any)
+				require.True(t, ok)
+				buyRates, ok := todayCharges["rates"].(map[string]float64)
+				require.True(t, ok)
+				assert.Equal(t, 0.15, buyRates["ON_PEAK"])
+				assert.Equal(t, 0.0, buyRates["OFF_PEAK"])
+
+				sellTariff, ok := tariffContent["sell_tariff"].(map[string]any)
+				require.True(t, ok)
+				sellEnergyCharges, ok := sellTariff["energy_charges"].(map[string]any)
+				require.True(t, ok)
+				sellTodayCharges, ok := sellEnergyCharges["TODAY"].(map[string]any)
+				require.True(t, ok)
+				sellRates, ok := sellTodayCharges["rates"].(map[string]float64)
+				require.True(t, ok)
+				assert.Equal(t, 0.15, sellRates["ON_PEAK"])
+				assert.Equal(t, 0.0, sellRates["OFF_PEAK"])
+
+				seasons, ok := sellTariff["seasons"].(map[string]any)
+				require.True(t, ok)
+				todaySeason, ok := seasons["TODAY"].(map[string]any)
+				require.True(t, ok)
+				touPeriods, ok := todaySeason["tou_periods"].(map[string]any)
+				require.True(t, ok)
+
+				onPeak, ok := touPeriods["ON_PEAK"].(map[string]any)
+				require.True(t, ok)
+				onPeakPeriods, ok := onPeak["periods"].([]map[string]any)
+				require.True(t, ok)
+				if assert.Len(t, onPeakPeriods, 1) {
+					assert.Equal(t, 14, onPeakPeriods[0]["fromHour"])
+					assert.Equal(t, 0, onPeakPeriods[0]["fromMinute"])
+					assert.Equal(t, 18, onPeakPeriods[0]["toHour"])
+					assert.Equal(t, 0, onPeakPeriods[0]["toMinute"])
+				}
+
+				offPeak, ok := touPeriods["OFF_PEAK"].(map[string]any)
+				require.True(t, ok)
+				offPeakPeriods, ok := offPeak["periods"].([]map[string]any)
+				require.True(t, ok)
+				if assert.Len(t, offPeakPeriods, 2) {
+					// Period 1: 0 to 14
+					assert.Equal(t, 0, offPeakPeriods[0]["fromHour"])
+					assert.Equal(t, 14, offPeakPeriods[0]["toHour"])
+					// Period 2: 18 to 0 (midnight)
+					assert.Equal(t, 18, offPeakPeriods[1]["fromHour"])
+					assert.Equal(t, 0, offPeakPeriods[1]["toHour"])
+				}
+
+				// Verify BEFORE season
+				beforeSeason, ok := seasons["BEFORE"].(map[string]any)
+				require.True(t, ok)
+				assert.Equal(t, 1, beforeSeason["fromMonth"])
+				assert.Equal(t, 1, beforeSeason["fromDay"])
+				assert.Equal(t, 7, beforeSeason["toMonth"])
+				assert.Equal(t, 14, beforeSeason["toDay"])
+				beforeTou, ok := beforeSeason["tou_periods"].(map[string]any)
+				require.True(t, ok)
+				assert.Nil(t, beforeTou["ON_PEAK"])
+				assert.NotNil(t, beforeTou["OFF_PEAK"])
+				beforeCharges, ok := energyCharges["BEFORE"].(map[string]any)
+				require.True(t, ok)
+				beforeRates, ok := beforeCharges["rates"].(map[string]float64)
+				require.True(t, ok)
+				assert.Equal(t, 0.0, beforeRates["OFF_PEAK"])
+				_, hasBeforeOnPeak := beforeRates["ON_PEAK"]
+				assert.False(t, hasBeforeOnPeak)
+
+				// Verify AFTER season
+				afterSeason, ok := seasons["AFTER"].(map[string]any)
+				require.True(t, ok)
+				assert.Equal(t, 7, afterSeason["fromMonth"])
+				assert.Equal(t, 16, afterSeason["fromDay"])
+				assert.Equal(t, 12, afterSeason["toMonth"])
+				assert.Equal(t, 31, afterSeason["toDay"])
+				afterTou, ok := afterSeason["tou_periods"].(map[string]any)
+				require.True(t, ok)
+				assert.Nil(t, afterTou["ON_PEAK"])
+				assert.NotNil(t, afterTou["OFF_PEAK"])
+				afterCharges, ok := energyCharges["AFTER"].(map[string]any)
+				require.True(t, ok)
+				afterRates, ok := afterCharges["rates"].(map[string]float64)
+				require.True(t, ok)
+				assert.Equal(t, 0.0, afterRates["OFF_PEAK"])
+				_, hasAfterOnPeak := afterRates["ON_PEAK"]
+				assert.False(t, hasAfterOnPeak)
+			})
+
+			t.Run("Actual Rates Above Minimum Spread", func(t *testing.T) {
+				price := types.Price{
+					DollarsPerKWH:        0.40,
+					GridUseDollarsPerKWH: 0.05,
+				}
+				payload := sys.buildTOUTariffPayload(start, until, price)
+				require.NotNil(t, payload)
+
+				touSettings := payload["tou_settings"].(map[string]any)
+				assert.Equal(t, "economics", touSettings["optimization_strategy"])
+				tariffContent := touSettings["tariff_content_v2"].(map[string]any)
+				buyRates := tariffContent["energy_charges"].(map[string]any)["TODAY"].(map[string]any)["rates"].(map[string]float64)
+				sellRates := tariffContent["sell_tariff"].(map[string]any)["energy_charges"].(map[string]any)["TODAY"].(map[string]any)["rates"].(map[string]float64)
+
+				// Buy rate: 0.40 + 0.05 = 0.45; Sell rate: 0.40; peakRate = max(0.45, 0.40, 0.15) = 0.45
+				assert.Equal(t, 0.45, buyRates["ON_PEAK"])
+				assert.Equal(t, 0.0, buyRates["OFF_PEAK"])
+				assert.Equal(t, 0.45, sellRates["ON_PEAK"])
+				assert.Equal(t, 0.0, sellRates["OFF_PEAK"])
+			})
+
+			t.Run("Artificially Raised Rates When Below Minimum Spread", func(t *testing.T) {
+				price := types.Price{
+					DollarsPerKWH:        0.04,
+					GridUseDollarsPerKWH: 0.02,
+				}
+				payload := sys.buildTOUTariffPayload(start, until, price)
+				require.NotNil(t, payload)
+
+				touSettings := payload["tou_settings"].(map[string]any)
+				tariffContent := touSettings["tariff_content_v2"].(map[string]any)
+				buyRates := tariffContent["energy_charges"].(map[string]any)["TODAY"].(map[string]any)["rates"].(map[string]float64)
+				sellRates := tariffContent["sell_tariff"].(map[string]any)["energy_charges"].(map[string]any)["TODAY"].(map[string]any)["rates"].(map[string]float64)
+
+				// Buy rate 0.06 < 0.15, should be raised to 0.15
+				assert.Equal(t, 0.15, buyRates["ON_PEAK"])
+				assert.Equal(t, 0.0, buyRates["OFF_PEAK"])
+				// Sell rate 0.04 < 0.15, should be raised to 0.15
+				assert.Equal(t, 0.15, sellRates["ON_PEAK"])
+				assert.Equal(t, 0.0, sellRates["OFF_PEAK"])
+			})
+
+			t.Run("Negative Rates Artificially Raised", func(t *testing.T) {
+				price := types.Price{
+					DollarsPerKWH:        -0.05,
+					GridUseDollarsPerKWH: 0.02,
+				}
+				payload := sys.buildTOUTariffPayload(start, until, price)
+				require.NotNil(t, payload)
+
+				touSettings := payload["tou_settings"].(map[string]any)
+				tariffContent := touSettings["tariff_content_v2"].(map[string]any)
+				buyRates := tariffContent["energy_charges"].(map[string]any)["TODAY"].(map[string]any)["rates"].(map[string]float64)
+				sellRates := tariffContent["sell_tariff"].(map[string]any)["energy_charges"].(map[string]any)["TODAY"].(map[string]any)["rates"].(map[string]float64)
+
+				assert.Equal(t, 0.15, buyRates["ON_PEAK"])
+				assert.Equal(t, 0.0, buyRates["OFF_PEAK"])
+				assert.Equal(t, 0.15, sellRates["ON_PEAK"])
+				assert.Equal(t, 0.0, sellRates["OFF_PEAK"])
+			})
+
+			t.Run("Period Rounding Rules", func(t *testing.T) {
+				base := time.Date(2026, 7, 15, 14, 0, 0, 0, time.UTC)
+
+				// Start time: ALWAYS rounds down to nearest 00 or 30 minute boundary, never up into the future
+				assert.Equal(t, base, roundTOUPeriodStart(base.Add(5*time.Minute)))
+				assert.Equal(t, base, roundTOUPeriodStart(base.Add(14*time.Minute)))
+				assert.Equal(t, base, roundTOUPeriodStart(base.Add(15*time.Minute)))
+				assert.Equal(t, base, roundTOUPeriodStart(base.Add(25*time.Minute)))
+				assert.Equal(t, base, roundTOUPeriodStart(base.Add(29*time.Minute)))
+				assert.Equal(t, base.Add(30*time.Minute), roundTOUPeriodStart(base.Add(30*time.Minute)))
+				assert.Equal(t, base.Add(30*time.Minute), roundTOUPeriodStart(base.Add(45*time.Minute)))
+				assert.Equal(t, base.Add(30*time.Minute), roundTOUPeriodStart(base.Add(59*time.Minute)))
+
+				// Ending time:
+				// < 15 mins rounds down to :00
+				assert.Equal(t, base, roundTOUPeriodEnd(base.Add(5*time.Minute)))
+				assert.Equal(t, base, roundTOUPeriodEnd(base.Add(14*time.Minute)))
+
+				// 15 <= mins <= 30 rounds up to :30
+				assert.Equal(t, base.Add(30*time.Minute), roundTOUPeriodEnd(base.Add(15*time.Minute)))
+				assert.Equal(t, base.Add(30*time.Minute), roundTOUPeriodEnd(base.Add(25*time.Minute)))
+				assert.Equal(t, base.Add(30*time.Minute), roundTOUPeriodEnd(base.Add(30*time.Minute)))
+
+				// >= 31 mins rounds up to next hour :00
+				assert.Equal(t, base.Add(time.Hour), roundTOUPeriodEnd(base.Add(31*time.Minute)))
+				assert.Equal(t, base.Add(time.Hour), roundTOUPeriodEnd(base.Add(45*time.Minute)))
+				assert.Equal(t, base.Add(time.Hour), roundTOUPeriodEnd(base.Add(59*time.Minute)))
+			})
+
+			t.Run("Cross Midnight Tariff and Schedule Matching", func(t *testing.T) {
+				loc := time.UTC
+				cmStart := time.Date(2026, 7, 15, 22, 0, 0, 0, loc)
+				cmUntil := time.Date(2026, 7, 16, 2, 0, 0, 0, loc)
+
+				payload := sys.buildTOUTariffPayload(cmStart, cmUntil, types.Price{})
+				require.NotNil(t, payload)
+
+				touSettings := payload["tou_settings"].(map[string]any)
+				tariffContent := touSettings["tariff_content_v2"].(map[string]any)
+				seasons := tariffContent["seasons"].(map[string]any)
+				energyCharges := tariffContent["energy_charges"].(map[string]any)
+
+				// 1. BEFORE season (1/1 to 7/14)
+				beforeSeason, ok := seasons["BEFORE"].(map[string]any)
+				require.True(t, ok)
+				assert.Equal(t, 1, beforeSeason["fromMonth"])
+				assert.Equal(t, 1, beforeSeason["fromDay"])
+				assert.Equal(t, 7, beforeSeason["toMonth"])
+				assert.Equal(t, 14, beforeSeason["toDay"])
+				beforeTou := beforeSeason["tou_periods"].(map[string]any)
+				assert.Nil(t, beforeTou["ON_PEAK"])
+				assert.NotNil(t, beforeTou["OFF_PEAK"])
+				beforeRates := energyCharges["BEFORE"].(map[string]any)["rates"].(map[string]float64)
+				assert.Equal(t, 0.0, beforeRates["OFF_PEAK"])
+				_, hasBeforeOnPeak := beforeRates["ON_PEAK"]
+				assert.False(t, hasBeforeOnPeak)
+
+				// 2. TODAY season (7/15 to 7/15)
+				todaySeason, ok := seasons["TODAY"].(map[string]any)
+				require.True(t, ok)
+				assert.Equal(t, 7, todaySeason["fromMonth"])
+				assert.Equal(t, 15, todaySeason["fromDay"])
+				assert.Equal(t, 7, todaySeason["toMonth"])
+				assert.Equal(t, 15, todaySeason["toDay"])
+				todayTou := todaySeason["tou_periods"].(map[string]any)
+				todayOnPeak := todayTou["ON_PEAK"].(map[string]any)["periods"].([]map[string]any)
+				if assert.Len(t, todayOnPeak, 1) {
+					assert.Equal(t, 22, todayOnPeak[0]["fromHour"])
+					assert.Equal(t, 0, todayOnPeak[0]["fromMinute"])
+					assert.Equal(t, 0, todayOnPeak[0]["toHour"])
+					assert.Equal(t, 0, todayOnPeak[0]["toMinute"])
+				}
+				todayOffPeak := todayTou["OFF_PEAK"].(map[string]any)["periods"].([]map[string]any)
+				if assert.Len(t, todayOffPeak, 1) {
+					assert.Equal(t, 0, todayOffPeak[0]["fromHour"])
+					assert.Equal(t, 0, todayOffPeak[0]["fromMinute"])
+					assert.Equal(t, 22, todayOffPeak[0]["toHour"])
+					assert.Equal(t, 0, todayOffPeak[0]["toMinute"])
+				}
+				todayRates := energyCharges["TODAY"].(map[string]any)["rates"].(map[string]float64)
+				assert.Equal(t, 0.15, todayRates["ON_PEAK"])
+				assert.Equal(t, 0.0, todayRates["OFF_PEAK"])
+
+				// 3. TOMORROW season (7/16 to 7/16)
+				tomorrowSeason, ok := seasons["TOMORROW"].(map[string]any)
+				require.True(t, ok)
+				assert.Equal(t, 7, tomorrowSeason["fromMonth"])
+				assert.Equal(t, 16, tomorrowSeason["fromDay"])
+				assert.Equal(t, 7, tomorrowSeason["toMonth"])
+				assert.Equal(t, 16, tomorrowSeason["toDay"])
+				tomorrowTou := tomorrowSeason["tou_periods"].(map[string]any)
+				tomorrowOnPeak := tomorrowTou["ON_PEAK"].(map[string]any)["periods"].([]map[string]any)
+				if assert.Len(t, tomorrowOnPeak, 1) {
+					assert.Equal(t, 0, tomorrowOnPeak[0]["fromHour"])
+					assert.Equal(t, 0, tomorrowOnPeak[0]["fromMinute"])
+					assert.Equal(t, 2, tomorrowOnPeak[0]["toHour"])
+					assert.Equal(t, 0, tomorrowOnPeak[0]["toMinute"])
+				}
+				tomorrowOffPeak := tomorrowTou["OFF_PEAK"].(map[string]any)["periods"].([]map[string]any)
+				if assert.Len(t, tomorrowOffPeak, 1) {
+					assert.Equal(t, 2, tomorrowOffPeak[0]["fromHour"])
+					assert.Equal(t, 0, tomorrowOffPeak[0]["fromMinute"])
+					assert.Equal(t, 0, tomorrowOffPeak[0]["toHour"])
+					assert.Equal(t, 0, tomorrowOffPeak[0]["toMinute"])
+				}
+				tomorrowRates := energyCharges["TOMORROW"].(map[string]any)["rates"].(map[string]float64)
+				assert.Equal(t, 0.15, tomorrowRates["ON_PEAK"])
+				assert.Equal(t, 0.0, tomorrowRates["OFF_PEAK"])
+
+				// 4. AFTER season (7/17 to 12/31)
+				afterSeason, ok := seasons["AFTER"].(map[string]any)
+				require.True(t, ok)
+				assert.Equal(t, 7, afterSeason["fromMonth"])
+				assert.Equal(t, 17, afterSeason["fromDay"])
+				assert.Equal(t, 12, afterSeason["toMonth"])
+				assert.Equal(t, 31, afterSeason["toDay"])
+				afterTou := afterSeason["tou_periods"].(map[string]any)
+				assert.Nil(t, afterTou["ON_PEAK"])
+				assert.NotNil(t, afterTou["OFF_PEAK"])
+				afterRates := energyCharges["AFTER"].(map[string]any)["rates"].(map[string]float64)
+				assert.Equal(t, 0.0, afterRates["OFF_PEAK"])
+				_, hasAfterOnPeak := afterRates["ON_PEAK"]
+				assert.False(t, hasAfterOnPeak)
+
+				// Verify isTeslaScheduleMatch:
+				// A. Before midnight: 7/15 22:30 -> match
+				nowBeforeMidnight := time.Date(2026, 7, 15, 22, 30, 0, 0, loc)
+				assert.True(t, isTeslaScheduleMatch(tariffContent, cmUntil, nowBeforeMidnight, loc),
+					"should match before midnight")
+
+				// B. After midnight: 7/16 01:00 -> match
+				nowAfterMidnight := time.Date(2026, 7, 16, 1, 0, 0, 0, loc)
+				assert.True(t, isTeslaScheduleMatch(tariffContent, cmUntil, nowAfterMidnight, loc),
+					"should match after midnight")
+
+				// C. Before window starts: 7/15 21:00 -> no match
+				nowBeforeStart := time.Date(2026, 7, 15, 21, 0, 0, 0, loc)
+				assert.False(t, isTeslaScheduleMatch(tariffContent, cmUntil, nowBeforeStart, loc),
+					"should not match before window starts")
+
+				// D. After window ends: 7/16 02:30 -> no match
+				nowAfterEnd := time.Date(2026, 7, 16, 2, 30, 0, 0, loc)
+				assert.False(t, isTeslaScheduleMatch(tariffContent, cmUntil, nowAfterEnd, loc),
+					"should not match after window ends")
+
+				// E. Different target until (e.g. 03:00) -> no match
+				diffUntil := time.Date(2026, 7, 16, 3, 0, 0, 0, loc)
+				assert.False(t, isTeslaScheduleMatch(tariffContent, diffUntil, nowBeforeMidnight, loc),
+					"should not match different target until")
+
+				// F. Customer utility tariff (non-RateRudder) -> no match
+				customerTariff := map[string]any{
+					"name":    "E-TOU-C",
+					"utility": "PG&E",
+					"seasons": seasons,
+				}
+				assert.False(t, isTeslaScheduleMatch(customerTariff, cmUntil, nowBeforeMidnight, loc),
+					"customer utility tariff must not match RateRudder schedule")
+			})
+
+			t.Run("Year Rollover Tariff and Schedule Matching", func(t *testing.T) {
+				loc := time.UTC
+				yrStart := time.Date(2026, 12, 31, 22, 0, 0, 0, loc)
+				yrUntil := time.Date(2027, 1, 1, 2, 0, 0, 0, loc)
+
+				payload := sys.buildTOUTariffPayload(yrStart, yrUntil, types.Price{})
+				require.NotNil(t, payload)
+
+				touSettings := payload["tou_settings"].(map[string]any)
+				tariffContent := touSettings["tariff_content_v2"].(map[string]any)
+				seasons := tariffContent["seasons"].(map[string]any)
+
+				// Jan 1: TOMORROW
+				tomSeason, ok := seasons["TOMORROW"].(map[string]any)
+				require.True(t, ok)
+				assert.Equal(t, 1, tomSeason["fromMonth"])
+				assert.Equal(t, 1, tomSeason["fromDay"])
+				assert.Equal(t, 1, tomSeason["toMonth"])
+				assert.Equal(t, 1, tomSeason["toDay"])
+
+				// Jan 2 to Dec 30: AFTER
+				afterSeason, ok := seasons["AFTER"].(map[string]any)
+				require.True(t, ok)
+				assert.Equal(t, 1, afterSeason["fromMonth"])
+				assert.Equal(t, 2, afterSeason["fromDay"])
+				assert.Equal(t, 12, afterSeason["toMonth"])
+				assert.Equal(t, 30, afterSeason["toDay"])
+
+				// Dec 31: TODAY
+				todaySeason, ok := seasons["TODAY"].(map[string]any)
+				require.True(t, ok)
+				assert.Equal(t, 12, todaySeason["fromMonth"])
+				assert.Equal(t, 31, todaySeason["fromDay"])
+				assert.Equal(t, 12, todaySeason["toMonth"])
+				assert.Equal(t, 31, todaySeason["toDay"])
+
+				// No BEFORE season
+				_, hasBefore := seasons["BEFORE"]
+				assert.False(t, hasBefore)
+
+				// Verify schedule matching
+				nowDec31 := time.Date(2026, 12, 31, 22, 30, 0, 0, loc)
+				assert.True(t, isTeslaScheduleMatch(tariffContent, yrUntil, nowDec31, loc),
+					"should match on Dec 31 before midnight")
+
+				nowJan1 := time.Date(2027, 1, 1, 1, 0, 0, 0, loc)
+				assert.True(t, isTeslaScheduleMatch(tariffContent, yrUntil, nowJan1, loc),
+					"should match on Jan 1 after midnight")
+			})
 		})
 	})
 
@@ -2413,5 +3307,40 @@ func TestTesla(t *testing.T) {
 			assert.True(t, gs.GridExportSolar)
 			assert.True(t, gs.GridExportBatteries)
 		})
+	})
+
+	t.Run("DoRequest Tariff Truncation", func(t *testing.T) {
+		largeTariff := make(map[string]any)
+		for i := 0; i < 150; i++ {
+			largeTariff[fmt.Sprintf("season_%d", i)] = "some large string content taking up plenty of bytes"
+		}
+		smallTariff := map[string]any{
+			"name": "Small Tariff",
+		}
+
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(map[string]any{
+				"response": map[string]any{
+					"tariff_content":    largeTariff,
+					"tariff_content_v2": smallTariff,
+				},
+			})
+		}))
+		defer ts.Close()
+
+		base := &baseTesla{client: ts.Client()}
+		req, err := http.NewRequestWithContext(context.Background(), "GET", ts.URL, nil)
+		require.NoError(t, err)
+
+		var dest struct {
+			Response struct {
+				TariffContent   map[string]any `json:"tariff_content"`
+				TariffContentV2 map[string]any `json:"tariff_content_v2"`
+			} `json:"response"`
+		}
+		err = base.doRequest(req, &dest)
+		require.NoError(t, err)
+		assert.Equal(t, "Small Tariff", dest.Response.TariffContentV2["name"])
+		assert.Len(t, dest.Response.TariffContent, 150)
 	})
 }

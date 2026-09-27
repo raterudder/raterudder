@@ -544,6 +544,47 @@ describe('App & Settings', () => {
         });
     });
 
+    it('can update battery export margin field when grid export batteries is enabled', async () => {
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            gridExportBatteries: true,
+            minBatteryExportDifferenceDollarsPerKWH: 0.07
+        });
+        await navigateToSettings();
+
+        const advancedBtn = await screen.findByText('Show Advanced Settings');
+        fireEvent.click(advancedBtn);
+
+        const exportMarginInput = await screen.findByLabelText(/Battery Export Margin/i);
+        expect(exportMarginInput).toBeInTheDocument();
+        expect(exportMarginInput).toHaveValue(0.07);
+
+        fireEvent.change(exportMarginInput, { target: { value: '0.12' } });
+
+        const saveBtn = screen.getByText('Save Settings');
+        fireEvent.click(saveBtn);
+
+        await waitFor(() => {
+            expect(screen.getByText('Settings saved successfully')).toBeInTheDocument();
+            expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+                minBatteryExportDifferenceDollarsPerKWH: 0.12
+            }), expect.any(String), undefined);
+        });
+    });
+
+    it('hides battery export margin field when grid export batteries is disabled', async () => {
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            gridExportBatteries: false
+        });
+        await navigateToSettings();
+
+        const advancedBtn = await screen.findByText('Show Advanced Settings');
+        fireEvent.click(advancedBtn);
+
+        expect(screen.queryByLabelText(/Battery Export Margin/i)).not.toBeInTheDocument();
+    });
+
     it('shows solar net metering credits value setting when netMeteringScheme is net', async () => {
         const user = userEvent.setup();
         (fetchSettings as any).mockResolvedValue({
@@ -2760,6 +2801,120 @@ describe('App & Settings', () => {
 
             expect(await screen.findByRole('heading', { name: 'Why specify charging hours?' })).toBeInTheDocument();
             expect(screen.getByText(/High-power household appliances like air conditioners, clothes dryers, and electric ovens draw electrical loads similar to an EV charger/i)).toBeInTheDocument();
+        });
+    });
+
+    describe('Direct Solar Export Optimization', () => {
+        it('is hidden when not already enabled and ?export=true is not present', async () => {
+            const user = userEvent.setup();
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                ess: 'tesla',
+                hasCredentials: { tesla: true },
+                manageTOUSchedules: false,
+            });
+
+            await navigateToSettings();
+
+            // Open ESS edit mode from summary card
+            const editBtn = screen.getByLabelText('Edit Energy Storage System');
+            await user.click(editBtn);
+
+            // Toggle should NOT be present
+            expect(screen.queryByRole('switch', { name: /Direct Solar Export Optimization/i })).not.toBeInTheDocument();
+        });
+
+        it('renders toggle and warning notice when ?export=true param is present for supported ESS', async () => {
+            const user = userEvent.setup();
+            const originalLocation = window.location;
+            delete (window as any).location;
+            (window as any).location = new URL('http://localhost/settings?export=true');
+
+            try {
+                (api.fetchSettings as any).mockResolvedValue({
+                    ...defaultSettings,
+                    ess: 'tesla',
+                    hasCredentials: { tesla: true },
+                    manageTOUSchedules: false,
+                });
+
+                await navigateToSettings();
+
+                // Open ESS edit mode from summary card
+                const editBtn = screen.getByLabelText('Edit Energy Storage System');
+                await user.click(editBtn);
+
+                // Toggle should be present
+                const exportOptSwitch = screen.getByRole('switch', { name: /Direct Solar Export Optimization/i });
+                expect(exportOptSwitch).not.toBeChecked();
+                expect(screen.queryByText(/Notice: This feature requires RateRudder to manage your battery's Time-Of-Use/i)).not.toBeInTheDocument();
+
+                // Click switch to enable
+                await user.click(exportOptSwitch);
+                expect(exportOptSwitch).toBeChecked();
+                expect(screen.getByText(/Notice: This feature requires RateRudder to manage your battery's Time-Of-Use/i)).toBeInTheDocument();
+
+                // Save settings
+                const saveBtn = screen.getByRole('button', { name: /Save Settings/i });
+                await user.click(saveBtn);
+
+                await waitFor(() => {
+                    expect(api.updateSettings).toHaveBeenCalledWith(
+                        expect.objectContaining({
+                            manageTOUSchedules: true,
+                        }),
+                        'site1',
+                        undefined
+                    );
+                });
+            } finally {
+                (window as any).location = originalLocation;
+            }
+        });
+
+        it('renders toggle when manageTOUSchedules is already enabled even without query param', async () => {
+            const user = userEvent.setup();
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                ess: 'tesla',
+                hasCredentials: { tesla: true },
+                manageTOUSchedules: true,
+            });
+
+            await navigateToSettings();
+
+            // Open ESS edit mode from summary card
+            const editBtn = screen.getByLabelText('Edit Energy Storage System');
+            await user.click(editBtn);
+
+            const exportOptSwitch = screen.getByRole('switch', { name: /Direct Solar Export Optimization/i });
+            expect(exportOptSwitch).toBeChecked();
+            expect(screen.getByText(/Notice: This feature requires RateRudder to manage your battery's Time-Of-Use/i)).toBeInTheDocument();
+        });
+
+        it('does not render toggle for unsupported ESS provider even with ?export=true', async () => {
+            const user = userEvent.setup();
+            const originalLocation = window.location;
+            delete (window as any).location;
+            (window as any).location = new URL('http://localhost/settings?export=true');
+
+            try {
+                (api.fetchSettings as any).mockResolvedValue({
+                    ...defaultSettings,
+                    ess: 'enphase',
+                    hasCredentials: { enphase: true },
+                });
+
+                await navigateToSettings();
+
+                // Open ESS edit mode from summary card
+                const editBtn = screen.getByLabelText('Edit Energy Storage System');
+                await user.click(editBtn);
+
+                expect(screen.queryByRole('switch', { name: /Direct Solar Export Optimization/i })).not.toBeInTheDocument();
+            } finally {
+                (window as any).location = originalLocation;
+            }
         });
     });
 });

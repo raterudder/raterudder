@@ -1,6 +1,6 @@
 import React from 'react';
 import { Meter } from '@base-ui/react/meter';
-import { type Action, BatteryMode, ActionReason } from '../api';
+import { type Action, BatteryMode, SolarMode, ActionReason } from '../api';
 import { getBatteryModeLabel } from '../utils/dashboardUtils';
 
 interface CurrentStatusProps {
@@ -103,6 +103,10 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
     }
 
     const isBatteryAtReserve = action.reason === ActionReason.BatteryAtReserve;
+    const isDirectExportReason = action.reason === ActionReason.DirectExport;
+    const isDirectBatteryExport = isDirectExportReason && action.batteryMode === BatteryMode.Export;
+    const isDirectSolarExportStandby = isDirectExportReason && action.batteryMode === BatteryMode.Standby;
+    const isDirectSolarExport = isDirectExportReason && !isDirectBatteryExport && !isDirectSolarExportStandby;
 
     const effectiveBatteryMode = action.targetBatteryMode
         ? action.targetBatteryMode
@@ -110,9 +114,9 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
     const mode = effectiveBatteryMode;
 
     let state: 'charging' | 'discharging' | 'standby' = 'standby';
-    if (isBatteryAtReserve) {
+    if (isBatteryAtReserve || isDirectSolarExportStandby) {
         state = 'standby';
-    } else if (mode === BatteryMode.Load) {
+    } else if (mode === BatteryMode.Load || mode === BatteryMode.Export) {
         state = 'discharging';
     } else if (mode === BatteryMode.ChargeAny) {
         state = 'charging';
@@ -147,17 +151,29 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
 
     if (defValid) {
         timeRemainingText = `Battery empty in ${formatDuration(deficitMs)}`;
-    } else if (capValid) {
+    } else if (capValid && !isDirectExportReason) {
         timeRemainingText = `Battery full in ${formatDuration(capacityMs)}`;
     }
 
-    const statusLabel = isBatteryAtReserve
+    const statusLabel = isDirectBatteryExport
+        ? (action.solarMode === SolarMode.Export ? 'Direct Battery & Solar Export' : 'Direct Battery Export')
+        : isDirectSolarExport
+        ? 'Direct Solar Export'
+        : isDirectSolarExportStandby
+        ? 'Peak Defense'
+        : isBatteryAtReserve
         ? 'Battery At Reserve'
         : state === 'discharging'
         ? 'Self-Powered'
         : `System ${state.charAt(0).toUpperCase() + state.slice(1)}`;
 
-    const statusValue = isBatteryAtReserve
+    const statusValue = isDirectBatteryExport
+        ? (action.solarMode === SolarMode.Export ? 'Exporting Battery & Solar' : 'Exporting Battery to Grid')
+        : isDirectSolarExport
+        ? 'Exporting Solar • Home on Battery'
+        : isDirectSolarExportStandby
+        ? 'Holding Reserve • Home on Solar'
+        : isBatteryAtReserve
         ? 'Holding Reserve'
         : state === 'discharging'
         ? 'Rely on Solar & Battery'
@@ -167,7 +183,13 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
         <div className={`current-status-card ${state}`}>
             <div className="status-main">
                 <div className="status-icon">
-                    {isBatteryAtReserve ? (
+                    {isDirectBatteryExport ? (
+                        <span className="icon" aria-hidden="true">⚡</span>
+                    ) : isDirectSolarExport ? (
+                        <span className="icon" aria-hidden="true">☀️</span>
+                    ) : isDirectSolarExportStandby ? (
+                        <span className="icon" aria-hidden="true">🛡️</span>
+                    ) : isBatteryAtReserve ? (
                         <span className="icon" aria-hidden="true">🔋</span>
                     ) : (
                         <>

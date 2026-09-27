@@ -273,6 +273,41 @@ describe('dashboardUtils', () => {
             expect(text).toContain('EV charging detected');
             expect(text).toContain('preserving battery reserves');
         });
+
+        it('explains DirectExport correctly', () => {
+            const actionSolar = {
+                ...baseAction,
+                batteryMode: BatteryMode.Load,
+                solarMode: SolarMode.Export,
+                reason: ActionReason.DirectExport,
+                currentPrice: { dollarsPerKWH: 0.35, gridUseDollarsPerKWH: 0.05, tsStart: '', tsEnd: '' },
+            };
+            const textSolar = getReasonText(actionSolar);
+            expect(textSolar).toContain('High solar export credit window active');
+            expect(textSolar).toContain('Powering the home from the battery');
+            expect(textSolar).toContain('$ 0.400/kWh');
+
+            const actionStandby = {
+                ...baseAction,
+                batteryMode: BatteryMode.Standby,
+                reason: ActionReason.DirectExport,
+                currentPrice: { dollarsPerKWH: 0.35, gridUseDollarsPerKWH: 0.05, tsStart: '', tsEnd: '' },
+            };
+            const textStandby = getReasonText(actionStandby);
+            expect(textStandby).toContain('High electricity price window active');
+            expect(textStandby).toContain('Holding remaining battery energy in standby');
+            expect(textStandby).toContain('defend against peak grid imports');
+
+            const actionBatteryExport = {
+                ...baseAction,
+                batteryMode: BatteryMode.Export,
+                solarMode: SolarMode.Export,
+                reason: ActionReason.DirectExport,
+                currentPrice: { dollarsPerKWH: 0.50, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
+            };
+            const textBatteryExport = getReasonText(actionBatteryExport);
+            expect(textBatteryExport).toContain('Discharging battery and exporting solar to the grid');
+        });
     });
 
     describe('formatTime & offset helpers', () => {

@@ -46,7 +46,6 @@ const (
 	ActionReasonMissingBattery              ActionReason = "missingBattery"
 	ActionReasonDeficitChargeNow            ActionReason = "deficitCharge"
 	ActionReasonArbitrageChargeExport       ActionReason = "arbitrageChargeExport"
-	ActionReasonDischargeBeforeCapacityNow  ActionReason = "dischargeBeforeCapacity"
 	ActionReasonDeficitSaveForPeak          ActionReason = "deficitSaveForPeak"
 	ActionReasonDischargeAtPeak             ActionReason = "dischargeAtPeak"
 	ActionReasonArbitrageHoldExport         ActionReason = "arbitrageHoldExport"
@@ -62,19 +61,23 @@ const (
 	ActionReasonVPPActive                   ActionReason = "vppActive"
 	ActionReasonVPPPrep                     ActionReason = "vppPrep"
 	ActionReasonEVChargingStandby           ActionReason = "evChargingStandby"
+	ActionReasonDirectExport                ActionReason = "directExport"
 
 	// Deprecated - we don't use these anymore but we don't delete them so we know they were used
-	ActionReasonArbitrageHoldSave   ActionReason = "arbitrageHoldSave"
-	ActionReasonArbitrageChargeSave ActionReason = "arbitrageChargeSave"
-	ActionReasonArbitrageChargeNow  ActionReason = "arbitrageCharge"
-	ActionReasonArbitrageHold       ActionReason = "arbitrageHold"
-	ActionReasonDeficitSave         ActionReason = "deficitSave"
+	ActionReasonDischargeBeforeCapacityNow ActionReason = "dischargeBeforeCapacity"
+	ActionReasonArbitrageHoldSave          ActionReason = "arbitrageHoldSave"
+	ActionReasonArbitrageChargeSave        ActionReason = "arbitrageChargeSave"
+	ActionReasonArbitrageChargeNow         ActionReason = "arbitrageCharge"
+	ActionReasonArbitrageHold              ActionReason = "arbitrageHold"
+	ActionReasonDeficitSave                ActionReason = "deficitSave"
 )
 
 // ModesOptions contains options for setting the operating modes.
 type ModesOptions struct {
-	ChargeToSOC int `json:"chargeToSoc,omitempty"`
-	MinimumSOC  int `json:"minimumSoc,omitempty"`
+	ChargeToSOC         int       `json:"chargeToSoc,omitempty"`
+	MinimumSOC          int       `json:"minimumSoc,omitempty"`
+	TSScheduleModeUntil time.Time `json:"tsScheduleModeUntil,omitempty"`
+	CurrentPrice        Price     `json:"currentPrice,omitempty"`
 }
 
 // Action represents a control decision made by the system.
@@ -93,6 +96,7 @@ type Action struct {
 	HitBufferedDeficitAt   time.Time        `json:"hitBufferedDeficitAt"`
 	HitThresholdDeficitAt  time.Time        `json:"hitThresholdDeficitAt"`
 	HitCapacityAt          time.Time        `json:"capacityAt"`
+	TSScheduleModeUntil    time.Time        `json:"tsScheduleModeUntil,omitempty"`
 	StrategyBenefitDollars float64          `json:"strategyBenefitDollars,omitempty"`
 	DryRun                 bool             `json:"dryRun,omitempty"`
 	Fault                  bool             `json:"fault,omitempty"`
@@ -100,6 +104,7 @@ type Action struct {
 	Paused                 bool             `json:"paused,omitempty"`
 	Error                  string           `json:"error,omitempty"`
 	SimulationParams       SimulationParams `json:"simulationParams,omitempty"`
+	Plan                   *Plan            `json:"plan,omitempty"`
 
 	// Deprecated: use BatteryMode
 	TargetBatteryMode BatteryMode `json:"targetBatteryMode,omitempty"`
@@ -175,11 +180,13 @@ type Storm struct {
 
 // VPPEvent represents a virtual power plant event.
 type VPPEvent struct {
-	Description string    `json:"description"`
-	TSStart     time.Time `json:"tsStart"`
-	TSEnd       time.Time `json:"tsEnd"`
-	VPPSoc      float64   `json:"vppSoc"`
-	OptOut      bool      `json:"optOut"`
+	Description   string    `json:"description"`
+	TSStart       time.Time `json:"tsStart"`
+	TSEnd         time.Time `json:"tsEnd"`
+	VPPSoc        float64   `json:"vppSoc"`
+	OptOut        bool      `json:"optOut"`
+	Mandatory     bool      `json:"mandatory"`
+	DollarsPerKWH float64   `json:"dollarsPerKWH,omitempty"`
 }
 
 // SystemStatus represents the current system status.
@@ -205,6 +212,7 @@ type SystemStatus struct {
 	VPPKW                   float64       `json:"vppKW,omitempty"`     // Power going to/from the VPP
 	VPPSOC                  float64       `json:"vppSOC,omitempty"`    // VPP target SOC
 	VPPEvents               []VPPEvent    `json:"vppEvents,omitempty"`
+	ManagedTOUMode          bool          `json:"managedTouMode,omitempty"` // True if battery is operating in RateRudder-managed Time-of-Use mode
 }
 
 // BatteryMode represents the mode of the battery.
@@ -215,6 +223,7 @@ const (
 	BatteryModeStandby   BatteryMode = 1
 	BatteryModeChargeAny BatteryMode = 2
 	BatteryModeLoad      BatteryMode = -1
+	BatteryModeExport    BatteryMode = -2
 )
 
 // SolarMode represents the mode of the solar panels.
@@ -224,7 +233,7 @@ const (
 	SolarModeNoChange SolarMode = 0
 	SolarModeNoExport SolarMode = 1
 	SolarModeAny      SolarMode = 2
-	// TODO: we could add SolarModeExportOnly SolarMode = 2 but right now no ESS system supports this mode
+	SolarModeExport   SolarMode = 3
 )
 
 // Feedback represents feedback submitted by a user.
@@ -380,4 +389,35 @@ type NotificationLog struct {
 type MonthlyNotificationLogs struct {
 	TSMonthStart time.Time         `json:"tsMonthStart"`
 	Logs         []NotificationLog `json:"logs"`
+}
+
+// Plan represents a forward-looking optimal schedule over the planning horizon.
+type Plan struct {
+	GeneratedAt        time.Time    `json:"generatedAt"`
+	HorizonHours       int          `json:"horizonHours"`
+	TotalProjectedCost float64      `json:"totalProjectedCost"`
+	TotalExportCredits float64      `json:"totalExportCredits"`
+	NetEconomicBenefit float64      `json:"netEconomicBenefit"`
+	Periods            []PlanPeriod `json:"periods"`
+}
+
+// PlanPeriod represents a single discrete scheduling period in a Plan.
+type PlanPeriod struct {
+	StartTime        time.Time    `json:"startTime"`
+	EndTime          time.Time    `json:"endTime"`
+	DurationHours    float64      `json:"durationHours"`
+	Price            Price        `json:"price"`
+	BatteryMode      BatteryMode  `json:"batteryMode"`
+	SolarMode        SolarMode    `json:"solarMode"`
+	Reason           ActionReason `json:"reason"`
+	Description      string       `json:"description"`
+	StartSOC         float64      `json:"startSoc"`
+	EndSOC           float64      `json:"endSoc"`
+	LoadKWH          float64      `json:"loadKWH,omitempty"`
+	SolarKWH         float64      `json:"solarKWH,omitempty"`
+	ProjectedLoadKW  float64      `json:"projectedLoadKW,omitempty"`
+	ProjectedSolarKW float64      `json:"projectedSolarKW,omitempty"`
+	GridImportKWH    float64      `json:"gridImportKWH"`
+	GridExportKWH    float64      `json:"gridExportKWH"`
+	CostDollars      float64      `json:"costDollars"`
 }

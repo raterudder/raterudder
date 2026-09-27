@@ -496,9 +496,13 @@ func CalibrateSolarScaleFactor(
 		weatherByHour[hw.TSHourStart.Unix()] = hw
 	}
 
-	timeLoc, err := time.LoadLocation(timeZone)
-	if err != nil {
-		timeLoc = time.UTC
+	timeLoc := time.UTC
+	if timeZone != "" && timeZone != "UTC" {
+		if now.Location() != nil && now.Location().String() == timeZone {
+			timeLoc = now.Location()
+		} else if l, err := time.LoadLocation(timeZone); err == nil {
+			timeLoc = l
+		}
 	}
 
 	// We calculate a preliminary static scale factor (staticEff) first.
@@ -726,9 +730,13 @@ func CalculateWeatherSolar(
 		forecastHours = append(forecastHours, w.ForecastHours...)
 	}
 
-	timeLoc, err := time.LoadLocation(locInfo.TimeZone)
-	if err != nil {
-		timeLoc = time.UTC
+	timeLoc := time.UTC
+	if locInfo.TimeZone != "" && locInfo.TimeZone != "UTC" {
+		if now.Location() != nil && now.Location().String() == locInfo.TimeZone {
+			timeLoc = now.Location()
+		} else if l, err := time.LoadLocation(locInfo.TimeZone); err == nil {
+			timeLoc = l
+		}
 	}
 
 	clippingCap := calculateSolarClippingCap(ctx, history)

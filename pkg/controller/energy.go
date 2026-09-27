@@ -151,6 +151,9 @@ func (c *Controller) BuildHourlyEnergyModel(
 		if tz == "" {
 			return fallback
 		}
+		if now.Location() != nil && now.Location().String() == tz {
+			return now.Location()
+		}
 		if l, ok := locCache[tz]; ok && l != nil {
 			return l
 		}
@@ -984,6 +987,9 @@ func detectLoadShift(
 	getLocation := func(tz string, fallback *time.Location) *time.Location {
 		if tz == "" {
 			return fallback
+		}
+		if now.Location() != nil && now.Location().String() == tz {
+			return now.Location()
 		}
 		if l, ok := locCache[tz]; ok && l != nil {
 			return l
