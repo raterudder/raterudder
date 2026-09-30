@@ -132,6 +132,14 @@ const (
 
 	// postHorizonPriceRollupTime is the duration used to blend prices beyond the planning horizon.
 	postHorizonPriceRollupTime = 4 * time.Hour
+
+	// abnormalRecentUsageThresholdKWH (1.0 kWh) is the minimum energy consumption excess above the 75th
+	// percentile (Q3) baseline over the recent 1–2 hour evaluation window required to classify usage as abnormal.
+	// A typical 13.5 kWh home battery reserve buffer is 10%–20% (1.35–2.7 kWh). Minor variations (< 1.0 kWh)
+	// reflect normal appliance cycles (refrigerators, televisions, lighting), whereas an excess of 1.0 kWh or more
+	// represents major, sustained discretionary energy draw (e.g. electric oven, stove, dryer, or car charging)
+	// that materially depleted the homeowner's backup reserve.
+	abnormalRecentUsageThresholdKWH = 1.0
 )
 
 // resolveBatteryPowerKW returns the given battery charge/discharge rate in kW, falling back
@@ -168,6 +176,7 @@ type planInterval struct {
 	importRate    float64 // Total delivered retail rate: supply + grid use/delivery fees ($/kWh)
 	exportRate    float64 // Total compensation for exported energy to grid ($/kWh)
 	loadKWH       float64 // Projected total home load energy for this interval (kWh)
+	q3LoadKWH     float64 // 75th percentile home load energy for this interval (kWh)
 	solarKWH      float64 // Projected total rooftop solar generation energy for this interval (kWh)
 	minSOC        float64 // Active reserve limit for this interval (%)
 }
@@ -420,7 +429,7 @@ func (c *Controller) Plan(
 	}
 
 	// 2. Build the discrete timeline across the horizon (including price synthesis for midnight cutoffs)
-	timeline, simParams, err := c.buildPlanningTimeline(ctx, now, currentPrice, futurePrices, history, weather, settings, currentStatus)
+	timeline, simParams, model, err := c.buildPlanningTimeline(ctx, now, currentPrice, futurePrices, history, weather, settings, currentStatus)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to build planning timeline", slog.Any("error", err))
 		return Decision{}, types.Plan{}, fmt.Errorf("buildPlanningTimeline: %w", err)
@@ -456,6 +465,36 @@ func (c *Controller) Plan(
 	decision.SimulationParams = simParams
 	decision.Action.SimulationParams = simParams
 
+	// 7. Always evaluate recent home usage and Q3 baseline for action telemetry
+	loc := now.Location()
+	if loc == nil {
+		loc = time.UTC
+	}
+	recentKWH, q3KWH, isAbnormal := c.calculateRecentUsageVsQ3(now, history, model, loc)
+	decision.Action.RecentHomeUsageKWH = recentKWH
+	decision.Action.Q3HomeUsageKWH = q3KWH
+	decision.Action.RecentHomeUsageAbnormal = isAbnormal
+
+	if isAbnormal {
+		log.Ctx(ctx).DebugContext(ctx, "abnormal recent home usage detected",
+			slog.Float64("recentHomeUsageKWH", recentKWH),
+			slog.Float64("q3HomeUsageKWH", q3KWH),
+			slog.Float64("usageDeltaKWH", recentKWH-q3KWH),
+			slog.String("actionReason", string(decision.Action.Reason)),
+			slog.Float64("batterySOC", currentStatus.BatterySOC),
+		)
+	}
+
+	if decision.Action.Reason == types.ActionReasonBatteryAtReserve && isAbnormal {
+		decision.Action.Description = "Battery is at reserve. Recent usage was well above normal. Home powered from solar/grid."
+		if decision.Action.Plan != nil && len(decision.Action.Plan.Periods) > 0 {
+			decision.Action.Plan.Periods[0].Description = decision.Action.Description
+		}
+		if len(plan.Periods) > 0 {
+			plan.Periods[0].Description = decision.Action.Description
+		}
+	}
+
 	winningPath.executeLogs(ctx)
 
 	log.Ctx(ctx).InfoContext(ctx, "plan execution completed successfully",
@@ -482,7 +521,7 @@ func (c *Controller) buildPlanningTimeline(
 	weather []types.Weather,
 	settings types.Settings,
 	currentStatus types.SystemStatus,
-) ([]planInterval, types.SimulationParams, error) {
+) ([]planInterval, types.SimulationParams, map[int]TimeProfile, error) {
 	// Helper to normalize price timestamps: if TSEnd is zero or invalid, default to 1 hour
 	normalizePrice := func(p types.Price) types.Price {
 		if p.TSStart.IsZero() {
@@ -531,7 +570,7 @@ func (c *Controller) buildPlanningTimeline(
 			slog.Int("minPlanningHorizonHours", minPlanningHorizonHours),
 			slog.Time("latestPriceTime", latestPriceTime),
 		)
-		return nil, types.SimulationParams{}, fmt.Errorf("insufficient pricing horizon: %.2f hours available, minimum required is %d hours", availableHours, minPlanningHorizonHours)
+		return nil, types.SimulationParams{}, nil, fmt.Errorf("insufficient pricing horizon: %.2f hours available, minimum required is %d hours", availableHours, minPlanningHorizonHours)
 	}
 
 	// Build energy model for hourly load and solar forecasts
@@ -678,10 +717,13 @@ func (c *Controller) buildPlanningTimeline(
 
 		// Projected home load energy for this interval (kWh)
 		loadKWH := profile.AvgHomeLoadKWH * durationHrs
+		q3LoadKWH := profile.P75HomeLoadKWH * durationHrs
 		if len(history) == 0 && currentStatus.HomeKW > 0 {
 			loadKWH = currentStatus.HomeKW * durationHrs
+			q3LoadKWH = currentStatus.HomeKW * durationHrs
 		} else if loadKWH <= 0 && currentStatus.HomeKW > 0 {
 			loadKWH = currentStatus.HomeKW * durationHrs
+			q3LoadKWH = currentStatus.HomeKW * durationHrs
 		}
 
 		importRate := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
@@ -711,6 +753,7 @@ func (c *Controller) buildPlanningTimeline(
 			importRate:    importRate,
 			exportRate:    exportRate,
 			loadKWH:       loadKWH,
+			q3LoadKWH:     q3LoadKWH,
 			solarKWH:      solarKWH,
 			minSOC:        minSOC,
 		}
@@ -728,7 +771,7 @@ func (c *Controller) buildPlanningTimeline(
 		slog.Float64("capacityKWH", currentStatus.BatteryCapacityKWH),
 	)
 
-	return timeline, simParams, nil
+	return timeline, simParams, model, nil
 }
 
 // isFlatNetMetering checks if the utility rate structure is flat 1:1 net metering
@@ -2899,4 +2942,77 @@ func solarModeString(m types.SolarMode) string {
 	default:
 		return fmt.Sprintf("SolarMode(%d)", m)
 	}
+}
+
+// calculateRecentUsageVsQ3 evaluates recent home usage (last 1–2 hours) against the 75th percentile (Q3)
+// baseline from the energy model. If actual recent usage exceeded Q3 by at least abnormalRecentUsageThresholdKWH (1.0 kWh), isAbnormal is true.
+func (c *Controller) calculateRecentUsageVsQ3(
+	now time.Time,
+	history []types.EnergyStats,
+	model map[int]TimeProfile,
+	loc *time.Location,
+) (recentKWH float64, q3KWH float64, isAbnormal bool) {
+	if len(history) == 0 || loc == nil || len(model) == 0 {
+		return 0, 0, false
+	}
+
+	localHour := func(t time.Time) time.Time {
+		tLoc := t.In(loc)
+		if tLoc.Minute() == 0 && tLoc.Second() == 0 && tLoc.Nanosecond() == 0 {
+			return tLoc
+		}
+		return time.Date(tLoc.Year(), tLoc.Month(), tLoc.Day(), tLoc.Hour(), 0, 0, 0, loc)
+	}
+
+	currentHour := localHour(now)
+	t1 := currentHour.Add(-1 * time.Hour)
+	t2 := currentHour.Add(-2 * time.Hour)
+
+	var s1, s2, sCurr types.EnergyStats
+	// History is chronologically ordered, so search backwards from the end
+	for i := len(history) - 1; i >= 0; i-- {
+		th := localHour(history[i].TSHourStart)
+		if th.Equal(t1) && s1.HomeKWH == 0 {
+			s1 = history[i]
+		} else if th.Equal(t2) && s2.HomeKWH == 0 {
+			s2 = history[i]
+		} else if th.Equal(currentHour) && sCurr.HomeKWH == 0 {
+			sCurr = history[i]
+		}
+		if s1.HomeKWH != 0 && s2.HomeKWH != 0 && sCurr.HomeKWH != 0 {
+			break
+		}
+		// If we've traversed into older days, stop searching
+		if th.Before(t2.Add(-24 * time.Hour)) {
+			break
+		}
+	}
+
+	hoursCounted := 0
+	if s1.HomeKWH > 0 {
+		recentKWH += s1.HomeKWH
+		q3KWH += model[t1.Hour()].P75HomeLoadKWH
+		hoursCounted++
+	}
+	if s2.HomeKWH > 0 {
+		recentKWH += s2.HomeKWH
+		q3KWH += model[t2.Hour()].P75HomeLoadKWH
+		hoursCounted++
+	}
+
+	// Also check in-progress current hour if it has already exceeded Q3
+	if sCurr.HomeKWH > 0 {
+		currQ3 := model[currentHour.Hour()].P75HomeLoadKWH
+		if sCurr.HomeKWH >= currQ3 && currQ3 > 0 {
+			recentKWH += sCurr.HomeKWH
+			q3KWH += currQ3
+			hoursCounted++
+		}
+	}
+
+	if hoursCounted > 0 && q3KWH > 0 && (recentKWH-q3KWH) >= abnormalRecentUsageThresholdKWH {
+		isAbnormal = true
+	}
+
+	return recentKWH, q3KWH, isAbnormal
 }

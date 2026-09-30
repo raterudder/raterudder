@@ -61,7 +61,7 @@ func TestBuildPlanningTimeline(t *testing.T) {
 			MinBatterySOC: 20,
 		}
 
-		timeline, simParams, err := c.buildPlanningTimeline(ctx, now, currentPrice, futurePrices, nil, nil, settings, status)
+		timeline, simParams, _, err := c.buildPlanningTimeline(ctx, now, currentPrice, futurePrices, nil, nil, settings, status)
 		require.NoError(t, err)
 		require.NotEmpty(t, timeline)
 		assert.Equal(t, "none", simParams.DetectedShift)
@@ -113,7 +113,7 @@ func TestBuildPlanningTimeline(t *testing.T) {
 			},
 		}
 
-		timeline, _, err := c.buildPlanningTimeline(ctx, startHour, halfHourPrice1, future30MinPrices, nil, nil, types.Settings{MinBatterySOC: 20}, types.SystemStatus{BatteryCapacityKWH: 13.5})
+		timeline, _, _, err := c.buildPlanningTimeline(ctx, startHour, halfHourPrice1, future30MinPrices, nil, nil, types.Settings{MinBatterySOC: 20}, types.SystemStatus{BatteryCapacityKWH: 13.5})
 		require.NoError(t, err)
 		require.True(t, len(timeline) >= 2)
 
@@ -150,7 +150,7 @@ func TestBuildPlanningTimeline(t *testing.T) {
 			},
 		}
 
-		timeline, _, err := c.buildPlanningTimeline(ctx, startHour, rate45Price, futurePrices, nil, nil, types.Settings{MinBatterySOC: 20}, types.SystemStatus{BatteryCapacityKWH: 13.5})
+		timeline, _, _, err := c.buildPlanningTimeline(ctx, startHour, rate45Price, futurePrices, nil, nil, types.Settings{MinBatterySOC: 20}, types.SystemStatus{BatteryCapacityKWH: 13.5})
 		require.NoError(t, err)
 		require.True(t, len(timeline) >= 3)
 
@@ -179,7 +179,7 @@ func TestBuildPlanningTimeline(t *testing.T) {
 			DollarsPerKWH: 0.10,
 		}
 
-		timeline, _, err := c.buildPlanningTimeline(ctx, runTime, currentPrice, nil, nil, nil, types.Settings{MinBatterySOC: 20}, types.SystemStatus{BatteryCapacityKWH: 13.5})
+		timeline, _, _, err := c.buildPlanningTimeline(ctx, runTime, currentPrice, nil, nil, nil, types.Settings{MinBatterySOC: 20}, types.SystemStatus{BatteryCapacityKWH: 13.5})
 		require.NoError(t, err)
 		require.NotEmpty(t, timeline)
 
@@ -221,7 +221,7 @@ func TestBuildPlanningTimeline(t *testing.T) {
 			MinBatterySOC: 20,
 		}
 
-		timeline, _, err := c.buildPlanningTimeline(ctx, now, currentPrice, futurePrices, nil, nil, settings, status)
+		timeline, _, _, err := c.buildPlanningTimeline(ctx, now, currentPrice, futurePrices, nil, nil, settings, status)
 		require.NoError(t, err)
 
 		// Timeline should plan over available hours up to midnight without synthesizing fake future prices
@@ -257,7 +257,7 @@ func TestBuildPlanningTimeline(t *testing.T) {
 			},
 		}
 
-		timeline, _, err := c.buildPlanningTimeline(ctx, now, shortPrice, shortFuture, nil, nil, settings, status)
+		timeline, _, _, err := c.buildPlanningTimeline(ctx, now, shortPrice, shortFuture, nil, nil, settings, status)
 		assert.Error(t, err)
 		assert.Nil(t, timeline)
 		assert.ErrorContains(t, err, "insufficient pricing horizon")
@@ -277,7 +277,7 @@ func TestBuildPlanningTimeline(t *testing.T) {
 		}
 
 		// Empty prices
-		timeline, _, err := c.buildPlanningTimeline(ctx, now, types.Price{}, nil, nil, nil, settings, status)
+		timeline, _, _, err := c.buildPlanningTimeline(ctx, now, types.Price{}, nil, nil, nil, settings, status)
 		assert.Error(t, err)
 		assert.Nil(t, timeline)
 		assert.ErrorContains(t, err, "insufficient pricing horizon")
@@ -336,7 +336,7 @@ func TestBuildPlanningTimeline(t *testing.T) {
 			},
 		}
 
-		timeline, _, err := c.buildPlanningTimeline(ctx, status.Timestamp, currentPrice, futurePrices, nil, nil, types.Settings{MinBatterySOC: 20}, status)
+		timeline, _, _, err := c.buildPlanningTimeline(ctx, status.Timestamp, currentPrice, futurePrices, nil, nil, types.Settings{MinBatterySOC: 20}, status)
 		require.NoError(t, err)
 
 		// Verify that an interval boundary cleanly matches VPP prep deadline (14:30) and VPP start (16:30)
@@ -383,7 +383,7 @@ func TestBuildPlanningTimeline(t *testing.T) {
 			TimeLocation:       "America/Chicago",
 		}
 
-		timeline, _, err := c.buildPlanningTimeline(ctx, now, currentPrice, futurePrices, nil, nil, types.Settings{MinBatterySOC: 20}, status)
+		timeline, _, _, err := c.buildPlanningTimeline(ctx, now, currentPrice, futurePrices, nil, nil, types.Settings{MinBatterySOC: 20}, status)
 		require.NoError(t, err)
 		assert.NotEmpty(t, timeline)
 		assert.LessOrEqual(t, len(timeline), 30, "Timeline intervals should be bounded")
@@ -428,7 +428,7 @@ func TestBuildPlanningTimeline(t *testing.T) {
 			TimeLocation:       "America/Chicago",
 		}
 
-		timeline, _, err := c.buildPlanningTimeline(ctx, now, currentPrice, openEndedFuture, nil, nil, types.Settings{MinBatterySOC: 20}, status)
+		timeline, _, _, err := c.buildPlanningTimeline(ctx, now, currentPrice, openEndedFuture, nil, nil, types.Settings{MinBatterySOC: 20}, status)
 		require.NoError(t, err)
 		// Interval at 11:00 should have the open-ended future price ($0.18)
 		var intervalAt11 *planInterval
@@ -469,7 +469,7 @@ func TestBuildPlanningTimeline(t *testing.T) {
 			TimeLocation:       "America/Chicago",
 		}
 
-		timeline, _, err := c.buildPlanningTimeline(ctx, now, zeroPrice, futurePrices, nil, nil, types.Settings{MinBatterySOC: 20}, status)
+		timeline, _, _, err := c.buildPlanningTimeline(ctx, now, zeroPrice, futurePrices, nil, nil, types.Settings{MinBatterySOC: 20}, status)
 		require.NoError(t, err)
 		require.NotEmpty(t, timeline)
 		assert.Equal(t, 0.0, timeline[0].importRate, "Zero price (e.g. Texas Free Nights) must be preserved as 0.0 without artificial fallback")
@@ -5071,6 +5071,122 @@ func TestPlanScenarios(t *testing.T) {
 		for i := 1; i < len(chargePeriods); i++ {
 			assert.Equal(t, chargePeriods[i-1].EndTime, chargePeriods[i].StartTime, "charging intervals must be contiguous without alternating fragmentation")
 		}
+	})
+
+	t.Run("BatteryAtReserve_AbnormalUsage", func(t *testing.T) {
+		t.Parallel()
+
+		now := time.Date(2026, 9, 20, 20, 15, 0, 0, nyLoc) // 8:15 PM
+
+		currentPrice := types.Price{
+			TSStart:              time.Date(2026, 9, 20, 20, 0, 0, 0, nyLoc),
+			TSEnd:                time.Date(2026, 9, 20, 21, 0, 0, 0, nyLoc),
+			DollarsPerKWH:        0.12,
+			GridUseDollarsPerKWH: 0.04,
+		}
+
+		var futurePrices []types.Price
+		for h := 21; h < 45; h++ {
+			day := 20
+			hour := h
+			if hour >= 24 {
+				day = 21
+				hour -= 24
+			}
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:              time.Date(2026, 9, day, hour, 0, 0, 0, nyLoc),
+				TSEnd:                time.Date(2026, 9, day, hour+1, 0, 0, 0, nyLoc),
+				DollarsPerKWH:        0.12,
+				GridUseDollarsPerKWH: 0.04,
+			})
+		}
+
+		// Historical baseline for the past 4 weeks: 1.0 kWh per hour
+		var history []types.EnergyStats
+		for week := 1; week <= 4; week++ {
+			dayStart := now.Add(time.Duration(-week*7*24) * time.Hour).Truncate(24 * time.Hour)
+			for h := 0; h < 24; h++ {
+				history = append(history, types.EnergyStats{
+					TSHourStart:  dayStart.Add(time.Duration(h) * time.Hour),
+					HomeKWH:      1.0,
+					TimeLocation: "America/New_York",
+				})
+			}
+		}
+
+		// Recent completed hours today: high usage spike (e.g. heavy cooking / appliance use)
+		// Hour 18 (6pm-7pm): 3.5 kWh
+		// Hour 19 (7pm-8pm): 4.0 kWh
+		history = append(history,
+			types.EnergyStats{
+				TSHourStart:  time.Date(2026, 9, 20, 18, 0, 0, 0, nyLoc),
+				HomeKWH:      3.5,
+				TimeLocation: "America/New_York",
+			},
+			types.EnergyStats{
+				TSHourStart:  time.Date(2026, 9, 20, 19, 0, 0, 0, nyLoc),
+				HomeKWH:      4.0,
+				TimeLocation: "America/New_York",
+			},
+		)
+
+		status := types.SystemStatus{
+			Timestamp:          now,
+			TimeLocation:       "America/New_York",
+			BatteryCapacityKWH: 13.5,
+			BatterySOC:         20.0, // Exactly at reserve
+			HomeKW:             2.5,
+			SolarKW:            0.0,
+		}
+
+		settings := types.Settings{
+			MinBatterySOC:       20,
+			GridChargeBatteries: false,
+			GridExportSolar:     true,
+			ManageTOUSchedules:  true,
+		}
+
+		decision, plan, err := c.Plan(ctx, status, currentPrice, futurePrices, history, nil, settings, nil)
+		require.NoError(t, err)
+		assert.Equal(t, types.ActionReasonBatteryAtReserve, decision.Action.Reason)
+		assert.True(t, decision.Action.RecentHomeUsageAbnormal)
+		assert.Equal(t, "Battery is at reserve. Recent usage was well above normal. Home powered from solar/grid.", decision.Action.Description)
+		assert.GreaterOrEqual(t, decision.Action.RecentHomeUsageKWH, 7.0)
+		assert.Greater(t, decision.Action.Q3HomeUsageKWH, 0.0)
+		assert.Greater(t, decision.Action.RecentHomeUsageKWH, decision.Action.Q3HomeUsageKWH)
+		if assert.NotEmpty(t, plan.Periods) {
+			assert.Equal(t, decision.Action.Description, plan.Periods[0].Description)
+		}
+
+		// Verify RecentHomeUsageKWH and Q3HomeUsageKWH are always included even when not at reserve
+		statusNonReserve := status
+		statusNonReserve.BatterySOC = 60.0
+		decisionNonReserve, _, err := c.Plan(ctx, statusNonReserve, currentPrice, futurePrices, history, nil, settings, nil)
+		require.NoError(t, err)
+		assert.NotEqual(t, types.ActionReasonBatteryAtReserve, decisionNonReserve.Action.Reason)
+		assert.True(t, decisionNonReserve.Action.RecentHomeUsageAbnormal)
+		assert.GreaterOrEqual(t, decisionNonReserve.Action.RecentHomeUsageKWH, 7.0)
+		assert.Greater(t, decisionNonReserve.Action.Q3HomeUsageKWH, 0.0)
+
+		// Verify normal usage history yields RecentHomeUsageAbnormal == false and standard description
+		historyNormal := history[:len(history)-2] // exclude recent spike hours
+		historyNormal = append(historyNormal,
+			types.EnergyStats{
+				TSHourStart:  time.Date(2026, 9, 20, 18, 0, 0, 0, nyLoc),
+				HomeKWH:      1.0,
+				TimeLocation: "America/New_York",
+			},
+			types.EnergyStats{
+				TSHourStart:  time.Date(2026, 9, 20, 19, 0, 0, 0, nyLoc),
+				HomeKWH:      1.0,
+				TimeLocation: "America/New_York",
+			},
+		)
+		decisionNormal, _, err := c.Plan(ctx, status, currentPrice, futurePrices, historyNormal, nil, settings, nil)
+		require.NoError(t, err)
+		assert.Equal(t, types.ActionReasonBatteryAtReserve, decisionNormal.Action.Reason)
+		assert.False(t, decisionNormal.Action.RecentHomeUsageAbnormal)
+		assert.Equal(t, "Battery is at reserve. Home powered from solar/grid.", decisionNormal.Action.Description)
 	})
 }
 

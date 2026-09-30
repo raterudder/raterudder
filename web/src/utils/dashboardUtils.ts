@@ -316,6 +316,16 @@ export const getReasonText = (action: Action): string => {
             return parts.concat(suffixParts).join(' ');
         }
         case ActionReason.BatteryAtReserve: {
+            if (
+                action.recentHomeUsageAbnormal &&
+                action.recentHomeUsageKWH != null &&
+                action.q3HomeUsageKWH != null
+            ) {
+                const parts = [
+                    `Battery is at reserve. Recent home usage (${action.recentHomeUsageKWH.toFixed(1)} kWh) was well above your normal usage (${action.q3HomeUsageKWH.toFixed(1)} kWh), depleting the reserve buffer.`,
+                ];
+                return parts.concat(suffixParts).join(' ');
+            }
             const parts = [
                 'Battery is at reserve. Using remaining energy because standby is not meaningful (battery is already held at reserve).',
             ];

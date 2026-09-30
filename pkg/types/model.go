@@ -82,27 +82,30 @@ type ModesOptions struct {
 
 // Action represents a control decision made by the system.
 type Action struct {
-	Timestamp              time.Time        `json:"timestamp"`
-	SystemTimestamp        time.Time        `json:"systemTimestamp,omitempty"`
-	BatteryMode            BatteryMode      `json:"batteryMode"`
-	SolarMode              SolarMode        `json:"solarMode"`
-	ChargeToSOC            int              `json:"chargeToSoc,omitempty"`
-	Reason                 ActionReason     `json:"reason"`
-	Description            string           `json:"description"`
-	CurrentPrice           *Price           `json:"currentPrice,omitempty"`
-	FuturePrice            *Price           `json:"futurePrice,omitempty"`
-	SystemStatus           SystemStatus     `json:"systemStatus"`
-	HitDeficitAt           time.Time        `json:"deficitAt"`
-	HitCapacityAt          time.Time        `json:"capacityAt"`
-	TSScheduleModeUntil    time.Time        `json:"tsScheduleModeUntil,omitempty"`
-	StrategyBenefitDollars float64          `json:"strategyBenefitDollars,omitempty"`
-	DryRun                 bool             `json:"dryRun,omitempty"`
-	Fault                  bool             `json:"fault,omitempty"`
-	Failed                 bool             `json:"failed,omitempty"`
-	Paused                 bool             `json:"paused,omitempty"`
-	Error                  string           `json:"error,omitempty"`
-	SimulationParams       SimulationParams `json:"simulationParams,omitempty"`
-	Plan                   *Plan            `json:"plan,omitempty"`
+	Timestamp               time.Time        `json:"timestamp"`
+	SystemTimestamp         time.Time        `json:"systemTimestamp,omitempty"`
+	BatteryMode             BatteryMode      `json:"batteryMode"`
+	SolarMode               SolarMode        `json:"solarMode"`
+	ChargeToSOC             int              `json:"chargeToSoc,omitempty"`
+	Reason                  ActionReason     `json:"reason"`
+	Description             string           `json:"description"`
+	CurrentPrice            *Price           `json:"currentPrice,omitempty"`
+	FuturePrice             *Price           `json:"futurePrice,omitempty"`
+	SystemStatus            SystemStatus     `json:"systemStatus"`
+	HitDeficitAt            time.Time        `json:"deficitAt"`
+	HitCapacityAt           time.Time        `json:"capacityAt"`
+	TSScheduleModeUntil     time.Time        `json:"tsScheduleModeUntil,omitempty"`
+	StrategyBenefitDollars  float64          `json:"strategyBenefitDollars,omitempty"`
+	DryRun                  bool             `json:"dryRun,omitempty"`
+	Fault                   bool             `json:"fault,omitempty"`
+	Failed                  bool             `json:"failed,omitempty"`
+	Paused                  bool             `json:"paused,omitempty"`
+	Error                   string           `json:"error,omitempty"`
+	SimulationParams        SimulationParams `json:"simulationParams,omitempty"`
+	Plan                    *Plan            `json:"plan,omitempty"`
+	RecentHomeUsageKWH      float64          `json:"recentHomeUsageKWH,omitempty"`
+	Q3HomeUsageKWH          float64          `json:"q3HomeUsageKWH,omitempty"`
+	RecentHomeUsageAbnormal bool             `json:"recentHomeUsageAbnormal,omitempty"`
 
 	// Deprecated: use HitDeficitAt
 	HitBufferedDeficitAt time.Time `json:"hitBufferedDeficitAt"`

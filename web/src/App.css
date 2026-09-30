@@ -753,6 +753,15 @@ button {
   font-weight: 500;
 }
 
+.status-footnote {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin-top: 0.35rem;
+  margin-bottom: 0.75rem;
+  padding-left: 0.5rem;
+  font-style: italic;
+}
+
 .status-metrics {
   display: flex;
   gap: var(--spacing-lg);

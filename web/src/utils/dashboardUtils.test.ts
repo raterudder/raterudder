@@ -308,6 +308,37 @@ describe('dashboardUtils', () => {
             const textBatteryExport = getReasonText(actionBatteryExport);
             expect(textBatteryExport).toContain('Discharging battery and exporting solar to the grid');
         });
+
+        it('handles BatteryAtReserve with and without abnormal usage', () => {
+            const standardReserve = {
+                ...baseAction,
+                reason: ActionReason.BatteryAtReserve,
+                batteryMode: BatteryMode.Load,
+            };
+            expect(getReasonText(standardReserve)).toContain('Using remaining energy because standby is not meaningful');
+
+            const normalReserveWithUsage = {
+                ...baseAction,
+                reason: ActionReason.BatteryAtReserve,
+                batteryMode: BatteryMode.Load,
+                recentHomeUsageAbnormal: false,
+                recentHomeUsageKWH: 2.5,
+                q3HomeUsageKWH: 2.0,
+            };
+            expect(getReasonText(normalReserveWithUsage)).toContain('Using remaining energy because standby is not meaningful');
+
+            const abnormalReserve = {
+                ...baseAction,
+                reason: ActionReason.BatteryAtReserve,
+                batteryMode: BatteryMode.Load,
+                recentHomeUsageAbnormal: true,
+                recentHomeUsageKWH: 7.5,
+                q3HomeUsageKWH: 2.7,
+            };
+            const abnormalText = getReasonText(abnormalReserve);
+            expect(abnormalText).toContain('Recent home usage (7.5 kWh) was well above your normal usage (2.7 kWh)');
+            expect(abnormalText).toContain('depleting the reserve buffer');
+        });
     });
 
     describe('formatTime & offset helpers', () => {

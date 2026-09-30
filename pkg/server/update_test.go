@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -1668,6 +1669,120 @@ func TestHandleUpdateSites(t *testing.T) {
 			require.NoError(t, err)
 			assert.Contains(t, resp["error"], "invalid cron parameter")
 		})
+	})
+
+	t.Run("Performance 100 Sites Parallel 3", func(t *testing.T) {
+		const numSites = 100
+		now := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
+
+		futurePrices := make([]types.Price, 24)
+		for i := 0; i < 24; i++ {
+			tStep := now.Add(time.Duration(i) * time.Hour)
+			rate := 0.08
+			if i >= 14 && i <= 19 {
+				rate = 0.45
+			}
+			futurePrices[i] = types.Price{
+				TSStart:              tStep,
+				TSEnd:                tStep.Add(time.Hour),
+				DollarsPerKWH:        rate,
+				GridUseDollarsPerKWH: 0.04,
+			}
+		}
+
+		settingsMap := make(map[string]types.Settings, numSites)
+		versionsMap := make(map[string]int, numSites)
+		updatedTimesMap := make(map[string]time.Time, numSites)
+		mockUMap := utility.NewMap(&mockStorage{})
+		mockP := ess.NewMap()
+
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(futurePrices[0], nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return(futurePrices, nil)
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{
+			Timestamp:          now,
+			BatteryCapacityKWH: 13.5,
+			BatterySOC:         50.0,
+			HomeKW:             1.5,
+			SolarKW:            2.0,
+		}, nil)
+		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
+
+		for i := 0; i < numSites; i++ {
+			siteID := fmt.Sprintf("site-perf-%03d", i+1)
+			settingsMap[siteID] = types.Settings{
+				Release:             "production",
+				PlanMode:            true,
+				ESS:                 "mock",
+				UtilityProvider:     "test",
+				MinBatterySOC:       20.0,
+				GridChargeBatteries: true,
+			}
+			versionsMap[siteID] = types.CurrentSettingsVersion
+			updatedTimesMap[siteID] = now
+			mockUMap.SetProvider(siteID, mockU)
+			mockP.SetSystem(siteID, mockES)
+		}
+
+		mockS := &mockStorage{}
+		mockS.On("ListSitesSettings", mock.Anything, "production", mock.Anything).Return(settingsMap, versionsMap, updatedTimesMap, nil)
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil)
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(now).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil)
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockS.On("InsertAction", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			listenAddr: ":8080",
+			controller: controller.NewController(),
+			bypassAuth: true,
+			release:    "production",
+			nowFunc:    func() time.Time { return now },
+		}
+
+		req := httptest.NewRequest("POST", "/api/updateSites", nil)
+		w := httptest.NewRecorder()
+
+		start := time.Now()
+		srv.handleUpdateSites(w, req)
+		elapsed := time.Since(start)
+
+		resp := w.Result()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var results map[string]string
+		err := json.NewDecoder(resp.Body).Decode(&results)
+		require.NoError(t, err)
+		assert.Len(t, results, numSites)
+		for siteID, status := range results {
+			assert.Equal(t, "success", status, "site %s should have succeeded", siteID)
+		}
+
+		// Ensure that running 100 sites with 3 parallel workers finishes well within Cloud Run's 90s deadline
+		assert.Less(t, elapsed, 30*time.Second, "100 sites with concurrency 3 took too long: %v", elapsed)
+
+		// Verify memory usage stays well below Cloud Run's 128 MB container limit
+		var mem runtime.MemStats
+		runtime.ReadMemStats(&mem)
+		assert.Less(t, mem.HeapAlloc, uint64(64*1024*1024), "HeapAlloc exceeded 64 MB: %d bytes", mem.HeapAlloc)
 	})
 }
 

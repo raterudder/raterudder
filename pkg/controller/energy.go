@@ -774,12 +774,14 @@ func (c *Controller) BuildHourlyEnergyModel(
 			pct = 0.50
 		}
 		avgLoadA := getWeightedPercentile(pts, pct)
+		p75LoadA := getWeightedPercentile(pts, 0.75)
 
 		// Apply extreme heatwave safeguard: if today's forecasted temp is at least extremeHeatwaveThresholdC
 		// hotter than the hottest temperature seen in history for this hour, AND is above the minimum hot-day threshold
 		// (extremeHeatwaveMinTempC), apply the safety boost to protect the battery.
 		if hasTargetTemp && hasHistTempForHour && targetTemp > maxHistTemp+extremeHeatwaveThresholdC && targetTemp > extremeHeatwaveMinTempC {
 			avgLoadA *= extremeHeatwaveLoadMultiplier
+			p75LoadA *= extremeHeatwaveLoadMultiplier
 		}
 
 		// Solar prediction.
@@ -797,11 +799,13 @@ func (c *Controller) BuildHourlyEnergyModel(
 		// Enforce a floor of 90% of the site's empirical standby baseline load to prevent predictions
 		// from collapsing completely, while allowing for some appliance shutdowns when going on vacation.
 		finalHomeLoadACAdj := max(0.9*standbyLoad, avgLoadA+appliedShift)
+		finalP75HomeLoad := max(0.9*standbyLoad, p75LoadA+appliedShift)
 
 		result[h] = TimeProfile{
 			Hour:           h,
 			AvgSolarKWH:    avgSolar,
 			AvgHomeLoadKWH: finalHomeLoadACAdj,
+			P75HomeLoadKWH: finalP75HomeLoad,
 		}
 	}
 

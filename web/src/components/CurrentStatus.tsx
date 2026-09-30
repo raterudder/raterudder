@@ -158,9 +158,15 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
     const refTs = (action.systemTimestamp && !isZeroTime(action.systemTimestamp)) ? action.systemTimestamp : action.systemStatus?.timestamp;
     const planSubvalue = getPlanStatusSubvalue(action, refTs);
 
+    const isAbnormalUsage = isBatteryAtReserve &&
+        Boolean(action.recentHomeUsageAbnormal) &&
+        action.recentHomeUsageKWH != null &&
+        action.q3HomeUsageKWH != null;
+
     let statusSubvalueText = timeRemainingText;
-    // Imminent depletion warning takes precedence if under 1 hour
-    if (defValid && deficitMs <= 60 * 60 * 1000) {
+    if (isAbnormalUsage) {
+        statusSubvalueText = `Recent usage well above normal (${action.recentHomeUsageKWH!.toFixed(1)} vs ${action.q3HomeUsageKWH!.toFixed(1)} kWh)`;
+    } else if (defValid && deficitMs <= 60 * 60 * 1000) {
         statusSubvalueText = timeRemainingText;
     } else if (planSubvalue) {
         statusSubvalueText = planSubvalue;
@@ -191,43 +197,50 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
         : getBatteryModeLabel(mode);
 
     return (
-        <div className={`current-status-card ${state}`}>
-            <div className="status-main">
-                <div className="status-icon">
-                    {isDirectBatteryExport ? (
-                        <span className="icon" aria-hidden="true">⚡</span>
-                    ) : isDirectSolarExport ? (
-                        <span className="icon" aria-hidden="true">☀️</span>
-                    ) : isDirectSolarExportStandby ? (
-                        <span className="icon" aria-hidden="true">🛡️</span>
-                    ) : isBatteryAtReserve ? (
-                        <span className="icon" aria-hidden="true">🔋</span>
-                    ) : (
-                        <>
-                            {state === 'charging' && <span className="icon" aria-hidden="true">⚡</span>}
-                            {state === 'discharging' && <span className="icon" aria-hidden="true">🏠</span>}
-                            {state === 'standby' && <span className="icon" aria-hidden="true">⏲️</span>}
-                        </>
-                    )}
-                </div>
-                <div className="status-info">
-                    <span className="status-label">{statusLabel}</span>
-                    <span className="status-value">{statusValue}</span>
-                    {statusSubvalueText && (
-                        <span className="status-subvalue">{statusSubvalueText}</span>
-                    )}
-                </div>
-            </div>
-            <div className="status-metrics">
-                {renderBatteryMetric()}
-                {hasPrice && (
-                    <div className="metric">
-                        <span className="metric-label">Price</span>
-                        <span className="metric-value">$ {price.toFixed(3)}<small>/kWh</small></span>
+        <>
+            <div className={`current-status-card ${state}`}>
+                <div className="status-main">
+                    <div className="status-icon">
+                        {isDirectBatteryExport ? (
+                            <span className="icon" aria-hidden="true">⚡</span>
+                        ) : isDirectSolarExport ? (
+                            <span className="icon" aria-hidden="true">☀️</span>
+                        ) : isDirectSolarExportStandby ? (
+                            <span className="icon" aria-hidden="true">🛡️</span>
+                        ) : isBatteryAtReserve ? (
+                            <span className="icon" aria-hidden="true">🔋</span>
+                        ) : (
+                            <>
+                                {state === 'charging' && <span className="icon" aria-hidden="true">⚡</span>}
+                                {state === 'discharging' && <span className="icon" aria-hidden="true">🏠</span>}
+                                {state === 'standby' && <span className="icon" aria-hidden="true">⏲️</span>}
+                            </>
+                        )}
                     </div>
-                )}
+                    <div className="status-info">
+                        <span className="status-label">{statusLabel}</span>
+                        <span className="status-value">{statusValue}</span>
+                        {statusSubvalueText && (
+                            <span className="status-subvalue">{statusSubvalueText}</span>
+                        )}
+                    </div>
+                </div>
+                <div className="status-metrics">
+                    {renderBatteryMetric()}
+                    {hasPrice && (
+                        <div className="metric">
+                            <span className="metric-label">Price</span>
+                            <span className="metric-value">$ {price.toFixed(3)}<small>/kWh</small></span>
+                        </div>
+                    )}
+                </div>
             </div>
-        </div>
+            {isAbnormalUsage && (
+                <div className="status-footnote">
+                    * Recent home usage ({action.recentHomeUsageKWH!.toFixed(1)} kWh) was well above your normal usage ({action.q3HomeUsageKWH!.toFixed(1)} kWh), depleting the reserve buffer.
+                </div>
+            )}
+        </>
     );
 };
 

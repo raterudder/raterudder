@@ -86,6 +86,9 @@ export interface Action {
     fault?: boolean;
     paused?: boolean;
     simulationParams?: SimulationParams;
+    recentHomeUsageKWH?: number;
+    q3HomeUsageKWH?: number;
+    recentHomeUsageAbnormal?: boolean;
     plan?: Plan;
 }
 

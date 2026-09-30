@@ -1048,10 +1048,14 @@ func (c *Controller) SimulateState(
 	return simData, simParams
 }
 
+// TimeProfile captures hourly solar generation and home load expectations for an hour of the day (0–23).
+// It includes both the central tendency (AvgHomeLoadKWH) and the 75th percentile (P75HomeLoadKWH)
+// baseline to evaluate typical energy flow and detect atypical consumption spikes.
 type TimeProfile struct {
 	Hour           int
 	AvgSolarKWH    float64
 	AvgHomeLoadKWH float64
+	P75HomeLoadKWH float64
 }
 
 func (c *Controller) calculateSolarTrend(ctx context.Context, now time.Time, history []types.EnergyStats, model map[int]TimeProfile, settings types.Settings) float64 {

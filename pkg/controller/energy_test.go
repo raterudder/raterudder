@@ -346,9 +346,11 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
-		// Adjacent hour blending dilutes the peak.
+		// Adjacent hour blending dilutes the peak in the median (AvgHomeLoadKWH),
+		// while the 75th percentile captures the elevated charging load.
 		if assert.Contains(t, model, 11) {
 			assert.InDelta(t, 3.3333333333333277, model[11].AvgHomeLoadKWH, 0.001)
+			assert.Greater(t, model[11].P75HomeLoadKWH, 1.0)
 		}
 	})
 
