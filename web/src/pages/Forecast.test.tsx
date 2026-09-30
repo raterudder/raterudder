@@ -364,9 +364,7 @@ describe('Forecast Page', () => {
         await waitFor(() => {
             expect(screen.getByText('24-Hour Energy Plan')).toBeInTheDocument();
             expect(screen.getByText('Planned Battery SOC (%)')).toBeInTheDocument();
-            expect(screen.queryByText('Battery (if used) (%)')).not.toBeInTheDocument();
-            expect(screen.getByText('Projected Benefit')).toBeInTheDocument();
-            expect(screen.getByText('+$1.85')).toBeInTheDocument();
+            expect(screen.queryByText('Projected Benefit')).not.toBeInTheDocument();
             expect(screen.getByText('Projected Grid Cost')).toBeInTheDocument();
             expect(screen.getByText('$3.45')).toBeInTheDocument();
             expect(screen.getByText('Projected Export Credits')).toBeInTheDocument();
@@ -442,12 +440,12 @@ describe('Forecast Page', () => {
         // Dynamic legend shows active modes
         expect(screen.getByText('Battery Modes:')).toBeInTheDocument();
         expect(screen.getByText('Grid Charge')).toBeInTheDocument();
-        expect(screen.getByText('Peak Discharge')).toBeInTheDocument();
         expect(screen.getByText('Solar Charge')).toBeInTheDocument();
         expect(screen.getByText('Powering Home')).toBeInTheDocument();
 
         // Inactive modes are NOT in the legend
         expect(screen.queryByText('Grid Export')).not.toBeInTheDocument();
+        expect(screen.queryByText('Peak Discharge')).not.toBeInTheDocument();
 
         // Reserve reference line is rendered on chart
         expect(screen.getByText('Reserve')).toBeInTheDocument();

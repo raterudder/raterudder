@@ -98,7 +98,7 @@ const planCharts: ChartConfig[] = [
         helpDescription: (
             <p>
                 Displays the planned State of Charge (SOC) of your battery as optimized by RateRudder.
-                The colored line segments highlight scheduled operations (charging from solar, discharging during peak rates, powering home, grid arbitrage, and standby holds).
+                The colored line segments highlight scheduled operations (charging from solar, powering home, grid charging, and standby holds).
                 The dashed red line represents your Minimum Reserve SOC threshold.
             </p>
         ),
@@ -722,29 +722,19 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     </p>
                     <div className="forecast-hero-grid">
                         <div className="forecast-stat-card">
-                            <span className="forecast-stat-label">Projected Benefit</span>
-                            <span className="forecast-stat-value benefit">
-                                {rawModelingData?.plan?.netEconomicBenefit !== undefined && rawModelingData.plan.netEconomicBenefit >= 0 ? '+' : ''}
-                                ${(rawModelingData?.plan?.netEconomicBenefit ?? 0).toFixed(2)}
-                            </span>
-                            <span className="forecast-stat-sublabel">Estimated schedule savings</span>
-                        </div>
-                        <div className="forecast-stat-card">
                             <span className="forecast-stat-label">Projected Grid Cost</span>
                             <span className="forecast-stat-value">
                                 ${(rawModelingData?.plan?.totalProjectedCost ?? 0).toFixed(2)}
                             </span>
                             <span className="forecast-stat-sublabel">Anticipated grid electricity cost</span>
                         </div>
-                        {rawModelingData?.plan?.totalExportCredits !== undefined && rawModelingData.plan.totalExportCredits > 0 && (
-                            <div className="forecast-stat-card">
-                                <span className="forecast-stat-label">Projected Export Credits</span>
-                                <span className="forecast-stat-value">
-                                    ${rawModelingData.plan.totalExportCredits.toFixed(2)}
-                                </span>
-                                <span className="forecast-stat-sublabel">Anticipated export credits</span>
-                            </div>
-                        )}
+                        <div className="forecast-stat-card">
+                            <span className="forecast-stat-label">Projected Export Credits</span>
+                            <span className="forecast-stat-value">
+                                ${(rawModelingData?.plan?.totalExportCredits ?? 0).toFixed(2)}
+                            </span>
+                            <span className="forecast-stat-sublabel">Anticipated export credits</span>
+                        </div>
                     </div>
                 </>
             ) : (

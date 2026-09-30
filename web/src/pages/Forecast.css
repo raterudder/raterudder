@@ -82,9 +82,6 @@
   color: var(--on-surface);
 }
 
-.forecast-stat-value.benefit {
-  color: var(--success, #10b981);
-}
 
 .forecast-stat-sublabel {
   font-size: 0.75rem;

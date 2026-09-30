@@ -29,13 +29,14 @@ function makePeriod(overrides: Partial<PlanPeriod> = {}): PlanPeriod {
 
 describe('classifyPlanPeriod', () => {
     it('defines standard ALL_ZONES configurations', () => {
-        expect(ALL_ZONES).toHaveLength(7);
+        expect(ALL_ZONES).toHaveLength(6);
         expect(ALL_ZONES.map((z) => z.key)).toContain('solarCharge');
-        expect(ALL_ZONES.map((z) => z.key)).toContain('peakDischarge');
         expect(ALL_ZONES.map((z) => z.key)).toContain('poweringHome');
+        expect(ALL_ZONES.map((z) => z.key)).toContain('gridCharge');
+        expect(ALL_ZONES.map((z) => z.key)).not.toContain('peakDischarge');
     });
 
-    it('classifies forced grid charging as Grid Charge', () => {
+    it('classifies forced grid charging as Grid Charge with purple color', () => {
         const period = makePeriod({
             batteryMode: BatteryMode.ChargeAny,
             startSoc: 20,
@@ -44,7 +45,7 @@ describe('classifyPlanPeriod', () => {
         const result = classifyPlanPeriod(period, 10);
         expect(result.key).toBe('gridCharge');
         expect(result.label).toBe('Grid Charge');
-        expect(result.color).toBe('#06b6d4');
+        expect(result.color).toBe('#8b5cf6');
     });
 
     it('classifies grid export as Grid Export', () => {
@@ -59,7 +60,7 @@ describe('classifyPlanPeriod', () => {
         expect(result.color).toBe('#f59e0b');
     });
 
-    it('classifies discharging during peak rate as Peak Discharge', () => {
+    it('classifies discharging during peak rate as Powering Home', () => {
         const period = makePeriod({
             batteryMode: BatteryMode.Load,
             reason: ActionReason.DischargeAtPeak,
@@ -67,12 +68,12 @@ describe('classifyPlanPeriod', () => {
             endSoc: 50,
         });
         const result = classifyPlanPeriod(period, 10);
-        expect(result.key).toBe('peakDischarge');
-        expect(result.label).toBe('Peak Discharge');
-        expect(result.color).toBe('#a855f7');
+        expect(result.key).toBe('poweringHome');
+        expect(result.label).toBe('Powering Home');
+        expect(result.color).toBe('#38bdf8');
     });
 
-    it('classifies peak description as Peak Discharge when discharging', () => {
+    it('classifies peak description as Powering Home when discharging', () => {
         const period = makePeriod({
             batteryMode: BatteryMode.Load,
             description: 'Discharging during peak hours',
@@ -80,8 +81,8 @@ describe('classifyPlanPeriod', () => {
             endSoc: 50,
         });
         const result = classifyPlanPeriod(period, 10);
-        expect(result.key).toBe('peakDischarge');
-        expect(result.label).toBe('Peak Discharge');
+        expect(result.key).toBe('poweringHome');
+        expect(result.label).toBe('Powering Home');
     });
 
     it('classifies rising SOC during self-consumption as Solar Charge', () => {
