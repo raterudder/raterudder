@@ -12,6 +12,7 @@ import { InterestForm } from '../components/InterestForm';
 import { HelpButton } from '../components/HelpButton';
 import { isESSEnabled } from '../utils/enabledProviders';
 import { formatHour12 } from '../utils/dashboardUtils';
+import { areSettingsEqual } from '../utils/settingsUtils';
 import './Settings.css';
 
 const countries = [
@@ -788,7 +789,6 @@ const ESSForm = ({
                                             checked={settings.manageTOUSchedules ?? false}
                                             onCheckedChange={(checked) => {
                                                 onChange('manageTOUSchedules', checked);
-                                                onChange('customGridSettings', true);
                                             }}
                                             className="switch-root"
                                         >
@@ -1082,6 +1082,7 @@ const Settings = ({
             setIsSaving(true);
             setError(null);
             await updateSettings(nextSettings, siteID);
+            originalSettingsRef.current = JSON.stringify(nextSettings);
             setSuccessMessage(newPause ? 'Automation paused' : 'Automation resumed');
             if (onSettingsSaved) {
                 await onSettingsSaved();
@@ -1195,9 +1196,7 @@ const Settings = ({
                 gridExportBatteries: parentSettings.gridExportBatteries ?? false
             };
             setSettings(initial);
-            if (!originalSettingsRef.current) {
-                originalSettingsRef.current = JSON.stringify(initial);
-            }
+            originalSettingsRef.current = JSON.stringify(initial);
             if (parentSettings.ess && !parentSettings.hasCredentials?.[parentSettings.ess]) {
                 setEditESS(true);
                 setIsESSDirty(true);
@@ -1208,7 +1207,13 @@ const Settings = ({
     const isDirty = Boolean(
         settings &&
         originalSettingsRef.current &&
-        JSON.stringify(settings) !== originalSettingsRef.current
+        (() => {
+            try {
+                return !areSettingsEqual(settings, JSON.parse(originalSettingsRef.current));
+            } catch {
+                return JSON.stringify(settings) !== originalSettingsRef.current;
+            }
+        })()
     );
 
     useEffect(() => {
@@ -1346,10 +1351,6 @@ const Settings = ({
             await updateSettings(finalSettings, siteID, credentialsPayload);
             setSuccessMessage('Settings saved successfully');
 
-            if (onSettingsSaved) {
-                await onSettingsSaved();
-            }
-
             const updatedSettings = credentialsPayload && finalSettings.ess ? {
                 ...finalSettings,
                 hasCredentials: {
@@ -1372,15 +1373,19 @@ const Settings = ({
                 }
             }
 
+            setSettings(updatedSettings);
+            originalSettingsRef.current = JSON.stringify(updatedSettings);
             if (credentialsPayload && settings.ess) {
-                setSettings(updatedSettings);
                 setEditESS(false);
                 setEssCredentials({});
                 setOauthStatus('idle');
             }
             setIsUtilityDirty(false);
             setIsESSDirty(false);
-            originalSettingsRef.current = JSON.stringify(updatedSettings);
+
+            if (onSettingsSaved) {
+                await onSettingsSaved();
+            }
 
             setTimeout(() => setSuccessMessage(null), 3000);
         } catch (err) {
@@ -1528,6 +1533,7 @@ const Settings = ({
             }
             setIsUtilityDirty(false);
             setIsESSDirty(false);
+            originalSettingsRef.current = JSON.stringify(finalSettings);
             if (finalSettings.ess === 'tesla') {
                 savingRef.current = false;
                 setIsSaving(false);
@@ -1570,7 +1576,10 @@ const Settings = ({
 
         try {
             setIsSaving(true);
-            await updateSettings({ ...settings, customGridSettings: true }, siteID);
+            const nextSettings = { ...settings, customGridSettings: true };
+            await updateSettings(nextSettings, siteID);
+            setSettings(nextSettings);
+            originalSettingsRef.current = JSON.stringify(nextSettings);
             setShowTeslaGridModal(false);
             if (onSettingsSaved) {
                 await onSettingsSaved();
