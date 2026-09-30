@@ -33,18 +33,20 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onLoginError, aut
                         <>
                             {clientIDs["google"] && (
                                 <GoogleOAuthProvider clientId={clientIDs["google"]}>
-                                    <GoogleLogin
-                                        onSuccess={(res) => onLoginSuccess(res, 'google')}
-                                        onError={onLoginError}
-                                        theme="filled_blue"
-                                        size="large"
-                                        text="signin_with"
-                                        shape="pill"
-                                        width="250"
-                                        auto_select
-                                        use_fedcm_for_prompt={!((navigator as any).brave)}
-                                        use_fedcm_for_button={!((navigator as any).brave)}
-                                    />
+                                    <div className="google-login-btn-container" style={{ colorScheme: 'light' }}>
+                                        <GoogleLogin
+                                            onSuccess={(res) => onLoginSuccess(res, 'google')}
+                                            onError={onLoginError}
+                                            theme="filled_blue"
+                                            size="large"
+                                            text="signin_with"
+                                            shape="pill"
+                                            width="250"
+                                            auto_select
+                                            use_fedcm_for_prompt={!((navigator as any).brave)}
+                                            use_fedcm_for_button={!((navigator as any).brave)}
+                                        />
+                                    </div>
                                 </GoogleOAuthProvider>
                             )}
                             {clientIDs["apple"] && (

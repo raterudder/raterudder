@@ -11,11 +11,14 @@ vi.mock('@react-oauth/google', () => ({
 
 describe('LoginPage Component', () => {
     it('renders correctly', () => {
-        render(<Router><LoginPage onLoginSuccess={vi.fn()} onLoginError={vi.fn()} authEnabled={true} clientIDs={{ google: "test-id" }} /></Router>);
+        const { container } = render(<Router><LoginPage onLoginSuccess={vi.fn()} onLoginError={vi.fn()} authEnabled={true} clientIDs={{ google: "test-id" }} /></Router>);
 
         expect(screen.getByText('RateRudder')).toBeInTheDocument();
         expect(screen.getByText('To get started, sign in below.')).toBeInTheDocument();
         expect(screen.getByText('Mock Google Login')).toBeInTheDocument();
+        const googleContainer = container.querySelector('.google-login-btn-container');
+        expect(googleContainer).toBeInTheDocument();
+        expect(googleContainer).toHaveStyle({ colorScheme: 'light' });
     });
 
     it('renders disabled message when auth is disabled', () => {

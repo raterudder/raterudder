@@ -27,6 +27,11 @@
   justify-content: center;
 }
 
+.google-login-btn-container,
+.google-login-btn-container iframe {
+  color-scheme: light;
+}
+
 .apple-auth-btn {
   width: 100% !important;
   max-width: 250px !important;
