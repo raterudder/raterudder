@@ -500,6 +500,165 @@ func TestHandleUnsubscribe(t *testing.T) {
 	})
 }
 
+func TestHandleReplaceSubscription(t *testing.T) {
+	t.Run("ReplacementSuccess", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		_, handler, _, _ := createTestEndpointsServer(t, mockS)
+
+		prevEndpoint := "https://updates.push.services.mozilla.com/wpush/v2/old-endpoint"
+		prevAuth := "test-prev-auth"
+
+		mockS.On("ReplaceUserPushSubscription", mock.Anything, prevEndpoint, prevAuth, mock.MatchedBy(func(sub *types.PushSubscription) bool {
+			return sub != nil && sub.Endpoint == "https://updates.push.services.mozilla.com/wpush/v2/new-endpoint" && sub.Keys.Auth == "test-new-auth"
+		})).Return(nil).Once()
+
+		reqBody := replaceSubscriptionRequest{
+			PrevEndpoint: prevEndpoint,
+			PrevAuth:     prevAuth,
+			Subscription: &types.PushSubscription{
+				Endpoint: "https://updates.push.services.mozilla.com/wpush/v2/new-endpoint",
+				Keys: types.PushSubscriptionKeys{
+					P256DH: "test-new-p256dh",
+					Auth:   "test-new-auth",
+				},
+				UserAgent: "TestBrowser",
+			},
+		}
+		body, err := json.Marshal(reqBody)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/notifications/replace", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		var resp map[string]bool
+		require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+		assert.True(t, resp["replaced"])
+	})
+
+	t.Run("RevocationSuccess", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		_, handler, _, _ := createTestEndpointsServer(t, mockS)
+
+		prevEndpoint := "https://updates.push.services.mozilla.com/wpush/v2/old-endpoint"
+		prevAuth := "test-prev-auth"
+
+		mockS.On("ReplaceUserPushSubscription", mock.Anything, prevEndpoint, prevAuth, (*types.PushSubscription)(nil)).Return(nil).Once()
+
+		reqBody := replaceSubscriptionRequest{
+			PrevEndpoint: prevEndpoint,
+			PrevAuth:     prevAuth,
+			Subscription: nil,
+		}
+		body, err := json.Marshal(reqBody)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/notifications/replace", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		var resp map[string]bool
+		require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+		assert.False(t, resp["replaced"])
+	})
+
+	t.Run("NotificationsDisabled", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		disabledSrv := &Server{
+			storage:            mockS,
+			bypassAuth:         true,
+			generalRateLimit:   rate.Every(time.Minute / 30),
+			generalBurst:       30,
+			sensitiveRateLimit: rate.Every(time.Minute / 10),
+			sensitiveBurst:     10,
+		}
+		disabledHandler := disabledSrv.setupHandler()
+
+		req := httptest.NewRequest(http.MethodPost, "/api/notifications/replace", bytes.NewReader([]byte("{}")))
+		rec := httptest.NewRecorder()
+		disabledHandler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	})
+
+	t.Run("InvalidBody", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		_, handler, _, _ := createTestEndpointsServer(t, mockS)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/notifications/replace", bytes.NewReader([]byte("not-json")))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+
+	t.Run("MissingRequiredFields", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		_, handler, _, _ := createTestEndpointsServer(t, mockS)
+
+		reqBody := replaceSubscriptionRequest{
+			PrevEndpoint: "",
+			PrevAuth:     "",
+		}
+		body, err := json.Marshal(reqBody)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/notifications/replace", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+
+	t.Run("MissingKeysOnReplacement", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		_, handler, _, _ := createTestEndpointsServer(t, mockS)
+
+		reqBody := replaceSubscriptionRequest{
+			PrevEndpoint: "https://updates.push.services.mozilla.com/wpush/v2/old-endpoint",
+			PrevAuth:     "test-prev-auth",
+			Subscription: &types.PushSubscription{
+				Endpoint: "https://updates.push.services.mozilla.com/wpush/v2/new-endpoint",
+				// Keys missing
+			},
+		}
+		body, err := json.Marshal(reqBody)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/notifications/replace", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+
+	t.Run("StorageForbidden", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		_, handler, _, _ := createTestEndpointsServer(t, mockS)
+
+		prevEndpoint := "https://updates.push.services.mozilla.com/wpush/v2/old-endpoint"
+		prevAuth := "invalid-auth"
+
+		mockS.On("ReplaceUserPushSubscription", mock.Anything, prevEndpoint, prevAuth, (*types.PushSubscription)(nil)).Return(errors.New("invalid subscription authentication secret")).Once()
+
+		reqBody := replaceSubscriptionRequest{
+			PrevEndpoint: prevEndpoint,
+			PrevAuth:     prevAuth,
+			Subscription: nil,
+		}
+		body, err := json.Marshal(reqBody)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/notifications/replace", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+}
+
 func TestHandleUpdateNotificationSettings(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}

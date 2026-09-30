@@ -185,6 +185,11 @@ resource "google_cloud_run_v2_service" "raterudder" {
       }
 
       env {
+        name  = "WEB_IMAGE_CACHE_DURATION"
+        value = "168h"
+      }
+
+      env {
         name  = "CONFIG_JSON_FILE"
         value = "/secrets/config.json"
       }

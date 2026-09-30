@@ -295,6 +295,11 @@ func (m *MockDatabase) RemoveUserPushSubscription(ctx context.Context, userID st
 	return args.Error(0)
 }
 
+func (m *MockDatabase) ReplaceUserPushSubscription(ctx context.Context, prevEndpoint, prevAuth string, newSub *types.PushSubscription) error {
+	args := m.Called(ctx, prevEndpoint, prevAuth, newSub)
+	return args.Error(0)
+}
+
 func (m *MockDatabase) UpdateSiteNotificationSettings(ctx context.Context, siteID string, userID string, settings types.UserNotificationSettings) error {
 	args := m.Called(ctx, siteID, userID, settings)
 	return args.Error(0)

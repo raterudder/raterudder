@@ -1237,6 +1237,35 @@ func TestFirestoreProvider(t *testing.T) {
 		gotSettings, _, _, err = f.GetSettings(ctx, siteID)
 		require.NoError(t, err)
 		assert.NotContains(t, gotSettings.Notifications, userID)
+
+		// Test ReplaceUserPushSubscription (renewal and revocation)
+		require.NoError(t, f.AddUserPushSubscription(ctx, userID, sub1))
+
+		sub1Rotated := types.PushSubscription{
+			ID:        "sub-1-rotated",
+			Endpoint:  "https://fcm.googleapis.com/fcm/send/sub-1-rotated",
+			Keys:      types.PushSubscriptionKeys{P256DH: "key1-rot", Auth: "auth1-rot"},
+			UserAgent: "Chrome Mac",
+		}
+
+		// Wrong auth secret fails
+		err = f.ReplaceUserPushSubscription(ctx, sub1.Endpoint, "wrong-auth", &sub1Rotated)
+		assert.Error(t, err)
+
+		// Valid replacement succeeds
+		require.NoError(t, f.ReplaceUserPushSubscription(ctx, sub1.Endpoint, sub1.Keys.Auth, &sub1Rotated))
+		gotUser, err = f.GetUser(ctx, userID)
+		require.NoError(t, err)
+		if assert.Len(t, gotUser.Subscriptions, 1) {
+			assert.Equal(t, "sub-1-rotated", gotUser.Subscriptions[0].ID)
+			assert.Equal(t, "https://fcm.googleapis.com/fcm/send/sub-1-rotated", gotUser.Subscriptions[0].Endpoint)
+		}
+
+		// Revocation with nil newSub removes subscription
+		require.NoError(t, f.ReplaceUserPushSubscription(ctx, sub1Rotated.Endpoint, "auth1-rot", nil))
+		gotUser, err = f.GetUser(ctx, userID)
+		require.NoError(t, err)
+		assert.Len(t, gotUser.Subscriptions, 0)
 	})
 
 	t.Run("SiteNotificationSettings", func(t *testing.T) {

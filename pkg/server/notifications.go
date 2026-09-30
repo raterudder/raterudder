@@ -2443,6 +2443,58 @@ func (s *Server) handleUnsubscribe(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// replaceSubscriptionRequest payload for rotating or revoking a push subscription without user authentication.
+type replaceSubscriptionRequest struct {
+	PrevEndpoint string                  `json:"prevEndpoint"`
+	PrevAuth     string                  `json:"prevAuth"`
+	Subscription *types.PushSubscription `json:"subscription"`
+}
+
+// handleReplaceSubscription handles unauthenticated push subscription replacement or revocation.
+func (s *Server) handleReplaceSubscription(w http.ResponseWriter, r *http.Request) {
+	if !s.notificationsEnabled() {
+		writeJSONError(w, "notifications not configured on server", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req replaceSubscriptionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.PrevEndpoint == "" || req.PrevAuth == "" {
+		writeJSONError(w, "prevEndpoint and prevAuth are required", http.StatusBadRequest)
+		return
+	}
+
+	if req.Subscription != nil && req.Subscription.Endpoint != "" {
+		if req.Subscription.Keys.P256DH == "" || req.Subscription.Keys.Auth == "" {
+			writeJSONError(w, "subscription keys are required for replacement", http.StatusBadRequest)
+			return
+		}
+		if req.Subscription.ID == "" {
+			h := sha256.Sum256([]byte(req.Subscription.Endpoint))
+			req.Subscription.ID = hex.EncodeToString(h[:])
+		}
+		req.Subscription.TSCreated = s.now().UTC()
+	}
+
+	ctx := r.Context()
+	if err := s.storage.ReplaceUserPushSubscription(ctx, req.PrevEndpoint, req.PrevAuth, req.Subscription); err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to replace push subscription", slog.Any("error", err), slog.String("prevEndpoint", req.PrevEndpoint))
+		writeJSONError(w, "failed to replace subscription", http.StatusForbidden)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	resp := map[string]bool{"replaced": req.Subscription != nil && req.Subscription.Endpoint != ""}
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		panic(http.ErrAbortHandler)
+	}
+}
+
 // updateNotificationSettingsRequest payload for updating user notification preferences on a site.
 type updateNotificationSettingsRequest struct {
 	SiteID   string                         `json:"siteID"`

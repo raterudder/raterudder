@@ -66,19 +66,20 @@ type Server struct {
 	devProxy   string
 	httpServer *http.Server
 
-	updateSpecificEmail  string
-	adminEmails          []string
-	oidcAudiences        map[string]string
-	oidcVerifiers        map[string]tokenVerifier
-	bypassAuth           bool
-	singleSite           bool
-	encryptionKey        string
-	sessionEncryptionKey string
-	sessionDuration      time.Duration
-	release              string
-	serverName           string
-	webCacheDuration     time.Duration
-	showHidden           bool
+	updateSpecificEmail   string
+	adminEmails           []string
+	oidcAudiences         map[string]string
+	oidcVerifiers         map[string]tokenVerifier
+	bypassAuth            bool
+	singleSite            bool
+	encryptionKey         string
+	sessionEncryptionKey  string
+	sessionDuration       time.Duration
+	release               string
+	serverName            string
+	webCacheDuration      time.Duration
+	webImageCacheDuration time.Duration
+	showHidden            bool
 
 	clientLimiters     sync.Map
 	generalRateLimit   rate.Limit
@@ -131,6 +132,7 @@ func Configured(u *utility.Map, e *ess.Map, s storage.Database) *Server {
 	sessionDuration := lflag.Duration("session-duration", 7*24*time.Hour, "Session lifetime duration (default 7 days)")
 	release := lflag.String("release", "production", "Release environment (production or staging)")
 	webCacheDuration := lflag.Duration("web-cache-duration", 0, "Duration to cache web files (e.g. 1h, 5m). 0 means no cache.")
+	webImageCacheDuration := lflag.Duration("web-image-cache-duration", 0, "Duration to cache web image assets (e.g. 30d, 720h). 0 means no cache.")
 	generalRateLimitPerMin := lflag.Int("general-rate-limit", 30, "General rate limit per minute per IP")
 	sensitiveRateLimitPerMin := lflag.Int("sensitive-rate-limit", 5, "Sensitive rate limit per minute per IP")
 	vapidPrivateKey := lflag.String("vapid-private-key", "", "Base64 ECDSA P-256 private key for Web Push")
@@ -221,6 +223,7 @@ func Configured(u *utility.Map, e *ess.Map, s storage.Database) *Server {
 		srv.showHidden = *showHidden
 		srv.release = *release
 		srv.webCacheDuration = *webCacheDuration
+		srv.webImageCacheDuration = *webImageCacheDuration
 
 		if len(*encryptionKey) != 32 {
 			log.Ctx(context.Background()).Error("credentials-encryption-key must be 32 characters")
@@ -285,6 +288,7 @@ func (s *Server) setupHandler() http.Handler {
 	apiMux.HandleFunc("GET /api/notifications/subscriptions", s.handleGetNotificationSubscriptions)
 	apiMux.HandleFunc("POST /api/notifications/subscribe", s.handleSubscribe)
 	apiMux.HandleFunc("POST /api/notifications/unsubscribe", s.handleUnsubscribe)
+	apiMux.HandleFunc("POST /api/notifications/replace", s.handleReplaceSubscription)
 	apiMux.HandleFunc("POST /api/settings/notifications", s.handleUpdateNotificationSettings)
 	apiMux.HandleFunc("POST /api/notifications/click", s.handleNotificationClick)
 
@@ -415,12 +419,21 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func isImageFile(p string) bool {
+	ext := strings.ToLower(path.Ext(p))
+	switch ext {
+	case ".png", ".svg", ".webp", ".ico", ".jpg", ".jpeg":
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *Server) webHandler(dir fs.FS, h http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		cleanedPath := path.Clean(strings.TrimPrefix(r.URL.Path, "/"))
 		// Default to serving index.html for unknown paths (SPA)
 		if r.URL.Path != "/" {
-			// Clean the path to remove trailing slashes and normalize it for io/fs
-			cleanedPath := path.Clean(strings.TrimPrefix(r.URL.Path, "/"))
 			// Check if the file exists in the filesystem
 			f, err := dir.Open(cleanedPath)
 			if err == nil {
@@ -441,8 +454,10 @@ func (s *Server) webHandler(dir fs.FS, h http.Handler) http.HandlerFunc {
 				return
 			}
 		}
-		// cache SPA files if duration is set
-		if s.webCacheDuration > 0 {
+		// cache SPA files or image files if duration is set
+		if isImageFile(cleanedPath) && s.webImageCacheDuration > 0 {
+			w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d, stale-while-revalidate, stale-if-error", int(s.webImageCacheDuration.Seconds())))
+		} else if s.webCacheDuration > 0 {
 			w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", int(s.webCacheDuration.Seconds())))
 		}
 

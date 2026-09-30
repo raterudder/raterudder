@@ -50,6 +50,7 @@ var routeAuthAttributes = map[string]pathAttributes{
 	"/api/notifications/subscriptions":  {ignoreSiteID: true},
 	"/api/notifications/subscribe":      {ignoreSiteID: true},
 	"/api/notifications/unsubscribe":    {ignoreSiteID: true},
+	"/api/notifications/replace":        {allowNoLogin: true, ignoreSiteID: true},
 	"/api/notifications/click":          {allowNoLogin: true, ignoreSiteID: true},
 	"/api/history/savings":              {allowAllSites: true},
 	"/api/history/actionsAndSavings":    {allowAllSites: true},

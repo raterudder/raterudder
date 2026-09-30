@@ -43,6 +43,7 @@ func TestWebHandler(t *testing.T) {
 	testFS := fstest.MapFS{
 		"index.html":     {Data: []byte("<html>index</html>")},
 		"assets/main.js": {Data: []byte("console.log('hello');")},
+		"logo_192.png":   {Data: []byte("pngdata")},
 	}
 
 	t.Run("Serve Existing Web File", func(t *testing.T) {
@@ -250,26 +251,40 @@ func TestWebHandler(t *testing.T) {
 
 	t.Run("web Cache Duration Header", func(t *testing.T) {
 		srv := &Server{
-			utilities:        mockUMap,
-			ess:              mockP,
-			storage:          mockS,
-			listenAddr:       ":8080",
-			controller:       controller.NewController(),
-			webCacheDuration: 5 * time.Minute,
+			utilities:             mockUMap,
+			ess:                   mockP,
+			storage:               mockS,
+			listenAddr:            ":8080",
+			controller:            controller.NewController(),
+			webCacheDuration:      5 * time.Minute,
+			webImageCacheDuration: 30 * 24 * time.Hour,
 		}
 
 		mux := http.NewServeMux()
 		fileServer := http.FileServer(http.FS(testFS))
 		mux.Handle("/", srv.webHandler(testFS, fileServer))
 
-		req := httptest.NewRequest("GET", "/", nil)
-		w := httptest.NewRecorder()
+		t.Run("Regular File", func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/", nil)
+			w := httptest.NewRecorder()
 
-		mux.ServeHTTP(w, req)
+			mux.ServeHTTP(w, req)
 
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-		assert.Equal(t, "public, max-age=300", w.Header().Get("Cache-Control"))
+			resp := w.Result()
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, "public, max-age=300", w.Header().Get("Cache-Control"))
+		})
+
+		t.Run("Image File", func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/logo_192.png", nil)
+			w := httptest.NewRecorder()
+
+			mux.ServeHTTP(w, req)
+
+			resp := w.Result()
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, "public, max-age=2592000, stale-while-revalidate, stale-if-error", w.Header().Get("Cache-Control"))
+		})
 	})
 
 	t.Run("Healthz Endpoint", func(t *testing.T) {

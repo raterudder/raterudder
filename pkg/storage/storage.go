@@ -77,6 +77,7 @@ type Database interface {
 	// Notifications
 	AddUserPushSubscription(ctx context.Context, userID string, sub types.PushSubscription) error
 	RemoveUserPushSubscription(ctx context.Context, userID string, endpoint string) error
+	ReplaceUserPushSubscription(ctx context.Context, prevEndpoint, prevAuth string, newSub *types.PushSubscription) error
 	UpdateSiteNotificationSettings(ctx context.Context, siteID string, userID string, settings types.UserNotificationSettings) error
 	GetNotificationLogs(ctx context.Context, siteID string, start, end time.Time) ([]types.NotificationLog, error)
 	AppendNotificationLog(ctx context.Context, siteID string, log types.NotificationLog) error

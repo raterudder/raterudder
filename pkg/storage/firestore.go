@@ -2,6 +2,9 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1194,12 +1197,23 @@ func (f *FirestoreProvider) UpdateUser(ctx context.Context, user types.User) err
 	if user.ID == "" {
 		return errors.New("userID cannot be empty")
 	}
+
+	subIDs := make([]string, 0, len(user.Subscriptions))
+	for i := range user.Subscriptions {
+		if user.Subscriptions[i].ID == "" {
+			h := sha256.Sum256([]byte(user.Subscriptions[i].Endpoint))
+			user.Subscriptions[i].ID = hex.EncodeToString(h[:])
+		}
+		subIDs = append(subIDs, user.Subscriptions[i].ID)
+	}
+
 	userJSON, err := json.Marshal(user)
 	if err != nil {
 		return fmt.Errorf("failed to marshal user %s: %w", user.ID, err)
 	}
 	_, err = f.client.Collection("users").Doc(user.ID).Set(ctx, map[string]any{
-		"json": string(userJSON),
+		"json":            string(userJSON),
+		"subscriptionIDs": subIDs,
 	}, firestore.MergeAll)
 	if err != nil {
 		return fmt.Errorf("failed to update user %s: %w", user.ID, err)
@@ -1953,6 +1967,11 @@ func (f *FirestoreProvider) AddUserPushSubscription(ctx context.Context, userID 
 			return fmt.Errorf("failed to unmarshal user %s: %w", userID, err)
 		}
 
+		if sub.ID == "" {
+			h := sha256.Sum256([]byte(sub.Endpoint))
+			sub.ID = hex.EncodeToString(h[:])
+		}
+
 		// Update existing subscription or append
 		found := false
 		for i, existing := range user.Subscriptions {
@@ -1966,13 +1985,28 @@ func (f *FirestoreProvider) AddUserPushSubscription(ctx context.Context, userID 
 			user.Subscriptions = append(user.Subscriptions, sub)
 		}
 
+		subIDs := make([]string, 0, len(user.Subscriptions)*2)
+		for _, s := range user.Subscriptions {
+			if s.ID != "" {
+				subIDs = append(subIDs, s.ID)
+			}
+			if s.Endpoint != "" {
+				h := sha256.Sum256([]byte(s.Endpoint))
+				hHex := hex.EncodeToString(h[:])
+				if hHex != s.ID {
+					subIDs = append(subIDs, hHex)
+				}
+			}
+		}
+
 		userJSON, err := json.Marshal(user)
 		if err != nil {
 			return fmt.Errorf("failed to marshal user %s: %w", userID, err)
 		}
 
 		return tx.Set(docRef, map[string]any{
-			"json": string(userJSON),
+			"json":            string(userJSON),
+			"subscriptionIDs": subIDs,
 		}, firestore.MergeAll)
 	})
 }
@@ -2021,13 +2055,28 @@ func (f *FirestoreProvider) RemoveUserPushSubscription(ctx context.Context, user
 			userSites = user.Sites
 		}
 
+		subIDs := make([]string, 0, len(user.Subscriptions)*2)
+		for _, s := range user.Subscriptions {
+			if s.ID != "" {
+				subIDs = append(subIDs, s.ID)
+			}
+			if s.Endpoint != "" {
+				h := sha256.Sum256([]byte(s.Endpoint))
+				hHex := hex.EncodeToString(h[:])
+				if hHex != s.ID {
+					subIDs = append(subIDs, hHex)
+				}
+			}
+		}
+
 		userJSON, err := json.Marshal(user)
 		if err != nil {
 			return fmt.Errorf("failed to marshal user %s: %w", userID, err)
 		}
 
 		return tx.Set(docRef, map[string]any{
-			"json": string(userJSON),
+			"json":            string(userJSON),
+			"subscriptionIDs": subIDs,
 		}, firestore.MergeAll)
 	})
 	if err != nil {
@@ -2051,6 +2100,108 @@ func (f *FirestoreProvider) RemoveUserPushSubscription(ctx context.Context, user
 	}
 
 	return nil
+}
+
+// ReplaceUserPushSubscription replaces a push subscription or removes it (if newSub is nil or has empty endpoint)
+// by finding the user matching prevEndpoint (or its sha256 ID) and verifying prevAuth in constant time.
+func (f *FirestoreProvider) ReplaceUserPushSubscription(
+	ctx context.Context,
+	prevEndpoint string,
+	prevAuth string,
+	newSub *types.PushSubscription,
+) error {
+	if prevEndpoint == "" || prevAuth == "" {
+		return fmt.Errorf("prevEndpoint and prevAuth are required")
+	}
+
+	prevHash := sha256.Sum256([]byte(prevEndpoint))
+	prevID := hex.EncodeToString(prevHash[:])
+
+	// Query users collection by subscriptionIDs containing prevID
+	iter := f.client.Collection("users").
+		Where("subscriptionIDs", "array-contains", prevID).
+		Limit(1).
+		Documents(ctx)
+	defer iter.Stop()
+
+	doc, err := iter.Next()
+	if errors.Is(err, iterator.Done) {
+		return fmt.Errorf("%w: subscription %s", ErrUserNotFound, prevID)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to query subscription by ID: %w", err)
+	}
+
+	docRef := doc.Ref
+
+	return f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		docSnap, err := tx.Get(docRef)
+		if err != nil {
+			return err
+		}
+
+		val, err := docSnap.DataAt("json")
+		if err != nil {
+			return fmt.Errorf("missing user json: %w", err)
+		}
+		jsonStr, ok := val.(string)
+		if !ok {
+			return fmt.Errorf("user json is not a string")
+		}
+
+		var user types.User
+		if err := json.Unmarshal([]byte(jsonStr), &user); err != nil {
+			return fmt.Errorf("failed to unmarshal user: %w", err)
+		}
+
+		targetIndex := -1
+		for i, existing := range user.Subscriptions {
+			if existing.ID == prevID || existing.Endpoint == prevEndpoint {
+				if subtle.ConstantTimeCompare([]byte(existing.Keys.Auth), []byte(prevAuth)) != 1 {
+					return fmt.Errorf("invalid subscription authentication secret")
+				}
+				targetIndex = i
+				break
+			}
+		}
+		if targetIndex == -1 {
+			return fmt.Errorf("subscription not found on user")
+		}
+
+		if newSub != nil && newSub.Endpoint != "" {
+			if newSub.ID == "" {
+				h := sha256.Sum256([]byte(newSub.Endpoint))
+				newSub.ID = hex.EncodeToString(h[:])
+			}
+			user.Subscriptions[targetIndex] = *newSub
+		} else {
+			user.Subscriptions = append(user.Subscriptions[:targetIndex], user.Subscriptions[targetIndex+1:]...)
+		}
+
+		subIDs := make([]string, 0, len(user.Subscriptions)*2)
+		for _, s := range user.Subscriptions {
+			if s.ID != "" {
+				subIDs = append(subIDs, s.ID)
+			}
+			if s.Endpoint != "" {
+				h := sha256.Sum256([]byte(s.Endpoint))
+				hHex := hex.EncodeToString(h[:])
+				if hHex != s.ID {
+					subIDs = append(subIDs, hHex)
+				}
+			}
+		}
+
+		userJSON, err := json.Marshal(user)
+		if err != nil {
+			return fmt.Errorf("failed to marshal user: %w", err)
+		}
+
+		return tx.Set(docRef, map[string]any{
+			"json":            string(userJSON),
+			"subscriptionIDs": subIDs,
+		}, firestore.MergeAll)
+	})
 }
 
 // UpdateSiteNotificationSettings updates notification preferences for a specific user on a site's settings in a transaction.
