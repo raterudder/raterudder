@@ -347,7 +347,7 @@ func TestDecideHistory(t *testing.T) {
 					dt := 1.0 / 60.0 // 1 minute in hours
 
 					// Get hourly stats for this minute
-					stat, _ := findEnergyStats(dataset.EnergyHistory, tMin, loc)
+					stat, _ := findEnergyStats(dataset.EnergyHistory, tMin, fileLoc)
 					homeKW := stat.HomeKWH
 					solarKW := stat.SolarKWH
 

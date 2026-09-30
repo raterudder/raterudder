@@ -66,21 +66,27 @@ func TestBuildPlanningTimeline(t *testing.T) {
 		require.NotEmpty(t, timeline)
 		assert.Equal(t, "none", simParams.DetectedShift)
 
-		// With >40m interval splitting, now (10:15) to top of hour (11:00) is 45m (> 40m), splitting at 10:30
+		// With >=40m interval splitting, now (10:15) to top of hour (11:00) is 45m (>= 40m), splitting off 20m at 10:35
 		assert.Equal(t, now, timeline[0].startTime)
-		assert.Equal(t, time.Date(2026, 6, 15, 10, 30, 0, 0, chicagoLoc), timeline[0].endTime)
-		assert.InDelta(t, 15.0/60.0, timeline[0].durationHours, 0.01)
+		assert.Equal(t, time.Date(2026, 6, 15, 10, 35, 0, 0, chicagoLoc), timeline[0].endTime)
+		assert.InDelta(t, 20.0/60.0, timeline[0].durationHours, 0.01)
 
-		// Subsequent intervals should be 30-minute blocks (:30 and :00)
+		// Remaining 10:35 to 11:00 is 25m (< 40m)
 		if len(timeline) > 1 {
-			assert.InDelta(t, 30.0/60.0, timeline[1].durationHours, 0.01)
-			assert.Equal(t, time.Date(2026, 6, 15, 10, 30, 0, 0, chicagoLoc), timeline[1].startTime)
+			assert.InDelta(t, 25.0/60.0, timeline[1].durationHours, 0.01)
+			assert.Equal(t, time.Date(2026, 6, 15, 10, 35, 0, 0, chicagoLoc), timeline[1].startTime)
 			assert.Equal(t, time.Date(2026, 6, 15, 11, 0, 0, 0, chicagoLoc), timeline[1].endTime)
 		}
+		// Subsequent intervals should be 20-minute blocks (:20, :40, :00)
 		if len(timeline) > 2 {
-			assert.InDelta(t, 30.0/60.0, timeline[2].durationHours, 0.01)
+			assert.InDelta(t, 20.0/60.0, timeline[2].durationHours, 0.01)
 			assert.Equal(t, time.Date(2026, 6, 15, 11, 0, 0, 0, chicagoLoc), timeline[2].startTime)
-			assert.Equal(t, time.Date(2026, 6, 15, 11, 30, 0, 0, chicagoLoc), timeline[2].endTime)
+			assert.Equal(t, time.Date(2026, 6, 15, 11, 20, 0, 0, chicagoLoc), timeline[2].endTime)
+		}
+		if len(timeline) > 3 {
+			assert.InDelta(t, 20.0/60.0, timeline[3].durationHours, 0.01)
+			assert.Equal(t, time.Date(2026, 6, 15, 11, 20, 0, 0, chicagoLoc), timeline[3].startTime)
+			assert.Equal(t, time.Date(2026, 6, 15, 11, 40, 0, 0, chicagoLoc), timeline[3].endTime)
 		}
 	})
 
@@ -148,14 +154,14 @@ func TestBuildPlanningTimeline(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, len(timeline) >= 3)
 
-		// 14:00 to 14:45 is 45m (> 40m), so it splits at 14:30 into 30m and 15m intervals
+		// 14:00 to 14:45 is 45m (>= 40m), so it chops off 20m into 14:00-14:20 (20m) and 14:20-14:45 (25m) intervals
 		assert.Equal(t, startHour, timeline[0].startTime)
-		assert.Equal(t, startHour.Add(30*time.Minute), timeline[0].endTime)
-		assert.InDelta(t, 0.5, timeline[0].durationHours, 0.01)
+		assert.Equal(t, startHour.Add(20*time.Minute), timeline[0].endTime)
+		assert.InDelta(t, 20.0/60.0, timeline[0].durationHours, 0.01)
 
-		assert.Equal(t, startHour.Add(30*time.Minute), timeline[1].startTime)
+		assert.Equal(t, startHour.Add(20*time.Minute), timeline[1].startTime)
 		assert.Equal(t, startHour.Add(45*time.Minute), timeline[1].endTime)
-		assert.InDelta(t, 15.0/60.0, timeline[1].durationHours, 0.01)
+		assert.InDelta(t, 25.0/60.0, timeline[1].durationHours, 0.01)
 
 		assert.Equal(t, startHour.Add(45*time.Minute), timeline[2].startTime)
 		assert.Equal(t, startHour.Add(60*time.Minute), timeline[2].endTime)
@@ -177,10 +183,10 @@ func TestBuildPlanningTimeline(t *testing.T) {
 		require.NoError(t, err)
 		require.NotEmpty(t, timeline)
 
-		// 10:55 to 11:00 is 5m (< 10m). Price continues to 14:00, so it merges with 11:00-11:30 -> 10:55 to 11:30 (35m <= 40m)
+		// 10:55 to 11:00 is 5m (< 10m). Price continues to 18:00, so it merges with 11:00-11:20 -> 10:55 to 11:20 (25m <= 40m)
 		assert.Equal(t, runTime, timeline[0].startTime)
-		assert.Equal(t, time.Date(2026, 6, 15, 11, 30, 0, 0, chicagoLoc), timeline[0].endTime)
-		assert.InDelta(t, 35.0/60.0, timeline[0].durationHours, 0.01)
+		assert.Equal(t, time.Date(2026, 6, 15, 11, 20, 0, 0, chicagoLoc), timeline[0].endTime)
+		assert.InDelta(t, 25.0/60.0, timeline[0].durationHours, 0.01)
 	})
 
 	t.Run("ComEdMidnightTruncation_PlansOverAvailableHours", func(t *testing.T) {
@@ -322,9 +328,10 @@ func TestBuildPlanningTimeline(t *testing.T) {
 			TimeLocation:       "America/Chicago",
 			VPPEvents: []types.VPPEvent{
 				{
-					TSStart: vppStart,
-					TSEnd:   vppEnd,
-					VPPSoc:  20,
+					TSStart:   vppStart,
+					TSEnd:     vppEnd,
+					VPPSoc:    20,
+					Mandatory: true,
 				},
 			},
 		}
@@ -2365,9 +2372,10 @@ func TestGenerateActionCandidates(t *testing.T) {
 	t.Run("ArbitragePrecharge_AccountsForRoundTripEfficiencyLoss", func(t *testing.T) {
 		t.Parallel()
 
-		// Export rate $0.11, current import rate $0.10.
-		// Default roundtrip efficiency is ~0.90 -> 0.10 / 0.90 = 0.111 > 0.11.
-		// Since export rate $0.11 < $0.111, this is financially negative arbitrage!
+		// Import rate $0.10, export rate $0.135, minArbitrageDiff = $0.03.
+		// Nominal spread: $0.135 - $0.10 = $0.035 >= $0.030.
+		// Round-trip efficiency ~0.90 -> recharge cost $0.10 / 0.90 = $0.1111.
+		// Post-loss spread: $0.135 - $0.1111 = $0.0239 < $0.030.
 		arbTimeline := []planInterval{
 			{
 				index:         0,
@@ -2383,15 +2391,11 @@ func TestGenerateActionCandidates(t *testing.T) {
 				endTime:       now.Add(10 * time.Hour),
 				durationHours: 4.0,
 				importRate:    0.15,
-				exportRate:    0.11,
+				exportRate:    0.135,
 				solarKWH:      16.0,
 				minSOC:        20.0,
 			},
 		}
-
-		arbSettings := settings
-		arbSettings.GridChargeBatteries = true
-		arbSettings.GridExportSolar = true
 
 		lowState := planState{
 			energyKWH:   2.7,
@@ -2400,11 +2404,39 @@ func TestGenerateActionCandidates(t *testing.T) {
 			maxChargeKW: 5.0,
 		}
 
-		candidates := c.generateActionCandidates(ctx, 0, arbTimeline[0], arbTimeline, lowState, planningAnchors{}, arbSettings, status, nil, precedingAction{})
-		for _, cand := range candidates {
+		// Case 1: Direct Battery Export Arbitrage (evaluated post-losses).
+		// Pruned because post-loss spread ($0.0239) does not clear the $0.030 hurdle.
+		batterySettings := settings
+		batterySettings.GridChargeBatteries = true
+		batterySettings.ManageTOUSchedules = true
+		batterySettings.GridExportBatteries = true
+		batterySettings.GridExportSolar = false
+		batterySettings.MinArbitrageDifferenceDollarsPerKWH = 0.03
+
+		candidatesBattery := c.generateActionCandidates(ctx, 0, arbTimeline[0], arbTimeline, lowState, planningAnchors{}, batterySettings, status, nil, precedingAction{})
+		for _, cand := range candidatesBattery {
 			assert.NotEqual(t, types.ActionReasonArbitrageChargeExport, cand.reason,
-				"Arbitrage pre-charge must be pruned when export rate does not clear AC round-trip recharge cost")
+				"Direct battery export pre-charge must be pruned when export rate does not clear AC round-trip recharge cost + hurdle")
 		}
+
+		// Case 2: Solar Export Credit Arbitrage (evaluated on nominal spread).
+		// Offered because nominal spread ($0.035) clears the $0.030 hurdle.
+		solarSettings := settings
+		solarSettings.GridChargeBatteries = true
+		solarSettings.ManageTOUSchedules = true
+		solarSettings.GridExportBatteries = false
+		solarSettings.GridExportSolar = true
+		solarSettings.MinArbitrageDifferenceDollarsPerKWH = 0.03
+
+		candidatesSolar := c.generateActionCandidates(ctx, 0, arbTimeline[0], arbTimeline, lowState, planningAnchors{}, solarSettings, status, nil, precedingAction{})
+		hasSolarArb := false
+		for _, cand := range candidatesSolar {
+			if cand.reason == types.ActionReasonArbitrageChargeExport {
+				hasSolarArb = true
+				break
+			}
+		}
+		assert.True(t, hasSolarArb, "Solar export pre-charge must be offered based on nominal spread")
 	})
 }
 
@@ -3044,6 +3076,19 @@ func TestCalculateTerminalValuation(t *testing.T) {
 
 		valuation := calculateTerminalValuation(surplusState, zeroAnchors, settings, peakTimeline, capacityKWH, roundTripEff)
 		assert.InDelta(t, 0.0, valuation, 0.0001, "Free post-horizon electricity ($0) must not be overridden with timeline rate to credit surplus energy")
+	})
+
+	t.Run("EndingWithinReserveTolerance_NoPenaltyOrCredit", func(t *testing.T) {
+		t.Parallel()
+
+		// Ending at 19.95% SOC when target reserve is 20.0% (within 0.1% tolerance)
+		finalState := planState{
+			energyKWH: capacityKWH * 0.1995,
+			soc:       19.95,
+		}
+
+		valuation := calculateTerminalValuation(finalState, anchors, settings, nil, capacityKWH, roundTripEff)
+		assert.Equal(t, 0.0, valuation, "ending within 0.1% reserve tolerance must produce zero penalty or credit")
 	})
 }
 
