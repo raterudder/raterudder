@@ -398,3 +398,119 @@ export interface ActionSummaryAccumulator extends Omit<ActionSummary, 'avgPrice'
     socTotal: number;
     socCount: number;
 }
+
+export function getPlanStatusSubvalue(action: Action, refTs?: string): string | null {
+    if (!action.plan || !action.plan.periods || action.plan.periods.length === 0) {
+        return null;
+    }
+
+    const periods = action.plan.periods;
+    const currentPeriod = periods[0];
+    const effectiveMode = action.targetBatteryMode !== undefined && action.targetBatteryMode !== BatteryMode.NoChange
+        ? action.targetBatteryMode
+        : action.batteryMode;
+
+    const isBatteryAtReserve = action.reason === ActionReason.BatteryAtReserve;
+    const isDirectExportReason = action.reason === ActionReason.DirectExport;
+    const isDirectSolarExportStandby = isDirectExportReason && action.batteryMode === BatteryMode.Standby;
+
+    let state: 'charging' | 'discharging' | 'standby' = 'standby';
+    if (isBatteryAtReserve || isDirectSolarExportStandby) {
+        state = 'standby';
+    } else if (effectiveMode === BatteryMode.Load || effectiveMode === BatteryMode.Export) {
+        state = 'discharging';
+    } else if (effectiveMode === BatteryMode.ChargeAny) {
+        state = 'charging';
+    }
+
+    // Standby: find what we are waiting for or holding for
+    if (state === 'standby') {
+        if (action.reason === ActionReason.PreventSolarCurtailment) {
+            return 'Holding reserve for daytime solar recharge';
+        }
+        if (action.reason === ActionReason.ArbitrageHoldExport) {
+            const nextExport = periods.find(p => p.batteryMode === BatteryMode.Export);
+            if (nextExport) {
+                return `Holding reserve for ${formatTime(nextExport.startTime, refTs)} export`;
+            }
+            return 'Holding reserve for upcoming export window';
+        }
+
+        // Look for the next mode change in the plan
+        for (let i = 1; i < periods.length; i++) {
+            const p = periods[i];
+            if (p.batteryMode === BatteryMode.ChargeAny) {
+                const price = p.price ? (p.price.dollarsPerKWH + (p.price.gridUseDollarsPerKWH || 0)) : null;
+                const priceStr = price !== null ? ` ($${price.toFixed(3)}/kWh)` : '';
+                return `Waiting to charge at ${formatTime(p.startTime, refTs)}${priceStr}`;
+            }
+            if (p.batteryMode === BatteryMode.Load && (p.reason === ActionReason.DischargeAtPeak || (p.description && p.description.toLowerCase().includes('peak')))) {
+                return `Saving reserve for ${formatTime(p.startTime, refTs)} peak rate`;
+            }
+            if (p.batteryMode === BatteryMode.Export) {
+                return `Holding reserve for ${formatTime(p.startTime, refTs)} export`;
+            }
+        }
+
+        if (action.reason === ActionReason.DeficitSaveForPeak || action.reason === ActionReason.ArbitrageHoldSave) {
+            return 'Saving reserve for upcoming peak rate';
+        }
+        return 'Holding reserve in standby';
+    }
+
+    // Charging: find end of contiguous charge block
+    if (state === 'charging') {
+        let endChargeTime = currentPeriod.endTime;
+        for (let i = 1; i < periods.length; i++) {
+            if (periods[i].batteryMode === BatteryMode.ChargeAny) {
+                endChargeTime = periods[i].endTime;
+            } else {
+                break;
+            }
+        }
+        const targetSoc = action.chargeToSoc || (currentPeriod.endSoc ? Math.round(currentPeriod.endSoc) : 100);
+        const price = action.currentPrice ? (action.currentPrice.dollarsPerKWH + (action.currentPrice.gridUseDollarsPerKWH || 0)) : null;
+        if (price !== null && price < 0.06) {
+            return `Charging to ${targetSoc}% until ${formatTime(endChargeTime, refTs)} • Low rate ($${price.toFixed(3)}/kWh)`;
+        }
+        if (targetSoc > 0 && targetSoc < 100) {
+            return `Charging to ${targetSoc}% until ${formatTime(endChargeTime, refTs)}`;
+        }
+        return `Charging until ${formatTime(endChargeTime, refTs)}`;
+    }
+
+    // Discharging:
+    if (state === 'discharging') {
+        // Direct export
+        if (effectiveMode === BatteryMode.Export || action.reason === ActionReason.DirectExport) {
+            let endExportTime = currentPeriod.endTime;
+            for (let i = 1; i < periods.length; i++) {
+                if (periods[i].batteryMode === BatteryMode.Export) {
+                    endExportTime = periods[i].endTime;
+                } else {
+                    break;
+                }
+            }
+            return `Exporting to grid until ${formatTime(endExportTime, refTs)}`;
+        }
+
+        // Peak discharge
+        let endDischargeTime = currentPeriod.endTime;
+        for (let i = 1; i < periods.length; i++) {
+            if (periods[i].batteryMode === BatteryMode.Load) {
+                endDischargeTime = periods[i].endTime;
+            } else {
+                break;
+            }
+        }
+        const isPeak = action.reason === ActionReason.DischargeAtPeak || (action.description && action.description.toLowerCase().includes('peak'));
+        if (isPeak) {
+            const price = action.currentPrice ? (action.currentPrice.dollarsPerKWH + (action.currentPrice.gridUseDollarsPerKWH || 0)) : null;
+            const priceStr = price !== null ? ` ($${price.toFixed(3)}/kWh)` : '';
+            return `Peak rate defense${priceStr} until ${formatTime(endDischargeTime, refTs)}`;
+        }
+        return `Powering home on solar & battery`;
+    }
+
+    return null;
+}

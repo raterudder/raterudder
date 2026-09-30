@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
-import { fetchModeling, fetchSettings } from '../api';
-import type { ForecastResponse, ModelingHour, Settings } from '../api';
+import { fetchModeling, fetchSettings, BatteryMode, ActionReason } from '../api';
+import type { ForecastResponse, ModelingHour, Settings, PlanPeriod } from '../api';
 import { Switch } from '@base-ui/react/switch';
 import { Field } from '@base-ui/react/field';
 import {
@@ -85,6 +85,29 @@ const charts: ChartConfig[] = [
     },
 ];
 
+const planCharts: ChartConfig[] = [
+    {
+        title: 'Planned Battery SOC (%)',
+        dataKey: 'plannedSOC',
+        color: 'var(--accent)',
+        gradientId: 'plannedBatteryGrad',
+        unit: '%',
+        helpDescription: (
+            <p>
+                Displays the planned State of Charge (SOC) of your battery as optimized by RateRudder.
+                The colored background zones highlight scheduled operations (charging, discharging during peak rates, standby holds, and grid export).
+                The dashed red line represents your Minimum Reserve SOC threshold.
+            </p>
+        ),
+        additionalLines: [
+            { dataKey: 'batteryReserveSOC', color: '#ef4444', strokeDasharray: '6 4', type: 'stepAfter' },
+        ],
+    },
+    charts[1],
+    charts[2],
+    charts[3],
+];
+
 import { formatTime } from '../utils/dashboardUtils';
 
 function formatHour(ts: string, referenceTs?: string): string {
@@ -97,9 +120,18 @@ function formatHour(ts: string, referenceTs?: string): string {
 interface ProcessedModelingHour extends ModelingHour {
     batterySOCIfUsed: number;
     batteryReserveSOC: number;
+    plannedSOC?: number;
 }
 
-function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerAction }: { data: ProcessedModelingHour[]; config: ChartConfig; isMobile: boolean; showCurrentTime: boolean; nowMs: number; headerAction?: React.ReactNode }) {
+function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerAction, planPeriods }: {
+    data: any[];
+    config: ChartConfig;
+    isMobile: boolean;
+    showCurrentTime: boolean;
+    nowMs: number;
+    headerAction?: React.ReactNode;
+    planPeriods?: PlanPeriod[];
+}) {
     // Compute reference value if applicable
     const refValue = config.referenceLine
         ? (data[0]?.[config.referenceLine.dataKey as keyof ProcessedModelingHour] as number)
@@ -121,7 +153,7 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
     }, [data, showCurrentTime, nowMs]);
 
     const vppTicks = React.useMemo(() => {
-        if (config.dataKey !== 'batterySOCIfUsed') return null;
+        if (config.dataKey !== 'batterySOCIfUsed' && config.dataKey !== 'plannedSOC') return null;
 
         const isZeroTime = (ts: string | undefined | null) => {
             if (!ts) return true;
@@ -164,6 +196,26 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                 </h3>
                 {headerAction}
             </div>
+            {config.dataKey === 'plannedSOC' && (
+                <div className="mode-legend">
+                    <div className="mode-legend-item">
+                        <span className="mode-legend-dot" style={{ background: '#10b981' }} />
+                        <span>Charge</span>
+                    </div>
+                    <div className="mode-legend-item">
+                        <span className="mode-legend-dot" style={{ background: '#a855f7' }} />
+                        <span>Peak Discharge</span>
+                    </div>
+                    <div className="mode-legend-item">
+                        <span className="mode-legend-dot" style={{ background: '#3b82f6' }} />
+                        <span>Standby</span>
+                    </div>
+                    <div className="mode-legend-item">
+                        <span className="mode-legend-dot" style={{ background: '#f59e0b' }} />
+                        <span>Export</span>
+                    </div>
+                </div>
+            )}
             <ResponsiveContainer width="100%" height={200}>
                 <AreaChart data={data} syncId="forecast" margin={{ top: 5, right: isMobile ? 0 : 20, left: 0, bottom: 5 }}>
                     <defs>
@@ -199,11 +251,13 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                             let displayName = config.title;
                             if (name === 'batteryReserveSOC') {
                                 displayName = 'Reserve SOC';
+                            } else if (name === 'plannedSOC') {
+                                displayName = 'Planned Battery SOC';
                             }
                             return [
                                 config.unit.includes('$')
                                     ? `$${v.toFixed(4)}`
-                                    : v.toFixed(2) + lineUnit.trim(),
+                                    : v.toFixed(1) + lineUnit.trim(),
                                 displayName,
                             ];
                         }}
@@ -291,6 +345,38 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                             strokeDasharray="3 3"
                         />
                     )}
+                    {config.dataKey === 'plannedSOC' && planPeriods?.map((p, idx) => {
+                        let fill = '';
+                        let label = '';
+                        if (p.batteryMode === BatteryMode.ChargeAny) {
+                            fill = 'rgba(16, 185, 129, 0.08)';
+                            label = 'Charge';
+                        } else if (p.batteryMode === BatteryMode.Export) {
+                            fill = 'rgba(245, 158, 11, 0.08)';
+                            label = 'Export';
+                        } else if (p.batteryMode === BatteryMode.Load && (p.reason === ActionReason.DischargeAtPeak || (p.description && p.description.toLowerCase().includes('peak')))) {
+                            fill = 'rgba(168, 85, 247, 0.08)';
+                            label = 'Peak Discharge';
+                        } else if (p.batteryMode === BatteryMode.Standby) {
+                            fill = 'rgba(59, 130, 246, 0.05)';
+                            label = 'Standby';
+                        }
+                        if (!fill) return null;
+                        return (
+                            <ReferenceArea
+                                key={idx}
+                                x1={p.startTime}
+                                x2={p.endTime}
+                                fill={fill}
+                                label={isMobile ? undefined : {
+                                    value: label,
+                                    position: 'insideTopLeft',
+                                    fontSize: 10,
+                                    fill: 'var(--text-muted)',
+                                }}
+                            />
+                        );
+                    })}
                 </AreaChart>
             </ResponsiveContainer>
         </div>
@@ -362,8 +448,73 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
         loadModelingOverride();
     }, [loadPredictionMode, initialized, siteID]);
 
+    const isPlanActive = Boolean(
+        rawModelingData?.plan &&
+        rawModelingData.plan.periods &&
+        rawModelingData.plan.periods.length > 0
+    );
+
     const data = useMemo(() => {
         if (!rawModelingData) return [];
+
+        if (isPlanActive) {
+            const plan = rawModelingData.plan!;
+            const periods = plan.periods;
+            const reserveSOC = settings?.minBatterySOC ?? 10;
+
+            let planData: any[] = [];
+            if (includeHistory && rawModelingData.energyHistory && rawModelingData.priceHistory) {
+                const energyHist = rawModelingData.energyHistory || [];
+                const priceHist = rawModelingData.priceHistory || [];
+                const historyMapped = energyHist.map((h: any) => {
+                    const hTime = new Date(h.tsHourStart).getTime();
+                    const price = priceHist.find((p: any) => new Date(p.tsHourStart).getTime() === hTime);
+                    return {
+                        ts: h.tsHourStart,
+                        hour: new Date(h.tsHourStart).getHours(),
+                        plannedSOC: h.avgBatterySOC,
+                        batterySOCIfUsed: h.avgBatterySOC,
+                        batteryReserveSOC: reserveSOC,
+                        predictedSolarKWH: h.solarKWH,
+                        avgHomeLoadKWH: Math.floor((h.homeLoadKWH || 0) * 10) / 10,
+                        gridChargeDollarsPerKWH: price ? price.dollarsPerKWH + (price.gridUseDollarsPerKWH || 0) : 0,
+                        isHistory: true,
+                    };
+                });
+                planData = [...historyMapped];
+            }
+
+            periods.forEach((p, idx) => {
+                const price = p.price ? p.price.dollarsPerKWH + (p.price.gridUseDollarsPerKWH || 0) : 0;
+                planData.push({
+                    ts: p.startTime,
+                    hour: new Date(p.startTime).getHours(),
+                    plannedSOC: p.startSoc,
+                    batterySOCIfUsed: p.startSoc,
+                    batteryReserveSOC: reserveSOC,
+                    predictedSolarKWH: p.solarKWH || 0,
+                    avgHomeLoadKWH: Math.floor((p.loadKWH || 0) * 10) / 10,
+                    gridChargeDollarsPerKWH: price,
+                    isHistory: false,
+                    period: p,
+                });
+                if (idx === periods.length - 1) {
+                    planData.push({
+                        ts: p.endTime,
+                        hour: new Date(p.endTime).getHours(),
+                        plannedSOC: p.endSoc,
+                        batterySOCIfUsed: p.endSoc,
+                        batteryReserveSOC: reserveSOC,
+                        predictedSolarKWH: 0,
+                        avgHomeLoadKWH: 0,
+                        gridChargeDollarsPerKWH: price,
+                        isHistory: false,
+                    });
+                }
+            });
+
+            return planData;
+        }
 
         let modelingData: any[] = rawModelingData.simulation || [];
 
@@ -385,7 +536,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     hour: new Date(h.tsHourStart).getHours(),
                     batteryKWH: (h.avgBatterySOC / 100) * capacity,
                     batteryCapacityKWH: capacity,
-                    batteryReserveKWH: reserve,
+                    batteryReserveSOC: reserve,
                     predictedSolarKWH: h.solarKWH,
                     todaySolarTrend: 1.0, // Used for raw solar calc below
                     avgHomeLoadKWH: h.homeLoadKWH || 0,
@@ -421,30 +572,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 avgHomeLoadKWH: Math.floor((avgHomeLoadKWH || 0) * 10) / 10,
             };
         });
-    }, [rawModelingData, includeHistory]);
-
-    const todayStr = useMemo(() => new Date(nowMs).toDateString(), [nowMs]);
-
-    const shiftedSolar1hForecast = useMemo(() => {
-        if (!rawModelingData?.solar1hForecast) return [];
-        const forecast = rawModelingData.solar1hForecast;
-        return forecast.map((h: any, idx: number) => {
-            const prevH = idx > 0 ? forecast[idx - 1] : null;
-            return {
-                ...h,
-                unclippedSolarGeneration: prevH ? prevH.unclippedSolarGeneration : 0,
-                improvedSolarGeneration: prevH ? prevH.improvedSolarGeneration : 0,
-            };
-        });
-    }, [rawModelingData?.solar1hForecast]);
-
-    const todaySolar1h = useMemo(() => {
-        return shiftedSolar1hForecast.filter((h: any) => new Date(h.tsHourStart).toDateString() === todayStr);
-    }, [shiftedSolar1hForecast, todayStr]);
-
-    const tomorrowSolar1h = useMemo(() => {
-        return shiftedSolar1hForecast.filter((h: any) => new Date(h.tsHourStart).toDateString() !== todayStr);
-    }, [shiftedSolar1hForecast, todayStr]);
+    }, [rawModelingData, includeHistory, isPlanActive, settings]);
 
     if (loading) return (
         <div className="loading-screen">
@@ -455,10 +583,12 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
     if (error) return <div className="error">Error: {error}</div>;
     if (!data.length) return <div className="no-actions">No simulation data available.</div>;
 
+    const activeCharts = isPlanActive ? planCharts : charts;
+
     return (
         <div className="content-container forecast-page">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <h2>24-Hour Simulation</h2>
+                <h2>{isPlanActive ? '24-Hour Energy Plan' : '24-Hour Simulation'}</h2>
                 <Field.Root className="form-group switch-group compact" style={{ margin: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', color: '#4b5563' }}>
                         <Switch.Root
@@ -473,16 +603,53 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     </div>
                 </Field.Root>
             </div>
-            <p className="forecast-subtitle">
-                Predicted energy state <strong>assuming no action is taken</strong> starting from{' '}
-                {(() => {
-                    const startTs = rawModelingData?.updated || rawModelingData?.simulation?.[0]?.ts;
-                    return startTs ? formatTime(startTs, data[0]?.ts) : '';
-                })()}
-            </p>
+            {isPlanActive ? (
+                <>
+                    <p className="forecast-subtitle">
+                        Optimal battery dispatch schedule generated {(() => {
+                            const startTs = rawModelingData?.plan?.generatedAt || rawModelingData?.updated;
+                            return startTs ? formatTime(startTs, data[0]?.ts) : '';
+                        })()} ({rawModelingData?.plan?.horizonHours ?? 24}-Hour Horizon)
+                    </p>
+                    <div className="forecast-hero-grid">
+                        <div className="forecast-stat-card">
+                            <span className="forecast-stat-label">Projected Benefit</span>
+                            <span className="forecast-stat-value benefit">
+                                {rawModelingData?.plan?.netEconomicBenefit !== undefined && rawModelingData.plan.netEconomicBenefit >= 0 ? '+' : ''}
+                                ${(rawModelingData?.plan?.netEconomicBenefit ?? 0).toFixed(2)}
+                            </span>
+                            <span className="forecast-stat-sublabel">Estimated schedule savings</span>
+                        </div>
+                        <div className="forecast-stat-card">
+                            <span className="forecast-stat-label">Projected Grid Cost</span>
+                            <span className="forecast-stat-value">
+                                ${(rawModelingData?.plan?.totalProjectedCost ?? 0).toFixed(2)}
+                            </span>
+                            <span className="forecast-stat-sublabel">Anticipated grid electricity cost</span>
+                        </div>
+                        {rawModelingData?.plan?.totalExportCredits !== undefined && rawModelingData.plan.totalExportCredits > 0 && (
+                            <div className="forecast-stat-card">
+                                <span className="forecast-stat-label">Projected Export Credits</span>
+                                <span className="forecast-stat-value">
+                                    ${rawModelingData.plan.totalExportCredits.toFixed(2)}
+                                </span>
+                                <span className="forecast-stat-sublabel">Anticipated export credits</span>
+                            </div>
+                        )}
+                    </div>
+                </>
+            ) : (
+                <p className="forecast-subtitle">
+                    Predicted energy state <strong>assuming no action is taken</strong> starting from{' '}
+                    {(() => {
+                        const startTs = rawModelingData?.updated || rawModelingData?.simulation?.[0]?.ts;
+                        return startTs ? formatTime(startTs, data[0]?.ts) : '';
+                    })()}
+                </p>
+            )}
             <div className="forecast-charts">
-                {charts.map((config) => {
-                    const headerAction = config.dataKey === 'avgHomeLoadKWH' ? (
+                {activeCharts.map((config) => {
+                    const headerAction = (!isPlanActive && config.dataKey === 'avgHomeLoadKWH') ? (
                         <Field.Root className="form-group switch-group compact" style={{ margin: 0 }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
                                 <Switch.Root
@@ -507,76 +674,11 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                             showCurrentTime={includeHistory}
                             nowMs={nowMs}
                             headerAction={headerAction}
+                            planPeriods={rawModelingData?.plan?.periods}
                         />
                     );
                 })}
             </div>
-            {settings?.release === 'staging' && (
-                <>
-                    {todaySolar1h.length > 0 && (
-                        <>
-                            <h3 style={{ marginTop: '2rem', marginBottom: '1rem', color: 'var(--on-surface)' }}>Today's Solar Forecast Comparison</h3>
-                            <div className="modeling-charts">
-                                <ForecastChart
-                                    data={todaySolar1h.map((h: any) => ({
-                                        ...h,
-                                        ts: h.tsHourStart,
-                                        batterySOCIfUsed: 0,
-                                        batteryReserveSOC: 0,
-                                        predictedSolarKWH: h.improvedSolarGeneration,
-                                        todaySolarTrend: 1.0,
-                                        avgHomeLoadKWH: 0,
-                                        gridChargeDollarsPerKWH: 0,
-                                        netLoadSolarKWH: 0,
-                                        solarOppDollarsPerKWH: 0,
-                                    }))}
-                                    config={{
-                                        title: 'Hourly Mean Self-Calculated Solar (1h Forecast) (kWh)',
-                                        dataKey: 'predictedSolarKWH',
-                                        color: '#f59e0b',
-                                        gradientId: 'solar1hGradToday',
-                                        unit: ' kWh',
-                                    }}
-                                    isMobile={isMobile}
-                                    showCurrentTime={false}
-                                    nowMs={nowMs}
-                                />
-                            </div>
-                        </>
-                    )}
-                    {tomorrowSolar1h.length > 0 && (
-                        <>
-                            <h3 style={{ marginTop: '2rem', marginBottom: '1rem', color: 'var(--on-surface)' }}>Tomorrow's Solar Forecast Comparison</h3>
-                            <div className="modeling-charts">
-                                <ForecastChart
-                                    data={tomorrowSolar1h.map((h: any) => ({
-                                        ...h,
-                                        ts: h.tsHourStart,
-                                        batterySOCIfUsed: 0,
-                                        batteryReserveSOC: 0,
-                                        predictedSolarKWH: h.improvedSolarGeneration,
-                                        todaySolarTrend: 1.0,
-                                        avgHomeLoadKWH: 0,
-                                        gridChargeDollarsPerKWH: 0,
-                                        netLoadSolarKWH: 0,
-                                        solarOppDollarsPerKWH: 0,
-                                    }))}
-                                    config={{
-                                        title: 'Hourly Mean Self-Calculated Solar (1h Forecast) (kWh)',
-                                        dataKey: 'predictedSolarKWH',
-                                        color: '#f59e0b',
-                                        gradientId: 'solar1hGradTomorrow',
-                                        unit: ' kWh',
-                                    }}
-                                    isMobile={isMobile}
-                                    showCurrentTime={false}
-                                    nowMs={nowMs}
-                                />
-                            </div>
-                        </>
-                    )}
-                </>
-            )}
         </div>
     );
 }

@@ -5,8 +5,7 @@ import { Router } from 'wouter';
 import Forecast from './Forecast';
 import * as api from '../api';
 import { setupDefaultApiMocks } from '../test/apiMocks';
-import type { ModelingHour } from '../api';
-
+import type { ModelingHour, Plan, PlanPeriod } from '../api';
 const { fetchModeling, fetchSettings } = api;
 
 vi.mock('../api');
@@ -35,6 +34,45 @@ function makeSimHours(): ModelingHour[] {
         });
     }
     return hours;
+}
+
+function makeTestPlan(): Plan {
+    const base = new Date('2026-02-11T14:00:00Z');
+    const periods: PlanPeriod[] = [];
+    for (let i = 0; i < 24; i++) {
+        const start = new Date(base.getTime() + i * 3600000);
+        const end = new Date(base.getTime() + (i + 1) * 3600000);
+        periods.push({
+            startTime: start.toISOString(),
+            endTime: end.toISOString(),
+            durationHours: 1,
+            startSoc: 50 + (i % 5) * 10,
+            endSoc: 50 + ((i + 1) % 5) * 10,
+            solarKWH: Math.max(0, 2.0 * Math.sin((i / 24) * Math.PI)),
+            loadKWH: 1.2,
+            price: {
+                dollarsPerKWH: 0.12 + (i === 18 ? 0.30 : 0),
+                gridUseDollarsPerKWH: 0.05,
+                tsStart: start.toISOString(),
+                tsEnd: end.toISOString(),
+            },
+            batteryMode: i === 18 ? api.BatteryMode.Load : (i < 5 ? api.BatteryMode.ChargeAny : api.BatteryMode.Standby),
+            solarMode: 0 as any,
+            reason: i === 18 ? api.ActionReason.ArbitrageSave : api.ActionReason.ArbitrageChargeSave,
+            description: i === 18 ? 'Peak discharge' : 'Charge from low rate',
+            gridImportKWH: i < 5 ? 1.5 : 0,
+            gridExportKWH: 0,
+            costDollars: 0.15,
+        });
+    }
+    return {
+        generatedAt: base.toISOString(),
+        horizonHours: 24,
+        totalProjectedCost: 3.45,
+        totalExportCredits: 0.60,
+        netEconomicBenefit: 1.85,
+        periods,
+    };
 }
 
 const renderForecast = () => render(<Router><Forecast /></Router>);
@@ -222,31 +260,6 @@ describe('Forecast Page', () => {
         });
     });
 
-    it('renders tomorrow comparison charts when solar1hForecast is present', async () => {
-        (fetchSettings as any).mockResolvedValue({ release: 'staging' });
-        const data = makeSimHours();
-        (fetchModeling as any).mockResolvedValue({
-            simulation: data,
-            energyHistory: [],
-            priceHistory: [],
-            weather: [],
-            solar1hForecast: [
-                {
-                    tsHourStart: '2026-02-12T12:00:00Z',
-                    improvedSolarGeneration: 1.5,
-                    unclippedSolarGeneration: 1.8,
-                }
-            ]
-        });
-
-        renderForecast();
-
-        await waitFor(() => {
-            expect(screen.getByText("Tomorrow's Solar Forecast Comparison")).toBeInTheDocument();
-            expect(screen.getByText('Hourly Mean Self-Calculated Solar (1h Forecast) (kWh)')).toBeInTheDocument();
-        });
-    });
-
     it('renders VPP event reference area and reference lines when VPP data is present in the simulation', async () => {
         const data = makeSimHours();
         // Set VPP data on some hours
@@ -335,5 +348,69 @@ describe('Forecast Page', () => {
 
         expect(await screen.findByRole('dialog')).toBeInTheDocument();
         expect(screen.getByText(/if RateRudder did nothing to optimize your system/i)).toBeInTheDocument();
+    });
+
+    it('renders 24-Hour Energy Plan and hero metrics when plan is present', async () => {
+        const plan = makeTestPlan();
+        (fetchModeling as any).mockResolvedValue({
+            plan,
+            energyHistory: [],
+            priceHistory: [],
+            weather: [],
+        });
+
+        renderForecast();
+
+        await waitFor(() => {
+            expect(screen.getByText('24-Hour Energy Plan')).toBeInTheDocument();
+            expect(screen.getByText('Planned Battery SOC (%)')).toBeInTheDocument();
+            expect(screen.queryByText('Battery (if used) (%)')).not.toBeInTheDocument();
+            expect(screen.getByText('Projected Benefit')).toBeInTheDocument();
+            expect(screen.getByText('+$1.85')).toBeInTheDocument();
+            expect(screen.getByText('Projected Grid Cost')).toBeInTheDocument();
+            expect(screen.getByText('$3.45')).toBeInTheDocument();
+            expect(screen.getByText('Projected Export Credits')).toBeInTheDocument();
+            expect(screen.getByText('$0.60')).toBeInTheDocument();
+            expect(screen.getByText('Predicted Solar (kWh)')).toBeInTheDocument();
+            expect(screen.getByText('Predicted Home Load (kWh)')).toBeInTheDocument();
+            expect(screen.getByText('Grid Charge Cost ($/kWh)')).toBeInTheDocument();
+        });
+    });
+
+    it('supports toggling show previous 24 hours with plan data', async () => {
+        const user = userEvent.setup();
+        const plan = makeTestPlan();
+        const base = new Date('2026-02-11T14:00:00Z');
+        const histTs = new Date(base.getTime() - 3600000).toISOString();
+        (fetchModeling as any).mockResolvedValue({
+            plan,
+            energyHistory: [
+                {
+                    timestamp: histTs,
+                    batterySOC: 45,
+                    solarKW: 1.0,
+                    homeKW: 2.0,
+                },
+            ],
+            priceHistory: [
+                {
+                    timestamp: histTs,
+                    priceDollarsPerKWH: 0.15,
+                },
+            ],
+            weather: [],
+        });
+
+        renderForecast();
+
+        await waitFor(() => {
+            expect(screen.getByText('24-Hour Energy Plan')).toBeInTheDocument();
+        });
+
+        const toggle = screen.getByRole('switch', { name: /Show Previous 24 Hours/i });
+        expect(toggle).not.toBeChecked();
+
+        await user.click(toggle);
+        expect(toggle).toBeChecked();
     });
 });

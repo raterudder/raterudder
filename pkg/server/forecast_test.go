@@ -661,4 +661,177 @@ func TestHandleForecast(t *testing.T) {
 		assert.Equal(t, now.Unix(), data.Updated.Unix())
 		mockES.AssertCalled(t, "GetStatus", mock.Anything)
 	})
+
+	t.Run("Fast-path returns plan when latestAction is fresh", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil)
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			MinBatterySOC:   5.0,
+			UtilityProvider: "test",
+			ESS:             "mock",
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+
+		plan := &types.Plan{
+			GeneratedAt:        now.Add(-10 * time.Minute),
+			HorizonHours:       24,
+			TotalProjectedCost: 2.50,
+			Periods: []types.PlanPeriod{
+				{
+					StartTime:     now,
+					EndTime:       now.Add(time.Hour),
+					DurationHours: 1,
+					BatteryMode:   types.BatteryModeStandby,
+					StartSOC:      50,
+					EndSOC:        50,
+				},
+			},
+		}
+
+		action := &types.Action{
+			Timestamp:    now.Add(-10 * time.Minute),
+			BatteryMode:  types.BatteryModeStandby,
+			CurrentPrice: &types.Price{DollarsPerKWH: 0.10, TSStart: now, TSEnd: now.Add(time.Hour)},
+			Plan:         plan,
+			SystemStatus: types.SystemStatus{
+				BatterySOC:         50,
+				BatteryCapacityKWH: 10.0,
+				Timestamp:          now.Add(-10 * time.Minute),
+			},
+		}
+
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return(action, nil)
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+
+		mockES := &mockESS{}
+		mockP := ess.NewMap()
+		mockP.SetSystem(types.SiteIDNone, mockES)
+
+		mockU := &mockUtility{}
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			controller: controller.NewController(),
+			bypassAuth: true,
+			nowFunc:    func() time.Time { return now },
+		}
+
+		req := httptest.NewRequest("GET", "/api/forecast", nil)
+		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
+		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv.handleForecast(w, req)
+
+		resp := w.Result()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var data ForecastRes
+		err := json.NewDecoder(resp.Body).Decode(&data)
+		require.NoError(t, err)
+
+		require.NotNil(t, data.Plan, "fast-path should return plan")
+		assert.Equal(t, 24, data.Plan.HorizonHours)
+		assert.Len(t, data.Plan.Periods, 1)
+		require.NotNil(t, data.LatestAction)
+		assert.Empty(t, data.Simulation, "fast-path should not return simulation")
+		mockES.AssertNotCalled(t, "GetStatus", mock.Anything)
+		mockU.AssertNotCalled(t, "GetCurrentPrice", mock.Anything)
+	})
+
+	t.Run("Staging real-time plan fallback when plan is stale", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil)
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			MinBatterySOC:   5.0,
+			UtilityProvider: "test",
+			ESS:             "mock",
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+
+		// Action is 2 hours old (stale)
+		staleAction := &types.Action{
+			Timestamp:    now.Add(-2 * time.Hour),
+			BatteryMode:  types.BatteryModeStandby,
+			CurrentPrice: &types.Price{DollarsPerKWH: 0.10, TSStart: now.Add(-2 * time.Hour)},
+			SystemStatus: types.SystemStatus{
+				BatterySOC:         50,
+				BatteryCapacityKWH: 10.0,
+				Timestamp:          now.Add(-2 * time.Hour),
+			},
+		}
+
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return(staleAction, nil)
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{
+			BatterySOC:         60,
+			BatteryCapacityKWH: 10.0,
+			Timestamp:          now,
+		}, nil)
+		mockP := ess.NewMap()
+		mockP.SetSystem(types.SiteIDNone, mockES)
+
+		futurePrices := make([]types.Price, 24)
+		for i := 0; i < 24; i++ {
+			pStart := now.Add(time.Duration(i) * time.Hour)
+			futurePrices[i] = types.Price{
+				DollarsPerKWH: 0.12,
+				TSStart:       pStart,
+				TSEnd:         pStart.Add(time.Hour),
+			}
+		}
+
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{
+			DollarsPerKWH: 0.10,
+			TSStart:       now,
+			TSEnd:         now.Add(time.Hour),
+		}, nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return(futurePrices, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil)
+
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			controller: controller.NewController(),
+			bypassAuth: true,
+			release:    "staging",
+			nowFunc:    func() time.Time { return now },
+		}
+
+		req := httptest.NewRequest("GET", "/api/forecast", nil)
+		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
+		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv.handleForecast(w, req)
+
+		resp := w.Result()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var data ForecastRes
+		err := json.NewDecoder(resp.Body).Decode(&data)
+		require.NoError(t, err)
+
+		require.NotNil(t, data.Plan, "staging fallback should run controller.Plan and return plan")
+		assert.Greater(t, data.Plan.HorizonHours, 0)
+		require.NotNil(t, data.LatestAction)
+		mockES.AssertCalled(t, "GetStatus", mock.Anything)
+		mockU.AssertCalled(t, "GetCurrentPrice", mock.Anything)
+	})
 }

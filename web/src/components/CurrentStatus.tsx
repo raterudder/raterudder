@@ -1,7 +1,7 @@
 import React from 'react';
 import { Meter } from '@base-ui/react/meter';
 import { type Action, BatteryMode, SolarMode, ActionReason } from '../api';
-import { getBatteryModeLabel } from '../utils/dashboardUtils';
+import { getBatteryModeLabel, isZeroTime, getPlanStatusSubvalue } from '../utils/dashboardUtils';
 
 interface CurrentStatusProps {
     action: Action;
@@ -155,6 +155,17 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
         timeRemainingText = `Battery full in ${formatDuration(capacityMs)}`;
     }
 
+    const refTs = (action.systemTimestamp && !isZeroTime(action.systemTimestamp)) ? action.systemTimestamp : action.systemStatus?.timestamp;
+    const planSubvalue = getPlanStatusSubvalue(action, refTs);
+
+    let statusSubvalueText = timeRemainingText;
+    // Imminent depletion warning takes precedence if under 1 hour
+    if (defValid && deficitMs <= 60 * 60 * 1000) {
+        statusSubvalueText = timeRemainingText;
+    } else if (planSubvalue) {
+        statusSubvalueText = planSubvalue;
+    }
+
     const statusLabel = isDirectBatteryExport
         ? (action.solarMode === SolarMode.Export ? 'Direct Battery & Solar Export' : 'Direct Battery Export')
         : isDirectSolarExport
@@ -202,8 +213,8 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
                 <div className="status-info">
                     <span className="status-label">{statusLabel}</span>
                     <span className="status-value">{statusValue}</span>
-                    {timeRemainingText && (
-                        <span className="status-subvalue">{timeRemainingText}</span>
+                    {statusSubvalueText && (
+                        <span className="status-subvalue">{statusSubvalueText}</span>
                     )}
                 </div>
             </div>

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"slices"
+	"strings"
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/controller"
@@ -45,11 +45,40 @@ type WeatherRes struct {
 
 // ForecastRes represents the complete response for the forecast endpoint, including histories.
 type ForecastRes struct {
-	Simulation      []controller.SimHour `json:"simulation"`
-	EnergyHistory   []EnergyHistoryRes   `json:"energyHistory"`
-	PriceHistory    []PriceHistoryRes    `json:"priceHistory"`
-	Solar1hForecast []WeatherRes         `json:"solar1hForecast,omitempty"`
-	Updated         time.Time            `json:"updated"`
+	Plan          *types.Plan          `json:"plan,omitempty"`
+	LatestAction  *types.Action        `json:"latestAction,omitempty"`
+	Simulation    []controller.SimHour `json:"simulation,omitempty"`
+	EnergyHistory []EnergyHistoryRes   `json:"energyHistory"`
+	PriceHistory  []PriceHistoryRes    `json:"priceHistory"`
+	Updated       time.Time            `json:"updated"`
+}
+
+func buildEnergyHistoryRes(stats []types.EnergyStats, start, end time.Time) []EnergyHistoryRes {
+	var res []EnergyHistoryRes
+	for _, h := range stats {
+		if !h.TSHourStart.Before(start) && h.TSHourStart.Before(end) {
+			avgSoc := (h.MinBatterySOC + h.MaxBatterySOC) / 2
+			res = append(res, EnergyHistoryRes{
+				TSHourStart:   h.TSHourStart,
+				AvgBatterySOC: avgSoc,
+				SolarKWH:      max(0, h.SolarKWH),
+				HomeLoadKWH:   h.HomeKWH,
+			})
+		}
+	}
+	return res
+}
+
+func buildPriceHistoryRes(prices []types.Price) []PriceHistoryRes {
+	res := make([]PriceHistoryRes, 0, len(prices))
+	for _, p := range prices {
+		res = append(res, PriceHistoryRes{
+			TSHourStart:          p.TSStart,
+			DollarsPerKWH:        p.DollarsPerKWH,
+			GridUseDollarsPerKWH: p.GridUseDollarsPerKWH,
+		})
+	}
+	return res
 }
 
 func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
@@ -73,6 +102,76 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	latestAction, err := s.storage.GetLatestAction(ctx, siteID)
+	if err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to get latest action", slog.Any("error", err))
+	} else if latestAction != nil {
+		if latestAction.SystemStatus.TimeLocation != "" {
+			if loc, err := time.LoadLocation(latestAction.SystemStatus.TimeLocation); err == nil {
+				latestAction.Timestamp = latestAction.Timestamp.In(loc)
+				latestAction.SystemTimestamp = latestAction.SystemTimestamp.In(loc)
+				latestAction.SystemStatus.Timestamp = latestAction.SystemStatus.Timestamp.In(loc)
+			}
+		}
+	}
+
+	now := s.now()
+	if latestAction != nil && !latestAction.Timestamp.IsZero() && latestAction.Timestamp.Location() != nil {
+		now = now.In(latestAction.Timestamp.Location())
+	}
+
+	// FAST-PATH: If we have a fresh plan generated within the last hour, bypass
+	// the 35-day historical query, ESS status fetch, and controller simulation.
+	isFreshPlan := latestAction != nil &&
+		latestAction.Plan != nil &&
+		len(latestAction.Plan.Periods) > 0 &&
+		now.Sub(latestAction.Timestamp) >= 0 &&
+		now.Sub(latestAction.Timestamp) <= time.Hour
+
+	if isFreshPlan {
+		histStart24 := now.AddDate(0, 0, -1).Truncate(time.Hour)
+		energyHistory24, _, err := s.getCombinedHistory(ctx, siteID, settings, histStart24, now, nil)
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to get combined history for 24h forecast", slog.Any("error", err))
+		}
+		flatEnergy24 := flattenDailyEnergyStats(energyHistory24)
+		energyRes := buildEnergyHistoryRes(flatEnergy24, histStart24, now)
+
+		priceHistory24, err := s.storage.GetPriceHistory(ctx, siteID, histStart24, now)
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to fetch price history for forecast", slog.Any("error", err))
+		}
+		if latestAction.CurrentPrice != nil && latestAction.CurrentPrice.Contains(now) {
+			var foundCurrentPrice bool
+			for _, p := range priceHistory24 {
+				if p.Contains(now) {
+					foundCurrentPrice = true
+					break
+				}
+			}
+			if !foundCurrentPrice {
+				priceHistory24 = append(priceHistory24, *latestAction.CurrentPrice)
+			}
+		}
+		priceRes := buildPriceHistoryRes(priceHistory24)
+
+		res := ForecastRes{
+			Plan:          latestAction.Plan,
+			LatestAction:  latestAction,
+			EnergyHistory: energyRes,
+			PriceHistory:  priceRes,
+			Updated:       latestAction.Timestamp,
+		}
+
+		w.Header().Set("Cache-Control", "private, max-age=300")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(res); err != nil {
+			panic(http.ErrAbortHandler)
+		}
+		return
+	}
+
 	essSystem, err := s.getESSSystem(ctx, siteID, settings, creds)
 	if err != nil {
 		if errors.Is(err, errESSRateLimited) {
@@ -90,17 +189,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	var updatedTime time.Time
 	useRealtime := true
 
-	latestAction, err := s.storage.GetLatestAction(ctx, siteID)
-	if err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to get latest action", slog.Any("error", err))
-	} else if latestAction != nil {
-		if latestAction.SystemStatus.TimeLocation != "" {
-			if loc, err := time.LoadLocation(latestAction.SystemStatus.TimeLocation); err == nil {
-				latestAction.Timestamp = latestAction.Timestamp.In(loc)
-				latestAction.SystemTimestamp = latestAction.SystemTimestamp.In(loc)
-				latestAction.SystemStatus.Timestamp = latestAction.SystemStatus.Timestamp.In(loc)
-			}
-		}
+	if latestAction != nil {
 		since := s.now().Sub(latestAction.Timestamp)
 		if since >= 0 && since <= time.Hour {
 			status = latestAction.SystemStatus
@@ -155,7 +244,6 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	status = s.mergeUtilityVPPEvents(ctx, status, vppInfo)
 
 	// 5. Get History (Last x days from monthly summaries + today's/tomorrow's unsummarized data)
-	now := s.now()
 	if !status.Timestamp.IsZero() && status.Timestamp.Location() != nil {
 		now = now.In(status.Timestamp.Location())
 	}
@@ -173,25 +261,14 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 
 	flatEnergyHistory := flattenDailyEnergyStats(energyHistory)
 
-	// 7. Run Simulation
-	simHours, _ := s.controller.SimulateState(ctx, now, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings)
-
-	// Fetch data for the previous day for history display
 	histStart24 := now.AddDate(0, 0, -1).Truncate(time.Hour)
-	energyHistory24 := make([]types.EnergyStats, 0, 24)
-	for _, h := range flatEnergyHistory {
-		if !h.TSHourStart.Before(histStart24) && h.TSHourStart.Before(now) {
-			energyHistory24 = append(energyHistory24, h)
-		}
-	}
+	energyRes := buildEnergyHistoryRes(flatEnergyHistory, histStart24, now)
 
-	// 8. Get Price History
 	priceHistory24, err := s.storage.GetPriceHistory(ctx, siteID, histStart24, now)
 	if err != nil {
 		log.Ctx(ctx).WarnContext(ctx, "failed to fetch price history for forecast", slog.Any("error", err))
 	}
 
-	// if we don't have the current hour in the price history, add it
 	var foundCurrentPrice bool
 	for _, p := range priceHistory24 {
 		if p.Contains(now) {
@@ -202,77 +279,40 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	if !foundCurrentPrice && currentPrice.Contains(now) {
 		priceHistory24 = append(priceHistory24, currentPrice)
 	}
+	priceRes := buildPriceHistoryRes(priceHistory24)
 
-	energyRes := make([]EnergyHistoryRes, 0, len(energyHistory24))
-	for _, h := range energyHistory24 {
-		avgSoc := (h.MinBatterySOC + h.MaxBatterySOC) / 2
-		energyRes = append(energyRes, EnergyHistoryRes{
-			TSHourStart:   h.TSHourStart,
-			AvgBatterySOC: avgSoc,
-			SolarKWH:      max(0, h.SolarKWH),
-			HomeLoadKWH:   h.HomeKWH,
-		})
-	}
-
-	priceRes := make([]PriceHistoryRes, 0, len(priceHistory24))
-	for _, p := range priceHistory24 {
-		priceRes = append(priceRes, PriceHistoryRes{
-			TSHourStart:          p.TSStart,
-			DollarsPerKWH:        p.DollarsPerKWH,
-			GridUseDollarsPerKWH: p.GridUseDollarsPerKWH,
-		})
-	}
-
-	var solar1hRes []WeatherRes
-
-	if settings.Location != nil && len(weatherHistory) > 0 {
-		// since this is weather-related we can use the location from settings
-		timeLoc, err := time.LoadLocation(settings.Location.TimeZone)
-		if err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to load timezone", slog.String("timezone", settings.Location.TimeZone), slog.Any("error", err))
-			// fallback to pulling from the latest action's system status location
-			timeLoc = now.Location()
-		}
-		todayMidnight := time.Date(now.In(timeLoc).Year(), now.In(timeLoc).Month(), now.In(timeLoc).Day(), 0, 0, 0, 0, timeLoc)
-		tomorrowEnd := todayMidnight.AddDate(0, 0, 2)
-
-		solar1hMap, _ := controller.CalculateWeatherSolar(ctx, now, flatEnergyHistory, weatherHistory, *settings.Location)
-
-		// Find matching forecast hours
-		var allForecastHours []types.HourlyWeather
-		for _, w := range weatherHistory {
-			allForecastHours = append(allForecastHours, w.ForecastHours...)
-		}
-		// Sort them chronologically
-		slices.SortFunc(allForecastHours, func(a, b types.HourlyWeather) int {
-			return a.TSHourStart.Compare(b.TSHourStart)
-		})
-
-		for _, hw := range allForecastHours {
-			if !hw.TSHourStart.Before(todayMidnight) && hw.TSHourStart.Before(tomorrowEnd) {
-				ts := hw.TSHourStart.Unix()
-				if ws, ok := solar1hMap[ts]; ok {
-					solar1hRes = append(solar1hRes, WeatherRes{
-						TSHourStart:             hw.TSHourStart,
-						ImprovedSolarGeneration: ws.SolarKWH,
-						SnowDepthCM:             ws.SnowDepth,
-						TempFactor:              ws.TempFactor,
-						SnowFactor:              ws.SnowFactor,
-						TemperatureC:            hw.TemperatureC,
-						Irradiance:              ws.Irradiance,
-						SnowfallCM:              hw.SnowfallCM,
-					})
-				}
+	// If on staging, try real-time Plan fallback
+	if strings.EqualFold(s.release, "staging") {
+		planDecision, freshPlan, planErr := s.controller.Plan(
+			ctx, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings, latestAction,
+		)
+		if planErr == nil {
+			res := ForecastRes{
+				Plan:          &freshPlan,
+				LatestAction:  &planDecision.Action,
+				EnergyHistory: energyRes,
+				PriceHistory:  priceRes,
+				Updated:       now,
 			}
+			w.Header().Set("Cache-Control", "private, max-age=300")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			if err := json.NewEncoder(w).Encode(res); err != nil {
+				panic(http.ErrAbortHandler)
+			}
+			return
 		}
+		log.Ctx(ctx).WarnContext(ctx, "real-time plan fallback failed, falling back to simulation", slog.Any("error", planErr))
 	}
+
+	// 7. Run Simulation
+	simHours, _ := s.controller.SimulateState(ctx, now, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings)
 
 	res := ForecastRes{
-		Simulation:      simHours,
-		EnergyHistory:   energyRes,
-		PriceHistory:    priceRes,
-		Solar1hForecast: solar1hRes,
-		Updated:         updatedTime,
+		Simulation:    simHours,
+		EnergyHistory: energyRes,
+		PriceHistory:  priceRes,
+		Updated:       updatedTime,
 	}
 
 	w.Header().Set("Cache-Control", "private, max-age=300")

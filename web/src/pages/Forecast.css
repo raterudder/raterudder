@@ -48,3 +48,67 @@
     font-size: 1.5rem;
   }
 }
+
+/* ============================================
+   Forecast Hero Stat Cards & Legend
+   ============================================ */
+
+.forecast-hero-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.forecast-stat-card {
+  background: var(--surface-container-low);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.forecast-stat-label {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.forecast-stat-value {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--on-surface);
+}
+
+.forecast-stat-value.benefit {
+  color: var(--success, #10b981);
+}
+
+.forecast-stat-sublabel {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.mode-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: center;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.mode-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.mode-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}

@@ -217,4 +217,89 @@ describe('CurrentStatus', () => {
 
         vi.useRealTimers();
     });
+
+    it('renders plan-aware subvalue when plan is in standby waiting for peak', () => {
+        const action: Action = {
+            ...defaultAction,
+            batteryMode: BatteryMode.Standby,
+            reason: ActionReason.DeficitSaveForPeak,
+            plan: {
+                generatedAt: '2026-06-15T12:00:00Z',
+                horizonHours: 24,
+                totalProjectedCost: 1.0,
+                totalExportCredits: 0,
+                netEconomicBenefit: 2.0,
+                periods: [
+                    {
+                        startTime: '2026-06-15T12:00:00Z',
+                        endTime: '2026-06-15T16:00:00Z',
+                        durationHours: 4,
+                        batteryMode: BatteryMode.Standby,
+                        solarMode: SolarMode.Any,
+                        reason: ActionReason.DeficitSaveForPeak,
+                        description: 'Standby for peak',
+                        startSoc: 80,
+                        endSoc: 80,
+                        price: { tsStart: '2026-06-15T12:00:00Z', tsEnd: '2026-06-15T16:00:00Z', dollarsPerKWH: 0.10, gridUseDollarsPerKWH: 0 },
+                        gridImportKWH: 0,
+                        gridExportKWH: 0,
+                        costDollars: 0,
+                    },
+                    {
+                        startTime: '2026-06-15T16:00:00Z',
+                        endTime: '2026-06-15T21:00:00Z',
+                        durationHours: 5,
+                        batteryMode: BatteryMode.Load,
+                        solarMode: SolarMode.Any,
+                        reason: ActionReason.DischargeAtPeak,
+                        description: 'Discharge at peak',
+                        startSoc: 80,
+                        endSoc: 20,
+                        price: { tsStart: '2026-06-15T16:00:00Z', tsEnd: '2026-06-15T21:00:00Z', dollarsPerKWH: 0.38, gridUseDollarsPerKWH: 0 },
+                        gridImportKWH: 0,
+                        gridExportKWH: 0,
+                        costDollars: 0,
+                    }
+                ]
+            }
+        };
+        render(<CurrentStatus action={action} />);
+        expect(screen.getByText(/Saving reserve for/)).toBeInTheDocument();
+        expect(screen.getByText(/peak rate/)).toBeInTheDocument();
+    });
+
+    it('renders plan-aware subvalue when plan is charging', () => {
+        const action: Action = {
+            ...defaultAction,
+            batteryMode: BatteryMode.ChargeAny,
+            currentPrice: { tsStart: '2026-06-15T01:00:00Z', tsEnd: '2026-06-15T04:00:00Z', dollarsPerKWH: 0.02, gridUseDollarsPerKWH: 0.01 },
+            plan: {
+                generatedAt: '2026-06-15T01:00:00Z',
+                horizonHours: 24,
+                totalProjectedCost: 1.0,
+                totalExportCredits: 0,
+                netEconomicBenefit: 2.0,
+                periods: [
+                    {
+                        startTime: '2026-06-15T01:00:00Z',
+                        endTime: '2026-06-15T04:00:00Z',
+                        durationHours: 3,
+                        batteryMode: BatteryMode.ChargeAny,
+                        solarMode: SolarMode.Any,
+                        reason: ActionReason.DeficitCharge,
+                        description: 'Grid charging',
+                        startSoc: 20,
+                        endSoc: 100,
+                        price: { tsStart: '2026-06-15T01:00:00Z', tsEnd: '2026-06-15T04:00:00Z', dollarsPerKWH: 0.02, gridUseDollarsPerKWH: 0.01 },
+                        gridImportKWH: 8,
+                        gridExportKWH: 0,
+                        costDollars: 0.24,
+                    }
+                ]
+            }
+        };
+        render(<CurrentStatus action={action} />);
+        expect(screen.getByText(/Charging to 100% until/)).toBeInTheDocument();
+        expect(screen.getByText(/Low rate/)).toBeInTheDocument();
+    });
 });

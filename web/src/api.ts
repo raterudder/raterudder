@@ -26,6 +26,7 @@ export const ActionReason = {
     ArbitrageChargeSave: 'arbitrageChargeSave',
     DischargeBeforeCapacity: 'dischargeBeforeCapacity',
     DeficitSaveForPeak: 'deficitSaveForPeak',
+    DischargeAtPeak: 'dischargeAtPeak',
     ArbitrageSave: 'dischargeAtPeak',
     SufficientBattery: 'sufficientBattery',
     SufficientBatteryTillCharge: 'sufficientBatteryTillCharge',
@@ -71,6 +72,7 @@ export interface Action {
     solarMode: number;
     targetBatteryMode?: number;
     targetSolarMode?: number;
+    chargeToSoc?: number;
     reason?: ActionReason;
     description: string;
     currentPrice?: PriceInfo;
@@ -712,11 +714,12 @@ export interface WeatherRes {
 }
 
 export interface ForecastResponse {
-    simulation: ModelingHour[];
-    energyHistory: EnergyHistoryRes[];
-    priceHistory: PriceHistoryRes[];
-    weather: WeatherRes[];
-    solar1hForecast?: WeatherRes[];
+    plan?: Plan;
+    latestAction?: Action;
+    simulation?: ModelingHour[];
+    energyHistory?: EnergyHistoryRes[];
+    priceHistory?: PriceHistoryRes[];
+    weather?: WeatherRes[];
     updated?: string;
 }
 export interface EnergyStats {
