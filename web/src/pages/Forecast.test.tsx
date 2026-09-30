@@ -413,4 +413,43 @@ describe('Forecast Page', () => {
         await user.click(toggle);
         expect(toggle).toBeChecked();
     });
+
+    it('renders dynamic battery modes legend and colored line segments for active plan modes', async () => {
+        const plan = makeTestPlan();
+        plan.periods[17].batteryMode = api.BatteryMode.Load;
+        plan.periods[17].reason = api.ActionReason.DischargeAtPeak;
+        plan.periods[17].startSoc = 70;
+        plan.periods[17].endSoc = 60;
+
+        plan.periods[18].batteryMode = api.BatteryMode.Load;
+        plan.periods[18].reason = api.ActionReason.DischargeAtPeak;
+        plan.periods[18].startSoc = 60;
+        plan.periods[18].endSoc = 50;
+
+        (fetchModeling as any).mockResolvedValue({
+            plan,
+            energyHistory: [],
+            priceHistory: [],
+            weather: [],
+        });
+
+        renderForecast();
+
+        await waitFor(() => {
+            expect(screen.getByText('24-Hour Energy Plan')).toBeInTheDocument();
+        });
+
+        // Dynamic legend shows active modes
+        expect(screen.getByText('Battery Modes:')).toBeInTheDocument();
+        expect(screen.getByText('Grid Charge')).toBeInTheDocument();
+        expect(screen.getByText('Peak Discharge')).toBeInTheDocument();
+        expect(screen.getByText('Solar Charge')).toBeInTheDocument();
+        expect(screen.getByText('Powering Home')).toBeInTheDocument();
+
+        // Inactive modes are NOT in the legend
+        expect(screen.queryByText('Grid Export')).not.toBeInTheDocument();
+
+        // Reserve reference line is rendered on chart
+        expect(screen.getByText('Reserve')).toBeInTheDocument();
+    });
 });

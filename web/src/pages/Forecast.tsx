@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
-import { fetchModeling, fetchSettings, BatteryMode, ActionReason } from '../api';
+import { fetchModeling, fetchSettings } from '../api';
 import type { ForecastResponse, ModelingHour, Settings, PlanPeriod } from '../api';
 import { Switch } from '@base-ui/react/switch';
 import { Field } from '@base-ui/react/field';
@@ -85,23 +85,23 @@ const charts: ChartConfig[] = [
     },
 ];
 
+import { ALL_ZONES, classifyPlanPeriod } from '../utils/forecastUtils';
+
+
 const planCharts: ChartConfig[] = [
     {
         title: 'Planned Battery SOC (%)',
         dataKey: 'plannedSOC',
-        color: 'var(--accent)',
+        color: '#38bdf8',
         gradientId: 'plannedBatteryGrad',
         unit: '%',
         helpDescription: (
             <p>
                 Displays the planned State of Charge (SOC) of your battery as optimized by RateRudder.
-                The colored background zones highlight scheduled operations (charging, discharging during peak rates, standby holds, and grid export).
+                The colored line segments highlight scheduled operations (charging from solar, discharging during peak rates, powering home, grid arbitrage, and standby holds).
                 The dashed red line represents your Minimum Reserve SOC threshold.
             </p>
         ),
-        additionalLines: [
-            { dataKey: 'batteryReserveSOC', color: '#ef4444', strokeDasharray: '6 4', type: 'stepAfter' },
-        ],
     },
     charts[1],
     charts[2],
@@ -136,6 +136,8 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
     const refValue = config.referenceLine
         ? (data[0]?.[config.referenceLine.dataKey as keyof ProcessedModelingHour] as number)
         : undefined;
+
+    const reserveSOC = data[0]?.batteryReserveSOC ?? 20;
 
     const currentTimeStr = React.useMemo(() => {
         if (!showCurrentTime || data.length === 0) return undefined;
@@ -185,6 +187,18 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
         return null;
     }, [data, config.dataKey]);
 
+    const activeZones = React.useMemo(() => {
+        if (config.dataKey !== 'plannedSOC' || !planPeriods || planPeriods.length === 0) {
+            return [];
+        }
+        const usedKeys = new Set<string>();
+        for (const p of planPeriods) {
+            const z = classifyPlanPeriod(p, reserveSOC);
+            usedKeys.add(z.key);
+        }
+        return ALL_ZONES.filter((z) => usedKeys.has(z.key));
+    }, [config.dataKey, planPeriods, reserveSOC]);
+
     return (
         <div className="chart-card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
@@ -196,24 +210,21 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                 </h3>
                 {headerAction}
             </div>
-            {config.dataKey === 'plannedSOC' && (
-                <div className="mode-legend">
-                    <div className="mode-legend-item">
-                        <span className="mode-legend-dot" style={{ background: '#10b981' }} />
-                        <span>Charge</span>
-                    </div>
-                    <div className="mode-legend-item">
-                        <span className="mode-legend-dot" style={{ background: '#a855f7' }} />
-                        <span>Peak Discharge</span>
-                    </div>
-                    <div className="mode-legend-item">
-                        <span className="mode-legend-dot" style={{ background: '#3b82f6' }} />
-                        <span>Standby</span>
-                    </div>
-                    <div className="mode-legend-item">
-                        <span className="mode-legend-dot" style={{ background: '#f59e0b' }} />
-                        <span>Export</span>
-                    </div>
+            {config.dataKey === 'plannedSOC' && activeZones.length > 0 && (
+                <div className="mode-legend" aria-label="Battery Modes Legend">
+                    <span className="mode-legend-title">Battery Modes:</span>
+                    {activeZones.map((zone) => (
+                        <div key={zone.key} className="mode-legend-item">
+                            <span className="mode-legend-line" style={{ backgroundColor: zone.color }} />
+                            <span>{zone.label}</span>
+                        </div>
+                    ))}
+                    {showCurrentTime && (
+                        <div className="mode-legend-item">
+                            <span className="mode-legend-line" style={{ backgroundColor: 'var(--outline-variant)' }} />
+                            <span>History</span>
+                        </div>
+                    )}
                 </div>
             )}
             <ResponsiveContainer width="100%" height={200}>
@@ -244,53 +255,156 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                         }
                     />
                     <Tooltip
-                        labelFormatter={(label) => formatHour(String(label), data[0]?.ts)}
-                        formatter={(value: number | string | undefined, name: string | number | undefined) => {
-                            const v = Number(value ?? 0);
-                            const lineUnit = config.unit;
-                            let displayName = config.title;
-                            if (name === 'batteryReserveSOC') {
-                                displayName = 'Reserve SOC';
-                            } else if (name === 'plannedSOC') {
-                                displayName = 'Planned Battery SOC';
+                        content={({ active, payload, label }) => {
+                            if (!active || !payload || !payload.length) return null;
+                            const pt = payload[0].payload;
+                            const timeStr = formatHour(String(label || pt.ts), data[0]?.ts);
+
+                            const containerStyle: React.CSSProperties = {
+                                backgroundColor: 'var(--surface-container-high)',
+                                border: '1px solid var(--border)',
+                                borderRadius: '8px',
+                                boxShadow: 'var(--shadow-lg)',
+                                padding: '8px 12px',
+                                color: 'var(--on-surface)',
+                                backdropFilter: 'blur(10px)',
+                                fontSize: isMobile ? '0.75rem' : '0.85rem',
+                                minWidth: '140px',
+                            };
+
+                            if (config.dataKey === 'plannedSOC') {
+                                const soc = pt.plannedSOC ?? pt.batterySOCIfUsed;
+                                return (
+                                    <div style={containerStyle}>
+                                        <div style={{ color: 'var(--text-muted)', marginBottom: '4px', fontWeight: 700 }}>
+                                            {timeStr}
+                                        </div>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '4px' }}>
+                                            <span style={{ color: 'var(--text-muted)' }}>Battery SOC:</span>
+                                            <span style={{ fontWeight: 600 }}>{soc !== undefined ? `${Number(soc).toFixed(1)}%` : '--'}</span>
+                                        </div>
+                                        {pt.zone && (
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center' }}>
+                                                <span style={{ color: 'var(--text-muted)' }}>Mode:</span>
+                                                <span style={{ color: pt.zoneColor, fontWeight: 700 }}>{pt.zone}</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                );
                             }
-                            return [
-                                config.unit.includes('$')
-                                    ? `$${v.toFixed(4)}`
-                                    : v.toFixed(1) + lineUnit.trim(),
-                                displayName,
-                            ];
+
+                            return (
+                                <div style={containerStyle}>
+                                    <div style={{ color: 'var(--text-muted)', marginBottom: '4px', fontWeight: 700 }}>
+                                        {timeStr}
+                                    </div>
+                                    {payload.map((entry: any, i: number) => {
+                                        let displayName = config.title;
+                                        if (entry.dataKey === 'batteryReserveSOC') {
+                                            displayName = 'Reserve SOC';
+                                        } else if (entry.dataKey === 'batterySOCIfUsed') {
+                                            displayName = 'Battery SOC';
+                                        } else if (entry.dataKey === 'predictedSolarKWH') {
+                                            displayName = 'Solar';
+                                        } else if (entry.dataKey === 'avgHomeLoadKWH') {
+                                            displayName = 'Home Load';
+                                        } else if (entry.dataKey === 'gridChargeDollarsPerKWH') {
+                                            displayName = 'Grid Cost';
+                                        }
+
+                                        const val = Number(entry.value ?? 0);
+                                        const formattedVal = config.unit.includes('$')
+                                            ? `$${val.toFixed(4)}`
+                                            : `${val.toFixed(1)}${config.unit.trim()}`;
+
+                                        return (
+                                            <div
+                                                key={i}
+                                                style={{
+                                                    display: 'flex',
+                                                    justifyContent: 'space-between',
+                                                    gap: '12px',
+                                                    marginBottom: i < payload.length - 1 ? '4px' : 0,
+                                                }}
+                                            >
+                                                <span style={{ color: 'var(--text-muted)' }}>{displayName}:</span>
+                                                <span style={{ fontWeight: 600 }}>{formattedVal}</span>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            );
                         }}
-                        contentStyle={{
-                            backgroundColor: 'var(--surface-container-high)',
-                            border: '1px solid var(--border)',
-                            borderRadius: '8px',
-                            boxShadow: 'var(--shadow-lg)',
-                            color: 'var(--on-surface)',
-                            backdropFilter: 'blur(10px)',
-                        }}
-                        itemStyle={{ color: 'var(--on-surface)' }}
-                        labelStyle={{ color: 'var(--text-muted)', marginBottom: '4px', fontWeight: 700 }}
                     />
-                    <Area
-                        type="monotone"
-                        dataKey={config.dataKey}
-                        stroke={config.color}
-                        strokeWidth={3}
-                        fill={`url(#${config.gradientId})`}
-                        isAnimationActive={true}
-                    />
-                    {config.additionalLines?.map((line) => (
-                        <Line
-                            key={line.dataKey}
-                            type={line.type || 'monotone'}
-                            dataKey={line.dataKey}
-                            stroke={line.color}
-                            strokeWidth={2}
-                            strokeDasharray={line.strokeDasharray}
-                            dot={false}
-                        />
-                    ))}
+                    {config.dataKey === 'plannedSOC' ? (
+                        <>
+                            <Area
+                                type="monotone"
+                                dataKey="plannedSOC"
+                                stroke="none"
+                                fill={`url(#${config.gradientId})`}
+                                isAnimationActive={false}
+                            />
+                            {activeZones.map((z) => (
+                                <Line
+                                    key={z.key}
+                                    type="monotone"
+                                    dataKey={`${z.key}SOC`}
+                                    stroke={z.color}
+                                    strokeWidth={3}
+                                    dot={false}
+                                    connectNulls={false}
+                                    isAnimationActive={false}
+                                />
+                            ))}
+                            {showCurrentTime && (
+                                <Line
+                                    key="historySOC"
+                                    type="monotone"
+                                    dataKey="historySOC"
+                                    stroke="var(--outline-variant)"
+                                    strokeDasharray="4 4"
+                                    strokeWidth={2}
+                                    dot={false}
+                                    connectNulls={false}
+                                    isAnimationActive={false}
+                                />
+                            )}
+                            <ReferenceLine
+                                y={reserveSOC}
+                                stroke="#ef4444"
+                                strokeDasharray="6 4"
+                                label={{
+                                    value: 'Reserve',
+                                    fill: '#ef4444',
+                                    fontSize: 10,
+                                    position: 'insideBottomLeft',
+                                }}
+                            />
+                        </>
+                    ) : (
+                        <>
+                            <Area
+                                type="monotone"
+                                dataKey={config.dataKey}
+                                stroke={config.color}
+                                strokeWidth={3}
+                                fill={`url(#${config.gradientId})`}
+                                isAnimationActive={true}
+                            />
+                            {config.additionalLines?.map((line) => (
+                                <Line
+                                    key={line.dataKey}
+                                    type={line.type || 'monotone'}
+                                    dataKey={line.dataKey}
+                                    stroke={line.color}
+                                    strokeWidth={2}
+                                    strokeDasharray={line.strokeDasharray}
+                                    dot={false}
+                                />
+                            ))}
+                        </>
+                    )}
                     {config.referenceLine && refValue !== undefined && (
                         <ReferenceLine
                             y={refValue}
@@ -345,38 +459,6 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                             strokeDasharray="3 3"
                         />
                     )}
-                    {config.dataKey === 'plannedSOC' && planPeriods?.map((p, idx) => {
-                        let fill = '';
-                        let label = '';
-                        if (p.batteryMode === BatteryMode.ChargeAny) {
-                            fill = 'rgba(16, 185, 129, 0.08)';
-                            label = 'Charge';
-                        } else if (p.batteryMode === BatteryMode.Export) {
-                            fill = 'rgba(245, 158, 11, 0.08)';
-                            label = 'Export';
-                        } else if (p.batteryMode === BatteryMode.Load && (p.reason === ActionReason.DischargeAtPeak || (p.description && p.description.toLowerCase().includes('peak')))) {
-                            fill = 'rgba(168, 85, 247, 0.08)';
-                            label = 'Peak Discharge';
-                        } else if (p.batteryMode === BatteryMode.Standby) {
-                            fill = 'rgba(59, 130, 246, 0.05)';
-                            label = 'Standby';
-                        }
-                        if (!fill) return null;
-                        return (
-                            <ReferenceArea
-                                key={idx}
-                                x1={p.startTime}
-                                x2={p.endTime}
-                                fill={fill}
-                                label={isMobile ? undefined : {
-                                    value: label,
-                                    position: 'insideTopLeft',
-                                    fontSize: 10,
-                                    fill: 'var(--text-muted)',
-                                }}
-                            />
-                        );
-                    })}
                 </AreaChart>
             </ResponsiveContainer>
         </div>
@@ -475,18 +557,24 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                         plannedSOC: h.avgBatterySOC,
                         batterySOCIfUsed: h.avgBatterySOC,
                         batteryReserveSOC: reserveSOC,
+                        historySOC: h.avgBatterySOC,
                         predictedSolarKWH: h.solarKWH,
                         avgHomeLoadKWH: Math.floor((h.homeLoadKWH || 0) * 10) / 10,
                         gridChargeDollarsPerKWH: price ? price.dollarsPerKWH + (price.gridUseDollarsPerKWH || 0) : 0,
                         isHistory: true,
+                        zone: 'Historical Actual',
+                        zoneColor: 'var(--text-muted)',
                     };
                 });
                 planData = [...historyMapped];
             }
 
+            const periodZones = periods.map((p) => classifyPlanPeriod(p, reserveSOC));
+
             periods.forEach((p, idx) => {
+                const z = periodZones[idx];
                 const price = p.price ? p.price.dollarsPerKWH + (p.price.gridUseDollarsPerKWH || 0) : 0;
-                planData.push({
+                const pt: any = {
                     ts: p.startTime,
                     hour: new Date(p.startTime).getHours(),
                     plannedSOC: p.startSoc,
@@ -497,9 +585,26 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     gridChargeDollarsPerKWH: price,
                     isHistory: false,
                     period: p,
-                });
+                    zone: z.label,
+                    zoneColor: z.color,
+                    [`${z.key}SOC`]: p.startSoc,
+                };
+
+                // Connect previous period's line to this start point for seamless transition
+                if (idx > 0) {
+                    const prevZ = periodZones[idx - 1];
+                    if (prevZ.key !== z.key) {
+                        pt[`${prevZ.key}SOC`] = p.startSoc;
+                    }
+                } else if (planData.length > 0) {
+                    // Connect history line to plan start
+                    pt.historySOC = p.startSoc;
+                }
+
+                planData.push(pt);
+
                 if (idx === periods.length - 1) {
-                    planData.push({
+                    const endPt: any = {
                         ts: p.endTime,
                         hour: new Date(p.endTime).getHours(),
                         plannedSOC: p.endSoc,
@@ -509,7 +614,11 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                         avgHomeLoadKWH: 0,
                         gridChargeDollarsPerKWH: price,
                         isHistory: false,
-                    });
+                        zone: z.label,
+                        zoneColor: z.color,
+                        [`${z.key}SOC`]: p.endSoc,
+                    };
+                    planData.push(endPt);
                 }
             });
 
