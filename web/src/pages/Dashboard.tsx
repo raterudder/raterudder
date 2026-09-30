@@ -16,17 +16,12 @@ import {
 export const whatsNewVersion = 10;
 export const whatsNewText = "New: variable battery reserve and you no longer need to login so often.";
 export const whatsNewLinkText = "";
+export const STALE_DASHBOARD_TIMEOUT_MS = 10 * 60 * 1000;
 
 const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ siteID, settings = null }) => {
     const [location, navigate] = useLocation();
     const search = useSearch();
     const searchParams = useMemo(() => new URLSearchParams(search), [search]);
-
-    const setSearchParams = useCallback((params: Record<string, string>) => {
-        const p = new URLSearchParams(search);
-        Object.entries(params).forEach(([k, v]) => p.set(k, v));
-        navigate(location + "?" + p.toString());
-    }, [search, location, navigate]);
 
     const dateQuery = searchParams.get('date');
     const [actions, setActions] = useState<Action[]>([]);
@@ -37,6 +32,41 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
     const [showWhatsNew, setShowWhatsNew] = useState(false);
     const [showGridWarning, setShowGridWarning] = useState(false);
     const [showLocationWarning, setShowLocationWarning] = useState(false);
+
+    const [refreshTrigger, setRefreshTrigger] = useState(0);
+    const lastHiddenTimeRef = useRef<number | null>(
+        typeof document !== 'undefined' && document.visibilityState === 'hidden' ? Date.now() : null
+    );
+    const lastFetchTimeRef = useRef<number>(Date.now());
+    const isRefreshRef = useRef(false);
+
+    useEffect(() => {
+        if (typeof document === 'undefined') return;
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'hidden') {
+                lastHiddenTimeRef.current = Date.now();
+            } else if (document.visibilityState === 'visible') {
+                const lastHidden = lastHiddenTimeRef.current;
+                if (lastHidden !== null) {
+                    const now = Date.now();
+                    const timeAway = now - lastHidden;
+                    const timeSinceLastFetch = now - lastFetchTimeRef.current;
+                    lastHiddenTimeRef.current = null;
+
+                    if (timeAway >= STALE_DASHBOARD_TIMEOUT_MS || timeSinceLastFetch >= STALE_DASHBOARD_TIMEOUT_MS) {
+                        isRefreshRef.current = true;
+                        setRefreshTrigger(prev => prev + 1);
+                    }
+                }
+            }
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
+    }, []);
 
     useEffect(() => {
         const storedVersion = localStorage.getItem('whats_new_banner_version');
@@ -92,14 +122,15 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
             }
         }
         return new Date();
-    }, [dateQuery]);
+    }, [dateQuery, refreshTrigger]);
 
     const isFirstMount = useRef(true);
 
     useEffect(() => {
         let isCancelled = false;
-        const delay = isFirstMount.current ? 0 : 200;
+        const delay = isFirstMount.current || isRefreshRef.current ? 0 : 200;
         isFirstMount.current = false;
+        isRefreshRef.current = false;
 
         const timer = setTimeout(async () => {
             setLoading(true);
@@ -116,6 +147,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                 if (!isCancelled) {
                     setActions(actionsAndSavingsData.actions || []);
                     setSavings(actionsAndSavingsData.savings);
+                    lastFetchTimeRef.current = Date.now();
                 }
             } catch (err) {
                 if (!isCancelled) {
@@ -125,6 +157,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
             } finally {
                 if (!isCancelled) {
                     setLoading(false);
+                    lastFetchTimeRef.current = Date.now();
                 }
             }
         }, delay);
@@ -133,16 +166,25 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
             isCancelled = true;
             clearTimeout(timer);
         };
-    }, [currentDate, siteID]);
+    }, [currentDate, siteID, refreshTrigger]);
 
     const handleDateChange = useCallback((days: number) => {
         const newDate = new Date(currentDate);
         newDate.setDate(newDate.getDate() + days);
-        const year = newDate.getFullYear();
-        const month = String(newDate.getMonth() + 1).padStart(2, '0');
-        const day = String(newDate.getDate()).padStart(2, '0');
-        setSearchParams({ date: `${year}-${month}-${day}` });
-    }, [currentDate, setSearchParams]);
+        const today = new Date();
+        const p = new URLSearchParams(search);
+        if (newDate.toDateString() === today.toDateString()) {
+            p.delete('date');
+            const newSearch = p.toString();
+            navigate(location + (newSearch ? "?" + newSearch : ""));
+        } else {
+            const year = newDate.getFullYear();
+            const month = String(newDate.getMonth() + 1).padStart(2, '0');
+            const day = String(newDate.getDate()).padStart(2, '0');
+            p.set('date', `${year}-${month}-${day}`);
+            navigate(location + "?" + p.toString());
+        }
+    }, [currentDate, search, location, navigate]);
 
     const isToday = currentDate.toDateString() === new Date().toDateString();
 

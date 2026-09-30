@@ -1,8 +1,8 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import Dashboard, { whatsNewVersion, whatsNewText, whatsNewLinkText } from './Dashboard';
+import Dashboard, { whatsNewVersion, whatsNewText, whatsNewLinkText, STALE_DASHBOARD_TIMEOUT_MS } from './Dashboard';
 import { Router } from 'wouter';
 import * as api from '../api';
 import { setupDefaultApiMocks } from '../test/apiMocks';
@@ -1129,5 +1129,192 @@ describe('Dashboard', () => {
         });
 
         expect(screen.queryByTestId('automation-paused-dryrun-warning-banner')).not.toBeInTheDocument();
+    });
+
+    describe('visibility auto-refresh', () => {
+        beforeEach(() => {
+            Object.defineProperty(document, 'visibilityState', {
+                value: 'visible',
+                writable: true,
+                configurable: true,
+            });
+        });
+
+        it('automatically refreshes when switching away and returning after more than 10 minutes', async () => {
+            expect(STALE_DASHBOARD_TIMEOUT_MS).toBe(10 * 60 * 1000);
+            let mockTime = new Date('2026-06-15T12:00:00Z').getTime();
+            const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => mockTime);
+
+            mockActionsAndSavings([]);
+            renderWithRouter(<Dashboard />);
+
+            await waitFor(() => {
+                expect(fetchActionsAndSavings).toHaveBeenCalledTimes(1);
+            });
+
+            // User switches away
+            act(() => {
+                Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+                document.dispatchEvent(new Event('visibilitychange'));
+            });
+
+            // More than 10 minutes pass
+            mockTime += STALE_DASHBOARD_TIMEOUT_MS + 60 * 1000;
+
+            // User returns
+            act(() => {
+                Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+                document.dispatchEvent(new Event('visibilitychange'));
+            });
+
+            await waitFor(() => {
+                expect(fetchActionsAndSavings).toHaveBeenCalledTimes(2);
+            });
+
+            dateSpy.mockRestore();
+        });
+
+        it('does not refresh when switching away and returning within 10 minutes', async () => {
+            let mockTime = new Date('2026-06-15T12:00:00Z').getTime();
+            const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => mockTime);
+
+            mockActionsAndSavings([]);
+            renderWithRouter(<Dashboard />);
+
+            await waitFor(() => {
+                expect(fetchActionsAndSavings).toHaveBeenCalledTimes(1);
+            });
+
+            // User switches away
+            act(() => {
+                Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+                document.dispatchEvent(new Event('visibilitychange'));
+            });
+
+            // 5 minutes pass
+            mockTime += 5 * 60 * 1000;
+
+            // User returns
+            act(() => {
+                Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+                document.dispatchEvent(new Event('visibilitychange'));
+            });
+
+            // Wait a bit to ensure no refresh call occurs
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            expect(fetchActionsAndSavings).toHaveBeenCalledTimes(1);
+
+            dateSpy.mockRestore();
+        });
+
+        it('refreshes regardless of the date when viewing a historical date', async () => {
+            window.history.replaceState({}, '', '/?date=2026-01-15');
+            let mockTime = new Date('2026-06-15T12:00:00Z').getTime();
+            const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => mockTime);
+
+            mockActionsAndSavings([]);
+            renderWithRouter(<Dashboard />);
+
+            await waitFor(() => {
+                expect(fetchActionsAndSavings).toHaveBeenCalledTimes(1);
+            });
+
+            const firstCallDate = (fetchActionsAndSavings as any).mock.calls[0][0] as Date;
+            expect(firstCallDate.getFullYear()).toBe(2026);
+            expect(firstCallDate.getMonth()).toBe(0); // January
+            expect(firstCallDate.getDate()).toBe(15);
+
+            // User switches away
+            act(() => {
+                Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+                document.dispatchEvent(new Event('visibilitychange'));
+            });
+
+            // 15 minutes pass
+            mockTime += 15 * 60 * 1000;
+
+            // User returns
+            act(() => {
+                Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+                document.dispatchEvent(new Event('visibilitychange'));
+            });
+
+            await waitFor(() => {
+                expect(fetchActionsAndSavings).toHaveBeenCalledTimes(2);
+            });
+
+            const secondCallDate = (fetchActionsAndSavings as any).mock.calls[1][0] as Date;
+            expect(secondCallDate.getFullYear()).toBe(2026);
+            expect(secondCallDate.getMonth()).toBe(0);
+            expect(secondCallDate.getDate()).toBe(15);
+
+            dateSpy.mockRestore();
+        });
+
+        it('rolls over to current date when opened yesterday and returned today after > 10 minutes', async () => {
+            vi.useFakeTimers({ toFake: ['Date'] });
+            // Start at 11:30 PM yesterday
+            const yesterday = new Date('2026-06-15T23:30:00');
+            vi.setSystemTime(yesterday);
+
+            mockActionsAndSavings([]);
+            renderWithRouter(<Dashboard />);
+
+            await waitFor(() => {
+                expect(fetchActionsAndSavings).toHaveBeenCalledTimes(1);
+            });
+
+            const firstCallDate = (fetchActionsAndSavings as any).mock.calls[0][0] as Date;
+            expect(firstCallDate.getDate()).toBe(15);
+
+            // User switches away
+            act(() => {
+                Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+                document.dispatchEvent(new Event('visibilitychange'));
+            });
+
+            // Fast forward to next morning at 8:00 AM (8.5 hours later)
+            const today = new Date('2026-06-16T08:00:00');
+            vi.setSystemTime(today);
+
+            // User returns
+            act(() => {
+                Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+                document.dispatchEvent(new Event('visibilitychange'));
+            });
+
+            await waitFor(() => {
+                expect(fetchActionsAndSavings).toHaveBeenCalledTimes(2);
+            });
+
+            const secondCallDate = (fetchActionsAndSavings as any).mock.calls[1][0] as Date;
+            expect(secondCallDate.getDate()).toBe(16);
+
+            vi.useRealTimers();
+        });
+
+        it('clears date parameter when navigating back to today', async () => {
+            const user = userEvent.setup();
+            mockActionsAndSavings([]);
+            renderWithRouter(<Dashboard />);
+
+            await waitFor(() => {
+                expect(screen.getByText(/Prev/)).toBeInTheDocument();
+            });
+
+            // Click Prev to go to yesterday
+            await user.click(screen.getByText(/Prev/));
+
+            await waitFor(() => {
+                expect(window.location.search).toContain('date=');
+            });
+
+            // Click Next to go back to today
+            await user.click(screen.getByText(/Next/));
+
+            await waitFor(() => {
+                expect(window.location.search).not.toContain('date=');
+            });
+        });
     });
 });
