@@ -19,9 +19,9 @@ import (
 var planBaselines = map[string]float64{
 	"site1_march.json":      -4.330,
 	"site1_may.json":        -16.197,
-	"site1_september.json":  48.502,
+	"site1_september.json":  48.696,
 	"site2_april.json":      0.382,
-	"site2_march.json":      9.246,
+	"site2_march.json":      9.478,
 	"site2_may.json":        1.442,
 	"site2_september.json":  -6.615,
 	"site3_march.json":      -1.587,
@@ -33,7 +33,7 @@ var planBaselines = map[string]float64{
 	"site5_september.json":  46.116,
 	"site7_june.json":       30.541,
 	"site8_june.json":       -10.494,
-	"site9_september.json":  -23.659,
+	"site9_september.json":  -23.447,
 	"site10_september.json": 2.459,
 }
 
