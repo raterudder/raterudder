@@ -176,7 +176,7 @@ func TestDecideHistory(t *testing.T) {
 
 			// Instantiate default settings
 			settings := types.Settings{}
-			settings, _, err = types.MigrateSettings(settings, 0)
+			settings, _, err = types.MigrateSettings(settings, 0, "production")
 			require.NoError(t, err)
 
 			// Site-specific settings overrides

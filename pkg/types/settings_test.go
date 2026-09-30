@@ -11,7 +11,7 @@ import (
 
 func TestMigrateSettings(t *testing.T) {
 	t.Run("v1: initial defaults", func(t *testing.T) {
-		s, changed, err := MigrateSettings(Settings{}, 0)
+		s, changed, err := MigrateSettings(Settings{}, 0, "production")
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.Equal(t, 2.0, s.IgnoreHourUsageOverMultiple)
@@ -21,7 +21,7 @@ func TestMigrateSettings(t *testing.T) {
 	})
 
 	t.Run("v5 to v6: release production", func(t *testing.T) {
-		s, changed, err := MigrateSettings(Settings{Release: ""}, 5)
+		s, changed, err := MigrateSettings(Settings{Release: ""}, 5, "production")
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.Equal(t, "production", s.Release)
@@ -31,7 +31,7 @@ func TestMigrateSettings(t *testing.T) {
 		old := Settings{
 			UtilityProvider: "comed_hourly",
 		}
-		s, changed, err := MigrateSettings(old, 4)
+		s, changed, err := MigrateSettings(old, 4, "production")
 		require.NoError(t, err)
 		assert.True(t, changed)
 		// v5 change: comed_hourly -> comed_besh
@@ -47,7 +47,7 @@ func TestMigrateSettings(t *testing.T) {
 				RateClass: "singleFamilyWithoutElectricHeat",
 			},
 		}
-		s, changed, err := MigrateSettings(old, 6)
+		s, changed, err := MigrateSettings(old, 6, "production")
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.Equal(t, "comed", s.UtilityProvider)
@@ -63,7 +63,7 @@ func TestMigrateSettings(t *testing.T) {
 			MinStartChargeMinutes:     5,
 			PeakSurvivalBufferMinutes: 30,
 		}
-		s, changed, err := MigrateSettings(old, 8)
+		s, changed, err := MigrateSettings(old, 8, "production")
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.True(t, s.UpdateGroup >= 1 && s.UpdateGroup <= 16, "UpdateGroup should be between 1 and 16, got %d", s.UpdateGroup)
@@ -76,7 +76,7 @@ func TestMigrateSettings(t *testing.T) {
 			IgnoreHourUsageFloorKWH:    0.5,
 			HomeLoadPredictionStrategy: "default",
 		}
-		s, changed, err = MigrateSettings(oldNoUtility, 8)
+		s, changed, err = MigrateSettings(oldNoUtility, 8, "production")
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.Equal(t, 0, s.UpdateGroup)
@@ -91,7 +91,7 @@ func TestMigrateSettings(t *testing.T) {
 			IgnoreHourUsageFloorKWH:    0.5,
 			HomeLoadPredictionStrategy: "default",
 		}
-		s, changed, err = MigrateSettings(oldNoESS, 8)
+		s, changed, err = MigrateSettings(oldNoESS, 8, "production")
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.Equal(t, 0, s.UpdateGroup)
@@ -108,7 +108,7 @@ func TestMigrateSettings(t *testing.T) {
 			IgnoreHourUsageFloorKWH:    0.5,
 			HomeLoadPredictionStrategy: "default",
 		}
-		s, changed, err = MigrateSettings(oldSet, 8)
+		s, changed, err = MigrateSettings(oldSet, 8, "production")
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.Equal(t, 5, s.UpdateGroup)
@@ -121,7 +121,7 @@ func TestMigrateSettings(t *testing.T) {
 			MinStartChargeMinutes:     0,
 			PeakSurvivalBufferMinutes: 0,
 		}
-		s, changed, err := MigrateSettings(old, 9)
+		s, changed, err := MigrateSettings(old, 9, "production")
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.Equal(t, 5, s.MinStartChargeMinutes)
@@ -133,7 +133,7 @@ func TestMigrateSettings(t *testing.T) {
 		old := Settings{
 			IgnoreHourUsageFloorKWH: 0.5,
 		}
-		s, changed, err := MigrateSettings(old, 11)
+		s, changed, err := MigrateSettings(old, 11, "production")
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.Equal(t, "default", s.HomeLoadPredictionStrategy)
@@ -144,7 +144,7 @@ func TestMigrateSettings(t *testing.T) {
 		oldBalanced := Settings{
 			PeakSurvivalBufferMinutes: 30,
 		}
-		s, changed, err := MigrateSettings(oldBalanced, 12)
+		s, changed, err := MigrateSettings(oldBalanced, 12, "production")
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.Equal(t, 4.0, s.SOCBufferPercent)
@@ -156,7 +156,7 @@ func TestMigrateSettings(t *testing.T) {
 		oldConservative := Settings{
 			PeakSurvivalBufferMinutes: 45,
 		}
-		s2, changed2, err2 := MigrateSettings(oldConservative, 12)
+		s2, changed2, err2 := MigrateSettings(oldConservative, 12, "production")
 		require.NoError(t, err2)
 		assert.True(t, changed2)
 		assert.Equal(t, 8.0, s2.SOCBufferPercent)
@@ -168,7 +168,7 @@ func TestMigrateSettings(t *testing.T) {
 		oldAggressive := Settings{
 			PeakSurvivalBufferMinutes: 15,
 		}
-		s3, changed3, err3 := MigrateSettings(oldAggressive, 12)
+		s3, changed3, err3 := MigrateSettings(oldAggressive, 12, "production")
 		require.NoError(t, err3)
 		assert.True(t, changed3)
 		assert.Equal(t, 2.0, s3.SOCBufferPercent)
@@ -181,7 +181,7 @@ func TestMigrateSettings(t *testing.T) {
 		old := Settings{
 			Release: "production",
 		}
-		s, changed, err := MigrateSettings(old, 13)
+		s, changed, err := MigrateSettings(old, 13, "production")
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.Equal(t, "production", s.Release)
@@ -191,7 +191,7 @@ func TestMigrateSettings(t *testing.T) {
 		old := Settings{
 			Release: "production",
 		}
-		s, changed, err := MigrateSettings(old, 14)
+		s, changed, err := MigrateSettings(old, 14, "production")
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.Equal(t, 0.02, s.MinExportHoldDifferenceDollarsPerKWH)
@@ -202,7 +202,7 @@ func TestMigrateSettings(t *testing.T) {
 		configuredSite := Settings{
 			ESS: "tesla",
 		}
-		s1, changed1, err1 := MigrateSettings(configuredSite, 15)
+		s1, changed1, err1 := MigrateSettings(configuredSite, 15, "production")
 		require.NoError(t, err1)
 		assert.True(t, changed1)
 		assert.True(t, s1.CustomGridSettings)
@@ -212,7 +212,7 @@ func TestMigrateSettings(t *testing.T) {
 			ESS:                                     "",
 			MinBatteryExportDifferenceDollarsPerKWH: 0.07,
 		}
-		s2, changed2, err2 := MigrateSettings(unconfiguredSite, 15)
+		s2, changed2, err2 := MigrateSettings(unconfiguredSite, 15, "production")
 		require.NoError(t, err2)
 		assert.False(t, changed2)
 		assert.False(t, s2.CustomGridSettings)
@@ -222,7 +222,7 @@ func TestMigrateSettings(t *testing.T) {
 		old := Settings{
 			Release: "production",
 		}
-		s, changed, err := MigrateSettings(old, 16)
+		s, changed, err := MigrateSettings(old, 16, "production")
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.Equal(t, 0.07, s.MinBatteryExportDifferenceDollarsPerKWH)
@@ -244,7 +244,7 @@ func TestMigrateSettings(t *testing.T) {
 			CustomGridSettings:                      true,
 			MinBatteryExportDifferenceDollarsPerKWH: 0.07,
 		}
-		s, changed, err := MigrateSettings(current, CurrentSettingsVersion)
+		s, changed, err := MigrateSettings(current, CurrentSettingsVersion, "production")
 		require.NoError(t, err)
 		assert.False(t, changed)
 		assert.Equal(t, current, s)

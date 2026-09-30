@@ -204,7 +204,7 @@ type EnphaseCredentials struct {
 
 // MigrateSettings migrates the settings to the current version.
 // It returns the migrated settings, a boolean indicating if changes were made, and an error if migration failed.
-func MigrateSettings(s Settings, currentVersion int) (Settings, bool, error) {
+func MigrateSettings(s Settings, currentVersion int, release string) (Settings, bool, error) {
 	if currentVersion >= CurrentSettingsVersion {
 		return s, false, nil
 	}
@@ -255,7 +255,7 @@ func MigrateSettings(s Settings, currentVersion int) (Settings, bool, error) {
 			}
 		case 6:
 			if s.Release == "" {
-				s.Release = "production"
+				s.Release = release
 				migrated = true
 			}
 		case 7:
