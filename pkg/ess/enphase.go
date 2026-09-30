@@ -62,8 +62,8 @@ func newEnphase() *Enphase {
 	}
 	return &Enphase{
 		client: &http.Client{
-			Transport: common.HTTPClient(time.Minute).Transport,
-			Timeout:   time.Minute,
+			Transport: common.HTTPClient(10 * time.Second).Transport,
+			Timeout:   10 * time.Second,
 			Jar:       jar,
 		},
 		baseURL:       u,
@@ -761,7 +761,7 @@ func (e *Enphase) updateBatterySettings(ctx context.Context, payload enphaseBatt
 	if err := e.doRequest(req, &res); err != nil {
 		return fmt.Errorf("failed to update battery settings: %w", err)
 	}
-	if res.Message != "success" && res.Message != "" {
+	if res.Message != "success" && res.Message != "" && !strings.EqualFold(res.Message, "changes already activated!") {
 		return fmt.Errorf("battery settings update failed: %s", res.Message)
 	}
 	return nil
@@ -830,7 +830,7 @@ func (e *Enphase) updateBatteryProfile(ctx context.Context, payload enphaseBatte
 	if err := e.doRequest(req, &res); err != nil {
 		return fmt.Errorf("failed to update battery profile: %w", err)
 	}
-	if res.Message != "success" && res.Message != "" {
+	if res.Message != "success" && res.Message != "" && !strings.EqualFold(res.Message, "changes already activated!") {
 		return fmt.Errorf("battery profile update failed: %s", res.Message)
 	}
 	return nil

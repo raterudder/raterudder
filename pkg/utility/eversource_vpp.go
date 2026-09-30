@@ -45,7 +45,7 @@ type baseEversourceVPP struct {
 
 func configuredEversourceVPP(db storage.Database) *baseEversourceVPP {
 	c := &baseEversourceVPP{
-		client:       common.HTTPClient(time.Minute),
+		client:       common.HTTPClient(10 * time.Second),
 		cachedPrices: make(map[string][]types.Price),
 		db:           db,
 	}

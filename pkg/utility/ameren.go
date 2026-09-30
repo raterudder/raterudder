@@ -34,7 +34,7 @@ type baseAmerenSmart struct {
 
 func configuredAmerenSmart(db storage.Database) *baseAmerenSmart {
 	c := &baseAmerenSmart{
-		client:       common.HTTPClient(time.Minute),
+		client:       common.HTTPClient(10 * time.Second),
 		cachedPrices: make(map[string][]types.Price),
 		cpnodeID:     "AMIL.BGS6",
 		db:           db,

@@ -383,7 +383,7 @@ func (s *Server) performSiteUpdate(
 				log.Ctx(ctx).ErrorContext(ctx, "failed to set modes while paused", slog.Any("error", err))
 			}
 		}
-		if err := s.storage.InsertAction(ctx, siteID, action); err != nil {
+		if err := s.insertAction(ctx, siteID, action); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to insert paused action", slog.Any("error", err))
 		}
 		// we are purposefully skipping notifications if things are paused
@@ -401,7 +401,7 @@ func (s *Server) performSiteUpdate(
 			SystemStatus:    status,
 			CurrentPrice:    &currentPrice,
 		}
-		if err := s.storage.InsertAction(ctx, siteID, action); err != nil {
+		if err := s.insertAction(ctx, siteID, action); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to insert action", slog.Any("error", err))
 		}
 		s.handleNotifications(ctx, siteID, notifData)
@@ -430,7 +430,7 @@ func (s *Server) performSiteUpdate(
 			Fault:           true,
 			CurrentPrice:    &currentPrice,
 		}
-		if err := s.storage.InsertAction(ctx, siteID, action); err != nil {
+		if err := s.insertAction(ctx, siteID, action); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to insert action", slog.Any("error", err))
 		}
 		s.handleNotifications(ctx, siteID, notifData)
@@ -448,7 +448,7 @@ func (s *Server) performSiteUpdate(
 			Fault:           true,
 			CurrentPrice:    &currentPrice,
 		}
-		if err := s.storage.InsertAction(ctx, siteID, action); err != nil {
+		if err := s.insertAction(ctx, siteID, action); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to insert action", slog.Any("error", err))
 		}
 		// don't send notifications is alarms present
@@ -467,7 +467,7 @@ func (s *Server) performSiteUpdate(
 			Fault:           true,
 			CurrentPrice:    &currentPrice,
 		}
-		if err := s.storage.InsertAction(ctx, siteID, action); err != nil {
+		if err := s.insertAction(ctx, siteID, action); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to insert action", slog.Any("error", err))
 		}
 		s.handleNotifications(ctx, siteID, notifData)
@@ -618,7 +618,7 @@ func (s *Server) performSiteUpdate(
 	}
 
 	// log Action
-	if err := s.storage.InsertAction(ctx, siteID, action); err != nil {
+	if err := s.insertAction(ctx, siteID, action); err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to insert action", slog.Any("error", err))
 	}
 
@@ -626,6 +626,12 @@ func (s *Server) performSiteUpdate(
 	s.handleNotifications(ctx, siteID, notifData)
 
 	return &action, "", nil
+}
+
+func (s *Server) insertAction(ctx context.Context, siteID string, action types.Action) error {
+	insertCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	return s.storage.InsertAction(insertCtx, siteID, action)
 }
 
 func (s *Server) mergeUtilityVPPEvents(ctx context.Context, status types.SystemStatus, vppInfo types.UtilityVPPInfo) types.SystemStatus {

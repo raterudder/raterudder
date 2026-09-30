@@ -2661,3 +2661,31 @@ func TestMergeUtilityVPPEvents(t *testing.T) {
 		}
 	})
 }
+
+func TestInsertAction(t *testing.T) {
+	t.Run("InsertAction With Canceled Context", func(t *testing.T) {
+		mockS := &mockStorage{}
+		var capturedErr error
+		var hasDeadline bool
+		var deadlineAfterNow bool
+
+		mockS.On("InsertAction", mock.Anything, "site1", mock.Anything).Run(func(args mock.Arguments) {
+			ctx := args.Get(0).(context.Context)
+			capturedErr = ctx.Err()
+			d, ok := ctx.Deadline()
+			hasDeadline = ok
+			deadlineAfterNow = d.After(time.Now())
+		}).Return(nil)
+
+		srv := &Server{storage: mockS}
+		canceledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := srv.insertAction(canceledCtx, "site1", types.Action{Description: "test action"})
+		require.NoError(t, err)
+
+		assert.NoError(t, capturedErr)
+		assert.True(t, hasDeadline)
+		assert.True(t, deadlineAfterNow)
+	})
+}

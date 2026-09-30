@@ -666,6 +666,8 @@ func TestEnphase(t *testing.T) {
 		var useRequestedConfig bool
 		var settingsProfile string = "self-consumption"
 		var requestedProfile string = "self-consumption"
+		var settingsMessage string = "success"
+		var profileMessage string = "success"
 		var putCalled bool
 		var lastSettingsPut *struct {
 			ChargeFromGrid                bool   `json:"chargeFromGrid"`
@@ -756,7 +758,7 @@ func TestEnphase(t *testing.T) {
 					lastSettingsPut = &body
 					putCalled = true
 					w.WriteHeader(http.StatusOK)
-					w.Write([]byte(`{"message":"success"}`))
+					json.NewEncoder(w).Encode(map[string]string{"message": settingsMessage})
 					return
 				}
 			}
@@ -786,7 +788,7 @@ func TestEnphase(t *testing.T) {
 					}
 					postCalled = true
 					w.WriteHeader(http.StatusOK)
-					w.Write([]byte(`{"message":"success"}`))
+					json.NewEncoder(w).Encode(map[string]string{"message": profileMessage})
 					return
 				}
 			}
@@ -904,6 +906,23 @@ func TestEnphase(t *testing.T) {
 		if assert.True(t, putCalled) {
 			assert.False(t, lastSettingsPut.ChargeFromGrid)
 		}
+
+		// Test Changes Already Activated! response
+		postCalled = false
+		lastPayload = nil
+		putCalled = false
+		lastSettingsPut = nil
+		profileMessage = "Changes Already Activated!"
+		settingsMessage = "Changes Already Activated!"
+		settingsChargeFromGrid = false
+		settingsScheduleEnabled = false
+		settingsProfile = "self-consumption"
+		useRequestedConfig = false
+		e.settings.GridChargeBatteries = true
+
+		changed, err = e.SetModes(context.Background(), types.BatteryModeStandby, types.SolarModeNoChange, types.ModesOptions{})
+		require.NoError(t, err)
+		assert.True(t, changed)
 	})
 
 	t.Run("SetModes storm mode grid charge", func(t *testing.T) {

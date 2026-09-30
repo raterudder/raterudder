@@ -52,7 +52,7 @@ type baseComEdHourly struct {
 // It uses lflag to register command-line flags for configuration.
 func configuredComEdHourly(db storage.Database) *baseComEdHourly {
 	c := &baseComEdHourly{
-		client:           common.HTTPClient(time.Minute),
+		client:           common.HTTPClient(10 * time.Second),
 		historicalPrices: make(map[int64]types.Price),
 		db:               db,
 	}

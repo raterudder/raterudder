@@ -100,7 +100,7 @@ type franklinMode struct {
 
 func newFranklin() *Franklin {
 	return &Franklin{
-		client:      common.HTTPClient(time.Minute),
+		client:      common.HTTPClient(10 * time.Second),
 		baseURL:     "https://energy.franklinwh.com",
 		retryDelay1: 5 * time.Second,
 		retryDelay2: 10 * time.Second,
@@ -443,11 +443,20 @@ func (f *Franklin) doRequest(req *http.Request, dest any) error {
 	return nil
 }
 
+func isFranklinRateLimit(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "429") || strings.Contains(msg, "too many requests")
+}
+
 func (f *Franklin) getRuntimeData(ctx context.Context) (franklinDeviceCompositeInfoResult, error) {
 	var res franklinDeviceCompositeInfoResult
+	var lastErr error
 	for attempt := 1; attempt <= 3; attempt++ {
 		refreshFlag := "1"
-		if attempt == 2 {
+		if attempt >= 2 {
 			refreshFlag = "0"
 		}
 
@@ -461,8 +470,11 @@ func (f *Franklin) getRuntimeData(ctx context.Context) (franklinDeviceCompositeI
 		}
 
 		res = franklinDeviceCompositeInfoResult{}
-		if err := f.doRequest(req, &res); err != nil {
-			return franklinDeviceCompositeInfoResult{}, fmt.Errorf("getDeviceCompositeInfo failed: %w", err)
+		lastErr = f.doRequest(req, &res)
+		if lastErr != nil {
+			if !isFranklinRateLimit(lastErr) || attempt == 3 {
+				return franklinDeviceCompositeInfoResult{}, fmt.Errorf("getDeviceCompositeInfo failed: %w", lastErr)
+			}
 		}
 
 		var dataTime time.Time
@@ -470,7 +482,7 @@ func (f *Franklin) getRuntimeData(ctx context.Context) (franklinDeviceCompositeI
 		isStale := false
 
 		// 0 seems to be returned if refreshFlag=0
-		if res.Valid && res.RuntimeData.Timestamp > 0 {
+		if lastErr == nil && res.Valid && res.RuntimeData.Timestamp > 0 {
 			dataTime = time.Unix(res.RuntimeData.Timestamp, 0)
 			age = time.Since(dataTime)
 			if age > 5*time.Minute {
@@ -479,7 +491,7 @@ func (f *Franklin) getRuntimeData(ctx context.Context) (franklinDeviceCompositeI
 			}
 		}
 
-		if res.Valid {
+		if lastErr == nil && res.Valid {
 			break
 		}
 
@@ -503,17 +515,30 @@ func (f *Franklin) getRuntimeData(ctx context.Context) (franklinDeviceCompositeI
 					slog.Time("timestamp", dataTime),
 				)
 			}
-			log.Ctx(ctx).WarnContext(
-				ctx,
-				"getDeviceCompositeInfo returned invalid or stale status, retrying",
-				attrs...,
-			)
+			if lastErr != nil {
+				attrs = append(attrs, slog.Any("error", lastErr))
+				log.Ctx(ctx).WarnContext(
+					ctx,
+					"getDeviceCompositeInfo rate limited, retrying with cached data",
+					attrs...,
+				)
+			} else {
+				log.Ctx(ctx).WarnContext(
+					ctx,
+					"getDeviceCompositeInfo returned invalid or stale status, retrying",
+					attrs...,
+				)
+			}
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
 				return franklinDeviceCompositeInfoResult{}, ctx.Err()
 			}
 		}
+	}
+
+	if lastErr != nil {
+		return franklinDeviceCompositeInfoResult{}, fmt.Errorf("getDeviceCompositeInfo failed: %w", lastErr)
 	}
 
 	if !res.Valid {

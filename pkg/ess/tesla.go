@@ -61,7 +61,7 @@ func configuredBaseTesla() *baseTesla {
 	b := baseTesla{
 		tokenURL: "https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token",
 		authURL:  "https://auth.tesla.com/oauth2/v3/authorize",
-		client:   common.HTTPClient(time.Minute),
+		client:   common.HTTPClient(10 * time.Second),
 	}
 	lflag.Do(func() {
 		b.clientID = *teslaClientID

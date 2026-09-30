@@ -224,7 +224,7 @@ func TestBaseEversourceVPP(t *testing.T) {
 
 	base := &baseEversourceVPP{
 		vppHistoryURL: "",
-		client:        common.HTTPClient(time.Minute),
+		client:        common.HTTPClient(10 * time.Second),
 		cachedPrices:  make(map[string][]types.Price),
 	}
 

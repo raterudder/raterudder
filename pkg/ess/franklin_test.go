@@ -398,6 +398,123 @@ func TestFranklin(t *testing.T) {
 		assert.Equal(t, 2, compositeAttempts)
 	})
 
+	t.Run("GetStatus Retry On Rate Limit (429)", func(t *testing.T) {
+		compositeAttempts := 0
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"totalCap": 30.0}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": []map[string]any{}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"list": []map[string]any{}}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+				compositeAttempts++
+				if compositeAttempts == 1 {
+					assert.Equal(t, "1", r.URL.Query().Get("refreshFlag"))
+					http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+					return
+				}
+				assert.Equal(t, "0", r.URL.Query().Get("refreshFlag"))
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"valid": true,
+						"runtimeData": map[string]any{
+							"soc":       75.0,
+							"timestamp": time.Now().Unix(),
+						},
+					},
+				})
+				return
+			}
+			http.Error(w, "not found: "+r.URL.Path, 404)
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:    ts.Client(),
+			baseURL:   ts.URL,
+			gatewayID: "g",
+		}
+
+		status, err := f.GetStatus(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, 75.0, status.BatterySOC)
+		assert.Equal(t, 2, compositeAttempts)
+	})
+
+	t.Run("GetStatus Retry Retains RefreshFlag 0 On Attempt 3", func(t *testing.T) {
+		compositeAttempts := 0
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"totalCap": 30.0}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": []map[string]any{}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"list": []map[string]any{}}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+				compositeAttempts++
+				if compositeAttempts == 1 {
+					assert.Equal(t, "1", r.URL.Query().Get("refreshFlag"))
+					http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+					return
+				}
+				if compositeAttempts == 2 {
+					assert.Equal(t, "0", r.URL.Query().Get("refreshFlag"))
+					http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+					return
+				}
+				assert.Equal(t, "0", r.URL.Query().Get("refreshFlag"))
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"valid": true,
+						"runtimeData": map[string]any{
+							"soc":       70.0,
+							"timestamp": time.Now().Unix(),
+						},
+					},
+				})
+				return
+			}
+			http.Error(w, "not found: "+r.URL.Path, 404)
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:    ts.Client(),
+			baseURL:   ts.URL,
+			gatewayID: "g",
+		}
+
+		status, err := f.GetStatus(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, 70.0, status.BatterySOC)
+		assert.Equal(t, 3, compositeAttempts)
+	})
+
 	t.Run("GetStatus Grid Status", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
