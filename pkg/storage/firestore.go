@@ -923,89 +923,167 @@ func (f *FirestoreProvider) GetUser(ctx context.Context, userID string) (types.U
 	return user, nil
 }
 
-// UpsertPrices adds or updates multiple price records in the "price_history" sub-collection of the site.
+// UpsertPrices adds or updates multiple price records in the "monthly_prices" sub-collection of the site.
+// Prices are grouped by month (YYYY-MM) and merged into monthly documents.
 func (f *FirestoreProvider) UpsertPrices(ctx context.Context, siteID string, prices []types.Price, version int) error {
+	if siteID == "" {
+		return fmt.Errorf("siteID cannot be empty")
+	}
 	if len(prices) == 0 {
 		return nil
 	}
 
-	coll, err := f.getCollection(siteID, "price_history")
+	coll, err := f.getCollection(siteID, "monthly_prices")
 	if err != nil {
 		return err
 	}
 
-	// For a single item, use direct Set to avoid batch overhead
-	if len(prices) == 1 {
-		p := prices[0]
-		jsonBytes, err := json.Marshal(p)
-		if err != nil {
-			return fmt.Errorf("failed to marshal price: %w", err)
-		}
-		docID := p.TSStart.UTC().Format(time.RFC3339)
-		_, err = coll.Doc(docID).Set(ctx, map[string]any{
-			"json":      string(jsonBytes),
-			"timestamp": p.TSStart,
-			"version":   version,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to upsert price: %w", err)
-		}
-		return nil
-	}
-
-	// For multiple items, use BulkWriter
-	bw := f.client.BulkWriter(ctx)
-	var endOnce sync.Once
-	endBW := func() { endOnce.Do(func() { bw.End() }) }
-	defer endBW()
-
-	jobs := make([]*firestore.BulkWriterJob, 0, len(prices))
-
+	// Group incoming prices by month (UTC)
+	byMonth := make(map[string][]types.Price)
 	for _, p := range prices {
-		jsonBytes, err := json.Marshal(p)
-		if err != nil {
-			return fmt.Errorf("failed to marshal price: %w", err)
+		if p.TSStart.IsZero() {
+			return errors.New("price tsStart cannot be zero")
 		}
-
-		docID := p.TSStart.UTC().Format(time.RFC3339)
-		ref := coll.Doc(docID)
-		job, err := bw.Set(ref, map[string]any{
-			"json":      string(jsonBytes),
-			"timestamp": p.TSStart,
-			"version":   version,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to enqueue price: %w", err)
-		}
-		jobs = append(jobs, job)
+		m := p.TSStart.UTC().Format("2006-01")
+		byMonth[m] = append(byMonth[m], p)
 	}
 
-	endBW()
+	months := make([]string, 0, len(byMonth))
+	for m := range byMonth {
+		months = append(months, m)
+	}
+	slices.Sort(months)
 
-	for _, job := range jobs {
-		if _, err := job.Results(); err != nil {
-			return fmt.Errorf("failed to upsert prices: %w", err)
+	maxRetries := 3
+	backoff := 100 * time.Millisecond
+
+	for _, m := range months {
+		incoming := byMonth[m]
+		docRef := coll.Doc(m)
+
+		var lastErr error
+		for attempt := 0; attempt < maxRetries; attempt++ {
+			lastErr = f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+				doc, err := tx.Get(docRef)
+				var existing types.SiteMonthlyPrices
+				exists := true
+				if err != nil {
+					if status.Code(err) == codes.NotFound {
+						exists = false
+					} else {
+						return err
+					}
+				}
+
+				if exists {
+					val, err := doc.DataAt("json")
+					if err != nil {
+						return fmt.Errorf("site monthly prices doc missing 'json' field: %w", err)
+					}
+					jsonStr, ok := val.(string)
+					if !ok {
+						return fmt.Errorf("site monthly prices doc 'json' field is not string")
+					}
+					if err := json.Unmarshal([]byte(jsonStr), &existing); err != nil {
+						return fmt.Errorf("failed to unmarshal site monthly prices: %w", err)
+					}
+				}
+
+				priceMap := make(map[int64]types.Price, len(existing.Prices)+len(incoming))
+				for _, p := range existing.Prices {
+					priceMap[p.TSStart.UTC().UnixNano()] = p
+				}
+				for _, p := range incoming {
+					priceMap[p.TSStart.UTC().UnixNano()] = p
+				}
+
+				merged := make([]types.Price, 0, len(priceMap))
+				for _, p := range priceMap {
+					merged = append(merged, p)
+				}
+				slices.SortFunc(merged, func(a, b types.Price) int {
+					return a.TSStart.Compare(b.TSStart)
+				})
+
+				var earliestDate, latestDate time.Time
+				if len(merged) > 0 {
+					earliestDate = merged[0].TSStart
+					latestDate = merged[len(merged)-1].TSStart
+				}
+
+				monthStart, err := time.Parse("2006-01", m)
+				if err != nil {
+					return fmt.Errorf("failed to parse month %s: %w", m, err)
+				}
+				nowTime := time.Now().UTC()
+				monthly := types.SiteMonthlyPrices{
+					SiteID:       siteID,
+					Month:        m,
+					TSMonthStart: monthStart,
+					Prices:       merged,
+					Version:      version,
+					TSUpdated:    nowTime,
+				}
+
+				jsonBytes, err := json.Marshal(monthly)
+				if err != nil {
+					return fmt.Errorf("failed to marshal site monthly prices: %w", err)
+				}
+
+				data := map[string]any{
+					"json":         string(jsonBytes),
+					"month":        m,
+					"earliestDate": earliestDate,
+					"latestDate":   latestDate,
+					"version":      version,
+					"tsUpdated":    nowTime,
+				}
+				return tx.Set(docRef, data)
+			})
+
+			if lastErr == nil {
+				break
+			}
+			if isTransactionExpiredErr(lastErr) {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(backoff):
+					backoff *= 2
+					continue
+				}
+			}
+			return fmt.Errorf("failed to upsert site monthly prices for month %s: %w", m, lastErr)
+		}
+		if lastErr != nil {
+			return lastErr
 		}
 	}
 
 	return nil
 }
 
-// GetPriceHistory retrieves price records within the specified time range for a site.
+// GetPriceHistory retrieves price records within the specified time range for a site from monthly buckets.
 func (f *FirestoreProvider) GetPriceHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Price, error) {
 	if !start.Before(end) {
 		return nil, nil
 	}
 
-	coll, err := f.getCollection(siteID, "price_history")
+	coll, err := f.getCollection(siteID, "monthly_prices")
 	if err != nil {
 		return nil, err
 	}
 
+	startMonth := start.UTC().Format("2006-01")
+	endMonth := end.UTC().Add(-time.Nanosecond).Format("2006-01")
+	if endMonth < startMonth {
+		endMonth = startMonth
+	}
+
 	iter := coll.
-		Where("timestamp", ">=", start).
-		Where("timestamp", "<", end).
-		OrderBy("timestamp", firestore.Asc).
+		Where("month", ">=", startMonth).
+		Where("month", "<=", endMonth).
+		OrderBy("month", firestore.Asc).
 		Documents(ctx)
 	defer iter.Stop()
 
@@ -1031,26 +1109,30 @@ func (f *FirestoreProvider) GetPriceHistory(ctx context.Context, siteID string, 
 			return nil, fmt.Errorf("price document %s 'json' field is not string", doc.Ref.ID)
 		}
 
-		var p types.Price
-		if err := json.Unmarshal([]byte(jsonStr), &p); err != nil {
+		var monthly types.SiteMonthlyPrices
+		if err := json.Unmarshal([]byte(jsonStr), &monthly); err != nil {
 			log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal price", slog.String("docID", doc.Ref.ID), slog.String("siteID", siteID), slog.Any("err", err))
 			return nil, fmt.Errorf("failed to unmarshal price (id=%s): %w", doc.Ref.ID, err)
 		}
-		prices = append(prices, p)
+
+		for _, p := range monthly.Prices {
+			if !p.TSStart.Before(start) && p.TSStart.Before(end) {
+				prices = append(prices, p)
+			}
+		}
 	}
 	return prices, nil
 }
 
-// GetLatestPriceHistoryTime retrieves the timestamp of the last stored price record for a site.
+// GetLatestPriceHistoryTime retrieves the timestamp of the last stored price record for a site from monthly buckets.
 func (f *FirestoreProvider) GetLatestPriceHistoryTime(ctx context.Context, siteID string) (time.Time, int, error) {
-	coll, err := f.getCollection(siteID, "price_history")
+	coll, err := f.getCollection(siteID, "monthly_prices")
 	if err != nil {
 		return time.Time{}, 0, err
 	}
 
-	// firestore automatically creates indexes for top-level fields
 	iter := coll.
-		OrderBy("timestamp", firestore.Desc).
+		OrderBy("month", firestore.Desc).
 		Limit(1).
 		Documents(ctx)
 	defer iter.Stop()
@@ -1063,9 +1145,11 @@ func (f *FirestoreProvider) GetLatestPriceHistoryTime(ctx context.Context, siteI
 		return time.Time{}, 0, fmt.Errorf("failed to get latest price doc: %w", err)
 	}
 
-	ts, err := time.Parse(time.RFC3339, doc.Ref.ID)
-	if err != nil {
-		return time.Time{}, 0, fmt.Errorf("invalid price doc id %s: %w", doc.Ref.ID, err)
+	var latestDate time.Time
+	if val, err := doc.DataAt("latestDate"); err == nil {
+		if t, ok := val.(time.Time); ok {
+			latestDate = t
+		}
 	}
 
 	// Read version if available (default 0)
@@ -1076,7 +1160,18 @@ func (f *FirestoreProvider) GetLatestPriceHistoryTime(ctx context.Context, siteI
 		}
 	}
 
-	return ts, version, nil
+	if latestDate.IsZero() {
+		if val, err := doc.DataAt("json"); err == nil {
+			if jsonStr, ok := val.(string); ok {
+				var monthly types.SiteMonthlyPrices
+				if err := json.Unmarshal([]byte(jsonStr), &monthly); err == nil && len(monthly.Prices) > 0 {
+					latestDate = monthly.Prices[len(monthly.Prices)-1].TSStart
+				}
+			}
+		}
+	}
+
+	return latestDate, version, nil
 }
 
 // GetLatestWeatherTime retrieves the timestamp of the last stored weather record for a site, along with its update time.
@@ -1425,7 +1520,8 @@ func (f *FirestoreProvider) ListFeedback(ctx context.Context, limit int, lastFee
 	return feedbacks, nil
 }
 
-// UpsertUtilityPrices adds or updates multiple price records for a utility.
+// UpsertUtilityPrices adds or updates multiple price records for a utility in the "monthly_prices" sub-collection.
+// Prices are grouped by month (YYYY-MM) and merged into monthly documents.
 func (f *FirestoreProvider) UpsertUtilityPrices(ctx context.Context, utilityID string, prices []types.PriceState, version int) error {
 	if utilityID == "" {
 		return errors.New("utilityID cannot be empty")
@@ -1434,64 +1530,134 @@ func (f *FirestoreProvider) UpsertUtilityPrices(ctx context.Context, utilityID s
 		return nil
 	}
 
-	coll := f.client.Collection("utilities").Doc(utilityID).Collection("hourly_prices")
+	coll := f.client.Collection("utilities").Doc(utilityID).Collection("monthly_prices")
 
-	if len(prices) == 1 {
-		p := prices[0]
-		jsonBytes, err := json.Marshal(p)
-		if err != nil {
-			return fmt.Errorf("failed to marshal utility price: %w", err)
-		}
-		docID := p.TSStart.UTC().Format(time.RFC3339)
-		_, err = coll.Doc(docID).Set(ctx, map[string]any{
-			"json":      string(jsonBytes),
-			"timestamp": p.TSStart,
-			"version":   version,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to upsert utility price: %w", err)
-		}
-		return nil
-	}
-
-	bw := f.client.BulkWriter(ctx)
-	var endOnce sync.Once
-	endBW := func() { endOnce.Do(func() { bw.End() }) }
-	defer endBW()
-
-	jobs := make([]*firestore.BulkWriterJob, 0, len(prices))
-
+	// Group incoming prices by month (UTC)
+	byMonth := make(map[string][]types.PriceState)
 	for _, p := range prices {
-		jsonBytes, err := json.Marshal(p)
-		if err != nil {
-			return fmt.Errorf("failed to marshal utility price: %w", err)
+		if p.TSStart.IsZero() {
+			return errors.New("price tsStart cannot be zero")
 		}
-
-		docID := p.TSStart.UTC().Format(time.RFC3339)
-		ref := coll.Doc(docID)
-		job, err := bw.Set(ref, map[string]any{
-			"json":      string(jsonBytes),
-			"timestamp": p.TSStart,
-			"version":   version,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to enqueue utility price: %w", err)
-		}
-		jobs = append(jobs, job)
+		m := p.TSStart.UTC().Format("2006-01")
+		byMonth[m] = append(byMonth[m], p)
 	}
 
-	endBW()
+	months := make([]string, 0, len(byMonth))
+	for m := range byMonth {
+		months = append(months, m)
+	}
+	slices.Sort(months)
 
-	for _, job := range jobs {
-		if _, err := job.Results(); err != nil {
-			return fmt.Errorf("failed to upsert utility prices: %w", err)
+	maxRetries := 3
+	backoff := 100 * time.Millisecond
+
+	for _, m := range months {
+		incoming := byMonth[m]
+		docRef := coll.Doc(m)
+
+		var lastErr error
+		for attempt := 0; attempt < maxRetries; attempt++ {
+			lastErr = f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+				doc, err := tx.Get(docRef)
+				var existing types.UtilityMonthlyPrices
+				exists := true
+				if err != nil {
+					if status.Code(err) == codes.NotFound {
+						exists = false
+					} else {
+						return err
+					}
+				}
+
+				if exists {
+					val, err := doc.DataAt("json")
+					if err != nil {
+						return fmt.Errorf("utility monthly prices doc missing 'json' field: %w", err)
+					}
+					jsonStr, ok := val.(string)
+					if !ok {
+						return fmt.Errorf("utility monthly prices doc 'json' field is not string")
+					}
+					if err := json.Unmarshal([]byte(jsonStr), &existing); err != nil {
+						return fmt.Errorf("failed to unmarshal utility monthly prices: %w", err)
+					}
+				}
+
+				priceMap := make(map[int64]types.PriceState, len(existing.Prices)+len(incoming))
+				for _, p := range existing.Prices {
+					priceMap[p.TSStart.UTC().UnixNano()] = p
+				}
+				for _, p := range incoming {
+					priceMap[p.TSStart.UTC().UnixNano()] = p
+				}
+
+				merged := make([]types.PriceState, 0, len(priceMap))
+				for _, p := range priceMap {
+					merged = append(merged, p)
+				}
+				slices.SortFunc(merged, func(a, b types.PriceState) int {
+					return a.TSStart.Compare(b.TSStart)
+				})
+
+				var earliestDate, latestDate time.Time
+				if len(merged) > 0 {
+					earliestDate = merged[0].TSStart
+					latestDate = merged[len(merged)-1].TSStart
+				}
+
+				monthStart, err := time.Parse("2006-01", m)
+				if err != nil {
+					return fmt.Errorf("failed to parse month %s: %w", m, err)
+				}
+				nowTime := time.Now().UTC()
+				monthly := types.UtilityMonthlyPrices{
+					UtilityID:    utilityID,
+					Month:        m,
+					TSMonthStart: monthStart,
+					Prices:       merged,
+					Version:      version,
+					TSUpdated:    nowTime,
+				}
+
+				jsonBytes, err := json.Marshal(monthly)
+				if err != nil {
+					return fmt.Errorf("failed to marshal utility monthly prices: %w", err)
+				}
+
+				data := map[string]any{
+					"json":         string(jsonBytes),
+					"month":        m,
+					"earliestDate": earliestDate,
+					"latestDate":   latestDate,
+					"version":      version,
+					"tsUpdated":    nowTime,
+				}
+				return tx.Set(docRef, data)
+			})
+
+			if lastErr == nil {
+				break
+			}
+			if isTransactionExpiredErr(lastErr) {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(backoff):
+					backoff *= 2
+					continue
+				}
+			}
+			return fmt.Errorf("failed to upsert utility monthly prices for month %s: %w", m, lastErr)
+		}
+		if lastErr != nil {
+			return lastErr
 		}
 	}
 
 	return nil
 }
 
-// GetUtilityPrices retrieves price records within the specified time range for a utility.
+// GetUtilityPrices retrieves price records within the specified time range for a utility from monthly buckets.
 func (f *FirestoreProvider) GetUtilityPrices(ctx context.Context, utilityID string, start, end time.Time) ([]types.PriceState, error) {
 	if utilityID == "" {
 		return nil, errors.New("utilityID cannot be empty")
@@ -1500,12 +1666,18 @@ func (f *FirestoreProvider) GetUtilityPrices(ctx context.Context, utilityID stri
 		return nil, nil
 	}
 
-	coll := f.client.Collection("utilities").Doc(utilityID).Collection("hourly_prices")
+	coll := f.client.Collection("utilities").Doc(utilityID).Collection("monthly_prices")
+
+	startMonth := start.UTC().Format("2006-01")
+	endMonth := end.UTC().Add(-time.Nanosecond).Format("2006-01")
+	if endMonth < startMonth {
+		endMonth = startMonth
+	}
 
 	iter := coll.
-		Where("timestamp", ">=", start).
-		Where("timestamp", "<", end).
-		OrderBy("timestamp", firestore.Asc).
+		Where("month", ">=", startMonth).
+		Where("month", "<=", endMonth).
+		OrderBy("month", firestore.Asc).
 		Documents(ctx)
 	defer iter.Stop()
 
@@ -1529,11 +1701,16 @@ func (f *FirestoreProvider) GetUtilityPrices(ctx context.Context, utilityID stri
 			continue
 		}
 
-		var p types.PriceState
-		if err := json.Unmarshal([]byte(jsonStr), &p); err != nil {
+		var monthly types.UtilityMonthlyPrices
+		if err := json.Unmarshal([]byte(jsonStr), &monthly); err != nil {
 			continue
 		}
-		prices = append(prices, p)
+
+		for _, p := range monthly.Prices {
+			if !p.TSStart.Before(start) && p.TSStart.Before(end) {
+				prices = append(prices, p)
+			}
+		}
 	}
 	return prices, nil
 }
@@ -2494,4 +2671,158 @@ func (f *FirestoreProvider) RecordNotificationClick(
 			"json": string(jsonBytes),
 		}, firestore.MergeAll)
 	})
+}
+
+// MigrateLegacyPricing migrates legacy hourly price documents (from utilities/{utilityID}/hourly_prices and
+// sites/{siteID}/price_history) into monthly bucket documents (monthly_prices/{YYYY-MM}).
+func (f *FirestoreProvider) MigrateLegacyPricing(ctx context.Context, opts PricingMigrationOptions) (*PricingMigrationStats, error) {
+	stats := &PricingMigrationStats{}
+
+	// 1. Migrate Utilities
+	var utilityIDs []string
+	if opts.UtilityID != "" {
+		utilityIDs = []string{opts.UtilityID}
+	} else {
+		// Discover utilities from the utilities collection
+		iter := f.client.Collection("utilities").DocumentRefs(ctx)
+		for {
+			docRef, err := iter.Next()
+			if errors.Is(err, iterator.Done) {
+				break
+			}
+			if err != nil {
+				return nil, fmt.Errorf("failed to list utilities: %w", err)
+			}
+			utilityIDs = append(utilityIDs, docRef.ID)
+		}
+
+		// Also ensure common known utilities are checked in case the parent doc hasn't been created
+		for _, known := range []string{"comed", "ameren", "eversource_ct_vpp"} {
+			if !slices.Contains(utilityIDs, known) {
+				utilityIDs = append(utilityIDs, known)
+			}
+		}
+	}
+
+	for _, uID := range utilityIDs {
+		legacyColl := f.client.Collection("utilities").Doc(uID).Collection("hourly_prices")
+		iter := legacyColl.Documents(ctx)
+
+		var prices []types.PriceState
+		for {
+			doc, err := iter.Next()
+			if errors.Is(err, iterator.Done) {
+				break
+			}
+			if err != nil {
+				iter.Stop()
+				return nil, fmt.Errorf("failed to iterate legacy utility prices for %s: %w", uID, err)
+			}
+
+			var p types.PriceState
+			if val, err := doc.DataAt("json"); err == nil {
+				if jsonStr, ok := val.(string); ok {
+					if err := json.Unmarshal([]byte(jsonStr), &p); err == nil && !p.TSStart.IsZero() {
+						prices = append(prices, p)
+					}
+				}
+			}
+		}
+		iter.Stop()
+
+		if len(prices) == 0 {
+			continue
+		}
+
+		stats.UtilitiesInspected++
+		stats.UtilityHoursMigrated += len(prices)
+
+		monthSet := make(map[string]struct{})
+		for _, p := range prices {
+			monthSet[p.TSStart.UTC().Format("2006-01")] = struct{}{}
+		}
+		stats.UtilityMonthsCreated += len(monthSet)
+
+		if !opts.DryRun {
+			if err := f.UpsertUtilityPrices(ctx, uID, prices, 0); err != nil {
+				return nil, fmt.Errorf("failed to upsert migrated utility prices for %s: %w", uID, err)
+			}
+			if opts.PurgeLegacy {
+				if err := f.deleteCollection(ctx, legacyColl); err != nil {
+					return nil, fmt.Errorf("failed to purge legacy utility prices for %s: %w", uID, err)
+				}
+			}
+		}
+	}
+
+	// 2. Migrate Sites
+	var siteIDs []string
+	if opts.SiteID != "" {
+		siteIDs = []string{opts.SiteID}
+	} else {
+		sites, err := f.ListSites(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list sites: %w", err)
+		}
+		for _, s := range sites {
+			siteIDs = append(siteIDs, s.ID)
+		}
+	}
+
+	for _, sID := range siteIDs {
+		legacyColl, err := f.getCollection(sID, "price_history")
+		if err != nil {
+			return nil, err
+		}
+
+		iter := legacyColl.Documents(ctx)
+
+		var prices []types.Price
+		for {
+			doc, err := iter.Next()
+			if errors.Is(err, iterator.Done) {
+				break
+			}
+			if err != nil {
+				iter.Stop()
+				return nil, fmt.Errorf("failed to iterate legacy site prices for %s: %w", sID, err)
+			}
+
+			var p types.Price
+			if val, err := doc.DataAt("json"); err == nil {
+				if jsonStr, ok := val.(string); ok {
+					if err := json.Unmarshal([]byte(jsonStr), &p); err == nil && !p.TSStart.IsZero() {
+						prices = append(prices, p)
+					}
+				}
+			}
+		}
+		iter.Stop()
+
+		if len(prices) == 0 {
+			continue
+		}
+
+		stats.SitesInspected++
+		stats.SiteHoursMigrated += len(prices)
+
+		monthSet := make(map[string]struct{})
+		for _, p := range prices {
+			monthSet[p.TSStart.UTC().Format("2006-01")] = struct{}{}
+		}
+		stats.SiteMonthsCreated += len(monthSet)
+
+		if !opts.DryRun {
+			if err := f.UpsertPrices(ctx, sID, prices, types.CurrentPriceHistoryVersion); err != nil {
+				return nil, fmt.Errorf("failed to upsert migrated site prices for %s: %w", sID, err)
+			}
+			if opts.PurgeLegacy {
+				if err := f.deleteCollection(ctx, legacyColl); err != nil {
+					return nil, fmt.Errorf("failed to purge legacy site prices for %s: %w", sID, err)
+				}
+			}
+		}
+	}
+
+	return stats, nil
 }

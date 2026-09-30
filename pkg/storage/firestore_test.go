@@ -159,6 +159,33 @@ func TestFirestoreProvider(t *testing.T) {
 			assert.Equal(t, future, latestTime, "latest time should match the future timestamp we just inserted")
 			assert.Equal(t, 0, version, "version should be 0 because we didn't set it explicitly on upsert in this test")
 		})
+
+		t.Run("CrossMonthRange", func(t *testing.T) {
+			siteID := "cross-month-site"
+			tMay := time.Date(2026, 5, 31, 23, 0, 0, 0, time.UTC)
+			tJun := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+			tJul := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+
+			pMay := types.Price{TSStart: tMay, DollarsPerKWH: 0.15, Provider: "test"}
+			pJun := types.Price{TSStart: tJun, DollarsPerKWH: 0.25, Provider: "test"}
+			pJul := types.Price{TSStart: tJul, DollarsPerKWH: 0.35, Provider: "test"}
+
+			require.NoError(t, f.UpsertPrices(ctx, siteID, []types.Price{pMay, pJun, pJul}, 2))
+
+			// Query range covering May and June, but stopping before July
+			res, err := f.GetPriceHistory(ctx, siteID, tMay, tJun.Add(time.Hour))
+			require.NoError(t, err)
+			require.Len(t, res, 2)
+			assert.Equal(t, tMay, res[0].TSStart)
+			assert.Equal(t, 0.15, res[0].DollarsPerKWH)
+			assert.Equal(t, tJun, res[1].TSStart)
+			assert.Equal(t, 0.25, res[1].DollarsPerKWH)
+
+			latestTime, ver, err := f.GetLatestPriceHistoryTime(ctx, siteID)
+			require.NoError(t, err)
+			assert.Equal(t, tJul, latestTime)
+			assert.Equal(t, 2, ver)
+		})
 	})
 
 	t.Run("Actions", func(t *testing.T) {
@@ -964,6 +991,177 @@ func TestFirestoreProvider(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, pricesRange, 1)
 		assert.Equal(t, 0.10, pricesRange[0].DollarsPerKWH)
+
+		t.Run("CrossMonthRange", func(t *testing.T) {
+			uID := "cross-month-util"
+			tAug := time.Date(2026, 8, 31, 23, 0, 0, 0, time.UTC)
+			tSep := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+
+			pAug := types.PriceState{
+				Price:     types.Price{TSStart: tAug, DollarsPerKWH: 0.05, Provider: "util"},
+				Confirmed: true,
+			}
+			pSep := types.PriceState{
+				Price:     types.Price{TSStart: tSep, DollarsPerKWH: 0.08, Provider: "util"},
+				Confirmed: false,
+			}
+
+			require.NoError(t, f.UpsertUtilityPrices(ctx, uID, []types.PriceState{pAug, pSep}, 0))
+
+			res, err := f.GetUtilityPrices(ctx, uID, tAug, tSep.Add(time.Hour))
+			require.NoError(t, err)
+			require.Len(t, res, 2)
+			assert.Equal(t, tAug, res[0].TSStart)
+			assert.Equal(t, 0.05, res[0].DollarsPerKWH)
+			assert.True(t, res[0].Confirmed)
+			assert.Equal(t, tSep, res[1].TSStart)
+			assert.Equal(t, 0.08, res[1].DollarsPerKWH)
+			assert.False(t, res[1].Confirmed)
+		})
+
+		t.Run("MergeOverwrites", func(t *testing.T) {
+			uID := "merge-util"
+			tHour := time.Date(2026, 9, 15, 14, 0, 0, 0, time.UTC)
+
+			pInitial := types.PriceState{
+				Price:     types.Price{TSStart: tHour, DollarsPerKWH: 0.04, Provider: "util"},
+				Confirmed: false,
+			}
+			require.NoError(t, f.UpsertUtilityPrices(ctx, uID, []types.PriceState{pInitial}, 0))
+
+			// Update same hour with confirmed true and final price
+			pFinal := types.PriceState{
+				Price:     types.Price{TSStart: tHour, DollarsPerKWH: 0.045, Provider: "util"},
+				Confirmed: true,
+			}
+			require.NoError(t, f.UpsertUtilityPrices(ctx, uID, []types.PriceState{pFinal}, 0))
+
+			res, err := f.GetUtilityPrices(ctx, uID, tHour, tHour.Add(time.Hour))
+			require.NoError(t, err)
+			require.Len(t, res, 1)
+			assert.Equal(t, 0.045, res[0].DollarsPerKWH)
+			assert.True(t, res[0].Confirmed)
+		})
+	})
+
+	t.Run("MigrateLegacyPricing", func(t *testing.T) {
+		uID := fmt.Sprintf("legacy-util-%d", time.Now().UnixNano())
+		sID := fmt.Sprintf("legacy-site-%d", time.Now().UnixNano())
+
+		// Create site
+		require.NoError(t, f.CreateSite(ctx, sID, types.Site{ID: sID}))
+
+		// Seed legacy utility documents directly
+		uColl := f.client.Collection("utilities").Doc(uID).Collection("hourly_prices")
+		t1 := time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC)
+		t2 := time.Date(2026, 5, 20, 15, 0, 0, 0, time.UTC)
+
+		uP1 := types.PriceState{
+			Price:     types.Price{TSStart: t1, DollarsPerKWH: 0.11, Provider: "util"},
+			Confirmed: true,
+			TSUpdated: t1,
+		}
+		uP2 := types.PriceState{
+			Price:     types.Price{TSStart: t2, DollarsPerKWH: 0.22, Provider: "util"},
+			Confirmed: false,
+			TSUpdated: t2,
+		}
+		b1, err := json.Marshal(uP1)
+		require.NoError(t, err)
+		b2, err := json.Marshal(uP2)
+		require.NoError(t, err)
+
+		_, err = uColl.Doc(t1.Format(time.RFC3339)).Set(ctx, map[string]any{"json": string(b1), "timestamp": t1})
+		require.NoError(t, err)
+		_, err = uColl.Doc(t2.Format(time.RFC3339)).Set(ctx, map[string]any{"json": string(b2), "timestamp": t2})
+		require.NoError(t, err)
+
+		// Seed legacy site documents directly
+		sColl, err := f.getCollection(sID, "price_history")
+		require.NoError(t, err)
+
+		sP1 := types.Price{TSStart: t1, DollarsPerKWH: 0.13, Provider: "site"}
+		sP2 := types.Price{TSStart: t2, DollarsPerKWH: 0.26, Provider: "site"}
+		sb1, err := json.Marshal(sP1)
+		require.NoError(t, err)
+		sb2, err := json.Marshal(sP2)
+		require.NoError(t, err)
+
+		_, err = sColl.Doc(t1.Format(time.RFC3339)).Set(ctx, map[string]any{"json": string(sb1), "timestamp": t1})
+		require.NoError(t, err)
+		_, err = sColl.Doc(t2.Format(time.RFC3339)).Set(ctx, map[string]any{"json": string(sb2), "timestamp": t2})
+		require.NoError(t, err)
+
+		// 1. Dry run
+		dryStats, err := f.MigrateLegacyPricing(ctx, PricingMigrationOptions{
+			DryRun:    true,
+			UtilityID: uID,
+			SiteID:    sID,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 1, dryStats.UtilitiesInspected)
+		assert.Equal(t, 2, dryStats.UtilityHoursMigrated)
+		assert.Equal(t, 2, dryStats.UtilityMonthsCreated)
+		assert.Equal(t, 1, dryStats.SitesInspected)
+		assert.Equal(t, 2, dryStats.SiteHoursMigrated)
+		assert.Equal(t, 2, dryStats.SiteMonthsCreated)
+
+		// Verify dry run did not write to monthly_prices
+		resU, err := f.GetUtilityPrices(ctx, uID, t1, t2.Add(time.Hour))
+		require.NoError(t, err)
+		assert.Empty(t, resU)
+		resS, err := f.GetPriceHistory(ctx, sID, t1, t2.Add(time.Hour))
+		require.NoError(t, err)
+		assert.Empty(t, resS)
+
+		// 2. Real migration without purge
+		migStats, err := f.MigrateLegacyPricing(ctx, PricingMigrationOptions{
+			DryRun:      false,
+			PurgeLegacy: false,
+			UtilityID:   uID,
+			SiteID:      sID,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 2, migStats.UtilityHoursMigrated)
+		assert.Equal(t, 2, migStats.SiteHoursMigrated)
+
+		// Verify monthly_prices now has the data
+		resU, err = f.GetUtilityPrices(ctx, uID, t1, t2.Add(time.Hour))
+		require.NoError(t, err)
+		require.Len(t, resU, 2)
+		assert.Equal(t, 0.11, resU[0].DollarsPerKWH)
+		assert.Equal(t, 0.22, resU[1].DollarsPerKWH)
+
+		resS, err = f.GetPriceHistory(ctx, sID, t1, t2.Add(time.Hour))
+		require.NoError(t, err)
+		require.Len(t, resS, 2)
+		assert.Equal(t, 0.13, resS[0].DollarsPerKWH)
+		assert.Equal(t, 0.26, resS[1].DollarsPerKWH)
+
+		// 3. Migration with purge legacy
+		purgeStats, err := f.MigrateLegacyPricing(ctx, PricingMigrationOptions{
+			DryRun:      false,
+			PurgeLegacy: true,
+			UtilityID:   uID,
+			SiteID:      sID,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 2, purgeStats.UtilityHoursMigrated)
+		assert.Equal(t, 2, purgeStats.SiteHoursMigrated)
+
+		// Verify legacy collections are now empty
+		uDocs, err := uColl.Limit(1).Documents(ctx).GetAll()
+		require.NoError(t, err)
+		assert.Empty(t, uDocs)
+
+		sDocs, err := sColl.Limit(1).Documents(ctx).GetAll()
+		require.NoError(t, err)
+		assert.Empty(t, sDocs)
+
+		// Verify monthly_prices still works
+		resUAfter, err := f.GetUtilityPrices(ctx, uID, t1, t2.Add(time.Hour))
+		require.NoError(t, err)
+		require.Len(t, resUAfter, 2)
 	})
 
 	t.Run("Interest", func(t *testing.T) {

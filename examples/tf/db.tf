@@ -34,6 +34,7 @@ locals {
     "weather",
     "notification_logs",
     "mocks",
+    "monthly_prices",
   ]
 }
 
