@@ -106,6 +106,7 @@ type simulationSummary struct {
 	SoonestSaveValue             float64
 	SoonestSavePrice             types.Price
 	MinFutureGridChargeCost      float64
+	MaxFutureGridChargeCost      float64
 	MinEnergy                    float64
 	MaxEnergy                    float64
 	SoonestVPPChargingAt         time.Time
@@ -545,6 +546,7 @@ func (c *Controller) analyzeSimulation(
 			summary.MinFutureGridChargeCost = slot.GridChargeDollarsPerKWH
 		}
 	}
+	summary.MaxFutureGridChargeCost = maxFutureGridChargeCost
 
 	// 3. Scan for energy trends, deficits, and export arbitrage opportunities
 	for _, slot := range simData {
@@ -2277,6 +2279,19 @@ func (c *Controller) evaluateFallback(
 					gridChargeNowCost,
 					solarExportValue,
 				),
+			}
+		}
+	}
+
+	if settings.GridChargeBatteries && settings.GridExportSolar && !solarWillRefill {
+		minDiff := max(priceEpsilonForEquality, settings.MinDeficitPriceDifferenceDollarsPerKWH)
+		isCheapestPriceNow := gridChargeNowCost <= summary.MinFutureGridChargeCost+priceEpsilonForEquality
+		hasHigherFuturePrice := summary.MaxFutureGridChargeCost > gridChargeNowCost+minDiff
+		if isCheapestPriceNow && hasHigherFuturePrice {
+			return &DecisionResult{
+				BatteryMode: types.BatteryModeStandby,
+				Reason:      types.ActionReasonDeficitSaveForPeak,
+				Description: fmt.Sprintf("Preserving battery in standby for upcoming peak rates ($%.3f < $%.3f).", gridChargeNowCost, summary.MaxFutureGridChargeCost),
 			}
 		}
 	}

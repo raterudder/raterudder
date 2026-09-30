@@ -6566,6 +6566,28 @@ func TestEvaluateFallback(t *testing.T) {
 		}
 	})
 
+	t.Run("Cheapest Price Hold + Higher Peak Ahead + No Solar Refill -> Standby", func(t *testing.T) {
+		status := baseStatus
+		status.BatterySOC = 100.0
+		settings := baseSettings
+		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.055}
+		summary := simulationSummary{
+			MinFutureGridChargeCost: 0.055,
+			MaxFutureGridChargeCost: 0.250,
+		}
+		simData := []SimHour{
+			{TS: now, GridChargeDollarsPerKWH: 0.055},
+			{TS: now.Add(6 * time.Hour), GridChargeDollarsPerKWH: 0.250, Price: types.Price{DollarsPerKWH: 0.250}},
+		}
+
+		decision := c.evaluateFallback(ctx, now, status, currentPrice, settings, simData, summary, nil)
+		if assert.NotNil(t, decision) {
+			assert.Equal(t, types.BatteryModeStandby, decision.BatteryMode)
+			assert.Equal(t, types.ActionReasonDeficitSaveForPeak, decision.Reason)
+			assert.Contains(t, decision.Description, "Preserving battery in standby for upcoming peak rates")
+		}
+	})
+
 	t.Run("Arbitrage and Deficit Hysteresis Oscillation", func(t *testing.T) {
 		loc := time.FixedZone("EDT", -4*60*60)
 		startNow := time.Date(2026, 5, 28, 22, 53, 14, 0, loc)
