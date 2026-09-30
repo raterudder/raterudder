@@ -281,8 +281,9 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	}
 	priceRes := buildPriceHistoryRes(priceHistory24)
 
-	// If on staging, try real-time Plan fallback
-	if strings.EqualFold(s.release, "staging") {
+	// Try real-time Plan fallback if on staging or if PlanMode is enabled
+	// TODO: Remove s.release check and settings.PlanMode once plan mode is rolled out to 100% of sites.
+	if strings.EqualFold(s.release, "staging") || settings.PlanMode {
 		planDecision, freshPlan, planErr := s.controller.Plan(
 			ctx, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings, latestAction,
 		)

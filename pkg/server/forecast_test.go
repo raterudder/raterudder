@@ -834,4 +834,105 @@ func TestHandleForecast(t *testing.T) {
 		mockES.AssertCalled(t, "GetStatus", mock.Anything)
 		mockU.AssertCalled(t, "GetCurrentPrice", mock.Anything)
 	})
+
+	t.Run("Production With PlanMode Runs Plan", func(t *testing.T) {
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		now := time.Now().Truncate(time.Hour)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{
+			DollarsPerKWH: 0.15,
+			TSStart:       now,
+			TSEnd:         now.Add(time.Hour),
+		}, nil)
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{
+			BatteryCapacityKWH: 13.5,
+			BatterySOC:         50,
+			Timestamp:          now,
+			TimeLocation:       "UTC",
+		}, nil)
+
+		mockP := ess.NewMap()
+		mockP.SetSystem(types.SiteIDNone, mockES)
+
+		mockS := &mockStorage{}
+		staleAction := &types.Action{
+			Timestamp:    now.Add(-2 * time.Hour),
+			BatteryMode:  types.BatteryModeStandby,
+			CurrentPrice: &types.Price{DollarsPerKWH: 0.10, TSStart: now.Add(-2 * time.Hour)},
+			SystemStatus: types.SystemStatus{
+				BatterySOC:         50,
+				BatteryCapacityKWH: 13.5,
+				Timestamp:          now.Add(-2 * time.Hour),
+			},
+		}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return(staleAction, nil)
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil)
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			UtilityProvider: "test",
+			MinBatterySOC:   20.0,
+			Release:         "production",
+			ESS:             "mock",
+			PlanMode:        true,
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil)
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+
+		var futurePrices []types.Price
+		for i := 1; i <= 24; i++ {
+			futurePrices = append(futurePrices, types.Price{
+				DollarsPerKWH: 0.15,
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+			})
+		}
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{
+			{
+				DollarsPerKWH: 0.15,
+				TSStart:       now,
+				TSEnd:         now.Add(time.Hour),
+			},
+		}, nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return(futurePrices, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil)
+
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			controller: controller.NewController(),
+			bypassAuth: true,
+			release:    "production",
+			nowFunc:    func() time.Time { return now },
+		}
+
+		req := httptest.NewRequest("GET", "/api/forecast", nil)
+		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
+		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv.handleForecast(w, req)
+
+		resp := w.Result()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var data ForecastRes
+		err := json.NewDecoder(resp.Body).Decode(&data)
+		require.NoError(t, err)
+
+		require.NotNil(t, data.Plan, "PlanMode=true on production should run controller.Plan and return plan")
+		assert.Greater(t, data.Plan.HorizonHours, 0)
+		require.NotNil(t, data.LatestAction)
+		mockES.AssertCalled(t, "GetStatus", mock.Anything)
+		mockU.AssertCalled(t, "GetCurrentPrice", mock.Anything)
+	})
 }

@@ -535,12 +535,13 @@ func (s *Server) performSiteUpdate(
 	}
 	notifData.simData = decision.SimData
 
-	// When release is staging, call Plan in addition to Decide.
-	// Log a warning if they produce different actions, but always perform the Plan action on staging.
-	if strings.EqualFold(s.release, "staging") {
+	// When release is staging or settings.PlanMode is enabled, call Plan in addition to Decide.
+	// Log a warning if they produce different actions, but always perform the Plan action when plan mode is active.
+	// TODO: Remove s.release check and settings.PlanMode once plan mode is rolled out to 100% of sites.
+	if strings.EqualFold(s.release, "staging") || settings.PlanMode {
 		planDecision, _, planErr := s.controller.Plan(ctx, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings, latestAction)
 		if planErr != nil {
-			log.Ctx(ctx).WarnContext(ctx, "controller plan failed on staging", slog.Any("error", planErr))
+			log.Ctx(ctx).WarnContext(ctx, "controller plan failed", slog.Any("error", planErr))
 		} else {
 			decideAct := decision.Action
 			planAct := planDecision.Action
@@ -565,7 +566,7 @@ func (s *Server) performSiteUpdate(
 					slog.String("planDescription", planAct.Description),
 				)
 			}
-			// Always perform the Plan action on staging
+			// Always perform the Plan action when plan mode is active
 			if planDecision.SimData == nil {
 				planDecision.SimData = decision.SimData
 			}

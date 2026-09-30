@@ -26,6 +26,8 @@ export const defaultSavings = {
 export const defaultSettings = {
     dryRun: false,
     pause: false,
+    // TODO: Remove planMode once plan mode is rolled out to 100% of sites.
+    planMode: false,
     release: 'production',
     minBatterySOC: 10,
     manageTOUSchedules: false,

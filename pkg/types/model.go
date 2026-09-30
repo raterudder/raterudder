@@ -93,8 +93,6 @@ type Action struct {
 	FuturePrice            *Price           `json:"futurePrice,omitempty"`
 	SystemStatus           SystemStatus     `json:"systemStatus"`
 	HitDeficitAt           time.Time        `json:"deficitAt"`
-	HitBufferedDeficitAt   time.Time        `json:"hitBufferedDeficitAt"`
-	HitThresholdDeficitAt  time.Time        `json:"hitThresholdDeficitAt"`
 	HitCapacityAt          time.Time        `json:"capacityAt"`
 	TSScheduleModeUntil    time.Time        `json:"tsScheduleModeUntil,omitempty"`
 	StrategyBenefitDollars float64          `json:"strategyBenefitDollars,omitempty"`
@@ -106,6 +104,10 @@ type Action struct {
 	SimulationParams       SimulationParams `json:"simulationParams,omitempty"`
 	Plan                   *Plan            `json:"plan,omitempty"`
 
+	// Deprecated: use HitDeficitAt
+	HitBufferedDeficitAt time.Time `json:"hitBufferedDeficitAt"`
+	// Deprecated: use HitDeficitAt
+	HitThresholdDeficitAt time.Time `json:"hitThresholdDeficitAt"`
 	// Deprecated: use BatteryMode
 	TargetBatteryMode BatteryMode `json:"targetBatteryMode,omitempty"`
 	// Deprecated: use SolarMode

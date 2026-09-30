@@ -1188,7 +1188,94 @@ func TestHandleUpdate(t *testing.T) {
 		resp := w.Result()
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		require.NotNil(t, insertedAction, "Action must be inserted into storage")
-		assert.Nil(t, insertedAction.Plan, "On production, Plan must not be called, so Action.Plan must be nil")
+		assert.Nil(t, insertedAction.Plan, "On production without PlanMode, Plan must not be called, so Action.Plan must be nil")
+	})
+
+	t.Run("Production Release With PlanMode Calls Plan", func(t *testing.T) {
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		now := time.Now().Truncate(time.Hour)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{
+			DollarsPerKWH: 0.15,
+			TSStart:       now,
+			TSEnd:         now.Add(time.Hour),
+		}, nil)
+
+		var futurePrices []types.Price
+		for i := 1; i <= 24; i++ {
+			futurePrices = append(futurePrices, types.Price{
+				DollarsPerKWH: 0.15,
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+			})
+		}
+		mockU.On("GetFuturePrices", mock.Anything).Return(futurePrices, nil)
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
+
+		var insertedAction *types.Action
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(now).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil)
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			UtilityProvider: "test",
+			MinBatterySOC:   20.0,
+			Release:         "production",
+			PlanMode:        true,
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockS.On("InsertAction", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			act := args.Get(2).(types.Action)
+			insertedAction = &act
+		}).Return(nil)
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{
+			BatteryCapacityKWH: 13.5,
+			BatterySOC:         50,
+			Timestamp:          now,
+			TimeLocation:       "UTC",
+		}, nil)
+		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
+
+		mockP := ess.NewMap()
+		mockP.SetSystem(types.SiteIDNone, mockES)
+
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			listenAddr: ":8080",
+			controller: controller.NewController(),
+			bypassAuth: true,
+			release:    "production", // Production release environment
+		}
+
+		req := httptest.NewRequest("GET", "/api/update", nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
+		w := httptest.NewRecorder()
+
+		srv.handleUpdate(w, req)
+
+		resp := w.Result()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		require.NotNil(t, insertedAction, "Action must be inserted into storage")
+		assert.NotNil(t, insertedAction.Plan, "On production with PlanMode=true, Action.Plan must be populated by Controller.Plan")
+		assert.NotEmpty(t, insertedAction.Plan.Periods)
 	})
 }
 

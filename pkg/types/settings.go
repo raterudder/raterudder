@@ -22,6 +22,10 @@ type Settings struct {
 	// Pause updates
 	Pause bool `json:"pause"`
 
+	// PlanMode enables the 24-hour forward planning engine for this site.
+	// TODO: Remove PlanMode once plan mode is rolled out to 100% of sites.
+	PlanMode bool `json:"planMode,omitempty"`
+
 	// What environment to opt into
 	Release string `json:"release"`
 
