@@ -881,4 +881,57 @@ describe('NotificationModal', () => {
         expect(screen.getByText(/Quiet period start and end time cannot be the same/i)).toBeInTheDocument();
         expect(screen.getByRole('button', { name: /Save Preferences/i })).toBeDisabled();
     });
+
+    it('renders High Home Load alert option and saves configured sensitivity', async () => {
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
+            subscriptions: [
+                {
+                    id: 'sub-chrome',
+                    endpoint: 'https://fcm.googleapis.com/fcm/send/sub-chrome',
+                    keys: { p256dh: 'k1', auth: 'a1' },
+                    userAgent: 'Chrome on Mac',
+                },
+            ],
+            notificationsEnabled: true,
+        });
+
+        const mockSettings = {
+            notifications: {
+                [mockUserID]: {
+                    morningSummaryEnabled: false,
+                    morningSummaryHour: 7,
+                    morningSummaryFlavor: 'home_planner',
+                    highHomeLoadAlert: 'medium',
+                },
+            },
+        } as any;
+
+        render(
+            <NotificationModal
+                open={true}
+                onClose={mockOnClose}
+                siteID={mockSiteID}
+                siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID={mockUserID}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.getByLabelText('Large Unusual Home Load')).toBeInTheDocument();
+            expect(screen.getByText('High Home Load Alert')).toBeInTheDocument();
+        });
+
+        // Trigger save
+        fireEvent.click(screen.getByRole('button', { name: /Save Preferences/i }));
+
+        await waitFor(() => {
+            expect(api.updateNotificationSettings).toHaveBeenCalledWith(
+                mockSiteID,
+                expect.objectContaining({
+                    highHomeLoadAlert: 'medium',
+                })
+            );
+        });
+    });
 });

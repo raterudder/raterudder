@@ -101,6 +101,14 @@ const solarUnderproductionLabels: Record<string, string> = {
     high: 'High Sensitivity'
 };
 
+const highHomeLoadLabels: Record<string, string> = {
+    '': 'Disabled',
+    disabled: 'Disabled',
+    low: 'Low Sensitivity',
+    medium: 'Medium Sensitivity',
+    high: 'High Sensitivity'
+};
+
 interface NotificationSampleProps {
     headerLabel?: string;
     title: string;
@@ -158,6 +166,7 @@ const defaultSettingsValues: UserNotificationSettings = {
     gridOutageAlert: false,
     priceSpikeAlert: '',
     solarUnderproductionAlert: '',
+    highHomeLoadAlert: '',
     vppDispatchAlert: false,
     quietPeriods: []
 };
@@ -258,6 +267,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                 gridOutageAlert: server.gridOutageAlert ?? defaultSettingsValues.gridOutageAlert,
                 priceSpikeAlert: server.priceSpikeAlert || '',
                 solarUnderproductionAlert: server.solarUnderproductionAlert || '',
+                highHomeLoadAlert: server.highHomeLoadAlert || '',
                 vppDispatchAlert: server.vppDispatchAlert ?? defaultSettingsValues.vppDispatchAlert,
                 quietPeriods: server.quietPeriods || [],
             } : defaultSettingsValues;
@@ -1198,6 +1208,74 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                 </Select.Root>
                                                 <Field.Description>
                                                     Alert me if midday solar falls significantly below weather forecast.
+                                                </Field.Description>
+                                            </Field.Root>
+
+                                            <hr className="notif-divider" />
+
+                                            {/* High Home Load & Battery Depletion Alert */}
+                                            <Field.Root className="form-group" style={{ marginBottom: 0 }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.35rem' }}>
+                                                    <Field.Label htmlFor="highHomeLoadSelect">High Home Load Alert</Field.Label>
+                                                    <HelpButton
+                                                        title="High Home Load Alerts"
+                                                        ariaLabel="More info about high home load alerts"
+                                                        description={
+                                                            <div>
+                                                                <p>
+                                                                    Alerts you when home electricity consumption surges abnormally, warning whether your battery will run out or has already reached reserve, with actionable electricity price guidance. Automatically suppressed during scheduled EV charging periods, solar coverage, and off-peak cheapest rate hours (on low/medium sensitivity).
+                                                                </p>
+                                                                <ul>
+                                                                    <li><strong>Low Sensitivity:</strong> Alerts only during extreme surges (&ge; 3.5 kW) that exceed 95th percentile for this time of day.</li>
+                                                                    <li><strong>Medium Sensitivity:</strong> Recommended; alerts on large surges (&ge; 3.0 kW) that exceed 90th percentile for this time of day.</li>
+                                                                    <li><strong>High Sensitivity:</strong> Alerts on elevated loads (&ge; 2.5 kW) exceeding 80th percentile for closer monitoring.</li>
+                                                                </ul>
+                                                                <NotificationSample
+                                                                    headerLabel="Sample High Home Load Alert"
+                                                                    title="⚠️ High Home Load Detected"
+                                                                    body="Large unusual home load detected (10.6 kW). Battery will run out in ~13 min (SOC 39%). Grid will be used. Rates are currently at today's peak ($0.38/kWh). Consider waiting until 8 PM when rates drop to $0.12/kWh."
+                                                                />
+                                                            </div>
+                                                        }
+                                                    />
+                                                </div>
+                                                <Select.Root
+                                                    value={draftSettings.highHomeLoadAlert || 'disabled'}
+                                                    onValueChange={(val) => handleUpdateDraft({ highHomeLoadAlert: (val === 'disabled' ? '' : val) as AnomalyAlertSensitivity })}
+                                                >
+                                                    <Select.Trigger className="select-trigger" id="highHomeLoadSelect" aria-label="Large Unusual Home Load">
+                                                        <Select.Value placeholder="Select sensitivity...">
+                                                            {highHomeLoadLabels[draftSettings.highHomeLoadAlert || ''] || 'Disabled'}
+                                                        </Select.Value>
+                                                        <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                                <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                            </svg>
+                                                        </Select.Icon>
+                                                    </Select.Trigger>
+                                                    <Select.Portal>
+                                                        <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
+                                                            <Select.Popup className="select-popup">
+                                                                <Select.List>
+                                                                    <Select.Item className="select-item" value="disabled">
+                                                                        <Select.ItemText>Disabled</Select.ItemText>
+                                                                    </Select.Item>
+                                                                    <Select.Item className="select-item" value="low">
+                                                                        <Select.ItemText>Low Sensitivity</Select.ItemText>
+                                                                    </Select.Item>
+                                                                    <Select.Item className="select-item" value="medium">
+                                                                        <Select.ItemText>Medium Sensitivity</Select.ItemText>
+                                                                    </Select.Item>
+                                                                    <Select.Item className="select-item" value="high">
+                                                                        <Select.ItemText>High Sensitivity</Select.ItemText>
+                                                                    </Select.Item>
+                                                                </Select.List>
+                                                            </Select.Popup>
+                                                        </Select.Positioner>
+                                                    </Select.Portal>
+                                                </Select.Root>
+                                                <Field.Description>
+                                                    Alert me when home consumption surges and battery will run out or is at reserve.
                                                 </Field.Description>
                                             </Field.Root>
 

@@ -338,6 +338,7 @@ const (
 	NotificationTypePriceSpike           = "price_spike"
 	NotificationTypeSolarUnderproduction = "solar_underproduction"
 	NotificationTypeVPPDispatch          = "vpp_dispatch"
+	NotificationTypeHighHomeLoad         = "high_home_load"
 )
 
 // UserNotificationSettings holds notification preferences for a specific user on a specific site.
@@ -353,6 +354,7 @@ type UserNotificationSettings struct {
 	GridOutageAlert           bool         `json:"gridOutageAlert"`
 	PriceSpikeAlert           string       `json:"priceSpikeAlert,omitempty"`           // "", "low", "medium", "high"
 	SolarUnderproductionAlert string       `json:"solarUnderproductionAlert,omitempty"` // "", "low", "medium", "high"
+	HighHomeLoadAlert         string       `json:"highHomeLoadAlert,omitempty"`         // "", "low", "medium", "high"
 	VPPDispatchAlert          bool         `json:"vppDispatchAlert"`
 	QuietPeriods              []TimePeriod `json:"quietPeriods,omitempty"`
 }

@@ -856,6 +856,7 @@ export interface UserNotificationSettings {
     gridOutageAlert?: boolean;
     priceSpikeAlert?: AnomalyAlertSensitivity;
     solarUnderproductionAlert?: AnomalyAlertSensitivity;
+    highHomeLoadAlert?: AnomalyAlertSensitivity;
     vppDispatchAlert?: boolean;
     quietPeriods?: TimePeriod[];
 }
