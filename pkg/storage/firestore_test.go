@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -11,6 +12,8 @@ import (
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestFirestoreProvider(t *testing.T) {
@@ -1417,5 +1420,35 @@ func TestFirestoreProvider(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, log2Time.UTC(), rawEarliest10.(time.Time).UTC())
 		assert.Equal(t, log3Time.UTC(), rawLatest10.(time.Time).UTC())
+	})
+}
+
+func TestIsRetryableFirestoreErr(t *testing.T) {
+	t.Run("Nil error", func(t *testing.T) {
+		assert.False(t, isRetryableFirestoreErr(nil))
+	})
+
+	t.Run("Unavailable error", func(t *testing.T) {
+		err := status.Error(codes.Unavailable, "error reading from server: connection reset by peer")
+		assert.True(t, isRetryableFirestoreErr(err))
+	})
+
+	t.Run("Wrapped Unavailable error", func(t *testing.T) {
+		err := fmt.Errorf("failed doc read: %w", status.Error(codes.Unavailable, "transport is closing"))
+		assert.True(t, isRetryableFirestoreErr(err))
+	})
+
+	t.Run("ResourceExhausted error", func(t *testing.T) {
+		err := status.Error(codes.ResourceExhausted, "quota exceeded")
+		assert.True(t, isRetryableFirestoreErr(err))
+	})
+
+	t.Run("NotFound error", func(t *testing.T) {
+		err := status.Error(codes.NotFound, "document not found")
+		assert.False(t, isRetryableFirestoreErr(err))
+	})
+
+	t.Run("Generic error", func(t *testing.T) {
+		assert.False(t, isRetryableFirestoreErr(errors.New("some regular error")))
 	})
 }

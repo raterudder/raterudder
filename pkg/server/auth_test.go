@@ -482,10 +482,12 @@ func TestAuthMiddleware(t *testing.T) {
 
 		server.authMiddleware(testHandler).ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusUnauthorized, w.Code)
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
 		// Should NOT have user header because userContextKey wasn't set
 		assert.Empty(t, w.Header().Get("X-Email"))
 		assert.Empty(t, w.Header().Get("X-Admin"))
+		// Cookies should NOT be cleared on storage error
+		assert.Empty(t, w.Result().Cookies())
 		assert.True(t, mocks.AssertExpectations(t))
 	})
 
@@ -724,6 +726,27 @@ func TestAuthMiddleware(t *testing.T) {
 			}
 		}
 		assert.True(t, foundSessionClear, "session cookie should be cleared on user not found")
+		assert.True(t, mocks.AssertExpectations(t))
+	})
+
+	t.Run("Multi Site Mode - User Lookup Storage Error Does Not Clear Cookies", func(t *testing.T) {
+		mocks := new(mockStorage)
+		server.storage = mocks
+		server.singleSite = false
+
+		sessionToken, err := server.createSessionToken("google:user@example.com", "user@example.com", "some-secret", 7*24*time.Hour)
+		require.NoError(t, err)
+
+		w := httptest.NewRecorder()
+		cookie := &http.Cookie{Name: sessionTokenCookie, Value: sessionToken}
+		req := createReq("GET", "/api/test?siteID=site1", nil, cookie)
+
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{}, assert.AnError).Once()
+
+		server.authMiddleware(testHandler).ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+		assert.Empty(t, w.Result().Cookies(), "cookies should not be cleared on transient storage error")
 		assert.True(t, mocks.AssertExpectations(t))
 	})
 }

@@ -245,10 +245,14 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 								Email:         email,
 								SessionSecret: sessionSecret,
 							})
-						} else {
-							log.Ctx(ctx).WarnContext(ctx, "user lookup failed", slog.String("userID", userID), slog.String("email", email), slog.Any("error", err))
+						} else if errors.Is(err, storage.ErrUserNotFound) {
+							log.Ctx(ctx).WarnContext(ctx, "user not found", slog.String("userID", userID), slog.String("email", email))
 							s.clearCookie(w)
 							writeJSONError(w, "user lookup failed", http.StatusUnauthorized)
+							return
+						} else {
+							log.Ctx(ctx).ErrorContext(ctx, "user lookup failed due to storage error", slog.String("userID", userID), slog.String("email", email), slog.Any("error", err))
+							writeJSONError(w, "internal server error", http.StatusInternalServerError)
 							return
 						}
 					} else {

@@ -18,7 +18,10 @@ import (
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"google.golang.org/api/iterator"
+	"google.golang.org/api/option"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
 )
 
@@ -69,7 +72,13 @@ func (f *FirestoreProvider) Init(ctx context.Context) error {
 	if database == "" {
 		database = firestore.DefaultDatabaseID
 	}
-	client, err := firestore.NewClientWithDatabase(ctx, projectID, database)
+	keepaliveParams := keepalive.ClientParameters{
+		Time:    30 * time.Second,
+		Timeout: 10 * time.Second,
+	}
+	client, err := firestore.NewClientWithDatabase(ctx, projectID, database,
+		option.WithGRPCDialOption(grpc.WithKeepaliveParams(keepaliveParams)),
+	)
 	if err != nil {
 		return fmt.Errorf("failed to create firestore client (project=%s, database=%s): %w", projectID, database, err)
 	}
@@ -110,13 +119,54 @@ func (f *FirestoreProvider) getCollection(siteID, name string) (*firestore.Colle
 	return f.client.Collection("sites").Doc(siteID).Collection(name), nil
 }
 
+func isRetryableFirestoreErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	c := status.Code(err)
+	return c == codes.Unavailable || c == codes.ResourceExhausted
+}
+
+// getDocWithRetry retrieves a document snapshot from docRef, retrying on transient errors
+// such as codes.Unavailable caused by idle TCP connection resets.
+func (f *FirestoreProvider) getDocWithRetry(ctx context.Context, docRef *firestore.DocumentRef) (*firestore.DocumentSnapshot, error) {
+	const maxAttempts = 3
+	backoff := 50 * time.Millisecond
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		doc, err := docRef.Get(ctx)
+		if err == nil {
+			return doc, nil
+		}
+		if status.Code(err) == codes.NotFound {
+			return nil, err
+		}
+		if isRetryableFirestoreErr(err) && attempt < maxAttempts-1 {
+			log.Ctx(ctx).WarnContext(ctx, "firestore read failed with retryable error, retrying",
+				slog.String("path", docRef.Path),
+				slog.Int("attempt", attempt+1),
+				slog.Any("error", err),
+			)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+				backoff *= 2
+				continue
+			}
+		}
+		return nil, err
+	}
+	return nil, fmt.Errorf("failed to get doc %s after retries", docRef.Path)
+}
+
 // GetSettings retrieves the dynamic configuration from the "config/settings" document.
 func (f *FirestoreProvider) GetSettings(ctx context.Context, siteID string) (types.Settings, int, time.Time, error) {
 	coll, err := f.getCollection(siteID, "config")
 	if err != nil {
 		return types.Settings{}, 0, time.Time{}, err
 	}
-	doc, err := coll.Doc("settings").Get(ctx)
+	doc, err := f.getDocWithRetry(ctx, coll.Doc("settings"))
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
 			// Return default settings if not found
@@ -692,7 +742,7 @@ func (f *FirestoreProvider) GetSite(ctx context.Context, siteID string) (types.S
 	if siteID == "" {
 		return types.Site{}, errors.New("siteID cannot be empty")
 	}
-	doc, err := f.client.Collection("sites").Doc(siteID).Get(ctx)
+	doc, err := f.getDocWithRetry(ctx, f.client.Collection("sites").Doc(siteID))
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
 			return types.Site{}, fmt.Errorf("%w: %s", ErrSiteNotFound, siteID)
@@ -844,7 +894,7 @@ func (f *FirestoreProvider) GetUser(ctx context.Context, userID string) (types.U
 	if userID == "" {
 		return types.User{}, errors.New("userID cannot be empty")
 	}
-	doc, err := f.client.Collection("users").Doc(userID).Get(ctx)
+	doc, err := f.getDocWithRetry(ctx, f.client.Collection("users").Doc(userID))
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
 			return types.User{}, fmt.Errorf("%w: %s", ErrUserNotFound, userID)
@@ -1195,7 +1245,7 @@ func (f *FirestoreProvider) ListUsers(ctx context.Context) ([]types.User, error)
 
 // GetAdminSettings retrieves global system configuration for admin functions.
 func (f *FirestoreProvider) GetAdminSettings(ctx context.Context) (types.AdminSettings, error) {
-	doc, err := f.client.Collection("admin").Doc("settings").Get(ctx)
+	doc, err := f.getDocWithRetry(ctx, f.client.Collection("admin").Doc("settings"))
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
 			return types.AdminSettings{Aliases: make(map[string]string)}, nil
@@ -1267,7 +1317,7 @@ func (f *FirestoreProvider) GetESSMockState(ctx context.Context, siteID string) 
 	if err != nil {
 		return types.ESSMockState{}, err
 	}
-	doc, err := coll.Doc("mock_ess").Get(ctx)
+	doc, err := f.getDocWithRetry(ctx, coll.Doc("mock_ess"))
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
 			return types.ESSMockState{}, nil
