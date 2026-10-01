@@ -1044,8 +1044,10 @@ func (s *Server) setESSModes(
 		if errors.Is(err, ess.ErrUnauthorized) {
 			settings.ESSAuthStatus.ConsecutiveSetFailures++
 			settings.ESSAuthStatus.LastAttempt = s.now().UTC()
-			if dbErr := s.storage.SetSettings(ctx, siteID, settings.Settings, settings.version, settings.updatedAt); dbErr != nil {
+			if newUpdatedAt, dbErr := s.storage.SetSettings(ctx, siteID, settings.Settings, settings.version, settings.updatedAt); dbErr != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status after set modes failure", slog.Any("error", dbErr))
+			} else {
+				settings.updatedAt = newUpdatedAt
 			}
 		}
 		return false, err
@@ -1054,8 +1056,10 @@ func (s *Server) setESSModes(
 	if settings.ESSAuthStatus.ConsecutiveSetFailures > 0 {
 		settings.ESSAuthStatus.ConsecutiveSetFailures = 0
 		settings.ESSAuthStatus.LastAttempt = s.now().UTC()
-		if dbErr := s.storage.SetSettings(ctx, siteID, settings.Settings, settings.version, settings.updatedAt); dbErr != nil {
+		if newUpdatedAt, dbErr := s.storage.SetSettings(ctx, siteID, settings.Settings, settings.version, settings.updatedAt); dbErr != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status after set modes success", slog.Any("error", dbErr))
+		} else {
+			settings.updatedAt = newUpdatedAt
 		}
 	}
 	return changed, nil

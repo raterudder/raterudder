@@ -237,7 +237,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
 			savedSettings = s
 			return true
-		}), types.CurrentSettingsVersion, mock.Anything).Return(nil)
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil)
 
 		newSettings := types.Settings{
 			DryRun:                      true,
@@ -265,7 +265,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockES := &mockESS{}
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
-		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(time.Time{}, nil)
 		essMap.SetSystem("site1", mockES)
 
 		testTime := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
@@ -367,7 +367,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockS.On("SetSettings", mock.Anything, "site1", mock.MatchedBy(func(s types.Settings) bool {
 			savedSettings = s
 			return s.ESSAuthStatus.ConsecutiveFailures == 1 && s.ESSAuthStatus.LastAttempt.Equal(testTime)
-		}), 1, mock.Anything).Return(nil).Once()
+		}), 1, mock.Anything).Return(time.Time{}, nil).Once()
 
 		essMap.SetSystem("site1", mockES)
 
@@ -638,7 +638,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		// Valid 24-hour custom period (0 to 24)
 		mockStorage := &mockStorage{}
 		mockStorage.On("GetSettings", mock.Anything, mock.Anything).Return(base, 1, time.Time{}, nil)
-		mockStorage.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mockStorage.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(time.Time{}, nil)
 		srvValid := &Server{
 			storage: mockStorage,
 			release: "test",
@@ -749,7 +749,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		// Expect SetSettings with version
 		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
 			return s.MinBatterySOC == 80.0 && s.DryRun == true && s.UpdateGroup == 5
-		}), types.CurrentSettingsVersion, mock.Anything).Return(nil)
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil)
 
 		srv.handleUpdateSettings(w, req)
 		if assert.Equal(t, http.StatusOK, w.Result().StatusCode) {
@@ -851,7 +851,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		// Expect SetSettings to be called
 		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
 			return s.ESS == "mock" && len(s.EncryptedCredentials) > 0
-		}), types.CurrentSettingsVersion, mock.Anything).Return(nil)
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil)
 
 		srv.handleUpdateSettings(w, req)
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
@@ -905,7 +905,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		// Expect SetSettings to be called to update auth status after failure
 		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
 			return s.ESSAuthStatus.ConsecutiveFailures == 1
-		}), types.CurrentSettingsVersion, mock.Anything).Return(nil)
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil)
 
 		srv.handleUpdateSettings(w, req)
 		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
@@ -964,7 +964,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(existingSettings, types.CurrentSettingsVersion, time.Time{}, nil)
 
 		// Expect SetSettings to be called
-		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(nil)
+		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil)
 
 		srv.handleUpdateSettings(w, req)
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
@@ -1034,7 +1034,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}, types.CurrentSettingsVersion, time.Time{}, nil)
 		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
 			return s.GridChargeBatteries == true && s.GridExportSolar == true && s.GridExportBatteries == true
-		}), types.CurrentSettingsVersion, mock.Anything).Return(nil)
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil)
 
 		srv.handleUpdateSettings(w, req)
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
@@ -1101,7 +1101,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}, types.CurrentSettingsVersion, time.Time{}, nil)
 		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
 			return s.CustomGridSettings == true && s.GridChargeBatteries == false && s.GridExportSolar == true && s.GridExportBatteries == false
-		}), types.CurrentSettingsVersion, mock.Anything).Return(nil)
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil)
 
 		srv.handleUpdateSettings(w, req)
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
@@ -1178,7 +1178,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		// Migration saves migrated settings with CustomGridSettings: true, then handleUpdateSettings saves updated settings
 		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
 			return s.CustomGridSettings == true && s.GridChargeBatteries == false && s.GridExportSolar == true && s.GridExportBatteries == true
-		}), types.CurrentSettingsVersion, mock.Anything).Return(nil).Twice()
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Twice()
 
 		srv.handleUpdateSettings(w, req)
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
@@ -1278,7 +1278,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
 			return s.Location != nil && s.Location.PostalCode == "90210"
-		}), types.CurrentSettingsVersion, mock.Anything).Return(nil)
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil)
 
 		w := httptest.NewRecorder()
 		srv.handleUpdateSettings(w, req)
@@ -1332,7 +1332,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 				s.Location.SolarTilt == 30 &&
 				s.Location.Latitude == 34.0736 &&
 				s.Location.Longitude == -118.4004
-		}), types.CurrentSettingsVersion, mock.Anything).Return(nil)
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil)
 
 		w := httptest.NewRecorder()
 		srv.handleUpdateSettings(w, req)
@@ -1413,7 +1413,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 				s.Location.SolarTilt == 15 &&
 				s.Location.PostalCode == "60601" &&
 				s.Location.Latitude == 41.8818
-		}), types.CurrentSettingsVersion, mock.Anything).Return(nil).Once()
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
 
 		w := httptest.NewRecorder()
 		srv.handleUpdateSettings(w, req)
@@ -1486,7 +1486,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
 			return s.ESSAuthStatus.ConsecutiveFailures == 0
-		}), types.CurrentSettingsVersion, mock.Anything).Return(nil)
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil)
 
 		w := httptest.NewRecorder()
 		srv.handleUpdateSettings(w, req)
@@ -1696,7 +1696,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
 			return s.ESSAuthStatus.ConsecutiveFailures == 0
-		}), mock.Anything, mock.Anything).Return(nil)
+		}), mock.Anything, mock.Anything).Return(time.Time{}, nil)
 
 		w := httptest.NewRecorder()
 		srv.handleUpdateSettings(w, req)
@@ -1747,7 +1747,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(set types.Settings) bool {
 			return set.UtilityProvider == "new-utility"
-		}), types.CurrentSettingsVersion, mock.Anything).Return(nil).Once()
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
 
 		srv.handleUpdateSettings(w, req)
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
@@ -1796,7 +1796,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(set types.Settings) bool {
 			return set.UtilityProvider == "new-utility"
-		}), types.CurrentSettingsVersion, mock.Anything).Return(nil).Once()
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
 
 		// Expect DeleteInterest to be called since transitioning from "" to "new-utility"
 		mockS.On("DeleteInterest", mock.Anything, "admin@example.com").Return(nil).Once()
@@ -1860,7 +1860,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(set types.Settings) bool {
 			return set.UtilityProvider == "new-utility" && set.UpdateGroup > 0 && set.UpdateGroup <= 16
-		}), types.CurrentSettingsVersion, mock.Anything).Return(nil).Once()
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
 
 		// Expect DeleteInterest to be called since transitioning from "" to "new-utility"
 		mockS.On("DeleteInterest", mock.Anything, "admin@example.com").Return(nil).Once()
@@ -1912,7 +1912,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 
 		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(set types.Settings) bool {
 			return set.UtilityProvider == "new-utility"
-		}), types.CurrentSettingsVersion, mock.Anything).Return(nil).Once()
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
 
 		// DeleteInterest should NOT be called
 
@@ -2002,7 +2002,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		// 3. SetSettings expectation
 		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
 			return s.Location != nil && s.Location.PostalCode == "60601" && s.UtilityProvider == "new-utility"
-		}), types.CurrentSettingsVersion, mock.Anything).Return(nil).Once()
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
 
 		// 4. History Summary mocks (should be called exactly once since they are waiting for both to finish)
 		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Once()
@@ -2057,7 +2057,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		// Assert that SetSettings receives the updated settings with NetMeteringCredits unset (false)
 		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
 			return s.UtilityRateOptions.NetMeteringScheme == "nem2" && !s.UtilityRateOptions.NetMeteringCredits
-		}), types.CurrentSettingsVersion, mock.Anything).Return(nil).Once()
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
 
 		w := httptest.NewRecorder()
 		srv.handleUpdateSettings(w, req)
@@ -2115,15 +2115,17 @@ func TestGetSettingsWithMigration(t *testing.T) {
 		}, oldVersion, time.Time{}, nil)
 
 		// Mock the SetSettings call that should happen after migration
+		migratedTime := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 		mockS.On("SetSettings", ctx, siteID, mock.MatchedBy(func(s types.Settings) bool {
 			// Basic validation to ensure settings are actually migrated/passed correctly
 			return s.UtilityProvider == "old-utility" && s.MinDeficitPriceDifferenceDollarsPerKWH == 0.02
-		}), types.CurrentSettingsVersion, mock.Anything).Return(nil)
+		}), types.CurrentSettingsVersion, mock.Anything).Return(migratedTime, nil)
 
 		sv, creds, err := srv.getSettingsWithMigration(ctx, siteID)
 
 		require.NoError(t, err)
 		assert.Equal(t, types.CurrentSettingsVersion, sv.version)
+		assert.Equal(t, migratedTime, sv.updatedAt)
 		// We expect SetSettings to have been called with the migrated settings
 		assert.True(t, mockS.AssertExpectations(t))
 
@@ -2155,7 +2157,7 @@ func TestGetSettingsWithMigration(t *testing.T) {
 		mockS.On("SetSettings", ctx, siteID, mock.MatchedBy(func(s types.Settings) bool {
 			// Basic validation to ensure settings are actually migrated/passed correctly
 			return s.UtilityProvider == "old-utility" && s.MinDeficitPriceDifferenceDollarsPerKWH == 0.02
-		}), types.CurrentSettingsVersion, mock.Anything).Return(fmt.Errorf("save failed"))
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, fmt.Errorf("save failed"))
 
 		sv, creds, err := srv.getSettingsWithMigration(ctx, siteID)
 
@@ -2297,7 +2299,7 @@ func TestHandleESSStage(t *testing.T) {
 
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, fmt.Errorf("some other error"))
 
-		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(nil).Once()
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
 
 		body := map[string]any{
 			"ess": "enphase",
@@ -2376,7 +2378,7 @@ func TestHandleESSStage(t *testing.T) {
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, fmt.Errorf("auth failed")).Once()
 
 		// SetSettings must be called to update auth status
-		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(nil).Once()
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
 
 		body := map[string]any{
 			"ess": "enphase",
@@ -2430,7 +2432,7 @@ func TestHandleESSStage(t *testing.T) {
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, ess.ErrNeedsNextStage).Once()
 
 		// SetSettings must be called to reset auth status
-		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(nil).Once()
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
 
 		body := map[string]any{
 			"ess": "enphase",
@@ -2461,7 +2463,7 @@ func TestHandleESSStage(t *testing.T) {
 		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
 
 		mockES2.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil).Once()
-		mockS2.On("SetSettings", mock.Anything, types.SiteIDNone, mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(nil).Once()
+		mockS2.On("SetSettings", mock.Anything, types.SiteIDNone, mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
 
 		w2 := httptest.NewRecorder()
 		req2 := httptest.NewRequest("POST", "/api/ess/stage", bytes.NewReader(b))

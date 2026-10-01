@@ -559,7 +559,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockP.SetSystem(types.SiteIDNone, mockES)
 
 		mockS.On("InsertAction", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(time.Time{}, nil).Maybe()
 		mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 		var futurePrices []types.Price
@@ -2511,7 +2511,7 @@ func TestSetESSModes(t *testing.T) {
 		// Expect settings to be saved with ConsecutiveSetFailures reset to 0
 		mockS.On("SetSettings", mock.Anything, "test-site", mock.MatchedBy(func(s types.Settings) bool {
 			return s.ESSAuthStatus.ConsecutiveSetFailures == 0
-		}), 1, mock.Anything).Return(nil)
+		}), 1, mock.Anything).Return(time.Time{}, nil)
 
 		srv := &Server{
 			storage: mockS,
@@ -2544,7 +2544,7 @@ func TestSetESSModes(t *testing.T) {
 		// Expect settings to be saved with ConsecutiveSetFailures incremented
 		mockS.On("SetSettings", mock.Anything, "test-site", mock.MatchedBy(func(s types.Settings) bool {
 			return s.ESSAuthStatus.ConsecutiveSetFailures == 2
-		}), 1, mock.Anything).Return(nil)
+		}), 1, mock.Anything).Return(time.Time{}, nil)
 
 		srv := &Server{
 			storage: mockS,

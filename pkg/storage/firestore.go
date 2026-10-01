@@ -209,15 +209,15 @@ func (f *FirestoreProvider) GetSettings(ctx context.Context, siteID string) (typ
 // SetSettings saves the dynamic configuration to the "config/settings" document.
 // It stores the settings as a JSON string for portability.
 // If updatedTime is non-zero, it runs in a transaction and ensures doc.UpdateTime matches updatedTime before writing.
-func (f *FirestoreProvider) SetSettings(ctx context.Context, siteID string, settings types.Settings, version int, updatedTime time.Time) error {
+func (f *FirestoreProvider) SetSettings(ctx context.Context, siteID string, settings types.Settings, version int, updatedTime time.Time) (time.Time, error) {
 	jsonBytes, err := json.Marshal(settings)
 	if err != nil {
-		return fmt.Errorf("failed to marshal settings: %w", err)
+		return time.Time{}, fmt.Errorf("failed to marshal settings: %w", err)
 	}
 
 	coll, err := f.getCollection(siteID, "config")
 	if err != nil {
-		return err
+		return time.Time{}, err
 	}
 
 	data := map[string]any{
@@ -228,7 +228,8 @@ func (f *FirestoreProvider) SetSettings(ctx context.Context, siteID string, sett
 	}
 
 	if !updatedTime.IsZero() {
-		return f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		var commitResp firestore.CommitResponse
+		err := f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
 			doc, err := tx.Get(coll.Doc("settings"))
 			if err != nil {
 				return fmt.Errorf("failed to fetch settings doc for transaction: %w", err)
@@ -237,14 +238,18 @@ func (f *FirestoreProvider) SetSettings(ctx context.Context, siteID string, sett
 				return fmt.Errorf("%w: settings updated at %v, expected %v", ErrSettingsConflict, doc.UpdateTime, updatedTime)
 			}
 			return tx.Set(coll.Doc("settings"), data)
-		})
+		}, firestore.WithCommitResponseTo(&commitResp))
+		if err != nil {
+			return time.Time{}, err
+		}
+		return commitResp.CommitTime(), nil
 	}
 
-	_, err = coll.Doc("settings").Set(ctx, data)
+	wr, err := coll.Doc("settings").Set(ctx, data)
 	if err != nil {
-		return fmt.Errorf("failed to save settings: %w", err)
+		return time.Time{}, fmt.Errorf("failed to save settings: %w", err)
 	}
-	return nil
+	return wr.UpdateTime, nil
 }
 
 // InsertAction adds a new action record to the "actions" collection as a JSON blob.

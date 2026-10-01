@@ -46,7 +46,9 @@ func TestFirestoreProvider(t *testing.T) {
 			MinBatterySOC:                  5.5,
 		}
 		// Pass version 1
-		require.NoError(t, f.SetSettings(ctx, "test-site", settings, 1, time.Time{}))
+		setUpdate1, err := f.SetSettings(ctx, "test-site", settings, 1, time.Time{})
+		require.NoError(t, err)
+		assert.False(t, setUpdate1.IsZero())
 
 		gotSettings, version, updatedTime, err := f.GetSettings(ctx, "test-site")
 		require.NoError(t, err)
@@ -61,19 +63,34 @@ func TestFirestoreProvider(t *testing.T) {
 	t.Run("SettingsConflict", func(t *testing.T) {
 		siteID := "conflict-site"
 		settings := types.Settings{DryRun: true}
-		require.NoError(t, f.SetSettings(ctx, siteID, settings, 1, time.Time{}))
+		initUpdate, err := f.SetSettings(ctx, siteID, settings, 1, time.Time{})
+		require.NoError(t, err)
+		assert.False(t, initUpdate.IsZero())
 
 		gotSettings, version, updatedTime, err := f.GetSettings(ctx, siteID)
 		require.NoError(t, err)
 
 		// Successful update with matching updatedTime
 		gotSettings.DryRun = false
-		require.NoError(t, f.SetSettings(ctx, siteID, gotSettings, version, updatedTime))
+		updatedTime2, err := f.SetSettings(ctx, siteID, gotSettings, version, updatedTime)
+		require.NoError(t, err)
+		assert.False(t, updatedTime2.IsZero())
+
+		// Verify that the returned updatedTime2 matches doc.UpdateTime in Firestore exactly
+		gotSettings2, _, docUpdateTime, err := f.GetSettings(ctx, siteID)
+		require.NoError(t, err)
+		assert.True(t, updatedTime2.Equal(docUpdateTime), "commitTime %v should equal doc.UpdateTime %v", updatedTime2, docUpdateTime)
+
+		// And verify that using updatedTime2 in a subsequent write succeeds without conflict
+		gotSettings2.DryRun = true
+		updatedTime3, err := f.SetSettings(ctx, siteID, gotSettings2, version, updatedTime2)
+		require.NoError(t, err)
+		assert.False(t, updatedTime3.IsZero())
 
 		// Conflicting update with stale updatedTime
 		staleSettings := gotSettings
 		staleSettings.DryRun = true
-		err = f.SetSettings(ctx, siteID, staleSettings, version, updatedTime)
+		_, err = f.SetSettings(ctx, siteID, staleSettings, version, updatedTime)
 		assert.ErrorIs(t, err, ErrSettingsConflict)
 	})
 
@@ -458,9 +475,12 @@ func TestFirestoreProvider(t *testing.T) {
 			set2 := types.Settings{UpdateGroup: 7, Release: "staging"}
 			set3 := types.Settings{UpdateGroup: 0, Release: "production"}
 
-			require.NoError(t, f.SetSettings(ctx, "site-group-3", set1, 1, time.Time{}))
-			require.NoError(t, f.SetSettings(ctx, "site-group-7", set2, 1, time.Time{}))
-			require.NoError(t, f.SetSettings(ctx, "site-group-0", set3, 1, time.Time{}))
+			_, err := f.SetSettings(ctx, "site-group-3", set1, 1, time.Time{})
+			require.NoError(t, err)
+			_, err = f.SetSettings(ctx, "site-group-7", set2, 1, time.Time{})
+			require.NoError(t, err)
+			_, err = f.SetSettings(ctx, "site-group-0", set3, 1, time.Time{})
+			require.NoError(t, err)
 
 			// Query with empty release and nil updateGroup: should return all
 			allSettings, allVersions, allTimes, err := f.ListSitesSettings(ctx, "", nil)
@@ -506,7 +526,8 @@ func TestFirestoreProvider(t *testing.T) {
 			require.NoError(t, f.UpdateSite(ctx, siteID, site))
 
 			// Create some settings (subcollection config)
-			require.NoError(t, f.SetSettings(ctx, siteID, types.Settings{UpdateGroup: 5}, 1, time.Time{}))
+			_, err := f.SetSettings(ctx, siteID, types.Settings{UpdateGroup: 5}, 1, time.Time{})
+			require.NoError(t, err)
 
 			// Verify site exists
 			gotSite, err := f.GetSite(ctx, siteID)
@@ -1367,7 +1388,7 @@ func TestFirestoreProvider(t *testing.T) {
 		require.NoError(t, f.CreateSite(ctx, siteID, types.Site{
 			ID: siteID,
 		}))
-		require.NoError(t, f.SetSettings(ctx, siteID, types.Settings{
+		_, err := f.SetSettings(ctx, siteID, types.Settings{
 			Notifications: map[string]types.UserNotificationSettings{
 				"push-user@test.com": {
 					MorningSummaryEnabled: true,
@@ -1375,7 +1396,8 @@ func TestFirestoreProvider(t *testing.T) {
 					MorningSummaryFlavor:  "metrics_heavy",
 				},
 			},
-		}, 1, time.Time{}))
+		}, 1, time.Time{})
+		require.NoError(t, err)
 
 		userID := "push-user@test.com"
 		user := types.User{
@@ -1473,7 +1495,8 @@ func TestFirestoreProvider(t *testing.T) {
 			InviteCode: "invite-123",
 		}
 		require.NoError(t, f.CreateSite(ctx, siteID, site))
-		require.NoError(t, f.SetSettings(ctx, siteID, types.Settings{}, 1, time.Time{}))
+		_, err := f.SetSettings(ctx, siteID, types.Settings{}, 1, time.Time{})
+		require.NoError(t, err)
 
 		user1 := "user1@test.com"
 		settings1 := types.UserNotificationSettings{

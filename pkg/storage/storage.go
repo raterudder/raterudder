@@ -40,7 +40,7 @@ type Database interface {
 	MigrateLegacyPricing(ctx context.Context, opts PricingMigrationOptions) (*PricingMigrationStats, error)
 	// Settings
 	GetSettings(ctx context.Context, siteID string) (types.Settings, int, time.Time, error)
-	SetSettings(ctx context.Context, siteID string, settings types.Settings, version int, updatedTime time.Time) error
+	SetSettings(ctx context.Context, siteID string, settings types.Settings, version int, updatedTime time.Time) (time.Time, error)
 	ListSitesSettings(ctx context.Context, release string, updateGroup []int) (map[string]types.Settings, map[string]int, map[string]time.Time, error)
 
 	// Data Persistence

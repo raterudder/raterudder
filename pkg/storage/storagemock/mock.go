@@ -31,9 +31,13 @@ func (m *MockDatabase) GetSettings(ctx context.Context, siteID string) (types.Se
 	return types.Settings{}, 0, time.Time{}, nil
 }
 
-func (m *MockDatabase) SetSettings(ctx context.Context, siteID string, settings types.Settings, version int, updatedTime time.Time) error {
+func (m *MockDatabase) SetSettings(ctx context.Context, siteID string, settings types.Settings, version int, updatedTime time.Time) (time.Time, error) {
 	args := m.Called(ctx, siteID, settings, version, updatedTime)
-	return args.Error(0)
+	var t time.Time
+	if args.Get(0) != nil {
+		t = args.Get(0).(time.Time)
+	}
+	return t, args.Error(1)
 }
 
 func (m *MockDatabase) UpsertPrices(ctx context.Context, siteID string, prices []types.Price, version int) error {

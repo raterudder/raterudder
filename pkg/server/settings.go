@@ -43,11 +43,12 @@ func (s *Server) migrateAndDecryptSettings(ctx context.Context, siteID string, s
 		} else if changed {
 			sv.Settings = newSettings
 			sv.version = types.CurrentSettingsVersion
-			if err := s.storage.SetSettings(ctx, siteID, newSettings, types.CurrentSettingsVersion, updatedAt); err != nil {
+			if newUpdatedAt, err := s.storage.SetSettings(ctx, siteID, newSettings, types.CurrentSettingsVersion, updatedAt); err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to save migrated settings", slog.Any("error", err))
 				// Return migrated settings even if save failed, so current request works with new defaults
 			} else {
 				log.Ctx(ctx).InfoContext(ctx, "saved migrated settings", slog.Int("oldVersion", version), slog.Int("newVersion", types.CurrentSettingsVersion))
+				sv.updatedAt = newUpdatedAt
 			}
 			sv.Settings = newSettings
 		}
@@ -97,8 +98,10 @@ func (s *Server) getESSSystem(ctx context.Context, siteID string, settings setti
 	if err != nil {
 		settings.ESSAuthStatus.ConsecutiveFailures++
 		settings.ESSAuthStatus.LastAttempt = now
-		if dbErr := s.storage.SetSettings(ctx, siteID, settings.Settings, settings.version, settings.updatedAt); dbErr != nil {
+		if newUpdatedAt, dbErr := s.storage.SetSettings(ctx, siteID, settings.Settings, settings.version, settings.updatedAt); dbErr != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status", slog.Any("error", dbErr))
+		} else {
+			settings.updatedAt = newUpdatedAt
 		}
 		return nil, fmt.Errorf("failed to apply settings: %w", err)
 	}
@@ -117,13 +120,17 @@ func (s *Server) getESSSystem(ctx context.Context, siteID string, settings setti
 		if err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to encrypt credentials", slog.Any("error", err))
 		} else {
-			if err := s.storage.SetSettings(ctx, siteID, settings.Settings, settings.version, settings.updatedAt); err != nil {
+			if newUpdatedAt, err := s.storage.SetSettings(ctx, siteID, settings.Settings, settings.version, settings.updatedAt); err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to save settings", slog.Any("error", err))
+			} else {
+				settings.updatedAt = newUpdatedAt
 			}
 		}
 	} else if authStatusChanged {
-		if dbErr := s.storage.SetSettings(ctx, siteID, settings.Settings, settings.version, settings.updatedAt); dbErr != nil {
+		if newUpdatedAt, dbErr := s.storage.SetSettings(ctx, siteID, settings.Settings, settings.version, settings.updatedAt); dbErr != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status", slog.Any("error", dbErr))
+		} else {
+			settings.updatedAt = newUpdatedAt
 		}
 	}
 
@@ -455,7 +462,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				// and NOT the new settings since the credentials were not verified
 				existing.ESSAuthStatus.ConsecutiveFailures++
 				existing.ESSAuthStatus.LastAttempt = now
-				if dbErr := s.storage.SetSettings(ctx, siteID, existing, types.CurrentSettingsVersion, time.Time{}); dbErr != nil {
+				if _, dbErr := s.storage.SetSettings(ctx, siteID, existing, types.CurrentSettingsVersion, time.Time{}); dbErr != nil {
 					log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status", slog.Any("error", dbErr))
 				}
 				writeJSONError(w, fmt.Sprintf("failed to verify ess credentials: %v", err), http.StatusBadRequest)
@@ -541,7 +548,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		newSettings.UpdateGroup = rand.IntN(16) + 1
 	}
 
-	if err := s.storage.SetSettings(ctx, siteID, newSettings, types.CurrentSettingsVersion, time.Time{}); err != nil {
+	if _, err := s.storage.SetSettings(ctx, siteID, newSettings, types.CurrentSettingsVersion, time.Time{}); err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to save settings", slog.Any("error", err))
 		writeJSONError(w, "failed to save settings", http.StatusInternalServerError)
 		return
@@ -710,7 +717,7 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 	if err != nil && !errors.Is(err, ess.ErrNeedsNextStage) {
 		existing.ESSAuthStatus.ConsecutiveFailures++
 		existing.ESSAuthStatus.LastAttempt = now
-		if dbErr := s.storage.SetSettings(ctx, siteID, existing, version, time.Time{}); dbErr != nil {
+		if _, dbErr := s.storage.SetSettings(ctx, siteID, existing, version, time.Time{}); dbErr != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status", slog.Any("error", dbErr))
 		}
 
@@ -723,7 +730,7 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 		existing.ESSAuthStatus.ConsecutiveFailures = 0
 		existing.ESSAuthStatus.ConsecutiveSetFailures = 0
 		existing.ESSAuthStatus.LastAttempt = now
-		if dbErr := s.storage.SetSettings(ctx, siteID, existing, version, time.Time{}); dbErr != nil {
+		if _, dbErr := s.storage.SetSettings(ctx, siteID, existing, version, time.Time{}); dbErr != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status", slog.Any("error", dbErr))
 		}
 	}
