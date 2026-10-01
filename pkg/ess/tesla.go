@@ -1345,6 +1345,7 @@ func (b *Tesla) updateTOUSettings(ctx context.Context, start time.Time, until ti
 	log.Ctx(ctx).DebugContext(ctx, "updating tesla time_of_use_settings",
 		slog.Time("start", start),
 		slog.Time("until", until),
+		slog.Any("payload", payload),
 	)
 	path := fmt.Sprintf("api/1/energy_sites/%d/time_of_use_settings", b.energySiteID)
 	req, err := b.base.newPOSTRequest(ctx, "POST", path, b.token, b.baseURL, payload)

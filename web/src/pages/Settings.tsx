@@ -781,7 +781,7 @@ const ESSForm = ({
                                 </div>
                             </Field.Root>
 
-                            {['tesla', 'franklin'].includes(settings.ess) && (!!settings.manageTOUSchedules || settings.release === 'staging' || (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('export') === 'true')) && (
+                            {['tesla', 'franklin'].includes(settings.ess) && (!!settings.manageTOUSchedules || !!settings.planMode || settings.release === 'staging') && (
                                 <Field.Root className="form-group switch-group compact" style={{ gridColumn: '1 / -1' }}>
                                     <div className="switch-row">
                                         <Switch.Root

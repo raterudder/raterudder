@@ -1144,25 +1144,6 @@ func (f *Franklin) saveExportTouDispatch(ctx context.Context, start time.Time, u
 		provinceID = 39 // default to California
 	}
 
-	if f.settings.DryRun {
-		log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated franklin saveTouDispatch",
-			slog.Time("start", roundedStart),
-			slog.Time("until", roundedUntil),
-			slog.Int("dispatchID", int(dispatchID)),
-			slog.Int("countryID", countryID),
-			slog.Int("provinceID", provinceID),
-		)
-		return nil
-	}
-
-	log.Ctx(ctx).DebugContext(ctx, "saving franklin tou dispatch",
-		slog.Time("start", roundedStart),
-		slog.Time("until", roundedUntil),
-		slog.Int("dispatchID", int(dispatchID)),
-		slog.Int("countryID", countryID),
-		slog.Int("provinceID", provinceID),
-	)
-
 	details := buildExportTouDetails(start, until, dispatchID)
 
 	payload := map[string]any{
@@ -1193,6 +1174,26 @@ func (f *Franklin) saveExportTouDispatch(ctx context.Context, start time.Time, u
 		},
 		"coverContentFlag": false,
 	}
+
+	if f.settings.DryRun {
+		log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated franklin saveTouDispatch",
+			slog.Time("start", roundedStart),
+			slog.Time("until", roundedUntil),
+			slog.Int("dispatchID", int(dispatchID)),
+			slog.Int("countryID", countryID),
+			slog.Int("provinceID", provinceID),
+		)
+		return nil
+	}
+
+	log.Ctx(ctx).DebugContext(ctx, "saving franklin tou dispatch",
+		slog.Time("start", roundedStart),
+		slog.Time("until", roundedUntil),
+		slog.Int("dispatchID", int(dispatchID)),
+		slog.Int("countryID", countryID),
+		slog.Int("provinceID", provinceID),
+		slog.Any("schedule", details),
+	)
 
 	req, err := f.newPostJSONRequest(ctx, "hes-gateway/terminal/tou/saveTouDispatch", payload)
 	if err != nil {

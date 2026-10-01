@@ -558,7 +558,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                         batterySOCIfUsed: h.avgBatterySOC,
                         batteryReserveSOC: reserveSOC,
                         historySOC: h.avgBatterySOC,
-                        predictedSolarKWH: h.solarKWH,
+                        predictedSolarKWH: h.solarKWH || 0,
                         avgHomeLoadKWH: Math.floor((h.homeLoadKWH || 0) * 10) / 10,
                         gridChargeDollarsPerKWH: price ? price.dollarsPerKWH + (price.gridUseDollarsPerKWH || 0) : 0,
                         isHistory: true,
@@ -574,14 +574,21 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
             periods.forEach((p, idx) => {
                 const z = periodZones[idx];
                 const price = p.price ? p.price.dollarsPerKWH + (p.price.gridUseDollarsPerKWH || 0) : 0;
+                const solarRate = p.projectedSolarKW !== undefined
+                    ? p.projectedSolarKW
+                    : (p.durationHours > 0 ? (p.solarKWH || 0) / p.durationHours : (p.solarKWH || 0));
+                const loadRate = p.projectedLoadKW !== undefined
+                    ? p.projectedLoadKW
+                    : (p.durationHours > 0 ? (p.loadKWH || 0) / p.durationHours : (p.loadKWH || 0));
+
                 const pt: any = {
                     ts: p.startTime,
                     hour: new Date(p.startTime).getHours(),
                     plannedSOC: p.startSoc,
                     batterySOCIfUsed: p.startSoc,
                     batteryReserveSOC: reserveSOC,
-                    predictedSolarKWH: p.solarKWH || 0,
-                    avgHomeLoadKWH: Math.floor((p.loadKWH || 0) * 10) / 10,
+                    predictedSolarKWH: solarRate,
+                    avgHomeLoadKWH: Math.floor(loadRate * 10) / 10,
                     gridChargeDollarsPerKWH: price,
                     isHistory: false,
                     period: p,
@@ -610,8 +617,8 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                         plannedSOC: p.endSoc,
                         batterySOCIfUsed: p.endSoc,
                         batteryReserveSOC: reserveSOC,
-                        predictedSolarKWH: 0,
-                        avgHomeLoadKWH: 0,
+                        predictedSolarKWH: solarRate,
+                        avgHomeLoadKWH: Math.floor(loadRate * 10) / 10,
                         gridChargeDollarsPerKWH: price,
                         isHistory: false,
                         zone: z.label,

@@ -2805,26 +2805,7 @@ describe('App & Settings', () => {
     });
 
     describe('Direct Solar Export Optimization', () => {
-        it('is hidden when not already enabled and ?export=true is not present', async () => {
-            const user = userEvent.setup();
-            (api.fetchSettings as any).mockResolvedValue({
-                ...defaultSettings,
-                ess: 'tesla',
-                hasCredentials: { tesla: true },
-                manageTOUSchedules: false,
-            });
-
-            await navigateToSettings();
-
-            // Open ESS edit mode from summary card
-            const editBtn = screen.getByLabelText('Edit Energy Storage System');
-            await user.click(editBtn);
-
-            // Toggle should NOT be present
-            expect(screen.queryByRole('switch', { name: /Direct Solar Export Optimization/i })).not.toBeInTheDocument();
-        });
-
-        it('renders toggle and warning notice when ?export=true param is present for supported ESS', async () => {
+        it('is hidden when planMode is false and release is not staging', async () => {
             const user = userEvent.setup();
             const originalLocation = window.location;
             delete (window as any).location;
@@ -2836,6 +2817,8 @@ describe('App & Settings', () => {
                     ess: 'tesla',
                     hasCredentials: { tesla: true },
                     manageTOUSchedules: false,
+                    planMode: false,
+                    release: 'production',
                 });
 
                 await navigateToSettings();
@@ -2844,41 +2827,64 @@ describe('App & Settings', () => {
                 const editBtn = screen.getByLabelText('Edit Energy Storage System');
                 await user.click(editBtn);
 
-                // Toggle should be present
-                const exportOptSwitch = screen.getByRole('switch', { name: /Direct Solar Export Optimization/i });
-                expect(exportOptSwitch).not.toBeChecked();
-                expect(screen.queryByText(/Notice: This feature requires RateRudder to manage your battery's Time-Of-Use/i)).not.toBeInTheDocument();
-
-                // Click switch to enable
-                await user.click(exportOptSwitch);
-                expect(exportOptSwitch).toBeChecked();
-                expect(screen.getByText(/Notice: This feature requires RateRudder to manage your battery's Time-Of-Use/i)).toBeInTheDocument();
-
-                // Save settings
-                const saveBtn = screen.getByRole('button', { name: /Save Settings/i });
-                await user.click(saveBtn);
-
-                await waitFor(() => {
-                    expect(api.updateSettings).toHaveBeenCalledWith(
-                        expect.objectContaining({
-                            manageTOUSchedules: true,
-                        }),
-                        'site1',
-                        undefined
-                    );
-                });
+                // Toggle should NOT be present
+                expect(screen.queryByRole('switch', { name: /Direct Solar Export Optimization/i })).not.toBeInTheDocument();
             } finally {
                 (window as any).location = originalLocation;
             }
         });
 
-        it('renders toggle when manageTOUSchedules is already enabled even without query param', async () => {
+        it('renders toggle and warning notice when planMode is true for supported ESS', async () => {
             const user = userEvent.setup();
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
                 ess: 'tesla',
                 hasCredentials: { tesla: true },
-                manageTOUSchedules: true,
+                manageTOUSchedules: false,
+                planMode: true,
+                release: 'production',
+            });
+
+            await navigateToSettings();
+
+            // Open ESS edit mode from summary card
+            const editBtn = screen.getByLabelText('Edit Energy Storage System');
+            await user.click(editBtn);
+
+            // Toggle should be present
+            const exportOptSwitch = screen.getByRole('switch', { name: /Direct Solar Export Optimization/i });
+            expect(exportOptSwitch).not.toBeChecked();
+            expect(screen.queryByText(/Notice: This feature requires RateRudder to manage your battery's Time-Of-Use/i)).not.toBeInTheDocument();
+
+            // Click switch to enable
+            await user.click(exportOptSwitch);
+            expect(exportOptSwitch).toBeChecked();
+            expect(screen.getByText(/Notice: This feature requires RateRudder to manage your battery's Time-Of-Use/i)).toBeInTheDocument();
+
+            // Save settings
+            const saveBtn = screen.getByRole('button', { name: /Save Settings/i });
+            await user.click(saveBtn);
+
+            await waitFor(() => {
+                expect(api.updateSettings).toHaveBeenCalledWith(
+                    expect.objectContaining({
+                        manageTOUSchedules: true,
+                    }),
+                    'site1',
+                    undefined
+                );
+            });
+        });
+
+        it('renders toggle when release is staging for supported ESS', async () => {
+            const user = userEvent.setup();
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                ess: 'franklin',
+                hasCredentials: { franklin: true },
+                manageTOUSchedules: false,
+                planMode: false,
+                release: 'staging',
             });
 
             await navigateToSettings();
@@ -2888,33 +2894,27 @@ describe('App & Settings', () => {
             await user.click(editBtn);
 
             const exportOptSwitch = screen.getByRole('switch', { name: /Direct Solar Export Optimization/i });
-            expect(exportOptSwitch).toBeChecked();
-            expect(screen.getByText(/Notice: This feature requires RateRudder to manage your battery's Time-Of-Use/i)).toBeInTheDocument();
+            expect(exportOptSwitch).toBeInTheDocument();
+            expect(exportOptSwitch).not.toBeChecked();
         });
 
-        it('does not render toggle for unsupported ESS provider even with ?export=true', async () => {
+        it('does not render toggle for unsupported ESS provider even when planMode is true or staging', async () => {
             const user = userEvent.setup();
-            const originalLocation = window.location;
-            delete (window as any).location;
-            (window as any).location = new URL('http://localhost/settings?export=true');
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                ess: 'enphase',
+                hasCredentials: { enphase: true },
+                planMode: true,
+                release: 'staging',
+            });
 
-            try {
-                (api.fetchSettings as any).mockResolvedValue({
-                    ...defaultSettings,
-                    ess: 'enphase',
-                    hasCredentials: { enphase: true },
-                });
+            await navigateToSettings();
 
-                await navigateToSettings();
+            // Open ESS edit mode from summary card
+            const editBtn = screen.getByLabelText('Edit Energy Storage System');
+            await user.click(editBtn);
 
-                // Open ESS edit mode from summary card
-                const editBtn = screen.getByLabelText('Edit Energy Storage System');
-                await user.click(editBtn);
-
-                expect(screen.queryByRole('switch', { name: /Direct Solar Export Optimization/i })).not.toBeInTheDocument();
-            } finally {
-                (window as any).location = originalLocation;
-            }
+            expect(screen.queryByRole('switch', { name: /Direct Solar Export Optimization/i })).not.toBeInTheDocument();
         });
     });
 });

@@ -13,7 +13,7 @@ self.addEventListener('push', function (event) {
   if (event.data) {
     try {
       const parsed = event.data.json();
-      payload = parsed.data || parsed;
+      payload = (parsed && (parsed.title || parsed.body)) ? parsed : (parsed.data || parsed);
     } catch (e) {
       payload = { title: 'RateRudder Notification', body: event.data.text() };
     }

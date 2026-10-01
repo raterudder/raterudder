@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/common"
+	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
@@ -539,7 +540,17 @@ func (s *Server) performSiteUpdate(
 	// Log a warning if they produce different actions, but always perform the Plan action when plan mode is active.
 	// TODO: Remove s.release check and settings.PlanMode once plan mode is rolled out to 100% of sites.
 	if strings.EqualFold(s.release, "staging") || settings.PlanMode {
-		planDecision, _, planErr := s.controller.Plan(ctx, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings, latestAction)
+		var planDecision controller.Decision
+		var planErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					planErr = fmt.Errorf("controller plan panicked: %v", r)
+					log.Ctx(ctx).ErrorContext(ctx, "controller plan panicked", slog.Any("panic", r))
+				}
+			}()
+			planDecision, _, planErr = s.controller.Plan(ctx, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings, latestAction)
+		}()
 		if planErr != nil {
 			log.Ctx(ctx).WarnContext(ctx, "controller plan failed", slog.Any("error", planErr))
 		} else {
@@ -547,9 +558,7 @@ func (s *Server) performSiteUpdate(
 			planAct := planDecision.Action
 			diffMode := decideAct.BatteryMode != planAct.BatteryMode
 			diffSolar := decideAct.SolarMode != planAct.SolarMode
-			diffChargeToSOC := decideAct.ChargeToSOC != planAct.ChargeToSOC
-			diffReason := decideAct.Reason != planAct.Reason
-			if diffMode || diffSolar || diffChargeToSOC || diffReason {
+			if diffMode || diffSolar {
 				log.Ctx(ctx).WarnContext(
 					ctx,
 					"plan and decide produced different actions",

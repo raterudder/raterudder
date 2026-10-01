@@ -450,4 +450,50 @@ describe('Forecast Page', () => {
         // Reserve reference line is rendered on chart
         expect(screen.getByText('Reserve')).toBeInTheDocument();
     });
+
+    it('normalizes sub-hourly plan intervals for predicted solar and load rates', async () => {
+        const plan = makeTestPlan();
+        plan.periods = [
+            {
+                startTime: '2026-02-11T12:00:00Z',
+                endTime: '2026-02-11T12:20:00Z',
+                durationHours: 0.333333,
+                startSoc: 50,
+                endSoc: 52,
+                solarKWH: 1.53,
+                loadKWH: 0.6,
+                projectedSolarKW: 4.59,
+                projectedLoadKW: 1.8,
+                price: {
+                    dollarsPerKWH: 0.10,
+                    gridUseDollarsPerKWH: 0.05,
+                    tsStart: '2026-02-11T12:00:00Z',
+                    tsEnd: '2026-02-11T13:00:00Z',
+                },
+                batteryMode: api.BatteryMode.Standby,
+                solarMode: 0 as any,
+                reason: api.ActionReason.HoldSimilarPrice,
+                description: 'Standby',
+                gridImportKWH: 0,
+                gridExportKWH: 0,
+                costDollars: 0,
+            },
+        ];
+
+        (fetchModeling as any).mockResolvedValue({
+            plan,
+            energyHistory: [],
+            priceHistory: [],
+            weather: [],
+        });
+
+        renderForecast();
+
+        await waitFor(() => {
+            expect(screen.getByText('24-Hour Energy Plan')).toBeInTheDocument();
+            expect(screen.getByText('Predicted Solar (kWh)')).toBeInTheDocument();
+            expect(screen.getByText('Predicted Home Load (kWh)')).toBeInTheDocument();
+        });
+    });
 });
+
