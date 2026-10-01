@@ -112,27 +112,25 @@ export const SolarMode = {
 export type SolarMode = typeof SolarMode[keyof typeof SolarMode];
 
 export interface PlanPeriod {
-    startTime: string;
-    endTime: string;
+    tsStart: string;
+    tsEnd: string;
     durationHours: number;
-    price: PriceInfo;
+    importDollars: number;
+    exportDollars?: number;
     batteryMode: BatteryMode;
     solarMode: SolarMode;
     reason: ActionReason;
-    description: string;
     startSoc: number;
     endSoc: number;
     loadKWH?: number;
     solarKWH?: number;
-    projectedLoadKW?: number;
-    projectedSolarKW?: number;
     gridImportKWH: number;
     gridExportKWH: number;
     costDollars: number;
 }
 
 export interface Plan {
-    generatedAt: string;
+    tsCreated: string;
     horizonHours: number;
     totalProjectedCost: number;
     totalExportCredits: number;

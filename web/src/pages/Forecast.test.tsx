@@ -43,30 +43,24 @@ function makeTestPlan(): Plan {
         const start = new Date(base.getTime() + i * 3600000);
         const end = new Date(base.getTime() + (i + 1) * 3600000);
         periods.push({
-            startTime: start.toISOString(),
-            endTime: end.toISOString(),
+            tsStart: start.toISOString(),
+            tsEnd: end.toISOString(),
             durationHours: 1,
             startSoc: 50 + (i % 5) * 10,
             endSoc: 50 + ((i + 1) % 5) * 10,
             solarKWH: Math.max(0, 2.0 * Math.sin((i / 24) * Math.PI)),
             loadKWH: 1.2,
-            price: {
-                dollarsPerKWH: 0.12 + (i === 18 ? 0.30 : 0),
-                gridUseDollarsPerKWH: 0.05,
-                tsStart: start.toISOString(),
-                tsEnd: end.toISOString(),
-            },
+            importDollars: 0.17 + (i === 18 ? 0.30 : 0),
             batteryMode: i === 18 ? api.BatteryMode.Load : (i < 5 ? api.BatteryMode.ChargeAny : api.BatteryMode.Standby),
             solarMode: 0 as any,
             reason: i === 18 ? api.ActionReason.ArbitrageSave : api.ActionReason.ArbitrageChargeSave,
-            description: i === 18 ? 'Peak discharge' : 'Charge from low rate',
             gridImportKWH: i < 5 ? 1.5 : 0,
             gridExportKWH: 0,
             costDollars: 0.15,
         });
     }
     return {
-        generatedAt: base.toISOString(),
+        tsCreated: base.toISOString(),
         horizonHours: 24,
         totalProjectedCost: 3.45,
         totalExportCredits: 0.60,
@@ -455,25 +449,17 @@ describe('Forecast Page', () => {
         const plan = makeTestPlan();
         plan.periods = [
             {
-                startTime: '2026-02-11T12:00:00Z',
-                endTime: '2026-02-11T12:20:00Z',
+                tsStart: '2026-02-11T12:00:00Z',
+                tsEnd: '2026-02-11T12:20:00Z',
                 durationHours: 0.333333,
                 startSoc: 50,
                 endSoc: 52,
                 solarKWH: 1.53,
                 loadKWH: 0.6,
-                projectedSolarKW: 4.59,
-                projectedLoadKW: 1.8,
-                price: {
-                    dollarsPerKWH: 0.10,
-                    gridUseDollarsPerKWH: 0.05,
-                    tsStart: '2026-02-11T12:00:00Z',
-                    tsEnd: '2026-02-11T13:00:00Z',
-                },
+                importDollars: 0.15,
                 batteryMode: api.BatteryMode.Standby,
                 solarMode: 0 as any,
                 reason: api.ActionReason.HoldSimilarPrice,
-                description: 'Standby',
                 gridImportKWH: 0,
                 gridExportKWH: 0,
                 costDollars: 0,

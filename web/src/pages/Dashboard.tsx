@@ -112,6 +112,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
     };
 
     const currentDate = useMemo(() => {
+        void refreshTrigger;
         if (dateQuery) {
             const parts = dateQuery.split('-');
             if (parts.length === 3) {

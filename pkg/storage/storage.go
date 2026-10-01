@@ -34,10 +34,27 @@ type PricingMigrationStats struct {
 	SiteMonthsCreated    int
 }
 
+// PlanMigrationOptions configures the action history plan schema migration.
+type PlanMigrationOptions struct {
+	DryRun bool
+	Sites  []string
+	Since  time.Time
+}
+
+// PlanMigrationStats tracks the outcomes of the action plan migration.
+type PlanMigrationStats struct {
+	SitesInspected   int
+	ActionsInspected int
+	PlansMigrated    int
+	PlansSkipped     int
+	BytesSaved       int
+}
+
 // Database defines the interface for persisting data and retrieving settings.
 type Database interface {
 	// Migration
 	MigrateLegacyPricing(ctx context.Context, opts PricingMigrationOptions) (*PricingMigrationStats, error)
+	MigrateActionPlans(ctx context.Context, opts PlanMigrationOptions) (*PlanMigrationStats, error)
 	// Settings
 	GetSettings(ctx context.Context, siteID string) (types.Settings, int, time.Time, error)
 	SetSettings(ctx context.Context, siteID string, settings types.Settings, version int, updatedTime time.Time) (time.Time, error)

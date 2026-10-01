@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"reflect"
 	"slices"
@@ -2827,6 +2828,280 @@ func (f *FirestoreProvider) MigrateLegacyPricing(ctx context.Context, opts Prici
 				}
 			}
 		}
+	}
+
+	return stats, nil
+}
+
+type legacyPlanPeriod struct {
+	StartTime time.Time `json:"startTime,omitempty"`
+	TSStart   time.Time `json:"tsStart,omitempty"`
+
+	EndTime time.Time `json:"endTime,omitempty"`
+	TSEnd   time.Time `json:"tsEnd,omitempty"`
+
+	DurationHours float64 `json:"durationHours"`
+
+	Price *struct {
+		DollarsPerKWH        float64   `json:"dollarsPerKWH"`
+		GridUseDollarsPerKWH float64   `json:"gridUseDollarsPerKWH"`
+		Provider             string    `json:"provider,omitempty"`
+		TSStart              time.Time `json:"tsStart,omitempty"`
+		TSEnd                time.Time `json:"tsEnd,omitempty"`
+	} `json:"price,omitempty"`
+
+	ImportDollars float64 `json:"importDollars,omitempty"`
+	ExportDollars float64 `json:"exportDollars,omitempty"`
+
+	Description string `json:"description,omitempty"`
+
+	BatteryMode types.BatteryMode  `json:"batteryMode"`
+	SolarMode   types.SolarMode    `json:"solarMode"`
+	Reason      types.ActionReason `json:"reason"`
+
+	StartSOC float64 `json:"startSoc"`
+	EndSOC   float64 `json:"endSoc"`
+
+	LoadKWH       float64 `json:"loadKWH,omitempty"`
+	SolarKWH      float64 `json:"solarKWH,omitempty"`
+	GridImportKWH float64 `json:"gridImportKWH,omitempty"`
+	GridExportKWH float64 `json:"gridExportKWH,omitempty"`
+	CostDollars   float64 `json:"costDollars,omitempty"`
+
+	ProjectedLoadKW  float64 `json:"projectedLoadKW,omitempty"`
+	ProjectedSolarKW float64 `json:"projectedSolarKW,omitempty"`
+}
+
+type legacyPlan struct {
+	GeneratedAt        time.Time          `json:"generatedAt,omitempty"`
+	TSCreated          time.Time          `json:"tsCreated,omitempty"`
+	HorizonHours       int                `json:"horizonHours"`
+	TotalProjectedCost float64            `json:"totalProjectedCost,omitempty"`
+	TotalExportCredits float64            `json:"totalExportCredits,omitempty"`
+	NetEconomicBenefit float64            `json:"netEconomicBenefit,omitempty"`
+	Periods            []legacyPlanPeriod `json:"periods"`
+}
+
+// TransformActionPlanJSON converts an action JSON document containing a legacy Plan
+// to the new Plan format (renaming generatedAt->tsCreated, startTime/endTime->tsStart/tsEnd,
+// converting price struct to importDollars/exportDollars, and pruning description, projectedLoadKW,
+// and projectedSolarKW).
+// It returns the transformed JSON, a boolean indicating if changes were made, bytes saved, and an error.
+func TransformActionPlanJSON(originalJSON []byte) ([]byte, bool, int, error) {
+	var actionMap map[string]json.RawMessage
+	if err := json.Unmarshal(originalJSON, &actionMap); err != nil {
+		return nil, false, 0, fmt.Errorf("failed to unmarshal action json: %w", err)
+	}
+
+	planRaw, ok := actionMap["plan"]
+	if !ok || len(planRaw) == 0 || string(planRaw) == "null" {
+		return originalJSON, false, 0, nil
+	}
+
+	var oldPlan legacyPlan
+	if err := json.Unmarshal(planRaw, &oldPlan); err != nil {
+		return nil, false, 0, fmt.Errorf("failed to unmarshal legacy plan: %w", err)
+	}
+
+	if len(oldPlan.Periods) == 0 {
+		return originalJSON, false, 0, nil
+	}
+
+	needsMigration := false
+	if !oldPlan.GeneratedAt.IsZero() {
+		needsMigration = true
+	}
+	for _, p := range oldPlan.Periods {
+		if !p.StartTime.IsZero() || !p.EndTime.IsZero() || p.Price != nil || p.Description != "" || p.ProjectedLoadKW != 0 || p.ProjectedSolarKW != 0 {
+			needsMigration = true
+			break
+		}
+	}
+
+	if !needsMigration {
+		return originalJSON, false, 0, nil
+	}
+
+	tsCreated := oldPlan.TSCreated
+	if tsCreated.IsZero() {
+		tsCreated = oldPlan.GeneratedAt
+	}
+
+	newPlan := types.Plan{
+		TSCreated:          tsCreated,
+		HorizonHours:       oldPlan.HorizonHours,
+		TotalProjectedCost: oldPlan.TotalProjectedCost,
+		TotalExportCredits: oldPlan.TotalExportCredits,
+		NetEconomicBenefit: oldPlan.NetEconomicBenefit,
+		Periods:            make([]types.PlanPeriod, len(oldPlan.Periods)),
+	}
+
+	for i, p := range oldPlan.Periods {
+		tsStart := p.TSStart
+		if tsStart.IsZero() {
+			tsStart = p.StartTime
+		}
+		tsEnd := p.TSEnd
+		if tsEnd.IsZero() {
+			tsEnd = p.EndTime
+		}
+
+		importDollars := p.ImportDollars
+		exportDollars := p.ExportDollars
+		if p.Price != nil {
+			importDollars = roundFloat(p.Price.DollarsPerKWH+p.Price.GridUseDollarsPerKWH, 4)
+			exportDollars = roundFloat(p.Price.DollarsPerKWH, 4)
+		}
+
+		newPlan.Periods[i] = types.PlanPeriod{
+			TSStart:       tsStart,
+			TSEnd:         tsEnd,
+			DurationHours: p.DurationHours,
+			ImportDollars: importDollars,
+			ExportDollars: exportDollars,
+			BatteryMode:   p.BatteryMode,
+			SolarMode:     p.SolarMode,
+			Reason:        p.Reason,
+			StartSOC:      p.StartSOC,
+			EndSOC:        p.EndSOC,
+			LoadKWH:       p.LoadKWH,
+			SolarKWH:      p.SolarKWH,
+			GridImportKWH: p.GridImportKWH,
+			GridExportKWH: p.GridExportKWH,
+			CostDollars:   p.CostDollars,
+		}
+	}
+
+	newPlanBytes, err := json.Marshal(newPlan)
+	if err != nil {
+		return nil, false, 0, fmt.Errorf("failed to marshal migrated plan: %w", err)
+	}
+
+	actionMap["plan"] = newPlanBytes
+	newActionBytes, err := json.Marshal(actionMap)
+	if err != nil {
+		return nil, false, 0, fmt.Errorf("failed to marshal updated action: %w", err)
+	}
+
+	// Validate against types.Action schema
+	var validated types.Action
+	if err := json.Unmarshal(newActionBytes, &validated); err != nil {
+		return nil, false, 0, fmt.Errorf("failed to validate migrated action json: %w", err)
+	}
+	if validated.Plan == nil || len(validated.Plan.Periods) == 0 {
+		return nil, false, 0, fmt.Errorf("migrated plan or periods is empty")
+	}
+
+	bytesSaved := len(originalJSON) - len(newActionBytes)
+	return newActionBytes, true, bytesSaved, nil
+}
+
+func roundFloat(val float64, decimals int) float64 {
+	pow := math.Pow(10, float64(decimals))
+	return math.Round(val*pow) / pow
+}
+
+// MigrateActionPlans migrates legacy Plan objects stored in action_history documents
+// to the new Plan format using BulkWriter for high-throughput writes.
+func (f *FirestoreProvider) MigrateActionPlans(ctx context.Context, opts PlanMigrationOptions) (*PlanMigrationStats, error) {
+	stats := &PlanMigrationStats{}
+	sites := opts.Sites
+	if len(sites) == 0 {
+		sites = []string{"hartero", "fastest963"}
+	}
+
+	bw := f.client.BulkWriter(ctx)
+	defer bw.End()
+
+	type scheduledJob struct {
+		job    *firestore.BulkWriterJob
+		siteID string
+		docID  string
+	}
+	var scheduledJobs []scheduledJob
+
+	for _, siteID := range sites {
+		coll, err := f.getCollection(siteID, "action_history")
+		if err != nil {
+			return nil, fmt.Errorf("failed to get action_history collection for site %s: %w", siteID, err)
+		}
+
+		stats.SitesInspected++
+
+		q := coll.Query
+		if !opts.Since.IsZero() {
+			q = coll.Where("timestamp", ">=", opts.Since)
+		}
+		iter := q.OrderBy("timestamp", firestore.Asc).Documents(ctx)
+
+		for {
+			doc, err := iter.Next()
+			if errors.Is(err, iterator.Done) {
+				break
+			}
+			if err != nil {
+				iter.Stop()
+				return nil, fmt.Errorf("error iterating actions for site %s: %w", siteID, err)
+			}
+
+			stats.ActionsInspected++
+
+			val, err := doc.DataAt("json")
+			if err != nil {
+				continue
+			}
+			jsonStr, ok := val.(string)
+			if !ok {
+				continue
+			}
+
+			newJSONBytes, modified, bytesSaved, err := TransformActionPlanJSON([]byte(jsonStr))
+			if err != nil {
+				iter.Stop()
+				return nil, fmt.Errorf("failed to transform action doc %s for site %s: %w", doc.Ref.ID, siteID, err)
+			}
+
+			if !modified {
+				stats.PlansSkipped++
+				continue
+			}
+
+			stats.PlansMigrated++
+			stats.BytesSaved += bytesSaved
+
+			if opts.DryRun {
+				log.Ctx(ctx).InfoContext(ctx, "[dry-run] would migrate plan for action",
+					slog.String("siteID", siteID),
+					slog.String("actionID", doc.Ref.ID),
+					slog.Int("bytesSaved", bytesSaved),
+				)
+			} else {
+				job, err := bw.Update(doc.Ref, []firestore.Update{{Path: "json", Value: string(newJSONBytes)}})
+				if err != nil {
+					iter.Stop()
+					return nil, fmt.Errorf("failed to schedule bulk update for doc %s (site %s): %w", doc.Ref.ID, siteID, err)
+				}
+				scheduledJobs = append(scheduledJobs, scheduledJob{
+					job:    job,
+					siteID: siteID,
+					docID:  doc.Ref.ID,
+				})
+			}
+		}
+		iter.Stop()
+	}
+
+	if !opts.DryRun && len(scheduledJobs) > 0 {
+		bw.Flush()
+		for _, sj := range scheduledJobs {
+			if _, err := sj.job.Results(); err != nil {
+				return nil, fmt.Errorf("bulk update failed for doc %s (site %s): %w", sj.docID, sj.siteID, err)
+			}
+		}
+		log.Ctx(ctx).InfoContext(ctx, "bulk writer flushed all migrated action plans",
+			slog.Int("totalMigrated", stats.PlansMigrated),
+			slog.Int("totalBytesSaved", stats.BytesSaved),
+		)
 	}
 
 	return stats, nil

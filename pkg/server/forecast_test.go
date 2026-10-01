@@ -672,13 +672,13 @@ func TestHandleForecast(t *testing.T) {
 		}, types.CurrentSettingsVersion, time.Time{}, nil)
 
 		plan := &types.Plan{
-			GeneratedAt:        now.Add(-10 * time.Minute),
+			TSCreated:          now.Add(-10 * time.Minute),
 			HorizonHours:       24,
 			TotalProjectedCost: 2.50,
 			Periods: []types.PlanPeriod{
 				{
-					StartTime:     now,
-					EndTime:       now.Add(time.Hour),
+					TSStart:       now,
+					TSEnd:         now.Add(time.Hour),
 					DurationHours: 1,
 					BatteryMode:   types.BatteryModeStandby,
 					StartSOC:      50,

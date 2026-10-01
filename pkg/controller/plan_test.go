@@ -1895,7 +1895,7 @@ func TestGenerateActionCandidates(t *testing.T) {
 
 		bestPath, err := c.searchOptimalPlan(ctx, timeline, lowState, planningAnchors{}, chargeSettings, lowStatus, nil, nil)
 		require.NoError(t, err)
-		decision, _ := finalizeDecisionAndPlan(bestPath, timeline, lowStatus, types.Price{DollarsPerKWH: 0.05}, now, chargeSettings)
+		decision, _ := finalizeDecisionAndPlan(ctx, bestPath, timeline, lowStatus, types.Price{DollarsPerKWH: 0.05}, now, chargeSettings, nil, nil)
 		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
 		assert.Greater(t, decision.Action.ChargeToSOC, 20, "Derived target SOC must be above initial reserve")
 		assert.Less(t, decision.Action.ChargeToSOC, 100, "Derived target SOC must NOT blindly charge to 100% when only deficit is needed")
@@ -1991,7 +1991,7 @@ func TestGenerateActionCandidates(t *testing.T) {
 
 		bestPath, err := c.searchOptimalPlan(ctx, solarTimeline, lowState, planningAnchors{}, chargeSettings, status, nil, nil)
 		require.NoError(t, err)
-		decision, _ := finalizeDecisionAndPlan(bestPath, solarTimeline, status, types.Price{DollarsPerKWH: 0.05}, now, chargeSettings)
+		decision, _ := finalizeDecisionAndPlan(ctx, bestPath, solarTimeline, status, types.Price{DollarsPerKWH: 0.05}, now, chargeSettings, nil, nil)
 		assert.NotEqual(t, types.BatteryModeChargeAny, decision.Action.BatteryMode,
 			"Solver must not choose ChargeAny when daytime solar will naturally fill battery before peak")
 	})
@@ -2047,7 +2047,7 @@ func TestGenerateActionCandidates(t *testing.T) {
 
 		bestPath, err := c.searchOptimalPlan(ctx, exportTimeline, lowState, planningAnchors{}, exportSettings, status, nil, nil)
 		require.NoError(t, err)
-		decision, _ := finalizeDecisionAndPlan(bestPath, exportTimeline, status, types.Price{DollarsPerKWH: 0.05}, now, exportSettings)
+		decision, _ := finalizeDecisionAndPlan(ctx, bestPath, exportTimeline, status, types.Price{DollarsPerKWH: 0.05}, now, exportSettings, nil, nil)
 		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
 		assert.Equal(t, 100, decision.Action.ChargeToSOC, "DP must dynamically charge to 100% to maximize solar export credits")
 	})
@@ -2192,7 +2192,7 @@ func TestGenerateActionCandidates(t *testing.T) {
 		// Verify DP solver chooses Standby to avoid cycling the battery for a wash
 		bestPath, err := c.searchOptimalPlan(ctx, holdTimeline, chargedState, planningAnchors{}, holdSettings, status, nil, nil)
 		require.NoError(t, err)
-		decision, _ := finalizeDecisionAndPlan(bestPath, holdTimeline, status, types.Price{DollarsPerKWH: 0.10}, now, holdSettings)
+		decision, _ := finalizeDecisionAndPlan(ctx, bestPath, holdTimeline, status, types.Price{DollarsPerKWH: 0.10}, now, holdSettings, nil, nil)
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode, "DP solver must choose Standby over Load when discharging is a wash with tomorrow's solar export")
 		assert.Equal(t, types.ActionReasonHoldSimilarPrice, decision.Action.Reason)
 	})
@@ -2308,7 +2308,7 @@ func TestGenerateActionCandidates(t *testing.T) {
 
 		bestPath, err := c.searchOptimalPlan(ctx, multiPeakTimeline, stateAt50, planningAnchors{}, chargeSettings, status, nil, nil)
 		require.NoError(t, err)
-		decision, _ := finalizeDecisionAndPlan(bestPath, multiPeakTimeline, status, types.Price{DollarsPerKWH: 0.10}, now, chargeSettings)
+		decision, _ := finalizeDecisionAndPlan(ctx, bestPath, multiPeakTimeline, status, types.Price{DollarsPerKWH: 0.10}, now, chargeSettings, nil, nil)
 		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
 		assert.Greater(t, decision.Action.ChargeToSOC, 80, "Multi-peak deficit must accumulate across shoulder period and target high SOC")
 	})
@@ -2364,7 +2364,7 @@ func TestGenerateActionCandidates(t *testing.T) {
 
 		bestPath, err := c.searchOptimalPlan(ctx, timelinePrePeakLoad, subReserveState, planningAnchors{}, chargeSettings, subStatus, nil, nil)
 		require.NoError(t, err)
-		decision, _ := finalizeDecisionAndPlan(bestPath, timelinePrePeakLoad, subStatus, types.Price{DollarsPerKWH: 0.10}, now, chargeSettings)
+		decision, _ := finalizeDecisionAndPlan(ctx, bestPath, timelinePrePeakLoad, subStatus, types.Price{DollarsPerKWH: 0.10}, now, chargeSettings, nil, nil)
 		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
 		assert.GreaterOrEqual(t, decision.Action.ChargeToSOC, 50)
 	})
@@ -3400,6 +3400,7 @@ func TestSearchOptimalPlan(t *testing.T) {
 func TestFinalizeDecisionAndPlan(t *testing.T) {
 	t.Parallel()
 
+	ctx := context.Background()
 	now := time.Date(2026, 6, 15, 8, 0, 0, 0, time.UTC)
 	currentPrice := types.Price{
 		TSStart:       now,
@@ -3467,7 +3468,7 @@ func TestFinalizeDecisionAndPlan(t *testing.T) {
 	t.Run("ConstructsImmediateDecision", func(t *testing.T) {
 		t.Parallel()
 
-		decision, plan := finalizeDecisionAndPlan(winningPath, timeline, status, currentPrice, now, types.Settings{GridChargeBatteries: true})
+		decision, plan := finalizeDecisionAndPlan(ctx, winningPath, timeline, status, currentPrice, now, types.Settings{GridChargeBatteries: true}, nil, nil)
 
 		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
 		assert.Equal(t, types.SolarModeAny, decision.Action.SolarMode)
@@ -3484,13 +3485,13 @@ func TestFinalizeDecisionAndPlan(t *testing.T) {
 	t.Run("PopulatesPlanPeriodSchedule", func(t *testing.T) {
 		t.Parallel()
 
-		_, plan := finalizeDecisionAndPlan(winningPath, timeline, status, currentPrice, now, types.Settings{GridChargeBatteries: true})
+		_, plan := finalizeDecisionAndPlan(ctx, winningPath, timeline, status, currentPrice, now, types.Settings{GridChargeBatteries: true}, nil, nil)
 		require.NotNil(t, plan)
 		require.Len(t, plan.Periods, 2)
 
 		p0 := plan.Periods[0]
-		assert.Equal(t, now, p0.StartTime)
-		assert.Equal(t, now.Add(time.Hour), p0.EndTime)
+		assert.Equal(t, now, p0.TSStart)
+		assert.Equal(t, now.Add(time.Hour), p0.TSEnd)
 		assert.Equal(t, types.BatteryModeChargeAny, p0.BatteryMode)
 		assert.Equal(t, 50.0, p0.StartSOC)
 		assert.Equal(t, 85.0, p0.EndSOC)
@@ -3516,7 +3517,7 @@ func TestFinalizeDecisionAndPlan(t *testing.T) {
 			},
 		}
 
-		decision, _ := finalizeDecisionAndPlan(multiChargePath, timeline, status, currentPrice, now, types.Settings{GridChargeBatteries: true})
+		decision, _ := finalizeDecisionAndPlan(ctx, multiChargePath, timeline, status, currentPrice, now, types.Settings{GridChargeBatteries: true}, nil, nil)
 		// Mode is identical across intervals 0 and 1, so scheduleUntil should extend to timeline[1].EndTime
 		assert.Equal(t, timeline[1].endTime, decision.Action.TSScheduleModeUntil)
 	})
@@ -3545,7 +3546,7 @@ func TestFinalizeDecisionAndPlan(t *testing.T) {
 			},
 		}
 
-		decision, _ := finalizeDecisionAndPlan(standbyPath, timeline[:1], fractionalStatus, currentPrice, now, types.Settings{})
+		decision, _ := finalizeDecisionAndPlan(ctx, standbyPath, timeline[:1], fractionalStatus, currentPrice, now, types.Settings{}, nil, nil)
 		assert.Equal(t, 0, decision.Action.ChargeToSOC, "Standby mode must not set ChargeToSOC; target SOC is implied")
 	})
 
@@ -3565,7 +3566,7 @@ func TestFinalizeDecisionAndPlan(t *testing.T) {
 			metrics: winningPath.metrics[:1],
 		}
 
-		decision, _ := finalizeDecisionAndPlan(vppPath, timeline[:1], status, currentPrice, now, types.Settings{MinBatterySOC: 20})
+		decision, _ := finalizeDecisionAndPlan(ctx, vppPath, timeline[:1], status, currentPrice, now, types.Settings{MinBatterySOC: 20}, nil, nil)
 		assert.Equal(t, 5, decision.Action.ChargeToSOC, "Active VPP event with targetSOC=5 must preserve contracted reserve rather than overwriting with minSOC")
 	})
 
@@ -3601,7 +3602,7 @@ func TestFinalizeDecisionAndPlan(t *testing.T) {
 			totalCost: 0.42,
 		}
 
-		decision, _ := finalizeDecisionAndPlan(unconstrainedPath, timeline, status, currentPrice, now, types.Settings{GridChargeBatteries: true})
+		decision, _ := finalizeDecisionAndPlan(ctx, unconstrainedPath, timeline, status, currentPrice, now, types.Settings{GridChargeBatteries: true}, nil, nil)
 
 		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
 		assert.Equal(t, 65, decision.Action.ChargeToSOC, "ChargeToSOC must be derived from peak SOC in charging episode (65%), not blindly set to 100%")
@@ -3645,7 +3646,7 @@ func TestFinalizeDecisionAndPlan(t *testing.T) {
 			},
 		}
 
-		decision, plan := finalizeDecisionAndPlan(peakPath, peakTimeline, status, currentPrice, now, types.Settings{})
+		decision, plan := finalizeDecisionAndPlan(ctx, peakPath, peakTimeline, status, currentPrice, now, types.Settings{}, nil, nil)
 		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonDischargeAtPeak, decision.Action.Reason, "Step 0 at peak rate ($0.45) must be labeled DischargeAtPeak")
 		assert.Contains(t, decision.Action.Description, "peak rate")
@@ -3691,7 +3692,7 @@ func TestFinalizeDecisionAndPlan(t *testing.T) {
 			},
 		}
 
-		decision, plan := finalizeDecisionAndPlan(chargePath, chargeTimeline, status, currentPrice, now, types.Settings{GridChargeBatteries: true})
+		decision, plan := finalizeDecisionAndPlan(ctx, chargePath, chargeTimeline, status, currentPrice, now, types.Settings{GridChargeBatteries: true}, nil, nil)
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonWaitingToCharge, decision.Action.Reason, "Standby before scheduled cheaper charge must be labeled WaitingToCharge")
 		assert.Contains(t, decision.Action.Description, "Waiting to charge at")
@@ -3736,7 +3737,7 @@ func TestFinalizeDecisionAndPlan(t *testing.T) {
 			},
 		}
 
-		decision, plan := finalizeDecisionAndPlan(reachPath, reachTimeline, status, currentPrice, now, types.Settings{GridChargeBatteries: true})
+		decision, plan := finalizeDecisionAndPlan(ctx, reachPath, reachTimeline, status, currentPrice, now, types.Settings{GridChargeBatteries: true}, nil, nil)
 		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonSufficientBatteryTillCharge, decision.Action.Reason, "Discharging when battery easily reaches scheduled charge must be labeled SufficientBatteryTillCharge")
 		assert.Contains(t, decision.Action.Description, "Sufficient battery to reach scheduled charge")
@@ -3784,10 +3785,10 @@ func TestFinalizeDecisionAndPlan(t *testing.T) {
 			},
 		}
 
-		decision, plan := finalizeDecisionAndPlan(solarPath, solarTimeline, status, currentPrice, now, types.Settings{
+		decision, plan := finalizeDecisionAndPlan(ctx, solarPath, solarTimeline, status, currentPrice, now, types.Settings{
 			GridExportSolar:                      true,
 			MinExportHoldDifferenceDollarsPerKWH: 0.02,
-		})
+		}, nil, nil)
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonHoldSimilarPrice, decision.Action.Reason, "Standby tonight when import price ~= tomorrow solar export credit must be labeled HoldSimilarPrice")
 		assert.Contains(t, decision.Action.Description, "Preserving battery in standby for daytime solar export")
@@ -3834,10 +3835,10 @@ func TestFinalizeDecisionAndPlan(t *testing.T) {
 			},
 		}
 
-		decision, plan := finalizeDecisionAndPlan(exportPath, exportTimeline, status, currentPrice, now, types.Settings{
+		decision, plan := finalizeDecisionAndPlan(ctx, exportPath, exportTimeline, status, currentPrice, now, types.Settings{
 			GridExportBatteries: true,
 			ManageTOUSchedules:  true,
-		})
+		}, nil, nil)
 		assert.Equal(t, types.BatteryModeStandby, decision.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonArbitrageHoldExport, decision.Action.Reason, "Standby ahead of lucrative grid export window must be labeled ArbitrageHoldExport")
 		assert.Contains(t, decision.Action.Description, "upcoming export window")
@@ -3884,10 +3885,10 @@ func TestFinalizeDecisionAndPlan(t *testing.T) {
 			},
 		}
 
-		decision, plan := finalizeDecisionAndPlan(peakPath, peakTimeline, status, types.Price{DollarsPerKWH: 0.55}, now, types.Settings{
+		decision, plan := finalizeDecisionAndPlan(ctx, peakPath, peakTimeline, status, types.Price{DollarsPerKWH: 0.55}, now, types.Settings{
 			GridChargeBatteries:                    true,
 			MinDeficitPriceDifferenceDollarsPerKWH: 0.08,
-		})
+		}, nil, nil)
 		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonDischargeAtPeak, decision.Action.Reason, "During a genuine TOU peak, reason must be DischargeAtPeak rather than SufficientBatteryTillCharge")
 		assert.Contains(t, decision.Action.Description, "Discharging battery to power home during peak rate")
@@ -3937,15 +3938,85 @@ func TestFinalizeDecisionAndPlan(t *testing.T) {
 			},
 		}
 
-		decision, plan := finalizeDecisionAndPlan(arbPath, arbTimeline, status, types.Price{DollarsPerKWH: 0.10}, now, types.Settings{
+		decision, plan := finalizeDecisionAndPlan(ctx, arbPath, arbTimeline, status, types.Price{DollarsPerKWH: 0.10}, now, types.Settings{
 			GridChargeBatteries:                 true,
 			GridExportSolar:                     true,
 			MinArbitrageDifferenceDollarsPerKWH: 0.05,
-		})
+		}, nil, nil)
 		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonDeficitChargeNow, decision.Action.Reason, "Must label as DeficitChargeNow when no actual solar export occurs in the plan")
 		assert.Contains(t, decision.Action.Description, "Pre-charging for upcoming peak rates")
 		assert.Equal(t, types.ActionReasonDeficitChargeNow, plan.Periods[0].Reason)
+	})
+
+	t.Run("BatteryAtReserve_AbnormalUsage", func(t *testing.T) {
+		t.Parallel()
+
+		chicagoLoc, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
+		nowChicago := time.Date(2026, 9, 15, 14, 0, 0, 0, chicagoLoc)
+
+		reserveTimeline := []planInterval{
+			{
+				index:         0,
+				startTime:     nowChicago,
+				endTime:       nowChicago.Add(time.Hour),
+				durationHours: 1.0,
+				importRate:    0.15,
+				minSOC:        20.0,
+			},
+		}
+
+		reservePath := &planPath{
+			actions: []actionCandidate{
+				{
+					batteryMode: types.BatteryModeLoad,
+					reason:      types.ActionReasonBatteryAtReserve,
+					description: "Battery is at reserve.",
+				},
+			},
+			states: []planState{
+				{time: nowChicago, soc: 20.0, energyKWH: 2.7},
+				{time: nowChicago.Add(time.Hour), soc: 20.0, energyKWH: 2.7},
+			},
+			metrics: []intervalMetrics{
+				{gridImportKWH: 1.5},
+			},
+		}
+
+		// Mock history with high usage in last 2 hours
+		history := []types.EnergyStats{
+			{
+				TSHourStart: nowChicago.Add(-2 * time.Hour),
+				HomeKWH:     3.0,
+			},
+			{
+				TSHourStart: nowChicago.Add(-1 * time.Hour),
+				HomeKWH:     3.0,
+			},
+		}
+
+		// Model has Q3 of 0.5 kWh for each hour (total Q3 = 1.0 kWh)
+		// Total recent load = 6.0 kWh -> delta = 5.0 kWh >= 1.0 abnormal threshold
+		model := map[int]TimeProfile{
+			12: {Hour: 12, P75HomeLoadKWH: 0.5},
+			13: {Hour: 13, P75HomeLoadKWH: 0.5},
+			14: {Hour: 14, P75HomeLoadKWH: 0.5},
+		}
+
+		reserveStatus := types.SystemStatus{
+			BatteryCapacityKWH: 13.5,
+			BatterySOC:         20.0,
+		}
+
+		decision, _ := finalizeDecisionAndPlan(ctx, reservePath, reserveTimeline, reserveStatus, currentPrice, nowChicago, types.Settings{MinBatterySOC: 20}, history, model)
+
+		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonBatteryAtReserve, decision.Action.Reason)
+		assert.True(t, decision.Action.RecentHomeUsageAbnormal)
+		assert.InDelta(t, 6.0, decision.Action.RecentHomeUsageKWH, 0.01)
+		assert.InDelta(t, 1.0, decision.Action.Q3HomeUsageKWH, 0.01)
+		assert.Equal(t, "Battery is at reserve. Recent usage was well above normal. Home powered from solar/grid.", decision.Action.Description)
 	})
 }
 
@@ -4021,7 +4092,7 @@ func TestPlanScenarios(t *testing.T) {
 		spikeStart := time.Date(2026, 7, 20, 17, 0, 0, 0, chicagoLoc)
 		foundSpikeDischarge := false
 		for _, period := range plan.Periods {
-			if period.StartTime.Equal(spikeStart) {
+			if period.TSStart.Equal(spikeStart) {
 				assert.Equal(t, types.BatteryModeLoad, period.BatteryMode, "must discharge battery during $0.85/kWh price spike")
 				foundSpikeDischarge = true
 				break
@@ -4118,7 +4189,7 @@ func TestPlanScenarios(t *testing.T) {
 
 		// Horizon plans over available hours ending at midnight (May 13th 00:00)
 		lastPeriod := plan.Periods[len(plan.Periods)-1]
-		assert.Equal(t, time.Date(2026, 5, 13, 0, 0, 0, 0, chicagoLoc), lastPeriod.EndTime)
+		assert.Equal(t, time.Date(2026, 5, 13, 0, 0, 0, 0, chicagoLoc), lastPeriod.TSEnd)
 	})
 
 	t.Run("PGE_EELEC_SummerSolarSurplus_4to9pmPeak", func(t *testing.T) {
@@ -4175,7 +4246,7 @@ func TestPlanScenarios(t *testing.T) {
 		peakTime := time.Date(2026, 8, 1, 16, 0, 0, 0, laLoc)
 		foundPeakDischarge := false
 		for _, p := range plan.Periods {
-			if p.StartTime.Equal(peakTime) {
+			if p.TSStart.Equal(peakTime) {
 				assert.Equal(t, types.BatteryModeLoad, p.BatteryMode)
 				foundPeakDischarge = true
 				break
@@ -4286,11 +4357,11 @@ func TestPlanScenarios(t *testing.T) {
 		// Between 2:00 PM (T-2h) and 4:00 PM (event start), battery must be in Standby
 		standbyTime := time.Date(2026, 8, 15, 14, 0, 0, 0, chicagoLoc)
 		for _, p := range plan.Periods {
-			if p.StartTime.Equal(standbyTime) {
+			if p.TSStart.Equal(standbyTime) {
 				assert.Equal(t, types.BatteryModeStandby, p.BatteryMode, "must hold Standby 2 hours before VPP event")
 				assert.Equal(t, types.ActionReasonVPPPrep, p.Reason)
 			}
-			if p.StartTime.Equal(vppStart) {
+			if p.TSStart.Equal(vppStart) {
 				assert.Equal(t, types.ActionReasonVPPActive, p.Reason, "must discharge during VPP event")
 			}
 		}
@@ -4501,12 +4572,12 @@ func TestPlanScenarios(t *testing.T) {
 		lock2Time := time.Date(2026, 8, 20, 17, 0, 0, 0, chicagoLoc)
 
 		for _, p := range plan.Periods {
-			if p.StartTime.Equal(lock1Time) || p.StartTime.Equal(lock2Time) {
-				assert.Equal(t, types.BatteryModeStandby, p.BatteryMode, "must hold Standby 2h before VPP event at %s", p.StartTime)
+			if p.TSStart.Equal(lock1Time) || p.TSStart.Equal(lock2Time) {
+				assert.Equal(t, types.BatteryModeStandby, p.BatteryMode, "must hold Standby 2h before VPP event at %s", p.TSStart)
 				assert.Equal(t, types.ActionReasonVPPPrep, p.Reason)
 			}
-			if p.StartTime.Equal(vpp1Start) || p.StartTime.Equal(vpp2Start) {
-				assert.Equal(t, types.ActionReasonVPPActive, p.Reason, "must discharge during VPP event at %s", p.StartTime)
+			if p.TSStart.Equal(vpp1Start) || p.TSStart.Equal(vpp2Start) {
+				assert.Equal(t, types.ActionReasonVPPActive, p.Reason, "must discharge during VPP event at %s", p.TSStart)
 			}
 		}
 	})
@@ -4863,7 +4934,7 @@ func TestPlanScenarios(t *testing.T) {
 		// Later in the night (closer to 6 AM), plan periods must schedule the charge
 		foundPlannedCharge := false
 		for _, p := range plan.Periods {
-			if p.StartTime.Hour() >= 4 && p.StartTime.Hour() < 6 && p.BatteryMode == types.BatteryModeChargeAny {
+			if p.TSStart.Hour() >= 4 && p.TSStart.Hour() < 6 && p.BatteryMode == types.BatteryModeChargeAny {
 				foundPlannedCharge = true
 				break
 			}
@@ -4950,13 +5021,13 @@ func TestPlanScenarios(t *testing.T) {
 		chargedHour13 := false
 		standbyAtDeadline := false
 		for _, p := range plan.Periods {
-			if p.StartTime.Hour() == 12 && p.BatteryMode == types.BatteryModeChargeAny {
+			if p.TSStart.Hour() == 12 && p.BatteryMode == types.BatteryModeChargeAny {
 				chargedHour12 = true
 			}
-			if p.StartTime.Hour() == 13 && p.BatteryMode == types.BatteryModeChargeAny {
+			if p.TSStart.Hour() == 13 && p.BatteryMode == types.BatteryModeChargeAny {
 				chargedHour13 = true
 			}
-			if p.StartTime.Equal(deadline) && p.BatteryMode == types.BatteryModeStandby {
+			if p.TSStart.Equal(deadline) && p.BatteryMode == types.BatteryModeStandby {
 				standbyAtDeadline = true
 				assert.GreaterOrEqual(t, p.StartSOC, 99.0, "must reach full 100%% SOC by 14:00 deadline")
 			}
@@ -5069,7 +5140,7 @@ func TestPlanScenarios(t *testing.T) {
 		require.GreaterOrEqual(t, len(chargePeriods), 2, "must schedule charging intervals to cover peak")
 		// Verify that all charge intervals are strictly contiguous (no gaps / start-stop chattering)
 		for i := 1; i < len(chargePeriods); i++ {
-			assert.Equal(t, chargePeriods[i-1].EndTime, chargePeriods[i].StartTime, "charging intervals must be contiguous without alternating fragmentation")
+			assert.Equal(t, chargePeriods[i-1].TSEnd, chargePeriods[i].TSStart, "charging intervals must be contiguous without alternating fragmentation")
 		}
 	})
 
@@ -5146,7 +5217,7 @@ func TestPlanScenarios(t *testing.T) {
 			ManageTOUSchedules:  true,
 		}
 
-		decision, plan, err := c.Plan(ctx, status, currentPrice, futurePrices, history, nil, settings, nil)
+		decision, _, err := c.Plan(ctx, status, currentPrice, futurePrices, history, nil, settings, nil)
 		require.NoError(t, err)
 		assert.Equal(t, types.ActionReasonBatteryAtReserve, decision.Action.Reason)
 		assert.True(t, decision.Action.RecentHomeUsageAbnormal)
@@ -5154,9 +5225,6 @@ func TestPlanScenarios(t *testing.T) {
 		assert.GreaterOrEqual(t, decision.Action.RecentHomeUsageKWH, 7.0)
 		assert.Greater(t, decision.Action.Q3HomeUsageKWH, 0.0)
 		assert.Greater(t, decision.Action.RecentHomeUsageKWH, decision.Action.Q3HomeUsageKWH)
-		if assert.NotEmpty(t, plan.Periods) {
-			assert.Equal(t, decision.Action.Description, plan.Periods[0].Description)
-		}
 
 		// Verify RecentHomeUsageKWH and Q3HomeUsageKWH are always included even when not at reserve
 		statusNonReserve := status

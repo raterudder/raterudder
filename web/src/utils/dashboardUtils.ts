@@ -441,7 +441,7 @@ export function getPlanStatusSubvalue(action: Action, refTs?: string): string | 
         if (action.reason === ActionReason.ArbitrageHoldExport) {
             const nextExport = periods.find(p => p.batteryMode === BatteryMode.Export);
             if (nextExport) {
-                return `Holding reserve for ${formatTime(nextExport.startTime, refTs)} export`;
+                return `Holding reserve for ${formatTime(nextExport.tsStart, refTs)} export`;
             }
             return 'Holding reserve for upcoming export window';
         }
@@ -450,15 +450,15 @@ export function getPlanStatusSubvalue(action: Action, refTs?: string): string | 
         for (let i = 1; i < periods.length; i++) {
             const p = periods[i];
             if (p.batteryMode === BatteryMode.ChargeAny) {
-                const price = p.price ? (p.price.dollarsPerKWH + (p.price.gridUseDollarsPerKWH || 0)) : null;
+                const price = p.importDollars !== undefined ? p.importDollars : null;
                 const priceStr = price !== null ? ` ($${price.toFixed(3)}/kWh)` : '';
-                return `Waiting to charge at ${formatTime(p.startTime, refTs)}${priceStr}`;
+                return `Waiting to charge at ${formatTime(p.tsStart, refTs)}${priceStr}`;
             }
-            if (p.batteryMode === BatteryMode.Load && (p.reason === ActionReason.DischargeAtPeak || (p.description && p.description.toLowerCase().includes('peak')))) {
-                return `Saving reserve for ${formatTime(p.startTime, refTs)} peak rate`;
+            if (p.batteryMode === BatteryMode.Load && p.reason === ActionReason.DischargeAtPeak) {
+                return `Saving reserve for ${formatTime(p.tsStart, refTs)} peak rate`;
             }
             if (p.batteryMode === BatteryMode.Export) {
-                return `Holding reserve for ${formatTime(p.startTime, refTs)} export`;
+                return `Holding reserve for ${formatTime(p.tsStart, refTs)} export`;
             }
         }
 
@@ -470,10 +470,10 @@ export function getPlanStatusSubvalue(action: Action, refTs?: string): string | 
 
     // Charging: find end of contiguous charge block
     if (state === 'charging') {
-        let endChargeTime = currentPeriod.endTime;
+        let endChargeTime = currentPeriod.tsEnd;
         for (let i = 1; i < periods.length; i++) {
             if (periods[i].batteryMode === BatteryMode.ChargeAny) {
-                endChargeTime = periods[i].endTime;
+                endChargeTime = periods[i].tsEnd;
             } else {
                 break;
             }
@@ -493,10 +493,10 @@ export function getPlanStatusSubvalue(action: Action, refTs?: string): string | 
     if (state === 'discharging') {
         // Direct export
         if (effectiveMode === BatteryMode.Export || action.reason === ActionReason.DirectExport) {
-            let endExportTime = currentPeriod.endTime;
+            let endExportTime = currentPeriod.tsEnd;
             for (let i = 1; i < periods.length; i++) {
                 if (periods[i].batteryMode === BatteryMode.Export) {
-                    endExportTime = periods[i].endTime;
+                    endExportTime = periods[i].tsEnd;
                 } else {
                     break;
                 }
@@ -505,10 +505,10 @@ export function getPlanStatusSubvalue(action: Action, refTs?: string): string | 
         }
 
         // Peak discharge
-        let endDischargeTime = currentPeriod.endTime;
+        let endDischargeTime = currentPeriod.tsEnd;
         for (let i = 1; i < periods.length; i++) {
             if (periods[i].batteryMode === BatteryMode.Load) {
-                endDischargeTime = periods[i].endTime;
+                endDischargeTime = periods[i].tsEnd;
             } else {
                 break;
             }

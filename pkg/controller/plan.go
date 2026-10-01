@@ -78,10 +78,6 @@ const (
 	// or deliver usable battery charging.
 	minSignificantSolarKW = 0.5
 
-	// socBucketResolutionPct is the width (in % SOC) of each discrete state bin used in forward dynamic programming
-	// (yielding 201 discrete buckets between 0% and 100%).
-	socBucketResolutionPct = 0.5
-
 	// socTargetTolerancePct is the tolerance (in % SOC) allowed when verifying whether a forward path reached its target SOC.
 	// It matches socBucketResolutionPct (0.5%) so that trajectories ending at e.g. 99.6% due to bin quantization are not discarded.
 	socTargetTolerancePct = 0.5
@@ -420,7 +416,7 @@ func (c *Controller) Plan(
 			SystemStatus:    currentStatus,
 		}
 		fallbackPlan := types.Plan{
-			GeneratedAt:        now.UTC(),
+			TSCreated:          now.UTC(),
 			HorizonHours:       0,
 			TotalProjectedCost: 0,
 			Periods:            []types.PlanPeriod{},
@@ -461,39 +457,9 @@ func (c *Controller) Plan(
 	}
 
 	// 6. Finalize output: extract immediate Decision for hardware dispatch and full Plan for UI
-	decision, plan := finalizeDecisionAndPlan(winningPath, timeline, currentStatus, currentPrice, now, settings)
+	decision, plan := finalizeDecisionAndPlan(ctx, winningPath, timeline, currentStatus, currentPrice, now, settings, history, model)
 	decision.SimulationParams = simParams
 	decision.Action.SimulationParams = simParams
-
-	// 7. Always evaluate recent home usage and Q3 baseline for action telemetry
-	loc := now.Location()
-	if loc == nil {
-		loc = time.UTC
-	}
-	recentKWH, q3KWH, isAbnormal := c.calculateRecentUsageVsQ3(now, history, model, loc)
-	decision.Action.RecentHomeUsageKWH = recentKWH
-	decision.Action.Q3HomeUsageKWH = q3KWH
-	decision.Action.RecentHomeUsageAbnormal = isAbnormal
-
-	if isAbnormal {
-		log.Ctx(ctx).DebugContext(ctx, "abnormal recent home usage detected",
-			slog.Float64("recentHomeUsageKWH", recentKWH),
-			slog.Float64("q3HomeUsageKWH", q3KWH),
-			slog.Float64("usageDeltaKWH", recentKWH-q3KWH),
-			slog.String("actionReason", string(decision.Action.Reason)),
-			slog.Float64("batterySOC", currentStatus.BatterySOC),
-		)
-	}
-
-	if decision.Action.Reason == types.ActionReasonBatteryAtReserve && isAbnormal {
-		decision.Action.Description = "Battery is at reserve. Recent usage was well above normal. Home powered from solar/grid."
-		if decision.Action.Plan != nil && len(decision.Action.Plan.Periods) > 0 {
-			decision.Action.Plan.Periods[0].Description = decision.Action.Description
-		}
-		if len(plan.Periods) > 0 {
-			plan.Periods[0].Description = decision.Action.Description
-		}
-	}
 
 	winningPath.executeLogs(ctx)
 
@@ -2719,15 +2685,18 @@ func resolvePlanActionReason(
 
 // finalizeDecisionAndPlan packages the winning path into Decision and types.Plan.
 func finalizeDecisionAndPlan(
+	ctx context.Context,
 	winningPath *planPath,
 	timeline []planInterval,
 	initialStatus types.SystemStatus,
 	currentPrice types.Price,
 	now time.Time,
 	settings types.Settings,
+	history []types.EnergyStats,
+	model map[int]TimeProfile,
 ) (Decision, types.Plan) {
 	if len(winningPath.actions) == 0 || len(timeline) == 0 {
-		return Decision{}, types.Plan{GeneratedAt: now.UTC()}
+		return Decision{}, types.Plan{TSCreated: now.UTC()}
 	}
 
 	immediateInterval := timeline[0]
@@ -2754,6 +2723,27 @@ func finalizeDecisionAndPlan(
 		winningPath.actions[i].futurePrice = futPrice
 	}
 	immediateAction := winningPath.actions[0]
+
+	// Evaluate recent home usage and Q3 baseline for action telemetry and reserve description
+	loc := now.Location()
+	if loc == nil {
+		loc = time.UTC
+	}
+	recentKWH, q3KWH, isAbnormal := calculateRecentUsageVsQ3(now, history, model, loc)
+	if isAbnormal {
+		log.Ctx(ctx).DebugContext(ctx, "abnormal recent home usage detected",
+			slog.Float64("recentHomeUsageKWH", recentKWH),
+			slog.Float64("q3HomeUsageKWH", q3KWH),
+			slog.Float64("usageDeltaKWH", recentKWH-q3KWH),
+			slog.String("actionReason", string(immediateAction.reason)),
+			slog.Float64("batterySOC", initialStatus.BatterySOC),
+		)
+	}
+
+	if immediateAction.reason == types.ActionReasonBatteryAtReserve && isAbnormal {
+		immediateAction.description = "Battery is at reserve. Recent usage was well above normal. Home powered from solar/grid."
+		winningPath.actions[0].description = immediateAction.description
+	}
 
 	targetSOC := immediateAction.targetSOC
 	if immediateAction.batteryMode == types.BatteryModeStandby {
@@ -2846,19 +2836,22 @@ func finalizeDecisionAndPlan(
 	}
 
 	act := types.Action{
-		Timestamp:           now.UTC(),
-		SystemTimestamp:     now,
-		BatteryMode:         immediateAction.batteryMode,
-		SolarMode:           immediateAction.solarMode,
-		ChargeToSOC:         targetSOC,
-		Reason:              immediateAction.reason,
-		Description:         immediateAction.description,
-		CurrentPrice:        &currentPrice,
-		FuturePrice:         immediateAction.futurePrice,
-		SystemStatus:        initialStatus,
-		HitDeficitAt:        hitDeficitAt,
-		HitCapacityAt:       hitCapacityAt,
-		TSScheduleModeUntil: scheduleUntil,
+		Timestamp:               now.UTC(),
+		SystemTimestamp:         now,
+		BatteryMode:             immediateAction.batteryMode,
+		SolarMode:               immediateAction.solarMode,
+		ChargeToSOC:             targetSOC,
+		Reason:                  immediateAction.reason,
+		Description:             immediateAction.description,
+		CurrentPrice:            &currentPrice,
+		FuturePrice:             immediateAction.futurePrice,
+		SystemStatus:            initialStatus,
+		HitDeficitAt:            hitDeficitAt,
+		HitCapacityAt:           hitCapacityAt,
+		TSScheduleModeUntil:     scheduleUntil,
+		RecentHomeUsageKWH:      recentKWH,
+		Q3HomeUsageKWH:          q3KWH,
+		RecentHomeUsageAbnormal: isAbnormal,
 	}
 
 	// Build full schedule for Plan UI
@@ -2891,30 +2884,28 @@ func finalizeDecisionAndPlan(
 		totalExportCredits += metrics.grossExportCreditDollars
 
 		periods = append(periods, types.PlanPeriod{
-			StartTime:        interval.startTime,
-			EndTime:          interval.endTime,
-			DurationHours:    interval.durationHours,
-			Price:            interval.price,
-			BatteryMode:      action.batteryMode,
-			SolarMode:        action.solarMode,
-			Reason:           action.reason,
-			Description:      action.description,
-			StartSOC:         startState.soc,
-			EndSOC:           endState.soc,
-			LoadKWH:          interval.loadKWH,
-			SolarKWH:         interval.solarKWH,
-			ProjectedLoadKW:  interval.avgLoadKW(),
-			ProjectedSolarKW: interval.avgSolarKW(),
-			GridImportKWH:    metrics.gridImportKWH,
-			GridExportKWH:    metrics.gridExportKWH,
-			CostDollars:      metrics.costDollars,
+			TSStart:       interval.startTime,
+			TSEnd:         interval.endTime,
+			DurationHours: interval.durationHours,
+			ImportDollars: interval.importRate,
+			ExportDollars: interval.exportRate,
+			BatteryMode:   action.batteryMode,
+			SolarMode:     action.solarMode,
+			Reason:        action.reason,
+			StartSOC:      startState.soc,
+			EndSOC:        endState.soc,
+			LoadKWH:       interval.loadKWH,
+			SolarKWH:      interval.solarKWH,
+			GridImportKWH: metrics.gridImportKWH,
+			GridExportKWH: metrics.gridExportKWH,
+			CostDollars:   metrics.costDollars,
 		})
 	}
 
 	horizonHours := int(math.Ceil(timeline[len(timeline)-1].endTime.Sub(timeline[0].startTime).Hours()))
 
 	plan := types.Plan{
-		GeneratedAt:        now.UTC(),
+		TSCreated:          now.UTC(),
 		HorizonHours:       horizonHours,
 		TotalProjectedCost: totalCostDollars,
 		TotalExportCredits: totalExportCredits,
@@ -2946,7 +2937,7 @@ func solarModeString(m types.SolarMode) string {
 
 // calculateRecentUsageVsQ3 evaluates recent home usage (last 1–2 hours) against the 75th percentile (Q3)
 // baseline from the energy model. If actual recent usage exceeded Q3 by at least abnormalRecentUsageThresholdKWH (1.0 kWh), isAbnormal is true.
-func (c *Controller) calculateRecentUsageVsQ3(
+func calculateRecentUsageVsQ3(
 	now time.Time,
 	history []types.EnergyStats,
 	model map[int]TimeProfile,

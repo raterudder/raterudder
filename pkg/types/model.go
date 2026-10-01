@@ -108,9 +108,9 @@ type Action struct {
 	RecentHomeUsageAbnormal bool             `json:"recentHomeUsageAbnormal,omitempty"`
 
 	// Deprecated: use HitDeficitAt
-	HitBufferedDeficitAt time.Time `json:"hitBufferedDeficitAt"`
+	HitBufferedDeficitAt time.Time `json:"hitBufferedDeficitAt,omitempty"`
 	// Deprecated: use HitDeficitAt
-	HitThresholdDeficitAt time.Time `json:"hitThresholdDeficitAt"`
+	HitThresholdDeficitAt time.Time `json:"hitThresholdDeficitAt,omitempty"`
 	// Deprecated: use BatteryMode
 	TargetBatteryMode BatteryMode `json:"targetBatteryMode,omitempty"`
 	// Deprecated: use SolarMode
@@ -400,31 +400,29 @@ type MonthlyNotificationLogs struct {
 
 // Plan represents a forward-looking optimal schedule over the planning horizon.
 type Plan struct {
-	GeneratedAt        time.Time    `json:"generatedAt"`
+	TSCreated          time.Time    `json:"tsCreated"`
 	HorizonHours       int          `json:"horizonHours"`
-	TotalProjectedCost float64      `json:"totalProjectedCost"`
-	TotalExportCredits float64      `json:"totalExportCredits"`
-	NetEconomicBenefit float64      `json:"netEconomicBenefit"`
+	TotalProjectedCost float64      `json:"totalProjectedCost,omitempty"`
+	TotalExportCredits float64      `json:"totalExportCredits,omitempty"`
+	NetEconomicBenefit float64      `json:"netEconomicBenefit,omitempty"`
 	Periods            []PlanPeriod `json:"periods"`
 }
 
 // PlanPeriod represents a single discrete scheduling period in a Plan.
 type PlanPeriod struct {
-	StartTime        time.Time    `json:"startTime"`
-	EndTime          time.Time    `json:"endTime"`
-	DurationHours    float64      `json:"durationHours"`
-	Price            Price        `json:"price"`
-	BatteryMode      BatteryMode  `json:"batteryMode"`
-	SolarMode        SolarMode    `json:"solarMode"`
-	Reason           ActionReason `json:"reason"`
-	Description      string       `json:"description"`
-	StartSOC         float64      `json:"startSoc"`
-	EndSOC           float64      `json:"endSoc"`
-	LoadKWH          float64      `json:"loadKWH,omitempty"`
-	SolarKWH         float64      `json:"solarKWH,omitempty"`
-	ProjectedLoadKW  float64      `json:"projectedLoadKW,omitempty"`
-	ProjectedSolarKW float64      `json:"projectedSolarKW,omitempty"`
-	GridImportKWH    float64      `json:"gridImportKWH"`
-	GridExportKWH    float64      `json:"gridExportKWH"`
-	CostDollars      float64      `json:"costDollars"`
+	TSStart       time.Time    `json:"tsStart"`
+	TSEnd         time.Time    `json:"tsEnd"`
+	DurationHours float64      `json:"durationHours"`
+	ImportDollars float64      `json:"importDollars"`
+	ExportDollars float64      `json:"exportDollars,omitempty"`
+	BatteryMode   BatteryMode  `json:"batteryMode"`
+	SolarMode     SolarMode    `json:"solarMode"`
+	Reason        ActionReason `json:"reason"`
+	StartSOC      float64      `json:"startSoc"`
+	EndSOC        float64      `json:"endSoc"`
+	LoadKWH       float64      `json:"loadKWH,omitempty"`
+	SolarKWH      float64      `json:"solarKWH,omitempty"`
+	GridImportKWH float64      `json:"gridImportKWH,omitempty"`
+	GridExportKWH float64      `json:"gridExportKWH,omitempty"`
+	CostDollars   float64      `json:"costDollars,omitempty"`
 }

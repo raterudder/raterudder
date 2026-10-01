@@ -1702,3 +1702,152 @@ func TestIsRetryableFirestoreErr(t *testing.T) {
 		assert.False(t, isRetryableFirestoreErr(errors.New("some regular error")))
 	})
 }
+
+func TestTransformActionPlanJSON(t *testing.T) {
+	t.Run("MigratesLegacyPlan", func(t *testing.T) {
+		legacyJSON := []byte(`{
+			"timestamp": "2026-10-01T15:29:07Z",
+			"batteryMode": -1,
+			"solarMode": 2,
+			"reason": "sufficientBattery",
+			"description": "Discharging battery to cover household load.",
+			"plan": {
+				"generatedAt": "2026-10-01T15:29:07Z",
+				"horizonHours": 24,
+				"totalProjectedCost": 1.25,
+				"totalExportCredits": 0.45,
+				"netEconomicBenefit": 0.80,
+				"periods": [
+					{
+						"startTime": "2026-10-01T15:29:07Z",
+						"endTime": "2026-10-01T16:00:00Z",
+						"durationHours": 0.51,
+						"price": {
+							"dollarsPerKWH": 0.0305,
+							"gridUseDollarsPerKWH": 0.1165,
+							"provider": "comed_besh",
+							"tsStart": "2026-10-01T15:00:00Z",
+							"tsEnd": "2026-10-01T16:00:00Z"
+						},
+						"description": "Discharging battery to cover household load.",
+						"batteryMode": -1,
+						"solarMode": 2,
+						"reason": "sufficientBattery",
+						"startSoc": 98.7,
+						"endSoc": 96.9,
+						"loadKWH": 0.95,
+						"solarKWH": 0.43,
+						"projectedLoadKW": 1.85,
+						"projectedSolarKW": 0.84,
+						"gridImportKWH": 0.1,
+						"gridExportKWH": 0.0,
+						"costDollars": 0.02
+					}
+				]
+			}
+		}`)
+
+		newJSON, modified, bytesSaved, err := TransformActionPlanJSON(legacyJSON)
+		require.NoError(t, err)
+		assert.True(t, modified)
+		assert.Positive(t, bytesSaved)
+
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal(newJSON, &parsed))
+
+		planMap, ok := parsed["plan"].(map[string]any)
+		require.True(t, ok)
+
+		// generatedAt renamed to tsCreated
+		assert.Equal(t, "2026-10-01T15:29:07Z", planMap["tsCreated"])
+		_, hasGenAt := planMap["generatedAt"]
+		assert.False(t, hasGenAt)
+
+		periods, ok := planMap["periods"].([]any)
+		require.True(t, ok)
+		if assert.Len(t, periods, 1) {
+			p0 := periods[0].(map[string]any)
+			assert.Equal(t, "2026-10-01T15:29:07Z", p0["tsStart"])
+			assert.Equal(t, "2026-10-01T16:00:00Z", p0["tsEnd"])
+			_, hasStart := p0["startTime"]
+			assert.False(t, hasStart)
+			_, hasEnd := p0["endTime"]
+			assert.False(t, hasEnd)
+
+			assert.InDelta(t, 0.147, p0["importDollars"], 0.001)
+			assert.InDelta(t, 0.0305, p0["exportDollars"], 0.0001)
+			_, hasPrice := p0["price"]
+			assert.False(t, hasPrice)
+
+			_, hasDesc := p0["description"]
+			assert.False(t, hasDesc)
+			_, hasProjLoad := p0["projectedLoadKW"]
+			assert.False(t, hasProjLoad)
+			_, hasProjSolar := p0["projectedSolarKW"]
+			assert.False(t, hasProjSolar)
+		}
+
+		// Validates clean unmarshal into types.Action
+		var act types.Action
+		require.NoError(t, json.Unmarshal(newJSON, &act))
+		assert.Equal(t, types.BatteryModeLoad, act.BatteryMode)
+		require.NotNil(t, act.Plan)
+		assert.False(t, act.Plan.TSCreated.IsZero())
+		if assert.Len(t, act.Plan.Periods, 1) {
+			assert.False(t, act.Plan.Periods[0].TSStart.IsZero())
+			assert.False(t, act.Plan.Periods[0].TSEnd.IsZero())
+			assert.InDelta(t, 0.147, act.Plan.Periods[0].ImportDollars, 0.001)
+			assert.InDelta(t, 0.0305, act.Plan.Periods[0].ExportDollars, 0.0001)
+		}
+	})
+
+	t.Run("IdempotentOnMigratedPlan", func(t *testing.T) {
+		migratedJSON := []byte(`{
+			"timestamp": "2026-10-01T15:29:07Z",
+			"batteryMode": -1,
+			"plan": {
+				"tsCreated": "2026-10-01T15:29:07Z",
+				"horizonHours": 24,
+				"periods": [
+					{
+						"tsStart": "2026-10-01T15:29:07Z",
+						"tsEnd": "2026-10-01T16:00:00Z",
+						"durationHours": 0.51,
+						"importDollars": 0.147,
+						"exportDollars": 0.0305,
+						"batteryMode": -1,
+						"solarMode": 2,
+						"reason": "sufficientBattery",
+						"startSoc": 98.7,
+						"endSoc": 96.9
+					}
+				]
+			}
+		}`)
+
+		newJSON, modified, bytesSaved, err := TransformActionPlanJSON(migratedJSON)
+		require.NoError(t, err)
+		assert.False(t, modified)
+		assert.Equal(t, 0, bytesSaved)
+		assert.Equal(t, migratedJSON, newJSON)
+	})
+
+	t.Run("ActionWithoutPlan", func(t *testing.T) {
+		noPlanJSON := []byte(`{
+			"timestamp": "2026-10-01T15:29:07Z",
+			"batteryMode": 1,
+			"reason": "standby"
+		}`)
+
+		newJSON, modified, bytesSaved, err := TransformActionPlanJSON(noPlanJSON)
+		require.NoError(t, err)
+		assert.False(t, modified)
+		assert.Equal(t, 0, bytesSaved)
+		assert.Equal(t, noPlanJSON, newJSON)
+	})
+
+	t.Run("InvalidJSON", func(t *testing.T) {
+		_, _, _, err := TransformActionPlanJSON([]byte(`{not valid json`))
+		assert.ErrorContains(t, err, "failed to unmarshal action json")
+	})
+}

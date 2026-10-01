@@ -142,13 +142,13 @@ func TestActionJSONSerialization(t *testing.T) {
 		t.Parallel()
 
 		plan := &Plan{
-			GeneratedAt:        now,
+			TSCreated:          now,
 			HorizonHours:       24,
 			TotalProjectedCost: 1.25,
 			Periods: []PlanPeriod{
 				{
-					StartTime:     now,
-					EndTime:       now.Add(time.Hour),
+					TSStart:       now,
+					TSEnd:         now.Add(time.Hour),
 					DurationHours: 1.0,
 					BatteryMode:   BatteryModeChargeAny,
 					SolarMode:     SolarModeAny,

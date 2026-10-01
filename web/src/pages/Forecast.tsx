@@ -573,16 +573,12 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
 
             // Base hourly rates for each period
             const periodRates = periods.map((p) => {
-                const price = p.price ? p.price.dollarsPerKWH + (p.price.gridUseDollarsPerKWH || 0) : 0;
-                const solarRate = p.projectedSolarKW !== undefined
-                    ? p.projectedSolarKW
-                    : (p.durationHours > 0 ? (p.solarKWH || 0) / p.durationHours : (p.solarKWH || 0));
-                const loadRate = p.projectedLoadKW !== undefined
-                    ? p.projectedLoadKW
-                    : (p.durationHours > 0 ? (p.loadKWH || 0) / p.durationHours : (p.loadKWH || 0));
+                const price = p.importDollars ?? 0;
+                const solarRate = p.durationHours > 0 ? (p.solarKWH || 0) / p.durationHours : (p.solarKWH || 0);
+                const loadRate = p.durationHours > 0 ? (p.loadKWH || 0) / p.durationHours : (p.loadKWH || 0);
                 return {
-                    startTimeMs: new Date(p.startTime).getTime(),
-                    endTimeMs: new Date(p.endTime).getTime(),
+                    startTimeMs: new Date(p.tsStart).getTime(),
+                    endTimeMs: new Date(p.tsEnd).getTime(),
                     solarRate,
                     loadRate,
                     price,
@@ -628,11 +624,11 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
 
             periods.forEach((p, idx) => {
                 const z = periodZones[idx];
-                const rates = getInterpolatedRates(p.startTime);
+                const rates = getInterpolatedRates(p.tsStart);
 
                 const pt: any = {
-                    ts: p.startTime,
-                    hour: new Date(p.startTime).getHours(),
+                    ts: p.tsStart,
+                    hour: new Date(p.tsStart).getHours(),
                     plannedSOC: p.startSoc,
                     batterySOCIfUsed: p.startSoc,
                     batteryReserveSOC: reserveSOC,
@@ -660,10 +656,10 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 planData.push(pt);
 
                 if (idx === periods.length - 1) {
-                    const endRates = getInterpolatedRates(p.endTime);
+                    const endRates = getInterpolatedRates(p.tsEnd);
                     const endPt: any = {
-                        ts: p.endTime,
-                        hour: new Date(p.endTime).getHours(),
+                        ts: p.tsEnd,
+                        hour: new Date(p.tsEnd).getHours(),
                         plannedSOC: p.endSoc,
                         batterySOCIfUsed: p.endSoc,
                         batteryReserveSOC: reserveSOC,
@@ -773,7 +769,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 <>
                     <p className="forecast-subtitle">
                         Optimal battery dispatch schedule generated {(() => {
-                            const startTs = rawModelingData?.plan?.generatedAt || rawModelingData?.updated;
+                            const startTs = rawModelingData?.plan?.tsCreated || rawModelingData?.updated;
                             return startTs ? formatTime(startTs, data[0]?.ts) : '';
                         })()} ({rawModelingData?.plan?.horizonHours ?? 24}-Hour Horizon)
                     </p>

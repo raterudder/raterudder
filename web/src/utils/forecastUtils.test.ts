@@ -5,19 +5,13 @@ import type { PlanPeriod } from '../api';
 
 function makePeriod(overrides: Partial<PlanPeriod> = {}): PlanPeriod {
     return {
-        startTime: '2026-09-30T10:00:00-05:00',
-        endTime: '2026-09-30T11:00:00-05:00',
+        tsStart: '2026-09-30T10:00:00-05:00',
+        tsEnd: '2026-09-30T11:00:00-05:00',
         durationHours: 1,
-        price: {
-            dollarsPerKWH: 0.10,
-            gridUseDollarsPerKWH: 0.05,
-            tsStart: '2026-09-30T10:00:00-05:00',
-            tsEnd: '2026-09-30T11:00:00-05:00',
-        },
+        importDollars: 0.15,
         batteryMode: BatteryMode.Load,
         solarMode: 2,
         reason: ActionReason.SufficientBattery,
-        description: 'Discharging battery to cover household load.',
         startSoc: 50,
         endSoc: 50,
         gridImportKWH: 0,
@@ -71,18 +65,6 @@ describe('classifyPlanPeriod', () => {
         expect(result.key).toBe('poweringHome');
         expect(result.label).toBe('Powering Home');
         expect(result.color).toBe('#38bdf8');
-    });
-
-    it('classifies peak description as Powering Home when discharging', () => {
-        const period = makePeriod({
-            batteryMode: BatteryMode.Load,
-            description: 'Discharging during peak hours',
-            startSoc: 65,
-            endSoc: 50,
-        });
-        const result = classifyPlanPeriod(period, 10);
-        expect(result.key).toBe('poweringHome');
-        expect(result.label).toBe('Powering Home');
     });
 
     it('classifies rising SOC during self-consumption as Solar Charge', () => {
