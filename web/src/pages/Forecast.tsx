@@ -571,8 +571,8 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
 
             const periodZones = periods.map((p) => classifyPlanPeriod(p, reserveSOC));
 
-            periods.forEach((p, idx) => {
-                const z = periodZones[idx];
+            // Base hourly rates for each period
+            const periodRates = periods.map((p) => {
                 const price = p.price ? p.price.dollarsPerKWH + (p.price.gridUseDollarsPerKWH || 0) : 0;
                 const solarRate = p.projectedSolarKW !== undefined
                     ? p.projectedSolarKW
@@ -580,6 +580,55 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 const loadRate = p.projectedLoadKW !== undefined
                     ? p.projectedLoadKW
                     : (p.durationHours > 0 ? (p.loadKWH || 0) / p.durationHours : (p.loadKWH || 0));
+                return {
+                    startTimeMs: new Date(p.startTime).getTime(),
+                    endTimeMs: new Date(p.endTime).getTime(),
+                    solarRate,
+                    loadRate,
+                    price,
+                };
+            });
+
+            const getBaseRateAt = (targetMs: number) => {
+                if (targetMs <= periodRates[0].startTimeMs) {
+                    return periodRates[0];
+                }
+                const lastRate = periodRates[periodRates.length - 1];
+                if (targetMs >= lastRate.endTimeMs) {
+                    return lastRate;
+                }
+                for (let i = 0; i < periodRates.length; i++) {
+                    if (targetMs >= periodRates[i].startTimeMs && targetMs < periodRates[i].endTimeMs) {
+                        return periodRates[i];
+                    }
+                }
+                return lastRate;
+            };
+
+            const getInterpolatedRates = (ts: string | Date) => {
+                const d = new Date(ts);
+                const tsMs = d.getTime();
+                const msIntoHour = (d.getMinutes() * 60 + d.getSeconds()) * 1000 + d.getMilliseconds();
+                if (msIntoHour === 0) {
+                    return getBaseRateAt(tsMs);
+                }
+                const hourStartMs = tsMs - msIntoHour;
+                const nextHourMs = hourStartMs + 3600000;
+                const fraction = msIntoHour / 3600000;
+
+                const currentRate = getBaseRateAt(hourStartMs);
+                const nextRate = getBaseRateAt(nextHourMs);
+
+                return {
+                    solarRate: (1 - fraction) * currentRate.solarRate + fraction * nextRate.solarRate,
+                    loadRate: (1 - fraction) * currentRate.loadRate + fraction * nextRate.loadRate,
+                    price: (1 - fraction) * currentRate.price + fraction * nextRate.price,
+                };
+            };
+
+            periods.forEach((p, idx) => {
+                const z = periodZones[idx];
+                const rates = getInterpolatedRates(p.startTime);
 
                 const pt: any = {
                     ts: p.startTime,
@@ -587,9 +636,9 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     plannedSOC: p.startSoc,
                     batterySOCIfUsed: p.startSoc,
                     batteryReserveSOC: reserveSOC,
-                    predictedSolarKWH: solarRate,
-                    avgHomeLoadKWH: Math.floor(loadRate * 10) / 10,
-                    gridChargeDollarsPerKWH: price,
+                    predictedSolarKWH: rates.solarRate,
+                    avgHomeLoadKWH: Math.floor(rates.loadRate * 10) / 10,
+                    gridChargeDollarsPerKWH: rates.price,
                     isHistory: false,
                     period: p,
                     zone: z.label,
@@ -611,15 +660,16 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 planData.push(pt);
 
                 if (idx === periods.length - 1) {
+                    const endRates = getInterpolatedRates(p.endTime);
                     const endPt: any = {
                         ts: p.endTime,
                         hour: new Date(p.endTime).getHours(),
                         plannedSOC: p.endSoc,
                         batterySOCIfUsed: p.endSoc,
                         batteryReserveSOC: reserveSOC,
-                        predictedSolarKWH: solarRate,
-                        avgHomeLoadKWH: Math.floor(loadRate * 10) / 10,
-                        gridChargeDollarsPerKWH: price,
+                        predictedSolarKWH: endRates.solarRate,
+                        avgHomeLoadKWH: Math.floor(endRates.loadRate * 10) / 10,
+                        gridChargeDollarsPerKWH: endRates.price,
                         isHistory: false,
                         zone: z.label,
                         zoneColor: z.color,
