@@ -60,6 +60,42 @@ func TestReportBrowser(t *testing.T) {
 		assert.Contains(t, logOutput, "Ad was heavy")
 	})
 
+	t.Run("Handle Notification Error", func(t *testing.T) {
+		payload := "[{\"age\": 5, \"body\": {\"message\": \"Failed to load notification icon\", \"name\": \"TypeError\", \"phase\": \"primary_show_notification\", \"title\": \"RateRudder Alert\", \"tag\": \"price-spike\", \"stack\": \"TypeError: Failed to load icon...\", \"data\": {\"url\": \"/dashboard\"}}, \"type\": \"x-notification-error\", \"url\": \"https://example.com/sw.js\", \"user_agent\": \"Mozilla/5.0\"}]"
+
+		req := httptest.NewRequest(http.MethodPost, "/api/report/browser", bytes.NewBufferString(payload))
+		ctx, buf := setupTestLogger(req.Context())
+		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv := &Server{}
+		srv.handleReportBrowser(w, req)
+
+		assert.Equal(t, http.StatusNoContent, w.Code)
+		logOutput := buf.String()
+		assert.Contains(t, logOutput, "Service Worker Notification Error")
+		assert.Contains(t, logOutput, "Failed to load notification icon")
+		assert.Contains(t, logOutput, "primary_show_notification")
+		assert.Contains(t, logOutput, "RateRudder Alert")
+		assert.Contains(t, logOutput, "price-spike")
+		assert.Contains(t, logOutput, "TypeError")
+	})
+
+	t.Run("Handle Invalid Notification Error Body", func(t *testing.T) {
+		payload := "[{\"age\": 5, \"body\": \"invalid body string\", \"type\": \"x-notification-error\", \"url\": \"https://example.com/sw.js\", \"user_agent\": \"Mozilla/5.0\"}]"
+
+		req := httptest.NewRequest(http.MethodPost, "/api/report/browser", bytes.NewBufferString(payload))
+		ctx, buf := setupTestLogger(req.Context())
+		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv := &Server{}
+		srv.handleReportBrowser(w, req)
+
+		assert.Equal(t, http.StatusNoContent, w.Code)
+		assert.Contains(t, buf.String(), "failed to decode notification error report body")
+	})
+
 	t.Run("Handle Invalid JSON", func(t *testing.T) {
 		payload := "invalid json"
 

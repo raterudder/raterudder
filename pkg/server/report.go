@@ -30,6 +30,21 @@ type InterventionReportBody struct {
 	ColumnNumber int    `json:"columnNumber"`
 }
 
+// NotificationErrorReportBody defines the body of a custom ("faked") browser report
+// sent by the service worker when a push notification fails to display or parse.
+// We use the "x-notification-error" type (with custom 'x-' prefix) to avoid collisions
+// with any future native W3C Reporting API types, formatting it as a synthetic BrowserReport
+// to reuse the unified /api/report/browser pipeline.
+type NotificationErrorReportBody struct {
+	Message string         `json:"message"`
+	Name    string         `json:"name,omitempty"`
+	Stack   string         `json:"stack,omitempty"`
+	Phase   string         `json:"phase,omitempty"`
+	Title   string         `json:"title,omitempty"`
+	Tag     string         `json:"tag,omitempty"`
+	Data    map[string]any `json:"data,omitempty"`
+}
+
 type BrowserReport struct {
 	Age       int             `json:"age"`
 	Body      json.RawMessage `json:"body"`
@@ -92,6 +107,25 @@ func (s *Server) handleReportBrowser(w http.ResponseWriter, r *http.Request) {
 				slog.String("sourceFile", body.SourceFile),
 				slog.Int("lineNumber", body.LineNumber),
 				slog.Int("columnNumber", body.ColumnNumber),
+			)
+		} else if report.Type == "x-notification-error" {
+			// Synthetic report sent by the service worker to leverage the existing browser report ingestion pipeline
+			var body NotificationErrorReportBody
+			if err := json.Unmarshal(report.Body, &body); err != nil {
+				log.Ctx(ctx).WarnContext(ctx, "failed to decode notification error report body", slog.Any("error", err))
+				continue
+			}
+			log.Ctx(ctx).ErrorContext(ctx, "Service Worker Notification Error",
+				slog.String("type", report.Type),
+				slog.String("url", report.URL),
+				slog.String("user_agent", report.UserAgent),
+				slog.String("message", body.Message),
+				slog.String("name", body.Name),
+				slog.String("phase", body.Phase),
+				slog.String("title", body.Title),
+				slog.String("tag", body.Tag),
+				slog.String("stack", body.Stack),
+				slog.Any("data", body.Data),
 			)
 		} else {
 			log.Ctx(ctx).WarnContext(ctx, "unknown browser report type",
