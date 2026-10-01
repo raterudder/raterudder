@@ -700,6 +700,7 @@ export interface PriceHistoryRes {
     tsHourStart: string;
     dollarsPerKWH: number;
     gridUseDollarsPerKWH: number;
+    exportDollarsPerKWH?: number;
 }
 
 export interface WeatherRes {

@@ -28,6 +28,7 @@ type PriceHistoryRes struct {
 	TSHourStart          time.Time `json:"tsHourStart"`
 	DollarsPerKWH        float64   `json:"dollarsPerKWH"`
 	GridUseDollarsPerKWH float64   `json:"gridUseDollarsPerKWH"`
+	ExportDollarsPerKWH  float64   `json:"exportDollarsPerKWH,omitempty"`
 }
 
 // WeatherRes represents the solar forecast data for a specific hour in a response.
@@ -72,10 +73,15 @@ func buildEnergyHistoryRes(stats []types.EnergyStats, start, end time.Time) []En
 func buildPriceHistoryRes(prices []types.Price) []PriceHistoryRes {
 	res := make([]PriceHistoryRes, 0, len(prices))
 	for _, p := range prices {
+		exportRate := p.DollarsPerKWH + p.GenerationAdjustmentDollarsPerKWH
+		if p.SeparateGenerationCredit {
+			exportRate = p.GenerationCreditDollarsPerKWH
+		}
 		res = append(res, PriceHistoryRes{
 			TSHourStart:          p.TSStart,
 			DollarsPerKWH:        p.DollarsPerKWH,
 			GridUseDollarsPerKWH: p.GridUseDollarsPerKWH,
+			ExportDollarsPerKWH:  exportRate,
 		})
 	}
 	return res

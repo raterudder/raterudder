@@ -25,8 +25,9 @@ type ChartConfig = {
     gradientId: string;
     unit: string;
     helpDescription?: React.ReactNode;
+    areaType?: 'monotone' | 'step' | 'stepAfter' | 'stepBefore';
     referenceLine?: { dataKey: string; label: string; color: string };
-    additionalLines?: { dataKey: string; color: string; strokeDasharray?: string; type?: 'monotone' | 'step' | 'stepAfter' | 'stepBefore' }[];
+    additionalLines?: { dataKey: string; label?: string; color: string; strokeDasharray?: string; type?: 'monotone' | 'step' | 'stepAfter' | 'stepBefore' }[];
 };
 
 const charts: ChartConfig[] = [
@@ -77,11 +78,21 @@ const charts: ChartConfig[] = [
         color: '#10b981',
         gradientId: 'priceGrad',
         unit: ' $/kWh',
+        areaType: 'stepAfter',
         helpDescription: (
             <p>
-                Displays hourly electricity import prices ($/kWh) according to your utility rate plan. RateRudder uses these rates to schedule low-cost grid charging and avoid expensive peak pricing.
+                Displays hourly electricity import prices and export credit rates ($/kWh) according to your utility rate plan. RateRudder uses these rates to schedule low-cost grid charging, avoid expensive peak pricing, and optimize solar or battery export credits.
             </p>
         ),
+        additionalLines: [
+            {
+                dataKey: 'gridExportDollarsPerKWH',
+                label: 'Export Rate',
+                color: '#f59e0b',
+                strokeDasharray: '4 3',
+                type: 'stepAfter',
+            },
+        ],
     },
 ];
 
@@ -121,6 +132,7 @@ interface ProcessedModelingHour extends ModelingHour {
     batterySOCIfUsed: number;
     batteryReserveSOC: number;
     plannedSOC?: number;
+    gridExportDollarsPerKWH?: number;
 }
 
 function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerAction, planPeriods }: {
@@ -227,6 +239,23 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                     )}
                 </div>
             )}
+            {config.dataKey === 'gridChargeDollarsPerKWH' && (
+                <div className="mode-legend" aria-label="Rate Legend">
+                    <div className="mode-legend-item">
+                        <span className="mode-legend-line" style={{ backgroundColor: config.color }} />
+                        <span>Import Rate</span>
+                    </div>
+                    <div className="mode-legend-item">
+                        <span
+                            className="mode-legend-line"
+                            style={{
+                                background: 'repeating-linear-gradient(90deg, #f59e0b, #f59e0b 4px, transparent 4px, transparent 7px)',
+                            }}
+                        />
+                        <span>Export Rate</span>
+                    </div>
+                </div>
+            )}
             <ResponsiveContainer width="100%" height={200}>
                 <AreaChart data={data} syncId="forecast" margin={{ top: 5, right: isMobile ? 0 : 20, left: 0, bottom: 5 }}>
                     <defs>
@@ -309,12 +338,14 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                                         } else if (entry.dataKey === 'avgHomeLoadKWH') {
                                             displayName = 'Home Load';
                                         } else if (entry.dataKey === 'gridChargeDollarsPerKWH') {
-                                            displayName = 'Grid Cost';
+                                            displayName = 'Import Rate';
+                                        } else if (entry.dataKey === 'gridExportDollarsPerKWH' || entry.dataKey === 'solarOppDollarsPerKWH') {
+                                            displayName = 'Export Rate';
                                         }
 
                                         const val = Number(entry.value ?? 0);
                                         const formattedVal = config.unit.includes('$')
-                                            ? `$${val.toFixed(4)}`
+                                            ? (val < 0 ? `-$${Math.abs(val).toFixed(4)}` : `$${val.toFixed(4)}`)
                                             : `${val.toFixed(1)}${config.unit.trim()}`;
 
                                         return (
@@ -385,7 +416,7 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                     ) : (
                         <>
                             <Area
-                                type="monotone"
+                                type={config.areaType || 'monotone'}
                                 dataKey={config.dataKey}
                                 stroke={config.color}
                                 strokeWidth={3}
@@ -551,6 +582,9 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 const historyMapped = energyHist.map((h: any) => {
                     const hTime = new Date(h.tsHourStart).getTime();
                     const price = priceHist.find((p: any) => new Date(p.tsHourStart).getTime() === hTime);
+                    const exportPrice = price
+                        ? (price.exportDollarsPerKWH ?? price.dollarsPerKWH ?? 0)
+                        : 0;
                     return {
                         ts: h.tsHourStart,
                         hour: new Date(h.tsHourStart).getHours(),
@@ -561,6 +595,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                         predictedSolarKWH: h.solarKWH || 0,
                         avgHomeLoadKWH: Math.floor((h.homeLoadKWH || 0) * 10) / 10,
                         gridChargeDollarsPerKWH: price ? price.dollarsPerKWH + (price.gridUseDollarsPerKWH || 0) : 0,
+                        gridExportDollarsPerKWH: exportPrice,
                         isHistory: true,
                         zone: 'Historical Actual',
                         zoneColor: 'var(--text-muted)',
@@ -571,9 +606,8 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
 
             const periodZones = periods.map((p) => classifyPlanPeriod(p, reserveSOC));
 
-            // Base hourly rates for each period
+            // Base hourly rates for each period (used for solar and home load interpolation)
             const periodRates = periods.map((p) => {
-                const price = p.importDollars ?? 0;
                 const solarRate = p.durationHours > 0 ? (p.solarKWH || 0) / p.durationHours : (p.solarKWH || 0);
                 const loadRate = p.durationHours > 0 ? (p.loadKWH || 0) / p.durationHours : (p.loadKWH || 0);
                 return {
@@ -581,7 +615,6 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     endTimeMs: new Date(p.tsEnd).getTime(),
                     solarRate,
                     loadRate,
-                    price,
                 };
             });
 
@@ -618,7 +651,6 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 return {
                     solarRate: (1 - fraction) * currentRate.solarRate + fraction * nextRate.solarRate,
                     loadRate: (1 - fraction) * currentRate.loadRate + fraction * nextRate.loadRate,
-                    price: (1 - fraction) * currentRate.price + fraction * nextRate.price,
                 };
             };
 
@@ -634,7 +666,8 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     batteryReserveSOC: reserveSOC,
                     predictedSolarKWH: rates.solarRate,
                     avgHomeLoadKWH: Math.floor(rates.loadRate * 10) / 10,
-                    gridChargeDollarsPerKWH: rates.price,
+                    gridChargeDollarsPerKWH: p.importDollars ?? 0,
+                    gridExportDollarsPerKWH: p.exportDollars ?? 0,
                     isHistory: false,
                     period: p,
                     zone: z.label,
@@ -665,7 +698,8 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                         batteryReserveSOC: reserveSOC,
                         predictedSolarKWH: endRates.solarRate,
                         avgHomeLoadKWH: Math.floor(endRates.loadRate * 10) / 10,
-                        gridChargeDollarsPerKWH: endRates.price,
+                        gridChargeDollarsPerKWH: p.importDollars ?? 0,
+                        gridExportDollarsPerKWH: p.exportDollars ?? 0,
                         isHistory: false,
                         zone: z.label,
                         zoneColor: z.color,
@@ -693,6 +727,9 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
             const historyMapped = energyHist.map((h: any) => {
                 const hTime = new Date(h.tsHourStart).getTime();
                 const price = priceHist.find((p: any) => new Date(p.tsHourStart).getTime() === hTime);
+                const exportPrice = price
+                    ? (price.exportDollarsPerKWH ?? price.dollarsPerKWH ?? 0)
+                    : 0;
                 return {
                     ts: h.tsHourStart,
                     hour: new Date(h.tsHourStart).getHours(),
@@ -703,8 +740,9 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     todaySolarTrend: 1.0, // Used for raw solar calc below
                     avgHomeLoadKWH: h.homeLoadKWH || 0,
                     gridChargeDollarsPerKWH: price ? price.dollarsPerKWH + (price.gridUseDollarsPerKWH || 0) : 0,
+                    gridExportDollarsPerKWH: exportPrice,
                     netLoadSolarKWH: -h.solarKWH,
-                    solarOppDollarsPerKWH: 0,
+                    solarOppDollarsPerKWH: exportPrice,
                     isHistory: true,
                 };
             });
@@ -732,6 +770,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     ? todaySolarTrend
                     : 0,
                 avgHomeLoadKWH: Math.floor((avgHomeLoadKWH || 0) * 10) / 10,
+                gridExportDollarsPerKWH: h.gridExportDollarsPerKWH ?? h.solarOppDollarsPerKWH ?? 0,
             };
         });
     }, [rawModelingData, includeHistory, isPlanActive, settings]);

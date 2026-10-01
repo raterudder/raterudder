@@ -51,6 +51,7 @@ function makeTestPlan(): Plan {
             solarKWH: Math.max(0, 2.0 * Math.sin((i / 24) * Math.PI)),
             loadKWH: 1.2,
             importDollars: 0.17 + (i === 18 ? 0.30 : 0),
+            exportDollars: 0.08,
             batteryMode: i === 18 ? api.BatteryMode.Load : (i < 5 ? api.BatteryMode.ChargeAny : api.BatteryMode.Standby),
             solarMode: 0 as any,
             reason: i === 18 ? api.ActionReason.ArbitrageSave : api.ActionReason.ArbitrageChargeSave,
@@ -480,6 +481,27 @@ describe('Forecast Page', () => {
             expect(screen.getByText('Predicted Solar (kWh)')).toBeInTheDocument();
             expect(screen.getByText('Predicted Home Load (kWh)')).toBeInTheDocument();
         });
+    });
+
+    it('renders import and export rate legend on grid charge cost chart', async () => {
+        const plan = makeTestPlan();
+        (fetchModeling as any).mockResolvedValue({
+            plan,
+            energyHistory: [],
+            priceHistory: [],
+            weather: [],
+        });
+
+        renderForecast();
+
+        await waitFor(() => {
+            expect(screen.getByText('24-Hour Energy Plan')).toBeInTheDocument();
+        });
+
+        expect(screen.getByText('Grid Charge Cost ($/kWh)')).toBeInTheDocument();
+        expect(screen.getByLabelText('Rate Legend')).toBeInTheDocument();
+        expect(screen.getByText('Import Rate')).toBeInTheDocument();
+        expect(screen.getByText('Export Rate')).toBeInTheDocument();
     });
 });
 

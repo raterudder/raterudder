@@ -373,8 +373,8 @@ func TestHandleForecast(t *testing.T) {
 			}},
 		}, nil)
 		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{
-			{TSStart: pastHour2, DollarsPerKWH: 0.1},
-			{TSStart: pastHour1, DollarsPerKWH: 0.1},
+			{TSStart: pastHour2, DollarsPerKWH: 0.1, GenerationAdjustmentDollarsPerKWH: -0.02},
+			{TSStart: pastHour1, DollarsPerKWH: 0.15, SeparateGenerationCredit: true, GenerationCreditDollarsPerKWH: 0.08},
 		}, nil)
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil)
 		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{
@@ -440,6 +440,18 @@ func TestHandleForecast(t *testing.T) {
 				assert.Equal(t, 2.0, eh.SolarKWH)
 				assert.Equal(t, 3.0, eh.HomeLoadKWH)
 				assert.Equal(t, 60.0, eh.AvgBatterySOC) // (50+70)/2
+			}
+		}
+
+		assert.Len(t, data.PriceHistory, 2)
+		for _, ph := range data.PriceHistory {
+			if ph.TSHourStart.Equal(pastHour2) {
+				assert.Equal(t, 0.1, ph.DollarsPerKWH)
+				assert.InDelta(t, 0.08, ph.ExportDollarsPerKWH, 0.0001)
+			}
+			if ph.TSHourStart.Equal(pastHour1) {
+				assert.Equal(t, 0.15, ph.DollarsPerKWH)
+				assert.Equal(t, 0.08, ph.ExportDollarsPerKWH)
 			}
 		}
 	})
