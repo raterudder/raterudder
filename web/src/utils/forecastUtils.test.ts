@@ -26,7 +26,11 @@ describe('classifyPlanPeriod', () => {
         expect(ALL_ZONES).toHaveLength(6);
         expect(ALL_ZONES.map((z) => z.key)).toContain('solarCharge');
         expect(ALL_ZONES.map((z) => z.key)).toContain('poweringHome');
+        expect(ALL_ZONES.map((z) => z.key)).toContain('solarExport');
+        expect(ALL_ZONES.map((z) => z.key)).toContain('standby');
         expect(ALL_ZONES.map((z) => z.key)).toContain('gridCharge');
+        expect(ALL_ZONES.map((z) => z.key)).toContain('gridExport');
+        expect(ALL_ZONES.map((z) => z.key)).not.toContain('atReserve');
         expect(ALL_ZONES.map((z) => z.key)).not.toContain('peakDischarge');
     });
 
@@ -52,6 +56,20 @@ describe('classifyPlanPeriod', () => {
         expect(result.key).toBe('gridExport');
         expect(result.label).toBe('Grid Export');
         expect(result.color).toBe('#f59e0b');
+    });
+
+    it('classifies direct solar export as Solar Export', () => {
+        const period = makePeriod({
+            batteryMode: BatteryMode.Load,
+            solarMode: 3,
+            reason: ActionReason.DirectExport,
+            startSoc: 70,
+            endSoc: 65,
+        });
+        const result = classifyPlanPeriod(period, 10);
+        expect(result.key).toBe('solarExport');
+        expect(result.label).toBe('Solar Export');
+        expect(result.color).toBe('#f97316');
     });
 
     it('classifies discharging during peak rate as Powering Home', () => {
@@ -93,7 +111,7 @@ describe('classifyPlanPeriod', () => {
         expect(result.color).toBe('#38bdf8');
     });
 
-    it('classifies period at reserve limit as At Reserve', () => {
+    it('classifies period at reserve limit as Standby', () => {
         const period = makePeriod({
             batteryMode: BatteryMode.Load,
             reason: ActionReason.BatteryAtReserve,
@@ -101,20 +119,21 @@ describe('classifyPlanPeriod', () => {
             endSoc: 20,
         });
         const result = classifyPlanPeriod(period, 20);
-        expect(result.key).toBe('atReserve');
-        expect(result.label).toBe('At Reserve');
-        expect(result.color).toBe('#94a3b8');
+        expect(result.key).toBe('standby');
+        expect(result.label).toBe('Standby');
+        expect(result.color).toBe('#64748b');
     });
 
-    it('classifies flat SOC near reserve as At Reserve', () => {
+    it('classifies flat SOC near reserve as Standby', () => {
         const period = makePeriod({
             batteryMode: BatteryMode.Load,
             startSoc: 20.5,
             endSoc: 20.5,
         });
         const result = classifyPlanPeriod(period, 20);
-        expect(result.key).toBe('atReserve');
-        expect(result.label).toBe('At Reserve');
+        expect(result.key).toBe('standby');
+        expect(result.label).toBe('Standby');
+        expect(result.color).toBe('#64748b');
     });
 
     it('classifies flat SOC holding charge away from reserve as Standby', () => {

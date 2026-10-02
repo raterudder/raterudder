@@ -218,6 +218,16 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
         return false;
     }, [config.dataKey, data]);
 
+    const lastReserveVal = React.useMemo(() => {
+        for (let i = data.length - 1; i >= 0; i--) {
+            const val = data[i].batteryReserveSOC;
+            if (val !== undefined && val !== null && !isNaN(val) && val > 0) {
+                return val;
+            }
+        }
+        return undefined;
+    }, [data]);
+
     return (
         <div className="chart-card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
@@ -242,17 +252,6 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                         <div className="mode-legend-item">
                             <span className="mode-legend-line" style={{ backgroundColor: 'var(--outline-variant)' }} />
                             <span>History</span>
-                        </div>
-                    )}
-                    {hasReserveLine && (
-                        <div className="mode-legend-item">
-                            <span
-                                className="mode-legend-line"
-                                style={{
-                                    background: 'repeating-linear-gradient(90deg, #ef4444, #ef4444 6px, transparent 6px, transparent 10px)',
-                                }}
-                            />
-                            <span>Reserve</span>
                         </div>
                     )}
                 </div>
@@ -428,7 +427,20 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                                     strokeWidth={2}
                                     strokeDasharray="6 4"
                                     dot={false}
+                                    activeDot={false}
                                     isAnimationActive={false}
+                                />
+                            )}
+                            {hasReserveLine && lastReserveVal !== undefined && (
+                                <ReferenceLine
+                                    y={lastReserveVal}
+                                    stroke="none"
+                                    label={{
+                                        value: 'Reserve',
+                                        fill: '#ef4444',
+                                        fontSize: 11,
+                                        position: 'insideTopRight',
+                                    }}
                                 />
                             )}
                         </>
@@ -451,8 +463,21 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                                     strokeWidth={2}
                                     strokeDasharray={line.strokeDasharray}
                                     dot={false}
+                                    activeDot={line.dataKey === 'batteryReserveSOC' ? false : undefined}
                                 />
                             ))}
+                            {config.dataKey === 'batterySOCIfUsed' && lastReserveVal !== undefined && (
+                                <ReferenceLine
+                                    y={lastReserveVal}
+                                    stroke="none"
+                                    label={{
+                                        value: 'Reserve',
+                                        fill: '#ef4444',
+                                        fontSize: 11,
+                                        position: 'insideTopRight',
+                                    }}
+                                />
+                            )}
                         </>
                     )}
                     {config.referenceLine && refValue !== undefined && (

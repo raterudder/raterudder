@@ -5,7 +5,7 @@ import { Router } from 'wouter';
 import Forecast from './Forecast';
 import * as api from '../api';
 import { setupDefaultApiMocks } from '../test/apiMocks';
-import type { ModelingHour, Plan, PlanPeriod } from '../api';
+import { BatteryMode, ActionReason, type ModelingHour, type Plan, type PlanPeriod } from '../api';
 const { fetchModeling, fetchSettings } = api;
 
 vi.mock('../api');
@@ -436,10 +436,44 @@ describe('Forecast Page', () => {
 
         // Inactive modes are NOT in the legend
         expect(screen.queryByText('Grid Export')).not.toBeInTheDocument();
+        expect(screen.queryByText('Solar Export')).not.toBeInTheDocument();
         expect(screen.queryByText('Peak Discharge')).not.toBeInTheDocument();
 
         // Reserve reference line is rendered on chart
         expect(screen.getByText('Reserve')).toBeInTheDocument();
+    });
+
+    it('renders Solar Export in dynamic legend when direct solar export is active', async () => {
+        const plan = makeTestPlan();
+        plan.periods.push({
+            tsStart: '2026-02-11T14:00:00Z',
+            tsEnd: '2026-02-11T15:00:00Z',
+            durationHours: 1,
+            startSoc: 80,
+            endSoc: 60,
+            batteryMode: BatteryMode.Load,
+            solarMode: 3,
+            reason: ActionReason.DirectExport,
+            gridImportKWH: 0,
+            gridExportKWH: 2.5,
+            costDollars: 0,
+            importDollars: 0.20,
+        });
+
+        (fetchModeling as any).mockResolvedValue({
+            plan,
+            energyHistory: [],
+            priceHistory: [],
+            weather: [],
+        });
+
+        renderForecast();
+
+        await waitFor(() => {
+            expect(screen.getByText('24-Hour Energy Plan')).toBeInTheDocument();
+        });
+
+        expect(screen.getByText('Solar Export')).toBeInTheDocument();
     });
 
     it('normalizes sub-hourly plan intervals for predicted solar and load rates', async () => {
