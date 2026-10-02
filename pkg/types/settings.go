@@ -49,8 +49,10 @@ type Settings struct {
 	AlwaysChargeUnderDollarsPerKWH          float64 `json:"alwaysChargeUnderDollarsPerKWH"`
 	MinArbitrageDifferenceDollarsPerKWH     float64 `json:"minArbitrageDifferenceDollarsPerKWH"`
 	MinDeficitPriceDifferenceDollarsPerKWH  float64 `json:"minDeficitPriceDifferenceDollarsPerKWH"`
-	MinExportHoldDifferenceDollarsPerKWH    float64 `json:"minExportHoldDifferenceDollarsPerKWH"`
 	MinBatteryExportDifferenceDollarsPerKWH float64 `json:"minBatteryExportDifferenceDollarsPerKWH"`
+
+	// Deprecated: MinExportHoldDifferenceDollarsPerKWH is deprecated in favor of internal cycling hurdle and RTE. Retained for backwards compatibility in decide path.
+	MinExportHoldDifferenceDollarsPerKWH float64 `json:"minExportHoldDifferenceDollarsPerKWH"`
 
 	// How to value solar exports when net metering credits are active. Valid values: "", "lowest", "highest", "none". Default is "lowest".
 	SolarNetMeteringCreditsValue string `json:"solarNetMeteringCreditsValue"`

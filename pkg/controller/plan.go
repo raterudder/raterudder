@@ -87,6 +87,12 @@ const (
 	// Differences below half a cent are typically floating-point noise or insignificant tariff riders.
 	priceMaterialityThresholdDollars = 0.005
 
+	// defaultBatteryCyclingHoldHurdleDollars ($0.01/kWh, or 1.0¢/kWh) is the marginal battery cycling
+	// and degradation hurdle applied during forward search when daytime solar refill is projected.
+	// Discharging the battery to save cheap off-peak grid imports is penalized by this amount to prevent
+	// premature cell wear for negligible fractional-cent arbitrage.
+	defaultBatteryCyclingHoldHurdleDollars = 0.01
+
 	// minPeakRateSpreadDollars ($0.10/kWh, or 10¢/kWh) is the minimum required price spread across the planning horizon
 	// before declaring an interval as "peak" in user explanations. This prevents minor off-peak variations or riders
 	// (like 15¢ vs 8¢) from erroneously telling users they are in an expensive "peak rate" period when true TOU peak
@@ -1276,8 +1282,8 @@ func (c *Controller) generateActionCandidates(
 	var hasUpcomingSolarRefill bool
 	var refillExportRate float64
 	var earliestSolarRefillTime time.Time
-	if isAboveReserve && settings.GridExportSolar && !isFlatNEM && settings.MinExportHoldDifferenceDollarsPerKWH > 0 {
-		holdHurdle := settings.MinExportHoldDifferenceDollarsPerKWH
+	if isAboveReserve && settings.GridExportSolar && !isFlatNEM && defaultBatteryCyclingHoldHurdleDollars > 0 {
+		holdHurdle := defaultBatteryCyclingHoldHurdleDollars
 		for i := stepIdx + 1; i < len(timeline); i++ {
 			if timeline[i].solarKWH > minSignificantSolarKW*timeline[i].durationHours &&
 				interval.importRate <= timeline[i].exportRate+holdHurdle+priceEpsilonForEquality {
@@ -1948,17 +1954,17 @@ func (c *Controller) searchOptimalPlan(
 		capacityKWH = initial.capacityKWH
 	}
 	cycleHurdle := settings.MinBatteryExportDifferenceDollarsPerKWH
-	holdHurdle := settings.MinExportHoldDifferenceDollarsPerKWH
 	isFlatNEM := isFlatNetMetering(settings.UtilityRateOptions)
 
 	// Pre-calculate whether daytime solar refill is projected ahead for each timeline interval
-	// Discharging is only penalized if tonight's import rate is within holdHurdle of daytime solar export credit.
+	// Discharging is only penalized if tonight's import rate is within
+	// defaultBatteryCyclingHoldHurdleDollars of daytime solar export credit.
 	solarRefillAhead := make([]bool, len(timeline))
-	if settings.GridExportSolar && !isFlatNEM && holdHurdle > 0 {
+	if settings.GridExportSolar && !isFlatNEM {
 		for i := 0; i < len(timeline); i++ {
 			for j := i + 1; j < len(timeline); j++ {
 				if timeline[j].solarKWH > minSignificantSolarKW*timeline[j].durationHours &&
-					timeline[i].importRate <= timeline[j].exportRate+holdHurdle+priceEpsilonForEquality {
+					timeline[i].importRate <= timeline[j].exportRate+defaultBatteryCyclingHoldHurdleDollars+priceEpsilonForEquality {
 					solarRefillAhead[i] = true
 					break
 				}
@@ -2060,8 +2066,8 @@ func (c *Controller) searchOptimalPlan(
 					nextState, metrics := stepPhysics(parent.state, cand, interval, settings, roundTripEff)
 
 					var holdCost float64
-					if settings.GridExportSolar && !isFlatNEM && solarRefillAhead[stepIdx] && holdHurdle > 0 {
-						holdCost = metrics.batSuppliedHomeKWH * holdHurdle
+					if settings.GridExportSolar && !isFlatNEM && solarRefillAhead[stepIdx] {
+						holdCost = metrics.batSuppliedHomeKWH * defaultBatteryCyclingHoldHurdleDollars
 					}
 
 					var transitionCost float64
