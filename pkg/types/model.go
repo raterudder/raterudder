@@ -446,6 +446,7 @@ type PlanPeriod struct {
 	Reason        ActionReason `json:"reason"`
 	StartSOC      float64      `json:"startSoc"`
 	EndSOC        float64      `json:"endSoc"`
+	ReserveSOC    float64      `json:"reserveSOC,omitempty"`
 	LoadKWH       float64      `json:"loadKWH,omitempty"`
 	SolarKWH      float64      `json:"solarKWH,omitempty"`
 	GridImportKWH float64      `json:"gridImportKWH,omitempty"`

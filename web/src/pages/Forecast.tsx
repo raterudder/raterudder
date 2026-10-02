@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
-import { fetchModeling, fetchSettings } from '../api';
+import { fetchModeling } from '../api';
 import type { ForecastResponse, ModelingHour, Settings, PlanPeriod } from '../api';
 import { Switch } from '@base-ui/react/switch';
 import { Field } from '@base-ui/react/field';
@@ -205,11 +205,18 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
         }
         const usedKeys = new Set<string>();
         for (const p of planPeriods) {
-            const z = classifyPlanPeriod(p, reserveSOC);
+            const z = classifyPlanPeriod(p, p.reserveSOC ?? reserveSOC);
             usedKeys.add(z.key);
         }
         return ALL_ZONES.filter((z) => usedKeys.has(z.key));
     }, [config.dataKey, planPeriods, reserveSOC]);
+
+    const hasReserveLine = React.useMemo(() => {
+        if (config.dataKey === 'plannedSOC') {
+            return data.some((d) => d.batteryReserveSOC !== undefined && d.batteryReserveSOC > 0);
+        }
+        return false;
+    }, [config.dataKey, data]);
 
     return (
         <div className="chart-card">
@@ -235,6 +242,17 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                         <div className="mode-legend-item">
                             <span className="mode-legend-line" style={{ backgroundColor: 'var(--outline-variant)' }} />
                             <span>History</span>
+                        </div>
+                    )}
+                    {hasReserveLine && (
+                        <div className="mode-legend-item">
+                            <span
+                                className="mode-legend-line"
+                                style={{
+                                    background: 'repeating-linear-gradient(90deg, #ef4444, #ef4444 6px, transparent 6px, transparent 10px)',
+                                }}
+                            />
+                            <span>Reserve</span>
                         </div>
                     )}
                 </div>
@@ -401,17 +419,18 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                                     isAnimationActive={false}
                                 />
                             )}
-                            <ReferenceLine
-                                y={reserveSOC}
-                                stroke="#ef4444"
-                                strokeDasharray="6 4"
-                                label={{
-                                    value: 'Reserve',
-                                    fill: '#ef4444',
-                                    fontSize: 10,
-                                    position: 'insideBottomLeft',
-                                }}
-                            />
+                            {hasReserveLine && (
+                                <Line
+                                    key="batteryReserveSOC"
+                                    type="stepAfter"
+                                    dataKey="batteryReserveSOC"
+                                    stroke="#ef4444"
+                                    strokeWidth={2}
+                                    strokeDasharray="6 4"
+                                    dot={false}
+                                    isAnimationActive={false}
+                                />
+                            )}
                         </>
                     ) : (
                         <>
@@ -496,10 +515,15 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
     );
 }
 
-const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
+interface ForecastProps {
+    siteID?: string;
+    settings?: Settings | null;
+}
+
+const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
     const [rawModelingData, setRawModelingData] = useState<ForecastResponse | null>(null);
-    const [settings, setSettings] = useState<Settings | null>(null);
-    const [loadPredictionMode, setLoadPredictionMode] = useState<'default' | 'conservative'>('default');
+    const initialStrategy = settings?.homeLoadPredictionStrategy === 'conservative' ? 'conservative' : 'default';
+    const [loadPredictionMode, setLoadPredictionMode] = useState<'default' | 'conservative'>(initialStrategy);
     const [initialized, setInitialized] = useState(false);
     const lastFetchedStrategyRef = useRef<string | null>(null);
     const [loading, setLoading] = useState(true);
@@ -514,20 +538,18 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
         return () => window.removeEventListener('resize', handleResize);
     }, []);
 
-    // Initial load on siteID change: fetch settings first, then fetch matching modeling.
+    // Initial load on siteID change or settings strategy change: fetch matching modeling.
     useEffect(() => {
         const loadInitialData = async () => {
             setLoading(true);
             setInitialized(false);
             try {
-                const sett = await fetchSettings(siteID);
-                const strategy = sett.homeLoadPredictionStrategy === 'conservative' ? 'conservative' : 'default';
+                const strategy = settings?.homeLoadPredictionStrategy === 'conservative' ? 'conservative' : 'default';
 
                 // Fetch modeling using the resolved settings strategy
                 const mod = await fetchModeling(siteID, strategy);
 
                 // Update states together
-                setSettings(sett);
                 setLoadPredictionMode(strategy);
                 lastFetchedStrategyRef.current = strategy;
                 setRawModelingData(mod);
@@ -539,7 +561,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
             }
         };
         loadInitialData();
-    }, [siteID]);
+    }, [siteID, settings?.homeLoadPredictionStrategy]);
 
     // Re-fetch modeling only when toggle is manually flipped by user after initialization
     useEffect(() => {
@@ -590,7 +612,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                         hour: new Date(h.tsHourStart).getHours(),
                         plannedSOC: h.avgBatterySOC,
                         batterySOCIfUsed: h.avgBatterySOC,
-                        batteryReserveSOC: reserveSOC,
+                        batteryReserveSOC: periods[0]?.reserveSOC,
                         historySOC: h.avgBatterySOC,
                         predictedSolarKWH: h.solarKWH || 0,
                         avgHomeLoadKWH: Math.floor((h.homeLoadKWH || 0) * 10) / 10,
@@ -604,7 +626,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                 planData = [...historyMapped];
             }
 
-            const periodZones = periods.map((p) => classifyPlanPeriod(p, reserveSOC));
+            const periodZones = periods.map((p) => classifyPlanPeriod(p, p.reserveSOC ?? reserveSOC));
 
             // Base hourly rates for each period (used for solar and home load interpolation)
             const periodRates = periods.map((p) => {
@@ -663,7 +685,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                     hour: new Date(p.tsStart).getHours(),
                     plannedSOC: p.startSoc,
                     batterySOCIfUsed: p.startSoc,
-                    batteryReserveSOC: reserveSOC,
+                    batteryReserveSOC: p.reserveSOC,
                     predictedSolarKWH: rates.solarRate,
                     avgHomeLoadKWH: Math.floor(rates.loadRate * 10) / 10,
                     gridChargeDollarsPerKWH: p.importDollars ?? 0,
@@ -695,7 +717,7 @@ const Forecast: React.FC<{ siteID?: string }> = ({ siteID }) => {
                         hour: new Date(p.tsEnd).getHours(),
                         plannedSOC: p.endSoc,
                         batterySOCIfUsed: p.endSoc,
-                        batteryReserveSOC: reserveSOC,
+                        batteryReserveSOC: p.reserveSOC,
                         predictedSolarKWH: endRates.solarRate,
                         avgHomeLoadKWH: Math.floor(endRates.loadRate * 10) / 10,
                         gridChargeDollarsPerKWH: p.importDollars ?? 0,

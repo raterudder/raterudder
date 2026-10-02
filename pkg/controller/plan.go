@@ -2900,6 +2900,7 @@ func finalizeDecisionAndPlan(
 			Reason:        action.reason,
 			StartSOC:      startState.soc,
 			EndSOC:        endState.soc,
+			ReserveSOC:    interval.minSOC,
 			LoadKWH:       interval.loadKWH,
 			SolarKWH:      interval.solarKWH,
 			GridImportKWH: metrics.gridImportKWH,

@@ -52,6 +52,7 @@ function makeTestPlan(): Plan {
             loadKWH: 1.2,
             importDollars: 0.17 + (i === 18 ? 0.30 : 0),
             exportDollars: 0.08,
+            reserveSOC: 20,
             batteryMode: i === 18 ? api.BatteryMode.Load : (i < 5 ? api.BatteryMode.ChargeAny : api.BatteryMode.Standby),
             solarMode: 0 as any,
             reason: i === 18 ? api.ActionReason.ArbitrageSave : api.ActionReason.ArbitrageChargeSave,
@@ -70,7 +71,8 @@ function makeTestPlan(): Plan {
     };
 }
 
-const renderForecast = () => render(<Router><Forecast /></Router>);
+const renderForecast = (props?: { siteID?: string; settings?: any }) =>
+    render(<Router><Forecast {...props} /></Router>);
 
 describe('Forecast Page', () => {
     beforeEach(() => {
@@ -164,9 +166,6 @@ describe('Forecast Page', () => {
     });
 
     it('defaults the toggle to checked if settings strategy is conservative', async () => {
-        (fetchSettings as any).mockResolvedValue({
-            homeLoadPredictionStrategy: 'conservative'
-        });
         const data = makeSimHours();
         (fetchModeling as any).mockResolvedValue({
             simulation: data,
@@ -175,7 +174,7 @@ describe('Forecast Page', () => {
             weather: []
         });
 
-        renderForecast();
+        renderForecast({ settings: { homeLoadPredictionStrategy: 'conservative' } });
 
         // Check toggle switch is present and checked
         const toggle = await screen.findByRole('switch', { name: /Conservative/i });
@@ -283,9 +282,6 @@ describe('Forecast Page', () => {
     it('does not make duplicate fetchModeling calls on initial load or toggle', async () => {
         const user = userEvent.setup();
         const data = makeSimHours();
-        (fetchSettings as any).mockResolvedValue({
-            homeLoadPredictionStrategy: 'conservative'
-        });
         (fetchModeling as any).mockResolvedValue({
             simulation: data,
             energyHistory: [],
@@ -293,15 +289,15 @@ describe('Forecast Page', () => {
             weather: []
         });
 
-        renderForecast();
+        renderForecast({ settings: { homeLoadPredictionStrategy: 'conservative' } });
 
         // 1. Initial load should happen once. Wait for the loading screen to disappear.
         await waitFor(() => {
             expect(screen.getByText('Battery (if used) (%)')).toBeInTheDocument();
         });
 
-        // The initial request to settings and modeling should be exactly 1.
-        expect(fetchSettings).toHaveBeenCalledTimes(1);
+        // The initial request to modeling should be exactly 1, and fetchSettings should not be called.
+        expect(fetchSettings).not.toHaveBeenCalled();
         expect(fetchModeling).toHaveBeenCalledTimes(1);
         expect(fetchModeling).toHaveBeenLastCalledWith(undefined, 'conservative');
 
@@ -502,6 +498,51 @@ describe('Forecast Page', () => {
         expect(screen.getByLabelText('Rate Legend')).toBeInTheDocument();
         expect(screen.getByText('Import Rate')).toBeInTheDocument();
         expect(screen.getByText('Export Rate')).toBeInTheDocument();
+    });
+
+    it('does not render reserve line or legend if plan periods do not have reserveSOC', async () => {
+        const plan = makeTestPlan();
+        plan.periods.forEach((p) => {
+            delete p.reserveSOC;
+        });
+
+        (fetchModeling as any).mockResolvedValue({
+            plan,
+            energyHistory: [],
+            priceHistory: [],
+            weather: [],
+        });
+
+        renderForecast();
+
+        await waitFor(() => {
+            expect(screen.getByText('24-Hour Energy Plan')).toBeInTheDocument();
+        });
+
+        expect(screen.queryByText('Reserve')).not.toBeInTheDocument();
+    });
+
+    it('incorporates dynamic reserve periods into the reserve line', async () => {
+        const plan = makeTestPlan();
+        // Dynamic reserve: 20% normally, 40% during peak hours (17-21)
+        plan.periods.forEach((p, idx) => {
+            p.reserveSOC = idx >= 17 && idx <= 21 ? 40 : 20;
+        });
+
+        (fetchModeling as any).mockResolvedValue({
+            plan,
+            energyHistory: [],
+            priceHistory: [],
+            weather: [],
+        });
+
+        renderForecast();
+
+        await waitFor(() => {
+            expect(screen.getByText('24-Hour Energy Plan')).toBeInTheDocument();
+        });
+
+        expect(screen.getByText('Reserve')).toBeInTheDocument();
     });
 });
 

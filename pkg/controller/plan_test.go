@@ -3495,11 +3495,13 @@ func TestFinalizeDecisionAndPlan(t *testing.T) {
 		assert.Equal(t, types.BatteryModeChargeAny, p0.BatteryMode)
 		assert.Equal(t, 50.0, p0.StartSOC)
 		assert.Equal(t, 85.0, p0.EndSOC)
+		assert.Equal(t, 20.0, p0.ReserveSOC)
 
 		p1 := plan.Periods[1]
 		assert.Equal(t, types.BatteryModeLoad, p1.BatteryMode)
 		assert.Equal(t, 85.0, p1.StartSOC)
 		assert.Equal(t, 70.0, p1.EndSOC)
+		assert.Equal(t, 20.0, p1.ReserveSOC)
 	})
 
 	t.Run("ExtendsScheduleUntilAcrossContiguousBlock", func(t *testing.T) {

@@ -122,6 +122,7 @@ export interface PlanPeriod {
     reason: ActionReason;
     startSoc: number;
     endSoc: number;
+    reserveSOC?: number;
     loadKWH?: number;
     solarKWH?: number;
     gridImportKWH: number;

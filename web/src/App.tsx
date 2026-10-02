@@ -420,7 +420,7 @@ function AppContent() {
                                     {!effectiveSiteID && effectiveSites.length === 0 ? (
                                         <Redirect to="/welcome" replace />
                                     ) : (
-                                        <Forecast siteID={effectiveSiteID} />
+                                        <Forecast siteID={effectiveSiteID} settings={settings} />
                                     )}
                                 </ProtectedRoute>
                             </Route>
