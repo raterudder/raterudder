@@ -457,6 +457,7 @@ func (s *Server) performSiteUpdate(
 			planDecision, _, planErr = s.controller.Plan(ctx, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings, latestAction)
 			if planErr == nil {
 				hasPlan = true
+				notifData.plan = planDecision.Action.Plan
 			}
 		}()
 	}
@@ -532,7 +533,6 @@ func (s *Server) performSiteUpdate(
 	if err != nil {
 		return nil, "", fmt.Errorf("controller decision failed: %w", err)
 	}
-	notifData.simData = decision.SimData
 
 	if hasPlan {
 		decideAct := decision.Action

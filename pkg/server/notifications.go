@@ -30,7 +30,6 @@ import (
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/common"
-	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
@@ -330,6 +329,7 @@ func generateEveningSummary(
 	todayGridImportKWH float64,
 	minBatterySOC float64,
 	hitDeficitAt time.Time,
+	scheduledChargeAt time.Time,
 	timeLoc *time.Location,
 ) (string, string) {
 	if ctx == nil {
@@ -344,6 +344,10 @@ func generateEveningSummary(
 	if !hitDeficitAt.IsZero() {
 		deficitStr = hitDeficitAt.In(timeLoc).Format("3:04 PM")
 	}
+	var chargeStr string
+	if !scheduledChargeAt.IsZero() {
+		chargeStr = scheduledChargeAt.In(timeLoc).Format("3:04 PM")
+	}
 
 	reserveThreshold := minBatterySOC
 	if reserveThreshold <= 0 {
@@ -357,12 +361,14 @@ func generateEveningSummary(
 	switch flavor {
 	case "home_planner":
 		title = "🌙 Evening Energy Wrap-up"
-		if isLowReserve {
+		if !scheduledChargeAt.IsZero() {
+			body = fmt.Sprintf("Battery at %.0f%% (%.1f kWh). Scheduled to charge from the grid at ~%s.", currentStatus.BatterySOC, currentEnergyKWH, chargeStr)
+		} else if isLowReserve {
 			body = fmt.Sprintf("Battery at %.0f%% (%.1f kWh). Reserve is low; home will switch to grid power shortly.", currentStatus.BatterySOC, currentEnergyKWH)
 		} else if hitDeficitAt.IsZero() {
 			body = fmt.Sprintf("Battery at %.0f%% (%.1f kWh). Projected to power home through the night until tomorrow's solar.", currentStatus.BatterySOC, currentEnergyKWH)
 		} else {
-			body = fmt.Sprintf("Battery at %.0f%% (%.1f kWh). Projected to supply home until ~%s before drawing from the grid.", currentStatus.BatterySOC, currentEnergyKWH, deficitStr)
+			body = fmt.Sprintf("Battery at %.0f%% (%.1f kWh). Projected to supply home until ~%s.", currentStatus.BatterySOC, currentEnergyKWH, deficitStr)
 		}
 
 	case "executive":
@@ -380,7 +386,9 @@ func generateEveningSummary(
 
 	case "pilot":
 		title = "🤖 RateRudder: Evening Wrap-up"
-		if isLowReserve {
+		if !scheduledChargeAt.IsZero() {
+			body = fmt.Sprintf("Battery at %.0f%% (%.1f kWh). Scheduled to charge from the grid at ~%s.", currentStatus.BatterySOC, currentEnergyKWH, chargeStr)
+		} else if isLowReserve {
 			body = fmt.Sprintf("Battery at %.0f%% (%.1f kWh). Reserve is low; home will switch to grid power shortly.", currentStatus.BatterySOC, currentEnergyKWH)
 		} else if hitDeficitAt.IsZero() {
 			if todayActualSolarKWH >= 2.0 {
@@ -390,9 +398,9 @@ func generateEveningSummary(
 			}
 		} else {
 			if todayActualSolarKWH >= 2.0 {
-				body = fmt.Sprintf("Automated battery managed %.1f kWh solar today. Stored %.1f kWh will supply home until ~%s before switching to grid.", todayActualSolarKWH, currentEnergyKWH, deficitStr)
+				body = fmt.Sprintf("Automated battery managed %.1f kWh solar today. Stored %.1f kWh will supply home until ~%s.", todayActualSolarKWH, currentEnergyKWH, deficitStr)
 			} else {
-				body = fmt.Sprintf("Stored %.1f kWh will supply home until ~%s before switching to grid.", currentEnergyKWH, deficitStr)
+				body = fmt.Sprintf("Stored %.1f kWh will supply home until ~%s.", currentEnergyKWH, deficitStr)
 			}
 		}
 
@@ -409,7 +417,9 @@ func generateEveningSummary(
 			flowStr = fmt.Sprintf("Today: %.1f kWh solar, %.1f kWh home.", todayActualSolarKWH, todayHomeUsageKWH)
 		}
 
-		if isLowReserve {
+		if !scheduledChargeAt.IsZero() {
+			body = fmt.Sprintf("%s Battery: %.1f kWh (scheduled to charge from grid at ~%s).", flowStr, currentEnergyKWH, chargeStr)
+		} else if isLowReserve {
 			body = fmt.Sprintf("%s Battery: %.1f kWh (reserve is low; home will switch to grid power shortly).", flowStr, currentEnergyKWH)
 		} else if hitDeficitAt.IsZero() {
 			body = fmt.Sprintf("%s Battery: %.1f kWh powers home through sunrise.", flowStr, currentEnergyKWH)
@@ -1102,6 +1112,323 @@ func (s *Server) newCachedUserFetcher() userFetcher {
 	}
 }
 
+type notificationPlanHelper struct {
+	plan *types.Plan
+}
+
+func newNotificationPlanHelper(plan *types.Plan) notificationPlanHelper {
+	return notificationPlanHelper{plan: plan}
+}
+
+// todaySolarForecastKWH sums forecasted solar generation for periods starting within [todayStart, todayEnd).
+func (h notificationPlanHelper) todaySolarForecastKWH(todayStart, todayEnd time.Time) float64 {
+	if h.plan == nil {
+		return 0
+	}
+	var total float64
+	for _, p := range h.plan.Periods {
+		if !p.TSStart.Before(todayStart) && p.TSStart.Before(todayEnd) {
+			total += p.SolarKWH
+		}
+	}
+	return total
+}
+
+// todayPeakSOC returns the maximum projected battery SOC during today's periods.
+func (h notificationPlanHelper) todayPeakSOC(todayStart, todayEnd time.Time, currentSOC float64) float64 {
+	peak := currentSOC
+	if h.plan == nil {
+		return peak
+	}
+	for _, p := range h.plan.Periods {
+		if !p.TSStart.Before(todayStart) && p.TSStart.Before(todayEnd) {
+			if p.StartSOC > peak {
+				peak = p.StartSOC
+			}
+			if p.EndSOC > peak {
+				peak = p.EndSOC
+			}
+		}
+	}
+	return peak
+}
+
+// batteryCapacityETA finds the discrete end time of the first period reaching full capacity (>= 99%) after nowLocal.
+func (h notificationPlanHelper) batteryCapacityETA(nowLocal, todayEnd time.Time) (time.Time, bool) {
+	if h.plan == nil {
+		return time.Time{}, false
+	}
+	for _, p := range h.plan.Periods {
+		if p.TSEnd.After(nowLocal) && p.TSStart.Before(todayEnd) {
+			if p.EndSOC >= 99.0 {
+				return p.TSEnd, true
+			}
+		}
+	}
+	return time.Time{}, false
+}
+
+type overnightPlanOutcome struct {
+	scheduledChargeAt time.Time
+	reachesReserveAt  time.Time
+	lastsUntilSunrise bool
+	allStandby        bool
+}
+
+func (h notificationPlanHelper) overnightPlanOutcome(
+	ctx context.Context,
+	nowLocal time.Time,
+	siteLoc *time.Location,
+	currentSOC, minSOC float64,
+) overnightPlanOutcome {
+	var outcome overnightPlanOutcome
+	if h.plan == nil || len(h.plan.Periods) == 0 {
+		return outcome
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if siteLoc == nil {
+		siteLoc = time.UTC
+	}
+
+	if currentSOC <= minSOC {
+		outcome.reachesReserveAt = nowLocal
+		log.Ctx(ctx).DebugContext(ctx, "battery already at or below reserve for overnight plan",
+			slog.Time("nowLocal", nowLocal),
+			slog.Float64("currentSOC", currentSOC),
+			slog.Float64("minSOC", minSOC),
+		)
+		return outcome
+	}
+
+	tomorrowDay := nowLocal.AddDate(0, 0, 1).Day()
+	var tomorrowSolarStart time.Time
+	for _, p := range h.plan.Periods {
+		if p.TSStart.In(siteLoc).Day() == tomorrowDay && p.SolarKWH > 0.2 {
+			tomorrowSolarStart = p.TSStart
+			break
+		}
+	}
+
+	cutoff := tomorrowSolarStart
+	if cutoff.IsZero() {
+		cutoff = time.Date(nowLocal.Year(), nowLocal.Month(), nowLocal.Day(), 12, 0, 0, 0, siteLoc).AddDate(0, 0, 1)
+	}
+
+	var overnightPeriods []types.PlanPeriod
+	for _, p := range h.plan.Periods {
+		if p.TSEnd.After(nowLocal) && p.TSStart.Before(cutoff) {
+			overnightPeriods = append(overnightPeriods, p)
+		}
+	}
+
+	if len(overnightPeriods) == 0 {
+		log.Ctx(ctx).DebugContext(ctx, "no overnight plan periods found",
+			slog.Time("nowLocal", nowLocal),
+			slog.Time("cutoff", cutoff),
+			slog.Time("tomorrowSolarStart", tomorrowSolarStart),
+			slog.Int("totalPlanPeriods", len(h.plan.Periods)),
+		)
+		return outcome
+	}
+
+	// 1. Check for scheduled grid charging overnight
+	for _, p := range overnightPeriods {
+		if p.BatteryMode == types.BatteryModeChargeAny {
+			outcome.scheduledChargeAt = p.TSStart
+			log.Ctx(ctx).DebugContext(ctx, "scheduled overnight grid charge detected in plan",
+				slog.Time("scheduledChargeAt", p.TSStart),
+				slog.Float64("currentSOC", currentSOC),
+				slog.Float64("minSOC", minSOC),
+			)
+			return outcome
+		}
+	}
+
+	// 2. Check if all periods are Standby
+	allStandby := true
+	for _, p := range overnightPeriods {
+		if p.BatteryMode != types.BatteryModeStandby {
+			allStandby = false
+			break
+		}
+	}
+	outcome.allStandby = allStandby
+
+	// 3. Check if battery reaches reserve before sunrise
+	for _, p := range overnightPeriods {
+		resSOC := p.ReserveSOC
+		if resSOC <= 0 {
+			resSOC = minSOC
+		}
+		if p.EndSOC <= resSOC {
+			outcome.reachesReserveAt = p.TSEnd
+			log.Ctx(ctx).DebugContext(ctx, "battery reaches reserve overnight",
+				slog.Time("reachesReserveAt", p.TSEnd),
+				slog.Float64("endSOC", p.EndSOC),
+				slog.Float64("reserveSOC", resSOC),
+				slog.Float64("currentSOC", currentSOC),
+			)
+			return outcome
+		}
+	}
+
+	// 4. Lasts through sunrise
+	outcome.lastsUntilSunrise = true
+	var minOvernightSOC float64 = currentSOC
+	var sunriseSOC float64 = currentSOC
+	if len(overnightPeriods) > 0 {
+		sunriseSOC = overnightPeriods[len(overnightPeriods)-1].EndSOC
+		for _, p := range overnightPeriods {
+			if p.EndSOC < minOvernightSOC {
+				minOvernightSOC = p.EndSOC
+			}
+		}
+	}
+	log.Ctx(ctx).DebugContext(ctx, "battery projected to last through sunrise",
+		slog.Time("nowLocal", nowLocal),
+		slog.Time("cutoff", cutoff),
+		slog.Time("tomorrowSolarStart", tomorrowSolarStart),
+		slog.Float64("currentSOC", currentSOC),
+		slog.Float64("minSOC", minSOC),
+		slog.Float64("minOvernightSOC", minOvernightSOC),
+		slog.Float64("sunriseSOC", sunriseSOC),
+		slog.Bool("allStandby", allStandby),
+		slog.Int("overnightPeriodsCount", len(overnightPeriods)),
+	)
+	return outcome
+}
+
+// currentSolarForecastKW returns the forecasted solar generation rate in kW for the interval covering nowLocal.
+func (h notificationPlanHelper) currentSolarForecastKW(nowLocal time.Time) (float64, bool) {
+	if h.plan == nil {
+		return 0, false
+	}
+	for _, p := range h.plan.Periods {
+		if !nowLocal.Before(p.TSStart) && nowLocal.Before(p.TSEnd) {
+			if p.DurationHours > 0 {
+				return p.SolarKWH / p.DurationHours, true
+			}
+			return p.SolarKWH, true
+		}
+	}
+	return 0, false
+}
+
+type priceSpikePlanOutcome struct {
+	solarCovers      bool
+	isExporting      bool
+	reachesReserveAt time.Time
+	lastsEntireSpike bool
+}
+
+func (h notificationPlanHelper) priceSpikeGuidance(
+	ctx context.Context,
+	spikeStart, spikeEnd time.Time,
+	currentSOC, reserveSOC float64,
+) priceSpikePlanOutcome {
+	var outcome priceSpikePlanOutcome
+	if h.plan == nil || len(h.plan.Periods) == 0 {
+		return outcome
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	var spikePeriods []types.PlanPeriod
+	for _, p := range h.plan.Periods {
+		if p.TSEnd.After(spikeStart) && p.TSStart.Before(spikeEnd) {
+			spikePeriods = append(spikePeriods, p)
+		}
+	}
+	if len(spikePeriods) == 0 {
+		log.Ctx(ctx).DebugContext(ctx, "no plan periods found overlapping price spike",
+			slog.Time("spikeStart", spikeStart),
+			slog.Time("spikeEnd", spikeEnd),
+			slog.Int("totalPlanPeriods", len(h.plan.Periods)),
+		)
+		return outcome
+	}
+
+	// 1. Solar coverage check
+	var totalSolar float64
+	solarCoversAll := true
+	for _, p := range spikePeriods {
+		totalSolar += p.SolarKWH
+		if p.SolarKWH < p.LoadKWH && p.GridImportKWH > 0.05 {
+			solarCoversAll = false
+		}
+	}
+	if totalSolar >= 0.5 && solarCoversAll {
+		outcome.solarCovers = true
+		log.Ctx(ctx).DebugContext(ctx, "solar covers home load during price spike",
+			slog.Time("spikeStart", spikeStart),
+			slog.Time("spikeEnd", spikeEnd),
+			slog.Float64("totalSolarKWH", totalSolar),
+			slog.Int("spikePeriodsCount", len(spikePeriods)),
+		)
+		return outcome
+	}
+
+	// 2. Export arbitrage check
+	for _, p := range spikePeriods {
+		if p.BatteryMode == types.BatteryModeExport {
+			outcome.isExporting = true
+			log.Ctx(ctx).DebugContext(ctx, "battery export arbitrage scheduled during price spike",
+				slog.Time("spikeStart", spikeStart),
+				slog.Time("spikeEnd", spikeEnd),
+				slog.Float64("currentSOC", currentSOC),
+			)
+			return outcome
+		}
+	}
+
+	// 3. Battery endurance
+	for _, p := range spikePeriods {
+		res := p.ReserveSOC
+		if res <= 0 {
+			res = reserveSOC
+		}
+		if p.EndSOC <= res {
+			outcome.reachesReserveAt = p.TSEnd
+			log.Ctx(ctx).DebugContext(ctx, "battery reaches reserve during price spike",
+				slog.Time("spikeStart", spikeStart),
+				slog.Time("spikeEnd", spikeEnd),
+				slog.Time("reachesReserveAt", p.TSEnd),
+				slog.Float64("endSOC", p.EndSOC),
+				slog.Float64("reserveSOC", res),
+				slog.Float64("currentSOC", currentSOC),
+			)
+			return outcome
+		}
+	}
+
+	outcome.lastsEntireSpike = true
+	var minSpikeSOC float64 = currentSOC
+	var finalSOC float64 = currentSOC
+	if len(spikePeriods) > 0 {
+		finalSOC = spikePeriods[len(spikePeriods)-1].EndSOC
+		for _, p := range spikePeriods {
+			if p.EndSOC < minSpikeSOC {
+				minSpikeSOC = p.EndSOC
+			}
+		}
+	}
+	log.Ctx(ctx).DebugContext(ctx, "battery projected to last through price spike",
+		slog.Time("spikeStart", spikeStart),
+		slog.Time("spikeEnd", spikeEnd),
+		slog.Float64("currentSOC", currentSOC),
+		slog.Float64("reserveSOC", reserveSOC),
+		slog.Float64("minSpikeSOC", minSpikeSOC),
+		slog.Float64("finalSOC", finalSOC),
+		slog.Int("spikePeriodsCount", len(spikePeriods)),
+	)
+	return outcome
+}
+
 type dataForNotifications struct {
 	settings       types.Settings
 	essSystem      ess.System
@@ -1111,20 +1438,7 @@ type dataForNotifications struct {
 	energyHistory  []types.DailyEnergyStats
 	weatherHistory []types.Weather
 	futurePrices   []types.Price
-	simData        []controller.SimHour
-	simDataL       sync.Mutex
-}
-
-// this is kind of gross that we
-func (d *dataForNotifications) getSimData(ctx context.Context, s *Server, siteID string, nowLocal time.Time) []controller.SimHour {
-	d.simDataL.Lock()
-	defer d.simDataL.Unlock()
-	if d.simData == nil {
-		flatEnergyHistory := flattenDailyEnergyStats(d.energyHistory)
-		simData, _ := s.controller.SimulateState(ctx, nowLocal, d.status, d.currentPrice, d.futurePrices, flatEnergyHistory, d.weatherHistory, d.settings)
-		d.simData = simData
-	}
-	return d.simData
+	plan           *types.Plan
 }
 
 // handleNotifications evaluates and dispatches any due notifications during the site update cycle.
@@ -1152,6 +1466,27 @@ func (s *Server) handleNotifications(
 
 	getNotifState := s.newSiteRecentNotificationsFetcher(ctx, siteID, nowLocal)
 	getUser := s.newCachedUserFetcher()
+
+	// Gating: notifications require active PlanMode (or staging).
+	isStaging := strings.EqualFold(s.release, "staging")
+	if !data.settings.PlanMode && !isStaging {
+		return
+	}
+
+	// If a severe grid event or emergency occurs, the inverter is in off-grid backup
+	// and forward optimization planning is skipped. Still evaluate hardware outage alerts.
+	if data.status.GridUnavailable || data.status.EmergencyMode {
+		s.handleGridOutageNotifications(ctx, siteID, notifications, data.status, data.essSystem, nowLocal, getNotifState, getUser)
+		return
+	}
+
+	// All remaining forecast-based notifications require a valid generated Plan.
+	if data.plan == nil || len(data.plan.Periods) == 0 {
+		log.Ctx(ctx).ErrorContext(ctx, "skipping forecast notifications: missing plan",
+			slog.String("siteID", siteID),
+		)
+		return
+	}
 
 	// 1. Morning Summary
 	wg.Go(func() {
@@ -1260,36 +1595,11 @@ func (s *Server) handleMorningSummaryNotifications(
 			continue
 		}
 
-		// Retrieve simulation hourly projection data for today
-		simData := data.getSimData(ctx, s, siteID, nowLocal)
-
-		var todayForecastKWH float64
-		var hitCapacityAt time.Time
-		maxSimSOC := data.status.BatterySOC
-
-		// Aggregate today's forecasted solar generation, find the projected peak SOC,
-		// and inspect when the battery is projected to hit 100% capacity.
-		for _, slot := range simData {
-			if !slot.TS.Before(todayStart) && slot.TS.Before(todayEnd) {
-				todayForecastKWH += slot.PredictedSolarKWH
-
-				if slot.BatteryCapacityKWH > 0 {
-					startSOC := (slot.StartBatteryKWH / slot.BatteryCapacityKWH) * 100.0
-					endSOC := (slot.BatteryKWH / slot.BatteryCapacityKWH) * 100.0
-					if startSOC > maxSimSOC {
-						maxSimSOC = startSOC
-					}
-					if endSOC > maxSimSOC {
-						maxSimSOC = endSOC
-					}
-				}
-
-				// Strictly inspect HitCapacityAt from the simulation controller
-				if hitCapacityAt.IsZero() && !slot.HitCapacityAt.IsZero() && slot.HitCapacityAt.After(nowLocal) {
-					hitCapacityAt = slot.HitCapacityAt
-				}
-			}
-		}
+		// Retrieve plan projection data for today
+		planHelper := newNotificationPlanHelper(data.plan)
+		todayForecastKWH := planHelper.todaySolarForecastKWH(todayStart, todayEnd)
+		maxSimSOC := planHelper.todayPeakSOC(todayStart, todayEnd, data.status.BatterySOC)
+		hitCapacityAt, hasHitCapacityAt := planHelper.batteryCapacityETA(nowLocal, todayEnd)
 
 		yesterdayStart := todayStart.AddDate(0, 0, -1)
 		yesterdayActualKWH := dailySolarMap[yesterdayStart.Format("2006-01-02")]
@@ -1307,7 +1617,7 @@ func (s *Server) handleMorningSummaryNotifications(
 			"forecastSolarKWH":  fmt.Sprintf("%.2f", todayForecastKWH),
 			"yesterdaySolarKWH": fmt.Sprintf("%.2f", yesterdayActualKWH),
 		}
-		if !hitCapacityAt.IsZero() {
+		if hasHitCapacityAt {
 			metadata["hitCapacityAt"] = hitCapacityAt.In(siteLoc).Format(time.RFC3339)
 		}
 
@@ -1360,36 +1670,10 @@ func (s *Server) handleEveningSummaryNotifications(
 
 		minSOC := data.settings.GetMinBatterySOC(ctx, nowLocal, siteLoc, data.currentPrice)
 
-		// Inspect simulation slots to determine if the battery will hit reserve overnight.
-		// If a deficit is predicted after tomorrow's solar refilling begins, the battery successfully
-		// powers the home through the entire night.
-		simData := data.getSimData(ctx, s, siteID, nowLocal)
-
-		var hitDeficitAt time.Time
-		var tomorrowSolarStart time.Time
-		tomorrowDay := nowLocal.AddDate(0, 0, 1).Day()
-
-		for _, slot := range simData {
-			if slot.TS.In(siteLoc).Day() == tomorrowDay && slot.PredictedSolarKWH > 0.2 && tomorrowSolarStart.IsZero() {
-				tomorrowSolarStart = slot.TS
-			}
-			// Strictly inspect HitDeficitAt without buffering or threshold heuristics
-			if hitDeficitAt.IsZero() && !slot.HitDeficitAt.IsZero() {
-				hitDeficitAt = slot.HitDeficitAt
-			}
-		}
-
-		if hitDeficitAt.IsZero() && (data.status.BatterySOC <= minSOC || !data.status.BatteryAboveMinSOC) {
-			hitDeficitAt = nowLocal
-		} else if !hitDeficitAt.IsZero() && hitDeficitAt.Before(nowLocal) {
-			hitDeficitAt = nowLocal
-		}
-
-		// If deficit is predicted only after tomorrow's solar starts refilling the battery,
-		// then the battery successfully powers the home throughout the entire night.
-		if !tomorrowSolarStart.IsZero() && !hitDeficitAt.IsZero() && hitDeficitAt.After(tomorrowSolarStart) {
-			hitDeficitAt = time.Time{}
-		}
+		planHelper := newNotificationPlanHelper(data.plan)
+		outcome := planHelper.overnightPlanOutcome(ctx, nowLocal, siteLoc, data.status.BatterySOC, minSOC)
+		hitDeficitAt := outcome.reachesReserveAt
+		scheduledChargeAt := outcome.scheduledChargeAt
 
 		// Aggregate today's energy metrics from midnight up to the current hour
 		todayStart := time.Date(nowLocal.Year(), nowLocal.Month(), nowLocal.Day(), 0, 0, 0, 0, siteLoc)
@@ -1415,8 +1699,14 @@ func (s *Server) handleEveningSummaryNotifications(
 			"todayGridImportKWH": fmt.Sprintf("%.2f", todayGridImportKWH),
 			"todayGridExportKWH": fmt.Sprintf("%.2f", todayGridExportKWH),
 		}
+		if !hitDeficitAt.IsZero() {
+			metadata["hitDeficitAt"] = hitDeficitAt.In(siteLoc).Format(time.RFC3339)
+		}
+		if !scheduledChargeAt.IsZero() {
+			metadata["scheduledChargeAt"] = scheduledChargeAt.In(siteLoc).Format(time.RFC3339)
+		}
 
-		title, body := generateEveningSummary(ctx, notifConfig.EveningSummaryFlavor, data.status, todayActualSolarKWH, todayHomeUsageKWH, todayGridExportKWH, todayGridImportKWH, minSOC, hitDeficitAt, siteLoc)
+		title, body := generateEveningSummary(ctx, notifConfig.EveningSummaryFlavor, data.status, todayActualSolarKWH, todayHomeUsageKWH, todayGridExportKWH, todayGridImportKWH, minSOC, hitDeficitAt, scheduledChargeAt, siteLoc)
 		s.dispatchPushToUser(
 			ctx,
 			siteID,
@@ -2044,83 +2334,24 @@ func (s *Server) handlePriceSpikeNotifications(
 		// 3. If battery will run out of energy before the spike ends: provide the estimated time battery reaches reserve.
 		// 4. If battery lasts through the entire spike: reassure user battery powers home through the whole event.
 		currentSOC := data.status.BatterySOC
-		simData := data.getSimData(ctx, s, siteID, nowLocal)
-		if len(simData) > 0 {
-			var spikeSlots []controller.SimHour
-			for i, slot := range simData {
-				var slotEnd time.Time
-				if i+1 < len(simData) && !simData[i+1].TS.IsZero() {
-					slotEnd = simData[i+1].TS
-				} else if i > 0 && !simData[i-1].TS.IsZero() {
-					slotEnd = slot.TS.Add(slot.TS.Sub(simData[i-1].TS))
-				} else if !spikeEnd.IsZero() && spikeEnd.After(slot.TS) {
-					slotEnd = spikeEnd
-				} else {
-					slotEnd = slot.TS.Add(30 * time.Minute)
-				}
+		reserveSOC := data.settings.GetMinBatterySOC(ctx, spikeStart, siteLoc, types.Price{DollarsPerKWH: activeSpikeCost})
+		if reserveSOC <= 0 {
+			reserveSOC = data.settings.MinBatterySOC
+		}
 
-				// Check if the simulation slot overlaps with the price spike interval [spikeStart, spikeEnd)
-				if slotEnd.After(spikeStart) && slot.TS.Before(spikeEnd) {
-					spikeSlots = append(spikeSlots, slot)
-				}
-			}
+		planHelper := newNotificationPlanHelper(data.plan)
+		spikeOutcome := planHelper.priceSpikeGuidance(ctx, spikeStart, spikeEnd, currentSOC, reserveSOC)
 
-			if len(spikeSlots) > 0 {
-				hasSolar := false
-				solarCoversAll := true
-				for _, slot := range spikeSlots {
-					// Require meaningful solar generation (>= 0.5 kWh, i.e. 500Wh for 1h or 1kW rate for 30m)
-					// to conclude solar actively covers the home rather than zero-load/dawn noise.
-					if slot.PredictedSolarKWH >= 0.5 {
-						hasSolar = true
-					}
-					// If net home load after solar exceeds 0.1 kWh in any slot, solar does not cover all demand.
-					if slot.NetLoadSolarKWH > 0.1 {
-						solarCoversAll = false
-					}
-				}
-
-				if hasSolar && solarCoversAll {
-					secondSentence = "Solar is projected to cover your home during the spike without drawing from the battery."
-				} else {
-					if currentSOC == 0 && spikeSlots[0].BatteryCapacityKWH > 0 {
-						currentSOC = (spikeSlots[0].StartBatteryKWH / spikeSlots[0].BatteryCapacityKWH) * 100.0
-					}
-					reserveSOC := 0.0
-					if spikeSlots[0].BatteryCapacityKWH > 0 && spikeSlots[0].BatteryReserveKWH > 0 {
-						reserveSOC = (spikeSlots[0].BatteryReserveKWH / spikeSlots[0].BatteryCapacityKWH) * 100.0
-					}
-					if reserveSOC == 0 {
-						reserveSOC = data.settings.GetMinBatterySOC(ctx, spikeStart, siteLoc, spikeSlots[0].Price)
-					}
-					if reserveSOC == 0 {
-						reserveSOC = data.settings.MinBatterySOC
-					}
-
-					currentReserveSOC := data.settings.GetMinBatterySOC(ctx, nowLocal, siteLoc, data.currentPrice)
-					if currentReserveSOC <= 0 {
-						currentReserveSOC = reserveSOC
-					}
-
-					if (isCurrentSpike && currentSOC <= currentReserveSOC) || (!isCurrentSpike && currentSOC <= reserveSOC) {
-						secondSentence = fmt.Sprintf("Battery is currently at %.0f%% reserve; your home will draw from the grid during the spike.", currentSOC)
-					} else {
-						var hitDeficitAt time.Time
-						for _, slot := range spikeSlots {
-							if !slot.HitDeficitAt.IsZero() && !slot.HitDeficitAt.Before(spikeStart) && slot.HitDeficitAt.Before(spikeEnd) {
-								hitDeficitAt = slot.HitDeficitAt
-								break
-							}
-						}
-
-						if !hitDeficitAt.IsZero() {
-							secondSentence = fmt.Sprintf("Battery is at %.0f%% and projected to reach reserve at ~%s before the spike ends.", currentSOC, hitDeficitAt.In(siteLoc).Format("3:04 PM"))
-						} else {
-							secondSentence = fmt.Sprintf("Battery is at %.0f%% and projected to power your home through the entire spike.", currentSOC)
-						}
-					}
-				}
-			}
+		if spikeOutcome.solarCovers {
+			secondSentence = "Solar is projected to cover your home usage during the spike."
+		} else if spikeOutcome.isExporting {
+			secondSentence = "RateRudder is discharging battery to export power during the surge."
+		} else if currentSOC <= reserveSOC {
+			secondSentence = fmt.Sprintf("Battery is currently at %.0f%% reserve; your home will draw from the grid during the spike.", currentSOC)
+		} else if !spikeOutcome.reachesReserveAt.IsZero() {
+			secondSentence = fmt.Sprintf("Battery is at %.0f%% and will supply home until ~%s.", currentSOC, spikeOutcome.reachesReserveAt.In(siteLoc).Format("3:04 PM"))
+		} else if spikeOutcome.lastsEntireSpike {
+			secondSentence = fmt.Sprintf("Battery is at %.0f%% and projected to power your home through the spike.", currentSOC)
 		}
 
 		// Store structured metadata on the notification log for debugging and re-alert evaluations
@@ -2238,20 +2469,11 @@ func (s *Server) handleSolarUnderproductionNotifications(
 		return
 	}
 
-	// Locate the forecasted solar generation for the current hour from simulation data
-	simData := data.getSimData(ctx, s, siteID, nowLocal)
-
-	var forecastKW float64
-	for _, slot := range simData {
-		if slot.TS.In(nowLocal.Location()).Hour() == nowLocal.Hour() {
-			forecastKW = slot.PredictedSolarKWH
-			break
-		}
-	}
-
-	// Skip if the forecast for this hour was negligible (< 3.0 kW)
-	if forecastKW < solarUnderproductionMinForecastKW {
-		log.Ctx(ctx).DebugContext(ctx, "skipping solar underproduction check: forecasted solar too low",
+	// Locate the forecasted solar generation for the current hour from plan data
+	planHelper := newNotificationPlanHelper(data.plan)
+	forecastKW, hasForecast := planHelper.currentSolarForecastKW(nowLocal)
+	if !hasForecast || forecastKW < solarUnderproductionMinForecastKW {
+		log.Ctx(ctx).DebugContext(ctx, "skipping solar underproduction check: forecasted solar too low or missing",
 			slog.Float64("forecastKW", forecastKW),
 			slog.Float64("minForecastKW", solarUnderproductionMinForecastKW),
 		)

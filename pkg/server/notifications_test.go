@@ -152,60 +152,74 @@ func TestGenerateEveningSummary(t *testing.T) {
 	hitDeficitAt := time.Date(2026, 9, 5, 1, 15, 0, 0, loc) // 1:15 AM
 
 	t.Run("HomePlannerNoDeficit", func(t *testing.T) {
-		title, body := generateEveningSummary(t.Context(), "home_planner", status, 42.0, 18.0, 20.0, 0.0, 20.0, time.Time{}, loc)
+		title, body := generateEveningSummary(t.Context(), "home_planner", status, 42.0, 18.0, 20.0, 0.0, 20.0, time.Time{}, time.Time{}, loc)
 		assert.Equal(t, "🌙 Evening Energy Wrap-up", title)
 		assert.Contains(t, body, "Projected to power home through the night until tomorrow's solar")
 		assert.Contains(t, body, "85%")
 	})
 
 	t.Run("HomePlannerWithDeficitETA", func(t *testing.T) {
-		title, body := generateEveningSummary(t.Context(), "home_planner", status, 42.0, 18.0, 20.0, 0.0, 20.0, hitDeficitAt, loc)
+		title, body := generateEveningSummary(t.Context(), "home_planner", status, 42.0, 18.0, 20.0, 0.0, 20.0, hitDeficitAt, time.Time{}, loc)
 		assert.Equal(t, "🌙 Evening Energy Wrap-up", title)
-		assert.Contains(t, body, "Projected to supply home until ~1:15 AM before drawing from the grid")
+		assert.Contains(t, body, "Projected to supply home until ~1:15 AM.")
 		assert.Contains(t, body, "85%")
+	})
+
+	t.Run("HomePlannerWithScheduledCharge", func(t *testing.T) {
+		scheduledChargeAt := time.Date(2026, 9, 5, 2, 0, 0, 0, loc)
+		title, body := generateEveningSummary(t.Context(), "home_planner", status, 42.0, 18.0, 20.0, 0.0, 20.0, time.Time{}, scheduledChargeAt, loc)
+		assert.Equal(t, "🌙 Evening Energy Wrap-up", title)
+		assert.Contains(t, body, "Scheduled to charge from the grid at ~2:00 AM.")
 	})
 
 	t.Run("HomePlannerLowReserve", func(t *testing.T) {
 		lowStatus := status
 		lowStatus.BatterySOC = 18.0
-		title, body := generateEveningSummary(t.Context(), "home_planner", lowStatus, 12.0, 25.0, 0.0, 10.0, 20.0, hitDeficitAt, loc)
+		title, body := generateEveningSummary(t.Context(), "home_planner", lowStatus, 12.0, 25.0, 0.0, 10.0, 20.0, hitDeficitAt, time.Time{}, loc)
 		assert.Equal(t, "🌙 Evening Energy Wrap-up", title)
 		assert.Contains(t, body, "Reserve is low; home will switch to grid power shortly")
 		assert.Contains(t, body, "18%")
 	})
 
 	t.Run("ExecutiveSummaryWithExport", func(t *testing.T) {
-		title, body := generateEveningSummary(t.Context(), "executive", status, 42.1, 18.0, 15.5, 0.0, 20.0, hitDeficitAt, loc)
+		title, body := generateEveningSummary(t.Context(), "executive", status, 42.1, 18.0, 15.5, 0.0, 20.0, hitDeficitAt, time.Time{}, loc)
 		assert.Equal(t, "🌙 42.1 kWh Solar Today • 🔋 85% SOC", title)
 		assert.Contains(t, body, "15.5 kWh exported to the grid")
 	})
 
 	t.Run("ExecutiveSummaryFullyCovering", func(t *testing.T) {
-		title, body := generateEveningSummary(t.Context(), "executive", status, 25.0, 20.0, 0.0, 0.0, 20.0, hitDeficitAt, loc)
+		title, body := generateEveningSummary(t.Context(), "executive", status, 25.0, 20.0, 0.0, 0.0, 20.0, hitDeficitAt, time.Time{}, loc)
 		assert.Equal(t, "🌙 25.0 kWh Solar Today • 🔋 85% SOC", title)
 		assert.Contains(t, body, "fully covering home needs")
 	})
 
 	t.Run("ExecutiveSummaryPartiallyCovering", func(t *testing.T) {
-		title, body := generateEveningSummary(t.Context(), "executive", status, 10.0, 20.0, 0.0, 10.0, 20.0, hitDeficitAt, loc)
+		title, body := generateEveningSummary(t.Context(), "executive", status, 10.0, 20.0, 0.0, 10.0, 20.0, hitDeficitAt, time.Time{}, loc)
 		assert.Equal(t, "🌙 10.0 kWh Solar Today • 🔋 85% SOC", title)
 		assert.Contains(t, body, "covered 50% of home use")
 	})
 
 	t.Run("AutonomousPilotWithDeficit", func(t *testing.T) {
-		title, body := generateEveningSummary(t.Context(), "pilot", status, 42.0, 18.0, 15.0, 0.0, 20.0, hitDeficitAt, loc)
+		title, body := generateEveningSummary(t.Context(), "pilot", status, 42.0, 18.0, 15.0, 0.0, 20.0, hitDeficitAt, time.Time{}, loc)
 		assert.Equal(t, "🤖 RateRudder: Evening Wrap-up", title)
-		assert.Contains(t, body, "will supply home until ~1:15 AM before switching to grid")
+		assert.Contains(t, body, "will supply home until ~1:15 AM.")
+	})
+
+	t.Run("AutonomousPilotWithScheduledCharge", func(t *testing.T) {
+		scheduledChargeAt := time.Date(2026, 9, 5, 2, 0, 0, 0, loc)
+		title, body := generateEveningSummary(t.Context(), "pilot", status, 42.0, 18.0, 15.0, 0.0, 20.0, time.Time{}, scheduledChargeAt, loc)
+		assert.Equal(t, "🤖 RateRudder: Evening Wrap-up", title)
+		assert.Contains(t, body, "Scheduled to charge from the grid at ~2:00 AM.")
 	})
 
 	t.Run("AutonomousPilotNoDeficit", func(t *testing.T) {
-		title, body := generateEveningSummary(t.Context(), "pilot", status, 42.0, 18.0, 15.0, 0.0, 20.0, time.Time{}, loc)
+		title, body := generateEveningSummary(t.Context(), "pilot", status, 42.0, 18.0, 15.0, 0.0, 20.0, time.Time{}, time.Time{}, loc)
 		assert.Equal(t, "🤖 RateRudder: Evening Wrap-up", title)
 		assert.Contains(t, body, "projected to power home through sunrise")
 	})
 
 	t.Run("MetricsHeavyWithDeficit", func(t *testing.T) {
-		title, body := generateEveningSummary(t.Context(), "metrics_heavy", status, 42.0, 18.0, 15.0, 0.0, 20.0, hitDeficitAt, loc)
+		title, body := generateEveningSummary(t.Context(), "metrics_heavy", status, 42.0, 18.0, 15.0, 0.0, 20.0, hitDeficitAt, time.Time{}, loc)
 		assert.Contains(t, title, "42.0 kWh Solar")
 		assert.Contains(t, title, "85% SOC")
 		assert.Contains(t, body, "42.0 kWh solar")
@@ -214,8 +228,14 @@ func TestGenerateEveningSummary(t *testing.T) {
 		assert.Contains(t, body, "powers home until ~1:15 AM")
 	})
 
+	t.Run("MetricsHeavyWithScheduledCharge", func(t *testing.T) {
+		scheduledChargeAt := time.Date(2026, 9, 5, 2, 0, 0, 0, loc)
+		_, body := generateEveningSummary(t.Context(), "metrics_heavy", status, 42.0, 18.0, 15.0, 0.0, 20.0, time.Time{}, scheduledChargeAt, loc)
+		assert.Contains(t, body, "scheduled to charge from grid at ~2:00 AM")
+	})
+
 	t.Run("MetricsHeavyNoDeficit", func(t *testing.T) {
-		title, body := generateEveningSummary(t.Context(), "metrics_heavy", status, 42.0, 18.0, 0.0, 5.0, 20.0, time.Time{}, loc)
+		title, body := generateEveningSummary(t.Context(), "metrics_heavy", status, 42.0, 18.0, 0.0, 5.0, 20.0, time.Time{}, time.Time{}, loc)
 		assert.Contains(t, title, "42.0 kWh Solar")
 		assert.Contains(t, title, "85% SOC")
 		assert.Contains(t, body, "5.0 kWh imported")
@@ -225,7 +245,7 @@ func TestGenerateEveningSummary(t *testing.T) {
 	t.Run("MetricsHeavyLowReserve", func(t *testing.T) {
 		lowStatus := status
 		lowStatus.BatterySOC = 12.0
-		title, body := generateEveningSummary(t.Context(), "metrics_heavy", lowStatus, 47.0, 51.7, 7.1, 0.0, 25.0, time.Time{}, loc)
+		title, body := generateEveningSummary(t.Context(), "metrics_heavy", lowStatus, 47.0, 51.7, 7.1, 0.0, 25.0, time.Time{}, time.Time{}, loc)
 		assert.Contains(t, title, "47.0 kWh Solar")
 		assert.Contains(t, title, "12% SOC")
 		assert.Contains(t, body, "reserve is low; home will switch to grid power shortly")
@@ -234,7 +254,7 @@ func TestGenerateEveningSummary(t *testing.T) {
 	t.Run("PilotLowReserve", func(t *testing.T) {
 		lowStatus := status
 		lowStatus.BatterySOC = 12.0
-		title, body := generateEveningSummary(t.Context(), "pilot", lowStatus, 47.0, 51.7, 7.1, 0.0, 25.0, time.Time{}, loc)
+		title, body := generateEveningSummary(t.Context(), "pilot", lowStatus, 47.0, 51.7, 7.1, 0.0, 25.0, time.Time{}, time.Time{}, loc)
 		assert.Equal(t, "🤖 RateRudder: Evening Wrap-up", title)
 		assert.Contains(t, body, "Reserve is low; home will switch to grid power shortly")
 	})
@@ -242,7 +262,7 @@ func TestGenerateEveningSummary(t *testing.T) {
 	t.Run("HomePlannerLowReserveNoDeficit", func(t *testing.T) {
 		lowStatus := status
 		lowStatus.BatterySOC = 12.0
-		title, body := generateEveningSummary(t.Context(), "home_planner", lowStatus, 47.0, 51.7, 7.1, 0.0, 25.0, time.Time{}, loc)
+		title, body := generateEveningSummary(t.Context(), "home_planner", lowStatus, 47.0, 51.7, 7.1, 0.0, 25.0, time.Time{}, time.Time{}, loc)
 		assert.Equal(t, "🌙 Evening Energy Wrap-up", title)
 		assert.Contains(t, body, "Reserve is low; home will switch to grid power shortly")
 	})
@@ -1318,13 +1338,14 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 		peakStatus := statusMorning
 		peakStatus.BatterySOC = 47.0
 
-		mockSim := []controller.SimHour{
-			{
-				TS:                 nowMorning,
-				StartBatteryKWH:    6.4,
-				BatteryKWH:         10.2, // 75% on 13.6 kWh capacity
-				BatteryCapacityKWH: 13.6,
-				PredictedSolarKWH:  20.0,
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:  nowMorning,
+					TSEnd:    nowMorning.Add(time.Hour),
+					SolarKWH: 20.0,
+					EndSOC:   75.0,
+				},
 			},
 		}
 
@@ -1339,7 +1360,7 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 			status:        peakStatus,
 			settings:      settings,
 			energyHistory: mockEnergyHistory,
-			simData:       mockSim,
+			plan:          mockPlan,
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
@@ -1363,13 +1384,15 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 		decliningStatus := statusMorning
 		decliningStatus.BatterySOC = 47.0
 
-		mockSim := []controller.SimHour{
-			{
-				TS:                 nowMorning,
-				StartBatteryKWH:    6.4,
-				BatteryKWH:         4.0, // only declines
-				BatteryCapacityKWH: 13.6,
-				PredictedSolarKWH:  5.0,
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:  nowMorning,
+					TSEnd:    nowMorning.Add(time.Hour),
+					SolarKWH: 5.0,
+					StartSOC: 47.0,
+					EndSOC:   30.0,
+				},
 			},
 		}
 
@@ -1384,7 +1407,7 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 			status:        decliningStatus,
 			settings:      settings,
 			energyHistory: mockEnergyHistory,
-			simData:       mockSim,
+			plan:          mockPlan,
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
@@ -1406,14 +1429,14 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 		}
 
 		hitTime := time.Date(2026, 9, 4, 13, 30, 0, 0, loc)
-		mockSim := []controller.SimHour{
-			{
-				TS:                 nowMorning,
-				StartBatteryKWH:    6.4,
-				BatteryKWH:         13.5,
-				BatteryCapacityKWH: 13.6,
-				HitCapacityAt:      hitTime,
-				PredictedSolarKWH:  25.0,
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:  nowMorning,
+					TSEnd:    hitTime,
+					SolarKWH: 25.0,
+					EndSOC:   100.0,
+				},
 			},
 		}
 
@@ -1428,7 +1451,7 @@ func TestHandleMorningSummaryNotifications(t *testing.T) {
 			status:        statusMorning,
 			settings:      settings,
 			energyHistory: mockEnergyHistory,
-			simData:       mockSim,
+			plan:          mockPlan,
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
@@ -1576,7 +1599,7 @@ func TestHandleEveningSummaryNotifications(t *testing.T) {
 		mockS.AssertExpectations(t)
 	})
 
-	t.Run("HomePlannerUsesSimulationDeficitETA", func(t *testing.T) {
+	t.Run("HomePlannerUsesPlanDeficitETA", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowEvening)
 		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
@@ -1588,11 +1611,14 @@ func TestHandleEveningSummaryNotifications(t *testing.T) {
 				EveningSummaryFlavor:  "home_planner",
 			},
 		}
-		deficitAt := nowEvening.Add(4*time.Hour + 30*time.Minute) // 12:45 AM
-		mockSim := []controller.SimHour{
-			{
-				TS:           nowEvening,
-				HitDeficitAt: deficitAt,
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:    nowEvening,
+					TSEnd:      nowEvening.Add(5 * time.Hour), // 1:00 AM
+					EndSOC:     15.0,                          // reaches below reserve (20%)
+					ReserveSOC: 20.0,
+				},
 			},
 		}
 
@@ -1600,13 +1626,13 @@ func TestHandleEveningSummaryNotifications(t *testing.T) {
 		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
 			return l.Type == types.NotificationTypeEveningSummary &&
 				l.Flavor == "home_planner" &&
-				strings.Contains(l.Body, "Projected to supply home until ~12:45 AM before drawing from the grid")
+				strings.Contains(l.Body, "Projected to supply home until ~1:15 AM.")
 		})).Return(nil).Once()
 
 		plannerData := &dataForNotifications{
 			status:   statusEvening,
 			settings: settings,
-			simData:  mockSim,
+			plan:     mockPlan,
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowEvening)
@@ -1674,10 +1700,14 @@ func TestHandleEveningSummaryNotifications(t *testing.T) {
 			},
 		}
 
-		mockSim := []controller.SimHour{
-			{
-				TS:           nowEvening,
-				HitDeficitAt: nowEvening, // Immediate deficit at start of simulation
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:  nowEvening,
+					TSEnd:    nowEvening.Add(time.Hour),
+					StartSOC: 12.0,
+					EndSOC:   12.0,
+				},
 			},
 		}
 
@@ -1709,7 +1739,7 @@ func TestHandleEveningSummaryNotifications(t *testing.T) {
 		data := &dataForNotifications{
 			status:   lowStatus,
 			settings: scheduledSettings,
-			simData:  mockSim,
+			plan:     mockPlan,
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowEvening)
@@ -2366,14 +2396,16 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			},
 		}
 
-		spikeSlot := controller.SimHour{
-			TS:                 nowMorning.Add(1 * time.Hour),
-			Hour:               nowMorning.Add(1 * time.Hour).Hour(),
-			PredictedSolarKWH:  5.0,
-			AvgHomeLoadKWH:     2.0,
-			NetLoadSolarKWH:    -3.0,
-			BatteryCapacityKWH: 13.6,
-			BatteryReserveKWH:  2.72,
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:       nowMorning.Add(1 * time.Hour),
+					TSEnd:         nowMorning.Add(2 * time.Hour),
+					SolarKWH:      5.0,
+					LoadKWH:       2.0,
+					GridImportKWH: 0.0,
+				},
+			},
 		}
 
 		data := &dataForNotifications{
@@ -2383,14 +2415,14 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 				BatteryCapacityKWH: 13.6,
 				BatterySOC:         80.0,
 			},
-			simData: []controller.SimHour{spikeSlot},
+			plan: mockPlan,
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
 		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState, mockUserGetter(user))
 		mockS.AssertExpectations(t)
 		if assert.NotEmpty(t, recordedLog.Body) {
-			assert.Contains(t, recordedLog.Body, "Solar is projected to cover your home during the spike without drawing from the battery.")
+			assert.Contains(t, recordedLog.Body, "Solar is projected to cover your home usage during the spike.")
 		}
 	})
 
@@ -2426,14 +2458,17 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			},
 		}
 
-		spikeSlot := controller.SimHour{
-			TS:                 nowMorning.Add(1 * time.Hour),
-			Hour:               nowMorning.Add(1 * time.Hour).Hour(),
-			PredictedSolarKWH:  0.3, // < 0.5 kWh threshold, so hasSolar should be false
-			AvgHomeLoadKWH:     0.3,
-			NetLoadSolarKWH:    0.0,
-			BatteryCapacityKWH: 13.6,
-			BatteryReserveKWH:  2.72,
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:       nowMorning.Add(1 * time.Hour),
+					TSEnd:         nowMorning.Add(2 * time.Hour),
+					SolarKWH:      0.3, // < 0.5 kWh threshold, so hasSolar should be false
+					LoadKWH:       0.3,
+					GridImportKWH: 0.0,
+					EndSOC:        75.0,
+				},
+			},
 		}
 
 		data := &dataForNotifications{
@@ -2443,7 +2478,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 				BatteryCapacityKWH: 13.6,
 				BatterySOC:         80.0,
 			},
-			simData: []controller.SimHour{spikeSlot},
+			plan: mockPlan,
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
@@ -2487,14 +2522,17 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			},
 		}
 
-		spikeSlot := controller.SimHour{
-			TS:                 nowMorning.Add(1 * time.Hour),
-			Hour:               nowMorning.Add(1 * time.Hour).Hour(),
-			PredictedSolarKWH:  2.0, // >= 0.5 kWh
-			AvgHomeLoadKWH:     2.15,
-			NetLoadSolarKWH:    0.15, // > 0.1 kWh threshold, so solar does not cover all load
-			BatteryCapacityKWH: 13.6,
-			BatteryReserveKWH:  2.72,
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:       nowMorning.Add(1 * time.Hour),
+					TSEnd:         nowMorning.Add(2 * time.Hour),
+					SolarKWH:      2.0, // >= 0.5 kWh
+					LoadKWH:       2.15,
+					GridImportKWH: 0.15, // > 0.05 kWh threshold, so solar does not cover all load
+					EndSOC:        75.0,
+				},
+			},
 		}
 
 		data := &dataForNotifications{
@@ -2504,7 +2542,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 				BatteryCapacityKWH: 13.6,
 				BatterySOC:         80.0,
 			},
-			simData: []controller.SimHour{spikeSlot},
+			plan: mockPlan,
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
@@ -2548,14 +2586,16 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			},
 		}
 
-		spikeSlot := controller.SimHour{
-			TS:                 nowMorning.Add(1 * time.Hour),
-			Hour:               nowMorning.Add(1 * time.Hour).Hour(),
-			PredictedSolarKWH:  0.8,  // >= 0.5 kWh
-			AvgHomeLoadKWH:     0.88, // load
-			NetLoadSolarKWH:    0.08, // <= 0.1 kWh tolerance
-			BatteryCapacityKWH: 13.6,
-			BatteryReserveKWH:  2.72,
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:       nowMorning.Add(1 * time.Hour),
+					TSEnd:         nowMorning.Add(2 * time.Hour),
+					SolarKWH:      0.8,  // >= 0.5 kWh
+					LoadKWH:       0.88, // load
+					GridImportKWH: 0.0,  // <= 0.05 kWh tolerance
+				},
+			},
 		}
 
 		data := &dataForNotifications{
@@ -2565,14 +2605,14 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 				BatteryCapacityKWH: 13.6,
 				BatterySOC:         80.0,
 			},
-			simData: []controller.SimHour{spikeSlot},
+			plan: mockPlan,
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
 		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState, mockUserGetter(user))
 		mockS.AssertExpectations(t)
 		if assert.NotEmpty(t, recordedLog.Body) {
-			assert.Contains(t, recordedLog.Body, "Solar is projected to cover your home during the spike without drawing from the battery.")
+			assert.Contains(t, recordedLog.Body, "Solar is projected to cover your home usage during the spike.")
 		}
 	})
 
@@ -2608,15 +2648,16 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			},
 		}
 
-		spikeSlot := controller.SimHour{
-			TS:                 nowMorning.Add(1 * time.Hour),
-			Hour:               nowMorning.Add(1 * time.Hour).Hour(),
-			PredictedSolarKWH:  0.0,
-			AvgHomeLoadKWH:     2.0,
-			NetLoadSolarKWH:    2.0,
-			BatteryCapacityKWH: 13.6,
-			BatteryKWH:         10.0,
-			BatteryReserveKWH:  2.72,
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:  nowMorning.Add(1 * time.Hour),
+					TSEnd:    nowMorning.Add(2 * time.Hour),
+					SolarKWH: 0.0,
+					LoadKWH:  2.0,
+					EndSOC:   70.0,
+				},
+			},
 		}
 
 		data := &dataForNotifications{
@@ -2629,14 +2670,14 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			settings: types.Settings{
 				MinBatterySOC: 20.0,
 			},
-			simData: []controller.SimHour{spikeSlot},
+			plan: mockPlan,
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
 		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState, mockUserGetter(user))
 		mockS.AssertExpectations(t)
 		if assert.NotEmpty(t, recordedLog.Body) {
-			assert.Contains(t, recordedLog.Body, "Battery is at 85% and projected to power your home through the entire spike.")
+			assert.Contains(t, recordedLog.Body, "Battery is at 85% and projected to power your home through the spike.")
 		}
 	})
 
@@ -2673,15 +2714,17 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			},
 		}
 
-		spikeSlot := controller.SimHour{
-			TS:                 spikeStart,
-			Hour:               spikeStart.Hour(),
-			PredictedSolarKWH:  0.0,
-			AvgHomeLoadKWH:     3.0,
-			NetLoadSolarKWH:    3.0,
-			BatteryCapacityKWH: 13.6,
-			BatteryReserveKWH:  2.72,
-			HitDeficitAt:       spikeStart.Add(35 * time.Minute),
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:    spikeStart,
+					TSEnd:      spikeStart.Add(35 * time.Minute),
+					SolarKWH:   0.0,
+					LoadKWH:    3.0,
+					EndSOC:     18.0,
+					ReserveSOC: 20.0,
+				},
+			},
 		}
 
 		data := &dataForNotifications{
@@ -2694,15 +2737,14 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			settings: types.Settings{
 				MinBatterySOC: 20.0,
 			},
-			simData: []controller.SimHour{spikeSlot},
+			plan: mockPlan,
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
 		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState, mockUserGetter(user))
 		mockS.AssertExpectations(t)
 		if assert.NotEmpty(t, recordedLog.Body) {
-			assert.Contains(t, recordedLog.Body, "Battery is at 35% and projected to reach reserve at ~")
-			assert.Contains(t, recordedLog.Body, "before the spike ends.")
+			assert.Contains(t, recordedLog.Body, "Battery is at 35% and will supply home until ~")
 		}
 	})
 
@@ -2740,25 +2782,27 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			},
 		}
 
-		// Two 30-minute simulation slots spanning 7:00 AM - 7:30 AM and 7:30 AM - 8:00 AM
-		slot1 := controller.SimHour{
-			TS:                 spikeStart,
-			Hour:               spikeStart.Hour(),
-			PredictedSolarKWH:  0.0,
-			AvgHomeLoadKWH:     1.5,
-			NetLoadSolarKWH:    1.5,
-			BatteryCapacityKWH: 13.6,
-			BatteryReserveKWH:  2.72,
-		}
-		slot2 := controller.SimHour{
-			TS:                 spikeStart.Add(30 * time.Minute),
-			Hour:               spikeStart.Hour(),
-			PredictedSolarKWH:  0.0,
-			AvgHomeLoadKWH:     1.5,
-			NetLoadSolarKWH:    1.5,
-			BatteryCapacityKWH: 13.6,
-			BatteryReserveKWH:  2.72,
-			HitDeficitAt:       spikeStart.Add(45 * time.Minute), // 7:45 AM
+		// Two 30-minute plan periods spanning 7:00 AM - 7:30 AM and 7:30 AM - 8:00 AM
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:       spikeStart,
+					TSEnd:         spikeStart.Add(30 * time.Minute),
+					DurationHours: 0.5,
+					SolarKWH:      0.0,
+					LoadKWH:       1.5,
+					EndSOC:        30.0,
+				},
+				{
+					TSStart:       spikeStart.Add(30 * time.Minute),
+					TSEnd:         spikeStart.Add(60 * time.Minute),
+					DurationHours: 0.5,
+					SolarKWH:      0.0,
+					LoadKWH:       1.5,
+					EndSOC:        18.0, // reaches reserve during second slot
+					ReserveSOC:    20.0,
+				},
+			},
 		}
 
 		data := &dataForNotifications{
@@ -2771,14 +2815,14 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			settings: types.Settings{
 				MinBatterySOC: 20.0,
 			},
-			simData: []controller.SimHour{slot1, slot2},
+			plan: mockPlan,
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
 		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState, mockUserGetter(user))
 		mockS.AssertExpectations(t)
 		if assert.NotEmpty(t, recordedLog.Body) {
-			assert.Contains(t, recordedLog.Body, "Battery is at 40% and projected to reach reserve at ~8:55 AM before the spike ends.")
+			assert.Contains(t, recordedLog.Body, "Battery is at 40% and will supply home until ~")
 		}
 	})
 
@@ -2814,14 +2858,15 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			},
 		}
 
-		spikeSlot := controller.SimHour{
-			TS:                 nowMorning.Add(1 * time.Hour),
-			Hour:               nowMorning.Add(1 * time.Hour).Hour(),
-			PredictedSolarKWH:  0.0,
-			AvgHomeLoadKWH:     3.0,
-			NetLoadSolarKWH:    3.0,
-			BatteryCapacityKWH: 13.6,
-			BatteryReserveKWH:  2.72,
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:    nowMorning.Add(1 * time.Hour),
+					TSEnd:      nowMorning.Add(2 * time.Hour),
+					EndSOC:     20.0,
+					ReserveSOC: 20.0,
+				},
+			},
 		}
 
 		data := &dataForNotifications{
@@ -2834,7 +2879,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			settings: types.Settings{
 				MinBatterySOC: 20.0,
 			},
-			simData: []controller.SimHour{spikeSlot},
+			plan: mockPlan,
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
@@ -2879,12 +2924,14 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			GridUseDollarsPerKWH: 0.05,
 		}
 
-		spikeSlot := controller.SimHour{
-			TS:                 nowMorning,
-			Hour:               nowMorning.Hour(),
-			BatteryCapacityKWH: 13.6,
-			BatteryKWH:         10.0,
-			BatteryReserveKWH:  2.72,
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart: nowMorning,
+					TSEnd:   nowMorning.Add(1 * time.Hour),
+					EndSOC:  70.0,
+				},
+			},
 		}
 
 		data := &dataForNotifications{
@@ -2897,7 +2944,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 			settings: types.Settings{
 				MinBatterySOC: 20.0,
 			},
-			simData: []controller.SimHour{spikeSlot},
+			plan: mockPlan,
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
@@ -2906,7 +2953,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		if assert.NotEmpty(t, recordedLog.Body) {
 			assert.Equal(t, "🚨 Price Spike: $0.35/kWh", recordedLog.Title)
 			assert.Contains(t, recordedLog.Body, "Price is $0.35/kWh now and anticipated to last until 8:10 AM.")
-			assert.Contains(t, recordedLog.Body, "Battery is at 85% and projected to power your home through the entire spike.")
+			assert.Contains(t, recordedLog.Body, "Battery is at 85% and projected to power your home through the spike.")
 			if assert.NotNil(t, recordedLog.Metadata) {
 				assert.Equal(t, "0.3500", recordedLog.Metadata["price"])
 				assert.Equal(t, "0.3500", recordedLog.Metadata["peakPrice"])
@@ -3509,13 +3556,20 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 			return l.Type == types.NotificationTypeSolarUnderproduction && l.Flavor == "medium"
 		})).Return(nil).Once()
 
-		simData := []controller.SimHour{
-			{TS: nowMidday, PredictedSolarKWH: 4.5},
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:       nowMidday.Truncate(time.Hour),
+					TSEnd:         nowMidday.Truncate(time.Hour).Add(time.Hour),
+					DurationHours: 1.0,
+					SolarKWH:      4.5,
+				},
+			},
 		}
 		data := &dataForNotifications{
 			status:   statusMid,
 			settings: settings,
-			simData:  simData,
+			plan:     mockPlan,
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMidday)
@@ -3556,13 +3610,20 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 		}
 
 		// Forecast only 1.5 kW (< 2.0 kW min forecast)
-		simData := []controller.SimHour{
-			{TS: nowMidday, PredictedSolarKWH: 1.5},
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:       nowMidday.Truncate(time.Hour),
+					TSEnd:         nowMidday.Truncate(time.Hour).Add(time.Hour),
+					DurationHours: 1.0,
+					SolarKWH:      1.5,
+				},
+			},
 		}
 		data := &dataForNotifications{
 			status:   statusMid,
 			settings: settings,
-			simData:  simData,
+			plan:     mockPlan,
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMidday)
@@ -3630,13 +3691,20 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 		// Forecast 4.0 kW, actual 3.5 kW (87.5% - well above 30% medium threshold)
 		statusNormal := statusMid
 		statusNormal.SolarKW = 3.5
-		simData := []controller.SimHour{
-			{TS: nowMidday, PredictedSolarKWH: 4.0},
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:       nowMidday.Truncate(time.Hour),
+					TSEnd:         nowMidday.Truncate(time.Hour).Add(time.Hour),
+					DurationHours: 1.0,
+					SolarKWH:      4.0,
+				},
+			},
 		}
 		data := &dataForNotifications{
 			status:   statusNormal,
 			settings: settings,
-			simData:  simData,
+			plan:     mockPlan,
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMidday)
@@ -3665,13 +3733,20 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 			},
 		}, nil).Once()
 
-		simData := []controller.SimHour{
-			{TS: nowMidday, PredictedSolarKWH: 4.0},
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:       nowMidday.Truncate(time.Hour),
+					TSEnd:         nowMidday.Truncate(time.Hour).Add(time.Hour),
+					DurationHours: 1.0,
+					SolarKWH:      4.0,
+				},
+			},
 		}
 		data := &dataForNotifications{
 			status:   statusMid,
 			settings: settings,
-			simData:  simData,
+			plan:     mockPlan,
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMidday)
@@ -3705,13 +3780,20 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 			return l.Type == types.NotificationTypeSolarUnderproduction && l.UserID == "user-low@test.com" && l.Flavor == "low"
 		})).Return(nil).Once()
 
-		simData := []controller.SimHour{
-			{TS: nowMidday, PredictedSolarKWH: 6.0},
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:       nowMidday.Truncate(time.Hour),
+					TSEnd:         nowMidday.Truncate(time.Hour).Add(time.Hour),
+					DurationHours: 1.0,
+					SolarKWH:      6.0,
+				},
+			},
 		}
 		data := &dataForNotifications{
 			status:   statusSensitivity,
 			settings: settings,
-			simData:  simData,
+			plan:     mockPlan,
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMidday)
@@ -3734,8 +3816,15 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 			},
 		}
 
-		simData := []controller.SimHour{
-			{TS: nowMidday, PredictedSolarKWH: 4.0},
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:       nowMidday.Truncate(time.Hour),
+					TSEnd:         nowMidday.Truncate(time.Hour).Add(time.Hour),
+					DurationHours: 1.0,
+					SolarKWH:      4.0,
+				},
+			},
 		}
 		weatherHistory := []types.Weather{
 			{
@@ -3752,7 +3841,7 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 			status:         statusOvercast,
 			settings:       settings,
 			weatherHistory: weatherHistory,
-			simData:        simData,
+			plan:           mockPlan,
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMidday)
@@ -3781,13 +3870,20 @@ func TestHandleSolarUnderproductionNotifications(t *testing.T) {
 			return l.Type == types.NotificationTypeSolarUnderproduction && l.Muted && !l.Success
 		})).Return(nil).Once()
 
-		simData := []controller.SimHour{
-			{TS: nowMidday, PredictedSolarKWH: 4.5},
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:       nowMidday.Truncate(time.Hour),
+					TSEnd:         nowMidday.Truncate(time.Hour).Add(time.Hour),
+					DurationHours: 1.0,
+					SolarKWH:      4.5,
+				},
+			},
 		}
 		data := &dataForNotifications{
 			status:   statusMid,
 			settings: settings,
-			simData:  simData,
+			plan:     mockPlan,
 		}
 
 		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMidday)
@@ -4016,14 +4112,73 @@ func TestHandleNotifications(t *testing.T) {
 		})).Return(nil).Once()
 
 		notifSettings := settings
+		notifSettings.PlanMode = true
 		notifSettings.Notifications = notifications
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:  nowMorning,
+					TSEnd:    nowMorning.Add(time.Hour),
+					SolarKWH: 20.0,
+					EndSOC:   75.0,
+				},
+			},
+		}
+		data := &dataForNotifications{
+			settings:      notifSettings,
+			status:        statusMorning,
+			energyHistory: mockEnergyHistory,
+			plan:          mockPlan,
+		}
+		srv.handleNotifications(context.Background(), siteID, data)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("PlanModeDisabledSuppressesForecastNotifications", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, nowMorning)
+
+		notifSettings := settings
+		notifSettings.PlanMode = false
+		notifSettings.Notifications = map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				MorningSummaryEnabled: true,
+				MorningSummaryHour:    7,
+				MorningSummaryFlavor:  "metrics_heavy",
+			},
+		}
 		data := &dataForNotifications{
 			settings:      notifSettings,
 			status:        statusMorning,
 			energyHistory: mockEnergyHistory,
 		}
 		srv.handleNotifications(context.Background(), siteID, data)
-		mockS.AssertExpectations(t)
+		mockS.AssertNotCalled(t, "GetNotificationLogs", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("MissingPlanSuppressesForecastNotifications", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, nowMorning)
+
+		notifSettings := settings
+		notifSettings.PlanMode = true
+		notifSettings.Notifications = map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				MorningSummaryEnabled: true,
+				MorningSummaryHour:    7,
+				MorningSummaryFlavor:  "metrics_heavy",
+			},
+		}
+		data := &dataForNotifications{
+			settings:      notifSettings,
+			status:        statusMorning,
+			energyHistory: mockEnergyHistory,
+			plan:          nil,
+		}
+		srv.handleNotifications(context.Background(), siteID, data)
+		mockS.AssertNotCalled(t, "GetNotificationLogs", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 	})
 
 	t.Run("NotificationsDisabled", func(t *testing.T) {
@@ -4206,47 +4361,478 @@ func TestNotificationIDHelpers(t *testing.T) {
 	})
 }
 
-func TestGetSimData(t *testing.T) {
+func TestNotificationPlanHelper(t *testing.T) {
 	loc, err := time.LoadLocation("America/Chicago")
 	require.NoError(t, err)
 	now := time.Date(2026, 9, 4, 12, 0, 0, 0, loc)
 
-	t.Run("ReturnsCachedDataWhenAlreadyPopulated", func(t *testing.T) {
-		mockS := &storagemock.MockDatabase{}
-		srv := createTestNotificationServer(t, mockS, now)
+	t.Run("TodaySolarForecastKWH", func(t *testing.T) {
+		todayStart := time.Date(2026, 9, 4, 0, 0, 0, 0, loc)
+		todayEnd := todayStart.AddDate(0, 0, 1)
 
-		cached := []controller.SimHour{
-			{TS: now, PredictedSolarKWH: 4.5},
-		}
-		data := &dataForNotifications{
-			simData: cached,
-		}
+		t.Run("FiltersPeriodsStrictlyWithinToday", func(t *testing.T) {
+			plan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{TSStart: todayStart.Add(-1 * time.Hour), TSEnd: todayStart, SolarKWH: 1.0}, // yesterday
+					{TSStart: todayStart, TSEnd: todayStart.Add(time.Hour), SolarKWH: 0.5},      // at boundary
+					{TSStart: todayStart.Add(8 * time.Hour), TSEnd: todayStart.Add(9 * time.Hour), SolarKWH: 2.5},
+					{TSStart: todayStart.Add(12 * time.Hour), TSEnd: todayStart.Add(13 * time.Hour), SolarKWH: 5.0},
+					{TSStart: todayEnd, TSEnd: todayEnd.Add(time.Hour), SolarKWH: 1.2},                    // at end boundary
+					{TSStart: todayEnd.Add(time.Hour), TSEnd: todayEnd.Add(2 * time.Hour), SolarKWH: 3.0}, // tomorrow
+				},
+			}
+			helper := newNotificationPlanHelper(plan)
+			assert.InDelta(t, 8.0, helper.todaySolarForecastKWH(todayStart, todayEnd), 1e-4)
+		})
 
-		result := data.getSimData(context.Background(), srv, "site-1", now)
-		if assert.Len(t, result, 1) {
-			assert.Equal(t, 4.5, result[0].PredictedSolarKWH)
-		}
+		t.Run("NilOrEmptyPlanReturnsZero", func(t *testing.T) {
+			assert.Equal(t, 0.0, newNotificationPlanHelper(nil).todaySolarForecastKWH(todayStart, todayEnd))
+			assert.Equal(t, 0.0, newNotificationPlanHelper(&types.Plan{}).todaySolarForecastKWH(todayStart, todayEnd))
+		})
 	})
 
-	t.Run("FetchesAndCachesWhenNil", func(t *testing.T) {
-		mockS := &storagemock.MockDatabase{}
-		srv := createTestNotificationServer(t, mockS, now)
+	t.Run("TodayPeakSOC", func(t *testing.T) {
+		todayStart := time.Date(2026, 9, 4, 0, 0, 0, 0, loc)
+		todayEnd := todayStart.AddDate(0, 0, 1)
 
-		data := &dataForNotifications{
-			status: types.SystemStatus{
-				Timestamp:          now,
-				BatterySOC:         70.0,
-				BatteryCapacityKWH: 13.6,
-			},
-			settings: types.Settings{
-				SolarBellCurveMultiplier: 1.0,
+		t.Run("ReturnsMaxOfStartOrEndSOC", func(t *testing.T) {
+			plan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{TSStart: todayStart.Add(8 * time.Hour), TSEnd: todayStart.Add(9 * time.Hour), StartSOC: 50.0, EndSOC: 65.0},
+					{TSStart: todayStart.Add(12 * time.Hour), TSEnd: todayStart.Add(13 * time.Hour), StartSOC: 88.0, EndSOC: 72.0}, // StartSOC higher
+				},
+			}
+			helper := newNotificationPlanHelper(plan)
+			assert.Equal(t, 88.0, helper.todayPeakSOC(todayStart, todayEnd, 45.0))
+		})
+
+		t.Run("ExcludesPeriodsFromOtherDays", func(t *testing.T) {
+			plan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{TSStart: todayStart.Add(-2 * time.Hour), TSEnd: todayStart.Add(-1 * time.Hour), EndSOC: 99.0},
+					{TSStart: todayStart.Add(10 * time.Hour), TSEnd: todayStart.Add(11 * time.Hour), EndSOC: 68.0},
+					{TSStart: todayEnd.Add(2 * time.Hour), TSEnd: todayEnd.Add(3 * time.Hour), EndSOC: 100.0},
+				},
+			}
+			helper := newNotificationPlanHelper(plan)
+			assert.Equal(t, 68.0, helper.todayPeakSOC(todayStart, todayEnd, 45.0))
+		})
+
+		t.Run("LowerThanCurrentSOCDefaultsToCurrent", func(t *testing.T) {
+			plan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{TSStart: todayStart.Add(10 * time.Hour), TSEnd: todayStart.Add(11 * time.Hour), EndSOC: 55.0},
+				},
+			}
+			helper := newNotificationPlanHelper(plan)
+			assert.Equal(t, 75.0, helper.todayPeakSOC(todayStart, todayEnd, 75.0))
+		})
+
+		t.Run("NilOrEmptyPlanReturnsCurrentSOC", func(t *testing.T) {
+			assert.Equal(t, 62.0, newNotificationPlanHelper(nil).todayPeakSOC(todayStart, todayEnd, 62.0))
+			assert.Equal(t, 62.0, newNotificationPlanHelper(&types.Plan{}).todayPeakSOC(todayStart, todayEnd, 62.0))
+		})
+	})
+
+	t.Run("BatteryCapacityETA", func(t *testing.T) {
+		todayEnd := time.Date(2026, 9, 4, 23, 59, 59, 0, loc)
+		etaTime := now.Add(2 * time.Hour)
+
+		t.Run("ReachesExact99PercentReturnsETA", func(t *testing.T) {
+			plan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{TSStart: now, TSEnd: now.Add(time.Hour), EndSOC: 85.0},
+					{TSStart: now.Add(time.Hour), TSEnd: etaTime, EndSOC: 99.0}, // exactly 99%
+				},
+			}
+			helper := newNotificationPlanHelper(plan)
+			eta, ok := helper.batteryCapacityETA(now, todayEnd)
+			assert.True(t, ok)
+			assert.Equal(t, etaTime, eta)
+		})
+
+		t.Run("PastPeriodsHittingFullChargeSkipped", func(t *testing.T) {
+			futureETA := now.Add(3 * time.Hour)
+			plan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{TSStart: now.Add(-2 * time.Hour), TSEnd: now.Add(-1 * time.Hour), EndSOC: 100.0}, // past
+					{TSStart: now, TSEnd: now.Add(time.Hour), EndSOC: 75.0},
+					{TSStart: now.Add(time.Hour), TSEnd: futureETA, EndSOC: 100.0},
+				},
+			}
+			helper := newNotificationPlanHelper(plan)
+			eta, ok := helper.batteryCapacityETA(now, todayEnd)
+			assert.True(t, ok)
+			assert.Equal(t, futureETA, eta)
+		})
+
+		t.Run("Under99PercentReturnsFalse", func(t *testing.T) {
+			lowPlan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{TSStart: now, TSEnd: now.Add(time.Hour), EndSOC: 98.9},
+				},
+			}
+			_, ok := newNotificationPlanHelper(lowPlan).batteryCapacityETA(now, todayEnd)
+			assert.False(t, ok)
+		})
+
+		t.Run("PeriodsStartingAfterTodayEndSkipped", func(t *testing.T) {
+			tomorrowPlan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{TSStart: todayEnd.Add(time.Hour), TSEnd: todayEnd.Add(2 * time.Hour), EndSOC: 100.0},
+				},
+			}
+			_, ok := newNotificationPlanHelper(tomorrowPlan).batteryCapacityETA(now, todayEnd)
+			assert.False(t, ok)
+		})
+
+		t.Run("NilOrEmptyPlanReturnsFalse", func(t *testing.T) {
+			_, ok := newNotificationPlanHelper(nil).batteryCapacityETA(now, todayEnd)
+			assert.False(t, ok)
+			_, ok = newNotificationPlanHelper(&types.Plan{}).batteryCapacityETA(now, todayEnd)
+			assert.False(t, ok)
+		})
+	})
+
+	t.Run("OvernightPlanOutcome", func(t *testing.T) {
+		evening := time.Date(2026, 9, 4, 20, 0, 0, 0, loc)
+
+		t.Run("BatteryAlreadyAtOrBelowReserve", func(t *testing.T) {
+			plan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{TSStart: evening, TSEnd: evening.Add(time.Hour), EndSOC: 15.0},
+				},
+			}
+			helper := newNotificationPlanHelper(plan)
+			outcome := helper.overnightPlanOutcome(context.Background(), evening, loc, 15.0, 20.0)
+			assert.Equal(t, evening, outcome.reachesReserveAt)
+			assert.False(t, outcome.lastsUntilSunrise)
+		})
+
+		t.Run("ScheduledChargeOvernight", func(t *testing.T) {
+			chargeTime := evening.Add(4 * time.Hour)
+			plan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{TSStart: evening, TSEnd: evening.Add(time.Hour), BatteryMode: types.BatteryModeStandby},
+					{TSStart: chargeTime, TSEnd: chargeTime.Add(time.Hour), BatteryMode: types.BatteryModeChargeAny},
+				},
+			}
+			helper := newNotificationPlanHelper(plan)
+			outcome := helper.overnightPlanOutcome(context.Background(), evening, loc, 50.0, 20.0)
+			assert.Equal(t, chargeTime, outcome.scheduledChargeAt)
+		})
+
+		t.Run("ReachesReserveBeforeSunrise", func(t *testing.T) {
+			reserveTime := evening.Add(5 * time.Hour)
+			plan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{TSStart: evening, TSEnd: reserveTime, EndSOC: 20.0, ReserveSOC: 20.0},
+				},
+			}
+			helper := newNotificationPlanHelper(plan)
+			outcome := helper.overnightPlanOutcome(context.Background(), evening, loc, 50.0, 20.0)
+			assert.Equal(t, reserveTime, outcome.reachesReserveAt)
+			assert.False(t, outcome.lastsUntilSunrise)
+		})
+
+		t.Run("PerPeriodReserveOverride", func(t *testing.T) {
+			periodEnd := evening.Add(3 * time.Hour)
+			plan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{TSStart: evening, TSEnd: periodEnd, EndSOC: 25.0, ReserveSOC: 30.0}, // reaches period-specific reserve (30%)
+				},
+			}
+			helper := newNotificationPlanHelper(plan)
+			outcome := helper.overnightPlanOutcome(context.Background(), evening, loc, 50.0, 20.0)
+			assert.Equal(t, periodEnd, outcome.reachesReserveAt)
+			assert.False(t, outcome.lastsUntilSunrise)
+		})
+
+		t.Run("LastsUntilSunriseWithTomorrowSolar", func(t *testing.T) {
+			tomorrowSunrise := time.Date(2026, 9, 5, 6, 30, 0, 0, loc)
+			plan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{TSStart: evening, TSEnd: evening.Add(4 * time.Hour), EndSOC: 65.0, ReserveSOC: 20.0, BatteryMode: types.BatteryModeStandby},
+					{TSStart: evening.Add(4 * time.Hour), TSEnd: tomorrowSunrise, EndSOC: 45.0, ReserveSOC: 20.0, BatteryMode: types.BatteryModeStandby},
+					{TSStart: tomorrowSunrise, TSEnd: tomorrowSunrise.Add(time.Hour), SolarKWH: 0.8, EndSOC: 50.0}, // tomorrow solar start
+				},
+			}
+			helper := newNotificationPlanHelper(plan)
+			outcome := helper.overnightPlanOutcome(context.Background(), evening, loc, 70.0, 20.0)
+			assert.True(t, outcome.lastsUntilSunrise)
+			assert.True(t, outcome.allStandby)
+			assert.True(t, outcome.reachesReserveAt.IsZero())
+		})
+
+		t.Run("LastsUntilSunriseFallbackCutoffWhenNoTomorrowSolar", func(t *testing.T) {
+			plan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{TSStart: evening, TSEnd: evening.Add(8 * time.Hour), EndSOC: 50.0, ReserveSOC: 20.0, BatteryMode: types.BatteryModeStandby},
+				},
+			}
+			helper := newNotificationPlanHelper(plan)
+			outcome := helper.overnightPlanOutcome(context.Background(), evening, loc, 60.0, 20.0)
+			assert.True(t, outcome.lastsUntilSunrise)
+			assert.True(t, outcome.reachesReserveAt.IsZero())
+		})
+
+		t.Run("AllStandbyFalseWhenSelfConsuming", func(t *testing.T) {
+			plan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{TSStart: evening, TSEnd: evening.Add(4 * time.Hour), EndSOC: 60.0, BatteryMode: types.BatteryModeStandby},
+					{TSStart: evening.Add(4 * time.Hour), TSEnd: evening.Add(8 * time.Hour), EndSOC: 45.0, BatteryMode: types.BatteryModeLoad},
+				},
+			}
+			helper := newNotificationPlanHelper(plan)
+			outcome := helper.overnightPlanOutcome(context.Background(), evening, loc, 75.0, 20.0)
+			assert.True(t, outcome.lastsUntilSunrise)
+			assert.False(t, outcome.allStandby)
+		})
+
+		t.Run("NoOvernightPeriods", func(t *testing.T) {
+			plan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{TSStart: evening.Add(-5 * time.Hour), TSEnd: evening.Add(-4 * time.Hour), EndSOC: 40.0},
+				},
+			}
+			helper := newNotificationPlanHelper(plan)
+			outcome := helper.overnightPlanOutcome(context.Background(), evening, loc, 60.0, 20.0)
+			assert.False(t, outcome.lastsUntilSunrise)
+			assert.True(t, outcome.reachesReserveAt.IsZero())
+			assert.True(t, outcome.scheduledChargeAt.IsZero())
+		})
+
+		t.Run("NilOrEmptyPlanReturnsEmptyOutcome", func(t *testing.T) {
+			nilOutcome := newNotificationPlanHelper(nil).overnightPlanOutcome(context.Background(), evening, loc, 60.0, 20.0)
+			assert.False(t, nilOutcome.lastsUntilSunrise)
+			emptyOutcome := newNotificationPlanHelper(&types.Plan{}).overnightPlanOutcome(context.Background(), evening, loc, 60.0, 20.0)
+			assert.False(t, emptyOutcome.lastsUntilSunrise)
+		})
+	})
+
+	t.Run("CurrentSolarForecastKW", func(t *testing.T) {
+		plan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:       now,
+					TSEnd:         now.Add(time.Hour),
+					DurationHours: 1.0,
+					SolarKWH:      4.2,
+				},
+				{
+					TSStart:       now.Add(time.Hour),
+					TSEnd:         now.Add(90 * time.Minute),
+					DurationHours: 0.5,
+					SolarKWH:      2.5, // 2.5 kWh over 30 mins = 5.0 kW
+				},
+				{
+					TSStart:       now.Add(90 * time.Minute),
+					TSEnd:         now.Add(150 * time.Minute),
+					DurationHours: 0.0, // fallback to SolarKWH
+					SolarKWH:      3.5,
+				},
 			},
 		}
+		helper := newNotificationPlanHelper(plan)
 
-		assert.Nil(t, data.simData)
-		result := data.getSimData(context.Background(), srv, "site-1", now)
-		assert.NotNil(t, result)
-		assert.Equal(t, result, data.simData)
+		t.Run("MatchesIntervalMidpoint", func(t *testing.T) {
+			kw, ok := helper.currentSolarForecastKW(now.Add(15 * time.Minute))
+			assert.True(t, ok)
+			assert.InDelta(t, 4.2, kw, 1e-4)
+		})
+
+		t.Run("MatchesIntervalStartBoundary", func(t *testing.T) {
+			kw, ok := helper.currentSolarForecastKW(now)
+			assert.True(t, ok)
+			assert.InDelta(t, 4.2, kw, 1e-4)
+		})
+
+		t.Run("ExcludesIntervalEndBoundary", func(t *testing.T) {
+			// At exactly now.Add(time.Hour), should match the second period (not first)
+			kw, ok := helper.currentSolarForecastKW(now.Add(time.Hour))
+			assert.True(t, ok)
+			assert.InDelta(t, 5.0, kw, 1e-4)
+		})
+
+		t.Run("ScalesFractionalDurationHours", func(t *testing.T) {
+			kw, ok := helper.currentSolarForecastKW(now.Add(75 * time.Minute))
+			assert.True(t, ok)
+			assert.InDelta(t, 5.0, kw, 1e-4)
+		})
+
+		t.Run("ZeroDurationHoursFallback", func(t *testing.T) {
+			kw, ok := helper.currentSolarForecastKW(now.Add(100 * time.Minute))
+			assert.True(t, ok)
+			assert.InDelta(t, 3.5, kw, 1e-4)
+		})
+
+		t.Run("OutsidePlanReturnsFalse", func(t *testing.T) {
+			_, ok := helper.currentSolarForecastKW(now.Add(4 * time.Hour))
+			assert.False(t, ok)
+		})
+
+		t.Run("NilOrEmptyPlanReturnsFalse", func(t *testing.T) {
+			_, ok := newNotificationPlanHelper(nil).currentSolarForecastKW(now)
+			assert.False(t, ok)
+			_, ok = newNotificationPlanHelper(&types.Plan{}).currentSolarForecastKW(now)
+			assert.False(t, ok)
+		})
+	})
+
+	t.Run("PriceSpikeGuidance", func(t *testing.T) {
+		spikeStart := now.Add(time.Hour)
+		spikeEnd := spikeStart.Add(2 * time.Hour)
+
+		t.Run("SolarCoversAllLoad", func(t *testing.T) {
+			plan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{
+						TSStart:       spikeStart,
+						TSEnd:         spikeEnd,
+						SolarKWH:      4.0,
+						LoadKWH:       2.5,
+						GridImportKWH: 0.0,
+					},
+				},
+			}
+			helper := newNotificationPlanHelper(plan)
+			outcome := helper.priceSpikeGuidance(context.Background(), spikeStart, spikeEnd, 80.0, 20.0)
+			assert.True(t, outcome.solarCovers)
+			assert.False(t, outcome.isExporting)
+		})
+
+		t.Run("SolarDeficitWithGridImportFailsCoverage", func(t *testing.T) {
+			plan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{
+						TSStart:       spikeStart,
+						TSEnd:         spikeEnd,
+						SolarKWH:      2.0,
+						LoadKWH:       3.0,
+						GridImportKWH: 0.25, // > 0.05
+						EndSOC:        70.0,
+					},
+				},
+			}
+			helper := newNotificationPlanHelper(plan)
+			outcome := helper.priceSpikeGuidance(context.Background(), spikeStart, spikeEnd, 80.0, 20.0)
+			assert.False(t, outcome.solarCovers)
+			assert.True(t, outcome.lastsEntireSpike) // falls back to battery endurance
+		})
+
+		t.Run("SolarBelowMinimumThresholdFailsCoverage", func(t *testing.T) {
+			plan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{
+						TSStart:       spikeStart,
+						TSEnd:         spikeEnd,
+						SolarKWH:      0.3, // < 0.5 kWh threshold
+						LoadKWH:       0.2,
+						GridImportKWH: 0.0,
+						EndSOC:        75.0,
+					},
+				},
+			}
+			helper := newNotificationPlanHelper(plan)
+			outcome := helper.priceSpikeGuidance(context.Background(), spikeStart, spikeEnd, 80.0, 20.0)
+			assert.False(t, outcome.solarCovers)
+			assert.True(t, outcome.lastsEntireSpike)
+		})
+
+		t.Run("ExportArbitragePriority", func(t *testing.T) {
+			plan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{
+						TSStart:     spikeStart,
+						TSEnd:       spikeEnd,
+						BatteryMode: types.BatteryModeExport,
+					},
+				},
+			}
+			helper := newNotificationPlanHelper(plan)
+			outcome := helper.priceSpikeGuidance(context.Background(), spikeStart, spikeEnd, 80.0, 20.0)
+			assert.True(t, outcome.isExporting)
+			assert.False(t, outcome.solarCovers)
+		})
+
+		t.Run("ReachesReserveInSecondPeriodOfSpike", func(t *testing.T) {
+			midSpike := spikeStart.Add(time.Hour)
+			plan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{
+						TSStart:    spikeStart,
+						TSEnd:      midSpike,
+						EndSOC:     30.0,
+						ReserveSOC: 20.0,
+					},
+					{
+						TSStart:    midSpike,
+						TSEnd:      spikeEnd,
+						EndSOC:     18.0, // reaches reserve during 2nd period
+						ReserveSOC: 20.0,
+					},
+				},
+			}
+			helper := newNotificationPlanHelper(plan)
+			outcome := helper.priceSpikeGuidance(context.Background(), spikeStart, spikeEnd, 45.0, 20.0)
+			assert.Equal(t, spikeEnd, outcome.reachesReserveAt)
+			assert.False(t, outcome.lastsEntireSpike)
+		})
+
+		t.Run("PerPeriodReserveOverride", func(t *testing.T) {
+			plan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{
+						TSStart:    spikeStart,
+						TSEnd:      spikeEnd,
+						EndSOC:     25.0,
+						ReserveSOC: 30.0, // overrides default 20%
+					},
+				},
+			}
+			helper := newNotificationPlanHelper(plan)
+			outcome := helper.priceSpikeGuidance(context.Background(), spikeStart, spikeEnd, 45.0, 20.0)
+			assert.Equal(t, spikeEnd, outcome.reachesReserveAt)
+			assert.False(t, outcome.lastsEntireSpike)
+		})
+
+		t.Run("LastsEntireSpike", func(t *testing.T) {
+			plan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{
+						TSStart:    spikeStart,
+						TSEnd:      spikeEnd,
+						EndSOC:     60.0,
+						ReserveSOC: 20.0,
+					},
+				},
+			}
+			helper := newNotificationPlanHelper(plan)
+			outcome := helper.priceSpikeGuidance(context.Background(), spikeStart, spikeEnd, 80.0, 20.0)
+			assert.True(t, outcome.lastsEntireSpike)
+			assert.True(t, outcome.reachesReserveAt.IsZero())
+		})
+
+		t.Run("NoSpikePeriods", func(t *testing.T) {
+			plan := &types.Plan{
+				Periods: []types.PlanPeriod{
+					{TSStart: spikeStart.Add(-5 * time.Hour), TSEnd: spikeStart.Add(-4 * time.Hour)},
+				},
+			}
+			helper := newNotificationPlanHelper(plan)
+			outcome := helper.priceSpikeGuidance(context.Background(), spikeStart, spikeEnd, 80.0, 20.0)
+			assert.False(t, outcome.solarCovers)
+			assert.False(t, outcome.isExporting)
+			assert.False(t, outcome.lastsEntireSpike)
+			assert.True(t, outcome.reachesReserveAt.IsZero())
+		})
+
+		t.Run("NilOrEmptyPlanReturnsEmptyOutcome", func(t *testing.T) {
+			nilOutcome := newNotificationPlanHelper(nil).priceSpikeGuidance(context.Background(), spikeStart, spikeEnd, 80.0, 20.0)
+			assert.False(t, nilOutcome.lastsEntireSpike)
+			emptyOutcome := newNotificationPlanHelper(&types.Plan{}).priceSpikeGuidance(context.Background(), spikeStart, spikeEnd, 80.0, 20.0)
+			assert.False(t, emptyOutcome.lastsEntireSpike)
+		})
 	})
 }
 
