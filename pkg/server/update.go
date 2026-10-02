@@ -363,52 +363,6 @@ func (s *Server) performSiteUpdate(
 	notifData.energyHistory = energyHistory
 	notifData.weatherHistory = weatherHistory
 
-	if settings.Pause {
-		log.Ctx(ctx).InfoContext(ctx, "update: paused")
-		action := types.Action{
-			Timestamp:       s.now(),
-			SystemTimestamp: s.now().In(status.Timestamp.Location()),
-			Description:     "Automation is paused",
-			SystemStatus:    status,
-			CurrentPrice:    &currentPrice,
-			Paused:          true,
-			BatteryMode:     types.BatteryModeLoad,
-			SolarMode:       types.SolarModeAny,
-		}
-		if status.ManagedTOUMode {
-			minSOC := int(math.Round(settings.Settings.GetMinBatterySOC(ctx, s.now(), status.Timestamp.Location(), currentPrice)))
-			if _, err := s.setESSModes(ctx, siteID, essSystem, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{
-				MinimumSOC:   minSOC,
-				CurrentPrice: currentPrice,
-			}, settings); err != nil {
-				log.Ctx(ctx).ErrorContext(ctx, "failed to set modes while paused", slog.Any("error", err))
-			}
-		}
-		if err := s.insertAction(ctx, siteID, action); err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to insert paused action", slog.Any("error", err))
-		}
-		// we are purposefully skipping notifications if things are paused
-		return &action, "paused", nil
-	}
-
-	// don't update if we're in a VPP event
-	if status.VPPActive {
-		log.Ctx(ctx).InfoContext(ctx, "update: VPP event active")
-		action := types.Action{
-			Timestamp:       s.now(),
-			SystemTimestamp: s.now().In(status.Timestamp.Location()),
-			Description:     "VPP event active",
-			Reason:          types.ActionReasonVPPActive,
-			SystemStatus:    status,
-			CurrentPrice:    &currentPrice,
-		}
-		if err := s.insertAction(ctx, siteID, action); err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to insert action", slog.Any("error", err))
-		}
-		s.handleNotifications(ctx, siteID, notifData)
-		return &action, "vpp event", nil
-	}
-
 	// don't update if we're in emergency mode (except Franklin systems where
 	// emergency mode is used as fallback for grid charging)
 	// TODO: Temporarily skip emergency mode bailout for Franklin systems because
@@ -452,7 +406,7 @@ func (s *Server) performSiteUpdate(
 		if err := s.insertAction(ctx, siteID, action); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to insert action", slog.Any("error", err))
 		}
-		// don't send notifications is alarms present
+		// don't send notifications if alarms present
 		// TODO: should we send an alarm notification when we detect something is wrong?
 		return nil, "alarms present", nil
 	}
@@ -475,73 +429,24 @@ func (s *Server) performSiteUpdate(
 		return nil, "grid unavailable", nil
 	}
 
-	if err := s.canSetModes(settings); err != nil {
+	latestAction := s.getLatestAction(ctx, siteID)
+	flatEnergyHistory := flattenDailyEnergyStats(energyHistory)
+
+	// get Future Prices for controller and plan
+	futurePrices, err := s.getFuturePrices(ctx, siteID, utility)
+	if err != nil {
 		return nil, "", err
 	}
-
-	// get Future Prices for controller
-	futurePrices, err := utility.GetFuturePrices(ctx)
-	if err != nil {
-		log.Ctx(ctx).WarnContext(ctx, "failed to get future prices", slog.Any("error", err))
-		// Continue with empty future prices
-	}
-
-	nowTime := s.now()
-	if len(futurePrices) == 0 {
-		log.Ctx(ctx).WarnContext(ctx, "no future prices available, estimating using last 24 hours")
-		histStart := nowTime.Add(-24 * time.Hour)
-		histPrices, histErr := s.storage.GetPriceHistory(ctx, siteID, histStart, nowTime)
-		if histErr != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to get historical prices", slog.Any("error", histErr))
-		} else {
-			for _, p := range histPrices {
-				p.TSStart = p.TSStart.Add(24 * time.Hour)
-				if !p.TSEnd.IsZero() {
-					p.TSEnd = p.TSEnd.Add(24 * time.Hour)
-				}
-				futurePrices = append(futurePrices, p)
-			}
-		}
-	}
-
-	hasFuture := false
-	for _, fp := range futurePrices {
-		if fp.TSStart.After(nowTime) {
-			hasFuture = true
-			break
-		}
-	}
-	if !hasFuture {
-		return nil, "", fmt.Errorf("insufficient future pricing data")
-	}
 	notifData.futurePrices = futurePrices
-
-	latestAction, err := s.storage.GetLatestAction(ctx, siteID)
-	if err != nil {
-		log.Ctx(ctx).WarnContext(ctx, "failed to get latest action from storage, using nil", slog.Any("error", err))
-		latestAction = nil
-	} else if latestAction != nil && latestAction.SystemStatus.TimeLocation != "" {
-		if loc, err := time.LoadLocation(latestAction.SystemStatus.TimeLocation); err == nil {
-			latestAction.Timestamp = latestAction.Timestamp.In(loc)
-			latestAction.SystemTimestamp = latestAction.SystemTimestamp.In(loc)
-			latestAction.SystemStatus.Timestamp = latestAction.SystemStatus.Timestamp.In(loc)
-		}
-	}
-
-	// decide Action
-	flatEnergyHistory := flattenDailyEnergyStats(energyHistory)
-	decision, err := s.controller.Decide(ctx, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings, latestAction)
-	if err != nil {
-		return nil, "", fmt.Errorf("controller decision failed: %w", err)
-	}
-	notifData.simData = decision.SimData
 
 	// When release is staging or settings.PlanMode is enabled, call Plan in addition to Decide.
 	// Log a warning if they produce different actions, but always perform the Plan action when plan mode is active.
 	// TODO: Remove s.release check and settings.PlanMode once plan mode is rolled out to 100% of sites.
+
+	var planDecision controller.Decision
+	var planErr error
+	var hasPlan bool
 	if strings.EqualFold(s.release, "staging") || settings.PlanMode {
-		var planDecision controller.Decision
-		var planErr error
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -550,37 +455,114 @@ func (s *Server) performSiteUpdate(
 				}
 			}()
 			planDecision, _, planErr = s.controller.Plan(ctx, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings, latestAction)
+			if planErr == nil {
+				hasPlan = true
+			}
 		}()
-		if planErr != nil {
-			log.Ctx(ctx).WarnContext(ctx, "controller plan failed", slog.Any("error", planErr))
-		} else {
-			decideAct := decision.Action
-			planAct := planDecision.Action
-			diffMode := decideAct.BatteryMode != planAct.BatteryMode
-			diffSolar := decideAct.SolarMode != planAct.SolarMode
-			if diffMode || diffSolar {
-				log.Ctx(ctx).WarnContext(
-					ctx,
-					"plan and decide produced different actions",
-					slog.String("siteID", siteID),
-					slog.Int("decideBatteryMode", int(decideAct.BatteryMode)),
-					slog.Int("planBatteryMode", int(planAct.BatteryMode)),
-					slog.Int("decideSolarMode", int(decideAct.SolarMode)),
-					slog.Int("planSolarMode", int(planAct.SolarMode)),
-					slog.Int("decideChargeToSOC", decideAct.ChargeToSOC),
-					slog.Int("planChargeToSOC", planAct.ChargeToSOC),
-					slog.String("decideReason", string(decideAct.Reason)),
-					slog.String("planReason", string(planAct.Reason)),
-					slog.String("decideDescription", decideAct.Description),
-					slog.String("planDescription", planAct.Description),
-				)
-			}
-			// Always perform the Plan action when plan mode is active
-			if planDecision.SimData == nil {
-				planDecision.SimData = decision.SimData
-			}
-			decision = planDecision
+	}
+
+	// still generate a plan when paused and VPPActive
+	if settings.Pause {
+		log.Ctx(ctx).InfoContext(ctx, "update: paused")
+		action := types.Action{
+			Timestamp:       s.now(),
+			SystemTimestamp: s.now().In(status.Timestamp.Location()),
+			Description:     "Automation is paused",
+			SystemStatus:    status,
+			CurrentPrice:    &currentPrice,
+			Paused:          true,
+			BatteryMode:     types.BatteryModeLoad,
+			SolarMode:       types.SolarModeAny,
 		}
+		// in case the user just paused and they were left in our managed TOU mode we
+		// want to revert them back to self-consumption
+		if status.ManagedTOUMode {
+			minSOC := int(math.Round(settings.Settings.GetMinBatterySOC(ctx, s.now(), status.Timestamp.Location(), currentPrice)))
+			if _, err := s.setESSModes(ctx, siteID, essSystem, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{
+				MinimumSOC:   minSOC,
+				CurrentPrice: currentPrice,
+			}, settings); err != nil {
+				log.Ctx(ctx).ErrorContext(ctx, "failed to set modes back to self-consumption while paused", slog.Any("error", err))
+			}
+		}
+
+		if hasPlan {
+			action.Plan = planDecision.Action.Plan
+			action.SimulationParams = planDecision.SimulationParams
+		} else if planErr != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to generate plan while paused", slog.Any("error", planErr))
+		}
+		if err := s.insertAction(ctx, siteID, action); err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to insert paused action", slog.Any("error", err))
+		}
+		// we are purposefully skipping notifications if things are paused
+		return &action, "paused", nil
+	}
+
+	// don't update if we're in a VPP event
+	if status.VPPActive {
+		log.Ctx(ctx).InfoContext(ctx, "update: VPP event active")
+		action := types.Action{
+			Timestamp:       s.now(),
+			SystemTimestamp: s.now().In(status.Timestamp.Location()),
+			Description:     "VPP event active",
+			Reason:          types.ActionReasonVPPActive,
+			SystemStatus:    status,
+			CurrentPrice:    &currentPrice,
+		}
+		if hasPlan {
+			action.Plan = planDecision.Action.Plan
+			action.SimulationParams = planDecision.SimulationParams
+		} else if planErr != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to generate plan during VPP active", slog.Any("error", planErr))
+		}
+		if err := s.insertAction(ctx, siteID, action); err != nil {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to insert action", slog.Any("error", err))
+		}
+		s.handleNotifications(ctx, siteID, notifData)
+		return &action, "vpp event", nil
+	}
+
+	if err := s.canSetModes(settings); err != nil {
+		return nil, "", err
+	}
+
+	// decide Action
+	decision, err := s.controller.Decide(ctx, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings, latestAction)
+	if err != nil {
+		return nil, "", fmt.Errorf("controller decision failed: %w", err)
+	}
+	notifData.simData = decision.SimData
+
+	if hasPlan {
+		decideAct := decision.Action
+		planAct := planDecision.Action
+		diffMode := decideAct.BatteryMode != planAct.BatteryMode
+		diffSolar := decideAct.SolarMode != planAct.SolarMode
+		if diffMode || diffSolar {
+			log.Ctx(ctx).WarnContext(
+				ctx,
+				"plan and decide produced different actions",
+				slog.String("siteID", siteID),
+				slog.Int("decideBatteryMode", int(decideAct.BatteryMode)),
+				slog.Int("planBatteryMode", int(planAct.BatteryMode)),
+				slog.Int("decideSolarMode", int(decideAct.SolarMode)),
+				slog.Int("planSolarMode", int(planAct.SolarMode)),
+				slog.Int("decideChargeToSOC", decideAct.ChargeToSOC),
+				slog.Int("planChargeToSOC", planAct.ChargeToSOC),
+				slog.String("decideReason", string(decideAct.Reason)),
+				slog.String("planReason", string(planAct.Reason)),
+				slog.String("decideDescription", decideAct.Description),
+				slog.String("planDescription", planAct.Description),
+			)
+		}
+		// Always perform the Plan action when plan mode is active
+		if planDecision.SimData == nil {
+			planDecision.SimData = decision.SimData
+		}
+		decision = planDecision
+	} else if planErr != nil {
+		log.Ctx(ctx).WarnContext(ctx, "controller plan failed", slog.Any("error", planErr))
 	}
 
 	action := decision.Action
@@ -642,6 +624,60 @@ func (s *Server) insertAction(ctx context.Context, siteID string, action types.A
 	insertCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	return s.storage.InsertAction(insertCtx, siteID, action)
+}
+
+func (s *Server) getFuturePrices(ctx context.Context, siteID string, utility utility.Utility) ([]types.Price, error) {
+	futurePrices, err := utility.GetFuturePrices(ctx)
+	if err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to get future prices", slog.Any("error", err))
+		// Continue with empty future prices
+	}
+
+	nowTime := s.now()
+	if len(futurePrices) == 0 {
+		log.Ctx(ctx).WarnContext(ctx, "no future prices available, estimating using last 24 hours")
+		histStart := nowTime.Add(-24 * time.Hour)
+		histPrices, histErr := s.storage.GetPriceHistory(ctx, siteID, histStart, nowTime)
+		if histErr != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to get historical prices", slog.Any("error", histErr))
+		} else {
+			for _, p := range histPrices {
+				p.TSStart = p.TSStart.Add(24 * time.Hour)
+				if !p.TSEnd.IsZero() {
+					p.TSEnd = p.TSEnd.Add(24 * time.Hour)
+				}
+				futurePrices = append(futurePrices, p)
+			}
+		}
+	}
+
+	hasFuture := false
+	for _, fp := range futurePrices {
+		if fp.TSStart.After(nowTime) {
+			hasFuture = true
+			break
+		}
+	}
+	if !hasFuture {
+		return nil, fmt.Errorf("insufficient future pricing data")
+	}
+	return futurePrices, nil
+}
+
+func (s *Server) getLatestAction(ctx context.Context, siteID string) *types.Action {
+	latestAction, err := s.storage.GetLatestAction(ctx, siteID)
+	if err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "failed to get latest action from storage, using nil", slog.Any("error", err))
+		return nil
+	}
+	if latestAction != nil && latestAction.SystemStatus.TimeLocation != "" {
+		if loc, err := time.LoadLocation(latestAction.SystemStatus.TimeLocation); err == nil {
+			latestAction.Timestamp = latestAction.Timestamp.In(loc)
+			latestAction.SystemTimestamp = latestAction.SystemTimestamp.In(loc)
+			latestAction.SystemStatus.Timestamp = latestAction.SystemStatus.Timestamp.In(loc)
+		}
+	}
+	return latestAction
 }
 
 func (s *Server) mergeUtilityVPPEvents(ctx context.Context, status types.SystemStatus, vppInfo types.UtilityVPPInfo) types.SystemStatus {

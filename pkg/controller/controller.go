@@ -19,16 +19,6 @@ const (
 
 const fastTrackChargeWithin = 15 * time.Minute
 
-// touScheduleLeadTimeBuffer is the minimum duration a direct solar export or peak defense standby
-// window must remain active for the controller to emit a TOU schedule to the ESS.
-//
-// Systems like Tesla Powerwall and FranklinWH rely on periodic cloud polling and asynchronous
-// synchronization to apply Time-of-Use schedule changes, which can take up to 30 minutes in practice.
-// If a peak window has less than 30 minutes remaining, any newly pushed TOU schedule is likely to
-// take effect after the peak has already ended, resulting in zero economic benefit, battery desynchronization,
-// or leaving the ESS stuck in a stale TOU mode post-peak.
-const touScheduleLeadTimeBuffer = 30 * time.Minute
-
 // Decision represents the result of the decision logic.
 type Decision struct {
 	Action           types.Action

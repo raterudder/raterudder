@@ -947,4 +947,207 @@ func TestHandleForecast(t *testing.T) {
 		mockES.AssertCalled(t, "GetStatus", mock.Anything)
 		mockU.AssertCalled(t, "GetCurrentPrice", mock.Anything)
 	})
+
+	t.Run("Fault In LatestAction Bypasses Planning And Returns Fault Action", func(t *testing.T) {
+		now := time.Now().Truncate(time.Hour)
+		mockS := &mockStorage{}
+		faultAction := &types.Action{
+			Timestamp:    now,
+			Description:  "Grid is unavailable",
+			Reason:       types.ActionReasonGridUnavailable,
+			Fault:        true,
+			CurrentPrice: &types.Price{DollarsPerKWH: 0.10, TSStart: now},
+			SystemStatus: types.SystemStatus{
+				GridUnavailable: true,
+				Timestamp:       now,
+			},
+		}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return(faultAction, nil)
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil).Maybe()
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			UtilityProvider: "test",
+			ESS:             "mock",
+			PlanMode:        true,
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
+
+		mockES := &mockESS{}
+		mockP := ess.NewMap()
+		mockP.SetSystem(types.SiteIDNone, mockES)
+
+		mockU := &mockUtility{}
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			controller: controller.NewController(),
+			bypassAuth: true,
+			release:    "production",
+			nowFunc:    func() time.Time { return now },
+		}
+
+		req := httptest.NewRequest("GET", "/api/forecast", nil)
+		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
+		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv.handleForecast(w, req)
+
+		resp := w.Result()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var data ForecastRes
+		err := json.NewDecoder(resp.Body).Decode(&data)
+		require.NoError(t, err)
+
+		assert.Nil(t, data.Plan, "Fault state must not generate a plan")
+		assert.Empty(t, data.Simulation, "Fault state must not run simulation")
+		require.NotNil(t, data.LatestAction)
+		assert.True(t, data.LatestAction.Fault)
+		assert.Equal(t, "Grid is unavailable", data.LatestAction.Description)
+		mockES.AssertNotCalled(t, "GetStatus")
+	})
+
+	t.Run("Realtime Fault Status Bypasses Planning", func(t *testing.T) {
+		now := time.Now().Truncate(time.Hour)
+		mockS := &mockStorage{}
+		// No recent action so realtime status is fetched
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil)
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil).Maybe()
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			UtilityProvider: "test",
+			ESS:             "mock",
+			PlanMode:        true,
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{
+			GridUnavailable: true,
+			Timestamp:       now,
+			TimeLocation:    "UTC",
+		}, nil)
+		mockP := ess.NewMap()
+		mockP.SetSystem(types.SiteIDNone, mockES)
+
+		mockU := &mockUtility{}
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			controller: controller.NewController(),
+			bypassAuth: true,
+			release:    "production",
+			nowFunc:    func() time.Time { return now },
+		}
+
+		req := httptest.NewRequest("GET", "/api/forecast", nil)
+		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
+		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv.handleForecast(w, req)
+
+		resp := w.Result()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var data ForecastRes
+		err := json.NewDecoder(resp.Body).Decode(&data)
+		require.NoError(t, err)
+
+		assert.Nil(t, data.Plan, "Realtime fault state must not generate a plan")
+		assert.Empty(t, data.Simulation, "Realtime fault state must not run simulation")
+		require.NotNil(t, data.LatestAction)
+		assert.True(t, data.LatestAction.Fault)
+		assert.Equal(t, "Grid is unavailable", data.LatestAction.Description)
+	})
+
+	t.Run("Paused Action With Plan Returns Plan", func(t *testing.T) {
+		now := time.Now().Truncate(time.Hour)
+		mockS := &mockStorage{}
+		pausedAction := &types.Action{
+			Timestamp:    now,
+			Description:  "Automation is paused",
+			Paused:       true,
+			CurrentPrice: &types.Price{DollarsPerKWH: 0.10, TSStart: now},
+			Plan: &types.Plan{
+				HorizonHours: 24,
+				Periods: []types.PlanPeriod{
+					{
+						TSStart:       now,
+						TSEnd:         now.Add(time.Hour),
+						DurationHours: 1,
+						BatteryMode:   types.BatteryModeLoad,
+					},
+				},
+			},
+			SystemStatus: types.SystemStatus{
+				BatterySOC: 70,
+				Timestamp:  now,
+			},
+		}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return(pausedAction, nil)
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil).Maybe()
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			UtilityProvider: "test",
+			ESS:             "mock",
+			Pause:           true,
+			PlanMode:        true,
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
+
+		mockES := &mockESS{}
+		mockP := ess.NewMap()
+		mockP.SetSystem(types.SiteIDNone, mockES)
+
+		mockU := &mockUtility{}
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			controller: controller.NewController(),
+			bypassAuth: true,
+			release:    "production",
+			nowFunc:    func() time.Time { return now },
+		}
+
+		req := httptest.NewRequest("GET", "/api/forecast", nil)
+		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
+		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv.handleForecast(w, req)
+
+		resp := w.Result()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var data ForecastRes
+		err := json.NewDecoder(resp.Body).Decode(&data)
+		require.NoError(t, err)
+
+		require.NotNil(t, data.Plan, "Paused user with plan should receive plan in forecast")
+		require.NotNil(t, data.LatestAction)
+		assert.True(t, data.LatestAction.Paused)
+		assert.Equal(t, "Automation is paused", data.LatestAction.Description)
+	})
 }

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Router } from 'wouter';
@@ -543,6 +543,77 @@ describe('Forecast Page', () => {
         });
 
         expect(screen.getByText('Reserve')).toBeInTheDocument();
+    });
+
+    it('renders system fault banner when latestAction has fault without simulation or plan', async () => {
+        (fetchModeling as any).mockResolvedValue({
+            latestAction: {
+                timestamp: '2026-09-30T12:00:00Z',
+                batteryMode: 0,
+                solarMode: 0,
+                description: 'Grid is unavailable',
+                fault: true,
+            },
+            energyHistory: [],
+            priceHistory: [],
+            weather: [],
+        });
+
+        renderForecast();
+
+        await waitFor(() => {
+            expect(screen.getByTestId('forecast-fault-alert')).toBeInTheDocument();
+        });
+
+        expect(screen.getByText(/Grid is unavailable/)).toBeInTheDocument();
+        expect(screen.getByText(/Automated planning is suspended until the fault is resolved/)).toBeInTheDocument();
+        expect(screen.getByText('No forecast data available while system is in a fault state.')).toBeInTheDocument();
+    });
+
+    it('renders system fault banner along with historical data when includeHistory is true', async () => {
+        const energyHistory = [
+            {
+                tsHourStart: '2026-09-30T10:00:00Z',
+                avgBatterySOC: 80,
+                solarKWH: 1.5,
+                homeLoadKWH: 0.8,
+            },
+        ];
+        const priceHistory = [
+            {
+                tsHourStart: '2026-09-30T10:00:00Z',
+                dollarsPerKWH: 0.12,
+                gridUseDollarsPerKWH: 0.04,
+            },
+        ];
+        (fetchModeling as any).mockResolvedValue({
+            latestAction: {
+                timestamp: '2026-09-30T12:00:00Z',
+                batteryMode: 0,
+                solarMode: 0,
+                description: '2 alarms present',
+                fault: true,
+            },
+            energyHistory,
+            priceHistory,
+            weather: [],
+        });
+
+        renderForecast();
+
+        await waitFor(() => {
+            expect(screen.getByTestId('forecast-fault-alert')).toBeInTheDocument();
+        });
+
+        // Toggle include history
+        const toggle = screen.getByRole('switch', { name: /Show Previous 24 Hours/i });
+        fireEvent.click(toggle);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('forecast-fault-alert')).toBeInTheDocument();
+            expect(screen.getByText(/2 alarms present/)).toBeInTheDocument();
+            expect(screen.getByText('24-Hour Simulation')).toBeInTheDocument();
+        });
     });
 });
 

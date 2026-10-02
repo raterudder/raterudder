@@ -804,7 +804,9 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
         </div>
     );
     if (error) return <div className="error">Error: {error}</div>;
-    if (!data.length) return <div className="no-actions">No simulation data available.</div>;
+
+    const hasFault = Boolean(rawModelingData?.latestAction?.fault);
+    const faultDescription = rawModelingData?.latestAction?.description || 'A system fault is currently active.';
 
     const activeCharts = isPlanActive ? planCharts : charts;
 
@@ -826,72 +828,89 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
                     </div>
                 </Field.Root>
             </div>
-            {isPlanActive ? (
-                <>
-                    <p className="forecast-subtitle">
-                        Optimal battery dispatch schedule generated {(() => {
-                            const startTs = rawModelingData?.plan?.tsCreated || rawModelingData?.updated;
-                            return startTs ? formatTime(startTs, data[0]?.ts) : '';
-                        })()} ({rawModelingData?.plan?.horizonHours ?? 24}-Hour Horizon)
+            {hasFault && (
+                <div className="banner error-banner" data-testid="forecast-fault-alert" style={{ marginTop: '1rem', marginBottom: '1rem' }}>
+                    <p>
+                        <strong>System Fault:</strong> {faultDescription}. Automated planning is suspended until the fault is resolved.
                     </p>
-                    <div className="forecast-hero-grid">
-                        <div className="forecast-stat-card">
-                            <span className="forecast-stat-label">Projected Grid Cost</span>
-                            <span className="forecast-stat-value">
-                                ${(rawModelingData?.plan?.totalProjectedCost ?? 0).toFixed(2)}
-                            </span>
-                            <span className="forecast-stat-sublabel">Anticipated grid electricity cost</span>
-                        </div>
-                        <div className="forecast-stat-card">
-                            <span className="forecast-stat-label">Projected Export Credits</span>
-                            <span className="forecast-stat-value">
-                                ${(rawModelingData?.plan?.totalExportCredits ?? 0).toFixed(2)}
-                            </span>
-                            <span className="forecast-stat-sublabel">Anticipated export credits</span>
-                        </div>
+                </div>
+            )}
+            {!data.length ? (
+                <div className="no-actions">
+                    {hasFault
+                        ? 'No forecast data available while system is in a fault state.'
+                        : 'No simulation data available.'}
+                </div>
+            ) : (
+                <>
+                    {isPlanActive ? (
+                        <>
+                            <p className="forecast-subtitle">
+                                Optimal battery dispatch schedule generated {(() => {
+                                    const startTs = rawModelingData?.plan?.tsCreated || rawModelingData?.updated;
+                                    return startTs ? formatTime(startTs, data[0]?.ts) : '';
+                                })()} ({rawModelingData?.plan?.horizonHours ?? 24}-Hour Horizon)
+                            </p>
+                            <div className="forecast-hero-grid">
+                                <div className="forecast-stat-card">
+                                    <span className="forecast-stat-label">Projected Grid Cost</span>
+                                    <span className="forecast-stat-value">
+                                        ${(rawModelingData?.plan?.totalProjectedCost ?? 0).toFixed(2)}
+                                    </span>
+                                    <span className="forecast-stat-sublabel">Anticipated grid electricity cost</span>
+                                </div>
+                                <div className="forecast-stat-card">
+                                    <span className="forecast-stat-label">Projected Export Credits</span>
+                                    <span className="forecast-stat-value">
+                                        ${(rawModelingData?.plan?.totalExportCredits ?? 0).toFixed(2)}
+                                    </span>
+                                    <span className="forecast-stat-sublabel">Anticipated export credits</span>
+                                </div>
+                            </div>
+                        </>
+                    ) : (
+                        <p className="forecast-subtitle">
+                            Predicted energy state <strong>assuming no action is taken</strong> starting from{' '}
+                            {(() => {
+                                const startTs = rawModelingData?.updated || rawModelingData?.simulation?.[0]?.ts;
+                                return startTs ? formatTime(startTs, data[0]?.ts) : '';
+                            })()}
+                        </p>
+                    )}
+                    <div className="forecast-charts">
+                        {activeCharts.map((config) => {
+                            const headerAction = (!isPlanActive && config.dataKey === 'avgHomeLoadKWH') ? (
+                                <Field.Root className="form-group switch-group compact" style={{ margin: 0 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                                        <Switch.Root
+                                             id="loadPredictionModeToggle"
+                                             aria-label="Conservative"
+                                             checked={loadPredictionMode === 'conservative'}
+                                             onCheckedChange={(checked) => setLoadPredictionMode(checked ? 'conservative' : 'default')}
+                                             className="switch-root"
+                                        >
+                                            <Switch.Thumb className="switch-thumb" />
+                                        </Switch.Root>
+                                        <span style={{ color: loadPredictionMode === 'conservative' ? 'var(--primary)' : 'inherit', fontWeight: loadPredictionMode === 'conservative' ? 600 : 400 }}>Conservative</span>
+                                    </div>
+                                </Field.Root>
+                            ) : undefined;
+                            return (
+                                <ForecastChart
+                                    key={config.dataKey}
+                                    data={data}
+                                    config={config}
+                                    isMobile={isMobile}
+                                    showCurrentTime={includeHistory}
+                                    nowMs={nowMs}
+                                    headerAction={headerAction}
+                                    planPeriods={rawModelingData?.plan?.periods}
+                                />
+                            );
+                        })}
                     </div>
                 </>
-            ) : (
-                <p className="forecast-subtitle">
-                    Predicted energy state <strong>assuming no action is taken</strong> starting from{' '}
-                    {(() => {
-                        const startTs = rawModelingData?.updated || rawModelingData?.simulation?.[0]?.ts;
-                        return startTs ? formatTime(startTs, data[0]?.ts) : '';
-                    })()}
-                </p>
             )}
-            <div className="forecast-charts">
-                {activeCharts.map((config) => {
-                    const headerAction = (!isPlanActive && config.dataKey === 'avgHomeLoadKWH') ? (
-                        <Field.Root className="form-group switch-group compact" style={{ margin: 0 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                                <Switch.Root
-                                     id="loadPredictionModeToggle"
-                                     aria-label="Conservative"
-                                     checked={loadPredictionMode === 'conservative'}
-                                     onCheckedChange={(checked) => setLoadPredictionMode(checked ? 'conservative' : 'default')}
-                                     className="switch-root"
-                                >
-                                    <Switch.Thumb className="switch-thumb" />
-                                </Switch.Root>
-                                <span style={{ color: loadPredictionMode === 'conservative' ? 'var(--primary)' : 'inherit', fontWeight: loadPredictionMode === 'conservative' ? 600 : 400 }}>Conservative</span>
-                            </div>
-                        </Field.Root>
-                    ) : undefined;
-                    return (
-                        <ForecastChart
-                            key={config.dataKey}
-                            data={data}
-                            config={config}
-                            isMobile={isMobile}
-                            showCurrentTime={includeHistory}
-                            nowMs={nowMs}
-                            headerAction={headerAction}
-                            planPeriods={rawModelingData?.plan?.periods}
-                        />
-                    );
-                })}
-            </div>
         </div>
     );
 }

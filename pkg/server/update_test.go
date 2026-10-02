@@ -342,6 +342,98 @@ func TestHandleUpdate(t *testing.T) {
 		mockES.AssertNotCalled(t, "SetModes")
 	})
 
+	t.Run("Paused Updates With PlanMode", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+		now := time.Now().Truncate(time.Hour)
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(now).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil)
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			Pause:           true,
+			PlanMode:        true,
+			UtilityProvider: "test",
+			MinBatterySOC:   20.0,
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{
+			BatterySOC:         75,
+			BatteryCapacityKWH: 13.5,
+			Timestamp:          now,
+			TimeLocation:       "UTC",
+		}, nil)
+
+		mockP := ess.NewMap()
+		mockP.SetSystem(types.SiteIDNone, mockES)
+
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: now, TSEnd: now.Add(time.Hour)}, nil)
+		var futurePrices []types.Price
+		for i := 1; i <= 24; i++ {
+			futurePrices = append(futurePrices, types.Price{
+				DollarsPerKWH: 0.15,
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+			})
+		}
+		mockU.On("GetFuturePrices", mock.Anything).Return(futurePrices, nil)
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
+
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		mockS.On("InsertAction", mock.Anything, mock.Anything, mock.MatchedBy(func(a types.Action) bool {
+			return a.Paused && a.Description == "Automation is paused" && a.BatteryMode == types.BatteryModeLoad &&
+				a.SolarMode == types.SolarModeAny && a.Plan != nil && len(a.Plan.Periods) > 0
+		})).Return(nil)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			listenAddr: ":8080",
+			controller: controller.NewController(),
+			bypassAuth: true,
+			release:    "production",
+			nowFunc:    func() time.Time { return now },
+		}
+
+		req := httptest.NewRequest("GET", "/api/update", nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
+		w := httptest.NewRecorder()
+
+		srv.handleUpdate(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+		var resp map[string]any
+		err := json.NewDecoder(w.Body).Decode(&resp)
+		require.NoError(t, err)
+		assert.Equal(t, "paused", resp["status"])
+		require.NotNil(t, resp["action"])
+		actionMap, ok := resp["action"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, true, actionMap["paused"])
+		assert.NotNil(t, actionMap["plan"], "plan should be generated and attached when PlanMode=true even if paused")
+
+		mockES.AssertNotCalled(t, "SetModes")
+	})
+
 	t.Run("Paused Updates Restores ManagedTOUMode", func(t *testing.T) {
 		t.Run("Restores When ManagedTOUMode Is True", func(t *testing.T) {
 			mockS := &mockStorage{}
@@ -761,6 +853,7 @@ func TestHandleUpdate(t *testing.T) {
 		mockU := &mockUtility{}
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: time.Now()}, nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{{DollarsPerKWH: 0.15, TSStart: time.Now().Add(time.Hour)}}, nil)
 		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
 		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
@@ -788,6 +881,165 @@ func TestHandleUpdate(t *testing.T) {
 
 		mockU.AssertCalled(t, "GetCurrentPrice", mock.Anything)
 		mockES.AssertNotCalled(t, "SetModes")
+	})
+
+	t.Run("Action - VPP Event Active With PlanMode", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+		now := time.Now().Truncate(time.Hour)
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(now).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil)
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			UtilityProvider: "test",
+			PlanMode:        true,
+			MinBatterySOC:   20.0,
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{
+			VPPActive:          true,
+			VPPKW:              3.5,
+			BatterySOC:         50,
+			BatteryCapacityKWH: 13.5,
+			Timestamp:          now,
+			TimeLocation:       "UTC",
+		}, nil)
+
+		mockP := ess.NewMap()
+		mockP.SetSystem(types.SiteIDNone, mockES)
+
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: now, TSEnd: now.Add(time.Hour)}, nil)
+		var futurePrices []types.Price
+		for i := 1; i <= 24; i++ {
+			futurePrices = append(futurePrices, types.Price{
+				DollarsPerKWH: 0.15,
+				TSStart:       now.Add(time.Duration(i) * time.Hour),
+				TSEnd:         now.Add(time.Duration(i+1) * time.Hour),
+			})
+		}
+		mockU.On("GetFuturePrices", mock.Anything).Return(futurePrices, nil)
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
+
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		mockS.On("InsertAction", mock.Anything, mock.Anything, mock.MatchedBy(func(a types.Action) bool {
+			return a.Description == "VPP event active" && a.Reason == types.ActionReasonVPPActive && !a.Fault &&
+				a.Plan != nil && len(a.Plan.Periods) > 0
+		})).Return(nil)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			listenAddr: ":8080",
+			controller: controller.NewController(),
+			bypassAuth: true,
+			release:    "production",
+			nowFunc:    func() time.Time { return now },
+		}
+
+		req := httptest.NewRequest("GET", "/api/update", nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
+		w := httptest.NewRecorder()
+		srv.handleUpdate(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+		var resp map[string]any
+		err := json.NewDecoder(w.Body).Decode(&resp)
+		require.NoError(t, err)
+		assert.Equal(t, "vpp event", resp["status"])
+
+		mockES.AssertNotCalled(t, "SetModes")
+	})
+
+	t.Run("Action - Grid Unavailable Skips Plan Even With PlanMode Enabled", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+		now := time.Now().Truncate(time.Hour)
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(now).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil)
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			UtilityProvider: "test",
+			PlanMode:        true,
+			MinBatterySOC:   20.0,
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{
+			GridUnavailable:    true,
+			BatterySOC:         50,
+			BatteryCapacityKWH: 13.5,
+			Timestamp:          now,
+			TimeLocation:       "UTC",
+		}, nil)
+
+		mockP := ess.NewMap()
+		mockP.SetSystem(types.SiteIDNone, mockES)
+
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: now, TSEnd: now.Add(time.Hour)}, nil)
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
+
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		mockS.On("InsertAction", mock.Anything, mock.Anything, mock.MatchedBy(func(a types.Action) bool {
+			return a.Description == "Grid is unavailable" && a.Reason == types.ActionReasonGridUnavailable && a.Fault && a.Plan == nil
+		})).Return(nil)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			listenAddr: ":8080",
+			controller: controller.NewController(),
+			bypassAuth: true,
+			release:    "production",
+			nowFunc:    func() time.Time { return now },
+		}
+
+		req := httptest.NewRequest("GET", "/api/update", nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
+		w := httptest.NewRecorder()
+		srv.handleUpdate(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+		var resp map[string]any
+		err := json.NewDecoder(w.Body).Decode(&resp)
+		require.NoError(t, err)
+		assert.Equal(t, "grid unavailable", resp["status"])
 	})
 
 	t.Run("Handle Update - Backfill Logic", func(t *testing.T) {
@@ -1593,6 +1845,7 @@ func TestHandleUpdateSites(t *testing.T) {
 		mockU := &mockUtility{}
 		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
 		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.15, TSStart: time.Now()}, nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{{DollarsPerKWH: 0.15, TSStart: time.Now().Add(time.Hour)}}, nil)
 		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
 		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 

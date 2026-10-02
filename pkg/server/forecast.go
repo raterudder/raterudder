@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -126,6 +127,49 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		now = now.In(latestAction.Timestamp.Location())
 	}
 
+	if latestAction != nil && latestAction.Fault {
+		histStart24 := now.AddDate(0, 0, -1).Truncate(time.Hour)
+		energyHistory24, _, err := s.getCombinedHistory(ctx, siteID, settings, histStart24, now, nil)
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to get combined history for faulted forecast", slog.Any("error", err))
+		}
+		flatEnergy24 := flattenDailyEnergyStats(energyHistory24)
+		energyRes := buildEnergyHistoryRes(flatEnergy24, histStart24, now)
+
+		priceHistory24, err := s.storage.GetPriceHistory(ctx, siteID, histStart24, now)
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to fetch price history for forecast", slog.Any("error", err))
+		}
+		if latestAction.CurrentPrice != nil && latestAction.CurrentPrice.Contains(now) {
+			var foundCurrentPrice bool
+			for _, p := range priceHistory24 {
+				if p.Contains(now) {
+					foundCurrentPrice = true
+					break
+				}
+			}
+			if !foundCurrentPrice {
+				priceHistory24 = append(priceHistory24, *latestAction.CurrentPrice)
+			}
+		}
+		priceRes := buildPriceHistoryRes(priceHistory24)
+
+		res := ForecastRes{
+			LatestAction:  latestAction,
+			EnergyHistory: energyRes,
+			PriceHistory:  priceRes,
+			Updated:       latestAction.Timestamp,
+		}
+
+		w.Header().Set("Cache-Control", "private, max-age=300")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(res); err != nil {
+			panic(http.ErrAbortHandler)
+		}
+		return
+	}
+
 	// FAST-PATH: If we have a fresh plan generated within the last hour, bypass
 	// the 35-day historical query, ESS status fetch, and controller simulation.
 	isFreshPlan := latestAction != nil &&
@@ -219,6 +263,53 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		updatedTime = status.Timestamp
 	}
 
+	isFaulted := (status.EmergencyMode && settings.ESS != "franklin") || len(status.Alarms) > 0 || status.GridUnavailable
+	if isFaulted {
+		desc := "Grid is unavailable"
+		reason := types.ActionReasonGridUnavailable
+		if status.EmergencyMode && settings.ESS != "franklin" {
+			desc = "In emergency mode"
+			reason = types.ActionReasonEmergencyMode
+		} else if len(status.Alarms) > 0 {
+			desc = fmt.Sprintf("%d alarms present", len(status.Alarms))
+			reason = types.ActionReasonHasAlarms
+		}
+		faultAction := &types.Action{
+			Timestamp:    updatedTime,
+			Description:  desc,
+			Reason:       reason,
+			SystemStatus: status,
+			Fault:        true,
+		}
+		histStart24 := now.AddDate(0, 0, -1).Truncate(time.Hour)
+		energyHistory24, _, err := s.getCombinedHistory(ctx, siteID, settings, histStart24, now, nil)
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to get combined history for faulted forecast", slog.Any("error", err))
+		}
+		flatEnergy24 := flattenDailyEnergyStats(energyHistory24)
+		energyRes := buildEnergyHistoryRes(flatEnergy24, histStart24, now)
+
+		priceHistory24, err := s.storage.GetPriceHistory(ctx, siteID, histStart24, now)
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to fetch price history for forecast", slog.Any("error", err))
+		}
+		priceRes := buildPriceHistoryRes(priceHistory24)
+
+		res := ForecastRes{
+			LatestAction:  faultAction,
+			EnergyHistory: energyRes,
+			PriceHistory:  priceRes,
+			Updated:       updatedTime,
+		}
+		w.Header().Set("Cache-Control", "private, max-age=300")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(res); err != nil {
+			panic(http.ErrAbortHandler)
+		}
+		return
+	}
+
 	// get utility
 	utility, err := s.utilities.Site(ctx, siteID, settings.Settings)
 	if err != nil {
@@ -288,15 +379,23 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	priceRes := buildPriceHistoryRes(priceHistory24)
 
 	// Try real-time Plan fallback if on staging or if PlanMode is enabled
-	// TODO: Remove s.release check and settings.PlanMode once plan mode is rolled out to 100% of sites.
+	// TODO: remove this and just return an error if we have a stale plan
 	if strings.EqualFold(s.release, "staging") || settings.PlanMode {
 		planDecision, freshPlan, planErr := s.controller.Plan(
 			ctx, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings, latestAction,
 		)
 		if planErr == nil {
+			act := planDecision.Action
+			if settings.Pause {
+				act.Paused = true
+				act.Description = "Automation is paused"
+			} else if status.VPPActive {
+				act.Reason = types.ActionReasonVPPActive
+				act.Description = "VPP event active"
+			}
 			res := ForecastRes{
 				Plan:          &freshPlan,
-				LatestAction:  &planDecision.Action,
+				LatestAction:  &act,
 				EnergyHistory: energyRes,
 				PriceHistory:  priceRes,
 				Updated:       now,

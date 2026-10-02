@@ -34,6 +34,20 @@
   border: 1px solid rgba(239, 68, 68, 0.2);
 }
 
+.forecast-page .error-banner {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-left: 4px solid #ef4444;
+  color: var(--on-surface);
+  margin-bottom: 1.5rem;
+}
+
+.forecast-page .error-banner p::before {
+  content: "⚠️";
+  font-size: 1.25rem;
+  margin-right: 0.25rem;
+}
+
 .forecast-page .no-actions {
   text-align: center;
   padding: 4rem;
