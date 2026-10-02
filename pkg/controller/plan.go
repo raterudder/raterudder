@@ -77,6 +77,14 @@ const (
 	// or deliver usable battery charging.
 	minSignificantSolarKW = 0.5
 
+	// minSurplusSolarForReserveKW (1.5 kW) is the minimum excess solar generation rate above home load
+	// (solarKWH - loadKWH >= 1.5 kW * durationHours) required to rely on solar for reserve deficit restoration
+	// rather than grid charging. At 1.5 kW net surplus, restoring a typical 15% deficit (e.g. 5% to 20% on a 13.5 kWh pack,
+	// ~2 kWh) takes approximately 1.3 hours. If the threshold is set too low (e.g. sensor noise or trickle solar), the battery
+	// will not meaningfully recharge, leaving the home exposed. If set too high, the system will unnecessarily import from
+	// the grid despite solar already providing substantial recharging capability.
+	minSurplusSolarForReserveKW = 1.5
+
 	// socTargetTolerancePct is the tolerance (in % SOC) allowed when verifying whether a forward path reached its target SOC.
 	// It matches socBucketResolutionPct (0.5%) so that trajectories ending at e.g. 99.6% due to bin quantization are not discarded.
 	socTargetTolerancePct = 0.5
@@ -126,6 +134,17 @@ const (
 	// reserveFloorTolerancePct is the numerical tolerance (0.1% SOC) used when evaluating if
 	// the battery is resting at its emergency reserve floor.
 	reserveFloorTolerancePct = 0.1
+
+	// minReserveDeficitPenaltyDollarsPerKWH ($1.00/kWh) is the minimum penalty rate applied to energy deficits below the user's reserve.
+	// It guarantees that the penalty strictly exceeds typical retail electricity rates and peak-shaving benefits, preventing the optimizer
+	// from treating the homeowner's backup reserve as a cheap source of energy to borrow or delay recharging.
+	minReserveDeficitPenaltyDollarsPerKWH = 1.00
+
+	// reserveDeficitPenaltyMultiplier (3.0x) scales the deficit penalty with current electricity rates.
+	// When import rates are high (e.g. $0.50/kWh during extreme events), a flat $1.00/kWh penalty might no longer sufficiently
+	// discourage borrowing from reserve if peak arbitrage spreads are exceptionally large. Multiplying by 3x ensures the penalty
+	// remains prohibitive relative to any single-cycle arbitrage gain.
+	reserveDeficitPenaltyMultiplier = 3.0
 
 	// minBatteryDeliveredEnergyKWH is the energy threshold (10 Wh) below which battery discharge
 	// to home load is considered negligible (e.g. at reserve floor).
@@ -1447,7 +1466,6 @@ func (c *Controller) generateActionCandidates(
 			}
 
 			for i := stepIdx + 1; i < len(timeline); i++ {
-
 				// For mandatory VPP events, firmware takes autonomous control at T-2h and forces charging
 				// regardless of cost if not full. Any retail arbitrage must complete before vppRechargeDeadline.
 				// For optional (voluntary) VPP events, there is no firmware takeover. Furthermore, voluntary
@@ -1499,23 +1517,24 @@ func (c *Controller) generateActionCandidates(
 
 			// When both an upcoming VPP event and an upcoming arbitrage/peak rate exist, consolidate
 			// into a single BatteryModeChargeAny candidate to prevent redundant state-space expansion.
-			// Arbitrage takes preference only if it occurs sooner with sufficient runway before the
-			// pre-VPP recharge deadline (allowing the battery to discharge and fully recharge to 100%
-			// Target reserve recharge: if currentSOC is below the interval's target reserve (e.g. during a scheduled off-peak charging window),
-			// offer ChargeAny to bring battery back up to the configured reserve.
-			hasReserveCharge := currentSOC < interval.minSOC
+			// Target reserve recharge: if currentSOC is below the interval's target reserve (e.g. during
+			// a scheduled off-peak charging window), offer ChargeAny to bring battery back up to the
+			// configured reserve.
+			hasReserveCharge := currentSOC < interval.minSOC-reserveFloorTolerancePct
 			if hasArbitrageAhead || hasVPPAhead || hasReserveCharge {
 				selectedReason := types.ActionReasonVPPPrep
 				selectedDesc := "VPP Pre-charging before deadline."
-				var candTargetSOC int
-				isArbitrageSooner := hasArbitrageAhead && (!hasVPPAhead || earliestArbitrageTime.Before(nearestVPPRechargeDeadline))
-				if isArbitrageSooner {
+				selectedTargetSOC := 0
+
+				if hasReserveCharge {
+					selectedReason = types.ActionReasonDeficitChargeNow
+					selectedDesc = "Charging battery to target reserve."
+					if !hasArbitrageAhead && !hasVPPAhead {
+						selectedTargetSOC = int(math.Round(interval.minSOC))
+					}
+				} else if hasArbitrageAhead && (!hasVPPAhead || earliestArbitrageTime.Before(nearestVPPRechargeDeadline)) {
 					selectedReason = chargeReason
 					selectedDesc = chargeDesc
-				} else if hasReserveCharge && !hasVPPAhead {
-					selectedReason = types.ActionReasonDeficitChargeNow
-					selectedDesc = fmt.Sprintf("Charging battery to target reserve (%.0f%%).", interval.minSOC)
-					candTargetSOC = int(math.Round(interval.minSOC))
 				}
 
 				importRate := interval.importRate
@@ -1524,10 +1543,17 @@ func (c *Controller) generateActionCandidates(
 					solarMode:   defaultSolarMode,
 					reason:      selectedReason,
 					description: selectedDesc,
-					targetSOC:   candTargetSOC,
+					targetSOC:   selectedTargetSOC,
 					isTruePeak:  isTruePeak,
 					logFn: func(ctx context.Context, selected bool) {
-						if isArbitrageSooner {
+						if hasReserveCharge {
+							planLog(ctx, selected, "reserve target charge",
+								slog.Time("stepTime", stepTime),
+								slog.Float64("importRate", interval.importRate),
+								slog.Float64("currentSOC", currentSOC),
+								slog.Float64("targetReserve", interval.minSOC),
+							)
+						} else if selectedReason == chargeReason {
 							planLog(ctx, selected, "grid arbitrage pre-charge",
 								slog.Time("stepTime", stepTime),
 								slog.Float64("importRate", importRate),
@@ -1603,7 +1629,7 @@ func (c *Controller) generateActionCandidates(
 
 	// Branch E: Battery Grid Export Dump (Opportunity cost of home offset + degradation hurdle)
 	if settings.ManageTOUSchedules && settings.GridExportBatteries && !isFlatNEM && canExport && beforeVPPRechargeDeadline && interval.exportRate > 0 {
-		cycleHurdle := settings.MinBatteryExportDifferenceDollarsPerKWH
+		cycleHurdle := max(priceEpsilonForEquality, settings.MinBatteryExportDifferenceDollarsPerKWH)
 
 		// Lowest possible alternative value of stored battery energy (avoided load or replacement)
 		minAlternativeValue := anchors.knownPostHorizonRate
@@ -1962,7 +1988,8 @@ func (c *Controller) searchOptimalPlan(
 	if capacityKWH <= 0 {
 		capacityKWH = initial.capacityKWH
 	}
-	cycleHurdle := settings.MinBatteryExportDifferenceDollarsPerKWH
+	batteryExportHurdle := max(priceEpsilonForEquality, settings.MinBatteryExportDifferenceDollarsPerKWH)
+	directSolarExportHurdle := max(priceEpsilonForEquality, settings.MinArbitrageDifferenceDollarsPerKWH)
 	isFlatNEM := isFlatNetMetering(settings.UtilityRateOptions)
 
 	// Pre-calculate whether daytime solar refill is projected ahead for each timeline interval
@@ -2086,11 +2113,44 @@ func (c *Controller) searchOptimalPlan(
 						if lastAction != nil && cand.batteryMode != lastAction.BatteryMode {
 							transitionCost = max(0.01, defaultInertiaThresholdDollars*min(1.0, interval.durationHours))
 						}
-					} else if parent.action.batteryMode != cand.batteryMode {
+					} else if parent.action.batteryMode != cand.batteryMode || (parent.action.solarMode > 0 && cand.solarMode > 0 && parent.action.solarMode != cand.solarMode) {
 						transitionCost = modeSwitchPenalty
 					}
 
-					newCost := parent.totalCost + metrics.costDollars + (metrics.batExportKWH * cycleHurdle) + holdCost + transitionCost + (nextState.energyKWH * interval.durationHours * batteryHoldingCostPerHourPerKWH)
+					// Direct battery export (BatteryModeExport) discharges stored battery energy directly into the grid
+					// at maximum inverter power (0.5C–1.0C). This high-power discharge incurs substantial thermal and cell wear,
+					// and is governed by the homeowner's configured battery export profit hurdle (batteryExportHurdle).
+					//
+					// Direct solar export (BatteryModeLoad + SolarModeExport) exports rooftop solar to the grid while
+					// simultaneously discharging the battery to cover home load (metrics.batSuppliedHomeKWH) at gentle baseline
+					// C-rates (0.03C–0.1C). While the solar export itself incurs zero cell wear, the home discharge is supplied
+					// by the battery. We apply the gentle cycling degradation hurdle (directSolarExportHurdle, derived from
+					// MinArbitrageDifferenceDollarsPerKWH) to prevent unprofitable cycling without blocking solar export with the
+					// 10 kW grid-dump barrier.
+					var exportDegradationCost float64
+					if cand.batteryMode == types.BatteryModeExport {
+						exportDegradationCost = metrics.batExportKWH * batteryExportHurdle
+					} else if cand.batteryMode == types.BatteryModeLoad && cand.solarMode == types.SolarModeExport {
+						exportDegradationCost = metrics.batSuppliedHomeKWH * directSolarExportHurdle
+					}
+
+					// Penalizes idling or running below the configured reserve floor (interval.minSOC) without recharging.
+					// If the battery is below reserve and solar is insufficient to recharge it, the system must actively
+					// charge from the grid (BatteryModeChargeAny) to restore the homeowner's backup reserve immediately.
+					//
+					// Without a running interval penalty, the DP optimizer only evaluates raw grid import cost and terminal
+					// battery valuation. If grid power is cheaper later the optimizer would choose to sit unprotected in
+					// standby at low SOC for hours to save a few cents on charging, defeating the entire purpose of the
+					// homeowner's configured reserve floor.
+					var deficitPenalty float64
+					hasSurplusSolar := interval.durationHours > 0 && (interval.solarKWH-interval.loadKWH) >= minSurplusSolarForReserveKW*interval.durationHours
+					if nextState.soc < interval.minSOC-reserveFloorTolerancePct && !hasSurplusSolar && cand.batteryMode != types.BatteryModeChargeAny {
+						deficitKWH := (interval.minSOC - nextState.soc) / 100.0 * capacityKWH
+						deficitPenaltyRate := max(minReserveDeficitPenaltyDollarsPerKWH, interval.importRate*reserveDeficitPenaltyMultiplier)
+						deficitPenalty = (deficitKWH / oneWayEff) * deficitPenaltyRate * interval.durationHours
+					}
+
+					newCost := parent.totalCost + metrics.costDollars + exportDegradationCost + holdCost + transitionCost + deficitPenalty + (nextState.energyKWH * interval.durationHours * batteryHoldingCostPerHourPerKWH)
 
 					// Check VPP deadline feasibility: apply penalty only for nearest upcoming event deadline
 					if hasNearestVPP {
@@ -2471,7 +2531,7 @@ func calculateTerminalValuation(
 	// Penalize heavily to eliminate cheating/arbitraging the homeowner's backup reserve.
 	if finalState.energyKWH < minAcceptableBaseKWH {
 		deficitKWH := baseReserveKWH - finalState.energyKWH
-		deficitPenaltyRate := max(1.0, replacementRate*3.0)
+		deficitPenaltyRate := max(minReserveDeficitPenaltyDollarsPerKWH, replacementRate*reserveDeficitPenaltyMultiplier)
 		penalty := (deficitKWH / oneWayEff) * deficitPenaltyRate
 		if targetEnergyKWH > baseReserveKWH {
 			touDeficitKWH := targetEnergyKWH - baseReserveKWH
@@ -2497,7 +2557,7 @@ func calculateTerminalValuation(
 			}
 			return (deficitKWH / rtEff) * replacementRate
 		}
-		deficitPenaltyRate := max(1.0, replacementRate*3.0)
+		deficitPenaltyRate := max(minReserveDeficitPenaltyDollarsPerKWH, replacementRate*reserveDeficitPenaltyMultiplier)
 		return (deficitKWH / oneWayEff) * deficitPenaltyRate
 	}
 

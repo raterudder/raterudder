@@ -40,7 +40,7 @@ describe('classifyPlanPeriod', () => {
             startSoc: 20,
             endSoc: 60,
         });
-        const result = classifyPlanPeriod(period, 10);
+        const result = classifyPlanPeriod(period);
         expect(result.key).toBe('gridCharge');
         expect(result.label).toBe('Grid Charge');
         expect(result.color).toBe('#8b5cf6');
@@ -52,7 +52,7 @@ describe('classifyPlanPeriod', () => {
             startSoc: 70,
             endSoc: 30,
         });
-        const result = classifyPlanPeriod(period, 10);
+        const result = classifyPlanPeriod(period);
         expect(result.key).toBe('gridExport');
         expect(result.label).toBe('Grid Export');
         expect(result.color).toBe('#f59e0b');
@@ -66,7 +66,7 @@ describe('classifyPlanPeriod', () => {
             startSoc: 70,
             endSoc: 65,
         });
-        const result = classifyPlanPeriod(period, 10);
+        const result = classifyPlanPeriod(period);
         expect(result.key).toBe('solarExport');
         expect(result.label).toBe('Solar Export');
         expect(result.color).toBe('#f97316');
@@ -79,7 +79,7 @@ describe('classifyPlanPeriod', () => {
             startSoc: 65,
             endSoc: 50,
         });
-        const result = classifyPlanPeriod(period, 10);
+        const result = classifyPlanPeriod(period);
         expect(result.key).toBe('poweringHome');
         expect(result.label).toBe('Powering Home');
         expect(result.color).toBe('#38bdf8');
@@ -92,7 +92,7 @@ describe('classifyPlanPeriod', () => {
             startSoc: 21.8,
             endSoc: 25.2,
         });
-        const result = classifyPlanPeriod(period, 10);
+        const result = classifyPlanPeriod(period);
         expect(result.key).toBe('solarCharge');
         expect(result.label).toBe('Solar Charge');
         expect(result.color).toBe('#10b981');
@@ -105,7 +105,7 @@ describe('classifyPlanPeriod', () => {
             startSoc: 70,
             endSoc: 65,
         });
-        const result = classifyPlanPeriod(period, 10);
+        const result = classifyPlanPeriod(period);
         expect(result.key).toBe('poweringHome');
         expect(result.label).toBe('Powering Home');
         expect(result.color).toBe('#38bdf8');
@@ -118,7 +118,7 @@ describe('classifyPlanPeriod', () => {
             startSoc: 20,
             endSoc: 20,
         });
-        const result = classifyPlanPeriod(period, 20);
+        const result = classifyPlanPeriod(period);
         expect(result.key).toBe('standby');
         expect(result.label).toBe('Standby');
         expect(result.color).toBe('#64748b');
@@ -130,7 +130,7 @@ describe('classifyPlanPeriod', () => {
             startSoc: 20.5,
             endSoc: 20.5,
         });
-        const result = classifyPlanPeriod(period, 20);
+        const result = classifyPlanPeriod(period);
         expect(result.key).toBe('standby');
         expect(result.label).toBe('Standby');
         expect(result.color).toBe('#64748b');
@@ -142,7 +142,7 @@ describe('classifyPlanPeriod', () => {
             startSoc: 75,
             endSoc: 75,
         });
-        const result = classifyPlanPeriod(period, 10);
+        const result = classifyPlanPeriod(period);
         expect(result.key).toBe('standby');
         expect(result.label).toBe('Standby');
         expect(result.color).toBe('#64748b');

@@ -16,7 +16,7 @@ export const ALL_ZONES: ZoneConfig[] = [
     { key: 'gridExport', label: 'Grid Export', color: '#f59e0b' },
 ];
 
-export function classifyPlanPeriod(p: PlanPeriod, _reserveSOC: number): ZoneConfig {
+export function classifyPlanPeriod(p: PlanPeriod): ZoneConfig {
     // 1. Forced grid charge
     if (p.batteryMode === BatteryMode.ChargeAny) {
         return ALL_ZONES.find((z) => z.key === 'gridCharge')!;

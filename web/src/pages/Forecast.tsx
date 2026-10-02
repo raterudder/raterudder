@@ -149,8 +149,6 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
         ? (data[0]?.[config.referenceLine.dataKey as keyof ProcessedModelingHour] as number)
         : undefined;
 
-    const reserveSOC = data[0]?.batteryReserveSOC ?? 20;
-
     const currentTimeStr = React.useMemo(() => {
         if (!showCurrentTime || data.length === 0) return undefined;
         // find closest hour in data
@@ -205,11 +203,11 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
         }
         const usedKeys = new Set<string>();
         for (const p of planPeriods) {
-            const z = classifyPlanPeriod(p, p.reserveSOC ?? reserveSOC);
+            const z = classifyPlanPeriod(p);
             usedKeys.add(z.key);
         }
         return ALL_ZONES.filter((z) => usedKeys.has(z.key));
-    }, [config.dataKey, planPeriods, reserveSOC]);
+    }, [config.dataKey, planPeriods]);
 
     const hasReserveLine = React.useMemo(() => {
         if (config.dataKey === 'plannedSOC') {
@@ -620,7 +618,6 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
         if (isPlanActive) {
             const plan = rawModelingData.plan!;
             const periods = plan.periods;
-            const reserveSOC = settings?.minBatterySOC ?? 10;
 
             let planData: any[] = [];
             if (includeHistory && rawModelingData.energyHistory && rawModelingData.priceHistory) {
@@ -651,7 +648,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
                 planData = [...historyMapped];
             }
 
-            const periodZones = periods.map((p) => classifyPlanPeriod(p, p.reserveSOC ?? reserveSOC));
+            const periodZones = periods.map((p) => classifyPlanPeriod(p));
 
             // Base hourly rates for each period (used for solar and home load interpolation)
             const periodRates = periods.map((p) => {
@@ -820,7 +817,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
                 gridExportDollarsPerKWH: h.gridExportDollarsPerKWH ?? h.solarOppDollarsPerKWH ?? 0,
             };
         });
-    }, [rawModelingData, includeHistory, isPlanActive, settings]);
+    }, [rawModelingData, includeHistory, isPlanActive]);
 
     if (loading) return (
         <div className="loading-screen">
