@@ -3090,6 +3090,30 @@ func TestCalculateTerminalValuation(t *testing.T) {
 		valuation := calculateTerminalValuation(finalState, anchors, settings, nil, capacityKWH, roundTripEff)
 		assert.Equal(t, 0.0, valuation, "ending within 0.1% reserve tolerance must produce zero penalty or credit")
 	})
+
+	t.Run("ScheduledTOUReserveDeficit_ValuedAtReplacementRate", func(t *testing.T) {
+		t.Parallel()
+
+		now := time.Date(2026, 6, 15, 22, 0, 0, 0, time.UTC)
+		// Base emergency reserve is 20%, but the last interval is Super Off-Peak with 90% minSOC
+		sopTimeline := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), minSOC: 90.0, importRate: 0.055},
+		}
+		// Ending at 40% SOC (above base reserve 20%, but below scheduled TOU reserve 90%)
+		finalState := planState{
+			energyKWH: capacityKWH * 0.40,
+			soc:       40.0,
+		}
+		chargeSettings := settings
+		chargeSettings.MinBatterySOC = 20.0
+		chargeSettings.GridChargeBatteries = true
+
+		valuation := calculateTerminalValuation(finalState, anchors, chargeSettings, sopTimeline, capacityKWH, roundTripEff)
+		// Deficit is (90% - 40%) * capacityKWH
+		deficitKWH := (0.90 - 0.40) * capacityKWH
+		expectedCost := (deficitKWH / roundTripEff) * anchors.knownPostHorizonRate
+		assert.InDelta(t, expectedCost, valuation, 1e-4, "ending below scheduled TOU reserve with grid charging enabled must be valued at replacement rate")
+	})
 }
 
 // TestSearchOptimalPlan tests the tree rollout selection and inertia against lastAction.
@@ -3393,6 +3417,91 @@ func TestSearchOptimalPlan(t *testing.T) {
 		assert.Contains(t, path.actions[0].description, "Pre-charging")
 		assert.Greater(t, path.metrics[0].gridImportKWH, 0.5)
 		assert.Greater(t, path.states[1].soc, path.states[0].soc)
+	})
+
+	t.Run("ModeSwitchPenalty_ContiguousExport", func(t *testing.T) {
+		t.Parallel()
+
+		// 3 equal 1-hour peak intervals at high export rate ($0.30/kWh).
+		// Battery has enough capacity to export for 2 hours, but not all 3.
+		// modeSwitchPenalty ensures [Export, Export, Load] wins over fragmented [Export, Load, Export].
+		peakTimeline := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.30, loadKWH: 0.2, minSOC: 10},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.30, loadKWH: 0.2, minSOC: 10},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.30, loadKWH: 0.2, minSOC: 10},
+		}
+
+		exportState := planState{
+			energyKWH:      10.0,
+			soc:            100.0,
+			capacityKWH:    10.0,
+			maxDischargeKW: 5.0,
+		}
+
+		exportStatus := types.SystemStatus{
+			Timestamp:             now,
+			BatteryCapacityKWH:    10.0,
+			BatterySOC:            100.0,
+			MaxBatteryDischargeKW: 5.0,
+		}
+
+		exportSettings := types.Settings{
+			MinBatterySOC:       10,
+			GridExportBatteries: true,
+		}
+
+		path, err := c.searchOptimalPlan(ctx, peakTimeline, exportState, planningAnchors{}, exportSettings, exportStatus, nil, nil)
+		require.NoError(t, err)
+		require.Len(t, path.actions, 3)
+
+		// Must not fragment export across an intervening load interval
+		if path.actions[0].batteryMode == types.BatteryModeExport && path.actions[2].batteryMode == types.BatteryModeExport {
+			assert.Equal(t, types.BatteryModeExport, path.actions[1].batteryMode, "export should not be interrupted by load when contiguous export is possible")
+		}
+	})
+
+	t.Run("DischargeDuringPeak_DespiteSuperOffPeakReserve", func(t *testing.T) {
+		t.Parallel()
+
+		// Interval 0: Peak pricing ($0.35/kWh), home load 2.0 kWh, minSOC 5%
+		// Interval 1: Super Off-Peak pricing ($0.055/kWh), home load 0.5 kWh, minSOC 90%
+		peakThenSOPTimeline := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.35, loadKWH: 2.0, minSOC: 5},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.055, loadKWH: 0.5, minSOC: 90},
+		}
+
+		sopState := planState{
+			energyKWH:      10.0,
+			soc:            100.0,
+			capacityKWH:    10.0,
+			maxDischargeKW: 5.0,
+			maxChargeKW:    5.0,
+		}
+
+		sopStatus := types.SystemStatus{
+			Timestamp:             now,
+			BatteryCapacityKWH:    10.0,
+			BatterySOC:            100.0,
+			MaxBatteryDischargeKW: 5.0,
+			MaxBatteryChargeKW:    5.0,
+		}
+
+		sopSettings := types.Settings{
+			MinBatterySOC:       5,
+			GridChargeBatteries: true,
+		}
+
+		sopAnchors := planningAnchors{
+			knownPostHorizonRate: 0.055,
+		}
+
+		path, err := c.searchOptimalPlan(ctx, peakThenSOPTimeline, sopState, sopAnchors, sopSettings, sopStatus, nil, nil)
+		require.NoError(t, err)
+		require.Len(t, path.actions, 2)
+
+		// Interval 0 must discharge to cover peak load rather than staying in Standby
+		assert.Equal(t, types.BatteryModeLoad, path.actions[0].batteryMode, "must discharge battery during peak rate despite high scheduled reserve in subsequent off-peak period")
+		assert.True(t, path.states[1].soc < 100.0, "SOC must decrease during peak load")
 	})
 }
 

@@ -57,13 +57,12 @@ const (
 	// reduces high-SOC calendar degradation, and minimizes standby losses without overriding true price differences.
 	batteryHoldingCostPerHourPerKWH = 0.0001
 
-	// chargeSessionStartPenalty is a nominal physical transition penalty ($0.01 = 1 cent)
-	// applied during dynamic programming forward search when initiating a new grid-charging
-	// session from an idle or discharging state. This eliminates mode chattering and strictly
-	// prioritizes contiguous charging blocks over fragmented start-stop charging during flat
-	// or similarly-priced off-peak periods, while still permitting split charging if an intervening
-	// rate spike exceeds 1 cent/kWh.
-	chargeSessionStartPenalty = 0.01
+	// modeSwitchPenalty is a nominal physical transition penalty ($0.01 = 1 cent)
+	// applied during dynamic programming forward search whenever transitioning between battery modes.
+	// This eliminates mode chattering, relay/contactor flutter, and fragmentation across all modes (charging,
+	// discharging to load, exporting, or standby), strictly prioritizing contiguous dispatch blocks
+	// while still permitting mode switches whenever economically justified.
+	modeSwitchPenalty = 0.01
 
 	// exportReserveMarginPct is the safety margin (in % SOC) maintained strictly above the effective
 	// reserve floor during battery grid export. Because grid exports discharge at maximum inverter power,
@@ -555,18 +554,17 @@ func (c *Controller) buildPlanningTimeline(
 	}
 
 	// 2. Convert into discrete intervals across the horizon
+	// The horizon covers up to maxPlanningHorizonHours (24h).
+	// Intervals that begin before the 24-hour mark are allowed to complete their full,
+	// untruncated period without being artificially cut off at 24 hours.
 	maxEnd := now.Add(time.Duration(maxPlanningHorizonHours) * time.Hour)
-	horizonEnd := latestPriceTime
-	if horizonEnd.After(maxEnd) {
-		horizonEnd = maxEnd
-	}
 
 	var timeline []planInterval
 	currentTime := now
 	currentPrice := nowPrice
 	idx := 0
 
-	for currentTime.Before(horizonEnd) {
+	for currentTime.Before(maxEnd) && currentTime.Before(latestPriceTime) {
 		// Default interval boundary is top of the next hour
 		stepEnd := currentTime.Truncate(time.Hour).Add(time.Hour)
 
@@ -589,7 +587,7 @@ func (c *Controller) buildPlanningTimeline(
 				slog.Time("currentTime", currentTime),
 				slog.Int("totalPricesInHorizon", len(allPrices)),
 				slog.Float64("availableHours", availableHours),
-				slog.Time("horizonEnd", horizonEnd),
+				slog.Time("latestPriceTime", latestPriceTime),
 				slog.Any("lastPrice", currentPrice),
 			)
 		}
@@ -621,24 +619,26 @@ func (c *Controller) buildPlanningTimeline(
 		}
 
 		stepEnd = stepEnd.In(currentTime.Location())
-		if stepEnd.After(horizonEnd) {
-			stepEnd = horizonEnd
-		}
 
 		// If duration is greater than or equal to 40 minutes, split it to provide finer sub-hourly resolution.
 		// Chop off 20 minutes from the start so that an hour breaks into 3 20-minute segments.
+		// (Do not split intervals under 40 minutes, e.g. a 30-minute period should not be split into 20 and 10).
 		duration := stepEnd.Sub(currentTime)
 		if duration >= 40*time.Minute {
 			stepEnd = currentTime.Add(20 * time.Minute)
 		}
 
+		if stepEnd.After(latestPriceTime) {
+			stepEnd = latestPriceTime
+		}
+
 		// Short interval handling:
 		// If duration is under 10 minutes, check if we can merge with the next boundary without crossing a price boundary.
 		duration = stepEnd.Sub(currentTime)
-		if duration < 10*time.Minute && !stepEnd.Equal(horizonEnd) {
+		if duration < 10*time.Minute && !stepEnd.Equal(latestPriceTime) {
 			nextBoundary := stepEnd.Add(20 * time.Minute)
-			if nextBoundary.After(horizonEnd) {
-				nextBoundary = horizonEnd
+			if nextBoundary.After(latestPriceTime) {
+				nextBoundary = latestPriceTime
 			}
 			if (currentPrice.TSEnd.After(stepEnd) || currentPrice.TSEnd.IsZero()) && nextBoundary.Sub(currentTime) <= 40*time.Minute {
 				log.Ctx(ctx).DebugContext(ctx, "merged short planning interval",
@@ -735,7 +735,10 @@ func (c *Controller) buildPlanningTimeline(
 		idx++
 	}
 
-	totalHorizonDuration := horizonEnd.Sub(now)
+	totalHorizonDuration := time.Duration(0)
+	if len(timeline) > 0 {
+		totalHorizonDuration = timeline[len(timeline)-1].endTime.Sub(now)
+	}
 	log.Ctx(ctx).DebugContext(ctx, "plan timeline built",
 		slog.Int("horizonIntervals", len(timeline)),
 		slog.Duration("totalHorizonDuration", totalHorizonDuration),
@@ -1498,16 +1501,21 @@ func (c *Controller) generateActionCandidates(
 			// into a single BatteryModeChargeAny candidate to prevent redundant state-space expansion.
 			// Arbitrage takes preference only if it occurs sooner with sufficient runway before the
 			// pre-VPP recharge deadline (allowing the battery to discharge and fully recharge to 100%
-			// before the VPP event). Otherwise, VPP prep takes precedence.
-			hasVPPAhead := nearestVPP != nil
-			if hasArbitrageAhead || hasVPPAhead {
+			// Target reserve recharge: if currentSOC is below the interval's target reserve (e.g. during a scheduled off-peak charging window),
+			// offer ChargeAny to bring battery back up to the configured reserve.
+			hasReserveCharge := currentSOC < interval.minSOC
+			if hasArbitrageAhead || hasVPPAhead || hasReserveCharge {
 				selectedReason := types.ActionReasonVPPPrep
 				selectedDesc := "VPP Pre-charging before deadline."
-
+				var candTargetSOC int
 				isArbitrageSooner := hasArbitrageAhead && (!hasVPPAhead || earliestArbitrageTime.Before(nearestVPPRechargeDeadline))
 				if isArbitrageSooner {
 					selectedReason = chargeReason
 					selectedDesc = chargeDesc
+				} else if hasReserveCharge && !hasVPPAhead {
+					selectedReason = types.ActionReasonDeficitChargeNow
+					selectedDesc = fmt.Sprintf("Charging battery to target reserve (%.0f%%).", interval.minSOC)
+					candTargetSOC = int(math.Round(interval.minSOC))
 				}
 
 				importRate := interval.importRate
@@ -1516,6 +1524,7 @@ func (c *Controller) generateActionCandidates(
 					solarMode:   defaultSolarMode,
 					reason:      selectedReason,
 					description: selectedDesc,
+					targetSOC:   candTargetSOC,
 					isTruePeak:  isTruePeak,
 					logFn: func(ctx context.Context, selected bool) {
 						if isArbitrageSooner {
@@ -2076,11 +2085,9 @@ func (c *Controller) searchOptimalPlan(
 						// scaled by interval duration with a minimum floor to prevent rapid mode oscillation.
 						if lastAction != nil && cand.batteryMode != lastAction.BatteryMode {
 							transitionCost = max(0.01, defaultInertiaThresholdDollars*min(1.0, interval.durationHours))
-						} else if lastAction == nil && cand.batteryMode == types.BatteryModeChargeAny {
-							transitionCost = chargeSessionStartPenalty
 						}
-					} else if parent.action.batteryMode != types.BatteryModeChargeAny && cand.batteryMode == types.BatteryModeChargeAny {
-						transitionCost = chargeSessionStartPenalty
+					} else if parent.action.batteryMode != cand.batteryMode {
+						transitionCost = modeSwitchPenalty
 					}
 
 					newCost := parent.totalCost + metrics.costDollars + (metrics.batExportKWH * cycleHurdle) + holdCost + transitionCost + (nextState.energyKWH * interval.durationHours * batteryHoldingCostPerHourPerKWH)
@@ -2342,7 +2349,7 @@ func (c *Controller) searchOptimalPlan(
 			if shouldFastTrack {
 				chargeNode, exists := modeBestNodes[types.BatteryModeChargeAny]
 				if !exists || chargeNode == nil {
-					slog.Warn("Should fast-track grid charge but no valid ChargeAny node exists in plan search",
+					slog.Warn("should fast-track grid charge but no valid ChargeAny node exists in plan search",
 						slog.Time("scheduledChargeTime", fastTrackStartTime),
 						slog.Duration("delay", fastTrackDelay),
 						slog.Float64("step0ImportRate", timeline[0].importRate),
@@ -2374,7 +2381,7 @@ func (c *Controller) searchOptimalPlan(
 						promotedCost += m.costDollars
 					}
 
-					slog.Debug("Fast-tracking scheduled grid charge to step 0 due to polling cycle",
+					slog.Debug("fast-tracking scheduled grid charge to step 0 due to polling cycle",
 						slog.Time("scheduledChargeTime", fastTrackStartTime),
 						slog.Duration("delay", fastTrackDelay),
 						slog.Float64("step0ImportRate", timeline[0].importRate),
@@ -2447,32 +2454,60 @@ func calculateTerminalValuation(
 	capacityKWH float64,
 	roundTripEfficiency float64,
 ) float64 {
-	targetReserveSOC := settings.MinBatterySOC
+	baseReserveSOC := settings.MinBatterySOC
+	targetReserveSOC := baseReserveSOC
 	if len(timeline) > 0 && timeline[len(timeline)-1].minSOC > 0 {
 		targetReserveSOC = timeline[len(timeline)-1].minSOC
 	}
+	baseReserveKWH := capacityKWH * (baseReserveSOC / 100.0)
 	targetEnergyKWH := capacityKWH * (targetReserveSOC / 100.0)
 
 	// Determine replacement rate at horizon end
 	replacementRate := anchors.knownPostHorizonRate
-
-	minAcceptableReserveKWH := capacityKWH * ((targetReserveSOC - reserveFloorTolerancePct) / 100.0)
-	energyDeltaKWH := finalState.energyKWH - targetEnergyKWH
 	oneWayEff := math.Sqrt(roundTripEfficiency)
+	minAcceptableBaseKWH := capacityKWH * ((baseReserveSOC - reserveFloorTolerancePct) / 100.0)
 
-	if finalState.energyKWH < minAcceptableReserveKWH {
-		// Ending below target reserve (beyond the 0.1% ESS hardware deadband): penalize heavily to eliminate arbitrage
+	// 1. Ending below the base emergency reserve (settings.MinBatterySOC):
+	// Penalize heavily to eliminate cheating/arbitraging the homeowner's backup reserve.
+	if finalState.energyKWH < minAcceptableBaseKWH {
+		deficitKWH := baseReserveKWH - finalState.energyKWH
+		deficitPenaltyRate := max(1.0, replacementRate*3.0)
+		penalty := (deficitKWH / oneWayEff) * deficitPenaltyRate
+		if targetEnergyKWH > baseReserveKWH {
+			touDeficitKWH := targetEnergyKWH - baseReserveKWH
+			rtEff := roundTripEfficiency
+			if rtEff <= 0 || rtEff > 1.0 {
+				rtEff = 0.90
+			}
+			penalty += (touDeficitKWH / rtEff) * replacementRate
+		}
+		return penalty
+	}
+
+	// 2. Ending below target reserve (e.g. an elevated off-peak target like 90%), but at or above base reserve:
+	// If GridChargeBatteries is allowed and replacementRate > 0, the cost to replenish the battery during
+	// the upcoming off-peak period is simply the replacement energy cost (accounting for round-trip efficiency).
+	minAcceptableTargetKWH := capacityKWH * ((targetReserveSOC - reserveFloorTolerancePct) / 100.0)
+	if finalState.energyKWH < minAcceptableTargetKWH {
 		deficitKWH := targetEnergyKWH - finalState.energyKWH
+		if settings.GridChargeBatteries && replacementRate > 0 {
+			rtEff := roundTripEfficiency
+			if rtEff <= 0 || rtEff > 1.0 {
+				rtEff = 0.90
+			}
+			return (deficitKWH / rtEff) * replacementRate
+		}
 		deficitPenaltyRate := max(1.0, replacementRate*3.0)
 		return (deficitKWH / oneWayEff) * deficitPenaltyRate
 	}
 
+	energyDeltaKWH := finalState.energyKWH - targetEnergyKWH
 	if energyDeltaKWH <= 0 {
 		// Within the +/- 0.1% ESS hardware tolerance of the reserve floor: no penalty, no credit
 		return 0.0
 	}
 
-	// Ending above target reserve: credit for banked energy displacing future imports at replacement rate.
+	// 3. Ending above target reserve: credit for banked energy displacing future imports at replacement rate.
 	totalCredit := energyDeltaKWH * oneWayEff * replacementRate
 	return -totalCredit
 }
@@ -2557,6 +2592,10 @@ func resolvePlanActionReason(
 		var futPrice *types.Price
 		if peakIdx != -1 {
 			futPrice = &timeline[peakIdx].price
+		}
+		if action.targetSOC > 0 && action.targetSOC == int(math.Round(interval.minSOC)) {
+			return types.ActionReasonDeficitChargeNow,
+				fmt.Sprintf("Charging battery to target reserve (%.0f%%).", interval.minSOC), futPrice
 		}
 		return types.ActionReasonDeficitChargeNow,
 			"Pre-charging for upcoming peak rates.", futPrice
