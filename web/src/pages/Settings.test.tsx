@@ -2804,7 +2804,7 @@ describe('App & Settings', () => {
         });
     });
 
-    describe('Direct Solar Export Optimization', () => {
+    describe('Direct Solar and Battery Export Management', () => {
         it('is hidden when planMode is false and release is not staging', async () => {
             const user = userEvent.setup();
             const originalLocation = window.location;
@@ -2828,7 +2828,7 @@ describe('App & Settings', () => {
                 await user.click(editBtn);
 
                 // Toggle should NOT be present
-                expect(screen.queryByRole('switch', { name: /Direct Solar Export Optimization/i })).not.toBeInTheDocument();
+                expect(screen.queryByRole('switch', { name: /Direct Solar and Battery Export Management/i })).not.toBeInTheDocument();
             } finally {
                 (window as any).location = originalLocation;
             }
@@ -2843,6 +2843,7 @@ describe('App & Settings', () => {
                 manageTOUSchedules: false,
                 planMode: true,
                 release: 'production',
+                gridExportSolar: true,
             });
 
             await navigateToSettings();
@@ -2852,7 +2853,7 @@ describe('App & Settings', () => {
             await user.click(editBtn);
 
             // Toggle should be present
-            const exportOptSwitch = screen.getByRole('switch', { name: /Direct Solar Export Optimization/i });
+            const exportOptSwitch = screen.getByRole('switch', { name: /Direct Solar and Battery Export Management/i });
             expect(exportOptSwitch).not.toBeChecked();
             expect(screen.queryByText(/Notice: This feature requires RateRudder to manage your battery's Time-Of-Use/i)).not.toBeInTheDocument();
 
@@ -2885,6 +2886,7 @@ describe('App & Settings', () => {
                 manageTOUSchedules: false,
                 planMode: false,
                 release: 'staging',
+                gridExportBatteries: true,
             });
 
             await navigateToSettings();
@@ -2893,7 +2895,7 @@ describe('App & Settings', () => {
             const editBtn = screen.getByLabelText('Edit Energy Storage System');
             await user.click(editBtn);
 
-            const exportOptSwitch = screen.getByRole('switch', { name: /Direct Solar Export Optimization/i });
+            const exportOptSwitch = screen.getByRole('switch', { name: /Direct Solar and Battery Export Management/i });
             expect(exportOptSwitch).toBeInTheDocument();
             expect(exportOptSwitch).not.toBeChecked();
         });
@@ -2906,6 +2908,7 @@ describe('App & Settings', () => {
                 hasCredentials: { enphase: true },
                 planMode: true,
                 release: 'staging',
+                gridExportSolar: true,
             });
 
             await navigateToSettings();
@@ -2914,7 +2917,50 @@ describe('App & Settings', () => {
             const editBtn = screen.getByLabelText('Edit Energy Storage System');
             await user.click(editBtn);
 
-            expect(screen.queryByRole('switch', { name: /Direct Solar Export Optimization/i })).not.toBeInTheDocument();
+            expect(screen.queryByRole('switch', { name: /Direct Solar and Battery Export Management/i })).not.toBeInTheDocument();
+        });
+
+        it('is hidden when neither solar nor battery export is enabled, and appears immediately when toggled on', async () => {
+            const user = userEvent.setup();
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                ess: 'tesla',
+                hasCredentials: { tesla: true },
+                manageTOUSchedules: false,
+                planMode: true,
+                release: 'production',
+                gridExportSolar: false,
+                gridExportBatteries: false,
+            });
+
+            await navigateToSettings();
+
+            // Open ESS edit mode from summary card
+            const editBtn = screen.getByLabelText('Edit Energy Storage System');
+            await user.click(editBtn);
+
+            // Neither export enabled -> should NOT be visible
+            expect(screen.queryByRole('switch', { name: /Direct Solar and Battery Export Management/i })).not.toBeInTheDocument();
+
+            // Toggle Export Solar to Grid ON
+            const exportSolarSwitch = screen.getByRole('switch', { name: /Export Solar to Grid/i });
+            await user.click(exportSolarSwitch);
+
+            // Should immediately pop in without saving
+            expect(screen.getByRole('switch', { name: /Direct Solar and Battery Export Management/i })).toBeInTheDocument();
+
+            // Toggle Export Solar to Grid OFF
+            await user.click(exportSolarSwitch);
+
+            // Should disappear
+            expect(screen.queryByRole('switch', { name: /Direct Solar and Battery Export Management/i })).not.toBeInTheDocument();
+
+            // Toggle Export Battery to Grid ON
+            const exportBatterySwitch = screen.getByRole('switch', { name: /Export Battery to Grid/i });
+            await user.click(exportBatterySwitch);
+
+            // Should pop in again
+            expect(screen.getByRole('switch', { name: /Direct Solar and Battery Export Management/i })).toBeInTheDocument();
         });
     });
 });

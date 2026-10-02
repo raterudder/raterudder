@@ -729,90 +729,94 @@ const ESSForm = ({
                     {renderFormFields()}
 
                     {!isWizard && settings.ess && settings.hasCredentials?.[settings.ess] && (
-                        <div className="grid-strategy-grid" style={{ marginTop: '1rem', borderTop: '1px solid var(--outline-variant)', paddingTop: '1rem' }}>
-                            <Field.Root className="form-group switch-group compact">
-                                <div className="switch-row">
-                                    <Switch.Root
-                                        id="gridChargeBatteries"
-                                        checked={settings.gridChargeBatteries}
-                                        onCheckedChange={(checked) => {
-                                            onChange('gridChargeBatteries', checked);
-                                            onChange('customGridSettings', true);
-                                        }}
-                                        className="switch-root"
-                                    >
-                                        <Switch.Thumb className="switch-thumb" />
-                                    </Switch.Root>
-                                    <Field.Label htmlFor="gridChargeBatteries">Grid Can Charge Battery</Field.Label>
-                                </div>
-                            </Field.Root>
-
-                            <Field.Root className="form-group switch-group compact">
-                                <div className="switch-row">
-                                    <Switch.Root
-                                        id="gridExportSolar"
-                                        checked={settings.gridExportSolar}
-                                        onCheckedChange={(checked) => {
-                                            onChange('gridExportSolar', checked);
-                                            onChange('customGridSettings', true);
-                                        }}
-                                        className="switch-root"
-                                    >
-                                        <Switch.Thumb className="switch-thumb" />
-                                    </Switch.Root>
-                                    <Field.Label htmlFor="gridExportSolar">Export Solar to Grid</Field.Label>
-                                </div>
-                            </Field.Root>
-
-                            <Field.Root className="form-group switch-group compact">
-                                <div className="switch-row">
-                                    <Switch.Root
-                                        id="gridExportBatteries"
-                                        checked={settings.gridExportBatteries}
-                                        onCheckedChange={(checked) => {
-                                            onChange('gridExportBatteries', checked);
-                                            onChange('customGridSettings', true);
-                                        }}
-                                        className="switch-root"
-                                    >
-                                        <Switch.Thumb className="switch-thumb" />
-                                    </Switch.Root>
-                                    <Field.Label htmlFor="gridExportBatteries">Export Battery to Grid</Field.Label>
-                                </div>
-                            </Field.Root>
-
-                            {['tesla', 'franklin'].includes(settings.ess) && (!!settings.manageTOUSchedules || !!settings.planMode || settings.release === 'staging') && (
-                                <Field.Root className="form-group switch-group compact" style={{ gridColumn: '1 / -1' }}>
+                        <>
+                            <div className="grid-strategy-grid" style={{ marginTop: '1rem' }}>
+                                <Field.Root className="form-group switch-group compact">
                                     <div className="switch-row">
                                         <Switch.Root
-                                            id="manageTOUSchedules"
-                                            checked={settings.manageTOUSchedules ?? false}
+                                            id="gridChargeBatteries"
+                                            checked={settings.gridChargeBatteries}
                                             onCheckedChange={(checked) => {
-                                                onChange('manageTOUSchedules', checked);
+                                                onChange('gridChargeBatteries', checked);
+                                                onChange('customGridSettings', true);
                                             }}
                                             className="switch-root"
                                         >
                                             <Switch.Thumb className="switch-thumb" />
                                         </Switch.Root>
-                                        <Field.Label htmlFor="manageTOUSchedules">Direct Solar Export Optimization</Field.Label>
+                                        <Field.Label htmlFor="gridChargeBatteries">Grid Can Charge Battery</Field.Label>
                                     </div>
-                                    <Field.Description>
-                                        Allows excess solar power to export directly to the grid without charging the battery to 100% first.
-                                    </Field.Description>
-                                    {settings.manageTOUSchedules && (
-                                        <div className="warning-notice" style={{ marginTop: '0.5rem' }}>
-                                            ⚠️ Notice: This feature requires RateRudder to manage your battery's Time-Of-Use (TOU) settings, which will overwrite any existing TOU or tariff schedules configured in your manufacturer app.
-                                        </div>
-                                    )}
                                 </Field.Root>
-                            )}
 
-                            {!settings.gridChargeBatteries && !settings.gridExportSolar && !settings.gridExportBatteries && (
-                                <div className="warning-notice" style={{ gridColumn: '1 / -1', marginTop: 0 }} data-testid="grid-restrictions-warning">
-                                    Warning: All grid interactions are disabled. The system will only charge from solar and will not charge from the grid or export any energy.
+                                <Field.Root className="form-group switch-group compact">
+                                    <div className="switch-row">
+                                        <Switch.Root
+                                            id="gridExportSolar"
+                                            checked={settings.gridExportSolar}
+                                            onCheckedChange={(checked) => {
+                                                onChange('gridExportSolar', checked);
+                                                onChange('customGridSettings', true);
+                                            }}
+                                            className="switch-root"
+                                        >
+                                            <Switch.Thumb className="switch-thumb" />
+                                        </Switch.Root>
+                                        <Field.Label htmlFor="gridExportSolar">Export Solar to Grid</Field.Label>
+                                    </div>
+                                </Field.Root>
+
+                                <Field.Root className="form-group switch-group compact">
+                                    <div className="switch-row">
+                                        <Switch.Root
+                                            id="gridExportBatteries"
+                                            checked={settings.gridExportBatteries}
+                                            onCheckedChange={(checked) => {
+                                                onChange('gridExportBatteries', checked);
+                                                onChange('customGridSettings', true);
+                                            }}
+                                            className="switch-root"
+                                        >
+                                            <Switch.Thumb className="switch-thumb" />
+                                        </Switch.Root>
+                                        <Field.Label htmlFor="gridExportBatteries">Export Battery to Grid</Field.Label>
+                                    </div>
+                                </Field.Root>
+
+                                {!settings.gridChargeBatteries && !settings.gridExportSolar && !settings.gridExportBatteries && (
+                                    <div className="warning-notice" style={{ gridColumn: '1 / -1', marginTop: 0 }} data-testid="grid-restrictions-warning">
+                                        ⚠️ Warning: All grid interactions are disabled. The system will only charge from solar and will not charge from the grid or export any energy.
+                                    </div>
+                                )}
+                            </div>
+
+                            {['tesla', 'franklin'].includes(settings.ess) && (!!settings.manageTOUSchedules || !!settings.planMode || settings.release === 'staging') && (settings.gridExportSolar || settings.gridExportBatteries) && (
+                                <div className="grid-strategy-grid">
+                                    <Field.Root className="form-group switch-group compact" style={{ gridColumn: '1 / -1' }}>
+                                        <div className="switch-row">
+                                            <Switch.Root
+                                                id="manageTOUSchedules"
+                                                checked={settings.manageTOUSchedules ?? false}
+                                                onCheckedChange={(checked) => {
+                                                    onChange('manageTOUSchedules', checked);
+                                                }}
+                                                className="switch-root"
+                                            >
+                                                <Switch.Thumb className="switch-thumb" />
+                                            </Switch.Root>
+                                            <Field.Label htmlFor="manageTOUSchedules">Direct Solar and Battery Export Management</Field.Label>
+                                        </div>
+                                        <Field.Description>
+                                            Allows excess solar power and battery energy to export directly to the grid without charging the battery to 100% first.
+                                        </Field.Description>
+                                        {settings.manageTOUSchedules && (
+                                            <div className="warning-notice" style={{ marginTop: '0.5rem' }}>
+                                                Notice: This feature requires RateRudder to manage your battery's Time-Of-Use (TOU) settings, which will overwrite any existing TOU or tariff schedules configured in your manufacturer app.
+                                            </div>
+                                        )}
+                                    </Field.Root>
                                 </div>
                             )}
-                        </div>
+                        </>
                     )}
 
                     {editESS && (
