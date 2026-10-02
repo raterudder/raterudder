@@ -2353,12 +2353,16 @@ func TestGenerateActionCandidates(t *testing.T) {
 
 		candidates := c.generateActionCandidates(ctx, 0, timelinePrePeakLoad[0], timelinePrePeakLoad, subReserveState, planningAnchors{}, chargeSettings, subStatus, nil, precedingAction{})
 		var chargeCand *actionCandidate
+		chargeCount := 0
 		for i := range candidates {
-			if candidates[i].batteryMode == types.BatteryModeChargeAny && candidates[i].reason == types.ActionReasonDeficitChargeNow {
-				chargeCand = &candidates[i]
-				break
+			if candidates[i].batteryMode == types.BatteryModeChargeAny {
+				chargeCount++
+				if candidates[i].reason == types.ActionReasonDeficitChargeNow {
+					chargeCand = &candidates[i]
+				}
 			}
 		}
+		assert.Equal(t, 1, chargeCount, "Must consolidate into exactly one ChargeAny candidate")
 		require.NotNil(t, chargeCand)
 		assert.Equal(t, 0, chargeCand.targetSOC, "Option B candidate generation leaves targetSOC 0 for dynamic DP resolution")
 
@@ -2437,6 +2441,71 @@ func TestGenerateActionCandidates(t *testing.T) {
 			}
 		}
 		assert.True(t, hasSolarArb, "Solar export pre-charge must be offered based on nominal spread")
+	})
+
+	t.Run("ReserveStepUp_RechargesImmediatelyAtOffPeakStart", func(t *testing.T) {
+		t.Parallel()
+
+		// Scenario: Battery has discharged down to 5.0% during an On-Peak period (e.g. 5% reserve).
+		// At 19:00, Off-Peak begins ($0.10/kWh) with a 25% target reserve.
+		// At 22:00, Super Off-Peak begins ($0.05/kWh) with a 90% target reserve.
+		// The battery MUST immediately start charging at 19:00 to reach 25%,
+		// and must not idle in standby/deficit waiting for Super Off-Peak.
+		timelineReserveStep := []planInterval{
+			{
+				index:         0,
+				startTime:     now,
+				endTime:       now.Add(time.Hour),
+				durationHours: 1.0,
+				importRate:    0.10,
+				minSOC:        25.0,
+			},
+			{
+				index:         1,
+				startTime:     now.Add(time.Hour),
+				endTime:       now.Add(2 * time.Hour),
+				durationHours: 1.0,
+				importRate:    0.10,
+				minSOC:        25.0,
+			},
+			{
+				index:         2,
+				startTime:     now.Add(2 * time.Hour),
+				endTime:       now.Add(3 * time.Hour),
+				durationHours: 1.0,
+				importRate:    0.10,
+				minSOC:        25.0,
+			},
+			{
+				index:         3,
+				startTime:     now.Add(3 * time.Hour),
+				endTime:       now.Add(6 * time.Hour),
+				durationHours: 3.0,
+				importRate:    0.05,
+				minSOC:        90.0,
+			},
+		}
+
+		stateAt5 := planState{
+			energyKWH:   13.5 * 0.05,
+			soc:         5.0,
+			capacityKWH: 13.5,
+			maxChargeKW: 5.0,
+		}
+
+		chargeSettings := settings
+		chargeSettings.GridChargeBatteries = true
+		statusAt5 := status
+		statusAt5.BatterySOC = 5.0
+
+		bestPath, err := c.searchOptimalPlan(ctx, timelineReserveStep, stateAt5, planningAnchors{}, chargeSettings, statusAt5, nil, nil)
+		require.NoError(t, err)
+		decision, plan := finalizeDecisionAndPlan(ctx, bestPath, timelineReserveStep, statusAt5, types.Price{DollarsPerKWH: 0.10}, now, chargeSettings, nil, nil)
+
+		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode, "Battery must immediately charge at start of Off-Peak when below 25% reserve")
+		assert.Equal(t, types.ActionReasonDeficitChargeNow, decision.Action.Reason)
+		require.NotEmpty(t, plan.Periods)
+		assert.Equal(t, types.BatteryModeChargeAny, plan.Periods[0].BatteryMode)
 	})
 }
 
@@ -3502,6 +3571,279 @@ func TestSearchOptimalPlan(t *testing.T) {
 		// Interval 0 must discharge to cover peak load rather than staying in Standby
 		assert.Equal(t, types.BatteryModeLoad, path.actions[0].batteryMode, "must discharge battery during peak rate despite high scheduled reserve in subsequent off-peak period")
 		assert.True(t, path.states[1].soc < 100.0, "SOC must decrease during peak load")
+	})
+
+	t.Run("MultiWindowArbitrage_ChargesBothProfitableWindows", func(t *testing.T) {
+		t.Parallel()
+
+		// 30m window at $0.05 followed by 30m window at $0.06, followed by 2h peak export at $0.30.
+		// Battery starts at 10% SOC. With 5 kW max charge into 13.5 kWh, 30m only charges ~2.37 kWh (+17.5% SOC),
+		// leaving ample headroom (~9.8 kWh).
+		// Since both $0.05 and $0.06 clear the round-trip recharge cost + $0.05 minArbitrageDiff relative to $0.30,
+		// both windows should charge rather than skipping the second window just because a cheaper one occurred earlier.
+		multiArbTimeline := []planInterval{
+			{
+				index:         0,
+				startTime:     now,
+				endTime:       now.Add(30 * time.Minute),
+				durationHours: 0.5,
+				importRate:    0.05,
+				exportRate:    0.04,
+				minSOC:        10,
+			},
+			{
+				index:         1,
+				startTime:     now.Add(30 * time.Minute),
+				endTime:       now.Add(60 * time.Minute),
+				durationHours: 0.5,
+				importRate:    0.06,
+				exportRate:    0.04,
+				minSOC:        10,
+			},
+			{
+				index:         2,
+				startTime:     now.Add(60 * time.Minute),
+				endTime:       now.Add(180 * time.Minute),
+				durationHours: 2.0,
+				importRate:    0.35,
+				exportRate:    0.30,
+				loadKWH:       0.2,
+				minSOC:        10,
+			},
+			{
+				index:         3,
+				startTime:     now.Add(180 * time.Minute),
+				endTime:       now.Add(360 * time.Minute),
+				durationHours: 3.0,
+				importRate:    0.05,
+				loadKWH:       1.0,
+				minSOC:        10,
+			},
+		}
+
+		arbState := planState{
+			energyKWH:      13.5 * 0.10,
+			soc:            10.0,
+			capacityKWH:    13.5,
+			maxDischargeKW: 5.0,
+			maxChargeKW:    5.0,
+		}
+
+		arbStatus := types.SystemStatus{
+			Timestamp:             now,
+			BatteryCapacityKWH:    13.5,
+			BatterySOC:            10.0,
+			MaxBatteryDischargeKW: 5.0,
+			MaxBatteryChargeKW:    5.0,
+		}
+
+		arbSettings := types.Settings{
+			MinBatterySOC:                       10,
+			GridChargeBatteries:                 true,
+			GridExportBatteries:                 true,
+			ManageTOUSchedules:                  true,
+			MinArbitrageDifferenceDollarsPerKWH: 0.05,
+		}
+
+		anchors := c.detectPlanningAnchors(multiArbTimeline, nil, arbStatus, arbSettings)
+		path, err := c.searchOptimalPlan(ctx, multiArbTimeline, arbState, anchors, arbSettings, arbStatus, nil, nil)
+		require.NoError(t, err)
+		require.Len(t, path.actions, 4)
+
+		assert.Equal(t, types.BatteryModeChargeAny, path.actions[0].batteryMode, "Window 0 ($0.05) must charge")
+		assert.Equal(t, types.BatteryModeChargeAny, path.actions[1].batteryMode, "Window 1 ($0.06) must also charge since window 0 alone is not enough time to fully charge and $0.06 is still profitable")
+		assert.Equal(t, types.BatteryModeExport, path.actions[2].batteryMode, "Window 2 ($0.30) must export stored energy")
+	})
+
+	t.Run("ReserveStepUp_ChargesImmediatelyRegardlessOfPeak", func(t *testing.T) {
+		t.Parallel()
+
+		// Scenario: Battery is at 5% SOC during peak pricing ($0.45/kWh), but user configured reserve is 25%.
+		// Later there is a cheap super off-peak period ($0.05/kWh).
+		// When solar cannot cover the home, the battery MUST charge immediately to 25% despite peak rates.
+		peakReserveTimeline := []planInterval{
+			{
+				index:         0,
+				startTime:     now,
+				endTime:       now.Add(time.Hour),
+				durationHours: 1.0,
+				importRate:    0.45,
+				loadKWH:       1.0,
+				solarKWH:      0.0,
+				minSOC:        25.0,
+			},
+			{
+				index:         1,
+				startTime:     now.Add(time.Hour),
+				endTime:       now.Add(2 * time.Hour),
+				durationHours: 1.0,
+				importRate:    0.45,
+				loadKWH:       1.0,
+				solarKWH:      0.0,
+				minSOC:        25.0,
+			},
+			{
+				index:         2,
+				startTime:     now.Add(2 * time.Hour),
+				endTime:       now.Add(6 * time.Hour),
+				durationHours: 4.0,
+				importRate:    0.05,
+				loadKWH:       1.0,
+				solarKWH:      0.0,
+				minSOC:        25.0,
+			},
+		}
+
+		stateAt5 := planState{
+			energyKWH:      13.5 * 0.05,
+			soc:            5.0,
+			capacityKWH:    13.5,
+			maxDischargeKW: 5.0,
+			maxChargeKW:    5.0,
+		}
+
+		statusAt5 := types.SystemStatus{
+			Timestamp:             now,
+			BatteryCapacityKWH:    13.5,
+			BatterySOC:            5.0,
+			MaxBatteryDischargeKW: 5.0,
+			MaxBatteryChargeKW:    5.0,
+		}
+
+		reserveSettings := types.Settings{
+			MinBatterySOC:       25,
+			GridChargeBatteries: true,
+		}
+
+		anchors := c.detectPlanningAnchors(peakReserveTimeline, nil, statusAt5, reserveSettings)
+		path, err := c.searchOptimalPlan(ctx, peakReserveTimeline, stateAt5, anchors, reserveSettings, statusAt5, nil, nil)
+		require.NoError(t, err)
+		require.NotEmpty(t, path.actions)
+
+		assert.Equal(t, types.BatteryModeChargeAny, path.actions[0].batteryMode, "must immediately charge battery to reserve during peak rates when below reserve")
+		decision, _ := finalizeDecisionAndPlan(ctx, path, peakReserveTimeline, statusAt5, types.Price{DollarsPerKWH: 0.45}, now, reserveSettings, nil, nil)
+		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
+		assert.Equal(t, 25, decision.Action.ChargeToSOC)
+
+		// Scenario 2: With surplus solar (solarKWH > loadKWH), grid charging is not required,
+		// but the battery must still recharge from surplus solar.
+		surplusSolarTimeline := []planInterval{
+			{
+				index:         0,
+				startTime:     now,
+				endTime:       now.Add(time.Hour),
+				durationHours: 1.0,
+				importRate:    0.45,
+				loadKWH:       1.0,
+				solarKWH:      4.0, // Surplus solar = 3.0 kWh
+				minSOC:        25.0,
+			},
+			{
+				index:         1,
+				startTime:     now.Add(time.Hour),
+				endTime:       now.Add(2 * time.Hour),
+				durationHours: 1.0,
+				importRate:    0.45,
+				loadKWH:       1.0,
+				solarKWH:      0.0,
+				minSOC:        25.0,
+			},
+		}
+
+		pathSurplus, err := c.searchOptimalPlan(ctx, surplusSolarTimeline, stateAt5, anchors, reserveSettings, statusAt5, nil, nil)
+		require.NoError(t, err)
+		require.NotEmpty(t, pathSurplus.actions)
+		// Battery charges from solar (SOC increases) without needing forced grid charge
+		assert.Greater(t, pathSurplus.states[1].soc, pathSurplus.states[0].soc, "battery must charge back toward reserve via surplus solar")
+	})
+
+	t.Run("ReserveInvariant_BatteryChargesWhenBelowReserve", func(t *testing.T) {
+		t.Parallel()
+
+		// Verify invariant: whenever state.soc < minSOC - 0.1 and GridChargeBatteries is true,
+		// the battery must be charging in some capacity (either BatteryModeChargeAny from grid, or charging via surplus solar).
+		// It must never idle in Standby or discharge when below reserve.
+		t.Run("PeakNoSolar_ForcesGridCharge", func(t *testing.T) {
+			t.Parallel()
+			peakTimeline := []planInterval{
+				{index: 0, startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.50, loadKWH: 2.0, solarKWH: 0.0, minSOC: 20.0},
+				{index: 1, startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.10, loadKWH: 1.0, solarKWH: 0.0, minSOC: 20.0},
+			}
+			st := planState{
+				energyKWH:      13.5 * 0.05,
+				soc:            5.0,
+				capacityKWH:    13.5,
+				maxDischargeKW: 5.0,
+				maxChargeKW:    5.0,
+			}
+			sysStatus := types.SystemStatus{
+				Timestamp:             now,
+				BatteryCapacityKWH:    13.5,
+				BatterySOC:            5.0,
+				MaxBatteryDischargeKW: 5.0,
+				MaxBatteryChargeKW:    5.0,
+			}
+			sett := types.Settings{
+				MinBatterySOC:       20.0,
+				GridChargeBatteries: true,
+			}
+
+			anch := c.detectPlanningAnchors(peakTimeline, nil, sysStatus, sett)
+			resPath, err := c.searchOptimalPlan(ctx, peakTimeline, st, anch, sett, sysStatus, nil, nil)
+			require.NoError(t, err)
+
+			for i := 0; i < len(resPath.actions); i++ {
+				soc := resPath.states[i].soc
+				minSOC := peakTimeline[i].minSOC
+				if soc < minSOC-0.1 {
+					assert.Equal(t, types.BatteryModeChargeAny, resPath.actions[i].batteryMode,
+						"step %d must grid charge when below reserve with no solar", i)
+				}
+			}
+		})
+
+		t.Run("SolarSurplus_ChargesViaSolarWithoutGridImport", func(t *testing.T) {
+			t.Parallel()
+			solarTimeline := []planInterval{
+				{index: 0, startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.20, loadKWH: 1.0, solarKWH: 5.0, minSOC: 30.0},
+				{index: 1, startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.20, loadKWH: 1.0, solarKWH: 0.0, minSOC: 30.0},
+			}
+			st := planState{
+				energyKWH:      13.5 * 0.15,
+				soc:            15.0,
+				capacityKWH:    13.5,
+				maxDischargeKW: 5.0,
+				maxChargeKW:    5.0,
+			}
+			sysStatus := types.SystemStatus{
+				Timestamp:             now,
+				BatteryCapacityKWH:    13.5,
+				BatterySOC:            15.0,
+				MaxBatteryDischargeKW: 5.0,
+				MaxBatteryChargeKW:    5.0,
+			}
+			sett := types.Settings{
+				MinBatterySOC:       30.0,
+				GridChargeBatteries: true,
+			}
+
+			anch := c.detectPlanningAnchors(solarTimeline, nil, sysStatus, sett)
+			resPath, err := c.searchOptimalPlan(ctx, solarTimeline, st, anch, sett, sysStatus, nil, nil)
+			require.NoError(t, err)
+
+			for i := 0; i < len(resPath.actions); i++ {
+				soc := resPath.states[i].soc
+				minSOC := solarTimeline[i].minSOC
+				if soc < minSOC-0.1 {
+					isGridCharging := resPath.actions[i].batteryMode == types.BatteryModeChargeAny
+					isSolarCharging := solarTimeline[i].solarKWH > solarTimeline[i].loadKWH && resPath.states[i+1].energyKWH > resPath.states[i].energyKWH
+					assert.True(t, isGridCharging || isSolarCharging,
+						"step %d must charge in some capacity back toward reserve", i)
+					assert.NotEqual(t, types.BatteryModeStandby, resPath.actions[i].batteryMode,
+						"step %d must not idle in standby below reserve", i)
+				}
+			}
+		})
 	})
 }
 
