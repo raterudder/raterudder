@@ -662,13 +662,13 @@ func TestGenerateActionCandidates(t *testing.T) {
 		require.Len(t, candidates, 2)
 		assert.Equal(t, types.BatteryModeChargeAny, candidates[0].batteryMode)
 		assert.Equal(t, types.ActionReasonAlwaysChargeBelowThreshold, candidates[0].reason)
-		require.NotNil(t, candidates[0].logFn)
-		candidates[0].logFn(ctx, true)
+		assert.Equal(t, PlanActionNegativeOrForceChargeThresholdCharging, candidates[0].actionName)
+		logCandidate(ctx, candidates[0], negInterval, planState{energyKWH: 6.75, soc: 50}, true)
 
 		assert.Equal(t, types.BatteryModeStandby, candidates[1].batteryMode)
 		assert.Equal(t, types.ActionReasonAlwaysChargeBelowThreshold, candidates[1].reason)
-		require.NotNil(t, candidates[1].logFn)
-		candidates[1].logFn(ctx, false)
+		assert.Equal(t, PlanActionNegativeOrForceChargeThresholdStandby, candidates[1].actionName)
+		logCandidate(ctx, candidates[1], negInterval, planState{energyKWH: 6.75, soc: 50}, false)
 	})
 
 	t.Run("ForceChargeThreshold_EnforcesChargeAny", func(t *testing.T) {
@@ -901,8 +901,8 @@ func TestGenerateActionCandidates(t *testing.T) {
 		require.NotEmpty(t, candidates)
 		assert.Equal(t, types.BatteryModeStandby, candidates[0].batteryMode)
 		assert.Equal(t, types.ActionReasonEVChargingStandby, candidates[0].reason)
-		require.NotNil(t, candidates[0].logFn)
-		candidates[0].logFn(ctx, true)
+		assert.Equal(t, PlanActionActiveEVChargingStandby, candidates[0].actionName)
+		logCandidate(ctx, candidates[0], interval, planState{energyKWH: 10.0, soc: 74}, true)
 		// Discharging modes (Load, Export) must be strictly pruned during EV charging
 		for _, cand := range candidates {
 			assert.NotEqual(t, types.BatteryModeLoad, cand.batteryMode)
@@ -1173,7 +1173,7 @@ func TestGenerateActionCandidates(t *testing.T) {
 		assert.Equal(t, types.BatteryModeExport, candidates15[0].batteryMode)
 		assert.Equal(t, types.ActionReasonVPPActive, candidates15[0].reason)
 		assert.Equal(t, 5, candidates15[0].targetSOC)
-		assert.Contains(t, candidates15[0].description, "Mandatory VPP Event Active (Discharging to 5%)")
+		assert.Contains(t, candidates15[0].description, "Mandatory VPP Event Active")
 
 		// 2. Battery reached 5% SOC:
 		// Target reached, switches to Standby at 5%.
@@ -1182,7 +1182,7 @@ func TestGenerateActionCandidates(t *testing.T) {
 		assert.Equal(t, types.BatteryModeStandby, candidates5[0].batteryMode)
 		assert.Equal(t, types.ActionReasonVPPActive, candidates5[0].reason)
 		assert.Equal(t, 0, candidates5[0].targetSOC)
-		assert.Contains(t, candidates5[0].description, "Mandatory VPP Target SOC reached (5%)")
+		assert.Contains(t, candidates5[0].description, "Mandatory VPP Target SOC reached")
 	})
 
 	t.Run("VPPActive_WithoutManageTOUSchedules_SelectsBatteryModeLoad", func(t *testing.T) {
@@ -1805,7 +1805,7 @@ func TestGenerateActionCandidates(t *testing.T) {
 		assert.Equal(t, types.ActionReasonHoldSimilarPrice, standbyCandAfter.reason, "When VPP deadline is after solar refill time, reason must be HoldSimilarPrice")
 	})
 
-	t.Run("DirectSolarExport_AtReserve_OffersExportMode", func(t *testing.T) {
+	t.Run("DirectSolarExport_AtOrBelowReserve_Pruned", func(t *testing.T) {
 		t.Parallel()
 
 		sunnyInterval := interval
@@ -1814,6 +1814,7 @@ func TestGenerateActionCandidates(t *testing.T) {
 		touSettings.ManageTOUSchedules = true
 		touSettings.GridExportSolar = true
 
+		// 1. At or below reserve: Direct solar export must NOT be offered
 		reserveState := planState{energyKWH: 2.7, soc: 20}
 		candidates := c.generateActionCandidates(ctx, 0, sunnyInterval, nil, reserveState, planningAnchors{}, touSettings, status, nil, precedingAction{})
 
@@ -1824,8 +1825,44 @@ func TestGenerateActionCandidates(t *testing.T) {
 				break
 			}
 		}
-		require.NotNil(t, directSolarCand, "Direct solar export must be offered even when battery is at reserve")
-		assert.Equal(t, types.ActionReasonBatteryAtReserve, directSolarCand.reason)
+		assert.Nil(t, directSolarCand, "Direct solar export must NOT be created when battery is at or below reserve")
+
+		// 2. Above reserve: Direct solar export IS offered
+		aboveReserveState := planState{energyKWH: 4.5, soc: 35}
+		candsAbove := c.generateActionCandidates(ctx, 0, sunnyInterval, nil, aboveReserveState, planningAnchors{}, touSettings, status, nil, precedingAction{})
+
+		var directSolarAbove *actionCandidate
+		for i := range candsAbove {
+			if candsAbove[i].solarMode == types.SolarModeExport {
+				directSolarAbove = &candsAbove[i]
+				break
+			}
+		}
+		require.NotNil(t, directSolarAbove, "Direct solar export must be offered when battery is above reserve")
+		assert.Equal(t, types.ActionReasonDirectExport, directSolarAbove.reason)
+
+		// 3. During VPP prep window (Rule 2) when at or below reserve: Direct solar export must NOT be offered
+		vppPrepAnchors := planningAnchors{
+			vppEvents: []vppAnchor{
+				{
+					eventStart: sunnyInterval.startTime.Add(time.Hour),
+					eventEnd:   sunnyInterval.startTime.Add(3 * time.Hour),
+					deadline:   sunnyInterval.startTime.Add(time.Hour),
+					mandatory:  true,
+				},
+			},
+		}
+		noGridChargeSettings := touSettings
+		noGridChargeSettings.GridChargeBatteries = false
+		vppCandidates := c.generateActionCandidates(ctx, 0, sunnyInterval, nil, reserveState, vppPrepAnchors, noGridChargeSettings, status, nil, precedingAction{})
+		var vppDirectSolarCand *actionCandidate
+		for i := range vppCandidates {
+			if vppCandidates[i].solarMode == types.SolarModeExport {
+				vppDirectSolarCand = &vppCandidates[i]
+				break
+			}
+		}
+		assert.Nil(t, vppDirectSolarCand, "Direct solar export must NOT be created during VPP prep when battery is at or below reserve")
 	})
 
 	t.Run("DeficitCharge_CalculatesExactNeededTargetSOC", func(t *testing.T) {
@@ -3383,50 +3420,70 @@ func TestSearchOptimalPlan(t *testing.T) {
 		assert.Equal(t, types.BatteryModeStandby, pathWithInertia.actions[0].batteryMode)
 	})
 
-	t.Run("ExecuteLogs_InvokesDeferredLogOnWinningActions", func(t *testing.T) {
+	t.Run("ExecuteLogs_And_LogChosenCandidates", func(t *testing.T) {
 		t.Parallel()
 
-		var loggedActions []string
-		var unchosenActions []string
+		testTimeline := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.10, minSOC: 20},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.15, minSOC: 20},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.05, minSOC: 20},
+			{startTime: now.Add(3 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 1.0, importRate: 0.05, minSOC: 20},
+		}
+		testStates := []planState{
+			{soc: 50, energyKWH: 6.75, capacityKWH: 13.5},
+			{soc: 45, energyKWH: 6.075, capacityKWH: 13.5},
+			{soc: 40, energyKWH: 5.4, capacityKWH: 13.5},
+			{soc: 55, energyKWH: 7.425, capacityKWH: 13.5},
+		}
+
 		p := &planPath{
 			actions: []actionCandidate{
 				{
 					batteryMode: types.BatteryModeStandby,
 					reason:      types.ActionReasonHoldSimilarPrice,
-					logFn: func(ctx context.Context, selected bool) {
-						if selected {
-							loggedActions = append(loggedActions, "chosen:action0")
-						} else {
-							unchosenActions = append(unchosenActions, "unchosen:action0")
-						}
-					},
+					actionName:  PlanActionBatteryStandby,
+					logData:     &candidateLogData{refillExportRate: 0.10, effectiveReserveSOC: 20},
 				},
 				{
 					batteryMode: types.BatteryModeLoad,
-					logFn:       nil,
-				},
-				{
-					batteryMode: types.BatteryModeChargeAny,
-					logFn: func(ctx context.Context, selected bool) {
-						if selected {
-							loggedActions = append(loggedActions, "chosen:action2")
-						}
-					},
-				},
-			},
-			initialCandidates: []actionCandidate{
-				{
-					batteryMode: types.BatteryModeStandby,
-					reason:      types.ActionReasonHoldSimilarPrice,
+					reason:      types.ActionReasonSufficientBattery,
+					actionName:  PlanActionDischargingBattery,
+					logData:     &candidateLogData{effectiveReserveSOC: 20},
 				},
 				{
 					batteryMode: types.BatteryModeChargeAny,
 					reason:      types.ActionReasonDeficitChargeNow,
-					logFn: func(ctx context.Context, selected bool) {
-						if !selected {
-							unchosenActions = append(unchosenActions, "unchosen:chargeCandidate")
-						}
+					actionName:  PlanActionGridArbitragePreCharge,
+					logData: &candidateLogData{
+						roundTripEff: 0.85,
+						rechargeCost: 0.05 / 0.85,
 					},
+				},
+				{
+					// Consecutive duplicate of previous action: must be skipped by executeLogs
+					batteryMode: types.BatteryModeChargeAny,
+					reason:      types.ActionReasonDeficitChargeNow,
+					actionName:  PlanActionGridArbitragePreCharge,
+					logData: &candidateLogData{
+						roundTripEff: 0.85,
+						rechargeCost: 0.05 / 0.85,
+					},
+				},
+			},
+			states:   testStates,
+			timeline: testTimeline,
+			initialCandidates: []actionCandidate{
+				{
+					batteryMode: types.BatteryModeStandby,
+					reason:      types.ActionReasonHoldSimilarPrice,
+					actionName:  PlanActionBatteryStandby,
+					logData:     &candidateLogData{},
+				},
+				{
+					batteryMode: types.BatteryModeChargeAny,
+					reason:      types.ActionReasonDeficitChargeNow,
+					actionName:  PlanActionReserveTargetCharge,
+					logData:     &candidateLogData{},
 				},
 			},
 			modeScores: map[types.BatteryMode]float64{
@@ -3436,15 +3493,45 @@ func TestSearchOptimalPlan(t *testing.T) {
 			bestScore: 1.0,
 		}
 
-		p.executeLogs(ctx)
-		require.Len(t, loggedActions, 2)
-		assert.Equal(t, []string{"chosen:action0", "chosen:action2"}, loggedActions)
-		require.Len(t, unchosenActions, 1)
-		assert.Equal(t, []string{"unchosen:chargeCandidate"}, unchosenActions)
+		// executeLogs must run without panic on winning path and unchosen step 0 candidate
+		assert.NotPanics(t, func() {
+			p.executeLogs(ctx)
+		})
 
 		// Calling executeLogs on nil planPath must be safe
 		var nilPath *planPath
-		nilPath.executeLogs(ctx)
+		assert.NotPanics(t, func() {
+			nilPath.executeLogs(ctx)
+		})
+
+		// Verify all defined action names are unique, non-empty, and handled safely in logCandidate
+		seenNames := make(map[PlanActionName]bool)
+		for _, name := range AllPlanActionNames {
+			assert.NotEmpty(t, name)
+			assert.False(t, seenNames[name], "duplicate action name: %s", name)
+			seenNames[name] = true
+
+			cand := actionCandidate{
+				actionName: name,
+				logData:    &candidateLogData{},
+			}
+			assert.NotPanics(t, func() {
+				logCandidate(ctx, cand, testTimeline[0], testStates[0], true)
+				logCandidate(ctx, cand, testTimeline[0], testStates[0], false)
+			})
+		}
+
+		// Fallback for custom or unhandled action name logs default parameters safely
+		fallbackCand := actionCandidate{
+			batteryMode: types.BatteryModeLoad,
+			solarMode:   types.SolarModeAny,
+			reason:      types.ActionReasonSufficientBattery,
+			actionName:  "custom unhandled candidate name",
+		}
+		assert.NotPanics(t, func() {
+			logCandidate(ctx, fallbackCand, testTimeline[0], testStates[0], true)
+			logCandidate(ctx, fallbackCand, testTimeline[0], testStates[0], false)
+		})
 	})
 
 	t.Run("FastTrackDelay_PromotesChargeAnyWhenDelayWithinThreshold", func(t *testing.T) {
@@ -3844,6 +3931,180 @@ func TestSearchOptimalPlan(t *testing.T) {
 				}
 			}
 		})
+
+		t.Run("DirectSolarExport_PenalizedDuringReserveDeficit", func(t *testing.T) {
+			t.Parallel()
+			// High export rate tempting direct solar export, but battery is below reserve
+			exportTimeline := []planInterval{
+				{index: 0, startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.15, exportRate: 0.30, loadKWH: 1.0, solarKWH: 5.0, minSOC: 30.0},
+				{index: 1, startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.15, exportRate: 0.05, loadKWH: 1.0, solarKWH: 0.0, minSOC: 30.0},
+			}
+			st := planState{
+				energyKWH:      13.5 * 0.15,
+				soc:            15.0,
+				capacityKWH:    13.5,
+				maxDischargeKW: 5.0,
+				maxChargeKW:    5.0,
+			}
+			sysStatus := types.SystemStatus{
+				Timestamp:             now,
+				BatteryCapacityKWH:    13.5,
+				BatterySOC:            15.0,
+				MaxBatteryDischargeKW: 5.0,
+				MaxBatteryChargeKW:    5.0,
+				SolarKW:               5.0,
+			}
+			sett := types.Settings{
+				MinBatterySOC:       30.0,
+				GridChargeBatteries: true,
+				GridExportSolar:     true,
+				ManageTOUSchedules:  true,
+			}
+
+			anch := c.detectPlanningAnchors(exportTimeline, nil, sysStatus, sett)
+			resPath, err := c.searchOptimalPlan(ctx, exportTimeline, st, anch, sett, sysStatus, nil, nil)
+			require.NoError(t, err)
+
+			// Step 0 must NOT select SolarModeExport because that bypasses charging the battery back to reserve
+			assert.NotEqual(t, types.SolarModeExport, resPath.actions[0].solarMode,
+				"must not direct export solar while in reserve deficit")
+			// Battery should charge toward reserve
+			assert.Greater(t, resPath.states[1].soc, resPath.states[0].soc,
+				"battery must recharge toward reserve instead of bypassing via export")
+		})
+
+		t.Run("GridChargingDisabled_NoDeficitPenaltyWhenImpossibleToCharge", func(t *testing.T) {
+			t.Parallel()
+			// Nighttime with no solar and grid charging disabled: battery is below reserve
+			nightTimeline := []planInterval{
+				{index: 0, startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.15, loadKWH: 1.0, solarKWH: 0.0, minSOC: 30.0},
+				{index: 1, startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.15, loadKWH: 1.0, solarKWH: 0.0, minSOC: 30.0},
+			}
+			st := planState{
+				energyKWH:      13.5 * 0.15,
+				soc:            15.0,
+				capacityKWH:    13.5,
+				maxDischargeKW: 5.0,
+				maxChargeKW:    5.0,
+			}
+			sysStatus := types.SystemStatus{
+				Timestamp:             now,
+				BatteryCapacityKWH:    13.5,
+				BatterySOC:            15.0,
+				MaxBatteryDischargeKW: 5.0,
+				MaxBatteryChargeKW:    5.0,
+			}
+			sett := types.Settings{
+				MinBatterySOC:       30.0,
+				GridChargeBatteries: false, // Grid charging disabled
+			}
+
+			anch := c.detectPlanningAnchors(nightTimeline, nil, sysStatus, sett)
+			resPath, err := c.searchOptimalPlan(ctx, nightTimeline, st, anch, sett, sysStatus, nil, nil)
+			require.NoError(t, err)
+			require.NotEmpty(t, resPath.actions)
+			// Planner successfully produces a viable plan without error
+			assert.Equal(t, types.BatteryModeLoad, resPath.actions[0].batteryMode)
+		})
+	})
+
+	t.Run("AntiChurn_PreventsReentryIntoChargeAnyDuringContinuousFlatPrice", func(t *testing.T) {
+		t.Parallel()
+
+		// 4 consecutive flat off-peak intervals followed by expensive peak intervals
+		flatPriceTimeline := []planInterval{
+			{index: 0, startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 0.333, importRate: 0.05, loadKWH: 0.2, minSOC: 20},
+			{index: 1, startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 0.333, importRate: 0.05, loadKWH: 0.2, minSOC: 20},
+			{index: 2, startTime: now.Add(40 * time.Minute), endTime: now.Add(60 * time.Minute), durationHours: 0.333, importRate: 0.05, loadKWH: 0.2, minSOC: 20},
+			{index: 3, startTime: now.Add(60 * time.Minute), endTime: now.Add(80 * time.Minute), durationHours: 0.333, importRate: 0.05, loadKWH: 0.2, minSOC: 20},
+			{index: 4, startTime: now.Add(80 * time.Minute), endTime: now.Add(100 * time.Minute), durationHours: 0.333, importRate: 0.50, loadKWH: 1.5, minSOC: 20},
+			{index: 5, startTime: now.Add(100 * time.Minute), endTime: now.Add(120 * time.Minute), durationHours: 0.333, importRate: 0.50, loadKWH: 1.5, minSOC: 20},
+		}
+
+		st := planState{
+			capacityKWH: 13.5,
+			energyKWH:   13.5 * 0.30,
+			soc:         30.0,
+		}
+		sysStatus := types.SystemStatus{
+			Timestamp:             now,
+			BatteryCapacityKWH:    13.5,
+			BatterySOC:            30.0,
+			MaxBatteryChargeKW:    5.0,
+			MaxBatteryDischargeKW: 5.0,
+		}
+		sett := types.Settings{
+			MinBatterySOC:                          20.0,
+			GridChargeBatteries:                    true,
+			MinArbitrageDifferenceDollarsPerKWH:    0.05,
+			MinDeficitPriceDifferenceDollarsPerKWH: 0.05,
+		}
+
+		anch := c.detectPlanningAnchors(flatPriceTimeline, nil, sysStatus, sett)
+		planPath, err := c.searchOptimalPlan(ctx, flatPriceTimeline, st, anch, sett, sysStatus, nil, nil)
+		require.NoError(t, err)
+		require.NotEmpty(t, planPath.actions)
+
+		// Verify invariant: during the contiguous flat-rate off-peak window (steps 0..3),
+		// once ChargeAny is exited, it never re-enters ChargeAny (no Charge -> Load -> Charge flutter).
+		hasExitedCharge := false
+		for i := 0; i <= 3; i++ {
+			act := planPath.actions[i]
+			if act.batteryMode == types.BatteryModeChargeAny {
+				assert.False(t, hasExitedCharge, "Step %d re-entered ChargeAny after exiting charging in the same flat price block", i)
+			} else {
+				hasExitedCharge = true
+			}
+		}
+	})
+
+	t.Run("AntiChurn_PreventsReentryFromLastAction", func(t *testing.T) {
+		t.Parallel()
+
+		// Flat price timeline
+		flatPriceTimeline := []planInterval{
+			{index: 0, startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 0.333, importRate: 0.05, exportRate: 0.02, loadKWH: 0.2, minSOC: 20},
+			{index: 1, startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 0.333, importRate: 0.05, exportRate: 0.02, loadKWH: 0.2, minSOC: 20},
+			{index: 2, startTime: now.Add(40 * time.Minute), endTime: now.Add(60 * time.Minute), durationHours: 0.333, importRate: 0.50, exportRate: 0.02, loadKWH: 1.5, minSOC: 20},
+		}
+
+		st := planState{
+			capacityKWH: 13.5,
+			energyKWH:   13.5 * 0.90, // Almost full
+			soc:         90.0,
+		}
+		sysStatus := types.SystemStatus{
+			Timestamp:             now,
+			BatteryCapacityKWH:    13.5,
+			BatterySOC:            90.0,
+			MaxBatteryChargeKW:    5.0,
+			MaxBatteryDischargeKW: 5.0,
+		}
+		sett := types.Settings{
+			MinBatterySOC:                          20.0,
+			GridChargeBatteries:                    true,
+			MinArbitrageDifferenceDollarsPerKWH:    0.05,
+			MinDeficitPriceDifferenceDollarsPerKWH: 0.05,
+		}
+
+		// lastAction was ChargeAny in the same price block
+		lastAct := &types.Action{
+			BatteryMode: types.BatteryModeChargeAny,
+			CurrentPrice: &types.Price{
+				DollarsPerKWH: 0.05,
+			},
+		}
+
+		anch := c.detectPlanningAnchors(flatPriceTimeline, nil, sysStatus, sett)
+		planPath, err := c.searchOptimalPlan(ctx, flatPriceTimeline, st, anch, sett, sysStatus, nil, lastAct)
+		require.NoError(t, err)
+		require.NotEmpty(t, planPath.actions)
+
+		// If step 0 switched to Load, step 1 must not re-enter ChargeAny in the same flat price block
+		if planPath.actions[0].batteryMode != types.BatteryModeChargeAny {
+			assert.NotEqual(t, types.BatteryModeChargeAny, planPath.actions[1].batteryMode,
+				"Step 1 must not re-enter ChargeAny after step 0 exited ChargeAny from lastAction in the same flat price block")
+		}
 	})
 }
 

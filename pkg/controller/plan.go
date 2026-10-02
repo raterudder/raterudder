@@ -39,6 +39,11 @@ const (
 	// minSolarGenerationKW is the threshold below which solar generation is treated as negligible.
 	minSolarGenerationKW = 0.05
 
+	// minDirectSolarExportKW is the minimum solar generation threshold (0.5 kW) required
+	// to enable direct solar export. Below 500 W, generation is negligible dawn/dusk sensor noise
+	// or overcast trickle that does not justify cycling the battery to export solar.
+	minDirectSolarExportKW = 0.5
+
 	// vppStandbyLeadTime is the duration prior to a VPP event during which the battery
 	// must be held in standby at 100% capacity to prevent the hardware ESS from taking over.
 	vppStandbyLeadTime = 2 * time.Hour
@@ -226,17 +231,54 @@ type planState struct {
 	chargingDisabled bool
 }
 
+// candidateLogData holds diagnostic attributes for an action candidate, avoiding heap
+// allocation from closures in generateActionCandidates.
+type candidateLogData struct {
+	vppStart                time.Time
+	vppEnd                  time.Time
+	vppDeadline             time.Time
+	vppMandatory            bool
+	homeKW                  float64
+	stepKW                  float64
+	periodStart             time.Time
+	periodEnd               time.Time
+	headroomKWH             float64
+	isAlreadyCharging       bool
+	refillExportRate        float64
+	effectiveReserveSOC     float64
+	earliestSolarRefillTime time.Time
+	higherFutureRate        float64
+	vppEventDeadline        time.Time
+	hasUpcomingSolarRefill  bool
+	hasVPPAhead             bool
+	vppBeforeSolarRefill    bool
+	isAlreadyStandby        bool
+	roundTripEff            float64
+	rechargeCost            float64
+	futureExportRate        float64
+	futurePeakRate          float64
+	minArbitrageDiff        float64
+	minDeficitDiff          float64
+	earliestArbitrageTime   time.Time
+	vppRechargeDeadline     time.Time
+	canDischarge            bool
+	minAlternativeValue     float64
+	cycleHurdle             float64
+	exportReplacementCost   float64
+}
+
 // actionCandidate represents a permissible control action pair for an interval.
 type actionCandidate struct {
 	batteryMode        types.BatteryMode
 	solarMode          types.SolarMode
 	reason             types.ActionReason
 	description        string
+	actionName         PlanActionName
 	targetSOC          int
 	overrideReserveSOC float64
 	isTruePeak         bool
 	futurePrice        *types.Price
-	logFn              func(ctx context.Context, selected bool)
+	logData            *candidateLogData
 }
 
 // precedingAction contains only the action state guaranteed to be known from
@@ -265,7 +307,7 @@ func (a actionCandidate) toPrecedingAction() precedingAction {
 
 // planLog formats and emits structured slog messages for action candidates, distinguishing whether
 // the candidate was ultimately chosen for execution or evaluated but not chosen.
-func planLog(ctx context.Context, selected bool, actionName string, attrs ...slog.Attr) {
+func planLog(ctx context.Context, selected bool, actionName PlanActionName, attrs ...slog.Attr) {
 	msg := "optimal plan action: " + actionName
 	if !selected {
 		msg = "optimal plan candidate not chosen: " + actionName
@@ -284,6 +326,7 @@ type intervalMetrics struct {
 	gridExportKWH            float64
 	batExportKWH             float64
 	batSuppliedHomeKWH       float64
+	gridChargeKWH            float64
 	costDollars              float64
 	grossImportCostDollars   float64
 	grossExportCreditDollars float64
@@ -319,61 +362,216 @@ type planPath struct {
 	actions           []actionCandidate
 	states            []planState
 	metrics           []intervalMetrics
+	timeline          []planInterval
 	totalCost         float64
 	initialCandidates []actionCandidate
 	modeScores        map[types.BatteryMode]float64
 	bestScore         float64
 }
 
-// executeLogs invokes the deferred logging callback on each action candidate in the winning trajectory
-// as well as any candidate actions evaluated at step 0 that were not chosen.
+// logCandidate emits structured slog messages for an action candidate, distinguishing whether
+// the candidate was ultimately chosen for execution or evaluated but not chosen.
+func logCandidate(ctx context.Context, cand actionCandidate, interval planInterval, state planState, selected bool) {
+	if cand.actionName == "" {
+		return
+	}
+	var ld candidateLogData
+	if cand.logData != nil {
+		ld = *cand.logData
+	}
+	switch cand.actionName {
+	case PlanActionVPPTargetSOCReached, PlanActionVPPActiveEventDischarging:
+		planLog(ctx, selected, cand.actionName,
+			slog.Time("stepTime", interval.startTime),
+			slog.Time("vppStart", ld.vppStart),
+			slog.Time("vppEnd", ld.vppEnd),
+			slog.Float64("currentSOC", state.soc),
+			slog.Float64("vppTargetSOC", cand.overrideReserveSOC),
+			slog.Bool("mandatory", ld.vppMandatory),
+		)
+	case PlanActionVPP2HourPrepEmergencyTopUp, PlanActionVPP2HourPrepStandbyLock, PlanActionVPP2HourPrepDirectSolarExport:
+		planLog(ctx, selected, cand.actionName,
+			slog.Time("stepTime", interval.startTime),
+			slog.Time("vppDeadline", ld.vppDeadline),
+			slog.Time("vppStart", ld.vppStart),
+			slog.Float64("currentSOC", state.soc),
+		)
+	case PlanActionActiveEVChargingStandby:
+		planLog(ctx, selected, cand.actionName,
+			slog.Time("stepTime", interval.startTime),
+			slog.Float64("homeKW", ld.homeKW),
+			slog.Float64("stepKW", ld.stepKW),
+			slog.Time("periodStart", ld.periodStart),
+			slog.Time("periodEnd", ld.periodEnd),
+		)
+	case PlanActionNegativeOrForceChargeThresholdCharging, PlanActionNegativeOrForceChargeThresholdStandby:
+		planLog(ctx, selected, cand.actionName,
+			slog.Time("stepTime", interval.startTime),
+			slog.Float64("importRate", interval.importRate),
+			slog.Float64("currentSOC", state.soc),
+			slog.Float64("headroomKWH", ld.headroomKWH),
+			slog.Bool("isAlreadyCharging", ld.isAlreadyCharging),
+		)
+	case PlanActionDischargingBattery, PlanActionBatteryAtReserveStandby:
+		if !selected {
+			return
+		}
+		planLog(ctx, selected, cand.actionName,
+			slog.Time("stepTime", interval.startTime),
+			slog.Float64("refillExportRate", ld.refillExportRate),
+			slog.Float64("currentSOC", state.soc),
+			slog.Float64("effectiveReserveSOC", ld.effectiveReserveSOC),
+		)
+	case PlanActionBatteryStandby:
+		if !selected {
+			return
+		}
+		planLog(ctx, selected, cand.actionName,
+			slog.Time("stepTime", interval.startTime),
+			slog.Float64("refillExportRate", ld.refillExportRate),
+			slog.Time("earliestSolarRefillTime", ld.earliestSolarRefillTime),
+			slog.Float64("currentSOC", state.soc),
+			slog.Float64("effectiveReserveSOC", ld.effectiveReserveSOC),
+			slog.Float64("higherFutureRate", ld.higherFutureRate),
+			slog.Time("vppEventDeadline", ld.vppEventDeadline),
+			slog.Bool("hasUpcomingSolarRefill", ld.hasUpcomingSolarRefill),
+			slog.Bool("hasVPPAhead", ld.hasVPPAhead),
+			slog.Bool("vppBeforeSolarRefill", ld.vppBeforeSolarRefill),
+			slog.Bool("isAlreadyStandby", ld.isAlreadyStandby),
+			slog.String("reason", string(cand.reason)),
+		)
+	case PlanActionReserveTargetCharge:
+		planLog(ctx, selected, cand.actionName,
+			slog.Time("stepTime", interval.startTime),
+			slog.Float64("importRate", interval.importRate),
+			slog.Float64("currentSOC", state.soc),
+			slog.Float64("targetReserve", interval.minSOC),
+		)
+	case PlanActionGridArbitragePreCharge:
+		planLog(ctx, selected, cand.actionName,
+			slog.Time("stepTime", interval.startTime),
+			slog.Float64("importRate", interval.importRate),
+			slog.String("reason", string(cand.reason)),
+			slog.Float64("roundTripEff", ld.roundTripEff),
+			slog.Float64("rechargeCost", ld.rechargeCost),
+			slog.Float64("futureExportRate", ld.futureExportRate),
+			slog.Float64("futurePeakRate", ld.futurePeakRate),
+			slog.Float64("minArbitrageDiff", ld.minArbitrageDiff),
+			slog.Float64("minDeficitDiff", ld.minDeficitDiff),
+			slog.Time("earliestArbitrageTime", ld.earliestArbitrageTime),
+			slog.Time("vppRechargeDeadline", ld.vppRechargeDeadline),
+		)
+	case PlanActionVPPPreChargeBeforeDeadline:
+		planLog(ctx, selected, cand.actionName,
+			slog.Time("stepTime", interval.startTime),
+			slog.Time("vppDeadline", ld.vppDeadline),
+			slog.Float64("importRate", interval.importRate),
+			slog.Float64("roundTripEff", ld.roundTripEff),
+			slog.Float64("rechargeCost", ld.rechargeCost),
+			slog.Float64("futureExportRate", ld.futureExportRate),
+			slog.Float64("futurePeakRate", ld.futurePeakRate),
+			slog.Float64("minArbitrageDiff", ld.minArbitrageDiff),
+			slog.Float64("minDeficitDiff", ld.minDeficitDiff),
+			slog.Time("earliestArbitrageTime", ld.earliestArbitrageTime),
+			slog.Time("vppRechargeDeadline", ld.vppRechargeDeadline),
+		)
+	case PlanActionDirectSolarExport:
+		planLog(ctx, selected, cand.actionName,
+			slog.Time("stepTime", interval.startTime),
+			slog.String("reason", string(types.ActionReasonDirectExport)),
+			slog.Float64("exportRate", interval.exportRate),
+			slog.Float64("importRate", interval.importRate),
+			slog.Float64("solarKWH", interval.solarKWH),
+			slog.Float64("currentSOC", state.soc),
+			slog.Float64("effectiveReserveSOC", ld.effectiveReserveSOC),
+			slog.Bool("canDischarge", ld.canDischarge),
+			slog.Time("vppRechargeDeadline", ld.vppRechargeDeadline),
+		)
+	case PlanActionBatteryGridExportDump:
+		planLog(ctx, selected, cand.actionName,
+			slog.Time("stepTime", interval.startTime),
+			slog.Float64("exportRate", interval.exportRate),
+			slog.Int("targetSOC", cand.targetSOC),
+			slog.Float64("rechargeCost", ld.exportReplacementCost),
+			slog.Float64("minAlternativeValue", ld.minAlternativeValue),
+			slog.Float64("roundTripEff", ld.roundTripEff),
+			slog.Float64("cycleHurdle", ld.cycleHurdle),
+		)
+	default:
+		planLog(ctx, selected, cand.actionName,
+			slog.Time("stepTime", interval.startTime),
+			slog.String("batteryMode", drModeString(cand.batteryMode)),
+			slog.String("solarMode", solarModeString(cand.solarMode)),
+			slog.String("reason", string(cand.reason)),
+			slog.Float64("currentSOC", state.soc),
+		)
+	}
+}
+
+// executeLogs invokes diagnostic logging on candidate actions evaluated at step 0
+// that were not chosen, as well as actions in the winning trajectory.
 func (p *planPath) executeLogs(ctx context.Context) {
 	if p == nil {
 		return
 	}
+	timeline := p.timeline
+
 	chosenAction := actionCandidate{}
 	if len(p.actions) > 0 {
 		chosenAction = p.actions[0]
 	}
 
 	// 1. Log candidates evaluated at step 0 that were not chosen
-	for _, cand := range p.initialCandidates {
-		isChosen := cand.batteryMode == chosenAction.batteryMode &&
-			cand.solarMode == chosenAction.solarMode &&
-			cand.reason == chosenAction.reason &&
-			cand.targetSOC == chosenAction.targetSOC
-		if isChosen {
-			continue
-		}
-		if cand.logFn != nil {
-			cand.logFn(ctx, false)
-		}
-		score, evaluated := p.modeScores[cand.batteryMode]
-		var delta float64
-		if evaluated {
-			delta = score - p.bestScore
-			if delta < 0 {
-				delta = 0
+	if len(timeline) > 0 && len(p.states) > 0 {
+		step0Interval := timeline[0]
+		step0State := p.states[0]
+		for _, cand := range p.initialCandidates {
+			isChosen := cand.batteryMode == chosenAction.batteryMode &&
+				cand.solarMode == chosenAction.solarMode &&
+				cand.reason == chosenAction.reason &&
+				cand.targetSOC == chosenAction.targetSOC
+			if isChosen {
+				continue
 			}
+			logCandidate(ctx, cand, step0Interval, step0State, false)
+			score, evaluated := p.modeScores[cand.batteryMode]
+			var delta float64
+			if evaluated {
+				delta = score - p.bestScore
+				if delta < 0 {
+					delta = 0
+				}
+			}
+			log.Ctx(ctx).DebugContext(ctx, "optimal plan candidate not chosen",
+				slog.String("batteryMode", drModeString(cand.batteryMode)),
+				slog.String("solarMode", solarModeString(cand.solarMode)),
+				slog.String("reason", string(cand.reason)),
+				slog.String("description", cand.description),
+				slog.Int("targetSOC", cand.targetSOC),
+				slog.Bool("evaluated", evaluated),
+				slog.Float64("candidateScoreDollars", score),
+				slog.Float64("winningScoreDollars", p.bestScore),
+				slog.Float64("costDeltaDollars", delta),
+			)
 		}
-		log.Ctx(ctx).DebugContext(ctx, "optimal plan candidate not chosen",
-			slog.String("batteryMode", drModeString(cand.batteryMode)),
-			slog.String("solarMode", solarModeString(cand.solarMode)),
-			slog.String("reason", string(cand.reason)),
-			slog.String("description", cand.description),
-			slog.Int("targetSOC", cand.targetSOC),
-			slog.Bool("evaluated", evaluated),
-			slog.Float64("candidateScoreDollars", score),
-			slog.Float64("winningScoreDollars", p.bestScore),
-			slog.Float64("costDeltaDollars", delta),
-		)
 	}
 
-	// 2. Log chosen actions in the winning trajectory
-	for _, act := range p.actions {
-		if act.logFn != nil {
-			act.logFn(ctx, true)
+	// 2. Log chosen actions in the winning trajectory, skipping subsequent consecutive duplicate actions
+	for i, act := range p.actions {
+		if i >= len(timeline) || i >= len(p.states) {
+			break
 		}
+		if i > 0 {
+			prev := p.actions[i-1]
+			if act.batteryMode == prev.batteryMode &&
+				act.solarMode == prev.solarMode &&
+				act.reason == prev.reason &&
+				act.actionName == prev.actionName &&
+				act.targetSOC == prev.targetSOC {
+				continue
+			}
+		}
+		logCandidate(ctx, act, timeline[i], p.states[i], true)
 	}
 }
 
@@ -910,7 +1108,6 @@ func (c *Controller) generateActionCandidates(
 	history []types.EnergyStats,
 	prevAction precedingAction,
 ) []actionCandidate {
-	stepTime := interval.startTime
 	currentSOC := state.soc
 
 	capacityKWH := state.capacityKWH
@@ -919,6 +1116,13 @@ func (c *Controller) generateActionCandidates(
 	}
 	roundTripEff, reserveBufferPct, _ := settings.GetOptimizationParams()
 	effectiveReserveSOC := interval.minSOC + reserveBufferPct
+	isAboveReserve := currentSOC > effectiveReserveSOC
+
+	// Single struct allocated per generateActionCandidates call; shared across all candidate actions.
+	ld := &candidateLogData{
+		effectiveReserveSOC: effectiveReserveSOC,
+		roundTripEff:        roundTripEff,
+	}
 
 	minImport := anchors.minHorizonImportRate
 	maxImport := anchors.maxHorizonImportRate
@@ -949,7 +1153,7 @@ func (c *Controller) generateActionCandidates(
 
 	// Determine if direct solar export is enabled. Flat net metering customers bank surplus 1:1 against consumption
 	// and have no incentive to export solar while discharging battery for home load.
-	hasSolar := interval.avgSolarKW() > minSolarGenerationKW || (stepIdx == 0 && currentStatus.SolarKW > minSolarGenerationKW)
+	hasSolar := interval.avgSolarKW() > minDirectSolarExportKW || (stepIdx == 0 && currentStatus.SolarKW > minDirectSolarExportKW)
 	canDirectSolarExport := settings.ManageTOUSchedules && settings.GridExportSolar && hasSolar && !isFlatNEM && interval.exportRate > 0
 
 	effRT := roundTripEff
@@ -968,6 +1172,9 @@ func (c *Controller) generateActionCandidates(
 	headroomKWH := capacityKWH - state.energyKWH
 	isAlreadyCharging := prevAction.BatteryMode == types.BatteryModeChargeAny
 	isAlreadyStandby := prevAction.BatteryMode == types.BatteryModeStandby
+	ld.headroomKWH = headroomKWH
+	ld.isAlreadyCharging = isAlreadyCharging
+
 	requiredHeadroom := calculateStartChargeHeadroomKWH(capacityKWH, maxChargeKW, settings)
 	if isAlreadyCharging {
 		requiredHeadroom = continueChargeHeadroomKWH
@@ -1022,6 +1229,7 @@ func (c *Controller) generateActionCandidates(
 	if nearestMandatoryVPP != nil {
 		vppRechargeDeadline = nearestMandatoryVPP.deadline.Add(-rechargeDuration)
 	}
+	ld.vppRechargeDeadline = vppRechargeDeadline
 	beforeVPPRechargeDeadline := nearestMandatoryVPP == nil || !interval.endTime.After(vppRechargeDeadline)
 
 	var nearestVPPRechargeDeadline time.Time
@@ -1041,6 +1249,7 @@ func (c *Controller) generateActionCandidates(
 			reason:      types.ActionReasonGridUnavailable,
 			description: "Grid unavailable. Discharging battery to power home backup circuits.",
 			isTruePeak:  isTruePeak,
+			logData:     ld,
 		})
 		return candidates
 	}
@@ -1053,6 +1262,10 @@ func (c *Controller) generateActionCandidates(
 	// Contracted utility VPP discharge takes strict precedence over retail pricing (even during negative/free import rates).
 	for _, vpp := range anchors.vppEvents {
 		if !interval.startTime.Before(vpp.eventStart) && interval.startTime.Before(vpp.eventEnd) {
+			ld.vppStart = vpp.eventStart
+			ld.vppEnd = vpp.eventEnd
+			ld.vppMandatory = vpp.mandatory
+
 			targetSOC := vpp.vppSoc
 			if !vpp.mandatory {
 				// Voluntary VPP: homeowner earns export incentives down to their configured reserve floor,
@@ -1064,30 +1277,19 @@ func (c *Controller) generateActionCandidates(
 			// reserve is set higher (e.g. 20%).
 			if currentSOC <= targetSOC {
 				// Target reached: lock battery in standby to protect contracted reserve
-				desc := "Preserving reserve in standby."
-				if stepIdx == 0 {
-					desc = fmt.Sprintf("VPP Target SOC reached (%.0f%%). Preserving reserve in standby.", targetSOC)
-					if vpp.mandatory {
-						desc = fmt.Sprintf("Mandatory VPP Target SOC reached (%.0f%%). Preserving reserve in standby.", targetSOC)
-					}
+				desc := "VPP Target SOC reached. Preserving reserve in standby."
+				if vpp.mandatory {
+					desc = "Mandatory VPP Target SOC reached. Preserving reserve in standby."
 				}
 				candidates = append(candidates, actionCandidate{
 					batteryMode:        types.BatteryModeStandby,
 					solarMode:          defaultSolarMode,
 					reason:             types.ActionReasonVPPActive,
 					description:        desc,
+					actionName:         PlanActionVPPTargetSOCReached,
 					overrideReserveSOC: targetSOC,
 					isTruePeak:         isTruePeak,
-					logFn: func(ctx context.Context, selected bool) {
-						planLog(ctx, selected, "VPP target SOC reached",
-							slog.Time("stepTime", stepTime),
-							slog.Time("vppStart", vpp.eventStart),
-							slog.Time("vppEnd", vpp.eventEnd),
-							slog.Float64("currentSOC", currentSOC),
-							slog.Float64("vppTargetSOC", targetSOC),
-							slog.Bool("mandatory", vpp.mandatory),
-						)
-					},
+					logData:            ld,
 				})
 				return candidates
 			}
@@ -1097,30 +1299,19 @@ func (c *Controller) generateActionCandidates(
 				batMode = types.BatteryModeExport
 			}
 			desc := "VPP Event Active."
-			if stepIdx == 0 {
-				desc = fmt.Sprintf("VPP Event Active (Discharging to %.0f%%)", targetSOC)
-				if vpp.mandatory {
-					desc = fmt.Sprintf("Mandatory VPP Event Active (Discharging to %.0f%%)", targetSOC)
-				}
+			if vpp.mandatory {
+				desc = "Mandatory VPP Event Active."
 			}
 			candidates = append(candidates, actionCandidate{
 				batteryMode:        batMode,
 				solarMode:          defaultSolarMode,
 				reason:             types.ActionReasonVPPActive,
 				description:        desc,
+				actionName:         PlanActionVPPActiveEventDischarging,
 				targetSOC:          int(math.Round(targetSOC)),
 				overrideReserveSOC: targetSOC,
 				isTruePeak:         isTruePeak,
-				logFn: func(ctx context.Context, selected bool) {
-					planLog(ctx, selected, "VPP active event discharging",
-						slog.Time("stepTime", stepTime),
-						slog.Time("vppStart", vpp.eventStart),
-						slog.Time("vppEnd", vpp.eventEnd),
-						slog.Float64("currentSOC", currentSOC),
-						slog.Float64("vppTargetSOC", targetSOC),
-						slog.Bool("mandatory", vpp.mandatory),
-					)
-				},
+				logData:            ld,
 			})
 			return candidates
 		}
@@ -1139,6 +1330,9 @@ func (c *Controller) generateActionCandidates(
 		}
 		firmwareTakeover := vpp.eventStart.Add(-vppStandbyLeadTime)
 		if !interval.startTime.Before(firmwareTakeover) && interval.startTime.Before(vpp.eventStart) {
+			ld.vppDeadline = vpp.deadline
+			ld.vppStart = vpp.eventStart
+
 			isApproximatelyFull := currentSOC >= vppMinFullCapacitySOC
 			if canGridCharge && !isApproximatelyFull {
 				candidates = append(candidates, actionCandidate{
@@ -1146,16 +1340,10 @@ func (c *Controller) generateActionCandidates(
 					solarMode:   defaultSolarMode,
 					reason:      types.ActionReasonVPPPrep,
 					description: "VPP Prep emergency top-up.",
+					actionName:  PlanActionVPP2HourPrepEmergencyTopUp,
 					targetSOC:   100,
 					isTruePeak:  isTruePeak,
-					logFn: func(ctx context.Context, selected bool) {
-						planLog(ctx, selected, "VPP 2-hour prep emergency top-up",
-							slog.Time("stepTime", stepTime),
-							slog.Time("vppDeadline", vpp.deadline),
-							slog.Time("vppStart", vpp.eventStart),
-							slog.Float64("currentSOC", currentSOC),
-						)
-					},
+					logData:     ld,
 				})
 				return candidates
 			}
@@ -1167,31 +1355,19 @@ func (c *Controller) generateActionCandidates(
 				solarMode:   defaultSolarMode,
 				reason:      types.ActionReasonVPPPrep,
 				description: "VPP Standby Lock.",
+				actionName:  PlanActionVPP2HourPrepStandbyLock,
 				isTruePeak:  isTruePeak,
-				logFn: func(ctx context.Context, selected bool) {
-					planLog(ctx, selected, "VPP 2-hour prep standby lock",
-						slog.Time("stepTime", stepTime),
-						slog.Time("vppDeadline", vpp.deadline),
-						slog.Time("vppStart", vpp.eventStart),
-						slog.Float64("currentSOC", currentSOC),
-					)
-				},
+				logData:     ld,
 			})
-			if canDirectSolarExport {
+			if canDirectSolarExport && isAboveReserve {
 				candidates = append(candidates, actionCandidate{
 					batteryMode: types.BatteryModeStandby,
 					solarMode:   types.SolarModeExport,
 					reason:      types.ActionReasonDirectExport,
 					description: "Direct Solar Export during VPP prep.",
+					actionName:  PlanActionVPP2HourPrepDirectSolarExport,
 					isTruePeak:  isTruePeak,
-					logFn: func(ctx context.Context, selected bool) {
-						planLog(ctx, selected, "VPP 2-hour prep direct solar export",
-							slog.Time("stepTime", stepTime),
-							slog.Time("vppDeadline", vpp.deadline),
-							slog.Time("vppStart", vpp.eventStart),
-							slog.Float64("currentSOC", currentSOC),
-						)
-					},
+					logData:     ld,
 				})
 			}
 			return candidates
@@ -1219,22 +1395,19 @@ func (c *Controller) generateActionCandidates(
 			if inPeriod, _, _ := period.Contains(interval.startTime); inPeriod {
 				isEV, stepKW := detectEVCharging(ctx, currentStatus.HomeKW, history)
 				if isEV {
-					homeKW := currentStatus.HomeKW
+					ld.homeKW = currentStatus.HomeKW
+					ld.stepKW = stepKW
+					ld.periodStart = period.Start
+					ld.periodEnd = period.End
+
 					candidates = append(candidates, actionCandidate{
 						batteryMode: types.BatteryModeStandby,
 						solarMode:   defaultSolarMode,
 						reason:      types.ActionReasonEVChargingStandby,
 						description: "EV Charging Active. Standby to protect battery.",
+						actionName:  PlanActionActiveEVChargingStandby,
 						isTruePeak:  isTruePeak,
-						logFn: func(ctx context.Context, selected bool) {
-							planLog(ctx, selected, "active EV charging detected, battery locked in standby",
-								slog.Time("stepTime", stepTime),
-								slog.Float64("homeKW", homeKW),
-								slog.Float64("stepKW", stepKW),
-								slog.Time("periodStart", period.Start),
-								slog.Time("periodEnd", period.End),
-							)
-						},
+						logData:     ld,
 					})
 					return candidates
 				}
@@ -1247,24 +1420,16 @@ func (c *Controller) generateActionCandidates(
 	// Power the home from the grid in Standby; charge battery if hardware permits.
 	if isNegativeOrFreePrice || isForceChargeThreshold {
 		canChargeNegative := gridChargeAllowed && headroomKWH >= continueChargeHeadroomKWH
-		importRate := interval.importRate
 		if canChargeNegative {
 			candidates = append(candidates, actionCandidate{
 				batteryMode: types.BatteryModeChargeAny,
 				solarMode:   defaultSolarMode,
 				reason:      types.ActionReasonAlwaysChargeBelowThreshold,
 				description: "Price below threshold. Charging battery from grid.",
+				actionName:  PlanActionNegativeOrForceChargeThresholdCharging,
 				targetSOC:   100,
 				isTruePeak:  isTruePeak,
-				logFn: func(ctx context.Context, selected bool) {
-					planLog(ctx, selected, "negative or force-charge threshold charging",
-						slog.Time("stepTime", stepTime),
-						slog.Float64("importRate", importRate),
-						slog.Float64("currentSOC", currentSOC),
-						slog.Float64("headroomKWH", headroomKWH),
-						slog.Bool("isAlreadyCharging", isAlreadyCharging),
-					)
-				},
+				logData:     ld,
 			})
 			// If user configured an explicit AlwaysChargeUnder threshold and battery has headroom,
 			// enforce charging as the designated action.
@@ -1279,22 +1444,14 @@ func (c *Controller) generateActionCandidates(
 			solarMode:   defaultSolarMode,
 			reason:      types.ActionReasonAlwaysChargeBelowThreshold,
 			description: "Price below threshold. Preserving battery in standby; home powered from grid.",
+			actionName:  PlanActionNegativeOrForceChargeThresholdStandby,
 			isTruePeak:  isTruePeak,
-			logFn: func(ctx context.Context, selected bool) {
-				planLog(ctx, selected, "negative or force-charge threshold standby",
-					slog.Time("stepTime", stepTime),
-					slog.Float64("importRate", importRate),
-					slog.Float64("currentSOC", currentSOC),
-					slog.Float64("headroomKWH", headroomKWH),
-					slog.Bool("isAlreadyCharging", isAlreadyCharging),
-				)
-			},
+			logData:     ld,
 		})
 		return candidates
 	}
 
 	// --- PRUNING RULE 5: Reserve Floor Protection ---
-	isAboveReserve := currentSOC > effectiveReserveSOC
 	// Battery grid export requires an export safety margin above the effective reserve floor.
 	canExport := currentSOC > effectiveReserveSOC+exportReserveMarginPct
 
@@ -1324,8 +1481,16 @@ func (c *Controller) generateActionCandidates(
 	}
 	vppBeforeSolarRefill := hasVPPAhead && hasUpcomingSolarRefill && !earliestSolarRefillTime.Before(nearestVPP.deadline)
 
+	ld.hasUpcomingSolarRefill = hasUpcomingSolarRefill
+	ld.refillExportRate = refillExportRate
+	ld.earliestSolarRefillTime = earliestSolarRefillTime
+	ld.hasVPPAhead = hasVPPAhead
+	ld.vppEventDeadline = vppEventDeadline
+	ld.vppBeforeSolarRefill = vppBeforeSolarRefill
+
 	// Self-consumption respects effective reserve floor
 	canDischarge := isAboveReserve
+	ld.canDischarge = canDischarge
 
 	// Build permissible candidate branches:
 	// Branch A: Standard Self-Consumption (BatteryModeLoad)
@@ -1341,18 +1506,9 @@ func (c *Controller) generateActionCandidates(
 			solarMode:   defaultSolarMode,
 			reason:      reason,
 			description: desc,
+			actionName:  PlanActionDischargingBattery,
 			isTruePeak:  isTruePeak,
-			logFn: func(ctx context.Context, selected bool) {
-				if !selected {
-					return
-				}
-				planLog(ctx, selected, "discharging battery",
-					slog.Time("stepTime", stepTime),
-					slog.Float64("refillExportRate", refillExportRate),
-					slog.Float64("currentSOC", currentSOC),
-					slog.Float64("effectiveReserveSOC", effectiveReserveSOC),
-				)
-			},
+			logData:     ld,
 		})
 	} else if !isAboveReserve {
 		// At or below reserve: battery hardware protects reserve; passthrough mode
@@ -1361,31 +1517,53 @@ func (c *Controller) generateActionCandidates(
 			solarMode:   defaultSolarMode,
 			reason:      types.ActionReasonBatteryAtReserve,
 			description: "Battery at reserve. Home powered from grid/solar.",
+			actionName:  PlanActionBatteryAtReserveStandby,
 			isTruePeak:  isTruePeak,
-			logFn: func(ctx context.Context, selected bool) {
-				if !selected {
-					return
-				}
-				planLog(ctx, selected, "battery at reserve, standby",
-					slog.Time("stepTime", stepTime),
-					slog.Float64("refillExportRate", refillExportRate),
-					slog.Float64("currentSOC", currentSOC),
-					slog.Float64("effectiveReserveSOC", effectiveReserveSOC),
-				)
-			},
+			logData:     ld,
 		})
 	}
 
-	// Branch B: Standby (Preserve battery charge for upcoming peak rates, solar export hold, or evaluate inertia)
+	// Branch B: Standby (Preserve battery charge for upcoming peak rates, solar export hold, or export arbitrage)
+	// Pruned immediately if current importRate >= maxFutureRate with no upcoming VPP or export opportunity,
+	// because there is never an economic incentive to hold battery energy during the highest rate in the horizon.
 	var maxFutureRate float64
+	var maxFutureExportRate float64
 	for i := stepIdx + 1; i < len(timeline); i++ {
 		if timeline[i].importRate > maxFutureRate {
 			maxFutureRate = timeline[i].importRate
 		}
+		if timeline[i].exportRate > maxFutureExportRate {
+			maxFutureExportRate = timeline[i].exportRate
+		}
 	}
 	hasHigherFutureRate := maxFutureRate > interval.importRate+priceMaterialityThresholdDollars
+	hasHigherFutureExport := canExport && settings.ManageTOUSchedules && settings.GridExportBatteries && !isFlatNEM &&
+		maxFutureExportRate > interval.importRate+priceMaterialityThresholdDollars
+	ld.higherFutureRate = maxFutureRate
+	ld.isAlreadyStandby = isAlreadyStandby
 
-	shouldOfferStandby := len(timeline) == 0 || hasHigherFutureRate || hasUpcomingSolarRefill || hasVPPAhead || isAlreadyStandby
+	// Standby Pruning & Mode Maintenance:
+
+	// We hypothesized that whenever `interval.importRate >= maxFutureRate` and there is no upcoming VPP event,
+	// export opportunity, or daytime solar refill, Standby could always be pruned immediately, reasoning that
+	// holding energy during the highest rate in the horizon is never economically justified.
+	//
+	// However:
+	// 1. Flat Pricing Schedules: In flat-rate environments, all intervals have identical rates (`importRate == maxFutureRate`).
+	//    Unconditionally pruning Standby removes the ability to stay in standby mode when already in standby
+	//    (e.g., resting at reserve floor or preserving state), causing mode flapping and failing PrecedingStandby_MaintainsStandbyCandidate.
+	// 2. Horizon Boundary Effects: At the final interval (`stepIdx == len(timeline)-1`), `maxFutureRate` is 0.0 because no
+	//    future intervals remain. Unconditionally pruning Standby here forces any path that held charge across earlier intervals
+	//    (such as night hold before daytime solar refill in SolarRefillHold_MinExportHoldDiff_PrunesSelfConsumptionTonight)
+	//    to transition into BatteryModeLoad at the very last interval. That forced boundary transition incurs a modeSwitchPenalty ($0.01),
+	//    which backpropagates through the DP search and prematurely discards the optimal holding trajectory at step 0.
+	//
+	// Standby MUST be pruned during genuine peak windows (`isTruePeak`, where import rate is at the horizon maximum
+	// and price spread exceeds minPeakRateSpreadDollars) even if `isAlreadyStandby` is true, because idling during expensive
+	// peak rates forces peak grid purchases. However, when `!isTruePeak` (flat rates, off-peak, horizon end), maintaining
+	// standby (`canMaintainStandby := isAlreadyStandby && !isTruePeak`) prevents mode churn and horizon truncation artifacts.
+	canMaintainStandby := isAlreadyStandby && !isTruePeak
+	shouldOfferStandby := len(timeline) == 0 || hasHigherFutureRate || hasHigherFutureExport || hasUpcomingSolarRefill || hasVPPAhead || canMaintainStandby
 	if shouldOfferStandby {
 		reason := types.ActionReasonDeficitSaveForPeak
 		desc := "Preserving battery in standby for upcoming peak rates."
@@ -1398,10 +1576,13 @@ func (c *Controller) generateActionCandidates(
 		} else if hasHigherFutureRate {
 			reason = types.ActionReasonDeficitSaveForPeak
 			desc = "Preserving battery in standby for upcoming peak rates."
+		} else if hasHigherFutureExport {
+			reason = types.ActionReasonDeficitSaveForPeak
+			desc = "Preserving battery in standby for upcoming export arbitrage."
 		} else if hasVPPAhead {
 			reason = types.ActionReasonVPPPrep
 			desc = "Preserving battery in standby ahead of VPP event."
-		} else if isAlreadyStandby && len(timeline) > 0 {
+		} else if canMaintainStandby {
 			reason = types.ActionReasonHoldSimilarPrice
 			desc = "Maintaining standby mode."
 		}
@@ -1410,26 +1591,9 @@ func (c *Controller) generateActionCandidates(
 			solarMode:   defaultSolarMode,
 			reason:      reason,
 			description: desc,
+			actionName:  PlanActionBatteryStandby,
 			isTruePeak:  isTruePeak,
-			logFn: func(ctx context.Context, selected bool) {
-				if !selected {
-					return
-				}
-				planLog(ctx, selected, "battery standby",
-					slog.Time("stepTime", stepTime),
-					slog.Float64("refillExportRate", refillExportRate),
-					slog.Time("earliestSolarRefillTime", earliestSolarRefillTime),
-					slog.Float64("currentSOC", currentSOC),
-					slog.Float64("effectiveReserveSOC", effectiveReserveSOC),
-					slog.Float64("higherFutureRate", maxFutureRate),
-					slog.Time("vppEventDeadline", vppEventDeadline),
-					slog.Bool("hasUpcomingSolarRefill", hasUpcomingSolarRefill),
-					slog.Bool("hasVPPAhead", hasVPPAhead),
-					slog.Bool("vppBeforeSolarRefill", vppBeforeSolarRefill),
-					slog.Bool("isAlreadyStandby", isAlreadyStandby),
-					slog.String("reason", string(reason)),
-				)
-			},
+			logData:     ld,
 		})
 	}
 
@@ -1444,6 +1608,7 @@ func (c *Controller) generateActionCandidates(
 				description: "Pre-charging battery from grid.",
 				targetSOC:   100,
 				isTruePeak:  isTruePeak,
+				logData:     ld,
 			})
 		} else {
 			// Grid Charge Arbitrage (Option B):
@@ -1537,93 +1702,55 @@ func (c *Controller) generateActionCandidates(
 					selectedDesc = chargeDesc
 				}
 
-				importRate := interval.importRate
+				var actionName PlanActionName
+				if hasReserveCharge {
+					actionName = PlanActionReserveTargetCharge
+				} else if selectedReason == chargeReason {
+					actionName = PlanActionGridArbitragePreCharge
+					ld.rechargeCost = rechargeCost
+					ld.futureExportRate = futureExportRate
+					ld.futurePeakRate = futurePeakRate
+					ld.minArbitrageDiff = minArbitrageDiff
+					ld.minDeficitDiff = minDeficitDiff
+					ld.earliestArbitrageTime = earliestArbitrageTime
+				} else {
+					actionName = PlanActionVPPPreChargeBeforeDeadline
+					if nearestVPP != nil {
+						ld.vppDeadline = nearestVPP.deadline
+					}
+					ld.rechargeCost = rechargeCost
+					ld.futureExportRate = futureExportRate
+					ld.futurePeakRate = futurePeakRate
+					ld.minArbitrageDiff = minArbitrageDiff
+					ld.minDeficitDiff = minDeficitDiff
+					ld.earliestArbitrageTime = earliestArbitrageTime
+				}
+
 				candidates = append(candidates, actionCandidate{
 					batteryMode: types.BatteryModeChargeAny,
 					solarMode:   defaultSolarMode,
 					reason:      selectedReason,
 					description: selectedDesc,
+					actionName:  actionName,
 					targetSOC:   selectedTargetSOC,
 					isTruePeak:  isTruePeak,
-					logFn: func(ctx context.Context, selected bool) {
-						if hasReserveCharge {
-							planLog(ctx, selected, "reserve target charge",
-								slog.Time("stepTime", stepTime),
-								slog.Float64("importRate", interval.importRate),
-								slog.Float64("currentSOC", currentSOC),
-								slog.Float64("targetReserve", interval.minSOC),
-							)
-						} else if selectedReason == chargeReason {
-							planLog(ctx, selected, "grid arbitrage pre-charge",
-								slog.Time("stepTime", stepTime),
-								slog.Float64("importRate", importRate),
-								slog.String("reason", string(selectedReason)),
-								slog.Float64("roundTripEff", roundTripEff),
-								slog.Float64("rechargeCost", rechargeCost),
-								slog.Float64("futureExportRate", futureExportRate),
-								slog.Float64("futurePeakRate", futurePeakRate),
-								slog.Float64("minArbitrageDiff", minArbitrageDiff),
-								slog.Float64("minDeficitDiff", minDeficitDiff),
-								slog.Time("earliestArbitrageTime", earliestArbitrageTime),
-								slog.Time("vppRechargeDeadline", vppRechargeDeadline),
-							)
-						} else {
-							var vppDeadline time.Time
-							if nearestVPP != nil {
-								vppDeadline = nearestVPP.deadline
-							}
-							planLog(ctx, selected, "VPP pre-charge before deadline",
-								slog.Time("stepTime", stepTime),
-								slog.Time("vppDeadline", vppDeadline),
-								slog.Float64("importRate", importRate),
-								slog.Float64("roundTripEff", roundTripEff),
-								slog.Float64("rechargeCost", rechargeCost),
-								slog.Float64("futureExportRate", futureExportRate),
-								slog.Float64("futurePeakRate", futurePeakRate),
-								slog.Float64("minArbitrageDiff", minArbitrageDiff),
-								slog.Float64("minDeficitDiff", minDeficitDiff),
-								slog.Time("earliestArbitrageTime", earliestArbitrageTime),
-								slog.Time("vppRechargeDeadline", vppRechargeDeadline),
-							)
-						}
-					},
+					logData:     ld,
 				})
 			}
 		}
 	}
 
 	// Branch D: Direct Solar Export (with BatteryModeLoad)
-	if canDirectSolarExport && beforeVPPRechargeDeadline {
-		reason := types.ActionReasonDirectExport
-		desc := "Direct Solar Export: battery covers load; solar exports."
-		if !canDischarge {
-			reason = types.ActionReasonBatteryAtReserve
-			desc = "Direct Solar Export at reserve: home powered from solar/grid; surplus solar exports."
-		}
-
-		exportRate := interval.exportRate
-		importRate := interval.importRate
-		solarKWH := interval.solarKWH
-
+	// Never offered when at or below reserve floor so surplus solar restores backup protection before exporting.
+	if canDirectSolarExport && isAboveReserve && beforeVPPRechargeDeadline {
 		candidates = append(candidates, actionCandidate{
 			batteryMode: types.BatteryModeLoad,
 			solarMode:   types.SolarModeExport,
-			reason:      reason,
-			description: desc,
+			reason:      types.ActionReasonDirectExport,
+			description: "Direct Solar Export: battery covers load; solar exports.",
+			actionName:  PlanActionDirectSolarExport,
 			isTruePeak:  isTruePeak,
-			logFn: func(ctx context.Context, selected bool) {
-				planLog(ctx, selected, "direct solar export",
-					slog.Time("stepTime", stepTime),
-					slog.String("reason", string(reason)),
-					slog.Float64("exportRate", exportRate),
-					slog.Float64("importRate", importRate),
-					slog.Float64("solarKWH", solarKWH),
-					slog.Float64("currentSOC", currentSOC),
-					slog.Float64("effectiveReserveSOC", effectiveReserveSOC),
-					slog.Bool("canDischarge", canDischarge),
-					slog.Time("vppRechargeDeadline", vppRechargeDeadline),
-				)
-			},
+			logData:     ld,
 		})
 	}
 
@@ -1648,26 +1775,20 @@ func (c *Controller) generateActionCandidates(
 
 		// Export is a viable candidate if export rate beats the replacement cost by at least the degradation hurdle
 		if interval.exportRate >= (rechargeCost + cycleHurdle) {
-			exportRate := interval.exportRate
 			targetSOC := int(math.Round(effectiveReserveSOC + exportReserveMarginPct))
+			ld.exportReplacementCost = rechargeCost
+			ld.minAlternativeValue = minAlternativeValue
+			ld.cycleHurdle = cycleHurdle
+
 			candidates = append(candidates, actionCandidate{
 				batteryMode: types.BatteryModeExport,
 				solarMode:   defaultSolarMode,
 				reason:      types.ActionReasonDirectExport,
 				description: "Battery Grid Export Dump.",
+				actionName:  PlanActionBatteryGridExportDump,
 				targetSOC:   targetSOC,
 				isTruePeak:  isTruePeak,
-				logFn: func(ctx context.Context, selected bool) {
-					planLog(ctx, selected, "battery grid export dump",
-						slog.Time("stepTime", stepTime),
-						slog.Float64("exportRate", exportRate),
-						slog.Int("targetSOC", targetSOC),
-						slog.Float64("rechargeCost", rechargeCost),
-						slog.Float64("minAlternativeValue", minAlternativeValue),
-						slog.Float64("roundTripEff", roundTripEff),
-						slog.Float64("cycleHurdle", cycleHurdle),
-					)
-				},
+				logData:     ld,
 			})
 		}
 	}
@@ -1865,6 +1986,7 @@ func stepPhysics(
 		gridExportKWH:            totalGridExportKWH,
 		batExportKWH:             batExportKWH,
 		batSuppliedHomeKWH:       batSuppliedHomeKWH,
+		gridChargeKWH:            gridChargeKWH,
 		costDollars:              intervalCostDollars,
 		grossImportCostDollars:   grossImportCost,
 		grossExportCreditDollars: grossExportCredits,
@@ -1990,6 +2112,7 @@ func (c *Controller) searchOptimalPlan(
 	}
 	batteryExportHurdle := max(priceEpsilonForEquality, settings.MinBatteryExportDifferenceDollarsPerKWH)
 	directSolarExportHurdle := max(priceEpsilonForEquality, settings.MinArbitrageDifferenceDollarsPerKWH)
+	gridChargeArbitrageHurdle := directSolarExportHurdle
 	isFlatNEM := isFlatNetMetering(settings.UtilityRateOptions)
 
 	// Pre-calculate whether daytime solar refill is projected ahead for each timeline interval
@@ -2026,8 +2149,12 @@ func (c *Controller) searchOptimalPlan(
 	// Used in DP intra-bucket dominance comparisons to accurately value retained battery energy
 	// against upcoming peak periods or export/VPP compensation rather than undervaluing it at the current off-peak rate.
 	maxFutureValuationRates := make([]float64, len(timeline))
+	canBatteryExport := settings.ManageTOUSchedules && settings.GridExportBatteries && !isFlatNEM
 	for i := len(timeline) - 1; i >= 0; i-- {
 		rate := timeline[i].importRate
+		if canBatteryExport && timeline[i].exportRate > rate {
+			rate = timeline[i].exportRate
+		}
 		for _, vpp := range anchors.vppEvents {
 			if vpp.price > rate && !timeline[i].startTime.Before(vpp.eventStart) && timeline[i].startTime.Before(vpp.eventEnd) {
 				rate = vpp.price
@@ -2078,6 +2205,19 @@ func (c *Controller) searchOptimalPlan(
 			// nextBuckets discretizes continuous battery State of Charge into 0.5% increments
 			// (201 buckets from 0.0% to 100.0%) partitioned independently by candidate battery mode (4 slots).
 			// This eliminates mode collisions (e.g. Standby vs Load) while maintaining sub-millisecond execution.
+			//
+			// Do not reduce to 101 buckets:
+			// We experimentally tested reducing this to 101 buckets (1.0% SOC bins). While it halved the state space,
+			// it caused massive economic regressions across real-world site recordings in TestPlanHistory (+17.4% total
+			// cost increase, failing 9 of 18 customer site benchmarks, with individual sites degrading by up to $7.17/day).
+			//
+			// Root cause: The planning horizon evaluates 20-minute intervals. A typical household baseload of 300 W
+			// consumes 0.10 kWh in 20 minutes, which represents ~0.74% SOC on a standard 13.5 kWh battery pack. At 1.0%
+			// bucket width, multiple distinct energy deltas and trickle solar refill collapse into the same bin at every
+			// step. Over a 72-step (24-hour) horizon, intra-bucket dominance comparison prematurely discards trajectories
+			// with fractional-percent energy advantages that would have preserved just enough charge to shave expensive
+			// peak rates hours later. 0.5% resolution (201 buckets) is mathematically necessary to capture residential
+			// sub-hourly dynamics.
 			var nextBuckets [4][201]*dpNode
 
 			for _, parent := range activeNodes {
@@ -2099,6 +2239,64 @@ func (c *Controller) searchOptimalPlan(
 					)
 				}
 				for _, cand := range candidates {
+					// Anti-churn re-entry guard: within a continuous price window (same import and export rates),
+					// once a trajectory exits a discretionary grid mode (ChargeAny or Export), it cannot
+					// re-enter that same mode at the same rates. This prevents fragmented Charge/Export -> Load -> Charge/Export
+					// fluttering during identical price periods, while preserving the solver's freedom to stop charging
+					// at the optimal partial SOC or stop exporting when the profitable price window concludes.
+					isDiscretionaryGridMode := cand.batteryMode == types.BatteryModeChargeAny || cand.batteryMode == types.BatteryModeExport
+					if stepIdx > 0 && isDiscretionaryGridMode && parent.action.batteryMode != cand.batteryMode {
+						currImport := interval.importRate
+						currExport := interval.exportRate
+						currStep := stepIdx - 1
+						isReentry := false
+						for p := parent; p != nil && currStep >= 0; p = p.parent {
+							sameImport := math.Abs(timeline[currStep].importRate-currImport) <= priceEpsilonForEquality
+							sameExport := math.Abs(timeline[currStep].exportRate-currExport) <= priceEpsilonForEquality
+							if !sameImport || !sameExport {
+								break // Tariff changed (import rate or export rate decoupled)
+							}
+							if p.action.batteryMode == cand.batteryMode {
+								isReentry = true
+								break
+							}
+							currStep--
+						}
+						// If ancestor trace reaches step 0, check lastAction from previous polling cycle
+						if !isReentry && currStep < 0 && lastAction != nil && lastAction.CurrentPrice != nil {
+							lastImport := lastAction.CurrentPrice.DollarsPerKWH + lastAction.CurrentPrice.GridUseDollarsPerKWH
+							lastExport := c.calculateExportCredit(*lastAction.CurrentPrice, settings, nil)
+							sameImport := math.Abs(lastImport-currImport) <= priceEpsilonForEquality
+							sameExport := math.Abs(lastExport-currExport) <= priceEpsilonForEquality
+							if sameImport && sameExport && lastAction.BatteryMode == cand.batteryMode {
+								isReentry = true
+							}
+						}
+						if isReentry {
+							// Emergency Reserve Deficit Exemption:
+							// Discretionary arbitrage charging (cycling above reserve to sell or offset peak) must not
+							// flutter on/off during the same price block. However, emergency deficit recovery
+							// (any BatteryModeChargeAny when parent.state.soc < interval.minSOC) must NEVER be discarded,
+							// regardless of which specific candidate reason initiated the charge.
+							//
+							// While the optimizer naturally prioritizes continuous charging to restore reserve as quickly
+							// as possible (enforced by the running deficitPenalty), valid multi-step scenarios can occur
+							// where grid charging is legitimately interrupted and resumed at the same rate:
+							// 1. Solar Interruption: Grid charging runs at dawn, pauses when surplus rooftop solar takes over
+							//    charging for free, and must be allowed to resume from the grid if clouds drop solar below load.
+							// 2. Intra-horizon Depletion: A trajectory that pre-charged earlier in the flat block and then
+							//    discharged to cover large home loads may subsequently deplete into deficit; it must not be
+							//    prohibited from charging back up to the reserve floor simply because it charged hours earlier.
+							// 3. Polling Continuity: If lastAction was ChargeAny but step 0 evaluated Load/Standby before dipping
+							//    into deficit, the system must immediately restore emergency backup reserve.
+							isReserveDeficit := cand.batteryMode == types.BatteryModeChargeAny &&
+								parent.state.soc < interval.minSOC-reserveFloorTolerancePct
+							if !isReserveDeficit {
+								continue
+							}
+						}
+					}
+
 					nextState, metrics := stepPhysics(parent.state, cand, interval, settings, roundTripEff)
 
 					var holdCost float64
@@ -2134,23 +2332,44 @@ func (c *Controller) searchOptimalPlan(
 						exportDegradationCost = metrics.batSuppliedHomeKWH * directSolarExportHurdle
 					}
 
+					// Grid charge arbitrage (BatteryModeChargeAny): When charging from the grid above the configured reserve
+					// floor for economic arbitrage (avoiding peak import or enabling export), the battery is cycled discretionarily.
+					// Charging up to the reserve floor is essential emergency backup protection (exempt from degradation hurdle).
+					// Any grid charging above the reserve floor incurs the cycling degradation hurdle (gridChargeArbitrageHurdle)
+					// to ensure the price spread justifies the battery cell wear.
+					var chargeDegradationCost float64
+					if metrics.gridChargeKWH > 0 && cand.reason == types.ActionReasonArbitrageChargeExport {
+						reserveKWH := (interval.minSOC / 100.0) * capacityKWH
+						reserveDeficitEnergyKWH := max(0.0, reserveKWH-parent.state.energyKWH)
+						gridChargeForReserveKWH := min(metrics.gridChargeKWH, reserveDeficitEnergyKWH/oneWayEff)
+						gridChargeAboveReserveKWH := max(0.0, metrics.gridChargeKWH-gridChargeForReserveKWH)
+						chargeDegradationCost = gridChargeAboveReserveKWH * gridChargeArbitrageHurdle
+					}
+
 					// Penalizes idling or running below the configured reserve floor (interval.minSOC) without recharging.
-					// If the battery is below reserve and solar is insufficient to recharge it, the system must actively
-					// charge from the grid (BatteryModeChargeAny) to restore the homeowner's backup reserve immediately.
+					// If the battery is below reserve and charging is physically possible (either from the grid or from surplus
+					// solar), the system must actively restore the homeowner's backup reserve immediately.
 					//
-					// Without a running interval penalty, the DP optimizer only evaluates raw grid import cost and terminal
-					// battery valuation. If grid power is cheaper later the optimizer would choose to sit unprotected in
-					// standby at low SOC for hours to save a few cents on charging, defeating the entire purpose of the
-					// homeowner's configured reserve floor.
+					// 1. Surplus solar recharge: If surplus solar is available and the battery is absorbing it (cand.solarMode != SolarModeExport),
+					//    the deficit is actively being restored by solar without requiring grid imports.
+					// 2. Direct solar export bypass: If direct solar export is chosen (cand.solarMode == SolarModeExport), surplus solar
+					//    bypasses charging the battery and exports to the grid, so the deficit penalty MUST apply to prevent abandoning reserve.
+					// 3. Grid charging disabled: If GridChargeBatteries is disabled and there is no surplus solar, it is physically impossible
+					//    to charge otherwise; the site is not penalized for an unavoidable deficit.
 					var deficitPenalty float64
+					inDeficit := nextState.soc < interval.minSOC-reserveFloorTolerancePct
+					isActivelyGridCharging := cand.batteryMode == types.BatteryModeChargeAny
+					canGridCharge := settings.GridChargeBatteries && !parent.state.chargingDisabled
 					hasSurplusSolar := interval.durationHours > 0 && (interval.solarKWH-interval.loadKWH) >= minSurplusSolarForReserveKW*interval.durationHours
-					if nextState.soc < interval.minSOC-reserveFloorTolerancePct && !hasSurplusSolar && cand.batteryMode != types.BatteryModeChargeAny {
+					isRechargingFromSolar := hasSurplusSolar && cand.solarMode != types.SolarModeExport
+
+					if inDeficit && !isActivelyGridCharging && !isRechargingFromSolar && (canGridCharge || hasSurplusSolar) {
 						deficitKWH := (interval.minSOC - nextState.soc) / 100.0 * capacityKWH
 						deficitPenaltyRate := max(minReserveDeficitPenaltyDollarsPerKWH, interval.importRate*reserveDeficitPenaltyMultiplier)
 						deficitPenalty = (deficitKWH / oneWayEff) * deficitPenaltyRate * interval.durationHours
 					}
 
-					newCost := parent.totalCost + metrics.costDollars + exportDegradationCost + holdCost + transitionCost + deficitPenalty + (nextState.energyKWH * interval.durationHours * batteryHoldingCostPerHourPerKWH)
+					newCost := parent.totalCost + metrics.costDollars + exportDegradationCost + chargeDegradationCost + holdCost + transitionCost + deficitPenalty + (nextState.energyKWH * interval.durationHours * batteryHoldingCostPerHourPerKWH)
 
 					// Check VPP deadline feasibility: apply penalty only for nearest upcoming event deadline
 					if hasNearestVPP {
@@ -2468,6 +2687,7 @@ func (c *Controller) searchOptimalPlan(
 		actions:           actions,
 		states:            states,
 		metrics:           metrics,
+		timeline:          timeline,
 		totalCost:         totalPhysicalCost,
 		initialCandidates: candidates0,
 		modeScores:        modeBestScores,
@@ -2655,7 +2875,7 @@ func resolvePlanActionReason(
 		}
 		if action.targetSOC > 0 && action.targetSOC == int(math.Round(interval.minSOC)) {
 			return types.ActionReasonDeficitChargeNow,
-				fmt.Sprintf("Charging battery to target reserve (%.0f%%).", interval.minSOC), futPrice
+				"Charging battery to target reserve.", futPrice
 		}
 		return types.ActionReasonDeficitChargeNow,
 			"Pre-charging for upcoming peak rates.", futPrice
@@ -2728,10 +2948,7 @@ func resolvePlanActionReason(
 	case types.BatteryModeLoad:
 		// 1. Direct Solar Export
 		if action.solarMode == types.SolarModeExport && interval.solarKWH > 0 {
-			if state.soc > effectiveReserveSOC {
-				return types.ActionReasonDirectExport, "Direct Solar Export: battery covers load; solar exports.", nil
-			}
-			return types.ActionReasonBatteryAtReserve, "Direct Solar Export at reserve: home powered from solar/grid; surplus solar exports.", nil
+			return types.ActionReasonDirectExport, "Direct Solar Export: battery covers load; solar exports.", nil
 		}
 
 		// 2. Battery At Reserve
