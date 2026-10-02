@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NotificationModal } from './NotificationModal';
 import * as api from '../api';
@@ -804,14 +805,14 @@ describe('NotificationModal', () => {
         );
 
         await waitFor(() => {
-            expect(screen.getByRole('switch', { name: /Mute Alerts During Quiet Hours/i })).toBeInTheDocument();
+            expect(screen.getByRole('switch', { name: /Quiet Hours/i })).toBeInTheDocument();
         });
 
         // Initially quiet hours inputs are not shown
         expect(screen.queryByLabelText('Quiet Period Start Time')).not.toBeInTheDocument();
 
         // Toggle Quiet Hours ON
-        fireEvent.click(screen.getByRole('switch', { name: /Mute Alerts During Quiet Hours/i }));
+        fireEvent.click(screen.getByRole('switch', { name: /Quiet Hours/i }));
 
         // Now start and end times should appear with default 10 PM to 7 AM
         expect(screen.getByLabelText('Quiet Period Start Time')).toBeInTheDocument();
@@ -875,7 +876,7 @@ describe('NotificationModal', () => {
         );
 
         await waitFor(() => {
-            expect(screen.getByRole('switch', { name: /Mute Alerts During Quiet Hours/i })).toBeInTheDocument();
+            expect(screen.getByRole('switch', { name: /Quiet Hours/i })).toBeInTheDocument();
         });
 
         expect(screen.getByText(/Quiet period start and end time cannot be the same/i)).toBeInTheDocument();
@@ -932,6 +933,184 @@ describe('NotificationModal', () => {
                     highHomeLoadAlert: 'medium',
                 })
             );
+        });
+    });
+
+    it('renders Recommended alert mode by default for new users and saves recommended settings', async () => {
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
+            subscriptions: [
+                {
+                    id: 'sub-iphone',
+                    endpoint: 'https://fcm.googleapis.com/fcm/send/sub-iphone',
+                    keys: { p256dh: 'k1', auth: 'a1' },
+                    userAgent: 'iPhone',
+                },
+            ],
+            notificationsEnabled: true,
+        });
+
+        const mockSettings = {
+            notifications: {
+                [mockUserID]: {
+                    morningSummaryEnabled: false,
+                    morningSummaryHour: 7,
+                    morningSummaryFlavor: 'home_planner',
+                },
+            },
+        } as any;
+
+        render(
+            <NotificationModal
+                open={true}
+                onClose={mockOnClose}
+                siteID={mockSiteID}
+                siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID={mockUserID}
+                onSaved={mockOnSaved}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.getByRole('button', { name: 'Recommended' })).toHaveClass('active');
+        });
+        expect(screen.getByLabelText('Real-Time Alert Sensitivity')).toBeInTheDocument();
+        expect(screen.getByText(/plus newly added alerts automatically/i)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /Customize individual alerts\.\.\./i })).toBeInTheDocument();
+        expect(screen.queryByRole('switch', { name: /Grid Outage & Restoration/i })).not.toBeInTheDocument();
+
+
+        // Click Save Preferences
+        fireEvent.click(screen.getByRole('button', { name: /Save Preferences/i }));
+
+        await waitFor(() => {
+            expect(api.updateNotificationSettings).toHaveBeenCalledWith(
+                mockSiteID,
+                expect.objectContaining({
+                    allAlertSensitivity: 'medium',
+                })
+            );
+            expect(mockOnSaved).toHaveBeenCalled();
+            expect(mockOnClose).toHaveBeenCalled();
+        });
+    });
+
+    it('allows toggling between Recommended and Custom mode and back', async () => {
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
+            subscriptions: [
+                {
+                    id: 'sub-iphone',
+                    endpoint: 'https://fcm.googleapis.com/fcm/send/sub-iphone',
+                    keys: { p256dh: 'k1', auth: 'a1' },
+                    userAgent: 'iPhone',
+                },
+            ],
+            notificationsEnabled: true,
+        });
+
+        const mockSettings = {
+            notifications: {
+                [mockUserID]: {
+                    allAlertSensitivity: 'medium',
+                },
+            },
+        } as any;
+
+        render(
+            <NotificationModal
+                open={true}
+                onClose={mockOnClose}
+                siteID={mockSiteID}
+                siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID={mockUserID}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.getByRole('button', { name: 'Recommended' })).toHaveClass('active');
+        });
+
+        // Click "Custom" mode button
+        fireEvent.click(screen.getByRole('button', { name: 'Custom' }));
+
+        // Now Custom mode is active, showing individual toggles
+        expect(screen.getByRole('button', { name: 'Custom' })).toHaveClass('active');
+        expect(screen.getByRole('switch', { name: /Grid Outage & Restoration/i })).toBeInTheDocument();
+
+        // Click "Recommended" mode button to switch back
+        fireEvent.click(screen.getByRole('button', { name: 'Recommended' }));
+
+        // Now back in Recommended mode
+        expect(screen.getByRole('button', { name: 'Recommended' })).toHaveClass('active');
+        expect(screen.getByLabelText('Real-Time Alert Sensitivity')).toBeInTheDocument();
+        expect(screen.queryByRole('switch', { name: /Grid Outage & Restoration/i })).not.toBeInTheDocument();
+    });
+
+    it('allows selecting Disabled for real-time alerts and saves allAlertSensitivity as disabled', async () => {
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
+            subscriptions: [
+                {
+                    id: 'sub-iphone',
+                    endpoint: 'https://fcm.googleapis.com/fcm/send/sub-iphone',
+                    keys: { p256dh: 'k1', auth: 'a1' },
+                    userAgent: 'iPhone',
+                },
+            ],
+            notificationsEnabled: true,
+        });
+
+        const mockSettings = {
+            notifications: {
+                [mockUserID]: {
+                    allAlertSensitivity: 'medium',
+                },
+            },
+        } as any;
+
+        render(
+            <NotificationModal
+                open={true}
+                onClose={mockOnClose}
+                siteID={mockSiteID}
+                siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID={mockUserID}
+                onSaved={mockOnSaved}
+            />
+        );
+
+        const user = userEvent.setup();
+
+        await waitFor(() => {
+            expect(screen.getByRole('button', { name: 'Recommended' })).toHaveClass('active');
+        });
+
+        // Click the sensitivity select trigger
+        const trigger = screen.getByLabelText('Real-Time Alert Sensitivity');
+        await user.click(trigger);
+
+        // Select "Disabled"
+        const disabledOption = await screen.findByRole('option', { name: 'Disabled' });
+        await user.click(disabledOption);
+
+        // Verification of disabled description
+        await waitFor(() => {
+            expect(screen.getByText(/All real-time push alerts are muted/i)).toBeInTheDocument();
+        });
+
+        // Save Preferences
+        fireEvent.click(screen.getByRole('button', { name: /Save Preferences/i }));
+
+        await waitFor(() => {
+            expect(api.updateNotificationSettings).toHaveBeenCalledWith(
+                mockSiteID,
+                expect.objectContaining({
+                    allAlertSensitivity: 'disabled',
+                })
+            );
+            expect(mockOnSaved).toHaveBeenCalled();
+            expect(mockOnClose).toHaveBeenCalled();
         });
     });
 });

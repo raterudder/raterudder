@@ -14,7 +14,8 @@ import {
     type PushSubscription,
     type MorningSummaryFlavor,
     type EveningSummaryFlavor,
-    type AnomalyAlertSensitivity
+    type AnomalyAlertSensitivity,
+    type AlertSensitivity
 } from '../api';
 import { HelpButton } from './HelpButton';
 import { isIOSDevice, hasNotificationSupport, isPushSupportedInBrowser } from '../utils/pwaUtils';
@@ -109,6 +110,13 @@ const highHomeLoadLabels: Record<string, string> = {
     high: 'High Sensitivity'
 };
 
+const alertSensitivityLabels: Record<AlertSensitivity, string> = {
+    disabled: 'Disabled',
+    low: 'Low Sensitivity',
+    medium: 'Medium Sensitivity',
+    high: 'High Sensitivity'
+};
+
 interface NotificationSampleProps {
     headerLabel?: string;
     title: string;
@@ -157,17 +165,18 @@ const getDeviceName = (ua?: string): string => {
 };
 
 const defaultSettingsValues: UserNotificationSettings = {
+    allAlertSensitivity: 'medium',
     morningSummaryEnabled: false,
     morningSummaryHour: 7,
     morningSummaryFlavor: 'home_planner',
     eveningSummaryEnabled: false,
     eveningSummaryHour: 20,
     eveningSummaryFlavor: 'home_planner',
-    gridOutageAlert: false,
-    priceSpikeAlert: '',
-    solarUnderproductionAlert: '',
-    highHomeLoadAlert: '',
-    vppDispatchAlert: false,
+    gridOutageAlert: true,
+    priceSpikeAlert: 'medium',
+    solarUnderproductionAlert: 'medium',
+    highHomeLoadAlert: 'medium',
+    vppDispatchAlert: true,
     quietPeriods: []
 };
 
@@ -253,7 +262,18 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                 : ((settings?.notifications && Object.values(settings.notifications).length > 0)
                     ? Object.values(settings.notifications)[0]
                     : (settings as any)?.settings);
+            const hasLegacyCustomAlerts = Boolean(server && (
+                server.gridOutageAlert !== undefined ||
+                server.priceSpikeAlert !== undefined ||
+                server.solarUnderproductionAlert !== undefined ||
+                server.highHomeLoadAlert !== undefined ||
+                server.vppDispatchAlert !== undefined
+            ));
+            const allAlertSensitivity: AlertSensitivity | '' = server?.allAlertSensitivity !== undefined
+                ? (server.allAlertSensitivity || '')
+                : (hasLegacyCustomAlerts ? '' : (defaultSettingsValues.allAlertSensitivity ?? 'medium'));
             const initial: UserNotificationSettings = server ? {
+                allAlertSensitivity,
                 morningSummaryEnabled: server.morningSummaryEnabled ?? defaultSettingsValues.morningSummaryEnabled,
                 morningSummaryHour: (server.morningSummaryHour !== undefined && server.morningSummaryHour !== null && (server.morningSummaryHour !== 0 || server.morningSummaryEnabled))
                     ? server.morningSummaryHour
@@ -388,6 +408,24 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
         });
     };
 
+    const handleSwitchToCustom = () => {
+        const sens = draftSettings.allAlertSensitivity || 'medium';
+        handleUpdateDraft({
+            allAlertSensitivity: '',
+            gridOutageAlert: draftSettings.gridOutageAlert ?? true,
+            vppDispatchAlert: draftSettings.vppDispatchAlert ?? true,
+            priceSpikeAlert: (draftSettings.priceSpikeAlert && draftSettings.priceSpikeAlert !== 'disabled') ? draftSettings.priceSpikeAlert : sens,
+            solarUnderproductionAlert: (draftSettings.solarUnderproductionAlert && draftSettings.solarUnderproductionAlert !== 'disabled') ? draftSettings.solarUnderproductionAlert : sens,
+            highHomeLoadAlert: (draftSettings.highHomeLoadAlert && draftSettings.highHomeLoadAlert !== 'disabled') ? draftSettings.highHomeLoadAlert : sens,
+        });
+    };
+
+    const handleSwitchToRecommended = () => {
+        handleUpdateDraft({
+            allAlertSensitivity: 'medium',
+        });
+    };
+
     const handleSavePreferences = async () => {
         if (!siteID || isQuietPeriodInvalid) return;
         setSaving(true);
@@ -395,6 +433,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
 
         const settingsToSave: UserNotificationSettings = {
             ...draftSettings,
+            allAlertSensitivity: draftSettings.allAlertSensitivity ?? '',
             morningSummaryFlavor: draftSettings.morningSummaryFlavor || defaultSettingsValues.morningSummaryFlavor,
             morningSummaryHour: draftSettings.morningSummaryHour ?? defaultSettingsValues.morningSummaryHour,
             eveningSummaryFlavor: draftSettings.eveningSummaryFlavor || defaultSettingsValues.eveningSummaryFlavor,
@@ -1031,24 +1070,134 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                         <div className="notif-segment">
                                             <div className="notif-segment-header">
                                                 <h3 className="notif-segment-title">Real-Time Alerts</h3>
+                                                <div className="notif-mode-toggle" role="group" aria-label="Alert Configuration Mode">
+                                                    <button
+                                                        type="button"
+                                                        className={`notif-mode-btn ${draftSettings.allAlertSensitivity ? 'active' : ''}`}
+                                                        onClick={handleSwitchToRecommended}
+                                                        aria-pressed={Boolean(draftSettings.allAlertSensitivity)}
+                                                    >
+                                                        Recommended
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        className={`notif-mode-btn ${!draftSettings.allAlertSensitivity ? 'active' : ''}`}
+                                                        onClick={handleSwitchToCustom}
+                                                        aria-pressed={!draftSettings.allAlertSensitivity}
+                                                    >
+                                                        Custom
+                                                    </button>
+                                                </div>
                                             </div>
 
-                                            {/* Grid Outage & Restoration */}
-                                            <Field.Root className="form-group switch-group" style={{ marginBottom: 0 }}>
-                                                <div className="switch-row">
-                                                    <Switch.Root
-                                                        id="gridOutageToggle"
-                                                        checked={draftSettings.gridOutageAlert ?? false}
-                                                        onCheckedChange={(val) => handleUpdateDraft({ gridOutageAlert: val })}
-                                                        className="switch-root"
-                                                        aria-label="Grid Outage & Restoration"
-                                                    >
-                                                        <Switch.Thumb className="switch-thumb" />
-                                                    </Switch.Root>
-                                                    <Field.Label htmlFor="gridOutageToggle" style={{ cursor: 'pointer' }}>
-                                                        Grid Outage & Restoration
-                                                    </Field.Label>
-                                                    <HelpButton
+                                            {draftSettings.allAlertSensitivity ? (
+                                                <div className="notif-recommended-container">
+                                                    <Field.Root className="form-group" style={{ marginBottom: 0 }}>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.35rem' }}>
+                                                            <Field.Label htmlFor="alertSensitivitySelect">Alert Sensitivity</Field.Label>
+                                                            <HelpButton
+                                                                title="Recommended Real-Time Alerts"
+                                                                ariaLabel="More info about recommended alerts"
+                                                                description={
+                                                                    <div>
+                                                                        <p>
+                                                                            You will automatically receive all current and future real-time energy alerts without needing to configure each alert individually:
+                                                                        </p>
+                                                                        <ul>
+                                                                            <li><strong>Grid Outages & Restoration:</strong> Alerts when grid power is lost for &gt;5 minutes, and when restored.</li>
+                                                                            <li><strong>Price Spike Alerts:</strong> Advance ~1-hour warning before abnormal electricity price surges.</li>
+                                                                            <li><strong>Solar Underproduction:</strong> Midday alert if solar generation drops significantly below weather forecast.</li>
+                                                                            <li><strong>High Home Load:</strong> Alerts when power consumption surges and battery will run out or is at reserve, with peak rate guidance.</li>
+                                                                            <li><strong>VPP Grid Support:</strong> Alerts when battery discharges to support the grid during an unscheduled demand response event.</li>
+                                                                            <li><strong>Future Alerts:</strong> Newly released alert types are automatically enabled at your selected sensitivity.</li>
+                                                                        </ul>
+                                                                        <p>
+                                                                            Sensitivity applies to price spikes, solar underproduction, and high home loads. Grid outage and VPP events are always delivered.
+                                                                        </p>
+                                                                    </div>
+                                                                }
+                                                            />
+                                                        </div>
+                                                        <Select.Root
+                                                            value={draftSettings.allAlertSensitivity || 'medium'}
+                                                            onValueChange={(val) => handleUpdateDraft({ allAlertSensitivity: val as AlertSensitivity })}
+                                                        >
+                                                            <Select.Trigger className="select-trigger" id="alertSensitivitySelect" aria-label="Real-Time Alert Sensitivity">
+                                                                <Select.Value>
+                                                                    {alertSensitivityLabels[draftSettings.allAlertSensitivity || 'medium']}
+                                                                </Select.Value>
+                                                                <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                                        <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                                    </svg>
+                                                                </Select.Icon>
+                                                            </Select.Trigger>
+                                                            <Select.Portal>
+                                                                <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
+                                                                    <Select.Popup className="select-popup">
+                                                                        <Select.List>
+                                                                            <Select.Item className="select-item" value="disabled">
+                                                                                <Select.ItemText>Disabled</Select.ItemText>
+                                                                            </Select.Item>
+                                                                            <Select.Item className="select-item" value="low">
+                                                                                <Select.ItemText>Low Sensitivity</Select.ItemText>
+                                                                            </Select.Item>
+                                                                            <Select.Item className="select-item" value="medium">
+                                                                                <Select.ItemText>Medium Sensitivity</Select.ItemText>
+                                                                            </Select.Item>
+                                                                            <Select.Item className="select-item" value="high">
+                                                                                <Select.ItemText>High Sensitivity</Select.ItemText>
+                                                                            </Select.Item>
+                                                                        </Select.List>
+                                                                    </Select.Popup>
+                                                                </Select.Positioner>
+                                                            </Select.Portal>
+                                                        </Select.Root>
+                                                        <Field.Description>
+                                                            {draftSettings.allAlertSensitivity === 'disabled'
+                                                                ? 'All real-time push alerts are muted.'
+                                                                : 'Automatically enables all real-time alerts. Sets sensitivity level for price surges, solar deficits, and heavy home loads.'}
+                                                        </Field.Description>
+                                                    </Field.Root>
+
+                                                    <div className="notif-recommended-info">
+                                                        {draftSettings.allAlertSensitivity === 'disabled' ? (
+                                                            <p>
+                                                                All real-time alerts are currently disabled. You will not receive push notifications for grid outages, price spikes, solar deficits, or high load.
+                                                            </p>
+                                                        ) : (
+                                                            <p>
+                                                                Includes <strong>Grid Outages</strong>, <strong>Price Spikes</strong>, <strong>Solar Deficits</strong>, <strong>High Home Load</strong>, and <strong>VPP Events</strong>, plus newly added alerts automatically.
+                                                            </p>
+                                                        )}
+                                                        <button
+                                                            type="button"
+                                                            className="text-button"
+                                                            onClick={handleSwitchToCustom}
+                                                            style={{ fontSize: '0.8125rem', marginTop: '0.25rem', padding: 0 }}
+                                                        >
+                                                            Customize individual alerts...
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    {/* Grid Outage & Restoration */}
+                                                    <Field.Root className="form-group switch-group" style={{ marginBottom: 0 }}>
+                                                        <div className="switch-row">
+                                                            <Switch.Root
+                                                                id="gridOutageToggle"
+                                                                checked={draftSettings.gridOutageAlert ?? false}
+                                                                onCheckedChange={(val) => handleUpdateDraft({ gridOutageAlert: val })}
+                                                                className="switch-root"
+                                                                aria-label="Grid Outage & Restoration"
+                                                            >
+                                                                <Switch.Thumb className="switch-thumb" />
+                                                            </Switch.Root>
+                                                            <Field.Label htmlFor="gridOutageToggle" style={{ cursor: 'pointer' }}>
+                                                                Grid Outage & Restoration
+                                                            </Field.Label>
+                                                            <HelpButton
                                                         title="Grid Outage Alerts"
                                                         ariaLabel="More info about grid outage alerts"
                                                         description={
@@ -1317,137 +1466,134 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                     Alert me when battery discharges during an unscheduled grid support event.
                                                 </Field.Description>
                                             </Field.Root>
+                                        </>
+                                    )}
 
-                                            <hr className="notif-divider" />
+                                    <hr className="notif-divider" />
 
-                                            {/* Quiet Hours Subsection */}
-                                            <div className="notif-quiet-hours-section">
-                                                <div className="notif-quiet-hours-header">
-                                                    <span className="notif-quiet-hours-title">Quiet Hours</span>
-                                                </div>
-                                                <Field.Root className="form-group switch-group" style={{ marginBottom: 0 }}>
-                                                    <div className="switch-row">
-                                                        <Switch.Root
-                                                            id="quietPeriodToggle"
-                                                            checked={isQuietPeriodEnabled}
-                                                            onCheckedChange={handleToggleQuietPeriod}
-                                                            className="switch-root"
-                                                            aria-label="Mute Alerts During Quiet Hours"
-                                                        >
-                                                            <Switch.Thumb className="switch-thumb" />
-                                                        </Switch.Root>
-                                                        <Field.Label htmlFor="quietPeriodToggle" style={{ cursor: 'pointer' }}>
-                                                            Mute Alerts During Quiet Hours
-                                                        </Field.Label>
-                                                        <HelpButton
-                                                            title="Quiet Period"
-                                                            ariaLabel="More info about quiet period"
-                                                            description={
-                                                                <div>
-                                                                    <p>
-                                                                        Set a daily window where real-time push alerts (such as price spikes, solar deficits, VPP dispatches, and grid outages) are muted so you aren&apos;t disturbed while sleeping.
-                                                                    </p>
-                                                                    <p>
-                                                                        If high prices or a grid outage continue past your quiet period, RateRudder will deliver a notification when quiet hours end.
-                                                                    </p>
-                                                                    <p>
-                                                                        Scheduled morning and evening summaries are not affected by this window.
-                                                                    </p>
-                                                                </div>
-                                                            }
-                                                        />
+                                    {/* Quiet Hours */}
+                                    <Field.Root className="form-group switch-group" style={{ marginBottom: 0 }}>
+                                        <div className="switch-row">
+                                            <Switch.Root
+                                                id="quietPeriodToggle"
+                                                checked={isQuietPeriodEnabled}
+                                                onCheckedChange={handleToggleQuietPeriod}
+                                                className="switch-root"
+                                                aria-label="Quiet Hours"
+                                            >
+                                                <Switch.Thumb className="switch-thumb" />
+                                            </Switch.Root>
+                                            <Field.Label htmlFor="quietPeriodToggle" style={{ cursor: 'pointer' }}>
+                                                Quiet Hours
+                                            </Field.Label>
+                                            <HelpButton
+                                                title="Quiet Period"
+                                                ariaLabel="More info about quiet period"
+                                                description={
+                                                    <div>
+                                                        <p>
+                                                            Set a daily window where real-time push alerts (such as price spikes, solar deficits, VPP dispatches, and grid outages) are muted so you aren&apos;t disturbed while sleeping.
+                                                        </p>
+                                                        <p>
+                                                            If high prices or a grid outage continue past your quiet period, RateRudder will deliver a notification when quiet hours end.
+                                                        </p>
+                                                        <p>
+                                                            Scheduled morning and evening summaries are not affected by this window.
+                                                        </p>
                                                     </div>
-                                                    <Field.Description>
-                                                        Temporarily pause alert-style push notifications during sleeping hours.
-                                                    </Field.Description>
+                                                }
+                                            />
+                                        </div>
+                                        <Field.Description>
+                                            Temporarily pause alert-style push notifications during sleeping hours.
+                                        </Field.Description>
+                                    </Field.Root>
+
+                                    {isQuietPeriodEnabled && (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.25rem' }}>
+                                            <div className="notif-row-split">
+                                                {/* Start Hour Dropdown */}
+                                                <Field.Root className="form-group compact">
+                                                    <Field.Label htmlFor="quietPeriodStartHour" style={{ marginBottom: '0.35rem', display: 'block' }}>Quiet Time Starts</Field.Label>
+                                                    <Select.Root
+                                                        value={String(quietStartHour)}
+                                                        onValueChange={(val) => handleQuietStartHourChange(parseInt(val as string, 10))}
+                                                    >
+                                                        <Select.Trigger className="select-trigger" id="quietPeriodStartHour" aria-label="Quiet Period Start Time">
+                                                            <Select.Value>
+                                                                {formatHour12(quietStartHour)}
+                                                            </Select.Value>
+                                                            <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                                    <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                                </svg>
+                                                            </Select.Icon>
+                                                        </Select.Trigger>
+                                                        <Select.Portal>
+                                                            <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
+                                                                <Select.Popup className="select-popup">
+                                                                    <Select.List>
+                                                                        {Array.from({ length: 24 }, (_, i) => (
+                                                                            <Select.Item key={i} className="select-item" value={String(i)}>
+                                                                                <Select.ItemText>{formatHour12(i)}</Select.ItemText>
+                                                                            </Select.Item>
+                                                                        ))}
+                                                                    </Select.List>
+                                                                </Select.Popup>
+                                                            </Select.Positioner>
+                                                        </Select.Portal>
+                                                    </Select.Root>
                                                 </Field.Root>
 
-                                                {isQuietPeriodEnabled && (
-                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.25rem' }}>
-                                                        <div className="notif-row-split">
-                                                            {/* Start Hour Dropdown */}
-                                                            <Field.Root className="form-group compact">
-                                                                <Field.Label htmlFor="quietPeriodStartHour" style={{ marginBottom: '0.35rem', display: 'block' }}>Quiet Time Starts</Field.Label>
-                                                                <Select.Root
-                                                                    value={String(quietStartHour)}
-                                                                    onValueChange={(val) => handleQuietStartHourChange(parseInt(val as string, 10))}
-                                                                >
-                                                                    <Select.Trigger className="select-trigger" id="quietPeriodStartHour" aria-label="Quiet Period Start Time">
-                                                                        <Select.Value>
-                                                                            {formatHour12(quietStartHour)}
-                                                                        </Select.Value>
-                                                                        <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
-                                                                            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                                                                <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                                                                            </svg>
-                                                                        </Select.Icon>
-                                                                    </Select.Trigger>
-                                                                    <Select.Portal>
-                                                                        <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
-                                                                            <Select.Popup className="select-popup">
-                                                                                <Select.List>
-                                                                                    {Array.from({ length: 24 }, (_, i) => (
-                                                                                        <Select.Item key={i} className="select-item" value={String(i)}>
-                                                                                            <Select.ItemText>{formatHour12(i)}</Select.ItemText>
-                                                                                        </Select.Item>
-                                                                                    ))}
-                                                                                </Select.List>
-                                                                            </Select.Popup>
-                                                                        </Select.Positioner>
-                                                                    </Select.Portal>
-                                                                </Select.Root>
-                                                            </Field.Root>
-
-                                                            {/* End Hour Dropdown */}
-                                                            <Field.Root className="form-group compact">
-                                                                <Field.Label htmlFor="quietPeriodEndHour" style={{ marginBottom: '0.35rem', display: 'block' }}>Quiet Time Ends</Field.Label>
-                                                                <Select.Root
-                                                                    value={String(quietEndHour)}
-                                                                    onValueChange={(val) => handleQuietEndHourChange(parseInt(val as string, 10))}
-                                                                >
-                                                                    <Select.Trigger className="select-trigger" id="quietPeriodEndHour" aria-label="Quiet Period End Time">
-                                                                        <Select.Value>
-                                                                            {formatHour12(quietEndHour)}
-                                                                        </Select.Value>
-                                                                        <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
-                                                                            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                                                                <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                                                                            </svg>
-                                                                        </Select.Icon>
-                                                                    </Select.Trigger>
-                                                                    <Select.Portal>
-                                                                        <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
-                                                                            <Select.Popup className="select-popup">
-                                                                                <Select.List>
-                                                                                    {Array.from({ length: 24 }, (_, i) => (
-                                                                                        <Select.Item key={i} className="select-item" value={String(i)}>
-                                                                                            <Select.ItemText>{formatHour12(i)}</Select.ItemText>
-                                                                                        </Select.Item>
-                                                                                    ))}
-                                                                                </Select.List>
-                                                                            </Select.Popup>
-                                                                        </Select.Positioner>
-                                                                    </Select.Portal>
-                                                                </Select.Root>
-                                                            </Field.Root>
-                                                        </div>
-
-                                                        {isQuietPeriodInvalid && (
-                                                            <div className="quiet-period-error" role="alert">
-                                                                Quiet period start and end time cannot be the same.
-                                                            </div>
-                                                        )}
-
-                                                        <div className="quiet-period-info">
-                                                            <p>
-                                                                Alert-style notifications (price spikes, solar deficits, VPP events, and grid outages) will be suppressed from {formatHour12(quietStartHour)} to {formatHour12(quietEndHour)}.
-                                                                If an alert condition is still active when quiet hours end, you will receive an alert upon wakeup.
-                                                                Daily morning and evening summaries are excluded and follow their scheduled delivery times.
-                                                            </p>
-                                                        </div>
-                                                    </div>
-                                                )}
+                                                {/* End Hour Dropdown */}
+                                                <Field.Root className="form-group compact">
+                                                    <Field.Label htmlFor="quietPeriodEndHour" style={{ marginBottom: '0.35rem', display: 'block' }}>Quiet Time Ends</Field.Label>
+                                                    <Select.Root
+                                                        value={String(quietEndHour)}
+                                                        onValueChange={(val) => handleQuietEndHourChange(parseInt(val as string, 10))}
+                                                    >
+                                                        <Select.Trigger className="select-trigger" id="quietPeriodEndHour" aria-label="Quiet Period End Time">
+                                                            <Select.Value>
+                                                                {formatHour12(quietEndHour)}
+                                                            </Select.Value>
+                                                            <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
+                                                                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                                    <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                                                </svg>
+                                                            </Select.Icon>
+                                                        </Select.Trigger>
+                                                        <Select.Portal>
+                                                            <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
+                                                                <Select.Popup className="select-popup">
+                                                                    <Select.List>
+                                                                        {Array.from({ length: 24 }, (_, i) => (
+                                                                            <Select.Item key={i} className="select-item" value={String(i)}>
+                                                                                <Select.ItemText>{formatHour12(i)}</Select.ItemText>
+                                                                            </Select.Item>
+                                                                        ))}
+                                                                    </Select.List>
+                                                                </Select.Popup>
+                                                            </Select.Positioner>
+                                                        </Select.Portal>
+                                                    </Select.Root>
+                                                </Field.Root>
                                             </div>
+
+                                            {isQuietPeriodInvalid && (
+                                                <div className="quiet-period-error" role="alert">
+                                                    Quiet period start and end time cannot be the same.
+                                                </div>
+                                            )}
+
+                                            <div className="quiet-period-info">
+                                                <p>
+                                                    Alert-style notifications (price spikes, solar deficits, VPP events, and grid outages) will be suppressed from {formatHour12(quietStartHour)} to {formatHour12(quietEndHour)}.
+                                                    If an alert condition is still active when quiet hours end, you will receive an alert upon wakeup.
+                                                    Daily morning and evening summaries are excluded and follow their scheduled delivery times.
+                                                </p>
+                                            </div>
+                                        </div>
+                                    )}
                                         </div>
                                     </div>
                                 )}

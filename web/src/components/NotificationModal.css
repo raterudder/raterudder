@@ -244,31 +244,7 @@
   margin: 0.25rem 0;
 }
 
-/* Quiet Hours Subsection inside Real-Time Alerts */
-.notif-quiet-hours-section {
-  display: flex;
-  flex-direction: column;
-  gap: 0.625rem;
-  padding: 0.875rem;
-  background: var(--surface-container-high, #1e293b);
-  border: 1px solid var(--border, #334155);
-  border-radius: var(--radius-md, 8px);
-  margin-top: 0.25rem;
-}
 
-.notif-quiet-hours-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.notif-quiet-hours-title {
-  font-size: 0.75rem;
-  font-weight: 700;
-  color: var(--text-muted, #94a3b8);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
 
 /* Configured Summary Card */
 .notif-configured-summary {
@@ -495,11 +471,7 @@
 
 /* Quiet Period Styles */
 .quiet-period-info {
-  background: var(--surface-container, rgba(255, 255, 255, 0.04));
-  border: 1px solid var(--border, #2e3440);
-  border-radius: var(--radius-md, 8px);
-  padding: 0.75rem 1rem;
-  font-size: 0.85rem;
+  font-size: 0.8125rem;
   color: var(--text-secondary, #94a3b8);
   line-height: 1.45;
 }
@@ -513,3 +485,62 @@
   color: var(--error, #ef4444);
   margin-top: 0.25rem;
 }
+
+/* Mode toggle buttons in segment header */
+.notif-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  background: var(--surface-container-high, #1e293b);
+  border: 1px solid var(--border, #334155);
+  border-radius: var(--radius-md, 6px);
+  padding: 2px;
+  gap: 2px;
+}
+
+.notif-mode-btn {
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-secondary, #94a3b8);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.notif-mode-btn:hover {
+  color: var(--on-surface, #fff);
+}
+
+.notif-mode-btn.active {
+  background: var(--primary, #3b82f6);
+  color: #fff;
+  font-weight: 600;
+}
+
+.notif-recommended-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.notif-recommended-info {
+  background: var(--surface-container-high, #1e293b);
+  border: 1px solid var(--border, #334155);
+  border-radius: 6px;
+  padding: 0.75rem 0.875rem;
+  font-size: 0.8125rem;
+  color: var(--text-secondary, #94a3b8);
+  line-height: 1.45;
+}
+
+.notif-recommended-info p {
+  margin: 0;
+}
+
+.notif-recommended-info strong {
+  color: var(--on-surface, #f8fafc);
+}
+
+

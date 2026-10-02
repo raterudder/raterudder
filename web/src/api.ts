@@ -849,8 +849,10 @@ export const fetchEstimateEVCharging = async (siteID?: string): Promise<EVDetect
 export type MorningSummaryFlavor = 'metrics_heavy' | 'home_planner' | 'executive' | 'pilot';
 export type EveningSummaryFlavor = 'metrics_heavy' | 'home_planner' | 'executive' | 'pilot';
 export type AnomalyAlertSensitivity = '' | 'disabled' | 'low' | 'medium' | 'high';
+export type AlertSensitivity = 'disabled' | 'low' | 'medium' | 'high';
 
 export interface UserNotificationSettings {
+    allAlertSensitivity?: AlertSensitivity | '';
     morningSummaryEnabled: boolean;
     morningSummaryHour: number;
     morningSummaryFlavor: MorningSummaryFlavor;

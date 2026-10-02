@@ -4102,6 +4102,59 @@ func TestHandleNotifications(t *testing.T) {
 
 		mockS.AssertExpectations(t)
 	})
+
+	t.Run("RecommendedAlertModeResolution", func(t *testing.T) {
+		// When AllAlertSensitivity is specified (e.g. "high"), all alerts are enabled at that sensitivity
+		recHigh := types.UserNotificationSettings{
+			AllAlertSensitivity: "high",
+		}
+		assert.True(t, recHigh.RealTimeAlertEnabled(false))
+		assert.Equal(t, "high", recHigh.RealTimeAlertSensitivity(""))
+		assert.Equal(t, "high", recHigh.RealTimeAlertSensitivity("low"))
+
+		// When AllAlertSensitivity is "medium" (recommended default)
+		recMed := types.UserNotificationSettings{
+			AllAlertSensitivity: "medium",
+		}
+		assert.True(t, recMed.RealTimeAlertEnabled(false))
+		assert.Equal(t, "medium", recMed.RealTimeAlertSensitivity(""))
+		assert.Equal(t, "medium", recMed.RealTimeAlertSensitivity("low"))
+
+		// When AllAlertSensitivity is "disabled" (all real-time alerts explicitly muted)
+		recDisabled := types.UserNotificationSettings{
+			AllAlertSensitivity: "disabled",
+			GridOutageAlert:     true,
+			PriceSpikeAlert:     "high",
+		}
+		assert.False(t, recDisabled.RealTimeAlertEnabled(true))
+		assert.Equal(t, "", recDisabled.RealTimeAlertSensitivity("high"))
+		assert.Equal(t, "", recDisabled.RealTimeAlertSensitivity(""))
+
+		// When AllAlertSensitivity is empty (custom / individual settings)
+		customCfg := types.UserNotificationSettings{
+			AllAlertSensitivity:       "",
+			GridOutageAlert:           true,
+			VPPDispatchAlert:          false,
+			PriceSpikeAlert:           "high",
+			SolarUnderproductionAlert: "low",
+			HighHomeLoadAlert:         "",
+		}
+		assert.True(t, customCfg.RealTimeAlertEnabled(customCfg.GridOutageAlert))
+		assert.False(t, customCfg.RealTimeAlertEnabled(customCfg.VPPDispatchAlert))
+		assert.Equal(t, "high", customCfg.RealTimeAlertSensitivity(customCfg.PriceSpikeAlert))
+		assert.Equal(t, "low", customCfg.RealTimeAlertSensitivity(customCfg.SolarUnderproductionAlert))
+		assert.Equal(t, "", customCfg.RealTimeAlertSensitivity(customCfg.HighHomeLoadAlert))
+
+		// When legacy config has no AllAlertSensitivity set
+		legacyCfg := types.UserNotificationSettings{
+			GridOutageAlert:           false,
+			PriceSpikeAlert:           "medium",
+			SolarUnderproductionAlert: "",
+		}
+		assert.False(t, legacyCfg.RealTimeAlertEnabled(legacyCfg.GridOutageAlert))
+		assert.Equal(t, "medium", legacyCfg.RealTimeAlertSensitivity(legacyCfg.PriceSpikeAlert))
+		assert.Equal(t, "", legacyCfg.RealTimeAlertSensitivity(legacyCfg.SolarUnderproductionAlert))
+	})
 }
 
 func TestNotificationIDHelpers(t *testing.T) {

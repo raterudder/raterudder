@@ -348,6 +348,8 @@ const (
 
 // UserNotificationSettings holds notification preferences for a specific user on a specific site.
 type UserNotificationSettings struct {
+	AllAlertSensitivity string `json:"allAlertSensitivity,omitempty"` // "low", "medium", "high", "disabled", or "" for custom/individual alert settings
+
 	MorningSummaryEnabled bool   `json:"morningSummaryEnabled"`
 	MorningSummaryHour    int    `json:"morningSummaryHour"`
 	MorningSummaryFlavor  string `json:"morningSummaryFlavor"`
@@ -362,6 +364,30 @@ type UserNotificationSettings struct {
 	HighHomeLoadAlert         string       `json:"highHomeLoadAlert,omitempty"`         // "", "low", "medium", "high"
 	VPPDispatchAlert          bool         `json:"vppDispatchAlert"`
 	QuietPeriods              []TimePeriod `json:"quietPeriods,omitempty"`
+}
+
+// RealTimeAlertSensitivity returns the effective sensitivity ("low", "medium", "high", or "" if disabled)
+// for a sensitivity-based alert type. When AllAlertSensitivity is set, it overrides customVal.
+func (s UserNotificationSettings) RealTimeAlertSensitivity(customVal string) string {
+	if s.AllAlertSensitivity == "disabled" {
+		return ""
+	}
+	if s.AllAlertSensitivity != "" {
+		return s.AllAlertSensitivity
+	}
+	return customVal
+}
+
+// RealTimeAlertEnabled returns whether a boolean alert type is enabled. When AllAlertSensitivity is set,
+// all real-time alerts are enabled (or disabled if AllAlertSensitivity == "disabled").
+func (s UserNotificationSettings) RealTimeAlertEnabled(customVal bool) bool {
+	if s.AllAlertSensitivity == "disabled" {
+		return false
+	}
+	if s.AllAlertSensitivity != "" {
+		return true
+	}
+	return customVal
 }
 
 // IsInQuietPeriod returns true if any period in QuietPeriods contains the given time t.

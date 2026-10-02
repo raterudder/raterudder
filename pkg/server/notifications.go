@@ -1445,7 +1445,7 @@ func (s *Server) handleGridOutageNotifications(
 ) {
 	hasAnyGridOutageUser := false
 	for _, notifConfig := range notifications {
-		if notifConfig.GridOutageAlert {
+		if notifConfig.RealTimeAlertEnabled(notifConfig.GridOutageAlert) {
 			hasAnyGridOutageUser = true
 			break
 		}
@@ -1467,7 +1467,7 @@ func (s *Server) handleGridOutageNotifications(
 	// to available has occurred.
 	if !status.GridUnavailable {
 		for userID, notifConfig := range notifications {
-			if !notifConfig.GridOutageAlert {
+			if !notifConfig.RealTimeAlertEnabled(notifConfig.GridOutageAlert) {
 				continue
 			}
 			lastLog, ok := getNotifState().lastLog(userID, false, types.NotificationTypeGridOutage, types.NotificationTypeGridRestored)
@@ -1555,7 +1555,7 @@ func (s *Server) handleGridOutageNotifications(
 		var outageUserIDs []string
 		var mutedOutageUserIDs []string
 		for userID, notifConfig := range notifications {
-			if !notifConfig.GridOutageAlert {
+			if !notifConfig.RealTimeAlertEnabled(notifConfig.GridOutageAlert) {
 				continue
 			}
 
@@ -1739,7 +1739,8 @@ func (s *Server) handlePriceSpikeNotifications(
 		sensitivity string
 	}
 	for userID, notifConfig := range notifications {
-		if notifConfig.PriceSpikeAlert == "" || notifConfig.PriceSpikeAlert == "disabled" {
+		sensitivity := notifConfig.RealTimeAlertSensitivity(notifConfig.PriceSpikeAlert)
+		if sensitivity == "" {
 			continue
 		}
 		if notifConfig.IsInQuietPeriod(nowLocal) {
@@ -1748,7 +1749,7 @@ func (s *Server) handlePriceSpikeNotifications(
 		spikeUsers = append(spikeUsers, struct {
 			userID      string
 			sensitivity string
-		}{userID: userID, sensitivity: notifConfig.PriceSpikeAlert})
+		}{userID: userID, sensitivity: sensitivity})
 	}
 	if len(spikeUsers) == 0 {
 		return
@@ -2185,7 +2186,7 @@ func (s *Server) handleSolarUnderproductionNotifications(
 ) {
 	hasAnySolarUser := false
 	for _, notifConfig := range notifications {
-		if notifConfig.SolarUnderproductionAlert != "" && notifConfig.SolarUnderproductionAlert != "disabled" {
+		if s := notifConfig.RealTimeAlertSensitivity(notifConfig.SolarUnderproductionAlert); s != "" {
 			hasAnySolarUser = true
 			break
 		}
@@ -2260,11 +2261,12 @@ func (s *Server) handleSolarUnderproductionNotifications(
 	todayDateStr := nowLocal.Format("2006-01-02")
 	actualKW := data.status.SolarKW
 	for userID, notifConfig := range notifications {
-		if notifConfig.SolarUnderproductionAlert == "" || notifConfig.SolarUnderproductionAlert == "disabled" {
+		sensitivity := notifConfig.RealTimeAlertSensitivity(notifConfig.SolarUnderproductionAlert)
+		if sensitivity == "" {
 			continue
 		}
 		var ratio float64
-		switch notifConfig.SolarUnderproductionAlert {
+		switch sensitivity {
 		case "low":
 			ratio = solarUnderproductionRatioLow
 		case "high":
@@ -2279,7 +2281,7 @@ func (s *Server) handleSolarUnderproductionNotifications(
 		if actualKW >= ratio*forecastKW || (forecastKW-actualKW) < solarUnderproductionMinDeficitKW {
 			log.Ctx(ctx).DebugContext(ctx, "skipping solar underproduction notification: actual generation within tolerance",
 				slog.String("userID", userID),
-				slog.String("sensitivity", notifConfig.SolarUnderproductionAlert),
+				slog.String("sensitivity", sensitivity),
 				slog.Float64("actualKW", actualKW),
 				slog.Float64("forecastKW", forecastKW),
 				slog.Float64("ratioThreshold", ratio),
@@ -2303,13 +2305,13 @@ func (s *Server) handleSolarUnderproductionNotifications(
 			"deficitKW":       fmt.Sprintf("%.2f", forecastKW-actualKW),
 		}
 		if notifConfig.IsInQuietPeriod(nowLocal) {
-			s.logMutedNotification(ctx, siteID, userID, types.NotificationTypeSolarUnderproduction, notifConfig.SolarUnderproductionAlert, title, body, metadata)
+			s.logMutedNotification(ctx, siteID, userID, types.NotificationTypeSolarUnderproduction, sensitivity, title, body, metadata)
 			continue
 		}
 
 		log.Ctx(ctx).DebugContext(ctx, "sending solar underproduction notification",
 			slog.String("userID", userID),
-			slog.String("sensitivity", notifConfig.SolarUnderproductionAlert),
+			slog.String("sensitivity", sensitivity),
 			slog.Float64("actualKW", actualKW),
 			slog.Float64("forecastKW", forecastKW),
 			slog.Float64("deficitKW", forecastKW-actualKW),
@@ -2321,7 +2323,7 @@ func (s *Server) handleSolarUnderproductionNotifications(
 			siteID,
 			userID,
 			types.NotificationTypeSolarUnderproduction,
-			notifConfig.SolarUnderproductionAlert,
+			sensitivity,
 			title,
 			body,
 			"/dashboard",
@@ -2349,7 +2351,7 @@ func (s *Server) handleVPPDispatchNotifications(
 
 	hasAnyVPPUser := false
 	for _, notifConfig := range notifications {
-		if notifConfig.VPPDispatchAlert {
+		if notifConfig.RealTimeAlertEnabled(notifConfig.VPPDispatchAlert) {
 			hasAnyVPPUser = true
 			break
 		}
@@ -2391,7 +2393,7 @@ func (s *Server) handleVPPDispatchNotifications(
 	}
 
 	for userID, notifConfig := range notifications {
-		if !notifConfig.VPPDispatchAlert {
+		if !notifConfig.RealTimeAlertEnabled(notifConfig.VPPDispatchAlert) {
 			continue
 		}
 		if getNotifState().hasSentWithin(userID, types.NotificationTypeVPPDispatch, vppDispatchDeduplicationWindow, s.now()) {
@@ -2649,7 +2651,7 @@ func (s *Server) handleHighHomeLoadNotifications(
 ) {
 	hasAnyUser := false
 	for _, notifConfig := range notifications {
-		if notifConfig.HighHomeLoadAlert != "" && notifConfig.HighHomeLoadAlert != "disabled" {
+		if s := notifConfig.RealTimeAlertSensitivity(notifConfig.HighHomeLoadAlert); s != "" {
 			hasAnyUser = true
 			break
 		}
@@ -2791,23 +2793,24 @@ func (s *Server) handleHighHomeLoadNotifications(
 	currentLoad := data.status.HomeKW
 
 	for userID, notifConfig := range notifications {
-		if notifConfig.HighHomeLoadAlert == "" || notifConfig.HighHomeLoadAlert == "disabled" {
+		sensitivity := notifConfig.RealTimeAlertSensitivity(notifConfig.HighHomeLoadAlert)
+		if sensitivity == "" {
 			continue
 		}
 
 		// Cheapest rate suppression: users on low or medium sensitivity are not warned during
 		// the day's cheapest rate period, as large loads are likely intentionally scheduled.
 		// High sensitivity users continue to be notified.
-		if isCheapestRate && notifConfig.HighHomeLoadAlert != "high" {
+		if isCheapestRate && sensitivity != "high" {
 			log.Ctx(ctx).DebugContext(ctx, "skipping high home load notification: cheapest rate of the day on low/medium sensitivity",
 				slog.String("userID", userID),
-				slog.String("sensitivity", notifConfig.HighHomeLoadAlert),
+				slog.String("sensitivity", sensitivity),
 			)
 			continue
 		}
 
 		var minLoad, reqTODPercentile float64
-		switch notifConfig.HighHomeLoadAlert {
+		switch sensitivity {
 		case "low":
 			minLoad = highHomeLoadMinAbsoluteKWLow
 			reqTODPercentile = highHomeLoadTODPercentileLow
@@ -2881,13 +2884,13 @@ func (s *Server) handleHighHomeLoadNotifications(
 		}
 
 		if notifConfig.IsInQuietPeriod(nowLocal) {
-			s.logMutedNotification(ctx, siteID, userID, types.NotificationTypeHighHomeLoad, notifConfig.HighHomeLoadAlert, title, body, metadata)
+			s.logMutedNotification(ctx, siteID, userID, types.NotificationTypeHighHomeLoad, sensitivity, title, body, metadata)
 			continue
 		}
 
 		log.Ctx(ctx).DebugContext(ctx, "sending high home load notification",
 			slog.String("userID", userID),
-			slog.String("sensitivity", notifConfig.HighHomeLoadAlert),
+			slog.String("sensitivity", sensitivity),
 			slog.Float64("homeKW", currentLoad),
 			slog.Float64("batterySOC", data.status.BatterySOC),
 			slog.String("title", title),
@@ -2898,7 +2901,7 @@ func (s *Server) handleHighHomeLoadNotifications(
 			siteID,
 			userID,
 			types.NotificationTypeHighHomeLoad,
-			notifConfig.HighHomeLoadAlert,
+			sensitivity,
 			title,
 			body,
 			"/dashboard",
