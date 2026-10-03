@@ -892,11 +892,7 @@ func roundTOUPeriodEnd(t time.Time) time.Time {
 	}
 }
 
-func (b *Tesla) buildTOUTariffPayload(start time.Time, until time.Time, currentPrice types.Price) map[string]any {
-	return buildTeslaTOUTariffPayload(start, until, currentPrice)
-}
-
-func buildTeslaTOUTariffPayload(start time.Time, until time.Time, currentPrice types.Price) map[string]any {
+func buildTeslaTOUTariffPayload(start time.Time, until time.Time, importRateDollars, exportRateDollars float64) map[string]any {
 	roundedStart := roundTOUPeriodStart(start)
 	roundedUntil := roundTOUPeriodEnd(until)
 	if !roundedUntil.After(roundedStart) {
@@ -925,18 +921,8 @@ func buildTeslaTOUTariffPayload(start time.Time, until time.Time, currentPrice t
 
 	const minRateSpread = 0.15
 
-	onPeakBuy := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
-	if onPeakBuy < 0 {
-		onPeakBuy = 0.0
-	}
-
-	onPeakSell := currentPrice.DollarsPerKWH + currentPrice.GenerationAdjustmentDollarsPerKWH
-	if currentPrice.SeparateGenerationCredit {
-		onPeakSell = currentPrice.GenerationCreditDollarsPerKWH
-	}
-	if onPeakSell < 0 {
-		onPeakSell = 0.0
-	}
+	onPeakBuy := importRateDollars
+	onPeakSell := exportRateDollars
 
 	// The Tesla Fleet API requires that buy_rate >= sell_rate at any given time;
 	// if sell_rate > buy_rate, Tesla snaps buy_rate equal to sell_rate.
@@ -1333,8 +1319,8 @@ func buildTeslaTOUTariffPayload(start time.Time, until time.Time, currentPrice t
 	}
 }
 
-func (b *Tesla) updateTOUSettings(ctx context.Context, start time.Time, until time.Time, currentPrice types.Price) error {
-	payload := b.buildTOUTariffPayload(start, until, currentPrice)
+func (b *Tesla) updateTOUSettings(ctx context.Context, start time.Time, until time.Time, importRateDollars, exportRateDollars float64) error {
+	payload := buildTeslaTOUTariffPayload(start, until, importRateDollars, exportRateDollars)
 	if b.settings.DryRun {
 		log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated tesla time_of_use_settings",
 			slog.Time("start", start),
@@ -1495,7 +1481,7 @@ func isTeslaScheduleMatch(currentTariff map[string]any, targetUntil time.Time, n
 	targetUntilInLoc := targetUntil.In(loc)
 	roundedTargetUntil := roundTOUPeriodEnd(targetUntilInLoc)
 
-	targetPayload := buildTeslaTOUTariffPayload(nowInLoc, targetUntilInLoc, types.Price{})
+	targetPayload := buildTeslaTOUTariffPayload(nowInLoc, targetUntilInLoc, 0, 0)
 	targetTouSettings, ok := targetPayload["tou_settings"].(map[string]any)
 	if !ok {
 		return false
@@ -1978,7 +1964,7 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 	}
 
 	if updatedTOU {
-		if err := b.updateTOUSettings(ctx, nowInLoc, opts.TSScheduleModeUntil.In(loc), opts.CurrentPrice); err != nil {
+		if err := b.updateTOUSettings(ctx, nowInLoc, opts.TSScheduleModeUntil.In(loc), opts.ImportRateDollars, opts.ExportRateDollars); err != nil {
 			return false, err
 		}
 	}

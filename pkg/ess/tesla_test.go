@@ -1641,7 +1641,8 @@ func TestTesla(t *testing.T) {
 			}
 			changed, err := teslaSys.SetModes(ctx, types.BatteryModeLoad, types.SolarModeExport, types.ModesOptions{
 				TSScheduleModeUntil: until,
-				CurrentPrice:        price,
+				ImportRateDollars:   price.ImportRateDollars(),
+				ExportRateDollars:   price.ExportRateDollars(),
 			})
 			require.NoError(t, err)
 			assert.True(t, changed)
@@ -1931,12 +1932,11 @@ func TestTesla(t *testing.T) {
 		})
 
 		t.Run("SolarExport Schedule Tariff Payload Verification", func(t *testing.T) {
-			sys := &Tesla{}
 			start := time.Date(2026, 7, 15, 14, 0, 0, 0, time.UTC)
 			until := time.Date(2026, 7, 15, 18, 0, 0, 0, time.UTC)
 
 			t.Run("Periods and Default Rates", func(t *testing.T) {
-				payload := sys.buildTOUTariffPayload(start, until, types.Price{})
+				payload := buildTeslaTOUTariffPayload(start, until, 0, 0)
 				require.NotNil(t, payload)
 
 				touSettings, ok := payload["tou_settings"].(map[string]any)
@@ -2040,7 +2040,7 @@ func TestTesla(t *testing.T) {
 					DollarsPerKWH:        0.40,
 					GridUseDollarsPerKWH: 0.05,
 				}
-				payload := sys.buildTOUTariffPayload(start, until, price)
+				payload := buildTeslaTOUTariffPayload(start, until, price.ImportRateDollars(), price.ExportRateDollars())
 				require.NotNil(t, payload)
 
 				touSettings := payload["tou_settings"].(map[string]any)
@@ -2061,7 +2061,7 @@ func TestTesla(t *testing.T) {
 					DollarsPerKWH:        0.04,
 					GridUseDollarsPerKWH: 0.02,
 				}
-				payload := sys.buildTOUTariffPayload(start, until, price)
+				payload := buildTeslaTOUTariffPayload(start, until, price.ImportRateDollars(), price.ExportRateDollars())
 				require.NotNil(t, payload)
 
 				touSettings := payload["tou_settings"].(map[string]any)
@@ -2082,7 +2082,7 @@ func TestTesla(t *testing.T) {
 					DollarsPerKWH:        -0.05,
 					GridUseDollarsPerKWH: 0.02,
 				}
-				payload := sys.buildTOUTariffPayload(start, until, price)
+				payload := buildTeslaTOUTariffPayload(start, until, price.ImportRateDollars(), price.ExportRateDollars())
 				require.NotNil(t, payload)
 
 				touSettings := payload["tou_settings"].(map[string]any)
@@ -2130,7 +2130,7 @@ func TestTesla(t *testing.T) {
 				cmStart := time.Date(2026, 7, 15, 22, 0, 0, 0, loc)
 				cmUntil := time.Date(2026, 7, 16, 2, 0, 0, 0, loc)
 
-				payload := sys.buildTOUTariffPayload(cmStart, cmUntil, types.Price{})
+				payload := buildTeslaTOUTariffPayload(cmStart, cmUntil, 0, 0)
 				require.NotNil(t, payload)
 
 				touSettings := payload["tou_settings"].(map[string]any)
@@ -2261,7 +2261,7 @@ func TestTesla(t *testing.T) {
 				yrStart := time.Date(2026, 12, 31, 22, 0, 0, 0, loc)
 				yrUntil := time.Date(2027, 1, 1, 2, 0, 0, 0, loc)
 
-				payload := sys.buildTOUTariffPayload(yrStart, yrUntil, types.Price{})
+				payload := buildTeslaTOUTariffPayload(yrStart, yrUntil, 0, 0)
 				require.NotNil(t, payload)
 
 				touSettings := payload["tou_settings"].(map[string]any)

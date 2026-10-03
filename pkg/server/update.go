@@ -480,8 +480,11 @@ func (s *Server) performSiteUpdate(
 		if status.ManagedTOUMode {
 			minSOC := int(math.Round(settings.Settings.GetMinBatterySOC(ctx, s.now(), status.Timestamp.Location(), currentPrice)))
 			if _, err := s.setESSModes(ctx, siteID, essSystem, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{
-				MinimumSOC:   minSOC,
-				CurrentPrice: currentPrice,
+				MinimumSOC:        minSOC,
+				ImportRateDollars: currentPrice.ImportRateDollars(),
+				// note: this doesn't take into account true net-metering but we shouldn't be
+				// exporting for them anyways
+				ExportRateDollars: currentPrice.ExportRateDollars(),
 			}, settings); err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to set modes back to self-consumption while paused", slog.Any("error", err))
 			}
@@ -594,7 +597,10 @@ func (s *Server) performSiteUpdate(
 		ChargeToSOC:         action.ChargeToSOC,
 		MinimumSOC:          minSOC,
 		TSScheduleModeUntil: action.TSScheduleModeUntil,
-		CurrentPrice:        currentPrice,
+		ImportRateDollars:   currentPrice.ImportRateDollars(),
+		// this isn't totally accurate if the user is on true net-metering but we
+		// shouldn't be exporting for them anyways
+		ExportRateDollars: currentPrice.ExportRateDollars(),
 	}, settings)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to set mode", slog.Any("error", err))

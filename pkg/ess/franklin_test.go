@@ -1861,6 +1861,8 @@ func TestFranklin(t *testing.T) {
 		until := now.Add(4 * time.Hour)
 		changed, err := f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeExport, types.ModesOptions{
 			TSScheduleModeUntil: until,
+			ImportRateDollars:   0.29982,
+			ExportRateDollars:   0.25962,
 		})
 		require.NoError(t, err)
 		assert.True(t, changed)
@@ -1873,6 +1875,10 @@ func TestFranklin(t *testing.T) {
 		strategy := strategyList[0].(map[string]any)
 		dayTypeList := strategy["dayTypeVoList"].([]any)
 		dayType := dayTypeList[0].(map[string]any)
+
+		assert.InDelta(t, 0.29982, dayType["eleticRatePeak"], 0.0001, "eleticRatePeak should match peak buy price")
+		assert.InDelta(t, 0.25962, dayType["eleticSellPeak"], 0.0001, "eleticSellPeak should match peak export price")
+
 		detailVoList := dayType["detailVoList"].([]any)
 
 		roundedStart := roundTOUPeriodStart(now)
@@ -1891,6 +1897,8 @@ func TestFranklin(t *testing.T) {
 			if w["startHourTime"] == expectedStart {
 				assert.EqualValues(t, franklinDispatchAPowerToHome, w["dispatchId"], "active window should have dispatchId: 1")
 				assert.Equal(t, expectedEnd, w["endHourTime"])
+				assert.InDelta(t, 0.29982, w["buyRate"], 0.0001)
+				assert.InDelta(t, 0.25962, w["sellRate"], 0.0001)
 			} else if crossesMidnight && w["startHourTime"] == "00:00" {
 				assert.EqualValues(t, franklinDispatchAPowerToHome, w["dispatchId"], "morning window should have dispatchId: 1")
 			} else {
@@ -2374,6 +2382,27 @@ func TestFranklin(t *testing.T) {
 		diffTargetUntil := time.Date(2026, 7, 15, 21, 0, 0, 0, loc)
 		assert.False(t, isFranklinScheduleMatch(standardRateRudderStrategies, diffTargetUntil, franklinDispatchAPowerToHome, nowWednesday),
 			"should not match when target end differs")
+
+		// Peak rate matching checks
+		importRateDollars := 0.29982
+		exportRateDollars := 0.25962
+
+		// Existing schedule has 0 rates, so it should NOT match target rates
+		assert.False(t, isFranklinScheduleMatch(standardRateRudderStrategies, targetUntil, franklinDispatchAPowerToHome, nowWednesday, importRateDollars, exportRateDollars),
+			"should not match when existing schedule has 0 rates and target has positive peak rate")
+
+		// When rates match on the existing schedule
+		strategiesWithRates := standardRateRudderStrategies
+		strategiesWithRates[0].DayTypeVoList[0].EleticRatePeak = 0.29982
+		strategiesWithRates[0].DayTypeVoList[0].EleticSellPeak = 0.25962
+		assert.True(t, isFranklinScheduleMatch(strategiesWithRates, targetUntil, franklinDispatchAPowerToHome, nowWednesday, importRateDollars, exportRateDollars),
+			"should match when rates also match")
+
+		// If existing peak rate is different, it should NOT match
+		strategiesWithDiffRate := strategiesWithRates
+		strategiesWithDiffRate[0].DayTypeVoList[0].EleticRatePeak = 0.15
+		assert.False(t, isFranklinScheduleMatch(strategiesWithDiffRate, targetUntil, franklinDispatchAPowerToHome, nowWednesday, importRateDollars, exportRateDollars),
+			"should not match when peak rate differs")
 
 		// 3. SetModes integration test: gateway returns multiDayTypeStrategies
 		// Today is Wednesday (Weekday), so SetModes MUST save new schedule because weekday does not have the dispatch

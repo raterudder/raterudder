@@ -1162,7 +1162,7 @@ func (c *Controller) buildPlanningTimeline(
 			q3LoadKWH = currentStatus.HomeKW * durationHrs
 		}
 
-		importRate := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
+		importRate := currentPrice.ImportRateDollars()
 		exportRate := c.calculateExportCredit(currentPrice, settings, allPrices)
 		for _, ev := range currentStatus.VPPEvents {
 			if ev.OptOut {
@@ -1249,12 +1249,7 @@ func (c *Controller) calculateExportCredit(price types.Price, settings types.Set
 			return minCost
 		}
 	}
-
-	if price.SeparateGenerationCredit {
-		return price.GenerationCreditDollarsPerKWH
-	}
-
-	return price.DollarsPerKWH + price.GenerationAdjustmentDollarsPerKWH
+	return price.ExportRateDollars()
 }
 
 // detectPlanningAnchors scans the timeline and future prices to locate fixed operational markers

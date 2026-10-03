@@ -33,6 +33,7 @@
   - Use `log/slog` with typed attribute helpers: `slog.String`, `slog.Int`, `slog.Float64`, `slog.Bool`, `slog.Time`, `slog.Duration`, `slog.Any`.
   - Always format log field names in headless camelCase (e.g., `userID`, `batterySOC`, `homeKW`).
 - **Structs & JSON**: Struct field JSON tags must be headless camelCase.
+- **Naming & Units**: Always make the unit explicit in variable, struct field, and method names. Avoid ambiguous names like `Rate` or `Price` without units (which could be cents or dollars); specify the unit explicitly (e.g., `ImportRateDollars` and `ExportRateDollars` or `ImportDollars` and `ExportDollars`, `DollarsPerKWH`, `LoadKWH`, `batterySOC`, `DurationHours`, `DurationSeconds`, `homeKW`).
 - **Struct Comparisons with Slices**: In Go, structs containing slice fields (e.g., `UserNotificationSettings` with `QuietPeriods []TimePeriod`) cannot be compared with `==`. Use `reflect.DeepEqual(a, b)` in storage/persistence checks.
 
 ---

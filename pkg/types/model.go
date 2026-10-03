@@ -77,7 +77,8 @@ type ModesOptions struct {
 	ChargeToSOC         int       `json:"chargeToSoc,omitempty"`
 	MinimumSOC          int       `json:"minimumSoc,omitempty"`
 	TSScheduleModeUntil time.Time `json:"tsScheduleModeUntil,omitempty"`
-	CurrentPrice        Price     `json:"currentPrice,omitempty"`
+	ImportRateDollars   float64   `json:"importRateDollars,omitempty"`
+	ExportRateDollars   float64   `json:"exportRateDollars,omitempty"`
 }
 
 // Action represents a control decision made by the system.

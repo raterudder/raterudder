@@ -116,6 +116,20 @@ func (p *Price) Contains(ts time.Time) bool {
 	return !ts.Before(p.TSStart) && (p.TSEnd.IsZero() || ts.Before(p.TSEnd))
 }
 
+// ImportRateDollars returns the total cost per kWh in dollars to import electricity from the grid.
+func (p Price) ImportRateDollars() float64 {
+	return p.DollarsPerKWH + p.GridUseDollarsPerKWH
+}
+
+// ExportRateDollars returns the credit per kWh in dollars for exporting electricity to the grid.
+// This does NOT take into account true net-metering.
+func (p Price) ExportRateDollars() float64 {
+	if p.SeparateGenerationCredit {
+		return p.GenerationCreditDollarsPerKWH
+	}
+	return p.DollarsPerKWH + p.GenerationAdjustmentDollarsPerKWH
+}
+
 // UtilityRateOptions represents the options for the utility rate.
 type UtilityRateOptions struct {
 	RateClass            string `json:"rateClass,omitempty"`

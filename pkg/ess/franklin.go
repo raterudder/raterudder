@@ -1124,7 +1124,7 @@ func (f *Franklin) getTOUTemplate(ctx context.Context) (franklinTOUTemplateRespo
 	return res, nil
 }
 
-func (f *Franklin) saveExportTouDispatch(ctx context.Context, start time.Time, until time.Time, dispatchID franklinDispatchID) error {
+func (f *Franklin) saveExportTouDispatch(ctx context.Context, start time.Time, until time.Time, dispatchID franklinDispatchID, importRateDollars, exportRateDollars float64) error {
 	roundedStart := roundTOUPeriodStart(start)
 	roundedUntil := roundTOUPeriodEnd(until)
 	if !roundedUntil.After(roundedStart) {
@@ -1144,7 +1144,20 @@ func (f *Franklin) saveExportTouDispatch(ctx context.Context, start time.Time, u
 		provinceID = 39 // default to California
 	}
 
-	details := buildExportTouDetails(start, until, dispatchID)
+	details := buildExportTouDetails(start, until, dispatchID, importRateDollars, exportRateDollars)
+
+	dayTypeMap := map[string]any{
+		"dayName":      "everyDay",
+		"dayType":      3,
+		"detailVoList": details,
+	}
+
+	if importRateDollars > 0 {
+		dayTypeMap["eleticRatePeak"] = importRateDollars
+	}
+	if exportRateDollars > 0 {
+		dayTypeMap["eleticSellPeak"] = exportRateDollars
+	}
 
 	payload := map[string]any{
 		"template": map[string]any{
@@ -1164,11 +1177,7 @@ func (f *Franklin) saveExportTouDispatch(ctx context.Context, start time.Time, u
 				"seasonName": "All Year",
 				"month":      "1,2,3,4,5,6,7,8,9,10,11,12",
 				"dayTypeVoList": []map[string]any{
-					{
-						"dayName":      "everyDay",
-						"dayType":      3,
-						"detailVoList": details,
-					},
+					dayTypeMap,
 				},
 			},
 		},
@@ -1206,7 +1215,7 @@ func (f *Franklin) saveExportTouDispatch(ctx context.Context, start time.Time, u
 	return nil
 }
 
-func buildExportTouDetails(start, until time.Time, dispatchID franklinDispatchID) []franklinDetailVoItem {
+func buildExportTouDetails(start, until time.Time, dispatchID franklinDispatchID, importRateDollars, exportRateDollars float64) []franklinDetailVoItem {
 	roundedStart := roundTOUPeriodStart(start)
 	roundedUntil := roundTOUPeriodEnd(until)
 	if !roundedUntil.After(roundedStart) {
@@ -1222,21 +1231,39 @@ func buildExportTouDetails(start, until time.Time, dispatchID franklinDispatchID
 	if crossesMidnight {
 		nextDayEndStr := roundedUntil.Format("15:04")
 		if nextDayEndStr >= startStr {
-			details = append(details, franklinDetailVoItem{
+			item := franklinDetailVoItem{
 				StartHourTime: "00:00",
 				EndHourTime:   "24:00",
 				WaveType:      2,
 				Name:          "On-peak",
 				DispatchID:    int(dispatchID),
-			})
+			}
+			if importRateDollars > 0 {
+				b := importRateDollars
+				item.BuyRate = &b
+			}
+			if exportRateDollars > 0 {
+				s := exportRateDollars
+				item.SellRate = &s
+			}
+			details = append(details, item)
 		} else {
-			details = append(details, franklinDetailVoItem{
+			item1 := franklinDetailVoItem{
 				StartHourTime: "00:00",
 				EndHourTime:   nextDayEndStr,
 				WaveType:      2,
 				Name:          "On-peak",
 				DispatchID:    int(dispatchID),
-			})
+			}
+			if importRateDollars > 0 {
+				b := importRateDollars
+				item1.BuyRate = &b
+			}
+			if exportRateDollars > 0 {
+				s := exportRateDollars
+				item1.SellRate = &s
+			}
+			details = append(details, item1)
 			details = append(details, franklinDetailVoItem{
 				StartHourTime: nextDayEndStr,
 				EndHourTime:   startStr,
@@ -1244,13 +1271,22 @@ func buildExportTouDetails(start, until time.Time, dispatchID franklinDispatchID
 				Name:          "Off-peak",
 				DispatchID:    int(franklinDispatchSelfConsumption),
 			})
-			details = append(details, franklinDetailVoItem{
+			item2 := franklinDetailVoItem{
 				StartHourTime: startStr,
 				EndHourTime:   "24:00",
 				WaveType:      2,
 				Name:          "On-peak",
 				DispatchID:    int(dispatchID),
-			})
+			}
+			if importRateDollars > 0 {
+				b := importRateDollars
+				item2.BuyRate = &b
+			}
+			if exportRateDollars > 0 {
+				s := exportRateDollars
+				item2.SellRate = &s
+			}
+			details = append(details, item2)
 		}
 	} else {
 		endStr := roundedUntil.Format("15:04")
@@ -1266,13 +1302,22 @@ func buildExportTouDetails(start, until time.Time, dispatchID franklinDispatchID
 				DispatchID:    int(franklinDispatchSelfConsumption),
 			})
 		}
-		details = append(details, franklinDetailVoItem{
+		item := franklinDetailVoItem{
 			StartHourTime: startStr,
 			EndHourTime:   endStr,
 			WaveType:      2,
 			Name:          "On-peak",
 			DispatchID:    int(dispatchID),
-		})
+		}
+		if importRateDollars > 0 {
+			b := importRateDollars
+			item.BuyRate = &b
+		}
+		if exportRateDollars > 0 {
+			s := exportRateDollars
+			item.SellRate = &s
+		}
+		details = append(details, item)
 		if endStr != "24:00" {
 			details = append(details, franklinDetailVoItem{
 				StartHourTime: endStr,
@@ -1302,7 +1347,7 @@ func parseTOUTimeOfDay(timeStr string, baseDate time.Time) (time.Time, bool) {
 	return time.Date(baseDate.Year(), baseDate.Month(), baseDate.Day(), h, m, 0, 0, baseDate.Location()), true
 }
 
-func isFranklinScheduleMatch(strategies []franklinTOUStrategy, targetUntil time.Time, dispatchID franklinDispatchID, now time.Time) bool {
+func isFranklinScheduleMatch(strategies []franklinTOUStrategy, targetUntil time.Time, dispatchID franklinDispatchID, now time.Time, ratesDollars ...float64) bool {
 	// RateRudder TOU schedules always provision a single "All Year" strategy covering all 12 months,
 	// with a single "everyDay" (DayType == 3) day type.
 	// If the existing schedule has multiple seasons or day types, it does not match RateRudder's structure.
@@ -1315,6 +1360,21 @@ func isFranklinScheduleMatch(strategies []franklinTOUStrategy, targetUntil time.
 	}
 	dt := s.DayTypeVoList[0]
 	if dt.DayType != 3 && !strings.Contains(strings.ToLower(dt.DayName), "every") && !strings.Contains(strings.ToLower(dt.DayName), "all") {
+		return false
+	}
+
+	var importRateDollars, exportRateDollars float64
+	if len(ratesDollars) > 0 {
+		importRateDollars = ratesDollars[0]
+	}
+	if len(ratesDollars) > 1 {
+		exportRateDollars = ratesDollars[1]
+	}
+
+	if math.Abs(dt.EleticRatePeak-importRateDollars) > 0.005 {
+		return false
+	}
+	if math.Abs(dt.EleticSellPeak-exportRateDollars) > 0.005 {
 		return false
 	}
 
@@ -1341,7 +1401,7 @@ func isFranklinScheduleMatch(strategies []franklinTOUStrategy, targetUntil time.
 	targetUntilInLoc := targetUntil.In(loc)
 	roundedTargetUntil := roundTOUPeriodEnd(targetUntilInLoc)
 
-	targetDetails := buildExportTouDetails(nowInLoc, targetUntilInLoc, dispatchID)
+	targetDetails := buildExportTouDetails(nowInLoc, targetUntilInLoc, dispatchID, importRateDollars, exportRateDollars)
 	var targetOnPeaks []franklinDetailVoItem
 	for _, d := range targetDetails {
 		if d.WaveType == 2 {
@@ -1527,10 +1587,14 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		if rd.RuntimeData.Timestamp > 0 {
 			startTime = time.Unix(rd.RuntimeData.Timestamp, 0).In(loc)
 		}
+
+		importRateDollars := opts.ImportRateDollars
+		exportRateDollars := opts.ExportRateDollars
+
 		scheduleMatched := false
 		if modes.touMode != (franklinMode{}) && modes.currentMode.WorkMode == franklinWorkModeTimeOfUse {
 			tplRes, err := f.getTOUTemplate(ctx)
-			if err == nil && isFranklinScheduleMatch(tplRes.StrategyList, opts.TSScheduleModeUntil, dispatchID, startTime) {
+			if err == nil && isFranklinScheduleMatch(tplRes.StrategyList, opts.TSScheduleModeUntil, dispatchID, startTime, importRateDollars, exportRateDollars) {
 				scheduleMatched = true
 				log.Ctx(ctx).DebugContext(ctx, "franklin tou schedule already matches, skipping saveTouDispatch",
 					slog.Time("until", opts.TSScheduleModeUntil),
@@ -1545,7 +1609,15 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 				slog.Time("until", opts.TSScheduleModeUntil),
 				slog.Int("dispatchID", int(dispatchID)),
 			)
-			if err := f.saveExportTouDispatch(ctx, startTime, opts.TSScheduleModeUntil, dispatchID); err != nil {
+			err := f.saveExportTouDispatch(
+				ctx,
+				startTime,
+				opts.TSScheduleModeUntil,
+				dispatchID,
+				importRateDollars,
+				exportRateDollars,
+			)
+			if err != nil {
 				return false, err
 			}
 			scheduleChanged = true
@@ -2213,19 +2285,23 @@ type franklinTOUStrategy struct {
 }
 
 type franklinDayTypeVo struct {
-	ID           int                    `json:"id,omitempty"`
-	DayName      string                 `json:"dayName"`
-	DayType      int                    `json:"dayType"`
-	DetailVoList []franklinDetailVoItem `json:"detailVoList"`
+	ID             int                    `json:"id,omitempty"`
+	DayName        string                 `json:"dayName"`
+	DayType        int                    `json:"dayType"`
+	DetailVoList   []franklinDetailVoItem `json:"detailVoList"`
+	EleticRatePeak float64                `json:"eleticRatePeak,omitempty"`
+	EleticSellPeak float64                `json:"eleticSellPeak,omitempty"`
 }
 
 type franklinDetailVoItem struct {
-	ID            int    `json:"id,omitempty"`
-	Name          string `json:"name"`
-	StartHourTime string `json:"startHourTime"`
-	EndHourTime   string `json:"endHourTime"`
-	WaveType      int    `json:"waveType"`
-	DispatchID    int    `json:"dispatchId"`
+	ID            int      `json:"id,omitempty"`
+	Name          string   `json:"name"`
+	StartHourTime string   `json:"startHourTime"`
+	EndHourTime   string   `json:"endHourTime"`
+	WaveType      int      `json:"waveType"`
+	DispatchID    int      `json:"dispatchId"`
+	BuyRate       *float64 `json:"buyRate,omitempty"`
+	SellRate      *float64 `json:"sellRate,omitempty"`
 }
 
 type franklinTOUTemplate struct {
