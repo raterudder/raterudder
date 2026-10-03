@@ -126,6 +126,7 @@
     display: inline-flex;
     flex-wrap: wrap;
     align-items: center;
+    justify-content: center;
     gap: 0.5rem;
     padding: 0.45rem 0.95rem;
     background: rgba(255, 255, 255, 0.03);
@@ -133,6 +134,7 @@
     border-radius: 99px;
     font-size: 0.85rem;
     line-height: 1.2;
+    max-width: 100%;
 }
 
 .compat-badge {
@@ -843,7 +845,18 @@
         border-radius: 12px;
     }
 
-    .chart-visual-container {
-        padding: 1rem 0.25rem 0.5rem;
+    .compat-badges {
+        font-size: clamp(0.68rem, 2.6vw, 0.8rem);
+        gap: clamp(0.2rem, 1.1vw, 0.4rem);
+        padding: 0.35rem clamp(0.4rem, 1.8vw, 0.75rem);
+        flex-wrap: nowrap;
+        white-space: nowrap;
     }
 }
+
+@media (max-width: 480px) {
+    .landing-page .content-container {
+        padding: 0 1rem;
+    }
+}
+
