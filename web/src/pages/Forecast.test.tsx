@@ -1,8 +1,8 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Router } from 'wouter';
-import Forecast from './Forecast';
+import Forecast, { STALE_FORECAST_TIMEOUT_MS } from './Forecast';
 import * as api from '../api';
 import { setupDefaultApiMocks } from '../test/apiMocks';
 import { BatteryMode, ActionReason, type ModelingHour, type Plan, type PlanPeriod } from '../api';
@@ -648,6 +648,129 @@ describe('Forecast Page', () => {
             expect(screen.getByText(/2 alarms present/)).toBeInTheDocument();
             expect(screen.getByText('24-Hour Simulation')).toBeInTheDocument();
         });
+    });
+
+    it('automatically refreshes when switching away and returning after more than 10 minutes', async () => {
+        expect(STALE_FORECAST_TIMEOUT_MS).toBe(10 * 60 * 1000);
+        let mockTime = new Date('2026-06-15T12:00:00Z').getTime();
+        const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => mockTime);
+
+        const data = makeSimHours();
+        (fetchModeling as any).mockResolvedValue({
+            simulation: data,
+            energyHistory: [],
+            priceHistory: [],
+            weather: [],
+        });
+
+        renderForecast();
+
+        await waitFor(() => {
+            expect(fetchModeling).toHaveBeenCalledTimes(1);
+        });
+
+        // User switches away
+        act(() => {
+            Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+            document.dispatchEvent(new Event('visibilitychange'));
+        });
+
+        // More than 10 minutes pass
+        mockTime += STALE_FORECAST_TIMEOUT_MS + 60 * 1000;
+
+        // User returns
+        act(() => {
+            Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+            document.dispatchEvent(new Event('visibilitychange'));
+        });
+
+        await waitFor(() => {
+            expect(fetchModeling).toHaveBeenCalledTimes(2);
+        });
+
+        dateSpy.mockRestore();
+    });
+
+    it('does not refresh when switching away and returning within 10 minutes', async () => {
+        let mockTime = new Date('2026-06-15T12:00:00Z').getTime();
+        const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => mockTime);
+
+        const data = makeSimHours();
+        (fetchModeling as any).mockResolvedValue({
+            simulation: data,
+            energyHistory: [],
+            priceHistory: [],
+            weather: [],
+        });
+
+        renderForecast();
+
+        await waitFor(() => {
+            expect(fetchModeling).toHaveBeenCalledTimes(1);
+        });
+
+        // User switches away
+        act(() => {
+            Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+            document.dispatchEvent(new Event('visibilitychange'));
+        });
+
+        // 5 minutes pass
+        mockTime += 5 * 60 * 1000;
+
+        // User returns
+        act(() => {
+            Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+            document.dispatchEvent(new Event('visibilitychange'));
+        });
+
+        // Wait a bit to ensure no refresh call occurs
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(fetchModeling).toHaveBeenCalledTimes(1);
+
+        dateSpy.mockRestore();
+    });
+
+    it('preserves conservative load prediction strategy when refreshing', async () => {
+        let mockTime = new Date('2026-06-15T12:00:00Z').getTime();
+        const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => mockTime);
+
+        const data = makeSimHours();
+        (fetchModeling as any).mockResolvedValue({
+            simulation: data,
+            energyHistory: [],
+            priceHistory: [],
+            weather: [],
+        });
+
+        renderForecast({ settings: { homeLoadPredictionStrategy: 'conservative' } });
+
+        await waitFor(() => {
+            expect(fetchModeling).toHaveBeenCalledTimes(1);
+            expect(fetchModeling).toHaveBeenLastCalledWith(undefined, 'conservative');
+        });
+
+        // User switches away
+        act(() => {
+            Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+            document.dispatchEvent(new Event('visibilitychange'));
+        });
+
+        // More than 10 minutes pass
+        mockTime += STALE_FORECAST_TIMEOUT_MS + 60 * 1000;
+
+        // User returns
+        act(() => {
+            Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+            document.dispatchEvent(new Event('visibilitychange'));
+        });
+
+        await waitFor(() => {
+            expect(fetchModeling).toHaveBeenCalledTimes(2);
+            expect(fetchModeling).toHaveBeenLastCalledWith(undefined, 'conservative');
+        });
+
+        dateSpy.mockRestore();
     });
 });
 

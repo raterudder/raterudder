@@ -543,6 +543,9 @@ interface ForecastProps {
     settings?: Settings | null;
 }
 
+export const STALE_FORECAST_TIMEOUT_MS = 10 * 60 * 1000;
+export const STALE_DASHBOARD_TIMEOUT_MS = STALE_FORECAST_TIMEOUT_MS;
+
 const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
     const [rawModelingData, setRawModelingData] = useState<ForecastResponse | null>(null);
     const initialStrategy = settings?.homeLoadPredictionStrategy === 'conservative' ? 'conservative' : 'default';
@@ -550,10 +553,49 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
     const [initialized, setInitialized] = useState(false);
     const lastFetchedStrategyRef = useRef<string | null>(null);
     const [loading, setLoading] = useState(true);
-    const [nowMs] = useState(() => Date.now());
+    const [nowMs, setNowMs] = useState(() => Date.now());
     const [error, setError] = useState<string | null>(null);
     const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
     const [includeHistory, setIncludeHistory] = useState(false);
+
+    const [refreshTrigger, setRefreshTrigger] = useState(0);
+    const lastHiddenTimeRef = useRef<number | null>(
+        typeof document !== 'undefined' && document.visibilityState === 'hidden' ? Date.now() : null
+    );
+    const lastFetchTimeRef = useRef<number>(Date.now());
+    const isRefreshRef = useRef(false);
+    const loadPredictionModeRef = useRef(loadPredictionMode);
+    loadPredictionModeRef.current = loadPredictionMode;
+    const siteIDRef = useRef(siteID);
+    siteIDRef.current = siteID;
+
+    useEffect(() => {
+        if (typeof document === 'undefined') return;
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'hidden') {
+                lastHiddenTimeRef.current = Date.now();
+            } else if (document.visibilityState === 'visible') {
+                const lastHidden = lastHiddenTimeRef.current;
+                if (lastHidden !== null) {
+                    const now = Date.now();
+                    const timeAway = now - lastHidden;
+                    const timeSinceLastFetch = now - lastFetchTimeRef.current;
+                    lastHiddenTimeRef.current = null;
+
+                    if (timeAway >= STALE_FORECAST_TIMEOUT_MS || timeSinceLastFetch >= STALE_FORECAST_TIMEOUT_MS) {
+                        isRefreshRef.current = true;
+                        setRefreshTrigger(prev => prev + 1);
+                    }
+                }
+            }
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
+    }, []);
 
     useEffect(() => {
         const handleResize = () => setIsMobile(window.innerWidth < 768);
@@ -563,6 +605,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
 
     // Initial load on siteID change or settings strategy change: fetch matching modeling.
     useEffect(() => {
+        let isCancelled = false;
         const loadInitialData = async () => {
             setLoading(true);
             setInitialized(false);
@@ -572,39 +615,95 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
                 // Fetch modeling using the resolved settings strategy
                 const mod = await fetchModeling(siteID, strategy);
 
-                // Update states together
-                setLoadPredictionMode(strategy);
-                lastFetchedStrategyRef.current = strategy;
-                setRawModelingData(mod);
-                setInitialized(true);
+                if (!isCancelled) {
+                    // Update states together
+                    setLoadPredictionMode(strategy);
+                    lastFetchedStrategyRef.current = strategy;
+                    setRawModelingData(mod);
+                    setInitialized(true);
+                    lastFetchTimeRef.current = Date.now();
+                }
             } catch (error) {
-                setError(error instanceof Error ? error.message : 'Unknown error');
+                if (!isCancelled) {
+                    setError(error instanceof Error ? error.message : 'Unknown error');
+                }
             } finally {
-                setLoading(false);
+                if (!isCancelled) {
+                    setLoading(false);
+                    lastFetchTimeRef.current = Date.now();
+                }
             }
         };
         loadInitialData();
+        return () => {
+            isCancelled = true;
+        };
     }, [siteID, settings?.homeLoadPredictionStrategy]);
 
     // Re-fetch modeling only when toggle is manually flipped by user after initialization
     useEffect(() => {
         if (!initialized) return;
         if (lastFetchedStrategyRef.current === loadPredictionMode) return;
+        let isCancelled = false;
 
         const loadModelingOverride = async () => {
             setLoading(true);
             try {
                 lastFetchedStrategyRef.current = loadPredictionMode;
                 const mod = await fetchModeling(siteID, loadPredictionMode);
-                setRawModelingData(mod);
+                if (!isCancelled) {
+                    setRawModelingData(mod);
+                    lastFetchTimeRef.current = Date.now();
+                }
             } catch (error) {
-                setError(error instanceof Error ? error.message : 'Unknown error');
+                if (!isCancelled) {
+                    setError(error instanceof Error ? error.message : 'Unknown error');
+                }
             } finally {
-                setLoading(false);
+                if (!isCancelled) {
+                    setLoading(false);
+                    lastFetchTimeRef.current = Date.now();
+                }
             }
         };
         loadModelingOverride();
+        return () => {
+            isCancelled = true;
+        };
     }, [loadPredictionMode, initialized, siteID]);
+
+    // Refresh modeling when returning to page after timeout
+    useEffect(() => {
+        if (refreshTrigger === 0) return;
+        let isCancelled = false;
+        isRefreshRef.current = false;
+
+        const refreshData = async () => {
+            setLoading(true);
+            setError(null);
+            try {
+                const mod = await fetchModeling(siteIDRef.current, loadPredictionModeRef.current);
+                if (!isCancelled) {
+                    setRawModelingData(mod);
+                    setNowMs(Date.now());
+                    lastFetchTimeRef.current = Date.now();
+                }
+            } catch (error) {
+                if (!isCancelled) {
+                    setError(error instanceof Error ? error.message : 'Unknown error');
+                }
+            } finally {
+                if (!isCancelled) {
+                    setLoading(false);
+                    lastFetchTimeRef.current = Date.now();
+                }
+            }
+        };
+        refreshData();
+        return () => {
+            isCancelled = true;
+        };
+    }, [refreshTrigger]);
 
     const isPlanActive = Boolean(
         rawModelingData?.plan &&
