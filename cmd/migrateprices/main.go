@@ -61,7 +61,7 @@ func main() {
 		slog.String("siteID", opts.SiteID),
 	)
 
-	fp, ok := s.(*storage.FirestoreProvider)
+	fp, ok := storage.Unwrap(s).(*storage.FirestoreProvider)
 	if !ok {
 		log.Ctx(ctx).ErrorContext(ctx, "storage provider must be *FirestoreProvider")
 		os.Exit(1)

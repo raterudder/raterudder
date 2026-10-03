@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"time"
 
@@ -58,23 +57,12 @@ func main() {
 
 	ctx := context.Background()
 
-	// Extract the underlying *firestore.Client using reflection because storage.Configured
-	// returns struct { Database }
-	var fsClient *firestore.Client
-	val := reflect.ValueOf(db)
-	if val.Kind() == reflect.Ptr {
-		val = val.Elem()
-	}
-	if val.Kind() == reflect.Struct && val.NumField() == 1 {
-		underlyingInterface := val.Field(0).Interface()
-		if getter, ok := underlyingInterface.(interface{ FirestoreClient() *firestore.Client }); ok {
-			fsClient = getter.FirestoreClient()
-		}
-	}
-	if fsClient == nil {
+	fp, ok := storage.Unwrap(db).(*storage.FirestoreProvider)
+	if !ok || fp.FirestoreClient() == nil {
 		fmt.Println("Error: could not retrieve firestore client from storage provider")
 		os.Exit(1)
 	}
+	fsClient := fp.FirestoreClient()
 
 	fmt.Printf("Fetching stable site number for site ID '%s'...\n", sID)
 	siteNum, err := getOrAssignSiteNumber(ctx, fsClient, sID)

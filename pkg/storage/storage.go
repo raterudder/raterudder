@@ -122,11 +122,29 @@ type Database interface {
 	Close() error
 }
 
+// databaseWrapper wraps the underlying Database implementation deferred until flags are configured.
+type databaseWrapper struct {
+	Database
+}
+
+// Unwrap returns the underlying concrete Database implementation.
+func (w *databaseWrapper) Unwrap() Database {
+	return w.Database
+}
+
+// Unwrap returns the underlying concrete Database implementation if db is wrapped.
+func Unwrap(db Database) Database {
+	if u, ok := db.(interface{ Unwrap() Database }); ok {
+		return u.Unwrap()
+	}
+	return db
+}
+
 // Configured sets up the Storage provider based on flags.
 func Configured() Database {
 	provider := lflag.String("storage-provider", "firestore", "Storage provider to use (available: firestore)")
 
-	var p struct{ Database }
+	var p databaseWrapper
 
 	fs := configuredFirestore()
 
