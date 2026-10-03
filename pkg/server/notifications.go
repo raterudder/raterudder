@@ -457,9 +457,21 @@ type pushPayload struct {
 	Title string         `json:"title"`
 	Body  string         `json:"body"`
 	Tag   string         `json:"tag,omitempty"`
-	Icon  string         `json:"icon,omitempty"`
+	Icon  string         `json:"icon"`
 	Badge string         `json:"badge,omitempty"`
 	Data  map[string]any `json:"data,omitempty"`
+}
+
+// pushPayloadIcon returns the icon URL for the push notification.
+// For installed app / WebAPK subscriptions, Android already displays the app launcher icon on the left;
+// returning a transparent icon avoids displaying a redundant duplicate icon on the right
+// while preventing Chrome on Android from falling back to generating a letter monogram avatar ("R").
+func pushPayloadIcon(sub types.PushSubscription) string {
+	if sub.AppType == types.PushSubscriptionAppTypeWebAPK {
+		// TODO: remove this after https://issues.chromium.org/issues/568852330
+		return "/transparent_192.png"
+	}
+	return "/logo_192.png"
 }
 
 // encryptWebPushPayload encrypts a plaintext message for a subscriber using RFC 8291 (aes128gcm).
@@ -609,6 +621,30 @@ func createVAPIDToken(privKey *ecdsa.PrivateKey, audience string, subject string
 	return signingInput + "." + sigB64, nil
 }
 
+// webPushTopic converts a notification tag into a compliant RFC 8030 Topic header value.
+// RFC 8030 Section 5.4 restricts Topic to at most 32 characters using the base64url alphabet ([A-Za-z0-9_-]).
+func webPushTopic(tag string) string {
+	if tag == "" {
+		return ""
+	}
+	var clean strings.Builder
+	for _, r := range tag {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			clean.WriteRune(r)
+		}
+	}
+	s := clean.String()
+	if len(s) == 0 {
+		return ""
+	}
+	if len(s) <= 32 {
+		return s
+	}
+	// If longer than 32 characters, derive a deterministic 22-character base64url string.
+	h := sha256.Sum256([]byte(s))
+	return base64.RawURLEncoding.EncodeToString(h[:16])
+}
+
 // sendWebPush sends an encrypted Web Push notification using RFC 8291 and RFC 8292.
 func (s *Server) sendWebPush(
 	ctx context.Context,
@@ -654,6 +690,9 @@ func (s *Server) sendWebPush(
 	req.Header.Set("TTL", fmt.Sprintf("%d", ttlSeconds))
 	if urgency != "" {
 		req.Header.Set("Urgency", urgency)
+	}
+	if topic := webPushTopic(payload.Tag); topic != "" {
+		req.Header.Set("Topic", topic)
 	}
 
 	// Support both RFC 8292 'vapid' and modern 'WebPush' schemes
@@ -948,7 +987,7 @@ func (s *Server) dispatchPushToUser(
 			Title: title,
 			Body:  body,
 			Tag:   notificationTag(notifType, siteID),
-			Icon:  "/logo_192.png",
+			Icon:  pushPayloadIcon(sub),
 			Badge: "/badge_96.png",
 			Data: map[string]any{
 				"url":      urlPath,
@@ -3204,7 +3243,7 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 			Title: "RateRudder Notifications Enabled",
 			Body:  "You will now receive energy updates and alerts for your system.",
 			Tag:   "raterudder-test",
-			Icon:  "/logo_192.png",
+			Icon:  pushPayloadIcon(req.Subscription),
 			Badge: "/badge_96.png",
 			Data: map[string]any{
 				"url": "/dashboard",

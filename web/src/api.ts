@@ -878,6 +878,7 @@ export interface PushSubscription {
     endpoint: string;
     keys: PushSubscriptionKeys;
     userAgent?: string;
+    appType?: string;
     tsCreated?: string;
 }
 

@@ -30,9 +30,9 @@ export function parsePushPayload(data: PushMessageData | null | undefined): {
   }
 
   const title = payload.title || 'RateRudder Notification';
+  const resolvedIcon = payload.icon !== undefined ? (payload.icon || undefined) : '/logo_192.png';
   const options: PushOptions = {
     body: payload.body || '',
-    icon: payload.icon || '/logo_192.png',
     badge: payload.badge || '/badge_96.png',
     data: {
       ...payload.data,
@@ -41,6 +41,10 @@ export function parsePushPayload(data: PushMessageData | null | undefined): {
       ts: Date.now(),
     },
   };
+
+  if (resolvedIcon) {
+    options.icon = resolvedIcon;
+  }
 
   // Only renotify when a tag is present
   if (payload.tag) {

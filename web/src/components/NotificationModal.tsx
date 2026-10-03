@@ -18,7 +18,17 @@ import {
     type AlertSensitivity
 } from '../api';
 import { HelpButton } from './HelpButton';
-import { isIOSDevice, hasNotificationSupport, isPushSupportedInBrowser } from '../utils/pwaUtils';
+import {
+    isIOSDevice,
+    hasNotificationSupport,
+    isPushSupportedInBrowser,
+    isAndroidBrowserTab,
+    isStandalone,
+    isAndroidDevice,
+    getDeferredInstallPrompt,
+    promptInstallApp,
+    subscribeInstallPrompt
+} from '../utils/pwaUtils';
 import { formatHour12 } from '../utils/dashboardUtils';
 import './NotificationModal.css';
 
@@ -140,28 +150,38 @@ const NotificationSample: React.FC<NotificationSampleProps> = ({ headerLabel = '
     </div>
 );
 
-const getDeviceName = (ua?: string): string => {
-    if (!ua) return 'Web Browser';
-    if (ua.includes('iPhone')) return 'Safari on iPhone';
-    if (ua.includes('iPad')) return 'Safari on iPad';
+const getDeviceName = (ua?: string, appType?: string, isCurrentStandalone?: boolean): string => {
+    if (!ua) return (appType === 'webapk' || appType === 'standalone' || isCurrentStandalone) ? 'RateRudder App' : 'Web Browser';
+    const isApp = Boolean(
+        appType === 'webapk' ||
+        appType === 'standalone' ||
+        isCurrentStandalone ||
+        ua.includes('WebAPK') ||
+        ua.includes('Standalone')
+    );
+    if (ua.includes('iPhone')) return isApp ? 'RateRudder App (iPhone)' : 'Safari on iPhone';
+    if (ua.includes('iPad')) return isApp ? 'RateRudder App (iPad)' : 'Safari on iPad';
     if (ua.includes('Android')) {
+        if (isApp) return 'RateRudder App (Android)';
         if (ua.includes('Chrome')) return 'Chrome on Android';
         if (ua.includes('Firefox')) return 'Firefox on Android';
         return 'Android Browser';
     }
     if (ua.includes('Macintosh')) {
+        if (isApp) return 'RateRudder App (Mac)';
         if (ua.includes('Chrome')) return 'Chrome on Mac';
         if (ua.includes('Safari')) return 'Safari on Mac';
         if (ua.includes('Firefox')) return 'Firefox on Mac';
         return 'Mac Browser';
     }
     if (ua.includes('Windows')) {
+        if (isApp) return 'RateRudder App (Windows)';
         if (ua.includes('Edg')) return 'Edge on Windows';
         if (ua.includes('Chrome')) return 'Chrome on Windows';
         if (ua.includes('Firefox')) return 'Firefox on Windows';
         return 'Windows Browser';
     }
-    return 'Web Browser';
+    return isApp ? 'RateRudder App' : 'Web Browser';
 };
 
 const defaultSettingsValues: UserNotificationSettings = {
@@ -202,6 +222,8 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
     });
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    const [subscribing, setSubscribing] = useState(false);
+    const [removingEndpoint, setRemovingEndpoint] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     const hasAnyDeviceConnected = isSubscribedLocally || subscriptions.length > 0;
@@ -210,6 +232,18 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
     const hasNotifications = hasNotificationSupport();
     const isPushSupported = isPushSupportedInBrowser();
     const isIOSWithoutNotifications = isIOS && isPushSupported && !hasNotifications;
+    const isAndroidBrowser = isAndroidBrowserTab();
+    const [canPromptInstall, setCanPromptInstall] = useState<boolean>(() => Boolean(getDeferredInstallPrompt()));
+
+    useEffect(() => {
+        return subscribeInstallPrompt((prompt) => {
+            setCanPromptInstall(Boolean(prompt));
+        });
+    }, []);
+
+    const handleInstallApp = async () => {
+        await promptInstallApp();
+    };
 
     const checkLocalSubscription = useCallback(async (knownSubscriptions?: PushSubscription[]) => {
         if (typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window) {
@@ -316,13 +350,13 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
         }
 
         setError(null);
-        setSaving(true);
+        setSubscribing(true);
 
         try {
             let perm = Notification.permission;
             if (perm === 'denied') {
                 setError('Notifications are blocked by your browser. Please enable notifications in your browser site settings.');
-                setSaving(false);
+                setSubscribing(false);
                 return;
             }
 
@@ -331,7 +365,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                 setPermission(perm);
                 if (perm !== 'granted') {
                     setError('Notification permission was not granted.');
-                    setSaving(false);
+                    setSubscribing(false);
                     return;
                 }
             }
@@ -344,13 +378,16 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
             });
 
             const subJSON = sub.toJSON();
+            const isInstalledApp = isStandalone();
+            const appType = isInstalledApp ? (isAndroidDevice() ? 'webapk' : 'standalone') : 'browser';
             await subscribePushNotification({
                 endpoint: sub.endpoint,
                 keys: {
                     p256dh: subJSON.keys?.p256dh || '',
                     auth: subJSON.keys?.auth || ''
                 },
-                userAgent: navigator.userAgent
+                userAgent: navigator.userAgent,
+                appType: appType,
             }, true);
 
             setIsSubscribedLocally(true);
@@ -360,7 +397,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
         } catch (err: any) {
             setError(err.message || 'Failed to update push subscription');
         } finally {
-            setSaving(false);
+            setSubscribing(false);
         }
     };
 
@@ -466,6 +503,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
 
     const handleRemoveDevice = async (endpoint: string) => {
         try {
+            setRemovingEndpoint(endpoint);
             // If the device being removed is this local browser, unsubscribe from pushManager too
             if (typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window) {
                 try {
@@ -488,6 +526,8 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
             await checkLocalSubscription(updatedSubs);
         } catch (err: any) {
             setError(err.message || 'Failed to remove device');
+        } finally {
+            setRemovingEndpoint(null);
         }
     };
 
@@ -576,6 +616,35 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                     </div>
                                 )}
 
+                                {/* Android Browser Guidance Banner */}
+                                {isAndroidBrowser && !isSubscribedLocally && (
+                                    <div className="notification-banner info" data-testid="android-browser-banner">
+                                        <span className="notification-banner-icon" aria-hidden="true">💡</span>
+                                        <div className="notification-banner-content">
+                                            <strong>Android Alert Reliability</strong>
+                                            <div>
+                                                Chrome may drop some notifications when running in the background. For the most reliable alerts, install RateRudder as an app.
+                                            </div>
+                                            {canPromptInstall ? (
+                                                <div style={{ marginTop: '0.5rem' }}>
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-primary btn-sm"
+                                                        onClick={handleInstallApp}
+                                                        data-testid="install-app-btn"
+                                                    >
+                                                        Install RateRudder
+                                                    </button>
+                                                </div>
+                                            ) : (
+                                                <div style={{ marginTop: '0.25rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                                                    Tap the menu (⋮) and select <strong>&quot;Install and Create Shortcut&quot;</strong>.
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+
                                 {/* Browser Permission Blocked Alert */}
                                 {permission === 'denied' && (
                                     <div className="notification-banner warning">
@@ -617,7 +686,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                     <div key={sub.endpoint || idx} className="device-item">
                                                         <div className="device-info">
                                                             <div className="device-name-row">
-                                                                <span className="device-name">{getDeviceName(sub.userAgent)}</span>
+                                                                <span className="device-name">{getDeviceName(sub.userAgent, sub.appType, isCurrentDevice && isStandalone())}</span>
                                                                 {isCurrentDevice && (
                                                                     <span className="this-device-badge">This Device</span>
                                                                 )}
@@ -630,9 +699,10 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                             type="button"
                                                             className="text-button danger"
                                                             onClick={() => handleRemoveDevice(sub.endpoint)}
+                                                            disabled={saving || subscribing || removingEndpoint === sub.endpoint}
                                                             title="Remove this device"
                                                         >
-                                                            Remove
+                                                            {removingEndpoint === sub.endpoint ? 'Removing...' : 'Remove'}
                                                         </button>
                                                     </div>
                                                 );
@@ -647,9 +717,9 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                 type="button"
                                                 className="btn btn-secondary btn-sm notif-subscribe-btn"
                                                 onClick={handleSubscribeThisDevice}
-                                                disabled={saving}
+                                                disabled={saving || subscribing || Boolean(removingEndpoint)}
                                             >
-                                                {saving ? 'Subscribing...' : 'Subscribe this device to notifications'}
+                                                {subscribing ? 'Subscribing...' : 'Subscribe this device to notifications'}
                                             </button>
                                         </div>
                                     )}
@@ -1608,7 +1678,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                 type="button"
                                 className="btn btn-secondary"
                                 onClick={handleCancel}
-                                disabled={saving}
+                                disabled={saving || subscribing || Boolean(removingEndpoint)}
                             >
                                 Cancel
                             </button>
@@ -1616,7 +1686,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                 type="button"
                                 className="btn btn-primary"
                                 onClick={handleSavePreferences}
-                                disabled={saving || loading || !siteID || isQuietPeriodInvalid}
+                                disabled={saving || subscribing || Boolean(removingEndpoint) || loading || !siteID || isQuietPeriodInvalid}
                             >
                                 {saving ? 'Saving...' : 'Save Preferences'}
                             </button>

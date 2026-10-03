@@ -1,8 +1,9 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NotificationModal } from './NotificationModal';
 import * as api from '../api';
+import { setDeferredInstallPrompt } from '../utils/pwaUtils';
 
 vi.mock('../api');
 
@@ -59,6 +60,8 @@ describe('NotificationModal', () => {
             permission: 'default',
             requestPermission: vi.fn().mockResolvedValue('granted'),
         };
+
+        delete (navigator as any).standalone;
 
         (api.fetchNotificationSubscriptions as any).mockResolvedValue({
             subscriptions: [],
@@ -309,6 +312,58 @@ describe('NotificationModal', () => {
             );
             expect(mockOnSaved).toHaveBeenCalled();
             expect(mockOnClose).toHaveBeenCalled();
+        });
+    });
+
+    it('does not show Subscribing... on subscribe button while saving preferences', async () => {
+        let resolveUpdate: (value: any) => void = () => {};
+        (api.updateNotificationSettings as any).mockReturnValue(
+            new Promise((resolve) => {
+                resolveUpdate = resolve;
+            })
+        );
+
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
+            subscriptions: [
+                {
+                    id: 'sub-iphone',
+                    endpoint: 'https://fcm.googleapis.com/fcm/send/sub-iphone',
+                    keys: { p256dh: 'k1', auth: 'a1' },
+                    userAgent: 'iPhone',
+                },
+            ],
+            notificationsEnabled: true,
+        });
+
+        render(
+            <NotificationModal
+                open={true}
+                onClose={mockOnClose}
+                siteID={mockSiteID}
+                siteName={mockSiteName}
+                settings={{} as any}
+                currentUserID={mockUserID}
+                onSaved={mockOnSaved}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.getByRole('button', { name: /Subscribe this device to notifications/i })).toBeInTheDocument();
+        });
+
+        const subscribeBtn = screen.getByRole('button', { name: /Subscribe this device to notifications/i });
+        const saveBtn = screen.getByRole('button', { name: /Save Preferences/i });
+
+        fireEvent.click(saveBtn);
+
+        expect(screen.getByRole('button', { name: /Saving.../i })).toBeInTheDocument();
+        expect(screen.queryByText(/Subscribing.../i)).not.toBeInTheDocument();
+        expect(subscribeBtn).toHaveTextContent('Subscribe this device to notifications');
+        expect(subscribeBtn).toBeDisabled();
+
+        resolveUpdate({});
+        await waitFor(() => {
+            expect(mockOnSaved).toHaveBeenCalled();
         });
     });
 
@@ -1113,4 +1168,199 @@ describe('NotificationModal', () => {
             expect(mockOnClose).toHaveBeenCalled();
         });
     });
+
+    it('renders Android browser guidance banner when visiting on Android in browser tab and hides when standalone', async () => {
+        vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Linux; Android 14; Pixel 8)');
+        window.matchMedia = vi.fn().mockReturnValue({ matches: false });
+
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
+            subscriptions: [],
+            notificationsEnabled: true,
+        });
+
+        const mockSettings = {
+            notifications: {
+                [mockUserID]: {},
+            },
+        } as any;
+
+        const { unmount } = render(
+            <NotificationModal
+                open={true}
+                onClose={mockOnClose}
+                siteID={mockSiteID}
+                siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID={mockUserID}
+            />
+        );
+
+        await waitFor(() => {
+            const banner = screen.getByTestId('android-browser-banner');
+            expect(banner).toBeInTheDocument();
+            expect(banner).toHaveTextContent('Android Alert Reliability');
+            expect(banner).toHaveTextContent(/Chrome may drop some notifications/i);
+            expect(banner).toHaveTextContent(/Install and Create Shortcut/i);
+        });
+
+        unmount();
+
+        // When in standalone mode, the banner should not render
+        window.matchMedia = vi.fn().mockImplementation((query) => ({
+            matches: query === '(display-mode: standalone)',
+        }));
+
+        render(
+            <NotificationModal
+                open={true}
+                onClose={mockOnClose}
+                siteID={mockSiteID}
+                siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID={mockUserID}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.queryByTestId('android-browser-banner')).not.toBeInTheDocument();
+        });
+
+        // When in browser tab but subscribed locally, banner should also not render
+        window.matchMedia = vi.fn().mockReturnValue({ matches: false });
+        const mockEndpoint = 'https://fcm.googleapis.com/fcm/send/android-sub';
+        (navigator.serviceWorker.ready as any) = Promise.resolve({
+            pushManager: {
+                getSubscription: vi.fn().mockResolvedValue({
+                    endpoint: mockEndpoint,
+                    unsubscribe: vi.fn(),
+                }),
+            },
+        });
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
+            subscriptions: [
+                {
+                    endpoint: mockEndpoint,
+                    userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8)',
+                    tsCreated: '2026-10-02T10:00:00Z',
+                },
+            ],
+            notificationsEnabled: true,
+        });
+
+        render(
+            <NotificationModal
+                open={true}
+                onClose={mockOnClose}
+                siteID={mockSiteID}
+                siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID={mockUserID}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.queryByTestId('android-browser-banner')).not.toBeInTheDocument();
+        });
+    });
+
+    it('shows Install RateRudder button in Android banner when install prompt is available', async () => {
+        vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Linux; Android 14; Pixel 8)');
+        window.matchMedia = vi.fn().mockReturnValue({ matches: false });
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
+            subscriptions: [],
+            notificationsEnabled: true,
+        });
+
+        const promptMock = vi.fn().mockResolvedValue(undefined);
+        const fakePrompt = {
+            preventDefault: vi.fn(),
+            prompt: promptMock,
+            userChoice: Promise.resolve({ outcome: 'accepted', platform: 'android' }),
+        } as any;
+        setDeferredInstallPrompt(fakePrompt);
+
+        const { unmount } = render(
+            <NotificationModal
+                open={true}
+                onClose={mockOnClose}
+                siteID={mockSiteID}
+                siteName={mockSiteName}
+                settings={{} as any}
+                currentUserID={mockUserID}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId('install-app-btn')).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /Install RateRudder/i })).toBeInTheDocument();
+        });
+
+        await act(async () => {
+            fireEvent.click(screen.getByTestId('install-app-btn'));
+        });
+        expect(promptMock).toHaveBeenCalled();
+
+        unmount();
+        setDeferredInstallPrompt(null);
+    });
+
+    it('displays RateRudder App (Android) when device is installed WebAPK', async () => {
+        vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Linux; Android 14; Pixel 8)');
+        window.matchMedia = vi.fn().mockImplementation((query) => ({
+            matches: query === '(display-mode: standalone)',
+        }));
+
+        const webapkEndpoint = 'https://fcm.googleapis.com/fcm/send/webapk-sub';
+        const browserEndpoint = 'https://fcm.googleapis.com/fcm/send/browser-sub';
+
+        (navigator.serviceWorker.ready as any) = Promise.resolve({
+            pushManager: {
+                getSubscription: vi.fn().mockResolvedValue({
+                    endpoint: webapkEndpoint,
+                    unsubscribe: vi.fn(),
+                }),
+            },
+        });
+
+        (api.fetchNotificationSubscriptions as any).mockResolvedValue({
+            subscriptions: [
+                {
+                    endpoint: webapkEndpoint,
+                    userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+                    appType: 'webapk',
+                    tsCreated: '2026-10-02T10:00:00Z',
+                },
+                {
+                    endpoint: browserEndpoint,
+                    userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/120.0.0.0 Mobile',
+                    tsCreated: '2026-10-01T10:00:00Z',
+                },
+            ],
+            notificationsEnabled: true,
+        });
+
+        const mockSettings = {
+            notifications: {
+                [mockUserID]: {},
+            },
+        } as any;
+
+        render(
+            <NotificationModal
+                open={true}
+                onClose={mockOnClose}
+                siteID={mockSiteID}
+                siteName={mockSiteName}
+                settings={mockSettings}
+                currentUserID={mockUserID}
+            />
+        );
+
+        await waitFor(() => {
+            const deviceNames = screen.getAllByText(/Android/);
+            expect(deviceNames.some((el) => el.textContent === 'RateRudder App (Android)')).toBe(true);
+            expect(deviceNames.some((el) => el.textContent === 'Chrome on Android')).toBe(true);
+        });
+    });
 });
+

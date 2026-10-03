@@ -332,8 +332,16 @@ type PushSubscription struct {
 	Endpoint  string               `json:"endpoint"`
 	Keys      PushSubscriptionKeys `json:"keys"`
 	UserAgent string               `json:"userAgent,omitempty"`
+	AppType   string               `json:"appType,omitempty"`
 	TSCreated time.Time            `json:"tsCreated"`
 }
+
+// AppType values for PushSubscription indicating application container type.
+const (
+	PushSubscriptionAppTypeWebAPK     = "webapk"
+	PushSubscriptionAppTypeStandalone = "standalone"
+	PushSubscriptionAppTypeBrowser    = "browser"
+)
 
 // Notification types sent by the push notification system.
 const (

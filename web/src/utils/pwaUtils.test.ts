@@ -6,6 +6,13 @@ import {
     hasServiceWorkerSupport,
     hasPushManagerSupport,
     isPushSupportedInBrowser,
+    isStandalone,
+    isAndroidDevice,
+    isAndroidBrowserTab,
+    getDeferredInstallPrompt,
+    setDeferredInstallPrompt,
+    promptInstallApp,
+    subscribeInstallPrompt,
 } from './pwaUtils';
 
 describe('pwaUtils', () => {
@@ -151,4 +158,141 @@ describe('pwaUtils', () => {
             expect(isPushSupportedInBrowser()).toBe(false);
         });
     });
+
+    describe('isStandalone', () => {
+        it('returns true when display-mode matches standalone', () => {
+            window.matchMedia = vi.fn().mockImplementation((query) => ({
+                matches: query === '(display-mode: standalone)',
+                media: query,
+                onchange: null,
+                addListener: vi.fn(),
+                removeListener: vi.fn(),
+                addEventListener: vi.fn(),
+                removeEventListener: vi.fn(),
+                dispatchEvent: vi.fn(),
+            }));
+            expect(isStandalone()).toBe(true);
+        });
+
+        it('returns true when navigator.standalone is true', () => {
+            window.matchMedia = vi.fn().mockReturnValue({ matches: false });
+            (window.navigator as any).standalone = true;
+            expect(isStandalone()).toBe(true);
+            delete (window.navigator as any).standalone;
+        });
+
+        it('returns false when not standalone', () => {
+            window.matchMedia = vi.fn().mockReturnValue({ matches: false });
+            expect(isStandalone()).toBe(false);
+        });
+    });
+
+    describe('isAndroidDevice', () => {
+        it('returns true for Android userAgent', () => {
+            vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Linux; Android 14; Pixel 8)');
+            expect(isAndroidDevice()).toBe(true);
+        });
+
+        it('returns false for iOS and desktop', () => {
+            vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)');
+            expect(isAndroidDevice()).toBe(false);
+
+            vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
+            expect(isAndroidDevice()).toBe(false);
+        });
+    });
+
+    describe('isAndroidBrowserTab', () => {
+        it('returns true when Android device and not standalone', () => {
+            vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Linux; Android 14; Pixel 8)');
+            window.matchMedia = vi.fn().mockReturnValue({ matches: false });
+            expect(isAndroidBrowserTab()).toBe(true);
+        });
+
+        it('returns false when Android device in standalone mode', () => {
+            vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Linux; Android 14; Pixel 8)');
+            window.matchMedia = vi.fn().mockImplementation((query) => ({
+                matches: query === '(display-mode: standalone)',
+            }));
+            expect(isAndroidBrowserTab()).toBe(false);
+        });
+
+        it('returns false when not an Android device', () => {
+            vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)');
+            window.matchMedia = vi.fn().mockReturnValue({ matches: false });
+            expect(isAndroidBrowserTab()).toBe(false);
+        });
+    });
+
+    describe('manifest.json', () => {
+        it('contains valid PWA shortcuts for Dashboard and Forecast', async () => {
+            const manifest = (await import('../../public/manifest.json')).default;
+
+            expect(manifest.name).toBe('RateRudder');
+            expect(manifest.display).toBe('standalone');
+            expect(Array.isArray(manifest.shortcuts)).toBe(true);
+
+            const shortcuts = manifest.shortcuts;
+            expect(shortcuts).toHaveLength(2);
+
+            const dashboard = shortcuts.find((s: any) => s.name === 'Dashboard');
+            expect(dashboard).toBeDefined();
+            expect(dashboard?.url).toBe('/dashboard');
+            expect((dashboard as any)?.icons).toBeUndefined();
+
+            const forecast = shortcuts.find((s: any) => s.name === 'Forecast');
+            expect(forecast).toBeDefined();
+            expect(forecast?.url).toBe('/forecast');
+            expect((forecast as any)?.icons).toBeUndefined();
+
+            // Also check that maskable icons are specified
+            const maskable = manifest.icons.filter((icon: any) => icon.purpose === 'maskable');
+            expect(maskable.length).toBeGreaterThan(0);
+        });
+    });
+
+    describe('installPrompt helpers', () => {
+        it('tracks deferred install prompt and triggers promptInstallApp', async () => {
+            const promptMock = vi.fn().mockResolvedValue(undefined);
+            const fakeEvent = {
+                preventDefault: vi.fn(),
+                prompt: promptMock,
+                userChoice: Promise.resolve({ outcome: 'accepted', platform: 'android' }),
+            } as any;
+
+            let notified: any = null;
+            const unsubscribe = subscribeInstallPrompt((p) => {
+                notified = p;
+            });
+
+            setDeferredInstallPrompt(fakeEvent);
+            expect(getDeferredInstallPrompt()).toBe(fakeEvent);
+            expect(notified).toBe(fakeEvent);
+
+            const accepted = await promptInstallApp();
+            expect(accepted).toBe(true);
+            expect(promptMock).toHaveBeenCalled();
+            expect(getDeferredInstallPrompt()).toBeNull();
+
+            unsubscribe();
+        });
+
+        it('returns false when prompt is dismissed or not set', async () => {
+            setDeferredInstallPrompt(null);
+            expect(await promptInstallApp()).toBe(false);
+
+            const promptMock = vi.fn().mockResolvedValue(undefined);
+            const dismissEvent = {
+                prompt: promptMock,
+                userChoice: Promise.resolve({ outcome: 'dismissed', platform: 'android' }),
+            } as any;
+
+            setDeferredInstallPrompt(dismissEvent);
+            const accepted = await promptInstallApp();
+            expect(accepted).toBe(false);
+            setDeferredInstallPrompt(null);
+        });
+    });
 });
+
+

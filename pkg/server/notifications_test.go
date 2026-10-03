@@ -295,6 +295,36 @@ func TestEncryptWebPushPayload(t *testing.T) {
 	})
 }
 
+func TestWebPushTopic(t *testing.T) {
+	t.Run("EmptyTag", func(t *testing.T) {
+		assert.Equal(t, "", webPushTopic(""))
+	})
+
+	t.Run("ShortCompliantTag", func(t *testing.T) {
+		tag := "raterudder-home"
+		assert.Equal(t, "raterudder-home", webPushTopic(tag))
+	})
+
+	t.Run("SpecialCharactersStripped", func(t *testing.T) {
+		tag := "raterudder@site#1!"
+		assert.Equal(t, "rateruddersite1", webPushTopic(tag))
+	})
+
+	t.Run("LongTagHashedToAtMost32Chars", func(t *testing.T) {
+		longTag := "raterudder-very-long-site-id-12345-price-spike-alert"
+		topic := webPushTopic(longTag)
+		assert.NotEmpty(t, topic)
+		assert.LessOrEqual(t, len(topic), 32)
+		// Deterministic
+		assert.Equal(t, topic, webPushTopic(longTag))
+		// Base64URL character compliance check
+		for _, r := range topic {
+			valid := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-'
+			assert.True(t, valid, "Topic contains invalid character: %c", r)
+		}
+	})
+}
+
 func createTestEndpointsServer(t *testing.T, mockS *storagemock.MockDatabase) (*Server, http.Handler, string, string) {
 	t.Helper()
 	privB64, pubB64 := generateTestVAPIDKeys(t)
@@ -4877,6 +4907,31 @@ func TestNotificationTag(t *testing.T) {
 	t.Run("DefaultFallback", func(t *testing.T) {
 		tag := notificationTag("unknown_type", siteID)
 		assert.Equal(t, "raterudder-site123", tag)
+	})
+}
+
+func TestPushPayloadIcon(t *testing.T) {
+	t.Run("WebAPKAppType", func(t *testing.T) {
+		sub := types.PushSubscription{
+			AppType:   types.PushSubscriptionAppTypeWebAPK,
+			UserAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+		}
+		icon := pushPayloadIcon(sub)
+		assert.Equal(t, "/transparent_192.png", icon)
+	})
+
+	t.Run("BrowserTab", func(t *testing.T) {
+		sub := types.PushSubscription{
+			AppType:   types.PushSubscriptionAppTypeBrowser,
+			UserAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+		}
+		icon := pushPayloadIcon(sub)
+		assert.Equal(t, "/logo_192.png", icon)
+	})
+
+	t.Run("EmptySubscription", func(t *testing.T) {
+		icon := pushPayloadIcon(types.PushSubscription{})
+		assert.Equal(t, "/logo_192.png", icon)
 	})
 }
 

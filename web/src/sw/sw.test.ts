@@ -150,6 +150,44 @@ describe('Service Worker', () => {
       expect(options.tag).toBeUndefined();
       expect(options.renotify).toBeUndefined();
     });
+
+    it('omits icon when payload.icon is explicitly an empty string', () => {
+      const rawPayload = {
+        title: 'RateRudder Alert',
+        body: 'Alert body',
+        icon: '',
+      };
+
+      const mockData: PushMessageData = {
+        json: () => rawPayload,
+        text: () => JSON.stringify(rawPayload),
+        arrayBuffer: () => new ArrayBuffer(0),
+        blob: () => new Blob(),
+      };
+
+      const { options } = parsePushPayload(mockData);
+
+      expect(options.icon).toBeUndefined();
+    });
+
+    it('sets icon when payload.icon is /transparent_192.png', () => {
+      const rawPayload = {
+        title: 'RateRudder Alert',
+        body: 'Alert body',
+        icon: '/transparent_192.png',
+      };
+
+      const mockData: PushMessageData = {
+        json: () => rawPayload,
+        text: () => JSON.stringify(rawPayload),
+        arrayBuffer: () => new ArrayBuffer(0),
+        blob: () => new Blob(),
+      };
+
+      const { options } = parsePushPayload(mockData);
+
+      expect(options.icon).toBe('/transparent_192.png');
+    });
   });
 
   describe('reportNotificationError', () => {
