@@ -4106,6 +4106,54 @@ func TestSearchOptimalPlan(t *testing.T) {
 				"Step 1 must not re-enter ChargeAny after step 0 exited ChargeAny from lastAction in the same flat price block")
 		}
 	})
+
+	t.Run("RefinesOverchargedEpisode_ClampsTargetSOCAndConvertsSamePriceLoadToStandby", func(t *testing.T) {
+		t.Parallel()
+
+		start := time.Date(2026, 10, 2, 21, 0, 0, 0, time.UTC)
+		timeline := []planInterval{
+			{index: 0, startTime: start, endTime: start.Add(time.Hour), durationHours: 1.0, importRate: 0.055, loadKWH: 0.0, minSOC: 20},
+			{index: 1, startTime: start.Add(time.Hour), endTime: start.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.055, loadKWH: 2.0, minSOC: 20},
+			{index: 2, startTime: start.Add(2 * time.Hour), endTime: start.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.35, loadKWH: 3.0, minSOC: 20},
+		}
+
+		sett := types.Settings{
+			MinBatterySOC:       20.0,
+			GridChargeBatteries: true,
+		}
+
+		// Initial state: 15 kWh battery starting at 40% SOC (6.0 kWh)
+		s0 := planState{time: start, energyKWH: 6.0, soc: 40.0, capacityKWH: 15.0, maxChargeKW: 8.0, maxDischargeKW: 8.0}
+		a0 := actionCandidate{batteryMode: types.BatteryModeChargeAny, reason: types.ActionReasonDeficitChargeNow, targetSOC: 0}
+		s1, m0 := stepPhysics(s0, a0, timeline[0], sett, 0.90)
+
+		a1 := actionCandidate{batteryMode: types.BatteryModeLoad, reason: types.ActionReasonSufficientBattery, targetSOC: 0}
+		s2, m1 := stepPhysics(s1, a1, timeline[1], sett, 0.90)
+
+		a2 := actionCandidate{batteryMode: types.BatteryModeLoad, reason: types.ActionReasonDischargeAtPeak, targetSOC: 0}
+		s3, m2 := stepPhysics(s2, a2, timeline[2], sett, 0.90)
+
+		p := &planPath{
+			actions:   []actionCandidate{a0, a1, a2},
+			states:    []planState{s0, s1, s2, s3},
+			metrics:   []intervalMetrics{m0, m1, m2},
+			timeline:  timeline,
+			totalCost: m0.costDollars + m1.costDollars + m2.costDollars,
+			bestScore: m0.costDollars + m1.costDollars + m2.costDollars,
+		}
+
+		originalCost := p.totalCost
+		refinedPath, adjusted := p.refineOverchargedEpisodes(ctx, sett, 0.90)
+		require.True(t, adjusted, "Overcharged episode must be refined")
+		assert.Equal(t, 77, refinedPath.actions[0].targetSOC, "Target SOC must be clamped to exit SOC (~76.5% rounded to 77%)")
+		assert.Equal(t, types.BatteryModeStandby, refinedPath.actions[1].batteryMode, "Same-rate discharge interval must be converted to Standby")
+		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, refinedPath.actions[1].reason)
+		assert.Equal(t, 0, refinedPath.actions[1].targetSOC)
+		assert.InDelta(t, 77.0, refinedPath.states[1].soc, 0.5, "Ending SOC of charge interval must reflect clamped targetSOC")
+		assert.InDelta(t, 77.0, refinedPath.states[2].soc, 0.5, "Standby interval must maintain SOC")
+		assert.Greater(t, originalCost, refinedPath.totalCost, "Refined plan must save money by avoiding round-trip conversion loss")
+		assert.Equal(t, 0, p.actions[0].targetSOC, "Original plan must remain unmutated")
+	})
 }
 
 // TestFinalizeDecisionAndPlan tests the synthesis of Decision and types.Plan from a winning path.
@@ -6151,4 +6199,370 @@ func BenchmarkPlan_FullScenario(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+func buildSyntheticPlanPath(timeline []planInterval, initial planState, actions []actionCandidate, settings types.Settings, eff float64) *planPath {
+	n := len(timeline)
+	states := make([]planState, n+1)
+	metrics := make([]intervalMetrics, n)
+	states[0] = initial
+	var totalCost float64
+	for i := 0; i < n; i++ {
+		st, m := stepPhysics(states[i], actions[i], timeline[i], settings, eff)
+		metrics[i] = m
+		states[i+1] = st
+		totalCost += m.costDollars
+	}
+	return &planPath{
+		actions:   actions,
+		states:    states,
+		metrics:   metrics,
+		timeline:  timeline,
+		totalCost: totalCost,
+		bestScore: totalCost,
+	}
+}
+
+func TestDetermineRefinedStandbyReason(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 10, 2, 21, 0, 0, 0, time.UTC)
+	timeline := []planInterval{
+		{index: 0, startTime: now, endTime: now.Add(time.Hour), importRate: 0.05},
+		{index: 1, startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), importRate: 0.05},
+		{index: 2, startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), importRate: 0.35},
+	}
+
+	t.Run("ChargeReasonVPPPrep_AlwaysPreservesVPPReason", func(t *testing.T) {
+		t.Parallel()
+		reason, desc := determineRefinedStandbyReason(types.ActionReasonVPPPrep, timeline[0], timeline, 0)
+		assert.Equal(t, types.ActionReasonVPPPrep, reason)
+		assert.Equal(t, "Preserving battery in standby ahead of VPP event.", desc)
+	})
+
+	t.Run("UpcomingPeakRate_ReturnsDeficitSaveForPeak", func(t *testing.T) {
+		t.Parallel()
+		reason, desc := determineRefinedStandbyReason(types.ActionReasonDeficitChargeNow, timeline[0], timeline, 0)
+		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, reason)
+		assert.Equal(t, "Preserving battery in standby for upcoming peak rates.", desc)
+	})
+
+	t.Run("FlatOrDecreasingRate_ReturnsHoldSimilarPrice", func(t *testing.T) {
+		t.Parallel()
+		flatTimeline := []planInterval{
+			{index: 0, startTime: now, endTime: now.Add(time.Hour), importRate: 0.10},
+			{index: 1, startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), importRate: 0.10},
+			{index: 2, startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), importRate: 0.08},
+		}
+		reason, desc := determineRefinedStandbyReason(types.ActionReasonDeficitChargeNow, flatTimeline[0], flatTimeline, 0)
+		assert.Equal(t, types.ActionReasonHoldSimilarPrice, reason)
+		assert.Equal(t, "Preserving battery in standby.", desc)
+	})
+
+	t.Run("ImmaterialRateIncrease_ReturnsHoldSimilarPrice", func(t *testing.T) {
+		t.Parallel()
+		immaterialTimeline := []planInterval{
+			{index: 0, startTime: now, endTime: now.Add(time.Hour), importRate: 0.100},
+			{index: 1, startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), importRate: 0.102},
+		}
+		reason, desc := determineRefinedStandbyReason(types.ActionReasonDeficitChargeNow, immaterialTimeline[0], immaterialTimeline, 0)
+		assert.Equal(t, types.ActionReasonHoldSimilarPrice, reason)
+		assert.Equal(t, "Preserving battery in standby.", desc)
+	})
+
+	t.Run("LastIntervalInHorizon_ReturnsHoldSimilarPrice", func(t *testing.T) {
+		t.Parallel()
+		reason, desc := determineRefinedStandbyReason(types.ActionReasonDeficitChargeNow, timeline[2], timeline, 2)
+		assert.Equal(t, types.ActionReasonHoldSimilarPrice, reason)
+		assert.Equal(t, "Preserving battery in standby.", desc)
+	})
+}
+
+func TestRefineOverchargedEpisodes(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	start := time.Date(2026, 10, 2, 21, 0, 0, 0, time.UTC)
+
+	t.Run("NoVPP_OverchargedDiscretionaryPrecharge_ClampsAndConvertsToStandby", func(t *testing.T) {
+		t.Parallel()
+		timeline := []planInterval{
+			{index: 0, startTime: start, endTime: start.Add(time.Hour), durationHours: 1.0, importRate: 0.055, loadKWH: 0.0, minSOC: 20},
+			{index: 1, startTime: start.Add(time.Hour), endTime: start.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.055, loadKWH: 2.0, minSOC: 20},
+			{index: 2, startTime: start.Add(2 * time.Hour), endTime: start.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.35, loadKWH: 3.0, minSOC: 20},
+		}
+		sett := types.Settings{MinBatterySOC: 20, GridChargeBatteries: true}
+		initSt := planState{time: start, energyKWH: 6.0, soc: 40.0, capacityKWH: 15.0, maxChargeKW: 8.0, maxDischargeKW: 8.0}
+		acts := []actionCandidate{
+			{batteryMode: types.BatteryModeChargeAny, reason: types.ActionReasonDeficitChargeNow, targetSOC: 0},
+			{batteryMode: types.BatteryModeLoad, reason: types.ActionReasonSufficientBattery, targetSOC: 0},
+			{batteryMode: types.BatteryModeLoad, reason: types.ActionReasonDischargeAtPeak, targetSOC: 0},
+		}
+		p := buildSyntheticPlanPath(timeline, initSt, acts, sett, 0.90)
+		origCost := p.totalCost
+
+		refinedPath, adjusted := p.refineOverchargedEpisodes(ctx, sett, 0.90)
+		require.True(t, adjusted)
+		assert.NotSame(t, p, refinedPath)
+		assert.Equal(t, 77, refinedPath.actions[0].targetSOC)
+		assert.Equal(t, types.BatteryModeStandby, refinedPath.actions[1].batteryMode)
+		assert.Equal(t, types.ActionReasonDeficitSaveForPeak, refinedPath.actions[1].reason)
+		assert.InDelta(t, 77.0, refinedPath.states[1].soc, 0.5)
+		assert.InDelta(t, 77.0, refinedPath.states[2].soc, 0.5)
+		assert.Greater(t, origCost, refinedPath.totalCost)
+		assert.Equal(t, 0, p.actions[0].targetSOC, "Original plan must remain unmutated")
+		assert.Equal(t, types.BatteryModeLoad, p.actions[1].batteryMode, "Original plan must remain unmutated")
+	})
+
+	t.Run("VPP_DiscretionaryPrechargeAheadOfVPP_ClampsAndPreservesVPPReason", func(t *testing.T) {
+		t.Parallel()
+		timeline := []planInterval{
+			{index: 0, startTime: start, endTime: start.Add(time.Hour), durationHours: 1.0, importRate: 0.055, loadKWH: 0.0, minSOC: 20},
+			{index: 1, startTime: start.Add(time.Hour), endTime: start.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.055, loadKWH: 2.0, minSOC: 20},
+			{index: 2, startTime: start.Add(2 * time.Hour), endTime: start.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.10, solarKWH: 6.0, loadKWH: 1.0, minSOC: 20},
+			{index: 3, startTime: start.Add(3 * time.Hour), endTime: start.Add(5 * time.Hour), durationHours: 2.0, importRate: 0.50, exportRate: 2.00, loadKWH: 2.0, minSOC: 20},
+		}
+		sett := types.Settings{MinBatterySOC: 20, GridChargeBatteries: true}
+		initSt := planState{time: start, energyKWH: 6.0, soc: 40.0, capacityKWH: 15.0, maxChargeKW: 8.0, maxDischargeKW: 8.0}
+		acts := []actionCandidate{
+			{batteryMode: types.BatteryModeChargeAny, reason: types.ActionReasonVPPPrep, description: "VPP Pre-charging before deadline.", targetSOC: 0},
+			{batteryMode: types.BatteryModeLoad, reason: types.ActionReasonSufficientBattery, targetSOC: 0},
+			{batteryMode: types.BatteryModeStandby, solarMode: types.SolarModeAny, reason: types.ActionReasonVPPPrep, targetSOC: 0},
+			{batteryMode: types.BatteryModeExport, reason: types.ActionReasonVPPActive, targetSOC: 20},
+		}
+		p := buildSyntheticPlanPath(timeline, initSt, acts, sett, 0.90)
+
+		refinedPath, adjusted := p.refineOverchargedEpisodes(ctx, sett, 0.90)
+		require.True(t, adjusted)
+		assert.NotSame(t, p, refinedPath)
+		assert.Equal(t, 77, refinedPath.actions[0].targetSOC)
+		assert.Equal(t, types.BatteryModeStandby, refinedPath.actions[1].batteryMode)
+		assert.Equal(t, types.ActionReasonVPPPrep, refinedPath.actions[1].reason)
+		assert.Equal(t, "Preserving battery in standby ahead of VPP event.", refinedPath.actions[1].description)
+		assert.Equal(t, 0, p.actions[0].targetSOC, "Original plan must remain unmutated")
+	})
+
+	t.Run("VPP_DeadlineApproaching_EmergencyTopUpNotTrimmed", func(t *testing.T) {
+		t.Parallel()
+		timeline := []planInterval{
+			{index: 0, startTime: start, endTime: start.Add(time.Hour), durationHours: 1.0, importRate: 0.055, minSOC: 20},
+			{index: 1, startTime: start.Add(time.Hour), endTime: start.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.055, minSOC: 20},
+		}
+		sett := types.Settings{MinBatterySOC: 20, GridChargeBatteries: true}
+		initSt := planState{time: start, energyKWH: 6.0, soc: 40.0, capacityKWH: 15.0, maxChargeKW: 8.0, maxDischargeKW: 8.0}
+		acts := []actionCandidate{
+			{batteryMode: types.BatteryModeChargeAny, reason: types.ActionReasonVPPPrep, actionName: PlanActionVPP2HourPrepEmergencyTopUp, targetSOC: 100},
+			{batteryMode: types.BatteryModeStandby, reason: types.ActionReasonVPPPrep, actionName: PlanActionVPP2HourPrepStandbyLock, targetSOC: 100},
+		}
+		p := buildSyntheticPlanPath(timeline, initSt, acts, sett, 0.90)
+
+		refinedPath, adjusted := p.refineOverchargedEpisodes(ctx, sett, 0.90)
+		assert.False(t, adjusted, "Must not modify emergency top-up in the immediate T-2h firmware window")
+		assert.Same(t, p, refinedPath)
+		assert.Equal(t, 100, p.actions[0].targetSOC)
+	})
+
+	t.Run("ChangingReserveSOC_ReserveStepUp_RespectsElevatedReserveAndProfileBuffer", func(t *testing.T) {
+		t.Parallel()
+		timeline := []planInterval{
+			{index: 0, startTime: start, endTime: start.Add(time.Hour), durationHours: 1.0, importRate: 0.055, loadKWH: 0.0, minSOC: 20},
+			{index: 1, startTime: start.Add(time.Hour), endTime: start.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.055, loadKWH: 2.0, minSOC: 50},
+			{index: 2, startTime: start.Add(2 * time.Hour), endTime: start.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.35, loadKWH: 3.0, minSOC: 50},
+		}
+		sett := types.Settings{
+			MinBatterySOC:       20,
+			OptimizationProfile: "conservative",
+			SOCBufferPercent:    10.0,
+			GridChargeBatteries: true,
+		}
+		initSt := planState{time: start, energyKWH: 6.0, soc: 40.0, capacityKWH: 15.0, maxChargeKW: 8.0, maxDischargeKW: 8.0}
+		acts := []actionCandidate{
+			{batteryMode: types.BatteryModeChargeAny, reason: types.ActionReasonDeficitChargeNow, targetSOC: 0},
+			{batteryMode: types.BatteryModeLoad, reason: types.ActionReasonSufficientBattery, targetSOC: 0},
+			{batteryMode: types.BatteryModeLoad, reason: types.ActionReasonDischargeAtPeak, targetSOC: 0},
+		}
+		p := buildSyntheticPlanPath(timeline, initSt, acts, sett, 0.85)
+
+		refinedPath, adjusted := p.refineOverchargedEpisodes(ctx, sett, 0.85)
+		require.True(t, adjusted)
+		assert.NotSame(t, p, refinedPath)
+		assert.GreaterOrEqual(t, refinedPath.actions[0].targetSOC, 60, "Must respect conservative profile buffer on reserve step-up")
+		assert.Equal(t, types.BatteryModeStandby, refinedPath.actions[1].batteryMode)
+		assert.Equal(t, 0, p.actions[0].targetSOC, "Original plan must remain unmutated")
+	})
+
+	t.Run("ChangingReserveSOC_LoweringReserveSOC_AllowsLowerClamp", func(t *testing.T) {
+		t.Parallel()
+		timeline := []planInterval{
+			{index: 0, startTime: start, endTime: start.Add(time.Hour), durationHours: 1.0, importRate: 0.055, loadKWH: 0.0, minSOC: 20},
+			{index: 1, startTime: start.Add(time.Hour), endTime: start.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.055, loadKWH: 5.0, minSOC: 20},
+			{index: 2, startTime: start.Add(2 * time.Hour), endTime: start.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.35, loadKWH: 3.0, minSOC: 20},
+		}
+		sett := types.Settings{MinBatterySOC: 20, GridChargeBatteries: true}
+		initSt := planState{time: start, energyKWH: 4.5, soc: 30.0, capacityKWH: 15.0, maxChargeKW: 8.0, maxDischargeKW: 8.0}
+		acts := []actionCandidate{
+			{batteryMode: types.BatteryModeChargeAny, reason: types.ActionReasonDeficitChargeNow, targetSOC: 0},
+			{batteryMode: types.BatteryModeLoad, reason: types.ActionReasonSufficientBattery, targetSOC: 0},
+			{batteryMode: types.BatteryModeLoad, reason: types.ActionReasonDischargeAtPeak, targetSOC: 0},
+		}
+		p := buildSyntheticPlanPath(timeline, initSt, acts, sett, 0.90)
+
+		refinedPath, adjusted := p.refineOverchargedEpisodes(ctx, sett, 0.90)
+		require.True(t, adjusted)
+		assert.NotSame(t, p, refinedPath)
+		assert.Equal(t, int(math.Ceil(refinedPath.states[2].soc)), refinedPath.actions[0].targetSOC)
+		assert.Equal(t, types.BatteryModeStandby, refinedPath.actions[1].batteryMode)
+		assert.Equal(t, 0, p.actions[0].targetSOC, "Original plan must remain unmutated")
+	})
+
+	t.Run("SolarHittingCapacity_AvoidsOverflowAndSavesRoundTripLoss", func(t *testing.T) {
+		t.Parallel()
+		timeline := []planInterval{
+			{index: 0, startTime: start, endTime: start.Add(time.Hour), durationHours: 1.0, importRate: 0.055, loadKWH: 0.0, minSOC: 20},
+			{index: 1, startTime: start.Add(time.Hour), endTime: start.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.055, loadKWH: 2.0, minSOC: 20},
+			{index: 2, startTime: start.Add(2 * time.Hour), endTime: start.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.10, solarKWH: 8.0, loadKWH: 0.5, minSOC: 20},
+			{index: 3, startTime: start.Add(3 * time.Hour), endTime: start.Add(4 * time.Hour), durationHours: 1.0, importRate: 0.40, loadKWH: 8.0, minSOC: 20},
+		}
+		sett := types.Settings{MinBatterySOC: 20, GridChargeBatteries: true}
+		initSt := planState{time: start, energyKWH: 6.0, soc: 40.0, capacityKWH: 15.0, maxChargeKW: 8.0, maxDischargeKW: 8.0}
+		acts := []actionCandidate{
+			{batteryMode: types.BatteryModeChargeAny, reason: types.ActionReasonDeficitChargeNow, targetSOC: 0},
+			{batteryMode: types.BatteryModeLoad, reason: types.ActionReasonSufficientBattery, targetSOC: 0},
+			{batteryMode: types.BatteryModeStandby, solarMode: types.SolarModeAny, reason: types.ActionReasonDeficitSaveForPeak, targetSOC: 0},
+			{batteryMode: types.BatteryModeLoad, reason: types.ActionReasonDischargeAtPeak, targetSOC: 0},
+		}
+		p := buildSyntheticPlanPath(timeline, initSt, acts, sett, 0.90)
+		origCost := p.totalCost
+
+		refinedPath, adjusted := p.refineOverchargedEpisodes(ctx, sett, 0.90)
+		require.True(t, adjusted)
+		assert.NotSame(t, p, refinedPath)
+		assert.Equal(t, 77, refinedPath.actions[0].targetSOC)
+		assert.Equal(t, types.BatteryModeStandby, refinedPath.actions[1].batteryMode)
+		assert.InDelta(t, 100.0, refinedPath.states[3].soc, 0.5)
+		assert.Greater(t, origCost, refinedPath.totalCost)
+		assert.Equal(t, 0, p.actions[0].targetSOC, "Original plan must remain unmutated")
+	})
+
+	t.Run("SolarNotHittingCapacity_NoOverflow_NoDischarge_NoRefinement", func(t *testing.T) {
+		t.Parallel()
+		timeline := []planInterval{
+			{index: 0, startTime: start, endTime: start.Add(time.Hour), durationHours: 1.0, importRate: 0.055, loadKWH: 0.0, minSOC: 20},
+			{index: 1, startTime: start.Add(time.Hour), endTime: start.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.055, loadKWH: 0.0, minSOC: 20},
+			{index: 2, startTime: start.Add(2 * time.Hour), endTime: start.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.10, solarKWH: 1.0, loadKWH: 0.5, minSOC: 20},
+		}
+		sett := types.Settings{MinBatterySOC: 20, GridChargeBatteries: true}
+		initSt := planState{time: start, energyKWH: 6.0, soc: 40.0, capacityKWH: 15.0, maxChargeKW: 8.0, maxDischargeKW: 8.0}
+		acts := []actionCandidate{
+			{batteryMode: types.BatteryModeChargeAny, reason: types.ActionReasonDeficitChargeNow, targetSOC: 0},
+			{batteryMode: types.BatteryModeStandby, reason: types.ActionReasonDeficitSaveForPeak, targetSOC: 0},
+			{batteryMode: types.BatteryModeStandby, solarMode: types.SolarModeAny, reason: types.ActionReasonDeficitSaveForPeak, targetSOC: 0},
+		}
+		p := buildSyntheticPlanPath(timeline, initSt, acts, sett, 0.90)
+
+		refinedPath, adjusted := p.refineOverchargedEpisodes(ctx, sett, 0.90)
+		assert.False(t, adjusted, "No churn occurred; refinement must return false")
+		assert.Same(t, p, refinedPath)
+	})
+
+	t.Run("ChargingBeforePeak_HoldsStandbyDirectly_NoRefinement", func(t *testing.T) {
+		t.Parallel()
+		timeline := []planInterval{
+			{index: 0, startTime: start, endTime: start.Add(time.Hour), durationHours: 1.0, importRate: 0.05, loadKWH: 0.0, minSOC: 20},
+			{index: 1, startTime: start.Add(time.Hour), endTime: start.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.05, loadKWH: 0.0, minSOC: 20},
+			{index: 2, startTime: start.Add(2 * time.Hour), endTime: start.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.45, loadKWH: 4.0, minSOC: 20},
+		}
+		sett := types.Settings{MinBatterySOC: 20, GridChargeBatteries: true}
+		initSt := planState{time: start, energyKWH: 6.0, soc: 40.0, capacityKWH: 15.0, maxChargeKW: 8.0, maxDischargeKW: 8.0}
+		acts := []actionCandidate{
+			{batteryMode: types.BatteryModeChargeAny, reason: types.ActionReasonDeficitChargeNow, targetSOC: 0},
+			{batteryMode: types.BatteryModeStandby, reason: types.ActionReasonDeficitSaveForPeak, targetSOC: 0},
+			{batteryMode: types.BatteryModeLoad, reason: types.ActionReasonDischargeAtPeak, targetSOC: 0},
+		}
+		p := buildSyntheticPlanPath(timeline, initSt, acts, sett, 0.90)
+
+		refinedPath, adjusted := p.refineOverchargedEpisodes(ctx, sett, 0.90)
+		assert.False(t, adjusted, "Battery already held standby directly before peak, no churn")
+		assert.Same(t, p, refinedPath)
+	})
+
+	t.Run("SafetyRollback_RejectsRefinementIfCostIncreases", func(t *testing.T) {
+		t.Parallel()
+		timeline := []planInterval{
+			{index: 0, startTime: start, endTime: start.Add(time.Hour), durationHours: 1.0, importRate: 0.055, loadKWH: 0.0, minSOC: 20},
+			{index: 1, startTime: start.Add(time.Hour), endTime: start.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.055, loadKWH: 2.0, minSOC: 20},
+			{index: 2, startTime: start.Add(2 * time.Hour), endTime: start.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.35, loadKWH: 3.0, minSOC: 20},
+		}
+		sett := types.Settings{MinBatterySOC: 20, GridChargeBatteries: true}
+		initSt := planState{time: start, energyKWH: 6.0, soc: 40.0, capacityKWH: 15.0, maxChargeKW: 8.0, maxDischargeKW: 8.0}
+		acts := []actionCandidate{
+			{batteryMode: types.BatteryModeChargeAny, reason: types.ActionReasonDeficitChargeNow, targetSOC: 0},
+			{batteryMode: types.BatteryModeLoad, reason: types.ActionReasonSufficientBattery, targetSOC: 0},
+			{batteryMode: types.BatteryModeLoad, reason: types.ActionReasonDischargeAtPeak, targetSOC: 0},
+		}
+		p := buildSyntheticPlanPath(timeline, initSt, acts, sett, 0.90)
+		p.totalCost = 0.01
+
+		refinedPath, adjusted := p.refineOverchargedEpisodes(ctx, sett, 0.90)
+		assert.False(t, adjusted, "Must reject refinement when refined cost exceeds original cost")
+		assert.Same(t, p, refinedPath, "Must return original plan pointer without modifications")
+		assert.Equal(t, 0.01, p.totalCost, "Original cost must be preserved")
+		assert.Equal(t, types.BatteryModeLoad, p.actions[1].batteryMode, "Original actions must remain untouched")
+	})
+
+	t.Run("NonZeroTargetSOC_ClampsWhenHigher_AndPreservesLower", func(t *testing.T) {
+		t.Parallel()
+		timeline := []planInterval{
+			{index: 0, startTime: start, endTime: start.Add(time.Hour), durationHours: 1.0, importRate: 0.055, loadKWH: 0.0, minSOC: 20},
+			{index: 1, startTime: start.Add(time.Hour), endTime: start.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.055, loadKWH: 2.0, minSOC: 20},
+			{index: 2, startTime: start.Add(2 * time.Hour), endTime: start.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.35, loadKWH: 3.0, minSOC: 20},
+		}
+		sett := types.Settings{MinBatterySOC: 20, GridChargeBatteries: true}
+		initSt := planState{time: start, energyKWH: 6.0, soc: 40.0, capacityKWH: 15.0, maxChargeKW: 8.0, maxDischargeKW: 8.0}
+		acts := []actionCandidate{
+			{batteryMode: types.BatteryModeChargeAny, reason: types.ActionReasonDeficitChargeNow, targetSOC: 90},
+			{batteryMode: types.BatteryModeLoad, reason: types.ActionReasonSufficientBattery, targetSOC: 0},
+			{batteryMode: types.BatteryModeLoad, reason: types.ActionReasonDischargeAtPeak, targetSOC: 0},
+		}
+		p := buildSyntheticPlanPath(timeline, initSt, acts, sett, 0.90)
+
+		refinedPath, adjusted := p.refineOverchargedEpisodes(ctx, sett, 0.90)
+		require.True(t, adjusted)
+		assert.NotSame(t, p, refinedPath)
+		assert.Equal(t, 76, refinedPath.actions[0].targetSOC, "Higher non-zero targetSOC (90) must be clamped down to 76")
+		assert.Equal(t, 90, p.actions[0].targetSOC, "Original plan targetSOC must remain untouched")
+	})
+
+	t.Run("NegativePricing_NotRefined", func(t *testing.T) {
+		t.Parallel()
+		timeline := []planInterval{
+			{index: 0, startTime: start, endTime: start.Add(time.Hour), durationHours: 1.0, importRate: -0.02, loadKWH: 0.0, minSOC: 20},
+			{index: 1, startTime: start.Add(time.Hour), endTime: start.Add(2 * time.Hour), durationHours: 1.0, importRate: -0.02, loadKWH: 2.0, minSOC: 20},
+			{index: 2, startTime: start.Add(2 * time.Hour), endTime: start.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.10, loadKWH: 3.0, minSOC: 20},
+		}
+		sett := types.Settings{MinBatterySOC: 20, GridChargeBatteries: true}
+		initSt := planState{time: start, energyKWH: 6.0, soc: 40.0, capacityKWH: 15.0, maxChargeKW: 8.0, maxDischargeKW: 8.0}
+		acts := []actionCandidate{
+			{batteryMode: types.BatteryModeChargeAny, reason: types.ActionReasonAlwaysChargeBelowThreshold, actionName: PlanActionNegativeOrForceChargeThresholdCharging, targetSOC: 100},
+			{batteryMode: types.BatteryModeLoad, reason: types.ActionReasonSufficientBattery, targetSOC: 0},
+			{batteryMode: types.BatteryModeLoad, reason: types.ActionReasonDischargeAtPeak, targetSOC: 0},
+		}
+		p := buildSyntheticPlanPath(timeline, initSt, acts, sett, 0.90)
+
+		refinedPath, adjusted := p.refineOverchargedEpisodes(ctx, sett, 0.90)
+		assert.False(t, adjusted, "Negative pricing charging must never be trimmed")
+		assert.Same(t, p, refinedPath)
+	})
+
+	t.Run("NilOrEmptyPath_SafelyReturnsFalse", func(t *testing.T) {
+		t.Parallel()
+		var nilPath *planPath
+		resNil, adjNil := nilPath.refineOverchargedEpisodes(ctx, types.Settings{}, 0.90)
+		assert.False(t, adjNil)
+		assert.Nil(t, resNil)
+
+		emptyPath := &planPath{}
+		resEmpty, adjEmpty := emptyPath.refineOverchargedEpisodes(ctx, types.Settings{}, 0.90)
+		assert.False(t, adjEmpty)
+		assert.Same(t, emptyPath, resEmpty)
+	})
 }
