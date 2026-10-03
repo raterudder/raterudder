@@ -453,3 +453,147 @@ type PlanPeriod struct {
 	GridExportKWH float64      `json:"gridExportKWH,omitempty"`
 	CostDollars   float64      `json:"costDollars,omitempty"`
 }
+
+// StoredPlanPeriod represents a single discrete scheduling period in a StoredPlan,
+// stored with compact 1-2 character JSON tags in Firestore to reduce storage footprint.
+type StoredPlanPeriod struct {
+	TSStart       time.Time    `json:"ts"`
+	TSEnd         time.Time    `json:"te"`
+	DurationHours float64      `json:"d"`
+	ImportDollars float64      `json:"i"`
+	ExportDollars float64      `json:"e,omitempty"`
+	BatteryMode   BatteryMode  `json:"bm"`
+	SolarMode     SolarMode    `json:"sm"`
+	Reason        ActionReason `json:"r"`
+	StartSOC      float64      `json:"ss"`
+	EndSOC        float64      `json:"es"`
+	ReserveSOC    float64      `json:"rs,omitempty"`
+	LoadKWH       float64      `json:"l,omitempty"`
+	SolarKWH      float64      `json:"s,omitempty"`
+	GridImportKWH float64      `json:"gi,omitempty"`
+	GridExportKWH float64      `json:"ge,omitempty"`
+	CostDollars   float64      `json:"c,omitempty"`
+}
+
+// StoredPlan represents a forward-looking optimal schedule over the planning horizon,
+// stored with compact 1-2 character JSON tags in Firestore.
+type StoredPlan struct {
+	TSCreated          time.Time          `json:"ts"`
+	HorizonHours       int                `json:"h"`
+	TotalProjectedCost float64            `json:"tc,omitempty"`
+	TotalExportCredits float64            `json:"te,omitempty"`
+	NetEconomicBenefit float64            `json:"nb,omitempty"`
+	Periods            []StoredPlanPeriod `json:"p"`
+}
+
+// StoredAction wraps Action for Firestore persistence, storing Plan under a compact
+// StoredPlan schema using the "shortPlan" JSON key to optimize storage footprint.
+type StoredAction struct {
+	Action
+	Plan *StoredPlan `json:"shortPlan,omitempty"`
+}
+
+// ToStored converts a PlanPeriod to its compact StoredPlanPeriod representation.
+func (p PlanPeriod) ToStored() StoredPlanPeriod {
+	return StoredPlanPeriod{
+		TSStart:       p.TSStart,
+		TSEnd:         p.TSEnd,
+		DurationHours: p.DurationHours,
+		ImportDollars: p.ImportDollars,
+		ExportDollars: p.ExportDollars,
+		BatteryMode:   p.BatteryMode,
+		SolarMode:     p.SolarMode,
+		Reason:        p.Reason,
+		StartSOC:      p.StartSOC,
+		EndSOC:        p.EndSOC,
+		ReserveSOC:    p.ReserveSOC,
+		LoadKWH:       p.LoadKWH,
+		SolarKWH:      p.SolarKWH,
+		GridImportKWH: p.GridImportKWH,
+		GridExportKWH: p.GridExportKWH,
+		CostDollars:   p.CostDollars,
+	}
+}
+
+// ToPlanPeriod converts a StoredPlanPeriod back to a domain PlanPeriod.
+func (sp StoredPlanPeriod) ToPlanPeriod() PlanPeriod {
+	return PlanPeriod{
+		TSStart:       sp.TSStart,
+		TSEnd:         sp.TSEnd,
+		DurationHours: sp.DurationHours,
+		ImportDollars: sp.ImportDollars,
+		ExportDollars: sp.ExportDollars,
+		BatteryMode:   sp.BatteryMode,
+		SolarMode:     sp.SolarMode,
+		Reason:        sp.Reason,
+		StartSOC:      sp.StartSOC,
+		EndSOC:        sp.EndSOC,
+		ReserveSOC:    sp.ReserveSOC,
+		LoadKWH:       sp.LoadKWH,
+		SolarKWH:      sp.SolarKWH,
+		GridImportKWH: sp.GridImportKWH,
+		GridExportKWH: sp.GridExportKWH,
+		CostDollars:   sp.CostDollars,
+	}
+}
+
+// ToStored converts a Plan to its compact StoredPlan representation. Returns nil if p is nil.
+func (p *Plan) ToStored() *StoredPlan {
+	if p == nil {
+		return nil
+	}
+	sp := &StoredPlan{
+		TSCreated:          p.TSCreated,
+		HorizonHours:       p.HorizonHours,
+		TotalProjectedCost: p.TotalProjectedCost,
+		TotalExportCredits: p.TotalExportCredits,
+		NetEconomicBenefit: p.NetEconomicBenefit,
+		Periods:            make([]StoredPlanPeriod, len(p.Periods)),
+	}
+	for i, per := range p.Periods {
+		sp.Periods[i] = per.ToStored()
+	}
+	return sp
+}
+
+// ToPlan converts a StoredPlan back to a domain Plan. Returns nil if sp is nil.
+func (sp *StoredPlan) ToPlan() *Plan {
+	if sp == nil {
+		return nil
+	}
+	p := &Plan{
+		TSCreated:          sp.TSCreated,
+		HorizonHours:       sp.HorizonHours,
+		TotalProjectedCost: sp.TotalProjectedCost,
+		TotalExportCredits: sp.TotalExportCredits,
+		NetEconomicBenefit: sp.NetEconomicBenefit,
+		Periods:            make([]PlanPeriod, len(sp.Periods)),
+	}
+	for i, per := range sp.Periods {
+		p.Periods[i] = per.ToPlanPeriod()
+	}
+	return p
+}
+
+// ToStored wraps an Action into a StoredAction, clearing the embedded Action.Plan
+// so that json.Marshal only serializes Plan under "shortPlan".
+func (a Action) ToStored() StoredAction {
+	sa := StoredAction{
+		Action: a,
+	}
+	sa.Action.Plan = nil
+	if a.Plan != nil {
+		sa.Plan = a.Plan.ToStored()
+	}
+	return sa
+}
+
+// ToAction extracts the Action from a StoredAction, restoring Plan from
+// shortPlan.
+func (s StoredAction) ToAction() Action {
+	act := s.Action
+	if s.Plan != nil {
+		act.Plan = s.Plan.ToPlan()
+	}
+	return act
+}

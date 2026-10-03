@@ -180,3 +180,135 @@ func TestActionJSONSerialization(t *testing.T) {
 		assert.Len(t, roundTrip.Plan.Periods, 1)
 	})
 }
+
+func TestStoredActionConversion(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	t.Run("BidirectionalConversionWithoutPlan", func(t *testing.T) {
+		t.Parallel()
+
+		act := Action{
+			Timestamp:   now,
+			BatteryMode: BatteryModeStandby,
+			SolarMode:   SolarModeAny,
+			Reason:      ActionReasonSufficientBattery,
+			Description: "Holding battery in standby.",
+		}
+
+		stored := act.ToStored()
+		assert.Nil(t, stored.Plan)
+		assert.Nil(t, stored.Action.Plan)
+
+		data, err := json.Marshal(stored)
+		assert.NoError(t, err)
+		assert.NotContains(t, string(data), `"shortPlan"`)
+		assert.NotContains(t, string(data), `"plan"`)
+
+		var roundTrip StoredAction
+		assert.NoError(t, json.Unmarshal(data, &roundTrip))
+		restored := roundTrip.ToAction()
+		assert.Nil(t, restored.Plan)
+		assert.Equal(t, act.BatteryMode, restored.BatteryMode)
+		assert.Equal(t, act.Reason, restored.Reason)
+	})
+
+	t.Run("BidirectionalConversionWithPlan", func(t *testing.T) {
+		t.Parallel()
+
+		plan := &Plan{
+			TSCreated:          now,
+			HorizonHours:       24,
+			TotalProjectedCost: 3.45,
+			TotalExportCredits: 1.20,
+			NetEconomicBenefit: 2.25,
+			Periods: []PlanPeriod{
+				{
+					TSStart:       now,
+					TSEnd:         now.Add(time.Hour),
+					DurationHours: 1.0,
+					ImportDollars: 0.155,
+					ExportDollars: 0.045,
+					BatteryMode:   BatteryModeLoad,
+					SolarMode:     SolarModeAny,
+					Reason:        ActionReasonDeficitSaveForPeak,
+					StartSOC:      95.5,
+					EndSOC:        90.0,
+					ReserveSOC:    20.0,
+					LoadKWH:       1.5,
+					SolarKWH:      0.8,
+					GridImportKWH: 0.2,
+					GridExportKWH: 0.0,
+					CostDollars:   0.03,
+				},
+			},
+		}
+
+		act := Action{
+			Timestamp:   now,
+			BatteryMode: BatteryModeLoad,
+			SolarMode:   SolarModeAny,
+			Reason:      ActionReasonDeficitSaveForPeak,
+			Description: "Discharging to load.",
+			Plan:        plan,
+		}
+
+		stored := act.ToStored()
+		assert.NotNil(t, stored.Plan)
+		assert.Nil(t, stored.Action.Plan) // embedded Plan cleared so it won't serialize under "plan"
+
+		data, err := json.Marshal(stored)
+		assert.NoError(t, err)
+		jsonStr := string(data)
+
+		// Must contain shortPlan and compact tags
+		assert.Contains(t, jsonStr, `"shortPlan"`)
+		assert.NotContains(t, jsonStr, `"plan":`)
+		assert.Contains(t, jsonStr, `"bm":-1`)
+		assert.Contains(t, jsonStr, `"sm":2`)
+		assert.Contains(t, jsonStr, `"r":"deficitSaveForPeak"`)
+		assert.Contains(t, jsonStr, `"ss":95.5`)
+		assert.Contains(t, jsonStr, `"es":90`)
+		assert.Contains(t, jsonStr, `"rs":20`)
+		assert.Contains(t, jsonStr, `"i":0.155`)
+		assert.Contains(t, jsonStr, `"e":0.045`)
+		assert.Contains(t, jsonStr, `"tc":3.45`)
+		assert.Contains(t, jsonStr, `"te":1.2`)
+		assert.Contains(t, jsonStr, `"nb":2.25`)
+
+		// Unmarshal back to StoredAction
+		var roundTrip StoredAction
+		assert.NoError(t, json.Unmarshal(data, &roundTrip))
+		assert.NotNil(t, roundTrip.Plan)
+
+		restored := roundTrip.ToAction()
+		if assert.NotNil(t, restored.Plan) {
+			assert.Equal(t, act.Plan.TSCreated, restored.Plan.TSCreated)
+			assert.Equal(t, act.Plan.HorizonHours, restored.Plan.HorizonHours)
+			assert.InDelta(t, act.Plan.TotalProjectedCost, restored.Plan.TotalProjectedCost, 0.0001)
+			assert.InDelta(t, act.Plan.TotalExportCredits, restored.Plan.TotalExportCredits, 0.0001)
+			assert.InDelta(t, act.Plan.NetEconomicBenefit, restored.Plan.NetEconomicBenefit, 0.0001)
+			if assert.Len(t, restored.Plan.Periods, 1) {
+				pOrig := act.Plan.Periods[0]
+				pRest := restored.Plan.Periods[0]
+				assert.Equal(t, pOrig.TSStart, pRest.TSStart)
+				assert.Equal(t, pOrig.TSEnd, pRest.TSEnd)
+				assert.InDelta(t, pOrig.DurationHours, pRest.DurationHours, 0.001)
+				assert.InDelta(t, pOrig.ImportDollars, pRest.ImportDollars, 0.0001)
+				assert.InDelta(t, pOrig.ExportDollars, pRest.ExportDollars, 0.0001)
+				assert.Equal(t, pOrig.BatteryMode, pRest.BatteryMode)
+				assert.Equal(t, pOrig.SolarMode, pRest.SolarMode)
+				assert.Equal(t, pOrig.Reason, pRest.Reason)
+				assert.InDelta(t, pOrig.StartSOC, pRest.StartSOC, 0.01)
+				assert.InDelta(t, pOrig.EndSOC, pRest.EndSOC, 0.01)
+				assert.InDelta(t, pOrig.ReserveSOC, pRest.ReserveSOC, 0.01)
+				assert.InDelta(t, pOrig.LoadKWH, pRest.LoadKWH, 0.01)
+				assert.InDelta(t, pOrig.SolarKWH, pRest.SolarKWH, 0.01)
+				assert.InDelta(t, pOrig.GridImportKWH, pRest.GridImportKWH, 0.01)
+				assert.InDelta(t, pOrig.GridExportKWH, pRest.GridExportKWH, 0.01)
+				assert.InDelta(t, pOrig.CostDollars, pRest.CostDollars, 0.01)
+			}
+		}
+	})
+}

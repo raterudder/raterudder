@@ -15,22 +15,6 @@ type MockDatabase struct {
 
 var _ storage.Database = (*MockDatabase)(nil)
 
-func (m *MockDatabase) MigrateLegacyPricing(ctx context.Context, opts storage.PricingMigrationOptions) (*storage.PricingMigrationStats, error) {
-	args := m.Called(ctx, opts)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*storage.PricingMigrationStats), args.Error(1)
-}
-
-func (m *MockDatabase) MigrateActionPlans(ctx context.Context, opts storage.PlanMigrationOptions) (*storage.PlanMigrationStats, error) {
-	args := m.Called(ctx, opts)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*storage.PlanMigrationStats), args.Error(1)
-}
-
 func (m *MockDatabase) GetSettings(ctx context.Context, siteID string) (types.Settings, int, time.Time, error) {
 	args := m.Called(ctx, siteID)
 	if len(args) > 0 {

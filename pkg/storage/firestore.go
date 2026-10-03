@@ -256,7 +256,7 @@ func (f *FirestoreProvider) SetSettings(ctx context.Context, siteID string, sett
 // InsertAction adds a new action record to the "actions" collection as a JSON blob.
 // The document ID is the RFC3339 timestamp for efficient range queries.
 func (f *FirestoreProvider) InsertAction(ctx context.Context, siteID string, action types.Action) error {
-	jsonBytes, err := json.Marshal(action)
+	jsonBytes, err := json.Marshal(action.ToStored())
 	if err != nil {
 		return fmt.Errorf("failed to marshal action: %w", err)
 	}
@@ -315,12 +315,12 @@ func (f *FirestoreProvider) GetActionHistory(ctx context.Context, siteID string,
 			return nil, fmt.Errorf("action document %s 'json' field is not string", doc.Ref.ID)
 		}
 
-		var a types.Action
-		if err := json.Unmarshal([]byte(jsonStr), &a); err != nil {
+		var sa types.StoredAction
+		if err := json.Unmarshal([]byte(jsonStr), &sa); err != nil {
 			log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal action", slog.String("actionID", doc.Ref.ID), slog.String("siteID", siteID), slog.Any("err", err))
 			return nil, fmt.Errorf("failed to unmarshal action (id=%s): %w", doc.Ref.ID, err)
 		}
-		actions = append(actions, a)
+		actions = append(actions, sa.ToAction())
 	}
 	return actions, nil
 }
@@ -356,11 +356,12 @@ func (f *FirestoreProvider) GetLatestAction(ctx context.Context, siteID string) 
 		return nil, fmt.Errorf("action doc %s 'json' field is not string", doc.Ref.ID)
 	}
 
-	var a types.Action
-	if err := json.Unmarshal([]byte(jsonStr), &a); err != nil {
+	var sa types.StoredAction
+	if err := json.Unmarshal([]byte(jsonStr), &sa); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal action: %w", err)
 	}
 
+	a := sa.ToAction()
 	return &a, nil
 }
 
@@ -2859,8 +2860,9 @@ type legacyPlanPeriod struct {
 	SolarMode   types.SolarMode    `json:"solarMode"`
 	Reason      types.ActionReason `json:"reason"`
 
-	StartSOC float64 `json:"startSoc"`
-	EndSOC   float64 `json:"endSoc"`
+	StartSOC   float64 `json:"startSoc"`
+	EndSOC     float64 `json:"endSoc"`
+	ReserveSOC float64 `json:"reserveSOC,omitempty"`
 
 	LoadKWH       float64 `json:"loadKWH,omitempty"`
 	SolarKWH      float64 `json:"solarKWH,omitempty"`
@@ -2883,14 +2885,21 @@ type legacyPlan struct {
 }
 
 // TransformActionPlanJSON converts an action JSON document containing a legacy Plan
-// to the new Plan format (renaming generatedAt->tsCreated, startTime/endTime->tsStart/tsEnd,
-// converting price struct to importDollars/exportDollars, and pruning description, projectedLoadKW,
-// and projectedSolarKW).
+// to the compact StoredPlan format under "shortPlan" (renaming generatedAt->tsCreated,
+// startTime/endTime->tsStart/tsEnd, converting price struct to importDollars/exportDollars,
+// pruning description, projectedLoadKW, and projectedSolarKW, and writing compact 1-2 char JSON keys).
 // It returns the transformed JSON, a boolean indicating if changes were made, bytes saved, and an error.
 func TransformActionPlanJSON(originalJSON []byte) ([]byte, bool, int, error) {
 	var actionMap map[string]json.RawMessage
 	if err := json.Unmarshal(originalJSON, &actionMap); err != nil {
 		return nil, false, 0, fmt.Errorf("failed to unmarshal action json: %w", err)
+	}
+
+	// If shortPlan is already present and legacy plan is absent, it is already migrated.
+	if _, hasShort := actionMap["shortPlan"]; hasShort {
+		if _, hasPlan := actionMap["plan"]; !hasPlan {
+			return originalJSON, false, 0, nil
+		}
 	}
 
 	planRaw, ok := actionMap["plan"]
@@ -2904,21 +2913,6 @@ func TransformActionPlanJSON(originalJSON []byte) ([]byte, bool, int, error) {
 	}
 
 	if len(oldPlan.Periods) == 0 {
-		return originalJSON, false, 0, nil
-	}
-
-	needsMigration := false
-	if !oldPlan.GeneratedAt.IsZero() {
-		needsMigration = true
-	}
-	for _, p := range oldPlan.Periods {
-		if !p.StartTime.IsZero() || !p.EndTime.IsZero() || p.Price != nil || p.Description != "" || p.ProjectedLoadKW != 0 || p.ProjectedSolarKW != 0 {
-			needsMigration = true
-			break
-		}
-	}
-
-	if !needsMigration {
 		return originalJSON, false, 0, nil
 	}
 
@@ -2964,6 +2958,7 @@ func TransformActionPlanJSON(originalJSON []byte) ([]byte, bool, int, error) {
 			Reason:        p.Reason,
 			StartSOC:      p.StartSOC,
 			EndSOC:        p.EndSOC,
+			ReserveSOC:    p.ReserveSOC,
 			LoadKWH:       p.LoadKWH,
 			SolarKWH:      p.SolarKWH,
 			GridImportKWH: p.GridImportKWH,
@@ -2972,23 +2967,26 @@ func TransformActionPlanJSON(originalJSON []byte) ([]byte, bool, int, error) {
 		}
 	}
 
-	newPlanBytes, err := json.Marshal(newPlan)
+	storedPlan := newPlan.ToStored()
+	storedPlanBytes, err := json.Marshal(storedPlan)
 	if err != nil {
-		return nil, false, 0, fmt.Errorf("failed to marshal migrated plan: %w", err)
+		return nil, false, 0, fmt.Errorf("failed to marshal stored plan: %w", err)
 	}
 
-	actionMap["plan"] = newPlanBytes
+	actionMap["shortPlan"] = storedPlanBytes
+	delete(actionMap, "plan")
 	newActionBytes, err := json.Marshal(actionMap)
 	if err != nil {
 		return nil, false, 0, fmt.Errorf("failed to marshal updated action: %w", err)
 	}
 
-	// Validate against types.Action schema
-	var validated types.Action
+	// Validate against types.StoredAction schema
+	var validated types.StoredAction
 	if err := json.Unmarshal(newActionBytes, &validated); err != nil {
 		return nil, false, 0, fmt.Errorf("failed to validate migrated action json: %w", err)
 	}
-	if validated.Plan == nil || len(validated.Plan.Periods) == 0 {
+	restoredAction := validated.ToAction()
+	if restoredAction.Plan == nil || len(restoredAction.Plan.Periods) == 0 {
 		return nil, false, 0, fmt.Errorf("migrated plan or periods is empty")
 	}
 

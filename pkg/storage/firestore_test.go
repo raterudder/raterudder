@@ -293,6 +293,63 @@ func TestFirestoreProvider(t *testing.T) {
 			require.NoError(t, err)
 			require.Nil(t, empty)
 		})
+
+		t.Run("ActionWithPlanStoredFormat", func(t *testing.T) {
+			now := time.Now().Truncate(time.Second).UTC()
+			act := types.Action{
+				Timestamp:   now,
+				BatteryMode: types.BatteryModeLoad,
+				SolarMode:   types.SolarModeAny,
+				Reason:      types.ActionReasonArbitrageHoldExport,
+				Description: "Stored action with plan test",
+				Plan: &types.Plan{
+					TSCreated:          now,
+					HorizonHours:       24,
+					TotalProjectedCost: 2.50,
+					Periods: []types.PlanPeriod{
+						{
+							TSStart:       now,
+							TSEnd:         now.Add(time.Hour),
+							DurationHours: 1.0,
+							ImportDollars: 0.20,
+							ExportDollars: 0.05,
+							BatteryMode:   types.BatteryModeLoad,
+							SolarMode:     types.SolarModeAny,
+							Reason:        types.ActionReasonArbitrageHoldExport,
+							StartSOC:      80.0,
+							EndSOC:        70.0,
+							ReserveSOC:    20.0,
+							LoadKWH:       1.2,
+							SolarKWH:      0.5,
+						},
+					},
+				},
+			}
+			require.NoError(t, f.InsertAction(ctx, "test-site-plan", act))
+
+			// Verify GetLatestAction returns full domain Action with Plan
+			latest, err := f.GetLatestAction(ctx, "test-site-plan")
+			require.NoError(t, err)
+			require.NotNil(t, latest)
+			assert.Equal(t, act.Description, latest.Description)
+			require.NotNil(t, latest.Plan)
+			assert.Equal(t, 24, latest.Plan.HorizonHours)
+			if assert.Len(t, latest.Plan.Periods, 1) {
+				assert.Equal(t, 0.20, latest.Plan.Periods[0].ImportDollars)
+				assert.Equal(t, 20.0, latest.Plan.Periods[0].ReserveSOC)
+			}
+
+			// Verify direct Firestore document stores "shortPlan" and NOT "plan"
+			docRef := f.client.Collection("sites").Doc("test-site-plan").Collection("action_history").Doc(now.UTC().Format(time.RFC3339))
+			snap, err := docRef.Get(ctx)
+			require.NoError(t, err)
+			rawJSON, err := snap.DataAt("json")
+			require.NoError(t, err)
+			rawJSONStr, ok := rawJSON.(string)
+			require.True(t, ok)
+			assert.Contains(t, rawJSONStr, `"shortPlan"`)
+			assert.NotContains(t, rawJSONStr, `"plan":`)
+		})
 	})
 
 	t.Run("EnergyHistory", func(t *testing.T) {
@@ -1735,6 +1792,7 @@ func TestTransformActionPlanJSON(t *testing.T) {
 						"reason": "sufficientBattery",
 						"startSoc": 98.7,
 						"endSoc": 96.9,
+						"reserveSOC": 20.0,
 						"loadKWH": 0.95,
 						"solarKWH": 0.43,
 						"projectedLoadKW": 1.85,
@@ -1755,41 +1813,48 @@ func TestTransformActionPlanJSON(t *testing.T) {
 		var parsed map[string]any
 		require.NoError(t, json.Unmarshal(newJSON, &parsed))
 
-		planMap, ok := parsed["plan"].(map[string]any)
+		// Must have shortPlan and no legacy plan
+		_, hasPlan := parsed["plan"]
+		assert.False(t, hasPlan)
+
+		planMap, ok := parsed["shortPlan"].(map[string]any)
 		require.True(t, ok)
 
-		// generatedAt renamed to tsCreated
-		assert.Equal(t, "2026-10-01T15:29:07Z", planMap["tsCreated"])
-		_, hasGenAt := planMap["generatedAt"]
-		assert.False(t, hasGenAt)
+		// compact keys: ts, h, tc, te, nb, p
+		assert.Equal(t, "2026-10-01T15:29:07Z", planMap["ts"])
+		assert.Equal(t, float64(24), planMap["h"])
+		assert.InDelta(t, 1.25, planMap["tc"], 0.001)
+		assert.InDelta(t, 0.45, planMap["te"], 0.001)
+		assert.InDelta(t, 0.80, planMap["nb"], 0.001)
 
-		periods, ok := planMap["periods"].([]any)
+		periods, ok := planMap["p"].([]any)
 		require.True(t, ok)
 		if assert.Len(t, periods, 1) {
 			p0 := periods[0].(map[string]any)
-			assert.Equal(t, "2026-10-01T15:29:07Z", p0["tsStart"])
-			assert.Equal(t, "2026-10-01T16:00:00Z", p0["tsEnd"])
-			_, hasStart := p0["startTime"]
-			assert.False(t, hasStart)
-			_, hasEnd := p0["endTime"]
-			assert.False(t, hasEnd)
+			// compact period keys: ts, te, d, i, e, bm, sm, r, ss, es, rs, l, s, gi, c
+			assert.Equal(t, "2026-10-01T15:29:07Z", p0["ts"])
+			assert.Equal(t, "2026-10-01T16:00:00Z", p0["te"])
+			assert.InDelta(t, 0.51, p0["d"], 0.01)
+			assert.InDelta(t, 0.147, p0["i"], 0.001)
+			assert.InDelta(t, 0.0305, p0["e"], 0.0001)
+			assert.Equal(t, float64(-1), p0["bm"])
+			assert.Equal(t, float64(2), p0["sm"])
+			assert.Equal(t, "sufficientBattery", p0["r"])
+			assert.InDelta(t, 98.7, p0["ss"], 0.01)
+			assert.InDelta(t, 96.9, p0["es"], 0.01)
+			assert.InDelta(t, 20.0, p0["rs"], 0.01)
 
-			assert.InDelta(t, 0.147, p0["importDollars"], 0.001)
-			assert.InDelta(t, 0.0305, p0["exportDollars"], 0.0001)
-			_, hasPrice := p0["price"]
-			assert.False(t, hasPrice)
-
-			_, hasDesc := p0["description"]
-			assert.False(t, hasDesc)
-			_, hasProjLoad := p0["projectedLoadKW"]
-			assert.False(t, hasProjLoad)
-			_, hasProjSolar := p0["projectedSolarKW"]
-			assert.False(t, hasProjSolar)
+			// ensure removed keys are not present
+			for _, removed := range []string{"startTime", "endTime", "tsStart", "tsEnd", "price", "description", "projectedLoadKW", "projectedSolarKW"} {
+				_, hasKey := p0[removed]
+				assert.False(t, hasKey, "key %s should not exist in compact period", removed)
+			}
 		}
 
-		// Validates clean unmarshal into types.Action
-		var act types.Action
-		require.NoError(t, json.Unmarshal(newJSON, &act))
+		// Validates clean unmarshal into types.StoredAction -> types.Action
+		var sa types.StoredAction
+		require.NoError(t, json.Unmarshal(newJSON, &sa))
+		act := sa.ToAction()
 		assert.Equal(t, types.BatteryModeLoad, act.BatteryMode)
 		require.NotNil(t, act.Plan)
 		assert.False(t, act.Plan.TSCreated.IsZero())
@@ -1798,11 +1863,12 @@ func TestTransformActionPlanJSON(t *testing.T) {
 			assert.False(t, act.Plan.Periods[0].TSEnd.IsZero())
 			assert.InDelta(t, 0.147, act.Plan.Periods[0].ImportDollars, 0.001)
 			assert.InDelta(t, 0.0305, act.Plan.Periods[0].ExportDollars, 0.0001)
+			assert.InDelta(t, 20.0, act.Plan.Periods[0].ReserveSOC, 0.01)
 		}
 	})
 
-	t.Run("IdempotentOnMigratedPlan", func(t *testing.T) {
-		migratedJSON := []byte(`{
+	t.Run("MigratesIntermediatePlan", func(t *testing.T) {
+		intermediateJSON := []byte(`{
 			"timestamp": "2026-10-01T15:29:07Z",
 			"batteryMode": -1,
 			"plan": {
@@ -1820,6 +1886,43 @@ func TestTransformActionPlanJSON(t *testing.T) {
 						"reason": "sufficientBattery",
 						"startSoc": 98.7,
 						"endSoc": 96.9
+					}
+				]
+			}
+		}`)
+
+		newJSON, modified, bytesSaved, err := TransformActionPlanJSON(intermediateJSON)
+		require.NoError(t, err)
+		assert.True(t, modified)
+		assert.Positive(t, bytesSaved)
+
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal(newJSON, &parsed))
+		_, hasPlan := parsed["plan"]
+		assert.False(t, hasPlan)
+		_, hasShort := parsed["shortPlan"]
+		assert.True(t, hasShort)
+	})
+
+	t.Run("IdempotentOnMigratedPlan", func(t *testing.T) {
+		migratedJSON := []byte(`{
+			"timestamp": "2026-10-01T15:29:07Z",
+			"batteryMode": -1,
+			"shortPlan": {
+				"ts": "2026-10-01T15:29:07Z",
+				"h": 24,
+				"p": [
+					{
+						"ts": "2026-10-01T15:29:07Z",
+						"te": "2026-10-01T16:00:00Z",
+						"d": 0.51,
+						"i": 0.147,
+						"e": 0.0305,
+						"bm": -1,
+						"sm": 2,
+						"r": "sufficientBattery",
+						"ss": 98.7,
+						"es": 96.9
 					}
 				]
 			}

@@ -52,9 +52,6 @@ type PlanMigrationStats struct {
 
 // Database defines the interface for persisting data and retrieving settings.
 type Database interface {
-	// Migration
-	MigrateLegacyPricing(ctx context.Context, opts PricingMigrationOptions) (*PricingMigrationStats, error)
-	MigrateActionPlans(ctx context.Context, opts PlanMigrationOptions) (*PlanMigrationStats, error)
 	// Settings
 	GetSettings(ctx context.Context, siteID string) (types.Settings, int, time.Time, error)
 	SetSettings(ctx context.Context, siteID string, settings types.Settings, version int, updatedTime time.Time) (time.Time, error)
