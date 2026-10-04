@@ -13,7 +13,7 @@ import (
 
 // CurrentSettingsVersion is the current version of the settings struct.
 // Increment this value only if you need to set a default value other than the Go default for that value.
-const CurrentSettingsVersion = 17
+const CurrentSettingsVersion = 18
 
 // Settings represents the configuration stored in the database.
 // These are dynamic settings that can be changed without redeploying.
@@ -349,12 +349,41 @@ func MigrateSettings(s Settings, currentVersion int, release string) (Settings, 
 				s.MinBatteryExportDifferenceDollarsPerKWH = 0.07
 				migrated = true
 			}
+		case 18:
+			// version 18: partition updateGroup into TOU (1..12) and ComEd (13..16) pools,
+			// and ensure ineligible sites have updateGroup reset to 0.
+			if !isEligibleForUpdate(s) {
+				if s.UpdateGroup != 0 {
+					s.UpdateGroup = 0
+					migrated = true
+				}
+			} else {
+				if isComEdHourly(s.UtilityProvider, s.UtilityRate) {
+					if s.UpdateGroup < 13 || s.UpdateGroup > 16 {
+						s.UpdateGroup = rand.IntN(4) + 13
+						migrated = true
+					}
+				} else {
+					if s.UpdateGroup < 1 || s.UpdateGroup > 12 {
+						s.UpdateGroup = rand.IntN(12) + 1
+						migrated = true
+					}
+				}
+			}
 		default:
 			return s, false, fmt.Errorf("unknown settings version: %d", version)
 		}
 	}
 
 	return s, migrated, nil
+}
+
+func isComEdHourly(provider, rate string) bool {
+	return provider == "comed" && rate != "comed_bes" && rate != "comed_best"
+}
+
+func isEligibleForUpdate(s Settings) bool {
+	return s.ESS != "" && s.UtilityProvider != "" && len(s.EncryptedCredentials) > 0
 }
 
 // GetMinBatterySOC calculates the active minimum battery reserve SOC (%) for a given time, location, and price.

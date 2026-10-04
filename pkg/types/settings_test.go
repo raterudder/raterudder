@@ -60,6 +60,7 @@ func TestMigrateSettings(t *testing.T) {
 		old := Settings{
 			ESS:                       "franklin",
 			UtilityProvider:           "comed",
+			EncryptedCredentials:      []byte("creds"),
 			MinStartChargeMinutes:     5,
 			PeakSurvivalBufferMinutes: 30,
 		}
@@ -71,6 +72,7 @@ func TestMigrateSettings(t *testing.T) {
 		// ESS configured but Utility is not
 		oldNoUtility := Settings{
 			ESS:                        "franklin",
+			EncryptedCredentials:       []byte("creds"),
 			MinStartChargeMinutes:      5,
 			PeakSurvivalBufferMinutes:  30,
 			IgnoreHourUsageFloorKWH:    0.5,
@@ -101,7 +103,8 @@ func TestMigrateSettings(t *testing.T) {
 		// UpdateGroup already set
 		oldSet := Settings{
 			ESS:                        "franklin",
-			UtilityProvider:            "comed",
+			UtilityProvider:            "pge",
+			EncryptedCredentials:       []byte("creds"),
 			UpdateGroup:                5,
 			MinStartChargeMinutes:      5,
 			PeakSurvivalBufferMinutes:  30,
@@ -226,6 +229,82 @@ func TestMigrateSettings(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.Equal(t, 0.07, s.MinBatteryExportDifferenceDollarsPerKWH)
+	})
+
+	t.Run("v17 to v18: updateGroup partitioning and eligibility", func(t *testing.T) {
+		// ComEd Hourly eligible with legacy group outside 13..16
+		comedOld := Settings{
+			UtilityProvider:      "comed",
+			UtilityRate:          "comed_besh",
+			ESS:                  "franklin",
+			EncryptedCredentials: []byte("creds"),
+			UpdateGroup:          7,
+		}
+		s1, changed1, err1 := MigrateSettings(comedOld, 17, "production")
+		require.NoError(t, err1)
+		assert.True(t, changed1)
+		assert.True(t, s1.UpdateGroup >= 13 && s1.UpdateGroup <= 16, "comed updateGroup should be 13..16, got %d", s1.UpdateGroup)
+
+		// TOU eligible with legacy group outside 1..12
+		touOld := Settings{
+			UtilityProvider:      "ameren",
+			UtilityRate:          "ameren_psp",
+			ESS:                  "franklin",
+			EncryptedCredentials: []byte("creds"),
+			UpdateGroup:          15,
+		}
+		s2, changed2, err2 := MigrateSettings(touOld, 17, "production")
+		require.NoError(t, err2)
+		assert.True(t, changed2)
+		assert.True(t, s2.UpdateGroup >= 1 && s2.UpdateGroup <= 12, "tou updateGroup should be 1..12, got %d", s2.UpdateGroup)
+
+		// Fixed ComEd (comed_bes) is TOU
+		comedTOUOld := Settings{
+			UtilityProvider:      "comed",
+			UtilityRate:          "comed_bes",
+			ESS:                  "franklin",
+			EncryptedCredentials: []byte("creds"),
+			UpdateGroup:          15,
+		}
+		s3, changed3, err3 := MigrateSettings(comedTOUOld, 17, "production")
+		require.NoError(t, err3)
+		assert.True(t, changed3)
+		assert.True(t, s3.UpdateGroup >= 1 && s3.UpdateGroup <= 12, "comed_bes updateGroup should be 1..12, got %d", s3.UpdateGroup)
+
+		// Eligible site already in valid pool
+		comedValid := Settings{
+			UtilityProvider:      "comed",
+			UtilityRate:          "comed_besh",
+			ESS:                  "franklin",
+			EncryptedCredentials: []byte("creds"),
+			UpdateGroup:          14,
+		}
+		s4, changed4, err4 := MigrateSettings(comedValid, 17, "production")
+		require.NoError(t, err4)
+		assert.False(t, changed4)
+		assert.Equal(t, 14, s4.UpdateGroup)
+
+		// Ineligible site with UpdateGroup > 0 -> reset to 0
+		ineligibleWithGroup := Settings{
+			UtilityProvider: "comed",
+			ESS:             "",
+			UpdateGroup:     5,
+		}
+		s5, changed5, err5 := MigrateSettings(ineligibleWithGroup, 17, "production")
+		require.NoError(t, err5)
+		assert.True(t, changed5)
+		assert.Equal(t, 0, s5.UpdateGroup)
+
+		// Ineligible site with UpdateGroup 0 -> stays 0
+		ineligibleZero := Settings{
+			UtilityProvider: "comed",
+			ESS:             "franklin",
+			UpdateGroup:     0,
+		}
+		s6, changed6, err6 := MigrateSettings(ineligibleZero, 17, "production")
+		require.NoError(t, err6)
+		assert.False(t, changed6)
+		assert.Equal(t, 0, s6.UpdateGroup)
 	})
 
 	t.Run("no change: current version", func(t *testing.T) {

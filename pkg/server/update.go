@@ -12,6 +12,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -97,15 +98,65 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	kindParam := r.URL.Query().Get("kind")
+	idxParam := r.URL.Query().Get("idx")
+	totalParam := r.URL.Query().Get("total")
 	cronParam := r.URL.Query().Get("cron")
-	if cronParam != "" && cronParam != "1" && cronParam != "2" {
-		writeJSONError(w, "invalid cron parameter", http.StatusBadRequest)
-		return
+
+	var kind string
+	var idx, total int
+	if kindParam != "" {
+		kind = kindParam
+		if kind == "all" && idxParam == "" && totalParam == "" {
+			idx = 0
+			total = 1
+		} else {
+			if idxParam == "" || totalParam == "" {
+				writeJSONError(w, "idx and total are required when kind is specified", http.StatusBadRequest)
+				return
+			}
+			var err error
+			idx, err = strconv.Atoi(idxParam)
+			if err != nil {
+				writeJSONError(w, "invalid idx parameter", http.StatusBadRequest)
+				return
+			}
+			total, err = strconv.Atoi(totalParam)
+			if err != nil {
+				writeJSONError(w, "invalid total parameter", http.StatusBadRequest)
+				return
+			}
+		}
+	} else if cronParam != "" {
+		switch cronParam {
+		case "1":
+			kind = "tou"
+			idx = 0
+			total = 2
+		case "2":
+			kind = "tou"
+			idx = 1
+			total = 2
+		case "3":
+			kind = "comed"
+			idx = 0
+			total = 1
+		default:
+			writeJSONError(w, "invalid cron parameter", http.StatusBadRequest)
+			return
+		}
 	}
 
-	groups := getCronGroups(s.now(), cronParam)
+	groups, err := getCronGroups(s.now(), kind, idx, total)
+	if err != nil {
+		log.Ctx(ctx).WarnContext(ctx, "invalid group partitioning parameters", slog.Any("error", err))
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	log.Ctx(ctx).DebugContext(ctx, "handling update sites",
-		slog.String("cron", cronParam),
+		slog.String("kind", kind),
+		slog.Int("idx", idx),
+		slog.Int("total", total),
 		slog.Any("groups", groups),
 	)
 	settingsMap, versionsMap, updatedTimesMap, err := s.storage.ListSitesSettings(ctx, s.release, groups)
@@ -145,14 +196,14 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if sv.ESS == "" {
-				log.Ctx(ctx).DebugContext(ctx, "site update skipped: no ESS configured", slog.String("siteID", siteID))
+				log.Ctx(ctx).DebugContext(ctx, "site update skipped: no ESS configured", slog.String("siteID", siteID), slog.Int("updateGroup", sv.UpdateGroup))
 				mu.Lock()
 				results[siteID] = "skipped: no ESS configured"
 				mu.Unlock()
 				return nil
 			}
 
-			log.Ctx(ctx).DebugContext(ctx, "processing site update")
+			log.Ctx(ctx).DebugContext(ctx, "processing site update", slog.Int("updateGroup", sv.UpdateGroup))
 			_, status, err := s.performSiteUpdate(ctx, siteID, sv, creds)
 
 			var resVal string
@@ -1499,25 +1550,50 @@ func flattenDailyEnergyStats(daily []types.DailyEnergyStats) []types.EnergyStats
 	return flat
 }
 
-func getCronGroups(nowTime time.Time, cronParam string) []int {
-	allGroups := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
-	if cronParam == "" {
-		return allGroups
+func getCronGroups(nowTime time.Time, kind string, idx int, total int) ([]int, error) {
+	if kind == "" {
+		allGroups := make([]int, 16)
+		for i := 0; i < 16; i++ {
+			allGroups[i] = i + 1
+		}
+		return allGroups, nil
 	}
 
-	seedString := nowTime.UTC().Format("2006-01-02-15")
-	h := sha256.Sum256([]byte(seedString))
-	seed1 := binary.BigEndian.Uint64(h[0:8])
-	seed2 := binary.BigEndian.Uint64(h[8:16])
-	pcg := rand.NewPCG(seed1, seed2)
-	r := rand.New(pcg)
+	var groups []int
+	switch kind {
+	case "all":
+		groups = make([]int, 16)
+		for i := 0; i < 16; i++ {
+			groups[i] = i + 1
+		}
+	case "comed":
+		groups = []int{13, 14, 15, 16}
+	case "tou":
+		groups = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
 
-	r.Shuffle(len(allGroups), func(i, j int) {
-		allGroups[i], allGroups[j] = allGroups[j], allGroups[i]
-	})
+		seedString := nowTime.UTC().Format("2006-01-02-15")
+		h := sha256.Sum256([]byte(seedString))
+		seed1 := binary.BigEndian.Uint64(h[0:8])
+		seed2 := binary.BigEndian.Uint64(h[8:16])
+		pcg := rand.NewPCG(seed1, seed2)
+		r := rand.New(pcg)
 
-	if cronParam == "1" {
-		return allGroups[0:8]
+		r.Shuffle(len(groups), func(i, j int) {
+			groups[i], groups[j] = groups[j], groups[i]
+		})
+	default:
+		return nil, fmt.Errorf("invalid kind: %q", kind)
 	}
-	return allGroups[8:16]
+
+	if total <= 0 || len(groups)%total != 0 {
+		return nil, fmt.Errorf("cannot evenly partition %d %s groups into %d parts", len(groups), kind, total)
+	}
+	if idx < 0 || idx >= total {
+		return nil, fmt.Errorf("idx %d out of bounds for total %d", idx, total)
+	}
+
+	chunkSize := len(groups) / total
+	start := idx * chunkSize
+	end := start + chunkSize
+	return groups[start:end], nil
 }

@@ -1984,32 +1984,71 @@ func TestHandleUpdateSites(t *testing.T) {
 			nowFunc:    func() time.Time { return time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC) },
 		}
 
-		t.Run("Valid cron=1 sets groups", func(t *testing.T) {
+		t.Run("Valid kind=tou idx=0 total=2 sets groups", func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/api/updateSites?kind=tou&idx=0&total=2", nil)
+			w := httptest.NewRecorder()
+			srv.handleUpdateSites(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			if assert.Len(t, capturedGroups, 6) {
+				expected, err := getCronGroups(srv.now(), "tou", 0, 2)
+				require.NoError(t, err)
+				assert.Equal(t, expected, capturedGroups)
+			}
+		})
+
+		t.Run("Valid kind=tou idx=1 total=2 sets groups", func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/api/updateSites?kind=tou&idx=1&total=2", nil)
+			w := httptest.NewRecorder()
+			srv.handleUpdateSites(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			if assert.Len(t, capturedGroups, 6) {
+				expected, err := getCronGroups(srv.now(), "tou", 1, 2)
+				require.NoError(t, err)
+				assert.Equal(t, expected, capturedGroups)
+			}
+		})
+
+		t.Run("Valid kind=comed idx=0 total=1 sets groups", func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/api/updateSites?kind=comed&idx=0&total=1", nil)
+			w := httptest.NewRecorder()
+			srv.handleUpdateSites(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			assert.Equal(t, []int{13, 14, 15, 16}, capturedGroups)
+		})
+
+		t.Run("Valid kind=all sets all 16 groups", func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/api/updateSites?kind=all", nil)
+			w := httptest.NewRecorder()
+			srv.handleUpdateSites(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			assert.Len(t, capturedGroups, 16)
+			for i := 1; i <= 16; i++ {
+				assert.Contains(t, capturedGroups, i)
+			}
+		})
+
+		t.Run("Legacy cron=1 and cron=2 set TOU groups", func(t *testing.T) {
 			req := httptest.NewRequest("POST", "/api/updateSites?cron=1", nil)
 			w := httptest.NewRecorder()
 			srv.handleUpdateSites(w, req)
 
 			assert.Equal(t, http.StatusOK, w.Code)
-			if assert.Len(t, capturedGroups, 8) {
-				expected := getCronGroups(srv.now(), "1")
-				assert.Equal(t, expected, capturedGroups)
-			}
+			assert.Len(t, capturedGroups, 6)
+
+			req2 := httptest.NewRequest("POST", "/api/updateSites?cron=2", nil)
+			w2 := httptest.NewRecorder()
+			srv.handleUpdateSites(w2, req2)
+
+			assert.Equal(t, http.StatusOK, w2.Code)
+			assert.Len(t, capturedGroups, 6)
 		})
 
-		t.Run("Valid cron=2 sets groups", func(t *testing.T) {
-			req := httptest.NewRequest("POST", "/api/updateSites?cron=2", nil)
-			w := httptest.NewRecorder()
-			srv.handleUpdateSites(w, req)
-
-			assert.Equal(t, http.StatusOK, w.Code)
-			if assert.Len(t, capturedGroups, 8) {
-				expected := getCronGroups(srv.now(), "2")
-				assert.Equal(t, expected, capturedGroups)
-			}
-		})
-
-		t.Run("Invalid cron returns bad request", func(t *testing.T) {
-			req := httptest.NewRequest("POST", "/api/updateSites?cron=3", nil)
+		t.Run("Invalid parameters return bad request", func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/api/updateSites?kind=invalid&idx=0&total=1", nil)
 			w := httptest.NewRecorder()
 			srv.handleUpdateSites(w, req)
 
@@ -2017,7 +2056,7 @@ func TestHandleUpdateSites(t *testing.T) {
 			var resp map[string]string
 			err := json.NewDecoder(w.Body).Decode(&resp)
 			require.NoError(t, err)
-			assert.Contains(t, resp["error"], "invalid cron parameter")
+			assert.Contains(t, resp["error"], "invalid kind")
 		})
 	})
 
@@ -2990,45 +3029,79 @@ func TestSetESSModes(t *testing.T) {
 }
 
 func TestGetCronGroups(t *testing.T) {
-	t.Run("Empty cron param returns all 16 groups", func(t *testing.T) {
+	t.Run("Empty kind param returns all 16 groups", func(t *testing.T) {
 		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
-		groups := getCronGroups(now, "")
+		groups, err := getCronGroups(now, "", 0, 0)
+		require.NoError(t, err)
 		assert.Len(t, groups, 16)
 		for i := 1; i <= 16; i++ {
 			assert.Contains(t, groups, i)
 		}
 	})
 
-	t.Run("Cron 1 and Cron 2 partition all 16 groups exactly", func(t *testing.T) {
+	t.Run("TOU partitions 12 groups into 2 parts of 6", func(t *testing.T) {
 		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
-		g1 := getCronGroups(now, "1")
-		g2 := getCronGroups(now, "2")
+		g0, err := getCronGroups(now, "tou", 0, 2)
+		require.NoError(t, err)
+		g1, err := getCronGroups(now, "tou", 1, 2)
+		require.NoError(t, err)
 
-		assert.Len(t, g1, 8)
-		assert.Len(t, g2, 8)
+		assert.Len(t, g0, 6)
+		assert.Len(t, g1, 6)
 
 		all := make(map[int]bool)
+		for _, g := range g0 {
+			all[g] = true
+		}
 		for _, g := range g1 {
 			all[g] = true
 		}
-		for _, g := range g2 {
-			all[g] = true
-		}
 
-		assert.Len(t, all, 16)
-		for i := 1; i <= 16; i++ {
-			assert.True(t, all[i], "missing group %d", i)
+		assert.Len(t, all, 12)
+		for i := 1; i <= 12; i++ {
+			assert.True(t, all[i], "missing TOU group %d", i)
 		}
 	})
 
-	t.Run("Groups change when hour changes", func(t *testing.T) {
+	t.Run("ComEd returns all 4 groups (13..16)", func(t *testing.T) {
+		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		groups, err := getCronGroups(now, "comed", 0, 1)
+		require.NoError(t, err)
+		assert.Equal(t, []int{13, 14, 15, 16}, groups)
+	})
+
+	t.Run("kind=all returns all 16 groups", func(t *testing.T) {
+		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		groups, err := getCronGroups(now, "all", 0, 1)
+		require.NoError(t, err)
+		assert.Len(t, groups, 16)
+		for i := 1; i <= 16; i++ {
+			assert.Contains(t, groups, i)
+		}
+	})
+
+	t.Run("TOU groups change when hour changes", func(t *testing.T) {
 		t1 := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
 		t2 := time.Date(2026, 6, 5, 13, 0, 0, 0, time.UTC)
 
-		g1_t1 := getCronGroups(t1, "1")
-		g1_t2 := getCronGroups(t2, "1")
+		g0_t1, err1 := getCronGroups(t1, "tou", 0, 2)
+		require.NoError(t, err1)
+		g0_t2, err2 := getCronGroups(t2, "tou", 0, 2)
+		require.NoError(t, err2)
 
-		assert.NotEqual(t, g1_t1, g1_t2)
+		assert.NotEqual(t, g0_t1, g0_t2)
+	})
+
+	t.Run("Invalid parameters return error", func(t *testing.T) {
+		now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		_, err := getCronGroups(now, "invalid", 0, 1)
+		assert.Error(t, err)
+
+		_, err = getCronGroups(now, "tou", 0, 5)
+		assert.ErrorContains(t, err, "cannot evenly partition")
+
+		_, err = getCronGroups(now, "tou", 2, 2)
+		assert.ErrorContains(t, err, "out of bounds")
 	})
 }
 

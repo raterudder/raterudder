@@ -544,8 +544,14 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	// setting UpdateGroup means it's ready for updates which we only do if the
 	// ess and utility are set and they're both validated
-	if newSettings.UpdateGroup == 0 && newSettings.ESS != "" && newSettings.UtilityProvider != "" && (changedESS || len(newSettings.EncryptedCredentials) > 0) {
-		newSettings.UpdateGroup = rand.IntN(16) + 1
+	eligible := newSettings.ESS != "" && newSettings.UtilityProvider != "" && (changedESS || len(newSettings.EncryptedCredentials) > 0)
+	if eligible {
+		isComEd := isComEdHourly(newSettings.UtilityProvider, newSettings.UtilityRate)
+		if isComEd && (newSettings.UpdateGroup < 13 || newSettings.UpdateGroup > 16) {
+			newSettings.UpdateGroup = rand.IntN(4) + 13
+		} else if !isComEd && (newSettings.UpdateGroup < 1 || newSettings.UpdateGroup > 12) {
+			newSettings.UpdateGroup = rand.IntN(12) + 1
+		}
 	}
 
 	if _, err := s.storage.SetSettings(ctx, siteID, newSettings, types.CurrentSettingsVersion, time.Time{}); err != nil {
@@ -841,4 +847,8 @@ func (s *Server) validateAndCalculateMinBatterySOCPeriods(ctx context.Context, s
 	}
 
 	return minPeriodSOC, nil
+}
+
+func isComEdHourly(provider, rate string) bool {
+	return provider == "comed" && rate != "comed_bes" && rate != "comed_best"
 }
