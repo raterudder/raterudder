@@ -143,9 +143,9 @@ const (
 	// to initiate a new grid charge session regardless of battery size or charging rate.
 	minStartChargeFloorKWH = 0.6
 
-	// reserveFloorTolerancePct is the numerical tolerance (0.1% SOC) used when evaluating if
+	// reserveFloorTolerancePct is the numerical tolerance (0.75% SOC) used when evaluating if
 	// the battery is resting at its emergency reserve floor.
-	reserveFloorTolerancePct = 0.1
+	reserveFloorTolerancePct = 0.75
 
 	// minReserveDeficitPenaltyDollarsPerKWH ($1.00/kWh) is the minimum penalty rate applied to energy deficits below the user's reserve.
 	// It guarantees that the penalty strictly exceeds typical retail electricity rates and peak-shaving benefits, preventing the optimizer
@@ -751,7 +751,7 @@ func (p *planPath) refineOverchargedEpisodes(ctx context.Context, settings types
 				// If previous intervals already brought the battery to targetSOCInt before interval j begins,
 				// switch interval j from ChargeAny to Standby. If interval j starts below targetSOCInt,
 				// it remains ChargeAny and stepPhysics clamps the charge to targetSOCInt.
-				if j <= chargeEndIdx && actions[j].batteryMode == types.BatteryModeChargeAny &&
+				if j > 0 && j <= chargeEndIdx && actions[j].batteryMode == types.BatteryModeChargeAny &&
 					states[j].soc >= float64(targetSOCInt)-reserveFloorTolerancePct {
 					sbReason, sbDesc := determineRefinedStandbyReason(chargeReason, timeline[j], timeline, j)
 					actions[j].batteryMode = types.BatteryModeStandby
@@ -822,6 +822,21 @@ func (p *planPath) refineOverchargedEpisodes(ctx context.Context, settings types
 	return refinedPath, true
 }
 
+// sanitizeLastAction filters out faults, paused actions, uninitialized modes, and stale actions (>90 minutes)
+// so that invalid historical records do not influence plan candidate generation or inertia.
+func sanitizeLastAction(lastAction *types.Action, refTime time.Time) *types.Action {
+	if lastAction == nil {
+		return nil
+	}
+	if lastAction.Fault || lastAction.Paused || lastAction.BatteryMode == types.BatteryModeNoChange {
+		return nil
+	}
+	if !lastAction.Timestamp.IsZero() && !refTime.IsZero() && refTime.Sub(lastAction.Timestamp) > 90*time.Minute {
+		return nil
+	}
+	return lastAction
+}
+
 // Plan computes the optimal battery and solar schedule across the planning horizon (16-24h)
 // using a pruned decision tree search and physical round-trip conversion efficiency.
 // It returns both the immediate Decision for physical inverter execution and the full Plan for visualization.
@@ -852,6 +867,8 @@ func (c *Controller) Plan(
 			now = now.In(loc)
 		}
 	}
+
+	lastAction = sanitizeLastAction(lastAction, now)
 
 	log.Ctx(ctx).DebugContext(ctx, "plan execution started",
 		slog.Time("now", now),
@@ -957,34 +974,43 @@ func (c *Controller) buildPlanningTimeline(
 	settings types.Settings,
 	currentStatus types.SystemStatus,
 ) ([]planInterval, types.SimulationParams, map[int]TimeProfile, error) {
-	// Helper to normalize price timestamps: if TSEnd is zero or invalid, default to 1 hour
-	normalizePrice := func(p types.Price) types.Price {
-		if p.TSStart.IsZero() {
-			p.TSStart = now
-		}
-		if p.TSEnd.IsZero() || !p.TSEnd.After(p.TSStart) {
-			p.TSEnd = p.TSStart.Add(time.Hour)
-		}
-		return p
-	}
-
 	// 1. Collate pricing records
 	var allPrices []types.Price
-	if !nowPrice.TSStart.IsZero() || nowPrice.DollarsPerKWH != 0 || nowPrice.GridUseDollarsPerKWH != 0 {
-		allPrices = append(allPrices, normalizePrice(nowPrice))
-	}
-
-	// Filter and sort future prices
-	for _, fp := range futurePrices {
-		norm := normalizePrice(fp)
-		if !norm.TSEnd.Before(now) {
-			allPrices = append(allPrices, norm)
+	if !nowPrice.TSStart.IsZero() && nowPrice.TSEnd.After(now) {
+		for _, fp := range futurePrices {
+			if fp.TSStart.After(now) && fp.TSStart.Before(nowPrice.TSEnd) {
+				nowPrice.TSEnd = fp.TSStart
+			}
 		}
+		allPrices = append(allPrices, nowPrice)
 	}
 
-	sort.Slice(allPrices, func(i, j int) bool {
+	for _, fp := range futurePrices {
+		if !fp.TSEnd.After(now) {
+			continue
+		}
+		// If nowPrice is present, skip future prices that duplicate or overlap it at now
+		if !nowPrice.TSStart.IsZero() && (fp.Contains(now) || fp.TSStart.Equal(nowPrice.TSStart)) {
+			continue
+		}
+		allPrices = append(allPrices, fp)
+	}
+
+	sort.SliceStable(allPrices, func(i, j int) bool {
+		if allPrices[i].TSStart.Equal(allPrices[j].TSStart) {
+			return allPrices[i].TSEnd.Before(allPrices[j].TSEnd)
+		}
 		return allPrices[i].TSStart.Before(allPrices[j].TSStart)
 	})
+
+	deduped := make([]types.Price, 0, len(allPrices))
+	for _, p := range allPrices {
+		if len(deduped) > 0 && deduped[len(deduped)-1].TSStart.Equal(p.TSStart) && deduped[len(deduped)-1].TSEnd.Equal(p.TSEnd) {
+			continue
+		}
+		deduped = append(deduped, p)
+	}
+	allPrices = deduped
 
 	// Determine available horizon duration
 	var latestPriceTime time.Time
@@ -1045,6 +1071,13 @@ func (c *Controller) buildPlanningTimeline(
 			}
 		}
 
+		// Clamp stepEnd to not overshoot the start of any upcoming price record
+		for _, p := range allPrices {
+			if p.TSStart.After(currentTime) && p.TSStart.Before(stepEnd) {
+				stepEnd = p.TSStart
+			}
+		}
+
 		if !foundPrice {
 			// just continue using the last found price if we don't have one
 			log.Ctx(ctx).WarnContext(ctx, "no price found at current time when planning",
@@ -1054,12 +1087,6 @@ func (c *Controller) buildPlanningTimeline(
 				slog.Time("latestPriceTime", latestPriceTime),
 				slog.Any("lastPrice", currentPrice),
 			)
-		}
-
-		// Ensure matched price has valid timestamp boundaries
-		if currentPrice.TSStart.IsZero() {
-			currentPrice.TSStart = currentTime
-			currentPrice.TSEnd = stepEnd
 		}
 
 		// Check operational VPP boundaries (prep deadline, event start, event end) to split intervals cleanly
@@ -1097,14 +1124,55 @@ func (c *Controller) buildPlanningTimeline(
 		}
 
 		// Short interval handling:
-		// If duration is under 10 minutes, check if we can merge with the next boundary without crossing a price boundary.
+		// If duration is under 10 minutes, check if we can merge with the next boundary without crossing
+		// a price boundary (currentPrice.TSEnd or any upcoming price start in allPrices) or any VPP event boundary.
 		duration = stepEnd.Sub(currentTime)
 		if duration < 10*time.Minute && !stepEnd.Equal(latestPriceTime) {
 			nextBoundary := stepEnd.Add(periodIdealDuration)
 			if nextBoundary.After(latestPriceTime) {
 				nextBoundary = latestPriceTime
 			}
-			if (currentPrice.TSEnd.After(stepEnd) || currentPrice.TSEnd.IsZero()) && nextBoundary.Sub(currentTime) <= periodSplitThresholdDuration {
+
+			crossesBoundary := false
+			if !currentPrice.TSEnd.IsZero() && nextBoundary.After(currentPrice.TSEnd) {
+				crossesBoundary = true
+			}
+
+			if !crossesBoundary {
+				for _, p := range allPrices {
+					if p.TSStart.After(currentTime) && p.TSStart.Before(nextBoundary) {
+						crossesBoundary = true
+						break
+					}
+				}
+			}
+
+			if !crossesBoundary {
+				buffer := time.Duration(settings.VPPChargingBufferMinutes) * time.Minute
+				for _, ev := range currentStatus.VPPEvents {
+					if ev.OptOut {
+						continue
+					}
+					deadline := ev.TSStart.Add(-buffer)
+					vppBounds := []time.Time{deadline, ev.TSStart, ev.TSEnd}
+					if ev.Mandatory {
+						firmwareTakeover := ev.TSStart.Add(-vppStandbyLeadTime)
+						mandatoryDeadline := firmwareTakeover.Add(-buffer)
+						vppBounds = append(vppBounds, firmwareTakeover, mandatoryDeadline)
+					}
+					for _, b := range vppBounds {
+						if b.After(currentTime) && b.Before(nextBoundary) {
+							crossesBoundary = true
+							break
+						}
+					}
+					if crossesBoundary {
+						break
+					}
+				}
+			}
+
+			if !crossesBoundary && nextBoundary.Sub(currentTime) <= periodSplitThresholdDuration {
 				log.Ctx(ctx).DebugContext(ctx, "merged short planning interval",
 					slog.Time("currentTime", currentTime),
 					slog.Time("originalStepEnd", stepEnd),
@@ -1778,10 +1846,14 @@ func (c *Controller) generateActionCandidates(
 			maxFutureExportRate = timeline[i].exportRate
 		}
 	}
-	hasHigherFutureRate := maxFutureRate > interval.importRate+priceMaterialityThresholdDollars
+	effectiveMaxFutureRate := max(maxFutureRate, anchors.knownPostHorizonRate)
+	hasHigherFutureRate := effectiveMaxFutureRate > interval.importRate+priceMaterialityThresholdDollars
+	// hasHigherFutureExport requires canExport because Standby only holds existing charge (without adding energy).
+	// If the battery does not currently have exportable energy above the reserve margin, holding it in Standby
+	// would needlessly prevent home self-consumption for an export opportunity it cannot participate in.
 	hasHigherFutureExport := canExport && settings.ManageTOUSchedules && settings.GridExportBatteries && !isFlatNEM &&
 		maxFutureExportRate > interval.importRate+priceMaterialityThresholdDollars
-	ld.higherFutureRate = maxFutureRate
+	ld.higherFutureRate = effectiveMaxFutureRate
 	ld.isAlreadyStandby = isAlreadyStandby
 
 	// Standby Pruning & Mode Maintenance:
@@ -1884,7 +1956,9 @@ func (c *Controller) generateActionCandidates(
 				// Evaluated post-losses (rechargeCost = importRate / roundTripEff) because energy passes through the battery
 				// electrochemically; round-trip conversion losses must be overcome to guarantee the homeowner achieves the
 				// configured minimum arbitrage profit margin above inverter losses and battery cell degradation.
-				canBatteryExportAhead := canExport && settings.ManageTOUSchedules && settings.GridExportBatteries && !isFlatNEM && canCompleteBeforeVPPRecharge
+				// Note: canExport is intentionally not checked here because current SOC may be low/empty right now;
+				// the purpose of pre-charging is to add energy so that canExport becomes true when reaching step i.
+				canBatteryExportAhead := settings.ManageTOUSchedules && settings.GridExportBatteries && !isFlatNEM && canCompleteBeforeVPPRecharge
 				if canBatteryExportAhead && timeline[i].exportRate-rechargeCost >= minArbitrageDiff {
 					futureExportRate = timeline[i].exportRate
 					hasArbitrageAhead = true
@@ -1919,6 +1993,16 @@ func (c *Controller) generateActionCandidates(
 					chargeDesc = "Pre-charging for upcoming peak rates."
 					earliestArbitrageTime = timeline[i].startTime
 					break
+				}
+			}
+
+			if !hasArbitrageAhead && anchors.knownPostHorizonRate > 0 && anchors.knownPostHorizonRate-rechargeCost >= minDeficitDiff {
+				futurePeakRate = anchors.knownPostHorizonRate
+				hasArbitrageAhead = true
+				chargeReason = types.ActionReasonDeficitChargeNow
+				chargeDesc = "Pre-charging for upcoming post-horizon peak rates."
+				if len(timeline) > 0 {
+					earliestArbitrageTime = timeline[len(timeline)-1].endTime
 				}
 			}
 
@@ -1984,6 +2068,15 @@ func (c *Controller) generateActionCandidates(
 
 	// Branch D: Direct Solar Export (with BatteryModeLoad)
 	// Never offered when at or below reserve floor so surplus solar restores backup protection before exporting.
+	//
+	// Note on BatteryModeStandby + SolarModeExport:
+	// We deliberately do not support a candidate for BatteryModeStandby with SolarModeExport.
+	// Behind a single net meter, retail export compensation is almost never higher than the retail
+	// import rate (outside of dedicated VPP dispatch events, which have their own rules).
+	// If the battery were held in Standby while exporting solar, household load would have to be
+	// served by grid imports at the full retail rate while exporting solar at a rate <= import rate.
+	// Displacing home load first (via BatteryModeLoad + SolarModeExport or storing solar) is always
+	// economically superior or equal to importing grid power to enable solar export.
 	if canDirectSolarExport && isAboveReserve && beforeVPPRechargeDeadline {
 		candidates = append(candidates, actionCandidate{
 			batteryMode: types.BatteryModeLoad,
@@ -2272,8 +2365,9 @@ func calculateVPPFeasibilityPenalty(
 	candidateState planState,
 	deadline time.Time,
 	oneWayEff float64,
+	gridChargeBatteries bool,
 ) float64 {
-	if initialState.chargingDisabled {
+	if initialState.chargingDisabled || !gridChargeBatteries {
 		return 0.0
 	}
 	leadTimeHours := deadline.Sub(initialState.time).Hours()
@@ -2335,6 +2429,12 @@ func (c *Controller) searchOptimalPlan(
 	if len(timeline) == 0 {
 		return &planPath{}, nil
 	}
+
+	refTime := initial.time
+	if !timeline[0].startTime.IsZero() {
+		refTime = timeline[0].startTime
+	}
+	lastAction = sanitizeLastAction(lastAction, refTime)
 
 	// Step 0 candidate generation
 	candidates0 := c.generateActionCandidates(ctx, 0, timeline[0], timeline, initial, anchors, settings, currentStatus, history, toPrecedingAction(lastAction))
@@ -2551,9 +2651,13 @@ func (c *Controller) searchOptimalPlan(
 					var transitionCost float64
 					if stepIdx == 0 {
 						// Inertia penalty: if switching away from lastAction at step 0, add default penalty
-						// scaled by interval duration with a minimum floor to prevent rapid mode oscillation.
-						if lastAction != nil && cand.batteryMode != lastAction.BatteryMode {
-							transitionCost = max(0.01, defaultInertiaThresholdDollars*min(1.0, interval.durationHours))
+						// to prevent rapid mode oscillation.
+						if lastAction != nil {
+							if cand.batteryMode != lastAction.BatteryMode {
+								transitionCost = max(0.01, defaultInertiaThresholdDollars*min(1.0, interval.durationHours))
+							} else if lastAction.SolarMode > 0 && cand.solarMode > 0 && cand.solarMode != lastAction.SolarMode {
+								transitionCost = modeSwitchPenalty
+							}
 						}
 					} else if parent.action.batteryMode != cand.batteryMode || (parent.action.solarMode > 0 && cand.solarMode > 0 && parent.action.solarMode != cand.solarMode) {
 						transitionCost = modeSwitchPenalty
@@ -2616,9 +2720,9 @@ func (c *Controller) searchOptimalPlan(
 					newCost := parent.totalCost + metrics.costDollars + exportDegradationCost + chargeDegradationCost + holdCost + transitionCost + deficitPenalty + (nextState.energyKWH * interval.durationHours * batteryHoldingCostPerHourPerKWH)
 
 					// Check VPP deadline feasibility: apply penalty only for nearest upcoming event deadline
-					if hasNearestVPP {
+					if hasNearestVPP && settings.GridChargeBatteries && !initial.chargingDisabled {
 						if interval.endTime.Equal(nearestVPPDeadline) || (interval.startTime.Before(nearestVPPDeadline) && interval.endTime.After(nearestVPPDeadline)) {
-							newCost += calculateVPPFeasibilityPenalty(initial, nextState, nearestVPPDeadline, oneWayEff)
+							newCost += calculateVPPFeasibilityPenalty(initial, nextState, nearestVPPDeadline, oneWayEff, settings.GridChargeBatteries)
 						}
 					}
 
@@ -2637,7 +2741,13 @@ func (c *Controller) searchOptimalPlan(
 						// Dominance comparison within the same mode: adjust by marginal residual value of SOC difference.
 						socDelta := nextState.soc - nextBuckets[mIdx][b].state.soc
 						energyDeltaKWH := (socDelta / 100.0) * capacityKWH
-						valuationRate := maxFutureValuationRates[stepIdx]
+						// Residual energy in nextState enters stepIdx+1. Value it using the maximum rate of
+						// subsequent intervals (stepIdx+1 onwards), or the known post-horizon rate if at horizon end,
+						// so we don't overestimate its future worth using the rate of the step that just finished.
+						valuationRate := anchors.knownPostHorizonRate
+						if stepIdx+1 < len(maxFutureValuationRates) {
+							valuationRate = maxFutureValuationRates[stepIdx+1]
+						}
 						marginalValue := energyDeltaKWH * oneWayEff * valuationRate
 						effectiveNewCost := newCost - marginalValue
 						if effectiveNewCost < nextBuckets[mIdx][b].totalCost {
@@ -2681,7 +2791,12 @@ func (c *Controller) searchOptimalPlan(
 			// it could never overcome the cost deficit.
 			// Pruning these dominated nodes cuts the active wavefront by ~50% per step without false pruning.
 			activeNodes = activeNodes[:0]
-			valuationRate := maxFutureValuationRates[stepIdx]
+			// Value frontier energy entering stepIdx+1 against remaining future rates (stepIdx+1 onwards)
+			// or knownPostHorizonRate if at horizon end, avoiding including stepIdx's own completed tariff.
+			valuationRate := anchors.knownPostHorizonRate
+			if stepIdx+1 < len(maxFutureValuationRates) {
+				valuationRate = maxFutureValuationRates[stepIdx+1]
+			}
 
 			// Between BatteryModeLoad (0) and BatteryModeExport (3), future physical constraints and
 			// transition rules are identical. In the same SOC bucket, keep only the node with lower effective cost.
@@ -2871,15 +2986,13 @@ func (c *Controller) searchOptimalPlan(
 
 			if shouldFastTrack {
 				chargeNode, exists := modeBestNodes[types.BatteryModeChargeAny]
+				chargeScore := modeBestScores[types.BatteryModeChargeAny]
 				if !exists || chargeNode == nil {
-					slog.Warn("should fast-track grid charge but no valid ChargeAny node exists in plan search",
+					log.Ctx(ctx).DebugContext(ctx, "fast-track grid charge skipped: no valid ChargeAny node exists in plan search",
 						slog.Time("scheduledChargeTime", fastTrackStartTime),
 						slog.Duration("delay", fastTrackDelay),
-						slog.Float64("step0ImportRate", timeline[0].importRate),
-						slog.Float64("batterySOC", currentStatus.BatterySOC),
-						slog.Float64("headroomKWH", headroomKWH),
-						slog.String("currentMode", drModeString(actions[0].batteryMode)))
-				} else {
+					)
+				} else if chargeScore-bestOverallScore <= defaultInertiaThresholdDollars {
 					originalMode := actions[0].batteryMode
 					originalScore := bestOverallScore
 					var originalCost float64

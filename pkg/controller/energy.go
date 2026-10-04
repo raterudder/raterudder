@@ -182,18 +182,22 @@ func (c *Controller) BuildHourlyEnergyModel(
 	// Calculate the site's empirical standby baseline load (1st percentile of non-zero hourly usage).
 	// This represents the physical minimum power consumed by always-on appliances (refrigerators, routers, modems, etc.).
 	var validLoads []float64
+	var validLoadsSum float64
 	for _, h := range history {
 		if h.HomeKWH > 0.05 {
 			validLoads = append(validLoads, h.HomeKWH)
+			validLoadsSum += h.HomeKWH
 		}
 	}
 	standbyLoad := 0.1
+	overallAvgLoad := 0.0
 	if len(validLoads) > 0 {
 		sortedLoads := make([]float64, len(validLoads))
 		copy(sortedLoads, validLoads)
 		sort.Float64s(sortedLoads)
 		idx := int(float64(len(sortedLoads)-1) * 0.01)
 		standbyLoad = max(0.1, sortedLoads[idx])
+		overallAvgLoad = validLoadsSum / float64(len(validLoads))
 	}
 
 	// Index historical load by timestamp for non-EV baseline lookup
@@ -773,8 +777,16 @@ func (c *Controller) BuildHourlyEnergyModel(
 		case "50p":
 			pct = 0.50
 		}
-		avgLoadA := getWeightedPercentile(pts, pct)
-		p75LoadA := getWeightedPercentile(pts, 0.75)
+		var avgLoadA, p75LoadA float64
+		if len(pts) > 0 {
+			avgLoadA = getWeightedPercentile(pts, pct)
+			p75LoadA = getWeightedPercentile(pts, 0.75)
+		} else {
+			// Sparse history fallback: when no historical points exist for this specific hour,
+			// fall back to the site's overall average load rather than collapsing to standby refrigerator floor.
+			avgLoadA = overallAvgLoad
+			p75LoadA = overallAvgLoad
+		}
 
 		// Apply extreme heatwave safeguard: if today's forecasted temp is at least extremeHeatwaveThresholdC
 		// hotter than the hottest temperature seen in history for this hour, AND is above the minimum hot-day threshold

@@ -359,6 +359,7 @@ func (s *Server) performSiteUpdate(
 	energyHistory, weatherHistory, err := s.getCombinedHistory(ctx, siteID, settings, historyStart, now, existingSummaries)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get combined history", slog.Any("error", err))
+		return nil, "failed to get history", fmt.Errorf("failed to get combined history: %w", err)
 	}
 	notifData.energyHistory = energyHistory
 	notifData.weatherHistory = weatherHistory

@@ -634,6 +634,19 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		assert.InDelta(t, 0.0, model[h1.Hour()].AvgSolarKWH, 0.001)
 	})
 
+	t.Run("Sparse History Falls Back To Overall Site Average", func(t *testing.T) {
+		h1 := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC) // Wednesday
+		h2 := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC) // Thursday
+		history := []types.EnergyStats{
+			{TSHourStart: h1, HomeKWH: 2.0, SolarKWH: 0.0},
+			{TSHourStart: h2, HomeKWH: 2.0, SolarKWH: 0.0},
+		}
+
+		testNow := time.Date(2026, 7, 3, 18, 0, 0, 0, time.UTC) // Friday hour 18
+		model, _ := c.BuildHourlyEnergyModel(ctx, testNow, history, nil, types.Settings{IgnoreHourUsageOverMultiple: 0.0})
+		assert.InDelta(t, 2.0, model[18].AvgHomeLoadKWH, 0.001)
+	})
+
 	t.Run("Ignore Outliers", func(t *testing.T) {
 		h1 := time.Date(2025, 6, 15, 2, 0, 0, 0, time.UTC)
 		h2 := h1.Add(-24 * time.Hour)

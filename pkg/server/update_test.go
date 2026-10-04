@@ -1530,6 +1530,103 @@ func TestHandleUpdate(t *testing.T) {
 		assert.NotNil(t, insertedAction.Plan, "On production with PlanMode=true, Action.Plan must be populated by Controller.Plan")
 		assert.NotEmpty(t, insertedAction.Plan.Periods)
 	})
+
+	t.Run("Combined History Fetch Failure Returns Error", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(([]types.HistorySummary)(nil), fmt.Errorf("storage error")).Maybe()
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			UtilityProvider: "test",
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(([]types.DailyEnergyStats)(nil), fmt.Errorf("storage error")).Maybe()
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil).Maybe()
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{
+			BatterySOC: 50.0,
+		}, nil)
+
+		mockP := ess.NewMap()
+		mockP.SetSystem(types.SiteIDNone, mockES)
+
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.15, TSStart: time.Now()}, nil)
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
+
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			listenAddr: ":8080",
+			controller: controller.NewController(),
+			bypassAuth: true,
+		}
+
+		req := httptest.NewRequest("GET", "/api/update", nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
+		w := httptest.NewRecorder()
+
+		srv.handleUpdate(w, req)
+		assert.Equal(t, http.StatusInternalServerError, w.Result().StatusCode)
+	})
+
+	t.Run("GetLatestAction Returns Action Without Filtering", func(t *testing.T) {
+		mockS := &mockStorage{}
+		now := time.Now()
+		srv := &Server{
+			storage: mockS,
+			nowFunc: func() time.Time { return now },
+		}
+
+		// 1. Fault action should still be returned
+		faultAct := &types.Action{
+			BatteryMode: types.BatteryModeChargeAny,
+			Fault:       true,
+			Timestamp:   now.Add(-10 * time.Minute),
+		}
+		mockS.On("GetLatestAction", mock.Anything, "fault-site").Return(faultAct, nil).Once()
+		assert.Equal(t, faultAct, srv.getLatestAction(context.Background(), "fault-site"))
+
+		// 2. Paused action should still be returned
+		pausedAct := &types.Action{
+			BatteryMode: types.BatteryModeChargeAny,
+			Paused:      true,
+			Timestamp:   now.Add(-10 * time.Minute),
+		}
+		mockS.On("GetLatestAction", mock.Anything, "paused-site").Return(pausedAct, nil).Once()
+		assert.Equal(t, pausedAct, srv.getLatestAction(context.Background(), "paused-site"))
+
+		// 3. Action older than 90m should still be returned
+		staleAct := &types.Action{
+			BatteryMode: types.BatteryModeChargeAny,
+			Timestamp:   now.Add(-95 * time.Minute),
+		}
+		mockS.On("GetLatestAction", mock.Anything, "stale-site").Return(staleAct, nil).Once()
+		assert.Equal(t, staleAct, srv.getLatestAction(context.Background(), "stale-site"))
+
+		// 4. Valid action with timezone should adjust timestamps
+		loc, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
+		validAct := &types.Action{
+			BatteryMode: types.BatteryModeChargeAny,
+			Timestamp:   now.UTC(),
+			SystemStatus: types.SystemStatus{
+				TimeLocation: "America/Chicago",
+			},
+		}
+		mockS.On("GetLatestAction", mock.Anything, "valid-site").Return(validAct, nil).Once()
+		act := srv.getLatestAction(context.Background(), "valid-site")
+		require.NotNil(t, act)
+		assert.Equal(t, loc.String(), act.Timestamp.Location().String())
+	})
 }
 
 func TestHandleUpdateSites(t *testing.T) {
