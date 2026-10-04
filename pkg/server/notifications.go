@@ -76,9 +76,9 @@ const (
 	priceSpikeMinDeltaHigh   = 0.03
 
 	// Percentile of historical prices required to qualify as a price spike:
-	// - High sensitivity: Top 10% (0.90) of all-hours alone (no time-of-day restriction; alerts whenever price is high).
-	// - Medium sensitivity: Top 10% (0.90) of all-hours AND time-of-day relative (+/- 1 hour buffer).
-	// - Low sensitivity: Top 5% (0.95) of all-hours AND time-of-day relative (+/- 1 hour buffer).
+	// - High sensitivity: Top 10% (0.90) of all-hours AND time-of-day relative (+/- 1 hour buffer) with lower delta ($0.03/kWh).
+	// - Medium sensitivity: Top 10% (0.90) of all-hours AND time-of-day relative (+/- 1 hour buffer) with moderate delta ($0.05/kWh).
+	// - Low sensitivity: Top 5% (0.95) of all-hours AND time-of-day relative (+/- 1 hour buffer) with large delta ($0.10/kWh).
 	priceSpikePercentileLow    = 0.95
 	priceSpikePercentileMedium = 0.90
 	priceSpikePercentileHigh   = 0.90
@@ -2107,13 +2107,13 @@ func (s *Server) handlePriceSpikeNotifications(
 
 	for _, su := range spikeUsers {
 		// Map user-selected sensitivity tier to spike detection parameters:
-		// - "high": Top 10% (0.90) of all hours alone. Does NOT require time-of-day relative comparison,
-		//   so it alerts whenever price is in the top 10% of all hours, even if recurring every week.
+		// - "high": Top 10% (0.90) of all hours AND time-of-day relative (+/- 1 hour buffer).
+		//   Alerts earlier on smaller rate increases ($0.03/kWh) above the time-of-day baseline.
 		// - "medium": Top 10% (0.90) of all hours AND time-of-day relative (+/- 1 hour buffer).
 		//   Requires the price to be in the top 10% of all hours AND significantly above the typical
-		//   price for this time of day (+/- 1h), filtering out normal daily evening peaks.
+		//   price for this time of day (+/- 1h) ($0.05/kWh), filtering out normal daily evening peaks.
 		// - "low": Top 5% (0.95) of all hours AND time-of-day relative (+/- 1 hour buffer).
-		//   Only alerts on severe surges in the top 5% that also exceed the time-of-day baseline.
+		//   Only alerts on severe surges in the top 5% that also exceed the time-of-day baseline ($0.10/kWh).
 		var minDelta, reqPercentile, escalatedPercentile float64
 		var useTimeOfDayRelative bool
 		switch su.sensitivity {
@@ -2126,7 +2126,7 @@ func (s *Server) handlePriceSpikeNotifications(
 			minDelta = priceSpikeMinDeltaHigh
 			reqPercentile = priceSpikePercentileHigh
 			escalatedPercentile = priceSpikeEscalatedPercentileHigh
-			useTimeOfDayRelative = false
+			useTimeOfDayRelative = true
 		case "medium":
 			fallthrough
 		default:

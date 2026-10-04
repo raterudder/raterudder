@@ -3331,10 +3331,9 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		mockS.AssertExpectations(t)
 	})
 
-	t.Run("HighSensitivityAlertsOnTop10PercentWithoutTimeOfDay", func(t *testing.T) {
+	t.Run("HighSensitivitySuppressesIfNormalForTimeOfDay", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
-		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
 
 		notifications := map[string]types.UserNotificationSettings{
 			"user1@test.com": {
@@ -3360,16 +3359,62 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		}
 
 		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return(hist, nil).Once()
-		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
-		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
-			return l.Type == types.NotificationTypePriceSpike
-		})).Return(nil).Once()
 
+		// $0.30 is in top 10% overall, but matches time-of-day baseline ($0.30), so High sensitivity suppresses it
 		data := &dataForNotifications{
 			currentPrice: types.Price{
 				TSStart:              nowMorning,
 				TSEnd:                nowMorning.Add(1 * time.Hour),
 				DollarsPerKWH:        0.25,
+				GridUseDollarsPerKWH: 0.05,
+			},
+		}
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowMorning)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowMorning, getNotifState, nil)
+		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("HighSensitivityAlertsIfAboveTimeOfDay", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, nowMorning)
+		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "high",
+			},
+		}
+
+		// Baseline is $0.30 for this hour
+		var hist []types.Price
+		for i := 1; i <= 90; i++ {
+			hist = append(hist, types.Price{
+				TSStart:              nowMorning.Add(-time.Duration(i*2) * time.Hour),
+				DollarsPerKWH:        0.10,
+				GridUseDollarsPerKWH: 0.05,
+			})
+		}
+		for i := 1; i <= 10; i++ {
+			hist = append(hist, types.Price{
+				TSStart:              nowMorning.AddDate(0, 0, -i),
+				DollarsPerKWH:        0.25,
+				GridUseDollarsPerKWH: 0.05,
+			})
+		}
+
+		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return(hist, nil).Once()
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
+		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+			return l.Type == types.NotificationTypePriceSpike && l.Flavor == "high"
+		})).Return(nil).Once()
+
+		// $0.34 is $0.04 above time-of-day baseline ($0.30), exceeding High sensitivity's $0.03 delta
+		data := &dataForNotifications{
+			currentPrice: types.Price{
+				TSStart:              nowMorning,
+				TSEnd:                nowMorning.Add(1 * time.Hour),
+				DollarsPerKWH:        0.29,
 				GridUseDollarsPerKWH: 0.05,
 			},
 		}
