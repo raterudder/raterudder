@@ -177,6 +177,10 @@ const (
 	// represents major, sustained discretionary energy draw (e.g. electric oven, stove, dryer, or car charging)
 	// that materially depleted the homeowner's backup reserve.
 	abnormalRecentUsageThresholdKWH = 1.0
+
+	// almostFullSOC is the threshold below which a battery is considered full enough to not meaninginfully need
+	// solar refill and also to avoid hold penalty
+	almostFullSOC = 95.0
 )
 
 // resolveBatteryPowerKW returns the given battery charge/discharge rate in kW, falling back
@@ -453,8 +457,10 @@ type planPath struct {
 	metrics           []intervalMetrics
 	timeline          []planInterval
 	totalCost         float64
+	strikes           int
 	initialCandidates []actionCandidate
 	modeScores        map[types.BatteryMode]float64
+	modeStrikes       map[types.BatteryMode]int
 	bestScore         float64
 }
 
@@ -624,6 +630,10 @@ func (p *planPath) executeLogs(ctx context.Context) {
 			}
 			logCandidate(ctx, cand, step0Interval, step0State, false)
 			score, evaluated := p.modeScores[cand.batteryMode]
+			candStrikes := 0
+			if p.modeStrikes != nil {
+				candStrikes = p.modeStrikes[cand.batteryMode]
+			}
 			var delta float64
 			if evaluated {
 				delta = score - p.bestScore
@@ -638,6 +648,8 @@ func (p *planPath) executeLogs(ctx context.Context) {
 				slog.String("description", cand.description),
 				slog.Int("targetSOC", cand.targetSOC),
 				slog.Bool("evaluated", evaluated),
+				slog.Int("candidateStrikes", candStrikes),
+				slog.Int("winningStrikes", p.strikes),
 				slog.Float64("candidateScoreDollars", score),
 				slog.Float64("winningScoreDollars", p.bestScore),
 				slog.Float64("costDeltaDollars", delta),
@@ -1955,6 +1967,7 @@ func (c *Controller) generateActionCandidates(
 	// --- PRUNING RULE 5: Reserve Floor Protection ---
 	// Battery grid export requires an export safety margin above the effective reserve floor.
 	canExport := currentSOC > effectiveReserveSOC+exportReserveMarginPct
+	roomLeftToFill := currentSOC < almostFullSOC
 
 	// Evaluate daytime solar refill:
 	// If daytime solar is expected and tonight's import rate is within minHoldDiff of export credit:
@@ -1962,11 +1975,10 @@ func (c *Controller) generateActionCandidates(
 	var hasUpcomingSolarRefill bool
 	var refillExportRate float64
 	var earliestSolarRefillTime time.Time
-	if isAboveReserve && settings.GridExportSolar && !isFlatNEM && defaultBatteryCyclingHoldHurdleDollars > 0 {
-		holdHurdle := defaultBatteryCyclingHoldHurdleDollars
+	if isAboveReserve && roomLeftToFill && settings.GridExportSolar && !isFlatNEM && defaultBatteryCyclingHoldHurdleDollars > 0 {
 		for i := stepIdx + 1; i < len(timeline); i++ {
 			if timeline[i].solarKWH > minSignificantSolarKW*timeline[i].durationHours &&
-				interval.importRate <= timeline[i].exportRate+holdHurdle+priceEpsilonForEquality {
+				interval.importRate+defaultBatteryCyclingHoldHurdleDollars <= timeline[i].exportRate+priceEpsilonForEquality {
 				hasUpcomingSolarRefill = true
 				refillExportRate = timeline[i].exportRate
 				earliestSolarRefillTime = timeline[i].startTime
@@ -1980,7 +1992,7 @@ func (c *Controller) generateActionCandidates(
 	if nearestVPP != nil {
 		vppEventDeadline = nearestVPP.deadline
 	}
-	vppBeforeSolarRefill := hasVPPAhead && hasUpcomingSolarRefill && !earliestSolarRefillTime.Before(nearestVPP.deadline)
+	vppBeforeSolarRefill := hasVPPAhead && (!hasUpcomingSolarRefill || !earliestSolarRefillTime.Before(nearestVPP.deadline))
 
 	ld.hasUpcomingSolarRefill = hasUpcomingSolarRefill
 	ld.refillExportRate = refillExportRate
@@ -2094,12 +2106,12 @@ func (c *Controller) generateActionCandidates(
 		if vppBeforeSolarRefill {
 			reason = types.ActionReasonVPPPrep
 			desc = "Preserving battery in standby ahead of VPP event."
-		} else if hasUpcomingSolarRefill {
-			reason = types.ActionReasonHoldSimilarPrice
-			desc = "Preserving battery in standby for daytime solar export."
 		} else if hasHigherFutureRate {
 			reason = types.ActionReasonDeficitSaveForPeak
 			desc = "Preserving battery in standby for upcoming peak rates."
+		} else if hasUpcomingSolarRefill {
+			reason = types.ActionReasonHoldSimilarPrice
+			desc = "Preserving battery in standby for daytime solar export."
 		} else if hasHigherFutureExport {
 			reason = types.ActionReasonDeficitSaveForPeak
 			desc = "Preserving battery in standby for upcoming export arbitrage."
@@ -2562,32 +2574,32 @@ func stepPhysics(
 type dpNode struct {
 	state     planState
 	totalCost float64
+	strikes   int
 	action    actionCandidate
 	metric    intervalMetrics
 	parent    *dpNode
 }
 
-// calculateVPPFeasibilityPenalty calculates a prohibitive penalty for failing to meet a VPP deadline.
+// calculateVPPShortfallStrikes calculates constraint violation strikes for failing to meet a VPP deadline.
 // It determines if 100% SOC is physically reachable given initial SOC, lead time, and max charge power.
-// If reachable target is not met, a prohibitive penalty ($1,000 base + $100 per % deficit) is applied,
-// effectively rejecting any plan that fails to charge by the deadline because the ESS hardware takes over.
-func calculateVPPFeasibilityPenalty(
+// If reachable target is not met, integer strikes (1 strike per % deficit) are returned.
+func calculateVPPShortfallStrikes(
 	initialState planState,
 	candidateState planState,
 	deadline time.Time,
 	oneWayEff float64,
 	gridChargeBatteries bool,
-) float64 {
+) int {
 	if initialState.chargingDisabled || !gridChargeBatteries {
-		return 0.0
+		return 0
 	}
 	leadTimeHours := deadline.Sub(initialState.time).Hours()
 	if leadTimeHours <= 0 {
 		targetSOC := 100.0
 		if candidateState.soc < targetSOC-socTargetTolerancePct {
-			return 1000.0 + (targetSOC-candidateState.soc)*100.0
+			return int(math.Ceil(targetSOC - candidateState.soc))
 		}
-		return 0.0
+		return 0
 	}
 	capacityKWH := initialState.capacityKWH
 	maxChargeKW := resolveBatteryPowerKW(initialState.maxChargeKW, capacityKWH)
@@ -2596,16 +2608,9 @@ func calculateVPPFeasibilityPenalty(
 
 	if candidateState.soc < targetSOC-socTargetTolerancePct {
 		deficitSOC := targetSOC - candidateState.soc
-		// If 100% was physically reachable from the start of the horizon, apply a prohibitive penalty
-		// ($1,000 base + $100 per % deficit) so the solver rejects any undercharged trajectory.
-		if targetSOC >= 100.0-socTargetTolerancePct {
-			return 1000.0 + (deficitSOC * 100.0)
-		}
-		// If physical lead time was constrained (cannot reach 100%), heavily penalize any deficit
-		// below the maximum achievable charge so the solver maximizes stored energy.
-		return deficitSOC * 10.0
+		return int(math.Ceil(deficitSOC))
 	}
-	return 0.0
+	return 0
 }
 
 // modeIndex maps a types.BatteryMode to an integer slot (0..3) for mode-isolated DP buckets.
@@ -2654,6 +2659,7 @@ func (c *Controller) searchOptimalPlan(
 	}
 
 	modeBestScores := make(map[types.BatteryMode]float64)
+	modeBestStrikes := make(map[types.BatteryMode]int)
 	modeBestNodes := make(map[types.BatteryMode]*dpNode)
 	totalPathsEvaluated := 0
 
@@ -2676,7 +2682,7 @@ func (c *Controller) searchOptimalPlan(
 		for i := 0; i < len(timeline); i++ {
 			for j := i + 1; j < len(timeline); j++ {
 				if timeline[j].solarKWH > minSignificantSolarKW*timeline[j].durationHours &&
-					timeline[i].importRate <= timeline[j].exportRate+defaultBatteryCyclingHoldHurdleDollars+priceEpsilonForEquality {
+					timeline[i].importRate+defaultBatteryCyclingHoldHurdleDollars <= timeline[j].exportRate+priceEpsilonForEquality {
 					solarRefillAhead[i] = true
 					break
 				}
@@ -2855,7 +2861,7 @@ func (c *Controller) searchOptimalPlan(
 					nextState, metrics := stepPhysics(parent.state, cand, interval, settings, roundTripEff)
 
 					var holdCost float64
-					if settings.GridExportSolar && !isFlatNEM && solarRefillAhead[stepIdx] {
+					if settings.GridExportSolar && !isFlatNEM && solarRefillAhead[stepIdx] && parent.state.soc < almostFullSOC {
 						holdCost = metrics.batSuppliedHomeKWH * defaultBatteryCyclingHoldHurdleDollars
 					}
 
@@ -2915,7 +2921,6 @@ func (c *Controller) searchOptimalPlan(
 					//    bypasses charging the battery and exports to the grid, so the deficit penalty MUST apply to prevent abandoning reserve.
 					// 3. Grid charging disabled: If GridChargeBatteries is disabled and there is no surplus solar, it is physically impossible
 					//    to charge otherwise; the site is not penalized for an unavoidable deficit.
-					var deficitPenalty float64
 					inDeficit := nextState.soc < interval.minSOC-reserveFloorTolerancePct
 					isActivelyGridCharging := cand.batteryMode == types.BatteryModeChargeAny
 					canGridCharge := settings.GridChargeBatteries && !parent.state.chargingDisabled
@@ -2923,21 +2928,22 @@ func (c *Controller) searchOptimalPlan(
 					isRechargingFromSolar := hasSurplusSolar && cand.solarMode != types.SolarModeExport
 
 					if inDeficit && !isActivelyGridCharging && !isRechargingFromSolar && (canGridCharge || hasSurplusSolar) {
-						deficitKWH := (interval.minSOC - nextState.soc) / 100.0 * capacityKWH
-						deficitPenaltyRate := max(minReserveDeficitPenaltyDollarsPerKWH, interval.importRate*reserveDeficitPenaltyMultiplier)
-						deficitPenalty = (deficitKWH / oneWayEff) * deficitPenaltyRate * interval.durationHours
+						// Hard constraint: when below reserve floor and recharging is physically possible,
+						// discard any trajectory that fails to restore the homeowner's backup reserve.
+						continue
 					}
 
-					newCost := parent.totalCost + metrics.costDollars + exportDegradationCost + chargeDegradationCost + holdCost + transitionCost + deficitPenalty + (nextState.energyKWH * interval.durationHours * batteryHoldingCostPerHourPerKWH)
+					newCost := parent.totalCost + metrics.costDollars + exportDegradationCost + chargeDegradationCost + holdCost + transitionCost + (nextState.energyKWH * interval.durationHours * batteryHoldingCostPerHourPerKWH)
 
-					// Check VPP deadline feasibility: apply penalty only for nearest upcoming event deadline
+					var strikeInc int
+					// Check VPP deadline feasibility: apply strikes for nearest upcoming event deadline
 					if hasNearestVPP && settings.GridChargeBatteries && !initial.chargingDisabled {
 						if interval.endTime.Equal(nearestVPPDeadline) || (interval.startTime.Before(nearestVPPDeadline) && interval.endTime.After(nearestVPPDeadline)) {
-							newCost += calculateVPPFeasibilityPenalty(initial, nextState, nearestVPPDeadline, oneWayEff, settings.GridChargeBatteries)
+							strikeInc += calculateVPPShortfallStrikes(initial, nextState, nearestVPPDeadline, oneWayEff, settings.GridChargeBatteries)
 						}
 					}
 
-					// Peak Survival Buffer Penalty:
+					// Peak Survival Buffer Cost:
 					// At the conclusion of a peak pricing window, evaluate whether the simulated trajectory
 					// survives the peak pricing period with the configured PeakSurvivalBufferMinutes.
 					//
@@ -2953,6 +2959,7 @@ func (c *Controller) searchOptimalPlan(
 					// of $0.428/kWh. Because the penalty rate ($0.428) exceeded retail electricity prices ($0.321), discharging
 					// the battery to power the home during the day appeared to the DP as a net financial loss! The solver
 					// locked the battery in Standby and forced the home to buy grid power for 8+ hours just to avoid a penalty at 9 PM.
+					var peakBufferCost float64
 					for _, pw := range anchors.peakWindows {
 						if stepIdx == pw.endIndex && pw.bufferEnergyKWH > 0 {
 							reserveBufferPct := settings.GetOptimizationParams().ReserveBufferPercent
@@ -2962,11 +2969,13 @@ func (c *Controller) searchOptimalPlan(
 
 							if nextState.energyKWH < targetEnergyKWH {
 								shortfallKWH := targetEnergyKWH - nextState.energyKWH
-								peakSurvivalPenalty := shortfallKWH * peakSurvivalBufferShortfallPenaltyDollarsPerKWH
-								newCost += peakSurvivalPenalty
+								peakBufferCost += shortfallKWH * peakSurvivalBufferShortfallPenaltyDollarsPerKWH
 							}
 						}
 					}
+
+					newCost += peakBufferCost
+					newStrikes := parent.strikes + strikeInc
 
 					mIdx := modeIndex(cand.batteryMode)
 					b := int(math.Round(nextState.soc * 2))
@@ -2980,20 +2989,22 @@ func (c *Controller) searchOptimalPlan(
 					if nextBuckets[mIdx][b] == nil {
 						isBetter = true
 					} else {
-						// Dominance comparison within the same mode: adjust by marginal residual value of SOC difference.
-						socDelta := nextState.soc - nextBuckets[mIdx][b].state.soc
-						energyDeltaKWH := (socDelta / 100.0) * capacityKWH
-						// Residual energy in nextState enters stepIdx+1. Value it using the maximum rate of
-						// subsequent intervals (stepIdx+1 onwards), or the known post-horizon rate if at horizon end,
-						// so we don't overestimate its future worth using the rate of the step that just finished.
-						valuationRate := anchors.knownPostHorizonRate
-						if stepIdx+1 < len(maxFutureValuationRates) {
-							valuationRate = maxFutureValuationRates[stepIdx+1]
-						}
-						marginalValue := energyDeltaKWH * oneWayEff * valuationRate
-						effectiveNewCost := newCost - marginalValue
-						if effectiveNewCost < nextBuckets[mIdx][b].totalCost {
+						curr := nextBuckets[mIdx][b]
+						if newStrikes < curr.strikes {
 							isBetter = true
+						} else if newStrikes == curr.strikes {
+							// Dominance comparison within the same mode and strike count: adjust by marginal residual value of SOC difference.
+							socDelta := nextState.soc - curr.state.soc
+							energyDeltaKWH := (socDelta / 100.0) * capacityKWH
+							valuationRate := anchors.knownPostHorizonRate
+							if stepIdx+1 < len(maxFutureValuationRates) {
+								valuationRate = maxFutureValuationRates[stepIdx+1]
+							}
+							marginalValue := energyDeltaKWH * oneWayEff * valuationRate
+							effectiveNewCost := newCost - marginalValue
+							if effectiveNewCost < curr.totalCost {
+								isBetter = true
+							}
 						}
 					}
 
@@ -3001,6 +3012,7 @@ func (c *Controller) searchOptimalPlan(
 						nextBuckets[mIdx][b] = &dpNode{
 							state:     nextState,
 							totalCost: newCost,
+							strikes:   newStrikes,
 							action:    cand,
 							metric:    metrics,
 							parent:    parent,
@@ -3041,17 +3053,32 @@ func (c *Controller) searchOptimalPlan(
 			}
 
 			// Between BatteryModeLoad (0) and BatteryModeExport (3), future physical constraints and
-			// transition rules are identical. In the same SOC bucket, keep only the node with lower effective cost.
+			// transition rules are identical. In the same SOC bucket, keep only the node with lower strikes or effective cost.
 			for b := 0; b <= 200; b++ {
 				n0 := nextBuckets[0][b]
 				n3 := nextBuckets[3][b]
 				if n0 != nil && n3 != nil {
-					eff0 := n0.totalCost - (n0.state.soc/100.0)*capacityKWH*oneWayEff*valuationRate
-					eff3 := n3.totalCost - (n3.state.soc/100.0)*capacityKWH*oneWayEff*valuationRate
-					if eff0 <= eff3 {
+					if n0.strikes < n3.strikes {
 						nextBuckets[3][b] = nil
-					} else {
+					} else if n3.strikes < n0.strikes {
 						nextBuckets[0][b] = nil
+					} else {
+						eff0 := n0.totalCost - (n0.state.soc/100.0)*capacityKWH*oneWayEff*valuationRate
+						eff3 := n3.totalCost - (n3.state.soc/100.0)*capacityKWH*oneWayEff*valuationRate
+						if eff0 <= eff3 {
+							nextBuckets[3][b] = nil
+						} else {
+							nextBuckets[0][b] = nil
+						}
+					}
+				}
+			}
+
+			minStrikes := math.MaxInt
+			for m := 0; m < 4; m++ {
+				for _, n := range nextBuckets[m] {
+					if n != nil && n.strikes < minStrikes {
+						minStrikes = n.strikes
 					}
 				}
 			}
@@ -3059,7 +3086,7 @@ func (c *Controller) searchOptimalPlan(
 			var minEffCost float64 = math.MaxFloat64
 			for m := 0; m < 4; m++ {
 				for _, n := range nextBuckets[m] {
-					if n != nil {
+					if n != nil && n.strikes == minStrikes {
 						effCost := n.totalCost - (n.state.soc/100.0)*capacityKWH*oneWayEff*valuationRate
 						if effCost < minEffCost {
 							minEffCost = effCost
@@ -3072,7 +3099,7 @@ func (c *Controller) searchOptimalPlan(
 
 			for m := 0; m < 4; m++ {
 				for _, n := range nextBuckets[m] {
-					if n != nil {
+					if n != nil && n.strikes == minStrikes {
 						effCost := n.totalCost - (n.state.soc/100.0)*capacityKWH*oneWayEff*valuationRate
 						if effCost <= maxAllowedEffCost {
 							activeNodes = append(activeNodes, n)
@@ -3093,27 +3120,31 @@ func (c *Controller) searchOptimalPlan(
 		// Evaluate terminal battery valuation across all surviving trajectories for this cand0
 		var bestNodeForCand *dpNode
 		var bestScoreForCand float64 = math.MaxFloat64
+		var bestStrikesForCand int = math.MaxInt
 
 		for _, node := range activeNodes {
 			totalPathsEvaluated++
 			termVal := calculateTerminalValuation(node.state, anchors, settings, timeline, capacityKWH, roundTripEff)
 			score := node.totalCost + termVal
-			if score < bestScoreForCand {
+			if node.strikes < bestStrikesForCand || (node.strikes == bestStrikesForCand && score < bestScoreForCand) {
+				bestStrikesForCand = node.strikes
 				bestScoreForCand = score
 				bestNodeForCand = node
 			}
 		}
 
 		if bestNodeForCand != nil {
-			prevScore, exists := modeBestScores[cand0.batteryMode]
-			isBetter := !exists || bestScoreForCand < prevScore-priceEpsilonForEquality
-			if !isBetter && exists && math.Abs(bestScoreForCand-prevScore) <= priceEpsilonForEquality {
+			prevStrikes, exists := modeBestStrikes[cand0.batteryMode]
+			prevScore := modeBestScores[cand0.batteryMode]
+			isBetter := !exists || bestStrikesForCand < prevStrikes || (bestStrikesForCand == prevStrikes && bestScoreForCand < prevScore-priceEpsilonForEquality)
+			if !isBetter && exists && bestStrikesForCand == prevStrikes && math.Abs(bestScoreForCand-prevScore) <= priceEpsilonForEquality {
 				// Tie-breaker: prefer candidate matching lastAction to avoid unnecessary step-0 mode switches
 				if lastAction != nil && cand0.batteryMode == lastAction.BatteryMode && cand0.solarMode == lastAction.SolarMode {
 					isBetter = true
 				}
 			}
 			if isBetter {
+				modeBestStrikes[cand0.batteryMode] = bestStrikesForCand
 				modeBestScores[cand0.batteryMode] = bestScoreForCand
 				modeBestNodes[cand0.batteryMode] = bestNodeForCand
 			}
@@ -3153,22 +3184,28 @@ func (c *Controller) searchOptimalPlan(
 
 	var bestOverallNode *dpNode
 	var bestOverallScore float64 = math.MaxFloat64
+	var bestOverallStrikes int = math.MaxInt
 	var runnerUpScore float64 = math.MaxFloat64
+	var runnerUpStrikes int = math.MaxInt
 
 	for _, mode := range modePriority {
 		score, exists := modeBestScores[mode]
 		if !exists {
 			continue
 		}
+		strikes := modeBestStrikes[mode]
 		node := modeBestNodes[mode]
-		if score < bestOverallScore-priceEpsilonForEquality {
+		if strikes < bestOverallStrikes || (strikes == bestOverallStrikes && score < bestOverallScore-priceEpsilonForEquality) {
 			if bestOverallNode != nil {
 				runnerUpScore = bestOverallScore
+				runnerUpStrikes = bestOverallStrikes
 			}
+			bestOverallStrikes = strikes
 			bestOverallScore = score
 			bestOverallNode = node
-		} else if score < runnerUpScore-priceEpsilonForEquality {
+		} else if strikes < runnerUpStrikes || (strikes == runnerUpStrikes && score < runnerUpScore-priceEpsilonForEquality) {
 			runnerUpScore = score
+			runnerUpStrikes = strikes
 		}
 	}
 
@@ -3236,14 +3273,16 @@ func (c *Controller) searchOptimalPlan(
 			if shouldFastTrack {
 				chargeNode, exists := modeBestNodes[types.BatteryModeChargeAny]
 				chargeScore := modeBestScores[types.BatteryModeChargeAny]
+				chargeStrikes := modeBestStrikes[types.BatteryModeChargeAny]
 				if !exists || chargeNode == nil {
 					log.Ctx(ctx).DebugContext(ctx, "fast-track grid charge skipped: no valid ChargeAny node exists in plan search",
 						slog.Time("scheduledChargeTime", fastTrackStartTime),
 						slog.Duration("delay", fastTrackDelay),
 					)
-				} else if chargeScore-bestOverallScore <= defaultInertiaThresholdDollars {
+				} else if chargeStrikes <= bestOverallStrikes && chargeScore-bestOverallScore <= defaultInertiaThresholdDollars {
 					originalMode := actions[0].batteryMode
 					originalScore := bestOverallScore
+					originalStrikes := bestOverallStrikes
 					var originalCost float64
 					for _, m := range metrics {
 						originalCost += m.costDollars
@@ -3251,6 +3290,7 @@ func (c *Controller) searchOptimalPlan(
 
 					bestOverallNode = chargeNode
 					bestOverallScore = modeBestScores[types.BatteryModeChargeAny]
+					bestOverallStrikes = chargeStrikes
 
 					curr = bestOverallNode
 					states[n] = curr.state
@@ -3266,7 +3306,7 @@ func (c *Controller) searchOptimalPlan(
 						promotedCost += m.costDollars
 					}
 
-					slog.Debug("fast-tracking scheduled grid charge to step 0 due to polling cycle",
+					log.Ctx(ctx).DebugContext(ctx, "fast-tracking scheduled grid charge to step 0 due to polling cycle",
 						slog.Time("scheduledChargeTime", fastTrackStartTime),
 						slog.Duration("delay", fastTrackDelay),
 						slog.Float64("step0ImportRate", timeline[0].importRate),
@@ -3274,10 +3314,12 @@ func (c *Controller) searchOptimalPlan(
 						slog.Float64("headroomKWH", headroomKWH),
 						slog.String("originalMode", drModeString(originalMode)),
 						slog.Float64("originalScore", originalScore),
+						slog.Int("originalStrikes", originalStrikes),
 						slog.Float64("originalCostDollars", originalCost),
 						slog.String("promotedMode", drModeString(actions[0].batteryMode)),
 						slog.String("promotedReason", string(actions[0].reason)),
 						slog.Float64("promotedScore", bestOverallScore),
+						slog.Int("promotedStrikes", bestOverallStrikes),
 						slog.Float64("promotedCostDollars", promotedCost))
 				}
 			}
@@ -3289,14 +3331,25 @@ func (c *Controller) searchOptimalPlan(
 		totalPhysicalCost += m.costDollars
 	}
 
+	winningStrikes := bestOverallStrikes
+	if winningStrikes == math.MaxInt {
+		winningStrikes = 0
+	}
+	ruStrikes := runnerUpStrikes
+	if ruStrikes == math.MaxInt {
+		ruStrikes = 0
+	}
+
 	bestPath := &planPath{
 		actions:           actions,
 		states:            states,
 		metrics:           metrics,
 		timeline:          timeline,
 		totalCost:         totalPhysicalCost,
+		strikes:           winningStrikes,
 		initialCandidates: candidates0,
 		modeScores:        modeBestScores,
+		modeStrikes:       modeBestStrikes,
 		bestScore:         bestOverallScore,
 	}
 
@@ -3323,6 +3376,8 @@ func (c *Controller) searchOptimalPlan(
 		slog.String("chosenReason", string(bestPath.actions[0].reason)),
 		slog.Float64("winningTotalNetCostDollars", bestPath.totalCost),
 		slog.Float64("winningTotalScoreWithValuationDollars", bestOverallScore),
+		slog.Int("strikes", bestPath.strikes),
+		slog.Int("runnerUpStrikes", ruStrikes),
 		slog.Float64("runnerUpScoreDollars", runnerUpScore),
 		slog.Float64("costDeltaDollars", costDelta),
 		slog.Bool("modeSwitchedFromLastAction", modeSwitched),
@@ -3512,21 +3567,33 @@ func resolvePlanActionReason(
 			}
 		}
 
-		// 2. ArbitrageHoldExport: Upcoming export window (battery or solar export) scheduled in plan
+		// 2. Battery Export Arbitrage: Upcoming battery export window scheduled in plan
 		for j := stepIdx + 1; j < len(winningPath.actions) && j < len(timeline); j++ {
-			if winningPath.actions[j].batteryMode == types.BatteryModeExport ||
-				(winningPath.actions[j].solarMode == types.SolarModeExport && timeline[j].solarKWH > minSignificantSolarKW*timeline[j].durationHours) {
+			if winningPath.actions[j].batteryMode == types.BatteryModeExport {
 				return types.ActionReasonArbitrageHoldExport,
 					"Preserving battery in standby for upcoming export window.", &timeline[j].price
 			}
 		}
 
-		// 3. Fallback to candidate reason and description (e.g. DeficitSaveForPeak with peak time and rate)
+		// 3. DeficitSaveForPeak: If an upcoming peak rate higher than current import exists, that is the primary reason to hold
+		peakIdx, futPrice := findUpcomingPeak(timeline, stepIdx)
+		if peakIdx != -1 && timeline[peakIdx].importRate > importRate+priceMaterialityThresholdDollars {
+			return types.ActionReasonDeficitSaveForPeak, "Preserving battery in standby for upcoming peak rates.", futPrice
+		}
+
+		// 4. Solar Export Arbitrage: Upcoming solar export window scheduled in plan (when no higher peak import rate exists)
+		for j := stepIdx + 1; j < len(winningPath.actions) && j < len(timeline); j++ {
+			if winningPath.actions[j].solarMode == types.SolarModeExport && timeline[j].solarKWH > minSignificantSolarKW*timeline[j].durationHours {
+				return types.ActionReasonArbitrageHoldExport,
+					"Preserving battery in standby for upcoming export window.", &timeline[j].price
+			}
+		}
+
+		// 4. Fallback to candidate reason and description
 		desc := action.description
 		if desc == "" {
 			desc = "Preserving battery in standby for upcoming peak rates."
 		}
-		_, futPrice := findUpcomingPeak(timeline, stepIdx)
 		return action.reason, desc, futPrice
 
 	case types.BatteryModeLoad:
