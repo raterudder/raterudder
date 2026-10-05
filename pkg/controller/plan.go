@@ -158,6 +158,10 @@ const (
 	// remains prohibitive relative to any single-cycle arbitrage gain.
 	reserveDeficitPenaltyMultiplier = 3.0
 
+	// peakSurvivalBufferShortfallPenaltyDollarsPerKWH ($0.02/kWh) is the soft tie-breaker penalty rate applied
+	// to any shortfall below the peak survival safety buffer (reserve + bufferEnergyKWH) at peak window exit.
+	peakSurvivalBufferShortfallPenaltyDollarsPerKWH = 0.02
+
 	// minSignificantBatteryPowerKW (0.3 kW = 300 W) is the minimum battery charge or discharge power rate
 	// required to be considered meaningful activity rather than inverter tare or idle losses.
 	// When evaluated over an interval, this is scaled by durationHours (e.g. 100 Wh for 20 min).
@@ -369,12 +373,77 @@ type vppAnchor struct {
 	price      float64
 }
 
+// peakWindowAnchor represents a contiguous peak pricing window within the planning horizon.
+type peakWindowAnchor struct {
+	startIndex      int
+	endIndex        int
+	startTime       time.Time
+	endTime         time.Time
+	minPeakRate     float64
+	maxPeakRate     float64
+	bufferEnergyKWH float64
+}
+
 // planningAnchors holds fixed operational markers detected across the horizon.
 type planningAnchors struct {
 	vppEvents            []vppAnchor
 	knownPostHorizonRate float64 // Known rate at H+1 if tariff has a fixed weekly schedule
 	minHorizonImportRate float64
 	maxHorizonImportRate float64
+	peakWindows          []peakWindowAnchor
+}
+
+// minDeficitPriceSpread returns the minimum price spread ($/kWh) required for an economic peak.
+func minDeficitPriceSpread(settings types.Settings) float64 {
+	return max(minPeakRateSpreadDollars, settings.MinDeficitPriceDifferenceDollarsPerKWH)
+}
+
+// calculateTimelinePriceRange returns the minimum and maximum import rates across the timeline.
+func calculateTimelinePriceRange(timeline []planInterval) (minImport, maxImport float64) {
+	if len(timeline) == 0 {
+		return 0, 0
+	}
+	minImport = timeline[0].importRate
+	maxImport = timeline[0].importRate
+	for _, it := range timeline {
+		if it.importRate > maxImport {
+			maxImport = it.importRate
+		}
+		if it.importRate < minImport {
+			minImport = it.importRate
+		}
+	}
+	return minImport, maxImport
+}
+
+// isTruePeakRate returns true if the import rate is at or near the horizon peak rate
+// and the horizon price spread exceeds minDeficitPriceSpread(settings).
+func isTruePeakRate(importRate, minImport, maxImport float64, settings types.Settings) bool {
+	return maxImport > 0 &&
+		importRate >= maxImport-priceMaterialityThresholdDollars &&
+		maxImport >= minImport+minDeficitPriceSpread(settings)
+}
+
+// isTruePeak returns true if the import rate is at or near the horizon peak rate
+// and the horizon price spread exceeds minDeficitPriceSpread(settings).
+func (a planningAnchors) isTruePeak(importRate float64, settings types.Settings) bool {
+	return isTruePeakRate(importRate, a.minHorizonImportRate, a.maxHorizonImportRate, settings)
+}
+
+// findUpcomingPeak finds the highest price interval in timeline strictly after stepIdx.
+func findUpcomingPeak(timeline []planInterval, stepIdx int) (peakIdx int, futPrice *types.Price) {
+	peakIdx = -1
+	var maxPeak float64
+	for j := stepIdx + 1; j < len(timeline); j++ {
+		if timeline[j].importRate > maxPeak {
+			maxPeak = timeline[j].importRate
+			peakIdx = j
+		}
+	}
+	if peakIdx != -1 {
+		futPrice = &timeline[peakIdx].price
+	}
+	return peakIdx, futPrice
 }
 
 // planPath represents a complete simulated trajectory over the entire horizon.
@@ -712,7 +781,7 @@ func (p *planPath) refineOverchargedEpisodes(ctx context.Context, settings types
 			// Target SOC needed at the end of the charge episode is exitSOC.
 			// Incorporate user profile reserve safety buffers and round up (Ceil)
 			// to guarantee the battery never enters downstream periods in deficit.
-			_, reserveBufferPct, _ := settings.GetOptimizationParams()
+			reserveBufferPct := settings.GetOptimizationParams().ReserveBufferPercent
 			minReserve := timeline[chargeEndIdx].minSOC + reserveBufferPct
 			targetSOCFloat := max(minReserve, exitSOC)
 			targetSOCInt := int(math.Ceil(targetSOCFloat))
@@ -1055,6 +1124,17 @@ func (c *Controller) buildPlanningTimeline(
 		todaySolarTrend = c.calculateSolarTrend(ctx, now, history, model, settings)
 	}
 
+	optParams := settings.GetOptimizationParams()
+
+	peakSolarHour := 12
+	var maxSolar float64
+	for hr, prof := range model {
+		if prof.AvgSolarKWH > maxSolar {
+			maxSolar = prof.AvgSolarKWH
+			peakSolarHour = hr
+		}
+	}
+
 	// 2. Convert into discrete intervals across the horizon
 	// The horizon covers up to maxPlanningHorizonHours (24h).
 	// Intervals that begin before the 24-hour mark are allowed to complete their full,
@@ -1102,7 +1182,7 @@ func (c *Controller) buildPlanningTimeline(
 		}
 
 		// Check operational VPP boundaries (prep deadline, event start, event end) to split intervals cleanly
-		buffer := time.Duration(settings.VPPChargingBufferMinutes) * time.Minute
+		buffer := time.Duration(optParams.VPPChargingBufferMinutes) * time.Minute
 		for _, ev := range currentStatus.VPPEvents {
 			if ev.OptOut {
 				continue
@@ -1160,7 +1240,7 @@ func (c *Controller) buildPlanningTimeline(
 			}
 
 			if !crossesBoundary {
-				buffer := time.Duration(settings.VPPChargingBufferMinutes) * time.Minute
+				buffer := time.Duration(optParams.VPPChargingBufferMinutes) * time.Minute
 				for _, ev := range currentStatus.VPPEvents {
 					if ev.OptOut {
 						continue
@@ -1205,8 +1285,25 @@ func (c *Controller) buildPlanningTimeline(
 		h := currentTime.Hour()
 		profile := model[h]
 
+		avgSolarKWH := profile.AvgSolarKWH
+		if optParams.SolarCapacityBufferMinutes > 0 && len(model) > 0 && h <= peakSolarHour {
+			shiftHours := optParams.SolarCapacityBufferMinutes / 60
+			shiftMinutes := optParams.SolarCapacityBufferMinutes % 60
+
+			baseHour := (h - shiftHours + 24) % 24
+			prevHour := (baseHour - 1 + 24) % 24
+
+			fraction := float64(shiftMinutes) / 60.0
+			shiftedSolar := (1.0-fraction)*model[baseHour].AvgSolarKWH + fraction*model[prevHour].AvgSolarKWH
+
+			// In morning ramp up to peak solar, clamp to shifted solar to delay reaching full capacity
+			if shiftedSolar < avgSolarKWH {
+				avgSolarKWH = shiftedSolar
+			}
+		}
+
 		// Projected solar generation energy for this interval (kWh)
-		solarKWH := profile.AvgSolarKWH * durationHrs
+		solarKWH := avgSolarKWH * durationHrs
 		if currentTime.YearDay() == now.YearDay() {
 			solarKWH *= todaySolarTrend
 		}
@@ -1346,25 +1443,18 @@ func (c *Controller) detectPlanningAnchors(
 		return anchors
 	}
 
-	minImport := timeline[0].importRate
-	maxImport := timeline[0].importRate
-	for _, it := range timeline {
-		if it.importRate > maxImport {
-			maxImport = it.importRate
-		}
-		if it.importRate < minImport {
-			minImport = it.importRate
-		}
-	}
+	minImport, maxImport := calculateTimelinePriceRange(timeline)
 	anchors.minHorizonImportRate = minImport
 	anchors.maxHorizonImportRate = maxImport
+
+	optParams := settings.GetOptimizationParams()
 
 	horizonStart := timeline[0].startTime
 	horizonEnd := timeline[len(timeline)-1].endTime
 
 	// 1. Detect VPP Events in Horizon (extended by vppStandbyLeadTime so events starting right after horizon end are caught)
 	vppScanEnd := horizonEnd.Add(vppStandbyLeadTime)
-	buffer := time.Duration(settings.VPPChargingBufferMinutes) * time.Minute
+	buffer := time.Duration(optParams.VPPChargingBufferMinutes) * time.Minute
 	for _, ev := range currentStatus.VPPEvents {
 		if ev.OptOut {
 			continue
@@ -1412,6 +1502,101 @@ func (c *Controller) detectPlanningAnchors(
 		anchors.knownPostHorizonRate = timeline[len(timeline)-1].importRate
 	}
 
+	// 3. Detect Peak Pricing Windows in Horizon:
+	// A peak pricing window is a contiguous block of intervals where import rates are significantly
+	// elevated (importRate >= minImport + minDeficitDiff) that contains at least one interval
+	// reaching the horizon peak rate (importRate >= maxImport - priceMaterialityThresholdDollars).
+	minDeficitDiff := minDeficitPriceSpread(settings)
+	if maxImport >= minImport+minDeficitDiff && len(timeline) > 0 {
+		bufferMinutes := optParams.PeakSurvivalBufferMinutes
+
+		inPeak := false
+		startIdx := 0
+		var currentWindowMaxRate float64
+		var currentWindowMinRate float64
+		hasTruePeak := false
+
+		for i, it := range timeline {
+			isElevated := it.importRate >= minImport+minDeficitDiff
+
+			if isElevated {
+				if !inPeak {
+					inPeak = true
+					startIdx = i
+					currentWindowMaxRate = it.importRate
+					currentWindowMinRate = it.importRate
+					hasTruePeak = isTruePeakRate(it.importRate, minImport, maxImport, settings)
+				} else {
+					if it.importRate > currentWindowMaxRate {
+						currentWindowMaxRate = it.importRate
+					}
+					if it.importRate < currentWindowMinRate {
+						currentWindowMinRate = it.importRate
+					}
+					if isTruePeakRate(it.importRate, minImport, maxImport, settings) {
+						hasTruePeak = true
+					}
+				}
+			}
+
+			// End of contiguous block or end of timeline
+			if inPeak && (!isElevated || i == len(timeline)-1) {
+				endIdx := i
+				if !isElevated {
+					endIdx = i - 1
+				}
+
+				// If this block reaches the end of the timeline, check if the peak actually continues beyond horizon.
+				// If future prices after horizonEnd remain elevated, the peak has not concluded within the horizon.
+				isOngoingBeyondHorizon := false
+				if endIdx == len(timeline)-1 && len(futurePrices) > 0 {
+					for _, p := range futurePrices {
+						if p.TSStart.Equal(horizonEnd) || (p.TSStart.Before(horizonEnd) && p.TSEnd.After(horizonEnd)) {
+							rate := p.DollarsPerKWH + p.GridUseDollarsPerKWH
+							if rate >= minImport+minDeficitDiff {
+								isOngoingBeyondHorizon = true
+							}
+							break
+						}
+					}
+				}
+
+				if hasTruePeak && endIdx >= startIdx && !isOngoingBeyondHorizon {
+					// Calculate required buffer energy (kWh) over bufferMinutes using greedy look-back
+					// from endIdx across the peak window, matching controller.checkPeakSurvival.
+					var bufferEnergyKWH float64
+					if bufferMinutes > 0 {
+						remainingMinutes := float64(bufferMinutes)
+						for k := endIdx; k >= startIdx && remainingMinutes > 0; k-- {
+							intervalMins := timeline[k].durationHours * 60.0
+							takeMins := min(remainingMinutes, intervalMins)
+							bufferEnergyKWH += (takeMins / intervalMins) * timeline[k].loadKWH
+							remainingMinutes -= takeMins
+						}
+						if remainingMinutes > 0 {
+							avgLoadKW := timeline[endIdx].loadKWH / timeline[endIdx].durationHours
+							bufferEnergyKWH += avgLoadKW * (remainingMinutes / 60.0)
+						}
+					}
+
+					anchors.peakWindows = append(anchors.peakWindows, peakWindowAnchor{
+						startIndex:      startIdx,
+						endIndex:        endIdx,
+						startTime:       timeline[startIdx].startTime,
+						endTime:         timeline[endIdx].endTime,
+						minPeakRate:     currentWindowMinRate,
+						maxPeakRate:     currentWindowMaxRate,
+						bufferEnergyKWH: bufferEnergyKWH,
+					})
+				}
+
+				inPeak = false
+				hasTruePeak = false
+				currentWindowMaxRate = 0
+			}
+		}
+	}
+
 	return anchors
 }
 
@@ -1436,7 +1621,9 @@ func (c *Controller) generateActionCandidates(
 	if capacityKWH <= 0 {
 		capacityKWH = currentStatus.BatteryCapacityKWH
 	}
-	roundTripEff, reserveBufferPct, _ := settings.GetOptimizationParams()
+	optParams := settings.GetOptimizationParams()
+	roundTripEff := optParams.RoundTripEfficiency
+	reserveBufferPct := optParams.ReserveBufferPercent
 	effectiveReserveSOC := interval.minSOC + reserveBufferPct
 	isAboveReserve := currentSOC > effectiveReserveSOC
 
@@ -1446,24 +1633,10 @@ func (c *Controller) generateActionCandidates(
 		roundTripEff:        roundTripEff,
 	}
 
-	minImport := anchors.minHorizonImportRate
-	maxImport := anchors.maxHorizonImportRate
-	if maxImport <= 0 && len(timeline) > 0 {
-		minImport = timeline[0].importRate
-		maxImport = timeline[0].importRate
-		for _, it := range timeline {
-			if it.importRate > maxImport {
-				maxImport = it.importRate
-			}
-			if it.importRate < minImport {
-				minImport = it.importRate
-			}
-		}
+	if anchors.maxHorizonImportRate <= 0 && len(timeline) > 0 {
+		anchors.minHorizonImportRate, anchors.maxHorizonImportRate = calculateTimelinePriceRange(timeline)
 	}
-	minDeficitDiff := max(minPeakRateSpreadDollars, settings.MinDeficitPriceDifferenceDollarsPerKWH)
-	isTruePeak := maxImport > 0 &&
-		interval.importRate >= maxImport-priceMaterialityThresholdDollars &&
-		maxImport >= minImport+minDeficitDiff
+	isTruePeak := anchors.isTruePeak(interval.importRate, settings)
 
 	// Determine default solar mode respecting user preference and export rates
 	defaultSolarMode := types.SolarModeAny
@@ -1856,16 +2029,35 @@ func (c *Controller) generateActionCandidates(
 	// because there is never an economic incentive to hold battery energy during the highest rate in the horizon.
 	var maxFutureRate float64
 	var maxFutureExportRate float64
+	cumNetSolarKWH := 0.0
+	headroomKWH = max(0.0, capacityKWH-state.energyKWH)
+	hasSolarRefillBeforePeak := false
 	for i := stepIdx + 1; i < len(timeline); i++ {
+		// If surplus solar before interval i is sufficient to refill the battery to capacity,
+		// the battery will enter interval i full from rooftop solar. Standing by now cannot increase
+		// energy available at interval i and would needlessly force grid imports now.
+		if headroomKWH > 0 && cumNetSolarKWH >= headroomKWH {
+			hasSolarRefillBeforePeak = true
+			break
+		}
 		if timeline[i].importRate > maxFutureRate {
 			maxFutureRate = timeline[i].importRate
 		}
 		if timeline[i].exportRate > maxFutureExportRate {
 			maxFutureExportRate = timeline[i].exportRate
 		}
+		netSolar := max(0.0, timeline[i].solarKWH-timeline[i].loadKWH)
+		cumNetSolarKWH += netSolar
 	}
-	effectiveMaxFutureRate := max(maxFutureRate, anchors.knownPostHorizonRate)
-	hasHigherFutureRate := effectiveMaxFutureRate > interval.importRate+priceMaterialityThresholdDollars
+	effectiveMaxFutureRate := maxFutureRate
+	if !hasSolarRefillBeforePeak {
+		effectiveMaxFutureRate = max(maxFutureRate, anchors.knownPostHorizonRate)
+	}
+	// hasHigherFutureRate requires canDischarge because Standby only holds existing charge.
+	// If the battery is already at or below reserve floor, holding it in Standby cannot save energy
+	// for future peak rates (hardware won't allow discharging below reserve anyway) and would
+	// needlessly lock the site into buying grid power while resting at reserve.
+	hasHigherFutureRate := canDischarge && effectiveMaxFutureRate > interval.importRate+priceMaterialityThresholdDollars
 	// hasHigherFutureExport requires canExport because Standby only holds existing charge (without adding energy).
 	// If the battery does not currently have exportable energy above the reserve margin, holding it in Standby
 	// would needlessly prevent home self-consumption for an export opportunity it cannot participate in.
@@ -2175,7 +2367,7 @@ func stepPhysics(
 		}
 	}
 
-	_, reserveBufferPct, _ := settings.GetOptimizationParams()
+	reserveBufferPct := settings.GetOptimizationParams().ReserveBufferPercent
 	effectiveReserveSOC := interval.minSOC + reserveBufferPct
 	if math.IsNaN(effectiveReserveSOC) || effectiveReserveSOC < 0 {
 		effectiveReserveSOC = 20.0
@@ -2465,7 +2657,7 @@ func (c *Controller) searchOptimalPlan(
 	modeBestNodes := make(map[types.BatteryMode]*dpNode)
 	totalPathsEvaluated := 0
 
-	roundTripEff, _, _ := settings.GetOptimizationParams()
+	roundTripEff := settings.GetOptimizationParams().RoundTripEfficiency
 	oneWayEff := math.Sqrt(roundTripEff)
 	capacityKWH := currentStatus.BatteryCapacityKWH
 	if capacityKWH <= 0 {
@@ -2742,6 +2934,37 @@ func (c *Controller) searchOptimalPlan(
 					if hasNearestVPP && settings.GridChargeBatteries && !initial.chargingDisabled {
 						if interval.endTime.Equal(nearestVPPDeadline) || (interval.startTime.Before(nearestVPPDeadline) && interval.endTime.After(nearestVPPDeadline)) {
 							newCost += calculateVPPFeasibilityPenalty(initial, nextState, nearestVPPDeadline, oneWayEff, settings.GridChargeBatteries)
+						}
+					}
+
+					// Peak Survival Buffer Penalty:
+					// At the conclusion of a peak pricing window, evaluate whether the simulated trajectory
+					// survives the peak pricing period with the configured PeakSurvivalBufferMinutes.
+					//
+					// The peak survival buffer represents a risk-hedging safety cushion (e.g. 15–30 mins of home load),
+					// NOT a critical hardware violation like breaching interval.minSOC. Once a peak window concludes,
+					// rates have already dropped back to off-peak/mid-peak, so exiting without the buffer merely incurs
+					// the minor risk that a peak window could extend or load could fluctuate right at the boundary.
+					// Applying a soft penalty (peakSurvivalBufferShortfallPenaltyDollarsPerKWH = $0.02/kWh) creates
+					// a steady, gentle preference in the DP search to preserve the cushion without overriding true energy economics.
+					//
+					// Previously, penaltyRate was calculated dynamically as min(maxAllowedPenalty, (minHorizonImportRate / roundTripEff) + spread).
+					// On high-load sites or conservative profiles (η = 0.85), an off-peak rate of $0.32/kWh produced a penalty
+					// of $0.428/kWh. Because the penalty rate ($0.428) exceeded retail electricity prices ($0.321), discharging
+					// the battery to power the home during the day appeared to the DP as a net financial loss! The solver
+					// locked the battery in Standby and forced the home to buy grid power for 8+ hours just to avoid a penalty at 9 PM.
+					for _, pw := range anchors.peakWindows {
+						if stepIdx == pw.endIndex && pw.bufferEnergyKWH > 0 {
+							reserveBufferPct := settings.GetOptimizationParams().ReserveBufferPercent
+							effectiveReserveSOC := interval.minSOC + reserveBufferPct
+							reserveKWH := capacityKWH * (effectiveReserveSOC / 100.0)
+							targetEnergyKWH := min(capacityKWH*0.50, reserveKWH+pw.bufferEnergyKWH)
+
+							if nextState.energyKWH < targetEnergyKWH {
+								shortfallKWH := targetEnergyKWH - nextState.energyKWH
+								peakSurvivalPenalty := shortfallKWH * peakSurvivalBufferShortfallPenaltyDollarsPerKWH
+								newCost += peakSurvivalPenalty
+							}
 						}
 					}
 
@@ -3211,13 +3434,10 @@ func resolvePlanActionReason(
 
 	importRate := interval.importRate
 
-	_, reserveBufferPct, _ := settings.GetOptimizationParams()
+	reserveBufferPct := settings.GetOptimizationParams().ReserveBufferPercent
 	effectiveReserveSOC := interval.minSOC + reserveBufferPct
 
-	minDeficitDiff := max(minPeakRateSpreadDollars, settings.MinDeficitPriceDifferenceDollarsPerKWH)
-	isTruePeak := action.isTruePeak || (maxHorizonImportRate > 0 &&
-		importRate >= maxHorizonImportRate-priceMaterialityThresholdDollars &&
-		maxHorizonImportRate >= minHorizonImportRate+minDeficitDiff)
+	isTruePeak := action.isTruePeak || isTruePeakRate(importRate, minHorizonImportRate, maxHorizonImportRate, settings)
 
 	switch action.batteryMode {
 	case types.BatteryModeExport:
@@ -3247,18 +3467,7 @@ func resolvePlanActionReason(
 		}
 
 		// Upcoming peak import rate
-		var peakIdx int = -1
-		var maxPeak float64
-		for j := stepIdx + 1; j < len(timeline); j++ {
-			if timeline[j].importRate > maxPeak {
-				maxPeak = timeline[j].importRate
-				peakIdx = j
-			}
-		}
-		var futPrice *types.Price
-		if peakIdx != -1 {
-			futPrice = &timeline[peakIdx].price
-		}
+		_, futPrice := findUpcomingPeak(timeline, stepIdx)
 		if action.targetSOC > 0 && action.targetSOC == int(math.Round(interval.minSOC)) {
 			return types.ActionReasonDeficitChargeNow,
 				"Charging battery to target reserve.", futPrice
@@ -3317,18 +3526,7 @@ func resolvePlanActionReason(
 		if desc == "" {
 			desc = "Preserving battery in standby for upcoming peak rates."
 		}
-		var futPrice *types.Price
-		var maxPeak float64
-		var peakIdx int = -1
-		for j := stepIdx + 1; j < len(timeline); j++ {
-			if timeline[j].importRate > maxPeak {
-				maxPeak = timeline[j].importRate
-				peakIdx = j
-			}
-		}
-		if peakIdx != -1 {
-			futPrice = &timeline[peakIdx].price
-		}
+		_, futPrice := findUpcomingPeak(timeline, stepIdx)
 		return action.reason, desc, futPrice
 
 	case types.BatteryModeLoad:
@@ -3413,16 +3611,7 @@ func finalizeDecisionAndPlan(
 	// Dynamic programming selects optimal modes across time, but homeowner-facing explanations
 	// are contextual to the full trajectory (e.g., peak discharge, waiting for scheduled charge,
 	// sufficient battery until charge, holding for daytime solar refill, or preventing solar curtailment).
-	minHorizonImportRate := timeline[0].importRate
-	maxHorizonImportRate := timeline[0].importRate
-	for _, it := range timeline {
-		if it.importRate > maxHorizonImportRate {
-			maxHorizonImportRate = it.importRate
-		}
-		if it.importRate < minHorizonImportRate {
-			minHorizonImportRate = it.importRate
-		}
-	}
+	minHorizonImportRate, maxHorizonImportRate := calculateTimelinePriceRange(timeline)
 
 	for i := 0; i < len(winningPath.actions) && i < len(timeline); i++ {
 		reason, desc, futPrice := resolvePlanActionReason(winningPath, i, timeline, settings, maxHorizonImportRate, minHorizonImportRate)
@@ -3498,7 +3687,7 @@ func finalizeDecisionAndPlan(
 	var hitDeficitAt time.Time
 	var hitCapacityAt time.Time
 
-	_, reserveBufferPct, _ := settings.GetOptimizationParams()
+	reserveBufferPct := settings.GetOptimizationParams().ReserveBufferPercent
 	effectiveReserveSOC := immediateInterval.minSOC + reserveBufferPct
 	if initialStatus.BatterySOC <= effectiveReserveSOC+reserveFloorTolerancePct {
 		hitDeficitAt = timeline[0].startTime

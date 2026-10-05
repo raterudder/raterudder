@@ -317,11 +317,10 @@ export interface Settings {
     solarAzimuth?: number;
     solarTilt?: number;
     minStartChargeMinutes: number;
-    peakSurvivalBufferMinutes: number;
-    socBufferPercent: number;
     solarCapacityBufferMinutes: number;
     vppChargingBufferMinutes: number;
     homeLoadPredictionStrategy?: string;
+    optimizationProfile?: string;
 }
 
 export interface UtilityHourPeriod {

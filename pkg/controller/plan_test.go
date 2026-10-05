@@ -598,6 +598,121 @@ func TestBuildPlanningTimeline(t *testing.T) {
 		assert.Equal(t, time.Date(2026, 6, 15, 14, 20, 0, 0, chicagoLoc), timeline[1].startTime)
 		assert.InDelta(t, 0.50, timeline[1].importRate, 0.001)
 	})
+
+	t.Run("SolarCapacityBufferMinutes_ShiftsSolarProfile", func(t *testing.T) {
+		t.Parallel()
+
+		// Run at 00:00 so all subsequent intervals in the day are projected without immediate telemetry override
+		runNow := time.Date(2026, 6, 15, 0, 0, 0, 0, chicagoLoc)
+		currentPrice := types.Price{
+			TSStart:       runNow,
+			TSEnd:         runNow.Add(time.Hour),
+			DollarsPerKWH: 0.10,
+		}
+		var futurePrices []types.Price
+		for h := 1; h < 24; h++ {
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       time.Date(2026, 6, 15, h, 0, 0, 0, chicagoLoc),
+				TSEnd:         time.Date(2026, 6, 15, h+1, 0, 0, 0, chicagoLoc),
+				DollarsPerKWH: 0.10,
+			})
+		}
+
+		// Generate 14 days of solar history:
+		// Hour 9: 2.0 kWh, Hour 10: 4.0 kWh, Hour 14: 6.0 kWh, Hour 15: 4.0 kWh
+		var history []types.EnergyStats
+		for d := 1; d <= 14; d++ {
+			day := runNow.Add(time.Duration(-d*24) * time.Hour)
+			for h := 0; h < 24; h++ {
+				solar := 0.0
+				switch h {
+				case 9:
+					solar = 2.0
+				case 10:
+					solar = 4.0
+				case 14:
+					solar = 6.0
+				case 15:
+					solar = 4.0
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: time.Date(day.Year(), day.Month(), day.Day(), h, 0, 0, 0, chicagoLoc),
+					SolarKWH:    solar,
+					HomeKWH:     1.0,
+				})
+			}
+		}
+
+		status := types.SystemStatus{
+			Timestamp:          runNow,
+			BatteryCapacityKWH: 13.5,
+			BatterySOC:         50,
+			TimeLocation:       "America/Chicago",
+		}
+
+		// Aggressive (0 min buffer)
+		timelineAgg, _, _, err := c.buildPlanningTimeline(ctx, runNow, currentPrice, futurePrices, history, nil, types.Settings{
+			OptimizationProfile: "aggressive",
+		}, status)
+		require.NoError(t, err)
+
+		// Balanced (15 min buffer)
+		timelineBal, _, _, err := c.buildPlanningTimeline(ctx, runNow, currentPrice, futurePrices, history, nil, types.Settings{
+			OptimizationProfile: "balanced",
+		}, status)
+		require.NoError(t, err)
+
+		// Conservative (30 min buffer)
+		timelineCons, _, _, err := c.buildPlanningTimeline(ctx, runNow, currentPrice, futurePrices, history, nil, types.Settings{
+			OptimizationProfile: "conservative",
+		}, status)
+		require.NoError(t, err)
+
+		// Find interval starting at 10:00 (duration 20m = 1/3 hr)
+		// Aggressive (0m shift): 4.0 * (20/60) = 1.333 kWh
+		// Balanced (0m shift): 4.0 * (20/60) = 1.333 kWh
+		// Conservative (20m shift): ((2/3)*4.0 + (1/3)*2.0) = 3.333 kWh/hr -> 3.333 * (20/60) = 1.111 kWh
+		var intAgg10, intBal10, intCons10 *planInterval
+		for i := range timelineAgg {
+			if timelineAgg[i].startTime.Hour() == 10 && timelineAgg[i].startTime.Minute() == 0 {
+				intAgg10 = &timelineAgg[i]
+				break
+			}
+		}
+		for i := range timelineBal {
+			if timelineBal[i].startTime.Hour() == 10 && timelineBal[i].startTime.Minute() == 0 {
+				intBal10 = &timelineBal[i]
+				break
+			}
+		}
+		for i := range timelineCons {
+			if timelineCons[i].startTime.Hour() == 10 && timelineCons[i].startTime.Minute() == 0 {
+				intCons10 = &timelineCons[i]
+				break
+			}
+		}
+
+		require.NotNil(t, intAgg10)
+		require.NotNil(t, intBal10)
+		require.NotNil(t, intCons10)
+
+		assert.InDelta(t, 4.0*(20.0/60.0), intAgg10.solarKWH, 0.05, "aggressive should have unshifted solar at hour 10")
+		assert.InDelta(t, 4.0*(20.0/60.0), intBal10.solarKWH, 0.05, "balanced should have unshifted solar at hour 10")
+		assert.InDelta(t, (10.0/3.0)*(20.0/60.0), intCons10.solarKWH, 0.05, "conservative should have 20m shifted solar at hour 10")
+
+		// In afternoon at Hour 15 (Hour 14 is 6.0, Hour 15 is 4.0, peak solar is hour 14):
+		// Buffer is only applied in morning ramp up to peak solar (h <= peakSolarHour).
+		// Afternoon hours remain unshifted at the true forecast (4.0 * 20/60).
+		var intCons15 *planInterval
+		for i := range timelineCons {
+			if timelineCons[i].startTime.Hour() == 15 && timelineCons[i].startTime.Minute() == 0 {
+				intCons15 = &timelineCons[i]
+				break
+			}
+		}
+		require.NotNil(t, intCons15)
+		assert.InDelta(t, 4.0*(20.0/60.0), intCons15.solarKWH, 0.05, "conservative should keep unshifted solar in afternoon after peak solar")
+	})
 }
 
 // TestDetectPlanningAnchors tests the detection of VPP deadlines, negative prices, and super-spikes.
@@ -641,16 +756,17 @@ func TestDetectPlanningAnchors(t *testing.T) {
 			{startTime: now, endTime: vppEnd2.Add(2 * time.Hour)},
 		}
 
+		// Default balanced profile has 20-minute VPPChargingBufferMinutes
 		anchors := c.detectPlanningAnchors(timeline, nil, status, types.Settings{})
 		require.Len(t, anchors.vppEvents, 2)
 
-		// First VPP is optional, so deadline is event start (minus buffer)
-		assert.Equal(t, vppStart1, anchors.vppEvents[0].deadline)
+		// First VPP is optional, so deadline is event start minus 20m buffer
+		assert.Equal(t, vppStart1.Add(-20*time.Minute), anchors.vppEvents[0].deadline)
 		assert.Equal(t, 20.0, anchors.vppEvents[0].vppSoc)
 		assert.False(t, anchors.vppEvents[0].mandatory)
 
-		// Second VPP is mandatory, so deadline is 2 hours before event start (vppStandbyLeadTime)
-		assert.Equal(t, vppStart2.Add(-2*time.Hour), anchors.vppEvents[1].deadline)
+		// Second VPP is mandatory, so deadline is 2 hours before event start (vppStandbyLeadTime) minus 20m buffer
+		assert.Equal(t, vppStart2.Add(-2*time.Hour).Add(-20*time.Minute), anchors.vppEvents[1].deadline)
 		assert.Equal(t, 25.0, anchors.vppEvents[1].vppSoc)
 		assert.True(t, anchors.vppEvents[1].mandatory)
 	})
@@ -688,6 +804,49 @@ func TestDetectPlanningAnchors(t *testing.T) {
 		// No future prices after horizon
 		anchors := c.detectPlanningAnchors(timeline, nil, types.SystemStatus{Timestamp: now}, types.Settings{})
 		assert.InDelta(t, 0.14, anchors.knownPostHorizonRate, 0.001, "must fall back to latest timeline rate")
+	})
+
+	t.Run("PeakSurvivalBufferWindows", func(t *testing.T) {
+		t.Parallel()
+
+		t0 := time.Date(2026, 7, 10, 12, 0, 0, 0, chicagoLoc)
+		// 12:00-16:00 Off-peak, 16:00-21:00 Peak (5 hours), 21:00-24:00 Off-peak
+		timeline := []planInterval{
+			{index: 0, startTime: t0, endTime: t0.Add(4 * time.Hour), durationHours: 4.0, importRate: 0.10, loadKWH: 4.0, solarKWH: 2.0},
+			{index: 1, startTime: t0.Add(4 * time.Hour), endTime: t0.Add(9 * time.Hour), durationHours: 5.0, importRate: 0.45, loadKWH: 10.0, solarKWH: 2.5},
+			{index: 2, startTime: t0.Add(9 * time.Hour), endTime: t0.Add(12 * time.Hour), durationHours: 3.0, importRate: 0.10, loadKWH: 3.0, solarKWH: 0.0},
+		}
+
+		settConservative := types.Settings{
+			OptimizationProfile: "conservative", // buffer = 30 mins
+		}
+		anchorsCons := c.detectPlanningAnchors(timeline, nil, types.SystemStatus{Timestamp: t0}, settConservative)
+		require.Len(t, anchorsCons.peakWindows, 1)
+		pwCons := anchorsCons.peakWindows[0]
+		assert.Equal(t, 1, pwCons.startIndex)
+		assert.Equal(t, 1, pwCons.endIndex)
+		assert.Equal(t, 0.45, pwCons.minPeakRate)
+		assert.Equal(t, 0.45, pwCons.maxPeakRate)
+		// Buffer 30 mins look-back: avg load during interval 1 is 10.0 kWh / 5h = 2.0 kW -> 2.0 kW * 0.5h = 1.0 kWh
+		assert.InDelta(t, 1.0, pwCons.bufferEnergyKWH, 0.01)
+
+		settAggressive := types.Settings{
+			OptimizationProfile: "aggressive", // buffer = 0 mins
+		}
+		anchorsAgg := c.detectPlanningAnchors(timeline, nil, types.SystemStatus{Timestamp: t0}, settAggressive)
+		require.Len(t, anchorsAgg.peakWindows, 1)
+		pwAgg := anchorsAgg.peakWindows[0]
+		// Buffer 0 mins: 0.0 kWh
+		assert.InDelta(t, 0.0, pwAgg.bufferEnergyKWH, 0.01)
+
+		settBalanced := types.Settings{
+			OptimizationProfile: "balanced", // buffer = 15 mins
+		}
+		anchorsBal := c.detectPlanningAnchors(timeline, nil, types.SystemStatus{Timestamp: t0}, settBalanced)
+		require.Len(t, anchorsBal.peakWindows, 1)
+		pwBal := anchorsBal.peakWindows[0]
+		// Buffer 15 mins: 2.0 kW * 0.25h = 0.5 kWh
+		assert.InDelta(t, 0.5, pwBal.bufferEnergyKWH, 0.01)
 	})
 }
 
@@ -4673,6 +4832,51 @@ func TestSearchOptimalPlan(t *testing.T) {
 			assert.Equal(t, types.BatteryModeLoad, bestPath.actions[0].batteryMode)
 			assert.Equal(t, types.SolarModeExport, bestPath.actions[0].solarMode, "Step 0 in real-time must not switch away from SolarModeExport during same peak price")
 		})
+
+		t.Run("PeakSurvivalBufferPenalty", func(t *testing.T) {
+			t.Parallel()
+
+			t0 := time.Date(2026, 7, 10, 10, 0, 0, 0, time.UTC)
+			// 10:00-14:00 Off-peak ($0.10/kWh, load = 0.5 kW), 14:00-18:00 Peak ($0.50/kWh, load = 2.0 kW), 18:00-22:00 Off-peak ($0.10/kWh)
+			timeline := []planInterval{
+				{index: 0, startTime: t0, endTime: t0.Add(4 * time.Hour), durationHours: 4.0, importRate: 0.10, loadKWH: 2.0},
+				{index: 1, startTime: t0.Add(4 * time.Hour), endTime: t0.Add(8 * time.Hour), durationHours: 4.0, importRate: 0.50, loadKWH: 8.0},
+				{index: 2, startTime: t0.Add(8 * time.Hour), endTime: t0.Add(12 * time.Hour), durationHours: 4.0, importRate: 0.10, loadKWH: 2.0},
+			}
+
+			sett := types.Settings{
+				GridChargeBatteries: true,
+				MinBatterySOC:       20.0,
+				OptimizationProfile: "conservative", // buffer = 60 mins (2.0 kWh)
+			}
+
+			status := types.SystemStatus{
+				Timestamp:             t0,
+				BatteryCapacityKWH:    13.5,
+				BatterySOC:            30.0, // Low initial SOC (4.05 kWh)
+				BatteryAboveMinSOC:    true,
+				MaxBatteryChargeKW:    5.0,
+				MaxBatteryDischargeKW: 5.0,
+			}
+
+			state := planState{
+				soc:         30.0,
+				energyKWH:   4.05,
+				capacityKWH: 13.5,
+				time:        t0,
+			}
+
+			anchors := c.detectPlanningAnchors(timeline, nil, status, sett)
+			require.Len(t, anchors.peakWindows, 1)
+
+			bestPath, err := c.searchOptimalPlan(ctx, timeline, state, anchors, sett, status, nil, nil)
+			require.NoError(t, err)
+			require.NotEmpty(t, bestPath.actions)
+
+			// With conservative profile (60 min buffer), off-peak pre-charging must be scheduled at step 0
+			// to ensure the battery enters peak with enough energy to cover peak load (8.0 kWh) + buffer (2.0 kWh).
+			assert.Equal(t, types.BatteryModeChargeAny, bestPath.actions[0].batteryMode, "Expected off-peak pre-charge to satisfy peak survival buffer")
+		})
 	})
 }
 
@@ -7018,7 +7222,6 @@ func TestRefineOverchargedEpisodes(t *testing.T) {
 		sett := types.Settings{
 			MinBatterySOC:       20,
 			OptimizationProfile: "conservative",
-			SOCBufferPercent:    10.0,
 			GridChargeBatteries: true,
 		}
 		initSt := planState{time: start, energyKWH: 6.0, soc: 40.0, capacityKWH: 15.0, maxChargeKW: 8.0, maxDischargeKW: 8.0}

@@ -247,18 +247,6 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "minimum start charge minutes must be at least 1", http.StatusBadRequest)
 		return
 	}
-	if newSettings.PeakSurvivalBufferMinutes < 0 {
-		writeJSONError(w, "peak survival buffer minutes cannot be negative", http.StatusBadRequest)
-		return
-	}
-	if newSettings.SOCBufferPercent < 0 {
-		writeJSONError(w, "SOC buffer percent cannot be negative", http.StatusBadRequest)
-		return
-	}
-	if newSettings.SOCBufferPercent > 90 {
-		writeJSONError(w, "SOC buffer percent cannot be greater than 90", http.StatusBadRequest)
-		return
-	}
 	if newSettings.SolarCapacityBufferMinutes < 0 {
 		writeJSONError(w, "solar capacity buffer minutes cannot be negative", http.StatusBadRequest)
 		return

@@ -708,6 +708,12 @@ func CalibrateSolarScaleFactor(
 	}
 }
 
+// minSignificantCloudCoverPercent is the minimum cloud cover threshold required to trigger
+// the optimization profile's cloud derate penalty. Minor cloud cover (< 10%) represents sparse
+// or fair-weather clouds that typically do not cause substantial forecasting errors, whereas
+// cloud cover >= 10% introduces material downside risk to the forecast.
+const minSignificantCloudCoverPercent = 10.0
+
 // CalculateWeatherSolar projects future solar generation based on forecast and historical calibration.
 // It performs on-the-fly compass search to detect the optimal panel azimuth and tilt, then:
 //  1. Calibrates robust hourly efficiency factors from filtered historical actual solar vs. irradiance data.
@@ -722,8 +728,8 @@ func CalculateWeatherSolar(
 	history []types.EnergyStats,
 	weather []types.Weather,
 	locInfo types.SiteLocation,
+	cloudDeratePercent float64,
 ) (map[int64]WeatherSolar, types.SimulationParams) {
-
 	// Collect all forecast hours across all days in weather
 	var forecastHours []types.HourlyWeather
 	for _, w := range weather {
@@ -1040,6 +1046,12 @@ func CalculateWeatherSolar(
 		eff := calculateSimilarityEfficiency(gti, hw.CloudCoverPercent, cacheByHour[localHour], finalCalib.StaticEff, hourlyEffs[localHour])
 
 		unclipped := gti * eff * tempFactor * snowFactor
+		if cloudDeratePercent > 0 && hw.CloudCoverPercent >= minSignificantCloudCoverPercent {
+			cloudFactor := hw.CloudCoverPercent / 100.0
+			derateFactor := max(0.0, 1.0-(cloudDeratePercent/100.0)*cloudFactor)
+			unclipped *= derateFactor
+		}
+
 		improved := unclipped
 		if clippingCap > 0 && improved > clippingCap {
 			improved = clippingCap

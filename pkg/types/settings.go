@@ -13,7 +13,7 @@ import (
 
 // CurrentSettingsVersion is the current version of the settings struct.
 // Increment this value only if you need to set a default value other than the Go default for that value.
-const CurrentSettingsVersion = 18
+const CurrentSettingsVersion = 19
 
 // Settings represents the configuration stored in the database.
 // These are dynamic settings that can be changed without redeploying.
@@ -50,9 +50,6 @@ type Settings struct {
 	MinArbitrageDifferenceDollarsPerKWH     float64 `json:"minArbitrageDifferenceDollarsPerKWH"`
 	MinDeficitPriceDifferenceDollarsPerKWH  float64 `json:"minDeficitPriceDifferenceDollarsPerKWH"`
 	MinBatteryExportDifferenceDollarsPerKWH float64 `json:"minBatteryExportDifferenceDollarsPerKWH"`
-
-	// Deprecated: MinExportHoldDifferenceDollarsPerKWH is deprecated in favor of internal cycling hurdle and RTE. Retained for backwards compatibility in decide path.
-	MinExportHoldDifferenceDollarsPerKWH float64 `json:"minExportHoldDifferenceDollarsPerKWH"`
 
 	// How to value solar exports when net metering credits are active. Valid values: "", "lowest", "highest", "none". Default is "lowest".
 	SolarNetMeteringCreditsValue string `json:"solarNetMeteringCreditsValue"`
@@ -116,21 +113,26 @@ type Settings struct {
 	UpdateGroup int `json:"updateGroup"`
 
 	// Hysteresis & timing thresholds
-	MinStartChargeMinutes      int     `json:"minStartChargeMinutes"`
-	PeakSurvivalBufferMinutes  int     `json:"peakSurvivalBufferMinutes"`
-	SOCBufferPercent           float64 `json:"socBufferPercent"`
-	SolarCapacityBufferMinutes int     `json:"solarCapacityBufferMinutes"`
-	VPPChargingBufferMinutes   int     `json:"vppChargingBufferMinutes"`
+	MinStartChargeMinutes int `json:"minStartChargeMinutes"`
 
 	// Home load prediction strategy ("default", "conservative")
 	HomeLoadPredictionStrategy string `json:"homeLoadPredictionStrategy"`
 
 	// OptimizationProfile controls the risk profile, reserve safety buffers, and round-trip efficiency assumptions.
-	// Valid values: "conservative" (η=0.85, higher reserve buffer), "balanced" (η=0.90, default), "aggressive" (η=0.92).
+	// Valid values: "conservative" (higher reserve buffer), "balanced" (default), "aggressive".
 	OptimizationProfile string `json:"optimizationProfile,omitempty"`
 
 	// Notifications maps userID to notification preferences for this site.
 	Notifications map[string]UserNotificationSettings `json:"notifications,omitempty"`
+
+	// Deprecated
+	SolarCapacityBufferMinutes int `json:"solarCapacityBufferMinutes"`
+
+	// Deprecated: MinExportHoldDifferenceDollarsPerKWH is deprecated in favor of internal cycling hurdle and RTE. Retained for backwards compatibility in decide path.
+	MinExportHoldDifferenceDollarsPerKWH float64 `json:"minExportHoldDifferenceDollarsPerKWH"`
+
+	// Deprecated: VPPChargingBufferMinutes is deprecated in favor of OptimizationParams.VPPChargingBufferMinutes.
+	VPPChargingBufferMinutes int `json:"vppChargingBufferMinutes"`
 }
 
 // GridSettings represents the ESS grid configuration capabilities.
@@ -285,13 +287,9 @@ func MigrateSettings(s Settings, currentVersion int, release string) (Settings, 
 				migrated = true
 			}
 		case 10:
-			// version 10: set default MinStartChargeMinutes and PeakSurvivalBufferMinutes
+			// version 10: set default MinStartChargeMinutes
 			if s.MinStartChargeMinutes == 0 {
 				s.MinStartChargeMinutes = 5
-				migrated = true
-			}
-			if s.PeakSurvivalBufferMinutes == 0 {
-				s.PeakSurvivalBufferMinutes = 30
 				migrated = true
 			}
 		case 11:
@@ -307,24 +305,12 @@ func MigrateSettings(s Settings, currentVersion int, release string) (Settings, 
 				migrated = true
 			}
 		case 13:
-			// version 13: split buffer settings based on existing PeakSurvivalBufferMinutes
-			existingBuffer := s.PeakSurvivalBufferMinutes
-			if existingBuffer == 30 || existingBuffer == 0 {
-				s.SOCBufferPercent = 4.0
-				s.PeakSurvivalBufferMinutes = 20
+			// version 13: split buffer settings
+			if s.SolarCapacityBufferMinutes == 0 {
 				s.SolarCapacityBufferMinutes = 10
+			}
+			if s.VPPChargingBufferMinutes == 0 {
 				s.VPPChargingBufferMinutes = 20
-			} else if existingBuffer > 30 {
-				s.SOCBufferPercent = 8.0
-				s.PeakSurvivalBufferMinutes = 40
-				s.SolarCapacityBufferMinutes = 30
-				s.VPPChargingBufferMinutes = 40
-			} else {
-				// existingBuffer < 30
-				s.SOCBufferPercent = 2.0
-				s.PeakSurvivalBufferMinutes = 10
-				s.SolarCapacityBufferMinutes = 0
-				s.VPPChargingBufferMinutes = 10
 			}
 			migrated = true
 		case 14:
@@ -369,6 +355,18 @@ func MigrateSettings(s Settings, currentVersion int, release string) (Settings, 
 						migrated = true
 					}
 				}
+			}
+		case 19:
+			// version 19: migrate legacy buffer settings to OptimizationProfile if unset
+			if s.OptimizationProfile == "" {
+				if s.VPPChargingBufferMinutes >= 40 || s.SolarCapacityBufferMinutes >= 30 {
+					s.OptimizationProfile = "conservative"
+				} else if s.VPPChargingBufferMinutes > 0 && s.VPPChargingBufferMinutes <= 10 {
+					s.OptimizationProfile = "aggressive"
+				} else {
+					s.OptimizationProfile = "balanced"
+				}
+				migrated = true
 			}
 		default:
 			return s, false, fmt.Errorf("unknown settings version: %d", version)
@@ -453,32 +451,46 @@ func (s Settings) GetMinBatterySOC(ctx context.Context, t time.Time, loc *time.L
 	return s.MinBatterySOC
 }
 
+// OptimizationParams holds physical, risk, and weather adjustment parameters associated with an OptimizationProfile.
+type OptimizationParams struct {
+	RoundTripEfficiency        float64 `json:"roundTripEfficiency"`
+	ReserveBufferPercent       float64 `json:"reserveBufferPercent"`
+	PeakSurvivalBufferMinutes  int     `json:"peakSurvivalBufferMinutes"`
+	SolarCapacityBufferMinutes int     `json:"solarCapacityBufferMinutes"`
+	VPPChargingBufferMinutes   int     `json:"vppChargingBufferMinutes"`
+	CloudCoverDeratePercent    float64 `json:"cloudCoverDeratePercent"`
+}
+
 // GetOptimizationParams returns the physical round-trip efficiency (η), active reserve buffer (%),
-// and peak survival buffer (minutes) associated with the configured OptimizationProfile.
-func (s Settings) GetOptimizationParams() (roundTripEfficiency float64, reserveBufferPercent float64, peakSurvivalBufferMinutes int) {
+// and cloud cover derating (%) associated with the configured OptimizationProfile.
+func (s Settings) GetOptimizationParams() OptimizationParams {
 	switch strings.ToLower(s.OptimizationProfile) {
 	case "conservative":
-		buf := s.SOCBufferPercent
-		if buf <= 0 {
-			buf = 10.0
+		return OptimizationParams{
+			RoundTripEfficiency:        0.85,
+			ReserveBufferPercent:       10.0,
+			PeakSurvivalBufferMinutes:  30,
+			SolarCapacityBufferMinutes: 20,
+			VPPChargingBufferMinutes:   40,
+			CloudCoverDeratePercent:    10.0,
 		}
-		surv := s.PeakSurvivalBufferMinutes
-		if surv <= 0 {
-			surv = 60
-		}
-		return 0.85, buf, surv
 	case "aggressive":
-		surv := s.PeakSurvivalBufferMinutes
-		if surv <= 0 {
-			surv = 15
+		return OptimizationParams{
+			RoundTripEfficiency:        0.92,
+			ReserveBufferPercent:       0.0,
+			PeakSurvivalBufferMinutes:  0,
+			SolarCapacityBufferMinutes: 0,
+			VPPChargingBufferMinutes:   10,
+			CloudCoverDeratePercent:    0.0,
 		}
-		return 0.92, 0.0, surv
 	default:
-		// "balanced" or unset: respects the user's configured MinBatterySOC directly
-		surv := s.PeakSurvivalBufferMinutes
-		if surv <= 0 {
-			surv = 30
+		return OptimizationParams{
+			RoundTripEfficiency:        0.90,
+			ReserveBufferPercent:       0.0,
+			PeakSurvivalBufferMinutes:  15,
+			SolarCapacityBufferMinutes: 0,
+			VPPChargingBufferMinutes:   20,
+			CloudCoverDeratePercent:    5.0,
 		}
-		return 0.90, 0.0, surv
 	}
 }

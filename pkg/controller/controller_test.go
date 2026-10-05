@@ -2246,7 +2246,6 @@ func TestDecide(t *testing.T) {
 
 	t.Run("DeficitAt fallback to HitBufferedDeficitAt if HitDeficitAt is empty", func(t *testing.T) {
 		settings := baseSettings
-		settings.PeakSurvivalBufferMinutes = 30
 		settings.MinBatterySOC = 20.0
 		settings.GridChargeBatteries = false
 
@@ -3006,9 +3005,7 @@ func TestSimulateStandby(t *testing.T) {
 		simData := []SimHour{
 			{TS: now, ClampedNetLoadSolarKWH: 2.0, GridChargeDollarsPerKWH: 0.15},
 		}
-		bufferSettings := types.Settings{
-			SOCBufferPercent: 4.0,
-		}
+		bufferSettings := types.Settings{}
 		res := c.simulateStandby(
 			simData,
 			0.10-0.01,
@@ -3044,9 +3041,7 @@ func TestSimulateStandby(t *testing.T) {
 				ThresholdNetLoadSolarKWH:        -3.0,
 			},
 		}
-		bufferSettings := types.Settings{
-			SOCBufferPercent: 4.0,
-		}
+		bufferSettings := types.Settings{}
 		res := c.simulateStandby(
 			simData,
 			0.10-0.01,
@@ -4007,24 +4002,11 @@ func TestEvaluateDeficit(t *testing.T) {
 			{TS: now.Add(3 * time.Hour), GridChargeDollarsPerKWH: 0.20, TotalBufferedDeficitKWH: 2.0, Price: futurePrices[2], BatteryReserveKWH: 2.0},
 		}
 
-		// 1. Without buffer: HitCapacityAt (now + 2h) is the cutoff.
-		// Since loop checks !slot.TS.Before(HitCapacityAt), the slot at now + 3h is excluded.
-		// So totalDeficitKWH = 0.
-		// So benefit is 0 (or no plan is created because there is no deficit).
-		settingsNoBuffer := baseSettings
-		settingsNoBuffer.PeakSurvivalBufferMinutes = 0
-		evalNoBuffer := c.evaluateDeficit(ctx, now, status, currentPrice, settingsNoBuffer, simData, summary, nil)
-		assert.Nil(t, evalNoBuffer)
-
-		// 2. With 90-minute buffer: Since evaluateDeficit now correctly uses the raw HitCapacityAt,
-		// the deficit at now + 3h is still excluded because it is after the capacity hit at now + 2h.
-		settingsWithBuffer := baseSettings
-		settingsWithBuffer.PeakSurvivalBufferMinutes = 90
-		evalWithBuffer := c.evaluateDeficit(ctx, now, status, currentPrice, settingsWithBuffer, simData, summary, nil)
-		assert.Nil(t, evalWithBuffer)
+		eval := c.evaluateDeficit(ctx, now, status, currentPrice, baseSettings, simData, summary, nil)
+		assert.Nil(t, eval)
 	})
 
-	t.Run("Deficit Target SOC with PeakSurvivalBufferMinutes", func(t *testing.T) {
+	t.Run("Deficit Target SOC without double buffering", func(t *testing.T) {
 		status := baseStatus
 		status.BatterySOC = 50.0 // 5.0 kWh
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}
@@ -4048,22 +4030,11 @@ func TestEvaluateDeficit(t *testing.T) {
 			{TS: now.Add(3 * time.Hour), GridChargeDollarsPerKWH: 0.50, TotalBufferedDeficitKWH: 2.0, Price: futurePrices[2], BatteryReserveKWH: 2.0, AvgHomeLoadKWH: 1.2},
 		}
 
-		// 1. PeakSurvivalBufferMinutes = 0 -> neededEnergy = 2.0 -> targetSOC = 70%
-		settingsNoBuffer := baseSettings
-		settingsNoBuffer.PeakSurvivalBufferMinutes = 0
-		evalNoBuffer := c.evaluateDeficit(ctx, now, status, currentPrice, settingsNoBuffer, simData, summary, nil)
-		require.NotNil(t, evalNoBuffer)
-		if assert.NotNil(t, evalNoBuffer.Decision) {
-			assert.Equal(t, 70, evalNoBuffer.Decision.ChargeToSOC)
-		}
-
-		// 2. PeakSurvivalBufferMinutes = 30 -> neededEnergy remains 2.0 -> targetSOC = 70% (no minutes-based double-buffering)
-		settingsWithBuffer := baseSettings
-		settingsWithBuffer.PeakSurvivalBufferMinutes = 30
-		evalWithBuffer := c.evaluateDeficit(ctx, now, status, currentPrice, settingsWithBuffer, simData, summary, nil)
-		require.NotNil(t, evalWithBuffer)
-		if assert.NotNil(t, evalWithBuffer.Decision) {
-			assert.Equal(t, 70, evalWithBuffer.Decision.ChargeToSOC)
+		// neededEnergy = 2.0 -> targetSOC = 70%
+		eval := c.evaluateDeficit(ctx, now, status, currentPrice, baseSettings, simData, summary, nil)
+		require.NotNil(t, eval)
+		if assert.NotNil(t, eval.Decision) {
+			assert.Equal(t, 70, eval.Decision.ChargeToSOC)
 		}
 	})
 
@@ -7160,11 +7131,9 @@ func TestEvaluateFallback(t *testing.T) {
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}
 
 		// The peak is from Hour 4 to Hour 5. It ends at Hour 5.
-		// PeakSurvivalBufferMinutes is 30 minutes.
 		// Deficit is at Hour 4 + 30 minutes (during the peak itself).
 		// Even if ElevatedMinBatterySOC is false (buffer = 0), we must enter Standby because we fail to survive the peak.
 		settings := baseSettings
-		settings.PeakSurvivalBufferMinutes = 30
 
 		summary := simulationSummary{
 			HitDeficitAt:         now.Add(4*time.Hour + 30*time.Minute),
@@ -7190,10 +7159,9 @@ func TestEvaluateFallback(t *testing.T) {
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}
 
 		// The peak is from Hour 4 to Hour 5 (ends at Hour 5).
-		// Buffer is 30 minutes. We need to outlast Hour 5 + 30 minutes.
+		// Buffer is 20 minutes (or 10m when not in standby). We need to outlast Hour 5 + buffer.
 		// If we hit a deficit at Hour 5 + 45 minutes, we survive beyond the buffer and can discharge (Load).
 		settings := baseSettings
-		settings.PeakSurvivalBufferMinutes = 30
 
 		summary := simulationSummary{
 			HitDeficitAt:         now.Add(5*time.Hour + 45*time.Minute),
@@ -7219,11 +7187,9 @@ func TestEvaluateFallback(t *testing.T) {
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}
 
 		// The peak is from Hour 4 to Hour 6. It ends at Hour 6.
-		// PeakSurvivalBufferMinutes is 30 minutes.
 		// Deficit is at Hour 5 + 30 minutes (during the peak).
 		// Even if ElevatedMinBatterySOC is false (buffer = 0), we must enter Standby because we fail to survive the peak.
 		settings := baseSettings
-		settings.PeakSurvivalBufferMinutes = 30
 
 		summary := simulationSummary{
 			HitDeficitAt:         now.Add(5*time.Hour + 30*time.Minute),
@@ -7250,10 +7216,9 @@ func TestEvaluateFallback(t *testing.T) {
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}
 
 		// The peak is from Hour 4 to Hour 6 (ends at Hour 6).
-		// Buffer is 30 minutes. We need to outlast Hour 6 + 30 minutes.
+		// Buffer is 20 minutes (or 10m when not in standby). We need to outlast Hour 6 + buffer.
 		// If we hit a deficit at Hour 6 + 45 minutes, we survive beyond the buffer and can discharge (Load).
 		settings := baseSettings
-		settings.PeakSurvivalBufferMinutes = 30
 
 		summary := simulationSummary{
 			HitDeficitAt:         now.Add(6*time.Hour + 45*time.Minute),
@@ -7281,12 +7246,10 @@ func TestEvaluateFallback(t *testing.T) {
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}
 
 		// The peak is from Hour 4 to Hour 5. It ends at Hour 5.
-		// PeakSurvivalBufferMinutes is 30 minutes.
 		// HitDeficitAt is zero, but HitAboveDeficitAt is Hour 5 + 15 minutes.
 		// Since we are in Load mode (ElevatedMinBatterySOC = false), we only require surviving the peak itself (buffer = 0).
 		// Since deficit is after Hour 5, we survive the peak and should stay in Load mode.
 		settings := baseSettings
-		settings.PeakSurvivalBufferMinutes = 30
 
 		summary := simulationSummary{
 			HitDeficitAt:         time.Time{},
@@ -7312,10 +7275,9 @@ func TestEvaluateFallback(t *testing.T) {
 
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}
 
-		// Since we are already in Standby (ElevatedMinBatterySOC = true), we require surviving the peak with the safety buffer (30 minutes).
-		// Since deficit is at Hour 5 + 15 minutes (within the 30 minute buffer), we must remain in Standby.
+		// Since we are already in Standby (ElevatedMinBatterySOC = true), we require surviving the peak with the safety buffer (20 minutes).
+		// Since deficit is at Hour 5 + 15 minutes (within the 20 minute buffer), we must remain in Standby.
 		settings := baseSettings
-		settings.PeakSurvivalBufferMinutes = 30
 
 		summary := simulationSummary{
 			HitDeficitAt:          now.Add(5*time.Hour + 15*time.Minute),
@@ -7342,10 +7304,9 @@ func TestEvaluateFallback(t *testing.T) {
 
 		currentPrice := types.Price{TSStart: now, TSEnd: now.Add(time.Hour), DollarsPerKWH: 0.10}
 
-		// Deficit is at Hour 5 + 45 minutes (after the 30 minute buffer).
+		// Deficit is at Hour 5 + 45 minutes (after the 20 minute buffer).
 		// We have built up enough buffer, so we can exit Standby to Load mode.
 		settings := baseSettings
-		settings.PeakSurvivalBufferMinutes = 30
 
 		summary := simulationSummary{
 			HitDeficitAt:          now.Add(5*time.Hour + 45*time.Minute),
@@ -7438,7 +7399,7 @@ func TestEvaluateFallback(t *testing.T) {
 		assert.Equal(t, types.ActionReasonSufficientBatteryTillCharge, decision.Action.Reason)
 	})
 
-	t.Run("Morning Capacity Hit with PeakSurvivalBufferMinutes", func(t *testing.T) {
+	t.Run("Morning Capacity Hit with Fallback", func(t *testing.T) {
 		status := baseStatus
 		status.BatterySOC = 95.0
 
@@ -7473,7 +7434,6 @@ func TestEvaluateFallback(t *testing.T) {
 		// 1. Without buffer: discharges early to prevent solar curtailment
 		settingsNoBuffer := baseSettings
 		settingsNoBuffer.GridExportSolar = false
-		settingsNoBuffer.PeakSurvivalBufferMinutes = 0
 		decisionNoBuffer := c.evaluateFallback(ctx, now, status, currentPrice, settingsNoBuffer, nil, summaryNoBuffer, nil)
 		if assert.NotNil(t, decisionNoBuffer) {
 			assert.Equal(t, types.BatteryModeLoad, decisionNoBuffer.BatteryMode)
@@ -7506,7 +7466,6 @@ func TestEvaluateFallback(t *testing.T) {
 
 		// 3. With 30-minute buffer: does not discharge early, falls back to standby
 		settingsWithBuffer := baseSettings
-		settingsWithBuffer.PeakSurvivalBufferMinutes = 30
 		decisionWithBuffer := c.evaluateFallback(ctx, now, status, currentPrice, settingsWithBuffer, simData, summaryWithBuffer, nil)
 		if assert.NotNil(t, decisionWithBuffer) {
 			assert.Equal(t, types.BatteryModeStandby, decisionWithBuffer.BatteryMode)
@@ -7530,9 +7489,7 @@ func TestEvaluateFallback(t *testing.T) {
 			BatteryMode: types.BatteryModeLoad,
 		}
 
-		// Buffer is 30 minutes. Under Load mode, it will use 15 minutes.
 		settings := baseSettings
-		settings.PeakSurvivalBufferMinutes = 30
 
 		// Deficit is predicted in 5 hours (safely after the peak end + buffer)
 		summary := simulationSummary{
@@ -8031,9 +7988,7 @@ func TestCheckPeakSurvival(t *testing.T) {
 	c := NewController()
 	now := time.Now().Truncate(time.Hour)
 	gridChargeNowCost := 0.10
-	settings := types.Settings{
-		PeakSurvivalBufferMinutes: 30,
-	}
+	bufferMinutes := 30
 
 	simData := []SimHour{
 		{TS: now, GridChargeDollarsPerKWH: 0.10, AvgHomeLoadKWH: 1.0, BatteryReserveKWH: 2.0},
@@ -8049,7 +8004,7 @@ func TestCheckPeakSurvival(t *testing.T) {
 		// Set battery level at end of peak to 2.1 kWh (below 2.0 + 30m buffer (0.5 kWh) = 2.5 kWh)
 		simData[3].BatteryKWH = 2.1
 
-		mustStandby, peakTime, peakCost, peakPrice := c.checkPeakSurvival(simData, time.Time{}, gridChargeNowCost, hitAboveDeficitAt, settings.PeakSurvivalBufferMinutes, 0.02)
+		mustStandby, peakTime, peakCost, peakPrice := c.checkPeakSurvival(simData, time.Time{}, gridChargeNowCost, hitAboveDeficitAt, bufferMinutes, 0.02)
 		assert.True(t, mustStandby)
 		assert.Equal(t, now.Add(2*time.Hour), peakTime)
 		assert.Equal(t, 0.30, peakCost)
@@ -8061,7 +8016,7 @@ func TestCheckPeakSurvival(t *testing.T) {
 		// Set battery level at end of peak to 2.8 kWh (above 2.0 + 30m buffer (0.5 kWh) = 2.5 kWh)
 		simData[3].BatteryKWH = 2.8
 
-		mustStandby, _, _, _ := c.checkPeakSurvival(simData, time.Time{}, gridChargeNowCost, hitAboveDeficitAt, settings.PeakSurvivalBufferMinutes, 0.02)
+		mustStandby, _, _, _ := c.checkPeakSurvival(simData, time.Time{}, gridChargeNowCost, hitAboveDeficitAt, bufferMinutes, 0.02)
 		assert.False(t, mustStandby)
 	})
 
@@ -8091,7 +8046,7 @@ func TestCheckPeakSurvival(t *testing.T) {
 		}
 		hitAboveDeficitAt := now.Add(1 * time.Hour)
 
-		mustStandby, _, _, _ := c.checkPeakSurvival(flatSimData, time.Time{}, gridChargeNowCost, hitAboveDeficitAt, settings.PeakSurvivalBufferMinutes, 0.02)
+		mustStandby, _, _, _ := c.checkPeakSurvival(flatSimData, time.Time{}, gridChargeNowCost, hitAboveDeficitAt, bufferMinutes, 0.02)
 		assert.False(t, mustStandby)
 	})
 
@@ -8100,12 +8055,12 @@ func TestCheckPeakSurvival(t *testing.T) {
 		scanUntil := now.Add(1 * time.Hour).Add(30 * time.Minute) // Stop scanning before peak
 		simData[3].BatteryKWH = 2.1
 
-		mustStandby, _, _, _ := c.checkPeakSurvival(simData, scanUntil, gridChargeNowCost, hitAboveDeficitAt, settings.PeakSurvivalBufferMinutes, 0.02)
+		mustStandby, _, _, _ := c.checkPeakSurvival(simData, scanUntil, gridChargeNowCost, hitAboveDeficitAt, bufferMinutes, 0.02)
 		assert.False(t, mustStandby)
 	})
 
 	t.Run("Empty sim data -> Load", func(t *testing.T) {
-		mustStandby, _, _, _ := c.checkPeakSurvival([]SimHour{}, time.Time{}, gridChargeNowCost, now, settings.PeakSurvivalBufferMinutes, 0.02)
+		mustStandby, _, _, _ := c.checkPeakSurvival([]SimHour{}, time.Time{}, gridChargeNowCost, now, bufferMinutes, 0.02)
 		assert.False(t, mustStandby)
 	})
 
@@ -8121,7 +8076,7 @@ func TestCheckPeakSurvival(t *testing.T) {
 		hitAboveDeficitAt := now.Add(4 * time.Hour)
 		simDataCheaper[2].BatteryKWH = 2.8
 
-		mustStandby, _, _, _ := c.checkPeakSurvival(simDataCheaper, time.Time{}, 0.20, hitAboveDeficitAt, settings.PeakSurvivalBufferMinutes, 0.02)
+		mustStandby, _, _, _ := c.checkPeakSurvival(simDataCheaper, time.Time{}, 0.20, hitAboveDeficitAt, bufferMinutes, 0.02)
 		assert.False(t, mustStandby)
 	})
 }
@@ -8334,7 +8289,7 @@ func TestEvaluateVPPEvent(t *testing.T) {
 		}
 	})
 
-	t.Run("VPP Prep Charge respecting PeakSurvivalBufferMinutes", func(t *testing.T) {
+	t.Run("VPP Prep Charge respecting VPPChargingBufferMinutes", func(t *testing.T) {
 		summary := simulationSummary{
 			SoonestVPPChargingAt: now.Add(2 * time.Hour),
 		}

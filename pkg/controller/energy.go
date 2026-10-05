@@ -338,7 +338,8 @@ func (c *Controller) BuildHourlyEnergyModel(
 			Longitude: weather[0].Longitude,
 			TimeZone:  weather[0].TimeLocation,
 		}
-		weatherSolar, params = CalculateWeatherSolar(ctx, now, history, weather, locInfo)
+		optParams := settings.GetOptimizationParams()
+		weatherSolar, params = CalculateWeatherSolar(ctx, now, history, weather, locInfo, optParams.CloudCoverDeratePercent)
 	} else {
 		smoothedSolar = CalculateSmoothedSolar(ctx, now, history, settings)
 	}

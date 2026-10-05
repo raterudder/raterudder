@@ -531,8 +531,8 @@ func (c *Controller) SimulateState(
 			}
 
 			unbufferedMinKWH := subMinKWH
-			bufferedMinKWH := subMinKWH + capacityKWH*(settings.SOCBufferPercent/100.0)
-			thresholdMinKWH := subMinKWH + capacityKWH*((settings.SOCBufferPercent/2.0)/100.0)
+			bufferedMinKWH := subMinKWH + capacityKWH*(legacySOCBufferPercent/100.0)
+			thresholdMinKWH := subMinKWH + capacityKWH*((legacySOCBufferPercent/2.0)/100.0)
 
 			// Once a VPP discharge event ends, or when a new higher reserve SOC period begins,
 			// the ESS system prioritizes restoring the battery up to the required reserve SOC.
@@ -579,9 +579,9 @@ func (c *Controller) SimulateState(
 
 			// startEnergy is the starting battery energy for the primary cost-optimization run (unshifted solar, unbuffered raw reserve).
 			startEnergy := simEnergyKWH
-			// bufferedStartEnergy tracks battery energy on unshifted solar, clamping at the buffered safety reserve (MinBatterySOC + SOCBufferPercent). Used for deficit refilling lookahead.
+			// bufferedStartEnergy tracks battery energy on unshifted solar, clamping at the buffered safety reserve (MinBatterySOC + legacySOCBufferPercent). Used for deficit refilling lookahead.
 			bufferedStartEnergy := bufferedEnergyKWH
-			// thresholdStartEnergy tracks battery energy on unshifted solar, clamping at the threshold safety reserve (MinBatterySOC + SOCBufferPercent/2).
+			// thresholdStartEnergy tracks battery energy on unshifted solar, clamping at the threshold safety reserve (MinBatterySOC + legacySOCBufferPercent/2).
 			thresholdStartEnergy := thresholdEnergyKWH
 			// bufferedShiftedStartEnergy tracks battery energy on safety-shifted (worst-case) solar, clamping at the buffered safety reserve. Used for capacity/curtailment lookahead.
 			bufferedShiftedStartEnergy := bufferedShiftedEnergyKWH

@@ -1122,7 +1122,7 @@ describe('App & Settings', () => {
         });
     });
 
-    it('can update new timing settings: minStartChargeMinutes and bufferProfile', async () => {
+    it('can update timing setting: minStartChargeMinutes and optimizationProfile', async () => {
         const user = userEvent.setup();
         await navigateToSettings();
 
@@ -1132,19 +1132,19 @@ describe('App & Settings', () => {
 
         await waitFor(() => {
             expect(screen.getByLabelText(/Minimum Start Charge Duration/i)).toBeInTheDocument();
-            expect(screen.getByRole('combobox', { name: /Overcharge Profile/i })).toBeInTheDocument();
+            expect(screen.getByRole('combobox', { name: /Optimization Profile/i })).toBeInTheDocument();
         });
 
         const minStartInput = screen.getByLabelText(/Minimum Start Charge Duration/i);
-        const bufferSelect = screen.getByRole('combobox', { name: /Overcharge Profile/i });
+        const profileSelect = screen.getByRole('combobox', { name: /Optimization Profile/i });
 
         expect(minStartInput).toHaveValue(5);
-        expect(bufferSelect).toHaveTextContent('Default');
+        expect(profileSelect).toHaveTextContent('Balanced');
 
         fireEvent.change(minStartInput, { target: { value: '10' } });
 
-        await user.click(bufferSelect);
-        const aggressiveOption = await screen.findByRole('option', { name: 'Tiny' });
+        await user.click(profileSelect);
+        const aggressiveOption = await screen.findByRole('option', { name: 'Aggressive' });
         await user.click(aggressiveOption);
 
         (updateSettings as any).mockResolvedValue(undefined);
@@ -1155,10 +1155,7 @@ describe('App & Settings', () => {
             expect(screen.getByText('Settings saved successfully')).toBeInTheDocument();
             expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
                 minStartChargeMinutes: 10,
-                socBufferPercent: 2,
-                peakSurvivalBufferMinutes: 10,
-                solarCapacityBufferMinutes: 0,
-                vppChargingBufferMinutes: 10
+                optimizationProfile: 'aggressive'
             }), expect.any(String), undefined);
         });
     });

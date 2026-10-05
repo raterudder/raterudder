@@ -860,9 +860,8 @@ func TestSimulateState(t *testing.T) {
 		}
 
 		settings := types.Settings{
-			GridExportSolar:  true,
-			MinBatterySOC:    20.0, // minKWH = 2.1 kWh
-			SOCBufferPercent: 4.0,  // bufferedMinKWH = 2.5 kWh, thresholdMinKWH = 2.3 kWh
+			GridExportSolar: true,
+			MinBatterySOC:   20.0, // minKWH = 2.1 kWh
 		}
 
 		simData, _ := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
@@ -932,9 +931,8 @@ func TestSimulateState(t *testing.T) {
 		}
 
 		settings := types.Settings{
-			GridExportSolar:  true,
-			MinBatterySOC:    20.0,
-			SOCBufferPercent: 4.0,
+			GridExportSolar: true,
+			MinBatterySOC:   20.0,
 		}
 
 		simData, _ := c.SimulateState(ctx, now, currentStatus, types.Price{}, nil, history, nil, settings)
@@ -1651,7 +1649,6 @@ func TestSimulateState(t *testing.T) {
 				GridChargeBatteries:        true,
 				GridExportSolar:            true,
 				MinBatterySOC:              20.0, // 2.0 kWh min
-				SOCBufferPercent:           4.0,  // bufferedMin = 2.4 kWh, thresholdMin = 2.2 kWh
 				SolarTrendRatioMax:         3.0,
 				SolarBellCurveMultiplier:   1.0,
 				SolarCapacityBufferMinutes: 20,
@@ -1750,9 +1747,8 @@ func TestSimulateState(t *testing.T) {
 		}
 
 		settings := types.Settings{
-			GridExportSolar:  true,
-			MinBatterySOC:    20.0,
-			SOCBufferPercent: 4.0,
+			GridExportSolar: true,
+			MinBatterySOC:   20.0,
 		}
 
 		simData, _ := c.SimulateState(context.Background(), now, currentStatus, types.Price{}, nil, history, nil, settings)
@@ -1822,21 +1818,19 @@ func TestSimulateState(t *testing.T) {
 
 		settings := types.Settings{
 			GridExportSolar:            true,
-			MinBatterySOC:              20.0, // minKWH = 2.0
-			SOCBufferPercent:           10.0, // thresholdMinKWH = 2.5
+			MinBatterySOC:              20.0, // minKWH = 2.1
 			SolarCapacityBufferMinutes: 0,    // no shifting of solar to keep math simple
 		}
 
 		simData, _ := c.SimulateState(context.Background(), now, currentStatus, types.Price{}, nil, history, nil, settings)
 		if assert.NotEmpty(t, simData) && assert.GreaterOrEqual(t, len(simData), 3) {
-			// Without the bug, thresholdShiftedEnergyKWH starts Hour 1 (11:00) at 2.5 kWh
-			// (clamped from 2.6 - 2.0 = 0.6 to threshold reserve 2.5? Wait, starting SOC is 2.6, load 2.0 -> clamped to 2.5 (or actually 2.6 because thresholdMinKWH = 2.1 + 0.5 = 2.6).
-			// Yes: threshold reserve is 2.1 + 0.5 = 2.6. So starting Hour 1 (11:00) is 2.6.
-			// During Hour 1, it charges 5.0 kWh to end Hour 1 at 7.6 kWh.
-			// During Hour 2 (12:00), it charges from 7.6 kWh to capacity threshold 9.8 kWh.
-			// Time to reach capacity: (9.8 - 7.6) / 5.0 = 0.44 hours (26.4 minutes).
-			// Expected HitThresholdCapacityAt is 10:00 + 2 hours + 26.4 minutes = 12:26:24.
-			expectedTime := now.Add(2*time.Hour + 26*time.Minute + 24*time.Second)
+			// Without the bug, thresholdShiftedEnergyKWH starts Hour 1 (11:00) at 2.3 kWh
+			// (clamped from 2.6 - 2.0 = 0.6 to threshold reserve 2.3).
+			// During Hour 1, it charges 5.0 kWh to end Hour 1 at 7.3 kWh.
+			// During Hour 2 (12:00), it charges from 7.3 kWh to capacity threshold 9.8 kWh.
+			// Time to reach capacity: (9.8 - 7.3) / 5.0 = 0.5 hours (30 minutes).
+			// Expected HitThresholdCapacityAt is 10:00 + 2 hours + 30 minutes = 12:30:00.
+			expectedTime := now.Add(2*time.Hour + 30*time.Minute)
 			assert.WithinDuration(t, expectedTime, simData[2].HitThresholdCapacityAt, 2*time.Second)
 		}
 	})

@@ -69,7 +69,8 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 	// hour (which only has partial generation telemetry) so that it doesn't skew learned solar efficiencies.
 	var improvedSolarMap map[int64]controller.WeatherSolar
 	if settings.Location != nil {
-		improvedSolarMap, _ = controller.CalculateWeatherSolar(ctx, s.now(), flatEnergy, weatherHistory, *settings.Location)
+		optParams := settings.GetOptimizationParams()
+		improvedSolarMap, _ = controller.CalculateWeatherSolar(ctx, s.now(), flatEnergy, weatherHistory, *settings.Location, optParams.CloudCoverDeratePercent)
 	}
 
 	locCache := make(map[string]*time.Location)

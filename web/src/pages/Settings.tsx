@@ -2635,46 +2635,31 @@ const Settings = ({
 
                         <div className="grid-strategy-grid">
                             <Field.Root className="form-group">
-                                <Field.Label htmlFor="bufferProfile">
-                                    Overcharge Profile
+                                <Field.Label htmlFor="optimizationProfile">
+                                    Optimization Profile
                                     <HelpButton
-                                        title="Overcharge Profile"
+                                        title="Optimization Profile"
                                         description={
                                             <>
-                                                <p>Determines how much battery headroom RateRudder includes beyond baseline requirement to absorb usage spikes or cloudy weather:</p>
+                                                <p>Controls the risk profile, reserve safety buffers, and solar forecasting assumptions used by the planning algorithm:</p>
                                                 <ul>
-                                                    <li><strong>Tiny:</strong> Maximizes immediate savings, but risks temporary depletion during load spikes.</li>
-                                                    <li><strong>Default:</strong> Balanced optimization and safety buffer.</li>
-                                                    <li><strong>Conservative:</strong> Holds higher energy reserves at the expense of lower savings.</li>
+                                                    <li><strong>Aggressive:</strong> Maximizes financial savings with tighter buffers and minimal solar derating.</li>
+                                                    <li><strong>Balanced:</strong> Recommended optimizations balancing financial savings with safety margins.</li>
+                                                    <li><strong>Conservative:</strong> Holds higher energy reserves and applies wider buffers to protect against usage spikes or overcast weather.</li>
                                                 </ul>
                                             </>
                                         }
                                     />
                                 </Field.Label>
                                 <Select.Root
-                                    value={settings.socBufferPercent === 2 ? "tiny" : settings.socBufferPercent === 8 ? "conservative" : "default"}
+                                    value={settings.optimizationProfile === 'conservative' ? 'conservative' : settings.optimizationProfile === 'aggressive' ? 'aggressive' : 'balanced'}
                                     onValueChange={(val) => {
-                                         if (val === 'tiny') {
-                                             handleChange('socBufferPercent', 2);
-                                             handleChange('peakSurvivalBufferMinutes', 10);
-                                             handleChange('solarCapacityBufferMinutes', 0);
-                                             handleChange('vppChargingBufferMinutes', 10);
-                                         } else if (val === 'conservative') {
-                                             handleChange('socBufferPercent', 8);
-                                             handleChange('peakSurvivalBufferMinutes', 40);
-                                             handleChange('solarCapacityBufferMinutes', 30);
-                                             handleChange('vppChargingBufferMinutes', 40);
-                                         } else {
-                                             handleChange('socBufferPercent', 4);
-                                             handleChange('peakSurvivalBufferMinutes', 20);
-                                             handleChange('solarCapacityBufferMinutes', 10);
-                                             handleChange('vppChargingBufferMinutes', 20);
-                                         }
-                                     }}
+                                        handleChange('optimizationProfile', val || 'balanced');
+                                    }}
                                 >
-                                    <Select.Trigger className="select-trigger" id="bufferProfile" aria-label="Overcharge Profile">
+                                    <Select.Trigger className="select-trigger" id="optimizationProfile" aria-label="Optimization Profile">
                                         <Select.Value>
-                                            {settings.socBufferPercent === 2 ? "Tiny" : settings.socBufferPercent === 8 ? "Conservative" : "Default"}
+                                            {settings.optimizationProfile === 'conservative' ? 'Conservative' : settings.optimizationProfile === 'aggressive' ? 'Aggressive' : 'Balanced'}
                                         </Select.Value>
                                         <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
                                             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -2685,11 +2670,11 @@ const Settings = ({
                                     <Select.Portal>
                                         <Select.Positioner className="select-positioner">
                                             <Select.Popup className="select-popup">
-                                                <Select.Item className="select-item" value="tiny">
-                                                    <Select.ItemText>Tiny</Select.ItemText>
+                                                <Select.Item className="select-item" value="aggressive">
+                                                    <Select.ItemText>Aggressive</Select.ItemText>
                                                 </Select.Item>
-                                                <Select.Item className="select-item" value="default">
-                                                    <Select.ItemText>Default</Select.ItemText>
+                                                <Select.Item className="select-item" value="balanced">
+                                                    <Select.ItemText>Balanced</Select.ItemText>
                                                 </Select.Item>
                                                 <Select.Item className="select-item" value="conservative">
                                                     <Select.ItemText>Conservative</Select.ItemText>
@@ -2699,14 +2684,14 @@ const Settings = ({
                                     </Select.Portal>
                                 </Select.Root>
                                 <Field.Description>
-                                    How much we over charge to handle unexpected solar/usage fluctuations.
+                                    Controls risk profile, reserve safety buffers, and solar derating for planning.
                                 </Field.Description>
-                                {settings.socBufferPercent === 2 && (
+                                {settings.optimizationProfile === 'aggressive' && (
                                     <div className="warning-text" style={{ color: 'orange', marginTop: '4px', fontSize: '0.9em' }}>
-                                        Warning: A tiny profile may cause the battery to deplete unexpectedly during usage/solar fluctuations.
+                                        Warning: An aggressive profile minimizes safety buffers to maximize financial return, which may risk battery depletion during unexpected usage spikes.
                                     </div>
                                 )}
-                                {settings.socBufferPercent === 8 && (
+                                {settings.optimizationProfile === 'conservative' && (
                                     <div className="warning-text" style={{ color: 'orange', marginTop: '4px', fontSize: '0.9em' }}>
                                         Warning: A conservative profile will reduce your financial savings by holding more energy in reserve.
                                     </div>

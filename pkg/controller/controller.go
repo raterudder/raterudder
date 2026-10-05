@@ -17,7 +17,11 @@ const (
 	priceEpsilonForEquality          = 1e-3
 )
 
-const fastTrackChargeWithin = 15 * time.Minute
+const (
+	fastTrackChargeWithin           = 15 * time.Minute
+	legacyPeakSurvivalBufferMinutes = 20
+	legacySOCBufferPercent          = 4.0
+)
 
 // Decision represents the result of the decision logic.
 type Decision struct {
@@ -1131,7 +1135,6 @@ func (c *Controller) evaluateDeficit(
 			slog.Bool("isSignificantlyCheaperThanDeficitNow", wasSignificantlyCheaperThanDeficitNow),
 			slog.Bool("isAlreadyChargingSamePrice", wasAlreadyChargingSamePrice),
 			slog.Int("futureCheapHours", hadFutureCheapHours),
-			slog.Float64("socBufferPercent", settings.SOCBufferPercent),
 			slog.Float64("minHeadroom", usedMinHeadroom),
 		)
 		decision = &DecisionResult{
@@ -1152,7 +1155,6 @@ func (c *Controller) evaluateDeficit(
 			slog.Any("standbyFuturePrice", standbyFuturePrice),
 			slog.Float64("refillRateDollarsPerKWH", refillRateDollarsPerKWH),
 			slog.Time("plannedChargeTime", plannedChargeTime),
-			slog.Float64("socBufferPercent", settings.SOCBufferPercent),
 			slog.Float64("minHeadroom", usedMinHeadroom),
 			slog.Float64("standbyThreshold", standbyThreshold),
 			slog.Float64("gridChargeNowCost", gridChargeNowCost),
@@ -1172,7 +1174,6 @@ func (c *Controller) evaluateDeficit(
 			slog.Time("plannedChargeTime", plannedChargeTime),
 			slog.Float64("plannedChargeCost", plannedChargeCost),
 			slog.Float64("planBenefitDollars", planBenefitDollars),
-			slog.Float64("socBufferPercent", settings.SOCBufferPercent),
 			slog.Bool("isSignificantlyCheaperFuture", wasSignificantlyCheaperFuture),
 			slog.Bool("isSignificantlyCheaperThanDeficit", wasSignificantlyCheaperThanDeficit),
 			slog.Bool("isSignificantlyCheaperThanDeficitNow", wasSignificantlyCheaperThanDeficitNow),
@@ -1951,9 +1952,9 @@ func (c *Controller) evaluatePlannedCharge(
 	}
 	var bufferMinutes int
 	if isMitigatingDeficit {
-		bufferMinutes = settings.PeakSurvivalBufferMinutes
+		bufferMinutes = legacyPeakSurvivalBufferMinutes
 	} else {
-		bufferMinutes = settings.PeakSurvivalBufferMinutes / 2
+		bufferMinutes = legacyPeakSurvivalBufferMinutes / 2
 	}
 
 	peakSurvivalDeficitAt := hitDeficitAt
@@ -1973,7 +1974,6 @@ func (c *Controller) evaluatePlannedCharge(
 		slog.Bool("mustStandbyForPeak", mustStandbyForPeak),
 		slog.Bool("isCheapOrEqualNow", isCheapOrEqualNow),
 		slog.Time("hitDeficitAt", hitDeficitAt),
-		slog.Float64("socBufferPercent", settings.SOCBufferPercent),
 	)
 	if isCheapOrEqualNow || mustStandbyForPeak {
 		var reason types.ActionReason
@@ -2014,7 +2014,7 @@ func (c *Controller) evaluatePlannedCharge(
 	// b. There's no future price that we need to save energy for (mustStandbyForPeak == false)
 	// Subtract a second so if there's floating point noise or if the times are equal
 	// we still think we have enough battery to last until the planned charge time.
-	if hitDeficitAt.IsZero() || !hitDeficitAt.Before(plan.Time.Add(-time.Second)) {
+	if summary.HitDeficitAt.IsZero() || !summary.HitDeficitAt.Before(plan.Time.Add(-time.Second)) {
 		// c. We have enough battery to last until the planned charge time
 		loadDescription := fmt.Sprintf("Sufficient battery to reach planned charge time at %s.", plan.Time.Format(time.Kitchen))
 		return nil, &DecisionResult{
@@ -2136,7 +2136,7 @@ func (c *Controller) evaluateFallback(
 	lastAction *types.Action,
 ) *DecisionResult {
 	gridChargeNowCost := currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
-	bufferMinutes := settings.PeakSurvivalBufferMinutes
+	bufferMinutes := legacyPeakSurvivalBufferMinutes
 
 	// 1. Minimum Reserve Enforcement:
 	// If the battery is already at or near its minimum reserve limit (either because BatteryAboveMinSOC is false
@@ -2166,10 +2166,10 @@ func (c *Controller) evaluateFallback(
 	var scanBufferMinutes int
 	if isAlreadyActive {
 		peakSurvivalDeficitAt = summary.HitBufferedDeficitAt
-		scanBufferMinutes = settings.PeakSurvivalBufferMinutes
+		scanBufferMinutes = legacyPeakSurvivalBufferMinutes
 	} else {
 		peakSurvivalDeficitAt = summary.HitThresholdDeficitAt
-		scanBufferMinutes = settings.PeakSurvivalBufferMinutes / 2
+		scanBufferMinutes = legacyPeakSurvivalBufferMinutes / 2
 	}
 
 	if !peakSurvivalDeficitAt.IsZero() {
@@ -2203,7 +2203,6 @@ func (c *Controller) evaluateFallback(
 				slog.Time("hitBufferedDeficitAt", summary.HitBufferedDeficitAt),
 				slog.Float64("gridChargeNowCost", gridChargeNowCost),
 				slog.Int("bufferMinutes", scanBufferMinutes),
-				slog.Float64("socBufferPercent", settings.SOCBufferPercent),
 			)
 			return &DecisionResult{
 				BatteryMode: types.BatteryModeStandby,
@@ -2345,7 +2344,6 @@ func (c *Controller) evaluateFallback(
 					slog.Time("hitFutureCapacityAt", summary.HitFutureCapacityAt),
 					slog.Time("hitBufferedDeficitAt", summary.HitBufferedDeficitAt),
 					slog.Float64("gridChargeNowCost", gridChargeNowCost),
-					slog.Float64("socBufferPercent", settings.SOCBufferPercent),
 					slog.String("reason", string(reason)),
 				)
 				return &DecisionResult{
@@ -2369,7 +2367,6 @@ func (c *Controller) evaluateFallback(
 			slog.Time("hitFutureCapacityAt", summary.HitFutureCapacityAt),
 			slog.Time("hitBufferedDeficitAt", summary.HitBufferedDeficitAt),
 			slog.Float64("gridChargeNowCost", gridChargeNowCost),
-			slog.Float64("socBufferPercent", settings.SOCBufferPercent),
 		)
 		return &DecisionResult{
 			BatteryMode: types.BatteryModeLoad,
@@ -2389,7 +2386,6 @@ func (c *Controller) evaluateFallback(
 		slog.Time("hitThresholdDeficitAt", summary.HitThresholdDeficitAt),
 		slog.Time("hitFutureCapacityAt", summary.HitFutureCapacityAt),
 		slog.Time("hitBufferedDeficitAt", summary.HitBufferedDeficitAt),
-		slog.Float64("socBufferPercent", settings.SOCBufferPercent),
 	)
 	return &DecisionResult{
 		BatteryMode: types.BatteryModeLoad,
@@ -2614,8 +2610,8 @@ func (c *Controller) simulateStandby(
 		if stepMinKWH <= 0 {
 			stepMinKWH = minKWH
 		}
-		bufferedMinKWH := stepMinKWH + capacityKWH*(settings.SOCBufferPercent/100.0)
-		thresholdMinKWH := stepMinKWH + capacityKWH*((settings.SOCBufferPercent/2.0)/100.0)
+		bufferedMinKWH := stepMinKWH + capacityKWH*(legacySOCBufferPercent/100.0)
+		thresholdMinKWH := stepMinKWH + capacityKWH*((legacySOCBufferPercent/2.0)/100.0)
 
 		// 1. Primary / Unbuffered run
 		clampedNetKWH := slot.ClampedNetLoadSolarKWH
