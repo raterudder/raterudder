@@ -1116,20 +1116,7 @@ func (s *Server) setESSModes(
 		solarMode = types.SolarModeAny
 	}
 
-	var changed bool
-	var err error
-	switch batteryMode {
-	case types.BatteryModeChargeAny:
-		changed, err = essSystem.SetModes(ctx, types.BatteryModeChargeAny, solarMode, opts) // Force charge
-	case types.BatteryModeLoad:
-		changed, err = essSystem.SetModes(ctx, types.BatteryModeLoad, solarMode, opts) // Use battery
-	case types.BatteryModeStandby:
-		// "self_consumption" is usually safe for idle too (just don't force charge)
-		changed, err = essSystem.SetModes(ctx, types.BatteryModeStandby, solarMode, opts)
-	case types.BatteryModeExport:
-		changed, err = essSystem.SetModes(ctx, types.BatteryModeExport, solarMode, opts)
-	}
-
+	changed, err := essSystem.SetModes(ctx, batteryMode, solarMode, opts)
 	if err != nil {
 		if errors.Is(err, ess.ErrUnauthorized) {
 			settings.ESSAuthStatus.ConsecutiveSetFailures++

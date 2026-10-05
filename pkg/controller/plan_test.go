@@ -6852,7 +6852,7 @@ func TestPlanScenarios(t *testing.T) {
 	t.Run("Franklin_FullBatteryMorningBeforePeak_DischargesLoadNotStandbyForSolarExport", func(t *testing.T) {
 		t.Parallel()
 
-		// Scenario based on jrollercoasters at 6:01 AM EDT:
+		// At 6:01 AM EDT:
 		// Battery is at 99.26% SOC (effectively 100% full).
 		// Current 6:00 AM import rate is $0.10481/kWh, export rate is $0.024/kWh.
 		// Upcoming 7:00 AM peak rate is $0.31443/kWh, export rate is $0.094/kWh.
@@ -7645,5 +7645,124 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 		assert.Equal(t, types.BatteryModeChargeAny, path.actions[0].batteryMode)
 		// Step 1 discharges to shield home from the $4.50/kWh spike
 		assert.Equal(t, types.BatteryModeLoad, path.actions[1].batteryMode)
+	})
+
+	t.Run("EversourceRate7_NoonDirectSolarExport", func(t *testing.T) {
+		t.Parallel()
+
+		nyLoc, err := time.LoadLocation("America/New_York")
+		require.NoError(t, err)
+
+		nowNoon := time.Date(2026, 10, 5, 12, 0, 0, 0, nyLoc)
+		currentPrice := types.Price{
+			TSStart:                       nowNoon,
+			TSEnd:                         nowNoon.Add(time.Hour),
+			DollarsPerKWH:                 0.29982,
+			GenerationCreditDollarsPerKWH: 0.25962,
+			SeparateGenerationCredit:      true,
+		}
+
+		var futurePrices []types.Price
+		for h := 13; h < 36; h++ {
+			day := 5
+			hour := h
+			if hour >= 24 {
+				day = 6
+				hour -= 24
+			}
+			rate := 0.20754
+			exportRate := 0.16734
+			if hour >= 12 && hour < 20 {
+				rate = 0.29982
+				exportRate = 0.25962
+			}
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:                       time.Date(2026, 10, day, hour, 0, 0, 0, nyLoc),
+				TSEnd:                         time.Date(2026, 10, day, hour+1, 0, 0, 0, nyLoc),
+				DollarsPerKWH:                 rate,
+				GenerationCreditDollarsPerKWH: exportRate,
+				SeparateGenerationCredit:      true,
+			})
+		}
+
+		status := types.SystemStatus{
+			Timestamp:          nowNoon,
+			TimeLocation:       "America/New_York",
+			BatteryCapacityKWH: 30.0,
+			BatterySOC:         73.05,
+			HomeKW:             0.45,
+			SolarKW:            1.16,
+		}
+
+		settings := types.Settings{
+			MinBatterySOC:      5,
+			GridExportSolar:    true,
+			ManageTOUSchedules: true,
+		}
+
+		// Mock history with typical solar and home load
+		var history []types.EnergyStats
+		for d := 1; d <= 7; d++ {
+			for h := 0; h < 24; h++ {
+				solar := 0.0
+				if h >= 8 && h <= 17 {
+					solar = 2.0
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart:  nowNoon.AddDate(0, 0, -d).Truncate(24 * time.Hour).Add(time.Duration(h) * time.Hour),
+					HomeKWH:      0.45,
+					SolarKWH:     solar,
+					TimeLocation: "America/New_York",
+				})
+			}
+		}
+
+		lastAction := &types.Action{
+			BatteryMode: types.BatteryModeStandby,
+			SolarMode:   types.SolarModeAny,
+			CurrentPrice: &types.Price{
+				DollarsPerKWH:                 0.20754,
+				GenerationCreditDollarsPerKWH: 0.16734,
+				SeparateGenerationCredit:      true,
+			},
+		}
+
+		decision, plan, err := c.Plan(ctx, status, currentPrice, futurePrices, history, nil, settings, lastAction)
+		require.NoError(t, err)
+		require.NotNil(t, plan)
+
+		t.Logf("Decision: BatteryMode=%v, SolarMode=%v, Reason=%v, Desc=%s",
+			decision.Action.BatteryMode, decision.Action.SolarMode, decision.Action.Reason, decision.Action.Description)
+		for i, p := range plan.Periods {
+			if i < 10 {
+				t.Logf("Period %d: [%s - %s] Bat=%v Sol=%v Reason=%v",
+					i, p.TSStart.Format("15:04"), p.TSEnd.Format("15:04"), p.BatteryMode, p.SolarMode, p.Reason)
+			}
+		}
+
+		sched := BuildTOUSchedule(&plan, nowNoon, nyLoc)
+		require.NotNil(t, sched)
+		require.Len(t, sched.Periods, 3)
+
+		// TOU Period 0: Morning off-peak self-consumption
+		assert.Equal(t, 0, sched.Periods[0].StartHour)
+		assert.Equal(t, 12, sched.Periods[0].EndHour)
+		assert.False(t, sched.Periods[0].Peak)
+		assert.Equal(t, types.SolarModeAny, sched.Periods[0].SolarMode)
+
+		// TOU Period 1: Afternoon peak (12:00 to 20:00) with direct solar export
+		assert.Equal(t, 12, sched.Periods[1].StartHour)
+		assert.Equal(t, 20, sched.Periods[1].EndHour)
+		assert.True(t, sched.Periods[1].Peak)
+		assert.Equal(t, types.BatteryModeLoad, sched.Periods[1].BatteryMode)
+		assert.Equal(t, types.SolarModeExport, sched.Periods[1].SolarMode)
+
+		// TOU Period 2: Evening off-peak self-consumption
+		assert.Equal(t, 20, sched.Periods[2].StartHour)
+		assert.Equal(t, 24, sched.Periods[2].EndHour)
+		assert.False(t, sched.Periods[2].Peak)
+
+		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode, "Battery should discharge to cover home load")
+		assert.Equal(t, types.SolarModeExport, decision.Action.SolarMode, "Solar should export starting at noon")
 	})
 }
