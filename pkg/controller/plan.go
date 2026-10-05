@@ -294,22 +294,33 @@ type actionCandidate struct {
 type precedingAction struct {
 	BatteryMode types.BatteryMode
 	SolarMode   types.SolarMode
+	ImportRate  float64
+	ExportRate  float64
 }
 
-func toPrecedingAction(action *types.Action) precedingAction {
+func (c *Controller) toPrecedingAction(action *types.Action, settings types.Settings) precedingAction {
 	if action == nil {
 		return precedingAction{}
+	}
+	var importRate, exportRate float64
+	if action.CurrentPrice != nil {
+		importRate = action.CurrentPrice.ImportRateDollars()
+		exportRate = c.calculateExportCredit(*action.CurrentPrice, settings, nil)
 	}
 	return precedingAction{
 		BatteryMode: action.BatteryMode,
 		SolarMode:   action.SolarMode,
+		ImportRate:  importRate,
+		ExportRate:  exportRate,
 	}
 }
 
-func (a actionCandidate) toPrecedingAction() precedingAction {
+func toPrecedingAction(a actionCandidate, prevInterval planInterval) precedingAction {
 	return precedingAction{
 		BatteryMode: a.batteryMode,
 		SolarMode:   a.solarMode,
+		ImportRate:  prevInterval.importRate,
+		ExportRate:  prevInterval.exportRate,
 	}
 }
 
@@ -333,6 +344,7 @@ type intervalMetrics struct {
 	gridImportKWH            float64
 	gridExportKWH            float64
 	batExportKWH             float64
+	solarExportKWH           float64
 	batSuppliedHomeKWH       float64
 	gridChargeKWH            float64
 	costDollars              float64
@@ -1463,8 +1475,14 @@ func (c *Controller) generateActionCandidates(
 
 	// Determine if direct solar export is enabled. Flat net metering customers bank surplus 1:1 against consumption
 	// and have no incentive to export solar while discharging battery for home load.
+	// If the forecast predicts solar has ended or dropped below threshold, allow solar export to continue
+	// as long as the preceding action was solar export and the export and import rates remain greater than or equal to preceding rates.
 	hasSolar := interval.avgSolarKW() > minDirectSolarExportKW || (stepIdx == 0 && currentStatus.SolarKW > minDirectSolarExportKW)
-	canDirectSolarExport := settings.ManageTOUSchedules && settings.GridExportSolar && hasSolar && !isFlatNEM && interval.exportRate > 0
+	isSolarExportContinuation := prevAction.SolarMode == types.SolarModeExport &&
+		prevAction.ExportRate > 0 &&
+		interval.exportRate >= prevAction.ExportRate-priceEpsilonForEquality &&
+		interval.importRate >= prevAction.ImportRate-priceEpsilonForEquality
+	canDirectSolarExport := settings.ManageTOUSchedules && settings.GridExportSolar && (hasSolar || isSolarExportContinuation) && !isFlatNEM && interval.exportRate > 0
 
 	effRT := roundTripEff
 	if effRT <= 0 || effRT > 1.0 {
@@ -2320,6 +2338,7 @@ func stepPhysics(
 		gridImportKWH:            gridImportKWH,
 		gridExportKWH:            totalGridExportKWH,
 		batExportKWH:             batExportKWH,
+		solarExportKWH:           solarExportKWH,
 		batSuppliedHomeKWH:       batSuppliedHomeKWH,
 		gridChargeKWH:            gridChargeKWH,
 		costDollars:              intervalCostDollars,
@@ -2437,7 +2456,7 @@ func (c *Controller) searchOptimalPlan(
 	lastAction = sanitizeLastAction(lastAction, refTime)
 
 	// Step 0 candidate generation
-	candidates0 := c.generateActionCandidates(ctx, 0, timeline[0], timeline, initial, anchors, settings, currentStatus, history, toPrecedingAction(lastAction))
+	candidates0 := c.generateActionCandidates(ctx, 0, timeline[0], timeline, initial, anchors, settings, currentStatus, history, c.toPrecedingAction(lastAction, settings))
 	if len(candidates0) == 0 {
 		return nil, fmt.Errorf("no viable plan found: all candidate actions pruned at step 0")
 	}
@@ -2579,7 +2598,7 @@ func (c *Controller) searchOptimalPlan(
 						settings,
 						currentStatus,
 						history,
-						parent.action.toPrecedingAction(),
+						toPrecedingAction(parent.action, timeline[stepIdx-1]),
 					)
 				}
 				for _, cand := range candidates {
@@ -2677,7 +2696,7 @@ func (c *Controller) searchOptimalPlan(
 					if cand.batteryMode == types.BatteryModeExport {
 						exportDegradationCost = metrics.batExportKWH * batteryExportHurdle
 					} else if cand.batteryMode == types.BatteryModeLoad && cand.solarMode == types.SolarModeExport {
-						exportDegradationCost = metrics.batSuppliedHomeKWH * directSolarExportHurdle
+						exportDegradationCost = min(metrics.batSuppliedHomeKWH, metrics.solarExportKWH) * directSolarExportHurdle
 					}
 
 					// Grid charge arbitrage (BatteryModeChargeAny): When charging from the grid above the configured reserve
@@ -2864,7 +2883,14 @@ func (c *Controller) searchOptimalPlan(
 
 		if bestNodeForCand != nil {
 			prevScore, exists := modeBestScores[cand0.batteryMode]
-			if !exists || bestScoreForCand < prevScore {
+			isBetter := !exists || bestScoreForCand < prevScore-priceEpsilonForEquality
+			if !isBetter && exists && math.Abs(bestScoreForCand-prevScore) <= priceEpsilonForEquality {
+				// Tie-breaker: prefer candidate matching lastAction to avoid unnecessary step-0 mode switches
+				if lastAction != nil && cand0.batteryMode == lastAction.BatteryMode && cand0.solarMode == lastAction.SolarMode {
+					isBetter = true
+				}
+			}
+			if isBetter {
 				modeBestScores[cand0.batteryMode] = bestScoreForCand
 				modeBestNodes[cand0.batteryMode] = bestNodeForCand
 			}

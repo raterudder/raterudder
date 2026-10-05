@@ -4498,6 +4498,182 @@ func TestSearchOptimalPlan(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, types.SolarModeExport, bestPath.actions[0].solarMode)
 	})
+
+	t.Run("SolarExport_Continuation_SameOrHigherPeakPriceWindow", func(t *testing.T) {
+		t.Parallel()
+
+		sett := types.Settings{
+			MinBatterySOC:      20.0,
+			GridExportSolar:    true,
+			ManageTOUSchedules: true,
+		}
+
+		state := planState{
+			energyKWH:   10.8,
+			soc:         80.0,
+			capacityKWH: 13.5,
+			maxChargeKW: 5.0,
+		}
+
+		t.Run("ForwardPlan_ContinuesAcrossSamePeakWindowAndStopsWhenPriceDrops", func(t *testing.T) {
+			t.Parallel()
+
+			timeline := []planInterval{
+				{
+					startTime:     now,
+					endTime:       now.Add(time.Hour),
+					durationHours: 1.0,
+					importRate:    0.35,
+					exportRate:    0.25,
+					minSOC:        20.0,
+					loadKWH:       0.5,
+					solarKWH:      1.5,
+				},
+				{
+					startTime:     now.Add(time.Hour),
+					endTime:       now.Add(2 * time.Hour),
+					durationHours: 1.0,
+					importRate:    0.35,
+					exportRate:    0.25,
+					minSOC:        20.0,
+					loadKWH:       0.5,
+					solarKWH:      0.0, // Forecasted solar ended
+				},
+				{
+					startTime:     now.Add(2 * time.Hour),
+					endTime:       now.Add(3 * time.Hour),
+					durationHours: 1.0,
+					importRate:    0.10, // Off-peak drop
+					exportRate:    0.05,
+					minSOC:        20.0,
+					loadKWH:       0.5,
+					solarKWH:      0.0,
+				},
+			}
+
+			status := types.SystemStatus{
+				Timestamp:          now,
+				BatteryCapacityKWH: 13.5,
+				BatterySOC:         80.0,
+				SolarKW:            1.5,
+			}
+
+			bestPath, err := c.searchOptimalPlan(ctx, timeline, state, planningAnchors{}, sett, status, nil, nil)
+			require.NoError(t, err)
+			require.Len(t, bestPath.actions, 3)
+
+			assert.Equal(t, types.SolarModeExport, bestPath.actions[0].solarMode, "Step 0 with active solar should export solar")
+			assert.Equal(t, types.SolarModeExport, bestPath.actions[1].solarMode, "Step 1 with zero solar but same peak rate should continue solar export")
+			assert.NotEqual(t, types.SolarModeExport, bestPath.actions[2].solarMode, "Step 2 after price drops to off-peak should terminate solar export")
+		})
+
+		t.Run("ForwardPlan_ContinuesWhenPeakPriceGoesHigher", func(t *testing.T) {
+			t.Parallel()
+
+			timeline := []planInterval{
+				{
+					startTime:     now,
+					endTime:       now.Add(time.Hour),
+					durationHours: 1.0,
+					importRate:    0.30,
+					exportRate:    0.20,
+					minSOC:        20.0,
+					loadKWH:       0.5,
+					solarKWH:      1.5,
+				},
+				{
+					startTime:     now.Add(time.Hour),
+					endTime:       now.Add(2 * time.Hour),
+					durationHours: 1.0,
+					importRate:    0.45, // Critical peak higher rate!
+					exportRate:    0.35, // Higher export rate!
+					minSOC:        20.0,
+					loadKWH:       0.5,
+					solarKWH:      0.0,
+				},
+				{
+					startTime:     now.Add(2 * time.Hour),
+					endTime:       now.Add(3 * time.Hour),
+					durationHours: 1.0,
+					importRate:    0.10,
+					exportRate:    0.05,
+					minSOC:        20.0,
+					loadKWH:       0.5,
+					solarKWH:      0.0,
+				},
+			}
+
+			status := types.SystemStatus{
+				Timestamp:          now,
+				BatteryCapacityKWH: 13.5,
+				BatterySOC:         80.0,
+				SolarKW:            1.5,
+			}
+
+			bestPath, err := c.searchOptimalPlan(ctx, timeline, state, planningAnchors{}, sett, status, nil, nil)
+			require.NoError(t, err)
+			require.Len(t, bestPath.actions, 3)
+
+			assert.Equal(t, types.SolarModeExport, bestPath.actions[0].solarMode, "Step 0 with active solar should export solar")
+			assert.Equal(t, types.SolarModeExport, bestPath.actions[1].solarMode, "Step 1 where peak price goes higher should continue solar export")
+			assert.NotEqual(t, types.SolarModeExport, bestPath.actions[2].solarMode, "Step 2 after price drops to off-peak should terminate solar export")
+		})
+
+		t.Run("RealTime_Step0_DoesNotSwitchAwayWhenSolarEndsDuringPeak", func(t *testing.T) {
+			t.Parallel()
+
+			timeline := []planInterval{
+				{
+					startTime:     now,
+					endTime:       now.Add(time.Hour),
+					durationHours: 1.0,
+					importRate:    0.35,
+					exportRate:    0.25,
+					minSOC:        20.0,
+					loadKWH:       0.5,
+					solarKWH:      0.0, // Solar ended
+				},
+				{
+					startTime:     now.Add(time.Hour),
+					endTime:       now.Add(2 * time.Hour),
+					durationHours: 1.0,
+					importRate:    0.10, // Off-peak drop
+					exportRate:    0.05,
+					minSOC:        20.0,
+					loadKWH:       0.5,
+					solarKWH:      0.0,
+				},
+			}
+
+			status := types.SystemStatus{
+				Timestamp:          now,
+				BatteryCapacityKWH: 13.5,
+				BatterySOC:         80.0,
+				SolarKW:            0.0, // Zero real-time solar
+			}
+
+			lastPrice := types.Price{
+				DollarsPerKWH:                 0.25,
+				GridUseDollarsPerKWH:          0.10, // Total import = 0.35
+				GenerationCreditDollarsPerKWH: 0.25,
+				SeparateGenerationCredit:      true, // Total export = 0.25
+			}
+
+			lastAction := &types.Action{
+				BatteryMode:  types.BatteryModeLoad,
+				SolarMode:    types.SolarModeExport,
+				Timestamp:    now.Add(-15 * time.Minute),
+				CurrentPrice: &lastPrice,
+			}
+
+			bestPath, err := c.searchOptimalPlan(ctx, timeline, state, planningAnchors{}, sett, status, nil, lastAction)
+			require.NoError(t, err)
+			require.NotEmpty(t, bestPath.actions)
+
+			assert.Equal(t, types.BatteryModeLoad, bestPath.actions[0].batteryMode)
+			assert.Equal(t, types.SolarModeExport, bestPath.actions[0].solarMode, "Step 0 in real-time must not switch away from SolarModeExport during same peak price")
+		})
+	})
 }
 
 // TestFinalizeDecisionAndPlan tests the synthesis of Decision and types.Plan from a winning path.
