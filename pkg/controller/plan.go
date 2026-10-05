@@ -3737,19 +3737,6 @@ func finalizeDecisionAndPlan(
 		targetSOC = int(math.Round(immediateInterval.minSOC))
 	}
 
-	// Extend TSScheduleModeUntil across the contiguous block of identical dispatch parameters
-	scheduleUntil := immediateInterval.endTime
-	for i := 1; i < len(winningPath.actions) && i < len(timeline); i++ {
-		if winningPath.actions[i].batteryMode == immediateAction.batteryMode &&
-			winningPath.actions[i].solarMode == immediateAction.solarMode &&
-			(winningPath.actions[i].targetSOC == immediateAction.targetSOC || immediateAction.batteryMode == types.BatteryModeChargeAny || immediateAction.batteryMode == types.BatteryModeStandby) &&
-			winningPath.actions[i].reason == immediateAction.reason {
-			scheduleUntil = timeline[i].endTime
-		} else {
-			break
-		}
-	}
-
 	// Deficit and capacity hit times detection from winning path trajectory
 	var hitDeficitAt time.Time
 	var hitCapacityAt time.Time
@@ -3812,7 +3799,6 @@ func finalizeDecisionAndPlan(
 		SystemStatus:            initialStatus,
 		HitDeficitAt:            hitDeficitAt,
 		HitCapacityAt:           hitCapacityAt,
-		TSScheduleModeUntil:     scheduleUntil,
 		RecentHomeUsageKWH:      recentKWH,
 		Q3HomeUsageKWH:          q3KWH,
 		RecentHomeUsageAbnormal: isAbnormal,

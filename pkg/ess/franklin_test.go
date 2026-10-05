@@ -1858,11 +1858,15 @@ func TestFranklin(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		until := now.Add(4 * time.Hour)
+		sched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 14, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, ImportDollars: 0.15, ExportDollars: 0.08},
+				{StartHour: 14, StartMinute: 0, EndHour: 18, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true, ImportDollars: 0.29982, ExportDollars: 0.25962},
+				{StartHour: 18, StartMinute: 0, EndHour: 24, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, ImportDollars: 0.15, ExportDollars: 0.08},
+			},
+		}
 		changed, err := f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeExport, types.ModesOptions{
-			TSScheduleModeUntil: until,
-			ImportRateDollars:   0.29982,
-			ExportRateDollars:   0.25962,
+			Schedule: sched,
 		})
 		require.NoError(t, err)
 		assert.True(t, changed)
@@ -1878,29 +1882,20 @@ func TestFranklin(t *testing.T) {
 
 		assert.InDelta(t, 0.29982, dayType["eleticRatePeak"], 0.0001, "eleticRatePeak should match peak buy price")
 		assert.InDelta(t, 0.25962, dayType["eleticSellPeak"], 0.0001, "eleticSellPeak should match peak export price")
+		assert.InDelta(t, 0.15, dayType["eleticRateValley"], 0.0001, "eleticRateValley should match off-peak buy price")
+		assert.InDelta(t, 0.08, dayType["eleticSellValley"], 0.0001, "eleticSellValley should match off-peak export price")
 
 		detailVoList := dayType["detailVoList"].([]any)
-
-		roundedStart := roundTOUPeriodStart(now)
-		roundedUntil := roundTOUPeriodEnd(until)
-		expectedStart := roundedStart.Format("15:04")
-		expectedEnd := roundedUntil.Format("15:04")
-		if (roundedUntil.Hour() == 0 && roundedUntil.Minute() == 0) || roundedUntil.Day() != roundedStart.Day() {
-			expectedEnd = "24:00"
-		}
-
-		crossesMidnight := roundedUntil.Day() != roundedStart.Day() && !(roundedUntil.Hour() == 0 && roundedUntil.Minute() == 0)
+		require.Len(t, detailVoList, 3)
 
 		// Check windows
 		for _, v := range detailVoList {
 			w := v.(map[string]any)
-			if w["startHourTime"] == expectedStart {
+			if w["startHourTime"] == "14:00" {
 				assert.EqualValues(t, franklinDispatchAPowerToHome, w["dispatchId"], "active window should have dispatchId: 1")
-				assert.Equal(t, expectedEnd, w["endHourTime"])
+				assert.Equal(t, "18:00", w["endHourTime"])
 				assert.InDelta(t, 0.29982, w["buyRate"], 0.0001)
 				assert.InDelta(t, 0.25962, w["sellRate"], 0.0001)
-			} else if crossesMidnight && w["startHourTime"] == "00:00" {
-				assert.EqualValues(t, franklinDispatchAPowerToHome, w["dispatchId"], "morning window should have dispatchId: 1")
 			} else {
 				assert.EqualValues(t, franklinDispatchSelfConsumption, w["dispatchId"], "off-peak fallback window should have dispatchId: 6")
 			}
@@ -2007,9 +2002,15 @@ func TestFranklin(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		until := now.Add(4 * time.Hour)
+		sched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 14, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+				{StartHour: 14, StartMinute: 0, EndHour: 18, EndMinute: 0, BatteryMode: types.BatteryModeStandby, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 18, StartMinute: 0, EndHour: 24, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+			},
+		}
 		changed, err := f.SetModes(context.Background(), types.BatteryModeStandby, types.SolarModeExport, types.ModesOptions{
-			TSScheduleModeUntil: until,
+			Schedule: sched,
 		})
 		require.NoError(t, err)
 		assert.True(t, changed)
@@ -2023,24 +2024,13 @@ func TestFranklin(t *testing.T) {
 		dayTypeList := strategy["dayTypeVoList"].([]any)
 		dayType := dayTypeList[0].(map[string]any)
 		detailVoList := dayType["detailVoList"].([]any)
-
-		roundedStart := roundTOUPeriodStart(now)
-		roundedUntil := roundTOUPeriodEnd(until)
-		expectedStart := roundedStart.Format("15:04")
-		expectedEnd := roundedUntil.Format("15:04")
-		if (roundedUntil.Hour() == 0 && roundedUntil.Minute() == 0) || roundedUntil.Day() != roundedStart.Day() {
-			expectedEnd = "24:00"
-		}
-
-		crossesMidnight := roundedUntil.Day() != roundedStart.Day() && !(roundedUntil.Hour() == 0 && roundedUntil.Minute() == 0)
+		require.Len(t, detailVoList, 3)
 
 		for _, v := range detailVoList {
 			w := v.(map[string]any)
-			if w["startHourTime"] == expectedStart {
+			if w["startHourTime"] == "14:00" {
 				assert.EqualValues(t, franklinDispatchAPowerOnStandby, w["dispatchId"], "active window should have dispatchId: 2")
-				assert.Equal(t, expectedEnd, w["endHourTime"])
-			} else if crossesMidnight && w["startHourTime"] == "00:00" {
-				assert.EqualValues(t, franklinDispatchAPowerOnStandby, w["dispatchId"], "morning window should have dispatchId: 2")
+				assert.Equal(t, "18:00", w["endHourTime"])
 			} else {
 				assert.EqualValues(t, franklinDispatchSelfConsumption, w["dispatchId"], "off-peak fallback window should have dispatchId: 6")
 			}
@@ -2050,7 +2040,7 @@ func TestFranklin(t *testing.T) {
 		saveDispatchCalled = false
 		updateTouModeCalled = false
 		changed2, err2 := f.SetModes(context.Background(), types.BatteryModeStandby, types.SolarModeExport, types.ModesOptions{
-			TSScheduleModeUntil: until,
+			Schedule: sched,
 		})
 		require.NoError(t, err2)
 		assert.False(t, changed2)
@@ -2062,7 +2052,6 @@ func TestFranklin(t *testing.T) {
 		var savedPayload map[string]any
 		loc := time.UTC
 		fixedStart := time.Date(2026, 7, 15, 22, 0, 0, 0, loc)
-		fixedUntil := time.Date(2026, 7, 16, 2, 0, 0, 0, loc)
 
 		currentTouID := 22222.0
 		currentTouSOC := 20.0
@@ -2161,8 +2150,16 @@ func TestFranklin(t *testing.T) {
 		})
 		require.NoError(t, err)
 
+		sched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 2, EndMinute: 0, BatteryMode: types.BatteryModeStandby, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 2, StartMinute: 0, EndHour: 22, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 22, StartMinute: 0, EndHour: 24, EndMinute: 0, BatteryMode: types.BatteryModeStandby, SolarMode: types.SolarModeExport, Peak: true},
+			},
+		}
+
 		changed, err := f.SetModes(context.Background(), types.BatteryModeStandby, types.SolarModeExport, types.ModesOptions{
-			TSScheduleModeUntil: fixedUntil,
+			Schedule: sched,
 		})
 		require.NoError(t, err)
 		assert.True(t, changed)
@@ -2194,50 +2191,179 @@ func TestFranklin(t *testing.T) {
 		assert.EqualValues(t, 2, seg3["waveType"])
 		assert.EqualValues(t, franklinDispatchAPowerOnStandby, seg3["dispatchId"])
 
-		// Convert detailVoList into []franklinTOUStrategy for isFranklinScheduleMatch testing
+		// Convert detailVoList into []franklinTOUStrategy for parseFranklinTOUSchedule testing
 		var parsedStrategies []franklinTOUStrategy
 		marshaled, err := json.Marshal(strategyList)
 		require.NoError(t, err)
 		require.NoError(t, json.Unmarshal(marshaled, &parsedStrategies))
 
-		// 1. Before midnight: 22:30 on 7/15 should match
-		nowBeforeMidnight := time.Date(2026, 7, 15, 22, 30, 0, 0, loc)
-		assert.True(t, isFranklinScheduleMatch(parsedStrategies, fixedUntil, franklinDispatchAPowerOnStandby, nowBeforeMidnight),
-			"should match before midnight")
+		existingSched := parseFranklinTOUSchedule(parsedStrategies)
+		require.NotNil(t, existingSched)
+		assert.False(t, existingSched.IsSignificantlyDifferent(sched))
 
-		// 2. After midnight: 00:30 on 7/16 should match
-		nowAfterMidnight := time.Date(2026, 7, 16, 0, 30, 0, 0, loc)
-		assert.True(t, isFranklinScheduleMatch(parsedStrategies, fixedUntil, franklinDispatchAPowerOnStandby, nowAfterMidnight),
-			"should match after midnight")
+		// Different schedule (e.g. 03:00 instead of 02:00) should report significantly different
+		diffSched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 3, EndMinute: 0, BatteryMode: types.BatteryModeStandby, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 3, StartMinute: 0, EndHour: 22, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 22, StartMinute: 0, EndHour: 24, EndMinute: 0, BatteryMode: types.BatteryModeStandby, SolarMode: types.SolarModeExport, Peak: true},
+			},
+		}
+		assert.True(t, existingSched.IsSignificantlyDifferent(diffSched))
 
-		// 3. Before window starts: 21:30 on 7/15 should NOT match
-		nowBeforeStart := time.Date(2026, 7, 15, 21, 30, 0, 0, loc)
-		assert.False(t, isFranklinScheduleMatch(parsedStrategies, fixedUntil, franklinDispatchAPowerOnStandby, nowBeforeStart),
-			"should not match before window starts")
-
-		// 4. After window ends: 02:30 on 7/16 should NOT match
-		nowAfterEnd := time.Date(2026, 7, 16, 2, 30, 0, 0, loc)
-		assert.False(t, isFranklinScheduleMatch(parsedStrategies, fixedUntil, franklinDispatchAPowerOnStandby, nowAfterEnd),
-			"should not match after window ends")
-
-		// 5. Different target until (e.g. 03:00) should NOT match
-		diffUntil := time.Date(2026, 7, 16, 3, 0, 0, 0, loc)
-		assert.False(t, isFranklinScheduleMatch(parsedStrategies, diffUntil, franklinDispatchAPowerOnStandby, nowBeforeMidnight),
-			"should not match different target until")
-
-		// 6. Calling SetModes again before midnight with matching schedule skips saveTouDispatch
+		// Calling SetModes again with matching schedule skips saveTouDispatch
 		saveDispatchCalled = false
 		changed2, err2 := f.SetModes(context.Background(), types.BatteryModeStandby, types.SolarModeExport, types.ModesOptions{
-			TSScheduleModeUntil: fixedUntil,
+			Schedule: sched,
 		})
 		require.NoError(t, err2)
 		assert.False(t, changed2)
 		assert.False(t, saveDispatchCalled, "saveTouDispatch should be skipped when schedule matches across midnight")
 	})
 
+	t.Run("SetModes 4 Tier Dynamic TOU Schedule", func(t *testing.T) {
+		var saveDispatchCalled bool
+		var savedPayload map[string]any
+		now := time.Now()
+
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"valid": true,
+						"runtimeData": map[string]any{
+							"soc":       70.0,
+							"timestamp": now.Unix(),
+						},
+					},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
+				list := []map[string]any{
+					{"id": 11111.0, "workMode": 1, "soc": 50.0},
+					{"id": 22222.0, "workMode": 2, "soc": 20.0},
+				}
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"list": list, "currendId": 22222.0},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": []map[string]any{}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"gridMaxFlag": 2, "gridFeedMaxFlag": 1},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/saveTouDispatch" {
+				saveDispatchCalled = true
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&savedPayload))
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/updateTouModeV2" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true})
+				return
+			}
+			http.Error(w, "not found: "+r.URL.Path, 404)
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:      ts.Client(),
+			baseURL:     ts.URL,
+			username:    "u",
+			md5Password: "p",
+			gatewayID:   "g",
+		}
+
+		err := f.ApplySettings(context.Background(), types.Settings{
+			ManageTOUSchedules: true,
+			MinBatterySOC:      20,
+		})
+		require.NoError(t, err)
+
+		// 4-tier schedule:
+		// - 00:00 - 06:00: Super Off-peak (0.03 buy, 0.01 sell)
+		// - 06:00 - 14:00: Off-peak (0.12 buy, 0.06 sell)
+		// - 14:00 - 18:00: Shoulder (0.22 buy, 0.14 sell)
+		// - 18:00 - 21:00: On-peak (0.45 buy, 0.35 sell)
+		// - 21:00 - 24:00: Off-peak (0.12 buy, 0.06 sell)
+		sched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 6, EndMinute: 0, ImportDollars: 0.03, ExportDollars: 0.01},
+				{StartHour: 6, StartMinute: 0, EndHour: 14, EndMinute: 0, ImportDollars: 0.12, ExportDollars: 0.06},
+				{StartHour: 14, StartMinute: 0, EndHour: 18, EndMinute: 0, ImportDollars: 0.22, ExportDollars: 0.14},
+				{StartHour: 18, StartMinute: 0, EndHour: 21, EndMinute: 0, Peak: true, ImportDollars: 0.45, ExportDollars: 0.35},
+				{StartHour: 21, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.12, ExportDollars: 0.06},
+			},
+		}
+
+		changed, err := f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeExport, types.ModesOptions{
+			Schedule: sched,
+		})
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.True(t, saveDispatchCalled)
+
+		strategyList := savedPayload["strategyList"].([]any)
+		strategy := strategyList[0].(map[string]any)
+		dayTypeList := strategy["dayTypeVoList"].([]any)
+		dayType := dayTypeList[0].(map[string]any)
+
+		// Verify all 4 tiers populated on dayType
+		assert.InDelta(t, 0.03, dayType["eleticRateSuperOffPeak"], 0.0001)
+		assert.InDelta(t, 0.01, dayType["eleticSellSuperOffPeak"], 0.0001)
+		assert.InDelta(t, 0.12, dayType["eleticRateValley"], 0.0001)
+		assert.InDelta(t, 0.06, dayType["eleticSellValley"], 0.0001)
+		assert.InDelta(t, 0.22, dayType["eleticRateShoulder"], 0.0001)
+		assert.InDelta(t, 0.14, dayType["eleticSellShoulder"], 0.0001)
+		assert.InDelta(t, 0.45, dayType["eleticRatePeak"], 0.0001)
+		assert.InDelta(t, 0.35, dayType["eleticSellPeak"], 0.0001)
+
+		// Verify detailVoList waveTypes and friendly names
+		detailVoList := dayType["detailVoList"].([]any)
+		require.Len(t, detailVoList, 5)
+
+		d0 := detailVoList[0].(map[string]any)
+		assert.EqualValues(t, 4, d0["waveType"], "00:00-06:00 should be Super Off-peak (waveType: 4)")
+		assert.Equal(t, "Super Off-peak", d0["name"])
+
+		d1 := detailVoList[1].(map[string]any)
+		assert.EqualValues(t, 0, d1["waveType"], "06:00-14:00 should be Off-peak (waveType: 0)")
+		assert.Equal(t, "Off-peak", d1["name"])
+
+		d2 := detailVoList[2].(map[string]any)
+		assert.EqualValues(t, 1, d2["waveType"], "14:00-18:00 should be Shoulder (waveType: 1)")
+		assert.Equal(t, "Shoulder", d2["name"])
+
+		d3 := detailVoList[3].(map[string]any)
+		assert.EqualValues(t, 2, d3["waveType"], "18:00-21:00 should be On-peak (waveType: 2)")
+		assert.Equal(t, "On-peak", d3["name"])
+
+		d4 := detailVoList[4].(map[string]any)
+		assert.EqualValues(t, 0, d4["waveType"], "21:00-24:00 should be Off-peak (waveType: 0)")
+		assert.Equal(t, "Off-peak", d4["name"])
+	})
+
 	t.Run("SetModes Respects Season and DayType When Matching TOU Schedule", func(t *testing.T) {
 		loc, err := time.LoadLocation("America/Chicago")
 		require.NoError(t, err)
+		nowWednesday := time.Date(2026, 7, 15, 18, 30, 0, 0, loc)
 
 		// 1. Direct unit tests for isFranklinScheduleMatch with multiple day types
 		// Multi-dayType schedules do not match RateRudder's single standard schedule structure and return false (prompting overwrite)
@@ -2274,21 +2400,21 @@ func TestFranklin(t *testing.T) {
 			},
 		}
 
-		targetUntil := time.Date(2026, 7, 15, 20, 0, 0, 0, loc)
+		// Wednesday (Weekday) target schedule: 18:00 to 20:00 export
+		targetSched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 18, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+				{StartHour: 18, StartMinute: 0, EndHour: 20, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 20, StartMinute: 0, EndHour: 24, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+			},
+		}
 
-		// Wednesday (Weekday): 2026-07-15 18:30 -> should NOT match (multi-dayType schedule)
-		nowWednesday := time.Date(2026, 7, 15, 18, 30, 0, 0, loc)
-		assert.False(t, isFranklinScheduleMatch(multiDayTypeStrategies, targetUntil, franklinDispatchAPowerToHome, nowWednesday),
-			"should not match when schedule has multiple day types")
+		// Multi-dayType schedule: parseFranklinTOUSchedule returns nil (prompting overwrite)
+		assert.Nil(t, parseFranklinTOUSchedule(multiDayTypeStrategies),
+			"should return nil when schedule has multiple day types")
 
-		// Saturday (Weekend): 2026-07-18 18:30 -> should NOT match (multi-dayType schedule)
-		nowSaturday := time.Date(2026, 7, 18, 18, 30, 0, 0, loc)
-		targetUntilSat := time.Date(2026, 7, 18, 20, 0, 0, 0, loc)
-		assert.False(t, isFranklinScheduleMatch(multiDayTypeStrategies, targetUntilSat, franklinDispatchAPowerToHome, nowSaturday),
-			"should not match multi-dayType schedule even on weekend")
-
-		// 2. Direct unit tests for isFranklinScheduleMatch with multiple seasons
-		// Multi-season schedules do not match RateRudder's single standard schedule structure and return false (prompting overwrite)
+		// 2. Direct unit tests for parseFranklinTOUSchedule with multiple seasons
+		// Multi-season schedules do not match RateRudder's single standard schedule structure and return nil (prompting overwrite)
 		multiSeasonStrategies := []franklinTOUStrategy{
 			{
 				SeasonName: "Winter",
@@ -2328,15 +2454,8 @@ func TestFranklin(t *testing.T) {
 			},
 		}
 
-		// Summer: 2026-07-15 18:30 -> should NOT match (multi-season schedule)
-		assert.False(t, isFranklinScheduleMatch(multiSeasonStrategies, targetUntil, franklinDispatchAPowerToHome, nowWednesday),
-			"should not match multi-season schedule in summer")
-
-		// Winter: 2026-12-15 18:30 -> should NOT match (multi-season schedule)
-		nowWinter := time.Date(2026, 12, 15, 18, 30, 0, 0, loc)
-		targetUntilWinter := time.Date(2026, 12, 15, 20, 0, 0, 0, loc)
-		assert.False(t, isFranklinScheduleMatch(multiSeasonStrategies, targetUntilWinter, franklinDispatchAPowerToHome, nowWinter),
-			"should not match multi-season schedule in winter")
+		assert.Nil(t, parseFranklinTOUSchedule(multiSeasonStrategies),
+			"should return nil for multi-season schedule")
 
 		// Standard RateRudder schedule (1 strategy "All Year", 1 dayType "everyDay")
 		standardRateRudderStrategies := []franklinTOUStrategy{
@@ -2372,36 +2491,64 @@ func TestFranklin(t *testing.T) {
 			},
 		}
 
-		// Matches standard schedule with flexible start (already active at 18:30) and matching end (20:00)
-		assert.True(t, isFranklinScheduleMatch(standardRateRudderStrategies, targetUntil, franklinDispatchAPowerToHome, nowWednesday),
-			"should match standard RateRudder schedule when active and target end matches")
+		parsedStd := parseFranklinTOUSchedule(standardRateRudderStrategies)
+		require.NotNil(t, parsedStd)
+
+		// Matches standard schedule
+		assert.False(t, parsedStd.IsSignificantlyDifferent(targetSched),
+			"should match standard RateRudder schedule when target matches")
+
 		// Does NOT match when dispatch differs
-		assert.False(t, isFranklinScheduleMatch(standardRateRudderStrategies, targetUntil, franklinDispatchAPowerToHomeAndGrid, nowWednesday),
+		diffDispatchSched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 18, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+				{StartHour: 18, StartMinute: 0, EndHour: 20, EndMinute: 0, BatteryMode: types.BatteryModeExport, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 20, StartMinute: 0, EndHour: 24, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+			},
+		}
+		assert.True(t, parsedStd.IsSignificantlyDifferent(diffDispatchSched),
 			"should not match when dispatch differs")
+
 		// Does NOT match when end time differs
-		diffTargetUntil := time.Date(2026, 7, 15, 21, 0, 0, 0, loc)
-		assert.False(t, isFranklinScheduleMatch(standardRateRudderStrategies, diffTargetUntil, franklinDispatchAPowerToHome, nowWednesday),
+		diffTimeSched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 18, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+				{StartHour: 18, StartMinute: 0, EndHour: 21, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 21, StartMinute: 0, EndHour: 24, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+			},
+		}
+		assert.True(t, parsedStd.IsSignificantlyDifferent(diffTimeSched),
 			"should not match when target end differs")
 
 		// Peak rate matching checks
-		importRateDollars := 0.29982
-		exportRateDollars := 0.25962
+		rateSched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 18, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+				{StartHour: 18, StartMinute: 0, EndHour: 20, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true, ImportDollars: 0.29982, ExportDollars: 0.25962},
+				{StartHour: 20, StartMinute: 0, EndHour: 24, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+			},
+		}
 
 		// Existing schedule has 0 rates, so it should NOT match target rates
-		assert.False(t, isFranklinScheduleMatch(standardRateRudderStrategies, targetUntil, franklinDispatchAPowerToHome, nowWednesday, importRateDollars, exportRateDollars),
+		assert.True(t, parsedStd.IsSignificantlyDifferent(rateSched),
 			"should not match when existing schedule has 0 rates and target has positive peak rate")
 
 		// When rates match on the existing schedule
 		strategiesWithRates := standardRateRudderStrategies
-		strategiesWithRates[0].DayTypeVoList[0].EleticRatePeak = 0.29982
-		strategiesWithRates[0].DayTypeVoList[0].EleticSellPeak = 0.25962
-		assert.True(t, isFranklinScheduleMatch(strategiesWithRates, targetUntil, franklinDispatchAPowerToHome, nowWednesday, importRateDollars, exportRateDollars),
+		buyRate := 0.29982
+		sellRate := 0.25962
+		strategiesWithRates[0].DayTypeVoList[0].DetailVoList[1].BuyRate = &buyRate
+		strategiesWithRates[0].DayTypeVoList[0].DetailVoList[1].SellRate = &sellRate
+		parsedWithRates := parseFranklinTOUSchedule(strategiesWithRates)
+		require.NotNil(t, parsedWithRates)
+		assert.False(t, parsedWithRates.IsSignificantlyDifferent(rateSched),
 			"should match when rates also match")
 
 		// If existing peak rate is different, it should NOT match
-		strategiesWithDiffRate := strategiesWithRates
-		strategiesWithDiffRate[0].DayTypeVoList[0].EleticRatePeak = 0.15
-		assert.False(t, isFranklinScheduleMatch(strategiesWithDiffRate, targetUntil, franklinDispatchAPowerToHome, nowWednesday, importRateDollars, exportRateDollars),
+		diffBuyRate := 0.15
+		strategiesWithRates[0].DayTypeVoList[0].DetailVoList[1].BuyRate = &diffBuyRate
+		parsedDiffRates := parseFranklinTOUSchedule(strategiesWithRates)
+		assert.True(t, parsedDiffRates.IsSignificantlyDifferent(rateSched),
 			"should not match when peak rate differs")
 
 		// 3. SetModes integration test: gateway returns multiDayTypeStrategies
@@ -2504,11 +2651,132 @@ func TestFranklin(t *testing.T) {
 		}))
 
 		changed, err := f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeExport, types.ModesOptions{
-			TSScheduleModeUntil: targetUntil,
+			Schedule: targetSched,
 		})
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.True(t, saveDispatchCalled, "saveTouDispatch MUST be called when today's day type differs, even if another day type has the dispatch")
+	})
+
+	t.Run("SetModes Manual Schedule Only Updated When Export Required", func(t *testing.T) {
+		var saveDispatchCalled bool
+		var updateTouModeCalled bool
+
+		targetSched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 18, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+				{StartHour: 18, StartMinute: 0, EndHour: 20, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 20, StartMinute: 0, EndHour: 24, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+			},
+		}
+
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"valid": true,
+						"runtimeData": map[string]any{
+							"soc":       80.0,
+							"timestamp": time.Now().Unix(),
+							"mode":      138224, // Self-consumption
+						},
+					},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
+				list := []map[string]any{
+					{"id": 44279.0, "workMode": 1, "name": "Time of Use", "soc": 20.0, "editSocFlag": true},
+					{"id": 138224.0, "workMode": 2, "name": "Self-Consumption", "soc": 20.0, "editSocFlag": true},
+				}
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"list": list, "currendId": 138224.0},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": []map[string]any{}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"gridMaxFlag": 2, "gridFeedMaxFlag": 2},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getTouDispatchDetail" {
+				// Gateway returns manual utility tariff (not RateRudder)
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"template": map[string]any{
+							"countryId":          2,
+							"provinceId":         39,
+							"electricCompany":    "Pacific Gas & Electric",
+							"eleCompanyFullName": "PG&E E-TOU-C",
+							"tariffName":         "E-TOU-C",
+						},
+						"strategyList": []map[string]any{},
+					},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/saveTouDispatch" {
+				saveDispatchCalled = true
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"id": 44279}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/updateTouModeV2" {
+				updateTouModeCalled = true
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
+				return
+			}
+			http.Error(w, "not found "+r.URL.Path, 404)
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:      ts.Client(),
+			baseURL:     ts.URL,
+			username:    "u",
+			md5Password: "p",
+			gatewayID:   "g",
+		}
+
+		require.NoError(t, f.ApplySettings(context.Background(), types.Settings{
+			ManageTOUSchedules: true,
+			GridExportSolar:    true,
+			MinBatterySOC:      20,
+		}))
+
+		// 1. When in BatteryModeLoad and SolarModeAny (no export required), manual schedule must NOT be updated
+		changed, err := f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{
+			Schedule: targetSched,
+		})
+		require.NoError(t, err)
+		assert.False(t, changed)
+		assert.False(t, saveDispatchCalled, "saveTouDispatch must NOT be called when export is not required and schedule is manual")
+		assert.False(t, updateTouModeCalled)
+
+		// 2. When in BatteryModeLoad and SolarModeExport (export required), schedule MUST be updated
+		changed2, err2 := f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeExport, types.ModesOptions{
+			Schedule: targetSched,
+		})
+		require.NoError(t, err2)
+		assert.True(t, changed2)
+		assert.True(t, saveDispatchCalled, "saveTouDispatch MUST be called when export is required")
+		assert.True(t, updateTouModeCalled)
 	})
 
 	t.Run("SetModes BatteryExport Dispatch 7", func(t *testing.T) {
@@ -2599,9 +2867,15 @@ func TestFranklin(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		until := now.Add(2 * time.Hour)
+		sched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 14, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+				{StartHour: 14, StartMinute: 0, EndHour: 16, EndMinute: 0, BatteryMode: types.BatteryModeExport, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 16, StartMinute: 0, EndHour: 24, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+			},
+		}
 		changed, err := f.SetModes(context.Background(), types.BatteryModeExport, types.SolarModeExport, types.ModesOptions{
-			TSScheduleModeUntil: until,
+			Schedule: sched,
 		})
 		require.NoError(t, err)
 		assert.True(t, changed)
@@ -2615,20 +2889,13 @@ func TestFranklin(t *testing.T) {
 		dayTypeList := strategy["dayTypeVoList"].([]any)
 		dayType := dayTypeList[0].(map[string]any)
 		detailVoList := dayType["detailVoList"].([]any)
-
-		roundedStart := roundTOUPeriodStart(now)
-		roundedUntil := roundTOUPeriodEnd(until)
-		expectedStart := roundedStart.Format("15:04")
-		expectedEnd := roundedUntil.Format("15:04")
-		if (roundedUntil.Hour() == 0 && roundedUntil.Minute() == 0) || roundedUntil.Day() != roundedStart.Day() {
-			expectedEnd = "24:00"
-		}
+		require.Len(t, detailVoList, 3)
 
 		for _, v := range detailVoList {
 			w := v.(map[string]any)
-			if w["startHourTime"] == expectedStart {
+			if w["startHourTime"] == "14:00" {
 				assert.EqualValues(t, franklinDispatchAPowerToHomeAndGrid, w["dispatchId"], "active window should have dispatchId: 7")
-				assert.Equal(t, expectedEnd, w["endHourTime"])
+				assert.Equal(t, "16:00", w["endHourTime"])
 			} else {
 				assert.EqualValues(t, franklinDispatchSelfConsumption, w["dispatchId"], "off-peak fallback window should have dispatchId: 6")
 			}
@@ -2725,9 +2992,15 @@ func TestFranklin(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		until := now.Add(4 * time.Hour)
+		sched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 14, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+				{StartHour: 14, StartMinute: 0, EndHour: 18, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 18, StartMinute: 0, EndHour: 24, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+			},
+		}
 		changed, err := f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeExport, types.ModesOptions{
-			TSScheduleModeUntil: until,
+			Schedule: sched,
 		})
 		require.NoError(t, err)
 		assert.True(t, changed)
@@ -2804,9 +3077,15 @@ func TestFranklin(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		until := now.Add(4 * time.Hour)
+		sched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 14, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+				{StartHour: 14, StartMinute: 0, EndHour: 18, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 18, StartMinute: 0, EndHour: 24, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+			},
+		}
 		changed, err := f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeExport, types.ModesOptions{
-			TSScheduleModeUntil: until,
+			Schedule: sched,
 		})
 		assert.False(t, changed)
 		assert.ErrorContains(t, err, "franklin tou mode not available")
@@ -3639,9 +3918,15 @@ func TestFranklin(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		until := time.Now().Add(2 * time.Hour)
+		sched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 14, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+				{StartHour: 14, StartMinute: 0, EndHour: 16, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 16, StartMinute: 0, EndHour: 24, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+			},
+		}
 		changed, err := f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeExport, types.ModesOptions{
-			TSScheduleModeUntil: until,
+			Schedule: sched,
 		})
 		require.NoError(t, err)
 		assert.True(t, changed)
@@ -3651,11 +3936,18 @@ func TestFranklin(t *testing.T) {
 		assert.Equal(t, 2, savedCountryID, "countryId should match existing gateway setting")
 		assert.Equal(t, 39, savedProvinceID, "provinceId should match existing gateway setting (California)")
 		assert.Equal(t, "RateRudder", savedElectricCompany, "electricCompany should always be overwritten with RateRudder")
-		assert.Equal(t, "RateRudder Dynamic Solar Export", savedEleCompanyFullName, "eleCompanyFullName should always be overwritten with RateRudder")
+		assert.Equal(t, "RateRudder Dynamic Schedule", savedEleCompanyFullName, "eleCompanyFullName should always be overwritten with RateRudder")
 
 		// Subsequent call should fetch fresh template and not use cache
+		sched2 := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 14, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+				{StartHour: 14, StartMinute: 0, EndHour: 17, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 17, StartMinute: 0, EndHour: 24, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+			},
+		}
 		_, err = f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeExport, types.ModesOptions{
-			TSScheduleModeUntil: until.Add(time.Hour),
+			Schedule: sched2,
 		})
 		require.NoError(t, err)
 		assert.Equal(t, 2, detailCalled, "getTouDispatchDetail should be called fresh each time")
@@ -3738,9 +4030,15 @@ func TestFranklin(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		until := time.Now().Add(2 * time.Hour)
+		sched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 14, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+				{StartHour: 14, StartMinute: 0, EndHour: 16, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 16, StartMinute: 0, EndHour: 24, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+			},
+		}
 		changed, err := f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeExport, types.ModesOptions{
-			TSScheduleModeUntil: until,
+			Schedule: sched,
 		})
 		require.NoError(t, err)
 		assert.True(t, changed)
@@ -3748,7 +4046,7 @@ func TestFranklin(t *testing.T) {
 		assert.Equal(t, 2, savedCountryID, "should fallback to countryId 2 (US)")
 		assert.Equal(t, 39, savedProvinceID, "should fallback to provinceId 39 (CA)")
 		assert.Equal(t, "RateRudder", savedElectricCompany, "should fallback to electricCompany RateRudder")
-		assert.Equal(t, "RateRudder Dynamic Solar Export", savedEleCompanyFullName)
+		assert.Equal(t, "RateRudder Dynamic Schedule", savedEleCompanyFullName)
 	})
 
 	t.Run("SetModes Direct Solar Export Defaults When Country and Province Are Zero", func(t *testing.T) {
@@ -3838,9 +4136,15 @@ func TestFranklin(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		until := time.Now().Add(2 * time.Hour)
+		sched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 14, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+				{StartHour: 14, StartMinute: 0, EndHour: 16, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 16, StartMinute: 0, EndHour: 24, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
+			},
+		}
 		changed, err := f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeExport, types.ModesOptions{
-			TSScheduleModeUntil: until,
+			Schedule: sched,
 		})
 		require.NoError(t, err)
 		assert.True(t, changed)
@@ -4230,6 +4534,142 @@ func TestFranklin(t *testing.T) {
 			assert.False(t, gs.GridChargeBatteries)
 			assert.False(t, gs.GridExportSolar)
 			assert.False(t, gs.GridExportBatteries)
+		})
+	})
+
+	t.Run("SaveFranklinTOUSchedule", func(t *testing.T) {
+		t.Run("Empty Schedule Error", func(t *testing.T) {
+			f := &Franklin{}
+			err := f.saveFranklinTOUSchedule(context.Background(), nil, franklinTOUTemplateResponse{})
+			require.Error(t, err)
+			assert.Equal(t, "empty schedule", err.Error())
+
+			err2 := f.saveFranklinTOUSchedule(context.Background(), &types.TOUSchedule{}, franklinTOUTemplateResponse{})
+			require.Error(t, err2)
+			assert.Equal(t, "empty schedule", err2.Error())
+		})
+
+		t.Run("Accepts Provided Template", func(t *testing.T) {
+			var saveDispatchPayload map[string]any
+			var getDetailCalled bool
+
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/hes-gateway/terminal/tou/getTouDispatchDetail" {
+					getDetailCalled = true
+					json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
+					return
+				}
+				if r.URL.Path == "/hes-gateway/terminal/tou/saveTouDispatch" {
+					json.NewDecoder(r.Body).Decode(&saveDispatchPayload)
+					json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
+					return
+				}
+				http.Error(w, "not found: "+r.URL.Path, 404)
+			}))
+			defer ts.Close()
+
+			f := &Franklin{
+				client:    ts.Client(),
+				baseURL:   ts.URL,
+				gatewayID: "g123",
+			}
+
+			sched := &types.TOUSchedule{
+				Periods: []types.TOUPeriod{
+					{
+						StartHour:     0,
+						StartMinute:   0,
+						EndHour:       14,
+						EndMinute:     0,
+						ImportDollars: 0.15,
+						ExportDollars: 0.05,
+						BatteryMode:   types.BatteryModeLoad,
+						SolarMode:     types.SolarModeAny,
+						Peak:          false,
+					},
+					{
+						StartHour:     14,
+						StartMinute:   0,
+						EndHour:       20,
+						EndMinute:     0,
+						ImportDollars: 0.45,
+						ExportDollars: 0.40,
+						BatteryMode:   types.BatteryModeExport,
+						SolarMode:     types.SolarModeExport,
+						Peak:          true,
+					},
+					{
+						StartHour:     20,
+						StartMinute:   0,
+						EndHour:       24,
+						EndMinute:     0,
+						ImportDollars: 0.15,
+						ExportDollars: 0.05,
+						BatteryMode:   types.BatteryModeLoad,
+						SolarMode:     types.SolarModeAny,
+						Peak:          false,
+					},
+				},
+			}
+
+			tplRes := franklinTOUTemplateResponse{
+				Template: franklinTOUTemplate{
+					CountryID:  5,
+					ProvinceID: 42,
+				},
+			}
+
+			err := f.saveFranklinTOUSchedule(context.Background(), sched, tplRes)
+			require.NoError(t, err)
+			assert.False(t, getDetailCalled, "getTouDispatchDetail should NOT be called when template is provided")
+			require.NotNil(t, saveDispatchPayload)
+			tplMap := saveDispatchPayload["template"].(map[string]any)
+			assert.Equal(t, float64(5), tplMap["countryId"])
+			assert.Equal(t, float64(42), tplMap["provinceId"])
+		})
+
+		t.Run("Default Location When Missing", func(t *testing.T) {
+			var saveDispatchPayload map[string]any
+
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/hes-gateway/terminal/tou/saveTouDispatch" {
+					json.NewDecoder(r.Body).Decode(&saveDispatchPayload)
+					json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
+					return
+				}
+				http.Error(w, "not found: "+r.URL.Path, 404)
+			}))
+			defer ts.Close()
+
+			f := &Franklin{
+				client:    ts.Client(),
+				baseURL:   ts.URL,
+				gatewayID: "g123",
+			}
+
+			sched := &types.TOUSchedule{
+				Periods: []types.TOUPeriod{
+					{
+						StartHour:     0,
+						StartMinute:   0,
+						EndHour:       24,
+						EndMinute:     0,
+						ImportDollars: 0.15,
+						ExportDollars: 0.05,
+						BatteryMode:   types.BatteryModeLoad,
+						SolarMode:     types.SolarModeAny,
+						Peak:          false,
+					},
+				},
+			}
+
+			err := f.saveFranklinTOUSchedule(context.Background(), sched, franklinTOUTemplateResponse{})
+			require.NoError(t, err)
+			require.NotNil(t, saveDispatchPayload)
+			tplMap := saveDispatchPayload["template"].(map[string]any)
+			// Defaults to US (2) and California (39) when missing from template
+			assert.Equal(t, float64(2), tplMap["countryId"])
+			assert.Equal(t, float64(39), tplMap["provinceId"])
 		})
 	})
 }

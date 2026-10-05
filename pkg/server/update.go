@@ -532,11 +532,7 @@ func (s *Server) performSiteUpdate(
 		if status.ManagedTOUMode {
 			minSOC := int(math.Round(settings.Settings.GetMinBatterySOC(ctx, s.now(), status.Timestamp.Location(), currentPrice)))
 			if _, err := s.setESSModes(ctx, siteID, essSystem, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{
-				MinimumSOC:        minSOC,
-				ImportRateDollars: currentPrice.ImportRateDollars(),
-				// note: this doesn't take into account true net-metering but we shouldn't be
-				// exporting for them anyways
-				ExportRateDollars: currentPrice.ExportRateDollars(),
+				MinimumSOC: minSOC,
 			}, settings); err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to set modes back to self-consumption while paused", slog.Any("error", err))
 			}
@@ -645,14 +641,14 @@ func (s *Server) performSiteUpdate(
 	if (action.BatteryMode == types.BatteryModeExport || action.BatteryMode == types.BatteryModeStandby) && action.ChargeToSOC > minSOC {
 		minSOC = action.ChargeToSOC
 	}
+	var sched *types.TOUSchedule
+	if settings.ManageTOUSchedules && hasPlan && action.Plan != nil {
+		sched = controller.BuildTOUSchedule(action.Plan, s.now(), status.Timestamp.Location())
+	}
 	modesChanged, err := s.setESSModes(ctx, siteID, essSystem, action.BatteryMode, action.SolarMode, types.ModesOptions{
-		ChargeToSOC:         action.ChargeToSOC,
-		MinimumSOC:          minSOC,
-		TSScheduleModeUntil: action.TSScheduleModeUntil,
-		ImportRateDollars:   currentPrice.ImportRateDollars(),
-		// this isn't totally accurate if the user is on true net-metering but we
-		// shouldn't be exporting for them anyways
-		ExportRateDollars: currentPrice.ExportRateDollars(),
+		ChargeToSOC: action.ChargeToSOC,
+		MinimumSOC:  minSOC,
+		Schedule:    sched,
 	}, settings)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to set mode", slog.Any("error", err))

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
+	"sort"
 	"sync"
 	"time"
 
@@ -135,4 +137,134 @@ func (m *Map) RegisterTesla(ctx context.Context, domain string) error {
 		return errors.New("tesla not configured")
 	}
 	return m.baseTesla.RegisterTesla(ctx, domain)
+}
+
+// calculateDurationWeightedRates computes the duration-weighted average buy and sell rates
+// for a slice of TOU periods, rounded to 5 decimal places ($0.00001 / 0.001¢ precision).
+// This preserves real sub-cent pricing accuracy from dynamic utility tariffs (e.g. ComEd RTP)
+// while eliminating IEEE 754 floating-point division noise, and ensures that buyRate >= sellRate.
+func calculateDurationWeightedRates(periods []types.TOUPeriod) (buyRate float64, sellRate float64) {
+	if len(periods) == 0 {
+		return 0, 0
+	}
+	var totalDur int
+	var buySum, sellSum float64
+	for _, p := range periods {
+		dur := p.DurationMinutes()
+		if dur <= 0 {
+			dur = 60
+		}
+		totalDur += dur
+		buySum += p.ImportDollars * float64(dur)
+		sellSum += p.ExportDollars * float64(dur)
+	}
+	if totalDur == 0 {
+		return 0, 0
+	}
+	bRate := math.Round((buySum/float64(totalDur))*100000) / 100000
+	sRate := math.Round((sellSum/float64(totalDur))*100000) / 100000
+	if sRate > bRate {
+		bRate = sRate
+	}
+	return bRate, sRate
+}
+
+// touTier represents a normalized time-of-use rate tier.
+type touTier string
+
+const (
+	touTierOnPeak       touTier = "ON_PEAK"
+	touTierPartialPeak  touTier = "PARTIAL_PEAK" // Shoulder
+	touTierOffPeak      touTier = "OFF_PEAK"     // Valley
+	touTierSuperOffPeak touTier = "SUPER_OFF_PEAK"
+)
+
+const (
+	// multiTierSpreadThresholdDollars defines the minimum rate spread ($/kWh) among non-peak periods
+	// before activating 3 non-peak tiers (SUPER_OFF_PEAK, OFF_PEAK, PARTIAL_PEAK).
+	// If the spread is <= $0.05, at most 2 non-peak tiers are used to prevent micro-segmentation.
+	multiTierSpreadThresholdDollars = 0.05
+)
+
+// classifyTOUScheduleTiers partitions schedule periods into up to 4 standard TOU tiers:
+// ON_PEAK, PARTIAL_PEAK (Shoulder), OFF_PEAK (Valley), and SUPER_OFF_PEAK.
+// It returns:
+// 1. A slice of TOUTier mapped 1:1 with the input periods.
+// 2. A map of TOUTier to the slice of periods belonging to that tier.
+func classifyTOUScheduleTiers(periods []types.TOUPeriod) ([]touTier, map[touTier][]types.TOUPeriod) {
+	tiers := make([]touTier, len(periods))
+	tierPeriods := make(map[touTier][]types.TOUPeriod)
+
+	var nonPeakIndices []int
+	var nonPeakRates []float64
+
+	for i, p := range periods {
+		if p.Peak || p.BatteryMode == types.BatteryModeExport || p.SolarMode == types.SolarModeExport {
+			tiers[i] = touTierOnPeak
+			tierPeriods[touTierOnPeak] = append(tierPeriods[touTierOnPeak], p)
+		} else {
+			nonPeakIndices = append(nonPeakIndices, i)
+			nonPeakRates = append(nonPeakRates, p.ImportDollars)
+		}
+	}
+
+	if len(nonPeakIndices) > 0 {
+		sortedRates := make([]float64, len(nonPeakRates))
+		copy(sortedRates, nonPeakRates)
+		sort.Float64s(sortedRates)
+
+		// Group rates within types.TOUCoalesceRateThresholdDollars ($0.015) into clusters
+		var clusters [][]float64
+		for _, r := range sortedRates {
+			if len(clusters) == 0 {
+				clusters = append(clusters, []float64{r})
+			} else {
+				lastCluster := clusters[len(clusters)-1]
+				if r-lastCluster[0] <= types.TOUCoalesceRateThresholdDollars {
+					clusters[len(clusters)-1] = append(clusters[len(clusters)-1], r)
+				} else {
+					clusters = append(clusters, []float64{r})
+				}
+			}
+		}
+
+		k := len(clusters)
+		spread := sortedRates[len(sortedRates)-1] - sortedRates[0]
+
+		getNonPeakTier := func(rate float64) touTier {
+			if k <= 1 || spread <= types.TOUCoalesceRateThresholdDollars {
+				return touTierOffPeak
+			}
+			if k == 2 || spread <= multiTierSpreadThresholdDollars {
+				// 2 non-peak tiers: SUPER_OFF_PEAK and OFF_PEAK
+				midCluster := len(clusters) / 2
+				maxSuperOffPeakRate := clusters[midCluster-1][len(clusters[midCluster-1])-1]
+				if rate <= maxSuperOffPeakRate {
+					return touTierSuperOffPeak
+				}
+				return touTierOffPeak
+			}
+			// 3 non-peak tiers: SUPER_OFF_PEAK, OFF_PEAK, and PARTIAL_PEAK
+			numLow := max(1, len(clusters)/3)
+			numHigh := max(1, len(clusters)/3)
+			maxSuperOffPeakRate := clusters[numLow-1][len(clusters[numLow-1])-1]
+			minPartialPeakRate := clusters[len(clusters)-numHigh][0]
+			if rate <= maxSuperOffPeakRate {
+				return touTierSuperOffPeak
+			}
+			if rate >= minPartialPeakRate {
+				return touTierPartialPeak
+			}
+			return touTierOffPeak
+		}
+
+		for _, idx := range nonPeakIndices {
+			p := periods[idx]
+			tier := getNonPeakTier(p.ImportDollars)
+			tiers[idx] = tier
+			tierPeriods[tier] = append(tierPeriods[tier], p)
+		}
+	}
+
+	return tiers, tierPeriods
 }

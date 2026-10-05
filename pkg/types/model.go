@@ -74,11 +74,9 @@ const (
 
 // ModesOptions contains options for setting the operating modes.
 type ModesOptions struct {
-	ChargeToSOC         int       `json:"chargeToSoc,omitempty"`
-	MinimumSOC          int       `json:"minimumSoc,omitempty"`
-	TSScheduleModeUntil time.Time `json:"tsScheduleModeUntil,omitempty"`
-	ImportRateDollars   float64   `json:"importRateDollars,omitempty"`
-	ExportRateDollars   float64   `json:"exportRateDollars,omitempty"`
+	ChargeToSOC int          `json:"chargeToSoc,omitempty"`
+	MinimumSOC  int          `json:"minimumSoc,omitempty"`
+	Schedule    *TOUSchedule `json:"schedule,omitempty"`
 }
 
 // Action represents a control decision made by the system.
@@ -95,7 +93,6 @@ type Action struct {
 	SystemStatus            SystemStatus     `json:"systemStatus"`
 	HitDeficitAt            time.Time        `json:"deficitAt"`
 	HitCapacityAt           time.Time        `json:"capacityAt"`
-	TSScheduleModeUntil     time.Time        `json:"tsScheduleModeUntil,omitempty"`
 	StrategyBenefitDollars  float64          `json:"strategyBenefitDollars,omitempty"`
 	DryRun                  bool             `json:"dryRun,omitempty"`
 	Fault                   bool             `json:"fault,omitempty"`

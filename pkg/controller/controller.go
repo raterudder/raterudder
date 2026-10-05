@@ -53,7 +53,6 @@ type DecisionResult struct {
 	Description           string
 	FuturePrice           *types.Price
 	ChargeToSOC           int
-	TSScheduleModeUntil   time.Time
 	HitDeficitAt          time.Time
 	HitBufferedDeficitAt  time.Time
 	HitThresholdDeficitAt time.Time
@@ -258,7 +257,6 @@ func (c *Controller) Decide(
 				HitThresholdDeficitAt: hitThresholdDeficitAt,
 				HitCapacityAt:         hitCapacityAt,
 				ChargeToSOC:           dr.ChargeToSOC,
-				TSScheduleModeUntil:   dr.TSScheduleModeUntil,
 			},
 			SimulationParams: simParams,
 			SimData:          simData,
