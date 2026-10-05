@@ -5029,6 +5029,31 @@ func TestComputeTimeOfDayRefPrice(t *testing.T) {
 			{TSStart: time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 20, 0, 0, 0, loc), DollarsPerKWH: 0.19, GridUseDollarsPerKWH: 0.05}, // 8 PM: $0.24
 			{TSStart: time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 12, 0, 0, 0, loc), DollarsPerKWH: 0.50, GridUseDollarsPerKWH: 0.05}, // 12 PM: ignored
 		}
+		// Yesterday's peak in the 3-hour window [6 PM, 7 PM, 8 PM] is $0.24
+		ref := computeTimeOfDayRefPrice(hist, targetTime, loc, 0.10)
+		assert.InDelta(t, 0.24, ref, 0.001)
+	})
+
+	t.Run("AdjacentShoulderHoursDoNotDilutePeak", func(t *testing.T) {
+		yesterday := targetTime.AddDate(0, 0, -1)
+		twoDaysAgo := targetTime.AddDate(0, 0, -2)
+		threeDaysAgo := targetTime.AddDate(0, 0, -3)
+		hist := []types.Price{
+			// Yesterday: 6 PM shoulder ($0.12), 7 PM peak ($0.22), 8 PM shoulder ($0.13)
+			{TSStart: time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 18, 0, 0, 0, loc), DollarsPerKWH: 0.07, GridUseDollarsPerKWH: 0.05},
+			{TSStart: time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 19, 0, 0, 0, loc), DollarsPerKWH: 0.17, GridUseDollarsPerKWH: 0.05},
+			{TSStart: time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 20, 0, 0, 0, loc), DollarsPerKWH: 0.08, GridUseDollarsPerKWH: 0.05},
+			// Two days ago: 6 PM shoulder ($0.12), 7 PM peak ($0.22), 8 PM shoulder ($0.13)
+			{TSStart: time.Date(twoDaysAgo.Year(), twoDaysAgo.Month(), twoDaysAgo.Day(), 18, 0, 0, 0, loc), DollarsPerKWH: 0.07, GridUseDollarsPerKWH: 0.05},
+			{TSStart: time.Date(twoDaysAgo.Year(), twoDaysAgo.Month(), twoDaysAgo.Day(), 19, 0, 0, 0, loc), DollarsPerKWH: 0.17, GridUseDollarsPerKWH: 0.05},
+			{TSStart: time.Date(twoDaysAgo.Year(), twoDaysAgo.Month(), twoDaysAgo.Day(), 20, 0, 0, 0, loc), DollarsPerKWH: 0.08, GridUseDollarsPerKWH: 0.05},
+			// Three days ago: 6 PM shoulder ($0.12), 7 PM peak ($0.22), 8 PM shoulder ($0.13)
+			{TSStart: time.Date(threeDaysAgo.Year(), threeDaysAgo.Month(), threeDaysAgo.Day(), 18, 0, 0, 0, loc), DollarsPerKWH: 0.07, GridUseDollarsPerKWH: 0.05},
+			{TSStart: time.Date(threeDaysAgo.Year(), threeDaysAgo.Month(), threeDaysAgo.Day(), 19, 0, 0, 0, loc), DollarsPerKWH: 0.17, GridUseDollarsPerKWH: 0.05},
+			{TSStart: time.Date(threeDaysAgo.Year(), threeDaysAgo.Month(), threeDaysAgo.Day(), 20, 0, 0, 0, loc), DollarsPerKWH: 0.08, GridUseDollarsPerKWH: 0.05},
+		}
+		// Each day's peak in the [6 PM, 7 PM, 8 PM] window is $0.22. Median of daily peaks is $0.22.
+		// (Without daily window peak logic, the six $0.12-$0.13 shoulder hours would have dragged the median down to $0.13).
 		ref := computeTimeOfDayRefPrice(hist, targetTime, loc, 0.10)
 		assert.InDelta(t, 0.22, ref, 0.001)
 	})
@@ -5042,8 +5067,9 @@ func TestComputeTimeOfDayRefPrice(t *testing.T) {
 			{TSStart: time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 1, 0, 0, 0, loc), DollarsPerKWH: 0.14, GridUseDollarsPerKWH: 0.05},  // 1 AM: $0.19
 			{TSStart: time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 5, 0, 0, 0, loc), DollarsPerKWH: 0.50, GridUseDollarsPerKWH: 0.05},  // 5 AM: ignored
 		}
+		// Yesterday's peak in the midnight window [11 PM, 12 AM, 1 AM] is $0.19
 		ref := computeTimeOfDayRefPrice(hist, midnightTarget, loc, 0.10)
-		assert.InDelta(t, 0.17, ref, 0.001)
+		assert.InDelta(t, 0.19, ref, 0.001)
 	})
 
 	t.Run("ExcludesSameDayPrices", func(t *testing.T) {

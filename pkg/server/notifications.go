@@ -893,10 +893,12 @@ func computePricePercentile(prices []float64, p float64) float64 {
 // 7:00 PM, and 8:00 PM across past days. The +/- 1 hour buffer accounts for slight shifts in peak
 // hours, seasonal daylight changes, and Daylight Saving Time adjustments.
 //
-// We use the median (50th percentile) of this 3-hour window across previous days rather than the maximum:
+// To prevent adjacent lower shoulder hours (e.g. 4 PM before a 5 PM peak) from dragging down
+// the peak baseline, we find the maximum price within that 3-hour window for each previous day,
+// and then take the median (50th percentile) of those daily peaks:
 //  1. Normal recurring daily peaks around this time form the baseline (so regular daily peaks don't alert).
-//  2. An occasional past price spike in this window does NOT artificially inflate the baseline or poison
-//     future alerts (unlike a maximum, a few spike hours won't move the median).
+//  2. An occasional past price spike on a single day does NOT inflate the baseline or poison
+//     future alerts (unlike a single max, a spike day won't move the median of daily peaks).
 //  3. If there are no historical prices in this window, it gracefully falls back to the provided fallback
 //     (typically the all-hours median).
 func computeTimeOfDayRefPrice(histPrices []types.Price, targetTime time.Time, loc *time.Location, fallback float64) float64 {
@@ -911,7 +913,8 @@ func computeTimeOfDayRefPrice(histPrices []types.Price, targetTime time.Time, lo
 	prevHour := (targetHour + 23) % 24
 	nextHour := (targetHour + 1) % 24
 
-	var windowCosts []float64
+	// Group prices in the 3-hour window by calendar date on previous days
+	dailyWindowCosts := make(map[string][]float64)
 	for _, p := range histPrices {
 		pLocal := p.TSStart.In(loc)
 		pY, pM, pD := pLocal.Date()
@@ -924,16 +927,30 @@ func computeTimeOfDayRefPrice(histPrices []types.Price, targetTime time.Time, lo
 		h := pLocal.Hour()
 		if h == prevHour || h == targetHour || h == nextHour {
 			cost := p.DollarsPerKWH + p.GridUseDollarsPerKWH
-			windowCosts = append(windowCosts, cost)
+			dateKey := fmt.Sprintf("%04d-%02d-%02d", pY, pM, pD)
+			dailyWindowCosts[dateKey] = append(dailyWindowCosts[dateKey], cost)
 		}
 	}
 
-	if len(windowCosts) == 0 {
+	if len(dailyWindowCosts) == 0 {
 		return fallback
 	}
 
-	// Use median of prices in this time window as the representative baseline
-	return computePricePercentile(windowCosts, 0.50)
+	// For each previous day, find the highest price within the 3-hour window.
+	// This captures the true daily peak for this time of day without dilution from adjacent shoulder hours.
+	var dailyPeaks []float64
+	for _, costs := range dailyWindowCosts {
+		maxCost := costs[0]
+		for _, c := range costs[1:] {
+			if c > maxCost {
+				maxCost = c
+			}
+		}
+		dailyPeaks = append(dailyPeaks, maxCost)
+	}
+
+	// Use median of the daily peaks as the baseline for this time of day
+	return computePricePercentile(dailyPeaks, 0.50)
 }
 
 // notificationTag returns the push notification tag for a given notification type and site.
@@ -2973,7 +2990,7 @@ func (s *Server) handleHighHomeLoadNotifications(
 	if reserveSOC <= 0 {
 		reserveSOC = 20.0
 	}
-	_, reserveBufferPct, _ := data.settings.GetOptimizationParams()
+	reserveBufferPct := data.settings.GetOptimizationParams().ReserveBufferPercent
 	effectiveReserveSOC := reserveSOC + reserveBufferPct
 	if effectiveReserveSOC > 100.0 {
 		effectiveReserveSOC = 100.0
