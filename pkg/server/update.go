@@ -681,27 +681,128 @@ func (s *Server) insertAction(ctx context.Context, siteID string, action types.A
 }
 
 func (s *Server) getFuturePrices(ctx context.Context, siteID string, utility utility.Utility) ([]types.Price, error) {
-	futurePrices, err := utility.GetFuturePrices(ctx)
-	if err != nil {
-		log.Ctx(ctx).WarnContext(ctx, "failed to get future prices", slog.Any("error", err))
-		// Continue with empty future prices
+	var futurePrices []types.Price
+	if utility != nil {
+		var err error
+		futurePrices, err = utility.GetFuturePrices(ctx)
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to get future prices", slog.Any("error", err))
+			// Continue with empty future prices
+		}
 	}
 
 	nowTime := s.now()
-	if len(futurePrices) == 0 {
-		log.Ctx(ctx).WarnContext(ctx, "no future prices available, estimating using last 24 hours")
-		histStart := nowTime.Add(-24 * time.Hour)
+	loc := nowTime.Location()
+	if len(futurePrices) > 0 && futurePrices[0].TSStart.Location() != nil {
+		loc = futurePrices[0].TSStart.Location()
+	}
+	nowInLoc := nowTime.In(loc)
+	todayStart := truncateDay(nowInLoc)
+	tomorrowStart := todayStart.AddDate(0, 0, 1)
+	tomorrowEnd := todayStart.AddDate(0, 0, 2)
+
+	hasCoverage := func(t time.Time) bool {
+		hourEnd := t.Add(time.Hour)
+		for _, p := range futurePrices {
+			pEnd := p.TSEnd
+			if pEnd.IsZero() {
+				pEnd = p.TSStart.Add(time.Hour)
+			}
+			if p.TSStart.Before(hourEnd) && pEnd.After(t) {
+				return true
+			}
+		}
+		return false
+	}
+
+	hasAllTomorrow := len(futurePrices) > 0
+	var missingCoverage time.Time
+	if hasAllTomorrow {
+		for t := tomorrowStart; t.Before(tomorrowEnd); t = t.Add(time.Hour) {
+			if !hasCoverage(t) {
+				hasAllTomorrow = false
+				missingCoverage = t
+				break
+			}
+		}
+	}
+
+	if !hasAllTomorrow {
+		log.Ctx(ctx).InfoContext(ctx, "less than all tomorrow prices available, estimating missing hours using 72h history",
+			slog.Int("existingFuturePricesCount", len(futurePrices)),
+			slog.Time("missingCoverage", missingCoverage),
+		)
+		histStart := nowTime.Add(-72 * time.Hour)
 		histPrices, histErr := s.storage.GetPriceHistory(ctx, siteID, histStart, nowTime)
 		if histErr != nil {
 			log.Ctx(ctx).WarnContext(ctx, "failed to get historical prices", slog.Any("error", histErr))
+		} else if len(histPrices) == 0 {
+			log.Ctx(ctx).WarnContext(ctx, "no historical prices found for the last 72 hours")
 		} else {
-			for _, p := range histPrices {
-				p.TSStart = p.TSStart.Add(24 * time.Hour)
-				if !p.TSEnd.IsZero() {
-					p.TSEnd = p.TSEnd.Add(24 * time.Hour)
-				}
-				futurePrices = append(futurePrices, p)
+			type hourlyStats struct {
+				prices []types.Price
 			}
+			buckets := make(map[int]*hourlyStats)
+			for i := 0; i < 24; i++ {
+				buckets[i] = &hourlyStats{}
+			}
+
+			var overallDollars []float64
+			for _, p := range histPrices {
+				pHour := p.TSStart.In(loc).Hour()
+				buckets[pHour].prices = append(buckets[pHour].prices, p)
+				overallDollars = append(overallDollars, p.DollarsPerKWH)
+			}
+			overallMedDollars := computeMedian(overallDollars)
+			overallTemplate := findClosestPrice(histPrices, overallMedDollars)
+
+			profiles := make(map[int]types.Price)
+			for h := 0; h < 24; h++ {
+				pricesInHour := buckets[h].prices
+				if len(pricesInHour) > 0 {
+					var dollars []float64
+					for _, p := range pricesInHour {
+						dollars = append(dollars, p.DollarsPerKWH)
+					}
+					med := computeMedian(dollars)
+					tmpl := findClosestPrice(pricesInHour, med)
+					profiles[h] = tmpl
+				} else {
+					profiles[h] = overallTemplate
+				}
+			}
+
+			nowHour := nowInLoc.Truncate(time.Hour)
+			startCheck := nowHour.Add(time.Hour)
+			if len(futurePrices) == 0 {
+				startCheck = nowHour
+			}
+
+			var estimatedPrices []types.Price
+			for t := startCheck; t.Before(tomorrowEnd); t = t.Add(time.Hour) {
+				if !hasCoverage(t) {
+					tmpl := profiles[t.In(loc).Hour()]
+					est := tmpl
+					est.TSStart = t
+					est.TSEnd = t.Add(time.Hour)
+					estimatedPrices = append(estimatedPrices, est)
+				}
+			}
+			futurePrices = append(futurePrices, estimatedPrices...)
+			slices.SortStableFunc(futurePrices, func(a, b types.Price) int {
+				if a.TSStart.Equal(b.TSStart) {
+					if a.TSEnd.Before(b.TSEnd) {
+						return -1
+					} else if a.TSEnd.After(b.TSEnd) {
+						return 1
+					}
+					return 0
+				}
+				if a.TSStart.Before(b.TSStart) {
+					return -1
+				}
+				return 1
+			})
 		}
 	}
 
@@ -716,6 +817,33 @@ func (s *Server) getFuturePrices(ctx context.Context, siteID string, utility uti
 		return nil, fmt.Errorf("insufficient future pricing data")
 	}
 	return futurePrices, nil
+}
+
+func computeMedian(vals []float64) float64 {
+	if len(vals) == 0 {
+		return 0
+	}
+	sorted := make([]float64, len(vals))
+	copy(sorted, vals)
+	slices.Sort(sorted)
+	n := len(sorted)
+	if n%2 == 1 {
+		return sorted[n/2]
+	}
+	return (sorted[n/2-1] + sorted[n/2]) / 2.0
+}
+
+func findClosestPrice(prices []types.Price, target float64) types.Price {
+	best := prices[0]
+	bestDiff := math.Abs(best.DollarsPerKWH - target)
+	for _, p := range prices[1:] {
+		diff := math.Abs(p.DollarsPerKWH - target)
+		if diff <= bestDiff {
+			best = p
+			bestDiff = diff
+		}
+	}
+	return best
 }
 
 func (s *Server) getLatestAction(ctx context.Context, siteID string) *types.Action {
