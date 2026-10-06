@@ -7689,9 +7689,9 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 			Timestamp:          nowNoon,
 			TimeLocation:       "America/New_York",
 			BatteryCapacityKWH: 30.0,
-			BatterySOC:         73.05,
-			HomeKW:             0.45,
-			SolarKW:            1.16,
+			BatterySOC:         76.5,
+			HomeKW:             0.32,
+			SolarKW:            4.1,
 		}
 
 		settings := types.Settings{
@@ -7706,11 +7706,11 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 			for h := 0; h < 24; h++ {
 				solar := 0.0
 				if h >= 8 && h <= 17 {
-					solar = 2.0
+					solar = 4.0
 				}
 				history = append(history, types.EnergyStats{
 					TSHourStart:  nowNoon.AddDate(0, 0, -d).Truncate(24 * time.Hour).Add(time.Duration(h) * time.Hour),
-					HomeKWH:      0.45,
+					HomeKWH:      0.32,
 					SolarKWH:     solar,
 					TimeLocation: "America/New_York",
 				})
@@ -7718,7 +7718,7 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 		}
 
 		lastAction := &types.Action{
-			BatteryMode: types.BatteryModeStandby,
+			BatteryMode: types.BatteryModeLoad,
 			SolarMode:   types.SolarModeAny,
 			CurrentPrice: &types.Price{
 				DollarsPerKWH:                 0.20754,

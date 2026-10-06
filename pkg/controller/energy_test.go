@@ -8,6 +8,7 @@ import (
 
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBuildHourlyEnergyModel(t *testing.T) {
@@ -346,10 +347,9 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
-		// Adjacent hour blending dilutes the peak in the median (AvgHomeLoadKWH),
-		// while the 75th percentile captures the elevated charging load.
+		// Adjacent hour blending at 55p captures the recurring elevated charging load.
 		if assert.Contains(t, model, 11) {
-			assert.InDelta(t, 3.3333333333333277, model[11].AvgHomeLoadKWH, 0.001)
+			assert.InDelta(t, 5.202787294076979, model[11].AvgHomeLoadKWH, 0.001)
 			assert.Greater(t, model[11].P75HomeLoadKWH, 1.0)
 		}
 	})
@@ -599,7 +599,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 
-		// Adjacent hour blending and 50p median results in 1.0.
+		// Monday at 19:00 remains near 1.0 KWH baseline.
 		if assert.Contains(t, model, 19) {
 			assert.InDelta(t, 1.0, model[19].AvgHomeLoadKWH, 0.001)
 		}
@@ -618,7 +618,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 
 		testNow := time.Date(2026, 7, 3, 2, 0, 0, 0, time.UTC)
 		model, _ := c.BuildHourlyEnergyModel(ctx, testNow, history, nil, types.Settings{IgnoreHourUsageOverMultiple: 0.0})
-		assert.InDelta(t, 1.9743589743589745, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
+		assert.InDelta(t, 2.1743589743589746, model[h1.Hour()].AvgHomeLoadKWH, 0.001)
 		assert.InDelta(t, 0.0, model[h1.Hour()].AvgSolarKWH, 0.001)
 	})
 
@@ -677,7 +677,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			{TSHourStart: h2, HomeKWH: 10.0, SolarKWH: 0.0},
 		}
 		modelFew, _ := c.BuildHourlyEnergyModel(ctx, testNow, historyFew, nil, types.Settings{IgnoreHourUsageOverMultiple: 3.0})
-		assert.InDelta(t, 5.384615384615385, modelFew[h1.Hour()].AvgHomeLoadKWH, 0.001)
+		assert.InDelta(t, 6.284615384615385, modelFew[h1.Hour()].AvgHomeLoadKWH, 0.001)
 	})
 
 	t.Run("PostVacationRecovery", func(t *testing.T) {
@@ -1145,6 +1145,250 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		// Model for remaining hours (e.g. 15:00) should be close to 0.5 (standby), not 2.0.
 		if assert.Contains(t, model, 15) {
 			assert.Less(t, model[15].AvgHomeLoadKWH, 1.0)
+		}
+	})
+
+	t.Run("DayOfWeekMorningOutlierBoost", func(t *testing.T) {
+		// Saturday morning chores: 5 weeks of history where Saturdays have high morning load (3.5 kWh)
+		// during hours 7..9, while preceding weekdays (Thu/Fri) have baseline morning load (1.0 kWh).
+		// The model should identify Saturday as a morning outlier (ratio >= 1.25), scale matching Saturday
+		// weights by dayOfWeekOutlierWeightMultiplier (3.0x), down-weight preceding non-matching days,
+		// and predict close to the true Saturday chore load rather than being diluted by weekday mornings.
+		now := time.Date(2025, 6, 14, 6, 0, 0, 0, time.UTC) // Saturday at 6:00 AM
+		var history []types.EnergyStats
+
+		startDate := now.Add(-35 * 24 * time.Hour)
+		for d := 0; d < 35; d++ {
+			dayTime := startDate.Add(time.Duration(d) * 24 * time.Hour)
+			wd := dayTime.Weekday()
+
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				load := 0.2 // Standby overnight
+				if h >= 6 && h <= 10 {
+					if wd == time.Saturday {
+						load = 2.5 // Saturday morning surge (2.5x vs 1.0 weekday)
+					} else {
+						load = 1.0 // Normal weekday morning
+					}
+				} else if h > 10 {
+					load = 1.0 + 0.1*float64(d%6) // Natural baseline variation across days
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: ts,
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		settings := types.Settings{}
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+
+		// Hour 8 (Saturday morning chore peak) should be close to 2.5 kWh, well above the 1.0 weekday level.
+		if assert.Contains(t, model, 8) {
+			assert.GreaterOrEqual(t, model[8].AvgHomeLoadKWH, 2.0)
+		}
+	})
+
+	t.Run("StandbyNeighborSleepFilter", func(t *testing.T) {
+		// Verify that sleeping hours (06:00 at 0.15 kWh standby) are excluded by
+		// neighborHourStandbyFloorMultiplier (1.8x) from diluting the adjacent waking hour (07:00 at 2.5 kWh).
+		now := time.Date(2025, 6, 14, 6, 0, 0, 0, time.UTC) // Saturday at 6:00 AM
+		var history []types.EnergyStats
+
+		startDate := now.Add(-28 * 24 * time.Hour)
+		for d := 0; d < 28; d++ {
+			dayTime := startDate.Add(time.Duration(d) * 24 * time.Hour)
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				load := 0.15 // Standby base
+				if h == 6 {
+					load = 0.15 // Sleep hour
+				} else if h >= 7 && h <= 10 {
+					load = 2.5 // Waking hours
+				} else if h > 10 {
+					load = 1.5
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: ts,
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		settings := types.Settings{}
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+
+		// Hour 7 should not be diluted down by hour 6's 0.15 kWh sleeping load.
+		if assert.Contains(t, model, 7) {
+			assert.GreaterOrEqual(t, model[7].AvgHomeLoadKWH, 2.0)
+		}
+	})
+
+	t.Run("SundayOutlierWithThuFriFallback", func(t *testing.T) {
+		// Test Sunday morning outlier where Saturday is ALSO high (both weekend mornings are 3.0 kWh),
+		// while weekdays (Thu/Fri) are baseline (1.0 kWh).
+		// Sunday morning vs Saturday morning has ratio ~1.0, but vs Thursday/Friday has ratio ~3.0.
+		// Sunday should trigger the Thursday/Friday fallback and receive the outlier boost.
+		now := time.Date(2025, 6, 15, 6, 0, 0, 0, time.UTC) // Sunday at 6:00 AM
+		var history []types.EnergyStats
+
+		startDate := now.Add(-35 * 24 * time.Hour)
+		for d := 0; d < 35; d++ {
+			dayTime := startDate.Add(time.Duration(d) * 24 * time.Hour)
+			wd := dayTime.Weekday()
+
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				load := 0.2
+				if h >= 6 && h <= 10 {
+					if wd == time.Saturday || wd == time.Sunday {
+						load = 3.0 // High weekend routine
+					} else {
+						load = 1.0 // Normal weekday morning
+					}
+				} else if h > 10 {
+					load = 1.2 + 0.05*float64(d%5)
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: ts,
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		settings := types.Settings{}
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+
+		// Sunday morning peak (hour 8) should be boosted to near weekend level (>= 2.2 kWh)
+		if assert.Contains(t, model, 8) {
+			assert.GreaterOrEqual(t, model[8].AvgHomeLoadKWH, 2.2)
+		}
+	})
+
+	t.Run("WeekdayOutlierDetection", func(t *testing.T) {
+		// Test generic weekday outlier: Wednesday has consistent morning chore routine (3.0 kWh),
+		// while Mon/Tue/Thu/Fri have standard load (1.0 kWh).
+		now := time.Date(2025, 6, 18, 6, 0, 0, 0, time.UTC) // Wednesday at 6:00 AM
+		var history []types.EnergyStats
+
+		startDate := now.Add(-35 * 24 * time.Hour)
+		for d := 0; d < 35; d++ {
+			dayTime := startDate.Add(time.Duration(d) * 24 * time.Hour)
+			wd := dayTime.Weekday()
+
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				load := 0.2
+				if h >= 6 && h <= 10 {
+					if wd == time.Wednesday {
+						load = 3.0 // Wednesday chore surge
+					} else {
+						load = 1.0 // Other days standard
+					}
+				} else if h > 10 {
+					load = 1.0 + 0.15*float64(d%5) // Natural daily variation across all days
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: ts,
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		settings := types.Settings{}
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+
+		// Wednesday morning peak (hour 8) should reflect the Wednesday surge (>= 2.2 kWh)
+		if assert.Contains(t, model, 8) {
+			assert.GreaterOrEqual(t, model[8].AvgHomeLoadKWH, 2.2)
+		}
+	})
+
+	t.Run("UniformDaysNoOutlierBoost", func(t *testing.T) {
+		// When all days have uniform morning load (1.0 kWh), no day should qualify as an outlier.
+		// Standard weights should produce ~1.0 kWh.
+		now := time.Date(2025, 6, 14, 6, 0, 0, 0, time.UTC) // Saturday at 6:00 AM
+		var history []types.EnergyStats
+
+		startDate := now.Add(-28 * 24 * time.Hour)
+		for d := 0; d < 28; d++ {
+			dayTime := startDate.Add(time.Duration(d) * 24 * time.Hour)
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				load := 0.2
+				if h >= 6 && h <= 10 {
+					load = 1.0 // Uniform across all days
+				} else if h > 10 {
+					load = 1.2
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: ts,
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		settings := types.Settings{}
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+
+		if assert.Contains(t, model, 8) {
+			assert.InDelta(t, 1.0, model[8].AvgHomeLoadKWH, 0.2)
+		}
+	})
+
+	t.Run("VacationShiftOverridesOutlierBoost", func(t *testing.T) {
+		// Saturday is historically an outlier (3.0 kWh mornings), but yesterday (Friday) was a vacation
+		// day (low standby only, ~0.08 kWh), and earlier this morning (hours 0..5) is also standby.
+		// The active vacation shift should take precedence over the day-of-week outlier boost.
+		now := time.Date(2025, 6, 14, 6, 0, 0, 0, time.UTC) // Saturday at 6:00 AM
+		var history []types.EnergyStats
+
+		startDate := now.Add(-28 * 24 * time.Hour)
+		for d := 0; d < 28; d++ {
+			dayTime := startDate.Add(time.Duration(d) * 24 * time.Hour)
+			wd := dayTime.Weekday()
+			isYesterday := d == 27 // Last day in history (Friday)
+
+			for h := 0; h < 24; h++ {
+				ts := time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC)
+				load := 0.08 // Standby baseline
+				if isYesterday {
+					// Vacation day: empty home all day
+					load = 0.08
+				} else {
+					if h >= 6 && h <= 10 {
+						if wd == time.Saturday {
+							load = 3.0 // Historical Saturday morning
+						} else {
+							load = 1.0
+						}
+					} else if h > 10 {
+						load = 1.5 + 0.1*float64(d%4)
+					}
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: ts,
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		// Also include early morning hours of today (Saturday) prior to 6:00 AM (0..5 at standby 0.08 kWh)
+		for h := 0; h < 6; h++ {
+			history = append(history, types.EnergyStats{
+				TSHourStart: time.Date(2025, 6, 14, h, 0, 0, 0, time.UTC),
+				HomeKWH:     0.08,
+			})
+		}
+
+		settings := types.Settings{}
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
+
+		// On vacation, Saturday morning (hour 8) should NOT be inflated to 2.5-3.0 kWh;
+		// it should drop toward vacation levels (< 1.0 kWh).
+		if assert.Contains(t, model, 8) {
+			assert.Less(t, model[8].AvgHomeLoadKWH, 1.0)
 		}
 	})
 }
@@ -2183,5 +2427,401 @@ func TestGetWeightedPercentile(t *testing.T) {
 		res := getWeightedPercentile(pts, 0.5)
 		assert.False(t, math.IsNaN(res), "result should not be NaN")
 		assert.False(t, math.IsInf(res, 0), "result should not be infinite")
+	})
+}
+
+func TestDetectDayOfWeekOutliers(t *testing.T) {
+	ctx := context.Background()
+	utc := time.UTC
+
+	makeDay := func(dateStr string, mornLoad float64, restLoad float64, loc *time.Location) *dayPoints {
+		dTime, err := time.ParseInLocation("2006-01-02", dateStr, loc)
+		if err != nil {
+			return nil
+		}
+		dp := &dayPoints{date: dateStr}
+		for h := 0; h < 24; h++ {
+			load := restLoad
+			if h >= 6 && h <= 10 {
+				load = mornLoad
+			}
+			ts := time.Date(dTime.Year(), dTime.Month(), dTime.Day(), h, 0, 0, 0, loc)
+			dp.loads = append(dp.loads, load)
+			dp.points = append(dp.points, types.EnergyStats{
+				TSHourStart: ts,
+				HomeKWH:     load,
+			})
+		}
+		return dp
+	}
+
+	t.Run("EmptyAndNilInputs", func(t *testing.T) {
+		res1 := detectDayOfWeekOutliers(ctx, utc, nil, nil, "2025-06-01")
+		assert.Empty(t, res1)
+
+		res2 := detectDayOfWeekOutliers(ctx, utc, make(map[string]*dayPoints), make(map[string]bool), "2025-06-01")
+		assert.Empty(t, res2)
+	})
+
+	t.Run("ExcludeTodayDate", func(t *testing.T) {
+		// History contains 3 Saturdays (2025-06-07, 2025-06-14, 2025-06-21).
+		// Today is 2025-06-21 (Saturday) with high morning usage.
+		// Since today must be excluded, only 2 Saturdays remain in history (len < 3).
+		// Even if Saturday load is high, it must not be flagged due to insufficient historical samples.
+		dayMap := make(map[string]*dayPoints)
+		validDaysMap := make(map[string]bool)
+
+		saturdays := []string{"2025-06-07", "2025-06-14", "2025-06-21"}
+		for _, s := range saturdays {
+			dayMap[s] = makeDay(s, 3.5, 1.0, utc)
+			validDaysMap[s] = true
+		}
+		thursdays := []string{"2025-06-05", "2025-06-12", "2025-06-19", "2025-06-26"}
+		fridays := []string{"2025-06-06", "2025-06-13", "2025-06-20", "2025-06-27"}
+		for _, d := range append(thursdays, fridays...) {
+			dayMap[d] = makeDay(d, 1.0, 1.0, utc)
+			validDaysMap[d] = true
+		}
+
+		res := detectDayOfWeekOutliers(ctx, utc, dayMap, validDaysMap, "2025-06-21")
+		assert.False(t, res[time.Saturday], "Excluding today leaves only 2 Saturdays; should not be flagged")
+	})
+
+	t.Run("ExcludeInvalidOrVacationDays", func(t *testing.T) {
+		// 4 Saturdays in dayMap, but 2 are flagged false in validDaysMap (e.g. vacation or corrupt).
+		dayMap := make(map[string]*dayPoints)
+		validDaysMap := make(map[string]bool)
+
+		saturdays := []string{"2025-06-07", "2025-06-14", "2025-06-21", "2025-06-28"}
+		for i, s := range saturdays {
+			dayMap[s] = makeDay(s, 3.5, 1.0, utc)
+			// Mark the last 2 Saturdays as invalid
+			validDaysMap[s] = (i < 2)
+		}
+		thursdays := []string{"2025-06-05", "2025-06-12", "2025-06-19", "2025-06-26"}
+		fridays := []string{"2025-06-06", "2025-06-13", "2025-06-20", "2025-06-27"}
+		for _, d := range append(thursdays, fridays...) {
+			dayMap[d] = makeDay(d, 1.0, 1.0, utc)
+			validDaysMap[d] = true
+		}
+
+		res := detectDayOfWeekOutliers(ctx, utc, dayMap, validDaysMap, "2025-06-30")
+		assert.False(t, res[time.Saturday], "Invalid days must be excluded, leaving < 3 target samples")
+	})
+
+	t.Run("InsufficientTargetSamples", func(t *testing.T) {
+		// Only 2 valid Saturdays exist in history (minimum required is 3).
+		dayMap := make(map[string]*dayPoints)
+		validDaysMap := make(map[string]bool)
+
+		saturdays := []string{"2025-06-07", "2025-06-14"}
+		for _, s := range saturdays {
+			dayMap[s] = makeDay(s, 10.0, 1.0, utc)
+			validDaysMap[s] = true
+		}
+		thursdays := []string{"2025-06-05", "2025-06-12", "2025-06-19", "2025-06-26"}
+		fridays := []string{"2025-06-06", "2025-06-13", "2025-06-20", "2025-06-27"}
+		for _, d := range append(thursdays, fridays...) {
+			dayMap[d] = makeDay(d, 1.0, 1.0, utc)
+			validDaysMap[d] = true
+		}
+
+		res := detectDayOfWeekOutliers(ctx, utc, dayMap, validDaysMap, "2025-06-30")
+		assert.False(t, res[time.Saturday], "Must require at least 3 target weekday occurrences")
+	})
+
+	t.Run("InsufficientPrecedingSamples", func(t *testing.T) {
+		// 4 valid Saturdays exist, but only 2 Thursdays and 2 Fridays (total 4 < 6 required preceding samples).
+		dayMap := make(map[string]*dayPoints)
+		validDaysMap := make(map[string]bool)
+
+		saturdays := []string{"2025-06-07", "2025-06-14", "2025-06-21", "2025-06-28"}
+		for _, s := range saturdays {
+			dayMap[s] = makeDay(s, 3.5, 1.0, utc)
+			validDaysMap[s] = true
+		}
+		thursdays := []string{"2025-06-05", "2025-06-12"}
+		fridays := []string{"2025-06-06", "2025-06-13"}
+		for _, d := range append(thursdays, fridays...) {
+			dayMap[d] = makeDay(d, 1.0, 1.0, utc)
+			validDaysMap[d] = true
+		}
+
+		res := detectDayOfWeekOutliers(ctx, utc, dayMap, validDaysMap, "2025-06-30")
+		assert.False(t, res[time.Saturday], "Must require at least 6 preceding weekday samples (p1 + p2)")
+	})
+
+	t.Run("InsufficientMorningHoursInDay", func(t *testing.T) {
+		// Saturdays have high load but only 2 non-zero points in hours 6..10 (mornCount < 3).
+		// A day requires >= 3 points in hours 6..10 to qualify as hasMorn.
+		dayMap := make(map[string]*dayPoints)
+		validDaysMap := make(map[string]bool)
+
+		saturdays := []string{"2025-06-07", "2025-06-14", "2025-06-21", "2025-06-28"}
+		for _, s := range saturdays {
+			dTime, err := time.ParseInLocation("2006-01-02", s, utc)
+			require.NoError(t, err)
+			dp := &dayPoints{date: s}
+			for h := 0; h < 24; h++ {
+				load := 1.0
+				if h == 6 || h == 7 {
+					load = 5.0
+				} else if h >= 8 && h <= 10 {
+					load = 0.0 // missing or zero
+				}
+				ts := time.Date(dTime.Year(), dTime.Month(), dTime.Day(), h, 0, 0, 0, utc)
+				dp.loads = append(dp.loads, load)
+				dp.points = append(dp.points, types.EnergyStats{
+					TSHourStart: ts,
+					HomeKWH:     load,
+				})
+			}
+			dayMap[s] = dp
+			validDaysMap[s] = true
+		}
+
+		thursdays := []string{"2025-06-05", "2025-06-12", "2025-06-19", "2025-06-26"}
+		fridays := []string{"2025-06-06", "2025-06-13", "2025-06-20", "2025-06-27"}
+		for _, d := range append(thursdays, fridays...) {
+			dayMap[d] = makeDay(d, 1.0, 1.0, utc)
+			validDaysMap[d] = true
+		}
+
+		res := detectDayOfWeekOutliers(ctx, utc, dayMap, validDaysMap, "2025-06-30")
+		assert.False(t, res[time.Saturday], "Days with fewer than 3 morning points must not have hasMorn=true")
+	})
+
+	t.Run("ZeroAndNegativeEnergyIgnored", func(t *testing.T) {
+		// Morning hours have non-positive values (0.0 or negative from net metering or sensor disconnect).
+		dayMap := make(map[string]*dayPoints)
+		validDaysMap := make(map[string]bool)
+
+		saturdays := []string{"2025-06-07", "2025-06-14", "2025-06-21", "2025-06-28"}
+		for _, s := range saturdays {
+			dTime, err := time.ParseInLocation("2006-01-02", s, utc)
+			require.NoError(t, err)
+			dp := &dayPoints{date: s}
+			for h := 0; h < 24; h++ {
+				load := 1.0
+				if h >= 6 && h <= 10 {
+					load = -0.5 // negative or zero ignored
+				}
+				ts := time.Date(dTime.Year(), dTime.Month(), dTime.Day(), h, 0, 0, 0, utc)
+				dp.loads = append(dp.loads, load)
+				dp.points = append(dp.points, types.EnergyStats{
+					TSHourStart: ts,
+					HomeKWH:     load,
+				})
+			}
+			dayMap[s] = dp
+			validDaysMap[s] = true
+		}
+
+		thursdays := []string{"2025-06-05", "2025-06-12", "2025-06-19", "2025-06-26"}
+		fridays := []string{"2025-06-06", "2025-06-13", "2025-06-20", "2025-06-27"}
+		for _, d := range append(thursdays, fridays...) {
+			dayMap[d] = makeDay(d, 1.0, 1.0, utc)
+			validDaysMap[d] = true
+		}
+
+		res := detectDayOfWeekOutliers(ctx, utc, dayMap, validDaysMap, "2025-06-30")
+		assert.False(t, res[time.Saturday], "Zero and negative HomeKWH points must be ignored")
+	})
+
+	t.Run("SaturdayMorningOutlierDetected", func(t *testing.T) {
+		// Standard case: 4 Saturdays with morning load ~2.5 kWh, Thursdays and Fridays ~1.0 kWh.
+		dayMap := make(map[string]*dayPoints)
+		validDaysMap := make(map[string]bool)
+
+		saturdays := []string{"2025-06-07", "2025-06-14", "2025-06-21", "2025-06-28"}
+		for _, s := range saturdays {
+			dayMap[s] = makeDay(s, 2.5, 1.0, utc)
+			validDaysMap[s] = true
+		}
+		thursdays := []string{"2025-06-05", "2025-06-12", "2025-06-19", "2025-06-26"}
+		fridays := []string{"2025-06-06", "2025-06-13", "2025-06-20", "2025-06-27"}
+		for _, d := range append(thursdays, fridays...) {
+			dayMap[d] = makeDay(d, 1.0, 1.0, utc)
+			validDaysMap[d] = true
+		}
+
+		res := detectDayOfWeekOutliers(ctx, utc, dayMap, validDaysMap, "2025-06-30")
+		assert.True(t, res[time.Saturday], "Saturday morning surge must be detected as an outlier")
+		assert.False(t, res[time.Friday], "Friday should not be detected as an outlier")
+		assert.False(t, res[time.Thursday], "Thursday should not be detected as an outlier")
+	})
+
+	t.Run("SundayMorningOutlierViaFallback", func(t *testing.T) {
+		// Both Saturday and Sunday are high morning chore days (2.2 kWh and 1.8 kWh).
+		// Sunday vs preceding (Saturday + Friday): meanPrev = (2.2 + 1.0)/2 = 1.6 kWh.
+		// Sunday primary ratio: 1.8 / 1.6 = 1.125 < 1.25 (primary check fails).
+		// Sunday fallback vs Thursday + Friday (both 1.0 kWh):
+		// Fallback ratio: 1.8 / 1.0 = 1.8 >= 1.25, and Welch's t >> 1.70.
+		// Both Saturday and Sunday should be detected as outliers.
+		dayMap := make(map[string]*dayPoints)
+		validDaysMap := make(map[string]bool)
+
+		sundays := []string{"2025-06-01", "2025-06-08", "2025-06-15", "2025-06-22"}
+		saturdays := []string{"2025-06-07", "2025-06-14", "2025-06-21", "2025-06-28"}
+		fridays := []string{"2025-06-06", "2025-06-13", "2025-06-20", "2025-06-27"}
+		thursdays := []string{"2025-06-05", "2025-06-12", "2025-06-19", "2025-06-26"}
+
+		for _, s := range sundays {
+			dayMap[s] = makeDay(s, 1.8, 1.0, utc)
+			validDaysMap[s] = true
+		}
+		for _, s := range saturdays {
+			dayMap[s] = makeDay(s, 2.2, 1.0, utc)
+			validDaysMap[s] = true
+		}
+		for _, d := range append(thursdays, fridays...) {
+			dayMap[d] = makeDay(d, 1.0, 1.0, utc)
+			validDaysMap[d] = true
+		}
+
+		res := detectDayOfWeekOutliers(ctx, utc, dayMap, validDaysMap, "2025-06-30")
+		assert.True(t, res[time.Saturday], "Saturday morning must be detected via primary check")
+		assert.True(t, res[time.Sunday], "Sunday morning must be detected via fallback to Thursday/Friday")
+	})
+
+	t.Run("WeekdayOutlierDetected", func(t *testing.T) {
+		// Generic day-of-week test: Wednesday morning is consistently high (3.0 kWh)
+		// while Monday and Tuesday are baseline (1.0 kWh).
+		dayMap := make(map[string]*dayPoints)
+		validDaysMap := make(map[string]bool)
+
+		mondays := []string{"2025-06-02", "2025-06-09", "2025-06-16", "2025-06-23"}
+		tuesdays := []string{"2025-06-03", "2025-06-10", "2025-06-17", "2025-06-24"}
+		wednesdays := []string{"2025-06-04", "2025-06-11", "2025-06-18", "2025-06-25"}
+
+		for _, m := range mondays {
+			dayMap[m] = makeDay(m, 1.0, 1.0, utc)
+			validDaysMap[m] = true
+		}
+		for _, tues := range tuesdays {
+			dayMap[tues] = makeDay(tues, 1.0, 1.0, utc)
+			validDaysMap[tues] = true
+		}
+		for _, w := range wednesdays {
+			dayMap[w] = makeDay(w, 3.0, 1.0, utc)
+			validDaysMap[w] = true
+		}
+
+		res := detectDayOfWeekOutliers(ctx, utc, dayMap, validDaysMap, "2025-06-30")
+		assert.True(t, res[time.Wednesday], "Wednesday should be detected as an outlier")
+		assert.False(t, res[time.Monday], "Monday should not be detected")
+		assert.False(t, res[time.Tuesday], "Tuesday should not be detected")
+	})
+
+	t.Run("UniformLoadNoOutliers", func(t *testing.T) {
+		// All 7 days across 4 weeks have identical morning load (1.2 kWh).
+		dayMap := make(map[string]*dayPoints)
+		validDaysMap := make(map[string]bool)
+
+		startDate := time.Date(2025, 6, 1, 0, 0, 0, 0, utc)
+		for d := 0; d < 28; d++ {
+			dStr := startDate.AddDate(0, 0, d).Format("2006-01-02")
+			dayMap[dStr] = makeDay(dStr, 1.2, 1.2, utc)
+			validDaysMap[dStr] = true
+		}
+
+		res := detectDayOfWeekOutliers(ctx, utc, dayMap, validDaysMap, "2025-06-30")
+		assert.Empty(t, res, "Uniform consumption across days should yield no outliers")
+	})
+
+	t.Run("HighRatioRejectedByWelchTDueToSingleSpike", func(t *testing.T) {
+		// Ratio threshold (>= 1.25) is met due to a single 5.0 kWh appliance run,
+		// but Welch's t-test rejects it due to high sample variance.
+		// 4 Saturdays: [5.0, 1.0, 1.0, 1.0] -> mean = 2.0.
+		// Preceding (4 Thursdays, 4 Fridays): all 1.3 kWh -> mean = 1.3.
+		// Ratio = 2.0 / 1.3 = 1.538 >= 1.25.
+		// Saturday std dev = 2.0 -> SE = sqrt(4.0/4 + 0) = 1.0.
+		// t = (2.0 - 1.3)/1.0 = 0.70 < 1.70.
+		dayMap := make(map[string]*dayPoints)
+		validDaysMap := make(map[string]bool)
+
+		saturdayLoads := []float64{5.0, 1.0, 1.0, 1.0}
+		saturdays := []string{"2025-06-07", "2025-06-14", "2025-06-21", "2025-06-28"}
+		for i, s := range saturdays {
+			dayMap[s] = makeDay(s, saturdayLoads[i], 1.0, utc)
+			validDaysMap[s] = true
+		}
+		thursdays := []string{"2025-06-05", "2025-06-12", "2025-06-19", "2025-06-26"}
+		fridays := []string{"2025-06-06", "2025-06-13", "2025-06-20", "2025-06-27"}
+		for _, d := range append(thursdays, fridays...) {
+			dayMap[d] = makeDay(d, 1.3, 1.0, utc)
+			validDaysMap[d] = true
+		}
+
+		res := detectDayOfWeekOutliers(ctx, utc, dayMap, validDaysMap, "2025-06-30")
+		assert.False(t, res[time.Saturday], "Single-spike day must be rejected by Welch's t-test (t ~ 0.70 < 1.70)")
+	})
+
+	t.Run("TimezoneHandling", func(t *testing.T) {
+		// Ensure timestamps with timezone offset (e.g. America/Chicago, UTC-5 during CDT)
+		// correctly map hours 6..10 in local time rather than UTC time.
+		chicagoLoc, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
+
+		dayMap := make(map[string]*dayPoints)
+		validDaysMap := make(map[string]bool)
+
+		saturdays := []string{"2025-06-07", "2025-06-14", "2025-06-21", "2025-06-28"}
+		for _, s := range saturdays {
+			dayMap[s] = makeDay(s, 2.8, 0.8, chicagoLoc)
+			validDaysMap[s] = true
+		}
+		thursdays := []string{"2025-06-05", "2025-06-12", "2025-06-19", "2025-06-26"}
+		fridays := []string{"2025-06-06", "2025-06-13", "2025-06-20", "2025-06-27"}
+		for _, d := range append(thursdays, fridays...) {
+			dayMap[d] = makeDay(d, 0.8, 0.8, chicagoLoc)
+			validDaysMap[d] = true
+		}
+
+		res := detectDayOfWeekOutliers(ctx, chicagoLoc, dayMap, validDaysMap, "2025-06-30")
+		assert.True(t, res[time.Saturday], "Saturday morning outlier should be detected using Chicago local hours")
+	})
+
+	t.Run("MalformedDatesAndNilEntries", func(t *testing.T) {
+		// ValidDaysMap contains malformed date strings and nil entries in dayMap.
+		// Function should safely skip them without panicking.
+		dayMap := make(map[string]*dayPoints)
+		validDaysMap := make(map[string]bool)
+
+		validDaysMap["not-a-date"] = true
+		validDaysMap["2025-99-99"] = true
+		validDaysMap["2025-06-07"] = true
+		dayMap["2025-06-07"] = nil // nil entry in map
+
+		// Add some valid days
+		saturdays := []string{"2025-06-14", "2025-06-21", "2025-06-28"}
+		for _, s := range saturdays {
+			dayMap[s] = makeDay(s, 2.5, 1.0, utc)
+			validDaysMap[s] = true
+		}
+
+		assert.NotPanics(t, func() {
+			res := detectDayOfWeekOutliers(ctx, utc, dayMap, validDaysMap, "2025-06-30")
+			assert.NotNil(t, res)
+		})
+	})
+
+	t.Run("WelchTStatisticDirect", func(t *testing.T) {
+		// Test calculateWelchT edge cases directly
+		assert.Equal(t, 0.0, calculateWelchT(nil, []float64{1.0, 2.0}))
+		assert.Equal(t, 0.0, calculateWelchT([]float64{1.0}, []float64{1.0, 2.0}))
+		assert.Equal(t, 0.0, calculateWelchT([]float64{1.0, 2.0}, []float64{1.0}))
+
+		// Identical sample distributions -> t = 0.0
+		tIdentical := calculateWelchT([]float64{1.0, 2.0, 3.0}, []float64{1.0, 2.0, 3.0})
+		assert.InDelta(t, 0.0, tIdentical, 1e-6)
+
+		// A significantly higher than B with small variance -> high positive t
+		tHigh := calculateWelchT([]float64{5.0, 5.1, 4.9, 5.0}, []float64{1.0, 1.1, 0.9, 1.0})
+		assert.Greater(t, tHigh, 10.0)
+
+		// A lower than B -> negative t
+		tLow := calculateWelchT([]float64{1.0, 1.1, 0.9}, []float64{5.0, 5.1, 4.9})
+		assert.Less(t, tLow, -10.0)
 	})
 }
