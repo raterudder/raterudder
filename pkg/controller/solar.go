@@ -1043,7 +1043,7 @@ func CalculateWeatherSolar(
 		snowFactor := calculateSnowFactor(snowDepth)
 
 		localHour := hw.TSHourStart.In(timeLoc).Hour()
-		eff := calculateSimilarityEfficiency(gti, hw.CloudCoverPercent, cacheByHour[localHour], finalCalib.StaticEff, hourlyEffs[localHour])
+		eff := calculateSimilarityEfficiency(gti, hw.CloudCoverPercent, cacheByHour, localHour, finalCalib.StaticEff, hourlyEffs[localHour])
 
 		unclipped := gti * eff * tempFactor * snowFactor
 		if cloudDeratePercent > 0 && hw.CloudCoverPercent >= minSignificantCloudCoverPercent {
@@ -1271,17 +1271,16 @@ func buildHistoricalCache(
 	return cacheByHour, allCache
 }
 
-// calculateSimilarityEfficiency calculates an irradiance-, cloud-cover-, and recency-similarity weighted efficiency ratio
-// for a target forecast hour by querying pre-computed historical telemetry points at the same hour of day.
-func calculateSimilarityEfficiency(
+// computeSimilarityEfficiency calculates the similarity-weighted efficiency from a slice of historical hour entries.
+// Returns the weighted efficiency and the number of matching historical sample hours.
+func computeSimilarityEfficiency(
 	forecastIrr float64,
 	forecastCloud float64,
 	cachedHours []historicalHourCache,
 	staticEff float64,
-	fallbackEff float64,
-) float64 {
+) (float64, int) {
 	if solarIrradianceSimilarityScale <= 0 || len(cachedHours) == 0 {
-		return fallbackEff
+		return 0, 0
 	}
 
 	var sumSolar, sumDenom float64
@@ -1320,7 +1319,59 @@ func calculateSimilarityEfficiency(
 	}
 
 	if count >= 3 && sumDenom > 0 {
-		return sumSolar / sumDenom
+		return sumSolar / sumDenom, count
 	}
+	return 0, count
+}
+
+// calculateSimilarityEfficiency calculates an irradiance-, cloud-cover-, and recency-similarity weighted efficiency ratio
+// for a target forecast hour by querying pre-computed historical telemetry points. If the target hour does not have
+// at least 3 matching historical samples, it falls back to pooling historical samples from adjacent daylight hours
+// (±1 hour, then ±2 hours) before falling back to hourlyEffs.
+func calculateSimilarityEfficiency(
+	forecastIrr float64,
+	forecastCloud float64,
+	cacheByHour map[int][]historicalHourCache,
+	localHour int,
+	staticEff float64,
+	fallbackEff float64,
+) float64 {
+	if solarIrradianceSimilarityScale <= 0 || len(cacheByHour) == 0 {
+		return fallbackEff
+	}
+
+	// 1. Try target hour directly
+	eff, count := computeSimilarityEfficiency(forecastIrr, forecastCloud, cacheByHour[localHour], staticEff)
+	if count >= 3 {
+		return eff
+	}
+
+	// 2. Fallback: pool adjacent hours (±1 hour)
+	prevHour := (localHour - 1 + 24) % 24
+	nextHour := (localHour + 1) % 24
+	adj1 := make([]historicalHourCache, 0, len(cacheByHour[localHour])+len(cacheByHour[prevHour])+len(cacheByHour[nextHour]))
+	adj1 = append(adj1, cacheByHour[localHour]...)
+	adj1 = append(adj1, cacheByHour[prevHour]...)
+	adj1 = append(adj1, cacheByHour[nextHour]...)
+
+	eff1, count1 := computeSimilarityEfficiency(forecastIrr, forecastCloud, adj1, staticEff)
+	if count1 >= 3 {
+		return eff1
+	}
+
+	// 3. Fallback: pool adjacent hours (±2 hours)
+	prev2 := (localHour - 2 + 24) % 24
+	next2 := (localHour + 2) % 24
+	adj2 := make([]historicalHourCache, 0, len(adj1)+len(cacheByHour[prev2])+len(cacheByHour[next2]))
+	adj2 = append(adj2, adj1...)
+	adj2 = append(adj2, cacheByHour[prev2]...)
+	adj2 = append(adj2, cacheByHour[next2]...)
+
+	eff2, count2 := computeSimilarityEfficiency(forecastIrr, forecastCloud, adj2, staticEff)
+	if count2 >= 3 {
+		return eff2
+	}
+
+	// 4. Ultimate fallback to calibrated hourly efficiency
 	return fallbackEff
 }

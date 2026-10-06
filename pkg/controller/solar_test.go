@@ -1016,9 +1016,9 @@ func TestHourlyScaleFactorCalibration(t *testing.T) {
 					GridExportKWH: 1.0,
 				})
 			}
-			// Add a forecast-only hour 15 (no history)
+			// Add a forecast-only hour 16 (no history, and outside adjacent ±2h window)
 			weatherHours = append(weatherHours, types.HourlyWeather{
-				TSHourStart: day.Add(15 * time.Hour),
+				TSHourStart: day.Add(16 * time.Hour),
 				GTI:         1000.0,
 			})
 		}
@@ -1035,9 +1035,9 @@ func TestHourlyScaleFactorCalibration(t *testing.T) {
 		// Daily actual = 12 + 13 + 14 = 39.0
 		// Daily theoretical = 1000 * 0.978125 * 3 = 2934.375
 		// staticEff = 39.0 / 2934.375 = 0.013291
-		// For hour 15, expected solar = 1000 * 0.013291 * 0.978125 = 13.0
-		val15 := res[baseDate.Add(15*time.Hour).Unix()]
-		assert.InDelta(t, 13.0, val15.SolarKWH, 0.5)
+		// For hour 16, expected solar = 1000 * 0.013291 * 0.978125 = 13.0
+		val16 := res[baseDate.Add(16*time.Hour).Unix()]
+		assert.InDelta(t, 13.0, val16.SolarKWH, 0.5)
 	})
 
 	t.Run("outlier hour (noisy) thrown away and interpolated", func(t *testing.T) {
@@ -2060,7 +2060,7 @@ func TestCalculateSimilarityEfficiency(t *testing.T) {
 
 		cacheByHour, _ := buildHistoricalCache(now, timeLoc, weatherByHour, statsByTs, getIrr)
 		fallbackEff := 0.0080
-		eff := calculateSimilarityEfficiency(400.0, 0.0, cacheByHour[localHour], 0.0080, fallbackEff)
+		eff := calculateSimilarityEfficiency(400.0, 0.0, cacheByHour, localHour, 0.0080, fallbackEff)
 		// Should fall back because count = 2 < 3
 		assert.Equal(t, fallbackEff, eff)
 
@@ -2070,7 +2070,7 @@ func TestCalculateSimilarityEfficiency(t *testing.T) {
 		statsByTs[ts3] = types.EnergyStats{TSHourStart: time.Unix(ts3, 0), SolarKWH: 3.0, GridExportKWH: 3.0}
 
 		cacheByHour3, _ := buildHistoricalCache(now, timeLoc, weatherByHour, statsByTs, getIrr)
-		eff3 := calculateSimilarityEfficiency(400.0, 0.0, cacheByHour3[localHour], 0.0080, fallbackEff)
+		eff3 := calculateSimilarityEfficiency(400.0, 0.0, cacheByHour3, localHour, 0.0080, fallbackEff)
 		// Should calculate weighted efficiency (not fallback)
 		assert.NotEqual(t, fallbackEff, eff3)
 		assert.InDelta(t, 0.00784, eff3, 0.0005)
@@ -2097,7 +2097,7 @@ func TestCalculateSimilarityEfficiency(t *testing.T) {
 		}
 
 		cacheByHour, _ := buildHistoricalCache(now, timeLoc, weatherByHour, statsByTs, getIrr)
-		eff := calculateSimilarityEfficiency(forecastIrr, 0.0, cacheByHour[localHour], 0.0050, 0.0050)
+		eff := calculateSimilarityEfficiency(forecastIrr, 0.0, cacheByHour, localHour, 0.0050, 0.0050)
 		// Should be dominated by the 200 W/m² points (eff ~ 0.0025), isolating clear sky (0.0098)
 		assert.Less(t, eff, 0.0040)
 	})
@@ -2122,10 +2122,10 @@ func TestCalculateSimilarityEfficiency(t *testing.T) {
 		cacheByHour, _ := buildHistoricalCache(now, timeLoc, weatherByHour, statsByTs, getIrr)
 
 		// When forecasting a clear hour (Cloud = 0%), it should selectively match clear historical days (higher eff)
-		effClear := calculateSimilarityEfficiency(500.0, 0.0, cacheByHour[localHour], 0.010, 0.010)
+		effClear := calculateSimilarityEfficiency(500.0, 0.0, cacheByHour, localHour, 0.010, 0.010)
 
 		// When forecasting an overcast hour (Cloud = 90%), it should selectively match overcast historical days (lower eff)
-		effOvercast := calculateSimilarityEfficiency(500.0, 90.0, cacheByHour[localHour], 0.010, 0.010)
+		effOvercast := calculateSimilarityEfficiency(500.0, 90.0, cacheByHour, localHour, 0.010, 0.010)
 
 		assert.Greater(t, effClear, effOvercast)
 		assert.InDelta(t, 0.013, effClear, 0.002)
@@ -2150,7 +2150,7 @@ func TestCalculateSimilarityEfficiency(t *testing.T) {
 		}
 
 		cacheByHour, _ := buildHistoricalCache(now, timeLoc, weatherByHour, statsByTs, getIrr)
-		eff := calculateSimilarityEfficiency(500.0, 0.0, cacheByHour[localHour], 0.0070, 0.0070)
+		eff := calculateSimilarityEfficiency(500.0, 0.0, cacheByHour, localHour, 0.0070, 0.0070)
 		// Because recent points have weight 0.95^1..3 vs older points 0.95^12..14 (~0.50),
 		// eff should be closer to recent efficiency (2.0 / (500*0.8906) ≈ 0.00449) than older (0.0112)
 		assert.Less(t, eff, 0.0070)
@@ -2173,7 +2173,7 @@ func TestCalculateSimilarityEfficiency(t *testing.T) {
 		statsByTs[tsOutlier] = types.EnergyStats{TSHourStart: time.Unix(tsOutlier, 0), SolarKWH: 30.0, GridExportKWH: 30.0}
 
 		cacheByHour, _ := buildHistoricalCache(now, timeLoc, weatherByHour, statsByTs, getIrr)
-		eff := calculateSimilarityEfficiency(150.0, 0.0, cacheByHour[localHour], staticEff, staticEff)
+		eff := calculateSimilarityEfficiency(150.0, 0.0, cacheByHour, localHour, staticEff, staticEff)
 		// The 30.0 kWh outlier must be rejected, keeping eff near low-irradiance value (~0.00112)
 		assert.Less(t, eff, 0.0030)
 	})
@@ -2196,8 +2196,38 @@ func TestCalculateSimilarityEfficiency(t *testing.T) {
 
 		cacheByHour, _ := buildHistoricalCache(now, timeLoc, weatherByHour, statsByTs, getIrr)
 		fallbackEff := 0.0080
-		eff := calculateSimilarityEfficiency(500.0, 0.0, cacheByHour[localHour], 0.0080, fallbackEff)
+		eff := calculateSimilarityEfficiency(500.0, 0.0, cacheByHour, localHour, 0.0080, fallbackEff)
 		// Since all 3 points were curtailed and skipped, count = 0 < 3 -> returns fallbackEff
 		assert.Equal(t, fallbackEff, eff)
+	})
+
+	t.Run("adjacent hours fallback when current hour has insufficient samples", func(t *testing.T) {
+		weatherByHour := make(map[int64]types.HourlyWeather)
+		statsByTs := make(map[int64]types.EnergyStats)
+
+		// Hour 9 only has 1 overcast sample (count = 1 < 3)
+		ts9 := now.AddDate(0, 0, -1).Truncate(24 * time.Hour).Add(9 * time.Hour).Unix()
+		weatherByHour[ts9] = types.HourlyWeather{TSHourStart: time.Unix(ts9, 0), GTI: 200.0, CloudCoverPercent: 85.0, TemperatureC: 20.0}
+		statsByTs[ts9] = types.EnergyStats{TSHourStart: time.Unix(ts9, 0), SolarKWH: 0.5, GridExportKWH: 0.5}
+
+		// Adjacent hour 10 has 3 overcast samples with low cloudy efficiency (~0.0025)
+		for d := 1; d <= 3; d++ {
+			ts10 := now.AddDate(0, 0, -d).Truncate(24 * time.Hour).Add(10 * time.Hour).Unix()
+			weatherByHour[ts10] = types.HourlyWeather{TSHourStart: time.Unix(ts10, 0), GTI: 200.0, CloudCoverPercent: 85.0, TemperatureC: 20.0}
+			statsByTs[ts10] = types.EnergyStats{TSHourStart: time.Unix(ts10, 0), SolarKWH: 0.5, GridExportKWH: 0.5}
+		}
+
+		cacheByHour, _ := buildHistoricalCache(now, timeLoc, weatherByHour, statsByTs, getIrr)
+		clearSkyFallbackEff := 0.0080
+		staticEff := 0.0050
+
+		// Target hour 9 alone has only 1 sample, but calculateSimilarityEfficiency automatically falls back to adjacent hour 10
+		effWithFallback := calculateSimilarityEfficiency(200.0, 85.0, cacheByHour, 9, staticEff, clearSkyFallbackEff)
+		assert.NotEqual(t, clearSkyFallbackEff, effWithFallback)
+		assert.InDelta(t, 0.0025, effWithFallback, 0.0005)
+
+		// When neither target hour nor adjacent hours have enough samples (e.g. hour 15 where ±1, ±2 have 0 samples), falls back to clearSkyFallbackEff
+		effNoAdjacent := calculateSimilarityEfficiency(200.0, 85.0, cacheByHour, 15, staticEff, clearSkyFallbackEff)
+		assert.Equal(t, clearSkyFallbackEff, effNoAdjacent)
 	})
 }
