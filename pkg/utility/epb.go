@@ -35,6 +35,7 @@ func getEPBHolidays(year int) []string {
 	return formatHolidays(holidays, year)
 }
 
+// Fuel Cost Adjustment (FCA) is published monthly at https://epb.com/residential/energy-power/rates/
 func epbFCAPeriods(years []int) []types.UtilityFeesPeriod {
 	var simplified []touSimplifiedPeriod
 	for _, year := range years {
@@ -99,7 +100,7 @@ func epbFCAPeriods(years []int) []types.UtilityFeesPeriod {
 				{
 					Year:       2026,
 					MonthStart: time.September,
-					MonthEnd:   time.December,
+					MonthEnd:   time.September,
 					HoursAndDays: []touSimplifiedHoursAndDays{
 						{
 							DollarsPerKWH: 0.02535,
@@ -107,16 +108,27 @@ func epbFCAPeriods(years []int) []types.UtilityFeesPeriod {
 						},
 					},
 				},
+				{
+					Year:       2026,
+					MonthStart: time.October,
+					MonthEnd:   time.December,
+					HoursAndDays: []touSimplifiedHoursAndDays{
+						{
+							DollarsPerKWH: 0.02164,
+							Description:   "EPB Fuel Cost Adjustment",
+						},
+					},
+				},
 			}...)
 		} else {
-			// 2027 and later (assumes the latest rate from September 2026)
+			// 2027 and later (assumes the latest rate from October 2026)
 			simplified = append(simplified, touSimplifiedPeriod{
 				Year:       year,
 				MonthStart: time.January,
 				MonthEnd:   time.December,
 				HoursAndDays: []touSimplifiedHoursAndDays{
 					{
-						DollarsPerKWH: 0.02535,
+						DollarsPerKWH: 0.02164,
 						Description:   "EPB Fuel Cost Adjustment",
 					},
 				},

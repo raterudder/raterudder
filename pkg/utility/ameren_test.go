@@ -429,14 +429,23 @@ func TestAmerenBGSAndLossFactor(t *testing.T) {
 		assert.InDelta(t, 0.08413, pSummer.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.02765+0.07811, pSummer.GridUseDollarsPerKWH, 1e-6)
 
-		// 2. Non-Summer BGS-1 (November 15, 2026)
+		// 2. Non-Summer BGS-1 early 2026 (April 15, 2026)
 		// Supply: $0.07283
+		// Transmission: $0.02629
+		// Distribution Delivery (Non-summer 2026): $0.04572
+		pEarlyNonSummer, err := u.priceForTime(time.Date(2026, time.April, 15, 12, 0, 0, 0, ctLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.07283, pEarlyNonSummer.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.02629+0.04572, pEarlyNonSummer.GridUseDollarsPerKWH, 1e-6)
+
+		// 3. Non-Summer BGS-1 late 2026 (November 15, 2026)
+		// Supply: $0.07648 ((7.310 - 0.028 + 0.313 + 0.053) / 100)
 		// Transmission: $0.02765
 		// Distribution Delivery (Non-summer 2026): $0.04572
-		// Total: 0.07283 + 0.02765 + 0.04572 = 0.14620
+		// Total: 0.07648 + 0.02765 + 0.04572 = 0.14985
 		pNonSummer, err := u.priceForTime(time.Date(2026, time.November, 15, 12, 0, 0, 0, ctLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.07283, pNonSummer.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.07648, pNonSummer.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.02765+0.04572, pNonSummer.GridUseDollarsPerKWH, 1e-6)
 	})
 

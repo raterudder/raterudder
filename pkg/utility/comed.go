@@ -1182,16 +1182,27 @@ func getComEdAdditionalFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPer
 			GridAdditional: false,
 			Description:    "Hourly Purchased Electricity Adjustment (HPEA) (Sept 2026)",
 		},
-		// fallback
+		// October 2026: -2.296 ¢/kWh (ICC ERM #26-164 filed under Rider HPEA)
 		{
 			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.November, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  -2.296 / 100,
+			GridAdditional: false,
+			Description:    "Hourly Purchased Electricity Adjustment (HPEA) (Oct 2026)",
+		},
+		// fallback
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.November, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH:  0.385 / 100,
+			DollarsPerKWH:  -2.296 / 100,
 			GridAdditional: false,
-			Description:    "Hourly Purchased Electricity Adjustment (HPEA) (Sept 2026)",
+			Description:    "Hourly Purchased Electricity Adjustment (HPEA) (Oct 2026)",
 		},
 	}
 
@@ -1385,16 +1396,27 @@ func getComEdBESFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, er
 			GridAdditional: false,
 			Description:    "Purchased Electricity Adjustment (PEA) (Sept 2026)",
 		},
-		// fallback
+		// October 2026: -1.551 ¢/kWh (ICC ERM #26-164 filed under Rider PEA)
 		{
 			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.November, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  -1.551 / 100,
+			GridAdditional: false,
+			Description:    "Purchased Electricity Adjustment (PEA) (Oct 2026)",
+		},
+		// fallback
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.November, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH:  -0.087 / 100,
+			DollarsPerKWH:  -1.551 / 100,
 			GridAdditional: false,
-			Description:    "Purchased Electricity Adjustment (PEA) (Sept 2026)",
+			Description:    "Purchased Electricity Adjustment (PEA) (Oct 2026)",
 		},
 	}
 
@@ -1435,12 +1457,34 @@ func getComEdBESTFees(ro types.UtilityRateOptions) ([]types.UtilityFeesPeriod, e
 		{
 			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.January, 1, 0, 0, 0, 0, ctLocation),
-				End:         time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
 			DollarsPerKWH:  0.0,
 			GridAdditional: false,
 			Description:    "Rate BEST Purchased Electricity Adjustment Factor (TPEA)",
+		},
+		// October 2026: 0.110 ¢/kWh (ICC ERM #26-164 filed under Rider PEA/HPEA)
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2026, time.November, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  0.110 / 100,
+			GridAdditional: false,
+			Description:    "Rate BEST Purchased Electricity Adjustment Factor (TPEA) (Oct 2026)",
+		},
+		// fallback
+		{
+			TimePeriod: types.TimePeriod{
+				Start:       time.Date(2026, time.November, 1, 0, 0, 0, 0, ctLocation),
+				End:         time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
+				LocationPtr: ctLocation,
+			},
+			DollarsPerKWH:  0.110 / 100,
+			GridAdditional: false,
+			Description:    "Rate BEST Purchased Electricity Adjustment Factor (TPEA) (Oct 2026)",
 		},
 
 		// --- BESTECs Components (Supply, GridAdditional: false) ---

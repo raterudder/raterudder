@@ -37,6 +37,11 @@ func TestEPB(t *testing.T) {
 		require.NoError(t, err)
 		assert.InDelta(t, 0.12035, p.DollarsPerKWH+p.GridUseDollarsPerKWH, 1e-6)
 
+		// October 15, 2026: base rate ($0.095) + October FCA ($0.02164) = $0.11664
+		p, err = u.priceForTime(time.Date(2026, time.October, 15, 12, 0, 0, 0, ny))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.11664, p.DollarsPerKWH+p.GridUseDollarsPerKWH, 1e-6)
+
 		// January 15, 2026: base rate ($0.095) + Jan FCA ($0.03021) = $0.12521
 		p, err = u.priceForTime(time.Date(2026, time.January, 15, 12, 0, 0, 0, ny))
 		require.NoError(t, err)
@@ -70,6 +75,16 @@ func TestEPB(t *testing.T) {
 		p, err = u.priceForTime(time.Date(2026, time.July, 13, 10, 0, 0, 0, ny))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.10925, p.DollarsPerKWH+p.GridUseDollarsPerKWH, 1e-6)
+
+		// Summer Weekday On-Peak October (Wednesday October 14, 2026 at 4:00 PM) -> base ($0.177) + Oct FCA ($0.02164) = $0.19864
+		p, err = u.priceForTime(time.Date(2026, time.October, 14, 16, 0, 0, 0, ny))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.19864, p.DollarsPerKWH+p.GridUseDollarsPerKWH, 1e-6)
+
+		// Summer Weekday Off-Peak October (Wednesday October 14, 2026 at 10:00 AM) -> base ($0.081) + Oct FCA ($0.02164) = $0.10264
+		p, err = u.priceForTime(time.Date(2026, time.October, 14, 10, 0, 0, 0, ny))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.10264, p.DollarsPerKWH+p.GridUseDollarsPerKWH, 1e-6)
 
 		// Summer Weekend Off-Peak (Saturday July 18, 2026 at 4:00 PM) -> base ($0.081) + July FCA ($0.02825) = $0.10925
 		p, err = u.priceForTime(time.Date(2026, time.July, 18, 16, 0, 0, 0, ny))

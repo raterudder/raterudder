@@ -11,13 +11,16 @@ import (
 // Link to Texas rate books: https://www.xcelenergy.com/company/rates_and_regulations/rates/rate_books
 var xcelTXNetBillingRates = map[int]map[time.Month]float64{
 	2026: {
-		time.January:  0.016221,
-		time.February: 0.016221,
-		time.March:    0.016221,
-		time.April:    0.009824,
-		time.May:      0.009824,
-		time.June:     0.009824,
-		time.July:     0.009824,
+		time.January:   0.016221,
+		time.February:  0.016221,
+		time.March:     0.016221,
+		time.April:     0.009824,
+		time.May:       0.009824,
+		time.June:      0.009824,
+		time.July:      0.009824,
+		time.August:    0.009824,
+		time.September: 0.018083,
+		time.October:   0.018083,
 	},
 }
 

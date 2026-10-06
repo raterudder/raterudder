@@ -517,7 +517,7 @@ func getAmerenBGSFees(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod,
 		return nil, err
 	}
 
-	// Add BGS-1 Supply Charges
+	// Ameren Illinois BGS-1 supply charges are filed with the ICC (e.g. Informational ERM filings at https://icc.illinois.gov/ and https://www.ameren.com/illinois/rates)
 	// Effective June 2026 through May 2027
 	// Summer: June 1 - Sept 30. Non-Summer: Oct 1 - May 31.
 	bgsSupply := []types.UtilityFeesPeriod{
@@ -542,13 +542,14 @@ func getAmerenBGSFees(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod,
 			Description:   "Ameren IL BGS-1 Non-Summer Retail Purchased Electricity Charge",
 		},
 		// Non-Summer 2026 (Oct - Dec) Supply Charge
+		// BGS-1 Secondary (0-800 kWh): 7.310 ¢/kWh, PEA: -0.028 ¢/kWh, Rider PER: +0.313 ¢/kWh, Rider EUA: +0.053 ¢/kWh
 		{
 			TimePeriod: types.TimePeriod{
 				Start:       time.Date(2026, time.October, 1, 0, 0, 0, 0, ctLocation),
 				End:         time.Date(2027, time.January, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH: 0.07283,
+			DollarsPerKWH: (7.310 - 0.028 + 0.313 + 0.053) / 100,
 			Description:   "Ameren IL BGS-1 Non-Summer Retail Purchased Electricity Charge",
 		},
 		// Summer 2027 Supply Charge
@@ -568,7 +569,7 @@ func getAmerenBGSFees(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod,
 				End:         time.Date(2027, time.June, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH: 0.07283,
+			DollarsPerKWH: (7.310 - 0.028 + 0.313 + 0.053) / 100,
 			Description:   "Ameren IL BGS-1 Non-Summer Retail Purchased Electricity Charge",
 		},
 		// Non-Summer 2027 (Oct - Dec) Supply Charge
@@ -578,7 +579,7 @@ func getAmerenBGSFees(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod,
 				End:         time.Date(2028, time.January, 1, 0, 0, 0, 0, ctLocation),
 				LocationPtr: ctLocation,
 			},
-			DollarsPerKWH: 0.07283,
+			DollarsPerKWH: (7.310 - 0.028 + 0.313 + 0.053) / 100,
 			Description:   "Ameren IL BGS-1 Non-Summer Retail Purchased Electricity Charge",
 		},
 	}

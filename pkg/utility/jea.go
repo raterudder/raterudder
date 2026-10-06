@@ -30,7 +30,7 @@ func getJEAHolidays(year int) []string {
 	return formatHolidays(holidays, year)
 }
 
-// Comes from https://www.jea.com/rates "Fuel Rates"
+// Comes from https://www.jea.com/rates "Fuel Rates" and Electric Tariff effective October 1, 2026
 func getJEAFuelCharge(year int, month time.Month) float64 {
 	if year == 2026 {
 		switch month {
@@ -50,9 +50,60 @@ func getJEAFuelCharge(year int, month time.Month) float64 {
 			return 0.04386
 		case time.August, time.September:
 			return 0.04282
+		case time.October:
+			return 0.04326
 		}
 	}
-	return 0.04282
+	return 0.04326
+}
+
+type jeaBaseRates struct {
+	rsBase         float64
+	gstOnPeakBase  float64
+	gstOffPeakBase float64
+}
+
+// JEA base rates are established by approved tariff documents (e.g. Electric Tariff Sheet 4.0 & 5.1).
+// These change with periodic tariff revisions (such as at the start of JEA fiscal years on Oct 1),
+// not with monthly fuel cost adjustments.
+var jeaBaseRateSchedules = []struct {
+	effectiveDate time.Time
+	rates         jeaBaseRates
+}{
+	// Prior to October 1, 2026
+	{
+		effectiveDate: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC),
+		rates: jeaBaseRates{
+			rsBase:         0.07237,
+			gstOnPeakBase:  0.13776,
+			gstOffPeakBase: 0.04535,
+		},
+	},
+	// Effective October 1, 2026 (Electric Tariff Document October 2026, Sheets 4.0 and 5.1)
+	{
+		effectiveDate: time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC),
+		rates: jeaBaseRates{
+			rsBase:         0.07815,
+			gstOnPeakBase:  0.14195,
+			gstOffPeakBase: 0.04732,
+		},
+	},
+}
+
+func getJEABaseRates(year int, month time.Month) jeaBaseRates {
+	target := time.Date(year, month, 1, 0, 0, 0, 0, time.UTC)
+	var effDate time.Time
+	chosen := jeaBaseRateSchedules[0].rates
+	// start at the end because the latest ones are at the bottom and find the newest rates
+	// that have an effective date <= target month
+	for i := len(jeaBaseRateSchedules) - 1; i >= 0; i-- {
+		schedule := jeaBaseRateSchedules[i]
+		if !target.Before(schedule.effectiveDate) && schedule.effectiveDate.After(effDate) {
+			chosen = schedule.rates
+			effDate = schedule.effectiveDate
+		}
+	}
+	return chosen
 }
 
 func jeaPeriods(plan string, opts types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
@@ -63,11 +114,12 @@ func jeaPeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 
 		for month := time.January; month <= time.December; month++ {
 			fuelCharge := getJEAFuelCharge(year, month)
+			baseRates := getJEABaseRates(year, month)
 
 			switch plan {
 			case "jea_r":
 				// Rate R (Residential Service)
-				rate := 0.07237 + fuelCharge
+				rate := baseRates.rsBase + fuelCharge
 
 				simplified := []touSimplifiedPeriod{
 					{
@@ -92,8 +144,8 @@ func jeaPeriods(plan string, opts types.UtilityRateOptions, years []int) []types
 
 			case "jea_gst":
 				// Rate GST (General Service Time-of-Day)
-				onPeakRate := 0.13776 + fuelCharge
-				offPeakRate := 0.04535 + fuelCharge
+				onPeakRate := baseRates.gstOnPeakBase + fuelCharge
+				offPeakRate := baseRates.gstOffPeakBase + fuelCharge
 
 				isWinter := month == time.November || month == time.December || month == time.January || month == time.February || month == time.March
 

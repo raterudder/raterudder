@@ -354,12 +354,44 @@ func TestXcelExportRates(t *testing.T) {
 			assert.InDelta(t, 0.016221, pJan.GenerationCreditDollarsPerKWH, 1e-6)
 		}
 
-		// July (undefined, fallback to May)
+		// July (defined)
 		targetJuly := time.Date(2026, time.July, 15, 12, 0, 0, 0, ctLocation)
 		pJuly, err := u.priceForTime(targetJuly)
 		require.NoError(t, err)
 		if assert.True(t, pJuly.SeparateGenerationCredit) {
 			assert.InDelta(t, 0.009824, pJuly.GenerationCreditDollarsPerKWH, 1e-6)
+		}
+
+		// August (defined)
+		targetAug := time.Date(2026, time.August, 15, 12, 0, 0, 0, ctLocation)
+		pAug, err := u.priceForTime(targetAug)
+		require.NoError(t, err)
+		if assert.True(t, pAug.SeparateGenerationCredit) {
+			assert.InDelta(t, 0.009824, pAug.GenerationCreditDollarsPerKWH, 1e-6)
+		}
+
+		// September (defined)
+		targetSep := time.Date(2026, time.September, 15, 12, 0, 0, 0, ctLocation)
+		pSep, err := u.priceForTime(targetSep)
+		require.NoError(t, err)
+		if assert.True(t, pSep.SeparateGenerationCredit) {
+			assert.InDelta(t, 0.018083, pSep.GenerationCreditDollarsPerKWH, 1e-6)
+		}
+
+		// October (defined)
+		targetOct := time.Date(2026, time.October, 15, 12, 0, 0, 0, ctLocation)
+		pOct, err := u.priceForTime(targetOct)
+		require.NoError(t, err)
+		if assert.True(t, pOct.SeparateGenerationCredit) {
+			assert.InDelta(t, 0.018083, pOct.GenerationCreditDollarsPerKWH, 1e-6)
+		}
+
+		// November (undefined, fallback to October)
+		targetNov := time.Date(2026, time.November, 15, 12, 0, 0, 0, ctLocation)
+		pNov, err := u.priceForTime(targetNov)
+		require.NoError(t, err)
+		if assert.True(t, pNov.SeparateGenerationCredit) {
+			assert.InDelta(t, 0.018083, pNov.GenerationCreditDollarsPerKWH, 1e-6)
 		}
 	})
 }

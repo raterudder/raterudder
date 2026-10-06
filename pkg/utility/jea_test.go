@@ -50,6 +50,13 @@ func TestJEA(t *testing.T) {
 			assert.False(t, p.SeparateGenerationCredit)
 		}
 
+		// October 2026: Tier 1 ($0.07815) + Fuel ($0.04326) = $0.12141
+		p, err = u.priceForTime(time.Date(2026, time.October, 15, 12, 0, 0, 0, etLocation))
+		require.NoError(t, err)
+		if assert.InDelta(t, 0.12141, p.DollarsPerKWH, 1e-6) {
+			assert.False(t, p.SeparateGenerationCredit)
+		}
+
 		periods, err := u.GetPeriods(context.Background())
 		require.NoError(t, err)
 		assert.NotEmpty(t, periods)
@@ -72,6 +79,14 @@ func TestJEA(t *testing.T) {
 		if assert.InDelta(t, 0.11461, p.DollarsPerKWH, 1e-6) {
 			assert.True(t, p.SeparateGenerationCredit)
 			assert.InDelta(t, 0.04224, p.GenerationCreditDollarsPerKWH, 1e-6)
+		}
+
+		// Oct 2026: Consumption = $0.12141, Export Credit = $0.04326 (fuel only)
+		p, err = u.priceForTime(time.Date(2026, time.October, 15, 12, 0, 0, 0, etLocation))
+		require.NoError(t, err)
+		if assert.InDelta(t, 0.12141, p.DollarsPerKWH, 1e-6) {
+			assert.True(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.04326, p.GenerationCreditDollarsPerKWH, 1e-6)
 		}
 	})
 
@@ -165,6 +180,22 @@ func TestJEA(t *testing.T) {
 		p, err = u.priceForTime(time.Date(2026, time.September, 14, 8, 0, 0, 0, etLocation))
 		require.NoError(t, err)
 		if assert.InDelta(t, 0.08817, p.DollarsPerKWH, 1e-6) {
+			assert.False(t, p.SeparateGenerationCredit)
+		}
+
+		// October On-Peak (October 12, 2026 is Monday at 2 PM)
+		// On-peak base: $0.14195 + Oct fuel $0.04326 = $0.18521
+		p, err = u.priceForTime(time.Date(2026, time.October, 12, 14, 0, 0, 0, etLocation))
+		require.NoError(t, err)
+		if assert.InDelta(t, 0.18521, p.DollarsPerKWH, 1e-6) {
+			assert.False(t, p.SeparateGenerationCredit)
+		}
+
+		// October Off-Peak (October 12, 2026 is Monday at 8 AM)
+		// Off-peak base: $0.04732 + Oct fuel $0.04326 = $0.09058
+		p, err = u.priceForTime(time.Date(2026, time.October, 12, 8, 0, 0, 0, etLocation))
+		require.NoError(t, err)
+		if assert.InDelta(t, 0.09058, p.DollarsPerKWH, 1e-6) {
 			assert.False(t, p.SeparateGenerationCredit)
 		}
 	})

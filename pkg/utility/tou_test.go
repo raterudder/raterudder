@@ -232,6 +232,10 @@ func TestTOUUtility(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 0.26408, p.DollarsPerKWH)
 
+		p, err = u.priceForTime(time.Date(2026, time.October, 15, 12, 0, 0, 0, ptLocation))
+		require.NoError(t, err)
+		assert.Equal(t, 0.27292, p.DollarsPerKWH)
+
 		// Test R-1B
 		err = u.ApplySettings(context.Background(), types.Settings{
 			UtilityProvider: "ladwp",
@@ -299,6 +303,26 @@ func TestTOUUtility(t *testing.T) {
 		p, err = u.priceForTime(time.Date(2026, time.February, 2, 14, 0, 0, 0, ptLocation))
 		require.NoError(t, err)
 		assert.Equal(t, 0.27647, p.DollarsPerKWH)
+
+		// October - December High Peak - October 12, 2026 is Monday
+		p, err = u.priceForTime(time.Date(2026, time.October, 12, 14, 0, 0, 0, ptLocation))
+		require.NoError(t, err)
+		assert.Equal(t, 0.30168, p.DollarsPerKWH)
+
+		// October - December Low Peak - October 12, 2026 is Monday
+		p, err = u.priceForTime(time.Date(2026, time.October, 12, 11, 0, 0, 0, ptLocation))
+		require.NoError(t, err)
+		assert.Equal(t, 0.30168, p.DollarsPerKWH)
+
+		// October - December Base - October 12, 2026 is Monday
+		p, err = u.priceForTime(time.Date(2026, time.October, 12, 21, 0, 0, 0, ptLocation))
+		require.NoError(t, err)
+		assert.Equal(t, 0.27814, p.DollarsPerKWH)
+
+		// October - December Base (Weekend) - October 17, 2026 is Saturday
+		p, err = u.priceForTime(time.Date(2026, time.October, 17, 14, 0, 0, 0, ptLocation))
+		require.NoError(t, err)
+		assert.Equal(t, 0.27814, p.DollarsPerKWH)
 	})
 
 	t.Run("MVEA", func(t *testing.T) {
