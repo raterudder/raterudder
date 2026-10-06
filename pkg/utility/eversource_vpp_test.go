@@ -283,6 +283,26 @@ func TestBaseEversourceVPP(t *testing.T) {
 			assert.InDelta(t, 0.26901, pricesJul[0].DollarsPerKWH, 1e-6)
 			assert.InDelta(t, -0.0402, pricesJul[0].GenerationAdjustmentDollarsPerKWH, 1e-6)
 		}
+
+		// Check with 2025 application year (adjustment -$0.0050/kWh)
+		siteFees2025 := &SiteFees{
+			base:   base,
+			siteID: "test-site",
+		}
+		err = siteFees2025.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "eversource",
+			UtilityRate:     "eversource_ct_vpp",
+			UtilityRateOptions: types.UtilityRateOptions{
+				NetMeteringScheme: "2025",
+			},
+		})
+		require.NoError(t, err)
+		prices2025, err := siteFees2025.GetConfirmedPrices(context.Background(), start, end)
+		require.NoError(t, err)
+		if assert.Len(t, prices2025, 1) {
+			assert.InDelta(t, 0.27078, prices2025[0].DollarsPerKWH, 1e-6)
+			assert.InDelta(t, -0.0050, prices2025[0].GenerationAdjustmentDollarsPerKWH, 1e-6)
+		}
 	})
 
 	t.Run("Memory Cache hit avoids DB query and HTTP fetch", func(t *testing.T) {

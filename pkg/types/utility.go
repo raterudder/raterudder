@@ -74,7 +74,7 @@ type Price struct {
 
 	// GenerationAdjustmentDollarsPerKWH is an adjustment applied to generated energy.
 	// For Connecticut Eversource, exports are via the Renewable Energy Solutions Rider,
-	// which is standard net metering but with a -$0.0402/kWh fee/adjustment applied to generated energy.
+	// which applies an adjustment fee/credit based on the customer's solar tariff application year.
 	// If SeparateGenerationCredit is false (1:1 net metering or standard net metering),
 	// this adjustment is added to the base rate for export credits (i.e. DollarsPerKWH + GenerationAdjustmentDollarsPerKWH).
 	// If NetMetering is active (e.g. min/max price valuation), this adjustment is applied to the max or min price (excluding 0).
@@ -141,6 +141,7 @@ type UtilityRateOptions struct {
 	Location             string `json:"location,omitempty"`
 	EVCredit             bool   `json:"evCredit,omitempty"`
 	VPPProgram           string `json:"vppProgram,omitempty"`
+	ApplicationYear      string `json:"applicationYear,omitempty"`
 }
 
 type UtilityHourPeriod struct {

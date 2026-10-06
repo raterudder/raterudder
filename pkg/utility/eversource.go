@@ -1,6 +1,7 @@
 package utility
 
 import (
+	"strings"
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/types"
@@ -32,6 +33,35 @@ func getEversourceHolidays(year int) []string {
 	return formatHolidays(holidays, year)
 }
 
+// eversourceCTGenerationAdjustmentDollarsPerKWH returns the Solar Energy Adjustment Rate in $/kWh
+// under the Connecticut Residential Renewable Energy Solutions Rider based on the tariff application year.
+//
+// Application Year | Netting REC Incentive Rate ($/kWh) | Solar Energy Adjustment Rate ($/kWh)
+// 2022             | $0.0318                            | N/A ($0.0000)
+// 2023             | $0.0318                            | N/A ($0.0000)
+// 2024             | $0.000                             | $0.0000
+// 2025             | $0.000                             | ($0.0050)
+// 2026             | $0.000                             | ($0.0402)
+//
+// Prior to January 1, 2022, systems are not eligible under this rider and receive standard net metering ($0.0000 adjustment).
+func eversourceCTGenerationAdjustmentDollarsPerKWH(opts types.UtilityRateOptions) float64 {
+	yearStr := opts.NetMeteringScheme
+	if yearStr == "" {
+		yearStr = opts.ApplicationYear
+	}
+	switch strings.ToLower(strings.TrimSpace(yearStr)) {
+	case "2026":
+		return -0.0402
+	case "2025":
+		return -0.0050
+	case "2024", "2023", "2022", "net":
+		return 0.0
+	default:
+		// Default to 2026 tariff rate (-$0.0402/kWh)
+		return -0.0402
+	}
+}
+
 // eversourcePeriods generates the fees period slice for a specific Eversource rate plan.
 func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) []types.UtilityFeesPeriod {
 	var periods []types.UtilityFeesPeriod
@@ -46,7 +76,8 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 		case "eversource_ct_rate_1":
 			// CT Residential Flat (Rate 1)
 			// Total rate: $0.24666/kWh (before July 1, 2026), $0.23602/kWh (starting July 1, 2026)
-			// Exports: Renewable Energy Solutions Rider applies a -$0.0402/kWh adjustment fee
+			// Exports: Renewable Energy Solutions Rider applies an adjustment fee based on application year
+			ctGenAdjustment := eversourceCTGenerationAdjustmentDollarsPerKWH(opts)
 			var simplified []touSimplifiedPeriod
 			if year == 2026 {
 				simplified = []touSimplifiedPeriod{
@@ -56,7 +87,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 						MonthEnd:                               time.June,
 						OtherDollarsPerKWH:                     0.24666,
 						OtherDescription:                       "Eversource CT Rate 1 Flat",
-						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+						OtherGenerationAdjustmentDollarsPerKWH: ctGenAdjustment,
 					},
 					{
 						Year:                                   year,
@@ -64,7 +95,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 						MonthEnd:                               time.December,
 						OtherDollarsPerKWH:                     0.23602,
 						OtherDescription:                       "Eversource CT Rate 1 Flat",
-						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+						OtherGenerationAdjustmentDollarsPerKWH: ctGenAdjustment,
 					},
 				}
 			} else {
@@ -75,7 +106,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 						MonthEnd:                               time.December,
 						OtherDollarsPerKWH:                     0.23602,
 						OtherDescription:                       "Eversource CT Rate 1 Flat",
-						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+						OtherGenerationAdjustmentDollarsPerKWH: ctGenAdjustment,
 					},
 				}
 			}
@@ -84,7 +115,8 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 		case "eversource_ct_rate_5":
 			// CT Residential Heating (Rate 5)
 			// Total rate: $0.22277/kWh (before July 1, 2026), $0.21213/kWh (starting July 1, 2026)
-			// Exports: Renewable Energy Solutions Rider applies a -$0.0402/kWh adjustment fee
+			// Exports: Renewable Energy Solutions Rider applies an adjustment fee based on application year
+			ctGenAdjustment := eversourceCTGenerationAdjustmentDollarsPerKWH(opts)
 			var simplified []touSimplifiedPeriod
 			if year == 2026 {
 				simplified = []touSimplifiedPeriod{
@@ -94,7 +126,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 						MonthEnd:                               time.June,
 						OtherDollarsPerKWH:                     0.22277,
 						OtherDescription:                       "Eversource CT Rate 5 Heating Flat",
-						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+						OtherGenerationAdjustmentDollarsPerKWH: ctGenAdjustment,
 					},
 					{
 						Year:                                   year,
@@ -102,7 +134,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 						MonthEnd:                               time.December,
 						OtherDollarsPerKWH:                     0.21213,
 						OtherDescription:                       "Eversource CT Rate 5 Heating Flat",
-						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+						OtherGenerationAdjustmentDollarsPerKWH: ctGenAdjustment,
 					},
 				}
 			} else {
@@ -113,7 +145,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 						MonthEnd:                               time.December,
 						OtherDollarsPerKWH:                     0.21213,
 						OtherDescription:                       "Eversource CT Rate 5 Heating Flat",
-						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+						OtherGenerationAdjustmentDollarsPerKWH: ctGenAdjustment,
 					},
 				}
 			}
@@ -123,7 +155,8 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 			// CT Residential Time-of-Day (Rate 7)
 			// On-Peak: Weekdays 12 Noon – 8 p.m. Rate: $0.31099/kWh (before July 1, 2026), $0.29982/kWh (starting July 1, 2026)
 			// Off-Peak: All other hours. Rate: $0.21871/kWh (before July 1, 2026), $0.20754/kWh (starting July 1, 2026)
-			// Exports: Renewable Energy Solutions Rider applies a -$0.0402/kWh adjustment fee
+			// Exports: Renewable Energy Solutions Rider applies an adjustment fee based on application year
+			ctGenAdjustment := eversourceCTGenerationAdjustmentDollarsPerKWH(opts)
 			var simplified []touSimplifiedPeriod
 			if year == 2026 {
 				simplified = []touSimplifiedPeriod{
@@ -138,13 +171,13 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 								Weekday:                           true,
 								DollarsPerKWH:                     0.31099,
 								Description:                       "Eversource CT Rate 7 On-Peak",
-								GenerationAdjustmentDollarsPerKWH: -0.0402,
+								GenerationAdjustmentDollarsPerKWH: ctGenAdjustment,
 							},
 						},
 						OtherName:                              "Off-Peak",
 						OtherDollarsPerKWH:                     0.21871,
 						OtherDescription:                       "Eversource CT Rate 7 Off-Peak",
-						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+						OtherGenerationAdjustmentDollarsPerKWH: ctGenAdjustment,
 					},
 					{
 						Year:       year,
@@ -157,13 +190,13 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 								Weekday:                           true,
 								DollarsPerKWH:                     0.29982,
 								Description:                       "Eversource CT Rate 7 On-Peak",
-								GenerationAdjustmentDollarsPerKWH: -0.0402,
+								GenerationAdjustmentDollarsPerKWH: ctGenAdjustment,
 							},
 						},
 						OtherName:                              "Off-Peak",
 						OtherDollarsPerKWH:                     0.20754,
 						OtherDescription:                       "Eversource CT Rate 7 Off-Peak",
-						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+						OtherGenerationAdjustmentDollarsPerKWH: ctGenAdjustment,
 					},
 				}
 			} else {
@@ -179,13 +212,13 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 								Weekday:                           true,
 								DollarsPerKWH:                     0.29982,
 								Description:                       "Eversource CT Rate 7 On-Peak",
-								GenerationAdjustmentDollarsPerKWH: -0.0402,
+								GenerationAdjustmentDollarsPerKWH: ctGenAdjustment,
 							},
 						},
 						OtherName:                              "Off-Peak",
 						OtherDollarsPerKWH:                     0.20754,
 						OtherDescription:                       "Eversource CT Rate 7 Off-Peak",
-						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+						OtherGenerationAdjustmentDollarsPerKWH: ctGenAdjustment,
 					},
 				}
 			}
@@ -196,7 +229,8 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 			// Delivery fee + FMCC-Generation Charge:
 			// Before July 1, 2026: Delivery $0.12228 - FMCC $0.00150 = $0.12078/kWh
 			// Starting July 1, 2026: Delivery $0.11111 - FMCC $0.00210 = $0.10901/kWh
-			// Renewable Energy Solutions Rider applies a -$0.0402/kWh adjustment fee
+			// Renewable Energy Solutions Rider applies an adjustment fee based on application year
+			ctGenAdjustment := eversourceCTGenerationAdjustmentDollarsPerKWH(opts)
 			var simplified []touSimplifiedPeriod
 			if year == 2026 {
 				simplified = []touSimplifiedPeriod{
@@ -206,7 +240,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 						MonthEnd:                               time.June,
 						OtherDollarsPerKWH:                     0.12078,
 						OtherDescription:                       "Eversource CT Rate 7 Delivery & FMCC Adjustment",
-						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+						OtherGenerationAdjustmentDollarsPerKWH: ctGenAdjustment,
 					},
 					{
 						Year:                                   year,
@@ -214,7 +248,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 						MonthEnd:                               time.December,
 						OtherDollarsPerKWH:                     0.10901,
 						OtherDescription:                       "Eversource CT Rate 7 Delivery & FMCC Adjustment",
-						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+						OtherGenerationAdjustmentDollarsPerKWH: ctGenAdjustment,
 					},
 				}
 			} else {
@@ -225,7 +259,7 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 						MonthEnd:                               time.December,
 						OtherDollarsPerKWH:                     0.10901,
 						OtherDescription:                       "Eversource CT Rate 7 Delivery & FMCC Adjustment",
-						OtherGenerationAdjustmentDollarsPerKWH: -0.0402,
+						OtherGenerationAdjustmentDollarsPerKWH: ctGenAdjustment,
 					},
 				}
 			}
@@ -601,6 +635,21 @@ func eversourcePeriods(plan string, opts types.UtilityRateOptions, years []int) 
 // eversourceUtilityInfo returns the metadata and rate options for Eversource.
 func eversourceUtilityInfo() types.UtilityProviderInfo {
 	eversourceCTOptions := []types.UtilityRateOption{
+		{
+			Field:       "netMeteringScheme",
+			Name:        "Installation Year",
+			Type:        types.UtilityOptionTypeSelect,
+			Description: "Select your solar tariff application year (typically the year your system was installed).",
+			Choices: []types.UtilityOptionChoice{
+				{Value: "2026", Name: "2026 (-$0.0402/kWh)"},
+				{Value: "2025", Name: "2025 (-$0.0050/kWh)"},
+				{Value: "2024", Name: "2024 ($0.0000/kWh)"},
+				{Value: "2023", Name: "2023 ($0.0000/kWh)"},
+				{Value: "2022", Name: "2022 ($0.0000/kWh)"},
+				{Value: "net", Name: "Prior to 2022 (Legacy Net Metering)"},
+			},
+			Default: "2026",
+		},
 		{
 			Field:       "vppProgram",
 			Name:        "Mandatory VPP Events",

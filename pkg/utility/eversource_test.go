@@ -469,4 +469,134 @@ func TestEversourceUtilityInfo(t *testing.T) {
 			assert.InDelta(t, 0.44090, pJun2027.DollarsPerKWH, 1e-6)
 		}
 	})
+
+	t.Run("CT Application Year Options Metadata", func(t *testing.T) {
+		info := eversourceUtilityInfo()
+		var ctRate *types.UtilityRateInfo
+		for i := range info.Rates {
+			if info.Rates[i].ID == "eversource_ct_rate_1" {
+				ctRate = &info.Rates[i]
+				break
+			}
+		}
+		require.NotNil(t, ctRate)
+
+		var appYearOpt *types.UtilityRateOption
+		for i := range ctRate.Options {
+			if ctRate.Options[i].Field == "netMeteringScheme" {
+				appYearOpt = &ctRate.Options[i]
+				break
+			}
+		}
+		require.NotNil(t, appYearOpt)
+		assert.NotEmpty(t, appYearOpt.Name)
+		assert.Equal(t, types.UtilityOptionTypeSelect, appYearOpt.Type)
+		assert.NotEmpty(t, appYearOpt.Default)
+		assert.Len(t, appYearOpt.Choices, 6)
+
+		choiceValues := make(map[string]bool)
+		for _, c := range appYearOpt.Choices {
+			choiceValues[c.Value] = true
+		}
+		assert.Contains(t, choiceValues, "2026")
+		assert.Contains(t, choiceValues, "2025")
+		assert.Contains(t, choiceValues, "2024")
+		assert.Contains(t, choiceValues, "2023")
+		assert.Contains(t, choiceValues, "2022")
+		assert.Contains(t, choiceValues, "net")
+		assert.Contains(t, choiceValues, appYearOpt.Default)
+	})
+
+	t.Run("CT Residential Flat Rate 1 - Application Year 2025", func(t *testing.T) {
+		err := u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "eversource",
+			UtilityRate:     "eversource_ct_rate_1",
+			UtilityRateOptions: types.UtilityRateOptions{
+				NetMeteringScheme: "2025",
+			},
+		})
+		require.NoError(t, err)
+
+		p, err := u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, etLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.24666, p.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, -0.0050, p.GenerationAdjustmentDollarsPerKWH, 1e-6)
+		}
+	})
+
+	t.Run("CT Residential Flat Rate 1 - Application Year 2024", func(t *testing.T) {
+		err := u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "eversource",
+			UtilityRate:     "eversource_ct_rate_1",
+			UtilityRateOptions: types.UtilityRateOptions{
+				NetMeteringScheme: "2024",
+			},
+		})
+		require.NoError(t, err)
+
+		p, err := u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, etLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.24666, p.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.0, p.GenerationAdjustmentDollarsPerKWH, 1e-6)
+		}
+	})
+
+	t.Run("CT Residential Flat Rate 1 - Application Year Legacy Net", func(t *testing.T) {
+		err := u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "eversource",
+			UtilityRate:     "eversource_ct_rate_1",
+			UtilityRateOptions: types.UtilityRateOptions{
+				NetMeteringScheme: "net",
+			},
+		})
+		require.NoError(t, err)
+
+		p, err := u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, etLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.24666, p.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, 0.0, p.GenerationAdjustmentDollarsPerKWH, 1e-6)
+		}
+	})
+
+	t.Run("CT Residential Heating Rate 5 - Application Year 2025 via applicationYear field", func(t *testing.T) {
+		err := u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "eversource",
+			UtilityRate:     "eversource_ct_rate_5",
+			UtilityRateOptions: types.UtilityRateOptions{
+				ApplicationYear: "2025",
+			},
+		})
+		require.NoError(t, err)
+
+		p, err := u.priceForTime(time.Date(2026, time.June, 15, 12, 0, 0, 0, etLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.22277, p.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, -0.0050, p.GenerationAdjustmentDollarsPerKWH, 1e-6)
+		}
+	})
+
+	t.Run("CT Residential TOU Rate 7 - Application Year 2025", func(t *testing.T) {
+		err := u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "eversource",
+			UtilityRate:     "eversource_ct_rate_7",
+			UtilityRateOptions: types.UtilityRateOptions{
+				NetMeteringScheme: "2025",
+			},
+		})
+		require.NoError(t, err)
+
+		// On-Peak
+		pOn, err := u.priceForTime(time.Date(2026, time.June, 15, 14, 0, 0, 0, etLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.31099, pOn.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, -0.0050, pOn.GenerationAdjustmentDollarsPerKWH, 1e-6)
+		}
+
+		// Off-Peak
+		pOff, err := u.priceForTime(time.Date(2026, time.June, 15, 10, 0, 0, 0, etLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.21871, pOff.DollarsPerKWH, 1e-6)
+			assert.InDelta(t, -0.0050, pOff.GenerationAdjustmentDollarsPerKWH, 1e-6)
+		}
+	})
 }
