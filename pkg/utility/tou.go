@@ -1100,6 +1100,10 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 		pgeUtilityInfo(),
 		sceUtilityInfo(),
 		pgEUtilityInfo(),
+		teslaElectricUtilityInfo(),
+		greenMountainUtilityInfo(),
+		directEnergyUtilityInfo(),
+		txuUtilityInfo(),
 	},
 		append(hawaiiUtilityInfo(), dukeUtilityInfo()...)...,
 	)

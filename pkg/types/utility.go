@@ -301,6 +301,11 @@ type UtilityFeesPeriod struct {
 	// GenerationAdjustmentDollarsPerKWH is the adjustment to generation credits.
 	GenerationAdjustmentDollarsPerKWH float64 `json:"generationAdjustmentDollarsPerKWH,omitempty"`
 
+	// GenerationCreditDollarsPerKWHPreMultiple is multiplied against the generation credit (or the base price
+	// if generation credit is zero) to calculate the final generation credit.
+	// For example, 0.90 for plans that pay 90% of the wholesale price (like Tesla Electric Dynamic).
+	GenerationCreditDollarsPerKWHPreMultiple float64 `json:"generationCreditDollarsPerKWHPreMultiple,omitempty"`
+
 	// Description is a description of the fee.
 	Description string `json:"description"`
 }
@@ -323,7 +328,15 @@ func (up *UtilityFeesPeriod) Apply(p Price, originalPrice Price) (Price, error) 
 
 	switch {
 	case up.SeparateGenerationCredit:
-		p.GenerationCreditDollarsPerKWH += up.DollarsPerKWH
+		if up.GenerationCreditDollarsPerKWHPreMultiple != 0 && (originalPrice.GenerationCreditDollarsPerKWH != 0 || originalPrice.DollarsPerKWH != 0) {
+			if originalPrice.GenerationCreditDollarsPerKWH != 0 {
+				p.GenerationCreditDollarsPerKWH = originalPrice.GenerationCreditDollarsPerKWH * up.GenerationCreditDollarsPerKWHPreMultiple
+			} else {
+				p.GenerationCreditDollarsPerKWH = originalPrice.DollarsPerKWH * up.GenerationCreditDollarsPerKWHPreMultiple
+			}
+		} else {
+			p.GenerationCreditDollarsPerKWH += up.DollarsPerKWH
+		}
 		p.SeparateGenerationCredit = true
 	case up.GridAdditional:
 		if up.DollarsPerKWHPreMultiple != 0 {

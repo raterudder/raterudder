@@ -50,6 +50,7 @@ func Configured(db storage.Database) *Map {
 	m.baseComEdHourly = configuredComEdHourly(db)
 	m.baseAmerenSmart = configuredAmerenSmart(db)
 	m.baseEversourceVPP = configuredEversourceVPP(db)
+	m.baseERCOT = configuredERCOT(db)
 	return m
 }
 
@@ -60,6 +61,7 @@ type Map struct {
 	baseComEdHourly   *baseComEdHourly
 	baseAmerenSmart   *baseAmerenSmart
 	baseEversourceVPP *baseEversourceVPP
+	baseERCOT         *baseERCOT
 	utilities         map[string]Utility
 }
 
@@ -135,6 +137,31 @@ func (m *Map) Site(ctx context.Context, siteID string, settings types.Settings) 
 			}
 			u = &SiteFees{
 				base:   m.baseEversourceVPP,
+				siteID: siteID,
+			}
+			if err := u.ApplySettings(ctx, settings); err != nil {
+				return nil, err
+			}
+		} else {
+			u = &genericTOU{
+				siteID: siteID,
+			}
+			if err := u.ApplySettings(ctx, settings); err != nil {
+				return nil, err
+			}
+		}
+	case "tesla_electric_tx":
+		if settings.UtilityRate == "tesla_dynamic" && m.baseERCOT != nil {
+			loadZone, err := loadZoneForTDU(settings.UtilityRateOptions.Location)
+			if err != nil {
+				return nil, err
+			}
+			zoneProvider, err := m.baseERCOT.Zone(loadZone)
+			if err != nil {
+				return nil, err
+			}
+			u = &SiteFees{
+				base:   zoneProvider,
 				siteID: siteID,
 			}
 			if err := u.ApplySettings(ctx, settings); err != nil {

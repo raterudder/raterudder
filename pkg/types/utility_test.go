@@ -462,6 +462,44 @@ func TestUtilityFeesPeriodApply(t *testing.T) {
 		assert.True(t, result.SeparateGenerationCredit)
 	})
 
+	t.Run("GenerationCreditDollarsPerKWHPreMultiple with existing generation credit", func(t *testing.T) {
+		up := UtilityFeesPeriod{
+			TimePeriod:                               TimePeriod{},
+			SeparateGenerationCredit:                 true,
+			GenerationCreditDollarsPerKWHPreMultiple: 0.90, // 90% (e.g. Tesla Electric Dynamic)
+		}
+		p := Price{
+			TSStart:                       testTime,
+			DollarsPerKWH:                 0.25,
+			SeparateGenerationCredit:      true,
+			GenerationCreditDollarsPerKWH: 2.00,
+		}
+		result, err := up.Apply(p, p)
+		require.NoError(t, err)
+		assert.Equal(t, 0.25, result.DollarsPerKWH)
+		assert.InDelta(t, 1.80, result.GenerationCreditDollarsPerKWH, 0.0001) // 2.00 * 0.90
+		assert.True(t, result.SeparateGenerationCredit)
+	})
+
+	t.Run("GenerationCreditDollarsPerKWHPreMultiple fallback to base price", func(t *testing.T) {
+		up := UtilityFeesPeriod{
+			TimePeriod:                               TimePeriod{},
+			SeparateGenerationCredit:                 true,
+			GenerationCreditDollarsPerKWHPreMultiple: 0.90,
+		}
+		p := Price{
+			TSStart:                       testTime,
+			DollarsPerKWH:                 1.50,
+			SeparateGenerationCredit:      false,
+			GenerationCreditDollarsPerKWH: 0.0,
+		}
+		result, err := up.Apply(p, p)
+		require.NoError(t, err)
+		assert.Equal(t, 1.50, result.DollarsPerKWH)
+		assert.InDelta(t, 1.35, result.GenerationCreditDollarsPerKWH, 0.0001) // 1.50 * 0.90
+		assert.True(t, result.SeparateGenerationCredit)
+	})
+
 	t.Run("DollarsPerKWHPreMultiple", func(t *testing.T) {
 		up := UtilityFeesPeriod{
 			TimePeriod:               TimePeriod{},
@@ -657,5 +695,32 @@ func TestApplyUtilityFeesPeriods(t *testing.T) {
 
 		// Base (0.20) + 0.05 = 0.25
 		assert.InDelta(t, 0.25, result.DollarsPerKWH, 0.0001)
+	})
+
+	t.Run("Generation credit multiplier with grid delivery fee", func(t *testing.T) {
+		periods := []UtilityFeesPeriod{
+			{
+				TimePeriod:     TimePeriod{},
+				DollarsPerKWH:  0.065,
+				GridAdditional: true,
+				Description:    "TDU Delivery",
+			},
+			{
+				TimePeriod:                               TimePeriod{},
+				SeparateGenerationCredit:                 true,
+				GenerationCreditDollarsPerKWHPreMultiple: 0.90,
+				Description:                              "90% Wholesale Buyback",
+			},
+		}
+		orig := Price{
+			TSStart:       testTime,
+			DollarsPerKWH: 2.00,
+		}
+		result, err := ApplyUtilityFeesPeriods(orig, periods)
+		require.NoError(t, err)
+		assert.Equal(t, 2.00, result.DollarsPerKWH)
+		assert.Equal(t, 0.065, result.GridUseDollarsPerKWH)
+		assert.InDelta(t, 1.80, result.GenerationCreditDollarsPerKWH, 0.0001)
+		assert.True(t, result.SeparateGenerationCredit)
 	})
 }
