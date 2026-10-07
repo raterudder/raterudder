@@ -2055,6 +2055,7 @@ func TestGenerateActionCandidates(t *testing.T) {
 
 		sunnyInterval := interval
 		sunnyInterval.solarKWH = 4.0
+		sunnyInterval.exportRate = 0.20
 		touSettings := settings
 		touSettings.ManageTOUSchedules = true
 		touSettings.GridExportSolar = true
@@ -2108,6 +2109,19 @@ func TestGenerateActionCandidates(t *testing.T) {
 			}
 		}
 		assert.Nil(t, vppDirectSolarCand, "Direct solar export must NOT be created during VPP prep when battery is at or below reserve")
+
+		// 4. Low export rate below recharge cost + arbitrage diff: Direct solar export must NOT be offered even when above reserve
+		lowExportInterval := sunnyInterval
+		lowExportInterval.exportRate = 0.05 // Below rechargeCost (0.12 / 0.85 = 0.141) + margin
+		candsLowExport := c.generateActionCandidates(ctx, 0, lowExportInterval, nil, aboveReserveState, planningAnchors{}, touSettings, status, nil, precedingAction{})
+		var directSolarLow *actionCandidate
+		for i := range candsLowExport {
+			if candsLowExport[i].solarMode == types.SolarModeExport {
+				directSolarLow = &candsLowExport[i]
+				break
+			}
+		}
+		assert.Nil(t, directSolarLow, "Direct solar export must NOT be created when export rate fails to clear recharge cost + arbitrage difference")
 	})
 
 	t.Run("DeficitCharge_CalculatesExactNeededTargetSOC", func(t *testing.T) {
@@ -4637,7 +4651,7 @@ func TestSearchOptimalPlan(t *testing.T) {
 				endTime:       now.Add(20 * time.Minute),
 				durationHours: 20.0 / 60.0,
 				importRate:    0.10,
-				exportRate:    0.05,
+				exportRate:    0.25,
 				minSOC:        20.0,
 				loadKWH:       0.3,
 				solarKWH:      0.5,

@@ -2360,18 +2360,32 @@ func (c *Controller) generateActionCandidates(
 		}
 	}
 
+	// Calculate lowest possible alternative value of stored battery energy (avoided load or replacement)
+	// and replacement recharge cost accounting for round-trip efficiency.
+	minAlternativeValue := anchors.knownPostHorizonRate
+	if len(timeline) > 0 {
+		if minAlternativeValue <= 0 {
+			minAlternativeValue = timeline[stepIdx].importRate
+		}
+		for i := stepIdx; i < len(timeline); i++ {
+			if timeline[i].importRate < minAlternativeValue {
+				minAlternativeValue = timeline[i].importRate
+			}
+		}
+	} else if minAlternativeValue <= 0 {
+		minAlternativeValue = interval.importRate
+	}
+	rechargeCost := minAlternativeValue / effRT
+
 	// Branch D: Direct Solar Export (with BatteryModeLoad)
 	// Never offered when at or below reserve floor so surplus solar restores backup protection before exporting.
 	//
-	// Note on BatteryModeStandby + SolarModeExport:
-	// We deliberately do not support a candidate for BatteryModeStandby with SolarModeExport.
-	// Behind a single net meter, retail export compensation is almost never higher than the retail
-	// import rate (outside of dedicated VPP dispatch events, which have their own rules).
-	// If the battery were held in Standby while exporting solar, household load would have to be
-	// served by grid imports at the full retail rate while exporting solar at a rate <= import rate.
-	// Displacing home load first (via BatteryModeLoad + SolarModeExport or storing solar) is always
-	// economically superior or equal to importing grid power to enable solar export.
-	if canDirectSolarExport && isAboveReserve && beforeVPPRechargeDeadline {
+	// Direct Solar Export discharges the battery to cover home load while exporting all rooftop solar.
+	// Because battery energy is consumed to enable solar export, the export credit must clear the replacement
+	// recharge cost (accounting for round-trip efficiency) plus the user's minimum arbitrage difference.
+	// Otherwise, solar charges the battery and offsets home load, preventing selling solar at cheap off-peak rates.
+	minArbitrageDiff := max(priceEpsilonForEquality, settings.MinArbitrageDifferenceDollarsPerKWH)
+	if canDirectSolarExport && isAboveReserve && beforeVPPRechargeDeadline && interval.exportRate >= (rechargeCost+minArbitrageDiff) {
 		candidates = append(candidates, actionCandidate{
 			batteryMode: types.BatteryModeLoad,
 			solarMode:   types.SolarModeExport,
@@ -2386,21 +2400,6 @@ func (c *Controller) generateActionCandidates(
 	// Branch E: Battery Grid Export Dump (Opportunity cost of home offset + degradation hurdle)
 	if settings.ManageTOUSchedules && settings.GridExportBatteries && !isFlatNEM && canExport && beforeVPPRechargeDeadline && interval.exportRate > 0 {
 		cycleHurdle := max(priceEpsilonForEquality, settings.MinBatteryExportDifferenceDollarsPerKWH)
-
-		// Lowest possible alternative value of stored battery energy (avoided load or replacement)
-		minAlternativeValue := anchors.knownPostHorizonRate
-		for i := stepIdx; i < len(timeline); i++ {
-			if timeline[i].importRate < minAlternativeValue {
-				minAlternativeValue = timeline[i].importRate
-			}
-		}
-
-		// Account for round-trip efficiency when calculating replacement energy cost.
-		// Direct battery export dump is evaluated post-losses (minAlternativeValue / roundTripEff)
-		// because energy stored in the battery incurs round-trip efficiency loss when replaced;
-		// the export rate must clear the replacement cost divided by round-trip efficiency plus
-		// the degradation cycle hurdle to guarantee net economic benefit.
-		rechargeCost := minAlternativeValue / effRT
 
 		// Export is a viable candidate if export rate beats the replacement cost by at least the degradation hurdle
 		if interval.exportRate >= (rechargeCost + cycleHurdle) {
