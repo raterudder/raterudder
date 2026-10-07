@@ -480,6 +480,173 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 	})
 
+	t.Run("AdaptiveShiftTemperatureSimilarityAndStandbyProtection", func(t *testing.T) {
+		// Tests that:
+		// 1. When weather history has a seasonal drop (cool recent days vs warm historical days),
+		//    temperature similarity weighting prevents a false large negative shift from double-counting.
+		// 2. Standby protection ensures that even with a negative shift, overnight idle loads are never
+		//    reduced below the empirical standby baseline.
+		now := time.Date(2025, 10, 6, 12, 0, 0, 0, time.UTC) // Monday
+
+		// Build 8 Mondays of history:
+		// Older 4 Mondays: Warm summer days (28°C), active load 2.5 kWh, overnight idle 0.6 kWh.
+		// Recent 4 Mondays: Cool autumn days (14°C), active load 1.2 kWh, overnight idle 0.6 kWh.
+		var history []types.EnergyStats
+		var weather []types.Weather
+
+		mondays := []time.Time{
+			now.Add(-7 * 24 * time.Hour),
+			now.Add(-14 * 24 * time.Hour),
+			now.Add(-21 * 24 * time.Hour),
+			now.Add(-28 * 24 * time.Hour),
+			now.Add(-35 * 24 * time.Hour),
+			now.Add(-42 * 24 * time.Hour),
+			now.Add(-49 * 24 * time.Hour),
+			now.Add(-56 * 24 * time.Hour),
+		}
+
+		for idx, m := range mondays {
+			isRecent := idx < 4
+			dayTemp := 28.0
+			activeLoad := 2.5
+			if isRecent {
+				dayTemp = 14.0
+				activeLoad = 1.2
+			}
+
+			var fHours []types.HourlyWeather
+			for h := 0; h < 24; h++ {
+				ts := time.Date(m.Year(), m.Month(), m.Day(), h, 0, 0, 0, time.UTC)
+				load := 0.6 // Standby idle
+				if h >= 10 && h <= 20 {
+					load = activeLoad
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: ts,
+					HomeKWH:     load,
+				})
+				fHours = append(fHours, types.HourlyWeather{
+					TSHourStart:  ts,
+					TemperatureC: dayTemp,
+				})
+			}
+			weather = append(weather, types.Weather{
+				TSDayStart:    time.Date(m.Year(), m.Month(), m.Day(), 0, 0, 0, 0, time.UTC),
+				ForecastHours: fHours,
+			})
+		}
+
+		// Today's forecast is also 14°C
+		var todayFHours []types.HourlyWeather
+		for h := 0; h < 24; h++ {
+			todayFHours = append(todayFHours, types.HourlyWeather{
+				TSHourStart:  time.Date(now.Year(), now.Month(), now.Day(), h, 0, 0, 0, time.UTC),
+				TemperatureC: 14.0,
+			})
+		}
+		weather = append(weather, types.Weather{
+			TSDayStart:    time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC),
+			ForecastHours: todayFHours,
+		})
+
+		settings := types.Settings{
+			IgnoreHourUsageOverMultiple: 0.0,
+		}
+
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, weather, settings)
+
+		// Overnight idle load (hour 3) must be protected by standby baseline (>= 0.6 kWh).
+		if assert.Contains(t, model, 3) {
+			assert.GreaterOrEqual(t, model[3].AvgHomeLoadKWH, 0.60)
+		}
+		// Daytime active load (hour 12) should be predicted near the cool day load (~1.2 kWh),
+		// rather than being crushed to 0.5 kWh or pulled up to 2.5 kWh.
+		if assert.Contains(t, model, 12) {
+			assert.InDelta(t, 1.2, model[12].AvgHomeLoadKWH, 0.25)
+		}
+	})
+
+	t.Run("AdaptiveShiftRejectsIsolatedSpikeWhenOtherDaysDropAccountedByWeather", func(t *testing.T) {
+		// When recent days are cooler than historical summer days, their lower consumption is
+		// accounted for by weather similarity. If ONE of the recent 4 days has a sporadic spike
+		// (e.g. EV charge or high usage day), Option G must NOT discard the other 3 days and treat
+		// the single spike as a consistent permanent shift.
+		now := time.Date(2025, 10, 6, 0, 0, 0, 0, time.UTC)
+
+		// 8 days of history: 4 older summer days (28°C, load 2.5 kWh),
+		// 3 recent cool days (14°C, load 0.9 kWh), and 1 recent spike day (14°C, load 3.2 kWh).
+		var history []types.EnergyStats
+		var weather []types.Weather
+
+		mondays := []time.Time{
+			now.Add(-7 * 24 * time.Hour),  // Recent day 1: cool (14°C), normal low load (0.9 kWh)
+			now.Add(-14 * 24 * time.Hour), // Recent day 2: cool (14°C), normal low load (0.9 kWh)
+			now.Add(-21 * 24 * time.Hour), // Recent day 3: cool (14°C), normal low load (0.9 kWh)
+			now.Add(-28 * 24 * time.Hour), // Recent day 4: cool (14°C), SPORADIC SPIKE (3.2 kWh)
+			now.Add(-35 * 24 * time.Hour), // Historical summer (28°C), 2.5 kWh
+			now.Add(-42 * 24 * time.Hour), // Historical summer (28°C), 2.5 kWh
+			now.Add(-49 * 24 * time.Hour), // Historical summer (28°C), 2.5 kWh
+			now.Add(-56 * 24 * time.Hour), // Historical summer (28°C), 2.5 kWh
+		}
+
+		for idx, m := range mondays {
+			dayTemp := 28.0
+			activeLoad := 2.5
+			if idx < 4 {
+				dayTemp = 14.0
+				if idx == 3 {
+					activeLoad = 3.2 // Isolated spike on day 4
+				} else {
+					activeLoad = 1.0 // Normal cool usage
+				}
+			}
+
+			var fHours []types.HourlyWeather
+			for h := 0; h < 24; h++ {
+				ts := time.Date(m.Year(), m.Month(), m.Day(), h, 0, 0, 0, time.UTC)
+				load := 0.6 // Standby idle
+				if h >= 10 && h <= 20 {
+					load = activeLoad
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: ts,
+					HomeKWH:     load,
+				})
+				fHours = append(fHours, types.HourlyWeather{
+					TSHourStart:  ts,
+					TemperatureC: dayTemp,
+				})
+			}
+			weather = append(weather, types.Weather{
+				TSDayStart:    time.Date(m.Year(), m.Month(), m.Day(), 0, 0, 0, 0, time.UTC),
+				ForecastHours: fHours,
+			})
+		}
+
+		// Today is 14°C
+		var todayFHours []types.HourlyWeather
+		for h := 0; h < 24; h++ {
+			todayFHours = append(todayFHours, types.HourlyWeather{
+				TSHourStart:  time.Date(now.Year(), now.Month(), now.Day(), h, 0, 0, 0, time.UTC),
+				TemperatureC: 14.0,
+			})
+		}
+		weather = append(weather, types.Weather{
+			TSDayStart:    time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC),
+			ForecastHours: todayFHours,
+		})
+
+		settings := types.Settings{}
+		model, simParams := c.BuildHourlyEnergyModel(ctx, now, history, weather, settings)
+
+		// The single day spike must NOT trigger an adaptive shift.
+		assert.Equal(t, "none", simParams.DetectedShift)
+		// Overnight load should remain near 0.9 kWh, not inflated to 2.2+ kWh.
+		if assert.Contains(t, model, 3) {
+			assert.Less(t, model[3].AvgHomeLoadKWH, 1.3)
+		}
+	})
+
 	t.Run("MultipleHighSpikesRetained", func(t *testing.T) {
 		// EV charged on 2 out of 5 Mondays at 11am.
 		// Since there are multiple high spikes (not exactly one outlier),
