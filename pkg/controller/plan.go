@@ -170,6 +170,20 @@ const (
 	// postHorizonPriceRollupTime is the duration used to blend prices beyond the planning horizon.
 	postHorizonPriceRollupTime = 4 * time.Hour
 
+	// postHorizonLoadForecastHours (8 hours) is the lookahead window used to calculate typical
+	// household consumption immediately following the planning horizon for terminal battery valuation.
+	postHorizonLoadForecastHours = 8
+
+	// defaultPostHorizonLoadKWH (6.0 kWh) is the fallback post-horizon household load requirement
+	// used when hourly energy forecast models are unavailable (e.g. unit tests or sparse history),
+	// corresponding to 4 hours of baseline residential consumption at 1.5 kW.
+	defaultPostHorizonLoadKWH = 6.0
+
+	// terminalSurplusDiscountFactor (0.70) applies a 30% discount to banked battery energy exceeding
+	// the immediate post-horizon household load requirements, reflecting diminishing marginal utility
+	// and future solar replenishment opportunity.
+	terminalSurplusDiscountFactor = 0.70
+
 	// abnormalRecentUsageThresholdKWH (1.0 kWh) is the minimum energy consumption excess above the 75th
 	// percentile (Q3) baseline over the recent 1–2 hour evaluation window required to classify usage as abnormal.
 	// A typical 13.5 kWh home battery reserve buffer is 10%–20% (1.35–2.7 kWh). Minor variations (< 1.0 kWh)
@@ -281,6 +295,8 @@ type candidateLogData struct {
 	minAlternativeValue     float64
 	cycleHurdle             float64
 	exportReplacementCost   float64
+	surplusSolarKWH         float64
+	solarRefillSOC          float64
 }
 
 // actionCandidate represents a permissible control action pair for an interval.
@@ -395,6 +411,7 @@ type planningAnchors struct {
 	minHorizonImportRate float64
 	maxHorizonImportRate float64
 	peakWindows          []peakWindowAnchor
+	postHorizonLoadKWH   float64
 }
 
 // minDeficitPriceSpread returns the minimum price spread ($/kWh) required for an economic peak.
@@ -462,6 +479,7 @@ type planPath struct {
 	modeScores        map[types.BatteryMode]float64
 	modeStrikes       map[types.BatteryMode]int
 	bestScore         float64
+	anchors           planningAnchors
 }
 
 // logCandidate emits structured slog messages for an action candidate, distinguishing whether
@@ -560,6 +578,9 @@ func logCandidate(ctx context.Context, cand actionCandidate, interval planInterv
 		planLog(ctx, selected, cand.actionName,
 			slog.Time("stepTime", interval.startTime),
 			slog.Time("vppDeadline", ld.vppDeadline),
+			slog.Int("targetSOC", cand.targetSOC),
+			slog.Float64("surplusSolarKWH", ld.surplusSolarKWH),
+			slog.Float64("solarRefillSOC", ld.solarRefillSOC),
 			slog.Float64("importRate", interval.importRate),
 			slog.Float64("roundTripEff", ld.roundTripEff),
 			slog.Float64("rechargeCost", ld.rechargeCost),
@@ -789,89 +810,92 @@ func (p *planPath) refineOverchargedEpisodes(ctx context.Context, settings types
 
 		exitSOC := states[windowEndIdx+1].soc
 		// Churn is present if the battery discharged below peakSOC during the same price block
-		if hasSameRateDischarge && exitSOC < peakSOC-socTargetTolerancePct {
-			// Target SOC needed at the end of the charge episode is exitSOC.
-			// Incorporate user profile reserve safety buffers and round up (Ceil)
-			// to guarantee the battery never enters downstream periods in deficit.
-			reserveBufferPct := settings.GetOptimizationParams().ReserveBufferPercent
-			minReserve := timeline[chargeEndIdx].minSOC + reserveBufferPct
-			targetSOCFloat := max(minReserve, exitSOC)
-			targetSOCInt := int(math.Ceil(targetSOCFloat))
-			if float64(targetSOCInt) < minReserve {
-				targetSOCInt = int(math.Ceil(minReserve))
-			}
-			if targetSOCInt > 100 {
-				targetSOCInt = 100
-			}
-
-			// 1. Cap charge intervals to targetSOCInt
-			for j := chargeStartIdx; j <= chargeEndIdx; j++ {
-				if actions[j].targetSOC == 0 {
-					actions[j].targetSOC = targetSOCInt
-				} else if actions[j].targetSOC != targetSOCInt {
-					log.Ctx(ctx).DebugContext(ctx, "encountered non-zero targetSOC during overcharge refinement",
-						slog.Time("intervalStart", timeline[j].startTime),
-						slog.String("actionName", string(actions[j].actionName)),
-						slog.Int("existingTargetSOC", actions[j].targetSOC),
-						slog.Int("refinedTargetSOC", targetSOCInt),
-					)
-					// If existing target was higher than refined target, clamp it down; never raise an existing lower cap
-					if actions[j].targetSOC > targetSOCInt {
-						actions[j].targetSOC = targetSOCInt
-					}
-				}
-			}
-
-			// 2. Convert subsequent same-price load intervals (without solar) to Standby
-			for j := chargeEndIdx + 1; j <= windowEndIdx; j++ {
-				if actions[j].batteryMode == types.BatteryModeLoad &&
-					actions[j].reason != types.ActionReasonVPPActive &&
-					actions[j].solarMode != types.SolarModeExport &&
-					timeline[j].solarKWH <= minSignificantSolarKW*timeline[j].durationHours {
-
-					sbReason, sbDesc := determineRefinedStandbyReason(chargeReason, timeline[j], timeline, j)
-					actions[j].batteryMode = types.BatteryModeStandby
-					actions[j].reason = sbReason
-					actions[j].description = sbDesc
-					actions[j].actionName = PlanActionBatteryStandby
-					actions[j].targetSOC = 0
-				}
-			}
-
-			// 3. Re-simulate physics forward from chargeStartIdx to end of horizon to update all states and metrics
-			for j := chargeStartIdx; j < len(actions) && j < len(timeline); j++ {
-				// Note: states[j] is the STARTING state entering interval j (states[j+1] is the ending state).
-				// If previous intervals already brought the battery to targetSOCInt before interval j begins,
-				// switch interval j from ChargeAny to Standby. If interval j starts below targetSOCInt,
-				// it remains ChargeAny and stepPhysics clamps the charge to targetSOCInt.
-				if j > 0 && j <= chargeEndIdx && actions[j].batteryMode == types.BatteryModeChargeAny &&
-					states[j].soc >= float64(targetSOCInt)-reserveFloorTolerancePct {
-					sbReason, sbDesc := determineRefinedStandbyReason(chargeReason, timeline[j], timeline, j)
-					actions[j].batteryMode = types.BatteryModeStandby
-					actions[j].reason = sbReason
-					actions[j].description = sbDesc
-					actions[j].actionName = PlanActionBatteryStandby
-					actions[j].targetSOC = 0
-				}
-
-				nextState, stepMetrics := stepPhysics(states[j], actions[j], timeline[j], settings, roundTripEff)
-				metrics[j] = stepMetrics
-				if j+1 < len(states) {
-					states[j+1] = nextState
-				}
-			}
-
-			adjusted = true
-			log.Ctx(ctx).DebugContext(ctx, "refined overcharged grid charge episode",
-				slog.Time("chargeStartTime", timeline[chargeStartIdx].startTime),
-				slog.Time("windowEndTime", timeline[windowEndIdx].endTime),
-				slog.Float64("chargeImportRate", chargeImportRate),
-				slog.Float64("peakSOC", peakSOC),
-				slog.Float64("exitSOC", exitSOC),
-				slog.Float64("overchargeDeltaSOC", peakSOC-exitSOC),
-				slog.Int("refinedTargetSOC", targetSOCInt),
-			)
+		if !hasSameRateDischarge || exitSOC >= peakSOC-socTargetTolerancePct {
+			i = windowEndIdx + 1
+			continue
 		}
+
+		// Target SOC needed at the end of the charge episode is exitSOC.
+		// Incorporate user profile reserve safety buffers and round up (Ceil)
+		// to guarantee the battery never enters downstream periods in deficit.
+		reserveBufferPct := settings.GetOptimizationParams().ReserveBufferPercent
+		minReserve := timeline[chargeEndIdx].minSOC + reserveBufferPct
+		targetSOCFloat := max(minReserve, exitSOC)
+		targetSOCInt := int(math.Ceil(targetSOCFloat))
+		if float64(targetSOCInt) < minReserve {
+			targetSOCInt = int(math.Ceil(minReserve))
+		}
+		if targetSOCInt > 100 {
+			targetSOCInt = 100
+		}
+
+		// 1. Cap charge intervals to targetSOCInt
+		for j := chargeStartIdx; j <= chargeEndIdx; j++ {
+			if actions[j].targetSOC == 0 {
+				actions[j].targetSOC = targetSOCInt
+			} else if actions[j].targetSOC != targetSOCInt {
+				log.Ctx(ctx).DebugContext(ctx, "encountered non-zero targetSOC during overcharge refinement",
+					slog.Time("intervalStart", timeline[j].startTime),
+					slog.String("actionName", string(actions[j].actionName)),
+					slog.Int("existingTargetSOC", actions[j].targetSOC),
+					slog.Int("refinedTargetSOC", targetSOCInt),
+				)
+				// If existing target was higher than refined target, clamp it down; never raise an existing lower cap
+				if actions[j].targetSOC > targetSOCInt {
+					actions[j].targetSOC = targetSOCInt
+				}
+			}
+		}
+
+		// 2. Convert subsequent same-price load intervals (without solar) to Standby
+		for j := chargeEndIdx + 1; j <= windowEndIdx && j < len(actions); j++ {
+			if actions[j].batteryMode == types.BatteryModeLoad &&
+				actions[j].reason != types.ActionReasonVPPActive &&
+				actions[j].solarMode != types.SolarModeExport &&
+				timeline[j].solarKWH <= minSignificantSolarKW*timeline[j].durationHours {
+
+				sbReason, sbDesc := determineRefinedStandbyReason(chargeReason, timeline[j], timeline, j)
+				actions[j].batteryMode = types.BatteryModeStandby
+				actions[j].reason = sbReason
+				actions[j].description = sbDesc
+				actions[j].actionName = PlanActionBatteryStandby
+				actions[j].targetSOC = 0
+			}
+		}
+
+		// 3. Re-simulate physics forward from chargeStartIdx to end of horizon to update all states and metrics
+		for j := chargeStartIdx; j < len(actions) && j < len(timeline); j++ {
+			// Note: states[j] is the STARTING state entering interval j (states[j+1] is the ending state).
+			// If previous intervals already brought the battery to targetSOCInt before interval j begins,
+			// switch interval j from ChargeAny to Standby. If interval j starts below targetSOCInt,
+			// it remains ChargeAny and stepPhysics clamps the charge to targetSOCInt.
+			if j > 0 && j <= chargeEndIdx && actions[j].batteryMode == types.BatteryModeChargeAny &&
+				states[j].soc >= float64(targetSOCInt)-reserveFloorTolerancePct {
+				sbReason, sbDesc := determineRefinedStandbyReason(chargeReason, timeline[j], timeline, j)
+				actions[j].batteryMode = types.BatteryModeStandby
+				actions[j].reason = sbReason
+				actions[j].description = sbDesc
+				actions[j].actionName = PlanActionBatteryStandby
+				actions[j].targetSOC = 0
+			}
+
+			nextState, stepMetrics := stepPhysics(states[j], actions[j], timeline[j], settings, roundTripEff)
+			metrics[j] = stepMetrics
+			if j+1 < len(states) {
+				states[j+1] = nextState
+			}
+		}
+
+		adjusted = true
+		log.Ctx(ctx).DebugContext(ctx, "refined overcharged grid charge episode",
+			slog.Time("chargeStartTime", timeline[chargeStartIdx].startTime),
+			slog.Time("windowEndTime", timeline[windowEndIdx].endTime),
+			slog.Float64("chargeImportRate", chargeImportRate),
+			slog.Float64("peakSOC", peakSOC),
+			slog.Float64("exitSOC", exitSOC),
+			slog.Float64("overchargeDeltaSOC", peakSOC-float64(targetSOCInt)),
+			slog.Int("refinedTargetSOC", targetSOCInt),
+		)
 
 		i = windowEndIdx + 1
 	}
@@ -1011,7 +1035,7 @@ func (c *Controller) Plan(
 	}
 
 	// 3. Scan timeline to detect fixed operational anchors (VPP deadlines and post-horizon replacement rate)
-	anchors := c.detectPlanningAnchors(timeline, futurePrices, currentStatus, settings)
+	anchors := c.detectPlanningAnchors(timeline, futurePrices, currentStatus, settings, model)
 
 	// 4. Initial battery state
 	capKWH := currentStatus.BatteryCapacityKWH
@@ -1448,6 +1472,7 @@ func (c *Controller) detectPlanningAnchors(
 	futurePrices []types.Price,
 	currentStatus types.SystemStatus,
 	settings types.Settings,
+	model map[int]TimeProfile,
 ) planningAnchors {
 	var anchors planningAnchors
 
@@ -1512,6 +1537,14 @@ func (c *Controller) detectPlanningAnchors(
 		// TODO: Approximate post-horizon pricing using site pricing historical data or time-of-day profile
 		// once site pricing data storage is optimized.
 		anchors.knownPostHorizonRate = timeline[len(timeline)-1].importRate
+	}
+
+	// Calculate forecasted post-horizon home load (across 8 hours) for two-tier terminal valuation.
+	if len(model) > 0 {
+		for h := 0; h < postHorizonLoadForecastHours; h++ {
+			t := horizonEnd.Add(time.Duration(h) * time.Hour)
+			anchors.postHorizonLoadKWH += model[t.Hour()].AvgHomeLoadKWH
+		}
 	}
 
 	// 3. Detect Peak Pricing Windows in Horizon:
@@ -1842,6 +1875,9 @@ func (c *Controller) generateActionCandidates(
 			continue
 		}
 		firmwareTakeover := vpp.eventStart.Add(-vppStandbyLeadTime)
+		if vpp.deadline.Before(firmwareTakeover) {
+			firmwareTakeover = vpp.deadline
+		}
 		if !interval.startTime.Before(firmwareTakeover) && interval.startTime.Before(vpp.eventStart) {
 			ld.vppDeadline = vpp.deadline
 			ld.vppStart = vpp.eventStart
@@ -2218,16 +2254,6 @@ func (c *Controller) generateActionCandidates(
 				}
 			}
 
-			if !hasArbitrageAhead && anchors.knownPostHorizonRate > 0 && anchors.knownPostHorizonRate-rechargeCost >= minDeficitDiff {
-				futurePeakRate = anchors.knownPostHorizonRate
-				hasArbitrageAhead = true
-				chargeReason = types.ActionReasonDeficitChargeNow
-				chargeDesc = "Pre-charging for upcoming post-horizon peak rates."
-				if len(timeline) > 0 {
-					earliestArbitrageTime = timeline[len(timeline)-1].endTime
-				}
-			}
-
 			// When both an upcoming VPP event and an upcoming arbitrage/peak rate exist, consolidate
 			// into a single BatteryModeChargeAny candidate to prevent redundant state-space expansion.
 			// Target reserve recharge: if currentSOC is below the interval's target reserve (e.g. during
@@ -2274,16 +2300,62 @@ func (c *Controller) generateActionCandidates(
 					ld.earliestArbitrageTime = earliestArbitrageTime
 				}
 
-				candidates = append(candidates, actionCandidate{
-					batteryMode: types.BatteryModeChargeAny,
-					solarMode:   defaultSolarMode,
-					reason:      selectedReason,
-					description: selectedDesc,
-					actionName:  actionName,
-					targetSOC:   selectedTargetSOC,
-					isTruePeak:  isTruePeak,
-					logData:     ld,
-				})
+				// VPP Solar Headroom Candidate:
+				// When pre-charging ahead of a VPP deadline, check if daytime rooftop solar will provide
+				// net surplus energy before the event deadline.
+				//
+				// Why this belongs in Candidate Generation rather than post-processing refinement:
+				// 1. Target SOC is an absolute battery charge ceiling, not an incremental delta. Setting a target
+				//    (e.g., 56%) across multi-hour charging windows charges the battery until it reaches
+				//    56% and then draws 0 kW of grid charge, letting incoming solar fill the rest.
+				// 2. Setting selectedTargetSOC to the solar headroom target allows the DP optimizer to simulate
+				//    charging up to the exact headroom ceiling. If free solar fills the remaining capacity,
+				//    the battery reaches 100% by the VPP deadline with 0 shortfall strikes and minimal grid import costs.
+				// 3. This keeps candidate evaluation native to the DP forward search, avoiding brittle
+				//    post-hoc plan surgery, duplicate ChargeAny candidates, and redundant simulation passes.
+				if actionName == PlanActionVPPPreChargeBeforeDeadline && nearestVPP != nil && capacityKWH > 0 {
+					var surplusSolarKWH float64
+					for k := stepIdx; k < len(timeline); k++ {
+						if !timeline[k].startTime.Before(nearestVPP.deadline) {
+							break
+						}
+						surplus := max(0.0, timeline[k].solarKWH-timeline[k].loadKWH)
+						if surplus > 0 {
+							stepCapKW := resolveBatteryPowerKW(state.maxChargeKW, capacityKWH)
+							surplusSolarKWH += min(surplus, stepCapKW*timeline[k].durationHours)
+						}
+					}
+					solarRefillSOC := (surplusSolarKWH * eff / capacityKWH) * 100.0
+					ld.surplusSolarKWH = surplusSolarKWH
+					ld.solarRefillSOC = solarRefillSOC
+					if solarRefillSOC >= 5.0 {
+						// The target entering SOC ahead of any VPP event is full capacity (100%),
+						// ensuring maximum energy is banked to export during the event down to vppSoc.
+						targetVPPSOC := vppMinFullCapacitySOC
+						reserveBufferPct := settings.GetOptimizationParams().ReserveBufferPercent
+						minReserve := interval.minSOC + reserveBufferPct
+						solarTargetSOC := int(math.Ceil(max(minReserve, targetVPPSOC-solarRefillSOC)))
+						if solarTargetSOC > 100 {
+							solarTargetSOC = 100
+						}
+						if solarTargetSOC < int(math.Round(targetVPPSOC)) {
+							selectedTargetSOC = solarTargetSOC
+						}
+					}
+				}
+
+				if selectedTargetSOC == 0 || currentSOC < float64(selectedTargetSOC) {
+					candidates = append(candidates, actionCandidate{
+						batteryMode: types.BatteryModeChargeAny,
+						solarMode:   defaultSolarMode,
+						reason:      selectedReason,
+						description: selectedDesc,
+						actionName:  actionName,
+						targetSOC:   selectedTargetSOC,
+						isTruePeak:  isTruePeak,
+						logData:     ld,
+					})
+				}
 			}
 		}
 	}
@@ -3351,6 +3423,7 @@ func (c *Controller) searchOptimalPlan(
 		modeScores:        modeBestScores,
 		modeStrikes:       modeBestStrikes,
 		bestScore:         bestOverallScore,
+		anchors:           anchors,
 	}
 
 	bestPath, _ = bestPath.refineOverchargedEpisodes(ctx, settings, roundTripEff)
@@ -3451,8 +3524,24 @@ func calculateTerminalValuation(
 		return 0.0
 	}
 
-	// 3. Ending above target reserve: credit for banked energy displacing future imports at replacement rate.
-	totalCredit := energyDeltaKWH * oneWayEff * replacementRate
+	// 3. Ending above target reserve: credit for banked energy displacing future imports.
+	// Uses a two-tier concave valuation:
+	// Tier 1: Stored energy up to the forecasted post-horizon home consumption (typically 8 hours)
+	//         displaces grid imports at the baseline replacement rate.
+	// Tier 2: Surplus energy beyond post-horizon home load is credited with a 30% discount (0.70x)
+	//         reflecting diminishing returns and future solar replenishment opportunity.
+	tier1CapacityKWH := anchors.postHorizonLoadKWH
+	if tier1CapacityKWH <= 0 {
+		tier1CapacityKWH = defaultPostHorizonLoadKWH
+	}
+
+	tier1KWH := min(energyDeltaKWH, tier1CapacityKWH)
+	tier2KWH := max(0.0, energyDeltaKWH-tier1CapacityKWH)
+
+	tier1CreditRate := replacementRate * oneWayEff
+	tier2CreditRate := tier1CreditRate * terminalSurplusDiscountFactor
+
+	totalCredit := (tier1KWH * tier1CreditRate) + (tier2KWH * tier2CreditRate)
 	return -totalCredit
 }
 

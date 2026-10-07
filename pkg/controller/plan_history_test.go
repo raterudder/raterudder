@@ -30,7 +30,7 @@ var planBaselines = map[string]float64{
 	"site4_may.json":        1.851,
 	"site4_september.json":  -4.269,
 	"site5_june.json":       18.272,
-	"site5_september.json":  46.041,
+	"site5_september.json":  47.750,
 	"site7_june.json":       30.730,
 	"site8_june.json":       -10.810,
 	"site9_september.json":  -23.550,

@@ -186,7 +186,7 @@ type VPPEvent struct {
 	Description   string    `json:"description"`
 	TSStart       time.Time `json:"tsStart"`
 	TSEnd         time.Time `json:"tsEnd"`
-	VPPSoc        float64   `json:"vppSoc"`
+	VPPSoc        float64   `json:"vppSoc"` // Minimum SOC floor the battery will drain down to during the event (can penetrate below user reserve)
 	OptOut        bool      `json:"optOut"`
 	Mandatory     bool      `json:"mandatory"`
 	DollarsPerKWH float64   `json:"dollarsPerKWH,omitempty"`
@@ -213,7 +213,7 @@ type SystemStatus struct {
 	Storms                  []Storm       `json:"storms,omitempty"`
 	VPPActive               bool          `json:"vppActive,omitempty"` // True if VPP is currently controlling
 	VPPKW                   float64       `json:"vppKW,omitempty"`     // Power going to/from the VPP
-	VPPSOC                  float64       `json:"vppSOC,omitempty"`    // VPP target SOC
+	VPPSOC                  float64       `json:"vppSOC,omitempty"`    // Active VPP minimum discharge floor SOC
 	VPPEvents               []VPPEvent    `json:"vppEvents,omitempty"`
 	ManagedTOUMode          bool          `json:"managedTouMode,omitempty"` // True if battery is operating in RateRudder-managed Time-of-Use mode
 }

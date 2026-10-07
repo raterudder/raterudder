@@ -757,7 +757,7 @@ func TestDetectPlanningAnchors(t *testing.T) {
 		}
 
 		// Default balanced profile has 20-minute VPPChargingBufferMinutes
-		anchors := c.detectPlanningAnchors(timeline, nil, status, types.Settings{})
+		anchors := c.detectPlanningAnchors(timeline, nil, status, types.Settings{}, nil)
 		require.Len(t, anchors.vppEvents, 2)
 
 		// First VPP is optional, so deadline is event start minus 20m buffer
@@ -788,7 +788,7 @@ func TestDetectPlanningAnchors(t *testing.T) {
 			},
 		}
 
-		anchors := c.detectPlanningAnchors(timeline, futurePrices, types.SystemStatus{Timestamp: now}, types.Settings{})
+		anchors := c.detectPlanningAnchors(timeline, futurePrices, types.SystemStatus{Timestamp: now}, types.Settings{}, nil)
 		assert.InDelta(t, 0.25, anchors.knownPostHorizonRate, 0.001, "must use real future price after horizon")
 	})
 
@@ -802,8 +802,26 @@ func TestDetectPlanningAnchors(t *testing.T) {
 		}
 
 		// No future prices after horizon
-		anchors := c.detectPlanningAnchors(timeline, nil, types.SystemStatus{Timestamp: now}, types.Settings{})
+		anchors := c.detectPlanningAnchors(timeline, nil, types.SystemStatus{Timestamp: now}, types.Settings{}, nil)
 		assert.InDelta(t, 0.14, anchors.knownPostHorizonRate, 0.001, "must fall back to latest timeline rate")
+	})
+
+	t.Run("PostHorizonLoadForecast", func(t *testing.T) {
+		t.Parallel()
+
+		tEnd := now.Add(6 * time.Hour)
+		timeline := []planInterval{
+			{startTime: now, endTime: tEnd, importRate: 0.10},
+		}
+
+		mockModel := make(map[int]TimeProfile)
+		for h := 0; h < 24; h++ {
+			mockModel[h] = TimeProfile{AvgHomeLoadKWH: 1.5}
+		}
+
+		anchors := c.detectPlanningAnchors(timeline, nil, types.SystemStatus{Timestamp: now}, types.Settings{}, mockModel)
+		// 8 hours * 1.5 kWh/hour = 12.0 kWh
+		assert.InDelta(t, 12.0, anchors.postHorizonLoadKWH, 0.001, "must forecast 8 hours of home consumption from model")
 	})
 
 	t.Run("PeakSurvivalBufferWindows", func(t *testing.T) {
@@ -820,7 +838,7 @@ func TestDetectPlanningAnchors(t *testing.T) {
 		settConservative := types.Settings{
 			OptimizationProfile: "conservative", // buffer = 30 mins
 		}
-		anchorsCons := c.detectPlanningAnchors(timeline, nil, types.SystemStatus{Timestamp: t0}, settConservative)
+		anchorsCons := c.detectPlanningAnchors(timeline, nil, types.SystemStatus{Timestamp: t0}, settConservative, nil)
 		require.Len(t, anchorsCons.peakWindows, 1)
 		pwCons := anchorsCons.peakWindows[0]
 		assert.Equal(t, 1, pwCons.startIndex)
@@ -833,7 +851,7 @@ func TestDetectPlanningAnchors(t *testing.T) {
 		settAggressive := types.Settings{
 			OptimizationProfile: "aggressive", // buffer = 0 mins
 		}
-		anchorsAgg := c.detectPlanningAnchors(timeline, nil, types.SystemStatus{Timestamp: t0}, settAggressive)
+		anchorsAgg := c.detectPlanningAnchors(timeline, nil, types.SystemStatus{Timestamp: t0}, settAggressive, nil)
 		require.Len(t, anchorsAgg.peakWindows, 1)
 		pwAgg := anchorsAgg.peakWindows[0]
 		// Buffer 0 mins: 0.0 kWh
@@ -842,7 +860,7 @@ func TestDetectPlanningAnchors(t *testing.T) {
 		settBalanced := types.Settings{
 			OptimizationProfile: "balanced", // buffer = 15 mins
 		}
-		anchorsBal := c.detectPlanningAnchors(timeline, nil, types.SystemStatus{Timestamp: t0}, settBalanced)
+		anchorsBal := c.detectPlanningAnchors(timeline, nil, types.SystemStatus{Timestamp: t0}, settBalanced, nil)
 		require.Len(t, anchorsBal.peakWindows, 1)
 		pwBal := anchorsBal.peakWindows[0]
 		// Buffer 15 mins: 2.0 kW * 0.25h = 0.5 kWh
@@ -2821,7 +2839,7 @@ func TestGenerateActionCandidates(t *testing.T) {
 		assert.True(t, hasStandby, "Standby must be offered when knownPostHorizonRate is significantly higher than current rate")
 	})
 
-	t.Run("PostHorizonPeak_OffersChargeAny", func(t *testing.T) {
+	t.Run("PostHorizonPeak_DoesNotOfferChargeAny", func(t *testing.T) {
 		t.Parallel()
 
 		cheapTimeline := []planInterval{
@@ -2859,10 +2877,9 @@ func TestGenerateActionCandidates(t *testing.T) {
 		for _, cand := range candidates {
 			if cand.batteryMode == types.BatteryModeChargeAny {
 				hasCharge = true
-				assert.Equal(t, types.ActionReasonDeficitChargeNow, cand.reason)
 			}
 		}
-		assert.True(t, hasCharge, "ChargeAny must be offered when knownPostHorizonRate exceeds recharge cost by minDeficitDiff")
+		assert.False(t, hasCharge, "ChargeAny must not be offered for speculative post-horizon peak rates")
 	})
 
 	t.Run("PreChargeForExport_DoesNotRequireCurrentSOCAboveReserve", func(t *testing.T) {
@@ -3643,7 +3660,7 @@ func TestSearchOptimalPlan(t *testing.T) {
 			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.10, loadKWH: 0.5, minSOC: 20},
 		}
 
-		anchors := c.detectPlanningAnchors(flatTimeline, nil, status, settings)
+		anchors := c.detectPlanningAnchors(flatTimeline, nil, status, settings, nil)
 		path, err := c.searchOptimalPlan(ctx, flatTimeline, initialState, anchors, settings, status, nil, lastAction)
 		require.NoError(t, err)
 		assert.Equal(t, types.BatteryModeStandby, path.actions[0].batteryMode)
@@ -4145,7 +4162,7 @@ func TestSearchOptimalPlan(t *testing.T) {
 			MinArbitrageDifferenceDollarsPerKWH: 0.05,
 		}
 
-		anchors := c.detectPlanningAnchors(multiArbTimeline, nil, arbStatus, arbSettings)
+		anchors := c.detectPlanningAnchors(multiArbTimeline, nil, arbStatus, arbSettings, nil)
 		path, err := c.searchOptimalPlan(ctx, multiArbTimeline, arbState, anchors, arbSettings, arbStatus, nil, nil)
 		require.NoError(t, err)
 		require.Len(t, path.actions, 4)
@@ -4215,7 +4232,7 @@ func TestSearchOptimalPlan(t *testing.T) {
 			GridChargeBatteries: true,
 		}
 
-		anchors := c.detectPlanningAnchors(peakReserveTimeline, nil, statusAt5, reserveSettings)
+		anchors := c.detectPlanningAnchors(peakReserveTimeline, nil, statusAt5, reserveSettings, nil)
 		path, err := c.searchOptimalPlan(ctx, peakReserveTimeline, stateAt5, anchors, reserveSettings, statusAt5, nil, nil)
 		require.NoError(t, err)
 		require.NotEmpty(t, path.actions)
@@ -4288,7 +4305,7 @@ func TestSearchOptimalPlan(t *testing.T) {
 				GridChargeBatteries: true,
 			}
 
-			anch := c.detectPlanningAnchors(peakTimeline, nil, sysStatus, sett)
+			anch := c.detectPlanningAnchors(peakTimeline, nil, sysStatus, sett, nil)
 			resPath, err := c.searchOptimalPlan(ctx, peakTimeline, st, anch, sett, sysStatus, nil, nil)
 			require.NoError(t, err)
 
@@ -4327,7 +4344,7 @@ func TestSearchOptimalPlan(t *testing.T) {
 				GridChargeBatteries: true,
 			}
 
-			anch := c.detectPlanningAnchors(solarTimeline, nil, sysStatus, sett)
+			anch := c.detectPlanningAnchors(solarTimeline, nil, sysStatus, sett, nil)
 			resPath, err := c.searchOptimalPlan(ctx, solarTimeline, st, anch, sett, sysStatus, nil, nil)
 			require.NoError(t, err)
 
@@ -4374,7 +4391,7 @@ func TestSearchOptimalPlan(t *testing.T) {
 				ManageTOUSchedules:  true,
 			}
 
-			anch := c.detectPlanningAnchors(exportTimeline, nil, sysStatus, sett)
+			anch := c.detectPlanningAnchors(exportTimeline, nil, sysStatus, sett, nil)
 			resPath, err := c.searchOptimalPlan(ctx, exportTimeline, st, anch, sett, sysStatus, nil, nil)
 			require.NoError(t, err)
 
@@ -4412,7 +4429,7 @@ func TestSearchOptimalPlan(t *testing.T) {
 				GridChargeBatteries: false, // Grid charging disabled
 			}
 
-			anch := c.detectPlanningAnchors(nightTimeline, nil, sysStatus, sett)
+			anch := c.detectPlanningAnchors(nightTimeline, nil, sysStatus, sett, nil)
 			resPath, err := c.searchOptimalPlan(ctx, nightTimeline, st, anch, sett, sysStatus, nil, nil)
 			require.NoError(t, err)
 			require.NotEmpty(t, resPath.actions)
@@ -4453,7 +4470,7 @@ func TestSearchOptimalPlan(t *testing.T) {
 			MinDeficitPriceDifferenceDollarsPerKWH: 0.05,
 		}
 
-		anch := c.detectPlanningAnchors(flatPriceTimeline, nil, sysStatus, sett)
+		anch := c.detectPlanningAnchors(flatPriceTimeline, nil, sysStatus, sett, nil)
 		planPath, err := c.searchOptimalPlan(ctx, flatPriceTimeline, st, anch, sett, sysStatus, nil, nil)
 		require.NoError(t, err)
 		require.NotEmpty(t, planPath.actions)
@@ -4508,7 +4525,7 @@ func TestSearchOptimalPlan(t *testing.T) {
 			},
 		}
 
-		anch := c.detectPlanningAnchors(flatPriceTimeline, nil, sysStatus, sett)
+		anch := c.detectPlanningAnchors(flatPriceTimeline, nil, sysStatus, sett, nil)
 		planPath, err := c.searchOptimalPlan(ctx, flatPriceTimeline, st, anch, sett, sysStatus, nil, lastAct)
 		require.NoError(t, err)
 		require.NotEmpty(t, planPath.actions)
@@ -4866,7 +4883,7 @@ func TestSearchOptimalPlan(t *testing.T) {
 				time:        t0,
 			}
 
-			anchors := c.detectPlanningAnchors(timeline, nil, status, sett)
+			anchors := c.detectPlanningAnchors(timeline, nil, status, sett, nil)
 			require.Len(t, anchors.peakWindows, 1)
 
 			bestPath, err := c.searchOptimalPlan(ctx, timeline, state, anchors, sett, status, nil, nil)
@@ -6581,6 +6598,97 @@ func TestPlanScenarios(t *testing.T) {
 		assert.True(t, chargedHour12, "must charge during 12:00-13:00 to satisfy 2-hour charging requirement")
 		assert.True(t, chargedHour13, "must charge during 13:00-14:00 (cheapest hour)")
 		assert.True(t, standbyAtDeadline, "must hold Standby at 14:00 deadline with battery at 100%%")
+	})
+
+	t.Run("VPPPrep_WithUpcomingSolar_ChargesOnlyToSolarHeadroomTarget", func(t *testing.T) {
+		t.Parallel()
+
+		now := time.Date(2026, 8, 15, 9, 0, 0, 0, chicagoLoc)
+		currentPrice := types.Price{
+			TSStart:              now,
+			TSEnd:                now.Add(time.Hour),
+			DollarsPerKWH:        0.06,
+			GridUseDollarsPerKWH: 0.02,
+		}
+
+		vppStart := time.Date(2026, 8, 15, 13, 0, 0, 0, chicagoLoc)
+		vppEnd := time.Date(2026, 8, 15, 15, 0, 0, 0, chicagoLoc)
+
+		var futurePrices []types.Price
+		for h := 10; h < 34; h++ {
+			rate := 0.06
+			if h >= 13 && h < 15 {
+				rate = 0.50
+			}
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:              time.Date(2026, 8, 15, h, 0, 0, 0, chicagoLoc),
+				TSEnd:                time.Date(2026, 8, 15, h+1, 0, 0, 0, chicagoLoc),
+				DollarsPerKWH:        rate,
+				GridUseDollarsPerKWH: 0.02,
+			})
+		}
+
+		// Battery starts at 20% SOC (15.0 kWh capacity, 3.0 kWh energy)
+		status := types.SystemStatus{
+			Timestamp:          now,
+			BatteryCapacityKWH: 15.0,
+			BatterySOC:         20.0,
+			MaxBatteryChargeKW: 8.0,
+			HomeKW:             0.5,
+			SolarKW:            1.0,
+			TimeLocation:       "America/Chicago",
+			VPPEvents: []types.VPPEvent{
+				{
+					TSStart:   vppStart,
+					TSEnd:     vppEnd,
+					VPPSoc:    20,
+					Mandatory: true,
+				},
+			},
+		}
+
+		// Historical baseline showing ~4.0 kWh solar per hour from 9:00 to 11:00 (before 11:00 T-2h deadline)
+		var history []types.EnergyStats
+		for d := 1; d <= 7; d++ {
+			day := now.AddDate(0, 0, -d)
+			for h := 0; h < 24; h++ {
+				solar := 0.0
+				if h >= 9 && h < 11 {
+					solar = 4.0
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart:  time.Date(day.Year(), day.Month(), day.Day(), h, 0, 0, 0, chicagoLoc),
+					HomeKWH:      0.5,
+					SolarKWH:     solar,
+					TimeLocation: "America/Chicago",
+				})
+			}
+		}
+
+		settings := types.Settings{
+			MinBatterySOC:       20,
+			GridChargeBatteries: true,
+			GridExportBatteries: true,
+		}
+
+		decision, plan, err := c.Plan(ctx, status, currentPrice, futurePrices, history, nil, settings, nil)
+		require.NoError(t, err)
+		require.NotNil(t, plan)
+
+		// Controller at 9:00 AM should charge toward the solar-headroom target (~56-65%), not 100%
+		assert.Equal(t, types.BatteryModeChargeAny, decision.Action.BatteryMode)
+		assert.LessOrEqual(t, decision.Action.ChargeToSOC, 70, "chargeToSOC must leave headroom for daytime solar")
+
+		// Verify that at VPP start (13:00), battery reaches 100% thanks to daytime solar
+		var vppPeriod *types.PlanPeriod
+		for i := range plan.Periods {
+			if plan.Periods[i].TSStart.Equal(vppStart) {
+				vppPeriod = &plan.Periods[i]
+				break
+			}
+		}
+		require.NotNil(t, vppPeriod, "VPP event period must exist in plan")
+		assert.GreaterOrEqual(t, vppPeriod.StartSOC, 99.0, "battery must reach full SOC by VPP start")
 	})
 
 	t.Run("ReturnsSimulationParams", func(t *testing.T) {
