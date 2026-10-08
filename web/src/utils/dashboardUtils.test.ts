@@ -436,10 +436,33 @@ describe('dashboardUtils', () => {
                 timestamp: '2026-07-22T04:00:00Z',
                 batteryMode: BatteryMode.ChargeAny,
                 solarMode: SolarMode.NoExport,
-                currentPrice: { dollarsPerKWH: 0.05 },
+                currentPrice: {
+                    tsStart: '2026-07-22T04:00:00Z',
+                    tsEnd: '2026-07-22T05:00:00Z',
+                    dollarsPerKWH: 0.05,
+                    gridUseDollarsPerKWH: 0
+                },
                 plan: {
+                    tsCreated: '2026-07-22T04:00:00Z',
+                    horizonHours: 2,
+                    totalProjectedCost: 0,
+                    totalExportCredits: 0,
+                    netEconomicBenefit: 0,
                     periods: [
-                        { tsStart: '2026-07-22T04:00:00Z', tsEnd: '2026-07-22T06:00:00Z', batteryMode: BatteryMode.ChargeAny, endSoc: 100 }
+                        {
+                            tsStart: '2026-07-22T04:00:00Z',
+                            tsEnd: '2026-07-22T06:00:00Z',
+                            durationHours: 2,
+                            importDollars: 0.05,
+                            batteryMode: BatteryMode.ChargeAny,
+                            solarMode: SolarMode.NoExport,
+                            reason: ActionReason.AlwaysChargeBelowThreshold,
+                            startSoc: 50,
+                            endSoc: 100,
+                            gridImportKWH: 10,
+                            gridExportKWH: 0,
+                            costDollars: 0.5
+                        }
                     ]
                 }
             };
