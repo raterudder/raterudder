@@ -616,11 +616,12 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 	}
 
 	updatedSOC := math.Round(newReserveSOC) != math.Round(currentReserveSOC)
+	updatedProfile := bat != types.BatteryModeNoChange && currentProfile != "" && currentProfile != newProfile
 	updatedChargeFromGrid := newChargeFromGrid != currentChargeFromGrid
 	disableSchedule := currentChargeFromGridScheduleEnabled
 
-	if !updatedSOC && !updatedChargeFromGrid && !disableSchedule {
-		log.Ctx(ctx).DebugContext(ctx, "no enphase reserve SOC, charge settings, or schedule updates required")
+	if !updatedSOC && !updatedProfile && !updatedChargeFromGrid && !disableSchedule {
+		log.Ctx(ctx).DebugContext(ctx, "no enphase reserve SOC, profile, charge settings, or schedule updates required")
 		return false, nil
 	}
 
@@ -649,8 +650,8 @@ func (e *Enphase) SetModes(ctx context.Context, bat types.BatteryMode, sol types
 		}
 	}
 
-	// Update batteryProfile if backup reserve SOC needs to change
-	if updatedSOC {
+	// Update batteryProfile if backup reserve SOC or profile needs to change
+	if updatedSOC || updatedProfile {
 		if e.settings.DryRun {
 			log.Ctx(ctx).InfoContext(ctx, "dry run: would've updated enphase battery profile",
 				slog.String("currentProfile", currentProfile),

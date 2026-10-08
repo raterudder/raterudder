@@ -923,6 +923,29 @@ func TestEnphase(t *testing.T) {
 		changed, err = e.SetModes(context.Background(), types.BatteryModeStandby, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err)
 		assert.True(t, changed)
+
+		// Test profile update when currentProfile is cost_savings even if reserve SOC already matches
+		postCalled = false
+		lastPayload = nil
+		putCalled = false
+		lastSettingsPut = nil
+		profileMessage = "success"
+		settingsMessage = "success"
+		settingsChargeFromGrid = true
+		settingsScheduleEnabled = false
+		settingsProfile = "cost_savings"
+		useRequestedConfig = false
+		e.settings.MinBatterySOC = 30
+		e.settings.GridChargeBatteries = true
+
+		changed, err = e.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.False(t, putCalled)
+		if assert.True(t, postCalled) {
+			assert.Equal(t, 30, lastPayload.BatteryBackupPercentage)
+			assert.Equal(t, "self-consumption", lastPayload.Usage)
+		}
 	})
 
 	t.Run("SetModes storm mode grid charge", func(t *testing.T) {

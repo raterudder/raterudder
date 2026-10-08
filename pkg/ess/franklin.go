@@ -1586,27 +1586,30 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 	}
 
 	modeChanged := modes.currentMode.WorkMode != targetMode.WorkMode
-	socChanged := (targetMode.WorkMode == franklinWorkModeSelfConsumption || targetMode.WorkMode == franklinWorkModeTimeOfUse) && math.Round(newReserveSOC) != math.Round(modes.currentMode.ReserveSOC)
+	socChanged := (targetMode.WorkMode == franklinWorkModeSelfConsumption || targetMode.WorkMode == franklinWorkModeTimeOfUse) && math.Round(newReserveSOC) != math.Round(targetMode.ReserveSOC)
 
 	if modeChanged || socChanged {
 		if f.settings.DryRun {
-			if !modeChanged {
+			if socChanged {
 				log.Ctx(ctx).DebugContext(
 					ctx,
-					"dry run: would've updated just soc",
+					"dry run: would've updated soc",
 					slog.Int("soc", int(math.Round(newReserveSOC))),
 					slog.Int("workMode", int(targetMode.WorkMode)),
 				)
-			} else {
+			}
+			if modeChanged {
 				log.Ctx(ctx).DebugContext(
 					ctx,
-					"dry run: would've tou mode",
+					"dry run: would've updated tou mode",
 					slog.Int("soc", int(math.Round(newReserveSOC))),
 					slog.Int("workMode", int(targetMode.WorkMode)),
 				)
 			}
 		} else {
-			if !modeChanged && targetMode.WorkMode == franklinWorkModeSelfConsumption {
+			// Explicitly call updateSocV2 before changing modes because updateTouModeV2
+			// does not seem to actually change the reserve SOC on the gateway hardware.
+			if socChanged {
 				log.Ctx(ctx).InfoContext(
 					ctx,
 					"updating franklin soc",
@@ -1627,7 +1630,8 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 					log.Ctx(ctx).ErrorContext(ctx, "failed to update soc", slog.Any("error", err))
 					return false, err
 				}
-			} else {
+			}
+			if modeChanged {
 				log.Ctx(ctx).InfoContext(
 					ctx,
 					"updating franklin tou mode",

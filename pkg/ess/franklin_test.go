@@ -1041,6 +1041,14 @@ func TestFranklin(t *testing.T) {
 				})
 				return
 			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/updateSocV2" {
+				callOrder = append(callOrder, "updateSocV2")
+				require.NoError(t, r.ParseForm())
+				assert.Equal(t, "2", r.Form.Get("workMode"), "workMode should be 2")
+				assert.Equal(t, "20", r.Form.Get("soc"), "soc should be 20")
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": nil})
+				return
+			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/updateTouModeV2" {
 				callOrder = append(callOrder, "updateTouModeV2")
 				require.NoError(t, r.ParseForm())
@@ -1073,9 +1081,8 @@ func TestFranklin(t *testing.T) {
 		require.NoError(t, err, "SetModes should succeed")
 		assert.True(t, changed)
 
-		// Verify the expected call was made
-		require.Len(t, callOrder, 1, "updateTouModeV2 should be called")
-		assert.Equal(t, "updateTouModeV2", callOrder[0])
+		// Verify updateSocV2 was called before updateTouModeV2
+		assert.Equal(t, []string{"updateSocV2", "updateTouModeV2"}, callOrder)
 	})
 
 	t.Run("SetModes Smart Dispatch Mode Transitions To Self-Consumption", func(t *testing.T) {
@@ -1115,6 +1122,14 @@ func TestFranklin(t *testing.T) {
 				})
 				return
 			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/updateSocV2" {
+				callOrder = append(callOrder, "updateSocV2")
+				require.NoError(t, r.ParseForm())
+				assert.Equal(t, "2", r.Form.Get("workMode"))
+				assert.Equal(t, "20", r.Form.Get("soc"))
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": nil})
+				return
+			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/updateTouModeV2" {
 				callOrder = append(callOrder, "updateTouModeV2")
 				require.NoError(t, r.ParseForm())
@@ -1140,8 +1155,7 @@ func TestFranklin(t *testing.T) {
 		changed, err := f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{})
 		require.NoError(t, err)
 		assert.True(t, changed)
-		require.Len(t, callOrder, 1)
-		assert.Equal(t, "updateTouModeV2", callOrder[0])
+		assert.Equal(t, []string{"updateSocV2", "updateTouModeV2"}, callOrder)
 	})
 
 	t.Run("SetModes Charge Fallback Backup", func(t *testing.T) {
@@ -1743,6 +1757,14 @@ func TestFranklin(t *testing.T) {
 				})
 				return
 			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/updateSocV2" {
+				callOrder = append(callOrder, "updateSocV2")
+				require.NoError(t, r.ParseForm())
+				assert.Equal(t, "2", r.Form.Get("workMode"), "should update soc for workMode 2 (self consumption)")
+				assert.Equal(t, "20", r.Form.Get("soc"), "should set reserve soc to MinBatterySOC 20")
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true})
+				return
+			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/updateTouModeV2" {
 				callOrder = append(callOrder, "updateTouModeV2")
 				require.NoError(t, r.ParseForm())
@@ -1772,13 +1794,12 @@ func TestFranklin(t *testing.T) {
 		changed, err := f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err)
 		assert.True(t, changed)
-		require.Len(t, callOrder, 1)
-		assert.Equal(t, "updateTouModeV2", callOrder[0])
+		assert.Equal(t, []string{"updateSocV2", "updateTouModeV2"}, callOrder)
 	})
 
 	t.Run("SetModes SolarExport State 1 Dispatch 1", func(t *testing.T) {
 		var saveDispatchCalled bool
-		var updateTouModeCalled bool
+		var callOrder []string
 		var savedPayload map[string]any
 		now := time.Now()
 
@@ -1831,8 +1852,16 @@ func TestFranklin(t *testing.T) {
 				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true})
 				return
 			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/updateSocV2" {
+				callOrder = append(callOrder, "updateSocV2")
+				require.NoError(t, r.ParseForm())
+				assert.Equal(t, "1", r.Form.Get("workMode"))
+				assert.Equal(t, "20", r.Form.Get("soc"))
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true})
+				return
+			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/updateTouModeV2" {
-				updateTouModeCalled = true
+				callOrder = append(callOrder, "updateTouModeV2")
 				require.NoError(t, r.ParseForm())
 				assert.Equal(t, "1", r.Form.Get("workMode"))
 				assert.Equal(t, "11111", r.Form.Get("currendId"))
@@ -1871,7 +1900,7 @@ func TestFranklin(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.True(t, saveDispatchCalled, "saveTouDispatch should be called")
-		assert.True(t, updateTouModeCalled, "updateTouModeV2 should be called")
+		assert.Equal(t, []string{"updateSocV2", "updateTouModeV2"}, callOrder)
 
 		// Verify 24h schedule strategy structure and fallback
 		strategyList, ok := savedPayload["strategyList"].([]any)
@@ -1904,7 +1933,7 @@ func TestFranklin(t *testing.T) {
 
 	t.Run("SetModes SolarExport State 2 Dispatch 2", func(t *testing.T) {
 		var saveDispatchCalled bool
-		var updateTouModeCalled bool
+		var callOrder []string
 		var savedPayload map[string]any
 		now := time.Now()
 
@@ -1973,8 +2002,17 @@ func TestFranklin(t *testing.T) {
 				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true})
 				return
 			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/updateSocV2" {
+				callOrder = append(callOrder, "updateSocV2")
+				require.NoError(t, r.ParseForm())
+				assert.Equal(t, "1", r.Form.Get("workMode"))
+				assert.Equal(t, "65", r.Form.Get("soc"), "reserve SOC should be locked to floor of current SOC")
+				currentTouSOC = 65.0
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true})
+				return
+			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/updateTouModeV2" {
-				updateTouModeCalled = true
+				callOrder = append(callOrder, "updateTouModeV2")
 				require.NoError(t, r.ParseForm())
 				assert.Equal(t, "1", r.Form.Get("workMode"))
 				assert.Equal(t, "11111", r.Form.Get("currendId"))
@@ -2015,7 +2053,7 @@ func TestFranklin(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.True(t, saveDispatchCalled, "saveTouDispatch should be called")
-		assert.True(t, updateTouModeCalled, "updateTouModeV2 should be called")
+		assert.Equal(t, []string{"updateSocV2", "updateTouModeV2"}, callOrder)
 
 		// Verify active window has dispatchId: 2 (aPower on standby)
 		strategyList, ok := savedPayload["strategyList"].([]any)
@@ -2038,13 +2076,14 @@ func TestFranklin(t *testing.T) {
 
 		// Second call: already in TOU mode, schedule matches -> saveTouDispatch skipped
 		saveDispatchCalled = false
-		updateTouModeCalled = false
+		callOrder = nil
 		changed2, err2 := f.SetModes(context.Background(), types.BatteryModeStandby, types.SolarModeExport, types.ModesOptions{
 			Schedule: sched,
 		})
 		require.NoError(t, err2)
 		assert.False(t, changed2)
 		assert.False(t, saveDispatchCalled, "saveTouDispatch should be skipped when schedule already matches and already in TOU mode")
+		assert.Empty(t, callOrder)
 	})
 
 	t.Run("SetModes Cross Midnight Dispatch", func(t *testing.T) {
@@ -2115,6 +2154,11 @@ func TestFranklin(t *testing.T) {
 			if r.URL.Path == "/hes-gateway/terminal/tou/saveTouDispatch" {
 				saveDispatchCalled = true
 				require.NoError(t, json.NewDecoder(r.Body).Decode(&savedPayload))
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/updateSocV2" {
+				currentTouSOC = 65.0
 				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true})
 				return
 			}
@@ -2272,6 +2316,10 @@ func TestFranklin(t *testing.T) {
 			if r.URL.Path == "/hes-gateway/terminal/tou/saveTouDispatch" {
 				saveDispatchCalled = true
 				require.NoError(t, json.NewDecoder(r.Body).Decode(&savedPayload))
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/updateSocV2" {
 				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true})
 				return
 			}
@@ -3794,6 +3842,14 @@ func TestFranklin(t *testing.T) {
 				})
 				return
 			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/updateSocV2" {
+				callOrder = append(callOrder, "updateSocV2")
+				require.NoError(t, r.ParseForm())
+				assert.Equal(t, "2", r.Form.Get("workMode"), "workMode should be 2")
+				assert.Equal(t, "85", r.Form.Get("soc"), "soc should be 85")
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": nil})
+				return
+			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/updateTouModeV2" {
 				callOrder = append(callOrder, "updateTouModeV2")
 				require.NoError(t, r.ParseForm())
@@ -3823,8 +3879,93 @@ func TestFranklin(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, changed)
 
-		require.Len(t, callOrder, 1)
-		assert.Equal(t, "updateTouModeV2", callOrder[0])
+		assert.Equal(t, []string{"updateSocV2", "updateTouModeV2"}, callOrder)
+	})
+
+	t.Run("SetModes TOU Transition To Self-Consumption Resets Stale Standby Reserve SOC Before Mode Switch", func(t *testing.T) {
+		var callOrder []string
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"valid":           true,
+						"currentWorkMode": 1,
+						"runtimeData": map[string]any{
+							"soc":       48.7,
+							"mode":      117109.0,
+							"timestamp": time.Now().Unix(),
+						},
+					},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
+				list := []map[string]any{
+					// Currently active TOU mode has soc=5, while Self-Consumption still has soc=69 from earlier Standby
+					{"id": 117109.0, "workMode": 1, "electricityType": 1, "soc": 5.0, "editSocFlag": true, "name": "RateRudder Dynamic Schedule"},
+					{"id": 97621.0, "workMode": 2, "electricityType": 1, "soc": 69.0, "editSocFlag": true, "name": "Self-Consumption"},
+				}
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"list": list, "currendId": 117109.0},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"gridMaxFlag": 2, "gridFeedMaxFlag": 2},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/updateSocV2" {
+				callOrder = append(callOrder, "updateSocV2")
+				require.NoError(t, r.ParseForm())
+				assert.Equal(t, "2", r.Form.Get("workMode"), "should update reserve SOC for Self-Consumption (workMode 2)")
+				assert.Equal(t, "1", r.Form.Get("electricityType"))
+				assert.Equal(t, "5", r.Form.Get("soc"), "should reset Self-Consumption reserve SOC from 69 to 5")
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": nil})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/updateTouModeV2" {
+				callOrder = append(callOrder, "updateTouModeV2")
+				require.NoError(t, r.ParseForm())
+				assert.Equal(t, "2", r.Form.Get("workMode"))
+				assert.Equal(t, "97621", r.Form.Get("currendId"))
+				assert.Equal(t, "5", r.Form.Get("soc"))
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
+				return
+			}
+			http.Error(w, "not found "+r.URL.Path, 404)
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:      ts.Client(),
+			baseURL:     ts.URL,
+			username:    "u",
+			md5Password: "p",
+			gatewayID:   "g",
+		}
+
+		err := f.ApplySettings(context.Background(), types.Settings{
+			ManageTOUSchedules: true,
+			MinBatterySOC:      5,
+		})
+		require.NoError(t, err)
+
+		changed, err := f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{MinimumSOC: 5})
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.Equal(t, []string{"updateSocV2", "updateTouModeV2"}, callOrder, "must call updateSocV2 before updateTouModeV2")
 	})
 
 	t.Run("SetModes Direct Solar Export Preserves Existing Country and Province", func(t *testing.T) {
