@@ -154,9 +154,12 @@ func (s *Server) handleHistoryEnergy(w http.ResponseWriter, r *http.Request) {
 				wr.SnowFactor = improved.SnowFactor
 				wr.Irradiance = improved.Irradiance
 			}
-			localHour := h.TSHourStart.In(loc).Hour()
-			if profile, ok := model[localHour]; ok {
-				wr.ImprovedHomeLoad = profile.AvgHomeLoadKWH
+			localHourTime := h.TSHourStart.In(loc).Truncate(time.Hour)
+			for _, profile := range model {
+				if (!profile.TSHourStart.IsZero() && profile.TSHourStart.Equal(localHourTime)) || profile.Hour == localHourTime.Hour() {
+					wr.ImprovedHomeLoad = profile.AvgHomeLoadKWH
+					break
+				}
 			}
 			dayWeather = append(dayWeather, wr)
 		}
@@ -353,34 +356,4 @@ func (s *Server) parseTimeRange(r *http.Request) (time.Time, time.Time, error) {
 	}
 
 	return start, end, nil
-}
-
-func (s *Server) handleEstimateEVCharging(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	siteID := s.getSiteID(r)
-
-	now := s.now()
-	start := now.AddDate(0, 0, -30)
-	end := now.AddDate(0, 0, 1)
-
-	dailyStats, err := s.storage.GetEnergyHistory(ctx, siteID, start, end)
-	if err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to get energy history for ev estimation", slog.String("siteID", siteID), slog.Any("error", err))
-		writeJSONError(w, "failed to get energy history", http.StatusInternalServerError)
-		return
-	}
-
-	var loc *time.Location
-	if settings, _, _, err := s.storage.GetSettings(ctx, siteID); err == nil && settings.Location != nil && settings.Location.TimeZone != "" {
-		if l, err := time.LoadLocation(settings.Location.TimeZone); err == nil {
-			loc = l
-		}
-	}
-
-	result := controller.EstimateEVCharging(dailyStats, loc)
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(result); err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to encode ev estimation result", slog.Any("error", err))
-	}
 }

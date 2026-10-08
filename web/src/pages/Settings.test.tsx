@@ -2631,6 +2631,7 @@ describe('App & Settings', () => {
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
                 release: 'production',
+evChargingStandby: undefined,
                 evChargingPeriods: undefined,
             });
             await navigateToSettings();
@@ -2646,7 +2647,7 @@ describe('App & Settings', () => {
                 (api.fetchSettings as any).mockResolvedValue({
                     ...defaultSettings,
                     release: 'production',
-                    evChargingPeriods: undefined,
+                    evChargingStandby: undefined,
                 });
                 await navigateToSettings();
                 expect(screen.getByTestId('ev-charging-section')).toBeInTheDocument();
@@ -2660,32 +2661,18 @@ describe('App & Settings', () => {
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
                 release: 'staging',
-                evChargingPeriods: undefined,
+                evChargingStandby: undefined,
             });
             await navigateToSettings();
             expect(screen.getByTestId('ev-charging-section')).toBeInTheDocument();
         });
 
-        it('toggling switch ON calls fetchEstimateEVCharging and populates default hours', async () => {
+        it('toggling switch ON enables evChargingStandby and saves without requiring charging hours', async () => {
             const user = userEvent.setup();
-            const originalLocation = window.location;
-            delete (window as any).location;
-            (window as any).location = new URL('http://localhost/settings?ev=true');
-
-            try {
-                (api.fetchSettings as any).mockResolvedValue({
+                            (api.fetchSettings as any).mockResolvedValue({
                     ...defaultSettings,
-                    release: 'production',
-                    evChargingPeriods: undefined,
-                });
-                (api.fetchEstimateEVCharging as any).mockResolvedValue({
-                    detected: true,
-                    recommendedPeriod: {
-                        name: 'Nighttime EV Charging',
-                        hours: [{ hourStart: 23, minuteStart: 0, hourEnd: 6, minuteEnd: 0 }],
-                    },
-                    estimatedRateKW: 11.5,
-                    sessionsCount: 11,
+                    release: 'staging',
+                    evChargingStandby: false,
                 });
 
                 await navigateToSettings();
@@ -2694,52 +2681,28 @@ describe('App & Settings', () => {
                 expect(evSwitch).not.toBeChecked();
 
                 await user.click(evSwitch);
+                expect(evSwitch).toBeChecked();
 
-                expect(api.fetchEstimateEVCharging).toHaveBeenCalled();
-                expect(await screen.findByText(/Auto-detected ~11.5 kW charging based on 11 recent sessions/i)).toBeInTheDocument();
+                const saveBtn = screen.getByText('Save Settings');
+            await user.click(saveBtn);
 
-                const startSelect = screen.getByRole('combobox', { name: /Start Time/i });
-                const endSelect = screen.getByRole('combobox', { name: /End Time/i });
-                expect(startSelect).toHaveTextContent('11 PM');
-                expect(endSelect).toHaveTextContent('6 AM');
-            } finally {
-                (window as any).location = originalLocation;
-            }
+            await waitFor(() => {
+                expect(api.updateSettings).toHaveBeenCalledWith(
+                    expect.objectContaining({
+                        evChargingStandby: true,
+                    }),
+                    expect.any(String),
+                    undefined
+                );
+            });
         });
 
-        it('shows warning note when auto-estimation fails to detect charging', async () => {
-            const user = userEvent.setup();
-            const originalLocation = window.location;
-            delete (window as any).location;
-            (window as any).location = new URL('http://localhost/settings?ev=true');
-
-            try {
-                (api.fetchSettings as any).mockResolvedValue({
-                    ...defaultSettings,
-                    release: 'production',
-                    evChargingPeriods: undefined,
-                });
-                (api.fetchEstimateEVCharging as any).mockResolvedValue({
-                    detected: false,
-                    message: 'No consistent nighttime EV charging detected.',
-                });
-
-                await navigateToSettings();
-
-                const evSwitch = screen.getByRole('switch', { name: /Avoid Battery for EV Charging/i });
-                await user.click(evSwitch);
-
-                expect(await screen.findByText(/couldn't detect consistent nighttime EV charging/i)).toBeInTheDocument();
-            } finally {
-                (window as any).location = originalLocation;
-            }
-        });
-
-        it('toggling switch OFF clears evChargingPeriods', async () => {
+        it('toggling switch OFF disables evChargingStandby and clears legacy evChargingPeriods', async () => {
             const user = userEvent.setup();
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
                 release: 'staging',
+evChargingStandby: true,
                 evChargingPeriods: [
                     {
                         name: 'Nighttime EV Charging',
@@ -2758,65 +2721,7 @@ describe('App & Settings', () => {
             await waitFor(() => {
                 expect(evSwitch).not.toBeChecked();
             });
-            expect(screen.queryByRole('combobox', { name: /Start Time/i })).not.toBeInTheDocument();
-        });
-
-        it('changing start and end times updates settings', async () => {
-            const user = userEvent.setup();
-            (api.fetchSettings as any).mockResolvedValue({
-                ...defaultSettings,
-                release: 'staging',
-                evChargingPeriods: [
-                    {
-                        name: 'Nighttime EV Charging',
-                        hours: [{ hourStart: 23, minuteStart: 0, hourEnd: 6, minuteEnd: 0 }],
-                    },
-                ],
-            });
-
-            await navigateToSettings();
-
-            const startSelect = screen.getByRole('combobox', { name: /Start Time/i });
-            const endSelect = screen.getByRole('combobox', { name: /End Time/i });
-
-            expect(startSelect).toHaveTextContent('11 PM');
-            expect(endSelect).toHaveTextContent('6 AM');
-
-            await user.click(startSelect);
-            const startOption = await screen.findByRole('option', { name: '12 AM' });
-            await user.click(startOption);
-
-            await user.click(endSelect);
-            const endOption = await screen.findByRole('option', { name: '4 AM' });
-            await user.click(endOption);
-
-            expect(startSelect).toHaveTextContent('12 AM');
-            expect(endSelect).toHaveTextContent('4 AM');
-        });
-
-        it('displays help dialog explaining why start and end times are required', async () => {
-            const user = userEvent.setup();
-            (api.fetchSettings as any).mockResolvedValue({
-                ...defaultSettings,
-                release: 'staging',
-                evChargingPeriods: [
-                    {
-                        name: 'Nighttime EV Charging',
-                        hours: [{ hourStart: 23, minuteStart: 0, hourEnd: 6, minuteEnd: 0 }],
-                    },
-                ],
-            });
-
-            await navigateToSettings();
-
-            const helpBtn = screen.getByRole('button', { name: /More info about EV charging hours/i });
-            expect(helpBtn).toBeInTheDocument();
-
-            await user.click(helpBtn);
-
-            expect(await screen.findByRole('heading', { name: 'Why specify charging hours?' })).toBeInTheDocument();
-            expect(screen.getByText(/High-power household appliances like air conditioners, clothes dryers, and electric ovens draw electrical loads similar to an EV charger/i)).toBeInTheDocument();
-        });
+                    });
     });
 
     describe('Direct Solar and Battery Export Management', () => {

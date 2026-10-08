@@ -1090,7 +1090,7 @@ func (c *Controller) buildPlanningTimeline(
 	weather []types.Weather,
 	settings types.Settings,
 	currentStatus types.SystemStatus,
-) ([]planInterval, types.SimulationParams, map[int]TimeProfile, error) {
+) ([]planInterval, types.SimulationParams, []TimeProfile, error) {
 	// 1. Collate pricing records
 	var allPrices []types.Price
 	if !nowPrice.TSStart.IsZero() && nowPrice.TSEnd.After(now) {
@@ -1164,10 +1164,10 @@ func (c *Controller) buildPlanningTimeline(
 
 	peakSolarHour := 12
 	var maxSolar float64
-	for hr, prof := range model {
+	for _, prof := range model {
 		if prof.AvgSolarKWH > maxSolar {
 			maxSolar = prof.AvgSolarKWH
-			peakSolarHour = hr
+			peakSolarHour = prof.Hour
 		}
 	}
 
@@ -1319,7 +1319,7 @@ func (c *Controller) buildPlanningTimeline(
 
 		durationHrs := stepEnd.Sub(currentTime).Hours()
 		h := currentTime.Hour()
-		profile := model[h]
+		profile := findTimeProfile(model, currentTime)
 
 		avgSolarKWH := profile.AvgSolarKWH
 		if optParams.SolarCapacityBufferMinutes > 0 && len(model) > 0 && h <= peakSolarHour {
@@ -1330,7 +1330,7 @@ func (c *Controller) buildPlanningTimeline(
 			prevHour := (baseHour - 1 + 24) % 24
 
 			fraction := float64(shiftMinutes) / 60.0
-			shiftedSolar := (1.0-fraction)*model[baseHour].AvgSolarKWH + fraction*model[prevHour].AvgSolarKWH
+			shiftedSolar := (1.0-fraction)*findTimeProfileByHour(model, baseHour).AvgSolarKWH + fraction*findTimeProfileByHour(model, prevHour).AvgSolarKWH
 
 			// In morning ramp up to peak solar, clamp to shifted solar to delay reaching full capacity
 			if shiftedSolar < avgSolarKWH {
@@ -1359,9 +1359,15 @@ func (c *Controller) buildPlanningTimeline(
 			}
 		}
 		// For the immediate planning interval (idx == 0), if real-time telemetry is reporting active
-		// solar generation, use live generation power * durationHrs
-		if idx == 0 && currentStatus.SolarKW > 0 {
+		// solar generation, use live generation power * durationHrs.
+		// If live solar is massively below the predicted rate (< 25%), assume the next 2 planning
+		// periods (40 minutes) are also depressed to avoid premature battery exports before the
+		// next 20-minute re-evaluation.
+		if currentStatus.SolarKW > 0 && durationHrs > 0 {
+			expectedSolarKW := solarKWH / durationHrs
+			if idx == 0 || (idx <= 2 && currentStatus.SolarKW < expectedSolarKW*0.25) {
 			solarKWH = currentStatus.SolarKW * durationHrs
+}
 		}
 
 		// Projected home load energy for this interval (kWh)
@@ -1472,7 +1478,7 @@ func (c *Controller) detectPlanningAnchors(
 	futurePrices []types.Price,
 	currentStatus types.SystemStatus,
 	settings types.Settings,
-	model map[int]TimeProfile,
+	model []TimeProfile,
 ) planningAnchors {
 	var anchors planningAnchors
 
@@ -1543,7 +1549,7 @@ func (c *Controller) detectPlanningAnchors(
 	if len(model) > 0 {
 		for h := 0; h < postHorizonLoadForecastHours; h++ {
 			t := horizonEnd.Add(time.Duration(h) * time.Hour)
-			anchors.postHorizonLoadKWH += model[t.Hour()].AvgHomeLoadKWH
+			anchors.postHorizonLoadKWH += findTimeProfile(model, t).AvgHomeLoadKWH
 		}
 	}
 
@@ -1939,15 +1945,17 @@ func (c *Controller) generateActionCandidates(
 	// starve normal household baseline self-consumption and waste battery capacity.
 	// Until reliable predictive models can forecast exactly WHICH nights an EV will charge, forward
 	// planning models baseline consumption, and real-time telemetry overrides to Standby when charging begins.
-	if stepIdx == 0 && len(settings.EVChargingPeriods) > 0 {
-		for _, period := range settings.EVChargingPeriods {
-			if inPeriod, _, _ := period.Contains(interval.startTime); inPeriod {
-				isEV, stepKW := detectEVCharging(ctx, currentStatus.HomeKW, history)
-				if isEV {
+	if stepIdx == 0 && isEVStandbyEligible(settings, interval.startTime) {
+		if isEV, stepKW := detectEVCharging(ctx, currentStatus.HomeKW, history); isEV {
 					ld.homeKW = currentStatus.HomeKW
 					ld.stepKW = stepKW
+for _, period := range settings.EVChargingPeriods {
+				if inPeriod, _, _ := period.Contains(interval.startTime); inPeriod {
 					ld.periodStart = period.Start
 					ld.periodEnd = period.End
+break
+				}
+			}
 
 					candidates = append(candidates, actionCandidate{
 						batteryMode: types.BatteryModeStandby,
@@ -1959,9 +1967,7 @@ func (c *Controller) generateActionCandidates(
 						logData:     ld,
 					})
 					return candidates
-				}
-			}
-		}
+						}
 	}
 
 	// --- PRUNING RULE 4: Negative / Free Delivered Price or AlwaysChargeThreshold ---
@@ -3754,7 +3760,7 @@ func finalizeDecisionAndPlan(
 	now time.Time,
 	settings types.Settings,
 	history []types.EnergyStats,
-	model map[int]TimeProfile,
+	model []TimeProfile,
 ) (Decision, types.Plan) {
 	if len(winningPath.actions) == 0 || len(timeline) == 0 {
 		return Decision{}, types.Plan{TSCreated: now.UTC()}
@@ -3979,7 +3985,7 @@ func solarModeString(m types.SolarMode) string {
 func calculateRecentUsageVsQ3(
 	now time.Time,
 	history []types.EnergyStats,
-	model map[int]TimeProfile,
+	model []TimeProfile,
 	loc *time.Location,
 ) (recentKWH float64, q3KWH float64, isAbnormal bool) {
 	if len(history) == 0 || loc == nil || len(model) == 0 {
@@ -4021,18 +4027,18 @@ func calculateRecentUsageVsQ3(
 	hoursCounted := 0
 	if s1.HomeKWH > 0 {
 		recentKWH += s1.HomeKWH
-		q3KWH += model[t1.Hour()].P75HomeLoadKWH
+		q3KWH += findTimeProfile(model, t1).P75HomeLoadKWH
 		hoursCounted++
 	}
 	if s2.HomeKWH > 0 {
 		recentKWH += s2.HomeKWH
-		q3KWH += model[t2.Hour()].P75HomeLoadKWH
+		q3KWH += findTimeProfile(model, t2).P75HomeLoadKWH
 		hoursCounted++
 	}
 
 	// Also check in-progress current hour if it has already exceeded Q3
 	if sCurr.HomeKWH > 0 {
-		currQ3 := model[currentHour.Hour()].P75HomeLoadKWH
+		currQ3 := findTimeProfile(model, currentHour).P75HomeLoadKWH
 		if sCurr.HomeKWH >= currQ3 && currQ3 > 0 {
 			recentKWH += sCurr.HomeKWH
 			q3KWH += currQ3

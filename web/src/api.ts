@@ -292,6 +292,7 @@ export interface Settings {
     minBatteryExportDifferenceDollarsPerKWH?: number;
     minBatterySOC: number;
     minBatterySOCPeriods?: MinBatterySOCPeriod[];
+    evChargingStandby?: boolean;
     evChargingPeriods?: TimePeriod[];
     ignoreHourUsageOverMultiple: number;
     customGridSettings?: boolean;
@@ -810,39 +811,6 @@ export const fetchActionsAndSavings = async (start: Date, end: Date, siteID?: st
     const response = await fetch(`/api/history/actionsAndSavings?${query.toString()}`);
     if (!response.ok) {
         throw new Error(await extractError(response, 'Failed to fetch actions and savings'));
-    }
-    return response.json();
-};
-
-export interface EVSession {
-    tsStartHour: string;
-    tsEndHour: string;
-    durationHr: number;
-    peakKW: number;
-    avgKW: number;
-    totalKWH: number;
-    netStepKW: number;
-}
-
-export interface EVDetectionResult {
-    detected: boolean;
-    recommendedPeriod?: TimePeriod;
-    allDetectedPeriods?: TimePeriod[];
-    estimatedRateKW?: number;
-    sessionsCount?: number;
-    sessions?: EVSession[];
-    message?: string;
-}
-
-export const fetchEstimateEVCharging = async (siteID?: string): Promise<EVDetectionResult> => {
-    const query = new URLSearchParams();
-    if (siteID) {
-        query.append('siteID', siteID);
-    }
-    const queryString = query.toString() ? `?${query.toString()}` : '';
-    const response = await fetch(`/api/history/estimateEVCharging${queryString}`);
-    if (!response.ok) {
-        throw new Error(await extractError(response, 'Failed to estimate EV charging'));
     }
     return response.json();
 };

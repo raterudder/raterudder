@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useLocation } from 'wouter';
-import { updateSettings, fetchUtilities, fetchESSList, submitESSStage, deleteSite, deleteUser, fetchUtilityPeriods, fetchEstimateEVCharging, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type ESSProviderInfo, type ESSCredentialField, type CredentialsPayload, type UserSite, type TimePeriod, type MinBatterySOCPeriod } from '../api';
+import { updateSettings, fetchUtilities, fetchESSList, submitESSStage, deleteSite, deleteUser, fetchUtilityPeriods, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type ESSProviderInfo, type ESSCredentialField, type CredentialsPayload, type UserSite, type TimePeriod, type MinBatterySOCPeriod } from '../api';
 import { Field } from '@base-ui/react/field';
 import { Input } from '@base-ui/react/input';
 import { Button } from '@base-ui/react/button';
@@ -11,7 +11,6 @@ import { Dialog } from '@base-ui/react/dialog';
 import { InterestForm } from '../components/InterestForm';
 import { HelpButton } from '../components/HelpButton';
 import { isESSEnabled } from '../utils/enabledProviders';
-import { formatHour12 } from '../utils/dashboardUtils';
 import { areSettingsEqual } from '../utils/settingsUtils';
 import './Settings.css';
 
@@ -911,10 +910,7 @@ const Settings = ({
     const [editBattery, setEditBattery] = useState(false);
     const [batteryError, setBatteryError] = useState<string | null>(null);
 
-    const isEVFeatureEnabled = settings?.release === 'staging' || (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('ev') === 'true') || (!!settings?.evChargingPeriods && settings.evChargingPeriods.length > 0);
-    const [estimatingEV, setEstimatingEV] = useState(false);
-    const [evEstimationNote, setEVEstimationNote] = useState<string | null>(null);
-    const [evEstimationError, setEVEstimationError] = useState<string | null>(null);
+    const isEVFeatureEnabled = settings?.release === 'staging' || (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('ev') === 'true') || !!settings?.evChargingStandby || (!!settings?.evChargingPeriods && settings.evChargingPeriods.length > 0);
     const hasNamedRatePeriods = utilityPeriods !== null ? utilityPeriods.some(p => p.name && p.name !== '') : true;
 
     const validateUtilityAndPeriods = async (
@@ -2454,42 +2450,13 @@ const Settings = ({
                                     <Switch.Root
                                         id="avoidBatteryForEV"
                                         className="switch-root"
-                                        checked={!!settings.evChargingPeriods && settings.evChargingPeriods.length > 0}
-                                        onCheckedChange={async (checked) => {
-                                            if (!checked) {
+                                        checked={!!settings.evChargingStandby || (!!settings.evChargingPeriods && settings.evChargingPeriods.length > 0)}
+                                        onCheckedChange={(checked) => {
+                                            handleChange('evChargingStandby', checked);
+                                            if (settings.evChargingPeriods) {
                                                 handleChange('evChargingPeriods', undefined);
-                                                setEVEstimationNote(null);
-                                                setEVEstimationError(null);
-                                                return;
-                                            }
-                                            setEstimatingEV(true);
-                                            setEVEstimationError(null);
-                                            setEVEstimationNote(null);
-                                            try {
-                                                const res = await fetchEstimateEVCharging(siteID);
-                                                if (res.detected && res.recommendedPeriod) {
-                                                    handleChange('evChargingPeriods', [res.recommendedPeriod]);
-                                                    setEVEstimationNote(`Auto-detected ~${res.estimatedRateKW} kW charging based on ${res.sessionsCount} recent sessions.`);
-                                                } else {
-                                                    const defaultPeriod: TimePeriod = {
-                                                        name: 'Nighttime EV Charging',
-                                                        hours: [{ hourStart: 23, minuteStart: 0, hourEnd: 6, minuteEnd: 0 }],
-                                                    };
-                                                    handleChange('evChargingPeriods', [defaultPeriod]);
-                                                    setEVEstimationError("We couldn't detect consistent nighttime EV charging in your recent history. Please verify your scheduled hours or leave feedback.");
                                                 }
-                                            } catch {
-                                                const defaultPeriod: TimePeriod = {
-                                                    name: 'Nighttime EV Charging',
-                                                    hours: [{ hourStart: 23, minuteStart: 0, hourEnd: 6, minuteEnd: 0 }],
-                                                };
-                                                handleChange('evChargingPeriods', [defaultPeriod]);
-                                                setEVEstimationError("Unable to analyze energy history. Please verify your scheduled hours or leave feedback.");
-                                            } finally {
-                                                setEstimatingEV(false);
-                                            }
                                         }}
-                                        disabled={estimatingEV}
                                         aria-label="Avoid Battery for EV Charging"
                                     >
                                         <Switch.Thumb className="switch-thumb" />
@@ -2497,131 +2464,9 @@ const Settings = ({
                                     <Field.Label htmlFor="avoidBatteryForEV">Avoid Battery for EV Charging</Field.Label>
                                 </div>
                                 <Field.Description>
-                                    Designed for nighttime EV charging when solar is unavailable. During the day, excess solar energy naturally powers your vehicle without depleting your home battery.
+                                    Automatically places your home battery into standby when Level 2 EV charging is detected at night (8:00 PM – 7:00 AM). EV charging can only be reliably isolated from other large household loads overnight, and this will not trigger during the day when using solar to charge your EV is desired.
                                 </Field.Description>
                             </Field.Root>
-
-                            {settings.evChargingPeriods && settings.evChargingPeriods.length > 0 && (
-                                <>
-                                    <div className="ev-time-row">
-                                        <Field.Root className="form-group compact">
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.35rem' }}>
-                                                <Field.Label htmlFor="evHourStart">EV Charging Start Time</Field.Label>
-                                                <HelpButton
-                                                    title="Why specify charging hours?"
-                                                    ariaLabel="More info about EV charging hours"
-                                                    description={
-                                                        <>
-                                                            <p>
-                                                                High-power household appliances like air conditioners, clothes dryers, and electric ovens draw electrical loads similar to an EV charger.
-                                                            </p>
-                                                            <p>
-                                                                Setting your charging window to hours when those other large loads are minimal (such as overnight) maximizes detection accuracy and prevents false triggers from other appliances.
-                                                            </p>
-                                                        </>
-                                                    }
-                                                />
-                                            </div>
-                                            <Select.Root
-                                                value={String(settings.evChargingPeriods[0]?.hours?.[0]?.hourStart ?? 23)}
-                                                onValueChange={(val) => {
-                                                    const start = parseInt(val as string, 10);
-                                                    const current = settings.evChargingPeriods![0]?.hours?.[0] || { hourStart: 23, hourEnd: 6 };
-                                                    const updated: TimePeriod = {
-                                                        name: 'Nighttime EV Charging',
-                                                        hours: [{ hourStart: start, minuteStart: 0, hourEnd: current.hourEnd, minuteEnd: 0 }],
-                                                    };
-                                                    handleChange('evChargingPeriods', [updated]);
-                                                }}
-                                            >
-                                                <Select.Trigger className="select-trigger" id="evHourStart" aria-label="EV Charging Start Time">
-                                                    <Select.Value>
-                                                        {formatHour12(settings.evChargingPeriods[0]?.hours?.[0]?.hourStart ?? 23)}
-                                                    </Select.Value>
-                                                    <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
-                                                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                                            <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                                                        </svg>
-                                                    </Select.Icon>
-                                                </Select.Trigger>
-                                                <Select.Portal>
-                                                    <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
-                                                        <Select.Popup className="select-popup">
-                                                            <Select.List>
-                                                                {Array.from({ length: 24 }, (_, i) => (
-                                                                    <Select.Item key={i} className="select-item" value={String(i)}>
-                                                                        <Select.ItemText>{formatHour12(i)}</Select.ItemText>
-                                                                    </Select.Item>
-                                                                ))}
-                                                            </Select.List>
-                                                        </Select.Popup>
-                                                    </Select.Positioner>
-                                                </Select.Portal>
-                                            </Select.Root>
-                                        </Field.Root>
-
-                                        <Field.Root className="form-group compact">
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.35rem' }}>
-                                                <Field.Label htmlFor="evHourEnd">EV Charging End Time</Field.Label>
-                                            </div>
-                                            <Select.Root
-                                                value={String(settings.evChargingPeriods[0]?.hours?.[0]?.hourEnd ?? 6)}
-                                                onValueChange={(val) => {
-                                                    const end = parseInt(val as string, 10);
-                                                    const current = settings.evChargingPeriods![0]?.hours?.[0] || { hourStart: 23, hourEnd: 6 };
-                                                    const updated: TimePeriod = {
-                                                        name: 'Nighttime EV Charging',
-                                                        hours: [{ hourStart: current.hourStart, minuteStart: 0, hourEnd: end, minuteEnd: 0 }],
-                                                    };
-                                                    handleChange('evChargingPeriods', [updated]);
-                                                }}
-                                            >
-                                                <Select.Trigger className="select-trigger" id="evHourEnd" aria-label="EV Charging End Time">
-                                                    <Select.Value>
-                                                        {formatHour12(settings.evChargingPeriods[0]?.hours?.[0]?.hourEnd ?? 6)}
-                                                    </Select.Value>
-                                                    <Select.Icon style={{ display: 'flex', alignItems: 'center' }}>
-                                                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                                            <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                                                        </svg>
-                                                    </Select.Icon>
-                                                </Select.Trigger>
-                                                <Select.Portal>
-                                                    <Select.Positioner className="select-positioner" alignItemWithTrigger={false} side="bottom" align="start" sideOffset={4}>
-                                                        <Select.Popup className="select-popup">
-                                                            <Select.List>
-                                                                {Array.from({ length: 24 }, (_, i) => (
-                                                                    <Select.Item key={i} className="select-item" value={String(i)}>
-                                                                        <Select.ItemText>{formatHour12(i)}</Select.ItemText>
-                                                                    </Select.Item>
-                                                                ))}
-                                                            </Select.List>
-                                                        </Select.Popup>
-                                                    </Select.Positioner>
-                                                </Select.Portal>
-                                            </Select.Root>
-                                        </Field.Root>
-                                    </div>
-
-                                    {estimatingEV && (
-                                        <div style={{ gridColumn: '1 / -1', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                                            Analyzing recent energy history to estimate charging schedule...
-                                        </div>
-                                    )}
-
-                                    {evEstimationNote && !estimatingEV && (
-                                        <div style={{ gridColumn: '1 / -1', color: 'var(--success-color, #10b981)', fontSize: '0.85rem', fontWeight: 500 }}>
-                                            ✓ {evEstimationNote}
-                                        </div>
-                                    )}
-
-                                    {evEstimationError && !estimatingEV && (
-                                        <div style={{ gridColumn: '1 / -1', color: 'var(--warning-color, #f59e0b)', fontSize: '0.85rem', fontWeight: 500 }}>
-                                            ⚠️ {evEstimationError}
-                                        </div>
-                                    )}
-                                </>
-                            )}
                         </div>
                     </div>
                 )}

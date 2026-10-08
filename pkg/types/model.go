@@ -295,28 +295,6 @@ type HistorySummary struct {
 	Weather      []Weather          `json:"weather"`
 }
 
-// EVSession represents a detected EV charging session.
-type EVSession struct {
-	TSStartHour time.Time `json:"tsStartHour"`
-	TSEndHour   time.Time `json:"tsEndHour"`
-	DurationHr  int       `json:"durationHr"`
-	PeakKW      float64   `json:"peakKW"`
-	AvgKW       float64   `json:"avgKW"`
-	TotalKWH    float64   `json:"totalKWH"`
-	NetStepKW   float64   `json:"netStepKW"`
-}
-
-// EVDetectionResult contains the output of EV charging estimation across history.
-type EVDetectionResult struct {
-	Detected           bool         `json:"detected"`
-	RecommendedPeriod  TimePeriod   `json:"recommendedPeriod"`
-	AllDetectedPeriods []TimePeriod `json:"allDetectedPeriods,omitempty"`
-	EstimatedRateKW    float64      `json:"estimatedRateKW"`
-	SessionsCount      int          `json:"sessionsCount"`
-	Sessions           []EVSession  `json:"sessions,omitempty"`
-	Message            string       `json:"message,omitempty"`
-}
-
 // PushSubscriptionKeys holds the client P256DH and Auth secrets from PushSubscription.toJSON().
 type PushSubscriptionKeys struct {
 	P256DH string `json:"p256dh"`

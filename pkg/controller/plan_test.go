@@ -713,6 +713,64 @@ func TestBuildPlanningTimeline(t *testing.T) {
 		require.NotNil(t, intCons15)
 		assert.InDelta(t, 4.0*(20.0/60.0), intCons15.solarKWH, 0.05, "conservative should keep unshifted solar in afternoon after peak solar")
 	})
+
+	t.Run("DepressedLiveSolar_DepressesNextTwoPeriods", func(t *testing.T) {
+		t.Parallel()
+
+		runNow := time.Date(2026, 6, 15, 12, 0, 0, 0, chicagoLoc)
+		currentPrice := types.Price{
+			TSStart:       runNow,
+			TSEnd:         runNow.Add(time.Hour),
+			DollarsPerKWH: 0.10,
+		}
+		var futurePrices []types.Price
+		for h := 13; h < 24; h++ {
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       time.Date(2026, 6, 15, h, 0, 0, 0, chicagoLoc),
+				TSEnd:         time.Date(2026, 6, 15, h+1, 0, 0, 0, chicagoLoc),
+				DollarsPerKWH: 0.10,
+			})
+		}
+
+		// 14 days of history with 6.0 kWh solar at hours 12 and 13
+		var history []types.EnergyStats
+		for d := 1; d <= 14; d++ {
+			day := runNow.Add(time.Duration(-d*24) * time.Hour)
+			for h := 0; h < 24; h++ {
+				solar := 0.0
+				if h == 12 || h == 13 {
+					solar = 6.0
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: time.Date(day.Year(), day.Month(), day.Day(), h, 0, 0, 0, chicagoLoc),
+					SolarKWH:    solar,
+					HomeKWH:     1.0,
+				})
+			}
+		}
+
+		// Live solar is 1.2 kW (< 50% of 6.0 kW predicted)
+		status := types.SystemStatus{
+			Timestamp:          runNow,
+			BatteryCapacityKWH: 13.5,
+			BatterySOC:         50,
+			SolarKW:            1.2,
+			TimeLocation:       "America/Chicago",
+		}
+
+		timeline, _, _, err := c.buildPlanningTimeline(ctx, runNow, currentPrice, futurePrices, history, nil, types.Settings{
+			OptimizationProfile: "aggressive",
+		}, status)
+		require.NoError(t, err)
+		if assert.GreaterOrEqual(t, len(timeline), 4) {
+			// idx 0 (12:00-12:20), idx 1 (12:20-12:40), idx 2 (12:40-13:00) should all be depressed to 1.2 kW * (1/3 h) = 0.4 kWh
+			assert.InDelta(t, 1.2*(20.0/60.0), timeline[0].solarKWH, 0.05)
+			assert.InDelta(t, 1.2*(20.0/60.0), timeline[1].solarKWH, 0.05)
+			assert.InDelta(t, 1.2*(20.0/60.0), timeline[2].solarKWH, 0.05)
+			// idx 3 (13:00-13:20) should return to normal predicted solar: 6.0 kW * (1/3 h) = 2.0 kWh
+			assert.InDelta(t, 6.0*(20.0/60.0), timeline[3].solarKWH, 0.05)
+		}
+	})
 }
 
 // TestDetectPlanningAnchors tests the detection of VPP deadlines, negative prices, and super-spikes.
@@ -814,9 +872,9 @@ func TestDetectPlanningAnchors(t *testing.T) {
 			{startTime: now, endTime: tEnd, importRate: 0.10},
 		}
 
-		mockModel := make(map[int]TimeProfile)
+		mockModel := make([]TimeProfile, 24)
 		for h := 0; h < 24; h++ {
-			mockModel[h] = TimeProfile{AvgHomeLoadKWH: 1.5}
+			mockModel[h] = TimeProfile{Hour: h, AvgHomeLoadKWH: 1.5}
 		}
 
 		anchors := c.detectPlanningAnchors(timeline, nil, types.SystemStatus{Timestamp: now}, types.Settings{}, mockModel)
@@ -5494,10 +5552,10 @@ func TestFinalizeDecisionAndPlan(t *testing.T) {
 
 		// Model has Q3 of 0.5 kWh for each hour (total Q3 = 1.0 kWh)
 		// Total recent load = 6.0 kWh -> delta = 5.0 kWh >= 1.0 abnormal threshold
-		model := map[int]TimeProfile{
-			12: {Hour: 12, P75HomeLoadKWH: 0.5},
-			13: {Hour: 13, P75HomeLoadKWH: 0.5},
-			14: {Hour: 14, P75HomeLoadKWH: 0.5},
+		model := []TimeProfile{
+			{Hour: 12, P75HomeLoadKWH: 0.5},
+			{Hour: 13, P75HomeLoadKWH: 0.5},
+			{Hour: 14, P75HomeLoadKWH: 0.5},
 		}
 
 		reserveStatus := types.SystemStatus{
@@ -6196,14 +6254,34 @@ func TestPlanScenarios(t *testing.T) {
 			BatteryMode: types.BatteryModeStandby,
 		}
 
-		var futurePrices []types.Price
-		for h := 15; h < 19; h++ {
-			futurePrices = append(futurePrices, types.Price{
-				TSStart:              time.Date(2026, 5, 10, h, 0, 0, 0, chicagoLoc),
-				TSEnd:                time.Date(2026, 5, 10, h+1, 0, 0, 0, chicagoLoc),
+		// Next hour rate is slightly higher (0.116 + 0.04 = 0.156 vs 0.140).
+		// Benefit of holding for next hour is 1.0 * (0.156 - 0.140) = $0.016,
+		// which is less than the duration-scaled inertia threshold ($0.01667).
+		futurePrices := []types.Price{
+			{
+				TSStart:              now.Add(time.Hour),
+				TSEnd:                now.Add(2 * time.Hour),
+				DollarsPerKWH:        0.116,
+				GridUseDollarsPerKWH: 0.04,
+			},
+			{
+				TSStart:              now.Add(2 * time.Hour),
+				TSEnd:                now.Add(3 * time.Hour),
 				DollarsPerKWH:        0.10,
 				GridUseDollarsPerKWH: 0.04,
-			})
+			},
+			{
+				TSStart:              now.Add(3 * time.Hour),
+				TSEnd:                now.Add(4 * time.Hour),
+				DollarsPerKWH:        0.10,
+				GridUseDollarsPerKWH: 0.04,
+			},
+			{
+				TSStart:              now.Add(4 * time.Hour),
+				TSEnd:                now.Add(5 * time.Hour),
+				DollarsPerKWH:        0.10,
+				GridUseDollarsPerKWH: 0.04,
+			},
 		}
 
 		decision, plan, err := c.Plan(ctx, status, currentPrice, futurePrices, nil, nil, settings, lastAction)
@@ -6236,14 +6314,31 @@ func TestPlanScenarios(t *testing.T) {
 			MinBatterySOC: 20,
 		}
 
-		var futurePrices []types.Price
-		for h := 15; h < 19; h++ {
-			futurePrices = append(futurePrices, types.Price{
-				TSStart:              time.Date(2026, 5, 10, h, 0, 0, 0, chicagoLoc),
-				TSEnd:                time.Date(2026, 5, 10, h+1, 0, 0, 0, chicagoLoc),
+		futurePrices := []types.Price{
+			{
+				TSStart:              now.Add(time.Hour),
+				TSEnd:                now.Add(2 * time.Hour),
+				DollarsPerKWH:        0.116,
+				GridUseDollarsPerKWH: 0.04,
+			},
+			{
+				TSStart:              now.Add(2 * time.Hour),
+				TSEnd:                now.Add(3 * time.Hour),
 				DollarsPerKWH:        0.10,
 				GridUseDollarsPerKWH: 0.04,
-			})
+			},
+			{
+				TSStart:              now.Add(3 * time.Hour),
+				TSEnd:                now.Add(4 * time.Hour),
+				DollarsPerKWH:        0.10,
+				GridUseDollarsPerKWH: 0.04,
+			},
+			{
+				TSStart:              now.Add(4 * time.Hour),
+				TSEnd:                now.Add(5 * time.Hour),
+				DollarsPerKWH:        0.10,
+				GridUseDollarsPerKWH: 0.04,
+			},
 		}
 
 		// Baseline: When lastAction is valid Standby, inertia maintains Standby

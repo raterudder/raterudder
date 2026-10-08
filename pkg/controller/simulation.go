@@ -278,7 +278,7 @@ func (c *Controller) SimulateState(
 			solarOppCost = price.DollarsPerKWH + price.GenerationAdjustmentDollarsPerKWH
 		}
 
-		profile := model[h]
+		profile := findTimeProfile(model, simTime)
 
 		// Determine solar trend for this hour
 		currentSolarTrend := todaySolarTrend
@@ -299,7 +299,7 @@ func (c *Controller) SimulateState(
 			prevHour := (baseHour - 1 + 24) % 24
 
 			fraction := float64(shiftMinutes) / 60.0
-			shiftedSolar := (1.0-fraction)*model[baseHour].AvgSolarKWH + fraction*model[prevHour].AvgSolarKWH
+			shiftedSolar := (1.0-fraction)*findTimeProfileByHour(model, baseHour).AvgSolarKWH + fraction*findTimeProfileByHour(model, prevHour).AvgSolarKWH
 
 			// Clamp by unshifted solar to prevent "ghost solar" after sunset
 			if profile.AvgSolarKWH < shiftedSolar {
@@ -320,7 +320,7 @@ func (c *Controller) SimulateState(
 			prevHour := (baseHour - 1 + 24) % 24
 
 			fraction := float64(shiftMinutes) / 60.0
-			shiftedSolar := (1.0-fraction)*model[baseHour].AvgSolarKWH + fraction*model[prevHour].AvgSolarKWH
+			shiftedSolar := (1.0-fraction)*findTimeProfileByHour(model, baseHour).AvgSolarKWH + fraction*findTimeProfileByHour(model, prevHour).AvgSolarKWH
 
 			// Clamp by unshifted solar to prevent "ghost solar" after sunset
 			if profile.AvgSolarKWH < shiftedSolar {
@@ -1052,13 +1052,33 @@ func (c *Controller) SimulateState(
 // It includes both the central tendency (AvgHomeLoadKWH) and the 75th percentile (P75HomeLoadKWH)
 // baseline to evaluate typical energy flow and detect atypical consumption spikes.
 type TimeProfile struct {
+	TSHourStart    time.Time
 	Hour           int
 	AvgSolarKWH    float64
 	AvgHomeLoadKWH float64
 	P75HomeLoadKWH float64
 }
 
-func (c *Controller) calculateSolarTrend(ctx context.Context, now time.Time, history []types.EnergyStats, model map[int]TimeProfile, settings types.Settings) float64 {
+func findTimeProfile(model []TimeProfile, t time.Time) TimeProfile {
+	truncT := t.Truncate(time.Hour)
+	for _, p := range model {
+		if !p.TSHourStart.IsZero() && p.TSHourStart.Equal(truncT) {
+			return p
+		}
+	}
+	return findTimeProfileByHour(model, t.Hour())
+}
+
+func findTimeProfileByHour(model []TimeProfile, hour int) TimeProfile {
+	for _, p := range model {
+		if p.Hour == hour {
+			return p
+		}
+	}
+	return TimeProfile{Hour: hour}
+}
+
+func (c *Controller) calculateSolarTrend(ctx context.Context, now time.Time, history []types.EnergyStats, model []TimeProfile, settings types.Settings) float64 {
 	if len(history) < 2 {
 		return 1.0
 	}
@@ -1111,8 +1131,8 @@ func (c *Controller) calculateSolarTrend(ctx context.Context, now time.Time, his
 	recentSolar := s1.SolarKWH + s2.SolarKWH
 
 	// Calculate model expected solar for these hours
-	m1 := model[t1.Hour()]
-	m2 := model[t2.Hour()]
+	m1 := findTimeProfile(model, t1)
+	m2 := findTimeProfile(model, t2)
 
 	modelSolar := m1.AvgSolarKWH + m2.AvgSolarKWH
 

@@ -2948,7 +2948,9 @@ func (s *Server) handleHighHomeLoadNotifications(
 		nowLocal = nowLocal.In(siteLoc)
 	}
 
-	// EV charging period suppression: if current time falls within any configured EV charging period, suppress alert
+	// TODO: Re-address suppressing high-home-load alerts specifically during detected EV charging
+	// sessions so we do not ignore all nighttime loads when EVChargingStandby defaults to on.
+	// Legacy EV charging suppression: if current time falls within any configured EV charging period, suppress alert
 	for _, period := range data.settings.EVChargingPeriods {
 		if inPeriod, _, err := period.Contains(nowLocal); err == nil && inPeriod {
 			log.Ctx(ctx).DebugContext(ctx, "skipping high home load check: within EV charging period",

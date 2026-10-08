@@ -17,10 +17,10 @@ func TestCalculateSolarTrend(t *testing.T) {
 	historyStart := now.Add(-2 * time.Hour)
 
 	// Mock model
-	model := map[int]TimeProfile{
-		11: {AvgSolarKWH: 2.0},
-		12: {AvgSolarKWH: 3.0},
-		13: {AvgSolarKWH: 4.0},
+	model := []TimeProfile{
+		{Hour: 11, AvgSolarKWH: 2.0},
+		{Hour: 12, AvgSolarKWH: 3.0},
+		{Hour: 13, AvgSolarKWH: 4.0},
 	}
 
 	settings := types.Settings{
@@ -41,10 +41,10 @@ func TestCalculateSolarTrend(t *testing.T) {
 			{TSHourStart: nightNow.Add(-1 * time.Hour), SolarKWH: 0.0},
 			{TSHourStart: nightNow.Add(-2 * time.Hour), SolarKWH: 0.0},
 		}
-		nightModel := map[int]TimeProfile{
-			0: {AvgSolarKWH: 0.0},
-			1: {AvgSolarKWH: 0.0},
-			2: {AvgSolarKWH: 0.0},
+		nightModel := []TimeProfile{
+			{Hour: 0, AvgSolarKWH: 0.0},
+			{Hour: 1, AvgSolarKWH: 0.0},
+			{Hour: 2, AvgSolarKWH: 0.0},
 		}
 		ratio := c.calculateSolarTrend(ctx, nightNow, history, nightModel, settings)
 		assert.Equal(t, 1.0, ratio)
@@ -2139,6 +2139,35 @@ func TestSimulateState(t *testing.T) {
 			// For hour 2 (which is hour 3 of the EV charge), it looks back earlier to 23:00 (1.5 kW)
 			// and uses ~1.5 kW instead of 0.1 kW site minimum!
 			assert.InDelta(t, 1.5, model[2].AvgHomeLoadKWH, 0.3)
+		})
+
+		t.Run("WithEVChargingStandby_NighttimeStandbyWithoutPeriods", func(t *testing.T) {
+			settingsStandby := types.Settings{
+				MinBatterySOC:     20.0,
+				EVChargingStandby: true,
+			}
+
+			model, _ := c.BuildHourlyEnergyModel(ctx, evNow, evHistory, nil, settingsStandby)
+			assert.LessOrEqual(t, model[0].AvgHomeLoadKWH, 2.0, "EVChargingStandby should clamp overnight EV load to baseline without EVChargingPeriods")
+
+			// Nighttime (23:00) active EV charging -> Standby
+			nightTime := time.Date(2026, 8, 20, 23, 0, 0, 0, loc)
+			nightStatus := evStatus
+			nightStatus.Timestamp = nightTime
+			nightStatus.HomeKW = 9.6
+			nightDecision := c.evaluateEVCharging(ctx, nightTime, nightStatus, evHistory, settingsStandby)
+			if assert.NotNil(t, nightDecision, "EVChargingStandby should trigger Standby at night (23:00)") {
+				assert.Equal(t, types.BatteryModeStandby, nightDecision.BatteryMode)
+				assert.Equal(t, types.ActionReasonEVChargingStandby, nightDecision.Reason)
+			}
+
+			// Daytime (13:00) active EV charging -> Must NOT trigger Standby (charging from solar is desired)
+			dayTime := time.Date(2026, 8, 20, 13, 0, 0, 0, loc)
+			dayStatus := evStatus
+			dayStatus.Timestamp = dayTime
+			dayStatus.HomeKW = 9.6
+			dayDecision := c.evaluateEVCharging(ctx, dayTime, dayStatus, evHistory, settingsStandby)
+			assert.Nil(t, dayDecision, "EVChargingStandby must not trigger Standby during daytime solar hours (13:00)")
 		})
 
 		t.Run("PriceFallback_SimulationStartsBeforeCurrentPrice", func(t *testing.T) {

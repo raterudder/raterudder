@@ -29,10 +29,9 @@ type Settings struct {
 	// What environment to opt into
 	Release string `json:"release"`
 
-	// Power History Settings
-	// What multiple over previous days to ignore when calculating power usage
+	// Deprecated: IgnoreHourUsageOverMultiple is deprecated in favor of automatic zero-config EV and load spike filtering.
 	IgnoreHourUsageOverMultiple float64 `json:"ignoreHourUsageOverMultiple"`
-	// The minimum hourly energy usage (in kWh) below which we do not filter outliers.
+	// Deprecated: IgnoreHourUsageFloorKWH is deprecated in favor of automatic zero-config EV and load spike filtering.
 	IgnoreHourUsageFloorKWH float64 `json:"ignoreHourUsageFloorKWH"`
 
 	// Utility Provider
@@ -60,8 +59,15 @@ type Settings struct {
 	// Optional variable minimum battery SOC periods (time-based or TOU period-name based).
 	MinBatterySOCPeriods []MinBatterySOCPeriod `json:"minBatterySOCPeriods,omitempty"`
 
-	// Optional EV charging periods where battery discharge is avoided.
-	// If empty/nil, feature is disabled.
+	// EVChargingStandby places the battery into standby when active Level 2 EV charging is
+	// detected at night (20:00-07:00 local time) so the home battery does not discharge into the EV.
+	// Real-time EV charging standby only operates at night (20:00-07:00) because EV charging can
+	// only be reliably isolated from normal household/HVAC loads overnight, and during the day
+	// using solar to charge the EV is assumed to be desired.
+	EVChargingStandby bool `json:"evChargingStandby,omitempty"`
+
+	// Deprecated: EVChargingPeriods is deprecated in favor of EVChargingStandby and automatic
+	// nighttime EV charging detection.
 	EVChargingPeriods []TimePeriod `json:"evChargingPeriods,omitempty"`
 
 	// Grid Settings

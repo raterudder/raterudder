@@ -2056,10 +2056,10 @@ func (c *Controller) evaluatePlannedCharge(
 	}
 }
 
-// evaluateEVCharging checks if EV charging is active within any configured EVChargingPeriods.
-// If active EV charging is detected (load >= 4.8 kW and step >= 3.5 kW above baseline),
-// it returns a DecisionResult with BatteryModeStandby and ActionReasonEVChargingStandby.
-// Otherwise, it returns nil.
+// evaluateEVCharging checks if EV charging standby is eligible (either EVChargingStandby is enabled
+// during nighttime hours 20:00-07:00, or within legacy EVChargingPeriods) and active EV charging is
+// detected (load >= 4.8 kW and step >= 3.5 kW above baseline). Real-time EV standby only triggers
+// at night and does not trigger during the day when using solar to charge the EV is desired.
 func (c *Controller) evaluateEVCharging(
 	ctx context.Context,
 	now time.Time,
@@ -2067,26 +2067,20 @@ func (c *Controller) evaluateEVCharging(
 	history []types.EnergyStats,
 	settings types.Settings,
 ) *DecisionResult {
-	if len(settings.EVChargingPeriods) == 0 {
+	if !isEVStandbyEligible(settings, now) {
 		return nil
 	}
 
-	for _, period := range settings.EVChargingPeriods {
-		inPeriod, _, err := period.Contains(now)
-		if err == nil && inPeriod {
-			if isEV, stepKW := detectEVCharging(ctx, currentStatus.HomeKW, history); isEV {
-				desc := fmt.Sprintf("EV Charging Detected (%.1fkW load, +%.1fkW step). Battery in standby.", currentStatus.HomeKW, stepKW)
-				log.Ctx(ctx).InfoContext(ctx, "ev charging detected, setting battery to standby",
-					slog.Float64("homeKW", currentStatus.HomeKW),
-					slog.Float64("stepKW", stepKW),
-					slog.String("period", period.Name),
-				)
-				return &DecisionResult{
-					BatteryMode: types.BatteryModeStandby,
-					Reason:      types.ActionReasonEVChargingStandby,
-					Description: desc,
-				}
-			}
+	if isEV, stepKW := detectEVCharging(ctx, currentStatus.HomeKW, history); isEV {
+		desc := fmt.Sprintf("EV Charging Detected (%.1fkW load, +%.1fkW step). Battery in standby.", currentStatus.HomeKW, stepKW)
+		log.Ctx(ctx).InfoContext(ctx, "ev charging detected, setting battery to standby",
+			slog.Float64("homeKW", currentStatus.HomeKW),
+			slog.Float64("stepKW", stepKW),
+		)
+		return &DecisionResult{
+			BatteryMode: types.BatteryModeStandby,
+			Reason:      types.ActionReasonEVChargingStandby,
+			Description: desc,
 		}
 	}
 

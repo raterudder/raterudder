@@ -45,7 +45,8 @@ const neighborHourWeightMultiplier = 0.5
 const neighborHourStandbyFloorMultiplier = 1.8
 
 // dayOfWeekOutlierRatioThreshold defines the minimum historical ratio of target weekday consumption
-// (morning hours 6..10 or daily average) relative to preceding days required to qualify as an outlier day.
+// (morning hours 6..10, or per-hour confirmation for afternoon/evening hours) relative to preceding days
+// required to qualify as an outlier day/hour.
 // Statistical analysis across 40 production sites showed that genuine day-of-week routines (e.g. weekend chores,
 // mid-week laundry, or work-from-home days) exhibit ratios of 1.25x to 1.90x compared to preceding days.
 const dayOfWeekOutlierRatioThreshold = 1.25
@@ -77,6 +78,24 @@ const tempSimilarityScale = 3.0
 // (at least 12 out of 24 hours) to calculate a representative 24-hour daily average temperature.
 // This prevents partial weather records (e.g. a single morning or late-night reading) from distorting the day's temperature.
 const minWeatherHoursForDailyAverage = 12
+
+// minTempSimilarityWeightSum defines the minimum cumulative exponential temperature similarity weight
+// (sum of exp(-tempDiff / 3.0)) required to consider a historical pool adequately temperature-matched.
+// Since each day within 1-2°C contributes ~0.51-0.72 weight, a sum of 1.5 corresponds to having at least
+// 2 to 3 historical days with closely matching temperatures.
+const minTempSimilarityWeightSum = 1.5
+
+// allDaysTempSimilarityDampenThreshold defines the cumulative temperature similarity weight across all valid
+// historical days (any weekday) required to dampen Option G shifts when temperature-matched and unweighted
+// weekday expectations diverge. Because matching weekdays already contribute >= 1.5 when entering that branch,
+// requiring 2.5 ensures at least ~3-5 total temperature-similar days exist across the month so the hourly
+// model's own temperature weighting already captures the weather effect.
+const allDaysTempSimilarityDampenThreshold = 2.5
+
+// weatherDrivenSurgeTempDeltaC is the minimum daily average temperature difference (2.0°C / ~3.6°F)
+// between a recent day and prior occurrences of the same weekday to classify a load increase as a
+// weather-driven HVAC surge rather than an occupancy shift (e.g. guests in town).
+const weatherDrivenSurgeTempDeltaC = 2.0
 
 // defaultStrategyPercentile represents the percentile used for the Default load prediction strategy.
 // We previously evaluated 65p (which caused +23% cost regression on normal days) and 50p (median).
@@ -149,27 +168,34 @@ const loadShiftOutlierCeilingCap = 0.55
 // while remaining far below normal human occupancy morning volatility (0.30 - 1.50+ kWh).
 const vacationMorningFlatnessStdDevCeiling = 0.15
 
+// EnergyHistoryDataset defines the JSON structure for historical energy modeling test datasets.
+type EnergyHistoryDataset struct {
+	SiteID            string                   `json:"siteID"`
+	Period            string                   `json:"period"`
+	TimeZone          string                   `json:"timeZone"`
+	SimStart          time.Time                `json:"simStart"`
+	SimEnd            time.Time                `json:"simEnd"`
+	EVChargingPeriods []types.TimePeriod       `json:"evChargingPeriods,omitempty"`
+	EnergyHistory     []types.DailyEnergyStats `json:"energyHistory"`
+	WeatherHistory    []types.Weather          `json:"weatherHistory"`
+}
+
 // recentDiffDetail stores detailed calculation values for a given recent date
 // during z-score baseline shift computation, useful for debug log inspection.
 type recentDiffDetail struct {
-	Date         string    `json:"date"`
-	ActualLoad   float64   `json:"actualLoad"`
-	ExpectedLoad float64   `json:"expectedLoad"`
-	Diff         float64   `json:"diff"`
-	SameWDValues []float64 `json:"sameWdValues"`
-}
-
-// hourPoint represents an energy load measurement at a specific date
-// for a particular hour, keeping track of its source date for debug logs.
-type hourPoint struct {
-	Date string  `json:"date"`
-	Load float64 `json:"load"`
+	Date            string    `json:"date"`
+	ActualLoadKWH   float64   `json:"actualLoadKWH"`
+	ExpectedLoadKWH float64   `json:"expectedLoadKWH"`
+	DiffKWH         float64   `json:"diffKWH"`
+	SameWDValuesKWH []float64 `json:"sameWdValuesKWH"`
 }
 
 type dayPoints struct {
-	date   string
-	loads  []float64
-	points []types.EnergyStats
+	date    string
+	dayTime time.Time
+	weekday time.Weekday
+	loads   []float64
+	points  []types.EnergyStats
 }
 
 // BuildHourlyEnergyModel averages usage and solar by hour of day from history,
@@ -183,7 +209,7 @@ func (c *Controller) BuildHourlyEnergyModel(
 	history []types.EnergyStats,
 	weather []types.Weather,
 	settings types.Settings,
-) (map[int]TimeProfile, types.SimulationParams) {
+) ([]TimeProfile, types.SimulationParams) {
 	loc := now.Location()
 	hasSpecificLocation := loc != nil && loc != time.UTC && loc.String() != ""
 
@@ -241,81 +267,117 @@ func (c *Controller) BuildHourlyEnergyModel(
 		overallAvgLoad = validLoadsSum / float64(len(validLoads))
 	}
 
-	// Index historical load by timestamp for non-EV baseline lookup
-	historyByTime := make(map[time.Time]float64, len(history))
-	for _, h := range history {
-		if !h.TSHourStart.IsZero() {
-			historyByTime[h.TSHourStart.UTC()] = h.HomeKWH
-		}
-	}
-
-	findNonEVBaseline := func(ts time.Time) float64 {
-		utcTS := ts.UTC()
-		for lookback := 1; lookback <= 12; lookback++ {
-			prevTS := utcTS.Add(-time.Duration(lookback) * time.Hour)
-			if load, exists := historyByTime[prevTS]; exists {
-				if load < EVMinThresholdKW && load > 0.05 {
-					return load
-				}
-			}
-		}
-		return standbyLoad
-	}
-
 	// Group history by calendar date string (YYYY-MM-DD) in the site's local timezone.
 	// This helps us analyze overall daily patterns and compute daily averages.
 	dayMap := make(map[string]*dayPoints)
 
 	for _, h := range history {
-		if h.TSHourStart.IsZero() {
+		if h.TSHourStart.IsZero() || h.HomeKWH <= 0.0 {
 			continue
 		}
-		dateStr := h.TSHourStart.In(getLocation(h.TimeLocation, loc)).Format("2006-01-02")
+		localTS := h.TSHourStart.In(getLocation(h.TimeLocation, loc))
+		dateStr := localTS.Format("2006-01-02")
 
 		d, exists := dayMap[dateStr]
 		if !exists {
-			d = &dayPoints{date: dateStr}
-			dayMap[dateStr] = d
-		}
-		d.points = append(d.points, h)
-		// We only consider positive, active loads (> 0.0 KWH) to filter out telemetry drops or empty hours.
-		loadVal := h.HomeKWH
-		if len(settings.EVChargingPeriods) > 0 && loadVal >= EVMinThresholdKW {
-			for _, evp := range settings.EVChargingPeriods {
-				inEVPeriod, _, err := evp.Contains(h.TSHourStart)
-				if err == nil && inEVPeriod {
-					loadVal = findNonEVBaseline(h.TSHourStart)
-					break
+			dTime, err := time.ParseInLocation("2006-01-02", dateStr, loc)
+			if err != nil {
+				log.Ctx(ctx).ErrorContext(ctx, "failed to parse dateStr", slog.String("dateStr", dateStr), slog.Any("err", err))
+			} else {
+				d = &dayPoints{
+					date:    dateStr,
+					dayTime: dTime,
+					weekday: dTime.Weekday(),
 				}
+				dayMap[dateStr] = d
 			}
 		}
-		if loadVal > 0.0 {
-			d.loads = append(d.loads, loadVal)
-		}
-	}
-
-	// Calculate daily averages for outlier detection.
-	// This average represents the baseline consumption profile of each day.
-	var dailyAverages []float64
-	dayAveragesMap := make(map[string]float64)
-	for _, d := range dayMap {
-		if len(d.loads) == 0 {
-			dayAveragesMap[d.date] = 0.0
-			dailyAverages = append(dailyAverages, 0.0)
-			continue
-		}
-		var sum float64
-		for _, l := range d.loads {
-			sum += l
-		}
-		avg := sum / float64(len(d.loads))
-		dayAveragesMap[d.date] = avg
-		dailyAverages = append(dailyAverages, avg)
+		// Copy before localizing timestamp so the caller's history slice is not mutated.
+		sanitized := h
+		sanitized.TSHourStart = localTS
+		d.points = append(d.points, sanitized)
+		d.loads = append(d.loads, h.HomeKWH)
 	}
 
 	todayStr := now.In(loc).Format("2006-01-02")
 	yesterdayStr := now.In(loc).AddDate(0, 0, -1).Format("2006-01-02")
 	currentHour := now.In(loc).Hour()
+
+	// Build mapping of temperature forecast hours for quick access during HVAC/EV outlier filtering
+	// and hourly temperature similarity weighting.
+	// Keys are normalized to UTC because Go map[time.Time] equality compares the internal *time.Location pointer.
+	weatherByHour := make(map[time.Time]float64)
+	for _, w := range weather {
+		for _, hw := range w.ForecastHours {
+			weatherByHour[hw.TSHourStart.UTC()] = hw.TemperatureC
+		}
+	}
+
+	ignoredOutlierHours, outlierRefLoad, hourBaselineRef := detectIntermittentEVAndLoadSpikes(ctx, dayMap, weatherByHour, settings, standbyLoad)
+
+	// Count how many historical days have at least 18 hours of valid load data.
+	// When history has >= 4 complete days, we require >= 18 hours for a day to participate
+	// in daily-average statistics (IQR, vacation detection, and Option G), preventing partial
+	// telemetry days from masquerading as low-load days while preserving compatibility with
+	// sparse synthetic unit tests.
+	completeHistDays := 0
+	for dateStr, d := range dayMap {
+		if dateStr != todayStr && len(d.loads) >= 18 {
+			completeHistDays++
+		}
+	}
+	isCompleteHistDay := func(dateStr string, d *dayPoints) bool {
+		if dateStr == todayStr || d == nil || len(d.loads) == 0 {
+			return false
+		}
+		if completeHistDays >= 4 && len(d.loads) < 18 {
+			return false
+		}
+		return true
+	}
+
+	// Calculate daily averages for outlier detection.
+	// Any hour flagged as an intermittent EV or load spike is replaced with its baseline reference load
+	// when computing daily averages so that a 30+ kWh EV charging session doesn't distort the entire day's
+	// average or trigger a false daily IQR outlier or Option G shift.
+	var dailyAverages []float64
+	dayAveragesMap := make(map[string]float64)
+	for _, d := range dayMap {
+		if len(d.loads) == 0 {
+			continue
+		}
+		var sum float64
+		var count int
+		for _, pt := range d.points {
+			if pt.HomeKWH <= 0.0 {
+				continue
+			}
+			val := pt.HomeKWH
+			hr := pt.TSHourStart.Hour()
+			key := dayHourKey{date: d.date, hour: hr}
+			if ignoredOutlierHours[key] {
+				if ref, ok := outlierRefLoad[key]; ok && ref > 0 {
+					val = ref
+				} else if ref, ok := hourBaselineRef[hr]; ok && ref > 0 {
+					val = ref
+				} else {
+					val = standbyLoad
+				}
+			}
+			sum += val
+			count++
+		}
+		if count == 0 {
+			continue
+		}
+		avg := sum / float64(count)
+		if isCompleteHistDay(d.date, d) {
+			dayAveragesMap[d.date] = avg
+			dailyAverages = append(dailyAverages, avg)
+		} else if d.date == todayStr {
+			dayAveragesMap[d.date] = avg
+		}
+	}
 
 	detectedShift := detectLoadShift(ctx, now, loc, dayMap, dayAveragesMap, todayStr, yesterdayStr, currentHour, standbyLoad)
 
@@ -350,24 +412,36 @@ func (c *Controller) BuildHourlyEnergyModel(
 			if detectedShift == "none" && historicalVacationDays[dateStr] {
 				continue
 			}
-			if (detectedShift != "none" && (dateStr == todayStr || dateStr == yesterdayStr)) || (avg >= lowerBound && avg <= upperBound) {
+			// When in an active vacation shift, retain today and yesterday in validDaysMap without IQR filtering.
+			if detectedShift != "none" && (dateStr == todayStr || dateStr == yesterdayStr) {
+				validDaysMap[dateStr] = true
+				continue
+			}
+			if isCompleteHistDay(dateStr, dayMap[dateStr]) && avg >= lowerBound && avg <= upperBound {
 				validDaysMap[dateStr] = true
 			}
 		}
 	} else {
 		// Fallback: If we have fewer than 4 days of history, we cannot establish standard deviation or IQR safely.
-		// Therefore, we treat all days as valid and skip IQR filtering.
+		// Therefore, we treat all complete historical days as valid and skip IQR filtering.
 		for dateStr := range dayAveragesMap {
 			if detectedShift == "none" && historicalVacationDays[dateStr] {
 				continue
 			}
-			validDaysMap[dateStr] = true
+			// When in an active vacation shift, retain today and yesterday in validDaysMap without IQR filtering.
+			if detectedShift != "none" && (dateStr == todayStr || dateStr == yesterdayStr) {
+				validDaysMap[dateStr] = true
+				continue
+			}
+			if isCompleteHistDay(dateStr, dayMap[dateStr]) {
+				validDaysMap[dateStr] = true
+			}
 		}
 	}
 
 	// Detect any days of the week that historically stand out with statistically significant higher load
 	// compared to their preceding days (e.g. weekend chore mornings, work-from-home days).
-	dayOfWeekOutliers := detectDayOfWeekOutliers(ctx, loc, dayMap, validDaysMap, todayStr)
+	dayOfWeekOutliers := detectDayOfWeekOutliers(ctx, loc, dayMap, validDaysMap, todayStr, ignoredOutlierHours)
 
 	// Calculate solar predictions using existing package functions.
 	// CalculateWeatherSolar handles forecasted temperatures and clear sky indices,
@@ -377,23 +451,30 @@ func (c *Controller) BuildHourlyEnergyModel(
 
 	var params types.SimulationParams
 
-	if len(weather) > 0 {
-		locInfo := types.SiteLocation{
-			Latitude:  weather[0].Latitude,
-			Longitude: weather[0].Longitude,
-			TimeZone:  weather[0].TimeLocation,
+	hasSolarHistory := false
+	for _, h := range history {
+		if h.SolarKWH > 0.05 {
+			hasSolarHistory = true
+			break
 		}
-		optParams := settings.GetOptimizationParams()
-		weatherSolar, params = CalculateWeatherSolar(ctx, now, history, weather, locInfo, optParams.CloudCoverDeratePercent)
-	} else {
-		smoothedSolar = CalculateSmoothedSolar(ctx, now, history, settings)
 	}
 
-	// Build mapping of temperature forecast hours for quick access during AC adjustments.
-	weatherByHour := make(map[time.Time]float64)
-	for _, w := range weather {
-		for _, hw := range w.ForecastHours {
-			weatherByHour[hw.TSHourStart.UTC()] = hw.TemperatureC
+	if hasSolarHistory {
+		if len(weather) > 0 {
+			locInfo := types.SiteLocation{
+				Latitude:  weather[0].Latitude,
+				Longitude: weather[0].Longitude,
+				TimeZone:  weather[0].TimeLocation,
+			}
+			optParams := settings.GetOptimizationParams()
+			weatherSolar, params = CalculateWeatherSolar(ctx, now, history, weather, locInfo, optParams.CloudCoverDeratePercent)
+		} else {
+			smoothedSolar = CalculateSmoothedSolar(ctx, now, history, settings)
+		}
+	} else if len(weather) > 0 {
+		params = types.SimulationParams{
+			PanelAzimuth: 180.0,
+			PanelTilt:    defaultSolarTilt,
 		}
 	}
 
@@ -487,28 +568,30 @@ func (c *Controller) BuildHourlyEnergyModel(
 	for i := 0; i < len(recentValidDates) && i < 4; i++ {
 		dStr := recentValidDates[i]
 		actualLoad := dayAveragesMap[dStr]
-		dTime, err := time.ParseInLocation("2006-01-02", dStr, loc)
-		if err == nil {
-			dWD := dTime.Weekday()
+		d := dayMap[dStr]
+		if d != nil && !d.dayTime.IsZero() {
+			dWD := d.weekday
 			targetDayTemp, hasTargetTemp := getDayAvgTemp(dStr)
 
 			var otherVals []float64
 			var otherWeights []float64
+			var otherHasTemp []bool
 			var allSameWDVals []float64
+			var sumOtherTemp float64
+			var countOtherTemp int
+			var tempSimW float64
 
 			for otherDateStr, ok := range validDaysMap {
 				// Compare this day to all OTHER days of the same weekday in history to establish baseline expectation.
-				// We exclude the day itself to prevent self-bias.
-				if ok && otherDateStr != dStr {
-					oTime, err2 := time.ParseInLocation("2006-01-02", otherDateStr, loc)
-					if err2 == nil && oTime.Weekday() == dWD {
+				// We exclude the day itself and todayStr to prevent self-bias or partial-day distortion.
+				if ok && otherDateStr != dStr && otherDateStr != todayStr {
+					od := dayMap[otherDateStr]
+					if od != nil && !od.dayTime.IsZero() && od.weekday == dWD {
 						load := dayAveragesMap[otherDateStr]
 						allSameWDVals = append(allSameWDVals, load)
 						otherDayTemp, hasOtherTemp := getDayAvgTemp(otherDateStr)
 
-						// Option G Adaptive Baseline Comparison:
-						// We evaluate historical days of the same weekday to establish the baseline expected load.
-						// We adopt Continuous Temperature-Similarity Weighting + Standby Protection:
+						// Continuous Temperature-Similarity Weighting + Standby Protection:
 						// - Why this was chosen: It achieved the lowest overall hourly MAE (0.921 kWh/hr, a 1.7%
 						//   improvement across 9,437 test hours and 40 sites) while cutting seasonal under-prediction bias by 33%.
 						//   It reuses the exponential temperature similarity function (math.Exp(-ΔT / tempSimilarityScale)),
@@ -518,11 +601,27 @@ func (c *Controller) BuildHourlyEnergyModel(
 						//   during autumn cool-downs (-52%), its hard boundary (e.g. 3.4°C vs 3.6°C) introduced threshold step
 						//   discontinuities and higher hourly MAE (0.927 kWh/hr) compared to continuous similarity weighting.
 						w := 1.0
-						if hasTargetTemp && hasOtherTemp {
+						hasBothTemp := hasTargetTemp && hasOtherTemp
+						if hasBothTemp {
 							w = math.Exp(-math.Abs(targetDayTemp-otherDayTemp) / tempSimilarityScale)
+							sumOtherTemp += otherDayTemp
+							countOtherTemp++
+							tempSimW += w
 						}
 						otherVals = append(otherVals, load)
 						otherWeights = append(otherWeights, w)
+						otherHasTemp = append(otherHasTemp, hasBothTemp)
+					}
+				}
+			}
+
+			// When some prior occurrences of this weekday have weather and others do not, scale missing-weather
+			// days by the average temperature similarity weight rather than leaving them at 1.0 (0°C match).
+			if hasTargetTemp && countOtherTemp > 0 && countOtherTemp < len(otherWeights) {
+				avgW := tempSimW / float64(countOtherTemp)
+				for idx := range otherWeights {
+					if !otherHasTemp[idx] {
+						otherWeights[idx] = avgW
 					}
 				}
 			}
@@ -537,14 +636,41 @@ func (c *Controller) BuildHourlyEnergyModel(
 				sumWeightedLoad += val * w
 			}
 
-			// sumW represents the effective sample size (N_eff = ∑ w_i) of temperature-similar historical days,
-			// where each matching weekday's weight w_i ∈ (0, 1] decays exponentially with temperature delta.
-			// A threshold of 1.5 ensures we have the statistical equivalent of at least 1.5 closely matching days
-			// (or 3-4 days within ~3°C) before trusting the weighted expected load.
-			// Below 1.5, temperature history is too sparse, so we fall back to the unweighted weekday average
-			// while suppressing negative shifts to avoid double-counting seasonal drops already captured by avgLoadA.
-			if sumW >= 1.5 {
+			// Sum temperature similarity weights across all valid historical days (regardless of weekday).
+			// Because the hourly model (avgLoadA) pulls from both same-weekday history and recentValidDates
+			// and weights every point by exp(-tempDiff / 3.0), a high allDaysSimW indicates that avgLoadA
+			// already has similar-temperature days to model weather-driven load changes without Option G
+			// applying a redundant shift on top.
+			var allDaysSimW float64
+			if hasTargetTemp {
+				for otherDateStr, ok := range validDaysMap {
+					if ok && otherDateStr != dStr && otherDateStr != todayStr {
+						if otherTemp, hasOT := getDayAvgTemp(otherDateStr); hasOT {
+							allDaysSimW += math.Exp(-math.Abs(targetDayTemp-otherTemp) / tempSimilarityScale)
+						}
+					}
+				}
+			}
+
+			hasSufficientTempMatch := (!hasTargetTemp && sumW >= minTempSimilarityWeightSum) || (hasTargetTemp && tempSimW >= minTempSimilarityWeightSum)
+			if hasSufficientTempMatch && sumW > 0 {
 				expectedLoad = sumWeightedLoad / sumW
+				// When the broader historical pool has ample temperature-matching days (allDaysSimW >= 2.5,
+				// ~3-5 days with closely matching temperatures) and the temperature-weighted expectation
+				// exceeds the unweighted weekday average by >15%, the recent day's elevated load is
+				// primarily weather-driven and already captured by avgLoadA's hourly temperature weighting.
+				// Blending expectedLoad halfway toward actualLoad dampens the residual diff so Option G
+				// does not double-count the weather effect.
+				if hasTargetTemp && len(allSameWDVals) > 0 && allDaysSimW >= allDaysTempSimilarityDampenThreshold {
+					var sumOther float64
+					for _, ov := range allSameWDVals {
+						sumOther += ov
+					}
+					unweightedExpected := sumOther / float64(len(allSameWDVals))
+					if math.Abs(expectedLoad-unweightedExpected) > 0.15*unweightedExpected && actualLoad > unweightedExpected {
+						expectedLoad = 0.5*expectedLoad + 0.5*actualLoad
+					}
+				}
 				hasExpected = true
 			} else if len(allSameWDVals) > 0 {
 				var sumOther float64
@@ -552,14 +678,34 @@ func (c *Controller) BuildHourlyEnergyModel(
 					sumOther += ov
 				}
 				unweightedExpected := sumOther / float64(len(allSameWDVals))
-				// When matching temperature data is insufficient but weather is active,
-				// do not apply a negative shift if the load drop was already accounted for by temperature.
+				// Fallback when prior occurrences of this exact weekday did not have sufficient temperature-matched
+				// history (tempSimW < 1.5, which only occurs when prior same-weekday temperatures were far from
+				// targetDayTemp or fewer than 2 prior occurrences of this weekday had weather):
+				// - If actualLoad <= unweightedExpected (a cool-day load drop), setting expectedLoad = actualLoad
+				//   produces diff = 0 so seasonal cooling does not trigger a downward shift.
+				// - If actualLoad > unweightedExpected, we check whether the surge is weather-driven:
+				//   (a) this day's temperature differed by >= 2.0°C from the mean of prior same-weekday temperatures, OR
+				//   (b) other weekdays in history had similar temperatures (allDaysSimW >= 1.5) so the hourly model's
+				//       temperature weighting already accounts for this temperature regime.
+				//   Only non-weather surges keep expectedLoad = unweightedExpected so Option G shifts upward.
 				if hasTargetTemp && len(weather) > 0 {
 					if actualLoad > unweightedExpected {
-						expectedLoad = unweightedExpected
+						isWeatherDrivenSurge := false
+						if countOtherTemp > 0 {
+							meanOtherTemp := sumOtherTemp / float64(countOtherTemp)
+							if math.Abs(targetDayTemp-meanOtherTemp) >= weatherDrivenSurgeTempDeltaC {
+								isWeatherDrivenSurge = true
+							}
+						}
+						if allDaysSimW >= minTempSimilarityWeightSum {
+							isWeatherDrivenSurge = true
+						}
+						if !isWeatherDrivenSurge {
+							expectedLoad = unweightedExpected
+						} else {
+							expectedLoad = actualLoad
+						}
 					} else {
-						// Seasonal drop is already accounted for by temperature similarity in avgLoadA.
-						// The unexplained difference is zero, preventing false negative shifts while retaining the day in variance calculations.
 						expectedLoad = actualLoad
 					}
 					hasExpected = true
@@ -574,11 +720,11 @@ func (c *Controller) BuildHourlyEnergyModel(
 				diffs = append(diffs, diff)
 
 				recentDiffDetails = append(recentDiffDetails, recentDiffDetail{
-					Date:         dStr,
-					ActualLoad:   actualLoad,
-					ExpectedLoad: expectedLoad,
-					Diff:         diff,
-					SameWDValues: otherVals,
+					Date:            dStr,
+					ActualLoadKWH:   actualLoad,
+					ExpectedLoadKWH: expectedLoad,
+					DiffKWH:         diff,
+					SameWDValuesKWH: otherVals,
 				})
 			}
 		}
@@ -590,9 +736,9 @@ func (c *Controller) BuildHourlyEnergyModel(
 	scaleG := 0.0
 	appliedShift := 0.0
 
-	// We require at least 3 valid diff days to calculate a meaningful variance and z-score.
-	// An isolated anomalous day (e.g. sporadic EV charging) must never trigger an adaptive baseline shift.
-	if len(diffs) >= 3 {
+	// We require at least 3 valid diff days to calculate a meaningful variance and z-score,
+	// and only apply Option G when not in an active vacation load shift.
+	if detectedShift == "none" && len(diffs) >= 3 {
 		var sumDiff float64
 		for _, diff := range diffs {
 			sumDiff += diff
@@ -626,7 +772,11 @@ func (c *Controller) BuildHourlyEnergyModel(
 		slog.Any("recentDiffDetails", recentDiffDetails),
 	)
 
-	result := make(map[int]TimeProfile)
+	var rawAvgLoadA [24]float64
+	var rawP75LoadA [24]float64
+	var rawSolar [24]float64
+	var hasHour [24]bool
+	var targetTimes [24]time.Time
 
 	// Predict hourly profile for each hour of the upcoming 24-hour cycle.
 	for h := 0; h < 24; h++ {
@@ -642,23 +792,20 @@ func (c *Controller) BuildHourlyEnergyModel(
 		if targetTime.IsZero() {
 			continue
 		}
+		hasHour[h] = true
+		targetTimes[h] = targetTime
 		wd := targetTime.Weekday()
 
-		// We attempt to gather historical days matching the exact weekday (Option A).
-		//
-		// Why len(selectedDayDatesA) < 3:
-		// If we have fewer than 3 matching weekdays (e.g., we only have 1 or 2 Fridays in history),
-		// the average is highly susceptible to single-day noise.
-		//
-		// Cascade:
-		// 1. Same Weekday (ideal).
-		// 2. Weekend vs Weekday Grouping (if < 3 same weekdays, we pull in all weekend days if target is weekend,
-		//    or all weekdays if target is weekday).
-		// 3. All Valid Days (if weekend/weekday group still has < 3 days).
+		// Build the Option A (same-weekday) historical date pool for target weekday wd.
+		// To compute a stable weighted percentile without being skewed by a single noisy day,
+		// we require at least 3 historical days in the base pool:
+		// - Primary: all valid historical dates matching the exact target weekday wd (e.g. all Tuesdays).
+		// - Fallback 1 (if < 3 exact weekday matches, e.g. short history or filtered vacation/outlier days):
+		//   expand to all valid days in the same day-type category (Weekend: Sat+Sun, or Weekday: Mon..Fri).
+		// - Fallback 2 (if still < 3 days): use all valid historical days regardless of weekday.
 		var selectedDayDatesA []string
 		for dateStr := range validDaysMap {
-			dayTime, err := time.ParseInLocation("2006-01-02", dateStr, loc)
-			if err == nil && dayTime.Weekday() == wd {
+			if d := dayMap[dateStr]; d != nil && !d.dayTime.IsZero() && d.weekday == wd {
 				selectedDayDatesA = append(selectedDayDatesA, dateStr)
 			}
 		}
@@ -666,9 +813,8 @@ func (c *Controller) BuildHourlyEnergyModel(
 			var fallbackDates []string
 			isWeekend := wd == time.Saturday || wd == time.Sunday
 			for dateStr := range validDaysMap {
-				dayTime, err := time.ParseInLocation("2006-01-02", dateStr, loc)
-				if err == nil {
-					wday := dayTime.Weekday()
+				if d := dayMap[dateStr]; d != nil && !d.dayTime.IsZero() {
+					wday := d.weekday
 					fallbackWeekend := wday == time.Saturday || wday == time.Sunday
 					if isWeekend == fallbackWeekend {
 						fallbackDates = append(fallbackDates, dateStr)
@@ -686,97 +832,9 @@ func (c *Controller) BuildHourlyEnergyModel(
 			}
 		}
 
-		// Gather historical energy data points for hour h on the selected days,
-		// preserving the date metadata for detailed outlier logging.
-		var pointsA []hourPoint
-		for _, dateStr := range selectedDayDatesA {
-			d := dayMap[dateStr]
-			if d == nil {
-				continue
-			}
-			for _, pt := range d.points {
-				if pt.TSHourStart.In(loc).Hour() == h {
-					pointsA = append(pointsA, hourPoint{Date: dateStr, Load: pt.HomeKWH})
-				}
-			}
-		}
-
-		floor := settings.IgnoreHourUsageFloorKWH
-		if floor == 0 {
-			floor = 0.5
-		}
-
-		// Filter points and log ignored outliers using pairwise comparison.
-		// NOTE: Pairwise outlier filtering is disabled as it is redundant under the new weighted
-		// percentile (50p/median) model. The median is naturally robust against single-point load spikes
-		// (e.g. oven, EV charging), whereas filtering runs the risk of discarding genuine heatwave A/C load spikes.
-		var validPointsA []hourPoint
-		if false && len(pointsA) >= 3 && settings.IgnoreHourUsageOverMultiple > 1 {
-			var outlierIdx []int
-			for i, p := range pointsA {
-				isOutlier := true
-				for j, other := range pointsA {
-					if i == j {
-						continue
-					}
-					limit := max(other.Load, floor) * settings.IgnoreHourUsageOverMultiple
-					if p.Load <= limit {
-						isOutlier = false
-						break
-					}
-				}
-				if isOutlier {
-					outlierIdx = append(outlierIdx, i)
-				}
-			}
-
-			if len(outlierIdx) == 1 {
-				// We found exactly one outlier, ignore it
-				log.Ctx(ctx).DebugContext(
-					ctx,
-					"ignoring hourly outlier data point in improved model",
-					slog.Int("hour", h),
-					slog.String("weekday", wd.String()),
-					slog.String("date", pointsA[outlierIdx[0]].Date),
-					slog.Float64("outlierLoad", pointsA[outlierIdx[0]].Load),
-					slog.Float64("floor", floor),
-					slog.Float64("multiple", settings.IgnoreHourUsageOverMultiple),
-					slog.Any("rawPoints", pointsA),
-				)
-				validPointsA = make([]hourPoint, 0, len(pointsA)-1)
-				for i, pt := range pointsA {
-					if i != outlierIdx[0] {
-						validPointsA = append(validPointsA, pt)
-					}
-				}
-			} else {
-				validPointsA = pointsA
-			}
-		} else {
-			validPointsA = pointsA
-		}
-
-		// Keep track of any matching-weekday date that was excluded as an hourly outlier
-		excludedDates := make(map[string]bool)
-		if len(pointsA) != len(validPointsA) {
-			for _, p := range pointsA {
-				found := false
-				for _, vp := range validPointsA {
-					if vp.Date == p.Date {
-						found = true
-						break
-					}
-				}
-				if !found {
-					excludedDates[p.Date] = true
-					break
-				}
-			}
-		}
-
-		// 1. Build de-duplicated set of dates combining matching weekdays and recent 7 days.
-		// De-duplicating via map ensures that matching weekdays which also happen to fall
-		// within the last week are not double-counted (which would skew weight percentiles).
+		// Build de-duplicated set of dates combining matching weekdays and recent 7 days.
+		// We always keep recentValidDates (even on day-of-week outlier days) so the model remains
+		// responsive to vacations or guests in town, relying on weight multipliers rather than excluding recent days.
 		selectedDatesMap := make(map[string]bool)
 		for _, dateStr := range selectedDayDatesA {
 			selectedDatesMap[dateStr] = true
@@ -784,22 +842,20 @@ func (c *Controller) BuildHourlyEnergyModel(
 		for _, dateStr := range recentValidDates {
 			selectedDatesMap[dateStr] = true
 		}
-
-		// 2. Build temperature lookup map
-		tempByHour := make(map[time.Time]float64)
-		for _, w := range weather {
-			for _, hw := range w.ForecastHours {
-				tempByHour[hw.TSHourStart.UTC()] = hw.TemperatureC
-			}
+		if dToday := dayMap[todayStr]; dToday != nil && len(dToday.loads) > 0 {
+			selectedDatesMap[todayStr] = true
 		}
 
 		// Target weather time and temperature for current hour h
-		targetTimeHr := time.Date(targetTime.Year(), targetTime.Month(), targetTime.Day(), h, 0, 0, 0, loc).UTC()
-		targetTemp, hasTargetTemp := tempByHour[targetTimeHr]
+		targetTimeHr := targetTime.Truncate(time.Hour).UTC()
+		targetTemp, hasTargetTemp := weatherByHour[targetTimeHr]
 
-		// 3. Gather points at hours h, h-1, h+1 on all selected dates.
+		// Gather points at hours h, h-1, h+1 on all selected dates.
 		// We gather neighboring hours to account for daily variations in household activity timing.
 		var pts []weightedPoint
+		var ptHasTemp []bool
+		var sumTempMult float64
+		var countTempMult int
 		maxHistTemp := -999.0
 		hasHistTempForHour := false
 
@@ -809,44 +865,131 @@ func (c *Controller) BuildHourlyEnergyModel(
 		}
 		sort.Strings(sortedSelectedDates)
 
+		prevHr := (h - 1 + 24) % 24
+		nextHr := (h + 1) % 24
+		isMorning := h >= 6 && h <= 11
+		// Morning hours use the day-level morning outlier flag; non-morning hours require per-hour
+		// confirmation (ratio >= 1.25 and Welch's t >= 1.70) so weekday surges that continue into
+		// the afternoon/evening also receive the 3x same-weekday boost without penalizing recency.
+		isOutlierHour := detectedShift == "none" && isMorning && dayOfWeekOutliers[wd]
+		if detectedShift == "none" && !isMorning && dayOfWeekOutliers[wd] {
+			var sameWDHourLoads, otherWDHourLoads []float64
+			for vDateStr, ok := range validDaysMap {
+				if !ok || vDateStr == todayStr {
+					continue
+				}
+				vd := dayMap[vDateStr]
+				if vd == nil || vd.dayTime.IsZero() {
+					continue
+				}
+				for _, pt := range vd.points {
+					if pt.HomeKWH > 0.0 && pt.TSHourStart.Hour() == h && !ignoredOutlierHours[dayHourKey{date: vDateStr, hour: h}] {
+						if vd.weekday == wd {
+							sameWDHourLoads = append(sameWDHourLoads, pt.HomeKWH)
+						} else {
+							otherWDHourLoads = append(otherWDHourLoads, pt.HomeKWH)
+						}
+					}
+				}
+			}
+			if len(sameWDHourLoads) >= 3 && len(otherWDHourLoads) >= 6 {
+				if getMean(sameWDHourLoads) >= math.Max(0.1, getMean(otherWDHourLoads))*dayOfWeekOutlierRatioThreshold &&
+					calculateWelchT(sameWDHourLoads, otherWDHourLoads) >= dayOfWeekOutlierTStatThreshold {
+					isOutlierHour = true
+				}
+			}
+		}
+
 		for _, dateStr := range sortedSelectedDates {
 			if detectedShift == "none" && historicalVacationDays[dateStr] {
 				continue
 			}
 			d := dayMap[dateStr]
-			if d == nil {
+			if d == nil || d.dayTime.IsZero() {
 				continue
 			}
-			dTime, err := time.ParseInLocation("2006-01-02", dateStr, loc)
-			if err != nil {
-				continue
-			}
+			dTime := d.dayTime
 			ageDays := int(targetTime.Sub(dTime).Hours() / 24)
 			if ageDays < 0 {
 				ageDays = 0
 			}
 
-			// Base weight based on age decay
+			// Base weight based on age decay.
 			var baseWeight float64
-			isMorning := h >= 6 && h <= 11
-			isOutlierDay := detectedShift == "none" && isMorning && dayOfWeekOutliers[wd]
 
 			if detectedShift != "none" {
 				baseWeight = math.Pow(loadShiftRecencyDecay, float64(ageDays))
-				if dTime.Weekday() == wd {
+				if d.weekday == wd {
 					baseWeight *= sameWeekdayWeightMultiplier
 				}
-			} else if dTime.Weekday() == wd {
+			} else if d.weekday == wd {
 				ageWeeks := float64(ageDays) / 7.0
 				sameWdMultiplier := sameWeekdayWeightMultiplier
-				if isOutlierDay {
+				if isOutlierHour {
 					sameWdMultiplier *= dayOfWeekOutlierWeightMultiplier
 				}
 				baseWeight = math.Pow(sameWeekdayWeeklyDecay, ageWeeks) * sameWdMultiplier
 			} else {
 				baseWeight = math.Pow(homeLoadPredictionRecencyDecay, float64(ageDays))
-				if isOutlierDay {
+				// Down-weight non-matching weekdays only in the morning so afternoon/evening recency stays intact.
+				if isOutlierHour && isMorning {
 					baseWeight *= dayOfWeekOutlierDownWeightMultiplier
+				}
+			}
+
+			addCandidatePoint := func(pt types.EnergyStats, ptDateStr string, hpLocalHour int, mult float64) {
+				if mult <= 0 || pt.HomeKWH <= 0.0 || ignoredOutlierHours[dayHourKey{date: ptDateStr, hour: hpLocalHour}] {
+					return
+				}
+				finalWeight := baseWeight * mult
+				hasTemp := false
+				if hasTargetTemp {
+					ptTime := pt.TSHourStart.Truncate(time.Hour).UTC()
+					if histTemp, hasHistTemp := weatherByHour[ptTime]; hasHistTemp {
+						tempDiff := math.Abs(targetTemp - histTemp)
+						tempMult := math.Exp(-tempDiff / tempSimilarityScale)
+						finalWeight *= tempMult
+						hasTemp = true
+						sumTempMult += tempMult
+						countTempMult++
+
+						// Track the maximum temperature in history for this exact hour (excluding h-1/h+1 neighbors)
+						if hpLocalHour == h && histTemp > maxHistTemp {
+							maxHistTemp = histTemp
+							hasHistTempForHour = true
+						}
+					}
+				}
+				pts = append(pts, weightedPoint{
+					Value:  pt.HomeKWH,
+					Weight: finalWeight,
+				})
+				ptHasTemp = append(ptHasTemp, hasTemp)
+			}
+
+			neighborMult := func(hpLocalHour int, loadKWH float64) float64 {
+				if h >= 6 && h <= 11 && hpLocalHour < 9 && loadKWH <= standbyLoad*neighborHourStandbyFloorMultiplier {
+					return 0.0
+				}
+				return neighborHourWeightMultiplier
+			}
+
+			// For h == 0 and h == 23, look up the true chronological neighbor on the adjacent calendar day
+			// (23:00 on d-1 or 00:00 on d+1). We exclude todayStr when looking forward from yesterday's 23:00
+			// so incomplete today data does not bleed into historical days, and never wrap h == 0 or h == 23
+			// to the opposite end (23 hours away) of the same day.
+			var prevDayPoints *dayPoints
+			if h == 0 {
+				prevDateStr := dTime.AddDate(0, 0, -1).Format("2006-01-02")
+				if !(detectedShift == "none" && historicalVacationDays[prevDateStr]) {
+					prevDayPoints = dayMap[prevDateStr]
+				}
+			}
+			var nextDayPoints *dayPoints
+			if h == 23 {
+				nextDateStr := dTime.AddDate(0, 0, 1).Format("2006-01-02")
+				if nextDateStr != todayStr && !(detectedShift == "none" && historicalVacationDays[nextDateStr]) {
+					nextDayPoints = dayMap[nextDateStr]
 				}
 			}
 
@@ -854,75 +997,54 @@ func (c *Controller) BuildHourlyEnergyModel(
 				if pt.HomeKWH <= 0.0 {
 					continue
 				}
-				hpLocalHour := pt.TSHourStart.In(getLocation(pt.TimeLocation, loc)).Hour()
-
-				// Calculate hour position weight multiplier.
-				// We blend adjacent hours (h-1, h+1) with a 0.50 multiplier, and the exact hour h with 1.0.
-				// We use modulo arithmetic ((h - 1 + 24) % 24) to properly wrap boundary conditions at midnight/noon.
-				mult := 0.0
+				hpLocalHour := pt.TSHourStart.Hour()
 				if hpLocalHour == h {
-					// Check if this point was excluded as an hourly outlier during same-weekday outlier filtering
-					if excludedDates[dateStr] {
+					addCandidatePoint(pt, d.date, hpLocalHour, 1.0)
+				} else if hpLocalHour == prevHr && h > 0 {
+					addCandidatePoint(pt, d.date, hpLocalHour, neighborMult(hpLocalHour, pt.HomeKWH))
+				} else if hpLocalHour == nextHr && h < 23 {
+					addCandidatePoint(pt, d.date, hpLocalHour, neighborMult(hpLocalHour, pt.HomeKWH))
+				}
+			}
+
+			if h == 0 && prevDayPoints != nil {
+				for _, pt := range prevDayPoints.points {
+					if pt.HomeKWH <= 0.0 {
 						continue
 					}
-					mult = 1.0
-				} else {
-					prevHr := (h - 1 + 24) % 24
-					nextHr := (h + 1) % 24
-					if hpLocalHour == prevHr || hpLocalHour == nextHr {
-						// Neighbor hours with low standby/sleep usage (during overnight/early morning sleep hours)
-						// are excluded from blending into morning waking hours to prevent sleep dilution.
-						if h >= 6 && h <= 11 && hpLocalHour < 9 && pt.HomeKWH <= standbyLoad*neighborHourStandbyFloorMultiplier {
-							mult = 0.0
-						} else {
-							mult = neighborHourWeightMultiplier
-						}
+					hpLocalHour := pt.TSHourStart.Hour()
+					if hpLocalHour == 23 {
+						addCandidatePoint(pt, prevDayPoints.date, hpLocalHour, neighborMult(hpLocalHour, pt.HomeKWH))
 					}
 				}
-
-				if mult > 0 {
-					finalWeight := baseWeight * mult
-
-					// Apply temperature similarity weight.
-					// Compares forecasted temperature for target hour h with actual temperature at historical point.
-					// Narrows similarity scale to penalize temperature deviations exponentially,
-					// ensuring historical cool days get virtually zero weight during a hot summer heatwave.
-					if hasTargetTemp {
-						ptTime := time.Date(dTime.Year(), dTime.Month(), dTime.Day(), hpLocalHour, 0, 0, 0, loc).UTC()
-						if histTemp, hasHistTemp := tempByHour[ptTime]; hasHistTemp {
-							tempDiff := math.Abs(targetTemp - histTemp)
-							finalWeight *= math.Exp(-tempDiff / tempSimilarityScale)
-
-							// Track the maximum temperature in history for this exact hour
-							if hpLocalHour == h {
-								if histTemp > maxHistTemp {
-									maxHistTemp = histTemp
-									hasHistTempForHour = true
-								}
-							}
-						}
+			}
+			if h == 23 && nextDayPoints != nil {
+				for _, pt := range nextDayPoints.points {
+					if pt.HomeKWH <= 0.0 {
+						continue
 					}
-
-					loadVal := pt.HomeKWH
-					if len(settings.EVChargingPeriods) > 0 && loadVal >= EVMinThresholdKW {
-						for _, evp := range settings.EVChargingPeriods {
-							inEVPeriod, _, err := evp.Contains(pt.TSHourStart)
-							if err == nil && inEVPeriod {
-								loadVal = findNonEVBaseline(pt.TSHourStart)
-								break
-							}
-						}
+					hpLocalHour := pt.TSHourStart.Hour()
+					if hpLocalHour == 0 {
+						addCandidatePoint(pt, nextDayPoints.date, hpLocalHour, neighborMult(hpLocalHour, pt.HomeKWH))
 					}
-
-					pts = append(pts, weightedPoint{
-						Value:  loadVal,
-						Weight: finalWeight,
-					})
 				}
 			}
 		}
 
-		// 4. Compute weighted percentile of the gathered points
+		// When no points have weather (countTempMult == 0), no temperature multiplier is applied (1.0x).
+		// When some historical days have weather and others do not, leaving missing-weather points at 1.0x
+		// would treat them as a perfect 0°C match (exp(0) == 1.0) and over-weight them by 2x-5x relative to
+		// weather-penalized points. Scaling by avgTempMult keeps missing-weather days neutral.
+		if hasTargetTemp && countTempMult > 0 && countTempMult < len(pts) {
+			avgTempMult := sumTempMult / float64(countTempMult)
+			for i := range pts {
+				if !ptHasTemp[i] {
+					pts[i].Weight *= avgTempMult
+				}
+			}
+		}
+
+		// Compute weighted percentile of the gathered points
 		pct := defaultStrategyPercentile
 		switch settings.HomeLoadPredictionStrategy {
 		case "conservative", "70p":
@@ -942,6 +1064,11 @@ func (c *Controller) BuildHourlyEnergyModel(
 		if len(pts) > 0 {
 			avgLoadA = getWeightedPercentile(pts, pct)
 			p75LoadA = getWeightedPercentile(pts, 0.75)
+		} else if ref, ok := hourBaselineRef[h]; ok && ref > 0 {
+			// If all candidate days in the selected pool were filtered out as EV/spike outliers for hour h,
+			// fall back to the cross-day 30th-percentile baseline reference for this hour.
+			avgLoadA = ref
+			p75LoadA = ref
 		} else {
 			// Sparse history fallback: when no historical points exist for this specific hour,
 			// fall back to the site's overall average load rather than collapsing to standby refrigerator floor.
@@ -968,18 +1095,37 @@ func (c *Controller) BuildHourlyEnergyModel(
 			avgSolar = smoothedSolar[h]
 		}
 
+		rawAvgLoadA[h] = avgLoadA
+		rawP75LoadA[h] = p75LoadA
+		rawSolar[h] = avgSolar
+	}
+
+	var sumActiveLoadA float64
+	var activeHourCount int
+	for h := 0; h < 24; h++ {
+		if hasHour[h] {
+			sumActiveLoadA += max(0.0, rawAvgLoadA[h]-standbyLoad)
+			activeHourCount++
+		}
+	}
+	dayMeanActiveLoadA := 0.0
+	if activeHourCount > 0 {
+		dayMeanActiveLoadA = sumActiveLoadA / float64(activeHourCount)
+	}
+
+	result := make([]TimeProfile, 24)
+	for h := 0; h < 24; h++ {
+		if !hasHour[h] {
+			result[h] = TimeProfile{Hour: h}
+			continue
+		}
+		avgLoadA := rawAvgLoadA[h]
+		p75LoadA := rawP75LoadA[h]
+
 		// Apply the adaptive shift derived via Option G.
-		//
-		// Standby Floor Protection:
-		// standbyLoad represents the site's empirical, 24/7 idle base draw (refrigerator, router, electronics,
-		// HVAC control boards) measured at the 1st percentile of non-zero usage.
-		// When an adaptive shift is negative (e.g. during vacations or lifestyle reductions), subtracting uniformly
-		// across all 24 hours would subtract power from 3 AM idle load where no discretionary consumption exists,
-		// forcing overnight hours down to an artificial 0.9 * standbyLoad clamp (creating an artificial flat line on the UI).
-		// Applying negative shifts strictly to active load (load above standbyLoad) ensures that:
-		// 1) The empirical standby idle floor is physically protected.
-		// 2) The natural overnight diurnal curve is preserved.
-		// 3) Reductions come from active daytime hours where power was actually cut.
+		// Negative shifts subtract strictly from active load above standbyLoad to protect the empirical standby floor.
+		// Positive shifts are weighted proportionally to each hour's active load share so overnight sleeping hours
+		// are not artificially inflated by daytime/evening load shifts.
 		var finalHomeLoadACAdj, finalP75HomeLoad float64
 		if appliedShift < 0 {
 			activeAvg := max(0.0, avgLoadA-standbyLoad)
@@ -987,13 +1133,19 @@ func (c *Controller) BuildHourlyEnergyModel(
 			finalHomeLoadACAdj = standbyLoad + max(0.0, activeAvg+appliedShift)
 			finalP75HomeLoad = standbyLoad + max(0.0, activeP75+appliedShift)
 		} else {
-			finalHomeLoadACAdj = max(0.9*standbyLoad, avgLoadA+appliedShift)
-			finalP75HomeLoad = max(0.9*standbyLoad, p75LoadA+appliedShift)
+			shiftWeight := 1.0
+			if dayMeanActiveLoadA > 0.1 {
+				activeAvg := max(0.0, avgLoadA-standbyLoad)
+				shiftWeight = min(1.5, activeAvg/dayMeanActiveLoadA)
+			}
+			finalHomeLoadACAdj = max(0.9*standbyLoad, avgLoadA+appliedShift*shiftWeight)
+			finalP75HomeLoad = max(0.9*standbyLoad, p75LoadA+appliedShift*shiftWeight)
 		}
 
 		result[h] = TimeProfile{
+			TSHourStart:    targetTimes[h],
 			Hour:           h,
-			AvgSolarKWH:    avgSolar,
+			AvgSolarKWH:    rawSolar[h],
 			AvgHomeLoadKWH: finalHomeLoadACAdj,
 			P75HomeLoadKWH: finalP75HomeLoad,
 		}
@@ -1023,8 +1175,36 @@ func getStdDev(values []float64) float64 {
 	return std
 }
 
+func getPopulationStdDev(values []float64) float64 {
+	if len(values) == 0 {
+		return 0.0
+	}
+	mean := getMean(values)
+	var sumSqDiff float64
+	for _, val := range values {
+		sumSqDiff += (val - mean) * (val - mean)
+	}
+	return math.Sqrt(sumSqDiff / float64(len(values)))
+}
+
+func getHomeKWHPointsStdDev(points []types.EnergyStats) float64 {
+	if len(points) == 0 {
+		return 0.0
+	}
+	var sum float64
+	for _, p := range points {
+		sum += p.HomeKWH
+	}
+	avg := sum / float64(len(points))
+	var varSum float64
+	for _, p := range points {
+		varSum += (p.HomeKWH - avg) * (p.HomeKWH - avg)
+	}
+	return math.Sqrt(varSum / float64(len(points)))
+}
+
 // detectDayOfWeekOutliers identifies which days of the week (Sunday..Saturday) historically exhibit
-// a statistically significant increase in morning (6:00 to 11:00) or daily energy usage compared to
+// a statistically significant increase in morning (6:00 to 10:59) energy usage compared to
 // their preceding days (ratio >= dayOfWeekOutlierRatioThreshold and t-stat >= 1.70).
 func detectDayOfWeekOutliers(
 	ctx context.Context,
@@ -1032,16 +1212,15 @@ func detectDayOfWeekOutliers(
 	dayMap map[string]*dayPoints,
 	validDaysMap map[string]bool,
 	todayStr string,
+	ignoredOutlierHours map[dayHourKey]bool,
 ) map[time.Weekday]bool {
 	outliers := make(map[time.Weekday]bool)
 
-	// Precompute morning (6:00 to 10:59 local) and daily averages for each valid historical day.
+	// Precompute morning (6:00 to 10:59 local) averages for each valid historical day.
 	type dayStats struct {
-		wd       time.Weekday
-		mornAvg  float64
-		dailyAvg float64
-		hasMorn  bool
-		hasDay   bool
+		wd      time.Weekday
+		mornAvg float64
+		hasMorn bool
 	}
 	statsByDate := make(map[string]*dayStats)
 
@@ -1060,16 +1239,15 @@ func detectDayOfWeekOutliers(
 
 		mornSum := 0.0
 		mornCount := 0
-		daySum := 0.0
-		dayCount := 0
 
 		for _, pt := range d.points {
 			if pt.HomeKWH <= 0.0 {
 				continue
 			}
 			hr := pt.TSHourStart.In(loc).Hour()
-			daySum += pt.HomeKWH
-			dayCount++
+			if ignoredOutlierHours[dayHourKey{date: dateStr, hour: hr}] {
+				continue
+			}
 			if hr >= 6 && hr <= 10 {
 				mornSum += pt.HomeKWH
 				mornCount++
@@ -1077,10 +1255,6 @@ func detectDayOfWeekOutliers(
 		}
 
 		ds := &dayStats{wd: dTime.Weekday()}
-		if dayCount >= 18 {
-			ds.dailyAvg = daySum / float64(dayCount)
-			ds.hasDay = true
-		}
 		if mornCount >= 3 {
 			ds.mornAvg = mornSum / float64(mornCount)
 			ds.hasMorn = true
@@ -1095,37 +1269,27 @@ func detectDayOfWeekOutliers(
 		p2 := time.Weekday((wdInt - 2 + 7) % 7)
 
 		var targetMorn, prevMorn []float64
-		var targetDay, prevDay []float64
 
 		for _, ds := range statsByDate {
 			if ds.wd == wd {
 				if ds.hasMorn {
 					targetMorn = append(targetMorn, ds.mornAvg)
 				}
-				if ds.hasDay {
-					targetDay = append(targetDay, ds.dailyAvg)
-				}
 			} else if ds.wd == p1 || ds.wd == p2 {
 				if ds.hasMorn {
 					prevMorn = append(prevMorn, ds.mornAvg)
-				}
-				if ds.hasDay {
-					prevDay = append(prevDay, ds.dailyAvg)
 				}
 			}
 		}
 
 		// Sunday special case: also test against Thursday + Friday to capture weekend routines
 		// where Saturday is also high.
-		var precMornSunTF, precDaySunTF []float64
+		var prevMornSunTF []float64
 		if wd == time.Sunday {
 			for _, ds := range statsByDate {
 				if ds.wd == time.Thursday || ds.wd == time.Friday {
 					if ds.hasMorn {
-						precMornSunTF = append(precMornSunTF, ds.mornAvg)
-					}
-					if ds.hasDay {
-						precDaySunTF = append(precDaySunTF, ds.dailyAvg)
+						prevMornSunTF = append(prevMornSunTF, ds.mornAvg)
 					}
 				}
 			}
@@ -1134,8 +1298,9 @@ func detectDayOfWeekOutliers(
 		isOutlier := false
 		var ratio, tStat float64
 		var detectedBy string
+		prevSamples := len(prevMorn)
 
-		// 1. Check morning hours (6:00 - 11:00) vs previous 2 days
+		// Check morning hours (6:00 - 11:00) vs previous 2 days
 		if len(targetMorn) >= 3 && len(prevMorn) >= 6 {
 			meanTarget := getMean(targetMorn)
 			meanPrev := getMean(prevMorn)
@@ -1146,20 +1311,22 @@ func detectDayOfWeekOutliers(
 				ratio = r
 				tStat = t
 				detectedBy = "morning"
+				prevSamples = len(prevMorn)
 			}
 		}
 
-		// 2. Sunday fallback vs Thursday/Friday
-		if !isOutlier && wd == time.Sunday && len(targetMorn) >= 3 && len(precMornSunTF) >= 6 {
+		// Sunday morning fallback vs Thursday/Friday
+		if !isOutlier && wd == time.Sunday && len(targetMorn) >= 3 && len(prevMornSunTF) >= 6 {
 			meanTarget := getMean(targetMorn)
-			meanPrec := getMean(precMornSunTF)
+			meanPrec := getMean(prevMornSunTF)
 			r := meanTarget / math.Max(0.1, meanPrec)
-			t := calculateWelchT(targetMorn, precMornSunTF)
+			t := calculateWelchT(targetMorn, prevMornSunTF)
 			if r >= dayOfWeekOutlierRatioThreshold && t >= dayOfWeekOutlierTStatThreshold {
 				isOutlier = true
 				ratio = r
 				tStat = t
 				detectedBy = "morningVsThuFri"
+				prevSamples = len(prevMornSunTF)
 			}
 		}
 
@@ -1173,7 +1340,7 @@ func detectDayOfWeekOutliers(
 				slog.Float64("surgeRatio", ratio),
 				slog.Float64("tStat", tStat),
 				slog.Int("targetSamples", len(targetMorn)),
-				slog.Int("precedingSamples", len(prevMorn)),
+				slog.Int("precedingSamples", prevSamples),
 			)
 		}
 	}
@@ -1331,14 +1498,39 @@ func detectLoadShift(
 	sort.Float64s(sorted)
 	n := len(sorted)
 	q1 := sorted[int(math.Round(float64(n-1)*0.25))]
+	q2 := sorted[int(math.Round(float64(n-1)*0.50))]
 	q3 := sorted[int(math.Round(float64(n-1)*0.75))]
+
+	// Calculate yesterday's standard deviation (requiring >= 18 hours so a partial day with missing
+	// afternoon/evening telemetry cannot falsely trigger vacation mode).
+	yStdDev := 1.0
+	hasYStdDev := false
+	if yPts, ok := dayMap[yesterdayStr]; ok && len(yPts.points) >= 18 {
+		yStdDev = getHomeKWHPointsStdDev(yPts.points)
+		hasYStdDev = true
+	}
+
+	// If a prolonged vacation spans > 25% of the history window (e.g. 9+ days in a 35-day window),
+	// Q1 collapses down to the vacation load level (< 25% of median active energy Q2) while yesterday
+	// remains flat (< vacationMorningFlatnessStdDevCeiling). Anchor Q1 to Q2 so vacation mode stays active.
+	if q1 < q2*loadShiftOutlierFloorFraction && hasYStdDev && yStdDev < vacationMorningFlatnessStdDevCeiling {
+		log.Ctx(ctx).DebugContext(
+			ctx,
+			"prolonged vacation collapsed Q1 active load in detectLoadShift, anchoring Q1 to median Q2",
+			slog.Float64("q1ActiveKWH", q1),
+			slog.Float64("q2ActiveKWH", q2),
+			slog.Float64("yesterdayStdDevKWH", yStdDev),
+		)
+		q1 = q2
+	}
+
 	iqr := q3 - q1
 	// Calculate the daily lower bound for active energy to detect vacations.
 	// We cannot simply use (q1 - loadShiftOutlierIQRExpansion*iqr) because:
-	// 1. Minimum Depth Requirement (q1 * floorFraction): If a site has extremely consistent load (IQR near 0),
+	// 1. Minimum Depth Requirement (q1 * ceilingCap): If a site has extremely consistent load (IQR near 0),
 	//    the standard formula would equal Q1. This would cause a normal day that is just slightly
 	//    below Q1 to falsely trigger a vacation. Capping the bound at a fraction of Q1 ensures that
-	//    a vacation requires a meaningful structural drop (at least a reduction below floorFraction).
+	//    a vacation requires a meaningful structural drop (at least a reduction below ceilingCap).
 	// 2. Adaptive Floor (loadShiftOutlierFloorFraction * q1): If a site has massive variance (huge IQR),
 	//    the standard formula could be negative. Since active energy is bounded at 0, it would never fall
 	//    below a negative lower bound, causing us to miss vacations. Wrapping the bound with a minimum of
@@ -1396,18 +1588,8 @@ func detectLoadShift(
 	// Calculate Q1 of standard deviations across baseline normal days for site-adaptive volatility checks
 	var baselineStdDevs []float64
 	for _, dStr := range baselineDays {
-		if d, ok := dayMap[dStr]; ok && len(d.points) >= 24 {
-			var sum float64
-			for _, p := range d.points {
-				sum += p.HomeKWH
-			}
-			avg := sum / float64(len(d.points))
-			var varSum float64
-			for _, p := range d.points {
-				varSum += (p.HomeKWH - avg) * (p.HomeKWH - avg)
-			}
-			stddev := math.Sqrt(varSum / float64(len(d.points)))
-			baselineStdDevs = append(baselineStdDevs, stddev)
+		if d, ok := dayMap[dStr]; ok && len(d.points) >= 18 {
+			baselineStdDevs = append(baselineStdDevs, getHomeKWHPointsStdDev(d.points))
 		}
 	}
 
@@ -1419,28 +1601,13 @@ func detectLoadShift(
 		q1StdDev = sortedStd[int(math.Round(float64(len(sortedStd)-1)*0.25))]
 	}
 
-	// Calculate yesterday's standard deviation
-	yStdDev := 1.0
-	if yPts, ok := dayMap[yesterdayStr]; ok && len(yPts.points) >= 24 {
-		var ySum float64
-		for _, p := range yPts.points {
-			ySum += p.HomeKWH
-		}
-		yAvg := ySum / float64(len(yPts.points))
-		var yVarSum float64
-		for _, p := range yPts.points {
-			yVarSum += (p.HomeKWH - yAvg) * (p.HomeKWH - yAvg)
-		}
-		yStdDev = math.Sqrt(yVarSum / float64(len(yPts.points)))
-	}
-
 	// Yesterday is the first completed day of the suspected shift.
-	// Verifying that yesterday was a daily outlier is a prerequisite for triggering a shift.
-	// We allow yesterdayIsLow to trigger if active avg is below dailyLowerBoundActive OR if
-	// active avg is below ceiling cap (55% Q1) AND stddev is adaptively low (< 0.25 * q1StdDev) AND q1StdDev >= 0.25.
+	// Verifying that yesterday was a completed daily outlier (hasYStdDev: >= 18 hours) is a prerequisite
+	// for triggering a shift. We allow yesterdayIsLow to trigger if active avg is below dailyLowerBoundActive
+	// OR if active avg is below ceiling cap (55% Q1) AND stddev is adaptively low (< 0.25 * q1StdDev) AND q1StdDev >= 0.25.
 	// This gating ensures continuous high flat load (e.g. EV charging at 7.2 kW) is never misclassified as vacation.
 	yActive, yExists := dailyActiveMap[yesterdayStr]
-	yesterdayIsLow := yExists && (yActive < dailyLowerBoundActive || (yActive < q1*loadShiftOutlierCeilingCap && q1StdDev >= 0.25 && yStdDev < 0.25*q1StdDev))
+	yesterdayIsLow := yExists && hasYStdDev && (yActive < dailyLowerBoundActive || (yActive < q1*loadShiftOutlierCeilingCap && q1StdDev >= 0.25 && yStdDev < 0.25*q1StdDev))
 	detectedShift := "none"
 
 	// Compute hourly metrics (Q1 and Q3) across baseline days for early escape checks.
@@ -1487,6 +1654,9 @@ func detectLoadShift(
 				if h >= 7 && h < currentHour {
 					todaySum += max(0.0, pt.HomeKWH-standbyLoad)
 					todayCount++
+				}
+				// Include hour 6 in morning volatility check so currentHour == 9 has 3 completed hours (6, 7, 8).
+				if h >= 6 && h < currentHour {
 					todayMorningLoads = append(todayMorningLoads, pt.HomeKWH)
 				}
 			}
@@ -1494,31 +1664,28 @@ func detectLoadShift(
 
 		if todayCount > 0 {
 			todayMorningStdDev := 1.0
+			hasMorningStdDev := false
 			if len(todayMorningLoads) >= 3 {
-				var mSum float64
-				for _, l := range todayMorningLoads {
-					mSum += l
-				}
-				mAvg := mSum / float64(len(todayMorningLoads))
-				var mVarSum float64
-				for _, l := range todayMorningLoads {
-					mVarSum += (l - mAvg) * (l - mAvg)
-				}
-				todayMorningStdDev = math.Sqrt(mVarSum / float64(len(todayMorningLoads)))
+				todayMorningStdDev = getPopulationStdDev(todayMorningLoads)
+				hasMorningStdDev = true
 			}
 
 			var baselineSums []float64
 			for _, dStr := range baselineDays {
 				var bSum float64
+				var bCount int
 				if d, ok := dayMap[dStr]; ok {
 					for _, pt := range d.points {
 						h := pt.TSHourStart.In(getLocation(pt.TimeLocation, loc)).Hour()
 						if h >= 7 && h < currentHour {
 							bSum += max(0.0, pt.HomeKWH-standbyLoad)
+							bCount++
 						}
 					}
 				}
-				baselineSums = append(baselineSums, bSum)
+				if bCount > 0 {
+					baselineSums = append(baselineSums, bSum)
+				}
 			}
 
 			sumLowerBound := 0.0
@@ -1537,10 +1704,10 @@ func detectLoadShift(
 				// Vacation Mode Trigger:
 				// If yesterday was a completed vacation day (yesterdayIsLow), we maintain vacation mode today if:
 				// 1. todaySum < sumLowerBound: Today's active energy sum (hours 7 to current hour) is below the lower bound, OR
-				// 2. todayMorningStdDev < max(vacationMorningFlatnessStdDevCeiling, 0.25*q1StdDev): Today's morning load exhibits
-				//    unoccupied flatness (standard deviation below 0.15 kWh or 25% of normal site volatility). The 0.15 kWh floor
-				//    accommodates mild hourly fluctuations from periodic HVAC or furnace cycling on hot/cold days while away.
-				if yesterdayIsLow && (todaySum < sumLowerBound || todayMorningStdDev < max(vacationMorningFlatnessStdDevCeiling, 0.25*q1StdDev)) {
+				// 2. Today's morning load is below 55% of baseline Q1 AND exhibits unoccupied flatness
+				//    (standard deviation below 0.15 kWh or 25% of normal site volatility).
+				morningFlatAndLow := hasMorningStdDev && todaySum < q1*loadShiftOutlierCeilingCap && todayMorningStdDev < max(vacationMorningFlatnessStdDevCeiling, 0.25*q1StdDev)
+				if yesterdayIsLow && (todaySum < sumLowerBound || morningFlatAndLow) {
 					detectedShift = "down"
 				}
 			}
@@ -1561,15 +1728,10 @@ func detectLoadShift(
 				var hourLoad float64
 				var comparisonHourLoad float64
 				for i := 1; i <= loadShiftEscapeHours; i++ {
-					relHour := currentHour - i
-					checkHour := (relHour%24 + 24) % 24
-					targetDateStr := todayStr
-					if relHour < 0 {
-						targetDateStr = yesterdayStr
-					}
+					checkHour := currentHour - i
 
 					var found bool
-					if targetPts, ok := dayMap[targetDateStr]; ok {
+					if targetPts, ok := dayMap[todayStr]; ok {
 						for _, pt := range targetPts.points {
 							h := pt.TSHourStart.In(getLocation(pt.TimeLocation, loc)).Hour()
 							if h == checkHour {
@@ -1764,6 +1926,7 @@ func identifyHistoricalVacationDays(
 	sort.Float64s(sortedRaw)
 	nR := len(sortedRaw)
 	q1R := sortedRaw[int(math.Round(float64(nR-1)*0.25))]
+	q2R := sortedRaw[int(math.Round(float64(nR-1)*0.50))]
 	q3R := sortedRaw[int(math.Round(float64(nR-1)*0.75))]
 	iqrR := q3R - q1R
 	upperBoundRaw := q3R + 1.5*iqrR
@@ -1784,12 +1947,6 @@ func identifyHistoricalVacationDays(
 	sort.Float64s(normalActiveAverages)
 	nA := len(normalActiveAverages)
 	// Step 3: Use Q3 (75th percentile) of active averages as the normal occupancy anchor.
-	//
-	// Why Q3 instead of Q1:
-	// If a site has a multi-day vacation in history (e.g., 7 consecutive low days), Q1 of active energy
-	// will collapse to the low vacation level (e.g., 0.2 kWh/hr). Calculating lower bounds relative to a collapsed
-	// Q1 would fail to identify past vacation days.
-	// Q3 (75th percentile) remains anchored on normal occupancy days (e.g., 1.9 kWh/hr), giving a stable reference.
 	q3A := normalActiveAverages[int(math.Round(float64(nA-1)*0.75))]
 
 	if q3A <= standbyActiveEnergyFloor {
@@ -1809,17 +1966,8 @@ func identifyHistoricalVacationDays(
 		if dateStr != todayStr && dateStr != yesterdayStr && avg <= upperBoundRaw {
 			activeAvg := max(0.0, avg-standbyLoad)
 			if activeAvg >= normalOccupancyActiveFloor {
-				if d := dayMap[dateStr]; d != nil && len(d.points) >= 24 {
-					var sum float64
-					for _, p := range d.points {
-						sum += p.HomeKWH
-					}
-					dAvg := sum / float64(len(d.points))
-					var varSum float64
-					for _, p := range d.points {
-						varSum += (p.HomeKWH - dAvg) * (p.HomeKWH - dAvg)
-					}
-					stdDevsA = append(stdDevsA, math.Sqrt(varSum/float64(len(d.points))))
+				if d := dayMap[dateStr]; d != nil && len(d.points) >= 18 {
+					stdDevsA = append(stdDevsA, getHomeKWHPointsStdDev(d.points))
 				}
 			}
 		}
@@ -1831,34 +1979,43 @@ func identifyHistoricalVacationDays(
 		q1StdDevA = stdDevsA[int(math.Round(float64(len(stdDevsA)-1)*0.25))]
 	}
 
+	if q1R < q2R*loadShiftOutlierFloorFraction {
+		log.Ctx(ctx).DebugContext(
+			ctx,
+			"prolonged vacation collapsed Q1 raw load in identifyHistoricalVacationDays, anchoring rawCeiling to Q2",
+			slog.Float64("q1RawKWH", q1R),
+			slog.Float64("q2RawKWH", q2R),
+			slog.Float64("q3RawKWH", q3R),
+		)
+	}
+
 	// Step 6: Evaluate each historical date against dual vacation criteria:
 	// - Condition A (Magnitude Drop): Active energy dropped below 25% of normal Q3 active baseline (magnitudeDropActiveFloor).
 	// - Condition B (Gated Volatility Drop): Active energy is below 55% of Q3 AND load volatility dropped below 25%
 	//   of normal site volatility (indicating a flat, unoccupied household load signature).
 	for dateStr, avg := range dayAveragesMap {
-		// We skip today (an incomplete day) and yesterday (handled dynamically by detectLoadShift).
-		// historicalVacationDays tags past completed vacation days (>= 2 days ago) to build a clean baseline pool.
-		// If yesterday or today were tagged here, returning home (detectedShift == "none") would incorrectly
-		// throw away yesterday's active returning data from the prediction pool.
-		if dateStr == todayStr || dateStr == yesterdayStr {
+		// We skip today (an incomplete day). Yesterday is evaluated here because historicalVacationDays
+		// is only used when detectedShift == "none" (normal occupancy mode); if the household returned
+		// from vacation today, yesterday's completed vacation day must be excluded from the normal pool.
+		if dateStr == todayStr {
 			continue
 		}
 		activeAvg := max(0.0, avg-standbyLoad)
-		var dStdDev float64 = 1.0
-		if d := dayMap[dateStr]; d != nil && len(d.points) >= 24 {
-			var sum float64
-			for _, p := range d.points {
-				sum += p.HomeKWH
-			}
-			dAvg := sum / float64(len(d.points))
-			var varSum float64
-			for _, p := range d.points {
-				varSum += (p.HomeKWH - dAvg) * (p.HomeKWH - dAvg)
-			}
-			dStdDev = math.Sqrt(varSum / float64(len(d.points)))
+		dStdDev := 1.0
+		hasDStdDev := false
+		if d := dayMap[dateStr]; d != nil && len(d.points) >= 18 {
+			dStdDev = getHomeKWHPointsStdDev(d.points)
+			hasDStdDev = true
 		}
 
-		if avg < q3R*loadShiftOutlierCeilingCap && (activeAvg < magnitudeDropActiveFloor || (q1StdDevA >= 0.25 && dStdDev < 0.25*q1StdDevA)) {
+		// Require raw daily average to fall below 55% of baseline Q1 (or Q2 when active load is at standby
+		// or a prolonged vacation > 25% of history collapsed Q1R below 25% of median load Q2R).
+		rawCeiling := q1R * loadShiftOutlierCeilingCap
+		if activeAvg <= standbyActiveEnergyFloor || q1R < q2R*loadShiftOutlierFloorFraction {
+			rawCeiling = q2R * loadShiftOutlierCeilingCap
+		}
+
+		if avg < rawCeiling && activeAvg < normalOccupancyActiveFloor && (activeAvg < magnitudeDropActiveFloor || (hasDStdDev && q1StdDevA >= 0.25 && dStdDev < 0.25*q1StdDevA)) {
 			historicalVacationDays[dateStr] = true
 			log.Ctx(ctx).DebugContext(
 				ctx,
@@ -1866,6 +2023,7 @@ func identifyHistoricalVacationDays(
 				slog.String("date", dateStr),
 				slog.Float64("avgHomeLoad", avg),
 				slog.Float64("activeAvg", activeAvg),
+				slog.Float64("rawCeilingKWH", rawCeiling),
 				slog.Float64("magnitudeDropActiveFloor", magnitudeDropActiveFloor),
 				slog.Float64("dayStdDev", dStdDev),
 				slog.Float64("q1StdDev", q1StdDevA),
