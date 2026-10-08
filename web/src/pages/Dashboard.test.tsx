@@ -357,6 +357,49 @@ describe('Dashboard', () => {
         });
     });
 
+    it('renders daily savings summary and actions with pound symbol when utilityProvider is octopus', async () => {
+        const savingsData = {
+            batterySavings: 5.50,
+            solarSavings: 5.00,
+            cost: 2.00,
+            credit: 1.00,
+            avoidedCost: 6.00,
+            chargingCost: 0.50,
+            solarGenerated: 20,
+            gridImported: 10,
+            gridExported: 5,
+            homeUsed: 25,
+            batteryUsed: 11,
+        };
+        const actions = [{
+            reason: ActionReason.AlwaysChargeBelowThreshold,
+            description: 'SOC test',
+            timestamp: new Date().toISOString(),
+            batteryMode: 1,
+            solarMode: 1,
+            currentPrice: { dollarsPerKWH: 0.05, tsStart: '2026-02-20T19:00:00Z', tsEnd: '' },
+            systemStatus: {
+                batterySOC: 42.5,
+                alarms: [],
+                storms: [],
+            }
+        }];
+        mockActionsAndSavings(actions, savingsData);
+
+        renderWithRouter(<Dashboard settings={{ utilityProvider: 'octopus' } as any} />);
+
+        await waitFor(() => {
+            expect(screen.getByText('Savings')).toBeInTheDocument();
+            // Net savings: 5.50 + 5.00 + 1.00 = 11.50 with £
+            expect(screen.getByText(/£ 11\.50/)).toBeInTheDocument();
+            expect(screen.getByText('+ £ 5.00')).toBeInTheDocument();
+            expect(screen.getByText('+ £ 5.50')).toBeInTheDocument();
+            expect(screen.getByText('+ £ 1.00')).toBeInTheDocument();
+            // Price metrics with £
+            expect(screen.getAllByText(/£ 0\.050/).length).toBeGreaterThanOrEqual(2);
+        });
+    });
+
     it('renders negative savings correctly', async () => {
         const savingsData = {
             batterySavings: -2.50,

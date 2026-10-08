@@ -10,11 +10,25 @@ import {
     formatTimeInOffset,
     getActionTimestamp,
     isZeroTime,
-    formatHour12
+    formatHour12,
+    getCurrencySymbol,
+    getPlanStatusSubvalue
 } from './dashboardUtils';
 import { BatteryMode, SolarMode, ActionReason, type Action } from '../api';
 
 describe('dashboardUtils', () => {
+    describe('getCurrencySymbol', () => {
+        it('returns £ for octopus', () => {
+            expect(getCurrencySymbol('octopus')).toBe('£');
+        });
+        it('returns $ for comed, tesla, empty, or undefined', () => {
+            expect(getCurrencySymbol('comed')).toBe('$');
+            expect(getCurrencySymbol('')).toBe('$');
+            expect(getCurrencySymbol(null)).toBe('$');
+            expect(getCurrencySymbol(undefined)).toBe('$');
+        });
+    });
+
     describe('getBatteryModeLabel', () => {
         it('returns correct label for standby', () => {
             expect(getBatteryModeLabel(BatteryMode.Standby)).toBe('Hold Battery');
@@ -28,6 +42,9 @@ describe('dashboardUtils', () => {
         it('formats dollars to price string', () => {
             expect(formatPrice(0.1234)).toBe('$ 0.123/kWh');
         });
+        it('formats with custom currency symbol', () => {
+            expect(formatPrice(0.1234, '£')).toBe('£ 0.123/kWh');
+        });
     });
 
     describe('formatCurrency', () => {
@@ -39,6 +56,11 @@ describe('dashboardUtils', () => {
         });
         it('formats with forceSign', () => {
             expect(formatCurrency(3.21, true)).toBe('+ $ 3.21');
+        });
+        it('formats with custom currency symbol', () => {
+            expect(formatCurrency(10.5, false, '£')).toBe('£ 10.50');
+            expect(formatCurrency(-5.25, false, '£')).toBe('- £ 5.25');
+            expect(formatCurrency(3.21, true, '£')).toBe('+ £ 3.21');
         });
     });
 
@@ -82,6 +104,20 @@ describe('dashboardUtils', () => {
             expect(text).toContain('$ 0.050');
             expect(text).toContain('$ 0.150');
             expect(text).toContain('savings: $ 0.100/kWh.');
+        });
+
+        it('handles SufficientBatteryTillCharge with custom currency symbol', () => {
+            const action = {
+                ...baseAction,
+                reason: ActionReason.SufficientBatteryTillCharge,
+                deficitAt: '2026-05-20T19:24:00-05:00',
+                currentPrice: { dollarsPerKWH: 0.15, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
+                futurePrice: { dollarsPerKWH: 0.05, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
+            };
+            const text = getReasonText(action, '£');
+            expect(text).toContain('£ 0.050');
+            expect(text).toContain('£ 0.150');
+            expect(text).toContain('savings: £ 0.100/kWh.');
         });
 
         it('handles SufficientBatteryTillCharge with identical prices or less than 1 cent margin', () => {
@@ -390,6 +426,24 @@ describe('dashboardUtils', () => {
             expect(formatHour12(13)).toBe('1 PM');
             expect(formatHour12(20)).toBe('8 PM');
             expect(formatHour12(23)).toBe('11 PM');
+        });
+    });
+
+    describe('getPlanStatusSubvalue', () => {
+        it('formats low rate price with currency symbol', () => {
+            const action: Action = {
+                description: 'test',
+                timestamp: '2026-07-22T04:00:00Z',
+                batteryMode: BatteryMode.ChargeAny,
+                solarMode: SolarMode.NoExport,
+                currentPrice: { dollarsPerKWH: 0.05 },
+                plan: {
+                    periods: [
+                        { tsStart: '2026-07-22T04:00:00Z', tsEnd: '2026-07-22T06:00:00Z', batteryMode: BatteryMode.ChargeAny, endSoc: 100 }
+                    ]
+                }
+            };
+            expect(getPlanStatusSubvalue(action, undefined, '£')).toContain('• Low rate (£0.050/kWh)');
         });
     });
 });

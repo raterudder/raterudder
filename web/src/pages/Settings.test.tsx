@@ -655,6 +655,24 @@ describe('App & Settings', () => {
         });
     });
 
+    it('displays ratesNotice when utility provider has a notice configured', async () => {
+        const user = userEvent.setup();
+        (fetchSettings as any).mockResolvedValue({
+            ...defaultSettings,
+            utilityProvider: '',
+            utilityRate: '',
+            utilityRateOptions: {}
+        });
+        await navigateToSettings();
+
+        const serviceSelect = await screen.findByRole('combobox', { name: /Service/i });
+        await user.click(serviceSelect);
+        const octopusOption = await screen.findByRole('option', { name: 'Octopus Energy (UK)' });
+        await user.click(octopusOption);
+
+        expect(await screen.findByTestId('utility-rates-notice')).toHaveTextContent('Intelligent Octopus Flux is not supported at this time.');
+    });
+
     it('can submit ESS credentials and passes raw password', async () => {
         const user = userEvent.setup();
         (fetchSettings as any).mockResolvedValue({

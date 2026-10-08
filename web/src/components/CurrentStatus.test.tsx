@@ -67,6 +67,21 @@ describe('CurrentStatus', () => {
         expect(screen.getByText('$ 0.200')).toBeInTheDocument();
     });
 
+    it('renders total price with custom currency symbol when passed', () => {
+        const action: Action = {
+            ...defaultAction,
+            currentPrice: {
+                tsStart: '',
+                tsEnd: '',
+                dollarsPerKWH: 0.15,
+                gridUseDollarsPerKWH: 0.05
+            }
+        };
+        render(<CurrentStatus action={action} currencySymbol="£" />);
+        expect(screen.getByText('Price')).toBeInTheDocument();
+        expect(screen.getByText('£ 0.200')).toBeInTheDocument();
+    });
+
     it('renders time until capacity when capacityAt is set in the future', () => {
         const mockNow = new Date('2026-06-15T12:00:00Z');
         vi.useFakeTimers();

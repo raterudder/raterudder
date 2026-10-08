@@ -5,9 +5,10 @@ import { getBatteryModeLabel, isZeroTime, getPlanStatusSubvalue } from '../utils
 
 interface CurrentStatusProps {
     action: Action;
+    currencySymbol?: string;
 }
 
-const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
+const CurrentStatus: React.FC<CurrentStatusProps> = ({ action, currencySymbol = '$' }) => {
     const hasSOC = action.systemStatus?.batterySOC !== undefined && action.systemStatus?.batterySOC !== null;
     const soc = hasSOC ? action.systemStatus!.batterySOC! : 0;
     const isUninitializedPrice = Boolean(action.currentPrice?.tsStart?.startsWith('0001-01-01') || action.currentPrice?.tsEnd?.startsWith('0001-01-01'));
@@ -49,7 +50,7 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
                     {hasPrice && (
                         <div className="metric">
                             <span className="metric-label">Price</span>
-                            <span className="metric-value">$ {price.toFixed(3)}<small>/kWh</small></span>
+                            <span className="metric-value">{currencySymbol} {price.toFixed(3)}<small>/kWh</small></span>
                         </div>
                     )}
                 </div>
@@ -94,7 +95,7 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
                     {hasPrice && (
                         <div className="metric">
                             <span className="metric-label">Price</span>
-                            <span className="metric-value">$ {price.toFixed(3)}<small>/kWh</small></span>
+                            <span className="metric-value">{currencySymbol} {price.toFixed(3)}<small>/kWh</small></span>
                         </div>
                     )}
                 </div>
@@ -156,7 +157,7 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
     }
 
     const refTs = (action.systemTimestamp && !isZeroTime(action.systemTimestamp)) ? action.systemTimestamp : action.systemStatus?.timestamp;
-    const planSubvalue = getPlanStatusSubvalue(action, refTs);
+    const planSubvalue = getPlanStatusSubvalue(action, refTs, currencySymbol);
 
     const isAbnormalUsage = isBatteryAtReserve &&
         Boolean(action.recentHomeUsageAbnormal) &&
@@ -230,7 +231,7 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action }) => {
                     {hasPrice && (
                         <div className="metric">
                             <span className="metric-label">Price</span>
-                            <span className="metric-value">$ {price.toFixed(3)}<small>/kWh</small></span>
+                            <span className="metric-value">{currencySymbol} {price.toFixed(3)}<small>/kWh</small></span>
                         </div>
                     )}
                 </div>

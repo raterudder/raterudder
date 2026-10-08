@@ -155,5 +155,34 @@ describe('ActionTimeline', () => {
         render(<ActionTimeline groupedActions={actions} />);
         expect(screen.queryByText(/Full:/)).not.toBeInTheDocument();
     });
+
+    it('renders price and summary range with custom currency symbol', () => {
+        const summary: ActionSummary = {
+            isSummary: true,
+            type: 'grouped',
+            startTime: new Date('2026-06-25T12:00:00Z').toISOString(),
+            latestAction: {
+                timestamp: new Date('2026-06-25T12:00:00Z').toISOString(),
+                batteryMode: BatteryMode.Standby,
+                solarMode: SolarMode.NoExport,
+                reason: ActionReason.SufficientBattery
+            } as Action,
+            count: 3,
+            alarms: new Set(),
+            storms: new Set(),
+            hasPrice: true,
+            hasSOC: false,
+            avgPrice: 0.15,
+            min: 0.10,
+            max: 0.20,
+            avgSOC: 0,
+            minSOC: 0,
+            maxSOC: 0
+        };
+        render(<ActionTimeline groupedActions={[summary]} currencySymbol="£" />);
+        expect(screen.getByText('Avg Price:')).toBeInTheDocument();
+        expect(screen.getByText(/£ 0\.150\/kWh/)).toBeInTheDocument();
+        expect(screen.getByText(/\(Range: £ 0\.100 - £ 0\.200\)/)).toBeInTheDocument();
+    });
 });
 

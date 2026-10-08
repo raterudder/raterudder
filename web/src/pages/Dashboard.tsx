@@ -8,6 +8,7 @@ import DateSelector from '../components/DateSelector';
 import {
     gridChargeCost,
     getActionTimestamp,
+    getCurrencySymbol,
     type ActionSummary,
     type ActionSummaryAccumulator,
     type SummaryType
@@ -19,6 +20,7 @@ export const whatsNewLinkText = "";
 export const STALE_DASHBOARD_TIMEOUT_MS = 10 * 60 * 1000;
 
 const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ siteID, settings = null }) => {
+    const currencySymbol = getCurrencySymbol(settings?.utilityProvider);
     const [location, navigate] = useLocation();
     const search = useSearch();
     const searchParams = useMemo(() => new URLSearchParams(search), [search]);
@@ -433,15 +435,15 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                         </div>
                     )}
                     {siteID !== 'ALL' && isToday && latestAction && (
-                        <CurrentStatus action={latestAction} />
+                        <CurrentStatus action={latestAction} currencySymbol={currencySymbol} />
                     )}
 
-                    <SavingsHero savings={savings} />
+                    <SavingsHero savings={savings} currencySymbol={currencySymbol} />
 
                     {siteID !== 'ALL' && (
                         <>
                             {visibleActions.length === 0 && <p className="no-actions">No actions recorded for this day.</p>}
-                            <ActionTimeline groupedActions={groupedActions} />
+                            <ActionTimeline groupedActions={groupedActions} currencySymbol={currencySymbol} />
                         </>
                     )}
                 </>

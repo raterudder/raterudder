@@ -92,6 +92,23 @@ export const defaultUtilities = [
         ],
     },
     {
+        id: 'octopus',
+        name: 'Octopus Energy (UK)',
+        ratesNotice: 'Intelligent Octopus Flux is not supported at this time.',
+        rates: [
+            {
+                id: 'octopus_flux',
+                name: 'Octopus Flux',
+                options: [],
+            },
+            {
+                id: 'octopus_intelligent_go',
+                name: 'Intelligent Octopus Go',
+                options: [],
+            },
+        ],
+    },
+    {
         id: 'hidden_utility',
         name: 'Secret Utility',
         hidden: true,

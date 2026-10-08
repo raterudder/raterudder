@@ -42,11 +42,20 @@ export const getSolarModeClass = (mode: number) => {
     }
 };
 
-export const formatPrice = (dollars: number) => `$ ${dollars.toFixed(3)}/kWh`;
+export const getCurrencySymbol = (utilityProvider?: string | null): string => {
+    switch (utilityProvider) {
+        case 'octopus':
+            return '£';
+        default:
+            return '$';
+    }
+};
 
-export const formatCurrency = (amount: number, forceSign: boolean = false) => {
+export const formatPrice = (dollars: number, symbol: string = '$') => `${symbol} ${dollars.toFixed(3)}/kWh`;
+
+export const formatCurrency = (amount: number, forceSign: boolean = false, symbol: string = '$') => {
     const sign = amount >= 0 ? (forceSign ? '+ ' : '') : '- ';
-    return `${sign}$ ${Math.abs(amount).toFixed(2)}`;
+    return `${sign}${symbol} ${Math.abs(amount).toFixed(2)}`;
 };
 
 export const isZeroTime = (ts?: string): boolean => {
@@ -112,7 +121,7 @@ export const formatHour12 = (hour: number): string => {
 export const gridChargeCost = (price: { dollarsPerKWH: number; gridUseDollarsPerKWH?: number }): number =>
     price.dollarsPerKWH + (price.gridUseDollarsPerKWH ?? 0);
 
-export const getReasonText = (action: Action): string => {
+export const getReasonText = (action: Action, symbol: string = '$'): string => {
     const reason = action.reason;
     if (!reason) {
         return action.description;
@@ -122,8 +131,8 @@ export const getReasonText = (action: Action): string => {
     const futurePrice = action.futurePrice;
     const nowCost = currentPrice ? gridChargeCost(currentPrice) : null;
     const futureCost = futurePrice ? gridChargeCost(futurePrice) : null;
-    const nowCostStr = nowCost !== null ? formatPrice(nowCost) : '';
-    const futureCostStr = futureCost !== null ? formatPrice(futureCost) : '';
+    const nowCostStr = nowCost !== null ? formatPrice(nowCost, symbol) : '';
+    const futureCostStr = futureCost !== null ? formatPrice(futureCost, symbol) : '';
     const refTs = (!action.systemTimestamp || isZeroTime(action.systemTimestamp)) ? action.systemStatus?.timestamp : action.systemTimestamp;
     const getDeficitTimeStr = (act: Action) => {
         if (!isZeroTime(act.deficitAt)) return formatTime(act.deficitAt!, refTs);
@@ -172,7 +181,7 @@ export const getReasonText = (action: Action): string => {
                 parts.push(`If we do not charge, the battery would deplete around ${deficitTimeStr}.`);
             }
             parts.push(costComparison);
-            if (delta !== null && delta >= 0.01) parts.push(`Estimated savings: ${formatPrice(delta)}.`);
+            if (delta !== null && delta >= 0.01) parts.push(`Estimated savings: ${formatPrice(delta, symbol)}.`);
             return parts.concat(suffixParts).join(' ');
         }
         case ActionReason.ArbitrageChargeExport: {
@@ -181,7 +190,7 @@ export const getReasonText = (action: Action): string => {
                 `Forecast shows higher prices later${futureCostStr ? ` (${futureCostStr})` : ''} compared to right now (${nowCostStr}).`,
                 `Charging the battery cheaply now to cover home load during the peak, allowing us to export maximum solar to the grid at higher rates.`,
             ];
-            if (delta !== null && delta >= 0.01) parts.push(`Estimated savings: ${formatPrice(delta)}.`);
+            if (delta !== null && delta >= 0.01) parts.push(`Estimated savings: ${formatPrice(delta, symbol)}.`);
             return parts.concat(suffixParts).join(' ');
         }
         case ActionReason.ArbitrageCharge:
@@ -191,7 +200,7 @@ export const getReasonText = (action: Action): string => {
                 `Forecast shows higher electricity prices later${futureCostStr ? ` (${futureCostStr})` : ''} compared to right now (${nowCostStr}).`,
                 `Charging the battery cheaply now so we can use stored energy later and avoid buying from the grid during the expensive window.`,
             ];
-            if (delta !== null && delta >= 0.01) parts.push(`Estimated savings: ${formatPrice(delta)}.`);
+            if (delta !== null && delta >= 0.01) parts.push(`Estimated savings: ${formatPrice(delta, symbol)}.`);
             return parts.concat(suffixParts).join(' ');
         }
         case ActionReason.DischargeBeforeCapacity: {
@@ -208,7 +217,7 @@ export const getReasonText = (action: Action): string => {
                 parts.push(`If we rely on the battery, it would deplete around ${deficitTimeStr}.`);
             }
             parts.push(`Since electricity prices now (${nowCostStr}) are cheap and are expected to remain cheap before the deficit, we can delay charging for now. We are keeping the battery in standby to preserve its remaining energy for the peak period${futureCostStr ? ` (${futureCostStr})` : ''}.`);
-            if (delta !== null && delta >= 0.01) parts.push(`Estimated savings: ${formatPrice(delta)}.`);
+            if (delta !== null && delta >= 0.01) parts.push(`Estimated savings: ${formatPrice(delta, symbol)}.`);
             return parts.concat(suffixParts).join(' ');
         }
         case ActionReason.DeficitSaveForPeak: {
@@ -218,7 +227,7 @@ export const getReasonText = (action: Action): string => {
                 parts.push(`If we rely on the battery, it would deplete around ${deficitTimeStr}.`);
             }
             parts.push(`Since electricity prices now (${nowCostStr}) are cheap, we are keeping the battery in standby to preserve its remaining energy for the peak period${futureCostStr ? ` (${futureCostStr})` : ''}.`);
-            if (delta !== null && delta >= 0.01) parts.push(`Estimated savings: ${formatPrice(delta)}.`);
+            if (delta !== null && delta >= 0.01) parts.push(`Estimated savings: ${formatPrice(delta, symbol)}.`);
             return parts.concat(suffixParts).join(' ');
         }
         case ActionReason.WaitingToCharge: {
@@ -235,7 +244,7 @@ export const getReasonText = (action: Action): string => {
                     `A cheaper charging window is coming up${futureCostStr ? ` at ${futureCostStr}` : ''} compared to now (${nowCostStr}).`,
                     `Holding off grid-charging the batteries and keeping them in standby until then.`,
                 ];
-                if (delta !== null && delta >= 0.01) parts.push(`Estimated savings: ${formatPrice(delta)}.`);
+                if (delta !== null && delta >= 0.01) parts.push(`Estimated savings: ${formatPrice(delta, symbol)}.`);
             }
             return parts.concat(suffixParts).join(' ');
         }
@@ -296,7 +305,7 @@ export const getReasonText = (action: Action): string => {
             parts.push(`Relying on solar and battery now to power the home, and waiting to refill it during ${refillWindowStr}.`);
 
             if (delta !== null && delta >= 0.01) {
-                parts.push(`Estimated savings: ${formatPrice(delta)}.`);
+                parts.push(`Estimated savings: ${formatPrice(delta, symbol)}.`);
             }
             return parts.concat(suffixParts).join(' ');
         }
@@ -409,7 +418,7 @@ export interface ActionSummaryAccumulator extends Omit<ActionSummary, 'avgPrice'
     socCount: number;
 }
 
-export function getPlanStatusSubvalue(action: Action, refTs?: string): string | null {
+export function getPlanStatusSubvalue(action: Action, refTs?: string, symbol: string = '$'): string | null {
     if (!action.plan || !action.plan.periods || action.plan.periods.length === 0) {
         return null;
     }
@@ -451,7 +460,7 @@ export function getPlanStatusSubvalue(action: Action, refTs?: string): string | 
             const p = periods[i];
             if (p.batteryMode === BatteryMode.ChargeAny) {
                 const price = p.importDollars !== undefined ? p.importDollars : null;
-                const priceStr = price !== null ? ` ($${price.toFixed(3)}/kWh)` : '';
+                const priceStr = price !== null ? ` (${symbol}${price.toFixed(3)}/kWh)` : '';
                 return `Waiting to charge at ${formatTime(p.tsStart, refTs)}${priceStr}`;
             }
             if (p.batteryMode === BatteryMode.Load && p.reason === ActionReason.DischargeAtPeak) {
@@ -481,7 +490,7 @@ export function getPlanStatusSubvalue(action: Action, refTs?: string): string | 
         const targetSoc = action.chargeToSoc || (currentPeriod.endSoc ? Math.round(currentPeriod.endSoc) : 100);
         const price = action.currentPrice ? (action.currentPrice.dollarsPerKWH + (action.currentPrice.gridUseDollarsPerKWH || 0)) : null;
         if (price !== null && price < 0.06) {
-            return `Charging to ${targetSoc}% until ${formatTime(endChargeTime, refTs)} • Low rate ($${price.toFixed(3)}/kWh)`;
+            return `Charging to ${targetSoc}% until ${formatTime(endChargeTime, refTs)} • Low rate (${symbol}${price.toFixed(3)}/kWh)`;
         }
         if (targetSoc > 0 && targetSoc < 100) {
             return `Charging to ${targetSoc}% until ${formatTime(endChargeTime, refTs)}`;
@@ -516,7 +525,7 @@ export function getPlanStatusSubvalue(action: Action, refTs?: string): string | 
         const isPeak = action.reason === ActionReason.DischargeAtPeak || (action.description && action.description.toLowerCase().includes('peak'));
         if (isPeak) {
             const price = action.currentPrice ? (action.currentPrice.dollarsPerKWH + (action.currentPrice.gridUseDollarsPerKWH || 0)) : null;
-            const priceStr = price !== null ? ` ($${price.toFixed(3)}/kWh)` : '';
+            const priceStr = price !== null ? ` (${symbol}${price.toFixed(3)}/kWh)` : '';
             return `Peak rate defense${priceStr} until ${formatTime(endDischargeTime, refTs)}`;
         }
         return `Powering home on solar & battery`;

@@ -7,10 +7,11 @@ import (
 
 // UtilityProviderInfo provides metadata about a utility provider.
 type UtilityProviderInfo struct {
-	ID     string            `json:"id"`
-	Name   string            `json:"name"`
-	Rates  []UtilityRateInfo `json:"rates"`
-	Hidden bool              `json:"hidden,omitempty"`
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	RatesNotice string            `json:"ratesNotice,omitempty"`
+	Rates       []UtilityRateInfo `json:"rates"`
+	Hidden      bool              `json:"hidden,omitempty"`
 }
 
 // UtilityRateInfo provides metadata about a specific utility rate.

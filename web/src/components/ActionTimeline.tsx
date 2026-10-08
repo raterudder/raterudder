@@ -16,9 +16,10 @@ import './ActionTimeline.css';
 
 interface ActionTimelineProps {
     groupedActions: (Action | ActionSummary)[];
+    currencySymbol?: string;
 }
 
-const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
+const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions, currencySymbol = '$' }) => {
     return (
         <ul className="timeline">
             {groupedActions.map((item, index) => {
@@ -33,7 +34,7 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
 
                 const isVPP = !!action.systemStatus?.vppActive || action.reason === ActionReason.VPPActive;
 
-                const reasonText = getReasonText(action);
+                const reasonText = getReasonText(action, currencySymbol);
                 let batteryModeClass = getBatteryModeClass(action.batteryMode);
                 if (isVPP) {
                     batteryModeClass = 'vpp';
@@ -160,9 +161,9 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
                                                 <div className="timeline-metric">
                                                     <span className="label">Avg Price:</span>
                                                     <span className="value">
-                                                        {formatPrice(summary!.avgPrice)}
+                                                        {formatPrice(summary!.avgPrice, currencySymbol)}
                                                         {summary!.min !== summary!.max && (
-                                                            <small className="range"> (Range: $ {summary!.min.toFixed(3)} - $ {summary!.max.toFixed(3)})</small>
+                                                            <small className="range"> (Range: {currencySymbol} {summary!.min.toFixed(3)} - {currencySymbol} {summary!.max.toFixed(3)})</small>
                                                         )}
                                                     </span>
                                                 </div>
@@ -184,7 +185,7 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({ groupedActions }) => {
                                             {action.currentPrice && (
                                                 <div className="timeline-metric">
                                                     <span className="label">Price:</span>
-                                                    <span className="value">{formatPrice(gridChargeCost(action.currentPrice))}</span>
+                                                    <span className="value">{formatPrice(gridChargeCost(action.currentPrice), currencySymbol)}</span>
                                                 </div>
                                             )}
                                             {action.systemStatus?.batterySOC !== undefined && (

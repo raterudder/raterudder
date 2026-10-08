@@ -1095,6 +1095,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 		engieUtilityInfo(),
 		originUtilityInfo(),
 		globirdUtilityInfo(),
+		octopusUtilityInfo(),
 		epbUtilityInfo(),
 		pepcoDCUtilityInfo(),
 		pgeUtilityInfo(),

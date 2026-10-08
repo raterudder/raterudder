@@ -298,6 +298,16 @@ const UtilityForm = ({
                 </Field.Root>
             )}
 
+            {settings.utilityProvider && (() => {
+                const provider = utilities.find(u => u.id === settings.utilityProvider);
+                if (!provider?.ratesNotice) return null;
+                return (
+                    <div className="warning-notice" style={{ marginTop: '0.5rem', marginBottom: '0.5rem' }} data-testid="utility-rates-notice">
+                        {provider.ratesNotice}
+                    </div>
+                );
+            })()}
+
             {settings.utilityProvider && settings.utilityRate && (() => {
                 const provider = utilities.find(u => u.id === settings.utilityProvider);
                 const rate = (provider?.rates || []).find(r => r.id === settings.utilityRate);

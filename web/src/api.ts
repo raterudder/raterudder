@@ -237,6 +237,7 @@ export interface UtilityRateOption {
 export interface UtilityProviderInfo {
   id: string;
   name: string;
+  ratesNotice?: string;
   rates?: UtilityRateInfo[];
   hidden?: boolean;
 }

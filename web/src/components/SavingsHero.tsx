@@ -5,9 +5,10 @@ import { formatCurrency } from '../utils/dashboardUtils';
 
 interface SavingsHeroProps {
     savings: SavingsStats | null;
+    currencySymbol?: string;
 }
 
-const SavingsHero: React.FC<SavingsHeroProps> = ({ savings }) => {
+const SavingsHero: React.FC<SavingsHeroProps> = ({ savings, currencySymbol = '$' }) => {
     const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
     const [open, setOpen] = useState(false);
 
@@ -29,7 +30,7 @@ const SavingsHero: React.FC<SavingsHeroProps> = ({ savings }) => {
                         <span className="hero-label">Savings</span>
                         <div className="hero-value-group">
                             <span className={`hero-value ${netSavings >= 0 ? 'positive' : 'negative'}`}>
-                                {formatCurrency(netSavings)}
+                                {formatCurrency(netSavings, false, currencySymbol)}
                             </span>
                         </div>
                         <div className="hero-breakdown">
@@ -37,14 +38,14 @@ const SavingsHero: React.FC<SavingsHeroProps> = ({ savings }) => {
                                 <span className="dot solar" aria-hidden="true"></span>
                                 <span className="label">Solar</span>
                                 <span className={`value ${savings.solarSavings >= 0 ? 'positive' : 'negative'}`}>
-                                    {formatCurrency(savings.solarSavings, true)}
+                                    {formatCurrency(savings.solarSavings, true, currencySymbol)}
                                 </span>
                             </div>
                             <div className="breakdown-item">
                                 <span className="dot battery" aria-hidden="true"></span>
                                 <span className="label">Battery</span>
                                 <span className={`value ${savings.batterySavings >= 0 ? 'positive' : 'negative'}`}>
-                                    {formatCurrency(savings.batterySavings, true)}
+                                    {formatCurrency(savings.batterySavings, true, currencySymbol)}
                                 </span>
                             </div>
                             {Math.abs(savings.credit) > 0.01 && (
@@ -52,7 +53,7 @@ const SavingsHero: React.FC<SavingsHeroProps> = ({ savings }) => {
                                     <span className="dot credit" aria-hidden="true"></span>
                                     <span className="label">Export</span>
                                     <span className={`value ${savings.credit >= 0 ? 'positive' : 'negative'}`}>
-                                        {formatCurrency(savings.credit, true)}
+                                        {formatCurrency(savings.credit, true, currencySymbol)}
                                     </span>
                                 </div>
                             )}
@@ -95,12 +96,12 @@ const SavingsHero: React.FC<SavingsHeroProps> = ({ savings }) => {
                                 <div className="stat-card">
                                     <span className="stat-label">Total Credit</span>
                                     <span className={`stat-value ${savings.credit > 0 ? 'positive' : savings.credit < 0 ? 'negative' : ''}`}>
-                                        {formatCurrency(savings.credit)}
+                                        {formatCurrency(savings.credit, false, currencySymbol)}
                                     </span>
                                 </div>
                                 <div className="stat-card">
                                     <span className="stat-label">Total Cost</span>
-                                    <span className="stat-value">{formatCurrency(savings.cost)}</span>
+                                    <span className="stat-value">{formatCurrency(savings.cost, false, currencySymbol)}</span>
                                 </div>
                             </div>
                         </div>

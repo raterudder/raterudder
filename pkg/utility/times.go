@@ -88,4 +88,12 @@ var (
 		}
 		return loc
 	}()
+
+	lonLocation = func() *time.Location {
+		loc, err := time.LoadLocation("Europe/London")
+		if err != nil {
+			panic(fmt.Errorf("failed to load London time location: %w", err))
+		}
+		return loc
+	}()
 )
