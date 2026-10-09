@@ -81,6 +81,11 @@ The application uses command-line flags for configuration.
 - `--pjm-api-url`: URL for the PJM API (Day-ahead pricing).
 - `--pjm-api-key`: API Key for PJM Data Miner 2 (optional, enabled day-ahead lookups).
 - `--miso-api-url`: URL for the MISO API.
+- `--ercot-api-url`: URL for the ERCOT Public Reports API.
+- `--ercot-api-key`: API Subscription Key for ERCOT Public Reports API (`Ocp-Apim-Subscription-Key`).
+- `--ercot-username`: Username/Email for ERCOT Developer Portal account.
+- `--ercot-password`: Password for ERCOT Developer Portal account.
+- `--ercot-token`: Optional static ID Token for ERCOT Public Reports API.
 - `--weather-geocoding-url`: Open-Meteo geocoding API URL.
 - `--weather-forecast-url`: Open-Meteo forecast API URL.
 

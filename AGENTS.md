@@ -77,3 +77,10 @@
 - **Layout & CSS**:
   - Reuse global styles from `App.css` (e.g., `.content-container`, `.card`, `.btn`, `.form-group`, `.switch-row`).
   - Component-specific layout and spacing belong in a dedicated `<Component>.css` file. Avoid excessive inline styles.
+
+---
+
+## Operations & Site Debugging
+- **GCP Project**: Cloud Logging and Firestore run under project `raterudder` (`projects/raterudder`).
+- **Site Debugging Skill**: Use the `debug-site` skill and `go run ./cmd/inspectsite --site=<siteID>` to inspect site settings, action history, and cloud logs for user-reported issues.
+- **Privacy Guardrail**: Never include site IDs, customer names, or user emails in git commits, tests, or code files.
