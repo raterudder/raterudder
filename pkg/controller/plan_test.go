@@ -5068,10 +5068,10 @@ func TestSearchOptimalPlan(t *testing.T) {
 		t.Parallel()
 
 		// Off-peak import: $0.05/kWh (round-trip recharge cost at 90% eff = $0.0556/kWh).
-		// Peak export: $0.15/kWh.
-		// Net physical spread after round-trip loss: $0.15 - $0.0556 = $0.0944/kWh.
-		// With balanced OptimizationParams (GridChargeDegradation = $0.02 on grid charge, BatteryExportDegradation = $0.05 on export):
-		// Total full-cycle wear hurdle = $0.02/0.90 + $0.05 = $0.0722/kWh (< $0.0944/kWh -> profitable!).
+		// Peak export: $0.20/kWh.
+		// Net physical spread after round-trip loss: $0.20 - $0.0556 = $0.1444/kWh.
+		// With balanced OptimizationParams (GridChargeDegradation = $0.02 on grid charge, BatteryExportDegradation = $0.07 on export):
+		// Total full-cycle wear hurdle = $0.02/0.90 + $0.07 = $0.0922/kWh (< $0.1444/kWh -> profitable!).
 		arbTimeline := []planInterval{
 			{
 				index:         0,
@@ -5088,7 +5088,7 @@ func TestSearchOptimalPlan(t *testing.T) {
 				endTime:       now.Add(2 * time.Hour),
 				durationHours: 1.0,
 				importRate:    0.20,
-				exportRate:    0.15,
+				exportRate:    0.20,
 				minSOC:        20.0,
 			},
 			{

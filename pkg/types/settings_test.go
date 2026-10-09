@@ -552,3 +552,35 @@ func TestGetMinBatterySOC(t *testing.T) {
 		assert.Equal(t, 60.0, soc)
 	})
 }
+
+func TestGetOptimizationParams(t *testing.T) {
+	t.Run("DefaultBalancedProfile", func(t *testing.T) {
+		s := Settings{}
+		params := s.GetOptimizationParams()
+		assert.Equal(t, 0.90, params.RoundTripEfficiency)
+		assert.Equal(t, 0.07, params.BatteryExportDegradationDollarsPerKWH)
+	})
+
+	t.Run("ConservativeProfile", func(t *testing.T) {
+		s := Settings{OptimizationProfile: "conservative"}
+		params := s.GetOptimizationParams()
+		assert.Equal(t, 0.85, params.RoundTripEfficiency)
+		assert.Equal(t, 0.07, params.BatteryExportDegradationDollarsPerKWH)
+	})
+
+	t.Run("AggressiveProfile", func(t *testing.T) {
+		s := Settings{OptimizationProfile: "aggressive"}
+		params := s.GetOptimizationParams()
+		assert.Equal(t, 0.92, params.RoundTripEfficiency)
+		assert.Equal(t, 0.05, params.BatteryExportDegradationDollarsPerKWH)
+	})
+
+	t.Run("MinBatteryExportDifferenceOverride", func(t *testing.T) {
+		s := Settings{
+			OptimizationProfile:                     "balanced",
+			MinBatteryExportDifferenceDollarsPerKWH: 0.15,
+		}
+		params := s.GetOptimizationParams()
+		assert.Equal(t, 0.15, params.BatteryExportDegradationDollarsPerKWH)
+	})
+}

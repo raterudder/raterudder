@@ -141,7 +141,8 @@ type Settings struct {
 	// Deprecated: MinDeficitPriceDifferenceDollarsPerKWH is deprecated in favor of OptimizationParams.GridChargeDegradationDollarsPerKWH. Retained for backwards compatibility in decide path.
 	MinDeficitPriceDifferenceDollarsPerKWH float64 `json:"minDeficitPriceDifferenceDollarsPerKWH"`
 
-	// Deprecated: MinBatteryExportDifferenceDollarsPerKWH is deprecated in favor of OptimizationParams.BatteryExportDegradationDollarsPerKWH. Retained for backwards compatibility in decide path.
+	// MinBatteryExportDifferenceDollarsPerKWH is the minimum profit spread ($/kWh) required to export battery energy directly to the grid.
+	// TODO: Reset MinBatteryExportDifferenceDollarsPerKWH to 0 in a new settings migration version when fully switching to plan mode if users have it set to the legacy default (0.07), so that profile defaults take effect unless explicitly configured.
 	MinBatteryExportDifferenceDollarsPerKWH float64 `json:"minBatteryExportDifferenceDollarsPerKWH"`
 }
 
@@ -476,13 +477,14 @@ type OptimizationParams struct {
 
 // GetOptimizationParams returns the physical round-trip efficiency (η), active reserve buffer (%),
 // cloud cover derating (%), and half-cycle battery degradation costs ($/kWh) associated with the configured OptimizationProfile.
-// Note that GridChargeDegradationDollarsPerKWH ($0.02) and BatteryExportDegradationDollarsPerKWH ($0.05) are additive across
-// a full grid-charge-to-battery-export cycle ($0.02 + $0.05 = $0.07/kWh total cycle hurdle in balanced/conservative,
-// and $0.01 + $0.04 = $0.05/kWh in aggressive).
+// Note that GridChargeDegradationDollarsPerKWH ($0.02) and BatteryExportDegradationDollarsPerKWH ($0.07) are additive across
+// a full grid-charge-to-battery-export cycle ($0.02 + $0.07 = $0.09/kWh total cycle hurdle in balanced/conservative,
+// and $0.01 + $0.05 = $0.06/kWh in aggressive).
 func (s Settings) GetOptimizationParams() OptimizationParams {
+	var params OptimizationParams
 	switch strings.ToLower(s.OptimizationProfile) {
 	case "conservative":
-		return OptimizationParams{
+		params = OptimizationParams{
 			RoundTripEfficiency:                   0.85,
 			ReserveBufferPercent:                  10.0,
 			PeakSurvivalBufferMinutes:             30,
@@ -491,10 +493,10 @@ func (s Settings) GetOptimizationParams() OptimizationParams {
 			CloudCoverDeratePercent:               10.0,
 			GridChargeDegradationDollarsPerKWH:    0.02,
 			SolarExportDegradationDollarsPerKWH:   0.02,
-			BatteryExportDegradationDollarsPerKWH: 0.05,
+			BatteryExportDegradationDollarsPerKWH: 0.07,
 		}
 	case "aggressive":
-		return OptimizationParams{
+		params = OptimizationParams{
 			RoundTripEfficiency:                   0.92,
 			ReserveBufferPercent:                  0.0,
 			PeakSurvivalBufferMinutes:             0,
@@ -503,10 +505,10 @@ func (s Settings) GetOptimizationParams() OptimizationParams {
 			CloudCoverDeratePercent:               0.0,
 			GridChargeDegradationDollarsPerKWH:    0.01,
 			SolarExportDegradationDollarsPerKWH:   0.01,
-			BatteryExportDegradationDollarsPerKWH: 0.04,
+			BatteryExportDegradationDollarsPerKWH: 0.05,
 		}
 	default:
-		return OptimizationParams{
+		params = OptimizationParams{
 			RoundTripEfficiency:                   0.90,
 			ReserveBufferPercent:                  0.0,
 			PeakSurvivalBufferMinutes:             15,
@@ -515,7 +517,13 @@ func (s Settings) GetOptimizationParams() OptimizationParams {
 			CloudCoverDeratePercent:               5.0,
 			GridChargeDegradationDollarsPerKWH:    0.02,
 			SolarExportDegradationDollarsPerKWH:   0.02,
-			BatteryExportDegradationDollarsPerKWH: 0.05,
+			BatteryExportDegradationDollarsPerKWH: 0.07,
 		}
 	}
+
+	if s.MinBatteryExportDifferenceDollarsPerKWH > 0 {
+		params.BatteryExportDegradationDollarsPerKWH = s.MinBatteryExportDifferenceDollarsPerKWH
+	}
+
+	return params
 }
