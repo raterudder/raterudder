@@ -5877,6 +5877,204 @@ func TestHandleHighHomeLoadNotifications(t *testing.T) {
 		mockS.AssertExpectations(t)
 	})
 
+	t.Run("EVChargingStandby_NighttimeEVChargingSuppressed", func(t *testing.T) {
+		nowNight := time.Date(2026, 9, 19, 23, 15, 0, 0, loc) // 11:15 PM (within 20:00-06:59 nighttime window)
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, nowNight)
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				HighHomeLoadAlert: "high",
+			},
+		}
+
+		// HomeKW = 9.6 kW (Level 2 EV charger) above 0.5 kW baseline (+9.1 kW step >= 3.5 kW)
+		data := &dataForNotifications{
+			status: types.SystemStatus{
+				Timestamp:          nowNight,
+				HomeKW:             9.6,
+				BatterySOC:         39.0,
+				BatteryKW:          9.6,
+				BatteryCapacityKWH: 13.6,
+			},
+			settings: types.Settings{
+				MinBatterySOC:     20.0,
+				EVChargingStandby: true,
+			},
+			energyHistory: baseHistory,
+		}
+
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowNight)
+		srv.handleHighHomeLoadNotifications(context.Background(), siteID, notifications, data, nowNight, getNotifState, nil)
+
+		// Suppressed because EVChargingStandby is enabled during nighttime hours and active EV charging is detected
+		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("EVChargingStandby_NighttimeNonEVHighLoadNotSuppressed", func(t *testing.T) {
+		nowNight := time.Date(2026, 9, 19, 22, 15, 0, 0, loc) // 10:15 PM (within 20:00-06:59 nighttime window)
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, nowNight)
+		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				HighHomeLoadAlert: "medium",
+			},
+		}
+
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
+
+		var recordedLog types.NotificationLog
+		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+			if l.Type == types.NotificationTypeHighHomeLoad {
+				recordedLog = l
+				return true
+			}
+			return false
+		})).Return(nil).Once()
+
+		// HomeKW = 4.6 kW (dryer + oven/heater, above 4.5 kW medium threshold, but below 4.8 kW EVMinThresholdKW)
+		data := &dataForNotifications{
+			status: types.SystemStatus{
+				Timestamp:          nowNight,
+				HomeKW:             4.6,
+				BatterySOC:         35.0,
+				BatteryKW:          4.6,
+				BatteryCapacityKWH: 13.6,
+			},
+			settings: types.Settings{
+				MinBatterySOC:     20.0,
+				EVChargingStandby: true,
+			},
+			energyHistory: baseHistory,
+		}
+
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowNight)
+		srv.handleHighHomeLoadNotifications(context.Background(), siteID, notifications, data, nowNight, getNotifState, mockUserGetter(user))
+
+		// Not suppressed: EVChargingStandby does not blanket-ignore non-EV nighttime high loads
+		mockS.AssertExpectations(t)
+		assert.Contains(t, recordedLog.Body, "Large unusual home load detected (4.6 kW)")
+	})
+
+	t.Run("EVChargingStandby_DaytimeHighLoadNotSuppressed", func(t *testing.T) {
+		nowDaytime := time.Date(2026, 9, 19, 14, 15, 0, 0, loc) // 2:15 PM (outside 20:00-06:59 nighttime window)
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, nowDaytime)
+		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				HighHomeLoadAlert: "medium",
+			},
+		}
+
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
+
+		var recordedLog types.NotificationLog
+		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+			if l.Type == types.NotificationTypeHighHomeLoad {
+				recordedLog = l
+				return true
+			}
+			return false
+		})).Return(nil).Once()
+
+		data := &dataForNotifications{
+			status: types.SystemStatus{
+				Timestamp:          nowDaytime,
+				HomeKW:             8.5,
+				BatterySOC:         39.0,
+				BatteryKW:          8.5,
+				BatteryCapacityKWH: 13.6,
+			},
+			settings: types.Settings{
+				MinBatterySOC:     20.0,
+				EVChargingStandby: true,
+			},
+			energyHistory: baseHistory,
+		}
+
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowDaytime)
+		srv.handleHighHomeLoadNotifications(context.Background(), siteID, notifications, data, nowDaytime, getNotifState, mockUserGetter(user))
+
+		// Not suppressed during daytime when battery is draining
+		mockS.AssertExpectations(t)
+		assert.Contains(t, recordedLog.Body, "Large unusual home load detected (8.5 kW)")
+	})
+
+	t.Run("IntermittentHistoricalEVSpikesIgnoredInTODBaseline", func(t *testing.T) {
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, now)
+		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				HighHomeLoadAlert: "medium",
+			},
+		}
+
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
+
+		var recordedLog types.NotificationLog
+		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+			if l.Type == types.NotificationTypeHighHomeLoad {
+				recordedLog = l
+				return true
+			}
+			return false
+		})).Return(nil).Once()
+
+		// Build 5 days of history where 2 of the 5 days had 9.6 kW EV charging across hours 6, 7, 8.
+		// Without filtering EV spikes in calculateTODHomeLoadBaseline, the 90th percentile of todLoads
+		// would be 9.6 kW (pTOD = 12.48 kW), masking a 5.5 kW unusual household load on non-EV days.
+		var evHistory []types.DailyEnergyStats
+		for d := 5; d >= 1; d-- {
+			dayDate := now.AddDate(0, 0, -d)
+			dayStart := time.Date(dayDate.Year(), dayDate.Month(), dayDate.Day(), 0, 0, 0, 0, loc)
+			var hourly []types.EnergyStats
+			for h := 0; h < 24; h++ {
+				hTime := dayStart.Add(time.Duration(h) * time.Hour)
+				load := 0.5
+				if (d == 2 || d == 4) && h >= 6 && h <= 8 {
+					load = 9.6
+				}
+				hourly = append(hourly, types.EnergyStats{
+					TSHourStart:   hTime,
+					HomeKWH:       load,
+					MaxBatterySOC: 80.0,
+					MinBatterySOC: 60.0,
+				})
+			}
+			evHistory = append(evHistory, types.DailyEnergyStats{
+				TSDayStart: dayStart,
+				Hourly:     hourly,
+			})
+		}
+
+		data := &dataForNotifications{
+			status: types.SystemStatus{
+				Timestamp:          now,
+				HomeKW:             5.5,
+				BatterySOC:         39.0,
+				BatteryKW:          5.5,
+				BatteryCapacityKWH: 13.6,
+			},
+			settings: types.Settings{
+				MinBatterySOC: 20.0,
+			},
+			energyHistory: evHistory,
+		}
+
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, now)
+		srv.handleHighHomeLoadNotifications(context.Background(), siteID, notifications, data, now, getNotifState, mockUserGetter(user))
+
+		mockS.AssertExpectations(t)
+		assert.Contains(t, recordedLog.Body, "Large unusual home load detected (5.5 kW)")
+	})
+
 	t.Run("DayOne_NoPriorDaysIgnored", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, now)

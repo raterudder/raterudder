@@ -2067,11 +2067,11 @@ func (c *Controller) evaluateEVCharging(
 	history []types.EnergyStats,
 	settings types.Settings,
 ) *DecisionResult {
-	if !isEVStandbyEligible(settings, now) {
+	if !IsEVStandbyEligible(settings, now) {
 		return nil
 	}
 
-	if isEV, stepKW := detectEVCharging(ctx, currentStatus.HomeKW, history); isEV {
+	if isEV, stepKW := DetectEVCharging(ctx, currentStatus.HomeKW, history); isEV {
 		desc := fmt.Sprintf("EV Charging Detected (%.1fkW load, +%.1fkW step). Battery in standby.", currentStatus.HomeKW, stepKW)
 		log.Ctx(ctx).InfoContext(ctx, "ev charging detected, setting battery to standby",
 			slog.Float64("homeKW", currentStatus.HomeKW),

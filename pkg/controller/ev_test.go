@@ -19,7 +19,7 @@ func TestDetectEVCharging(t *testing.T) {
 			{TSHourStart: now.Add(-2 * time.Hour), HomeKWH: 0.9},
 			{TSHourStart: now.Add(-3 * time.Hour), HomeKWH: 1.1},
 		}
-		isEV, step := detectEVCharging(ctx, 12.0, history)
+		isEV, step := DetectEVCharging(ctx, 12.0, history)
 		if assert.True(t, isEV) {
 			assert.InDelta(t, 11.0, step, 0.1)
 		}
@@ -31,7 +31,7 @@ func TestDetectEVCharging(t *testing.T) {
 			{TSHourStart: now.Add(-2 * time.Hour), HomeKWH: 4.2},
 			{TSHourStart: now.Add(-3 * time.Hour), HomeKWH: 4.6},
 		}
-		isEV, step := detectEVCharging(ctx, 16.0, history)
+		isEV, step := DetectEVCharging(ctx, 16.0, history)
 		if assert.True(t, isEV) {
 			assert.InDelta(t, 11.5, step, 0.1)
 		}
@@ -42,7 +42,7 @@ func TestDetectEVCharging(t *testing.T) {
 			{TSHourStart: now.Add(-1 * time.Hour), HomeKWH: 1.0},
 			{TSHourStart: now.Add(-2 * time.Hour), HomeKWH: 0.8},
 		}
-		isEV, step := detectEVCharging(ctx, 8.2, history)
+		isEV, step := DetectEVCharging(ctx, 8.2, history)
 		if assert.True(t, isEV) {
 			assert.InDelta(t, 7.2, step, 0.1)
 		}
@@ -52,7 +52,7 @@ func TestDetectEVCharging(t *testing.T) {
 		history := []types.EnergyStats{
 			{TSHourStart: now.Add(-1 * time.Hour), HomeKWH: 1.0},
 		}
-		isEV, step := detectEVCharging(ctx, 6.5, history)
+		isEV, step := DetectEVCharging(ctx, 6.5, history)
 		if assert.True(t, isEV) {
 			assert.InDelta(t, 5.5, step, 0.1)
 		}
@@ -62,7 +62,7 @@ func TestDetectEVCharging(t *testing.T) {
 		history := []types.EnergyStats{
 			{TSHourStart: now.Add(-1 * time.Hour), HomeKWH: 1.2},
 		}
-		isEV, step := detectEVCharging(ctx, 5.0, history)
+		isEV, step := DetectEVCharging(ctx, 5.0, history)
 		if assert.True(t, isEV) {
 			assert.InDelta(t, 3.8, step, 0.1)
 		}
@@ -74,7 +74,7 @@ func TestDetectEVCharging(t *testing.T) {
 			{TSHourStart: now.Add(-2 * time.Hour), HomeKWH: 8.2},
 			{TSHourStart: now.Add(-3 * time.Hour), HomeKWH: 8.1},
 		}
-		isEV, step := detectEVCharging(ctx, 8.0, history)
+		isEV, step := DetectEVCharging(ctx, 8.0, history)
 		assert.False(t, isEV)
 		assert.InDelta(t, 0.0, step, 0.1)
 	})
@@ -83,7 +83,7 @@ func TestDetectEVCharging(t *testing.T) {
 		history := []types.EnergyStats{
 			{TSHourStart: now.Add(-1 * time.Hour), HomeKWH: 1.5},
 		}
-		isEV, _ := detectEVCharging(ctx, 4.2, history)
+		isEV, _ := DetectEVCharging(ctx, 4.2, history)
 		assert.False(t, isEV)
 	})
 
@@ -91,12 +91,12 @@ func TestDetectEVCharging(t *testing.T) {
 		history := []types.EnergyStats{
 			{TSHourStart: now.Add(-1 * time.Hour), HomeKWH: 0.8},
 		}
-		isEV, _ := detectEVCharging(ctx, 0.8, history)
+		isEV, _ := DetectEVCharging(ctx, 0.8, history)
 		assert.False(t, isEV)
 	})
 
 	t.Run("EmptyHistory_UsesDefaultBaseline", func(t *testing.T) {
-		isEV, step := detectEVCharging(ctx, 8.0, nil)
+		isEV, step := DetectEVCharging(ctx, 8.0, nil)
 		if assert.True(t, isEV) {
 			assert.InDelta(t, 7.0, step, 0.1)
 		}
@@ -113,8 +113,29 @@ func TestDetectEVCharging(t *testing.T) {
 			{TSHourStart: checkAt20h.Add(-5 * time.Hour), HomeKWH: 4.9},
 			{TSHourStart: checkAt20h.Add(-6 * time.Hour), HomeKWH: 2.0},
 		}
-		isEV, _ := detectEVCharging(ctx, 5.7, history)
+		isEV, _ := DetectEVCharging(ctx, 5.7, history)
 		assert.False(t, isEV, "Sustained 5.0-5.8 kW afternoon AC continuing at 20:00 (5.7 kW) must not be flagged as EV charging")
+	})
+
+	t.Run("FilterTODHomeLoadEVSpikes_ReplacesIntermittentEVSpikes", func(t *testing.T) {
+		// 5 normal days at 1.0 kW (3 hours/day = 15 points) and 2 EV days at 9.5 kW (6 points)
+		loads := []float64{
+			1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+			9.5, 9.5, 9.5, 9.5, 9.5, 9.5,
+		}
+		filtered := FilterTODHomeLoadEVSpikes(loads, 14)
+		for _, v := range filtered {
+			assert.InDelta(t, 1.0, v, 0.01, "Intermittent EV charging spikes should be replaced with the 30th percentile non-EV baseline")
+		}
+	})
+
+	t.Run("FilterTODHomeLoadEVSpikes_PreservesRoutineDailyHighLoad", func(t *testing.T) {
+		// Every day has a routine 5.5 kW load at this hour
+		loads := []float64{5.5, 5.5, 5.5, 5.5, 5.5, 5.5, 5.5, 5.5, 5.5}
+		filtered := FilterTODHomeLoadEVSpikes(loads, 18)
+		for _, v := range filtered {
+			assert.InDelta(t, 5.5, v, 0.01, "Routine daily loads should not be filtered out")
+		}
 	})
 }
 

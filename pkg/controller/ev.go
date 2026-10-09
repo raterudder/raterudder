@@ -75,12 +75,12 @@ func isNighttimeEVHour(hr int) bool {
 	return hr >= 20 || hr <= 6
 }
 
-// isEVStandbyEligible returns true if the site has opted into EV charging standby for ts:
+// IsEVStandbyEligible returns true if the site has opted into EV charging standby for ts:
 // either EVChargingStandby is enabled and ts falls within the nighttime window (20:00-06:59 local time),
 // or ts falls within a legacy configured EVChargingPeriods window.
 // Real-time EV standby intentionally does not trigger during daytime hours (07:00-19:59) when
 // using solar to charge the EV is assumed to be desired.
-func isEVStandbyEligible(settings types.Settings, ts time.Time) bool {
+func IsEVStandbyEligible(settings types.Settings, ts time.Time) bool {
 	localTS := ts
 	if (localTS.Location() == nil || localTS.Location() == time.UTC) && settings.Location != nil && settings.Location.TimeZone != "" {
 		if loc, err := time.LoadLocation(settings.Location.TimeZone); err == nil {
@@ -99,10 +99,10 @@ func isEVStandbyEligible(settings types.Settings, ts time.Time) bool {
 	return false
 }
 
-// detectEVCharging checks if the current instantaneous household load reflects active EV charging
+// DetectEVCharging checks if the current instantaneous household load reflects active EV charging
 // by evaluating whether the load is >= 4.8 kW and represents a step increase of >= 3.5 kW above
 // recent baseline household load.
-func detectEVCharging(ctx context.Context, currentLoad float64, history []types.EnergyStats) (bool, float64) {
+func DetectEVCharging(ctx context.Context, currentLoad float64, history []types.EnergyStats) (bool, float64) {
 	if currentLoad < EVMinThresholdKW {
 		return false, 0
 	}
@@ -120,6 +120,44 @@ func detectEVCharging(ctx context.Context, currentLoad float64, history []types.
 	)
 
 	return isEV, stepKW
+}
+
+// FilterTODHomeLoadEVSpikes replaces historical EV charging spikes in a time-of-day load slice
+// with the non-EV baseline reference load so intermittent EV charging sessions do not inflate
+// high-home-load notification percentile thresholds.
+func FilterTODHomeLoadEVSpikes(loads []float64, targetHour int) []float64 {
+	if len(loads) < 3 {
+		return loads
+	}
+	sorted := make([]float64, len(loads))
+	copy(sorted, loads)
+	sort.Float64s(sorted)
+	refLoad := sorted[int(math.Round(float64(len(sorted)-1)*hourlyOutlierBaselinePercentile))]
+
+	// For high-frequency nighttime EV chargers (where >= 70% of readings in the window are EV charging),
+	// anchor the reference load to the median of quiet non-EV readings (< 3.0 kWh) if available.
+	if isNighttimeEVHour(targetHour) && refLoad >= 3.0 {
+		var quietLoads []float64
+		for _, v := range sorted {
+			if v < 3.0 {
+				quietLoads = append(quietLoads, v)
+			}
+		}
+		if len(quietLoads) > 0 {
+			refLoad = quietLoads[len(quietLoads)/2]
+		}
+	}
+
+	limit := max(refLoad, hourlyOutlierFloorKWH) * hourlyOutlierMultiple
+	filtered := make([]float64, len(loads))
+	for i, v := range loads {
+		if v >= EVMinThresholdKW && v-refLoad >= EVMinStepKW && v > limit {
+			filtered[i] = refLoad
+		} else {
+			filtered[i] = v
+		}
+	}
+	return filtered
 }
 
 // calculateRecentBaseline computes the non-EV baseline from recent hourly history.
@@ -307,7 +345,7 @@ func detectIntermittentEVAndLoadSpikes(
 				if pt.HomeKWH < EVMinThresholdKW {
 					allHourNonEVLoads[hr] = append(allHourNonEVLoads[hr], pt.HomeKWH)
 				}
-				if isEVStandbyEligible(settings, pt.TSHourStart) {
+				if IsEVStandbyEligible(settings, pt.TSHourStart) {
 					hasConfiguredEVAtHour[hr] = true
 				}
 				ptTemp, hasTemp := weatherByHour[pt.TSHourStart.Truncate(time.Hour).UTC()]
@@ -432,7 +470,7 @@ func detectIntermittentEVAndLoadSpikes(
 				hr := pt.TSHourStart.Hour()
 				if (hr < 9 || hr > 22) && hr >= 0 && hr < 24 && hasAllRef[hr] && val >= EVMinThresholdKW {
 					baseRef := allRefByHour[hr]
-					if isEVStandbyEligible(settings, pt.TSHourStart) || (val-baseRef >= EVMinStepKW && val > max(baseRef, hourlyOutlierFloorKWH)*hourlyOutlierMultiple) {
+					if IsEVStandbyEligible(settings, pt.TSHourStart) || (val-baseRef >= EVMinStepKW && val > max(baseRef, hourlyOutlierFloorKWH)*hourlyOutlierMultiple) {
 						val = baseRef
 					}
 				}
@@ -502,7 +540,7 @@ func detectIntermittentEVAndLoadSpikes(
 			}
 			refLoad := computePointRefLoad(pt, hr, dayP65, dayP75, hasDayStats)
 			limit := max(refLoad, hourlyOutlierFloorKWH) * hourlyOutlierMultiple
-			if isEVStandbyEligible(settings, pt.TSHourStart) || (pt.HomeKWH-refLoad >= EVMinStepKW && pt.HomeKWH > limit) {
+			if IsEVStandbyEligible(settings, pt.TSHourStart) || (pt.HomeKWH-refLoad >= EVMinStepKW && pt.HomeKWH > limit) {
 				key := dayHourKey{date: dateStr, hour: hr}
 				ignoredOutlierHours[key] = true
 				confirmedPass1[key] = true

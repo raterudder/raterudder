@@ -45,10 +45,7 @@ type Settings struct {
 
 	// Price Settings
 	// Always charge when the price is under this amount (in $/kWh)
-	AlwaysChargeUnderDollarsPerKWH          float64 `json:"alwaysChargeUnderDollarsPerKWH"`
-	MinArbitrageDifferenceDollarsPerKWH     float64 `json:"minArbitrageDifferenceDollarsPerKWH"`
-	MinDeficitPriceDifferenceDollarsPerKWH  float64 `json:"minDeficitPriceDifferenceDollarsPerKWH"`
-	MinBatteryExportDifferenceDollarsPerKWH float64 `json:"minBatteryExportDifferenceDollarsPerKWH"`
+	AlwaysChargeUnderDollarsPerKWH float64 `json:"alwaysChargeUnderDollarsPerKWH"`
 
 	// How to value solar exports when net metering credits are active. Valid values: "", "lowest", "highest", "none". Default is "lowest".
 	SolarNetMeteringCreditsValue string `json:"solarNetMeteringCreditsValue"`
@@ -137,6 +134,15 @@ type Settings struct {
 
 	// Deprecated: VPPChargingBufferMinutes is deprecated in favor of OptimizationParams.VPPChargingBufferMinutes.
 	VPPChargingBufferMinutes int `json:"vppChargingBufferMinutes"`
+
+	// Deprecated: MinArbitrageDifferenceDollarsPerKWH is deprecated in favor of OptimizationParams.SolarExportDegradationDollarsPerKWH. Retained for backwards compatibility in decide path.
+	MinArbitrageDifferenceDollarsPerKWH float64 `json:"minArbitrageDifferenceDollarsPerKWH"`
+
+	// Deprecated: MinDeficitPriceDifferenceDollarsPerKWH is deprecated in favor of OptimizationParams.GridChargeDegradationDollarsPerKWH. Retained for backwards compatibility in decide path.
+	MinDeficitPriceDifferenceDollarsPerKWH float64 `json:"minDeficitPriceDifferenceDollarsPerKWH"`
+
+	// Deprecated: MinBatteryExportDifferenceDollarsPerKWH is deprecated in favor of OptimizationParams.BatteryExportDegradationDollarsPerKWH. Retained for backwards compatibility in decide path.
+	MinBatteryExportDifferenceDollarsPerKWH float64 `json:"minBatteryExportDifferenceDollarsPerKWH"`
 }
 
 // GridSettings represents the ESS grid configuration capabilities.
@@ -455,46 +461,61 @@ func (s Settings) GetMinBatterySOC(ctx context.Context, t time.Time, loc *time.L
 	return s.MinBatterySOC
 }
 
-// OptimizationParams holds physical, risk, and weather adjustment parameters associated with an OptimizationProfile.
+// OptimizationParams holds physical, risk, weather adjustment, and battery degradation parameters associated with an OptimizationProfile.
 type OptimizationParams struct {
-	RoundTripEfficiency        float64 `json:"roundTripEfficiency"`
-	ReserveBufferPercent       float64 `json:"reserveBufferPercent"`
-	PeakSurvivalBufferMinutes  int     `json:"peakSurvivalBufferMinutes"`
-	SolarCapacityBufferMinutes int     `json:"solarCapacityBufferMinutes"`
-	VPPChargingBufferMinutes   int     `json:"vppChargingBufferMinutes"`
-	CloudCoverDeratePercent    float64 `json:"cloudCoverDeratePercent"`
+	RoundTripEfficiency                   float64 `json:"roundTripEfficiency"`
+	ReserveBufferPercent                  float64 `json:"reserveBufferPercent"`
+	PeakSurvivalBufferMinutes             int     `json:"peakSurvivalBufferMinutes"`
+	SolarCapacityBufferMinutes            int     `json:"solarCapacityBufferMinutes"`
+	VPPChargingBufferMinutes              int     `json:"vppChargingBufferMinutes"`
+	CloudCoverDeratePercent               float64 `json:"cloudCoverDeratePercent"`
+	GridChargeDegradationDollarsPerKWH    float64 `json:"gridChargeDegradationDollarsPerKWH"`
+	SolarExportDegradationDollarsPerKWH   float64 `json:"solarExportDegradationDollarsPerKWH"`
+	BatteryExportDegradationDollarsPerKWH float64 `json:"batteryExportDegradationDollarsPerKWH"`
 }
 
 // GetOptimizationParams returns the physical round-trip efficiency (η), active reserve buffer (%),
-// and cloud cover derating (%) associated with the configured OptimizationProfile.
+// cloud cover derating (%), and half-cycle battery degradation costs ($/kWh) associated with the configured OptimizationProfile.
+// Note that GridChargeDegradationDollarsPerKWH ($0.02) and BatteryExportDegradationDollarsPerKWH ($0.05) are additive across
+// a full grid-charge-to-battery-export cycle ($0.02 + $0.05 = $0.07/kWh total cycle hurdle in balanced/conservative,
+// and $0.01 + $0.04 = $0.05/kWh in aggressive).
 func (s Settings) GetOptimizationParams() OptimizationParams {
 	switch strings.ToLower(s.OptimizationProfile) {
 	case "conservative":
 		return OptimizationParams{
-			RoundTripEfficiency:        0.85,
-			ReserveBufferPercent:       10.0,
-			PeakSurvivalBufferMinutes:  30,
-			SolarCapacityBufferMinutes: 20,
-			VPPChargingBufferMinutes:   40,
-			CloudCoverDeratePercent:    10.0,
+			RoundTripEfficiency:                   0.85,
+			ReserveBufferPercent:                  10.0,
+			PeakSurvivalBufferMinutes:             30,
+			SolarCapacityBufferMinutes:            20,
+			VPPChargingBufferMinutes:              40,
+			CloudCoverDeratePercent:               10.0,
+			GridChargeDegradationDollarsPerKWH:    0.02,
+			SolarExportDegradationDollarsPerKWH:   0.02,
+			BatteryExportDegradationDollarsPerKWH: 0.05,
 		}
 	case "aggressive":
 		return OptimizationParams{
-			RoundTripEfficiency:        0.92,
-			ReserveBufferPercent:       0.0,
-			PeakSurvivalBufferMinutes:  0,
-			SolarCapacityBufferMinutes: 0,
-			VPPChargingBufferMinutes:   10,
-			CloudCoverDeratePercent:    0.0,
+			RoundTripEfficiency:                   0.92,
+			ReserveBufferPercent:                  0.0,
+			PeakSurvivalBufferMinutes:             0,
+			SolarCapacityBufferMinutes:            0,
+			VPPChargingBufferMinutes:              10,
+			CloudCoverDeratePercent:               0.0,
+			GridChargeDegradationDollarsPerKWH:    0.01,
+			SolarExportDegradationDollarsPerKWH:   0.01,
+			BatteryExportDegradationDollarsPerKWH: 0.04,
 		}
 	default:
 		return OptimizationParams{
-			RoundTripEfficiency:        0.90,
-			ReserveBufferPercent:       0.0,
-			PeakSurvivalBufferMinutes:  15,
-			SolarCapacityBufferMinutes: 0,
-			VPPChargingBufferMinutes:   20,
-			CloudCoverDeratePercent:    5.0,
+			RoundTripEfficiency:                   0.90,
+			ReserveBufferPercent:                  0.0,
+			PeakSurvivalBufferMinutes:             15,
+			SolarCapacityBufferMinutes:            0,
+			VPPChargingBufferMinutes:              20,
+			CloudCoverDeratePercent:               5.0,
+			GridChargeDegradationDollarsPerKWH:    0.02,
+			SolarExportDegradationDollarsPerKWH:   0.02,
+			BatteryExportDegradationDollarsPerKWH: 0.05,
 		}
 	}
 }

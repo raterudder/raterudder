@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/common"
+	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
@@ -2766,7 +2767,7 @@ func calculateTODHomeLoadBaseline(history []types.DailyEnergyStats, targetLocal 
 	if len(todLoads) < 3 {
 		return nil, false
 	}
-	return todLoads, true
+	return controller.FilterTODHomeLoadEVSpikes(todLoads, targetHour), true
 }
 
 // calculateTODReserveRatio computes the fraction of historical hours over the past 7 days
@@ -2948,13 +2949,14 @@ func (s *Server) handleHighHomeLoadNotifications(
 		nowLocal = nowLocal.In(siteLoc)
 	}
 
-	// TODO: Re-address suppressing high-home-load alerts specifically during detected EV charging
-	// sessions so we do not ignore all nighttime loads when EVChargingStandby defaults to on.
-	// Legacy EV charging suppression: if current time falls within any configured EV charging period, suppress alert
-	for _, period := range data.settings.EVChargingPeriods {
-		if inPeriod, _, err := period.Contains(nowLocal); err == nil && inPeriod {
-			log.Ctx(ctx).DebugContext(ctx, "skipping high home load check: within EV charging period",
-				slog.String("periodName", period.Name),
+	// EV charging suppression: when EV standby is eligible (either EVChargingStandby is enabled during
+	// nighttime hours 20:00-06:59 or within legacy EVChargingPeriods) and active EV charging is detected,
+	// suppress the alert rather than blanket-ignoring all nighttime loads.
+	if controller.IsEVStandbyEligible(data.settings, nowLocal) {
+		if isEV, stepKW := controller.DetectEVCharging(ctx, data.status.HomeKW, flattenDailyEnergyStats(data.energyHistory)); isEV {
+			log.Ctx(ctx).DebugContext(ctx, "skipping high home load check: EV charging detected during eligible EV standby window",
+				slog.Float64("homeKW", data.status.HomeKW),
+				slog.Float64("stepKW", stepKW),
 				slog.Time("nowLocal", nowLocal),
 			)
 			return
