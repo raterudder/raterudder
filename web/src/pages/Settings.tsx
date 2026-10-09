@@ -92,56 +92,6 @@ const LocationForm = ({ settings, onChange }: LocationFormProps) => {
                     placeholder="e.g. 90210"
                 />
             </Field.Root>
-
-            <Field.Root className="form-group" style={{ display: 'none' }}>
-                <Field.Label htmlFor="solarDirection">Roof Solar Panel Direction</Field.Label>
-                <Select.Root
-                    value={(settings.solarTilt && settings.solarTilt > 0) ? (settings.solarAzimuth?.toString() || "") : ""}
-                    onValueChange={(val) => {
-                        const azimuth = parseInt(val as string, 10);
-                        onChange("solarAzimuth", azimuth);
-                        onChange("solarTilt", 25);
-                    }}
-                >
-                    <Select.Trigger className="select-trigger" aria-label="Solar Direction">
-                        <Select.Value placeholder="Select direction...">
-                            {settings.solarTilt && settings.solarTilt > 0 ? (
-                                ({
-                                    "0": "North",
-                                    "45": "Northeast",
-                                    "90": "East",
-                                    "135": "Southeast",
-                                    "180": "South",
-                                    "225": "Southwest",
-                                    "270": "West",
-                                    "315": "Northwest"
-                                } as Record<string, string>)[settings.solarAzimuth?.toString() || ""]
-                            ) : null}
-                        </Select.Value>
-                        <Select.Icon className="select-icon">
-                            <svg width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                <path d="M4.18179 6.18181C4.35753 6.00608 4.64245 6.00608 4.81819 6.18181L7.49999 8.86362L10.1818 6.18181C10.3575 6.00608 10.6424 6.00608 10.8182 6.18181C10.9939 6.35755 10.9939 6.64247 10.8182 6.81821L7.81819 9.81821C7.73379 9.9026 7.61934 9.95001 7.49999 9.95001C7.38064 9.95001 7.26618 9.9026 7.18179 9.81821L4.18179 6.81821C4.00605 6.64247 4.00605 6.35755 4.18179 6.18181Z" fill="currentColor" fillRule="evenodd" clipRule="evenodd"></path>
-                            </svg>
-                        </Select.Icon>
-                    </Select.Trigger>
-                    <Select.Portal>
-                        <Select.Positioner className="select-positioner">
-                            <Select.Popup className="select-popup">
-                                <Select.List>
-                                    <Select.Item className="select-item" value="0"><Select.ItemText>North</Select.ItemText></Select.Item>
-                                    <Select.Item className="select-item" value="45"><Select.ItemText>Northeast</Select.ItemText></Select.Item>
-                                    <Select.Item className="select-item" value="90"><Select.ItemText>East</Select.ItemText></Select.Item>
-                                    <Select.Item className="select-item" value="135"><Select.ItemText>Southeast</Select.ItemText></Select.Item>
-                                    <Select.Item className="select-item" value="180"><Select.ItemText>South</Select.ItemText></Select.Item>
-                                    <Select.Item className="select-item" value="225"><Select.ItemText>Southwest</Select.ItemText></Select.Item>
-                                    <Select.Item className="select-item" value="270"><Select.ItemText>West</Select.ItemText></Select.Item>
-                                    <Select.Item className="select-item" value="315"><Select.ItemText>Northwest</Select.ItemText></Select.Item>
-                                </Select.List>
-                            </Select.Popup>
-                        </Select.Positioner>
-                    </Select.Portal>
-                </Select.Root>
-            </Field.Root>
         </>
     );
 };
@@ -2455,7 +2405,7 @@ const Settings = ({
                                             handleChange('evChargingStandby', checked);
                                             if (settings.evChargingPeriods) {
                                                 handleChange('evChargingPeriods', undefined);
-                                                }
+                                            }
                                         }}
                                         aria-label="Avoid Battery for EV Charging"
                                     >

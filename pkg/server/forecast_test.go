@@ -358,11 +358,9 @@ func TestHandleForecast(t *testing.T) {
 			MinBatterySOC:   5.0,
 			UtilityProvider: "test",
 			Location: &types.SiteLocation{
-				Latitude:     1,
-				Longitude:    1,
-				TimeZone:     "UTC",
-				SolarTilt:    30,
-				SolarAzimuth: 180,
+				Latitude:  1,
+				Longitude: 1,
+				TimeZone:  "UTC",
 			},
 			ESS: "mock",
 		}, types.CurrentSettingsVersion, time.Time{}, nil)

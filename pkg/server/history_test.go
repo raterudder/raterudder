@@ -819,11 +819,9 @@ func TestHandleHistoryEnergy(t *testing.T) {
 
 		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
 			Location: &types.SiteLocation{
-				TimeZone:     "UTC",
-				Latitude:     41.8781,
-				Longitude:    -87.6298,
-				SolarTilt:    20,
-				SolarAzimuth: 180,
+				TimeZone:  "UTC",
+				Latitude:  41.8781,
+				Longitude: -87.6298,
 			},
 		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
 
@@ -886,11 +884,9 @@ func TestHandleHistoryEnergy(t *testing.T) {
 
 		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
 			Location: &types.SiteLocation{
-				TimeZone:     "UTC",
-				Latitude:     41.8781,
-				Longitude:    -87.6298,
-				SolarTilt:    20,
-				SolarAzimuth: 180,
+				TimeZone:  "UTC",
+				Latitude:  41.8781,
+				Longitude: -87.6298,
 			},
 		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
 
@@ -937,11 +933,9 @@ func TestHandleHistoryEnergy(t *testing.T) {
 
 		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
 			Location: &types.SiteLocation{
-				TimeZone:     "UTC",
-				Latitude:     41.8781,
-				Longitude:    -87.6298,
-				SolarTilt:    20,
-				SolarAzimuth: 180,
+				TimeZone:  "UTC",
+				Latitude:  41.8781,
+				Longitude: -87.6298,
 			},
 		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
 
@@ -983,11 +977,9 @@ func TestHandleHistoryEnergy(t *testing.T) {
 
 		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
 			Location: &types.SiteLocation{
-				TimeZone:     "UTC",
-				Latitude:     41.8781,
-				Longitude:    -87.6298,
-				SolarTilt:    20,
-				SolarAzimuth: 180,
+				TimeZone:  "UTC",
+				Latitude:  41.8781,
+				Longitude: -87.6298,
 			},
 		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
 

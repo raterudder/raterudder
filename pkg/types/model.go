@@ -252,15 +252,13 @@ type Feedback struct {
 
 // SiteLocation represents the geographical location of a site.
 type SiteLocation struct {
-	PostalCode   string  `json:"postalCode"`
-	Latitude     float64 `json:"latitude"`
-	Longitude    float64 `json:"longitude"`
-	City         string  `json:"city"`
-	CountryCode  string  `json:"countryCode"`
-	TimeZone     string  `json:"timeZone"`
-	Elevation    float64 `json:"elevation"`
-	SolarAzimuth float64 `json:"solarAzimuth"`
-	SolarTilt    float64 `json:"solarTilt"`
+	PostalCode  string  `json:"postalCode"`
+	Latitude    float64 `json:"latitude"`
+	Longitude   float64 `json:"longitude"`
+	City        string  `json:"city"`
+	CountryCode string  `json:"countryCode"`
+	TimeZone    string  `json:"timeZone"`
+	Elevation   float64 `json:"elevation"`
 }
 
 // HourlyWeather represents the solar forecast data for a specific hour.

@@ -316,8 +316,6 @@ export interface Settings {
         consecutiveFailures: number;
         lastAttempt: string;
     };
-    solarAzimuth?: number;
-    solarTilt?: number;
     minStartChargeMinutes: number;
     solarCapacityBufferMinutes: number;
     vppChargingBufferMinutes: number;

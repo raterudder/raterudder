@@ -1288,17 +1288,15 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.True(t, mockW.AssertExpectations(t))
 	})
 
-	t.Run("Update Solar Direction - Preservation", func(t *testing.T) {
+	t.Run("Update Location - Preservation", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 
 		existingLoc := types.SiteLocation{
-			PostalCode:   "90210",
-			CountryCode:  "US",
-			Latitude:     34.0736,
-			Longitude:    -118.4004,
-			SolarAzimuth: 180,
-			SolarTilt:    25,
+			PostalCode:  "90210",
+			CountryCode: "US",
+			Latitude:    34.0736,
+			Longitude:   -118.4004,
 		}
 
 		srv := &Server{
@@ -1310,8 +1308,6 @@ func TestHandleUpdateSettings(t *testing.T) {
 			CountryCode:                 "US",
 			IgnoreHourUsageOverMultiple: 1.0,
 			SolarTrendRatioMax:          1.0,
-			SolarAzimuth:                270,
-			SolarTilt:                   30,
 		}
 		body, err := json.Marshal(bodyData)
 		require.NoError(t, err)
@@ -1326,10 +1322,8 @@ func TestHandleUpdateSettings(t *testing.T) {
 		}, types.CurrentSettingsVersion, time.Time{}, nil)
 
 		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
-			// Verify that the new azimuth and tilt are saved, but geo data is preserved
+			// Verify that geo data is preserved when zip/country did not change
 			return s.Location != nil &&
-				s.Location.SolarAzimuth == 270 &&
-				s.Location.SolarTilt == 30 &&
 				s.Location.Latitude == 34.0736 &&
 				s.Location.Longitude == -118.4004
 		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil)
@@ -1341,7 +1335,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.True(t, mockS.AssertExpectations(t))
 	})
 
-	t.Run("Update Solar Direction - With Zip Change", func(t *testing.T) {
+	t.Run("Update Location - With Zip Change", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockW := &mockWeather{}
@@ -1356,8 +1350,6 @@ func TestHandleUpdateSettings(t *testing.T) {
 			CountryCode:                 "US",
 			IgnoreHourUsageOverMultiple: 1.0,
 			SolarTrendRatioMax:          1.0,
-			SolarAzimuth:                270,
-			SolarTilt:                   15,
 		}
 		body, err := json.Marshal(bodyData)
 		require.NoError(t, err)
@@ -1395,8 +1387,6 @@ func TestHandleUpdateSettings(t *testing.T) {
 				},
 			},
 		}
-		newLoc.SolarAzimuth = 270
-		newLoc.SolarTilt = 15
 		mockW.On("Forecast", mock.Anything, newLoc, mock.Anything, mock.Anything).Return(weather, nil)
 		mockS.On("GetLatestWeatherTime", mock.Anything, mock.Anything).Return(time.Time{}, time.Time{}, 0, nil)
 		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
@@ -1407,10 +1397,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		mockS.On("UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Maybe()
 
 		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
-			// Verify that the new azimuth and tilt are preserved despite a zip change re-fetching location
 			return s.Location != nil &&
-				s.Location.SolarAzimuth == 270 &&
-				s.Location.SolarTilt == 15 &&
 				s.Location.PostalCode == "60601" &&
 				s.Location.Latitude == 41.8818
 		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()

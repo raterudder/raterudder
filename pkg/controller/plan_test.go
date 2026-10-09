@@ -732,13 +732,18 @@ func TestBuildPlanningTimeline(t *testing.T) {
 			})
 		}
 
-		// 14 days of history with 6.0 kWh solar at hours 12 and 13
+		// 14 days of history with 0.6 kWh at hour 7, 3.0 kWh at hour 8, and 6.0 kWh at hours 12 and 13
 		var history []types.EnergyStats
 		for d := 1; d <= 14; d++ {
 			day := runNow.Add(time.Duration(-d*24) * time.Hour)
 			for h := 0; h < 24; h++ {
 				solar := 0.0
-				if h == 12 || h == 13 {
+				switch h {
+				case 7:
+					solar = 0.6
+				case 8:
+					solar = 3.0
+				case 12, 13:
 					solar = 6.0
 				}
 				history = append(history, types.EnergyStats{
@@ -749,7 +754,7 @@ func TestBuildPlanningTimeline(t *testing.T) {
 			}
 		}
 
-		// Live solar is 1.2 kW (< 50% of 6.0 kW predicted)
+		// 1. Live solar at 12:00 is 1.2 kW (< 25% of 6.0 kW predicted at idx == 0)
 		status := types.SystemStatus{
 			Timestamp:          runNow,
 			BatteryCapacityKWH: 13.5,
@@ -769,6 +774,42 @@ func TestBuildPlanningTimeline(t *testing.T) {
 			assert.InDelta(t, 1.2*(20.0/60.0), timeline[2].solarKWH, 0.05)
 			// idx 3 (13:00-13:20) should return to normal predicted solar: 6.0 kW * (1/3 h) = 2.0 kWh
 			assert.InDelta(t, 6.0*(20.0/60.0), timeline[3].solarKWH, 0.05)
+		}
+
+		// 2. Morning ramp at 07:45 AM: live solar is 0.60 kW (100% of hour 7's 0.60 kW forecast, NOT depressed),
+		// while hour 8's forecast is 3.00 kW (> 4x 0.60 kW). Intervals idx 1 (08:00-08:20) and idx 2 (08:20-08:40)
+		// must NOT be depressed to 0.60 kW.
+		morningNow := time.Date(2026, 6, 15, 7, 45, 0, 0, chicagoLoc)
+		morningPrice := types.Price{
+			TSStart:       time.Date(2026, 6, 15, 7, 0, 0, 0, chicagoLoc),
+			TSEnd:         time.Date(2026, 6, 15, 8, 0, 0, 0, chicagoLoc),
+			DollarsPerKWH: 0.10,
+		}
+		var morningFuturePrices []types.Price
+		for h := 8; h < 20; h++ {
+			morningFuturePrices = append(morningFuturePrices, types.Price{
+				TSStart:       time.Date(2026, 6, 15, h, 0, 0, 0, chicagoLoc),
+				TSEnd:         time.Date(2026, 6, 15, h+1, 0, 0, 0, chicagoLoc),
+				DollarsPerKWH: 0.10,
+			})
+		}
+		morningStatus := types.SystemStatus{
+			Timestamp:          morningNow,
+			BatteryCapacityKWH: 13.5,
+			BatterySOC:         50,
+			SolarKW:            0.60,
+			TimeLocation:       "America/Chicago",
+		}
+		morningTimeline, _, _, err := c.buildPlanningTimeline(ctx, morningNow, morningPrice, morningFuturePrices, history, nil, types.Settings{
+			OptimizationProfile: "aggressive",
+		}, morningStatus)
+		require.NoError(t, err)
+		if assert.GreaterOrEqual(t, len(morningTimeline), 3) {
+			// idx 0 (07:45-08:00, 15m): 0.60 kW * 0.25h = 0.15 kWh
+			assert.InDelta(t, 0.60*0.25, morningTimeline[0].solarKWH, 0.02)
+			// idx 1 (08:00-08:20, 20m) and idx 2 (08:20-08:40, 20m): must remain at hour 8's 3.0 kW * (1/3h) = 1.0 kWh
+			assert.InDelta(t, 3.0*(20.0/60.0), morningTimeline[1].solarKWH, 0.05)
+			assert.InDelta(t, 3.0*(20.0/60.0), morningTimeline[2].solarKWH, 0.05)
 		}
 	})
 }

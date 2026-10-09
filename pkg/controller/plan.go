@@ -1181,6 +1181,7 @@ func (c *Controller) buildPlanningTimeline(
 	currentTime := now
 	currentPrice := nowPrice
 	idx := 0
+	var step0SolarDepressed bool
 
 	for currentTime.Before(maxEnd) && currentTime.Before(latestPriceTime) {
 		// Default interval boundary is top of the next hour
@@ -1360,13 +1361,16 @@ func (c *Controller) buildPlanningTimeline(
 		}
 		// For the immediate planning interval (idx == 0), if real-time telemetry is reporting active
 		// solar generation, use live generation power * durationHrs.
-		// If live solar is massively below the predicted rate (< 25%), assume the next 2 planning
-		// periods (40 minutes) are also depressed to avoid premature battery exports before the
-		// next 20-minute re-evaluation.
+		// If live solar at idx == 0 is massively below idx == 0's predicted rate (< 25%), assume the
+		// next 2 planning periods (40 minutes) are also depressed (clamped to never exceed their
+		// forecasted solarKWH) to avoid premature battery exports before the next 20-minute re-evaluation.
 		if currentStatus.SolarKW > 0 && durationHrs > 0 {
 			expectedSolarKW := solarKWH / durationHrs
-			if idx == 0 || (idx <= 2 && currentStatus.SolarKW < expectedSolarKW*0.25) {
+			if idx == 0 {
+				step0SolarDepressed = expectedSolarKW > 0.1 && currentStatus.SolarKW < expectedSolarKW*0.25
 			solarKWH = currentStatus.SolarKW * durationHrs
+} else if idx <= 2 && step0SolarDepressed {
+				solarKWH = min(solarKWH, currentStatus.SolarKW*durationHrs)
 }
 		}
 

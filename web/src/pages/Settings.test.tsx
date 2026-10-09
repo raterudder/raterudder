@@ -401,62 +401,6 @@ describe('App & Settings', () => {
         });
     });
 
-    it('can update roof solar panel direction', async () => {
-        const user = userEvent.setup();
-        const stagingSettings = { release: 'staging', solarAzimuth: 0, solarTilt: 25, ess: 'mock', hasCredentials: { mock: true } };
-        (fetchSettings as any).mockResolvedValue(stagingSettings);
-        (fetchAuthStatus as any).mockResolvedValue({ ...defaultAuthStatus, loggedIn: true });
-
-        render(<App />);
-        fireEvent.click(screen.getByText(/Log In/));
-        await waitFor(() => expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument());
-        fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
-        await screen.findByRole('heading', { name: /^Settings$/i });
-
-        const directionSelect = await screen.findByLabelText(/Solar Direction/i);
-        await user.click(directionSelect);
-        const northOption = await screen.findByRole('option', { name: 'North' });
-        await user.click(northOption);
-
-        const saveBtn = screen.getByText('Save Settings');
-        fireEvent.click(saveBtn);
-
-        await waitFor(() => {
-            expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
-                solarAzimuth: 0,
-                solarTilt: 25
-            }), expect.any(String), undefined);
-        });
-    });
-
-    it('can update roof solar panel direction to intermediate directions', async () => {
-        const user = userEvent.setup();
-        const stagingSettings = { release: 'staging', solarAzimuth: 0, solarTilt: 25, ess: 'mock', hasCredentials: { mock: true } };
-        (fetchSettings as any).mockResolvedValue(stagingSettings);
-        (fetchAuthStatus as any).mockResolvedValue({ ...defaultAuthStatus, loggedIn: true });
-
-        render(<App />);
-        fireEvent.click(screen.getByText(/Log In/));
-        await waitFor(() => expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument());
-        fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
-        await screen.findByRole('heading', { name: /^Settings$/i });
-
-        const directionSelect = await screen.findByLabelText(/Solar Direction/i);
-        await user.click(directionSelect);
-        const northeastOption = await screen.findByRole('option', { name: 'Northeast' });
-        await user.click(northeastOption);
-
-        const saveBtn = screen.getByText('Save Settings');
-        fireEvent.click(saveBtn);
-
-        await waitFor(() => {
-            expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
-                solarAzimuth: 45,
-                solarTilt: 25
-            }), expect.any(String), undefined);
-        });
-    });
-
     it('can update ComEd rate options', async () => {
         (fetchSettings as any).mockResolvedValue({
             ...defaultSettings,
@@ -2631,7 +2575,7 @@ describe('App & Settings', () => {
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
                 release: 'production',
-evChargingStandby: undefined,
+                evChargingStandby: undefined,
                 evChargingPeriods: undefined,
             });
             await navigateToSettings();
@@ -2669,21 +2613,21 @@ evChargingStandby: undefined,
 
         it('toggling switch ON enables evChargingStandby and saves without requiring charging hours', async () => {
             const user = userEvent.setup();
-                            (api.fetchSettings as any).mockResolvedValue({
-                    ...defaultSettings,
-                    release: 'staging',
-                    evChargingStandby: false,
-                });
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                release: 'staging',
+                evChargingStandby: false,
+            });
 
-                await navigateToSettings();
+            await navigateToSettings();
 
-                const evSwitch = screen.getByRole('switch', { name: /Avoid Battery for EV Charging/i });
-                expect(evSwitch).not.toBeChecked();
+            const evSwitch = screen.getByRole('switch', { name: /Avoid Battery for EV Charging/i });
+            expect(evSwitch).not.toBeChecked();
 
-                await user.click(evSwitch);
-                expect(evSwitch).toBeChecked();
+            await user.click(evSwitch);
+            expect(evSwitch).toBeChecked();
 
-                const saveBtn = screen.getByText('Save Settings');
+            const saveBtn = screen.getByText('Save Settings');
             await user.click(saveBtn);
 
             await waitFor(() => {
@@ -2702,7 +2646,7 @@ evChargingStandby: undefined,
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
                 release: 'staging',
-evChargingStandby: true,
+                evChargingStandby: true,
                 evChargingPeriods: [
                     {
                         name: 'Nighttime EV Charging',
@@ -2721,7 +2665,7 @@ evChargingStandby: true,
             await waitFor(() => {
                 expect(evSwitch).not.toBeChecked();
             });
-                    });
+        });
     });
 
     describe('Direct Solar and Battery Export Management', () => {

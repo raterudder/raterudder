@@ -88,11 +88,9 @@ type Settings struct {
 	ManageTOUSchedules bool `json:"manageTOUSchedules"`
 
 	// Location settings
-	CountryCode  string  `json:"countryCode"`
-	PostalCode   string  `json:"postalCode"`
-	SolarAzimuth float64 `json:"solarAzimuth"`
-	SolarTilt    float64 `json:"solarTilt"`
-	// Location is set by the weather package and the solar azimuth/tilt are copied
+	CountryCode string `json:"countryCode"`
+	PostalCode  string `json:"postalCode"`
+	// Location is set by the weather package
 	Location *SiteLocation `json:"location,omitempty"`
 
 	// Solar Settings

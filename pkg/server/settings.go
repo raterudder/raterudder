@@ -324,10 +324,6 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			}
 			newSettings.Location = &loc
 
-			// Set user-provided azimuth/tilt
-			loc.SolarAzimuth = newSettings.SolarAzimuth
-			loc.SolarTilt = newSettings.SolarTilt
-
 			updatedWeather = true
 			wg.Go(func() {
 				log.Ctx(ctx).InfoContext(ctx, "fetching initial weather for new location")
@@ -339,11 +335,6 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			})
 		} else {
 			newSettings.Location = existing.Location
-			// Always sync solar azimuth/tilt into location if it's set
-			if newSettings.Location != nil {
-				newSettings.Location.SolarAzimuth = newSettings.SolarAzimuth
-				newSettings.Location.SolarTilt = newSettings.SolarTilt
-			}
 		}
 	} else {
 		newSettings.Location = nil

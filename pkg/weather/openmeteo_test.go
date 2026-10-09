@@ -197,9 +197,10 @@ func TestOpenMeteoService(t *testing.T) {
 
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				query := r.URL.Query()
-				assert.Equal(t, "20.000000", query.Get("tilt"))
-				// South is 180 in compass, should be 0 in Open-Meteo
-				assert.Equal(t, "0.000000", query.Get("azimuth"))
+				hourly := query.Get("hourly")
+				assert.NotContains(t, hourly, "global_tilted_irradiance")
+				assert.Empty(t, query.Get("tilt"))
+				assert.Empty(t, query.Get("azimuth"))
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(mockBody)
 			}))
@@ -208,7 +209,7 @@ func TestOpenMeteoService(t *testing.T) {
 			forecastURL, parseErr := url.Parse(ts.URL + "/v1/forecast")
 			require.NoError(t, parseErr)
 			s := &OpenMeteo{ForecastURL: forecastURL, HTTPClient: ts.Client()}
-			res, err := s.Forecast(context.Background(), types.SiteLocation{Latitude: 34.0, Longitude: -118.0, TimeZone: timezone, SolarTilt: 20, SolarAzimuth: 180}, startDay, endDay)
+			res, err := s.Forecast(context.Background(), types.SiteLocation{Latitude: 34.0, Longitude: -118.0, TimeZone: timezone}, startDay, endDay)
 
 			require.NoError(t, err)
 			assert.Len(t, res, 3)
@@ -234,26 +235,6 @@ func TestOpenMeteoService(t *testing.T) {
 				assert.Equal(t, 35.0, res[2].ForecastHours[0].CloudCoverPercent) // (30+40)/2
 				assert.Equal(t, 60.0, res[2].ForecastHours[0].SnowDepthCM)       // (0.5+0.7)/2 * 100
 			}
-		})
-
-		t.Run("tilt zero", func(t *testing.T) {
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				query := r.URL.Query()
-				hourly := query.Get("hourly")
-				assert.NotContains(t, hourly, "global_tilted_irradiance")
-				assert.Empty(t, query.Get("tilt"))
-				assert.Empty(t, query.Get("azimuth"))
-
-				w.WriteHeader(http.StatusOK)
-				json.NewEncoder(w).Encode(weatherForecastResponse{})
-			}))
-			defer ts.Close()
-
-			forecastURL, parseErr := url.Parse(ts.URL + "/v1/forecast")
-			require.NoError(t, parseErr)
-			s := &OpenMeteo{ForecastURL: forecastURL, HTTPClient: ts.Client()}
-			_, err = s.Forecast(context.Background(), types.SiteLocation{Latitude: 34.0, Longitude: -118.0, TimeZone: timezone, SolarTilt: 0}, startDay, endDay)
-			require.NoError(t, err)
 		})
 	})
 

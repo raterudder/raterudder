@@ -155,14 +155,6 @@ func (s *OpenMeteo) Forecast(
 	q.Set("latitude", fmt.Sprintf("%f", loc.Latitude))
 	q.Set("longitude", fmt.Sprintf("%f", loc.Longitude))
 	hourly := []string{"shortwave_radiation", "diffuse_radiation", "direct_normal_irradiance", "snow_depth", "snowfall", "cloud_cover", "temperature_2m"}
-	if loc.SolarTilt > 0 {
-		hourly = append(hourly, "global_tilted_irradiance")
-		q.Set("tilt", fmt.Sprintf("%f", loc.SolarTilt))
-		// Open-Meteo expects Azimuth 0 south, -90 = east, +90 = west.
-		// Our system uses compass degrees where 0 = North, 90 = East, 180 = South, 270 = West.
-		omAzimuth := loc.SolarAzimuth - 180
-		q.Set("azimuth", fmt.Sprintf("%f", omAzimuth))
-	}
 	q.Set("hourly", strings.Join(hourly, ","))
 	q.Set("daily", "sunrise,sunset")
 	q.Set("timezone", timezone)
@@ -229,10 +221,6 @@ func (s *OpenMeteo) Forecast(
 	if len(data.Hourly.Time) != len(data.Hourly.CloudCover) {
 		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.Int("timeCount", len(data.Hourly.Time)), slog.Int("cloudCoverCount", len(data.Hourly.CloudCover)))
 		return nil, fmt.Errorf("hourly data mismatch: %d times, %d cloud cover", len(data.Hourly.Time), len(data.Hourly.CloudCover))
-	}
-	if loc.SolarTilt > 0 && len(data.Hourly.Time) != len(data.Hourly.TiltedRadiation) {
-		log.Ctx(ctx).ErrorContext(ctx, "open-meteo: hourly data mismatch", slog.Int("timeCount", len(data.Hourly.Time)), slog.Int("tiltedRadiationCount", len(data.Hourly.TiltedRadiation)))
-		return nil, fmt.Errorf("hourly data mismatch: %d times, %d tilted radiation", len(data.Hourly.Time), len(data.Hourly.TiltedRadiation))
 	}
 
 	// Parse the response into daily types.Weather structs
