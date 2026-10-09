@@ -180,6 +180,12 @@ const (
 	// corresponding to 4 hours of baseline residential consumption at 1.5 kW.
 	defaultPostHorizonLoadKWH = 6.0
 
+	// terminalTier1DiscountFactor (0.95) applies a 5% time-preference discount to banked battery
+	// energy up to the forecasted post-horizon home load. This ensures the solver strictly prefers
+	// covering certain in-horizon home load at rate R today over hoarding energy in Standby to T+24h
+	// for speculative post-horizon consumption at the same rate R tomorrow.
+	terminalTier1DiscountFactor = 0.95
+
 	// terminalSurplusDiscountFactor (0.70) applies a 30% discount to banked battery energy exceeding
 	// the immediate post-horizon household load requirements, reflecting diminishing marginal utility
 	// and future solar replenishment opportunity.
@@ -2262,9 +2268,11 @@ func (c *Controller) appendActionCandidates(
 	//
 	// Standby MUST be pruned during genuine peak windows (`isTruePeak`, where import rate is at the horizon maximum
 	// and price spread exceeds minPeakRateSpreadDollars) even if `isAlreadyStandby` is true, because idling during expensive
-	// peak rates forces peak grid purchases. However, when `!isTruePeak` (flat rates, off-peak, horizon end), maintaining
-	// standby (`canMaintainStandby := isAlreadyStandby && !isTruePeak`) prevents mode churn and horizon truncation artifacts.
-	canMaintainStandby := isAlreadyStandby && !isTruePeak
+	// peak rates forces peak grid purchases. At future rollout steps (`stepIdx > 0`), when all four forward-looking hold
+	// reasons are false, we also only maintain standby if the battery wouldn't discharge to cover net home load anyway
+	// (`!canDischarge || interval.loadKWH <= interval.solarKWH`), preventing an overnight hold from staying locked in
+	// Standby all day when a weekend/moderate TOU spread is below minPeakRateSpreadDollars.
+	canMaintainStandby := isAlreadyStandby && !isTruePeak && (stepIdx == 0 || !canDischarge || interval.loadKWH <= interval.solarKWH)
 	shouldOfferStandby := len(timeline) == 0 || hasHigherFutureRate || hasHigherFutureExport || hasUpcomingSolarRefill || hasVPPAhead || canMaintainStandby
 	if shouldOfferStandby {
 		reason := types.ActionReasonDeficitSaveForPeak
@@ -3758,8 +3766,10 @@ func calculateTerminalValuation(
 	// 3. Ending above target reserve: credit for banked energy displacing future imports.
 	// Uses a two-tier concave valuation:
 	// Tier 1: Stored energy up to the forecasted post-horizon home consumption (typically 8 hours)
-	//         displaces grid imports at the baseline replacement rate.
-	// Tier 2: Surplus energy beyond post-horizon home load is credited with a 30% discount (0.70x)
+	//         displaces grid imports at the baseline replacement rate with a slight 5% time-preference
+	//         discount (0.95x) so certain in-horizon self-consumption at rate R strictly beats hoarding
+	//         energy to T+24h for the same rate R tomorrow.
+	// Tier 2: Surplus energy beyond post-horizon home load is credited with an additional 30% discount
 	//         reflecting diminishing returns and future solar replenishment opportunity.
 	tier1CapacityKWH := anchors.postHorizonLoadKWH
 	if tier1CapacityKWH <= 0 {
@@ -3769,7 +3779,7 @@ func calculateTerminalValuation(
 	tier1KWH := min(energyDeltaKWH, tier1CapacityKWH)
 	tier2KWH := max(0.0, energyDeltaKWH-tier1CapacityKWH)
 
-	tier1CreditRate := replacementRate * oneWayEff
+	tier1CreditRate := replacementRate * oneWayEff * terminalTier1DiscountFactor
 	tier2CreditRate := tier1CreditRate * terminalSurplusDiscountFactor
 
 	totalCredit := (tier1KWH * tier1CreditRate) + (tier2KWH * tier2CreditRate)

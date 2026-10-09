@@ -7633,6 +7633,124 @@ func TestPlanScenarios(t *testing.T) {
 		assert.Equal(t, types.BatteryModeLoad, decWithStandby.Action.BatteryMode,
 			"Preceding Standby must not block transitioning to BatteryModeLoad when battery is full and off-peak load is present")
 	})
+
+	t.Run("WeekendModerateSpread_ChargesAtSuperOffPeakAndDischargesDuringDaytimeOffPeak", func(t *testing.T) {
+		t.Parallel()
+
+		nyLoc, err := time.LoadLocation("America/New_York")
+		require.NoError(t, err)
+
+		// Friday evening 5:30 PM EDT:
+		// - Friday 6:00 PM - 7:00 PM is weekday On-Peak ($0.3144/kWh)
+		// - Friday 10:00 PM - Saturday 5:00 AM is Super Off-Peak ($0.05500/kWh)
+		// - Saturday 5:00 AM - 10:00 PM is weekend Off-Peak ($0.10481/kWh, no weekend On-Peak)
+		// Weekend spread ($0.10481 - $0.05500 = $0.04981) is profitable to pre-charge for,
+		// but is below minPeakRateSpreadDollars ($0.10).
+		friEvening := time.Date(2026, 10, 9, 17, 30, 0, 0, nyLoc)
+
+		rateForHour := func(ts time.Time) float64 {
+			h := ts.Hour()
+			if h >= 22 || h < 5 {
+				return 0.05500
+			}
+			if ts.Weekday() != time.Saturday && ts.Weekday() != time.Sunday && h == 18 {
+				return 0.31440
+			}
+			return 0.10481
+		}
+
+		friHourStart := time.Date(2026, 10, 9, 17, 0, 0, 0, nyLoc)
+		currentPrice := types.Price{
+			TSStart:       friHourStart,
+			TSEnd:         friHourStart.Add(time.Hour),
+			DollarsPerKWH: rateForHour(friHourStart),
+		}
+		var futurePrices []types.Price
+		for h := 1; h <= 48; h++ {
+			ts := friHourStart.Add(time.Duration(h) * time.Hour)
+			futurePrices = append(futurePrices, types.Price{
+				TSStart:       ts,
+				TSEnd:         ts.Add(time.Hour),
+				DollarsPerKWH: rateForHour(ts),
+			})
+		}
+
+		var history []types.EnergyStats
+		for d := 1; d <= 7; d++ {
+			for h := 0; h < 24; h++ {
+				solar := 0.0
+				if h >= 9 && h <= 15 {
+					solar = 1.0 // Modest 7 kWh/day solar vs ~38 kWh/day load (net deficit)
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart:  friHourStart.AddDate(0, 0, -d).Truncate(24 * time.Hour).Add(time.Duration(h) * time.Hour),
+					HomeKWH:      1.6,
+					SolarKWH:     solar,
+					TimeLocation: "America/New_York",
+				})
+			}
+		}
+
+		settings := types.Settings{
+			MinBatterySOC:       20,
+			GridChargeBatteries: true,
+			GridExportSolar:     false,
+			UtilityRateOptions: types.UtilityRateOptions{
+				NetMeteringCredits: true,
+			},
+			SolarNetMeteringCreditsValue: "none",
+		}
+
+		friStatus := types.SystemStatus{
+			Timestamp:             friEvening,
+			TimeLocation:          "America/New_York",
+			BatteryCapacityKWH:    15.0,
+			BatterySOC:            34.0,
+			MaxBatteryChargeKW:    8.0,
+			MaxBatteryDischargeKW: 10.0,
+			HomeKW:                1.6,
+		}
+
+		_, friPlan, err := c.Plan(ctx, friStatus, currentPrice, futurePrices, history, nil, settings, nil)
+		require.NoError(t, err)
+		require.NotEmpty(t, friPlan.Periods)
+
+		// Verify Friday night charges at $0.055 and Saturday morning (5:00 AM onwards) discharges in BatteryModeLoad
+		sawSuperOffPeakCharge := false
+		satMorningTime := time.Date(2026, 10, 10, 5, 0, 0, 0, nyLoc)
+		for _, p := range friPlan.Periods {
+			if p.ImportDollars <= 0.056 && p.BatteryMode == types.BatteryModeChargeAny {
+				sawSuperOffPeakCharge = true
+			}
+			if !p.TSStart.Before(satMorningTime) && p.StartSOC > 25.0 {
+				assert.Equal(t, types.BatteryModeLoad, p.BatteryMode,
+					"Saturday morning (%s) at $0.10481/kWh must discharge to cover home load, not stay stuck in Standby", p.TSStart.Format(time.RFC3339))
+			}
+		}
+		assert.True(t, sawSuperOffPeakCharge, "Must schedule grid charging during Friday night Super Off-Peak ($0.055/kWh)")
+
+		// Also verify step-0 execution at 5:00 AM Saturday when entering from overnight Standby at 100% SOC
+		satStatus := friStatus
+		satStatus.Timestamp = satMorningTime
+		satStatus.BatterySOC = 100.0
+		satPrice := types.Price{
+			TSStart:       satMorningTime,
+			TSEnd:         satMorningTime.Add(time.Hour),
+			DollarsPerKWH: 0.10481,
+		}
+		lastActStandby := &types.Action{
+			BatteryMode:  types.BatteryModeStandby,
+			Reason:       types.ActionReasonDeficitSaveForPeak,
+			Timestamp:    satMorningTime.Add(-20 * time.Minute),
+			CurrentPrice: &types.Price{DollarsPerKWH: 0.05500},
+		}
+		satDec, _, err := c.Plan(ctx, satStatus, satPrice, futurePrices, history, nil, settings, lastActStandby)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeLoad, satDec.Action.BatteryMode,
+			"At 5:00 AM Saturday, battery must transition out of overnight Standby into BatteryModeLoad")
+		assert.NotEqual(t, types.ActionReasonDischargeAtPeak, satDec.Action.Reason,
+			"Weekend Off-Peak ($0.10481/kWh) should not be mislabeled as DischargeAtPeak")
+	})
 }
 
 func BenchmarkSearchOptimalPlan(b *testing.B) {
