@@ -11,6 +11,17 @@ export const getBatteryModeLabel = (mode: number) => {
     }
 };
 
+export const getBatteryPillLabel = (mode: number) => {
+    switch (mode) {
+        case BatteryMode.Standby: return 'Hold Battery';
+        case BatteryMode.ChargeAny: return 'Charge From Solar+Grid';
+        case BatteryMode.Load: return 'Power Home';
+        case BatteryMode.Export: return 'Export to Grid';
+        case BatteryMode.NoChange: return 'No Change';
+        default: return 'Unknown';
+    }
+};
+
 export const getBatteryModeClass = (mode: number) => {
     switch (mode) {
         case BatteryMode.Standby: return 'standby';
@@ -205,7 +216,7 @@ export const getReasonText = (action: Action, symbol: string = '$'): string => {
         }
         case ActionReason.DischargeBeforeCapacity: {
             const parts = [
-                `Solar generation is forecast to fully charge the battery${capacityTimeStr ? ` by ${capacityTimeStr}` : ''} before the next predicted deficit${deficitTimeStr ? ` at ${deficitTimeStr}` : ''}.`,
+                `Solar generation is forecast to fully charge the battery${capacityTimeStr ? ` by ${capacityTimeStr}` : ''} before it would run low${deficitTimeStr ? ` at ${deficitTimeStr}` : ''}.`,
                 `Relying on solar and battery now to power the home, since the battery will refill anyway.`,
             ];
             return parts.concat(suffixParts).join(' ');
@@ -216,7 +227,7 @@ export const getReasonText = (action: Action, symbol: string = '$'): string => {
             if (deficitTimeStr) {
                 parts.push(`If we rely on the battery, it would deplete around ${deficitTimeStr}.`);
             }
-            parts.push(`Since electricity prices now (${nowCostStr}) are cheap and are expected to remain cheap before the deficit, we can delay charging for now. We are keeping the battery in standby to preserve its remaining energy for the peak period${futureCostStr ? ` (${futureCostStr})` : ''}.`);
+            parts.push(`Since electricity prices now (${nowCostStr}) are cheap and are expected to remain cheap before the battery runs low, we can delay charging for now. We are keeping the battery in standby to preserve its remaining energy for the peak period${futureCostStr ? ` (${futureCostStr})` : ''}.`);
             if (delta !== null && delta >= 0.01) parts.push(`Estimated savings: ${formatPrice(delta, symbol)}.`);
             return parts.concat(suffixParts).join(' ');
         }
@@ -370,7 +381,7 @@ export const getReasonText = (action: Action, symbol: string = '$'): string => {
         }
         case ActionReason.ArbitrageHoldExport: {
             const parts = [
-                `An export arbitrage window is coming up${futureCostStr ? ` (${futureCostStr})` : ''} with higher rates than now (${nowCostStr}).`,
+                `Higher export credit rates are coming up${futureCostStr ? ` (${futureCostStr})` : ''} compared to right now (${nowCostStr}).`,
                 `Keeping the battery in standby to preserve stored energy, allowing maximum solar export to the grid during the peak period.`,
             ];
             return parts.concat(suffixParts).join(' ');
@@ -378,7 +389,7 @@ export const getReasonText = (action: Action, symbol: string = '$'): string => {
         case ActionReason.ArbitrageHold:
         case ActionReason.ArbitrageHoldSave: {
             const parts = [
-                `An arbitrage window is coming up${futureCostStr ? ` (${futureCostStr})` : ''} with higher rates than now (${nowCostStr}).`,
+                `Higher electricity prices are coming up${futureCostStr ? ` (${futureCostStr})` : ''} compared to right now (${nowCostStr}).`,
                 `Keeping the battery in standby to preserve stored energy so we can avoid importing from the grid during the peak period.`,
             ];
             return parts.concat(suffixParts).join(' ');
@@ -402,6 +413,8 @@ export interface ActionSummary {
     avgSOC: number;
     minSOC: number;
     maxSOC: number;
+    startSOC?: number;
+    endSOC?: number;
     count: number;
     alarms: Set<string>;
     storms: Set<string>;
@@ -409,6 +422,7 @@ export interface ActionSummary {
     stormEnd?: Date;
     hasPrice: boolean;
     hasSOC: boolean;
+    hasSolar?: boolean;
 }
 
 export interface ActionSummaryAccumulator extends Omit<ActionSummary, 'avgPrice' | 'avgSOC'> {
@@ -417,6 +431,482 @@ export interface ActionSummaryAccumulator extends Omit<ActionSummary, 'avgPrice'
     socTotal: number;
     socCount: number;
 }
+
+export const formatSOCRange = (startSOC: number, endSOC: number): string => {
+    const startRound = Math.round(startSOC);
+    const endRound = Math.round(endSOC);
+    if (Math.abs(endRound - startRound) >= 1) {
+        return `${startRound}% → ${endRound}%`;
+    }
+    return `${endRound}%`;
+};
+
+export const hasSolarActivity = (item: Action | ActionSummary): boolean => {
+    if ('isSummary' in item) {
+        if (item.hasSolar !== undefined) {
+            return item.hasSolar;
+        }
+        return (item.latestAction.systemStatus?.solarKW ?? 0) > 0;
+    }
+    return (item.systemStatus?.solarKW ?? 0) > 0;
+};
+
+export const getActionTitle = (action: Action, isSummaryFault = false): string => {
+    const isFault = !!action.fault || isSummaryFault;
+    const hasStorms = Boolean(action.systemStatus?.storms && action.systemStatus.storms.length > 0);
+    const isEmergency = hasStorms || action.reason === ActionReason.EmergencyMode;
+    const isVPP = !!action.systemStatus?.vppActive || action.reason === ActionReason.VPPActive;
+
+    if (isVPP) {
+        return 'VPP Event Active';
+    }
+    if (isEmergency) {
+        return hasStorms ? 'Storm Hedge Mode' : 'Emergency Mode';
+    }
+    if (action.reason === ActionReason.GridUnavailable || action.systemStatus?.gridUnavailable) {
+        return 'Grid Unavailable';
+    }
+    if (isFault) {
+        return 'System Fault';
+    }
+    if (action.batteryMode === BatteryMode.NoChange) {
+        return 'No Change';
+    }
+
+    switch (action.reason) {
+        case ActionReason.BatteryAtReserve:
+            return 'Battery At Reserve';
+        case ActionReason.DirectExport:
+            if (action.batteryMode === BatteryMode.Export) {
+                return action.solarMode === SolarMode.Export ? 'Battery & Solar Grid Export' : 'Direct Battery Export';
+            }
+            if (action.batteryMode === BatteryMode.Standby) {
+                return 'Peak Defense Standby';
+            }
+            return 'Direct Solar Export';
+        case ActionReason.ArbitrageHoldExport:
+        case ActionReason.ArbitrageHoldSave:
+        case ActionReason.ArbitrageHold:
+            return 'Saving Battery for Peak';
+        case ActionReason.HoldSimilarPrice:
+            return 'Standby for Similar Price';
+        case ActionReason.VPPPrep:
+            return 'VPP Pre-Charging';
+        case ActionReason.AlwaysChargeBelowThreshold:
+            return 'Low-Rate Grid Charge';
+        case ActionReason.DeficitCharge:
+            return 'Topping Up Battery';
+        case ActionReason.ArbitrageChargeExport:
+        case ActionReason.ArbitrageChargeSave:
+        case ActionReason.ArbitrageCharge:
+            return 'Charging Before Peak';
+        case ActionReason.SufficientBattery:
+            return 'Self-Powered';
+        case ActionReason.SufficientBatteryTillCharge:
+            return 'Using Battery Until Cheap Window';
+        case ActionReason.DischargeBeforeCapacity:
+            return 'Using Battery Before Solar Refill';
+        case ActionReason.PreventSolarCurtailment:
+            return 'Making Room for Solar';
+        case ActionReason.DischargeAtPeak:
+            return 'Peak Rate Defense';
+        case ActionReason.DeficitSave:
+        case ActionReason.DeficitSaveForPeak:
+            return 'Saving Battery for Peak';
+        case ActionReason.WaitingToCharge:
+            return 'Waiting for Cheaper Rate';
+        case ActionReason.EVChargingStandby:
+            return 'EV Charging Standby';
+        case ActionReason.MissingBattery:
+            return 'Missing Battery Info';
+        default:
+            return getBatteryModeLabel(action.batteryMode);
+    }
+};
+
+export type SummaryPhaseCategory =
+    | 'charge'
+    | 'solarCharge'
+    | 'load'
+    | 'solarExport'
+    | 'export'
+    | 'standby'
+    | 'vpp'
+    | 'fault';
+
+export interface DaySummarySegment {
+    category: SummaryPhaseCategory;
+    leftPercent: number;
+    widthPercent: number;
+}
+
+export interface DaySummaryBeat {
+    category: SummaryPhaseCategory;
+    headline: string;
+    timeLabel: string;
+    socText?: string;
+    priceText?: string;
+}
+
+export interface DaySummaryLegendItem {
+    category: SummaryPhaseCategory;
+    label: string;
+}
+
+export interface DaySummaryData {
+    segments: DaySummarySegment[];
+    beats: DaySummaryBeat[];
+    legend: DaySummaryLegendItem[];
+}
+
+const SUMMARY_LEGEND_ORDER: DaySummaryLegendItem[] = [
+    { category: 'solarCharge', label: 'Solar Charge' },
+    { category: 'load', label: 'Powering Home' },
+    { category: 'solarExport', label: 'Solar Export' },
+    { category: 'standby', label: 'Standby' },
+    { category: 'charge', label: 'Grid Charge' },
+    { category: 'export', label: 'Grid Export' },
+    { category: 'vpp', label: 'VPP Event' },
+    { category: 'fault', label: 'Alert' },
+];
+
+const getMinutesFromMidnight = (isoStr?: string, referenceTs?: string): number => {
+    if (!isoStr || isZeroTime(isoStr)) return 0;
+    try {
+        const d = new Date(isoStr);
+        if (isNaN(d.getTime())) return 0;
+        const offsetMinutes = extractOffsetMinutes(isoStr) ?? extractOffsetMinutes(referenceTs);
+        if (offsetMinutes !== null && offsetMinutes !== undefined) {
+            const targetDate = new Date(d.getTime() + offsetMinutes * 60 * 1000);
+            return targetDate.getUTCHours() * 60 + targetDate.getUTCMinutes();
+        }
+        return d.getHours() * 60 + d.getMinutes();
+    } catch {
+        return 0;
+    }
+};
+
+const classifySummaryItem = (
+    item: Action | ActionSummary,
+    startSOC: number,
+    endSOC: number,
+    hasSOC: boolean
+): SummaryPhaseCategory => {
+    const action = 'isSummary' in item ? item.latestAction : item;
+    const isSummaryFault = 'isSummary' in item && item.type === 'fault';
+    const isVPP = !!action.systemStatus?.vppActive || action.reason === ActionReason.VPPActive;
+    if (isVPP) return 'vpp';
+
+    const hasStorms = Boolean(action.systemStatus?.storms && action.systemStatus.storms.length > 0);
+    const isFaultOrEmergency =
+        !!action.fault ||
+        isSummaryFault ||
+        hasStorms ||
+        action.reason === ActionReason.EmergencyMode ||
+        action.reason === ActionReason.GridUnavailable ||
+        !!action.systemStatus?.gridUnavailable;
+    if (isFaultOrEmergency) return 'fault';
+
+    const effectiveMode =
+        action.targetBatteryMode !== undefined && action.targetBatteryMode !== BatteryMode.NoChange
+            ? action.targetBatteryMode
+            : action.batteryMode;
+
+    if (effectiveMode === BatteryMode.ChargeAny) {
+        return 'charge';
+    }
+    if (effectiveMode === BatteryMode.Export) {
+        return 'export';
+    }
+    if (action.reason === ActionReason.DirectExport && effectiveMode !== BatteryMode.Standby) {
+        return 'solarExport';
+    }
+    if (
+        (hasSOC && Math.round(endSOC) - Math.round(startSOC) >= 1) ||
+        (!('isSummary' in item) &&
+            (action.systemStatus?.batteryKW ?? 0) < -0.1 &&
+            (action.systemStatus?.solarKW ?? 0) > 0)
+    ) {
+        return 'solarCharge';
+    }
+    if (effectiveMode === BatteryMode.Load && action.reason !== ActionReason.BatteryAtReserve) {
+        return 'load';
+    }
+    return 'standby';
+};
+
+const getSummaryBeatHeadline = (
+    category: SummaryPhaseCategory,
+    action: Action,
+    isCurrent: boolean
+): string => {
+    const hasStorms = Boolean(action.systemStatus?.storms && action.systemStatus.storms.length > 0);
+    switch (category) {
+        case 'charge':
+            if (action.reason === ActionReason.VPPPrep) {
+                return isCurrent ? 'Pre-charging for VPP' : 'Pre-charged for VPP';
+            }
+            if (action.reason === ActionReason.AlwaysChargeBelowThreshold) {
+                return isCurrent ? 'Charging at low price' : 'Charged at low price';
+            }
+            if (
+                action.reason === ActionReason.ArbitrageChargeExport ||
+                action.reason === ActionReason.ArbitrageChargeSave ||
+                action.reason === ActionReason.ArbitrageCharge
+            ) {
+                return isCurrent ? 'Charging before peak' : 'Charged before peak';
+            }
+            if (action.reason === ActionReason.DeficitCharge) {
+                return isCurrent ? 'Topping up battery' : 'Topped up battery';
+            }
+            return isCurrent ? 'Charging battery' : 'Charged battery';
+        case 'solarCharge':
+            return isCurrent ? 'Charging from solar' : 'Charged from solar';
+        case 'solarExport':
+            return isCurrent ? 'Exporting solar' : 'Exported solar';
+        case 'export':
+            if (action.batteryMode === BatteryMode.Load && action.solarMode === SolarMode.Export) {
+                return isCurrent ? 'Exporting solar' : 'Exported solar';
+            }
+            return isCurrent ? 'Exporting to grid' : 'Exported to grid';
+        case 'load':
+            if (action.reason === ActionReason.DischargeAtPeak) {
+                return isCurrent ? 'Powering home at peak' : 'Powered home at peak';
+            }
+            if (
+                action.reason === ActionReason.PreventSolarCurtailment ||
+                action.reason === ActionReason.DischargeBeforeCapacity
+            ) {
+                return isCurrent ? 'Making room for solar' : 'Made room for solar';
+            }
+            return isCurrent ? 'Running on solar & battery' : 'Ran on solar & battery';
+        case 'vpp':
+            return isCurrent ? 'VPP event active' : 'VPP event';
+        case 'fault':
+            if (hasStorms) {
+                return isCurrent ? 'Preparing for storm' : 'Prepared for storm';
+            }
+            if (action.reason === ActionReason.GridUnavailable || action.systemStatus?.gridUnavailable) {
+                return 'Grid outage backup';
+            }
+            if (action.reason === ActionReason.EmergencyMode) {
+                return 'Emergency mode active';
+            }
+            return 'System fault detected';
+        case 'standby':
+        default:
+            return isCurrent ? 'Holding battery in standby' : 'Held battery in standby';
+    }
+};
+
+export const buildDaySummary = (
+    groupedActions: (Action | ActionSummary)[],
+    currencySymbol: string = '$'
+): DaySummaryData => {
+    if (!groupedActions || groupedActions.length === 0) {
+        return { segments: [], beats: [], legend: [] };
+    }
+
+    // groupedActions is newest-to-oldest; reverse to chronological (oldest-to-newest)
+    const chronological = [...groupedActions].reverse();
+
+    interface RawPhase {
+        category: SummaryPhaseCategory;
+        startTime: string;
+        endTime: string;
+        effectiveEndTime: string;
+        startMinutes: number;
+        endMinutes: number;
+        durationMinutes: number;
+        hasSOC: boolean;
+        startSOC: number;
+        endSOC: number;
+        hasPrice: boolean;
+        avgPrice: number;
+        priceWeight: number;
+        latestAction: Action;
+        refTs?: string;
+        isLatest: boolean;
+    }
+
+    const rawPhases: RawPhase[] = chronological.map((item, idx) => {
+        const isSummary = 'isSummary' in item;
+        const action = isSummary ? item.latestAction : item;
+        const refTs =
+            action.systemTimestamp && !isZeroTime(action.systemTimestamp)
+                ? action.systemTimestamp
+                : action.systemStatus?.timestamp;
+        const startTime = isSummary ? item.startTime : getActionTimestamp(action);
+        const endTime = isSummary && item.endTime ? item.endTime : startTime;
+
+        let effectiveEndTime = endTime;
+        if (idx < chronological.length - 1) {
+            const nextItem = chronological[idx + 1];
+            const nextStart = 'isSummary' in nextItem ? nextItem.startTime : getActionTimestamp(nextItem);
+            const endMs = new Date(endTime).getTime();
+            const nextStartMs = new Date(nextStart).getTime();
+            if (!isNaN(endMs) && !isNaN(nextStartMs)) {
+                const gapMinutes = (nextStartMs - endMs) / 60000;
+                if (gapMinutes > 0 && gapMinutes <= 45) {
+                    effectiveEndTime = nextStart;
+                }
+            }
+        }
+
+        const startMs = new Date(startTime).getTime();
+        const effEndMs = new Date(effectiveEndTime).getTime();
+        const durationMinutes =
+            !isNaN(startMs) && !isNaN(effEndMs) && effEndMs >= startMs
+                ? (effEndMs - startMs) / 60000
+                : 0;
+
+        const startMinutes = getMinutesFromMidnight(startTime, refTs);
+        const rawEndMinutes = getMinutesFromMidnight(effectiveEndTime, refTs);
+        const endMinutes = Math.min(1440, Math.max(rawEndMinutes, startMinutes + 20));
+
+        const hasSOC = isSummary
+            ? item.hasSOC
+            : action.systemStatus?.batterySOC !== undefined && action.systemStatus.batterySOC !== 0;
+        const singleSOC = action.systemStatus?.batterySOC ?? 0;
+        const startSOC = isSummary ? (item.startSOC ?? item.minSOC ?? item.avgSOC) : singleSOC;
+        const endSOC = isSummary ? (item.endSOC ?? item.maxSOC ?? item.avgSOC) : singleSOC;
+
+        const hasPrice = isSummary
+            ? item.hasPrice
+            : Boolean(action.currentPrice && !isZeroTime(action.currentPrice.tsStart));
+        const avgPrice = isSummary
+            ? item.avgPrice
+            : action.currentPrice
+            ? gridChargeCost(action.currentPrice)
+            : 0;
+        const priceWeight = isSummary ? item.count : 1;
+
+        return {
+            category: classifySummaryItem(item, startSOC, endSOC, hasSOC),
+            startTime,
+            endTime,
+            effectiveEndTime,
+            startMinutes,
+            endMinutes,
+            durationMinutes,
+            hasSOC,
+            startSOC,
+            endSOC,
+            hasPrice,
+            avgPrice,
+            priceWeight,
+            latestAction: action,
+            refTs,
+            isLatest: idx === chronological.length - 1,
+        };
+    });
+
+    // 1. Build 24h bar segments (merge adjacent same-category segments and snap touching boundaries)
+    const mergedBarPhases: { category: SummaryPhaseCategory; startMinutes: number; endMinutes: number }[] = [];
+    for (const p of rawPhases) {
+        const prev = mergedBarPhases[mergedBarPhases.length - 1];
+        if (prev && prev.category === p.category && p.startMinutes <= prev.endMinutes + 45) {
+            prev.endMinutes = Math.max(prev.endMinutes, p.endMinutes);
+        } else {
+            if (prev && p.startMinutes > prev.endMinutes && p.startMinutes - prev.endMinutes <= 45) {
+                prev.endMinutes = p.startMinutes;
+            }
+            const clampedStart = prev ? Math.max(p.startMinutes, prev.endMinutes) : p.startMinutes;
+            const clampedEnd = Math.min(1440, Math.max(p.endMinutes, clampedStart + 15));
+            mergedBarPhases.push({
+                category: p.category,
+                startMinutes: clampedStart,
+                endMinutes: clampedEnd,
+            });
+        }
+    }
+
+    const segments: DaySummarySegment[] = mergedBarPhases.map(seg => {
+        const leftPercent = Math.max(0, Math.min(100, (seg.startMinutes / 1440) * 100));
+        const rightPercent = Math.max(leftPercent, Math.min(100, (seg.endMinutes / 1440) * 100));
+        const widthPercent = Math.max(1, rightPercent - leftPercent);
+        return {
+            category: seg.category,
+            leftPercent,
+            widthPercent,
+        };
+    });
+
+    const usedCategories = new Set(segments.map(s => s.category));
+    const legend = SUMMARY_LEGEND_ORDER.filter(item => usedCategories.has(item.category));
+
+    // 2. Build story beats:
+    // Filter out < 30 minute blips (except the newest/current action, faults, or VPP)
+    let significantPhases = rawPhases.filter(
+        p => p.isLatest || p.category === 'fault' || p.category === 'vpp' || p.durationMinutes >= 30
+    );
+    if (significantPhases.length === 0) {
+        significantPhases = [rawPhases[rawPhases.length - 1]];
+    }
+
+    // Merge consecutive phases of the same category
+    const mergedPhases: RawPhase[] = [];
+    for (const p of significantPhases) {
+        const prev = mergedPhases[mergedPhases.length - 1];
+        if (prev && prev.category === p.category) {
+            prev.endTime = p.endTime;
+            prev.effectiveEndTime = p.effectiveEndTime;
+            prev.durationMinutes += p.durationMinutes;
+            if (p.hasSOC) {
+                if (!prev.hasSOC) {
+                    prev.startSOC = p.startSOC;
+                }
+                prev.endSOC = p.endSOC;
+                prev.hasSOC = true;
+            }
+            if (p.hasPrice) {
+                const totalWeight = (prev.hasPrice ? prev.priceWeight : 0) + p.priceWeight;
+                prev.avgPrice =
+                    ((prev.hasPrice ? prev.avgPrice * prev.priceWeight : 0) + p.avgPrice * p.priceWeight) /
+                    totalWeight;
+                prev.priceWeight = totalWeight;
+                prev.hasPrice = true;
+            }
+            prev.latestAction = p.latestAction;
+            prev.refTs = p.refTs;
+            prev.isLatest = p.isLatest;
+        } else {
+            mergedPhases.push({ ...p });
+        }
+    }
+
+    // Hide standby from bullet points unless the entire day is standby
+    const hasNonStandby = mergedPhases.some(p => p.category !== 'standby');
+    let beatPhases = hasNonStandby
+        ? mergedPhases.filter(p => p.category !== 'standby')
+        : mergedPhases;
+
+    if (beatPhases.length === 0) {
+        beatPhases = [mergedPhases[mergedPhases.length - 1]];
+    }
+
+    // Order newest to oldest
+    const newestFirst = [...beatPhases].reverse();
+
+    const beats: DaySummaryBeat[] = newestFirst.map(p => {
+        const startFormatted = formatTime(p.startTime, p.refTs);
+        const endFormatted = formatTime(p.endTime, p.refTs);
+        const timeLabel =
+            startFormatted && endFormatted && startFormatted !== endFormatted
+                ? `${startFormatted} – ${endFormatted}`
+                : startFormatted;
+
+        return {
+            category: p.category,
+            headline: getSummaryBeatHeadline(p.category, p.latestAction, p.isLatest),
+            timeLabel,
+            socText: p.hasSOC ? formatSOCRange(p.startSOC, p.endSOC) : undefined,
+            priceText: p.hasPrice ? formatPrice(p.avgPrice, currencySymbol) : undefined,
+        };
+    });
+
+    return { segments, beats, legend };
+};
 
 export function getPlanStatusSubvalue(action: Action, refTs?: string, symbol: string = '$'): string | null {
     if (!action.plan || !action.plan.periods || action.plan.periods.length === 0) {

@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
     getBatteryModeLabel,
+    getBatteryPillLabel,
+    getActionTitle,
+    formatSOCRange,
+    hasSolarActivity,
+    buildDaySummary,
     formatPrice,
     formatCurrency,
     gridChargeCost,
@@ -12,7 +17,8 @@ import {
     isZeroTime,
     formatHour12,
     getCurrencySymbol,
-    getPlanStatusSubvalue
+    getPlanStatusSubvalue,
+    type ActionSummary
 } from './dashboardUtils';
 import { BatteryMode, SolarMode, ActionReason, type Action } from '../api';
 
@@ -467,6 +473,188 @@ describe('dashboardUtils', () => {
                 }
             };
             expect(getPlanStatusSubvalue(action, undefined, '£')).toContain('• Low rate (£0.050/kWh)');
+        });
+    });
+
+    describe('getBatteryPillLabel', () => {
+        it('returns Power Home for Load mode instead of repeating solar text', () => {
+            expect(getBatteryPillLabel(BatteryMode.Load)).toBe('Power Home');
+            expect(getBatteryPillLabel(BatteryMode.Standby)).toBe('Hold Battery');
+            expect(getBatteryPillLabel(BatteryMode.ChargeAny)).toBe('Charge From Solar+Grid');
+            expect(getBatteryPillLabel(BatteryMode.Export)).toBe('Export to Grid');
+        });
+    });
+
+    describe('getActionTitle', () => {
+        it('returns distinct strategic titles based on reason', () => {
+            const base: Action = {
+                description: 'test',
+                timestamp: '2026-07-22T04:00:00Z',
+                batteryMode: BatteryMode.Load,
+                solarMode: SolarMode.Any
+            };
+            expect(getActionTitle({ ...base, reason: ActionReason.SufficientBatteryTillCharge })).toBe('Using Battery Until Cheap Window');
+            expect(getActionTitle({ ...base, reason: ActionReason.SufficientBattery })).toBe('Self-Powered');
+            expect(getActionTitle({ ...base, reason: ActionReason.ArbitrageChargeExport, batteryMode: BatteryMode.ChargeAny })).toBe('Charging Before Peak');
+            expect(getActionTitle({ ...base, reason: ActionReason.DeficitCharge, batteryMode: BatteryMode.ChargeAny })).toBe('Topping Up Battery');
+            expect(getActionTitle({ ...base, reason: ActionReason.ArbitrageHold, batteryMode: BatteryMode.Standby })).toBe('Saving Battery for Peak');
+            expect(getActionTitle({ ...base, reason: ActionReason.AlwaysChargeBelowThreshold, batteryMode: BatteryMode.ChargeAny })).toBe('Low-Rate Grid Charge');
+            expect(getActionTitle({ ...base })).toBe('Solar first, then battery');
+        });
+    });
+
+    describe('formatSOCRange & hasSolarActivity', () => {
+        it('formats start to end SOC when difference is at least 1%', () => {
+            expect(formatSOCRange(48.2, 95.8)).toBe('48% → 96%');
+            expect(formatSOCRange(89.1, 51.4)).toBe('89% → 51%');
+        });
+
+        it('formats single SOC value when start and end round to the same integer', () => {
+            expect(formatSOCRange(99.6, 99.9)).toBe('100%');
+            expect(formatSOCRange(50, 50.3)).toBe('50%');
+        });
+
+        it('detects solar activity only when solarKW > 0', () => {
+            expect(hasSolarActivity({
+                description: '',
+                timestamp: '',
+                batteryMode: 1,
+                solarMode: 2,
+                systemStatus: { solarKW: 0 }
+            })).toBe(false);
+
+            expect(hasSolarActivity({
+                description: '',
+                timestamp: '',
+                batteryMode: 1,
+                solarMode: 2,
+                systemStatus: { solarKW: 2.4 }
+            })).toBe(true);
+        });
+    });
+
+    describe('buildDaySummary', () => {
+        it('orders beats newest to oldest, filters <30m blips, and hides standby when active phases exist', () => {
+            const latestLoad: ActionSummary = {
+                isSummary: true,
+                type: 'grouped',
+                reason: ActionReason.SufficientBatteryTillCharge,
+                startTime: '2026-07-22T15:00:00-05:00',
+                endTime: '2026-07-22T16:30:00-05:00',
+                latestAction: {
+                    description: '',
+                    timestamp: '2026-07-22T16:30:00-05:00',
+                    batteryMode: BatteryMode.Load,
+                    solarMode: SolarMode.Any,
+                    reason: ActionReason.SufficientBatteryTillCharge
+                },
+                count: 4,
+                alarms: new Set(),
+                storms: new Set(),
+                hasPrice: true,
+                avgPrice: 0.105,
+                min: 0.1,
+                max: 0.11,
+                hasSOC: true,
+                avgSOC: 70,
+                minSOC: 51,
+                maxSOC: 89,
+                startSOC: 89,
+                endSOC: 51
+            };
+
+            const shortExportBlip: Action = {
+                description: '',
+                timestamp: '2026-07-22T14:40:00-05:00',
+                batteryMode: BatteryMode.Export,
+                solarMode: SolarMode.Export,
+                reason: ActionReason.DirectExport,
+                systemStatus: { batterySOC: 89 }
+            };
+
+            const standbySummary: ActionSummary = {
+                isSummary: true,
+                type: 'grouped',
+                reason: ActionReason.ArbitrageHoldExport,
+                startTime: '2026-07-22T12:00:00-05:00',
+                endTime: '2026-07-22T14:20:00-05:00',
+                latestAction: {
+                    description: '',
+                    timestamp: '2026-07-22T14:20:00-05:00',
+                    batteryMode: BatteryMode.Standby,
+                    solarMode: SolarMode.Any,
+                    reason: ActionReason.ArbitrageHoldExport
+                },
+                count: 6,
+                alarms: new Set(),
+                storms: new Set(),
+                hasPrice: true,
+                avgPrice: 0.06,
+                min: 0.06,
+                max: 0.06,
+                hasSOC: true,
+                avgSOC: 98,
+                minSOC: 98,
+                maxSOC: 98,
+                startSOC: 98,
+                endSOC: 98
+            };
+
+            const morningCharge: ActionSummary = {
+                isSummary: true,
+                type: 'grouped',
+                reason: ActionReason.ArbitrageChargeExport,
+                startTime: '2026-07-22T04:00:00-05:00',
+                endTime: '2026-07-22T11:30:00-05:00',
+                latestAction: {
+                    description: '',
+                    timestamp: '2026-07-22T11:30:00-05:00',
+                    batteryMode: BatteryMode.ChargeAny,
+                    solarMode: SolarMode.Any,
+                    reason: ActionReason.ArbitrageChargeExport
+                },
+                count: 15,
+                alarms: new Set(),
+                storms: new Set(),
+                hasPrice: true,
+                avgPrice: 0.055,
+                min: 0.04,
+                max: 0.07,
+                hasSOC: true,
+                avgSOC: 60,
+                minSOC: 24,
+                maxSOC: 98,
+                startSOC: 24,
+                endSOC: 98
+            };
+
+            const summary = buildDaySummary([latestLoad, shortExportBlip, standbySummary, morningCharge], '$');
+
+            expect(summary.segments.some(s => s.category === 'standby')).toBe(true);
+
+            expect(summary.beats).toHaveLength(2);
+            expect(summary.beats[0].category).toBe('load');
+            expect(summary.beats[0].headline).toBe('Running on solar & battery');
+            expect(summary.beats[0].socText).toBe('89% → 51%');
+
+            expect(summary.beats[1].category).toBe('charge');
+            expect(summary.beats[1].headline).toBe('Charged before peak');
+            expect(summary.beats[1].socText).toBe('24% → 98%');
+        });
+
+        it('shows standby beat when the entire day is standby', () => {
+            const standbyAction: Action = {
+                description: 'Holding',
+                timestamp: '2026-07-22T10:00:00-05:00',
+                batteryMode: BatteryMode.Standby,
+                solarMode: SolarMode.Any,
+                systemStatus: { batterySOC: 100 }
+            };
+            const summary = buildDaySummary([standbyAction], '$');
+            expect(summary.beats).toHaveLength(1);
+            expect(summary.beats[0].category).toBe('standby');
+            expect(summary.beats[0].headline).toBe('Holding battery in standby');
+            expect(summary.beats[0].socText).toBe('100%');
         });
     });
 });

@@ -64,6 +64,7 @@ describe('Dashboard', () => {
     });
 
     it('renders actions with reason-based text', async () => {
+        const user = userEvent.setup();
         const actions = [{
             reason: 'alwaysChargeBelowThreshold',
             description: 'This is a legacy description',
@@ -76,6 +77,9 @@ describe('Dashboard', () => {
 
         renderWithRouter(<Dashboard />);
 
+        const toggleBtn = await screen.findByRole('button', { name: /Show Detailed Action Log/i });
+        await user.click(toggleBtn);
+
         await waitFor(() => {
             // Should show reason-based text, not description
             expect(screen.getByText(/Current price.*\$ 0\.040/)).toBeInTheDocument();
@@ -85,6 +89,7 @@ describe('Dashboard', () => {
     });
 
     it('falls back to description when reason is empty (legacy actions)', async () => {
+        const user = userEvent.setup();
         const actions = [{
             description: 'This is a test',
             timestamp: new Date().toISOString(),
@@ -94,6 +99,9 @@ describe('Dashboard', () => {
         mockActionsAndSavings(actions);
 
         renderWithRouter(<Dashboard />);
+
+        const toggleBtn = await screen.findByRole('button', { name: /Show Detailed Action Log/i });
+        await user.click(toggleBtn);
 
         await waitFor(() => {
             const standbyElements = screen.getAllByText('Hold Battery');
@@ -161,6 +169,7 @@ describe('Dashboard', () => {
     });
 
     it('renders dry run badge', async () => {
+        const user = userEvent.setup();
         const actions = [{
             reason: ActionReason.AlwaysChargeBelowThreshold,
             description: 'Dry run test',
@@ -174,6 +183,9 @@ describe('Dashboard', () => {
 
         renderWithRouter(<Dashboard />);
 
+        const toggleBtn = await screen.findByRole('button', { name: /Show Detailed Action Log/i });
+        await user.click(toggleBtn);
+
         await waitFor(() => {
             expect(screen.getByText('Dry Run')).toBeInTheDocument();
             expect(screen.getByText('Dry Run')).toHaveClass('tag', 'dry-run');
@@ -181,6 +193,7 @@ describe('Dashboard', () => {
     });
 
     it('renders VPP active state in current status and timeline', async () => {
+        const user = userEvent.setup();
         const actions = [{
             reason: ActionReason.VPPActive,
             description: 'VPP Active test',
@@ -198,6 +211,9 @@ describe('Dashboard', () => {
 
         renderWithRouter(<Dashboard />);
 
+        const toggleBtn = await screen.findByRole('button', { name: /Show Detailed Action Log/i });
+        await user.click(toggleBtn);
+
         await waitFor(() => {
             // Verify current status card
             const statusCard = document.querySelector('.current-status-card.vpp');
@@ -214,28 +230,34 @@ describe('Dashboard', () => {
     });
 
     it('hides no change badges', async () => {
+        const user = userEvent.setup();
         const actions = [{
             description: 'Mixed modes test',
             timestamp: new Date().toISOString(),
             batteryMode: 0, // NoChange
             solarMode: 1, // NoExport
+            systemStatus: { solarKW: 2.0 },
         }];
         mockActionsAndSavings(actions);
 
         renderWithRouter(<Dashboard />);
 
+        const toggleBtn = await screen.findByRole('button', { name: /Show Detailed Action Log/i });
+        await user.click(toggleBtn);
+
         await waitFor(() => {
-            // Solar mode should be visible
+            // Solar mode should be visible when solarKW > 0
             expect(screen.getByText('Use & No Export')).toBeInTheDocument();
             // Battery mode (NoChange) should NOT be visible as a badge/tag
             const badges = screen.queryAllByText((content, element) => {
-                return element !== null && element.classList.contains('tag') && content === 'No Change';
+                return element !== null && element.classList.contains('tag') && content.includes('No Change');
             });
             expect(badges.length).toBe(0);
         });
     });
 
     it('groups consecutive fault actions into summary', async () => {
+        const user = userEvent.setup();
         const actions = [
             {
                 description: 'Fault 1',
@@ -264,17 +286,18 @@ describe('Dashboard', () => {
 
         renderWithRouter(<Dashboard />);
 
+        const toggleBtn = await screen.findByRole('button', { name: /Show Detailed Action Log/i });
+        await user.click(toggleBtn);
+
         await waitFor(() => {
             // Should show "System Fault" title/header
             expect(screen.getByRole('heading', { name: /System Fault/ })).toBeInTheDocument();
-            // Should show alarm names - the order depends on Set iteration, usually insertion order
-            // Since we add GridFault then InverterFault, it should be "GridFault, InverterFault"
-            // However, regex is safer if order is not guaranteed, but usually it is for Sets of strings added in order.
             expect(screen.getByText(/Alarms: GridFault, InverterFault/)).toBeInTheDocument();
         });
     });
 
     it('groups consecutive no change actions into summary', async () => {
+        const user = userEvent.setup();
         const actions = [
             {
                 description: 'No change 1',
@@ -295,6 +318,9 @@ describe('Dashboard', () => {
 
         renderWithRouter(<Dashboard />);
 
+        const toggleBtn = await screen.findByRole('button', { name: /Show Detailed Action Log/i });
+        await user.click(toggleBtn);
+
         await waitFor(() => {
             // Should show "No Change" title/header
             expect(screen.getByRole('heading', { name: /No Change/ })).toBeInTheDocument();
@@ -303,7 +329,7 @@ describe('Dashboard', () => {
             expect(screen.queryByText('No change 1')).not.toBeInTheDocument();
             // Should show average price: (0.10 + 0.20) / 2 = 0.15
             expect(screen.getByText(/Avg Price:/)).toBeInTheDocument();
-            expect(screen.getByText(/\$ 0.150\/kWh/)).toBeInTheDocument();
+            expect(screen.getAllByText(/\$ 0.150\/kWh/).length).toBeGreaterThanOrEqual(1);
             // Should show range: 0.10 - 0.20
             expect(screen.getByText(/Range: \$ 0.100 - \$ 0.200/)).toBeInTheDocument();
         });
@@ -560,6 +586,7 @@ describe('Dashboard', () => {
     });
 
     it('renders manual emergency mode correctly', async () => {
+        const user = userEvent.setup();
         const actions = [{
             reason: 'emergencyMode',
             description: 'Emergency Mode Active',
@@ -577,6 +604,9 @@ describe('Dashboard', () => {
 
         renderWithRouter(<Dashboard />);
 
+        const showLogBtn = await screen.findByRole('button', { name: /Show Detailed Action Log/i });
+        await user.click(showLogBtn);
+
         await waitFor(() => {
             expect(screen.getByRole('heading', { name: /Emergency Mode/ })).toBeInTheDocument();
             expect(screen.getByText('System manually put into emergency mode. Skipping automation.')).toBeInTheDocument();
@@ -584,6 +614,7 @@ describe('Dashboard', () => {
     });
 
     it('renders storm protection mode correctly with times', async () => {
+        const user = userEvent.setup();
         const stormStart = new Date('2023-01-01T12:00:00');
         const stormEnd = new Date('2023-01-01T15:00:00');
         const actions = [{
@@ -607,6 +638,9 @@ describe('Dashboard', () => {
 
         renderWithRouter(<Dashboard />);
 
+        const showLogBtn = await screen.findByRole('button', { name: /Show Detailed Action Log/i });
+        await user.click(showLogBtn);
+
         await waitFor(() => {
             expect(screen.getByRole('heading', { name: /Storm Hedge Mode/ })).toBeInTheDocument();
             expect(screen.getByText('Charging the battery to prepare for the storm.')).toBeInTheDocument();
@@ -615,6 +649,7 @@ describe('Dashboard', () => {
     });
 
     it('hides price footer in summary when no price data is available', async () => {
+        const user = userEvent.setup();
         const actions = [{
             reason: 'emergencyMode',
             description: 'Emergency Mode Active',
@@ -631,6 +666,9 @@ describe('Dashboard', () => {
         mockActionsAndSavings(actions);
 
         renderWithRouter(<Dashboard />);
+
+        const showLogBtn = await screen.findByRole('button', { name: /Show Detailed Action Log/i });
+        await user.click(showLogBtn);
 
         await waitFor(() => {
             expect(screen.getByRole('heading', { name: /Emergency Mode/ })).toBeInTheDocument();
@@ -712,6 +750,7 @@ describe('Dashboard', () => {
     });
 
     it('shows pills for targetBatteryMode even when batteryMode is NoChange', async () => {
+        const user = userEvent.setup();
         const actions = [{
             description: 'Target mode test',
             timestamp: new Date().toISOString(),
@@ -719,22 +758,27 @@ describe('Dashboard', () => {
             solarMode: 0,
             targetBatteryMode: -1, // Load
             targetSolarMode: 1, // NoExport
+            systemStatus: { solarKW: 2.0 },
         }];
         mockActionsAndSavings(actions);
 
         renderWithRouter(<Dashboard />);
 
+        const showLogBtn = await screen.findByRole('button', { name: /Show Detailed Action Log/i });
+        await user.click(showLogBtn);
+
         await waitFor(() => {
-            // Should show "Solar first, then battery" and "No Export" pills
-            const useBatteryPills = screen.getAllByText('Solar first, then battery');
-            expect(useBatteryPills.some(p => p.classList.contains('tag'))).toBe(true);
+            // Should show "Power Home" and "Use & No Export" pills
+            const useBatteryPills = screen.getAllByText('Power Home');
+            expect(useBatteryPills.some(p => p.closest('.tag'))).toBe(true);
 
             const noExportPills = screen.getAllByText('Use & No Export');
-            expect(noExportPills.some(p => p.classList.contains('tag'))).toBe(true);
+            expect(noExportPills.some(p => p.closest('.tag'))).toBe(true);
         });
     });
 
     it('shows target mode pills in summaries', async () => {
+        const user = userEvent.setup();
         const actions = [
             {
                 description: 'No change 1',
@@ -743,6 +787,7 @@ describe('Dashboard', () => {
                 solarMode: 0,
                 targetBatteryMode: 1, // Standby
                 targetSolarMode: 1, // NoExport
+                systemStatus: { solarKW: 2.0 },
             },
             {
                 description: 'No change 2',
@@ -751,24 +796,29 @@ describe('Dashboard', () => {
                 solarMode: 0,
                 targetBatteryMode: 1, // Standby
                 targetSolarMode: 1, // NoExport
+                systemStatus: { solarKW: 2.0 },
             }
         ];
         mockActionsAndSavings(actions);
 
         renderWithRouter(<Dashboard />);
 
+        const showLogBtn = await screen.findByRole('button', { name: /Show Detailed Action Log/i });
+        await user.click(showLogBtn);
+
         await waitFor(() => {
             expect(screen.getByRole('heading', { name: /No Change/ })).toBeInTheDocument();
             // Should show pills in the summary item
             const holdBatteryPills = screen.getAllByText('Hold Battery');
-            expect(holdBatteryPills.some(p => p.classList.contains('tag'))).toBe(true);
+            expect(holdBatteryPills.some(p => p.closest('.tag'))).toBe(true);
 
             const noExportPills = screen.getAllByText('Use & No Export');
-            expect(noExportPills.some(p => p.classList.contains('tag'))).toBe(true);
+            expect(noExportPills.some(p => p.closest('.tag'))).toBe(true);
         });
     });
 
     it('renders action summaries with price range, latest battery charge, and info tags', async () => {
+        const user = userEvent.setup();
         const actions = [
             {
                 timestamp: new Date('2023-01-01T10:00:00').toISOString(),
@@ -792,18 +842,20 @@ describe('Dashboard', () => {
 
         renderWithRouter(<Dashboard />);
 
+        const showLogBtn = await screen.findByRole('button', { name: /Show Detailed Action Log/i });
+        await user.click(showLogBtn);
+
         await waitFor(() => {
             expect(screen.getByRole('heading', { name: /No Change/ })).toBeInTheDocument();
 
             // Should show average price and range
             expect(screen.getByText(/Avg Price:/)).toBeInTheDocument();
-            expect(screen.getByText(/\$ 0\.150\/kWh/)).toBeInTheDocument();
+            expect(screen.getAllByText(/\$ 0\.150\/kWh/).length).toBeGreaterThan(0);
             expect(screen.getByText(/Range: \$ 0\.100 - \$ 0\.200/)).toBeInTheDocument();
 
-            // Should show average SOC and range
+            // Should show start-to-end SOC range
             expect(screen.getByText(/Battery:/)).toBeInTheDocument();
-            expect(screen.getByText(/42\.5%/)).toBeInTheDocument();
-            expect(screen.getByText(/Range: 40% - 45%/)).toBeInTheDocument();
+            expect(screen.getAllByText(/40% → 45%/).length).toBeGreaterThan(0);
 
             // Should show Empty and Full tags from the LATEST action
             // Using a more flexible regex for time as it depends on local timezone
@@ -850,6 +902,7 @@ describe('Dashboard', () => {
     });
 
     it('does not group VPPActive actions with sufficientBattery actions', async () => {
+        const user = userEvent.setup();
         const now = new Date();
         const actions = [
             {
@@ -874,6 +927,9 @@ describe('Dashboard', () => {
         mockActionsAndSavings(actions);
 
         renderWithRouter(<Dashboard />);
+
+        const showLogBtn = await screen.findByRole('button', { name: /Show Detailed Action Log/i });
+        await user.click(showLogBtn);
 
         await waitFor(() => {
             expect(screen.getByText(/The battery has enough stored energy/)).toBeInTheDocument();

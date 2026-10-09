@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import ActionTimeline from './ActionTimeline';
 import { BatteryMode, SolarMode, ActionReason, type Action } from '../api';
 import { type ActionSummary } from '../utils/dashboardUtils';
@@ -183,6 +184,95 @@ describe('ActionTimeline', () => {
         expect(screen.getByText('Avg Price:')).toBeInTheDocument();
         expect(screen.getByText(/£ 0\.150\/kWh/)).toBeInTheDocument();
         expect(screen.getByText(/\(Range: £ 0\.100 - £ 0\.200\)/)).toBeInTheDocument();
+    });
+
+    it('hides solar pill when solarKW is 0 and shows it with sun icon when solarKW > 0', () => {
+        const actions: Action[] = [
+            {
+                timestamp: new Date().toISOString(),
+                batteryMode: BatteryMode.Load,
+                solarMode: SolarMode.Any,
+                reason: ActionReason.SufficientBatteryTillCharge,
+                description: 'Night action',
+                systemStatus: { solarKW: 0, batterySOC: 60 }
+            }
+        ];
+        const { rerender } = render(<ActionTimeline groupedActions={actions} />);
+        expect(screen.getByText('Using Battery Until Cheap Window')).toBeInTheDocument();
+        expect(screen.getByText('Power Home')).toBeInTheDocument();
+        expect(screen.queryByText('Use & Export')).not.toBeInTheDocument();
+
+        rerender(
+            <ActionTimeline
+                groupedActions={[
+                    {
+                        ...actions[0],
+                        systemStatus: { solarKW: 3.2, batterySOC: 60 }
+                    }
+                ]}
+            />
+        );
+        expect(screen.getByText('Use & Export')).toBeInTheDocument();
+    });
+
+    it('renders start to end SOC in summaries instead of average and range', () => {
+        const summary: ActionSummary = {
+            isSummary: true,
+            type: 'grouped',
+            startTime: new Date('2026-06-25T10:00:00Z').toISOString(),
+            endTime: new Date('2026-06-25T11:30:00Z').toISOString(),
+            latestAction: {
+                timestamp: new Date('2026-06-25T11:30:00Z').toISOString(),
+                batteryMode: BatteryMode.ChargeAny,
+                solarMode: SolarMode.Any,
+                reason: ActionReason.ArbitrageChargeExport
+            } as Action,
+            count: 4,
+            alarms: new Set(),
+            storms: new Set(),
+            hasPrice: false,
+            hasSOC: true,
+            avgPrice: 0,
+            min: 0,
+            max: 0,
+            avgSOC: 67.2,
+            minSOC: 48,
+            maxSOC: 96,
+            startSOC: 48,
+            endSOC: 96
+        };
+        render(<ActionTimeline groupedActions={[summary]} />);
+        expect(screen.getByText('48% → 96%')).toBeInTheDocument();
+        expect(screen.queryByText(/67\.2%/)).not.toBeInTheDocument();
+    });
+
+    it('renders Activity Summary and collapses detailed log by default when collapsible is true', async () => {
+        const user = userEvent.setup();
+        const actions: Action[] = [
+            {
+                timestamp: '2026-06-25T15:00:00-05:00',
+                batteryMode: BatteryMode.Load,
+                solarMode: SolarMode.Any,
+                reason: ActionReason.SufficientBattery,
+                description: 'Detailed explanation text',
+                systemStatus: { batterySOC: 75, solarKW: 2.1 }
+            }
+        ];
+        render(<ActionTimeline groupedActions={actions} collapsible />);
+
+        expect(screen.getByTestId('day-summary-card')).toBeInTheDocument();
+        expect(screen.getByText('Summary')).toBeInTheDocument();
+        expect(screen.getByText('Powering Home')).toBeInTheDocument();
+        expect(screen.getByText('Running on solar & battery')).toBeInTheDocument();
+
+        // Detailed log is collapsed initially
+        expect(screen.queryByText(/battery has enough stored energy/)).not.toBeInTheDocument();
+
+        const toggleBtn = screen.getByRole('button', { name: /Show Detailed Action Log \(1\)/i });
+        await user.click(toggleBtn);
+
+        expect(screen.getByText(/battery has enough stored energy/)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /Hide Detailed Action Log/i })).toBeInTheDocument();
     });
 });
 

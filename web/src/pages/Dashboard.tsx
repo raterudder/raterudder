@@ -216,18 +216,26 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                     if (summary.max === undefined || price > summary.max) summary.max = price;
                 }
                 if (action.systemStatus && action.systemStatus.batterySOC !== undefined && action.systemStatus.batterySOC !== 0) {
-                    summary.hasSOC = true;
                     const soc = action.systemStatus.batterySOC;
+                    if (!summary.hasSOC) {
+                        summary.startSOC = soc;
+                    }
+                    summary.endSOC = soc;
+                    summary.hasSOC = true;
                     summary.socTotal += soc;
                     summary.socCount++;
                     if (summary.minSOC === undefined || soc < summary.minSOC) summary.minSOC = soc;
                     if (summary.maxSOC === undefined || soc > summary.maxSOC) summary.maxSOC = soc;
+                }
+                if ((action.systemStatus?.solarKW ?? 0) > 0) {
+                    summary.hasSolar = true;
                 }
             };
 
             const createSummary = (type: SummaryType): ActionSummaryAccumulator => {
                  const hasSOC = !!(action.systemStatus && action.systemStatus.batterySOC !== undefined && action.systemStatus.batterySOC !== 0);
                  const soc = (action.systemStatus && action.systemStatus.batterySOC !== undefined && action.systemStatus.batterySOC !== 0) ? action.systemStatus.batterySOC : 0;
+                 const hasSolar = (action.systemStatus?.solarKW ?? 0) > 0;
                  return {
                     isSummary: true,
                     type: type,
@@ -246,7 +254,10 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                     socTotal: hasSOC ? soc : 0,
                     socCount: hasSOC ? 1 : 0,
                     minSOC: hasSOC ? soc : Infinity,
-                    maxSOC: hasSOC ? soc : -Infinity
+                    maxSOC: hasSOC ? soc : -Infinity,
+                    startSOC: hasSOC ? soc : 0,
+                    endSOC: hasSOC ? soc : 0,
+                    hasSolar: hasSolar
                 };
             };
 
@@ -443,7 +454,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                     {siteID !== 'ALL' && (
                         <>
                             {visibleActions.length === 0 && <p className="no-actions">No actions recorded for this day.</p>}
-                            <ActionTimeline groupedActions={groupedActions} currencySymbol={currencySymbol} />
+                            <ActionTimeline groupedActions={groupedActions} currencySymbol={currencySymbol} collapsible />
                         </>
                     )}
                 </>

@@ -467,7 +467,6 @@ button {
 
 
 .savings-hero {
-  margin-bottom: 2rem;
   overflow: hidden;
   border-radius: var(--radius-lg);
   border: 1px solid var(--border);
@@ -490,17 +489,6 @@ button {
   justify-content: center;
   position: relative;
   overflow: hidden;
-}
-
-.net-savings-panel::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 1px;
-  height: 100%;
-  background: linear-gradient(to bottom, var(--primary), transparent);
-  opacity: 0.4;
 }
 
 .hero-label {
@@ -651,7 +639,6 @@ button {
 
 /* Current Status Card */
 .current-status-card {
-  margin-bottom: 0.5rem;
   padding: var(--spacing-lg);
   border-radius: var(--radius-lg);
   display: flex;
@@ -663,30 +650,6 @@ button {
   box-shadow: var(--shadow-md);
   position: relative;
   overflow: hidden;
-}
-
-.current-status-card.discharging {
-  border-left: 6px solid var(--accent);
-}
-
-.current-status-card.charging {
-  border-left: 6px solid var(--primary);
-}
-
-.current-status-card.standby {
-  border-left: 6px solid var(--warning);
-}
-
-.current-status-card.grid-unavailable {
-  border-left: 6px solid var(--danger);
-}
-
-.current-status-card.paused {
-  border-left: 6px solid var(--outline-variant);
-}
-
-.current-status-card.vpp {
-  border-left: 6px solid #a855f7;
 }
 
 .status-main {
@@ -708,23 +671,23 @@ button {
 }
 
 .current-status-card.discharging .status-icon {
-  background: rgba(0, 255, 194, 0.1);
-  color: var(--accent);
+  background: rgba(56, 189, 248, 0.14);
+  color: #38bdf8;
 }
 
 .current-status-card.charging .status-icon {
-  background: rgba(75, 142, 255, 0.1);
-  color: var(--primary);
+  background: rgba(139, 92, 246, 0.14);
+  color: #8b5cf6;
 }
 
 .current-status-card.standby .status-icon {
-  background: rgba(255, 184, 0, 0.1);
-  color: var(--warning);
+  background: rgba(100, 116, 139, 0.16);
+  color: #94a3b8;
 }
 
 .current-status-card.vpp .status-icon {
-  background: rgba(168, 85, 247, 0.1);
-  color: #a855f7;
+  background: rgba(59, 130, 246, 0.14);
+  color: #3b82f6;
 }
 
 .status-info {
@@ -1020,39 +983,39 @@ button {
 
 /* Tag Variants (Scoped to tags to avoid leaking to containers) */
 .tag.mode-charge_any {
-  background: rgba(75, 142, 255, 0.1);
-  color: var(--primary);
-  border: 1px solid rgba(75, 142, 255, 0.2);
+  background: rgba(139, 92, 246, 0.14);
+  color: #a78bfa;
+  border: 1px solid rgba(139, 92, 246, 0.28);
 }
 
 .tag.mode-charge_solar {
-  background: rgba(0, 255, 194, 0.1);
-  color: var(--accent);
-  border: 1px solid rgba(0, 255, 194, 0.2);
+  background: rgba(16, 185, 129, 0.14);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.28);
 }
 
 .tag.mode-load {
-  background: rgba(0, 255, 194, 0.1);
-  color: var(--accent);
-  border: 1px solid rgba(0, 255, 194, 0.2);
+  background: rgba(56, 189, 248, 0.14);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.28);
 }
 
 .tag.mode-standby {
-  background: rgba(255, 184, 0, 0.1);
-  color: var(--warning);
-  border: 1px solid rgba(255, 184, 0, 0.2);
+  background: rgba(100, 116, 139, 0.16);
+  color: var(--on-surface-variant);
+  border: 1px solid rgba(100, 116, 139, 0.3);
 }
 
 .tag.mode-vpp {
-  background: rgba(168, 85, 247, 0.1);
-  color: #a855f7;
-  border: 1px solid rgba(168, 85, 247, 0.2);
+  background: rgba(59, 130, 246, 0.14);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.28);
 }
 
 .tag.mode-export {
-  background: rgba(16, 185, 129, 0.1);
-  color: #10b981;
-  border: 1px solid rgba(16, 185, 129, 0.2);
+  background: rgba(245, 158, 11, 0.14);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.28);
 }
 
 .tag.mode-no_change {
@@ -1061,16 +1024,29 @@ button {
   border: 1px solid var(--border);
 }
 
-.tag.solar-export {
-  background: rgba(0, 255, 194, 0.1);
-  color: var(--accent);
-  border: 1px solid rgba(0, 255, 194, 0.2);
+.tag.solar-export,
+.tag.solar-direct_export {
+  background: rgba(251, 191, 36, 0.12);
+  color: #fcd34d;
+  border: 1px solid rgba(251, 191, 36, 0.25);
 }
 
 .tag.solar-no_export {
-  background: rgba(255, 184, 0, 0.1);
-  color: var(--warning);
-  border: 1px solid rgba(255, 184, 0, 0.2);
+  background: rgba(251, 146, 60, 0.12);
+  color: #fb923c;
+  border: 1px solid rgba(251, 146, 60, 0.25);
+}
+
+.tag.tag-info {
+  background: var(--surface-container-high);
+  color: var(--on-surface-variant);
+  border: 1px solid var(--border);
+}
+
+.tag.tag-warning {
+  background: rgba(255, 75, 75, 0.1);
+  color: var(--danger);
+  border: 1px solid rgba(255, 75, 75, 0.2);
 }
 
 .tag.dry-run {
