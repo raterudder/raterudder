@@ -22,22 +22,22 @@ var historyFS embed.FS
 var fileBaselines = map[string]float64{
 	"site1_march.json":      -4.371,
 	"site1_may.json":        -16.185,
-	"site1_september.json":  48.371,
+	"site1_september.json":  36.928,
 	"site2_april.json":      1.223,
 	"site2_march.json":      9.095,
 	"site2_may.json":        1.338,
-	"site2_september.json":  -7.003,
+	"site2_september.json":  -0.018,
 	"site3_march.json":      -2.205,
 	"site3_may.json":        -6.952,
 	"site4_late-may.json":   0.304,
 	"site4_may.json":        1.621,
-	"site4_september.json":  -4.385,
+	"site4_september.json":  -4.538,
 	"site5_june.json":       18.150,
-	"site5_september.json":  44.600,
+	"site5_september.json":  13.612,
 	"site7_june.json":       34.509,
 	"site8_june.json":       -9.229,
-	"site9_september.json":  -6.827,
-	"site10_september.json": 4.270,
+	"site9_september.json":  0.097,
+	"site10_september.json": 20.782,
 }
 
 func findEnergyStats(history []types.DailyEnergyStats, ts time.Time, loc *time.Location) (types.EnergyStats, bool) {

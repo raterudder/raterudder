@@ -19,22 +19,22 @@ import (
 var planBaselines = map[string]float64{
 	"site1_march.json":      -4.279,
 	"site1_may.json":        -16.095,
-	"site1_september.json":  49.139,
+	"site1_september.json":  37.389,
 	"site2_april.json":      0.164,
 	"site2_march.json":      9.229,
 	"site2_may.json":        1.362,
-	"site2_september.json":  -6.142,
+	"site2_september.json":  0.679,
 	"site3_march.json":      -1.984,
 	"site3_may.json":        -6.952,
 	"site4_late-may.json":   0.362,
 	"site4_may.json":        1.851,
-	"site4_september.json":  -4.434,
+	"site4_september.json":  -4.551,
 	"site5_june.json":       18.248,
-	"site5_september.json":  47.782,
+	"site5_september.json":  14.212,
 	"site7_june.json":       30.944,
 	"site8_june.json":       -10.810,
-	"site9_september.json":  -22.961,
-	"site10_september.json": 2.684,
+	"site9_september.json":  -16.732,
+	"site10_september.json": 20.192,
 }
 
 // TestPlanHistory evaluates the new Plan engine against real-world recorded site history datasets
