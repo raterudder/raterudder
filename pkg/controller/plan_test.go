@@ -4061,8 +4061,8 @@ func TestSearchOptimalPlan(t *testing.T) {
 				},
 			},
 			logData: []candidateLogData{
-				{refillExportRate: 0.10, effectiveReserveSOC: 20},
-				{effectiveReserveSOC: 20},
+				{refillExportRate: 0.10, minSOC: 20},
+				{minSOC: 20},
 				{roundTripEff: 0.85, rechargeCost: 0.05 / 0.85},
 				{roundTripEff: 0.85, rechargeCost: 0.05 / 0.85},
 			},
@@ -6878,6 +6878,7 @@ func TestPlanScenarios(t *testing.T) {
 		settingsConservative := types.Settings{
 			MinBatterySOC:       20,
 			OptimizationProfile: "conservative",
+			GridChargeBatteries: true,
 		}
 
 		var futurePrices []types.Price
@@ -6890,19 +6891,29 @@ func TestPlanScenarios(t *testing.T) {
 			})
 		}
 
-		decisionCons, _, err := c.Plan(ctx, status, currentPrice, futurePrices, nil, nil, settingsConservative, nil)
+		// Even with Conservative profile (10% ReserveBufferPercent), when the battery is at 28% SOC
+		// above the 20% MinBatterySOC physical reserve with no higher future rate ahead, it must
+		// discharge down to the 20% reserve rather than locking into batteryAtReserve at 30%.
+		decisionCons, planCons, err := c.Plan(ctx, status, currentPrice, futurePrices, nil, nil, settingsConservative, nil)
 		require.NoError(t, err)
-		assert.Equal(t, types.ActionReasonBatteryAtReserve, decisionCons.Action.Reason)
+		assert.Equal(t, types.BatteryModeLoad, decisionCons.Action.BatteryMode)
+		assert.Equal(t, types.ActionReasonSufficientBattery, decisionCons.Action.Reason)
+		require.NotEmpty(t, planCons.Periods)
+		assert.InDelta(t, 20.0, planCons.Periods[len(planCons.Periods)-1].EndSOC, 0.5,
+			"Conservative plan must discharge down to the 20% physical reserve floor when covering load")
 
 		settingsAggressive := types.Settings{
 			MinBatterySOC:       20,
 			OptimizationProfile: "aggressive",
+			GridChargeBatteries: true,
 		}
 
-		decisionAggr, _, err := c.Plan(ctx, status, currentPrice, futurePrices, nil, nil, settingsAggressive, nil)
+		decisionAggr, planAggr, err := c.Plan(ctx, status, currentPrice, futurePrices, nil, nil, settingsAggressive, nil)
 		require.NoError(t, err)
 		assert.Equal(t, types.BatteryModeLoad, decisionAggr.Action.BatteryMode)
 		assert.Equal(t, types.ActionReasonSufficientBattery, decisionAggr.Action.Reason)
+		require.NotEmpty(t, planAggr.Periods)
+		assert.InDelta(t, 20.0, planAggr.Periods[len(planAggr.Periods)-1].EndSOC, 0.5)
 	})
 
 	t.Run("TailEndBatteryDump_BeforeNightRatePlummet", func(t *testing.T) {
@@ -7693,6 +7704,7 @@ func TestPlanScenarios(t *testing.T) {
 
 		settings := types.Settings{
 			MinBatterySOC:       20,
+			OptimizationProfile: "conservative",
 			GridChargeBatteries: true,
 			GridExportSolar:     false,
 			UtilityRateOptions: types.UtilityRateOptions{
@@ -7716,18 +7728,28 @@ func TestPlanScenarios(t *testing.T) {
 		require.NotEmpty(t, friPlan.Periods)
 
 		// Verify Friday night charges at $0.055 and Saturday morning (5:00 AM onwards) discharges in BatteryModeLoad
+		// all the way down to the 20% physical reserve (not stopping at 30% despite Conservative's 10% ReserveBufferPercent).
 		sawSuperOffPeakCharge := false
+		minSatAfternoonSOC := 100.0
 		satMorningTime := time.Date(2026, 10, 10, 5, 0, 0, 0, nyLoc)
 		for _, p := range friPlan.Periods {
 			if p.ImportDollars <= 0.056 && p.BatteryMode == types.BatteryModeChargeAny {
 				sawSuperOffPeakCharge = true
 			}
-			if !p.TSStart.Before(satMorningTime) && p.StartSOC > 25.0 {
-				assert.Equal(t, types.BatteryModeLoad, p.BatteryMode,
-					"Saturday morning (%s) at $0.10481/kWh must discharge to cover home load, not stay stuck in Standby", p.TSStart.Format(time.RFC3339))
+			if !p.TSStart.Before(satMorningTime) {
+				if p.EndSOC < minSatAfternoonSOC {
+					minSatAfternoonSOC = p.EndSOC
+				}
+				if p.StartSOC > 21.0 {
+					assert.Equal(t, types.BatteryModeLoad, p.BatteryMode,
+						"Saturday (%s) at $0.10481/kWh must discharge down to 20%% reserve, not stay stuck in Standby", p.TSStart.Format(time.RFC3339))
+					assert.NotEqual(t, types.ActionReasonBatteryAtReserve, p.Reason,
+						"Saturday (%s, StartSOC=%.1f%%) must not report batteryAtReserve while above 20%% reserve", p.TSStart.Format(time.RFC3339), p.StartSOC)
+				}
 			}
 		}
 		assert.True(t, sawSuperOffPeakCharge, "Must schedule grid charging during Friday night Super Off-Peak ($0.055/kWh)")
+		assert.InDelta(t, 20.0, minSatAfternoonSOC, 0.5, "Saturday trajectory under Conservative must discharge down to the 20% physical reserve, not stop at 30%")
 
 		// Also verify step-0 execution at 5:00 AM Saturday when entering from overnight Standby at 100% SOC
 		satStatus := friStatus
@@ -8119,6 +8141,23 @@ func TestRefineOverchargedEpisodes(t *testing.T) {
 		assert.GreaterOrEqual(t, refinedPath.actions[0].targetSOC, 60, "Must respect conservative profile buffer on reserve step-up")
 		assert.Equal(t, types.BatteryModeStandby, refinedPath.actions[1].batteryMode)
 		assert.Equal(t, 0, p.actions[0].targetSOC, "Original plan must remain unmutated")
+
+		// Also verify that when exitSOC hits the 20% reserve floor, Conservative caps targetSOC at 30%
+		// (20% minSOC + 10% ReserveBufferPercent), holds at 30% in Standby during the cheap window,
+		// and then discharges from 30% all the way down to the 20% physical reserve during the peak window.
+		flatReserveTimeline := []planInterval{
+			{index: 0, startTime: start, endTime: start.Add(time.Hour), durationHours: 1.0, importRate: 0.055, loadKWH: 0.0, minSOC: 20},
+			{index: 1, startTime: start.Add(time.Hour), endTime: start.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.055, loadKWH: 8.0, minSOC: 20},
+			{index: 2, startTime: start.Add(2 * time.Hour), endTime: start.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.35, loadKWH: 3.0, minSOC: 20},
+		}
+		initSt20 := planState{time: start, energyKWH: 3.0, soc: 20.0, capacityKWH: 15.0, maxChargeKW: 8.0, maxDischargeKW: 8.0}
+		p20 := buildSyntheticPlanPath(flatReserveTimeline, initSt20, acts, sett, 0.85)
+		refined20, adjusted20 := p20.refineOverchargedEpisodes(ctx, sett, 0.85)
+		require.True(t, adjusted20)
+		assert.Equal(t, 30, refined20.actions[0].targetSOC, "Conservative refinement must buffer targetSOC to 30% (20% minSOC + 10% buffer)")
+		assert.Equal(t, types.BatteryModeStandby, refined20.actions[1].batteryMode)
+		assert.InDelta(t, 30.0, refined20.states[2].soc, 0.5, "Must enter peak window at 30% buffered SOC")
+		assert.InDelta(t, 20.0, refined20.states[3].soc, 0.5, "Must discharge from 30% down to the 20% physical reserve during peak")
 	})
 
 	t.Run("ChangingReserveSOC_LoweringReserveSOC_AllowsLowerClamp", func(t *testing.T) {

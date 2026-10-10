@@ -284,7 +284,7 @@ type candidateLogData struct {
 	stepKW                  float64
 	headroomKWH             float64
 	refillExportRate        float64
-	effectiveReserveSOC     float64
+	minSOC                  float64
 	higherFutureRate        float64
 	roundTripEff            float64
 	rechargeCost            float64
@@ -550,7 +550,7 @@ func logCandidate(ctx context.Context, cand actionCandidate, ld candidateLogData
 			slog.Time("stepTime", interval.startTime),
 			slog.Float64("refillExportRate", ld.refillExportRate),
 			slog.Float64("currentSOC", state.soc),
-			slog.Float64("effectiveReserveSOC", ld.effectiveReserveSOC),
+			slog.Float64("minSOC", ld.minSOC),
 		)
 	case PlanActionBatteryStandby:
 		if !selected {
@@ -561,7 +561,7 @@ func logCandidate(ctx context.Context, cand actionCandidate, ld candidateLogData
 			slog.Float64("refillExportRate", ld.refillExportRate),
 			slog.Time("earliestSolarRefillTime", ld.earliestSolarRefillTime),
 			slog.Float64("currentSOC", state.soc),
-			slog.Float64("effectiveReserveSOC", ld.effectiveReserveSOC),
+			slog.Float64("minSOC", ld.minSOC),
 			slog.Float64("higherFutureRate", ld.higherFutureRate),
 			slog.Time("vppEventDeadline", ld.vppEventDeadline),
 			slog.Bool("hasUpcomingSolarRefill", ld.hasUpcomingSolarRefill),
@@ -616,7 +616,7 @@ func logCandidate(ctx context.Context, cand actionCandidate, ld candidateLogData
 			slog.Float64("importRate", interval.importRate),
 			slog.Float64("solarKWH", interval.solarKWH),
 			slog.Float64("currentSOC", state.soc),
-			slog.Float64("effectiveReserveSOC", ld.effectiveReserveSOC),
+			slog.Float64("minSOC", ld.minSOC),
 			slog.Bool("canDischarge", ld.canDischarge),
 			slog.Time("vppRechargeDeadline", ld.vppRechargeDeadline),
 		)
@@ -1818,13 +1818,12 @@ func (c *Controller) appendActionCandidates(
 	}
 	optParams := settings.GetOptimizationParams()
 	roundTripEff := optParams.RoundTripEfficiency
-	reserveBufferPct := optParams.ReserveBufferPercent
-	effectiveReserveSOC := interval.minSOC + reserveBufferPct
-	isAboveReserve := currentSOC > effectiveReserveSOC
+	minSOC := interval.minSOC
+	isAboveReserve := currentSOC > minSOC
 
 	ld := candidateLogData{
-		effectiveReserveSOC: effectiveReserveSOC,
-		roundTripEff:        roundTripEff,
+		minSOC:       minSOC,
+		roundTripEff: roundTripEff,
 	}
 
 	if anchors.maxHorizonImportRate <= 0 && len(timeline) > 0 {
@@ -1903,7 +1902,7 @@ func (c *Controller) appendActionCandidates(
 		dHours = 1.0
 	}
 	rechargeKWHNeeded := headroomKWH + maxDischargeKW*dHours
-	maxReserveKWH := capacityKWH * (100.0 - effectiveReserveSOC) / 100.0
+	maxReserveKWH := capacityKWH * (100.0 - minSOC) / 100.0
 	if rechargeKWHNeeded > maxReserveKWH {
 		rechargeKWHNeeded = maxReserveKWH
 	}
@@ -1962,7 +1961,7 @@ func (c *Controller) appendActionCandidates(
 			if !vpp.mandatory {
 				// Voluntary VPP: homeowner earns export incentives down to their configured reserve floor,
 				// but never discharges below their effective reserve.
-				targetSOC = effectiveReserveSOC
+				targetSOC = minSOC
 			}
 			// For mandatory VPP, we cannot control vppSoc. The utility controls dispatch and the battery
 			// will drain to vppSoc (e.g. 5%) regardless of what we command or configure, even if the user's
@@ -2140,7 +2139,7 @@ func (c *Controller) appendActionCandidates(
 
 	// --- PRUNING RULE 5: Reserve Floor Protection ---
 	// Battery grid export requires an export safety margin above the effective reserve floor.
-	canExport := currentSOC > effectiveReserveSOC+exportReserveMarginPct
+	canExport := currentSOC > minSOC+exportReserveMarginPct
 	roomLeftToFill := currentSOC < almostFullSOC
 
 	// Evaluate daytime solar refill:
@@ -2476,7 +2475,7 @@ func (c *Controller) appendActionCandidates(
 						// The target entering SOC ahead of any VPP event is full capacity (100%),
 						// ensuring maximum energy is banked to export during the event down to vppSoc.
 						targetVPPSOC := vppMinFullCapacitySOC
-						minReserve := interval.minSOC + reserveBufferPct
+						minReserve := interval.minSOC + optParams.ReserveBufferPercent
 						solarTargetSOC := int(math.Ceil(max(minReserve, targetVPPSOC-solarRefillSOC)))
 						if solarTargetSOC > 100 {
 							solarTargetSOC = 100
@@ -2545,7 +2544,7 @@ func (c *Controller) appendActionCandidates(
 
 		// Export is a viable candidate if export rate beats the replacement cost by at least the degradation hurdle
 		if interval.exportRate >= (rechargeCost + cycleHurdle) {
-			targetSOC := int(math.Round(effectiveReserveSOC + exportReserveMarginPct))
+			targetSOC := int(math.Round(minSOC + exportReserveMarginPct))
 			ld.exportReplacementCost = rechargeCost
 			ld.minAlternativeValue = minAlternativeValue
 			ld.cycleHurdle = cycleHurdle
@@ -2591,15 +2590,14 @@ func stepPhysics(
 		}
 	}
 
-	reserveBufferPct := settings.GetOptimizationParams().ReserveBufferPercent
-	effectiveReserveSOC := interval.minSOC + reserveBufferPct
-	if math.IsNaN(effectiveReserveSOC) || effectiveReserveSOC < 0 {
-		effectiveReserveSOC = 20.0
-	} else if effectiveReserveSOC > 100.0 {
-		effectiveReserveSOC = 100.0
+	minSOC := interval.minSOC
+	if math.IsNaN(minSOC) || minSOC < 0 {
+		minSOC = 20.0
+	} else if minSOC > 100.0 {
+		minSOC = 100.0
 	}
-	reserveKWH := capacityKWH * (effectiveReserveSOC / 100.0)
-	exportReserveKWH := capacityKWH * ((effectiveReserveSOC + exportReserveMarginPct) / 100.0)
+	reserveKWH := capacityKWH * (minSOC / 100.0)
+	exportReserveKWH := capacityKWH * ((minSOC + exportReserveMarginPct) / 100.0)
 
 	// Half efficiency for one-way conversions: sqrt(roundTripEfficiency)
 	rtEff := roundTripEfficiency
@@ -3818,10 +3816,7 @@ func resolvePlanActionReason(
 	}
 
 	importRate := interval.importRate
-
-	reserveBufferPct := settings.GetOptimizationParams().ReserveBufferPercent
-	effectiveReserveSOC := interval.minSOC + reserveBufferPct
-
+	minSOC := interval.minSOC
 	isTruePeak := action.isTruePeak || isTruePeakRate(importRate, minHorizonImportRate, maxHorizonImportRate, settings)
 
 	switch action.batteryMode {
@@ -3963,7 +3958,7 @@ func resolvePlanActionReason(
 		}
 
 		// 2. Battery At Reserve
-		if state.soc <= effectiveReserveSOC+reserveFloorTolerancePct && metrics.batSuppliedHomeKWH <= minSignificantBatteryPowerKW*interval.durationHours {
+		if state.soc <= minSOC+reserveFloorTolerancePct && metrics.batSuppliedHomeKWH <= minSignificantBatteryPowerKW*interval.durationHours {
 			return types.ActionReasonBatteryAtReserve, "Battery is at reserve. Home powered from solar/grid.", nil
 		}
 
@@ -3987,7 +3982,7 @@ func resolvePlanActionReason(
 				if !hasInterveningPeak {
 					canReachCharge := true
 					for k := stepIdx; k < j; k++ {
-						if k+1 < len(winningPath.states) && winningPath.states[k+1].soc <= effectiveReserveSOC+reserveFloorTolerancePct {
+						if k+1 < len(winningPath.states) && winningPath.states[k+1].soc <= minSOC+reserveFloorTolerancePct {
 							canReachCharge = false
 							break
 						}
@@ -4101,9 +4096,8 @@ func finalizeDecisionAndPlan(
 	var hitDeficitAt time.Time
 	var hitCapacityAt time.Time
 
-	reserveBufferPct := settings.GetOptimizationParams().ReserveBufferPercent
-	effectiveReserveSOC := immediateInterval.minSOC + reserveBufferPct
-	if initialStatus.BatterySOC <= effectiveReserveSOC+reserveFloorTolerancePct {
+	minSOC := immediateInterval.minSOC
+	if initialStatus.BatterySOC <= minSOC+reserveFloorTolerancePct {
 		hitDeficitAt = timeline[0].startTime
 	}
 	if initialStatus.BatterySOC >= 100.0-socTargetTolerancePct {
@@ -4111,7 +4105,7 @@ func finalizeDecisionAndPlan(
 	}
 
 	for i := 0; i < len(winningPath.actions) && i < len(timeline); i++ {
-		stepReserveSOC := timeline[i].minSOC + reserveBufferPct
+		stepReserveSOC := timeline[i].minSOC
 		if i < len(winningPath.states) && i+1 < len(winningPath.states) {
 			startSOC := winningPath.states[i].soc
 			endSOC := winningPath.states[i+1].soc
