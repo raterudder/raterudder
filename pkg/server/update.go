@@ -170,7 +170,7 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 	var mu sync.Mutex
 
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(3)
+	g.SetLimit(5)
 
 	for siteID, settings := range settingsMap {
 		version := versionsMap[siteID]
@@ -180,7 +180,7 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 
-			siteCtx, cancel := context.WithTimeout(gCtx, 30*time.Second)
+			siteCtx, cancel := context.WithTimeout(gCtx, 60*time.Second)
 			defer cancel()
 
 			ctx := log.With(siteCtx, log.Ctx(siteCtx).With(slog.Group("update", slog.String("siteID", siteID))))

@@ -70,9 +70,11 @@ type rawTOUSlice struct {
 //     Dynamic forecasts (solar irradiance, temperature, home usage) become less reliable several
 //     hours out. We do not want to program autonomous export dispatches deep into the future on the
 //     hardware, which could misfire if weather or usage suddenly shifts.
-//     Therefore, ONLY the immediate contiguous block of the active control action (from plan.Periods[0]
+//
+//     Only the immediate contiguous block of the active control action (from plan.Periods[0]
 //     onward with identical BatteryMode and SolarMode) is programmed as an active override dispatch
-//     (e.g., Solar Export, Battery Export, or Standby).
+//     when exporting (Solar Export or Battery Export). Self-consumption charging and standby are
+//     controlled directly via reserve SOC in self-consumption mode and do not alter the TOU schedule.
 //     All subsequent periods in the 24-hour cycle automatically revert to standard Self-Consumption
 //     (BatteryModeLoad, SolarModeAny), keeping RateRudder in continuous, real-time control.
 //
@@ -83,7 +85,7 @@ type rawTOUSlice struct {
 //
 //  4. Gap-Free & Coalesced:
 //     The resulting schedule is guaranteed to span seamlessly from 00:00 to 24:00 without gaps or overlaps.
-//     Adjacent periods sharing identical modes, peak status, and near-identical rates (within $0.005/kWh)
+//     Adjacent periods sharing identical modes, peak status, and near-identical rates (within $0.015/kWh)
 //     are coalesced into clean, compact blocks.
 func BuildTOUSchedule(plan *types.Plan, now time.Time, loc *time.Location) *types.TOUSchedule {
 	if plan == nil || len(plan.Periods) == 0 {
@@ -109,11 +111,12 @@ func BuildTOUSchedule(plan *types.Plan, now time.Time, loc *time.Location) *type
 	immBatteryMode := imm.BatteryMode
 	immSolarMode := imm.SolarMode
 
-	// Determine if the immediate action is an operational override dispatch
+	// Determine if the immediate action is an operational override dispatch.
+	// Only export dispatches use hardware TOU mode; self-consumption charging and
+	// standby (without solar export) are controlled via reserve SOC in self-consumption
+	// mode and should not alter the recurring 24-hour TOU schedule.
 	isOverride := immBatteryMode == types.BatteryModeExport ||
-		immSolarMode == types.SolarModeExport ||
-		immBatteryMode == types.BatteryModeChargeAny ||
-		immBatteryMode == types.BatteryModeStandby
+		immSolarMode == types.SolarModeExport
 
 	// Find the end boundary of the immediate contiguous block of identical action parameters.
 	// Only periods within this contiguous block will receive the override dispatch.
@@ -128,8 +131,15 @@ func BuildTOUSchedule(plan *types.Plan, now time.Time, loc *time.Location) *type
 	}
 	activeUntilInLoc := activeUntil.In(loc)
 
-	// Define the 24-hour planning horizon in local time
-	horizonStart := plan.Periods[0].TSStart.In(loc)
+	// Define the 24-hour planning horizon in local time.
+	// When there is no active export override, align the horizon start to the start of the
+	// current hour so mid-hour polling timestamps (e.g. :03, :23, :43) do not split the
+	// current hour between tomorrow's rate and today's rate.
+	t0 := plan.Periods[0].TSStart.In(loc)
+	horizonStart := t0
+	if !isOverride {
+		horizonStart = time.Date(t0.Year(), t0.Month(), t0.Day(), t0.Hour(), 0, 0, 0, loc)
+	}
 	horizonEnd := horizonStart.Add(24 * time.Hour)
 
 	// Scan 24h horizon to detect utility peak pricing windows (when not exporting)
@@ -161,8 +171,11 @@ func BuildTOUSchedule(plan *types.Plan, now time.Time, loc *time.Location) *type
 	// Slice and map plan periods across the 24-hour horizon into clock minutes (0 to 1440)
 	var rawSlices []rawTOUSlice
 
-	for _, p := range plan.Periods {
+	for i, p := range plan.Periods {
 		pStart := p.TSStart.In(loc)
+		if i == 0 && !isOverride && pStart.After(horizonStart) {
+			pStart = horizonStart
+		}
 		pEnd := p.TSEnd.In(loc)
 
 		// Skip intervals outside the 24-hour horizon
@@ -191,11 +204,7 @@ func BuildTOUSchedule(plan *types.Plan, now time.Time, loc *time.Location) *type
 		if isOverride && pStart.Before(activeUntilInLoc) {
 			bMode = immBatteryMode
 			sMode = immSolarMode
-			if immBatteryMode == types.BatteryModeExport || immSolarMode == types.SolarModeExport {
-				isPeak = true
-			} else {
-				isPeak = isUtilityPeakRate(p.ImportDollars)
-			}
+			isPeak = true
 		} else {
 			bMode = types.BatteryModeLoad
 			sMode = types.SolarModeAny

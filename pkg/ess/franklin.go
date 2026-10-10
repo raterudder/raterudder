@@ -49,6 +49,9 @@ type Franklin struct {
 	// retry delays for getDeviceCompositeInfo valid: false failures
 	retryDelay1 time.Duration
 	retryDelay2 time.Duration
+
+	// delay after saveTouDispatch before updating reserve SOC or switching modes
+	touDispatchDelay time.Duration
 }
 
 type franklinWorkMode int
@@ -100,10 +103,11 @@ type franklinMode struct {
 
 func newFranklin() *Franklin {
 	return &Franklin{
-		client:      common.HTTPClient(10 * time.Second),
-		baseURL:     "https://energy.franklinwh.com",
-		retryDelay1: 5 * time.Second,
-		retryDelay2: 10 * time.Second,
+		client:           common.HTTPClient(10 * time.Second),
+		baseURL:          "https://energy.franklinwh.com",
+		retryDelay1:      5 * time.Second,
+		retryDelay2:      10 * time.Second,
+		touDispatchDelay: 5 * time.Second,
 	}
 }
 
@@ -1138,70 +1142,7 @@ func (f *Franklin) saveFranklinTOUSchedule(ctx context.Context, sched *types.TOU
 		provinceID = 39 // default to California
 	}
 
-	tiers, tierPeriods := classifyTOUScheduleTiers(sched.Periods)
-	details := buildFranklinTouDetailsFromSchedule(sched, tiers)
-
-	dayTypeMap := map[string]any{
-		"dayName":      "everyDay",
-		"dayType":      3,
-		"detailVoList": details,
-	}
-
-	for tier, periods := range tierPeriods {
-		if len(periods) == 0 {
-			continue
-		}
-		bRate, sRate := calculateDurationWeightedRates(periods)
-		switch tier {
-		case touTierOnPeak:
-			if bRate > 0 {
-				dayTypeMap["eleticRatePeak"] = bRate
-			}
-			if sRate > 0 {
-				dayTypeMap["eleticSellPeak"] = sRate
-			}
-		case touTierPartialPeak:
-			if bRate > 0 {
-				dayTypeMap["eleticRateShoulder"] = bRate
-			}
-			if sRate > 0 {
-				dayTypeMap["eleticSellShoulder"] = sRate
-			}
-		case touTierOffPeak:
-			if bRate > 0 {
-				dayTypeMap["eleticRateValley"] = bRate
-			}
-			if sRate > 0 {
-				dayTypeMap["eleticSellValley"] = sRate
-			}
-		case touTierSuperOffPeak:
-			if bRate > 0 {
-				dayTypeMap["eleticRateSuperOffPeak"] = bRate
-			}
-			if sRate > 0 {
-				dayTypeMap["eleticSellSuperOffPeak"] = sRate
-			}
-		}
-	}
-
-	// Fallback: If only peak or only off-peak was present, ensure at least Peak and Valley are populated
-	// so the Franklin app does not treat the tariff structure as incomplete.
-	if _, ok := dayTypeMap["eleticRateValley"]; !ok {
-		if peakBuy, ok := dayTypeMap["eleticRatePeak"]; ok {
-			dayTypeMap["eleticRateValley"] = peakBuy
-			if peakSell, ok := dayTypeMap["eleticSellPeak"]; ok {
-				dayTypeMap["eleticSellValley"] = peakSell
-			}
-		}
-	}
-	if _, ok := dayTypeMap["eleticRatePeak"]; !ok {
-		if valleyBuy, ok := dayTypeMap["eleticRateValley"]; ok {
-			dayTypeMap["eleticRatePeak"] = valleyBuy
-			if valleySell, ok := dayTypeMap["eleticSellValley"]; ok {
-				dayTypeMap["eleticSellPeak"] = valleySell
-			}
-		}
-	}
+	dayTypeVo := buildFranklinDayTypeVo(sched)
 
 	payload := map[string]any{
 		"template": map[string]any{
@@ -1220,8 +1161,8 @@ func (f *Franklin) saveFranklinTOUSchedule(ctx context.Context, sched *types.TOU
 			{
 				"seasonName": "All Year",
 				"month":      "1,2,3,4,5,6,7,8,9,10,11,12",
-				"dayTypeVoList": []map[string]any{
-					dayTypeMap,
+				"dayTypeVoList": []franklinDayTypeVo{
+					dayTypeVo,
 				},
 			},
 		},
@@ -1240,7 +1181,7 @@ func (f *Franklin) saveFranklinTOUSchedule(ctx context.Context, sched *types.TOU
 	log.Ctx(ctx).DebugContext(ctx, "saving franklin tou dispatch",
 		slog.Int("countryID", countryID),
 		slog.Int("provinceID", provinceID),
-		slog.Any("schedule", details),
+		slog.Any("schedule", dayTypeVo.DetailVoList),
 	)
 
 	req, err := f.newPostJSONRequest(ctx, "hes-gateway/terminal/tou/saveTouDispatch", payload)
@@ -1252,6 +1193,71 @@ func (f *Franklin) saveFranklinTOUSchedule(ctx context.Context, sched *types.TOU
 		return err
 	}
 	return nil
+}
+
+func buildFranklinDayTypeVo(sched *types.TOUSchedule) franklinDayTypeVo {
+	tiers, tierPeriods := classifyTOUScheduleTiers(sched.Periods)
+	details := buildFranklinTouDetailsFromSchedule(sched, tiers)
+
+	dt := franklinDayTypeVo{
+		DayName:      "everyDay",
+		DayType:      3,
+		DetailVoList: details,
+	}
+
+	for tier, periods := range tierPeriods {
+		if len(periods) == 0 {
+			continue
+		}
+		bRate, sRate := calculateDurationWeightedRates(periods)
+		switch tier {
+		case touTierOnPeak:
+			if bRate > 0 {
+				dt.EleticRatePeak = bRate
+			}
+			if sRate > 0 {
+				dt.EleticSellPeak = sRate
+			}
+		case touTierPartialPeak:
+			if bRate > 0 {
+				dt.EleticRateShoulder = bRate
+			}
+			if sRate > 0 {
+				dt.EleticSellShoulder = sRate
+			}
+		case touTierOffPeak:
+			if bRate > 0 {
+				dt.EleticRateValley = bRate
+			}
+			if sRate > 0 {
+				dt.EleticSellValley = sRate
+			}
+		case touTierSuperOffPeak:
+			if bRate > 0 {
+				dt.EleticRateSuperOffPeak = bRate
+			}
+			if sRate > 0 {
+				dt.EleticSellSuperOffPeak = sRate
+			}
+		}
+	}
+
+	// Fallback: If only peak or only off-peak was present, ensure at least Peak and Valley are populated
+	// so the Franklin app does not treat the tariff structure as incomplete.
+	if dt.EleticRateValley == 0 && dt.EleticRatePeak > 0 {
+		dt.EleticRateValley = dt.EleticRatePeak
+		if dt.EleticSellPeak > 0 {
+			dt.EleticSellValley = dt.EleticSellPeak
+		}
+	}
+	if dt.EleticRatePeak == 0 && dt.EleticRateValley > 0 {
+		dt.EleticRatePeak = dt.EleticRateValley
+		if dt.EleticSellValley > 0 {
+			dt.EleticSellPeak = dt.EleticSellValley
+		}
+	}
+
+	return dt
 }
 
 func buildFranklinTouDetailsFromSchedule(sched *types.TOUSchedule, tiers []touTier) []franklinDetailVoItem {
@@ -1298,24 +1304,32 @@ func buildFranklinTouDetailsFromSchedule(sched *types.TOUSchedule, tiers []touTi
 			dispatchID = franklinDispatchSelfConsumption
 		}
 
-		item := franklinDetailVoItem{
+		details = append(details, franklinDetailVoItem{
 			StartHourTime: p.StartTimeStr(),
 			EndHourTime:   p.EndTimeStr(),
 			WaveType:      waveType,
 			Name:          name,
 			DispatchID:    int(dispatchID),
-		}
-		if p.ImportDollars > 0 {
-			b := p.ImportDollars
-			item.BuyRate = &b
-		}
-		if p.ExportDollars > 0 {
-			s := p.ExportDollars
-			item.SellRate = &s
-		}
-		details = append(details, item)
+		})
 	}
 	return details
+}
+
+func franklinWaveTypeRates(dt franklinDayTypeVo, waveType int) (float64, float64) {
+	switch waveType {
+	case 0:
+		return dt.EleticRateValley, dt.EleticSellValley
+	case 1:
+		return dt.EleticRateShoulder, dt.EleticSellShoulder
+	case 2:
+		return dt.EleticRatePeak, dt.EleticSellPeak
+	case 3:
+		return dt.EleticRateSharp, dt.EleticSellSharp
+	case 4:
+		return dt.EleticRateSuperOffPeak, dt.EleticSellSuperOffPeak
+	default:
+		return 0, 0
+	}
 }
 
 func parseFranklinTOUSchedule(strategies []franklinTOUStrategy) *types.TOUSchedule {
@@ -1354,13 +1368,7 @@ func parseFranklinTOUSchedule(strategies []franklinTOUStrategy) *types.TOUSchedu
 			sMode = types.SolarModeAny
 		}
 
-		var imp, exp float64
-		if d.BuyRate != nil {
-			imp = *d.BuyRate
-		}
-		if d.SellRate != nil {
-			exp = *d.SellRate
-		}
+		imp, exp := franklinWaveTypeRates(dt, d.WaveType)
 
 		periods[i] = types.TOUPeriod{
 			StartHour:     startH,
@@ -1375,6 +1383,31 @@ func parseFranklinTOUSchedule(strategies []franklinTOUStrategy) *types.TOUSchedu
 		}
 	}
 	return &types.TOUSchedule{Periods: periods}
+}
+
+func isFranklinScheduleMatch(strategies []franklinTOUStrategy, sched *types.TOUSchedule) bool {
+	if sched == nil || len(sched.Periods) == 0 {
+		return false
+	}
+	existingSched := parseFranklinTOUSchedule(strategies)
+	if existingSched == nil {
+		return false
+	}
+	if !existingSched.IsSignificantlyDifferent(sched) {
+		return true
+	}
+	targetDayType := buildFranklinDayTypeVo(sched)
+	targetSched := parseFranklinTOUSchedule([]franklinTOUStrategy{
+		{
+			SeasonName:    "All Year",
+			Month:         "1,2,3,4,5,6,7,8,9,10,11,12",
+			DayTypeVoList: []franklinDayTypeVo{targetDayType},
+		},
+	})
+	if targetSched == nil {
+		return false
+	}
+	return !existingSched.IsSignificantlyDifferent(targetSched)
 }
 
 func parseFranklinHourMinute(s string) (int, int, bool) {
@@ -1445,79 +1478,18 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		minSOC = float64(opts.MinimumSOC)
 	}
 
-	var scheduleChanged bool
-	if f.settings.ManageTOUSchedules && opts.Schedule != nil {
-		tplRes, err := f.getTOUTemplate(ctx)
-		if err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to get franklin tou template", slog.Any("error", err))
-		}
-		isRateRudder := err == nil && isFranklinRateRudderSchedule(tplRes, modes.touMode)
-		needsExport := sol == types.SolarModeExport || bat == types.BatteryModeExport
-
-		if isRateRudder || needsExport {
-			scheduleMatched := false
-			if err == nil {
-				existingSched := parseFranklinTOUSchedule(tplRes.StrategyList)
-				if existingSched != nil && !existingSched.IsSignificantlyDifferent(opts.Schedule) {
-					scheduleMatched = true
-					log.Ctx(ctx).DebugContext(ctx, "franklin tou schedule already matches, skipping saveTouDispatch")
-				}
-			}
-
-			if !scheduleMatched {
-				log.Ctx(ctx).DebugContext(ctx, "saving franklin tou schedule", slog.Any("schedule", opts.Schedule))
-				if err := f.saveFranklinTOUSchedule(ctx, opts.Schedule, tplRes); err != nil {
-					return false, err
-				}
-				scheduleChanged = true
-			}
-		} else {
-			log.Ctx(ctx).DebugContext(ctx, "franklin schedule is manually configured and export is not required, skipping schedule update")
-		}
-
-		if needsExport && modes.touMode == (franklinMode{}) {
-			if f.settings.DryRun {
-				log.Ctx(ctx).InfoContext(ctx, "dry run: franklin tou mode not configured on gateway, would've provisioned via saveTouDispatch",
-					slog.String("gatewayID", f.gatewayID),
-				)
-				modes.touMode = franklinMode{
-					WorkMode: franklinWorkModeTimeOfUse,
-					Name:     "RateRudder Dynamic Schedule",
-				}
-			} else {
-				log.Ctx(ctx).WarnContext(ctx, "franklin tou mode not configured on gateway, re-fetching modes after saving dispatch",
-					slog.String("gatewayID", f.gatewayID),
-				)
-				refreshedModes, err := f.getAvailableModes(ctx)
-				if err != nil {
-					log.Ctx(ctx).ErrorContext(ctx, "failed to re-fetch available modes after saving tou dispatch", slog.Any("error", err))
-					return false, err
-				}
-				modes = refreshedModes
-			}
-		}
-
-		if needsExport && modes.touMode == (franklinMode{}) {
-			log.Ctx(ctx).ErrorContext(ctx, "franklin tou mode not available on gateway even after saving tou dispatch",
-				slog.String("gatewayID", f.gatewayID),
-				slog.Any("modes", modes.list),
-			)
-			return false, errors.New("franklin tou mode not available")
-		}
+	needsExport := f.settings.ManageTOUSchedules && (sol == types.SolarModeExport || bat == types.BatteryModeExport)
+	if needsExport && opts.Schedule == nil {
+		log.Ctx(ctx).ErrorContext(ctx, "no schedule provided for tou export", slog.String("gatewayID", f.gatewayID))
+		return false, errors.New("missing schedule to provision tou mode")
 	}
 
-	if f.settings.ManageTOUSchedules && (sol == types.SolarModeExport || bat == types.BatteryModeExport) {
-		if opts.Schedule == nil {
-			log.Ctx(ctx).ErrorContext(ctx, "no schedule provided for tou export", slog.String("gatewayID", f.gatewayID))
-			return false, errors.New("missing schedule to provision tou mode")
-		}
-
+	if needsExport {
 		if bat == types.BatteryModeStandby {
 			newReserveSOC = max(math.Floor(rd.RuntimeData.SOC), minSOC)
 		} else {
 			newReserveSOC = minSOC
 		}
-
 		targetMode = modes.touMode
 	} else {
 		switch bat {
@@ -1564,29 +1536,85 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		}
 	}
 
-	if targetMode.WorkMode == franklinWorkModeSelfConsumption || targetMode.WorkMode == franklinWorkModeTimeOfUse {
-		// we can't set it below 5
-		if newReserveSOC < 5 {
-			newReserveSOC = 5
-		}
-
-		// if franklin overshot our reserve SOC by less than 1 percent, ignore it
-		if math.Abs(newReserveSOC-targetMode.ReserveSOC) <= 1.0 {
-			newReserveSOC = targetMode.ReserveSOC
-		}
+	if newReserveSOC < 5 {
+		newReserveSOC = 5
 	}
-
-	switch sol {
-	case types.SolarModeExport, types.SolarModeAny, types.SolarModeNoExport, types.SolarModeNoChange:
-		// In FranklinWH, PCS power control (setPowerControl/setPowerControlV2) only configures static interconnection
-		// compliance caps (PCS limits, which require installer privileges) and does not command runtime export dispatch.
-		// Runtime export is controlled exclusively via TOU dispatch schedules (saveTouDispatch).
-	default:
-		return false, fmt.Errorf("unknown solar mode: %v", sol)
+	if math.Abs(newReserveSOC-targetMode.ReserveSOC) <= 1.0 {
+		newReserveSOC = targetMode.ReserveSOC
 	}
 
 	modeChanged := modes.currentMode.WorkMode != targetMode.WorkMode
 	socChanged := (targetMode.WorkMode == franklinWorkModeSelfConsumption || targetMode.WorkMode == franklinWorkModeTimeOfUse) && math.Round(newReserveSOC) != math.Round(targetMode.ReserveSOC)
+
+	// When not exporting, skip TOU schedule updates if we are actively changing the
+	// operating mode or reserve SOC (e.g. starting/stopping a charge or entering standby)
+	// so saveTouDispatch never reloads the gateway's dispatch package in the same cycle
+	// as an active mode or reserve SOC update.
+	var scheduleChanged bool
+	shouldCheckTOUSchedule := f.settings.ManageTOUSchedules && opts.Schedule != nil && (needsExport || (!modeChanged && !socChanged))
+	if shouldCheckTOUSchedule {
+		tplRes, err := f.getTOUTemplate(ctx)
+		if err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to get franklin tou template", slog.Any("error", err))
+		}
+		isRateRudder := err == nil && isFranklinRateRudderSchedule(tplRes, modes.touMode)
+
+		if isRateRudder || needsExport {
+			scheduleMatched := false
+			if err == nil && isFranklinScheduleMatch(tplRes.StrategyList, opts.Schedule) {
+				scheduleMatched = true
+				log.Ctx(ctx).DebugContext(ctx, "franklin tou schedule already matches, skipping saveTouDispatch")
+			}
+
+			if !scheduleMatched {
+				log.Ctx(ctx).DebugContext(ctx, "saving franklin tou schedule", slog.Any("schedule", opts.Schedule))
+				if err := f.saveFranklinTOUSchedule(ctx, opts.Schedule, tplRes); err != nil {
+					return false, err
+				}
+				scheduleChanged = true
+			}
+		} else {
+			log.Ctx(ctx).DebugContext(ctx, "franklin schedule is manually configured and export is not required, skipping schedule update")
+		}
+
+		if needsExport && modes.touMode == (franklinMode{}) {
+			if f.settings.DryRun {
+				log.Ctx(ctx).InfoContext(ctx, "dry run: franklin tou mode not configured on gateway, would've provisioned via saveTouDispatch",
+					slog.String("gatewayID", f.gatewayID),
+				)
+				modes.touMode = franklinMode{
+					WorkMode: franklinWorkModeTimeOfUse,
+					Name:     "RateRudder Dynamic Schedule",
+				}
+			} else {
+				log.Ctx(ctx).WarnContext(ctx, "franklin tou mode not configured on gateway, re-fetching modes after saving dispatch",
+					slog.String("gatewayID", f.gatewayID),
+				)
+				refreshedModes, err := f.getAvailableModes(ctx)
+				if err != nil {
+					log.Ctx(ctx).ErrorContext(ctx, "failed to re-fetch available modes after saving tou dispatch", slog.Any("error", err))
+					return false, err
+				}
+				modes = refreshedModes
+			}
+
+			if modes.touMode == (franklinMode{}) {
+				log.Ctx(ctx).ErrorContext(ctx, "franklin tou mode not available on gateway even after saving tou dispatch",
+					slog.String("gatewayID", f.gatewayID),
+					slog.Any("modes", modes.list),
+				)
+				return false, errors.New("franklin tou mode not available")
+			}
+
+			targetMode = modes.touMode
+			if math.Abs(newReserveSOC-targetMode.ReserveSOC) <= 1.0 {
+				newReserveSOC = targetMode.ReserveSOC
+			}
+			// we know it changed because we just created tou mode
+			modeChanged = true
+			socChanged = math.Round(newReserveSOC) != math.Round(targetMode.ReserveSOC)
+		}
+	}
 
 	if modeChanged || socChanged {
 		if f.settings.DryRun {
@@ -1607,6 +1635,23 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 				)
 			}
 		} else {
+			if scheduleChanged && f.touDispatchDelay > 0 {
+				// Calling saveTouDispatch causes the FranklinWH gateway to reload its TOU dispatch
+				// package ("Package settings are taking effect, please check later"). Sending
+				// updateSocV2 or updateTouModeV2 immediately after saveTouDispatch can cause the
+				// gateway to delay or ignore the reserve SOC / operating mode change.
+				log.Ctx(ctx).DebugContext(
+					ctx,
+					"waiting after saving franklin tou schedule before updating mode/soc",
+					slog.Duration("delay", f.touDispatchDelay),
+				)
+				select {
+				case <-ctx.Done():
+					return false, ctx.Err()
+				case <-time.After(f.touDispatchDelay):
+				}
+			}
+
 			// Explicitly call updateSocV2 before changing modes because updateTouModeV2
 			// does not seem to actually change the reserve SOC on the gateway hardware.
 			if socChanged {
@@ -2171,14 +2216,12 @@ type franklinDayTypeVo struct {
 }
 
 type franklinDetailVoItem struct {
-	ID            int      `json:"id,omitempty"`
-	Name          string   `json:"name"`
-	StartHourTime string   `json:"startHourTime"`
-	EndHourTime   string   `json:"endHourTime"`
-	WaveType      int      `json:"waveType"`
-	DispatchID    int      `json:"dispatchId"`
-	BuyRate       *float64 `json:"buyRate,omitempty"`
-	SellRate      *float64 `json:"sellRate,omitempty"`
+	ID            int    `json:"id,omitempty"`
+	Name          string `json:"name"`
+	StartHourTime string `json:"startHourTime"`
+	EndHourTime   string `json:"endHourTime"`
+	WaveType      int    `json:"waveType"`
+	DispatchID    int    `json:"dispatchId"`
 }
 
 type franklinTOUTemplate struct {

@@ -293,18 +293,21 @@ func TestBuildTOUSchedule(t *testing.T) {
 		assert.True(t, sched.Periods[2].Peak)
 	})
 
-	t.Run("Active Standby Window", func(t *testing.T) {
-		// Scenario: Controller decides to hold battery in Standby for 2 hours (13:00 to 15:00)
-		// in anticipation of upcoming peak export.
+	t.Run("Active Standby With Solar Export Window", func(t *testing.T) {
+		// Scenario: Controller decides to hold battery in Standby while exporting excess solar
+		// for 2 hours (13:00 to 15:00). Because SolarModeExport is active, the hardware TOU
+		// schedule must use the Standby+SolarExport override for 13:00 to 15:00.
 		startTime := baseTime.Add(13 * time.Hour) // 13:00
 		var periods []types.PlanPeriod
 		for h := 0; h < 24; h++ {
 			currStart := startTime.Add(time.Duration(h) * time.Hour)
 			currEnd := currStart.Add(time.Hour)
 			bMode := types.BatteryModeLoad
+			sMode := types.SolarModeAny
 
-			if h < 2 { // 13:00 - 15:00 Standby
+			if h < 2 { // 13:00 - 15:00 Standby with Solar Export
 				bMode = types.BatteryModeStandby
+				sMode = types.SolarModeExport
 			}
 
 			periods = append(periods, types.PlanPeriod{
@@ -314,7 +317,7 @@ func TestBuildTOUSchedule(t *testing.T) {
 				ImportDollars: 0.20,
 				ExportDollars: 0.10,
 				BatteryMode:   bMode,
-				SolarMode:     types.SolarModeAny,
+				SolarMode:     sMode,
 			})
 		}
 
@@ -322,7 +325,7 @@ func TestBuildTOUSchedule(t *testing.T) {
 		sched := BuildTOUSchedule(plan, startTime, loc)
 		require.NotNil(t, sched)
 
-		// 13:00 to 15:00 must be marked Standby
+		// 13:00 to 15:00 must be marked Standby + SolarModeExport
 		var standbyPeriod *types.TOUPeriod
 		for i := range sched.Periods {
 			if sched.Periods[i].StartHour == 13 && sched.Periods[i].EndHour == 15 {
@@ -332,6 +335,78 @@ func TestBuildTOUSchedule(t *testing.T) {
 		}
 		require.NotNil(t, standbyPeriod)
 		assert.Equal(t, types.BatteryModeStandby, standbyPeriod.BatteryMode)
+		assert.Equal(t, types.SolarModeExport, standbyPeriod.SolarMode)
+		assert.True(t, standbyPeriod.Peak)
+	})
+
+	t.Run("Self Consumption Charging And Standby Do Not Override TOU Schedule", func(t *testing.T) {
+		// Scenario: Controller transitions through Standby (04:03-04:23), ChargeAny (04:23-05:00),
+		// ChargeAny (04:43-05:00), and Load (05:01) in self-consumption mode (SolarModeAny).
+		// None of these self-consumption actions should inject dynamic slices into the TOU schedule,
+		// and polling at mid-hour timestamps (:03, :23, :43) must not cause the schedule to differ.
+		buildPlanAt := func(nowTime time.Time, immMode types.BatteryMode) *types.Plan {
+			var periods []types.PlanPeriod
+			hourStart := time.Date(nowTime.Year(), nowTime.Month(), nowTime.Day(), nowTime.Hour(), 0, 0, 0, loc)
+			firstEnd := hourStart.Add(time.Hour)
+			periods = append(periods, types.PlanPeriod{
+				TSStart:       nowTime,
+				TSEnd:         firstEnd,
+				DurationHours: firstEnd.Sub(nowTime).Hours(),
+				ImportDollars: 0.055,
+				ExportDollars: 0.032,
+				BatteryMode:   immMode,
+				SolarMode:     types.SolarModeAny,
+			})
+			for h := 1; h <= 24; h++ {
+				currStart := hourStart.Add(time.Duration(h) * time.Hour)
+				currEnd := currStart.Add(time.Hour)
+				clockHour := currStart.Hour()
+				imp := 0.055
+				exp := 0.032
+				if clockHour >= 18 && clockHour < 20 {
+					imp = 0.105
+					exp = 0.082
+				}
+				periods = append(periods, types.PlanPeriod{
+					TSStart:       currStart,
+					TSEnd:         currEnd,
+					DurationHours: 1.0,
+					ImportDollars: imp,
+					ExportDollars: exp,
+					BatteryMode:   types.BatteryModeLoad,
+					SolarMode:     types.SolarModeAny,
+				})
+			}
+			return &types.Plan{Periods: periods}
+		}
+
+		t0403 := baseTime.Add(4*time.Hour + 3*time.Minute)
+		t0423 := baseTime.Add(4*time.Hour + 23*time.Minute)
+		t0443 := baseTime.Add(4*time.Hour + 43*time.Minute)
+		t0501 := baseTime.Add(5*time.Hour + 1*time.Minute)
+
+		schedStandby := BuildTOUSchedule(buildPlanAt(t0403, types.BatteryModeStandby), t0403, loc)
+		schedCharge1 := BuildTOUSchedule(buildPlanAt(t0423, types.BatteryModeChargeAny), t0423, loc)
+		schedCharge2 := BuildTOUSchedule(buildPlanAt(t0443, types.BatteryModeChargeAny), t0443, loc)
+		schedLoad := BuildTOUSchedule(buildPlanAt(t0501, types.BatteryModeLoad), t0501, loc)
+
+		require.NotNil(t, schedStandby)
+		require.NotNil(t, schedCharge1)
+		require.NotNil(t, schedCharge2)
+		require.NotNil(t, schedLoad)
+
+		for _, p := range schedCharge1.Periods {
+			assert.Equal(t, types.BatteryModeLoad, p.BatteryMode, "self-consumption ChargeAny must not override TOU BatteryMode")
+			assert.Equal(t, types.SolarModeAny, p.SolarMode)
+		}
+		for _, p := range schedStandby.Periods {
+			assert.Equal(t, types.BatteryModeLoad, p.BatteryMode, "self-consumption Standby must not override TOU BatteryMode")
+			assert.Equal(t, types.SolarModeAny, p.SolarMode)
+		}
+
+		assert.False(t, schedStandby.IsSignificantlyDifferent(schedCharge1), "transition from Standby to ChargeAny must not change TOU schedule")
+		assert.False(t, schedCharge1.IsSignificantlyDifferent(schedCharge2), "continuing ChargeAny 20 minutes later must not change TOU schedule")
+		assert.False(t, schedCharge2.IsSignificantlyDifferent(schedLoad), "transition from ChargeAny back to Load must not change TOU schedule")
 	})
 
 	t.Run("Short Plan Under 24 Hours Fills Remaining Hours Seamlessly", func(t *testing.T) {
