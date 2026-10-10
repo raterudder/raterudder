@@ -24,7 +24,7 @@ const (
 	// defaultInertiaThresholdDollars is the minimum monetary improvement ($) across the horizon
 	// required to switch from the current active battery mode in lastAction to a new mode.
 	// This prevents inverter relays from chattering when two plans differ by fractions of a cent.
-	defaultInertiaThresholdDollars = 0.05
+	defaultInertiaThresholdDollars = 0.025
 
 	// continueChargeHeadroomKWH is the lower headroom threshold applied when the battery is
 	// already actively grid-charging. This allows an existing charge session to run smoothly
@@ -70,12 +70,25 @@ const (
 	// reduces high-SOC calendar degradation, and minimizes standby losses without overriding true price differences.
 	batteryHoldingCostPerHourPerKWH = 0.0001
 
-	// modeSwitchPenalty is a nominal physical transition penalty ($0.01 = 1 cent)
+	// chargeCompletionBufferDuration (40 minutes, or 2 standard 20-minute intervals) is the safety buffer
+	// window immediately preceding a material import rate increase. Grid charging within this final window
+	// incurs a minute penalty (lateChargeBufferPenaltyPerKWH = batteryHoldingCostPerHourPerKWH - 1e-6 per kWh)
+	// so the planner targets completing cheap grid charges 20-40 minutes before rates jump rather than waiting
+	// until the final interval with zero margin for hardware command delays or constant-voltage top-off tapering.
+	chargeCompletionBufferDuration = 40 * time.Minute
+	lateChargeBufferPenaltyPerKWH  = batteryHoldingCostPerHourPerKWH - 1e-6
+
+	// planScoreTieEpsilon ($1e-6) is the floating-point tie-breaker tolerance when comparing
+	// total horizon plan scores across candidate modes, allowing sub-mill-dollar holding and
+	// pre-peak buffer penalties (~$1e-4) to steer timing while breaking true floating-point ties deterministically.
+	planScoreTieEpsilon = 1e-6
+
+	// modeSwitchPenalty is a nominal physical transition penalty ($0.005 = 0.5 cents)
 	// applied during dynamic programming forward search whenever transitioning between battery modes.
 	// This eliminates mode chattering, relay/contactor flutter, and fragmentation across all modes (charging,
 	// discharging to load, exporting, or standby), strictly prioritizing contiguous dispatch blocks
 	// while still permitting mode switches whenever economically justified.
-	modeSwitchPenalty = 0.01
+	modeSwitchPenalty = 0.005
 
 	// exportReserveMarginPct is the safety margin (in % SOC) maintained strictly above the effective
 	// reserve floor during battery grid export. Because grid exports discharge at maximum inverter power,
@@ -102,10 +115,10 @@ const (
 	// It matches socBucketResolutionPct (0.5%) so that trajectories ending at e.g. 99.6% due to bin quantization are not discarded.
 	socTargetTolerancePct = 0.5
 
-	// priceMaterialityThresholdDollars ($0.005/kWh, or 0.5¢/kWh) is the minimum price differential required for an economic
-	// distinction to be meaningful to homeowners when generating decision explanations (e.g. waiting to charge vs charging now).
-	// Differences below half a cent are typically floating-point noise or insignificant tariff riders.
-	priceMaterialityThresholdDollars = 0.005
+	// priceMaterialityThresholdDollars ($0.03/kWh, or 3.0¢/kWh) is the minimum price differential required for an economic
+	// distinction to be meaningful when evaluating rate jumps, standby holds, and decision explanations (e.g. waiting to charge vs charging now).
+	// Differences below 3 cents are typically minor hourly wholesale fluctuations or insignificant tariff riders.
+	priceMaterialityThresholdDollars = 0.03
 
 	// defaultBatteryCyclingHoldHurdleDollars ($0.01/kWh, or 1.0¢/kWh) is the marginal battery cycling
 	// and degradation hurdle applied during forward search when daytime solar refill is projected.
@@ -2921,6 +2934,26 @@ func (c *Controller) searchOptimalPlan(
 		}
 	}
 
+	// Pre-calculate whether each interval falls within the final chargeCompletionBufferDuration (40 minutes)
+	// before a material import rate increase (> priceMaterialityThresholdDollars). Charging within this
+	// tail window incurs a minute buffer cost (lateChargeBufferPenaltyPerKWH) so the planner completes overnight
+	// or off-peak charging with a 20-40 minute safety cushion rather than waiting until the very last interval.
+	inPrePeakChargeBuffer := make([]bool, len(timeline))
+	for i := 0; i < len(timeline); i++ {
+		for j := i + 1; j < len(timeline); j++ {
+			if timeline[j].startTime.Sub(timeline[i].startTime) > chargeCompletionBufferDuration {
+				break
+			}
+			if timeline[j].importRate < timeline[i].importRate-priceMaterialityThresholdDollars {
+				break
+			}
+			if timeline[j].importRate > timeline[i].importRate+priceMaterialityThresholdDollars {
+				inPrePeakChargeBuffer[i] = true
+				break
+			}
+		}
+	}
+
 	// Identify the nearest upcoming VPP event whose deadline has not passed relative to step 0.
 	// Only the nearest upcoming event deadline is evaluated for feasibility; future events will be evaluated
 	// in subsequent rolling plans once the earlier event concludes, preventing false penalties on trajectories
@@ -3134,25 +3167,31 @@ func (c *Controller) searchOptimalPlan(
 						// to prevent rapid mode oscillation.
 						if lastAction != nil {
 							if cand.batteryMode != lastAction.BatteryMode {
-								if lastAction.BatteryMode == types.BatteryModeStandby && cand.batteryMode == types.BatteryModeLoad {
+								if lastAction.BatteryMode == types.BatteryModeStandby &&
+									(cand.batteryMode == types.BatteryModeLoad || cand.batteryMode == types.BatteryModeChargeAny) {
 									// Standby is an idle resting state rather than an active high-power dispatch mode.
-									// Transitioning from Standby into BatteryModeLoad (Self-Consumption) carries zero risk
-									// of relay wear or grid oscillation. The DP forward horizon already natively accounts
-									// for upcoming peak rates or mandatory VPP events through replacement costs, terminal
-									// valuation, and shortfall strikes; subjecting Standby->Load transitions to the heavy
-									// step-0 defaultInertiaThresholdDollars penalty causes rolling-horizon delays where
-									// self-consumption is perpetually postponed on off-peak rates ("frozen battery" bug).
-									// We therefore apply the nominal modeSwitchPenalty rather than full inertia threshold.
+									// Subjecting transitions out of Standby into Load or ChargeAny to a higher step-0
+									// inertia threshold than step-1 modeSwitchPenalty causes rolling-horizon procrastination
+									// where every run prefers starting the charge or discharge one interval later (step 1)
+									// rather than immediately (step 0). Applying modeSwitchPenalty at step 0 equalizes
+									// step-0 and step-1 exit costs from Standby.
 									transitionCost = modeSwitchPenalty
 								} else {
-									transitionCost = max(0.01, defaultInertiaThresholdDollars*min(1.0, interval.durationHours))
+									transitionCost = max(modeSwitchPenalty, defaultInertiaThresholdDollars*min(1.0, interval.durationHours))
 								}
 							} else if lastAction.SolarMode > 0 && cand.solarMode > 0 && cand.solarMode != lastAction.SolarMode {
 								transitionCost = modeSwitchPenalty
 							}
 						}
 					} else if parent.action.batteryMode != cand.batteryMode || (parent.action.solarMode > 0 && cand.solarMode > 0 && parent.action.solarMode != cand.solarMode) {
-						transitionCost = modeSwitchPenalty
+						if parent.action.batteryMode == types.BatteryModeChargeAny && cand.batteryMode == types.BatteryModeStandby && inPrePeakChargeBuffer[stepIdx] {
+							// Completing a grid charge (whether to 100% or a partial target SOC before solar/peak)
+							// naturally rests the battery in Standby during the pre-peak completion buffer window;
+							// do not penalize finishing a charge with a safety cushion.
+							transitionCost = 0
+						} else {
+							transitionCost = modeSwitchPenalty
+						}
 					}
 
 					// Battery Wear / Degradation Costs (Half-Cycle Additive Model):
@@ -3224,7 +3263,15 @@ func (c *Controller) searchOptimalPlan(
 						continue
 					}
 
-					newCost := parent.totalCost + metrics.costDollars + exportDegradationCost + chargeDegradationCost + holdCost + transitionCost + (nextState.energyKWH * interval.durationHours * batteryHoldingCostPerHourPerKWH)
+					// Apply the pre-peak completion buffer penalty strictly to grid charging (metrics.gridChargeKWH)
+					// rather than total battery charging (metrics.batteryChargeKW) so that passive solar charging
+					// in Load/Standby right before a peak window is never penalized.
+					var lateChargeBufferCost float64
+					if inPrePeakChargeBuffer[stepIdx] && metrics.gridChargeKWH > 0 {
+						lateChargeBufferCost = metrics.gridChargeKWH * oneWayEff * lateChargeBufferPenaltyPerKWH
+					}
+
+					newCost := parent.totalCost + metrics.costDollars + exportDegradationCost + chargeDegradationCost + holdCost + transitionCost + lateChargeBufferCost + (nextState.energyKWH * interval.durationHours * batteryHoldingCostPerHourPerKWH)
 
 					var strikeInc int
 					// Check VPP deadline feasibility: apply strikes for nearest upcoming event deadline
@@ -3439,8 +3486,8 @@ func (c *Controller) searchOptimalPlan(
 		if bestNodeForCand != nil {
 			prevStrikes, exists := modeBestStrikes[cand0.batteryMode]
 			prevScore := modeBestScores[cand0.batteryMode]
-			isBetter := !exists || bestStrikesForCand < prevStrikes || (bestStrikesForCand == prevStrikes && bestScoreForCand < prevScore-priceEpsilonForEquality)
-			if !isBetter && exists && bestStrikesForCand == prevStrikes && math.Abs(bestScoreForCand-prevScore) <= priceEpsilonForEquality {
+			isBetter := !exists || bestStrikesForCand < prevStrikes || (bestStrikesForCand == prevStrikes && bestScoreForCand < prevScore-planScoreTieEpsilon)
+			if !isBetter && exists && bestStrikesForCand == prevStrikes && math.Abs(bestScoreForCand-prevScore) <= planScoreTieEpsilon {
 				// Tie-breaker: prefer candidate matching lastAction to avoid unnecessary step-0 mode switches
 				if lastAction != nil && cand0.batteryMode == lastAction.BatteryMode && cand0.solarMode == lastAction.SolarMode {
 					isBetter = true
@@ -3498,7 +3545,13 @@ func (c *Controller) searchOptimalPlan(
 		}
 		strikes := modeBestStrikes[mode]
 		node := modeBestNodes[mode]
-		if strikes < bestOverallStrikes || (strikes == bestOverallStrikes && score < bestOverallScore-priceEpsilonForEquality) {
+		tieEps := planScoreTieEpsilon
+		if bestOverallNode != nil && bestOverallNode.action.batteryMode == types.BatteryModeLoad && mode == types.BatteryModeStandby {
+			// Require at least priceEpsilonForEquality ($0.001) of net savings before pulling the battery
+			// out of active self-consumption (BatteryModeLoad) into idle Standby over sub-mill-dollar noise.
+			tieEps = priceEpsilonForEquality
+		}
+		if strikes < bestOverallStrikes || (strikes == bestOverallStrikes && score < bestOverallScore-tieEps) {
 			if bestOverallNode != nil {
 				runnerUpScore = bestOverallScore
 				runnerUpStrikes = bestOverallStrikes
@@ -3506,7 +3559,7 @@ func (c *Controller) searchOptimalPlan(
 			bestOverallStrikes = strikes
 			bestOverallScore = score
 			bestOverallNode = node
-		} else if strikes < runnerUpStrikes || (strikes == runnerUpStrikes && score < runnerUpScore-priceEpsilonForEquality) {
+		} else if strikes < runnerUpStrikes || (strikes == runnerUpStrikes && score < runnerUpScore-planScoreTieEpsilon) {
 			runnerUpScore = score
 			runnerUpStrikes = strikes
 		}

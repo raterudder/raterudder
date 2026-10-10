@@ -6706,7 +6706,7 @@ func TestPlanScenarios(t *testing.T) {
 		status := types.SystemStatus{
 			Timestamp:          now,
 			BatteryCapacityKWH: 10.0,
-			BatterySOC:         30.0,
+			BatterySOC:         22.0,
 			HomeKW:             1.0,
 			TimeLocation:       "America/Chicago",
 		}
@@ -6719,14 +6719,15 @@ func TestPlanScenarios(t *testing.T) {
 			BatteryMode: types.BatteryModeLoad,
 		}
 
-		// Next hour rate is slightly higher (0.116 + 0.04 = 0.156 vs 0.140).
-		// Benefit of holding for next hour is 1.0 * (0.156 - 0.140) = $0.016,
-		// which is less than the duration-scaled inertia threshold ($0.01667).
+		// Next hour rate is $0.04/kWh higher (0.14 + 0.04 = 0.18 vs 0.14, exceeding priceMaterialityThresholdDollars = $0.03).
+		// With 0.2 kWh above reserve (22% vs 20% on 10 kWh pack), benefit of holding for next hour is ~0.2 * $0.04 = $0.008,
+		// which exceeds modeSwitchPenalty ($0.005) when lastAction is nil, but is less than the step-0 inertia + switch
+		// threshold ($0.00833 + $0.005 = $0.01333) when lastAction is Load.
 		futurePrices := []types.Price{
 			{
 				TSStart:              now.Add(time.Hour),
 				TSEnd:                now.Add(2 * time.Hour),
-				DollarsPerKWH:        0.116,
+				DollarsPerKWH:        0.14,
 				GridUseDollarsPerKWH: 0.04,
 			},
 			{
@@ -6771,7 +6772,7 @@ func TestPlanScenarios(t *testing.T) {
 		status := types.SystemStatus{
 			Timestamp:          now,
 			BatteryCapacityKWH: 10.0,
-			BatterySOC:         30.0,
+			BatterySOC:         22.0,
 			HomeKW:             1.0,
 			TimeLocation:       "America/Chicago",
 		}
@@ -6784,7 +6785,7 @@ func TestPlanScenarios(t *testing.T) {
 			{
 				TSStart:              now.Add(time.Hour),
 				TSEnd:                now.Add(2 * time.Hour),
-				DollarsPerKWH:        0.116,
+				DollarsPerKWH:        0.14,
 				GridUseDollarsPerKWH: 0.04,
 			},
 			{
@@ -7750,6 +7751,30 @@ func TestPlanScenarios(t *testing.T) {
 		}
 		assert.True(t, sawSuperOffPeakCharge, "Must schedule grid charging during Friday night Super Off-Peak ($0.055/kWh)")
 		assert.InDelta(t, 20.0, minSatAfternoonSOC, 0.5, "Saturday trajectory under Conservative must discharge down to the 20% physical reserve, not stop at 30%")
+
+		// Also verify at 4:03 AM Saturday (57 minutes before the 5:00 AM rate increase) at 70.0% SOC
+		// with lastAction = Standby (waitingToCharge): the planner must begin charging immediately at 4:03 AM
+		// rather than procrastinating until 4:23 AM (the final 37 minutes before 5:00 AM).
+		prePeakTime := time.Date(2026, 10, 10, 4, 3, 0, 0, nyLoc)
+		prePeakStatus := friStatus
+		prePeakStatus.Timestamp = prePeakTime
+		prePeakStatus.BatterySOC = 70.0
+		prePeakPrice := types.Price{
+			TSStart:       time.Date(2026, 10, 10, 4, 0, 0, 0, nyLoc),
+			TSEnd:         satMorningTime,
+			DollarsPerKWH: 0.05500,
+		}
+		lastActWaiting := &types.Action{
+			BatteryMode:  types.BatteryModeStandby,
+			Reason:       types.ActionReasonWaitingToCharge,
+			Timestamp:    prePeakTime.Add(-20 * time.Minute),
+			CurrentPrice: &types.Price{DollarsPerKWH: 0.05500},
+		}
+		prePeakDec, _, err := c.Plan(ctx, prePeakStatus, prePeakPrice, futurePrices, history, nil, settings, lastActWaiting)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeChargeAny, prePeakDec.Action.BatteryMode,
+			"At 4:03 AM (70.0%% SOC), planner must start charging immediately rather than waiting until 4:23 AM")
+		assert.Equal(t, 100, prePeakDec.Action.ChargeToSOC)
 
 		// Also verify step-0 execution at 5:00 AM Saturday when entering from overnight Standby at 100% SOC
 		satStatus := friStatus
