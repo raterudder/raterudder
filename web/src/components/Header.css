@@ -41,8 +41,13 @@
 .header-left {
   display: flex;
   align-items: center;
-  flex: 1;
-  /* Allows it to take up available space */
+  flex: 0 0 auto;
+}
+
+.header-site-container {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
 }
 
 .site-selector-header {
@@ -96,7 +101,7 @@
 }
 
 .header-nav {
-  flex: 2;
+  flex: 1;
   /* Center navigation */
   display: flex;
   justify-content: center;
@@ -124,7 +129,7 @@
 }
 
 .header-right {
-  flex: 1;
+  flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
   align-items: center;
@@ -137,6 +142,7 @@
 
 .raterudder-header.logged-out .header-right {
   flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .notification-bell-btn {
@@ -280,9 +286,32 @@
     min-width: 0;
   }
 
-  .site-selector-header,
+  .header-site-container {
+    width: 100%;
+    margin-bottom: 0.5rem;
+  }
+
+  .site-selector-header {
+    max-width: none;
+    width: 100%;
+    box-sizing: border-box;
+    justify-content: center;
+    gap: 0.5rem;
+  }
+
   .site-badge-header {
-    max-width: 130px;
+    max-width: none;
+    width: 100%;
+    box-sizing: border-box;
+    justify-content: center;
+    text-align: center;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    padding: 0.25rem 0.5rem 0.75rem;
+    color: var(--text-muted);
+    font-size: 0.8125rem;
   }
 
   .mobile-menu-toggle {
@@ -332,6 +361,20 @@
     width: 100%;
     display: block;
     box-sizing: border-box;
+  }
+
+  .mobile-top-nav-link.hide-on-desktop {
+    display: inline-flex;
+    align-items: center;
+    width: auto;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.875rem;
+  }
+
+  .mobile-top-nav-link.hide-on-desktop:hover,
+  .mobile-top-nav-link.hide-on-desktop:focus {
+    color: var(--on-surface-variant);
+    background: transparent;
   }
 
   .logout-link {

@@ -43,8 +43,22 @@ describe('Header Component', () => {
         renderHeader('/dashboard', true);
 
         expect(screen.getByText('Dashboard')).toBeInTheDocument();
-        expect(screen.getByText('Forecast')).toBeInTheDocument();
+        const forecastLinks = screen.getAllByText('Forecast');
+        expect(forecastLinks).toHaveLength(2);
+        const mobileTopLink = screen.getByTestId('mobile-top-nav-link');
+        expect(mobileTopLink).toHaveClass('hide-on-desktop');
+        expect(mobileTopLink).toHaveTextContent('Forecast');
+        expect(mobileTopLink).toHaveAttribute('href', '/forecast');
         expect(screen.getByText('Settings')).toBeInTheDocument();
+    });
+
+    it('switches mobile top link to Dashboard when on the forecast page', () => {
+        renderHeader('/forecast', true);
+
+        const mobileTopLink = screen.getByTestId('mobile-top-nav-link');
+        expect(mobileTopLink).toHaveTextContent('Dashboard');
+        expect(mobileTopLink).toHaveAttribute('href', '/dashboard');
+        expect(screen.getByText('Forecast')).toHaveClass('active');
     });
 
     it('shows active styling and aria-current for the current route', () => {
@@ -53,9 +67,11 @@ describe('Header Component', () => {
         expect(dashboardLink).toHaveClass('active');
         expect(dashboardLink).toHaveAttribute('aria-current', 'page');
 
-        const forecastLink = screen.getByText('Forecast');
-        expect(forecastLink).not.toHaveClass('active');
-        expect(forecastLink).not.toHaveAttribute('aria-current');
+        const forecastLinks = screen.getAllByText('Forecast');
+        for (const forecastLink of forecastLinks) {
+            expect(forecastLink).not.toHaveClass('active');
+            expect(forecastLink).not.toHaveAttribute('aria-current');
+        }
     });
 
     it('calls onLogout when logout button is clicked', () => {
@@ -72,7 +88,7 @@ describe('Header Component', () => {
         expect(menuButton).toHaveAttribute('aria-expanded', 'false');
     });
 
-    it('shows static site badge when there is only one site', () => {
+    it('shows static site badge inside mobile menu content when there is only one site', () => {
         const { hook } = memoryLocation({ static: true, path: '/dashboard' });
         render(
             <Router hook={hook}>
@@ -89,10 +105,11 @@ describe('Header Component', () => {
         const siteNameElement = screen.getByTestId('header-site-name');
         expect(siteNameElement).toBeInTheDocument();
         expect(siteNameElement).toHaveTextContent('Only Site');
+        expect(siteNameElement.closest('#mobile-menu-content')).not.toBeNull();
         expect(screen.queryByLabelText('Select Site')).not.toBeInTheDocument();
     });
 
-    it('shows site selector dropdown when there are multiple sites', () => {
+    it('shows site selector dropdown inside mobile menu content when there are multiple sites', () => {
         const { hook } = memoryLocation({ static: true, path: '/dashboard' });
         render(
             <Router hook={hook}>
@@ -110,7 +127,9 @@ describe('Header Component', () => {
         );
 
         expect(screen.queryByTestId('header-site-name')).not.toBeInTheDocument();
-        expect(screen.getByLabelText('Select Site')).toBeInTheDocument();
+        const selectTrigger = screen.getByLabelText('Select Site');
+        expect(selectTrigger).toBeInTheDocument();
+        expect(selectTrigger.closest('#mobile-menu-content')).not.toBeNull();
     });
 
     it('does not render notification bell by default', () => {

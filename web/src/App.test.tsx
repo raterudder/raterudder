@@ -34,7 +34,7 @@ describe('App routing and viewSite parameter preservation', () => {
 
         expect(window.location.search).toContain('viewSite=test-site-id');
 
-        const forecastLink = screen.getByRole('link', { name: 'Forecast' });
+        const forecastLink = screen.getAllByRole('link', { name: 'Forecast' })[0];
         await user.click(forecastLink);
 
         await waitFor(() => {
