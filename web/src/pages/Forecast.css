@@ -2,6 +2,21 @@
    Forecast Page
    ============================================ */
 
+.forecast-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.forecast-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
 .forecast-page h2 {
   font-size: 1.875rem;
   font-weight: 800;

@@ -91,6 +91,11 @@ func buildPriceHistoryRes(prices []types.Price) []PriceHistoryRes {
 func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	siteID := s.getSiteID(r)
+	regeneratePlan := r.URL.Query().Get("regeneratePlan") == "true"
+	if regeneratePlan && !s.isMultiSiteAdmin(s.getUser(r)) && !s.bypassAuth {
+		writeJSONError(w, "forbidden", http.StatusForbidden)
+		return
+	}
 
 	// 1. Get Settings
 	settings, creds, err := s.getSettingsWithMigration(ctx, siteID)
@@ -172,7 +177,8 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 
 	// FAST-PATH: If we have a fresh plan generated within the last hour, bypass
 	// the 35-day historical query, ESS status fetch, and controller simulation.
-	isFreshPlan := latestAction != nil &&
+	isFreshPlan := !regeneratePlan &&
+		latestAction != nil &&
 		latestAction.Plan != nil &&
 		len(latestAction.Plan.Periods) > 0 &&
 		now.Sub(latestAction.Timestamp) >= 0 &&
@@ -327,7 +333,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 4. Get Future Prices
-	futurePrices, err := utility.GetFuturePrices(ctx)
+	futurePrices, err := s.getFuturePrices(ctx, siteID, utility)
 	if err != nil {
 		log.Ctx(ctx).WarnContext(ctx, "failed to get future prices", slog.Any("error", err))
 		// Continue with empty future prices
@@ -378,11 +384,13 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	}
 	priceRes := buildPriceHistoryRes(priceHistory24)
 
-	// Try real-time Plan fallback if on staging or if PlanMode is enabled
+	// Try real-time Plan fallback if on staging, if PlanMode is enabled, or if regeneratePlan is requested
 	// TODO: remove this and just return an error if we have a stale plan
-	if strings.EqualFold(s.release, "staging") || settings.PlanMode {
+	if regeneratePlan || strings.EqualFold(s.release, "staging") || settings.PlanMode {
+		planStatus := status
+		planStatus.Timestamp = now
 		planDecision, freshPlan, planErr := s.controller.Plan(
-			ctx, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings, latestAction,
+			ctx, planStatus, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings, latestAction,
 		)
 		if planErr == nil {
 			act := planDecision.Action
@@ -400,12 +408,21 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 				PriceHistory:  priceRes,
 				Updated:       now,
 			}
-			w.Header().Set("Cache-Control", "private, max-age=300")
+			if regeneratePlan {
+				w.Header().Set("Cache-Control", "no-store")
+			} else {
+				w.Header().Set("Cache-Control", "private, max-age=300")
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			if err := json.NewEncoder(w).Encode(res); err != nil {
 				panic(http.ErrAbortHandler)
 			}
+			return
+		}
+		if regeneratePlan {
+			log.Ctx(ctx).ErrorContext(ctx, "failed to regenerate plan", slog.Any("error", planErr))
+			writeJSONError(w, "failed to regenerate plan", http.StatusInternalServerError)
 			return
 		}
 		log.Ctx(ctx).WarnContext(ctx, "real-time plan fallback failed, falling back to simulation", slog.Any("error", planErr))

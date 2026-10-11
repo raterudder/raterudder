@@ -772,5 +772,79 @@ describe('Forecast Page', () => {
 
         dateSpy.mockRestore();
     });
+
+    it('hides Regenerate Plan button when not on staging site', async () => {
+        (fetchModeling as any).mockResolvedValue({
+            plan: makeTestPlan(),
+            energyHistory: [],
+            priceHistory: [],
+        });
+
+        renderForecast({ siteID: 'site-1', settings: { release: 'staging' } });
+
+        await waitFor(() => {
+            expect(screen.getByText('24-Hour Energy Plan')).toBeInTheDocument();
+        });
+
+        expect(screen.queryByRole('button', { name: /Regenerate Plan/i })).not.toBeInTheDocument();
+    });
+
+    it('renders Regenerate Plan button on staging site and re-renders with new plan when clicked', async () => {
+        const originalLocation = window.location;
+        const locationProxy = new Proxy(originalLocation, {
+            get(target, prop) {
+                if (prop === 'hostname') return 'staging.raterudder.com';
+                return (target as any)[prop];
+            },
+        });
+        Object.defineProperty(window, 'location', {
+            configurable: true,
+            value: locationProxy,
+        });
+
+        try {
+            const user = userEvent.setup();
+            const initialPlan = makeTestPlan();
+            const regeneratedPlan: Plan = {
+                ...makeTestPlan(),
+                totalProjectedCost: 1.23,
+                totalExportCredits: 4.56,
+            };
+
+            (fetchModeling as any)
+                .mockResolvedValueOnce({
+                    plan: initialPlan,
+                    energyHistory: [],
+                    priceHistory: [],
+                })
+                .mockResolvedValueOnce({
+                    plan: regeneratedPlan,
+                    energyHistory: [],
+                    priceHistory: [],
+                });
+
+            renderForecast({ siteID: 'site-1', settings: { release: 'production' } });
+
+            await waitFor(() => {
+                expect(screen.getByText('$3.45')).toBeInTheDocument();
+            });
+
+            const regenerateBtn = screen.getByRole('button', { name: /Regenerate Plan/i });
+            expect(regenerateBtn).toBeInTheDocument();
+
+            await user.click(regenerateBtn);
+
+            await waitFor(() => {
+                expect(fetchModeling).toHaveBeenLastCalledWith('site-1', 'default', true);
+                expect(screen.getByText('$1.23')).toBeInTheDocument();
+                expect(screen.getByText('$4.56')).toBeInTheDocument();
+            });
+        } finally {
+            Object.defineProperty(window, 'location', {
+                configurable: true,
+                value: originalLocation,
+            });
+        }
+    });
 });
 

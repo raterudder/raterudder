@@ -550,13 +550,16 @@ export interface ModelingHour {
     vppEndAt?: string;
 }
 
-export const fetchModeling = async (siteID?: string, overrideHomeLoadPredictionStrategy?: string): Promise<ForecastResponse> => {
+export const fetchModeling = async (siteID?: string, overrideHomeLoadPredictionStrategy?: string, regeneratePlan?: boolean): Promise<ForecastResponse> => {
     const query = new URLSearchParams();
     if (siteID) {
         query.append('siteID', siteID);
     }
     if (overrideHomeLoadPredictionStrategy) {
         query.append('overrideHomeLoadPredictionStrategy', overrideHomeLoadPredictionStrategy);
+    }
+    if (regeneratePlan) {
+        query.append('regeneratePlan', 'true');
     }
     const response = await fetch(`/api/forecast?${query.toString()}`);
     if (!response.ok) {

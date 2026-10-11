@@ -1148,4 +1148,138 @@ func TestHandleForecast(t *testing.T) {
 		assert.True(t, data.LatestAction.Paused)
 		assert.Equal(t, "Automation is paused", data.LatestAction.Description)
 	})
+
+	t.Run("RegeneratePlan Forbidden For Non-Admin", func(t *testing.T) {
+		mockS := &mockStorage{}
+		srv := &Server{
+			storage:     mockS,
+			bypassAuth:  false,
+			adminEmails: []string{"admin@example.com"},
+		}
+
+		req := httptest.NewRequest("GET", "/api/forecast?regeneratePlan=true", nil)
+		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
+		ctx = context.WithValue(ctx, userContextKey, types.User{
+			ID:    "user-1",
+			Email: "regular@example.com",
+		})
+		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv.handleForecast(w, req)
+
+		assert.Equal(t, http.StatusForbidden, w.Result().StatusCode)
+		mockS.AssertNotCalled(t, "GetSettings", mock.Anything, mock.Anything)
+		mockS.AssertNotCalled(t, "GetLatestAction", mock.Anything, mock.Anything)
+	})
+
+	t.Run("RegeneratePlan Bypasses Fresh Plan Fast-Path And Runs Plan", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil)
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			MinBatterySOC:   5.0,
+			UtilityProvider: "test",
+			ESS:             "mock",
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+
+		cachedPlan := &types.Plan{
+			TSCreated:          now.Add(-10 * time.Minute),
+			HorizonHours:       1,
+			TotalProjectedCost: 99.99,
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:       now,
+					TSEnd:         now.Add(time.Hour),
+					DurationHours: 1,
+					BatteryMode:   types.BatteryModeStandby,
+					StartSOC:      50,
+					EndSOC:        50,
+				},
+			},
+		}
+
+		recentAction := &types.Action{
+			Timestamp:    now.Add(-10 * time.Minute),
+			BatteryMode:  types.BatteryModeStandby,
+			CurrentPrice: &types.Price{DollarsPerKWH: 0.10, TSStart: now, TSEnd: now.Add(time.Hour)},
+			Plan:         cachedPlan,
+			SystemStatus: types.SystemStatus{
+				BatterySOC:         50,
+				BatteryCapacityKWH: 10.0,
+				Timestamp:          now.Add(-10 * time.Minute),
+			},
+		}
+
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return(recentAction, nil)
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockP := ess.NewMap()
+		mockP.SetSystem(types.SiteIDNone, mockES)
+
+		futurePrices := make([]types.Price, 24)
+		for i := 0; i < 24; i++ {
+			pStart := now.Add(time.Duration(i) * time.Hour)
+			futurePrices[i] = types.Price{
+				DollarsPerKWH: 0.12,
+				TSStart:       pStart,
+				TSEnd:         pStart.Add(time.Hour),
+			}
+		}
+
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{
+			DollarsPerKWH: 0.10,
+			TSStart:       now,
+			TSEnd:         now.Add(time.Hour),
+		}, nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return(futurePrices, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil)
+
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:   mockUMap,
+			ess:         mockP,
+			storage:     mockS,
+			controller:  controller.NewController(),
+			bypassAuth:  false,
+			adminEmails: []string{"admin@example.com"},
+			release:     "production",
+			nowFunc:     func() time.Time { return now },
+		}
+
+		req := httptest.NewRequest("GET", "/api/forecast?regeneratePlan=true", nil)
+		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
+		ctx = context.WithValue(ctx, userContextKey, types.User{
+			ID:    "admin-1",
+			Email: "admin@example.com",
+		})
+		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv.handleForecast(w, req)
+
+		resp := w.Result()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "no-store", resp.Header.Get("Cache-Control"))
+
+		var data ForecastRes
+		err := json.NewDecoder(resp.Body).Decode(&data)
+		require.NoError(t, err)
+
+		require.NotNil(t, data.Plan)
+		assert.Equal(t, now.UTC(), data.Plan.TSCreated)
+		assert.Greater(t, len(data.Plan.Periods), 1, "should return newly generated multi-period plan instead of cached 1-period plan")
+		assert.NotEqual(t, 99.99, data.Plan.TotalProjectedCost)
+		mockU.AssertCalled(t, "GetCurrentPrice", mock.Anything)
+		mockU.AssertCalled(t, "GetFuturePrices", mock.Anything)
+		mockS.AssertNotCalled(t, "InsertAction", mock.Anything, mock.Anything, mock.Anything)
+	})
 }

@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { fetchModeling } from '../api';
 import type { ForecastResponse, ModelingHour, Settings, PlanPeriod } from '../api';
+import { Button } from '@base-ui/react/button';
 import { Switch } from '@base-ui/react/switch';
 import { Field } from '@base-ui/react/field';
 import {
@@ -553,6 +554,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
     const [initialized, setInitialized] = useState(false);
     const lastFetchedStrategyRef = useRef<string | null>(null);
     const [loading, setLoading] = useState(true);
+    const [regenerating, setRegenerating] = useState(false);
     const [nowMs, setNowMs] = useState(() => Date.now());
     const [error, setError] = useState<string | null>(null);
     const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
@@ -704,6 +706,21 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
             isCancelled = true;
         };
     }, [refreshTrigger]);
+
+    const handleRegeneratePlan = async () => {
+        setRegenerating(true);
+        setError(null);
+        try {
+            const mod = await fetchModeling(siteID, loadPredictionMode, true);
+            setRawModelingData(mod);
+            setNowMs(Date.now());
+            lastFetchTimeRef.current = Date.now();
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Unknown error');
+        } finally {
+            setRegenerating(false);
+        }
+    };
 
     const isPlanActive = Boolean(
         rawModelingData?.plan &&
@@ -930,24 +947,37 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
     const faultDescription = rawModelingData?.latestAction?.description || 'A system fault is currently active.';
 
     const activeCharts = isPlanActive ? planCharts : charts;
+    const isStagingSite = typeof window !== 'undefined' && window.location.hostname.includes('staging');
 
     return (
         <div className="content-container forecast-page">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="forecast-header">
                 <h2>{isPlanActive ? '24-Hour Energy Plan' : '24-Hour Simulation'}</h2>
-                <Field.Root className="form-group switch-group compact" style={{ margin: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', color: '#4b5563' }}>
-                        <Switch.Root
-                             id="showHistoryToggle"
-                             checked={includeHistory}
-                             onCheckedChange={(checked) => setIncludeHistory(checked)}
-                             className="switch-root"
+                <div className="forecast-header-actions">
+                    {isStagingSite && (
+                        <Button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={handleRegeneratePlan}
+                            disabled={regenerating}
                         >
-                            <Switch.Thumb className="switch-thumb" />
-                        </Switch.Root>
-                        <Field.Label htmlFor="showHistoryToggle" style={{ cursor: 'pointer' }}>Show Previous 24 Hours</Field.Label>
-                    </div>
-                </Field.Root>
+                            {regenerating ? 'Regenerating…' : 'Regenerate Plan'}
+                        </Button>
+                    )}
+                    <Field.Root className="form-group switch-group compact" style={{ margin: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', color: '#4b5563' }}>
+                            <Switch.Root
+                                 id="showHistoryToggle"
+                                 checked={includeHistory}
+                                 onCheckedChange={(checked) => setIncludeHistory(checked)}
+                                 className="switch-root"
+                            >
+                                <Switch.Thumb className="switch-thumb" />
+                            </Switch.Root>
+                            <Field.Label htmlFor="showHistoryToggle" style={{ cursor: 'pointer' }}>Show Previous 24 Hours</Field.Label>
+                        </div>
+                    </Field.Root>
+                </div>
             </div>
             {hasFault && (
                 <div className="banner error-banner" data-testid="forecast-fault-alert" style={{ marginTop: '1rem', marginBottom: '1rem' }}>
