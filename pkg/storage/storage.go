@@ -34,22 +34,6 @@ type PricingMigrationStats struct {
 	SiteMonthsCreated    int
 }
 
-// PlanMigrationOptions configures the action history plan schema migration.
-type PlanMigrationOptions struct {
-	DryRun bool
-	Sites  []string
-	Since  time.Time
-}
-
-// PlanMigrationStats tracks the outcomes of the action plan migration.
-type PlanMigrationStats struct {
-	SitesInspected   int
-	ActionsInspected int
-	PlansMigrated    int
-	PlansSkipped     int
-	BytesSaved       int
-}
-
 // Database defines the interface for persisting data and retrieving settings.
 type Database interface {
 	// Settings

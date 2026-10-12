@@ -2,10 +2,12 @@ package types
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestUserNotificationSettings_IsInQuietPeriod(t *testing.T) {
@@ -181,134 +183,261 @@ func TestActionJSONSerialization(t *testing.T) {
 	})
 }
 
-func TestStoredActionConversion(t *testing.T) {
+func TestActionStorageCompaction(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	loc, err := time.LoadLocation("America/Chicago")
+	require.NoError(t, err)
+	nowUTC := time.Date(2026, 6, 15, 17, 0, 0, 0, time.UTC)
+	nowLocal := nowUTC.In(loc)
 
 	t.Run("BidirectionalConversionWithoutPlan", func(t *testing.T) {
 		t.Parallel()
 
 		act := Action{
-			Timestamp:   now,
-			BatteryMode: BatteryModeStandby,
-			SolarMode:   SolarModeAny,
-			Reason:      ActionReasonSufficientBattery,
-			Description: "Holding battery in standby.",
+			Timestamp:       nowUTC,
+			SystemTimestamp: nowLocal,
+			BatteryMode:     BatteryModeStandby,
+			SolarMode:       SolarModeAny,
+			Reason:          ActionReasonSufficientBattery,
+			Description:     "Holding battery in standby.",
+			SystemStatus: SystemStatus{
+				Timestamp:    nowLocal,
+				TimeLocation: loc.String(),
+				BatterySOC:   75.0,
+			},
 		}
 
-		stored := act.ToStored()
-		assert.Nil(t, stored.Plan)
-		assert.Nil(t, stored.Action.Plan)
+		compacted := act.CompactForStorage()
+		assert.Equal(t, "America/Chicago", compacted.Location)
+		assert.Nil(t, compacted.Plan)
 
-		data, err := json.Marshal(stored)
-		assert.NoError(t, err)
-		assert.NotContains(t, string(data), `"shortPlan"`)
+		data, err := json.Marshal(compacted)
+		require.NoError(t, err)
+		assert.Contains(t, string(data), `"location":"America/Chicago"`)
 		assert.NotContains(t, string(data), `"plan"`)
 
-		var roundTrip StoredAction
-		assert.NoError(t, json.Unmarshal(data, &roundTrip))
-		restored := roundTrip.ToAction()
-		assert.Nil(t, restored.Plan)
-		assert.Equal(t, act.BatteryMode, restored.BatteryMode)
-		assert.Equal(t, act.Reason, restored.Reason)
+		var restored Action
+		require.NoError(t, json.Unmarshal(data, &restored))
+		restored.ExpandFromStorage()
+		assert.Empty(t, restored.Location)
+		assert.True(t, reflect.DeepEqual(act, restored))
+		assert.Equal(t, act, restored)
 	})
 
 	t.Run("BidirectionalConversionWithPlan", func(t *testing.T) {
 		t.Parallel()
 
 		plan := &Plan{
-			TSCreated:          now,
+			TSCreated:          nowUTC,
 			HorizonHours:       24,
-			TotalProjectedCost: 3.45,
-			TotalExportCredits: 1.20,
-			NetEconomicBenefit: 2.25,
+			TotalProjectedCost: 3.4512,
+			TotalExportCredits: 1.2099,
+			NetEconomicBenefit: 2.2413,
 			Periods: []PlanPeriod{
 				{
-					TSStart:       now,
-					TSEnd:         now.Add(time.Hour),
-					DurationHours: 1.0,
-					ImportDollars: 0.155,
-					ExportDollars: 0.045,
+					TSStart:       nowLocal,
+					TSEnd:         nowLocal.Add(20 * time.Minute),
+					DurationHours: (20 * time.Minute).Hours(),
+					ImportDollars: 0.1551,
+					ExportDollars: 0.0460,
 					BatteryMode:   BatteryModeLoad,
 					SolarMode:     SolarModeAny,
 					Reason:        ActionReasonDeficitSaveForPeak,
 					StartSOC:      95.5,
 					EndSOC:        90.0,
 					ReserveSOC:    20.0,
-					LoadKWH:       1.5,
-					SolarKWH:      0.8,
-					GridImportKWH: 0.2,
+					LoadKWH:       1.512,
+					SolarKWH:      0.812,
+					GridImportKWH: 0.212,
 					GridExportKWH: 0.0,
-					CostDollars:   0.03,
+					CostDollars:   0.0329,
 				},
 			},
 		}
 
 		act := Action{
-			Timestamp:   now,
-			BatteryMode: BatteryModeLoad,
-			SolarMode:   SolarModeAny,
-			Reason:      ActionReasonDeficitSaveForPeak,
-			Description: "Discharging to load.",
-			Plan:        plan,
+			Timestamp:       nowUTC,
+			SystemTimestamp: nowLocal,
+			BatteryMode:     BatteryModeLoad,
+			SolarMode:       SolarModeAny,
+			Reason:          ActionReasonDeficitSaveForPeak,
+			Description:     "Discharging to load.",
+			HitDeficitAt:    nowLocal.Add(3 * time.Hour),
+			HitCapacityAt:   nowLocal.Add(6 * time.Hour),
+			CurrentPrice: &Price{
+				Provider:             "comed",
+				TSStart:              nowLocal,
+				TSEnd:                nowLocal.Add(time.Hour),
+				DollarsPerKWH:        0.055,
+				GridUseDollarsPerKWH: 0.10,
+			},
+			FuturePrice: &Price{
+				Provider:             "comed",
+				TSStart:              nowLocal.Add(4 * time.Hour),
+				TSEnd:                nowLocal.Add(5 * time.Hour),
+				DollarsPerKWH:        0.185,
+				GridUseDollarsPerKWH: 0.10,
+			},
+			SystemStatus: SystemStatus{
+				Timestamp:    nowLocal,
+				TimeLocation: loc.String(),
+				BatterySOC:   95.5,
+				Alarms: []SystemAlarm{
+					{Name: "TestAlarm", Description: "Desc", Timestamp: nowLocal, Code: "A1"},
+				},
+				Storms: []Storm{
+					{Description: "Storm", TSStart: nowLocal, TSEnd: nowLocal.Add(2 * time.Hour)},
+				},
+				VPPEvents: []VPPEvent{
+					{Description: "VPP", TSStart: nowLocal, TSEnd: nowLocal.Add(time.Hour), VPPSoc: 20},
+				},
+			},
+			Plan: plan,
 		}
 
-		stored := act.ToStored()
-		assert.NotNil(t, stored.Plan)
-		assert.Nil(t, stored.Action.Plan) // embedded Plan cleared so it won't serialize under "plan"
+		compacted := act.CompactForStorage()
+		require.NotNil(t, compacted.Plan)
+		assert.Nil(t, compacted.Plan.Periods)
+		assert.Len(t, compacted.Plan.ShortPeriods, 1)
+		assert.Equal(t, "America/Chicago", compacted.Location)
+		// Ensure original action's Plan.Periods was not mutated
+		assert.Len(t, act.Plan.Periods, 1)
+		assert.Nil(t, act.Plan.ShortPeriods)
 
-		data, err := json.Marshal(stored)
-		assert.NoError(t, err)
+		data, err := json.Marshal(compacted)
+		require.NoError(t, err)
 		jsonStr := string(data)
 
-		// Must contain shortPlan and compact tags
-		assert.Contains(t, jsonStr, `"shortPlan"`)
-		assert.NotContains(t, jsonStr, `"plan":`)
+		assert.Contains(t, jsonStr, `"shortPeriods"`)
+		assert.NotContains(t, jsonStr, `"periods"`)
+		assert.Contains(t, jsonStr, `"us":`)
+		assert.Contains(t, jsonStr, `"ue":`)
 		assert.Contains(t, jsonStr, `"bm":-1`)
 		assert.Contains(t, jsonStr, `"sm":2`)
 		assert.Contains(t, jsonStr, `"r":"deficitSaveForPeak"`)
-		assert.Contains(t, jsonStr, `"ss":95.5`)
-		assert.Contains(t, jsonStr, `"es":90`)
-		assert.Contains(t, jsonStr, `"rs":20`)
-		assert.Contains(t, jsonStr, `"i":0.155`)
-		assert.Contains(t, jsonStr, `"e":0.045`)
-		assert.Contains(t, jsonStr, `"tc":3.45`)
-		assert.Contains(t, jsonStr, `"te":1.2`)
-		assert.Contains(t, jsonStr, `"nb":2.25`)
 
-		// Unmarshal back to StoredAction
-		var roundTrip StoredAction
-		assert.NoError(t, json.Unmarshal(data, &roundTrip))
-		assert.NotNil(t, roundTrip.Plan)
+		var restored Action
+		require.NoError(t, json.Unmarshal(data, &restored))
+		restored.ExpandFromStorage()
 
-		restored := roundTrip.ToAction()
+		assert.Empty(t, restored.Location)
 		if assert.NotNil(t, restored.Plan) {
-			assert.Equal(t, act.Plan.TSCreated, restored.Plan.TSCreated)
-			assert.Equal(t, act.Plan.HorizonHours, restored.Plan.HorizonHours)
-			assert.InDelta(t, act.Plan.TotalProjectedCost, restored.Plan.TotalProjectedCost, 0.0001)
-			assert.InDelta(t, act.Plan.TotalExportCredits, restored.Plan.TotalExportCredits, 0.0001)
-			assert.InDelta(t, act.Plan.NetEconomicBenefit, restored.Plan.NetEconomicBenefit, 0.0001)
-			if assert.Len(t, restored.Plan.Periods, 1) {
-				pOrig := act.Plan.Periods[0]
-				pRest := restored.Plan.Periods[0]
-				assert.Equal(t, pOrig.TSStart, pRest.TSStart)
-				assert.Equal(t, pOrig.TSEnd, pRest.TSEnd)
-				assert.InDelta(t, pOrig.DurationHours, pRest.DurationHours, 0.001)
-				assert.InDelta(t, pOrig.ImportDollars, pRest.ImportDollars, 0.0001)
-				assert.InDelta(t, pOrig.ExportDollars, pRest.ExportDollars, 0.0001)
-				assert.Equal(t, pOrig.BatteryMode, pRest.BatteryMode)
-				assert.Equal(t, pOrig.SolarMode, pRest.SolarMode)
-				assert.Equal(t, pOrig.Reason, pRest.Reason)
-				assert.InDelta(t, pOrig.StartSOC, pRest.StartSOC, 0.01)
-				assert.InDelta(t, pOrig.EndSOC, pRest.EndSOC, 0.01)
-				assert.InDelta(t, pOrig.ReserveSOC, pRest.ReserveSOC, 0.01)
-				assert.InDelta(t, pOrig.LoadKWH, pRest.LoadKWH, 0.01)
-				assert.InDelta(t, pOrig.SolarKWH, pRest.SolarKWH, 0.01)
-				assert.InDelta(t, pOrig.GridImportKWH, pRest.GridImportKWH, 0.01)
-				assert.InDelta(t, pOrig.GridExportKWH, pRest.GridExportKWH, 0.01)
-				assert.InDelta(t, pOrig.CostDollars, pRest.CostDollars, 0.01)
-			}
+			assert.Nil(t, restored.Plan.ShortPeriods)
+			assert.Len(t, restored.Plan.Periods, 1)
 		}
+		assert.True(t, reflect.DeepEqual(act, restored))
+		assert.Equal(t, act, restored)
+	})
+
+	t.Run("TwelveHourRollupSizeUnder720KB", func(t *testing.T) {
+		t.Parallel()
+
+		const actionsPer12Hours = 36 // 12 hours at 20-minute intervals
+		const periodsPerPlan = 73    // 24 hours of 20-minute intervals + partial step 0
+
+		actions := make([]Action, 0, actionsPer12Hours)
+		for aIdx := 0; aIdx < actionsPer12Hours; aIdx++ {
+			actTimeUTC := nowUTC.Add(time.Duration(aIdx) * 20 * time.Minute)
+			actTimeLocal := actTimeUTC.In(loc)
+
+			periods := make([]PlanPeriod, periodsPerPlan)
+			for pIdx := 0; pIdx < periodsPerPlan; pIdx++ {
+				pStart := actTimeLocal.Add(time.Duration(pIdx) * 20 * time.Minute)
+				pEnd := pStart.Add(20 * time.Minute)
+				periods[pIdx] = PlanPeriod{
+					TSStart:       pStart,
+					TSEnd:         pEnd,
+					DurationHours: pEnd.Sub(pStart).Hours(),
+					ImportDollars: 0.10355878099999999 + float64(pIdx)*0.0001234567,
+					ExportDollars: 0.03689123456789012 + float64(pIdx)*0.0000987654,
+					BatteryMode:   BatteryModeLoad,
+					SolarMode:     SolarModeAny,
+					Reason:        ActionReasonSufficientBatteryTillCharge,
+					StartSOC:      84.56789123456789,
+					EndSOC:        83.12345678901234,
+					ReserveSOC:    20.0,
+					LoadKWH:       0.6055082377695578,
+					SolarKWH:      0.2456789012345678,
+					GridImportKWH: 0.3598293365349900,
+					GridExportKWH: 0.0123456789012345,
+					CostDollars:   0.06006983134493879,
+				}
+			}
+
+			act := Action{
+				Timestamp:               actTimeUTC,
+				SystemTimestamp:         actTimeLocal,
+				BatteryMode:             BatteryModeLoad,
+				SolarMode:               SolarModeAny,
+				ChargeToSOC:             100,
+				Reason:                  ActionReasonSufficientBatteryTillCharge,
+				Description:             "Discharging battery to cover household load until scheduled charge window.",
+				HitDeficitAt:            actTimeLocal.Add(5 * time.Hour),
+				HitCapacityAt:           actTimeLocal.Add(14 * time.Hour),
+				StrategyBenefitDollars:  4.567890123456789,
+				RecentHomeUsageKWH:      2.345678901234567,
+				Q3HomeUsageKWH:          1.890123456789012,
+				RecentHomeUsageAbnormal: true,
+				CurrentPrice: &Price{
+					Provider:             "comed",
+					TSStart:              actTimeLocal.Truncate(time.Hour),
+					TSEnd:                actTimeLocal.Truncate(time.Hour).Add(time.Hour),
+					DollarsPerKWH:        0.0456789,
+					GridUseDollarsPerKWH: 0.057879881,
+					PeriodName:           "Off-Peak",
+				},
+				FuturePrice: &Price{
+					Provider:             "comed",
+					TSStart:              actTimeLocal.Truncate(time.Hour).Add(6 * time.Hour),
+					TSEnd:                actTimeLocal.Truncate(time.Hour).Add(7 * time.Hour),
+					DollarsPerKWH:        0.1456789,
+					GridUseDollarsPerKWH: 0.057879881,
+					PeriodName:           "Peak",
+				},
+				SystemStatus: SystemStatus{
+					Timestamp:             actTimeLocal,
+					TimeLocation:          loc.String(),
+					BatterySOC:            84.56789123456789,
+					BatteryKW:             1.854321,
+					BatteryCapacityKWH:    27.2,
+					MaxBatteryChargeKW:    10.0,
+					MaxBatteryDischargeKW: 10.0,
+					SolarKW:               0.735123,
+					GridKW:                0.021345,
+					HomeKW:                2.610789,
+					ElevatedMinBatterySOC: false,
+					BatteryAboveMinSOC:    true,
+					ManagedTOUMode:        true,
+				},
+				SimulationParams: SimulationParams{
+					ClippingCapKWH:         8.456789012345678,
+					PanelAzimuth:           180.0,
+					PanelTilt:              30.0,
+					AverageSolarEfficiency: 0.8234567890123456,
+					DetectedShift:          "none",
+				},
+				Plan: &Plan{
+					TSCreated:          actTimeUTC,
+					HorizonHours:       24,
+					TotalProjectedCost: 5.43210987654321,
+					TotalExportCredits: 1.23456789012345,
+					NetEconomicBenefit: -4.19754198641976,
+					Periods:            periods,
+				},
+			}
+			actions = append(actions, act.CompactForStorage())
+		}
+
+		rollup := SiteActionBucket{
+			TSBucketStart: time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC),
+			Actions:       actions,
+		}
+
+		data, err := json.Marshal(rollup)
+		require.NoError(t, err)
+
+		const maxRollupBytes = 720 * 1024 // 720 KB (< 75% of Firestore's 1 MiB limit)
+		assert.Less(t, len(data), maxRollupBytes, "12-hour SiteActionRollup JSON size (%d bytes) must stay under 720 KB (%d bytes)", len(data), maxRollupBytes)
 	})
 }

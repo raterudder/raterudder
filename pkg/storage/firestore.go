@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"os"
 	"reflect"
 	"slices"
@@ -253,43 +252,168 @@ func (f *FirestoreProvider) SetSettings(ctx context.Context, siteID string, sett
 	return wr.UpdateTime, nil
 }
 
-// InsertAction adds a new action record to the "actions" collection as a JSON blob.
-// The document ID is the RFC3339 timestamp for efficient range queries.
-func (f *FirestoreProvider) InsertAction(ctx context.Context, siteID string, action types.Action) error {
-	jsonBytes, err := json.Marshal(action.ToStored())
-	if err != nil {
-		return fmt.Errorf("failed to marshal action: %w", err)
+func actionBucket(t time.Time) (string, time.Time) {
+	u := t.UTC()
+	hour := 0
+	if u.Hour() >= 12 {
+		hour = 12
+	}
+	bucketStart := time.Date(u.Year(), u.Month(), u.Day(), hour, 0, 0, 0, time.UTC)
+	return fmt.Sprintf("%s-%02d", u.Format("2006-01-02"), hour), bucketStart
+}
+
+func (f *FirestoreProvider) upsertActions(ctx context.Context, siteID string, actions []types.Action, version int) error {
+	if siteID == "" {
+		return fmt.Errorf("siteID cannot be empty")
+	}
+	if len(actions) == 0 {
+		return nil
 	}
 
-	coll, err := f.getCollection(siteID, "action_history")
+	coll, err := f.getCollection(siteID, "daily_actions")
 	if err != nil {
 		return err
 	}
-	// Use RFC3339 as document ID for lexicographic ordering and efficient range queries
-	docID := action.Timestamp.UTC().Format(time.RFC3339)
-	_, err = coll.Doc(docID).Set(ctx, map[string]any{
-		"json":      string(jsonBytes),
-		"timestamp": action.Timestamp,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to insert action: %w", err)
+
+	byBucket := make(map[string][]types.Action)
+	bucketStarts := make(map[string]time.Time)
+	for _, a := range actions {
+		if a.Timestamp.IsZero() {
+			return errors.New("action timestamp cannot be zero")
+		}
+		b, bStart := actionBucket(a.Timestamp)
+		byBucket[b] = append(byBucket[b], a)
+		bucketStarts[b] = bStart
 	}
+
+	buckets := make([]string, 0, len(byBucket))
+	for b := range byBucket {
+		buckets = append(buckets, b)
+	}
+	slices.Sort(buckets)
+
+	maxRetries := 3
+	backoff := 100 * time.Millisecond
+
+	for _, b := range buckets {
+		incoming := byBucket[b]
+		bucketStart := bucketStarts[b]
+		docRef := coll.Doc(b)
+
+		var lastErr error
+		for attempt := 0; attempt < maxRetries; attempt++ {
+			lastErr = f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+				doc, err := tx.Get(docRef)
+				var existing types.SiteActionBucket
+				exists := true
+				if err != nil {
+					if status.Code(err) == codes.NotFound {
+						exists = false
+					} else {
+						return err
+					}
+				}
+
+				if exists {
+					val, err := doc.DataAt("json")
+					if err != nil {
+						return fmt.Errorf("site daily actions doc missing 'json' field: %w", err)
+					}
+					jsonStr, ok := val.(string)
+					if !ok {
+						return fmt.Errorf("site daily actions doc 'json' field is not string")
+					}
+					if err := json.Unmarshal([]byte(jsonStr), &existing); err != nil {
+						return fmt.Errorf("failed to unmarshal site daily actions: %w", err)
+					}
+				}
+
+				actionMap := make(map[int64]types.Action, len(existing.Actions)+len(incoming))
+				for _, a := range existing.Actions {
+					actionMap[a.Timestamp.UTC().Unix()] = a
+				}
+				for _, a := range incoming {
+					actionMap[a.Timestamp.UTC().Unix()] = a.CompactForStorage()
+				}
+
+				merged := make([]types.Action, 0, len(actionMap))
+				for _, a := range actionMap {
+					merged = append(merged, a)
+				}
+				slices.SortFunc(merged, func(a, b types.Action) int {
+					return a.Timestamp.Compare(b.Timestamp)
+				})
+
+				var earliestDate, latestDate time.Time
+				if len(merged) > 0 {
+					earliestDate = merged[0].Timestamp.UTC()
+					latestDate = merged[len(merged)-1].Timestamp.UTC()
+				}
+
+				nowTime := time.Now().UTC()
+				rollup := types.SiteActionBucket{
+					TSBucketStart: bucketStart,
+					Actions:       merged,
+				}
+
+				jsonBytes, err := json.Marshal(rollup)
+				if err != nil {
+					return fmt.Errorf("failed to marshal site daily actions: %w", err)
+				}
+
+				data := map[string]any{
+					"json":         string(jsonBytes),
+					"earliestDate": earliestDate,
+					"latestDate":   latestDate,
+					"version":      version,
+					"tsUpdated":    nowTime,
+				}
+				return tx.Set(docRef, data)
+			})
+
+			if lastErr == nil {
+				break
+			}
+			if isTransactionExpiredErr(lastErr) {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(backoff):
+					backoff *= 2
+					continue
+				}
+			}
+			return fmt.Errorf("failed to upsert site daily actions for bucket %s: %w", b, lastErr)
+		}
+		if lastErr != nil {
+			return lastErr
+		}
+	}
+
 	return nil
 }
 
-// GetActionHistory retrieves action records within the specified time range.
+// InsertAction adds or updates an action record in the "daily_actions" 12-hour rollup subcollection.
+func (f *FirestoreProvider) InsertAction(ctx context.Context, siteID string, action types.Action) error {
+	return f.upsertActions(ctx, siteID, []types.Action{action}, types.CurrentActionHistoryVersion)
+}
+
+// GetActionHistory retrieves action records within the specified time range from 12-hour rollup buckets.
 func (f *FirestoreProvider) GetActionHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Action, error) {
 	if !start.Before(end) {
 		return nil, nil
 	}
-	coll, err := f.getCollection(siteID, "action_history")
+	coll, err := f.getCollection(siteID, "daily_actions")
 	if err != nil {
 		return nil, err
 	}
+
+	_, queryStart := actionBucket(start)
+
 	iter := coll.
-		Where("timestamp", ">=", start).
-		Where("timestamp", "<", end).
-		OrderBy("timestamp", firestore.Asc).
+		Where("earliestDate", ">=", queryStart).
+		Where("earliestDate", "<", end.UTC()).
+		OrderBy("earliestDate", firestore.Asc).
 		Documents(ctx)
 	defer iter.Stop()
 
@@ -315,25 +439,30 @@ func (f *FirestoreProvider) GetActionHistory(ctx context.Context, siteID string,
 			return nil, fmt.Errorf("action document %s 'json' field is not string", doc.Ref.ID)
 		}
 
-		var sa types.StoredAction
-		if err := json.Unmarshal([]byte(jsonStr), &sa); err != nil {
-			log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal action", slog.String("actionID", doc.Ref.ID), slog.String("siteID", siteID), slog.Any("err", err))
-			return nil, fmt.Errorf("failed to unmarshal action (id=%s): %w", doc.Ref.ID, err)
+		var rollup types.SiteActionBucket
+		if err := json.Unmarshal([]byte(jsonStr), &rollup); err != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to unmarshal action rollup", slog.String("actionID", doc.Ref.ID), slog.String("siteID", siteID), slog.Any("err", err))
+			return nil, fmt.Errorf("failed to unmarshal action rollup (id=%s): %w", doc.Ref.ID, err)
 		}
-		actions = append(actions, sa.ToAction())
+		for _, a := range rollup.Actions {
+			if !a.Timestamp.Before(start) && a.Timestamp.Before(end) {
+				a.ExpandFromStorage()
+				actions = append(actions, a)
+			}
+		}
 	}
 	return actions, nil
 }
 
 // GetLatestAction retrieves the most recent action record. Will return nil if no actions found.
 func (f *FirestoreProvider) GetLatestAction(ctx context.Context, siteID string) (*types.Action, error) {
-	coll, err := f.getCollection(siteID, "action_history")
+	coll, err := f.getCollection(siteID, "daily_actions")
 	if err != nil {
 		return nil, err
 	}
 
 	iter := coll.
-		OrderBy("timestamp", firestore.Desc).
+		OrderBy("latestDate", firestore.Desc).
 		Limit(1).
 		Documents(ctx)
 	defer iter.Stop()
@@ -356,12 +485,16 @@ func (f *FirestoreProvider) GetLatestAction(ctx context.Context, siteID string) 
 		return nil, fmt.Errorf("action doc %s 'json' field is not string", doc.Ref.ID)
 	}
 
-	var sa types.StoredAction
-	if err := json.Unmarshal([]byte(jsonStr), &sa); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal action: %w", err)
+	var rollup types.SiteActionBucket
+	if err := json.Unmarshal([]byte(jsonStr), &rollup); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal action rollup: %w", err)
+	}
+	if len(rollup.Actions) == 0 {
+		return nil, nil
 	}
 
-	a := sa.ToAction()
+	a := rollup.Actions[len(rollup.Actions)-1]
+	a.ExpandFromStorage()
 	return &a, nil
 }
 
@@ -1014,8 +1147,8 @@ func (f *FirestoreProvider) UpsertPrices(ctx context.Context, siteID string, pri
 
 				var earliestDate, latestDate time.Time
 				if len(merged) > 0 {
-					earliestDate = merged[0].TSStart
-					latestDate = merged[len(merged)-1].TSStart
+					earliestDate = merged[0].TSStart.UTC()
+					latestDate = merged[len(merged)-1].TSStart.UTC()
 				}
 
 				monthStart, err := time.Parse("2006-01", m)
@@ -1024,12 +1157,8 @@ func (f *FirestoreProvider) UpsertPrices(ctx context.Context, siteID string, pri
 				}
 				nowTime := time.Now().UTC()
 				monthly := types.SiteMonthlyPrices{
-					SiteID:       siteID,
-					Month:        m,
 					TSMonthStart: monthStart,
 					Prices:       merged,
-					Version:      version,
-					TSUpdated:    nowTime,
 				}
 
 				jsonBytes, err := json.Marshal(monthly)
@@ -1039,7 +1168,6 @@ func (f *FirestoreProvider) UpsertPrices(ctx context.Context, siteID string, pri
 
 				data := map[string]any{
 					"json":         string(jsonBytes),
-					"month":        m,
 					"earliestDate": earliestDate,
 					"latestDate":   latestDate,
 					"version":      version,
@@ -1081,16 +1209,14 @@ func (f *FirestoreProvider) GetPriceHistory(ctx context.Context, siteID string, 
 		return nil, err
 	}
 
-	startMonth := start.UTC().Format("2006-01")
-	endMonth := end.UTC().Add(-time.Nanosecond).Format("2006-01")
-	if endMonth < startMonth {
-		endMonth = startMonth
-	}
+	startUTC := start.UTC()
+	endUTC := end.UTC()
+	queryStart := time.Date(startUTC.Year(), startUTC.Month(), 1, 0, 0, 0, 0, time.UTC)
 
 	iter := coll.
-		Where("month", ">=", startMonth).
-		Where("month", "<=", endMonth).
-		OrderBy("month", firestore.Asc).
+		Where("earliestDate", ">=", queryStart).
+		Where("earliestDate", "<", endUTC).
+		OrderBy("earliestDate", firestore.Asc).
 		Documents(ctx)
 	defer iter.Stop()
 
@@ -1139,7 +1265,7 @@ func (f *FirestoreProvider) GetLatestPriceHistoryTime(ctx context.Context, siteI
 	}
 
 	iter := coll.
-		OrderBy("month", firestore.Desc).
+		OrderBy("latestDate", firestore.Desc).
 		Limit(1).
 		Documents(ctx)
 	defer iter.Stop()
@@ -1608,8 +1734,8 @@ func (f *FirestoreProvider) UpsertUtilityPrices(ctx context.Context, utilityID s
 
 				var earliestDate, latestDate time.Time
 				if len(merged) > 0 {
-					earliestDate = merged[0].TSStart
-					latestDate = merged[len(merged)-1].TSStart
+					earliestDate = merged[0].TSStart.UTC()
+					latestDate = merged[len(merged)-1].TSStart.UTC()
 				}
 
 				monthStart, err := time.Parse("2006-01", m)
@@ -1618,12 +1744,8 @@ func (f *FirestoreProvider) UpsertUtilityPrices(ctx context.Context, utilityID s
 				}
 				nowTime := time.Now().UTC()
 				monthly := types.UtilityMonthlyPrices{
-					UtilityID:    utilityID,
-					Month:        m,
 					TSMonthStart: monthStart,
 					Prices:       merged,
-					Version:      version,
-					TSUpdated:    nowTime,
 				}
 
 				jsonBytes, err := json.Marshal(monthly)
@@ -1633,7 +1755,6 @@ func (f *FirestoreProvider) UpsertUtilityPrices(ctx context.Context, utilityID s
 
 				data := map[string]any{
 					"json":         string(jsonBytes),
-					"month":        m,
 					"earliestDate": earliestDate,
 					"latestDate":   latestDate,
 					"version":      version,
@@ -1675,16 +1796,14 @@ func (f *FirestoreProvider) GetUtilityPrices(ctx context.Context, utilityID stri
 
 	coll := f.client.Collection("utilities").Doc(utilityID).Collection("monthly_prices")
 
-	startMonth := start.UTC().Format("2006-01")
-	endMonth := end.UTC().Add(-time.Nanosecond).Format("2006-01")
-	if endMonth < startMonth {
-		endMonth = startMonth
-	}
+	startUTC := start.UTC()
+	endUTC := end.UTC()
+	queryStart := time.Date(startUTC.Year(), startUTC.Month(), 1, 0, 0, 0, 0, time.UTC)
 
 	iter := coll.
-		Where("month", ">=", startMonth).
-		Where("month", "<=", endMonth).
-		OrderBy("month", firestore.Asc).
+		Where("earliestDate", ">=", queryStart).
+		Where("earliestDate", "<", endUTC).
+		OrderBy("earliestDate", firestore.Asc).
 		Documents(ctx)
 	defer iter.Stop()
 
@@ -2834,204 +2953,158 @@ func (f *FirestoreProvider) MigrateLegacyPricing(ctx context.Context, opts Prici
 	return stats, nil
 }
 
-type legacyPlanPeriod struct {
-	StartTime time.Time `json:"startTime,omitempty"`
-	TSStart   time.Time `json:"tsStart,omitempty"`
-
-	EndTime time.Time `json:"endTime,omitempty"`
-	TSEnd   time.Time `json:"tsEnd,omitempty"`
-
-	DurationHours float64 `json:"durationHours"`
-
-	Price *struct {
-		DollarsPerKWH        float64   `json:"dollarsPerKWH"`
-		GridUseDollarsPerKWH float64   `json:"gridUseDollarsPerKWH"`
-		Provider             string    `json:"provider,omitempty"`
-		TSStart              time.Time `json:"tsStart,omitempty"`
-		TSEnd                time.Time `json:"tsEnd,omitempty"`
-	} `json:"price,omitempty"`
-
-	ImportDollars float64 `json:"importDollars,omitempty"`
-	ExportDollars float64 `json:"exportDollars,omitempty"`
-
-	Description string `json:"description,omitempty"`
-
-	BatteryMode types.BatteryMode  `json:"batteryMode"`
-	SolarMode   types.SolarMode    `json:"solarMode"`
-	Reason      types.ActionReason `json:"reason"`
-
-	StartSOC   float64 `json:"startSoc"`
-	EndSOC     float64 `json:"endSoc"`
-	ReserveSOC float64 `json:"reserveSOC,omitempty"`
-
-	LoadKWH       float64 `json:"loadKWH,omitempty"`
-	SolarKWH      float64 `json:"solarKWH,omitempty"`
-	GridImportKWH float64 `json:"gridImportKWH,omitempty"`
-	GridExportKWH float64 `json:"gridExportKWH,omitempty"`
-	CostDollars   float64 `json:"costDollars,omitempty"`
-
-	ProjectedLoadKW  float64 `json:"projectedLoadKW,omitempty"`
-	ProjectedSolarKW float64 `json:"projectedSolarKW,omitempty"`
+type legacyStoredPlanPeriod struct {
+	TSStart       time.Time          `json:"ts"`
+	TSEnd         time.Time          `json:"te"`
+	DurationHours float64            `json:"d"`
+	ImportDollars float64            `json:"i,omitempty"`
+	ExportDollars float64            `json:"e,omitempty"`
+	BatteryMode   types.BatteryMode  `json:"bm,omitempty"`
+	SolarMode     types.SolarMode    `json:"sm,omitempty"`
+	Reason        types.ActionReason `json:"r,omitempty"`
+	StartSOC      float64            `json:"ss"`
+	EndSOC        float64            `json:"es"`
+	ReserveSOC    float64            `json:"rs,omitempty"`
+	LoadKWH       float64            `json:"l,omitempty"`
+	SolarKWH      float64            `json:"s,omitempty"`
+	GridImportKWH float64            `json:"gi,omitempty"`
+	GridExportKWH float64            `json:"ge,omitempty"`
+	CostDollars   float64            `json:"c,omitempty"`
 }
 
-type legacyPlan struct {
-	GeneratedAt        time.Time          `json:"generatedAt,omitempty"`
-	TSCreated          time.Time          `json:"tsCreated,omitempty"`
-	HorizonHours       int                `json:"horizonHours"`
-	TotalProjectedCost float64            `json:"totalProjectedCost,omitempty"`
-	TotalExportCredits float64            `json:"totalExportCredits,omitempty"`
-	NetEconomicBenefit float64            `json:"netEconomicBenefit,omitempty"`
-	Periods            []legacyPlanPeriod `json:"periods"`
+type legacyStoredPlan struct {
+	TSCreated          time.Time                `json:"ts"`
+	HorizonHours       int                      `json:"h"`
+	TotalProjectedCost float64                  `json:"tc,omitempty"`
+	TotalExportCredits float64                  `json:"te,omitempty"`
+	NetEconomicBenefit float64                  `json:"nb,omitempty"`
+	Periods            []legacyStoredPlanPeriod `json:"p"`
 }
 
-// TransformActionPlanJSON converts an action JSON document containing a legacy Plan
-// to the compact StoredPlan format under "shortPlan" (renaming generatedAt->tsCreated,
-// startTime/endTime->tsStart/tsEnd, converting price struct to importDollars/exportDollars,
-// pruning description, projectedLoadKW, and projectedSolarKW, and writing compact 1-2 char JSON keys).
-// It returns the transformed JSON, a boolean indicating if changes were made, bytes saved, and an error.
-func TransformActionPlanJSON(originalJSON []byte) ([]byte, bool, int, error) {
-	var actionMap map[string]json.RawMessage
-	if err := json.Unmarshal(originalJSON, &actionMap); err != nil {
-		return nil, false, 0, fmt.Errorf("failed to unmarshal action json: %w", err)
+func parseLegacyActionJSON(rawJSON []byte) (types.Action, error) {
+	var act types.Action
+	if err := json.Unmarshal(rawJSON, &act); err != nil {
+		return types.Action{}, fmt.Errorf("failed to unmarshal action json: %w", err)
 	}
 
-	// If shortPlan is already present and legacy plan is absent, it is already migrated.
-	if _, hasShort := actionMap["shortPlan"]; hasShort {
-		if _, hasPlan := actionMap["plan"]; !hasPlan {
-			return originalJSON, false, 0, nil
+	var raw struct {
+		ShortPlan *legacyStoredPlan `json:"shortPlan"`
+	}
+	if err := json.Unmarshal(rawJSON, &raw); err != nil {
+		return types.Action{}, fmt.Errorf("failed to unmarshal legacy shortPlan: %w", err)
+	}
+
+	if raw.ShortPlan != nil && len(raw.ShortPlan.Periods) > 0 {
+		periods := make([]types.PlanPeriod, len(raw.ShortPlan.Periods))
+		for i, p := range raw.ShortPlan.Periods {
+			periods[i] = types.PlanPeriod{
+				TSStart:       p.TSStart,
+				TSEnd:         p.TSEnd,
+				DurationHours: p.DurationHours,
+				ImportDollars: p.ImportDollars,
+				ExportDollars: p.ExportDollars,
+				BatteryMode:   p.BatteryMode,
+				SolarMode:     p.SolarMode,
+				Reason:        p.Reason,
+				StartSOC:      p.StartSOC,
+				EndSOC:        p.EndSOC,
+				ReserveSOC:    p.ReserveSOC,
+				LoadKWH:       p.LoadKWH,
+				SolarKWH:      p.SolarKWH,
+				GridImportKWH: p.GridImportKWH,
+				GridExportKWH: p.GridExportKWH,
+				CostDollars:   p.CostDollars,
+			}
+		}
+		act.Plan = &types.Plan{
+			TSCreated:          raw.ShortPlan.TSCreated,
+			HorizonHours:       raw.ShortPlan.HorizonHours,
+			TotalProjectedCost: raw.ShortPlan.TotalProjectedCost,
+			TotalExportCredits: raw.ShortPlan.TotalExportCredits,
+			NetEconomicBenefit: raw.ShortPlan.NetEconomicBenefit,
+			Periods:            periods,
 		}
 	}
 
-	planRaw, ok := actionMap["plan"]
-	if !ok || len(planRaw) == 0 || string(planRaw) == "null" {
-		return originalJSON, false, 0, nil
+	if act.Plan != nil && len(act.Plan.Periods) > 0 && len(act.Plan.ShortPeriods) == 0 {
+		act = act.CompactForStorage()
 	}
-
-	var oldPlan legacyPlan
-	if err := json.Unmarshal(planRaw, &oldPlan); err != nil {
-		return nil, false, 0, fmt.Errorf("failed to unmarshal legacy plan: %w", err)
+	if act.SystemStatus.TimeLocation != "" {
+		act.Location = act.SystemStatus.TimeLocation
 	}
-
-	if len(oldPlan.Periods) == 0 {
-		return originalJSON, false, 0, nil
-	}
-
-	tsCreated := oldPlan.TSCreated
-	if tsCreated.IsZero() {
-		tsCreated = oldPlan.GeneratedAt
-	}
-
-	newPlan := types.Plan{
-		TSCreated:          tsCreated,
-		HorizonHours:       oldPlan.HorizonHours,
-		TotalProjectedCost: oldPlan.TotalProjectedCost,
-		TotalExportCredits: oldPlan.TotalExportCredits,
-		NetEconomicBenefit: oldPlan.NetEconomicBenefit,
-		Periods:            make([]types.PlanPeriod, len(oldPlan.Periods)),
-	}
-
-	for i, p := range oldPlan.Periods {
-		tsStart := p.TSStart
-		if tsStart.IsZero() {
-			tsStart = p.StartTime
-		}
-		tsEnd := p.TSEnd
-		if tsEnd.IsZero() {
-			tsEnd = p.EndTime
-		}
-
-		importDollars := p.ImportDollars
-		exportDollars := p.ExportDollars
-		if p.Price != nil {
-			importDollars = roundFloat(p.Price.DollarsPerKWH+p.Price.GridUseDollarsPerKWH, 4)
-			exportDollars = roundFloat(p.Price.DollarsPerKWH, 4)
-		}
-
-		newPlan.Periods[i] = types.PlanPeriod{
-			TSStart:       tsStart,
-			TSEnd:         tsEnd,
-			DurationHours: p.DurationHours,
-			ImportDollars: importDollars,
-			ExportDollars: exportDollars,
-			BatteryMode:   p.BatteryMode,
-			SolarMode:     p.SolarMode,
-			Reason:        p.Reason,
-			StartSOC:      p.StartSOC,
-			EndSOC:        p.EndSOC,
-			ReserveSOC:    p.ReserveSOC,
-			LoadKWH:       p.LoadKWH,
-			SolarKWH:      p.SolarKWH,
-			GridImportKWH: p.GridImportKWH,
-			GridExportKWH: p.GridExportKWH,
-			CostDollars:   p.CostDollars,
-		}
-	}
-
-	storedPlan := newPlan.ToStored()
-	storedPlanBytes, err := json.Marshal(storedPlan)
-	if err != nil {
-		return nil, false, 0, fmt.Errorf("failed to marshal stored plan: %w", err)
-	}
-
-	actionMap["shortPlan"] = storedPlanBytes
-	delete(actionMap, "plan")
-	newActionBytes, err := json.Marshal(actionMap)
-	if err != nil {
-		return nil, false, 0, fmt.Errorf("failed to marshal updated action: %w", err)
-	}
-
-	// Validate against types.StoredAction schema
-	var validated types.StoredAction
-	if err := json.Unmarshal(newActionBytes, &validated); err != nil {
-		return nil, false, 0, fmt.Errorf("failed to validate migrated action json: %w", err)
-	}
-	restoredAction := validated.ToAction()
-	if restoredAction.Plan == nil || len(restoredAction.Plan.Periods) == 0 {
-		return nil, false, 0, fmt.Errorf("migrated plan or periods is empty")
-	}
-
-	bytesSaved := len(originalJSON) - len(newActionBytes)
-	return newActionBytes, true, bytesSaved, nil
+	act.ExpandFromStorage()
+	return act, nil
 }
 
-func roundFloat(val float64, decimals int) float64 {
-	pow := math.Pow(10, float64(decimals))
-	return math.Round(val*pow) / pow
+// ActionMigrationOptions configures the legacy action history rollup migration.
+type ActionMigrationOptions struct {
+	DryRun      bool
+	PurgeLegacy bool
+	SiteID      string    // Optional: restrict to a specific site
+	Since       time.Time // Optional: only migrate actions at or after this timestamp
 }
 
-// MigrateActionPlans migrates legacy Plan objects stored in action_history documents
-// to the new Plan format using BulkWriter for high-throughput writes.
-func (f *FirestoreProvider) MigrateActionPlans(ctx context.Context, opts PlanMigrationOptions) (*PlanMigrationStats, error) {
-	stats := &PlanMigrationStats{}
-	sites := opts.Sites
-	if len(sites) == 0 {
-		sites = []string{"hartero", "fastest963"}
-	}
+// ActionMigrationStats tracks the outcomes of the legacy action history migration.
+type ActionMigrationStats struct {
+	SitesInspected      int
+	SiteActionsMigrated int
+	SiteBucketsCreated  int
+	SitesPurged         int
+}
 
-	bw := f.client.BulkWriter(ctx)
-	defer bw.End()
+// MigrateLegacyActions migrates legacy individual action documents (from sites/{siteID}/action_history)
+// into 12-hour rollup bucket documents (sites/{siteID}/daily_actions/{YYYY-MM-DD-00|12}).
+// When opts.PurgeLegacy is true, it ONLY deletes the legacy action_history collection without reading
+// or inserting into daily_actions.
+func (f *FirestoreProvider) MigrateLegacyActions(ctx context.Context, opts ActionMigrationOptions) (*ActionMigrationStats, error) {
+	stats := &ActionMigrationStats{}
 
-	type scheduledJob struct {
-		job    *firestore.BulkWriterJob
-		siteID string
-		docID  string
-	}
-	var scheduledJobs []scheduledJob
-
-	for _, siteID := range sites {
-		coll, err := f.getCollection(siteID, "action_history")
+	var siteIDs []string
+	if opts.SiteID != "" {
+		siteIDs = []string{opts.SiteID}
+	} else {
+		sites, err := f.ListSites(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get action_history collection for site %s: %w", siteID, err)
+			return nil, fmt.Errorf("failed to list sites: %w", err)
+		}
+		for _, s := range sites {
+			siteIDs = append(siteIDs, s.ID)
+		}
+	}
+
+	for _, sID := range siteIDs {
+		legacyColl, err := f.getCollection(sID, "action_history")
+		if err != nil {
+			return nil, err
 		}
 
-		stats.SitesInspected++
+		if opts.PurgeLegacy {
+			refIter := legacyColl.DocumentRefs(ctx)
+			_, err := refIter.Next()
+			if errors.Is(err, iterator.Done) {
+				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("failed to check legacy action_history for %s: %w", sID, err)
+			}
 
-		q := coll.Query
+			stats.SitesInspected++
+			if !opts.DryRun {
+				if err := f.deleteCollection(ctx, legacyColl); err != nil {
+					return nil, fmt.Errorf("failed to purge legacy action_history for %s: %w", sID, err)
+				}
+			}
+			stats.SitesPurged++
+			continue
+		}
+
+		q := legacyColl.Query
 		if !opts.Since.IsZero() {
-			q = coll.Where("timestamp", ">=", opts.Since)
+			q = legacyColl.Where("timestamp", ">=", opts.Since)
 		}
 		iter := q.OrderBy("timestamp", firestore.Asc).Documents(ctx)
 
+		var actions []types.Action
 		for {
 			doc, err := iter.Next()
 			if errors.Is(err, iterator.Done) {
@@ -3039,10 +3112,8 @@ func (f *FirestoreProvider) MigrateActionPlans(ctx context.Context, opts PlanMig
 			}
 			if err != nil {
 				iter.Stop()
-				return nil, fmt.Errorf("error iterating actions for site %s: %w", siteID, err)
+				return nil, fmt.Errorf("failed to iterate legacy actions for %s: %w", sID, err)
 			}
-
-			stats.ActionsInspected++
 
 			val, err := doc.DataAt("json")
 			if err != nil {
@@ -3053,53 +3124,36 @@ func (f *FirestoreProvider) MigrateActionPlans(ctx context.Context, opts PlanMig
 				continue
 			}
 
-			newJSONBytes, modified, bytesSaved, err := TransformActionPlanJSON([]byte(jsonStr))
+			act, err := parseLegacyActionJSON([]byte(jsonStr))
 			if err != nil {
 				iter.Stop()
-				return nil, fmt.Errorf("failed to transform action doc %s for site %s: %w", doc.Ref.ID, siteID, err)
+				return nil, fmt.Errorf("failed to parse legacy action %s for %s: %w", doc.Ref.ID, sID, err)
 			}
-
-			if !modified {
-				stats.PlansSkipped++
-				continue
-			}
-
-			stats.PlansMigrated++
-			stats.BytesSaved += bytesSaved
-
-			if opts.DryRun {
-				log.Ctx(ctx).InfoContext(ctx, "[dry-run] would migrate plan for action",
-					slog.String("siteID", siteID),
-					slog.String("actionID", doc.Ref.ID),
-					slog.Int("bytesSaved", bytesSaved),
-				)
-			} else {
-				job, err := bw.Update(doc.Ref, []firestore.Update{{Path: "json", Value: string(newJSONBytes)}})
-				if err != nil {
-					iter.Stop()
-					return nil, fmt.Errorf("failed to schedule bulk update for doc %s (site %s): %w", doc.Ref.ID, siteID, err)
-				}
-				scheduledJobs = append(scheduledJobs, scheduledJob{
-					job:    job,
-					siteID: siteID,
-					docID:  doc.Ref.ID,
-				})
+			if !act.Timestamp.IsZero() {
+				actions = append(actions, act)
 			}
 		}
 		iter.Stop()
-	}
 
-	if !opts.DryRun && len(scheduledJobs) > 0 {
-		bw.Flush()
-		for _, sj := range scheduledJobs {
-			if _, err := sj.job.Results(); err != nil {
-				return nil, fmt.Errorf("bulk update failed for doc %s (site %s): %w", sj.docID, sj.siteID, err)
+		if len(actions) == 0 {
+			continue
+		}
+
+		stats.SitesInspected++
+		stats.SiteActionsMigrated += len(actions)
+
+		bucketSet := make(map[string]struct{})
+		for _, a := range actions {
+			b, _ := actionBucket(a.Timestamp)
+			bucketSet[b] = struct{}{}
+		}
+		stats.SiteBucketsCreated += len(bucketSet)
+
+		if !opts.DryRun {
+			if err := f.upsertActions(ctx, sID, actions, types.CurrentActionHistoryVersion); err != nil {
+				return nil, fmt.Errorf("failed to upsert migrated actions for %s: %w", sID, err)
 			}
 		}
-		log.Ctx(ctx).InfoContext(ctx, "bulk writer flushed all migrated action plans",
-			slog.Int("totalMigrated", stats.PlansMigrated),
-			slog.Int("totalBytesSaved", stats.BytesSaved),
-		)
 	}
 
 	return stats, nil

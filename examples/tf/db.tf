@@ -35,6 +35,7 @@ locals {
     "notification_logs",
     "mocks",
     "monthly_prices",
+    "daily_actions",
   ]
 }
 

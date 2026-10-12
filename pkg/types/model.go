@@ -1,11 +1,15 @@
 package types
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 const (
-	CurrentEnergyStatsVersion  = 3
-	CurrentPriceHistoryVersion = 2
-	CurrentWeatherVersion      = 4 // Note: Version 5 was burned in staging/development and should not be reused
+	CurrentEnergyStatsVersion   = 3
+	CurrentPriceHistoryVersion  = 2
+	CurrentWeatherVersion       = 4 // Note: Version 5 was burned in staging/development and should not be reused
+	CurrentActionHistoryVersion = 1
 
 	SiteIDNone = "none"
 )
@@ -82,7 +86,8 @@ type ModesOptions struct {
 // Action represents a control decision made by the system.
 type Action struct {
 	Timestamp               time.Time        `json:"timestamp"`
-	SystemTimestamp         time.Time        `json:"systemTimestamp,omitempty"`
+	SystemTimestamp         time.Time        `json:"systemTimestamp,omitempty,omitzero"`
+	Location                string           `json:"location,omitempty"`
 	BatteryMode             BatteryMode      `json:"batteryMode"`
 	SolarMode               SolarMode        `json:"solarMode"`
 	ChargeToSOC             int              `json:"chargeToSoc,omitempty"`
@@ -91,8 +96,8 @@ type Action struct {
 	CurrentPrice            *Price           `json:"currentPrice,omitempty"`
 	FuturePrice             *Price           `json:"futurePrice,omitempty"`
 	SystemStatus            SystemStatus     `json:"systemStatus"`
-	HitDeficitAt            time.Time        `json:"deficitAt"`
-	HitCapacityAt           time.Time        `json:"capacityAt"`
+	HitDeficitAt            time.Time        `json:"deficitAt,omitempty,omitzero"`
+	HitCapacityAt           time.Time        `json:"capacityAt,omitempty,omitzero"`
 	StrategyBenefitDollars  float64          `json:"strategyBenefitDollars,omitempty"`
 	DryRun                  bool             `json:"dryRun,omitempty"`
 	Fault                   bool             `json:"fault,omitempty"`
@@ -106,9 +111,9 @@ type Action struct {
 	RecentHomeUsageAbnormal bool             `json:"recentHomeUsageAbnormal,omitempty"`
 
 	// Deprecated: use HitDeficitAt
-	HitBufferedDeficitAt time.Time `json:"hitBufferedDeficitAt,omitempty"`
+	HitBufferedDeficitAt time.Time `json:"hitBufferedDeficitAt,omitempty,omitzero"`
 	// Deprecated: use HitDeficitAt
-	HitThresholdDeficitAt time.Time `json:"hitThresholdDeficitAt,omitempty"`
+	HitThresholdDeficitAt time.Time `json:"hitThresholdDeficitAt,omitempty,omitzero"`
 	// Deprecated: use BatteryMode
 	TargetBatteryMode BatteryMode `json:"targetBatteryMode,omitempty"`
 	// Deprecated: use SolarMode
@@ -408,12 +413,13 @@ type MonthlyNotificationLogs struct {
 
 // Plan represents a forward-looking optimal schedule over the planning horizon.
 type Plan struct {
-	TSCreated          time.Time    `json:"tsCreated"`
-	HorizonHours       int          `json:"horizonHours"`
-	TotalProjectedCost float64      `json:"totalProjectedCost,omitempty"`
-	TotalExportCredits float64      `json:"totalExportCredits,omitempty"`
-	NetEconomicBenefit float64      `json:"netEconomicBenefit,omitempty"`
-	Periods            []PlanPeriod `json:"periods"`
+	TSCreated          time.Time         `json:"tsCreated"`
+	HorizonHours       int               `json:"horizonHours"`
+	TotalProjectedCost float64           `json:"totalProjectedCost,omitempty"`
+	TotalExportCredits float64           `json:"totalExportCredits,omitempty"`
+	NetEconomicBenefit float64           `json:"netEconomicBenefit,omitempty"`
+	Periods            []PlanPeriod      `json:"periods,omitempty"`
+	ShortPeriods       []ShortPlanPeriod `json:"shortPeriods,omitempty"`
 }
 
 // PlanPeriod represents a single discrete scheduling period in a Plan.
@@ -436,12 +442,11 @@ type PlanPeriod struct {
 	CostDollars   float64      `json:"costDollars,omitempty"`
 }
 
-// StoredPlanPeriod represents a single discrete scheduling period in a StoredPlan,
-// stored with compact 1-2 character JSON tags in Firestore to reduce storage footprint.
-type StoredPlanPeriod struct {
-	TSStart       time.Time    `json:"ts"`
-	TSEnd         time.Time    `json:"te"`
-	DurationHours float64      `json:"d"`
+// ShortPlanPeriod represents a single discrete scheduling period in a Plan,
+// stored with compact 1-2 character JSON tags and Unix timestamps in Firestore to reduce storage footprint.
+type ShortPlanPeriod struct {
+	UnixStart     int64        `json:"us"`
+	UnixEnd       int64        `json:"ue"`
 	ImportDollars float64      `json:"i"`
 	ExportDollars float64      `json:"e,omitempty"`
 	BatteryMode   BatteryMode  `json:"bm"`
@@ -457,52 +462,47 @@ type StoredPlanPeriod struct {
 	CostDollars   float64      `json:"c,omitempty"`
 }
 
-// StoredPlan represents a forward-looking optimal schedule over the planning horizon,
-// stored with compact 1-2 character JSON tags in Firestore.
-type StoredPlan struct {
-	TSCreated          time.Time          `json:"ts"`
-	HorizonHours       int                `json:"h"`
-	TotalProjectedCost float64            `json:"tc,omitempty"`
-	TotalExportCredits float64            `json:"te,omitempty"`
-	NetEconomicBenefit float64            `json:"nb,omitempty"`
-	Periods            []StoredPlanPeriod `json:"p"`
+// SiteActionBucket represents a 12-hour bucket of actions stored in the daily_actions collection.
+type SiteActionBucket struct {
+	TSBucketStart time.Time `json:"tsBucketStart"`
+	Actions       []Action  `json:"actions"`
 }
 
-// StoredAction wraps Action for Firestore persistence, storing Plan under a compact
-// StoredPlan schema using the "shortPlan" JSON key to optimize storage footprint.
-type StoredAction struct {
-	Action
-	Plan *StoredPlan `json:"shortPlan,omitempty"`
+func roundFloat(val float64, decimals int) float64 {
+	pow := math.Pow(10, float64(decimals))
+	return math.Round(val*pow) / pow
 }
 
-// ToStored converts a PlanPeriod to its compact StoredPlanPeriod representation.
-func (p PlanPeriod) ToStored() StoredPlanPeriod {
-	return StoredPlanPeriod{
-		TSStart:       p.TSStart,
-		TSEnd:         p.TSEnd,
-		DurationHours: p.DurationHours,
-		ImportDollars: p.ImportDollars,
-		ExportDollars: p.ExportDollars,
+func (p PlanPeriod) toShort() ShortPlanPeriod {
+	return ShortPlanPeriod{
+		UnixStart:     p.TSStart.Unix(),
+		UnixEnd:       p.TSEnd.Unix(),
+		ImportDollars: roundFloat(p.ImportDollars, 4),
+		ExportDollars: roundFloat(p.ExportDollars, 4),
 		BatteryMode:   p.BatteryMode,
 		SolarMode:     p.SolarMode,
 		Reason:        p.Reason,
-		StartSOC:      p.StartSOC,
-		EndSOC:        p.EndSOC,
-		ReserveSOC:    p.ReserveSOC,
-		LoadKWH:       p.LoadKWH,
-		SolarKWH:      p.SolarKWH,
-		GridImportKWH: p.GridImportKWH,
-		GridExportKWH: p.GridExportKWH,
-		CostDollars:   p.CostDollars,
+		StartSOC:      roundFloat(p.StartSOC, 1),
+		EndSOC:        roundFloat(p.EndSOC, 1),
+		ReserveSOC:    roundFloat(p.ReserveSOC, 1),
+		LoadKWH:       roundFloat(p.LoadKWH, 3),
+		SolarKWH:      roundFloat(p.SolarKWH, 3),
+		GridImportKWH: roundFloat(p.GridImportKWH, 3),
+		GridExportKWH: roundFloat(p.GridExportKWH, 3),
+		CostDollars:   roundFloat(p.CostDollars, 4),
 	}
 }
 
-// ToPlanPeriod converts a StoredPlanPeriod back to a domain PlanPeriod.
-func (sp StoredPlanPeriod) ToPlanPeriod() PlanPeriod {
+func (sp ShortPlanPeriod) toPlanPeriod(loc *time.Location) PlanPeriod {
+	if loc == nil {
+		loc = time.UTC
+	}
+	tsStart := time.Unix(sp.UnixStart, 0).In(loc)
+	tsEnd := time.Unix(sp.UnixEnd, 0).In(loc)
 	return PlanPeriod{
-		TSStart:       sp.TSStart,
-		TSEnd:         sp.TSEnd,
-		DurationHours: sp.DurationHours,
+		TSStart:       tsStart,
+		TSEnd:         tsEnd,
+		DurationHours: tsEnd.Sub(tsStart).Hours(),
 		ImportDollars: sp.ImportDollars,
 		ExportDollars: sp.ExportDollars,
 		BatteryMode:   sp.BatteryMode,
@@ -519,63 +519,73 @@ func (sp StoredPlanPeriod) ToPlanPeriod() PlanPeriod {
 	}
 }
 
-// ToStored converts a Plan to its compact StoredPlan representation. Returns nil if p is nil.
-func (p *Plan) ToStored() *StoredPlan {
-	if p == nil {
-		return nil
+// CompactForStorage returns a copy of the Action optimized for Firestore storage,
+// setting Location from SystemTimestamp and converting Plan.Periods into Plan.ShortPeriods.
+func (a Action) CompactForStorage() Action {
+	if !a.SystemTimestamp.IsZero() {
+		a.Location = a.SystemTimestamp.Location().String()
 	}
-	sp := &StoredPlan{
-		TSCreated:          p.TSCreated,
-		HorizonHours:       p.HorizonHours,
-		TotalProjectedCost: p.TotalProjectedCost,
-		TotalExportCredits: p.TotalExportCredits,
-		NetEconomicBenefit: p.NetEconomicBenefit,
-		Periods:            make([]StoredPlanPeriod, len(p.Periods)),
-	}
-	for i, per := range p.Periods {
-		sp.Periods[i] = per.ToStored()
-	}
-	return sp
-}
-
-// ToPlan converts a StoredPlan back to a domain Plan. Returns nil if sp is nil.
-func (sp *StoredPlan) ToPlan() *Plan {
-	if sp == nil {
-		return nil
-	}
-	p := &Plan{
-		TSCreated:          sp.TSCreated,
-		HorizonHours:       sp.HorizonHours,
-		TotalProjectedCost: sp.TotalProjectedCost,
-		TotalExportCredits: sp.TotalExportCredits,
-		NetEconomicBenefit: sp.NetEconomicBenefit,
-		Periods:            make([]PlanPeriod, len(sp.Periods)),
-	}
-	for i, per := range sp.Periods {
-		p.Periods[i] = per.ToPlanPeriod()
-	}
-	return p
-}
-
-// ToStored wraps an Action into a StoredAction, clearing the embedded Action.Plan
-// so that json.Marshal only serializes Plan under "shortPlan".
-func (a Action) ToStored() StoredAction {
-	sa := StoredAction{
-		Action: a,
-	}
-	sa.Action.Plan = nil
 	if a.Plan != nil {
-		sa.Plan = a.Plan.ToStored()
+		planCopy := *a.Plan
+		if len(planCopy.Periods) > 0 {
+			planCopy.ShortPeriods = make([]ShortPlanPeriod, len(planCopy.Periods))
+			for i, p := range planCopy.Periods {
+				planCopy.ShortPeriods[i] = p.toShort()
+			}
+		}
+		planCopy.Periods = nil
+		a.Plan = &planCopy
 	}
-	return sa
+	return a
 }
 
-// ToAction extracts the Action from a StoredAction, restoring Plan from
-// shortPlan.
-func (s StoredAction) ToAction() Action {
-	act := s.Action
-	if s.Plan != nil {
-		act.Plan = s.Plan.ToPlan()
+func inLoc(t time.Time, loc *time.Location) time.Time {
+	if t.IsZero() || loc == nil {
+		return t
 	}
-	return act
+	return t.In(loc)
+}
+
+// ExpandFromStorage restores the Action's time.Location on all local timestamps
+// and expands Plan.ShortPeriods back into Plan.Periods in place.
+func (a *Action) ExpandFromStorage() {
+	var loc *time.Location
+	if a.Location != "" {
+		if l, err := time.LoadLocation(a.Location); err == nil {
+			loc = l
+		}
+		a.Location = ""
+	}
+	a.SystemTimestamp = inLoc(a.SystemTimestamp, loc)
+	a.SystemStatus.Timestamp = inLoc(a.SystemStatus.Timestamp, loc)
+	a.HitDeficitAt = inLoc(a.HitDeficitAt, loc)
+	a.HitCapacityAt = inLoc(a.HitCapacityAt, loc)
+	a.HitBufferedDeficitAt = inLoc(a.HitBufferedDeficitAt, loc)
+	a.HitThresholdDeficitAt = inLoc(a.HitThresholdDeficitAt, loc)
+	if a.CurrentPrice != nil {
+		a.CurrentPrice.TSStart = inLoc(a.CurrentPrice.TSStart, loc)
+		a.CurrentPrice.TSEnd = inLoc(a.CurrentPrice.TSEnd, loc)
+	}
+	if a.FuturePrice != nil {
+		a.FuturePrice.TSStart = inLoc(a.FuturePrice.TSStart, loc)
+		a.FuturePrice.TSEnd = inLoc(a.FuturePrice.TSEnd, loc)
+	}
+	for i := range a.SystemStatus.Alarms {
+		a.SystemStatus.Alarms[i].Timestamp = inLoc(a.SystemStatus.Alarms[i].Timestamp, loc)
+	}
+	for i := range a.SystemStatus.Storms {
+		a.SystemStatus.Storms[i].TSStart = inLoc(a.SystemStatus.Storms[i].TSStart, loc)
+		a.SystemStatus.Storms[i].TSEnd = inLoc(a.SystemStatus.Storms[i].TSEnd, loc)
+	}
+	for i := range a.SystemStatus.VPPEvents {
+		a.SystemStatus.VPPEvents[i].TSStart = inLoc(a.SystemStatus.VPPEvents[i].TSStart, loc)
+		a.SystemStatus.VPPEvents[i].TSEnd = inLoc(a.SystemStatus.VPPEvents[i].TSEnd, loc)
+	}
+	if a.Plan != nil && len(a.Plan.ShortPeriods) > 0 {
+		a.Plan.Periods = make([]PlanPeriod, len(a.Plan.ShortPeriods))
+		for i, sp := range a.Plan.ShortPeriods {
+			a.Plan.Periods[i] = sp.toPlanPeriod(loc)
+		}
+		a.Plan.ShortPeriods = nil
+	}
 }

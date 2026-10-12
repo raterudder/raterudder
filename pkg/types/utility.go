@@ -94,22 +94,14 @@ type PriceState struct {
 
 // SiteMonthlyPrices represents monthly price history stored in the monthly_prices collection.
 type SiteMonthlyPrices struct {
-	SiteID       string    `json:"siteID"`
-	Month        string    `json:"month"`
 	TSMonthStart time.Time `json:"tsMonthStart"`
 	Prices       []Price   `json:"prices"`
-	Version      int       `json:"version"`
-	TSUpdated    time.Time `json:"tsUpdated"`
 }
 
 // UtilityMonthlyPrices represents monthly utility price history stored in the monthly_prices collection.
 type UtilityMonthlyPrices struct {
-	UtilityID    string       `json:"utilityID"`
-	Month        string       `json:"month"`
 	TSMonthStart time.Time    `json:"tsMonthStart"`
 	Prices       []PriceState `json:"prices"`
-	Version      int          `json:"version"`
-	TSUpdated    time.Time    `json:"tsUpdated"`
 }
 
 // Contains checks if a time is within the price interval.
