@@ -2205,20 +2205,20 @@ func TestGenerateActionCandidates(t *testing.T) {
 		touSettings.ManageTOUSchedules = true
 		touSettings.GridExportSolar = true
 
-		// 1. At or below reserve: Direct solar export must NOT be offered
+		// 1. At or below reserve (20%), or within solarExportReserveMarginPct (<= 25%): Direct solar export must NOT be offered
 		reserveState := planState{energyKWH: 2.7, soc: 20}
 		candidates := c.generateActionCandidates(ctx, 0, sunnyInterval, nil, reserveState, planningAnchors{}, touSettings, status, nil, precedingAction{})
-
-		var directSolarCand *actionCandidate
 		for i := range candidates {
-			if candidates[i].solarMode == types.SolarModeExport {
-				directSolarCand = &candidates[i]
-				break
-			}
+			assert.NotEqual(t, types.SolarModeExport, candidates[i].solarMode, "Direct solar export must NOT be created at 20% SOC")
 		}
-		assert.Nil(t, directSolarCand, "Direct solar export must NOT be created when battery is at or below reserve")
 
-		// 2. Above reserve: Direct solar export IS offered
+		withinMarginState := planState{energyKWH: 3.375, soc: 25}
+		candsWithinMargin := c.generateActionCandidates(ctx, 0, sunnyInterval, nil, withinMarginState, planningAnchors{}, touSettings, status, nil, precedingAction{})
+		for i := range candsWithinMargin {
+			assert.NotEqual(t, types.SolarModeExport, candsWithinMargin[i].solarMode, "Direct solar export must NOT be created at 25% SOC (minSOC + solarExportReserveMarginPct)")
+		}
+
+		// 2. Above reserve + solarExportReserveMarginPct (> 25%): Direct solar export IS offered
 		aboveReserveState := planState{energyKWH: 4.5, soc: 35}
 		candsAbove := c.generateActionCandidates(ctx, 0, sunnyInterval, nil, aboveReserveState, planningAnchors{}, touSettings, status, nil, precedingAction{})
 
@@ -2229,7 +2229,7 @@ func TestGenerateActionCandidates(t *testing.T) {
 				break
 			}
 		}
-		require.NotNil(t, directSolarAbove, "Direct solar export must be offered when battery is above reserve")
+		require.NotNil(t, directSolarAbove, "Direct solar export must be offered when battery is above reserve + solarExportReserveMarginPct")
 		assert.Equal(t, types.ActionReasonDirectExport, directSolarAbove.reason)
 
 		// 3. During VPP prep window (Rule 2) when at or below reserve: Direct solar export must NOT be offered

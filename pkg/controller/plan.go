@@ -90,12 +90,18 @@ const (
 	// while still permitting mode switches whenever economically justified.
 	modeSwitchPenalty = 0.005
 
-	// exportReserveMarginPct is the safety margin (in % SOC) maintained strictly above the effective
+	// batteryExportReserveMarginPct is the safety margin (in % SOC) maintained strictly above the
 	// reserve floor during battery grid export. Because grid exports discharge at maximum inverter power,
 	// hardware reporting latencies, inverter shutdown ramps, and cell-balancing variances can cause over-discharge.
 	// Adding a 5% buffer guarantees that deliberate grid export operations terminate well before cutting into
 	// the homeowner's essential emergency backup reserve.
-	exportReserveMarginPct = 5.0
+	batteryExportReserveMarginPct = 5.0
+
+	// solarExportReserveMarginPct is the minimum SOC margin (in % SOC) required above the reserve floor
+	// to initiate or sustain direct solar export (BatteryModeLoad + SolarModeExport). Because direct solar
+	// export routes all solar to the grid while the battery covers household load, requiring a 5% buffer
+	// prevents entering solar export when only 1–2% above reserve and immediately hitting the reserve floor.
+	solarExportReserveMarginPct = 5.0
 
 	// minSignificantSolarKW is the threshold (in kW) above which solar production is considered
 	// materially significant for battery charging or daytime export arbitrage. This filters out dawn/dusk sensor noise,
@@ -2151,8 +2157,9 @@ func (c *Controller) appendActionCandidates(
 	}
 
 	// --- PRUNING RULE 5: Reserve Floor Protection ---
-	// Battery grid export requires an export safety margin above the effective reserve floor.
-	canExport := currentSOC > minSOC+exportReserveMarginPct
+	// Battery grid export and direct solar export require safety margins above the reserve floor.
+	canBatteryExport := currentSOC > minSOC+batteryExportReserveMarginPct
+	canSolarExport := currentSOC > minSOC+solarExportReserveMarginPct
 	roomLeftToFill := currentSOC < almostFullSOC
 
 	// Evaluate daytime solar refill:
@@ -2254,10 +2261,10 @@ func (c *Controller) appendActionCandidates(
 	// for future peak rates (hardware won't allow discharging below reserve anyway) and would
 	// needlessly lock the site into buying grid power while resting at reserve.
 	hasHigherFutureRate := canDischarge && effectiveMaxFutureRate > interval.importRate+priceMaterialityThresholdDollars
-	// hasHigherFutureExport requires canExport because Standby only holds existing charge (without adding energy).
+	// hasHigherFutureExport requires canBatteryExport because Standby only holds existing charge (without adding energy).
 	// If the battery does not currently have exportable energy above the reserve margin, holding it in Standby
 	// would needlessly prevent home self-consumption for an export opportunity it cannot participate in.
-	hasHigherFutureExport := canExport && settings.ManageTOUSchedules && settings.GridExportBatteries && !isFlatNEM &&
+	hasHigherFutureExport := canBatteryExport && settings.ManageTOUSchedules && settings.GridExportBatteries && !isFlatNEM &&
 		maxFutureExportRate > interval.importRate+priceMaterialityThresholdDollars
 	ld.higherFutureRate = effectiveMaxFutureRate
 	ld.isAlreadyStandby = isAlreadyStandby
@@ -2532,7 +2539,8 @@ func (c *Controller) appendActionCandidates(
 	rechargeCost := minAlternativeValue / effRT
 
 	// Branch D: Direct Solar Export (with BatteryModeLoad)
-	// Never offered when at or below reserve floor so surplus solar restores backup protection before exporting.
+	// Requires canSolarExport (currentSOC > minSOC + solarExportReserveMarginPct) so the battery has enough
+	// cushion above reserve to cover home load without immediately hitting the reserve floor.
 	//
 	// Direct Solar Export exports rooftop solar directly through the inverter to the grid (without passing through
 	// the battery electrochemically) while discharging the battery to cover daytime home load. Evaluated on the
@@ -2540,7 +2548,7 @@ func (c *Controller) appendActionCandidates(
 	// battery is only discharged once to cover home load (just as it would be during off-peak self-consumption),
 	// whereas dividing minAlternativeValue by effRT here would double-count round-trip conversion losses.
 	solarExportDegradation := max(priceEpsilonForEquality, optParams.SolarExportDegradationDollarsPerKWH)
-	if canDirectSolarExport && isAboveReserve && beforeVPPRechargeDeadline && interval.exportRate >= (minAlternativeValue+solarExportDegradation) {
+	if canDirectSolarExport && canSolarExport && beforeVPPRechargeDeadline && interval.exportRate >= (minAlternativeValue+solarExportDegradation) {
 		candidates = append(candidates, actionCandidate{
 			batteryMode: types.BatteryModeLoad,
 			solarMode:   types.SolarModeExport,
@@ -2552,12 +2560,12 @@ func (c *Controller) appendActionCandidates(
 	}
 
 	// Branch E: Battery Grid Export Dump (Opportunity cost of home offset + degradation hurdle)
-	if settings.ManageTOUSchedules && settings.GridExportBatteries && !isFlatNEM && canExport && beforeVPPRechargeDeadline && interval.exportRate > 0 {
+	if settings.ManageTOUSchedules && settings.GridExportBatteries && !isFlatNEM && canBatteryExport && beforeVPPRechargeDeadline && interval.exportRate > 0 {
 		cycleHurdle := max(priceEpsilonForEquality, optParams.BatteryExportDegradationDollarsPerKWH, optParams.SolarExportDegradationDollarsPerKWH)
 
 		// Export is a viable candidate if export rate beats the replacement cost by at least the degradation hurdle
 		if interval.exportRate >= (rechargeCost + cycleHurdle) {
-			targetSOC := int(math.Round(minSOC + exportReserveMarginPct))
+			targetSOC := int(math.Round(minSOC + batteryExportReserveMarginPct))
 			ld.exportReplacementCost = rechargeCost
 			ld.minAlternativeValue = minAlternativeValue
 			ld.cycleHurdle = cycleHurdle
@@ -2610,7 +2618,7 @@ func stepPhysics(
 		minSOC = 100.0
 	}
 	reserveKWH := capacityKWH * (minSOC / 100.0)
-	exportReserveKWH := capacityKWH * ((minSOC + exportReserveMarginPct) / 100.0)
+	exportReserveKWH := capacityKWH * ((minSOC + batteryExportReserveMarginPct) / 100.0)
 
 	// Half efficiency for one-way conversions: sqrt(roundTripEfficiency)
 	rtEff := roundTripEfficiency
