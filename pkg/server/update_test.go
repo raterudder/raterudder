@@ -2167,6 +2167,12 @@ func TestHandleUpdateSites(t *testing.T) {
 		req := httptest.NewRequest("POST", "/api/updateSites", nil)
 		w := httptest.NewRecorder()
 
+		// Run GC twice before the benchmark: the first cycle collects unreachable heap objects from
+		// prior tests and moves sync.Pool entries to the victim cache, and the second cycle clears
+		// the victim cache so baseline allocations are isolated.
+		runtime.GC()
+		runtime.GC()
+
 		start := time.Now()
 		srv.handleUpdateSites(w, req)
 		elapsed := time.Since(start)

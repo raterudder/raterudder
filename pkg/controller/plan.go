@@ -2802,6 +2802,11 @@ func stepPhysics(
 }
 
 // dpNode represents a node in the dynamic programming forward search tree.
+// Note: logData and metric are intentionally stored directly on each dpNode rather than
+// re-running appendActionCandidates or stepPhysics on the winning trajectory after the search.
+// We do not want to force candidate generation or physics simulation to be unnecessarily
+// perfectly deterministic, and we need the log data and metrics to come from the actual
+// actions that were generated during the search to guarantee accuracy for debugging purposes.
 type dpNode struct {
 	state     planState
 	totalCost float64
@@ -2909,9 +2914,15 @@ func (c *Controller) searchOptimalPlan(
 		return nil, fmt.Errorf("no viable plan found: all candidate actions pruned at step 0")
 	}
 
+	type modeBestTrajectory struct {
+		actions []actionCandidate
+		logData []candidateLogData
+		states  []planState
+		metrics []intervalMetrics
+	}
 	modeBestScores := make(map[types.BatteryMode]float64)
 	modeBestStrikes := make(map[types.BatteryMode]int)
-	modeBestNodes := make(map[types.BatteryMode]*dpNode)
+	modeBestPaths := make(map[types.BatteryMode]modeBestTrajectory)
 	totalPathsEvaluated := 0
 
 	optParams := settings.GetOptimizationParams()
@@ -3014,12 +3025,11 @@ func (c *Controller) searchOptimalPlan(
 	// 2. In-place bucket reuse: Within each timeline step, only the first trajectory to land in a given
 	//    nextBuckets[mIdx][b] slot claims a node from nodeChunk; subsequent trajectories landing in the same
 	//    bucket overwrite *node in-place without consuming another slot.
-	// 3. Pool recycling: A typical 72-step (24h) horizon across all cand0 rollouts populates ~1,000–2,500
-	//    unique bucket slots total (3–5 slabs). Because no *dpNode escapes searchOptimalPlan once the winning
-	//    path is extracted, returning the slabs to dpNodeSlabPool on function exit allows concurrent workers
-	//    to reuse the same slabs across sites without retaining both intervalMetrics and candidateLogData on the heap.
+	// 3. Per-cand0 & cross-site recycling: At the end of each cand0 rollout, the winning trajectory's states,
+	//    actions, metrics, and logData are extracted, allowing the next cand0 rollout to reset slabIdx to 0 and
+	//    reuse the same slabs in-place. Returning the slabs to dpNodeSlabPool on function exit allows concurrent
+	//    workers to reuse the same slabs across sites without retaining both intervalMetrics and candidateLogData on the heap.
 	var nodeChunk *[512]dpNode
-	nodeChunkIdx := 512
 	usedSlabs := make([]*[512]dpNode, 0, 6)
 	defer func() {
 		for _, slab := range usedSlabs {
@@ -3034,6 +3044,8 @@ func (c *Controller) searchOptimalPlan(
 	// This ensures every distinct immediate dispatch action explores its optimal future trajectory.
 	for _, cand0 := range candidates0 {
 		cand0Slice := []actionCandidate{cand0}
+		slabIdx := 0
+		nodeChunkIdx := 512
 
 		// root is the genesis/sentinel node representing the battery's real-time state (initial)
 		// before any decisions in the planning horizon are taken. It has no parent and zero cost.
@@ -3358,8 +3370,13 @@ func (c *Controller) searchOptimalPlan(
 						node := nextBuckets[mIdx][b]
 						if node == nil {
 							if nodeChunkIdx >= 512 {
-								nodeChunk = dpNodeSlabPool.Get().(*[512]dpNode)
-								usedSlabs = append(usedSlabs, nodeChunk)
+								if slabIdx < len(usedSlabs) {
+									nodeChunk = usedSlabs[slabIdx]
+								} else {
+									nodeChunk = dpNodeSlabPool.Get().(*[512]dpNode)
+									usedSlabs = append(usedSlabs, nodeChunk)
+								}
+								slabIdx++
 								nodeChunkIdx = 0
 							}
 							node = &nodeChunk[nodeChunkIdx]
@@ -3502,9 +3519,28 @@ func (c *Controller) searchOptimalPlan(
 				}
 			}
 			if isBetter {
+				n := len(timeline)
+				traj, hasTraj := modeBestPaths[cand0.batteryMode]
+				if !hasTraj {
+					traj = modeBestTrajectory{
+						actions: make([]actionCandidate, n),
+						logData: make([]candidateLogData, n),
+						states:  make([]planState, n+1),
+						metrics: make([]intervalMetrics, n),
+					}
+				}
+				curr := bestNodeForCand
+				traj.states[n] = curr.state
+				for i := n - 1; i >= 0; i-- {
+					traj.actions[i] = curr.action
+					traj.logData[i] = curr.logData
+					traj.metrics[i] = curr.metric
+					curr = curr.parent
+					traj.states[i] = curr.state
+				}
 				modeBestStrikes[cand0.batteryMode] = bestStrikesForCand
 				modeBestScores[cand0.batteryMode] = bestScoreForCand
-				modeBestNodes[cand0.batteryMode] = bestNodeForCand
+				modeBestPaths[cand0.batteryMode] = traj
 			}
 		}
 	}
@@ -3540,7 +3576,8 @@ func (c *Controller) searchOptimalPlan(
 		types.BatteryModeExport,
 	}
 
-	var bestOverallNode *dpNode
+	var bestOverallMode types.BatteryMode
+	var hasBestOverall bool
 	var bestOverallScore float64 = math.MaxFloat64
 	var bestOverallStrikes int = math.MaxInt
 	var runnerUpScore float64 = math.MaxFloat64
@@ -3552,43 +3589,32 @@ func (c *Controller) searchOptimalPlan(
 			continue
 		}
 		strikes := modeBestStrikes[mode]
-		node := modeBestNodes[mode]
 		tieEps := planScoreTieEpsilon
-		if bestOverallNode != nil && bestOverallNode.action.batteryMode == types.BatteryModeLoad && mode == types.BatteryModeStandby {
+		if hasBestOverall && bestOverallMode == types.BatteryModeLoad && mode == types.BatteryModeStandby {
 			// Require at least priceEpsilonForEquality ($0.001) of net savings before pulling the battery
 			// out of active self-consumption (BatteryModeLoad) into idle Standby over sub-mill-dollar noise.
 			tieEps = priceEpsilonForEquality
 		}
 		if strikes < bestOverallStrikes || (strikes == bestOverallStrikes && score < bestOverallScore-tieEps) {
-			if bestOverallNode != nil {
+			if hasBestOverall {
 				runnerUpScore = bestOverallScore
 				runnerUpStrikes = bestOverallStrikes
 			}
 			bestOverallStrikes = strikes
 			bestOverallScore = score
-			bestOverallNode = node
+			bestOverallMode = mode
+			hasBestOverall = true
 		} else if strikes < runnerUpStrikes || (strikes == runnerUpStrikes && score < runnerUpScore-planScoreTieEpsilon) {
 			runnerUpScore = score
 			runnerUpStrikes = strikes
 		}
 	}
 
-	// Reconstruct chronological winning path from the terminal node
-	n := len(timeline)
-	actions := make([]actionCandidate, n)
-	logData := make([]candidateLogData, n)
-	states := make([]planState, n+1)
-	metrics := make([]intervalMetrics, n)
-
-	curr := bestOverallNode
-	states[n] = curr.state
-	for i := n - 1; i >= 0; i-- {
-		actions[i] = curr.action
-		logData[i] = curr.logData
-		metrics[i] = curr.metric
-		curr = curr.parent
-		states[i] = curr.state
-	}
+	winningTraj := modeBestPaths[bestOverallMode]
+	actions := winningTraj.actions
+	logData := winningTraj.logData
+	states := winningTraj.states
+	metrics := winningTraj.metrics
 
 	// Fast-Track Delay Check:
 	// RateRudder only executes hardware mode changes when its polling loop runs (every 20-25 minutes).
@@ -3637,10 +3663,10 @@ func (c *Controller) searchOptimalPlan(
 			}
 
 			if shouldFastTrack {
-				chargeNode, exists := modeBestNodes[types.BatteryModeChargeAny]
+				chargePath, exists := modeBestPaths[types.BatteryModeChargeAny]
 				chargeScore := modeBestScores[types.BatteryModeChargeAny]
 				chargeStrikes := modeBestStrikes[types.BatteryModeChargeAny]
-				if !exists || chargeNode == nil {
+				if !exists || len(chargePath.actions) == 0 {
 					log.Ctx(ctx).DebugContext(ctx, "fast-track grid charge skipped: no valid ChargeAny node exists in plan search",
 						slog.Time("scheduledChargeTime", fastTrackStartTime),
 						slog.Duration("delay", fastTrackDelay),
@@ -3654,19 +3680,13 @@ func (c *Controller) searchOptimalPlan(
 						originalCost += m.costDollars
 					}
 
-					bestOverallNode = chargeNode
+					bestOverallMode = types.BatteryModeChargeAny
 					bestOverallScore = modeBestScores[types.BatteryModeChargeAny]
 					bestOverallStrikes = chargeStrikes
-
-					curr = bestOverallNode
-					states[n] = curr.state
-					for i := n - 1; i >= 0; i-- {
-						actions[i] = curr.action
-						logData[i] = curr.logData
-						metrics[i] = curr.metric
-						curr = curr.parent
-						states[i] = curr.state
-					}
+					actions = chargePath.actions
+					logData = chargePath.logData
+					states = chargePath.states
+					metrics = chargePath.metrics
 
 					var promotedCost float64
 					for _, m := range metrics {
