@@ -144,7 +144,7 @@ describe('CurrentStatus', () => {
         expect(screen.getByText('🔋')).toBeInTheDocument();
     });
 
-    it('renders abnormal usage subvalue and footnote when battery is at reserve', () => {
+    it('renders abnormal usage subvalue when battery is at reserve', () => {
         const action: Action = {
             ...defaultAction,
             reason: ActionReason.BatteryAtReserve,
@@ -161,10 +161,9 @@ describe('CurrentStatus', () => {
         expect(screen.getByText('Battery At Reserve')).toBeInTheDocument();
         expect(screen.getByText('Holding Reserve')).toBeInTheDocument();
         expect(screen.getByText('Recent usage well above normal (7.5 vs 2.7 kWh)')).toBeInTheDocument();
-        expect(screen.getByText('* Recent home usage (7.5 kWh) was well above your normal usage (2.7 kWh), depleting the reserve buffer.')).toBeInTheDocument();
     });
 
-    it('does not render abnormal usage footnote when recentHomeUsageAbnormal is false', () => {
+    it('does not render abnormal usage subvalue when recentHomeUsageAbnormal is false', () => {
         const action: Action = {
             ...defaultAction,
             reason: ActionReason.BatteryAtReserve,
@@ -181,7 +180,6 @@ describe('CurrentStatus', () => {
         expect(screen.getByText('Battery At Reserve')).toBeInTheDocument();
         expect(screen.getByText('Holding Reserve')).toBeInTheDocument();
         expect(screen.queryByText(/Recent usage well above normal/)).not.toBeInTheDocument();
-        expect(screen.queryByText(/\* Recent home usage/)).not.toBeInTheDocument();
     });
 
     it('renders Direct Solar Export status correctly', () => {

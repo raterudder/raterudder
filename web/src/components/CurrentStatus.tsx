@@ -198,50 +198,43 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action, currencySymbol = 
         : getBatteryModeLabel(mode);
 
     return (
-        <>
-            <div className={`current-status-card ${state}`}>
-                <div className="status-main">
-                    <div className="status-icon">
-                        {isDirectBatteryExport ? (
-                            <span className="icon" aria-hidden="true">⚡</span>
-                        ) : isDirectSolarExport ? (
-                            <span className="icon" aria-hidden="true">☀️</span>
-                        ) : isDirectSolarExportStandby ? (
-                            <span className="icon" aria-hidden="true">🛡️</span>
-                        ) : isBatteryAtReserve ? (
-                            <span className="icon" aria-hidden="true">🔋</span>
-                        ) : (
-                            <>
-                                {state === 'charging' && <span className="icon" aria-hidden="true">⚡</span>}
-                                {state === 'discharging' && <span className="icon" aria-hidden="true">🏠</span>}
-                                {state === 'standby' && <span className="icon" aria-hidden="true">⏲️</span>}
-                            </>
-                        )}
-                    </div>
-                    <div className="status-info">
-                        <span className="status-label">{statusLabel}</span>
-                        <span className="status-value">{statusValue}</span>
-                        {statusSubvalueText && (
-                            <span className="status-subvalue">{statusSubvalueText}</span>
-                        )}
-                    </div>
+        <div className={`current-status-card ${state}`}>
+            <div className="status-main">
+                <div className="status-icon">
+                    {isDirectBatteryExport ? (
+                        <span className="icon" aria-hidden="true">⚡</span>
+                    ) : isDirectSolarExport ? (
+                        <span className="icon" aria-hidden="true">☀️</span>
+                    ) : isDirectSolarExportStandby ? (
+                        <span className="icon" aria-hidden="true">🛡️</span>
+                    ) : isBatteryAtReserve ? (
+                        <span className="icon" aria-hidden="true">🔋</span>
+                    ) : (
+                        <>
+                            {state === 'charging' && <span className="icon" aria-hidden="true">⚡</span>}
+                            {state === 'discharging' && <span className="icon" aria-hidden="true">🏠</span>}
+                            {state === 'standby' && <span className="icon" aria-hidden="true">⏲️</span>}
+                        </>
+                    )}
                 </div>
-                <div className="status-metrics">
-                    {renderBatteryMetric()}
-                    {hasPrice && (
-                        <div className="metric">
-                            <span className="metric-label">Price</span>
-                            <span className="metric-value">{currencySymbol} {price.toFixed(3)}<small>/kWh</small></span>
-                        </div>
+                <div className="status-info">
+                    <span className="status-label">{statusLabel}</span>
+                    <span className="status-value">{statusValue}</span>
+                    {statusSubvalueText && (
+                        <span className="status-subvalue">{statusSubvalueText}</span>
                     )}
                 </div>
             </div>
-            {isAbnormalUsage && (
-                <div className="status-footnote">
-                    * Recent home usage ({action.recentHomeUsageKWH!.toFixed(1)} kWh) was well above your normal usage ({action.q3HomeUsageKWH!.toFixed(1)} kWh), depleting the reserve buffer.
-                </div>
-            )}
-        </>
+            <div className="status-metrics">
+                {renderBatteryMetric()}
+                {hasPrice && (
+                    <div className="metric">
+                        <span className="metric-label">Price</span>
+                        <span className="metric-value">{currencySymbol} {price.toFixed(3)}<small>/kWh</small></span>
+                    </div>
+                )}
+            </div>
+        </div>
     );
 };
 
