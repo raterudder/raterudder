@@ -1026,7 +1026,7 @@ func TestTesla(t *testing.T) {
 					dateSOECalls[startDate]++
 					switch startDate {
 					case "2026-03-12T00:00:00-05:00":
-						// SOE at 15 min intervals shifted: 10:15=80, 10:30=75, 10:45=70, 11:00=72, 11:15=65, 12:00=68
+						// SOE at 15 min intervals: 10:15=80, 10:30=75, 10:45=70, 11:00=68 (boundary for both Hour 10 and Hour 11), 11:15=65
 						json.NewEncoder(w).Encode(map[string]any{
 							"response": map[string]any{
 								"serial_number": "abc123",
@@ -1035,7 +1035,7 @@ func TestTesla(t *testing.T) {
 									{"timestamp": "2026-03-12T10:15:00-05:00", "soe": 80.0},
 									{"timestamp": "2026-03-12T10:30:00-05:00", "soe": 75.0},
 									{"timestamp": "2026-03-12T10:45:00-05:00", "soe": 70.0},
-									{"timestamp": "2026-03-12T11:00:00-05:00", "soe": 72.0},
+									{"timestamp": "2026-03-12T11:00:00-05:00", "soe": 68.0},
 									{"timestamp": "2026-03-12T11:15:00-05:00", "soe": 65.0},
 									{"timestamp": "2026-03-12T23:15:00-05:00", "soe": 68.0},
 									// bad data
@@ -1094,8 +1094,8 @@ func TestTesla(t *testing.T) {
 			assert.Equal(t, 0.4, s.SolarToGridKWH)
 			assert.Equal(t, 1.8, s.BatteryToHomeKWH)
 			assert.Equal(t, 0.1, s.BatteryToGridKWH)
-			// SOC: min=70 (10:45), max=80 (10:15)
-			assert.Equal(t, 70.0, s.MinBatterySOC)
+			// SOC: min=68 (11:00 end-of-hour boundary), max=80 (10:15)
+			assert.Equal(t, 68.0, s.MinBatterySOC)
 			assert.Equal(t, 80.0, s.MaxBatterySOC)
 
 			// Hour 11: single entry (from 12:00:00 timestamp)
@@ -1107,9 +1107,9 @@ func TestTesla(t *testing.T) {
 			assert.Equal(t, 1.0, s2.GridImportKWH)
 			assert.Equal(t, 1.2, s2.GridExportKWH)
 			assert.Equal(t, 4.8, s2.HomeKWH)
-			// SOC: min=65 (11:15), max=72 (11:00)
+			// SOC: min=65 (11:15), max=68 (11:00 start-of-hour boundary)
 			assert.Equal(t, 65.0, s2.MinBatterySOC)
-			assert.Equal(t, 72.0, s2.MaxBatterySOC)
+			assert.Equal(t, 68.0, s2.MaxBatterySOC)
 
 			// Hour 23
 			s3 := hourly[2]
@@ -1641,7 +1641,7 @@ func TestTesla(t *testing.T) {
 			sched := &types.TOUSchedule{
 				Periods: []types.TOUPeriod{
 					{StartHour: 0, StartMinute: 0, EndHour: 14, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
-					{StartHour: 14, StartMinute: 0, EndHour: 18, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true, ImportDollars: price.ImportRateDollars(), ExportDollars: price.ExportRateDollars()},
+					{StartHour: 14, StartMinute: 0, EndHour: 18, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true, ImportDollars: price.ImportRateDollars(), ExportDollars: price.ExportRateDollars(types.Settings{}, nil)},
 					{StartHour: 18, StartMinute: 0, EndHour: 24, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
 				},
 			}
@@ -2152,7 +2152,7 @@ func TestTesla(t *testing.T) {
 							EndHour:       18,
 							EndMinute:     0,
 							ImportDollars: price.ImportRateDollars(),
-							ExportDollars: price.ExportRateDollars(),
+							ExportDollars: price.ExportRateDollars(types.Settings{}, nil),
 							Peak:          true,
 						},
 						{
@@ -2204,7 +2204,7 @@ func TestTesla(t *testing.T) {
 							EndHour:       18,
 							EndMinute:     0,
 							ImportDollars: price.ImportRateDollars(),
-							ExportDollars: price.ExportRateDollars(),
+							ExportDollars: price.ExportRateDollars(types.Settings{}, nil),
 							Peak:          true,
 						},
 						{
@@ -2256,7 +2256,7 @@ func TestTesla(t *testing.T) {
 							EndHour:       18,
 							EndMinute:     0,
 							ImportDollars: price.ImportRateDollars(),
-							ExportDollars: price.ExportRateDollars(),
+							ExportDollars: price.ExportRateDollars(types.Settings{}, nil),
 							Peak:          true,
 						},
 						{

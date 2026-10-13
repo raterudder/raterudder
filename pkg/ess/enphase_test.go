@@ -208,11 +208,11 @@ func TestEnphase(t *testing.T) {
 				var stats []map[string]any
 				if startDate == "2026-04-13" && endDate == "2026-04-14" {
 					stats = append(stats, map[string]any{
-						"production":      []float64{0, 0, 0, 1000},
-						"consumption":     []float64{0, 0, 0, 0},
-						"solar_home":      []float64{0, 0, 0, 500},
-						"solar_grid":      []float64{0, 0, 0, 500},
-						"soc":             []float64{10, 15, 20, 25},
+						"production":      []float64{0, 0, 0, 1000, 400},
+						"consumption":     []float64{0, 0, 0, 0, 0},
+						"solar_home":      []float64{0, 0, 0, 500, 400},
+						"solar_grid":      []float64{0, 0, 0, 500, 0},
+						"soc":             []float64{10, 15, 20, 25, 28},
 						"start_time":      1776038400, // 2026-04-13T00:00:00Z
 						"interval_length": 900,
 					})
@@ -291,15 +291,21 @@ func TestEnphase(t *testing.T) {
 
 			if assert.Len(t, stats, 1) {
 				assert.Equal(t, start, stats[0].TSDayStart)
-				if assert.Len(t, stats[0].Hourly, 1) {
-					hourStat := stats[0].Hourly[0]
-					assert.Equal(t, start, hourStat.TSHourStart)
-					assert.Equal(t, 1.0, hourStat.SolarKWH)
-					assert.Equal(t, 0.5, hourStat.SolarToHomeKWH)
-					assert.Equal(t, 0.5, hourStat.SolarToGridKWH)
-					assert.Equal(t, 0.5, hourStat.HomeKWH)
-					assert.Equal(t, 10.0, hourStat.MinBatterySOC)
-					assert.Equal(t, 25.0, hourStat.MaxBatterySOC)
+				if assert.Len(t, stats[0].Hourly, 2) {
+					hourStat0 := stats[0].Hourly[0]
+					assert.Equal(t, start, hourStat0.TSHourStart)
+					assert.Equal(t, 1.0, hourStat0.SolarKWH)
+					assert.Equal(t, 0.5, hourStat0.SolarToHomeKWH)
+					assert.Equal(t, 0.5, hourStat0.SolarToGridKWH)
+					assert.Equal(t, 0.5, hourStat0.HomeKWH)
+					// Includes 01:00:00 boundary SOC (28.0) as the end of Hour 0
+					assert.Equal(t, 10.0, hourStat0.MinBatterySOC)
+					assert.Equal(t, 28.0, hourStat0.MaxBatterySOC)
+
+					hourStat1 := stats[0].Hourly[1]
+					assert.Equal(t, start.Add(time.Hour), hourStat1.TSHourStart)
+					assert.Equal(t, 28.0, hourStat1.MinBatterySOC)
+					assert.Equal(t, 28.0, hourStat1.MaxBatterySOC)
 				}
 			}
 		})

@@ -1993,6 +1993,20 @@ func (f *Franklin) aggregatePointsIntoHours(points []franklinEnergyPoint, loc *t
 		s.SolarToBatteryKWH += solarToBat
 		s.SolarToGridKWH += solarToGrid
 
+		// Because each point is shifted back by 1 minute into its preceding interval's
+		// hour bucket, an exact hour-boundary point (e.g. 11:00:00) is assigned to the
+		// previous hour (10:00:00). Include the previous point's SOC when it falls at
+		// the start of this hour so MinBatterySOC/MaxBatterySOC span the full hour.
+		if i > 0 && !points[i-1].Timestamp.In(loc).Before(s.TSHourStart) {
+			prevSOC := points[i-1].BatterySOC
+			if prevSOC < s.MinBatterySOC {
+				s.MinBatterySOC = prevSOC
+			}
+			if prevSOC > s.MaxBatterySOC {
+				s.MaxBatterySOC = prevSOC
+			}
+		}
+
 		if p.BatterySOC < s.MinBatterySOC {
 			s.MinBatterySOC = p.BatterySOC
 		}

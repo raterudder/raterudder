@@ -877,6 +877,26 @@ func parseDailyStats(stat enphaseTodayStats, dayStart time.Time, loc *time.Locat
 
 		if i < len(stat.SOC) && stat.SOC[i] != nil {
 			socVal := *stat.SOC[i]
+			// An exact hour-boundary reading (e.g. 01:00:00) marks both the start of the
+			// new hour and the end of the previous hour. Include it in the previous hour's
+			// bucket as well so MinBatterySOC/MaxBatterySOC cover the full hour.
+			if intervalTime.Equal(hourStart) {
+				prevHourStart := hourStart.Add(-time.Hour)
+				if prevS, prevOK := hourlyStatsMap[prevHourStart]; prevOK {
+					if !hourInitializedSOC[prevHourStart] {
+						prevS.MinBatterySOC = socVal
+						prevS.MaxBatterySOC = socVal
+						hourInitializedSOC[prevHourStart] = true
+					} else {
+						if socVal < prevS.MinBatterySOC {
+							prevS.MinBatterySOC = socVal
+						}
+						if socVal > prevS.MaxBatterySOC {
+							prevS.MaxBatterySOC = socVal
+						}
+					}
+				}
+			}
 			if !hourInitializedSOC[hourStart] {
 				s.MinBatterySOC = socVal
 				s.MaxBatterySOC = socVal

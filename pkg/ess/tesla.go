@@ -1942,13 +1942,33 @@ func (b *Tesla) GetEnergyHistory(ctx context.Context, start, end time.Time) ([]t
 					if tInLoc.After(now) {
 						continue
 					}
-					hourKey := tInLoc.Truncate(time.Hour).Format(time.RFC3339)
+					hourStart := tInLoc.Truncate(time.Hour)
+					// An exact hour-boundary reading (e.g. 11:00:00) marks both the start of the
+					// new hour and the end of the previous hour. Include it in the previous hour's
+					// bucket as well so MinBatterySOC/MaxBatterySOC cover the full hour.
+					if tInLoc.Equal(hourStart) {
+						prevKey := hourStart.Add(-time.Hour).Format(time.RFC3339)
+						if prevS, prevExists := hourlyStats[prevKey]; prevExists {
+							if prevS.MinBatterySOC == 0 && prevS.MaxBatterySOC == 0 {
+								prevS.MinBatterySOC = soeEntry.SOE
+								prevS.MaxBatterySOC = soeEntry.SOE
+							} else {
+								if soeEntry.SOE < prevS.MinBatterySOC {
+									prevS.MinBatterySOC = soeEntry.SOE
+								}
+								if soeEntry.SOE > prevS.MaxBatterySOC {
+									prevS.MaxBatterySOC = soeEntry.SOE
+								}
+							}
+						}
+					}
+					hourKey := hourStart.Format(time.RFC3339)
 
 					s, exists := hourlyStats[hourKey]
 					if !exists {
 						// SOE entry for hour without energy data; create a bucket
 						s = &types.EnergyStats{
-							TSHourStart:   tInLoc.Truncate(time.Hour),
+							TSHourStart:   hourStart,
 							TimeLocation:  loc.String(),
 							MinBatterySOC: soeEntry.SOE,
 							MaxBatterySOC: soeEntry.SOE,

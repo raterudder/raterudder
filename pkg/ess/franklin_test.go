@@ -3179,40 +3179,43 @@ func TestFranklin(t *testing.T) {
 				}
 				assert.Equal(t, "2026-02-01", dayTime, "dayTime should match")
 
-				// Return mock data with 3 timestamps to define 2 intervals in the 12:00 hour
-				// 12:00:00 -> 12:15:00 (15 min = 0.25h)
-				// 12:15:00 -> 13:00:00 (45 min = 0.75h)
+				// Return mock data with 4 timestamps including the 12:00:00 start-of-hour boundary:
+				// 12:00:00 (start of hour boundary, SOC=60.0)
+				// 12:00:00 -> 12:05:00 (5 min, SOC=50.0)
+				// 12:05:00 -> 12:15:00 (10 min, SOC=40.0)
+				// 12:15:00 -> 13:00:00 (45 min, SOC=50.0)
 				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
 					"result": map[string]any{
 						"deviceTimeArray": []string{
+							"2026-02-01 12:00:00",
 							"2026-02-01 12:05:00",
 							"2026-02-01 12:15:00",
 							"2026-02-01 13:00:00",
 						},
 						// SocArray length must match
-						"socArray": []float64{50.0, 40.0, 50.0},
+						"socArray": []float64{60.0, 50.0, 40.0, 50.0},
 						// SolarToHome:
 						// 12:05:00 (period 12:00 to 12:05): 12.0 kW * (5/60) h = 1.0 kWh
 						// 12:15:00 (period 12:05 to 12:15): 0.0 kW * (10/60) h = 0.0 kWh
 						// 13:00:00 (period 12:15 to 13:00): 0.0 kW * (45/60) h = 0.0 kWh
 						// Total = 1.0
-						"powerSolarHomeArray": []float64{12.0, 0.0, 0.0},
+						"powerSolarHomeArray": []float64{0.0, 12.0, 0.0, 0.0},
 
 						// BatteryToHome:
 						// 12:05:00 (period 12:00 to 12:05): 24.0 kW * (5/60) h = 2.0 kWh
 						// 12:15:00 (period 12:05 to 12:15): 18.0 kW * (10/60) h = 3.0 kWh
 						// 13:00:00 (period 12:15 to 13:00): 0.0 kW * (45/60) h = 0.0 kWh
 						// Total = 5.0
-						"powerFhpHomeArray": []float64{24.0, 18.0, 0.0},
+						"powerFhpHomeArray": []float64{0.0, 24.0, 18.0, 0.0},
 
-						// Arrays must be same length (3)
-						"powerSolarGirdArray": []float64{0.0, 0.0, 0.0},
-						"powerSolarFhpArray":  []float64{0.0, 0.0, 0.0},
-						"powerGirdFhpArray":   []float64{0.0, 0.0, 0.0},
-						"powerGirdHomeArray":  []float64{0.0, 0.0, 0.0},
-						"powerFhpGirdArray":   []float64{0.0, 0.0, 0.0},
+						// Arrays must be same length (4)
+						"powerSolarGirdArray": []float64{0.0, 0.0, 0.0, 0.0},
+						"powerSolarFhpArray":  []float64{0.0, 0.0, 0.0, 0.0},
+						"powerGirdFhpArray":   []float64{0.0, 0.0, 0.0, 0.0},
+						"powerGirdHomeArray":  []float64{0.0, 0.0, 0.0, 0.0},
+						"powerFhpGirdArray":   []float64{0.0, 0.0, 0.0, 0.0},
 					},
 				})
 				return
@@ -3251,7 +3254,7 @@ func TestFranklin(t *testing.T) {
 		assert.InDelta(t, 1.0, s.SolarKWH, 0.01, "SolarKWH mismatch")
 		assert.InDelta(t, 5.0, s.BatteryUsedKWH, 0.01, "BatteryUsedKWH mismatch")
 		assert.Equal(t, 40.0, s.MinBatterySOC, "MinBatterySOC mismatch")
-		assert.Equal(t, 50.0, s.MaxBatterySOC, "MaxBatterySOC mismatch")
+		assert.Equal(t, 60.0, s.MaxBatterySOC, "MaxBatterySOC mismatch")
 	})
 
 	t.Run("Authenticate", func(t *testing.T) {
