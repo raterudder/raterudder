@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"math"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -125,12 +124,6 @@ const (
 	// distinction to be meaningful when evaluating rate jumps, standby holds, and decision explanations (e.g. waiting to charge vs charging now).
 	// Differences below 3 cents are typically minor hourly wholesale fluctuations or insignificant tariff riders.
 	priceMaterialityThresholdDollars = 0.03
-
-	// defaultBatteryCyclingHoldHurdleDollars ($0.01/kWh, or 1.0¢/kWh) is the marginal battery cycling
-	// and degradation hurdle applied during forward search when daytime solar refill is projected.
-	// Discharging the battery to save cheap off-peak grid imports is penalized by this amount to prevent
-	// premature cell wear for negligible fractional-cent arbitrage.
-	defaultBatteryCyclingHoldHurdleDollars = 0.01
 
 	// minPeakRateSpreadDollars ($0.10/kWh, or 10¢/kWh) is the minimum required price spread across the planning horizon
 	// before declaring an interval as "peak" in user explanations. This prevents minor off-peak variations or riders
@@ -343,6 +336,7 @@ type actionCandidate struct {
 type precedingAction struct {
 	BatteryMode types.BatteryMode
 	SolarMode   types.SolarMode
+	ActionName  PlanActionName
 	ImportRate  float64
 	ExportRate  float64
 }
@@ -354,11 +348,11 @@ func (c *Controller) toPrecedingAction(action *types.Action, settings types.Sett
 	var importRate, exportRate float64
 	if action.CurrentPrice != nil {
 		importRate = action.CurrentPrice.ImportRateDollars()
-		// calculateExportCredit only inspects allPrices under 1:1 flat net metering (to find the
-		// horizon-wide min/max retail rate); for all other tariffs it simply returns price.ExportRateDollars().
-		// Guarding slice allocation here avoids building an unused []types.Price slice on non-flat-NEM calls.
+		// ExportRateDollars only inspects allPrices under 1:1 flat net metering (to find the
+		// horizon-wide min/max retail rate). Guarding slice allocation here avoids building
+		// an unused []types.Price slice on non-flat-NEM calls.
 		var allPrices []types.Price
-		if isFlatNetMetering(settings.UtilityRateOptions) && len(timeline) > 0 {
+		if settings.UtilityRateOptions.IsFlatNetMetering() && len(timeline) > 0 {
 			allPrices = make([]types.Price, len(timeline))
 			for i := range timeline {
 				if !timeline[i].price.TSStart.IsZero() || !timeline[i].price.TSEnd.IsZero() || timeline[i].price.DollarsPerKWH != 0 || timeline[i].price.GridUseDollarsPerKWH != 0 {
@@ -368,7 +362,7 @@ func (c *Controller) toPrecedingAction(action *types.Action, settings types.Sett
 				}
 			}
 		}
-		exportRate = c.calculateExportCredit(*action.CurrentPrice, settings, allPrices)
+		exportRate = action.CurrentPrice.ExportRateDollars(settings, allPrices)
 	}
 	return precedingAction{
 		BatteryMode: action.BatteryMode,
@@ -382,6 +376,7 @@ func toPrecedingAction(a actionCandidate, prevInterval planInterval) precedingAc
 	return precedingAction{
 		BatteryMode: a.batteryMode,
 		SolarMode:   a.solarMode,
+		ActionName:  a.actionName,
 		ImportRate:  prevInterval.importRate,
 		ExportRate:  prevInterval.exportRate,
 	}
@@ -526,6 +521,8 @@ type planPath struct {
 	initialCandidates []actionCandidate
 	modeScores        map[types.BatteryMode]float64
 	modeStrikes       map[types.BatteryMode]int
+	candScores        map[PlanActionName]float64
+	candStrikes       map[PlanActionName]int
 	bestScore         float64
 	anchors           planningAnchors
 }
@@ -692,16 +689,26 @@ func (p *planPath) executeLogs(ctx context.Context) {
 		for _, cand := range p.initialCandidates {
 			isChosen := cand.batteryMode == chosenAction.batteryMode &&
 				cand.solarMode == chosenAction.solarMode &&
-				cand.reason == chosenAction.reason &&
+				cand.actionName == chosenAction.actionName &&
 				(cand.targetSOC == chosenAction.targetSOC || (cand.batteryMode == types.BatteryModeChargeAny && cand.targetSOC <= 0))
 			if isChosen {
 				continue
 			}
 			logCandidate(ctx, cand, step0LD, step0Interval, step0State, false)
-			score, evaluated := p.modeScores[cand.batteryMode]
+			var score float64
+			var evaluated bool
 			candStrikes := 0
-			if p.modeStrikes != nil {
-				candStrikes = p.modeStrikes[cand.batteryMode]
+			if p.candScores != nil && cand.actionName != "" {
+				score, evaluated = p.candScores[cand.actionName]
+				if p.candStrikes != nil {
+					candStrikes = p.candStrikes[cand.actionName]
+				}
+			}
+			if !evaluated {
+				score, evaluated = p.modeScores[cand.batteryMode]
+				if p.modeStrikes != nil {
+					candStrikes = p.modeStrikes[cand.batteryMode]
+				}
 			}
 			var delta float64
 			if evaluated {
@@ -1355,7 +1362,7 @@ func (c *Controller) buildPlanningTimeline(
 
 			crossesBoundary := false
 			currImport := currentPrice.ImportRateDollars()
-			currExport := c.calculateExportCredit(currentPrice, settings, allPrices)
+			currExport := currentPrice.ExportRateDollars(settings, allPrices)
 			currMinSOC := settings.GetMinBatterySOC(ctx, currentTime, currentTime.Location(), currentPrice)
 			coveredUntil := currentTime
 			if !currentPrice.TSEnd.IsZero() && currentPrice.TSEnd.After(coveredUntil) {
@@ -1371,7 +1378,7 @@ func (c *Controller) buildPlanningTimeline(
 					break
 				}
 				pImport := p.ImportRateDollars()
-				pExport := c.calculateExportCredit(p, settings, allPrices)
+				pExport := p.ExportRateDollars(settings, allPrices)
 				evalTime := p.TSStart
 				if evalTime.Before(currentTime) {
 					evalTime = currentTime
@@ -1501,7 +1508,7 @@ func (c *Controller) buildPlanningTimeline(
 		}
 
 		importRate := currentPrice.ImportRateDollars()
-		exportRate := c.calculateExportCredit(currentPrice, settings, allPrices)
+		exportRate := currentPrice.ExportRateDollars(settings, allPrices)
 		for _, ev := range currentStatus.VPPEvents {
 			if ev.OptOut {
 				continue
@@ -1549,45 +1556,6 @@ func (c *Controller) buildPlanningTimeline(
 	)
 
 	return timeline, simParams, model, nil
-}
-
-// isFlatNetMetering checks if the utility rate structure is flat 1:1 net metering
-// where surplus solar is banked against retail consumption rather than receiving TOU generation credits.
-func isFlatNetMetering(opts types.UtilityRateOptions) bool {
-	scheme := strings.ToLower(strings.TrimSpace(opts.NetMeteringScheme))
-	return opts.NetMeteringCredits || scheme == "net" || scheme == "nem" || scheme == "nem1"
-}
-
-// calculateExportCredit determines the exact credit rate ($/kWh) for energy exported to the grid.
-// Solar and battery exports are valued the same based on the utility tariff.
-func (c *Controller) calculateExportCredit(price types.Price, settings types.Settings, allPrices []types.Price) float64 {
-	// Flat net metering schemes (1:1 NEM, net, or nem1) bank at flat lowest/highest values
-	if isFlatNetMetering(settings.UtilityRateOptions) {
-		switch settings.SolarNetMeteringCreditsValue {
-		case "highest":
-			maxCost := price.DollarsPerKWH + price.GridUseDollarsPerKWH + price.GenerationAdjustmentDollarsPerKWH
-			for _, p := range allPrices {
-				cost := p.DollarsPerKWH + p.GridUseDollarsPerKWH + p.GenerationAdjustmentDollarsPerKWH
-				if cost > maxCost {
-					maxCost = cost
-				}
-			}
-			return maxCost
-		case "none":
-			return 0.0
-		default:
-			// "lowest" conservative default
-			minCost := price.DollarsPerKWH + price.GridUseDollarsPerKWH + price.GenerationAdjustmentDollarsPerKWH
-			for _, p := range allPrices {
-				cost := p.DollarsPerKWH + p.GridUseDollarsPerKWH + p.GenerationAdjustmentDollarsPerKWH
-				if cost < minCost {
-					minCost = cost
-				}
-			}
-			return minCost
-		}
-	}
-	return price.ExportRateDollars()
 }
 
 // detectPlanningAnchors scans the timeline and future prices to locate fixed operational markers
@@ -1931,7 +1899,7 @@ func (c *Controller) appendActionCandidates(
 		defaultSolarMode = types.SolarModeNoExport
 	}
 
-	isFlatNEM := isFlatNetMetering(settings.UtilityRateOptions)
+	isFlatNEM := settings.UtilityRateOptions.IsFlatNetMetering()
 
 	// Determine if direct solar export is enabled. Flat net metering customers bank surplus 1:1 against consumption
 	// and have no incentive to export solar while discharging battery for home load.
@@ -2238,15 +2206,15 @@ func (c *Controller) appendActionCandidates(
 	roomLeftToFill := currentSOC < almostFullSOC
 
 	// Evaluate daytime solar refill:
-	// If daytime solar is expected and tonight's import rate is within minHoldDiff of export credit:
-	// Discharging tonight to save cheap grid power when solar will refill tomorrow causes unnecessary cycling.
+	// If daytime solar is expected and export credit clears tonight's import rate adjusted for round-trip efficiency:
+	// Holding battery charge tonight to export more solar tomorrow is only justified when exportRate >= importRate / roundTripEff.
 	var hasUpcomingSolarRefill bool
 	var refillExportRate float64
 	var earliestSolarRefillTime time.Time
-	if isAboveReserve && roomLeftToFill && settings.GridExportSolar && !isFlatNEM && defaultBatteryCyclingHoldHurdleDollars > 0 {
+	if isAboveReserve && roomLeftToFill && settings.GridExportSolar && !isFlatNEM && roundTripEff > 0 {
 		for i := stepIdx + 1; i < len(timeline); i++ {
 			if timeline[i].solarKWH > minSignificantSolarKW*timeline[i].durationHours &&
-				interval.importRate+defaultBatteryCyclingHoldHurdleDollars <= timeline[i].exportRate+priceEpsilonForEquality {
+				interval.importRate/roundTripEff <= timeline[i].exportRate+priceEpsilonForEquality {
 				hasUpcomingSolarRefill = true
 				refillExportRate = timeline[i].exportRate
 				earliestSolarRefillTime = timeline[i].startTime
@@ -2427,7 +2395,9 @@ func (c *Controller) appendActionCandidates(
 
 			gridChargeDegradation := max(priceEpsilonForEquality, optParams.GridChargeDegradationDollarsPerKWH)
 			solarExportDegradation := max(priceEpsilonForEquality, optParams.SolarExportDegradationDollarsPerKWH)
-			batteryExportDegradation := max(solarExportDegradation, optParams.BatteryExportDegradationDollarsPerKWH)
+			// BatteryExportDegradationDollarsPerKWH is the full round-trip cycle hurdle, and grid charging
+			// already pays gridChargeDegradation, so we subtract gridChargeDegradation for the export half-cycle.
+			batteryExportDegradation := max(0.0, optParams.BatteryExportDegradationDollarsPerKWH-gridChargeDegradation)
 			rechargeCost := interval.importRate
 			if roundTripEff > 0 && roundTripEff <= 1.0 {
 				rechargeCost = interval.importRate / roundTripEff
@@ -2444,7 +2414,8 @@ func (c *Controller) appendActionCandidates(
 				// 1. Direct battery export arbitrage: charging now to export stored battery energy to the grid at high export rates.
 				// Evaluated post-losses (rechargeCost = importRate / roundTripEff) because energy passes through the battery
 				// electrochemically; round-trip conversion losses plus both half-cycle wear costs (gridChargeDegradation +
-				// batteryExportDegradation) must be overcome to guarantee the homeowner achieves the configured profit margin.
+				// batteryExportDegradation = BatteryExportDegradationDollarsPerKWH full-cycle hurdle) must be overcome to
+				// guarantee the homeowner achieves the configured profit margin.
 				// Note: canExport is intentionally not checked here because current SOC may be low/empty right now;
 				// the purpose of pre-charging is to add energy so that canExport becomes true when reaching step i.
 				canBatteryExportAhead := settings.ManageTOUSchedules && settings.GridExportBatteries && !isFlatNEM && canCompleteBeforeVPPRecharge
@@ -2464,7 +2435,7 @@ func (c *Controller) appendActionCandidates(
 				// penalty here would double-count battery losses and be overly conservative.
 				canSolarExportAhead := canCompleteBeforeVPPRecharge && settings.GridExportSolar && !isFlatNEM &&
 					timeline[i].solarKWH > minSignificantSolarKW*timeline[i].durationHours &&
-					timeline[i].exportRate-interval.importRate >= solarExportDegradation
+					timeline[i].exportRate-interval.importRate >= max(gridChargeDegradation, solarExportDegradation)
 				if canSolarExportAhead {
 					futureExportRate = timeline[i].exportRate
 					hasArbitrageAhead = true
@@ -2485,32 +2456,48 @@ func (c *Controller) appendActionCandidates(
 				}
 			}
 
-			// When both an upcoming VPP event and an upcoming arbitrage/peak rate exist, consolidate
-			// into a single BatteryModeChargeAny candidate to prevent redundant state-space expansion.
+			samePriceAsPrev := math.Abs(prevAction.ImportRate-interval.importRate) <= priceEpsilonForEquality &&
+				math.Abs(prevAction.ExportRate-interval.exportRate) <= priceEpsilonForEquality
+			prevWasReserveCharge := samePriceAsPrev && prevAction.ActionName == PlanActionReserveTargetCharge
+			prevWasArbitrageOrVPPCharge := samePriceAsPrev &&
+				(prevAction.ActionName == PlanActionGridArbitragePreCharge || prevAction.ActionName == PlanActionVPPPreChargeBeforeDeadline)
+
 			// Target reserve recharge: if currentSOC is below the interval's target reserve (e.g. during
-			// a scheduled off-peak charging window), offer ChargeAny to bring battery back up to the
-			// configured reserve.
+			// a scheduled off-peak charging window or when the reserve floor steps up), offer a
+			// ChargeAny candidate capped at the configured reserve floor so the DP can restore reserve
+			// without being forced to overcharge for the full 20-minute interval when solar or a cheaper
+			// window will fill the rest.
 			hasReserveCharge := currentSOC < interval.minSOC-reserveFloorTolerancePct
-			if hasArbitrageAhead || hasVPPAhead || hasReserveCharge {
+			reserveTargetSOC := int(math.Round(interval.minSOC))
+			hasReserveCandidate := false
+			if hasReserveCharge && currentSOC < float64(reserveTargetSOC) && !prevWasArbitrageOrVPPCharge {
+				candidates = append(candidates, actionCandidate{
+					batteryMode: types.BatteryModeChargeAny,
+					solarMode:   defaultSolarMode,
+					reason:      types.ActionReasonDeficitChargeNow,
+					description: "Charging battery to target reserve.",
+					actionName:  PlanActionReserveTargetCharge,
+					targetSOC:   reserveTargetSOC,
+					isTruePeak:  isTruePeak,
+				})
+				hasReserveCandidate = true
+			}
+
+			// When both an upcoming VPP event and an upcoming arbitrage/peak rate exist, consolidate
+			// into a single arbitrage/VPP BatteryModeChargeAny candidate to prevent redundant state-space expansion.
+			// Skip if the preceding interval in the same price window already elected the reserve-capped charge candidate.
+			if (hasArbitrageAhead || hasVPPAhead) && !prevWasReserveCharge {
 				selectedReason := types.ActionReasonVPPPrep
 				selectedDesc := "VPP Pre-charging before deadline."
 				selectedTargetSOC := 0
 
-				if hasReserveCharge {
-					selectedReason = types.ActionReasonDeficitChargeNow
-					selectedDesc = "Charging battery to target reserve."
-					if !hasArbitrageAhead && !hasVPPAhead {
-						selectedTargetSOC = int(math.Round(interval.minSOC))
-					}
-				} else if hasArbitrageAhead && (!hasVPPAhead || earliestArbitrageTime.Before(nearestVPPRechargeDeadline)) {
+				if hasArbitrageAhead && (!hasVPPAhead || earliestArbitrageTime.Before(nearestVPPRechargeDeadline)) {
 					selectedReason = chargeReason
 					selectedDesc = chargeDesc
 				}
 
 				var actionName PlanActionName
-				if hasReserveCharge {
-					actionName = PlanActionReserveTargetCharge
-				} else if selectedReason == chargeReason {
+				if selectedReason == chargeReason {
 					actionName = PlanActionGridArbitragePreCharge
 					ld.rechargeCost = rechargeCost
 					ld.futureExportRate = futureExportRate
@@ -2581,7 +2568,8 @@ func (c *Controller) appendActionCandidates(
 					}
 				}
 
-				if selectedTargetSOC == 0 || currentSOC < float64(selectedTargetSOC) {
+				canExceedReserve := !hasReserveCandidate || selectedTargetSOC == 0 || selectedTargetSOC > reserveTargetSOC
+				if canExceedReserve && (selectedTargetSOC == 0 || currentSOC < float64(selectedTargetSOC)) {
 					candidates = append(candidates, actionCandidate{
 						batteryMode: types.BatteryModeChargeAny,
 						solarMode:   defaultSolarMode,
@@ -2606,6 +2594,17 @@ func (c *Controller) appendActionCandidates(
 		for i := stepIdx; i < len(timeline); i++ {
 			if timeline[i].importRate < minAlternativeValue {
 				minAlternativeValue = timeline[i].importRate
+			}
+			// When surplus solar is available ahead, refilling the battery only costs the foregone solar
+			// export credit (or $0 if solar export is disabled) rather than the retail grid import rate.
+			if timeline[i].solarKWH-timeline[i].loadKWH >= minSignificantSolarKW*timeline[i].durationHours {
+				solarRefillCost := max(0.0, timeline[i].exportRate)
+				if !settings.GridExportSolar {
+					solarRefillCost = 0.0
+				}
+				if solarRefillCost < minAlternativeValue {
+					minAlternativeValue = solarRefillCost
+				}
 			}
 		}
 	} else if minAlternativeValue <= 0 {
@@ -2636,7 +2635,7 @@ func (c *Controller) appendActionCandidates(
 
 	// Branch E: Battery Grid Export Dump (Opportunity cost of home offset + degradation hurdle)
 	if settings.ManageTOUSchedules && settings.GridExportBatteries && !isFlatNEM && canBatteryExport && beforeVPPRechargeDeadline && interval.exportRate > 0 {
-		cycleHurdle := max(priceEpsilonForEquality, optParams.BatteryExportDegradationDollarsPerKWH, optParams.SolarExportDegradationDollarsPerKWH)
+		cycleHurdle := max(priceEpsilonForEquality, optParams.BatteryExportDegradationDollarsPerKWH)
 
 		// Export is a viable candidate if export rate beats the replacement cost by at least the degradation hurdle
 		if interval.exportRate >= (rechargeCost + cycleHurdle) {
@@ -2998,6 +2997,8 @@ func (c *Controller) searchOptimalPlan(
 	modeBestScores := make(map[types.BatteryMode]float64)
 	modeBestStrikes := make(map[types.BatteryMode]int)
 	modeBestPaths := make(map[types.BatteryMode]modeBestTrajectory)
+	candBestScores := make(map[PlanActionName]float64)
+	candBestStrikes := make(map[PlanActionName]int)
 	totalPathsEvaluated := 0
 
 	optParams := settings.GetOptimizationParams()
@@ -3009,24 +3010,10 @@ func (c *Controller) searchOptimalPlan(
 	}
 	gridChargeDegradation := max(priceEpsilonForEquality, optParams.GridChargeDegradationDollarsPerKWH)
 	solarExportDegradation := max(priceEpsilonForEquality, optParams.SolarExportDegradationDollarsPerKWH)
-	batteryExportDegradation := max(solarExportDegradation, optParams.BatteryExportDegradationDollarsPerKWH)
-	isFlatNEM := isFlatNetMetering(settings.UtilityRateOptions)
-
-	// Pre-calculate whether daytime solar refill is projected ahead for each timeline interval
-	// Discharging is only penalized if tonight's import rate is within
-	// defaultBatteryCyclingHoldHurdleDollars of daytime solar export credit.
-	solarRefillAhead := make([]bool, len(timeline))
-	if settings.GridExportSolar && !isFlatNEM {
-		for i := 0; i < len(timeline); i++ {
-			for j := i + 1; j < len(timeline); j++ {
-				if timeline[j].solarKWH > minSignificantSolarKW*timeline[j].durationHours &&
-					timeline[i].importRate+defaultBatteryCyclingHoldHurdleDollars <= timeline[j].exportRate+priceEpsilonForEquality {
-					solarRefillAhead[i] = true
-					break
-				}
-			}
-		}
-	}
+	// BatteryExportDegradationDollarsPerKWH is the full round-trip cycle hurdle, and grid charging
+	// already pays gridChargeDegradation, so we subtract gridChargeDegradation for the export half-cycle.
+	batteryExportDegradation := max(0.0, optParams.BatteryExportDegradationDollarsPerKWH-gridChargeDegradation)
+	isFlatNEM := settings.UtilityRateOptions.IsFlatNetMetering()
 
 	// Pre-calculate whether each interval falls within the final chargeCompletionBufferDuration (40 minutes)
 	// before a material import rate increase (> priceMaterialityThresholdDollars). Charging within this
@@ -3250,12 +3237,6 @@ func (c *Controller) searchOptimalPlan(
 
 					nextState, metrics := stepPhysics(parent.state, cand, interval, settings, roundTripEff)
 
-					var holdCost float64
-					if cand.batteryMode == types.BatteryModeLoad && cand.solarMode != types.SolarModeExport &&
-						settings.GridExportSolar && !isFlatNEM && solarRefillAhead[stepIdx] && parent.state.soc < almostFullSOC {
-						holdCost = metrics.batSuppliedHomeKWH * defaultBatteryCyclingHoldHurdleDollars
-					}
-
 					var transitionCost float64
 					if stepIdx == 0 {
 						// Inertia penalty: if switching away from lastAction at step 0, add default penalty
@@ -3297,7 +3278,8 @@ func (c *Controller) searchOptimalPlan(
 					// 1. Direct Battery Export (BatteryModeExport):
 					//    Discharges stored battery energy directly into the grid at maximum inverter power (0.5C–1.0C).
 					//    100% of exported battery energy is measured in metrics.batExportKWH at the export step and
-					//    penalized by batteryExportDegradation = max(BatteryExportDegradationDollarsPerKWH, SolarExportDegradationDollarsPerKWH).
+					//    penalized by batteryExportDegradation = max(0, BatteryExportDegradationDollarsPerKWH - gridChargeDegradation),
+					//    so that gridChargeDegradation + batteryExportDegradation equals the full round-trip cycle hurdle.
 					//
 					// 2. Direct Solar Export (BatteryModeLoad + SolarModeExport):
 					//    Exports rooftop solar to the grid while discharging the battery to cover daytime home load
@@ -3308,14 +3290,15 @@ func (c *Controller) searchOptimalPlan(
 					// 3. Grid Charging Above Reserve (BatteryModeChargeAny):
 					//    Any discretionary grid charging above the homeowner's reserve floor (gridChargeAboveReserveKWH)
 					//    cycles the battery at high inverter charge power (~0.3C–0.5C). Applying gridChargeDegradation
-					//    (GridChargeDegradationDollarsPerKWH) unconditionally at the charge step ensures that:
+					//    (GridChargeDegradationDollarsPerKWH) scaled by roundTripEff (so it is per delivered AC kWh, matching
+					//    exportDegradationCost and candidate generation) unconditionally at the charge step ensures that:
 					//    - Pre-charging from the grid to cover later peak home loads only wins if the net price savings
 					//      exceed both round-trip efficiency losses and the grid charge degradation cost ($0.02/kWh).
 					//    - Pre-charging from the grid so the battery enters daytime solar already full (forcing daytime
 					//      solar to overflow to the grid during normal SolarModeAny) also pays the degradation cost ($0.02/kWh)
 					//      on every kWh of grid charge without needing any candidate-level arbitrage classification.
 					//    - Pre-charging from the grid to export from the battery later pays both half-cycle costs
-					//      ($0.02/kWh on grid charge + $0.05/kWh on battery export = $0.07/kWh full-cycle wear hurdle).
+					//      ($0.02/kWh on grid charge + $0.01/kWh on battery export = $0.03/kWh full-cycle wear hurdle in balanced).
 					//    - Even during slightly negative prices (e.g. -$0.005/kWh), the DP will charge if the stored energy
 					//      offsets normal retail rates later, but will stay in Standby if free solar would have filled the
 					//      battery anyway and the total gain across the horizon is less than $0.02/kWh.
@@ -3333,7 +3316,7 @@ func (c *Controller) searchOptimalPlan(
 						reserveDeficitEnergyKWH := max(0.0, reserveKWH-parent.state.energyKWH)
 						gridChargeForReserveKWH := min(metrics.gridChargeKWH, reserveDeficitEnergyKWH/oneWayEff)
 						gridChargeAboveReserveKWH := max(0.0, metrics.gridChargeKWH-gridChargeForReserveKWH)
-						chargeDegradationCost = gridChargeAboveReserveKWH * gridChargeDegradation
+						chargeDegradationCost = gridChargeAboveReserveKWH * roundTripEff * gridChargeDegradation
 					}
 
 					// Penalizes idling or running below the configured reserve floor (interval.minSOC) without recharging.
@@ -3366,7 +3349,7 @@ func (c *Controller) searchOptimalPlan(
 						lateChargeBufferCost = metrics.gridChargeKWH * oneWayEff * lateChargeBufferPenaltyPerKWH
 					}
 
-					newCost := parent.totalCost + metrics.costDollars + exportDegradationCost + chargeDegradationCost + holdCost + transitionCost + lateChargeBufferCost + (nextState.energyKWH * interval.durationHours * batteryHoldingCostPerHourPerKWH)
+					newCost := parent.totalCost + metrics.costDollars + exportDegradationCost + chargeDegradationCost + transitionCost + lateChargeBufferCost + (nextState.energyKWH * interval.durationHours * batteryHoldingCostPerHourPerKWH)
 
 					var strikeInc int
 					// Check VPP deadline feasibility: apply strikes for nearest upcoming event deadline
@@ -3584,12 +3567,26 @@ func (c *Controller) searchOptimalPlan(
 		}
 
 		if bestNodeForCand != nil {
+			if cand0.actionName != "" {
+				candBestScores[cand0.actionName] = bestScoreForCand
+				candBestStrikes[cand0.actionName] = bestStrikesForCand
+			}
 			prevStrikes, exists := modeBestStrikes[cand0.batteryMode]
 			prevScore := modeBestScores[cand0.batteryMode]
 			isBetter := !exists || bestStrikesForCand < prevStrikes || (bestStrikesForCand == prevStrikes && bestScoreForCand < prevScore-planScoreTieEpsilon)
 			if !isBetter && exists && bestStrikesForCand == prevStrikes && math.Abs(bestScoreForCand-prevScore) <= planScoreTieEpsilon {
-				// Tie-breaker: prefer candidate matching lastAction to avoid unnecessary step-0 mode switches
-				if lastAction != nil && cand0.batteryMode == lastAction.BatteryMode && cand0.solarMode == lastAction.SolarMode {
+				prevTraj := modeBestPaths[cand0.batteryMode]
+				var prevCand actionCandidate
+				if len(prevTraj.actions) > 0 {
+					prevCand = prevTraj.actions[0]
+				}
+				// Tie-breaker: prefer PlanActionReserveTargetCharge over unconstrained charging on ties;
+				// otherwise prefer candidate matching lastAction to avoid unnecessary step-0 mode switches.
+				if cand0.actionName == PlanActionReserveTargetCharge && prevCand.actionName != PlanActionReserveTargetCharge {
+					isBetter = true
+				} else if prevCand.actionName != PlanActionReserveTargetCharge &&
+					lastAction != nil && cand0.batteryMode == lastAction.BatteryMode && cand0.solarMode == lastAction.SolarMode &&
+					(prevCand.batteryMode != lastAction.BatteryMode || prevCand.solarMode != lastAction.SolarMode) {
 					isBetter = true
 				}
 			}
@@ -3813,6 +3810,8 @@ func (c *Controller) searchOptimalPlan(
 		initialCandidates: candidates0,
 		modeScores:        modeBestScores,
 		modeStrikes:       modeBestStrikes,
+		candScores:        candBestScores,
+		candStrikes:       candBestStrikes,
 		bestScore:         bestOverallScore,
 		anchors:           anchors,
 	}

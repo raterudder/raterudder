@@ -558,21 +558,24 @@ func TestGetOptimizationParams(t *testing.T) {
 		s := Settings{}
 		params := s.GetOptimizationParams()
 		assert.Equal(t, 0.90, params.RoundTripEfficiency)
-		assert.Equal(t, 0.07, params.BatteryExportDegradationDollarsPerKWH)
+		assert.Equal(t, 0.005, params.SolarExportDegradationDollarsPerKWH)
+		assert.Equal(t, 0.03, params.BatteryExportDegradationDollarsPerKWH)
 	})
 
 	t.Run("ConservativeProfile", func(t *testing.T) {
 		s := Settings{OptimizationProfile: "conservative"}
 		params := s.GetOptimizationParams()
 		assert.Equal(t, 0.90, params.RoundTripEfficiency)
-		assert.Equal(t, 0.07, params.BatteryExportDegradationDollarsPerKWH)
+		assert.Equal(t, 0.01, params.SolarExportDegradationDollarsPerKWH)
+		assert.Equal(t, 0.04, params.BatteryExportDegradationDollarsPerKWH)
 	})
 
 	t.Run("AggressiveProfile", func(t *testing.T) {
 		s := Settings{OptimizationProfile: "aggressive"}
 		params := s.GetOptimizationParams()
 		assert.Equal(t, 0.92, params.RoundTripEfficiency)
-		assert.Equal(t, 0.05, params.BatteryExportDegradationDollarsPerKWH)
+		assert.Equal(t, 0.005, params.SolarExportDegradationDollarsPerKWH)
+		assert.Equal(t, 0.02, params.BatteryExportDegradationDollarsPerKWH)
 	})
 
 	t.Run("MinBatteryExportDifferenceOverride", func(t *testing.T) {

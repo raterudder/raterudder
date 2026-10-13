@@ -38,6 +38,7 @@ var fileBaselines = map[string]float64{
 	"site8_june.json":       -9.229,
 	"site9_september.json":  0.097,
 	"site10_september.json": 20.782,
+	"site11_october.json":   4.698,
 }
 
 func findEnergyStats(history []types.DailyEnergyStats, ts time.Time, loc *time.Location) (types.EnergyStats, bool) {
@@ -211,6 +212,11 @@ func TestDecideHistory(t *testing.T) {
 				settings.MinBatterySOC = 20
 				settings.GridChargeBatteries = false
 				settings.GridExportBatteries = true
+				settings.ManageTOUSchedules = true
+			} else if dataset.SiteID == "site11" {
+				settings.MinBatterySOC = 20
+				settings.GridExportBatteries = true
+				settings.ManageTOUSchedules = true
 			}
 
 			// Filter actions that fall within the simulation range

@@ -20,21 +20,22 @@ var planBaselines = map[string]float64{
 	"site1_march.json":      -4.271,
 	"site1_may.json":        -16.013,
 	"site1_september.json":  37.302,
-	"site2_april.json":      0.409,
+	"site2_april.json":      0.257,
 	"site2_march.json":      9.182,
 	"site2_may.json":        1.269,
-	"site2_september.json":  0.560,
-	"site3_march.json":      -1.994,
+	"site2_september.json":  0.515,
+	"site3_march.json":      -2.012,
 	"site3_may.json":        -6.952,
-	"site4_late-may.json":   0.345,
+	"site4_late-may.json":   0.353,
 	"site4_may.json":        1.857,
 	"site4_september.json":  -4.574,
-	"site5_june.json":       18.326,
-	"site5_september.json":  14.175,
+	"site5_june.json":       18.252,
+	"site5_september.json":  14.111,
 	"site7_june.json":       30.944,
 	"site8_june.json":       -10.810,
-	"site9_september.json":  -16.724,
-	"site10_september.json": 20.192,
+	"site9_september.json":  -16.733,
+	"site10_september.json": 2.675,
+	"site11_october.json":   -14.782,
 }
 
 // TestPlanHistory evaluates the new Plan engine against real-world recorded site history datasets
@@ -163,6 +164,11 @@ func TestPlanHistory(t *testing.T) {
 				settings.MinBatterySOC = 20
 				settings.GridChargeBatteries = false
 				settings.GridExportBatteries = true
+				settings.ManageTOUSchedules = true
+			} else if dataset.SiteID == "site11" {
+				settings.MinBatterySOC = 20
+				settings.GridExportBatteries = true
+				settings.ManageTOUSchedules = true
 			}
 
 			// Adjust simStart to the hour of the first action to align the evaluation window

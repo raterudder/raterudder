@@ -476,10 +476,10 @@ type OptimizationParams struct {
 }
 
 // GetOptimizationParams returns the physical round-trip efficiency (η), active reserve buffer (%),
-// cloud cover derating (%), and half-cycle battery degradation costs ($/kWh) associated with the configured OptimizationProfile.
-// Note that GridChargeDegradationDollarsPerKWH ($0.02) and BatteryExportDegradationDollarsPerKWH ($0.07) are additive across
-// a full grid-charge-to-battery-export cycle ($0.02 + $0.07 = $0.09/kWh total cycle hurdle in balanced/conservative,
-// and $0.01 + $0.05 = $0.06/kWh in aggressive).
+// cloud cover derating (%), and battery degradation costs ($/kWh) associated with the configured OptimizationProfile.
+// BatteryExportDegradationDollarsPerKWH represents the full round-trip cycle degradation hurdle ($0.04 conservative,
+// $0.03 balanced, $0.02 aggressive); when evaluating battery exports, GridChargeDegradationDollarsPerKWH is subtracted
+// from BatteryExportDegradationDollarsPerKWH at the export step so the total cycle hurdle equals BatteryExportDegradationDollarsPerKWH.
 func (s Settings) GetOptimizationParams() OptimizationParams {
 	var params OptimizationParams
 	switch strings.ToLower(s.OptimizationProfile) {
@@ -492,8 +492,8 @@ func (s Settings) GetOptimizationParams() OptimizationParams {
 			VPPChargingBufferMinutes:              40,
 			CloudCoverDeratePercent:               10.0,
 			GridChargeDegradationDollarsPerKWH:    0.02,
-			SolarExportDegradationDollarsPerKWH:   0.02,
-			BatteryExportDegradationDollarsPerKWH: 0.07,
+			SolarExportDegradationDollarsPerKWH:   0.01,
+			BatteryExportDegradationDollarsPerKWH: 0.04,
 		}
 	case "aggressive":
 		params = OptimizationParams{
@@ -504,8 +504,8 @@ func (s Settings) GetOptimizationParams() OptimizationParams {
 			VPPChargingBufferMinutes:              10,
 			CloudCoverDeratePercent:               0.0,
 			GridChargeDegradationDollarsPerKWH:    0.01,
-			SolarExportDegradationDollarsPerKWH:   0.01,
-			BatteryExportDegradationDollarsPerKWH: 0.05,
+			SolarExportDegradationDollarsPerKWH:   0.005,
+			BatteryExportDegradationDollarsPerKWH: 0.02,
 		}
 	default:
 		params = OptimizationParams{
@@ -516,8 +516,8 @@ func (s Settings) GetOptimizationParams() OptimizationParams {
 			VPPChargingBufferMinutes:              20,
 			CloudCoverDeratePercent:               5.0,
 			GridChargeDegradationDollarsPerKWH:    0.02,
-			SolarExportDegradationDollarsPerKWH:   0.02,
-			BatteryExportDegradationDollarsPerKWH: 0.07,
+			SolarExportDegradationDollarsPerKWH:   0.005,
+			BatteryExportDegradationDollarsPerKWH: 0.03,
 		}
 	}
 

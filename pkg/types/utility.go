@@ -2,6 +2,7 @@ package types
 
 import (
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -114,9 +115,34 @@ func (p Price) ImportRateDollars() float64 {
 	return p.DollarsPerKWH + p.GridUseDollarsPerKWH
 }
 
-// ExportRateDollars returns the credit per kWh in dollars for exporting electricity to the grid.
-// This does NOT take into account true net-metering.
-func (p Price) ExportRateDollars() float64 {
+// ExportRateDollars returns the credit per kWh in dollars for exporting electricity to the grid,
+// taking into account flat 1:1 net metering valuation across allPrices when configured in settings.
+func (p Price) ExportRateDollars(settings Settings, allPrices []Price) float64 {
+	if settings.UtilityRateOptions.IsFlatNetMetering() {
+		switch settings.SolarNetMeteringCreditsValue {
+		case "highest":
+			maxCost := p.DollarsPerKWH + p.GridUseDollarsPerKWH + p.GenerationAdjustmentDollarsPerKWH
+			for _, other := range allPrices {
+				cost := other.DollarsPerKWH + other.GridUseDollarsPerKWH + other.GenerationAdjustmentDollarsPerKWH
+				if cost > maxCost {
+					maxCost = cost
+				}
+			}
+			return maxCost
+		case "none":
+			return 0.0
+		default:
+			// "lowest" conservative default
+			minCost := p.DollarsPerKWH + p.GridUseDollarsPerKWH + p.GenerationAdjustmentDollarsPerKWH
+			for _, other := range allPrices {
+				cost := other.DollarsPerKWH + other.GridUseDollarsPerKWH + other.GenerationAdjustmentDollarsPerKWH
+				if cost < minCost {
+					minCost = cost
+				}
+			}
+			return minCost
+		}
+	}
 	if p.SeparateGenerationCredit {
 		return p.GenerationCreditDollarsPerKWH
 	}
@@ -135,6 +161,13 @@ type UtilityRateOptions struct {
 	EVCredit             bool   `json:"evCredit,omitempty"`
 	VPPProgram           string `json:"vppProgram,omitempty"`
 	ApplicationYear      string `json:"applicationYear,omitempty"`
+}
+
+// IsFlatNetMetering checks if the utility rate structure is flat 1:1 net metering
+// where surplus solar is banked against retail consumption rather than receiving TOU generation credits.
+func (opts UtilityRateOptions) IsFlatNetMetering() bool {
+	scheme := strings.ToLower(strings.TrimSpace(opts.NetMeteringScheme))
+	return opts.NetMeteringCredits || scheme == "net" || scheme == "nem" || scheme == "nem1"
 }
 
 type UtilityHourPeriod struct {
