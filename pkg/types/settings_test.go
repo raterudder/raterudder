@@ -564,7 +564,7 @@ func TestGetOptimizationParams(t *testing.T) {
 	t.Run("ConservativeProfile", func(t *testing.T) {
 		s := Settings{OptimizationProfile: "conservative"}
 		params := s.GetOptimizationParams()
-		assert.Equal(t, 0.85, params.RoundTripEfficiency)
+		assert.Equal(t, 0.90, params.RoundTripEfficiency)
 		assert.Equal(t, 0.07, params.BatteryExportDegradationDollarsPerKWH)
 	})
 

@@ -937,9 +937,9 @@ func TestDetectPlanningAnchors(t *testing.T) {
 	t.Run("PostHorizonLoadForecast", func(t *testing.T) {
 		t.Parallel()
 
-		tEnd := now.Add(6 * time.Hour)
+		tEnd := time.Date(2026, 7, 10, 6, 0, 0, 0, chicagoLoc)
 		timeline := []planInterval{
-			{startTime: now, endTime: tEnd, importRate: 0.10},
+			{startTime: tEnd.Add(-6 * time.Hour), endTime: tEnd, importRate: 0.10},
 		}
 
 		mockModel := make([]TimeProfile, 24)
@@ -947,9 +947,48 @@ func TestDetectPlanningAnchors(t *testing.T) {
 			mockModel[h] = TimeProfile{Hour: h, AvgHomeLoadKWH: 1.5}
 		}
 
-		anchors := c.detectPlanningAnchors(timeline, nil, types.SystemStatus{Timestamp: now}, types.Settings{}, mockModel)
-		// 8 hours * 1.5 kWh/hour = 12.0 kWh
-		assert.InDelta(t, 12.0, anchors.postHorizonLoadKWH, 0.001, "must forecast 8 hours of home consumption from model")
+		anchors := c.detectPlanningAnchors(timeline, nil, types.SystemStatus{Timestamp: tEnd.Add(-6 * time.Hour)}, types.Settings{}, mockModel)
+		// 4 hours * 1.5 kWh/hour = 6.0 kWh
+		if assert.Len(t, anchors.postHorizonSlices, 4) {
+			var totalLoad float64
+			for _, s := range anchors.postHorizonSlices {
+				totalLoad += s.loadKWH
+			}
+			assert.InDelta(t, 6.0, totalLoad, 0.001, "must forecast 4 hours of home consumption from model")
+		}
+
+		// Verify net load (AvgHomeLoadKWH - AvgSolarKWH) paired with per-hour futurePrices and sorted by rate descending
+		solarModel := make([]TimeProfile, 24)
+		for h := 0; h < 24; h++ {
+			solar := 0.0
+			if h >= 8 && h < 14 {
+				solar = 3.0 // Net solar surplus during 08:00-14:00
+			}
+			solarModel[h] = TimeProfile{Hour: h, AvgHomeLoadKWH: 1.0, AvgSolarKWH: solar}
+		}
+		postPrices := []types.Price{
+			{TSStart: tEnd, TSEnd: tEnd.Add(time.Hour), DollarsPerKWH: 0.10},                        // 06:00-07:00: $0.10, netLoad 1.0
+			{TSStart: tEnd.Add(time.Hour), TSEnd: tEnd.Add(2 * time.Hour), DollarsPerKWH: 0.30},     // 07:00-08:00: $0.30, netLoad 1.0
+			{TSStart: tEnd.Add(2 * time.Hour), TSEnd: tEnd.Add(8 * time.Hour), DollarsPerKWH: 0.30}, // 08:00-14:00: $0.30, netLoad <= 0 (sunny)
+		}
+		solarAnchors := c.detectPlanningAnchors(timeline, postPrices, types.SystemStatus{Timestamp: tEnd.Add(-6 * time.Hour)}, types.Settings{}, solarModel)
+		if assert.Len(t, solarAnchors.postHorizonSlices, 2, "sunny post-horizon hours with net solar surplus must not create net load slices") {
+			assert.InDelta(t, 0.30, solarAnchors.postHorizonSlices[0].importRate, 1e-6, "highest-rate post-horizon net load hour must be ordered first")
+			assert.InDelta(t, 1.0, solarAnchors.postHorizonSlices[0].loadKWH, 1e-6)
+			assert.InDelta(t, 0.10, solarAnchors.postHorizonSlices[1].importRate, 1e-6)
+			assert.InDelta(t, 1.0, solarAnchors.postHorizonSlices[1].loadKWH, 1e-6)
+		}
+
+		// Verify brand-new site with no energy history (BuildHourlyEnergyModel returns 24 profiles at the 0.09 kWh standby floor)
+		// falls back to defaultPostHorizonLoadKWH (6.0 kWh / 4h = 1.5 kWh/hr) paired with post-horizon rates
+		emptyModel, _ := c.BuildHourlyEnergyModel(context.Background(), tEnd.Add(-6*time.Hour), nil, nil, types.Settings{})
+		coldStartAnchors := c.detectPlanningAnchors(timeline, postPrices, types.SystemStatus{Timestamp: tEnd.Add(-6 * time.Hour)}, types.Settings{}, emptyModel)
+		if assert.Len(t, coldStartAnchors.postHorizonSlices, 4, "brand-new site with empty energy history must still populate 4 default load slices") {
+			assert.InDelta(t, 0.30, coldStartAnchors.postHorizonSlices[0].importRate, 1e-6)
+			assert.InDelta(t, 1.5, coldStartAnchors.postHorizonSlices[0].loadKWH, 1e-6)
+			assert.InDelta(t, 0.10, coldStartAnchors.postHorizonSlices[3].importRate, 1e-6)
+			assert.InDelta(t, 1.5, coldStartAnchors.postHorizonSlices[3].loadKWH, 1e-6)
+		}
 	})
 
 	t.Run("PeakSurvivalBufferWindows", func(t *testing.T) {
@@ -3634,6 +3673,9 @@ func TestCalculateTerminalValuation(t *testing.T) {
 
 	anchors := planningAnchors{
 		knownPostHorizonRate: 0.08,
+		postHorizonSlices: []postHorizonLoadSlice{
+			{loadKWH: defaultPostHorizonLoadKWH, importRate: 0.08},
+		},
 	}
 
 	capacityKWH := 13.5
@@ -3776,6 +3818,43 @@ func TestCalculateTerminalValuation(t *testing.T) {
 
 		valuation := calculateTerminalValuation(surplusState, negAnchors, settings, nil, capacityKWH, roundTripEff)
 		assert.InDelta(t, 0.0, valuation, 1e-6, "Negative post-horizon rate must be floored at 0.0 so banked energy is never penalized")
+	})
+
+	t.Run("PerHourPostHorizonSlices_ValuesEachSliceAtConsumptionRate", func(t *testing.T) {
+		t.Parallel()
+
+		oneWayEff := math.Sqrt(roundTripEff)
+		targetEnergy := capacityKWH * 0.20 // 2.7 kWh (usable capacity = 10.8 kWh)
+		sliceAnchors := planningAnchors{
+			knownPostHorizonRate:       0.25, // Higher 4h mean than lowest slice (0.10)
+			postHorizonSolarSurplusKWH: 6.8,  // Leaves 10.8 - 6.8 = 4.0 kWh of Tier 2 headroom after morning load drains
+			postHorizonSlices: []postHorizonLoadSlice{
+				{loadKWH: 1.0, importRate: 0.30},
+				{loadKWH: 2.0, importRate: 0.10},
+			},
+		}
+
+		// 1. 2.5 kWh above reserve: 1.0 kWh credited at $0.30 and 1.5 kWh credited at $0.10 (with 0.95 Tier 1 discount)
+		state25 := planState{
+			energyKWH: targetEnergy + 2.5,
+			soc:       ((targetEnergy + 2.5) / capacityKWH) * 100.0,
+		}
+		val25 := calculateTerminalValuation(state25, sliceAnchors, settings, nil, capacityKWH, roundTripEff)
+		expected25 := -((1.0 * 0.30 * oneWayEff * terminalTier1DiscountFactor) + (1.5 * 0.10 * oneWayEff * terminalTier1DiscountFactor))
+		assert.InDelta(t, expected25, val25, 1e-6, "Each post-horizon slice must be valued at the rate of the hour when it is consumed")
+
+		// 2. 6.5 kWh above reserve:
+		// - 3.0 kWh covered by Tier 1 slices (1.0 kWh @ $0.30 + 2.0 kWh @ $0.10)
+		// - Remaining 3.5 kWh <= unfilledBySolarKWH (10.8 - 6.8 = 4.0 kWh), credited at Tier 2 clamped to lowest slice ($0.10 * 0.95 * 0.70)
+		state65 := planState{
+			energyKWH: targetEnergy + 6.5,
+			soc:       ((targetEnergy + 6.5) / capacityKWH) * 100.0,
+		}
+		val65 := calculateTerminalValuation(state65, sliceAnchors, settings, nil, capacityKWH, roundTripEff)
+		tier1Full := (1.0 * 0.30 * oneWayEff * terminalTier1DiscountFactor) + (2.0 * 0.10 * oneWayEff * terminalTier1DiscountFactor)
+		tier2Rate := 0.10 * oneWayEff * terminalTier1DiscountFactor * terminalSurplusDiscountFactor
+		expected65 := -(tier1Full + 3.5*tier2Rate)
+		assert.InDelta(t, expected65, val65, 1e-6, "Tier 2 must clamp base rate to lowest Tier 1 slice and not double-subtract postHorizonLoadKWH from unfilledBySolarKWH")
 	})
 }
 

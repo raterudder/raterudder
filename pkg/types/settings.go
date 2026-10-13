@@ -485,7 +485,7 @@ func (s Settings) GetOptimizationParams() OptimizationParams {
 	switch strings.ToLower(s.OptimizationProfile) {
 	case "conservative":
 		params = OptimizationParams{
-			RoundTripEfficiency:                   0.85,
+			RoundTripEfficiency:                   0.90,
 			ReserveBufferPercent:                  10.0,
 			PeakSurvivalBufferMinutes:             30,
 			SolarCapacityBufferMinutes:            20,

@@ -190,9 +190,9 @@ const (
 	// postHorizonPriceRollupTime is the duration used to blend prices beyond the planning horizon.
 	postHorizonPriceRollupTime = 4 * time.Hour
 
-	// postHorizonLoadForecastHours (8 hours) is the lookahead window used to calculate typical
+	// postHorizonLoadForecastHours (4 hours) is the lookahead window used to calculate typical
 	// household consumption immediately following the planning horizon for terminal battery valuation.
-	postHorizonLoadForecastHours = 8
+	postHorizonLoadForecastHours = 4
 
 	// defaultPostHorizonLoadKWH (6.0 kWh) is the fallback post-horizon household load requirement
 	// used when hourly energy forecast models are unavailable (e.g. unit tests or sparse history),
@@ -443,14 +443,22 @@ type peakWindowAnchor struct {
 	bufferEnergyKWH float64
 }
 
+// postHorizonLoadSlice pairs a forecasted post-horizon net load requirement (kWh)
+// with the import rate ($/kWh) of the hour in which it is consumed.
+type postHorizonLoadSlice struct {
+	loadKWH    float64
+	importRate float64
+}
+
 // planningAnchors holds fixed operational markers detected across the horizon.
 type planningAnchors struct {
-	vppEvents            []vppAnchor
-	knownPostHorizonRate float64 // Known rate at H+1 if tariff has a fixed weekly schedule
-	minHorizonImportRate float64
-	maxHorizonImportRate float64
-	peakWindows          []peakWindowAnchor
-	postHorizonLoadKWH   float64
+	vppEvents                  []vppAnchor
+	knownPostHorizonRate       float64 // Known rate at H+1 if tariff has a fixed weekly schedule
+	minHorizonImportRate       float64
+	maxHorizonImportRate       float64
+	peakWindows                []peakWindowAnchor
+	postHorizonSolarSurplusKWH float64
+	postHorizonSlices          []postHorizonLoadSlice
 }
 
 // minDeficitPriceSpread returns the minimum price spread ($/kWh) required for an economic peak.
@@ -1666,13 +1674,80 @@ func (c *Controller) detectPlanningAnchors(
 	// calculateTerminalValuation and shrink maxAllowedEffCost below minEffCost during DP frontier pruning.
 	anchors.knownPostHorizonRate = max(0.0, anchors.knownPostHorizonRate)
 
-	// Calculate forecasted post-horizon home load (across 8 hours) for two-tier terminal valuation.
-	if len(model) > 0 {
-		for h := 0; h < postHorizonLoadForecastHours; h++ {
-			t := horizonEnd.Add(time.Duration(h) * time.Hour)
-			anchors.postHorizonLoadKWH += findTimeProfile(model, t).AvgHomeLoadKWH
+	// Calculate forecasted post-horizon net home load slices (across 4 hours) paired with each hour's import rate
+	// for terminal battery valuation. When no historical energy model data is available (nil/empty model or all hours
+	// sitting at BuildHourlyEnergyModel's 0.09 kWh empty-history standby floor), fall back to
+	// defaultPostHorizonLoadKWH distributed evenly across the post-horizon hours.
+	hasLoadModel := false
+	for _, p := range model {
+		if p.AvgHomeLoadKWH > 0.1 {
+			hasLoadModel = true
+			break
 		}
 	}
+	rtEff := optParams.RoundTripEfficiency
+	oneWayEff := math.Sqrt(rtEff)
+	var postHorizonSolarSurplusKWH float64
+	lastHourRate := anchors.knownPostHorizonRate
+	defaultHourlyLoadKWH := defaultPostHorizonLoadKWH / float64(postHorizonLoadForecastHours)
+	for h := 0; h < postHorizonLoadForecastHours; h++ {
+		tStart := horizonEnd.Add(time.Duration(h) * time.Hour)
+		tEnd := tStart.Add(time.Hour)
+
+		var weightedSum, overlapHrs float64
+		for _, p := range futurePrices {
+			if p.TSEnd.After(tStart) && p.TSStart.Before(tEnd) {
+				oStart := p.TSStart
+				if tStart.After(oStart) {
+					oStart = tStart
+				}
+				oEnd := p.TSEnd
+				if tEnd.Before(oEnd) {
+					oEnd = tEnd
+				}
+				dur := oEnd.Sub(oStart).Hours()
+				if dur > 0 {
+					weightedSum += dur * p.ImportRateDollars()
+					overlapHrs += dur
+				}
+			}
+		}
+		hourRate := lastHourRate
+		if overlapHrs > 0 {
+			hourRate = max(0.0, weightedSum/overlapHrs)
+			lastHourRate = hourRate
+		}
+
+		prof := findTimeProfile(model, tStart)
+		homeLoadKWH := defaultHourlyLoadKWH
+		if hasLoadModel {
+			homeLoadKWH = prof.AvgHomeLoadKWH
+		}
+		netLoadKWH := homeLoadKWH - prof.AvgSolarKWH
+		if netLoadKWH <= 0 {
+			// Convert AC surplus solar into stored DC battery energy via one-way charging efficiency
+			postHorizonSolarSurplusKWH += (-netLoadKWH) * oneWayEff
+			continue
+		}
+		if postHorizonSolarSurplusKWH > 0 {
+			// Discharging stored DC solar energy through the inverter yields postHorizonSolarSurplusKWH * oneWayEff of AC load coverage
+			offsetAC := min(netLoadKWH, postHorizonSolarSurplusKWH*oneWayEff)
+			netLoadKWH -= offsetAC
+			postHorizonSolarSurplusKWH -= offsetAC / oneWayEff
+		}
+		if netLoadKWH > 0 {
+			anchors.postHorizonSlices = append(anchors.postHorizonSlices, postHorizonLoadSlice{
+				loadKWH:    netLoadKWH,
+				importRate: hourRate,
+			})
+		}
+	}
+	anchors.postHorizonSolarSurplusKWH = postHorizonSolarSurplusKWH
+	// Sort slices from highest to lowest rate so banked battery energy is valued against the most
+	// expensive post-horizon hours first (preserving strict concavity of terminal valuation).
+	sort.SliceStable(anchors.postHorizonSlices, func(i, j int) bool {
+		return anchors.postHorizonSlices[i].importRate > anchors.postHorizonSlices[j].importRate
+	})
 
 	// 3. Detect Peak Pricing Windows in Horizon:
 	// A peak pricing window is a contiguous block of intervals where import rates are significantly
@@ -3843,25 +3918,36 @@ func calculateTerminalValuation(
 	}
 
 	// 3. Ending above target reserve: credit for banked energy displacing future imports.
-	// Uses a two-tier concave valuation:
-	// Tier 1: Stored energy up to the forecasted post-horizon home consumption (typically 8 hours)
-	//         displaces grid imports at the baseline replacement rate with a slight 5% time-preference
-	//         discount (0.95x) so certain in-horizon self-consumption at rate R strictly beats hoarding
-	//         energy to T+24h for the same rate R tomorrow.
-	// Tier 2: Surplus energy beyond post-horizon home load is credited with an additional 30% discount
-	//         reflecting diminishing returns and future solar replenishment opportunity.
-	tier1CapacityKWH := anchors.postHorizonLoadKWH
-	if tier1CapacityKWH <= 0 {
-		tier1CapacityKWH = defaultPostHorizonLoadKWH
+	// Uses a multi-slice concave valuation:
+	// Tier 1: Stored energy up to the forecasted post-horizon net home consumption (4 hours)
+	//         is credited against each post-horizon hour's actual import rate (from highest to lowest rate)
+	//         with a 5% time-preference discount (0.95x) so certain in-horizon self-consumption at rate R
+	//         strictly beats hoarding energy to T+24h for the same rate R tomorrow.
+	// Tier 2: Surplus energy beyond all post-horizon net home load is credited at no more than the minimum
+	//         replacement rate with an additional 30% discount reflecting diminishing returns and future
+	//         solar or off-peak replenishment opportunity.
+	remainingKWH := energyDeltaKWH
+	var totalCredit float64
+	for _, slice := range anchors.postHorizonSlices {
+		if remainingKWH <= 0 {
+			break
+		}
+		usedKWH := min(remainingKWH, slice.loadKWH)
+		creditRate := max(0.0, slice.importRate) * oneWayEff * terminalTier1DiscountFactor
+		totalCredit += usedKWH * creditRate
+		remainingKWH -= usedKWH
 	}
-
-	tier1KWH := min(energyDeltaKWH, tier1CapacityKWH)
-	tier2KWH := max(0.0, energyDeltaKWH-tier1CapacityKWH)
-
-	tier1CreditRate := replacementRate * oneWayEff * terminalTier1DiscountFactor
-	tier2CreditRate := tier1CreditRate * terminalSurplusDiscountFactor
-
-	totalCredit := (tier1KWH * tier1CreditRate) + (tier2KWH * tier2CreditRate)
+	if remainingKWH > 0 {
+		usableCapacityKWH := max(0.0, capacityKWH-targetEnergyKWH)
+		unfilledBySolarKWH := max(0.0, usableCapacityKWH-anchors.postHorizonSolarSurplusKWH)
+		tier2KWH := min(remainingKWH, unfilledBySolarKWH)
+		tier2BaseRate := replacementRate
+		if n := len(anchors.postHorizonSlices); n > 0 {
+			tier2BaseRate = min(tier2BaseRate, max(0.0, anchors.postHorizonSlices[n-1].importRate))
+		}
+		tier2CreditRate := tier2BaseRate * oneWayEff * terminalTier1DiscountFactor * terminalSurplusDiscountFactor
+		totalCredit += tier2KWH * tier2CreditRate
+	}
 	return -totalCredit
 }
 
