@@ -89,6 +89,7 @@ func TestHandleUpdate(t *testing.T) {
 	require.NoError(t, err)
 	if assert.NotNil(t, res.Action) {
 		assert.False(t, res.Action.SystemTimestamp.IsZero())
+		assert.Equal(t, 5.0, res.Action.ReserveSOC)
 	}
 
 	t.Run("Handle Update - Auth", func(t *testing.T) {

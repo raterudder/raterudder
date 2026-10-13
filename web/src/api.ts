@@ -181,6 +181,7 @@ export const fetchActions = async (start: Date, end: Date, siteID?: string): Pro
 
 export interface SavingsStats {
     timestamp: string;
+    endTimestamp?: string;
     cost: number;
     credit: number;
     batterySavings: number;
@@ -192,24 +193,15 @@ export interface SavingsStats {
     gridExported: number;
     homeUsed: number;
     batteryUsed: number;
+    totalSavingsDollars?: number;
+    solarAndBatterySavingsDollars?: number;
+    rateRudderSavingsDollars?: number;
+    selfConsumptionCostDollars?: number;
+    selfConsumptionCreditDollars?: number;
+    gridOnlyCostDollars?: number;
+    storedEnergyValueDollars?: number;
+    estimated?: boolean;
 }
-
-export const fetchSavings = async (start: Date, end: Date, siteID?: string): Promise<SavingsStats|null> => {
-    const startStr = start.toISOString();
-    const endStr = end.toISOString();
-    const query = new URLSearchParams({
-        start: startStr,
-        end: endStr,
-    });
-    if (siteID) {
-        query.append('siteID', siteID);
-    }
-    const response = await fetch(`/api/history/savings?${query.toString()}`);
-    if (!response.ok) {
-        throw new Error(await extractError(response, 'Failed to fetch savings'));
-    }
-    return response.json();
-};
 
 export interface UtilityRateOptions {
     generationRate?: string;
@@ -794,12 +786,26 @@ export const submitESSStage = async (ess: string, credentials: Record<string, an
     }
 };
 
+interface SavingsPeriod {
+    start: Date;
+    end: Date;
+}
+
 export interface ActionsAndSavingsResponse {
     actions: Action[];
     savings: SavingsStats;
+    savingsPeriods?: SavingsStats[];
 }
 
-export const fetchActionsAndSavings = async (start: Date, end: Date, siteID?: string): Promise<ActionsAndSavingsResponse> => {
+export const fetchActionsAndSavings = async (
+    start: Date,
+    end: Date,
+    siteID?: string,
+    options?: {
+        newCalculation?: boolean;
+        savingsPeriods?: SavingsPeriod[];
+    }
+): Promise<ActionsAndSavingsResponse> => {
     const startStr = start.toISOString();
     const endStr = end.toISOString();
     const query = new URLSearchParams({
@@ -808,6 +814,15 @@ export const fetchActionsAndSavings = async (start: Date, end: Date, siteID?: st
     });
     if (siteID) {
         query.append('siteID', siteID);
+    }
+    if (options?.newCalculation) {
+        query.append('newCalculation', 'true');
+    }
+    if (options?.savingsPeriods && options.savingsPeriods.length > 0) {
+        const periodsParam = options.savingsPeriods
+            .map(p => `${p.start.toISOString()},${p.end.toISOString()}`)
+            .join(';');
+        query.append('savingsPeriods', periodsParam);
     }
     const response = await fetch(`/api/history/actionsAndSavings?${query.toString()}`);
     if (!response.ok) {

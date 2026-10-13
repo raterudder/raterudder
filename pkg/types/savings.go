@@ -18,6 +18,7 @@ type HourlySavingsStatsDebugging struct {
 // SavingsStats is the response type for the savings endpoint
 type SavingsStats struct {
 	Timestamp       time.Time                     `json:"timestamp"`
+	EndTimestamp    time.Time                     `json:"endTimestamp,omitempty"`
 	Cost            float64                       `json:"cost"`
 	Credit          float64                       `json:"credit"`
 	BatterySavings  float64                       `json:"batterySavings"` // Estimated Battery Savings = Avoided - Charging
@@ -30,4 +31,21 @@ type SavingsStats struct {
 	HomeUsed        float64                       `json:"homeUsed"`       // Total home usage
 	BatteryUsed     float64                       `json:"batteryUsed"`    // Total battery discharged
 	HourlyDebugging []HourlySavingsStatsDebugging `json:"hourlyDebugging"`
+
+	// New shadow self-consumption savings fields (populated when newCalculation=true)
+	TotalSavingsDollars           float64 `json:"totalSavingsDollars,omitempty"`
+	SolarAndBatterySavingsDollars float64 `json:"solarAndBatterySavingsDollars,omitempty"`
+	RateRudderSavingsDollars      float64 `json:"rateRudderSavingsDollars,omitempty"`
+	SelfConsumptionCostDollars    float64 `json:"selfConsumptionCostDollars,omitempty"`
+	SelfConsumptionCreditDollars  float64 `json:"selfConsumptionCreditDollars,omitempty"`
+	GridOnlyCostDollars           float64 `json:"gridOnlyCostDollars,omitempty"`
+	StoredEnergyValueDollars      float64 `json:"storedEnergyValueDollars,omitempty"`
+	StartBatterySOC               float64 `json:"startBatterySOC,omitempty"`
+	EndBatterySOC                 float64 `json:"endBatterySOC,omitempty"`
+	StartShadowSOC                float64 `json:"startShadowSOC,omitempty"`
+	EndShadowSOC                  float64 `json:"endShadowSOC,omitempty"`
+	BatteryCapacityKWH            float64 `json:"batteryCapacityKWH,omitempty"`
+	StoredEnergyDeltaKWH          float64 `json:"storedEnergyDeltaKWH,omitempty"`
+	NextDayValuationDollarsPerKWH float64 `json:"nextDayValuationDollarsPerKWH,omitempty"`
+	Estimated                     bool    `json:"estimated,omitempty"`
 }

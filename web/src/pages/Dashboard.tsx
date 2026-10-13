@@ -28,8 +28,10 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
     const dateQuery = searchParams.get('date');
     const [actions, setActions] = useState<Action[]>([]);
     const [savings, setSavings] = useState<SavingsStats | null>(null);
+    const [savingsPeriods, setSavingsPeriods] = useState<SavingsStats[] | undefined>(undefined);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const planMode = !!settings?.planMode;
 
     const [showWhatsNew, setShowWhatsNew] = useState(false);
     const [showGridWarning, setShowGridWarning] = useState(false);
@@ -145,11 +147,26 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                 const end = new Date(currentDate);
                 end.setHours(23, 59, 59, 999);
 
-                const actionsAndSavingsData = await fetchActionsAndSavings(start, end, siteID);
+                const weekStart = new Date(start);
+                weekStart.setDate(weekStart.getDate() - 6);
+                const monthStart = new Date(start);
+                monthStart.setDate(monthStart.getDate() - 29);
+
+                const actionsAndSavingsData = planMode
+                    ? await fetchActionsAndSavings(start, end, siteID, {
+                          newCalculation: true,
+                          savingsPeriods: [
+                              { start, end },
+                              { start: weekStart, end },
+                              { start: monthStart, end },
+                          ],
+                      })
+                    : await fetchActionsAndSavings(start, end, siteID);
 
                 if (!isCancelled) {
                     setActions(actionsAndSavingsData.actions || []);
                     setSavings(actionsAndSavingsData.savings);
+                    setSavingsPeriods(actionsAndSavingsData.savingsPeriods);
                     lastFetchTimeRef.current = Date.now();
                 }
             } catch (err) {
@@ -169,7 +186,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
             isCancelled = true;
             clearTimeout(timer);
         };
-    }, [currentDate, siteID, refreshTrigger]);
+    }, [currentDate, siteID, refreshTrigger, planMode]);
 
     const handleDateChange = useCallback((days: number) => {
         const newDate = new Date(currentDate);
@@ -449,7 +466,14 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                         <CurrentStatus action={latestAction} currencySymbol={currencySymbol} />
                     )}
 
-                    <SavingsHero savings={savings} currencySymbol={currencySymbol} />
+                    <SavingsHero
+                        savings={savings}
+                        savingsPeriods={savingsPeriods}
+                        planMode={planMode}
+                        currentDate={currentDate}
+                        isToday={isToday}
+                        currencySymbol={currencySymbol}
+                    />
 
                     {siteID !== 'ALL' && (
                         <>

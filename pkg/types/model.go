@@ -91,6 +91,7 @@ type Action struct {
 	BatteryMode             BatteryMode      `json:"batteryMode"`
 	SolarMode               SolarMode        `json:"solarMode"`
 	ChargeToSOC             int              `json:"chargeToSoc,omitempty"`
+	ReserveSOC              float64          `json:"reserveSOC,omitempty"`
 	Reason                  ActionReason     `json:"reason"`
 	Description             string           `json:"description"`
 	CurrentPrice            *Price           `json:"currentPrice,omitempty"`

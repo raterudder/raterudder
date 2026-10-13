@@ -414,6 +414,7 @@ func (s *Server) performSiteUpdate(
 	}
 	notifData.energyHistory = energyHistory
 	notifData.weatherHistory = weatherHistory
+	configuredReserveSOC := settings.Settings.GetMinBatterySOC(ctx, s.now(), status.Timestamp.Location(), currentPrice)
 
 	// don't update if we're in emergency mode (except Franklin systems where
 	// emergency mode is used as fallback for grid charging)
@@ -423,7 +424,7 @@ func (s *Server) performSiteUpdate(
 	if status.EmergencyMode && settings.ESS != "franklin" {
 		log.Ctx(ctx).InfoContext(ctx, "update: emergency mode, ensuring grid charge is enabled")
 
-		minSOC := int(math.Round(settings.Settings.GetMinBatterySOC(ctx, s.now(), status.Timestamp.Location(), currentPrice)))
+		minSOC := int(math.Round(configuredReserveSOC))
 		if _, err := essSystem.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeNoChange, types.ModesOptions{MinimumSOC: minSOC}); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to set modes in emergency mode", slog.Any("error", err))
 		}
@@ -431,6 +432,7 @@ func (s *Server) performSiteUpdate(
 		action := types.Action{
 			Timestamp:       s.now(),
 			SystemTimestamp: s.now().In(status.Timestamp.Location()),
+			ReserveSOC:      configuredReserveSOC,
 			Description:     "In emergency mode",
 			Reason:          types.ActionReasonEmergencyMode,
 			SystemStatus:    status,
@@ -449,6 +451,7 @@ func (s *Server) performSiteUpdate(
 		action := types.Action{
 			Timestamp:       s.now(),
 			SystemTimestamp: s.now().In(status.Timestamp.Location()),
+			ReserveSOC:      configuredReserveSOC,
 			Description:     fmt.Sprintf("%d alarms present", len(status.Alarms)),
 			Reason:          types.ActionReasonHasAlarms,
 			SystemStatus:    status,
@@ -468,6 +471,7 @@ func (s *Server) performSiteUpdate(
 		action := types.Action{
 			Timestamp:       s.now(),
 			SystemTimestamp: s.now().In(status.Timestamp.Location()),
+			ReserveSOC:      configuredReserveSOC,
 			Description:     "Grid is unavailable",
 			Reason:          types.ActionReasonGridUnavailable,
 			SystemStatus:    status,
@@ -520,6 +524,7 @@ func (s *Server) performSiteUpdate(
 		action := types.Action{
 			Timestamp:       s.now(),
 			SystemTimestamp: s.now().In(status.Timestamp.Location()),
+			ReserveSOC:      configuredReserveSOC,
 			Description:     "Automation is paused",
 			SystemStatus:    status,
 			CurrentPrice:    &currentPrice,
@@ -530,7 +535,7 @@ func (s *Server) performSiteUpdate(
 		// in case the user just paused and they were left in our managed TOU mode we
 		// want to revert them back to self-consumption
 		if status.ManagedTOUMode {
-			minSOC := int(math.Round(settings.Settings.GetMinBatterySOC(ctx, s.now(), status.Timestamp.Location(), currentPrice)))
+			minSOC := int(math.Round(configuredReserveSOC))
 			if _, err := s.setESSModes(ctx, siteID, essSystem, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{
 				MinimumSOC: minSOC,
 			}, settings); err != nil {
@@ -557,6 +562,7 @@ func (s *Server) performSiteUpdate(
 		action := types.Action{
 			Timestamp:       s.now(),
 			SystemTimestamp: s.now().In(status.Timestamp.Location()),
+			ReserveSOC:      configuredReserveSOC,
 			Description:     "VPP event active",
 			Reason:          types.ActionReasonVPPActive,
 			SystemStatus:    status,
@@ -618,6 +624,9 @@ func (s *Server) performSiteUpdate(
 
 	action := decision.Action
 	action.SimulationParams = decision.SimulationParams
+	if action.ReserveSOC == 0 {
+		action.ReserveSOC = configuredReserveSOC
+	}
 	// Ensure timestamps match if not set
 	if action.Timestamp.IsZero() {
 		action.Timestamp = s.now()
@@ -637,7 +646,7 @@ func (s *Server) performSiteUpdate(
 	)
 
 	// execute Action
-	minSOC := int(math.Round(settings.Settings.GetMinBatterySOC(ctx, s.now(), status.Timestamp.Location(), currentPrice)))
+	minSOC := int(math.Round(configuredReserveSOC))
 	if (action.BatteryMode == types.BatteryModeExport || action.BatteryMode == types.BatteryModeStandby) && action.ChargeToSOC > minSOC {
 		minSOC = action.ChargeToSOC
 	}

@@ -808,6 +808,240 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 		assert.Empty(t, resp.Savings.HourlyDebugging)
 		assert.Empty(t, resp.Actions) // siteID = ALL should not return actions
 	})
+
+	t.Run("SavingsPeriods Validation Errors", func(t *testing.T) {
+		handler, _, _ := setupTestServer(t)
+		base := time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC)
+		end := base.Add(24 * time.Hour)
+
+		t.Run("Malformed Pair", func(t *testing.T) {
+			q := make(url.Values)
+			q.Set("start", base.Format(time.RFC3339))
+			q.Set("end", end.Format(time.RFC3339))
+			q.Set("savingsPeriods", "invalid-pair")
+			req := httptest.NewRequest("GET", "/api/history/actionsAndSavings?"+q.Encode(), nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.Contains(t, w.Body.String(), "expected start,end")
+		})
+
+		t.Run("More Than 3 Periods", func(t *testing.T) {
+			p1 := fmt.Sprintf("%s,%s", base.Format(time.RFC3339), end.Format(time.RFC3339))
+			p2 := fmt.Sprintf("%s,%s", base.AddDate(0, 0, -1).Format(time.RFC3339), end.Format(time.RFC3339))
+			p3 := fmt.Sprintf("%s,%s", base.AddDate(0, 0, -2).Format(time.RFC3339), end.Format(time.RFC3339))
+			p4 := fmt.Sprintf("%s,%s", base.AddDate(0, 0, -3).Format(time.RFC3339), end.Format(time.RFC3339))
+			q := make(url.Values)
+			q.Set("start", base.Format(time.RFC3339))
+			q.Set("end", end.Format(time.RFC3339))
+			q.Set("savingsPeriods", fmt.Sprintf("%s;%s;%s;%s", p1, p2, p3, p4))
+			req := httptest.NewRequest("GET", "/api/history/actionsAndSavings?"+q.Encode(), nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.Contains(t, w.Body.String(), "cannot request more than 3 savings periods")
+		})
+
+		t.Run("Disjoint Periods", func(t *testing.T) {
+			p1 := fmt.Sprintf("%s,%s", base.Format(time.RFC3339), end.Format(time.RFC3339))
+			p2 := fmt.Sprintf("%s,%s", base.AddDate(0, 0, -5).Format(time.RFC3339), base.AddDate(0, 0, -4).Format(time.RFC3339))
+			q := make(url.Values)
+			q.Set("start", base.Format(time.RFC3339))
+			q.Set("end", end.Format(time.RFC3339))
+			q.Set("savingsPeriods", fmt.Sprintf("%s;%s", p1, p2))
+			req := httptest.NewRequest("GET", "/api/history/actionsAndSavings?"+q.Encode(), nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.Contains(t, w.Body.String(), "must be contiguous or nested")
+		})
+
+		t.Run("Range Exceeds 35 Days", func(t *testing.T) {
+			p1 := fmt.Sprintf("%s,%s", base.AddDate(0, 0, -40).Format(time.RFC3339), end.Format(time.RFC3339))
+			q := make(url.Values)
+			q.Set("start", base.Format(time.RFC3339))
+			q.Set("end", end.Format(time.RFC3339))
+			q.Set("savingsPeriods", p1)
+			req := httptest.NewRequest("GET", "/api/history/actionsAndSavings?"+q.Encode(), nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.Contains(t, w.Body.String(), "cannot exceed 35 days")
+		})
+	})
+
+	t.Run("Nested SavingsPeriods 1D 7D 30D", func(t *testing.T) {
+		handler, mockS, mockSBase := setupTestServer(t)
+		dayStart := time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC)
+		dayEnd := dayStart.Add(24 * time.Hour)
+		weekStart := dayEnd.AddDate(0, 0, -7)
+		monthStart := dayEnd.AddDate(0, 0, -30)
+
+		mockS.actions = []types.Action{
+			{
+				Timestamp:    dayStart.Add(6 * time.Hour),
+				BatteryMode:  types.BatteryModeLoad,
+				Reason:       types.ActionReasonDischargeAtPeak,
+				SystemStatus: types.SystemStatus{BatteryCapacityKWH: 13.5},
+			},
+		}
+		mockS.prices = []types.Price{
+			{TSStart: monthStart.Add(time.Hour), TSEnd: monthStart.Add(2 * time.Hour), DollarsPerKWH: 0.20},
+			{TSStart: weekStart.Add(time.Hour), TSEnd: weekStart.Add(2 * time.Hour), DollarsPerKWH: 0.20},
+			{TSStart: dayStart.Add(time.Hour), TSEnd: dayStart.Add(2 * time.Hour), DollarsPerKWH: 0.20},
+		}
+		mockS.err = nil
+
+		mockSBase.On("GetHistorySummaries", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{
+						TSDayStart: monthStart,
+						Hourly: []types.EnergyStats{
+							{TSHourStart: monthStart.Add(time.Hour), HomeKWH: 5, SolarKWH: 5, SolarToHomeKWH: 5},
+						},
+					},
+					{
+						TSDayStart: weekStart,
+						Hourly: []types.EnergyStats{
+							{TSHourStart: weekStart.Add(time.Hour), HomeKWH: 5, SolarKWH: 5, SolarToHomeKWH: 5},
+						},
+					},
+				},
+			},
+		}, nil).Once()
+
+		mockSBase.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{
+			{
+				TSDayStart: dayStart,
+				Hourly: []types.EnergyStats{
+					{TSHourStart: dayStart.Add(time.Hour), HomeKWH: 5, SolarKWH: 5, SolarToHomeKWH: 5},
+				},
+			},
+		}, nil).Once()
+
+		periodsParam := fmt.Sprintf("%s,%s;%s,%s;%s,%s",
+			dayStart.Format(time.RFC3339), dayEnd.Format(time.RFC3339),
+			weekStart.Format(time.RFC3339), dayEnd.Format(time.RFC3339),
+			monthStart.Format(time.RFC3339), dayEnd.Format(time.RFC3339),
+		)
+
+		q := make(url.Values)
+		q.Set("start", dayStart.Format(time.RFC3339))
+		q.Set("end", dayEnd.Format(time.RFC3339))
+		q.Set("newCalculation", "true")
+		q.Set("savingsPeriods", periodsParam)
+
+		req := httptest.NewRequest("GET", "/api/history/actionsAndSavings?"+q.Encode(), nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+		var res struct {
+			Actions        []types.Action       `json:"actions"`
+			Savings        types.SavingsStats   `json:"savings"`
+			SavingsPeriods []types.SavingsStats `json:"savingsPeriods"`
+		}
+		require.NoError(t, json.NewDecoder(w.Body).Decode(&res))
+
+		if assert.Len(t, res.Actions, 1) {
+			assert.Equal(t, types.ActionReasonDischargeAtPeak, res.Actions[0].Reason)
+		}
+		if assert.Len(t, res.SavingsPeriods, 3) {
+			// Day: 5 kWh * $0.20 = $1.00
+			assert.InDelta(t, 1.00, res.SavingsPeriods[0].TotalSavingsDollars, 0.001)
+			// Last 7D: Day + weekStart = 10 kWh * $0.20 = $2.00
+			assert.InDelta(t, 2.00, res.SavingsPeriods[1].TotalSavingsDollars, 0.001)
+			// Last 30D: Day + weekStart + monthStart = 15 kWh * $0.20 = $3.00
+			assert.InDelta(t, 3.00, res.SavingsPeriods[2].TotalSavingsDollars, 0.001)
+		}
+		assert.InDelta(t, 1.00, res.Savings.TotalSavingsDollars, 0.001)
+	})
+
+	t.Run("Fetch Actions and Savings ALL Sites with NewCalculation and SavingsPeriods", func(t *testing.T) {
+		mockStore := &mockStorage{}
+		mockUtilities := utility.NewMap(mockStore)
+		dayStart := time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC)
+		dayEnd := dayStart.Add(24 * time.Hour)
+		weekStart := dayEnd.AddDate(0, 0, -7)
+		s := &Server{
+			storage:    mockStore,
+			utilities:  mockUtilities,
+			bypassAuth: true,
+			nowFunc:    func() time.Time { return dayStart.Add(12 * time.Hour) },
+		}
+
+		for _, id := range []string{"site1", "site2"} {
+			mockStore.On("GetSettings", mock.Anything, id).Return(types.Settings{MinBatterySOC: 20}, types.CurrentSettingsVersion, time.Time{}, nil)
+			mockStore.On("GetPriceHistory", mock.Anything, id, mock.Anything, mock.Anything).Return([]types.Price{
+				{TSStart: weekStart.Add(time.Hour), TSEnd: weekStart.Add(2 * time.Hour), DollarsPerKWH: 0.20},
+				{TSStart: dayStart.Add(time.Hour), TSEnd: dayStart.Add(2 * time.Hour), DollarsPerKWH: 0.20},
+			}, nil)
+			mockStore.On("GetHistorySummaries", mock.Anything, id, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+				{
+					Energy: []types.DailyEnergyStats{
+						{
+							TSDayStart: weekStart,
+							Hourly: []types.EnergyStats{
+								{TSHourStart: weekStart.Add(time.Hour), HomeKWH: 5, SolarKWH: 5, SolarToHomeKWH: 5},
+							},
+						},
+					},
+				},
+			}, nil)
+			mockStore.On("GetEnergyHistory", mock.Anything, id, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{
+				{
+					TSDayStart: dayStart,
+					Hourly: []types.EnergyStats{
+						{TSHourStart: dayStart.Add(time.Hour), HomeKWH: 5, SolarKWH: 5, SolarToHomeKWH: 5},
+					},
+				},
+			}, nil)
+			mockStore.On("GetActionHistory", mock.Anything, id, mock.Anything, mock.Anything).Return([]types.Action{
+				{
+					Timestamp:    dayStart.Add(time.Hour),
+					SystemStatus: types.SystemStatus{BatteryCapacityKWH: 13.5},
+				},
+			}, nil)
+		}
+
+		periodsParam := fmt.Sprintf("%s,%s;%s,%s",
+			dayStart.Format(time.RFC3339), dayEnd.Format(time.RFC3339),
+			weekStart.Format(time.RFC3339), dayEnd.Format(time.RFC3339),
+		)
+
+		q := make(url.Values)
+		q.Set("siteID", "ALL")
+		q.Set("start", dayStart.Format(time.RFC3339))
+		q.Set("end", dayEnd.Format(time.RFC3339))
+		q.Set("newCalculation", "true")
+		q.Set("savingsPeriods", periodsParam)
+
+		req, _ := http.NewRequest("GET", "/api/history/actionsAndSavings?"+q.Encode(), nil)
+		ctx := req.Context()
+		ctx = context.WithValue(ctx, siteIDContextKey, SiteIDAll)
+		ctx = context.WithValue(ctx, allUserSitesContextKey, []types.UserSite{{ID: "site1"}, {ID: "site2"}})
+		req = req.WithContext(ctx)
+
+		rr := httptest.NewRecorder()
+		s.handleHistoryActionsAndSavings(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+
+		var resp struct {
+			Actions        []types.Action       `json:"actions"`
+			Savings        types.SavingsStats   `json:"savings"`
+			SavingsPeriods []types.SavingsStats `json:"savingsPeriods"`
+		}
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+		assert.Empty(t, resp.Actions)
+		if assert.Len(t, resp.SavingsPeriods, 2) {
+			// Site 1 + Site 2 on Day: $1.00 + $1.00 = $2.00
+			assert.InDelta(t, 2.00, resp.SavingsPeriods[0].TotalSavingsDollars, 0.001)
+			// Site 1 + Site 2 on 7D: $2.00 + $2.00 = $4.00
+			assert.InDelta(t, 4.00, resp.SavingsPeriods[1].TotalSavingsDollars, 0.001)
+		}
+		assert.InDelta(t, 2.00, resp.Savings.TotalSavingsDollars, 0.001)
+	})
 }
 
 func TestHandleHistoryEnergy(t *testing.T) {

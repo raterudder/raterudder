@@ -1415,5 +1415,102 @@ describe('Dashboard', () => {
                 expect(window.location.search).not.toContain('date=');
             });
         });
+
+        it('requests newCalculation and 3 savingsPeriods when planMode is enabled', async () => {
+            const periodStats = [
+                {
+                    timestamp: new Date().toISOString(),
+                    batterySavings: 1,
+                    solarSavings: 2,
+                    cost: 0.75,
+                    credit: 0.45,
+                    avoidedCost: 0,
+                    chargingCost: 0,
+                    solarGenerated: 25,
+                    gridImported: 14.2,
+                    gridExported: 6.8,
+                    homeUsed: 32.4,
+                    batteryUsed: 11.6,
+                    totalSavingsDollars: 3.4,
+                    solarAndBatterySavingsDollars: 2.55,
+                    rateRudderSavingsDollars: 0.85,
+                    estimated: true,
+                },
+                {
+                    timestamp: new Date().toISOString(),
+                    batterySavings: 5,
+                    solarSavings: 15,
+                    cost: 6.9,
+                    credit: 3.1,
+                    avoidedCost: 0,
+                    chargingCost: 0,
+                    solarGenerated: 165.2,
+                    gridImported: 112.5,
+                    gridExported: 44,
+                    homeUsed: 218,
+                    batteryUsed: 78.4,
+                    totalSavingsDollars: 22.8,
+                    solarAndBatterySavingsDollars: 17.4,
+                    rateRudderSavingsDollars: 5.4,
+                    estimated: false,
+                },
+                {
+                    timestamp: new Date().toISOString(),
+                    batterySavings: 20,
+                    solarSavings: 60,
+                    cost: 24.6,
+                    credit: 12.4,
+                    avoidedCost: 0,
+                    chargingCost: 0,
+                    solarGenerated: 712,
+                    gridImported: 418,
+                    gridExported: 182,
+                    homeUsed: 910.5,
+                    batteryUsed: 324,
+                    totalSavingsDollars: 94.5,
+                    solarAndBatterySavingsDollars: 73.3,
+                    rateRudderSavingsDollars: 21.2,
+                    estimated: false,
+                },
+            ];
+
+            (fetchActionsAndSavings as any).mockResolvedValue({
+                actions: [],
+                savings: periodStats[0],
+                savingsPeriods: periodStats,
+            });
+
+            renderWithRouter(
+                <Dashboard
+                    siteID="site1"
+                    settings={{
+                        minBatterySOC: 10,
+                        ess: 'franklinwh',
+                        hasCredentials: { franklinwh: true },
+                        utilityProvider: 'comed_besh',
+                        planMode: true,
+                    } as any}
+                />
+            );
+
+            await waitFor(() => {
+                expect(fetchActionsAndSavings).toHaveBeenCalledWith(
+                    expect.any(Date),
+                    expect.any(Date),
+                    'site1',
+                    expect.objectContaining({
+                        newCalculation: true,
+                        savingsPeriods: expect.arrayContaining([
+                            expect.objectContaining({ start: expect.any(Date), end: expect.any(Date) }),
+                        ]),
+                    })
+                );
+            });
+
+            expect(screen.getByText('Today Savings')).toBeInTheDocument();
+            expect(screen.getByTestId('hero-primary-savings')).toHaveTextContent('$ 3.40');
+            expect(screen.getByRole('button', { name: /Last 7 Days/i })).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /Last 30 Days/i })).toBeInTheDocument();
+        });
     });
 });
