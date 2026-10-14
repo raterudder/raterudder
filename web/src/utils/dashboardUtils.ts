@@ -627,7 +627,7 @@ const classifySummaryItem = (
             (action.systemStatus?.batteryKW ?? 0) < -0.1 &&
             (action.systemStatus?.solarKW ?? 0) > 0)
     ) {
-        return 'solarCharge';
+        return hasSolarActivity(item) ? 'solarCharge' : 'charge';
     }
     if (effectiveMode === BatteryMode.Load && action.reason !== ActionReason.BatteryAtReserve) {
         return 'load';

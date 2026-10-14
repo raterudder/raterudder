@@ -656,5 +656,74 @@ describe('dashboardUtils', () => {
             expect(summary.beats[0].headline).toBe('Holding battery in standby');
             expect(summary.beats[0].socText).toBe('100%');
         });
+
+        it('classifies standby SOC increase without solar as grid charge instead of solar charge', () => {
+            const daytimeSolarCharge: ActionSummary = {
+                isSummary: true,
+                type: 'grouped',
+                reason: ActionReason.WaitingToCharge,
+                startTime: '2026-07-22T11:01:00-04:00',
+                endTime: '2026-07-22T11:21:00-04:00',
+                latestAction: {
+                    description: '',
+                    timestamp: '2026-07-22T11:21:00-04:00',
+                    batteryMode: BatteryMode.Standby,
+                    solarMode: SolarMode.Any,
+                    reason: ActionReason.WaitingToCharge,
+                    systemStatus: { solarKW: 1.5, batterySOC: 31.4 }
+                },
+                count: 2,
+                alarms: new Set(),
+                storms: new Set(),
+                hasPrice: true,
+                avgPrice: 0.074,
+                min: 0.074,
+                max: 0.074,
+                hasSOC: true,
+                avgSOC: 30.6,
+                minSOC: 29.9,
+                maxSOC: 31.4,
+                startSOC: 29.9,
+                endSOC: 31.4,
+                hasSolar: true
+            };
+
+            const overnightReserveCharge: ActionSummary = {
+                isSummary: true,
+                type: 'grouped',
+                reason: ActionReason.WaitingToCharge,
+                startTime: '2026-07-22T01:01:00-04:00',
+                endTime: '2026-07-22T01:41:00-04:00',
+                latestAction: {
+                    description: '',
+                    timestamp: '2026-07-22T01:41:00-04:00',
+                    batteryMode: BatteryMode.Standby,
+                    solarMode: SolarMode.Any,
+                    reason: ActionReason.WaitingToCharge,
+                    systemStatus: { solarKW: 0, batterySOC: 49.9 }
+                },
+                count: 3,
+                alarms: new Set(),
+                storms: new Set(),
+                hasPrice: true,
+                avgPrice: 0.074,
+                min: 0.074,
+                max: 0.074,
+                hasSOC: true,
+                avgSOC: 41.9,
+                minSOC: 29.8,
+                maxSOC: 49.9,
+                startSOC: 29.8,
+                endSOC: 49.9,
+                hasSolar: false
+            };
+
+            const summary = buildDaySummary([daytimeSolarCharge, overnightReserveCharge], '$');
+            expect(summary.beats).toHaveLength(2);
+            expect(summary.beats[0].category).toBe('solarCharge');
+            expect(summary.beats[0].headline).toBe('Charging from solar');
+            expect(summary.beats[1].category).toBe('charge');
+            expect(summary.beats[1].headline).toBe('Charged battery');
+        });
     });
 });
