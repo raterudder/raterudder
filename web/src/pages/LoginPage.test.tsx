@@ -25,4 +25,22 @@ describe('LoginPage Component', () => {
         render(<Router><LoginPage onLoginSuccess={vi.fn()} onLoginError={vi.fn()} authEnabled={false} clientIDs={{}} /></Router>);
         expect(screen.getByText('Authentication is currently disabled.')).toBeInTheDocument();
     });
+
+    it('renders custom utility request message when from param includes requestUtility', () => {
+        const originalLocation = window.location;
+        Object.defineProperty(window, 'location', {
+            configurable: true,
+            value: { ...originalLocation, search: '?from=%2Fwelcome%3FrequestUtility%3D1' },
+        });
+        try {
+            render(<Router><LoginPage onLoginSuccess={vi.fn()} onLoginError={vi.fn()} authEnabled={true} clientIDs={{ google: "test-id" }} /></Router>);
+            expect(screen.getByText(/Log in to submit a request to add your utility/i)).toBeInTheDocument();
+            expect(screen.queryByText('To get started, sign in below.')).not.toBeInTheDocument();
+        } finally {
+            Object.defineProperty(window, 'location', {
+                configurable: true,
+                value: originalLocation,
+            });
+        }
+    });
 });

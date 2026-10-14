@@ -4,20 +4,20 @@
 
 :root {
   color-scheme: dark;
-  --surface: #111318;
-  /* Base Layer: Laboratory Floor */
-  --surface-container-low: #1a1c20;
+  --surface: #0f131a;
+  /* Base Layer: Slate Ink Floor */
+  --surface-container-low: #161b26;
   /* Secondary Layer: Large content blocks */
-  --surface-container-high: #282a2e;
+  --surface-container-high: #1e2534;
   /* Active Layer: Interactive cards/modals */
-  --surface-container-highest: #333539;
+  --surface-container-highest: #252f42;
   /* Elevation Layer: Stacked cards */
 
-  --primary: #4b8eff;
-  /* Primary Power Cell */
-  --primary-glow: #adc6ff;
-  /* Illumination Blue */
-  --on-primary: #001a41;
+  --primary: #38bdf8;
+  /* Sky/Cobalt Power Cell */
+  --primary-glow: #7dd3fc;
+  /* Illumination Sky Blue */
+  --on-primary: #082f49;
   /* High Contrast on Primary */
   --accent: #00ffc2;
   /* Synthetic Cyan/Emerald */
@@ -27,33 +27,33 @@
 
   /* Surfaces & Text */
   --bg-app: var(--surface);
-  --on-surface: #e2e2e8;
+  --on-surface: #f1f5f9;
   /* Headline / Primary Text */
-  --on-surface-variant: #c1c6d7;
+  --on-surface-variant: #cbd5e1;
   /* Body / Secondary Text */
 
   --text-primary: var(--on-surface);
   --text-secondary: var(--on-surface-variant);
-  --text-muted: #8b90a0;
+  --text-muted: #94a3b8;
 
   /* Borders & Depth */
-  --outline: #8b90a0;
-  --outline-variant: #414755;
-  --border: rgba(65, 71, 85, 0.15);
-  /* Ghost edge: outline-variant at 15% */
-  --ghost-border: rgba(139, 144, 160, 0.15);
-  /* Laser-etched border */
+  --outline: #94a3b8;
+  --outline-variant: #334155;
+  --border: rgba(148, 163, 184, 0.22);
+  /* Crisp 1px structural hairline shared across all cards */
+  --ghost-border: rgba(148, 163, 184, 0.14);
+  /* Subtle divider border */
 
-  /* Shadows (Ambient Glow) */
-  --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 12px 32px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 40px 40px 0 rgba(0, 26, 65, 0.08);
+  /* Shadows */
+  --shadow-sm: 0 4px 14px rgba(2, 6, 23, 0.28);
+  --shadow-md: 0 12px 32px rgba(2, 6, 23, 0.42);
+  --shadow-lg: 0 28px 56px rgba(2, 6, 23, 0.55);
 
   /* Spacing & Radius */
   --radius-sm: 6px;
-  --radius-md: 6px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  --radius-md: 8px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
 
   /* Spacing Tokens */
   --spacing-16: 3.5rem;
@@ -65,7 +65,7 @@
   --spacing-xl: 3rem;
 
   /* Typography */
-  --font-mono: 'Inter', monospace;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ============================================
@@ -79,7 +79,7 @@
   font-size: 1rem;
   color: var(--on-surface);
   background: var(--surface-container-low);
-  border: 1px solid var(--outline-variant);
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   box-sizing: border-box;
@@ -167,6 +167,27 @@ textarea:focus-visible,
 }
 
 /* ============================================
+   Shared Card Surface & Border Foundation
+   ============================================ */
+.card,
+.chart-card,
+.savings-hero,
+.current-status-card,
+.auth-card,
+.forecast-stat-card,
+.form-grid.compact-grid,
+.grid-strategy-grid,
+.configured-summary,
+.wizard-card,
+.checklist-banner,
+.day-summary-card {
+  background: var(--surface-container-low);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ============================================
    Component: Auth Pages & Cards
    Generic styles for Login, Join, and Create Site
    ============================================ */
@@ -183,10 +204,7 @@ textarea:focus-visible,
 }
 
 .auth-card {
-  background: var(--surface-container-low);
   padding: var(--spacing-16) var(--spacing-md);
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--ghost-border);
   box-shadow: var(--shadow-lg);
   text-align: center;
   width: 100%;
@@ -209,6 +227,7 @@ textarea:focus-visible,
 }
 
 .auth-card h1 {
+  letter-spacing: -0.025em;
   margin-top: 0;
   margin-bottom: 0.75rem;
   font-size: 2.25rem;
@@ -258,11 +277,7 @@ textarea:focus-visible,
    Component: Card
    ============================================ */
 .card {
-  background: var(--surface-container-low);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
   padding: var(--spacing-md);
-  box-shadow: var(--shadow-sm);
   transition: all 0.2s ease;
 }
 
@@ -275,12 +290,8 @@ textarea:focus-visible,
    Component: Chart Card
    ============================================ */
 .chart-card {
-  background: var(--surface-container-low);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
   padding: var(--spacing-lg);
   margin: 0 0 1.5rem 0;
-  box-shadow: var(--shadow-sm);
   transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
   position: relative;
   overflow: hidden;
@@ -293,6 +304,7 @@ textarea:focus-visible,
 }
 
 .chart-card h3 {
+  letter-spacing: -0.015em;
   margin-top: 0;
   margin-bottom: var(--spacing-md);
   font-size: 1.1rem;
@@ -358,6 +370,7 @@ textarea:focus-visible,
 }
 
 .dialog-title {
+  letter-spacing: -0.02em;
   margin: 0;
   font-size: 1.5rem;
   font-weight: 800;
@@ -468,10 +481,6 @@ button {
 
 .savings-hero {
   overflow: hidden;
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border);
-  background: var(--surface-container-low);
-  box-shadow: var(--shadow-sm);
 }
 
 .overview-hero {
@@ -492,17 +501,18 @@ button {
 }
 
 .hero-label {
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   color: var(--text-muted);
   margin-bottom: 0.5rem;
 }
 
 .hero-value {
-  font-size: 3rem;
-  font-weight: 800;
+  font-size: 2.85rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
   line-height: 1;
   color: var(--on-surface);
   font-variant-numeric: tabular-nums;
@@ -526,7 +536,7 @@ button {
 
 .hero-value-secondary {
   font-size: 1.125rem;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1;
   color: var(--on-surface);
   opacity: 0.85;
@@ -690,7 +700,7 @@ button {
   font-weight: 700;
   color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.06em;
   display: block;
 }
 
@@ -717,14 +727,10 @@ button {
 /* Current Status Card */
 .current-status-card {
   padding: var(--spacing-lg);
-  border-radius: var(--radius-lg);
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: var(--spacing-xl);
-  background: var(--surface-container-low);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-md);
   position: relative;
   overflow: hidden;
 }
@@ -738,8 +744,7 @@ button {
 .status-icon {
   width: 48px;
   height: 48px;
-  border-radius: 8px;
-  /* md shape per DESIGN.md */
+  border-radius: 10px;
   background: var(--surface-container-high);
   display: flex;
   align-items: center;
@@ -773,14 +778,15 @@ button {
 }
 
 .status-label {
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   color: var(--text-muted);
 }
 
 .status-value {
+  letter-spacing: -0.015em;
   font-size: 1.25rem;
   font-weight: 700;
   color: var(--on-surface);
@@ -809,8 +815,10 @@ button {
 }
 
 .metric-label {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
   color: var(--text-muted);
 }
 
@@ -880,8 +888,7 @@ button {
   font-size: 1rem;
   color: var(--on-surface);
   background: var(--surface-container-low);
-  border: 1px solid var(--outline-variant);
-  /* Increased contrast */
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   box-sizing: border-box;
@@ -934,7 +941,7 @@ button {
   width: 100%;
   padding: 0;
   gap: 0;
-  border: 1px solid var(--outline-variant);
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface-container-low);
   overflow: hidden;

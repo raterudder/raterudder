@@ -13,6 +13,12 @@ interface LoginPageProps {
 }
 
 const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onLoginError, authEnabled, clientIDs }) => {
+    const queryParams = typeof window !== 'undefined'
+        ? new URLSearchParams(window.location.search)
+        : new URLSearchParams();
+    const fromParam = queryParams.get('from') || '';
+    const isUtilityRequest = queryParams.has('requestUtility') || fromParam.includes('requestUtility');
+
     const handleAppleSuccess = (response: AppleAuthResponse) => {
         if (response.authorization && response.authorization.id_token) {
             onLoginSuccess({ credential: response.authorization.id_token }, 'apple');
@@ -26,7 +32,13 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onLoginError, aut
         <div className="auth-page">
             <div className="auth-card">
                 <h1>RateRudder</h1>
-                <p>To get started, sign in below.</p>
+                {isUtilityRequest ? (
+                    <p>
+                        Log in to submit a request to add your utility, and in a few days when your utility is supported we&apos;ll shoot you an email. Having to log in is annoying, but it prevents us from getting a bunch of spam.
+                    </p>
+                ) : (
+                    <p>To get started, sign in below.</p>
+                )}
 
                 <div className="google-btn-wrapper">
                     {authEnabled && (clientIDs["google"] || clientIDs["apple"]) ? (

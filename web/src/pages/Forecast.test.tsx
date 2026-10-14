@@ -354,6 +354,7 @@ describe('Forecast Page', () => {
 
         await waitFor(() => {
             expect(screen.getByText('24-Hour Energy Plan')).toBeInTheDocument();
+            expect(screen.getByText('SmartPlan')).toBeInTheDocument();
             expect(screen.getByText('Planned Battery SOC (%)')).toBeInTheDocument();
             expect(screen.queryByText('Projected Benefit')).not.toBeInTheDocument();
             expect(screen.getByText('Projected Grid Cost')).toBeInTheDocument();

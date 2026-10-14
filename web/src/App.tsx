@@ -21,8 +21,21 @@ import BetaInterstitialPage from './pages/BetaInterstitialPage';
 import AdminPage from './pages/AdminPage';
 import PrivacyPolicy from './pages/PrivacyPolicy';
 import TermsOfService from './pages/TermsOfService';
+import HowItWorksPage from './pages/HowItWorksPage';
+import GettingStartedPage from './pages/GettingStartedPage';
+import ChangelogPage from './pages/ChangelogPage';
+import SupportedUtilitiesPage from './pages/SupportedUtilitiesPage';
 import TeslaCallback from './pages/TeslaCallback';
 import { checkAndStoreEnabledParam } from './utils/enabledProviders';
+
+const isMarketingRoute = (path: string) =>
+    path === '/' ||
+    path === '/how-it-works' ||
+    path === '/getting-started' ||
+    path === '/utilities' ||
+    path === '/changelog' ||
+    path === '/privacy' ||
+    path === '/terms';
 
 // Custom location hook that preserves the ?viewSite query parameter
 const useLocationWithViewSite = () => {
@@ -97,7 +110,7 @@ function AppContent() {
         const queryParams = new URLSearchParams(search);
         return queryParams.get('viewSite');
     }, [search]);
-    const [loading, setLoading] = useState(() => window.location.pathname !== '/');
+    const [loading, setLoading] = useState(() => !isMarketingRoute(window.location.pathname));
     const [hasAttemptedFetch, setHasAttemptedFetch] = useState(false);
 
     const [settings, setSettings] = useState<SettingsType | null>(null);
@@ -107,7 +120,17 @@ function AppContent() {
     const [currentUserID, setCurrentUserID] = useState<string>("");
 
     const [location, navigate] = useLocationWithViewSite();
-    const isHome = location === '/';
+    const isHome = isMarketingRoute(location);
+    const prevLocationRef = React.useRef(location);
+
+    useEffect(() => {
+        if (prevLocationRef.current !== location) {
+            prevLocationRef.current = location;
+            if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
+                window.scrollTo(0, 0);
+            }
+        }
+    }, [location]);
 
     const effectiveSiteID = viewSiteOverride || selectedSiteID;
 
@@ -213,7 +236,11 @@ function AppContent() {
         setHasAttemptedFetch(true);
 
         if (redirectOnLogin && status.loggedIn) {
-            if (newSites.length === 0) {
+            const queryParams = new URLSearchParams(window.location.search);
+            const from = queryParams.get('from');
+            if (from && from.startsWith('/welcome') && from.includes('requestUtility')) {
+                navigate(from);
+            } else if (newSites.length === 0) {
                 navigate('/welcome');
             } else {
                 const targetSiteID = viewSiteOverrideRef.current || (
@@ -229,8 +256,6 @@ function AppContent() {
                     if (!settingsData.utilityProvider || !settingsData.ess) {
                         navigate('/settings');
                     } else {
-                        const queryParams = new URLSearchParams(window.location.search);
-                        const from = queryParams.get('from');
                         if (from && from.startsWith('/')) {
                             navigate(from);
                         } else {
@@ -248,9 +273,9 @@ function AppContent() {
     // Initial auth check — runs once on mount. Sets loading=true to gate
     // the first render until we know whether the user is authenticated.
     useEffect(() => {
-        // Skip auth check if we're on the landing page.
+        // Skip auth check if we're on a public marketing page.
         // We'll trigger it later if they navigate away.
-        if (window.location.pathname === '/') {
+        if (isMarketingRoute(window.location.pathname)) {
             return;
         }
 
@@ -374,22 +399,33 @@ function AppContent() {
                     ) : (
                         <Switch>
                             <Route path="/" component={LandingPage} />
+                            <Route path="/how-it-works" component={HowItWorksPage} />
+                            <Route path="/getting-started" component={GettingStartedPage} />
+                            <Route path="/utilities" component={SupportedUtilitiesPage} />
+                            <Route path="/changelog" component={ChangelogPage} />
                             <Route path="/privacy" component={PrivacyPolicy} />
                             <Route path="/terms" component={TermsOfService} />
                             <Route path="/login">
-                                {loggedIn ? <Redirect to="/dashboard" replace /> :
-                                <LoginPage
-                                    onLoginSuccess={handleLoginSuccess}
-                                    onLoginError={() => console.log('Login Failed')}
-                                    authEnabled={authRequired}
-                                    clientIDs={clientIDs}
-                                />}
+                                {loggedIn ? (
+                                    (() => {
+                                        const from = new URLSearchParams(search || window.location.search).get('from');
+                                        const dest = from && from.startsWith('/') ? from : '/dashboard';
+                                        return <Redirect to={dest} replace />;
+                                    })()
+                                ) : (
+                                    <LoginPage
+                                        onLoginSuccess={handleLoginSuccess}
+                                        onLoginError={() => console.log('Login Failed')}
+                                        authEnabled={authRequired}
+                                        clientIDs={clientIDs}
+                                    />
+                                )}
                             </Route>
 
                             {/* Protected Routes */}
                             <Route path="/welcome">
                                 <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
-                                    {effectiveSites.length > 0 ? (
+                                    {effectiveSites.length > 0 && !new URLSearchParams(search || window.location.search).has('requestUtility') ? (
                                         <Redirect to="/dashboard" replace />
                                     ) : (
                                         <BetaInterstitialPage />

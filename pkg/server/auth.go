@@ -43,7 +43,7 @@ var routeAuthAttributes = map[string]pathAttributes{
 	"/api/tesla/register":               {ignoreSiteID: true},
 	"/api/interest":                     {ignoreUserNotFound: true, ignoreSiteID: true},
 	"/api/list/ess":                     {ignoreSiteID: true, ignoreUserNotFound: true},
-	"/api/list/utilities":               {ignoreSiteID: true, ignoreUserNotFound: true},
+	"/api/list/utilities":               {allowNoLogin: true, ignoreSiteID: true, ignoreUserNotFound: true},
 	"/api/delete/user":                  {ignoreSiteID: true},
 	"/api/list/userSites":               {ignoreSiteID: true},
 	"/api/notifications/vapidPublicKey": {allowNoLogin: true, ignoreUserNotFound: true, ignoreSiteID: true},

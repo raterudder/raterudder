@@ -61,6 +61,19 @@ describe('Header Component', () => {
         expect(screen.getByText('Forecast')).toHaveClass('active');
     });
 
+    it('links mobile top link to Dashboard on the landing page and settings page', () => {
+        const { unmount } = renderHeader('/', true);
+        let mobileTopLink = screen.getByTestId('mobile-top-nav-link');
+        expect(mobileTopLink).toHaveTextContent('Dashboard');
+        expect(mobileTopLink).toHaveAttribute('href', '/dashboard');
+        unmount();
+
+        renderHeader('/settings', true);
+        mobileTopLink = screen.getByTestId('mobile-top-nav-link');
+        expect(mobileTopLink).toHaveTextContent('Dashboard');
+        expect(mobileTopLink).toHaveAttribute('href', '/dashboard');
+    });
+
     it('shows active styling and aria-current for the current route', () => {
         renderHeader('/dashboard', true);
         const dashboardLink = screen.getByText('Dashboard');

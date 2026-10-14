@@ -109,7 +109,7 @@ const planCharts: ChartConfig[] = [
         unit: '%',
         helpDescription: (
             <p>
-                Displays the planned State of Charge (SOC) of your battery as optimized by RateRudder.
+                Displays the planned State of Charge (SOC) of your battery as optimized by RateRudder&apos;s SmartPlan engine.
                 The colored line segments highlight scheduled operations (charging from solar, powering home, grid charging, and standby holds).
                 The dashed red line represents your Minimum Reserve SOC threshold.
             </p>
@@ -997,7 +997,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
                     {isPlanActive ? (
                         <>
                             <p className="forecast-subtitle">
-                                Optimal battery dispatch schedule generated {(() => {
+                                Optimal <strong>SmartPlan</strong> battery dispatch schedule generated {(() => {
                                     const startTs = rawModelingData?.plan?.tsCreated || rawModelingData?.updated;
                                     return startTs ? formatTime(startTs, data[0]?.ts) : '';
                                 })()} ({rawModelingData?.plan?.horizonHours ?? 24}-Hour Horizon)

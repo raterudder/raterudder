@@ -9,6 +9,7 @@
 }
 
 .settings-container h2 {
+  letter-spacing: -0.025em;
   font-size: 2.25rem;
   font-weight: 800;
   color: var(--on-surface);
@@ -16,11 +17,11 @@
 }
 
 .settings-container h3 {
-  font-size: 0.75rem;
+  font-size: 0.74rem;
   font-weight: 700;
-  color: var(--text-muted);
+  color: var(--primary);
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   margin-top: 1rem;
   margin-bottom: 1.25rem;
 }
@@ -89,12 +90,12 @@
   width: 100%;
   margin-top: 0;
   padding: 1rem;
-  background: var(--primary);
-  color: white;
+  background: linear-gradient(135deg, #0284c7 0%, #2563eb 100%);
+  color: #ffffff;
   border: none;
   border-radius: var(--radius-md);
   font-size: 1rem;
-  font-weight: 600;
+  font-weight: 700;
   cursor: pointer;
   transition: all 0.2s;
   box-shadow: var(--shadow-sm);
@@ -105,7 +106,7 @@
 }
 
 .save-button:hover {
-  background: var(--primary-glow);
+  background: linear-gradient(135deg, #0369a1 0%, #1d4ed8 100%);
   box-shadow: var(--shadow-md);
   transform: translateY(-1px);
 }
@@ -170,10 +171,6 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 1.5rem;
-  background: var(--surface-container-low);
-  border: 1px solid var(--outline-variant);
-  /* Increased contrast */
-  border-radius: var(--radius-lg);
   padding: 2rem;
   margin-bottom: 2.5rem;
 }
@@ -188,10 +185,6 @@
 
 /* Configured Summary Card */
 .configured-summary {
-  background: var(--surface-container-low);
-  border: 1px solid var(--outline-variant);
-  /* Increased contrast */
-  border-radius: var(--radius-lg);
   padding: 1.5rem 2rem;
   display: flex;
   align-items: center;
@@ -336,25 +329,9 @@
 }
 
 .wizard-card {
-  background: var(--surface);
-  border: 1px solid var(--outline-variant);
-  border-radius: var(--radius-xl);
   padding: 2.5rem;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2), 0 1px 3px rgba(0, 0, 0, 0.1);
   position: relative;
   overflow: hidden;
-  backdrop-filter: blur(10px);
-}
-
-/* Glassmorphism top line effect */
-.wizard-card::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 4px;
-  background: linear-gradient(90deg, var(--primary), var(--accent));
 }
 
 .wizard-step-indicators {
@@ -426,10 +403,10 @@
   flex-direction: column;
   gap: 1.5rem;
   margin-bottom: 2.5rem;
-  background: var(--surface-container-low);
+  background: var(--surface-container-high);
   padding: 1.75rem;
   border-radius: var(--radius-lg);
-  border: 1px solid var(--outline-variant);
+  border: 1px solid var(--border);
 }
 
 .wizard-actions {
@@ -446,7 +423,7 @@
 .wizard-footer {
   margin-top: 2rem;
   padding-top: 1.5rem;
-  border-top: 1px solid var(--outline-variant);
+  border-top: 1px solid var(--border);
   text-align: center;
 }
 
@@ -464,24 +441,10 @@
 
 /* Checklist Banner */
 .checklist-banner {
-  background: var(--surface-container-high);
-  border: 1px solid var(--outline-variant);
-  border-radius: var(--radius-lg);
-  padding: 1rem 2rem 1.5rem;
+  padding: 1.25rem 2rem 1.5rem;
   margin-bottom: 2.5rem;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
   position: relative;
   overflow: hidden;
-}
-
-.checklist-banner::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 4px;
-  background: var(--primary);
 }
 
 .checklist-banner h4 {

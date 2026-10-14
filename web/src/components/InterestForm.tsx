@@ -9,6 +9,7 @@ interface InterestFormProps {
     essList?: ESSProviderInfo[];
     hideBattery?: boolean;
     alwaysShowDetails?: boolean;
+    directOtherForm?: boolean;
     onContinue?: () => void;
     header?: React.ReactNode;
 }
@@ -18,11 +19,12 @@ export const InterestForm: React.FC<InterestFormProps> = ({
     essList = [],
     hideBattery = false,
     alwaysShowDetails = false,
+    directOtherForm = false,
     onContinue,
     header
 }) => {
-    const [utility, setUtility] = useState<string>("");
-    const [battery, setBattery] = useState<string>("");
+    const [utility, setUtility] = useState<string>(directOtherForm ? 'other' : "");
+    const [battery, setBattery] = useState<string>(directOtherForm ? 'other' : "");
 
     // New fields for "Other" / Details
     const [utilityProviderName, setUtilityProviderName] = useState("");
@@ -36,7 +38,7 @@ export const InterestForm: React.FC<InterestFormProps> = ({
     const [error, setError] = useState<string | null>(null);
 
     const isOther = utility === 'other' || (!hideBattery && battery === 'other');
-    const showDetails = alwaysShowDetails ? !!utility : isOther;
+    const showDetails = directOtherForm || (alwaysShowDetails ? !!utility : isOther);
 
     const handleSubmitInterest = async () => {
         setIsSubmitting(true);
@@ -67,10 +69,9 @@ export const InterestForm: React.FC<InterestFormProps> = ({
 
     return (
         <div>
-            {!isSubmitted && (
-                <>
-                    {header}
-                    <div className="beta-interstitial-form">
+            {!isSubmitted && header}
+            {!isSubmitted && !directOtherForm && (
+                <div className="beta-interstitial-form">
                     <div>
                         <label id="utility-label" htmlFor="utility" className="beta-interstitial-label">Utility Provider</label>
                         <Combobox.Root
@@ -148,11 +149,10 @@ export const InterestForm: React.FC<InterestFormProps> = ({
                         </div>
                     )}
                 </div>
-                </>
             )}
 
             {showDetails && !isSubmitted && (
-                <div className="beta-interstitial-form" style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border)', paddingTop: '1.5rem' }}>
+                <div className="beta-interstitial-form" style={directOtherForm ? undefined : { marginTop: '1.5rem', borderTop: '1px solid var(--border)', paddingTop: '1.5rem' }}>
                     {utility === 'other' && (
                         <div>
                             <label htmlFor="utilityProviderName" className="beta-interstitial-label">Utility Provider Name</label>

@@ -26,6 +26,7 @@
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  letter-spacing: -0.02em;
   font-size: 1.25rem;
   font-weight: 800;
   color: var(--text-primary);

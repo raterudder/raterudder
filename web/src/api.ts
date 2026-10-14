@@ -140,7 +140,7 @@ export interface Plan {
 }
 
 async function extractError(response: Response, fallback: string): Promise<string> {
-    if (response.status === 401 && !response.url.includes('/api/auth/status')) {
+    if (response.status === 401 && !response.url.includes('/api/auth/status') && !response.url.includes('/api/list/utilities')) {
         try {
             const statusRes = await fetch('/api/auth/status');
             if (statusRes.ok) {

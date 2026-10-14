@@ -42,7 +42,7 @@ func TestHandleListUtilities(t *testing.T) {
 		resp := w.Result()
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
-		assert.Equal(t, "private, max-age=300", resp.Header.Get("Cache-Control"))
+		assert.Equal(t, "public, max-age=3600", resp.Header.Get("Cache-Control"))
 
 		var utilities []types.UtilityProviderInfo
 		err := json.NewDecoder(w.Body).Decode(&utilities)
@@ -245,6 +245,29 @@ func TestHandleListUtilities(t *testing.T) {
 		require.NoError(t, json.NewDecoder(w.Body).Decode(&utilities))
 		assert.NotEmpty(t, utilities)
 		assert.True(t, mockStorage.AssertExpectations(t))
+	})
+
+	t.Run("Passes authMiddleware for unauthenticated user", func(t *testing.T) {
+		srv := &Server{
+			utilities:          mockUMap,
+			ess:                mockE,
+			singleSite:         false,
+			bypassAuth:         false,
+			generalRateLimit:   rate.Every(time.Minute / 30),
+			generalBurst:       30,
+			sensitiveRateLimit: rate.Every(time.Minute / 5),
+			sensitiveBurst:     5,
+		}
+
+		handler := srv.setupHandler()
+		req := httptest.NewRequest("GET", "/api/list/utilities", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+		var utilities []types.UtilityProviderInfo
+		require.NoError(t, json.NewDecoder(w.Body).Decode(&utilities))
+		assert.NotEmpty(t, utilities)
 	})
 }
 

@@ -5,6 +5,7 @@ import { analyzer } from 'vite-bundle-analyzer'
 import { buildSync } from 'esbuild'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { PUBLIC_PAGES_SEO, renderSubpageHtml } from './src/utils/seo'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -44,6 +45,27 @@ function serviceWorkerPlugin(): Plugin {
   }
 }
 
+function seoSubpagesPlugin(): Plugin {
+  return {
+    name: 'seo-subpages-plugin',
+    enforce: 'post',
+    generateBundle(_, bundle) {
+      const indexAsset = bundle['index.html']
+      if (!indexAsset || indexAsset.type !== 'asset' || typeof indexAsset.source !== 'string') {
+        return
+      }
+      for (const [slug, seo] of Object.entries(PUBLIC_PAGES_SEO)) {
+        if (slug === 'index') continue
+        this.emitFile({
+          type: 'asset',
+          fileName: `${slug}.html`,
+          source: renderSubpageHtml(indexAsset.source, seo),
+        })
+      }
+    },
+  }
+}
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
@@ -53,6 +75,7 @@ export default defineConfig({
       openAnalyzer: false,
     }),
     serviceWorkerPlugin(),
+    seoSubpagesPlugin(),
   ],
   test: {
     globals: true,
@@ -60,4 +83,3 @@ export default defineConfig({
     setupFiles: './src/setupTests.tsx',
   },
 })
-

@@ -36,13 +36,13 @@ const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSite
                     </Link>
                     {loggedIn && selectedSiteID !== 'ALL' && (
                         <Link
-                            key={location === '/forecast' ? 'dashboard' : 'forecast'}
-                            to={location === '/forecast' ? '/dashboard' : '/forecast'}
+                            key={location === '/dashboard' ? 'forecast' : 'dashboard'}
+                            to={location === '/dashboard' ? '/forecast' : '/dashboard'}
                             className="nav-link mobile-top-nav-link hide-on-desktop"
                             onClick={() => setIsMenuOpen(false)}
                             data-testid="mobile-top-nav-link"
                         >
-                            {location === '/forecast' ? 'Dashboard' : 'Forecast'}
+                            {location === '/dashboard' ? 'Forecast' : 'Dashboard'}
                         </Link>
                     )}
                 </div>

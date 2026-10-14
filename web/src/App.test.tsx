@@ -80,4 +80,27 @@ describe('App routing and viewSite parameter preservation', () => {
             expect(window.location.search).not.toContain('viewSite');
         });
     });
+
+    it('renders secondary marketing routes (/how-it-works, /getting-started, /utilities, /changelog)', async () => {
+        window.history.pushState(null, '', '/how-it-works');
+        const { unmount } = render(<App />);
+        expect(await screen.findByText(/Why Battery Optimization Is Harder Than/i)).toBeInTheDocument();
+        unmount();
+
+        window.history.pushState(null, '', '/getting-started');
+        const { unmount: unmount2 } = render(<App />);
+        expect(await screen.findByText(/Up and Running in/i)).toBeInTheDocument();
+        unmount2();
+
+        window.history.pushState(null, '', '/utilities');
+        const { unmount: unmount3 } = render(<App />);
+        expect(await screen.findByText(/How RateRudder Models Notable Grids/i)).toBeInTheDocument();
+        expect(screen.getByText(/Commonwealth Edison \(ComEd\)/i)).toBeInTheDocument();
+        unmount3();
+
+        window.history.pushState(null, '', '/changelog');
+        render(<App />);
+        expect(await screen.findByText(/What's New in/i)).toBeInTheDocument();
+        expect(screen.getByText('October 2026')).toBeInTheDocument();
+    });
 });

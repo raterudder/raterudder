@@ -444,8 +444,14 @@ func (s *Server) webHandler(dir fs.FS, h http.Handler) http.HandlerFunc {
 					http.Error(w, "not found", http.StatusNotFound)
 					return
 				}
-				// If file doesn't exist, serve index.html
-				r.URL.Path = "/"
+				// Try serving a matching .html file for top-level public pages (e.g. /how-it-works -> /how-it-works.html)
+				if htmlFile, htmlErr := dir.Open(cleanedPath + ".html"); htmlErr == nil {
+					htmlFile.Close()
+					r.URL.Path = "/" + cleanedPath + ".html"
+				} else {
+					// If file doesn't exist, serve index.html
+					r.URL.Path = "/"
+				}
 			} else {
 				log.Ctx(r.Context()).ErrorContext(r.Context(), "failed to open file", slog.Any("error", err), slog.String("path", r.URL.Path))
 				// we don't write JSON here because we don't know what file type is expected

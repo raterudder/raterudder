@@ -98,6 +98,31 @@ func TestWebHandler(t *testing.T) {
 		assert.Empty(t, w.Header().Get("Cache-Control"))
 	})
 
+	t.Run("Serve Matching HTML File for Public Subpage", func(t *testing.T) {
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			listenAddr: ":8080",
+			controller: controller.NewController(),
+		}
+
+		testFS["utilities.html"] = &fstest.MapFile{Data: []byte("<html>utilities seo</html>")}
+
+		mux := http.NewServeMux()
+		fileServer := http.FileServer(http.FS(testFS))
+		mux.Handle("/", srv.webHandler(testFS, fileServer))
+
+		req := httptest.NewRequest("GET", "/utilities", nil)
+		w := httptest.NewRecorder()
+
+		mux.ServeHTTP(w, req)
+
+		resp := w.Result()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "<html>utilities seo</html>", w.Body.String())
+	})
+
 	t.Run("Serve Index on Unknown Route", func(t *testing.T) {
 		srv := &Server{
 			utilities:  mockUMap,

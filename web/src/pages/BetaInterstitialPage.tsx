@@ -10,7 +10,14 @@ const BetaInterstitialPage: React.FC = () => {
     const [essList, setEssList] = useState<ESSProviderInfo[]>([]);
     const [isLoadingData, setIsLoadingData] = useState(true);
 
+    const isRequestUtility = typeof window !== 'undefined' &&
+        new URLSearchParams(window.location.search).has('requestUtility');
+
     useEffect(() => {
+        if (isRequestUtility) {
+            setIsLoadingData(false);
+            return;
+        }
         const load = async () => {
             try {
                 const [utils, ess] = await Promise.all([
@@ -26,7 +33,7 @@ const BetaInterstitialPage: React.FC = () => {
             }
         };
         load();
-    }, []);
+    }, [isRequestUtility]);
 
     const handleContinue = () => {
         navigate('/new-site');
@@ -34,8 +41,10 @@ const BetaInterstitialPage: React.FC = () => {
 
     return (
         <div className="auth-page">
-            <div className="auth-card" style={{ maxWidth: '440px' }}>
-                <h1 className="beta-interstitial-title">RateRudder Beta</h1>
+            <div className="auth-card">
+                <h1 className="beta-interstitial-title">
+                    {isRequestUtility ? 'Request Your Utility' : 'RateRudder Beta'}
+                </h1>
                 {isLoadingData ? (
                     <div className="loading-screen" style={{ minHeight: '200px' }}>
                         <span className="loading-spinner loading-spinner-large" aria-hidden="true"></span>
@@ -46,10 +55,13 @@ const BetaInterstitialPage: React.FC = () => {
                         utilitiesList={utilitiesList}
                         essList={essList}
                         hideBattery={false}
+                        directOtherForm={isRequestUtility}
                         onContinue={handleContinue}
                         header={
                             <p className="beta-interstitial-desc">
-                                To get started, please confirm your equipment and utility provider.
+                                {isRequestUtility
+                                    ? "Tell us about your utility and rate plan below, and in a few days when your utility is supported we'll shoot you an email."
+                                    : "To get started, please confirm your equipment and utility provider."}
                             </p>
                         }
                     />

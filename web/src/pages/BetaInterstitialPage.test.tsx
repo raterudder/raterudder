@@ -159,4 +159,39 @@ describe('BetaInterstitialPage Component', () => {
 
         expect(await screen.findByRole('option', { name: 'Enphase' })).toBeInTheDocument();
     });
+
+    it('skips question dropdowns and goes straight to interest form when requestUtility=1 is present', async () => {
+        const user = userEvent.setup();
+        const originalLocation = window.location;
+        Object.defineProperty(window, 'location', {
+            configurable: true,
+            value: { ...originalLocation, search: '?requestUtility=1' },
+        });
+        vi.mocked(submitInterest).mockResolvedValue(undefined);
+        (useLocation as ReturnType<typeof vi.fn>).mockReturnValue(['/welcome', vi.fn()]);
+
+        try {
+            render(<BetaInterstitialPage />);
+
+            expect(screen.getByText('Request Your Utility')).toBeInTheDocument();
+            expect(screen.queryByRole('combobox', { name: /Utility Provider/i })).not.toBeInTheDocument();
+            expect(screen.getByLabelText(/Utility Provider Name/i)).toBeInTheDocument();
+
+            await user.type(screen.getByLabelText(/Utility Provider Name/i), 'Austin Energy');
+            await user.click(screen.getByRole('button', { name: /Express Interest/i }));
+
+            await waitFor(() => {
+                expect(submitInterest).toHaveBeenCalledWith(expect.objectContaining({
+                    utility: 'other',
+                    utilityProviderName: 'Austin Energy',
+                }));
+                expect(screen.getByText(/Success!/i)).toBeInTheDocument();
+            });
+        } finally {
+            Object.defineProperty(window, 'location', {
+                configurable: true,
+                value: originalLocation,
+            });
+        }
+    });
 });

@@ -1,4 +1,4 @@
-/* Base grid decoration consistent with landing page */
+/* Subtle sky-cobalt ambient glow consistent with the landing page hero */
 .auth-page::before {
   content: '';
   position: absolute;
@@ -6,8 +6,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background-image: radial-gradient(rgba(65, 71, 85, 0.1) 1px, transparent 1px);
-  background-size: 24px 24px;
+  background: radial-gradient(circle at 50% 0%, rgba(2, 132, 199, 0.22) 0%, rgba(37, 99, 235, 0.08) 40%, transparent 70%);
   z-index: 0;
   pointer-events: none;
 }
