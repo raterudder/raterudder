@@ -855,7 +855,7 @@ func TestComEd(t *testing.T) {
 		c.apiURL = ts.URL
 		c.client = ts.Client()
 
-		dbStart := now.Truncate(time.Hour).Add(-1 * time.Hour)
+		dbStart := now.Add(-6 * time.Hour).Truncate(time.Hour)
 		dbPrices := []types.PriceState{
 			{
 				Price: types.Price{
@@ -868,12 +868,6 @@ func TestComEd(t *testing.T) {
 				TSUpdated: now.Add(-45 * time.Minute),
 			},
 		}
-
-		m.On("GetUtilityPrices", mock.Anything, "comed", mock.MatchedBy(func(t time.Time) bool {
-			return t.After(now.Truncate(time.Hour).Add(-5*time.Second)) && t.Before(now.Truncate(time.Hour).Add(5*time.Second))
-		}), mock.MatchedBy(func(t time.Time) bool {
-			return t.After(now.Add(-5*time.Second)) && t.Before(now.Add(5*time.Second))
-		})).Return([]types.PriceState{}, nil).Once()
 
 		m.On("GetUtilityPrices", mock.Anything, "comed", mock.MatchedBy(func(t time.Time) bool {
 			return t.After(dbStart.Add(-5*time.Second)) && t.Before(dbStart.Add(5*time.Second))
@@ -912,6 +906,85 @@ func TestComEd(t *testing.T) {
 		_, err := c.GetCurrentPrice(context.Background())
 		assert.Error(t, err)
 		assert.ErrorContains(t, err, "comed api returned status: 500")
+	})
+
+	t.Run("OrigEstDollarsPerKWH and SubDollarsPerKWH", func(t *testing.T) {
+		m := &storagemock.MockDatabase{}
+		start := time.UnixMilli(1706227200000).In(ctLocation)
+		end := start.Add(time.Hour)
+
+		// Return 5-minute entries out of chronological order to verify sorting
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			response := fmt.Sprintf(`[
+				{"millisUTC":"%d","price":"3.5"},
+				{"millisUTC":"%d","price":"2.5"}
+			]`, start.Add(10*time.Minute).UnixMilli(), start.Add(5*time.Minute).UnixMilli())
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(response))
+		}))
+		defer ts.Close()
+
+		c := configuredComEdHourly(m)
+		c.apiURL = ts.URL
+		c.client = ts.Client()
+
+		ctx := context.Background()
+
+		// 1. DB currently has an unconfirmed day-ahead estimate (0.042) with no SubDollarsPerKWH
+		m.On("GetUtilityPrices", mock.Anything, "comed", start, end).Return([]types.PriceState{
+			{
+				Price:     types.Price{TSStart: start, TSEnd: end, DollarsPerKWH: 0.042},
+				Confirmed: false,
+				TSUpdated: start.Add(-12 * time.Hour),
+			},
+		}, nil).Once()
+
+		var upserted []types.PriceState
+		m.On("UpsertUtilityPrices", mock.Anything, "comed", mock.Anything, 0).Run(func(args mock.Arguments) {
+			upserted = args.Get(2).([]types.PriceState)
+		}).Return(nil).Once()
+
+		prices, err := c.GetConfirmedPrices(ctx, start, end)
+		require.NoError(t, err)
+		require.Len(t, prices, 1)
+		assert.InDelta(t, 0.03, prices[0].DollarsPerKWH, 0.0001)
+
+		if assert.Len(t, upserted, 1) {
+			assert.InDelta(t, 0.03, upserted[0].DollarsPerKWH, 0.0001)
+			assert.InDelta(t, 0.042, upserted[0].OrigEstDollarsPerKWH, 0.0001)
+			assert.Equal(t, []float64{0.025, 0.035}, upserted[0].SubDollarsPerKWH)
+			assert.True(t, upserted[0].Confirmed)
+		}
+		m.AssertExpectations(t)
+
+		// 2. If a fresh instance reads a PriceState that already has OrigEstDollarsPerKWH set, it preserves it
+		c2 := configuredComEdHourly(m)
+		c2.apiURL = ts.URL
+		c2.client = ts.Client()
+
+		m.On("GetUtilityPrices", mock.Anything, "comed", start, end).Return([]types.PriceState{
+			{
+				Price:                types.Price{TSStart: start, TSEnd: end, DollarsPerKWH: 0.025},
+				Confirmed:            false,
+				OrigEstDollarsPerKWH: 0.042,
+				SubDollarsPerKWH:     []float64{0.025},
+				TSUpdated:            start.Add(5 * time.Minute),
+			},
+		}, nil).Once()
+
+		var upserted2 []types.PriceState
+		m.On("UpsertUtilityPrices", mock.Anything, "comed", mock.Anything, 0).Run(func(args mock.Arguments) {
+			upserted2 = args.Get(2).([]types.PriceState)
+		}).Return(nil).Once()
+
+		_, err = c2.GetConfirmedPrices(ctx, start, end)
+		require.NoError(t, err)
+		if assert.Len(t, upserted2, 1) {
+			assert.InDelta(t, 0.03, upserted2[0].DollarsPerKWH, 0.0001)
+			assert.InDelta(t, 0.042, upserted2[0].OrigEstDollarsPerKWH, 0.0001)
+			assert.Equal(t, []float64{0.025, 0.035}, upserted2[0].SubDollarsPerKWH)
+		}
+		m.AssertExpectations(t)
 	})
 }
 

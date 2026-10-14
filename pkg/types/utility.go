@@ -89,8 +89,10 @@ type Price struct {
 // PriceState embeds Price and adds a Confirmed flag.
 type PriceState struct {
 	Price
-	Confirmed bool      `json:"confirmed"`
-	TSUpdated time.Time `json:"tsUpdated"`
+	Confirmed            bool      `json:"confirmed"`
+	TSUpdated            time.Time `json:"tsUpdated"`
+	OrigEstDollarsPerKWH float64   `json:"origEstDollarsPerKWH,omitempty"`
+	SubDollarsPerKWH     []float64 `json:"subDollarsPerKWH,omitempty"`
 }
 
 // SiteMonthlyPrices represents monthly price history stored in the monthly_prices collection.

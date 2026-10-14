@@ -83,6 +83,21 @@ func configuredComEdHourly(db storage.Database) *baseComEdHourly {
 	return c
 }
 
+// extractOrigEstPrices extracts the original estimated price for each hour from existing DB records.
+// If a record already has OrigEstDollarsPerKWH set, it preserves that value; otherwise, if the record
+// is an unconfirmed day-ahead estimate (no 5-minute SubDollarsPerKWH samples), its DollarsPerKWH is the original estimate.
+func extractOrigEstPrices(dbPrices []types.PriceState) map[int64]float64 {
+	origEst := make(map[int64]float64, len(dbPrices))
+	for _, p := range dbPrices {
+		if p.OrigEstDollarsPerKWH != 0 {
+			origEst[p.TSStart.Unix()] = p.OrigEstDollarsPerKWH
+		} else if !p.Confirmed && len(p.SubDollarsPerKWH) == 0 && p.DollarsPerKWH != 0 {
+			origEst[p.TSStart.Unix()] = p.DollarsPerKWH
+		}
+	}
+	return origEst
+}
+
 // apiResponse represents the structure of the JSON returned by ComEd.
 type comedPriceEntry struct {
 	MillisUTC string `json:"millisUTC"`
@@ -139,6 +154,7 @@ func (c *baseComEdHourly) GetConfirmedPrices(ctx context.Context, start, end tim
 		}
 
 		// Then check database
+		var origEstByHour map[int64]float64
 		if c.db != nil {
 			log.Ctx(ctx).DebugContext(ctx,
 				"confirmed prices not found in cache, checking database",
@@ -149,6 +165,7 @@ func (c *baseComEdHourly) GetConfirmedPrices(ctx context.Context, start, end tim
 			if err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to get confirmed prices from database", slog.Any("error", err))
 			} else if len(dbPrices) > 0 {
+				origEstByHour = extractOrigEstPrices(dbPrices)
 				// verify if all confirmed
 				allConfirmed := true
 				for _, p := range dbPrices {
@@ -174,18 +191,18 @@ func (c *baseComEdHourly) GetConfirmedPrices(ctx context.Context, start, end tim
 		}
 
 		log.Ctx(ctx).DebugContext(ctx, "fetching confirmed price history from api")
-		prices, err := c.fetchPricesRange(ctx, start, end)
+		prices, err := c.fetchPricesRange(ctx, currInner, end)
 		if err != nil {
 			return nil, err
 		}
 
 		now := time.Now().In(ctLocation)
-		confirmedPrices := make([]types.Price, 0, len(prices))
+		confirmedPrices := make([]types.Price, len(cachedInner), len(cachedInner)+len(prices))
+		copy(confirmedPrices, cachedInner)
 		var earliest time.Time
 		var latest time.Time
 		toUpsert := make([]types.PriceState, 0, len(prices))
-		for i := len(prices) - 1; i >= 0; i-- {
-			p := prices[i]
+		for _, p := range prices {
 			confirmed := p.isConfirmed(now)
 
 			if confirmed {
@@ -199,20 +216,22 @@ func (c *baseComEdHourly) GetConfirmedPrices(ctx context.Context, start, end tim
 				}
 			} else {
 				// if we don't have a full hour of data and it's recent, log that we are waiting
-				if p.sampleCount < 12 && p.TSEnd.After(now.Add(-45*time.Minute)) && !p.TSEnd.After(now.Add(-5*time.Minute)) {
+				if len(p.subDollarsPerKWH) < 12 && p.TSEnd.After(now.Add(-45*time.Minute)) && !p.TSEnd.After(now.Add(-5*time.Minute)) {
 					log.Ctx(ctx).WarnContext(
 						ctx,
 						"waiting for more price data for hour",
 						slog.Time("tsStart", p.TSStart),
 						slog.Time("tsEnd", p.TSEnd),
-						slog.Int("sampleCount", p.sampleCount))
+						slog.Int("sampleCount", len(p.subDollarsPerKWH)))
 				}
 			}
 
 			toUpsert = append(toUpsert, types.PriceState{
-				Price:     p.Price,
-				Confirmed: confirmed,
-				TSUpdated: now,
+				Price:                p.Price,
+				Confirmed:            confirmed,
+				TSUpdated:            now,
+				OrigEstDollarsPerKWH: origEstByHour[p.TSStart.Unix()],
+				SubDollarsPerKWH:     p.subDollarsPerKWH,
 			})
 		}
 
@@ -248,12 +267,12 @@ func (c *baseComEdHourly) GetConfirmedPrices(ctx context.Context, start, end tim
 	return copied, nil
 }
 
-type priceWithSampleCount struct {
+type priceWithSamples struct {
 	types.Price
-	sampleCount int
+	subDollarsPerKWH []float64
 }
 
-func (p priceWithSampleCount) isConfirmed(now time.Time) bool {
+func (p priceWithSamples) isConfirmed(now time.Time) bool {
 	// don't confirm prices that ended within 5 minutes ago
 	if p.TSEnd.After(now.Add(-5 * time.Minute)) {
 		return false
@@ -265,14 +284,14 @@ func (p priceWithSampleCount) isConfirmed(now time.Time) bool {
 
 	// don't confirm prices that have less than 12 samples and ended within 45
 	// minutes ago
-	if p.sampleCount < 12 && p.TSEnd.After(now.Add(-45*time.Minute)) {
+	if len(p.subDollarsPerKWH) < 12 && p.TSEnd.After(now.Add(-45*time.Minute)) {
 		return false
 	}
 	return true
 }
 
 // fetchPricesRange retrieves prices from the ComEd API for a specific range.
-func (c *baseComEdHourly) fetchPricesRange(ctx context.Context, start, end time.Time) ([]priceWithSampleCount, error) {
+func (c *baseComEdHourly) fetchPricesRange(ctx context.Context, start, end time.Time) ([]priceWithSamples, error) {
 	start = start.In(ctLocation)
 	end = end.In(ctLocation)
 
@@ -319,11 +338,16 @@ func (c *baseComEdHourly) fetchPricesRange(ctx context.Context, start, end time.
 		slog.String("end", end.Format(time.RFC3339)),
 	)
 
+	type subSample struct {
+		tsEnd         time.Time
+		dollarsPerKWH float64
+	}
+
 	// Map to group prices by hour
 	type hourlyData struct {
 		start    time.Time
 		sum      float64
-		count    int
+		samples  []subSample
 		lastTime time.Time
 	}
 	hours := make(map[int64]*hourlyData) // Key by unix hour to handle map keys
@@ -349,16 +373,26 @@ func (c *baseComEdHourly) fetchPricesRange(ctx context.Context, start, end time.
 		}
 		h := hours[key]
 		h.sum += centsPerKWH
-		h.count++
+		h.samples = append(h.samples, subSample{
+			tsEnd:         tsEnd,
+			dollarsPerKWH: centsPerKWH / 100,
+		})
 		if tsEnd.After(h.lastTime) {
 			h.lastTime = tsEnd
 		}
 	}
 
-	var prices []priceWithSampleCount
+	var prices []priceWithSamples
 	for _, h := range hours {
-		avgCents := h.sum / float64(h.count)
-		prices = append(prices, priceWithSampleCount{
+		sort.Slice(h.samples, func(i, j int) bool {
+			return h.samples[i].tsEnd.Before(h.samples[j].tsEnd)
+		})
+		subDollars := make([]float64, len(h.samples))
+		for i, s := range h.samples {
+			subDollars[i] = s.dollarsPerKWH
+		}
+		avgCents := h.sum / float64(len(h.samples))
+		prices = append(prices, priceWithSamples{
 			Price: types.Price{
 				Provider: "comed_besh",
 				TSStart:  h.start,
@@ -369,7 +403,7 @@ func (c *baseComEdHourly) fetchPricesRange(ctx context.Context, start, end time.
 				TSEnd:         h.start.Add(time.Hour),
 				DollarsPerKWH: avgCents / 100, // Cents to Dollars
 			},
-			sampleCount: h.count,
+			subDollarsPerKWH: subDollars,
 		})
 	}
 
@@ -409,22 +443,30 @@ func (c *baseComEdHourly) GetCurrentPrice(ctx context.Context) (types.Price, err
 		}
 		c.mu.Unlock()
 
+		// Fetch enough history to get at least the last few hours complete.
+		// 6 hours back should be plenty to get full hours even with delays.
+		start := now.Add(-6 * time.Hour).Truncate(time.Hour)
+
 		// Then check database
+		var dbPrices []types.PriceState
+		var origEstByHour map[int64]float64
 		if c.db != nil {
-			start := now.Truncate(time.Hour)
-			dbPrices, err := c.db.GetUtilityPrices(ctx, "comed", start, now)
+			var err error
+			dbPrices, err = c.db.GetUtilityPrices(ctx, "comed", start, now)
 			if err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to get current price from database", slog.Any("error", err))
 			} else if len(dbPrices) > 0 {
+				origEstByHour = extractOrigEstPrices(dbPrices)
 				sort.Slice(dbPrices, func(i, j int) bool {
 					return dbPrices[i].TSStart.Before(dbPrices[j].TSStart)
 				})
 				// use the latest price in the range
 				latest := dbPrices[len(dbPrices)-1]
-				// if it was updated recently and contains the current time then use it
+				// if it was updated recently and contains the current time (and has real-time 5-min samples
+				// rather than just an unconfirmed day-ahead estimate) then use it.
 				// we chose 2 minutes because the price should update every 5 minutes and
 				// we don't want to have cached a stale price that just recently updated
-				if latest.Contains(now) && time.Since(latest.TSUpdated) < 2*time.Minute {
+				if latest.Contains(now) && len(latest.SubDollarsPerKWH) > 0 && time.Since(latest.TSUpdated) < 2*time.Minute {
 					log.Ctx(ctx).DebugContext(ctx, "current price found in database and is fresh")
 					c.mu.Lock()
 					// Update memory cache since we found a fresh one in DB
@@ -438,9 +480,6 @@ func (c *baseComEdHourly) GetCurrentPrice(ctx context.Context) (types.Price, err
 			}
 		}
 
-		// Fetch enough history to get at least the last few hours complete.
-		// 6 hours back should be plenty to get full hours even with delays.
-		start := now.Add(-6 * time.Hour).Truncate(time.Hour)
 		prices, err := c.fetchPricesRange(ctx, start, now)
 		if err != nil || len(prices) == 0 {
 			fetchErr := err
@@ -468,23 +507,15 @@ func (c *baseComEdHourly) GetCurrentPrice(ctx context.Context) (types.Price, err
 				return latest, nil
 			}
 
-			if c.db != nil {
-				// fetch up to 1 hour back as a fallback
-				dbStart := now.Truncate(time.Hour).Add(-1 * time.Hour)
-				dbPrices, dbErr := c.db.GetUtilityPrices(ctx, "comed", dbStart, now)
-				if dbErr == nil && len(dbPrices) > 0 {
-					sort.Slice(dbPrices, func(i, j int) bool {
-						return dbPrices[i].TSStart.Before(dbPrices[j].TSStart)
-					})
-					latest := dbPrices[len(dbPrices)-1]
-					if now.Sub(latest.TSEnd) <= time.Hour {
-						log.Ctx(ctx).WarnContext(ctx, "comed api down or empty, falling back to database cached price",
-							slog.Any("error", fetchErr),
-							slog.Time("cachedStart", latest.TSStart),
-							slog.Time("cachedEnd", latest.TSEnd),
-							slog.Float64("price", latest.DollarsPerKWH))
-						return latest.Price, nil
-					}
+			if len(dbPrices) > 0 {
+				latest := dbPrices[len(dbPrices)-1]
+				if now.Sub(latest.TSEnd) <= time.Hour {
+					log.Ctx(ctx).WarnContext(ctx, "comed api down or empty, falling back to database cached price",
+						slog.Any("error", fetchErr),
+						slog.Time("cachedStart", latest.TSStart),
+						slog.Time("cachedEnd", latest.TSEnd),
+						slog.Float64("price", latest.DollarsPerKWH))
+					return latest.Price, nil
 				}
 			}
 
@@ -497,9 +528,11 @@ func (c *baseComEdHourly) GetCurrentPrice(ctx context.Context) (types.Price, err
 		for i, p := range prices {
 			rawPrices[i] = p.Price
 			toUpsert = append(toUpsert, types.PriceState{
-				Price:     p.Price,
-				Confirmed: p.isConfirmed(now),
-				TSUpdated: nowUpsert,
+				Price:                p.Price,
+				Confirmed:            p.isConfirmed(now),
+				TSUpdated:            nowUpsert,
+				OrigEstDollarsPerKWH: origEstByHour[p.TSStart.Unix()],
+				SubDollarsPerKWH:     p.subDollarsPerKWH,
 			})
 		}
 
@@ -608,11 +641,12 @@ func (c *baseComEdHourly) GetFuturePrices(ctx context.Context) ([]types.Price, e
 		}
 
 		// Check database for future prices
+		dbPriceMap := make(map[int64]types.PriceState)
+		dbStart := nowHour
+		if latestFutureHourInner.After(nowHour) {
+			dbStart = latestFutureHourInner.Add(time.Hour)
+		}
 		if c.db != nil {
-			dbStart := nowHour
-			if latestFutureHourInner.After(nowHour) {
-				dbStart = latestFutureHourInner.Add(time.Hour)
-			}
 			// we want prices from now until at least tomorrow night
 			end := nowHour.Add(48 * time.Hour)
 			log.Ctx(ctx).DebugContext(
@@ -629,6 +663,7 @@ func (c *baseComEdHourly) GetFuturePrices(ctx context.Context) ([]types.Price, e
 				log.Ctx(ctx).ErrorContext(ctx, "failed to get future prices from database", slog.Any("error", err))
 			} else if len(dbPrices) > 0 {
 				for _, p := range dbPrices {
+					dbPriceMap[p.TSStart.Unix()] = p
 					if !p.TSStart.Before(nowHour) {
 						futurePricesInner = append(futurePricesInner, p.Price)
 					}
@@ -659,6 +694,16 @@ func (c *baseComEdHourly) GetFuturePrices(ctx context.Context) ([]types.Price, e
 		for _, p := range fetchedPrices {
 			if !p.TSStart.Before(nowHour) {
 				prices = append(prices, p)
+			}
+			if !p.TSStart.Before(dbStart) {
+				// backfill estimated price
+				if existing, ok := dbPriceMap[p.TSStart.Unix()]; ok && (existing.Confirmed || len(existing.SubDollarsPerKWH) > 0) {
+					if existing.OrigEstDollarsPerKWH == 0 {
+						existing.OrigEstDollarsPerKWH = p.DollarsPerKWH
+						toUpsert = append(toUpsert, existing)
+					}
+					continue
+				}
 				toUpsert = append(toUpsert, types.PriceState{
 					Price:     p,
 					Confirmed: false, // not confirmed for ComEd future prices
@@ -672,7 +717,7 @@ func (c *baseComEdHourly) GetFuturePrices(ctx context.Context) ([]types.Price, e
 		c.lastFutureFetch = time.Now()
 		c.mu.Unlock()
 
-		if c.db != nil {
+		if c.db != nil && len(toUpsert) > 0 {
 			if err := c.db.UpsertUtilityPrices(ctx, "comed", toUpsert, 0); err != nil {
 				log.Ctx(ctx).WarnContext(ctx, "failed to upsert comed future prices to database", slog.Any("error", err))
 			}
