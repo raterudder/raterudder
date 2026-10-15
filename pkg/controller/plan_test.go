@@ -5715,6 +5715,488 @@ func TestSearchOptimalPlan(t *testing.T) {
 		assert.NotEqual(t, types.BatteryModeChargeAny, bestPath.actions[0].batteryMode,
 			"Grid charge wear hurdle must reject grid pre-charging at $0.05/kWh when it only displaces marginal $0.065/kWh shoulder load")
 	})
+
+	t.Run("IntraBucketTieBreakingAndBoundaryIsolation", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("EqualCostDifferentSOC_PrefersHigherSOCDespiteHoldingCost", func(t *testing.T) {
+			t.Parallel()
+
+			// At Step 1 ($0.00/kWh free window with 0.045 kWh load), Branch A (Standby) preserves 50.20% SOC
+			// while Branch B (Load) drains 0.35% SOC to 49.85% SOC; both have $0.00 cash/wear/transition cost.
+			// At Step 2 ($0.15/kWh with 0 load), both transition to BatteryModeLoad (mIdx=0) and round to the
+			// same 0.5% bucket (b=100). Branch A has a ~9.5e-6 higher holding cost from carrying +0.047 kWh,
+			// which is within planScoreTieEpsilon (1e-4). The tie-breaker must retain Branch A's higher SOC
+			// (50.20% > 49.85%) so the extra energy offsets the Step 3 ($0.50/kWh) peak.
+			tieTimeline := []planInterval{
+				{
+					index:         0,
+					startTime:     now,
+					endTime:       now.Add(time.Hour),
+					durationHours: 1.0,
+					importRate:    0.10,
+					loadKWH:       0.0,
+					minSOC:        20.0,
+				},
+				{
+					index:         1,
+					startTime:     now.Add(time.Hour),
+					endTime:       now.Add(2 * time.Hour),
+					durationHours: 1.0,
+					importRate:    0.00,
+					loadKWH:       0.045,
+					minSOC:        20.0,
+				},
+				{
+					index:         2,
+					startTime:     now.Add(2 * time.Hour),
+					endTime:       now.Add(3 * time.Hour),
+					durationHours: 1.0,
+					importRate:    0.15,
+					loadKWH:       0.0,
+					minSOC:        20.0,
+				},
+				{
+					index:         3,
+					startTime:     now.Add(3 * time.Hour),
+					endTime:       now.Add(4 * time.Hour),
+					durationHours: 1.0,
+					importRate:    0.50,
+					loadKWH:       5.0,
+					minSOC:        20.0,
+				},
+			}
+
+			tieSettings := types.Settings{
+				MinBatterySOC:       20.0,
+				GridChargeBatteries: false,
+			}
+			tieStatus := types.SystemStatus{
+				Timestamp:             now,
+				BatteryCapacityKWH:    13.5,
+				BatterySOC:            50.20,
+				BatteryAboveMinSOC:    true,
+				MaxBatteryChargeKW:    5.0,
+				MaxBatteryDischargeKW: 5.0,
+			}
+			tieState := planState{
+				energyKWH:      13.5 * 0.5020,
+				soc:            50.20,
+				capacityKWH:    13.5,
+				maxChargeKW:    5.0,
+				maxDischargeKW: 5.0,
+				time:           now,
+			}
+
+			anchors := c.detectPlanningAnchors(tieTimeline, nil, tieStatus, tieSettings, nil)
+			bestPath, err := c.searchOptimalPlan(ctx, tieTimeline, tieState, anchors, tieSettings, tieStatus, nil, nil)
+			require.NoError(t, err)
+			require.Len(t, bestPath.actions, 4)
+
+			assert.Equal(t, types.BatteryModeStandby, bestPath.actions[1].batteryMode,
+				"Intra-bucket tie-breaker must keep the higher-SOC trajectory (50.20% vs 49.85%) when cash costs tie within planScoreTieEpsilon")
+			assert.InDelta(t, 50.20, bestPath.states[2].soc, 0.01)
+		})
+
+		t.Run("BoundaryBucket200_FullCapacityNotOverwrittenByNearFull", func(t *testing.T) {
+			t.Parallel()
+
+			// Branch A holds at Step 1 ($0.05/kWh, 0.285 kWh load) and charges to a clamped 100.00% SOC at Step 2 ($0.04/kWh).
+			// Branch B discharges at Step 1 and charges at Step 2 to 99.83% SOC.
+			// At Step 2, both are in BatteryModeChargeAny (mIdx=2), and Branch B has a ~$0.0025 lower accumulated cost
+			// because it charged 0.17% less energy. Because bucket 200 is reserved strictly for full capacity (soc >= 100%),
+			// Branch B (99.83%) is placed in bucket 199 and does not overwrite Branch A (100.00%) ahead of the Step 3 ($0.50/kWh) peak.
+			fullBoundaryTimeline := []planInterval{
+				{
+					index:         0,
+					startTime:     now,
+					endTime:       now.Add(time.Hour),
+					durationHours: 1.0,
+					importRate:    0.08,
+					loadKWH:       0.27,
+					minSOC:        20.0,
+				},
+				{
+					index:         1,
+					startTime:     now.Add(time.Hour),
+					endTime:       now.Add(2 * time.Hour),
+					durationHours: 1.0,
+					importRate:    0.05,
+					loadKWH:       0.285,
+					minSOC:        20.0,
+				},
+				{
+					index:         2,
+					startTime:     now.Add(2 * time.Hour),
+					endTime:       now.Add(3*time.Hour + 12*time.Minute),
+					durationHours: 1.2,
+					importRate:    0.04,
+					loadKWH:       0.0,
+					minSOC:        20.0,
+				},
+				{
+					index:         3,
+					startTime:     now.Add(3*time.Hour + 12*time.Minute),
+					endTime:       now.Add(5*time.Hour + 12*time.Minute),
+					durationHours: 2.0,
+					importRate:    0.50,
+					loadKWH:       11.0,
+					minSOC:        20.0,
+				},
+			}
+
+			fullSettings := types.Settings{
+				MinBatterySOC:       20.0,
+				GridChargeBatteries: true,
+			}
+			fullStatus := types.SystemStatus{
+				Timestamp:             now,
+				BatteryCapacityKWH:    13.5,
+				BatterySOC:            62.0,
+				BatteryAboveMinSOC:    true,
+				MaxBatteryChargeKW:    5.0,
+				MaxBatteryDischargeKW: 5.0,
+			}
+			fullState := planState{
+				energyKWH:      13.5 * 0.62,
+				soc:            62.0,
+				capacityKWH:    13.5,
+				maxChargeKW:    5.0,
+				maxDischargeKW: 5.0,
+				time:           now,
+			}
+
+			anchors := c.detectPlanningAnchors(fullBoundaryTimeline, nil, fullStatus, fullSettings, nil)
+			bestPath, err := c.searchOptimalPlan(ctx, fullBoundaryTimeline, fullState, anchors, fullSettings, fullStatus, nil, nil)
+			require.NoError(t, err)
+			require.Len(t, bestPath.actions, 4)
+
+			assert.InDelta(t, 100.0, bestPath.states[3].soc, 1e-4,
+				"Full 100.0% SOC trajectory in bucket 200 must not be overwritten by a cheaper 99.83% trajectory ahead of a high peak")
+		})
+
+		t.Run("BoundaryMinBucket_AboveReserveNotMergedWithClampedReserve", func(t *testing.T) {
+			t.Parallel()
+
+			// With minSOC = 20.0% (minBucket = 40), Branch A (Standby at Step 1 $0.15, Load at Step 2 $0.16)
+			// arrives at Step 2 with 20.175% SOC (0.0236 kWh above reserve) and cumulative cost $0.1040,
+			// whereas Branch B (Load at Step 1 and Step 2) clamps at 20.000% SOC with cumulative cost $0.1018.
+			// Because minBucket (40) is reserved for soc <= minSOC, Branch A (20.175%) is placed in bucket 41
+			// and survives to discharge its remaining energy during the Step 3 ($0.80/kWh) critical peak.
+			reserveBoundaryTimeline := []planInterval{
+				{
+					index:         0,
+					startTime:     now,
+					endTime:       now.Add(time.Hour),
+					durationHours: 1.0,
+					importRate:    0.10,
+					loadKWH:       0.0,
+					minSOC:        20.0,
+				},
+				{
+					index:         1,
+					startTime:     now.Add(time.Hour),
+					endTime:       now.Add(2 * time.Hour),
+					durationHours: 1.0,
+					importRate:    0.15,
+					loadKWH:       0.66,
+					minSOC:        20.0,
+				},
+				{
+					index:         2,
+					startTime:     now.Add(2 * time.Hour),
+					endTime:       now.Add(3 * time.Hour),
+					durationHours: 1.0,
+					importRate:    0.16,
+					loadKWH:       0.618,
+					minSOC:        20.0,
+				},
+				{
+					index:         3,
+					startTime:     now.Add(3 * time.Hour),
+					endTime:       now.Add(4 * time.Hour),
+					durationHours: 1.0,
+					importRate:    0.80,
+					loadKWH:       1.0,
+					minSOC:        20.0,
+				},
+			}
+
+			resSettings := types.Settings{
+				MinBatterySOC:       20.0,
+				GridChargeBatteries: false,
+			}
+			resStatus := types.SystemStatus{
+				Timestamp:             now,
+				BatteryCapacityKWH:    13.5,
+				BatterySOC:            25.0,
+				BatteryAboveMinSOC:    true,
+				MaxBatteryChargeKW:    5.0,
+				MaxBatteryDischargeKW: 5.0,
+			}
+			resState := planState{
+				energyKWH:      13.5 * 0.25,
+				soc:            25.0,
+				capacityKWH:    13.5,
+				maxChargeKW:    5.0,
+				maxDischargeKW: 5.0,
+				time:           now,
+			}
+
+			anchors := c.detectPlanningAnchors(reserveBoundaryTimeline, nil, resStatus, resSettings, nil)
+			bestPath, err := c.searchOptimalPlan(ctx, reserveBoundaryTimeline, resState, anchors, resSettings, resStatus, nil, nil)
+			require.NoError(t, err)
+			require.Len(t, bestPath.actions, 4)
+
+			assert.Greater(t, bestPath.states[3].soc, 20.10,
+				"Unclamped 20.175% SOC trajectory must be isolated in minBucket+1 rather than overwritten by clamped 20.0% SOC before Step 3 peak")
+			assert.Greater(t, bestPath.metrics[3].batSuppliedHomeKWH, 0.02,
+				"Remaining energy above reserve must be discharged during the Step 3 ($0.80/kWh) peak")
+		})
+
+		t.Run("EqualSOC_PrefersLateJustInTimeChargingViaHoldingCost", func(t *testing.T) {
+			t.Parallel()
+
+			// Across a flat 3-hour off-peak block ($0.05/kWh) ahead of a peak window ($0.45/kWh),
+			// charging at Step 0 vs waiting in Standby at Step 0 and charging at Step 1 both reach
+			// the exact same 100.0% SOC in bucket 200. Because nextState.soc == curr.state.soc,
+			// newCost < curr.totalCost breaks the tie via batteryHoldingCostPerHourPerKWH in favor of
+			// waiting at Step 0 and charging just-in-time (while respecting the 40-min pre-peak buffer).
+			jitTimeline := []planInterval{
+				{
+					index:         0,
+					startTime:     now,
+					endTime:       now.Add(time.Hour),
+					durationHours: 1.0,
+					importRate:    0.05,
+					loadKWH:       0.0,
+					minSOC:        20.0,
+				},
+				{
+					index:         1,
+					startTime:     now.Add(time.Hour),
+					endTime:       now.Add(2 * time.Hour),
+					durationHours: 1.0,
+					importRate:    0.05,
+					loadKWH:       0.0,
+					minSOC:        20.0,
+				},
+				{
+					index:         2,
+					startTime:     now.Add(2 * time.Hour),
+					endTime:       now.Add(2*time.Hour + 20*time.Minute),
+					durationHours: 1.0 / 3.0,
+					importRate:    0.05,
+					loadKWH:       0.0,
+					minSOC:        20.0,
+				},
+				{
+					index:         3,
+					startTime:     now.Add(2*time.Hour + 20*time.Minute),
+					endTime:       now.Add(4*time.Hour + 20*time.Minute),
+					durationHours: 2.0,
+					importRate:    0.45,
+					loadKWH:       9.0,
+					minSOC:        20.0,
+				},
+			}
+
+			jitSettings := types.Settings{
+				MinBatterySOC:       20.0,
+				GridChargeBatteries: true,
+			}
+			jitStatus := types.SystemStatus{
+				Timestamp:             now,
+				BatteryCapacityKWH:    13.5,
+				BatterySOC:            75.0,
+				BatteryAboveMinSOC:    true,
+				MaxBatteryChargeKW:    5.0,
+				MaxBatteryDischargeKW: 5.0,
+			}
+			jitState := planState{
+				energyKWH:      13.5 * 0.75,
+				soc:            75.0,
+				capacityKWH:    13.5,
+				maxChargeKW:    5.0,
+				maxDischargeKW: 5.0,
+				time:           now,
+			}
+
+			anchors := c.detectPlanningAnchors(jitTimeline, nil, jitStatus, jitSettings, nil)
+			bestPath, err := c.searchOptimalPlan(ctx, jitTimeline, jitState, anchors, jitSettings, jitStatus, nil, nil)
+			require.NoError(t, err)
+			require.Len(t, bestPath.actions, 4)
+
+			assert.NotEqual(t, types.BatteryModeChargeAny, bestPath.actions[0].batteryMode,
+				"When two paths reach the exact same 100% SOC, holding cost tie-breaker must prefer waiting at Step 0 and charging later")
+			assert.Equal(t, types.BatteryModeChargeAny, bestPath.actions[1].batteryMode,
+				"Should charge at Step 1 (completing before the Step 2 20-min pre-peak buffer)")
+			assert.Equal(t, types.BatteryModeStandby, bestPath.actions[2].batteryMode,
+				"Should rest in Standby during the 20-min pre-peak buffer at Step 2")
+		})
+
+		t.Run("ModeSlotIsolation_SolarModeExportDoesNotCollideWithSolarModeAny", func(t *testing.T) {
+			t.Parallel()
+
+			// At Step 1 (20-min interval), solar (0.35 kWh = 1.05 kW >= minDirectSolarExportKW) slightly exceeds
+			// home load (0.30 kWh), and exportRate ($0.12) exceeds importRate ($0.10) by $0.02.
+			// On a 27 kWh battery, the SOC difference between SolarModeAny (absorbing 0.05 kWh net solar -> +0.17% SOC)
+			// and SolarModeExport (exporting 0.35 kWh solar while battery covers 0.30 kWh load -> -1.17% SOC)
+			// or between trajectories reaching the same bucket in Load+SolarModeAny (mIdx=0) vs Load+SolarModeExport (mIdx=4)
+			// is isolated into separate mode slots so SolarModeExport's immediate credit cannot overwrite SolarModeAny's
+			// trajectory ahead of an evening $0.60/kWh peak.
+			modeSlotTimeline := []planInterval{
+				{
+					index:         0,
+					startTime:     now,
+					endTime:       now.Add(20 * time.Minute),
+					durationHours: 1.0 / 3.0,
+					importRate:    0.10,
+					exportRate:    0.05,
+					loadKWH:       0.10,
+					solarKWH:      0.10,
+					minSOC:        20.0,
+				},
+				{
+					index:         1,
+					startTime:     now.Add(20 * time.Minute),
+					endTime:       now.Add(40 * time.Minute),
+					durationHours: 1.0 / 3.0,
+					importRate:    0.10,
+					exportRate:    0.12,
+					loadKWH:       0.02,
+					solarKWH:      0.35, // 1.05 kW solar
+					minSOC:        20.0,
+				},
+				{
+					index:         2,
+					startTime:     now.Add(40 * time.Minute),
+					endTime:       now.Add(100 * time.Minute),
+					durationHours: 1.0,
+					importRate:    0.60,
+					exportRate:    0.05,
+					loadKWH:       3.0,
+					solarKWH:      0.0,
+					minSOC:        20.0,
+				},
+			}
+
+			slotSettings := types.Settings{
+				MinBatterySOC:       20.0,
+				ManageTOUSchedules:  true,
+				GridExportSolar:     true,
+				GridChargeBatteries: false,
+			}
+			slotStatus := types.SystemStatus{
+				Timestamp:             now,
+				BatteryCapacityKWH:    27.0,
+				BatterySOC:            30.0,
+				BatteryAboveMinSOC:    true,
+				MaxBatteryChargeKW:    10.0,
+				MaxBatteryDischargeKW: 10.0,
+			}
+			slotState := planState{
+				energyKWH:      27.0 * 0.30,
+				soc:            30.0,
+				capacityKWH:    27.0,
+				maxChargeKW:    10.0,
+				maxDischargeKW: 10.0,
+				time:           now,
+			}
+
+			// Verify modeIndex isolates SolarModeExport (slot 4) from SolarModeAny (slot 0)
+			assert.Equal(t, 0, modeIndex(types.BatteryModeLoad, types.SolarModeAny))
+			assert.Equal(t, 4, modeIndex(types.BatteryModeLoad, types.SolarModeExport))
+
+			anchors := c.detectPlanningAnchors(modeSlotTimeline, nil, slotStatus, slotSettings, nil)
+			bestPath, err := c.searchOptimalPlan(ctx, modeSlotTimeline, slotState, anchors, slotSettings, slotStatus, nil, nil)
+			require.NoError(t, err)
+			require.Len(t, bestPath.actions, 3)
+
+			// Step 1 should absorb the 0.33 kWh net solar for the $0.60/kWh Step 2 peak rather than exporting at $0.12/kWh
+			assert.Equal(t, types.SolarModeAny, bestPath.actions[1].solarMode,
+				"SolarModeAny must survive Step 1 and beat SolarModeExport when Step 2 has a $0.60/kWh peak deficit")
+		})
+
+		t.Run("CostOnlyTieBreaker_RejectsMidPeriodStandbyChurnAheadOfSolarRefill", func(t *testing.T) {
+			t.Parallel()
+
+			// Across a flat off-peak block ($0.10/kWh) with small baseload (0.045 kWh per 20-min step = 0.35% SOC on 13.5 kWh)
+			// followed by a free solar refill (12.0 kWh) that fills the battery to 100% before an evening $0.50/kWh peak,
+			// switching to Standby for one step saves 0.35% SOC (landing in the same 0.5% bucket as continuous Load)
+			// at the cost of importing 0.045 kWh ($0.0045) + modeSwitchPenalty.
+			// Because intra-bucket tie-breaking compares accumulated cost directly rather than crediting intra-bucket
+			// SOC differences at maxFutureValuationRates ($0.50/kWh), the solver must remain in continuous Load without Standby churn.
+			churnTimeline := []planInterval{
+				{
+					index:         0,
+					startTime:     now,
+					endTime:       now.Add(20 * time.Minute),
+					durationHours: 1.0 / 3.0,
+					importRate:    0.10,
+					loadKWH:       0.045,
+					minSOC:        20.0,
+				},
+				{
+					index:         1,
+					startTime:     now.Add(20 * time.Minute),
+					endTime:       now.Add(40 * time.Minute),
+					durationHours: 1.0 / 3.0,
+					importRate:    0.10,
+					loadKWH:       0.045,
+					minSOC:        20.0,
+				},
+				{
+					index:         2,
+					startTime:     now.Add(40 * time.Minute),
+					endTime:       now.Add(3*time.Hour + 40*time.Minute),
+					durationHours: 3.0,
+					importRate:    0.10,
+					loadKWH:       0.5,
+					solarKWH:      12.0, // Fills battery to 100% for free
+					minSOC:        20.0,
+				},
+				{
+					index:         3,
+					startTime:     now.Add(3*time.Hour + 40*time.Minute),
+					endTime:       now.Add(5*time.Hour + 40*time.Minute),
+					durationHours: 2.0,
+					importRate:    0.50,
+					loadKWH:       6.0,
+					minSOC:        20.0,
+				},
+			}
+
+			churnSettings := types.Settings{
+				MinBatterySOC: 20.0,
+			}
+			churnStatus := types.SystemStatus{
+				Timestamp:             now,
+				BatteryCapacityKWH:    13.5,
+				BatterySOC:            50.20,
+				BatteryAboveMinSOC:    true,
+				MaxBatteryChargeKW:    5.0,
+				MaxBatteryDischargeKW: 5.0,
+			}
+			churnState := planState{
+				energyKWH:      13.5 * 0.5020,
+				soc:            50.20,
+				capacityKWH:    13.5,
+				maxChargeKW:    5.0,
+				maxDischargeKW: 5.0,
+				time:           now,
+			}
+
+			anchors := c.detectPlanningAnchors(churnTimeline, nil, churnStatus, churnSettings, nil)
+			bestPath, err := c.searchOptimalPlan(ctx, churnTimeline, churnState, anchors, churnSettings, churnStatus, nil, nil)
+			require.NoError(t, err)
+			require.Len(t, bestPath.actions, 4)
+
+			assert.Equal(t, types.BatteryModeLoad, bestPath.actions[0].batteryMode)
+			assert.Equal(t, types.BatteryModeLoad, bestPath.actions[1].batteryMode,
+				"Must remain in continuous BatteryModeLoad rather than churning into Standby before a free solar refill")
+		})
+	})
 }
 
 // TestFinalizeDecisionAndPlan tests the synthesis of Decision and types.Plan from a winning path.

@@ -2930,8 +2930,15 @@ func calculateVPPShortfallStrikes(
 	return 0
 }
 
-// modeIndex maps a types.BatteryMode to an integer slot (0..3) for mode-isolated DP buckets.
-func modeIndex(mode types.BatteryMode) int {
+// modeIndex maps a candidate's BatteryMode and SolarMode to an integer slot (0..4) for mode-isolated DP buckets.
+func modeIndex(mode types.BatteryMode, solarMode types.SolarMode) int {
+	// Direct solar export pairs with BatteryModeLoad but carries its own transition penalties and
+	// continuation rules at the next step, and can land in the same 0.5% SOC bucket as SolarModeAny
+	// during low-solar intervals; isolating it prevents the immediate export credit from overwriting
+	// a trajectory that absorbs solar for a later peak.
+	if solarMode == types.SolarModeExport {
+		return 4
+	}
 	switch mode {
 	case types.BatteryModeLoad:
 		return 0
@@ -3098,7 +3105,7 @@ func (c *Controller) searchOptimalPlan(
 			dpNodeSlabPool.Put(slab)
 		}
 	}()
-	var nextBuckets [4][201]*dpNode
+	var nextBuckets [5][201]*dpNode
 	activeNodes := make([]*dpNode, 0, 201)
 
 	// Evaluate forward rollout independently for each initial candidate action at step 0.
@@ -3136,8 +3143,10 @@ func (c *Controller) searchOptimalPlan(
 			interval := timeline[stepIdx]
 
 			// nextBuckets discretizes continuous battery State of Charge into 0.5% increments
-			// (201 buckets from 0.0% to 100.0%) partitioned independently by candidate battery mode (4 slots).
-			// This eliminates mode collisions (e.g. Standby vs Load) while maintaining sub-millisecond execution.
+			// (201 buckets from 0.0% to 100.0%) partitioned independently by candidate dispatch mode (5 slots,
+			// isolating Load, Standby, ChargeAny, Export, and Direct Solar Export).
+			// This eliminates mode collisions (e.g. Standby vs Load, or SolarModeExport vs SolarModeAny)
+			// while maintaining sub-millisecond execution.
 			//
 			// Do not reduce to 101 buckets:
 			// We experimentally tested reducing this to 101 buckets (1.0% SOC bins). While it halved the state space,
@@ -3153,7 +3162,7 @@ func (c *Controller) searchOptimalPlan(
 			// sub-hourly dynamics.
 			//
 			// Note: if you raise this then consider changing socTargetTolerancePct
-			nextBuckets = [4][201]*dpNode{}
+			nextBuckets = [5][201]*dpNode{}
 			var candBuf [5]actionCandidate
 
 			for _, parent := range activeNodes {
@@ -3414,12 +3423,26 @@ func (c *Controller) searchOptimalPlan(
 					newCost += peakBufferCost
 					newStrikes := parent.strikes + strikeInc
 
-					mIdx := modeIndex(cand.batteryMode)
+					mIdx := modeIndex(cand.batteryMode, cand.solarMode)
 					b := int(math.Round(nextState.soc * 2))
 					if b < 0 {
 						b = 0
 					} else if b > 200 {
 						b = 200
+					}
+					// Keep clamped boundary buckets (minSOC reserve floor and 100% full capacity) isolated
+					// from unclamped trajectories:
+					// - Bucket 200 is reserved strictly for full capacity (soc >= 100%), preventing a 99.76% trajectory
+					//   (which paid slightly less grid import cost) from overwriting 100.00% SOC.
+					// - Bucket minBucket is reserved for trajectories at or below reserve (soc <= minSOC, where
+					//   canDischarge is false), preventing a trajectory still discharging above reserve (e.g. 20.20%)
+					//   from colliding with a clamped at-reserve trajectory until it actually finishes draining to minSOC.
+					if b == 200 && nextState.soc < 100.0-1e-6 {
+						b = 199
+					}
+					minBucket := int(math.Round(interval.minSOC * 2))
+					if nextState.soc > interval.minSOC+1e-6 && b <= minBucket && minBucket < 199 {
+						b = minBucket + 1
 					}
 
 					isBetter := false
@@ -3432,10 +3455,17 @@ func (c *Controller) searchOptimalPlan(
 						} else if newStrikes == curr.strikes {
 							// Compare strictly on accumulated cost rather than adjusting for the < 0.5% intra-bucket
 							// SOC difference at maxFutureValuationRates. Both trajectories are already at the same step,
-							// in the same battery mode, and within the same 0.5% SOC bucket; crediting fractional intra-bucket
+							// in the same dispatch mode, and within the same 0.5% SOC bucket; crediting fractional intra-bucket
 							// energy at future peak rates artificially favors paths that bought off-peak grid power (e.g. via
 							// mid-period Standby) or conserved energy ahead of a free solar refill, overcoming modeSwitchPenalty.
-							if newCost < curr.totalCost {
+							// When two trajectories with different SOCs have identical economic cost (within planScoreTieEpsilon,
+							// e.g. from absorbing extra free solar), break the tie in favor of the higher SOC.
+							costDiff := newCost - curr.totalCost
+							if math.Abs(nextState.soc-curr.state.soc) > 1e-6 && math.Abs(costDiff) <= planScoreTieEpsilon {
+								if nextState.soc > curr.state.soc {
+									isBetter = true
+								}
+							} else if newCost < curr.totalCost {
 								isBetter = true
 							}
 						}
@@ -3474,19 +3504,13 @@ func (c *Controller) searchOptimalPlan(
 			// Collect surviving bucket nodes for the next time step with frontier dominance pruning.
 			//
 			// What is Frontier Dominance Pruning?
-			// At each step, multiple path trajectories land in discrete SOC buckets across 4 mode slots.
+			// At each step, multiple path trajectories land in discrete SOC buckets across 5 mode slots.
 			// To compare paths with different SOCs on an equal footing, we compute each node's "effective cost" (effCost):
 			//   effCost = totalCost - (storedEnergyKWH * oneWayEff * valuationRate)
 			// where valuationRate is the maximum tariff rate appearing anywhere in the remaining horizon.
 			// This represents the most optimistic theoretical future net cost if the stored energy is discharged
 			// at the highest possible future price.
 			//
-			// Pruning Rule 1 (Intra-Bucket Mode Consolidation):
-			// Between BatteryModeLoad (slot 0) and BatteryModeExport (slot 3), all subsequent physical constraints,
-			// valid actions, and transition penalties are identical. In the same 0.5% SOC bucket, the node with
-			// the higher effective cost can never overtake the lower one. We discard the higher one.
-			//
-			// Pruning Rule 2 (Frontier Bounding):
 			// Across the entire search wavefront, let minEffCost be the best effective cost found so far.
 			// The maximum possible economic benefit ANY battery could ever deliver in the remaining horizon
 			// over an empty battery is (capacityKWH * valuationRate). Therefore, any trajectory whose effective
@@ -3502,28 +3526,8 @@ func (c *Controller) searchOptimalPlan(
 				valuationRate = maxFutureValuationRates[stepIdx+1]
 			}
 
-			// Between BatteryModeLoad (0) and BatteryModeExport (3), future physical constraints and
-			// transition rules are identical. In the same SOC bucket, keep only the node with lower strikes or total cost.
-			for b := 0; b <= 200; b++ {
-				n0 := nextBuckets[0][b]
-				n3 := nextBuckets[3][b]
-				if n0 != nil && n3 != nil {
-					if n0.strikes < n3.strikes {
-						nextBuckets[3][b] = nil
-					} else if n3.strikes < n0.strikes {
-						nextBuckets[0][b] = nil
-					} else {
-						if n0.totalCost <= n3.totalCost {
-							nextBuckets[3][b] = nil
-						} else {
-							nextBuckets[0][b] = nil
-						}
-					}
-				}
-			}
-
 			minStrikes := math.MaxInt
-			for m := 0; m < 4; m++ {
+			for m := 0; m < 5; m++ {
 				for _, n := range nextBuckets[m] {
 					if n != nil && n.strikes < minStrikes {
 						minStrikes = n.strikes
@@ -3532,7 +3536,7 @@ func (c *Controller) searchOptimalPlan(
 			}
 
 			var minEffCost float64 = math.MaxFloat64
-			for m := 0; m < 4; m++ {
+			for m := 0; m < 5; m++ {
 				for _, n := range nextBuckets[m] {
 					if n != nil && n.strikes == minStrikes {
 						effCost := n.totalCost - (n.state.soc/100.0)*capacityKWH*oneWayEff*valuationRate
@@ -3545,7 +3549,7 @@ func (c *Controller) searchOptimalPlan(
 
 			maxAllowedEffCost := minEffCost + (capacityKWH * valuationRate) + 1.00
 
-			for m := 0; m < 4; m++ {
+			for m := 0; m < 5; m++ {
 				for _, n := range nextBuckets[m] {
 					if n != nil && n.strikes == minStrikes {
 						effCost := n.totalCost - (n.state.soc/100.0)*capacityKWH*oneWayEff*valuationRate
