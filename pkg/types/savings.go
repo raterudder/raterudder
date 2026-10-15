@@ -40,12 +40,5 @@ type SavingsStats struct {
 	SelfConsumptionCreditDollars  float64 `json:"selfConsumptionCreditDollars,omitempty"`
 	GridOnlyCostDollars           float64 `json:"gridOnlyCostDollars,omitempty"`
 	StoredEnergyValueDollars      float64 `json:"storedEnergyValueDollars,omitempty"`
-	StartBatterySOC               float64 `json:"startBatterySOC,omitempty"`
-	EndBatterySOC                 float64 `json:"endBatterySOC,omitempty"`
-	StartShadowSOC                float64 `json:"startShadowSOC,omitempty"`
-	EndShadowSOC                  float64 `json:"endShadowSOC,omitempty"`
-	BatteryCapacityKWH            float64 `json:"batteryCapacityKWH,omitempty"`
-	StoredEnergyDeltaKWH          float64 `json:"storedEnergyDeltaKWH,omitempty"`
-	NextDayValuationDollarsPerKWH float64 `json:"nextDayValuationDollarsPerKWH,omitempty"`
 	Estimated                     bool    `json:"estimated,omitempty"`
 }

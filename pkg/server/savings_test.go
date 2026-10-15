@@ -828,10 +828,11 @@ func TestHandleHistorySavings(t *testing.T) {
 			}
 		})
 		// Cash cost delta on Day 1: -$0.20 (5 kWh * $0.04)
-		// Stored energy value at end of Day 1: +5 kWh * $0.20 = +$1.00
-		// Net RateRudder savings: -$0.20 + $1.00 = +$0.80
-		assert.InDelta(t, 1.00, savings.StoredEnergyValueDollars, 0.001)
-		assert.InDelta(t, 0.80, savings.RateRudderSavingsDollars, 0.001)
+		// Stored energy value at end of Day 1: +5 kWh * $0.20 * sqrt(0.90) = +$0.9487
+		// Net RateRudder savings: -$0.20 + $0.9487 = +$0.7487
+		expectedStoredVal := 1.00 * math.Sqrt(0.90)
+		assert.InDelta(t, expectedStoredVal, savings.StoredEnergyValueDollars, 0.001)
+		assert.InDelta(t, expectedStoredVal-0.20, savings.RateRudderSavingsDollars, 0.001)
 	})
 
 	t.Run("NewCalculation In-Progress Today Uses Plan For Stored Energy Valuation", func(t *testing.T) {
@@ -879,10 +880,11 @@ func TestHandleHistorySavings(t *testing.T) {
 		assert.False(t, savings.Estimated)
 		// Only actuals so far today (Hour 0: 1.0 kWh) are included in HomeUsed
 		assert.InDelta(t, 1.0, savings.HomeUsed, 0.001)
-		// Stored +5 kWh is valued at upcoming plan period's $0.25/kWh = $1.25, offsetting the $0.25 morning charge cost -> +$1.00 savings
-		assert.InDelta(t, 1.25, savings.StoredEnergyValueDollars, 0.001)
-		assert.InDelta(t, 1.00, savings.RateRudderSavingsDollars, 0.001)
-		assert.InDelta(t, 1.00, savings.TotalSavingsDollars, 0.001)
+		// Stored +5 kWh is valued at upcoming plan period's $0.25/kWh * sqrt(0.90) = $1.1859, offsetting the $0.25 morning charge cost -> +$0.9359 savings
+		expectedStoredVal := 1.25 * math.Sqrt(0.90)
+		assert.InDelta(t, expectedStoredVal, savings.StoredEnergyValueDollars, 0.001)
+		assert.InDelta(t, expectedStoredVal-0.25, savings.RateRudderSavingsDollars, 0.001)
+		assert.InDelta(t, expectedStoredVal-0.25, savings.TotalSavingsDollars, 0.001)
 	})
 
 	t.Run("NewCalculation Missing BatteryCapacityKWH Returns Zero Stats", func(t *testing.T) {
@@ -967,9 +969,9 @@ func TestHandleHistorySavings(t *testing.T) {
 				},
 			}
 		})
-		// Actual has +30% (+4.5 kWh) more stored energy than shadow at end of day, valued at next day's $0.20/kWh = $0.90.
+		// Actual has +30% (+4.5 kWh) more stored energy than shadow at end of day, valued at next day's $0.20/kWh * sqrt(0.90) = $0.8538.
 		// If shadowSOC had falsely snapped from 20% to 50%, StoredEnergyValueDollars would be $0.00!
-		assert.InDelta(t, 0.90, savings.StoredEnergyValueDollars, 0.01)
+		assert.InDelta(t, 0.90*math.Sqrt(0.90), savings.StoredEnergyValueDollars, 0.01)
 	})
 
 	t.Run("NewCalculation Paused Arbitrage Zeroes RateRudder Savings", func(t *testing.T) {
@@ -1030,7 +1032,7 @@ func TestHandleHistorySavings(t *testing.T) {
 		})
 		// Emergency mode is ignored so RateRudder is not blamed for the $1.50 storm charge
 		assert.InDelta(t, 0.0, savings.RateRudderSavingsDollars, 0.001)
-		assert.InDelta(t, 0.0, savings.StoredEnergyDeltaKWH, 0.001)
+		assert.InDelta(t, 0.0, savings.StoredEnergyValueDollars, 0.001)
 	})
 
 	t.Run("NewCalculation Per-Day Cache Rollup Equivalence", func(t *testing.T) {
@@ -1100,28 +1102,37 @@ func TestHandleHistorySavings(t *testing.T) {
 		day1 := res[0]
 		day2 := res[1]
 		twoDay := res[2]
+		oneWayEff := math.Sqrt(0.90)
 
-		// Verify per-day cache state fields are populated
-		assert.InDelta(t, 20.0, day1.StartBatterySOC, 0.001)
-		assert.InDelta(t, 70.0, day1.EndBatterySOC, 0.001)
-		assert.InDelta(t, 20.0, day1.StartShadowSOC, 0.001)
-		assert.InDelta(t, 20.0, day1.EndShadowSOC, 0.001)
-		assert.InDelta(t, 5.0, day1.StoredEnergyDeltaKWH, 0.001)
+		assert.InDelta(t, 5.0*0.20*oneWayEff, day1.StoredEnergyValueDollars, 0.001)
+		assert.InDelta(t, -3.0*0.15*oneWayEff, day2.StoredEnergyValueDollars, 0.001)
 
-		assert.InDelta(t, 70.0, day2.StartBatterySOC, 0.001)
-		assert.InDelta(t, 40.0, day2.EndBatterySOC, 0.001)
-		assert.InDelta(t, -3.0, day2.StoredEnergyDeltaKWH, 0.001)
+		trackers := []dailySavingsTracker{
+			{
+				period:                        savingsPeriod{Start: day1Start, End: day2Start},
+				stats:                         day1,
+				batteryCapacityKWH:            10.0,
+				storedEnergyDeltaKWH:          5.0,
+				nextDayValuationDollarsPerKWH: 0.20 * oneWayEff,
+			},
+			{
+				period:                        savingsPeriod{Start: day2Start, End: day2End},
+				stats:                         day2,
+				batteryCapacityKWH:            10.0,
+				storedEnergyDeltaKWH:          -3.0,
+				nextDayValuationDollarsPerKWH: 0.15 * oneWayEff,
+			},
+		}
 
-		// Rolling up cached [day1, day2] directly produces the exact same 2-day stats
-		rolledUp := rollupDailySavingsStats(savingsPeriod{Start: day1Start, End: day2End}, []types.SavingsStats{day1, day2})
-		assert.InDelta(t, twoDay.StoredEnergyDeltaKWH, rolledUp.StoredEnergyDeltaKWH, 0.0001)
+		// Rolling up daily trackers directly produces the exact same 2-day stats
+		rolledUp := rollupDailySavingsStats(savingsPeriod{Start: day1Start, End: day2End}, trackers)
 		assert.InDelta(t, twoDay.StoredEnergyValueDollars, rolledUp.StoredEnergyValueDollars, 0.0001)
 		assert.InDelta(t, twoDay.RateRudderSavingsDollars, rolledUp.RateRudderSavingsDollars, 0.0001)
 		assert.InDelta(t, twoDay.SolarAndBatterySavingsDollars, rolledUp.SolarAndBatterySavingsDollars, 0.0001)
 		assert.InDelta(t, twoDay.TotalSavingsDollars, rolledUp.TotalSavingsDollars, 0.0001)
 
 		// Also verify rollupDailySavingsStats matches when period End is 23:59:59 (1 second before day2End)
-		rolledUpEndOfDay := rollupDailySavingsStats(savingsPeriod{Start: day1Start, End: day2End.Add(-time.Second)}, []types.SavingsStats{day1, day2})
+		rolledUpEndOfDay := rollupDailySavingsStats(savingsPeriod{Start: day1Start, End: day2End.Add(-time.Second)}, trackers)
 		assert.InDelta(t, twoDay.TotalSavingsDollars, rolledUpEndOfDay.TotalSavingsDollars, 0.0001)
 	})
 
@@ -1164,8 +1175,8 @@ func TestHandleHistorySavings(t *testing.T) {
 				},
 			}
 		})
-		// Battery starts and ends at 20%, so StoredEnergyDeltaKWH must be 0.0
-		assert.InDelta(t, 0.0, savings.StoredEnergyDeltaKWH, 0.001)
+		// Battery starts and ends at 20%, so StoredEnergyValueDollars must be 0.0
+		assert.InDelta(t, 0.0, savings.StoredEnergyValueDollars, 0.001)
 		// RateRudder saved $1.50 (avoided peak import) - $0.25 (off-peak charge) = $1.25
 		assert.InDelta(t, 1.25, savings.RateRudderSavingsDollars, 0.001)
 		assert.InDelta(t, 1.25, savings.TotalSavingsDollars, 0.001)
@@ -1235,7 +1246,7 @@ func TestHandleHistorySavings(t *testing.T) {
 		})
 		// Because VPP dump mirrored shadowSOC down to 20%, RateRudder is not penalized for the evening import
 		assert.InDelta(t, 0.0, savings.RateRudderSavingsDollars, 0.01)
-		assert.InDelta(t, 0.0, savings.StoredEnergyDeltaKWH, 0.01)
+		assert.InDelta(t, 0.0, savings.StoredEnergyValueDollars, 0.01)
 	})
 
 	t.Run("NewCalculation VPP Off-Peak Pre-Charge Credits Rate Spread", func(t *testing.T) {
@@ -1287,7 +1298,7 @@ func TestHandleHistorySavings(t *testing.T) {
 		// Both batteries exit at 20% SOC with 5 kWh exported; RateRudder paid $0.05/kWh to pre-charge while
 		// shadow self-consumption was forced to buy that 5 kWh stored (5.0 / sqrt(0.90) kWh grid import) at $0.35/kWh.
 		expectedSpread := gridImportFor5KWHStored * (0.35 - 0.05)
-		assert.InDelta(t, 0.0, savings.StoredEnergyDeltaKWH, 0.01)
+		assert.InDelta(t, 0.0, savings.StoredEnergyValueDollars, 0.01)
 		assert.InDelta(t, expectedSpread, savings.RateRudderSavingsDollars, 0.01)
 	})
 
@@ -1354,6 +1365,152 @@ func TestHandleHistorySavings(t *testing.T) {
 		// with round-trip losses (1.0 * 0.90 = 0.90 kWh delivered to home), requiring 0.10 kWh of grid import @ $0.20 = $0.02,
 		// matching actual cost ($0.02) so RateRudder is not penalized for physical round-trip conversion losses.
 		assert.InDelta(t, 0.02, savings.SelfConsumptionCostDollars, 0.001)
+		assert.InDelta(t, 0.0, savings.RateRudderSavingsDollars, 0.001)
+	})
+
+	t.Run("NewCalculation Forced Solar Export Does Not Mimic Solar Export In Shadow Self-Consumption", func(t *testing.T) {
+		savings := runNewCalcTest(t, end.Add(24*time.Hour), func(m *mockSavingsStorage) {
+			m.settings.MinBatterySOC = 20.0
+			m.settings.GridExportSolar = true
+			m.actions = []types.Action{
+				{Timestamp: start, ReserveSOC: 20.0, SystemStatus: types.SystemStatus{BatteryCapacityKWH: 20.0}},
+			}
+			m.prices = []types.Price{
+				// Peak hour: export pays $0.50/kWh, import is $0.50/kWh
+				{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.50, SeparateGenerationCredit: true, GenerationCreditDollarsPerKWH: 0.50},
+				// Next day load hour: import is $0.10/kWh
+				{TSStart: end, TSEnd: end.Add(time.Hour), DollarsPerKWH: 0.10},
+			}
+			// RateRudder forces SolarMode=Export at 100% SOC: all 3.0 kWh of solar is exported to the grid
+			// (SolarToGridKWH = 3.0, SolarToHomeKWH = 0.0) while the battery discharges 1.0 kWh to power the home.
+			m.stats = []types.EnergyStats{
+				{
+					TSHourStart:      start,
+					MinBatterySOC:    95,
+					MaxBatterySOC:    100,
+					HomeKWH:          1.0,
+					SolarKWH:         3.0,
+					SolarToHomeKWH:   0.0,
+					SolarToGridKWH:   3.0,
+					GridExportKWH:    3.0,
+					BatteryUsedKWH:   1.0,
+					BatteryToHomeKWH: 1.0,
+				},
+				{
+					TSHourStart:   end,
+					MinBatterySOC: 80,
+					MaxBatterySOC: 95,
+					HomeKWH:       3.0,
+				},
+			}
+		})
+		// In Self-Consumption mode, 1.0 kWh of solar serves the 1.0 kWh home load directly and only 2.0 kWh is exported ($1.00 credit),
+		// whereas RateRudder exported all 3.0 kWh ($1.50 credit) and used 1.0 kWh of battery valued at next-day $0.10 * sqrt(0.90).
+		assert.InDelta(t, 1.50, savings.Credit, 0.001)
+		assert.InDelta(t, 1.00, savings.SelfConsumptionCreditDollars, 0.001)
+		assert.InDelta(t, 0.50-0.10*math.Sqrt(0.90), savings.RateRudderSavingsDollars, 0.001)
+	})
+
+	t.Run("NewCalculation Next-Day Solar Refills Partially Empty Battery Values Delta At Export Rate", func(t *testing.T) {
+		oneWayEff := math.Sqrt(0.90)
+		savings := runNewCalcTest(t, end.Add(24*time.Hour), func(m *mockSavingsStorage) {
+			m.settings.MinBatterySOC = 20.0
+			m.settings.GridExportSolar = true
+			m.actions = []types.Action{
+				{Timestamp: start, ReserveSOC: 20.0, SystemStatus: types.SystemStatus{BatteryCapacityKWH: 30.0}},
+			}
+			m.prices = []types.Price{
+				// Day 1 peak export hour ($0.40 import, $0.30 export)
+				{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.40, SeparateGenerationCredit: true, GenerationCreditDollarsPerKWH: 0.30},
+				// Day 2 morning load hour ($0.45 import, $0.05 export)
+				{TSStart: end, TSEnd: end.Add(time.Hour), DollarsPerKWH: 0.45, SeparateGenerationCredit: true, GenerationCreditDollarsPerKWH: 0.05},
+				// Day 2 midday solar hour ($0.45 import, $0.05 export)
+				{TSStart: end.Add(time.Hour), TSEnd: end.Add(2 * time.Hour), DollarsPerKWH: 0.45, SeparateGenerationCredit: true, GenerationCreditDollarsPerKWH: 0.05},
+			}
+			m.stats = []types.EnergyStats{
+				{
+					// Day 1: Both batteries start at 85% SOC on a 30 kWh battery.
+					// RateRudder exports 6.0 kWh (85% -> 65% SOC) @ $0.30 = $1.80 credit, while Shadow stays at 85% SOC.
+					TSHourStart:      start,
+					MinBatterySOC:    65,
+					MaxBatterySOC:    85,
+					BatteryUsedKWH:   6.0,
+					BatteryToGridKWH: 6.0,
+					GridExportKWH:    6.0,
+				},
+				{
+					// Day 2 morning: 3.0 kWh load (both 65% and 85% batteries have >13 kWh usable above 20% reserve, so neither imports).
+					TSHourStart:   end,
+					MinBatterySOC: 55,
+					MaxBatterySOC: 65,
+					HomeKWH:       3.0,
+				},
+				{
+					// Day 2 midday: 20 kWh solar surplus (< 24 kWh = 0.80*30 kWh, but > 13.5 kWh needed to refill from 55% to 100%).
+					TSHourStart:   end.Add(time.Hour),
+					MinBatterySOC: 55,
+					MaxBatterySOC: 100,
+					SolarKWH:      20.0,
+				},
+			}
+		})
+		// Both batteries cover Day 2 morning load without grid import and both refill to 100% from Day 2 solar.
+		// Therefore the -6.0 kWh stored energy delta is valued at Day 2's $0.05/kWh solar export rate (* oneWayEff),
+		// not the $0.45/kWh retail import rate!
+		assert.InDelta(t, -6.0*0.05*oneWayEff, savings.StoredEnergyValueDollars, 0.001)
+		assert.InDelta(t, 1.80-6.0*0.05*oneWayEff, savings.RateRudderSavingsDollars, 0.001)
+	})
+
+	t.Run("NewCalculation Next-Day Solar Refill With GridExportSolar Disabled Values Excess At Zero", func(t *testing.T) {
+		savings := runNewCalcTest(t, end.Add(24*time.Hour), func(m *mockSavingsStorage) {
+			m.settings.MinBatterySOC = 20.0
+			m.settings.GridExportSolar = false
+			m.actions = []types.Action{
+				{Timestamp: start, ReserveSOC: 20.0, SystemStatus: types.SystemStatus{BatteryCapacityKWH: 20.0}},
+			}
+			m.prices = []types.Price{
+				{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.30},
+				{TSStart: end, TSEnd: end.Add(time.Hour), DollarsPerKWH: 0.30},
+			}
+			m.stats = []types.EnergyStats{
+				{
+					// Day 1: Battery starts at 80% SOC; RateRudder discharges 4 kWh (80% -> 60% SOC), Shadow stays at 80%
+					TSHourStart:    start,
+					MinBatterySOC:  60,
+					MaxBatterySOC:  80,
+					BatteryUsedKWH: 4.0,
+				},
+				{
+					// Day 2: 15 kWh solar surplus refills both 60% and 80% batteries to 100%, curtailing excess at $0.00/kWh
+					TSHourStart:   end,
+					MinBatterySOC: 60,
+					MaxBatterySOC: 100,
+					SolarKWH:      15.0,
+				},
+			}
+		})
+		assert.InDelta(t, 0.0, savings.StoredEnergyValueDollars, 0.001)
+		assert.InDelta(t, 0.0, savings.RateRudderSavingsDollars, 0.001)
+	})
+
+	t.Run("NewCalculation Idle BMS Standby Drift Mirrors To Shadow Battery", func(t *testing.T) {
+		savings := runNewCalcTest(t, end.Add(24*time.Hour), func(m *mockSavingsStorage) {
+			m.settings.MinBatterySOC = 20.0
+			m.prices = []types.Price{
+				{TSStart: start, TSEnd: start.Add(time.Hour), DollarsPerKWH: 0.20},
+			}
+			// Idle battery drifts from 80% down to 79% with zero reported charge/discharge
+			m.stats = []types.EnergyStats{
+				{
+					TSHourStart:   start,
+					MinBatterySOC: 79,
+					MaxBatterySOC: 80,
+					HomeKWH:       1.0,
+					SolarKWH:      1.0,
+				},
+			}
+		})
+		assert.InDelta(t, 0.0, savings.StoredEnergyValueDollars, 0.001)
 		assert.InDelta(t, 0.0, savings.RateRudderSavingsDollars, 0.001)
 	})
 }
@@ -1553,17 +1710,36 @@ func TestInferRoundTripEfficiency(t *testing.T) {
 		assert.InDelta(t, 0.86, inferRoundTripEfficiency(stats, 15.0, 0.90), 0.0001)
 	})
 
-	t.Run("ClampsOutOfBoundsRatiosToDefault", func(t *testing.T) {
-		// Below 0.75 falls back to defaultRTEff
-		tooLow := []types.EnergyStats{
-			{MinBatterySOC: 20, MaxBatterySOC: 20, BatteryChargedKWH: 100.0, BatteryUsedKWH: 70.0},
+	t.Run("ClampsOutOfBoundsRatios", func(t *testing.T) {
+		// Between 0.70 and 0.75 (e.g. 73.4% on multi-inverter systems with light loads) is preserved
+		lowLoad := []types.EnergyStats{
+			{MinBatterySOC: 20, MaxBatterySOC: 20, BatteryChargedKWH: 100.0, BatteryUsedKWH: 73.4},
 		}
-		assert.InDelta(t, 0.90, inferRoundTripEfficiency(tooLow, 15.0, 0.90), 0.0001)
+		assert.InDelta(t, 0.734, inferRoundTripEfficiency(lowLoad, 15.0, 0.90), 0.0001)
+
+		// Positive ratio below 0.70 clamps to 0.70 instead of cliff-jumping back to defaultRTEff
+		tooLow := []types.EnergyStats{
+			{MinBatterySOC: 20, MaxBatterySOC: 20, BatteryChargedKWH: 100.0, BatteryUsedKWH: 65.0},
+		}
+		assert.InDelta(t, 0.70, inferRoundTripEfficiency(tooLow, 15.0, 0.90), 0.0001)
 
 		// Above defaultRTEff (e.g. DC-coupled solar reporting >90% AC ratio) caps at defaultRTEff
 		aboveDefault := []types.EnergyStats{
 			{MinBatterySOC: 20, MaxBatterySOC: 20, BatteryChargedKWH: 100.0, BatteryUsedKWH: 96.0},
 		}
 		assert.InDelta(t, 0.90, inferRoundTripEfficiency(aboveDefault, 15.0, 0.90), 0.0001)
+	})
+
+	t.Run("IdleStartAndEndHour", func(t *testing.T) {
+		// Hour 0 is idle (80% -> 78% BMS drift -> startSOC = 80%),
+		// Hour 1 cycles 50 kWh, Hour 2 is idle (22% -> 20% BMS drift -> endSOC = 20%).
+		// Net SOC delta = -60% of 15 kWh = -9.0 kWh.
+		drainedInitialOutKWH := 9.0 * math.Sqrt(0.90)
+		stats := []types.EnergyStats{
+			{MinBatterySOC: 78, MaxBatterySOC: 80, BatteryChargedKWH: 0, BatteryUsedKWH: 0},
+			{MinBatterySOC: 22, MaxBatterySOC: 78, BatteryChargedKWH: 50.0, BatteryUsedKWH: 40.0 + drainedInitialOutKWH},
+			{MinBatterySOC: 20, MaxBatterySOC: 22, BatteryChargedKWH: 0, BatteryUsedKWH: 0},
+		}
+		assert.InDelta(t, 0.80, inferRoundTripEfficiency(stats, 15.0, 0.90), 0.0001)
 	})
 }

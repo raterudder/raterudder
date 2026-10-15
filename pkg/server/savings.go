@@ -19,6 +19,74 @@ import (
 const (
 	maxSavingsPeriods    = 3
 	maxSavingsWindowDays = 35
+
+	// shadowWarmupLookbackDays is the number of days fetched prior to the earliest
+	// requested period so shadowSOC can warm up and converge before scoring begins.
+	shadowWarmupLookbackDays = 2
+
+	// nextDayValuationLookaheadDays is the number of days (24h) fetched after the end
+	// of the latest requested period to value end-of-period stored energy differences
+	// and 24-hour flat net metering credits.
+	nextDayValuationLookaheadDays = 1
+
+	// defaultRoundTripEfficiency is the fallback battery round-trip efficiency (90%, or ~94.9% one-way)
+	// used when OptimizationParams.RoundTripEfficiency is unset/invalid or when the lookback window
+	// has fewer than minEfficiencyInferenceCycles of charge/discharge telemetry.
+	defaultRoundTripEfficiency = 0.90
+
+	// minInferredRoundTripEfficiency is the lower bound (70%) when clamping empirical round-trip
+	// efficiency inferred from telemetry. Realized efficiency includes not only continuous BMS
+	// idle draw, but also the inverter efficiency curve at light home loads where fixed active
+	// inverter switching power makes up a larger portion of total load.
+	minInferredRoundTripEfficiency = 0.70
+
+	// minEfficiencyInferenceCycles is the minimum number of full battery capacity equivalents
+	// (2 * capacityKWH) of both charging and discharging required before trusting empirical
+	// round-trip efficiency over defaultRoundTripEfficiency, preventing SOC rounding noise
+	// on partial cycles from skewing the estimate.
+	minEfficiencyInferenceCycles = 2.0
+
+	// forcedExportMaxHomeOrImportKWH (50 Wh) is the maximum SolarToHomeKWH or GridImportKWH
+	// meter noise allowed when identifying an interval where RateRudder forced pure solar export
+	// to the grid while discharging the battery to cover home load.
+	forcedExportMaxHomeOrImportKWH = 0.05
+
+	// forcedExportMaxBatteryChargeKWH (10 Wh) is the maximum SolarToBatteryKWH allowed when
+	// identifying forced solar export, confirming solar bypassed the battery to export.
+	forcedExportMaxBatteryChargeKWH = 0.01
+
+	// forcedExportMinActiveFlowKWH (100 Wh) is the minimum SolarToGridKWH and BatteryToHomeKWH
+	// required to confirm active solar export and battery discharge during forced solar export.
+	forcedExportMinActiveFlowKWH = 0.10
+
+	// minDefaultInitialSOC is the minimum fallback starting SOC (%) when no telemetry
+	// MinBatterySOC/MaxBatterySOC is available at the start of the warmup window.
+	minDefaultInitialSOC = 20.0
+
+	// defaultValuationCapacityKWH is the fallback battery capacity (kWh) used in
+	// calculateNextDayValuationPrice when batteryCapacityKWH is unset.
+	defaultValuationCapacityKWH = 12.5
+
+	// idleBatteryMaxFlowKWH (50 Wh) is the maximum hourly charge or discharge energy
+	// (BatteryChargedKWH and BatteryUsedKWH) treated as an idle battery when checking
+	// whether both actual and shadow batteries are resting at reserve.
+	idleBatteryMaxFlowKWH = 0.05
+
+	// reserveConvergenceToleranceSOC (0.5%) is the tight SOC tolerance around minSOC
+	// within which active actual and shadow batteries snap together at the reserve floor.
+	reserveConvergenceToleranceSOC = 0.5
+
+	// idleReserveConvergenceToleranceSOC (1.5%) is the wider SOC tolerance around minSOC
+	// when the battery is idle (<= idleBatteryMaxFlowKWH). ESS BMS controllers (e.g., Enphase
+	// and FranklinWH) frequently stop discharging 1% to 1.5% above or below the nominal reserve
+	// target due to SOC hysteresis and standby drift.
+	idleReserveConvergenceToleranceSOC = 1.5
+
+	// fullBatteryConvergenceSOC (98.5%) is the SOC threshold at the top of the battery
+	// (100% - idleReserveConvergenceToleranceSOC) where both actual and shadow batteries are
+	// considered full and snapped together, since ESS BMS controllers often taper or stop
+	// charging at 98.5%-99% SOC rather than reporting a full 100.0%.
+	fullBatteryConvergenceSOC = 100.0 - idleReserveConvergenceToleranceSOC
 )
 
 // savingsPeriod defines a [Start, End) time window for savings calculation.
@@ -683,19 +751,30 @@ func (s *Server) getCombinedEnergyHistory(ctx context.Context, siteID string, hi
 // When source-to-destination breakdown fields are populated on EnergyStats, we use subStat.SolarToHomeKWH
 // so intra-hour solar/load mismatch (e.g., a 10 kW oven spike for 15 minutes during a 3 kWh solar hour)
 // is preserved instead of assuming uniform 1-hour overlap min(SolarKWH, HomeKWH).
+// The only exception is when RateRudder forces pure solar export (exporting all solar to the grid while
+// discharging the battery to cover home load with zero grid import), where native Self-Consumption would
+// have routed min(SolarKWH, effectiveHomeKWH) directly to the home.
 func resolveDirectSolarToHomeKWH(subStat types.EnergyStats, effectiveHomeKWH float64) float64 {
 	if subStat.SolarToHomeKWH > 0 || subStat.SolarToBatteryKWH > 0 || subStat.SolarToGridKWH > 0 {
-		return max(0, min(subStat.SolarKWH, min(effectiveHomeKWH, subStat.SolarToHomeKWH)))
+		forcedSolarExport := subStat.SolarToHomeKWH <= forcedExportMaxHomeOrImportKWH &&
+			subStat.SolarToBatteryKWH <= forcedExportMaxBatteryChargeKWH &&
+			subStat.SolarToGridKWH > forcedExportMinActiveFlowKWH &&
+			subStat.BatteryToHomeKWH > forcedExportMinActiveFlowKWH &&
+			subStat.GridImportKWH <= forcedExportMaxHomeOrImportKWH
+		if !forcedSolarExport {
+			return max(0, min(subStat.SolarKWH, min(effectiveHomeKWH, subStat.SolarToHomeKWH)))
+		}
 	}
 	return min(subStat.SolarKWH, effectiveHomeKWH)
 }
 
 // inferRoundTripEfficiency estimates the battery's realized round-trip efficiency across the window
-// when at least 2 full battery cycles of charge and discharge telemetry are present, adjusting for
-// any net change in stored SOC between the first and last hour and clamping between 75% and defaultRTEff.
+// when at least minEfficiencyInferenceCycles of charge and discharge telemetry are present, adjusting for
+// any net change in stored SOC between the first and last hour and clamping between
+// minInferredRoundTripEfficiency and defaultRTEff.
 func inferRoundTripEfficiency(energyStats []types.EnergyStats, capacityKWH, defaultRTEff float64) float64 {
 	if defaultRTEff <= 0 || defaultRTEff > 1.0 {
-		defaultRTEff = 0.90
+		defaultRTEff = defaultRoundTripEfficiency
 	}
 	if capacityKWH <= 0 || len(energyStats) == 0 {
 		return defaultRTEff
@@ -709,29 +788,42 @@ func inferRoundTripEfficiency(energyStats []types.EnergyStats, capacityKWH, defa
 		if st.MinBatterySOC > 0 || st.MaxBatterySOC > 0 {
 			if !hasStartSOC {
 				hasStartSOC = true
-				if st.BatteryChargedKWH >= st.BatteryUsedKWH && st.MinBatterySOC > 0 {
+				// Hourly EnergyStats only records the min and max SOC reached during the hour, not the
+				// exact start-of-hour instant. For the start of the hour, if the battery net-charged
+				// (BatteryChargedKWH > BatteryUsedKWH), SOC rose over the hour so it entered at MinBatterySOC;
+				// if it net-discharged or sat idle (<=), SOC fell or drifted down so it entered at MaxBatterySOC.
+				if st.BatteryChargedKWH > st.BatteryUsedKWH && st.MinBatterySOC > 0 {
 					startSOC = st.MinBatterySOC
 				} else if st.MaxBatterySOC > 0 {
 					startSOC = st.MaxBatterySOC
+				} else {
+					startSOC = st.MinBatterySOC
 				}
 			}
+			// For the end of the hour, the opposite holds: if the battery net-charged
+			// (BatteryChargedKWH > BatteryUsedKWH), SOC rose over the hour and finished at MaxBatterySOC;
+			// if it net-discharged or sat idle (<=), SOC fell or drifted down and finished at MinBatterySOC.
 			if st.BatteryChargedKWH > st.BatteryUsedKWH && st.MaxBatterySOC > 0 {
 				endSOC = st.MaxBatterySOC
-			} else if st.BatteryUsedKWH > st.BatteryChargedKWH && st.MinBatterySOC > 0 {
+			} else if st.MinBatterySOC > 0 {
 				endSOC = st.MinBatterySOC
 			} else if st.MaxBatterySOC > 0 {
 				endSOC = st.MaxBatterySOC
 			}
 		}
 	}
-	if totalCharged >= 2*capacityKWH && totalUsed >= 2*capacityKWH {
+	if totalCharged >= minEfficiencyInferenceCycles*capacityKWH && totalUsed >= minEfficiencyInferenceCycles*capacityKWH {
 		netSOCDeltaKWH := 0.0
 		if hasStartSOC {
 			netSOCDeltaKWH = (endSOC - startSOC) / 100.0 * capacityKWH
 		}
 		obs := (totalUsed + netSOCDeltaKWH*math.Sqrt(defaultRTEff)) / totalCharged
-		if obs >= 0.75 && obs < defaultRTEff {
-			return obs
+		// Realized efficiency includes not only BMS idle draw, but also the inverter efficiency
+		// curve at low home loads where fixed active inverter switching power takes up a larger
+		// portion of overall load (especially on multi-inverter systems serving light loads).
+		// Clamp to minInferredRoundTripEfficiency rather than falling back to defaultRTEff.
+		if obs > 0 && obs < defaultRTEff {
+			return max(minInferredRoundTripEfficiency, obs)
 		}
 	}
 	return defaultRTEff
@@ -836,7 +928,7 @@ func stepShadowSelfConsumption(
 		return shadowSOC, 0, 0
 	}
 	if oneWayEff <= 0 || oneWayEff > 1.0 {
-		oneWayEff = math.Sqrt(0.90)
+		oneWayEff = math.Sqrt(defaultRoundTripEfficiency)
 	}
 	if minSOC < 0 {
 		minSOC = 0
@@ -896,10 +988,10 @@ func (s *Server) getSiteSavingsNew(
 		}
 	}
 
-	// Cap lookback at 2 days prior to the earliest period to warm up shadowSOC.
-	lookbackStart := minStart.AddDate(0, 0, -2)
-	// Look ahead 24 hours past maxEnd for next-day stored energy valuation and 24h net metering.
-	fetchEnd := maxEnd.AddDate(0, 0, 1)
+	// Cap lookback at shadowWarmupLookbackDays prior to the earliest period to warm up shadowSOC.
+	lookbackStart := minStart.AddDate(0, 0, -shadowWarmupLookbackDays)
+	// Look ahead nextDayValuationLookaheadDays past maxEnd for next-day stored energy valuation and 24h net metering.
+	fetchEnd := maxEnd.AddDate(0, 0, nextDayValuationLookaheadDays)
 
 	settings, _, err := s.getSettingsWithMigration(ctx, siteID)
 	if err != nil {
@@ -1014,13 +1106,20 @@ func (s *Server) getSiteSavingsNew(
 		settings.MinBatterySOC,
 	)
 
-	initialSOC := max(baselineReserveForTime(lookbackStart), 20.0)
+	initialSOC := max(baselineReserveForTime(lookbackStart), minDefaultInitialSOC)
 	for _, stat := range energyStats {
 		if stat.MinBatterySOC > 0 || stat.MaxBatterySOC > 0 {
-			if stat.BatteryChargedKWH >= stat.BatteryUsedKWH && stat.MinBatterySOC > 0 {
+			// Hourly EnergyStats only records the min and max SOC reached during the hour, not the
+			// exact start-of-hour instant. For initialSOC (the start of the first hour), if the battery
+			// net-charged (BatteryChargedKWH > BatteryUsedKWH), SOC rose over the hour so it started at
+			// MinBatterySOC; if it net-discharged or sat idle (<=), SOC fell or drifted down so it
+			// started at MaxBatterySOC.
+			if stat.BatteryChargedKWH > stat.BatteryUsedKWH && stat.MinBatterySOC > 0 {
 				initialSOC = stat.MinBatterySOC
 			} else if stat.MaxBatterySOC > 0 {
 				initialSOC = stat.MaxBatterySOC
+			} else {
+				initialSOC = stat.MinBatterySOC
 			}
 			break
 		}
@@ -1030,13 +1129,7 @@ func (s *Server) getSiteSavingsNew(
 	shadowSOC := initialSOC
 
 	dailyPeriods := buildDailySavingsPeriods(minStart, maxEnd, periods, siteLoc)
-	type dailyTracker struct {
-		period          savingsPeriod
-		stats           types.SavingsStats
-		hasStarted      bool
-		lastIntervalEnd time.Time
-	}
-	dailyTrackers := make([]dailyTracker, len(dailyPeriods))
+	dailyTrackers := make([]dailySavingsTracker, len(dailyPeriods))
 	for i, dp := range dailyPeriods {
 		dailyTrackers[i].period = dp
 		dailyTrackers[i].stats.Timestamp = dp.Start
@@ -1110,9 +1203,14 @@ func (s *Server) getSiteSavingsNew(
 		// conversion losses, BMS standby draw, and meter rounding do not cause actualSOC
 		// to drift over multi-day windows.
 		if stat.MinBatterySOC > 0 || stat.MaxBatterySOC > 0 {
-			if stat.BatteryChargedKWH > stat.BatteryUsedKWH {
+			// Hourly EnergyStats only records the min and max SOC reached during the hour, not the
+			// exact end-of-hour instant. For hourEndSOC (the end of the hour), if the battery
+			// net-charged (BatteryChargedKWH > BatteryUsedKWH), SOC rose over the hour and finished at
+			// MaxBatterySOC; if it net-discharged or sat idle (<=), SOC fell or drifted down and
+			// finished at MinBatterySOC.
+			if stat.BatteryChargedKWH > stat.BatteryUsedKWH && stat.MaxBatterySOC > 0 {
 				hourEndSOC = stat.MaxBatterySOC
-			} else if stat.BatteryUsedKWH > stat.BatteryChargedKWH && stat.MinBatterySOC > 0 {
+			} else if stat.MinBatterySOC > 0 {
 				hourEndSOC = stat.MinBatterySOC
 			} else if stat.MaxBatterySOC > 0 {
 				hourEndSOC = stat.MaxBatterySOC
@@ -1164,9 +1262,24 @@ func (s *Server) getSiteSavingsNew(
 				settings.GridExportSolar,
 			)
 
+			// TODO: Some sites have non-backed-up subpanels (e.g., EV chargers or heavy appliances wired
+			// upstream of the battery backup panel) or inverter discharge limits where grid import occurs
+			// even while the battery is in normal self-consumption mode with ample SOC above reserve.
+			// Today stepShadowSelfConsumption assumes the shadow battery can discharge to cover all
+			// unmetHomeLoadKWH up to its usable energy; consider modeling non-backed-up load or max discharge power.
+
+			// Mirror passive BMS standby self-discharge when both real and shadow batteries are completely idle.
+			if subStat.BatteryChargedKWH == 0 && subStat.BatteryUsedKWH == 0 && actualSOC < prevActualSOC && simShadowSOC == prevShadowSOC {
+				simShadowSOC = max(min(minSOC, actualSOC), simShadowSOC+(actualSOC-prevActualSOC))
+			}
+
 			// Natural convergence sync: when both real and shadow batteries are empty at reserve or full,
-			// snap simShadowSOC to actualSOC to prevent efficiency approximation drift over long windows.
-			if (math.Abs(actualSOC-minSOC) <= 0.5 && math.Abs(simShadowSOC-minSOC) <= 0.5) || (actualSOC >= 99.0 && simShadowSOC >= 99.0) {
+			// snap simShadowSOC to actualSOC to prevent efficiency approximation or BMS hysteresis drift.
+			idleAtReserve := subStat.BatteryChargedKWH <= idleBatteryMaxFlowKWH && subStat.BatteryUsedKWH <= idleBatteryMaxFlowKWH &&
+				math.Abs(actualSOC-minSOC) <= idleReserveConvergenceToleranceSOC && math.Abs(simShadowSOC-minSOC) <= idleReserveConvergenceToleranceSOC
+			if (math.Abs(actualSOC-minSOC) <= reserveConvergenceToleranceSOC && math.Abs(simShadowSOC-minSOC) <= reserveConvergenceToleranceSOC) ||
+				idleAtReserve ||
+				(actualSOC >= fullBatteryConvergenceSOC && simShadowSOC >= fullBatteryConvergenceSOC) {
 				simShadowSOC = actualSOC
 			}
 
@@ -1193,14 +1306,12 @@ func (s *Server) getSiteSavingsNew(
 				if !subTS.Before(dt.period.Start) && subTS.Before(dt.period.End) {
 					if !dt.hasStarted {
 						dt.hasStarted = true
-						dt.stats.StartBatterySOC = prevActualSOC
-						dt.stats.StartShadowSOC = prevShadowSOC
-						dt.stats.BatteryCapacityKWH = capacityKWH
+						dt.batteryCapacityKWH = capacityKWH
 					}
 					dt.lastIntervalEnd = subTS.Add(time.Duration(interval.duration * float64(time.Hour)))
-					dt.stats.EndBatterySOC = actualSOC
-					dt.stats.EndShadowSOC = shadowSOC
-					dt.stats.StoredEnergyDeltaKWH += deltaRRKWH
+					dt.endBatterySOC = actualSOC
+					dt.endShadowSOC = shadowSOC
+					dt.storedEnergyDeltaKWH += deltaRRKWH
 
 					dt.stats.HomeUsed += effectiveHomeKWH
 					dt.stats.SolarGenerated += subStat.SolarKWH
@@ -1224,33 +1335,52 @@ func (s *Server) getSiteSavingsNew(
 	// Finalize per-day SavingsStats and roll up into requested SavingsPeriods.
 	// TODO: Consider using controller.BuildHourlyEnergyModel to forecast next-day load and solar
 	// when evaluating current-day windows if a 24h plan is not available.
-	dailyStats := make([]types.SavingsStats, len(dailyTrackers))
 	for dIdx := range dailyTrackers {
 		dt := &dailyTrackers[dIdx]
 		if dt.hasStarted {
 			valPeriod := dt.period
-			if !dt.lastIntervalEnd.IsZero() && dt.lastIntervalEnd.Before(valPeriod.End) {
+			hasNextDayIntervals := false
+			for _, iv := range allIntervals {
+				if !iv.stat.TSHourStart.Before(dt.period.End) {
+					hasNextDayIntervals = true
+					break
+				}
+			}
+			if !hasNextDayIntervals && !dt.lastIntervalEnd.IsZero() && dt.lastIntervalEnd.Before(valPeriod.End) {
 				valPeriod.End = dt.lastIntervalEnd
 			}
-			dt.stats.NextDayValuationDollarsPerKWH = calculateNextDayValuationPrice(
+			dt.nextDayValuationDollarsPerKWH = calculateNextDayValuationPrice(
 				valPeriod,
 				allIntervals,
 				latestActionWithPlan,
-				dt.stats,
+				*dt,
 				prices,
 				oneWayEff,
+				baselineReserveForTime(valPeriod.End),
+				settings.GridExportSolar,
 			)
 		}
-		finalizeSavingsStats(&dt.stats)
-		dailyStats[dIdx] = dt.stats
+		finalizeSavingsStats(&dt.stats, dt.storedEnergyDeltaKWH, dt.nextDayValuationDollarsPerKWH)
 	}
 
 	results := make([]types.SavingsStats, len(periods))
 	for pIdx, p := range periods {
-		results[pIdx] = rollupDailySavingsStats(p, dailyStats)
+		results[pIdx] = rollupDailySavingsStats(p, dailyTrackers)
 	}
 
 	return results, filteredActions, nil
+}
+
+type dailySavingsTracker struct {
+	period                        savingsPeriod
+	stats                         types.SavingsStats
+	hasStarted                    bool
+	lastIntervalEnd               time.Time
+	endBatterySOC                 float64
+	endShadowSOC                  float64
+	batteryCapacityKWH            float64
+	storedEnergyDeltaKWH          float64
+	nextDayValuationDollarsPerKWH float64
 }
 
 type savingsSubInterval struct {
@@ -1265,101 +1395,176 @@ func calculateNextDayValuationPrice(
 	p savingsPeriod,
 	allIntervals []savingsSubInterval,
 	latestActionWithPlan types.Action,
-	periodStats types.SavingsStats,
+	dt dailySavingsTracker,
 	prices []types.Price,
 	oneWayEff float64,
+	reserveSOC float64,
+	gridExportSolar bool,
 ) float64 {
 	if oneWayEff <= 0 || oneWayEff > 1.0 {
-		oneWayEff = math.Sqrt(0.90)
+		oneWayEff = math.Sqrt(defaultRoundTripEfficiency)
 	}
 	nextDayEnd := p.End.Add(24 * time.Hour)
-	usableCapKWH := periodStats.BatteryCapacityKWH * 0.80
-	if usableCapKWH <= 0 {
-		usableCapKWH = 10.0
+	capKWH := dt.batteryCapacityKWH
+	if capKWH <= 0 {
+		capKWH = defaultValuationCapacityKWH
+	}
+	if reserveSOC < 0 || reserveSOC > 100 {
+		reserveSOC = minDefaultInitialSOC
+	}
+
+	// The marginal value of the stored energy difference between the actual and shadow batteries
+	// depends on where that specific [lowSOC, highSOC] band sits in the battery:
+	//   - If both batteries are high enough to cover overnight load without hitting reserveSOC and
+	//     both refill to 100% from midday solar, the extra energy in highSOC only produces extra
+	//     midday solar export (or $0 curtailment if export is disabled), not avoided retail imports.
+	//   - If the lower battery drains to reserveSOC during overnight/morning load while the higher
+	//     battery continues discharging, the band avoids retail grid imports during those load hours.
+	// Ordering lowSOC <= highSOC keeps initialDiffDCKWH > 0 and valueDiffDollars >= 0 so
+	// simulateValuationWindow always returns a positive $/kWh unit rate for the [lowSOC, highSOC]
+	// band, which finalizeSavingsStats then multiplies by the signed storedEnergyDeltaKWH.
+	lowSOC := max(reserveSOC, min(dt.endBatterySOC, dt.endShadowSOC))
+	highSOC := max(lowSOC, max(dt.endBatterySOC, dt.endShadowSOC))
+	type valuationInterval struct {
+		loadKWH     float64
+		solarKWH    float64
+		importPrice float64
+		exportPrice float64
+	}
+
+	// storedEnergyDeltaKWH is measured in DC battery SOC kWh, which yields oneWayEff kWh
+	// of AC energy when discharged to cover home load or exported. Simulate two self-consumption
+	// trajectories starting from lowSOC and highSOC across the next 24h so morning drain to
+	// reserve, midday solar refill/curtailment, and afternoon peak discharge are weighted at
+	// the exact hours and prices where the two trajectories converge.
+	simulateValuationWindow := func(intervals []valuationInterval) (float64, bool) {
+		var grossLoadCost, grossLoadKWH float64
+		var nextLoadCost, nextLoadKWH float64
+		var totalSolarSurplus float64
+		for _, iv := range intervals {
+			grossLoadCost += iv.loadKWH * iv.importPrice
+			grossLoadKWH += iv.loadKWH
+			netLoad := max(0, iv.loadKWH-iv.solarKWH)
+			solarSurplus := max(0, iv.solarKWH-iv.loadKWH)
+			nextLoadCost += netLoad * iv.importPrice
+			nextLoadKWH += netLoad
+			totalSolarSurplus += solarSurplus
+		}
+		if grossLoadKWH <= 0 && totalSolarSurplus <= 0 {
+			return 0, false
+		}
+
+		dMax := max(0.1, ((100.0-reserveSOC)/100.0)*capKWH)
+		dLow := max(0, min(dMax, ((lowSOC-reserveSOC)/100.0)*capKWH))
+		dHigh := max(dLow, min(dMax, ((highSOC-reserveSOC)/100.0)*capKWH))
+		// simulateValuationWindow returns a $/kWh rate (valueDiffDollars / initialDiffDCKWH).
+		// When endBatterySOC and endShadowSOC are equal (or both at/below reserveSOC) at the end
+		// of a day, dHigh == dLow would cause a division by zero and we still need a valid $/kWh
+		// valuation rate for this day in case an earlier paused/ignored transition left a non-zero
+		// storedEnergyDeltaKWH or rollupDailySavingsStats uses this day's rate to value a multi-day
+		// period's cumulative delta. Falling back to [0, dMax] (empty at reserveSOC vs full at 100% SOC)
+		// evaluates the average $/kWh value across the full usable battery capacity over the next 24h.
+		if dHigh-dLow <= 1e-6 {
+			dLow = 0
+			dHigh = dMax
+		}
+		initialDiffDCKWH := dHigh - dLow
+
+		var valueDiffDollars float64
+		for _, iv := range intervals {
+			solarSurplus := max(0, iv.solarKWH-iv.loadKWH)
+			if solarSurplus > 0 {
+				chargeLowDC := min(solarSurplus*oneWayEff, max(0, dMax-dLow))
+				chargeHighDC := min(solarSurplus*oneWayEff, max(0, dMax-dHigh))
+				dLow += chargeLowDC
+				dHigh += chargeHighDC
+				convergedSolarDC := max(0, chargeLowDC-chargeHighDC)
+				if gridExportSolar {
+					valueDiffDollars += convergedSolarDC * iv.exportPrice * oneWayEff
+				}
+			}
+			netLoad := max(0, iv.loadKWH-iv.solarKWH)
+			if netLoad > 0 {
+				disLowDC := min(netLoad/oneWayEff, dLow)
+				disHighDC := min(netLoad/oneWayEff, dHigh)
+				dLow -= disLowDC
+				dHigh -= disHighDC
+				convergedLoadDC := max(0, disHighDC-disLowDC)
+				valueDiffDollars += convergedLoadDC * iv.importPrice * oneWayEff
+			}
+		}
+
+		// If the highSOC and lowSOC trajectories have not fully converged by the end of the 24h
+		// lookahead window (because neither battery ever hit 100% full or drained to reserveSOC),
+		// remDCKWH is the remaining unconverged DC energy difference still stored in the battery.
+		// Value that remaining inventory at the window's load-weighted average import price
+		// (scaled by oneWayEff), since it will eventually discharge to offset future home load.
+		remDCKWH := max(0, dHigh-dLow)
+		if remDCKWH > 0 {
+			avgLoadImp := 0.0
+			if nextLoadKWH > 0 {
+				avgLoadImp = nextLoadCost / nextLoadKWH
+			} else if grossLoadKWH > 0 {
+				avgLoadImp = grossLoadCost / grossLoadKWH
+			}
+			valueDiffDollars += remDCKWH * avgLoadImp * oneWayEff
+		}
+
+		return valueDiffDollars / initialDiffDCKWH, true
 	}
 
 	// 1. Check actual next-24h intervals [p.End, p.End + 24h)
-	var nextLoadCost, nextLoadKWH float64
-	var grossLoadCost, grossLoadKWH float64
-	var solarSurplusKWH, solarExportWeighted, solarExportWeight float64
+	var actualValIntervals []valuationInterval
 	for _, iv := range allIntervals {
 		ts := iv.stat.TSHourStart
 		if !ts.Before(p.End) && ts.Before(nextDayEnd) {
 			homeKWH := max(iv.stat.HomeKWH, iv.stat.SolarToHomeKWH+iv.stat.BatteryToHomeKWH)
-			grossLoadCost += homeKWH * iv.gridImportPrice
-			grossLoadKWH += homeKWH
-
-			directSolarKWH := resolveDirectSolarToHomeKWH(iv.stat, homeKWH)
-			netLoadKWH := max(0, homeKWH-directSolarKWH)
-			solarSurplus := max(0, iv.stat.SolarKWH-directSolarKWH)
-			if solarSurplus > 0 {
-				solarSurplusKWH += solarSurplus * oneWayEff
-				solarExportWeighted += solarSurplus * iv.gridExportPrice
-				solarExportWeight += solarSurplus
-			}
-			// Only accumulate unmet load before solar surplus refills the battery.
-			if solarSurplusKWH < usableCapKWH && netLoadKWH > 0 {
-				nextLoadCost += netLoadKWH * iv.gridImportPrice
-				nextLoadKWH += netLoadKWH
-			}
+			actualValIntervals = append(actualValIntervals, valuationInterval{
+				loadKWH:     homeKWH,
+				solarKWH:    iv.stat.SolarKWH,
+				importPrice: iv.gridImportPrice,
+				exportPrice: iv.gridExportPrice,
+			})
 		}
 	}
-	if solarSurplusKWH >= usableCapKWH && solarExportWeight > 0 {
-		avgSolarExp := solarExportWeighted / solarExportWeight
-		avgMorningImp := 0.0
-		if nextLoadKWH > 0 {
-			avgMorningImp = nextLoadCost / nextLoadKWH
-		}
-		wLoad := min(1.0, nextLoadKWH/usableCapKWH)
-		return wLoad*avgMorningImp + (1.0-wLoad)*avgSolarExp
-	}
-	if nextLoadKWH > 0 {
-		return nextLoadCost / nextLoadKWH
-	}
-	if grossLoadKWH > 0 {
-		return grossLoadCost / grossLoadKWH
+	if val, ok := simulateValuationWindow(actualValIntervals); ok {
+		return val
 	}
 
 	// 2. Check latestActionWithPlan future periods (only when p.End is near/within the plan horizon)
 	if latestActionWithPlan.Plan != nil && len(latestActionWithPlan.Plan.Periods) > 0 {
-		planStart := latestActionWithPlan.Plan.Periods[0].TSStart
-		var planLoadCost, planLoadKWH float64
-		for _, pp := range latestActionWithPlan.Plan.Periods {
-			if !pp.TSStart.Before(p.End) && pp.TSStart.Before(nextDayEnd) {
-				netLoad := max(0, pp.LoadKWH-pp.SolarKWH)
-				if netLoad > 0 {
-					planLoadCost += netLoad * pp.ImportDollars
-					planLoadKWH += netLoad
-				}
-			}
-		}
-		if planLoadKWH > 0 {
-			return planLoadCost / planLoadKWH
-		}
-		for _, pp := range latestActionWithPlan.Plan.Periods {
-			if !pp.TSStart.Before(p.End) && pp.TSStart.Before(nextDayEnd) {
-				planLoadCost += pp.LoadKWH * pp.ImportDollars
-				planLoadKWH += pp.LoadKWH
-			}
-		}
-		if planLoadKWH > 0 {
-			return planLoadCost / planLoadKWH
-		}
-		if !p.End.Before(planStart) {
-			// If p.End is at the end of the plan horizon, use all periods in the plan
+		evalPlanWindow := func(filter func(types.PlanPeriod) bool) (float64, bool) {
+			var planValIntervals []valuationInterval
 			for _, pp := range latestActionWithPlan.Plan.Periods {
-				planLoadCost += pp.LoadKWH * pp.ImportDollars
-				planLoadKWH += pp.LoadKWH
+				if !filter(pp) {
+					continue
+				}
+				planValIntervals = append(planValIntervals, valuationInterval{
+					loadKWH:     pp.LoadKWH,
+					solarKWH:    pp.SolarKWH,
+					importPrice: pp.ImportDollars,
+					exportPrice: pp.ExportDollars,
+				})
 			}
-			if planLoadKWH > 0 {
-				return planLoadCost / planLoadKWH
+			return simulateValuationWindow(planValIntervals)
+		}
+
+		if val, ok := evalPlanWindow(func(pp types.PlanPeriod) bool {
+			return !pp.TSStart.Before(p.End) && pp.TSStart.Before(nextDayEnd)
+		}); ok {
+			return val
+		}
+		planStart := latestActionWithPlan.Plan.Periods[0].TSStart
+		if !p.End.Before(planStart) {
+			if val, ok := evalPlanWindow(func(types.PlanPeriod) bool { return true }); ok {
+				return val
 			}
 		}
 	}
 
 	// 3. Fallback to the period's own load-weighted average import price
-	if periodStats.HomeUsed > 0 && periodStats.GridOnlyCostDollars > 0 {
-		return periodStats.GridOnlyCostDollars / periodStats.HomeUsed
+	if dt.stats.HomeUsed > 0 && dt.stats.GridOnlyCostDollars > 0 {
+		return (dt.stats.GridOnlyCostDollars / dt.stats.HomeUsed) * oneWayEff
 	}
 
 	// 4. Fallback to simple average import price in the period
@@ -1372,7 +1577,7 @@ func calculateNextDayValuationPrice(
 		}
 	}
 	if priceCount > 0 {
-		return priceSum / float64(priceCount)
+		return (priceSum / float64(priceCount)) * oneWayEff
 	}
 	return 0
 }
@@ -1515,7 +1720,7 @@ func buildDailySavingsPeriods(minStart, maxEnd time.Time, periods []savingsPerio
 	return daily
 }
 
-func finalizeSavingsStats(st *types.SavingsStats) {
+func finalizeSavingsStats(st *types.SavingsStats, storedEnergyDeltaKWH, nextDayValuationDollarsPerKWH float64) {
 	clampNearZero := func(v float64) float64 {
 		if math.Abs(v) < 1e-9 {
 			return 0
@@ -1523,8 +1728,8 @@ func finalizeSavingsStats(st *types.SavingsStats) {
 		return v
 	}
 
-	st.StoredEnergyDeltaKWH = clampNearZero(st.StoredEnergyDeltaKWH)
-	st.StoredEnergyValueDollars = clampNearZero(st.StoredEnergyDeltaKWH * st.NextDayValuationDollarsPerKWH)
+	storedEnergyDeltaKWH = clampNearZero(storedEnergyDeltaKWH)
+	st.StoredEnergyValueDollars = clampNearZero(storedEnergyDeltaKWH * nextDayValuationDollarsPerKWH)
 
 	actualNetCost := st.Cost - st.Credit
 	selfConsumptionNetCost := st.SelfConsumptionCostDollars - st.SelfConsumptionCreditDollars
@@ -1535,46 +1740,38 @@ func finalizeSavingsStats(st *types.SavingsStats) {
 	st.BatterySavings = clampNearZero(st.TotalSavingsDollars - st.SolarSavings)
 }
 
-// rollupDailySavingsStats aggregates per-day SavingsStats within [p.Start, p.End) into a single period SavingsStats.
-// This allows cached daily SavingsStats to be combined with newly calculated days without re-simulating cached days.
-func rollupDailySavingsStats(p savingsPeriod, dailyStats []types.SavingsStats) types.SavingsStats {
+// rollupDailySavingsStats aggregates per-day trackers within [p.Start, p.End) into a single period SavingsStats.
+func rollupDailySavingsStats(p savingsPeriod, dailyTrackers []dailySavingsTracker) types.SavingsStats {
 	agg := types.SavingsStats{
 		Timestamp:    p.Start,
 		EndTimestamp: p.End,
 	}
-	hasFirstActiveDay := false
-	for _, d := range dailyStats {
-		if d.Timestamp.Before(p.Start.Add(-time.Minute)) || d.EndTimestamp.After(p.End.Add(time.Minute)) {
+	var storedEnergyDeltaKWH float64
+	var nextDayValuationDollarsPerKWH float64
+	for _, dt := range dailyTrackers {
+		if dt.stats.Timestamp.Before(p.Start.Add(-time.Minute)) || dt.stats.EndTimestamp.After(p.End.Add(time.Minute)) {
 			continue
 		}
-		agg.HomeUsed += d.HomeUsed
-		agg.SolarGenerated += d.SolarGenerated
-		agg.GridImported += d.GridImported
-		agg.GridExported += d.GridExported
-		agg.BatteryUsed += d.BatteryUsed
-		agg.Cost += d.Cost
-		agg.Credit += d.Credit
-		agg.GridOnlyCostDollars += d.GridOnlyCostDollars
-		agg.SelfConsumptionCostDollars += d.SelfConsumptionCostDollars
-		agg.SelfConsumptionCreditDollars += d.SelfConsumptionCreditDollars
-		agg.SolarSavings += d.SolarSavings
-		agg.AvoidedCost += d.AvoidedCost
-		agg.StoredEnergyDeltaKWH += d.StoredEnergyDeltaKWH
-		if d.Estimated {
+		agg.HomeUsed += dt.stats.HomeUsed
+		agg.SolarGenerated += dt.stats.SolarGenerated
+		agg.GridImported += dt.stats.GridImported
+		agg.GridExported += dt.stats.GridExported
+		agg.BatteryUsed += dt.stats.BatteryUsed
+		agg.Cost += dt.stats.Cost
+		agg.Credit += dt.stats.Credit
+		agg.GridOnlyCostDollars += dt.stats.GridOnlyCostDollars
+		agg.SelfConsumptionCostDollars += dt.stats.SelfConsumptionCostDollars
+		agg.SelfConsumptionCreditDollars += dt.stats.SelfConsumptionCreditDollars
+		agg.SolarSavings += dt.stats.SolarSavings
+		agg.AvoidedCost += dt.stats.AvoidedCost
+		storedEnergyDeltaKWH += dt.storedEnergyDeltaKWH
+		if dt.stats.Estimated {
 			agg.Estimated = true
 		}
-		if d.BatteryCapacityKWH > 0 {
-			if !hasFirstActiveDay {
-				hasFirstActiveDay = true
-				agg.StartBatterySOC = d.StartBatterySOC
-				agg.StartShadowSOC = d.StartShadowSOC
-			}
-			agg.EndBatterySOC = d.EndBatterySOC
-			agg.EndShadowSOC = d.EndShadowSOC
-			agg.BatteryCapacityKWH = d.BatteryCapacityKWH
-			agg.NextDayValuationDollarsPerKWH = d.NextDayValuationDollarsPerKWH
+		if dt.batteryCapacityKWH > 0 {
+			nextDayValuationDollarsPerKWH = dt.nextDayValuationDollarsPerKWH
 		}
 	}
-	finalizeSavingsStats(&agg)
+	finalizeSavingsStats(&agg, storedEnergyDeltaKWH, nextDayValuationDollarsPerKWH)
 	return agg
 }
