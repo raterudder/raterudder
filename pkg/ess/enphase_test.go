@@ -664,6 +664,107 @@ func TestEnphase(t *testing.T) {
 		assert.InDelta(t, 0.96, status.HomeKW, 0.0001)
 	})
 
+	t.Run("Skips corrupt negative counter rollover intervals in parseDailyStats and GetStatus", func(t *testing.T) {
+		soc20 := 20.0
+		soc21 := 21.0
+		dayStart := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+		hour8Start := dayStart.Add(8 * time.Hour)
+
+		// 4 intervals in 08:00 hour: first 3 are valid, 4th has a counter rollover (-15,160 Wh battery_home, +74,900 Wh grid_battery, +73,860 Wh battery_grid)
+		rawStat := enphaseTodayStats{
+			StartTime:      hour8Start.Unix(),
+			IntervalLength: 900,
+			Production:     []float64{500, 800, 940, 0},
+			Consumption:    []float64{500, 500, 590, -15160},
+			SolarHome:      []float64{300, 400, 420, 0},
+			SolarBattery:   []float64{200, 400, 520, 0},
+			SolarGrid:      []float64{0, 0, 0, 0},
+			GridHome:       []float64{200, 100, 170, 0},
+			GridBattery:    []float64{0, 0, 0, 74900},
+			BatteryHome:    []float64{0, 0, 0, -15160},
+			BatteryGrid:    []float64{0, 0, 0, 73860},
+			SOC:            []*float64{&soc20, &soc20, &soc21, &soc21},
+		}
+
+		parsed := parseDailyStats(context.Background(), rawStat, dayStart, time.UTC)
+		if assert.Len(t, parsed.Hourly, 1) {
+			h := parsed.Hourly[0]
+			assert.InDelta(t, 2.24, h.SolarKWH, 0.0001)
+			assert.InDelta(t, 1.12, h.SolarToHomeKWH, 0.0001)
+			assert.InDelta(t, 1.12, h.SolarToBatteryKWH, 0.0001)
+			assert.InDelta(t, 1.59, h.HomeKWH, 0.0001)
+			assert.InDelta(t, 0.47, h.GridImportKWH, 0.0001)
+			assert.InDelta(t, 0.0, h.GridExportKWH, 0.0001)
+			assert.InDelta(t, 1.12, h.BatteryChargedKWH, 0.0001)
+			assert.InDelta(t, 0.0, h.BatteryUsedKWH, 0.0001)
+			assert.InDelta(t, 0.0, h.BatteryToHomeKWH, 0.0001)
+			assert.Equal(t, 20.0, h.MinBatterySOC)
+			assert.Equal(t, 21.0, h.MaxBatterySOC)
+		}
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/app-api/123/data.json":
+				res := enphaseDataResult{
+					App:            enphaseApp{Timezone: "UTC"},
+					LastReportDate: hour8Start.Add(time.Hour).Unix(),
+				}
+				json.NewEncoder(w).Encode(res)
+			case "/pv/systems/123/today":
+				res := enphaseTodayResponse{
+					StartDate: "2026-10-01",
+					Stats:     []enphaseTodayStats{rawStat},
+					BatteryDetails: &struct {
+						AggregateSOC float64 `json:"aggregate_soc"`
+					}{AggregateSOC: 21},
+				}
+				json.NewEncoder(w).Encode(res)
+			case "/pv/settings/123/battery_status.json":
+				w.Write([]byte(`{"max_capacity": 10.0, "available_power": 3.84}`))
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer server.Close()
+
+		e := newEnphase()
+		e.baseURL, _ = url.Parse(server.URL)
+		e.systemID = 123
+		status, err := e.GetStatus(context.Background())
+		require.NoError(t, err)
+		// Should step back from index 3 (corrupt) to index 2 (valid: prod=940Wh -> 3.76kW, solarHome=420Wh+gridHome=170Wh=590Wh -> 2.36kW)
+		assert.InDelta(t, 3.76, status.SolarKW, 0.0001)
+		assert.InDelta(t, 2.36, status.HomeKW, 0.0001)
+		assert.InDelta(t, -2.08, status.BatteryKW, 0.0001)
+		assert.InDelta(t, 0.68, status.GridKW, 0.0001)
+
+		// Positive spike with flat SOC (e.g. Oct 6 13:45 reboot glitch: 5,271 Wh battery_home while SOC changes 99% -> 98%)
+		soc97 := 97.0
+		soc98 := 98.0
+		soc99 := 99.0
+		soc100 := 100.0
+		positiveSpikeStat := enphaseTodayStats{
+			StartTime:      dayStart.Add(13 * time.Hour).Unix(),
+			IntervalLength: 900,
+			Production:     []float64{2088, 2001, 1899, 1831},
+			Consumption:    []float64{503, 456, 792, 5873},
+			SolarHome:      []float64{502, 453, 208, 602},
+			SolarBattery:   []float64{29, 368, 291, 29},
+			SolarGrid:      []float64{1558, 1180, 1200, 1201},
+			GridHome:       []float64{0, 0, 0, 0},
+			GridBattery:    []float64{0, 0, 0, 0},
+			BatteryHome:    []float64{1, 3, 584, 5271},
+			BatteryGrid:    []float64{0, 0, 0, 0},
+			SOC:            []*float64{&soc98, &soc97, &soc99, &soc98, &soc100},
+		}
+		assert.False(t, hasCorruptEnphaseInterval(context.Background(), positiveSpikeStat, 0, time.UTC))
+		assert.False(t, hasCorruptEnphaseInterval(context.Background(), positiveSpikeStat, 1, time.UTC))
+		// Index 2 has production=1899 vs solarSum=1699 (diff=200 > 50)
+		assert.True(t, hasCorruptEnphaseInterval(context.Background(), positiveSpikeStat, 2, time.UTC))
+		// Index 3 has netBatWH=-5242 with socDelta=-1 (99 -> 98)
+		assert.True(t, hasCorruptEnphaseInterval(context.Background(), positiveSpikeStat, 3, time.UTC))
+	})
+
 	t.Run("SetModes", func(t *testing.T) {
 		var lastPayload *enphaseBatterySchedulesPayload
 		var postCalled bool

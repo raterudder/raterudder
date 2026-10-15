@@ -336,47 +336,52 @@ func (e *Enphase) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 
 		if maxLen > 0 {
 			latestIndex := maxLen - 1
+			for latestIndex >= 0 && hasCorruptEnphaseInterval(ctx, stat, latestIndex, loc) {
+				latestIndex--
+			}
 
-			var latestIntervalDuration float64 = float64(intervalSecs)
-			intervalStartTime := stat.StartTime + int64(latestIndex*intervalSecs)
-			if data.LastReportDate > intervalStartTime && data.LastReportDate < intervalStartTime+int64(intervalSecs) {
-				latestIntervalDuration = float64(data.LastReportDate - intervalStartTime)
-				if latestIntervalDuration < 5 {
-					latestIntervalDuration = 5
+			if latestIndex >= 0 {
+				var latestIntervalDuration float64 = float64(intervalSecs)
+				intervalStartTime := stat.StartTime + int64(latestIndex*intervalSecs)
+				if data.LastReportDate > intervalStartTime && data.LastReportDate < intervalStartTime+int64(intervalSecs) {
+					latestIntervalDuration = float64(data.LastReportDate - intervalStartTime)
+					if latestIntervalDuration < 5 {
+						latestIntervalDuration = 5
+					}
 				}
-			}
 
-			whToKW := func(val float64) float64 {
-				return (val / 1000.0) / (latestIntervalDuration / 3600.0)
-			}
-
-			getPowerVal := func(arr []float64) float64 {
-				if latestIndex < len(arr) {
-					return whToKW(arr[latestIndex])
+				whToKW := func(val float64) float64 {
+					return (val / 1000.0) / (latestIntervalDuration / 3600.0)
 				}
-				return 0
-			}
 
-			prod := getPowerVal(stat.Production)
-			solarHome := getPowerVal(stat.SolarHome)
-			solarBat := getPowerVal(stat.SolarBattery)
-			solarGrid := getPowerVal(stat.SolarGrid)
+				getPowerVal := func(arr []float64) float64 {
+					if latestIndex < len(arr) {
+						return whToKW(arr[latestIndex])
+					}
+					return 0
+				}
 
-			gridBat := getPowerVal(stat.GridBattery)
-			gridHome := getPowerVal(stat.GridHome)
+				prod := getPowerVal(stat.Production)
+				solarHome := getPowerVal(stat.SolarHome)
+				solarBat := getPowerVal(stat.SolarBattery)
+				solarGrid := getPowerVal(stat.SolarGrid)
 
-			batHome := getPowerVal(stat.BatteryHome)
-			batGrid := getPowerVal(stat.BatteryGrid)
+				gridBat := getPowerVal(stat.GridBattery)
+				gridHome := getPowerVal(stat.GridHome)
 
-			solarKW = prod
-			if solarKW == 0 {
-				solarKW = solarHome + solarBat + solarGrid
-			}
-			batteryKW = batHome + batGrid - gridBat - solarBat
-			gridKW = gridHome + gridBat - solarGrid - batGrid
-			homeKW = solarHome + batHome + gridHome
-			if homeKW == 0 && latestIndex < len(stat.Consumption) {
-				homeKW = whToKW(stat.Consumption[latestIndex])
+				batHome := getPowerVal(stat.BatteryHome)
+				batGrid := getPowerVal(stat.BatteryGrid)
+
+				solarKW = prod
+				if solarKW == 0 {
+					solarKW = solarHome + solarBat + solarGrid
+				}
+				batteryKW = batHome + batGrid - gridBat - solarBat
+				gridKW = gridHome + gridBat - solarGrid - batGrid
+				homeKW = solarHome + batHome + gridHome
+				if homeKW == 0 && latestIndex < len(stat.Consumption) {
+					homeKW = whToKW(stat.Consumption[latestIndex])
+				}
 			}
 		}
 	}
@@ -837,7 +842,119 @@ func (e *Enphase) updateBatteryProfile(ctx context.Context, payload enphaseBatte
 	return nil
 }
 
-func parseDailyStats(stat enphaseTodayStats, dayStart time.Time, loc *time.Location) types.DailyEnergyStats {
+func hasCorruptEnphaseInterval(ctx context.Context, stat enphaseTodayStats, idx int, loc *time.Location) bool {
+	if loc == nil {
+		loc = time.UTC
+	}
+	intervalSecs := stat.IntervalLength
+	if intervalSecs == 0 {
+		intervalSecs = 900
+	}
+	intervalStart := time.Unix(stat.StartTime, 0).In(loc).Add(time.Duration(idx*intervalSecs) * time.Second)
+	intervalEnd := intervalStart.Add(time.Duration(intervalSecs) * time.Second)
+
+	val := func(arr []float64) float64 {
+		if idx < len(arr) {
+			return arr[idx]
+		}
+		return 0
+	}
+
+	prod := val(stat.Production)
+	cons := val(stat.Consumption)
+	gridImp := val(stat.GridImport)
+	solarHome := val(stat.SolarHome)
+	solarBat := val(stat.SolarBattery)
+	solarGrid := val(stat.SolarGrid)
+	gridBat := val(stat.GridBattery)
+	gridHome := val(stat.GridHome)
+	batHome := val(stat.BatteryHome)
+	batGrid := val(stat.BatteryGrid)
+
+	warnCorrupt := func(reason string, extraAttrs ...any) {
+		attrs := []any{
+			slog.String("reason", reason),
+			slog.Time("intervalStart", intervalStart),
+			slog.Time("intervalEnd", intervalEnd),
+			slog.Int("intervalIndex", idx),
+			slog.Float64("productionWH", prod),
+			slog.Float64("consumptionWH", cons),
+			slog.Float64("solarHomeWH", solarHome),
+			slog.Float64("solarBatteryWH", solarBat),
+			slog.Float64("solarGridWH", solarGrid),
+			slog.Float64("gridHomeWH", gridHome),
+			slog.Float64("gridBatteryWH", gridBat),
+			slog.Float64("batteryHomeWH", batHome),
+			slog.Float64("batteryGridWH", batGrid),
+		}
+		if idx < len(stat.GridImport) && gridImp != 0 {
+			attrs = append(attrs, slog.Float64("gridImport", gridImp))
+		}
+		attrs = append(attrs, extraAttrs...)
+		log.Ctx(ctx).WarnContext(ctx, "skipping corrupt enphase interval", attrs...)
+	}
+
+	checkNeg := func(arr []float64) bool {
+		return idx < len(arr) && arr[idx] < 0
+	}
+	if checkNeg(stat.Production) ||
+		checkNeg(stat.Consumption) ||
+		checkNeg(stat.GridImport) ||
+		checkNeg(stat.SolarHome) ||
+		checkNeg(stat.SolarBattery) ||
+		checkNeg(stat.SolarGrid) ||
+		checkNeg(stat.GridBattery) ||
+		checkNeg(stat.GridHome) ||
+		checkNeg(stat.BatteryHome) ||
+		checkNeg(stat.BatteryGrid) {
+		warnCorrupt("negative_value")
+		return true
+	}
+
+	// Solar production and home consumption should match their directional component sums when both are reported.
+	solarSum := solarHome + solarBat + solarGrid
+	if prod > 0 && solarSum > 0 && math.Abs(prod-solarSum) > 50 {
+		warnCorrupt("production_sum_mismatch", slog.Float64("solarSumWH", solarSum))
+		return true
+	}
+	homeSum := solarHome + batHome + gridHome
+	if cons > 0 && homeSum > 0 && math.Abs(cons-homeSum) > 50 {
+		warnCorrupt("consumption_sum_mismatch", slog.Float64("homeSumWH", homeSum))
+		return true
+	}
+
+	// Large net battery flow (> 1.5 kWh in 15m) with flat SOC (<= 2% change) or opposite SOC change (> 1 kWh with > 1% opposite SOC change).
+	if idx > 0 && idx < len(stat.SOC) && stat.SOC[idx] != nil && stat.SOC[idx-1] != nil {
+		prevSOC := *stat.SOC[idx-1]
+		currSOC := *stat.SOC[idx]
+		socDelta := currSOC - prevSOC
+		batIn := solarBat + gridBat
+		batOut := batHome + batGrid
+		netBatWH := batIn - batOut
+		if math.Abs(netBatWH) > 1500 && math.Abs(socDelta) <= 2 {
+			warnCorrupt("net_battery_vs_flat_soc",
+				slog.Float64("netBatteryWH", netBatWH),
+				slog.Float64("prevSOC", prevSOC),
+				slog.Float64("currSOC", currSOC),
+				slog.Float64("socDelta", socDelta),
+			)
+			return true
+		}
+		if (netBatWH > 1000 && socDelta < -1) || (netBatWH < -1000 && socDelta > 1) {
+			warnCorrupt("net_battery_opposite_soc",
+				slog.Float64("netBatteryWH", netBatWH),
+				slog.Float64("prevSOC", prevSOC),
+				slog.Float64("currSOC", currSOC),
+				slog.Float64("socDelta", socDelta),
+			)
+			return true
+		}
+	}
+
+	return false
+}
+
+func parseDailyStats(ctx context.Context, stat enphaseTodayStats, dayStart time.Time, loc *time.Location) types.DailyEnergyStats {
 	startTime := time.Unix(stat.StartTime, 0).In(loc)
 
 	hourlyStatsMap := make(map[time.Time]*types.EnergyStats)
@@ -909,6 +1026,12 @@ func parseDailyStats(stat enphaseTodayStats, dayStart time.Time, loc *time.Locat
 					s.MaxBatterySOC = socVal
 				}
 			}
+		}
+
+		// Skip accumulating directional energy flows when an Enphase 15-minute bucket
+		// contains corrupt values from a gateway/battery lifetime counter rollover.
+		if hasCorruptEnphaseInterval(ctx, stat, i, loc) {
+			continue
 		}
 
 		solarHome := getVal(stat.SolarHome, i)
@@ -1007,7 +1130,7 @@ func (e *Enphase) GetEnergyHistory(ctx context.Context, start, end time.Time) ([
 		for _, stat := range res.Stats {
 			statStartTime := time.Unix(stat.StartTime, 0).In(loc)
 			statDay := time.Date(statStartTime.Year(), statStartTime.Month(), statStartTime.Day(), 0, 0, 0, 0, loc)
-			dailyStats = append(dailyStats, parseDailyStats(stat, statDay, loc))
+			dailyStats = append(dailyStats, parseDailyStats(ctx, stat, statDay, loc))
 		}
 	}
 
@@ -1023,7 +1146,7 @@ func (e *Enphase) GetEnergyHistory(ctx context.Context, start, end time.Time) ([
 		}
 
 		if len(res.Stats) > 0 {
-			dailyStats = append(dailyStats, parseDailyStats(res.Stats[0], todayMidnight, loc))
+			dailyStats = append(dailyStats, parseDailyStats(ctx, res.Stats[0], todayMidnight, loc))
 		}
 	}
 
