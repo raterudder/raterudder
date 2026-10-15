@@ -737,16 +737,19 @@ func (s *Server) getFuturePrices(ctx context.Context, siteID string, utility uti
 	}
 
 	if !hasAllTomorrow {
-		log.Ctx(ctx).InfoContext(ctx, "less than all tomorrow prices available, estimating missing hours using 72h history",
+		log.Ctx(ctx).InfoContext(ctx, "less than all tomorrow prices available, estimating missing hours using 168h history",
 			slog.Int("existingFuturePricesCount", len(futurePrices)),
 			slog.Time("missingCoverage", missingCoverage),
 		)
-		histStart := nowTime.Add(-72 * time.Hour)
+		// Use 7 days (168h) of historical prices plus today's already-known future prices
+		// to compute a more robust hourly median profile for missing tomorrow hours
+		// (before PJM publishes tomorrow's Day-Ahead prices around 1:30 PM ET).
+		histStart := nowTime.Add(-168 * time.Hour)
 		histPrices, histErr := s.storage.GetPriceHistory(ctx, siteID, histStart, nowTime)
 		if histErr != nil {
 			log.Ctx(ctx).WarnContext(ctx, "failed to get historical prices", slog.Any("error", histErr))
 		} else if len(histPrices) == 0 {
-			log.Ctx(ctx).WarnContext(ctx, "no historical prices found for the last 72 hours")
+			log.Ctx(ctx).WarnContext(ctx, "no historical prices found for the last 168 hours")
 		} else {
 			type hourlyStats struct {
 				prices []types.Price
@@ -758,6 +761,11 @@ func (s *Server) getFuturePrices(ctx context.Context, siteID string, utility uti
 
 			var overallDollars []float64
 			for _, p := range histPrices {
+				pHour := p.TSStart.In(loc).Hour()
+				buckets[pHour].prices = append(buckets[pHour].prices, p)
+				overallDollars = append(overallDollars, p.DollarsPerKWH)
+			}
+			for _, p := range futurePrices {
 				pHour := p.TSStart.In(loc).Hour()
 				buckets[pHour].prices = append(buckets[pHour].prices, p)
 				overallDollars = append(overallDollars, p.DollarsPerKWH)

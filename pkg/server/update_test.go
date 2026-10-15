@@ -3429,7 +3429,7 @@ func TestGetFuturePrices(t *testing.T) {
 			}
 		}
 
-		histStart := fixedNow.Add(-72 * time.Hour)
+		histStart := fixedNow.Add(-168 * time.Hour)
 		mockS.On("GetPriceHistory", mock.Anything, "site1", histStart, fixedNow).Return(histPrices, nil)
 
 		srv := &Server{
@@ -3456,7 +3456,7 @@ func TestGetFuturePrices(t *testing.T) {
 		}
 		assert.Len(t, tomorrowPricesMap, 24)
 
-		// Verify hour 14 average: (0.14 + 0.12 + 0.10) / 3 = 0.12, grid (0.06 + 0.04 + 0.02) / 3 = 0.04
+		// Verify hour 14 median template: closest price to median([0.10, 0.12, 0.14, 0.20] = 0.13) is 0.12, grid 0.04
 		h14Price, ok := tomorrowPricesMap[14]
 		require.True(t, ok)
 		assert.InDelta(t, 0.12, h14Price.DollarsPerKWH, 0.0001)
@@ -3518,7 +3518,7 @@ func TestGetFuturePrices(t *testing.T) {
 				assert.Equal(t, 0.22, p.DollarsPerKWH)
 			}
 			if !p.TSStart.Before(tomorrowStart.Add(12*time.Hour)) && p.TSStart.Before(tomorrowEnd) {
-				assert.InDelta(t, 0.30, p.DollarsPerKWH, 0.0001)
+				assert.InDelta(t, 0.18, p.DollarsPerKWH, 0.0001)
 			}
 		}
 	})
@@ -3611,7 +3611,7 @@ func TestGetFuturePrices(t *testing.T) {
 			}
 		}
 
-		histStart := fixedNow.Add(-72 * time.Hour)
+		histStart := fixedNow.Add(-168 * time.Hour)
 		mockS.On("GetPriceHistory", mock.Anything, "site1", histStart, fixedNow).Return(histPrices, nil)
 
 		srv := &Server{
@@ -3630,7 +3630,7 @@ func TestGetFuturePrices(t *testing.T) {
 			}
 		}
 		require.NotNil(t, tomorrowH14Price)
-		// Median of [0.35, 0.35, 1.00] is 0.35 (whereas arithmetic mean would be 0.567)
+		// Median of [0.20, 0.35, 0.35, 1.00] is 0.35 (whereas arithmetic mean would be 0.475)
 		assert.InDelta(t, 0.35, tomorrowH14Price.DollarsPerKWH, 0.0001)
 	})
 }

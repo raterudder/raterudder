@@ -141,10 +141,10 @@ const spotlightSlides: SpotlightSlide[] = [
     {
         id: "savings-boost",
         badge: "Real-Time Price Spike Result",
-        tabValue: "Over 60%",
+        tabValue: "Over 65%",
         tabLabel: "Extra Savings vs. Self-Consumption",
-        title: "Squeeze 60%+ More Out of the Battery You Already Own",
-        description: "Last month, a Powerwall home on hourly pricing would have saved $90 in default Self-Consumption mode. RateRudder added an additional $57 in savings, including $13.67 during a single afternoon price spike.",
+        title: "Squeeze 65%+ More Out of the Battery You Already Own",
+        description: "A Powerwall home on hourly pricing would've saved over $90/mo in default Self-Consumption mode, and RateRudder added an extra $57/mo, including an additional $13 during a single afternoon price spike.",
         metrics: [
             { label: "Self-Consumption Alone", value: "$90 / mo" },
             { label: "With RateRudder", value: "$148 / mo (+$57)", highlight: true },
@@ -221,7 +221,7 @@ const faqData: { question: string; answer: React.ReactNode }[] = [
     },
     {
         question: "Why is RateRudder better than my battery's built-in Self-Consumption or Time-of-Use mode?",
-        answer: "Default Self-Consumption is blind to utility rates and often drains your battery on cheap morning load or into a charging EV, leaving it empty when afternoon prices spike. Static manual schedules do the opposite, blindly charging to 100% overnight even when free solar is hours away. RateRudder recalculates your optimal plan every hour with zero manual tweaking, delivering over 60% more savings."
+        answer: "Default Self-Consumption is blind to utility rates and often drains your battery on cheap morning load or into a charging EV, leaving it empty when afternoon prices spike. Static manual schedules do the opposite, blindly charging to 100% overnight even when free solar is hours away. RateRudder recalculates your optimal plan every hour with zero manual tweaking, delivering over 65% more savings."
     },
     {
         question: "Does using RateRudder void my battery warranty?",
@@ -394,7 +394,7 @@ const LandingPage: React.FC = () => {
                         <p>
                             RateRudder automatically charges your battery when power is cheap (or negative!),
                             holds energy through expensive peak hours, and exports solar when buyback credits surge, delivering{' '}
-                            <strong>over 60% more savings</strong> than default self-consumption with zero daily tweaking.
+                            <strong>over 65% more savings</strong> than default self-consumption with zero daily tweaking.
                         </p>
                         <div className="cta-wrapper">
                             <a href="/login" className="cta-button">

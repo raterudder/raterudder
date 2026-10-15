@@ -14,7 +14,7 @@ const UTILITY_METADATA: Record<string, UtilityMetadata> = {
     comed: {
         region: 'Illinois',
         category: 'realtime',
-        blurb: 'Fetches live 5-minute real-time prices from ComEd alongside official PJM Day-Ahead hourly rates, combined with your exact residential delivery class and 1:1 supply export or net metering.'
+        blurb: 'Fetches live real-time prices from ComEd alongside PJM Day-Ahead hourly rates. Day-Ahead prices and 5-minute real-time prices are adjusted in upcoming hours against live trends to significantly reduce forecast error.'
     },
     ameren: {
         region: 'Illinois',
@@ -360,7 +360,7 @@ const SupportedUtilitiesPage: React.FC = () => {
                             <span className="guardrail-icon" aria-hidden="true">⚡</span>
                             <h3>ComEd Hourly Pricing (Illinois)</h3>
                             <p>
-                                RateRudder combines ComEd&apos;s live <strong>5-minute real-time pricing feed</strong> with official <strong>PJM Day-Ahead hourly rates</strong> so SmartPlan has an accurate 24-hour price curve. We also add your exact residential delivery class (Single-Family or Multi-Family, with or without Electric Space Heat) and model <strong>1:1 supply export</strong> vs. full net metering.
+                                RateRudder combines ComEd&apos;s live <strong>5-minute real-time pricing feed</strong> with official <strong>PJM Day-Ahead hourly rates</strong> so SmartPlan has an accurate 24-hour price curve. Rather than relying blindly on raw PJM forecasts, RateRudder dynamically calibrates upcoming day-ahead rates against live 5-minute price errors—suppressing false-alarm peaks and cutting PJM forecast error. We also add your exact residential delivery class (Single-Family or Multi-Family, with or without Electric Space Heat) and model <strong>1:1 supply export</strong> vs. full net metering.
                             </p>
                         </div>
 

@@ -40,7 +40,7 @@ describe('LandingPage Component', () => {
         expect(screen.getByText('Automated EV Charging Detection')).toBeInTheDocument();
         expect(screen.getByText('Direct Solar & Battery Peak Export')).toBeInTheDocument();
         expect(screen.getByText('Time-Windowed Backup Reserves')).toBeInTheDocument();
-        expect(screen.getByText('Over 60%')).toBeInTheDocument();
+        expect(screen.getByText('Over 65%')).toBeInTheDocument();
 
         // Check for smart charging feature text and new feature cards
         expect(screen.getByText((content) => content.startsWith('RateRudder learns your home'))).toBeInTheDocument();
@@ -67,8 +67,8 @@ describe('LandingPage Component', () => {
             </Router>
         );
 
-        // Initial slide is the +63% savings boost
-        expect(screen.getByText('Squeeze 60%+ More Out of the Battery You Already Own')).toBeInTheDocument();
+        // Initial slide is the +65% savings boost
+        expect(screen.getByText('Squeeze 65%+ More Out of the Battery You Already Own')).toBeInTheDocument();
 
         // Click next slide -> 144% bill elimination
         await user.click(screen.getByRole('button', { name: 'Next highlight' }));

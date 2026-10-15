@@ -402,7 +402,7 @@ func TestComEd(t *testing.T) {
 
 		ctx := context.Background()
 
-		m.On("GetUtilityPrices", mock.Anything, "comed", now.Truncate(time.Hour), now.Truncate(time.Hour).Add(48*time.Hour)).Return([]types.PriceState{
+		m.On("GetUtilityPrices", mock.Anything, "comed", now.Truncate(time.Hour).Add(-time.Hour), now.Truncate(time.Hour).Add(48*time.Hour)).Return([]types.PriceState{
 			{Price: types.Price{TSStart: now, DollarsPerKWH: 0.0105009}, Confirmed: false, TSUpdated: time.Now()}, // Using a stable price for test
 		}, nil).Once()
 		m.On("UpsertUtilityPrices", mock.Anything, "comed", mock.MatchedBy(func(p []types.PriceState) bool {
@@ -429,7 +429,7 @@ func TestComEd(t *testing.T) {
 				TSUpdated: time.Now(),
 			})
 		}
-		m.On("GetUtilityPrices", mock.Anything, "comed", now.Truncate(time.Hour), now.Truncate(time.Hour).Add(48*time.Hour)).Return(dbPrices, nil).Once()
+		m.On("GetUtilityPrices", mock.Anything, "comed", now.Truncate(time.Hour).Add(-time.Hour), now.Truncate(time.Hour).Add(48*time.Hour)).Return(dbPrices, nil).Once()
 
 		futures2, err := c.GetFuturePrices(ctx)
 		require.NoError(t, err)
@@ -456,8 +456,12 @@ func TestComEd(t *testing.T) {
 		c.cachedFuture = prices
 		c.lastFutureFetch = time.Now()
 		c.mu.Unlock()
+		c.recordRecentPriceStates([]types.PriceState{
+			{Price: types.Price{TSStart: now.Add(-time.Hour), DollarsPerKWH: 0.10}, Confirmed: true, TSUpdated: time.Now()},
+			{Price: types.Price{TSStart: now, DollarsPerKWH: 0.10}, Confirmed: false, TSUpdated: time.Now()},
+		})
 
-		// GetFuturePrices should return from memory without calling DB
+		// GetFuturePrices should return from memory without calling DB when recentPriceStates are also cached
 		ctx := context.Background()
 		futures, err := c.GetFuturePrices(ctx)
 		require.NoError(t, err)
@@ -512,6 +516,8 @@ func TestComEd(t *testing.T) {
 		}
 
 		m.On("GetUtilityPrices", mock.Anything, "comed", expectedDBStart, nowHour.Add(48*time.Hour)).Return(dbPrices, nil).Once()
+		// Since recentPriceStates for [nowHour - 1h, nowHour] were not cached, adjustFuturePrices fetches them from Firestore directly
+		m.On("GetUtilityPrices", mock.Anything, "comed", nowHour.Add(-time.Hour), nowHour.Add(time.Hour)).Return([]types.PriceState{}, nil).Once()
 
 		// 3. Execution should return 11 prices (5 cached + 6 DB)
 		ctx := context.Background()
@@ -869,10 +875,11 @@ func TestComEd(t *testing.T) {
 			},
 		}
 
+		dbEnd := now.Truncate(time.Hour).Add(time.Hour)
 		m.On("GetUtilityPrices", mock.Anything, "comed", mock.MatchedBy(func(t time.Time) bool {
 			return t.After(dbStart.Add(-5*time.Second)) && t.Before(dbStart.Add(5*time.Second))
 		}), mock.MatchedBy(func(t time.Time) bool {
-			return t.After(now.Add(-5*time.Second)) && t.Before(now.Add(5*time.Second))
+			return t.After(dbEnd.Add(-5*time.Second)) && t.Before(dbEnd.Add(5*time.Second))
 		})).Return(dbPrices, nil).Once()
 
 		price, err := c.GetCurrentPrice(context.Background())
@@ -985,6 +992,491 @@ func TestComEd(t *testing.T) {
 			assert.Equal(t, []float64{0.025, 0.035}, upserted2[0].SubDollarsPerKWH)
 		}
 		m.AssertExpectations(t)
+	})
+
+	t.Run("GetCurrentPrice Intra-Hour Whole-Hour Prediction", func(t *testing.T) {
+		ctx := context.Background()
+		now := time.Now().In(ctLocation)
+		nowHour := now.Truncate(time.Hour)
+		prevHour := nowHour.Add(-2 * time.Hour)
+
+		t.Run("Upward Spike Reverts Toward OrigEst While Storing Raw SubDollarsPerKWH", func(t *testing.T) {
+			m := &storagemock.MockDatabase{}
+
+			// ComEd API returns:
+			// - A completed confirmed hour (prevHour, 2 hours ago) with 12 samples of 3.0 cents ($0.03)
+			// - Current in-progress hour (nowHour) with k=2 samples: 4.0 cents ($0.04) and 16.0 cents ($0.16)
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var entries []string
+				for i := 0; i < 12; i++ {
+					sampleTime := prevHour.Add(time.Duration(i*5) * time.Minute)
+					entries = append(entries, fmt.Sprintf(`{"millisUTC":"%d","price":"3.0"}`, sampleTime.UnixMilli()))
+				}
+				entries = append(entries,
+					fmt.Sprintf(`{"millisUTC":"%d","price":"4.0"}`, nowHour.Add(5*time.Minute).UnixMilli()),
+					fmt.Sprintf(`{"millisUTC":"%d","price":"16.0"}`, nowHour.Add(10*time.Minute).UnixMilli()),
+				)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte("[" + strings.Join(entries, ",") + "]"))
+			}))
+			defer ts.Close()
+
+			c := configuredComEdHourly(m)
+			c.apiURL = ts.URL
+			c.client = ts.Client()
+
+			// DB has unconfirmed day-ahead estimates for prevHour ($0.05) and nowHour ($0.04)
+			m.On("GetUtilityPrices", mock.Anything, "comed", mock.Anything, mock.Anything).Return([]types.PriceState{
+				{
+					Price:     types.Price{TSStart: prevHour, TSEnd: prevHour.Add(time.Hour), DollarsPerKWH: 0.05},
+					Confirmed: false,
+					TSUpdated: nowHour.Add(-12 * time.Hour),
+				},
+				{
+					Price:     types.Price{TSStart: nowHour, TSEnd: nowHour.Add(time.Hour), DollarsPerKWH: 0.04},
+					Confirmed: false,
+					TSUpdated: nowHour.Add(-12 * time.Hour),
+				},
+			}, nil).Once()
+
+			var upserted []types.PriceState
+			m.On("UpsertUtilityPrices", mock.Anything, "comed", mock.Anything, 0).Run(func(args mock.Arguments) {
+				upserted = args.Get(2).([]types.PriceState)
+			}).Return(nil).Once()
+
+			price, err := c.GetCurrentPrice(ctx)
+			require.NoError(t, err)
+
+			// Expected whole-hour prediction for nowHour:
+			// k = 2, r = 10, sumSoFar = 0.04 + 0.16 = 0.20, latestSample = 0.16, E_t = 0.04
+			// Since 0.16 > 0.04, c = 3.5 -> predRem = (3.5*0.16 + 10*0.04) / 13.5 = 0.96 / 13.5 = 0.0711111...
+			// predHour = (0.20 + 10 * 0.0711111...) / 12 = 0.9111111... / 12 = 0.0759259...
+			expectedPred := (0.20 + 10.0*((3.5*0.16+10.0*0.04)/13.5)) / 12.0
+			assert.InDelta(t, expectedPred, price.DollarsPerKWH, 0.000001)
+
+			if assert.Len(t, upserted, 2) {
+				// 1. Confirmed past hour MUST keep exact arithmetic mean ($0.03), never altered byOrigEst ($0.05)
+				assert.True(t, upserted[0].Confirmed)
+				assert.InDelta(t, 0.03, upserted[0].DollarsPerKWH, 0.000001)
+				assert.InDelta(t, 0.05, upserted[0].OrigEstDollarsPerKWH, 0.000001)
+				assert.Len(t, upserted[0].SubDollarsPerKWH, 12)
+
+				// 2. Unconfirmed current hour stores predicted whole-hour DollarsPerKWH alongside raw SubDollarsPerKWH
+				assert.False(t, upserted[1].Confirmed)
+				assert.InDelta(t, expectedPred, upserted[1].DollarsPerKWH, 0.000001)
+				assert.InDelta(t, 0.04, upserted[1].OrigEstDollarsPerKWH, 0.000001)
+				assert.Equal(t, []float64{0.04, 0.16}, upserted[1].SubDollarsPerKWH)
+			}
+			m.AssertExpectations(t)
+
+			// 3. Another Cloud Run instance reading that fresh unconfirmed DB record (< 2m old)
+			// immediately gets the predicted whole-hour price without calling the ComEd API.
+			c2 := configuredComEdHourly(m)
+			c2.apiURL = "http://invalid-should-not-be-called"
+			m.On("GetUtilityPrices", mock.Anything, "comed", mock.Anything, mock.Anything).Return(upserted, nil).Once()
+
+			cachedPrice, err := c2.GetCurrentPrice(ctx)
+			require.NoError(t, err)
+			assert.InDelta(t, expectedPred, cachedPrice.DollarsPerKWH, 0.000001)
+			m.AssertExpectations(t)
+		})
+
+		t.Run("Calm Below-Estimate Hour Persists And Suppresses False Alarm Peak", func(t *testing.T) {
+			m := &storagemock.MockDatabase{}
+
+			// ComEd API returns k=2 calm samples of 3.0 cents ($0.03) during a $0.12 day-ahead forecast peak
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				response := fmt.Sprintf(`[
+					{"millisUTC":"%d","price":"3.0"},
+					{"millisUTC":"%d","price":"3.0"}
+				]`, nowHour.Add(5*time.Minute).UnixMilli(), nowHour.Add(10*time.Minute).UnixMilli())
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(response))
+			}))
+			defer ts.Close()
+
+			c := configuredComEdHourly(m)
+			c.apiURL = ts.URL
+			c.client = ts.Client()
+
+			m.On("GetUtilityPrices", mock.Anything, "comed", mock.Anything, mock.Anything).Return([]types.PriceState{
+				{
+					Price:     types.Price{TSStart: nowHour, TSEnd: nowHour.Add(time.Hour), DollarsPerKWH: 0.12},
+					Confirmed: false,
+					TSUpdated: nowHour.Add(-12 * time.Hour),
+				},
+			}, nil).Once()
+
+			var upserted []types.PriceState
+			m.On("UpsertUtilityPrices", mock.Anything, "comed", mock.Anything, 0).Run(func(args mock.Arguments) {
+				upserted = args.Get(2).([]types.PriceState)
+			}).Return(nil).Once()
+
+			price, err := c.GetCurrentPrice(ctx)
+			require.NoError(t, err)
+
+			// k = 2, r = 10, sumSoFar = 0.06, latestSample = 0.03 <= E_t (0.12) -> c = 18.0
+			// predRem = (18.0*0.03 + 10.0*0.12) / 28.0 = 1.74 / 28.0 = 0.062142857...
+			// predHour = (0.06 + 10.0 * 0.062142857...) / 12.0 = 0.0567857...
+			expectedPred := (0.06 + 10.0*((18.0*0.03+10.0*0.12)/28.0)) / 12.0
+			assert.InDelta(t, expectedPred, price.DollarsPerKWH, 0.000001)
+			if assert.Len(t, upserted, 1) {
+				assert.False(t, upserted[0].Confirmed)
+				assert.InDelta(t, expectedPred, upserted[0].DollarsPerKWH, 0.000001)
+				assert.InDelta(t, 0.12, upserted[0].OrigEstDollarsPerKWH, 0.000001)
+				assert.Equal(t, []float64{0.03, 0.03}, upserted[0].SubDollarsPerKWH)
+			}
+			m.AssertExpectations(t)
+		})
+
+		t.Run("Sudden Mid-Hour Negative Spike Reverts Fast With c=3.5", func(t *testing.T) {
+			m := &storagemock.MockDatabase{}
+
+			// ComEd API returns k=2 samples where hour starts positive (+2.0c = $0.02)
+			// and then suddenly spikes negative (-4.0c = -$0.04) under a normal $0.02 day-ahead estimate.
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				response := fmt.Sprintf(`[
+					{"millisUTC":"%d","price":"2.0"},
+					{"millisUTC":"%d","price":"-4.0"}
+				]`, nowHour.Add(5*time.Minute).UnixMilli(), nowHour.Add(10*time.Minute).UnixMilli())
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(response))
+			}))
+			defer ts.Close()
+
+			c := configuredComEdHourly(m)
+			c.apiURL = ts.URL
+			c.client = ts.Client()
+
+			m.On("GetUtilityPrices", mock.Anything, "comed", mock.Anything, mock.Anything).Return([]types.PriceState{
+				{
+					Price:     types.Price{TSStart: nowHour, TSEnd: nowHour.Add(time.Hour), DollarsPerKWH: 0.02},
+					Confirmed: false,
+					TSUpdated: nowHour.Add(-12 * time.Hour),
+				},
+			}, nil).Once()
+
+			var upserted []types.PriceState
+			m.On("UpsertUtilityPrices", mock.Anything, "comed", mock.Anything, 0).Run(func(args mock.Arguments) {
+				upserted = args.Get(2).([]types.PriceState)
+			}).Return(nil).Once()
+
+			price, err := c.GetCurrentPrice(ctx)
+			require.NoError(t, err)
+
+			// k = 2, r = 10, sumSoFar = 0.02 + (-0.04) = -0.02
+			// sub[0] = 0.02 >= 0 and latestSample = -0.04 < 0 -> sudden mid-hour negative drop uses c = 3.5, targetEst = 0.02
+			// predRem = (3.5*(-0.04) + 10.0*0.02) / 13.5 = 0.06 / 13.5
+			// predHour = (-0.02 + 10.0 * (0.06 / 13.5)) / 12.0
+			expectedPred := (-0.02 + 10.0*((3.5*(-0.04)+10.0*0.02)/13.5)) / 12.0
+			assert.InDelta(t, expectedPred, price.DollarsPerKWH, 0.000001)
+			if assert.Len(t, upserted, 1) {
+				assert.False(t, upserted[0].Confirmed)
+				assert.InDelta(t, expectedPred, upserted[0].DollarsPerKWH, 0.000001)
+				assert.Equal(t, []float64{0.02, -0.04}, upserted[0].SubDollarsPerKWH)
+			}
+			m.AssertExpectations(t)
+		})
+
+		t.Run("Hour Starting Negative Uses Moderate Reversion c=8.0 And Caps Target At 3 Cents", func(t *testing.T) {
+			m := &storagemock.MockDatabase{}
+
+			// ComEd API returns k=2 negative samples (-3.0c and -5.0c) while day-ahead OrigEst was an
+			// inflated $0.15/kWh peak (e.g., winter polar vortex wind curtailment).
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				response := fmt.Sprintf(`[
+					{"millisUTC":"%d","price":"-3.0"},
+					{"millisUTC":"%d","price":"-5.0"}
+				]`, nowHour.Add(5*time.Minute).UnixMilli(), nowHour.Add(10*time.Minute).UnixMilli())
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(response))
+			}))
+			defer ts.Close()
+
+			c := configuredComEdHourly(m)
+			c.apiURL = ts.URL
+			c.client = ts.Client()
+
+			m.On("GetUtilityPrices", mock.Anything, "comed", mock.Anything, mock.Anything).Return([]types.PriceState{
+				{
+					Price:     types.Price{TSStart: nowHour, TSEnd: nowHour.Add(time.Hour), DollarsPerKWH: 0.15},
+					Confirmed: false,
+					TSUpdated: nowHour.Add(-12 * time.Hour),
+				},
+			}, nil).Once()
+
+			var upserted []types.PriceState
+			m.On("UpsertUtilityPrices", mock.Anything, "comed", mock.Anything, 0).Run(func(args mock.Arguments) {
+				upserted = args.Get(2).([]types.PriceState)
+			}).Return(nil).Once()
+
+			price, err := c.GetCurrentPrice(ctx)
+			require.NoError(t, err)
+
+			// k = 2, r = 10, sumSoFar = -0.03 + (-0.05) = -0.08
+			// sub[0] = -0.03 < 0 and latestSample = -0.05 < 0 -> c = 8.0, targetEst capped at min(0.15, 0.03) = 0.03
+			// predRem = (8.0*(-0.05) + 10.0*0.03) / 18.0 = -0.10 / 18.0
+			expectedPred := (-0.08 + 10.0*((8.0*(-0.05)+10.0*0.03)/18.0)) / 12.0
+			assert.InDelta(t, expectedPred, price.DollarsPerKWH, 0.000001)
+			if assert.Len(t, upserted, 1) {
+				assert.False(t, upserted[0].Confirmed)
+				assert.InDelta(t, expectedPred, upserted[0].DollarsPerKWH, 0.000001)
+				assert.InDelta(t, 0.15, upserted[0].OrigEstDollarsPerKWH, 0.000001)
+				assert.Equal(t, []float64{-0.03, -0.05}, upserted[0].SubDollarsPerKWH)
+			}
+			m.AssertExpectations(t)
+		})
+	})
+
+	t.Run("GetFuturePrices Raw Storage and On-The-Fly Error Adjustment", func(t *testing.T) {
+		ctx := context.Background()
+		now := time.Now().In(ctLocation)
+		nowHour := now.Truncate(time.Hour)
+		prevHour := nowHour.Add(-time.Hour)
+
+		// Helper to convert desired ComEd BESH $/kWh back to PJM total_lmp_da ($/MWh)
+		hecFactor := (1.0 / 1000.0) * 1.0124 * 1.0002 * (1.0 + 0.0406)
+		toLMP := func(dollarsPerKWH float64) float64 {
+			return dollarsPerKWH / hecFactor
+		}
+
+		t.Run("Negative Error Persistence And Peak-To-OffPeak Ratio Scaling With Raw DB Storage", func(t *testing.T) {
+			m := &storagemock.MockDatabase{}
+
+			// PJM Day-Ahead schedule for L = 0..5:
+			// L=0 (nowHour): $0.10/kWh
+			// L=1 (+1h):     $0.10/kWh (same peak level -> scale = 1.0)
+			// L=2 (+2h):     $0.10/kWh (same peak level -> scale = 1.0)
+			// L=3 (+3h):     $0.025/kWh (off-peak level -> scale = 0.025 / 0.10 = 0.25)
+			// L=4 (+4h):     $0.10/kWh (scale = 1.0)
+			// L=5 (+5h):     $0.10/kWh (beyond 4h horizon -> unadjusted $0.10)
+			rawEst := []float64{0.10, 0.10, 0.10, 0.025, 0.10, 0.10}
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var items []string
+				for i, est := range rawEst {
+					tEPT := nowHour.Add(time.Duration(i) * time.Hour).In(etLocation)
+					items = append(items, fmt.Sprintf(`{"datetime_beginning_ept":"%s","total_lmp_da":%.8f}`,
+						tEPT.Format("2006-01-02T15:04:05"), toLMP(est)))
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte("[" + strings.Join(items, ",") + "]"))
+			}))
+			defer ts.Close()
+
+			c := configuredComEdHourly(m)
+			c.pjmAPIURL = ts.URL
+			c.pjmAPIKey = "test-key"
+			c.client = ts.Client()
+
+			// DB returns:
+			// - prevHour (t-1): Confirmed actual $0.04 vs OrigEst $0.10 -> e_{-1} = -0.06 -> e0Prior = 0.75 * (-0.06) = -0.045
+			// - nowHour (t): Unconfirmed with k=3 samples of $0.04 vs OrigEst $0.10 -> e0Obs = -0.06, w_3 = 3/(3+3) = 0.5
+			//   -> e0 = 0.5*(-0.06) + 0.5*(-0.045) = -0.0525
+			curPredStored := predictWholeHourPrice(0.04, []float64{0.04, 0.04, 0.04}, 0.10)
+			m.On("GetUtilityPrices", mock.Anything, "comed", prevHour, nowHour.Add(48*time.Hour)).Return([]types.PriceState{
+				{
+					Price:                types.Price{TSStart: prevHour, TSEnd: nowHour, DollarsPerKWH: 0.04},
+					Confirmed:            true,
+					OrigEstDollarsPerKWH: 0.10,
+					SubDollarsPerKWH:     []float64{0.04, 0.04, 0.04, 0.04, 0.04, 0.04, 0.04, 0.04, 0.04, 0.04, 0.04, 0.04},
+					TSUpdated:            now,
+				},
+				{
+					Price:                types.Price{TSStart: nowHour, TSEnd: nowHour.Add(time.Hour), DollarsPerKWH: curPredStored},
+					Confirmed:            false,
+					OrigEstDollarsPerKWH: 0.10,
+					SubDollarsPerKWH:     []float64{0.04, 0.04, 0.04},
+					TSUpdated:            now,
+				},
+			}, nil).Once()
+
+			var upsertedFuture []types.PriceState
+			m.On("UpsertUtilityPrices", mock.Anything, "comed", mock.Anything, 0).Run(func(args mock.Arguments) {
+				upsertedFuture = args.Get(2).([]types.PriceState)
+			}).Return(nil).Once()
+
+			futures, err := c.GetFuturePrices(ctx)
+			require.NoError(t, err)
+			require.Len(t, futures, 6)
+
+			// 1. Verify that UpsertUtilityPrices stored the RAW unadjusted PJM prices for L=1..5
+			if assert.Len(t, upsertedFuture, 5) {
+				for i, u := range upsertedFuture {
+					assert.InDelta(t, rawEst[i+1], u.DollarsPerKWH, 0.000001, "DB must store raw PJM price at L=%d", i+1)
+					assert.False(t, u.Confirmed)
+				}
+			}
+
+			// 2. Verify that c.cachedFuture also holds the RAW unadjusted PJM prices
+			c.mu.Lock()
+			require.Len(t, c.cachedFuture, 6)
+			for i, rawP := range c.cachedFuture {
+				assert.InDelta(t, rawEst[i], rawP.DollarsPerKWH, 0.000001, "memory cache must store raw PJM price at L=%d", i)
+			}
+			c.mu.Unlock()
+
+			// 3. Verify that the returned slice has on-the-fly adjustments applied:
+			// e0 = -0.0525, negWeights = [0.75, 0.45, 0.30, 0.20]
+			e0 := -0.0525
+			// L=0: matches predictWholeHourPrice for nowHour
+			assert.InDelta(t, curPredStored, futures[0].DollarsPerKWH, 0.000001)
+			// L=1: 0.10 + 0.75 * (-0.0525) * 1.0
+			assert.InDelta(t, 0.10+0.75*e0, futures[1].DollarsPerKWH, 0.000001)
+			// L=2: 0.10 + 0.45 * (-0.0525) * 1.0
+			assert.InDelta(t, 0.10+0.45*e0, futures[2].DollarsPerKWH, 0.000001)
+			// L=3 (off-peak $0.025, scale = 0.025 / 0.10 = 0.25): 0.025 + 0.30 * (-0.0525 * 0.25)
+			assert.InDelta(t, 0.025+0.30*(e0*0.25), futures[3].DollarsPerKWH, 0.000001)
+			// L=4: 0.10 + 0.20 * (-0.0525) * 1.0
+			assert.InDelta(t, 0.10+0.20*e0, futures[4].DollarsPerKWH, 0.000001)
+			// L=5: unadjusted raw PJM price ($0.10)
+			assert.InDelta(t, 0.10, futures[5].DollarsPerKWH, 0.000001)
+
+			m.AssertExpectations(t)
+		})
+
+		t.Run("Positive Spike Clamping At 8 Cents And Rapid Decay plus Dynamic Intra-Hour Update", func(t *testing.T) {
+			m := &storagemock.MockDatabase{}
+			c := configuredComEdHourly(m)
+			c.pjmAPIKey = "test-key"
+
+			// Populate c.cachedFuture with 12 raw PJM hours at $0.05/kWh
+			var cachedRaw []types.Price
+			for i := 0; i < 12; i++ {
+				hStart := nowHour.Add(time.Duration(i) * time.Hour)
+				cachedRaw = append(cachedRaw, types.Price{
+					Provider:      "comed_besh",
+					TSStart:       hStart,
+					TSEnd:         hStart.Add(time.Hour),
+					DollarsPerKWH: 0.05,
+				})
+			}
+			c.mu.Lock()
+			c.cachedFuture = cachedRaw
+			c.lastFutureFetch = now
+			c.mu.Unlock()
+
+			// Case A: At top of hour (k=0 samples in nowHour), prevHour had a massive +$0.25/kWh spike
+			// ($0.30 actual vs $0.05 OrigEst).
+			// Clamped at +$0.08 -> e0Prior = 0.35 * 0.08 = +0.028.
+			c.recordRecentPriceStates([]types.PriceState{
+				{
+					Price:                types.Price{TSStart: prevHour, TSEnd: nowHour, DollarsPerKWH: 0.30},
+					Confirmed:            true,
+					OrigEstDollarsPerKWH: 0.05,
+					TSUpdated:            now,
+				},
+			})
+
+			futuresA, err := c.GetFuturePrices(ctx)
+			require.NoError(t, err)
+			require.Len(t, futuresA, 12)
+
+			// At k=0:
+			// L=0 (nowHour): 0.05 + e0Prior (0.028) = 0.078
+			// L=1 (+1h):     0.05 + 0.35 * 0.028 = 0.0598
+			// L=2 (+2h):     0.05 + 0.15 * 0.028 = 0.0542
+			// L=3 (+3h):     0.05 + 0.05 * 0.028 = 0.0514
+			// L=4 (+4h):     0.05 + 0.00 * 0.028 = 0.0500
+			assert.InDelta(t, 0.05+0.028, futuresA[0].DollarsPerKWH, 0.000001)
+			assert.InDelta(t, 0.05+0.35*0.028, futuresA[1].DollarsPerKWH, 0.000001)
+			assert.InDelta(t, 0.05+0.15*0.028, futuresA[2].DollarsPerKWH, 0.000001)
+			assert.InDelta(t, 0.05+0.05*0.028, futuresA[3].DollarsPerKWH, 0.000001)
+			assert.InDelta(t, 0.05, futuresA[4].DollarsPerKWH, 0.000001)
+
+			// Case B: Now 3 five-minute samples arrive in nowHour where the spike has subsided
+			// to $0.03/kWh (below the $0.05 estimate!).
+			// Without re-fetching PJM, GetFuturePrices dynamically updates using the new state:
+			// e0Obs = 0.03 - 0.05 = -0.02, w_3 = 0.5 -> e0 = 0.5*(-0.02) + 0.5*(0.028) = +0.004
+			c.recordRecentPriceStates([]types.PriceState{
+				{
+					Price:                types.Price{TSStart: nowHour, TSEnd: nowHour.Add(time.Hour), DollarsPerKWH: 0.03},
+					Confirmed:            false,
+					OrigEstDollarsPerKWH: 0.05,
+					SubDollarsPerKWH:     []float64{0.03, 0.03, 0.03},
+					TSUpdated:            now,
+				},
+			})
+
+			futuresB, err := c.GetFuturePrices(ctx)
+			require.NoError(t, err)
+			require.Len(t, futuresB, 12)
+
+			expectedL0 := predictWholeHourPrice(0.03, []float64{0.03, 0.03, 0.03}, 0.05)
+			assert.InDelta(t, expectedL0, futuresB[0].DollarsPerKWH, 0.000001)
+			assert.InDelta(t, 0.05+0.35*0.004, futuresB[1].DollarsPerKWH, 0.000001)
+			assert.InDelta(t, 0.05+0.15*0.004, futuresB[2].DollarsPerKWH, 0.000001)
+		})
+
+		t.Run("Direct Firestore Lookup When Uncached And Negative OrigEstDollarsPerKWH", func(t *testing.T) {
+			// Verify that if recentPriceStates is not cached (e.g. cold Cloud Run request
+			// hitting PJM directly or when cachedFuture is used after recentPriceStates is empty),
+			// adjustFuturePrices queries Firestore directly for [nowHour-1h, nowHour+1h).
+			// Also verify that negative OrigEstDollarsPerKWH is properly handled (since != 0 is checked).
+			m := &storagemock.MockDatabase{}
+			c := configuredComEdHourly(m)
+			c.pjmAPIKey = "test-key"
+			now := time.Now().In(ctLocation)
+			nowHour := now.Truncate(time.Hour)
+			prevHour := nowHour.Add(-time.Hour)
+
+			// Seed cachedFuture directly (simulating a hit where recentPriceStates was empty)
+			// with negative day-ahead estimate (-$0.01/kWh) for nowHour and L=1, and $0.02/kWh thereafter.
+			var cached []types.Price
+			for i := 0; i < 12; i++ {
+				est := 0.02
+				if i <= 1 {
+					est = -0.01
+				}
+				cached = append(cached, types.Price{
+					Provider:      "comed_besh",
+					TSStart:       nowHour.Add(time.Duration(i) * time.Hour),
+					TSEnd:         nowHour.Add(time.Duration(i+1) * time.Hour),
+					DollarsPerKWH: est,
+				})
+			}
+			c.cachedFuture = cached
+			c.lastFutureFetch = now
+
+			// Mock Firestore returning prevHour and nowHour with negative OrigEstDollarsPerKWH (-0.01)
+			// and actual prices even more negative (-0.03), so error = -0.03 - (-0.01) = -0.02.
+			dbRecent := []types.PriceState{
+				{
+					Price:                types.Price{TSStart: prevHour, TSEnd: nowHour, DollarsPerKWH: -0.03},
+					Confirmed:            true,
+					OrigEstDollarsPerKWH: -0.01,
+					TSUpdated:            now,
+				},
+				{
+					Price:                types.Price{TSStart: nowHour, TSEnd: nowHour.Add(time.Hour), DollarsPerKWH: -0.03},
+					Confirmed:            false,
+					OrigEstDollarsPerKWH: -0.01,
+					SubDollarsPerKWH:     []float64{-0.03, -0.03, -0.03},
+					TSUpdated:            now,
+				},
+			}
+			m.On("GetUtilityPrices", mock.Anything, "comed", prevHour, nowHour.Add(time.Hour)).Return(dbRecent, nil).Once()
+
+			futures, err := c.GetFuturePrices(ctx)
+			require.NoError(t, err)
+			require.Len(t, futures, 12)
+
+			// L=0 (nowHour): predictWholeHourPrice with negative OrigEst (-0.01) and negative samples (-0.03):
+			// targetEst = min(-0.01, 0.03) = -0.01, c = 8.0, w = 8/(8+9) = 8/17
+			// remPred = (8/17)*(-0.03) + (9/17)*(-0.01)
+			expectedL0 := predictWholeHourPrice(-0.03, []float64{-0.03, -0.03, -0.03}, -0.01)
+			assert.InDelta(t, expectedL0, futures[0].DollarsPerKWH, 0.000001)
+
+			// ePrev = 0.75*(-0.03 - (-0.01)) = 0.75*(-0.02) = -0.015
+			// e0Obs = -0.03 - (-0.01) = -0.02, w_3 = 3/(3+3) = 0.5
+			// e0 = 0.5*(-0.02) + 0.5*(-0.015) = -0.0175
+			// L=1: scale = max(-0.01, 0.015) / max(-0.01, 0.030) = 0.5 -> eEff = -0.0175 * 0.5
+			// L=2: scale = max(0.02, 0.015) / max(-0.01, 0.030) = 2/3 -> eEff = -0.0175 * (2/3)
+			// Since eEff < 0, negative decay weights (0.75 for L=1, 0.45 for L=2) apply:
+			assert.InDelta(t, -0.01+0.75*(-0.0175*0.5), futures[1].DollarsPerKWH, 0.000001)
+			assert.InDelta(t, 0.02+0.45*(-0.0175*(0.02/0.03)), futures[2].DollarsPerKWH, 0.000001)
+
+			m.AssertExpectations(t)
+		})
 	})
 }
 
