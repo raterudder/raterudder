@@ -2334,8 +2334,8 @@ func (c *Controller) appendActionCandidates(
 	// reasons are false, we also only maintain standby if the battery wouldn't discharge to cover net home load anyway
 	// (`!canDischarge || interval.loadKWH <= interval.solarKWH`), preventing an overnight hold from staying locked in
 	// Standby all day when a weekend/moderate TOU spread is below minPeakRateSpreadDollars.
-	canMaintainStandby := isAlreadyStandby && !isTruePeak && (stepIdx == 0 || !canDischarge || interval.loadKWH <= interval.solarKWH)
-	shouldOfferStandby := len(timeline) == 0 || hasHigherFutureRate || hasHigherFutureExport || hasUpcomingSolarRefill || hasVPPAhead || canMaintainStandby
+	canMaintainStandby := isAlreadyStandby && !isTruePeak && (stepIdx == 0 || interval.loadKWH <= interval.solarKWH)
+	shouldOfferStandby := canDischarge && (len(timeline) == 0 || hasHigherFutureRate || hasHigherFutureExport || hasUpcomingSolarRefill || hasVPPAhead || canMaintainStandby)
 	if shouldOfferStandby {
 		reason := types.ActionReasonDeficitSaveForPeak
 		desc := "Preserving battery in standby for upcoming peak rates."
@@ -3050,8 +3050,7 @@ func (c *Controller) searchOptimalPlan(
 		}
 	}
 	// Pre-calculate the maximum future valuation rate for each step across the remaining horizon.
-	// Used in DP intra-bucket dominance comparisons to accurately value retained battery energy
-	// against upcoming peak periods or export/VPP compensation rather than undervaluing it at the current off-peak rate.
+	// Used in DP frontier bounding to ensure high-SOC paths are never falsely pruned before upcoming peaks.
 	// Floored at 0.0 because stored battery energy always has non-negative option value even during negative grid prices.
 	maxFutureValuationRates := make([]float64, len(timeline))
 	canBatteryExport := settings.ManageTOUSchedules && settings.GridExportBatteries && !isFlatNEM
@@ -3240,9 +3239,15 @@ func (c *Controller) searchOptimalPlan(
 					var transitionCost float64
 					if stepIdx == 0 {
 						// Inertia penalty: if switching away from lastAction at step 0, add default penalty
-						// to prevent rapid mode oscillation.
+						// to prevent rapid mode oscillation during the same price period.
 						if lastAction != nil {
-							if cand.batteryMode != lastAction.BatteryMode {
+							isPriceBoundary := lastAction.CurrentPrice != nil &&
+								(math.Abs(interval.importRate-lastPreceding.ImportRate) >= priceMaterialityThresholdDollars ||
+									math.Abs(interval.exportRate-lastPreceding.ExportRate) >= priceMaterialityThresholdDollars)
+							isSolarPriceDrop := lastAction.CurrentPrice != nil &&
+								(lastPreceding.ImportRate-interval.importRate >= priceMaterialityThresholdDollars ||
+									lastPreceding.ExportRate-interval.exportRate >= priceMaterialityThresholdDollars)
+							if !isPriceBoundary && cand.batteryMode != lastAction.BatteryMode {
 								if lastAction.BatteryMode == types.BatteryModeStandby &&
 									(cand.batteryMode == types.BatteryModeLoad || cand.batteryMode == types.BatteryModeChargeAny) {
 									// Standby is an idle resting state rather than an active high-power dispatch mode.
@@ -3251,22 +3256,38 @@ func (c *Controller) searchOptimalPlan(
 									// where every run prefers starting the charge or discharge one interval later (step 1)
 									// rather than immediately (step 0). Applying modeSwitchPenalty at step 0 equalizes
 									// step-0 and step-1 exit costs from Standby.
-									transitionCost = modeSwitchPenalty
+									transitionCost += modeSwitchPenalty
 								} else {
-									transitionCost = max(modeSwitchPenalty, defaultInertiaThresholdDollars*min(1.0, interval.durationHours))
+									transitionCost += max(modeSwitchPenalty, defaultInertiaThresholdDollars*min(1.0, interval.durationHours))
 								}
-							} else if lastAction.SolarMode > 0 && cand.solarMode > 0 && cand.solarMode != lastAction.SolarMode {
-								transitionCost = modeSwitchPenalty
+							}
+							// Penalize solarMode transitions independently of batteryMode so switching both modes
+							// in the same step does not make the solarMode change free, and only exempt boundaries
+							// where rates drop (keeping SolarModeExport sticky when peak prices stay flat or increase
+							// after solar subsides).
+							if !isSolarPriceDrop && lastAction.SolarMode > 0 && cand.solarMode > 0 && cand.solarMode != lastAction.SolarMode {
+								transitionCost += modeSwitchPenalty
 							}
 						}
-					} else if parent.action.batteryMode != cand.batteryMode || (parent.action.solarMode > 0 && cand.solarMode > 0 && parent.action.solarMode != cand.solarMode) {
-						if parent.action.batteryMode == types.BatteryModeChargeAny && cand.batteryMode == types.BatteryModeStandby && inPrePeakChargeBuffer[stepIdx] {
-							// Completing a grid charge (whether to 100% or a partial target SOC before solar/peak)
-							// naturally rests the battery in Standby during the pre-peak completion buffer window;
-							// do not penalize finishing a charge with a safety cushion.
-							transitionCost = 0
-						} else {
-							transitionCost = modeSwitchPenalty
+					} else {
+						prevInterval := timeline[stepIdx-1]
+						isPriceBoundary := math.Abs(interval.importRate-prevInterval.importRate) >= priceMaterialityThresholdDollars ||
+							math.Abs(interval.exportRate-prevInterval.exportRate) >= priceMaterialityThresholdDollars
+						isSolarPriceDrop := prevInterval.importRate-interval.importRate >= priceMaterialityThresholdDollars ||
+							prevInterval.exportRate-interval.exportRate >= priceMaterialityThresholdDollars
+						if !isPriceBoundary && parent.action.batteryMode != cand.batteryMode {
+							if parent.action.batteryMode == types.BatteryModeChargeAny && cand.batteryMode == types.BatteryModeStandby && inPrePeakChargeBuffer[stepIdx] {
+								// Completing a grid charge (whether to 100% or a partial target SOC before solar/peak)
+								// naturally rests the battery in Standby during the pre-peak completion buffer window;
+								// do not penalize finishing a charge with a safety cushion.
+							} else {
+								transitionCost += modeSwitchPenalty
+							}
+						}
+						// Penalize solarMode transitions independently of batteryMode, and only exempt boundaries
+						// where rates drop so SolarModeExport remains sticky across equal or higher peak tiers.
+						if !isSolarPriceDrop && parent.action.solarMode > 0 && cand.solarMode > 0 && parent.action.solarMode != cand.solarMode {
+							transitionCost += modeSwitchPenalty
 						}
 					}
 
@@ -3409,16 +3430,12 @@ func (c *Controller) searchOptimalPlan(
 						if newStrikes < curr.strikes {
 							isBetter = true
 						} else if newStrikes == curr.strikes {
-							// Dominance comparison within the same mode and strike count: adjust by marginal residual value of SOC difference.
-							socDelta := nextState.soc - curr.state.soc
-							energyDeltaKWH := (socDelta / 100.0) * capacityKWH
-							valuationRate := anchors.knownPostHorizonRate
-							if stepIdx+1 < len(maxFutureValuationRates) {
-								valuationRate = maxFutureValuationRates[stepIdx+1]
-							}
-							marginalValue := energyDeltaKWH * oneWayEff * valuationRate
-							effectiveNewCost := newCost - marginalValue
-							if effectiveNewCost < curr.totalCost {
+							// Compare strictly on accumulated cost rather than adjusting for the < 0.5% intra-bucket
+							// SOC difference at maxFutureValuationRates. Both trajectories are already at the same step,
+							// in the same battery mode, and within the same 0.5% SOC bucket; crediting fractional intra-bucket
+							// energy at future peak rates artificially favors paths that bought off-peak grid power (e.g. via
+							// mid-period Standby) or conserved energy ahead of a free solar refill, overcoming modeSwitchPenalty.
+							if newCost < curr.totalCost {
 								isBetter = true
 							}
 						}
@@ -3486,7 +3503,7 @@ func (c *Controller) searchOptimalPlan(
 			}
 
 			// Between BatteryModeLoad (0) and BatteryModeExport (3), future physical constraints and
-			// transition rules are identical. In the same SOC bucket, keep only the node with lower strikes or effective cost.
+			// transition rules are identical. In the same SOC bucket, keep only the node with lower strikes or total cost.
 			for b := 0; b <= 200; b++ {
 				n0 := nextBuckets[0][b]
 				n3 := nextBuckets[3][b]
@@ -3496,9 +3513,7 @@ func (c *Controller) searchOptimalPlan(
 					} else if n3.strikes < n0.strikes {
 						nextBuckets[0][b] = nil
 					} else {
-						eff0 := n0.totalCost - (n0.state.soc/100.0)*capacityKWH*oneWayEff*valuationRate
-						eff3 := n3.totalCost - (n3.state.soc/100.0)*capacityKWH*oneWayEff*valuationRate
-						if eff0 <= eff3 {
+						if n0.totalCost <= n3.totalCost {
 							nextBuckets[3][b] = nil
 						} else {
 							nextBuckets[0][b] = nil
