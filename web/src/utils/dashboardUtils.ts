@@ -964,7 +964,7 @@ export function getPlanStatusSubvalue(action: Action, refTs?: string, symbol: st
         if (action.reason === ActionReason.DeficitSaveForPeak || action.reason === ActionReason.ArbitrageHoldSave) {
             return 'Saving reserve for upcoming peak rate';
         }
-        return 'Holding reserve in standby';
+        return null;
     }
 
     // Charging: find end of contiguous charge block

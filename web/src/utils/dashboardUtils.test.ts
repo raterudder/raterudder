@@ -474,6 +474,40 @@ describe('dashboardUtils', () => {
             };
             expect(getPlanStatusSubvalue(action, undefined, '£')).toContain('• Low rate (£0.050/kWh)');
         });
+
+        it('returns null when holding reserve in standby with no specific upcoming transition', () => {
+            const action: Action = {
+                description: 'test',
+                timestamp: '2026-07-22T04:00:00Z',
+                batteryMode: BatteryMode.Load,
+                solarMode: SolarMode.Any,
+                reason: ActionReason.BatteryAtReserve,
+                plan: {
+                    tsCreated: '2026-07-22T04:00:00Z',
+                    horizonHours: 2,
+                    totalProjectedCost: 0,
+                    totalExportCredits: 0,
+                    netEconomicBenefit: 0,
+                    periods: [
+                        {
+                            tsStart: '2026-07-22T04:00:00Z',
+                            tsEnd: '2026-07-22T06:00:00Z',
+                            durationHours: 2,
+                            importDollars: 0.08,
+                            batteryMode: BatteryMode.Standby,
+                            solarMode: SolarMode.Any,
+                            reason: ActionReason.BatteryAtReserve,
+                            startSoc: 20,
+                            endSoc: 20,
+                            gridImportKWH: 2,
+                            gridExportKWH: 0,
+                            costDollars: 0.16
+                        }
+                    ]
+                }
+            };
+            expect(getPlanStatusSubvalue(action, undefined, '$')).toBeNull();
+        });
     });
 
     describe('getBatteryPillLabel', () => {
