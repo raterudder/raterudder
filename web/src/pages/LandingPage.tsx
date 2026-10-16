@@ -416,13 +416,12 @@ const LandingPage: React.FC = () => {
 
                     <div className="hero-visual-wrapper" aria-hidden="true">
                         <div className="dashboard-phone-mockup">
-                            {/* Realistic Hardware Side Buttons */}
-                            <span className="phone-hw-btn phone-vol-up" />
-                            <span className="phone-hw-btn phone-vol-down" />
+                            {/* Pixel Hardware Side Buttons (Right Side: Power on Top, Volume Rocker Below) */}
                             <span className="phone-hw-btn phone-power" />
+                            <span className="phone-hw-btn phone-vol-rocker" />
 
                             <div className="phone-notch-bar">
-                                <span className="phone-speaker" />
+                                <span className="phone-camera-hole" />
                             </div>
 
                             {/* Authentic Mobile App Header with Forecast Link & Hamburger Menu */}
@@ -441,39 +440,39 @@ const LandingPage: React.FC = () => {
                                 </div>
                             </div>
 
-                            {/* Mocked CurrentStatus Card (No Left Colored Border) */}
+                            {/* Mocked CurrentStatus Card (Afternoon Solar Export State) */}
                             <div className="mock-status-card">
                                 <div className="mock-status-top">
                                     <div className="mock-status-icon">☀️</div>
                                     <div className="mock-status-text">
                                         <span className="mock-status-eyebrow">Direct Solar Export</span>
                                         <span className="mock-status-main">Exporting Solar • Home on Battery</span>
-                                        <span className="mock-status-sub">Next: Self-Powered at 4:00 PM ($0.18/kWh)</span>
+                                        <span className="mock-status-sub">Exporting to grid until 4:00 PM</span>
                                     </div>
                                 </div>
                                 <div className="mock-status-metrics">
                                     <div className="mock-status-metric">
                                         <span className="mock-metric-lbl">Battery</span>
-                                        <span className="mock-metric-val">88.0%</span>
+                                        <span className="mock-metric-val">74.0%</span>
                                         <div className="mock-battery-track">
-                                            <div className="mock-battery-fill" style={{ width: '88%' }} />
+                                            <div className="mock-battery-fill" style={{ width: '74%' }} />
                                         </div>
                                     </div>
                                     <div className="mock-status-metric">
                                         <span className="mock-metric-lbl">Price</span>
-                                        <span className="mock-metric-val">$0.142<small>/kWh</small></span>
+                                        <span className="mock-metric-val">$0.150<small>/kWh</small></span>
                                     </div>
                                 </div>
                             </div>
 
-                            {/* Mocked SavingsHero Card (Today, Last 7 Days, Last 30 Days) */}
+                            {/* Mocked SavingsHero Card (Mobile Default: Usage Stats Collapsed) */}
                             <div className="mock-savings-card">
                                 <span className="mock-savings-eyebrow">Today Savings</span>
                                 <div className="mock-savings-hero-row">
                                     <span className="mock-savings-big">$6.42</span>
                                     <span className="mock-savings-without">($3.85)</span>
                                 </div>
-                                <span className="mock-savings-subcaption">Estimated. (Without RateRudder).</span>
+                                <span className="mock-savings-subcaption">(Without RateRudder).</span>
 
                                 <div className="mock-periods-list">
                                     <div className="mock-period-row">
@@ -495,25 +494,126 @@ const LandingPage: React.FC = () => {
                                         </span>
                                     </div>
                                 </div>
-
-                                <div className="mock-usage-mini-grid">
-                                    <div className="mock-usage-cell">
-                                        <span className="lbl">Home Usage</span>
-                                        <span className="val">28.4 <small>kWh</small></span>
-                                    </div>
-                                    <div className="mock-usage-cell">
-                                        <span className="lbl">Solar Gen</span>
-                                        <span className="val">41.2 <small>kWh</small></span>
-                                    </div>
-                                    <div className="mock-usage-cell">
-                                        <span className="lbl">Battery Use</span>
-                                        <span className="val">19.5 <small>kWh</small></span>
-                                    </div>
-                                </div>
                             </div>
 
-                            <div className="phone-home-indicator-row">
-                                <span className="phone-home-indicator" />
+                            {/* Mocked Day Activity Summary Card (Afternoon ~2:30 PM) */}
+                            <div className="mock-day-summary-card">
+                                <div className="mock-summary-header">
+                                    <span className="mock-summary-label">Summary</span>
+                                    <div className="mock-summary-legend">
+                                        <span className="mock-legend-item leg-solarCharge">
+                                            <span className="mock-legend-dot" />
+                                            Solar Charge
+                                        </span>
+                                        <span className="mock-legend-item leg-load">
+                                            <span className="mock-legend-dot" />
+                                            Powering Home
+                                        </span>
+                                        <span className="mock-legend-item leg-solarExport">
+                                            <span className="mock-legend-dot" />
+                                            Solar Export
+                                        </span>
+                                        <span className="mock-legend-item leg-standby">
+                                            <span className="mock-legend-dot" />
+                                            Standby
+                                        </span>
+                                        <span className="mock-legend-item leg-charge">
+                                            <span className="mock-legend-dot" />
+                                            Grid Charge
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <div className="mock-summary-strip-wrap">
+                                    <div className="mock-summary-strip">
+                                        <div
+                                            className="mock-summary-seg seg-standby"
+                                            style={{ left: '0%', width: '8.33%' }}
+                                        />
+                                        <div
+                                            className="mock-summary-seg seg-charge"
+                                            style={{ left: '8.33%', width: '12.5%' }}
+                                        />
+                                        <div
+                                            className="mock-summary-seg seg-load"
+                                            style={{ left: '20.83%', width: '12.5%' }}
+                                        />
+                                        <div
+                                            className="mock-summary-seg seg-solarCharge"
+                                            style={{ left: '33.33%', width: '16.67%' }}
+                                        />
+                                        <div
+                                            className="mock-summary-seg seg-solarExport"
+                                            style={{ left: '50%', width: '10.42%' }}
+                                        />
+                                    </div>
+                                    <div className="mock-summary-axis">
+                                        <span>12a</span>
+                                        <span>6a</span>
+                                        <span>12p</span>
+                                        <span>6p</span>
+                                        <span>12a</span>
+                                    </div>
+                                </div>
+
+                                <ul className="mock-summary-beats">
+                                    <li className="mock-summary-beat beat-solarExport">
+                                        <span className="mock-beat-dot" />
+                                        <div className="mock-beat-body">
+                                            <div className="mock-beat-top">
+                                                <span className="mock-beat-headline">Exporting solar</span>
+                                                <span className="mock-beat-time">12:00 PM – 2:30 PM</span>
+                                            </div>
+                                            <div className="mock-beat-meta">
+                                                <span className="mock-beat-soc">95% → 74%</span>
+                                                <span className="mock-beat-sep">·</span>
+                                                <span className="mock-beat-price">$0.15/kWh</span>
+                                            </div>
+                                        </div>
+                                    </li>
+                                    <li className="mock-summary-beat beat-solarCharge">
+                                        <span className="mock-beat-dot" />
+                                        <div className="mock-beat-body">
+                                            <div className="mock-beat-top">
+                                                <span className="mock-beat-headline">Charged from solar</span>
+                                                <span className="mock-beat-time">8:00 AM – 12:00 PM</span>
+                                            </div>
+                                            <div className="mock-beat-meta">
+                                                <span className="mock-beat-soc">30% → 95%</span>
+                                                <span className="mock-beat-sep">·</span>
+                                                <span className="mock-beat-price">$0.09/kWh</span>
+                                            </div>
+                                        </div>
+                                    </li>
+                                    <li className="mock-summary-beat beat-load">
+                                        <span className="mock-beat-dot" />
+                                        <div className="mock-beat-body">
+                                            <div className="mock-beat-top">
+                                                <span className="mock-beat-headline">Made room for solar</span>
+                                                <span className="mock-beat-time">5:00 AM – 8:00 AM</span>
+                                            </div>
+                                            <div className="mock-beat-meta">
+                                                <span className="mock-beat-soc">65% → 30%</span>
+                                                <span className="mock-beat-sep">·</span>
+                                                <span className="mock-beat-price">$0.12/kWh</span>
+                                            </div>
+                                        </div>
+                                    </li>
+                                    <li className="mock-summary-beat beat-charge">
+                                        <span className="mock-beat-dot" />
+                                        <div className="mock-beat-body">
+                                            <div className="mock-beat-top">
+                                                <span className="mock-beat-headline">Charged before peak</span>
+                                                <span className="mock-beat-time">2:00 AM – 5:00 AM</span>
+                                            </div>
+                                            <div className="mock-beat-meta">
+                                                <span className="mock-beat-soc">35% → 65%</span>
+                                                <span className="mock-beat-sep">·</span>
+                                                <span className="mock-beat-price">$0.01/kWh</span>
+                                            </div>
+                                        </div>
+                                    </li>
+                                </ul>
                             </div>
                         </div>
                     </div>
@@ -630,12 +730,11 @@ const LandingPage: React.FC = () => {
                     >
                         {/* Cropped Mobile Forecast Phone (No Blue Mat) */}
                         <div className="forecast-phone-frame">
-                            <span className="phone-hw-btn phone-vol-up" aria-hidden="true" />
-                            <span className="phone-hw-btn phone-vol-down" aria-hidden="true" />
                             <span className="phone-hw-btn phone-power" aria-hidden="true" />
+                            <span className="phone-hw-btn phone-vol-rocker" aria-hidden="true" />
 
                             <div className="forecast-phone-notch" aria-hidden="true">
-                                <span className="phone-speaker" />
+                                <span className="phone-camera-hole" />
                             </div>
 
                             <div className="phone-app-header forecast-app-header" aria-hidden="true">
