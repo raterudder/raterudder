@@ -360,7 +360,7 @@ const SupportedUtilitiesPage: React.FC = () => {
                             <span className="guardrail-icon" aria-hidden="true">⚡</span>
                             <h3>ComEd Hourly Pricing (Illinois)</h3>
                             <p>
-                                RateRudder combines ComEd&apos;s live <strong>5-minute real-time pricing feed</strong> with official <strong>PJM Day-Ahead hourly rates</strong> so SmartPlan has an accurate 24-hour price curve. Rather than relying blindly on raw PJM forecasts, RateRudder dynamically calibrates upcoming day-ahead rates against live 5-minute price errors—suppressing false-alarm peaks and cutting PJM forecast error. We also add your exact residential delivery class (Single-Family or Multi-Family, with or without Electric Space Heat) and model <strong>1:1 supply export</strong> vs. full net metering.
+                                RateRudder combines ComEd&apos;s live <strong>5-minute real-time pricing feed</strong> with official <strong>PJM Day-Ahead hourly rates</strong> so SmartPlan has an accurate 24-hour price curve. Rather than relying on raw PJM forecasts, RateRudder dynamically calibrates upcoming day-ahead rates against live 5-minute price errors to suppress false-alarm peaks and reduce PJM forecast error.
                             </p>
                         </div>
 
@@ -368,7 +368,7 @@ const SupportedUtilitiesPage: React.FC = () => {
                             <span className="guardrail-icon" aria-hidden="true">📊</span>
                             <h3>Ameren Illinois Power Smart Pricing</h3>
                             <p>
-                                For Ameren Illinois PSP homeowners, RateRudder fetches official <strong>MISO Day-Ahead market reports</strong> directly as soon as next-day clearing prices are published, pairing them with your seasonal delivery Zone (<code>Zone I, II, or III</code>) and electric space heating riders.
+                                For Ameren Illinois PSP homeowners, RateRudder fetches official <strong>MISO Day-Ahead market reports</strong> directly as soon as next-day clearing prices are published, pairing them with your seasonal delivery Zone (<code>Zone I, II, or III</code>).
                             </p>
                         </div>
 
@@ -376,7 +376,7 @@ const SupportedUtilitiesPage: React.FC = () => {
                             <span className="guardrail-icon" aria-hidden="true">🤠</span>
                             <h3>Texas / ERCOT &amp; Tesla Electric</h3>
                             <p>
-                                For <strong>Tesla Electric Dynamic</strong> plans, RateRudder authenticates directly with the <strong>official ERCOT Public API</strong> to pull Real-Time Settlement Point Prices (SPP) and Day-Ahead Market (DAM) prices, automatically layering on regulated PUCT wire charges for <strong>CenterPoint, Oncor, AEP Texas, or TNMP</strong>. Also supports TXU, Green Mountain, and Direct Energy <strong>Free Nights</strong> plans.
+                                For <strong>Tesla Electric Dynamic</strong> plans, RateRudder authenticates directly with the <strong>official ERCOT Public API</strong> to pull Real-Time Settlement Point Prices and Day-Ahead Market prices, automatically layering on regulated PUCT wire charges for <strong>CenterPoint, Oncor, AEP Texas, or TNMP</strong>. Also supports TXU, Green Mountain, and Direct Energy <strong>Free Nights</strong> plans.
                             </p>
                         </div>
 
@@ -384,7 +384,7 @@ const SupportedUtilitiesPage: React.FC = () => {
                             <span className="guardrail-icon" aria-hidden="true">☀️</span>
                             <h3>California NEM 2.0 &amp; NEM 3.0 (PG&amp;E, SCE, SDG&amp;E)</h3>
                             <p>
-                                Under California&apos;s Net Billing Tariff (NEM 3.0 / SBP), midday solar exports earn pennies while September evening exports can pay several dollars per kWh. RateRudder models the complete monthly and weekday/weekend Avoided Cost Calculator export table plus non-bypassable charges across <code>E-TOU-C</code>, <code>EV2-A</code>, <code>E-ELEC</code>, <code>TOU-D-PRIME</code>, and <code>EV-TOU-5</code>.
+                                Under California&apos;s Net Billing Tariff (NEM 3.0 / SBP), midday solar exports earn pennies while Fall evening exports can pay several dollars per kWh. RateRudder models the complete monthly and weekday/weekend Avoided Cost Calculator export table plus non-bypassable charges.
                             </p>
                         </div>
 
@@ -392,7 +392,7 @@ const SupportedUtilitiesPage: React.FC = () => {
                             <span className="guardrail-icon" aria-hidden="true">🔋</span>
                             <h3>Eversource ConnectedSolutions &amp; VPP (CT, MA, NH)</h3>
                             <p>
-                                RateRudder pulls daily Variable Peak Pricing (Rate 7 VPP) rates directly from Eversource Connecticut, models CT Renewable Energy Solutions (RRES) application-year export adjustments (<code>2022-2026</code>), and automatically pre-charges your battery to 100% ahead of summer weekday <strong>ConnectedSolutions Passive Dispatch (5-8 PM)</strong> events.
+                                RateRudder pulls daily Variable Peak Pricing rates directly from Eversource Connecticut, models CT Renewable Energy Solutions (RRES) application-year export adjustments (<code>2022-2026</code>), and automatically pre-charges your battery to 100% ahead of summer weekday <strong>ConnectedSolutions Passive Dispatch</strong> events.
                             </p>
                         </div>
 
@@ -400,7 +400,7 @@ const SupportedUtilitiesPage: React.FC = () => {
                             <span className="guardrail-icon" aria-hidden="true">🌍</span>
                             <h3>Hawai‘i Shift &amp; Save, Duke Schedule PP, UK &amp; Australia</h3>
                             <p>
-                                From <strong>Hawaiian Electric&apos;s</strong> <code>ARD TOU R</code> Shift and Save tariff across O‘ahu, Maui, and Hawai‘i Island and <strong>SRP / APS</strong> Arizona solar export plans, to <strong>Duke Energy</strong> PowerPair Schedule PP riders, <strong>Octopus Flux / Intelligent Go (UK)</strong> across all 14 DNO regions, and <strong>Origin / GloBird ZEROHERO (Australia)</strong>.
+                                From <strong>Hawaiian Electric&apos;s</strong> Shift and Save tariff across O‘ahu, Maui, and Hawai‘i Island and <strong>SRP / APS</strong> Arizona solar export plans, to <strong>Duke Energy</strong> PowerPair Schedule PP riders, <strong>Octopus Flux / Intelligent Go (UK)</strong> across all 14 DNO regions, and <strong>Origin / GloBird ZEROHERO (Australia)</strong>.
                             </p>
                         </div>
                     </div>
