@@ -184,7 +184,7 @@ func calculateRecentBaseline(ctx context.Context, history []types.EnergyStats) f
 	daytimeHighCount := 0
 	for i := 0; i < len(hCopy) && i < 6; i++ {
 		hr := hCopy[i].TSHourStart.Hour()
-		if !isNighttimeEVHour(hr) && hCopy[i].HomeKWH >= 3.8 {
+		if !isNighttimeEVHour(hr) && hCopy[i].HomeKWH >= 3.8 && hCopy[i].HomeKWH <= sustainedDaytimeHVACMaxKW {
 			daytimeHighCount++
 		}
 	}

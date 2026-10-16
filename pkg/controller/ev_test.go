@@ -117,6 +117,31 @@ func TestDetectEVCharging(t *testing.T) {
 		assert.False(t, isEV, "Sustained 5.0-5.8 kW afternoon AC continuing at 20:00 (5.7 kW) must not be flagged as EV charging")
 	})
 
+	t.Run("DaytimeEVChargingDoesNotTriggerSustainedHVACIntoNighttimeEV", func(t *testing.T) {
+		checkAt22h := time.Date(2026, 8, 20, 22, 0, 0, 0, time.UTC)
+		var history []types.EnergyStats
+		// Prior 7 days of normal 1.2 kW evening baseline at hour 21
+		for d := 1; d <= 7; d++ {
+			history = append(history, types.EnergyStats{
+				TSHourStart: time.Date(2026, 8, 20-d, 21, 0, 0, 0, time.UTC),
+				HomeKWH:     1.2,
+			})
+		}
+		// Preceding 6 hours (16:00-21:00) had high-power daytime EV charging (9-12 kW) and a 6.6 kW ramp hour
+		history = append(history,
+			types.EnergyStats{TSHourStart: checkAt22h.Add(-1 * time.Hour), HomeKWH: 9.2},
+			types.EnergyStats{TSHourStart: checkAt22h.Add(-2 * time.Hour), HomeKWH: 6.6},
+			types.EnergyStats{TSHourStart: checkAt22h.Add(-3 * time.Hour), HomeKWH: 9.1},
+			types.EnergyStats{TSHourStart: checkAt22h.Add(-4 * time.Hour), HomeKWH: 11.4},
+			types.EnergyStats{TSHourStart: checkAt22h.Add(-5 * time.Hour), HomeKWH: 12.1},
+			types.EnergyStats{TSHourStart: checkAt22h.Add(-6 * time.Hour), HomeKWH: 9.5},
+		)
+		isEV, step := DetectEVCharging(ctx, 8.0, history)
+		if assert.True(t, isEV, "Daytime EV charging > 7.5 kW must not classify as sustained HVAC and mask nighttime EV charging") {
+			assert.InDelta(t, 6.8, step, 0.1)
+		}
+	})
+
 	t.Run("FilterTODHomeLoadEVSpikes_ReplacesIntermittentEVSpikes", func(t *testing.T) {
 		// 5 normal days at 1.0 kW (3 hours/day = 15 points) and 2 EV days at 9.5 kW (6 points)
 		loads := []float64{
