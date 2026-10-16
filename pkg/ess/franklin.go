@@ -1294,10 +1294,8 @@ func buildFranklinTouDetailsFromSchedule(sched *types.TOUSchedule, tiers []touTi
 		switch {
 		case p.BatteryMode == types.BatteryModeExport:
 			dispatchID = franklinDispatchAPowerToHomeAndGrid
-		case p.BatteryMode == types.BatteryModeStandby:
+		case p.SolarMode == types.SolarModeExport && p.BatteryMode == types.BatteryModeStandby:
 			dispatchID = franklinDispatchAPowerOnStandby
-		case p.BatteryMode == types.BatteryModeChargeAny:
-			dispatchID = franklinDispatchAPowerChargesFromGrid
 		case p.SolarMode == types.SolarModeExport:
 			dispatchID = franklinDispatchAPowerToHome
 		default:

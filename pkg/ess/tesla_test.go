@@ -3727,4 +3727,134 @@ func TestTesla(t *testing.T) {
 		assert.Equal(t, "Small Tariff", dest.Response.TariffContentV2["name"])
 		assert.Len(t, dest.Response.TariffContent, 150)
 	})
+
+	t.Run("SetModes Lookahead Disables Battery Export Only Within One Hour Of SolarOnly Export", func(t *testing.T) {
+		loc, err := time.LoadLocation("America/Chicago")
+		require.NoError(t, err)
+		currentTime := time.Date(2026, 7, 15, 10, 30, 0, 0, loc) // 10:30 AM (1.5 hours before 12:00 PM solar export)
+
+		currentExportRule := teslaExportRuleBatteryOk
+		var gridImportExportCalls int
+		var touCalls int
+		var currentTariff map[string]any
+
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/api/1/energy_sites/1234/site_info":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"default_real_mode":      "self_consumption",
+						"backup_reserve_percent": 20.0,
+						"installation_time_zone": "America/Chicago",
+						"tariff_content_v2":      currentTariff,
+						"components": map[string]any{
+							"solar":                          true,
+							"battery":                        true,
+							"customer_preferred_export_rule": currentExportRule,
+							"disallow_charge_from_grid_with_solar_installed": false,
+						},
+					},
+				})
+			case "/api/1/energy_sites/1234/live_status":
+				json.NewEncoder(w).Encode(map[string]any{
+					"response": map[string]any{
+						"percentage_charged": 75.0,
+						"storm_mode_active":  false,
+					},
+				})
+			case "/api/1/energy_sites/1234/grid_import_export":
+				gridImportExportCalls++
+				var body map[string]any
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+				if rule, ok := body["customer_preferred_export_rule"].(string); ok {
+					currentExportRule = rule
+				}
+				json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 201}})
+			case "/api/1/energy_sites/1234/time_of_use_settings":
+				touCalls++
+				var body map[string]any
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+				if touSettings, ok := body["tou_settings"].(map[string]any); ok {
+					currentTariff, _ = touSettings["tariff_content_v2"].(map[string]any)
+				}
+				json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 201}})
+			case "/api/1/energy_sites/1234/operation":
+				json.NewEncoder(w).Encode(map[string]any{"response": map[string]any{"code": 201}})
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer ts.Close()
+
+		m := teslaMap(ts)
+		settings := types.Settings{
+			ESS:                 "tesla",
+			ManageTOUSchedules:  true,
+			GridChargeBatteries: true,
+			GridExportSolar:     true,
+			GridExportBatteries: true,
+			MinBatterySOC:       20,
+		}
+		sys, err := m.Site(ctx, "test-site-lookahead", settings)
+		require.NoError(t, err)
+
+		teslaSys := sys.(*Tesla)
+		teslaSys.token = "mock-access"
+		teslaSys.energySiteID = 1234
+		teslaSys.baseURL = ts.URL
+		teslaSys.nowFunc = func() time.Time { return currentTime }
+
+		// Schedule has a solar-only export window 12:00-16:00 and a battery export window 18:00-20:00
+		sched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 12, EndMinute: 0, ImportDollars: 0.05, ExportDollars: 0.03, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 12, StartMinute: 0, EndHour: 16, EndMinute: 0, ImportDollars: 0.25, ExportDollars: 0.15, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 16, StartMinute: 0, EndHour: 18, EndMinute: 0, ImportDollars: 0.05, ExportDollars: 0.03, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 18, StartMinute: 0, EndHour: 20, EndMinute: 0, ImportDollars: 0.35, ExportDollars: 0.25, BatteryMode: types.BatteryModeExport, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 20, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.05, ExportDollars: 0.03, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+			},
+		}
+
+		// Seed initial RateRudder tariff on the Powerwall so ManageTOUSchedules recognizes it
+		initialPayload := buildTeslaTOUTariffPayload(sched)
+		currentTariff = initialPayload["tou_settings"].(map[string]any)["tariff_content_v2"].(map[string]any)
+
+		// 1. At 10:30 AM (90 minutes before 12:00 PM solar export):
+		// Should NOT switch export rule to pv_only because we are >= 1 hour ahead of time.
+		changed, err := teslaSys.SetModes(ctx, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{
+			MinimumSOC: 20,
+			Schedule:   sched,
+		})
+		require.NoError(t, err)
+		assert.False(t, changed)
+		assert.Equal(t, 0, gridImportExportCalls, "should not change export rule when >= 1 hour before solar export")
+		assert.Equal(t, teslaExportRuleBatteryOk, currentExportRule)
+
+		// 2. At 11:20 AM (40 minutes before 12:00 PM solar-only export):
+		// Less than 1 hour ahead of a non-battery export window -> MUST switch export rule to pv_only.
+		currentTime = time.Date(2026, 7, 15, 11, 20, 0, 0, loc)
+		teslaSys.siteInfoExpiry = time.Time{}
+		changed, err = teslaSys.SetModes(ctx, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{
+			MinimumSOC: 20,
+			Schedule:   sched,
+		})
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.Equal(t, 1, gridImportExportCalls, "should switch export rule to pv_only when < 1 hour before solar-only export")
+		assert.Equal(t, teslaExportRulePvOnly, currentExportRule)
+		assert.Equal(t, 0, touCalls, "TOU schedule already matches and should not be re-uploaded")
+
+		// 3. At 5:20 PM / 17:20 (40 minutes before 18:00 battery export):
+		// Upcoming export is BatteryModeExport -> MUST switch export rule back to battery_ok.
+		currentTime = time.Date(2026, 7, 15, 17, 20, 0, 0, loc)
+		teslaSys.siteInfoExpiry = time.Time{}
+		changed, err = teslaSys.SetModes(ctx, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{
+			MinimumSOC: 20,
+			Schedule:   sched,
+		})
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.Equal(t, 2, gridImportExportCalls, "should switch export rule back to battery_ok before battery export")
+		assert.Equal(t, teslaExportRuleBatteryOk, currentExportRule)
+	})
 }

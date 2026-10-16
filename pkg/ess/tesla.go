@@ -432,6 +432,8 @@ type Tesla struct {
 	retryDelay1 time.Duration
 	retryDelay2 time.Duration
 	verifyDelay time.Duration
+
+	nowFunc func() time.Time
 }
 
 func newTesla(b *baseTesla) *Tesla {
@@ -441,6 +443,19 @@ func newTesla(b *baseTesla) *Tesla {
 		retryDelay2: 5 * time.Second,
 		verifyDelay: 2 * time.Minute,
 	}
+}
+
+func (b *Tesla) now(siteInfo teslaSiteInfoResponse) time.Time {
+	now := time.Now()
+	if b.nowFunc != nil {
+		now = b.nowFunc()
+	}
+	if siteInfo.InstallationTimeZone != "" {
+		if loc, err := time.LoadLocation(siteInfo.InstallationTimeZone); err == nil {
+			return now.In(loc)
+		}
+	}
+	return now
 }
 
 func (b *Tesla) Name() string {
@@ -1276,6 +1291,38 @@ func isTeslaScheduleMatch(currentTariff map[string]any, sched *types.TOUSchedule
 	return !existingSched.IsSignificantlyDifferent(targetSched)
 }
 
+// hasUpcomingSolarOnlyExportWithinHour reports whether the next scheduled export
+// period in sched starts in less than 1 hour (< 60 minutes) from now and is a
+// solar-only export (SolarModeExport without BatteryModeExport).
+func hasUpcomingSolarOnlyExportWithinHour(sched *types.TOUSchedule, now time.Time) bool {
+	if sched == nil || now.IsZero() {
+		return false
+	}
+	nowMin := now.Hour()*60 + now.Minute()
+	bestDiff := 60
+	var found bool
+	var isSolarOnly bool
+	for _, p := range sched.Periods {
+		if p.BatteryMode != types.BatteryModeExport && p.SolarMode != types.SolarModeExport {
+			continue
+		}
+		startMin := p.StartHour*60 + p.StartMinute
+		// sched.Periods is built from the rolling 24-hour window [now, now + 24h), so
+		// any minute-of-day in [0, 1440) maps to its single upcoming occurrence within
+		// the next 24 hours. Adding 1440 (24 hours) and taking modulo 1440 handles
+		// wrapping across midnight (e.g. now is 23:30 and the export period starts at
+		// 00:10 -> diff is 40 minutes), while periods earlier in the clock day that
+		// belong to tomorrow (startMin < nowMin) wrap to > 60 minutes away.
+		diff := (startMin - nowMin + 1440) % 1440
+		if diff > 0 && diff < bestDiff {
+			bestDiff = diff
+			found = true
+			isSolarOnly = p.SolarMode == types.SolarModeExport && p.BatteryMode != types.BatteryModeExport
+		}
+	}
+	return found && isSolarOnly
+}
+
 // SetModes sets the operating modes of the system.
 func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.SolarMode, opts types.ModesOptions) (bool, error) {
 	log.Ctx(ctx).DebugContext(ctx, "SetModes called", slog.Any("batteryMode", bat), slog.Any("solarMode", sol), slog.Any("opts", opts))
@@ -1541,6 +1588,14 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 			targetRule := teslaExportRuleNever
 			if b.settings.GridExportBatteries {
 				targetRule = teslaExportRuleBatteryOk
+				// Since all planned export windows are included as ON_PEAK in the TOU schedule
+				// and we do not control the exact moment the Powerwall starts an ON_PEAK period
+				// (or our control loop may run slightly late), switch to pv_only less than an hour
+				// ahead of an upcoming solar-only export period so the battery does not export
+				// when that ON_PEAK window begins. There is no need to switch earlier than 1 hour ahead.
+				if hasUpcomingSolarOnlyExportWithinHour(opts.Schedule, b.now(siteInfo)) {
+					targetRule = teslaExportRulePvOnly
+				}
 			} else if b.settings.GridExportSolar {
 				targetRule = teslaExportRulePvOnly
 			}

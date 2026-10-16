@@ -4991,4 +4991,138 @@ func TestFranklin(t *testing.T) {
 		assert.Equal(t, 2, saveDispatchCalls)
 		assert.GreaterOrEqual(t, time.Since(startExport), f.touDispatchDelay, "should wait touDispatchDelay after saving TOU schedule before switching mode")
 	})
+
+	t.Run("SetModes Stores Export Dispatches And Keeps NonExport On SelfConsumption", func(t *testing.T) {
+		var saveDispatchCalls int
+		var savedPayload map[string]any
+		var currentStrategies []franklinTOUStrategy
+
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/hes-gateway/terminal/initialize/appUserOrInstallerLogin":
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
+			case "/hes-gateway/terminal/getDeviceCompositeInfo":
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"valid": true,
+						"runtimeData": map[string]any{
+							"soc":       60.0,
+							"timestamp": time.Now().Unix(),
+							"mode":      11111,
+						},
+					},
+				})
+			case "/hes-gateway/terminal/tou/getGatewayTouListV2":
+				list := []map[string]any{
+					{"id": 11111, "workMode": 1, "name": "RateRudder Dynamic Schedule", "soc": 20.0, "editSocFlag": true},
+					{"id": 22222, "workMode": 2, "name": "Self-Consumption", "soc": 20.0, "editSocFlag": true},
+				}
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"list": list, "currendId": 11111},
+				})
+			case "/hes-gateway/terminal/tou/getPowerControlSetting":
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"gridMaxFlag": 2, "gridFeedMaxFlag": 2},
+				})
+			case "/hes-gateway/terminal/tou/getTouDispatchDetail":
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"template": map[string]any{
+							"countryId":       2,
+							"provinceId":      39,
+							"electricCompany": "RateRudder",
+							"tariffName":      "RateRudder Dynamic Schedule",
+						},
+						"strategyList": currentStrategies,
+					},
+				})
+			case "/hes-gateway/terminal/tou/saveTouDispatch":
+				saveDispatchCalls++
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&savedPayload))
+				rawStrategies, err := json.Marshal(savedPayload["strategyList"])
+				require.NoError(t, err)
+				require.NoError(t, json.Unmarshal(rawStrategies, &currentStrategies))
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true})
+			case "/hes-gateway/terminal/tou/updateSocV2":
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true})
+			case "/hes-gateway/terminal/tou/updateTouModeV2":
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true})
+			default:
+				http.Error(w, "not found: "+r.URL.Path, 404)
+			}
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:      ts.Client(),
+			baseURL:     ts.URL,
+			username:    "u",
+			md5Password: "p",
+			gatewayID:   "g",
+		}
+		require.NoError(t, f.ApplySettings(context.Background(), types.Settings{
+			ManageTOUSchedules:  true,
+			GridChargeBatteries: true,
+			GridExportSolar:     true,
+			GridExportBatteries: true,
+			MinBatterySOC:       20,
+		}))
+
+		// Schedule containing non-export ChargeAny and Standby periods as well as
+		// all three export variants for the rest of the day:
+		// - 00:00-04:00: ChargeAny + SolarModeAny -> self-consumption dispatch (6)
+		// - 04:00-12:00: Standby + SolarModeAny -> self-consumption dispatch (6)
+		// - 12:00-15:00: Load + SolarModeExport -> aPower to home / solar export dispatch (1)
+		// - 15:00-16:00: Standby + SolarModeExport -> aPower on standby dispatch (2)
+		// - 16:00-19:00: Load + SolarModeAny -> self-consumption dispatch (6)
+		// - 19:00-21:00: BatteryModeExport + SolarModeExport -> aPower to home & grid dispatch (7)
+		// - 21:00-24:00: Load + SolarModeAny -> self-consumption dispatch (6)
+		sched := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 4, EndMinute: 0, ImportDollars: 0.05, ExportDollars: 0.02, BatteryMode: types.BatteryModeChargeAny, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 4, StartMinute: 0, EndHour: 12, EndMinute: 0, ImportDollars: 0.05, ExportDollars: 0.02, BatteryMode: types.BatteryModeStandby, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 12, StartMinute: 0, EndHour: 15, EndMinute: 0, ImportDollars: 0.25, ExportDollars: 0.15, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 15, StartMinute: 0, EndHour: 16, EndMinute: 0, ImportDollars: 0.25, ExportDollars: 0.15, BatteryMode: types.BatteryModeStandby, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 16, StartMinute: 0, EndHour: 19, EndMinute: 0, ImportDollars: 0.05, ExportDollars: 0.02, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 19, StartMinute: 0, EndHour: 21, EndMinute: 0, ImportDollars: 0.35, ExportDollars: 0.25, BatteryMode: types.BatteryModeExport, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 21, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.05, ExportDollars: 0.02, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+			},
+		}
+
+		changed, err := f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeExport, types.ModesOptions{
+			Schedule: sched,
+		})
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assert.Equal(t, 1, saveDispatchCalls)
+
+		strategyList := savedPayload["strategyList"].([]any)
+		dayType := strategyList[0].(map[string]any)["dayTypeVoList"].([]any)[0].(map[string]any)
+		detailVoList := dayType["detailVoList"].([]any)
+		if assert.Len(t, detailVoList, 7) {
+			assert.EqualValues(t, franklinDispatchSelfConsumption, detailVoList[0].(map[string]any)["dispatchId"], "00:00-04:00 non-export ChargeAny should stay on self-consumption dispatch (6)")
+			assert.EqualValues(t, franklinDispatchSelfConsumption, detailVoList[1].(map[string]any)["dispatchId"], "04:00-12:00 non-export Standby should stay on self-consumption dispatch (6)")
+			assert.EqualValues(t, franklinDispatchAPowerToHome, detailVoList[2].(map[string]any)["dispatchId"], "12:00-15:00 SolarModeExport should use dispatch 1")
+			assert.EqualValues(t, franklinDispatchAPowerOnStandby, detailVoList[3].(map[string]any)["dispatchId"], "15:00-16:00 Standby+SolarModeExport should use dispatch 2")
+			assert.EqualValues(t, franklinDispatchSelfConsumption, detailVoList[4].(map[string]any)["dispatchId"], "16:00-19:00 non-export Load should use dispatch 6")
+			assert.EqualValues(t, franklinDispatchAPowerToHomeAndGrid, detailVoList[5].(map[string]any)["dispatchId"], "19:00-21:00 future BatteryModeExport should use dispatch 7")
+			assert.EqualValues(t, franklinDispatchSelfConsumption, detailVoList[6].(map[string]any)["dispatchId"], "21:00-24:00 non-export Load should use dispatch 6")
+		}
+
+		// Calling SetModes again during the peak period with the same schedule must match and skip saveTouDispatch
+		changed, err = f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeExport, types.ModesOptions{
+			Schedule: sched,
+		})
+		require.NoError(t, err)
+		assert.False(t, changed)
+		assert.Equal(t, 1, saveDispatchCalls, "should not re-save TOU schedule when schedule already matches")
+	})
 }

@@ -66,17 +66,13 @@ type rawTOUSlice struct {
 //     (Note: If weekday vs. weekend tariffs differ, the schedule will naturally be refreshed when the
 //     update loop runs on Friday and Sunday).
 //
-//  2. Short-Term Trust Horizon for Operational Control:
-//     Dynamic forecasts (solar irradiance, temperature, home usage) become less reliable several
-//     hours out. We do not want to program autonomous export dispatches deep into the future on the
-//     hardware, which could misfire if weather or usage suddenly shifts.
-//
-//     Only the immediate contiguous block of the active control action (from plan.Periods[0]
-//     onward with identical BatteryMode and SolarMode) is programmed as an active override dispatch
-//     when exporting (Solar Export or Battery Export). Self-consumption charging and standby are
-//     controlled directly via reserve SOC in self-consumption mode and do not alter the TOU schedule.
-//     All subsequent periods in the 24-hour cycle automatically revert to standard Self-Consumption
-//     (BatteryModeLoad, SolarModeAny), keeping RateRudder in continuous, real-time control.
+//  2. Export Dispatches Across the 24-Hour Horizon:
+//     All planned export periods (Solar Export or Battery Export) across the 24-hour horizon are
+//     programmed into the TOU schedule as peak export dispatches. Self-consumption charging and standby
+//     (without solar export) are controlled directly via reserve SOC in self-consumption mode and remain
+//     on standard Self-Consumption (BatteryModeLoad, SolarModeAny) in the TOU schedule.
+//     If tomorrow's schedule has a peak period that overlaps with now, we do not change that overlapping
+//     period to tomorrow's dispatch until the period is over, preventing 20-minute schedule churn.
 //
 //  3. True Pricing 24/7 for Accurate App Analytics:
 //     Even during Self-Consumption periods, the true retail import and export rates from the utility plan
@@ -108,28 +104,13 @@ func BuildTOUSchedule(plan *types.Plan, now time.Time, loc *time.Location) *type
 	}
 
 	imm := plan.Periods[0]
-	immBatteryMode := imm.BatteryMode
-	immSolarMode := imm.SolarMode
 
-	// Determine if the immediate action is an operational override dispatch.
+	// Determine if the immediate action is an operational export override dispatch.
 	// Only export dispatches use hardware TOU mode; self-consumption charging and
 	// standby (without solar export) are controlled via reserve SOC in self-consumption
 	// mode and should not alter the recurring 24-hour TOU schedule.
-	isOverride := immBatteryMode == types.BatteryModeExport ||
-		immSolarMode == types.SolarModeExport
-
-	// Find the end boundary of the immediate contiguous block of identical action parameters.
-	// Only periods within this contiguous block will receive the override dispatch.
-	activeUntil := imm.TSEnd
-	for i := 1; i < len(plan.Periods); i++ {
-		p := plan.Periods[i]
-		if p.BatteryMode == immBatteryMode && p.SolarMode == immSolarMode {
-			activeUntil = p.TSEnd
-		} else {
-			break
-		}
-	}
-	activeUntilInLoc := activeUntil.In(loc)
+	isOverride := imm.BatteryMode == types.BatteryModeExport ||
+		imm.SolarMode == types.SolarModeExport
 
 	// Define the 24-hour planning horizon in local time.
 	// When there is no active export override, align the horizon start to the start of the
@@ -168,6 +149,21 @@ func BuildTOUSchedule(plan *types.Plan, now time.Time, loc *time.Location) *type
 		return false
 	}
 
+	// Track whether a peak period on tomorrow continues past horizonEnd (meaning tomorrow's
+	// peak period overlaps with now).
+	peakAfterHorizonEnd := false
+	for _, p := range plan.Periods {
+		pStart := p.TSStart.In(loc)
+		pEnd := p.TSEnd.In(loc)
+		isPeak := p.BatteryMode == types.BatteryModeExport ||
+			p.SolarMode == types.SolarModeExport ||
+			isUtilityPeakRate(p.ImportDollars)
+		if isPeak && pEnd.After(horizonEnd) && !pStart.After(horizonEnd) {
+			peakAfterHorizonEnd = true
+			break
+		}
+	}
+
 	// Slice and map plan periods across the 24-hour horizon into clock minutes (0 to 1440)
 	var rawSlices []rawTOUSlice
 
@@ -195,15 +191,15 @@ func BuildTOUSchedule(plan *types.Plan, now time.Time, loc *time.Location) *type
 		}
 
 		// Operational mode & peak determination:
-		// Only intervals within the active contiguous block retain the override dispatch.
-		// All subsequent intervals revert to standard self-consumption.
+		// All planned export dispatches across the 24-hour horizon retain their export mode and
+		// are flagged as peak. Non-export intervals revert to standard self-consumption.
 		var bMode types.BatteryMode
 		var sMode types.SolarMode
 		var isPeak bool
 
-		if isOverride && pStart.Before(activeUntilInLoc) {
-			bMode = immBatteryMode
-			sMode = immSolarMode
+		if p.BatteryMode == types.BatteryModeExport || p.SolarMode == types.SolarModeExport {
+			bMode = p.BatteryMode
+			sMode = p.SolarMode
 			isPeak = true
 		} else {
 			bMode = types.BatteryModeLoad
@@ -244,6 +240,24 @@ func BuildTOUSchedule(plan *types.Plan, now time.Time, loc *time.Location) *type
 
 	if len(rawSlices) == 0 {
 		return nil
+	}
+
+	// If tomorrow's schedule at the end of the 24-hour horizon has a peak period that overlaps
+	// with now (either because today is currently in a peak period at horizonStart or because
+	// tomorrow's peak period extends past horizonEnd), do not change that overlapping peak period
+	// to tomorrow's dispatch yet. Wait until the period is over before updating for tomorrow so
+	// we do not rewrite the TOU schedule every 20 minutes throughout the peak period.
+	if len(rawSlices) > 1 && rawSlices[len(rawSlices)-1].peak && (rawSlices[0].peak || peakAfterHorizonEnd) {
+		immSlice := rawSlices[0]
+		nextStartMin := immSlice.startMin
+		for k := len(rawSlices) - 1; k >= 1 && rawSlices[k].peak && rawSlices[k].endMin%1440 == nextStartMin%1440; k-- {
+			nextStartMin = rawSlices[k].startMin
+			rawSlices[k].batteryMode = immSlice.batteryMode
+			rawSlices[k].solarMode = immSlice.solarMode
+			rawSlices[k].peak = immSlice.peak
+			rawSlices[k].importRateDollars = immSlice.importRateDollars
+			rawSlices[k].exportRateDollars = immSlice.exportRateDollars
+		}
 	}
 
 	// Sort slices by start minute which will bring tomorrow's periods first before

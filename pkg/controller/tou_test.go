@@ -101,19 +101,16 @@ func TestBuildTOUSchedule(t *testing.T) {
 		assert.False(t, p3.Peak)
 	})
 
-	t.Run("Active Immediate Solar Export Window (Trust Horizon Restricts Future Export)", func(t *testing.T) {
+	t.Run("Active Immediate Solar Export And Future Battery Export Windows", func(t *testing.T) {
 		// Scenario:
 		// Plan starts at 14:00 on Monday.
 		// - 14:00 to 16:00 (2 hours): Active immediate Solar Export (SolarModeExport).
 		// - 16:00 to 19:00 (3 hours): Normal self-consumption (SolarModeAny, BatteryModeLoad).
-		// - 19:00 to 21:00 (2 hours): FUTURE planned export in the solver (BatteryModeExport).
+		// - 19:00 to 21:00 (2 hours): Future planned export in the solver (BatteryModeExport).
 		// - 21:00 to 14:00 Tuesday:  Self-consumption.
 		//
-		// Trust Horizon Rule:
-		// - Only the immediate active block (14:00 to 16:00) receives the override dispatch.
-		// - The future 19:00 to 21:00 export must be DEMOTED to standard Self-Consumption (Load/Any)
-		//   so the ESS is not programmed with premature future actions if solar/usage changes.
-		// - True rates across all 24 hours must be preserved for accurate app pricing.
+		// Both the immediate 14:00 to 16:00 Solar Export and the future 19:00 to 21:00 Battery Export
+		// must be preserved in the TOU schedule as peak export dispatches.
 		startTime := baseTime.Add(14 * time.Hour) // 14:00 Monday
 		var periods []types.PlanPeriod
 		for h := 0; h < 24; h++ {
@@ -165,13 +162,18 @@ func TestBuildTOUSchedule(t *testing.T) {
 		assert.Equal(t, types.SolarModeExport, activeExportPeriod.SolarMode, "Immediate block must have SolarModeExport")
 		assert.True(t, activeExportPeriod.Peak, "Export window must be flagged as Peak")
 
-		// Verify the 19:00 to 21:00 window: MUST BE DEMOTED to BatteryModeLoad (trust horizon)
-		for _, p := range sched.Periods {
-			if p.StartHour >= 19 && p.EndHour <= 21 {
-				assert.Equal(t, types.BatteryModeLoad, p.BatteryMode, "Future planned export must be demoted to BatteryModeLoad")
-				assert.Equal(t, types.SolarModeAny, p.SolarMode, "Future planned export must be demoted to SolarModeAny")
+		// Verify the 19:00 to 21:00 window: future planned export must be preserved
+		var futureExportPeriod *types.TOUPeriod
+		for i := range sched.Periods {
+			p := &sched.Periods[i]
+			if p.StartHour == 19 && p.EndHour == 21 {
+				futureExportPeriod = p
+				break
 			}
 		}
+		require.NotNil(t, futureExportPeriod, "Future 19:00-21:00 export block should exist in schedule")
+		assert.Equal(t, types.BatteryModeExport, futureExportPeriod.BatteryMode, "Future planned export must retain BatteryModeExport")
+		assert.True(t, futureExportPeriod.Peak, "Future planned export must be flagged as Peak")
 
 		// Verify full 24h continuity from 00:00 to 24:00
 		assert.Equal(t, 0, sched.Periods[0].StartHour)
@@ -647,5 +649,149 @@ func TestBuildTOUSchedule(t *testing.T) {
 		assert.Equal(t, "24:00", b5.EndTimeStr())
 		assert.InDelta(t, (0.065+0.062+0.058)/3.0, b5.ImportDollars, 0.0001)
 		assert.False(t, b5.Peak)
+	})
+
+	t.Run("Future Export Included While NonExport Remains SelfConsumption", func(t *testing.T) {
+		// Scenario: At 08:00 Monday, the immediate action is Load/SolarModeAny, followed by
+		// ChargeAny (09:00-11:00), Standby without solar export (11:00-12:00), planned
+		// Solar Export (12:00-16:00), and planned Battery Export (18:00-20:00).
+		// Only the export windows (12:00-16:00 and 18:00-20:00) should retain their export
+		// dispatch in the TOU schedule; non-export periods must stay on Load/SolarModeAny.
+		startTime := baseTime.Add(8 * time.Hour) // 08:00 Monday
+		var periods []types.PlanPeriod
+		for h := 0; h < 24; h++ {
+			currStart := startTime.Add(time.Duration(h) * time.Hour)
+			currEnd := currStart.Add(time.Hour)
+			clockHour := currStart.Hour()
+
+			bMode := types.BatteryModeLoad
+			sMode := types.SolarModeAny
+			switch {
+			case clockHour >= 9 && clockHour < 11:
+				bMode = types.BatteryModeChargeAny
+			case clockHour == 11:
+				bMode = types.BatteryModeStandby
+			case clockHour >= 12 && clockHour < 16:
+				bMode = types.BatteryModeLoad
+				sMode = types.SolarModeExport
+			case clockHour >= 18 && clockHour < 20:
+				bMode = types.BatteryModeExport
+			}
+
+			periods = append(periods, types.PlanPeriod{
+				TSStart:       currStart,
+				TSEnd:         currEnd,
+				DurationHours: 1.0,
+				ImportDollars: 0.15,
+				ExportDollars: 0.08,
+				BatteryMode:   bMode,
+				SolarMode:     sMode,
+			})
+		}
+
+		sched := BuildTOUSchedule(&types.Plan{Periods: periods}, startTime, loc)
+		require.NotNil(t, sched)
+		if assert.Len(t, sched.Periods, 5) {
+			assert.Equal(t, "00:00", sched.Periods[0].StartTimeStr())
+			assert.Equal(t, "12:00", sched.Periods[0].EndTimeStr())
+			assert.Equal(t, types.BatteryModeLoad, sched.Periods[0].BatteryMode)
+			assert.Equal(t, types.SolarModeAny, sched.Periods[0].SolarMode)
+			assert.False(t, sched.Periods[0].Peak)
+
+			assert.Equal(t, "12:00", sched.Periods[1].StartTimeStr())
+			assert.Equal(t, "16:00", sched.Periods[1].EndTimeStr())
+			assert.Equal(t, types.BatteryModeLoad, sched.Periods[1].BatteryMode)
+			assert.Equal(t, types.SolarModeExport, sched.Periods[1].SolarMode)
+			assert.True(t, sched.Periods[1].Peak)
+
+			assert.Equal(t, "16:00", sched.Periods[2].StartTimeStr())
+			assert.Equal(t, "18:00", sched.Periods[2].EndTimeStr())
+			assert.Equal(t, types.BatteryModeLoad, sched.Periods[2].BatteryMode)
+			assert.Equal(t, types.SolarModeAny, sched.Periods[2].SolarMode)
+			assert.False(t, sched.Periods[2].Peak)
+
+			assert.Equal(t, "18:00", sched.Periods[3].StartTimeStr())
+			assert.Equal(t, "20:00", sched.Periods[3].EndTimeStr())
+			assert.Equal(t, types.BatteryModeExport, sched.Periods[3].BatteryMode)
+			assert.True(t, sched.Periods[3].Peak)
+
+			assert.Equal(t, "20:00", sched.Periods[4].StartTimeStr())
+			assert.Equal(t, "24:00", sched.Periods[4].EndTimeStr())
+			assert.Equal(t, types.BatteryModeLoad, sched.Periods[4].BatteryMode)
+			assert.Equal(t, types.SolarModeAny, sched.Periods[4].SolarMode)
+			assert.False(t, sched.Periods[4].Peak)
+		}
+	})
+
+	t.Run("Does Not Update Tomorrows Peak Period Overlapping Now Until Period Ends", func(t *testing.T) {
+		// Scenario: Peak export window is 12:00 to 16:00.
+		// Today (Monday) 12:00-16:00 is Load + SolarModeExport.
+		// Tomorrow (Tuesday) 12:00-16:00 is Standby + SolarModeExport.
+		// While now is inside 12:00-16:00 (e.g. 12:20, 13:20, 15:20), tomorrow's overlapping
+		// [12:00, now) slice must not split or change the 12:00-16:00 period every 20 minutes.
+		// Once now is after 16:00 (e.g. 16:05), the 12:00-16:00 period updates to tomorrow's dispatch.
+		buildPlan := func(nowTime time.Time) *types.Plan {
+			var periods []types.PlanPeriod
+			hourStart := time.Date(nowTime.Year(), nowTime.Month(), nowTime.Day(), nowTime.Hour(), 0, 0, 0, loc)
+			for h := 0; h <= 24; h++ {
+				currStart := hourStart.Add(time.Duration(h) * time.Hour)
+				currEnd := currStart.Add(time.Hour)
+				if h == 0 {
+					currStart = nowTime
+				}
+				bMode := types.BatteryModeLoad
+				sMode := types.SolarModeAny
+				if currStart.Hour() >= 12 && currStart.Hour() < 16 {
+					sMode = types.SolarModeExport
+					if currStart.Day() == baseTime.Day() {
+						bMode = types.BatteryModeLoad
+					} else {
+						bMode = types.BatteryModeStandby
+					}
+				}
+				periods = append(periods, types.PlanPeriod{
+					TSStart:       currStart,
+					TSEnd:         currEnd,
+					DurationHours: currEnd.Sub(currStart).Hours(),
+					ImportDollars: 0.15,
+					ExportDollars: 0.08,
+					BatteryMode:   bMode,
+					SolarMode:     sMode,
+				})
+			}
+			return &types.Plan{Periods: periods}
+		}
+
+		t1200 := baseTime.Add(12 * time.Hour)
+		t1220 := baseTime.Add(12*time.Hour + 20*time.Minute)
+		t1320 := baseTime.Add(13*time.Hour + 20*time.Minute)
+		t1520 := baseTime.Add(15*time.Hour + 20*time.Minute)
+		t1605 := baseTime.Add(16*time.Hour + 5*time.Minute)
+
+		sched1200 := BuildTOUSchedule(buildPlan(t1200), t1200, loc)
+		sched1220 := BuildTOUSchedule(buildPlan(t1220), t1220, loc)
+		sched1320 := BuildTOUSchedule(buildPlan(t1320), t1320, loc)
+		sched1520 := BuildTOUSchedule(buildPlan(t1520), t1520, loc)
+		sched1605 := BuildTOUSchedule(buildPlan(t1605), t1605, loc)
+
+		// Throughout 12:00-16:00, the 12:00-16:00 period must remain Load + SolarModeExport without changing
+		assert.False(t, sched1200.IsSignificantlyDifferent(sched1220))
+		assert.False(t, sched1200.IsSignificantlyDifferent(sched1320))
+		assert.False(t, sched1200.IsSignificantlyDifferent(sched1520))
+		if assert.Len(t, sched1320.Periods, 3) {
+			assert.Equal(t, "12:00", sched1320.Periods[1].StartTimeStr())
+			assert.Equal(t, "16:00", sched1320.Periods[1].EndTimeStr())
+			assert.Equal(t, types.BatteryModeLoad, sched1320.Periods[1].BatteryMode)
+			assert.Equal(t, types.SolarModeExport, sched1320.Periods[1].SolarMode)
+		}
+
+		// After 16:00 (at 16:05), the 12:00-16:00 period updates to tomorrow's Standby + SolarModeExport dispatch
+		assert.True(t, sched1200.IsSignificantlyDifferent(sched1605))
+		if assert.Len(t, sched1605.Periods, 3) {
+			assert.Equal(t, "12:00", sched1605.Periods[1].StartTimeStr())
+			assert.Equal(t, "16:00", sched1605.Periods[1].EndTimeStr())
+			assert.Equal(t, types.BatteryModeStandby, sched1605.Periods[1].BatteryMode)
+			assert.Equal(t, types.SolarModeExport, sched1605.Periods[1].SolarMode)
+		}
 	})
 }
