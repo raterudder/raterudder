@@ -86,17 +86,47 @@ type TOUSchedule struct {
 
 // IsSignificantlyDifferent checks whether two schedules differ beyond the standard rate and time thresholds.
 // It returns true if:
-// 1. Either schedule is nil, or period counts differ.
-// 2. Any period differs in BatteryMode, SolarMode, or Peak status.
-// 3. Any period's ImportDollars or ExportDollars differs by more than TOUScheduleRateThresholdDollars.
-// 4. Any period's start or end boundary has shifted by more than TOUScheduleTimeThresholdMinutes.
-func (s *TOUSchedule) IsSignificantlyDifferent(other *TOUSchedule) bool {
+//  1. Either schedule is nil, or period counts differ.
+//  2. Any period differs in BatteryMode, SolarMode, or Peak status.
+//  3. Any period's ImportDollars or ExportDollars differs by more than TOUScheduleRateThresholdDollars.
+//  4. Any period's start or end boundary has shifted by more than TOUScheduleTimeThresholdMinutes
+//     (except for the start boundary of the currently active period covering now).
+func (s *TOUSchedule) IsSignificantlyDifferent(other *TOUSchedule, now time.Time) bool {
 	if s == nil || other == nil {
 		return true
 	}
 	if len(s.Periods) != len(other.Periods) {
 		return true
 	}
+
+	// isActivePeriodStartBoundary reports whether the boundary at Periods[idx].Start
+	// (and Periods[idx-1].End) is the start of the period currently active at now
+	// in both schedules. Because BuildTOUSchedule starts the 24-hour horizon at now
+	// and fills [00:00, now) from tomorrow, the active period's start time in the
+	// newly built schedule advances with now on each cycle when tomorrow's [00:00, now)
+	// period does not coalesce with today's active period. Since both schedules are
+	// already in this period at now, that past boundary shift does not warrant
+	// re-uploading the schedule.
+	isActivePeriodStartBoundary := func(idx int) bool {
+		if now.IsZero() || idx <= 0 || idx >= len(s.Periods) {
+			return false
+		}
+		p1Prev := s.Periods[idx-1]
+		p1 := s.Periods[idx]
+		p2Prev := other.Periods[idx-1]
+		p2 := other.Periods[idx]
+
+		// Ensure Periods[idx-1].End and Periods[idx].Start share a contiguous boundary
+		// before excusing shifts to both via isActivePeriodStartBoundary(i+1) and (i).
+		if p1Prev.EndHour != p1.StartHour || p1Prev.EndMinute != p1.StartMinute {
+			return false
+		}
+		if p2Prev.EndHour != p2.StartHour || p2Prev.EndMinute != p2.StartMinute {
+			return false
+		}
+		return p1.CoversTime(now) && p2.CoversTime(now)
+	}
+
 	for i := range s.Periods {
 		p1 := s.Periods[i]
 		p2 := other.Periods[i]
@@ -115,13 +145,13 @@ func (s *TOUSchedule) IsSignificantlyDifferent(other *TOUSchedule) bool {
 		// Time boundary shifts
 		p1Start := p1.StartHour*60 + p1.StartMinute
 		p2Start := p2.StartHour*60 + p2.StartMinute
-		if math.Abs(float64(p1Start-p2Start)) > float64(touScheduleTimeThresholdMinutes) {
+		if math.Abs(float64(p1Start-p2Start)) > float64(touScheduleTimeThresholdMinutes) && !isActivePeriodStartBoundary(i) {
 			return true
 		}
 
 		p1End := p1.EndHour*60 + p1.EndMinute
 		p2End := p2.EndHour*60 + p2.EndMinute
-		if math.Abs(float64(p1End-p2End)) > float64(touScheduleTimeThresholdMinutes) {
+		if math.Abs(float64(p1End-p2End)) > float64(touScheduleTimeThresholdMinutes) && !isActivePeriodStartBoundary(i+1) {
 			return true
 		}
 	}

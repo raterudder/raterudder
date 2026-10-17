@@ -1264,7 +1264,7 @@ func parseTeslaTOUSchedule(currentTariff map[string]any) *types.TOUSchedule {
 	return &types.TOUSchedule{Periods: periods}
 }
 
-func isTeslaScheduleMatch(currentTariff map[string]any, sched *types.TOUSchedule) bool {
+func isTeslaScheduleMatch(currentTariff map[string]any, sched *types.TOUSchedule, now time.Time) bool {
 	if sched == nil {
 		return false
 	}
@@ -1288,7 +1288,7 @@ func isTeslaScheduleMatch(currentTariff map[string]any, sched *types.TOUSchedule
 	if targetSched == nil {
 		return false
 	}
-	return !existingSched.IsSignificantlyDifferent(targetSched)
+	return !existingSched.IsSignificantlyDifferent(targetSched, now)
 }
 
 // hasUpcomingSolarOnlyExportWithinHour reports whether the next scheduled export
@@ -1625,7 +1625,7 @@ func (b *Tesla) SetModes(ctx context.Context, bat types.BatteryMode, sol types.S
 		needsExport := bat == types.BatteryModeExport || sol == types.SolarModeExport
 
 		if isRateRudder || needsExport {
-			shouldUpdate := !isTeslaScheduleMatch(siteInfo.TariffContentV2, opts.Schedule)
+			shouldUpdate := !isTeslaScheduleMatch(siteInfo.TariffContentV2, opts.Schedule, b.now(siteInfo))
 			if updatedMode && targetMode == "autonomous" {
 				shouldUpdate = true
 			}

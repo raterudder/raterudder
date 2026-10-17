@@ -2243,7 +2243,7 @@ func TestFranklin(t *testing.T) {
 
 		existingSched := parseFranklinTOUSchedule(parsedStrategies)
 		require.NotNil(t, existingSched)
-		assert.False(t, existingSched.IsSignificantlyDifferent(sched))
+		assert.False(t, existingSched.IsSignificantlyDifferent(sched, time.Time{}))
 
 		// Different schedule (e.g. 03:00 instead of 02:00) should report significantly different
 		diffSched := &types.TOUSchedule{
@@ -2253,7 +2253,7 @@ func TestFranklin(t *testing.T) {
 				{StartHour: 22, StartMinute: 0, EndHour: 24, EndMinute: 0, BatteryMode: types.BatteryModeStandby, SolarMode: types.SolarModeExport, Peak: true},
 			},
 		}
-		assert.True(t, existingSched.IsSignificantlyDifferent(diffSched))
+		assert.True(t, existingSched.IsSignificantlyDifferent(diffSched, time.Time{}))
 
 		// Calling SetModes again with matching schedule skips saveTouDispatch
 		saveDispatchCalled = false
@@ -2543,7 +2543,7 @@ func TestFranklin(t *testing.T) {
 		require.NotNil(t, parsedStd)
 
 		// Matches standard schedule
-		assert.False(t, parsedStd.IsSignificantlyDifferent(targetSched),
+		assert.False(t, parsedStd.IsSignificantlyDifferent(targetSched, time.Time{}),
 			"should match standard RateRudder schedule when target matches")
 
 		// Does NOT match when dispatch differs
@@ -2554,7 +2554,7 @@ func TestFranklin(t *testing.T) {
 				{StartHour: 20, StartMinute: 0, EndHour: 24, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
 			},
 		}
-		assert.True(t, parsedStd.IsSignificantlyDifferent(diffDispatchSched),
+		assert.True(t, parsedStd.IsSignificantlyDifferent(diffDispatchSched, time.Time{}),
 			"should not match when dispatch differs")
 
 		// Does NOT match when end time differs
@@ -2565,7 +2565,7 @@ func TestFranklin(t *testing.T) {
 				{StartHour: 21, StartMinute: 0, EndHour: 24, EndMinute: 0, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
 			},
 		}
-		assert.True(t, parsedStd.IsSignificantlyDifferent(diffTimeSched),
+		assert.True(t, parsedStd.IsSignificantlyDifferent(diffTimeSched, time.Time{}),
 			"should not match when target end differs")
 
 		// Peak rate matching checks
@@ -2578,7 +2578,7 @@ func TestFranklin(t *testing.T) {
 		}
 
 		// Existing schedule has 0 rates, so it should NOT match target rates
-		assert.True(t, parsedStd.IsSignificantlyDifferent(rateSched),
+		assert.True(t, parsedStd.IsSignificantlyDifferent(rateSched, time.Time{}),
 			"should not match when existing schedule has 0 rates and target has positive peak rate")
 
 		// When rates match on the existing schedule
@@ -2587,13 +2587,13 @@ func TestFranklin(t *testing.T) {
 		strategiesWithRates[0].DayTypeVoList[0].EleticSellPeak = 0.25962
 		parsedWithRates := parseFranklinTOUSchedule(strategiesWithRates)
 		require.NotNil(t, parsedWithRates)
-		assert.False(t, parsedWithRates.IsSignificantlyDifferent(rateSched),
+		assert.False(t, parsedWithRates.IsSignificantlyDifferent(rateSched, time.Time{}),
 			"should match when rates also match")
 
 		// If existing peak rate is different, it should NOT match
 		strategiesWithRates[0].DayTypeVoList[0].EleticRatePeak = 0.15
 		parsedDiffRates := parseFranklinTOUSchedule(strategiesWithRates)
-		assert.True(t, parsedDiffRates.IsSignificantlyDifferent(rateSched),
+		assert.True(t, parsedDiffRates.IsSignificantlyDifferent(rateSched, time.Time{}),
 			"should not match when peak rate differs")
 
 		// 3. SetModes integration test: gateway returns multiDayTypeStrategies
@@ -5124,5 +5124,21 @@ func TestFranklin(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, changed)
 		assert.Equal(t, 1, saveDispatchCalls, "should not re-save TOU schedule when schedule already matches")
+
+		// During the 12:00-15:00 export period (e.g. at 13:20) where the active period start
+		// has advanced to 13:20 (because tomorrow 04:00-13:20 is non-export), isFranklinScheduleMatch
+		// must treat the schedule as matching.
+		schedAt1320 := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 4, EndMinute: 0, ImportDollars: 0.05, ExportDollars: 0.02, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 4, StartMinute: 0, EndHour: 13, EndMinute: 20, ImportDollars: 0.05, ExportDollars: 0.02, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 13, StartMinute: 20, EndHour: 15, EndMinute: 0, ImportDollars: 0.25, ExportDollars: 0.15, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 15, StartMinute: 0, EndHour: 16, EndMinute: 0, ImportDollars: 0.25, ExportDollars: 0.15, BatteryMode: types.BatteryModeStandby, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 16, StartMinute: 0, EndHour: 19, EndMinute: 0, ImportDollars: 0.05, ExportDollars: 0.02, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 19, StartMinute: 0, EndHour: 21, EndMinute: 0, ImportDollars: 0.35, ExportDollars: 0.25, BatteryMode: types.BatteryModeExport, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 21, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.05, ExportDollars: 0.02, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+			},
+		}
+		assert.True(t, isFranklinScheduleMatch(currentStrategies, schedAt1320, time.Date(2026, 10, 16, 13, 20, 0, 0, time.UTC)))
 	})
 }

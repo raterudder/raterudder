@@ -2369,7 +2369,7 @@ func TestTesla(t *testing.T) {
 
 				// Verify isTeslaScheduleMatch:
 				// A. Exact schedule matches
-				assert.True(t, isTeslaScheduleMatch(tariffContent, cmSched),
+				assert.True(t, isTeslaScheduleMatch(tariffContent, cmSched, time.Time{}),
 					"should match identical schedule")
 
 				// B. Modified period time (e.g. 03:00 instead of 02:00) -> no match
@@ -2380,7 +2380,7 @@ func TestTesla(t *testing.T) {
 						{StartHour: 22, StartMinute: 0, EndHour: 24, EndMinute: 0, BatteryMode: types.BatteryModeExport, SolarMode: types.SolarModeExport, Peak: true},
 					},
 				}
-				assert.False(t, isTeslaScheduleMatch(tariffContent, diffTimeSched),
+				assert.False(t, isTeslaScheduleMatch(tariffContent, diffTimeSched, time.Time{}),
 					"should not match different period times")
 
 				// C. Different rate (> $0.01) -> no match
@@ -2391,7 +2391,7 @@ func TestTesla(t *testing.T) {
 						{StartHour: 22, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.30, ExportDollars: 0.30, BatteryMode: types.BatteryModeExport, SolarMode: types.SolarModeExport, Peak: true},
 					},
 				}
-				assert.False(t, isTeslaScheduleMatch(tariffContent, diffRateSched),
+				assert.False(t, isTeslaScheduleMatch(tariffContent, diffRateSched, time.Time{}),
 					"should not match different rates")
 
 				// D. Customer utility tariff (non-RateRudder) -> no match
@@ -2400,12 +2400,12 @@ func TestTesla(t *testing.T) {
 					"utility": "PG&E",
 					"seasons": seasons,
 				}
-				assert.False(t, isTeslaScheduleMatch(customerTariff, cmSched),
+				assert.False(t, isTeslaScheduleMatch(customerTariff, cmSched, time.Time{}),
 					"customer utility tariff must not match RateRudder schedule")
 
 				// E. Nil schedule or nil tariff -> no match
-				assert.False(t, isTeslaScheduleMatch(nil, cmSched))
-				assert.False(t, isTeslaScheduleMatch(tariffContent, nil))
+				assert.False(t, isTeslaScheduleMatch(nil, cmSched, time.Time{}))
+				assert.False(t, isTeslaScheduleMatch(tariffContent, nil, time.Time{}))
 			})
 
 			t.Run("3-Tier Tariff Payload and Matching", func(t *testing.T) {
@@ -2488,7 +2488,7 @@ func TestTesla(t *testing.T) {
 				assert.Less(t, buyRates["OFF_PEAK"], buyRates["ON_PEAK"])
 
 				// Round-trip matching
-				assert.True(t, isTeslaScheduleMatch(tariffContent, threeTierSched),
+				assert.True(t, isTeslaScheduleMatch(tariffContent, threeTierSched, time.Time{}),
 					"3-tier schedule should round-trip match via isTeslaScheduleMatch")
 			})
 
@@ -2586,7 +2586,7 @@ func TestTesla(t *testing.T) {
 				assert.Less(t, buyRates["PARTIAL_PEAK"], buyRates["ON_PEAK"])
 
 				// Round-trip matching
-				assert.True(t, isTeslaScheduleMatch(tariffContent, fourTierSched),
+				assert.True(t, isTeslaScheduleMatch(tariffContent, fourTierSched, time.Time{}),
 					"4-tier schedule should round-trip match via isTeslaScheduleMatch")
 			})
 
@@ -2686,7 +2686,7 @@ func TestTesla(t *testing.T) {
 				assert.Less(t, buyRates["PARTIAL_PEAK"], buyRates["ON_PEAK"])
 
 				// Round-trip matching
-				assert.True(t, isTeslaScheduleMatch(tariffContent, comedSched),
+				assert.True(t, isTeslaScheduleMatch(tariffContent, comedSched, time.Time{}),
 					"ComEd dynamic schedule should round-trip match via isTeslaScheduleMatch")
 			})
 		})
@@ -3856,5 +3856,20 @@ func TestTesla(t *testing.T) {
 		assert.True(t, changed)
 		assert.Equal(t, 2, gridImportExportCalls, "should switch export rule back to battery_ok before battery export")
 		assert.Equal(t, teslaExportRuleBatteryOk, currentExportRule)
+
+		// 4. At 1:20 PM / 13:20 during active solar export (when active period start in schedule
+		// has advanced from 12:00 to 13:20 because tomorrow 00:00-13:20 is off-peak):
+		// Must treat schedule as matching and skip re-uploading time_of_use_settings.
+		currentTime = time.Date(2026, 7, 15, 13, 20, 0, 0, loc)
+		schedAt1320 := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 13, EndMinute: 20, ImportDollars: 0.05, ExportDollars: 0.03, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 13, StartMinute: 20, EndHour: 16, EndMinute: 0, ImportDollars: 0.25, ExportDollars: 0.15, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 16, StartMinute: 0, EndHour: 18, EndMinute: 0, ImportDollars: 0.05, ExportDollars: 0.03, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 18, StartMinute: 0, EndHour: 20, EndMinute: 0, ImportDollars: 0.35, ExportDollars: 0.25, BatteryMode: types.BatteryModeExport, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 20, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.05, ExportDollars: 0.03, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+			},
+		}
+		assert.True(t, isTeslaScheduleMatch(currentTariff, schedAt1320, currentTime), "advancing active period start with current time should match existing Tesla tariff")
 	})
 }

@@ -1383,7 +1383,15 @@ func parseFranklinTOUSchedule(strategies []franklinTOUStrategy) *types.TOUSchedu
 	return &types.TOUSchedule{Periods: periods}
 }
 
-func isFranklinScheduleMatch(strategies []franklinTOUStrategy, sched *types.TOUSchedule) bool {
+func (f *Franklin) now() time.Time {
+	now := time.Now()
+	if f.deviceInfoCache.location != nil {
+		return now.In(f.deviceInfoCache.location)
+	}
+	return now
+}
+
+func isFranklinScheduleMatch(strategies []franklinTOUStrategy, sched *types.TOUSchedule, now time.Time) bool {
 	if sched == nil || len(sched.Periods) == 0 {
 		return false
 	}
@@ -1391,7 +1399,7 @@ func isFranklinScheduleMatch(strategies []franklinTOUStrategy, sched *types.TOUS
 	if existingSched == nil {
 		return false
 	}
-	if !existingSched.IsSignificantlyDifferent(sched) {
+	if !existingSched.IsSignificantlyDifferent(sched, now) {
 		return true
 	}
 	targetDayType := buildFranklinDayTypeVo(sched)
@@ -1405,7 +1413,7 @@ func isFranklinScheduleMatch(strategies []franklinTOUStrategy, sched *types.TOUS
 	if targetSched == nil {
 		return false
 	}
-	return !existingSched.IsSignificantlyDifferent(targetSched)
+	return !existingSched.IsSignificantlyDifferent(targetSched, now)
 }
 
 func parseFranklinHourMinute(s string) (int, int, bool) {
@@ -1559,7 +1567,7 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 
 		if isRateRudder || needsExport {
 			scheduleMatched := false
-			if err == nil && isFranklinScheduleMatch(tplRes.StrategyList, opts.Schedule) {
+			if err == nil && isFranklinScheduleMatch(tplRes.StrategyList, opts.Schedule, f.now()) {
 				scheduleMatched = true
 				log.Ctx(ctx).DebugContext(ctx, "franklin tou schedule already matches, skipping saveTouDispatch")
 			}

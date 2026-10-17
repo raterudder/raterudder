@@ -406,9 +406,9 @@ func TestBuildTOUSchedule(t *testing.T) {
 			assert.Equal(t, types.SolarModeAny, p.SolarMode)
 		}
 
-		assert.False(t, schedStandby.IsSignificantlyDifferent(schedCharge1), "transition from Standby to ChargeAny must not change TOU schedule")
-		assert.False(t, schedCharge1.IsSignificantlyDifferent(schedCharge2), "continuing ChargeAny 20 minutes later must not change TOU schedule")
-		assert.False(t, schedCharge2.IsSignificantlyDifferent(schedLoad), "transition from ChargeAny back to Load must not change TOU schedule")
+		assert.False(t, schedStandby.IsSignificantlyDifferent(schedCharge1, t0423), "transition from Standby to ChargeAny must not change TOU schedule")
+		assert.False(t, schedCharge1.IsSignificantlyDifferent(schedCharge2, t0443), "continuing ChargeAny 20 minutes later must not change TOU schedule")
+		assert.False(t, schedCharge2.IsSignificantlyDifferent(schedLoad, t0501), "transition from ChargeAny back to Load must not change TOU schedule")
 	})
 
 	t.Run("Short Plan Under 24 Hours Fills Remaining Hours Seamlessly", func(t *testing.T) {
@@ -517,10 +517,10 @@ func TestBuildTOUSchedule(t *testing.T) {
 		}
 
 		// Identical schedule -> not significantly different
-		assert.False(t, s1.IsSignificantlyDifferent(s1))
+		assert.False(t, s1.IsSignificantlyDifferent(s1, time.Time{}))
 
 		// Nil schedule -> significantly different
-		assert.True(t, s1.IsSignificantlyDifferent(nil))
+		assert.True(t, s1.IsSignificantlyDifferent(nil, time.Time{}))
 
 		// Rate difference within $0.01 ($0.008) -> not significantly different
 		s2 := &types.TOUSchedule{
@@ -530,7 +530,7 @@ func TestBuildTOUSchedule(t *testing.T) {
 				{StartHour: 21, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.150, ExportDollars: 0.080, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
 			},
 		}
-		assert.False(t, s1.IsSignificantlyDifferent(s2))
+		assert.False(t, s1.IsSignificantlyDifferent(s2, time.Time{}))
 
 		// Rate difference exceeding $0.01 ($0.015) -> significantly different
 		s3 := &types.TOUSchedule{
@@ -540,7 +540,7 @@ func TestBuildTOUSchedule(t *testing.T) {
 				{StartHour: 21, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.150, ExportDollars: 0.080, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
 			},
 		}
-		assert.True(t, s1.IsSignificantlyDifferent(s3))
+		assert.True(t, s1.IsSignificantlyDifferent(s3, time.Time{}))
 
 		// Time shift within 15 mins (10 min shift from 16:00 to 16:10) -> not significantly different
 		s4 := &types.TOUSchedule{
@@ -550,7 +550,7 @@ func TestBuildTOUSchedule(t *testing.T) {
 				{StartHour: 21, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.150, ExportDollars: 0.080, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
 			},
 		}
-		assert.False(t, s1.IsSignificantlyDifferent(s4))
+		assert.False(t, s1.IsSignificantlyDifferent(s4, time.Time{}))
 
 		// Time shift exceeding 15 mins (30 min shift from 16:00 to 16:30) -> significantly different
 		s5 := &types.TOUSchedule{
@@ -560,7 +560,7 @@ func TestBuildTOUSchedule(t *testing.T) {
 				{StartHour: 21, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.150, ExportDollars: 0.080, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
 			},
 		}
-		assert.True(t, s1.IsSignificantlyDifferent(s5))
+		assert.True(t, s1.IsSignificantlyDifferent(s5, time.Time{}))
 
 		// Mode change (BatteryModeLoad -> BatteryModeExport) -> significantly different
 		s6 := &types.TOUSchedule{
@@ -570,7 +570,7 @@ func TestBuildTOUSchedule(t *testing.T) {
 				{StartHour: 21, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.150, ExportDollars: 0.080, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
 			},
 		}
-		assert.True(t, s1.IsSignificantlyDifferent(s6))
+		assert.True(t, s1.IsSignificantlyDifferent(s6, time.Time{}))
 	})
 
 	t.Run("DynamicHourlyPricingComEdStyleCoalescesIntoBlocks", func(t *testing.T) {
@@ -775,9 +775,9 @@ func TestBuildTOUSchedule(t *testing.T) {
 		sched1605 := BuildTOUSchedule(buildPlan(t1605), t1605, loc)
 
 		// Throughout 12:00-16:00, the 12:00-16:00 period must remain Load + SolarModeExport without changing
-		assert.False(t, sched1200.IsSignificantlyDifferent(sched1220))
-		assert.False(t, sched1200.IsSignificantlyDifferent(sched1320))
-		assert.False(t, sched1200.IsSignificantlyDifferent(sched1520))
+		assert.False(t, sched1200.IsSignificantlyDifferent(sched1220, t1220))
+		assert.False(t, sched1200.IsSignificantlyDifferent(sched1320, t1320))
+		assert.False(t, sched1200.IsSignificantlyDifferent(sched1520, t1520))
 		if assert.Len(t, sched1320.Periods, 3) {
 			assert.Equal(t, "12:00", sched1320.Periods[1].StartTimeStr())
 			assert.Equal(t, "16:00", sched1320.Periods[1].EndTimeStr())
@@ -786,12 +786,71 @@ func TestBuildTOUSchedule(t *testing.T) {
 		}
 
 		// After 16:00 (at 16:05), the 12:00-16:00 period updates to tomorrow's Standby + SolarModeExport dispatch
-		assert.True(t, sched1200.IsSignificantlyDifferent(sched1605))
+		assert.True(t, sched1200.IsSignificantlyDifferent(sched1605, t1605))
 		if assert.Len(t, sched1605.Periods, 3) {
 			assert.Equal(t, "12:00", sched1605.Periods[1].StartTimeStr())
 			assert.Equal(t, "16:00", sched1605.Periods[1].EndTimeStr())
 			assert.Equal(t, types.BatteryModeStandby, sched1605.Periods[1].BatteryMode)
 			assert.Equal(t, types.SolarModeExport, sched1605.Periods[1].SolarMode)
 		}
+	})
+
+	t.Run("Does Not Flag Advancing Active Period Start When Tomorrow Is OffPeak", func(t *testing.T) {
+		// Scenario: Today (Friday) enters Direct Solar Export during an on-peak window (12:41 to 20:00),
+		// while tomorrow (Saturday) is off-peak self-consumption all day.
+		// Because [00:00, now) comes from tomorrow (Off-Peak) and [now, 20:00) comes from today (On-Peak Export),
+		// the start of the active period in BuildTOUSchedule advances with now (12:41 -> 13:03 -> 13:23 -> 15:23).
+		// IsSignificantlyDifferent must treat these schedules as matching while inside the active period,
+		// while still flagging changes to the period's end boundary or future periods.
+		fridayMidnight := time.Date(2026, 10, 16, 0, 0, 0, 0, loc)
+		buildFridayPlan := func(nowTime time.Time, exportEndHour int) *types.Plan {
+			var periods []types.PlanPeriod
+			hourStart := time.Date(nowTime.Year(), nowTime.Month(), nowTime.Day(), nowTime.Hour(), 0, 0, 0, loc)
+			for h := 0; h <= 24; h++ {
+				currStart := hourStart.Add(time.Duration(h) * time.Hour)
+				currEnd := currStart.Add(time.Hour)
+				if h == 0 {
+					currStart = nowTime
+				}
+				bMode := types.BatteryModeLoad
+				sMode := types.SolarModeAny
+				imp := 0.20754
+				exp := 0.20754
+				// Friday 12:00 to exportEndHour is On-Peak Direct Solar Export; Saturday is Off-Peak all day
+				if currStart.Day() == fridayMidnight.Day() && currStart.Hour() >= 12 && currStart.Hour() < exportEndHour {
+					sMode = types.SolarModeExport
+					imp = 0.29982
+					exp = 0.29982
+				}
+				periods = append(periods, types.PlanPeriod{
+					TSStart:       currStart,
+					TSEnd:         currEnd,
+					DurationHours: currEnd.Sub(currStart).Hours(),
+					ImportDollars: imp,
+					ExportDollars: exp,
+					BatteryMode:   bMode,
+					SolarMode:     sMode,
+				})
+			}
+			return &types.Plan{Periods: periods}
+		}
+
+		t1241 := fridayMidnight.Add(12*time.Hour + 41*time.Minute)
+		t1303 := fridayMidnight.Add(13*time.Hour + 3*time.Minute)
+		t1323 := fridayMidnight.Add(13*time.Hour + 23*time.Minute)
+		t1523 := fridayMidnight.Add(15*time.Hour + 23*time.Minute)
+
+		sched1241 := BuildTOUSchedule(buildFridayPlan(t1241, 20), t1241, loc)
+		sched1303 := BuildTOUSchedule(buildFridayPlan(t1303, 20), t1303, loc)
+		sched1323 := BuildTOUSchedule(buildFridayPlan(t1323, 20), t1323, loc)
+		sched1523 := BuildTOUSchedule(buildFridayPlan(t1523, 20), t1523, loc)
+
+		assert.False(t, sched1241.IsSignificantlyDifferent(sched1303, t1303), "advancing active start from 12:41 to 13:03 should not be significantly different")
+		assert.False(t, sched1241.IsSignificantlyDifferent(sched1323, t1323), "advancing active start from 12:41 to 13:23 should not be significantly different")
+		assert.False(t, sched1241.IsSignificantlyDifferent(sched1523, t1523), "advancing active start from 12:41 to 15:23 should not be significantly different")
+
+		// If the end of the active export period changes (e.g. 20:00 -> 19:00), it must still be flagged as different
+		sched1523Shortened := BuildTOUSchedule(buildFridayPlan(t1523, 19), t1523, loc)
+		assert.True(t, sched1241.IsSignificantlyDifferent(sched1523Shortened, t1523), "changing the future end of the active period must be significantly different")
 	})
 }
