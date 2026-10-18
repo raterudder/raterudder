@@ -1184,7 +1184,48 @@ const Settings = ({
             }
         };
         window.addEventListener('beforeunload', handleBeforeUnload);
-        return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+
+        if (!isDirty) {
+            return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+        }
+
+        const confirmLeave = (targetUrl?: string | URL | null) => {
+            if (savingRef.current) return true;
+            if (targetUrl != null) {
+                try {
+                    const url = new URL(targetUrl.toString(), window.location.origin);
+                    if (url.pathname === window.location.pathname) {
+                        return true;
+                    }
+                } catch {
+                    // Proceed to confirm if URL parsing fails
+                }
+            }
+            return window.confirm('You have unsaved changes. Are you sure you want to leave?');
+        };
+
+        const originalPushState = window.history.pushState;
+        const originalReplaceState = window.history.replaceState;
+
+        window.history.pushState = function (...args: Parameters<History['pushState']>) {
+            if (!confirmLeave(args[2])) {
+                return;
+            }
+            return originalPushState.apply(this, args);
+        };
+
+        window.history.replaceState = function (...args: Parameters<History['replaceState']>) {
+            if (!confirmLeave(args[2])) {
+                return;
+            }
+            return originalReplaceState.apply(this, args);
+        };
+
+        return () => {
+            window.removeEventListener('beforeunload', handleBeforeUnload);
+            window.history.pushState = originalPushState;
+            window.history.replaceState = originalReplaceState;
+        };
     }, [isDirty]);
 
     const handleDiscard = () => {
@@ -1529,12 +1570,15 @@ const Settings = ({
                 onShowTutorial();
             }
             if (isInWizard) {
+                savingRef.current = true;
                 navigate('/dashboard');
             }
             return;
         }
 
+        let success = false;
         try {
+            savingRef.current = true;
             setIsSaving(true);
             const nextSettings = { ...settings, customGridSettings: true };
             await updateSettings(nextSettings, siteID);
@@ -1547,13 +1591,19 @@ const Settings = ({
             if (onShowTutorial && !settings.pause) {
                 onShowTutorial();
             }
+            success = true;
             if (isInWizard) {
                 navigate('/dashboard');
+            } else {
+                savingRef.current = false;
             }
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : 'Failed to save grid settings';
             setError(errMsg);
         } finally {
+            if (!success) {
+                savingRef.current = false;
+            }
             setIsSaving(false);
         }
     };

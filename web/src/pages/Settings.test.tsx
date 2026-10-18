@@ -2827,4 +2827,48 @@ describe('App & Settings', () => {
             expect(screen.getByRole('switch', { name: /Direct Solar and Battery Export Management/i })).toBeInTheDocument();
         });
     });
+
+    describe('Unsaved Changes Confirmation', () => {
+        it('prompts with window.confirm when navigating away with unsaved changes and blocks navigation if cancelled', async () => {
+            await navigateToSettings();
+
+            const input = await screen.findByLabelText(/Minimum Battery %/i);
+            fireEvent.change(input, { target: { value: '35' } });
+            expect(screen.getByTestId('unsaved-changes-bar')).toBeInTheDocument();
+
+            const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValueOnce(false);
+
+            const dashboardLinks = screen.getAllByRole('link', { name: 'Dashboard' });
+            fireEvent.click(dashboardLinks[0]);
+
+            expect(confirmSpy).toHaveBeenCalledWith('You have unsaved changes. Are you sure you want to leave?');
+            expect(screen.getByRole('heading', { name: /^Settings$/i })).toBeInTheDocument();
+            expect(screen.getByLabelText(/Minimum Battery %/i)).toHaveValue(35);
+
+            // Confirming allows leaving
+            confirmSpy.mockReturnValueOnce(true);
+            fireEvent.click(dashboardLinks[0]);
+
+            await waitFor(() => {
+                expect(screen.getByText('Home Usage')).toBeInTheDocument();
+            });
+            confirmSpy.mockRestore();
+        });
+
+        it('does not prompt with window.confirm when navigating away without unsaved changes', async () => {
+            await navigateToSettings();
+
+            const confirmSpy = vi.spyOn(window, 'confirm');
+
+            const dashboardLinks = screen.getAllByRole('link', { name: 'Dashboard' });
+            fireEvent.click(dashboardLinks[0]);
+
+            await waitFor(() => {
+                expect(screen.getByText('Home Usage')).toBeInTheDocument();
+            });
+            expect(confirmSpy).not.toHaveBeenCalled();
+            confirmSpy.mockRestore();
+        });
+    });
 });
+
