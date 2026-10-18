@@ -1175,7 +1175,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                                         </p>
                                                                         <ul>
                                                                             <li><strong>Grid Outages & Restoration:</strong> Alerts when grid power is lost for &gt;5 minutes, and when restored.</li>
-                                                                            <li><strong>Price Spike Alerts:</strong> Advance ~1-hour warning before abnormal electricity price surges.</li>
+                                                                            <li><strong>Price Spike Alerts:</strong> Advance warning before abnormal electricity price surges or unusually low/negative price dips.</li>
                                                                             <li><strong>Solar Underproduction:</strong> Midday alert if solar generation drops significantly below weather forecast.</li>
                                                                             <li><strong>High Home Load:</strong> Alerts when power consumption surges and battery will run out or is at reserve, with peak rate guidance.</li>
                                                                             <li><strong>VPP Grid Support:</strong> Alerts when battery discharges to support the grid during an unscheduled demand response event.</li>
@@ -1301,17 +1301,17 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.35rem' }}>
                                                     <Field.Label htmlFor="priceSpikeSelect">Price Spike Alert</Field.Label>
                                                     <HelpButton
-                                                        title="Price Spike Alerts"
+                                                        title="Price Spike & Dip Alerts"
                                                         ariaLabel="More info about price spike alerts"
                                                         description={
                                                             <div>
                                                                 <p>
-                                                                    Advance alert sent ~1 hour before an upcoming real-time price surge. RateRudder compares rates against recent days at that hour to filter out routine scheduled price changes.
+                                                                    Advance alert sent before an upcoming real-time price surge or unusual price dip (including negative all-in rates). RateRudder compares rates against recent days at that hour to filter out routine scheduled price changes.
                                                                 </p>
                                                                 <ul>
-                                                                    <li><strong>Low Sensitivity:</strong> Alerts only during major, extreme rate surges.</li>
-                                                                    <li><strong>Medium Sensitivity:</strong> Recommended; alerts during notable, unexpected price spikes.</li>
-                                                                    <li><strong>High Sensitivity:</strong> Alerts earlier on smaller rate increases for maximum advance notice.</li>
+                                                                    <li><strong>Low Sensitivity:</strong> Alerts only during major, extreme rate surges or deep price plunges.</li>
+                                                                    <li><strong>Medium Sensitivity:</strong> Recommended; alerts during notable, unexpected price spikes or dips.</li>
+                                                                    <li><strong>High Sensitivity:</strong> Alerts earlier on smaller rate changes for maximum advance notice.</li>
                                                                 </ul>
                                                                 <NotificationSample
                                                                     headerLabel="Sample Price Spike Alert"
@@ -1358,7 +1358,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                                                     </Select.Portal>
                                                 </Select.Root>
                                                 <Field.Description>
-                                                    Advance 1-hour warning when electricity prices surge abnormally.
+                                                    Advance warning when electricity prices surge or dip abnormally.
                                                 </Field.Description>
                                             </Field.Root>
 

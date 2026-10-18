@@ -3588,6 +3588,267 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowWakeup, getNotifState, mockUserGetter(user))
 		mockS.AssertExpectations(t)
 	})
+
+	t.Run("PriceDip_PositiveLowPriceDispatchedWithGridChargeGuidance", func(t *testing.T) {
+		nowOvernight := time.Date(2026, 9, 4, 1, 10, 0, 0, loc)
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, nowOvernight)
+		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
+			},
+		}
+		dipHour := nowOvernight.Add(50 * time.Minute) // 2:00 AM
+		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
+			{TSStart: dipHour.AddDate(0, 0, -1), DollarsPerKWH: 0.02, GridUseDollarsPerKWH: 0.05}, // $0.07/kWh
+			{TSStart: dipHour.AddDate(0, 0, -2), DollarsPerKWH: 0.02, GridUseDollarsPerKWH: 0.05}, // $0.07/kWh
+			{TSStart: dipHour.AddDate(0, 0, -3), DollarsPerKWH: 0.03, GridUseDollarsPerKWH: 0.05}, // $0.08/kWh
+		}, nil).Once()
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
+
+		var capturedLog types.NotificationLog
+		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+			if l.Type == types.NotificationTypePriceDip {
+				capturedLog = l
+				return true
+			}
+			return false
+		})).Return(nil).Once()
+
+		data := &dataForNotifications{
+			currentPrice: types.Price{TSStart: nowOvernight.Truncate(time.Hour), DollarsPerKWH: 0.02, GridUseDollarsPerKWH: 0.05},
+			futurePrices: []types.Price{
+				{
+					TSStart:              dipHour,
+					TSEnd:                dipHour.Add(2 * time.Hour),
+					DollarsPerKWH:        -0.04, // All-in $0.01/kWh (6¢ drop below $0.07 baseline)
+					GridUseDollarsPerKWH: 0.05,
+				},
+			},
+			plan: &types.Plan{
+				Periods: []types.PlanPeriod{
+					{
+						TSStart:       dipHour,
+						TSEnd:         dipHour.Add(time.Hour),
+						BatteryMode:   types.BatteryModeChargeAny,
+						GridImportKWH: 5.0,
+					},
+				},
+			},
+		}
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowOvernight)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowOvernight, getNotifState, mockUserGetter(user))
+		mockS.AssertExpectations(t)
+		assert.Equal(t, "🟢 Low Price Dip Ahead: $0.01/kWh at 2:00 AM", capturedLog.Title)
+		assert.Contains(t, capturedLog.Body, "RateRudder is also charging your battery from the grid")
+	})
+
+	t.Run("PriceDip_GridChargeGuidanceSuppressedWhenHighHomeLoadOrNearlyFullSOC", func(t *testing.T) {
+		nowOvernight := time.Date(2026, 9, 4, 1, 10, 0, 0, loc)
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, nowOvernight)
+		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
+			},
+		}
+		dipHour := nowOvernight.Add(50 * time.Minute)
+		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
+			{TSStart: dipHour.AddDate(0, 0, -1), DollarsPerKWH: 0.02, GridUseDollarsPerKWH: 0.05},
+			{TSStart: dipHour.AddDate(0, 0, -2), DollarsPerKWH: 0.02, GridUseDollarsPerKWH: 0.05},
+			{TSStart: dipHour.AddDate(0, 0, -3), DollarsPerKWH: 0.03, GridUseDollarsPerKWH: 0.05},
+		}, nil).Once()
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
+
+		var capturedLog types.NotificationLog
+		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+			if l.Type == types.NotificationTypePriceDip {
+				capturedLog = l
+				return true
+			}
+			return false
+		})).Return(nil).Once()
+
+		// Period 1: GridImportKWH (5.0) is entirely consumed by LoadKWH (5.0), so 0 kWh charges battery.
+		// Period 2: StartSOC is 96% -> 98% on a 13.6 kWh battery (0.27 kWh gain, stopping in a few minutes).
+		data := &dataForNotifications{
+			currentPrice: types.Price{TSStart: nowOvernight.Truncate(time.Hour), DollarsPerKWH: 0.02, GridUseDollarsPerKWH: 0.05},
+			futurePrices: []types.Price{
+				{
+					TSStart:              dipHour,
+					TSEnd:                dipHour.Add(2 * time.Hour),
+					DollarsPerKWH:        -0.04,
+					GridUseDollarsPerKWH: 0.05,
+				},
+			},
+			status: types.SystemStatus{
+				BatterySOC:         80.0,
+				BatteryCapacityKWH: 13.6,
+			},
+			plan: &types.Plan{
+				Periods: []types.PlanPeriod{
+					{
+						TSStart:       dipHour,
+						TSEnd:         dipHour.Add(time.Hour),
+						BatteryMode:   types.BatteryModeChargeAny,
+						LoadKWH:       5.0,
+						GridImportKWH: 5.0,
+						StartSOC:      80.0,
+						EndSOC:        80.0,
+					},
+					{
+						TSStart:       dipHour.Add(time.Hour),
+						TSEnd:         dipHour.Add(2 * time.Hour),
+						BatteryMode:   types.BatteryModeChargeAny,
+						LoadKWH:       0.5,
+						GridImportKWH: 1.5,
+						StartSOC:      96.0,
+						EndSOC:        98.0,
+					},
+				},
+			},
+		}
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowOvernight)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowOvernight, getNotifState, mockUserGetter(user))
+		mockS.AssertExpectations(t)
+		assert.NotContains(t, capturedLog.Body, "RateRudder is also charging your battery from the grid")
+		assert.Contains(t, capturedLog.Body, "Great time to charge your EV or run heavy appliances while electricity rates are unusually low.")
+	})
+
+	t.Run("PriceDip_NegativePriceAlertsWithRelaxedDelta", func(t *testing.T) {
+		nowOvernight := time.Date(2026, 9, 4, 1, 10, 0, 0, loc)
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, nowOvernight)
+		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium", // Medium normally requires $0.05 delta, but only $0.025 when negative
+			},
+		}
+		dipHour := nowOvernight.Add(50 * time.Minute) // 2:00 AM
+		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
+			{TSStart: dipHour.AddDate(0, 0, -1), DollarsPerKWH: -0.03, GridUseDollarsPerKWH: 0.05}, // $0.02/kWh
+			{TSStart: dipHour.AddDate(0, 0, -2), DollarsPerKWH: -0.03, GridUseDollarsPerKWH: 0.05}, // $0.02/kWh
+			{TSStart: dipHour.AddDate(0, 0, -3), DollarsPerKWH: -0.02, GridUseDollarsPerKWH: 0.05}, // $0.03/kWh
+		}, nil).Once()
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
+
+		var capturedLog types.NotificationLog
+		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+			if l.Type == types.NotificationTypePriceDip {
+				capturedLog = l
+				return true
+			}
+			return false
+		})).Return(nil).Once()
+
+		data := &dataForNotifications{
+			currentPrice: types.Price{TSStart: nowOvernight.Truncate(time.Hour), DollarsPerKWH: 0.00, GridUseDollarsPerKWH: 0.05},
+			futurePrices: []types.Price{
+				{
+					TSStart:              dipHour,
+					TSEnd:                dipHour.Add(time.Hour),
+					DollarsPerKWH:        -0.06, // All-in -$0.01/kWh (3¢ drop below $0.02 baseline; passes relaxed 2.5¢ negative delta)
+					GridUseDollarsPerKWH: 0.05,
+				},
+			},
+		}
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowOvernight)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowOvernight, getNotifState, mockUserGetter(user))
+		mockS.AssertExpectations(t)
+		assert.Equal(t, "🟢 Negative Price Ahead: -$0.01/kWh at 2:00 AM", capturedLog.Title)
+		assert.Contains(t, capturedLog.Body, "Great time to charge your EV or run heavy appliances while electricity rates are negative.")
+	})
+
+	t.Run("PriceDip_SuppressedWhenNegativeMultipleDaysInARow", func(t *testing.T) {
+		nowOvernight := time.Date(2026, 9, 4, 1, 10, 0, 0, loc)
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, nowOvernight)
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "high",
+			},
+		}
+		dipHour := nowOvernight.Add(50 * time.Minute) // 2:00 AM
+		// Yesterday at 2:00 AM was already -$0.02/kWh all-in, while days -2 and -3 were $0.06/kWh
+		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
+			{TSStart: dipHour.AddDate(0, 0, -1), DollarsPerKWH: -0.07, GridUseDollarsPerKWH: 0.05}, // -$0.02/kWh yesterday
+			{TSStart: dipHour.AddDate(0, 0, -2), DollarsPerKWH: 0.01, GridUseDollarsPerKWH: 0.05},  // $0.06/kWh
+			{TSStart: dipHour.AddDate(0, 0, -3), DollarsPerKWH: 0.01, GridUseDollarsPerKWH: 0.05},  // $0.06/kWh
+		}, nil).Once()
+
+		data := &dataForNotifications{
+			currentPrice: types.Price{TSStart: nowOvernight.Truncate(time.Hour), DollarsPerKWH: 0.01, GridUseDollarsPerKWH: 0.05},
+			futurePrices: []types.Price{
+				{
+					TSStart:              dipHour,
+					TSEnd:                dipHour.Add(time.Hour),
+					DollarsPerKWH:        -0.07, // Same -$0.02/kWh as yesterday
+					GridUseDollarsPerKWH: 0.05,
+				},
+			},
+		}
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowOvernight)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowOvernight, getNotifState, nil)
+		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("PriceDip_SameDaySecondNegativeWindowAlertsAfterRecovery", func(t *testing.T) {
+		nowAfternoon := time.Date(2026, 9, 4, 13, 10, 0, 0, loc) // 1:10 PM
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, nowAfternoon)
+		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
+			},
+		}
+		dipHour := nowAfternoon.Add(50 * time.Minute) // 2:00 PM
+		// Earlier today at 8:00 AM prices recovered to $0.08/kWh; past days at 2:00 PM were $0.10/kWh
+		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
+			{TSStart: time.Date(2026, 9, 4, 8, 0, 0, 0, loc), DollarsPerKWH: 0.03, GridUseDollarsPerKWH: 0.05},
+			{TSStart: dipHour.AddDate(0, 0, -1), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05},
+			{TSStart: dipHour.AddDate(0, 0, -2), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05},
+			{TSStart: dipHour.AddDate(0, 0, -3), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05},
+		}, nil).Once()
+		// Previous dip alert was 11 hours ago (at 2:10 AM) for -$0.01/kWh
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{
+			{
+				ID:        "prev-dip",
+				TSCreated: nowAfternoon.Add(-11 * time.Hour),
+				UserID:    "user1@test.com",
+				Type:      types.NotificationTypePriceDip,
+				Success:   true,
+				Metadata:  map[string]string{"price": "-0.0100", "minPrice": "-0.0100"},
+			},
+		}, nil).Once()
+		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+			return l.Type == types.NotificationTypePriceDip
+		})).Return(nil).Once()
+
+		data := &dataForNotifications{
+			currentPrice: types.Price{TSStart: nowAfternoon.Truncate(time.Hour), DollarsPerKWH: 0.03, GridUseDollarsPerKWH: 0.05},
+			futurePrices: []types.Price{
+				{
+					TSStart:              dipHour,
+					TSEnd:                dipHour.Add(time.Hour),
+					DollarsPerKWH:        -0.06, // -$0.01/kWh all-in at 2:00 PM
+					GridUseDollarsPerKWH: 0.05,
+				},
+			},
+		}
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowAfternoon)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowAfternoon, getNotifState, mockUserGetter(user))
+		mockS.AssertExpectations(t)
+	})
 }
 
 func TestHandleSolarUnderproductionNotifications(t *testing.T) {
@@ -4990,7 +5251,9 @@ func TestExtractHighestAlertedPrice(t *testing.T) {
 				"peakPrice": "0.5500",
 			},
 		}
-		assert.Equal(t, 0.55, extractHighestAlertedPrice(log))
+		val, ok := extractAlertedExtremePrice(log, false)
+		assert.True(t, ok)
+		assert.Equal(t, 0.55, val)
 	})
 
 	t.Run("ReadsPriceIfNoPeakPrice", func(t *testing.T) {
@@ -4999,7 +5262,9 @@ func TestExtractHighestAlertedPrice(t *testing.T) {
 				"price": "0.4200",
 			},
 		}
-		assert.Equal(t, 0.42, extractHighestAlertedPrice(log))
+		val, ok := extractAlertedExtremePrice(log, false)
+		assert.True(t, ok)
+		assert.Equal(t, 0.42, val)
 	})
 
 	t.Run("EmptyMetadataReturnsZero", func(t *testing.T) {
@@ -5007,11 +5272,15 @@ func TestExtractHighestAlertedPrice(t *testing.T) {
 			Title: "🚨 Price Spike: $0.35/kWh (peaking at $0.60 at 8:00 AM)",
 			Body:  "Price is $0.35/kWh now",
 		}
-		assert.Equal(t, 0.0, extractHighestAlertedPrice(log))
+		val, ok := extractAlertedExtremePrice(log, false)
+		assert.False(t, ok)
+		assert.Equal(t, 0.0, val)
 	})
 
 	t.Run("NilLogReturnsZero", func(t *testing.T) {
-		assert.Equal(t, 0.0, extractHighestAlertedPrice(nil))
+		val, ok := extractAlertedExtremePrice(nil, false)
+		assert.False(t, ok)
+		assert.Equal(t, 0.0, val)
 	})
 }
 
@@ -5030,7 +5299,7 @@ func TestComputeTimeOfDayRefPrice(t *testing.T) {
 			{TSStart: time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 12, 0, 0, 0, loc), DollarsPerKWH: 0.50, GridUseDollarsPerKWH: 0.05}, // 12 PM: ignored
 		}
 		// Yesterday's peak in the 3-hour window [6 PM, 7 PM, 8 PM] is $0.24
-		ref := computeTimeOfDayRefPrice(hist, targetTime, loc, 0.10)
+		ref := computeTimeOfDayWindowRefPrice(hist, targetTime, loc, 0.10, false)
 		assert.InDelta(t, 0.24, ref, 0.001)
 	})
 
@@ -5054,7 +5323,7 @@ func TestComputeTimeOfDayRefPrice(t *testing.T) {
 		}
 		// Each day's peak in the [6 PM, 7 PM, 8 PM] window is $0.22. Median of daily peaks is $0.22.
 		// (Without daily window peak logic, the six $0.12-$0.13 shoulder hours would have dragged the median down to $0.13).
-		ref := computeTimeOfDayRefPrice(hist, targetTime, loc, 0.10)
+		ref := computeTimeOfDayWindowRefPrice(hist, targetTime, loc, 0.10, false)
 		assert.InDelta(t, 0.22, ref, 0.001)
 	})
 
@@ -5068,7 +5337,7 @@ func TestComputeTimeOfDayRefPrice(t *testing.T) {
 			{TSStart: time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 5, 0, 0, 0, loc), DollarsPerKWH: 0.50, GridUseDollarsPerKWH: 0.05},  // 5 AM: ignored
 		}
 		// Yesterday's peak in the midnight window [11 PM, 12 AM, 1 AM] is $0.19
-		ref := computeTimeOfDayRefPrice(hist, midnightTarget, loc, 0.10)
+		ref := computeTimeOfDayWindowRefPrice(hist, midnightTarget, loc, 0.10, false)
 		assert.InDelta(t, 0.19, ref, 0.001)
 	})
 
@@ -5076,7 +5345,7 @@ func TestComputeTimeOfDayRefPrice(t *testing.T) {
 		hist := []types.Price{
 			{TSStart: time.Date(targetTime.Year(), targetTime.Month(), targetTime.Day(), 19, 0, 0, 0, loc), DollarsPerKWH: 0.40, GridUseDollarsPerKWH: 0.05},
 		}
-		ref := computeTimeOfDayRefPrice(hist, targetTime, loc, 0.15)
+		ref := computeTimeOfDayWindowRefPrice(hist, targetTime, loc, 0.15, false)
 		assert.Equal(t, 0.15, ref)
 	})
 
@@ -5089,13 +5358,52 @@ func TestComputeTimeOfDayRefPrice(t *testing.T) {
 			{TSStart: time.Date(twoDaysAgo.Year(), twoDaysAgo.Month(), twoDaysAgo.Day(), 19, 0, 0, 0, loc), DollarsPerKWH: 0.16, GridUseDollarsPerKWH: 0.05},       // $0.21
 			{TSStart: time.Date(threeDaysAgo.Year(), threeDaysAgo.Month(), threeDaysAgo.Day(), 19, 0, 0, 0, loc), DollarsPerKWH: 0.75, GridUseDollarsPerKWH: 0.05}, // $0.80 spike
 		}
-		ref := computeTimeOfDayRefPrice(hist, targetTime, loc, 0.10)
+		ref := computeTimeOfDayWindowRefPrice(hist, targetTime, loc, 0.10, false)
 		assert.InDelta(t, 0.21, ref, 0.001)
 	})
 
 	t.Run("EmptyHistoryFallsBackToFallback", func(t *testing.T) {
-		ref := computeTimeOfDayRefPrice(nil, targetTime, loc, 0.14)
+		ref := computeTimeOfDayWindowRefPrice(nil, targetTime, loc, 0.14, false)
 		assert.Equal(t, 0.14, ref)
+	})
+
+	t.Run("LowRefPrice_AdjacentShouldersDoNotInflateTrough", func(t *testing.T) {
+		overnightTarget := time.Date(2026, 9, 10, 2, 0, 0, 0, loc) // 2:00 AM
+		yesterday := overnightTarget.AddDate(0, 0, -1)
+		twoDaysAgo := overnightTarget.AddDate(0, 0, -2)
+		threeDaysAgo := overnightTarget.AddDate(0, 0, -3)
+		hist := []types.Price{
+			// Yesterday: 1 AM ($0.10), 2 AM trough ($0.05), 3 AM ($0.09)
+			{TSStart: time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 1, 0, 0, 0, loc), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05},
+			{TSStart: time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 2, 0, 0, 0, loc), DollarsPerKWH: 0.00, GridUseDollarsPerKWH: 0.05},
+			{TSStart: time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 3, 0, 0, 0, loc), DollarsPerKWH: 0.04, GridUseDollarsPerKWH: 0.05},
+			// Two days ago: 1 AM ($0.10), 2 AM trough ($0.05), 3 AM ($0.09)
+			{TSStart: time.Date(twoDaysAgo.Year(), twoDaysAgo.Month(), twoDaysAgo.Day(), 1, 0, 0, 0, loc), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05},
+			{TSStart: time.Date(twoDaysAgo.Year(), twoDaysAgo.Month(), twoDaysAgo.Day(), 2, 0, 0, 0, loc), DollarsPerKWH: 0.00, GridUseDollarsPerKWH: 0.05},
+			{TSStart: time.Date(twoDaysAgo.Year(), twoDaysAgo.Month(), twoDaysAgo.Day(), 3, 0, 0, 0, loc), DollarsPerKWH: 0.04, GridUseDollarsPerKWH: 0.05},
+			// Three days ago: 1 AM ($0.10), 2 AM trough ($0.05), 3 AM ($0.09)
+			{TSStart: time.Date(threeDaysAgo.Year(), threeDaysAgo.Month(), threeDaysAgo.Day(), 1, 0, 0, 0, loc), DollarsPerKWH: 0.05, GridUseDollarsPerKWH: 0.05},
+			{TSStart: time.Date(threeDaysAgo.Year(), threeDaysAgo.Month(), threeDaysAgo.Day(), 2, 0, 0, 0, loc), DollarsPerKWH: 0.00, GridUseDollarsPerKWH: 0.05},
+			{TSStart: time.Date(threeDaysAgo.Year(), threeDaysAgo.Month(), threeDaysAgo.Day(), 3, 0, 0, 0, loc), DollarsPerKWH: 0.04, GridUseDollarsPerKWH: 0.05},
+		}
+		ref := computeTimeOfDayWindowRefPrice(hist, overnightTarget, loc, 0.08, true)
+		assert.InDelta(t, 0.05, ref, 0.001)
+	})
+
+	t.Run("LowRefPrice_YesterdayNegativePreventsConsecutiveDayAlert", func(t *testing.T) {
+		overnightTarget := time.Date(2026, 9, 10, 2, 0, 0, 0, loc) // 2:00 AM
+		yesterday := overnightTarget.AddDate(0, 0, -1)
+		twoDaysAgo := overnightTarget.AddDate(0, 0, -2)
+		threeDaysAgo := overnightTarget.AddDate(0, 0, -3)
+		hist := []types.Price{
+			// Yesterday dipped to -$0.02/kWh all-in, while earlier days were $0.06/kWh
+			{TSStart: time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 2, 0, 0, 0, loc), DollarsPerKWH: -0.07, GridUseDollarsPerKWH: 0.05},
+			{TSStart: time.Date(twoDaysAgo.Year(), twoDaysAgo.Month(), twoDaysAgo.Day(), 2, 0, 0, 0, loc), DollarsPerKWH: 0.01, GridUseDollarsPerKWH: 0.05},
+			{TSStart: time.Date(threeDaysAgo.Year(), threeDaysAgo.Month(), threeDaysAgo.Day(), 2, 0, 0, 0, loc), DollarsPerKWH: 0.01, GridUseDollarsPerKWH: 0.05},
+		}
+		// Because yesterday was already -$0.02/kWh, low ref price uses -$0.02/kWh so today at -$0.02/kWh won't re-alert
+		ref := computeTimeOfDayWindowRefPrice(hist, overnightTarget, loc, 0.08, true)
+		assert.InDelta(t, -0.02, ref, 0.001)
 	})
 }
 

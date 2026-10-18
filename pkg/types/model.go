@@ -329,6 +329,7 @@ const (
 	NotificationTypeGridOutage           = "grid_outage"
 	NotificationTypeGridRestored         = "grid_restored"
 	NotificationTypePriceSpike           = "price_spike"
+	NotificationTypePriceDip             = "price_dip"
 	NotificationTypeSolarUnderproduction = "solar_underproduction"
 	NotificationTypeVPPDispatch          = "vpp_dispatch"
 	NotificationTypeHighHomeLoad         = "high_home_load"

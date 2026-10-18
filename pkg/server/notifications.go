@@ -84,6 +84,15 @@ const (
 	priceSpikePercentileMedium = 0.90
 	priceSpikePercentileHigh   = 0.90
 
+	// Maximum absolute all-in price ($/kWh) before any price dip alert can trigger.
+	// Prevents alerts when rates drop from a high peak to a normal rate (e.g. $0.30 to $0.12/kWh).
+	priceDipAbsoluteCeilingDollarsPerKWH = 0.04
+
+	// When the all-in price is negative (< $0.00/kWh), we require only half the normal delta below reference
+	// and relax the percentile threshold so negative pricing events trigger more readily.
+	priceDipNegativeDeltaMultiplier = 0.50
+	priceDipNegativePercentile      = 0.20 // Bottom 20% of all hours when all-in price is negative
+
 	// Minimum weather forecast solar (kW) required before solar underproduction is evaluated.
 	solarUnderproductionMinForecastKW = 3.0
 
@@ -804,66 +813,81 @@ func (n *siteRecentNotifications) lastLog(userID string, onlyDelivered bool, not
 	return latestLog, found
 }
 
-func extractHighestAlertedPrice(l *types.NotificationLog) float64 {
+func extractAlertedExtremePrice(l *types.NotificationLog, isDip bool) (float64, bool) {
 	if l == nil || len(l.Metadata) == 0 {
-		return 0
+		return 0, false
 	}
-	var maxP float64
-	if peakStr, ok := l.Metadata["peakPrice"]; ok && peakStr != "" {
-		if p, err := strconv.ParseFloat(peakStr, 64); err == nil && p > maxP {
-			maxP = p
+	var extreme float64
+	var found bool
+	for _, key := range []string{"minPrice", "peakPrice", "price"} {
+		if str, ok := l.Metadata[key]; ok && str != "" {
+			if p, err := strconv.ParseFloat(str, 64); err == nil {
+				if !isDip && p <= 0 {
+					continue
+				}
+				if !found || (isDip && p < extreme) || (!isDip && p > extreme) {
+					extreme = p
+					found = true
+				}
+			}
 		}
 	}
-	if priceStr, ok := l.Metadata["price"]; ok && priceStr != "" {
-		if p, err := strconv.ParseFloat(priceStr, 64); err == nil && p > maxP {
-			maxP = p
-		}
-	}
-	return maxP
+	return extreme, found
 }
 
-// priceDroppedBelowBetween checks if electricity prices dropped below spike threshold conditions
-// at any point between the previous alert timestamp (start) and the start of the candidate spike (end).
-//
-// If prices dropped back to normal levels in between, the user is eligible for a re-alert
-// after the 6-hour cooldown window. If prices remained continuously elevated without dropping below,
-// repeated alerts for the same ongoing elevated price event are suppressed until the next day (24h).
-func priceDroppedBelowBetween(
+func qualifiesAsPriceAnomaly(
+	costDollarsPerKWH, refDollarsPerKWH float64,
+	rawCostsDollarsPerKWH []float64,
+	reqPercentile, minDeltaDollarsPerKWH float64,
+	isDip bool,
+) bool {
+	if !isDip {
+		pctVal := computePricePercentile(rawCostsDollarsPerKWH, reqPercentile)
+		return costDollarsPerKWH >= priceSpikeAbsoluteFloorDollarsPerKWH &&
+			costDollarsPerKWH >= pctVal &&
+			(costDollarsPerKWH-refDollarsPerKWH) >= minDeltaDollarsPerKWH
+	}
+	if costDollarsPerKWH > priceDipAbsoluteCeilingDollarsPerKWH {
+		return false
+	}
+	dipDelta := minDeltaDollarsPerKWH
+	dipPct := 1.0 - reqPercentile
+	if costDollarsPerKWH < 0 {
+		dipDelta *= priceDipNegativeDeltaMultiplier
+		if dipPct < priceDipNegativePercentile {
+			dipPct = priceDipNegativePercentile
+		}
+	}
+	pctVal := computePricePercentile(rawCostsDollarsPerKWH, dipPct)
+	return costDollarsPerKWH <= pctVal && (refDollarsPerKWH-costDollarsPerKWH) >= dipDelta
+}
+
+// priceRecoveredBetween checks if electricity prices returned to normal (dropped below spike thresholds
+// or rose above dip thresholds) at any point between the previous alert (start) and the candidate event (end).
+func priceRecoveredBetween(
 	histPrices []types.Price,
 	start, end time.Time,
-	rawCosts []float64,
-	reqPercentile, minDelta float64,
-	useTimeOfDayRelative bool,
+	rawCostsDollarsPerKWH []float64,
+	reqPercentile, minDeltaDollarsPerKWH float64,
+	isDip bool,
 	loc *time.Location,
 ) bool {
 	if loc == nil {
 		loc = time.UTC
 	}
-	pctVal := computePricePercentile(rawCosts, reqPercentile)
-	medianCost := computePricePercentile(rawCosts, 0.50)
+	medianCost := computePricePercentile(rawCostsDollarsPerKWH, 0.50)
 	foundAny := false
 	for _, p := range histPrices {
 		if p.TSStart.After(start) && p.TSStart.Before(end) {
 			foundAny = true
 			cost := p.DollarsPerKWH + p.GridUseDollarsPerKWH
-			var ref float64
-			if useTimeOfDayRelative {
-				ref = computeTimeOfDayRefPrice(histPrices, p.TSStart, loc, medianCost)
-			} else {
-				ref = medianCost
-			}
-			// If at any hour the cost was below the absolute floor, below the percentile threshold,
-			// or failed to exceed the reference price by the required delta, it is considered dropped below.
-			if cost < priceSpikeAbsoluteFloorDollarsPerKWH || cost < pctVal || (cost-ref) < minDelta {
+			ref := computeTimeOfDayWindowRefPrice(histPrices, p.TSStart, loc, medianCost, isDip)
+			if !qualifiesAsPriceAnomaly(cost, ref, rawCostsDollarsPerKWH, reqPercentile, minDeltaDollarsPerKWH, isDip) {
 				return true
 			}
 		}
 	}
-	// If no prices were found in the window, default to true to allow alerting
-	if !foundAny {
-		return true
-	}
-	return false
+	return !foundAny
 }
 
 // computePercentile returns the p-th percentile value (e.g. p=0.90 for 90th percentile)
@@ -887,22 +911,13 @@ func computePricePercentile(prices []float64, p float64) float64 {
 	return computePercentile(prices, p)
 }
 
-// computeTimeOfDayRefPrice calculates the typical baseline price for a target time of day,
+// computeTimeOfDayWindowRefPrice calculates the typical baseline price for a target time of day
 // using historical prices from previous days within a +/- 1 hour window.
-//
-// For example, if targetTime is 7:00 PM, this function inspects historical prices at 6:00 PM,
-// 7:00 PM, and 8:00 PM across past days. The +/- 1 hour buffer accounts for slight shifts in peak
-// hours, seasonal daylight changes, and Daylight Saving Time adjustments.
-//
-// To prevent adjacent lower shoulder hours (e.g. 4 PM before a 5 PM peak) from dragging down
-// the peak baseline, we find the maximum price within that 3-hour window for each previous day,
-// and then take the median (50th percentile) of those daily peaks:
-//  1. Normal recurring daily peaks around this time form the baseline (so regular daily peaks don't alert).
-//  2. An occasional past price spike on a single day does NOT inflate the baseline or poison
-//     future alerts (unlike a single max, a spike day won't move the median of daily peaks).
-//  3. If there are no historical prices in this window, it gracefully falls back to the provided fallback
-//     (typically the all-hours median).
-func computeTimeOfDayRefPrice(histPrices []types.Price, targetTime time.Time, loc *time.Location, fallback float64) float64 {
+// For spikes (isDip=false), it takes the median of each day's 3-hour window maximum so adjacent lower
+// shoulder hours do not dilute the peak baseline.
+// For dips (isDip=true), it takes the median of each day's 3-hour window minimum (and caps at yesterday's
+// minimum so consecutive days of low/negative prices do not re-alert at the same level).
+func computeTimeOfDayWindowRefPrice(histPrices []types.Price, targetTime time.Time, loc *time.Location, fallback float64, isDip bool) float64 {
 	if loc == nil {
 		loc = time.UTC
 	}
@@ -910,21 +925,20 @@ func computeTimeOfDayRefPrice(histPrices []types.Price, targetTime time.Time, lo
 	targetHour := targetLocal.Hour()
 	targetY, targetM, targetD := targetLocal.Date()
 
-	// 3-hour window around targetHour (+/- 1 hour), with modulo 24 handling midnight wrap-around cleanly
 	prevHour := (targetHour + 23) % 24
 	nextHour := (targetHour + 1) % 24
 
-	// Group prices in the 3-hour window by calendar date on previous days
+	yesterdayLocal := targetLocal.AddDate(0, 0, -1)
+	yY, yM, yD := yesterdayLocal.Date()
+	yesterdayDateKey := fmt.Sprintf("%04d-%02d-%02d", yY, yM, yD)
+
 	dailyWindowCosts := make(map[string][]float64)
 	for _, p := range histPrices {
 		pLocal := p.TSStart.In(loc)
 		pY, pM, pD := pLocal.Date()
-
-		// Only inspect previous days, never prices from the current target day
 		if pY == targetY && pM == targetM && pD == targetD {
 			continue
 		}
-
 		h := pLocal.Hour()
 		if h == prevHour || h == targetHour || h == nextHour {
 			cost := p.DollarsPerKWH + p.GridUseDollarsPerKWH
@@ -937,32 +951,44 @@ func computeTimeOfDayRefPrice(histPrices []types.Price, targetTime time.Time, lo
 		return fallback
 	}
 
-	// For each previous day, find the highest price within the 3-hour window.
-	// This captures the true daily peak for this time of day without dilution from adjacent shoulder hours.
-	var dailyPeaks []float64
-	for _, costs := range dailyWindowCosts {
-		maxCost := costs[0]
+	var dailyExtremes []float64
+	var yesterdayExtreme float64
+	var hasYesterday bool
+	for dateKey, costs := range dailyWindowCosts {
+		ext := costs[0]
 		for _, c := range costs[1:] {
-			if c > maxCost {
-				maxCost = c
+			if (isDip && c < ext) || (!isDip && c > ext) {
+				ext = c
 			}
 		}
-		dailyPeaks = append(dailyPeaks, maxCost)
+		dailyExtremes = append(dailyExtremes, ext)
+		if dateKey == yesterdayDateKey {
+			yesterdayExtreme = ext
+			hasYesterday = true
+		}
 	}
 
-	// Use median of the daily peaks as the baseline for this time of day
-	return computePricePercentile(dailyPeaks, 0.50)
+	medianExtreme := computePricePercentile(dailyExtremes, 0.50)
+	// Only cap at yesterday's extreme for dips: if prices are negative/low for multiple days in a row,
+	// we don't want to nag on Day 2 before the 5-day median catches up. For spikes, we intentionally use
+	// the 5-day median so a single spike yesterday (e.g. Day 1 of a heatwave) doesn't mask a real spike today.
+	if isDip && hasYesterday && yesterdayExtreme < medianExtreme {
+		return yesterdayExtreme
+	}
+	return medianExtreme
 }
 
 // notificationTag returns the push notification tag for a given notification type and site.
 // Solar underproduction, grid outages, grid restored, and daily summaries share the primary
 // tag ("raterudder-" + siteID) so that alerts overwrite summaries on the user's device when
-// conditions change. Price spike, VPP dispatch, and high home load alerts use distinct tags so
+// conditions change. Price spike, price dip, VPP dispatch, and high home load alerts use distinct tags so
 // they do not overwrite summaries or each other.
 func notificationTag(notifType string, siteID string) string {
 	switch notifType {
 	case types.NotificationTypePriceSpike:
 		return "raterudder-" + siteID + "-price-spike"
+	case types.NotificationTypePriceDip:
+		return "raterudder-" + siteID + "-price-dip"
 	case types.NotificationTypeVPPDispatch:
 		return "raterudder-" + siteID + "-vpp"
 	case types.NotificationTypeHighHomeLoad:
@@ -1484,6 +1510,38 @@ func (h notificationPlanHelper) priceSpikeGuidance(
 		slog.Int("spikePeriodsCount", len(spikePeriods)),
 	)
 	return outcome
+}
+
+func (h notificationPlanHelper) isGridChargingDuringDip(dipStart, dipEnd time.Time, currentSOC, batteryCapacityKWH float64) bool {
+	if h.plan == nil || len(h.plan.Periods) == 0 || currentSOC >= 95.0 {
+		return false
+	}
+	for _, p := range h.plan.Periods {
+		if p.TSEnd.After(dipStart) && p.TSStart.Before(dipEnd) && p.BatteryMode == types.BatteryModeChargeAny {
+			// if the battery is almost full then ignore
+			if p.StartSOC >= 95.0 {
+				continue
+			}
+			// ensure the battery is actually charging
+			gridToBatteryKWH := p.GridImportKWH - math.Max(0, p.LoadKWH-p.SolarKWH)
+			if gridToBatteryKWH < 0.5 {
+				continue
+			}
+			// make sure the charging is significant
+			if p.EndSOC > 0 || p.StartSOC > 0 {
+				socGain := p.EndSOC - p.StartSOC
+				if batteryCapacityKWH > 0 {
+					if (socGain/100.0)*batteryCapacityKWH < 0.5 {
+						continue
+					}
+				} else if socGain < 5.0 {
+					continue
+				}
+			}
+			return true
+		}
+	}
+	return false
 }
 
 type dataForNotifications struct {
@@ -2054,11 +2112,13 @@ func (s *Server) handlePriceSpikeNotifications(
 		nextPriceCost = data.futurePrices[0].DollarsPerKWH + data.futurePrices[0].GridUseDollarsPerKWH
 	}
 
-	// Fast rejection: If neither the current price nor the next future price meets the absolute price floor,
-	// skip history fetching and heavy evaluations entirely.
+	// Fast rejection: If neither the current price nor the next future price meets the absolute spike floor
+	// or absolute dip ceiling, skip history fetching and heavy evaluations entirely.
 	currentCouldSpike := !data.currentPrice.TSStart.IsZero() && currentCost >= priceSpikeAbsoluteFloorDollarsPerKWH
 	futureCouldSpike := hasFuturePrice && nextPriceCost >= priceSpikeAbsoluteFloorDollarsPerKWH
-	if !currentCouldSpike && !futureCouldSpike {
+	currentCouldDip := !data.currentPrice.TSStart.IsZero() && currentCost <= priceDipAbsoluteCeilingDollarsPerKWH
+	futureCouldDip := hasFuturePrice && nextPriceCost <= priceDipAbsoluteCeilingDollarsPerKWH
+	if !currentCouldSpike && !futureCouldSpike && !currentCouldDip && !futureCouldDip {
 		return
 	}
 
@@ -2124,330 +2184,339 @@ func (s *Server) handlePriceSpikeNotifications(
 	medianCost := computePricePercentile(rawCosts, 0.50)
 
 	for _, su := range spikeUsers {
-		// Map user-selected sensitivity tier to spike detection parameters:
-		// - "high": Top 10% (0.90) of all hours AND time-of-day relative (+/- 1 hour buffer).
-		//   Alerts earlier on smaller rate increases ($0.03/kWh) above the time-of-day baseline.
-		// - "medium": Top 10% (0.90) of all hours AND time-of-day relative (+/- 1 hour buffer).
-		//   Requires the price to be in the top 10% of all hours AND significantly above the typical
-		//   price for this time of day (+/- 1h) ($0.05/kWh), filtering out normal daily evening peaks.
-		// - "low": Top 5% (0.95) of all hours AND time-of-day relative (+/- 1 hour buffer).
-		//   Only alerts on severe surges in the top 5% that also exceed the time-of-day baseline ($0.10/kWh).
 		var minDelta, reqPercentile, escalatedPercentile float64
-		var useTimeOfDayRelative bool
 		switch su.sensitivity {
 		case "low":
 			minDelta = priceSpikeMinDeltaLow
 			reqPercentile = priceSpikePercentileLow
 			escalatedPercentile = priceSpikeEscalatedPercentileLow
-			useTimeOfDayRelative = true
 		case "high":
 			minDelta = priceSpikeMinDeltaHigh
 			reqPercentile = priceSpikePercentileHigh
 			escalatedPercentile = priceSpikeEscalatedPercentileHigh
-			useTimeOfDayRelative = true
 		case "medium":
 			fallthrough
 		default:
 			minDelta = priceSpikeMinDeltaMedium
 			reqPercentile = priceSpikePercentileMedium
 			escalatedPercentile = priceSpikeEscalatedPercentileMedium
-			useTimeOfDayRelative = true
 		}
 
-		pctVal := computePricePercentile(rawCosts, reqPercentile)
-
-		// Candidate 1: Current price (active right now).
-		// For Medium/Low, reference price is the time-of-day median (+/- 1 hour on previous days).
-		// For High sensitivity, reference price is the overall all-hours median.
-		var refPriceCurrent float64
-		if useTimeOfDayRelative {
-			refPriceCurrent = computeTimeOfDayRefPrice(histPrices, data.currentPrice.TSStart, siteLoc, medianCost)
-		} else {
-			refPriceCurrent = medianCost
-		}
-		isCurrentSpike := !data.currentPrice.TSStart.IsZero() &&
-			currentCost >= priceSpikeAbsoluteFloorDollarsPerKWH &&
-			currentCost >= pctVal &&
-			(currentCost-refPriceCurrent) >= minDelta
-
-		// Candidate 2: Future upcoming price (data.futurePrices[0]).
-		var isFutureSpike bool
-		var nextPrice types.Price
-		var refPriceNext float64
-		if len(data.futurePrices) > 0 {
-			nextPrice = data.futurePrices[0]
-			if useTimeOfDayRelative {
-				refPriceNext = computeTimeOfDayRefPrice(histPrices, nextPrice.TSStart, siteLoc, medianCost)
-			} else {
-				refPriceNext = medianCost
+		for _, isDip := range []bool{false, true} {
+			if (!isDip && !currentCouldSpike && !futureCouldSpike) || (isDip && !currentCouldDip && !futureCouldDip) {
+				continue
 			}
-			isFutureSpike = nextPriceCost >= priceSpikeAbsoluteFloorDollarsPerKWH &&
-				nextPriceCost >= pctVal &&
-				(nextPriceCost-refPriceNext) >= minDelta
-		}
 
-		// If neither the active current price nor the next upcoming hour qualifies as a spike, skip.
-		if !isCurrentSpike && !isFutureSpike {
-			log.Ctx(ctx).DebugContext(ctx, "skipping price spike notification: price does not qualify as spike",
-				slog.String("userID", su.userID),
-				slog.String("sensitivity", su.sensitivity),
-				slog.Float64("currentCost", currentCost),
-				slog.Float64("nextPriceCost", nextPriceCost),
-				slog.Float64("floor", priceSpikeAbsoluteFloorDollarsPerKWH),
-				slog.Float64("pctVal", pctVal),
-				slog.Float64("refPriceCurrent", refPriceCurrent),
-				slog.Float64("refPriceNext", refPriceNext),
-				slog.Float64("minDelta", minDelta),
-				slog.Bool("useTimeOfDayRelative", useTimeOfDayRelative),
-			)
-			continue
-		}
-
-		var spikeStart, spikeEnd time.Time
-		var activeSpikeCost, maxSpikeCost float64
-		var maxSpikeTime time.Time
-		var refPrice float64
-
-		// Scan forward to determine the full contiguous duration of elevated prices and locate the peak price/time.
-		if isCurrentSpike {
-			spikeStart = data.currentPrice.TSStart
-			spikeEnd = data.currentPrice.TSEnd
-			if spikeEnd.IsZero() {
-				spikeEnd = spikeStart.Add(time.Hour)
+			notifType := types.NotificationTypePriceSpike
+			if isDip {
+				notifType = types.NotificationTypePriceDip
 			}
-			activeSpikeCost = currentCost
-			maxSpikeCost = currentCost
-			maxSpikeTime = spikeStart
-			refPrice = refPriceCurrent
 
-			// Scan forward across contiguous future prices that remain elevated
-			for _, fp := range data.futurePrices {
-				if !fp.TSStart.Before(spikeEnd) && (fp.TSStart.Equal(spikeEnd) || fp.TSStart.Sub(spikeEnd) <= 15*time.Minute) {
-					fpCost := fp.DollarsPerKWH + fp.GridUseDollarsPerKWH
-					var fpRef float64
-					if useTimeOfDayRelative {
-						fpRef = computeTimeOfDayRefPrice(histPrices, fp.TSStart, siteLoc, medianCost)
-					} else {
-						fpRef = medianCost
-					}
-					if fpCost >= priceSpikeAbsoluteFloorDollarsPerKWH && fpCost >= pctVal && (fpCost-fpRef) >= minDelta {
-						if !fp.TSEnd.IsZero() {
-							spikeEnd = fp.TSEnd
-						} else {
-							spikeEnd = fp.TSStart.Add(time.Hour)
-						}
-						if fpCost > maxSpikeCost+0.005 {
-							maxSpikeCost = fpCost
-							maxSpikeTime = fp.TSStart
-						}
-					} else {
-						break
-					}
+			var eventStart, eventEnd, extremeTime time.Time
+			var activeCost, extremeCost, refPrice float64
+			var isCurrent, isFuture bool
+			var refPriceCurrent, refPriceNext float64
+			scanStartIdx := 0
+
+			if !data.currentPrice.TSStart.IsZero() {
+				refPriceCurrent = computeTimeOfDayWindowRefPrice(histPrices, data.currentPrice.TSStart, siteLoc, medianCost, isDip)
+				isCurrent = qualifiesAsPriceAnomaly(currentCost, refPriceCurrent, rawCosts, reqPercentile, minDelta, isDip)
+			}
+			if isCurrent {
+				eventStart = data.currentPrice.TSStart
+				eventEnd = data.currentPrice.TSEnd
+				activeCost = currentCost
+				refPrice = refPriceCurrent
+			} else if len(data.futurePrices) > 0 {
+				nextPrice := data.futurePrices[0]
+				refPriceNext = computeTimeOfDayWindowRefPrice(histPrices, nextPrice.TSStart, siteLoc, medianCost, isDip)
+				isFuture = qualifiesAsPriceAnomaly(nextPriceCost, refPriceNext, rawCosts, reqPercentile, minDelta, isDip)
+				if isFuture {
+					eventStart = nextPrice.TSStart
+					eventEnd = nextPrice.TSEnd
+					activeCost = nextPriceCost
+					refPrice = refPriceNext
+					scanStartIdx = 1
 				}
 			}
-		} else {
-			spikeStart = nextPrice.TSStart
-			spikeEnd = nextPrice.TSEnd
-			if spikeEnd.IsZero() {
-				spikeEnd = spikeStart.Add(time.Hour)
-			}
-			activeSpikeCost = nextPriceCost
-			maxSpikeCost = nextPriceCost
-			maxSpikeTime = nextPrice.TSStart
-			refPrice = refPriceNext
 
-			// Scan forward across subsequent future prices
-			for i := 1; i < len(data.futurePrices); i++ {
-				fp := data.futurePrices[i]
-				if !fp.TSStart.Before(spikeEnd) && (fp.TSStart.Equal(spikeEnd) || fp.TSStart.Sub(spikeEnd) <= 15*time.Minute) {
-					fpCost := fp.DollarsPerKWH + fp.GridUseDollarsPerKWH
-					var fpRef float64
-					if useTimeOfDayRelative {
-						fpRef = computeTimeOfDayRefPrice(histPrices, fp.TSStart, siteLoc, medianCost)
-					} else {
-						fpRef = medianCost
-					}
-					if fpCost >= priceSpikeAbsoluteFloorDollarsPerKWH && fpCost >= pctVal && (fpCost-fpRef) >= minDelta {
-						if !fp.TSEnd.IsZero() {
-							spikeEnd = fp.TSEnd
-						} else {
-							spikeEnd = fp.TSStart.Add(time.Hour)
-						}
-						if fpCost > maxSpikeCost+0.005 {
-							maxSpikeCost = fpCost
-							maxSpikeTime = fp.TSStart
-						}
-					} else {
-						break
-					}
-				}
-			}
-		}
-
-		// Cooldown and Anti-Flapping Logic:
-		// 1. Hard 1-hour lockout: Never re-alert within 1 hour of an alert.
-		// 2. 1h to 6h window: Only re-alert if price is significantly higher (>= 20% surge above previously
-		//    alerted/warned peak price) AND meets the escalated percentile threshold (e.g. top 5% or 2%).
-		// 3. 6h to 24h window: Re-alert if prices dropped back below spike thresholds between alerts.
-		//    If prices stayed continuously elevated for 6+ hours at the same high level, do not re-alert
-		//    about the same price until the next day.
-		// 4. 24h+: Standard alert thresholds apply.
-		lastDeliveredLog, hasDelivered := getNotifState().lastLog(su.userID, true, types.NotificationTypePriceSpike)
-
-		if hasDelivered {
-			timeSince := s.now().Sub(lastDeliveredLog.TSCreated)
-			if timeSince < 1*time.Hour {
-				log.Ctx(ctx).DebugContext(ctx, "skipping price spike notification: within 1-hour lockout cooldown",
+			if !isCurrent && !isFuture {
+				log.Ctx(ctx).DebugContext(ctx, "skipping price notification: price does not qualify",
 					slog.String("userID", su.userID),
-					slog.Duration("timeSinceLastAlert", timeSince),
-					slog.Time("lastAlertTime", lastDeliveredLog.TSCreated),
-					slog.Float64("activeSpikeCost", activeSpikeCost),
-					slog.Float64("maxSpikeCost", maxSpikeCost),
+					slog.String("type", notifType),
+					slog.String("sensitivity", su.sensitivity),
+					slog.Float64("currentCost", currentCost),
+					slog.Float64("nextPriceCost", nextPriceCost),
+					slog.Float64("refPriceCurrent", refPriceCurrent),
+					slog.Float64("refPriceNext", refPriceNext),
+					slog.Float64("minDelta", minDelta),
 				)
 				continue
 			}
 
-			prevPeakCost := extractHighestAlertedPrice(&lastDeliveredLog)
-			escalatedPctVal := computePricePercentile(rawCosts, escalatedPercentile)
-			checkCost := activeSpikeCost
-			if maxSpikeCost > checkCost {
-				checkCost = maxSpikeCost
+			if eventEnd.IsZero() {
+				eventEnd = eventStart.Add(time.Hour)
 			}
-			var isSignificantSurge bool
-			if prevPeakCost > 0 {
-				isSignificantSurge = (checkCost >= prevPeakCost*priceSpikeSignificantMultiplier) && (checkCost >= escalatedPctVal)
+			extremeCost = activeCost
+			extremeTime = eventStart
+
+			// Scan forward only across contiguous qualifying slots of this same event
+			// (breaking as soon as a slot is non-contiguous or returns to normal).
+			for _, fp := range data.futurePrices[scanStartIdx:] {
+				if fp.TSStart.Before(eventEnd) {
+					continue
+				}
+				if fp.TSStart.Sub(eventEnd) > 15*time.Minute {
+					break
+				}
+				fpCost := fp.DollarsPerKWH + fp.GridUseDollarsPerKWH
+				fpRef := computeTimeOfDayWindowRefPrice(histPrices, fp.TSStart, siteLoc, medianCost, isDip)
+				if !qualifiesAsPriceAnomaly(fpCost, fpRef, rawCosts, reqPercentile, minDelta, isDip) {
+					break
+				}
+				if !fp.TSEnd.IsZero() {
+					eventEnd = fp.TSEnd
+				} else {
+					eventEnd = fp.TSStart.Add(time.Hour)
+				}
+				if (!isDip && fpCost > extremeCost+0.005) || (isDip && fpCost < extremeCost-0.005) {
+					extremeCost = fpCost
+					extremeTime = fp.TSStart
+				}
 			}
 
-			if timeSince < 6*time.Hour {
-				if !isSignificantSurge {
-					log.Ctx(ctx).DebugContext(ctx, "skipping price spike notification: price surge not significant since last alert (1-6h window)",
+			// Cooldown and Anti-Flapping Logic:
+			// 1. Hard 1-hour lockout.
+			// 2. 1h to 6h window: Only re-alert on a significant escalation.
+			// 3. 6h+ window:
+			//    - Spikes (6-24h): Re-alert if prices recovered in between, or if significantly higher.
+			//    - Dips (6-18h): Re-alert for negative dips if prices recovered in between, or if significantly lower.
+			//    - Dips (18-36h): Suppress consecutive-day re-alerts at the same level unless significantly lower.
+			lastDeliveredLog, hasDelivered := getNotifState().lastLog(su.userID, true, notifType)
+			if hasDelivered {
+				timeSince := s.now().Sub(lastDeliveredLog.TSCreated)
+				if timeSince < 1*time.Hour {
+					log.Ctx(ctx).DebugContext(ctx, "skipping price notification: within 1-hour lockout cooldown",
 						slog.String("userID", su.userID),
+						slog.String("type", notifType),
 						slog.Duration("timeSinceLastAlert", timeSince),
 						slog.Time("lastAlertTime", lastDeliveredLog.TSCreated),
-						slog.Float64("prevPeakCost", prevPeakCost),
-						slog.Float64("checkCost", checkCost),
-						slog.Float64("requiredCost", prevPeakCost*priceSpikeSignificantMultiplier),
-						slog.Float64("escalatedPctVal", escalatedPctVal),
+						slog.Float64("activeCost", activeCost),
+						slog.Float64("extremeCost", extremeCost),
 					)
 					continue
 				}
-			} else if timeSince < 24*time.Hour {
-				droppedBelow := priceDroppedBelowBetween(
-					histPrices,
-					lastDeliveredLog.TSCreated,
-					spikeStart,
-					rawCosts,
-					reqPercentile,
-					minDelta,
-					useTimeOfDayRelative,
-					siteLoc,
-				)
-				if !droppedBelow && !isSignificantSurge {
-					log.Ctx(ctx).DebugContext(ctx, "skipping price spike notification: price did not drop below threshold between alerts and not significant surge (6-24h window)",
-						slog.String("userID", su.userID),
-						slog.Duration("timeSinceLastAlert", timeSince),
-						slog.Time("lastAlertTime", lastDeliveredLog.TSCreated),
-						slog.Float64("prevPeakCost", prevPeakCost),
-						slog.Float64("checkCost", checkCost),
-						slog.Bool("droppedBelow", droppedBelow),
-					)
-					continue
+
+				prevExtreme, hasPrev := extractAlertedExtremePrice(&lastDeliveredLog, isDip)
+				var isSignificantEscalation bool
+				if !isDip {
+					escalatedPctVal := computePricePercentile(rawCosts, escalatedPercentile)
+					isSignificantEscalation = hasPrev && prevExtreme > 0 &&
+						(extremeCost >= prevExtreme*priceSpikeSignificantMultiplier) && (extremeCost >= escalatedPctVal)
+				} else {
+					escalatedPctVal := computePricePercentile(rawCosts, 1.0-escalatedPercentile)
+					reqDrop := minDelta
+					if extremeCost < 0 {
+						reqDrop *= priceDipNegativeDeltaMultiplier
+					}
+					isSignificantEscalation = hasPrev &&
+						(prevExtreme-extremeCost) >= reqDrop &&
+						(extremeCost <= escalatedPctVal || (extremeCost < 0 && prevExtreme >= 0))
+				}
+
+				if timeSince < 6*time.Hour {
+					if !isSignificantEscalation {
+						log.Ctx(ctx).DebugContext(ctx, "skipping price notification: escalation not significant in 1-6h window",
+							slog.String("userID", su.userID),
+							slog.String("type", notifType),
+							slog.Duration("timeSinceLastAlert", timeSince),
+							slog.Float64("prevExtreme", prevExtreme),
+							slog.Float64("extremeCost", extremeCost),
+						)
+						continue
+					}
+				} else if !isDip && timeSince < 24*time.Hour {
+					recovered := priceRecoveredBetween(histPrices, lastDeliveredLog.TSCreated, eventStart, rawCosts, reqPercentile, minDelta, false, siteLoc)
+					if !recovered && !isSignificantEscalation {
+						log.Ctx(ctx).DebugContext(ctx, "skipping price spike notification: price did not recover in 6-24h window",
+							slog.String("userID", su.userID),
+							slog.Duration("timeSinceLastAlert", timeSince),
+							slog.Float64("prevExtreme", prevExtreme),
+							slog.Float64("extremeCost", extremeCost),
+						)
+						continue
+					}
+				} else if isDip && timeSince < 18*time.Hour {
+					if extremeCost < 0 {
+						recovered := priceRecoveredBetween(histPrices, lastDeliveredLog.TSCreated, eventStart, rawCosts, reqPercentile, minDelta, true, siteLoc)
+						if !recovered && !isSignificantEscalation {
+							log.Ctx(ctx).DebugContext(ctx, "skipping price dip notification: price did not recover in 6-18h window",
+								slog.String("userID", su.userID),
+								slog.Duration("timeSinceLastAlert", timeSince),
+								slog.Float64("prevExtreme", prevExtreme),
+								slog.Float64("extremeCost", extremeCost),
+							)
+							continue
+						}
+					} else if !isSignificantEscalation {
+						log.Ctx(ctx).DebugContext(ctx, "skipping price dip notification: non-negative dip within cooldown",
+							slog.String("userID", su.userID),
+							slog.Duration("timeSinceLastAlert", timeSince),
+							slog.Float64("prevExtreme", prevExtreme),
+							slog.Float64("extremeCost", extremeCost),
+						)
+						continue
+					}
+				} else if isDip && timeSince < 36*time.Hour {
+					if !isSignificantEscalation {
+						log.Ctx(ctx).DebugContext(ctx, "skipping price dip notification: consecutive-day dip not significantly lower",
+							slog.String("userID", su.userID),
+							slog.Duration("timeSinceLastAlert", timeSince),
+							slog.Float64("prevExtreme", prevExtreme),
+							slog.Float64("extremeCost", extremeCost),
+						)
+						continue
+					}
 				}
 			}
-		}
 
-		// Construct Notification Title and Opening Sentence:
-		// If the spike is active right now:
-		// - If upcoming hours peak even higher (+2¢ or more), mention the current price and projected peak time/price.
-		// - Otherwise, state the current price and duration.
-		// If the spike begins in an upcoming hour:
-		// - State when it begins, along with any projected higher peak time/price.
-		var title, firstSentence string
-		if isCurrentSpike {
-			if maxSpikeCost >= activeSpikeCost+0.02 {
-				title = fmt.Sprintf("🚨 Price Spike: $%.2f/kWh (peaking at $%.2f at %s)", activeSpikeCost, maxSpikeCost, maxSpikeTime.In(siteLoc).Format("3:04 PM"))
-				firstSentence = fmt.Sprintf("Price is $%.2f/kWh now and expected to rise to $%.2f/kWh at %s (lasting until %s).", activeSpikeCost, maxSpikeCost, maxSpikeTime.In(siteLoc).Format("3:04 PM"), spikeEnd.In(siteLoc).Format("3:04 PM"))
+			currentSOC := data.status.BatterySOC
+			planHelper := newNotificationPlanHelper(data.plan)
+			var title, firstSentence, secondSentence string
+			var metadata map[string]string
+
+			if !isDip {
+				if isCurrent {
+					if extremeCost >= activeCost+0.02 {
+						title = fmt.Sprintf("🚨 Price Spike: $%.2f/kWh (peaking at $%.2f at %s)", activeCost, extremeCost, extremeTime.In(siteLoc).Format("3:04 PM"))
+						firstSentence = fmt.Sprintf("Price is $%.2f/kWh now and expected to rise to $%.2f/kWh at %s (lasting until %s).", activeCost, extremeCost, extremeTime.In(siteLoc).Format("3:04 PM"), eventEnd.In(siteLoc).Format("3:04 PM"))
+					} else {
+						title = fmt.Sprintf("🚨 Price Spike: $%.2f/kWh", activeCost)
+						firstSentence = fmt.Sprintf("Price is $%.2f/kWh now and anticipated to last until %s.", activeCost, eventEnd.In(siteLoc).Format("3:04 PM"))
+					}
+				} else {
+					if extremeCost >= activeCost+0.02 {
+						title = fmt.Sprintf("🚨 Price Spike Ahead: $%.2f/kWh at %s (peaking at $%.2f at %s)", activeCost, eventStart.In(siteLoc).Format("3:04 PM"), extremeCost, extremeTime.In(siteLoc).Format("3:04 PM"))
+						firstSentence = fmt.Sprintf("Price is projected to reach $%.2f/kWh at %s and peak at $%.2f/kWh at %s (lasting until %s).", activeCost, eventStart.In(siteLoc).Format("3:04 PM"), extremeCost, extremeTime.In(siteLoc).Format("3:04 PM"), eventEnd.In(siteLoc).Format("3:04 PM"))
+					} else {
+						title = fmt.Sprintf("🚨 Price Spike Ahead: $%.2f/kWh at %s", activeCost, eventStart.In(siteLoc).Format("3:04 PM"))
+						firstSentence = fmt.Sprintf("Price is projected to reach $%.2f/kWh at %s (lasting until %s).", activeCost, eventStart.In(siteLoc).Format("3:04 PM"), eventEnd.In(siteLoc).Format("3:04 PM"))
+					}
+				}
+
+				secondSentence = fmt.Sprintf("Electricity rates are surging significantly above recent prices ($%.2f/kWh). RateRudder will prioritize battery power to protect your home.", refPrice)
+				reserveSOC := data.settings.GetMinBatterySOC(ctx, eventStart, siteLoc, types.Price{DollarsPerKWH: activeCost})
+				if reserveSOC <= 0 {
+					reserveSOC = data.settings.MinBatterySOC
+				}
+				spikeOutcome := planHelper.priceSpikeGuidance(ctx, eventStart, eventEnd, currentSOC, reserveSOC)
+				if spikeOutcome.solarCovers {
+					secondSentence = "Solar is projected to cover your home usage during the spike."
+				} else if spikeOutcome.isExporting {
+					secondSentence = "RateRudder is discharging battery to export power during the surge."
+				} else if currentSOC <= reserveSOC {
+					secondSentence = fmt.Sprintf("Battery is currently at %.0f%% reserve; your home will draw from the grid during the spike.", currentSOC)
+				} else if !spikeOutcome.reachesReserveAt.IsZero() {
+					secondSentence = fmt.Sprintf("Battery is at %.0f%% and will supply home until ~%s.", currentSOC, spikeOutcome.reachesReserveAt.In(siteLoc).Format("3:04 PM"))
+				} else if spikeOutcome.lastsEntireSpike {
+					secondSentence = fmt.Sprintf("Battery is at %.0f%% and projected to power your home through the spike.", currentSOC)
+				}
+
+				metadata = map[string]string{
+					"price":      fmt.Sprintf("%.4f", activeCost),
+					"peakPrice":  fmt.Sprintf("%.4f", extremeCost),
+					"refPrice":   fmt.Sprintf("%.4f", refPrice),
+					"currentSOC": fmt.Sprintf("%.1f", currentSOC),
+					"spikeStart": eventStart.In(siteLoc).Format(time.RFC3339),
+					"spikeEnd":   eventEnd.In(siteLoc).Format(time.RFC3339),
+				}
 			} else {
-				title = fmt.Sprintf("🚨 Price Spike: $%.2f/kWh", activeSpikeCost)
-				firstSentence = fmt.Sprintf("Price is $%.2f/kWh now and anticipated to last until %s.", activeSpikeCost, spikeEnd.In(siteLoc).Format("3:04 PM"))
+				isNegative := extremeCost < 0 || activeCost < 0
+				label := "Low Price Dip"
+				if isNegative {
+					label = "Negative Electricity Price"
+					if !isCurrent {
+						label = "Negative Price"
+					}
+				}
+				if isCurrent {
+					if extremeCost <= activeCost-0.02 {
+						title = fmt.Sprintf("🟢 %s: %s (dropping to %s at %s)", label, formatPriceDollarsPerKWH(activeCost), formatPriceShortDollars(extremeCost), extremeTime.In(siteLoc).Format("3:04 PM"))
+						firstSentence = fmt.Sprintf("Price is %s now and expected to drop to %s at %s (lasting until %s).", formatPriceDollarsPerKWH(activeCost), formatPriceDollarsPerKWH(extremeCost), extremeTime.In(siteLoc).Format("3:04 PM"), eventEnd.In(siteLoc).Format("3:04 PM"))
+					} else {
+						title = fmt.Sprintf("🟢 %s: %s", label, formatPriceDollarsPerKWH(activeCost))
+						firstSentence = fmt.Sprintf("Price is %s now and anticipated to last until %s.", formatPriceDollarsPerKWH(activeCost), eventEnd.In(siteLoc).Format("3:04 PM"))
+					}
+				} else {
+					if extremeCost <= activeCost-0.02 {
+						title = fmt.Sprintf("🟢 %s Ahead: %s at %s (dropping to %s at %s)", label, formatPriceDollarsPerKWH(activeCost), eventStart.In(siteLoc).Format("3:04 PM"), formatPriceShortDollars(extremeCost), extremeTime.In(siteLoc).Format("3:04 PM"))
+						firstSentence = fmt.Sprintf("Price is projected to drop to %s at %s and reach %s at %s (lasting until %s).", formatPriceDollarsPerKWH(activeCost), eventStart.In(siteLoc).Format("3:04 PM"), formatPriceDollarsPerKWH(extremeCost), extremeTime.In(siteLoc).Format("3:04 PM"), eventEnd.In(siteLoc).Format("3:04 PM"))
+					} else {
+						title = fmt.Sprintf("🟢 %s Ahead: %s at %s", label, formatPriceDollarsPerKWH(activeCost), eventStart.In(siteLoc).Format("3:04 PM"))
+						firstSentence = fmt.Sprintf("Price is projected to drop to %s at %s (lasting until %s).", formatPriceDollarsPerKWH(activeCost), eventStart.In(siteLoc).Format("3:04 PM"), eventEnd.In(siteLoc).Format("3:04 PM"))
+					}
+				}
+
+				secondSentence = "Great time to charge your EV or run heavy appliances while electricity rates are unusually low."
+				if isNegative {
+					secondSentence = "Great time to charge your EV or run heavy appliances while electricity rates are negative."
+				}
+				if planHelper.isGridChargingDuringDip(eventStart, eventEnd, currentSOC, data.status.BatteryCapacityKWH) {
+					secondSentence = "Great time to charge your EV or run heavy appliances; RateRudder is also charging your battery from the grid."
+				}
+
+				metadata = map[string]string{
+					"price":      fmt.Sprintf("%.4f", activeCost),
+					"minPrice":   fmt.Sprintf("%.4f", extremeCost),
+					"refPrice":   fmt.Sprintf("%.4f", refPrice),
+					"currentSOC": fmt.Sprintf("%.1f", currentSOC),
+					"dipStart":   eventStart.In(siteLoc).Format(time.RFC3339),
+					"dipEnd":     eventEnd.In(siteLoc).Format(time.RFC3339),
+				}
 			}
-		} else {
-			if maxSpikeCost >= activeSpikeCost+0.02 {
-				title = fmt.Sprintf("🚨 Price Spike Ahead: $%.2f/kWh at %s (peaking at $%.2f at %s)", activeSpikeCost, spikeStart.In(siteLoc).Format("3:04 PM"), maxSpikeCost, maxSpikeTime.In(siteLoc).Format("3:04 PM"))
-				firstSentence = fmt.Sprintf("Price is projected to reach $%.2f/kWh at %s and peak at $%.2f/kWh at %s (lasting until %s).", activeSpikeCost, spikeStart.In(siteLoc).Format("3:04 PM"), maxSpikeCost, maxSpikeTime.In(siteLoc).Format("3:04 PM"), spikeEnd.In(siteLoc).Format("3:04 PM"))
-			} else {
-				title = fmt.Sprintf("🚨 Price Spike Ahead: $%.2f/kWh at %s", activeSpikeCost, spikeStart.In(siteLoc).Format("3:04 PM"))
-				firstSentence = fmt.Sprintf("Price is projected to reach $%.2f/kWh at %s (lasting until %s).", activeSpikeCost, spikeStart.In(siteLoc).Format("3:04 PM"), spikeEnd.In(siteLoc).Format("3:04 PM"))
-			}
+
+			body := fmt.Sprintf("%s %s", firstSentence, secondSentence)
+			log.Ctx(ctx).DebugContext(ctx, "sending price notification",
+				slog.String("userID", su.userID),
+				slog.String("type", notifType),
+				slog.String("sensitivity", su.sensitivity),
+				slog.Float64("activeCost", activeCost),
+				slog.Float64("extremeCost", extremeCost),
+				slog.Float64("refPrice", refPrice),
+				slog.Time("eventStart", eventStart),
+				slog.Time("eventEnd", eventEnd),
+				slog.Float64("currentSOC", currentSOC),
+				slog.String("title", title),
+				slog.String("body", body),
+			)
+			s.dispatchPushToUser(
+				ctx,
+				siteID,
+				su.userID,
+				notifType,
+				su.sensitivity,
+				title,
+				body,
+				"/forecast",
+				metadata,
+				getUser,
+			)
 		}
-
-		// Second sentence explains the baseline comparison and what RateRudder will do.
-		// Defaults to stating RateRudder will prioritize battery power.
-		secondSentence := fmt.Sprintf("Electricity rates are surging significantly above recent prices ($%.2f/kWh). RateRudder will prioritize battery power to protect your home.", refPrice)
-
-		// Inspect hourly simulation data across the spike slots to provide specific home battery outcome guidance:
-		// 1. If solar generation covers entire home consumption: inform user solar is powering home without drawing battery.
-		// 2. If battery is already at or below reserve: warn that the home will draw from grid during the spike.
-		// 3. If battery will run out of energy before the spike ends: provide the estimated time battery reaches reserve.
-		// 4. If battery lasts through the entire spike: reassure user battery powers home through the whole event.
-		currentSOC := data.status.BatterySOC
-		reserveSOC := data.settings.GetMinBatterySOC(ctx, spikeStart, siteLoc, types.Price{DollarsPerKWH: activeSpikeCost})
-		if reserveSOC <= 0 {
-			reserveSOC = data.settings.MinBatterySOC
-		}
-
-		planHelper := newNotificationPlanHelper(data.plan)
-		spikeOutcome := planHelper.priceSpikeGuidance(ctx, spikeStart, spikeEnd, currentSOC, reserveSOC)
-
-		if spikeOutcome.solarCovers {
-			secondSentence = "Solar is projected to cover your home usage during the spike."
-		} else if spikeOutcome.isExporting {
-			secondSentence = "RateRudder is discharging battery to export power during the surge."
-		} else if currentSOC <= reserveSOC {
-			secondSentence = fmt.Sprintf("Battery is currently at %.0f%% reserve; your home will draw from the grid during the spike.", currentSOC)
-		} else if !spikeOutcome.reachesReserveAt.IsZero() {
-			secondSentence = fmt.Sprintf("Battery is at %.0f%% and will supply home until ~%s.", currentSOC, spikeOutcome.reachesReserveAt.In(siteLoc).Format("3:04 PM"))
-		} else if spikeOutcome.lastsEntireSpike {
-			secondSentence = fmt.Sprintf("Battery is at %.0f%% and projected to power your home through the spike.", currentSOC)
-		}
-
-		// Store structured metadata on the notification log for debugging and re-alert evaluations
-		metadata := map[string]string{
-			"price":      fmt.Sprintf("%.4f", activeSpikeCost),
-			"peakPrice":  fmt.Sprintf("%.4f", maxSpikeCost),
-			"refPrice":   fmt.Sprintf("%.4f", refPrice),
-			"currentSOC": fmt.Sprintf("%.1f", currentSOC),
-			"spikeStart": spikeStart.In(siteLoc).Format(time.RFC3339),
-			"spikeEnd":   spikeEnd.In(siteLoc).Format(time.RFC3339),
-		}
-
-		body := fmt.Sprintf("%s %s", firstSentence, secondSentence)
-
-		log.Ctx(ctx).DebugContext(ctx, "sending price spike notification",
-			slog.String("userID", su.userID),
-			slog.String("sensitivity", su.sensitivity),
-			slog.Float64("activeSpikeCost", activeSpikeCost),
-			slog.Float64("maxSpikeCost", maxSpikeCost),
-			slog.Float64("refPrice", refPrice),
-			slog.Time("spikeStart", spikeStart),
-			slog.Time("spikeEnd", spikeEnd),
-			slog.Float64("currentSOC", currentSOC),
-			slog.String("title", title),
-			slog.String("body", body),
-		)
-		s.dispatchPushToUser(
-			ctx,
-			siteID,
-			su.userID,
-			types.NotificationTypePriceSpike,
-			su.sensitivity,
-			title,
-			body,
-			"/forecast",
-			metadata,
-			getUser,
-		)
 	}
+}
+
+func formatPriceDollarsPerKWH(dollarsPerKWH float64) string {
+	if dollarsPerKWH < -0.0005 {
+		return fmt.Sprintf("-$%.2f/kWh", math.Abs(dollarsPerKWH))
+	}
+	return fmt.Sprintf("$%.2f/kWh", math.Abs(dollarsPerKWH))
+}
+
+func formatPriceShortDollars(dollarsPerKWH float64) string {
+	if dollarsPerKWH < -0.0005 {
+		return fmt.Sprintf("-$%.2f", math.Abs(dollarsPerKWH))
+	}
+	return fmt.Sprintf("$%.2f", math.Abs(dollarsPerKWH))
 }
 
 // handleSolarUnderproductionNotifications evaluates and sends alerts when actual solar production
