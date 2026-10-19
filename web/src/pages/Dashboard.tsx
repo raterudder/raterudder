@@ -463,7 +463,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                         </div>
                     )}
                     {siteID !== 'ALL' && isToday && latestAction && (
-                        <CurrentStatus action={latestAction} currencySymbol={currencySymbol} />
+                        <CurrentStatus action={latestAction} currencySymbol={currencySymbol} planMode={planMode} />
                     )}
 
                     <SavingsHero

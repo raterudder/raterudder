@@ -495,28 +495,28 @@ func (s *Server) performSiteUpdate(
 	}
 	notifData.futurePrices = futurePrices
 
-	// When release is staging or settings.PlanMode is enabled, call Plan in addition to Decide.
-	// Log a warning if they produce different actions, but always perform the Plan action when plan mode is active.
+	// Always call Plan in addition to Decide (dark-launched when planMode is false on production).
+	// Log a warning if they produce different actions, attach Plan to Action for debugging,
+	// and only perform the Plan action (and TOU schedule) when plan mode is active.
 	// TODO: Remove s.release check and settings.PlanMode once plan mode is rolled out to 100% of sites.
+	usePlanMode := strings.EqualFold(s.release, "staging") || settings.PlanMode
 
 	var planDecision controller.Decision
 	var planErr error
 	var hasPlan bool
-	if strings.EqualFold(s.release, "staging") || settings.PlanMode {
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					planErr = fmt.Errorf("controller plan panicked: %v", r)
-					log.Ctx(ctx).ErrorContext(ctx, "controller plan panicked", slog.Any("panic", r))
-				}
-			}()
-			planDecision, _, planErr = s.controller.Plan(ctx, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings, latestAction)
-			if planErr == nil {
-				hasPlan = true
-				notifData.plan = planDecision.Action.Plan
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				planErr = fmt.Errorf("controller plan panicked: %v", r)
+				log.Ctx(ctx).ErrorContext(ctx, "controller plan panicked", slog.Any("panic", r))
 			}
 		}()
-	}
+		planDecision, _, planErr = s.controller.Plan(ctx, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings, latestAction)
+		if planErr == nil {
+			hasPlan = true
+			notifData.plan = planDecision.Action.Plan
+		}
+	}()
 
 	// still generate a plan when paused and VPPActive
 	if settings.Pause {
@@ -545,7 +545,9 @@ func (s *Server) performSiteUpdate(
 
 		if hasPlan {
 			action.Plan = planDecision.Action.Plan
-			action.SimulationParams = planDecision.SimulationParams
+			if usePlanMode {
+				action.SimulationParams = planDecision.SimulationParams
+			}
 		} else if planErr != nil {
 			log.Ctx(ctx).WarnContext(ctx, "failed to generate plan while paused", slog.Any("error", planErr))
 		}
@@ -570,7 +572,9 @@ func (s *Server) performSiteUpdate(
 		}
 		if hasPlan {
 			action.Plan = planDecision.Action.Plan
-			action.SimulationParams = planDecision.SimulationParams
+			if usePlanMode {
+				action.SimulationParams = planDecision.SimulationParams
+			}
 		} else if planErr != nil {
 			log.Ctx(ctx).WarnContext(ctx, "failed to generate plan during VPP active", slog.Any("error", planErr))
 		}
@@ -601,6 +605,7 @@ func (s *Server) performSiteUpdate(
 				ctx,
 				"plan and decide produced different actions",
 				slog.String("siteID", siteID),
+				slog.Bool("planMode", usePlanMode),
 				slog.Int("decideBatteryMode", int(decideAct.BatteryMode)),
 				slog.Int("planBatteryMode", int(planAct.BatteryMode)),
 				slog.Int("decideSolarMode", int(decideAct.SolarMode)),
@@ -613,11 +618,16 @@ func (s *Server) performSiteUpdate(
 				slog.String("planDescription", planAct.Description),
 			)
 		}
-		// Always perform the Plan action when plan mode is active
-		if planDecision.SimData == nil {
-			planDecision.SimData = decision.SimData
+		if usePlanMode {
+			// Perform the Plan action when plan mode is active
+			if planDecision.SimData == nil {
+				planDecision.SimData = decision.SimData
+			}
+			decision = planDecision
+		} else {
+			// Attach the generated plan for debugging while executing the Decide action
+			decision.Action.Plan = planDecision.Action.Plan
 		}
-		decision = planDecision
 	} else if planErr != nil {
 		log.Ctx(ctx).WarnContext(ctx, "controller plan failed", slog.Any("error", planErr))
 	}
@@ -651,7 +661,7 @@ func (s *Server) performSiteUpdate(
 		minSOC = action.ChargeToSOC
 	}
 	var sched *types.TOUSchedule
-	if settings.ManageTOUSchedules && hasPlan && action.Plan != nil {
+	if usePlanMode && settings.ManageTOUSchedules && hasPlan && action.Plan != nil {
 		sched = controller.BuildTOUSchedule(action.Plan, s.now(), status.Timestamp.Location())
 	}
 	modesChanged, err := s.setESSModes(ctx, siteID, essSystem, action.BatteryMode, action.SolarMode, types.ModesOptions{

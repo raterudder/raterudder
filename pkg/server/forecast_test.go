@@ -679,6 +679,7 @@ func TestHandleForecast(t *testing.T) {
 			MinBatterySOC:   5.0,
 			UtilityProvider: "test",
 			ESS:             "mock",
+			PlanMode:        true,
 		}, types.CurrentSettingsVersion, time.Time{}, nil)
 
 		plan := &types.Plan{
@@ -752,6 +753,105 @@ func TestHandleForecast(t *testing.T) {
 		assert.Empty(t, data.Simulation, "fast-path should not return simulation")
 		mockES.AssertNotCalled(t, "GetStatus", mock.Anything)
 		mockU.AssertNotCalled(t, "GetCurrentPrice", mock.Anything)
+	})
+
+	t.Run("Dark-launched plan in latestAction does not trigger fast-path when PlanMode is false", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil)
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			MinBatterySOC:   5.0,
+			UtilityProvider: "test",
+			ESS:             "mock",
+			PlanMode:        false,
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+
+		plan := &types.Plan{
+			TSCreated:          now.Add(-10 * time.Minute),
+			HorizonHours:       24,
+			TotalProjectedCost: 2.50,
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:       now,
+					TSEnd:         now.Add(time.Hour),
+					DurationHours: 1,
+					BatteryMode:   types.BatteryModeStandby,
+					StartSOC:      50,
+					EndSOC:        50,
+				},
+			},
+		}
+
+		action := &types.Action{
+			Timestamp:    now.Add(-10 * time.Minute),
+			BatteryMode:  types.BatteryModeStandby,
+			CurrentPrice: &types.Price{DollarsPerKWH: 0.10, TSStart: now, TSEnd: now.Add(time.Hour)},
+			Plan:         plan,
+			SystemStatus: types.SystemStatus{
+				BatterySOC:         50,
+				BatteryCapacityKWH: 10.0,
+				Timestamp:          now.Add(-10 * time.Minute),
+			},
+		}
+
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return(action, nil)
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockP := ess.NewMap()
+		mockP.SetSystem(types.SiteIDNone, mockES)
+
+		futurePrices := make([]types.Price, 24)
+		for i := 0; i < 24; i++ {
+			pStart := now.Add(time.Duration(i) * time.Hour)
+			futurePrices[i] = types.Price{
+				DollarsPerKWH: 0.12,
+				TSStart:       pStart,
+				TSEnd:         pStart.Add(time.Hour),
+			}
+		}
+
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{
+			DollarsPerKWH: 0.10,
+			TSStart:       now,
+			TSEnd:         now.Add(time.Hour),
+		}, nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return(futurePrices, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil)
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			controller: controller.NewController(),
+			bypassAuth: true,
+			release:    "production",
+			nowFunc:    func() time.Time { return now },
+		}
+
+		req := httptest.NewRequest("GET", "/api/forecast", nil)
+		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
+		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv.handleForecast(w, req)
+
+		resp := w.Result()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var data ForecastRes
+		err := json.NewDecoder(resp.Body).Decode(&data)
+		require.NoError(t, err)
+
+		assert.Nil(t, data.Plan, "dark-launched plan must not be returned when PlanMode is false")
+		assert.NotEmpty(t, data.Simulation, "legacy simulation must be returned when PlanMode is false")
 	})
 
 	t.Run("Staging real-time plan fallback when plan is stale", func(t *testing.T) {

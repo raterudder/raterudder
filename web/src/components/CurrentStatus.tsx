@@ -6,9 +6,10 @@ import { getBatteryModeLabel, isZeroTime, getPlanStatusSubvalue } from '../utils
 interface CurrentStatusProps {
     action: Action;
     currencySymbol?: string;
+    planMode?: boolean;
 }
 
-const CurrentStatus: React.FC<CurrentStatusProps> = ({ action, currencySymbol = '$' }) => {
+const CurrentStatus: React.FC<CurrentStatusProps> = ({ action, currencySymbol = '$', planMode = true }) => {
     const hasSOC = action.systemStatus?.batterySOC !== undefined && action.systemStatus?.batterySOC !== null;
     const soc = hasSOC ? action.systemStatus!.batterySOC! : 0;
     const isUninitializedPrice = Boolean(action.currentPrice?.tsStart?.startsWith('0001-01-01') || action.currentPrice?.tsEnd?.startsWith('0001-01-01'));
@@ -157,7 +158,7 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action, currencySymbol = 
     }
 
     const refTs = (action.systemTimestamp && !isZeroTime(action.systemTimestamp)) ? action.systemTimestamp : action.systemStatus?.timestamp;
-    const planSubvalue = getPlanStatusSubvalue(action, refTs, currencySymbol);
+    const planSubvalue = planMode ? getPlanStatusSubvalue(action, refTs, currencySymbol) : null;
 
     const isAbnormalUsage = isBatteryAtReserve &&
         Boolean(action.recentHomeUsageAbnormal) &&

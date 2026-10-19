@@ -352,4 +352,45 @@ describe('CurrentStatus', () => {
         expect(screen.getByText(/Charging to 100% until/)).toBeInTheDocument();
         expect(screen.getByText(/Low rate/)).toBeInTheDocument();
     });
+
+    it('ignores dark-launched plan when planMode is false', () => {
+        const mockNow = new Date('2026-06-15T12:00:00Z');
+        vi.useFakeTimers();
+        vi.setSystemTime(mockNow);
+
+        const action: Action = {
+            ...defaultAction,
+            batteryMode: BatteryMode.ChargeAny,
+            capacityAt: '2026-06-15T15:00:00Z',
+            currentPrice: { tsStart: '2026-06-15T12:00:00Z', tsEnd: '2026-06-15T13:00:00Z', dollarsPerKWH: 0.02, gridUseDollarsPerKWH: 0.01 },
+            plan: {
+                tsCreated: '2026-06-15T12:00:00Z',
+                horizonHours: 24,
+                totalProjectedCost: 1.0,
+                totalExportCredits: 0,
+                netEconomicBenefit: 2.0,
+                periods: [
+                    {
+                        tsStart: '2026-06-15T12:00:00Z',
+                        tsEnd: '2026-06-15T15:00:00Z',
+                        durationHours: 3,
+                        batteryMode: BatteryMode.ChargeAny,
+                        solarMode: SolarMode.Any,
+                        reason: ActionReason.DeficitCharge,
+                        startSoc: 20,
+                        endSoc: 100,
+                        importDollars: 0.03,
+                        gridImportKWH: 8,
+                        gridExportKWH: 0,
+                        costDollars: 0.24,
+                    }
+                ]
+            }
+        };
+        render(<CurrentStatus action={action} planMode={false} />);
+        expect(screen.getByText('Battery full in 3 hours')).toBeInTheDocument();
+        expect(screen.queryByText(/Charging to 100% until/)).not.toBeInTheDocument();
+
+        vi.useRealTimers();
+    });
 });

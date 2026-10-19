@@ -175,9 +175,12 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// FAST-PATH: If we have a fresh plan generated within the last hour, bypass
-	// the 35-day historical query, ESS status fetch, and controller simulation.
-	isFreshPlan := !regeneratePlan &&
+	usePlanMode := strings.EqualFold(s.release, "staging") || settings.PlanMode
+
+	// FAST-PATH: If we have a fresh plan generated within the last hour (and plan mode is active),
+	// bypass the 35-day historical query, ESS status fetch, and controller simulation.
+	isFreshPlan := usePlanMode &&
+		!regeneratePlan &&
 		latestAction != nil &&
 		latestAction.Plan != nil &&
 		len(latestAction.Plan.Periods) > 0 &&
