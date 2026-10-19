@@ -1613,6 +1613,7 @@ func (s *Server) syncHistorySummaryRange(
 	}
 
 	summariesByMonth := make(map[string]*types.HistorySummary)
+	var minEnergyTime, maxEnergyTime time.Time
 	for d := startDay; !d.After(yesterdayStart); d = d.AddDate(0, 0, 1) {
 		dateStr := d.Format("2006-01-02")
 		dailyStat, hasData := energyStatsByDate[dateStr]
@@ -1652,10 +1653,39 @@ func (s *Server) syncHistorySummaryRange(
 			summariesByMonth[monthKey] = summary
 		}
 		if hasData {
+			dailyStat.Hourly = slices.Clone(dailyStat.Hourly)
+			for _, h := range dailyStat.Hourly {
+				if h.TSHourStart.IsZero() {
+					continue
+				}
+				if minEnergyTime.IsZero() || h.TSHourStart.Before(minEnergyTime) {
+					minEnergyTime = h.TSHourStart
+				}
+				hEnd := h.TSHourStart.Add(time.Hour)
+				if maxEnergyTime.IsZero() || hEnd.After(maxEnergyTime) {
+					maxEnergyTime = hEnd
+				}
+			}
 			summary.Energy = append(summary.Energy, dailyStat)
 		}
 		if weather, ok := weatherStatsByDate[dateStr]; ok {
 			summary.Weather = append(summary.Weather, weather)
+		}
+	}
+
+	if !minEnergyTime.IsZero() && minEnergyTime.Before(maxEnergyTime) {
+		log.Ctx(ctx).DebugContext(ctx, "pulling action history to enrich energy stats",
+			slog.String("siteID", siteID),
+			slog.Time("start", minEnergyTime),
+			slog.Time("end", maxEnergyTime),
+		)
+		actions, actErr := s.storage.GetActionHistory(ctx, siteID, minEnergyTime, maxEnergyTime)
+		if actErr != nil {
+			log.Ctx(ctx).WarnContext(ctx, "failed to get action history for history summary", slog.String("siteID", siteID), slog.Any("error", actErr))
+		} else if len(actions) > 0 {
+			for _, summary := range summariesByMonth {
+				enrichDailyEnergyStatsWithActions(summary.Energy, actions)
+			}
 		}
 	}
 
@@ -1678,6 +1708,64 @@ func (s *Server) syncHistorySummaryRange(
 	}
 
 	return updatedSummaries, nil
+}
+
+func enrichDailyEnergyStatsWithActions(dailyStats []types.DailyEnergyStats, actions []types.Action) {
+	if len(dailyStats) == 0 || len(actions) == 0 {
+		return
+	}
+
+	actionsByHour := make(map[int64][]types.Action)
+	for _, a := range actions {
+		ts := a.Timestamp
+		if ts.IsZero() {
+			ts = a.SystemStatus.Timestamp
+		}
+		if ts.IsZero() {
+			continue
+		}
+		hourKey := ts.Truncate(time.Hour).Unix()
+		actionsByHour[hourKey] = append(actionsByHour[hourKey], a)
+	}
+
+	for dIdx := range dailyStats {
+		for hIdx := range dailyStats[dIdx].Hourly {
+			stat := &dailyStats[dIdx].Hourly[hIdx]
+			if stat.TSHourStart.IsZero() {
+				continue
+			}
+			hourActions := actionsByHour[stat.TSHourStart.Truncate(time.Hour).Unix()]
+			for _, a := range hourActions {
+				if a.SystemStatus.BatteryHeating {
+					stat.HadBatteryHeating = true
+				}
+				if a.SystemStatus.VPPActive || a.Reason == types.ActionReasonVPPActive {
+					stat.HadVPPActive = true
+				}
+				if a.SystemStatus.GridUnavailable || a.Reason == types.ActionReasonGridUnavailable {
+					stat.HadGridUnavailable = true
+				}
+				if a.SystemStatus.EmergencyMode || a.Reason == types.ActionReasonEmergencyMode {
+					stat.HadEmergencyMode = true
+				}
+				if a.SolarMode == types.SolarModeNoExport || a.Reason == types.ActionReasonPreventSolarCurtailment {
+					stat.HadSolarNoExport = true
+				}
+				for _, alarm := range a.SystemStatus.Alarms {
+					exists := false
+					for _, existing := range stat.Alarms {
+						if existing.Code == alarm.Code && existing.Name == alarm.Name && existing.Description == alarm.Description {
+							exists = true
+							break
+						}
+					}
+					if !exists {
+						stat.Alarms = append(stat.Alarms, alarm)
+					}
+				}
+			}
+		}
+	}
 }
 
 func flattenDailyEnergyStats(daily []types.DailyEnergyStats) []types.EnergyStats {

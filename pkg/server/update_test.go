@@ -3662,3 +3662,120 @@ func TestGetFuturePrices(t *testing.T) {
 		assert.InDelta(t, 0.35, tomorrowH14Price.DollarsPerKWH, 0.0001)
 	})
 }
+
+func TestSyncHistorySummaryRange(t *testing.T) {
+	loc, err := time.LoadLocation("America/Chicago")
+	require.NoError(t, err)
+
+	now := time.Date(2026, 10, 20, 8, 0, 0, 0, loc)
+	yesterday := time.Date(2026, 10, 19, 0, 0, 0, 0, loc)
+
+	t.Run("EnrichesHourlyEnergyStatsFromActions", func(t *testing.T) {
+		mockS := &mockStorage{}
+
+		h8 := yesterday.Add(8 * time.Hour)
+		h12 := yesterday.Add(12 * time.Hour)
+		h17 := yesterday.Add(17 * time.Hour)
+		h23 := yesterday.Add(23 * time.Hour)
+
+		dailyEnergy := []types.DailyEnergyStats{
+			{
+				TSDayStart:   yesterday,
+				TimeLocation: loc.String(),
+				Hourly: []types.EnergyStats{
+					{TSHourStart: h8, TimeLocation: loc.String(), HomeKWH: 1.5},
+					{TSHourStart: h12, TimeLocation: loc.String(), SolarKWH: 4.0},
+					{TSHourStart: h17, TimeLocation: loc.String(), BatteryUsedKWH: 3.0},
+					{TSHourStart: h23, TimeLocation: loc.String(), HomeKWH: 0.8},
+				},
+			},
+		}
+
+		alarm1 := types.SystemAlarm{Code: "E100", Name: "Inverter Fault", Description: "Fault details"}
+		actions := []types.Action{
+			{
+				Timestamp: h8.Add(15 * time.Minute),
+				SystemStatus: types.SystemStatus{
+					BatteryHeating: true,
+				},
+			},
+			{
+				Timestamp: h8.Add(35 * time.Minute),
+				SystemStatus: types.SystemStatus{
+					BatteryHeating: false,
+				},
+			},
+			{
+				Timestamp: h12.Add(10 * time.Minute),
+				SolarMode: types.SolarModeNoExport,
+				Reason:    types.ActionReasonPreventSolarCurtailment,
+			},
+			{
+				Timestamp: h17.Add(5 * time.Minute),
+				Reason:    types.ActionReasonVPPActive,
+				SystemStatus: types.SystemStatus{
+					VPPActive: true,
+				},
+			},
+			{
+				Timestamp: h23.Add(10 * time.Minute),
+				Reason:    types.ActionReasonGridUnavailable,
+				SystemStatus: types.SystemStatus{
+					GridUnavailable: true,
+					EmergencyMode:   true,
+					Alarms:          []types.SystemAlarm{alarm1},
+				},
+			},
+			{
+				Timestamp: h23.Add(25 * time.Minute),
+				SystemStatus: types.SystemStatus{
+					Alarms: []types.SystemAlarm{alarm1}, // duplicate alarm in same hour should be deduplicated
+				},
+			},
+		}
+
+		mockS.On("GetEnergyHistory", mock.Anything, "site1", yesterday, yesterday.AddDate(0, 0, 1)).Return(dailyEnergy, nil).Once()
+		mockS.On("GetWeather", mock.Anything, "site1", yesterday, yesterday.AddDate(0, 0, 1)).Return([]types.Weather{}, nil).Once()
+		mockS.On("GetActionHistory", mock.Anything, "site1", h8, h23.Add(time.Hour)).Return(actions, nil).Once()
+
+		var capturedSummary types.HistorySummary
+		mockS.On("UpdateHistorySummary", mock.Anything, "site1", "2026-10", mock.Anything).Run(func(args mock.Arguments) {
+			capturedSummary = args.Get(3).(types.HistorySummary)
+		}).Return(types.HistorySummary{}, nil).Once()
+
+		srv := &Server{
+			storage: mockS,
+			nowFunc: func() time.Time { return now },
+		}
+
+		_, err := srv.syncHistorySummaryRange(context.Background(), "site1", yesterday, now, false)
+		require.NoError(t, err)
+		mockS.AssertExpectations(t)
+
+		if assert.Len(t, capturedSummary.Energy, 1) {
+			hourly := capturedSummary.Energy[0].Hourly
+			if assert.Len(t, hourly, 4) {
+				// 08:00 hour: HadBatteryHeating = true
+				assert.True(t, hourly[0].HadBatteryHeating)
+				assert.False(t, hourly[0].HadVPPActive)
+				assert.False(t, hourly[0].HadSolarNoExport)
+				assert.Empty(t, hourly[0].Alarms)
+
+				// 12:00 hour: HadSolarNoExport = true
+				assert.False(t, hourly[1].HadBatteryHeating)
+				assert.True(t, hourly[1].HadSolarNoExport)
+
+				// 17:00 hour: HadVPPActive = true
+				assert.True(t, hourly[2].HadVPPActive)
+				assert.False(t, hourly[2].HadGridUnavailable)
+
+				// 23:00 hour: HadGridUnavailable, HadEmergencyMode, and deduplicated Alarms
+				assert.True(t, hourly[3].HadGridUnavailable)
+				assert.True(t, hourly[3].HadEmergencyMode)
+				if assert.Len(t, hourly[3].Alarms, 1) {
+					assert.Equal(t, "E100", hourly[3].Alarms[0].Code)
+				}
+			}
+		}
+	})
+}

@@ -186,7 +186,12 @@ type EnergyStats struct {
 	BatteryToGridKWH  float64 `json:"batteryToGridKWH"`
 
 	// Miscellaneous
-	Alarms []SystemAlarm `json:"alarms,omitempty"`
+	Alarms             []SystemAlarm `json:"alarms,omitempty"`
+	HadBatteryHeating  bool          `json:"hadBatteryHeating,omitempty"`
+	HadVPPActive       bool          `json:"hadVppActive,omitempty"`
+	HadGridUnavailable bool          `json:"hadGridUnavailable,omitempty"`
+	HadEmergencyMode   bool          `json:"hadEmergencyMode,omitempty"`
+	HadSolarNoExport   bool          `json:"hadSolarNoExport,omitempty"`
 }
 
 // DailyEnergyStats represents aggregated energy statistics for a day.
