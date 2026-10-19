@@ -964,9 +964,17 @@ func TestFranklin(t *testing.T) {
 								"time":             "2023-10-27 12:00:02",
 							},
 							{
+								"logName":          "Minor Warning",
+								"alarmExplanation": "Level 1 warning while not faulted",
+								"alarmCode":        "W001",
+								"level":            1,
+								"time":             "2023-10-27 12:00:03",
+							},
+							{
 								"logName":          "Real Alarm",
 								"alarmExplanation": "Don't ignore this",
 								"alarmCode":        "E002",
+								"level":            2,
 								"time":             "2023-10-27 12:00:01",
 							},
 						},
@@ -989,8 +997,201 @@ func TestFranklin(t *testing.T) {
 
 		status, err := f.GetStatus(context.Background())
 		require.NoError(t, err, "GetStatus should succeed")
-		if assert.Len(t, status.Alarms, 1, "should have only 1 alarm (SIM card and PV alarms should be ignored)") {
+		if assert.Len(t, status.Alarms, 1, "should have only 1 alarm (SIM card, PV, and level 1 non-fault alarms should be ignored)") {
 			assert.Equal(t, "Real Alarm", status.Alarms[0].Name)
+		}
+	})
+
+	t.Run("GetStatus BMS Heating And Under Temperature Alarms", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"token": "tok"},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"totalCap": 30.0, "timeZone": "UTC"},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": []map[string]any{
+						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
+					},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"gridMaxFlag": 0, "gridFeedMaxFlag": 0},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
+				list := []map[string]any{
+					{"id": 1.0, "workMode": 2},
+				}
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"list": list, "currendId": 1.0},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"valid":        true,
+						"deviceStatus": 1,
+						"runtimeData": map[string]any{
+							"soc":            79.684,
+							"run_status":     1,
+							"p_fhp":          -0.871,
+							"fhpPower":       []float64{-0.435, -0.436},
+							"bms_heat_state": []int{3, 3},
+						},
+						"currentAlarmVOList": []map[string]any{
+							{
+								"logName":          "NO.1 BMS Charge Under Temperature",
+								"alarmExplanation": "Low ambient temperature",
+								"alarmCode":        "610E",
+								"commonAlarmCode":  "6#0E",
+								"level":            1,
+								"time":             "2023-10-27 04:00:00",
+							},
+							{
+								"logName":          "NO.2 BMS Charge Under Temperature",
+								"alarmExplanation": "Low ambient temperature",
+								"alarmCode":        "620E",
+								"commonAlarmCode":  "6#0E",
+								"level":            1,
+								"time":             "2023-10-27 04:30:00",
+							},
+						},
+					},
+				})
+				return
+			}
+			http.Error(w, "not found: "+r.URL.Path, 404)
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:      ts.Client(),
+			baseURL:     ts.URL,
+			username:    "u",
+			md5Password: "p",
+			gatewayID:   "g",
+			settings:    types.Settings{MinBatterySOC: 10},
+		}
+
+		status, err := f.GetStatus(context.Background())
+		require.NoError(t, err, "GetStatus should succeed")
+		assert.Empty(t, status.Alarms, "BMS Charge Under Temperature alarms should be ignored across multiple batteries")
+		assert.False(t, status.BatteryChargingDisabled, "BatteryChargingDisabled should not be set for BMS Charge Under Temperature")
+		assert.True(t, status.BatteryHeating, "BatteryHeating should be true when bms_heat_state has active entries")
+	})
+
+	t.Run("GetStatus Level 1 Alarm In Fault Status", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"token": "tok"},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"totalCap": 30.0, "timeZone": "UTC"},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": []map[string]any{
+						{"id": 2, "modelName": "aPower 2", "peHwVersion": 20, "ratedCap": 15000, "chargePower": 8000, "dischargePower": 10000, "derateFlag": 1},
+					},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"gridMaxFlag": 0, "gridFeedMaxFlag": 0},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
+				list := []map[string]any{
+					{"id": 1.0, "workMode": 1},
+				}
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result":  map[string]any{"list": list, "currendId": 1.0},
+				})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"valid": true,
+						"runtimeData": map[string]any{
+							"soc":        50.0,
+							"run_status": 3, // franklinRunStatusFault
+						},
+						"currentAlarmVOList": []map[string]any{
+							{
+								"logName":          "System Fault Alarm",
+								"alarmExplanation": "System is in fault status",
+								"alarmCode":        "F001",
+								"level":            1,
+								"time":             "2023-10-27 12:00:00",
+							},
+						},
+					},
+				})
+				return
+			}
+			http.Error(w, "not found: "+r.URL.Path, 404)
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:      ts.Client(),
+			baseURL:     ts.URL,
+			username:    "u",
+			md5Password: "p",
+			gatewayID:   "g",
+			settings:    types.Settings{MinBatterySOC: 10},
+		}
+
+		status, err := f.GetStatus(context.Background())
+		require.NoError(t, err, "GetStatus should succeed")
+		if assert.Len(t, status.Alarms, 1, "level 1 alarm should be included when run_status is fault") {
+			assert.Equal(t, "System Fault Alarm", status.Alarms[0].Name)
 		}
 	})
 

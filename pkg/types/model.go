@@ -222,6 +222,7 @@ type SystemStatus struct {
 	VPPSOC                  float64       `json:"vppSOC,omitempty"`    // Active VPP minimum discharge floor SOC
 	VPPEvents               []VPPEvent    `json:"vppEvents,omitempty"`
 	ManagedTOUMode          bool          `json:"managedTouMode,omitempty"` // True if battery is operating in RateRudder-managed Time-of-Use mode
+	BatteryHeating          bool          `json:"batteryHeating,omitempty"` // True if battery heating blankets are active
 }
 
 // BatteryMode represents the mode of the battery.

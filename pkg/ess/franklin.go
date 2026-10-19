@@ -563,6 +563,7 @@ func (f *Franklin) getRuntimeData(ctx context.Context) (franklinDeviceCompositeI
 		slog.Float64("gridKW", res.RuntimeData.PowerGrid),
 		slog.Float64("loadKW", res.RuntimeData.PowerLoad),
 		slog.Float64("batteryKW", res.RuntimeData.PowerBattery),
+		slog.Any("bmsHeatState", res.RuntimeData.BMSHeatState),
 		slog.Int("alarms", len(res.CurrentAlarmList)),
 		slog.Int("mode", int(res.RuntimeData.TOUID)),
 		slog.Int64("timestamp", res.RuntimeData.Timestamp),
@@ -709,12 +710,22 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 			slog.String("description", alarm.Explanation),
 			slog.Time("time", t),
 			slog.String("code", alarm.AlarmCode),
+			slog.String("commonCode", alarm.CommonAlarmCode),
+			slog.Int("level", alarm.Level),
 		)
 		if alarm.Name == "SIM card not inserted" || alarm.Name == "4G module not connected" {
 			continue
 		}
 		if alarm.Name == "No PV Current Detected" {
 			log.Ctx(ctx).InfoContext(ctx, "ignoring alarm: No PV Current Detected", slog.String("alarmName", alarm.Name), slog.String("alarmCode", alarm.AlarmCode))
+			continue
+		}
+		if strings.Contains(alarm.Name, "BMS Charge Under Temperature") || strings.Contains(alarm.Name, "BMS Discharge Under Temperature") {
+			log.Ctx(ctx).InfoContext(ctx, "ignoring bms under temperature alarm", slog.String("alarmName", alarm.Name), slog.String("alarmCode", alarm.AlarmCode), slog.Int("level", alarm.Level))
+			continue
+		}
+		if alarm.Level == 1 && rd.RuntimeData.RunStatus != franklinRunStatusFault {
+			log.Ctx(ctx).InfoContext(ctx, "ignoring level 1 alarm while system is not in fault status", slog.String("alarmName", alarm.Name), slog.String("alarmCode", alarm.AlarmCode), slog.Int("runStatus", int(rd.RuntimeData.RunStatus)))
 			continue
 		}
 
@@ -724,13 +735,6 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 			Timestamp:   t,
 			Code:        alarm.AlarmCode,
 		})
-	}
-
-	var batteryChargingDisabled bool
-	if len(alarms) == 1 && strings.Contains(alarms[0].Name, "BMS Charge Under Temperature") {
-		log.Ctx(ctx).InfoContext(ctx, "bms charge under temperature is the only alarm, ignoring and setting battery charging disabled")
-		alarms = nil
-		batteryChargingDisabled = true
 	}
 
 	stormHedge := rd.RuntimeData.TOUID == franklinOverlayModeStormHedge
@@ -870,28 +874,36 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		}
 	}
 
+	var batteryHeating bool
+	for _, heatState := range rd.RuntimeData.BMSHeatState {
+		if heatState > 0 {
+			batteryHeating = true
+			break
+		}
+	}
+
 	status := types.SystemStatus{
-		Timestamp:               time.Now().In(di.location),
-		TimeLocation:            di.location.String(),
-		BatterySOC:              rd.RuntimeData.SOC,
-		BatteryKW:               rd.RuntimeData.PowerBattery,
-		SolarKW:                 rd.RuntimeData.PowerSolar,
-		GridKW:                  rd.RuntimeData.PowerGrid,
-		HomeKW:                  rd.RuntimeData.PowerLoad,
-		BatteryCapacityKWH:      di.TotalBatteryCapacityKWH,
-		EmergencyMode:           stormHedge || modes.currentMode.WorkMode == franklinWorkModeEmergencyBackup,
-		GridUnavailable:         rd.RuntimeData.OffGridFlag != franklinOffGridFlagOnGrid,
-		ElevatedMinBatterySOC:   modes.currentMode.ReserveSOC > 0 && modes.currentMode.ReserveSOC > f.settings.MinBatterySOC,
-		BatteryAboveMinSOC:      rd.RuntimeData.SOC >= modes.currentMode.ReserveSOC,
-		BatteryChargingDisabled: batteryChargingDisabled,
-		MaxBatteryChargeKW:      maxBatteryChargeKW,
-		MaxBatteryDischargeKW:   maxBatteryDischargeKW,
-		Alarms:                  alarms,
-		Storms:                  storms,
-		VPPActive:               vppActive,
-		VPPSOC:                  modes.VPPSOC,
-		VPPEvents:               vppEvents,
-		ManagedTOUMode:          (modes.currentMode.WorkMode == franklinWorkModeTimeOfUse || rd.CurrentWorkMode == franklinWorkModeTimeOfUse) && (modes.currentMode.Name == "Direct Solar Export" || strings.Contains(modes.currentMode.Name, "RateRudder")),
+		Timestamp:             time.Now().In(di.location),
+		TimeLocation:          di.location.String(),
+		BatterySOC:            rd.RuntimeData.SOC,
+		BatteryKW:             rd.RuntimeData.PowerBattery,
+		BatteryHeating:        batteryHeating,
+		SolarKW:               rd.RuntimeData.PowerSolar,
+		GridKW:                rd.RuntimeData.PowerGrid,
+		HomeKW:                rd.RuntimeData.PowerLoad,
+		BatteryCapacityKWH:    di.TotalBatteryCapacityKWH,
+		EmergencyMode:         stormHedge || modes.currentMode.WorkMode == franklinWorkModeEmergencyBackup,
+		GridUnavailable:       rd.RuntimeData.OffGridFlag != franklinOffGridFlagOnGrid,
+		ElevatedMinBatterySOC: modes.currentMode.ReserveSOC > 0 && modes.currentMode.ReserveSOC > f.settings.MinBatterySOC,
+		BatteryAboveMinSOC:    rd.RuntimeData.SOC >= modes.currentMode.ReserveSOC,
+		MaxBatteryChargeKW:    maxBatteryChargeKW,
+		MaxBatteryDischargeKW: maxBatteryDischargeKW,
+		Alarms:                alarms,
+		Storms:                storms,
+		VPPActive:             vppActive,
+		VPPSOC:                modes.VPPSOC,
+		VPPEvents:             vppEvents,
+		ManagedTOUMode:        (modes.currentMode.WorkMode == franklinWorkModeTimeOfUse || rd.CurrentWorkMode == franklinWorkModeTimeOfUse) && (modes.currentMode.Name == "Direct Solar Export" || strings.Contains(modes.currentMode.Name, "RateRudder")),
 	}
 
 	log.Ctx(ctx).DebugContext(ctx, "franklin system status", slog.Any("status", status))
@@ -2039,11 +2051,12 @@ type franklinCurrentAlarmVO struct {
 	GatewayID            string `json:"gatewayId"`
 	AlarmForSerialNumber string `json:"alarmEqSn"`
 	AlarmCode            string `json:"alarmCode"`
+	CommonAlarmCode      string `json:"commonAlarmCode"`
 	Time                 string `json:"time"`
 	Name                 string `json:"logName"`
 	Explanation          string `json:"alarmExplanation"`
 	Plan                 string `json:"plan"`
-	// TODO: what does level mean? Should we only stop updating based on certain levels?
+	Level                int    `json:"level"`
 }
 
 type franklinDeviceCompositeInfoResult struct {
@@ -2067,9 +2080,10 @@ type franklinRuntimeData struct {
 	RunStatus   franklinRunStatus   `json:"run_status"`
 	OffGridFlag franklinOffGridFlag `json:"offGirdFlag"` // misspelled in API
 
-	SOC       float64   `json:"soc"`
-	Timestamp int64     `json:"timestamp"`
-	EachSOC   []float64 `json:"fhpSoc"`
+	SOC          float64   `json:"soc"`
+	Timestamp    int64     `json:"timestamp"`
+	EachSOC      []float64 `json:"fhpSoc"`
+	BMSHeatState []int     `json:"bms_heat_state"`
 
 	PowerBattery     float64   `json:"p_fhp"`
 	PowerSolar       float64   `json:"p_sun"`
