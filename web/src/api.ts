@@ -948,4 +948,110 @@ export const updateNotificationSettings = async (siteID: string, settings: UserN
     }
 };
 
+export const AppType = {
+    APIKey: 1,
+    OAuth: 2,
+} as const;
 
+export type AppType = typeof AppType[keyof typeof AppType];
+
+export interface UserApp {
+    id: string;
+    name: string;
+    type: AppType;
+    siteID: string;
+    tsCreated: string;
+}
+
+export interface CreateAppResponse {
+    app: UserApp;
+    token: string;
+}
+
+export const fetchApps = async (siteID: string): Promise<UserApp[]> => {
+    const query = new URLSearchParams({ siteID });
+    const response = await fetch(`/api/apps?${query.toString()}`);
+    if (response.status === 501) {
+        return [];
+    }
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Failed to fetch connected apps'));
+    }
+    const data: { apps?: UserApp[] } = await response.json();
+    return data.apps || [];
+};
+
+export const createApp = async (siteID: string, name: string): Promise<CreateAppResponse> => {
+    const response = await fetch('/api/apps/new', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ siteID, name }),
+    });
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Failed to create API key'));
+    }
+    return response.json();
+};
+
+export const revokeApp = async (siteID: string, id: string): Promise<void> => {
+    const response = await fetch('/api/apps/revoke', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ siteID, id }),
+    });
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Failed to revoke app'));
+    }
+};
+
+export interface OAuthClientInfo {
+    clientName: string;
+    redirectURI: string;
+}
+
+export const fetchOAuthClientInfo = async (params: {
+    clientID: string;
+    redirectURI: string;
+    responseType: string;
+    codeChallenge: string;
+    codeChallengeMethod: string;
+}): Promise<OAuthClientInfo> => {
+    const query = new URLSearchParams({
+        client_id: params.clientID,
+        redirect_uri: params.redirectURI,
+        response_type: params.responseType,
+        code_challenge: params.codeChallenge,
+        code_challenge_method: params.codeChallengeMethod,
+    });
+    const response = await fetch(`/api/oauth/client?${query.toString()}`);
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Invalid OAuth authorization request'));
+    }
+    return response.json();
+};
+
+export const approveOAuthClient = async (payload: {
+    siteID: string;
+    clientID: string;
+    redirectURI: string;
+    responseType: string;
+    codeChallenge: string;
+    codeChallengeMethod: string;
+    state?: string;
+}): Promise<{ redirectURL: string }> => {
+    const response = await fetch('/api/oauth/approve', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Failed to approve connected app'));
+    }
+    return response.json();
+};

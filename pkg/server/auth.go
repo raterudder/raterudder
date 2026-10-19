@@ -26,6 +26,8 @@ type pathAttributes struct {
 	ignoreSiteID       bool
 	optionalSiteID     bool
 	allowAllSites      bool
+	allowAppToken      bool
+	allowQueryToken    bool
 }
 
 var routeAuthAttributes = map[string]pathAttributes{
@@ -54,6 +56,7 @@ var routeAuthAttributes = map[string]pathAttributes{
 	"/api/notifications/click":          {allowNoLogin: true, ignoreSiteID: true},
 	"/api/history/savings":              {allowAllSites: true},
 	"/api/history/actionsAndSavings":    {allowAllSites: true},
+	"/api/oauth/client":                 {ignoreUserNotFound: true, ignoreSiteID: true},
 }
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
@@ -77,6 +80,34 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		ignoreSiteID := attrs.ignoreSiteID
 		optionalSiteID := attrs.optionalSiteID
 		allowAllSites := attrs.allowAllSites
+		allowAppToken := attrs.allowAppToken
+		allowQueryToken := attrs.allowQueryToken
+
+		setWWWAuthenticate := func() {
+			if allowAppToken {
+				w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata="%s/.well-known/oauth-protected-resource"`, requestBaseURL(r)))
+			}
+		}
+
+		// Check if request carries a RateRudder app token (rr_...)
+		var rawAppToken string
+		if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer "+appTokenPrefix) {
+			rawAppToken = strings.TrimPrefix(authHeader, "Bearer ")
+		} else if allowQueryToken {
+			q := r.URL.Query()
+			if qToken := q.Get("token"); strings.HasPrefix(qToken, appTokenPrefix) {
+				rawAppToken = qToken
+				// remove token so it doesn't end up in logs
+				q.Del("token")
+				r.URL.RawQuery = q.Encode()
+			}
+		}
+
+		if rawAppToken != "" && !allowAppToken {
+			log.Ctx(ctx).WarnContext(ctx, "app token not allowed on endpoint", slog.String("path", r.URL.Path))
+			writeJSONError(w, "app token not allowed on this endpoint", http.StatusForbidden)
+			return
+		}
 
 		// extract SiteID
 		var siteID string
@@ -117,6 +148,8 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		var email string
 		var userID string
 		var activeSession *SessionData
+		var activeAppToken *AppTokenData
+		var activeAppName string
 		// user might be a mock/fake user if this is bypassAuth or singleSite
 		var user types.User
 		var authViaUpdateSpecific bool
@@ -131,8 +164,32 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		} else {
 			var authSuccess bool
 
+			// Check app token auth on allowed endpoints
+			if rawAppToken != "" && allowAppToken {
+				if len(s.appsEncryptionKey) != 32 || s.singleSite {
+					writeJSONError(w, "apps not enabled", http.StatusNotImplemented)
+					return
+				}
+				appToken, err := s.verifyAppToken(rawAppToken)
+				if err != nil {
+					log.Ctx(ctx).WarnContext(ctx, "app token validation failed", slog.Any("error", err))
+					setWWWAuthenticate()
+					writeJSONError(w, "invalid app token", http.StatusUnauthorized)
+					return
+				}
+				if siteID != "" && siteID != appToken.SiteID {
+					log.Ctx(ctx).WarnContext(ctx, "siteID does not match app token", slog.String("siteID", siteID), slog.String("appSiteID", appToken.SiteID), slog.String("appID", appToken.AppID))
+					writeJSONError(w, "siteID does not match app token", http.StatusBadRequest)
+					return
+				}
+				userID = appToken.UserID
+				siteID = appToken.SiteID
+				activeAppToken = appToken
+				authSuccess = true
+			}
+
 			// Check /api/update specific auth
-			if isUpdatePath && s.updateSpecificEmail != "" {
+			if !authSuccess && isUpdatePath && s.updateSpecificEmail != "" {
 				authHeader := r.Header.Get("Authorization")
 				if authHeader != "" {
 					if !strings.HasPrefix(authHeader, "Bearer ") {
@@ -209,6 +266,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 							authSuccess = true
 						}
 					} else if !allowNoLogin {
+						setWWWAuthenticate()
 						writeJSONError(w, "missing auth cookie", http.StatusUnauthorized)
 						return
 					}
@@ -248,7 +306,10 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 							})
 						} else if errors.Is(err, storage.ErrUserNotFound) {
 							log.Ctx(ctx).WarnContext(ctx, "user not found", slog.String("userID", userID), slog.String("email", email))
-							s.clearCookie(w)
+							if activeAppToken == nil {
+								s.clearCookie(w)
+							}
+							setWWWAuthenticate()
 							writeJSONError(w, "user lookup failed", http.StatusUnauthorized)
 							return
 						} else {
@@ -263,6 +324,24 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 								log.Ctx(ctx).WarnContext(ctx, "session secret mismatch or revoked", slog.String("userID", userID), slog.String("email", email))
 								s.clearCookie(w)
 								writeJSONError(w, "session invalid or revoked", http.StatusUnauthorized)
+								return
+							}
+						}
+
+						// If authenticated via app token, verify app exists on user for this site and is not pending
+						if activeAppToken != nil {
+							appValid := false
+							for _, app := range user.Apps {
+								if app.ID == activeAppToken.AppID && app.SiteID == activeAppToken.SiteID && app.PendingCodeHash == "" {
+									appValid = true
+									activeAppName = app.Name
+									break
+								}
+							}
+							if !appValid {
+								log.Ctx(ctx).WarnContext(ctx, "app token invalid or revoked", slog.String("userID", userID), slog.String("appID", activeAppToken.AppID))
+								setWWWAuthenticate()
+								writeJSONError(w, "app token invalid or revoked", http.StatusUnauthorized)
 								return
 							}
 						}
@@ -332,6 +411,12 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 		if siteID != "" {
 			authAttrs = append(authAttrs, slog.String("authSiteID", siteID))
+		}
+		if activeAppToken != nil {
+			authAttrs = append(authAttrs, slog.String("authAppID", activeAppToken.AppID))
+			if activeAppName != "" {
+				authAttrs = append(authAttrs, slog.String("authAppName", activeAppName))
+			}
 		}
 		if len(authAttrs) > 0 {
 			ctx = log.With(ctx, log.Ctx(ctx).With(slog.Group("auth", authAttrs...)))

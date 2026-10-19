@@ -8,14 +8,17 @@ import (
 	"crypto/rsa"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/coreos/go-oidc/v3/oidc/oidctest"
+	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
@@ -748,6 +751,274 @@ func TestAuthMiddleware(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, w.Code)
 		assert.Empty(t, w.Result().Cookies(), "cookies should not be cleared on transient storage error")
 		assert.True(t, mocks.AssertExpectations(t))
+	})
+
+	t.Run("App Token Authentication", func(t *testing.T) {
+		const (
+			allowedPath      = "/api/test-app-allowed"
+			allowedQueryPath = "/api/test-app-query-allowed"
+		)
+		routeAuthAttributes[allowedPath] = pathAttributes{
+			allowAppToken: true,
+		}
+		routeAuthAttributes[allowedQueryPath] = pathAttributes{
+			allowAppToken:   true,
+			allowQueryToken: true,
+		}
+		defer func() {
+			delete(routeAuthAttributes, allowedPath)
+			delete(routeAuthAttributes, allowedQueryPath)
+			server.appsEncryptionKey = ""
+		}()
+
+		server.appsEncryptionKey = testAppsEncryptionKey
+		activeToken, err := server.createAppToken("google:user@example.com", "site1", "app-active", types.AppTypeAPIKey)
+		require.NoError(t, err)
+		pendingToken, err := server.createAppToken("google:user@example.com", "site1", "app-pending", types.AppTypeOAuth)
+		require.NoError(t, err)
+		revokedToken, err := server.createAppToken("google:user@example.com", "site1", "app-revoked", types.AppTypeAPIKey)
+		require.NoError(t, err)
+
+		t.Run("DisallowedEndpointRejectsAppToken", func(t *testing.T) {
+			mocks := new(mockStorage)
+			server.storage = mocks
+			server.singleSite = false
+
+			for _, p := range []string{"/api/test", "/api/settings", "/api/forecast", "/api/apps"} {
+				w := httptest.NewRecorder()
+				req := createReq("GET", p, nil, nil)
+				req.Header.Set("Authorization", "Bearer "+activeToken)
+
+				server.authMiddleware(testHandler).ServeHTTP(w, req)
+				assert.Equal(t, http.StatusForbidden, w.Code, "path %s should reject app tokens", p)
+			}
+			assert.True(t, mocks.AssertExpectations(t))
+		})
+
+		t.Run("AppsNotEnabledReturnsNotImplemented", func(t *testing.T) {
+			mocks := new(mockStorage)
+			server.storage = mocks
+			server.singleSite = false
+			server.appsEncryptionKey = ""
+			defer func() { server.appsEncryptionKey = testAppsEncryptionKey }()
+
+			w := httptest.NewRecorder()
+			req := createReq("GET", allowedPath, nil, nil)
+			req.Header.Set("Authorization", "Bearer "+activeToken)
+
+			server.authMiddleware(testHandler).ServeHTTP(w, req)
+			assert.Equal(t, http.StatusNotImplemented, w.Code)
+			assert.True(t, mocks.AssertExpectations(t))
+		})
+
+		t.Run("MalformedAppTokenReturnsUnauthorized", func(t *testing.T) {
+			mocks := new(mockStorage)
+			server.storage = mocks
+			server.singleSite = false
+
+			w := httptest.NewRecorder()
+			req := createReq("GET", allowedPath, nil, nil)
+			req.Header.Set("Authorization", "Bearer rr_malformed-token")
+
+			server.authMiddleware(testHandler).ServeHTTP(w, req)
+			assert.Equal(t, http.StatusUnauthorized, w.Code)
+			assert.True(t, mocks.AssertExpectations(t))
+		})
+
+		t.Run("ValidBearerTokenAuthenticatesAndSetsSlogAttrs", func(t *testing.T) {
+			mocks := new(mockStorage)
+			server.storage = mocks
+			server.singleSite = false
+
+			mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+				ID:    "google:user@example.com",
+				Email: "user@example.com",
+				Sites: []types.UserSite{{ID: "site1"}, {ID: "site2"}},
+				Apps: []types.UserApp{
+					{
+						ID:     "app-active",
+						Name:   "Claude MCP",
+						Type:   types.AppTypeAPIKey,
+						SiteID: "site1",
+					},
+				},
+			}, nil).Once()
+
+			mocks.On("GetSite", mock.Anything, "site1").Return(types.Site{
+				ID:          "site1",
+				Permissions: []types.SitePermissions{{UserID: "google:user@example.com"}},
+			}, nil).Once()
+
+			var logBuf bytes.Buffer
+			bufLogger := slog.New(slog.NewJSONHandler(&logBuf, nil))
+
+			loggingHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				log.Ctx(r.Context()).InfoContext(r.Context(), "handler invoked")
+				testHandler.ServeHTTP(w, r)
+			})
+
+			w := httptest.NewRecorder()
+			req := createReq("POST", allowedPath, map[string]string{"jsonrpc": "2.0"}, nil)
+			req = req.WithContext(log.With(req.Context(), bufLogger))
+			req.Header.Set("Authorization", "Bearer "+activeToken)
+
+			server.authMiddleware(loggingHandler).ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			assert.Equal(t, "site1", w.Header().Get("X-Site-ID"))
+			assert.Equal(t, "user@example.com", w.Header().Get("X-Email"))
+			assert.Equal(t, "true", w.Header().Get("X-Admin"))
+
+			logOutput := logBuf.String()
+			assert.Contains(t, logOutput, `"authUserID":"google:user@example.com"`)
+			assert.Contains(t, logOutput, `"authSiteID":"site1"`)
+			assert.Contains(t, logOutput, `"authAppID":"app-active"`)
+			assert.Contains(t, logOutput, `"authAppName":"Claude MCP"`)
+			assert.True(t, mocks.AssertExpectations(t))
+		})
+
+		t.Run("QueryTokenAllowedVsDisallowed", func(t *testing.T) {
+			mocks := new(mockStorage)
+			server.storage = mocks
+			server.singleSite = false
+
+			mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+				ID:    "google:user@example.com",
+				Email: "user@example.com",
+				Sites: []types.UserSite{{ID: "site1"}},
+				Apps: []types.UserApp{
+					{
+						ID:     "app-active",
+						Name:   "Claude MCP",
+						Type:   types.AppTypeAPIKey,
+						SiteID: "site1",
+					},
+				},
+			}, nil).Once()
+
+			mocks.On("GetSite", mock.Anything, "site1").Return(types.Site{
+				ID:          "site1",
+				Permissions: []types.SitePermissions{{UserID: "google:user@example.com"}},
+			}, nil).Once()
+
+			// Allowed on route with allowQueryToken: true
+			wOK := httptest.NewRecorder()
+			reqOK := createReq("GET", allowedQueryPath+"?token="+url.QueryEscape(activeToken), nil, nil)
+			server.authMiddleware(testHandler).ServeHTTP(wOK, reqOK)
+			assert.Equal(t, http.StatusOK, wOK.Code)
+			assert.Equal(t, "site1", wOK.Header().Get("X-Site-ID"))
+
+			// Ignored on route with allowQueryToken: false -> 401 Unauthorized
+			wDisallowed := httptest.NewRecorder()
+			reqDisallowed := createReq("GET", allowedPath+"?token="+url.QueryEscape(activeToken), nil, nil)
+			server.authMiddleware(testHandler).ServeHTTP(wDisallowed, reqDisallowed)
+			assert.Equal(t, http.StatusUnauthorized, wDisallowed.Code)
+
+			assert.True(t, mocks.AssertExpectations(t))
+		})
+
+		t.Run("SiteIDMatchAndMismatch", func(t *testing.T) {
+			mocks := new(mockStorage)
+			server.storage = mocks
+			server.singleSite = false
+
+			// Matching siteID in query param succeeds
+			mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+				ID:    "google:user@example.com",
+				Email: "user@example.com",
+				Sites: []types.UserSite{{ID: "site1"}, {ID: "site2"}},
+				Apps: []types.UserApp{
+					{
+						ID:     "app-active",
+						Name:   "Claude MCP",
+						Type:   types.AppTypeAPIKey,
+						SiteID: "site1",
+					},
+				},
+			}, nil).Once()
+			mocks.On("GetSite", mock.Anything, "site1").Return(types.Site{
+				ID:          "site1",
+				Permissions: []types.SitePermissions{{UserID: "google:user@example.com"}},
+			}, nil).Once()
+
+			wMatch := httptest.NewRecorder()
+			reqMatch := createReq("GET", allowedPath+"?siteID=site1", nil, nil)
+			reqMatch.Header.Set("Authorization", "Bearer "+activeToken)
+			server.authMiddleware(testHandler).ServeHTTP(wMatch, reqMatch)
+			assert.Equal(t, http.StatusOK, wMatch.Code)
+			assert.Equal(t, "site1", wMatch.Header().Get("X-Site-ID"))
+
+			// Mismatched siteID in GET query param fails before DB lookup
+			wQueryMismatch := httptest.NewRecorder()
+			reqQueryMismatch := createReq("GET", allowedPath+"?siteID=site2", nil, nil)
+			reqQueryMismatch.Header.Set("Authorization", "Bearer "+activeToken)
+			server.authMiddleware(testHandler).ServeHTTP(wQueryMismatch, reqQueryMismatch)
+			assert.Equal(t, http.StatusBadRequest, wQueryMismatch.Code)
+			assert.Contains(t, wQueryMismatch.Body.String(), "siteID does not match app token")
+
+			// Mismatched siteID in POST JSON body fails before DB lookup
+			wBodyMismatch := httptest.NewRecorder()
+			reqBodyMismatch := createReq("POST", allowedPath, map[string]string{"siteID": "site2"}, nil)
+			reqBodyMismatch.Header.Set("Authorization", "Bearer "+activeToken)
+			server.authMiddleware(testHandler).ServeHTTP(wBodyMismatch, reqBodyMismatch)
+			assert.Equal(t, http.StatusBadRequest, wBodyMismatch.Code)
+			assert.Contains(t, wBodyMismatch.Body.String(), "siteID does not match app token")
+
+			assert.True(t, mocks.AssertExpectations(t))
+		})
+
+		t.Run("PendingAndRevokedAppTokensRejected", func(t *testing.T) {
+			mocks := new(mockStorage)
+			server.storage = mocks
+			server.singleSite = false
+
+			userWithPendingOnly := types.User{
+				ID:    "google:user@example.com",
+				Email: "user@example.com",
+				Sites: []types.UserSite{{ID: "site1"}},
+				Apps: []types.UserApp{
+					{
+						ID:              "app-pending",
+						Name:            "Pending OAuth",
+						Type:            types.AppTypeOAuth,
+						SiteID:          "site1",
+						PendingCodeHash: "still-pending",
+					},
+				},
+			}
+
+			mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(userWithPendingOnly, nil).Twice()
+
+			// Pending app token -> 401
+			wPending := httptest.NewRecorder()
+			reqPending := createReq("GET", allowedPath, nil, nil)
+			reqPending.Header.Set("Authorization", "Bearer "+pendingToken)
+			server.authMiddleware(testHandler).ServeHTTP(wPending, reqPending)
+			assert.Equal(t, http.StatusUnauthorized, wPending.Code)
+
+			// Revoked/missing app token -> 401
+			wRevoked := httptest.NewRecorder()
+			reqRevoked := createReq("GET", allowedPath, nil, nil)
+			reqRevoked.Header.Set("Authorization", "Bearer "+revokedToken)
+			server.authMiddleware(testHandler).ServeHTTP(wRevoked, reqRevoked)
+			assert.Equal(t, http.StatusUnauthorized, wRevoked.Code)
+
+			assert.True(t, mocks.AssertExpectations(t))
+		})
+
+		t.Run("UnauthenticatedReturnsWWWAuthenticateHeader", func(t *testing.T) {
+			mocks := new(mockStorage)
+			server.storage = mocks
+			server.singleSite = false
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "https://staging.raterudder.com"+allowedPath, nil)
+			server.authMiddleware(testHandler).ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusUnauthorized, w.Code)
+			assert.Contains(t, w.Header().Get("WWW-Authenticate"), `Bearer resource_metadata="https://staging.raterudder.com/.well-known/oauth-protected-resource"`)
+			assert.True(t, mocks.AssertExpectations(t))
+		})
 	})
 }
 

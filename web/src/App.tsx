@@ -26,6 +26,7 @@ import GettingStartedPage from './pages/GettingStartedPage';
 import ChangelogPage from './pages/ChangelogPage';
 import SupportedUtilitiesPage from './pages/SupportedUtilitiesPage';
 import TeslaCallback from './pages/TeslaCallback';
+import OAuthAuthorizePage from './pages/OAuthAuthorizePage';
 import { checkAndStoreEnabledParam } from './utils/enabledProviders';
 
 const isMarketingRoute = (path: string) =>
@@ -238,7 +239,8 @@ function AppContent() {
         if (redirectOnLogin && status.loggedIn) {
             const queryParams = new URLSearchParams(window.location.search);
             const from = queryParams.get('from');
-            if (from && from.startsWith('/welcome') && from.includes('requestUtility')) {
+            const isSafeRelativeFrom = Boolean(from && from.startsWith('/') && !from.startsWith('//') && !from.startsWith('/\\'));
+            if (isSafeRelativeFrom && from && (from.startsWith('/oauth/authorize') || (from.startsWith('/welcome') && from.includes('requestUtility')))) {
                 navigate(from);
             } else if (newSites.length === 0) {
                 navigate('/welcome');
@@ -256,7 +258,7 @@ function AppContent() {
                     if (!settingsData.utilityProvider || !settingsData.ess) {
                         navigate('/settings');
                     } else {
-                        if (from && from.startsWith('/')) {
+                        if (isSafeRelativeFrom && from) {
                             navigate(from);
                         } else {
                             navigate('/dashboard');
@@ -481,6 +483,11 @@ function AppContent() {
                             <Route path="/admin">
                                 <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
                                     <AdminPage />
+                                </ProtectedRoute>
+                            </Route>
+                            <Route path="/oauth/authorize">
+                                <ProtectedRoute loggedIn={loggedIn} loading={showLoading}>
+                                    <OAuthAuthorizePage sites={effectiveSites} selectedSiteID={effectiveSiteID} />
                                 </ProtectedRoute>
                             </Route>
 

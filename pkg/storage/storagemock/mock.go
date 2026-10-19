@@ -326,3 +326,18 @@ func (m *MockDatabase) RecordNotificationClick(ctx context.Context, siteID strin
 	args := m.Called(ctx, siteID, month, logID, clickedAt)
 	return args.Error(0)
 }
+
+func (m *MockDatabase) AddUserApp(ctx context.Context, userID string, app types.UserApp) error {
+	args := m.Called(ctx, userID, app)
+	return args.Error(0)
+}
+
+func (m *MockDatabase) RemoveUserApp(ctx context.Context, userID string, siteID string, appID string) error {
+	args := m.Called(ctx, userID, siteID, appID)
+	return args.Error(0)
+}
+
+func (m *MockDatabase) ReplaceUserApp(ctx context.Context, userID string, newApp types.UserApp, opts storage.ReplaceUserAppOptions) error {
+	args := m.Called(ctx, userID, newApp, opts)
+	return args.Error(0)
+}

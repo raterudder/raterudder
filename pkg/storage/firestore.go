@@ -2507,6 +2507,189 @@ func (f *FirestoreProvider) ReplaceUserPushSubscription(
 	})
 }
 
+// AddUserApp adds or updates a UserApp on a user in a transaction.
+func (f *FirestoreProvider) AddUserApp(ctx context.Context, userID string, app types.UserApp) error {
+	if userID == "" {
+		return errors.New("userID cannot be empty")
+	}
+	if app.ID == "" {
+		return errors.New("app ID cannot be empty")
+	}
+	if app.SiteID == "" {
+		return errors.New("app siteID cannot be empty")
+	}
+	docRef := f.client.Collection("users").Doc(userID)
+
+	return f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		doc, err := tx.Get(docRef)
+		if err != nil {
+			if status.Code(err) == codes.NotFound {
+				return fmt.Errorf("%w: %s", ErrUserNotFound, userID)
+			}
+			return fmt.Errorf("failed to get user %s: %w", userID, err)
+		}
+
+		val, err := doc.DataAt("json")
+		if err != nil {
+			return fmt.Errorf("user %s missing json: %w", userID, err)
+		}
+		jsonStr, ok := val.(string)
+		if !ok {
+			return fmt.Errorf("user %s json is not a string", userID)
+		}
+
+		var user types.User
+		if err := json.Unmarshal([]byte(jsonStr), &user); err != nil {
+			return fmt.Errorf("failed to unmarshal user %s: %w", userID, err)
+		}
+
+		found := false
+		for i, existing := range user.Apps {
+			if existing.ID == app.ID {
+				user.Apps[i] = app
+				found = true
+				break
+			}
+		}
+		if !found {
+			user.Apps = append(user.Apps, app)
+		}
+
+		userJSON, err := json.Marshal(user)
+		if err != nil {
+			return fmt.Errorf("failed to marshal user %s: %w", userID, err)
+		}
+
+		return tx.Set(docRef, map[string]any{
+			"json": string(userJSON),
+		}, firestore.MergeAll)
+	})
+}
+
+// RemoveUserApp removes a UserApp by ID and siteID from a user in a transaction.
+func (f *FirestoreProvider) RemoveUserApp(ctx context.Context, userID string, siteID string, appID string) error {
+	if userID == "" {
+		return errors.New("userID cannot be empty")
+	}
+	if siteID == "" {
+		return errors.New("siteID cannot be empty")
+	}
+	if appID == "" {
+		return errors.New("appID cannot be empty")
+	}
+	docRef := f.client.Collection("users").Doc(userID)
+
+	return f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		doc, err := tx.Get(docRef)
+		if err != nil {
+			if status.Code(err) == codes.NotFound {
+				return fmt.Errorf("%w: %s", ErrUserNotFound, userID)
+			}
+			return fmt.Errorf("failed to get user %s: %w", userID, err)
+		}
+
+		val, err := doc.DataAt("json")
+		if err != nil {
+			return fmt.Errorf("user %s missing json: %w", userID, err)
+		}
+		jsonStr, ok := val.(string)
+		if !ok {
+			return fmt.Errorf("user %s json is not a string", userID)
+		}
+
+		var user types.User
+		if err := json.Unmarshal([]byte(jsonStr), &user); err != nil {
+			return fmt.Errorf("failed to unmarshal user %s: %w", userID, err)
+		}
+
+		origLen := len(user.Apps)
+		user.Apps = slices.DeleteFunc(user.Apps, func(existing types.UserApp) bool {
+			return existing.ID == appID && existing.SiteID == siteID
+		})
+		if len(user.Apps) == origLen {
+			return fmt.Errorf("%w: %s", ErrAppNotFound, appID)
+		}
+
+		userJSON, err := json.Marshal(user)
+		if err != nil {
+			return fmt.Errorf("failed to marshal user %s: %w", userID, err)
+		}
+
+		return tx.Set(docRef, map[string]any{
+			"json": string(userJSON),
+		}, firestore.MergeAll)
+	})
+}
+
+// ReplaceUserApp replaces an existing UserApp on a user in a transaction after verifying
+// any preconditions configured in opts.
+func (f *FirestoreProvider) ReplaceUserApp(ctx context.Context, userID string, newApp types.UserApp, opts ReplaceUserAppOptions) error {
+	if userID == "" {
+		return errors.New("userID cannot be empty")
+	}
+	if newApp.ID == "" {
+		return errors.New("app ID cannot be empty")
+	}
+	if newApp.SiteID == "" {
+		return errors.New("app siteID cannot be empty")
+	}
+	docRef := f.client.Collection("users").Doc(userID)
+
+	return f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		doc, err := tx.Get(docRef)
+		if err != nil {
+			if status.Code(err) == codes.NotFound {
+				return fmt.Errorf("%w: %s", ErrUserNotFound, userID)
+			}
+			return fmt.Errorf("failed to get user %s: %w", userID, err)
+		}
+
+		val, err := doc.DataAt("json")
+		if err != nil {
+			return fmt.Errorf("user %s missing json: %w", userID, err)
+		}
+		jsonStr, ok := val.(string)
+		if !ok {
+			return fmt.Errorf("user %s json is not a string", userID)
+		}
+
+		var user types.User
+		if err := json.Unmarshal([]byte(jsonStr), &user); err != nil {
+			return fmt.Errorf("failed to unmarshal user %s: %w", userID, err)
+		}
+
+		targetIdx := -1
+		for i, existing := range user.Apps {
+			if existing.ID == newApp.ID {
+				targetIdx = i
+				break
+			}
+		}
+		if targetIdx == -1 {
+			return fmt.Errorf("%w: %s", ErrAppNotFound, newApp.ID)
+		}
+
+		existing := user.Apps[targetIdx]
+		if existing.SiteID != newApp.SiteID {
+			return fmt.Errorf("%w: %s", ErrAppConflict, newApp.ID)
+		}
+		if opts.ExpectedPendingCodeHash != nil && subtle.ConstantTimeCompare([]byte(existing.PendingCodeHash), []byte(*opts.ExpectedPendingCodeHash)) != 1 {
+			return fmt.Errorf("%w: %s", ErrAppConflict, newApp.ID)
+		}
+
+		user.Apps[targetIdx] = newApp
+
+		userJSON, err := json.Marshal(user)
+		if err != nil {
+			return fmt.Errorf("failed to marshal user %s: %w", userID, err)
+		}
+
+		return tx.Set(docRef, map[string]any{
+			"json": string(userJSON),
+		}, firestore.MergeAll)
+	})
+}
+
 // UpdateSiteNotificationSettings updates notification preferences for a specific user on a site's settings in a transaction.
 // If settings is an empty struct (types.UserNotificationSettings{}), the user's notification entry is deleted.
 func (f *FirestoreProvider) UpdateSiteNotificationSettings(ctx context.Context, siteID string, userID string, settings types.UserNotificationSettings) error {

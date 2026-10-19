@@ -221,6 +221,51 @@ func TestDeleteHandlers(t *testing.T) {
 			store.AssertNotCalled(t, "GetSite", mock.Anything, mock.Anything)
 			store.AssertExpectations(t)
 		})
+
+		t.Run("FiltersOutDeletedSiteApps", func(t *testing.T) {
+			store := &mockStorage{}
+			s := newServer(store)
+
+			siteID := "site-to-delete"
+			site := types.Site{
+				ID: siteID,
+				Permissions: []types.SitePermissions{
+					{UserID: "user1"},
+				},
+			}
+
+			user1 := types.User{
+				ID:    "user1",
+				Admin: true,
+				Sites: []types.UserSite{
+					{ID: "site-to-delete", Name: "Deleted Site"},
+					{ID: "other-site", Name: "Other Site"},
+				},
+				Apps: []types.UserApp{
+					{ID: "app-deleted-1", Name: "Deleted Key", Type: types.AppTypeAPIKey, SiteID: "site-to-delete"},
+					{ID: "app-kept", Name: "Kept Key", Type: types.AppTypeOAuth, SiteID: "other-site"},
+					{ID: "app-deleted-2", Name: "Deleted OAuth", Type: types.AppTypeOAuth, SiteID: "site-to-delete"},
+				},
+			}
+
+			store.On("GetSite", mock.Anything, siteID).Return(site, nil).Once()
+			store.On("GetUser", mock.Anything, "user1").Return(user1, nil).Once()
+			store.On("UpdateUser", mock.Anything, mock.MatchedBy(func(u types.User) bool {
+				return u.ID == "user1" &&
+					len(u.Sites) == 1 && u.Sites[0].ID == "other-site" &&
+					len(u.Apps) == 1 && u.Apps[0].ID == "app-kept" && u.Apps[0].SiteID == "other-site"
+			})).Return(nil).Once()
+			store.On("DeleteSite", mock.Anything, siteID).Return(nil).Once()
+
+			req := httptest.NewRequest(http.MethodPost, "/api/delete/site", nil)
+			req = withUser(req, types.User{ID: "user1", Admin: true})
+			req = withSiteID(req, siteID)
+			w := httptest.NewRecorder()
+
+			s.handleDeleteSite(w, req)
+			assert.Equal(t, http.StatusOK, w.Code)
+			store.AssertExpectations(t)
+		})
 	})
 
 	t.Run("DeleteUser", func(t *testing.T) {

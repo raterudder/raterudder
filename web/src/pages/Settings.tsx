@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useLocation } from 'wouter';
-import { updateSettings, fetchUtilities, fetchESSList, submitESSStage, deleteSite, deleteUser, fetchUtilityPeriods, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type ESSProviderInfo, type ESSCredentialField, type CredentialsPayload, type UserSite, type TimePeriod, type MinBatterySOCPeriod } from '../api';
+import { updateSettings, fetchUtilities, fetchESSList, submitESSStage, deleteSite, deleteUser, fetchUtilityPeriods, fetchApps, createApp, revokeApp, AppType, type Settings as SettingsType, type UtilityProviderInfo, type UtilityRateOption, type ESSProviderInfo, type ESSCredentialField, type CredentialsPayload, type UserSite, type TimePeriod, type MinBatterySOCPeriod, type UserApp } from '../api';
 import { Field } from '@base-ui/react/field';
 import { Input } from '@base-ui/react/input';
 import { Button } from '@base-ui/react/button';
@@ -860,7 +860,15 @@ const Settings = ({
     const [editBattery, setEditBattery] = useState(false);
     const [batteryError, setBatteryError] = useState<string | null>(null);
 
+    const [apps, setApps] = useState<UserApp[]>([]);
+    const [newAppName, setNewAppName] = useState('');
+    const [createdToken, setCreatedToken] = useState<string | null>(null);
+    const [isCreatingApp, setIsCreatingApp] = useState(false);
+    const [appError, setAppError] = useState<string | null>(null);
+    const [copiedToken, setCopiedToken] = useState(false);
+
     const isEVFeatureEnabled = settings?.release === 'staging' || (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('ev') === 'true') || !!settings?.evChargingStandby || (!!settings?.evChargingPeriods && settings.evChargingPeriods.length > 0);
+    const isAppsFeatureEnabled = settings?.release === 'staging' || apps.length > 0;
     const hasNamedRatePeriods = utilityPeriods !== null ? utilityPeriods.some(p => p.name && p.name !== '') : true;
 
     const validateUtilityAndPeriods = async (
@@ -1142,10 +1150,47 @@ const Settings = ({
 
         loadLists();
 
+        fetchApps(siteID)
+            .then(data => {
+                if (active) setApps(data || []);
+            })
+            .catch(() => {
+                if (active) setApps([]);
+            });
+
         return () => {
             active = false;
         };
     }, [siteID]);
+
+    const handleCreateApp = async () => {
+        if (!siteID || !newAppName.trim()) return;
+        setIsCreatingApp(true);
+        setAppError(null);
+        setCreatedToken(null);
+        try {
+            const res = await createApp(siteID, newAppName.trim());
+            setApps(prev => [...prev, res.app]);
+            setCreatedToken(res.token);
+            setNewAppName('');
+            setCopiedToken(false);
+        } catch (err) {
+            setAppError(err instanceof Error ? err.message : 'Failed to create API key');
+        } finally {
+            setIsCreatingApp(false);
+        }
+    };
+
+    const handleRevokeApp = async (id: string) => {
+        if (!siteID) return;
+        setAppError(null);
+        try {
+            await revokeApp(siteID, id);
+            setApps(prev => prev.filter(a => a.id !== id));
+        } catch (err) {
+            setAppError(err instanceof Error ? err.message : 'Failed to revoke app');
+        }
+    };
 
     useEffect(() => {
         if (parentSettings) {
@@ -2911,6 +2956,128 @@ const Settings = ({
                     )}
                 </div>
             </form>
+
+            {isAppsFeatureEnabled && (
+                <div className="settings-section" data-testid="connected-apps-section" style={{ marginTop: '2rem' }}>
+                    <div className="section-header">
+                        <h3>Connected Apps</h3>
+                    </div>
+                    <p className="section-description" style={{ marginBottom: '1rem' }}>
+                        Manage API keys and OAuth connections that have read-only access to this site.
+                    </p>
+
+                    {appError && <div className="error-message" style={{ marginBottom: '1rem' }}>{appError}</div>}
+
+                    {createdToken && (
+                        <div className="warning-notice" data-testid="created-app-token-banner" style={{ marginBottom: '1.25rem' }}>
+                            <div style={{ marginBottom: '0.5rem' }}>
+                                Copy your new API key now. It will not be shown again:
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                                <code
+                                    data-testid="created-app-token"
+                                    style={{
+                                        flex: 1,
+                                        padding: '0.5rem 0.75rem',
+                                        background: 'rgba(0,0,0,0.2)',
+                                        borderRadius: 'var(--radius-sm, 6px)',
+                                        wordBreak: 'break-all',
+                                        fontFamily: 'monospace',
+                                        fontSize: '0.85rem'
+                                    }}
+                                >
+                                    {createdToken}
+                                </code>
+                                <Button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    onClick={() => {
+                                        navigator.clipboard?.writeText(createdToken);
+                                        setCopiedToken(true);
+                                    }}
+                                >
+                                    {copiedToken ? 'Copied!' : 'Copy'}
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+
+                    {apps.length > 0 && (
+                        <div className="connected-apps-list" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.25rem' }}>
+                            {apps.map(app => (
+                                <div
+                                    key={app.id}
+                                    data-testid={`app-row-${app.id}`}
+                                    style={{
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        alignItems: 'center',
+                                        padding: '0.875rem 1rem',
+                                        background: 'var(--surface-container, rgba(255,255,255,0.03))',
+                                        border: '1px solid var(--outline-variant)',
+                                        borderRadius: 'var(--radius-md)',
+                                        gap: '1rem'
+                                    }}
+                                >
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', minWidth: 0 }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                            <span style={{ fontWeight: 700, color: 'var(--on-surface)' }}>{app.name}</span>
+                                            <span
+                                                style={{
+                                                    fontSize: '0.7rem',
+                                                    fontWeight: 700,
+                                                    textTransform: 'uppercase',
+                                                    padding: '0.15rem 0.45rem',
+                                                    borderRadius: '4px',
+                                                    background: 'rgba(2, 132, 199, 0.15)',
+                                                    color: 'var(--primary)'
+                                                }}
+                                            >
+                                                {app.type === AppType.OAuth ? 'OAuth' : 'API Key'}
+                                            </span>
+                                        </div>
+                                        {app.tsCreated && (
+                                            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                                                Added {new Date(app.tsCreated).toLocaleDateString()}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <Button
+                                        type="button"
+                                        className="text-button danger"
+                                        onClick={() => handleRevokeApp(app.id)}
+                                        aria-label={`Revoke ${app.name}`}
+                                    >
+                                        Revoke
+                                    </Button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                        <Field.Root className="form-group compact" style={{ flex: 1, minWidth: '200px' }}>
+                            <Field.Label htmlFor="newAppName">New API Key Name</Field.Label>
+                            <Input
+                                id="newAppName"
+                                type="text"
+                                placeholder="e.g. Claude Desktop"
+                                maxLength={50}
+                                value={newAppName}
+                                onChange={(e) => setNewAppName(e.target.value)}
+                            />
+                        </Field.Root>
+                        <Button
+                            type="button"
+                            className="btn btn-secondary"
+                            disabled={isCreatingApp || !newAppName.trim()}
+                            onClick={handleCreateApp}
+                        >
+                            {isCreatingApp ? 'Creating...' : 'Create API Key'}
+                        </Button>
+                    </div>
+                </div>
+            )}
 
             {/* Pause Automation Section right above Danger Zone */}
             <div className="settings-section" data-testid="pause-section" style={{ marginTop: '2rem' }}>

@@ -74,6 +74,7 @@ type Server struct {
 	singleSite            bool
 	encryptionKey         string
 	sessionEncryptionKey  string
+	appsEncryptionKey     string
 	sessionDuration       time.Duration
 	release               string
 	serverName            string
@@ -129,6 +130,7 @@ func Configured(u *utility.Map, e *ess.Map, s storage.Database) *Server {
 	showHidden := lflag.Bool("show-hidden", false, "Expose hidden providers in lists via the API")
 	encryptionKey := lflag.RequiredString("credentials-encryption-key", "Key for encrypting credentials")
 	sessionEncryptionKey := lflag.RequiredString("session-encryption-key", "Key for encrypting session cookies (32 bytes)")
+	appsEncryptionKey := lflag.String("apps-encryption-key", "", "Key for encrypting connected app tokens and OAuth state (32 bytes)")
 	sessionDuration := lflag.Duration("session-duration", 7*24*time.Hour, "Session lifetime duration (default 7 days)")
 	release := lflag.String("release", "production", "Release environment (production or staging)")
 	webCacheDuration := lflag.Duration("web-cache-duration", 0, "Duration to cache web files (e.g. 1h, 5m). 0 means no cache.")
@@ -238,6 +240,16 @@ func Configured(u *utility.Map, e *ess.Map, s storage.Database) *Server {
 		srv.sessionEncryptionKey = *sessionEncryptionKey
 		srv.sessionDuration = *sessionDuration
 
+		if *appsEncryptionKey != "" {
+			if len(*appsEncryptionKey) != 32 {
+				log.Ctx(context.Background()).Error("apps-encryption-key must be 32 characters")
+				os.Exit(1)
+			}
+			srv.appsEncryptionKey = *appsEncryptionKey
+		} else {
+			log.Ctx(context.Background()).Info("connected apps disabled: -apps-encryption-key not configured")
+		}
+
 		if srv.devProxy != "" && len(srv.oidcAudiences) == 0 && len(srv.adminEmails) == 0 {
 			srv.bypassAuth = true
 		}
@@ -290,6 +302,11 @@ func (s *Server) setupHandler() http.Handler {
 	apiMux.HandleFunc("POST /api/notifications/replace", s.handleReplaceSubscription)
 	apiMux.HandleFunc("POST /api/settings/notifications", s.handleUpdateNotificationSettings)
 	apiMux.HandleFunc("POST /api/notifications/click", s.handleNotificationClick)
+	apiMux.HandleFunc("GET /api/apps", s.handleListApps)
+	apiMux.HandleFunc("POST /api/apps/new", s.handleNewApp)
+	apiMux.HandleFunc("POST /api/apps/revoke", s.handleRevokeApp)
+	apiMux.HandleFunc("GET /api/oauth/client", s.handleOAuthClientInfo)
+	apiMux.HandleFunc("POST /api/oauth/approve", s.handleOAuthApprove)
 
 	mux := http.NewServeMux()
 	// limit request body to 1MB to prevent DoS
@@ -302,6 +319,20 @@ func (s *Server) setupHandler() http.Handler {
 		1048576,
 	))
 	mux.HandleFunc("GET /.well-known/appspecific/com.tesla.3p.public-key.pem", s.handleTeslaPublicKey)
+	mux.HandleFunc("GET /.well-known/oauth-authorization-server", s.handleOAuthServerMetadata)
+	mux.HandleFunc("GET /.well-known/oauth-protected-resource", s.handleOAuthProtectedResource)
+	mux.Handle("POST /oauth/register", http.MaxBytesHandler(
+		s.rateLimitMiddleware(
+			common.CtxFromRequestMiddleware(http.HandlerFunc(s.handleOAuthRegister)),
+		),
+		1048576,
+	))
+	mux.Handle("POST /oauth/token", http.MaxBytesHandler(
+		s.rateLimitMiddleware(
+			common.CtxFromRequestMiddleware(http.HandlerFunc(s.handleOAuthToken)),
+		),
+		1048576,
+	))
 
 	// serve the web frontend, either from the embedded filesystem or from the dev server
 	if s.devProxy != "" {

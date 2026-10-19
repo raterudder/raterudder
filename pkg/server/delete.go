@@ -67,8 +67,18 @@ func (s *Server) handleDeleteSite(w http.ResponseWriter, r *http.Request) {
 				newSites = append(newSites, us)
 			}
 		}
-
 		u.Sites = newSites
+
+		if len(u.Apps) > 0 {
+			newApps := make([]types.UserApp, 0, len(u.Apps))
+			for _, app := range u.Apps {
+				if app.SiteID != siteID {
+					newApps = append(newApps, app)
+				}
+			}
+			u.Apps = newApps
+		}
+
 		if err := s.storage.UpdateUser(ctx, u); err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update user during site cleanup", slog.String("userID", u.ID), slog.String("siteID", siteID), slog.Any("error", err))
 		} else {

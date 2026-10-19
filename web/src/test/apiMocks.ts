@@ -208,6 +208,9 @@ export const setupDefaultApiMocks = (api: any) => {
     if (typeof api.fetchVAPIDPublicKey?.mockResolvedValue === 'function') api.fetchVAPIDPublicKey.mockResolvedValue(new ArrayBuffer(65));
     if (typeof api.subscribePushNotification?.mockResolvedValue === 'function') api.subscribePushNotification.mockResolvedValue(undefined);
     if (typeof api.unsubscribePushNotification?.mockResolvedValue === 'function') api.unsubscribePushNotification.mockResolvedValue(undefined);
+    if (typeof api.fetchApps?.mockResolvedValue === 'function') api.fetchApps.mockResolvedValue([]);
+    if (typeof api.createApp?.mockResolvedValue === 'function') api.createApp.mockResolvedValue({ app: { id: 'app1', name: 'Test App', type: 1, siteID: 'site1', tsCreated: '2026-10-19T12:00:00Z' }, token: 'rr_test_token' });
+    if (typeof api.revokeApp?.mockResolvedValue === 'function') api.revokeApp.mockResolvedValue(undefined);
+    if (typeof api.fetchOAuthClientInfo?.mockResolvedValue === 'function') api.fetchOAuthClientInfo.mockResolvedValue({ clientName: 'Claude', redirectURI: 'https://claude.ai/api/mcp/auth_callback' });
+    if (typeof api.approveOAuthClient?.mockResolvedValue === 'function') api.approveOAuthClient.mockResolvedValue({ redirectURL: 'https://claude.ai/api/mcp/auth_callback?code=rro_test' });
 };
-
-

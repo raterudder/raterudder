@@ -32,6 +32,29 @@ type UserSite struct {
 	Name string `json:"name"`
 }
 
+// AppType represents the type of connected application on a user account.
+type AppType int
+
+const (
+	AppTypeAPIKey AppType = 1
+	AppTypeOAuth  AppType = 2
+)
+
+// UserApp represents a site-scoped API key or OAuth-connected application belonging to a user.
+type UserApp struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Type      AppType   `json:"type"`
+	SiteID    string    `json:"siteID"`
+	TSCreated time.Time `json:"tsCreated"`
+
+	// Pending OAuth authorization code fields (cleared atomically upon token exchange).
+	PendingCodeHash  string    `json:"pendingCodeHash,omitempty"`
+	PendingExpiresAt time.Time `json:"pendingExpiresAt,omitempty,omitzero"`
+	CodeChallenge    string    `json:"codeChallenge,omitempty"`
+	RedirectURI      string    `json:"redirectURI,omitempty"`
+}
+
 // User represents a user of the system.
 type User struct {
 	ID            string             `json:"id"`
@@ -40,6 +63,7 @@ type User struct {
 	Admin         bool               `json:"-"`
 	SessionSecret string             `json:"sessionSecret,omitempty"`
 	Subscriptions []PushSubscription `json:"subscriptions,omitempty"`
+	Apps          []UserApp          `json:"apps,omitempty"`
 }
 
 // ActionReason represents the type of action taken by the system.

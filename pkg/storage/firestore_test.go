@@ -1724,6 +1724,89 @@ func TestFirestoreProvider(t *testing.T) {
 		assert.Len(t, gotUser.Subscriptions, 0)
 	})
 
+	t.Run("UserApps", func(t *testing.T) {
+		userID := "apps-user@test.com"
+		now := time.Now().UTC().Truncate(time.Second)
+		require.NoError(t, f.CreateUser(ctx, types.User{
+			ID:    userID,
+			Email: userID,
+			Sites: []types.UserSite{{ID: "site-1", Name: "Site 1"}},
+		}))
+
+		pendingApp := types.UserApp{
+			ID:               "app-oauth",
+			Name:             "Claude",
+			Type:             types.AppTypeOAuth,
+			SiteID:           "site-1",
+			TSCreated:        now,
+			PendingCodeHash:  "valid-hash-123",
+			PendingExpiresAt: now.Add(time.Minute),
+			CodeChallenge:    "challenge-123",
+			RedirectURI:      "https://claude.ai/api/mcp/auth_callback",
+		}
+		require.NoError(t, f.AddUserApp(ctx, userID, pendingApp))
+
+		gotUser, err := f.GetUser(ctx, userID)
+		require.NoError(t, err)
+		if assert.Len(t, gotUser.Apps, 1) {
+			assert.Equal(t, "app-oauth", gotUser.Apps[0].ID)
+			assert.Equal(t, "valid-hash-123", gotUser.Apps[0].PendingCodeHash)
+		}
+
+		redeemedApp := types.UserApp{
+			ID:        "app-oauth",
+			Name:      "Claude",
+			Type:      types.AppTypeOAuth,
+			SiteID:    "site-1",
+			TSCreated: now,
+		}
+
+		// Mismatched ExpectedPendingCodeHash returns ErrAppConflict
+		wrongHash := "wrong-hash"
+		err = f.ReplaceUserApp(ctx, userID, redeemedApp, ReplaceUserAppOptions{
+			ExpectedPendingCodeHash: &wrongHash,
+		})
+		assert.ErrorIs(t, err, ErrAppConflict)
+
+		// Expecting empty PendingCodeHash when app is still pending returns ErrAppConflict
+		emptyHash := ""
+		err = f.ReplaceUserApp(ctx, userID, redeemedApp, ReplaceUserAppOptions{
+			ExpectedPendingCodeHash: &emptyHash,
+		})
+		assert.ErrorIs(t, err, ErrAppConflict)
+
+		// Attempting to move app to a different siteID returns ErrAppConflict
+		wrongSiteApp := redeemedApp
+		wrongSiteApp.SiteID = "site-other"
+		validHash := "valid-hash-123"
+		err = f.ReplaceUserApp(ctx, userID, wrongSiteApp, ReplaceUserAppOptions{
+			ExpectedPendingCodeHash: &validHash,
+		})
+		assert.ErrorIs(t, err, ErrAppConflict)
+
+		// Matching ExpectedPendingCodeHash replaces the app
+		require.NoError(t, f.ReplaceUserApp(ctx, userID, redeemedApp, ReplaceUserAppOptions{
+			ExpectedPendingCodeHash: &validHash,
+		}))
+
+		gotUser, err = f.GetUser(ctx, userID)
+		require.NoError(t, err)
+		if assert.Len(t, gotUser.Apps, 1) {
+			assert.Equal(t, "app-oauth", gotUser.Apps[0].ID)
+			assert.Empty(t, gotUser.Apps[0].PendingCodeHash)
+		}
+
+		// Removing app with wrong siteID returns ErrAppNotFound
+		err = f.RemoveUserApp(ctx, userID, "site-other", "app-oauth")
+		assert.ErrorIs(t, err, ErrAppNotFound)
+
+		// Removing app with matching siteID succeeds
+		require.NoError(t, f.RemoveUserApp(ctx, userID, "site-1", "app-oauth"))
+		gotUser, err = f.GetUser(ctx, userID)
+		require.NoError(t, err)
+		assert.Empty(t, gotUser.Apps)
+	})
+
 	t.Run("SiteNotificationSettings", func(t *testing.T) {
 		siteID := "site-notif-test"
 		site := types.Site{

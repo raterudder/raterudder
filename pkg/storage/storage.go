@@ -13,6 +13,8 @@ import (
 var (
 	ErrUserNotFound     = errors.New("user not found")
 	ErrSiteNotFound     = errors.New("site not found")
+	ErrAppNotFound      = errors.New("app not found")
+	ErrAppConflict      = errors.New("app conflict: cannot overwrite")
 	ErrSettingsConflict = errors.New("settings conflict: cannot overwrite")
 )
 
@@ -101,9 +103,19 @@ type Database interface {
 	AppendNotificationLog(ctx context.Context, siteID string, log types.NotificationLog) error
 	RecordNotificationClick(ctx context.Context, siteID string, month string, logID string, clickedAt time.Time) error
 
+	// Apps
+	AddUserApp(ctx context.Context, userID string, app types.UserApp) error
+	RemoveUserApp(ctx context.Context, userID string, siteID string, appID string) error
+	ReplaceUserApp(ctx context.Context, userID string, newApp types.UserApp, opts ReplaceUserAppOptions) error
+
 	// Lifecycle
 	Ping(ctx context.Context) error
 	Close() error
+}
+
+// ReplaceUserAppOptions configures optional precondition checks when replacing an existing UserApp.
+type ReplaceUserAppOptions struct {
+	ExpectedPendingCodeHash *string
 }
 
 // databaseWrapper wraps the underlying Database implementation deferred until flags are configured.

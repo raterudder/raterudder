@@ -2870,5 +2870,75 @@ describe('App & Settings', () => {
             confirmSpy.mockRestore();
         });
     });
+
+    describe('Connected Apps', () => {
+        it('is hidden in production even when planMode is true if no apps are installed', async () => {
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                release: 'production',
+                planMode: true,
+            });
+            (api.fetchApps as any).mockResolvedValue([]);
+
+            await navigateToSettings();
+            expect(screen.queryByTestId('connected-apps-section')).not.toBeInTheDocument();
+        });
+
+        it('is visible in production when an app is already installed', async () => {
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                release: 'production',
+                planMode: false,
+            });
+            (api.fetchApps as any).mockResolvedValue([
+                { id: 'app-1', siteID: 'site1', type: 2, name: 'Claude Desktop', tsCreated: '2026-01-01T00:00:00Z' },
+            ]);
+
+            await navigateToSettings();
+            expect(await screen.findByTestId('connected-apps-section')).toBeInTheDocument();
+            expect(screen.getByText('Claude Desktop')).toBeInTheDocument();
+            expect(screen.getByText('OAuth')).toBeInTheDocument();
+        });
+
+        it('is visible in staging and supports creating an API key and revoking an app', async () => {
+            const user = userEvent.setup();
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                release: 'staging',
+            });
+            (api.fetchApps as any).mockResolvedValue([]);
+            (api.createApp as any).mockResolvedValue({
+                token: 'rr_test_token_123',
+                app: { id: 'app-new', siteID: 'site1', type: 1, name: 'My Agent', tsCreated: '2026-01-02T00:00:00Z' },
+            });
+            (api.revokeApp as any).mockResolvedValue(undefined);
+
+            await navigateToSettings();
+
+            const section = await screen.findByTestId('connected-apps-section');
+            expect(section).toBeInTheDocument();
+
+            const nameInput = within(section).getByLabelText(/New API Key Name/i);
+            await user.type(nameInput, 'My Agent');
+
+            const createBtn = within(section).getByRole('button', { name: /Create API Key/i });
+            await user.click(createBtn);
+
+            await waitFor(() => {
+                expect(api.createApp).toHaveBeenCalledWith('site1', 'My Agent');
+                expect(screen.getByTestId('created-app-token')).toHaveTextContent('rr_test_token_123');
+                expect(screen.getByText('My Agent')).toBeInTheDocument();
+                expect(screen.getByText('API Key')).toBeInTheDocument();
+            });
+
+            const revokeBtn = within(section).getByRole('button', { name: /Revoke My Agent/i });
+            await user.click(revokeBtn);
+
+            await waitFor(() => {
+                expect(api.revokeApp).toHaveBeenCalledWith('site1', 'app-new');
+                expect(screen.queryByText('My Agent')).not.toBeInTheDocument();
+            });
+        });
+    });
 });
 
