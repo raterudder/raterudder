@@ -1,7 +1,6 @@
 package server
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -9,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -33,21 +31,22 @@ const (
 	maxCodeChallengeLength = 128
 )
 
-// OAuthClientData holds the stateless registered client metadata encrypted inside client_id (rrc_...).
-type OAuthClientData struct {
-	Name         string   `json:"name"`
-	RedirectURIs []string `json:"redirectURIs"`
-	CreatedAt    int64    `json:"createdAt"`
+// oauthClientData holds the stateless registered client metadata encrypted inside client_id (rrc_...).
+// Uses 1-character JSON keys to keep client_id strings compact.
+type oauthClientData struct {
+	Name         string   `json:"n"`
+	RedirectURIs []string `json:"r"`
+	CreatedAt    int64    `json:"c"`
 }
 
-// OAuthCodeData holds the payload encrypted inside a short-lived authorization code (rro_...).
-type OAuthCodeData struct {
-	UserID    string `json:"userID"`
-	SiteID    string `json:"siteID"`
-	AppID     string `json:"appID"`
-	Secret    string `json:"secret"`
-	ClientID  string `json:"clientID"`
-	ExpiresAt int64  `json:"expiresAt"`
+// oauthCodeData holds the payload encrypted inside a short-lived authorization code (rro_...).
+// Uses 1-character JSON keys to keep authorization code strings compact.
+type oauthCodeData struct {
+	UserID    string `json:"u"`
+	SiteID    string `json:"i"`
+	AppID     string `json:"a"`
+	Secret    string `json:"s"`
+	ExpiresAt int64  `json:"e"`
 }
 
 func requestBaseURL(r *http.Request) string {
@@ -85,7 +84,7 @@ func validateRedirectURI(rawURI string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid redirect_uri: %w", err)
 	}
-	if u.Fragment != "" {
+	if u.Fragment != "" || strings.Contains(trimmed, "#") {
 		return "", errors.New("redirect_uri must not contain a fragment")
 	}
 	if u.User != nil {
@@ -124,17 +123,13 @@ func isValidCodeVerifier(verifier string) bool {
 	return true
 }
 
-func generateOAuthSecret() (string, error) {
-	b := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, b); err != nil {
-		return "", fmt.Errorf("failed to generate random oauth secret: %w", err)
-	}
-	return hex.EncodeToString(b), nil
-}
-
 func sha256Hex(val string) string {
 	sum := sha256.Sum256([]byte(val))
 	return hex.EncodeToString(sum[:])
+}
+
+func computePendingCodeHash(secret, clientID string) string {
+	return sha256Hex(secret + ":" + clientID)
 }
 
 func computePKCES256Challenge(verifier string) string {
@@ -251,7 +246,7 @@ func (s *Server) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := s.now().Unix()
-	clientID, err := s.encryptAppPayload(oauthClientIDPrefix, OAuthClientData{
+	clientID, err := s.encryptAppPayload(oauthClientIDPrefix, oauthClientData{
 		Name:         name,
 		RedirectURIs: validatedURIs,
 		CreatedAt:    now,
@@ -290,11 +285,11 @@ func (s *Server) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) validateOAuthAuthorizeParams(clientID, redirectURI, responseType, codeChallenge, codeChallengeMethod string) (*OAuthClientData, error) {
+func (s *Server) validateOAuthAuthorizeParams(clientID, redirectURI, responseType, codeChallenge, codeChallengeMethod string) (*oauthClientData, error) {
 	if clientID == "" {
 		return nil, errors.New("client_id is required")
 	}
-	var clientData OAuthClientData
+	var clientData oauthClientData
 	if err := s.decryptAppPayload(oauthClientIDPrefix, clientID, &clientData); err != nil {
 		return nil, errors.New("invalid client_id")
 	}
@@ -420,7 +415,7 @@ func (s *Server) handleOAuthApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawSecret, err := generateOAuthSecret()
+	rawSecret, err := generateAppSecret()
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to generate oauth code secret", slog.Any("error", err))
 		writeJSONError(w, "internal server error", http.StatusInternalServerError)
@@ -435,18 +430,17 @@ func (s *Server) handleOAuthApprove(w http.ResponseWriter, r *http.Request) {
 		Type:             types.AppTypeOAuth,
 		SiteID:           siteID,
 		TSCreated:        now,
-		PendingCodeHash:  sha256Hex(rawSecret),
+		PendingCodeHash:  computePendingCodeHash(rawSecret, req.ClientID),
 		PendingExpiresAt: expiresAt,
 		CodeChallenge:    req.CodeChallenge,
 		RedirectURI:      req.RedirectURI,
 	}
 
-	code, err := s.encryptAppPayload(oauthCodePrefix, OAuthCodeData{
+	code, err := s.encryptAppPayload(oauthCodePrefix, oauthCodeData{
 		UserID:    user.ID,
 		SiteID:    siteID,
 		AppID:     appID,
 		Secret:    rawSecret,
-		ClientID:  req.ClientID,
 		ExpiresAt: expiresAt.Unix(),
 	})
 	if err != nil {
@@ -530,7 +524,7 @@ func (s *Server) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 	// Decrypt the authorization code early so that if any validation or token exchange
 	// step fails while the code is still within its validity window, we can remove the
 	// pending app from the user's apps list.
-	var codeData OAuthCodeData
+	var codeData oauthCodeData
 	hasValidCodePayload := false
 	codeNotExpired := false
 	if code != "" {
@@ -574,7 +568,7 @@ func (s *Server) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var clientData OAuthClientData
+	var clientData oauthClientData
 	if err := s.decryptAppPayload(oauthClientIDPrefix, clientID, &clientData); err != nil {
 		cleanupEarly()
 		writeOAuthError(w, http.StatusBadRequest, "invalid_client", "invalid client_id")
@@ -586,7 +580,7 @@ func (s *Server) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	codeHash := sha256Hex(codeData.Secret)
+	codeHash := computePendingCodeHash(codeData.Secret, clientID)
 	computedChallenge := computePKCES256Challenge(codeVerifier)
 
 	user, err := s.storage.GetUser(ctx, codeData.UserID)
@@ -610,10 +604,11 @@ func (s *Server) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 
 	// If PendingCodeHash is already empty, this authorization code was replayed.
 	// Only revoke the active app if the replay occurred within the code's validity
-	// window so an expired historical code from browser history cannot be used as an
-	// unauthenticated kill-switch against a long-running active app.
+	// window and the client_id matches the app name so an expired historical code from
+	// browser history cannot be used as an unauthenticated kill-switch against a
+	// long-running active app.
 	if target.PendingCodeHash == "" {
-		if codeNotExpired {
+		if codeNotExpired && target.Name == clientData.Name {
 			removeApp()
 			log.Ctx(ctx).WarnContext(ctx, "revoked oauth app due to authorization code replay", slog.String("userID", codeData.UserID), slog.String("appID", target.ID))
 		}
@@ -624,29 +619,31 @@ func (s *Server) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 	codeMatch := subtle.ConstantTimeCompare([]byte(target.PendingCodeHash), []byte(codeHash))
 	challengeMatch := subtle.ConstantTimeCompare([]byte(target.CodeChallenge), []byte(computedChallenge))
 	redirectMatch := subtle.ConstantTimeCompare([]byte(target.RedirectURI), []byte(redirectURI))
-	clientMatch := subtle.ConstantTimeCompare([]byte(codeData.ClientID), []byte(clientID))
 	if !codeNotExpired || target.PendingExpiresAt.IsZero() || !now.Before(target.PendingExpiresAt) ||
 		target.Name != clientData.Name ||
-		(codeMatch&challengeMatch&redirectMatch&clientMatch) != 1 {
-		removeApp()
+		(codeMatch&challengeMatch&redirectMatch) != 1 {
+		if codeNotExpired {
+			removeApp()
+		}
 		log.Ctx(ctx).WarnContext(ctx, "oauth code validation failed", slog.String("userID", codeData.UserID), slog.String("appID", codeData.AppID))
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "invalid or expired authorization code")
 		return
 	}
 
-	redeemedApp := *target
-	redeemedApp.PendingCodeHash = ""
-	redeemedApp.PendingExpiresAt = time.Time{}
-	redeemedApp.CodeChallenge = ""
-	redeemedApp.RedirectURI = ""
-
-	accessToken, err := s.createAppToken(codeData.UserID, redeemedApp.SiteID, redeemedApp.ID, types.AppTypeOAuth)
+	accessToken, tokenHash, err := s.createAppToken(codeData.UserID, target.SiteID, target.ID)
 	if err != nil {
 		removeApp()
 		log.Ctx(ctx).ErrorContext(ctx, "failed to create oauth access token", slog.String("userID", codeData.UserID), slog.Any("error", err))
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "failed to issue access token")
 		return
 	}
+
+	redeemedApp := *target
+	redeemedApp.TokenHash = tokenHash
+	redeemedApp.PendingCodeHash = ""
+	redeemedApp.PendingExpiresAt = time.Time{}
+	redeemedApp.CodeChallenge = ""
+	redeemedApp.RedirectURI = ""
 
 	expectedCodeHash := target.PendingCodeHash
 	err = s.storage.ReplaceUserApp(ctx, codeData.UserID, redeemedApp, storage.ReplaceUserAppOptions{

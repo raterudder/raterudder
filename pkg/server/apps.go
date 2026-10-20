@@ -29,12 +29,13 @@ const (
 	maxAppNameLength = 64
 )
 
-// AppTokenData holds the decrypted payload stored inside an encrypted app token (rr_...).
-type AppTokenData struct {
-	UserID string        `json:"userID"`
-	SiteID string        `json:"siteID"`
-	AppID  string        `json:"appID"`
-	Type   types.AppType `json:"type"`
+// appTokenData holds the decrypted payload stored inside an encrypted app token (rr_...).
+// Uses 1-character JSON keys to keep token strings compact.
+type appTokenData struct {
+	UserID string `json:"u"`
+	SiteID string `json:"i"`
+	AppID  string `json:"a"`
+	Secret string `json:"s"`
 }
 
 func generateAppID() (string, error) {
@@ -43,6 +44,14 @@ func generateAppID() (string, error) {
 		return "", fmt.Errorf("failed to generate random app id: %w", err)
 	}
 	return hex.EncodeToString(b), nil
+}
+
+func generateAppSecret() (string, error) {
+	b := make([]byte, 16)
+	if _, err := io.ReadFull(rand.Reader, b); err != nil {
+		return "", fmt.Errorf("failed to generate random app secret: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
 func (s *Server) encryptAppPayload(prefix string, payload any) (string, error) {
@@ -106,31 +115,33 @@ func (s *Server) decryptAppPayload(prefix, tokenStr string, out any) error {
 	return nil
 }
 
-func (s *Server) createAppToken(userID, siteID, appID string, appType types.AppType) (string, error) {
+func (s *Server) createAppToken(userID, siteID, appID string) (string, string, error) {
 	if userID == "" || siteID == "" || appID == "" {
-		return "", errors.New("userID, siteID, and appID are required")
+		return "", "", errors.New("userID, siteID, and appID are required")
 	}
-	if appType != types.AppTypeAPIKey && appType != types.AppTypeOAuth {
-		return "", errors.New("invalid app token type")
+	secret, err := generateAppSecret()
+	if err != nil {
+		return "", "", err
 	}
-	return s.encryptAppPayload(appTokenPrefix, AppTokenData{
+	token, err := s.encryptAppPayload(appTokenPrefix, appTokenData{
 		UserID: userID,
 		SiteID: siteID,
 		AppID:  appID,
-		Type:   appType,
+		Secret: secret,
 	})
+	if err != nil {
+		return "", "", err
+	}
+	return token, sha256Hex(secret), nil
 }
 
-func (s *Server) verifyAppToken(tokenStr string) (*AppTokenData, error) {
-	var data AppTokenData
+func (s *Server) verifyAppToken(tokenStr string) (*appTokenData, error) {
+	var data appTokenData
 	if err := s.decryptAppPayload(appTokenPrefix, tokenStr, &data); err != nil {
 		return nil, err
 	}
-	if data.UserID == "" || data.SiteID == "" || data.AppID == "" {
+	if data.UserID == "" || data.SiteID == "" || data.AppID == "" || data.Secret == "" {
 		return nil, errors.New("incomplete app token payload")
-	}
-	if data.Type != types.AppTypeAPIKey && data.Type != types.AppTypeOAuth {
-		return nil, errors.New("invalid app token type")
 	}
 	return &data, nil
 }
@@ -155,12 +166,12 @@ func validateAppName(raw string) (string, error) {
 // over time so abandoned OAuth flows get cleaned up without needing a bulk-delete
 // storage method or risking an unbounded number of DB calls in a single request.
 // It returns the active apps for siteID and the total remaining (non-cleaned) app count.
-func (s *Server) cleanExpiredPendingApps(ctx context.Context, user types.User, siteID string) ([]types.UserApp, int) {
+func (s *Server) cleanExpiredPendingApps(ctx context.Context, user types.User, siteID string) ([]types.PublicUserApp, int) {
 	const maxExpiredCleanup = 3
 	now := s.now().UTC()
 	cleaned := 0
 	remainingTotal := 0
-	activeApps := make([]types.UserApp, 0)
+	activeApps := make([]types.PublicUserApp, 0)
 	for _, app := range user.Apps {
 		if app.PendingCodeHash != "" {
 			if cleaned < maxExpiredCleanup && app.SiteID != "" && (app.PendingExpiresAt.IsZero() || !now.Before(app.PendingExpiresAt)) {
@@ -169,6 +180,7 @@ func (s *Server) cleanExpiredPendingApps(ctx context.Context, user types.User, s
 				if err != nil {
 					if !errors.Is(err, storage.ErrAppNotFound) {
 						log.Ctx(ctx).WarnContext(ctx, "failed to remove expired pending user app", slog.String("appID", app.ID), slog.Any("error", err))
+						remainingTotal++
 					}
 				} else {
 					log.Ctx(ctx).DebugContext(ctx, "removed stale pending app", slog.String("appID", app.ID))
@@ -180,7 +192,7 @@ func (s *Server) cleanExpiredPendingApps(ctx context.Context, user types.User, s
 		}
 		remainingTotal++
 		if app.SiteID == siteID {
-			activeApps = append(activeApps, app)
+			activeApps = append(activeApps, app.Public())
 		}
 	}
 	return activeApps, remainingTotal
@@ -201,7 +213,7 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	err := json.NewEncoder(w).Encode(struct {
-		Apps []types.UserApp `json:"apps"`
+		Apps []types.PublicUserApp `json:"apps"`
 	}{
 		Apps: activeApps,
 	})
@@ -251,19 +263,20 @@ func (s *Server) handleNewApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	token, tokenHash, err := s.createAppToken(user.ID, siteID, appID)
+	if err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to create app token", slog.Any("error", err))
+		writeJSONError(w, "failed to create app token", http.StatusInternalServerError)
+		return
+	}
+
 	newApp := types.UserApp{
 		ID:        appID,
 		Name:      name,
 		Type:      types.AppTypeAPIKey,
 		SiteID:    siteID,
 		TSCreated: s.now().UTC(),
-	}
-
-	token, err := s.createAppToken(user.ID, siteID, newApp.ID, types.AppTypeAPIKey)
-	if err != nil {
-		log.Ctx(ctx).ErrorContext(ctx, "failed to create app token", slog.Any("error", err))
-		writeJSONError(w, "failed to create app token", http.StatusInternalServerError)
-		return
+		TokenHash: tokenHash,
 	}
 
 	if err := s.storage.AddUserApp(ctx, user.ID, newApp); err != nil {
@@ -277,10 +290,10 @@ func (s *Server) handleNewApp(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	err = json.NewEncoder(w).Encode(struct {
-		App   types.UserApp `json:"app"`
-		Token string        `json:"token"`
+		App   types.PublicUserApp `json:"app"`
+		Token string              `json:"token"`
 	}{
-		App:   newApp,
+		App:   newApp.Public(),
 		Token: token,
 	})
 	if err != nil {

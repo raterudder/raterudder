@@ -89,14 +89,21 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
-		// Check if request carries a RateRudder app token (rr_...)
+		// Check if request carries a RateRudder app token (rr_...).
+		// On /api/update and /api/updateSites (isUpdatePath), non-rr_ Authorization headers carry
+		// Google OIDC JWTs from Cloud Scheduler and are handled by the update-specific auth block below.
+		// On all other endpoints (or whenever the token starts with "Bearer rr_"), treat any
+		// Authorization header as an app token attempt so malformed or non-rr_ Bearer tokens fail
+		// immediately instead of silently falling back to session cookies.
 		var rawAppToken string
-		if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer "+appTokenPrefix) {
-			rawAppToken = strings.TrimPrefix(authHeader, "Bearer ")
+		if authHeader := r.Header.Get("Authorization"); authHeader != "" {
+			if strings.HasPrefix(authHeader, "Bearer "+appTokenPrefix) || !isUpdatePath {
+				rawAppToken = strings.TrimPrefix(authHeader, "Bearer ")
+			}
 		} else if allowQueryToken {
 			q := r.URL.Query()
-			if qToken := q.Get("token"); strings.HasPrefix(qToken, appTokenPrefix) {
-				rawAppToken = qToken
+			if q.Has("token") {
+				rawAppToken = q.Get("token")
 				// remove token so it doesn't end up in logs
 				q.Del("token")
 				r.URL.RawQuery = q.Encode()
@@ -110,10 +117,8 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		// extract SiteID
-		var siteID string
-		if r.Method == http.MethodGet {
-			siteID = r.URL.Query().Get("siteID")
-		} else {
+		siteID := r.URL.Query().Get("siteID")
+		if r.Method != http.MethodGet {
 			// read body to find SiteID
 			var bodyBytes []byte
 			if r.Body != nil {
@@ -141,14 +146,21 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 					http.Error(w, "invalid request", http.StatusBadRequest)
 					return
 				}
-				siteID = justSiteID.SiteID
+				if siteID != "" && justSiteID.SiteID != "" && siteID != justSiteID.SiteID {
+					log.Ctx(ctx).WarnContext(ctx, "conflicting siteID in query and body", slog.String("querySiteID", siteID), slog.String("bodySiteID", justSiteID.SiteID))
+					writeJSONError(w, "siteID does not match", http.StatusBadRequest)
+					return
+				}
+				if justSiteID.SiteID != "" {
+					siteID = justSiteID.SiteID
+				}
 			}
 		}
 
 		var email string
 		var userID string
 		var activeSession *SessionData
-		var activeAppToken *AppTokenData
+		var activeAppToken *appTokenData
 		var activeAppName string
 		// user might be a mock/fake user if this is bypassAuth or singleSite
 		var user types.User
@@ -328,11 +340,13 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 							}
 						}
 
-						// If authenticated via app token, verify app exists on user for this site and is not pending
+						// If authenticated via app token, verify app exists on user for this site, is not pending, and matches TokenHash
 						if activeAppToken != nil {
+							tokenHash := sha256Hex(activeAppToken.Secret)
 							appValid := false
 							for _, app := range user.Apps {
-								if app.ID == activeAppToken.AppID && app.SiteID == activeAppToken.SiteID && app.PendingCodeHash == "" {
+								if app.ID == activeAppToken.AppID && app.SiteID == activeAppToken.SiteID && app.PendingCodeHash == "" && app.TokenHash != "" &&
+									subtle.ConstantTimeCompare([]byte(app.TokenHash), []byte(tokenHash)) == 1 {
 									appValid = true
 									activeAppName = app.Name
 									break

@@ -1150,6 +1150,11 @@ const Settings = ({
 
         loadLists();
 
+        setCreatedToken(null);
+        setCopiedToken(false);
+        setAppError(null);
+        setNewAppName('');
+
         fetchApps(siteID)
             .then(data => {
                 if (active) setApps(data || []);
@@ -2971,7 +2976,7 @@ const Settings = ({
                     {createdToken && (
                         <div className="warning-notice" data-testid="created-app-token-banner" style={{ marginBottom: '1.25rem' }}>
                             <div style={{ marginBottom: '0.5rem' }}>
-                                Copy your new API key now. It will not be shown again:
+                                <strong>Save your new API key now.</strong> You will only see this API key once and RateRudder cannot show it again. If you lose it, you will need to revoke it and create a new one:
                             </div>
                             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
                                 <code

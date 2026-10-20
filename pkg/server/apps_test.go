@@ -250,8 +250,10 @@ func TestHandleNewApp(t *testing.T) {
 			ID:          "site-1",
 			Permissions: []types.SitePermissions{{UserID: "user-1"}},
 		}, nil).Once()
+		var storedTokenHash string
 		mockS.On("AddUserApp", mock.Anything, "user-1", mock.MatchedBy(func(app types.UserApp) bool {
-			return app.Name == "Claude MCP" && app.SiteID == "site-1" && app.Type == types.AppTypeAPIKey && app.ID != ""
+			storedTokenHash = app.TokenHash
+			return app.Name == "Claude MCP" && app.SiteID == "site-1" && app.Type == types.AppTypeAPIKey && app.ID != "" && app.TokenHash != ""
 		})).Return(nil).Once()
 
 		handler := srv.setupHandler()
@@ -263,8 +265,8 @@ func TestHandleNewApp(t *testing.T) {
 		require.Equal(t, http.StatusOK, wNew.Code)
 
 		var createRes struct {
-			App   types.UserApp `json:"app"`
-			Token string        `json:"token"`
+			App   types.PublicUserApp `json:"app"`
+			Token string              `json:"token"`
 		}
 		require.NoError(t, json.NewDecoder(wNew.Body).Decode(&createRes))
 		assert.Equal(t, "Claude MCP", createRes.App.Name)
@@ -277,6 +279,7 @@ func TestHandleNewApp(t *testing.T) {
 		assert.Equal(t, "user-1", tokenData.UserID)
 		assert.Equal(t, "site-1", tokenData.SiteID)
 		assert.Equal(t, createRes.App.ID, tokenData.AppID)
+		assert.Equal(t, storedTokenHash, sha256Hex(tokenData.Secret))
 		mockS.AssertExpectations(t)
 	})
 }
@@ -351,27 +354,28 @@ func TestVerifyAppToken(t *testing.T) {
 	srv := newTestAppsServer(&mockStorage{}, now)
 
 	t.Run("ValidRoundTrip", func(t *testing.T) {
-		token, err := srv.createAppToken("user-1", "site-1", "app-1", types.AppTypeAPIKey)
+		token, tokenHash, err := srv.createAppToken("user-1", "site-1", "app-1")
 		require.NoError(t, err)
 		assert.True(t, strings.HasPrefix(token, appTokenPrefix))
+		assert.NotEmpty(t, tokenHash)
 
 		data, err := srv.verifyAppToken(token)
 		require.NoError(t, err)
 		assert.Equal(t, "user-1", data.UserID)
 		assert.Equal(t, "site-1", data.SiteID)
 		assert.Equal(t, "app-1", data.AppID)
-		assert.Equal(t, types.AppTypeAPIKey, data.Type)
+		assert.Equal(t, tokenHash, sha256Hex(data.Secret))
 	})
 
 	t.Run("MissingRequiredFields", func(t *testing.T) {
-		_, err := srv.createAppToken("", "site-1", "app-1", types.AppTypeAPIKey)
+		_, _, err := srv.createAppToken("", "site-1", "app-1")
 		assert.ErrorContains(t, err, "userID, siteID, and appID are required")
 	})
 
 	t.Run("AppsKeyNotConfigured", func(t *testing.T) {
 		unconfiguredSrv := newTestAppsServer(&mockStorage{}, now)
 		unconfiguredSrv.appsEncryptionKey = ""
-		_, err := unconfiguredSrv.createAppToken("user-1", "site-1", "app-1", types.AppTypeAPIKey)
+		_, _, err := unconfiguredSrv.createAppToken("user-1", "site-1", "app-1")
 		assert.ErrorContains(t, err, "apps encryption key not configured")
 
 		_, err = unconfiguredSrv.verifyAppToken("rr_something")
@@ -390,33 +394,22 @@ func TestVerifyAppToken(t *testing.T) {
 	})
 
 	t.Run("IncompleteDecryptedPayload", func(t *testing.T) {
-		incompleteToken, err := srv.encryptAppPayload(appTokenPrefix, AppTokenData{
+		incompleteToken, err := srv.encryptAppPayload(appTokenPrefix, appTokenData{
 			UserID: "user-1",
+			SiteID: "site-1",
+			AppID:  "app-1",
 		})
 		require.NoError(t, err)
 		_, err = srv.verifyAppToken(incompleteToken)
 		assert.ErrorContains(t, err, "incomplete app token payload")
 	})
 
-	t.Run("InvalidAppTokenType", func(t *testing.T) {
-		badTypeToken, err := srv.encryptAppPayload(appTokenPrefix, AppTokenData{
-			UserID: "user-1",
-			SiteID: "site-1",
-			AppID:  "app-1",
-			Type:   types.AppType(99),
-		})
-		require.NoError(t, err)
-		_, err = srv.verifyAppToken(badTypeToken)
-		assert.ErrorContains(t, err, "invalid app token type")
-	})
-
 	t.Run("RejectsCrossPrefixTokenSubstitution", func(t *testing.T) {
-		oauthCode, err := srv.encryptAppPayload(oauthCodePrefix, OAuthCodeData{
+		oauthCode, err := srv.encryptAppPayload(oauthCodePrefix, oauthCodeData{
 			UserID:    "user-1",
 			SiteID:    "site-1",
 			AppID:     "app-1",
 			Secret:    "sec-123",
-			ClientID:  "rrc_123",
 			ExpiresAt: now.Add(oauthCodeDuration).Unix(),
 		})
 		require.NoError(t, err)

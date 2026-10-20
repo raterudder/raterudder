@@ -411,7 +411,8 @@ function AppContent() {
                                 {loggedIn ? (
                                     (() => {
                                         const from = new URLSearchParams(search || window.location.search).get('from');
-                                        const dest = from && from.startsWith('/') ? from : '/dashboard';
+                                        const isSafeRelativeFrom = Boolean(from && from.startsWith('/') && !from.startsWith('//') && !from.startsWith('/\\'));
+                                        const dest = isSafeRelativeFrom && from ? from : '/dashboard';
                                         return <Redirect to={dest} replace />;
                                     })()
                                 ) : (

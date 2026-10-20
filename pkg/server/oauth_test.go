@@ -143,7 +143,7 @@ func TestHandleOAuthClientInfo(t *testing.T) {
 	srv := newTestAppsServer(mockS, now)
 	handler := srv.setupHandler()
 
-	clientID, err := srv.encryptAppPayload(oauthClientIDPrefix, OAuthClientData{
+	clientID, err := srv.encryptAppPayload(oauthClientIDPrefix, oauthClientData{
 		Name:         "Claude",
 		RedirectURIs: []string{"https://claude.ai/api/mcp/auth_callback"},
 		CreatedAt:    now.Unix(),
@@ -214,7 +214,7 @@ func TestHandleOAuthApprove(t *testing.T) {
 		srv := newTestAppsServer(mockS, now)
 		handler := srv.setupHandler()
 
-		clientID, err := srv.encryptAppPayload(oauthClientIDPrefix, OAuthClientData{
+		clientID, err := srv.encryptAppPayload(oauthClientIDPrefix, oauthClientData{
 			Name:         "Claude",
 			RedirectURIs: []string{"https://claude.ai/api/mcp/auth_callback"},
 			CreatedAt:    now.Unix(),
@@ -286,7 +286,7 @@ func TestHandleOAuthToken(t *testing.T) {
 		srv := newTestAppsServer(mockS, now)
 		handler := srv.setupHandler()
 
-		clientID, err := srv.encryptAppPayload(oauthClientIDPrefix, OAuthClientData{
+		clientID, err := srv.encryptAppPayload(oauthClientIDPrefix, oauthClientData{
 			Name:         "Claude",
 			RedirectURIs: []string{"https://claude.ai/api/mcp/auth_callback"},
 			CreatedAt:    now.Unix(),
@@ -294,12 +294,11 @@ func TestHandleOAuthToken(t *testing.T) {
 		require.NoError(t, err)
 
 		rawSecret := "secret-12345"
-		authCode, err := srv.encryptAppPayload(oauthCodePrefix, OAuthCodeData{
+		authCode, err := srv.encryptAppPayload(oauthCodePrefix, oauthCodeData{
 			UserID:    "user-1",
 			SiteID:    "site-1",
 			AppID:     "app-oauth-1",
 			Secret:    rawSecret,
-			ClientID:  clientID,
 			ExpiresAt: now.Add(oauthCodeDuration).Unix(),
 		})
 		require.NoError(t, err)
@@ -310,17 +309,10 @@ func TestHandleOAuthToken(t *testing.T) {
 			Type:             types.AppTypeOAuth,
 			SiteID:           "site-1",
 			TSCreated:        now,
-			PendingCodeHash:  sha256Hex(rawSecret),
+			PendingCodeHash:  computePendingCodeHash(rawSecret, clientID),
 			PendingExpiresAt: now.Add(oauthCodeDuration),
 			CodeChallenge:    codeChallenge,
 			RedirectURI:      "https://claude.ai/api/mcp/auth_callback",
-		}
-		expectedRedeemedApp := types.UserApp{
-			ID:        "app-oauth-1",
-			Name:      "Claude",
-			Type:      types.AppTypeOAuth,
-			SiteID:    "site-1",
-			TSCreated: now,
 		}
 
 		storedUser := types.User{
@@ -332,10 +324,20 @@ func TestHandleOAuthToken(t *testing.T) {
 
 		expectedHash := pendingApp.PendingCodeHash
 		mockS.On("GetUser", mock.Anything, "user-1").Return(storedUser, nil).Once()
-		mockS.On("ReplaceUserApp", mock.Anything, "user-1", expectedRedeemedApp, storage.ReplaceUserAppOptions{
+		mockS.On("ReplaceUserApp", mock.Anything, "user-1", mock.MatchedBy(func(app types.UserApp) bool {
+			return app.ID == "app-oauth-1" &&
+				app.Name == "Claude" &&
+				app.Type == types.AppTypeOAuth &&
+				app.SiteID == "site-1" &&
+				app.TokenHash != "" &&
+				app.PendingCodeHash == "" &&
+				app.PendingExpiresAt.IsZero() &&
+				app.CodeChallenge == "" &&
+				app.RedirectURI == ""
+		}), storage.ReplaceUserAppOptions{
 			ExpectedPendingCodeHash: &expectedHash,
-		}).Run(func(_ mock.Arguments) {
-			storedUser.Apps[0] = expectedRedeemedApp
+		}).Run(func(args mock.Arguments) {
+			storedUser.Apps[0] = args.Get(2).(types.UserApp)
 		}).Return(nil).Once()
 
 		tokenForm := url.Values{
@@ -359,6 +361,10 @@ func TestHandleOAuthToken(t *testing.T) {
 		assert.Equal(t, "Bearer", tokenRes.TokenType)
 		assert.True(t, strings.HasPrefix(tokenRes.AccessToken, appTokenPrefix))
 
+		tokenData, err := srv.verifyAppToken(tokenRes.AccessToken)
+		require.NoError(t, err)
+		assert.Equal(t, storedUser.Apps[0].TokenHash, sha256Hex(tokenData.Secret))
+
 		// Replaying the same authorization code within its validity window fails and revokes the app via RemoveUserApp
 		mockS.On("GetUser", mock.Anything, "user-1").Return(storedUser, nil).Once()
 		mockS.On("RemoveUserApp", mock.Anything, "user-1", "site-1", "app-oauth-1").Return(nil).Once()
@@ -376,12 +382,11 @@ func TestHandleOAuthToken(t *testing.T) {
 		srv := newTestAppsServer(mockS, now)
 		handler := srv.setupHandler()
 
-		authCode, err := srv.encryptAppPayload(oauthCodePrefix, OAuthCodeData{
+		authCode, err := srv.encryptAppPayload(oauthCodePrefix, oauthCodeData{
 			UserID:    "user-1",
 			SiteID:    "site-1",
 			AppID:     "app-broken-1",
 			Secret:    "secret-abc",
-			ClientID:  "rrc_123",
 			ExpiresAt: now.Add(oauthCodeDuration).Unix(),
 		})
 		require.NoError(t, err)
@@ -408,19 +413,18 @@ func TestHandleOAuthToken(t *testing.T) {
 		srv := newTestAppsServer(mockS, now)
 		handler := srv.setupHandler()
 
-		clientID, err := srv.encryptAppPayload(oauthClientIDPrefix, OAuthClientData{
+		clientID, err := srv.encryptAppPayload(oauthClientIDPrefix, oauthClientData{
 			Name:         "Claude",
 			RedirectURIs: []string{"https://claude.ai/api/mcp/auth_callback"},
 			CreatedAt:    now.Add(-24 * time.Hour).Unix(),
 		})
 		require.NoError(t, err)
 
-		expiredCode, err := srv.encryptAppPayload(oauthCodePrefix, OAuthCodeData{
+		expiredCode, err := srv.encryptAppPayload(oauthCodePrefix, oauthCodeData{
 			UserID:    "user-1",
 			SiteID:    "site-1",
 			AppID:     "app-active-1",
 			Secret:    "old-secret",
-			ClientID:  clientID,
 			ExpiresAt: now.Add(-time.Hour).Unix(),
 		})
 		require.NoError(t, err)
@@ -470,13 +474,13 @@ func TestHandleOAuthToken(t *testing.T) {
 		srv := newTestAppsServer(mockS, now)
 		handler := srv.setupHandler()
 
-		clientID1, err := srv.encryptAppPayload(oauthClientIDPrefix, OAuthClientData{
+		clientID1, err := srv.encryptAppPayload(oauthClientIDPrefix, oauthClientData{
 			Name:         "Claude",
 			RedirectURIs: []string{"https://claude.ai/api/mcp/auth_callback"},
 			CreatedAt:    now.Unix(),
 		})
 		require.NoError(t, err)
-		clientID2, err := srv.encryptAppPayload(oauthClientIDPrefix, OAuthClientData{
+		clientID2, err := srv.encryptAppPayload(oauthClientIDPrefix, oauthClientData{
 			Name:         "Claude",
 			RedirectURIs: []string{"https://claude.ai/api/mcp/auth_callback"},
 			CreatedAt:    now.Unix() + 1,
@@ -484,12 +488,11 @@ func TestHandleOAuthToken(t *testing.T) {
 		require.NoError(t, err)
 
 		rawSecret := "secret-12345"
-		authCode, err := srv.encryptAppPayload(oauthCodePrefix, OAuthCodeData{
+		authCode, err := srv.encryptAppPayload(oauthCodePrefix, oauthCodeData{
 			UserID:    "user-1",
 			SiteID:    "site-1",
 			AppID:     "app-oauth-1",
 			Secret:    rawSecret,
-			ClientID:  clientID1,
 			ExpiresAt: now.Add(oauthCodeDuration).Unix(),
 		})
 		require.NoError(t, err)
@@ -503,7 +506,7 @@ func TestHandleOAuthToken(t *testing.T) {
 					Type:             types.AppTypeOAuth,
 					SiteID:           "site-1",
 					TSCreated:        now,
-					PendingCodeHash:  sha256Hex(rawSecret),
+					PendingCodeHash:  computePendingCodeHash(rawSecret, clientID1),
 					PendingExpiresAt: now.Add(oauthCodeDuration),
 					CodeChallenge:    codeChallenge,
 					RedirectURI:      "https://claude.ai/api/mcp/auth_callback",

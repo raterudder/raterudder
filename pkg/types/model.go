@@ -47,12 +47,33 @@ type UserApp struct {
 	Type      AppType   `json:"type"`
 	SiteID    string    `json:"siteID"`
 	TSCreated time.Time `json:"tsCreated"`
+	TokenHash string    `json:"tokenHash,omitempty"`
 
 	// Pending OAuth authorization code fields (cleared atomically upon token exchange).
 	PendingCodeHash  string    `json:"pendingCodeHash,omitempty"`
 	PendingExpiresAt time.Time `json:"pendingExpiresAt,omitempty,omitzero"`
 	CodeChallenge    string    `json:"codeChallenge,omitempty"`
 	RedirectURI      string    `json:"redirectURI,omitempty"`
+}
+
+// PublicUserApp represents the public-facing fields of a UserApp returned by the API.
+type PublicUserApp struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Type      AppType   `json:"type"`
+	SiteID    string    `json:"siteID"`
+	TSCreated time.Time `json:"tsCreated"`
+}
+
+// Public returns a PublicUserApp containing only the fields safe to expose to the frontend.
+func (a UserApp) Public() PublicUserApp {
+	return PublicUserApp{
+		ID:        a.ID,
+		Name:      a.Name,
+		Type:      a.Type,
+		SiteID:    a.SiteID,
+		TSCreated: a.TSCreated,
+	}
 }
 
 // User represents a user of the system.
