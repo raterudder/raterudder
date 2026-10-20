@@ -6146,45 +6146,6 @@ func TestHandleHighHomeLoadNotifications(t *testing.T) {
 		mockS.AssertExpectations(t)
 	})
 
-	t.Run("EVChargingPeriodSuppressed", func(t *testing.T) {
-		mockS := &storagemock.MockDatabase{}
-		srv := createTestNotificationServer(t, mockS, now)
-
-		notifications := map[string]types.UserNotificationSettings{
-			"user1@test.com": {
-				HighHomeLoadAlert: "high", // Even high sensitivity is suppressed during active EV charging periods
-			},
-		}
-
-		data := &dataForNotifications{
-			status: types.SystemStatus{
-				Timestamp:          now,
-				HomeKW:             6.2,
-				BatterySOC:         39.0,
-				BatteryKW:          10.0,
-				BatteryCapacityKWH: 13.6,
-			},
-			settings: types.Settings{
-				MinBatterySOC: 20.0,
-				EVChargingPeriods: []types.TimePeriod{
-					{
-						Name: "Nightly EV Charging",
-						Hours: []types.UtilityHourPeriod{
-							{HourStart: 7, HourEnd: 9}, // 7:49 AM falls within 7:00 - 9:00 AM
-						},
-					},
-				},
-			},
-			energyHistory: baseHistory,
-		}
-
-		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, now)
-		srv.handleHighHomeLoadNotifications(context.Background(), siteID, notifications, data, now, getNotifState, nil)
-
-		// Suppressed by active EV charging period
-		mockS.AssertExpectations(t)
-	})
-
 	t.Run("EVChargingStandby_NighttimeEVChargingSuppressed", func(t *testing.T) {
 		nowNight := time.Date(2026, 9, 19, 23, 15, 0, 0, loc) // 11:15 PM (within 20:00-06:59 nighttime window)
 		mockS := &storagemock.MockDatabase{}

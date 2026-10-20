@@ -175,7 +175,7 @@ type EnergyHistoryDataset struct {
 	TimeZone          string                   `json:"timeZone"`
 	SimStart          time.Time                `json:"simStart"`
 	SimEnd            time.Time                `json:"simEnd"`
-	EVChargingPeriods []types.TimePeriod       `json:"evChargingPeriods,omitempty"`
+	EVChargingStandby bool                     `json:"evChargingStandby,omitempty"`
 	EnergyHistory     []types.DailyEnergyStats `json:"energyHistory"`
 	WeatherHistory    []types.Weather          `json:"weatherHistory"`
 }

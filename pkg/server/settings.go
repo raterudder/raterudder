@@ -203,6 +203,11 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		newSettings.UtilityRateOptions.NetMeteringCredits = false
 	}
 
+	if len(newSettings.EVChargingPeriods) > 0 {
+		newSettings.EVChargingStandby = true
+		newSettings.EVChargingPeriods = nil
+	}
+
 	if newSettings.MinArbitrageDifferenceDollarsPerKWH < 0 {
 		writeJSONError(w, "minimum arbitrage difference cannot be negative", http.StatusBadRequest)
 		return

@@ -13,7 +13,7 @@ import (
 
 // CurrentSettingsVersion is the current version of the settings struct.
 // Increment this value only if you need to set a default value other than the Go default for that value.
-const CurrentSettingsVersion = 19
+const CurrentSettingsVersion = 20
 
 // Settings represents the configuration stored in the database.
 // These are dynamic settings that can be changed without redeploying.
@@ -377,6 +377,13 @@ func MigrateSettings(s Settings, currentVersion int, release string) (Settings, 
 				} else {
 					s.OptimizationProfile = "balanced"
 				}
+				migrated = true
+			}
+		case 20:
+			// version 20: migrate legacy EVChargingPeriods to EVChargingStandby and clear EVChargingPeriods
+			if len(s.EVChargingPeriods) > 0 {
+				s.EVChargingStandby = true
+				s.EVChargingPeriods = nil
 				migrated = true
 			}
 		default:

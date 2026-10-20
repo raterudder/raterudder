@@ -2056,8 +2056,8 @@ func (c *Controller) evaluatePlannedCharge(
 	}
 }
 
-// evaluateEVCharging checks if EV charging standby is eligible (either EVChargingStandby is enabled
-// during nighttime hours 20:00-07:00, or within legacy EVChargingPeriods) and active EV charging is
+// evaluateEVCharging checks if EV charging standby is eligible (EVChargingStandby is enabled
+// during nighttime hours 20:00-07:00) and active EV charging is
 // detected (load >= 4.8 kW and step >= 3.5 kW above baseline). Real-time EV standby only triggers
 // at night and does not trigger during the day when using solar to charge the EV is desired.
 func (c *Controller) evaluateEVCharging(

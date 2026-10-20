@@ -3018,8 +3018,8 @@ func (s *Server) handleHighHomeLoadNotifications(
 		nowLocal = nowLocal.In(siteLoc)
 	}
 
-	// EV charging suppression: when EV standby is eligible (either EVChargingStandby is enabled during
-	// nighttime hours 20:00-06:59 or within legacy EVChargingPeriods) and active EV charging is detected,
+	// EV charging suppression: when EV standby is eligible (EVChargingStandby is enabled during
+	// nighttime hours 20:00-06:59) and active EV charging is detected,
 	// suppress the alert rather than blanket-ignoring all nighttime loads.
 	if controller.IsEVStandbyEligible(data.settings, nowLocal) {
 		if isEV, stepKW := controller.DetectEVCharging(ctx, data.status.HomeKW, flattenDailyEnergyStats(data.energyHistory)); isEV {

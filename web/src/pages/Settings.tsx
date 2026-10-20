@@ -867,7 +867,7 @@ const Settings = ({
     const [appError, setAppError] = useState<string | null>(null);
     const [copiedToken, setCopiedToken] = useState(false);
 
-    const isEVFeatureEnabled = settings?.release === 'staging' || (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('ev') === 'true') || !!settings?.evChargingStandby || (!!settings?.evChargingPeriods && settings.evChargingPeriods.length > 0);
+    const isEVFeatureEnabled = settings?.release === 'staging' || (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('ev') === 'true') || !!settings?.evChargingStandby;
     const isAppsFeatureEnabled = settings?.release === 'staging' || apps.length > 0;
     const hasNamedRatePeriods = utilityPeriods !== null ? utilityPeriods.some(p => p.name && p.name !== '') : true;
 
@@ -2500,12 +2500,9 @@ const Settings = ({
                                     <Switch.Root
                                         id="avoidBatteryForEV"
                                         className="switch-root"
-                                        checked={!!settings.evChargingStandby || (!!settings.evChargingPeriods && settings.evChargingPeriods.length > 0)}
+                                        checked={!!settings.evChargingStandby}
                                         onCheckedChange={(checked) => {
                                             handleChange('evChargingStandby', checked);
-                                            if (settings.evChargingPeriods) {
-                                                handleChange('evChargingPeriods', undefined);
-                                            }
                                         }}
                                         aria-label="Avoid Battery for EV Charging"
                                     >

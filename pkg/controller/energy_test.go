@@ -1758,13 +1758,7 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 		}
 
 		settings := types.Settings{
-			EVChargingPeriods: []types.TimePeriod{
-				{
-					Hours: []types.UtilityHourPeriod{
-						{HourStart: 1, HourEnd: 4},
-					},
-				},
-			},
+			EVChargingStandby: true,
 		}
 		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, settings)
 

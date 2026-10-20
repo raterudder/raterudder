@@ -285,7 +285,6 @@ export interface Settings {
     minBatterySOC: number;
     minBatterySOCPeriods?: MinBatterySOCPeriod[];
     evChargingStandby?: boolean;
-    evChargingPeriods?: TimePeriod[];
     ignoreHourUsageOverMultiple: number;
     customGridSettings?: boolean;
     manageTOUSchedules?: boolean;

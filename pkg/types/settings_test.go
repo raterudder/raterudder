@@ -311,6 +311,33 @@ func TestMigrateSettings(t *testing.T) {
 		assert.Equal(t, "aggressive", sSet.OptimizationProfile)
 	})
 
+	t.Run("v19 to v20: migrate legacy EVChargingPeriods to EVChargingStandby", func(t *testing.T) {
+		// Case 1: Non-empty EVChargingPeriods migrates to EVChargingStandby = true and clears EVChargingPeriods
+		oldWithPeriods := Settings{
+			EVChargingPeriods: []TimePeriod{
+				{
+					Name:  "Nighttime EV Charging",
+					Hours: []UtilityHourPeriod{{HourStart: 0, HourEnd: 6}},
+				},
+			},
+		}
+		s1, changed1, err1 := MigrateSettings(oldWithPeriods, 19, "production")
+		require.NoError(t, err1)
+		assert.True(t, changed1)
+		assert.True(t, s1.EVChargingStandby)
+		assert.Nil(t, s1.EVChargingPeriods)
+
+		// Case 2: Empty EVChargingPeriods makes no changes
+		oldWithoutPeriods := Settings{
+			EVChargingStandby: false,
+		}
+		s2, changed2, err2 := MigrateSettings(oldWithoutPeriods, 19, "production")
+		require.NoError(t, err2)
+		assert.False(t, changed2)
+		assert.False(t, s2.EVChargingStandby)
+		assert.Nil(t, s2.EVChargingPeriods)
+	})
+
 	t.Run("no change: current version", func(t *testing.T) {
 		current := Settings{
 			UtilityProvider:                         "comed",

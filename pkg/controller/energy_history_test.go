@@ -34,8 +34,8 @@ type energyHistoryBaseline struct {
 var energyHistoryBaselines = map[string]energyHistoryBaseline{
 	// site3 (America/Chicago): 13 vacation days + post-vacation recovery across varying temps (13.5..30.8°C)
 	"site3_late-summer.json": {maeKWH: 0.965, underPredictKWH: 1518.0, overPredictKWH: 903.0},
-	// site5 (America/New_York): configured EVChargingPeriods (00:00-07:00), 4 vacation days, and 1.67x heavy weekends
-	"site5_late-summer.json": {maeKWH: 0.880, underPredictKWH: 1756.5, overPredictKWH: 451.7},
+	// site5 (America/New_York): configured EVChargingStandby, 4 vacation days, and 1.67x heavy weekends
+	"site5_late-summer.json": {maeKWH: 0.766, underPredictKWH: 1444.7, overPredictKWH: 475.6},
 	// site6 (America/Los_Angeles): steady coastal temperatures (13.8..26.9°C) and tight daily load distribution
 	"site6_late-summer.json": {maeKWH: 0.362, underPredictKWH: 512.8, overPredictKWH: 395.9},
 	// site11 (America/Chicago): wide late-summer temperature swings / heatwaves (13.7..31.0°C) driving large AC loads
@@ -162,11 +162,12 @@ func TestEnergyHistory(t *testing.T) {
 				}
 			}
 
-			settings := types.Settings{}
+			settings := types.Settings{
+				EVChargingStandby: dataset.EVChargingStandby,
+			}
 			settings, _, err = types.MigrateSettings(settings, 0, "production")
 			require.NoError(t, err)
 			settings.Location = &types.SiteLocation{TimeZone: fileLoc.String()}
-			settings.EVChargingPeriods = dataset.EVChargingPeriods
 
 			var allHours []types.EnergyStats
 			dayHourlyMap := make(map[string]map[int]float64)
@@ -200,27 +201,23 @@ func TestEnergyHistory(t *testing.T) {
 				standbyLoadKWH = max(0.1, validLoads[int(float64(len(validLoads)-1)*0.01)])
 			}
 
-			// BuildHourlyEnergyModel strips EV charging spikes inside configured EVChargingPeriods to predict
+			// BuildHourlyEnergyModel strips EV charging spikes inside eligible EV charging windows to predict
 			// underlying household load, so target actuals are sanitized the same way before scoring.
 			findNonEVActualKWH := func(localTS time.Time, rawLoadKWH float64) float64 {
-				if len(settings.EVChargingPeriods) > 0 && rawLoadKWH >= EVMinThresholdKW {
-					for _, evp := range settings.EVChargingPeriods {
-						if inEV, _, err := evp.Contains(localTS); err == nil && inEV {
-							for dayOffset := 1; dayOffset <= 7; dayOffset++ {
-								prevUTC := localTS.AddDate(0, 0, -dayOffset).Truncate(time.Hour).UTC()
-								if prevKWH, ok := historyByUTC[prevUTC]; ok && prevKWH < EVMinThresholdKW && prevKWH > 0.05 {
-									return prevKWH
-								}
-							}
-							utcTS := localTS.Truncate(time.Hour).UTC()
-							for lb := 1; lb <= 12; lb++ {
-								if prevKWH, ok := historyByUTC[utcTS.Add(-time.Duration(lb)*time.Hour)]; ok && prevKWH < EVMinThresholdKW && prevKWH > 0.05 {
-									return prevKWH
-								}
-							}
-							return standbyLoadKWH
+				if rawLoadKWH >= EVMinThresholdKW && IsEVStandbyEligible(settings, localTS) {
+					for dayOffset := 1; dayOffset <= 7; dayOffset++ {
+						prevUTC := localTS.AddDate(0, 0, -dayOffset).Truncate(time.Hour).UTC()
+						if prevKWH, ok := historyByUTC[prevUTC]; ok && prevKWH < EVMinThresholdKW && prevKWH > 0.05 {
+							return prevKWH
 						}
 					}
+					utcTS := localTS.Truncate(time.Hour).UTC()
+					for lb := 1; lb <= 12; lb++ {
+						if prevKWH, ok := historyByUTC[utcTS.Add(-time.Duration(lb)*time.Hour)]; ok && prevKWH < EVMinThresholdKW && prevKWH > 0.05 {
+							return prevKWH
+						}
+					}
+					return standbyLoadKWH
 				}
 				return rawLoadKWH
 			}

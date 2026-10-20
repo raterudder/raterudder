@@ -286,8 +286,6 @@ type candidateLogData struct {
 	vppStart                time.Time
 	vppEnd                  time.Time
 	vppDeadline             time.Time
-	periodStart             time.Time
-	periodEnd               time.Time
 	earliestSolarRefillTime time.Time
 	vppEventDeadline        time.Time
 	earliestArbitrageTime   time.Time
@@ -555,8 +553,6 @@ func logCandidate(ctx context.Context, cand actionCandidate, ld candidateLogData
 			slog.Time("stepTime", interval.startTime),
 			slog.Float64("homeKW", ld.homeKW),
 			slog.Float64("stepKW", ld.stepKW),
-			slog.Time("periodStart", ld.periodStart),
-			slog.Time("periodEnd", ld.periodEnd),
 		)
 	case PlanActionNegativeOrForceChargeThresholdCharging, PlanActionNegativeOrForceChargeThresholdStandby:
 		planLog(ctx, selected, cand.actionName,
@@ -2146,13 +2142,6 @@ func (c *Controller) appendActionCandidates(
 		if isEV, stepKW := DetectEVCharging(ctx, currentStatus.HomeKW, history); isEV {
 			ld.homeKW = currentStatus.HomeKW
 			ld.stepKW = stepKW
-			for _, period := range settings.EVChargingPeriods {
-				if inPeriod, _, _ := period.Contains(interval.startTime); inPeriod {
-					ld.periodStart = period.Start
-					ld.periodEnd = period.End
-					break
-				}
-			}
 
 			candidates = append(candidates, actionCandidate{
 				batteryMode: types.BatteryModeStandby,

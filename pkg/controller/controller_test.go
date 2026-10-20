@@ -2404,17 +2404,7 @@ func TestDecide(t *testing.T) {
 			MinDeficitPriceDifferenceDollarsPerKWH: 0.05,
 			MinArbitrageDifferenceDollarsPerKWH:    0.10,
 			GridChargeBatteries:                    true,
-			EVChargingPeriods: []types.TimePeriod{
-				{
-					Name: "Night EV Charging",
-					Hours: []types.UtilityHourPeriod{
-						{
-							HourStart: 23,
-							HourEnd:   6,
-						},
-					},
-				},
-			},
+			EVChargingStandby:                      true,
 		}
 		evBaseStatus := types.SystemStatus{
 			Timestamp:             evNow,
@@ -8552,17 +8542,7 @@ func TestEvaluateEVCharging(t *testing.T) {
 	now := time.Date(2026, 8, 20, 23, 30, 0, 0, loc)
 
 	baseSettings := types.Settings{
-		EVChargingPeriods: []types.TimePeriod{
-			{
-				Name: "Night EV Charging",
-				Hours: []types.UtilityHourPeriod{
-					{
-						HourStart: 23,
-						HourEnd:   6,
-					},
-				},
-			},
-		},
+		EVChargingStandby: true,
 	}
 
 	baseStatus := types.SystemStatus{
@@ -8654,26 +8634,6 @@ func TestEvaluateEVCharging(t *testing.T) {
 		require.NotNil(t, result)
 		assert.Equal(t, types.BatteryModeStandby, result.BatteryMode)
 		assert.Equal(t, types.ActionReasonEVChargingStandby, result.Reason)
-	})
-
-	t.Run("MultiplePeriods_MatchesActivePeriod", func(t *testing.T) {
-		multiPeriodSettings := types.Settings{
-			EVChargingPeriods: []types.TimePeriod{
-				{
-					Name:  "Morning Period",
-					Hours: []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 9}},
-				},
-				{
-					Name:  "Night Period",
-					Hours: []types.UtilityHourPeriod{{HourStart: 23, HourEnd: 6}},
-				},
-			},
-		}
-		status := baseStatus
-		status.HomeKW = 9.6
-		result := c.evaluateEVCharging(ctx, now, status, history, multiPeriodSettings)
-		require.NotNil(t, result)
-		assert.Equal(t, types.BatteryModeStandby, result.BatteryMode)
 	})
 
 	t.Run("OvernightMidnightCrossingPeriod", func(t *testing.T) {

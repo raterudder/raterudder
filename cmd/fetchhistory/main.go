@@ -262,7 +262,7 @@ func fetchAndSaveEnergyDataset(ctx context.Context, db storage.Database, sID str
 		TimeZone:          tz,
 		SimStart:          start,
 		SimEnd:            end,
-		EVChargingPeriods: settings.EVChargingPeriods,
+		EVChargingStandby: settings.EVChargingStandby,
 		EnergyHistory:     dedupEnergy,
 		WeatherHistory:    dedupWeather,
 	}
@@ -286,8 +286,8 @@ func fetchAndSaveEnergyDataset(ctx context.Context, db storage.Database, sID str
 		os.Exit(1)
 	}
 
-	fmt.Printf("Loaded: %d energy days, %d weather days (tz=%s, evPeriods=%d).\n",
-		len(dedupEnergy), len(dedupWeather), tz, len(settings.EVChargingPeriods))
+	fmt.Printf("Loaded: %d energy days, %d weather days (tz=%s, evStandby=%v).\n",
+		len(dedupEnergy), len(dedupWeather), tz, settings.EVChargingStandby)
 	fmt.Printf("Saved anonymized energy history dataset to %s\n", outputPath)
 }
 

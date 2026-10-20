@@ -76,27 +76,20 @@ func isNighttimeEVHour(hr int) bool {
 }
 
 // IsEVStandbyEligible returns true if the site has opted into EV charging standby for ts:
-// either EVChargingStandby is enabled and ts falls within the nighttime window (20:00-06:59 local time),
-// or ts falls within a legacy configured EVChargingPeriods window.
+// EVChargingStandby is enabled and ts falls within the nighttime window (20:00-06:59 local time).
 // Real-time EV standby intentionally does not trigger during daytime hours (07:00-19:59) when
 // using solar to charge the EV is assumed to be desired.
 func IsEVStandbyEligible(settings types.Settings, ts time.Time) bool {
+	if !settings.EVChargingStandby {
+		return false
+	}
 	localTS := ts
 	if (localTS.Location() == nil || localTS.Location() == time.UTC) && settings.Location != nil && settings.Location.TimeZone != "" {
 		if loc, err := time.LoadLocation(settings.Location.TimeZone); err == nil {
 			localTS = localTS.In(loc)
 		}
 	}
-	if settings.EVChargingStandby && isNighttimeEVHour(localTS.Hour()) {
-		return true
-	}
-	for _, evp := range settings.EVChargingPeriods {
-		inEVPeriod, _, err := evp.Contains(localTS)
-		if err == nil && inEVPeriod {
-			return true
-		}
-	}
-	return false
+	return isNighttimeEVHour(localTS.Hour())
 }
 
 // DetectEVCharging checks if the current instantaneous household load reflects active EV charging
@@ -278,7 +271,7 @@ func calculateRecentBaseline(ctx context.Context, history []types.EnergyStats) f
 
 // detectIntermittentEVAndLoadSpikes performs automatic, zero-config detection of intermittent Level 2 EV
 // charging (e.g. afternoon solar EV charging 1-4 days/week, or nighttime charging 1-6 nights/week when
-// EVChargingPeriods is not configured), user-configured EV standby periods, and large unusual one-off loads.
+// EVChargingStandby is not enabled), user-configured EV standby windows, and large unusual one-off loads.
 //
 // Why we focus on Level 2 EV charging (and not Level 1):
 //   - Level 1 chargers (12A on a 120V/15A circuit) draw only ~1.4 kW, which overlaps completely with normal

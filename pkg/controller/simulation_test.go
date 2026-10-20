@@ -2068,20 +2068,10 @@ func TestSimulateState(t *testing.T) {
 			assert.GreaterOrEqual(t, model[0].AvgHomeLoadKWH, 5.0)
 		})
 
-		t.Run("WithEVChargingPeriods_EVLoadClampedToBaseline", func(t *testing.T) {
+		t.Run("WithEVChargingStandby_EVLoadClampedToBaseline", func(t *testing.T) {
 			settingsWithEV := types.Settings{
-				MinBatterySOC: 20.0,
-				EVChargingPeriods: []types.TimePeriod{
-					{
-						Name: "Night EV Charging",
-						Hours: []types.UtilityHourPeriod{
-							{
-								HourStart: 23,
-								HourEnd:   6,
-							},
-						},
-					},
-				},
+				MinBatterySOC:     20.0,
+				EVChargingStandby: true,
 			}
 
 			model, _ := c.BuildHourlyEnergyModel(ctx, evNow, evHistory, nil, settingsWithEV)
@@ -2099,7 +2089,7 @@ func TestSimulateState(t *testing.T) {
 			}
 		})
 
-		t.Run("WithEVChargingPeriods_ClampedToHourSpecificBaseline", func(t *testing.T) {
+		t.Run("WithEVChargingStandby_ClampedToHourSpecificBaseline", func(t *testing.T) {
 			// History where night baseline is 1.5 kW (due to nighttime AC), but midday has 0.1 kW standby
 			var hist []types.EnergyStats
 			for d := 0; d < 14; d++ {
@@ -2121,18 +2111,8 @@ func TestSimulateState(t *testing.T) {
 			}
 
 			settingsWithEV := types.Settings{
-				MinBatterySOC: 20.0,
-				EVChargingPeriods: []types.TimePeriod{
-					{
-						Name: "Night EV Charging",
-						Hours: []types.UtilityHourPeriod{
-							{
-								HourStart: 23,
-								HourEnd:   6,
-							},
-						},
-					},
-				},
+				MinBatterySOC:     20.0,
+				EVChargingStandby: true,
 			}
 
 			model, _ := c.BuildHourlyEnergyModel(ctx, evNow, hist, nil, settingsWithEV)

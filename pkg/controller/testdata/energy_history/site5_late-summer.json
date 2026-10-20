@@ -4,19 +4,7 @@
   "timeZone": "America/New_York",
   "simStart": "2026-08-05T00:00:00Z",
   "simEnd": "2026-10-01T00:00:00Z",
-  "evChargingPeriods": [
-    {
-      "name": "Nighttime EV Charging",
-      "start": "0001-01-01T00:00:00Z",
-      "end": "0001-01-01T00:00:00Z",
-      "hours": [
-        {
-          "hourStart": 0,
-          "hourEnd": 7
-        }
-      ]
-    }
-  ],
+  "evChargingStandby": true,
   "energyHistory": [
     {
       "tsDayStart": "2026-07-01T00:00:00-04:00",

@@ -2576,7 +2576,6 @@ describe('App & Settings', () => {
                 ...defaultSettings,
                 release: 'production',
                 evChargingStandby: undefined,
-                evChargingPeriods: undefined,
             });
             await navigateToSettings();
             expect(screen.queryByTestId('ev-charging-section')).not.toBeInTheDocument();
@@ -2641,18 +2640,12 @@ describe('App & Settings', () => {
             });
         });
 
-        it('toggling switch OFF disables evChargingStandby and clears legacy evChargingPeriods', async () => {
+        it('toggling switch OFF disables evChargingStandby', async () => {
             const user = userEvent.setup();
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
                 release: 'staging',
                 evChargingStandby: true,
-                evChargingPeriods: [
-                    {
-                        name: 'Nighttime EV Charging',
-                        hours: [{ hourStart: 23, minuteStart: 0, hourEnd: 6, minuteEnd: 0 }],
-                    },
-                ],
             });
 
             await navigateToSettings();

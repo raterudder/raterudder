@@ -1321,21 +1321,25 @@ func TestGenerateActionCandidates(t *testing.T) {
 	t.Run("ActiveEVCharging_EnforcesStandbyAtT0", func(t *testing.T) {
 		t.Parallel()
 
+		nightNow := time.Date(2026, 6, 15, 22, 0, 0, 0, time.UTC)
+		nightInterval := interval
+		nightInterval.startTime = nightNow
+		nightInterval.endTime = nightNow.Add(time.Hour)
+
 		evSettings := settings
-		evSettings.EVChargingPeriods = []types.TimePeriod{
-			{Start: now.Add(-time.Hour), End: now.Add(4 * time.Hour)},
-		}
+		evSettings.EVChargingStandby = true
 
 		// Current home load shows EV charging active (8.5 kW)
 		evStatus := status
+		evStatus.Timestamp = nightNow
 		evStatus.HomeKW = 8.5
 
-		candidates := c.generateActionCandidates(ctx, 0, interval, nil, planState{energyKWH: 10.0, soc: 74}, planningAnchors{}, evSettings, evStatus, nil, precedingAction{})
+		candidates := c.generateActionCandidates(ctx, 0, nightInterval, nil, planState{energyKWH: 10.0, soc: 74}, planningAnchors{}, evSettings, evStatus, nil, precedingAction{})
 		require.NotEmpty(t, candidates)
 		assert.Equal(t, types.BatteryModeStandby, candidates[0].batteryMode)
 		assert.Equal(t, types.ActionReasonEVChargingStandby, candidates[0].reason)
 		assert.Equal(t, PlanActionActiveEVChargingStandby, candidates[0].actionName)
-		logCandidate(ctx, candidates[0], candidateLogData{}, interval, planState{energyKWH: 10.0, soc: 74}, true)
+		logCandidate(ctx, candidates[0], candidateLogData{}, nightInterval, planState{energyKWH: 10.0, soc: 74}, true)
 		// Discharging modes (Load, Export) must be strictly pruned during EV charging
 		for _, cand := range candidates {
 			assert.NotEqual(t, types.BatteryModeLoad, cand.batteryMode)
@@ -1346,16 +1350,20 @@ func TestGenerateActionCandidates(t *testing.T) {
 	t.Run("EVChargingPeriod_NoActiveSession_AllowsNormalSelfConsumption", func(t *testing.T) {
 		t.Parallel()
 
+		nightNow := time.Date(2026, 6, 15, 22, 0, 0, 0, time.UTC)
+		nightInterval := interval
+		nightInterval.startTime = nightNow
+		nightInterval.endTime = nightNow.Add(time.Hour)
+
 		evSettings := settings
-		evSettings.EVChargingPeriods = []types.TimePeriod{
-			{Start: now.Add(-time.Hour), End: now.Add(4 * time.Hour)},
-		}
+		evSettings.EVChargingStandby = true
 
 		// Current home load is baseline (1.2 kW, no EV charging active)
 		idleStatus := status
+		idleStatus.Timestamp = nightNow
 		idleStatus.HomeKW = 1.2
 
-		candidates := c.generateActionCandidates(ctx, 0, interval, nil, planState{energyKWH: 10.0, soc: 74}, planningAnchors{}, evSettings, idleStatus, nil, precedingAction{})
+		candidates := c.generateActionCandidates(ctx, 0, nightInterval, nil, planState{energyKWH: 10.0, soc: 74}, planningAnchors{}, evSettings, idleStatus, nil, precedingAction{})
 		require.NotEmpty(t, candidates)
 
 		// On nights without active EV charging, battery should cover household baseline load
@@ -1372,17 +1380,21 @@ func TestGenerateActionCandidates(t *testing.T) {
 	t.Run("EVChargingPeriod_FutureSteps_NotForcedToStandby", func(t *testing.T) {
 		t.Parallel()
 
+		nightNow := time.Date(2026, 6, 15, 22, 0, 0, 0, time.UTC)
+		nightInterval := interval
+		nightInterval.startTime = nightNow
+		nightInterval.endTime = nightNow.Add(time.Hour)
+
 		evSettings := settings
-		evSettings.EVChargingPeriods = []types.TimePeriod{
-			{Start: now.Add(-time.Hour), End: now.Add(4 * time.Hour)},
-		}
+		evSettings.EVChargingStandby = true
 
 		// Even if step 0 has active EV charging, step 1 (future step) must not be unconditionally forced
 		// to Standby because user might not charge across future intervals.
 		evStatus := status
+		evStatus.Timestamp = nightNow
 		evStatus.HomeKW = 8.5
 
-		candidatesFuture := c.generateActionCandidates(ctx, 1, interval, nil, planState{energyKWH: 10.0, soc: 74}, planningAnchors{}, evSettings, evStatus, nil, precedingAction{})
+		candidatesFuture := c.generateActionCandidates(ctx, 1, nightInterval, nil, planState{energyKWH: 10.0, soc: 74}, planningAnchors{}, evSettings, evStatus, nil, precedingAction{})
 		require.NotEmpty(t, candidatesFuture)
 
 		hasLoad := false
@@ -2005,15 +2017,19 @@ func TestGenerateActionCandidates(t *testing.T) {
 	t.Run("EVCharging_PeakRate_PrunesChargeAny", func(t *testing.T) {
 		t.Parallel()
 
+		nightNow := time.Date(2026, 6, 15, 20, 0, 0, 0, time.UTC)
 		evSettings := settings
-		evSettings.EVChargingPeriods = []types.TimePeriod{{Start: now.Add(-time.Hour), End: now.Add(2 * time.Hour)}}
+		evSettings.EVChargingStandby = true
 
 		peakEVInterval := interval
+		peakEVInterval.startTime = nightNow
+		peakEVInterval.endTime = nightNow.Add(time.Hour)
 		peakEVInterval.importRate = 0.40
 		peakEVInterval.loadKWH = 6.0
 
 		anchors := planningAnchors{knownPostHorizonRate: 0.08}
 		evStatus := status
+		evStatus.Timestamp = nightNow
 		evStatus.HomeKW = 6.5
 
 		candidates := c.generateActionCandidates(ctx, 0, peakEVInterval, nil, planState{energyKWH: 8.1, soc: 60}, anchors, evSettings, evStatus, nil, precedingAction{})
@@ -7595,13 +7611,8 @@ func TestPlanScenarios(t *testing.T) {
 		}
 
 		settings := types.Settings{
-			MinBatterySOC: 20,
-			EVChargingPeriods: []types.TimePeriod{
-				{
-					Start: time.Date(2026, 6, 15, 22, 0, 0, 0, chicagoLoc),
-					End:   time.Date(2026, 6, 16, 6, 0, 0, 0, chicagoLoc),
-				},
-			},
+			MinBatterySOC:     20,
+			EVChargingStandby: true,
 		}
 
 		var futurePrices []types.Price
