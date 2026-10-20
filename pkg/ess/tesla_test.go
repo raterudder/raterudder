@@ -3858,18 +3858,33 @@ func TestTesla(t *testing.T) {
 		assert.Equal(t, teslaExportRuleBatteryOk, currentExportRule)
 
 		// 4. At 1:20 PM / 13:20 during active solar export (when active period start in schedule
-		// has advanced from 12:00 to 13:20 because tomorrow 00:00-13:20 is off-peak):
+		// has advanced from 12:00 to 13:20 because tomorrow 00:00-13:20 is off-peak, even with
+		// ComEd-style non-export sub-splits across SUPER_OFF_PEAK, OFF_PEAK, and PARTIAL_PEAK):
 		// Must treat schedule as matching and skip re-uploading time_of_use_settings.
 		currentTime = time.Date(2026, 7, 15, 13, 20, 0, 0, loc)
 		schedAt1320 := &types.TOUSchedule{
 			Periods: []types.TOUPeriod{
-				{StartHour: 0, StartMinute: 0, EndHour: 13, EndMinute: 20, ImportDollars: 0.05, ExportDollars: 0.03, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 0, StartMinute: 0, EndHour: 4, EndMinute: 0, ImportDollars: 0.04, ExportDollars: 0.02, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 4, StartMinute: 0, EndHour: 8, EndMinute: 0, ImportDollars: 0.05, ExportDollars: 0.03, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 8, StartMinute: 0, EndHour: 11, EndMinute: 0, ImportDollars: 0.08, ExportDollars: 0.05, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 11, StartMinute: 0, EndHour: 13, EndMinute: 20, ImportDollars: 0.12, ExportDollars: 0.08, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
 				{StartHour: 13, StartMinute: 20, EndHour: 16, EndMinute: 0, ImportDollars: 0.25, ExportDollars: 0.15, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
 				{StartHour: 16, StartMinute: 0, EndHour: 18, EndMinute: 0, ImportDollars: 0.05, ExportDollars: 0.03, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
 				{StartHour: 18, StartMinute: 0, EndHour: 20, EndMinute: 0, ImportDollars: 0.35, ExportDollars: 0.25, BatteryMode: types.BatteryModeExport, SolarMode: types.SolarModeExport, Peak: true},
 				{StartHour: 20, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.05, ExportDollars: 0.03, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
 			},
 		}
-		assert.True(t, isTeslaScheduleMatch(currentTariff, schedAt1320, currentTime), "advancing active period start with current time should match existing Tesla tariff")
+		assert.True(t, isTeslaScheduleMatch(currentTariff, schedAt1320, currentTime), "advancing active period start and non-export ComEd sub-splits should match existing Tesla tariff")
+
+		// Also verify buildTeslaTOUTariffPayload merges adjacent periods within the same tier
+		// (00:00-04:00 at $0.04 and 04:00-08:00 at $0.05 both land in SUPER_OFF_PEAK and merge into 00:00-08:00).
+		payload1320 := buildTeslaTOUTariffPayload(schedAt1320)
+		tc1320 := payload1320["tou_settings"].(map[string]any)["tariff_content_v2"].(map[string]any)
+		allYear1320 := tc1320["seasons"].(map[string]any)["ALL_YEAR"].(map[string]any)
+		superOffPeriods := getTeslaPeriodsByType(allYear1320, "SUPER_OFF_PEAK")
+		if assert.Len(t, superOffPeriods, 3, "adjacent SUPER_OFF_PEAK periods 00:00-04:00 and 04:00-08:00 should merge into a single 00:00-08:00 entry") {
+			assert.Equal(t, 0, superOffPeriods[0].fromHour)
+			assert.Equal(t, 8, superOffPeriods[0].toHour)
+		}
 	})
 }

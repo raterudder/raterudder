@@ -952,9 +952,21 @@ func buildTeslaTOUTariffPayload(sched *types.TOUSchedule) map[string]any {
 		if !ok || len(periods) == 0 {
 			continue
 		}
+		var mergedPeriods []types.TOUPeriod
+		for _, p := range periods {
+			if len(mergedPeriods) > 0 {
+				prev := &mergedPeriods[len(mergedPeriods)-1]
+				if prev.EndHour == p.StartHour && prev.EndMinute == p.StartMinute {
+					prev.EndHour = p.EndHour
+					prev.EndMinute = p.EndMinute
+					continue
+				}
+			}
+			mergedPeriods = append(mergedPeriods, p)
+		}
 		tierName := string(tier)
 		var pList []map[string]any
-		for _, p := range periods {
+		for _, p := range mergedPeriods {
 			toH := p.EndHour % 24
 			toM := p.EndMinute
 			pList = append(pList, map[string]any{

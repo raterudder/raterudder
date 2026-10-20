@@ -5149,7 +5149,7 @@ func TestFranklin(t *testing.T) {
 		updatedSched := &types.TOUSchedule{
 			Periods: []types.TOUPeriod{
 				{StartHour: 0, StartMinute: 0, EndHour: 17, EndMinute: 0, ImportDollars: 0.055, ExportDollars: 0.032, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
-				{StartHour: 17, StartMinute: 0, EndHour: 21, EndMinute: 0, ImportDollars: 0.250, ExportDollars: 0.180, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: true},
+				{StartHour: 17, StartMinute: 0, EndHour: 21, EndMinute: 0, ImportDollars: 0.250, ExportDollars: 0.180, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
 				{StartHour: 21, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.055, ExportDollars: 0.032, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
 			},
 		}
@@ -5179,7 +5179,7 @@ func TestFranklin(t *testing.T) {
 		exportSched := &types.TOUSchedule{
 			Periods: []types.TOUPeriod{
 				{StartHour: 0, StartMinute: 0, EndHour: 17, EndMinute: 0, ImportDollars: 0.055, ExportDollars: 0.032, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
-				{StartHour: 17, StartMinute: 0, EndHour: 21, EndMinute: 0, ImportDollars: 0.250, ExportDollars: 0.180, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 17, StartMinute: 0, EndHour: 21, EndMinute: 0, ImportDollars: 0.250, ExportDollars: 0.180, BatteryMode: types.BatteryModeExport, SolarMode: types.SolarModeExport, Peak: true},
 				{StartHour: 21, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.055, ExportDollars: 0.032, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny},
 			},
 		}
@@ -5308,14 +5308,15 @@ func TestFranklin(t *testing.T) {
 		strategyList := savedPayload["strategyList"].([]any)
 		dayType := strategyList[0].(map[string]any)["dayTypeVoList"].([]any)[0].(map[string]any)
 		detailVoList := dayType["detailVoList"].([]any)
-		if assert.Len(t, detailVoList, 7) {
-			assert.EqualValues(t, franklinDispatchSelfConsumption, detailVoList[0].(map[string]any)["dispatchId"], "00:00-04:00 non-export ChargeAny should stay on self-consumption dispatch (6)")
-			assert.EqualValues(t, franklinDispatchSelfConsumption, detailVoList[1].(map[string]any)["dispatchId"], "04:00-12:00 non-export Standby should stay on self-consumption dispatch (6)")
-			assert.EqualValues(t, franklinDispatchAPowerToHome, detailVoList[2].(map[string]any)["dispatchId"], "12:00-15:00 SolarModeExport should use dispatch 1")
-			assert.EqualValues(t, franklinDispatchAPowerOnStandby, detailVoList[3].(map[string]any)["dispatchId"], "15:00-16:00 Standby+SolarModeExport should use dispatch 2")
-			assert.EqualValues(t, franklinDispatchSelfConsumption, detailVoList[4].(map[string]any)["dispatchId"], "16:00-19:00 non-export Load should use dispatch 6")
-			assert.EqualValues(t, franklinDispatchAPowerToHomeAndGrid, detailVoList[5].(map[string]any)["dispatchId"], "19:00-21:00 future BatteryModeExport should use dispatch 7")
-			assert.EqualValues(t, franklinDispatchSelfConsumption, detailVoList[6].(map[string]any)["dispatchId"], "21:00-24:00 non-export Load should use dispatch 6")
+		if assert.Len(t, detailVoList, 6) {
+			assert.Equal(t, "00:00", detailVoList[0].(map[string]any)["startHourTime"])
+			assert.Equal(t, "12:00", detailVoList[0].(map[string]any)["endHourTime"])
+			assert.EqualValues(t, franklinDispatchSelfConsumption, detailVoList[0].(map[string]any)["dispatchId"], "00:00-12:00 adjacent non-export ChargeAny and Standby with same waveType should merge on self-consumption dispatch (6)")
+			assert.EqualValues(t, franklinDispatchAPowerToHome, detailVoList[1].(map[string]any)["dispatchId"], "12:00-15:00 SolarModeExport should use dispatch 1")
+			assert.EqualValues(t, franklinDispatchAPowerOnStandby, detailVoList[2].(map[string]any)["dispatchId"], "15:00-16:00 Standby+SolarModeExport should use dispatch 2")
+			assert.EqualValues(t, franklinDispatchSelfConsumption, detailVoList[3].(map[string]any)["dispatchId"], "16:00-19:00 non-export Load should use dispatch 6")
+			assert.EqualValues(t, franklinDispatchAPowerToHomeAndGrid, detailVoList[4].(map[string]any)["dispatchId"], "19:00-21:00 future BatteryModeExport should use dispatch 7")
+			assert.EqualValues(t, franklinDispatchSelfConsumption, detailVoList[5].(map[string]any)["dispatchId"], "21:00-24:00 non-export Load should use dispatch 6")
 		}
 
 		// Calling SetModes again during the peak period with the same schedule must match and skip saveTouDispatch
@@ -5327,15 +5328,17 @@ func TestFranklin(t *testing.T) {
 		assert.Equal(t, 1, saveDispatchCalls, "should not re-save TOU schedule when schedule already matches")
 
 		// During the 12:00-15:00 export period (e.g. at 13:20) where the active period start
-		// has advanced to 13:20 (because tomorrow 04:00-13:20 is non-export), isFranklinScheduleMatch
+		// has advanced to 13:20 (because tomorrow 04:00-13:20 is non-export) and non-export
+		// periods have sub-splits or different ComEd tier rates, isFranklinScheduleMatch
 		// must treat the schedule as matching.
 		schedAt1320 := &types.TOUSchedule{
 			Periods: []types.TOUPeriod{
-				{StartHour: 0, StartMinute: 0, EndHour: 4, EndMinute: 0, ImportDollars: 0.05, ExportDollars: 0.02, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
-				{StartHour: 4, StartMinute: 0, EndHour: 13, EndMinute: 20, ImportDollars: 0.05, ExportDollars: 0.02, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 0, StartMinute: 0, EndHour: 4, EndMinute: 0, ImportDollars: 0.04, ExportDollars: 0.01, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 4, StartMinute: 0, EndHour: 8, EndMinute: 0, ImportDollars: 0.08, ExportDollars: 0.04, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 8, StartMinute: 0, EndHour: 13, EndMinute: 20, ImportDollars: 0.14, ExportDollars: 0.08, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
 				{StartHour: 13, StartMinute: 20, EndHour: 15, EndMinute: 0, ImportDollars: 0.25, ExportDollars: 0.15, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
 				{StartHour: 15, StartMinute: 0, EndHour: 16, EndMinute: 0, ImportDollars: 0.25, ExportDollars: 0.15, BatteryMode: types.BatteryModeStandby, SolarMode: types.SolarModeExport, Peak: true},
-				{StartHour: 16, StartMinute: 0, EndHour: 19, EndMinute: 0, ImportDollars: 0.05, ExportDollars: 0.02, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 16, StartMinute: 0, EndHour: 19, EndMinute: 0, ImportDollars: 0.09, ExportDollars: 0.05, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
 				{StartHour: 19, StartMinute: 0, EndHour: 21, EndMinute: 0, ImportDollars: 0.35, ExportDollars: 0.25, BatteryMode: types.BatteryModeExport, SolarMode: types.SolarModeExport, Peak: true},
 				{StartHour: 21, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.05, ExportDollars: 0.02, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
 			},

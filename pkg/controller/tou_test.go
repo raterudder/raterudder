@@ -511,7 +511,7 @@ func TestBuildTOUSchedule(t *testing.T) {
 		s1 := &types.TOUSchedule{
 			Periods: []types.TOUPeriod{
 				{StartHour: 0, StartMinute: 0, EndHour: 16, EndMinute: 0, ImportDollars: 0.150, ExportDollars: 0.080, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
-				{StartHour: 16, StartMinute: 0, EndHour: 21, EndMinute: 0, ImportDollars: 0.450, ExportDollars: 0.350, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: true},
+				{StartHour: 16, StartMinute: 0, EndHour: 21, EndMinute: 0, ImportDollars: 0.450, ExportDollars: 0.350, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
 				{StartHour: 21, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.150, ExportDollars: 0.080, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
 			},
 		}
@@ -522,21 +522,21 @@ func TestBuildTOUSchedule(t *testing.T) {
 		// Nil schedule -> significantly different
 		assert.True(t, s1.IsSignificantlyDifferent(nil, time.Time{}))
 
-		// Rate difference within $0.01 ($0.008) -> not significantly different
+		// Export period rate difference within $0.05 ($0.030) -> not significantly different
 		s2 := &types.TOUSchedule{
 			Periods: []types.TOUPeriod{
-				{StartHour: 0, StartMinute: 0, EndHour: 16, EndMinute: 0, ImportDollars: 0.158, ExportDollars: 0.080, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
-				{StartHour: 16, StartMinute: 0, EndHour: 21, EndMinute: 0, ImportDollars: 0.450, ExportDollars: 0.350, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: true},
+				{StartHour: 0, StartMinute: 0, EndHour: 16, EndMinute: 0, ImportDollars: 0.150, ExportDollars: 0.080, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 16, StartMinute: 0, EndHour: 21, EndMinute: 0, ImportDollars: 0.480, ExportDollars: 0.350, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
 				{StartHour: 21, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.150, ExportDollars: 0.080, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
 			},
 		}
 		assert.False(t, s1.IsSignificantlyDifferent(s2, time.Time{}))
 
-		// Rate difference exceeding $0.01 ($0.015) -> significantly different
+		// Export period rate difference exceeding $0.05 ($0.070) -> significantly different
 		s3 := &types.TOUSchedule{
 			Periods: []types.TOUPeriod{
-				{StartHour: 0, StartMinute: 0, EndHour: 16, EndMinute: 0, ImportDollars: 0.165, ExportDollars: 0.080, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
-				{StartHour: 16, StartMinute: 0, EndHour: 21, EndMinute: 0, ImportDollars: 0.450, ExportDollars: 0.350, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: true},
+				{StartHour: 0, StartMinute: 0, EndHour: 16, EndMinute: 0, ImportDollars: 0.150, ExportDollars: 0.080, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 16, StartMinute: 0, EndHour: 21, EndMinute: 0, ImportDollars: 0.520, ExportDollars: 0.350, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
 				{StartHour: 21, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.150, ExportDollars: 0.080, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
 			},
 		}
@@ -546,7 +546,7 @@ func TestBuildTOUSchedule(t *testing.T) {
 		s4 := &types.TOUSchedule{
 			Periods: []types.TOUPeriod{
 				{StartHour: 0, StartMinute: 0, EndHour: 16, EndMinute: 10, ImportDollars: 0.150, ExportDollars: 0.080, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
-				{StartHour: 16, StartMinute: 10, EndHour: 21, EndMinute: 0, ImportDollars: 0.450, ExportDollars: 0.350, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: true},
+				{StartHour: 16, StartMinute: 10, EndHour: 21, EndMinute: 0, ImportDollars: 0.450, ExportDollars: 0.350, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
 				{StartHour: 21, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.150, ExportDollars: 0.080, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
 			},
 		}
@@ -556,21 +556,35 @@ func TestBuildTOUSchedule(t *testing.T) {
 		s5 := &types.TOUSchedule{
 			Periods: []types.TOUPeriod{
 				{StartHour: 0, StartMinute: 0, EndHour: 16, EndMinute: 30, ImportDollars: 0.150, ExportDollars: 0.080, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
-				{StartHour: 16, StartMinute: 30, EndHour: 21, EndMinute: 0, ImportDollars: 0.450, ExportDollars: 0.350, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: true},
+				{StartHour: 16, StartMinute: 30, EndHour: 21, EndMinute: 0, ImportDollars: 0.450, ExportDollars: 0.350, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
 				{StartHour: 21, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.150, ExportDollars: 0.080, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
 			},
 		}
 		assert.True(t, s1.IsSignificantlyDifferent(s5, time.Time{}))
 
-		// Mode change (BatteryModeLoad -> BatteryModeExport) -> significantly different
+		// Mode change (SolarModeExport -> BatteryModeExport) -> significantly different
 		s6 := &types.TOUSchedule{
 			Periods: []types.TOUPeriod{
 				{StartHour: 0, StartMinute: 0, EndHour: 16, EndMinute: 0, ImportDollars: 0.150, ExportDollars: 0.080, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
-				{StartHour: 16, StartMinute: 0, EndHour: 21, EndMinute: 0, ImportDollars: 0.450, ExportDollars: 0.350, BatteryMode: types.BatteryModeExport, SolarMode: types.SolarModeAny, Peak: true},
+				{StartHour: 16, StartMinute: 0, EndHour: 21, EndMinute: 0, ImportDollars: 0.450, ExportDollars: 0.350, BatteryMode: types.BatteryModeExport, SolarMode: types.SolarModeExport, Peak: true},
 				{StartHour: 21, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.150, ExportDollars: 0.080, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
 			},
 		}
 		assert.True(t, s1.IsSignificantlyDifferent(s6, time.Time{}))
+
+		// Non-export sub-splits, merges, Peak flag flips, and rate changes (e.g. ComEd dynamic hourly pricing)
+		// must coalesce and NOT be flagged as significantly different when export periods match
+		s7 := &types.TOUSchedule{
+			Periods: []types.TOUPeriod{
+				{StartHour: 0, StartMinute: 0, EndHour: 5, EndMinute: 0, ImportDollars: 0.050, ExportDollars: 0.020, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 5, StartMinute: 0, EndHour: 7, EndMinute: 0, ImportDollars: 0.220, ExportDollars: 0.180, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: true},
+				{StartHour: 7, StartMinute: 0, EndHour: 16, EndMinute: 0, ImportDollars: 0.080, ExportDollars: 0.040, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 16, StartMinute: 0, EndHour: 21, EndMinute: 0, ImportDollars: 0.450, ExportDollars: 0.350, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport, Peak: true},
+				{StartHour: 21, StartMinute: 0, EndHour: 23, EndMinute: 0, ImportDollars: 0.065, ExportDollars: 0.035, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+				{StartHour: 23, StartMinute: 0, EndHour: 24, EndMinute: 0, ImportDollars: 0.090, ExportDollars: 0.055, BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeAny, Peak: false},
+			},
+		}
+		assert.False(t, s1.IsSignificantlyDifferent(s7, time.Time{}))
 	})
 
 	t.Run("DynamicHourlyPricingComEdStyleCoalescesIntoBlocks", func(t *testing.T) {

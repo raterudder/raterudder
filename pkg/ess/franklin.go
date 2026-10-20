@@ -1314,9 +1314,19 @@ func buildFranklinTouDetailsFromSchedule(sched *types.TOUSchedule, tiers []touTi
 			dispatchID = franklinDispatchSelfConsumption
 		}
 
+		startStr := p.StartTimeStr()
+		endStr := p.EndTimeStr()
+		if len(details) > 0 {
+			prev := &details[len(details)-1]
+			if prev.WaveType == waveType && prev.DispatchID == int(dispatchID) && prev.EndHourTime == startStr {
+				prev.EndHourTime = endStr
+				continue
+			}
+		}
+
 		details = append(details, franklinDetailVoItem{
-			StartHourTime: p.StartTimeStr(),
-			EndHourTime:   p.EndTimeStr(),
+			StartHourTime: startStr,
+			EndHourTime:   endStr,
 			WaveType:      waveType,
 			Name:          name,
 			DispatchID:    int(dispatchID),

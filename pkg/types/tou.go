@@ -8,10 +8,10 @@ import (
 
 const (
 	// touScheduleRateThresholdDollars defines the minimum rate difference ($/kWh) between
-	// two TOU period rates to be considered a significant change warranting an ESS schedule update.
-	// A value of $0.0101 (just above 1 cent) avoids unnecessary writes to ESS hardware or cloud APIs
-	// for sub-cent rounding or floating-point fluctuations while capturing meaningful tariff shifts.
-	touScheduleRateThresholdDollars = 0.0101
+	// two export TOU period rates to be considered a significant change warranting an ESS schedule update.
+	// A value of $0.0501 (just above 5 cents) avoids unnecessary writes to ESS hardware or cloud APIs
+	// for minor real-time hourly fluctuations (e.g. ComEd 5-minute price ticks) while capturing major tariff shifts.
+	touScheduleRateThresholdDollars = 0.0501
 
 	// touScheduleTimeThresholdMinutes defines the minimum shift in period start or end time
 	// boundary (in minutes) to be considered a significant schedule change.
@@ -84,18 +84,62 @@ type TOUSchedule struct {
 	Periods []TOUPeriod `json:"periods"`
 }
 
-// IsSignificantlyDifferent checks whether two schedules differ beyond the standard rate and time thresholds.
+// coalesceOperationalPeriods merges adjacent contiguous periods that share the same
+// operational export dispatch (BatteryMode and SolarMode). Non-export periods
+// (neither BatteryModeExport nor SolarModeExport) all operate as standard self-consumption
+// on the ESS hardware and are normalized to (BatteryModeLoad, SolarModeAny, Peak: false)
+// so that non-export rate sub-splits or TOU tier flips do not trigger hardware schedule updates.
+func coalesceOperationalPeriods(periods []TOUPeriod) []TOUPeriod {
+	var coalesced []TOUPeriod
+	for _, p := range periods {
+		norm := p
+		if p.BatteryMode == BatteryModeExport || p.SolarMode == SolarModeExport {
+			norm.Peak = true
+		} else {
+			norm.BatteryMode = BatteryModeLoad
+			norm.SolarMode = SolarModeAny
+			norm.Peak = false
+		}
+
+		if len(coalesced) > 0 {
+			prev := &coalesced[len(coalesced)-1]
+			if prev.BatteryMode == norm.BatteryMode &&
+				prev.SolarMode == norm.SolarMode &&
+				prev.EndHour == norm.StartHour &&
+				prev.EndMinute == norm.StartMinute {
+				prevDur := prev.DurationMinutes()
+				normDur := norm.DurationMinutes()
+				totalDur := prevDur + normDur
+				if totalDur > 0 {
+					prev.ImportDollars = (prev.ImportDollars*float64(prevDur) + norm.ImportDollars*float64(normDur)) / float64(totalDur)
+					prev.ExportDollars = (prev.ExportDollars*float64(prevDur) + norm.ExportDollars*float64(normDur)) / float64(totalDur)
+				}
+				prev.EndHour = norm.EndHour
+				prev.EndMinute = norm.EndMinute
+				continue
+			}
+		}
+		coalesced = append(coalesced, norm)
+	}
+	return coalesced
+}
+
+// IsSignificantlyDifferent checks whether two schedules differ in their operational export dispatches
+// beyond the standard rate and time thresholds. Non-export periods are coalesced by operational mode
+// so that dynamic hourly price sub-splits and informational tier flips do not warrant re-uploading.
 // It returns true if:
-//  1. Either schedule is nil, or period counts differ.
-//  2. Any period differs in BatteryMode, SolarMode, or Peak status.
-//  3. Any period's ImportDollars or ExportDollars differs by more than TOUScheduleRateThresholdDollars.
-//  4. Any period's start or end boundary has shifted by more than TOUScheduleTimeThresholdMinutes
+//  1. Either schedule is nil, or operational period counts differ.
+//  2. Any operational period differs in BatteryMode or SolarMode.
+//  3. Any export period's ImportDollars or ExportDollars differs by more than touScheduleRateThresholdDollars.
+//  4. Any operational period's start or end boundary has shifted by more than touScheduleTimeThresholdMinutes
 //     (except for the start boundary of the currently active period covering now).
 func (s *TOUSchedule) IsSignificantlyDifferent(other *TOUSchedule, now time.Time) bool {
 	if s == nil || other == nil {
 		return true
 	}
-	if len(s.Periods) != len(other.Periods) {
+	sPeriods := coalesceOperationalPeriods(s.Periods)
+	otherPeriods := coalesceOperationalPeriods(other.Periods)
+	if len(sPeriods) != len(otherPeriods) {
 		return true
 	}
 
@@ -108,13 +152,13 @@ func (s *TOUSchedule) IsSignificantlyDifferent(other *TOUSchedule, now time.Time
 	// already in this period at now, that past boundary shift does not warrant
 	// re-uploading the schedule.
 	isActivePeriodStartBoundary := func(idx int) bool {
-		if now.IsZero() || idx <= 0 || idx >= len(s.Periods) {
+		if now.IsZero() || idx <= 0 || idx >= len(sPeriods) {
 			return false
 		}
-		p1Prev := s.Periods[idx-1]
-		p1 := s.Periods[idx]
-		p2Prev := other.Periods[idx-1]
-		p2 := other.Periods[idx]
+		p1Prev := sPeriods[idx-1]
+		p1 := sPeriods[idx]
+		p2Prev := otherPeriods[idx-1]
+		p2 := otherPeriods[idx]
 
 		// Ensure Periods[idx-1].End and Periods[idx].Start share a contiguous boundary
 		// before excusing shifts to both via isActivePeriodStartBoundary(i+1) and (i).
@@ -127,18 +171,19 @@ func (s *TOUSchedule) IsSignificantlyDifferent(other *TOUSchedule, now time.Time
 		return p1.CoversTime(now) && p2.CoversTime(now)
 	}
 
-	for i := range s.Periods {
-		p1 := s.Periods[i]
-		p2 := other.Periods[i]
+	for i := range sPeriods {
+		p1 := sPeriods[i]
+		p2 := otherPeriods[i]
 
 		// Operational intent must match identically
 		if p1.BatteryMode != p2.BatteryMode || p1.SolarMode != p2.SolarMode || p1.Peak != p2.Peak {
 			return true
 		}
 
-		// Rate diff check
-		if math.Abs(p1.ImportDollars-p2.ImportDollars) > touScheduleRateThresholdDollars ||
-			math.Abs(p1.ExportDollars-p2.ExportDollars) > touScheduleRateThresholdDollars {
+		// Rate diff check on export periods (non-export periods all run self-consumption
+		// regardless of informational tariff tier rates)
+		if p1.Peak && (math.Abs(p1.ImportDollars-p2.ImportDollars) > touScheduleRateThresholdDollars ||
+			math.Abs(p1.ExportDollars-p2.ExportDollars) > touScheduleRateThresholdDollars) {
 			return true
 		}
 
