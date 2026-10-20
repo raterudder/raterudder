@@ -306,6 +306,113 @@ describe('dashboardUtils', () => {
             expect(getReasonText(action)).toContain('Disabled solar export');
         });
 
+        it('distinguishes between solar and battery export in ArbitrageChargeExport and ArbitrageHoldExport', () => {
+            const basePeriod = {
+                tsStart: '2026-05-20T10:00:00Z',
+                tsEnd: '2026-05-20T11:00:00Z',
+                durationHours: 1,
+                importDollars: 0.20,
+                exportDollars: 0.10,
+                batteryMode: BatteryMode.ChargeAny,
+                solarMode: SolarMode.NoExport,
+                reason: ActionReason.ArbitrageChargeExport,
+                startSoc: 50,
+                endSoc: 60,
+                gridImportKWH: 5,
+                gridExportKWH: 0,
+                costDollars: 1.0,
+            };
+            const basePlan = {
+                tsCreated: '2026-05-20T10:00:00Z',
+                horizonHours: 24,
+                totalProjectedCost: 1.0,
+                totalExportCredits: 0.5,
+                netEconomicBenefit: 0.5,
+            };
+
+            const chargeSolarExportAction: Action = {
+                ...baseAction,
+                reason: ActionReason.ArbitrageChargeExport,
+                batteryMode: BatteryMode.ChargeAny,
+                currentPrice: { dollarsPerKWH: 0.208, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
+                futurePrice: { dollarsPerKWH: 0.300, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
+                plan: {
+                    ...basePlan,
+                    periods: [
+                        { ...basePeriod, batteryMode: BatteryMode.ChargeAny },
+                        { ...basePeriod, batteryMode: BatteryMode.Load, solarMode: SolarMode.Export },
+                    ],
+                },
+            };
+            expect(getReasonText(chargeSolarExportAction)).toContain(
+                'Charging the battery cheaply now to cover home load during the peak, allowing us to export maximum solar to the grid at higher rates.'
+            );
+
+            const chargeBatteryExportAction: Action = {
+                ...chargeSolarExportAction,
+                plan: {
+                    ...basePlan,
+                    periods: [
+                        { ...basePeriod, batteryMode: BatteryMode.ChargeAny },
+                        { ...basePeriod, batteryMode: BatteryMode.ChargeAny },
+                        { ...basePeriod, batteryMode: BatteryMode.Export, solarMode: SolarMode.Export },
+                    ],
+                },
+            };
+            expect(getReasonText(chargeBatteryExportAction)).toContain(
+                'Charging the battery cheaply now so we can export stored energy to the grid at higher rates during the peak.'
+            );
+
+            // Battery export after a separate future charge episode should not count for the current episode
+            const chargeLaterEpisodeExportAction: Action = {
+                ...chargeSolarExportAction,
+                plan: {
+                    ...basePlan,
+                    periods: [
+                        { ...basePeriod, batteryMode: BatteryMode.ChargeAny },
+                        { ...basePeriod, batteryMode: BatteryMode.Load, solarMode: SolarMode.Export },
+                        { ...basePeriod, batteryMode: BatteryMode.ChargeAny },
+                        { ...basePeriod, batteryMode: BatteryMode.Export },
+                    ],
+                },
+            };
+            expect(getReasonText(chargeLaterEpisodeExportAction)).toContain(
+                'Charging the battery cheaply now to cover home load during the peak, allowing us to export maximum solar to the grid at higher rates.'
+            );
+
+            const holdSolarExportAction: Action = {
+                ...baseAction,
+                reason: ActionReason.ArbitrageHoldExport,
+                batteryMode: BatteryMode.Standby,
+                currentPrice: { dollarsPerKWH: 0.15, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
+                futurePrice: { dollarsPerKWH: 0.35, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' },
+                plan: {
+                    ...basePlan,
+                    periods: [
+                        { ...basePeriod, batteryMode: BatteryMode.Standby },
+                        { ...basePeriod, batteryMode: BatteryMode.Load, solarMode: SolarMode.Export },
+                    ],
+                },
+            };
+            expect(getReasonText(holdSolarExportAction)).toContain(
+                'Keeping the battery in standby to preserve stored energy, allowing maximum solar export to the grid during the peak period.'
+            );
+
+            const holdBatteryExportAction: Action = {
+                ...holdSolarExportAction,
+                plan: {
+                    ...basePlan,
+                    periods: [
+                        { ...basePeriod, batteryMode: BatteryMode.Standby },
+                        { ...basePeriod, batteryMode: BatteryMode.Export },
+                    ],
+                },
+            };
+            expect(getReasonText(holdBatteryExportAction)).toContain(
+                'Keeping the battery in standby to preserve stored energy so we can export it to the grid during the peak period.'
+            );
+        });
+
         it('explains EV charging standby correctly', () => {
             const action = {
                 ...baseAction,

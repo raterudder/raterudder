@@ -132,6 +132,26 @@ export const formatHour12 = (hour: number): string => {
 export const gridChargeCost = (price: { dollarsPerKWH: number; gridUseDollarsPerKWH?: number }): number =>
     price.dollarsPerKWH + (price.gridUseDollarsPerKWH ?? 0);
 
+const hasUpcomingBatteryExport = (action: Action): boolean => {
+    const periods = action.plan?.periods;
+    if (!periods || periods.length === 0) {
+        return false;
+    }
+    let inCurrentChargeEpisode = periods[0].batteryMode === BatteryMode.ChargeAny;
+    for (let i = 1; i < periods.length; i++) {
+        const p = periods[i];
+        if (p.batteryMode !== BatteryMode.ChargeAny) {
+            inCurrentChargeEpisode = false;
+        } else if (!inCurrentChargeEpisode) {
+            break;
+        }
+        if (p.batteryMode === BatteryMode.Export) {
+            return true;
+        }
+    }
+    return false;
+};
+
 export const getReasonText = (action: Action, symbol: string = '$'): string => {
     const reason = action.reason;
     if (!reason) {
@@ -197,9 +217,12 @@ export const getReasonText = (action: Action, symbol: string = '$'): string => {
         }
         case ActionReason.ArbitrageChargeExport: {
             const delta = nowCost !== null && futureCost !== null ? futureCost - nowCost : null;
+            const exportText = hasUpcomingBatteryExport(action)
+                ? 'Charging the battery cheaply now so we can export stored energy to the grid at higher rates during the peak.'
+                : 'Charging the battery cheaply now to cover home load during the peak, allowing us to export maximum solar to the grid at higher rates.';
             const parts = [
                 `Forecast shows higher prices later${futureCostStr ? ` (${futureCostStr})` : ''} compared to right now (${nowCostStr}).`,
-                `Charging the battery cheaply now to cover home load during the peak, allowing us to export maximum solar to the grid at higher rates.`,
+                exportText,
             ];
             if (delta !== null && delta >= 0.01) parts.push(`Estimated savings: ${formatPrice(delta, symbol)}.`);
             return parts.concat(suffixParts).join(' ');
@@ -380,9 +403,12 @@ export const getReasonText = (action: Action, symbol: string = '$'): string => {
             return parts.concat(suffixParts).join(' ');
         }
         case ActionReason.ArbitrageHoldExport: {
+            const exportText = hasUpcomingBatteryExport(action)
+                ? 'Keeping the battery in standby to preserve stored energy so we can export it to the grid during the peak period.'
+                : 'Keeping the battery in standby to preserve stored energy, allowing maximum solar export to the grid during the peak period.';
             const parts = [
                 `Higher export credit rates are coming up${futureCostStr ? ` (${futureCostStr})` : ''} compared to right now (${nowCostStr}).`,
-                `Keeping the battery in standby to preserve stored energy, allowing maximum solar export to the grid during the peak period.`,
+                exportText,
             ];
             return parts.concat(suffixParts).join(' ');
         }
