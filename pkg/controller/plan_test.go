@@ -2022,13 +2022,16 @@ func TestGenerateActionCandidates(t *testing.T) {
 		}
 	})
 
-	t.Run("BatteryExportDump_TargetSOCIncludes5PercentBuffer", func(t *testing.T) {
+	t.Run("BatteryExportDump_TargetSOCAndPeakLoadBuffer", func(t *testing.T) {
 		t.Parallel()
 
 		exportSettings := settings
 		exportSettings.ManageTOUSchedules = true
 		exportSettings.GridExportBatteries = true
-		anchors := planningAnchors{knownPostHorizonRate: 0.04}
+		anchors := planningAnchors{
+			knownPostHorizonRate: 0.055,
+			minHorizonImportRate: 0.055,
+		}
 
 		highExportInterval := interval
 		highExportInterval.exportRate = 0.50
@@ -2043,7 +2046,40 @@ func TestGenerateActionCandidates(t *testing.T) {
 			}
 		}
 		require.NotNil(t, dumpCand, "Battery export dump must be offered")
-		assert.Equal(t, 25, dumpCand.targetSOC, "TargetSOC must preserve 5% reserve buffer (20% + 5% = 25%)")
+		assert.Equal(t, 20, dumpCand.targetSOC, "TargetSOC must allow exporting down to minSOC (20%)")
+
+		// Even when the TOU peak-to-off-peak spread is under $0.10/kWh (e.g. $0.149/kWh peak vs $0.055/kWh off-peak = $0.094/kWh),
+		// remainingPeakLoadKWH must sum across the entire remaining contiguous peak block (2 x 0.19 kWh = 0.38 kWh AC, ~3% SOC
+		// on a 13.5 kWh battery at sqrt(0.90) one-way efficiency), budgeting 3% + 5% = 8% SOC above minSOC (28% total).
+		// At 26% SOC (within the 8% planned peak buffer) with exportRate == importRate ($0.149/kWh),
+		// exporting would force peak grid imports at $0.149 / 0.90 = $0.1656/kWh and must be pruned.
+		peakStep0 := interval
+		peakStep0.loadKWH = 0.19
+		peakStep0.importRate = 0.149
+		peakStep0.exportRate = 0.149
+		peakStep1 := peakStep0
+		offPeakStep2 := interval
+		offPeakStep2.importRate = 0.055
+		offPeakStep2.exportRate = 0.03
+		subTenCentSpreadTimeline := []planInterval{peakStep0, peakStep1, offPeakStep2}
+
+		candsWithinBuffer := c.generateActionCandidates(ctx, 0, peakStep0, subTenCentSpreadTimeline, planState{energyKWH: 3.51, soc: 26, capacityKWH: 13.5}, anchors, exportSettings, status, nil, precedingAction{})
+		for i := range candsWithinBuffer {
+			assert.NotEqual(t, types.BatteryModeExport, candsWithinBuffer[i].batteryMode,
+				"Must not export at 26% SOC when 3% multi-step peak load + 5% buffer (28% SOC) requires comparing against peak grid imports")
+		}
+
+		// Above 28% SOC (e.g. 30% SOC), the battery has surplus above the 3% + 5% = 8% planned peak load,
+		// so export is evaluated against off-peak replacement cost ($0.055 / 0.90 + $0.03 = $0.0911) and offered.
+		candsAboveBuffer := c.generateActionCandidates(ctx, 0, peakStep0, subTenCentSpreadTimeline, planState{energyKWH: 4.05, soc: 30, capacityKWH: 13.5}, anchors, exportSettings, status, nil, precedingAction{})
+		hasExportAboveBuffer := false
+		for i := range candsAboveBuffer {
+			if candsAboveBuffer[i].batteryMode == types.BatteryModeExport {
+				hasExportAboveBuffer = true
+				break
+			}
+		}
+		assert.True(t, hasExportAboveBuffer, "Must offer battery export at 30% SOC when above the 28% (20% + 3% + 5%) buffered peak threshold")
 	})
 
 	t.Run("BatteryExportDump_FlatNEM_Pruned", func(t *testing.T) {
@@ -6197,6 +6233,227 @@ func TestSearchOptimalPlan(t *testing.T) {
 				"Must remain in continuous BatteryModeLoad rather than churning into Standby before a free solar refill")
 		})
 	})
+
+	t.Run("BatteryExport_DelaysDumpToEndOfFlatPeakWindow", func(t *testing.T) {
+		t.Parallel()
+
+		// 8-hour flat peak window (12:00 PM - 8:00 PM, 24 x 20-min intervals) at $0.15/kWh import & export,
+		// followed by off-peak ($0.05/kWh import, $0.02/kWh export).
+		// Battery starts at 90% SOC on a 27.0 kWh system (10 kW max discharge).
+		// The planner must stay in BatteryModeLoad at the start of the peak window (12:00 PM) to cover
+		// afternoon home load and delay BatteryModeExport until the end of the peak window, discharging
+		// down to the 20% reserve floor right as peak concludes.
+		var peakTimeline []planInterval
+		idx := 0
+		for i := 0; i < 24; i++ {
+			start := now.Add(time.Duration(i*20) * time.Minute)
+			peakTimeline = append(peakTimeline, planInterval{
+				index:         idx,
+				startTime:     start,
+				endTime:       start.Add(20 * time.Minute),
+				durationHours: 1.0 / 3.0,
+				importRate:    0.15,
+				exportRate:    0.15,
+				loadKWH:       0.15,
+				solarKWH:      0.0,
+				minSOC:        20.0,
+			})
+			idx++
+		}
+		for i := 0; i < 6; i++ {
+			start := now.Add(8*time.Hour + time.Duration(i*20)*time.Minute)
+			peakTimeline = append(peakTimeline, planInterval{
+				index:         idx,
+				startTime:     start,
+				endTime:       start.Add(20 * time.Minute),
+				durationHours: 1.0 / 3.0,
+				importRate:    0.05,
+				exportRate:    0.02,
+				loadKWH:       0.15,
+				solarKWH:      0.0,
+				minSOC:        20.0,
+			})
+			idx++
+		}
+
+		exportSettings := types.Settings{
+			MinBatterySOC:       20.0,
+			ManageTOUSchedules:  true,
+			GridChargeBatteries: true,
+			GridExportBatteries: true,
+			OptimizationProfile: "balanced",
+		}
+		exportStatus := types.SystemStatus{
+			Timestamp:             now,
+			BatteryCapacityKWH:    27.0,
+			BatterySOC:            90.0,
+			BatteryAboveMinSOC:    true,
+			MaxBatteryChargeKW:    10.0,
+			MaxBatteryDischargeKW: 10.0,
+		}
+		exportState := planState{
+			time:           now,
+			energyKWH:      27.0 * 0.90,
+			soc:            90.0,
+			capacityKWH:    27.0,
+			maxChargeKW:    10.0,
+			maxDischargeKW: 10.0,
+		}
+
+		anchors := c.detectPlanningAnchors(peakTimeline, nil, exportStatus, exportSettings, nil)
+		bestPath, err := c.searchOptimalPlan(ctx, peakTimeline, exportState, anchors, exportSettings, exportStatus, nil, nil)
+		require.NoError(t, err)
+		require.Len(t, bestPath.actions, len(peakTimeline))
+
+		// Must remain in BatteryModeLoad across the first 19 intervals (12:00 PM - 6:20 PM)
+		// and only switch to BatteryModeExport in the final 5 intervals (6:20 PM - 8:00 PM)
+		// needed to drain the remaining SOC down to the 20% reserve floor right as peak ends.
+		for i := 0; i < 19; i++ {
+			assert.Equal(t, types.BatteryModeLoad, bestPath.actions[i].batteryMode,
+				"Must remain in BatteryModeLoad before the final export window at the end of peak (step %d)", i)
+		}
+		for i := 19; i < 24; i++ {
+			assert.Equal(t, types.BatteryModeExport, bestPath.actions[i].batteryMode,
+				"Must delay BatteryModeExport to the final intervals of the flat peak window (step %d)", i)
+		}
+		assert.InDelta(t, 20.0, bestPath.states[24].soc, 0.5,
+			"Late peak export must discharge down to the 20% reserve floor by the end of peak")
+	})
+
+	t.Run("ReserveStepUp_CountsPostPeakRechargeAsWearWhenDrainedFromAbove", func(t *testing.T) {
+		t.Parallel()
+
+		// Scenario: Battery starts at 90% SOC (12.15 kWh on 13.5 kWh pack).
+		// - Step 0 (Peak): minSOC = 20%.
+		// - Step 1 (Post-peak off-peak charging schedule): importRate = $0.06/kWh, minSOC = 50% (reserve step-up).
+		// - Step 2 (Morning solar): plentiful free solar (minAlternativeValue = $0.00/kWh).
+		//
+		// Case 1: Marginal peak export ($0.085/kWh) with 0 home load across two 1-hour peak intervals.
+		// At Step 0, exporting from 90% -> ~51% is profitable because energy above 50% is refilled for free
+		// by Step 3's solar. At Step 1 (entering at ~51% SOC), however, exporting down to 20% would force
+		// an immediate 20% -> 50% grid recharge at Step 2 ($0.06/kWh = $0.0667/kWh post-RTE).
+		// Counting that induced 20% -> 50% grid recharge as wear ($0.02/kWh charge wear + $0.01/kWh export wear = $0.03/kWh,
+		// total cost $0.0667 + $0.03 = $0.0967/kWh > $0.085/kWh) causes the solver to stop exporting at ~51%
+		// rather than draining down to 20%.
+		marginalExportTimeline := []planInterval{
+			{
+				index:         0,
+				startTime:     now,
+				endTime:       now.Add(time.Hour),
+				durationHours: 1.0,
+				importRate:    0.15,
+				exportRate:    0.085,
+				loadKWH:       0.0,
+				solarKWH:      0.0,
+				minSOC:        20.0,
+			},
+			{
+				index:         1,
+				startTime:     now.Add(time.Hour),
+				endTime:       now.Add(2 * time.Hour),
+				durationHours: 1.0,
+				importRate:    0.15,
+				exportRate:    0.085,
+				loadKWH:       0.0,
+				solarKWH:      0.0,
+				minSOC:        20.0,
+			},
+			{
+				index:         2,
+				startTime:     now.Add(2 * time.Hour),
+				endTime:       now.Add(4 * time.Hour),
+				durationHours: 2.0,
+				importRate:    0.06,
+				exportRate:    0.02,
+				loadKWH:       0.0,
+				solarKWH:      0.0,
+				minSOC:        50.0,
+			},
+			{
+				index:         3,
+				startTime:     now.Add(4 * time.Hour),
+				endTime:       now.Add(8 * time.Hour),
+				durationHours: 4.0,
+				importRate:    0.06,
+				exportRate:    0.02,
+				loadKWH:       0.0,
+				solarKWH:      15.0,
+				minSOC:        20.0,
+			},
+		}
+
+		stepUpSettings := types.Settings{
+			MinBatterySOC:       20.0,
+			ManageTOUSchedules:  true,
+			GridChargeBatteries: true,
+			GridExportBatteries: true,
+			OptimizationProfile: "balanced",
+		}
+		stepUpStatus := types.SystemStatus{
+			Timestamp:             now,
+			BatteryCapacityKWH:    13.5,
+			BatterySOC:            90.0,
+			BatteryAboveMinSOC:    true,
+			MaxBatteryChargeKW:    5.0,
+			MaxBatteryDischargeKW: 5.0,
+		}
+		stepUpState := planState{
+			time:           now,
+			energyKWH:      13.5 * 0.90,
+			soc:            90.0,
+			capacityKWH:    13.5,
+			maxChargeKW:    5.0,
+			maxDischargeKW: 5.0,
+		}
+
+		anchors := c.detectPlanningAnchors(marginalExportTimeline, nil, stepUpStatus, stepUpSettings, nil)
+		bestPath, err := c.searchOptimalPlan(ctx, marginalExportTimeline, stepUpState, anchors, stepUpSettings, stepUpStatus, nil, nil)
+		require.NoError(t, err)
+		require.Len(t, bestPath.actions, 4)
+		assert.GreaterOrEqual(t, bestPath.states[2].soc, 50.0,
+			"Must not export below 50% at $0.085/kWh when post-peak 50% reserve step-up forces a $0.06/kWh grid recharge + $0.03/kWh full-cycle wear")
+
+		// Case 2: Peak self-consumption (BatteryModeLoad) during a $0.15/kWh peak with 9.0 kWh home load
+		// (which drains the battery from 90% down to 20% before the 50% post-peak reserve step-up).
+		// Offsetting $0.15/kWh peak imports easily overcomes the $0.06/kWh ($0.0667/kWh post-RTE) + $0.02/kWh
+		// post-peak recharge cost ($0.0867/kWh total), so the solver MUST still discharge via BatteryModeLoad
+		// rather than forcing Standby during peak.
+		peakLoadTimeline := []planInterval{
+			{
+				index:         0,
+				startTime:     now,
+				endTime:       now.Add(2 * time.Hour),
+				durationHours: 2.0,
+				importRate:    0.15,
+				exportRate:    0.04,
+				loadKWH:       9.0,
+				solarKWH:      0.0,
+				minSOC:        20.0,
+			},
+			{
+				index:         1,
+				startTime:     now.Add(2 * time.Hour),
+				endTime:       now.Add(4 * time.Hour),
+				durationHours: 2.0,
+				importRate:    0.06,
+				exportRate:    0.02,
+				loadKWH:       0.0,
+				solarKWH:      0.0,
+				minSOC:        50.0,
+			},
+		}
+
+		anchorsLoad := c.detectPlanningAnchors(peakLoadTimeline, nil, stepUpStatus, stepUpSettings, nil)
+		bestPathLoad, err := c.searchOptimalPlan(ctx, peakLoadTimeline, stepUpState, anchorsLoad, stepUpSettings, stepUpStatus, nil, nil)
+		require.NoError(t, err)
+		require.Len(t, bestPathLoad.actions, 2)
+		assert.Equal(t, types.BatteryModeLoad, bestPathLoad.actions[0].batteryMode,
+			"Must still discharge via BatteryModeLoad during $0.15/kWh peak when savings exceed post-peak $0.06/kWh recharge + $0.02/kWh wear")
+		assert.InDelta(t, 20.0, bestPathLoad.states[1].soc, 0.5,
+			"Should discharge down to 20% peak reserve to cover the $0.15/kWh peak load")
+		assert.Equal(t, types.BatteryModeChargeAny, bestPathLoad.actions[1].batteryMode,
+			"Should recharge back to 50% post-peak reserve during off-peak")
+	})
 }
 
 // TestFinalizeDecisionAndPlan tests the synthesis of Decision and types.Plan from a winning path.
@@ -9667,5 +9924,105 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 			}
 		}
 		assert.True(t, foundMorningExport, "Expected BatteryModeExport during 07:00-09:00 morning peak when midday surplus solar refills the battery")
+	})
+
+	t.Run("PeakBatteryExport_DelayedToEndOfPeakWindow", func(t *testing.T) {
+		t.Parallel()
+
+		nyLoc, err := time.LoadLocation("America/New_York")
+		require.NoError(t, err)
+
+		// Start at 12:00 PM at the beginning of a 12:00 PM - 8:00 PM flat peak period ($0.149/kWh import & export,
+		// $0.055/kWh off-peak) with afternoon solar (12:00 PM - 5:00 PM).
+		// Battery starts at 51% SOC on a 27 kWh pack (10 kW max discharge).
+		// Rather than dumping from 51% -> 20% at 12:00 PM, the plan must stay in BatteryModeLoad through the afternoon
+		// (absorbing surplus solar and covering afternoon peak load) and delay BatteryModeExport until the end of
+		// the peak period (after 6:00 PM).
+		nowNoon := time.Date(2026, 10, 14, 12, 0, 0, 0, nyLoc)
+
+		priceForHour := func(ts time.Time) types.Price {
+			h := ts.Hour()
+			imp := 0.055
+			exp := 0.055
+			if h >= 12 && h < 20 {
+				imp = 0.149
+				exp = 0.149
+			}
+			return types.Price{
+				TSStart:                       ts,
+				TSEnd:                         ts.Add(time.Hour),
+				DollarsPerKWH:                 imp,
+				SeparateGenerationCredit:      true,
+				GenerationCreditDollarsPerKWH: exp,
+			}
+		}
+
+		currentPrice := priceForHour(nowNoon)
+		var futurePrices []types.Price
+		for i := 1; i < 28; i++ {
+			futurePrices = append(futurePrices, priceForHour(nowNoon.Add(time.Duration(i)*time.Hour)))
+		}
+
+		status := types.SystemStatus{
+			Timestamp:             nowNoon,
+			TimeLocation:          "America/New_York",
+			BatteryCapacityKWH:    27.0,
+			BatterySOC:            51.0,
+			BatteryAboveMinSOC:    true,
+			MaxBatteryChargeKW:    10.0,
+			MaxBatteryDischargeKW: 10.0,
+			SolarKW:               3.0,
+			HomeKW:                0.5,
+		}
+
+		settings := types.Settings{
+			OptimizationProfile: "balanced",
+			MinBatterySOC:       20.0,
+			GridChargeBatteries: true,
+			GridExportSolar:     false,
+			GridExportBatteries: true,
+			ManageTOUSchedules:  true,
+		}
+
+		var history []types.EnergyStats
+		for d := 1; d <= 7; d++ {
+			dayStart := nowNoon.AddDate(0, 0, -d).Truncate(24 * time.Hour)
+			for h := 0; h < 24; h++ {
+				solar := 0.0
+				if h >= 9 && h < 17 {
+					solar = 3.0
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart:  dayStart.Add(time.Duration(h) * time.Hour),
+					HomeKWH:      0.5,
+					SolarKWH:     solar,
+					TimeLocation: "America/New_York",
+				})
+			}
+		}
+
+		decision, plan, err := c.Plan(ctx, status, currentPrice, futurePrices, history, nil, settings, nil)
+		require.NoError(t, err)
+		require.NotNil(t, plan)
+
+		// Immediate decision at 12:00 PM must be BatteryModeLoad, NOT an early BatteryModeExport dump
+		assert.Equal(t, types.BatteryModeLoad, decision.Action.BatteryMode,
+			"Must remain in BatteryModeLoad at 12:00 PM rather than dumping the battery at the start of peak")
+
+		sixPM := time.Date(2026, 10, 14, 18, 0, 0, 0, nyLoc)
+		eightPM := time.Date(2026, 10, 14, 20, 0, 0, 0, nyLoc)
+		foundLatePeakExport := false
+		for _, p := range plan.Periods {
+			if p.TSStart.Before(sixPM) && p.TSEnd.Before(sixPM.Add(time.Minute)) {
+				assert.NotEqual(t, types.BatteryModeExport, p.BatteryMode,
+					"Must not schedule BatteryModeExport before 6:00 PM (period %s - %s)",
+					p.TSStart.Format("15:04"), p.TSEnd.Format("15:04"))
+			}
+			if !p.TSStart.Before(sixPM) && p.TSStart.Before(eightPM) && p.BatteryMode == types.BatteryModeExport {
+				foundLatePeakExport = true
+			}
+		}
+		assert.True(t, foundLatePeakExport,
+			"Must schedule BatteryModeExport in the final hours of the peak period (6:00 PM - 8:00 PM)")
 	})
 }

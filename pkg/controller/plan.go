@@ -89,11 +89,10 @@ const (
 	// while still permitting mode switches whenever economically justified.
 	modeSwitchPenalty = 0.005
 
-	// batteryExportReserveMarginPct is the safety margin (in % SOC) maintained strictly above the
-	// reserve floor during battery grid export. Because grid exports discharge at maximum inverter power,
-	// hardware reporting latencies, inverter shutdown ramps, and cell-balancing variances can cause over-discharge.
-	// Adding a 5% buffer guarantees that deliberate grid export operations terminate well before cutting into
-	// the homeowner's essential emergency backup reserve.
+	// batteryExportReserveMarginPct is the home-load safety buffer (in % SOC) added to forecasted
+	// peak home consumption when evaluating whether battery grid export is economical relative to
+	// grid imports. The battery can still export down to minSOC, but any energy within this 5% buffer
+	// above forecasted peak load is only exported if the export rate clears the grid import replacement cost.
 	batteryExportReserveMarginPct = 5.0
 
 	// solarExportReserveMarginPct is the minimum SOC margin (in % SOC) required above the reserve floor
@@ -273,6 +272,7 @@ func (pi planInterval) avgSolarKW() float64 {
 type planState struct {
 	time             time.Time
 	energyKWH        float64
+	maxEnergyKWH     float64
 	soc              float64
 	capacityKWH      float64
 	maxChargeKW      float64
@@ -1140,6 +1140,7 @@ func (c *Controller) Plan(
 	initialState := planState{
 		time:             now,
 		energyKWH:        initialEnergy,
+		maxEnergyKWH:     initialEnergy,
 		soc:              currentStatus.BatterySOC,
 		capacityKWH:      capKWH,
 		maxChargeKW:      maxChargeKW,
@@ -2200,8 +2201,9 @@ func (c *Controller) appendActionCandidates(
 	}
 
 	// --- PRUNING RULE 5: Reserve Floor Protection ---
-	// Battery grid export and direct solar export require safety margins above the reserve floor.
-	canBatteryExport := currentSOC > minSOC+batteryExportReserveMarginPct
+	// Direct solar export requires a safety margin above the reserve floor, while battery grid export
+	// can discharge down to the reserve floor once the peak load buffer hurdle in Branch E is met.
+	canBatteryExport := isAboveReserve
 	canSolarExport := currentSOC > minSOC+solarExportReserveMarginPct
 	roomLeftToFill := currentSOC < almostFullSOC
 
@@ -2307,8 +2309,10 @@ func (c *Controller) appendActionCandidates(
 	// hasHigherFutureExport requires canBatteryExport because Standby only holds existing charge (without adding energy).
 	// If the battery does not currently have exportable energy above the reserve margin, holding it in Standby
 	// would needlessly prevent home self-consumption for an export opportunity it cannot participate in.
+	// It also requires maxFutureExportRate to exceed the current interval's exportRate so the battery does not
+	// idle in Standby when it is already inside the highest export rate window.
 	hasHigherFutureExport := canBatteryExport && settings.ManageTOUSchedules && settings.GridExportBatteries && !isFlatNEM &&
-		maxFutureExportRate > interval.importRate+priceMaterialityThresholdDollars
+		maxFutureExportRate > max(interval.importRate, interval.exportRate)+priceMaterialityThresholdDollars
 	ld.higherFutureRate = effectiveMaxFutureRate
 	ld.isAlreadyStandby = isAlreadyStandby
 
@@ -2637,10 +2641,56 @@ func (c *Controller) appendActionCandidates(
 	if settings.ManageTOUSchedules && settings.GridExportBatteries && !isFlatNEM && canBatteryExport && beforeVPPRechargeDeadline && interval.exportRate > 0 {
 		cycleHurdle := max(priceEpsilonForEquality, optParams.BatteryExportDegradationDollarsPerKWH)
 
+		// When evaluating whether battery export is worthwhile, account for the forecasted net home load
+		// across the remainder of the current elevated-rate block plus the 5% safety buffer
+		// (batteryExportReserveMarginPct). For example, if the home is forecasted to use 3% SOC during
+		// the remaining peak window, we plan for peak home demand to require 8% SOC (3% + 5%) above minSOC.
+		// If currentSOC is at or below that buffered threshold (and we are not already mid-export),
+		// exporting cuts into the planned peak load cushion and risks forcing grid imports at peak rates,
+		// so the export rate must beat the peak grid import replacement cost (peakImportRate / effRT)
+		// rather than just the cheapest off-peak rechargeCost.
+		var remainingPeakLoadKWH float64
+		peakImportRate := interval.importRate
+		minDeficitDiff := minDeficitPriceSpread(settings)
+		baselineImport := max(0.0, anchors.minHorizonImportRate)
+		if len(timeline) == 0 {
+			baselineImport = max(0.0, minAlternativeValue)
+		}
+		isElevatedPeakInterval := interval.importRate >= baselineImport+minDeficitDiff ||
+			interval.importRate > rechargeCost+optParams.GridChargeDegradationDollarsPerKWH
+		if len(timeline) > 0 && isElevatedPeakInterval {
+			for i := stepIdx; i < len(timeline); i++ {
+				if timeline[i].importRate < interval.importRate-priceMaterialityThresholdDollars &&
+					timeline[i].importRate < baselineImport+minDeficitDiff {
+					break
+				}
+				remainingPeakLoadKWH += max(0.0, timeline[i].loadKWH-timeline[i].solarKWH)
+				if timeline[i].importRate > peakImportRate {
+					peakImportRate = timeline[i].importRate
+				}
+			}
+		} else {
+			remainingPeakLoadKWH = max(0.0, interval.loadKWH-interval.solarKWH)
+		}
+		var remainingPeakLoadSOC float64
+		if capacityKWH > 0 && eff > 0 {
+			remainingPeakLoadSOC = ((remainingPeakLoadKWH / eff) / capacityKWH) * 100.0
+		}
+		samePriceAsPrev := math.Abs(prevAction.ImportRate-interval.importRate) <= priceEpsilonForEquality &&
+			math.Abs(prevAction.ExportRate-interval.exportRate) <= priceEpsilonForEquality
+		bufferedPeakReserveSOC := minSOC + remainingPeakLoadSOC + batteryExportReserveMarginPct
+		if samePriceAsPrev && prevAction.BatteryMode == types.BatteryModeExport {
+			bufferedPeakReserveSOC = minSOC + remainingPeakLoadSOC
+		}
+		effectiveRechargeCost := rechargeCost
+		if currentSOC <= bufferedPeakReserveSOC {
+			effectiveRechargeCost = max(rechargeCost, peakImportRate/effRT)
+		}
+
 		// Export is a viable candidate if export rate beats the replacement cost by at least the degradation hurdle
-		if interval.exportRate >= (rechargeCost + cycleHurdle) {
-			targetSOC := int(math.Round(minSOC + batteryExportReserveMarginPct))
-			ld.exportReplacementCost = rechargeCost
+		if interval.exportRate >= (effectiveRechargeCost + cycleHurdle) {
+			targetSOC := int(math.Round(minSOC))
+			ld.exportReplacementCost = effectiveRechargeCost
 			ld.minAlternativeValue = minAlternativeValue
 			ld.cycleHurdle = cycleHurdle
 
@@ -2677,6 +2727,9 @@ func stepPhysics(
 		if math.IsNaN(cleanState.energyKWH) || cleanState.energyKWH < 0 {
 			cleanState.energyKWH = 0
 		}
+		if math.IsNaN(cleanState.maxEnergyKWH) || cleanState.maxEnergyKWH < 0 {
+			cleanState.maxEnergyKWH = cleanState.energyKWH
+		}
 		if math.IsNaN(cleanState.soc) || cleanState.soc < 0 {
 			cleanState.soc = 0
 		}
@@ -2692,7 +2745,6 @@ func stepPhysics(
 		minSOC = 100.0
 	}
 	reserveKWH := capacityKWH * (minSOC / 100.0)
-	exportReserveKWH := capacityKWH * ((minSOC + batteryExportReserveMarginPct) / 100.0)
 
 	// Half efficiency for one-way conversions: sqrt(roundTripEfficiency)
 	rtEff := roundTripEfficiency
@@ -2703,12 +2755,10 @@ func stepPhysics(
 
 	// Override reserve floor if non-zero override specified on candidate action (e.g. VPP active event)
 	effectiveLoadReserveKWH := reserveKWH
-	effectiveExportReserveKWH := exportReserveKWH
 	if action.overrideReserveSOC > 0 {
 		soc := min(100.0, action.overrideReserveSOC)
 		overrideKWH := capacityKWH * (soc / 100.0)
 		effectiveLoadReserveKWH = overrideKWH
-		effectiveExportReserveKWH = overrideKWH
 	}
 
 	maxChargeKW := resolveBatteryPowerKW(state.maxChargeKW, capacityKWH)
@@ -2737,9 +2787,6 @@ func stepPhysics(
 		// However, if home load exceeds battery discharge capability,
 		// solar covers remaining home load first (obeying Kirchhoff's law on residential meter).
 		usableBatEnergy := max(0.0, newEnergy-effectiveLoadReserveKWH)
-		if action.batteryMode == types.BatteryModeExport {
-			usableBatEnergy = max(0.0, newEnergy-effectiveExportReserveKWH)
-		}
 		maxBatDischargeKWH := min(maxDischargeKW*dHours, usableBatEnergy*oneWayEff)
 		uncoveredHomeLoadKWH := max(0.0, totalHomeLoadKWH-maxBatDischargeKWH)
 
@@ -2812,8 +2859,8 @@ func stepPhysics(
 		gridImportKWH = unmetHomeLoadKWH - batSuppliedHomeKWH
 
 	case types.BatteryModeExport:
-		// Battery supplies unmet home load + exports to grid at max inverter power down to reserve buffer
-		usableBatEnergy := max(0.0, newEnergy-effectiveExportReserveKWH)
+		// Battery supplies unmet home load + exports to grid at max inverter power down to reserve floor
+		usableBatEnergy := max(0.0, newEnergy-effectiveLoadReserveKWH)
 		maxBatDischargeKWH := min(maxDischargeKW*dHours, usableBatEnergy*oneWayEff)
 		batSuppliedHomeKWH = min(unmetHomeLoadKWH, maxBatDischargeKWH)
 		newEnergy -= batSuppliedHomeKWH / oneWayEff
@@ -2865,6 +2912,7 @@ func stepPhysics(
 	newState := planState{
 		time:             interval.endTime,
 		energyKWH:        newEnergy,
+		maxEnergyKWH:     max(state.maxEnergyKWH, max(state.energyKWH, newEnergy)),
 		soc:              endingSOC,
 		capacityKWH:      capacityKWH,
 		maxChargeKW:      maxChargeKW,
@@ -3108,6 +3156,8 @@ func (c *Controller) searchOptimalPlan(
 	var nextBuckets [5][201]*dpNode
 	activeNodes := make([]*dpNode, 0, 201)
 
+	initial.maxEnergyKWH = max(initial.maxEnergyKWH, initial.energyKWH)
+
 	// Evaluate forward rollout independently for each initial candidate action at step 0.
 	// This ensures every distinct immediate dispatch action explores its optimal future trajectory.
 	for _, cand0 := range candidates0 {
@@ -3307,7 +3357,9 @@ func (c *Controller) searchOptimalPlan(
 					//
 					// 1. Direct Battery Export (BatteryModeExport):
 					//    Discharges stored battery energy directly into the grid at maximum inverter power (0.5C–1.0C).
-					//    100% of exported battery energy is measured in metrics.batExportKWH at the export step and
+					//    During sunny hours, stepPhysics routes battery discharge to cover home load first so rooftop
+					//    solar can export directly, so total battery discharge that enabled grid export is
+					//    metrics.batExportKWH + min(metrics.batSuppliedHomeKWH, metrics.solarExportKWH). This is
 					//    penalized by batteryExportDegradation = max(0, BatteryExportDegradationDollarsPerKWH - gridChargeDegradation),
 					//    so that gridChargeDegradation + batteryExportDegradation equals the full round-trip cycle hurdle.
 					//
@@ -3317,9 +3369,9 @@ func (c *Controller) searchOptimalPlan(
 					//    solarExportDegradation to the home load supplied by the battery (min(batSuppliedHomeKWH, solarExportKWH))
 					//    that freed that additional daytime solar to export.
 					//
-					// 3. Grid Charging Above Reserve (BatteryModeChargeAny):
-					//    Any discretionary grid charging above the homeowner's reserve floor (gridChargeAboveReserveKWH)
-					//    cycles the battery at high inverter charge power (~0.3C–0.5C). Applying gridChargeDegradation
+					// 3. Grid Charging Above Unavoidable Reserve Deficit (BatteryModeChargeAny):
+					//    Any grid charging beyond the unavoidable initial reserve deficit cycles the battery at high
+					//    inverter charge power (~0.3C–0.5C). Applying gridChargeDegradation
 					//    (GridChargeDegradationDollarsPerKWH) scaled by roundTripEff (so it is per delivered AC kWh, matching
 					//    exportDegradationCost and candidate generation) unconditionally at the charge step ensures that:
 					//    - Pre-charging from the grid to cover later peak home loads only wins if the net price savings
@@ -3327,6 +3379,9 @@ func (c *Controller) searchOptimalPlan(
 					//    - Pre-charging from the grid so the battery enters daytime solar already full (forcing daytime
 					//      solar to overflow to the grid during normal SolarModeAny) also pays the degradation cost ($0.02/kWh)
 					//      on every kWh of grid charge without needing any candidate-level arbitrage classification.
+					//    - Discharging from above a future reserve step-up down below it (e.g. starting at 90% and exporting
+					//      or discharging down to 20% before a post-peak 50% reserve floor) and then grid-charging back up
+					//      to 50% is also recognized as cycling wear.
 					//    - Pre-charging from the grid to export from the battery later pays both half-cycle costs
 					//      ($0.02/kWh on grid charge + $0.01/kWh on battery export = $0.03/kWh full-cycle wear hurdle in balanced).
 					//    - Even during slightly negative prices (e.g. -$0.005/kWh), the DP will charge if the stored energy
@@ -3335,7 +3390,7 @@ func (c *Controller) searchOptimalPlan(
 					//    - Normal solar self-consumption (free solar charging -> covering home load) pays $0.00/kWh wear cost.
 					var exportDegradationCost float64
 					if cand.batteryMode == types.BatteryModeExport {
-						exportDegradationCost = metrics.batExportKWH * batteryExportDegradation
+						exportDegradationCost = (metrics.batExportKWH + min(metrics.batSuppliedHomeKWH, metrics.solarExportKWH)) * batteryExportDegradation
 					} else if cand.batteryMode == types.BatteryModeLoad && cand.solarMode == types.SolarModeExport {
 						exportDegradationCost = min(metrics.batSuppliedHomeKWH, metrics.solarExportKWH) * solarExportDegradation
 					}
@@ -3343,8 +3398,16 @@ func (c *Controller) searchOptimalPlan(
 					var chargeDegradationCost float64
 					if metrics.gridChargeKWH > 0 {
 						reserveKWH := (interval.minSOC / 100.0) * capacityKWH
-						reserveDeficitEnergyKWH := max(0.0, reserveKWH-parent.state.energyKWH)
-						gridChargeForReserveKWH := min(metrics.gridChargeKWH, reserveDeficitEnergyKWH/oneWayEff)
+						// We compare reserveKWH against parent.state.maxEnergyKWH (the high-water mark of energy
+						// reached along this trajectory) rather than parent.state.energyKWH so that only an
+						// unavoidable deficit (where the battery started and stayed below interval.minSOC) is
+						// exempt from wear cost. If the trajectory previously held energy at or above interval.minSOC
+						// and chose to discharge or export below it, recharging that energy from the grid later is
+						// a cycle caused by our earlier discharge decision and must pay gridChargeDegradation so
+						// the DP weighs the earlier discharge/export gain against the cost and wear of recharging.
+						unavoidableDeficitKWH := max(0.0, reserveKWH-parent.state.maxEnergyKWH)
+						exemptReserveDeficitKWH := min(unavoidableDeficitKWH, max(0.0, reserveKWH-parent.state.energyKWH))
+						gridChargeForReserveKWH := min(metrics.gridChargeKWH, exemptReserveDeficitKWH/oneWayEff)
 						gridChargeAboveReserveKWH := max(0.0, metrics.gridChargeKWH-gridChargeForReserveKWH)
 						chargeDegradationCost = gridChargeAboveReserveKWH * roundTripEff * gridChargeDegradation
 					}
@@ -3379,7 +3442,21 @@ func (c *Controller) searchOptimalPlan(
 						lateChargeBufferCost = metrics.gridChargeKWH * oneWayEff * lateChargeBufferPenaltyPerKWH
 					}
 
-					newCost := parent.totalCost + metrics.costDollars + exportDegradationCost + chargeDegradationCost + transitionCost + lateChargeBufferCost + (nextState.energyKWH * interval.durationHours * batteryHoldingCostPerHourPerKWH)
+					// Delay battery grid export to the end of flat export windows:
+					// Exporting 1 kWh of stored battery energy at interval.endTime reduces nextState.energyKWH
+					// for all remaining intervals in the horizon, which would otherwise save 1.0x
+					// batteryHoldingCostPerHourPerKWH per remaining hour and bias the DP to dump the battery
+					// at the very start of a multi-hour peak window. Applying 1.1x batteryHoldingCostPerHourPerKWH
+					// over the remaining horizon hours creates a net 0.1x holding cost preference to keep
+					// the energy in the battery to cover afternoon home load and export at the end of the window.
+					var earlyExportCost float64
+					if cand.batteryMode == types.BatteryModeExport && metrics.batExportKWH > 0 {
+						exportedDCKWH := metrics.batExportKWH / oneWayEff
+						remainingHorizonHours := max(0.0, timeline[len(timeline)-1].endTime.Sub(interval.endTime).Hours())
+						earlyExportCost = exportedDCKWH * remainingHorizonHours * (1.1 * batteryHoldingCostPerHourPerKWH)
+					}
+
+					newCost := parent.totalCost + metrics.costDollars + exportDegradationCost + chargeDegradationCost + transitionCost + lateChargeBufferCost + earlyExportCost + (nextState.energyKWH * interval.durationHours * batteryHoldingCostPerHourPerKWH)
 
 					var strikeInc int
 					// Check VPP deadline feasibility: apply strikes for nearest upcoming event deadline
