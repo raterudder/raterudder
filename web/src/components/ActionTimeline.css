@@ -404,6 +404,11 @@
     border-top-color: rgba(245, 158, 11, 0.48);
 }
 
+.timeline-item.mode-solar_export .timeline-content {
+    background: radial-gradient(120% 70px at 12% 0%, rgba(249, 115, 22, 0.14), transparent 70%), var(--surface-container-low);
+    border-top-color: rgba(249, 115, 22, 0.48);
+}
+
 .timeline-item.mode-vpp .timeline-content {
     background: radial-gradient(120% 70px at 12% 0%, rgba(59, 130, 246, 0.14), transparent 70%), var(--surface-container-low);
     border-top-color: rgba(59, 130, 246, 0.48);
@@ -463,6 +468,11 @@
 .timeline-item.mode-export .timeline-status-dot {
     background: #f59e0b;
     box-shadow: 0 0 8px rgba(245, 158, 11, 0.7);
+}
+
+.timeline-item.mode-solar_export .timeline-status-dot {
+    background: #f97316;
+    box-shadow: 0 0 8px rgba(249, 115, 22, 0.7);
 }
 
 .timeline-item.mode-vpp .timeline-status-dot {

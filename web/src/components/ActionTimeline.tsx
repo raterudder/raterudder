@@ -69,6 +69,12 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({
                 let batteryModeClass = getBatteryModeClass(effectiveBatteryMode);
                 if (isVPP) {
                     batteryModeClass = 'vpp';
+                } else if (
+                    action.reason === ActionReason.DirectExport &&
+                    effectiveBatteryMode !== BatteryMode.Standby &&
+                    effectiveBatteryMode !== BatteryMode.Export
+                ) {
+                    batteryModeClass = 'solar_export';
                 }
                 const isNegPrice =
                     action.currentPrice &&

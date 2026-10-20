@@ -135,11 +135,17 @@ describe('ActionTimeline', () => {
                 currentPrice: { dollarsPerKWH: 0.35, gridUseDollarsPerKWH: 0, tsStart: '', tsEnd: '' }
             }
         ];
-        render(<ActionTimeline groupedActions={actions} />);
+        const { container } = render(<ActionTimeline groupedActions={actions} />);
         expect(screen.getByText('Battery & Solar Grid Export')).toBeInTheDocument();
         expect(screen.getByText('Direct Battery Export')).toBeInTheDocument();
         expect(screen.getByText('Peak Defense Standby')).toBeInTheDocument();
         expect(screen.getByText('Direct Solar Export')).toBeInTheDocument();
+
+        const items = container.querySelectorAll('li.timeline-item');
+        expect(items[0]).toHaveClass('mode-export');
+        expect(items[1]).toHaveClass('mode-export');
+        expect(items[2]).toHaveClass('mode-standby');
+        expect(items[3]).toHaveClass('mode-solar_export');
     });
 
     it('suppresses Full tag for DirectExport actions even when capacityAt is set', () => {
