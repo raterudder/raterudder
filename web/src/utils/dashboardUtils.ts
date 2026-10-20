@@ -744,6 +744,7 @@ export const buildDaySummary = (
         startMinutes: number;
         endMinutes: number;
         durationMinutes: number;
+        count: number;
         hasSOC: boolean;
         startSOC: number;
         endSOC: number;
@@ -765,6 +766,15 @@ export const buildDaySummary = (
         const startTime = isSummary ? item.startTime : getActionTimestamp(action);
         const endTime = isSummary && item.endTime ? item.endTime : startTime;
 
+        const hasSOC = isSummary
+            ? item.hasSOC
+            : action.systemStatus?.batterySOC !== undefined && action.systemStatus.batterySOC !== 0;
+        const singleSOC = action.systemStatus?.batterySOC ?? 0;
+        const startSOC = isSummary ? (item.startSOC ?? item.minSOC ?? item.avgSOC) : singleSOC;
+        const ownEndSOC = isSummary ? (item.endSOC ?? item.maxSOC ?? item.avgSOC) : singleSOC;
+        const category = classifySummaryItem(item, startSOC, ownEndSOC, hasSOC);
+        let endSOC = ownEndSOC;
+
         let effectiveEndTime = endTime;
         if (idx < chronological.length - 1) {
             const nextItem = chronological[idx + 1];
@@ -775,6 +785,18 @@ export const buildDaySummary = (
                 const gapMinutes = (nextStartMs - endMs) / 60000;
                 if (gapMinutes > 0 && gapMinutes <= 45) {
                     effectiveEndTime = nextStart;
+                    const nextIsSummary = 'isSummary' in nextItem;
+                    const nextAction = nextIsSummary ? nextItem.latestAction : nextItem;
+                    const nextHasSOC = nextIsSummary
+                        ? nextItem.hasSOC
+                        : nextAction.systemStatus?.batterySOC !== undefined &&
+                          nextAction.systemStatus.batterySOC !== 0;
+                    if (hasSOC && nextHasSOC) {
+                        const nextSingleSOC = nextAction.systemStatus?.batterySOC ?? 0;
+                        endSOC = nextIsSummary
+                            ? (nextItem.startSOC ?? nextItem.minSOC ?? nextItem.avgSOC)
+                            : nextSingleSOC;
+                    }
                 }
             }
         }
@@ -790,13 +812,6 @@ export const buildDaySummary = (
         const rawEndMinutes = getMinutesFromMidnight(effectiveEndTime, refTs);
         const endMinutes = Math.min(1440, Math.max(rawEndMinutes, startMinutes + 20));
 
-        const hasSOC = isSummary
-            ? item.hasSOC
-            : action.systemStatus?.batterySOC !== undefined && action.systemStatus.batterySOC !== 0;
-        const singleSOC = action.systemStatus?.batterySOC ?? 0;
-        const startSOC = isSummary ? (item.startSOC ?? item.minSOC ?? item.avgSOC) : singleSOC;
-        const endSOC = isSummary ? (item.endSOC ?? item.maxSOC ?? item.avgSOC) : singleSOC;
-
         const hasPrice = isSummary
             ? item.hasPrice
             : Boolean(action.currentPrice && !isZeroTime(action.currentPrice.tsStart));
@@ -805,16 +820,18 @@ export const buildDaySummary = (
             : action.currentPrice
             ? gridChargeCost(action.currentPrice)
             : 0;
-        const priceWeight = isSummary ? item.count : 1;
+        const count = isSummary ? item.count : 1;
+        const priceWeight = count;
 
         return {
-            category: classifySummaryItem(item, startSOC, endSOC, hasSOC),
+            category,
             startTime,
             endTime,
             effectiveEndTime,
             startMinutes,
             endMinutes,
             durationMinutes,
+            count,
             hasSOC,
             startSOC,
             endSOC,
@@ -862,8 +879,96 @@ export const buildDaySummary = (
     const legend = SUMMARY_LEGEND_ORDER.filter(item => usedCategories.has(item.category));
 
     // 2. Build story beats:
+    const mergePhaseInto = (prev: RawPhase, p: RawPhase) => {
+        prev.endTime = p.endTime;
+        prev.effectiveEndTime = p.effectiveEndTime;
+        prev.endMinutes = p.endMinutes;
+        prev.durationMinutes += p.durationMinutes;
+        prev.count += p.count;
+        if (p.hasSOC) {
+            if (!prev.hasSOC) {
+                prev.startSOC = p.startSOC;
+            }
+            prev.endSOC = p.endSOC;
+            prev.hasSOC = true;
+        }
+        if (p.hasPrice) {
+            const totalWeight = (prev.hasPrice ? prev.priceWeight : 0) + p.priceWeight;
+            prev.avgPrice =
+                ((prev.hasPrice ? prev.avgPrice * prev.priceWeight : 0) + p.avgPrice * p.priceWeight) /
+                totalWeight;
+            prev.priceWeight = totalWeight;
+            prev.hasPrice = true;
+        }
+        prev.latestAction = p.latestAction;
+        prev.refTs = p.refTs;
+        prev.isLatest = prev.isLatest || p.isLatest;
+    };
+
+    const mergeAdjacentSameCategory = (phases: RawPhase[]): RawPhase[] => {
+        const result: RawPhase[] = [];
+        for (const p of phases) {
+            const prev = result[result.length - 1];
+            if (prev && prev.category === p.category) {
+                mergePhaseInto(prev, p);
+            } else {
+                result.push({ ...p });
+            }
+        }
+        return result;
+    };
+
+    // Coalesce adjacent same-category phases first
+    const coalescedPhases = mergeAdjacentSameCategory(rawPhases);
+
+    // Combine similar non-standby phases separated by standby
+    const afterStandbyBridge: RawPhase[] = [];
+    for (const p of coalescedPhases) {
+        const prev = afterStandbyBridge[afterStandbyBridge.length - 1];
+        const prevPrev = afterStandbyBridge[afterStandbyBridge.length - 2];
+        if (prev && prev.category === p.category) {
+            mergePhaseInto(prev, p);
+        } else if (
+            p.category !== 'standby' &&
+            prev &&
+            prev.category === 'standby' &&
+            prevPrev &&
+            prevPrev.category === p.category
+        ) {
+            afterStandbyBridge.pop();
+            mergePhaseInto(prevPrev, p);
+        } else {
+            afterStandbyBridge.push({ ...p });
+        }
+    }
+
+    // Combine similar non-standby phases separated by just 1 other period
+    const afterSinglePeriodBridge: RawPhase[] = [];
+    for (const p of afterStandbyBridge) {
+        const prev = afterSinglePeriodBridge[afterSinglePeriodBridge.length - 1];
+        const prevPrev = afterSinglePeriodBridge[afterSinglePeriodBridge.length - 2];
+        const isSinglePeriodSeparator =
+            prev &&
+            prev.category !== 'fault' &&
+            prev.category !== 'vpp' &&
+            (prev.count === 1 || prev.durationMinutes < 30);
+        if (prev && prev.category === p.category) {
+            mergePhaseInto(prev, p);
+        } else if (
+            p.category !== 'standby' &&
+            isSinglePeriodSeparator &&
+            prevPrev &&
+            prevPrev.category === p.category
+        ) {
+            afterSinglePeriodBridge.pop();
+            mergePhaseInto(prevPrev, p);
+        } else {
+            afterSinglePeriodBridge.push({ ...p });
+        }
+    }
+
     // Filter out < 30 minute blips (except the newest/current action, faults, or VPP)
-    let significantPhases = rawPhases.filter(
+    let significantPhases = afterSinglePeriodBridge.filter(
         p => p.isLatest || p.category === 'fault' || p.category === 'vpp' || p.durationMinutes >= 30
     );
     if (significantPhases.length === 0) {
@@ -871,40 +976,12 @@ export const buildDaySummary = (
     }
 
     // Merge consecutive phases of the same category
-    const mergedPhases: RawPhase[] = [];
-    for (const p of significantPhases) {
-        const prev = mergedPhases[mergedPhases.length - 1];
-        if (prev && prev.category === p.category) {
-            prev.endTime = p.endTime;
-            prev.effectiveEndTime = p.effectiveEndTime;
-            prev.durationMinutes += p.durationMinutes;
-            if (p.hasSOC) {
-                if (!prev.hasSOC) {
-                    prev.startSOC = p.startSOC;
-                }
-                prev.endSOC = p.endSOC;
-                prev.hasSOC = true;
-            }
-            if (p.hasPrice) {
-                const totalWeight = (prev.hasPrice ? prev.priceWeight : 0) + p.priceWeight;
-                prev.avgPrice =
-                    ((prev.hasPrice ? prev.avgPrice * prev.priceWeight : 0) + p.avgPrice * p.priceWeight) /
-                    totalWeight;
-                prev.priceWeight = totalWeight;
-                prev.hasPrice = true;
-            }
-            prev.latestAction = p.latestAction;
-            prev.refTs = p.refTs;
-            prev.isLatest = p.isLatest;
-        } else {
-            mergedPhases.push({ ...p });
-        }
-    }
+    const mergedPhases = mergeAdjacentSameCategory(significantPhases);
 
     // Hide standby from bullet points unless the entire day is standby
     const hasNonStandby = mergedPhases.some(p => p.category !== 'standby');
     let beatPhases = hasNonStandby
-        ? mergedPhases.filter(p => p.category !== 'standby')
+        ? mergeAdjacentSameCategory(mergedPhases.filter(p => p.category !== 'standby'))
         : mergedPhases;
 
     if (beatPhases.length === 0) {

@@ -866,5 +866,111 @@ describe('dashboardUtils', () => {
             expect(summary.beats[1].category).toBe('charge');
             expect(summary.beats[1].headline).toBe('Charged battery');
         });
+
+        it('combines similar actions separated by standby or by 1 other period', () => {
+            const finalStandby: ActionSummary = {
+                isSummary: true,
+                type: 'grouped',
+                reason: ActionReason.HoldSimilarPrice,
+                startTime: '2026-10-19T22:03:00-04:00',
+                endTime: '2026-10-19T22:43:00-04:00',
+                latestAction: {
+                    description: '',
+                    timestamp: '2026-10-19T22:43:00-04:00',
+                    batteryMode: BatteryMode.Standby,
+                    solarMode: SolarMode.Any,
+                    reason: ActionReason.HoldSimilarPrice,
+                    systemStatus: { batterySOC: 79.7 }
+                },
+                count: 3,
+                alarms: new Set(),
+                storms: new Set(),
+                hasPrice: true,
+                avgPrice: 0.208,
+                min: 0.208,
+                max: 0.208,
+                hasSOC: true,
+                avgSOC: 79.8,
+                minSOC: 79.7,
+                maxSOC: 79.9,
+                startSOC: 79.9,
+                endSOC: 79.7
+            };
+
+            const singleCharge: Action = {
+                description: '',
+                timestamp: '2026-10-19T21:43:00-04:00',
+                batteryMode: BatteryMode.ChargeAny,
+                solarMode: SolarMode.Any,
+                reason: ActionReason.ArbitrageChargeExport,
+                currentPrice: { dollarsPerKWH: 0.208, gridUseDollarsPerKWH: 0, tsStart: '2026-10-19T21:00:00-04:00', tsEnd: '' },
+                systemStatus: { batterySOC: 65.8 }
+            };
+
+            const singleStandby: Action = {
+                description: '',
+                timestamp: '2026-10-19T21:23:00-04:00',
+                batteryMode: BatteryMode.Standby,
+                solarMode: SolarMode.Any,
+                reason: ActionReason.ArbitrageHoldExport,
+                currentPrice: { dollarsPerKWH: 0.208, gridUseDollarsPerKWH: 0, tsStart: '2026-10-19T21:00:00-04:00', tsEnd: '' },
+                systemStatus: { batterySOC: 65.1 }
+            };
+
+            const initialCharge: ActionSummary = {
+                isSummary: true,
+                type: 'grouped',
+                reason: ActionReason.ArbitrageChargeExport,
+                startTime: '2026-10-19T20:23:00-04:00',
+                endTime: '2026-10-19T21:03:00-04:00',
+                latestAction: {
+                    description: '',
+                    timestamp: '2026-10-19T21:03:00-04:00',
+                    batteryMode: BatteryMode.ChargeAny,
+                    solarMode: SolarMode.Any,
+                    reason: ActionReason.ArbitrageChargeExport,
+                    systemStatus: { batterySOC: 49.0 }
+                },
+                count: 3,
+                alarms: new Set(),
+                storms: new Set(),
+                hasPrice: true,
+                avgPrice: 0.208,
+                min: 0.208,
+                max: 0.208,
+                hasSOC: true,
+                avgSOC: 36.2,
+                minSOC: 24.1,
+                maxSOC: 49.0,
+                startSOC: 24.1,
+                endSOC: 49.0
+            };
+
+            const summary = buildDaySummary([finalStandby, singleCharge, singleStandby, initialCharge], '$');
+            expect(summary.beats).toHaveLength(1);
+            expect(summary.beats[0].category).toBe('charge');
+            expect(summary.beats[0].headline).toBe('Charged before peak');
+            expect(summary.beats[0].timeLabel).toBe('8:23 PM – 9:43 PM');
+            expect(summary.beats[0].socText).toBe('24% → 80%');
+
+            const singleLoadSeparator: Action = {
+                description: '',
+                timestamp: '2026-10-19T21:23:00-04:00',
+                batteryMode: BatteryMode.Load,
+                solarMode: SolarMode.Any,
+                reason: ActionReason.SufficientBattery,
+                currentPrice: { dollarsPerKWH: 0.208, gridUseDollarsPerKWH: 0, tsStart: '2026-10-19T21:00:00-04:00', tsEnd: '' },
+                systemStatus: { batterySOC: 65.1 }
+            };
+
+            const summaryWithOtherPeriod = buildDaySummary(
+                [finalStandby, singleCharge, singleLoadSeparator, initialCharge],
+                '$'
+            );
+            expect(summaryWithOtherPeriod.beats).toHaveLength(1);
+            expect(summaryWithOtherPeriod.beats[0].category).toBe('charge');
+            expect(summaryWithOtherPeriod.beats[0].timeLabel).toBe('8:23 PM – 9:43 PM');
+            expect(summaryWithOtherPeriod.beats[0].socText).toBe('24% → 80%');
+        });
     });
 });
