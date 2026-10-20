@@ -19,6 +19,30 @@ You can also specify explicit date bounds:
 go run ./cmd/inspectsite --site=<siteID> --start=2026-10-04 --end=2026-10-07
 ```
 
+## Replaying & Simulating `controller.Plan`
+Use `cmd/replayplan` to inspect the full 24-hour `Plan` horizon recorded at a specific poll, verify how code changes in `pkg/controller/plan.go` affect historical decisions, or test "what-if" setting overrides:
+
+```bash
+# Replay all polls on a specific local date and print full horizon schedules at selected times
+go run ./cmd/replayplan --site=<siteID> --date=2026-10-19 --detail-at=12:01,13:23
+
+# Compare the recorded Firestore plan schedule vs. the replayed plan schedule
+go run ./cmd/replayplan --site=<siteID> --date=2026-10-19 --detail-at=13:22 --show-recorded-plan
+
+# Replay with in-memory setting overrides (e.g., if the user changed settings after an incident)
+go run ./cmd/replayplan --site=<siteID> --date=2026-10-19 \
+  --min-soc=20 \
+  --period-min-soc="On-Peak=20,Off-Peak=50" \
+  --export-margin=0 \
+  --detail-at=12:01
+```
+
+Useful flags:
+* `--detail-at=HH:MM,HH:MM` (or `all`): Dump the step-by-step `plan.Periods` table for matching local poll times.
+* `--show-recorded-plan`: Print the `action.Plan` stored in Firestore alongside the newly simulated plan.
+* `--chain-actions=false`: Feed the historically recorded previous action as `lastAction` instead of chaining the simulated action across polls.
+* Setting override flags: `--min-soc`, `--period-min-soc`, `--export-margin`, `--arbitrage-diff`, `--always-charge-under`, `--grid-charge`, `--grid-export-batteries`, `--grid-export-solar`.
+
 ## Key Investigation Steps
 
 ### 1. Identify Environment & Timezone

@@ -73,6 +73,8 @@ func main() {
 	}
 	fmt.Printf("Thresholds:     AlwaysChargeUnder=$%.4f/kWh, MinArbitrageDiff=$%.4f/kWh\n",
 		settings.AlwaysChargeUnderDollarsPerKWH, settings.MinArbitrageDifferenceDollarsPerKWH)
+	fmt.Printf("EV Standby:     %v\n", settings.EVChargingStandby)
+	fmt.Printf("Optimization:   %+v\n", settings.GetOptimizationParams())
 	fmt.Printf("Manage TOU:     %v\n", settings.ManageTOUSchedules)
 
 	if settingsOnly {

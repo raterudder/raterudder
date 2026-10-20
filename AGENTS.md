@@ -82,5 +82,5 @@
 
 ## Operations & Site Debugging
 - **GCP Project**: Cloud Logging and Firestore run under project `raterudder` (`projects/raterudder`).
-- **Site Debugging Skill**: Use the `debug-site` skill and `go run ./cmd/inspectsite --site=<siteID>` to inspect site settings, action history, and cloud logs for user-reported issues.
+- **Site Debugging Skill**: Use the `debug-site` skill (`cmd/inspectsite` and `cmd/replayplan`) to inspect site settings, action history, cloud logs, and re-run `controller.Plan` across historical polls.
 - **Privacy Guardrail**: Never include site IDs, customer names, or user emails in git commits, tests, or code files.
