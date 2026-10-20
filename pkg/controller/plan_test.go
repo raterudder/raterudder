@@ -6470,6 +6470,126 @@ func TestSearchOptimalPlan(t *testing.T) {
 		assert.Equal(t, types.BatteryModeChargeAny, bestPathLoad.actions[1].batteryMode,
 			"Should recharge back to 50% post-peak reserve during off-peak")
 	})
+
+	t.Run("SolarModeSwitchPenalty_BlocksShortMinorRealTimeBlipWhilePreservingSpike", func(t *testing.T) {
+		t.Parallel()
+
+		// Scenario: Battery is at 83.3% SOC on a 27.0 kWh system and currently in BatteryModeLoad + SolarModeAny.
+		// Step 0 is a 13-minute end-of-hour interval (09:47 - 10:00) with 1.85 kWh solar and 0.21 kWh load,
+		// followed by midday solar intervals (10:00 - 12:00) at $0.0653/kWh import / $0.0213/kWh export that
+		// fill the battery to 100% SOC and overflow excess solar at $0.0213/kWh.
+		//
+		// Case 1 (Minor 0.82c/kWh blip at 09:47: $0.0735/kWh import, $0.0295/kWh export):
+		// Exporting 1.85 kWh at $0.0295 vs $0.0213 only gains +$0.0152 gross (-$0.0011 wear = +$0.0141 net).
+		// Because the $0.0082/kWh drop at 10:00 is below priceMaterialityThresholdDollars ($0.03/kWh),
+		// switching SolarModeAny -> SolarModeExport -> SolarModeAny incurs 2 x solarModeSwitchPenalty ($0.0200),
+		// which exceeds the +$0.0141 gain and keeps the system in SolarModeAny without chattering.
+		minorBlipTimeline := []planInterval{
+			{
+				index:         0,
+				startTime:     now,
+				endTime:       now.Add(13 * time.Minute),
+				durationHours: 13.0 / 60.0,
+				importRate:    0.0735,
+				exportRate:    0.0295,
+				loadKWH:       0.21,
+				solarKWH:      1.85,
+				minSOC:        25.0,
+			},
+			{
+				index:         1,
+				startTime:     now.Add(13 * time.Minute),
+				endTime:       now.Add(73 * time.Minute),
+				durationHours: 1.0,
+				importRate:    0.0653,
+				exportRate:    0.0213,
+				loadKWH:       1.10,
+				solarKWH:      9.00,
+				minSOC:        25.0,
+			},
+			{
+				index:         2,
+				startTime:     now.Add(73 * time.Minute),
+				endTime:       now.Add(133 * time.Minute),
+				durationHours: 1.0,
+				importRate:    0.0649,
+				exportRate:    0.0198,
+				loadKWH:       1.08,
+				solarKWH:      8.46,
+				minSOC:        25.0,
+			},
+		}
+
+		solarSettings := types.Settings{
+			MinBatterySOC:       25.0,
+			ManageTOUSchedules:  true,
+			GridExportSolar:     true,
+			GridChargeBatteries: true,
+			OptimizationProfile: "balanced",
+		}
+		solarStatus := types.SystemStatus{
+			Timestamp:             now,
+			BatteryCapacityKWH:    27.0,
+			BatterySOC:            83.3,
+			BatteryAboveMinSOC:    true,
+			MaxBatteryChargeKW:    10.0,
+			MaxBatteryDischargeKW: 10.0,
+			SolarKW:               8.5,
+			HomeKW:                1.0,
+		}
+		solarState := planState{
+			time:           now,
+			energyKWH:      27.0 * 0.833,
+			soc:            83.3,
+			capacityKWH:    27.0,
+			maxChargeKW:    10.0,
+			maxDischargeKW: 10.0,
+		}
+		prevLoadPrice := types.Price{
+			DollarsPerKWH:                 0.0650,
+			GenerationCreditDollarsPerKWH: 0.0210,
+			SeparateGenerationCredit:      true,
+		}
+		lastLoadAction := &types.Action{
+			Timestamp:    now.Add(-20 * time.Minute),
+			BatteryMode:  types.BatteryModeLoad,
+			SolarMode:    types.SolarModeAny,
+			CurrentPrice: &prevLoadPrice,
+		}
+
+		anchorsBlip := c.detectPlanningAnchors(minorBlipTimeline, nil, solarStatus, solarSettings, nil)
+		bestPathBlip, err := c.searchOptimalPlan(ctx, minorBlipTimeline, solarState, anchorsBlip, solarSettings, solarStatus, nil, lastLoadAction)
+		require.NoError(t, err)
+		require.Len(t, bestPathBlip.actions, 3)
+		assert.Equal(t, types.SolarModeAny, bestPathBlip.actions[0].solarMode,
+			"Must stay in SolarModeAny during a 13-minute minor price blip (+$0.0141 net gain < $0.02 round-trip solarModeSwitchPenalty)")
+
+		// Case 2 (Genuine morning price spike at 07:27: $0.1088/kWh import, $0.0648/kWh export):
+		// Exporting 0.85 kWh at $0.0648 vs $0.0198 gains +$0.0383 gross, and the $0.045/kWh drop at 08:00
+		// exceeds priceMaterialityThresholdDollars ($0.03/kWh) so exiting at Step 1 is free (isSolarPriceDrop == true).
+		// The +$0.0383 gain easily clears the single $0.01 entry penalty.
+		spikeTimeline := []planInterval{
+			{
+				index:         0,
+				startTime:     now,
+				endTime:       now.Add(33 * time.Minute),
+				durationHours: 33.0 / 60.0,
+				importRate:    0.1088,
+				exportRate:    0.0648,
+				loadKWH:       0.47,
+				solarKWH:      0.85,
+				minSOC:        25.0,
+			},
+			minorBlipTimeline[1],
+			minorBlipTimeline[2],
+		}
+		anchorsSpike := c.detectPlanningAnchors(spikeTimeline, nil, solarStatus, solarSettings, nil)
+		bestPathSpike, err := c.searchOptimalPlan(ctx, spikeTimeline, solarState, anchorsSpike, solarSettings, solarStatus, nil, lastLoadAction)
+		require.NoError(t, err)
+		require.Len(t, bestPathSpike.actions, 3)
+		assert.Equal(t, types.SolarModeExport, bestPathSpike.actions[0].solarMode,
+			"Must switch to SolarModeExport during a genuine morning price spike (+$0.0383 gain > $0.01 solarModeSwitchPenalty)")
+	})
 }
 
 // TestFinalizeDecisionAndPlan tests the synthesis of Decision and types.Plan from a winning path.

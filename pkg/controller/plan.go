@@ -89,6 +89,14 @@ const (
 	// while still permitting mode switches whenever economically justified.
 	modeSwitchPenalty = 0.005
 
+	// solarModeSwitchPenalty ($0.01 = 1.0 cent) is the transition penalty applied when toggling SolarMode
+	// (e.g. SolarModeAny <-> SolarModeExport). Because DirectSolarExport shares BatteryModeLoad with normal
+	// self-consumption, a $0.01 per-switch penalty ($0.02 round-trip when entering and exiting on minor
+	// < $0.03/kWh fluctuations where isSolarPriceDrop is false) prevents short end-of-hour real-time blips
+	// from toggling hardware TOU modes for a single poll just to earn a cent, while preserving genuine
+	// price spikes and multi-hour solar export windows.
+	solarModeSwitchPenalty = 0.01
+
 	// batteryExportReserveMarginPct is the home-load safety buffer (in % SOC) added to forecasted
 	// peak home consumption when evaluating whether battery grid export is economical relative to
 	// grid imports. The battery can still export down to minSOC, but any energy within this 5% buffer
@@ -3314,7 +3322,7 @@ func (c *Controller) searchOptimalPlan(
 							// where rates drop (keeping SolarModeExport sticky when peak prices stay flat or increase
 							// after solar subsides).
 							if !isSolarPriceDrop && lastAction.SolarMode > 0 && cand.solarMode > 0 && cand.solarMode != lastAction.SolarMode {
-								transitionCost += modeSwitchPenalty
+								transitionCost += solarModeSwitchPenalty
 							}
 						}
 					} else {
@@ -3335,7 +3343,7 @@ func (c *Controller) searchOptimalPlan(
 						// Penalize solarMode transitions independently of batteryMode, and only exempt boundaries
 						// where rates drop so SolarModeExport remains sticky across equal or higher peak tiers.
 						if !isSolarPriceDrop && parent.action.solarMode > 0 && cand.solarMode > 0 && parent.action.solarMode != cand.solarMode {
-							transitionCost += modeSwitchPenalty
+							transitionCost += solarModeSwitchPenalty
 						}
 					}
 
