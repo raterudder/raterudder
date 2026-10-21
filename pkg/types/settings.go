@@ -528,9 +528,5 @@ func (s Settings) GetOptimizationParams() OptimizationParams {
 		}
 	}
 
-	if s.MinBatteryExportDifferenceDollarsPerKWH > 0 {
-		params.BatteryExportDegradationDollarsPerKWH = s.MinBatteryExportDifferenceDollarsPerKWH
-	}
-
 	return params
 }

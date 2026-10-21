@@ -605,12 +605,12 @@ func TestGetOptimizationParams(t *testing.T) {
 		assert.Equal(t, 0.02, params.BatteryExportDegradationDollarsPerKWH)
 	})
 
-	t.Run("MinBatteryExportDifferenceOverride", func(t *testing.T) {
+	t.Run("MinBatteryExportDifferenceDoesNotOverrideDegradation", func(t *testing.T) {
 		s := Settings{
 			OptimizationProfile:                     "balanced",
 			MinBatteryExportDifferenceDollarsPerKWH: 0.15,
 		}
 		params := s.GetOptimizationParams()
-		assert.Equal(t, 0.15, params.BatteryExportDegradationDollarsPerKWH)
+		assert.Equal(t, 0.03, params.BatteryExportDegradationDollarsPerKWH)
 	})
 }

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -17,25 +16,33 @@ import (
 )
 
 var planBaselines = map[string]float64{
-	"site1_march.json":      -4.271,
-	"site1_may.json":        -16.013,
-	"site1_september.json":  37.278,
-	"site2_april.json":      0.172,
-	"site2_march.json":      9.252,
-	"site2_may.json":        1.262,
-	"site2_september.json":  0.357,
-	"site3_march.json":      -2.004,
-	"site3_may.json":        -6.952,
-	"site4_late-may.json":   0.353,
-	"site4_may.json":        1.857,
-	"site4_september.json":  -4.574,
-	"site5_june.json":       18.230,
-	"site5_september.json":  14.108,
-	"site7_june.json":       30.310,
-	"site8_june.json":       -10.810,
-	"site9_september.json":  -16.734,
-	"site10_september.json": 1.834,
-	"site11_october.json":   -14.804,
+	"site1_march.json":           -3.917,
+	"site1_may.json":             -15.436,
+	"site1_september.json":       38.044,
+	"site2_april.json":           0.987,
+	"site2_march.json":           9.907,
+	"site2_may.json":             1.495,
+	"site2_september.json":       1.317,
+	"site3_march.json":           -1.760,
+	"site3_may.json":             -6.903,
+	"site4_late-may.json":        1.097,
+	"site4_may.json":             2.337,
+	"site4_october.json":         -1.013,
+	"site4_september.json":       -4.215,
+	"site5_june.json":            20.469,
+	"site5_october.json":         -0.040,
+	"site5_september.json":       15.082,
+	"site7_june.json":            32.955,
+	"site8_june.json":            -9.692,
+	"site9_september.json":       -14.067,
+	"site10_september.json":      6.691,
+	"site11_october.json":        -13.385,
+	"site13_october.json":        12.886,
+	"site14_october.json":        15.678,
+	"site15_october.json":        5.180,
+	"site15_september.json":      3.411,
+	"site16_late-september.json": 3.092,
+	"site5_mid-october.json":     1.788,
 }
 
 // TestPlanHistory evaluates the new Plan engine against real-world recorded site history datasets
@@ -60,11 +67,11 @@ func TestPlanHistory(t *testing.T) {
 		if totalBaselineCost != 0 {
 			pctTotalSavings = (netTotalSavings / totalBaselineCost) * 100.0
 		}
-		fmt.Fprintf(os.Stderr, "\n====== GLOBAL PLAN REPLAY RESULTS ======\n")
-		fmt.Fprintf(os.Stderr, "Total Baseline Cost : $%.3f\n", totalBaselineCost)
-		fmt.Fprintf(os.Stderr, "Total Simulated Cost: $%.3f\n", totalSimCost)
-		fmt.Fprintf(os.Stderr, "Total Net Savings   : $%.3f (%.2f%%)\n", netTotalSavings, pctTotalSavings)
-		fmt.Fprintf(os.Stderr, "========================================\n")
+		t.Log("\n====== GLOBAL PLAN REPLAY RESULTS ======")
+		t.Logf("Total Baseline Cost : $%.3f", totalBaselineCost)
+		t.Logf("Total Simulated Cost: $%.3f", totalSimCost)
+		t.Logf("Total Net Savings   : $%.3f (%.2f%%)", netTotalSavings, pctTotalSavings)
+		t.Log("========================================")
 		assert.LessOrEqual(t, totalSimCost, totalBaselineCost+0.10, "Global simulated cost across all sites should meet or beat baseline")
 	})
 
@@ -146,9 +153,29 @@ func TestPlanHistory(t *testing.T) {
 				}
 			} else if dataset.SiteID == "site4" {
 				settings.MinBatterySOC = 5
+				if fileName == "site4_october.json" {
+					settings.GridExportBatteries = true
+					settings.ManageTOUSchedules = true
+					settings.MinBatteryExportDifferenceDollarsPerKWH = 0.02
+					settings.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+						{UtilityPeriodName: "On-Peak", MinBatterySOC: 5},
+						{UtilityPeriodName: "Off-Peak", MinBatterySOC: 20},
+						{UtilityPeriodName: "Super Off-Peak", MinBatterySOC: 40},
+					}
+				}
 			} else if dataset.SiteID == "site5" {
 				settings.UtilityRateOptions.VPPProgram = "ess-passive"
 				settings.MinBatterySOC = 5
+				if fileName == "site5_october.json" || fileName == "site5_mid-october.json" {
+					settings.MinBatterySOC = 25
+					settings.GridExportBatteries = true
+					settings.ManageTOUSchedules = true
+					settings.MinBatteryExportDifferenceDollarsPerKWH = 0.04
+					settings.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+						{UtilityPeriodName: "On-Peak", MinBatterySOC: 25},
+						{UtilityPeriodName: "Off-Peak", MinBatterySOC: 25},
+					}
+				}
 			} else if dataset.SiteID == "site7" {
 				settings.GridChargeBatteries = false
 			} else if dataset.SiteID == "site8" {
@@ -169,6 +196,38 @@ func TestPlanHistory(t *testing.T) {
 				settings.MinBatterySOC = 20
 				settings.GridExportBatteries = true
 				settings.ManageTOUSchedules = true
+			} else if dataset.SiteID == "site13" {
+				settings.MinBatterySOC = 10
+				settings.GridExportBatteries = true
+				settings.ManageTOUSchedules = true
+				settings.MinBatteryExportDifferenceDollarsPerKWH = 0.07
+			} else if dataset.SiteID == "site14" {
+				settings.MinBatterySOC = 30
+				settings.GridExportBatteries = true
+				settings.ManageTOUSchedules = true
+				settings.MinBatteryExportDifferenceDollarsPerKWH = 0.07
+				settings.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+					{TimePeriod: types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 1}}}, MinBatterySOC: 30},
+					{TimePeriod: types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 1, HourEnd: 6}}}, MinBatterySOC: 50},
+					{TimePeriod: types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 24}}}, MinBatterySOC: 30},
+				}
+			} else if dataset.SiteID == "site15" {
+				settings.MinBatterySOC = 20
+				settings.GridExportBatteries = true
+				settings.ManageTOUSchedules = true
+				settings.MinBatteryExportDifferenceDollarsPerKWH = 0.07
+				settings.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+					{TimePeriod: types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 7}}}, MinBatterySOC: 20},
+					{TimePeriod: types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 7, HourEnd: 16}}}, MinBatterySOC: 80},
+					{TimePeriod: types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}}}, MinBatterySOC: 20},
+					{TimePeriod: types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 21, HourEnd: 24}}}, MinBatterySOC: 80},
+				}
+			} else if dataset.SiteID == "site16" {
+				settings.MinBatterySOC = 10
+				settings.GridExportSolar = false
+				settings.GridExportBatteries = false
+				settings.ManageTOUSchedules = true
+				settings.MinBatteryExportDifferenceDollarsPerKWH = 0.07
 			}
 
 			// Adjust simStart to the hour of the first action to align the evaluation window
@@ -318,7 +377,7 @@ func TestPlanHistory(t *testing.T) {
 				simStatus.Timestamp = tCurrent.In(fileLoc)
 				simStatus.TimeLocation = fileLoc.String()
 				simStatus.BatterySOC = simSOC
-				simStatus.BatteryAboveMinSOC = simSOC > settings.MinBatterySOC
+				simStatus.BatteryAboveMinSOC = simSOC > settings.GetMinBatterySOC(ctx, simStatus.Timestamp, fileLoc, currentPrice)
 				simStatus.BatteryCapacityKWH = capacityKWH
 				simStatus.MaxBatteryChargeKW = maxChargeKW
 				simStatus.MaxBatteryDischargeKW = maxDischargeKW
@@ -330,8 +389,9 @@ func TestPlanHistory(t *testing.T) {
 				}
 				simStatus.VPPEvents = currentVPPEvents
 
-				decision, _, err := c.Plan(ctx, simStatus, currentPrice, futurePrices, mockHistory, mockWeather, settings, lastAction)
+				decision, plan, err := c.Plan(ctx, simStatus, currentPrice, futurePrices, mockHistory, mockWeather, settings, lastAction)
 				require.NoError(t, err)
+				assert.Empty(t, findDominatedPlanPeriods(plan), "Plan at %s must not contain dominated Hold->Export or Export->Hold periods", simStatus.Timestamp.Format(time.RFC3339))
 
 				decidedMode := decision.Action.BatteryMode
 				planModes = append(planModes, decidedMode)
@@ -353,7 +413,7 @@ func TestPlanHistory(t *testing.T) {
 					var gridExportPrice float64
 					if okMin {
 						gridImportPrice = pMin.DollarsPerKWH + pMin.GridUseDollarsPerKWH
-						if !settings.GridExportSolar {
+						if !settings.GridExportSolar && !settings.GridExportBatteries {
 							gridExportPrice = 0.0
 						} else if settings.UtilityRateOptions.NetMeteringCredits {
 							gridExportPrice = calculateMinFuturePrice(dataset.PriceHistory, tMin)
@@ -367,7 +427,7 @@ func TestPlanHistory(t *testing.T) {
 						}
 					} else {
 						gridImportPrice = currentPrice.DollarsPerKWH + currentPrice.GridUseDollarsPerKWH
-						if !settings.GridExportSolar {
+						if !settings.GridExportSolar && !settings.GridExportBatteries {
 							gridExportPrice = 0.0
 						} else if settings.UtilityRateOptions.NetMeteringCredits {
 							gridExportPrice = calculateMinFuturePrice(dataset.PriceHistory, tMin)
@@ -386,8 +446,14 @@ func TestPlanHistory(t *testing.T) {
 					}
 					lastGridImportPrice = gridImportPrice
 
+					effectivePrice := currentPrice
+					if okMin {
+						effectivePrice = pMin
+					}
+					effectiveMinSOC := settings.GetMinBatterySOC(ctx, tMin.In(fileLoc), fileLoc, effectivePrice)
 					energy := simSOC * capacityKWH / 100.0
-					minEnergy := (settings.MinBatterySOC / 100.0) * capacityKWH
+					minEnergy := (effectiveMinSOC / 100.0) * capacityKWH
+					oneWayEff := math.Sqrt(0.90)
 
 					var pBattCharge float64
 					var pBattDischarge float64
@@ -406,30 +472,34 @@ func TestPlanHistory(t *testing.T) {
 							}
 							targetEnergyLimit := capacityKWH * float64(targetSOC) / 100.0
 							if energy < targetEnergyLimit {
-								targetGridCharge := math.Max(0.0, (targetEnergyLimit-energy)/dt)
+								targetGridCharge := math.Max(0.0, (targetEnergyLimit-energy)/(dt*oneWayEff))
 								gridCharge = math.Min(maxChargeKW, targetGridCharge)
 								gridCharge = math.Max(0.0, gridCharge-solarCharge)
 							}
 						}
 						pBattCharge = math.Min(maxChargeKW, solarCharge+gridCharge)
-						pBattCharge = math.Min(pBattCharge, (capacityKWH-energy)/dt)
+						pBattCharge = math.Min(pBattCharge, (capacityKWH-energy)/(dt*oneWayEff))
 
 					case types.BatteryModeExport:
-						pBattDischarge = math.Min(maxDischargeKW, math.Max(0.0, (energy-minEnergy)/dt))
+						exportMinEnergy := minEnergy
+						if decision.Action.ChargeToSOC > 0 {
+							exportMinEnergy = math.Max(exportMinEnergy, capacityKWH*math.Min(100.0, float64(decision.Action.ChargeToSOC))/100.0)
+						}
+						pBattDischarge = math.Min(maxDischargeKW, math.Max(0.0, (energy-exportMinEnergy)*oneWayEff/dt))
 						pBattCharge = 0.0
 
 					case types.BatteryModeLoad:
 						if decision.Action.SolarMode == types.SolarModeExport {
-							pBattDischarge = math.Min(homeKW, math.Min(maxDischargeKW, math.Max(0.0, (energy-minEnergy)/dt)))
+							pBattDischarge = math.Min(homeKW, math.Min(maxDischargeKW, math.Max(0.0, (energy-minEnergy)*oneWayEff/dt)))
 							pBattCharge = 0.0
 						} else {
 							netLoad := homeKW - solarKW
 							if netLoad > 0 {
-								pBattDischarge = math.Min(netLoad, math.Min(maxDischargeKW, math.Max(0.0, (energy-minEnergy)/dt)))
+								pBattDischarge = math.Min(netLoad, math.Min(maxDischargeKW, math.Max(0.0, (energy-minEnergy)*oneWayEff/dt)))
 								pBattCharge = 0.0
 							} else {
 								surplusSolar := solarKW - homeKW
-								pBattCharge = math.Min(surplusSolar, math.Min(maxChargeKW, (capacityKWH-energy)/dt))
+								pBattCharge = math.Min(surplusSolar, math.Min(maxChargeKW, (capacityKWH-energy)/(dt*oneWayEff)))
 								pBattDischarge = 0.0
 							}
 						}
@@ -442,7 +512,7 @@ func TestPlanHistory(t *testing.T) {
 							netLoad := homeKW - solarKW
 							if netLoad < 0 {
 								surplusSolar := solarKW - homeKW
-								pBattCharge = math.Min(surplusSolar, math.Min(maxChargeKW, (capacityKWH-energy)/dt))
+								pBattCharge = math.Min(surplusSolar, math.Min(maxChargeKW, (capacityKWH-energy)/(dt*oneWayEff)))
 							} else {
 								pBattCharge = 0.0
 							}
@@ -450,7 +520,7 @@ func TestPlanHistory(t *testing.T) {
 						}
 					}
 
-					energy = energy + (pBattCharge-pBattDischarge)*dt
+					energy = energy + (pBattCharge*oneWayEff-pBattDischarge/oneWayEff)*dt
 					simSOC = energy / capacityKWH * 100.0
 					if simSOC < 0.0 {
 						simSOC = 0.0
@@ -464,7 +534,7 @@ func TestPlanHistory(t *testing.T) {
 						simCost += gridKW * dt * gridImportPrice
 					} else if gridKW < 0 {
 						exportKWH := math.Abs(gridKW) * dt
-						if settings.GridExportSolar || settings.GridExportBatteries {
+						if settings.GridExportSolar || (settings.GridExportBatteries && decidedMode == types.BatteryModeExport) {
 							simCredit += exportKWH * gridExportPrice
 						}
 					}
@@ -518,7 +588,7 @@ func TestPlanHistory(t *testing.T) {
 			for _, r := range planReasons {
 				reasonCounts[r]++
 			}
-			fmt.Fprintf(os.Stderr, "%-20s | Cash: $%7.3f | SOC: %5.1f%% -> %5.1f%% (dE: %+6.2f kWh, AssetVal: $%+6.3f) | PlanAdjNetCost: $%7.3f | PlanBase: $%7.3f | DecideBase: $%7.3f | SavVsDecide: $%+6.3f (%5.1f%%) | Modes: %v | Reasons: %v | Cost: $%.2f Credit: $%.2f\n",
+			t.Logf("%-20s | Cash: $%7.3f | SOC: %5.1f%% -> %5.1f%% (dE: %+6.2f kWh, AssetVal: $%+6.3f) | PlanAdjNetCost: $%7.3f | PlanBase: $%7.3f | DecideBase: $%7.3f | SavVsDecide: $%+6.3f (%5.1f%%) | Modes: %v | Reasons: %v | Cost: $%.2f Credit: $%.2f",
 				fileName, simNetCost, initialSOC, simSOC, deltaEnergyKWH, batteryAssetValue, simAdjustedNetCost, baseNetCost, decideBaseCost, savingsVsDecide, pctSavingsVsDecide, modeCounts, reasonCounts, simCost, simCredit)
 
 			mu.Lock()
@@ -534,4 +604,79 @@ func TestPlanHistory(t *testing.T) {
 			}
 		})
 	}
+}
+
+// dominatedPeriodPriceGapDollars is the minimum price difference ($/kWh) required to flag a
+// HoldThenCheaperExport or ExportThenCostlierHold sequence as dominated. Swapping 1 kWh of grid import
+// in Standby for 1 kWh less battery export is strictly better even at equal prices because exporting
+// also incurs round-trip losses and wear; a $0.005/kWh threshold catches small TOU tier inversions
+// (such as $0.1048 off-peak import vs $0.0940 on-peak export) while ignoring float rounding noise.
+const dominatedPeriodPriceGapDollars = 0.005
+
+// findDominatedPlanPeriods checks a generated Plan for dominated interval pairs:
+//  1. HoldThenCheaperExport: Standby above reserve with net grid import at rate I, followed later by
+//     BatteryModeExport at export rate E < I - epsilon while the battery remains above reserve in between.
+//  2. ExportThenCostlierHold: BatteryModeExport at export rate E, followed later by Standby above reserve
+//     with net grid import at rate I > E + epsilon before any recharge or solar refill to full.
+func findDominatedPlanPeriods(plan types.Plan) []string {
+	var violations []string
+	periods := plan.Periods
+	for i := 0; i < len(periods); i++ {
+		p := periods[i]
+		// 1. HoldThenCheaperExport
+		if p.BatteryMode == types.BatteryModeStandby &&
+			p.Reason != types.ActionReasonVPPPrep &&
+			p.Reason != types.ActionReasonVPPActive &&
+			p.StartSOC > p.ReserveSOC+1.0 &&
+			p.LoadKWH > p.SolarKWH+0.05 &&
+			p.GridImportKWH > 0.05 {
+			for j := i + 1; j < len(periods); j++ {
+				q := periods[j]
+				if q.Reason == types.ActionReasonVPPPrep || q.Reason == types.ActionReasonVPPActive {
+					break
+				}
+				if q.StartSOC <= q.ReserveSOC+1.0 || q.EndSOC <= q.ReserveSOC+1.0 || q.BatteryMode == types.BatteryModeChargeAny || q.EndSOC >= 95.0 {
+					break
+				}
+				if q.BatteryMode == types.BatteryModeExport &&
+					q.GridExportKWH > q.SolarKWH+0.05 &&
+					q.ExportDollars < p.ImportDollars-dominatedPeriodPriceGapDollars {
+					violations = append(violations, fmt.Sprintf(
+						"HoldThenCheaperExport: Standby at %s (import $%.4f, SOC %.1f%%) before Export at %s (export $%.4f, EndSOC %.1f%%)",
+						p.TSStart.Format("15:04"), p.ImportDollars, p.StartSOC,
+						q.TSStart.Format("15:04"), q.ExportDollars, q.EndSOC,
+					))
+					break
+				}
+			}
+		}
+
+		// 2. ExportThenCostlierHold
+		if p.BatteryMode == types.BatteryModeExport &&
+			p.Reason != types.ActionReasonVPPActive &&
+			p.GridExportKWH > p.SolarKWH+0.05 {
+			for j := i + 1; j < len(periods); j++ {
+				q := periods[j]
+				if q.Reason == types.ActionReasonVPPPrep || q.Reason == types.ActionReasonVPPActive {
+					break
+				}
+				if q.BatteryMode == types.BatteryModeChargeAny || q.EndSOC >= 95.0 {
+					break
+				}
+				if q.BatteryMode == types.BatteryModeStandby &&
+					q.StartSOC > q.ReserveSOC+1.0 &&
+					q.LoadKWH > q.SolarKWH+0.05 &&
+					q.GridImportKWH > 0.05 &&
+					q.ImportDollars > p.ExportDollars+dominatedPeriodPriceGapDollars {
+					violations = append(violations, fmt.Sprintf(
+						"ExportThenCostlierHold: Export at %s (export $%.4f, EndSOC %.1f%%) before Standby at %s (import $%.4f, SOC %.1f%%)",
+						p.TSStart.Format("15:04"), p.ExportDollars, p.EndSOC,
+						q.TSStart.Format("15:04"), q.ImportDollars, q.StartSOC,
+					))
+					break
+				}
+			}
+		}
+	}
+	return violations
 }
