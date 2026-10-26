@@ -2982,7 +2982,7 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		mockS.AssertExpectations(t)
 		if assert.NotEmpty(t, recordedLog.Body) {
 			assert.Equal(t, "🚨 Price Spike: $0.35/kWh", recordedLog.Title)
-			assert.Contains(t, recordedLog.Body, "Price is $0.35/kWh now and anticipated to last until 8:10 AM.")
+			assert.Contains(t, recordedLog.Body, "Price is $0.35/kWh until 8:10 AM.")
 			assert.Contains(t, recordedLog.Body, "Battery is at 85% and projected to power your home through the spike.")
 			if assert.NotNil(t, recordedLog.Metadata) {
 				assert.Equal(t, "0.3500", recordedLog.Metadata["price"])

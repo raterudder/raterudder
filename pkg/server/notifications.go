@@ -2392,7 +2392,7 @@ func (s *Server) handlePriceSpikeNotifications(
 						firstSentence = fmt.Sprintf("Price is $%.2f/kWh now and expected to rise to $%.2f/kWh at %s (lasting until %s).", activeCost, extremeCost, extremeTime.In(siteLoc).Format("3:04 PM"), eventEnd.In(siteLoc).Format("3:04 PM"))
 					} else {
 						title = fmt.Sprintf("🚨 Price Spike: $%.2f/kWh", activeCost)
-						firstSentence = fmt.Sprintf("Price is $%.2f/kWh now and anticipated to last until %s.", activeCost, eventEnd.In(siteLoc).Format("3:04 PM"))
+						firstSentence = fmt.Sprintf("Price is $%.2f/kWh until %s.", activeCost, eventEnd.In(siteLoc).Format("3:04 PM"))
 					}
 				} else {
 					if extremeCost >= activeCost+0.02 {
@@ -2445,7 +2445,7 @@ func (s *Server) handlePriceSpikeNotifications(
 						firstSentence = fmt.Sprintf("Price is %s now and expected to drop to %s at %s (lasting until %s).", formatPriceDollarsPerKWH(activeCost), formatPriceDollarsPerKWH(extremeCost), extremeTime.In(siteLoc).Format("3:04 PM"), eventEnd.In(siteLoc).Format("3:04 PM"))
 					} else {
 						title = fmt.Sprintf("🟢 %s: %s", label, formatPriceDollarsPerKWH(activeCost))
-						firstSentence = fmt.Sprintf("Price is %s now and anticipated to last until %s.", formatPriceDollarsPerKWH(activeCost), eventEnd.In(siteLoc).Format("3:04 PM"))
+						firstSentence = fmt.Sprintf("Price is %s until %s.", formatPriceDollarsPerKWH(activeCost), eventEnd.In(siteLoc).Format("3:04 PM"))
 					}
 				} else {
 					if extremeCost <= activeCost-0.02 {
