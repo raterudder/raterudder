@@ -2568,6 +2568,41 @@ describe('App & Settings', () => {
                 );
             });
         });
+
+        it('always sets minBatterySOC to the lowest SOC across all configured reserve periods when saving or pausing', async () => {
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                minBatterySOC: 10,
+                minBatterySOCPeriods: [
+                    { utilityPeriodName: 'Peak', minBatterySOC: 55 },
+                    { utilityPeriodName: 'Off-Peak', minBatterySOC: 35 },
+                ],
+            });
+            (api.fetchUtilityPeriods as any).mockResolvedValue([
+                { name: 'Peak' },
+                { name: 'Off-Peak' },
+            ]);
+            (api.updateSettings as any).mockResolvedValue(undefined);
+            await navigateToSettings();
+
+            // Pause should send minBatterySOC = 35 (lowest of 55 and 35) even without editing the periods
+            const pauseBtn = await screen.findByRole('button', { name: /^Pause$/i });
+            fireEvent.click(pauseBtn);
+
+            await waitFor(() => {
+                expect(api.updateSettings).toHaveBeenCalledWith(
+                    expect.objectContaining({
+                        pause: true,
+                        minBatterySOC: 35,
+                        minBatterySOCPeriods: [
+                            { utilityPeriodName: 'Peak', minBatterySOC: 55 },
+                            { utilityPeriodName: 'Off-Peak', minBatterySOC: 35 },
+                        ],
+                    }),
+                    expect.any(String)
+                );
+            });
+        });
     });
 
     describe('EV Charging Battery Protection', () => {

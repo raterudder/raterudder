@@ -995,21 +995,45 @@ const Settings = ({
         }
     };
 
+    const normalizeMinBatterySOC = (s: SettingsType): SettingsType => {
+        const copy = { ...s };
+        if (copy.minBatterySOCPeriods && copy.minBatterySOCPeriods.length > 0) {
+            const fallbackSOC = typeof copy.minBatterySOC === 'number' && !isNaN(copy.minBatterySOC) ? copy.minBatterySOC : 20;
+            copy.minBatterySOCPeriods = copy.minBatterySOCPeriods.map(p => {
+                const parsed = typeof p.minBatterySOC === 'number' ? p.minBatterySOC : parseFloat(p.minBatterySOC as any);
+                return {
+                    ...p,
+                    minBatterySOC: !isNaN(parsed) ? parsed : fallbackSOC,
+                };
+            });
+            const minVal = Math.min(...copy.minBatterySOCPeriods.map(p => p.minBatterySOC));
+            copy.minBatterySOC = isFinite(minVal) ? minVal : fallbackSOC;
+        } else if (copy.minBatterySOC !== undefined && copy.minBatterySOC !== null) {
+            const parsed = typeof copy.minBatterySOC === 'number' ? copy.minBatterySOC : parseFloat(copy.minBatterySOC as any);
+            copy.minBatterySOC = !isNaN(parsed) ? parsed : 20;
+        }
+        return copy;
+    };
+
     const updateMinBatterySOCPeriods = (newPeriods: MinBatterySOCPeriod[] | undefined) => {
+setSettings(prev => {
+            if (!prev) return prev;
         if (!newPeriods || newPeriods.length === 0) {
-            handleChange('minBatterySOCPeriods', undefined);
-            return;
+            return {
+                    ...prev,
+minBatterySOCPeriods: undefined,
+                };
         }
         const validSOCs = newPeriods
             .map(p => typeof p.minBatterySOC === 'number' ? p.minBatterySOC : parseFloat(p.minBatterySOC as any))
             .filter(v => !isNaN(v));
-        const minVal = validSOCs.length > 0 ? Math.min(...validSOCs) : (settings?.minBatterySOC ?? 20);
-        const updated = {
-            ...settings!,
+        const minVal = validSOCs.length > 0 ? Math.min(...validSOCs) : (prev.minBatterySOC ?? 20);
+        return {
+            ...prev,
             minBatterySOCPeriods: newPeriods,
-            minBatterySOC: isFinite(minVal) ? minVal : (settings?.minBatterySOC ?? 20),
+            minBatterySOC: isFinite(minVal) ? minVal : (prev.minBatterySOC ?? 20),
         };
-        setSettings(updated);
+        });
     };
 
     const validate24HourCoverage = (periods: MinBatterySOCPeriod[]) => {
@@ -1044,7 +1068,7 @@ const Settings = ({
     const handleTogglePause = async () => {
         if (!settings) return;
         const newPause = !settings.pause;
-        const nextSettings = { ...settings, pause: newPause };
+        const nextSettings = normalizeMinBatterySOC({ ...settings, pause: newPause });
         setSettings(nextSettings);
         try {
             setIsSaving(true);
@@ -1199,12 +1223,12 @@ const Settings = ({
 
     useEffect(() => {
         if (parentSettings) {
-            const initial = {
+            const initial = normalizeMinBatterySOC({
                 ...parentSettings,
                 gridChargeBatteries: parentSettings.gridChargeBatteries ?? true,
                 gridExportSolar: parentSettings.gridExportSolar ?? false,
                 gridExportBatteries: parentSettings.gridExportBatteries ?? false
-            };
+            });
             setSettings(initial);
             originalSettingsRef.current = JSON.stringify(initial);
             if (parentSettings.ess && !parentSettings.hasCredentials?.[parentSettings.ess]) {
@@ -1342,7 +1366,7 @@ const Settings = ({
             // Merge default values for utility rate options
             const utilityProvider = utilities.find(u => u.id === settings.utilityProvider);
             const utilityRate = (utilityProvider?.rates || []).find(r => r.id === settings.utilityRate);
-            const finalSettings = { ...settings };
+            const finalSettings = normalizeMinBatterySOC({ ...settings });
             if (utilityRate) {
                 const finalOpts = { ...finalSettings.utilityRateOptions };
                 (utilityRate.options || []).forEach(opt => {
@@ -1356,20 +1380,7 @@ const Settings = ({
             }
 
             let credentialsPayload: CredentialsPayload | undefined = undefined;
-            if (finalSettings.minBatterySOCPeriods && finalSettings.minBatterySOCPeriods.length > 0) {
-                finalSettings.minBatterySOCPeriods = finalSettings.minBatterySOCPeriods.map(p => {
-                    const parsed = typeof p.minBatterySOC === 'number' ? p.minBatterySOC : parseFloat(p.minBatterySOC as any);
-                    return {
-                        ...p,
-                        minBatterySOC: !isNaN(parsed) ? parsed : (typeof finalSettings.minBatterySOC === 'number' && !isNaN(finalSettings.minBatterySOC) ? finalSettings.minBatterySOC : 20),
-                    };
-                });
-            }
-            if (finalSettings.minBatterySOC !== undefined && finalSettings.minBatterySOC !== null) {
-                const parsed = typeof finalSettings.minBatterySOC === 'number' ? finalSettings.minBatterySOC : parseFloat(finalSettings.minBatterySOC as any);
-                finalSettings.minBatterySOC = !isNaN(parsed) ? parsed : 20;
-            }
-            const essProvider = essProviders.find(p => p.id === settings.ess);
+                        const essProvider = essProviders.find(p => p.id === settings.ess);
             if (essProvider && (isESSDirty || Object.keys(essCredentials).length > 0)) {
                 credentialsPayload = { [essProvider.id]: {} };
                 const processCred = (cred: ESSCredentialField) => {
@@ -1524,20 +1535,7 @@ const Settings = ({
             setSuccessMessage(null);
 
             let credentialsPayload: CredentialsPayload | undefined = undefined;
-            const finalSettings = { ...settings };
-            if (finalSettings.minBatterySOCPeriods && finalSettings.minBatterySOCPeriods.length > 0) {
-                finalSettings.minBatterySOCPeriods = finalSettings.minBatterySOCPeriods.map(p => {
-                    const parsed = typeof p.minBatterySOC === 'number' ? p.minBatterySOC : parseFloat(p.minBatterySOC as any);
-                    return {
-                        ...p,
-                        minBatterySOC: !isNaN(parsed) ? parsed : (typeof finalSettings.minBatterySOC === 'number' && !isNaN(finalSettings.minBatterySOC) ? finalSettings.minBatterySOC : 20),
-                    };
-                });
-            }
-            if (finalSettings.minBatterySOC !== undefined && finalSettings.minBatterySOC !== null) {
-                const parsed = typeof finalSettings.minBatterySOC === 'number' ? finalSettings.minBatterySOC : parseFloat(finalSettings.minBatterySOC as any);
-                finalSettings.minBatterySOC = !isNaN(parsed) ? parsed : 20;
-            }
+            const finalSettings = normalizeMinBatterySOC({ ...settings });
 
             const essProvider = essProviders.find(p => p.id === settings.ess);
             if (essProvider && (isESSDirty || Object.keys(essCredentials).length > 0)) {
@@ -2272,7 +2270,7 @@ const Settings = ({
                                                                 const lastEnd = settings.minBatterySOCPeriods![settings.minBatterySOCPeriods!.length - 1]?.hours?.[0]?.hourEnd || 0;
                                                                 const next = [
                                                                     ...settings.minBatterySOCPeriods!,
-                                                                    { hours: [{ hourStart: lastEnd < 24 ? lastEnd : 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: settings.minBatterySOC || 20 }
+                                                                    { hours: [{ hourStart: lastEnd < 24 ? lastEnd : 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: settings.minBatterySOC ?? 20 }
                                                                 ];
                                                                 updateMinBatterySOCPeriods(next);
                                                             }}
@@ -2321,7 +2319,7 @@ const Settings = ({
                                                                 setBatteryError(null);
                                                                 setScheduleMode('custom');
                                                                 const custom: MinBatterySOCPeriod[] = [
-                                                                    { hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: settings.minBatterySOC || 20 }
+                                                                    { hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: settings.minBatterySOC ?? 20 }
                                                                 ];
                                                                 updateMinBatterySOCPeriods(custom);
                                                                 return;
@@ -2329,7 +2327,7 @@ const Settings = ({
                                                             const uniqueNames = Array.from(new Set(fetchedNames));
                                                             const initialPeriods: MinBatterySOCPeriod[] = uniqueNames.map(name => ({
                                                                 utilityPeriodName: name,
-                                                                minBatterySOC: settings.minBatterySOC || 20,
+                                                                minBatterySOC: settings.minBatterySOC ?? 20,
                                                             }));
                                                             updateMinBatterySOCPeriods(initialPeriods);
                                                             setScheduleMode('named');
@@ -2345,7 +2343,7 @@ const Settings = ({
                                                     onClick={() => {
                                                         setScheduleMode('custom');
                                                         const custom: MinBatterySOCPeriod[] = [
-                                                            { hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: settings.minBatterySOC || 20 }
+                                                            { hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: settings.minBatterySOC ?? 20 }
                                                         ];
                                                         updateMinBatterySOCPeriods(custom);
                                                     }}
@@ -2362,7 +2360,7 @@ const Settings = ({
                                                         onClick={() => {
                                                             setScheduleMode('custom');
                                                             const custom: MinBatterySOCPeriod[] = [
-                                                                { hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: settings.minBatterySOC || 20 }
+                                                                { hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: settings.minBatterySOC ?? 20 }
                                                             ];
                                                             updateMinBatterySOCPeriods(custom);
                                                         }}
@@ -2385,7 +2383,7 @@ const Settings = ({
                                                                     setBatteryError(null);
                                                                     setScheduleMode('custom');
                                                                     const custom: MinBatterySOCPeriod[] = [
-                                                                        { hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: settings.minBatterySOC || 20 }
+                                                                        { hours: [{ hourStart: 0, minuteStart: 0, hourEnd: 24, minuteEnd: 0 }], minBatterySOC: settings.minBatterySOC ?? 20 }
                                                                     ];
                                                                     updateMinBatterySOCPeriods(custom);
                                                                     return;
@@ -2393,7 +2391,7 @@ const Settings = ({
                                                                 const uniqueNames = Array.from(new Set(fetchedNames));
                                                                 const initialPeriods: MinBatterySOCPeriod[] = uniqueNames.map(name => ({
                                                                     utilityPeriodName: name,
-                                                                    minBatterySOC: settings.minBatterySOC || 20,
+                                                                    minBatterySOC: settings.minBatterySOC ?? 20,
                                                                 }));
                                                                 updateMinBatterySOCPeriods(initialPeriods);
                                                                 setScheduleMode('named');
