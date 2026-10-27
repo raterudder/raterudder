@@ -1539,6 +1539,75 @@ func TestHandleUpdate(t *testing.T) {
 		require.NotNil(t, act)
 		assert.Equal(t, loc.String(), act.Timestamp.Location().String())
 	})
+
+	t.Run("Does Not Skip Recently Updated Site", func(t *testing.T) {
+		now := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
+
+		mockS := &mockStorage{}
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+			DryRun:          true,
+			MinBatterySOC:   5.0,
+			UtilityProvider: "test",
+		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+		mockS.On("GetLatestAction", mock.Anything, types.SiteIDNone).Return(&types.Action{
+			Timestamp:   now.Add(-1 * time.Minute),
+			BatteryMode: types.BatteryModeLoad,
+		}, nil).Once()
+		mockS.On("GetHistorySummaries", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(now).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil).Once()
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, types.SiteIDNone).Return(time.Time{}, 0, nil).Once()
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, types.SiteIDNone).Return(time.Time{}, 0, nil).Once()
+		mockS.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockS.On("GetPriceHistory", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
+		mockS.On("InsertAction", mock.Anything, types.SiteIDNone, mock.Anything).Return(nil).Once()
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil).Once()
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 80, Timestamp: now}, nil).Once()
+		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+		mockP := ess.NewMap()
+		mockP.SetSystem(types.SiteIDNone, mockES)
+
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.15, TSStart: now}, nil).Once()
+		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{{DollarsPerKWH: 0.15, TSStart: now.Add(time.Hour)}}, nil).Once()
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Once()
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
+
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			controller: controller.NewController(),
+			bypassAuth: true,
+			nowFunc:    func() time.Time { return now },
+		}
+
+		req := httptest.NewRequest("GET", "/api/update", nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
+		w := httptest.NewRecorder()
+		srv.handleUpdate(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var res updateResult
+		err := json.NewDecoder(w.Body).Decode(&res)
+		require.NoError(t, err)
+		assert.Equal(t, "success", res.Status)
+		assert.NotNil(t, res.Action)
+		mockS.AssertExpectations(t)
+	})
 }
 
 func TestHandleUpdateSites(t *testing.T) {
@@ -2095,6 +2164,166 @@ func TestHandleUpdateSites(t *testing.T) {
 		runtime.ReadMemStats(&mem)
 		assert.Less(t, mem.HeapAlloc, uint64(64*1024*1024), "HeapAlloc exceeded 64 MB: %d bytes", mem.HeapAlloc)
 	})
+
+	t.Run("Panic Isolation", func(t *testing.T) {
+		now := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
+
+		mockS := &mockStorage{}
+		mockS.On("ListSitesSettings", mock.Anything, "production", mock.Anything).Return(map[string]types.Settings{
+			"site-panic":   {ESS: "mock", UtilityProvider: "test", Release: "production"},
+			"site-healthy": {ESS: "mock", UtilityProvider: "test", Release: "production"},
+		}, map[string]int{
+			"site-panic":   types.CurrentSettingsVersion,
+			"site-healthy": types.CurrentSettingsVersion,
+		}, map[string]time.Time{}, nil)
+
+		mockS.On("GetLatestAction", mock.Anything, "site-panic").Run(func(args mock.Arguments) {
+			panic("unexpected nil pointer in site-panic")
+		}).Return((*types.Action)(nil), nil)
+		mockS.On("GetLatestAction", mock.Anything, "site-healthy").Return((*types.Action)(nil), nil).Once()
+		mockS.On("GetHistorySummaries", mock.Anything, "site-healthy", mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(now).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil)
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, "site-healthy").Return(time.Time{}, 0, nil)
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site-healthy").Return(now.Add(-1*time.Hour), types.CurrentPriceHistoryVersion, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, "site-healthy", mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockS.On("GetPriceHistory", mock.Anything, "site-healthy", mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
+		mockS.On("InsertAction", mock.Anything, "site-healthy", mock.Anything).Return(nil).Once()
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 80, Timestamp: now}, nil)
+		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+		mockP := ess.NewMap()
+		mockP.SetSystem("site-panic", mockES)
+		mockP.SetSystem("site-healthy", mockES)
+
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.15, TSStart: now}, nil)
+		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{{DollarsPerKWH: 0.15, TSStart: now.Add(time.Hour)}}, nil)
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
+
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider("site-panic", mockU)
+		mockUMap.SetProvider("site-healthy", mockU)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			controller: controller.NewController(),
+			bypassAuth: true,
+			release:    "production",
+			nowFunc:    func() time.Time { return now },
+		}
+
+		req := httptest.NewRequest("POST", "/api/updateSites", nil)
+		w := httptest.NewRecorder()
+		srv.handleUpdateSites(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var results map[string]string
+		err := json.NewDecoder(w.Body).Decode(&results)
+		require.NoError(t, err)
+
+		assert.Equal(t, "failed: panic: unexpected nil pointer in site-panic", results["site-panic"])
+		assert.Equal(t, "success", results["site-healthy"])
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("Skips Recently Updated Site And Reuses LatestAction", func(t *testing.T) {
+		now := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
+
+		mockS := &mockStorage{}
+		mockS.On("ListSitesSettings", mock.Anything, "production", mock.Anything).Return(map[string]types.Settings{
+			"site-recent": {ESS: "mock", UtilityProvider: "test", Release: "production"},
+			"site-older":  {ESS: "mock", UtilityProvider: "test", Release: "production"},
+		}, map[string]int{
+			"site-recent": types.CurrentSettingsVersion,
+			"site-older":  types.CurrentSettingsVersion,
+		}, map[string]time.Time{}, nil)
+
+		// site-recent was updated 2 minutes ago (< 5 minutes) -> should be skipped immediately
+		mockS.On("GetLatestAction", mock.Anything, "site-recent").Return(&types.Action{
+			Timestamp:   now.Add(-2 * time.Minute),
+			BatteryMode: types.BatteryModeLoad,
+		}, nil).Once()
+
+		// site-older was updated 6 minutes ago (>= 5 minutes) -> should run and only call GetLatestAction once
+		mockS.On("GetLatestAction", mock.Anything, "site-older").Return(&types.Action{
+			Timestamp:   now.Add(-6 * time.Minute),
+			BatteryMode: types.BatteryModeLoad,
+		}, nil).Once()
+
+		mockS.On("GetHistorySummaries", mock.Anything, "site-older", mock.Anything, mock.Anything).Return([]types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{TSDayStart: truncateDay(now).AddDate(0, 0, -1)},
+				},
+			},
+		}, nil).Once()
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, "site-older").Return(time.Time{}, 0, nil).Once()
+		mockS.On("GetLatestPriceHistoryTime", mock.Anything, "site-older").Return(now.Add(-1*time.Hour), types.CurrentPriceHistoryVersion, nil).Once()
+		mockS.On("GetEnergyHistory", mock.Anything, "site-older", mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockS.On("GetPriceHistory", mock.Anything, "site-older", mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
+		mockS.On("InsertAction", mock.Anything, "site-older", mock.Anything).Return(nil).Once()
+
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil).Once()
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 80, Timestamp: now}, nil).Once()
+		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+		mockP := ess.NewMap()
+		mockP.SetSystem("site-recent", mockES)
+		mockP.SetSystem("site-older", mockES)
+
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.15, TSStart: now}, nil).Once()
+		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{{DollarsPerKWH: 0.15, TSStart: now.Add(time.Hour)}}, nil).Once()
+		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Once()
+		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
+
+		mockUMap := utility.NewMap(mockS)
+		mockUMap.SetProvider("site-recent", mockU)
+		mockUMap.SetProvider("site-older", mockU)
+
+		srv := &Server{
+			utilities:  mockUMap,
+			ess:        mockP,
+			storage:    mockS,
+			controller: controller.NewController(),
+			bypassAuth: true,
+			release:    "production",
+			nowFunc:    func() time.Time { return now },
+		}
+
+		req := httptest.NewRequest("POST", "/api/updateSites", nil)
+		w := httptest.NewRecorder()
+		srv.handleUpdateSites(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var results map[string]string
+		err := json.NewDecoder(w.Body).Decode(&results)
+		require.NoError(t, err)
+
+		assert.Equal(t, "skipped: recently updated", results["site-recent"])
+		assert.Equal(t, "success", results["site-older"])
+		mockS.AssertExpectations(t)
+		mockES.AssertExpectations(t)
+		mockU.AssertExpectations(t)
+	})
 }
 
 // Helpers for Recording Mocks
@@ -2524,7 +2753,7 @@ func TestUpdateEnergyHistory(t *testing.T) {
 			controller: controller.NewController(),
 		}
 
-		_, _, err := srv.performSiteUpdate(context.Background(), "site1", settingsWithVersion{Settings: types.Settings{UtilityProvider: "test"}}, types.Credentials{})
+		_, _, err := srv.performSiteUpdate(context.Background(), "site1", settingsWithVersion{Settings: types.Settings{UtilityProvider: "test"}}, types.Credentials{}, false)
 		assert.NoError(t, err)
 
 		mockS.AssertCalled(t, "GetPriceHistory", mock.Anything, "site1", mock.Anything, mock.Anything)

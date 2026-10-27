@@ -11,6 +11,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"net/http"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -45,7 +46,7 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "failed to get site settings", http.StatusInternalServerError)
 		return
 	}
-	action, status, err := s.performSiteUpdate(ctx, siteID, settings, creds)
+	action, status, err := s.performSiteUpdate(ctx, siteID, settings, creds, false)
 	if err != nil {
 		if errors.Is(err, errESSRateLimited) {
 			log.Ctx(ctx).DebugContext(ctx, "update skipped: ESS rate limited", slog.Any("error", err))
@@ -185,6 +186,15 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 
 			ctx := log.With(siteCtx, log.Ctx(siteCtx).With(slog.Group("update", slog.String("siteID", siteID))))
 
+			defer func() {
+				if r := recover(); r != nil {
+					log.Ctx(ctx).ErrorContext(ctx, "site update panicked", slog.Any("panic", r), slog.String("stack", string(debug.Stack())))
+					mu.Lock()
+					results[siteID] = fmt.Sprintf("failed: panic: %v", r)
+					mu.Unlock()
+				}
+			}()
+
 			sv, creds, err := s.migrateAndDecryptSettings(ctx, siteID, settings, version, updatedTime)
 			if err != nil {
 				log.Ctx(ctx).ErrorContext(ctx, "failed to get site settings", slog.Any("error", err))
@@ -204,7 +214,7 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 			}
 
 			log.Ctx(ctx).DebugContext(ctx, "processing site update", slog.Int("updateGroup", sv.UpdateGroup))
-			_, status, err := s.performSiteUpdate(ctx, siteID, sv, creds)
+			_, status, err := s.performSiteUpdate(ctx, siteID, sv, creds, true)
 
 			var resVal string
 			if err != nil {
@@ -218,6 +228,8 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 					log.Ctx(ctx).ErrorContext(ctx, "site update failed", slog.Any("error", err))
 					resVal = fmt.Sprintf("failed: %v", err)
 				}
+			} else if strings.HasPrefix(status, "skipped:") {
+				resVal = status
 			} else {
 				log.Ctx(ctx).InfoContext(ctx, "site update success")
 				if status == "" {
@@ -255,7 +267,14 @@ func (s *Server) performSiteUpdate(
 	siteID string,
 	settings settingsWithVersion,
 	creds types.Credentials,
+	skipIfRecent bool,
 ) (*types.Action, string, error) {
+	latestAction := s.getLatestAction(ctx, siteID)
+	if skipIfRecent && latestAction != nil && !latestAction.Timestamp.IsZero() && s.now().Sub(latestAction.Timestamp) < 5*time.Minute {
+		log.Ctx(ctx).DebugContext(ctx, "site update skipped: recently updated", slog.Time("lastActionTime", latestAction.Timestamp))
+		return nil, "skipped: recently updated", nil
+	}
+
 	notifData := &dataForNotifications{
 		settings: settings.Settings,
 	}
@@ -485,7 +504,6 @@ func (s *Server) performSiteUpdate(
 		return nil, "grid unavailable", nil
 	}
 
-	latestAction := s.getLatestAction(ctx, siteID)
 	flatEnergyHistory := flattenDailyEnergyStats(energyHistory)
 
 	// get Future Prices for controller and plan
