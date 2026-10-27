@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"math/rand/v2"
 	"net/http"
 	"reflect"
@@ -538,13 +539,22 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if _, err := s.storage.SetSettings(ctx, siteID, newSettings, types.CurrentSettingsVersion, time.Time{}); err != nil {
+	updatedAt, err := s.storage.SetSettings(ctx, siteID, newSettings, types.CurrentSettingsVersion, time.Time{})
+	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to save settings", slog.Any("error", err))
 		writeJSONError(w, "failed to save settings", http.StatusInternalServerError)
 		return
 	}
 
 	log.Ctx(ctx).InfoContext(ctx, "settings updated")
+
+	if !existing.Pause && newSettings.Pause && newSettings.ManageTOUSchedules {
+		s.revertManagedTOUModeOnPause(ctx, siteID, settingsWithVersion{
+			Settings:  newSettings,
+			version:   types.CurrentSettingsVersion,
+			updatedAt: updatedAt,
+		}, existingCreds)
+	}
 
 	if existing.UtilityProvider == "" && newSettings.UtilityProvider != "" && user.Email != "" {
 		if err := s.storage.DeleteInterest(ctx, user.Email); err != nil {
@@ -567,6 +577,35 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) revertManagedTOUModeOnPause(ctx context.Context, siteID string, settings settingsWithVersion, creds types.Credentials) {
+	if s.ess == nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to revert managed TOU mode on pause: ess map is nil")
+		return
+	}
+	essSystem, err := s.getESSSystem(ctx, siteID, settings, creds)
+	if err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to get ESS system to revert managed TOU mode on pause", slog.Any("error", err))
+		return
+	}
+
+	status, err := essSystem.GetStatus(ctx)
+	if err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to get ESS status to revert managed TOU mode on pause", slog.Any("error", err))
+		return
+	}
+
+	if !status.ManagedTOUMode {
+		return
+	}
+
+	minSOC := int(math.Round(settings.MinBatterySOC))
+	if _, err := s.setESSModes(ctx, siteID, essSystem, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{
+		MinimumSOC: minSOC,
+	}, settings); err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to set modes back to self-consumption on pause", slog.Any("error", err))
+	}
 }
 
 func getESSBackoff(failures int) time.Duration {

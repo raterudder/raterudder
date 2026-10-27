@@ -2177,6 +2177,258 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
 		assert.True(t, mockS.AssertExpectations(t))
 	})
+
+	t.Run("Update Settings - Pause Reverts ManagedTOUMode", func(t *testing.T) {
+		setupPauseTest := func() (*Server, *mockESS, *mockStorage) {
+			mockES := &mockESS{MockName: "mock"}
+			essMap := ess.NewMap()
+			essMap.SetSystem(types.SiteIDNone, mockES)
+			mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+			mockS := &mockStorage{}
+			mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+			return &Server{
+				ess:           essMap,
+				storage:       mockS,
+				encryptionKey: "test-secret-key-1234567890123456",
+			}, mockES, mockS
+		}
+
+		t.Run("Reverts When Pause Changes False To True And ManagedTOUMode Is True", func(t *testing.T) {
+			srv, mockES, mockS := setupPauseTest()
+
+			mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+				ESS:                "mock",
+				Pause:              false,
+				ManageTOUSchedules: true,
+			}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+			mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+				return s.Pause && s.ManageTOUSchedules
+			}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+			mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil).Once()
+			mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{
+				BatterySOC:     75,
+				ManagedTOUMode: true,
+			}, nil).Once()
+			mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{
+				MinimumSOC: 25,
+			}).Return(true, nil).Once()
+
+			s := types.Settings{
+				ESS:                         "mock",
+				Pause:                       true,
+				ManageTOUSchedules:          true,
+				MinBatterySOC:               25,
+				IgnoreHourUsageOverMultiple: 2,
+				SolarTrendRatioMax:          3,
+				SolarBellCurveMultiplier:    1,
+			}
+			b, err := json.Marshal(s)
+			require.NoError(t, err)
+			req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+			req = withUser(req, "admin@example.com", true)
+			w := httptest.NewRecorder()
+
+			srv.handleUpdateSettings(w, req)
+			assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+			assert.True(t, mockS.AssertExpectations(t))
+			assert.True(t, mockES.AssertExpectations(t))
+		})
+
+		t.Run("Preserves Native TOU Mode When ManagedTOUMode Is False", func(t *testing.T) {
+			srv, mockES, mockS := setupPauseTest()
+
+			mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+				ESS:                "mock",
+				Pause:              false,
+				ManageTOUSchedules: true,
+			}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+			mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+				return s.Pause && s.ManageTOUSchedules
+			}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+			mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil).Once()
+			mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{
+				BatterySOC:     75,
+				ManagedTOUMode: false,
+			}, nil).Once()
+
+			s := types.Settings{
+				ESS:                         "mock",
+				Pause:                       true,
+				ManageTOUSchedules:          true,
+				MinBatterySOC:               25,
+				IgnoreHourUsageOverMultiple: 2,
+				SolarTrendRatioMax:          3,
+				SolarBellCurveMultiplier:    1,
+			}
+			b, err := json.Marshal(s)
+			require.NoError(t, err)
+			req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+			req = withUser(req, "admin@example.com", true)
+			w := httptest.NewRecorder()
+
+			srv.handleUpdateSettings(w, req)
+			assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+			assert.True(t, mockS.AssertExpectations(t))
+			assert.True(t, mockES.AssertExpectations(t))
+			mockES.AssertNotCalled(t, "SetModes")
+		})
+
+		t.Run("Does Not Check Status Or SetModes When ManageTOUSchedules Is False", func(t *testing.T) {
+			srv, mockES, mockS := setupPauseTest()
+
+			mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+				ESS:                "mock",
+				Pause:              false,
+				ManageTOUSchedules: false,
+			}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+			mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+				return s.Pause && !s.ManageTOUSchedules
+			}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+			s := types.Settings{
+				ESS:                         "mock",
+				Pause:                       true,
+				ManageTOUSchedules:          false,
+				MinBatterySOC:               25,
+				IgnoreHourUsageOverMultiple: 2,
+				SolarTrendRatioMax:          3,
+				SolarBellCurveMultiplier:    1,
+			}
+			b, err := json.Marshal(s)
+			require.NoError(t, err)
+			req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+			req = withUser(req, "admin@example.com", true)
+			w := httptest.NewRecorder()
+
+			srv.handleUpdateSettings(w, req)
+			assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+			assert.True(t, mockS.AssertExpectations(t))
+			mockES.AssertNotCalled(t, "GetStatus")
+			mockES.AssertNotCalled(t, "SetModes")
+		})
+
+		t.Run("Does Not Check Status Or SetModes When Already Paused", func(t *testing.T) {
+			srv, mockES, mockS := setupPauseTest()
+
+			mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+				ESS:                "mock",
+				Pause:              true,
+				ManageTOUSchedules: true,
+			}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+			mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+				return s.Pause && s.ManageTOUSchedules
+			}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+			s := types.Settings{
+				ESS:                         "mock",
+				Pause:                       true,
+				ManageTOUSchedules:          true,
+				MinBatterySOC:               25,
+				IgnoreHourUsageOverMultiple: 2,
+				SolarTrendRatioMax:          3,
+				SolarBellCurveMultiplier:    1,
+			}
+			b, err := json.Marshal(s)
+			require.NoError(t, err)
+			req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+			req = withUser(req, "admin@example.com", true)
+			w := httptest.NewRecorder()
+
+			srv.handleUpdateSettings(w, req)
+			assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+			assert.True(t, mockS.AssertExpectations(t))
+			mockES.AssertNotCalled(t, "GetStatus")
+			mockES.AssertNotCalled(t, "SetModes")
+		})
+
+		t.Run("Logs Error And Succeeds When GetStatus Fails", func(t *testing.T) {
+			srv, mockES, mockS := setupPauseTest()
+
+			mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+				ESS:                "mock",
+				Pause:              false,
+				ManageTOUSchedules: true,
+			}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+			mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+				return s.Pause && s.ManageTOUSchedules
+			}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+			mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil).Once()
+			mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{}, fmt.Errorf("status error")).Once()
+
+			s := types.Settings{
+				ESS:                         "mock",
+				Pause:                       true,
+				ManageTOUSchedules:          true,
+				MinBatterySOC:               25,
+				IgnoreHourUsageOverMultiple: 2,
+				SolarTrendRatioMax:          3,
+				SolarBellCurveMultiplier:    1,
+			}
+			b, err := json.Marshal(s)
+			require.NoError(t, err)
+			req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+			req = withUser(req, "admin@example.com", true)
+			w := httptest.NewRecorder()
+
+			srv.handleUpdateSettings(w, req)
+			assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+			assert.True(t, mockS.AssertExpectations(t))
+			assert.True(t, mockES.AssertExpectations(t))
+			mockES.AssertNotCalled(t, "SetModes")
+		})
+
+		t.Run("Logs Error And Succeeds When SetModes Fails", func(t *testing.T) {
+			srv, mockES, mockS := setupPauseTest()
+
+			mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+				ESS:                "mock",
+				Pause:              false,
+				ManageTOUSchedules: true,
+			}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+			mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+				return s.Pause && s.ManageTOUSchedules
+			}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+			mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil).Once()
+			mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{
+				BatterySOC:     75,
+				ManagedTOUMode: true,
+			}, nil).Once()
+			mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{
+				MinimumSOC: 25,
+			}).Return(false, fmt.Errorf("set modes error")).Once()
+
+			s := types.Settings{
+				ESS:                         "mock",
+				Pause:                       true,
+				ManageTOUSchedules:          true,
+				MinBatterySOC:               25,
+				IgnoreHourUsageOverMultiple: 2,
+				SolarTrendRatioMax:          3,
+				SolarBellCurveMultiplier:    1,
+			}
+			b, err := json.Marshal(s)
+			require.NoError(t, err)
+			req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+			req = withUser(req, "admin@example.com", true)
+			w := httptest.NewRecorder()
+
+			srv.handleUpdateSettings(w, req)
+			assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+			assert.True(t, mockS.AssertExpectations(t))
+			assert.True(t, mockES.AssertExpectations(t))
+		})
+	})
 }
 
 func TestGetSettingsWithMigration(t *testing.T) {

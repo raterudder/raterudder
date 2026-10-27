@@ -532,17 +532,6 @@ func (s *Server) performSiteUpdate(
 			BatteryMode:     types.BatteryModeLoad,
 			SolarMode:       types.SolarModeAny,
 		}
-		// in case the user just paused and they were left in our managed TOU mode we
-		// want to revert them back to self-consumption
-		if status.ManagedTOUMode {
-			minSOC := int(math.Round(configuredReserveSOC))
-			if _, err := s.setESSModes(ctx, siteID, essSystem, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{
-				MinimumSOC: minSOC,
-			}, settings); err != nil {
-				log.Ctx(ctx).ErrorContext(ctx, "failed to set modes back to self-consumption while paused", slog.Any("error", err))
-			}
-		}
-
 		if hasPlan {
 			action.Plan = planDecision.Action.Plan
 			if usePlanMode {
@@ -724,14 +713,14 @@ func (s *Server) getFuturePrices(ctx context.Context, siteID string, utility uti
 			return p.TSEnd
 		}
 		return p.TSStart.Add(time.Hour)
-			}
-			
+	}
+
 	sortPrices := func(prices []types.Price) {
 		slices.SortStableFunc(prices, func(a, b types.Price) int {
 			if a.TSStart.Equal(b.TSStart) {
 				return a.TSEnd.Compare(b.TSEnd)
-		}
-		return a.TSStart.Compare(b.TSStart)
+			}
+			return a.TSStart.Compare(b.TSStart)
 		})
 	}
 	sortPrices(futurePrices)
@@ -756,7 +745,7 @@ func (s *Server) getFuturePrices(ctx context.Context, siteID string, utility uti
 				missingCoverage = cursor
 				break
 			}
-cursor = pEnd
+			cursor = pEnd
 			if !cursor.Before(tomorrowEnd) {
 				break
 			}
@@ -798,13 +787,13 @@ cursor = pEnd
 			allCandidates = append(allCandidates, futurePrices...)
 
 			var overallDollars []float64
-var overallGenCredits []float64
+			var overallGenCredits []float64
 			for _, p := range allCandidates {
-								overallDollars = append(overallDollars, p.DollarsPerKWH)
-			overallGenCredits = append(overallGenCredits, p.GenerationCreditDollarsPerKWH)
+				overallDollars = append(overallDollars, p.DollarsPerKWH)
+				overallGenCredits = append(overallGenCredits, p.GenerationCreditDollarsPerKWH)
 			}
 			overallMedDollars := computeMedian(overallDollars)
-overallMedGenCredits := computeMedian(overallGenCredits)
+			overallMedGenCredits := computeMedian(overallGenCredits)
 			overallTemplate := findClosestPrice(allCandidates, overallMedDollars, overallMedGenCredits)
 			overallDur := priceEnd(overallTemplate).Sub(overallTemplate.TSStart)
 			if overallDur <= 0 {
@@ -965,7 +954,7 @@ func computeMedian(vals []float64) float64 {
 }
 
 func findClosestPrice(prices []types.Price, targetDollars, targetGenCredit float64) types.Price {
-if len(prices) == 0 {
+	if len(prices) == 0 {
 		return types.Price{}
 	}
 	best := prices[0]
@@ -977,7 +966,7 @@ if len(prices) == 0 {
 		if diff < bestDiff || (diff == bestDiff && genDiff <= bestGenDiff) {
 			best = p
 			bestDiff = diff
-		bestGenDiff = genDiff
+			bestGenDiff = genDiff
 		}
 	}
 	if best.SeparateGenerationCredit {
