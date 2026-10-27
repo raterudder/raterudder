@@ -1,142 +1,95 @@
 # RateRudder
 
-RateRudder is an intelligent home energy management system designed to optimize the usage of Energy Storage Systems (ESS) like Tesla Powerwall and FranklinWH based on real-time/TOU electricity pricing. It automates the charging and discharging of batteries to maximize savings and efficiency.
+RateRudder is a home energy management system that automates residential Energy Storage Systems (ESS)—such as Tesla Powerwall, FranklinWH aPower, and Enphase IQ Battery—based on real-time wholesale and Time-of-Use (TOU) electricity pricing.
 
-## Architecture
+Standard battery modes like Self-Consumption only react to local solar and home load without awareness of utility rate schedules, while static time-based rules charge and discharge on fixed timers regardless of upcoming weather or dynamic pricing. RateRudder periodically fetches utility tariffs, weather forecasts, and battery telemetry to compute and apply an updated 24-hour dispatch schedule through the manufacturer's cloud API.
 
-The project is structured as follows:
+## Overview & Capabilities
 
-- **`cmd/raterudder`**: The main entry point and orchestrator.
-- **`pkg`**: Core backend logic.
-    - **`controller`**: Decision-making logic for ESS control.
-    - **`ess`**: Interfaces and implementations for ESS (supports Tesla Powerwall and FranklinWH).
-    - **`server`**: HTTP API server for the web dashboard and triggered updates.
-    - **`storage`**: Persistence layer (currently supports Google Cloud Firestore).
-    - **`utility`**: Electricity pricing fetchers (supporting over 25 utility companies including ComEd and Ameren, plus PJM/MISO).
-    - **`weather`**: Weather status forecasts and geocoding.
-- **`web`**: A React + TypeScript + Vite single-page application for the frontend dashboard.
-- **`tf`**: Terraform configuration for provisioning infrastructure on Google Cloud.
+- **24-Hour Dispatch Planner (`pkg/controller`)**: Uses dynamic programming over sub-hour intervals to schedule when the battery should charge from the grid, remain in standby, power the home, or export solar and stored energy to the grid.
+- **Physical & Economic Constraints**: Accounts for AC/DC round-trip efficiency losses, battery cycle degradation cost, pre-peak charging buffers, and mode-transition penalties to avoid frequent inverter relay switching during minor wholesale price fluctuations.
+- **Solar Production Modeling**: Estimates site-specific solar generation from weather irradiance forecasts and historical production data, automatically adjusting for panel orientation, inverter clipping, and seasonal shading without requiring manual array specifications.
+- **Home Load & EV Detection**: Predicts hourly household consumption from historical usage and temperature forecasts—accounting for weekday vs. weekend patterns and low-load vacation periods—while isolating high-draw EV charging spikes so the home battery does not discharge into a vehicle.
+- **Backup Reserves & VPP Pre-Charging**: Enforces a configurable minimum state-of-charge reserve, supports time-windowed reserve floors (such as allowing deeper discharge during evening peak hours while maintaining a higher reserve overnight), and pre-charges ahead of scheduled Virtual Power Plant (VPP) events.
+- **Counterfactual Simulation**: Simulates baseline battery behavior alongside actual operation to estimate the financial difference between RateRudder's dispatch decisions and default self-consumption.
+- **Notifications**: Supports Web Push notifications for price spikes, negative pricing windows, grid outages, abnormal load events, and daily status summaries.
 
-## Getting Started
+## Supported Integrations
+
+### Energy Storage Systems (`pkg/ess`)
+All battery integrations implement the `ess.System` interface:
+- **Tesla**: Powerwall 2, Powerwall+, and Powerwall 3 (via Tesla Fleet API)
+- **FranklinWH**: aPower / aGate systems
+- **Enphase**: IQ Battery systems
+
+### Utilities & Tariffs (`pkg/utility`)
+All tariff integrations implement the `utility.Utility` interface. The repository includes implementations for over 50 utilities and 120 rate plans across the US, UK, and Australia, as well as user-defined TOU schedules:
+- **Real-Time & Wholesale Markets**: ComEd, Ameren Illinois, ERCOT / Tesla Electric, PJM and MISO day-ahead/real-time markets, Octopus Energy (Agile), Amber Electric, and Xcel Energy.
+- **Time-of-Use & Tiered Tariffs**: PG&E, Southern California Edison (SCE), SDG&E, Duke Energy, Eversource, FPL, BGE, PECO, Pepco, APS, SRP, Dominion, PSE, ConEd, and others.
+
+### Weather & Geocoding (`pkg/weather`)
+Weather and location lookups sit behind the `weather.Service` interface, allowing underlying providers to be swapped out if needed:
+- **Solar & Temperature Forecasts**: Fetched from Open-Meteo (including global horizontal, direct normal, and diffuse solar irradiance as well as ambient temperature).
+- **Geocoding & Timezones**: Resolved from site postal codes using Open-Meteo Geocoding by default, with optional support for the Google Maps Geocoding and Time Zone APIs.
+
+### Storage & Infrastructure (`pkg/storage`)
+RateRudder is built to run as a stateless service on Google Cloud Run with Google Cloud Firestore as its primary database, triggered periodically by Cloud Scheduler. However, all persistence operations in `pkg/storage` are defined against the `storage.Database` interface, allowing other databases to be added without changing the controller or HTTP server packages.
+
+## Repository Structure
+
+- `cmd/` — Main application binary and operational CLI utilities:
+  - `cmd/raterudder`: HTTP server and periodic site orchestration entry point.
+  - `cmd/inspectsite`: CLI tool to inspect site configuration, recent actions, and pricing history.
+  - `cmd/replayplan`: CLI tool to replay `controller.Plan` against historical poll snapshots.
+  - `cmd/fetchhistory`, `cmd/decryptcreds`, `cmd/setplanmode`, `cmd/migrate*`: Administrative and migration tools.
+- `pkg/` — Backend Go packages:
+  - `pkg/controller`: Dispatch planning (`plan.go`), solar forecasting (`solar.go`), load modeling (`energy.go`), EV detection (`ev.go`), and baseline simulation (`simulation.go`).
+  - `pkg/ess`: Battery provider interface and client implementations.
+  - `pkg/utility`: Utility rate fetchers and tariff schedule evaluators.
+  - `pkg/weather`: Weather forecast and geocoding interface and clients.
+  - `pkg/storage`: `Database` interface and Firestore implementation.
+  - `pkg/server`: HTTP API handlers, OIDC authentication (Google/Apple), credential encryption, Web Push delivery, and static asset serving.
+  - `pkg/types`: Shared domain structs and interfaces.
+  - `pkg/common` & `pkg/log`: HTTP client helpers, context utilities, and structured logging (`log/slog`).
+- `web/` — React, TypeScript, and Vite single-page application using `@base-ui/react` and Recharts. Production builds are embedded directly into the Go binary via `web/embed.go`.
+- `examples/tf/` — Example Terraform configuration for deploying on Google Cloud (Cloud Run, Cloud Scheduler, Firestore, and Secret Manager).
+
+## Testing & Real-Data Benchmarks
+
+In addition to standard unit and integration tests, `pkg/controller` includes historical replay benchmarks backed by anonymized multi-week telemetry datasets from real sites (`pkg/controller/testdata/`):
+
+- **Plan & Controller Replay (`plan_history_test.go`, `controller_history_test.go`)**: Replays historical site telemetry, weather forecasts, and utility prices hour-by-hour through the planner, simulating battery state-of-charge trajectories and comparing total electricity cost against per-site and fleet-wide baselines.
+- **Load Forecasting Evaluation (`energy_history_test.go`)**: Evaluates `BuildHourlyEnergyModel` across recorded site histories at multiple daily planning hours, tracking Mean Absolute Error (MAE) alongside total under-prediction and over-prediction (kWh) to guard against regressions across heatwaves, weekend shifts, EV charging, and vacation days.
+
+## Development
 
 ### Prerequisites
+- Go 1.27+
+- Node.js & npm
+- Google Cloud Firestore (or the local Firestore Emulator via `firebase-tools` / `gcloud` for local runs and storage tests)
 
-- Go 1.25+
-- Node.js & npm (for web development)
-- Google Cloud Project with Firestore enabled
-- Tesla or FranklinWH Account Credentials
+### Building & Running Tests
 
-### Installation
+Frontend (`web/`):
+```bash
+cd web
+npm install
+npm test        # Run Vitest suite
+npm run build   # Build static assets for Go embedding
+```
 
-1.  **Clone the repository:**
+Backend (`cmd/` & `pkg/`):
+```bash
+go build ./cmd/raterudder
+go test ./pkg/... ./cmd/...
+```
+Storage tests in `pkg/storage` connect to the local Firestore Emulator (`npx firebase-tools emulators:start --only firestore --project demo-test`).
 
-    ```bash
-    git clone https://github.com/raterudder/raterudder.git
-    cd raterudder
-    ```
-
-2.  **Build the Web App (Optional if running dev server):**
-
-    ```bash
-    cd web
-    npm install
-    npm run build
-    cd ..
-    ```
-
-3.  **Build the Go Binary:**
-
-    ```bash
-    go build ./cmd/raterudder
-    ```
-
-### Usage
-
-Run the binary with the necessary flags.
-
+To view all configuration flags and environment variables:
 ```bash
 ./raterudder --help
 ```
 
-### Configuration Flags
+## License
 
-The application uses command-line flags for configuration.
-
-#### General / Server
-- `--http-listen`: HTTP server listen address (default `:8080`).
-- `--dev-proxy`: Address of the dev server (e.g., `http://localhost:5173`).
-- `--update-specific-email`: Email requirement for authenticating calls to `/api/update`.
-- `--admin-emails`: Comma-delimited list of email addresses allowed to update settings via IAP.
-- `--oidc-audience`: Expected audience for OIDC token validation.
-- `--oidc-audiences`: JSON map of provider (`google`/`apple`) to audience/client ID.
-- `--update-specific-audience`: Google-specific legacy audience to validate for `/api/update`.
-- `--single-site`: Enable single-site mode (disables siteID requirement), for simple single-user deployments.
-- `--show-hidden`: Expose hidden providers in lists via the API.
-- `--credentials-encryption-key`: Key for encrypting credentials (must be 32 characters).
-- `--release`: Release environment (`production` or `staging`).
-- `--web-cache-duration`: Duration to cache web files (e.g., `1h`, `5m`). `0` means no cache.
-
-#### Utility & Weather
-- `--comed-api-url`: URL for the ComEd Hourly Pricing API.
-- `--pjm-api-url`: URL for the PJM API (Day-ahead pricing).
-- `--pjm-api-key`: API Key for PJM Data Miner 2 (optional, enabled day-ahead lookups).
-- `--miso-api-url`: URL for the MISO API.
-- `--ercot-api-url`: URL for the ERCOT Public Reports API.
-- `--ercot-api-key`: API Subscription Key for ERCOT Public Reports API (`Ocp-Apim-Subscription-Key`).
-- `--ercot-username`: Username/Email for ERCOT Developer Portal account.
-- `--ercot-password`: Password for ERCOT Developer Portal account.
-- `--ercot-token`: Optional static ID Token for ERCOT Public Reports API.
-- `--weather-geocoding-url`: Open-Meteo geocoding API URL.
-- `--weather-forecast-url`: Open-Meteo forecast API URL.
-
-#### Storage (Firestore)
-- `--storage-provider`: Provider to use (default `firestore`).
-- `--firestore-project-id`: Google Cloud Project ID for Firestore.
-- `--firestore-database`: Google Cloud Firestore Database.
-- `--firestore-emulator`: Use Firestore emulator.
-
-## Development
-
-### Running Locally
-
-To run the full stack locally:
-
-1.  **Start Firestore Emulator:**
-
-    ```bash
-    gcloud emulators firestore start --host-port=127.0.0.1:8087
-    ```
-
-2.  **Start Web Dev Server:**
-
-    ```bash
-    cd web
-    npm run dev
-    ```
-
-3.  **Run Go Backend:**
-
-    ```bash
-    export FIRESTORE_EMULATOR_HOST=127.0.0.1:8087
-    go run ./cmd/raterudder \
-      --dev-proxy=http://localhost:5173 \
-      --credentials-encryption-key=YOUR_32_CHAR_LONG_SECRET_KEY_HERE
-    ```
-
-### Running Tests
-
-To run all Go tests:
-
-```bash
-go test ./...
-```
-
-Firestore integration tests will automatically use the emulator if `FIRESTORE_EMULATOR_HOST` is set or default to `127.0.0.1:8087`.
-
-## Deployment
-
-The `tf` directory contains Terraform code to deploy the application to Google Cloud Platform. It sets up:
-- **Cloud Run**: Hosts the Go server (which serves the embedded React app).
-- **Cloud Scheduler**: Triggers the `/api/update` endpoint periodically.
-- **Firestore**: Database for settings, history, and actions.
-- **Secret Manager**: Securely stores credentials.
+See [LICENSE](LICENSE) for details.
