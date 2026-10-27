@@ -630,11 +630,81 @@ func TestTOUUtility(t *testing.T) {
 		assert.Equal(t, end, prices[2].TSEnd)
 		assert.Equal(t, 0.10, prices[2].DollarsPerKWH)
 
-		// 3. Test GetFuturePrices:
-		// GetFuturePrices generates next 48 hours. Let's make sure it doesn't infinite loop or panic
-		// and returns the expected segments.
-		future, err := u.GetFuturePrices(context.Background())
+		// 2b. Test GetConfirmedPrices with start/end overlapping mid-period:
+		// Query [08:05, 08:10) -> should return the overlapping [08:00, 08:15) segment
+		overlapFirst, err := u.GetConfirmedPrices(context.Background(), start.Add(5*time.Minute), start.Add(10*time.Minute))
 		require.NoError(t, err)
-		assert.NotEmpty(t, future)
+		if assert.Len(t, overlapFirst, 1) {
+			assert.Equal(t, start, overlapFirst[0].TSStart)
+			assert.Equal(t, start.Add(15*time.Minute), overlapFirst[0].TSEnd)
+			assert.Equal(t, 0.10, overlapFirst[0].DollarsPerKWH)
+		}
+
+		// Query [08:25, 08:50) -> should return overlapping [08:15, 08:45) and [08:45, 09:00) segments
+		overlapMid, err := u.GetConfirmedPrices(context.Background(), start.Add(25*time.Minute), start.Add(50*time.Minute))
+		require.NoError(t, err)
+		if assert.Len(t, overlapMid, 2) {
+			assert.Equal(t, start.Add(15*time.Minute), overlapMid[0].TSStart)
+			assert.Equal(t, start.Add(45*time.Minute), overlapMid[0].TSEnd)
+			assert.Equal(t, 0.40, overlapMid[0].DollarsPerKWH)
+
+			assert.Equal(t, start.Add(45*time.Minute), overlapMid[1].TSStart)
+			assert.Equal(t, end, overlapMid[1].TSEnd)
+			assert.Equal(t, 0.10, overlapMid[1].DollarsPerKWH)
+		}
+
+		// 3. Test GetFuturePrices returning partial periods in the current hour:
+		// At 08:05 (in first segment [08:00, 08:15)), GetFuturePrices should return both remaining
+		// partial segments of the current hour ([08:15, 08:45) and [08:45, 09:00)) before [09:00, 10:00).
+		u.nowFunc = func() time.Time { return start.Add(5 * time.Minute) }
+		futureAt0805, err := u.GetFuturePrices(context.Background())
+		require.NoError(t, err)
+		if assert.GreaterOrEqual(t, len(futureAt0805), 3) {
+			assert.Equal(t, start.Add(15*time.Minute), futureAt0805[0].TSStart)
+			assert.Equal(t, start.Add(45*time.Minute), futureAt0805[0].TSEnd)
+			assert.Equal(t, 0.40, futureAt0805[0].DollarsPerKWH)
+
+			assert.Equal(t, start.Add(45*time.Minute), futureAt0805[1].TSStart)
+			assert.Equal(t, end, futureAt0805[1].TSEnd)
+			assert.Equal(t, 0.10, futureAt0805[1].DollarsPerKWH)
+
+			assert.Equal(t, end, futureAt0805[2].TSStart)
+			assert.Equal(t, end.Add(time.Hour), futureAt0805[2].TSEnd)
+		}
+
+		// At 08:20 (in second segment [08:15, 08:45)), GetFuturePrices should return [08:45, 09:00) first.
+		u.nowFunc = func() time.Time { return start.Add(20 * time.Minute) }
+		futureAt0820, err := u.GetFuturePrices(context.Background())
+		require.NoError(t, err)
+		if assert.GreaterOrEqual(t, len(futureAt0820), 2) {
+			assert.Equal(t, start.Add(45*time.Minute), futureAt0820[0].TSStart)
+			assert.Equal(t, end, futureAt0820[0].TSEnd)
+			assert.Equal(t, 0.10, futureAt0820[0].DollarsPerKWH)
+
+			assert.Equal(t, end, futureAt0820[1].TSStart)
+			assert.Equal(t, end.Add(time.Hour), futureAt0820[1].TSEnd)
+		}
+
+		// At 08:50 (in last segment [08:45, 09:00) of the hour), GetFuturePrices should start at [09:00, 10:00).
+		u.nowFunc = func() time.Time { return start.Add(50 * time.Minute) }
+		futureAt0850, err := u.GetFuturePrices(context.Background())
+		require.NoError(t, err)
+		if assert.NotEmpty(t, futureAt0850) {
+			assert.Equal(t, end, futureAt0850[0].TSStart)
+			assert.Equal(t, end.Add(time.Hour), futureAt0850[0].TSEnd)
+		}
+
+		// 4. Test Fall-Back DST transition (Sunday Nov 1, 2026 in America/New_York: 25-hour day with repeated 01:00 hour)
+		fallStart := time.Date(2026, time.November, 1, 0, 0, 0, 0, etLocation)
+		fallEnd := time.Date(2026, time.November, 2, 0, 0, 0, 0, etLocation)
+		fallConfirmed, err := u.GetConfirmedPrices(context.Background(), fallStart, fallEnd)
+		require.NoError(t, err)
+		// 25 hours with hour 8 split into 3 segments = 27 segments
+		assert.Len(t, fallConfirmed, 27)
+
+		u.nowFunc = func() time.Time { return fallStart }
+		fallFuture, err := u.GetFuturePrices(context.Background())
+		require.NoError(t, err)
+		assert.NotEmpty(t, fallFuture)
 	})
 }

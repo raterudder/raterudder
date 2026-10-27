@@ -271,15 +271,29 @@ func (p *TimePeriod) Contains(t time.Time) (bool, UtilityPeriodStartEnd, error) 
 			endMin := hour.HourEnd*60 + hour.MinuteEnd
 			match := false
 			if startMin < endMin {
+				// Standard daytime/same-day window (e.g. 05:30 to 23:30)
 				match = tMin >= startMin && tMin < endMin
 			} else if startMin > endMin {
+				// Overnight window wrapping past midnight (e.g. 23:30 to 05:30)
 				match = tMin >= startMin || tMin < endMin
 			} else {
+				// Full 24-hour window (startMin == endMin)
 				match = true
 			}
 			if match {
+				// On fall-back DST days where a wall-clock hour repeats (e.g. 01:00 EDT followed by 01:00 EST),
+				// time.Date always resolves to the first occurrence. When the period boundary is in the same
+				// hour as t, anchor to tHourStart so hStart/hEnd preserve t's actual DST offset.
+				tHourStart := t.Add(-time.Duration(t.Minute())*time.Minute - time.Duration(t.Second())*time.Second - time.Duration(t.Nanosecond()))
 				hStart := time.Date(t.Year(), t.Month(), t.Day(), hour.HourStart, hour.MinuteStart, 0, 0, t.Location())
+				if hour.HourStart == t.Hour() {
+					hStart = tHourStart.Add(time.Duration(hour.MinuteStart) * time.Minute)
+				}
 				hEnd := time.Date(t.Year(), t.Month(), t.Day(), hour.HourEnd, hour.MinuteEnd, 0, 0, t.Location())
+				if hour.HourEnd == t.Hour() {
+					hEnd = tHourStart.Add(time.Duration(hour.MinuteEnd) * time.Minute)
+				}
+				// Narrow the returned [Start, End) bounds to the matched daily hour window.
 				if startEnd.Start.IsZero() || hStart.After(startEnd.Start) {
 					startEnd.Start = hStart
 				}

@@ -51,6 +51,7 @@ func Configured(db storage.Database) *Map {
 	m.baseAmerenSmart = configuredAmerenSmart(db)
 	m.baseEversourceVPP = configuredEversourceVPP(db)
 	m.baseERCOT = configuredERCOT(db)
+	m.baseOctopus = configuredOctopus(db)
 	return m
 }
 
@@ -62,6 +63,7 @@ type Map struct {
 	baseAmerenSmart   *baseAmerenSmart
 	baseEversourceVPP *baseEversourceVPP
 	baseERCOT         *baseERCOT
+	baseOctopus       *baseOctopus
 	utilities         map[string]Utility
 }
 
@@ -73,13 +75,21 @@ func NewMap(db storage.Database) *Map {
 	}
 }
 
+type settingsMatcher interface {
+	settingsMatch(settings types.Settings) bool
+}
+
 // Site returns the utility provider for the given site based on settings.
 func (m *Map) Site(ctx context.Context, siteID string, settings types.Settings) (Utility, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if p, ok := m.utilities[siteID]; ok {
-		if settings.UtilityRate == "" || p.Name() == settings.UtilityRate {
+		match := settings.UtilityRate == "" || p.Name() == settings.UtilityRate
+		if sm, ok := p.(settingsMatcher); ok {
+			match = sm.settingsMatch(settings)
+		}
+		if match {
 			if err := p.ApplySettings(ctx, settings); err != nil {
 				return nil, err
 			}
@@ -162,6 +172,27 @@ func (m *Map) Site(ctx context.Context, siteID string, settings types.Settings) 
 			}
 			u = &SiteFees{
 				base:   zoneProvider,
+				siteID: siteID,
+			}
+			if err := u.ApplySettings(ctx, settings); err != nil {
+				return nil, err
+			}
+		} else {
+			u = &genericTOU{
+				siteID: siteID,
+			}
+			if err := u.ApplySettings(ctx, settings); err != nil {
+				return nil, err
+			}
+		}
+	case "octopus":
+		if (settings.UtilityRate == "octopus_intelligent_go" || settings.UtilityRate == "octopus_go") && settings.UtilityRateOptions.GenerationRate == "outgoing_agile" && m.baseOctopus != nil {
+			regionProvider, err := m.baseOctopus.Region(settings.UtilityRateOptions.Location)
+			if err != nil {
+				return nil, err
+			}
+			u = &SiteFees{
+				base:   regionProvider,
 				siteID: siteID,
 			}
 			if err := u.ApplySettings(ctx, settings); err != nil {

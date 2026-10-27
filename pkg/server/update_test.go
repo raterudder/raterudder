@@ -3560,8 +3560,8 @@ func TestGetFuturePrices(t *testing.T) {
 		histPrices := []types.Price{
 			{
 				Provider:      "comed",
-				TSStart:       fixedNow.Add(-24 * time.Hour),
-				TSEnd:         fixedNow.Add(-23 * time.Hour),
+				TSStart:       fixedNow.Truncate(time.Hour).Add(-24 * time.Hour),
+				TSEnd:         fixedNow.Truncate(time.Hour).Add(-23 * time.Hour),
 				DollarsPerKWH: 0.15,
 			},
 		}
@@ -3660,6 +3660,352 @@ func TestGetFuturePrices(t *testing.T) {
 		require.NotNil(t, tomorrowH14Price)
 		// Median of [0.20, 0.35, 0.35, 1.00] is 0.35 (whereas arithmetic mean would be 0.475)
 		assert.InDelta(t, 0.35, tomorrowH14Price.DollarsPerKWH, 0.0001)
+	})
+
+	t.Run("HalfHourIntervals_WithStaticTOUImportAndDynamicExportCredit", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockU := &mockUtility{}
+
+		// Simulate Octopus Agile Outgoing + Intelligent Octopus Go before 16:00 UK time:
+		// Published future prices cover 30-minute intervals from 10:30 today until 23:00 today.
+		var todayPrices []types.Price
+		for slot := 21; slot < 46; slot++ { // 10:30 (slot 21) to 23:00 (slot 46)
+			st := todayStart.Add(time.Duration(slot) * 30 * time.Minute)
+			todayPrices = append(todayPrices, types.Price{
+				Provider:                      "octopus",
+				TSStart:                       st,
+				TSEnd:                         st.Add(30 * time.Minute),
+				DollarsPerKWH:                 0.2802,
+				GenerationCreditDollarsPerKWH: 0.15,
+				SeparateGenerationCredit:      true,
+				PeriodName:                    "peak",
+			})
+		}
+		mockU.On("GetFuturePrices", mock.Anything).Return(todayPrices, nil)
+
+		// 3 days of 30-minute historical prices:
+		// Off-peak (0.07): 00:00-05:30 (slots 0..10) and 23:30-24:00 (slot 47)
+		// Peak (0.2802): 05:30-23:30 (slots 11..46)
+		// Slot 36 (18:00-18:30): export credits across 3 days are [0.40 (day 1), 0.25 (day 2), 0.25 (day 3)], today future is 0.15 -> sorted [0.15, 0.25, 0.25, 0.40], median is 0.25
+		// Slot 37 (18:30-19:00): export credits across 3 days are [0.08 (day 1), 0.18 (day 2), 0.18 (day 3)], today future is 0.15 -> sorted [0.08, 0.15, 0.18, 0.18], closest to median (0.165) with two 0.18s vs 0.15: let's use [0.18 (day 1), 0.18 (day 2), 0.30 (day 3)] -> sorted [0.15, 0.18, 0.18, 0.30], median is 0.18
+		// Slot 46 (23:00-23:30, not in todayPrices): export credits across 3 days are [0.35 (day 1), 0.14 (day 2), 0.05 (day 3)] -> median is 0.14
+		var histPrices []types.Price
+		for day := 1; day <= 3; day++ {
+			dStart := todayStart.AddDate(0, 0, -day)
+			for slot := 0; slot < 48; slot++ {
+				st := dStart.Add(time.Duration(slot) * 30 * time.Minute)
+				importRate := 0.2802
+				periodName := "peak"
+				if slot < 11 || slot == 47 {
+					importRate = 0.07
+					periodName = "off-peak"
+				}
+				exportRate := 0.10
+				switch slot {
+				case 36: // 18:00-18:30
+					switch day {
+					case 1:
+						exportRate = 0.40
+					case 2:
+						exportRate = 0.25
+					case 3:
+						exportRate = 0.25
+					}
+				case 37: // 18:30-19:00
+					switch day {
+					case 1:
+						exportRate = 0.18
+					case 2:
+						exportRate = 0.18
+					case 3:
+						exportRate = 0.30
+					}
+				case 46: // 23:00-23:30
+					switch day {
+					case 1:
+						exportRate = 0.35
+					case 2:
+						exportRate = 0.14
+					case 3:
+						exportRate = 0.05
+					}
+				}
+				histPrices = append(histPrices, types.Price{
+					Provider:                      "octopus",
+					TSStart:                       st,
+					TSEnd:                         st.Add(30 * time.Minute),
+					DollarsPerKWH:                 importRate,
+					GenerationCreditDollarsPerKWH: exportRate,
+					SeparateGenerationCredit:      true,
+					PeriodName:                    periodName,
+				})
+			}
+		}
+
+		histStart := fixedNow.Add(-168 * time.Hour)
+		mockS.On("GetPriceHistory", mock.Anything, "site1", histStart, fixedNow).Return(histPrices, nil)
+
+		srv := &Server{
+			storage: mockS,
+			nowFunc: func() time.Time { return fixedNow },
+		}
+
+		prices, err := srv.getFuturePrices(context.Background(), "site1", mockU)
+		require.NoError(t, err)
+
+		// Today 10:30-23:00 (25 known 30m slots) + Today 23:00-24:00 (2 estimated 30m slots) + Tomorrow 00:00-24:00 (48 estimated 30m slots) = 75 slots
+		if assert.Len(t, prices, 75) {
+			priceByStart := make(map[time.Time]types.Price, len(prices))
+			for _, p := range prices {
+				assert.Equal(t, 30*time.Minute, p.TSEnd.Sub(p.TSStart))
+				priceByStart[p.TSStart] = p
+			}
+
+			// Verify 05:00-05:30 vs 05:30-06:00 tomorrow preserves the half-hour TOU boundary
+			p0500, ok := priceByStart[tomorrowStart.Add(5*time.Hour)]
+			if assert.True(t, ok) {
+				assert.InDelta(t, 0.07, p0500.DollarsPerKWH, 0.0001)
+				assert.Equal(t, "off-peak", p0500.PeriodName)
+			}
+			p0530, ok := priceByStart[tomorrowStart.Add(5*time.Hour+30*time.Minute)]
+			if assert.True(t, ok) {
+				assert.InDelta(t, 0.2802, p0530.DollarsPerKWH, 0.0001)
+				assert.Equal(t, "peak", p0530.PeriodName)
+			}
+
+			// Verify 23:00-23:30 vs 23:30-24:00 today (missing tonight slots after 23:00) preserves the half-hour boundary and median export credit
+			pTonight2300, ok := priceByStart[todayStart.Add(23*time.Hour)]
+			if assert.True(t, ok) {
+				assert.InDelta(t, 0.2802, pTonight2300.DollarsPerKWH, 0.0001)
+				assert.InDelta(t, 0.14, pTonight2300.GenerationCreditDollarsPerKWH, 0.0001)
+				assert.True(t, pTonight2300.SeparateGenerationCredit)
+			}
+			pTonight2330, ok := priceByStart[todayStart.Add(23*time.Hour+30*time.Minute)]
+			if assert.True(t, ok) {
+				assert.InDelta(t, 0.07, pTonight2330.DollarsPerKWH, 0.0001)
+				assert.Equal(t, "off-peak", pTonight2330.PeriodName)
+			}
+
+			// Verify 18:00-18:30 vs 18:30-19:00 tomorrow have distinct 30m median export credits
+			p1800, ok := priceByStart[tomorrowStart.Add(18*time.Hour)]
+			if assert.True(t, ok) {
+				assert.InDelta(t, 0.2802, p1800.DollarsPerKWH, 0.0001)
+				assert.InDelta(t, 0.25, p1800.GenerationCreditDollarsPerKWH, 0.0001)
+			}
+			p1830, ok := priceByStart[tomorrowStart.Add(18*time.Hour+30*time.Minute)]
+			if assert.True(t, ok) {
+				assert.InDelta(t, 0.2802, p1830.DollarsPerKWH, 0.0001)
+				assert.InDelta(t, 0.18, p1830.GenerationCreditDollarsPerKWH, 0.0001)
+			}
+		}
+	})
+
+	t.Run("SeparateGenerationCredit_IndependentDynamicImportAndExport", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockU := &mockUtility{}
+
+		mockU.On("GetFuturePrices", mock.Anything).Return([]types.Price{}, nil)
+
+		// 3 days of history at hour 12 where import and export medians occur on different days:
+		// Day -1: import = 0.10, export = 0.30
+		// Day -2: import = 0.20 (median import), export = 0.10
+		// Day -3: import = 0.30, export = 0.20 (median export)
+		var histPrices []types.Price
+		for day := 1; day <= 3; day++ {
+			st := todayStart.AddDate(0, 0, -day).Add(12 * time.Hour)
+			var imp, exp float64
+			switch day {
+			case 1:
+				imp, exp = 0.10, 0.30
+			case 2:
+				imp, exp = 0.20, 0.10
+			case 3:
+				imp, exp = 0.30, 0.20
+			}
+			histPrices = append(histPrices, types.Price{
+				Provider:                      "octopus",
+				TSStart:                       st,
+				TSEnd:                         st.Add(time.Hour),
+				DollarsPerKWH:                 imp,
+				GenerationCreditDollarsPerKWH: exp,
+				SeparateGenerationCredit:      true,
+			})
+		}
+
+		histStart := fixedNow.Add(-168 * time.Hour)
+		mockS.On("GetPriceHistory", mock.Anything, "site1", histStart, fixedNow).Return(histPrices, nil)
+
+		srv := &Server{
+			storage: mockS,
+			nowFunc: func() time.Time { return fixedNow },
+		}
+
+		prices, err := srv.getFuturePrices(context.Background(), "site1", mockU)
+		require.NoError(t, err)
+
+		var tomorrowH12 *types.Price
+		for _, p := range prices {
+			if p.TSStart.Equal(tomorrowStart.Add(12 * time.Hour)) {
+				tomorrowH12 = &p
+				break
+			}
+		}
+		if assert.NotNil(t, tomorrowH12) {
+			assert.InDelta(t, 0.20, tomorrowH12.DollarsPerKWH, 0.0001)
+			assert.InDelta(t, 0.20, tomorrowH12.GenerationCreditDollarsPerKWH, 0.0001)
+			assert.True(t, tomorrowH12.SeparateGenerationCredit)
+		}
+	})
+
+	t.Run("ArbitrarySubHourIntervals_PreservedFromOverlappingHistory", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockU := &mockUtility{}
+
+		// Today has prices from 11:00 to 24:00 (1-hour blocks), but tomorrow is missing.
+		// Historical data has a 15-minute split in the 08:00 hour:
+		// 08:00-08:15 ($0.10), 08:15-08:45 ($0.45), 08:45-09:00 ($0.12), and 1-hour blocks elsewhere ($0.15).
+		var todayPrices []types.Price
+		for hr := 11; hr < 24; hr++ {
+			st := todayStart.Add(time.Duration(hr) * time.Hour)
+			todayPrices = append(todayPrices, types.Price{
+				Provider:      "tou",
+				TSStart:       st,
+				TSEnd:         st.Add(time.Hour),
+				DollarsPerKWH: 0.15,
+			})
+		}
+		mockU.On("GetFuturePrices", mock.Anything).Return(todayPrices, nil)
+
+		var histPrices []types.Price
+		for day := 1; day <= 3; day++ {
+			dStart := todayStart.AddDate(0, 0, -day)
+			for h := 0; h < 24; h++ {
+				st := dStart.Add(time.Duration(h) * time.Hour)
+				if h == 8 {
+					histPrices = append(histPrices,
+						types.Price{Provider: "tou", TSStart: st, TSEnd: st.Add(15 * time.Minute), DollarsPerKWH: 0.10},
+						types.Price{Provider: "tou", TSStart: st.Add(15 * time.Minute), TSEnd: st.Add(45 * time.Minute), DollarsPerKWH: 0.45},
+						types.Price{Provider: "tou", TSStart: st.Add(45 * time.Minute), TSEnd: st.Add(time.Hour), DollarsPerKWH: 0.12},
+					)
+				} else {
+					histPrices = append(histPrices, types.Price{
+						Provider:      "tou",
+						TSStart:       st,
+						TSEnd:         st.Add(time.Hour),
+						DollarsPerKWH: 0.15,
+					})
+				}
+			}
+		}
+
+		histStart := fixedNow.Add(-168 * time.Hour)
+		mockS.On("GetPriceHistory", mock.Anything, "site1", histStart, fixedNow).Return(histPrices, nil)
+
+		srv := &Server{
+			storage: mockS,
+			nowFunc: func() time.Time { return fixedNow },
+		}
+
+		prices, err := srv.getFuturePrices(context.Background(), "site1", mockU)
+		require.NoError(t, err)
+
+		// 13 today + 26 tomorrow (23 1-hour blocks + 3 sub-hour blocks in hour 8) = 39 total
+		if assert.Len(t, prices, 39) {
+			priceByStart := make(map[time.Time]types.Price, len(prices))
+			for _, p := range prices {
+				priceByStart[p.TSStart] = p
+			}
+
+			t0800 := tomorrowStart.Add(8 * time.Hour)
+			if p, ok := priceByStart[t0800]; assert.True(t, ok) {
+				assert.Equal(t, t0800.Add(15*time.Minute), p.TSEnd)
+				assert.InDelta(t, 0.10, p.DollarsPerKWH, 0.0001)
+			}
+			t0815 := t0800.Add(15 * time.Minute)
+			if p, ok := priceByStart[t0815]; assert.True(t, ok) {
+				assert.Equal(t, t0800.Add(45*time.Minute), p.TSEnd)
+				assert.InDelta(t, 0.45, p.DollarsPerKWH, 0.0001)
+			}
+			t0845 := t0800.Add(45 * time.Minute)
+			if p, ok := priceByStart[t0845]; assert.True(t, ok) {
+				assert.Equal(t, t0800.Add(time.Hour), p.TSEnd)
+				assert.InDelta(t, 0.12, p.DollarsPerKWH, 0.0001)
+			}
+		}
+	})
+
+	t.Run("InitialGapAndMidnightSpanningAndNextCandidateClamping", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockU := &mockUtility{}
+
+		// Future prices start at 14:00 today (leaving an initial gap 11:00-14:00 today) and stop at 23:30 today.
+		var todayPrices []types.Price
+		for hr := 14; hr < 23; hr++ {
+			st := todayStart.Add(time.Duration(hr) * time.Hour)
+			todayPrices = append(todayPrices, types.Price{
+				Provider:      "tou",
+				TSStart:       st,
+				TSEnd:         st.Add(time.Hour),
+				DollarsPerKWH: 0.20,
+			})
+		}
+		todayPrices = append(todayPrices, types.Price{
+			Provider:      "tou",
+			TSStart:       todayStart.Add(23 * time.Hour),
+			TSEnd:         todayStart.Add(23*time.Hour + 30*time.Minute),
+			DollarsPerKWH: 0.20,
+		})
+		mockU.On("GetFuturePrices", mock.Anything).Return(todayPrices, nil)
+
+		// History has:
+		// - A midnight-spanning interval 23:30–00:30 ($0.08)
+		// - A sub-hour candidate 07:30–08:00 ($0.30) with no history for 07:00–07:30 (so 07:00 clamps to 07:30)
+		dStart := todayStart.AddDate(0, 0, -1)
+		histPrices := []types.Price{
+			{
+				Provider:      "tou",
+				TSStart:       dStart.Add(-30 * time.Minute), // 23:30 two nights ago -> 00:30 yesterday
+				TSEnd:         dStart.Add(30 * time.Minute),
+				DollarsPerKWH: 0.08,
+			},
+			{
+				Provider:      "tou",
+				TSStart:       dStart.Add(7*time.Hour + 30*time.Minute),
+				TSEnd:         dStart.Add(8 * time.Hour),
+				DollarsPerKWH: 0.30,
+			},
+		}
+
+		histStart := fixedNow.Add(-168 * time.Hour)
+		mockS.On("GetPriceHistory", mock.Anything, "site1", histStart, fixedNow).Return(histPrices, nil)
+
+		srv := &Server{
+			storage: mockS,
+			nowFunc: func() time.Time { return fixedNow },
+		}
+
+		prices, err := srv.getFuturePrices(context.Background(), "site1", mockU)
+		require.NoError(t, err)
+
+		priceByStart := make(map[time.Time]types.Price, len(prices))
+		for _, p := range prices {
+			priceByStart[p.TSStart] = p
+		}
+
+		// 1. Initial gap 11:00-14:00 today is filled starting at 11:00 today
+		assert.Equal(t, todayStart.Add(11*time.Hour), prices[0].TSStart)
+
+		// 2. Midnight-spanning 23:30 today -> 00:30 tomorrow is matched with $0.08
+		if p2330, ok := priceByStart[todayStart.Add(23*time.Hour+30*time.Minute)]; assert.True(t, ok) {
+			assert.Equal(t, tomorrowStart.Add(30*time.Minute), p2330.TSEnd)
+			assert.InDelta(t, 0.08, p2330.DollarsPerKWH, 0.0001)
+		}
+
+		// 3. Tomorrow 06:30–07:30 clamps at 07:30 so 07:30–08:00 ($0.30) is preserved
+		if p0730, ok := priceByStart[tomorrowStart.Add(7*time.Hour+30*time.Minute)]; assert.True(t, ok) {
+			assert.Equal(t, tomorrowStart.Add(8*time.Hour), p0730.TSEnd)
+			assert.InDelta(t, 0.30, p0730.DollarsPerKWH, 0.0001)
+		}
 	})
 }
 

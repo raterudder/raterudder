@@ -717,32 +717,54 @@ func (s *Server) getFuturePrices(ctx context.Context, siteID string, utility uti
 	}
 	nowInLoc := nowTime.In(loc)
 	todayStart := truncateDay(nowInLoc)
-	tomorrowStart := todayStart.AddDate(0, 0, 1)
 	tomorrowEnd := todayStart.AddDate(0, 0, 2)
 
-	hasCoverage := func(t time.Time) bool {
-		hourEnd := t.Add(time.Hour)
-		for _, p := range futurePrices {
-			pEnd := p.TSEnd
-			if pEnd.IsZero() {
-				pEnd = p.TSStart.Add(time.Hour)
-			}
-			if p.TSStart.Before(hourEnd) && pEnd.After(t) {
-				return true
-			}
+	priceEnd := func(p types.Price) time.Time {
+		if !p.TSEnd.IsZero() && p.TSEnd.After(p.TSStart) && p.TSEnd.Sub(p.TSStart) <= 24*time.Hour {
+			return p.TSEnd
 		}
-		return false
+		return p.TSStart.Add(time.Hour)
+			}
+			
+	sortPrices := func(prices []types.Price) {
+		slices.SortStableFunc(prices, func(a, b types.Price) int {
+			if a.TSStart.Equal(b.TSStart) {
+				return a.TSEnd.Compare(b.TSEnd)
+		}
+		return a.TSStart.Compare(b.TSStart)
+		})
 	}
+	sortPrices(futurePrices)
 
 	hasAllTomorrow := len(futurePrices) > 0
 	var missingCoverage time.Time
+	nowHourStart := nowInLoc.Add(-time.Duration(nowInLoc.Minute())*time.Minute - time.Duration(nowInLoc.Second())*time.Second - time.Duration(nowInLoc.Nanosecond()))
+	nextHourStart := nowHourStart.Add(time.Hour)
 	if hasAllTomorrow {
-		for t := tomorrowStart; t.Before(tomorrowEnd); t = t.Add(time.Hour) {
-			if !hasCoverage(t) {
+		cursor := futurePrices[0].TSStart.In(loc)
+		if cursor.After(nextHourStart) {
+			cursor = nextHourStart
+		}
+		for _, p := range futurePrices {
+			pEnd := priceEnd(p).In(loc)
+			if !pEnd.After(cursor) {
+				continue
+			}
+			// if its not contiguous then we don't have all tomorrow
+			if p.TSStart.In(loc).After(cursor) {
 				hasAllTomorrow = false
-				missingCoverage = t
+				missingCoverage = cursor
 				break
 			}
+cursor = pEnd
+			if !cursor.Before(tomorrowEnd) {
+				break
+			}
+		}
+		// if we didn't make it to the end of tomorrow then we don't have all tomorrow
+		if hasAllTomorrow && cursor.Before(tomorrowEnd) {
+			hasAllTomorrow = false
+			missingCoverage = cursor
 		}
 	}
 
@@ -752,8 +774,9 @@ func (s *Server) getFuturePrices(ctx context.Context, siteID string, utility uti
 			slog.Time("missingCoverage", missingCoverage),
 		)
 		// Use 7 days (168h) of historical prices plus today's already-known future prices
-		// to compute a more robust hourly median profile for missing tomorrow hours
-		// (before PJM publishes tomorrow's Day-Ahead prices around 1:30 PM ET).
+		// to compute a more robust median profile for missing tomorrow intervals
+		// (e.g. before PJM publishes tomorrow's Day-Ahead prices around 1:30 PM ET,
+		// or before Octopus publishes tomorrow's Agile rates around 4:00 PM UK time).
 		histStart := nowTime.Add(-168 * time.Hour)
 		histPrices, histErr := s.storage.GetPriceHistory(ctx, siteID, histStart, nowTime)
 		if histErr != nil {
@@ -761,75 +784,156 @@ func (s *Server) getFuturePrices(ctx context.Context, siteID string, utility uti
 		} else if len(histPrices) == 0 {
 			log.Ctx(ctx).WarnContext(ctx, "no historical prices found for the last 168 hours")
 		} else {
-			type hourlyStats struct {
-				prices []types.Price
+			if len(futurePrices) == 0 && histPrices[0].TSStart.Location() != nil {
+				loc = histPrices[0].TSStart.Location()
+				nowInLoc = nowTime.In(loc)
+				todayStart = truncateDay(nowInLoc)
+				tomorrowEnd = todayStart.AddDate(0, 0, 2)
+				nowHourStart = nowInLoc.Add(-time.Duration(nowInLoc.Minute())*time.Minute - time.Duration(nowInLoc.Second())*time.Second - time.Duration(nowInLoc.Nanosecond()))
+				nextHourStart = nowHourStart.Add(time.Hour)
 			}
-			buckets := make(map[int]*hourlyStats)
-			for i := 0; i < 24; i++ {
-				buckets[i] = &hourlyStats{}
-			}
+
+			allCandidates := make([]types.Price, 0, len(histPrices)+len(futurePrices))
+			allCandidates = append(allCandidates, histPrices...)
+			allCandidates = append(allCandidates, futurePrices...)
 
 			var overallDollars []float64
-			for _, p := range histPrices {
-				pHour := p.TSStart.In(loc).Hour()
-				buckets[pHour].prices = append(buckets[pHour].prices, p)
-				overallDollars = append(overallDollars, p.DollarsPerKWH)
-			}
-			for _, p := range futurePrices {
-				pHour := p.TSStart.In(loc).Hour()
-				buckets[pHour].prices = append(buckets[pHour].prices, p)
-				overallDollars = append(overallDollars, p.DollarsPerKWH)
+var overallGenCredits []float64
+			for _, p := range allCandidates {
+								overallDollars = append(overallDollars, p.DollarsPerKWH)
+			overallGenCredits = append(overallGenCredits, p.GenerationCreditDollarsPerKWH)
 			}
 			overallMedDollars := computeMedian(overallDollars)
-			overallTemplate := findClosestPrice(histPrices, overallMedDollars)
-
-			profiles := make(map[int]types.Price)
-			for h := 0; h < 24; h++ {
-				pricesInHour := buckets[h].prices
-				if len(pricesInHour) > 0 {
-					var dollars []float64
-					for _, p := range pricesInHour {
-						dollars = append(dollars, p.DollarsPerKWH)
-					}
-					med := computeMedian(dollars)
-					tmpl := findClosestPrice(pricesInHour, med)
-					profiles[h] = tmpl
-				} else {
-					profiles[h] = overallTemplate
-				}
+overallMedGenCredits := computeMedian(overallGenCredits)
+			overallTemplate := findClosestPrice(allCandidates, overallMedDollars, overallMedGenCredits)
+			overallDur := priceEnd(overallTemplate).Sub(overallTemplate.TSStart)
+			if overallDur <= 0 {
+				overallDur = time.Hour
 			}
 
-			nowHour := nowInLoc.Truncate(time.Hour)
-			startCheck := nowHour.Add(time.Hour)
-			if len(futurePrices) == 0 {
-				startCheck = nowHour
+			// alignCandidate projects a candidate price's time-of-day window onto target's date in loc.
+			alignCandidate := func(cp types.Price, target time.Time) (time.Time, time.Time) {
+				tLoc := target.In(loc)
+				cpStart := cp.TSStart.In(loc)
+				cpDur := priceEnd(cp).Sub(cp.TSStart)
+				if cpDur <= 0 {
+					cpDur = time.Hour
+				}
+				alignedStart := time.Date(tLoc.Year(), tLoc.Month(), tLoc.Day(), cpStart.Hour(), cpStart.Minute(), cpStart.Second(), cpStart.Nanosecond(), loc)
+				// Skip candidates whose wall-clock time falls in a nonexistent spring-forward DST gap on target's date.
+				if alignedStart.Hour() != cpStart.Hour() || alignedStart.Minute() != cpStart.Minute() {
+					return time.Time{}, time.Time{}
+				}
+				// On fall-back DST days where a wall-clock hour repeats, align to the second occurrence when target is in the second pass.
+				if plus1h := alignedStart.Add(time.Hour); plus1h.Hour() == cpStart.Hour() && plus1h.Minute() == cpStart.Minute() && !tLoc.Before(plus1h) {
+					alignedStart = plus1h
+				}
+				// Handle intervals that cross midnight (e.g. 23:30–00:30 when tLoc is 00:15)
+				// by checking if starting on the previous calendar day extends past tLoc.
+				if alignedStart.After(tLoc) {
+					prevStart := alignedStart.AddDate(0, 0, -1)
+					if prevStart.Add(cpDur).After(tLoc) {
+						alignedStart = prevStart
+					}
+				}
+				return alignedStart, alignedStart.Add(cpDur)
+			}
+
+			cursor := nowHourStart
+			if len(futurePrices) > 0 {
+				firstStart := futurePrices[0].TSStart.In(loc)
+				if !firstStart.After(nextHourStart) {
+					cursor = firstStart
+				} else {
+					cursor = nextHourStart
+				}
 			}
 
 			var estimatedPrices []types.Price
-			for t := startCheck; t.Before(tomorrowEnd); t = t.Add(time.Hour) {
-				if !hasCoverage(t) {
-					tmpl := profiles[t.In(loc).Hour()]
-					est := tmpl
-					est.TSStart = t
-					est.TSEnd = t.Add(time.Hour)
-					estimatedPrices = append(estimatedPrices, est)
-				}
-			}
-			futurePrices = append(futurePrices, estimatedPrices...)
-			slices.SortStableFunc(futurePrices, func(a, b types.Price) int {
-				if a.TSStart.Equal(b.TSStart) {
-					if a.TSEnd.Before(b.TSEnd) {
-						return -1
-					} else if a.TSEnd.After(b.TSEnd) {
-						return 1
+			for cursor.Before(tomorrowEnd) {
+				// Advance past any interval already covered by futurePrices.
+				covered := false
+				gapEnd := tomorrowEnd
+				for _, fp := range futurePrices {
+					fpStart := fp.TSStart.In(loc)
+					fpEnd := priceEnd(fp).In(loc)
+					if !fpStart.After(cursor) && fpEnd.After(cursor) {
+						cursor = fpEnd
+						covered = true
+						break
 					}
-					return 0
+					if fpStart.After(cursor) && fpStart.Before(gapEnd) {
+						gapEnd = fpStart
+					}
 				}
-				if a.TSStart.Before(b.TSStart) {
-					return -1
+				if covered {
+					continue
 				}
-				return 1
-			})
+
+				// Find all historical/known prices whose time-of-day overlaps cursor (the previous price's TSEnd).
+				var matching []types.Price
+				var dollarVals []float64
+				var genCreditVals []float64
+				var minEnd time.Time
+				var minNextStart time.Time
+				for _, cp := range allCandidates {
+					aStart, aEnd := alignCandidate(cp, cursor)
+					if aStart.IsZero() {
+						continue
+					}
+					if !cursor.Before(aStart) && cursor.Before(aEnd) {
+						matching = append(matching, cp)
+						dollarVals = append(dollarVals, cp.DollarsPerKWH)
+						if cp.SeparateGenerationCredit {
+							genCreditVals = append(genCreditVals, cp.GenerationCreditDollarsPerKWH)
+						}
+						if minEnd.IsZero() || aEnd.Before(minEnd) {
+							minEnd = aEnd
+						}
+					} else if aStart.After(cursor) {
+						// Track the earliest upcoming candidate start time after cursor so a fallback
+						// interval doesn't overshoot a sub-hour historical price starting later in the hour.
+						if minNextStart.IsZero() || aStart.Before(minNextStart) {
+							minNextStart = aStart
+						}
+					}
+				}
+
+				var est types.Price
+				var estEnd time.Time
+				if len(matching) > 0 {
+					medDollars := computeMedian(dollarVals)
+					medGenCredits := computeMedian(genCreditVals)
+					est = findClosestPrice(matching, medDollars, medGenCredits)
+					estEnd = minEnd
+				} else {
+					est = overallTemplate
+					estEnd = cursor.Add(overallDur)
+					// Clamp the fallback interval to the next candidate's start time (e.g. if cursor is
+					// 07:00 with no history for 07:00–07:30, stop at 07:30 so 07:30–08:00 can match next).
+					if !minNextStart.IsZero() && estEnd.After(minNextStart) {
+						estEnd = minNextStart
+					}
+				}
+
+				if estEnd.After(gapEnd) {
+					estEnd = gapEnd
+				}
+				if !estEnd.After(cursor) {
+					estEnd = cursor.Add(time.Hour)
+					if estEnd.After(gapEnd) {
+						estEnd = gapEnd
+					}
+				}
+
+				est.TSStart = cursor
+				est.TSEnd = estEnd
+				estimatedPrices = append(estimatedPrices, est)
+				cursor = estEnd
+			}
+
+			futurePrices = append(futurePrices, estimatedPrices...)
+			sortPrices(futurePrices)
 		}
 	}
 
@@ -860,15 +964,33 @@ func computeMedian(vals []float64) float64 {
 	return (sorted[n/2-1] + sorted[n/2]) / 2.0
 }
 
-func findClosestPrice(prices []types.Price, target float64) types.Price {
+func findClosestPrice(prices []types.Price, targetDollars, targetGenCredit float64) types.Price {
+if len(prices) == 0 {
+		return types.Price{}
+	}
 	best := prices[0]
-	bestDiff := math.Abs(best.DollarsPerKWH - target)
+	bestDiff := math.Abs(best.DollarsPerKWH - targetDollars)
+	bestGenDiff := math.Abs(best.GenerationCreditDollarsPerKWH - targetGenCredit)
 	for _, p := range prices[1:] {
-		diff := math.Abs(p.DollarsPerKWH - target)
-		if diff <= bestDiff {
+		diff := math.Abs(p.DollarsPerKWH - targetDollars)
+		genDiff := math.Abs(p.GenerationCreditDollarsPerKWH - targetGenCredit)
+		if diff < bestDiff || (diff == bestDiff && genDiff <= bestGenDiff) {
 			best = p
 			bestDiff = diff
+		bestGenDiff = genDiff
 		}
+	}
+	if best.SeparateGenerationCredit {
+		bestGen := prices[0].GenerationCreditDollarsPerKWH
+		bestGenDiff = math.Abs(bestGen - targetGenCredit)
+		for _, p := range prices[1:] {
+			genDiff := math.Abs(p.GenerationCreditDollarsPerKWH - targetGenCredit)
+			if genDiff <= bestGenDiff {
+				bestGen = p.GenerationCreditDollarsPerKWH
+				bestGenDiff = genDiff
+			}
+		}
+		best.GenerationCreditDollarsPerKWH = bestGen
 	}
 	return best
 }

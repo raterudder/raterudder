@@ -22,6 +22,20 @@ func (s *SiteFees) Name() string {
 	return s.name
 }
 
+func (s *SiteFees) settingsMatch(settings types.Settings) bool {
+	s.mu.Lock()
+	name := s.name
+	s.mu.Unlock()
+
+	if settings.UtilityRate != "" && name != settings.UtilityRate {
+		return false
+	}
+	if sm, ok := s.base.(settingsMatcher); ok {
+		return sm.settingsMatch(settings)
+	}
+	return true
+}
+
 // ApplySettings implements the Utility interface
 func (s *SiteFees) ApplySettings(ctx context.Context, settings types.Settings) error {
 	s.mu.Lock()
@@ -48,9 +62,18 @@ func (s *SiteFees) GetVPPInfo(context.Context) (types.UtilityVPPInfo, error) {
 	return types.UtilityVPPInfo{}, nil
 }
 
-// GetPeriods implements the Utility interface for real-time rates (returns nil, nil).
+// GetPeriods implements the Utility interface, returning named import TOU periods when present.
 func (s *SiteFees) GetPeriods(context.Context) ([]types.TimePeriod, error) {
-	return nil, nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var res []types.TimePeriod
+	for _, p := range s.periods {
+		if !p.SeparateGenerationCredit && !p.GridAdditional && p.Name != "" {
+			res = append(res, p.TimePeriod)
+		}
+	}
+	return res, nil
 }
 
 func (s *SiteFees) applyFees(p types.Price) (types.Price, error) {

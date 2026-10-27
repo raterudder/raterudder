@@ -18,10 +18,27 @@ type genericTOU struct {
 	name    string
 	options types.UtilityRateOptions
 	vppInfo types.UtilityVPPInfo
+	nowFunc func() time.Time
+}
+
+func (t *genericTOU) now() time.Time {
+	if t.nowFunc != nil {
+		return t.nowFunc()
+	}
+	return time.Now()
 }
 
 func (t *genericTOU) Name() string {
 	return t.name
+}
+
+func (t *genericTOU) settingsMatch(settings types.Settings) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if settings.UtilityRate != "" && t.name != settings.UtilityRate {
+		return false
+	}
+	return t.options == settings.UtilityRateOptions
 }
 
 func (t *genericTOU) ApplySettings(ctx context.Context, settings types.Settings) error {
@@ -84,8 +101,8 @@ func (t *genericTOU) priceForTime(target time.Time) (types.Price, error) {
 		target = target.In(lastLoc)
 	}
 
-	// Truncate to the start of the hour in the target's location
-	start := time.Date(target.Year(), target.Month(), target.Day(), target.Hour(), 0, 0, 0, target.Location())
+	// Truncate to the start of the elapsed hour in the target's location (preserving DST offset on repeated hours)
+	start := target.Add(-time.Duration(target.Minute())*time.Minute - time.Duration(target.Second())*time.Second - time.Duration(target.Nanosecond()))
 	end := start.Add(time.Hour)
 
 	// check all periods for an overlapping price period
@@ -121,22 +138,26 @@ func (t *genericTOU) priceForTime(target time.Time) (types.Price, error) {
 
 // GetCurrentPrice returns the current price.
 func (t *genericTOU) GetCurrentPrice(ctx context.Context) (types.Price, error) {
-	return t.priceForTime(time.Now())
+	return t.priceForTime(t.now())
 }
 
 // GetFuturePrices returns the next 48 hours of prices.
 func (t *genericTOU) GetFuturePrices(ctx context.Context) ([]types.Price, error) {
-	now := time.Now().Truncate(time.Hour)
+	nowTime := t.now()
+	now := nowTime.Truncate(time.Hour)
 	prices := make([]types.Price, 0, 48)
 
-	// Generate prices for the next 48 hours
-	for i := 1; i <= 48; i++ {
+	// Generate prices from the current hour (including any remaining sub-hour segments after nowTime)
+	// through the next 48 hours.
+	for i := 0; i <= 48; i++ {
 		target := now.Add(time.Duration(i) * time.Hour)
 		p, err := t.priceForTime(target)
 		if err != nil {
 			return nil, err
 		}
-		prices = append(prices, p)
+		if p.TSStart.After(nowTime) {
+			prices = append(prices, p)
+		}
 		end := target.Add(time.Hour)
 		// if the returned price doesn't cover the full hour, retrieve the rest
 		for p.TSEnd.Before(end) {
@@ -150,7 +171,9 @@ func (t *genericTOU) GetFuturePrices(ctx context.Context) ([]types.Price, error)
 			if p2.TSStart.Before(p.TSEnd) || !p2.TSEnd.After(p.TSEnd) {
 				return nil, fmt.Errorf("invalid next price segment duration: prev end %v, next start %v", p.TSEnd, p2.TSStart)
 			}
-			prices = append(prices, p2)
+			if p2.TSStart.After(nowTime) {
+				prices = append(prices, p2)
+			}
 			p = p2
 		}
 	}
@@ -173,11 +196,11 @@ func (t *genericTOU) GetConfirmedPrices(ctx context.Context, start, end time.Tim
 
 		// even if the end time goes beyond the end time, we still want to include it
 		// since it will cover the time period between start and end
-		if !p.TSStart.Before(start) && p.TSStart.Before(end) {
+		if p.TSEnd.After(start) && p.TSStart.Before(end) {
 			prices = append(prices, p)
 		}
 		next := current.Add(time.Hour)
-		if p.TSEnd.Before(next) {
+		if p.TSEnd.Before(next) && p.TSEnd.After(current) {
 			current = p.TSEnd
 		} else {
 			current = next
