@@ -273,6 +273,7 @@ type SystemStatus struct {
 	VPPEvents               []VPPEvent    `json:"vppEvents,omitempty"`
 	ManagedTOUMode          bool          `json:"managedTouMode,omitempty"` // True if battery is operating in RateRudder-managed Time-of-Use mode
 	BatteryHeating          bool          `json:"batteryHeating,omitempty"` // True if battery heating blankets are active
+	DCCoupled               bool          `json:"dcCoupled,omitempty"`      // True if solar is DC-coupled directly to the battery inverter (e.g., Powerwall 3)
 }
 
 // BatteryMode represents the mode of the battery.

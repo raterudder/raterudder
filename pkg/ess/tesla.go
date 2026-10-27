@@ -812,6 +812,15 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 	batteryCount := getBatteryCount(siteInfo)
 	isMaxBackup := isMaxBackupCharging(siteInfo, liveStatus, batteryCount)
 
+	hasPW3 := false
+	for _, gw := range siteInfo.Components.Gateways {
+		if strings.Contains(strings.ToLower(gw.PartName), "powerwall 3") {
+			hasPW3 = true
+			break
+		}
+	}
+	dcCoupled := hasPW3 && siteInfo.Components.BatteryType == "solar_powerwall"
+
 	status := types.SystemStatus{
 		Timestamp:             time.Now().In(loc),
 		TimeLocation:          loc.String(),
@@ -830,6 +839,7 @@ func (b *Tesla) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		VPPActive:             liveStatus.GridServicesActive,
 		VPPKW:                 liveStatus.GridServicesPowerW / 1000.0,
 		ManagedTOUMode:        siteInfo.DefaultRealMode == "autonomous" && isTeslaRateRudderTariff(siteInfo.TariffContentV2),
+		DCCoupled:             dcCoupled,
 		// TODO: how do we know when battery charging is disabled
 		// TODO: what about alarms?
 	}

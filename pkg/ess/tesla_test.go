@@ -583,6 +583,7 @@ func TestTesla(t *testing.T) {
 		assert.Equal(t, 13.5, status.BatteryCapacityKWH)
 		assert.Equal(t, 3.3, status.MaxBatteryChargeKW)
 		assert.Equal(t, 11.52, status.MaxBatteryDischargeKW)
+		assert.False(t, status.DCCoupled)
 	})
 
 	t.Run("GetStatus Ignore Unknown Batteries Fallback", func(t *testing.T) {
@@ -656,6 +657,88 @@ func TestTesla(t *testing.T) {
 		assert.Equal(t, 13.5, status.BatteryCapacityKWH)
 		assert.Equal(t, 3.3, status.MaxBatteryChargeKW)
 		assert.Equal(t, 11.52, status.MaxBatteryDischargeKW)
+		assert.False(t, status.DCCoupled)
+	})
+
+	t.Run("GetStatus DCCoupled Detection", func(t *testing.T) {
+		newTeslaSite := func(t *testing.T, batteryType string, gatewayPartName string) (System, func()) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/1/energy_sites/1234/site_info":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"backup_reserve_percent": 20.0,
+							"nameplate_energy":       13500.0,
+							"components": map[string]any{
+								"battery_type": batteryType,
+								"gateways": []map[string]any{
+									{
+										"part_name": gatewayPartName,
+										"is_active": true,
+									},
+								},
+							},
+						},
+					})
+				case "/api/1/energy_sites/1234/live_status":
+					json.NewEncoder(w).Encode(map[string]any{
+						"response": map[string]any{
+							"percentage_charged": 50.0,
+							"grid_status":        "Active",
+						},
+					})
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+
+			m := teslaMap(ts)
+			sys, err := m.Site(ctx, "test-site", types.Settings{ESS: "tesla"})
+			require.NoError(t, err)
+
+			teslaSys := sys.(*Tesla)
+			teslaSys.token = "mock-access"
+			teslaSys.energySiteID = 1234
+			teslaSys.baseURL = ts.URL
+
+			return sys, ts.Close
+		}
+
+		t.Run("Powerwall 3 with solar_powerwall is DC coupled", func(t *testing.T) {
+			sys, cleanup := newTeslaSite(t, "solar_powerwall", "Powerwall 3")
+			defer cleanup()
+
+			status, err := sys.GetStatus(ctx)
+			require.NoError(t, err)
+			assert.True(t, status.DCCoupled)
+		})
+
+		t.Run("Powerwall 3 with ac_powerwall is not DC coupled", func(t *testing.T) {
+			sys, cleanup := newTeslaSite(t, "ac_powerwall", "Powerwall 3")
+			defer cleanup()
+
+			status, err := sys.GetStatus(ctx)
+			require.NoError(t, err)
+			assert.False(t, status.DCCoupled)
+		})
+
+		t.Run("Powerwall+ with solar_powerwall and Gateway 2 is not DC coupled", func(t *testing.T) {
+			sys, cleanup := newTeslaSite(t, "solar_powerwall", "Tesla Backup Gateway 2")
+			defer cleanup()
+
+			status, err := sys.GetStatus(ctx)
+			require.NoError(t, err)
+			assert.False(t, status.DCCoupled)
+		})
+
+		t.Run("Powerwall 2 with ac_powerwall is not DC coupled", func(t *testing.T) {
+			sys, cleanup := newTeslaSite(t, "ac_powerwall", "Tesla Backup Gateway 2")
+			defer cleanup()
+
+			status, err := sys.GetStatus(ctx)
+			require.NoError(t, err)
+			assert.False(t, status.DCCoupled)
+		})
 	})
 
 	t.Run("GetStatus Grid Status", func(t *testing.T) {
