@@ -1274,7 +1274,7 @@ func TestHandleUpdate(t *testing.T) {
 			},
 		}, nil)
 		// With BatterySOC=100 and AlwaysChargeUnderDollarsPerKWH=0.20, Decide returns BatteryModeChargeAny
-		// while Plan returns BatteryModeStandby. Also set ManageTOUSchedules=true to verify TOU schedules
+		// while Plan returns BatteryModeLoad. Also set ManageTOUSchedules=true to verify TOU schedules
 		// are not dispatched during dark launch when PlanMode=false.
 		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
 			UtilityProvider:                "test",
@@ -1338,7 +1338,7 @@ func TestHandleUpdate(t *testing.T) {
 		require.NotNil(t, insertedAction, "Action must be inserted into storage")
 		require.NotNil(t, insertedAction.Plan, "On production dark launch, Action.Plan must be attached for debugging")
 		require.NotEmpty(t, insertedAction.Plan.Periods)
-		assert.Equal(t, types.BatteryModeStandby, insertedAction.Plan.Periods[0].BatteryMode, "Plan should have chosen Standby")
+		assert.Equal(t, types.BatteryModeLoad, insertedAction.Plan.Periods[0].BatteryMode, "Plan should have chosen Load")
 		assert.Equal(t, types.BatteryModeChargeAny, insertedAction.BatteryMode, "Dark launch must still execute Decide's BatteryMode")
 		assert.Equal(t, types.BatteryModeChargeAny, setBatteryMode, "SetModes must receive Decide's BatteryMode")
 		assert.Nil(t, setOpts.Schedule, "Dark launch must not build or send TOU schedule when PlanMode=false")
@@ -1438,8 +1438,8 @@ func TestHandleUpdate(t *testing.T) {
 		require.NotNil(t, insertedAction, "Action must be inserted into storage")
 		assert.NotNil(t, insertedAction.Plan, "On production with PlanMode=true, Action.Plan must be populated by Controller.Plan")
 		assert.NotEmpty(t, insertedAction.Plan.Periods)
-		assert.Equal(t, types.BatteryModeStandby, insertedAction.BatteryMode, "With PlanMode=true, Plan's BatteryMode must be used")
-		assert.Equal(t, types.BatteryModeStandby, setBatteryMode, "SetModes must receive Plan's BatteryMode")
+		assert.Equal(t, types.BatteryModeLoad, insertedAction.BatteryMode, "With PlanMode=true, Plan's BatteryMode must be used")
+		assert.Equal(t, types.BatteryModeLoad, setBatteryMode, "SetModes must receive Plan's BatteryMode")
 		assert.NotNil(t, setOpts.Schedule, "With PlanMode=true and ManageTOUSchedules=true, TOUSchedule must be built")
 	})
 

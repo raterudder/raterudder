@@ -1016,23 +1016,23 @@ const Settings = ({
     };
 
     const updateMinBatterySOCPeriods = (newPeriods: MinBatterySOCPeriod[] | undefined) => {
-setSettings(prev => {
+        setSettings(prev => {
             if (!prev) return prev;
-        if (!newPeriods || newPeriods.length === 0) {
-            return {
+            if (!newPeriods || newPeriods.length === 0) {
+                return {
                     ...prev,
-minBatterySOCPeriods: undefined,
+                    minBatterySOCPeriods: undefined,
                 };
-        }
-        const validSOCs = newPeriods
-            .map(p => typeof p.minBatterySOC === 'number' ? p.minBatterySOC : parseFloat(p.minBatterySOC as any))
-            .filter(v => !isNaN(v));
-        const minVal = validSOCs.length > 0 ? Math.min(...validSOCs) : (prev.minBatterySOC ?? 20);
-        return {
-            ...prev,
-            minBatterySOCPeriods: newPeriods,
-            minBatterySOC: isFinite(minVal) ? minVal : (prev.minBatterySOC ?? 20),
-        };
+            }
+            const validSOCs = newPeriods
+                .map(p => typeof p.minBatterySOC === 'number' ? p.minBatterySOC : parseFloat(p.minBatterySOC as any))
+                .filter(v => !isNaN(v));
+            const minVal = validSOCs.length > 0 ? Math.min(...validSOCs) : (prev.minBatterySOC ?? 20);
+            return {
+                ...prev,
+                minBatterySOCPeriods: newPeriods,
+                minBatterySOC: isFinite(minVal) ? minVal : (prev.minBatterySOC ?? 20),
+            };
         });
     };
 
@@ -1380,7 +1380,7 @@ minBatterySOCPeriods: undefined,
             }
 
             let credentialsPayload: CredentialsPayload | undefined = undefined;
-                        const essProvider = essProviders.find(p => p.id === settings.ess);
+            const essProvider = essProviders.find(p => p.id === settings.ess);
             if (essProvider && (isESSDirty || Object.keys(essCredentials).length > 0)) {
                 credentialsPayload = { [essProvider.id]: {} };
                 const processCred = (cred: ESSCredentialField) => {
@@ -2639,6 +2639,11 @@ minBatterySOCPeriods: undefined,
                                     onChange={(e) => handleChange('minArbitrageDifferenceDollarsPerKWH', parseFloat(e.target.value))}
                                 />
                                 <Field.Description>Required profit margin to trigger immediate charging to later use/export at a higher prices.</Field.Description>
+                                {settings.minArbitrageDifferenceDollarsPerKWH < 0.03 && (
+                                    <div className="warning-text" style={{ color: 'orange', marginTop: '4px', fontSize: '0.9em' }} data-testid="min-arbitrage-warning">
+                                        Warning: Setting this below the $0.03/kWh default may not cover battery degradation, making grid charging unprofitable.
+                                    </div>
+                                )}
                             </Field.Root>
 
                             <Field.Root className="form-group">
@@ -2697,6 +2702,11 @@ minBatterySOCPeriods: undefined,
                                         onChange={(e) => handleChange('minBatteryExportDifferenceDollarsPerKWH', parseFloat(e.target.value))}
                                     />
                                     <Field.Description>Minimum profit spread required to export battery energy directly to the grid.</Field.Description>
+                                    {(settings.minBatteryExportDifferenceDollarsPerKWH ?? 0.07) < 0.04 && (
+                                        <div className="warning-text" style={{ color: 'orange', marginTop: '4px', fontSize: '0.9em' }} data-testid="min-battery-export-warning">
+                                            Warning: Setting this below the $0.04/kWh default may not cover battery degradation, making battery exports unprofitable.
+                                        </div>
+                                    )}
                                 </Field.Root>
                             )}
 

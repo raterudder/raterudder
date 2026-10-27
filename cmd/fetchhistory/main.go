@@ -27,6 +27,13 @@ func main() {
 	endDate := lflag.String("end", "", "End date (YYYY-MM-DD) (Exclusive)")
 	energyOnly := lflag.Bool("energy", false, "Fetch energy and weather history dataset for energy modeling tests")
 
+	if os.Getenv("FIRESTORE_PROJECT_ID") == "" {
+		_ = os.Setenv("FIRESTORE_PROJECT_ID", "raterudder")
+	}
+	if os.Getenv("STORAGE_PROVIDER") == "" {
+		_ = os.Setenv("STORAGE_PROVIDER", "firestore")
+	}
+
 	// Configure database
 	db := storage.Configured()
 
@@ -93,6 +100,9 @@ func main() {
 	if err != nil {
 		fmt.Printf("Failed to get action history: %v\n", err)
 		os.Exit(1)
+	}
+	for i := range actionHistory {
+		actionHistory[i].Plan = nil
 	}
 
 	priceHistory, err := db.GetPriceHistory(ctx, sID, start, end)

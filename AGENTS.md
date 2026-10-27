@@ -1,7 +1,7 @@
 # Agent Guidelines & Project Standards
 
 ## Architecture & Project Layout
-- `cmd/raterudder`: Main entry point and orchestration loop.
+- `cmd/raterudder`: Main entry point and orchestration loop (site updates run every 20 minutes via Cloud Scheduler calling `/api/updateSites`).
 - `pkg/controller`: Battery charging/discharging decision logic and scheduling simulations.
 - `pkg/utility`: Electricity tariff fetchers (e.g., ComEd hourly/real-time pricing).
 - `pkg/ess`: Energy Storage System integrations (FranklinWH, Tesla, etc.).
@@ -9,7 +9,6 @@
 - `pkg/server`: HTTP API endpoints for notifications, settings, history, auth, and telemetry.
 - `pkg/model` & `pkg/types`: Shared domain models, tariff structures, and interfaces.
 - `web`: React frontend utilizing `@base-ui/react`.
-- `deployment/tf`: Example Terraform deployment configurations.
 
 ---
 
@@ -82,5 +81,6 @@
 
 ## Operations & Site Debugging
 - **GCP Project**: Cloud Logging and Firestore run under project `raterudder` (`projects/raterudder`).
+- **Polling Interval**: RateRudder site updates (`/api/updateSites`) run every **20 minutes** (not every 5 minutes; do not confuse 5-minute utility price feeds or cache TTLs with the control loop interval).
 - **Site Debugging Skill**: Use the `debug-site` skill (`cmd/inspectsite` and `cmd/replayplan`) to inspect site settings, action history, cloud logs, and re-run `controller.Plan` across historical polls.
 - **Privacy Guardrail**: Never include site IDs, customer names, or user emails in git commits, tests, or code files.

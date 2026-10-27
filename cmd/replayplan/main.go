@@ -49,6 +49,7 @@ func main() {
 	}
 
 	db := storage.Configured()
+	uMap := utility.Configured(db)
 	lflag.Configure()
 
 	var (
@@ -246,11 +247,9 @@ func main() {
 		}
 	}
 
-	uMap := utility.NewMap(db)
 	u, err := uMap.Site(ctx, siteID, settings)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize utility (%s): %v\n", settings.UtilityProvider, err)
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "Warning: failed to initialize utility (%s): %v (using stored prices)\n", settings.UtilityProvider, err)
 	}
 
 	// Fetch actions including 2 hours before start so we have the prior action for the first poll
@@ -327,7 +326,7 @@ func main() {
 			continue
 		}
 
-		curPrice, futurePrices, err := buildPricesAt(ctx, u, storedPrices, a, t, loc)
+		curPrice, futurePrices, err := buildPricesAt(ctx, u, storedPrices, a, t, loc, settings)
 		if err != nil {
 			fmt.Printf("[%s] SOC:%5.1f%% | Price build error: %v\n", fullTS, a.SystemStatus.BatterySOC, err)
 			continue
@@ -486,11 +485,19 @@ func buildPricesAt(
 	action types.Action,
 	t time.Time,
 	loc *time.Location,
+	settings types.Settings,
 ) (types.Price, []types.Price, error) {
 	hourStart := t.Truncate(time.Hour)
 	todayStart := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc)
 	tomorrowStart := todayStart.AddDate(0, 0, 1)
 	tomorrowEnd := todayStart.AddDate(0, 0, 2)
+
+	isComEdRealTime := settings.UtilityProvider == "comed" && settings.UtilityRate != "comed_bes" && settings.UtilityRate != "comed_best"
+	confirmedCutoff := tomorrowEnd.Add(4 * time.Hour)
+	if isComEdRealTime {
+		// ComEd real-time hourly prices are only known for the current hour at poll time t
+		confirmedCutoff = hourStart.Add(time.Hour)
+	}
 
 	// Collect candidate prices from stored Firestore price history and utility.GetConfirmedPrices
 	var candidates []types.Price
@@ -499,12 +506,12 @@ func buildPricesAt(
 		if pEnd.IsZero() {
 			pEnd = p.TSStart.Add(time.Hour)
 		}
-		if pEnd.After(hourStart) && p.TSStart.Before(tomorrowEnd.Add(4*time.Hour)) {
+		if pEnd.After(hourStart) && p.TSStart.Before(confirmedCutoff) {
 			candidates = append(candidates, p)
 		}
 	}
 
-	if u != nil {
+	if u != nil && !isComEdRealTime {
 		confirmed, err := u.GetConfirmedPrices(ctx, hourStart, tomorrowEnd.Add(2*time.Hour))
 		if err == nil && len(confirmed) > 0 {
 			for _, cp := range confirmed {

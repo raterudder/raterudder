@@ -44,8 +44,13 @@ type Settings struct {
 	ESS string `json:"ess"`
 
 	// Price Settings
-	// Always charge when the price is under this amount (in $/kWh)
-	AlwaysChargeUnderDollarsPerKWH float64 `json:"alwaysChargeUnderDollarsPerKWH"`
+
+	// MinArbitrageDifferenceDollarsPerKWH is the minimum profit spread ($/kWh) required to justify charging the battery from the grid for arbitrage.
+	MinArbitrageDifferenceDollarsPerKWH float64 `json:"minArbitrageDifferenceDollarsPerKWH"`
+
+	// MinBatteryExportDifferenceDollarsPerKWH is the minimum profit spread ($/kWh) required to export battery energy directly to the grid.
+	// TODO: Reset MinBatteryExportDifferenceDollarsPerKWH to 0 in a new settings migration version when fully switching to plan mode if users have it set to the legacy default (0.07), so that profile defaults take effect unless explicitly configured.
+	MinBatteryExportDifferenceDollarsPerKWH float64 `json:"minBatteryExportDifferenceDollarsPerKWH"`
 
 	// How to value solar exports when net metering credits are active. Valid values: "", "lowest", "highest", "none". Default is "lowest".
 	SolarNetMeteringCreditsValue string `json:"solarNetMeteringCreditsValue"`
@@ -71,12 +76,8 @@ type Settings struct {
 	// CustomGridSettings indicates if the grid settings were manually configured.
 	// When false, grid settings are automatically synchronized from the ESS.
 	CustomGridSettings bool `json:"customGridSettings,omitempty"`
-	// Maximum Grid Use (in kW) (not supported yet since we don't change limits)
-	// MaxGridUseKW float64 `json:"maxGridUseKW"`
 	// Can charge batteries from grid
 	GridChargeBatteries bool `json:"gridChargeBatteries"`
-	// Maximum Grid Export (in kW) (not supported yet since we don't change limits)
-	//MaxGridExportKW float64 `json:"maxGridExportKW"`
 	// Can export solar to grid
 	GridExportSolar bool `json:"gridExportSolar"`
 	// Can export batteries to grid
@@ -126,6 +127,9 @@ type Settings struct {
 	// Notifications maps userID to notification preferences for this site.
 	Notifications map[string]UserNotificationSettings `json:"notifications,omitempty"`
 
+	// Deprecated: MinDeficitPriceDifferenceDollarsPerKWH is deprecated in favor of OptimizationParams.GridChargeDegradationDollarsPerKWH. Retained for backwards compatibility in decide path.
+	MinDeficitPriceDifferenceDollarsPerKWH float64 `json:"minDeficitPriceDifferenceDollarsPerKWH"`
+
 	// Deprecated
 	SolarCapacityBufferMinutes int `json:"solarCapacityBufferMinutes"`
 
@@ -135,15 +139,9 @@ type Settings struct {
 	// Deprecated: VPPChargingBufferMinutes is deprecated in favor of OptimizationParams.VPPChargingBufferMinutes.
 	VPPChargingBufferMinutes int `json:"vppChargingBufferMinutes"`
 
-	// Deprecated: MinArbitrageDifferenceDollarsPerKWH is deprecated in favor of OptimizationParams.SolarExportDegradationDollarsPerKWH. Retained for backwards compatibility in decide path.
-	MinArbitrageDifferenceDollarsPerKWH float64 `json:"minArbitrageDifferenceDollarsPerKWH"`
-
-	// Deprecated: MinDeficitPriceDifferenceDollarsPerKWH is deprecated in favor of OptimizationParams.GridChargeDegradationDollarsPerKWH. Retained for backwards compatibility in decide path.
-	MinDeficitPriceDifferenceDollarsPerKWH float64 `json:"minDeficitPriceDifferenceDollarsPerKWH"`
-
-	// MinBatteryExportDifferenceDollarsPerKWH is the minimum profit spread ($/kWh) required to export battery energy directly to the grid.
-	// TODO: Reset MinBatteryExportDifferenceDollarsPerKWH to 0 in a new settings migration version when fully switching to plan mode if users have it set to the legacy default (0.07), so that profile defaults take effect unless explicitly configured.
-	MinBatteryExportDifferenceDollarsPerKWH float64 `json:"minBatteryExportDifferenceDollarsPerKWH"`
+	// Always charge when the price is under this amount (in $/kWh).
+	// Deprecated: Only used by legacy Decide; Plan mode only triggers unconditional charging on negative or free rates (<= $0.00/kWh).
+	AlwaysChargeUnderDollarsPerKWH float64 `json:"alwaysChargeUnderDollarsPerKWH"`
 }
 
 // GridSettings represents the ESS grid configuration capabilities.
@@ -473,7 +471,6 @@ func (s Settings) GetMinBatterySOC(ctx context.Context, t time.Time, loc *time.L
 type OptimizationParams struct {
 	RoundTripEfficiency                   float64 `json:"roundTripEfficiency"`
 	ReserveBufferPercent                  float64 `json:"reserveBufferPercent"`
-	PeakSurvivalBufferMinutes             int     `json:"peakSurvivalBufferMinutes"`
 	SolarCapacityBufferMinutes            int     `json:"solarCapacityBufferMinutes"`
 	VPPChargingBufferMinutes              int     `json:"vppChargingBufferMinutes"`
 	CloudCoverDeratePercent               float64 `json:"cloudCoverDeratePercent"`
@@ -494,7 +491,6 @@ func (s Settings) GetOptimizationParams() OptimizationParams {
 		params = OptimizationParams{
 			RoundTripEfficiency:                   0.90,
 			ReserveBufferPercent:                  10.0,
-			PeakSurvivalBufferMinutes:             30,
 			SolarCapacityBufferMinutes:            20,
 			VPPChargingBufferMinutes:              40,
 			CloudCoverDeratePercent:               10.0,
@@ -506,7 +502,6 @@ func (s Settings) GetOptimizationParams() OptimizationParams {
 		params = OptimizationParams{
 			RoundTripEfficiency:                   0.92,
 			ReserveBufferPercent:                  0.0,
-			PeakSurvivalBufferMinutes:             0,
 			SolarCapacityBufferMinutes:            0,
 			VPPChargingBufferMinutes:              10,
 			CloudCoverDeratePercent:               0.0,
@@ -518,7 +513,6 @@ func (s Settings) GetOptimizationParams() OptimizationParams {
 		params = OptimizationParams{
 			RoundTripEfficiency:                   0.90,
 			ReserveBufferPercent:                  0.0,
-			PeakSurvivalBufferMinutes:             15,
 			SolarCapacityBufferMinutes:            0,
 			VPPChargingBufferMinutes:              20,
 			CloudCoverDeratePercent:               5.0,

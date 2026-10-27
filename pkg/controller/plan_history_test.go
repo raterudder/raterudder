@@ -16,33 +16,33 @@ import (
 )
 
 var planBaselines = map[string]float64{
-	"site1_march.json":           -3.917,
-	"site1_may.json":             -15.436,
-	"site1_september.json":       38.044,
-	"site2_april.json":           0.987,
-	"site2_march.json":           9.907,
-	"site2_may.json":             1.495,
-	"site2_september.json":       1.317,
-	"site3_march.json":           -1.760,
+	"site1_march.json":           -3.896,
+	"site1_may.json":             -15.612,
+	"site1_september.json":       38.126,
+	"site2_april.json":           0.734,
+	"site2_march.json":           9.766,
+	"site2_may.json":             1.485,
+	"site2_september.json":       1.565,
+	"site3_march.json":           -1.715,
 	"site3_may.json":             -6.903,
-	"site4_late-may.json":        1.097,
-	"site4_may.json":             2.337,
-	"site4_october.json":         -1.013,
-	"site4_september.json":       -4.215,
-	"site5_june.json":            20.469,
-	"site5_october.json":         -0.040,
-	"site5_september.json":       15.082,
-	"site7_june.json":            32.955,
-	"site8_june.json":            -9.692,
-	"site9_september.json":       -14.067,
-	"site10_september.json":      6.691,
-	"site11_october.json":        -13.385,
-	"site13_october.json":        12.886,
-	"site14_october.json":        15.678,
-	"site15_october.json":        5.180,
-	"site15_september.json":      3.411,
-	"site16_late-september.json": 3.092,
-	"site5_mid-october.json":     1.788,
+	"site4_late-may.json":        1.061,
+	"site4_may.json":             2.383,
+	"site4_october.json":         -0.789,
+	"site4_september.json":       -4.228,
+	"site5_june.json":            20.499,
+	"site5_october.json":         -1.107,
+	"site5_september.json":       14.945,
+	"site7_june.json":            32.014,
+	"site8_june.json":            -10.374,
+	"site9_september.json":       -14.344,
+	"site10_september.json":      6.367,
+	"site11_october.json":        -13.453,
+	"site13_october.json":        12.415,
+	"site14_october.json":        15.832,
+	"site15_october.json":        5.079,
+	"site15_september.json":      3.368,
+	"site16_late-september.json": 3.010,
+	"site5_mid-october.json":     1.790,
 }
 
 // TestPlanHistory evaluates the new Plan engine against real-world recorded site history datasets
@@ -145,6 +145,7 @@ func TestPlanHistory(t *testing.T) {
 				//settings.ManageTOUSchedules = true
 			}
 
+			var dcCoupled bool
 			if dataset.SiteID == "site1" {
 				settings.UtilityRateOptions.NetMeteringCredits = true
 			} else if dataset.SiteID == "site2" {
@@ -178,9 +179,11 @@ func TestPlanHistory(t *testing.T) {
 				}
 			} else if dataset.SiteID == "site7" {
 				settings.GridChargeBatteries = false
+				dcCoupled = true
 			} else if dataset.SiteID == "site8" {
 				settings.GridChargeBatteries = false
 				settings.GridExportBatteries = true
+				dcCoupled = true
 			} else if dataset.SiteID == "site9" {
 				settings.UtilityRateOptions.NetMeteringScheme = "nem2"
 				settings.UtilityRateOptions.GenerationRate = "sdcp_power_on"
@@ -201,6 +204,7 @@ func TestPlanHistory(t *testing.T) {
 				settings.GridExportBatteries = true
 				settings.ManageTOUSchedules = true
 				settings.MinBatteryExportDifferenceDollarsPerKWH = 0.07
+				dcCoupled = true
 			} else if dataset.SiteID == "site14" {
 				settings.MinBatterySOC = 30
 				settings.GridExportBatteries = true
@@ -222,6 +226,7 @@ func TestPlanHistory(t *testing.T) {
 					{TimePeriod: types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 16, HourEnd: 21}}}, MinBatterySOC: 20},
 					{TimePeriod: types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 21, HourEnd: 24}}}, MinBatterySOC: 80},
 				}
+				dcCoupled = true
 			} else if dataset.SiteID == "site16" {
 				settings.MinBatterySOC = 10
 				settings.GridExportSolar = false
@@ -381,6 +386,7 @@ func TestPlanHistory(t *testing.T) {
 				simStatus.BatteryCapacityKWH = capacityKWH
 				simStatus.MaxBatteryChargeKW = maxChargeKW
 				simStatus.MaxBatteryDischargeKW = maxDischargeKW
+				simStatus.DCCoupled = simStatus.DCCoupled || dcCoupled
 				var currentVPPEvents []types.VPPEvent
 				for _, ev := range allDatasetVPPEvents {
 					if ev.TSEnd.After(tCurrent) {
@@ -391,7 +397,16 @@ func TestPlanHistory(t *testing.T) {
 
 				decision, plan, err := c.Plan(ctx, simStatus, currentPrice, futurePrices, mockHistory, mockWeather, settings, lastAction)
 				require.NoError(t, err)
-				assert.Empty(t, findDominatedPlanPeriods(plan), "Plan at %s must not contain dominated Hold->Export or Export->Hold periods", simStatus.Timestamp.Format(time.RFC3339))
+				violations := findDominatedPlanPeriods(plan)
+				if len(violations) > 0 {
+					for idx, p := range plan.Periods {
+						t.Logf("[%2d] %s-%s Mode:%v Reason:%v Imp:$%.4f Exp:$%.4f SOC:%.1f->%.1f Solar:%.2f Load:%.2f ImpKWH:%.2f ExpKWH:%.2f",
+							idx, p.TSStart.In(fileLoc).Format("15:04"), p.TSEnd.In(fileLoc).Format("15:04"),
+							p.BatteryMode, p.Reason, p.ImportDollars, p.ExportDollars,
+							p.StartSOC, p.EndSOC, p.SolarKWH, p.LoadKWH, p.GridImportKWH, p.GridExportKWH)
+					}
+				}
+				assert.Empty(t, violations, "Plan at %s must not contain dominated Hold->Export or Export->Hold periods", simStatus.Timestamp.Format(time.RFC3339))
 
 				decidedMode := decision.Action.BatteryMode
 				planModes = append(planModes, decidedMode)
@@ -453,7 +468,7 @@ func TestPlanHistory(t *testing.T) {
 					effectiveMinSOC := settings.GetMinBatterySOC(ctx, tMin.In(fileLoc), fileLoc, effectivePrice)
 					energy := simSOC * capacityKWH / 100.0
 					minEnergy := (effectiveMinSOC / 100.0) * capacityKWH
-					oneWayEff := math.Sqrt(0.90)
+					oneWayEff := math.Sqrt(resolveRoundTripEfficiency(settings.GetOptimizationParams().RoundTripEfficiency, simStatus))
 
 					var pBattCharge float64
 					var pBattDischarge float64
@@ -598,20 +613,12 @@ func TestPlanHistory(t *testing.T) {
 
 			if hasBaseline {
 				simAdjustedNetCostRounded := math.Round(simAdjustedNetCost*1000.0) / 1000.0
-				// Allow up to $0.10 regression per site
 				allowedBuffer := 0.10
 				assert.LessOrEqual(t, simAdjustedNetCostRounded, baseNetCost+allowedBuffer, "Plan simulated adjusted net cost should meet or beat baseline")
 			}
 		})
 	}
 }
-
-// dominatedPeriodPriceGapDollars is the minimum price difference ($/kWh) required to flag a
-// HoldThenCheaperExport or ExportThenCostlierHold sequence as dominated. Swapping 1 kWh of grid import
-// in Standby for 1 kWh less battery export is strictly better even at equal prices because exporting
-// also incurs round-trip losses and wear; a $0.005/kWh threshold catches small TOU tier inversions
-// (such as $0.1048 off-peak import vs $0.0940 on-peak export) while ignoring float rounding noise.
-const dominatedPeriodPriceGapDollars = 0.005
 
 // findDominatedPlanPeriods checks a generated Plan for dominated interval pairs:
 //  1. HoldThenCheaperExport: Standby above reserve with net grid import at rate I, followed later by

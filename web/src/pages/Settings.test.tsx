@@ -2968,5 +2968,38 @@ describe('App & Settings', () => {
             });
         });
     });
+
+    describe('Minimum Difference Degradation Warnings', () => {
+        it('shows degradation warnings when minimum arbitrage profit or battery export margin are lowered below defaults', async () => {
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                gridExportBatteries: true,
+                minArbitrageDifferenceDollarsPerKWH: 0.03,
+                minBatteryExportDifferenceDollarsPerKWH: 0.07,
+            });
+
+            await navigateToSettings();
+
+            const advancedBtn = await screen.findByText('Show Advanced Settings');
+            fireEvent.click(advancedBtn);
+
+            const arbInput = await screen.findByLabelText(/Minimum Arbitrage Profit/i);
+            const exportInput = await screen.findByLabelText(/Battery Export Margin/i);
+
+            expect(screen.queryByTestId('min-arbitrage-warning')).not.toBeInTheDocument();
+            expect(screen.queryByTestId('min-battery-export-warning')).not.toBeInTheDocument();
+
+            fireEvent.change(arbInput, { target: { value: '0.02' } });
+            expect(screen.getByTestId('min-arbitrage-warning')).toHaveTextContent(/battery degradation/i);
+
+            fireEvent.change(exportInput, { target: { value: '0.03' } });
+            expect(screen.getByTestId('min-battery-export-warning')).toHaveTextContent(/battery degradation/i);
+
+            fireEvent.change(arbInput, { target: { value: '0.03' } });
+            fireEvent.change(exportInput, { target: { value: '0.05' } });
+            expect(screen.queryByTestId('min-arbitrage-warning')).not.toBeInTheDocument();
+            expect(screen.queryByTestId('min-battery-export-warning')).not.toBeInTheDocument();
+        });
+    });
 });
 
