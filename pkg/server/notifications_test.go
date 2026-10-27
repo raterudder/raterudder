@@ -3849,6 +3849,197 @@ func TestHandlePriceSpikeNotifications(t *testing.T) {
 		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowAfternoon, getNotifState, mockUserGetter(user))
 		mockS.AssertExpectations(t)
 	})
+
+	t.Run("PriceDip_SuppressedWhenFuturePriceHigherWithinHour", func(t *testing.T) {
+		nowEarlyMorning := time.Date(2026, 9, 4, 6, 7, 0, 0, loc)
+		curHourStart := nowEarlyMorning.Truncate(time.Hour) // 6:00 AM
+		nextHourStart := curHourStart.Add(time.Hour)        // 7:00 AM (53 minutes away)
+
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, nowEarlyMorning)
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "high",
+			},
+		}
+		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
+			{TSStart: curHourStart.AddDate(0, 0, -1), DollarsPerKWH: 0.01, GridUseDollarsPerKWH: 0.044},
+			{TSStart: curHourStart.AddDate(0, 0, -2), DollarsPerKWH: 0.01, GridUseDollarsPerKWH: 0.044},
+			{TSStart: curHourStart.AddDate(0, 0, -3), DollarsPerKWH: 0.01, GridUseDollarsPerKWH: 0.044},
+		}, nil).Once()
+
+		// Current hour (6:00-7:00 AM) has a brief real-time dip to $0.013/kWh,
+		// but the 7:00-8:00 AM future price (within an hour) is $0.083/kWh.
+		data := &dataForNotifications{
+			currentPrice: types.Price{
+				TSStart:              curHourStart,
+				TSEnd:                nextHourStart,
+				DollarsPerKWH:        -0.031,
+				GridUseDollarsPerKWH: 0.044,
+			},
+			futurePrices: []types.Price{
+				{
+					TSStart:              curHourStart,
+					TSEnd:                nextHourStart,
+					DollarsPerKWH:        -0.031,
+					GridUseDollarsPerKWH: 0.044,
+				},
+				{
+					TSStart:              nextHourStart,
+					TSEnd:                nextHourStart.Add(time.Hour),
+					DollarsPerKWH:        0.039,
+					GridUseDollarsPerKWH: 0.044,
+				},
+			},
+		}
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowEarlyMorning)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowEarlyMorning, getNotifState, nil)
+		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("PriceDip_AlertsWhenNextHourStillNegative", func(t *testing.T) {
+		nowEarlyMorning := time.Date(2026, 9, 4, 6, 7, 0, 0, loc)
+		curHourStart := nowEarlyMorning.Truncate(time.Hour) // 6:00 AM
+		nextHourStart := curHourStart.Add(time.Hour)        // 7:00 AM
+
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, nowEarlyMorning)
+		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "medium",
+			},
+		}
+		// 6:00 AM baseline is $0.05, 7:00 AM baseline is -$0.03 (so -$0.04 at 7:00 AM does not meet 2.5¢ negative delta on its own)
+		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
+			{TSStart: curHourStart.Add(-time.Hour).AddDate(0, 0, -1), DollarsPerKWH: 0.01, GridUseDollarsPerKWH: 0.04},
+			{TSStart: curHourStart.Add(-time.Hour).AddDate(0, 0, -2), DollarsPerKWH: 0.01, GridUseDollarsPerKWH: 0.04},
+			{TSStart: curHourStart.Add(-time.Hour).AddDate(0, 0, -3), DollarsPerKWH: 0.01, GridUseDollarsPerKWH: 0.04},
+			{TSStart: nextHourStart.Add(time.Hour).AddDate(0, 0, -1), DollarsPerKWH: -0.07, GridUseDollarsPerKWH: 0.04},
+			{TSStart: nextHourStart.Add(time.Hour).AddDate(0, 0, -2), DollarsPerKWH: -0.07, GridUseDollarsPerKWH: 0.04},
+			{TSStart: nextHourStart.Add(time.Hour).AddDate(0, 0, -3), DollarsPerKWH: -0.07, GridUseDollarsPerKWH: 0.04},
+		}, nil).Once()
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
+		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+			return l.Type == types.NotificationTypePriceDip
+		})).Return(nil).Once()
+
+		// Current hour is -$0.05/kWh and next hour is -$0.04/kWh (still negative, so it should still alert)
+		data := &dataForNotifications{
+			currentPrice: types.Price{
+				TSStart:              curHourStart,
+				TSEnd:                nextHourStart,
+				DollarsPerKWH:        -0.09,
+				GridUseDollarsPerKWH: 0.04,
+			},
+			futurePrices: []types.Price{
+				{
+					TSStart:              nextHourStart,
+					TSEnd:                nextHourStart.Add(time.Hour),
+					DollarsPerKWH:        -0.08,
+					GridUseDollarsPerKWH: 0.04,
+				},
+			},
+		}
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowEarlyMorning)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowEarlyMorning, getNotifState, mockUserGetter(user))
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("PriceDip_AlertsWhenNegativeToSmallPositiveWithinThreshold", func(t *testing.T) {
+		nowEarlyMorning := time.Date(2026, 9, 4, 6, 7, 0, 0, loc)
+		curHourStart := nowEarlyMorning.Truncate(time.Hour) // 6:00 AM
+		nextHourStart := curHourStart.Add(time.Hour)        // 7:00 AM
+
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, nowEarlyMorning)
+		user := createTestPushUser(t, "user1@test.com", pushServer.URL+"/push/user1")
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "high",
+			},
+		}
+		// 6:00 AM baseline is $0.05, 7:00 AM baseline is $0.02 (so $0.001 at 7:00 AM does not meet 3¢ positive delta)
+		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
+			{TSStart: curHourStart.Add(-time.Hour).AddDate(0, 0, -1), DollarsPerKWH: 0.01, GridUseDollarsPerKWH: 0.04},
+			{TSStart: curHourStart.Add(-time.Hour).AddDate(0, 0, -2), DollarsPerKWH: 0.01, GridUseDollarsPerKWH: 0.04},
+			{TSStart: curHourStart.Add(-time.Hour).AddDate(0, 0, -3), DollarsPerKWH: 0.01, GridUseDollarsPerKWH: 0.04},
+			{TSStart: nextHourStart.Add(time.Hour).AddDate(0, 0, -1), DollarsPerKWH: -0.02, GridUseDollarsPerKWH: 0.04},
+			{TSStart: nextHourStart.Add(time.Hour).AddDate(0, 0, -2), DollarsPerKWH: -0.02, GridUseDollarsPerKWH: 0.04},
+			{TSStart: nextHourStart.Add(time.Hour).AddDate(0, 0, -3), DollarsPerKWH: -0.02, GridUseDollarsPerKWH: 0.04},
+		}, nil).Once()
+		mockS.On("GetNotificationLogs", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.NotificationLog{}, nil).Once()
+		mockS.On("AppendNotificationLog", mock.Anything, siteID, mock.MatchedBy(func(l types.NotificationLog) bool {
+			return l.Type == types.NotificationTypePriceDip
+		})).Return(nil).Once()
+
+		// Current hour is -$0.001/kWh and next hour is $0.001/kWh (difference is $0.002 <= $0.011, so it should still alert)
+		data := &dataForNotifications{
+			currentPrice: types.Price{
+				TSStart:              curHourStart,
+				TSEnd:                nextHourStart,
+				DollarsPerKWH:        -0.041,
+				GridUseDollarsPerKWH: 0.04,
+			},
+			futurePrices: []types.Price{
+				{
+					TSStart:              nextHourStart,
+					TSEnd:                nextHourStart.Add(time.Hour),
+					DollarsPerKWH:        -0.039,
+					GridUseDollarsPerKWH: 0.04,
+				},
+			},
+		}
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowEarlyMorning)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowEarlyMorning, getNotifState, mockUserGetter(user))
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("PriceDip_SuppressedWhenNegativeToPositiveAboveThreshold", func(t *testing.T) {
+		nowEarlyMorning := time.Date(2026, 9, 4, 6, 7, 0, 0, loc)
+		curHourStart := nowEarlyMorning.Truncate(time.Hour) // 6:00 AM
+		nextHourStart := curHourStart.Add(time.Hour)        // 7:00 AM
+
+		mockS := &storagemock.MockDatabase{}
+		srv := createTestNotificationServer(t, mockS, nowEarlyMorning)
+
+		notifications := map[string]types.UserNotificationSettings{
+			"user1@test.com": {
+				PriceSpikeAlert: "high",
+			},
+		}
+		mockS.On("GetPriceHistory", mock.Anything, siteID, mock.Anything, mock.Anything).Return([]types.Price{
+			{TSStart: curHourStart.AddDate(0, 0, -1), DollarsPerKWH: 0.01, GridUseDollarsPerKWH: 0.04},
+			{TSStart: curHourStart.AddDate(0, 0, -2), DollarsPerKWH: 0.01, GridUseDollarsPerKWH: 0.04},
+			{TSStart: curHourStart.AddDate(0, 0, -3), DollarsPerKWH: 0.01, GridUseDollarsPerKWH: 0.04},
+		}, nil).Once()
+
+		// Current hour is -$0.005/kWh and next hour is $0.025/kWh (positive and difference is $0.030 > $0.011, so suppress)
+		data := &dataForNotifications{
+			currentPrice: types.Price{
+				TSStart:              curHourStart,
+				TSEnd:                nextHourStart,
+				DollarsPerKWH:        -0.045,
+				GridUseDollarsPerKWH: 0.04,
+			},
+			futurePrices: []types.Price{
+				{
+					TSStart:              nextHourStart,
+					TSEnd:                nextHourStart.Add(time.Hour),
+					DollarsPerKWH:        -0.015,
+					GridUseDollarsPerKWH: 0.04,
+				},
+			},
+		}
+		getNotifState := srv.newSiteRecentNotificationsFetcher(context.Background(), siteID, nowEarlyMorning)
+		srv.handlePriceSpikeNotifications(context.Background(), siteID, notifications, data, nowEarlyMorning, getNotifState, nil)
+		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
+		mockS.AssertExpectations(t)
+	})
 }
 
 func TestHandleSolarUnderproductionNotifications(t *testing.T) {

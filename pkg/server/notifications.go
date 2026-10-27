@@ -93,6 +93,11 @@ const (
 	priceDipNegativeDeltaMultiplier = 0.50
 	priceDipNegativePercentile      = 0.20 // Bottom 20% of all hours when all-in price is negative
 
+	// Minimum price increase ($/kWh) to a positive rate within the next hour required to suppress a price dip alert.
+	// If the next hour remains negative (e.g. -$0.05 to -$0.04) or increases by <= $0.011 (e.g. -$0.001 to $0.001),
+	// the dip alert is still sent.
+	priceDipMaxNextHourIncreaseDollarsPerKWH = 0.011
+
 	// Minimum weather forecast solar (kW) required before solar underproduction is evaluated.
 	solarUnderproductionMinForecastKW = 3.0
 
@@ -2105,11 +2110,18 @@ func (s *Server) handlePriceSpikeNotifications(
 
 	// Calculate total unit electricity cost ($/kWh) including energy supply and grid delivery fees
 	currentCost := data.currentPrice.DollarsPerKWH + data.currentPrice.GridUseDollarsPerKWH
+	nextFutureIdx := -1
+	for i, fp := range data.futurePrices {
+		if data.currentPrice.TSStart.IsZero() || fp.TSStart.After(data.currentPrice.TSStart) {
+			nextFutureIdx = i
+			break
+		}
+	}
 	var nextPriceCost float64
 	var hasFuturePrice bool
-	if len(data.futurePrices) > 0 {
+	if nextFutureIdx >= 0 {
 		hasFuturePrice = true
-		nextPriceCost = data.futurePrices[0].DollarsPerKWH + data.futurePrices[0].GridUseDollarsPerKWH
+		nextPriceCost = data.futurePrices[nextFutureIdx].DollarsPerKWH + data.futurePrices[nextFutureIdx].GridUseDollarsPerKWH
 	}
 
 	// Fast rejection: If neither the current price nor the next future price meets the absolute spike floor
@@ -2227,8 +2239,11 @@ func (s *Server) handlePriceSpikeNotifications(
 				eventEnd = data.currentPrice.TSEnd
 				activeCost = currentCost
 				refPrice = refPriceCurrent
-			} else if len(data.futurePrices) > 0 {
-				nextPrice := data.futurePrices[0]
+				if nextFutureIdx > 0 {
+					scanStartIdx = nextFutureIdx
+				}
+			} else if hasFuturePrice {
+				nextPrice := data.futurePrices[nextFutureIdx]
 				refPriceNext = computeTimeOfDayWindowRefPrice(histPrices, nextPrice.TSStart, siteLoc, medianCost, isDip)
 				isFuture = qualifiesAsPriceAnomaly(nextPriceCost, refPriceNext, rawCosts, reqPercentile, minDelta, isDip)
 				if isFuture {
@@ -2236,7 +2251,7 @@ func (s *Server) handlePriceSpikeNotifications(
 					eventEnd = nextPrice.TSEnd
 					activeCost = nextPriceCost
 					refPrice = refPriceNext
-					scanStartIdx = 1
+					scanStartIdx = nextFutureIdx + 1
 				}
 			}
 
@@ -2260,6 +2275,10 @@ func (s *Server) handlePriceSpikeNotifications(
 			extremeCost = activeCost
 			extremeTime = eventStart
 
+			var higherWithinHour bool
+			var higherPriceCost float64
+			var higherPriceStart time.Time
+
 			// Scan forward only across contiguous qualifying slots of this same event
 			// (breaking as soon as a slot is non-contiguous or returns to normal).
 			for _, fp := range data.futurePrices[scanStartIdx:] {
@@ -2272,6 +2291,11 @@ func (s *Server) handlePriceSpikeNotifications(
 				fpCost := fp.DollarsPerKWH + fp.GridUseDollarsPerKWH
 				fpRef := computeTimeOfDayWindowRefPrice(histPrices, fp.TSStart, siteLoc, medianCost, isDip)
 				if !qualifiesAsPriceAnomaly(fpCost, fpRef, rawCosts, reqPercentile, minDelta, isDip) {
+					if isDip && !fp.TSStart.After(nowLocal.Add(time.Hour)) && fpCost > 0 && fpCost-activeCost > priceDipMaxNextHourIncreaseDollarsPerKWH {
+						higherWithinHour = true
+						higherPriceCost = fpCost
+						higherPriceStart = fp.TSStart
+					}
 					break
 				}
 				if !fp.TSEnd.IsZero() {
@@ -2283,6 +2307,17 @@ func (s *Server) handlePriceSpikeNotifications(
 					extremeCost = fpCost
 					extremeTime = fp.TSStart
 				}
+			}
+
+			if higherWithinHour {
+				log.Ctx(ctx).DebugContext(ctx, "skipping price dip notification: future price is higher within an hour",
+					slog.String("userID", su.userID),
+					slog.Float64("activeCost", activeCost),
+					slog.Float64("higherPriceCost", higherPriceCost),
+					slog.Time("higherPriceStart", higherPriceStart),
+					slog.Time("eventEnd", eventEnd),
+				)
+				continue
 			}
 
 			// Cooldown and Anti-Flapping Logic:
