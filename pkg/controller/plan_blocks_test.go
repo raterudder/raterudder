@@ -1045,6 +1045,21 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 		}
 		validAbove, reasonAbove := validateCandidateTrajectory(actionsHoldExport, timelineAboveGate, exportGateSettings, wearGate, 0.90, state80, 0)
 		assert.True(t, validAbove, "Spread of $0.08/kWh must clear $0.07/kWh export gate without adding degradation on top: "+reasonAbove)
+
+		// 3. Single-period export that drains all the way to minSOC (states[j+1].soc == 20.0% <= minSOC+1.0)
+		// after a Standby interval with light net grid import (0.08 kWh in 20m) must still be rejected by
+		// HoldThenCheaperExport when exportRate - importRate ($0.29482 - $0.20754 = $0.08728) < exportGatePerKWH ($0.09).
+		eversourceGateSettings := settings
+		eversourceGateSettings.MinBatteryExportDifferenceDollarsPerKWH = 0.09
+		eversourceWear := getWearRates(eversourceGateSettings, eversourceGateSettings.GetOptimizationParams())
+		stateNearReserve := planState{soc: 22.5, energyKWH: 30.0 * 0.225, capacityKWH: 30.0, maxChargeKW: 10.0, maxDischargeKW: 10.0, time: now}
+		timelineDrainToReserve := []planInterval{
+			{startTime: now, endTime: now.Add(20 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.20754, exportRate: 0.20254, loadKWH: 0.27, solarKWH: 0.19, minSOC: 20.0},
+			{startTime: now.Add(20 * time.Minute), endTime: now.Add(40 * time.Minute), durationHours: 1.0 / 3.0, importRate: 0.29982, exportRate: 0.29482, loadKWH: 0.16, solarKWH: 0.0, minSOC: 20.0},
+		}
+		validDrain, reasonDrain := validateCandidateTrajectory(actionsHoldExport, timelineDrainToReserve, eversourceGateSettings, eversourceWear, 0.90, stateNearReserve, 0)
+		assert.False(t, validDrain, "Export step that finishes at minSOC must not bypass HoldThenCheaperExport")
+		assert.Equal(t, "HoldThenCheaperExport", reasonDrain)
 	})
 
 	t.Run("EnforcesReserveDeficitRecovery_AndAllowsContinuousChargeWhenMinSOCUnreachable", func(t *testing.T) {
@@ -2847,6 +2862,63 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 		assert.True(t, sawDirectSolarExport, "Must schedule DirectSolarExport during sunny On-Peak hours")
 		assert.True(t, saw7PMBatteryExport, "Must export excess solar-charged battery energy during the final hour of On-Peak (7:00 PM - 8:00 PM)")
 		assert.GreaterOrEqual(t, minEndSOCBefore8PM, 49.5, "7:00 PM battery export must stop at the 50%% Off-Peak reserve floor")
+
+		// 4. Early morning (06:40 AM) with flat 20% MinSOC, light solar, and SOC just above reserve (21.5%):
+		// When MinBatteryExportDifference is $0.09/kWh (> $0.0873/kWh spread), the planner must discharge in
+		// BatteryModeLoad (sufficientBattery) rather than holding in Standby (arbitrageHoldExport) while importing
+		// from the grid to save energy for a single-interval end-of-peak export to 20.0%.
+		t0640 := time.Date(2026, 10, 15, 6, 40, 0, 0, nyLoc)
+		t0600 := time.Date(2026, 10, 15, 6, 0, 0, 0, nyLoc)
+		var future0640 []types.Price
+		for i := 1; i < 28; i++ {
+			future0640 = append(future0640, priceForHour(t0600.Add(time.Duration(i)*time.Hour)))
+		}
+		var fallHistory []types.EnergyStats
+		for d := 1; d <= 7; d++ {
+			dayStart := time.Date(t0640.Year(), t0640.Month(), t0640.Day(), 0, 0, 0, 0, nyLoc).AddDate(0, 0, -d)
+			for h := 0; h < 24; h++ {
+				solar := 0.0
+				switch h {
+				case 8:
+					solar = 0.6
+				case 9:
+					solar = 1.3
+				case 10:
+					solar = 1.7
+				case 11:
+					solar = 2.5
+				case 12, 13:
+					solar = 1.6
+				case 14, 15:
+					solar = 0.9
+				case 16:
+					solar = 0.2
+				}
+				fallHistory = append(fallHistory, types.EnergyStats{
+					TSHourStart:  dayStart.Add(time.Duration(h) * time.Hour),
+					HomeKWH:      0.6,
+					SolarKWH:     solar,
+					TimeLocation: "America/New_York",
+				})
+			}
+		}
+		flat20Settings := settings
+		flat20Settings.MinBatterySOC = 20.0
+		flat20Settings.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
+			{UtilityPeriodName: "Off-Peak", MinBatterySOC: 20},
+			{UtilityPeriodName: "On-Peak", MinBatterySOC: 20},
+		}
+		status0640 := status1100
+		status0640.Timestamp = t0640
+		status0640.BatterySOC = 21.5
+		status0640.HomeKW = 1.0
+		status0640.SolarKW = 0.0
+
+		dec0640, _, err := c.Plan(ctx, status0640, priceForHour(t0600), future0640, fallHistory, nil, flat20Settings, nil)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeLoad, dec0640.Action.BatteryMode,
+			"At 06:40 AM with 21.5%% SOC and ExportMargin=$0.09, must discharge in BatteryModeLoad rather than holding in Standby for a $0.2948 export")
+		assert.Equal(t, types.ActionReasonSufficientBattery, dec0640.Action.Reason)
 	})
 }
 

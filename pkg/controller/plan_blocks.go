@@ -1326,7 +1326,7 @@ func validateCandidateTrajectory(
 			actions[i].reason != types.ActionReasonVPPActive &&
 			actions[i].reason != types.ActionReasonEVChargingStandby &&
 			states[i].soc > timeline[i].minSOC+1.0 {
-			standbyImportedFromGrid := metrics[i].gridImportKWH > minSignificantBatteryPowerKW*timeline[i].durationHours
+			standbyImportedFromGrid := metrics[i].gridImportKWH > 1e-6
 			for j := i + 1; j < len(timeline); j++ {
 				if actions[j].reason == types.ActionReasonVPPPrep || actions[j].reason == types.ActionReasonVPPActive {
 					break
@@ -1338,7 +1338,6 @@ func validateCandidateTrajectory(
 				//   Requiring states[j+1].soc > states[j].soc ensures we only break when solar actually refills
 				//   the battery to >=98%, not when the battery was already sitting at >=98% in Standby.
 				if states[j].soc <= timeline[j].minSOC+1.0 ||
-					states[j+1].soc <= timeline[j].minSOC+1.0 ||
 					actions[j].batteryMode == types.BatteryModeChargeAny ||
 					(states[j+1].soc > states[j].soc && states[j+1].soc >= almostFullSOC) {
 					break
@@ -1351,6 +1350,9 @@ func validateCandidateTrajectory(
 					if timeline[j].exportRate-timeline[i].importRate < minExportDiff {
 						return false, "HoldThenCheaperExport"
 					}
+				}
+				if states[j+1].soc <= timeline[j].minSOC+1.0 {
+					break
 				}
 			}
 		}
@@ -1377,7 +1379,7 @@ func validateCandidateTrajectory(
 				if actions[j].batteryMode == types.BatteryModeStandby &&
 					states[j].soc > timeline[j].minSOC+1.0 {
 					minExportDiff := -dominatedPeriodPriceGapDollars
-					if metrics[j].gridImportKWH > minSignificantBatteryPowerKW*timeline[j].durationHours {
+					if metrics[j].gridImportKWH > 1e-6 {
 						minExportDiff = wear.exportGatePerKWH - priceEpsilonForEquality
 					}
 					if timeline[i].exportRate-timeline[j].importRate < minExportDiff {
