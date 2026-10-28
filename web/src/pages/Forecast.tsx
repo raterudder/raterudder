@@ -25,9 +25,11 @@ type ChartConfig = {
     color: string;
     gradientId: string;
     unit: string;
+    height?: number;
     helpDescription?: React.ReactNode;
     areaType?: 'monotone' | 'step' | 'stepAfter' | 'stepBefore';
     referenceLine?: { dataKey: string; label: string; color: string };
+    additionalAreas?: { dataKey: string; label?: string; color: string; gradientId: string; type?: 'monotone' | 'step' | 'stepAfter' | 'stepBefore' }[];
     additionalLines?: { dataKey: string; label?: string; color: string; strokeDasharray?: string; type?: 'monotone' | 'step' | 'stepAfter' | 'stepBefore' }[];
 };
 
@@ -97,30 +99,62 @@ const charts: ChartConfig[] = [
     },
 ];
 
-import { ALL_ZONES, classifyPlanPeriod } from '../utils/forecastUtils';
-
+import {
+    ALL_ZONES,
+    classifyPlanPeriod,
+    buildPlanSolarLoadSeries,
+    buildPlanPriceSeries,
+    computePlanSummaryStats,
+    buildPlanSummaryBeats,
+    type PlanSummaryStats,
+} from '../utils/forecastUtils';
+import { formatTime, getCurrencySymbol, type DaySummaryBeat } from '../utils/dashboardUtils';
+import { SummaryBeatsList } from '../components/ActionTimeline';
 
 const planCharts: ChartConfig[] = [
     {
-        title: 'Planned Battery SOC (%)',
+        title: 'Battery Schedule & SOC (%)',
         dataKey: 'plannedSOC',
         color: '#38bdf8',
         gradientId: 'plannedBatteryGrad',
         unit: '%',
+        height: 200,
         helpDescription: (
             <p>
-                Displays the planned State of Charge (SOC) of your battery as optimized by RateRudder&apos;s SmartPlan engine.
+                Displays the planned State of Charge (SOC) and upcoming dispatch schedule of your battery as optimized by RateRudder&apos;s SmartPlan engine.
                 The colored line segments highlight scheduled operations (charging from solar, powering home, grid charging, and standby holds).
                 The dashed red line represents your Minimum Reserve SOC threshold.
             </p>
         ),
     },
-    charts[1],
-    charts[2],
-    charts[3],
+    {
+        title: 'Predicted Solar & Home Load (kWh)',
+        dataKey: 'predictedSolarKWH',
+        color: 'var(--warning)',
+        gradientId: 'solarGrad',
+        unit: ' kWh',
+        height: 180,
+        helpDescription: (
+            <p>
+                Compares expected hourly solar generation against predicted home electricity usage (in kWh).
+                When solar rises above home load, surplus solar energy recharges your battery or exports to the grid.
+            </p>
+        ),
+        additionalAreas: [
+            {
+                dataKey: 'avgHomeLoadKWH',
+                label: 'Home Load',
+                color: '#a855f7',
+                gradientId: 'loadGrad',
+                type: 'monotone',
+            },
+        ],
+    },
+    {
+        ...charts[3],
+        height: 140,
+    },
 ];
-
-import { formatTime } from '../utils/dashboardUtils';
 
 function formatHour(ts: string, referenceTs?: string): string {
     if (!ts) return '';
@@ -136,7 +170,39 @@ interface ProcessedModelingHour extends ModelingHour {
     gridExportDollarsPerKWH?: number;
 }
 
-function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerAction, planPeriods }: {
+function syncByTimestamp(tooltipTicks: readonly any[], syncState: any): number {
+    if (!tooltipTicks || tooltipTicks.length === 0) return -1;
+    const activeLabel = syncState?.activeLabel;
+    if (activeLabel !== undefined && activeLabel !== null) {
+        const exactIdx = tooltipTicks.findIndex((t) => t.value === activeLabel);
+        if (exactIdx !== -1) return exactIdx;
+        const targetMs = new Date(String(activeLabel)).getTime();
+        if (!isNaN(targetMs)) {
+            let bestIdx = 0;
+            for (let i = 0; i < tooltipTicks.length; i++) {
+                const tickMs = new Date(String(tooltipTicks[i].value)).getTime();
+                if (!isNaN(tickMs) && tickMs <= targetMs) {
+                    bestIdx = i;
+                }
+            }
+            return bestIdx;
+        }
+    }
+    return syncState?.activeTooltipIndex ?? -1;
+}
+
+function ForecastChart({
+    data,
+    config,
+    isMobile,
+    showCurrentTime,
+    nowMs,
+    headerAction,
+    planPeriods,
+    planStats,
+    scheduleBeats,
+    currencySymbol = '$',
+}: {
     data: any[];
     config: ChartConfig;
     isMobile: boolean;
@@ -144,6 +210,9 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
     nowMs: number;
     headerAction?: React.ReactNode;
     planPeriods?: PlanPeriod[];
+    planStats?: PlanSummaryStats | null;
+    scheduleBeats?: DaySummaryBeat[];
+    currencySymbol?: string;
 }) {
     // Compute reference value if applicable
     const refValue = config.referenceLine
@@ -227,6 +296,8 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
         return undefined;
     }, [data]);
 
+    const chartHeight = config.height ?? 200;
+
     return (
         <div className="chart-card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
@@ -255,6 +326,30 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                     )}
                 </div>
             )}
+            {config.dataKey === 'predictedSolarKWH' && config.additionalAreas && config.additionalAreas.length > 0 && (
+                <div className="mode-legend" aria-label="Solar and Load Legend">
+                    <div className="mode-legend-item">
+                        <span className="mode-legend-line" style={{ backgroundColor: config.color }} />
+                        <span>Solar</span>
+                        {planStats && (
+                            <span className="chart-stat-badge" data-testid="solar-total-badge">
+                                {planStats.totalSolarKWH.toFixed(1)} kWh
+                            </span>
+                        )}
+                    </div>
+                    {config.additionalAreas.map((area) => (
+                        <div key={area.dataKey} className="mode-legend-item">
+                            <span className="mode-legend-line" style={{ backgroundColor: area.color }} />
+                            <span>{area.label || area.dataKey}</span>
+                            {planStats && area.dataKey === 'avgHomeLoadKWH' && (
+                                <span className="chart-stat-badge" data-testid="load-total-badge">
+                                    {planStats.totalLoadKWH.toFixed(1)} kWh
+                                </span>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            )}
             {config.dataKey === 'gridChargeDollarsPerKWH' && (
                 <div className="mode-legend" aria-label="Rate Legend">
                     <div className="mode-legend-item">
@@ -270,15 +365,36 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                         />
                         <span>Export Rate</span>
                     </div>
+                    {planStats && (
+                        <div className="chart-rate-callouts">
+                            <span className="chart-stat-badge" data-testid="rate-low-badge">
+                                Low: {currencySymbol}{planStats.minImportDollars.toFixed(2)}/kWh
+                            </span>
+                            <span className="chart-stat-badge" data-testid="rate-peak-badge">
+                                Peak: {currencySymbol}{planStats.maxImportDollars.toFixed(2)}/kWh
+                            </span>
+                        </div>
+                    )}
                 </div>
             )}
-            <ResponsiveContainer width="100%" height={200}>
-                <AreaChart data={data} syncId="forecast" margin={{ top: 5, right: isMobile ? 0 : 20, left: 0, bottom: 5 }}>
+            <ResponsiveContainer width="100%" height={chartHeight}>
+                <AreaChart
+                    data={data}
+                    syncId="forecast"
+                    syncMethod={syncByTimestamp}
+                    margin={{ top: 5, right: isMobile ? 0 : 20, left: 0, bottom: 5 }}
+                >
                     <defs>
                         <linearGradient id={config.gradientId} x1="0" y1="0" x2="0" y2="1">
                             <stop offset="5%" stopColor={config.color} stopOpacity={0.3} />
                             <stop offset="95%" stopColor={config.color} stopOpacity={0.02} />
                         </linearGradient>
+                        {config.additionalAreas?.map((area) => (
+                            <linearGradient key={area.gradientId} id={area.gradientId} x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor={area.color} stopOpacity={0.28} />
+                                <stop offset="95%" stopColor={area.color} stopOpacity={0.02} />
+                            </linearGradient>
+                        ))}
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--outline-variant)" vertical={false} opacity={0.4} />
                     <XAxis
@@ -453,6 +569,17 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                                 fill={`url(#${config.gradientId})`}
                                 isAnimationActive={true}
                             />
+                            {config.additionalAreas?.map((area) => (
+                                <Area
+                                    key={area.dataKey}
+                                    type={area.type || 'monotone'}
+                                    dataKey={area.dataKey}
+                                    stroke={area.color}
+                                    strokeWidth={2.5}
+                                    fill={`url(#${area.gradientId})`}
+                                    isAnimationActive={true}
+                                />
+                            ))}
                             {config.additionalLines?.map((line) => (
                                 <Line
                                     key={line.dataKey}
@@ -535,6 +662,13 @@ function ForecastChart({ data, config, isMobile, showCurrentTime, nowMs, headerA
                     )}
                 </AreaChart>
             </ResponsiveContainer>
+            {scheduleBeats && scheduleBeats.length > 0 && (
+                <SummaryBeatsList
+                    beats={scheduleBeats}
+                    className="forecast-plan-beats"
+                    data-testid="plan-schedule-beats"
+                />
+            )}
         </div>
     );
 }
@@ -935,6 +1069,43 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
         });
     }, [rawModelingData, includeHistory, isPlanActive]);
 
+    const currencySymbol = getCurrencySymbol(settings?.utilityProvider);
+
+    const solarLoadData = useMemo(() => {
+        if (!isPlanActive || !rawModelingData?.plan) return [];
+        return buildPlanSolarLoadSeries(
+            rawModelingData.plan.periods,
+            rawModelingData.energyHistory,
+            includeHistory
+        );
+    }, [rawModelingData, includeHistory, isPlanActive]);
+
+    const priceData = useMemo(() => {
+        if (!isPlanActive || !rawModelingData?.plan) return [];
+        return buildPlanPriceSeries(
+            rawModelingData.plan.periods,
+            rawModelingData.futurePrices,
+            rawModelingData.priceHistory,
+            includeHistory
+        );
+    }, [rawModelingData, includeHistory, isPlanActive]);
+
+    const planStats = useMemo(() => {
+        if (!isPlanActive || !rawModelingData?.plan) return null;
+        return computePlanSummaryStats(
+            rawModelingData.plan.periods,
+            rawModelingData.futurePrices
+        );
+    }, [rawModelingData, isPlanActive]);
+
+    const planScheduleBeats = useMemo(() => {
+        if (!isPlanActive || !rawModelingData?.plan) return [];
+        return buildPlanSummaryBeats(
+            rawModelingData.plan.periods,
+            currencySymbol
+        );
+    }, [rawModelingData, isPlanActive, currencySymbol]);
+
     if (loading) return (
         <div className="loading-screen">
             <span className="loading-spinner loading-spinner-large" aria-hidden="true"></span>
@@ -1046,16 +1217,29 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
                                     </div>
                                 </Field.Root>
                             ) : undefined;
+
+                            let chartData = data;
+                            if (isPlanActive) {
+                                if (config.dataKey === 'predictedSolarKWH') {
+                                    chartData = solarLoadData;
+                                } else if (config.dataKey === 'gridChargeDollarsPerKWH') {
+                                    chartData = priceData;
+                                }
+                            }
+
                             return (
                                 <ForecastChart
                                     key={config.dataKey}
-                                    data={data}
+                                    data={chartData}
                                     config={config}
                                     isMobile={isMobile}
                                     showCurrentTime={includeHistory}
                                     nowMs={nowMs}
                                     headerAction={headerAction}
                                     planPeriods={rawModelingData?.plan?.periods}
+                                    planStats={isPlanActive ? planStats : null}
+                                    scheduleBeats={isPlanActive && config.dataKey === 'plannedSOC' ? planScheduleBeats : undefined}
+                                    currencySymbol={currencySymbol}
                                 />
                             );
                         })}

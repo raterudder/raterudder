@@ -688,6 +688,7 @@ export interface EnergyHistoryRes {
     tsHourStart: string;
     avgBatterySOC: number;
     solarKWH: number;
+    homeLoadKWH?: number;
 }
 
 export interface PriceHistoryRes {
@@ -717,6 +718,7 @@ export interface ForecastResponse {
     simulation?: ModelingHour[];
     energyHistory?: EnergyHistoryRes[];
     priceHistory?: PriceHistoryRes[];
+    futurePrices?: PriceHistoryRes[];
     weather?: WeatherRes[];
     updated?: string;
 }

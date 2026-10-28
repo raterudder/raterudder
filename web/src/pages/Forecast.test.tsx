@@ -355,15 +355,19 @@ describe('Forecast Page', () => {
         await waitFor(() => {
             expect(screen.getByText('24-Hour Energy Plan')).toBeInTheDocument();
             expect(screen.getByText('SmartPlan')).toBeInTheDocument();
-            expect(screen.getByText('Planned Battery SOC (%)')).toBeInTheDocument();
+            expect(screen.getByText('Battery Schedule & SOC (%)')).toBeInTheDocument();
             expect(screen.queryByText('Projected Benefit')).not.toBeInTheDocument();
             expect(screen.getByText('Projected Grid Cost')).toBeInTheDocument();
             expect(screen.getByText('$3.45')).toBeInTheDocument();
             expect(screen.getByText('Projected Export Credits')).toBeInTheDocument();
             expect(screen.getByText('$0.60')).toBeInTheDocument();
-            expect(screen.getByText('Predicted Solar (kWh)')).toBeInTheDocument();
-            expect(screen.getByText('Predicted Home Load (kWh)')).toBeInTheDocument();
+            expect(screen.getByTestId('plan-schedule-beats')).toBeInTheDocument();
+            expect(screen.getByText('Predicted Solar & Home Load (kWh)')).toBeInTheDocument();
+            expect(screen.getByTestId('solar-total-badge')).toBeInTheDocument();
+            expect(screen.getByTestId('load-total-badge')).toBeInTheDocument();
             expect(screen.getByText('Grid Charge Cost ($/kWh)')).toBeInTheDocument();
+            expect(screen.getByTestId('rate-low-badge')).toHaveTextContent('Low: $0.17/kWh');
+            expect(screen.getByTestId('rate-peak-badge')).toHaveTextContent('Peak: $0.47/kWh');
         });
     });
 
@@ -509,8 +513,9 @@ describe('Forecast Page', () => {
 
         await waitFor(() => {
             expect(screen.getByText('24-Hour Energy Plan')).toBeInTheDocument();
-            expect(screen.getByText('Predicted Solar (kWh)')).toBeInTheDocument();
-            expect(screen.getByText('Predicted Home Load (kWh)')).toBeInTheDocument();
+            expect(screen.getByText('Predicted Solar & Home Load (kWh)')).toBeInTheDocument();
+            expect(screen.getByTestId('solar-total-badge')).toHaveTextContent('1.5 kWh');
+            expect(screen.getByTestId('load-total-badge')).toHaveTextContent('0.6 kWh');
         });
     });
 
@@ -846,6 +851,39 @@ describe('Forecast Page', () => {
                 value: originalLocation,
             });
         }
+    });
+
+    it('uses backend futurePrices and renders Upcoming Schedule blocks with SOC and rate metadata', async () => {
+        const plan = makeTestPlan();
+        (fetchModeling as any).mockResolvedValue({
+            plan,
+            energyHistory: [],
+            priceHistory: [],
+            futurePrices: [
+                {
+                    tsHourStart: '2026-02-11T14:00:00Z',
+                    dollarsPerKWH: 0.09,
+                    gridUseDollarsPerKWH: 0,
+                    exportDollarsPerKWH: 0.04,
+                },
+                {
+                    tsHourStart: '2026-02-11T15:00:00Z',
+                    dollarsPerKWH: 0.38,
+                    gridUseDollarsPerKWH: 0,
+                    exportDollarsPerKWH: 0.12,
+                },
+            ],
+        });
+
+        renderForecast();
+
+        await waitFor(() => {
+            expect(screen.getByTestId('plan-schedule-beats')).toBeInTheDocument();
+        });
+
+        expect(screen.getByText('Charging before peak')).toBeInTheDocument();
+        expect(screen.getByTestId('rate-low-badge')).toHaveTextContent('Low: $0.09/kWh');
+        expect(screen.getByTestId('rate-peak-badge')).toHaveTextContent('Peak: $0.38/kWh');
     });
 });
 

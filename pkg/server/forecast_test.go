@@ -425,8 +425,6 @@ func TestHandleForecast(t *testing.T) {
 
 		assert.Len(t, data.Simulation, 24, "should return exactly 24 simulated hours")
 
-		assert.Len(t, data.Simulation, 24, "should return exactly 24 simulated hours")
-
 		assert.Len(t, data.EnergyHistory, 2)
 		for _, eh := range data.EnergyHistory {
 			if eh.TSHourStart.Equal(pastHour2) {
@@ -1378,8 +1376,201 @@ func TestHandleForecast(t *testing.T) {
 		assert.Equal(t, now.UTC(), data.Plan.TSCreated)
 		assert.Greater(t, len(data.Plan.Periods), 1, "should return newly generated multi-period plan instead of cached 1-period plan")
 		assert.NotEqual(t, 99.99, data.Plan.TotalProjectedCost)
+		assert.Len(t, data.FuturePrices, 24, "should reconstruct 24 hourly future prices from 20-minute plan periods")
 		mockU.AssertCalled(t, "GetCurrentPrice", mock.Anything)
 		mockU.AssertCalled(t, "GetFuturePrices", mock.Anything)
 		mockS.AssertNotCalled(t, "InsertAction", mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("Reconstructs FuturePrices from 20-minute plan periods while preserving sub-hourly rate changes", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetSite", mock.Anything, mock.Anything).Return(types.Site{}, nil)
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			MinBatterySOC:   5.0,
+			UtilityProvider: "test",
+			ESS:             "mock",
+			PlanMode:        true,
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+
+		plan := &types.Plan{
+			TSCreated:          now.Add(-5 * time.Minute),
+			HorizonHours:       2,
+			TotalProjectedCost: 1.25,
+			Periods: []types.PlanPeriod{
+				// First hour starts at :20 with two 20-minute intervals at identical price
+				{
+					TSStart:       now.Add(20 * time.Minute),
+					TSEnd:         now.Add(40 * time.Minute),
+					DurationHours: 1.0 / 3.0,
+					ImportDollars: 0.12,
+					ExportDollars: 0.04,
+				},
+				{
+					TSStart:       now.Add(40 * time.Minute),
+					TSEnd:         now.Add(time.Hour),
+					DurationHours: 1.0 / 3.0,
+					ImportDollars: 0.12,
+					ExportDollars: 0.04,
+				},
+				// Second hour has three 20-minute intervals at identical price
+				{
+					TSStart:       now.Add(time.Hour),
+					TSEnd:         now.Add(80 * time.Minute),
+					DurationHours: 1.0 / 3.0,
+					ImportDollars: 0.18,
+					ExportDollars: 0.06,
+				},
+				{
+					TSStart:       now.Add(80 * time.Minute),
+					TSEnd:         now.Add(100 * time.Minute),
+					DurationHours: 1.0 / 3.0,
+					ImportDollars: 0.18,
+					ExportDollars: 0.06,
+				},
+				{
+					TSStart:       now.Add(100 * time.Minute),
+					TSEnd:         now.Add(2 * time.Hour),
+					DurationHours: 1.0 / 3.0,
+					ImportDollars: 0.18,
+					ExportDollars: 0.06,
+				},
+				// Third hour has a mid-hour TOU/30-min rate change at :30
+				{
+					TSStart:       now.Add(2 * time.Hour),
+					TSEnd:         now.Add(150 * time.Minute),
+					DurationHours: 0.5,
+					ImportDollars: 0.18,
+					ExportDollars: 0.06,
+				},
+				{
+					TSStart:       now.Add(150 * time.Minute),
+					TSEnd:         now.Add(3 * time.Hour),
+					DurationHours: 0.5,
+					ImportDollars: 0.35,
+					ExportDollars: 0.15,
+				},
+			},
+		}
+
+		action := &types.Action{
+			Timestamp:    now.Add(-5 * time.Minute),
+			BatteryMode:  types.BatteryModeStandby,
+			CurrentPrice: &types.Price{DollarsPerKWH: 0.12, TSStart: now, TSEnd: now.Add(time.Hour)},
+			Plan:         plan,
+			SystemStatus: types.SystemStatus{
+				BatterySOC:         50,
+				BatteryCapacityKWH: 10.0,
+				Timestamp:          now.Add(-5 * time.Minute),
+			},
+		}
+
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return(action, nil)
+		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{}, nil)
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
+		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil)
+
+		srv := &Server{
+			utilities:  utility.NewMap(mockS),
+			ess:        ess.NewMap(),
+			storage:    mockS,
+			controller: controller.NewController(),
+			bypassAuth: true,
+			nowFunc:    func() time.Time { return now },
+		}
+
+		req := httptest.NewRequest("GET", "/api/forecast", nil)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
+		w := httptest.NewRecorder()
+
+		srv.handleForecast(w, req)
+
+		resp := w.Result()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var data ForecastRes
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&data))
+		if assert.Len(t, data.FuturePrices, 4) {
+			assert.Equal(t, now, data.FuturePrices[0].TSHourStart)
+			assert.InDelta(t, 0.12, data.FuturePrices[0].DollarsPerKWH, 1e-4)
+			assert.InDelta(t, 0.04, data.FuturePrices[0].ExportDollarsPerKWH, 1e-4)
+
+			assert.Equal(t, now.Add(time.Hour), data.FuturePrices[1].TSHourStart)
+			assert.InDelta(t, 0.18, data.FuturePrices[1].DollarsPerKWH, 1e-4)
+			assert.InDelta(t, 0.06, data.FuturePrices[1].ExportDollarsPerKWH, 1e-4)
+
+			assert.Equal(t, now.Add(2*time.Hour), data.FuturePrices[2].TSHourStart)
+			assert.InDelta(t, 0.18, data.FuturePrices[2].DollarsPerKWH, 1e-4)
+
+			assert.Equal(t, now.Add(150*time.Minute), data.FuturePrices[3].TSHourStart)
+			assert.InDelta(t, 0.35, data.FuturePrices[3].DollarsPerKWH, 1e-4)
+			assert.InDelta(t, 0.15, data.FuturePrices[3].ExportDollarsPerKWH, 1e-4)
+		}
+
+		// Edge case 1: Plan starts at :40 when CurrentPrice.TSStart is at a mid-hour :30 boundary
+		midHourPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:       now.Add(40 * time.Minute),
+					TSEnd:         now.Add(time.Hour),
+					DurationHours: 1.0 / 3.0,
+					ImportDollars: 0.25,
+					ExportDollars: 0.10,
+				},
+				{
+					TSStart:       now.Add(time.Hour),
+					TSEnd:         now.Add(80 * time.Minute),
+					DurationHours: 1.0 / 3.0,
+					ImportDollars: 0.25,
+					ExportDollars: 0.10,
+				},
+			},
+		}
+		midHourCurrentPrice := types.Price{
+			TSStart:       now.Add(30 * time.Minute),
+			TSEnd:         now.Add(time.Hour),
+			DollarsPerKWH: 0.25,
+		}
+		midHourPrices := reconstructFuturePrices(midHourPlan, midHourCurrentPrice)
+		if assert.Len(t, midHourPrices, 2) {
+			assert.Equal(t, now.Add(30*time.Minute), midHourPrices[0].TSHourStart, "should preserve :30 rate boundary from CurrentPrice")
+			assert.Equal(t, now.Add(time.Hour), midHourPrices[1].TSHourStart)
+		}
+
+		// Edge case 2: Plan starts at :55 with a <10m merged initial period [11:55, 12:20) crossing the hour boundary
+		mergedHourPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:       now.Add(55 * time.Minute),
+					TSEnd:         now.Add(80 * time.Minute),
+					DurationHours: 25.0 / 60.0,
+					ImportDollars: 0.14,
+					ExportDollars: 0.05,
+				},
+				{
+					TSStart:       now.Add(80 * time.Minute),
+					TSEnd:         now.Add(100 * time.Minute),
+					DurationHours: 1.0 / 3.0,
+					ImportDollars: 0.14,
+					ExportDollars: 0.05,
+				},
+				{
+					TSStart:       now.Add(100 * time.Minute),
+					TSEnd:         now.Add(2 * time.Hour),
+					DurationHours: 1.0 / 3.0,
+					ImportDollars: 0.14,
+					ExportDollars: 0.05,
+				},
+			},
+		}
+		mergedHourCurrentPrice := types.Price{
+			TSStart:       now,
+			TSEnd:         now.Add(time.Hour),
+			DollarsPerKWH: 0.14,
+		}
+		mergedHourPrices := reconstructFuturePrices(mergedHourPlan, mergedHourCurrentPrice)
+		if assert.Len(t, mergedHourPrices, 2) {
+			assert.Equal(t, now, mergedHourPrices[0].TSHourStart, "should emit current hour :00")
+			assert.Equal(t, now.Add(time.Hour), mergedHourPrices[1].TSHourStart, "should emit next hour :00 when period crosses hour boundary")
+		}
 	})
 }

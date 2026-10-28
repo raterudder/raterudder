@@ -16,9 +16,44 @@ import {
     isZeroTime,
     getReasonText,
     gridChargeCost,
-    type ActionSummary
+    type ActionSummary,
+    type DaySummaryBeat
 } from '../utils/dashboardUtils';
 import './ActionTimeline.css';
+
+export const SummaryBeatsList: React.FC<{
+    beats: DaySummaryBeat[];
+    className?: string;
+    'data-testid'?: string;
+}> = ({ beats, className = '', 'data-testid': testId }) => {
+    if (!beats || beats.length === 0) return null;
+    return (
+        <div className={`day-summary-beats ${className}`.trim()} data-testid={testId}>
+            {beats.map((beat, idx) => (
+                <div key={idx} className={`day-summary-beat beat-${beat.category}`}>
+                    <span className="beat-dot" aria-hidden="true" />
+                    <div className="beat-body">
+                        <div className="beat-top">
+                            <span className="beat-headline">{beat.headline}</span>
+                            {beat.timeLabel && <span className="beat-time">{beat.timeLabel}</span>}
+                        </div>
+                        {(beat.socText || beat.priceText) && (
+                            <div className="beat-meta">
+                                {beat.socText && <span className="beat-soc">{beat.socText}</span>}
+                                {beat.socText && beat.priceText && (
+                                    <span className="beat-sep" aria-hidden="true">
+                                        ·
+                                    </span>
+                                )}
+                                {beat.priceText && <span className="beat-price">{beat.priceText}</span>}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            ))}
+        </div>
+    );
+};
 
 interface ActionTimelineProps {
     groupedActions: (Action | ActionSummary)[];
@@ -294,32 +329,7 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({
                     </div>
                 )}
 
-                {daySummary.beats.length > 0 && (
-                    <div className="day-summary-beats">
-                        {daySummary.beats.map((beat, idx) => (
-                            <div key={idx} className={`day-summary-beat beat-${beat.category}`}>
-                                <span className="beat-dot" aria-hidden="true" />
-                                <div className="beat-body">
-                                    <div className="beat-top">
-                                        <span className="beat-headline">{beat.headline}</span>
-                                        {beat.timeLabel && <span className="beat-time">{beat.timeLabel}</span>}
-                                    </div>
-                                    {(beat.socText || beat.priceText) && (
-                                        <div className="beat-meta">
-                                            {beat.socText && <span className="beat-soc">{beat.socText}</span>}
-                                            {beat.socText && beat.priceText && (
-                                                <span className="beat-sep" aria-hidden="true">
-                                                    ·
-                                                </span>
-                                            )}
-                                            {beat.priceText && <span className="beat-price">{beat.priceText}</span>}
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                )}
+                {daySummary.beats.length > 0 && <SummaryBeatsList beats={daySummary.beats} />}
             </div>
 
             <Collapsible.Root open={open} onOpenChange={setOpen}>

@@ -661,9 +661,9 @@ const classifySummaryItem = (
     return 'standby';
 };
 
-const getSummaryBeatHeadline = (
+export const getSummaryBeatHeadline = (
     category: SummaryPhaseCategory,
-    action: Action,
+    action: Pick<Action, 'reason' | 'batteryMode' | 'solarMode' | 'systemStatus'>,
     isCurrent: boolean
 ): string => {
     const hasStorms = Boolean(action.systemStatus?.storms && action.systemStatus.storms.length > 0);

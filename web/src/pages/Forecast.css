@@ -148,4 +148,48 @@
   flex-shrink: 0;
 }
 
+.chart-stat-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--on-surface);
+  background: var(--surface-container-low);
+  border: 1px solid var(--border);
+}
+
+.chart-rate-callouts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+/* ============================================
+   Inline Schedule Beats (Inside Battery Chart Card)
+   ============================================ */
+
+.day-summary-beats.forecast-plan-beats {
+  margin-top: 0.75rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem 2rem;
+}
+
+@media (max-width: 768px) {
+  .day-summary-beats.forecast-plan-beats {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+
+  .chart-rate-callouts {
+    margin-left: 0;
+  }
+}
+
+
 

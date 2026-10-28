@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -52,6 +53,7 @@ type ForecastRes struct {
 	Simulation    []controller.SimHour `json:"simulation,omitempty"`
 	EnergyHistory []EnergyHistoryRes   `json:"energyHistory"`
 	PriceHistory  []PriceHistoryRes    `json:"priceHistory"`
+	FuturePrices  []PriceHistoryRes    `json:"futurePrices,omitempty"`
 	Updated       time.Time            `json:"updated"`
 }
 
@@ -84,6 +86,54 @@ func buildPriceHistoryRes(prices []types.Price) []PriceHistoryRes {
 			GridUseDollarsPerKWH: p.GridUseDollarsPerKWH,
 			ExportDollarsPerKWH:  exportRate,
 		})
+	}
+	return res
+}
+
+func truncateLocalHour(t time.Time) time.Time {
+	return t.Add(-time.Duration(t.Minute())*time.Minute - time.Duration(t.Second())*time.Second - time.Duration(t.Nanosecond()))
+}
+
+func reconstructFuturePrices(plan *types.Plan, currentPrice types.Price) []PriceHistoryRes {
+	if plan == nil || len(plan.Periods) == 0 {
+		return nil
+	}
+	const priceEpsilon = 1e-3
+	var res []PriceHistoryRes
+	appendEntry := func(ts time.Time, importDollars, exportDollars float64) {
+		if len(res) > 0 {
+			last := res[len(res)-1]
+			if truncateLocalHour(last.TSHourStart).Equal(truncateLocalHour(ts)) &&
+				math.Abs(last.DollarsPerKWH-importDollars) < priceEpsilon &&
+				math.Abs(last.ExportDollarsPerKWH-exportDollars) < priceEpsilon {
+				return
+			}
+		}
+		res = append(res, PriceHistoryRes{
+			TSHourStart:         ts,
+			DollarsPerKWH:       importDollars,
+			ExportDollarsPerKWH: exportDollars,
+		})
+	}
+
+	for i, p := range plan.Periods {
+		start := p.TSStart
+		if i == 0 {
+			hourStart := truncateLocalHour(start)
+			if !currentPrice.TSStart.IsZero() && currentPrice.TSStart.After(hourStart) && !currentPrice.TSStart.After(start) {
+				start = currentPrice.TSStart.In(start.Location())
+			} else if start.Minute()%15 != 0 || start.Minute()%20 == 0 {
+				start = hourStart
+			}
+		}
+		appendEntry(start, p.ImportDollars, p.ExportDollars)
+
+		// If a <10m short-interval merge spans across the top of the next hour (e.g. [11:55, 12:20)),
+		// emit the :00 boundary so the next hour starts at :00 rather than :20.
+		nextHour := truncateLocalHour(p.TSStart).Add(time.Hour)
+		if p.TSEnd.After(nextHour) {
+			appendEntry(nextHour, p.ImportDollars, p.ExportDollars)
+		}
 	}
 	return res
 }
@@ -200,16 +250,19 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Ctx(ctx).WarnContext(ctx, "failed to fetch price history for forecast", slog.Any("error", err))
 		}
+		var currentPrice types.Price
 		if latestAction.CurrentPrice != nil && latestAction.CurrentPrice.Contains(now) {
 			var foundCurrentPrice bool
 			for _, p := range priceHistory24 {
 				if p.Contains(now) {
 					foundCurrentPrice = true
+					currentPrice = p
 					break
 				}
 			}
 			if !foundCurrentPrice {
 				priceHistory24 = append(priceHistory24, *latestAction.CurrentPrice)
+				currentPrice = *latestAction.CurrentPrice
 			}
 		}
 		priceRes := buildPriceHistoryRes(priceHistory24)
@@ -219,6 +272,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 			LatestAction:  latestAction,
 			EnergyHistory: energyRes,
 			PriceHistory:  priceRes,
+			FuturePrices:  reconstructFuturePrices(latestAction.Plan, currentPrice),
 			Updated:       latestAction.Timestamp,
 		}
 
@@ -409,6 +463,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 				LatestAction:  &act,
 				EnergyHistory: energyRes,
 				PriceHistory:  priceRes,
+				FuturePrices:  reconstructFuturePrices(&freshPlan, currentPrice),
 				Updated:       now,
 			}
 			if regeneratePlan {
