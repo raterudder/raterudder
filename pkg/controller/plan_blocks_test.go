@@ -996,6 +996,61 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 		}
 		validRaw, reasonRaw := validateCandidateTrajectory(actions, timelineRawSpread, settings, wear, 0.90, state, 0)
 		assert.True(t, validRaw, "Export gate must compare raw rate spread ($0.46 - $0.40 = $0.06 >= $0.05) without dividing charge rate by RTE: "+reasonRaw)
+
+		// Case A (minSOC > preChargeSOC): Grid charge from 20% (preChargeSOC = 20%) to ~65% at $0.20,
+		// then drain in Load to an elevated 50% minSOC window, then drop minSOC to 20% and export (50% -> 20%) at $0.21.
+		// Because 50% > min(preChargeSOC=20%, minSOC=50%) + 1.0, hasPriorCharge must NOT reset at interval 1.
+		timelineElevatedMinSOC := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.20, exportRate: 0.15, loadKWH: 0.1, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.25, exportRate: 0.15, loadKWH: 3.0, minSOC: 50.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.25, exportRate: 0.21, loadKWH: 0.1, minSOC: 20.0},
+		}
+		actionsElevatedMinSOC := []actionCandidate{
+			{batteryMode: types.BatteryModeChargeAny, targetSOC: 65.0},
+			{batteryMode: types.BatteryModeLoad},
+			{batteryMode: types.BatteryModeExport, targetSOC: 20.0},
+		}
+		state20 := planState{soc: 20.0, energyKWH: 13.5 * 0.20, capacityKWH: 13.5, maxChargeKW: 10.0, maxDischargeKW: 10.0, time: now}
+		validElev, reasonElev := validateCandidateTrajectory(actionsElevatedMinSOC, timelineElevatedMinSOC, settings, wear, 0.90, state20, 0)
+		assert.False(t, validElev, "Drain to elevated 50%% minSOC must not clear hasPriorCharge when preChargeSOC was 20%%")
+		assert.Equal(t, "UnprofitableGridChargeToExport", reasonElev)
+
+		// Case B (preChargeSOC > minSOC): Battery starts at 40% (above 30% minSOC), grid-charges to 55% at $0.2075,
+		// then daytime Load drains it back to ~40% (<= preChargeSOC + 1.0, but still 10% above the 30% minSOC floor),
+		// and finally exports 40% -> 30% at $0.2948 (spread $0.0873 < $0.10 exportGatePerKWH).
+		// Because 40% > min(preChargeSOC=40%, minSOC=30%) + 1.0, hasPriorCharge must NOT reset and the export must be rejected.
+		wear10Cents := wearRates{exportGatePerKWH: 0.10, arbitrageGatePerKWH: 0.03}
+		timelineDrainToPreCharge := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.2075, exportRate: 0.2025, loadKWH: 0.1, minSOC: 30.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.2998, exportRate: 0.2948, loadKWH: 4.2, minSOC: 30.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.2998, exportRate: 0.2948, loadKWH: 0.1, minSOC: 30.0},
+		}
+		actionsDrainToPreCharge := []actionCandidate{
+			{batteryMode: types.BatteryModeChargeAny, targetSOC: 55.0},
+			{batteryMode: types.BatteryModeLoad},
+			{batteryMode: types.BatteryModeExport, targetSOC: 30.0},
+		}
+		state40 := planState{soc: 40.0, energyKWH: 30.0 * 0.40, capacityKWH: 30.0, maxChargeKW: 10.0, maxDischargeKW: 10.0, time: now}
+		validPre, reasonPre := validateCandidateTrajectory(actionsDrainToPreCharge, timelineDrainToPreCharge, settings, wear10Cents, 0.90, state40, 0)
+		assert.False(t, validPre, "Drain back to preChargeSOC (40%%) while still above minSOC (30%%) must not clear hasPriorCharge")
+		assert.Equal(t, "UnprofitableGridChargeToExport", reasonPre)
+
+		// Case C: When Load drains the battery all the way down to min(preChargeSOC, minSOC) (30%),
+		// a subsequent free solar refill (30% -> 60%) and export (60% -> 30%) is decoupled and accepted.
+		timelineFullDrainSolarRefill := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.2075, exportRate: 0.2025, loadKWH: 0.1, minSOC: 30.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.2998, exportRate: 0.2948, loadKWH: 8.0, minSOC: 30.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.2998, exportRate: 0.2948, loadKWH: 0.2, solarKWH: 10.0, minSOC: 30.0},
+			{startTime: now.Add(3 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 1.0, importRate: 0.2998, exportRate: 0.2948, loadKWH: 0.1, minSOC: 30.0},
+		}
+		actionsFullDrainSolarRefill := []actionCandidate{
+			{batteryMode: types.BatteryModeChargeAny, targetSOC: 55.0},
+			{batteryMode: types.BatteryModeLoad},
+			{batteryMode: types.BatteryModeLoad},
+			{batteryMode: types.BatteryModeExport, targetSOC: 30.0},
+		}
+		validFullDrain, reasonFullDrain := validateCandidateTrajectory(actionsFullDrainSolarRefill, timelineFullDrainSolarRefill, settings, wear10Cents, 0.90, state40, 0)
+		assert.True(t, validFullDrain, "Draining to min(preChargeSOC, minSOC) (30%%) before solar refill must clear hasPriorCharge: "+reasonFullDrain)
 	})
 
 	t.Run("Rejects_UnprofitableExportToGridCharge", func(t *testing.T) {

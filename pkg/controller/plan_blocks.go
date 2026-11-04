@@ -1417,11 +1417,12 @@ func validateCandidateTrajectory(
 		} else if hasPriorCharge &&
 			actions[i].batteryMode != types.BatteryModeExport &&
 			states[i+1].soc < states[i].soc &&
-			states[i+1].soc <= preChargeSOC+1.0 {
-			// Track preChargeSOC rather than timeline[i].minSOC so that if household load drains all of
-			// the grid-charged energy back down to (or below) the SOC before grid charging began, a later
-			// solar refill and export is decoupled from the earlier grid charge, without being fooled by
-			// a temporary elevated minSOC reserve window where grid-charged energy still remains in the battery.
+			states[i+1].soc <= min(preChargeSOC, timeline[i].minSOC)+1.0 {
+			// Reset once household load drains the battery back down to (or below) both preChargeSOC
+			// and the period's minSOC floor. Requiring min(preChargeSOC, minSOC) ensures that neither
+			// a temporary elevated minSOC reserve window nor daytime load draining a grid-charged
+			// battery down to preChargeSOC (while still sitting above minSOC) prematurely clears
+			// hasPriorCharge while grid-charged energy remains available to export.
 			hasPriorCharge = false
 			maxPriorChargeRate = 0
 			preChargeSOC = 0
