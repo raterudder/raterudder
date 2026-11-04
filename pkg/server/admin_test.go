@@ -345,3 +345,229 @@ func TestAdminListUserSites(t *testing.T) {
 		mockStorage.AssertExpectations(t)
 	})
 }
+
+func TestHandleListFeatures(t *testing.T) {
+	oidcSrv, priv := setupOIDCTest(t)
+	defer oidcSrv.Close()
+	provider, err := oidc.NewProvider(context.Background(), oidcSrv.URL)
+	require.NoError(t, err)
+
+	adminToken := generateTestToken(t, oidcSrv.URL, priv, "admin@example.com", "admin-1")
+	userToken := generateTestToken(t, oidcSrv.URL, priv, "user@example.com", "user-1")
+
+	mockS := &mockStorage{}
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+
+	srv := &Server{
+		storage:              mockS,
+		release:              "production",
+		adminEmails:          []string{"admin@example.com"},
+		sessionEncryptionKey: "12345678901234567890123456789012",
+		encryptionKey:        "12345678901234567890123456789012",
+		oidcAudiences: map[string]string{
+			"google": "test-audience",
+		},
+		oidcVerifiers: map[string]tokenVerifier{
+			"google": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
+		},
+		generalRateLimit:   rate.Every(time.Minute / 30),
+		generalBurst:       30,
+		sensitiveRateLimit: rate.Every(time.Minute / 10),
+		sensitiveBurst:     10,
+		nowFunc:            func() time.Time { return now },
+	}
+	handler := srv.setupHandler()
+
+	t.Run("Unauthenticated", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/list/features", nil)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		assert.Equal(t, http.StatusUnauthorized, rr.Code)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("Forbidden - Not Admin", func(t *testing.T) {
+		mockS.On("GetUser", mock.Anything, "google:user-1").Return(types.User{
+			ID:    "google:user-1",
+			Email: "user@example.com",
+		}, nil).Once()
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, now, nil).Once()
+
+		req := httptest.NewRequest(http.MethodGet, "/api/list/features", nil)
+		req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: userToken})
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		assert.Equal(t, http.StatusForbidden, rr.Code)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("Authorized - Admin List Features", func(t *testing.T) {
+		mockS.On("GetUser", mock.Anything, "google:admin-1").Return(types.User{
+			ID:    "google:admin-1",
+			Email: "admin@example.com",
+		}, nil).Once()
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{
+			Features: map[string][]feats.Criteria{
+				"serverTestAlpha": {
+					{SiteIDs: []string{"site-1"}, Value: true},
+				},
+			},
+		}, now, nil).Once()
+
+		req := httptest.NewRequest(http.MethodGet, "/api/list/features", nil)
+		req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: adminToken})
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+
+		var listResp []AdminFeatureFlag
+		require.NoError(t, json.NewDecoder(rr.Body).Decode(&listResp))
+		flagsByName := make(map[string]AdminFeatureFlag, len(listResp))
+		for _, f := range listResp {
+			flagsByName[f.Name] = f
+		}
+		if assert.Contains(t, flagsByName, "serverTestAlpha") {
+			assert.False(t, flagsByName["serverTestAlpha"].DefaultValue)
+			assert.Equal(t, []feats.Criteria{{SiteIDs: []string{"site-1"}, Value: true}}, flagsByName["serverTestAlpha"].Criteria)
+		}
+		if assert.Contains(t, flagsByName, "serverTestBeta") {
+			assert.True(t, flagsByName["serverTestBeta"].DefaultValue)
+			assert.Empty(t, flagsByName["serverTestBeta"].Criteria)
+		}
+		mockS.AssertExpectations(t)
+	})
+}
+
+func TestHandleUpdateFeatures(t *testing.T) {
+	oidcSrv, priv := setupOIDCTest(t)
+	defer oidcSrv.Close()
+	provider, err := oidc.NewProvider(context.Background(), oidcSrv.URL)
+	require.NoError(t, err)
+
+	adminToken := generateTestToken(t, oidcSrv.URL, priv, "admin@example.com", "admin-1")
+	userToken := generateTestToken(t, oidcSrv.URL, priv, "user@example.com", "user-1")
+
+	mockS := &mockStorage{}
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+
+	srv := &Server{
+		storage:              mockS,
+		release:              "production",
+		adminEmails:          []string{"admin@example.com"},
+		sessionEncryptionKey: "12345678901234567890123456789012",
+		encryptionKey:        "12345678901234567890123456789012",
+		oidcAudiences: map[string]string{
+			"google": "test-audience",
+		},
+		oidcVerifiers: map[string]tokenVerifier{
+			"google": provider.Verifier(&oidc.Config{ClientID: "test-audience"}).Verify,
+		},
+		generalRateLimit:   rate.Every(time.Minute / 30),
+		generalBurst:       30,
+		sensitiveRateLimit: rate.Every(time.Minute / 10),
+		sensitiveBurst:     10,
+		nowFunc:            func() time.Time { return now },
+	}
+	handler := srv.setupHandler()
+
+	t.Run("Unauthenticated", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/features", strings.NewReader(`{"features":{}}`))
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		assert.Equal(t, http.StatusUnauthorized, rr.Code)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("Forbidden - Not Admin", func(t *testing.T) {
+		mockS.On("GetUser", mock.Anything, "google:user-1").Return(types.User{
+			ID:    "google:user-1",
+			Email: "user@example.com",
+		}, nil).Once()
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, now, nil).Once()
+
+		req := httptest.NewRequest(http.MethodPost, "/api/features", strings.NewReader(`{"features":{}}`))
+		req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: userToken})
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		assert.Equal(t, http.StatusForbidden, rr.Code)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("Authorized - Combines SiteIDs And Persists Normalized Config", func(t *testing.T) {
+		mockS.On("GetUser", mock.Anything, "google:admin-1").Return(types.User{
+			ID:    "google:admin-1",
+			Email: "admin@example.com",
+		}, nil).Once()
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, now, nil).Once()
+		expectedCfg := feats.Config{
+			Features: map[string][]feats.Criteria{
+				"serverTestAlpha": {
+					{SiteIDs: []string{"site-1", "site-2"}, Value: true},
+					{SiteIDs: []string{"site-3"}, Value: false},
+					{SitePercent: 40, Value: true},
+				},
+			},
+		}
+		mockS.On("SetFeatureConfig", mock.Anything, "production", expectedCfg, now).Return(now, nil).Once()
+
+		updateBody := `{
+			"features": {
+				"serverTestAlpha": [
+					{"sitePercent": 40, "value": true},
+					{"siteIDs": ["site-1"], "value": true},
+					{"siteIDs": ["site-3"], "value": false},
+					{"siteIDs": ["site-2", "site-1"], "value": true}
+				]
+			}
+		}`
+		req := httptest.NewRequest(http.MethodPost, "/api/features", strings.NewReader(updateBody))
+		req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: adminToken})
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+
+		// Evaluator in memory was NOT immediately mutated (picks up change on next synced refresh)
+		ctxBeforeRefresh := srv.initFeats(context.Background(), "site-1")
+		assert.False(t, ffServerTestAlpha.Enabled(ctxBeforeRefresh))
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("Rejects Multiple SitePercent Criteria", func(t *testing.T) {
+		mockS.On("GetUser", mock.Anything, "google:admin-1").Return(types.User{
+			ID:    "google:admin-1",
+			Email: "admin@example.com",
+		}, nil).Once()
+
+		multiPercentBody := `{
+			"features": {
+				"serverTestAlpha": [
+					{"sitePercent": 20, "value": true},
+					{"sitePercent": 50, "value": false}
+				]
+			}
+		}`
+		req := httptest.NewRequest(http.MethodPost, "/api/features", strings.NewReader(multiPercentBody))
+		req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: adminToken})
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		assert.Equal(t, http.StatusBadRequest, rr.Code)
+		assert.Contains(t, rr.Body.String(), "at most one sitePercent criterion is allowed")
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("Rejects Unknown Feature Flag", func(t *testing.T) {
+		mockS.On("GetUser", mock.Anything, "google:admin-1").Return(types.User{
+			ID:    "google:admin-1",
+			Email: "admin@example.com",
+		}, nil).Once()
+
+		unknownFlagBody := `{"features": {"nonExistentFlag": [{"value": true}]}}`
+		req := httptest.NewRequest(http.MethodPost, "/api/features", strings.NewReader(unknownFlagBody))
+		req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: adminToken})
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		assert.Equal(t, http.StatusBadRequest, rr.Code)
+		assert.Contains(t, rr.Body.String(), "unknown feature flag")
+		mockS.AssertExpectations(t)
+	})
+}

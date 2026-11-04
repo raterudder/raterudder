@@ -12,11 +12,12 @@ import (
 )
 
 var (
-	ErrUserNotFound     = errors.New("user not found")
-	ErrSiteNotFound     = errors.New("site not found")
-	ErrAppNotFound      = errors.New("app not found")
-	ErrAppConflict      = errors.New("app conflict: cannot overwrite")
-	ErrSettingsConflict = errors.New("settings conflict: cannot overwrite")
+	ErrUserNotFound          = errors.New("user not found")
+	ErrSiteNotFound          = errors.New("site not found")
+	ErrAppNotFound           = errors.New("app not found")
+	ErrAppConflict           = errors.New("app conflict: cannot overwrite")
+	ErrSettingsConflict      = errors.New("settings conflict: cannot overwrite")
+	ErrFeatureConfigConflict = errors.New("feature config conflict: cannot overwrite")
 )
 
 // PricingMigrationOptions configures the legacy pricing data migration.
@@ -89,7 +90,7 @@ type Database interface {
 
 	// Feature Flags
 	GetFeatureConfig(ctx context.Context, release string) (feats.Config, time.Time, error)
-	SetFeatureConfig(ctx context.Context, release string, config feats.Config) (time.Time, error)
+	SetFeatureConfig(ctx context.Context, release string, config feats.Config, updatedTime time.Time) (time.Time, error)
 
 	// Feedback
 	InsertFeedback(ctx context.Context, feedback types.Feedback) error

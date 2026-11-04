@@ -48,6 +48,8 @@ var routeAuthAttributes = map[string]pathAttributes{
 	"/api/list/utilities":               {allowNoLogin: true, ignoreSiteID: true, ignoreUserNotFound: true},
 	"/api/delete/user":                  {ignoreSiteID: true},
 	"/api/list/userSites":               {ignoreSiteID: true},
+	"/api/list/features":                {ignoreSiteID: true},
+	"/api/features":                     {ignoreSiteID: true},
 	"/api/notifications/vapidPublicKey": {allowNoLogin: true, ignoreUserNotFound: true, ignoreSiteID: true},
 	"/api/notifications/subscriptions":  {ignoreSiteID: true},
 	"/api/notifications/subscribe":      {ignoreSiteID: true},

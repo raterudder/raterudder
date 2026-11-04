@@ -288,7 +288,7 @@ func (f *FirestoreProvider) GetSettings(ctx context.Context, siteID string) (typ
 
 // SetSettings saves the dynamic configuration to the "config/settings" document.
 // It stores the settings as a JSON string for portability.
-// If updatedTime is non-zero, it runs in a transaction and ensures doc.UpdateTime matches updatedTime before writing.
+// If updatedTime is non-zero, it ensures doc.UpdateTime matches updatedTime before writing.
 func (f *FirestoreProvider) SetSettings(ctx context.Context, siteID string, settings types.Settings, version int, updatedTime time.Time) (time.Time, error) {
 	jsonBytes, err := json.Marshal(settings)
 	if err != nil {
@@ -300,6 +300,7 @@ func (f *FirestoreProvider) SetSettings(ctx context.Context, siteID string, sett
 		return time.Time{}, err
 	}
 
+	docRef := coll.Doc("settings")
 	data := map[string]any{
 		"json":        string(jsonBytes),
 		"version":     version,
@@ -308,38 +309,18 @@ func (f *FirestoreProvider) SetSettings(ctx context.Context, siteID string, sett
 	}
 
 	if !updatedTime.IsZero() {
-		docRef := coll.Doc("settings")
-		updates := mapToFirestoreUpdates(data)
-		const maxRetries = 3
-		backoff := 100 * time.Millisecond
-		for attempt := 0; attempt < maxRetries; attempt++ {
-			wr, err := docRef.Update(ctx, updates, firestore.LastUpdateTime(updatedTime))
-			if err == nil {
-				return wr.UpdateTime, nil
-			}
+		wr, err := docRef.Update(ctx, mapToFirestoreUpdates(data), firestore.LastUpdateTime(updatedTime))
+		if err != nil {
 			c := status.Code(err)
 			if c == codes.FailedPrecondition || c == codes.Aborted || c == codes.NotFound {
 				return time.Time{}, fmt.Errorf("%w: expected %v: %w", ErrSettingsConflict, updatedTime, err)
 			}
-			if isRetryableFirestoreErr(err) && attempt < maxRetries-1 {
-				log.Ctx(ctx).WarnContext(ctx, "firestore settings update failed with retryable error, retrying",
-					slog.String("siteID", siteID),
-					slog.Int("attempt", attempt+1),
-					slog.Any("error", err),
-				)
-				select {
-				case <-ctx.Done():
-					return time.Time{}, ctx.Err()
-				case <-time.After(backoff):
-					backoff *= 2
-					continue
-				}
-			}
 			return time.Time{}, fmt.Errorf("failed to update settings with precondition: %w", err)
 		}
+		return wr.UpdateTime, nil
 	}
 
-	wr, err := coll.Doc("settings").Set(ctx, data)
+	wr, err := docRef.Set(ctx, data)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("failed to save settings: %w", err)
 	}
@@ -1631,7 +1612,8 @@ func (f *FirestoreProvider) GetFeatureConfig(ctx context.Context, release string
 }
 
 // SetFeatureConfig saves the per-environment feature flag configuration to the "features/{release}" document.
-func (f *FirestoreProvider) SetFeatureConfig(ctx context.Context, release string, config feats.Config) (time.Time, error) {
+// If updatedTime is non-zero, it ensures doc.UpdateTime matches updatedTime before writing.
+func (f *FirestoreProvider) SetFeatureConfig(ctx context.Context, release string, config feats.Config, updatedTime time.Time) (time.Time, error) {
 	if release == "" {
 		return time.Time{}, errors.New("release cannot be empty")
 	}
@@ -1641,9 +1623,24 @@ func (f *FirestoreProvider) SetFeatureConfig(ctx context.Context, release string
 		return time.Time{}, fmt.Errorf("failed to marshal feature config: %w", err)
 	}
 
-	wr, err := f.client.Collection("features").Doc(release).Set(ctx, map[string]any{
+	docRef := f.client.Collection("features").Doc(release)
+	data := map[string]any{
 		"json": string(jsonBytes),
-	})
+	}
+
+	if !updatedTime.IsZero() {
+		wr, err := docRef.Update(ctx, mapToFirestoreUpdates(data), firestore.LastUpdateTime(updatedTime))
+		if err != nil {
+			c := status.Code(err)
+			if c == codes.FailedPrecondition || c == codes.Aborted || c == codes.NotFound {
+				return time.Time{}, fmt.Errorf("%w: expected %v: %w", ErrFeatureConfigConflict, updatedTime, err)
+			}
+			return time.Time{}, fmt.Errorf("failed to update feature config with precondition: %w", err)
+		}
+		return wr.UpdateTime, nil
+	}
+
+	wr, err := docRef.Set(ctx, data)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("failed to save feature config for %s: %w", release, err)
 	}

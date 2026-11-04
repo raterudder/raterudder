@@ -46,7 +46,7 @@
 - **Never Pass `-v`**: Avoid passing `-v` to `go test` to prevent noisy output.
 - **Never Redirect Output**: Do not redirect test output to a file (no `> out.txt`).
 - **Subtests with `t.Run`**:
-  - Tests live in `<file>_test.go` named `Test<FunctionName>`.
+  - Tests for a function `fooBar` defined in `<file>.go` must live in `<file>_test.go` inside a top-level test function named `Test<FunctionName>` (e.g., `handleListFeatures` and `handleUpdateFeatures` in `admin.go` must be tested by `TestHandleListFeatures` and `TestHandleUpdateFeatures` in `admin_test.go`, not grouped into another file or under an unrelated `Test*` function).
   - **Never create separate top-level test functions for feature variants or subtests of existing functions** (e.g., do not create `TestHandleGridOutageQuietPeriod`; add `t.Run("QuietPeriod...", ...)` inside `TestHandleGridOutageNotifications`).
   - Avoid looping over slices of test case structs. Prefer explicit, named subtests with `t.Run`.
 - **Testify Assertions**:

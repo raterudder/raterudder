@@ -303,8 +303,8 @@ func (m *MockDatabase) GetFeatureConfig(ctx context.Context, release string) (fe
 	return feats.Config{}, time.Time{}, nil
 }
 
-func (m *MockDatabase) SetFeatureConfig(ctx context.Context, release string, config feats.Config) (time.Time, error) {
-	args := m.Called(ctx, release, config)
+func (m *MockDatabase) SetFeatureConfig(ctx context.Context, release string, config feats.Config, updatedTime time.Time) (time.Time, error) {
+	args := m.Called(ctx, release, config, updatedTime)
 	var t time.Time
 	if args.Get(0) != nil {
 		t = args.Get(0).(time.Time)

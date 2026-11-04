@@ -100,6 +100,67 @@ func All(ctx context.Context) map[string]bool {
 	return res
 }
 
+// Defined returns a snapshot of all registered boolean feature flags.
+func Defined() map[string]BoolFlag {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	return maps.Clone(definedFlags)
+}
+
+// NormalizeCriteria validates and canonicalizes a slice of Criteria.
+// It combines SiteIDs with the same Value, places explicit SiteIDs rules before
+// any SitePercent rule, and returns an error if more than one SitePercent rule is defined.
+func NormalizeCriteria(criteria []Criteria) ([]Criteria, error) {
+	var trueSites []string
+	var falseSites []string
+	seenSites := make(map[string]struct{})
+
+	var hasPercent bool
+	var percentCriteria Criteria
+
+	for _, c := range criteria {
+		if c.SitePercent < 0 || c.SitePercent > 100 {
+			return nil, fmt.Errorf("sitePercent must be between 0 and 100, got %d", c.SitePercent)
+		}
+		for _, id := range c.SiteIDs {
+			if id == "" {
+				continue
+			}
+			if _, seen := seenSites[id]; seen {
+				continue
+			}
+			seenSites[id] = struct{}{}
+			if c.Value {
+				trueSites = append(trueSites, id)
+			} else {
+				falseSites = append(falseSites, id)
+			}
+		}
+		if c.SitePercent > 0 {
+			if hasPercent {
+				return nil, fmt.Errorf("at most one sitePercent criterion is allowed")
+			}
+			hasPercent = true
+			percentCriteria = Criteria{
+				SitePercent: c.SitePercent,
+				Value:       c.Value,
+			}
+		}
+	}
+
+	var out []Criteria
+	if len(trueSites) > 0 {
+		out = append(out, Criteria{SiteIDs: trueSites, Value: true})
+	}
+	if len(falseSites) > 0 {
+		out = append(out, Criteria{SiteIDs: falseSites, Value: false})
+	}
+	if hasPercent {
+		out = append(out, percentCriteria)
+	}
+	return out, nil
+}
+
 // Criteria defines a single evaluation rule for a feature flag.
 // A criterion matches a siteID if the siteID is in SiteIDs OR falls within SitePercent (0-100).
 type Criteria struct {

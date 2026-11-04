@@ -235,4 +235,52 @@ func TestFeats(t *testing.T) {
 			assert.Equal(t, true, featsGroup["planMode"])
 		}
 	})
+
+	t.Run("DefinedAndNormalizeCriteria", func(t *testing.T) {
+		resetRegistryForTest(t)
+
+		ffA := Bool("flagA", true)
+		ffB := Bool("flagB", false)
+
+		defs := Defined()
+		if assert.Len(t, defs, 2) {
+			assert.Equal(t, ffA, defs["flagA"])
+			assert.Equal(t, ffB, defs["flagB"])
+		}
+
+		// Combines SiteIDs with same Value, deduplicates (first wins), splits mixed criteria,
+		// and places SiteIDs rules before SitePercent.
+		normalized, err := NormalizeCriteria([]Criteria{
+			{SitePercent: 30, Value: true},
+			{SiteIDs: []string{"site-1", "", "site-2"}, Value: true},
+			{SiteIDs: []string{"site-3", "site-1"}, Value: false},
+			{SiteIDs: []string{"site-4"}, Value: true},
+			{SiteIDs: []string{"site-5"}, Value: false},
+			{}, // empty criterion dropped
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []Criteria{
+			{SiteIDs: []string{"site-1", "site-2", "site-4"}, Value: true},
+			{SiteIDs: []string{"site-3", "site-5"}, Value: false},
+			{SitePercent: 30, Value: true},
+		}, normalized)
+
+		// Rejects multiple SitePercent > 0 criteria
+		_, err = NormalizeCriteria([]Criteria{
+			{SitePercent: 20, Value: true},
+			{SitePercent: 50, Value: false},
+		})
+		assert.ErrorContains(t, err, "at most one sitePercent criterion is allowed")
+
+		// Rejects out-of-range SitePercent
+		_, err = NormalizeCriteria([]Criteria{
+			{SitePercent: -1, Value: true},
+		})
+		assert.ErrorContains(t, err, "sitePercent must be between 0 and 100")
+
+		_, err = NormalizeCriteria([]Criteria{
+			{SitePercent: 101, Value: true},
+		})
+		assert.ErrorContains(t, err, "sitePercent must be between 0 and 100")
+	})
 }

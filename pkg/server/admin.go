@@ -2,9 +2,11 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"golang.org/x/sync/errgroup"
@@ -13,8 +15,16 @@ import (
 // AdminSite is a site that is visible to admins along with the LastAction
 type AdminSite struct {
 	types.Site
-	LastAction *types.Action `json:"lastAction,omitempty"`
-	Alias      string        `json:"alias,omitempty"`
+	LastAction *types.Action   `json:"lastAction,omitempty"`
+	Alias      string          `json:"alias,omitempty"`
+	Features   map[string]bool `json:"features,omitempty"`
+}
+
+// AdminFeatureFlag represents a defined boolean feature flag and its current criteria for admins.
+type AdminFeatureFlag struct {
+	Name         string           `json:"name"`
+	DefaultValue bool             `json:"defaultValue"`
+	Criteria     []feats.Criteria `json:"criteria,omitempty"`
 }
 
 func (s *Server) handleListSites(w http.ResponseWriter, r *http.Request) {
@@ -44,6 +54,7 @@ func (s *Server) handleListSites(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	featsEval := s.getFeatsEvaluator(ctx)
 	adminSites := make([]AdminSite, len(sites))
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(5)
@@ -58,6 +69,7 @@ func (s *Server) handleListSites(w http.ResponseWriter, r *http.Request) {
 				Site:       site,
 				LastAction: action,
 				Alias:      adminSettings.Aliases[site.ID],
+				Features:   featsEval.Evaluate(site.ID),
 			}
 			return nil
 		})
@@ -152,4 +164,106 @@ func (s *Server) handleListUserSites(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(userSites); err != nil {
 		panic(http.ErrAbortHandler)
 	}
+}
+
+func (s *Server) handleListFeatures(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := s.getUser(r)
+
+	if !s.isMultiSiteAdmin(user) && !s.bypassAuth {
+		log.Ctx(ctx).WarnContext(ctx, "unauthorized access to list features", slog.String("email", user.Email))
+		writeJSONError(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	release := s.release
+	if release == "" {
+		release = "production"
+	}
+
+	cfg, _, err := s.storage.GetFeatureConfig(ctx, release)
+	if err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to get feature config", slog.String("release", release), slog.Any("error", err))
+		writeJSONError(w, "failed to get feature config", http.StatusInternalServerError)
+		return
+	}
+
+	defined := feats.Defined()
+	flags := make([]AdminFeatureFlag, 0, len(defined))
+	for name, flag := range defined {
+		flags = append(flags, AdminFeatureFlag{
+			Name:         name,
+			DefaultValue: flag.Default(),
+			Criteria:     cfg.Features[name],
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(flags); err != nil {
+		panic(http.ErrAbortHandler)
+	}
+}
+
+func (s *Server) handleUpdateFeatures(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := s.getUser(r)
+
+	if !s.isMultiSiteAdmin(user) && !s.bypassAuth {
+		log.Ctx(ctx).WarnContext(ctx, "unauthorized access to update features", slog.String("email", user.Email))
+		writeJSONError(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	var req struct {
+		Features map[string][]feats.Criteria `json:"features"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	defined := feats.Defined()
+	normalizedUpdates := make(map[string][]feats.Criteria, len(req.Features))
+	for name, criteria := range req.Features {
+		if _, ok := defined[name]; !ok {
+			writeJSONError(w, fmt.Sprintf("unknown feature flag: %s", name), http.StatusBadRequest)
+			return
+		}
+		normalized, err := feats.NormalizeCriteria(criteria)
+		if err != nil {
+			writeJSONError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		normalizedUpdates[name] = normalized
+	}
+
+	release := s.release
+	if release == "" {
+		release = "production"
+	}
+
+	cfg, updatedAt, err := s.storage.GetFeatureConfig(ctx, release)
+	if err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to get feature config for update", slog.String("release", release), slog.Any("error", err))
+		writeJSONError(w, "failed to update feature config", http.StatusInternalServerError)
+		return
+	}
+
+	if cfg.Features == nil {
+		cfg.Features = make(map[string][]feats.Criteria)
+	}
+	for name, normalized := range normalizedUpdates {
+		if len(normalized) == 0 {
+			delete(cfg.Features, name)
+		} else {
+			cfg.Features[name] = normalized
+		}
+	}
+
+	if _, err := s.storage.SetFeatureConfig(ctx, release, cfg, updatedAt); err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to save feature config", slog.String("release", release), slog.Any("error", err))
+		writeJSONError(w, "failed to update feature config", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }

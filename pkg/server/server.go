@@ -299,6 +299,8 @@ func (s *Server) setupHandler() http.Handler {
 	apiMux.HandleFunc("GET /api/list/sites", s.handleListSites)
 	apiMux.HandleFunc("POST /api/site/alias", s.handleSetSiteAlias)
 	apiMux.HandleFunc("GET /api/list/userSites", s.handleListUserSites)
+	apiMux.HandleFunc("GET /api/list/features", s.handleListFeatures)
+	apiMux.HandleFunc("POST /api/features", s.handleUpdateFeatures)
 	apiMux.HandleFunc("POST /api/feedback", s.handleSubmitFeedback)
 	apiMux.HandleFunc("GET /api/list/feedback", s.handleListFeedback)
 	apiMux.HandleFunc("POST /api/interest", s.handleSubmitInterest)

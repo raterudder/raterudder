@@ -950,7 +950,7 @@ func TestFirestoreProvider(t *testing.T) {
 			_, _, err := f.GetFeatureConfig(ctx, "")
 			assert.ErrorContains(t, err, "release cannot be empty")
 
-			_, err = f.SetFeatureConfig(ctx, "", feats.Config{})
+			_, err = f.SetFeatureConfig(ctx, "", feats.Config{}, time.Time{})
 			assert.ErrorContains(t, err, "release cannot be empty")
 		})
 
@@ -976,7 +976,7 @@ func TestFirestoreProvider(t *testing.T) {
 				},
 			}
 
-			updatedAt1, err := f.SetFeatureConfig(ctx, "production", want)
+			updatedAt1, err := f.SetFeatureConfig(ctx, "production", want, time.Time{})
 			require.NoError(t, err)
 			assert.False(t, updatedAt1.IsZero())
 
@@ -984,6 +984,30 @@ func TestFirestoreProvider(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, want, got)
 			assert.True(t, updatedAt1.Equal(gotUpdatedAt))
+
+			// Successful update with matching updatedAt
+			want2 := feats.Config{
+				Features: map[string][]feats.Criteria{
+					"solarModelV2": {
+						{
+							SitePercent: 50,
+							Value:       true,
+						},
+					},
+				},
+			}
+			updatedAt2, err := f.SetFeatureConfig(ctx, "production", want2, gotUpdatedAt)
+			require.NoError(t, err)
+			assert.False(t, updatedAt2.IsZero())
+
+			got2, gotUpdatedAt2, err := f.GetFeatureConfig(ctx, "production")
+			require.NoError(t, err)
+			assert.Equal(t, want2, got2)
+			assert.True(t, updatedAt2.Equal(gotUpdatedAt2))
+
+			// Conflicting update with stale updatedAt1
+			_, err = f.SetFeatureConfig(ctx, "production", want, updatedAt1)
+			assert.ErrorIs(t, err, ErrFeatureConfigConflict)
 		})
 	})
 

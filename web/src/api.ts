@@ -489,7 +489,43 @@ export const deleteUser = async (): Promise<void> => {
 export interface AdminSite extends Site {
     lastAction?: Action;
     alias?: string;
+    features?: Record<string, boolean>;
 }
+
+export interface FeatureCriteria {
+    siteIDs?: string[];
+    sitePercent?: number;
+    value: boolean;
+}
+
+export interface AdminFeatureFlag {
+    name: string;
+    defaultValue: boolean;
+    criteria?: FeatureCriteria[];
+}
+
+export const listFeatures = async (): Promise<AdminFeatureFlag[]> => {
+    const response = await fetch('/api/list/features', {
+        method: 'GET',
+    });
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Failed to list feature flags'));
+    }
+    return response.json();
+};
+
+export const updateFeatures = async (features: Record<string, FeatureCriteria[]>): Promise<void> => {
+    const response = await fetch('/api/features', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ features }),
+    });
+    if (!response.ok) {
+        throw new Error(await extractError(response, 'Failed to update feature flags'));
+    }
+};
 
 export const listSites = async (): Promise<AdminSite[]> => {
     const response = await fetch('/api/list/sites', {
