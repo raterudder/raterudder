@@ -538,15 +538,6 @@ func detectIntermittentEVAndLoadSpikes(
 				ignoredOutlierHours[key] = true
 				confirmedPass1[key] = true
 				outlierRefLoad[key] = refLoad
-				log.Ctx(ctx).DebugContext(
-					ctx,
-					"ignoring intermittent EV or hourly load spike in energy model",
-					slog.Int("hour", hr),
-					slog.String("weekday", d.weekday.String()),
-					slog.String("date", dateStr),
-					slog.Float64("outlierLoadKWH", pt.HomeKWH),
-					slog.Float64("refLoadKWH", refLoad),
-				)
 			}
 		}
 	}
@@ -586,17 +577,18 @@ func detectIntermittentEVAndLoadSpikes(
 			if pt.HomeKWH-refLoad >= evShoulderMinStepKW && pt.HomeKWH > limit {
 				ignoredOutlierHours[key] = true
 				outlierRefLoad[key] = refLoad
-				log.Ctx(ctx).DebugContext(
-					ctx,
-					"ignoring adjacent EV shoulder hour in energy model",
-					slog.Int("hour", hr),
-					slog.String("weekday", d.weekday.String()),
-					slog.String("date", dateStr),
-					slog.Float64("shoulderLoadKWH", pt.HomeKWH),
-					slog.Float64("refLoadKWH", refLoad),
-				)
 			}
 		}
+	}
+
+	if len(ignoredOutlierHours) > 0 {
+		log.Ctx(ctx).DebugContext(
+			ctx,
+			"ignoring intermittent EV or hourly load spikes in energy model",
+			slog.Int("ignoredHours", len(ignoredOutlierHours)),
+			slog.Int("spikeHours", len(confirmedPass1)),
+			slog.Int("shoulderHours", len(ignoredOutlierHours)-len(confirmedPass1)),
+		)
 	}
 
 	return ignoredOutlierHours, outlierRefLoad, hourBaselineRef
