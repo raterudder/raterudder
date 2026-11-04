@@ -4579,7 +4579,7 @@ func TestStepWearCostDollars(t *testing.T) {
 		cand := actionCandidate{batteryMode: types.BatteryModeExport, solarMode: types.SolarModeAny}
 		metrics := intervalMetrics{batExportKWH: 4.0}
 		cost := stepWearCostDollars(cand, metrics, roundTripEff, wear)
-		assert.InDelta(t, 4.0*0.01, cost, 1e-6)
+		assert.InDelta(t, (4.0/roundTripEff)*0.01, cost, 1e-6)
 
 		// Conservative profile default: BatteryExportDegradation = $0.04, GridChargeDegradation = $0.02 -> batteryExportPerKWH = $0.02
 		consSettings := types.Settings{OptimizationProfile: "conservative"}
@@ -4612,8 +4612,15 @@ func TestStepWearCostDollars(t *testing.T) {
 		assert.InDelta(t, 0.05, arbWear.arbitrageGatePerKWH, 1e-6)
 
 		cost := stepWearCostDollars(cand, intervalMetrics{gridChargeKWH: chargeAC}, roundTripEff, arbWear)
-		assert.InDelta(t, chargeAC*roundTripEff*arbWear.gridChargePerKWH, cost, 1e-6,
-			"Grid charging must incur physical gridChargePerKWH wear rather than the user's MinArbitrageDifference eligibility threshold")
+		assert.InDelta(t, chargeAC*arbWear.gridChargePerKWH, cost, 1e-6,
+			"Grid charging must incur physical gridChargePerKWH wear (without roundTripEff discounting) rather than the user's MinArbitrageDifference eligibility threshold")
+
+		// Verify a 1.0 kWh AC grid-charge -> 0.90 kWh AC export round-trip cycle incurs the full $0.03/kWh balanced cycle wear
+		exportCand := actionCandidate{batteryMode: types.BatteryModeExport, solarMode: types.SolarModeAny}
+		roundTripWear := stepWearCostDollars(cand, intervalMetrics{gridChargeKWH: 1.0}, roundTripEff, arbWear) +
+			stepWearCostDollars(exportCand, intervalMetrics{batExportKWH: roundTripEff}, roundTripEff, arbWear)
+		assert.InDelta(t, 0.03, roundTripWear, 1e-6,
+			"Full 1 kWh AC grid-charge to 0.90 kWh AC export cycle must incur the full $0.03/kWh balanced degradation cost")
 	})
 }
 

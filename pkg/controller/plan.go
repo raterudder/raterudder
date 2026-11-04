@@ -1374,19 +1374,25 @@ func stepWearCostDollars(
 	roundTripEff float64,
 	wear wearRates,
 ) float64 {
+	roundTripEff = sanitizeRoundTripEfficiency(roundTripEff)
 	var exportDegradationCost float64
 	if cand.batteryMode == types.BatteryModeExport {
 		// In BatteryModeExport, both direct battery export (batExportKWH) and battery discharge covering home
 		// load that frees up solar to export (min(batSuppliedHomeKWH, solarExportKWH)) pay batteryExportPerKWH
 		// (the physical export-half wear after accounting for gridChargePerKWH on the charging step).
-		exportDegradationCost = (metrics.batExportKWH + min(metrics.batSuppliedHomeKWH, metrics.solarExportKWH)) * wear.batteryExportPerKWH
+		// Dividing by roundTripEff normalizes AC exported kWh back to AC charged kWh so a full
+		// 1 kWh AC grid-charge -> 0.90 kWh AC export cycle incurs gridChargePerKWH + batteryExportPerKWH
+		// ($0.02 + $0.01 = $0.03/kWh) without discounting wear by roundTripEff.
+		exportDegradationCost = ((metrics.batExportKWH + min(metrics.batSuppliedHomeKWH, metrics.solarExportKWH)) / roundTripEff) * wear.batteryExportPerKWH
 	} else if cand.batteryMode == types.BatteryModeLoad && cand.solarMode == types.SolarModeExport {
 		exportDegradationCost = min(metrics.batSuppliedHomeKWH, metrics.solarExportKWH) * wear.solarExportPerKWH
 	}
 
 	var chargeDegradationCost float64
 	if metrics.gridChargeKWH > 0 {
-		chargeDegradationCost = metrics.gridChargeKWH * roundTripEff * wear.gridChargePerKWH
+		// Do not multiply by roundTripEff here: gridChargeKWH is AC energy imported to charge the battery,
+		// and gridChargePerKWH is the full per-kWh degradation cost of a grid-charge cycle (not discounted by RTE).
+		chargeDegradationCost = metrics.gridChargeKWH * wear.gridChargePerKWH
 	}
 
 	return exportDegradationCost + chargeDegradationCost

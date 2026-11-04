@@ -1296,17 +1296,11 @@ func validateCandidateTrajectory(
 	metrics := make([]intervalMetrics, len(timeline))
 	states[0] = initialState
 
-	var maxChargeRate float64
 	firstChargeIdx := -1
 	for i := 0; i < len(timeline); i++ {
 		states[i+1], metrics[i] = stepPhysics(states[i], actions[i], timeline[i], settings, roundTripEff)
-		if actions[i].batteryMode == types.BatteryModeChargeAny {
-			if firstChargeIdx == -1 {
-				firstChargeIdx = i
-				maxChargeRate = timeline[i].importRate
-			} else if timeline[i].importRate > maxChargeRate {
-				maxChargeRate = timeline[i].importRate
-			}
+		if actions[i].batteryMode == types.BatteryModeChargeAny && firstChargeIdx == -1 {
+			firstChargeIdx = i
 		}
 	}
 
@@ -1326,7 +1320,7 @@ func validateCandidateTrajectory(
 			actions[i].reason != types.ActionReasonVPPActive &&
 			actions[i].reason != types.ActionReasonEVChargingStandby &&
 			states[i].soc > timeline[i].minSOC+1.0 {
-			standbyImportedFromGrid := metrics[i].gridImportKWH > 1e-6
+			standbyImportedFromGrid := metrics[i].gridImportKWH > minSolarGenerationKW*timeline[i].durationHours
 			for j := i + 1; j < len(timeline); j++ {
 				if actions[j].reason == types.ActionReasonVPPPrep || actions[j].reason == types.ActionReasonVPPActive {
 					break
@@ -1379,7 +1373,7 @@ func validateCandidateTrajectory(
 				if actions[j].batteryMode == types.BatteryModeStandby &&
 					states[j].soc > timeline[j].minSOC+1.0 {
 					minExportDiff := -dominatedPeriodPriceGapDollars
-					if metrics[j].gridImportKWH > 1e-6 {
+					if metrics[j].gridImportKWH > minSolarGenerationKW*timeline[j].durationHours {
 						minExportDiff = wear.exportGatePerKWH - priceEpsilonForEquality
 					}
 					if timeline[i].exportRate-timeline[j].importRate < minExportDiff {
@@ -1390,15 +1384,68 @@ func validateCandidateTrajectory(
 		}
 	}
 
-	// 2. Unprofitable Grid Charge -> Battery Export hurdle:
+	// 2. Unprofitable Grid Charge <-> Battery Export hurdle:
 	// Whenever a trajectory charges from the grid and later dumps battery energy to the grid,
+	// or dumps battery energy to the grid and later charges from the grid before a full solar refill,
 	// the export rate must beat the grid charge rate by at least wear.exportGatePerKWH
 	// (max(BatteryExportDegradation, MinBatteryExportDifference)).
-	if firstChargeIdx != -1 {
-		for j := firstChargeIdx + 1; j < len(timeline); j++ {
-			if actions[j].batteryMode == types.BatteryModeExport {
-				if timeline[j].exportRate-maxChargeRate < wear.exportGatePerKWH-priceEpsilonForEquality {
-					return false, "UnprofitableGridChargeToExport"
+	hasPriorCharge := false
+	var maxPriorChargeRate float64
+	var preChargeSOC float64
+	for i := 0; i < len(timeline); i++ {
+		if actions[i].batteryMode == types.BatteryModeExport &&
+			metrics[i].batExportKWH > minSignificantBatteryPowerKW*timeline[i].durationHours &&
+			hasPriorCharge {
+			if timeline[i].exportRate-maxPriorChargeRate < wear.exportGatePerKWH-priceEpsilonForEquality {
+				return false, "UnprofitableGridChargeToExport"
+			}
+		}
+		if actions[i].batteryMode == types.BatteryModeChargeAny &&
+			metrics[i].gridChargeKWH > minSignificantBatteryPowerKW*timeline[i].durationHours {
+			if !hasPriorCharge {
+				hasPriorCharge = true
+				maxPriorChargeRate = timeline[i].importRate
+				preChargeSOC = states[i].soc
+			} else {
+				if timeline[i].importRate > maxPriorChargeRate {
+					maxPriorChargeRate = timeline[i].importRate
+				}
+				if states[i].soc < preChargeSOC {
+					preChargeSOC = states[i].soc
+				}
+			}
+		} else if hasPriorCharge &&
+			actions[i].batteryMode != types.BatteryModeExport &&
+			states[i+1].soc < states[i].soc &&
+			states[i+1].soc <= preChargeSOC+1.0 {
+			// Track preChargeSOC rather than timeline[i].minSOC so that if household load drains all of
+			// the grid-charged energy back down to (or below) the SOC before grid charging began, a later
+			// solar refill and export is decoupled from the earlier grid charge, without being fooled by
+			// a temporary elevated minSOC reserve window where grid-charged energy still remains in the battery.
+			hasPriorCharge = false
+			maxPriorChargeRate = 0
+			preChargeSOC = 0
+		}
+	}
+	for i := 0; i < len(timeline); i++ {
+		if actions[i].batteryMode == types.BatteryModeExport &&
+			actions[i].reason != types.ActionReasonVPPActive &&
+			metrics[i].batExportKWH > minSignificantBatteryPowerKW*timeline[i].durationHours {
+			for j := i + 1; j < len(timeline); j++ {
+				if actions[j].reason == types.ActionReasonVPPPrep || actions[j].reason == types.ActionReasonVPPActive {
+					break
+				}
+				if actions[j].batteryMode == types.BatteryModeChargeAny &&
+					metrics[j].gridChargeKWH > minSignificantBatteryPowerKW*timeline[j].durationHours {
+					if timeline[i].exportRate-timeline[j].importRate < wear.exportGatePerKWH-priceEpsilonForEquality {
+						return false, "UnprofitableExportToGridCharge"
+					}
+				}
+				// Once the battery refills to >= almostFullSOC (whether from solar or from a grid charge at j
+				// that already passed the export gate check above), hitting full capacity decouples export i
+				// from any subsequent grid charges after j.
+				if states[j+1].soc > states[j].soc && states[j+1].soc >= almostFullSOC {
+					break
 				}
 			}
 		}

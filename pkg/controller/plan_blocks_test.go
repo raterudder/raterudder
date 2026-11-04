@@ -998,6 +998,49 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 		assert.True(t, validRaw, "Export gate must compare raw rate spread ($0.46 - $0.40 = $0.06 >= $0.05) without dividing charge rate by RTE: "+reasonRaw)
 	})
 
+	t.Run("Rejects_UnprofitableExportToGridCharge", func(t *testing.T) {
+		t.Parallel()
+		wear4Cents := wearRates{exportGatePerKWH: 0.04, arbitrageGatePerKWH: 0.02}
+		state80 := planState{soc: 80.0, energyKWH: 13.5 * 0.80, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
+
+		// 1. Export at $0.0940 followed by grid charge at $0.05503 (raw spread $0.03897 < $0.04 gate) -> rejected.
+		timelineBelowGate := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.31443, exportRate: 0.0940, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.05503, exportRate: 0.02375, loadKWH: 0.5, minSOC: 40.0},
+		}
+		actionsExportThenCharge := []actionCandidate{
+			{batteryMode: types.BatteryModeExport, targetSOC: 20.0},
+			{batteryMode: types.BatteryModeChargeAny, targetSOC: 60.0},
+		}
+		validBelow, reasonBelow := validateCandidateTrajectory(actionsExportThenCharge, timelineBelowGate, settings, wear4Cents, 0.90, state80, 0)
+		assert.False(t, validBelow, "Should reject UnprofitableExportToGridCharge when exportRate - importRate < exportGatePerKWH")
+		assert.Equal(t, "UnprofitableExportToGridCharge", reasonBelow)
+
+		// 2. Export at $0.1000 followed by grid charge at $0.05503 (raw spread $0.04497 >= $0.04 gate) -> accepted.
+		timelineAboveGate := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.31443, exportRate: 0.1000, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.05503, exportRate: 0.02375, loadKWH: 0.5, minSOC: 40.0},
+		}
+		validAbove, reasonAbove := validateCandidateTrajectory(actionsExportThenCharge, timelineAboveGate, settings, wear4Cents, 0.90, state80, 0)
+		assert.True(t, validAbove, "Spread of $0.045/kWh must clear $0.04/kWh exportGatePerKWH: "+reasonAbove)
+
+		// 3. Intervening full solar refill (to >= 98% SOC in BatteryModeLoad) decouples the earlier export from a later grid charge.
+		timelineSolarRefill := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.31443, exportRate: 0.0940, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 3.0, importRate: 0.10481, exportRate: 0.02375, loadKWH: 0.5, solarKWH: 15.0, minSOC: 20.0},
+			{startTime: now.Add(4 * time.Hour), endTime: now.Add(6 * time.Hour), durationHours: 2.0, importRate: 0.31443, exportRate: 0.0940, loadKWH: 8.0, minSOC: 20.0},
+			{startTime: now.Add(6 * time.Hour), endTime: now.Add(7 * time.Hour), durationHours: 1.0, importRate: 0.05503, exportRate: 0.02375, loadKWH: 0.5, minSOC: 40.0},
+		}
+		actionsWithSolarRefill := []actionCandidate{
+			{batteryMode: types.BatteryModeExport, targetSOC: 20.0},
+			{batteryMode: types.BatteryModeLoad},
+			{batteryMode: types.BatteryModeLoad},
+			{batteryMode: types.BatteryModeChargeAny, targetSOC: 80.0},
+		}
+		validRefill, reasonRefill := validateCandidateTrajectory(actionsWithSolarRefill, timelineSolarRefill, settings, wear4Cents, 0.90, state80, 0)
+		assert.True(t, validRefill, "Full solar refill between export and later grid charge must decouple the cycle: "+reasonRefill)
+	})
+
 	t.Run("Accepts_ProfitableArbitrageTrajectory", func(t *testing.T) {
 		t.Parallel()
 		// Grid charge at $0.05, export at $0.40. Margin is huge.
@@ -2362,8 +2405,11 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 		}
 		assert.True(t, foundMorningExport, "Plan must schedule late-morning peak export (08:00-09:00)")
 
-		// Case 2: At 18:20 (final interval of afternoon On-Peak before 19:00-22:00 Off-Peak load),
-		// BatteryModeExport must preserve enough SOC (> 20%) to cover 19:00-22:00 Off-Peak load ($0.1048/kWh > $0.0940/kWh export).
+		// Case 2a: At 18:20 with $0.0940/kWh On-Peak export and $0.05503/kWh Super Off-Peak import,
+		// exporting down to 55% SOC requires recharging from the grid at 22:00 ($0.05503/kWh).
+		// After 90% RTE ($0.0940 * 0.90 - $0.05503 = $0.02957/kWh) and $0.0300/kWh balanced cycle wear,
+		// that Export -> ChargeAny cycle is a net loss (-$0.00043/kWh), so scoreCandidateTrajectory
+		// keeps 18:20 in BatteryModeLoad rather than cycling the battery unprofitably.
 		t1820 := time.Date(2026, 10, 19, 18, 20, 0, 0, nyLoc)
 		t1800 := time.Date(2026, 10, 19, 18, 0, 0, 0, nyLoc)
 		var future1820 []types.Price
@@ -2382,14 +2428,36 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 		}
 		dec1820, plan1820, err := c.Plan(ctx, status1820, priceForHour(t1800), future1820, buildHistory(t1820), nil, settings, nil)
 		require.NoError(t, err)
-		assert.Equal(t, types.BatteryModeExport, dec1820.Action.BatteryMode,
-			"At 18:20 On-Peak with 92%% SOC, battery must export surplus energy above 19:00-22:00 Off-Peak load requirement")
-		assert.Greater(t, dec1820.Action.ChargeToSOC, 45,
-			"Evening peak export ChargeToSOC must preserve energy above 20%% reserve to cover 19:00-22:00 Off-Peak load")
+		assert.Equal(t, types.BatteryModeLoad, dec1820.Action.BatteryMode,
+			"At 18:20 On-Peak ($0.0940/kWh export vs $0.05503/kWh overnight import), exporting energy that must be grid-recharged is unprofitable after 90%% RTE and $0.03/kWh wear")
 		assert.Empty(t, findDominatedPlanPeriods(plan1820), "Plan at 18:20 must not contain dominated Standby/Export periods")
 
+		// Case 2b: When On-Peak export is $0.100/kWh (still below $0.10481/kWh Off-Peak import, but
+		// profitable to recharge at $0.05503/kWh Super Off-Peak: $0.100 * 0.90 - $0.05503 = $0.03497 > $0.0300 wear):
+		// - With MinBatteryExportDifference = $0.02/kWh (raw spread $0.04497 >= $0.02), BatteryModeExport
+		//   is scheduled at 18:20 and clamped to ChargeToSOC > 45% to preserve 19:00-22:00 Off-Peak load.
+		// - With MinBatteryExportDifference = $0.05/kWh (raw spread $0.04497 < $0.05), UnprofitableExportToGridCharge
+		//   blocks exporting energy that forces a 22:00 Super Off-Peak grid charge.
+		price1800HigherExp := priceForHour(t1800)
+		price1800HigherExp.GenerationCreditDollarsPerKWH = 0.100
+		dec1820Profitable, plan1820Profitable, err := c.Plan(ctx, status1820, price1800HigherExp, future1820, buildHistory(t1820), nil, settings, nil)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeExport, dec1820Profitable.Action.BatteryMode,
+			"At 18:20 On-Peak ($0.100/kWh export), battery must export surplus energy above 19:00-22:00 Off-Peak load requirement")
+		assert.Greater(t, dec1820Profitable.Action.ChargeToSOC, 45,
+			"Evening peak export ChargeToSOC must preserve energy above 20%% reserve to cover 19:00-22:00 Off-Peak load")
+		assert.Empty(t, findDominatedPlanPeriods(plan1820Profitable), "Plan at 18:20 ($0.100 export) must not contain dominated Standby/Export periods")
+
+		settingsHigherExportGate := settings
+		settingsHigherExportGate.MinBatteryExportDifferenceDollarsPerKWH = 0.05
+		dec1820Gated, _, err := c.Plan(ctx, status1820, price1800HigherExp, future1820, buildHistory(t1820), nil, settingsHigherExportGate, nil)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeLoad, dec1820Gated.Action.BatteryMode,
+			"When MinBatteryExportDifference ($0.05/kWh) exceeds raw export-to-grid-charge spread ($0.100 - $0.05503 = $0.045/kWh), UnprofitableExportToGridCharge must prevent export")
+
 		// Case 3: At 19:00 (start of Off-Peak at 58% SOC) and 22:00 (start of Super Off-Peak at 20% SOC with 40% reserve):
-		// At 19:00 the battery must stay in BatteryModeLoad (not Standby waitingToCharge), and at 22:00 it must charge above 40%.
+		// At 19:00 the battery must stay in BatteryModeLoad (not Standby waitingToCharge), and at 22:00 it must charge
+		// above the 40% reserve (~45% SOC) to cover 05:00-09:00 morning load without over-charging for unprofitable morning export.
 		t1900 := time.Date(2026, 10, 19, 19, 0, 0, 0, nyLoc)
 		var future1900 []types.Price
 		for i := 1; i < 28; i++ {
@@ -2425,8 +2493,10 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 				socAt0900 = p.StartSOC
 			}
 		}
-		assert.Greater(t, maxOvernightEndSOC, 50.0,
-			"Super Off-Peak (22:00-05:00) must recharge well above the 40%% reserve target to cover morning peak")
+		assert.Greater(t, maxOvernightEndSOC, 43.5,
+			"Super Off-Peak (22:00-05:00) must recharge above the 40%% reserve target (~44%% SOC) to cover 05:00-09:00 morning load")
+		assert.Less(t, maxOvernightEndSOC, 50.0,
+			"Super Off-Peak (22:00-05:00) must not over-charge above 50%% SOC for an unprofitable $0.0940/kWh morning export")
 		assert.InDelta(t, 20.0, socAt0900, 1.0,
 			"By 09:00 (after 07:00-09:00 On-Peak), battery must be at the 20%% Off-Peak reserve to leave 80%% headroom for 09:00-13:00 free Off-Peak solar (+68%% SOC)")
 
