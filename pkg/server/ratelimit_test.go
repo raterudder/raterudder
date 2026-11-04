@@ -1,13 +1,16 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
 )
 
@@ -468,6 +471,85 @@ func TestRateLimitMiddleware(t *testing.T) {
 		val, exists := s.clientLimiters.Load("10.0.0.99")
 		assert.True(t, exists)
 		assert.NotNil(t, val)
+	})
+
+	t.Run("App Token Per-User Rate Limit - Bearer and Query Token", func(t *testing.T) {
+		s := &Server{
+			appsEncryptionKey:  testAppsEncryptionKey,
+			generalRateLimit:   rate.Every(time.Minute / 1),
+			generalBurst:       1,
+			sensitiveRateLimit: rate.Every(time.Minute / 5),
+			sensitiveBurst:     5,
+		}
+		handler := s.rateLimitMiddleware(dummyHandler)
+
+		tokenUser1, _, err := s.createAppToken("user-1", "site-1", "app-1")
+		require.NoError(t, err)
+		tokenUser2, _, err := s.createAppToken("user-2", "site-2", "app-2")
+		require.NoError(t, err)
+
+		// User 1 from shared egress IP 198.51.100.50 succeeds on first request
+		reqUser1A := httptest.NewRequest("GET", "/api/agent/summary", nil)
+		reqUser1A.RemoteAddr = "198.51.100.50:12345"
+		reqUser1A.Header.Set("Authorization", "Bearer "+tokenUser1)
+		wUser1A := httptest.NewRecorder()
+		handler.ServeHTTP(wUser1A, reqUser1A)
+		assert.Equal(t, http.StatusOK, wUser1A.Code)
+
+		// User 1 from a DIFFERENT egress IP 198.51.100.51 via ?token= on /api/agent/summary is throttled (same user bucket)
+		reqUser1B := httptest.NewRequest("GET", "/api/agent/summary?token="+url.QueryEscape(tokenUser1), nil)
+		reqUser1B.RemoteAddr = "198.51.100.51:12345"
+		wUser1B := httptest.NewRecorder()
+		handler.ServeHTTP(wUser1B, reqUser1B)
+		assert.Equal(t, http.StatusTooManyRequests, wUser1B.Code)
+
+		// User 2 from the SAME shared egress IP 198.51.100.50 is allowed (independent user bucket)
+		reqUser2 := httptest.NewRequest("GET", "/api/agent/summary?token="+url.QueryEscape(tokenUser2), nil)
+		reqUser2.RemoteAddr = "198.51.100.50:12345"
+		wUser2 := httptest.NewRecorder()
+		handler.ServeHTTP(wUser2, reqUser2)
+		assert.Equal(t, http.StatusOK, wUser2.Code)
+
+		// Invalid app token from 198.51.100.50 falls back to IP limiter (first IP request succeeds, second is blocked)
+		reqInvalid1 := httptest.NewRequest("GET", "/api/agent/summary", nil)
+		reqInvalid1.RemoteAddr = "198.51.100.50:12345"
+		reqInvalid1.Header.Set("Authorization", "Bearer rr_invalid")
+		wInvalid1 := httptest.NewRecorder()
+		handler.ServeHTTP(wInvalid1, reqInvalid1)
+		assert.Equal(t, http.StatusOK, wInvalid1.Code)
+
+		reqInvalid2 := httptest.NewRequest("GET", "/api/agent/summary", nil)
+		reqInvalid2.RemoteAddr = "198.51.100.50:12345"
+		reqInvalid2.Header.Set("Authorization", "Bearer rr_invalid")
+		wInvalid2 := httptest.NewRecorder()
+		handler.ServeHTTP(wInvalid2, reqInvalid2)
+		assert.Equal(t, http.StatusTooManyRequests, wInvalid2.Code)
+	})
+
+	t.Run("Sensitive Endpoint Limit OAuth and Apps Minting Endpoints", func(t *testing.T) {
+		s := &Server{
+			generalRateLimit:   rate.Every(time.Minute / 30),
+			generalBurst:       30,
+			sensitiveRateLimit: rate.Every(time.Minute / 1),
+			sensitiveBurst:     1,
+		}
+		handler := s.rateLimitMiddleware(dummyHandler)
+
+		for idx, path := range []string{"/api/apps/new", "/api/oauth/approve", "/oauth/register", "/oauth/token"} {
+			ip := fmt.Sprintf("198.51.100.%d:12345", 60+idx)
+
+			req1 := httptest.NewRequest("POST", path, nil)
+			req1.RemoteAddr = ip
+			w1 := httptest.NewRecorder()
+			handler.ServeHTTP(w1, req1)
+			assert.Equal(t, http.StatusOK, w1.Code, "first request to %s should succeed", path)
+
+			req2 := httptest.NewRequest("POST", path, nil)
+			req2.RemoteAddr = ip
+			w2 := httptest.NewRecorder()
+			handler.ServeHTTP(w2, req2)
+			assert.Equal(t, http.StatusTooManyRequests, w2.Code, "second request to %s should hit sensitive limit", path)
+		}
 	})
 }
 

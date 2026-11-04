@@ -319,6 +319,7 @@ func (s *Server) setupHandler() http.Handler {
 	apiMux.HandleFunc("POST /api/apps/revoke", s.handleRevokeApp)
 	apiMux.HandleFunc("GET /api/oauth/client", s.handleOAuthClientInfo)
 	apiMux.HandleFunc("POST /api/oauth/approve", s.handleOAuthApprove)
+	apiMux.HandleFunc("GET /api/agent/summary", s.handleAgentSummary)
 
 	mux := http.NewServeMux()
 	// limit request body to 1MB to prevent DoS

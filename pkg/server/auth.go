@@ -59,6 +59,7 @@ var routeAuthAttributes = map[string]pathAttributes{
 	"/api/history/savings":              {allowAllSites: true},
 	"/api/history/actionsAndSavings":    {allowAllSites: true},
 	"/api/oauth/client":                 {ignoreUserNotFound: true, ignoreSiteID: true},
+	"/api/agent/summary":                {allowAppToken: true, allowQueryToken: true},
 }
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {

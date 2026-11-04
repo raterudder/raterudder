@@ -225,7 +225,28 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 		ctx := r.Context()
 
 		ip := getClientIP(r)
-		limiter := s.getClientLimiter(ip)
+		limiterKey := ip
+		var rateLimitUserID string
+
+		attrs := routeAuthAttributes[r.URL.Path]
+		if attrs.allowAppToken {
+			var rawAppToken string
+			if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer "+appTokenPrefix) {
+				rawAppToken = strings.TrimPrefix(authHeader, "Bearer ")
+			} else if attrs.allowQueryToken {
+				if qToken := r.URL.Query().Get("token"); strings.HasPrefix(qToken, appTokenPrefix) {
+					rawAppToken = qToken
+				}
+			}
+			if rawAppToken != "" {
+				if appToken, err := s.verifyAppToken(rawAppToken); err == nil && appToken.UserID != "" {
+					limiterKey = "user:" + appToken.UserID
+					rateLimitUserID = appToken.UserID
+				}
+			}
+		}
+
+		limiter := s.getClientLimiter(limiterKey)
 
 		// Check if it's a sensitive endpoint
 		isSensitive := r.URL.Path == "/api/auth/login" ||
@@ -234,12 +255,20 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 			r.URL.Path == "/api/update" ||
 			r.URL.Path == "/api/updateSites" ||
 			r.URL.Path == "/api/tesla/register" ||
-			r.URL.Path == "/api/ess/stage"
+			r.URL.Path == "/api/ess/stage" ||
+			r.URL.Path == "/api/apps/new" ||
+			r.URL.Path == "/api/oauth/approve" ||
+			r.URL.Path == "/oauth/register" ||
+			r.URL.Path == "/oauth/token"
 
 		// Apply sensitive rate limit first if applicable
 		if isSensitive {
 			if !limiter.sensitive.Allow() {
-				log.Ctx(ctx).WarnContext(ctx, "sensitive rate limit exceeded", slog.String("ip", ip), slog.String("path", r.URL.Path))
+				if rateLimitUserID != "" {
+					log.Ctx(ctx).WarnContext(ctx, "sensitive rate limit exceeded", slog.String("ip", ip), slog.String("userID", rateLimitUserID), slog.String("path", r.URL.Path))
+				} else {
+					log.Ctx(ctx).WarnContext(ctx, "sensitive rate limit exceeded", slog.String("ip", ip), slog.String("path", r.URL.Path))
+				}
 				writeJSONError(w, "too many requests", http.StatusTooManyRequests)
 				return
 			}
@@ -247,7 +276,11 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 
 		// Apply general rate limit
 		if !limiter.general.Allow() {
-			log.Ctx(ctx).WarnContext(ctx, "general rate limit exceeded", slog.String("ip", ip), slog.String("path", r.URL.Path))
+			if rateLimitUserID != "" {
+				log.Ctx(ctx).WarnContext(ctx, "general rate limit exceeded", slog.String("ip", ip), slog.String("userID", rateLimitUserID), slog.String("path", r.URL.Path))
+			} else {
+				log.Ctx(ctx).WarnContext(ctx, "general rate limit exceeded", slog.String("ip", ip), slog.String("path", r.URL.Path))
+			}
 			writeJSONError(w, "too many requests", http.StatusTooManyRequests)
 			return
 		}

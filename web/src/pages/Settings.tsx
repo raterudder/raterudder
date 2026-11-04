@@ -867,6 +867,7 @@ const Settings = ({
     const [isCreatingApp, setIsCreatingApp] = useState(false);
     const [appError, setAppError] = useState<string | null>(null);
     const [copiedToken, setCopiedToken] = useState(false);
+    const [copiedSummaryUrl, setCopiedSummaryUrl] = useState(false);
 
     const isAppsFeatureEnabled = useFeatureFlag('connectedApps');
     const hasNamedRatePeriods = utilityPeriods !== null ? utilityPeriods.some(p => p.name && p.name !== '') : true;
@@ -1176,6 +1177,7 @@ const Settings = ({
 
         setCreatedToken(null);
         setCopiedToken(false);
+        setCopiedSummaryUrl(false);
         setAppError(null);
         setNewAppName('');
 
@@ -1215,6 +1217,7 @@ const Settings = ({
             setCreatedToken(res.token);
             setNewAppName('');
             setCopiedToken(false);
+            setCopiedSummaryUrl(false);
         } catch (err) {
             setAppError(err instanceof Error ? err.message : 'Failed to create API key');
         } finally {
@@ -2988,10 +2991,11 @@ const Settings = ({
 
                     {createdToken && (
                         <div className="warning-notice" data-testid="created-app-token-banner" style={{ marginBottom: '1.25rem' }}>
-                            <div style={{ marginBottom: '0.5rem' }}>
-                                <strong>Save your new API key now.</strong> You will only see this API key once and RateRudder cannot show it again. If you lose it, you will need to revoke it and create a new one:
+                            <div style={{ marginBottom: '0.75rem' }}>
+                                <strong>Save your new API key or summary URL now.</strong> You will only see them once and RateRudder cannot show them again. If you lose them, you will need to revoke this key and create a new one.
                             </div>
-                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.25rem' }}>API Key (Bearer token):</div>
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
                                 <code
                                     data-testid="created-app-token"
                                     style={{
@@ -3015,6 +3019,34 @@ const Settings = ({
                                     }}
                                 >
                                     {copiedToken ? 'Copied!' : 'Copy'}
+                                </Button>
+                            </div>
+                            <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.25rem' }}>Read-Only Summary URL (for web-fetch agents):</div>
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                                <code
+                                    data-testid="created-app-summary-url"
+                                    style={{
+                                        flex: 1,
+                                        padding: '0.5rem 0.75rem',
+                                        background: 'rgba(0,0,0,0.2)',
+                                        borderRadius: 'var(--radius-sm, 6px)',
+                                        wordBreak: 'break-all',
+                                        fontFamily: 'monospace',
+                                        fontSize: '0.85rem'
+                                    }}
+                                >
+                                    {`${window.location.origin}/api/agent/summary?token=${encodeURIComponent(createdToken)}&format=text`}
+                                </code>
+                                <Button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    onClick={() => {
+                                        const summaryUrl = `${window.location.origin}/api/agent/summary?token=${encodeURIComponent(createdToken)}&format=text`;
+                                        navigator.clipboard?.writeText(summaryUrl);
+                                        setCopiedSummaryUrl(true);
+                                    }}
+                                >
+                                    {copiedSummaryUrl ? 'Copied!' : 'Copy URL'}
                                 </Button>
                             </div>
                         </div>
