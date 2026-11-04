@@ -187,6 +187,13 @@ func TestGenerateEveningSummary(t *testing.T) {
 		assert.Contains(t, body, "15.5 kWh exported to the grid")
 	})
 
+	t.Run("ExecutiveSummarySmallExportOmitted", func(t *testing.T) {
+		title, body := generateEveningSummary(t.Context(), "executive", status, 25.0, 20.0, 0.8, 0.0, 20.0, hitDeficitAt, time.Time{}, loc)
+		assert.Equal(t, "🌙 25.0 kWh Solar Today • 🔋 85% SOC", title)
+		assert.NotContains(t, body, "exported")
+		assert.Contains(t, body, "fully covering home needs")
+	})
+
 	t.Run("ExecutiveSummaryFullyCovering", func(t *testing.T) {
 		title, body := generateEveningSummary(t.Context(), "executive", status, 25.0, 20.0, 0.0, 0.0, 20.0, hitDeficitAt, time.Time{}, loc)
 		assert.Equal(t, "🌙 25.0 kWh Solar Today • 🔋 85% SOC", title)
@@ -240,6 +247,13 @@ func TestGenerateEveningSummary(t *testing.T) {
 		assert.Contains(t, title, "85% SOC")
 		assert.Contains(t, body, "5.0 kWh imported")
 		assert.Contains(t, body, "powers home through sunrise")
+	})
+
+	t.Run("MetricsHeavySmallExportAndImportOmitted", func(t *testing.T) {
+		_, body := generateEveningSummary(t.Context(), "metrics_heavy", status, 42.0, 18.0, 0.1, 0.9, 20.0, time.Time{}, time.Time{}, loc)
+		assert.Contains(t, body, "Today: 42.0 kWh solar, 18.0 kWh home.")
+		assert.NotContains(t, body, "exported")
+		assert.NotContains(t, body, "imported")
 	})
 
 	t.Run("MetricsHeavyLowReserve", func(t *testing.T) {

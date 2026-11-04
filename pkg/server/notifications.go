@@ -388,7 +388,7 @@ func generateEveningSummary(
 
 	case "executive":
 		title = fmt.Sprintf("🌙 %.1f kWh Solar Today • 🔋 %.0f%% SOC", todayActualSolarKWH, currentStatus.BatterySOC)
-		if todayGridExportKWH > 0.5 {
+		if todayGridExportKWH >= 1.0 {
 			body = fmt.Sprintf("Solar generated %.1f kWh today with %.1f kWh exported to the grid. Battery entering night at %.0f%%.", todayActualSolarKWH, todayGridExportKWH, currentStatus.BatterySOC)
 		} else if todayHomeUsageKWH > 0 && todayActualSolarKWH >= todayHomeUsageKWH {
 			body = fmt.Sprintf("Solar generated %.1f kWh today, fully covering home needs. Battery entering night at %.0f%%.", todayActualSolarKWH, currentStatus.BatterySOC)
@@ -424,9 +424,9 @@ func generateEveningSummary(
 	default:
 		title = fmt.Sprintf("🌙 %.1f kWh Solar • 🔋 %.0f%% SOC (%.1f kWh)", todayActualSolarKWH, currentStatus.BatterySOC, currentEnergyKWH)
 		var flowStr string
-		if todayGridExportKWH > 0.0 {
+		if todayGridExportKWH >= 1.0 {
 			flowStr = fmt.Sprintf("Today: %.1f kWh solar, %.1f kWh home (%.1f kWh exported).", todayActualSolarKWH, todayHomeUsageKWH, todayGridExportKWH)
-		} else if todayGridImportKWH > 0.0 {
+		} else if todayGridImportKWH >= 1.0 {
 			flowStr = fmt.Sprintf("Today: %.1f kWh solar, %.1f kWh home (%.1f kWh imported).", todayActualSolarKWH, todayHomeUsageKWH, todayGridImportKWH)
 		} else {
 			flowStr = fmt.Sprintf("Today: %.1f kWh solar, %.1f kWh home.", todayActualSolarKWH, todayHomeUsageKWH)
