@@ -102,7 +102,7 @@ export async function handlePushEvent(
   event: PushEvent,
   sw: ServiceWorkerGlobalScope = self as unknown as ServiceWorkerGlobalScope
 ): Promise<void> {
-  let title = 'RateRudder Notification';
+  let title: string;
   let options: PushOptions;
 
   try {
