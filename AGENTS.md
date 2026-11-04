@@ -5,6 +5,7 @@
 - `pkg/controller`: Battery charging/discharging decision logic and scheduling simulations.
 - `pkg/utility`: Electricity tariff fetchers (e.g., ComEd hourly/real-time pricing).
 - `pkg/ess`: Energy Storage System integrations (FranklinWH, Tesla, etc.).
+- `pkg/feats`: Per-environment boolean feature flagging and site evaluation (`features/{release}` in Firestore).
 - `pkg/storage`: Persistence layer using Google Cloud Firestore.
 - `pkg/server`: HTTP API endpoints for notifications, settings, history, auth, and telemetry.
 - `pkg/model` & `pkg/types`: Shared domain models, tariff structures, and interfaces.
@@ -34,6 +35,22 @@
 - **Structs & JSON**: Struct field JSON tags must be headless camelCase.
 - **Naming & Units**: Always make the unit explicit in variable, struct field, and method names. Avoid ambiguous names like `Rate` or `Price` without units (which could be cents or dollars); specify the unit explicitly (e.g., `ImportRateDollars` and `ExportRateDollars` or `ImportDollars` and `ExportDollars`, `DollarsPerKWH`, `LoadKWH`, `batterySOC`, `DurationHours`, `DurationSeconds`, `homeKW`).
 - **Struct Comparisons with Slices**: In Go, structs containing slice fields (e.g., `UserNotificationSettings` with `QuietPeriods []TimePeriod`) cannot be compared with `==`. Use `reflect.DeepEqual(a, b)` in storage/persistence checks.
+
+---
+
+## Feature Flags (`pkg/feats`)
+- **Defining Flags**:
+  - Register flags as package-level variables in the package where they are evaluated using `feats.Bool("<flagName>", <defaultValue>)` (e.g., `var ffSolarModelV2 = feats.Bool("solarModelV2", false)`).
+  - Flag names must be unique and formatted in headless camelCase. Calling `feats.Bool` with the same name and different default values panics at startup.
+- **Backend Evaluation**:
+  - Check whether a flag is enabled using `ffSolarModelV2.Enabled(ctx)`.
+  - Request and background poll contexts are automatically populated with evaluated site flags by `Server.initFeats(ctx, siteID)` (cached per instance and synced to 5-minute boundaries against `features/{release}` in Firestore). If a flag is not overridden in `ctx`, `Enabled(ctx)` returns the flag's registered default value.
+- **Overriding in Go Tests**:
+  - Override a flag in unit tests without needing storage or an `Evaluator` by wrapping the context with `With`:
+    `ctx = ffSolarModelV2.With(ctx, true)`
+- **Frontend Usage**:
+  - Evaluated flags for the active site are returned in `GET /api/settings` (`SettingsRes.Features`) and provided to the React tree via `FeaturesProvider` in `web/src/utils/features.tsx`.
+  - Read a single flag in components with `const enabled = useFeatureFlag('solarModelV2')` or all flags with `const features = useFeatures()`.
 
 ---
 
