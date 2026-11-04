@@ -194,7 +194,7 @@ export const getReasonText = (action: Action, symbol: string = '$'): string => {
             return 'No battery capacity was detected. The system is standing by until battery information is available.';
         case ActionReason.DeficitCharge: {
             const delta = nowCost !== null && futureCost !== null ? futureCost - nowCost : null;
-            let costComparison = '';
+            let costComparison: string;
             if (nowCost !== null && futureCost !== null) {
                 const diff = futureCost - nowCost;
                 if (diff >= 0.01) {
@@ -267,7 +267,7 @@ export const getReasonText = (action: Action, symbol: string = '$'): string => {
         case ActionReason.WaitingToCharge: {
             const delta = nowCost !== null && futureCost !== null ? nowCost - futureCost : null;
 
-            let parts: string[] = [];
+            let parts: string[];
             if (delta !== null && delta < 0.01) {
                 parts = [
                     `A charging window is coming up which is similar in price or cheaper than now.`,
@@ -317,7 +317,7 @@ export const getReasonText = (action: Action, symbol: string = '$'): string => {
         }
         case ActionReason.SufficientBatteryTillCharge: {
             const delta = nowCost !== null && futureCost !== null ? nowCost - futureCost : null;
-            let comparisonStr = '';
+            let comparisonStr: string;
             if (nowCost !== null && futureCost !== null) {
                 const diff = nowCost - futureCost;
                 if (diff >= 0.01) {

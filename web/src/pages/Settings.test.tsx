@@ -2346,15 +2346,15 @@ describe('App & Settings', () => {
 
             await navigateToSettings();
 
+            const user = userEvent.setup();
             const editUtilBtn = screen.getByRole('button', { name: 'Change Utility Service' });
-            fireEvent.click(editUtilBtn);
+            await user.click(editUtilBtn);
 
-            const utilInput = await screen.findByPlaceholderText(/Select a service.../i);
-            fireEvent.change(utilInput, { target: { value: 'ComEd' } });
-            fireEvent.keyDown(utilInput, { key: 'ArrowDown' });
+            const utilInput = await screen.findByRole('combobox', { name: /Service/i });
+            await user.click(utilInput);
 
-            const item = await screen.findByText(/ComEd/i);
-            fireEvent.click(item);
+            const item = await screen.findByRole('option', { name: /ComEd/i });
+            await user.click(item);
 
             await waitFor(() => {
                 expect(api.fetchUtilityPeriods).toHaveBeenCalledWith(
@@ -2409,15 +2409,15 @@ describe('App & Settings', () => {
 
             await navigateToSettings();
 
+            const user = userEvent.setup();
             const editUtilBtn = screen.getByRole('button', { name: 'Change Utility Service' });
-            fireEvent.click(editUtilBtn);
+            await user.click(editUtilBtn);
 
-            const utilInput = await screen.findByPlaceholderText(/Select a service.../i);
-            fireEvent.change(utilInput, { target: { value: 'Florida' } });
-            fireEvent.keyDown(utilInput, { key: 'ArrowDown' });
+            const utilInput = await screen.findByRole('combobox', { name: /Service/i });
+            await user.click(utilInput);
 
-            const item = await screen.findByText(/Florida Power & Light/i);
-            fireEvent.click(item);
+            const item = await screen.findByRole('option', { name: /Florida Power & Light/i });
+            await user.click(item);
 
             await waitFor(() => {
                 expect(screen.getByText(/On-Peak: 50%/i)).toBeInTheDocument();
