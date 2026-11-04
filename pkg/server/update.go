@@ -1478,10 +1478,12 @@ func (s *Server) getCombinedHistory(
 			// because the entire monthly summary document was already loaded from Firestore.
 			// Filtering out the early days of the month would discard data we have already paid to read.
 			dLoc := getLocation(day.TimeLocation, now.Location())
-			if day.TSDayStart.In(dLoc).Before(todayStart) {
+			dDay := day.TSDayStart.In(dLoc)
+			dDayNorm := time.Date(dDay.Year(), dDay.Month(), dDay.Day(), 0, 0, 0, 0, now.Location())
+			if dDayNorm.Before(todayStart) {
 				combinedEnergy = append(combinedEnergy, day)
-				if latestSummaryEnergyDay.IsZero() || day.TSDayStart.In(dLoc).After(latestSummaryEnergyDay) {
-					latestSummaryEnergyDay = day.TSDayStart.In(dLoc)
+				if latestSummaryEnergyDay.IsZero() || dDayNorm.After(latestSummaryEnergyDay) {
+					latestSummaryEnergyDay = dDayNorm
 				}
 			}
 		}
@@ -1490,10 +1492,13 @@ func (s *Server) getCombinedHistory(
 		for _, w := range summary.Weather {
 			// Explicitly ignore filtering by historyStart because the monthly summary document
 			// was already fetched. Keeping all days ensures we use all available loaded history.
-			if w.TSDayStart.Before(todayStart) {
+			wLoc := getLocation(w.TimeLocation, now.Location())
+			wDay := w.TSDayStart.In(wLoc)
+			wDayNorm := time.Date(wDay.Year(), wDay.Month(), wDay.Day(), 0, 0, 0, 0, now.Location())
+			if wDayNorm.Before(todayStart) {
 				combinedWeather = append(combinedWeather, w)
-				if latestSummaryWeatherDay.IsZero() || w.TSDayStart.After(latestSummaryWeatherDay) {
-					latestSummaryWeatherDay = w.TSDayStart
+				if latestSummaryWeatherDay.IsZero() || wDayNorm.After(latestSummaryWeatherDay) {
+					latestSummaryWeatherDay = wDayNorm
 				}
 			}
 		}
@@ -1507,17 +1512,24 @@ func (s *Server) getCombinedHistory(
 		latestSummaryEnergyDay = latestSummaryWeatherDay
 	}
 
+	// Callers like handleHistoryEnergy may pass targetDate+1d as now, so cap
+	// expectedLatestDay at the actual yesterday to avoid expecting today in the summary.
 	yesterdayStart := todayStart.AddDate(0, 0, -1)
+	realYesterdayStart := truncateDay(s.now().In(now.Location())).AddDate(0, 0, -1)
+	expectedLatestDay := yesterdayStart
+	if realYesterdayStart.Before(expectedLatestDay) {
+		expectedLatestDay = realYesterdayStart
+	}
 
 	// Determine start range for fetching unsummarized energy history
 	energyFetchStart := todayStart
 	if !latestSummaryEnergyDay.IsZero() {
 		energyFetchStart = latestSummaryEnergyDay.AddDate(0, 0, 1)
-		if latestSummaryEnergyDay.Before(yesterdayStart) {
+		if latestSummaryEnergyDay.Before(expectedLatestDay) {
 			log.Ctx(ctx).WarnContext(ctx, "energy history summary is behind, fetching missing days from database",
 				slog.String("siteID", siteID),
 				slog.Time("latestSummaryDay", latestSummaryEnergyDay),
-				slog.Time("expectedLatestDay", yesterdayStart),
+				slog.Time("expectedLatestDay", expectedLatestDay),
 			)
 		}
 	} else {
@@ -1543,11 +1555,11 @@ func (s *Server) getCombinedHistory(
 	weatherFetchStart := todayStart
 	if !latestSummaryWeatherDay.IsZero() {
 		weatherFetchStart = latestSummaryWeatherDay.AddDate(0, 0, 1)
-		if latestSummaryWeatherDay.Before(yesterdayStart) {
+		if latestSummaryWeatherDay.Before(expectedLatestDay) {
 			log.Ctx(ctx).WarnContext(ctx, "weather history summary is behind, fetching missing days from database",
 				slog.String("siteID", siteID),
 				slog.Time("latestSummaryDay", latestSummaryWeatherDay),
-				slog.Time("expectedLatestDay", yesterdayStart),
+				slog.Time("expectedLatestDay", expectedLatestDay),
 			)
 		}
 	} else {

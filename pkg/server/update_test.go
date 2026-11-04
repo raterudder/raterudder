@@ -4234,3 +4234,115 @@ func TestSyncHistorySummaryRange(t *testing.T) {
 		}
 	})
 }
+
+func TestGetCombinedHistory(t *testing.T) {
+	chicagoLoc, err := time.LoadLocation("America/Chicago")
+	require.NoError(t, err)
+	nyLoc, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	t.Run("CrossTimezoneWeatherSummaryAdvancesToTodayStart", func(t *testing.T) {
+		mockS := &mockStorage{}
+		now := time.Date(2026, 11, 4, 12, 0, 0, 0, chicagoLoc)
+		todayStart := truncateDay(now) // 2026-11-04T00:00:00-06:00
+		historyStart := todayStart.AddDate(0, 0, -35)
+
+		// Energy is in America/Chicago (-06:00), Weather is in America/New_York (-05:00)
+		yesterdayEnergyStart := time.Date(2026, 11, 3, 0, 0, 0, 0, chicagoLoc)
+		yesterdayWeatherStart := time.Date(2026, 11, 3, 0, 0, 0, 0, nyLoc)
+
+		summaries := []types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{
+						TSDayStart:   yesterdayEnergyStart,
+						TimeLocation: chicagoLoc.String(),
+						Hourly:       []types.EnergyStats{{TSHourStart: yesterdayEnergyStart, HomeKWH: 1.0}},
+					},
+				},
+				Weather: []types.Weather{
+					{
+						TSDayStart:    yesterdayWeatherStart,
+						TimeLocation:  nyLoc.String(),
+						ForecastHours: []types.HourlyWeather{{TSHourStart: yesterdayWeatherStart, TemperatureC: 10}},
+					},
+				},
+			},
+		}
+
+		// Both energyFetchStart and weatherFetchStart must advance to todayStart (2026-11-04T00:00:00-06:00),
+		// not re-fetch yesterday (2026-11-03).
+		mockS.On("GetEnergyHistory", mock.Anything, "site1", todayStart, todayStart.AddDate(0, 0, 1)).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockS.On("GetWeather", mock.Anything, "site1", todayStart, todayStart.AddDate(0, 0, 2)).Return([]types.Weather{}, nil).Once()
+
+		srv := &Server{
+			storage: mockS,
+			nowFunc: func() time.Time { return now },
+		}
+
+		settings := settingsWithVersion{
+			Settings: types.Settings{
+				Location: &types.SiteLocation{
+					TimeZone: nyLoc.String(),
+				},
+			},
+		}
+
+		energy, weather, err := srv.getCombinedHistory(context.Background(), "site1", settings, historyStart, now, summaries)
+		require.NoError(t, err)
+		assert.Len(t, energy, 1)
+		assert.Len(t, weather, 1)
+		mockS.AssertExpectations(t)
+	})
+
+	t.Run("CallerPassingTomorrowEndUsesRealYesterdayForSummaryCheck", func(t *testing.T) {
+		mockS := &mockStorage{}
+		realNow := time.Date(2026, 11, 4, 16, 0, 0, 0, time.UTC)
+		realToday := time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)
+		realYesterday := time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC)
+
+		// handleHistoryEnergy passes targetDate + 1 day (2026-11-05T00:00:00Z) as `now`
+		queryEnd := realToday.AddDate(0, 0, 1)
+		historyStart := realToday.AddDate(0, 0, -36)
+
+		summaries := []types.HistorySummary{
+			{
+				Energy: []types.DailyEnergyStats{
+					{
+						TSDayStart: realYesterday,
+						Hourly:     []types.EnergyStats{{TSHourStart: realYesterday, HomeKWH: 2.0}},
+					},
+				},
+				Weather: []types.Weather{
+					{
+						TSDayStart:    realYesterday,
+						ForecastHours: []types.HourlyWeather{{TSHourStart: realYesterday, TemperatureC: 12}},
+					},
+				},
+			},
+		}
+
+		// Fetch starts at realToday (2026-11-04) up to queryEnd + 1 day / 2 days
+		mockS.On("GetEnergyHistory", mock.Anything, "site1", realToday, queryEnd.AddDate(0, 0, 1)).Return([]types.DailyEnergyStats{}, nil).Once()
+		mockS.On("GetWeather", mock.Anything, "site1", realToday, queryEnd.AddDate(0, 0, 2)).Return([]types.Weather{}, nil).Once()
+
+		srv := &Server{
+			storage: mockS,
+			nowFunc: func() time.Time { return realNow },
+		}
+
+		settings := settingsWithVersion{
+			Settings: types.Settings{
+				Location: &types.SiteLocation{
+					TimeZone: "UTC",
+				},
+			},
+		}
+
+		energy, weather, err := srv.getCombinedHistory(context.Background(), "site1", settings, historyStart, queryEnd, summaries)
+		require.NoError(t, err)
+		assert.Len(t, energy, 1)
+		assert.Len(t, weather, 1)
+		mockS.AssertExpectations(t)
+	})
+}
