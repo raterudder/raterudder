@@ -185,6 +185,7 @@ func (s *Server) handleUpdateSites(w http.ResponseWriter, r *http.Request) {
 			defer cancel()
 
 			ctx := log.With(siteCtx, log.Ctx(siteCtx).With(slog.Group("update", slog.String("siteID", siteID))))
+			ctx = s.initFeats(ctx, siteID)
 
 			defer func() {
 				if r := recover(); r != nil {

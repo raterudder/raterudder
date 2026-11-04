@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -941,6 +942,48 @@ func TestFirestoreProvider(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, "alias1", got.Aliases["site1"])
 			assert.Equal(t, "alias2", got.Aliases["site2"])
+		})
+	})
+
+	t.Run("FeatureConfig", func(t *testing.T) {
+		t.Run("EmptyReleaseError", func(t *testing.T) {
+			_, _, err := f.GetFeatureConfig(ctx, "")
+			assert.ErrorContains(t, err, "release cannot be empty")
+
+			_, err = f.SetFeatureConfig(ctx, "", feats.Config{})
+			assert.ErrorContains(t, err, "release cannot be empty")
+		})
+
+		t.Run("GetFeatureConfigNotFound", func(t *testing.T) {
+			_, _ = f.client.Collection("features").Doc("staging").Delete(ctx)
+
+			cfg, updatedAt, err := f.GetFeatureConfig(ctx, "staging")
+			require.NoError(t, err)
+			assert.Empty(t, cfg.Features)
+			assert.True(t, updatedAt.IsZero())
+		})
+
+		t.Run("SetAndGetFeatureConfig", func(t *testing.T) {
+			want := feats.Config{
+				Features: map[string][]feats.Criteria{
+					"solarModelV2": {
+						{
+							SiteIDs:     []string{"site-1", "site-2"},
+							SitePercent: 20,
+							Value:       true,
+						},
+					},
+				},
+			}
+
+			updatedAt1, err := f.SetFeatureConfig(ctx, "production", want)
+			require.NoError(t, err)
+			assert.False(t, updatedAt1.IsZero())
+
+			got, gotUpdatedAt, err := f.GetFeatureConfig(ctx, "production")
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+			assert.True(t, updatedAt1.Equal(gotUpdatedAt))
 		})
 	})
 

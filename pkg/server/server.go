@@ -23,6 +23,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/common"
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
@@ -93,6 +94,12 @@ type Server struct {
 	vapidPublicKey  string
 	vapidSubject    string
 	gridOutageDelay time.Duration
+
+	featsMu        sync.RWMutex
+	featsFetchMu   sync.Mutex
+	featsEvaluator *feats.Evaluator
+	featsUpdatedAt time.Time
+	featsFetchedAt time.Time
 }
 
 // Configured initializes the Server with dependencies.
@@ -395,6 +402,9 @@ func (s *Server) getUpdateSpecificAuth(r *http.Request) bool {
 // Run starts the HTTP server and blocks until the context is canceled or an error occurs.
 // It also handles graceful shutdown when the context is done.
 func (s *Server) Run(ctx context.Context) error {
+	// trigger a refresh of the feature config
+	s.getFeatsEvaluator(ctx)
+
 	s.httpServer = &http.Server{
 		Addr:              s.listenAddr,
 		Handler:           s.setupHandler(),

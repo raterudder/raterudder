@@ -51,6 +51,7 @@ export const defaultSettings = {
     hasCredentials: {
         franklin: true
     },
+    features: {},
     minStartChargeMinutes: 5,
     solarCapacityBufferMinutes: 10,
     vppChargingBufferMinutes: 20,

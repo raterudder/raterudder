@@ -18,6 +18,7 @@ import (
 
 	"github.com/raterudder/raterudder/pkg/common"
 	"github.com/raterudder/raterudder/pkg/controller"
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/storage/storagemock"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
@@ -341,6 +342,7 @@ func TestWebPushTopic(t *testing.T) {
 
 func createTestEndpointsServer(t *testing.T, mockS *storagemock.MockDatabase) (*Server, http.Handler, string, string) {
 	t.Helper()
+	mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Maybe()
 	privB64, pubB64 := generateTestVAPIDKeys(t)
 	privKey, pubKey, err := parseVAPIDPrivateKey(privB64)
 	require.NoError(t, err)
@@ -381,6 +383,7 @@ func TestHandleGetVAPIDPublicKey(t *testing.T) {
 
 	t.Run("Disabled", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Maybe()
 		disabledSrv := &Server{
 			storage:            mockS,
 			bypassAuth:         true,
@@ -425,6 +428,7 @@ func TestHandleSubscribe(t *testing.T) {
 
 	t.Run("Disabled", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Maybe()
 		disabledSrv := &Server{
 			storage:            mockS,
 			bypassAuth:         true,
@@ -630,6 +634,7 @@ func TestHandleReplaceSubscription(t *testing.T) {
 
 	t.Run("NotificationsDisabled", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Maybe()
 		disabledSrv := &Server{
 			storage:            mockS,
 			bypassAuth:         true,

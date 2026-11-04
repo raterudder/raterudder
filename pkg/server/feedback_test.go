@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/storage/storagemock"
 	"github.com/raterudder/raterudder/pkg/types"
@@ -79,6 +80,7 @@ func TestHandleSubmitFeedback(t *testing.T) {
 			Email: "user@example.com",
 			Sites: []types.UserSite{},
 		}, nil).Once()
+		mockDB.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 
 		mockDB.On("InsertFeedback", mock.Anything, mock.MatchedBy(func(f types.Feedback) bool {
 			return f.SiteID == "" && f.Sentiment == "happy" && f.Comment == "No sites yet!" && f.UserID == "google:user1"
@@ -122,6 +124,7 @@ func TestHandleSubmitFeedback(t *testing.T) {
 
 		// User does not exist in storage yet
 		mockDB.On("GetUser", mock.Anything, "google:newuser1").Return(types.User{}, storage.ErrUserNotFound).Once()
+		mockDB.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 
 		mockDB.On("InsertFeedback", mock.Anything, mock.MatchedBy(func(f types.Feedback) bool {
 			return f.SiteID == "" && f.Sentiment == "neutral" && f.Comment == "Brand new user" && f.UserID == "google:newuser1"
@@ -175,6 +178,7 @@ func TestHandleSubmitFeedback(t *testing.T) {
 				{UserID: "google:user1"},
 			},
 		}, nil).Once()
+		mockDB.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 
 		mockDB.On("InsertFeedback", mock.Anything, mock.MatchedBy(func(f types.Feedback) bool {
 			return f.SiteID == "site123" && f.Sentiment == "happy" && f.Comment == "Authorized site" && f.UserID == "google:user1"
@@ -348,6 +352,7 @@ func TestHandleListFeedback(t *testing.T) {
 		}, nil).Once()
 
 		mockDBWithAuth.On("ListFeedback", mock.Anything, 50, "").Return([]types.Feedback{}, nil).Once()
+		mockDBWithAuth.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 
 		reqAuth := httptest.NewRequest("GET", "/api/list/feedback", nil)
 		reqAuth.AddCookie(&http.Cookie{Name: authTokenCookie, Value: validToken})
@@ -387,6 +392,7 @@ func TestHandleListFeedback(t *testing.T) {
 		}, nil).Once()
 
 		mockDBWithAuth.On("ListFeedback", mock.Anything, 20, "fb5").Return([]types.Feedback{}, nil).Once()
+		mockDBWithAuth.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 
 		reqAuth := httptest.NewRequest("GET", "/api/list/feedback?limit=20&lastFeedbackID=fb5", nil)
 		reqAuth.AddCookie(&http.Cookie{Name: authTokenCookie, Value: validToken})

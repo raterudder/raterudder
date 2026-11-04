@@ -11,6 +11,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
@@ -135,6 +136,7 @@ func TestHandleListUtilities(t *testing.T) {
 
 	t.Run("Accessible via setup handler through auth bypass", func(t *testing.T) {
 		mockStorage := &mockStorage{}
+		mockStorage.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 		mockESS := &mockESS{}
 		mockP := ess.NewMap()
 		mockP.SetSystem(types.SiteIDNone, mockESS)
@@ -212,6 +214,7 @@ func TestHandleListUtilities(t *testing.T) {
 		require.NoError(t, err)
 
 		mockStorage := &mockStorage{}
+		mockStorage.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 		mockStorage.On("GetUser", mock.Anything, "google:unregistered@example.com").Return(types.User{}, storage.ErrUserNotFound).Once()
 
 		srv := &Server{

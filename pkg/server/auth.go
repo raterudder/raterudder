@@ -164,6 +164,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		var activeAppName string
 		// user might be a mock/fake user if this is bypassAuth or singleSite
 		var user types.User
+		var authSuccess bool
 		var authViaUpdateSpecific bool
 		// handle authentication
 		if s.bypassAuth {
@@ -172,9 +173,9 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				Sites: []types.UserSite{{ID: types.SiteIDNone}},
 				Admin: true,
 			}
+			authSuccess = true
 			ctx = context.WithValue(ctx, userContextKey, user)
 		} else {
-			var authSuccess bool
 
 			// Check app token auth on allowed endpoints
 			if rawAppToken != "" && allowAppToken {
@@ -453,6 +454,10 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 		if len(authAttrs) > 0 {
 			ctx = log.With(ctx, log.Ctx(ctx).With(slog.Group("auth", authAttrs...)))
+		}
+
+		if (authSuccess || authViaUpdateSpecific) && (!isUpdatePath || siteID != "") {
+			ctx = s.initFeats(ctx, siteID)
 		}
 
 		ctx = context.WithValue(ctx, allUserSitesContextKey, user.Sites)

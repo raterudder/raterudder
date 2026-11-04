@@ -17,6 +17,7 @@ import (
 
 	"cloud.google.com/go/firestore"
 	"github.com/levenlabs/go-lflag"
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"google.golang.org/api/iterator"
@@ -1596,6 +1597,57 @@ func (f *FirestoreProvider) UpdateAdminSettings(ctx context.Context, settings ty
 		return fmt.Errorf("failed to save admin settings: %w", err)
 	}
 	return nil
+}
+
+// GetFeatureConfig retrieves the per-environment feature flag configuration from the "features/{release}" document.
+func (f *FirestoreProvider) GetFeatureConfig(ctx context.Context, release string) (feats.Config, time.Time, error) {
+	if release == "" {
+		return feats.Config{}, time.Time{}, errors.New("release cannot be empty")
+	}
+
+	doc, err := f.getDocWithRetry(ctx, f.client.Collection("features").Doc(release))
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return feats.Config{}, time.Time{}, nil
+		}
+		return feats.Config{}, time.Time{}, fmt.Errorf("failed to fetch feature config for %s: %w", release, err)
+	}
+
+	val, err := doc.DataAt("json")
+	if err != nil {
+		return feats.Config{}, time.Time{}, fmt.Errorf("feature config doc %s missing 'json' field: %w", release, err)
+	}
+
+	jsonStr, ok := val.(string)
+	if !ok {
+		return feats.Config{}, time.Time{}, fmt.Errorf("feature config doc %s 'json' field is not a string", release)
+	}
+
+	var cfg feats.Config
+	if err := json.Unmarshal([]byte(jsonStr), &cfg); err != nil {
+		return feats.Config{}, time.Time{}, fmt.Errorf("failed to unmarshal feature config for %s: %w", release, err)
+	}
+	return cfg, doc.UpdateTime, nil
+}
+
+// SetFeatureConfig saves the per-environment feature flag configuration to the "features/{release}" document.
+func (f *FirestoreProvider) SetFeatureConfig(ctx context.Context, release string, config feats.Config) (time.Time, error) {
+	if release == "" {
+		return time.Time{}, errors.New("release cannot be empty")
+	}
+
+	jsonBytes, err := json.Marshal(config)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("failed to marshal feature config: %w", err)
+	}
+
+	wr, err := f.client.Collection("features").Doc(release).Set(ctx, map[string]any{
+		"json": string(jsonBytes),
+	})
+	if err != nil {
+		return time.Time{}, fmt.Errorf("failed to save feature config for %s: %w", release, err)
+	}
+	return wr.UpdateTime, nil
 }
 
 // UpdateESSMockState saves the internal state of a mock ESS provider.

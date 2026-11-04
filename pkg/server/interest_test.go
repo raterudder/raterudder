@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/storage/storagemock"
 	"github.com/raterudder/raterudder/pkg/types"
@@ -113,6 +115,7 @@ func TestHandleSubmitInterestAuth(t *testing.T) {
 
 	// Verify it ignores user lookup error and siteID requirement
 	mockDB.On("GetUser", mock.Anything, "google:new-user-id").Return(types.User{}, storage.ErrUserNotFound).Once()
+	mockDB.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 	mockDB.On("UpsertInterest", mock.Anything, mock.MatchedBy(func(it types.InterestSubmission) bool {
 		return it.Email == "new@example.com"
 	})).Return(nil).Once()

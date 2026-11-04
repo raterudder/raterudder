@@ -18,6 +18,7 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/coreos/go-oidc/v3/oidc/oidctest"
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
@@ -176,6 +177,7 @@ func TestAuthMiddleware(t *testing.T) {
 
 	t.Run("Single Site Mode - No SiteID Required", func(t *testing.T) {
 		mocks := new(mockStorage)
+		mocks.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 		server.storage = mocks
 		server.singleSite = true
 		w := httptest.NewRecorder()
@@ -1651,6 +1653,7 @@ func TestHandleLogout(t *testing.T) {
 
 	t.Run("Through Auth Middleware", func(t *testing.T) {
 		mocks := new(mockStorage)
+		mocks.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 		serverWithMocks := &Server{
 			storage: mocks,
 		}
@@ -1717,6 +1720,7 @@ func TestHandleLogout(t *testing.T) {
 
 	t.Run("Through Auth Middleware - Valid Session Revokes Nonce", func(t *testing.T) {
 		mocks := new(mockStorage)
+		mocks.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 		serverWithMocks := &Server{
 			storage:              mocks,
 			sessionEncryptionKey: testKey,
@@ -1753,6 +1757,7 @@ func TestHandleLogout(t *testing.T) {
 
 	t.Run("Through Auth Middleware - Unregistered User Ignores ErrUserNotFound", func(t *testing.T) {
 		mocks := new(mockStorage)
+		mocks.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 		serverWithMocks := &Server{
 			storage:              mocks,
 			sessionEncryptionKey: testKey,

@@ -15,6 +15,7 @@ import (
 	"github.com/raterudder/raterudder/pkg/common"
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
 	"github.com/stretchr/testify/assert"
@@ -33,6 +34,7 @@ func TestHandleUpdate(t *testing.T) {
 	mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
 	mockS := &mockStorage{}
+	mockS.On("GetFeatureConfig", mock.Anything, mock.Anything).Return(feats.Config{}, time.Time{}, nil).Maybe()
 	mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 	mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 		{
@@ -1619,6 +1621,7 @@ func TestHandleUpdateSites(t *testing.T) {
 	mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
 
 	mockS := &mockStorage{}
+	mockS.On("GetFeatureConfig", mock.Anything, mock.Anything).Return(feats.Config{}, time.Time{}, nil).Maybe()
 	mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 	mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 		{
@@ -1711,6 +1714,7 @@ func TestHandleUpdateSites(t *testing.T) {
 
 	t.Run("No ESS Configured", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
@@ -1754,6 +1758,7 @@ func TestHandleUpdateSites(t *testing.T) {
 		token := generateTestToken(t, oidcSrv.URL, priv, updateEmail, "updater")
 
 		mockS := &mockStorage{}
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
@@ -1849,6 +1854,7 @@ func TestHandleUpdateSites(t *testing.T) {
 
 	t.Run("ESS Rate Limited", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
@@ -1888,6 +1894,7 @@ func TestHandleUpdateSites(t *testing.T) {
 
 	t.Run("ESS Write Rate Limited", func(t *testing.T) {
 		mockS := &mockStorage{}
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
 			{
@@ -2106,6 +2113,7 @@ func TestHandleUpdateSites(t *testing.T) {
 		}
 
 		mockS := &mockStorage{}
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 		mockS.On("ListSitesSettings", mock.Anything, "production", mock.Anything).Return(settingsMap, versionsMap, updatedTimesMap, nil)
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil)
 		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
@@ -2169,6 +2177,7 @@ func TestHandleUpdateSites(t *testing.T) {
 		now := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
 
 		mockS := &mockStorage{}
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 		mockS.On("ListSitesSettings", mock.Anything, "production", mock.Anything).Return(map[string]types.Settings{
 			"site-panic":   {ESS: "mock", UtilityProvider: "test", Release: "production"},
 			"site-healthy": {ESS: "mock", UtilityProvider: "test", Release: "production"},
@@ -2244,6 +2253,7 @@ func TestHandleUpdateSites(t *testing.T) {
 		now := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
 
 		mockS := &mockStorage{}
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 		mockS.On("ListSitesSettings", mock.Anything, "production", mock.Anything).Return(map[string]types.Settings{
 			"site-recent": {ESS: "mock", UtilityProvider: "test", Release: "production"},
 			"site-older":  {ESS: "mock", UtilityProvider: "test", Release: "production"},

@@ -28,6 +28,7 @@ import SupportedUtilitiesPage from './pages/SupportedUtilitiesPage';
 import TeslaCallback from './pages/TeslaCallback';
 import OAuthAuthorizePage from './pages/OAuthAuthorizePage';
 import { checkAndStoreEnabledParam } from './utils/enabledProviders';
+import { FeaturesProvider } from './utils/features';
 
 const isMarketingRoute = (path: string) =>
     path === '/' ||
@@ -375,7 +376,7 @@ function AppContent() {
     };
 
     return (
-        <>
+        <FeaturesProvider features={settings?.features}>
             <div className={isHome ? "app-container-home" : "app-container"}>
                 <Header
                     loggedIn={loggedIn}
@@ -522,7 +523,7 @@ function AppContent() {
 
                 <TutorialDialog open={showTutorial} onClose={() => setShowTutorial(false)} settings={settings} />
             </div>
-        </>
+        </FeaturesProvider>
     );
 }
 

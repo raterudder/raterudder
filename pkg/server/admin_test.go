@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -19,6 +20,7 @@ import (
 
 func TestAdminListSites(t *testing.T) {
 	mockStorage := &mockStorage{}
+	mockStorage.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 	sites := []types.Site{
 		{ID: "site1"},
 		{ID: "site2"},
@@ -193,6 +195,7 @@ func TestAdminSetSiteAlias(t *testing.T) {
 			Email: "admin@example.com",
 		}, nil).Once()
 		mockStorage.On("GetSite", mock.Anything, "site1").Return(types.Site{ID: "site1"}, nil).Once()
+		mockStorage.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 
 		mockStorage.On("GetAdminSettings", mock.Anything).Return(types.AdminSettings{
 			Aliases: map[string]string{
@@ -247,6 +250,7 @@ func TestAdminSetSiteAlias(t *testing.T) {
 
 func TestAdminListUserSites(t *testing.T) {
 	mockStorage := &mockStorage{}
+	mockStorage.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
 	srvUrl, priv := setupOIDCTest(t)
 	defer srvUrl.Close()
 	provider, err := oidc.NewProvider(context.Background(), srvUrl.URL)

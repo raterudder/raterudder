@@ -12,6 +12,7 @@ import (
 
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
 	"github.com/stretchr/testify/assert"
@@ -56,6 +57,7 @@ func setupTestServer(t *testing.T) (http.Handler, *historyMockStorage, *mockStor
 	mockU := &mockUtility{}
 	mockSBase := &mockStorage{}
 	mockSBase.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{UtilityProvider: "test"}, types.CurrentSettingsVersion, time.Time{}, nil)
+	mockSBase.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Maybe()
 
 	mockS := &historyMockStorage{
 		mockStorage: mockSBase,
@@ -90,6 +92,7 @@ func setupTestServer(t *testing.T) (http.Handler, *historyMockStorage, *mockStor
 
 func setupTestEnergyServer(t *testing.T) (http.Handler, *mockStorage) {
 	mockS := &mockStorage{}
+	mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Maybe()
 	testTime := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
 	srv := &Server{
 		storage:            mockS,

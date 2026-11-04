@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/levenlabs/go-lflag"
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/types"
 )
 
@@ -85,6 +86,10 @@ type Database interface {
 	ListUsers(ctx context.Context) ([]types.User, error)
 	GetAdminSettings(ctx context.Context) (types.AdminSettings, error)
 	UpdateAdminSettings(ctx context.Context, settings types.AdminSettings) error
+
+	// Feature Flags
+	GetFeatureConfig(ctx context.Context, release string) (feats.Config, time.Time, error)
+	SetFeatureConfig(ctx context.Context, release string, config feats.Config) (time.Time, error)
 
 	// Feedback
 	InsertFeedback(ctx context.Context, feedback types.Feedback) error

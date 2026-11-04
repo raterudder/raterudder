@@ -302,6 +302,7 @@ export interface Settings {
     hasCredentials: {
         [key: string]: boolean;
     };
+    features?: Record<string, boolean>;
     notifications?: Record<string, UserNotificationSettings>;
     essAuthStatus?: {
         consecutiveFailures: number;

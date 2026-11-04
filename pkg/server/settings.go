@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/ess"
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
@@ -163,6 +164,7 @@ func (s *Server) getESSSystem(ctx context.Context, siteID string, settings setti
 type SettingsRes struct {
 	types.Settings
 	HasCredentials map[string]bool `json:"hasCredentials"`
+	Features       map[string]bool `json:"features"`
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -180,6 +182,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	resp := SettingsRes{
 		Settings:       settings.Settings,
 		HasCredentials: creds.Has(),
+		Features:       feats.All(ctx),
 	}
 
 	w.Header().Set("Cache-Control", "no-store")

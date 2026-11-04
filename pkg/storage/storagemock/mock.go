@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/mock"
@@ -292,6 +293,23 @@ func (m *MockDatabase) GetAdminSettings(ctx context.Context) (types.AdminSetting
 func (m *MockDatabase) UpdateAdminSettings(ctx context.Context, settings types.AdminSettings) error {
 	args := m.Called(ctx, settings)
 	return args.Error(0)
+}
+
+func (m *MockDatabase) GetFeatureConfig(ctx context.Context, release string) (feats.Config, time.Time, error) {
+	args := m.Called(ctx, release)
+	if len(args) > 0 {
+		return args.Get(0).(feats.Config), args.Get(1).(time.Time), args.Error(2)
+	}
+	return feats.Config{}, time.Time{}, nil
+}
+
+func (m *MockDatabase) SetFeatureConfig(ctx context.Context, release string, config feats.Config) (time.Time, error) {
+	args := m.Called(ctx, release, config)
+	var t time.Time
+	if args.Get(0) != nil {
+		t = args.Get(0).(time.Time)
+	}
+	return t, args.Error(1)
 }
 
 func (m *MockDatabase) AddUserPushSubscription(ctx context.Context, userID string, sub types.PushSubscription) error {

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/stretchr/testify/assert"
@@ -20,6 +21,7 @@ import (
 const testAppsEncryptionKey = "0123456789abcdef0123456789abcdef"
 
 func newTestAppsServer(mockS *mockStorage, now time.Time) *Server {
+	mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Maybe()
 	return &Server{
 		storage:              mockS,
 		sessionEncryptionKey: "fedcba9876543210fedcba9876543210",
