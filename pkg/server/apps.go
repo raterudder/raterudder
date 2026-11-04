@@ -14,11 +14,14 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
 	"golang.org/x/crypto/chacha20poly1305"
 )
+
+var ffConnectedApps = feats.Bool("connectedApps", false)
 
 const (
 	appTokenPrefix      = "rr_"

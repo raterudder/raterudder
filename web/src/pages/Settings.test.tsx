@@ -2606,50 +2606,22 @@ describe('App & Settings', () => {
     });
 
     describe('EV Charging Battery Protection', () => {
-        it('is hidden when query param ?ev=true is not present and release is production', async () => {
+        it('is visible by default in production', async () => {
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
                 release: 'production',
                 evChargingStandby: undefined,
             });
             await navigateToSettings();
-            expect(screen.queryByTestId('ev-charging-section')).not.toBeInTheDocument();
-        });
-
-        it('is visible when ?ev=true is present in query param', async () => {
-            const originalLocation = window.location;
-            delete (window as any).location;
-            (window as any).location = new URL('http://localhost/settings?ev=true');
-
-            try {
-                (api.fetchSettings as any).mockResolvedValue({
-                    ...defaultSettings,
-                    release: 'production',
-                    evChargingStandby: undefined,
-                });
-                await navigateToSettings();
-                expect(screen.getByTestId('ev-charging-section')).toBeInTheDocument();
-                expect(screen.getByText('Avoid Battery for EV Charging')).toBeInTheDocument();
-            } finally {
-                (window as any).location = originalLocation;
-            }
-        });
-
-        it('is visible when settings release is staging', async () => {
-            (api.fetchSettings as any).mockResolvedValue({
-                ...defaultSettings,
-                release: 'staging',
-                evChargingStandby: undefined,
-            });
-            await navigateToSettings();
             expect(screen.getByTestId('ev-charging-section')).toBeInTheDocument();
+            expect(screen.getByText('Avoid Battery for EV Charging')).toBeInTheDocument();
         });
 
         it('toggling switch ON enables evChargingStandby and saves without requiring charging hours', async () => {
             const user = userEvent.setup();
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
-                release: 'staging',
+                release: 'production',
                 evChargingStandby: false,
             });
 
@@ -2679,7 +2651,7 @@ describe('App & Settings', () => {
             const user = userEvent.setup();
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
-                release: 'staging',
+                release: 'production',
                 evChargingStandby: true,
             });
 
@@ -2900,23 +2872,26 @@ describe('App & Settings', () => {
     });
 
     describe('Connected Apps', () => {
-        it('is hidden in production even when planMode is true if no apps are installed', async () => {
+        it('is hidden and skips fetching apps when connectedApps feature flag is disabled', async () => {
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
-                release: 'production',
+                release: 'staging',
                 planMode: true,
+                features: { connectedApps: false },
             });
             (api.fetchApps as any).mockResolvedValue([]);
 
             await navigateToSettings();
             expect(screen.queryByTestId('connected-apps-section')).not.toBeInTheDocument();
+            expect(api.fetchApps).not.toHaveBeenCalled();
         });
 
-        it('is visible in production when an app is already installed', async () => {
+        it('is visible when connectedApps feature flag is enabled and displays existing apps', async () => {
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
                 release: 'production',
                 planMode: false,
+                features: { connectedApps: true },
             });
             (api.fetchApps as any).mockResolvedValue([
                 { id: 'app-1', siteID: 'site1', type: 2, name: 'Claude Desktop', tsCreated: '2026-01-01T00:00:00Z' },
@@ -2928,11 +2903,11 @@ describe('App & Settings', () => {
             expect(screen.getByText('OAuth')).toBeInTheDocument();
         });
 
-        it('is visible in staging and supports creating an API key and revoking an app', async () => {
+        it('supports creating an API key and revoking an app when connectedApps feature flag is enabled', async () => {
             const user = userEvent.setup();
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
-                release: 'staging',
+                features: { connectedApps: true },
             });
             (api.fetchApps as any).mockResolvedValue([]);
             (api.createApp as any).mockResolvedValue({

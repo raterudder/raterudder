@@ -11,6 +11,7 @@ import { Dialog } from '@base-ui/react/dialog';
 import { InterestForm } from '../components/InterestForm';
 import { HelpButton } from '../components/HelpButton';
 import { isESSEnabled } from '../utils/enabledProviders';
+import { useFeatureFlag } from '../utils/features';
 import { areSettingsEqual } from '../utils/settingsUtils';
 import './Settings.css';
 
@@ -867,8 +868,7 @@ const Settings = ({
     const [appError, setAppError] = useState<string | null>(null);
     const [copiedToken, setCopiedToken] = useState(false);
 
-    const isEVFeatureEnabled = settings?.release === 'staging' || (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('ev') === 'true') || !!settings?.evChargingStandby;
-    const isAppsFeatureEnabled = settings?.release === 'staging' || apps.length > 0;
+    const isAppsFeatureEnabled = useFeatureFlag('connectedApps');
     const hasNamedRatePeriods = utilityPeriods !== null ? utilityPeriods.some(p => p.name && p.name !== '') : true;
 
     const validateUtilityAndPeriods = async (
@@ -1179,6 +1179,18 @@ const Settings = ({
         setAppError(null);
         setNewAppName('');
 
+        return () => {
+            active = false;
+        };
+    }, [siteID]);
+
+    useEffect(() => {
+        if (!siteID || !isAppsFeatureEnabled) {
+            setApps([]);
+            return;
+        }
+        let active = true;
+
         fetchApps(siteID)
             .then(data => {
                 if (active) setApps(data || []);
@@ -1190,7 +1202,7 @@ const Settings = ({
         return () => {
             active = false;
         };
-    }, [siteID]);
+    }, [siteID, isAppsFeatureEnabled]);
 
     const handleCreateApp = async () => {
         if (!siteID || !newAppName.trim()) return;
@@ -2487,34 +2499,32 @@ const Settings = ({
                 />
                 </div>
 
-                {isEVFeatureEnabled && (
-                    <div className="settings-section" data-testid="ev-charging-section">
-                        <div className="section-header">
-                            <h3>EV Charging</h3>
-                        </div>
-                        <div className="grid-strategy-grid">
-                            <Field.Root className="form-group switch-group compact" style={{ gridColumn: '1 / -1' }}>
-                                <div className="switch-row">
-                                    <Switch.Root
-                                        id="avoidBatteryForEV"
-                                        className="switch-root"
-                                        checked={!!settings.evChargingStandby}
-                                        onCheckedChange={(checked) => {
-                                            handleChange('evChargingStandby', checked);
-                                        }}
-                                        aria-label="Avoid Battery for EV Charging"
-                                    >
-                                        <Switch.Thumb className="switch-thumb" />
-                                    </Switch.Root>
-                                    <Field.Label htmlFor="avoidBatteryForEV">Avoid Battery for EV Charging</Field.Label>
-                                </div>
-                                <Field.Description>
-                                    Automatically places your home battery into standby when Level 2 EV charging is detected at night (8:00 PM – 7:00 AM). EV charging can only be reliably isolated from other large household loads overnight, and this will not trigger during the day when using solar to charge your EV is desired.
-                                </Field.Description>
-                            </Field.Root>
-                        </div>
+                <div className="settings-section" data-testid="ev-charging-section">
+                    <div className="section-header">
+                        <h3>EV Charging</h3>
                     </div>
-                )}
+                    <div className="grid-strategy-grid">
+                        <Field.Root className="form-group switch-group compact" style={{ gridColumn: '1 / -1' }}>
+                            <div className="switch-row">
+                                <Switch.Root
+                                    id="avoidBatteryForEV"
+                                    className="switch-root"
+                                    checked={!!settings.evChargingStandby}
+                                    onCheckedChange={(checked) => {
+                                        handleChange('evChargingStandby', checked);
+                                    }}
+                                    aria-label="Avoid Battery for EV Charging"
+                                >
+                                    <Switch.Thumb className="switch-thumb" />
+                                </Switch.Root>
+                                <Field.Label htmlFor="avoidBatteryForEV">Avoid Battery for EV Charging</Field.Label>
+                            </div>
+                            <Field.Description>
+                                Automatically places your home battery into standby when Level 2 EV charging is detected at night (8:00 PM – 7:00 AM). EV charging can only be reliably isolated from other large household loads overnight, and this will not trigger during the day when using solar to charge your EV is desired.
+                            </Field.Description>
+                        </Field.Root>
+                    </div>
+                </div>
 
                 {!showAdvanced ? (
                     <div className="advanced-trigger-section">
