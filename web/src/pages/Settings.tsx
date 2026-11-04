@@ -1606,9 +1606,7 @@ const Settings = ({
                         onShowTutorial();
                     }
                 }
-                setTimeout(() => {
-                    navigate('/dashboard');
-                }, 1000);
+                navigate('/dashboard');
             }
             success = true;
         } catch (err) {
