@@ -18,8 +18,20 @@ interface ChangelogMonth {
 
 const changelogMonths: ChangelogMonth[] = [
     {
+        month: "November 2026",
+        badge: "Multi-Model Ensemble Solar Forecasting",
+        entries: [
+            {
+                category: "forecasting",
+                categoryLabel: "Solar Forecasting",
+                title: "Multi-Model Weather Blending (~20% Lower Forecast Error)",
+                description: "Upgraded solar forecasting from a single weather model to multi-model blending. Across several months of data, multi-model blending reduced forecast error by ~20% and significantly improved accuracy on partly cloudy and overcast days."
+            }
+        ]
+    },
+    {
         month: "October 2026",
-        badge: "Latest Release • SmartPlan & Counterfactual Savings",
+        badge: "SmartPlan & Counterfactual Savings",
         entries: [
             {
                 category: "ux",

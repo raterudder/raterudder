@@ -101,6 +101,7 @@ describe('App routing and viewSite parameter preservation', () => {
         window.history.pushState(null, '', '/changelog');
         render(<App />);
         expect(await screen.findByText(/What's New in/i)).toBeInTheDocument();
+        expect(screen.getByText('November 2026')).toBeInTheDocument();
         expect(screen.getByText('October 2026')).toBeInTheDocument();
     });
 });

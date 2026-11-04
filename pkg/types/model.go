@@ -321,27 +321,34 @@ type SiteLocation struct {
 
 // HourlyWeather represents the solar forecast data for a specific hour.
 type HourlyWeather struct {
-	TSHourStart       time.Time `json:"tsHourStart"`
-	GHI               float64   `json:"ghi,omitempty"`               // Shortwave radiation in W/m²
-	GTI               float64   `json:"gti,omitempty"`               // Global tilted irradiance in W/m²
-	DHI               float64   `json:"dhi,omitempty"`               // Diffuse radiation in W/m²
-	DNI               float64   `json:"dni,omitempty"`               // Direct normal irradiance in W/m²
-	TemperatureC      float64   `json:"temperatureC,omitempty"`      // Temperature in °C
-	SnowfallCM        float64   `json:"snowfallCM,omitempty"`        // Snowfall in cm
-	SnowDepthCM       float64   `json:"snowDepthCM,omitempty"`       // Snow depth in cm
-	CloudCoverPercent float64   `json:"cloudCoverPercent,omitempty"` // Cloud cover
+	TSHourStart time.Time `json:"tsHourStart"`
+	HourlyWeatherMetrics
+}
+
+// HourlyWeatherMetrics holds the weather forecast metrics for a single model at a specific hour.
+type HourlyWeatherMetrics struct {
+	GHI               float64 `json:"ghi,omitempty"`               // Shortwave radiation in W/m²
+	GTI               float64 `json:"gti,omitempty"`               // Global tilted irradiance in W/m²
+	DHI               float64 `json:"dhi,omitempty"`               // Diffuse radiation in W/m²
+	DNI               float64 `json:"dni,omitempty"`               // Direct normal irradiance in W/m²
+	TemperatureC      float64 `json:"temperatureC,omitempty"`      // Temperature in °C
+	SnowfallCM        float64 `json:"snowfallCM,omitempty"`        // Snowfall in cm
+	SnowDepthCM       float64 `json:"snowDepthCM,omitempty"`       // Snow depth in cm
+	CloudCoverPercent float64 `json:"cloudCoverPercent,omitempty"` // Cloud cover
 }
 
 // Weather represents the daily weather forecast data.
 type Weather struct {
-	TSDayStart    time.Time       `json:"tsDayStart"`
-	TimeLocation  string          `json:"timeLocation"`
-	Latitude      float64         `json:"latitude"`
-	Longitude     float64         `json:"longitude"`
-	TSSunrise     time.Time       `json:"tsSunrise"`
-	TSSunset      time.Time       `json:"tsSunset"`
-	TSUpdated     time.Time       `json:"tsUpdated"`
-	ForecastHours []HourlyWeather `json:"forecastHours"`
+	TSDayStart     time.Time                         `json:"tsDayStart"`
+	TimeLocation   string                            `json:"timeLocation"`
+	Latitude       float64                           `json:"latitude"`
+	Longitude      float64                           `json:"longitude"`
+	TSSunrise      time.Time                         `json:"tsSunrise"`
+	TSSunset       time.Time                         `json:"tsSunset"`
+	TSUpdated      time.Time                         `json:"tsUpdated"`
+	Models         []string                          `json:"models,omitempty"`
+	ForecastHours  []HourlyWeather                   `json:"forecastHours"`
+	ModelForecasts map[string][]HourlyWeatherMetrics `json:"modelForecasts,omitempty"`
 }
 
 // HistorySummary represents the monthly history data stored in the history_summary Firestore collection.
