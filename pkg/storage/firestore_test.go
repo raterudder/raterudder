@@ -2056,6 +2056,33 @@ func TestIsRetryableFirestoreErr(t *testing.T) {
 	t.Run("Generic error", func(t *testing.T) {
 		assert.False(t, isRetryableFirestoreErr(errors.New("some regular error")))
 	})
+
+	t.Run("Optimistic Retryable Errors", func(t *testing.T) {
+		assert.False(t, isOptimisticRetryableErr(nil))
+		assert.True(t, isOptimisticRetryableErr(status.Error(codes.Unavailable, "unavailable")))
+		assert.True(t, isOptimisticRetryableErr(status.Error(codes.ResourceExhausted, "quota")))
+		assert.True(t, isOptimisticRetryableErr(status.Error(codes.FailedPrecondition, "lastUpdateTime mismatch")))
+		assert.True(t, isOptimisticRetryableErr(status.Error(codes.Aborted, "concurrency conflict")))
+		assert.True(t, isOptimisticRetryableErr(status.Error(codes.AlreadyExists, "doc already exists")))
+		assert.False(t, isOptimisticRetryableErr(status.Error(codes.NotFound, "not found")))
+		assert.False(t, isOptimisticRetryableErr(status.Error(codes.InvalidArgument, "bad arg")))
+	})
+
+	t.Run("MapToFirestoreUpdates", func(t *testing.T) {
+		input := map[string]any{
+			"version":    2,
+			"json":       "{}",
+			"latestDate": "2026-11-01",
+		}
+		updates := mapToFirestoreUpdates(input)
+		got := make(map[string]any, len(updates))
+		for _, u := range updates {
+			if assert.Len(t, u.FieldPath, 1) {
+				got[u.FieldPath[0]] = u.Value
+			}
+		}
+		assert.Equal(t, input, got)
+	})
 }
 
 func TestParseLegacyActionJSON(t *testing.T) {

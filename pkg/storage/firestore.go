@@ -12,7 +12,6 @@ import (
 	"os"
 	"reflect"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -130,6 +129,17 @@ func isRetryableFirestoreErr(err error) bool {
 	return c == codes.Unavailable || c == codes.ResourceExhausted
 }
 
+func isOptimisticRetryableErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if isRetryableFirestoreErr(err) {
+		return true
+	}
+	c := status.Code(err)
+	return c == codes.AlreadyExists || c == codes.FailedPrecondition || c == codes.Aborted
+}
+
 // getDocWithRetry retrieves a document snapshot from docRef, retrying on transient errors
 // such as codes.Unavailable caused by idle TCP connection resets.
 func (f *FirestoreProvider) getDocWithRetry(ctx context.Context, docRef *firestore.DocumentRef) (*firestore.DocumentSnapshot, error) {
@@ -161,6 +171,75 @@ func (f *FirestoreProvider) getDocWithRetry(ctx context.Context, docRef *firesto
 		return nil, err
 	}
 	return nil, fmt.Errorf("failed to get doc %s after retries", docRef.Path)
+}
+
+func mapToFirestoreUpdates(data map[string]any) []firestore.Update {
+	updates := make([]firestore.Update, 0, len(data))
+	for k, v := range data {
+		updates = append(updates, firestore.Update{FieldPath: firestore.FieldPath{k}, Value: v})
+	}
+	return updates
+}
+
+// readModifyWriteDoc performs a stateless optimistic read-modify-write cycle on a single document
+// using Create (when the document does not exist) or Update with LastUpdateTime precondition (when it
+// exists). This avoids stateful BeginTransaction/Commit session tokens that can expire under CPU throttling.
+// If mutate returns a nil map and nil error, no write is performed.
+func (f *FirestoreProvider) readModifyWriteDoc(
+	ctx context.Context,
+	docRef *firestore.DocumentRef,
+	mutate func(doc *firestore.DocumentSnapshot) (map[string]any, error),
+) (*firestore.WriteResult, error) {
+	const maxRetries = 5
+	backoff := 200 * time.Millisecond
+
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		doc, err := f.getDocWithRetry(ctx, docRef)
+		if err != nil {
+			if status.Code(err) == codes.NotFound {
+				doc = nil
+			} else {
+				return nil, err
+			}
+		}
+
+		data, err := mutate(doc)
+		if err != nil {
+			return nil, err
+		}
+		if data == nil {
+			return nil, nil
+		}
+
+		var wr *firestore.WriteResult
+		if doc == nil {
+			wr, err = docRef.Create(ctx, data)
+		} else {
+			wr, err = docRef.Update(ctx, mapToFirestoreUpdates(data), firestore.LastUpdateTime(doc.UpdateTime))
+		}
+		if err == nil {
+			return wr, nil
+		}
+
+		lastErr = err
+		if isOptimisticRetryableErr(err) && attempt < maxRetries-1 {
+			log.Ctx(ctx).WarnContext(ctx, "firestore optimistic write conflict or transient error, retrying",
+				slog.String("path", docRef.Path),
+				slog.Int("attempt", attempt+1),
+				slog.Any("error", err),
+			)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+				backoff *= 2
+				continue
+			}
+		}
+		return nil, err
+	}
+	return nil, lastErr
 }
 
 // GetSettings retrieves the dynamic configuration from the "config/settings" document.
@@ -228,21 +307,35 @@ func (f *FirestoreProvider) SetSettings(ctx context.Context, siteID string, sett
 	}
 
 	if !updatedTime.IsZero() {
-		var commitResp firestore.CommitResponse
-		err := f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-			doc, err := tx.Get(coll.Doc("settings"))
-			if err != nil {
-				return fmt.Errorf("failed to fetch settings doc for transaction: %w", err)
+		docRef := coll.Doc("settings")
+		updates := mapToFirestoreUpdates(data)
+		const maxRetries = 3
+		backoff := 100 * time.Millisecond
+		for attempt := 0; attempt < maxRetries; attempt++ {
+			wr, err := docRef.Update(ctx, updates, firestore.LastUpdateTime(updatedTime))
+			if err == nil {
+				return wr.UpdateTime, nil
 			}
-			if !doc.UpdateTime.Equal(updatedTime) {
-				return fmt.Errorf("%w: settings updated at %v, expected %v", ErrSettingsConflict, doc.UpdateTime, updatedTime)
+			c := status.Code(err)
+			if c == codes.FailedPrecondition || c == codes.Aborted || c == codes.NotFound {
+				return time.Time{}, fmt.Errorf("%w: expected %v: %w", ErrSettingsConflict, updatedTime, err)
 			}
-			return tx.Set(coll.Doc("settings"), data)
-		}, firestore.WithCommitResponseTo(&commitResp))
-		if err != nil {
-			return time.Time{}, err
+			if isRetryableFirestoreErr(err) && attempt < maxRetries-1 {
+				log.Ctx(ctx).WarnContext(ctx, "firestore settings update failed with retryable error, retrying",
+					slog.String("siteID", siteID),
+					slog.Int("attempt", attempt+1),
+					slog.Any("error", err),
+				)
+				select {
+				case <-ctx.Done():
+					return time.Time{}, ctx.Err()
+				case <-time.After(backoff):
+					backoff *= 2
+					continue
+				}
+			}
+			return time.Time{}, fmt.Errorf("failed to update settings with precondition: %w", err)
 		}
-		return commitResp.CommitTime(), nil
 	}
 
 	wr, err := coll.Doc("settings").Set(ctx, data)
@@ -292,101 +385,70 @@ func (f *FirestoreProvider) upsertActions(ctx context.Context, siteID string, ac
 	}
 	slices.Sort(buckets)
 
-	maxRetries := 3
-	backoff := 100 * time.Millisecond
-
 	for _, b := range buckets {
 		incoming := byBucket[b]
 		bucketStart := bucketStarts[b]
 		docRef := coll.Doc(b)
 
-		var lastErr error
-		for attempt := 0; attempt < maxRetries; attempt++ {
-			lastErr = f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-				doc, err := tx.Get(docRef)
-				var existing types.SiteActionBucket
-				exists := true
+		_, err := f.readModifyWriteDoc(ctx, docRef, func(doc *firestore.DocumentSnapshot) (map[string]any, error) {
+			var existing types.SiteActionBucket
+			if doc != nil {
+				val, err := doc.DataAt("json")
 				if err != nil {
-					if status.Code(err) == codes.NotFound {
-						exists = false
-					} else {
-						return err
-					}
+					return nil, fmt.Errorf("site daily actions doc missing 'json' field: %w", err)
 				}
+				jsonStr, ok := val.(string)
+				if !ok {
+					return nil, fmt.Errorf("site daily actions doc 'json' field is not string")
+				}
+				if err := json.Unmarshal([]byte(jsonStr), &existing); err != nil {
+					return nil, fmt.Errorf("failed to unmarshal site daily actions: %w", err)
+				}
+			}
 
-				if exists {
-					val, err := doc.DataAt("json")
-					if err != nil {
-						return fmt.Errorf("site daily actions doc missing 'json' field: %w", err)
-					}
-					jsonStr, ok := val.(string)
-					if !ok {
-						return fmt.Errorf("site daily actions doc 'json' field is not string")
-					}
-					if err := json.Unmarshal([]byte(jsonStr), &existing); err != nil {
-						return fmt.Errorf("failed to unmarshal site daily actions: %w", err)
-					}
-				}
+			actionMap := make(map[int64]types.Action, len(existing.Actions)+len(incoming))
+			for _, a := range existing.Actions {
+				actionMap[a.Timestamp.UTC().Unix()] = a
+			}
+			for _, a := range incoming {
+				actionMap[a.Timestamp.UTC().Unix()] = a.CompactForStorage()
+			}
 
-				actionMap := make(map[int64]types.Action, len(existing.Actions)+len(incoming))
-				for _, a := range existing.Actions {
-					actionMap[a.Timestamp.UTC().Unix()] = a
-				}
-				for _, a := range incoming {
-					actionMap[a.Timestamp.UTC().Unix()] = a.CompactForStorage()
-				}
-
-				merged := make([]types.Action, 0, len(actionMap))
-				for _, a := range actionMap {
-					merged = append(merged, a)
-				}
-				slices.SortFunc(merged, func(a, b types.Action) int {
-					return a.Timestamp.Compare(b.Timestamp)
-				})
-
-				var earliestDate, latestDate time.Time
-				if len(merged) > 0 {
-					earliestDate = merged[0].Timestamp.UTC()
-					latestDate = merged[len(merged)-1].Timestamp.UTC()
-				}
-
-				nowTime := time.Now().UTC()
-				rollup := types.SiteActionBucket{
-					TSBucketStart: bucketStart,
-					Actions:       merged,
-				}
-
-				jsonBytes, err := json.Marshal(rollup)
-				if err != nil {
-					return fmt.Errorf("failed to marshal site daily actions: %w", err)
-				}
-
-				data := map[string]any{
-					"json":         string(jsonBytes),
-					"earliestDate": earliestDate,
-					"latestDate":   latestDate,
-					"version":      version,
-					"tsUpdated":    nowTime,
-				}
-				return tx.Set(docRef, data)
+			merged := make([]types.Action, 0, len(actionMap))
+			for _, a := range actionMap {
+				merged = append(merged, a)
+			}
+			slices.SortFunc(merged, func(a, b types.Action) int {
+				return a.Timestamp.Compare(b.Timestamp)
 			})
 
-			if lastErr == nil {
-				break
+			var earliestDate, latestDate time.Time
+			if len(merged) > 0 {
+				earliestDate = merged[0].Timestamp.UTC()
+				latestDate = merged[len(merged)-1].Timestamp.UTC()
 			}
-			if isTransactionExpiredErr(lastErr) {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(backoff):
-					backoff *= 2
-					continue
-				}
+
+			nowTime := time.Now().UTC()
+			rollup := types.SiteActionBucket{
+				TSBucketStart: bucketStart,
+				Actions:       merged,
 			}
-			return fmt.Errorf("failed to upsert site daily actions for bucket %s: %w", b, lastErr)
-		}
-		if lastErr != nil {
-			return lastErr
+
+			jsonBytes, err := json.Marshal(rollup)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal site daily actions: %w", err)
+			}
+
+			return map[string]any{
+				"json":         string(jsonBytes),
+				"earliestDate": earliestDate,
+				"latestDate":   latestDate,
+				"version":      version,
+				"tsUpdated":    nowTime,
+			}, nil
+		})
+		if err != nil {
+			return fmt.Errorf("failed to upsert site daily actions for bucket %s: %w", b, err)
 		}
 	}
 
@@ -530,7 +592,7 @@ func (f *FirestoreProvider) UpsertEnergyHistories(ctx context.Context, siteID st
 					prev := s.Hourly[i-1].TSHourStart
 					curr := s.Hourly[i].TSHourStart
 					if !curr.Equal(prev.Add(time.Hour)) {
-// Allow a 1-hour gap across a DST fall-back transition (where wall-clock-keyed
+						// Allow a 1-hour gap across a DST fall-back transition (where wall-clock-keyed
 						// telemetry collapses the repeated hour into the standard-time offset).
 						_, prevOffset := prev.Zone()
 						_, currOffset := curr.Zone()
@@ -780,12 +842,11 @@ func (f *FirestoreProvider) GetEnergyHistory(ctx context.Context, siteID string,
 		return nil, err
 	}
 
-	// Subtract 23 hours from start to handle timezone shifts and late-in-day queries.
-	// Stored daily records have tsDayStart representing midnight in their respective
-	// timezones. A query start time later in the day (or from a different timezone)
-	// could fall after the stored record's tsDayStart timestamp in UTC, which would
-	// incorrectly exclude the record for that day.
-	queryStart := start.Add(-23 * time.Hour)
+	// Subtract 25 hours from start to handle timezone shifts, late-in-day queries,
+	// and 25-hour Fall-Back DST days. Stored daily records have tsDayStart representing
+	// midnight in their respective timezones. A query start time later in the day (up to
+	// 24h+ into a 25-hour DST day) could fall after the stored record's tsDayStart in UTC.
+	queryStart := start.Add(-25 * time.Hour)
 	iter := coll.
 		Where("tsDayStart", ">=", queryStart).
 		Where("tsDayStart", "<", end).
@@ -821,7 +882,21 @@ func (f *FirestoreProvider) GetEnergyHistory(ctx context.Context, siteID string,
 			return nil, fmt.Errorf("failed to unmarshal daily energy stats (id=%s): %w", doc.Ref.ID, err)
 		}
 
-		dayEnd := s.TSDayStart.AddDate(0, 0, 1)
+		// JSON unmarshaling parses TSDayStart with a fixed numeric UTC offset rather than the IANA
+		// timezone name, so AddDate(0, 0, 1) on a Fall-Back DST day would only advance 24h instead of 25h.
+		// Re-attaching s.TimeLocation (and checking the last hourly entry) ensures dayEnd covers all 25 hours.
+		dayStart := s.TSDayStart
+		if s.TimeLocation != "" {
+			if loc, err := time.LoadLocation(s.TimeLocation); err == nil {
+				dayStart = dayStart.In(loc)
+			}
+		}
+		dayEnd := dayStart.AddDate(0, 0, 1)
+		if len(s.Hourly) > 0 {
+			if lastEnd := s.Hourly[len(s.Hourly)-1].TSHourStart.Add(time.Hour); lastEnd.After(dayEnd) {
+				dayEnd = lastEnd
+			}
+		}
 		if !dayEnd.After(start) || !s.TSDayStart.Before(end) {
 			continue
 		}
@@ -1116,104 +1191,73 @@ func (f *FirestoreProvider) UpsertPrices(ctx context.Context, siteID string, pri
 	}
 	slices.Sort(months)
 
-	maxRetries := 3
-	backoff := 100 * time.Millisecond
-
 	for _, m := range months {
 		incoming := byMonth[m]
 		docRef := coll.Doc(m)
 
-		var lastErr error
-		for attempt := 0; attempt < maxRetries; attempt++ {
-			lastErr = f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-				doc, err := tx.Get(docRef)
-				var existing types.SiteMonthlyPrices
-				exists := true
+		_, err := f.readModifyWriteDoc(ctx, docRef, func(doc *firestore.DocumentSnapshot) (map[string]any, error) {
+			var existing types.SiteMonthlyPrices
+			if doc != nil {
+				val, err := doc.DataAt("json")
 				if err != nil {
-					if status.Code(err) == codes.NotFound {
-						exists = false
-					} else {
-						return err
-					}
+					return nil, fmt.Errorf("site monthly prices doc missing 'json' field: %w", err)
 				}
+				jsonStr, ok := val.(string)
+				if !ok {
+					return nil, fmt.Errorf("site monthly prices doc 'json' field is not string")
+				}
+				if err := json.Unmarshal([]byte(jsonStr), &existing); err != nil {
+					return nil, fmt.Errorf("failed to unmarshal site monthly prices: %w", err)
+				}
+			}
 
-				if exists {
-					val, err := doc.DataAt("json")
-					if err != nil {
-						return fmt.Errorf("site monthly prices doc missing 'json' field: %w", err)
-					}
-					jsonStr, ok := val.(string)
-					if !ok {
-						return fmt.Errorf("site monthly prices doc 'json' field is not string")
-					}
-					if err := json.Unmarshal([]byte(jsonStr), &existing); err != nil {
-						return fmt.Errorf("failed to unmarshal site monthly prices: %w", err)
-					}
-				}
+			priceMap := make(map[int64]types.Price, len(existing.Prices)+len(incoming))
+			for _, p := range existing.Prices {
+				priceMap[p.TSStart.UTC().UnixNano()] = p
+			}
+			for _, p := range incoming {
+				priceMap[p.TSStart.UTC().UnixNano()] = p
+			}
 
-				priceMap := make(map[int64]types.Price, len(existing.Prices)+len(incoming))
-				for _, p := range existing.Prices {
-					priceMap[p.TSStart.UTC().UnixNano()] = p
-				}
-				for _, p := range incoming {
-					priceMap[p.TSStart.UTC().UnixNano()] = p
-				}
-
-				merged := make([]types.Price, 0, len(priceMap))
-				for _, p := range priceMap {
-					merged = append(merged, p)
-				}
-				slices.SortFunc(merged, func(a, b types.Price) int {
-					return a.TSStart.Compare(b.TSStart)
-				})
-
-				var earliestDate, latestDate time.Time
-				if len(merged) > 0 {
-					earliestDate = merged[0].TSStart.UTC()
-					latestDate = merged[len(merged)-1].TSStart.UTC()
-				}
-
-				monthStart, err := time.Parse("2006-01", m)
-				if err != nil {
-					return fmt.Errorf("failed to parse month %s: %w", m, err)
-				}
-				nowTime := time.Now().UTC()
-				monthly := types.SiteMonthlyPrices{
-					TSMonthStart: monthStart,
-					Prices:       merged,
-				}
-
-				jsonBytes, err := json.Marshal(monthly)
-				if err != nil {
-					return fmt.Errorf("failed to marshal site monthly prices: %w", err)
-				}
-
-				data := map[string]any{
-					"json":         string(jsonBytes),
-					"earliestDate": earliestDate,
-					"latestDate":   latestDate,
-					"version":      version,
-					"tsUpdated":    nowTime,
-				}
-				return tx.Set(docRef, data)
+			merged := make([]types.Price, 0, len(priceMap))
+			for _, p := range priceMap {
+				merged = append(merged, p)
+			}
+			slices.SortFunc(merged, func(a, b types.Price) int {
+				return a.TSStart.Compare(b.TSStart)
 			})
 
-			if lastErr == nil {
-				break
+			var earliestDate, latestDate time.Time
+			if len(merged) > 0 {
+				earliestDate = merged[0].TSStart.UTC()
+				latestDate = merged[len(merged)-1].TSStart.UTC()
 			}
-			if isTransactionExpiredErr(lastErr) {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(backoff):
-					backoff *= 2
-					continue
-				}
+
+			monthStart, err := time.Parse("2006-01", m)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse month %s: %w", m, err)
 			}
-			return fmt.Errorf("failed to upsert site monthly prices for month %s: %w", m, lastErr)
-		}
-		if lastErr != nil {
-			return lastErr
+			nowTime := time.Now().UTC()
+			monthly := types.SiteMonthlyPrices{
+				TSMonthStart: monthStart,
+				Prices:       merged,
+			}
+
+			jsonBytes, err := json.Marshal(monthly)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal site monthly prices: %w", err)
+			}
+
+			return map[string]any{
+				"json":         string(jsonBytes),
+				"earliestDate": earliestDate,
+				"latestDate":   latestDate,
+				"version":      version,
+				"tsUpdated":    nowTime,
+			}, nil
+		})
+		if err != nil {
+			return fmt.Errorf("failed to upsert site monthly prices for month %s: %w", m, err)
 		}
 	}
 
@@ -1703,104 +1747,73 @@ func (f *FirestoreProvider) UpsertUtilityPrices(ctx context.Context, utilityID s
 	}
 	slices.Sort(months)
 
-	maxRetries := 3
-	backoff := 100 * time.Millisecond
-
 	for _, m := range months {
 		incoming := byMonth[m]
 		docRef := coll.Doc(m)
 
-		var lastErr error
-		for attempt := 0; attempt < maxRetries; attempt++ {
-			lastErr = f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-				doc, err := tx.Get(docRef)
-				var existing types.UtilityMonthlyPrices
-				exists := true
+		_, err := f.readModifyWriteDoc(ctx, docRef, func(doc *firestore.DocumentSnapshot) (map[string]any, error) {
+			var existing types.UtilityMonthlyPrices
+			if doc != nil {
+				val, err := doc.DataAt("json")
 				if err != nil {
-					if status.Code(err) == codes.NotFound {
-						exists = false
-					} else {
-						return err
-					}
+					return nil, fmt.Errorf("utility monthly prices doc missing 'json' field: %w", err)
 				}
+				jsonStr, ok := val.(string)
+				if !ok {
+					return nil, fmt.Errorf("utility monthly prices doc 'json' field is not string")
+				}
+				if err := json.Unmarshal([]byte(jsonStr), &existing); err != nil {
+					return nil, fmt.Errorf("failed to unmarshal utility monthly prices: %w", err)
+				}
+			}
 
-				if exists {
-					val, err := doc.DataAt("json")
-					if err != nil {
-						return fmt.Errorf("utility monthly prices doc missing 'json' field: %w", err)
-					}
-					jsonStr, ok := val.(string)
-					if !ok {
-						return fmt.Errorf("utility monthly prices doc 'json' field is not string")
-					}
-					if err := json.Unmarshal([]byte(jsonStr), &existing); err != nil {
-						return fmt.Errorf("failed to unmarshal utility monthly prices: %w", err)
-					}
-				}
+			priceMap := make(map[int64]types.PriceState, len(existing.Prices)+len(incoming))
+			for _, p := range existing.Prices {
+				priceMap[p.TSStart.UTC().UnixNano()] = p
+			}
+			for _, p := range incoming {
+				priceMap[p.TSStart.UTC().UnixNano()] = p
+			}
 
-				priceMap := make(map[int64]types.PriceState, len(existing.Prices)+len(incoming))
-				for _, p := range existing.Prices {
-					priceMap[p.TSStart.UTC().UnixNano()] = p
-				}
-				for _, p := range incoming {
-					priceMap[p.TSStart.UTC().UnixNano()] = p
-				}
-
-				merged := make([]types.PriceState, 0, len(priceMap))
-				for _, p := range priceMap {
-					merged = append(merged, p)
-				}
-				slices.SortFunc(merged, func(a, b types.PriceState) int {
-					return a.TSStart.Compare(b.TSStart)
-				})
-
-				var earliestDate, latestDate time.Time
-				if len(merged) > 0 {
-					earliestDate = merged[0].TSStart.UTC()
-					latestDate = merged[len(merged)-1].TSStart.UTC()
-				}
-
-				monthStart, err := time.Parse("2006-01", m)
-				if err != nil {
-					return fmt.Errorf("failed to parse month %s: %w", m, err)
-				}
-				nowTime := time.Now().UTC()
-				monthly := types.UtilityMonthlyPrices{
-					TSMonthStart: monthStart,
-					Prices:       merged,
-				}
-
-				jsonBytes, err := json.Marshal(monthly)
-				if err != nil {
-					return fmt.Errorf("failed to marshal utility monthly prices: %w", err)
-				}
-
-				data := map[string]any{
-					"json":         string(jsonBytes),
-					"earliestDate": earliestDate,
-					"latestDate":   latestDate,
-					"version":      version,
-					"tsUpdated":    nowTime,
-				}
-				return tx.Set(docRef, data)
+			merged := make([]types.PriceState, 0, len(priceMap))
+			for _, p := range priceMap {
+				merged = append(merged, p)
+			}
+			slices.SortFunc(merged, func(a, b types.PriceState) int {
+				return a.TSStart.Compare(b.TSStart)
 			})
 
-			if lastErr == nil {
-				break
+			var earliestDate, latestDate time.Time
+			if len(merged) > 0 {
+				earliestDate = merged[0].TSStart.UTC()
+				latestDate = merged[len(merged)-1].TSStart.UTC()
 			}
-			if isTransactionExpiredErr(lastErr) {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(backoff):
-					backoff *= 2
-					continue
-				}
+
+			monthStart, err := time.Parse("2006-01", m)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse month %s: %w", m, err)
 			}
-			return fmt.Errorf("failed to upsert utility monthly prices for month %s: %w", m, lastErr)
-		}
-		if lastErr != nil {
-			return lastErr
+			nowTime := time.Now().UTC()
+			monthly := types.UtilityMonthlyPrices{
+				TSMonthStart: monthStart,
+				Prices:       merged,
+			}
+
+			jsonBytes, err := json.Marshal(monthly)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal utility monthly prices: %w", err)
+			}
+
+			return map[string]any{
+				"json":         string(jsonBytes),
+				"earliestDate": earliestDate,
+				"latestDate":   latestDate,
+				"version":      version,
+				"tsUpdated":    nowTime,
+			}, nil
+		})
+		if err != nil {
+			return fmt.Errorf("failed to upsert utility monthly prices for month %s: %w", m, err)
 		}
 	}
 
@@ -2011,18 +2024,6 @@ func (f *FirestoreProvider) GetHistorySummaries(ctx context.Context, siteID stri
 	return summaries, nil
 }
 
-func isTransactionExpiredErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	if st, ok := status.FromError(err); ok {
-		if st.Code() == codes.InvalidArgument && strings.Contains(st.Message(), "referenced transaction has expired") {
-			return true
-		}
-	}
-	return false
-}
-
 // UpdateHistorySummary reads the existing summary, merges it with newSummary (overwriting matching days), and saves it.
 func (f *FirestoreProvider) UpdateHistorySummary(ctx context.Context, siteID string, month string, newSummary types.HistorySummary) (types.HistorySummary, error) {
 	coll, err := f.getCollection(siteID, "history_summary")
@@ -2031,139 +2032,103 @@ func (f *FirestoreProvider) UpdateHistorySummary(ctx context.Context, siteID str
 	}
 	docRef := coll.Doc(month)
 
-	maxRetries := 3
-	backoff := 100 * time.Millisecond
-
-	var lastErr error
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		var mergedSummary types.HistorySummary
-
-		err = f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-			doc, err := tx.Get(docRef)
-			var existing types.HistorySummary
-			exists := true
+	var mergedSummary types.HistorySummary
+	_, err = f.readModifyWriteDoc(ctx, docRef, func(doc *firestore.DocumentSnapshot) (map[string]any, error) {
+		var existing types.HistorySummary
+		if doc != nil {
+			val, err := doc.DataAt("json")
 			if err != nil {
-				if status.Code(err) == codes.NotFound {
-					exists = false
-				} else {
-					return err
-				}
+				return nil, fmt.Errorf("history summary doc missing 'json' field: %w", err)
 			}
+			jsonStr, ok := val.(string)
+			if !ok {
+				return nil, fmt.Errorf("history summary doc 'json' field is not string")
+			}
+			if err := json.Unmarshal([]byte(jsonStr), &existing); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal history summary: %w", err)
+			}
+		}
 
-			if exists {
-				val, err := doc.DataAt("json")
-				if err != nil {
-					return fmt.Errorf("history summary doc missing 'json' field: %w", err)
-				}
-				jsonStr, ok := val.(string)
-				if !ok {
-					return fmt.Errorf("history summary doc 'json' field is not string")
-				}
-				if err := json.Unmarshal([]byte(jsonStr), &existing); err != nil {
-					return fmt.Errorf("failed to unmarshal history summary: %w", err)
-				}
-			}
-
-			// Merge Energy data, favoring the newSummary's days.
-			energyMap := make(map[string]types.DailyEnergyStats)
-			for _, e := range existing.Energy {
-				energyMap[e.TSDayStart.Format("2006-01-02")] = e
-			}
-			for _, e := range newSummary.Energy {
-				energyMap[e.TSDayStart.Format("2006-01-02")] = e
-			}
-			var mergedEnergy []types.DailyEnergyStats
-			for _, e := range energyMap {
-				mergedEnergy = append(mergedEnergy, e)
-			}
-			slices.SortFunc(mergedEnergy, func(a, b types.DailyEnergyStats) int {
-				return a.TSDayStart.Compare(b.TSDayStart)
-			})
-
-			// Merge Weather data, favoring the newSummary's days.
-			weatherMap := make(map[string]types.Weather)
-			for _, w := range existing.Weather {
-				weatherMap[w.TSDayStart.Format("2006-01-02")] = w
-			}
-			for _, w := range newSummary.Weather {
-				weatherMap[w.TSDayStart.Format("2006-01-02")] = w
-			}
-			var mergedWeather []types.Weather
-			for _, w := range weatherMap {
-				mergedWeather = append(mergedWeather, w)
-			}
-			slices.SortFunc(mergedWeather, func(a, b types.Weather) int {
-				return a.TSDayStart.Compare(b.TSDayStart)
-			})
-
-			var monthStart time.Time
-			if monthTime, err := time.Parse("2006-01", month); err == nil {
-				monthStart = monthTime
-			}
-
-			mergedSummary = types.HistorySummary{
-				TSMonthStart: monthStart,
-				Energy:       mergedEnergy,
-				Weather:      mergedWeather,
-			}
-
-			// Determine latestDate and earliestDate.
-			var latestDate, earliestDate time.Time
-			if len(mergedSummary.Energy) > 0 {
-				earliestDate = mergedSummary.Energy[0].TSDayStart
-				latestDate = mergedSummary.Energy[0].TSDayStart
-				for _, day := range mergedSummary.Energy {
-					if day.TSDayStart.Before(earliestDate) {
-						earliestDate = day.TSDayStart
-					}
-					if day.TSDayStart.After(latestDate) {
-						latestDate = day.TSDayStart
-					}
-				}
-			}
-
-			jsonBytes, err := json.Marshal(mergedSummary)
-			if err != nil {
-				return fmt.Errorf("failed to marshal history summary: %w", err)
-			}
-
-			data := map[string]any{
-				"json": string(jsonBytes),
-			}
-			if !latestDate.IsZero() {
-				data["latestDate"] = latestDate
-			}
-			if !earliestDate.IsZero() {
-				data["earliestDate"] = earliestDate
-			}
-
-			return tx.Set(docRef, data)
+		// Merge Energy data, favoring the newSummary's days.
+		energyMap := make(map[string]types.DailyEnergyStats)
+		for _, e := range existing.Energy {
+			energyMap[e.TSDayStart.Format("2006-01-02")] = e
+		}
+		for _, e := range newSummary.Energy {
+			energyMap[e.TSDayStart.Format("2006-01-02")] = e
+		}
+		var mergedEnergy []types.DailyEnergyStats
+		for _, e := range energyMap {
+			mergedEnergy = append(mergedEnergy, e)
+		}
+		slices.SortFunc(mergedEnergy, func(a, b types.DailyEnergyStats) int {
+			return a.TSDayStart.Compare(b.TSDayStart)
 		})
 
-		if err == nil {
-			return mergedSummary, nil
+		// Merge Weather data, favoring the newSummary's days.
+		weatherMap := make(map[string]types.Weather)
+		for _, w := range existing.Weather {
+			weatherMap[w.TSDayStart.Format("2006-01-02")] = w
+		}
+		for _, w := range newSummary.Weather {
+			weatherMap[w.TSDayStart.Format("2006-01-02")] = w
+		}
+		var mergedWeather []types.Weather
+		for _, w := range weatherMap {
+			mergedWeather = append(mergedWeather, w)
+		}
+		slices.SortFunc(mergedWeather, func(a, b types.Weather) int {
+			return a.TSDayStart.Compare(b.TSDayStart)
+		})
+
+		var monthStart time.Time
+		if monthTime, err := time.Parse("2006-01", month); err == nil {
+			monthStart = monthTime
 		}
 
-		lastErr = err
-		if isTransactionExpiredErr(err) && attempt < maxRetries-1 {
-			log.Ctx(ctx).WarnContext(ctx, "history summary transaction expired, retrying",
-				slog.String("siteID", siteID),
-				slog.String("month", month),
-				slog.Int("attempt", attempt+1),
-				slog.Any("error", err),
-			)
-			select {
-			case <-ctx.Done():
-				return types.HistorySummary{}, ctx.Err()
-			case <-time.After(backoff):
-				backoff *= 2
-				continue
+		mergedSummary = types.HistorySummary{
+			TSMonthStart: monthStart,
+			Energy:       mergedEnergy,
+			Weather:      mergedWeather,
+		}
+
+		// Determine latestDate and earliestDate.
+		var latestDate, earliestDate time.Time
+		if len(mergedSummary.Energy) > 0 {
+			earliestDate = mergedSummary.Energy[0].TSDayStart
+			latestDate = mergedSummary.Energy[0].TSDayStart
+			for _, day := range mergedSummary.Energy {
+				if day.TSDayStart.Before(earliestDate) {
+					earliestDate = day.TSDayStart
+				}
+				if day.TSDayStart.After(latestDate) {
+					latestDate = day.TSDayStart
+				}
 			}
 		}
-		break
+
+		jsonBytes, err := json.Marshal(mergedSummary)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal history summary: %w", err)
+		}
+
+		data := map[string]any{
+			"json": string(jsonBytes),
+		}
+		if !latestDate.IsZero() {
+			data["latestDate"] = latestDate
+		}
+		if !earliestDate.IsZero() {
+			data["earliestDate"] = earliestDate
+		}
+
+		return data, nil
+	})
+	if err != nil {
+		return types.HistorySummary{}, err
 	}
 
-	return types.HistorySummary{}, lastErr
+	return mergedSummary, nil
 }
 
 // DeleteSite deletes a site document and recursively deletes all its associated subcollections using BulkWriter, with config deleted last.
@@ -2262,34 +2227,30 @@ func (f *FirestoreProvider) deleteCollection(ctx context.Context, coll *firestor
 	return nil
 }
 
-// AddUserPushSubscription adds or updates a push subscription on a user in a transaction.
+// AddUserPushSubscription adds or updates a push subscription on a user with optimistic concurrency.
 func (f *FirestoreProvider) AddUserPushSubscription(ctx context.Context, userID string, sub types.PushSubscription) error {
 	if userID == "" {
 		return fmt.Errorf("userID cannot be empty")
 	}
 	docRef := f.client.Collection("users").Doc(userID)
 
-	return f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-		doc, err := tx.Get(docRef)
-		if err != nil {
-			if status.Code(err) == codes.NotFound {
-				return fmt.Errorf("%w: %s", ErrUserNotFound, userID)
-			}
-			return fmt.Errorf("failed to get user %s: %w", userID, err)
+	_, err := f.readModifyWriteDoc(ctx, docRef, func(doc *firestore.DocumentSnapshot) (map[string]any, error) {
+		if doc == nil {
+			return nil, fmt.Errorf("%w: %s", ErrUserNotFound, userID)
 		}
 
 		val, err := doc.DataAt("json")
 		if err != nil {
-			return fmt.Errorf("user %s missing json: %w", userID, err)
+			return nil, fmt.Errorf("user %s missing json: %w", userID, err)
 		}
 		jsonStr, ok := val.(string)
 		if !ok {
-			return fmt.Errorf("user %s json is not a string", userID)
+			return nil, fmt.Errorf("user %s json is not a string", userID)
 		}
 
 		var user types.User
 		if err := json.Unmarshal([]byte(jsonStr), &user); err != nil {
-			return fmt.Errorf("failed to unmarshal user %s: %w", userID, err)
+			return nil, fmt.Errorf("failed to unmarshal user %s: %w", userID, err)
 		}
 
 		if sub.ID == "" {
@@ -2326,17 +2287,18 @@ func (f *FirestoreProvider) AddUserPushSubscription(ctx context.Context, userID 
 
 		userJSON, err := json.Marshal(user)
 		if err != nil {
-			return fmt.Errorf("failed to marshal user %s: %w", userID, err)
+			return nil, fmt.Errorf("failed to marshal user %s: %w", userID, err)
 		}
 
-		return tx.Set(docRef, map[string]any{
+		return map[string]any{
 			"json":            string(userJSON),
 			"subscriptionIDs": subIDs,
-		}, firestore.MergeAll)
+		}, nil
 	})
+	return err
 }
 
-// RemoveUserPushSubscription removes a push subscription by endpoint from a user in a transaction.
+// RemoveUserPushSubscription removes a push subscription by endpoint from a user with optimistic concurrency.
 // If the user has no remaining push subscriptions after removal, their userID is also cleaned up from
 // site.Notifications across all sites they belong to.
 func (f *FirestoreProvider) RemoveUserPushSubscription(ctx context.Context, userID string, endpoint string) error {
@@ -2348,36 +2310,34 @@ func (f *FirestoreProvider) RemoveUserPushSubscription(ctx context.Context, user
 	var userSites []types.UserSite
 	noRemainingSubscriptions := false
 
-	err := f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-		doc, err := tx.Get(docRef)
-		if err != nil {
-			if status.Code(err) == codes.NotFound {
-				return fmt.Errorf("%w: %s", ErrUserNotFound, userID)
-			}
-			return fmt.Errorf("failed to get user %s: %w", userID, err)
+	_, err := f.readModifyWriteDoc(ctx, docRef, func(doc *firestore.DocumentSnapshot) (map[string]any, error) {
+		if doc == nil {
+			return nil, fmt.Errorf("%w: %s", ErrUserNotFound, userID)
 		}
 
 		val, err := doc.DataAt("json")
 		if err != nil {
-			return fmt.Errorf("user %s missing json: %w", userID, err)
+			return nil, fmt.Errorf("user %s missing json: %w", userID, err)
 		}
 		jsonStr, ok := val.(string)
 		if !ok {
-			return fmt.Errorf("user %s json is not a string", userID)
+			return nil, fmt.Errorf("user %s json is not a string", userID)
 		}
 
 		var user types.User
 		if err := json.Unmarshal([]byte(jsonStr), &user); err != nil {
-			return fmt.Errorf("failed to unmarshal user %s: %w", userID, err)
+			return nil, fmt.Errorf("failed to unmarshal user %s: %w", userID, err)
 		}
 
 		filtered := slices.DeleteFunc(user.Subscriptions, func(sub types.PushSubscription) bool {
 			return sub.Endpoint == endpoint || sub.ID == endpoint
 		})
 		user.Subscriptions = filtered
-		if len(filtered) == 0 {
-			noRemainingSubscriptions = true
+		noRemainingSubscriptions = len(filtered) == 0
+		if noRemainingSubscriptions {
 			userSites = user.Sites
+		} else {
+			userSites = nil
 		}
 
 		subIDs := make([]string, 0, len(user.Subscriptions)*2)
@@ -2396,13 +2356,13 @@ func (f *FirestoreProvider) RemoveUserPushSubscription(ctx context.Context, user
 
 		userJSON, err := json.Marshal(user)
 		if err != nil {
-			return fmt.Errorf("failed to marshal user %s: %w", userID, err)
+			return nil, fmt.Errorf("failed to marshal user %s: %w", userID, err)
 		}
 
-		return tx.Set(docRef, map[string]any{
+		return map[string]any{
 			"json":            string(userJSON),
 			"subscriptionIDs": subIDs,
-		}, firestore.MergeAll)
+		}, nil
 	})
 	if err != nil {
 		return err
@@ -2459,38 +2419,37 @@ func (f *FirestoreProvider) ReplaceUserPushSubscription(
 
 	docRef := doc.Ref
 
-	return f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-		docSnap, err := tx.Get(docRef)
-		if err != nil {
-			return err
+	_, err = f.readModifyWriteDoc(ctx, docRef, func(docSnap *firestore.DocumentSnapshot) (map[string]any, error) {
+		if docSnap == nil {
+			return nil, fmt.Errorf("%w: subscription %s", ErrUserNotFound, prevID)
 		}
 
 		val, err := docSnap.DataAt("json")
 		if err != nil {
-			return fmt.Errorf("missing user json: %w", err)
+			return nil, fmt.Errorf("missing user json: %w", err)
 		}
 		jsonStr, ok := val.(string)
 		if !ok {
-			return fmt.Errorf("user json is not a string")
+			return nil, fmt.Errorf("user json is not a string")
 		}
 
 		var user types.User
 		if err := json.Unmarshal([]byte(jsonStr), &user); err != nil {
-			return fmt.Errorf("failed to unmarshal user: %w", err)
+			return nil, fmt.Errorf("failed to unmarshal user: %w", err)
 		}
 
 		targetIndex := -1
 		for i, existing := range user.Subscriptions {
 			if existing.ID == prevID || existing.Endpoint == prevEndpoint {
 				if subtle.ConstantTimeCompare([]byte(existing.Keys.Auth), []byte(prevAuth)) != 1 {
-					return fmt.Errorf("invalid subscription authentication secret")
+					return nil, fmt.Errorf("invalid subscription authentication secret")
 				}
 				targetIndex = i
 				break
 			}
 		}
 		if targetIndex == -1 {
-			return fmt.Errorf("subscription not found on user")
+			return nil, fmt.Errorf("subscription not found on user")
 		}
 
 		if newSub != nil && newSub.Endpoint != "" {
@@ -2519,17 +2478,18 @@ func (f *FirestoreProvider) ReplaceUserPushSubscription(
 
 		userJSON, err := json.Marshal(user)
 		if err != nil {
-			return fmt.Errorf("failed to marshal user: %w", err)
+			return nil, fmt.Errorf("failed to marshal user: %w", err)
 		}
 
-		return tx.Set(docRef, map[string]any{
+		return map[string]any{
 			"json":            string(userJSON),
 			"subscriptionIDs": subIDs,
-		}, firestore.MergeAll)
+		}, nil
 	})
+	return err
 }
 
-// AddUserApp adds or updates a UserApp on a user in a transaction.
+// AddUserApp adds or updates a UserApp on a user with optimistic concurrency.
 func (f *FirestoreProvider) AddUserApp(ctx context.Context, userID string, app types.UserApp) error {
 	if userID == "" {
 		return errors.New("userID cannot be empty")
@@ -2542,27 +2502,23 @@ func (f *FirestoreProvider) AddUserApp(ctx context.Context, userID string, app t
 	}
 	docRef := f.client.Collection("users").Doc(userID)
 
-	return f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-		doc, err := tx.Get(docRef)
-		if err != nil {
-			if status.Code(err) == codes.NotFound {
-				return fmt.Errorf("%w: %s", ErrUserNotFound, userID)
-			}
-			return fmt.Errorf("failed to get user %s: %w", userID, err)
+	_, err := f.readModifyWriteDoc(ctx, docRef, func(doc *firestore.DocumentSnapshot) (map[string]any, error) {
+		if doc == nil {
+			return nil, fmt.Errorf("%w: %s", ErrUserNotFound, userID)
 		}
 
 		val, err := doc.DataAt("json")
 		if err != nil {
-			return fmt.Errorf("user %s missing json: %w", userID, err)
+			return nil, fmt.Errorf("user %s missing json: %w", userID, err)
 		}
 		jsonStr, ok := val.(string)
 		if !ok {
-			return fmt.Errorf("user %s json is not a string", userID)
+			return nil, fmt.Errorf("user %s json is not a string", userID)
 		}
 
 		var user types.User
 		if err := json.Unmarshal([]byte(jsonStr), &user); err != nil {
-			return fmt.Errorf("failed to unmarshal user %s: %w", userID, err)
+			return nil, fmt.Errorf("failed to unmarshal user %s: %w", userID, err)
 		}
 
 		found := false
@@ -2579,16 +2535,17 @@ func (f *FirestoreProvider) AddUserApp(ctx context.Context, userID string, app t
 
 		userJSON, err := json.Marshal(user)
 		if err != nil {
-			return fmt.Errorf("failed to marshal user %s: %w", userID, err)
+			return nil, fmt.Errorf("failed to marshal user %s: %w", userID, err)
 		}
 
-		return tx.Set(docRef, map[string]any{
+		return map[string]any{
 			"json": string(userJSON),
-		}, firestore.MergeAll)
+		}, nil
 	})
+	return err
 }
 
-// RemoveUserApp removes a UserApp by ID and siteID from a user in a transaction.
+// RemoveUserApp removes a UserApp by ID and siteID from a user with optimistic concurrency.
 func (f *FirestoreProvider) RemoveUserApp(ctx context.Context, userID string, siteID string, appID string) error {
 	if userID == "" {
 		return errors.New("userID cannot be empty")
@@ -2601,27 +2558,23 @@ func (f *FirestoreProvider) RemoveUserApp(ctx context.Context, userID string, si
 	}
 	docRef := f.client.Collection("users").Doc(userID)
 
-	return f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-		doc, err := tx.Get(docRef)
-		if err != nil {
-			if status.Code(err) == codes.NotFound {
-				return fmt.Errorf("%w: %s", ErrUserNotFound, userID)
-			}
-			return fmt.Errorf("failed to get user %s: %w", userID, err)
+	_, err := f.readModifyWriteDoc(ctx, docRef, func(doc *firestore.DocumentSnapshot) (map[string]any, error) {
+		if doc == nil {
+			return nil, fmt.Errorf("%w: %s", ErrUserNotFound, userID)
 		}
 
 		val, err := doc.DataAt("json")
 		if err != nil {
-			return fmt.Errorf("user %s missing json: %w", userID, err)
+			return nil, fmt.Errorf("user %s missing json: %w", userID, err)
 		}
 		jsonStr, ok := val.(string)
 		if !ok {
-			return fmt.Errorf("user %s json is not a string", userID)
+			return nil, fmt.Errorf("user %s json is not a string", userID)
 		}
 
 		var user types.User
 		if err := json.Unmarshal([]byte(jsonStr), &user); err != nil {
-			return fmt.Errorf("failed to unmarshal user %s: %w", userID, err)
+			return nil, fmt.Errorf("failed to unmarshal user %s: %w", userID, err)
 		}
 
 		origLen := len(user.Apps)
@@ -2629,21 +2582,22 @@ func (f *FirestoreProvider) RemoveUserApp(ctx context.Context, userID string, si
 			return existing.ID == appID && existing.SiteID == siteID
 		})
 		if len(user.Apps) == origLen {
-			return fmt.Errorf("%w: %s", ErrAppNotFound, appID)
+			return nil, fmt.Errorf("%w: %s", ErrAppNotFound, appID)
 		}
 
 		userJSON, err := json.Marshal(user)
 		if err != nil {
-			return fmt.Errorf("failed to marshal user %s: %w", userID, err)
+			return nil, fmt.Errorf("failed to marshal user %s: %w", userID, err)
 		}
 
-		return tx.Set(docRef, map[string]any{
+		return map[string]any{
 			"json": string(userJSON),
-		}, firestore.MergeAll)
+		}, nil
 	})
+	return err
 }
 
-// ReplaceUserApp replaces an existing UserApp on a user in a transaction after verifying
+// ReplaceUserApp replaces an existing UserApp on a user with optimistic concurrency after verifying
 // any preconditions configured in opts.
 func (f *FirestoreProvider) ReplaceUserApp(ctx context.Context, userID string, newApp types.UserApp, opts ReplaceUserAppOptions) error {
 	if userID == "" {
@@ -2657,27 +2611,23 @@ func (f *FirestoreProvider) ReplaceUserApp(ctx context.Context, userID string, n
 	}
 	docRef := f.client.Collection("users").Doc(userID)
 
-	return f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-		doc, err := tx.Get(docRef)
-		if err != nil {
-			if status.Code(err) == codes.NotFound {
-				return fmt.Errorf("%w: %s", ErrUserNotFound, userID)
-			}
-			return fmt.Errorf("failed to get user %s: %w", userID, err)
+	_, err := f.readModifyWriteDoc(ctx, docRef, func(doc *firestore.DocumentSnapshot) (map[string]any, error) {
+		if doc == nil {
+			return nil, fmt.Errorf("%w: %s", ErrUserNotFound, userID)
 		}
 
 		val, err := doc.DataAt("json")
 		if err != nil {
-			return fmt.Errorf("user %s missing json: %w", userID, err)
+			return nil, fmt.Errorf("user %s missing json: %w", userID, err)
 		}
 		jsonStr, ok := val.(string)
 		if !ok {
-			return fmt.Errorf("user %s json is not a string", userID)
+			return nil, fmt.Errorf("user %s json is not a string", userID)
 		}
 
 		var user types.User
 		if err := json.Unmarshal([]byte(jsonStr), &user); err != nil {
-			return fmt.Errorf("failed to unmarshal user %s: %w", userID, err)
+			return nil, fmt.Errorf("failed to unmarshal user %s: %w", userID, err)
 		}
 
 		targetIdx := -1
@@ -2688,31 +2638,32 @@ func (f *FirestoreProvider) ReplaceUserApp(ctx context.Context, userID string, n
 			}
 		}
 		if targetIdx == -1 {
-			return fmt.Errorf("%w: %s", ErrAppNotFound, newApp.ID)
+			return nil, fmt.Errorf("%w: %s", ErrAppNotFound, newApp.ID)
 		}
 
 		existing := user.Apps[targetIdx]
 		if existing.SiteID != newApp.SiteID {
-			return fmt.Errorf("%w: %s", ErrAppConflict, newApp.ID)
+			return nil, fmt.Errorf("%w: %s", ErrAppConflict, newApp.ID)
 		}
 		if opts.ExpectedPendingCodeHash != nil && subtle.ConstantTimeCompare([]byte(existing.PendingCodeHash), []byte(*opts.ExpectedPendingCodeHash)) != 1 {
-			return fmt.Errorf("%w: %s", ErrAppConflict, newApp.ID)
+			return nil, fmt.Errorf("%w: %s", ErrAppConflict, newApp.ID)
 		}
 
 		user.Apps[targetIdx] = newApp
 
 		userJSON, err := json.Marshal(user)
 		if err != nil {
-			return fmt.Errorf("failed to marshal user %s: %w", userID, err)
+			return nil, fmt.Errorf("failed to marshal user %s: %w", userID, err)
 		}
 
-		return tx.Set(docRef, map[string]any{
+		return map[string]any{
 			"json": string(userJSON),
-		}, firestore.MergeAll)
+		}, nil
 	})
+	return err
 }
 
-// UpdateSiteNotificationSettings updates notification preferences for a specific user on a site's settings in a transaction.
+// UpdateSiteNotificationSettings updates notification preferences for a specific user on a site's settings with optimistic concurrency.
 // If settings is an empty struct (types.UserNotificationSettings{}), the user's notification entry is deleted.
 func (f *FirestoreProvider) UpdateSiteNotificationSettings(ctx context.Context, siteID string, userID string, settings types.UserNotificationSettings) error {
 	if siteID == "" {
@@ -2727,35 +2678,31 @@ func (f *FirestoreProvider) UpdateSiteNotificationSettings(ctx context.Context, 
 	}
 	docRef := coll.Doc("settings")
 
-	return f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-		doc, err := tx.Get(docRef)
-		if err != nil {
-			if status.Code(err) == codes.NotFound {
-				return fmt.Errorf("%w: %s", ErrSiteNotFound, siteID)
-			}
-			return fmt.Errorf("failed to get settings for site %s: %w", siteID, err)
+	_, err = f.readModifyWriteDoc(ctx, docRef, func(doc *firestore.DocumentSnapshot) (map[string]any, error) {
+		if doc == nil {
+			return nil, fmt.Errorf("%w: %s", ErrSiteNotFound, siteID)
 		}
 
 		val, err := doc.DataAt("json")
 		if err != nil {
-			return fmt.Errorf("settings for site %s missing json: %w", siteID, err)
+			return nil, fmt.Errorf("settings for site %s missing json: %w", siteID, err)
 		}
 		jsonStr, ok := val.(string)
 		if !ok {
-			return fmt.Errorf("settings for site %s json is not a string", siteID)
+			return nil, fmt.Errorf("settings for site %s json is not a string", siteID)
 		}
 
 		var s types.Settings
 		if err := json.Unmarshal([]byte(jsonStr), &s); err != nil {
-			return fmt.Errorf("failed to unmarshal settings for site %s: %w", siteID, err)
+			return nil, fmt.Errorf("failed to unmarshal settings for site %s: %w", siteID, err)
 		}
 
 		if reflect.DeepEqual(settings, types.UserNotificationSettings{}) {
 			if s.Notifications == nil {
-				return nil
+				return nil, nil
 			}
 			if _, exists := s.Notifications[userID]; !exists {
-				return nil
+				return nil, nil
 			}
 			delete(s.Notifications, userID)
 			if len(s.Notifications) == 0 {
@@ -2764,7 +2711,7 @@ func (f *FirestoreProvider) UpdateSiteNotificationSettings(ctx context.Context, 
 		} else {
 			if s.Notifications != nil {
 				if existing, exists := s.Notifications[userID]; exists && reflect.DeepEqual(existing, settings) {
-					return nil
+					return nil, nil
 				}
 			} else {
 				s.Notifications = make(map[string]types.UserNotificationSettings)
@@ -2774,13 +2721,14 @@ func (f *FirestoreProvider) UpdateSiteNotificationSettings(ctx context.Context, 
 
 		settingsJSON, err := json.Marshal(s)
 		if err != nil {
-			return fmt.Errorf("failed to marshal settings for site %s: %w", siteID, err)
+			return nil, fmt.Errorf("failed to marshal settings for site %s: %w", siteID, err)
 		}
 
-		return tx.Set(docRef, map[string]any{
+		return map[string]any{
 			"json": string(settingsJSON),
-		}, firestore.MergeAll)
+		}, nil
 	})
+	return err
 }
 
 // GetNotificationLogs retrieves notification logs for a site within the [start, end) time range.
@@ -2848,7 +2796,7 @@ func (f *FirestoreProvider) GetNotificationLogs(ctx context.Context, siteID stri
 	return allLogs, nil
 }
 
-// AppendNotificationLog appends a notification log entry to the monthly log document in a transaction.
+// AppendNotificationLog appends a notification log entry to the monthly log document with optimistic concurrency.
 func (f *FirestoreProvider) AppendNotificationLog(ctx context.Context, siteID string, logEntry types.NotificationLog) error {
 	if siteID == "" {
 		return fmt.Errorf("siteID cannot be empty")
@@ -2868,33 +2816,40 @@ func (f *FirestoreProvider) AppendNotificationLog(ctx context.Context, siteID st
 	monthStart := time.Date(ts.Year(), ts.Month(), 1, 0, 0, 0, 0, time.UTC)
 	docRef := coll.Doc(month)
 
-	return f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-		doc, err := tx.Get(docRef)
+	_, err = f.readModifyWriteDoc(ctx, docRef, func(doc *firestore.DocumentSnapshot) (map[string]any, error) {
 		var monthlyLogs types.MonthlyNotificationLogs
-		if err != nil {
-			if status.Code(err) == codes.NotFound {
-				monthlyLogs = types.MonthlyNotificationLogs{
-					TSMonthStart: monthStart,
-					Logs:         []types.NotificationLog{},
-				}
-			} else {
-				return fmt.Errorf("failed to get notification logs doc %s: %w", month, err)
+		if doc == nil {
+			monthlyLogs = types.MonthlyNotificationLogs{
+				TSMonthStart: monthStart,
+				Logs:         []types.NotificationLog{},
 			}
 		} else {
 			val, err := doc.DataAt("json")
 			if err != nil {
-				return fmt.Errorf("notification logs doc missing json: %w", err)
+				return nil, fmt.Errorf("notification logs doc missing json: %w", err)
 			}
 			jsonStr, ok := val.(string)
 			if !ok {
-				return fmt.Errorf("notification logs doc json not string")
+				return nil, fmt.Errorf("notification logs doc json not string")
 			}
 			if err := json.Unmarshal([]byte(jsonStr), &monthlyLogs); err != nil {
-				return fmt.Errorf("failed to unmarshal monthly notification logs: %w", err)
+				return nil, fmt.Errorf("failed to unmarshal monthly notification logs: %w", err)
 			}
 		}
 
-		monthlyLogs.Logs = append(monthlyLogs.Logs, logEntry)
+		found := false
+		if logEntry.ID != "" {
+			for i, existing := range monthlyLogs.Logs {
+				if existing.ID == logEntry.ID {
+					monthlyLogs.Logs[i] = logEntry
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			monthlyLogs.Logs = append(monthlyLogs.Logs, logEntry)
+		}
 
 		var earliestDate, latestDate time.Time
 		if len(monthlyLogs.Logs) > 0 {
@@ -2912,7 +2867,7 @@ func (f *FirestoreProvider) AppendNotificationLog(ctx context.Context, siteID st
 
 		jsonBytes, err := json.Marshal(monthlyLogs)
 		if err != nil {
-			return fmt.Errorf("failed to marshal monthly notification logs: %w", err)
+			return nil, fmt.Errorf("failed to marshal monthly notification logs: %w", err)
 		}
 
 		data := map[string]any{
@@ -2925,11 +2880,12 @@ func (f *FirestoreProvider) AppendNotificationLog(ctx context.Context, siteID st
 			data["latestDate"] = latestDate
 		}
 
-		return tx.Set(docRef, data)
+		return data, nil
 	})
+	return err
 }
 
-// RecordNotificationClick marks a notification log entry as clicked in a transaction.
+// RecordNotificationClick marks a notification log entry as clicked with optimistic concurrency.
 func (f *FirestoreProvider) RecordNotificationClick(
 	ctx context.Context,
 	siteID string,
@@ -2954,34 +2910,30 @@ func (f *FirestoreProvider) RecordNotificationClick(
 	}
 	docRef := coll.Doc(month)
 
-	return f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-		doc, err := tx.Get(docRef)
-		if err != nil {
-			if status.Code(err) == codes.NotFound {
-				return nil
-			}
-			return fmt.Errorf("failed to get notification logs doc %s: %w", month, err)
+	_, err = f.readModifyWriteDoc(ctx, docRef, func(doc *firestore.DocumentSnapshot) (map[string]any, error) {
+		if doc == nil {
+			return nil, nil
 		}
 
 		val, err := doc.DataAt("json")
 		if err != nil {
-			return fmt.Errorf("notification logs doc missing json: %w", err)
+			return nil, fmt.Errorf("notification logs doc missing json: %w", err)
 		}
 		jsonStr, ok := val.(string)
 		if !ok {
-			return fmt.Errorf("notification logs doc json not string")
+			return nil, fmt.Errorf("notification logs doc json not string")
 		}
 
 		var monthlyLogs types.MonthlyNotificationLogs
 		if err := json.Unmarshal([]byte(jsonStr), &monthlyLogs); err != nil {
-			return fmt.Errorf("failed to unmarshal monthly notification logs: %w", err)
+			return nil, fmt.Errorf("failed to unmarshal monthly notification logs: %w", err)
 		}
 
 		found := false
 		for i, entry := range monthlyLogs.Logs {
 			if entry.ID == logID {
 				if entry.Clicked {
-					return nil
+					return nil, nil
 				}
 				monthlyLogs.Logs[i].Clicked = true
 				monthlyLogs.Logs[i].TSClicked = ts
@@ -2990,18 +2942,19 @@ func (f *FirestoreProvider) RecordNotificationClick(
 			}
 		}
 		if !found {
-			return nil
+			return nil, nil
 		}
 
 		jsonBytes, err := json.Marshal(monthlyLogs)
 		if err != nil {
-			return fmt.Errorf("failed to marshal monthly notification logs: %w", err)
+			return nil, fmt.Errorf("failed to marshal monthly notification logs: %w", err)
 		}
 
-		return tx.Set(docRef, map[string]any{
+		return map[string]any{
 			"json": string(jsonBytes),
-		}, firestore.MergeAll)
+		}, nil
 	})
+	return err
 }
 
 // MigrateLegacyPricing migrates legacy hourly price documents (from utilities/{utilityID}/hourly_prices and

@@ -36,12 +36,12 @@ func (s *Server) migrateAndDecryptSettings(ctx context.Context, siteID string, s
 
 	// Check for migration
 	if version < types.CurrentSettingsVersion {
-		log.Ctx(ctx).InfoContext(ctx, "migrating settings", slog.Int("oldVersion", version), slog.Int("newVersion", types.CurrentSettingsVersion))
 		newSettings, changed, err := types.MigrateSettings(settings, version, s.release)
 		if err != nil {
 			// Log error but return settings as is (best effort)
 			log.Ctx(ctx).ErrorContext(ctx, "failed to migrate settings", slog.Int("currentVersion", version), slog.Any("error", err))
 		} else if changed {
+			log.Ctx(ctx).InfoContext(ctx, "migrating settings", slog.Int("oldVersion", version), slog.Int("newVersion", types.CurrentSettingsVersion))
 			sv.Settings = newSettings
 			sv.version = types.CurrentSettingsVersion
 			if newUpdatedAt, err := s.storage.SetSettings(ctx, siteID, newSettings, types.CurrentSettingsVersion, updatedAt); err != nil {
