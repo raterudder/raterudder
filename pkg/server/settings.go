@@ -15,6 +15,7 @@ import (
 
 	"github.com/raterudder/raterudder/pkg/ess"
 	"github.com/raterudder/raterudder/pkg/log"
+	"github.com/raterudder/raterudder/pkg/storage"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
 )
@@ -34,6 +35,7 @@ func (s *Server) migrateAndDecryptSettings(ctx context.Context, siteID string, s
 		updatedAt: updatedAt,
 	}
 
+	var migrated bool
 	// Check for migration
 	if version < types.CurrentSettingsVersion {
 		newSettings, changed, err := types.MigrateSettings(settings, version, s.release)
@@ -44,24 +46,43 @@ func (s *Server) migrateAndDecryptSettings(ctx context.Context, siteID string, s
 			log.Ctx(ctx).InfoContext(ctx, "migrating settings", slog.Int("oldVersion", version), slog.Int("newVersion", types.CurrentSettingsVersion))
 			sv.Settings = newSettings
 			sv.version = types.CurrentSettingsVersion
-			if newUpdatedAt, err := s.storage.SetSettings(ctx, siteID, newSettings, types.CurrentSettingsVersion, updatedAt); err != nil {
-				log.Ctx(ctx).ErrorContext(ctx, "failed to save migrated settings", slog.Any("error", err))
-				// Return migrated settings even if save failed, so current request works with new defaults
-			} else {
-				log.Ctx(ctx).InfoContext(ctx, "saved migrated settings", slog.Int("oldVersion", version), slog.Int("newVersion", types.CurrentSettingsVersion))
-				sv.updatedAt = newUpdatedAt
-			}
-			sv.Settings = newSettings
+			migrated = true
 		}
 	}
 
 	var creds types.Credentials
-	var err error
+	var credsMigrated bool
 	if len(sv.Settings.EncryptedCredentials) > 0 {
-		creds, err = s.decryptCredentials(ctx, sv.Settings.EncryptedCredentials)
+		var needsUpgrade bool
+		var err error
+		creds, needsUpgrade, err = s.decryptCredentials(ctx, siteID, sv.Settings.EncryptedCredentials)
 		if err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to decrypt credentials", slog.Any("error", err))
 			return settingsWithVersion{}, types.Credentials{}, err
+		}
+		if needsUpgrade {
+			encrypted, err := s.encryptCredentials(ctx, siteID, creds)
+			if err != nil {
+				log.Ctx(ctx).ErrorContext(ctx, "failed to re-encrypt credentials during migration", slog.Any("error", err))
+			} else {
+				log.Ctx(ctx).InfoContext(ctx, "migrating encrypted credentials to v2")
+				sv.Settings.EncryptedCredentials = encrypted
+				credsMigrated = true
+			}
+		}
+	}
+
+	if migrated || credsMigrated {
+		if newUpdatedAt, err := s.storage.SetSettings(ctx, siteID, sv.Settings, sv.version, updatedAt); err != nil {
+			if errors.Is(err, storage.ErrSettingsConflict) {
+				log.Ctx(ctx).WarnContext(ctx, "settings modified concurrently during migration", slog.Any("error", err))
+			} else {
+				log.Ctx(ctx).ErrorContext(ctx, "failed to save migrated settings", slog.Any("error", err))
+			}
+			// Return migrated settings even if save failed, so current request works with new defaults
+		} else {
+			log.Ctx(ctx).InfoContext(ctx, "saved migrated settings", slog.Int("oldVersion", version), slog.Int("newVersion", sv.version), slog.Bool("credsMigrated", credsMigrated))
+			sv.updatedAt = newUpdatedAt
 		}
 	}
 
@@ -76,7 +97,7 @@ func (s *Server) getSettingsWithMigration(ctx context.Context, siteID string) (s
 	return s.migrateAndDecryptSettings(ctx, siteID, settings, version, updatedAt)
 }
 
-func (s *Server) getESSSystem(ctx context.Context, siteID string, settings settingsWithVersion, creds types.Credentials) (ess.System, error) {
+func (s *Server) getESSSystem(ctx context.Context, siteID string, settings settingsWithVersion, creds types.Credentials) (ess.System, settingsWithVersion, error) {
 	failures := settings.ESSAuthStatus.ConsecutiveFailures
 	if failures > 1 {
 		backoff := getESSBackoff(failures)
@@ -84,13 +105,13 @@ func (s *Server) getESSSystem(ctx context.Context, siteID string, settings setti
 		if timeLeft > 0 {
 			// Round to seconds
 			timeLeft = timeLeft.Round(time.Second)
-			return nil, fmt.Errorf("%w, try again in %v", errESSRateLimited, timeLeft)
+			return nil, settings, fmt.Errorf("%w, try again in %v", errESSRateLimited, timeLeft)
 		}
 	}
 
 	essSystem, err := s.ess.Site(ctx, siteID, settings.Settings)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get ESS system: %w", err)
+		return nil, settings, fmt.Errorf("failed to get ESS system: %w", err)
 	}
 
 	// and apply those settings to the ESS
@@ -104,7 +125,7 @@ func (s *Server) getESSSystem(ctx context.Context, siteID string, settings setti
 		} else {
 			settings.updatedAt = newUpdatedAt
 		}
-		return nil, fmt.Errorf("failed to apply settings: %w", err)
+		return nil, settings, fmt.Errorf("failed to apply settings: %w", err)
 	}
 
 	authStatusChanged := false
@@ -117,7 +138,7 @@ func (s *Server) getESSSystem(ctx context.Context, siteID string, settings setti
 	if updated {
 		log.Ctx(ctx).DebugContext(ctx, "credentials updated by ess system")
 		settings.ESSAuthStatus.ConsecutiveSetFailures = 0
-		settings.EncryptedCredentials, err = s.encryptCredentials(ctx, newCreds)
+		settings.EncryptedCredentials, err = s.encryptCredentials(ctx, siteID, newCreds)
 		if err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to encrypt credentials", slog.Any("error", err))
 		} else {
@@ -135,7 +156,7 @@ func (s *Server) getESSSystem(ctx context.Context, siteID string, settings setti
 		}
 	}
 
-	return essSystem, nil
+	return essSystem, settings, nil
 }
 
 // SettingsRes is the response type for GetSettings
@@ -496,7 +517,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	if credsChanged {
 		// store the existing credentials with the new ones updated in-place
-		encrypted, err := s.encryptCredentials(ctx, existingCreds)
+		encrypted, err := s.encryptCredentials(ctx, siteID, existingCreds)
 		if err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to encrypt credentials", slog.Any("error", err))
 			writeJSONError(w, "failed to encrypt credentials", http.StatusInternalServerError)
@@ -584,7 +605,7 @@ func (s *Server) revertManagedTOUModeOnPause(ctx context.Context, siteID string,
 		log.Ctx(ctx).ErrorContext(ctx, "failed to revert managed TOU mode on pause: ess map is nil")
 		return
 	}
-	essSystem, err := s.getESSSystem(ctx, siteID, settings, creds)
+	essSystem, settings, err := s.getESSSystem(ctx, siteID, settings, creds)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get ESS system to revert managed TOU mode on pause", slog.Any("error", err))
 		return
@@ -674,17 +695,17 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 		ESS: req.ESS,
 	}
 
-	existing, version, _, err := s.storage.GetSettings(ctx, siteID)
+	existingRaw, version, updatedAt, err := s.storage.GetSettings(ctx, siteID)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get settings", slog.Any("error", err))
 		writeJSONError(w, "failed to get settings", http.StatusInternalServerError)
 		return
 	}
 
-	failures := existing.ESSAuthStatus.ConsecutiveFailures + existing.ESSAuthStatus.ConsecutiveSetFailures
+	failures := existingRaw.ESSAuthStatus.ConsecutiveFailures + existingRaw.ESSAuthStatus.ConsecutiveSetFailures
 	if failures > 1 {
 		backoff := getESSBackoff(failures)
-		timeLeft := backoff - s.now().Sub(existing.ESSAuthStatus.LastAttempt)
+		timeLeft := backoff - s.now().Sub(existingRaw.ESSAuthStatus.LastAttempt)
 		if timeLeft > 0 {
 			timeLeft = timeLeft.Round(time.Second)
 			writeJSONError(w, fmt.Sprintf("ESS rate limited, try again in %v", timeLeft), http.StatusTooManyRequests)
@@ -692,15 +713,13 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var existingCreds types.Credentials
-	if len(existing.EncryptedCredentials) > 0 {
-		existingCreds, err = s.decryptCredentials(ctx, existing.EncryptedCredentials)
-		if err != nil {
-			log.Ctx(ctx).ErrorContext(ctx, "failed to decrypt credentials", slog.Any("error", err))
-			writeJSONError(w, "failed to decrypt credentials", http.StatusInternalServerError)
-			return
-		}
+	existingSV, existingCreds, err := s.migrateAndDecryptSettings(ctx, siteID, existingRaw, version, updatedAt)
+	if err != nil {
+		log.Ctx(ctx).ErrorContext(ctx, "failed to decrypt credentials", slog.Any("error", err))
+		writeJSONError(w, "failed to decrypt credentials", http.StatusInternalServerError)
+		return
 	}
+	existing := existingSV.Settings
 
 	switch req.ESS {
 	case "enphase":
@@ -746,7 +765,7 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 	if err != nil && !errors.Is(err, ess.ErrNeedsNextStage) {
 		existing.ESSAuthStatus.ConsecutiveFailures++
 		existing.ESSAuthStatus.LastAttempt = now
-		if _, dbErr := s.storage.SetSettings(ctx, siteID, existing, version, time.Time{}); dbErr != nil {
+		if _, dbErr := s.storage.SetSettings(ctx, siteID, existing, existingSV.version, existingSV.updatedAt); dbErr != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status", slog.Any("error", dbErr))
 		}
 
@@ -759,7 +778,7 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 		existing.ESSAuthStatus.ConsecutiveFailures = 0
 		existing.ESSAuthStatus.ConsecutiveSetFailures = 0
 		existing.ESSAuthStatus.LastAttempt = now
-		if _, dbErr := s.storage.SetSettings(ctx, siteID, existing, version, time.Time{}); dbErr != nil {
+		if _, dbErr := s.storage.SetSettings(ctx, siteID, existing, existingSV.version, existingSV.updatedAt); dbErr != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status", slog.Any("error", dbErr))
 		}
 	}

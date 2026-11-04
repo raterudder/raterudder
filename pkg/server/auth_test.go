@@ -1090,6 +1090,68 @@ func TestAuthMiddleware(t *testing.T) {
 			assert.True(t, mocks.AssertExpectations(t))
 		})
 	})
+
+	t.Run("RevokedSessionNonce", func(t *testing.T) {
+		mocks := new(mockStorage)
+		server.storage = mocks
+		server.singleSite = false
+
+		tok1, err := server.createSessionToken("google:user@example.com", "user@example.com", "secret-123", time.Hour)
+		require.NoError(t, err)
+		sess1, err := server.verifySessionToken(tok1)
+		require.NoError(t, err)
+
+		tok2, err := server.createSessionToken("google:user@example.com", "user@example.com", "secret-123", time.Hour)
+		require.NoError(t, err)
+
+		userWithRevoked := types.User{
+			ID:            "google:user@example.com",
+			Email:         "user@example.com",
+			SessionSecret: "secret-123",
+			Sites:         []types.UserSite{{ID: "site1"}},
+			RevokedSessions: []types.RevokedSession{
+				{
+					Nonce:     sess1.nonce,
+					TSExpires: time.Now().Add(time.Hour).UTC(),
+				},
+			},
+		}
+
+		// 1. Revoked session token on protected route returns 401 and clears cookie
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(userWithRevoked, nil).Once()
+		wRevoked := httptest.NewRecorder()
+		reqRevoked := createReq("GET", "/api/history", nil, &http.Cookie{Name: sessionTokenCookie, Value: tok1})
+		server.authMiddleware(testHandler).ServeHTTP(wRevoked, reqRevoked)
+		assert.Equal(t, http.StatusUnauthorized, wRevoked.Code)
+		var cleared bool
+		for _, c := range wRevoked.Result().Cookies() {
+			if c.Name == sessionTokenCookie && c.Value == "" && c.MaxAge < 0 {
+				cleared = true
+			}
+		}
+		assert.True(t, cleared, "revoked session cookie should be cleared")
+
+		// 2. Different session token for the same user (different nonce) succeeds
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(userWithRevoked, nil).Once()
+		mocks.On("GetSite", mock.Anything, "site1").Return(types.Site{
+			ID:          "site1",
+			Permissions: []types.SitePermissions{{UserID: "google:user@example.com"}},
+		}, nil).Once()
+		wValid := httptest.NewRecorder()
+		reqValid := createReq("GET", "/api/history", nil, &http.Cookie{Name: sessionTokenCookie, Value: tok2})
+		server.authMiddleware(testHandler).ServeHTTP(wValid, reqValid)
+		assert.Equal(t, http.StatusOK, wValid.Code)
+
+		// 3. Revoked session token on allowNoLogin route (/api/auth/status) clears cookie and proceeds unauthenticated
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(userWithRevoked, nil).Once()
+		wStatus := httptest.NewRecorder()
+		reqStatus := createReq("GET", "/api/auth/status", nil, &http.Cookie{Name: sessionTokenCookie, Value: tok1})
+		server.authMiddleware(testHandler).ServeHTTP(wStatus, reqStatus)
+		assert.Equal(t, http.StatusOK, wStatus.Code)
+		assert.Empty(t, wStatus.Header().Get("X-User-ID"))
+
+		assert.True(t, mocks.AssertExpectations(t))
+	})
 }
 
 func TestHandleAuthStatus(t *testing.T) {
@@ -1495,10 +1557,59 @@ func TestHandleLogin(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 		assert.True(t, mocks.AssertExpectations(t))
 	})
+
+	t.Run("Through Auth Middleware With Blacklisted Or Expired Session Cookie", func(t *testing.T) {
+		mocks := new(mockStorage)
+		server.storage = mocks
+
+		revokedTok, err := server.createSessionToken("google:user@example.com", "user@example.com", "test-secret-123", time.Hour)
+		require.NoError(t, err)
+		revokedSess, err := server.verifySessionToken(revokedTok)
+		require.NoError(t, err)
+
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:            "google:user@example.com",
+			Email:         "user@example.com",
+			SessionSecret: "test-secret-123",
+			RevokedSessions: []types.RevokedSession{
+				{
+					Nonce:     revokedSess.nonce,
+					TSExpires: time.Now().Add(time.Hour).UTC(),
+				},
+			},
+		}, nil).Once()
+
+		w := httptest.NewRecorder()
+		req := createReq(validToken)
+		req.AddCookie(&http.Cookie{
+			Name:  sessionTokenCookie,
+			Value: revokedTok,
+		})
+
+		handler := server.authMiddleware(http.HandlerFunc(server.handleLogin))
+		handler.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var newCookie *http.Cookie
+		for _, c := range w.Result().Cookies() {
+			if c.Name == sessionTokenCookie && c.Value != "" {
+				newCookie = c
+			}
+		}
+		if assert.NotNil(t, newCookie, "should mint a new session_token cookie") {
+			newSess, err := server.verifySessionToken(newCookie.Value)
+			require.NoError(t, err)
+			assert.NotEqual(t, revokedSess.nonce, newSess.nonce)
+		}
+		assert.True(t, mocks.AssertExpectations(t))
+	})
 }
 
 func TestHandleLogout(t *testing.T) {
-	server := &Server{}
+	testKey := "12345678901234567890123456789012"
+	server := &Server{
+		sessionEncryptionKey: testKey,
+	}
 
 	t.Run("Logout", func(t *testing.T) {
 		w := httptest.NewRecorder()
@@ -1601,6 +1712,112 @@ func TestHandleLogout(t *testing.T) {
 			}
 		}
 		assert.True(t, foundSession, "session cookie should be cleared")
+		assert.True(t, mocks.AssertExpectations(t))
+	})
+
+	t.Run("Through Auth Middleware - Valid Session Revokes Nonce", func(t *testing.T) {
+		mocks := new(mockStorage)
+		serverWithMocks := &Server{
+			storage:              mocks,
+			sessionEncryptionKey: testKey,
+		}
+
+		tok, err := serverWithMocks.createSessionToken("google:user@example.com", "user@example.com", "secret-123", time.Hour)
+		require.NoError(t, err)
+		sess, err := serverWithMocks.verifySessionToken(tok)
+		require.NoError(t, err)
+
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:            "google:user@example.com",
+			Email:         "user@example.com",
+			SessionSecret: "secret-123",
+		}, nil).Once()
+		mocks.On("RevokeUserSession", mock.Anything, "google:user@example.com", types.RevokedSession{
+			Nonce:     sess.nonce,
+			TSExpires: time.Unix(sess.ExpiresAt, 0).UTC(),
+		}).Return(nil).Once()
+
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/api/auth/logout", nil)
+		req.AddCookie(&http.Cookie{
+			Name:  sessionTokenCookie,
+			Value: tok,
+		})
+
+		handler := serverWithMocks.authMiddleware(http.HandlerFunc(serverWithMocks.handleLogout))
+		handler.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.True(t, mocks.AssertExpectations(t))
+	})
+
+	t.Run("Through Auth Middleware - Unregistered User Ignores ErrUserNotFound", func(t *testing.T) {
+		mocks := new(mockStorage)
+		serverWithMocks := &Server{
+			storage:              mocks,
+			sessionEncryptionKey: testKey,
+		}
+
+		tok, err := serverWithMocks.createSessionToken("google:new@example.com", "new@example.com", "secret-new", time.Hour)
+		require.NoError(t, err)
+		sess, err := serverWithMocks.verifySessionToken(tok)
+		require.NoError(t, err)
+
+		mocks.On("GetUser", mock.Anything, "google:new@example.com").Return(types.User{}, storage.ErrUserNotFound).Once()
+		mocks.On("RevokeUserSession", mock.Anything, "google:new@example.com", types.RevokedSession{
+			Nonce:     sess.nonce,
+			TSExpires: time.Unix(sess.ExpiresAt, 0).UTC(),
+		}).Return(storage.ErrUserNotFound).Once()
+
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/api/auth/logout", nil)
+		req.AddCookie(&http.Cookie{
+			Name:  sessionTokenCookie,
+			Value: tok,
+		})
+
+		handler := serverWithMocks.authMiddleware(http.HandlerFunc(serverWithMocks.handleLogout))
+		handler.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.True(t, mocks.AssertExpectations(t))
+	})
+
+	t.Run("Through Auth Middleware - Already Revoked Session", func(t *testing.T) {
+		mocks := new(mockStorage)
+		serverWithMocks := &Server{
+			storage:              mocks,
+			sessionEncryptionKey: testKey,
+		}
+
+		tok, err := serverWithMocks.createSessionToken("google:user@example.com", "user@example.com", "secret-123", time.Hour)
+		require.NoError(t, err)
+		sess, err := serverWithMocks.verifySessionToken(tok)
+		require.NoError(t, err)
+
+		mocks.On("GetUser", mock.Anything, "google:user@example.com").Return(types.User{
+			ID:            "google:user@example.com",
+			Email:         "user@example.com",
+			SessionSecret: "secret-123",
+			RevokedSessions: []types.RevokedSession{
+				{
+					Nonce:     sess.nonce,
+					TSExpires: time.Now().Add(time.Hour).UTC(),
+				},
+			},
+		}, nil).Once()
+
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/api/auth/logout", nil)
+		req.AddCookie(&http.Cookie{
+			Name:  sessionTokenCookie,
+			Value: tok,
+		})
+
+		handler := serverWithMocks.authMiddleware(http.HandlerFunc(serverWithMocks.handleLogout))
+		handler.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
 		assert.True(t, mocks.AssertExpectations(t))
 	})
 }

@@ -232,12 +232,14 @@ func Configured(u *utility.Map, e *ess.Map, s storage.Database) *Server {
 			os.Exit(1)
 		}
 		srv.encryptionKey = *encryptionKey
+		_ = os.Unsetenv("CREDENTIALS_ENCRYPTION_KEY")
 
 		if len(*sessionEncryptionKey) != 32 {
 			log.Ctx(context.Background()).Error("session-encryption-key must be 32 characters")
 			os.Exit(1)
 		}
 		srv.sessionEncryptionKey = *sessionEncryptionKey
+		_ = os.Unsetenv("SESSION_ENCRYPTION_KEY")
 		srv.sessionDuration = *sessionDuration
 
 		if *appsEncryptionKey != "" {
@@ -246,6 +248,7 @@ func Configured(u *utility.Map, e *ess.Map, s storage.Database) *Server {
 				os.Exit(1)
 			}
 			srv.appsEncryptionKey = *appsEncryptionKey
+			_ = os.Unsetenv("APPS_ENCRYPTION_KEY")
 		} else {
 			log.Ctx(context.Background()).Info("connected apps disabled: -apps-encryption-key not configured")
 		}

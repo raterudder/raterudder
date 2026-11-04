@@ -76,15 +76,22 @@ func (a UserApp) Public() PublicUserApp {
 	}
 }
 
+// RevokedSession represents a logged-out session nonce that is blacklisted until its expiration.
+type RevokedSession struct {
+	Nonce     string    `json:"nonce"`
+	TSExpires time.Time `json:"tsExpires"`
+}
+
 // User represents a user of the system.
 type User struct {
-	ID            string             `json:"id"`
-	Email         string             `json:"email"`
-	Sites         []UserSite         `json:"sites"`
-	Admin         bool               `json:"-"`
-	SessionSecret string             `json:"sessionSecret,omitempty"`
-	Subscriptions []PushSubscription `json:"subscriptions,omitempty"`
-	Apps          []UserApp          `json:"apps,omitempty"`
+	ID              string             `json:"id"`
+	Email           string             `json:"email"`
+	Sites           []UserSite         `json:"sites"`
+	Admin           bool               `json:"-"`
+	SessionSecret   string             `json:"sessionSecret,omitempty"`
+	RevokedSessions []RevokedSession   `json:"revokedSessions,omitempty"`
+	Subscriptions   []PushSubscription `json:"subscriptions,omitempty"`
+	Apps            []UserApp          `json:"apps,omitempty"`
 }
 
 // ActionReason represents the type of action taken by the system.

@@ -80,6 +80,7 @@ type Database interface {
 	GetUser(ctx context.Context, userID string) (types.User, error)
 	CreateUser(ctx context.Context, user types.User) error
 	UpdateUser(ctx context.Context, user types.User) error
+	RevokeUserSession(ctx context.Context, userID string, revoked types.RevokedSession) error
 	DeleteUser(ctx context.Context, userID string) error
 	ListUsers(ctx context.Context) ([]types.User, error)
 	GetAdminSettings(ctx context.Context) (types.AdminSettings, error)

@@ -149,6 +149,11 @@ func (m *MockDatabase) UpdateUser(ctx context.Context, user types.User) error {
 	return args.Error(0)
 }
 
+func (m *MockDatabase) RevokeUserSession(ctx context.Context, userID string, revoked types.RevokedSession) error {
+	args := m.Called(ctx, userID, revoked)
+	return args.Error(0)
+}
+
 func (m *MockDatabase) ListSites(ctx context.Context) ([]types.Site, error) {
 	args := m.Called(ctx)
 	if len(args) > 0 {

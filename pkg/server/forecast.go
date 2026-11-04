@@ -285,7 +285,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	essSystem, err := s.getESSSystem(ctx, siteID, settings, creds)
+	essSystem, settings, err := s.getESSSystem(ctx, siteID, settings, creds)
 	if err != nil {
 		if errors.Is(err, errESSRateLimited) {
 			log.Ctx(ctx).DebugContext(ctx, "failed to get ess system: ESS rate limited", slog.Any("error", err))

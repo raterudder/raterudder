@@ -280,7 +280,7 @@ func (s *Server) performSiteUpdate(
 	}
 
 	// get ESS System
-	essSystem, err := s.getESSSystem(ctx, siteID, settings, creds)
+	essSystem, settings, err := s.getESSSystem(ctx, siteID, settings, creds)
 	if err != nil {
 		// TODO: how should we alert the user when this fails?
 		return nil, "", fmt.Errorf("failed to get ESS system: %w", err)

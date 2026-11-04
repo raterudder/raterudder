@@ -194,6 +194,16 @@ resource "google_cloud_run_v2_service" "raterudder" {
         value = "/secrets/config.json"
       }
 
+      env {
+        name = "CREDENTIALS_ENCRYPTION_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.raterudder_credentials_encryption_key.secret_id
+            version = "latest"
+          }
+        }
+      }
+
       volume_mounts {
         name       = "secrets"
         mount_path = "/secrets"

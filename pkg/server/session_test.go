@@ -43,6 +43,16 @@ func TestSessionToken(t *testing.T) {
 			assert.Equal(t, "user@example.com", session.Email)
 			assert.Equal(t, "my-secret-123", session.SessionSecret)
 			assert.Equal(t, now.Add(7*24*time.Hour).Unix(), session.ExpiresAt)
+			assert.Len(t, session.nonce, 48)
+
+			token2, err := s.createSessionToken("google:12345", "user@example.com", "my-secret-123", 7*24*time.Hour)
+			require.NoError(t, err)
+			session2, err := s.verifySessionToken(token2)
+			require.NoError(t, err)
+			if assert.NotNil(t, session2) {
+				assert.Len(t, session2.nonce, 48)
+				assert.NotEqual(t, session.nonce, session2.nonce)
+			}
 		}
 	})
 

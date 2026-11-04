@@ -136,7 +136,7 @@ func TestHandleGetSettings(t *testing.T) {
 		}
 
 		// Encrypt the mock credentials
-		encrypted, err := srv.encryptCredentials(context.Background(), creds)
+		encrypted, err := srv.encryptCredentials(context.Background(), types.SiteIDNone, creds)
 		require.NoError(t, err)
 
 		// Create settings with the encrypted credentials
@@ -286,7 +286,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 				},
 			},
 		}
-		_, err := srv.getESSSystem(ctx, "site1", s0, creds)
+		_, _, err := srv.getESSSystem(ctx, "site1", s0, creds)
 		require.NoError(t, err)
 
 		// 2. Failures = 1, should succeed immediately
@@ -298,7 +298,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 				},
 			},
 		}
-		_, err = srv.getESSSystem(ctx, "site1", s1, creds)
+		_, _, err = srv.getESSSystem(ctx, "site1", s1, creds)
 		require.NoError(t, err)
 
 		// 3. Failures = 2, wait 30s. If last attempt was 10s ago, should fail.
@@ -310,7 +310,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 				},
 			},
 		}
-		_, err = srv.getESSSystem(ctx, "site1", s2, creds)
+		_, _, err = srv.getESSSystem(ctx, "site1", s2, creds)
 		require.ErrorContains(t, err, "try again in 20s")
 
 		// 4. Failures = 2, wait 30s. If last attempt was 31s ago, should succeed.
@@ -322,7 +322,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 				},
 			},
 		}
-		_, err = srv.getESSSystem(ctx, "site1", s2_expired, creds)
+		_, _, err = srv.getESSSystem(ctx, "site1", s2_expired, creds)
 		require.NoError(t, err)
 
 		// 5. Failures = 5, backoff should be 240s (4 mins). If last attempt was 1 min ago, should fail.
@@ -334,7 +334,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 				},
 			},
 		}
-		_, err = srv.getESSSystem(ctx, "site1", s5, creds)
+		_, _, err = srv.getESSSystem(ctx, "site1", s5, creds)
 		require.ErrorContains(t, err, "try again in 3m0s")
 
 		// 6. Failures = 5, backoff should be 240s. If last attempt was 5 mins ago, should succeed.
@@ -346,7 +346,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 				},
 			},
 		}
-		_, err = srv.getESSSystem(ctx, "site1", s5_expired, creds)
+		_, _, err = srv.getESSSystem(ctx, "site1", s5_expired, creds)
 		require.NoError(t, err)
 	})
 
@@ -389,7 +389,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 			version: 1,
 		}
 
-		sys, err := srv.getESSSystem(ctx, "site1", s0, creds)
+		sys, _, err := srv.getESSSystem(ctx, "site1", s0, creds)
 		require.ErrorContains(t, err, "failed to apply settings: auth failed")
 		assert.Nil(t, sys)
 
@@ -430,7 +430,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 			version: 1,
 		}
 
-		sys, err := srv.getESSSystem(ctx, "site1", s0, creds)
+		sys, _, err := srv.getESSSystem(ctx, "site1", s0, creds)
 		require.ErrorIs(t, err, errESSRateLimited)
 		assert.ErrorContains(t, err, "try again in")
 		assert.Nil(t, sys)
@@ -464,7 +464,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 				},
 			},
 		}
-		_, err := srv.getESSSystem(ctx, "site1", s10, creds)
+		_, _, err := srv.getESSSystem(ctx, "site1", s10, creds)
 		require.ErrorIs(t, err, errESSRateLimited)
 		assert.ErrorContains(t, err, "try again in 15m")
 
@@ -477,7 +477,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 				},
 			},
 		}
-		_, err = srv.getESSSystem(ctx, "site1", s15, creds)
+		_, _, err = srv.getESSSystem(ctx, "site1", s15, creds)
 		require.ErrorIs(t, err, errESSRateLimited)
 		assert.ErrorContains(t, err, "try again in 30m")
 
@@ -490,7 +490,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 				},
 			},
 		}
-		_, err = srv.getESSSystem(ctx, "site1", s30, creds)
+		_, _, err = srv.getESSSystem(ctx, "site1", s30, creds)
 		require.ErrorIs(t, err, errESSRateLimited)
 		assert.ErrorContains(t, err, "try again in 2h")
 	})
@@ -952,7 +952,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		existingCreds := types.Credentials{
 			Mock: &types.MockCredentials{Strategy: "foo"},
 		}
-		encrypted, err := srv.encryptCredentials(req.Context(), existingCreds)
+		encrypted, err := srv.encryptCredentials(req.Context(), types.SiteIDNone, existingCreds)
 		require.NoError(t, err)
 
 		existingSettings := types.Settings{
@@ -1452,7 +1452,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		existingCreds := types.Credentials{
 			Mock: &types.MockCredentials{Strategy: "bar"},
 		}
-		encrypted, err := srv.encryptCredentials(context.Background(), existingCreds)
+		encrypted, err := srv.encryptCredentials(context.Background(), types.SiteIDNone, existingCreds)
 		require.NoError(t, err)
 
 		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
@@ -1497,7 +1497,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		existingCreds := types.Credentials{
 			Mock: &types.MockCredentials{Strategy: "sameuser"},
 		}
-		encrypted, err := srv.encryptCredentials(context.Background(), existingCreds)
+		encrypted, err := srv.encryptCredentials(context.Background(), types.SiteIDNone, existingCreds)
 		require.NoError(t, err)
 
 		s := types.Settings{
@@ -1566,7 +1566,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		existingCreds := types.Credentials{
 			Mock: &types.MockCredentials{Strategy: "sameuser"},
 		}
-		encrypted, err := srv.encryptCredentials(context.Background(), existingCreds)
+		encrypted, err := srv.encryptCredentials(context.Background(), types.SiteIDNone, existingCreds)
 		require.NoError(t, err)
 
 		s := types.Settings{
@@ -1662,7 +1662,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		existingCreds := types.Credentials{
 			Mock: &types.MockCredentials{Strategy: "bar"},
 		}
-		encrypted, err := srv.encryptCredentials(context.Background(), existingCreds)
+		encrypted, err := srv.encryptCredentials(context.Background(), types.SiteIDNone, existingCreds)
 		require.NoError(t, err)
 
 		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
@@ -1826,7 +1826,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		existingCreds := types.Credentials{
 			Tesla: &types.TeslaCredentials{AccessToken: "token"},
 		}
-		encrypted, err := srv.encryptCredentials(req.Context(), existingCreds)
+		encrypted, err := srv.encryptCredentials(req.Context(), types.SiteIDNone, existingCreds)
 		require.NoError(t, err)
 
 		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
@@ -1891,7 +1891,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		existingCreds := types.Credentials{
 			Tesla: &types.TeslaCredentials{AccessToken: "token"},
 		}
-		encrypted, err := srv.encryptCredentials(req.Context(), existingCreds)
+		encrypted, err := srv.encryptCredentials(req.Context(), types.SiteIDNone, existingCreds)
 		require.NoError(t, err)
 
 		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
@@ -1954,7 +1954,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 		existingCreds := types.Credentials{
 			Tesla: &types.TeslaCredentials{AccessToken: "token"},
 		}
-		encrypted, err := srv.encryptCredentials(req.Context(), existingCreds)
+		encrypted, err := srv.encryptCredentials(req.Context(), types.SiteIDNone, existingCreds)
 		require.NoError(t, err)
 
 		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
@@ -2446,7 +2446,7 @@ func TestGetSettingsWithMigration(t *testing.T) {
 		creds := types.Credentials{
 			Mock: &types.MockCredentials{Strategy: "test-strategy"},
 		}
-		encrypted, err := srv.encryptCredentials(ctx, creds)
+		encrypted, err := srv.encryptCredentials(ctx, siteID, creds)
 		require.NoError(t, err)
 
 		mockS.On("GetSettings", ctx, siteID).Return(types.Settings{
@@ -2460,6 +2460,44 @@ func TestGetSettingsWithMigration(t *testing.T) {
 		assert.Equal(t, types.CurrentSettingsVersion, sv.version)
 		assert.Equal(t, "test-utility", sv.Settings.UtilityProvider)
 		assert.Equal(t, "test-strategy", returnedCreds.Mock.Strategy)
+		assert.True(t, mockS.AssertExpectations(t))
+	})
+
+	t.Run("Upgrades Legacy V1 Credentials To V2 And Saves", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+		testKey := "test-secret-key-1234567890123456"
+		srv := &Server{
+			storage:       mockS,
+			encryptionKey: testKey,
+		}
+
+		ctx := context.Background()
+		siteID := "test-site"
+
+		creds := types.Credentials{
+			Mock: &types.MockCredentials{Strategy: "legacy-strategy"},
+		}
+		legacyEncrypted := encryptLegacyV1Credentials(t, testKey, creds)
+
+		mockS.On("GetSettings", ctx, siteID).Return(types.Settings{
+			UtilityProvider:      "test-utility",
+			EncryptedCredentials: legacyEncrypted,
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+
+		upgradedTime := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+		mockS.On("SetSettings", ctx, siteID, mock.MatchedBy(func(s types.Settings) bool {
+			return s.UtilityProvider == "test-utility" &&
+				bytes.HasPrefix(s.EncryptedCredentials, []byte(credsEncryptionPrefixV2))
+		}), types.CurrentSettingsVersion, mock.Anything).Return(upgradedTime, nil)
+
+		sv, returnedCreds, err := srv.getSettingsWithMigration(ctx, siteID)
+
+		require.NoError(t, err)
+		assert.Equal(t, types.CurrentSettingsVersion, sv.version)
+		assert.Equal(t, upgradedTime, sv.updatedAt)
+		assert.True(t, bytes.HasPrefix(sv.Settings.EncryptedCredentials, []byte(credsEncryptionPrefixV2)))
+		assert.Equal(t, "legacy-strategy", returnedCreds.Mock.Strategy)
 		assert.True(t, mockS.AssertExpectations(t))
 	})
 

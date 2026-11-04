@@ -2026,6 +2026,72 @@ func TestFirestoreProvider(t *testing.T) {
 		assert.Equal(t, log2Time.UTC(), rawEarliest10.(time.Time).UTC())
 		assert.Equal(t, log3Time.UTC(), rawLatest10.(time.Time).UTC())
 	})
+
+	t.Run("RevokeUserSession", func(t *testing.T) {
+		ctx := context.Background()
+		userID := "revoke_test_user"
+
+		assert.ErrorContains(t, f.RevokeUserSession(ctx, "", types.RevokedSession{Nonce: "n1"}), "userID cannot be empty")
+		assert.ErrorContains(t, f.RevokeUserSession(ctx, userID, types.RevokedSession{}), "revoked session nonce cannot be empty")
+		assert.ErrorIs(t, f.RevokeUserSession(ctx, "nonexistent_user", types.RevokedSession{Nonce: "n1", TSExpires: time.Now().Add(time.Hour)}), ErrUserNotFound)
+
+		now := time.Now().UTC().Truncate(time.Second)
+		require.NoError(t, f.CreateUser(ctx, types.User{
+			ID:            userID,
+			Email:         "revoke@example.com",
+			SessionSecret: "sec-1",
+			RevokedSessions: []types.RevokedSession{
+				{
+					Nonce:     "expired-nonce",
+					TSExpires: now.Add(-time.Hour),
+				},
+				{
+					Nonce:     "active-nonce-1",
+					TSExpires: now.Add(time.Hour),
+				},
+			},
+		}))
+
+		// Revoke a new session and verify expired-nonce is pruned
+		require.NoError(t, f.RevokeUserSession(ctx, userID, types.RevokedSession{
+			Nonce:     "active-nonce-2",
+			TSExpires: now.Add(2 * time.Hour),
+		}))
+
+		u, err := f.GetUser(ctx, userID)
+		require.NoError(t, err)
+		if assert.Len(t, u.RevokedSessions, 2) {
+			assert.Equal(t, "active-nonce-1", u.RevokedSessions[0].Nonce)
+			assert.Equal(t, "active-nonce-2", u.RevokedSessions[1].Nonce)
+		}
+
+		// Deduplicate existing nonce
+		require.NoError(t, f.RevokeUserSession(ctx, userID, types.RevokedSession{
+			Nonce:     "active-nonce-1",
+			TSExpires: now.Add(3 * time.Hour),
+		}))
+		u, err = f.GetUser(ctx, userID)
+		require.NoError(t, err)
+		if assert.Len(t, u.RevokedSessions, 2) {
+			assert.Equal(t, "active-nonce-2", u.RevokedSessions[0].Nonce)
+			assert.Equal(t, "active-nonce-1", u.RevokedSessions[1].Nonce)
+			assert.Equal(t, now.Add(3*time.Hour), u.RevokedSessions[1].TSExpires)
+		}
+
+		// Cap at maxRevokedSessions (50)
+		for i := 0; i < 55; i++ {
+			require.NoError(t, f.RevokeUserSession(ctx, userID, types.RevokedSession{
+				Nonce:     fmt.Sprintf("cap-nonce-%d", i),
+				TSExpires: now.Add(time.Duration(10+i) * time.Hour),
+			}))
+		}
+		u, err = f.GetUser(ctx, userID)
+		require.NoError(t, err)
+		if assert.Len(t, u.RevokedSessions, maxRevokedSessions) {
+			assert.Equal(t, "cap-nonce-5", u.RevokedSessions[0].Nonce)
+			assert.Equal(t, "cap-nonce-54", u.RevokedSessions[maxRevokedSessions-1].Nonce)
+		}
+	})
 }
 
 func TestIsRetryableFirestoreErr(t *testing.T) {

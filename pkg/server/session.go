@@ -20,6 +20,7 @@ type SessionData struct {
 	SessionSecret string `json:"sessionSecret,omitempty"`
 	ExpiresAt     int64  `json:"expiresAt"`
 	Email         string `json:"email,omitempty"`
+	nonce         string
 }
 
 // generateSessionSecret creates a 16-byte cryptographically secure random hex string.
@@ -98,6 +99,7 @@ func (s *Server) verifySessionToken(tokenStr string) (*SessionData, error) {
 		return nil, errors.New("session token expired")
 	}
 
+	session.nonce = hex.EncodeToString(nonce)
 	return &session, nil
 }
 

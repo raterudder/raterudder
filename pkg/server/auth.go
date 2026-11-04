@@ -236,7 +236,8 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			}
 
 			// normal user auth (cookie)
-			if !authSuccess {
+			// ignore login so that a login request can overwrite a broken cookie
+			if !authSuccess && r.URL.Path != "/api/auth/login" {
 				// 1. Check sessionTokenCookie
 				sessionCookie, err := r.Cookie(sessionTokenCookie)
 				if err != nil && !errors.Is(err, http.ErrNoCookie) {
@@ -330,13 +331,29 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 							return
 						}
 					} else {
-						// If authenticated via session token, verify per-user SessionSecret
+						// If authenticated via session token, verify per-user SessionSecret and RevokedSessions
 						if activeSession != nil {
-							if user.SessionSecret == "" || subtle.ConstantTimeCompare([]byte(activeSession.SessionSecret), []byte(user.SessionSecret)) != 1 {
+							sessionRevoked := user.SessionSecret == "" || subtle.ConstantTimeCompare([]byte(activeSession.SessionSecret), []byte(user.SessionSecret)) != 1
+							if !sessionRevoked && activeSession.nonce != "" {
+								for _, revoked := range user.RevokedSessions {
+									if subtle.ConstantTimeCompare([]byte(activeSession.nonce), []byte(revoked.Nonce)) == 1 {
+										sessionRevoked = true
+										break
+									}
+								}
+							}
+							if sessionRevoked {
 								log.Ctx(ctx).WarnContext(ctx, "session secret mismatch or revoked", slog.String("userID", userID), slog.String("email", email))
 								s.clearCookie(w)
-								writeJSONError(w, "session invalid or revoked", http.StatusUnauthorized)
-								return
+								if !allowNoLogin {
+									writeJSONError(w, "session invalid or revoked", http.StatusUnauthorized)
+									return
+								}
+								user = types.User{}
+								activeSession = nil
+								userID = ""
+								email = ""
+								authSuccess = false
 							}
 						}
 
@@ -361,46 +378,48 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 						}
 
 						// fill in default siteID if the user only has 1 site
-						if siteID == "" && len(user.Sites) == 1 && !optionalSiteID {
+						if authSuccess && siteID == "" && len(user.Sites) == 1 && !optionalSiteID {
 							siteID = user.Sites[0].ID
 						}
 					}
 				}
 
-				if siteID == SiteIDAll && !allowAllSites {
-					log.Ctx(ctx).WarnContext(ctx, "all sites not supported", slog.String("siteID", siteID))
-					writeJSONError(w, "all sites not supported", http.StatusForbidden)
-					return
-				}
-
-				isAdmin := s.isMultiSiteAdmin(user)
-				if isAdmin && s.singleSite {
-					user.Admin = true
-				}
-				if !s.singleSite && siteID != "" && siteID != SiteIDAll && !authViaUpdateSpecific {
-					site, err := s.storage.GetSite(ctx, siteID)
-					if err != nil {
-						log.Ctx(ctx).WarnContext(ctx, "site lookup failed", slog.String("siteID", siteID), slog.Any("error", err))
-						writeJSONError(w, "site access denied", http.StatusForbidden)
+				if authSuccess {
+					if siteID == SiteIDAll && !allowAllSites {
+						log.Ctx(ctx).WarnContext(ctx, "all sites not supported", slog.String("siteID", siteID))
+						writeJSONError(w, "all sites not supported", http.StatusForbidden)
 						return
 					}
 
-					permFound := false
-					for _, p := range site.Permissions {
-						if p.UserID == user.ID {
-							permFound = true
-							user.Admin = true
-							break
+					isAdmin := s.isMultiSiteAdmin(user)
+					if isAdmin && s.singleSite {
+						user.Admin = true
+					}
+					if !s.singleSite && siteID != "" && siteID != SiteIDAll && !authViaUpdateSpecific {
+						site, err := s.storage.GetSite(ctx, siteID)
+						if err != nil {
+							log.Ctx(ctx).WarnContext(ctx, "site lookup failed", slog.String("siteID", siteID), slog.Any("error", err))
+							writeJSONError(w, "site access denied", http.StatusForbidden)
+							return
 						}
+
+						permFound := false
+						for _, p := range site.Permissions {
+							if p.UserID == user.ID {
+								permFound = true
+								user.Admin = true
+								break
+							}
+						}
+						if !permFound && !isAdmin {
+							log.Ctx(ctx).WarnContext(ctx, "user does not have permission for site", slog.String("userID", userID), slog.String("email", email), slog.String("site", siteID))
+							writeJSONError(w, "site access denied", http.StatusForbidden)
+							return
+						}
+						ctx = context.WithValue(ctx, siteContextKey, site)
 					}
-					if !permFound && !isAdmin {
-						log.Ctx(ctx).WarnContext(ctx, "user does not have permission for site", slog.String("userID", userID), slog.String("email", email), slog.String("site", siteID))
-						writeJSONError(w, "site access denied", http.StatusForbidden)
-						return
-					}
-					ctx = context.WithValue(ctx, siteContextKey, site)
+					ctx = context.WithValue(ctx, userContextKey, user)
 				}
-				ctx = context.WithValue(ctx, userContextKey, user)
 			} else if !allowNoLogin {
 				log.Ctx(ctx).WarnContext(ctx, "unauthenticated request")
 				s.clearCookie(w)
@@ -565,6 +584,19 @@ func (s *Server) clearCookie(w http.ResponseWriter) {
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if sess, ok := r.Context().Value(sessionDataContextKey).(*SessionData); ok && sess != nil && sess.nonce != "" && sess.UserID != "" {
+		// Note: we explicitly do not handle revoking sessions if a user logs out before
+		// creating/joining a site (when they do not yet have a User record in storage).
+		if !s.singleSite && !s.bypassAuth && s.storage != nil {
+			err := s.storage.RevokeUserSession(r.Context(), sess.UserID, types.RevokedSession{
+				Nonce:     sess.nonce,
+				TSExpires: time.Unix(sess.ExpiresAt, 0).UTC(),
+			})
+			if err != nil && !errors.Is(err, storage.ErrUserNotFound) {
+				log.Ctx(r.Context()).ErrorContext(r.Context(), "failed to revoke user session on logout", slog.String("userID", sess.UserID), slog.Any("error", err))
+			}
+		}
+	}
 	s.clearCookie(w)
 	w.WriteHeader(http.StatusOK)
 }

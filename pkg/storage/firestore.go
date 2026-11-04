@@ -2663,6 +2663,72 @@ func (f *FirestoreProvider) ReplaceUserApp(ctx context.Context, userID string, n
 	return err
 }
 
+const maxRevokedSessions = 50
+
+// RevokeUserSession adds a revoked session nonce to a user's record and prunes expired entries.
+func (f *FirestoreProvider) RevokeUserSession(ctx context.Context, userID string, revoked types.RevokedSession) error {
+	if userID == "" {
+		return errors.New("userID cannot be empty")
+	}
+	if revoked.Nonce == "" {
+		return errors.New("revoked session nonce cannot be empty")
+	}
+	docRef := f.client.Collection("users").Doc(userID)
+
+	_, err := f.readModifyWriteDoc(ctx, docRef, func(doc *firestore.DocumentSnapshot) (map[string]any, error) {
+		if doc == nil {
+			return nil, fmt.Errorf("%w: %s", ErrUserNotFound, userID)
+		}
+
+		val, err := doc.DataAt("json")
+		if err != nil {
+			return nil, fmt.Errorf("user %s missing json: %w", userID, err)
+		}
+		jsonStr, ok := val.(string)
+		if !ok {
+			return nil, fmt.Errorf("user %s json is not a string", userID)
+		}
+
+		var user types.User
+		if err := json.Unmarshal([]byte(jsonStr), &user); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal user %s: %w", userID, err)
+		}
+
+		now := time.Now().UTC()
+		filtered := make([]types.RevokedSession, 0, len(user.RevokedSessions)+1)
+		for _, existing := range user.RevokedSessions {
+			if !existing.TSExpires.After(now) {
+				continue
+			}
+			if existing.Nonce == revoked.Nonce {
+				continue
+			}
+			filtered = append(filtered, existing)
+		}
+		if revoked.TSExpires.After(now) {
+			filtered = append(filtered, revoked)
+		}
+
+		if len(filtered) > maxRevokedSessions {
+			slices.SortFunc(filtered, func(a, b types.RevokedSession) int {
+				return a.TSExpires.Compare(b.TSExpires)
+			})
+			filtered = filtered[len(filtered)-maxRevokedSessions:]
+		}
+		user.RevokedSessions = filtered
+
+		userJSON, err := json.Marshal(user)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal user %s: %w", userID, err)
+		}
+
+		return map[string]any{
+			"json": string(userJSON),
+		}, nil
+	})
+	return err
+}
+
 // UpdateSiteNotificationSettings updates notification preferences for a specific user on a site's settings with optimistic concurrency.
 // If settings is an empty struct (types.UserNotificationSettings{}), the user's notification entry is deleted.
 func (f *FirestoreProvider) UpdateSiteNotificationSettings(ctx context.Context, siteID string, userID string, settings types.UserNotificationSettings) error {
