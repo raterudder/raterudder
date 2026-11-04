@@ -649,6 +649,42 @@ func TestFirestoreProvider(t *testing.T) {
 			require.NoError(t, err)
 			assert.Len(t, resLA, 1, "should retrieve energy history for LA when querying at 4pm")
 		})
+
+		t.Run("DSTFallBackContiguityAnd25HourLookback", func(t *testing.T) {
+			locNY, err := time.LoadLocation("America/New_York")
+			require.NoError(t, err)
+
+			// 2026-11-01 is a 25-hour Fall-Back DST day in America/New_York (00:00 EDT to 00:00 EST next day).
+			dstMidnight := time.Date(2026, 11, 1, 0, 0, 0, 0, locNY)
+			var hourly []types.EnergyStats
+			for h := 0; h < 25; h++ {
+				// Simulate FranklinWH's 1-hour gap across the repeated 01:00 hour (h == 2, i.e., 01:00 EST skipped between 01:00 EDT and 02:00 EST)
+				if h == 2 {
+					continue
+				}
+				hourly = append(hourly, types.EnergyStats{
+					TSHourStart: dstMidnight.Add(time.Duration(h) * time.Hour),
+					HomeKWH:     1.0,
+				})
+			}
+			require.Len(t, hourly, 24)
+
+			statsDST := types.DailyEnergyStats{
+				TSDayStart: dstMidnight,
+				Hourly:     hourly,
+			}
+			err = f.UpsertEnergyHistories(ctx, "test-site-dst-eh", []types.DailyEnergyStats{statsDST}, types.CurrentEnergyStatsVersion)
+			require.NoError(t, err)
+
+			// Querying starting at 23:30 EST on 2026-11-01 is +24h30m after dstMidnight (00:00 EDT).
+			// With -25h lookback, GetEnergyHistory must still find the 2026-11-01 document.
+			lateStart := dstMidnight.Add(24*time.Hour + 30*time.Minute)
+			resDST, err := f.GetEnergyHistory(ctx, "test-site-dst-eh", lateStart, lateStart.Add(time.Hour))
+			require.NoError(t, err)
+			if assert.Len(t, resDST, 1, "should retrieve 25-hour DST day document when querying at +24h30m") {
+				assert.Len(t, resDST[0].Hourly, 24)
+			}
+		})
 	})
 
 	t.Run("Sites", func(t *testing.T) {

@@ -1513,6 +1513,75 @@ func TestHandleHistorySavings(t *testing.T) {
 		assert.InDelta(t, 0.0, savings.StoredEnergyValueDollars, 0.001)
 		assert.InDelta(t, 0.0, savings.RateRudderSavingsDollars, 0.001)
 	})
+
+	t.Run("DST Fall Back 25 Hour Single Period", func(t *testing.T) {
+		loc, err := time.LoadLocation("America/New_York")
+		require.NoError(t, err)
+		dstStart := time.Date(2026, 11, 1, 0, 0, 0, 0, loc)
+		dstEnd := time.Date(2026, 11, 2, 0, 0, 0, 0, loc)
+		require.Equal(t, 25*time.Hour, dstEnd.Sub(dstStart))
+
+		mockStoreBase := &mockStorage{}
+		mockStore := &mockSavingsStorage{
+			mockStorage: mockStoreBase,
+			settings: types.Settings{
+				MinBatterySOC: 20.0,
+			},
+			actions: []types.Action{
+				{
+					Timestamp:    dstStart,
+					SystemStatus: types.SystemStatus{BatteryCapacityKWH: 10.0},
+				},
+			},
+		}
+		for h := 0; h < 25; h++ {
+			ts := dstStart.Add(time.Duration(h) * time.Hour)
+			mockStore.prices = append(mockStore.prices, types.Price{
+				TSStart:       ts,
+				TSEnd:         ts.Add(time.Hour),
+				DollarsPerKWH: 0.10,
+			})
+			// Simulate FranklinWH's 1-hour gap on the first 01:00 EDT hour (h == 1)
+			if h == 1 {
+				continue
+			}
+			mockStore.stats = append(mockStore.stats, types.EnergyStats{
+				TSHourStart:   ts,
+				MinBatterySOC: 50,
+				MaxBatterySOC: 50,
+				HomeKWH:       1.0,
+				GridImportKWH: 1.0,
+			})
+		}
+		mockStoreBase.On("GetSettings", mock.Anything, types.SiteIDNone).Return(mockStore.settings, types.CurrentSettingsVersion, time.Time{}, nil)
+
+		mockUtility := &mockUtility{}
+		mockUtility.On("GetFuturePrices", mock.Anything).Return([]types.Price{}, nil)
+		mockUtility.On("ApplySettings", mock.Anything, mock.AnythingOfType("types.Settings")).Return(nil)
+
+		mockUtilities := utility.NewMap(mockStore)
+		mockUtilities.SetProvider(types.SiteIDNone, mockUtility)
+
+		s := &Server{
+			storage:    mockStore,
+			utilities:  mockUtilities,
+			bypassAuth: true,
+			nowFunc:    func() time.Time { return dstEnd.Add(24 * time.Hour) },
+		}
+
+		req, err := http.NewRequest("GET", "/api/history/savings?newCalculation=true&start="+dstStart.UTC().Format(time.RFC3339)+"&end="+dstEnd.UTC().Format(time.RFC3339), nil)
+		require.NoError(t, err)
+		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
+		rr := httptest.NewRecorder()
+
+		s.handleHistorySavings(rr, req)
+		assert.Equal(t, http.StatusOK, rr.Code)
+
+		var savings types.SavingsStats
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &savings))
+		assert.InDelta(t, 24.0, savings.HomeUsed, 0.001)
+		assert.InDelta(t, 2.40, savings.Cost, 0.001)
+	})
 }
 
 func TestHandleHistorySavingsAll(t *testing.T) {

@@ -382,8 +382,9 @@ func (s *Server) parseTimeRange(r *http.Request) (time.Time, time.Time, error) {
 		return time.Time{}, time.Time{}, fmt.Errorf("start time must be before end time")
 	}
 
-	if end.Sub(start) > 24*time.Hour {
-		return time.Time{}, time.Time{}, fmt.Errorf("time range cannot exceed 24 hours")
+	// Allow up to 25 hours to account for daylight saving time fall-back days.
+	if end.Sub(start) > 25*time.Hour {
+		return time.Time{}, time.Time{}, fmt.Errorf("time range cannot exceed 25 hours")
 	}
 
 	return start, end, nil

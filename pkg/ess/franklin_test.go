@@ -3,6 +3,7 @@ package ess
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -4724,6 +4725,101 @@ func TestFranklin(t *testing.T) {
 
 		assert.True(t, foundPast, "should have found the past data point")
 		assert.False(t, foundFuture, "should not have found the future data point")
+	})
+
+	t.Run("GetEnergyHistory DST Fall Back And Spring Forward", func(t *testing.T) {
+		loc, err := time.LoadLocation("America/New_York")
+		require.NoError(t, err)
+
+		makeDayPayload := func(dayStr string) map[string]any {
+			var times []string
+			var socs []float64
+			var gridHome []float64
+			var zeros []float64
+			for h := 0; h < 24; h++ {
+				for m := 0; m < 60; m += 5 {
+					times = append(times, fmt.Sprintf("%s %02d:%02d:00", dayStr, h, m))
+					socs = append(socs, 50.0)
+					gridHome = append(gridHome, 1.0)
+					zeros = append(zeros, 0.0)
+				}
+			}
+			return map[string]any{
+				"code":    200,
+				"success": true,
+				"result": map[string]any{
+					"deviceTimeArray":     times,
+					"socArray":            socs,
+					"powerSolarHomeArray": zeros,
+					"powerFhpHomeArray":   zeros,
+					"powerSolarGirdArray": zeros,
+					"powerSolarFhpArray":  zeros,
+					"powerGirdFhpArray":   zeros,
+					"powerGirdHomeArray":  gridHome,
+					"powerFhpGirdArray":   zeros,
+				},
+			}
+		}
+
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"zoneInfo": "America/New_York"}})
+				return
+			}
+			if r.URL.Path == "/api-energy/power/getFhpPowerByDay" {
+				dayTime := r.URL.Query().Get("dayTime")
+				json.NewEncoder(w).Encode(makeDayPayload(dayTime))
+				return
+			}
+			http.Error(w, "not found", 404)
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:      ts.Client(),
+			baseURL:     ts.URL,
+			gatewayID:   "g",
+			username:    "u",
+			md5Password: "p",
+		}
+
+		// 1. Fall-Back DST day (2026-11-01 in America/New_York, 25 real hours, 24 wall-clock hours returned by FranklinWH)
+		fallStart := time.Date(2026, 11, 1, 0, 0, 0, 0, loc)
+		fallEnd := time.Date(2026, 11, 1, 23, 0, 0, 0, loc)
+		fallStats, err := f.GetEnergyHistory(context.Background(), fallStart, fallEnd)
+		require.NoError(t, err)
+		if assert.GreaterOrEqual(t, len(fallStats), 1) {
+			hourly := fallStats[0].Hourly
+			// 24 wall-clock hours: 00:00 EDT, 01:00 EDT, followed by 02:00 EST..23:00 EST (with 1-hour gap across the repeated 1 AM hour)
+			if assert.Len(t, hourly, 24) {
+				assert.Equal(t, time.Date(2026, 11, 1, 0, 0, 0, 0, loc).Unix(), hourly[0].TSHourStart.Unix())
+				assert.Equal(t, time.Hour, hourly[1].TSHourStart.Sub(hourly[0].TSHourStart))
+				assert.Equal(t, 2*time.Hour, hourly[2].TSHourStart.Sub(hourly[1].TSHourStart), "expected 1-hour gap across DST fall-back transition between 01:00 EDT and 02:00 EST")
+				for i, h := range hourly {
+					assert.InDelta(t, 1.0, h.HomeKWH, 0.001, "fall-back hour index %d (%s) should have 1.0 kWh without 12x DST spike", i, h.TSHourStart.Format(time.RFC3339))
+					assert.InDelta(t, 1.0, h.GridImportKWH, 0.001, "fall-back hour index %d (%s) should have 1.0 kWh grid import", i, h.TSHourStart.Format(time.RFC3339))
+				}
+			}
+		}
+
+		// 2. Spring-Forward DST day (2026-03-08 in America/New_York, 23 real hours; non-existent 02:00..02:55 wall-clock points skipped)
+		springStart := time.Date(2026, 3, 8, 0, 0, 0, 0, loc)
+		springEnd := time.Date(2026, 3, 8, 23, 0, 0, 0, loc)
+		springStats, err := f.GetEnergyHistory(context.Background(), springStart, springEnd)
+		require.NoError(t, err)
+		if assert.GreaterOrEqual(t, len(springStats), 1) {
+			hourly := springStats[0].Hourly
+			if assert.Len(t, hourly, 23) {
+				for i, h := range hourly {
+					assert.NotEqual(t, 2, h.TSHourStart.In(loc).Hour(), "non-existent 02:00 hour should not exist on spring-forward day")
+					assert.InDelta(t, 1.0, h.HomeKWH, 0.001, "spring-forward hour index %d (%s) should have 1.0 kWh without double-counting 01:00", i, h.TSHourStart.Format(time.RFC3339))
+				}
+			}
+		}
 	})
 
 	t.Run("GetAvailableModes Current Tou ID Not Found", func(t *testing.T) {

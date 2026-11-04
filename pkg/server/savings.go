@@ -154,7 +154,8 @@ func validateSavingsPeriods(periods []savingsPeriod) error {
 		}
 	}
 
-	if maxEnd.Sub(minStart) > maxSavingsWindowDays*24*time.Hour {
+	// Allow an extra hour to account for daylight saving time fall-back days.
+	if maxEnd.Sub(minStart) > maxSavingsWindowDays*24*time.Hour+time.Hour {
 		return fmt.Errorf("total savings period range cannot exceed %d days", maxSavingsWindowDays)
 	}
 

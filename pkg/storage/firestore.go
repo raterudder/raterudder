@@ -527,7 +527,16 @@ func (f *FirestoreProvider) UpsertEnergyHistories(ctx context.Context, siteID st
 				contiguous = false
 			} else {
 				for i := 1; i < len(s.Hourly); i++ {
-					if !s.Hourly[i].TSHourStart.Equal(s.Hourly[i-1].TSHourStart.Add(time.Hour)) {
+					prev := s.Hourly[i-1].TSHourStart
+					curr := s.Hourly[i].TSHourStart
+					if !curr.Equal(prev.Add(time.Hour)) {
+// Allow a 1-hour gap across a DST fall-back transition (where wall-clock-keyed
+						// telemetry collapses the repeated hour into the standard-time offset).
+						_, prevOffset := prev.Zone()
+						_, currOffset := curr.Zone()
+						if currOffset < prevOffset && curr.Equal(prev.Add(time.Hour+time.Duration(prevOffset-currOffset)*time.Second)) {
+							continue
+						}
 						contiguous = false
 						break
 					}
@@ -696,12 +705,11 @@ func (f *FirestoreProvider) GetWeather(ctx context.Context, siteID string, start
 	if err != nil {
 		return nil, err
 	}
-	// Subtract 23 hours from start to handle timezone shifts and late-in-day queries.
-	// Stored daily records have tsDayStart representing midnight in their respective
-	// timezones. A query start time later in the day (or from a different timezone)
-	// could fall after the stored record's tsDayStart timestamp in UTC, which would
-	// incorrectly exclude the record for that day.
-	queryStart := start.Add(-23 * time.Hour)
+	// Subtract 25 hours from start to handle timezone shifts, late-in-day queries,
+	// and 25-hour Fall-Back DST days. Stored daily records have tsDayStart representing
+	// midnight in their respective timezones. A query start time later in the day (up to
+	// 24h+ into a 25-hour DST day) could fall after the stored record's tsDayStart in UTC.
+	queryStart := start.Add(-25 * time.Hour)
 	iter := coll.
 		Where("tsDayStart", ">=", queryStart).
 		Where("tsDayStart", "<", end).
@@ -737,7 +745,21 @@ func (f *FirestoreProvider) GetWeather(ctx context.Context, siteID string, start
 			continue
 		}
 
-		dayEnd := w.TSDayStart.AddDate(0, 0, 1)
+		// JSON unmarshaling parses TSDayStart with a fixed numeric UTC offset rather than the IANA
+		// timezone name, so AddDate(0, 0, 1) on a Fall-Back DST day would only advance 24h instead of 25h.
+		// Re-attaching w.TimeLocation (and checking the last forecast hour) ensures dayEnd covers all 25 hours.
+		dayStart := w.TSDayStart
+		if w.TimeLocation != "" {
+			if loc, err := time.LoadLocation(w.TimeLocation); err == nil {
+				dayStart = dayStart.In(loc)
+			}
+		}
+		dayEnd := dayStart.AddDate(0, 0, 1)
+		if len(w.ForecastHours) > 0 {
+			if lastEnd := w.ForecastHours[len(w.ForecastHours)-1].TSHourStart.Add(time.Hour); lastEnd.After(dayEnd) {
+				dayEnd = lastEnd
+			}
+		}
 		if !dayEnd.After(start) || !w.TSDayStart.Before(end) {
 			continue
 		}

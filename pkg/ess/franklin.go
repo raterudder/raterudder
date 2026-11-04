@@ -1928,6 +1928,11 @@ func (f *Franklin) getEnergyPointsForDay(ctx context.Context, day time.Time, loc
 			log.Ctx(ctx).WarnContext(ctx, "failed to parse time", slog.String("time", timeStr), slog.Any("error", err))
 			return nil, err
 		}
+		// Skip non-existent wall-clock timestamps during spring-forward DST transitions
+		// (e.g., "02:00:00".."02:55:00"), which time.ParseInLocation maps backward by 1 hour.
+		if t.Format("2006-01-02 15:04:05") != timeStr {
+			continue
+		}
 		if t.After(now) {
 			continue
 		}
@@ -1972,8 +1977,19 @@ func (f *Franklin) aggregatePointsIntoHours(points []franklinEnergyPoint, loc *t
 		// The data is for the preceding period, so we look backwards.
 		var duration time.Duration
 		if i > 0 {
+			diff := t.Sub(points[i-1].Timestamp)
+			// FranklinWH returns 24 wall-clock hours without timezone offsets and does not
+			// repeat the 01:00 hour on fall-back DST days, so "01:55:00" (DST) to "02:00:00" (standard)
+			// has a 1h05m elapsed difference for a 5-minute wall-clock interval.
+			_, prevOffset := points[i-1].Timestamp.Zone()
+			_, currOffset := t.Zone()
+			if currOffset < prevOffset {
+				if wallDiff := diff - time.Duration(prevOffset-currOffset)*time.Second; wallDiff > 0 {
+					diff = wallDiff
+				}
+			}
 			// Cap duration to 1 hour to avoid massive errors during data gaps
-			duration = min(t.Sub(points[i-1].Timestamp), time.Hour)
+			duration = min(diff, time.Hour)
 		} else {
 			// for the first point, we assume it's a 5 minute interval leading up to t.
 			duration = 5 * time.Minute

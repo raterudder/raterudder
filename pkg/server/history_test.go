@@ -175,19 +175,23 @@ func TestHandleHistoryPrices(t *testing.T) {
 		assert.Equal(t, now.Add(-24*time.Hour), mockS.lastStart)
 	})
 
-	t.Run("Validate 24 Hour Limit", func(t *testing.T) {
+	t.Run("Validate 25 Hour Limit", func(t *testing.T) {
 		handler, _, _ := setupTestServer(t)
 		testTime := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
-		start := testTime.Add(-25 * time.Hour)
-		end := testTime
 
+		// 25 hours (e.g., daylight saving time fall-back day) is allowed
 		q := make(url.Values)
-		q.Set("start", start.Format(time.RFC3339))
-		q.Set("end", end.Format(time.RFC3339))
-		u := "/api/history/prices?" + q.Encode()
-
-		req := httptest.NewRequest("GET", u, nil)
+		q.Set("start", testTime.Add(-25*time.Hour).Format(time.RFC3339))
+		q.Set("end", testTime.Format(time.RFC3339))
+		req := httptest.NewRequest("GET", "/api/history/prices?"+q.Encode(), nil)
 		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+		// Exceeding 25 hours is rejected
+		q.Set("start", testTime.Add(-26*time.Hour).Format(time.RFC3339))
+		req = httptest.NewRequest("GET", "/api/history/prices?"+q.Encode(), nil)
+		w = httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 		resp := w.Result()
 		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
@@ -195,7 +199,7 @@ func TestHandleHistoryPrices(t *testing.T) {
 			Error string `json:"error"`
 		}
 		require.NoError(t, json.NewDecoder(w.Body).Decode(&errResp))
-		assert.Contains(t, errResp.Error, "time range cannot exceed 24 hours")
+		assert.Contains(t, errResp.Error, "time range cannot exceed 25 hours")
 	})
 
 	t.Run("Fetch Prices Data", func(t *testing.T) {
@@ -387,19 +391,23 @@ func TestHandleHistoryActions(t *testing.T) {
 		assert.Equal(t, now.Add(-24*time.Hour), mockS.lastStart)
 	})
 
-	t.Run("Validate 24 Hour Limit", func(t *testing.T) {
+	t.Run("Validate 25 Hour Limit", func(t *testing.T) {
 		handler, _, _ := setupTestServer(t)
 		testTime := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
-		start := testTime.Add(-25 * time.Hour)
-		end := testTime
 
+		// 25 hours (e.g., daylight saving time fall-back day) is allowed
 		q := make(url.Values)
-		q.Set("start", start.Format(time.RFC3339))
-		q.Set("end", end.Format(time.RFC3339))
-		u := "/api/history/actions?" + q.Encode()
-
-		req := httptest.NewRequest("GET", u, nil)
+		q.Set("start", testTime.Add(-25*time.Hour).Format(time.RFC3339))
+		q.Set("end", testTime.Format(time.RFC3339))
+		req := httptest.NewRequest("GET", "/api/history/actions?"+q.Encode(), nil)
 		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+		// Exceeding 25 hours is rejected
+		q.Set("start", testTime.Add(-26*time.Hour).Format(time.RFC3339))
+		req = httptest.NewRequest("GET", "/api/history/actions?"+q.Encode(), nil)
+		w = httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 		resp := w.Result()
 		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
@@ -407,7 +415,7 @@ func TestHandleHistoryActions(t *testing.T) {
 			Error string `json:"error"`
 		}
 		require.NoError(t, json.NewDecoder(w.Body).Decode(&errResp))
-		assert.Contains(t, errResp.Error, "time range cannot exceed 24 hours")
+		assert.Contains(t, errResp.Error, "time range cannot exceed 25 hours")
 	})
 
 	t.Run("Fetch Actions Data", func(t *testing.T) {
@@ -612,19 +620,24 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 		assert.Equal(t, now.Add(-50*time.Hour), mockS.lastStart)
 	})
 
-	t.Run("Validate 24 Hour Limit", func(t *testing.T) {
-		handler, _, _ := setupTestServer(t)
+	t.Run("Validate 25 Hour Limit", func(t *testing.T) {
+		handler, _, mockSBase := setupTestServer(t)
+		mockSBase.On("GetEnergyHistory", mock.Anything, types.SiteIDNone, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Once()
 		testTime := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
-		start := testTime.Add(-25 * time.Hour)
-		end := testTime
 
+		// 25 hours (e.g., daylight saving time fall-back day) is allowed
 		q := make(url.Values)
-		q.Set("start", start.Format(time.RFC3339))
-		q.Set("end", end.Format(time.RFC3339))
-		u := "/api/history/actionsAndSavings?" + q.Encode()
-
-		req := httptest.NewRequest("GET", u, nil)
+		q.Set("start", testTime.Add(-25*time.Hour).Format(time.RFC3339))
+		q.Set("end", testTime.Format(time.RFC3339))
+		req := httptest.NewRequest("GET", "/api/history/actionsAndSavings?"+q.Encode(), nil)
 		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+		// Exceeding 25 hours is rejected
+		q.Set("start", testTime.Add(-26*time.Hour).Format(time.RFC3339))
+		req = httptest.NewRequest("GET", "/api/history/actionsAndSavings?"+q.Encode(), nil)
+		w = httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 		resp := w.Result()
 		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
@@ -632,7 +645,7 @@ func TestHandleHistoryActionsAndSavings(t *testing.T) {
 			Error string `json:"error"`
 		}
 		require.NoError(t, json.NewDecoder(w.Body).Decode(&errResp))
-		assert.Contains(t, errResp.Error, "time range cannot exceed 24 hours")
+		assert.Contains(t, errResp.Error, "time range cannot exceed 25 hours")
 	})
 
 	t.Run("Fetch Actions and Savings Data", func(t *testing.T) {
