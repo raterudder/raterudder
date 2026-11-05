@@ -384,7 +384,6 @@ function AppContent() {
                     selectedSiteID={effectiveSiteID}
                     onSiteChange={handleSiteChange}
                     onLogout={handleLogout}
-                    hasNotifications={Boolean(settings?.notifications && Object.keys(settings.notifications).length > 0)}
                     onOpenNotifications={() => setIsNotificationModalOpen(true)}
                 />
 

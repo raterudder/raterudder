@@ -4639,6 +4639,8 @@ func TestHandleNotifications(t *testing.T) {
 		},
 	}
 
+	ctx := ffNotifications.With(context.Background(), true)
+
 	t.Run("DispatchesDueNotifications", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
@@ -4658,7 +4660,6 @@ func TestHandleNotifications(t *testing.T) {
 		})).Return(nil).Once()
 
 		notifSettings := settings
-		notifSettings.PlanMode = true
 		notifSettings.Notifications = notifications
 		mockPlan := &types.Plan{
 			Periods: []types.PlanPeriod{
@@ -4676,16 +4677,15 @@ func TestHandleNotifications(t *testing.T) {
 			energyHistory: mockEnergyHistory,
 			plan:          mockPlan,
 		}
-		srv.handleNotifications(context.Background(), siteID, data)
+		srv.handleNotifications(ctx, siteID, data)
 		mockS.AssertExpectations(t)
 	})
 
-	t.Run("PlanModeDisabledSuppressesForecastNotifications", func(t *testing.T) {
+	t.Run("FeatureFlagDisabledSuppressesNotifications", func(t *testing.T) {
 		mockS := &storagemock.MockDatabase{}
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 
 		notifSettings := settings
-		notifSettings.PlanMode = false
 		notifSettings.Notifications = map[string]types.UserNotificationSettings{
 			"user1@test.com": {
 				MorningSummaryEnabled: true,
@@ -4693,10 +4693,21 @@ func TestHandleNotifications(t *testing.T) {
 				MorningSummaryFlavor:  "metrics_heavy",
 			},
 		}
+		mockPlan := &types.Plan{
+			Periods: []types.PlanPeriod{
+				{
+					TSStart:  nowMorning,
+					TSEnd:    nowMorning.Add(time.Hour),
+					SolarKWH: 20.0,
+					EndSOC:   75.0,
+				},
+			},
+		}
 		data := &dataForNotifications{
 			settings:      notifSettings,
 			status:        statusMorning,
 			energyHistory: mockEnergyHistory,
+			plan:          mockPlan,
 		}
 		srv.handleNotifications(context.Background(), siteID, data)
 		mockS.AssertNotCalled(t, "GetNotificationLogs", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
@@ -4708,7 +4719,6 @@ func TestHandleNotifications(t *testing.T) {
 		srv := createTestNotificationServer(t, mockS, nowMorning)
 
 		notifSettings := settings
-		notifSettings.PlanMode = true
 		notifSettings.Notifications = map[string]types.UserNotificationSettings{
 			"user1@test.com": {
 				MorningSummaryEnabled: true,
@@ -4722,7 +4732,7 @@ func TestHandleNotifications(t *testing.T) {
 			energyHistory: mockEnergyHistory,
 			plan:          nil,
 		}
-		srv.handleNotifications(context.Background(), siteID, data)
+		srv.handleNotifications(ctx, siteID, data)
 		mockS.AssertNotCalled(t, "GetNotificationLogs", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertNotCalled(t, "AppendNotificationLog", mock.Anything, mock.Anything, mock.Anything)
 	})
@@ -4738,7 +4748,7 @@ func TestHandleNotifications(t *testing.T) {
 			settings: settings,
 			status:   statusMorning,
 		}
-		disabledSrv.handleNotifications(context.Background(), siteID, data)
+		disabledSrv.handleNotifications(ctx, siteID, data)
 		mockS.AssertNotCalled(t, "GetSite", mock.Anything, mock.Anything)
 	})
 
@@ -4750,7 +4760,7 @@ func TestHandleNotifications(t *testing.T) {
 			settings: settings,
 			status:   statusMorning,
 		}
-		srv.handleNotifications(context.Background(), siteID, data)
+		srv.handleNotifications(ctx, siteID, data)
 		mockS.AssertNotCalled(t, "GetNotificationLogs", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})
@@ -4775,7 +4785,7 @@ func TestHandleNotifications(t *testing.T) {
 			settings: notifSettings,
 			status:   statusMorning,
 		}
-		srv.handleNotifications(context.Background(), siteID, data)
+		srv.handleNotifications(ctx, siteID, data)
 		mockS.AssertNotCalled(t, "GetNotificationLogs", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 		mockS.AssertExpectations(t)
 	})

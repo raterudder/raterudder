@@ -1,7 +1,7 @@
 import React from 'react';
-import { Link, useLocation, useSearchParams } from 'wouter';
+import { Link, useLocation } from 'wouter';
 import { Select } from '@base-ui/react/select';
-import { isIOSHomeScreen } from '../utils/pwaUtils';
+import { useFeatureFlag } from '../utils/features';
 import './Header.css';
 import type { UserSite } from '../api';
 
@@ -11,16 +11,14 @@ interface HeaderProps {
     selectedSiteID: string;
     onSiteChange: (siteID: string) => void;
     onLogout: () => void;
-    hasNotifications?: boolean;
     onOpenNotifications?: () => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSiteChange, onLogout, hasNotifications, onOpenNotifications }) => {
+const Header: React.FC<HeaderProps> = ({ loggedIn, sites, selectedSiteID, onSiteChange, onLogout, onOpenNotifications }) => {
     const [isMenuOpen, setIsMenuOpen] = React.useState(false);
     const [location] = useLocation();
-    const [searchParams] = useSearchParams();
 
-    const showNotifications = searchParams.get('notifications') === 'true' || isIOSHomeScreen() || Boolean(hasNotifications);
+    const showNotifications = useFeatureFlag('notifications');
 
     const toggleMenu = () => {
         setIsMenuOpen(!isMenuOpen);

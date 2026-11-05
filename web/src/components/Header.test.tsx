@@ -2,6 +2,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { Router } from 'wouter';
 import { memoryLocation } from 'wouter/memory-location';
 import Header from './Header';
+import { FeaturesProvider } from '../utils/features';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 describe('Header Component', () => {
@@ -14,20 +15,21 @@ describe('Header Component', () => {
         vi.restoreAllMocks();
     });
 
-    const renderHeader = (path: string, loggedIn: boolean, hasNotifications?: boolean) => {
+    const renderHeader = (path: string, loggedIn: boolean, features?: Record<string, boolean>) => {
         const { hook } = memoryLocation({ static: true, path: path });
         return render(
-            <Router hook={hook}>
-                <Header
-                    loggedIn={loggedIn}
-                    sites={[{ id: 'site1', name: 'Site 1' }]}
-                    selectedSiteID="site1"
-                    onSiteChange={mockOnSiteChange}
-                    onLogout={mockOnLogout}
-                    onOpenNotifications={mockOnOpenNotifications}
-                    hasNotifications={hasNotifications}
-                />
-            </Router>
+            <FeaturesProvider features={features}>
+                <Router hook={hook}>
+                    <Header
+                        loggedIn={loggedIn}
+                        sites={[{ id: 'site1', name: 'Site 1' }]}
+                        selectedSiteID="site1"
+                        onSiteChange={mockOnSiteChange}
+                        onLogout={mockOnLogout}
+                        onOpenNotifications={mockOnOpenNotifications}
+                    />
+                </Router>
+            </FeaturesProvider>
         );
     };
 
@@ -150,39 +152,18 @@ describe('Header Component', () => {
         expect(screen.queryByTestId('header-bell-btn')).not.toBeInTheDocument();
     });
 
-    it('renders notification bell when ?notifications=true is in the query params', () => {
-        renderHeader('/dashboard?notifications=true', true);
-        expect(screen.getByTestId('header-bell-btn')).toBeInTheDocument();
+    it('does not render notification bell when notifications feature flag is false', () => {
+        renderHeader('/dashboard', true, { notifications: false });
+        expect(screen.queryByTestId('header-bell-btn')).not.toBeInTheDocument();
     });
 
-    it('renders notification bell when on iOS home screen even without query params', () => {
-        vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)');
-        (window as any).Notification = { permission: 'default' };
-
-        renderHeader('/dashboard', true);
+    it('renders notification bell when notifications feature flag is enabled', () => {
+        renderHeader('/dashboard', true, { notifications: true });
         expect(screen.getByTestId('header-bell-btn')).toBeInTheDocument();
     });
 
     it('calls onOpenNotifications when bell button is clicked', async () => {
-        renderHeader('/dashboard?notifications=true', true);
-        const bellBtn = screen.getByTestId('header-bell-btn');
-        fireEvent.click(bellBtn);
-
-        expect(mockOnOpenNotifications).toHaveBeenCalledTimes(1);
-    });
-
-    it('renders notification bell when hasNotifications is true without query params', () => {
-        renderHeader('/dashboard', true, true);
-        expect(screen.getByTestId('header-bell-btn')).toBeInTheDocument();
-    });
-
-    it('does not render notification bell when hasNotifications is false and no query params', () => {
-        renderHeader('/dashboard', true, false);
-        expect(screen.queryByTestId('header-bell-btn')).not.toBeInTheDocument();
-    });
-
-    it('calls onOpenNotifications when bell button is clicked via hasNotifications', async () => {
-        renderHeader('/dashboard', true, true);
+        renderHeader('/dashboard', true, { notifications: true });
         const bellBtn = screen.getByTestId('header-bell-btn');
         fireEvent.click(bellBtn);
 

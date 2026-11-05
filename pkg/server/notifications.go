@@ -32,10 +32,13 @@ import (
 	"github.com/raterudder/raterudder/pkg/common"
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"golang.org/x/crypto/hkdf"
 )
+
+var ffNotifications = feats.Bool("notifications", false)
 
 // Tunable notification thresholds for anomaly detection.
 // These constants are grouped here for easy iteration and simulation against actual site history.
@@ -1567,7 +1570,7 @@ func (s *Server) handleNotifications(
 	siteID string,
 	data *dataForNotifications,
 ) {
-	if !s.notificationsEnabled() {
+	if !ffNotifications.Enabled(ctx) || !s.notificationsEnabled() {
 		return
 	}
 
@@ -1586,12 +1589,6 @@ func (s *Server) handleNotifications(
 
 	getNotifState := s.newSiteRecentNotificationsFetcher(ctx, siteID, nowLocal)
 	getUser := s.newCachedUserFetcher()
-
-	// Gating: notifications require active PlanMode (or staging).
-	isStaging := strings.EqualFold(s.release, "staging")
-	if !data.settings.PlanMode && !isStaging {
-		return
-	}
 
 	// If a severe grid event or emergency occurs, the inverter is in off-grid backup
 	// and forward optimization planning is skipped. Still evaluate hardware outage alerts.
