@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"log/slog"
 	"math"
 	"net/http"
@@ -391,15 +392,112 @@ func formatAgentSummaryText(summary AgentSummaryRes) string {
 	return b.String()
 }
 
+func formatAgentSummaryHTML(summary AgentSummaryRes) string {
+	var b strings.Builder
+	b.WriteString("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>RateRudder Energy Summary</title>\n</head>\n<body>\n<main>\n")
+	b.WriteString("<h1>RateRudder Energy Summary</h1>\n<ul>\n")
+	fmt.Fprintf(&b, "<li><strong>Site Time:</strong> %s (%s)</li>\n", html.EscapeString(summary.SiteTime.Format("2006-01-02 15:04 MST")), html.EscapeString(summary.TimeZone))
+	fmt.Fprintf(&b, "<li><strong>Last Updated:</strong> %s</li>\n", html.EscapeString(summary.UpdatedAt.Format("2006-01-02 15:04 MST")))
+	b.WriteString("</ul>\n")
+
+	st := summary.Status
+	b.WriteString("<h2>Current Status</h2>\n<ul>\n")
+	fmt.Fprintf(&b, "<li><strong>Battery SOC:</strong> %.1f%% (Capacity: %.1f kWh, Reserve: %.1f%%)</li>\n", st.BatterySOC, st.BatteryCapacityKWH, st.ReserveSOC)
+	fmt.Fprintf(&b, "<li><strong>Power Flows:</strong> Battery %.2f kW, Solar %.2f kW, Home Load %.2f kW, Grid %.2f kW</li>\n", st.BatteryKW, st.SolarKW, st.HomeKW, st.GridKW)
+	fmt.Fprintf(&b, "<li><strong>Battery Mode:</strong> %s</li>\n", html.EscapeString(st.BatteryModeLabel))
+	fmt.Fprintf(&b, "<li><strong>Solar Mode:</strong> %s</li>\n", html.EscapeString(st.SolarModeLabel))
+	if st.Description != "" {
+		fmt.Fprintf(&b, "<li><strong>Decision:</strong> %s</li>\n", html.EscapeString(st.Description))
+	}
+	fmt.Fprintf(&b, "<li><strong>Current Prices:</strong> Import $%.4f/kWh, Export $%.4f/kWh</li>\n", st.ImportDollarsPerKWH, st.ExportDollarsPerKWH)
+	if st.Paused {
+		b.WriteString("<li><strong>Automation Status:</strong> Paused</li>\n")
+	}
+	if st.GridUnavailable {
+		b.WriteString("<li><strong>Grid Status:</strong> Grid Unavailable (Outage)</li>\n")
+	}
+	if st.EmergencyMode {
+		b.WriteString("<li><strong>Emergency Mode:</strong> Active</li>\n")
+	}
+	if st.VPPActive {
+		b.WriteString("<li><strong>VPP Event:</strong> Active</li>\n")
+	}
+	b.WriteString("</ul>\n")
+
+	sf := summary.SolarForecast
+	b.WriteString("<h2>Solar Forecast</h2>\n<ul>\n")
+	fmt.Fprintf(&b, "<li><strong>Today Actual So Far:</strong> %.2f kWh</li>\n", sf.TodayActualSolarKWH)
+	fmt.Fprintf(&b, "<li><strong>Today Remaining Forecast:</strong> %.2f kWh</li>\n", sf.TodayRemainingForecastSolarKWH)
+	fmt.Fprintf(&b, "<li><strong>Today Total Estimated:</strong> %.2f kWh</li>\n", sf.TodayTotalEstimatedSolarKWH)
+	fmt.Fprintf(&b, "<li><strong>Tomorrow Forecast:</strong> %.2f kWh</li>\n", sf.TomorrowForecastSolarKWH)
+	b.WriteString("</ul>\n")
+
+	b.WriteString("<h2>Next 24-Hour Plan</h2>\n")
+	if len(summary.Plan) == 0 {
+		b.WriteString("<p>No upcoming schedule periods available.</p>\n")
+	} else {
+		b.WriteString("<table>\n<thead>\n<tr><th>Time</th><th>Battery SOC</th><th>Solar (kWh)</th><th>Home Load (kWh)</th><th>Import ($/kWh)</th><th>Export ($/kWh)</th><th>Battery Mode</th></tr>\n</thead>\n<tbody>\n")
+		for _, p := range summary.Plan {
+			fmt.Fprintf(
+				&b,
+				"<tr><td>%s - %s</td><td>%.1f%% -&gt; %.1f%%</td><td>%.2f</td><td>%.2f</td><td>$%.4f</td><td>$%.4f</td><td>%s</td></tr>\n",
+				html.EscapeString(p.TSStart.Format("2006-01-02 15:04")),
+				html.EscapeString(p.TSEnd.Format("15:04")),
+				p.StartSOC,
+				p.EndSOC,
+				p.SolarKWH,
+				p.HomeLoadKWH,
+				p.ImportDollarsPerKWH,
+				p.ExportDollarsPerKWH,
+				html.EscapeString(p.BatteryModeLabel),
+			)
+		}
+		b.WriteString("</tbody>\n</table>\n")
+	}
+	b.WriteString("</main>\n</body>\n</html>\n")
+	return b.String()
+}
+
+func resolveAgentSummaryFormat(r *http.Request) (string, error) {
+	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
+	switch format {
+	case "json", "text", "html":
+		return format, nil
+	case "", "auto":
+		accept := strings.ToLower(r.Header.Get("Accept"))
+		bestFormat := "html"
+		bestIdx := -1
+		for _, candidate := range []struct {
+			mime   string
+			format string
+		}{
+			{"text/html", "html"},
+			{"application/json", "json"},
+			{"text/plain", "text"},
+			{"text/markdown", "text"},
+		} {
+			if idx := strings.Index(accept, candidate.mime); idx >= 0 && (bestIdx == -1 || idx < bestIdx) {
+				bestIdx = idx
+				bestFormat = candidate.format
+			}
+		}
+		// Default to HTML when format is omitted or auto and no specific type matches so
+		// web-fetch agents (including bots that send Accept: */* or no Accept header) receive parseable HTML.
+		return bestFormat, nil
+	default:
+		return "", errors.New("invalid format: must be json, text, html, or auto")
+	}
+}
+
 func (s *Server) handleAgentSummary(w http.ResponseWriter, r *http.Request) {
 	if len(s.appsEncryptionKey) != 32 {
 		writeJSONError(w, "apps not enabled", http.StatusNotImplemented)
 		return
 	}
 
-	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
-	if format != "" && format != "json" && format != "text" {
-		writeJSONError(w, "invalid format: must be json or text", http.StatusBadRequest)
+	format, err := resolveAgentSummaryFormat(r)
+	if err != nil {
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -421,18 +519,27 @@ func (s *Server) handleAgentSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Cache-Control", "private, max-age=300")
-	if format == "text" {
+	w.Header().Set("Vary", "Accept")
+	switch format {
+	case "html":
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write([]byte(formatAgentSummaryHTML(summary))); err != nil {
+			panic(http.ErrAbortHandler)
+		}
+		return
+	case "text":
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		if _, err := w.Write([]byte(formatAgentSummaryText(summary))); err != nil {
 			panic(http.ErrAbortHandler)
 		}
 		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(summary); err != nil {
-		panic(http.ErrAbortHandler)
+	default:
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(summary); err != nil {
+			panic(http.ErrAbortHandler)
+		}
 	}
 }

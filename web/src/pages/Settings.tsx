@@ -3035,13 +3035,13 @@ const Settings = ({
                                         fontSize: '0.85rem'
                                     }}
                                 >
-                                    {`${window.location.origin}/api/agent/summary?token=${encodeURIComponent(createdToken)}&format=text`}
+                                    {`${window.location.origin}/api/agent/summary?token=${encodeURIComponent(createdToken)}`}
                                 </code>
                                 <Button
                                     type="button"
                                     className="btn btn-secondary"
                                     onClick={() => {
-                                        const summaryUrl = `${window.location.origin}/api/agent/summary?token=${encodeURIComponent(createdToken)}&format=text`;
+                                        const summaryUrl = `${window.location.origin}/api/agent/summary?token=${encodeURIComponent(createdToken)}`;
                                         navigator.clipboard?.writeText(summaryUrl);
                                         setCopiedSummaryUrl(true);
                                     }}

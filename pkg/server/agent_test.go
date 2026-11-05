@@ -174,6 +174,7 @@ func TestHandleAgentSummary(t *testing.T) {
 
 		req := httptest.NewRequest(http.MethodGet, "/api/agent/summary", nil)
 		req.Header.Set("Authorization", "Bearer "+rawToken)
+		req.Header.Set("Accept", "application/json")
 		w := httptest.NewRecorder()
 
 		srv.authMiddleware(http.HandlerFunc(srv.handleAgentSummary)).ServeHTTP(w, req)
@@ -181,6 +182,7 @@ func TestHandleAgentSummary(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code)
 		assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
 		assert.Equal(t, "private, max-age=300", w.Header().Get("Cache-Control"))
+		assert.Equal(t, "Accept", w.Header().Get("Vary"))
 
 		var res AgentSummaryRes
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
@@ -328,6 +330,108 @@ func TestHandleAgentSummary(t *testing.T) {
 		mockStore.AssertExpectations(t)
 	})
 
+	t.Run("HTMLOutputDefaultWhenFormatOmitted", func(t *testing.T) {
+		mockStore := &mockStorage{}
+		srv := &Server{
+			storage:           mockStore,
+			appsEncryptionKey: testAppsEncryptionKey,
+			nowFunc:           func() time.Time { return fixedNow.UTC() },
+		}
+
+		rawToken, tokenHash, err := srv.createAppToken("user-1", "site-1", "app-1")
+		require.NoError(t, err)
+
+		mockStore.On("GetUser", mock.Anything, "user-1").Return(types.User{
+			ID:    "user-1",
+			Email: "user1@example.com",
+			Sites: []types.UserSite{{ID: "site-1"}},
+			Apps: []types.UserApp{
+				{
+					ID:        "app-1",
+					Name:      "Gemini",
+					Type:      types.AppTypeAPIKey,
+					SiteID:    "site-1",
+					TokenHash: tokenHash,
+				},
+			},
+		}, nil).Once()
+		mockStore.On("GetSite", mock.Anything, "site-1").Return(types.Site{
+			ID:          "site-1",
+			Permissions: []types.SitePermissions{{UserID: "user-1"}},
+		}, nil).Once()
+
+		mockStore.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{}, time.Time{}, nil).Once()
+		mockStore.On("GetSettings", mock.Anything, "site-1").Return(types.Settings{
+			ESS:             "franklinwh",
+			UtilityProvider: "comed",
+		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+		actionTS := time.Date(2026, 6, 15, 14, 20, 0, 0, loc)
+		p1Start := time.Date(2026, 6, 15, 14, 0, 0, 0, loc)
+		p1End := time.Date(2026, 6, 15, 15, 0, 0, 0, loc)
+
+		mockStore.On("GetLatestAction", mock.Anything, "site-1").Return(&types.Action{
+			Timestamp:       actionTS,
+			SystemTimestamp: actionTS,
+			BatteryMode:     types.BatteryModeStandby,
+			SolarMode:       types.SolarModeAny,
+			Description:     "Holding battery <reserve>",
+			ReserveSOC:      20,
+			SystemStatus: types.SystemStatus{
+				Timestamp:          actionTS,
+				BatterySOC:         85.0,
+				BatteryCapacityKWH: 15.0,
+				BatteryKW:          0,
+				SolarKW:            3.2,
+				HomeKW:             1.2,
+				GridKW:             -2.0,
+				TimeLocation:       "America/Chicago",
+			},
+			Plan: &types.Plan{
+				Periods: []types.PlanPeriod{
+					{
+						TSStart:       p1Start,
+						TSEnd:         p1End,
+						DurationHours: 1.0,
+						BatteryMode:   types.BatteryModeStandby,
+						SolarMode:     types.SolarModeAny,
+						StartSOC:      85.0,
+						EndSOC:        85.0,
+						SolarKWH:      3.2,
+						LoadKWH:       1.2,
+						ImportDollars: 0.06,
+						ExportDollars: 0.03,
+					},
+				},
+			},
+		}, nil).Once()
+
+		mockStore.On("GetEnergyHistory", mock.Anything, "site-1", todayStart, fixedNow).Return(([]types.DailyEnergyStats)(nil), nil).Once()
+
+		// Omit format parameter (simulating the default Settings Summary URL fetched by Gemini)
+		req := httptest.NewRequest(http.MethodGet, "/api/agent/summary?token="+url.QueryEscape(rawToken), nil)
+		w := httptest.NewRecorder()
+
+		srv.authMiddleware(http.HandlerFunc(srv.handleAgentSummary)).ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "text/html; charset=utf-8", w.Header().Get("Content-Type"))
+		assert.Equal(t, "private, max-age=300", w.Header().Get("Cache-Control"))
+		assert.Equal(t, "Accept", w.Header().Get("Vary"))
+
+		body := w.Body.String()
+		assert.Contains(t, body, "<!DOCTYPE html>")
+		assert.Contains(t, body, "<h1>RateRudder Energy Summary</h1>")
+		assert.Contains(t, body, "<h2>Current Status</h2>")
+		assert.Contains(t, body, "<li><strong>Battery SOC:</strong> 85.0% (Capacity: 15.0 kWh, Reserve: 20.0%)</li>")
+		assert.Contains(t, body, "<li><strong>Decision:</strong> Holding battery &lt;reserve&gt;</li>")
+		assert.Contains(t, body, "<h2>Solar Forecast</h2>")
+		assert.Contains(t, body, "<h2>Next 24-Hour Plan</h2>")
+		assert.Contains(t, body, "<tr><td>2026-06-15 14:00 - 15:00</td><td>85.0% -&gt; 85.0%</td><td>3.20</td><td>1.20</td><td>$0.0600</td><td>$0.0300</td><td>Standby</td></tr>")
+
+		mockStore.AssertExpectations(t)
+	})
+
 	t.Run("NoESSConfiguredReturnsBadRequest", func(t *testing.T) {
 		mockStore := &mockStorage{}
 		srv := &Server{
@@ -390,7 +494,7 @@ func TestHandleAgentSummary(t *testing.T) {
 		srv.authMiddleware(http.HandlerFunc(srv.handleAgentSummary)).ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
-		assert.Contains(t, w.Body.String(), "invalid format: must be json or text")
+		assert.Contains(t, w.Body.String(), "invalid format: must be json, text, html, or auto")
 	})
 
 	t.Run("AppsNotEnabledReturnsNotImplemented", func(t *testing.T) {
@@ -407,5 +511,25 @@ func TestHandleAgentSummary(t *testing.T) {
 
 		assert.Equal(t, http.StatusNotImplemented, w.Code)
 		assert.Contains(t, w.Body.String(), "apps not enabled")
+	})
+
+	t.Run("AcceptHeaderSelectsEarliestMatchingFormat", func(t *testing.T) {
+		reqTextFirst := httptest.NewRequest(http.MethodGet, "/api/agent/summary", nil)
+		reqTextFirst.Header.Set("Accept", "text/markdown, text/plain, text/html;q=0.9, */*;q=0.8")
+		fmtText, err := resolveAgentSummaryFormat(reqTextFirst)
+		require.NoError(t, err)
+		assert.Equal(t, "text", fmtText)
+
+		reqJSONFirst := httptest.NewRequest(http.MethodGet, "/api/agent/summary", nil)
+		reqJSONFirst.Header.Set("Accept", "application/json, text/html;q=0.8")
+		fmtJSON, err := resolveAgentSummaryFormat(reqJSONFirst)
+		require.NoError(t, err)
+		assert.Equal(t, "json", fmtJSON)
+
+		reqHTMLFirst := httptest.NewRequest(http.MethodGet, "/api/agent/summary", nil)
+		reqHTMLFirst.Header.Set("Accept", "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8")
+		fmtHTML, err := resolveAgentSummaryFormat(reqHTMLFirst)
+		require.NoError(t, err)
+		assert.Equal(t, "html", fmtHTML)
 	})
 }

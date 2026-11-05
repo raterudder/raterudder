@@ -2930,7 +2930,7 @@ describe('App & Settings', () => {
             await waitFor(() => {
                 expect(api.createApp).toHaveBeenCalledWith('site1', 'My Agent');
                 expect(screen.getByTestId('created-app-token')).toHaveTextContent('rr_test_token_123');
-                expect(screen.getByTestId('created-app-summary-url')).toHaveTextContent('/api/agent/summary?token=rr_test_token_123&format=text');
+                expect(screen.getByTestId('created-app-summary-url')).toHaveTextContent('/api/agent/summary?token=rr_test_token_123');
                 expect(screen.getByText('My Agent')).toBeInTheDocument();
                 expect(screen.getByText('API Key')).toBeInTheDocument();
             });

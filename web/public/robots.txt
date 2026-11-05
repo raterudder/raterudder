@@ -1,5 +1,6 @@
 User-agent: *
 Allow: /
+Allow: /api/agent/summary
 Disallow: /api/
 Disallow: /callback/
 
