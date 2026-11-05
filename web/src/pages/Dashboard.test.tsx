@@ -6,6 +6,7 @@ import Dashboard, { whatsNewVersion, whatsNewText, whatsNewLinkText, STALE_DASHB
 import { Router } from 'wouter';
 import * as api from '../api';
 import { setupDefaultApiMocks } from '../test/apiMocks';
+import { FeaturesProvider } from '../utils/features';
 
 const { fetchActionsAndSavings, fetchSettings, ActionReason } = api;
 
@@ -13,21 +14,26 @@ vi.mock('../api');
 
 const renderWithRouter = (component: React.ReactNode) => {
     let element = component;
+    let features: Record<string, boolean> | undefined;
     if (React.isValidElement(element) && element.type === Dashboard) {
         const props = element.props as any;
+        const settings = props.settings !== undefined ? props.settings : {
+            minBatterySOC: 10,
+            ess: 'franklinwh',
+            hasCredentials: { franklinwh: true },
+            utilityProvider: 'comed_besh',
+        };
+        features = settings?.features;
         element = React.cloneElement(element, {
-            settings: props.settings !== undefined ? props.settings : {
-                minBatterySOC: 10,
-                ess: 'franklinwh',
-                hasCredentials: { franklinwh: true },
-                utilityProvider: 'comed_besh',
-            }
+            settings,
         } as any);
     }
     return render(
-        <Router>
-            {element}
-        </Router>
+        <FeaturesProvider features={features}>
+            <Router>
+                {element}
+            </Router>
+        </FeaturesProvider>
     );
 };
 
@@ -1416,7 +1422,7 @@ describe('Dashboard', () => {
             });
         });
 
-        it('requests newCalculation and 3 savingsPeriods when planMode is enabled', async () => {
+        it('requests newCalculation and 3 savingsPeriods when onlyPlanMode is enabled', async () => {
             const periodStats = [
                 {
                     timestamp: new Date().toISOString(),
@@ -1488,7 +1494,7 @@ describe('Dashboard', () => {
                         ess: 'franklinwh',
                         hasCredentials: { franklinwh: true },
                         utilityProvider: 'comed_besh',
-                        planMode: true,
+                        features: { onlyPlanMode: true },
                     } as any}
                 />
             );

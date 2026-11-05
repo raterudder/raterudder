@@ -2669,7 +2669,7 @@ describe('App & Settings', () => {
     });
 
     describe('Direct Solar and Battery Export Management', () => {
-        it('is hidden when planMode is false and release is not staging', async () => {
+        it('is hidden when onlyPlanMode is false and manageTOUSchedules is false', async () => {
             const user = userEvent.setup();
             const originalLocation = window.location;
             delete (window as any).location;
@@ -2681,7 +2681,7 @@ describe('App & Settings', () => {
                     ess: 'tesla',
                     hasCredentials: { tesla: true },
                     manageTOUSchedules: false,
-                    planMode: false,
+                    features: { onlyPlanMode: false },
                     release: 'production',
                 });
 
@@ -2698,14 +2698,14 @@ describe('App & Settings', () => {
             }
         });
 
-        it('renders toggle and warning notice when planMode is true for supported ESS', async () => {
+        it('renders toggle and warning notice when onlyPlanMode is true for supported ESS', async () => {
             const user = userEvent.setup();
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
                 ess: 'tesla',
                 hasCredentials: { tesla: true },
                 manageTOUSchedules: false,
-                planMode: true,
+                features: { onlyPlanMode: true },
                 release: 'production',
                 gridExportSolar: true,
             });
@@ -2741,15 +2741,15 @@ describe('App & Settings', () => {
             });
         });
 
-        it('renders toggle when release is staging for supported ESS', async () => {
+        it('renders toggle when manageTOUSchedules is already enabled even if onlyPlanMode is false', async () => {
             const user = userEvent.setup();
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
                 ess: 'franklin',
                 hasCredentials: { franklin: true },
-                manageTOUSchedules: false,
-                planMode: false,
-                release: 'staging',
+                manageTOUSchedules: true,
+                features: { onlyPlanMode: false },
+                release: 'production',
                 gridExportBatteries: true,
             });
 
@@ -2761,16 +2761,16 @@ describe('App & Settings', () => {
 
             const exportOptSwitch = screen.getByRole('switch', { name: /Direct Solar and Battery Export Management/i });
             expect(exportOptSwitch).toBeInTheDocument();
-            expect(exportOptSwitch).not.toBeChecked();
+            expect(exportOptSwitch).toBeChecked();
         });
 
-        it('does not render toggle for unsupported ESS provider even when planMode is true or staging', async () => {
+        it('does not render toggle for unsupported ESS provider even when onlyPlanMode is true', async () => {
             const user = userEvent.setup();
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
                 ess: 'enphase',
                 hasCredentials: { enphase: true },
-                planMode: true,
+                features: { onlyPlanMode: true },
                 release: 'staging',
                 gridExportSolar: true,
             });
@@ -2791,7 +2791,7 @@ describe('App & Settings', () => {
                 ess: 'tesla',
                 hasCredentials: { tesla: true },
                 manageTOUSchedules: false,
-                planMode: true,
+                features: { onlyPlanMode: true },
                 release: 'production',
                 gridExportSolar: false,
                 gridExportBatteries: false,
@@ -2876,7 +2876,6 @@ describe('App & Settings', () => {
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
                 release: 'staging',
-                planMode: true,
                 features: { connectedApps: false },
             });
             (api.fetchApps as any).mockResolvedValue([]);
@@ -2890,7 +2889,6 @@ describe('App & Settings', () => {
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
                 release: 'production',
-                planMode: false,
                 features: { connectedApps: true },
             });
             (api.fetchApps as any).mockResolvedValue([

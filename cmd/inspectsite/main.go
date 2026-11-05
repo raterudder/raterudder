@@ -62,7 +62,6 @@ func main() {
 	fmt.Printf("Version:        %d (Last Updated: %s)\n", version, updatedTime.Format(time.RFC3339))
 	fmt.Printf("Release:        %s\n", settings.Release)
 	fmt.Printf("Automation:     Paused=%v\n", settings.Pause)
-	fmt.Printf("Engine Mode:    PlanMode=%v\n", settings.PlanMode)
 	fmt.Printf("ESS Provider:   %s\n", settings.ESS)
 	fmt.Printf("Utility:        %s (Rate: %s)\n", settings.UtilityProvider, settings.UtilityRate)
 	fmt.Printf("Grid Settings:  ChargeBatteries=%v, ExportBatteries=%v, ExportSolar=%v\n",

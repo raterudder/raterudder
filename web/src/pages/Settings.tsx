@@ -455,6 +455,7 @@ const ESSForm = ({
     editESS = false,
     setEditESS
 }: ESSFormProps) => {
+    const onlyPlanMode = useFeatureFlag('onlyPlanMode');
     const provider = essProviders.find(p => p.id === settings.ess);
     const maxStage = provider
         ? (provider.credentials || []).reduce((max, cred) => {
@@ -749,7 +750,7 @@ const ESSForm = ({
                                 )}
                             </div>
 
-                            {['tesla', 'franklin'].includes(settings.ess) && (!!settings.manageTOUSchedules || !!settings.planMode || settings.release === 'staging') && (settings.gridExportSolar || settings.gridExportBatteries) && (
+                            {['tesla', 'franklin'].includes(settings.ess) && (!!settings.manageTOUSchedules || onlyPlanMode) && (settings.gridExportSolar || settings.gridExportBatteries) && (
                                 <div className="grid-strategy-grid">
                                     <Field.Root className="form-group switch-group compact" style={{ gridColumn: '1 / -1' }}>
                                         <div className="switch-row">

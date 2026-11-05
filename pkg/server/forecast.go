@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/controller"
@@ -225,11 +224,11 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	usePlanMode := strings.EqualFold(s.release, "staging") || settings.PlanMode
+	onlyPlanMode := ffOnlyPlanMode.Enabled(ctx)
 
-	// FAST-PATH: If we have a fresh plan generated within the last hour (and plan mode is active),
+	// FAST-PATH: If we have a fresh plan generated within the last hour (and onlyPlanMode is active),
 	// bypass the 35-day historical query, ESS status fetch, and controller simulation.
-	isFreshPlan := usePlanMode &&
+	isFreshPlan := onlyPlanMode &&
 		!regeneratePlan &&
 		latestAction != nil &&
 		latestAction.Plan != nil &&
@@ -441,9 +440,9 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	}
 	priceRes := buildPriceHistoryRes(priceHistory24)
 
-	// Try real-time Plan fallback if on staging, if PlanMode is enabled, or if regeneratePlan is requested
+	// Try real-time Plan fallback if onlyPlanMode is enabled or if regeneratePlan is requested
 	// TODO: remove this and just return an error if we have a stale plan
-	if regeneratePlan || strings.EqualFold(s.release, "staging") || settings.PlanMode {
+	if regeneratePlan || onlyPlanMode {
 		planStatus := status
 		planStatus.Timestamp = now
 		planDecision, freshPlan, planErr := s.controller.Plan(

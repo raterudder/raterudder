@@ -272,8 +272,6 @@ export interface ESSProviderInfo {
 export interface Settings {
     dryRun: boolean;
     pause: boolean;
-    // TODO: Remove planMode once plan mode is rolled out to 100% of sites.
-    planMode?: boolean;
     countryCode: string;
     postalCode: string;
     release: string;

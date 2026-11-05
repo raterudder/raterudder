@@ -41,7 +41,7 @@ RateRudder is built to run as a stateless service on Google Cloud Run with Googl
   - `cmd/raterudder`: HTTP server and periodic site orchestration entry point.
   - `cmd/inspectsite`: CLI tool to inspect site configuration, recent actions, and pricing history.
   - `cmd/replayplan`: CLI tool to replay `controller.Plan` against historical poll snapshots.
-  - `cmd/fetchhistory`, `cmd/decryptcreds`, `cmd/setplanmode`, `cmd/migrate*`: Administrative and migration tools.
+  - `cmd/fetchhistory`, `cmd/decryptcreds`, `cmd/migrate*`: Administrative and migration tools.
 - `pkg/` — Backend Go packages:
   - `pkg/controller`: Dispatch planning (`plan.go`), solar forecasting (`solar.go`), load modeling (`energy.go`), EV detection (`ev.go`), and baseline simulation (`simulation.go`).
   - `pkg/ess`: Battery provider interface and client implementations.

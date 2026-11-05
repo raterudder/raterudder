@@ -47,7 +47,7 @@ Useful flags:
 
 ### 1. Identify Environment & Timezone
 * **Timezone**: Look up `SystemStatus.TimeLocation` (e.g., `America/Los_Angeles`, `America/Chicago`). "Overnight" must be evaluated relative to the site's local timezone, not UTC.
-* **Control Mode**: Check `settings.PlanMode`. If `false`, the site runs legacy `controller.Decide`. If `true`, it runs `controller.Plan`.
+* **Control Mode**: Check the `onlyPlanMode` feature flag in `features/{release}` in Firestore. If `false`, the site runs legacy `controller.Decide` alongside dark-launched `controller.Plan`. If `true`, it runs `controller.Plan` only.
 
 ### 2. Check Automation Status
 * Check if `settings.Pause` is `true`. When paused, the battery remains in self-consumption (`BatteryModeLoad`) and no automated grid charging/export occurs.

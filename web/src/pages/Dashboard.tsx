@@ -5,6 +5,7 @@ import CurrentStatus from '../components/CurrentStatus';
 import SavingsHero from '../components/SavingsHero';
 import ActionTimeline from '../components/ActionTimeline';
 import DateSelector from '../components/DateSelector';
+import { useFeatureFlag } from '../utils/features';
 import {
     gridChargeCost,
     getActionTimestamp,
@@ -31,7 +32,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
     const [savingsPeriods, setSavingsPeriods] = useState<SavingsStats[] | undefined>(undefined);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const planMode = !!settings?.planMode;
+    const onlyPlanMode = useFeatureFlag('onlyPlanMode');
 
     const [showWhatsNew, setShowWhatsNew] = useState(false);
     const [showGridWarning, setShowGridWarning] = useState(false);
@@ -152,7 +153,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                 const monthStart = new Date(start);
                 monthStart.setDate(monthStart.getDate() - 29);
 
-                const actionsAndSavingsData = planMode
+                const actionsAndSavingsData = onlyPlanMode
                     ? await fetchActionsAndSavings(start, end, siteID, {
                           newCalculation: true,
                           savingsPeriods: [
@@ -186,7 +187,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
             isCancelled = true;
             clearTimeout(timer);
         };
-    }, [currentDate, siteID, refreshTrigger, planMode]);
+    }, [currentDate, siteID, refreshTrigger, onlyPlanMode]);
 
     const handleDateChange = useCallback((days: number) => {
         const newDate = new Date(currentDate);
@@ -463,13 +464,13 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                         </div>
                     )}
                     {siteID !== 'ALL' && isToday && latestAction && (
-                        <CurrentStatus action={latestAction} currencySymbol={currencySymbol} planMode={planMode} />
+                        <CurrentStatus action={latestAction} currencySymbol={currencySymbol} planMode={onlyPlanMode} />
                     )}
 
                     <SavingsHero
                         savings={savings}
                         savingsPeriods={savingsPeriods}
-                        planMode={planMode}
+                        planMode={onlyPlanMode}
                         currentDate={currentDate}
                         isToday={isToday}
                         currencySymbol={currencySymbol}

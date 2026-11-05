@@ -300,8 +300,8 @@ func main() {
 
 	fmt.Printf("=== REPLAYING PLAN FOR SITE %s (%s) ===\n", siteID, loc.String())
 	fmt.Printf("Window:         %s to %s (%d polls)\n", start.Format("2006-01-02 15:04"), end.Format("2006-01-02 15:04"), len(actions))
-	fmt.Printf("Utility:        %s (Rate: %s) | ESS: %s | PlanMode=%v\n",
-		settings.UtilityProvider, settings.UtilityRate, settings.ESS, settings.PlanMode)
+	fmt.Printf("Utility:        %s (Rate: %s) | ESS: %s\n",
+		settings.UtilityProvider, settings.UtilityRate, settings.ESS)
 	fmt.Printf("Settings:       MinSOC=%.1f%% | Periods=%+v | ExportMargin=$%.4f | ArbDiff=$%.4f | AlwaysChargeUnder=$%.4f\n",
 		settings.MinBatterySOC, settings.MinBatterySOCPeriods,
 		settings.MinBatteryExportDifferenceDollarsPerKWH,
