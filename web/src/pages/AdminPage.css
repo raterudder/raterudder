@@ -550,6 +550,45 @@
   margin-top: 0.25rem;
 }
 
+.admin-pill-input-container {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background-color: var(--surface-container-low);
+}
+
+.admin-pill-input-container:focus-within {
+  border-color: var(--primary);
+}
+
+.admin-pill-inner-input {
+  flex: 1;
+  min-width: 120px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  padding: 0.1rem 0;
+}
+
+.admin-pill-inner-input:focus {
+  outline: none;
+}
+
+.admin-site-chip-pending {
+  background-color: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+}
+
+.admin-site-chip-pending:focus {
+  outline: 1px solid var(--primary);
+}
+
 /* Per-site Feature Overrides */
 .admin-site-features-collapsible {
   margin-top: 0.5rem;

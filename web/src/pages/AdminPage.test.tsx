@@ -176,6 +176,51 @@ describe('AdminPage', () => {
         });
     });
 
+    it('defaults feedback and interest sections to closed when all items have already been seen', async () => {
+        const seenTs = '2026-10-05T12:23:01.045674015Z';
+        localStorage.setItem('admin_last_seen_feedback_ts', seenTs);
+        localStorage.setItem('admin_last_seen_interest_ts', seenTs);
+
+        vi.mocked(listFeedback).mockResolvedValue([
+            {
+                id: 'fb-seen',
+                siteID: 'site1',
+                userID: 'u1',
+                sentiment: 'happy',
+                comment: 'Already read feedback',
+                timestamp: seenTs,
+                extra: {},
+            },
+        ]);
+        vi.mocked(listInterest).mockResolvedValue([
+            {
+                email: 'seen@example.com',
+                utility: 'comed',
+                battery: 'tesla',
+                utilityProviderName: '',
+                state: 'IL',
+                planName: '',
+                batteryName: '',
+                comments: '',
+                timestamp: seenTs,
+            },
+        ]);
+
+        render(
+            <Router>
+                <AdminPage />
+            </Router>
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Feedback')).toBeInTheDocument();
+            expect(screen.getByText('Interest Submissions')).toBeInTheDocument();
+        });
+
+        expect(screen.queryByText(/Already read feedback/)).not.toBeInTheDocument();
+        expect(screen.queryByText('seen@example.com')).not.toBeInTheDocument();
+    });
+
     it('renders site aliases and handles editing', async () => {
         const mockSites: any = [
             {
@@ -349,16 +394,15 @@ describe('AdminPage', () => {
             });
         });
 
-        // Add a second site to solarModelV2 and verify frontend normalizes/combines siteIDs with same value
-        const addSiteInput = screen.getByPlaceholderText('Add site ID to solarModelV2...');
-        fireEvent.change(addSiteInput, { target: { value: 'site2' } });
-        const addSiteBtns = screen.getAllByRole('button', { name: 'Add Site' });
-        fireEvent.click(addSiteBtns[1]);
+        // Add multiple sites to solarModelV2 using Tab to create a pill and Enter to submit all at once
+        const user = userEvent.setup();
+        const addSiteInput = screen.getByLabelText('Add site ID to solarModelV2');
+        await user.type(addSiteInput, 'site2{Tab}site3{Enter}');
 
         await waitFor(() => {
             expect(updateFeatures).toHaveBeenCalledWith({
                 solarModelV2: [
-                    { siteIDs: ['site1', 'site2'], value: true },
+                    { siteIDs: ['site1', 'site2', 'site3'], value: true },
                     { sitePercent: 50, value: true },
                 ],
             });

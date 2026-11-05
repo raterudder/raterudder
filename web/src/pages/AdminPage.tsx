@@ -18,6 +18,7 @@ import type {
 } from '../api';
 import { Collapsible } from '@base-ui/react/collapsible';
 import { Autocomplete } from '@base-ui/react/autocomplete';
+import { Combobox } from '@base-ui/react/combobox';
 import './AdminPage.css';
 
 const LAST_SEEN_FEEDBACK_KEY = 'admin_last_seen_feedback_ts';
@@ -105,14 +106,15 @@ function normalizeCriteria(criteria: FeatureCriteria[]): FeatureCriteria[] {
     return out;
 }
 
-function buildUpdatedCriteriaForSiteOverride(
+function buildUpdatedCriteriaForSiteOverrides(
     flag: AdminFeatureFlag,
-    siteID: string,
+    siteIDs: string[],
     override: 'default' | 'on' | 'off'
 ): FeatureCriteria[] {
+    const targetSet = new Set(siteIDs);
     const next: FeatureCriteria[] = [];
     for (const c of flag.criteria || []) {
-        const remainingSites = (c.siteIDs || []).filter((id) => id !== siteID);
+        const remainingSites = (c.siteIDs || []).filter((id) => !targetSet.has(id));
         if (remainingSites.length > 0 || (c.sitePercent && c.sitePercent > 0)) {
             next.push({
                 ...(remainingSites.length > 0 ? { siteIDs: remainingSites } : {}),
@@ -123,7 +125,7 @@ function buildUpdatedCriteriaForSiteOverride(
     }
     if (override === 'on' || override === 'off') {
         next.push({
-            siteIDs: [siteID],
+            siteIDs,
             value: override === 'on',
         });
     }
@@ -161,8 +163,8 @@ const AdminPage: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
 
     // Collapsible Section States
-    const [feedbackOpen, setFeedbackOpen] = useState(true);
-    const [interestOpen, setInterestOpen] = useState(true);
+    const [feedbackOpen, setFeedbackOpen] = useState(false);
+    const [interestOpen, setInterestOpen] = useState(false);
     const [featuresOpen, setFeaturesOpen] = useState(false);
     const [sitesOpen, setSitesOpen] = useState(false);
 
@@ -190,7 +192,9 @@ const AdminPage: React.FC = () => {
 
     // Feature Flags Editing State
     const [rolloutEdits, setRolloutEdits] = useState<Record<string, { sitePercent: number; value: boolean }>>({});
-    const [newSiteInputs, setNewSiteInputs] = useState<Record<string, { siteID: string; value: boolean }>>({});
+    const [newSiteInputs, setNewSiteInputs] = useState<
+        Record<string, { siteID: string; pendingSiteIDs: string[]; value: boolean }>
+    >({});
     const [savingFlag, setSavingFlag] = useState<string | null>(null);
 
     const syncRolloutEdits = (sortedFlags: AdminFeatureFlag[]) => {
@@ -208,8 +212,27 @@ const AdminPage: React.FC = () => {
             Promise.resolve(listFeatures()).catch(() => [] as AdminFeatureFlag[]),
         ])
             .then(([feedbackData, interestData, featuresData]) => {
-                setFeedbacks(feedbackData || []);
-                setInterest(interestData || []);
+                const loadedFeedbacks = feedbackData || [];
+                const loadedInterest = interestData || [];
+                setFeedbacks(loadedFeedbacks);
+                setInterest(loadedInterest);
+
+                const savedFeedbackTs = localStorage.getItem(LAST_SEEN_FEEDBACK_KEY);
+                const hasUnseenFeedback = loadedFeedbacks.some((fb) =>
+                    savedFeedbackTs
+                        ? new Date(fb.timestamp).getTime() > new Date(savedFeedbackTs).getTime()
+                        : true
+                );
+                setFeedbackOpen(hasUnseenFeedback);
+
+                const savedInterestTs = localStorage.getItem(LAST_SEEN_INTEREST_KEY);
+                const hasUnseenInterest = loadedInterest.some((sub) =>
+                    savedInterestTs
+                        ? new Date(sub.timestamp).getTime() > new Date(savedInterestTs).getTime()
+                        : true
+                );
+                setInterestOpen(hasUnseenInterest);
+
                 const sorted = sortFeatureFlags(featuresData || []);
                 setFeatures(sorted);
                 syncRolloutEdits(sorted);
@@ -269,7 +292,7 @@ const AdminPage: React.FC = () => {
     const handleApplyFeatureCriteria = async (
         flagName: string,
         nextCriteria: FeatureCriteria[],
-        siteOverrideUpdate?: { siteID: string; effectiveValue: boolean }
+        siteOverrideUpdate?: { siteIDs: string[]; effectiveValue: boolean }
     ) => {
         const normalized = normalizeCriteria(nextCriteria);
         setSavingFlag(flagName);
@@ -283,9 +306,10 @@ const AdminPage: React.FC = () => {
                 return updated;
             });
             if (siteOverrideUpdate) {
+                const updatedSiteSet = new Set(siteOverrideUpdate.siteIDs);
                 setSites((prev) =>
                     prev.map((s) =>
-                        s.id === siteOverrideUpdate.siteID
+                        updatedSiteSet.has(s.id)
                             ? {
                                   ...s,
                                   features: {
@@ -311,25 +335,37 @@ const AdminPage: React.FC = () => {
     };
 
     const handleAddSiteToFlag = async (flag: AdminFeatureFlag) => {
-        const input = newSiteInputs[flag.name] ?? { siteID: '', value: true };
+        const input = newSiteInputs[flag.name] ?? {
+            siteID: '',
+            pendingSiteIDs: [],
+            value: true,
+        };
         const trimmedID = input.siteID.trim();
-        if (!trimmedID) return;
-        const nextCriteria = buildUpdatedCriteriaForSiteOverride(
+        const allSiteIDs = [...input.pendingSiteIDs];
+        if (trimmedID && !allSiteIDs.includes(trimmedID)) {
+            allSiteIDs.push(trimmedID);
+        }
+        if (allSiteIDs.length === 0) return;
+
+        const nextCriteria = buildUpdatedCriteriaForSiteOverrides(
             flag,
-            trimmedID,
+            allSiteIDs,
             input.value ? 'on' : 'off'
         );
         await handleApplyFeatureCriteria(flag.name, nextCriteria, {
-            siteID: trimmedID,
+            siteIDs: allSiteIDs,
             effectiveValue: input.value,
         });
-        setNewSiteInputs((prev) => ({ ...prev, [flag.name]: { siteID: '', value: input.value } }));
+        setNewSiteInputs((prev) => ({
+            ...prev,
+            [flag.name]: { siteID: '', pendingSiteIDs: [], value: input.value },
+        }));
     };
 
     const handleRemoveSiteFromFlag = async (flag: AdminFeatureFlag, siteID: string) => {
-        const nextCriteria = buildUpdatedCriteriaForSiteOverride(flag, siteID, 'default');
+        const nextCriteria = buildUpdatedCriteriaForSiteOverrides(flag, [siteID], 'default');
         await handleApplyFeatureCriteria(flag.name, nextCriteria, {
-            siteID,
+            siteIDs: [siteID],
             effectiveValue: flag.defaultValue,
         });
     };
@@ -339,11 +375,11 @@ const AdminPage: React.FC = () => {
         flag: AdminFeatureFlag,
         override: 'default' | 'on' | 'off'
     ) => {
-        const nextCriteria = buildUpdatedCriteriaForSiteOverride(flag, site.id, override);
+        const nextCriteria = buildUpdatedCriteriaForSiteOverrides(flag, [site.id], override);
         const effectiveValue =
             override === 'on' ? true : override === 'off' ? false : flag.defaultValue;
         await handleApplyFeatureCriteria(flag.name, nextCriteria, {
-            siteID: site.id,
+            siteIDs: [site.id],
             effectiveValue,
         });
     };
@@ -651,6 +687,7 @@ const AdminPage: React.FC = () => {
                                     rolloutEdits[flag.name] ?? getFlagRollout(flag);
                                 const siteInput = newSiteInputs[flag.name] ?? {
                                     siteID: '',
+                                    pendingSiteIDs: [],
                                     value: true,
                                 };
                                 const enabledSites = (flag.criteria || [])
@@ -679,7 +716,13 @@ const AdminPage: React.FC = () => {
                                         </div>
 
                                         <div className="admin-feature-controls">
-                                            <div className="admin-feature-rollout-row">
+                                            <form
+                                                className="admin-feature-rollout-row"
+                                                onSubmit={(e) => {
+                                                    e.preventDefault();
+                                                    handleSaveRollout(flag);
+                                                }}
+                                            >
                                                 <label className="admin-feature-label">
                                                     Rollout %
                                                     <input
@@ -727,14 +770,13 @@ const AdminPage: React.FC = () => {
                                                     </select>
                                                 </label>
                                                 <button
-                                                    type="button"
+                                                    type="submit"
                                                     className="btn admin-search-btn"
                                                     disabled={savingFlag === flag.name}
-                                                    onClick={() => handleSaveRollout(flag)}
                                                 >
                                                     Save Rollout
                                                 </button>
-                                            </div>
+                                            </form>
 
                                             <div className="admin-feature-sites-section">
                                                 <div className="admin-feature-chips-group">
@@ -803,22 +845,122 @@ const AdminPage: React.FC = () => {
                                                     )}
                                                 </div>
 
-                                                <div className="admin-feature-add-site-row">
-                                                    <input
-                                                        type="text"
-                                                        placeholder={`Add site ID to ${flag.name}...`}
-                                                        value={siteInput.siteID}
-                                                        onChange={(e) =>
-                                                            setNewSiteInputs((prev) => ({
-                                                                ...prev,
-                                                                [flag.name]: {
-                                                                    ...siteInput,
-                                                                    siteID: e.target.value,
-                                                                },
-                                                            }))
+                                                <form
+                                                    className="admin-feature-add-site-row"
+                                                    onSubmit={(e) => {
+                                                        e.preventDefault();
+                                                        handleAddSiteToFlag(flag);
+                                                    }}
+                                                >
+                                                    <Combobox.Root
+                                                        multiple
+                                                        open={false}
+                                                        value={siteInput.pendingSiteIDs}
+                                                        onValueChange={(nextPending) =>
+                                                            setNewSiteInputs((prev) => {
+                                                                const current = prev[flag.name] ?? {
+                                                                    siteID: '',
+                                                                    pendingSiteIDs: [],
+                                                                    value: true,
+                                                                };
+                                                                return {
+                                                                    ...prev,
+                                                                    [flag.name]: {
+                                                                        ...current,
+                                                                        pendingSiteIDs: nextPending,
+                                                                    },
+                                                                };
+                                                            })
                                                         }
-                                                        className="admin-alias-input"
-                                                    />
+                                                        inputValue={siteInput.siteID}
+                                                        onInputValueChange={(nextSiteID) =>
+                                                            setNewSiteInputs((prev) => {
+                                                                const current = prev[flag.name] ?? {
+                                                                    siteID: '',
+                                                                    pendingSiteIDs: [],
+                                                                    value: true,
+                                                                };
+                                                                return {
+                                                                    ...prev,
+                                                                    [flag.name]: {
+                                                                        ...current,
+                                                                        siteID: nextSiteID,
+                                                                    },
+                                                                };
+                                                            })
+                                                        }
+                                                    >
+                                                        <Combobox.Chips className="admin-pill-input-container">
+                                                            {siteInput.pendingSiteIDs.map(
+                                                                (pendingID) => (
+                                                                    <Combobox.Chip
+                                                                        key={pendingID}
+                                                                        className="admin-site-chip admin-site-chip-pending"
+                                                                    >
+                                                                        {pendingID}
+                                                                        <Combobox.ChipRemove
+                                                                            aria-label={`Remove pending ${pendingID}`}
+                                                                            className="admin-chip-remove-btn"
+                                                                        >
+                                                                            ×
+                                                                        </Combobox.ChipRemove>
+                                                                    </Combobox.Chip>
+                                                                )
+                                                            )}
+                                                            <Combobox.Input
+                                                                placeholder={
+                                                                    siteInput.pendingSiteIDs
+                                                                        .length === 0
+                                                                        ? `Add site ID to ${flag.name}...`
+                                                                        : 'Add another site ID...'
+                                                                }
+                                                                aria-label={`Add site ID to ${flag.name}`}
+                                                                onKeyDown={(e) => {
+                                                                    if (e.key === 'Tab') {
+                                                                        const trimmed =
+                                                                            siteInput.siteID.trim();
+                                                                        if (trimmed) {
+                                                                            e.preventDefault();
+                                                                            setNewSiteInputs(
+                                                                                (prev) => {
+                                                                                    const current =
+                                                                                        prev[
+                                                                                            flag
+                                                                                                .name
+                                                                                        ] ?? {
+                                                                                            siteID: '',
+                                                                                            pendingSiteIDs:
+                                                                                                [],
+                                                                                            value: true,
+                                                                                        };
+                                                                                    const nextPending =
+                                                                                        current.pendingSiteIDs.includes(
+                                                                                            trimmed
+                                                                                        )
+                                                                                            ? current.pendingSiteIDs
+                                                                                            : [
+                                                                                                  ...current.pendingSiteIDs,
+                                                                                                  trimmed,
+                                                                                              ];
+                                                                                    return {
+                                                                                        ...prev,
+                                                                                        [flag.name]:
+                                                                                            {
+                                                                                                ...current,
+                                                                                                siteID: '',
+                                                                                                pendingSiteIDs:
+                                                                                                    nextPending,
+                                                                                            },
+                                                                                    };
+                                                                                }
+                                                                            );
+                                                                        }
+                                                                    }
+                                                                }}
+                                                                className="admin-pill-inner-input"
+                                                            />
+                                                        </Combobox.Chips>
+                                                    </Combobox.Root>
                                                     <select
                                                         aria-label={`Site override value for ${flag.name}`}
                                                         value={siteInput.value ? 'true' : 'false'}
@@ -837,14 +979,13 @@ const AdminPage: React.FC = () => {
                                                         <option value="false">OFF</option>
                                                     </select>
                                                     <button
-                                                        type="button"
+                                                        type="submit"
                                                         className="btn admin-alias-save-btn"
                                                         disabled={savingFlag === flag.name}
-                                                        onClick={() => handleAddSiteToFlag(flag)}
                                                     >
                                                         Add Site
                                                     </button>
-                                                </div>
+                                                </form>
                                             </div>
                                         </div>
                                     </div>
