@@ -44,7 +44,7 @@
   - Flag names must be unique and formatted in headless camelCase. Calling `feats.Bool` with the same name and different default values panics at startup.
 - **Backend Evaluation**:
   - Check whether a flag is enabled using `ffSolarModelV2.Enabled(ctx)`.
-  - Request and background poll contexts are automatically populated with evaluated site flags by `Server.initFeats(ctx, siteID)` (cached per instance and synced to 5-minute boundaries against `features/{release}` in Firestore). If a flag is not overridden in `ctx`, `Enabled(ctx)` returns the flag's registered default value.
+  - Request and background poll contexts are automatically populated with evaluated site flags by `Server.initFeats(ctx, siteID)` (cached per instance and synced to 5-minute boundaries against `features/{release}` in Firestore, or `features/{features-environment}` when `-features-environment` is configured). If a flag is not overridden in `ctx`, `Enabled(ctx)` returns the flag's registered default value.
 - **Overriding in Go Tests**:
   - Override a flag in unit tests without needing storage or an `Evaluator` by wrapping the context with `With`:
     `ctx = ffSolarModelV2.With(ctx, true)`

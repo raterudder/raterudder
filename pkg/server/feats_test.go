@@ -214,4 +214,27 @@ func TestServerFeats(t *testing.T) {
 		}
 		mockS.AssertExpectations(t)
 	})
+
+	t.Run("FeaturesEnvironmentOverridesRelease", func(t *testing.T) {
+		mockS := &mockStorage{}
+		now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+		srv := &Server{
+			storage:             mockS,
+			release:             "staging",
+			featuresEnvironment: "production",
+			nowFunc:             func() time.Time { return now },
+		}
+
+		mockS.On("GetFeatureConfig", mock.Anything, "production").Return(feats.Config{
+			Features: map[string][]feats.Criteria{
+				"serverTestAlpha": {
+					{SiteIDs: []string{"site-1"}, Value: true},
+				},
+			},
+		}, now, nil).Once()
+
+		ctx := srv.initFeats(context.Background(), "site-1")
+		assert.True(t, ffServerTestAlpha.Enabled(ctx))
+		mockS.AssertExpectations(t)
+	})
 }

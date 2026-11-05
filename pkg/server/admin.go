@@ -176,10 +176,7 @@ func (s *Server) handleListFeatures(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	release := s.release
-	if release == "" {
-		release = "production"
-	}
+	release := s.featsRelease()
 
 	cfg, _, err := s.storage.GetFeatureConfig(ctx, release)
 	if err != nil {
@@ -236,10 +233,7 @@ func (s *Server) handleUpdateFeatures(w http.ResponseWriter, r *http.Request) {
 		normalizedUpdates[name] = normalized
 	}
 
-	release := s.release
-	if release == "" {
-		release = "production"
-	}
+	release := s.featsRelease()
 
 	cfg, updatedAt, err := s.storage.GetFeatureConfig(ctx, release)
 	if err != nil {

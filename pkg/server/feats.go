@@ -11,6 +11,16 @@ import (
 
 const featsCacheTTL = 5 * time.Minute
 
+func (s *Server) featsRelease() string {
+	if s.featuresEnvironment != "" {
+		return s.featuresEnvironment
+	}
+	if s.release != "" {
+		return s.release
+	}
+	return "production"
+}
+
 func (s *Server) getFeatsEvaluator(ctx context.Context) *feats.Evaluator {
 	now := s.now()
 	s.featsMu.RLock()
@@ -40,10 +50,7 @@ func (s *Server) getFeatsEvaluator(ctx context.Context) *feats.Evaluator {
 		return prevEval
 	}
 
-	release := s.release
-	if release == "" {
-		release = "production"
-	}
+	release := s.featsRelease()
 
 	cfg, updatedAt, err := s.storage.GetFeatureConfig(ctx, release)
 	if err != nil {

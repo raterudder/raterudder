@@ -78,6 +78,7 @@ type Server struct {
 	appsEncryptionKey     string
 	sessionDuration       time.Duration
 	release               string
+	featuresEnvironment   string
 	serverName            string
 	webCacheDuration      time.Duration
 	webImageCacheDuration time.Duration
@@ -140,6 +141,7 @@ func Configured(u *utility.Map, e *ess.Map, s storage.Database) *Server {
 	appsEncryptionKey := lflag.String("apps-encryption-key", "", "Key for encrypting connected app tokens and OAuth state (32 bytes)")
 	sessionDuration := lflag.Duration("session-duration", 7*24*time.Hour, "Session lifetime duration (default 7 days)")
 	release := lflag.String("release", "production", "Release environment (production or staging)")
+	featuresEnvironment := lflag.String("features-environment", "", "Optional environment override for feature flags (defaults to release)")
 	webCacheDuration := lflag.Duration("web-cache-duration", 0, "Duration to cache web files (e.g. 1h, 5m). 0 means no cache.")
 	webImageCacheDuration := lflag.Duration("web-image-cache-duration", 0, "Duration to cache web image assets (e.g. 30d, 720h). 0 means no cache.")
 	generalRateLimitPerMin := lflag.Int("general-rate-limit", 30, "General rate limit per minute per IP")
@@ -231,6 +233,7 @@ func Configured(u *utility.Map, e *ess.Map, s storage.Database) *Server {
 		srv.singleSite = *singleSite
 		srv.showHidden = *showHidden
 		srv.release = *release
+		srv.featuresEnvironment = *featuresEnvironment
 		srv.webCacheDuration = *webCacheDuration
 		srv.webImageCacheDuration = *webImageCacheDuration
 
