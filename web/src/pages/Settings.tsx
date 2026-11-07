@@ -1295,19 +1295,27 @@ const Settings = ({
     const [editESS, setEditESS] = useState(false);
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [highlightTOU, setHighlightTOU] = useState(false);
-    const touHandledRef = useRef(false);
+    const [highlightEV, setHighlightEV] = useState(false);
+    const deepLinkHandledRef = useRef(false);
 
     useEffect(() => {
-        if (loading || !settings || touHandledRef.current) return;
+        if (loading || !settings || deepLinkHandledRef.current) return;
         const searchParams = new URLSearchParams(window.location.search);
         const touParam = searchParams.get('tou');
         const hasTOU = (searchParams.has('tou') && touParam !== '0' && touParam !== 'false') || window.location.hash === '#tou';
-        if (hasTOU) {
-            touHandledRef.current = true;
+        const evParam = searchParams.get('ev');
+        const hasEV = (searchParams.has('ev') && evParam !== '0' && evParam !== 'false') || window.location.hash === '#ev';
+        if (hasTOU || hasEV) {
+            deepLinkHandledRef.current = true;
             setForceFullSettings(true);
             setIsInWizard(false);
-            setEditESS(true);
-            setHighlightTOU(true);
+            if (hasTOU) {
+                setEditESS(true);
+                setHighlightTOU(true);
+            }
+            if (hasEV) {
+                setHighlightEV(true);
+            }
         }
     }, [loading, settings]);
 
@@ -1318,6 +1326,14 @@ const Settings = ({
             target.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
     }, [highlightTOU, editESS, loading]);
+
+    useEffect(() => {
+        if (!highlightEV || highlightTOU || loading) return;
+        const target = document.querySelector('[data-testid="ev-charging-section"]');
+        if (target && typeof target.scrollIntoView === 'function') {
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    }, [highlightEV, highlightTOU, loading]);
 
     const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
     const [deleteAccountChecked, setDeleteAccountChecked] = useState(false);
@@ -2794,7 +2810,7 @@ const Settings = ({
                 />
                 </div>
 
-                <div className="settings-section" data-testid="ev-charging-section">
+                <div className={`settings-section${highlightEV ? ' highlighted-section' : ''}`} data-testid="ev-charging-section">
                     <div className="section-header">
                         <h3>EV Charging</h3>
                     </div>

@@ -2684,6 +2684,29 @@ describe('App & Settings', () => {
                 expect(evSwitch).not.toBeChecked();
             });
         });
+
+        it('highlights and scrolls to EV Charging section when visiting /settings?ev=1', async () => {
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                release: 'production',
+                evChargingStandby: false,
+            });
+            (fetchAuthStatus as any).mockResolvedValue({ ...defaultAuthStatus, loggedIn: true });
+
+            const scrollIntoViewMock = vi.fn();
+            window.HTMLElement.prototype.scrollIntoView = scrollIntoViewMock;
+
+            window.history.pushState(null, '', '/settings?ev=1');
+            render(<App />);
+
+            await screen.findByRole('heading', { name: /^Settings$/i });
+
+            await waitFor(() => {
+                const evSection = screen.getByTestId('ev-charging-section');
+                expect(evSection).toHaveClass('highlighted-section');
+                expect(scrollIntoViewMock).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+            });
+        });
     });
 
     describe('Direct Solar and Battery Export Management', () => {
