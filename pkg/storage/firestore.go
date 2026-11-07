@@ -28,6 +28,22 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+const (
+	defaultFirestoreTimeout = 15 * time.Second
+	defaultPingTimeout      = 5 * time.Second
+)
+
+// withDefaultTimeout ensures the context has a deadline so Firestore's GAPIC client
+// does not retry Unavailable errors indefinitely (especially on streaming RPCs like
+// RunQuery and BatchGetDocuments that have no default client timeout) when Firestore
+// or the local emulator is unreachable.
+func withDefaultTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, defaultFirestoreTimeout)
+}
+
 // FirestoreProvider implements the Provider interface using Google Cloud Firestore.
 // It persists settings, prices, and actions to Firestore collections.
 type FirestoreProvider struct {
@@ -67,6 +83,9 @@ func (f *FirestoreProvider) Validate() error {
 // Init initializes the Firestore client.
 // This must be called before using the provider methods.
 func (f *FirestoreProvider) Init(ctx context.Context) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	projectID := f.projectID
 	if projectID == "" {
 		projectID = firestore.DetectProjectID
@@ -98,6 +117,11 @@ func (f *FirestoreProvider) FirestoreClient() *firestore.Client {
 func (f *FirestoreProvider) Ping(ctx context.Context) error {
 	if f.client == nil {
 		return fmt.Errorf("firestore client not initialized")
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultPingTimeout)
+		defer cancel()
 	}
 	// Use a simple operation to check connectivity
 	_, err := f.client.Doc("health_check/non_existent").Get(ctx)
@@ -144,6 +168,9 @@ func isOptimisticRetryableErr(err error) bool {
 // getDocWithRetry retrieves a document snapshot from docRef, retrying on transient errors
 // such as codes.Unavailable caused by idle TCP connection resets.
 func (f *FirestoreProvider) getDocWithRetry(ctx context.Context, docRef *firestore.DocumentRef) (*firestore.DocumentSnapshot, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	const maxAttempts = 3
 	backoff := 50 * time.Millisecond
 
@@ -191,6 +218,9 @@ func (f *FirestoreProvider) readModifyWriteDoc(
 	docRef *firestore.DocumentRef,
 	mutate func(doc *firestore.DocumentSnapshot) (map[string]any, error),
 ) (*firestore.WriteResult, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	const maxRetries = 5
 	backoff := 200 * time.Millisecond
 
@@ -245,6 +275,9 @@ func (f *FirestoreProvider) readModifyWriteDoc(
 
 // GetSettings retrieves the dynamic configuration from the "config/settings" document.
 func (f *FirestoreProvider) GetSettings(ctx context.Context, siteID string) (types.Settings, int, time.Time, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	coll, err := f.getCollection(siteID, "config")
 	if err != nil {
 		return types.Settings{}, 0, time.Time{}, err
@@ -290,6 +323,9 @@ func (f *FirestoreProvider) GetSettings(ctx context.Context, siteID string) (typ
 // It stores the settings as a JSON string for portability.
 // If updatedTime is non-zero, it ensures doc.UpdateTime matches updatedTime before writing.
 func (f *FirestoreProvider) SetSettings(ctx context.Context, siteID string, settings types.Settings, version int, updatedTime time.Time) (time.Time, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	jsonBytes, err := json.Marshal(settings)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("failed to marshal settings: %w", err)
@@ -338,6 +374,9 @@ func actionBucket(t time.Time) (string, time.Time) {
 }
 
 func (f *FirestoreProvider) upsertActions(ctx context.Context, siteID string, actions []types.Action, version int) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if siteID == "" {
 		return fmt.Errorf("siteID cannot be empty")
 	}
@@ -444,6 +483,9 @@ func (f *FirestoreProvider) InsertAction(ctx context.Context, siteID string, act
 
 // GetActionHistory retrieves action records within the specified time range from 12-hour rollup buckets.
 func (f *FirestoreProvider) GetActionHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Action, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if !start.Before(end) {
 		return nil, nil
 	}
@@ -500,6 +542,9 @@ func (f *FirestoreProvider) GetActionHistory(ctx context.Context, siteID string,
 
 // GetLatestAction retrieves the most recent action record. Will return nil if no actions found.
 func (f *FirestoreProvider) GetLatestAction(ctx context.Context, siteID string) (*types.Action, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	coll, err := f.getCollection(siteID, "daily_actions")
 	if err != nil {
 		return nil, err
@@ -544,6 +589,9 @@ func (f *FirestoreProvider) GetLatestAction(ctx context.Context, siteID string) 
 
 // UpsertEnergyHistories adds or updates multiple energy history records in the "energy_history" collection.
 func (f *FirestoreProvider) UpsertEnergyHistories(ctx context.Context, siteID string, stats []types.DailyEnergyStats, version int) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if len(stats) == 0 {
 		return nil
 	}
@@ -667,6 +715,9 @@ func (f *FirestoreProvider) UpsertEnergyHistories(ctx context.Context, siteID st
 
 // UpsertWeather adds or updates multiple weather records.
 func (f *FirestoreProvider) UpsertWeather(ctx context.Context, siteID string, weather []types.Weather, version int) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if len(weather) == 0 {
 		return nil
 	}
@@ -741,6 +792,9 @@ func (f *FirestoreProvider) UpsertWeather(ctx context.Context, siteID string, we
 
 // GetWeather retrieves weather records within the specified time range.
 func (f *FirestoreProvider) GetWeather(ctx context.Context, siteID string, start, end time.Time) ([]types.Weather, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if !start.Before(end) {
 		return nil, nil
 	}
@@ -815,6 +869,9 @@ func (f *FirestoreProvider) GetWeather(ctx context.Context, siteID string, start
 
 // GetEnergyHistory retrieves energy history records within the specified time range.
 func (f *FirestoreProvider) GetEnergyHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.DailyEnergyStats, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if !start.Before(end) {
 		return nil, nil
 	}
@@ -892,6 +949,9 @@ func (f *FirestoreProvider) GetEnergyHistory(ctx context.Context, siteID string,
 // GetLatestEnergyHistoryTime retrieves the timestamp of the last stored energy
 // history record.
 func (f *FirestoreProvider) GetLatestEnergyHistoryTime(ctx context.Context, siteID string) (time.Time, int, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	coll, err := f.getCollection(siteID, "energy_history")
 	if err != nil {
 		return time.Time{}, 0, err
@@ -961,6 +1021,9 @@ func (f *FirestoreProvider) GetLatestEnergyHistoryTime(ctx context.Context, site
 
 // GetSite retrieves a site from the "sites" collection.
 func (f *FirestoreProvider) GetSite(ctx context.Context, siteID string) (types.Site, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if siteID == "" {
 		return types.Site{}, errors.New("siteID cannot be empty")
 	}
@@ -993,6 +1056,9 @@ func (f *FirestoreProvider) GetSite(ctx context.Context, siteID string) (types.S
 
 // ListSites retrieves all sites from the "sites" collection.
 func (f *FirestoreProvider) ListSites(ctx context.Context) ([]types.Site, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	iter := f.client.Collection("sites").Documents(ctx)
 	defer iter.Stop()
 
@@ -1032,6 +1098,9 @@ func (f *FirestoreProvider) ListSites(ctx context.Context) ([]types.Site, error)
 // ListSitesSettings retrieves settings for sites, optionally filtered by updateGroup
 // and release. Release is required if updateGroup is provided.
 func (f *FirestoreProvider) ListSitesSettings(ctx context.Context, release string, updateGroup []int) (map[string]types.Settings, map[string]int, map[string]time.Time, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	q := f.client.CollectionGroup("config").Query
 	if release != "" {
 		q = q.Where("release", "==", release)
@@ -1113,6 +1182,9 @@ func (f *FirestoreProvider) ListSitesSettings(ctx context.Context, release strin
 
 // GetUser retrieves a user from the "users" collection.
 func (f *FirestoreProvider) GetUser(ctx context.Context, userID string) (types.User, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if userID == "" {
 		return types.User{}, errors.New("userID cannot be empty")
 	}
@@ -1145,6 +1217,9 @@ func (f *FirestoreProvider) GetUser(ctx context.Context, userID string) (types.U
 // UpsertPrices adds or updates multiple price records in the "monthly_prices" sub-collection of the site.
 // Prices are grouped by month (YYYY-MM) and merged into monthly documents.
 func (f *FirestoreProvider) UpsertPrices(ctx context.Context, siteID string, prices []types.Price, version int) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if siteID == "" {
 		return fmt.Errorf("siteID cannot be empty")
 	}
@@ -1248,6 +1323,9 @@ func (f *FirestoreProvider) UpsertPrices(ctx context.Context, siteID string, pri
 
 // GetPriceHistory retrieves price records within the specified time range for a site from monthly buckets.
 func (f *FirestoreProvider) GetPriceHistory(ctx context.Context, siteID string, start, end time.Time) ([]types.Price, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if !start.Before(end) {
 		return nil, nil
 	}
@@ -1307,6 +1385,9 @@ func (f *FirestoreProvider) GetPriceHistory(ctx context.Context, siteID string, 
 
 // GetLatestPriceHistoryTime retrieves the timestamp of the last stored price record for a site from monthly buckets.
 func (f *FirestoreProvider) GetLatestPriceHistoryTime(ctx context.Context, siteID string) (time.Time, int, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	coll, err := f.getCollection(siteID, "monthly_prices")
 	if err != nil {
 		return time.Time{}, 0, err
@@ -1357,6 +1438,9 @@ func (f *FirestoreProvider) GetLatestPriceHistoryTime(ctx context.Context, siteI
 
 // GetLatestWeatherTime retrieves the timestamp of the last stored weather record for a site, along with its update time.
 func (f *FirestoreProvider) GetLatestWeatherTime(ctx context.Context, siteID string) (time.Time, time.Time, int, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	coll, err := f.getCollection(siteID, "weather")
 	if err != nil {
 		return time.Time{}, time.Time{}, 0, err
@@ -1416,6 +1500,9 @@ func (f *FirestoreProvider) GetLatestWeatherTime(ctx context.Context, siteID str
 // It fails atomically if a document with the same siteID already exists,
 // preventing race conditions.
 func (f *FirestoreProvider) CreateSite(ctx context.Context, siteID string, site types.Site) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if siteID == "" {
 		return errors.New("siteID cannot be empty")
 	}
@@ -1434,6 +1521,9 @@ func (f *FirestoreProvider) CreateSite(ctx context.Context, siteID string, site 
 
 // UpdateSite updates a site document in the "sites" collection.
 func (f *FirestoreProvider) UpdateSite(ctx context.Context, siteID string, site types.Site) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if siteID == "" {
 		return errors.New("siteID cannot be empty")
 	}
@@ -1452,6 +1542,9 @@ func (f *FirestoreProvider) UpdateSite(ctx context.Context, siteID string, site 
 
 // CreateUser creates a new user document in the "users" collection.
 func (f *FirestoreProvider) CreateUser(ctx context.Context, user types.User) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if user.ID == "" {
 		return errors.New("userID cannot be empty")
 	}
@@ -1470,6 +1563,9 @@ func (f *FirestoreProvider) CreateUser(ctx context.Context, user types.User) err
 
 // UpdateUser updates an existing user document in the "users" collection.
 func (f *FirestoreProvider) UpdateUser(ctx context.Context, user types.User) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if user.ID == "" {
 		return errors.New("userID cannot be empty")
 	}
@@ -1499,6 +1595,9 @@ func (f *FirestoreProvider) UpdateUser(ctx context.Context, user types.User) err
 
 // ListUsers retrieves all users from the "users" collection.
 func (f *FirestoreProvider) ListUsers(ctx context.Context) ([]types.User, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	iter := f.client.Collection("users").Documents(ctx)
 	defer iter.Stop()
 
@@ -1535,6 +1634,9 @@ func (f *FirestoreProvider) ListUsers(ctx context.Context) ([]types.User, error)
 
 // GetAdminSettings retrieves global system configuration for admin functions.
 func (f *FirestoreProvider) GetAdminSettings(ctx context.Context) (types.AdminSettings, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	doc, err := f.getDocWithRetry(ctx, f.client.Collection("admin").Doc("settings"))
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
@@ -1562,6 +1664,9 @@ func (f *FirestoreProvider) GetAdminSettings(ctx context.Context) (types.AdminSe
 
 // UpdateAdminSettings saves global system configuration for admin functions.
 func (f *FirestoreProvider) UpdateAdminSettings(ctx context.Context, settings types.AdminSettings) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if settings.Aliases == nil {
 		settings.Aliases = make(map[string]string)
 	}
@@ -1582,6 +1687,9 @@ func (f *FirestoreProvider) UpdateAdminSettings(ctx context.Context, settings ty
 
 // GetFeatureConfig retrieves the per-environment feature flag configuration from the "features/{release}" document.
 func (f *FirestoreProvider) GetFeatureConfig(ctx context.Context, release string) (feats.Config, time.Time, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if release == "" {
 		return feats.Config{}, time.Time{}, errors.New("release cannot be empty")
 	}
@@ -1614,6 +1722,9 @@ func (f *FirestoreProvider) GetFeatureConfig(ctx context.Context, release string
 // SetFeatureConfig saves the per-environment feature flag configuration to the "features/{release}" document.
 // If updatedTime is non-zero, it ensures doc.UpdateTime matches updatedTime before writing.
 func (f *FirestoreProvider) SetFeatureConfig(ctx context.Context, release string, config feats.Config, updatedTime time.Time) (time.Time, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if release == "" {
 		return time.Time{}, errors.New("release cannot be empty")
 	}
@@ -1650,6 +1761,9 @@ func (f *FirestoreProvider) SetFeatureConfig(ctx context.Context, release string
 // UpdateESSMockState saves the internal state of a mock ESS provider.
 
 func (f *FirestoreProvider) UpdateESSMockState(ctx context.Context, siteID string, state types.ESSMockState) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	stateJSON, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("failed to marshal mock state %s: %w", siteID, err)
@@ -1670,6 +1784,9 @@ func (f *FirestoreProvider) UpdateESSMockState(ctx context.Context, siteID strin
 
 // GetESSMockState retrieves the internal state of a mock ESS provider.
 func (f *FirestoreProvider) GetESSMockState(ctx context.Context, siteID string) (types.ESSMockState, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	coll, err := f.getCollection(siteID, "mocks")
 	if err != nil {
 		return types.ESSMockState{}, err
@@ -1701,6 +1818,9 @@ func (f *FirestoreProvider) GetESSMockState(ctx context.Context, siteID string) 
 
 // InsertFeedback adds a new feedback record to the "feedback" collection.
 func (f *FirestoreProvider) InsertFeedback(ctx context.Context, feedback types.Feedback) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if feedback.ID == "" {
 		return errors.New("feedback ID cannot be empty")
 	}
@@ -1722,6 +1842,9 @@ func (f *FirestoreProvider) InsertFeedback(ctx context.Context, feedback types.F
 
 // ListFeedback retrieves feedback records, sorted by ID descending.
 func (f *FirestoreProvider) ListFeedback(ctx context.Context, limit int, lastFeedbackID string) ([]types.Feedback, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if limit <= 0 {
 		return nil, errors.New("limit must be greater than 0")
 	}
@@ -1771,6 +1894,9 @@ func (f *FirestoreProvider) ListFeedback(ctx context.Context, limit int, lastFee
 // UpsertUtilityPrices adds or updates multiple price records for a utility in the "monthly_prices" sub-collection.
 // Prices are grouped by month (YYYY-MM) and merged into monthly documents.
 func (f *FirestoreProvider) UpsertUtilityPrices(ctx context.Context, utilityID string, prices []types.PriceState, version int) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if utilityID == "" {
 		return errors.New("utilityID cannot be empty")
 	}
@@ -1871,6 +1997,9 @@ func (f *FirestoreProvider) UpsertUtilityPrices(ctx context.Context, utilityID s
 
 // GetUtilityPrices retrieves price records within the specified time range for a utility from monthly buckets.
 func (f *FirestoreProvider) GetUtilityPrices(ctx context.Context, utilityID string, start, end time.Time) ([]types.PriceState, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if utilityID == "" {
 		return nil, errors.New("utilityID cannot be empty")
 	}
@@ -1928,6 +2057,9 @@ func (f *FirestoreProvider) GetUtilityPrices(ctx context.Context, utilityID stri
 // UpsertInterest adds or updates an interest submission record in the "interest" collection.
 // It uses the email as the document ID to ensure one record per email.
 func (f *FirestoreProvider) UpsertInterest(ctx context.Context, submission types.InterestSubmission) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if submission.Email == "" {
 		return fmt.Errorf("email cannot be empty for interest submission")
 	}
@@ -1950,6 +2082,9 @@ func (f *FirestoreProvider) UpsertInterest(ctx context.Context, submission types
 
 // ListInterest retrieves interest submissions, sorted by timestamp descending.
 func (f *FirestoreProvider) ListInterest(ctx context.Context, limit int) ([]types.InterestSubmission, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if limit <= 0 {
 		return nil, errors.New("limit must be greater than 0")
 	}
@@ -1993,6 +2128,9 @@ func (f *FirestoreProvider) ListInterest(ctx context.Context, limit int) ([]type
 
 // DeleteInterest removes an interest submission record from the "interest" collection.
 func (f *FirestoreProvider) DeleteInterest(ctx context.Context, email string) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if email == "" {
 		return fmt.Errorf("email cannot be empty for interest deletion")
 	}
@@ -2009,6 +2147,9 @@ func (f *FirestoreProvider) DeleteInterest(ctx context.Context, email string) er
 // We do not discard any dates from the history summaries, even if they fall outside
 // of [start, end)
 func (f *FirestoreProvider) GetHistorySummaries(ctx context.Context, siteID string, start, end time.Time) ([]types.HistorySummary, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if !start.Before(end) {
 		return nil, nil
 	}
@@ -2075,6 +2216,9 @@ func (f *FirestoreProvider) GetHistorySummaries(ctx context.Context, siteID stri
 
 // UpdateHistorySummary reads the existing summary, merges it with newSummary (overwriting matching days), and saves it.
 func (f *FirestoreProvider) UpdateHistorySummary(ctx context.Context, siteID string, month string, newSummary types.HistorySummary) (types.HistorySummary, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	coll, err := f.getCollection(siteID, "history_summary")
 	if err != nil {
 		return types.HistorySummary{}, err
@@ -2182,6 +2326,9 @@ func (f *FirestoreProvider) UpdateHistorySummary(ctx context.Context, siteID str
 
 // DeleteSite deletes a site document and recursively deletes all its associated subcollections using BulkWriter, with config deleted last.
 func (f *FirestoreProvider) DeleteSite(ctx context.Context, siteID string) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if siteID == "" {
 		return fmt.Errorf("siteID cannot be empty for site deletion")
 	}
@@ -2234,6 +2381,9 @@ func (f *FirestoreProvider) DeleteSite(ctx context.Context, siteID string) error
 
 // DeleteUser deletes the user document.
 func (f *FirestoreProvider) DeleteUser(ctx context.Context, userID string) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if userID == "" {
 		return fmt.Errorf("userID cannot be empty for user deletion")
 	}
@@ -2246,6 +2396,9 @@ func (f *FirestoreProvider) DeleteUser(ctx context.Context, userID string) error
 
 // deleteCollection deletes all documents in a collection using BulkWriter.
 func (f *FirestoreProvider) deleteCollection(ctx context.Context, coll *firestore.CollectionRef) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	iter := coll.DocumentRefs(ctx)
 	bw := f.client.BulkWriter(ctx)
 	var endOnce sync.Once
@@ -2278,6 +2431,9 @@ func (f *FirestoreProvider) deleteCollection(ctx context.Context, coll *firestor
 
 // AddUserPushSubscription adds or updates a push subscription on a user with optimistic concurrency.
 func (f *FirestoreProvider) AddUserPushSubscription(ctx context.Context, userID string, sub types.PushSubscription) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if userID == "" {
 		return fmt.Errorf("userID cannot be empty")
 	}
@@ -2351,6 +2507,9 @@ func (f *FirestoreProvider) AddUserPushSubscription(ctx context.Context, userID 
 // If the user has no remaining push subscriptions after removal, their userID is also cleaned up from
 // site.Notifications across all sites they belong to.
 func (f *FirestoreProvider) RemoveUserPushSubscription(ctx context.Context, userID string, endpoint string) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if userID == "" {
 		return fmt.Errorf("userID cannot be empty")
 	}
@@ -2444,6 +2603,9 @@ func (f *FirestoreProvider) ReplaceUserPushSubscription(
 	prevAuth string,
 	newSub *types.PushSubscription,
 ) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if prevEndpoint == "" || prevAuth == "" {
 		return fmt.Errorf("prevEndpoint and prevAuth are required")
 	}
@@ -2540,6 +2702,9 @@ func (f *FirestoreProvider) ReplaceUserPushSubscription(
 
 // AddUserApp adds or updates a UserApp on a user with optimistic concurrency.
 func (f *FirestoreProvider) AddUserApp(ctx context.Context, userID string, app types.UserApp) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if userID == "" {
 		return errors.New("userID cannot be empty")
 	}
@@ -2596,6 +2761,9 @@ func (f *FirestoreProvider) AddUserApp(ctx context.Context, userID string, app t
 
 // RemoveUserApp removes a UserApp by ID and siteID from a user with optimistic concurrency.
 func (f *FirestoreProvider) RemoveUserApp(ctx context.Context, userID string, siteID string, appID string) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if userID == "" {
 		return errors.New("userID cannot be empty")
 	}
@@ -2649,6 +2817,9 @@ func (f *FirestoreProvider) RemoveUserApp(ctx context.Context, userID string, si
 // ReplaceUserApp replaces an existing UserApp on a user with optimistic concurrency after verifying
 // any preconditions configured in opts.
 func (f *FirestoreProvider) ReplaceUserApp(ctx context.Context, userID string, newApp types.UserApp, opts ReplaceUserAppOptions) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if userID == "" {
 		return errors.New("userID cannot be empty")
 	}
@@ -2716,6 +2887,9 @@ const maxRevokedSessions = 50
 
 // RevokeUserSession adds a revoked session nonce to a user's record and prunes expired entries.
 func (f *FirestoreProvider) RevokeUserSession(ctx context.Context, userID string, revoked types.RevokedSession) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if userID == "" {
 		return errors.New("userID cannot be empty")
 	}
@@ -2781,6 +2955,9 @@ func (f *FirestoreProvider) RevokeUserSession(ctx context.Context, userID string
 // UpdateSiteNotificationSettings updates notification preferences for a specific user on a site's settings with optimistic concurrency.
 // If settings is an empty struct (types.UserNotificationSettings{}), the user's notification entry is deleted.
 func (f *FirestoreProvider) UpdateSiteNotificationSettings(ctx context.Context, siteID string, userID string, settings types.UserNotificationSettings) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if siteID == "" {
 		return fmt.Errorf("siteID cannot be empty")
 	}
@@ -2848,6 +3025,9 @@ func (f *FirestoreProvider) UpdateSiteNotificationSettings(ctx context.Context, 
 
 // GetNotificationLogs retrieves notification logs for a site within the [start, end) time range.
 func (f *FirestoreProvider) GetNotificationLogs(ctx context.Context, siteID string, start, end time.Time) ([]types.NotificationLog, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if siteID == "" {
 		return nil, fmt.Errorf("siteID cannot be empty")
 	}
@@ -2913,6 +3093,9 @@ func (f *FirestoreProvider) GetNotificationLogs(ctx context.Context, siteID stri
 
 // AppendNotificationLog appends a notification log entry to the monthly log document with optimistic concurrency.
 func (f *FirestoreProvider) AppendNotificationLog(ctx context.Context, siteID string, logEntry types.NotificationLog) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if siteID == "" {
 		return fmt.Errorf("siteID cannot be empty")
 	}
@@ -3008,6 +3191,9 @@ func (f *FirestoreProvider) RecordNotificationClick(
 	logID string,
 	clickedAt time.Time,
 ) error {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	if siteID == "" {
 		return fmt.Errorf("siteID cannot be empty")
 	}
@@ -3075,6 +3261,9 @@ func (f *FirestoreProvider) RecordNotificationClick(
 // MigrateLegacyPricing migrates legacy hourly price documents (from utilities/{utilityID}/hourly_prices and
 // sites/{siteID}/price_history) into monthly bucket documents (monthly_prices/{YYYY-MM}).
 func (f *FirestoreProvider) MigrateLegacyPricing(ctx context.Context, opts PricingMigrationOptions) (*PricingMigrationStats, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	stats := &PricingMigrationStats{}
 
 	// 1. Migrate Utilities
@@ -3330,6 +3519,9 @@ type ActionMigrationStats struct {
 // When opts.PurgeLegacy is true, it ONLY deletes the legacy action_history collection without reading
 // or inserting into daily_actions.
 func (f *FirestoreProvider) MigrateLegacyActions(ctx context.Context, opts ActionMigrationOptions) (*ActionMigrationStats, error) {
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+
 	stats := &ActionMigrationStats{}
 
 	var siteIDs []string

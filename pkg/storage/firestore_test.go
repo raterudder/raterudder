@@ -36,6 +36,7 @@ func TestFirestoreProvider(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, f.Init(ctx))
 	defer f.Close()
+	require.NoError(t, f.Ping(ctx))
 
 	t.Run("Validate", func(t *testing.T) {
 		require.NoError(t, f.Validate())
@@ -2298,5 +2299,45 @@ func TestParseLegacyActionJSON(t *testing.T) {
 	t.Run("InvalidJSON", func(t *testing.T) {
 		_, err := parseLegacyActionJSON([]byte(`{not valid json`))
 		assert.ErrorContains(t, err, "failed to unmarshal action json")
+	})
+}
+
+func TestWithDefaultTimeout(t *testing.T) {
+	t.Run("AppliesDefaultWhenNoDeadline", func(t *testing.T) {
+		before := time.Now()
+		ctx, cancel := withDefaultTimeout(context.Background())
+		defer cancel()
+
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		remaining := deadline.Sub(before)
+		assert.GreaterOrEqual(t, remaining, defaultFirestoreTimeout)
+		assert.Less(t, remaining, defaultFirestoreTimeout+5*time.Second)
+	})
+
+	t.Run("PreservesExistingShorterDeadline", func(t *testing.T) {
+		expected := time.Now().Add(2 * time.Second)
+		parentCtx, parentCancel := context.WithDeadline(context.Background(), expected)
+		defer parentCancel()
+
+		ctx, cancel := withDefaultTimeout(parentCtx)
+		defer cancel()
+
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		assert.True(t, deadline.Equal(expected))
+	})
+
+	t.Run("PreservesExistingLongerDeadline", func(t *testing.T) {
+		expected := time.Now().Add(60 * time.Second)
+		parentCtx, parentCancel := context.WithDeadline(context.Background(), expected)
+		defer parentCancel()
+
+		ctx, cancel := withDefaultTimeout(parentCtx)
+		defer cancel()
+
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		assert.True(t, deadline.Equal(expected))
 	})
 }

@@ -52,6 +52,11 @@ func main() {
 		_ = db.Close()
 	}()
 
+	if err := db.Ping(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to ping database: %v\n", err)
+		os.Exit(1)
+	}
+
 	settings, version, updatedTime, err := db.GetSettings(ctx, siteID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to fetch settings for site %q: %v\n", siteID, err)
