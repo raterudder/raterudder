@@ -166,6 +166,11 @@ textarea:focus-visible,
   padding-bottom: var(--spacing-xl);
 }
 
+.main-content:has(.auth-page) {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
 /* ============================================
    Shared Card Surface & Border Foundation
    ============================================ */
