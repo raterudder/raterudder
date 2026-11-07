@@ -345,7 +345,7 @@ func (s *Server) performSiteUpdate(
 
 	// get History for Controller (Last 35 days from monthly summaries + today's/tomorrow's unsummarized data)
 	now := s.now().In(status.Timestamp.Location())
-	historyStart := now.AddDate(0, 0, -forecastHistoryDays).Truncate(time.Hour)
+	historyStart := truncateDay(now).AddDate(0, 0, -forecastHistoryDays)
 
 	// Fetch existing summaries in-memory first to determine if backfill/update is needed
 	existingSummaries, err := s.storage.GetHistorySummaries(ctx, siteID, historyStart, now)

@@ -410,7 +410,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	if s.nowFunc == nil && !status.Timestamp.IsZero() && (status.Timestamp.Before(now.Add(-2*time.Hour)) || status.Timestamp.After(now.Add(2*time.Hour))) {
 		now = status.Timestamp
 	}
-	historyStart := now.AddDate(0, 0, -forecastHistoryDays).Truncate(time.Hour)
+	historyStart := truncateDay(now).AddDate(0, 0, -forecastHistoryDays)
 	energyHistory, weatherHistory, err := s.getCombinedHistory(ctx, siteID, settings, historyStart, now, nil)
 	if err != nil {
 		log.Ctx(ctx).ErrorContext(ctx, "failed to get combined history for forecast", slog.Any("error", err))

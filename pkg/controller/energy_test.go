@@ -1931,6 +1931,59 @@ func TestBuildHourlyEnergyModel(t *testing.T) {
 			assert.InDelta(t, 3.5, model[15].AvgHomeLoadKWH, 0.35, "afternoon forecast should match 3.5 kWh hot-day load without Option G double-counting")
 		}
 	})
+
+	t.Run("FloatingWeekdayBlockLoadProportionallyScalesWashedOutHours", func(t *testing.T) {
+		// Verify that when a recurring weekday multi-hour load (e.g. Friday electric dryer/laundry)
+		// floats across a 5-hour daytime block (09:00-13:00) from week to week so that individual
+		// 1-hour P55 predictions wash out to baseline (~1.0 kWh), overlapping 5-hour block scaling
+		// detects the Friday block outlier and proportionally scales up the washed-out hours in the block.
+		now := time.Date(2025, 7, 4, 4, 0, 0, 0, time.UTC) // Friday 04:00 AM
+		var history []types.EnergyStats
+
+		startDate := time.Date(2025, 5, 30, 0, 0, 0, 0, time.UTC) // 5 historical Fridays before 2025-07-04
+		fridayIndex := 0
+		for d := 0; d <= 35; d++ {
+			dayTime := startDate.AddDate(0, 0, d)
+			isToday := d == 35
+			isFri := dayTime.Weekday() == time.Friday && !isToday
+			surgeStartHr := -1
+			if isFri {
+				// Each historical Friday has a 2-hour laundry surge that shifts across 09:00-13:00
+				// (09-10, 11-12, 10-11, 12-13, 09-10) so no single hour has a majority of Fridays elevated.
+				offsets := []int{9, 11, 10, 12, 9}
+				surgeStartHr = offsets[fridayIndex%len(offsets)]
+				fridayIndex++
+			}
+			for h := 0; h < 24; h++ {
+				if isToday && h >= 4 {
+					continue
+				}
+				load := 0.35
+				if h >= 6 && h <= 21 {
+					load = 0.75 + 0.12*float64(d%5) // Natural daily variation (0.75..1.23 kWh, mean ~0.99)
+					if isFri && (h == surgeStartHr || h == surgeStartHr+1) {
+						load = 2.8 // 2-hour electric dryer load floating inside 09:00-13:00
+					}
+				}
+				history = append(history, types.EnergyStats{
+					TSHourStart: time.Date(dayTime.Year(), dayTime.Month(), dayTime.Day(), h, 0, 0, 0, time.UTC),
+					HomeKWH:     load,
+				})
+			}
+		}
+
+		model, _ := c.BuildHourlyEnergyModel(ctx, now, history, nil, types.Settings{})
+		if assert.Len(t, model, 24) {
+			var blockSum float64
+			for h := 9; h <= 13; h++ {
+				blockSum += model[h].AvgHomeLoadKWH
+			}
+			blockAvg := blockSum / 5.0
+			assert.Greater(t, blockAvg, 1.20, "Friday 09:00-13:00 block average should be scaled above the ~0.98 kWh baseline")
+			// Evening hours outside the floating laundry block should remain at normal baseline (~0.98 kWh)
+			assert.InDelta(t, 0.98, model[19].AvgHomeLoadKWH, 0.20, "non-laundry evening hour 19 should remain near baseline")
+		}
+	})
 }
 
 func TestDetectLoadShift(t *testing.T) {
@@ -3703,5 +3756,460 @@ func TestDetectDayOfWeekOutliers(t *testing.T) {
 		// A lower than B -> negative t
 		tLow := calculateWelchT([]float64{1.0, 1.1, 0.9}, []float64{5.0, 5.1, 4.9})
 		assert.Less(t, tLow, -10.0)
+	})
+}
+
+func TestComputeDayBlockAvg(t *testing.T) {
+	t.Run("NilDayAndInsufficientHours", func(t *testing.T) {
+		avg, ok := computeDayBlockAvg(nil, 10, 14, nil)
+		assert.False(t, ok)
+		assert.Equal(t, 0.0, avg)
+
+		// 5-hour block [10..14] requires minHours = max(2, 5/2+1) = 3 hours.
+		// Provide only 2 valid hours (10 and 11) plus a zero-load hour (12).
+		dayTime := time.Date(2025, 6, 6, 0, 0, 0, 0, time.UTC)
+		dp := &dayPoints{
+			date:    "2025-06-06",
+			dayTime: dayTime,
+			weekday: time.Friday,
+			points: []types.EnergyStats{
+				{TSHourStart: dayTime.Add(10 * time.Hour), HomeKWH: 1.5},
+				{TSHourStart: dayTime.Add(11 * time.Hour), HomeKWH: 2.5},
+				{TSHourStart: dayTime.Add(12 * time.Hour), HomeKWH: 0.0},
+				{TSHourStart: dayTime.Add(16 * time.Hour), HomeKWH: 3.0}, // outside [10..14]
+			},
+		}
+		avg, ok = computeDayBlockAvg(dp, 10, 14, nil)
+		assert.False(t, ok, "fewer than 3 valid hours in a 5-hour block should return false")
+		assert.Equal(t, 0.0, avg)
+	})
+
+	t.Run("ValidFiveHourBlockExcludesIgnoredOutlierHours", func(t *testing.T) {
+		dayTime := time.Date(2025, 6, 6, 0, 0, 0, 0, time.UTC)
+		dp := &dayPoints{
+			date:    "2025-06-06",
+			dayTime: dayTime,
+			weekday: time.Friday,
+			points: []types.EnergyStats{
+				{TSHourStart: dayTime.Add(10 * time.Hour), HomeKWH: 1.0},
+				{TSHourStart: dayTime.Add(11 * time.Hour), HomeKWH: 2.0},
+				{TSHourStart: dayTime.Add(12 * time.Hour), HomeKWH: 3.0},
+				{TSHourStart: dayTime.Add(13 * time.Hour), HomeKWH: 9.5}, // EV spike to ignore
+				{TSHourStart: dayTime.Add(14 * time.Hour), HomeKWH: 2.0},
+			},
+		}
+		ignored := map[dayHourKey]bool{
+			{date: "2025-06-06", hour: 13}: true,
+		}
+		avg, ok := computeDayBlockAvg(dp, 10, 14, ignored)
+		assert.True(t, ok)
+		assert.InDelta(t, 2.0, avg, 1e-6, "average of remaining 4 hours (1.0, 2.0, 3.0, 2.0) should be 2.0 kWh")
+	})
+}
+
+func TestIsWeekdayBlockOutlier(t *testing.T) {
+	makeBlockDay := func(dateStr string, blockLoad, otherLoad float64, bStart, bEnd int) *dayPoints {
+		dt, err := time.ParseInLocation("2006-01-02", dateStr, time.UTC)
+		require.NoError(t, err)
+		var pts []types.EnergyStats
+		var loads []float64
+		for h := 0; h < 24; h++ {
+			val := otherLoad
+			if h >= bStart && h <= bEnd {
+				val = blockLoad
+			}
+			pts = append(pts, types.EnergyStats{
+				TSHourStart: dt.Add(time.Duration(h) * time.Hour),
+				HomeKWH:     val,
+			})
+			loads = append(loads, val)
+		}
+		return &dayPoints{
+			date:    dateStr,
+			dayTime: dt,
+			weekday: dt.Weekday(),
+			points:  pts,
+			loads:   loads,
+		}
+	}
+
+	t.Run("ConfirmsConsistentFridayAfternoonBlockOutlier", func(t *testing.T) {
+		dayMap := make(map[string]*dayPoints)
+		validDays := make(map[string]bool)
+
+		fridays := []string{"2025-06-06", "2025-06-13", "2025-06-20", "2025-06-27"}
+		for i, d := range fridays {
+			dayMap[d] = makeBlockDay(d, 2.2+0.1*float64(i%2), 0.9, 10, 14)
+			validDays[d] = true
+		}
+		preceding := []string{
+			"2025-06-04", "2025-06-05",
+			"2025-06-11", "2025-06-12",
+			"2025-06-18", "2025-06-19",
+			"2025-06-25", "2025-06-26",
+		}
+		for i, d := range preceding {
+			dayMap[d] = makeBlockDay(d, 0.9+0.05*float64(i%2), 0.9, 10, 14)
+			validDays[d] = true
+		}
+
+		isValid := func(ds string) bool { return validDays[ds] }
+		assert.True(t, isWeekdayBlockOutlier(dayMap, isValid, nil, time.Friday, 10, 14))
+		assert.False(t, isWeekdayBlockOutlier(dayMap, isValid, nil, time.Friday, 16, 20), "non-elevated evening block should not be flagged")
+	})
+
+	t.Run("SundayBlockOutlierFallbackAgainstThursdayFriday", func(t *testing.T) {
+		dayMap := make(map[string]*dayPoints)
+		validDays := make(map[string]bool)
+
+		// Both Saturday and Sunday have elevated midday block (2.4 kWh), while Thu/Fri are 0.9 kWh.
+		sundays := []string{"2025-06-08", "2025-06-15", "2025-06-22", "2025-06-29"}
+		saturdays := []string{"2025-06-07", "2025-06-14", "2025-06-21", "2025-06-28"}
+		for _, d := range append(sundays, saturdays...) {
+			dayMap[d] = makeBlockDay(d, 2.4, 0.9, 11, 15)
+			validDays[d] = true
+		}
+		thuFri := []string{
+			"2025-06-05", "2025-06-06",
+			"2025-06-12", "2025-06-13",
+			"2025-06-19", "2025-06-20",
+			"2025-06-26", "2025-06-27",
+		}
+		for _, d := range thuFri {
+			dayMap[d] = makeBlockDay(d, 0.9, 0.9, 11, 15)
+			validDays[d] = true
+		}
+
+		isValid := func(ds string) bool { return validDays[ds] }
+		assert.True(t, isWeekdayBlockOutlier(dayMap, isValid, nil, time.Sunday, 11, 15), "Sunday should qualify via Thursday+Friday fallback even when Saturday is also high")
+	})
+
+	t.Run("RejectsSingleSpikeAndInsufficientTargetDays", func(t *testing.T) {
+		dayMap := make(map[string]*dayPoints)
+		validDays := make(map[string]bool)
+
+		// 3 normal Fridays (0.9 kWh) and 1 high Friday (4.0 kWh) -> high variance fails Welch's t >= 1.70
+		fridays := []string{"2025-06-06", "2025-06-13", "2025-06-20", "2025-06-27"}
+		for i, d := range fridays {
+			blkLoad := 0.9
+			if i == 3 {
+				blkLoad = 4.0
+			}
+			dayMap[d] = makeBlockDay(d, blkLoad, 0.9, 10, 14)
+			validDays[d] = true
+		}
+		preceding := []string{
+			"2025-06-04", "2025-06-05",
+			"2025-06-11", "2025-06-12",
+			"2025-06-18", "2025-06-19",
+			"2025-06-25", "2025-06-26",
+		}
+		for _, d := range preceding {
+			dayMap[d] = makeBlockDay(d, 0.9, 0.9, 10, 14)
+			validDays[d] = true
+		}
+
+		isValid := func(ds string) bool { return validDays[ds] }
+		assert.False(t, isWeekdayBlockOutlier(dayMap, isValid, nil, time.Friday, 10, 14), "single Friday spike must fail Welch's t-test")
+
+		// Fewer than 3 target weekday occurrences must return false
+		delete(validDays, "2025-06-06")
+		delete(validDays, "2025-06-13")
+		assert.False(t, isWeekdayBlockOutlier(dayMap, isValid, nil, time.Friday, 10, 14), "fewer than 3 target days must return false")
+	})
+}
+
+func TestApplyProportionalBlockScaling(t *testing.T) {
+	buildFridayHistoryFixture := func() (map[string]*dayPoints, map[string]bool, []string) {
+		dayMap := make(map[string]*dayPoints)
+		validDaysMap := make(map[string]bool)
+
+		startDate := time.Date(2025, 5, 30, 0, 0, 0, 0, time.UTC) // Friday
+		for d := 0; d < 35; d++ {
+			dt := startDate.AddDate(0, 0, d)
+			ds := dt.Format("2006-01-02")
+			isFri := dt.Weekday() == time.Friday
+			var pts []types.EnergyStats
+			var loads []float64
+			for h := 0; h < 24; h++ {
+				val := 0.4
+				if h >= 6 && h <= 22 {
+					val = 0.9
+					if isFri && h >= 10 && h <= 14 {
+						val = 2.1 // Consistent 2.1 kWh average across [10..14] on Fridays vs 0.9 kWh on Wed/Thu
+					}
+				}
+				pts = append(pts, types.EnergyStats{
+					TSHourStart: dt.Add(time.Duration(h) * time.Hour),
+					HomeKWH:     val,
+				})
+				loads = append(loads, val)
+			}
+			dayMap[ds] = &dayPoints{
+				date:    ds,
+				dayTime: dt,
+				weekday: dt.Weekday(),
+				points:  pts,
+				loads:   loads,
+			}
+			validDaysMap[ds] = true
+		}
+		recentValidDates := []string{"2025-07-03", "2025-07-02", "2025-07-01", "2025-06-30", "2025-06-29", "2025-06-28", "2025-06-27"}
+		return dayMap, validDaysMap, recentValidDates
+	}
+
+	t.Run("ScalesWashedOutHoursAndPreservesAlreadyElevatedHours", func(t *testing.T) {
+		dayMap, validDaysMap, recentValidDates := buildFridayHistoryFixture()
+		todayStr := "2025-07-04" // Friday
+		targetDay := time.Date(2025, 7, 4, 0, 0, 0, 0, time.UTC)
+
+		var rawAvgLoadA, rawP75LoadA [24]float64
+		var hasHour [24]bool
+		var targetTimes [24]time.Time
+		for h := 0; h < 24; h++ {
+			hasHour[h] = true
+			targetTimes[h] = targetDay.Add(time.Duration(h) * time.Hour)
+			rawAvgLoadA[h] = 0.90
+			rawP75LoadA[h] = 1.05
+		}
+		// Make hour 10 already elevated above baseMean*1.25 (0.9 * 1.25 = 1.125) while 11..14 are washed out at 0.90
+		rawAvgLoadA[10] = 1.35
+
+		applyProportionalBlockScaling(
+			&rawAvgLoadA,
+			&rawP75LoadA,
+			hasHour,
+			targetTimes,
+			dayMap,
+			validDaysMap,
+			nil,
+			recentValidDates,
+			todayStr,
+			nil,
+			nil,
+		)
+
+		assert.InDelta(t, 1.35, rawAvgLoadA[10], 1e-6, "already-elevated hour 10 (>= 1.25 * baseMean) must not be over-boosted")
+		for _, h := range []int{11, 12, 13, 14} {
+			assert.Greater(t, rawAvgLoadA[h], 1.20, "washed-out Friday hour %d in [10..14] should be proportionally raised", h)
+			assert.GreaterOrEqual(t, rawP75LoadA[h], rawAvgLoadA[h], "P75 must remain >= scaled AvgHomeLoadKWH at hour %d", h)
+		}
+		assert.InDelta(t, 0.90, rawAvgLoadA[19], 1e-6, "non-outlier evening hour 19 must remain unchanged")
+	})
+
+	t.Run("SkipsScalingWhenModelBlockAverageAlreadyMatchesExpected", func(t *testing.T) {
+		dayMap, validDaysMap, recentValidDates := buildFridayHistoryFixture()
+		todayStr := "2025-07-04"
+		targetDay := time.Date(2025, 7, 4, 0, 0, 0, 0, time.UTC)
+
+		var rawAvgLoadA, rawP75LoadA [24]float64
+		var hasHour [24]bool
+		var targetTimes [24]time.Time
+		for h := 0; h < 24; h++ {
+			hasHour[h] = true
+			targetTimes[h] = targetDay.Add(time.Duration(h) * time.Hour)
+			rawAvgLoadA[h] = 0.90
+			if h >= 10 && h <= 14 {
+				// Model already predicts 1.50 kWh across [10..14], so expectedBlkAvg (~1.62) / modelAvg (1.50) = 1.08 < 1.25
+				rawAvgLoadA[h] = 1.50
+			}
+			rawP75LoadA[h] = rawAvgLoadA[h]
+		}
+
+		applyProportionalBlockScaling(
+			&rawAvgLoadA,
+			&rawP75LoadA,
+			hasHour,
+			targetTimes,
+			dayMap,
+			validDaysMap,
+			nil,
+			recentValidDates,
+			todayStr,
+			nil,
+			nil,
+		)
+
+		for h := 10; h <= 14; h++ {
+			assert.InDelta(t, 1.50, rawAvgLoadA[h], 1e-6, "hour %d should not be scaled when block deficit ratio < 1.25", h)
+		}
+	})
+
+	t.Run("PreservesAfternoonBoostWhenMorningHoursAreAtNormalBaseline", func(t *testing.T) {
+		dayMap, validDaysMap, recentValidDates := buildFridayHistoryFixture()
+		todayStr := "2025-07-04"
+		targetDay := time.Date(2025, 7, 4, 0, 0, 0, 0, time.UTC)
+
+		// Populate todayStr with 4 normal baseline morning waking hours (06:00..09:00 at 0.85 kWh < 0.9 * 1.25)
+		// before an expected midday/afternoon laundry block (10:00..14:00).
+		var todayPts []types.EnergyStats
+		var todayLoads []float64
+		for h := 0; h <= 9; h++ {
+			todayPts = append(todayPts, types.EnergyStats{
+				TSHourStart: targetDay.Add(time.Duration(h) * time.Hour),
+				HomeKWH:     0.85,
+			})
+			todayLoads = append(todayLoads, 0.85)
+		}
+		dayMap[todayStr] = &dayPoints{
+			date:    todayStr,
+			dayTime: targetDay,
+			weekday: time.Friday,
+			points:  todayPts,
+			loads:   todayLoads,
+		}
+
+		var rawAvgLoadA, rawP75LoadA [24]float64
+		var hasHour [24]bool
+		var targetTimes [24]time.Time
+		for h := 0; h < 24; h++ {
+			hasHour[h] = true
+			targetTimes[h] = targetDay.Add(time.Duration(h) * time.Hour)
+			rawAvgLoadA[h] = 0.90
+			rawP75LoadA[h] = 1.00
+		}
+
+		applyProportionalBlockScaling(
+			&rawAvgLoadA,
+			&rawP75LoadA,
+			hasHour,
+			targetTimes,
+			dayMap,
+			validDaysMap,
+			nil,
+			recentValidDates,
+			todayStr,
+			nil,
+			nil,
+		)
+
+		for h := 10; h <= 14; h++ {
+			assert.Greater(t, rawAvgLoadA[h], 1.30, "midday/afternoon hour %d should still be boosted when morning hours are at normal baseline", h)
+		}
+	})
+
+	t.Run("PreservesRemainingBlockBoostAfterEarlierMorningLoads", func(t *testing.T) {
+		dayMap, validDaysMap, recentValidDates := buildFridayHistoryFixture()
+		todayStr := "2025-07-04"
+		targetDay := time.Date(2025, 7, 4, 0, 0, 0, 0, time.UTC)
+
+		// Even if 2 hours of elevated load occurred earlier in the morning (07:00 and 08:00),
+		// a household may still have more laundry/chores in the 10:00..14:00 block.
+		var todayPts []types.EnergyStats
+		var todayLoads []float64
+		for h := 0; h <= 10; h++ {
+			val := 0.85
+			if h == 7 || h == 8 {
+				val = 2.50
+			}
+			todayPts = append(todayPts, types.EnergyStats{
+				TSHourStart: targetDay.Add(time.Duration(h) * time.Hour),
+				HomeKWH:     val,
+			})
+			todayLoads = append(todayLoads, val)
+		}
+		dayMap[todayStr] = &dayPoints{
+			date:    todayStr,
+			dayTime: targetDay,
+			weekday: time.Friday,
+			points:  todayPts,
+			loads:   todayLoads,
+		}
+
+		var rawAvgLoadA, rawP75LoadA [24]float64
+		var hasHour [24]bool
+		var targetTimes [24]time.Time
+		for h := 0; h < 24; h++ {
+			hasHour[h] = true
+			targetTimes[h] = targetDay.Add(time.Duration(h) * time.Hour)
+			rawAvgLoadA[h] = 0.90
+			rawP75LoadA[h] = 1.00
+		}
+
+		applyProportionalBlockScaling(
+			&rawAvgLoadA,
+			&rawP75LoadA,
+			hasHour,
+			targetTimes,
+			dayMap,
+			validDaysMap,
+			nil,
+			recentValidDates,
+			todayStr,
+			nil,
+			nil,
+		)
+
+		for h := 11; h <= 14; h++ {
+			assert.Greater(t, rawAvgLoadA[h], 1.30, "midday hour %d should still be boosted when the 10:00..14:00 block is washed out", h)
+		}
+	})
+
+	t.Run("SundayFullWeekendFallbackUsesThursdayFridayBaseline", func(t *testing.T) {
+		dayMap := make(map[string]*dayPoints)
+		validDaysMap := make(map[string]bool)
+
+		startDate := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC) // Sunday
+		for d := 0; d < 35; d++ {
+			dt := startDate.AddDate(0, 0, d)
+			ds := dt.Format("2006-01-02")
+			isWeekend := dt.Weekday() == time.Saturday || dt.Weekday() == time.Sunday
+			var pts []types.EnergyStats
+			var loads []float64
+			for h := 0; h < 24; h++ {
+				val := 0.4
+				if h >= 6 && h <= 22 {
+					val = 0.9
+					if isWeekend && h >= 10 && h <= 14 {
+						val = 2.2 // Both Saturday and Sunday are elevated (2.2 kWh vs 0.9 kWh on Thu/Fri)
+					}
+				}
+				pts = append(pts, types.EnergyStats{
+					TSHourStart: dt.Add(time.Duration(h) * time.Hour),
+					HomeKWH:     val,
+				})
+				loads = append(loads, val)
+			}
+			dayMap[ds] = &dayPoints{
+				date:    ds,
+				dayTime: dt,
+				weekday: dt.Weekday(),
+				points:  pts,
+				loads:   loads,
+			}
+			validDaysMap[ds] = true
+		}
+
+		todayStr := "2025-07-06" // Sunday
+		targetDay := time.Date(2025, 7, 6, 0, 0, 0, 0, time.UTC)
+		recentValidDates := []string{"2025-07-05", "2025-07-04", "2025-07-03", "2025-07-02", "2025-07-01", "2025-06-30", "2025-06-29"}
+
+		var rawAvgLoadA, rawP75LoadA [24]float64
+		var hasHour [24]bool
+		var targetTimes [24]time.Time
+		for h := 0; h < 24; h++ {
+			hasHour[h] = true
+			targetTimes[h] = targetDay.Add(time.Duration(h) * time.Hour)
+			rawAvgLoadA[h] = 0.90
+			rawP75LoadA[h] = 1.00
+		}
+
+		applyProportionalBlockScaling(
+			&rawAvgLoadA,
+			&rawP75LoadA,
+			hasHour,
+			targetTimes,
+			dayMap,
+			validDaysMap,
+			nil,
+			recentValidDates,
+			todayStr,
+			nil,
+			nil,
+		)
+
+		for h := 10; h <= 14; h++ {
+			assert.Greater(t, rawAvgLoadA[h], 1.30, "Sunday hour %d should scale using the Thursday+Friday baseline even when Saturday is also high", h)
+		}
 	})
 }

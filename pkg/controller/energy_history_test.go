@@ -255,7 +255,7 @@ func TestEnergyHistory(t *testing.T) {
 
 				for _, runHr := range runHours {
 					now := time.Date(dayStart.Year(), dayStart.Month(), dayStart.Day(), runHr, 0, 0, 0, fileLoc)
-					hStart := now.AddDate(0, 0, -35)
+					hStart := histWindowStart
 
 					var histSlice []types.EnergyStats
 					for _, h := range allHours {
