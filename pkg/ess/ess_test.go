@@ -31,6 +31,11 @@ func TestListSystems(t *testing.T) {
 		assert.False(t, ids[s.ID], "system IDs must be unique, duplicate: %s", s.ID)
 		ids[s.ID] = true
 
+		if s.ID == "tesla" {
+			assert.Contains(t, s.OAuthURLs["default"], "prompt_missing_scopes=true")
+			assert.Contains(t, s.OAuthURLs["default"], "require_requested_scopes=true")
+		}
+
 		for _, opt := range s.Credentials {
 			assert.NotEmpty(t, opt.Field, "credential must have a Field")
 			assert.NotEmpty(t, opt.Name, "credential must have a name")

@@ -305,6 +305,9 @@ export interface Settings {
     essAuthStatus?: {
         consecutiveFailures: number;
         lastAttempt: string;
+        consecutiveSetFailures?: number;
+        consecutiveUserFailures?: number;
+        lastUserAttempt?: string;
     };
     minStartChargeMinutes: number;
     solarCapacityBufferMinutes: number;

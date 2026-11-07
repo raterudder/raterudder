@@ -21,10 +21,13 @@ import (
 	"time"
 
 	"github.com/raterudder/raterudder/pkg/common"
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"golang.org/x/time/rate"
 )
+
+var ffFranklinBackupToCharge = feats.Bool("franklinBackupToCharge", false)
 
 const franklinLoginPath = "hes-gateway/terminal/initialize/appUserOrInstallerLogin"
 
@@ -882,6 +885,8 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		}
 	}
 
+	isBackup := modes.currentMode.WorkMode == franklinWorkModeEmergencyBackup && !ffFranklinBackupToCharge.Enabled(ctx)
+
 	status := types.SystemStatus{
 		Timestamp:             time.Now().In(di.location),
 		TimeLocation:          di.location.String(),
@@ -892,7 +897,7 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		GridKW:                rd.RuntimeData.PowerGrid,
 		HomeKW:                rd.RuntimeData.PowerLoad,
 		BatteryCapacityKWH:    di.TotalBatteryCapacityKWH,
-		EmergencyMode:         stormHedge || modes.currentMode.WorkMode == franklinWorkModeEmergencyBackup,
+		EmergencyMode:         stormHedge || isBackup,
 		GridUnavailable:       rd.RuntimeData.OffGridFlag != franklinOffGridFlagOnGrid,
 		ElevatedMinBatterySOC: modes.currentMode.ReserveSOC > 0 && modes.currentMode.ReserveSOC > f.settings.MinBatterySOC,
 		BatteryAboveMinSOC:    rd.RuntimeData.SOC >= modes.currentMode.ReserveSOC,
@@ -1504,15 +1509,17 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 	}
 
 	isStormHedge := rd.RuntimeData.TOUID == franklinOverlayModeStormHedge
-	isBackup := modes.currentMode.WorkMode == franklinWorkModeEmergencyBackup
-	// TODO: restore checking isBackup when we are no longer using backup as a workaround
-	_ = isBackup
+	isBackup := modes.currentMode.WorkMode == franklinWorkModeEmergencyBackup && !ffFranklinBackupToCharge.Enabled(ctx)
 
-	if isStormHedge {
+	if isStormHedge || isBackup {
 		if bat == types.BatteryModeNoChange {
 			return false, nil
 		}
-		log.Ctx(ctx).DebugContext(ctx, "storm hedge active, skipping mode change", slog.Any("batteryMode", bat))
+		log.Ctx(ctx).DebugContext(ctx, "storm hedge or backup active, skipping mode change",
+			slog.Any("batteryMode", bat),
+			slog.Bool("isStormHedge", isStormHedge),
+			slog.Bool("isBackup", isBackup),
+		)
 		return false, nil
 	}
 
@@ -1551,7 +1558,7 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 	} else {
 		switch bat {
 		case types.BatteryModeChargeAny:
-			if f.settings.GridChargeBatteries && pc.GridMaxFlag != franklinGridMaxFlagChargeFromGrid {
+			if f.settings.GridChargeBatteries && pc.GridMaxFlag != franklinGridMaxFlagChargeFromGrid && ffFranklinBackupToCharge.Enabled(ctx) {
 				log.Ctx(ctx).WarnContext(ctx, "grid charging is disabled in power control, setting emergency backup mode to charge", slog.Any("opts", opts))
 				if modes.backup == (franklinMode{}) {
 					log.Ctx(ctx).ErrorContext(ctx, "backup mode not available", slog.Any("modes", modes))
@@ -1559,6 +1566,9 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 				}
 				targetMode = modes.backup
 			} else {
+				if f.settings.GridChargeBatteries && pc.GridMaxFlag != franklinGridMaxFlagChargeFromGrid {
+					log.Ctx(ctx).WarnContext(ctx, "grid charging is disabled in power control", slog.Any("opts", opts))
+				}
 				// note: since we're not setting emergency backup mode solar will still be
 				// used to power the home first then spill over into the battery
 				if !sc.CanEditReserveSOC {

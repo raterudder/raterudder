@@ -185,6 +185,8 @@ func TestDecideHistory(t *testing.T) {
 			settings := types.Settings{}
 			settings, _, err = types.MigrateSettings(settings, 0, "production")
 			require.NoError(t, err)
+			settings.MinArbitrageDifferenceDollarsPerKWH = 0.03
+			settings.MinBatteryExportDifferenceDollarsPerKWH = 0.07
 
 			// Site-specific settings overrides
 			settings.Location = &types.SiteLocation{TimeZone: fileLoc.String()}

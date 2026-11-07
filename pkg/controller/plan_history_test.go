@@ -203,13 +203,11 @@ func TestPlanHistory(t *testing.T) {
 				settings.MinBatterySOC = 10
 				settings.GridExportBatteries = true
 				settings.ManageTOUSchedules = true
-				settings.MinBatteryExportDifferenceDollarsPerKWH = 0.07
 				dcCoupled = true
 			} else if dataset.SiteID == "site14" {
 				settings.MinBatterySOC = 30
 				settings.GridExportBatteries = true
 				settings.ManageTOUSchedules = true
-				settings.MinBatteryExportDifferenceDollarsPerKWH = 0.07
 				settings.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
 					{TimePeriod: types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 1}}}, MinBatterySOC: 30},
 					{TimePeriod: types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 1, HourEnd: 6}}}, MinBatterySOC: 50},
@@ -219,7 +217,6 @@ func TestPlanHistory(t *testing.T) {
 				settings.MinBatterySOC = 20
 				settings.GridExportBatteries = true
 				settings.ManageTOUSchedules = true
-				settings.MinBatteryExportDifferenceDollarsPerKWH = 0.07
 				settings.MinBatterySOCPeriods = []types.MinBatterySOCPeriod{
 					{TimePeriod: types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 0, HourEnd: 7}}}, MinBatterySOC: 20},
 					{TimePeriod: types.TimePeriod{Hours: []types.UtilityHourPeriod{{HourStart: 7, HourEnd: 16}}}, MinBatterySOC: 80},
@@ -232,7 +229,6 @@ func TestPlanHistory(t *testing.T) {
 				settings.GridExportSolar = false
 				settings.GridExportBatteries = false
 				settings.ManageTOUSchedules = true
-				settings.MinBatteryExportDifferenceDollarsPerKWH = 0.07
 			}
 
 			// Adjust simStart to the hour of the first action to align the evaluation window

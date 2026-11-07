@@ -417,7 +417,64 @@ interface ESSFormProps {
     isWizard?: boolean;
     editESS?: boolean;
     setEditESS?: (val: boolean) => void;
+    essAuthStatus?: SettingsType['essAuthStatus'];
+    highlightTOU?: boolean;
 }
+
+const MAX_INTERACTIVE_ESS_BACKOFF_SECONDS = 15 * 60;
+
+const getInteractiveESSBackoffSeconds = (failures: number): number => {
+    if (failures <= 1) return 0;
+    return Math.min(30 * Math.pow(2, failures - 2), MAX_INTERACTIVE_ESS_BACKOFF_SECONDS);
+};
+
+const getInteractiveESSResetWindowSeconds = (failures: number): number => {
+    return Math.max(2 * getInteractiveESSBackoffSeconds(failures), MAX_INTERACTIVE_ESS_BACKOFF_SECONDS);
+};
+
+const getRemainingESSCooldownSeconds = (essAuthStatus?: SettingsType['essAuthStatus'], nowMs: number = Date.now()): number => {
+    const userFailures = essAuthStatus?.consecutiveUserFailures ?? 0;
+    if (userFailures <= 1 || !essAuthStatus?.lastUserAttempt) return 0;
+    const lastMs = new Date(essAuthStatus.lastUserAttempt).getTime();
+    if (isNaN(lastMs)) return 0;
+    const elapsedSeconds = Math.max(0, Math.floor((nowMs - lastMs) / 1000));
+    if (elapsedSeconds >= getInteractiveESSResetWindowSeconds(userFailures)) return 0;
+    const backoffSeconds = getInteractiveESSBackoffSeconds(userFailures);
+    return Math.max(0, backoffSeconds - elapsedSeconds);
+};
+
+const hasRecentFirstInteractiveFailure = (essAuthStatus?: SettingsType['essAuthStatus'], nowMs: number = Date.now()): boolean => {
+    const userFailures = essAuthStatus?.consecutiveUserFailures ?? 0;
+    if (userFailures !== 1 || !essAuthStatus?.lastUserAttempt) return false;
+    const lastMs = new Date(essAuthStatus.lastUserAttempt).getTime();
+    if (isNaN(lastMs)) return false;
+    const elapsedSeconds = Math.max(0, Math.floor((nowMs - lastMs) / 1000));
+    return elapsedSeconds < MAX_INTERACTIVE_ESS_BACKOFF_SECONDS;
+};
+
+const formatWaitDuration = (seconds: number): string => {
+    const total = Math.max(0, Math.ceil(seconds));
+    const mins = Math.floor(total / 60);
+    const secs = total % 60;
+    if (mins > 0 && secs > 0) return `${mins}m ${secs}s`;
+    if (mins > 0) return `${mins}m`;
+    return `${secs}s`;
+};
+
+const formatESSRateLimitError = (errMsg: string): string => {
+    if (/ESS rate limited, try again in /i.test(errMsg)) {
+        return `${errMsg}. RateRudder temporarily pauses login attempts after repeated failures to protect your battery manufacturer account from being locked out.`;
+    }
+    return errMsg;
+};
+
+const isESSAuthFailureError = (errMsg: string): boolean => {
+    if (/ESS rate limited/i.test(errMsg)) return false;
+    if (/invalid utility|location data|postal code|minimum battery|arbitrage|coverage|release|failed to get settings|failed to encrypt|failed to save settings|network|failed to fetch/i.test(errMsg)) {
+        return false;
+    }
+    return true;
+};
 
 const getESSGridSummary = (gridCharge?: boolean, exportSolar?: boolean, exportBatteries?: boolean, hasCredentials?: boolean) => {
     if (!hasCredentials) {
@@ -453,9 +510,10 @@ const ESSForm = ({
     handleESSContinue,
     isWizard = false,
     editESS = false,
-    setEditESS
+    setEditESS,
+    essAuthStatus,
+    highlightTOU = false
 }: ESSFormProps) => {
-    const onlyPlanMode = useFeatureFlag('onlyPlanMode');
     const provider = essProviders.find(p => p.id === settings.ess);
     const maxStage = provider
         ? (provider.credentials || []).reduce((max, cred) => {
@@ -464,8 +522,82 @@ const ESSForm = ({
           }, 0)
         : 0;
 
+    const effectiveAuthStatus = essAuthStatus ?? settings.essAuthStatus;
+    const [nowMs, setNowMs] = useState(() => Date.now());
+    const consecutiveFailures = effectiveAuthStatus?.consecutiveFailures ?? 0;
+    const consecutiveSetFailures = effectiveAuthStatus?.consecutiveSetFailures ?? 0;
+    const hasStoredCredsForSelectedESS = Boolean(!isWizard && settings.ess && settings.hasCredentials?.[settings.ess]);
+    const isAuthFailing = hasStoredCredsForSelectedESS && (consecutiveFailures >= 3 || consecutiveSetFailures >= 3);
+    const cooldownSeconds = getRemainingESSCooldownSeconds(effectiveAuthStatus, nowMs);
+    const showFirstRetryCaution = cooldownSeconds === 0 && hasRecentFirstInteractiveFailure(effectiveAuthStatus, nowMs);
+
+    useEffect(() => {
+        setNowMs(Date.now());
+    }, [effectiveAuthStatus?.consecutiveUserFailures, effectiveAuthStatus?.lastUserAttempt]);
+
+    useEffect(() => {
+        if (cooldownSeconds <= 0) return;
+        const timer = setInterval(() => {
+            setNowMs(Date.now());
+        }, 1000);
+        return () => clearInterval(timer);
+    }, [cooldownSeconds > 0, effectiveAuthStatus?.consecutiveUserFailures, effectiveAuthStatus?.lastUserAttempt]);
+
+    const renderAuthFailureWarning = () => {
+        if (!hasStoredCredsForSelectedESS) return null;
+        const actionPrompt = editESS
+            ? 'Please update or re-link your credentials below'
+            : 'Click Update or select your battery system below to update or re-link your credentials';
+        if (consecutiveFailures >= 40) {
+            return (
+                <div className="warning-notice" style={{ marginTop: 0, marginBottom: '1rem' }} data-testid="ess-auth-warning">
+                    ⚠️ <strong>Battery authentication is paused after {consecutiveFailures} failed attempts.</strong> To prevent your battery manufacturer from locking out your account, RateRudder stopped retrying automatically. {actionPrompt} to resume automation.
+                </div>
+            );
+        }
+        if (consecutiveFailures >= 3) {
+            return (
+                <div className="warning-notice" style={{ marginTop: 0, marginBottom: '1rem' }} data-testid="ess-auth-warning">
+                    ⚠️ <strong>Battery authentication has failed {consecutiveFailures} times in a row.</strong> RateRudder is spacing out background retries so your battery manufacturer account does not get locked out. {actionPrompt}.
+                </div>
+            );
+        }
+        if (consecutiveSetFailures >= 3) {
+            return (
+                <div className="warning-notice" style={{ marginTop: 0, marginBottom: '1rem' }} data-testid="ess-auth-warning">
+                    ⚠️ <strong>Applying battery mode changes has failed {consecutiveSetFailures} times in a row.</strong>{' '}
+                    {settings.ess === 'tesla'
+                        ? `${actionPrompt} and make sure all permissions (including Energy Commands) are checked.`
+                        : 'Please check your battery manufacturer app to make sure your account can change battery settings, or re-authenticate below.'}
+                </div>
+            );
+        }
+        return null;
+    };
+
+    const renderCooldownNotice = () => {
+        if (!settings.ess) return null;
+        if (cooldownSeconds > 0) {
+            return (
+                <div className="warning-notice" style={{ marginTop: 0, marginBottom: '1rem' }} data-testid="ess-cooldown-warning">
+                    ⏳ <strong>Please wait {formatWaitDuration(cooldownSeconds)} before trying again.</strong> To protect your battery manufacturer account from being locked out after repeated failed login attempts, RateRudder temporarily pauses credential retries (up to 15 minutes max). Verify your login in the manufacturer app before retrying.
+                </div>
+            );
+        }
+        if (showFirstRetryCaution) {
+            return (
+                <div className="warning-notice" style={{ marginTop: 0, marginBottom: '1rem' }} data-testid="ess-retry-caution">
+                    💡 <strong>Double-check your credentials before trying again.</strong> You can retry immediately right now, but additional failed login attempts will require a short wait (starting at 30 seconds, up to 15 minutes) so we don't lock out your battery manufacturer account.
+                </div>
+            );
+        }
+        return null;
+    };
+
     const renderFormFields = () => (
         <>
+            {renderAuthFailureWarning()}
+            {renderCooldownNotice()}
             <Field.Root className="form-group">
                 <Field.Label htmlFor={isWizard ? "wizardESS" : "ess"}>System Type</Field.Label>
                 <Select.Root
@@ -674,17 +806,21 @@ const ESSForm = ({
     return (
         <>
             {settings.ess && (settings.hasCredentials?.[settings.ess] || isESSDirty) && !editESS ? (
-                <button type="button" className="configured-summary" onClick={() => setEditESS && setEditESS(true)} aria-label="Edit Energy Storage System">
-                    <div className="summary-info">
-                        <span className="summary-label">{essProviders.find(p => p.id === settings.ess)?.name || settings.ess || 'Unknown System'}</span>
-                        <span className="summary-sublabel">
-                            {getESSGridSummary(settings.gridChargeBatteries, settings.gridExportSolar, settings.gridExportBatteries, !!settings.hasCredentials?.[settings.ess])}
-                        </span>
-                    </div>
-                    <div className={`summary-status ${isESSDirty ? 'pending' : ''}`}>
-                        {isESSDirty ? 'Pending Save' : 'Connected'}
-                    </div>
-                </button>
+                <>
+                    {renderAuthFailureWarning()}
+                    {renderCooldownNotice()}
+                    <button type="button" className="configured-summary" onClick={() => setEditESS && setEditESS(true)} aria-label="Edit Energy Storage System">
+                        <div className="summary-info">
+                            <span className="summary-label">{essProviders.find(p => p.id === settings.ess)?.name || settings.ess || 'Unknown System'}</span>
+                            <span className="summary-sublabel">
+                                {getESSGridSummary(settings.gridChargeBatteries, settings.gridExportSolar, settings.gridExportBatteries, !!settings.hasCredentials?.[settings.ess])}
+                            </span>
+                        </div>
+                        <div className={`summary-status ${isESSDirty ? 'pending' : isAuthFailing ? 'error' : ''}`}>
+                            {isESSDirty ? 'Pending Save' : isAuthFailing ? 'Auth Failing' : 'Connected'}
+                        </div>
+                    </button>
+                </>
             ) : (
                 <div className={editESS ? "edit-section" : ""}>
                     {renderFormFields()}
@@ -715,6 +851,11 @@ const ESSForm = ({
                                             id="gridExportSolar"
                                             checked={settings.gridExportSolar}
                                             onCheckedChange={(checked) => {
+                                                if (checked && !settings.gridExportSolar && !settings.gridExportBatteries && ['tesla', 'franklin'].includes(settings.ess)) {
+                                                    onChange('manageTOUSchedules', true);
+                                                } else if (!checked && !settings.gridExportBatteries && settings.manageTOUSchedules) {
+                                                    onChange('manageTOUSchedules', false);
+                                                }
                                                 onChange('gridExportSolar', checked);
                                                 onChange('customGridSettings', true);
                                             }}
@@ -732,6 +873,11 @@ const ESSForm = ({
                                             id="gridExportBatteries"
                                             checked={settings.gridExportBatteries}
                                             onCheckedChange={(checked) => {
+                                                if (checked && !settings.gridExportSolar && !settings.gridExportBatteries && ['tesla', 'franklin'].includes(settings.ess)) {
+                                                    onChange('manageTOUSchedules', true);
+                                                } else if (!checked && !settings.gridExportSolar && settings.manageTOUSchedules) {
+                                                    onChange('manageTOUSchedules', false);
+                                                }
                                                 onChange('gridExportBatteries', checked);
                                                 onChange('customGridSettings', true);
                                             }}
@@ -750,8 +896,11 @@ const ESSForm = ({
                                 )}
                             </div>
 
-                            {['tesla', 'franklin'].includes(settings.ess) && (!!settings.manageTOUSchedules || onlyPlanMode) && (settings.gridExportSolar || settings.gridExportBatteries) && (
-                                <div className="grid-strategy-grid">
+                            {['tesla', 'franklin'].includes(settings.ess) && (settings.gridExportSolar || settings.gridExportBatteries) && (
+                                <div
+                                    className={`grid-strategy-grid tou-management-grid${highlightTOU ? ' highlighted-section' : ''}`}
+                                    data-testid="tou-management-section"
+                                >
                                     <Field.Root className="form-group switch-group compact" style={{ gridColumn: '1 / -1' }}>
                                         <div className="switch-row">
                                             <Switch.Root
@@ -838,6 +987,39 @@ const Settings = ({
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
     const [currentStage, setCurrentStage] = useState(0);
     const [isStaging, setIsStaging] = useState(false);
+    const [localEssAuthStatus, setLocalEssAuthStatus] = useState<SettingsType['essAuthStatus']>(undefined);
+    const [minArbitrageInput, setMinArbitrageInput] = useState<string>('');
+    const [minBatteryExportInput, setMinBatteryExportInput] = useState<string>('');
+
+    const recordInteractiveESSAuthResult = (succeeded: boolean) => {
+        const nowIso = new Date().toISOString();
+        const nowTime = Date.now();
+        setLocalEssAuthStatus(prev => {
+            const current = prev ?? settings?.essAuthStatus;
+            if (succeeded) {
+                return {
+                    ...current,
+                    consecutiveFailures: 0,
+                    consecutiveSetFailures: 0,
+                    consecutiveUserFailures: 0,
+                    lastAttempt: nowIso,
+                    lastUserAttempt: nowIso,
+                };
+            }
+            const prevUserFailures = current?.consecutiveUserFailures ?? 0;
+            const lastUserMs = current?.lastUserAttempt ? new Date(current.lastUserAttempt).getTime() : 0;
+            const resetWindowMs = getInteractiveESSResetWindowSeconds(prevUserFailures) * 1000;
+            const expired = !lastUserMs || isNaN(lastUserMs) || (nowTime - lastUserMs) >= resetWindowMs;
+            const baseUserFailures = expired ? 0 : prevUserFailures;
+            return {
+                ...current,
+                consecutiveFailures: current?.consecutiveFailures ?? 0,
+                lastAttempt: current?.lastAttempt ?? nowIso,
+                consecutiveUserFailures: baseUserFailures + 1,
+                lastUserAttempt: nowIso,
+            };
+        });
+    };
 
     const loading = loadingLists || !settings;
 
@@ -1112,6 +1294,30 @@ const Settings = ({
     const [editUtility, setEditUtility] = useState(false);
     const [editESS, setEditESS] = useState(false);
     const [showAdvanced, setShowAdvanced] = useState(false);
+    const [highlightTOU, setHighlightTOU] = useState(false);
+    const touHandledRef = useRef(false);
+
+    useEffect(() => {
+        if (loading || !settings || touHandledRef.current) return;
+        const searchParams = new URLSearchParams(window.location.search);
+        const touParam = searchParams.get('tou');
+        const hasTOU = (searchParams.has('tou') && touParam !== '0' && touParam !== 'false') || window.location.hash === '#tou';
+        if (hasTOU) {
+            touHandledRef.current = true;
+            setForceFullSettings(true);
+            setIsInWizard(false);
+            setEditESS(true);
+            setHighlightTOU(true);
+        }
+    }, [loading, settings]);
+
+    useEffect(() => {
+        if (!highlightTOU || !editESS || loading) return;
+        const target = document.querySelector('[data-testid="tou-management-section"]') || document.querySelector('[data-testid="ess-section"]');
+        if (target && typeof target.scrollIntoView === 'function') {
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    }, [highlightTOU, editESS, loading]);
 
     const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
     const [deleteAccountChecked, setDeleteAccountChecked] = useState(false);
@@ -1246,6 +1452,9 @@ const Settings = ({
                 gridExportBatteries: parentSettings.gridExportBatteries ?? false
             });
             setSettings(initial);
+            setMinArbitrageInput(initial.minArbitrageDifferenceDollarsPerKWH ? String(initial.minArbitrageDifferenceDollarsPerKWH) : '');
+            setMinBatteryExportInput(initial.minBatteryExportDifferenceDollarsPerKWH ? String(initial.minBatteryExportDifferenceDollarsPerKWH) : '');
+            setLocalEssAuthStatus(parentSettings.essAuthStatus);
             originalSettingsRef.current = JSON.stringify(initial);
             if (parentSettings.ess && !parentSettings.hasCredentials?.[parentSettings.ess]) {
                 setEditESS(true);
@@ -1320,7 +1529,13 @@ const Settings = ({
 
     const handleDiscard = () => {
         if (originalSettingsRef.current) {
-            setSettings(JSON.parse(originalSettingsRef.current));
+            const restored: SettingsType = JSON.parse(originalSettingsRef.current);
+            setSettings(restored);
+            setMinArbitrageInput(restored.minArbitrageDifferenceDollarsPerKWH ? String(restored.minArbitrageDifferenceDollarsPerKWH) : '');
+            setMinBatteryExportInput(restored.minBatteryExportDifferenceDollarsPerKWH ? String(restored.minBatteryExportDifferenceDollarsPerKWH) : '');
+            setEssCredentials({});
+            setOauthStatus('idle');
+            setCurrentStage(0);
             setIsUtilityDirty(false);
             setIsESSDirty(false);
             setError(null);
@@ -1335,6 +1550,7 @@ const Settings = ({
         if (!settings || !settings.ess) return;
         setIsStaging(true);
         setError(null);
+        let attemptedStage = false;
         try {
             const provider = essProviders.find(p => p.id === settings.ess);
             if (!provider) throw new Error('Selected ESS provider not found');
@@ -1342,13 +1558,22 @@ const Settings = ({
             const payload: Record<string, string> = {};
             const stageFields = (provider.credentials || []).filter(cred => (cred.stage ?? 0) <= currentStage);
             for (const cred of stageFields) {
-                payload[cred.field] = essCredentials[cred.field] || cred.default || "";
+                const val = essCredentials[cred.field] || cred.default || "";
+                if (cred.required && !val) {
+                    throw new Error(`The ${cred.name} field is required.`);
+                }
+                payload[cred.field] = val;
             }
 
+            attemptedStage = true;
             await submitESSStage(settings.ess, payload, siteID);
             setCurrentStage(prev => prev + 1);
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'Failed to advance stage');
+            const errMsg = err instanceof Error ? err.message : 'Failed to advance stage';
+            if (attemptedStage && isESSAuthFailureError(errMsg)) {
+                recordInteractiveESSAuthResult(false);
+            }
+            setError(formatESSRateLimitError(errMsg));
         } finally {
             setIsStaging(false);
         }
@@ -1373,6 +1598,7 @@ const Settings = ({
             }
         }
 
+        let attemptedESSAuth = false;
         try {
             savingRef.current = true;
             setIsSaving(true);
@@ -1426,7 +1652,11 @@ const Settings = ({
                 }
             }
 
+            attemptedESSAuth = Boolean(credentialsPayload && finalSettings.ess);
             await updateSettings(finalSettings, siteID, credentialsPayload);
+            if (attemptedESSAuth) {
+                recordInteractiveESSAuthResult(true);
+            }
             setSuccessMessage('Settings saved successfully');
 
             const updatedSettings = credentialsPayload && finalSettings.ess ? {
@@ -1434,13 +1664,21 @@ const Settings = ({
                 hasCredentials: {
                     ...finalSettings.hasCredentials,
                     [finalSettings.ess]: true
-                }
+                },
+                ...(finalSettings.essAuthStatus ? {
+                    essAuthStatus: {
+                        ...finalSettings.essAuthStatus,
+                        consecutiveFailures: 0,
+                        consecutiveSetFailures: 0,
+                        consecutiveUserFailures: 0,
+                    }
+                } : {})
             } : finalSettings;
 
             const isESSNowConfigured = updatedSettings ? (!!updatedSettings.ess && updatedSettings.ess !== "" && !!updatedSettings.hasCredentials?.[updatedSettings.ess]) : false;
 
-            const isTeslaSetup = !!credentialsPayload?.['tesla'] || (finalSettings.ess === 'tesla' && !finalSettings.customGridSettings && !isESSAlreadyConfigured && isESSNowConfigured);
-            if (isTeslaSetup) {
+            const isGridModalSetup = (finalSettings.ess === 'tesla' || finalSettings.ess === 'franklin') && !finalSettings.customGridSettings && !isESSAlreadyConfigured && isESSNowConfigured;
+            if (isGridModalSetup) {
                 setTeslaGridDirty(false);
                 setShowTeslaGridModal(true);
             } else {
@@ -1468,11 +1706,14 @@ const Settings = ({
             setTimeout(() => setSuccessMessage(null), 3000);
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : 'Failed to save settings';
+            if (attemptedESSAuth && isESSAuthFailureError(errMsg)) {
+                recordInteractiveESSAuthResult(false);
+            }
             if (errMsg.toLowerCase().includes("authorization code is invalid") || errMsg.toLowerCase().includes("code is invalid")) {
                 setError("The authorization code expired. Please click 'Login to link account' again and save immediately.");
                 setEditESS(true);
             } else {
-                setError(errMsg);
+                setError(formatESSRateLimitError(errMsg));
             }
             setOauthStatus('idle');
 
@@ -1544,6 +1785,7 @@ const Settings = ({
         const isESSAlreadyConfigured = settings ? (!!settings.ess && settings.ess !== "" && !!settings.hasCredentials?.[settings.ess]) : false;
 
         let success = false;
+        let attemptedESSAuth = false;
         try {
             savingRef.current = true;
             setIsSaving(true);
@@ -1582,7 +1824,11 @@ const Settings = ({
                 }
             }
 
+            attemptedESSAuth = Boolean(credentialsPayload && finalSettings.ess);
             await updateSettings(finalSettings, siteID, credentialsPayload);
+            if (attemptedESSAuth) {
+                recordInteractiveESSAuthResult(true);
+            }
             setSuccessMessage('Setup complete!');
 
             if (onSettingsSaved) {
@@ -1599,7 +1845,7 @@ const Settings = ({
             setIsUtilityDirty(false);
             setIsESSDirty(false);
             originalSettingsRef.current = JSON.stringify(finalSettings);
-            if (finalSettings.ess === 'tesla') {
+            if (finalSettings.ess === 'tesla' || finalSettings.ess === 'franklin') {
                 savingRef.current = false;
                 setIsSaving(false);
                 setTeslaGridDirty(false);
@@ -1615,7 +1861,10 @@ const Settings = ({
             success = true;
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : 'Failed to save settings';
-            setError(errMsg);
+            if (attemptedESSAuth && isESSAuthFailureError(errMsg)) {
+                recordInteractiveESSAuthResult(false);
+            }
+            setError(formatESSRateLimitError(errMsg));
         } finally {
             if (!success) {
                 savingRef.current = false;
@@ -1801,67 +2050,108 @@ const Settings = ({
                 <Dialog.Popup className="dialog-popup" data-testid="tesla-grid-modal">
                     <Dialog.Title className="dialog-title">Confirm Grid Settings</Dialog.Title>
                     <Dialog.Description className="dialog-description">
-                        Based on your Tesla Powerwall configuration, we've detected the following grid settings. Please confirm or adjust them:
+                        Based on your {settings?.ess === 'franklin' ? 'FranklinWH' : 'Tesla Powerwall'} configuration, we've detected the following grid settings. Please confirm or adjust them:
                     </Dialog.Description>
                     {settings && (
-                        <div className="grid-strategy-grid" style={{ marginTop: '1rem', marginBottom: '1.5rem' }}>
-                            <Field.Root className="form-group switch-group compact">
-                                <div className="switch-row">
-                                    <Switch.Root
-                                        id="modal-gridChargeBatteries"
-                                        checked={settings.gridChargeBatteries ?? true}
-                                        onCheckedChange={(checked) => {
-                                            handleChange('gridChargeBatteries', checked);
-                                            setTeslaGridDirty(true);
-                                        }}
-                                        className="switch-root"
-                                    >
-                                        <Switch.Thumb className="switch-thumb" />
-                                    </Switch.Root>
-                                    <Field.Label htmlFor="modal-gridChargeBatteries">Grid Can Charge Battery</Field.Label>
-                                </div>
-                            </Field.Root>
+                        <>
+                            <div className="grid-strategy-grid" style={{ marginTop: '0.5rem', marginBottom: 0 }}>
+                                <Field.Root className="form-group switch-group compact">
+                                    <div className="switch-row">
+                                        <Switch.Root
+                                            id="modal-gridChargeBatteries"
+                                            checked={settings.gridChargeBatteries ?? true}
+                                            onCheckedChange={(checked) => {
+                                                handleChange('gridChargeBatteries', checked);
+                                                setTeslaGridDirty(true);
+                                            }}
+                                            className="switch-root"
+                                        >
+                                            <Switch.Thumb className="switch-thumb" />
+                                        </Switch.Root>
+                                        <Field.Label htmlFor="modal-gridChargeBatteries">Grid Can Charge Battery</Field.Label>
+                                    </div>
+                                </Field.Root>
 
-                            <Field.Root className="form-group switch-group compact">
-                                <div className="switch-row">
-                                    <Switch.Root
-                                        id="modal-gridExportSolar"
-                                        checked={settings.gridExportSolar ?? false}
-                                        onCheckedChange={(checked) => {
-                                            handleChange('gridExportSolar', checked);
-                                            setTeslaGridDirty(true);
-                                        }}
-                                        className="switch-root"
-                                    >
-                                        <Switch.Thumb className="switch-thumb" />
-                                    </Switch.Root>
-                                    <Field.Label htmlFor="modal-gridExportSolar">Export Solar to Grid</Field.Label>
-                                </div>
-                            </Field.Root>
+                                <Field.Root className="form-group switch-group compact">
+                                    <div className="switch-row">
+                                        <Switch.Root
+                                            id="modal-gridExportSolar"
+                                            checked={settings.gridExportSolar ?? false}
+                                            onCheckedChange={(checked) => {
+                                                if (checked && !settings.gridExportSolar && !settings.gridExportBatteries && ['tesla', 'franklin'].includes(settings.ess || '')) {
+                                                    handleChange('manageTOUSchedules', true);
+                                                } else if (!checked && !settings.gridExportBatteries && settings.manageTOUSchedules) {
+                                                    handleChange('manageTOUSchedules', false);
+                                                }
+                                                handleChange('gridExportSolar', checked);
+                                                setTeslaGridDirty(true);
+                                            }}
+                                            className="switch-root"
+                                        >
+                                            <Switch.Thumb className="switch-thumb" />
+                                        </Switch.Root>
+                                        <Field.Label htmlFor="modal-gridExportSolar">Export Solar to Grid</Field.Label>
+                                    </div>
+                                </Field.Root>
 
-                            <Field.Root className="form-group switch-group compact">
-                                <div className="switch-row">
-                                    <Switch.Root
-                                        id="modal-gridExportBatteries"
-                                        checked={settings.gridExportBatteries ?? false}
-                                        onCheckedChange={(checked) => {
-                                            handleChange('gridExportBatteries', checked);
-                                            setTeslaGridDirty(true);
-                                        }}
-                                        className="switch-root"
-                                    >
-                                        <Switch.Thumb className="switch-thumb" />
-                                    </Switch.Root>
-                                    <Field.Label htmlFor="modal-gridExportBatteries">Export Battery to Grid</Field.Label>
-                                </div>
-                            </Field.Root>
+                                <Field.Root className="form-group switch-group compact">
+                                    <div className="switch-row">
+                                        <Switch.Root
+                                            id="modal-gridExportBatteries"
+                                            checked={settings.gridExportBatteries ?? false}
+                                            onCheckedChange={(checked) => {
+                                                if (checked && !settings.gridExportSolar && !settings.gridExportBatteries && ['tesla', 'franklin'].includes(settings.ess || '')) {
+                                                    handleChange('manageTOUSchedules', true);
+                                                } else if (!checked && !settings.gridExportSolar && settings.manageTOUSchedules) {
+                                                    handleChange('manageTOUSchedules', false);
+                                                }
+                                                handleChange('gridExportBatteries', checked);
+                                                setTeslaGridDirty(true);
+                                            }}
+                                            className="switch-root"
+                                        >
+                                            <Switch.Thumb className="switch-thumb" />
+                                        </Switch.Root>
+                                        <Field.Label htmlFor="modal-gridExportBatteries">Export Battery to Grid</Field.Label>
+                                    </div>
+                                </Field.Root>
 
-                            {!settings.gridChargeBatteries && !settings.gridExportSolar && !settings.gridExportBatteries && (
-                                <div className="warning-notice" style={{ gridColumn: '1 / -1', marginTop: 0 }} data-testid="tesla-grid-modal-warning">
-                                    Warning: All grid interactions are disabled. The system will only charge from solar and will not charge from the grid or export any energy.
+                                {!settings.gridChargeBatteries && !settings.gridExportSolar && !settings.gridExportBatteries && (
+                                    <div className="warning-notice" style={{ gridColumn: '1 / -1', marginTop: 0 }} data-testid="tesla-grid-modal-warning">
+                                        Warning: All grid interactions are disabled. The system will only charge from solar and will not charge from the grid or export any energy.
+                                    </div>
+                                )}
+                            </div>
+
+                            {['tesla', 'franklin'].includes(settings.ess || '') && (settings.gridExportSolar || settings.gridExportBatteries) && (
+                                <div className="grid-strategy-grid tou-management-grid" style={{ marginBottom: '0.5rem' }}>
+                                    <Field.Root className="form-group switch-group compact" style={{ gridColumn: '1 / -1' }}>
+                                        <div className="switch-row">
+                                            <Switch.Root
+                                                id="modal-manageTOUSchedules"
+                                                checked={settings.manageTOUSchedules ?? false}
+                                                onCheckedChange={(checked) => {
+                                                    handleChange('manageTOUSchedules', checked);
+                                                    setTeslaGridDirty(true);
+                                                }}
+                                                className="switch-root"
+                                            >
+                                                <Switch.Thumb className="switch-thumb" />
+                                            </Switch.Root>
+                                            <Field.Label htmlFor="modal-manageTOUSchedules">Direct Solar and Battery Export Management</Field.Label>
+                                        </div>
+                                        <Field.Description>
+                                            Allows excess solar power and battery energy to export directly to the grid without charging the battery to 100% first.
+                                        </Field.Description>
+                                        {settings.manageTOUSchedules && (
+                                            <div className="warning-notice" style={{ marginTop: '0.5rem' }}>
+                                                Notice: This feature requires RateRudder to manage your battery's Time-Of-Use (TOU) settings, which will overwrite any existing TOU or tariff schedules configured in your manufacturer app.
+                                            </div>
+                                        )}
+                                    </Field.Root>
                                 </div>
                             )}
-                        </div>
+                        </>
                     )}
                     <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
                         <button
@@ -1952,6 +2242,7 @@ const Settings = ({
                                     handleOAuthLogin={handleOAuthLogin}
                                     handleESSContinue={handleESSContinue}
                                     isWizard={true}
+                                    essAuthStatus={localEssAuthStatus ?? settings.essAuthStatus}
                                 />
                             </div>
                         )}
@@ -2498,6 +2789,8 @@ const Settings = ({
                     isWizard={false}
                     editESS={editESS}
                     setEditESS={setEditESS}
+                    essAuthStatus={localEssAuthStatus ?? settings.essAuthStatus}
+                    highlightTOU={highlightTOU}
                 />
                 </div>
 
@@ -2639,7 +2932,7 @@ const Settings = ({
                                     Minimum Arbitrage Profit ($/kWh)
                                     <HelpButton
                                         title="Minimum Arbitrage Profit"
-                                        description="The minimum price difference ($/kWh) required between charging hours and later export hours to justify charging the battery from the grid for arbitrage."
+                                        description="The minimum price difference ($/kWh) required between charging hours and later export hours to justify charging the battery from the grid for arbitrage. When left blank (Default), the threshold from your selected Optimization Profile is used."
                                     />
                                 </Field.Label>
                                 <Input
@@ -2647,13 +2940,24 @@ const Settings = ({
                                     type="number"
                                     step="0.01"
                                     min="0"
-                                    value={settings.minArbitrageDifferenceDollarsPerKWH}
-                                    onChange={(e) => handleChange('minArbitrageDifferenceDollarsPerKWH', parseFloat(e.target.value))}
+                                    placeholder="Default"
+                                    value={minArbitrageInput}
+                                    onChange={(e) => {
+                                        const raw = e.target.value;
+                                        setMinArbitrageInput(raw);
+                                        const val = raw === '' ? 0 : parseFloat(raw);
+                                        handleChange('minArbitrageDifferenceDollarsPerKWH', isNaN(val) ? 0 : val);
+                                    }}
+                                    onBlur={() => {
+                                        if (!settings.minArbitrageDifferenceDollarsPerKWH) {
+                                            setMinArbitrageInput('');
+                                        }
+                                    }}
                                 />
-                                <Field.Description>Required profit margin to trigger immediate charging to later use/export at a higher prices.</Field.Description>
-                                {settings.minArbitrageDifferenceDollarsPerKWH < 0.03 && (
+                                <Field.Description>Required profit margin to trigger immediate charging to later use/export at higher prices. Leave blank to use the Optimization Profile default.</Field.Description>
+                                {(settings.minArbitrageDifferenceDollarsPerKWH ?? 0) > 0 && settings.minArbitrageDifferenceDollarsPerKWH < 0.03 && (
                                     <div className="warning-text" style={{ color: 'orange', marginTop: '4px', fontSize: '0.9em' }} data-testid="min-arbitrage-warning">
-                                        Warning: Setting this below the $0.03/kWh default may not cover battery degradation, making grid charging unprofitable.
+                                        Warning: Setting this below $0.03/kWh may not cover battery degradation, making grid charging unprofitable.
                                     </div>
                                 )}
                             </Field.Root>
@@ -2702,7 +3006,7 @@ const Settings = ({
                                         Battery Export Margin ($/kWh)
                                         <HelpButton
                                             title="Battery Export Margin"
-                                            description="The minimum profit difference ($/kWh) required between the export credit and the recharging/replacement cost to justify discharging the battery directly to the grid. Defaults to $0.07/kWh."
+                                            description="The minimum profit difference ($/kWh) required between the export credit and the recharging/replacement cost to justify discharging the battery directly to the grid. When left blank (Default), the threshold from your selected Optimization Profile is used."
                                         />
                                     </Field.Label>
                                     <Input
@@ -2710,13 +3014,24 @@ const Settings = ({
                                         type="number"
                                         step="0.01"
                                         min="0"
-                                        value={settings.minBatteryExportDifferenceDollarsPerKWH ?? 0.07}
-                                        onChange={(e) => handleChange('minBatteryExportDifferenceDollarsPerKWH', parseFloat(e.target.value))}
+                                        placeholder="Default"
+                                        value={minBatteryExportInput}
+                                        onChange={(e) => {
+                                            const raw = e.target.value;
+                                            setMinBatteryExportInput(raw);
+                                            const val = raw === '' ? 0 : parseFloat(raw);
+                                            handleChange('minBatteryExportDifferenceDollarsPerKWH', isNaN(val) ? 0 : val);
+                                        }}
+                                        onBlur={() => {
+                                            if (!settings.minBatteryExportDifferenceDollarsPerKWH) {
+                                                setMinBatteryExportInput('');
+                                            }
+                                        }}
                                     />
-                                    <Field.Description>Minimum profit spread required to export battery energy directly to the grid.</Field.Description>
-                                    {(settings.minBatteryExportDifferenceDollarsPerKWH ?? 0.07) < 0.04 && (
+                                    <Field.Description>Minimum profit spread required to export battery energy directly to the grid. Leave blank to use the Optimization Profile default.</Field.Description>
+                                    {(settings.minBatteryExportDifferenceDollarsPerKWH ?? 0) > 0 && (settings.minBatteryExportDifferenceDollarsPerKWH ?? 0) < 0.04 && (
                                         <div className="warning-text" style={{ color: 'orange', marginTop: '4px', fontSize: '0.9em' }} data-testid="min-battery-export-warning">
-                                            Warning: Setting this below the $0.04/kWh default may not cover battery degradation, making battery exports unprofitable.
+                                            Warning: Setting this below $0.04/kWh may not cover battery degradation, making battery exports unprofitable.
                                         </div>
                                     )}
                                 </Field.Root>

@@ -1414,6 +1414,8 @@ describe('App & Settings', () => {
                 utilityProvider: 'comed',
                 utilityRate: 'comed_besh',
                 ess: 'franklin',
+                gridExportSolar: true,
+                manageTOUSchedules: true,
                 hasCredentials: { franklin: true }
             });
 
@@ -1433,6 +1435,18 @@ describe('App & Settings', () => {
                     password: 'secretPass'
                 })
             }));
+
+            // Confirm Grid Settings modal should appear for FranklinWH with TOU schedule management enabled and notice visible
+            await waitFor(() => {
+                expect(screen.getByText('Confirm Grid Settings')).toBeInTheDocument();
+                expect(screen.getByText(/Based on your FranklinWH configuration/i)).toBeInTheDocument();
+                const touSwitch = screen.getByRole('switch', { name: /Direct Solar and Battery Export Management/i });
+                expect(touSwitch).toBeChecked();
+                expect(screen.getByText(/Notice: This feature requires RateRudder to manage your battery's Time-Of-Use/i)).toBeInTheDocument();
+            });
+
+            const confirmBtn = screen.getByRole('button', { name: /Confirm & Finish/i });
+            await user.click(confirmBtn);
 
             // Should navigate to dashboard
             await waitFor(() => {
@@ -1920,16 +1934,20 @@ describe('App & Settings', () => {
                 gridChargeBatteries: true,
                 gridExportSolar: true,
                 gridExportBatteries: false,
+                manageTOUSchedules: true,
                 hasCredentials: { tesla: true }
             });
 
             const saveBtn = screen.getByText('Save Settings');
             await user.click(saveBtn);
 
-            // Tesla confirmation dialog should be displayed
+            // Tesla confirmation dialog should be displayed with Direct Solar and Battery Export Management checked and TOU warning visible
             await waitFor(() => {
                 expect(screen.getByText('Confirm Grid Settings')).toBeInTheDocument();
                 expect(screen.getByRole('switch', { name: /Grid Can Charge Battery/i })).toBeInTheDocument();
+                const touSwitch = screen.getByRole('switch', { name: /Direct Solar and Battery Export Management/i });
+                expect(touSwitch).toBeChecked();
+                expect(screen.getByText(/Notice: This feature requires RateRudder to manage your battery's Time-Of-Use/i)).toBeInTheDocument();
             });
 
             const confirmBtn = screen.getByRole('button', { name: /Confirm & Finish/i });
@@ -2669,43 +2687,13 @@ describe('App & Settings', () => {
     });
 
     describe('Direct Solar and Battery Export Management', () => {
-        it('is hidden when onlyPlanMode is false and manageTOUSchedules is false', async () => {
-            const user = userEvent.setup();
-            const originalLocation = window.location;
-            delete (window as any).location;
-            (window as any).location = new URL('http://localhost/settings?export=true');
-
-            try {
-                (api.fetchSettings as any).mockResolvedValue({
-                    ...defaultSettings,
-                    ess: 'tesla',
-                    hasCredentials: { tesla: true },
-                    manageTOUSchedules: false,
-                    features: { onlyPlanMode: false },
-                    release: 'production',
-                });
-
-                await navigateToSettings();
-
-                // Open ESS edit mode from summary card
-                const editBtn = screen.getByLabelText('Edit Energy Storage System');
-                await user.click(editBtn);
-
-                // Toggle should NOT be present
-                expect(screen.queryByRole('switch', { name: /Direct Solar and Battery Export Management/i })).not.toBeInTheDocument();
-            } finally {
-                (window as any).location = originalLocation;
-            }
-        });
-
-        it('renders toggle and warning notice when onlyPlanMode is true for supported ESS', async () => {
+        it('renders toggle and warning notice when export is enabled for supported ESS', async () => {
             const user = userEvent.setup();
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
                 ess: 'tesla',
                 hasCredentials: { tesla: true },
                 manageTOUSchedules: false,
-                features: { onlyPlanMode: true },
                 release: 'production',
                 gridExportSolar: true,
             });
@@ -2741,14 +2729,13 @@ describe('App & Settings', () => {
             });
         });
 
-        it('renders toggle when manageTOUSchedules is already enabled even if onlyPlanMode is false', async () => {
+        it('renders toggle checked when manageTOUSchedules is already enabled', async () => {
             const user = userEvent.setup();
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
                 ess: 'franklin',
                 hasCredentials: { franklin: true },
                 manageTOUSchedules: true,
-                features: { onlyPlanMode: false },
                 release: 'production',
                 gridExportBatteries: true,
             });
@@ -2764,13 +2751,12 @@ describe('App & Settings', () => {
             expect(exportOptSwitch).toBeChecked();
         });
 
-        it('does not render toggle for unsupported ESS provider even when onlyPlanMode is true', async () => {
+        it('does not render toggle for unsupported ESS provider', async () => {
             const user = userEvent.setup();
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
                 ess: 'enphase',
                 hasCredentials: { enphase: true },
-                features: { onlyPlanMode: true },
                 release: 'staging',
                 gridExportSolar: true,
             });
@@ -2791,7 +2777,6 @@ describe('App & Settings', () => {
                 ess: 'tesla',
                 hasCredentials: { tesla: true },
                 manageTOUSchedules: false,
-                features: { onlyPlanMode: true },
                 release: 'production',
                 gridExportSolar: false,
                 gridExportBatteries: false,
@@ -2810,8 +2795,11 @@ describe('App & Settings', () => {
             const exportSolarSwitch = screen.getByRole('switch', { name: /Export Solar to Grid/i });
             await user.click(exportSolarSwitch);
 
-            // Should immediately pop in without saving
-            expect(screen.getByRole('switch', { name: /Direct Solar and Battery Export Management/i })).toBeInTheDocument();
+            // Should immediately pop in without saving, checked by default with TOU notice visible
+            const touSwitch = screen.getByRole('switch', { name: /Direct Solar and Battery Export Management/i });
+            expect(touSwitch).toBeInTheDocument();
+            expect(touSwitch).toBeChecked();
+            expect(screen.getByText(/Notice: This feature requires RateRudder to manage your battery's Time-Of-Use/i)).toBeInTheDocument();
 
             // Toggle Export Solar to Grid OFF
             await user.click(exportSolarSwitch);
@@ -2823,8 +2811,40 @@ describe('App & Settings', () => {
             const exportBatterySwitch = screen.getByRole('switch', { name: /Export Battery to Grid/i });
             await user.click(exportBatterySwitch);
 
-            // Should pop in again
-            expect(screen.getByRole('switch', { name: /Direct Solar and Battery Export Management/i })).toBeInTheDocument();
+            // Should pop in again, checked by default with TOU notice visible
+            const touSwitchAfter = screen.getByRole('switch', { name: /Direct Solar and Battery Export Management/i });
+            expect(touSwitchAfter).toBeInTheDocument();
+            expect(touSwitchAfter).toBeChecked();
+            expect(screen.getByText(/Notice: This feature requires RateRudder to manage your battery's Time-Of-Use/i)).toBeInTheDocument();
+        });
+
+        it('automatically expands ESS section and highlights TOU toggle when visiting /settings?tou=1', async () => {
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                ess: 'tesla',
+                hasCredentials: { tesla: true },
+                manageTOUSchedules: false,
+                release: 'production',
+                gridExportSolar: true,
+            });
+            (fetchAuthStatus as any).mockResolvedValue({ ...defaultAuthStatus, loggedIn: true });
+
+            const scrollIntoViewMock = vi.fn();
+            window.HTMLElement.prototype.scrollIntoView = scrollIntoViewMock;
+
+            window.history.pushState(null, '', '/settings?tou=1');
+            render(<App />);
+
+            await screen.findByRole('heading', { name: /^Settings$/i });
+
+            // ESS section should automatically be expanded without clicking Edit
+            const touSwitch = await screen.findByRole('switch', { name: /Direct Solar and Battery Export Management/i });
+            expect(touSwitch).toBeInTheDocument();
+
+            // TOU section container should have the highlighted-section class and be scrolled into view
+            const touSection = screen.getByTestId('tou-management-section');
+            expect(touSection).toHaveClass('highlighted-section');
+            expect(scrollIntoViewMock).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
         });
     });
 
@@ -2944,12 +2964,13 @@ describe('App & Settings', () => {
     });
 
     describe('Minimum Difference Degradation Warnings', () => {
-        it('shows degradation warnings when minimum arbitrage profit or battery export margin are lowered below defaults', async () => {
+        it('shows Default placeholder when unset (0) and shows degradation warnings only when lowered to a positive value below thresholds', async () => {
+            const user = userEvent.setup();
             (api.fetchSettings as any).mockResolvedValue({
                 ...defaultSettings,
                 gridExportBatteries: true,
-                minArbitrageDifferenceDollarsPerKWH: 0.03,
-                minBatteryExportDifferenceDollarsPerKWH: 0.07,
+                minArbitrageDifferenceDollarsPerKWH: 0,
+                minBatteryExportDifferenceDollarsPerKWH: 0,
             });
 
             await navigateToSettings();
@@ -2960,19 +2981,179 @@ describe('App & Settings', () => {
             const arbInput = await screen.findByLabelText(/Minimum Arbitrage Profit/i);
             const exportInput = await screen.findByLabelText(/Battery Export Margin/i);
 
+            expect(arbInput).toHaveAttribute('placeholder', 'Default');
+            expect(exportInput).toHaveAttribute('placeholder', 'Default');
+            expect(arbInput).toHaveValue(null);
+            expect(exportInput).toHaveValue(null);
+
             expect(screen.queryByTestId('min-arbitrage-warning')).not.toBeInTheDocument();
             expect(screen.queryByTestId('min-battery-export-warning')).not.toBeInTheDocument();
 
-            fireEvent.change(arbInput, { target: { value: '0.02' } });
+            await user.type(arbInput, '0.02');
+            expect(arbInput).toHaveValue(0.02);
             expect(screen.getByTestId('min-arbitrage-warning')).toHaveTextContent(/battery degradation/i);
 
-            fireEvent.change(exportInput, { target: { value: '0.03' } });
+            await user.type(exportInput, '0.03');
+            expect(exportInput).toHaveValue(0.03);
             expect(screen.getByTestId('min-battery-export-warning')).toHaveTextContent(/battery degradation/i);
 
             fireEvent.change(arbInput, { target: { value: '0.03' } });
             fireEvent.change(exportInput, { target: { value: '0.05' } });
             expect(screen.queryByTestId('min-arbitrage-warning')).not.toBeInTheDocument();
             expect(screen.queryByTestId('min-battery-export-warning')).not.toBeInTheDocument();
+
+            // Clearing the inputs resets to Default (0) without showing warnings
+            fireEvent.change(arbInput, { target: { value: '' } });
+            fireEvent.change(exportInput, { target: { value: '' } });
+            expect(arbInput).toHaveValue(null);
+            expect(exportInput).toHaveValue(null);
+            expect(screen.queryByTestId('min-arbitrage-warning')).not.toBeInTheDocument();
+            expect(screen.queryByTestId('min-battery-export-warning')).not.toBeInTheDocument();
+        });
+    });
+
+    describe('ESS Auth Failure and Cooldown Warnings', () => {
+        it('shows auth failure warning and Auth Failing badge when consecutiveFailures >= 3 or >= 40', async () => {
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                ess: 'franklin',
+                hasCredentials: { franklin: true },
+                essAuthStatus: {
+                    consecutiveFailures: 40,
+                    lastAttempt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+                },
+            });
+
+            await navigateToSettings();
+
+            const authWarning = await screen.findByTestId('ess-auth-warning');
+            expect(authWarning).toHaveTextContent(/paused after 40 failed attempts/i);
+            expect(authWarning).toHaveTextContent(/locking out your account/i);
+            expect(screen.getByText('Auth Failing')).toBeInTheDocument();
+            expect(screen.queryByTestId('ess-cooldown-warning')).not.toBeInTheDocument();
+        });
+
+        it('shows Tesla permissions warning and Auth Failing badge when consecutiveSetFailures >= 3', async () => {
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                ess: 'tesla',
+                hasCredentials: { tesla: true },
+                essAuthStatus: {
+                    consecutiveFailures: 0,
+                    consecutiveSetFailures: 10,
+                    lastAttempt: new Date().toISOString(),
+                },
+            });
+
+            await navigateToSettings();
+
+            const authWarning = await screen.findByTestId('ess-auth-warning');
+            expect(authWarning).toHaveTextContent(/Applying battery mode changes has failed 10 times in a row/i);
+            expect(authWarning).toHaveTextContent(/make sure all permissions \(including Energy Commands\) are checked/i);
+            expect(screen.getByText('Auth Failing')).toBeInTheDocument();
+        });
+
+        it('shows active interactive cooldown warning when consecutiveUserFailures >= 2 within 15 minutes, and hides it when older than 15 minutes', async () => {
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                ess: 'franklin',
+                hasCredentials: { franklin: true },
+                essAuthStatus: {
+                    consecutiveFailures: 2,
+                    lastAttempt: new Date(Date.now() - 5000).toISOString(),
+                    consecutiveUserFailures: 2,
+                    lastUserAttempt: new Date(Date.now() - 5000).toISOString(),
+                },
+            });
+
+            await navigateToSettings();
+
+            const cooldownWarning = await screen.findByTestId('ess-cooldown-warning');
+            expect(cooldownWarning).toHaveTextContent(/Please wait \d+s before trying again/i);
+            expect(cooldownWarning).toHaveTextContent(/protect your battery manufacturer account from being locked out/i);
+        });
+
+        it('shows retry caution on first interactive failure and cooldown warning on second failure', async () => {
+            const user = userEvent.setup();
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                ess: 'franklin',
+                hasCredentials: { franklin: true },
+                essAuthStatus: {
+                    consecutiveFailures: 40,
+                    lastAttempt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+                },
+            });
+            (api.updateSettings as any).mockRejectedValue(new Error('invalid username or password'));
+
+            await navigateToSettings();
+
+            const editBtn = await screen.findByLabelText('Edit Energy Storage System');
+            await user.click(editBtn);
+
+            const emailInput = screen.getByLabelText('Email');
+            const passInput = screen.getByLabelText('Password');
+            await user.type(emailInput, 'user@example.com');
+            await user.type(passInput, 'wrongpass1');
+
+            const saveBtn = screen.getByRole('button', { name: /Save Settings/i });
+            await user.click(saveBtn);
+
+            // First interactive failure -> shows retry caution (0s wait)
+            const caution = await screen.findByTestId('ess-retry-caution');
+            expect(caution).toHaveTextContent(/Double-check your credentials before trying again/i);
+            expect(caution).toHaveTextContent(/retry immediately right now/i);
+
+            // Second interactive failure -> shows 30s cooldown warning
+            await user.click(saveBtn);
+            const cooldown = await screen.findByTestId('ess-cooldown-warning');
+            expect(cooldown).toHaveTextContent(/Please wait \d+s before trying again/i);
+
+            // Rate limit error from server includes lockout explanation
+            (api.updateSettings as any).mockRejectedValueOnce(new Error('ESS rate limited, try again in 28s'));
+            await user.click(saveBtn);
+            expect(await screen.findByText(/ESS rate limited, try again in 28s\. RateRudder temporarily pauses login attempts/i)).toBeInTheDocument();
+
+            // Succeeding re-auth on an already-configured ESS clears warnings without opening the initial grid confirmation modal
+            (api.updateSettings as any).mockResolvedValueOnce(undefined);
+            await user.click(saveBtn);
+            await waitFor(() => {
+                expect(screen.getByText('Settings saved successfully')).toBeInTheDocument();
+            });
+            expect(screen.queryByText('Confirm Grid Settings')).not.toBeInTheDocument();
+            expect(screen.queryByTestId('ess-auth-warning')).not.toBeInTheDocument();
+            expect(screen.queryByTestId('ess-cooldown-warning')).not.toBeInTheDocument();
+        });
+
+        it('does not show auth failure or retry warnings for unconfigured ESS or non-ESS save errors', async () => {
+            const user = userEvent.setup();
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                ess: 'franklin',
+                hasCredentials: { franklin: false },
+                essAuthStatus: {
+                    consecutiveFailures: 0,
+                    lastAttempt: new Date().toISOString(),
+                },
+            });
+            (api.updateSettings as any).mockRejectedValue(new Error('failed to fetch location data for postal code'));
+
+            await navigateToSettings();
+
+            expect(screen.queryByTestId('ess-auth-warning')).not.toBeInTheDocument();
+
+            const emailInput = await screen.findByLabelText('Email');
+            const passInput = screen.getByLabelText('Password');
+            await user.type(emailInput, 'user@example.com');
+            await user.type(passInput, 'validpass');
+
+            const saveBtn = screen.getByRole('button', { name: /Save Settings/i });
+            await user.click(saveBtn);
+
+            expect(await screen.findByText(/failed to fetch location data for postal code/i)).toBeInTheDocument();
+            expect(screen.queryByTestId('ess-retry-caution')).not.toBeInTheDocument();
+            expect(screen.queryByTestId('ess-cooldown-warning')).not.toBeInTheDocument();
+            expect(screen.queryByTestId('ess-auth-warning')).not.toBeInTheDocument();
         });
     });
 });

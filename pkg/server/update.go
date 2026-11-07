@@ -439,12 +439,8 @@ func (s *Server) performSiteUpdate(
 	notifData.weatherHistory = weatherHistory
 	configuredReserveSOC := settings.Settings.GetMinBatterySOC(ctx, s.now(), status.Timestamp.Location(), currentPrice)
 
-	// don't update if we're in emergency mode (except Franklin systems where
-	// emergency mode is used as fallback for grid charging)
-	// TODO: Temporarily skip emergency mode bailout for Franklin systems because
-	// Franklin disabled power control grid charge toggles, requiring emergency
-	// backup mode to force charging. Revisit to reverse when fixed.
-	if status.EmergencyMode && settings.ESS != "franklin" {
+	// don't update if we're in emergency mode
+	if status.EmergencyMode {
 		log.Ctx(ctx).InfoContext(ctx, "update: emergency mode, ensuring grid charge is enabled")
 
 		minSOC := int(math.Round(configuredReserveSOC))
@@ -1378,7 +1374,7 @@ func (s *Server) canSetModes(settings settingsWithVersion) error {
 		backoff := getESSBackoff(failures)
 		timeLeft := backoff - s.now().Sub(settings.ESSAuthStatus.LastAttempt)
 		if timeLeft > 0 {
-			timeLeft = timeLeft.Round(time.Second)
+			timeLeft = max(timeLeft.Round(time.Second), time.Second)
 			return fmt.Errorf("%w, try again in %v", errESSRateLimited, timeLeft)
 		}
 	}
@@ -1416,7 +1412,7 @@ func (s *Server) setESSModes(
 		return false, err
 	}
 
-	if settings.ESSAuthStatus.ConsecutiveSetFailures > 0 {
+	if changed && settings.ESSAuthStatus.ConsecutiveSetFailures > 0 {
 		settings.ESSAuthStatus.ConsecutiveSetFailures = 0
 		settings.ESSAuthStatus.LastAttempt = s.now().UTC()
 		if newUpdatedAt, dbErr := s.storage.SetSettings(ctx, siteID, settings.Settings, settings.version, settings.updatedAt); dbErr != nil {

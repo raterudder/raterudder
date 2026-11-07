@@ -13,7 +13,7 @@ import (
 
 // CurrentSettingsVersion is the current version of the settings struct.
 // Increment this value only if you need to set a default value other than the Go default for that value.
-const CurrentSettingsVersion = 20
+const CurrentSettingsVersion = 21
 
 // Settings represents the configuration stored in the database.
 // These are dynamic settings that can be changed without redeploying.
@@ -45,7 +45,6 @@ type Settings struct {
 	MinArbitrageDifferenceDollarsPerKWH float64 `json:"minArbitrageDifferenceDollarsPerKWH"`
 
 	// MinBatteryExportDifferenceDollarsPerKWH is the minimum profit spread ($/kWh) required to export battery energy directly to the grid.
-	// TODO: Reset MinBatteryExportDifferenceDollarsPerKWH to 0 in a new settings migration version when fully switching to plan mode if users have it set to the legacy default (0.07), so that profile defaults take effect unless explicitly configured.
 	MinBatteryExportDifferenceDollarsPerKWH float64 `json:"minBatteryExportDifferenceDollarsPerKWH"`
 
 	// How to value solar exports when net metering credits are active. Valid values: "", "lowest", "highest", "none". Default is "lowest".
@@ -149,9 +148,11 @@ type GridSettings struct {
 
 // ESSAuthStatus represents the status of ESS authentication for the site.
 type ESSAuthStatus struct {
-	ConsecutiveFailures    int       `json:"consecutiveFailures,omitempty"`
-	ConsecutiveSetFailures int       `json:"consecutiveSetFailures,omitempty"`
-	LastAttempt            time.Time `json:"lastAttempt,omitempty"`
+	ConsecutiveFailures     int       `json:"consecutiveFailures,omitempty"`
+	ConsecutiveSetFailures  int       `json:"consecutiveSetFailures,omitempty"`
+	ConsecutiveUserFailures int       `json:"consecutiveUserFailures,omitempty"`
+	LastAttempt             time.Time `json:"lastAttempt,omitempty"`
+	LastUserAttempt         time.Time `json:"lastUserAttempt,omitempty"`
 }
 
 // Credentials for external systems
@@ -230,10 +231,6 @@ func MigrateSettings(s Settings, currentVersion int, release string) (Settings, 
 			// version 1: initial
 			if s.IgnoreHourUsageOverMultiple == 0 {
 				s.IgnoreHourUsageOverMultiple = 2
-				migrated = true
-			}
-			if s.MinArbitrageDifferenceDollarsPerKWH == 0 {
-				s.MinArbitrageDifferenceDollarsPerKWH = 0.03
 				migrated = true
 			}
 			if s.MinBatterySOC == 0 {
@@ -335,11 +332,7 @@ func MigrateSettings(s Settings, currentVersion int, release string) (Settings, 
 			}
 		case 17:
 			// version 17: add default MinBatteryExportDifferenceDollarsPerKWH
-			if s.MinBatteryExportDifferenceDollarsPerKWH == 0 {
-				// Default is $0.07/kWh (~$1 profit per cycle on a 15 kWh battery).
-				s.MinBatteryExportDifferenceDollarsPerKWH = 0.07
-				migrated = true
-			}
+			// we no longer default this
 		case 18:
 			// version 18: partition updateGroup into TOU (1..12) and ComEd (13..16) pools,
 			// and ensure ineligible sites have updateGroup reset to 0.
@@ -378,6 +371,17 @@ func MigrateSettings(s Settings, currentVersion int, release string) (Settings, 
 			if len(s.EVChargingPeriods) > 0 {
 				s.EVChargingStandby = true
 				s.EVChargingPeriods = nil
+				migrated = true
+			}
+		case 21:
+			// version 21: reset legacy default MinArbitrageDifferenceDollarsPerKWH (0.03) and
+			// MinBatteryExportDifferenceDollarsPerKWH (0.07) to 0 so OptimizationProfile defaults take effect.
+			if s.MinArbitrageDifferenceDollarsPerKWH == 0.03 {
+				s.MinArbitrageDifferenceDollarsPerKWH = 0
+				migrated = true
+			}
+			if s.MinBatteryExportDifferenceDollarsPerKWH == 0.07 {
+				s.MinBatteryExportDifferenceDollarsPerKWH = 0
 				migrated = true
 			}
 		default:

@@ -503,76 +503,6 @@ func TestHandleUpdate(t *testing.T) {
 		mockES.AssertExpectations(t)
 	})
 
-	t.Run("Action - Emergency Mode Franklin Bypass", func(t *testing.T) {
-		mockS := &mockStorage{}
-		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
-		mockS.On("GetHistorySummaries", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.HistorySummary{
-			{
-				Energy: []types.DailyEnergyStats{
-					{TSDayStart: truncateDay(time.Now()).AddDate(0, 0, -1)},
-				},
-			},
-		}, nil)
-		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{ESS: "franklin", UtilityProvider: "test"}, types.CurrentSettingsVersion, time.Time{}, nil)
-		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
-		mockS.On("GetLatestPriceHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil)
-		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
-		mockS.On("GetPriceHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Price{}, nil).Maybe()
-
-		mockES := &mockESS{MockName: "franklin"}
-		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
-		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
-		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
-		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{EmergencyMode: true}, nil)
-		mockES.On("SetModes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-
-		mockP := ess.NewMap()
-		mockP.SetSystem(types.SiteIDNone, mockES)
-
-		mockS.On("InsertAction", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(time.Time{}, nil).Maybe()
-		mockS.On("UpsertPrices", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-
-		var futurePrices []types.Price
-		now := time.Now()
-		for i := 0; i < 48; i++ {
-			futurePrices = append(futurePrices, types.Price{
-				DollarsPerKWH: 0.10,
-				TSStart:       now.Add(time.Duration(i) * time.Hour),
-			})
-		}
-
-		mockU := &mockUtility{}
-		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
-		mockU.On("GetCurrentPrice", mock.Anything).Return(types.Price{DollarsPerKWH: 0.10, TSStart: now}, nil)
-		mockU.On("GetConfirmedPrices", mock.Anything, mock.Anything, mock.Anything).Return(futurePrices[:24], nil)
-		mockU.On("GetFuturePrices", mock.Anything).Return(futurePrices, nil).Maybe()
-		mockU.On("GetVPPInfo", mock.Anything).Return(types.UtilityVPPInfo{}, nil).Maybe()
-
-		mockUMap := utility.NewMap(mockS)
-		mockUMap.SetProvider(types.SiteIDNone, mockU)
-
-		srv := &Server{
-			utilities:  mockUMap,
-			ess:        mockP,
-			storage:    mockS,
-			listenAddr: ":8080",
-			controller: controller.NewController(),
-			bypassAuth: true,
-		}
-
-		req := httptest.NewRequest("GET", "/api/update", nil)
-		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
-		w := httptest.NewRecorder()
-		srv.handleUpdate(w, req)
-
-		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
-		var resp map[string]any
-		_ = json.NewDecoder(w.Body).Decode(&resp)
-		// Should NOT be emergency mode status because Franklin bypasses bailout and continues update logic
-		assert.NotEqual(t, "emergency mode", resp["status"])
-	})
-
 	t.Run("Action - Alarms Present", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
@@ -1928,9 +1858,15 @@ func TestHandleUpdateSites(t *testing.T) {
 
 		mockES := &mockESS{}
 		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
-		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil)
+		// Simulate an OAuth token refresh (updated=true) to verify it does NOT wipe ConsecutiveSetFailures
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{
+			Tesla: &types.TeslaCredentials{AccessToken: "refreshed"},
+		}, true, nil)
 		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil)
 		mockES.On("GetStatus", mock.Anything).Return(types.SystemStatus{BatterySOC: 80}, nil)
+		mockS.On("SetSettings", mock.Anything, "site-write-rate-limited", mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveSetFailures == 2
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
 
 		mockP := ess.NewMap()
 		mockP.SetSystem("site-write-rate-limited", mockES)
@@ -1946,11 +1882,12 @@ func TestHandleUpdateSites(t *testing.T) {
 		mockUMap.SetProvider("site-write-rate-limited", mockU)
 
 		srv := &Server{
-			storage:    mockS,
-			utilities:  mockUMap,
-			ess:        mockP,
-			release:    "production",
-			bypassAuth: true,
+			storage:       mockS,
+			utilities:     mockUMap,
+			ess:           mockP,
+			release:       "production",
+			bypassAuth:    true,
+			encryptionKey: "test-secret-key-1234567890123456",
 		}
 
 		req := httptest.NewRequest("POST", "/api/updateSites", nil)
@@ -1961,6 +1898,7 @@ func TestHandleUpdateSites(t *testing.T) {
 		err := json.NewDecoder(w.Body).Decode(&results)
 		require.NoError(t, err)
 		assert.Equal(t, "skipped: ESS rate limited", results["site-write-rate-limited"])
+		mockS.AssertExpectations(t)
 	})
 
 	t.Run("Cron Partitioning", func(t *testing.T) {
@@ -3065,8 +3003,8 @@ func TestSetESSModes(t *testing.T) {
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
 		mockES := &mockESS{}
 
-		// Expect SetModes to succeed
-		mockES.On("SetModes", mock.Anything, types.BatteryModeChargeAny, types.SolarModeAny, mock.Anything).Return(nil)
+		// Expect SetModes to succeed with changed=true
+		mockES.On("SetModes", mock.Anything, types.BatteryModeChargeAny, types.SolarModeAny, mock.Anything).Return(true, nil)
 
 		// Expect settings to be saved with ConsecutiveSetFailures reset to 0
 		mockS.On("SetSettings", mock.Anything, "test-site", mock.MatchedBy(func(s types.Settings) bool {
@@ -3087,9 +3025,39 @@ func TestSetESSModes(t *testing.T) {
 			version: 1,
 		}
 
-		_, err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{}, settings)
+		changed, err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{}, settings)
 		assert.NoError(t, err)
+		assert.True(t, changed)
 		mockS.AssertExpectations(t)
+		mockES.AssertExpectations(t)
+	})
+
+	t.Run("No-op SetModes (changed=false) does not clear ConsecutiveSetFailures", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+		mockES := &mockESS{}
+
+		// When hardware is already in the target state, SetModes sends no write API calls and returns changed=false, nil
+		mockES.On("SetModes", mock.Anything, types.BatteryModeLoad, types.SolarModeAny, mock.Anything).Return(false, nil)
+
+		srv := &Server{
+			storage: mockS,
+		}
+
+		settings := settingsWithVersion{
+			Settings: types.Settings{
+				ESSAuthStatus: types.ESSAuthStatus{
+					ConsecutiveSetFailures: 3,
+					LastAttempt:            time.Now().Add(-time.Hour),
+				},
+			},
+			version: 1,
+		}
+
+		changed, err := srv.setESSModes(context.Background(), "test-site", mockES, types.BatteryModeLoad, types.SolarModeAny, types.ModesOptions{}, settings)
+		assert.NoError(t, err)
+		assert.False(t, changed)
+		mockS.AssertNotCalled(t, "SetSettings")
 		mockES.AssertExpectations(t)
 	})
 

@@ -430,6 +430,19 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                             </p>
                         </div>
                     )}
+                    {settings && settings.essAuthStatus && (settings.essAuthStatus.consecutiveFailures ?? 0) < 3 && (settings.essAuthStatus.consecutiveSetFailures ?? 0) >= 3 && (
+                        <div className="banner warning-banner">
+                            <p>
+                                {settings.ess === 'tesla' ? (
+                                    <span><strong>Warning:</strong> RateRudder can read your Tesla battery status, but failed to update battery modes {settings.essAuthStatus.consecutiveSetFailures} time(s) due to missing command permissions.{' '}
+                                    <Link href="/settings">Re-link your Tesla account in Settings</Link> and make sure all permissions (including Energy Commands) are checked.</span>
+                                ) : (
+                                    <span><strong>Warning:</strong> Energy Storage System rejected battery mode updates {settings.essAuthStatus.consecutiveSetFailures} time(s).{' '}
+                                    Please check your battery manufacturer app to make sure your account can change battery settings, or <Link href="/settings">re-authenticate in Settings</Link>.</span>
+                                )}
+                            </p>
+                        </div>
+                    )}
                     {showGridWarning && (
                         <div className="banner warning-banner" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} data-testid="grid-restrictions-warning-banner">
                             <p>

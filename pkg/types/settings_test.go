@@ -16,7 +16,7 @@ func TestMigrateSettings(t *testing.T) {
 		assert.True(t, changed)
 		assert.Equal(t, 2.0, s.IgnoreHourUsageOverMultiple)
 		assert.Equal(t, 0.5, s.IgnoreHourUsageFloorKWH)
-		assert.Equal(t, 0.03, s.MinArbitrageDifferenceDollarsPerKWH)
+		assert.Equal(t, 0.0, s.MinArbitrageDifferenceDollarsPerKWH)
 		assert.Equal(t, 20.0, s.MinBatterySOC)
 	})
 
@@ -170,24 +170,13 @@ func TestMigrateSettings(t *testing.T) {
 
 		// Case 2: Unconfigured ESS site
 		unconfiguredSite := Settings{
-			ESS:                                     "",
-			OptimizationProfile:                     "balanced",
-			MinBatteryExportDifferenceDollarsPerKWH: 0.07,
+			ESS:                 "",
+			OptimizationProfile: "balanced",
 		}
 		s2, changed2, err2 := MigrateSettings(unconfiguredSite, 15, "production")
 		require.NoError(t, err2)
 		assert.False(t, changed2)
 		assert.False(t, s2.CustomGridSettings)
-	})
-
-	t.Run("v16 to v17: add default MinBatteryExportDifferenceDollarsPerKWH", func(t *testing.T) {
-		old := Settings{
-			Release: "production",
-		}
-		s, changed, err := MigrateSettings(old, 16, "production")
-		require.NoError(t, err)
-		assert.True(t, changed)
-		assert.Equal(t, 0.07, s.MinBatteryExportDifferenceDollarsPerKWH)
 	})
 
 	t.Run("v17 to v18: updateGroup partitioning and eligibility", func(t *testing.T) {
@@ -336,6 +325,38 @@ func TestMigrateSettings(t *testing.T) {
 		assert.False(t, changed2)
 		assert.False(t, s2.EVChargingStandby)
 		assert.Nil(t, s2.EVChargingPeriods)
+	})
+
+	t.Run("v20 to v21: reset legacy default arbitrage and battery export differences", func(t *testing.T) {
+		// Case 1: Legacy defaults (0.03 and 0.07) are reset to 0
+		legacyDefaults := Settings{
+			MinArbitrageDifferenceDollarsPerKWH:     0.03,
+			MinBatteryExportDifferenceDollarsPerKWH: 0.07,
+		}
+		s1, changed1, err1 := MigrateSettings(legacyDefaults, 20, "production")
+		require.NoError(t, err1)
+		assert.True(t, changed1)
+		assert.Equal(t, 0.0, s1.MinArbitrageDifferenceDollarsPerKWH)
+		assert.Equal(t, 0.0, s1.MinBatteryExportDifferenceDollarsPerKWH)
+
+		// Case 2: Custom non-default values are preserved
+		customValues := Settings{
+			MinArbitrageDifferenceDollarsPerKWH:     0.05,
+			MinBatteryExportDifferenceDollarsPerKWH: 0.10,
+		}
+		s2, changed2, err2 := MigrateSettings(customValues, 20, "production")
+		require.NoError(t, err2)
+		assert.False(t, changed2)
+		assert.Equal(t, 0.05, s2.MinArbitrageDifferenceDollarsPerKWH)
+		assert.Equal(t, 0.10, s2.MinBatteryExportDifferenceDollarsPerKWH)
+
+		// Case 3: Already zero values make no changes
+		zeroValues := Settings{}
+		s3, changed3, err3 := MigrateSettings(zeroValues, 20, "production")
+		require.NoError(t, err3)
+		assert.False(t, changed3)
+		assert.Equal(t, 0.0, s3.MinArbitrageDifferenceDollarsPerKWH)
+		assert.Equal(t, 0.0, s3.MinBatteryExportDifferenceDollarsPerKWH)
 	})
 
 	t.Run("no change: current version", func(t *testing.T) {

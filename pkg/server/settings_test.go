@@ -1043,6 +1043,77 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.True(t, mockES.AssertExpectations(t))
 	})
 
+	t.Run("Update Settings - Auto-Enables ManageTOUSchedules When Syncing Export Grid Settings for Supported ESS", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+		mockS.On("GetLatestEnergyHistoryTime", mock.Anything, mock.Anything).Return(time.Time{}, 0, nil).Maybe()
+		mockS.On("UpsertEnergyHistories", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockS.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+		mockS.On("GetWeather", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]types.Weather{}, nil).Maybe()
+		mockS.On("UpdateHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(types.HistorySummary{}, nil).Maybe()
+		mockS.On("UpsertHistorySummary", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockES := &mockESS{MockName: "franklin"}
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockES)
+
+		mockUMap := utility.NewMap(mockS)
+		mockU := &mockUtility{}
+		mockU.On("ApplySettings", mock.Anything, mock.Anything).Return(nil).Maybe()
+		mockUMap.SetProvider(types.SiteIDNone, mockU)
+
+		srv := &Server{
+			utilities:     mockUMap,
+			storage:       mockS,
+			ess:           essMap,
+			encryptionKey: "test-secret-key-1234567890123456",
+		}
+
+		reqBody := struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials,omitempty"`
+		}{
+			Settings: types.Settings{
+				ESS:                         "franklin",
+				CustomGridSettings:          false,
+				ManageTOUSchedules:          false,
+				MinBatterySOC:               20,
+				IgnoreHourUsageOverMultiple: 5,
+				SolarTrendRatioMax:          3.0,
+				SolarBellCurveMultiplier:    1.0,
+			},
+			Credentials: &types.Credentials{
+				Franklin: &types.FranklinCredentials{Username: "user@example.com", Password: "pw"},
+			},
+		}
+		b, err := json.Marshal(reqBody)
+		require.NoError(t, err)
+		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+		req = withUser(req, "admin@example.com", true)
+		w := httptest.NewRecorder()
+
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{
+			Franklin: &types.FranklinCredentials{Username: "user@example.com", Password: "pw"},
+		}, true, nil)
+		mockES.On("GetEnergyHistory", mock.Anything, mock.Anything, mock.Anything).Return([]types.DailyEnergyStats{}, nil).Maybe()
+		mockES.On("GridSettings", mock.Anything).Return(types.GridSettings{
+			GridChargeBatteries: true,
+			GridExportSolar:     true,
+			GridExportBatteries: false,
+		}, nil)
+
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{}, types.CurrentSettingsVersion, time.Time{}, nil)
+		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			return s.GridChargeBatteries == true && s.GridExportSolar == true && s.GridExportBatteries == false && s.ManageTOUSchedules == true
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil)
+
+		srv.handleUpdateSettings(w, req)
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockES.AssertExpectations(t))
+	})
+
 	t.Run("Update Settings - Preserves Manual Grid Settings when CustomGridSettings is True", func(t *testing.T) {
 		mockS := &mockStorage{}
 		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
@@ -1530,8 +1601,10 @@ func TestHandleUpdateSettings(t *testing.T) {
 			ESS:                  "mock",
 			EncryptedCredentials: encrypted,
 			ESSAuthStatus: types.ESSAuthStatus{
-				ConsecutiveFailures: 2,
-				LastAttempt:         time.Now().UTC().Add(-10 * time.Second), // 20s remaining of 30s
+				ConsecutiveFailures:     2,
+				LastAttempt:             time.Now().UTC().Add(-10 * time.Second),
+				ConsecutiveUserFailures: 2,
+				LastUserAttempt:         time.Now().UTC().Add(-10 * time.Second), // 20s remaining of 30s
 			},
 		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
 
@@ -1598,8 +1671,10 @@ func TestHandleUpdateSettings(t *testing.T) {
 			ESS:                  "mock",
 			EncryptedCredentials: encrypted,
 			ESSAuthStatus: types.ESSAuthStatus{
-				ConsecutiveFailures: 2,
-				LastAttempt:         time.Now().UTC().Add(-10 * time.Second), // 20s remaining of 30s
+				ConsecutiveFailures:     2,
+				LastAttempt:             time.Now().UTC().Add(-10 * time.Second),
+				ConsecutiveUserFailures: 2,
+				LastUserAttempt:         time.Now().UTC().Add(-10 * time.Second), // 20s remaining of 30s
 			},
 		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
 
@@ -1669,8 +1744,10 @@ func TestHandleUpdateSettings(t *testing.T) {
 			ESS:                  "mock",
 			EncryptedCredentials: encrypted,
 			ESSAuthStatus: types.ESSAuthStatus{
-				ConsecutiveFailures: 5,
-				LastAttempt:         time.Now().UTC().Add(-5 * time.Minute),
+				ConsecutiveFailures:     5,
+				LastAttempt:             time.Now().UTC().Add(-5 * time.Minute),
+				ConsecutiveUserFailures: 5,
+				LastUserAttempt:         time.Now().UTC().Add(-5 * time.Minute),
 			},
 		}, types.CurrentSettingsVersion, time.Time{}, nil)
 
@@ -1682,12 +1759,158 @@ func TestHandleUpdateSettings(t *testing.T) {
 		})).Return(types.Credentials{}, true, nil)
 
 		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
-			return s.ESSAuthStatus.ConsecutiveFailures == 0
+			return s.ESSAuthStatus.ConsecutiveFailures == 0 && s.ESSAuthStatus.ConsecutiveUserFailures == 0
 		}), mock.Anything, mock.Anything).Return(time.Time{}, nil)
 
 		w := httptest.NewRecorder()
 		srv.handleUpdateSettings(w, req)
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+	})
+
+	t.Run("Rate Limit Capped at 15 Minutes for High Failure Counts", func(t *testing.T) {
+		mockS := &mockStorage{}
+		mockS.On("GetLatestAction", mock.Anything, mock.Anything).Return((*types.Action)(nil), nil).Maybe()
+		mockES := &mockESS{}
+		mockES.On("ApplySettings", mock.Anything, mock.Anything).Return(nil)
+
+		essMap := ess.NewMap()
+		essMap.SetSystem(types.SiteIDNone, mockES)
+
+		testTime := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		srv := &Server{
+			ess:           essMap,
+			storage:       mockS,
+			encryptionKey: "test-secret-key-1234567890123456",
+			nowFunc:       func() time.Time { return testTime },
+		}
+
+		existingCreds := types.Credentials{
+			Mock: &types.MockCredentials{Strategy: "bar"},
+		}
+		encrypted, err := srv.encryptCredentials(context.Background(), types.SiteIDNone, existingCreds)
+		require.NoError(t, err)
+
+		body := struct {
+			types.Settings
+			Credentials *types.Credentials `json:"credentials"`
+		}{
+			Settings: types.Settings{
+				ESS:                         "mock",
+				MinBatterySOC:               20,
+				IgnoreHourUsageOverMultiple: 2,
+				SolarTrendRatioMax:          3,
+				SolarBellCurveMultiplier:    1,
+			},
+			Credentials: &types.Credentials{
+				Mock: &types.MockCredentials{
+					Strategy: "foo",
+				},
+			},
+		}
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+
+		// 1. With 10 interactive failures and LastUserAttempt 5 minutes ago, interactive backoff is capped at 15m (10m remaining)
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			ESS:                  "mock",
+			EncryptedCredentials: encrypted,
+			ESSAuthStatus: types.ESSAuthStatus{
+				ConsecutiveFailures:     40,
+				LastAttempt:             testTime.Add(-5 * time.Minute),
+				ConsecutiveUserFailures: 10,
+				LastUserAttempt:         testTime.Add(-5 * time.Minute),
+			},
+		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+		req1 := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+		req1 = withUser(req1, "admin@example.com", true)
+		w1 := httptest.NewRecorder()
+		srv.handleUpdateSettings(w1, req1)
+		assert.Equal(t, http.StatusTooManyRequests, w1.Result().StatusCode)
+		assert.Contains(t, w1.Body.String(), "try again in 10m0s")
+
+		// 2. At 16 minutes after 10 interactive failures (cooldown expired, but within 30m reset window):
+		// Retry is allowed, and if it fails, ConsecutiveUserFailures increments to 11 (staying at 15m cap, not resetting to 1)
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			ESS:                  "mock",
+			EncryptedCredentials: encrypted,
+			ESSAuthStatus: types.ESSAuthStatus{
+				ConsecutiveFailures:     40,
+				LastAttempt:             testTime.Add(-1 * time.Minute),
+				ConsecutiveUserFailures: 10,
+				LastUserAttempt:         testTime.Add(-16 * time.Minute),
+			},
+		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+		mockES.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+			return c.Mock.Strategy == "foo"
+		})).Return(types.Credentials{}, false, fmt.Errorf("bad password")).Once()
+
+		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveFailures == 41 && s.ESSAuthStatus.ConsecutiveUserFailures == 11
+		}), mock.Anything, mock.Anything).Return(time.Time{}, nil).Once()
+
+		req2 := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+		req2 = withUser(req2, "admin@example.com", true)
+		w2 := httptest.NewRecorder()
+		srv.handleUpdateSettings(w2, req2)
+		assert.Equal(t, http.StatusBadRequest, w2.Result().StatusCode)
+
+		// 3. After > 30 minutes of inactivity (2 * maxInteractiveESSBackoff), user gets a fresh interactive curve:
+		// First attempt fails -> sets ConsecutiveUserFailures=1 (0s backoff)
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			ESS:                  "mock",
+			EncryptedCredentials: encrypted,
+			ESSAuthStatus: types.ESSAuthStatus{
+				ConsecutiveFailures:     40,
+				LastAttempt:             testTime.Add(-1 * time.Minute),
+				ConsecutiveUserFailures: 10,
+				LastUserAttempt:         testTime.Add(-31 * time.Minute),
+			},
+		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+		mockES.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+			return c.Mock.Strategy == "foo"
+		})).Return(types.Credentials{}, false, fmt.Errorf("bad password")).Once()
+
+		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveFailures == 41 && s.ESSAuthStatus.ConsecutiveUserFailures == 1
+		}), mock.Anything, mock.Anything).Return(time.Time{}, nil).Once()
+
+		req3 := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+		req3 = withUser(req3, "admin@example.com", true)
+		w3 := httptest.NewRecorder()
+		srv.handleUpdateSettings(w3, req3)
+		assert.Equal(t, http.StatusBadRequest, w3.Result().StatusCode)
+
+		// 4. Immediate second try after 1 interactive failure (ConsecutiveUserFailures=1 has 0s backoff) succeeds and resets both counters
+		mockS.On("GetSettings", mock.Anything, mock.Anything).Return(types.Settings{
+			ESS:                  "mock",
+			EncryptedCredentials: encrypted,
+			ESSAuthStatus: types.ESSAuthStatus{
+				ConsecutiveFailures:     41,
+				LastAttempt:             testTime,
+				ConsecutiveUserFailures: 1,
+				LastUserAttempt:         testTime,
+			},
+		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+		mockES.On("Authenticate", mock.Anything, mock.MatchedBy(func(c types.Credentials) bool {
+			return c.Mock.Strategy == "foo"
+		})).Return(types.Credentials{}, true, nil).Once()
+
+		mockS.On("SetSettings", mock.Anything, mock.Anything, mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveFailures == 0 && s.ESSAuthStatus.ConsecutiveUserFailures == 0
+		}), mock.Anything, mock.Anything).Return(time.Time{}, nil).Once()
+
+		req4 := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+		req4 = withUser(req4, "admin@example.com", true)
+		w4 := httptest.NewRecorder()
+		srv.handleUpdateSettings(w4, req4)
+		assert.Equal(t, http.StatusOK, w4.Result().StatusCode)
+
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockES.AssertExpectations(t))
 	})
 
 	t.Run("Update Settings - Utility Provider Changed Re-fetches Prices", func(t *testing.T) {
@@ -2805,8 +3028,10 @@ func TestHandleESSStage(t *testing.T) {
 		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
 			ESS: "enphase",
 			ESSAuthStatus: types.ESSAuthStatus{
-				ConsecutiveFailures: 2,
-				LastAttempt:         time.Now().UTC(),
+				ConsecutiveFailures:     2,
+				LastAttempt:             time.Now().UTC(),
+				ConsecutiveUserFailures: 2,
+				LastUserAttempt:         time.Now().UTC(),
 			},
 		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
 
@@ -2826,16 +3051,15 @@ func TestHandleESSStage(t *testing.T) {
 		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
 			ESS: "enphase",
 			ESSAuthStatus: types.ESSAuthStatus{
-				ConsecutiveFailures: 2,
-				LastAttempt:         time.Now().UTC().Add(-10 * time.Minute), // wait has expired
+				ConsecutiveFailures:     2,
+				LastAttempt:             time.Now().UTC().Add(-10 * time.Minute),
+				ConsecutiveUserFailures: 2,
+				LastUserAttempt:         time.Now().UTC().Add(-10 * time.Minute), // wait has expired
 			},
 		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
 
-		// Authenticate returns ErrNeedsNextStage (success)
+		// Authenticate returns ErrNeedsNextStage (stage 0) -> does NOT reset failure counters prematurely
 		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, ess.ErrNeedsNextStage).Once()
-
-		// SetSettings must be called to reset auth status
-		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
 
 		body := map[string]any{
 			"ess": "enphase",
@@ -2854,25 +3078,91 @@ func TestHandleESSStage(t *testing.T) {
 
 		srv.handleESSStage(w, req)
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+		assert.True(t, mockS.AssertExpectations(t))
 
-		// Let's also test a complete success (err = nil) which resets failures to 0
+		// Complete stage authentication (err = nil) DOES reset failure counters to 0
 		srv2, mockES2, mockS2 := newAuthServer()
 		mockS2.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
 			ESS: "enphase",
 			ESSAuthStatus: types.ESSAuthStatus{
-				ConsecutiveFailures: 2,
-				LastAttempt:         time.Now().UTC().Add(-10 * time.Minute),
+				ConsecutiveFailures:     2,
+				LastAttempt:             time.Now().UTC().Add(-10 * time.Minute),
+				ConsecutiveUserFailures: 2,
+				LastUserAttempt:         time.Now().UTC().Add(-10 * time.Minute),
 			},
 		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
 
 		mockES2.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil).Once()
-		mockS2.On("SetSettings", mock.Anything, types.SiteIDNone, mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+		mockS2.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveFailures == 0 && s.ESSAuthStatus.ConsecutiveUserFailures == 0
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
 
 		w2 := httptest.NewRecorder()
 		req2 := httptest.NewRequest("POST", "/api/ess/stage", bytes.NewReader(b))
 		req2 = withUser(req2, "admin@example.com", true)
 		srv2.handleESSStage(w2, req2)
 		assert.Equal(t, http.StatusOK, w2.Result().StatusCode)
+		assert.True(t, mockS2.AssertExpectations(t))
+	})
+
+	t.Run("Stage rate limit capped at 15 minutes for high failure counts", func(t *testing.T) {
+		srv, mockES, mockS := newAuthServer()
+		testTime := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+		srv.nowFunc = func() time.Time { return testTime }
+
+		body := map[string]any{
+			"ess": "enphase",
+			"credentials": map[string]any{
+				"enphase": map[string]any{
+					"username": "test@example.com",
+				},
+			},
+		}
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+
+		// 1. With 10 interactive failures and LastUserAttempt 5 minutes ago, rate limit is capped at 15m (10m remaining)
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+			ESS: "enphase",
+			ESSAuthStatus: types.ESSAuthStatus{
+				ConsecutiveFailures:     40,
+				LastAttempt:             testTime.Add(-5 * time.Minute),
+				ConsecutiveUserFailures: 10,
+				LastUserAttempt:         testTime.Add(-5 * time.Minute),
+			},
+		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+		req1 := httptest.NewRequest("POST", "/api/ess/stage", bytes.NewReader(b))
+		req1 = withUser(req1, "admin@example.com", true)
+		w1 := httptest.NewRecorder()
+		srv.handleESSStage(w1, req1)
+		assert.Equal(t, http.StatusTooManyRequests, w1.Result().StatusCode)
+		assert.Contains(t, w1.Body.String(), "try again in 10m0s")
+
+		// 2. With 40 background failures and LastUserAttempt 16 minutes ago, stage request is allowed and full auth (err == nil) resets failures
+		mockS.On("GetSettings", mock.Anything, types.SiteIDNone).Return(types.Settings{
+			ESS: "enphase",
+			ESSAuthStatus: types.ESSAuthStatus{
+				ConsecutiveFailures:     40,
+				LastAttempt:             testTime.Add(-1 * time.Minute),
+				ConsecutiveUserFailures: 10,
+				LastUserAttempt:         testTime.Add(-16 * time.Minute),
+			},
+		}, types.CurrentSettingsVersion, time.Time{}, nil).Once()
+
+		mockES.On("Authenticate", mock.Anything, mock.Anything).Return(types.Credentials{}, false, nil).Once()
+		mockS.On("SetSettings", mock.Anything, types.SiteIDNone, mock.MatchedBy(func(s types.Settings) bool {
+			return s.ESSAuthStatus.ConsecutiveFailures == 0 && s.ESSAuthStatus.ConsecutiveUserFailures == 0
+		}), types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil).Once()
+
+		req2 := httptest.NewRequest("POST", "/api/ess/stage", bytes.NewReader(b))
+		req2 = withUser(req2, "admin@example.com", true)
+		w2 := httptest.NewRecorder()
+		srv.handleESSStage(w2, req2)
+		assert.Equal(t, http.StatusOK, w2.Result().StatusCode)
+
+		assert.True(t, mockS.AssertExpectations(t))
+		assert.True(t, mockES.AssertExpectations(t))
 	})
 }
 

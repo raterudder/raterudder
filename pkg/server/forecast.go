@@ -325,11 +325,11 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		updatedTime = status.Timestamp
 	}
 
-	isFaulted := (status.EmergencyMode && settings.ESS != "franklin") || len(status.Alarms) > 0 || status.GridUnavailable
+	isFaulted := status.EmergencyMode || len(status.Alarms) > 0 || status.GridUnavailable
 	if isFaulted {
 		desc := "Grid is unavailable"
 		reason := types.ActionReasonGridUnavailable
-		if status.EmergencyMode && settings.ESS != "franklin" {
+		if status.EmergencyMode {
 			desc = "In emergency mode"
 			reason = types.ActionReasonEmergencyMode
 		} else if len(status.Alarms) > 0 {

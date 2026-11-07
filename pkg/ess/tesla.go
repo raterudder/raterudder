@@ -142,6 +142,7 @@ func (b *baseTesla) info(ctx context.Context) types.ESSProviderInfo {
 		q.Set("client_id", b.clientID)
 		q.Set("scope", teslaScopes)
 		q.Set("redirect_uri", b.redirectURI(ctx))
+		q.Set("prompt_missing_scopes", "true")
 		q.Set("require_requested_scopes", "true")
 		parsed.RawQuery = q.Encode()
 		baseOAuthURL = parsed.String()

@@ -1407,10 +1407,18 @@ func TestFranklin(t *testing.T) {
 				})
 				return
 			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/updateSocV2" {
+				callOrder = append(callOrder, "updateSocV2")
+				require.NoError(t, r.ParseForm())
+				assert.Equal(t, "2", r.Form.Get("workMode"), "workMode should be 2 when franklinBackupToCharge is disabled")
+				assert.Equal(t, "100", r.Form.Get("soc"), "soc should be 100")
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": nil})
+				return
+			}
 			if r.URL.Path == "/hes-gateway/terminal/tou/updateTouModeV2" {
 				callOrder = append(callOrder, "updateTouModeV2")
 				require.NoError(t, r.ParseForm())
-				// Fallback to Backup Mode (workMode 3) when gridMaxFlag is 1 (disabled)
+				// Fallback to Backup Mode (workMode 3) when gridMaxFlag is 1 (disabled) and franklinBackupToCharge is enabled
 				assert.Equal(t, "3", r.Form.Get("workMode"), "workMode should be 3 for backup fallback")
 				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{}})
 				return
@@ -1429,12 +1437,20 @@ func TestFranklin(t *testing.T) {
 
 		err := f.ApplySettings(context.Background(), types.Settings{GridChargeBatteries: true})
 		require.NoError(t, err, "ApplySettings should succeed")
+
+		// Default (franklinBackupToCharge=false): stays in self-consumption and updates reserve SOC to 100
 		changed, err := f.SetModes(context.Background(), types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{})
 		require.NoError(t, err, "SetModes should succeed")
 		assert.True(t, changed)
+		assert.Equal(t, []string{"updateSocV2"}, callOrder)
 
-		require.Len(t, callOrder, 1, "updateTouModeV2 should be called")
-		assert.Equal(t, "updateTouModeV2", callOrder[0])
+		// With franklinBackupToCharge=true: switches to emergency backup mode (workMode 3)
+		callOrder = nil
+		ctx := ffFranklinBackupToCharge.With(context.Background(), true)
+		changed, err = f.SetModes(ctx, types.BatteryModeChargeAny, types.SolarModeAny, types.ModesOptions{})
+		require.NoError(t, err, "SetModes should succeed")
+		assert.True(t, changed)
+		assert.Equal(t, []string{"updateTouModeV2"}, callOrder)
 	})
 
 	t.Run("SetModes Both Mode and PowerControl Updates", func(t *testing.T) {
@@ -1993,7 +2009,15 @@ func TestFranklin(t *testing.T) {
 		})
 		require.NoError(t, err)
 
+		// Default (franklinBackupToCharge=false): backup mode is treated as emergency mode and skipped
 		changed, err := f.SetModes(context.Background(), types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
+		require.NoError(t, err)
+		assert.False(t, changed)
+		assert.Empty(t, callOrder)
+
+		// With franklinBackupToCharge=true: transitions out of backup mode to self-consumption
+		ctx := ffFranklinBackupToCharge.With(context.Background(), true)
+		changed, err = f.SetModes(ctx, types.BatteryModeLoad, types.SolarModeNoChange, types.ModesOptions{})
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assert.Equal(t, []string{"updateSocV2", "updateTouModeV2"}, callOrder)
@@ -3927,6 +3951,72 @@ func TestFranklin(t *testing.T) {
 		// 600 minutes = 10 hours
 		expectedEnd := expectedStart.Add(10 * time.Hour)
 		assert.Equal(t, expectedEnd.UTC(), status.Storms[0].TSEnd.UTC())
+	})
+
+	t.Run("GetStatus Backup Mode EmergencyMode Flag", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hes-gateway/terminal/initialize/appUserOrInstallerLogin" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"token": "tok"}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceInfoV2" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"totalCap": 30.0, "timeZone": "UTC"}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/common/getPowerCapConfigList" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": []map[string]any{}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getPowerControlSetting" {
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"gridMaxFlag": 1, "gridFeedMaxFlag": 0}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
+				list := []map[string]any{
+					{"id": 30.0, "workMode": 3, "name": "Emergency Backup"},
+				}
+				json.NewEncoder(w).Encode(map[string]any{"code": 200, "success": true, "result": map[string]any{"list": list, "currendId": 30.0}})
+				return
+			}
+			if r.URL.Path == "/hes-gateway/terminal/getDeviceCompositeInfo" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"code":    200,
+					"success": true,
+					"result": map[string]any{
+						"valid":           true,
+						"currentWorkMode": 3,
+						"runtimeData": map[string]any{
+							"soc":       80.0,
+							"mode":      30.0,
+							"timestamp": time.Now().Unix(),
+						},
+					},
+				})
+				return
+			}
+			http.Error(w, "not found: "+r.URL.Path, 404)
+		}))
+		defer ts.Close()
+
+		f := &Franklin{
+			client:      ts.Client(),
+			baseURL:     ts.URL,
+			username:    "u",
+			md5Password: "p",
+			gatewayID:   "g",
+			settings:    types.Settings{MinBatterySOC: 10},
+		}
+
+		// Default (franklinBackupToCharge=false): workMode 3 sets EmergencyMode=true
+		status, err := f.GetStatus(context.Background())
+		require.NoError(t, err)
+		assert.True(t, status.EmergencyMode, "Emergency Backup mode should set EmergencyMode=true by default")
+
+		// With franklinBackupToCharge=true: workMode 3 does not set EmergencyMode=true
+		ctx := ffFranklinBackupToCharge.With(context.Background(), true)
+		status, err = f.GetStatus(ctx)
+		require.NoError(t, err)
+		assert.False(t, status.EmergencyMode, "Emergency Backup mode should not set EmergencyMode=true when franklinBackupToCharge is enabled")
 	})
 
 	t.Run("SetModes Both Solar and Battery Export", func(t *testing.T) {

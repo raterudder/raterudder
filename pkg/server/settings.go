@@ -23,6 +23,27 @@ import (
 
 var errESSRateLimited = errors.New("ESS rate limited")
 
+const maxInteractiveESSBackoff = 15 * time.Minute
+
+func checkInteractiveESSRateLimit(authStatus *types.ESSAuthStatus, now time.Time) time.Duration {
+	if authStatus.ConsecutiveUserFailures == 0 {
+		return 0
+	}
+	backoff := min(getESSBackoff(authStatus.ConsecutiveUserFailures), maxInteractiveESSBackoff)
+	resetWindow := max(2*backoff, maxInteractiveESSBackoff)
+	elapsed := now.Sub(authStatus.LastUserAttempt)
+	if !authStatus.LastUserAttempt.IsZero() && elapsed > resetWindow {
+		authStatus.ConsecutiveUserFailures = 0
+		return 0
+	}
+	if authStatus.ConsecutiveUserFailures > 1 {
+		if timeLeft := backoff - elapsed; timeLeft > 0 {
+			return max(timeLeft.Round(time.Second), time.Second)
+		}
+	}
+	return 0
+}
+
 type settingsWithVersion struct {
 	types.Settings
 	version   int
@@ -105,7 +126,7 @@ func (s *Server) getESSSystem(ctx context.Context, siteID string, settings setti
 		timeLeft := backoff - s.now().Sub(settings.ESSAuthStatus.LastAttempt)
 		if timeLeft > 0 {
 			// Round to seconds
-			timeLeft = timeLeft.Round(time.Second)
+			timeLeft = max(timeLeft.Round(time.Second), time.Second)
 			return nil, settings, fmt.Errorf("%w, try again in %v", errESSRateLimited, timeLeft)
 		}
 	}
@@ -138,7 +159,6 @@ func (s *Server) getESSSystem(ctx context.Context, siteID string, settings setti
 
 	if updated {
 		log.Ctx(ctx).DebugContext(ctx, "credentials updated by ess system")
-		settings.ESSAuthStatus.ConsecutiveSetFailures = 0
 		settings.EncryptedCredentials, err = s.encryptCredentials(ctx, siteID, newCreds)
 		if err != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to encrypt credentials", slog.Any("error", err))
@@ -450,35 +470,37 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			failures := newSettings.ESSAuthStatus.ConsecutiveFailures + newSettings.ESSAuthStatus.ConsecutiveSetFailures
-			if failures > 1 {
-				backoff := getESSBackoff(failures)
-				timeLeft := backoff - s.now().Sub(newSettings.ESSAuthStatus.LastAttempt)
-				if timeLeft > 0 {
-					timeLeft = timeLeft.Round(time.Second)
-					writeJSONError(w, fmt.Sprintf("ESS rate limited, try again in %v", timeLeft), http.StatusTooManyRequests)
-					return
-				}
+			now := s.now().UTC()
+			if timeLeft := checkInteractiveESSRateLimit(&newSettings.ESSAuthStatus, now); timeLeft > 0 {
+				writeJSONError(w, fmt.Sprintf("ESS rate limited, try again in %v", timeLeft), http.StatusTooManyRequests)
+				return
 			}
+			existing.ESSAuthStatus.ConsecutiveUserFailures = newSettings.ESSAuthStatus.ConsecutiveUserFailures
 
 			// Verify and update credentials
 			existingCreds, _, err = essSystem.Authenticate(ctx, existingCreds)
-			now := s.now().UTC()
+			now = s.now().UTC()
 			if err != nil {
 				log.Ctx(ctx).WarnContext(ctx, "failed to verify ess credentials", slog.Any("error", err))
 
 				// purposefully store the existing settings with the auth status updated
 				// and NOT the new settings since the credentials were not verified
 				existing.ESSAuthStatus.ConsecutiveFailures++
+				existing.ESSAuthStatus.ConsecutiveUserFailures++
 				existing.ESSAuthStatus.LastAttempt = now
-				if _, dbErr := s.storage.SetSettings(ctx, siteID, existing, types.CurrentSettingsVersion, time.Time{}); dbErr != nil {
+				existing.ESSAuthStatus.LastUserAttempt = now
+				if _, dbErr := s.storage.SetSettings(ctx, siteID, existing, existingSV.version, existingSV.updatedAt); dbErr != nil {
 					log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status", slog.Any("error", dbErr))
 				}
 				writeJSONError(w, fmt.Sprintf("failed to verify ess credentials: %v", err), http.StatusBadRequest)
 				return
 			}
 
-			if newSettings.ESSAuthStatus.ConsecutiveFailures > 0 || newSettings.ESSAuthStatus.ConsecutiveSetFailures > 0 {
+			if newSettings.ESSAuthStatus.ConsecutiveFailures > 0 || newSettings.ESSAuthStatus.ConsecutiveSetFailures > 0 || newSettings.ESSAuthStatus.ConsecutiveUserFailures > 0 {
+				if newSettings.ESS != "mock" || existing.ESS == "" || existing.ESS == "mock" {
+					newSettings.ESSAuthStatus.ConsecutiveUserFailures = 0
+					newSettings.ESSAuthStatus.LastUserAttempt = now
+				}
 				newSettings.ESSAuthStatus.ConsecutiveFailures = 0
 				newSettings.ESSAuthStatus.ConsecutiveSetFailures = 0
 				newSettings.ESSAuthStatus.LastAttempt = now
@@ -497,6 +519,9 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 					newSettings.GridChargeBatteries = gridSettings.GridChargeBatteries
 					newSettings.GridExportSolar = gridSettings.GridExportSolar
 					newSettings.GridExportBatteries = gridSettings.GridExportBatteries
+					if (newSettings.ESS == "tesla" || newSettings.ESS == "franklin") && (gridSettings.GridExportSolar || gridSettings.GridExportBatteries) {
+						newSettings.ManageTOUSchedules = true
+					}
 				}
 			}
 
@@ -705,15 +730,10 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	failures := existingRaw.ESSAuthStatus.ConsecutiveFailures + existingRaw.ESSAuthStatus.ConsecutiveSetFailures
-	if failures > 1 {
-		backoff := getESSBackoff(failures)
-		timeLeft := backoff - s.now().Sub(existingRaw.ESSAuthStatus.LastAttempt)
-		if timeLeft > 0 {
-			timeLeft = timeLeft.Round(time.Second)
-			writeJSONError(w, fmt.Sprintf("ESS rate limited, try again in %v", timeLeft), http.StatusTooManyRequests)
-			return
-		}
+	now := s.now().UTC()
+	if timeLeft := checkInteractiveESSRateLimit(&existingRaw.ESSAuthStatus, now); timeLeft > 0 {
+		writeJSONError(w, fmt.Sprintf("ESS rate limited, try again in %v", timeLeft), http.StatusTooManyRequests)
+		return
 	}
 
 	existingSV, existingCreds, err := s.migrateAndDecryptSettings(ctx, siteID, existingRaw, version, updatedAt)
@@ -763,11 +783,13 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, _, err = essSystem.Authenticate(ctx, existingCreds)
-	now := s.now().UTC()
+	now = s.now().UTC()
 	// its expected that this returns needs next stage if there is one
 	if err != nil && !errors.Is(err, ess.ErrNeedsNextStage) {
 		existing.ESSAuthStatus.ConsecutiveFailures++
+		existing.ESSAuthStatus.ConsecutiveUserFailures++
 		existing.ESSAuthStatus.LastAttempt = now
+		existing.ESSAuthStatus.LastUserAttempt = now
 		if _, dbErr := s.storage.SetSettings(ctx, siteID, existing, existingSV.version, existingSV.updatedAt); dbErr != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status", slog.Any("error", dbErr))
 		}
@@ -777,10 +799,14 @@ func (s *Server) handleESSStage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if existing.ESSAuthStatus.ConsecutiveFailures > 0 || existing.ESSAuthStatus.ConsecutiveSetFailures > 0 {
+	// Only reset failure counters when full stage authentication succeeds (err == nil),
+	// NOT when ErrNeedsNextStage is returned on stage 0 before OTP/password verification.
+	if err == nil && (existing.ESSAuthStatus.ConsecutiveFailures > 0 || existing.ESSAuthStatus.ConsecutiveSetFailures > 0 || existing.ESSAuthStatus.ConsecutiveUserFailures > 0) {
 		existing.ESSAuthStatus.ConsecutiveFailures = 0
 		existing.ESSAuthStatus.ConsecutiveSetFailures = 0
+		existing.ESSAuthStatus.ConsecutiveUserFailures = 0
 		existing.ESSAuthStatus.LastAttempt = now
+		existing.ESSAuthStatus.LastUserAttempt = now
 		if _, dbErr := s.storage.SetSettings(ctx, siteID, existing, existingSV.version, existingSV.updatedAt); dbErr != nil {
 			log.Ctx(ctx).ErrorContext(ctx, "failed to update settings auth status", slog.Any("error", dbErr))
 		}

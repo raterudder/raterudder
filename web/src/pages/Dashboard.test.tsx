@@ -1236,6 +1236,58 @@ describe('Dashboard', () => {
         expect(screen.queryByTestId('automation-paused-dryrun-warning-banner')).not.toBeInTheDocument();
     });
 
+    it('shows customized Tesla permissions warning banner when consecutiveSetFailures >= 3', async () => {
+        mockActionsAndSavings([]);
+        const settings = {
+            utilityProvider: 'comed',
+            ess: 'tesla',
+            hasCredentials: { tesla: true },
+            essAuthStatus: {
+                consecutiveFailures: 0,
+                consecutiveSetFailures: 10,
+                lastAttempt: new Date().toISOString(),
+            },
+        };
+
+        renderWithRouter(<Dashboard siteID="site1" settings={settings as any} />);
+
+        await waitFor(() => {
+            expect(
+                screen.getByText(/RateRudder can read your Tesla battery status, but failed to update battery modes 10 time\(s\) due to missing command permissions/i)
+            ).toBeInTheDocument();
+            const link = screen.getByRole('link', { name: /Re-link your Tesla account in Settings/i });
+            expect(link).toHaveAttribute('href', '/settings');
+            expect(screen.getByText(/including Energy Commands/i)).toBeInTheDocument();
+        });
+    });
+
+    it('shows generic mode update warning banner for non-Tesla ESS when consecutiveSetFailures >= 3', async () => {
+        mockActionsAndSavings([]);
+        const settings = {
+            utilityProvider: 'comed',
+            ess: 'franklin',
+            hasCredentials: { franklin: true },
+            essAuthStatus: {
+                consecutiveFailures: 0,
+                consecutiveSetFailures: 4,
+                lastAttempt: new Date().toISOString(),
+            },
+        };
+
+        renderWithRouter(<Dashboard siteID="site1" settings={settings as any} />);
+
+        await waitFor(() => {
+            expect(
+                screen.getByText(/Energy Storage System rejected battery mode updates 4 time\(s\)/i)
+            ).toBeInTheDocument();
+            expect(
+                screen.getByText(/check your battery manufacturer app to make sure your account can change battery settings/i)
+            ).toBeInTheDocument();
+            const link = screen.getByRole('link', { name: /re-authenticate in Settings/i });
+            expect(link).toHaveAttribute('href', '/settings');
+        });
+    });
+
     describe('visibility auto-refresh', () => {
         beforeEach(() => {
             Object.defineProperty(document, 'visibilityState', {

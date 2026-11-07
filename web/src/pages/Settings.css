@@ -175,6 +175,11 @@
   margin-bottom: 2.5rem;
 }
 
+.grid-strategy-grid.tou-management-grid {
+  background: rgba(56, 189, 248, 0.03);
+  border-color: rgba(56, 189, 248, 0.25);
+}
+
 .form-group.compact {
   margin-bottom: 0;
 }
@@ -240,6 +245,11 @@
 .summary-status.pending {
   color: var(--warning);
   background: rgba(255, 184, 0, 0.1);
+}
+
+.summary-status.error {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
 }
 
 /* Buttons */
@@ -519,7 +529,8 @@
   margin-bottom: 1.5rem;
 }
 
-.settings-section.highlighted-section {
+.settings-section.highlighted-section,
+.tou-management-grid.highlighted-section {
   background: rgba(75, 142, 255, 0.03);
   outline: 2px dashed var(--primary);
   outline-offset: 6px;
