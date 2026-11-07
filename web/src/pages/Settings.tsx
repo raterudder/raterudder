@@ -1296,6 +1296,7 @@ const Settings = ({
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [highlightTOU, setHighlightTOU] = useState(false);
     const [highlightEV, setHighlightEV] = useState(false);
+    const [highlightESS, setHighlightESS] = useState(false);
     const deepLinkHandledRef = useRef(false);
 
     useEffect(() => {
@@ -1305,7 +1306,9 @@ const Settings = ({
         const hasTOU = (searchParams.has('tou') && touParam !== '0' && touParam !== 'false') || window.location.hash === '#tou';
         const evParam = searchParams.get('ev');
         const hasEV = (searchParams.has('ev') && evParam !== '0' && evParam !== 'false') || window.location.hash === '#ev';
-        if (hasTOU || hasEV) {
+        const essParam = searchParams.get('ess');
+        const hasESS = (searchParams.has('ess') && essParam !== '0' && essParam !== 'false') || window.location.hash === '#ess';
+        if (hasTOU || hasEV || hasESS) {
             deepLinkHandledRef.current = true;
             setForceFullSettings(true);
             setIsInWizard(false);
@@ -1315,6 +1318,10 @@ const Settings = ({
             }
             if (hasEV) {
                 setHighlightEV(true);
+            }
+            if (hasESS) {
+                setEditESS(true);
+                setHighlightESS(true);
             }
         }
     }, [loading, settings]);
@@ -1328,12 +1335,20 @@ const Settings = ({
     }, [highlightTOU, editESS, loading]);
 
     useEffect(() => {
-        if (!highlightEV || highlightTOU || loading) return;
+        if (!highlightESS || highlightTOU || !editESS || loading) return;
+        const target = document.querySelector('[data-testid="ess-section"]');
+        if (target && typeof target.scrollIntoView === 'function') {
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    }, [highlightESS, highlightTOU, editESS, loading]);
+
+    useEffect(() => {
+        if (!highlightEV || highlightTOU || highlightESS || loading) return;
         const target = document.querySelector('[data-testid="ev-charging-section"]');
         if (target && typeof target.scrollIntoView === 'function') {
             target.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
-    }, [highlightEV, highlightTOU, loading]);
+    }, [highlightEV, highlightTOU, highlightESS, loading]);
 
     const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
     const [deleteAccountChecked, setDeleteAccountChecked] = useState(false);
@@ -2053,7 +2068,7 @@ const Settings = ({
 
     const locationHighlightClass = showChecklist && !isLocationConfigured ? "highlighted-section" : "";
     const utilityHighlightClass = showChecklist && !isUtilityConfigured && !isUtilityDirty ? "highlighted-section" : "";
-    const essHighlightClass = showChecklist && !isESSConfigured && !isESSDirty ? "highlighted-section" : "";
+    const essHighlightClass = (highlightESS || (showChecklist && !isESSConfigured && !isESSDirty)) ? "highlighted-section" : "";
 
     const renderTeslaGridModal = () => (
         <Dialog.Root open={showTeslaGridModal} onOpenChange={(open) => {

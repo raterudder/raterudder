@@ -512,6 +512,8 @@ describe('Dashboard', () => {
             expect(warningTags.length).toBeGreaterThan(0);
             const failureTags = screen.getAllByText(/Energy Storage System authentication failed 3 time\(s\)\./);
             expect(failureTags.length).toBeGreaterThan(0);
+            const link = screen.getByRole('link', { name: /Update your credentials in Settings/i });
+            expect(link).toHaveAttribute('href', '/settings?ess=1');
         });
     });
 
@@ -1256,7 +1258,7 @@ describe('Dashboard', () => {
                 screen.getByText(/RateRudder can read your Tesla battery status, but failed to update battery modes 10 time\(s\) due to missing command permissions/i)
             ).toBeInTheDocument();
             const link = screen.getByRole('link', { name: /Re-link your Tesla account in Settings/i });
-            expect(link).toHaveAttribute('href', '/settings');
+            expect(link).toHaveAttribute('href', '/settings?ess=1');
             expect(screen.getByText(/including Energy Commands/i)).toBeInTheDocument();
         });
     });
@@ -1284,7 +1286,7 @@ describe('Dashboard', () => {
                 screen.getByText(/check your battery manufacturer app to make sure your account can change battery settings/i)
             ).toBeInTheDocument();
             const link = screen.getByRole('link', { name: /re-authenticate in Settings/i });
-            expect(link).toHaveAttribute('href', '/settings');
+            expect(link).toHaveAttribute('href', '/settings?ess=1');
         });
     });
 

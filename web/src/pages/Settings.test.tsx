@@ -2869,6 +2869,33 @@ describe('App & Settings', () => {
             expect(touSection).toHaveClass('highlighted-section');
             expect(scrollIntoViewMock).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
         });
+
+        it('automatically expands and highlights ESS section when visiting /settings?ess=1', async () => {
+            (api.fetchSettings as any).mockResolvedValue({
+                ...defaultSettings,
+                ess: 'tesla',
+                hasCredentials: { tesla: true },
+                release: 'production',
+            });
+            (fetchAuthStatus as any).mockResolvedValue({ ...defaultAuthStatus, loggedIn: true });
+
+            const scrollIntoViewMock = vi.fn();
+            window.HTMLElement.prototype.scrollIntoView = scrollIntoViewMock;
+
+            window.history.pushState(null, '', '/settings?ess=1');
+            render(<App />);
+
+            await screen.findByRole('heading', { name: /^Settings$/i });
+
+            // ESS section should automatically be expanded without clicking Edit
+            const essSelect = await screen.findByRole('combobox', { name: /System Type/i });
+            expect(essSelect).toBeInTheDocument();
+
+            // ESS section container should have the highlighted-section class and be scrolled into view
+            const essSection = screen.getByTestId('ess-section');
+            expect(essSection).toHaveClass('highlighted-section');
+            expect(scrollIntoViewMock).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+        });
     });
 
     describe('Unsaved Changes Confirmation', () => {
