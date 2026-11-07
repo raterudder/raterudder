@@ -29,12 +29,23 @@ export const TutorialDialog: React.FC<TutorialDialogProps> = ({ open, onClose, s
 
     if (!open) return null;
 
+    const hasTOUStep = !!settings?.manageTOUSchedules;
+    const totalSteps = hasTOUStep ? 3 : 2;
+
+    const renderStepDots = (activeStep: number) => (
+        <div className="tutorial-steps">
+            {Array.from({ length: totalSteps }, (_, i) => (
+                <span key={i + 1} className={`step-dot${activeStep === i + 1 ? ' active' : ''}`}></span>
+            ))}
+        </div>
+    );
+
     return (
         <Dialog.Root open={open} onOpenChange={(isOpen) => { if (!isOpen) onClose(); }}>
             <Dialog.Portal>
                 <Dialog.Backdrop className="dialog-backdrop" />
                 <Dialog.Popup className="dialog-popup tutorial-dialog-popup">
-                    {step === 1 ? (
+                    {step === 1 && (
                         <>
                             <Dialog.Title className="dialog-title tutorial-title">
                                 Welcome to RateRudder! 🚀
@@ -51,16 +62,14 @@ export const TutorialDialog: React.FC<TutorialDialogProps> = ({ open, onClose, s
                                 </p>
                             </div>
                             <div className="tutorial-footer">
-                                <div className="tutorial-steps">
-                                    <span className="step-dot active"></span>
-                                    <span className="step-dot"></span>
-                                </div>
+                                {renderStepDots(1)}
                                 <button className="btn btn-primary" type="button" onClick={() => setStep(2)}>
                                     Next
                                 </button>
                             </div>
                         </>
-                    ) : (
+                    )}
+                    {step === 2 && (
                         <>
                             <Dialog.Title className="dialog-title tutorial-title">
                                 Manual Charging 💡
@@ -77,12 +86,44 @@ export const TutorialDialog: React.FC<TutorialDialogProps> = ({ open, onClose, s
                                 </p>
                             </div>
                             <div className="tutorial-footer">
-                                <div className="tutorial-steps">
-                                    <span className="step-dot"></span>
-                                    <span className="step-dot active"></span>
-                                </div>
+                                {renderStepDots(2)}
                                 <div className="tutorial-buttons">
                                     <button className="btn btn-secondary" type="button" onClick={() => setStep(1)}>
+                                        Back
+                                    </button>
+                                    {hasTOUStep ? (
+                                        <button className="btn btn-primary" type="button" onClick={() => setStep(3)}>
+                                            Next
+                                        </button>
+                                    ) : (
+                                        <button className="btn btn-primary" type="button" onClick={onClose}>
+                                            Got It
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        </>
+                    )}
+                    {step === 3 && hasTOUStep && (
+                        <>
+                            <Dialog.Title className="dialog-title tutorial-title">
+                                Rate Schedule Management 📅
+                            </Dialog.Title>
+                            <div className="tutorial-content">
+                                <div className="tutorial-illustration">
+                                    <span className="icon-pulse" role="img" aria-label="calendar">📅</span>
+                                </div>
+                                <p className="dialog-description tutorial-desc">
+                                    RateRudder will periodically overwrite your <strong>rate schedule</strong> in your battery's app and use that to dynamically change modes, if necessary.
+                                </p>
+                                <p className="dialog-description tutorial-desc">
+                                    <strong>Don't change your rate schedule</strong> in your battery's app while this is enabled.
+                                </p>
+                            </div>
+                            <div className="tutorial-footer">
+                                {renderStepDots(3)}
+                                <div className="tutorial-buttons">
+                                    <button className="btn btn-secondary" type="button" onClick={() => setStep(2)}>
                                         Back
                                     </button>
                                     <button className="btn btn-primary" type="button" onClick={onClose}>

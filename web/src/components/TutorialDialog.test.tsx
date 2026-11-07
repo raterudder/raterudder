@@ -79,4 +79,32 @@ describe('TutorialDialog Component', () => {
         
         expect(onClose).toHaveBeenCalledTimes(1);
     });
+
+    it('shows step 3 for rate schedule management when manageTOUSchedules is enabled', () => {
+        const onClose = vi.fn();
+        const touSettings = { ...defaultSettings, manageTOUSchedules: true };
+        render(<TutorialDialog open={true} onClose={onClose} settings={touSettings} />);
+
+        // Step 1 -> Step 2
+        fireEvent.click(screen.getByRole('button', { name: /Next/i }));
+        expect(screen.getByText(/Manual Charging/i)).toBeInTheDocument();
+
+        // Step 2 has Next instead of Got It
+        expect(screen.queryByRole('button', { name: /Got It/i })).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: /Next/i }));
+
+        // Step 3
+        expect(screen.getByText(/Rate Schedule Management/i)).toBeInTheDocument();
+        expect(screen.getByText(/periodically overwrite your/i)).toBeInTheDocument();
+        expect(screen.getByText(/Don't change your rate schedule/i)).toBeInTheDocument();
+
+        // Back to Step 2 and forward again
+        fireEvent.click(screen.getByRole('button', { name: /Back/i }));
+        expect(screen.getByText(/Manual Charging/i)).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: /Next/i }));
+
+        // Got It on Step 3 closes dialog
+        fireEvent.click(screen.getByRole('button', { name: /Got It/i }));
+        expect(onClose).toHaveBeenCalledTimes(1);
+    });
 });
