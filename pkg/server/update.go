@@ -28,7 +28,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-var ffOnlyPlanMode = feats.Bool("onlyPlanMode", false)
+var ffOnlyPlanMode = feats.Bool("onlyPlanMode", true)
 
 type updateResult struct {
 	Status string        `json:"status"`
@@ -602,8 +602,15 @@ func (s *Server) performSiteUpdate(
 		}
 		decision = planDecision
 	} else {
+		decideSettings := settings.Settings
+		if decideSettings.MinArbitrageDifferenceDollarsPerKWH == 0 {
+			decideSettings.MinArbitrageDifferenceDollarsPerKWH = 0.03
+		}
+		if decideSettings.MinBatteryExportDifferenceDollarsPerKWH == 0 {
+			decideSettings.MinBatteryExportDifferenceDollarsPerKWH = 0.07
+		}
 		var err error
-		decision, err = s.controller.Decide(ctx, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, settings.Settings, latestAction)
+		decision, err = s.controller.Decide(ctx, status, currentPrice, futurePrices, flatEnergyHistory, weatherHistory, decideSettings, latestAction)
 		if err != nil {
 			return nil, "", fmt.Errorf("controller decision failed: %w", err)
 		}

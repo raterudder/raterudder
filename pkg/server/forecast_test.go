@@ -64,6 +64,7 @@ func TestHandleForecast(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/api/forecast", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
+		ctx = ffOnlyPlanMode.With(ctx, false)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -411,6 +412,7 @@ func TestHandleForecast(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/api/forecast", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
+		ctx = ffOnlyPlanMode.With(ctx, false)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -509,6 +511,7 @@ func TestHandleForecast(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/api/forecast", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
+		ctx = ffOnlyPlanMode.With(ctx, false)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -583,6 +586,7 @@ func TestHandleForecast(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/api/forecast", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
+		ctx = ffOnlyPlanMode.With(ctx, false)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -654,6 +658,7 @@ func TestHandleForecast(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/api/forecast", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
+		ctx = ffOnlyPlanMode.With(ctx, false)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
@@ -835,6 +840,7 @@ func TestHandleForecast(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/api/forecast", nil)
 		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
+		ctx = ffOnlyPlanMode.With(ctx, false)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 

@@ -1264,7 +1264,9 @@ func TestHandleUpdate(t *testing.T) {
 		}
 
 		req := httptest.NewRequest("GET", "/api/update", nil)
-		req = req.WithContext(context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone))
+		ctx := context.WithValue(req.Context(), siteIDContextKey, types.SiteIDNone)
+		ctx = ffOnlyPlanMode.With(ctx, false)
+		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 
 		srv.handleUpdate(w, req)
