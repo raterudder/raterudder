@@ -4823,17 +4823,18 @@ func TestFranklin(t *testing.T) {
 	})
 
 	t.Run("GetAvailableModes Current Tou ID Not Found", func(t *testing.T) {
+		var currendID float64 = 9322.0
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/hes-gateway/terminal/tou/getGatewayTouListV2" {
 				list := []map[string]any{
 					{"id": 83450.0, "workMode": 1, "soc": 15.0, "name": "TOU"},
-					{"id": 55594.0, "workMode": 2, "soc": 10.0, "name": "自发自用"},
-					{"id": 100626.0, "workMode": 3, "soc": 100.0, "name": "仅备电"},
+					{"id": 55594.0, "workMode": 2, "soc": 10.0, "name": "Self-Consumption"},
+					{"id": 100626.0, "workMode": 3, "soc": 100.0, "name": "Emergency Backup"},
 				}
 				json.NewEncoder(w).Encode(map[string]any{
 					"code":    200,
 					"success": true,
-					"result":  map[string]any{"list": list, "currendId": 9322.0},
+					"result":  map[string]any{"list": list, "currendId": currendID},
 				})
 				return
 			}
@@ -4847,12 +4848,45 @@ func TestFranklin(t *testing.T) {
 			gatewayID: "g",
 		}
 
-		modes, err := f.getAvailableModes(context.Background())
-		require.NoError(t, err)
+		t.Run("ResolvedFromRuntimeTOUID", func(t *testing.T) {
+			currendID = 9323.0
+			modes, err := f.getAvailableModes(context.Background(), franklinDeviceCompositeInfoResult{
+				CurrentWorkMode: franklinWorkModeSelfConsumption,
+				RuntimeData: franklinRuntimeData{
+					TOUID: 55594,
+				},
+			})
+			require.NoError(t, err)
 
-		assert.Equal(t, 83450, modes.currentMode.ID)
-		assert.Equal(t, franklinWorkModeTimeOfUse, modes.currentMode.WorkMode)
-		assert.Equal(t, "TOU", modes.currentMode.Name)
+			assert.Equal(t, 55594, modes.currentMode.ID)
+			assert.Equal(t, franklinWorkModeSelfConsumption, modes.currentMode.WorkMode)
+			assert.Equal(t, "Self-Consumption", modes.currentMode.Name)
+		})
+
+		t.Run("ResolvedFromCurrentWorkModeWhenOverlayActive", func(t *testing.T) {
+			currendID = 9323.0
+			modes, err := f.getAvailableModes(context.Background(), franklinDeviceCompositeInfoResult{
+				CurrentWorkMode: franklinWorkModeSelfConsumption,
+				RuntimeData: franklinRuntimeData{
+					TOUID: franklinOverlayModeStormHedge,
+				},
+			})
+			require.NoError(t, err)
+
+			assert.Equal(t, 55594, modes.currentMode.ID)
+			assert.Equal(t, franklinWorkModeSelfConsumption, modes.currentMode.WorkMode)
+			assert.Equal(t, "Self-Consumption", modes.currentMode.Name)
+		})
+
+		t.Run("FallbackToFirstWhenRuntimeDataMissing", func(t *testing.T) {
+			currendID = 9322.0
+			modes, err := f.getAvailableModes(context.Background(), franklinDeviceCompositeInfoResult{})
+			require.NoError(t, err)
+
+			assert.Equal(t, 83450, modes.currentMode.ID)
+			assert.Equal(t, franklinWorkModeTimeOfUse, modes.currentMode.WorkMode)
+			assert.Equal(t, "TOU", modes.currentMode.Name)
+		})
 	})
 
 	t.Run("GetAvailableModes Smart Energy Dispatch", func(t *testing.T) {
@@ -4881,7 +4915,7 @@ func TestFranklin(t *testing.T) {
 			gatewayID: "g",
 		}
 
-		modes, err := f.getAvailableModes(context.Background())
+		modes, err := f.getAvailableModes(context.Background(), franklinDeviceCompositeInfoResult{})
 		require.NoError(t, err)
 
 		assert.Equal(t, 186440, modes.currentMode.ID)

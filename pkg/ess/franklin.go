@@ -687,7 +687,7 @@ func (f *Franklin) GetStatus(ctx context.Context) (types.SystemStatus, error) {
 		return types.SystemStatus{}, err
 	}
 
-	modes, err := f.getAvailableModes(ctx)
+	modes, err := f.getAvailableModes(ctx, rd)
 	if err != nil {
 		return types.SystemStatus{}, err
 	}
@@ -1035,7 +1035,7 @@ type availableModes struct {
 	VPPApplicable       bool
 }
 
-func (f *Franklin) getAvailableModes(ctx context.Context) (availableModes, error) {
+func (f *Franklin) getAvailableModes(ctx context.Context, rd franklinDeviceCompositeInfoResult) (availableModes, error) {
 	params := url.Values{}
 	params.Set("showType", "1")
 	params.Set("gatewayId", f.gatewayID)
@@ -1100,12 +1100,41 @@ func (f *Franklin) getAvailableModes(ctx context.Context) (availableModes, error
 		foundIDs[i] = fmt.Sprintf("%d", item.ID)
 	}
 
+	if current.ID == 0 && rd.RuntimeData.TOUID != 0 {
+		for _, m := range modes {
+			if m.ID == int(rd.RuntimeData.TOUID) {
+				current = m
+				break
+			}
+		}
+	}
+	if current.ID == 0 && rd.CurrentWorkMode != 0 {
+		for _, m := range modes {
+			if m.WorkMode == rd.CurrentWorkMode {
+				current = m
+				break
+			}
+		}
+	}
+	if current.ID != 0 && current.ID != res.CurrentID {
+		log.Ctx(ctx).DebugContext(
+			ctx,
+			"franklin current tou id resolved from runtime data",
+			slog.Int("currentTouID", res.CurrentID),
+			slog.Int("runtimeTouID", int(rd.RuntimeData.TOUID)),
+			slog.Int("currentWorkMode", int(rd.CurrentWorkMode)),
+			slog.Int("resolvedTouID", current.ID),
+		)
+	}
+
 	if current.ID == 0 {
 		current = first
 		log.Ctx(ctx).WarnContext(
 			ctx,
 			"franklin current tou id not found",
 			slog.Int("currentTouID", res.CurrentID),
+			slog.Int("runtimeTouID", int(rd.RuntimeData.TOUID)),
+			slog.Int("currentWorkMode", int(rd.CurrentWorkMode)),
 			slog.String("foundIDs", strings.Join(foundIDs, ",")),
 		)
 	}
@@ -1469,7 +1498,7 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 		return false, err
 	}
 
-	modes, err := f.getAvailableModes(ctx)
+	modes, err := f.getAvailableModes(ctx, rd)
 	if err != nil {
 		return false, err
 	}
@@ -1618,7 +1647,7 @@ func (f *Franklin) SetModes(ctx context.Context, bat types.BatteryMode, sol type
 				log.Ctx(ctx).WarnContext(ctx, "franklin tou mode not configured on gateway, re-fetching modes after saving dispatch",
 					slog.String("gatewayID", f.gatewayID),
 				)
-				refreshedModes, err := f.getAvailableModes(ctx)
+				refreshedModes, err := f.getAvailableModes(ctx, rd)
 				if err != nil {
 					log.Ctx(ctx).ErrorContext(ctx, "failed to re-fetch available modes after saving tou dispatch", slog.Any("error", err))
 					return false, err
