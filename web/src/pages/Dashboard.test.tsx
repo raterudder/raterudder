@@ -1019,6 +1019,10 @@ describe('Dashboard', () => {
         await waitFor(() => {
             expect(screen.getByText("What's New:")).toBeInTheDocument();
             expect(screen.getByText((content) => content.includes(whatsNewText))).toBeInTheDocument();
+            expect(screen.getByText('SmartPlan Algorithm')).toBeInTheDocument();
+            expect(screen.getByText('Direct Solar & Battery Export')).toBeInTheDocument();
+            expect(screen.getByText('EV Standby Charging')).toBeInTheDocument();
+            expect(screen.getByText('Updated Dashboard & Forecast')).toBeInTheDocument();
             if (whatsNewLinkText) {
                 const link = screen.getByRole('link', { name: whatsNewLinkText });
                 expect(link).toBeInTheDocument();
@@ -1044,6 +1048,101 @@ describe('Dashboard', () => {
             expect(screen.queryByText("What's New:")).not.toBeInTheDocument();
         });
         expect(localStorage.getItem('whats_new_banner_version')).toBe(whatsNewVersion.toString());
+    });
+
+    it('shows TOU notice banner when Tesla or Franklin can export solar or batteries and TOU is not enabled', async () => {
+        localStorage.clear();
+        mockActionsAndSavings([]);
+        const settings = {
+            utilityProvider: 'comed',
+            ess: 'tesla',
+            hasCredentials: { tesla: true },
+            gridExportSolar: true,
+            gridExportBatteries: false,
+            manageTOUSchedules: false,
+        };
+
+        renderWithRouter(<Dashboard siteID="site1" settings={settings as any} />);
+
+        await waitFor(() => {
+            const banner = screen.getByTestId('tou-notice-banner');
+            expect(banner).toBeInTheDocument();
+            expect(banner).toHaveClass('info-banner');
+            expect(banner).not.toHaveClass('warning-banner');
+            const link = screen.getByRole('link', { name: /Enable it in Settings/i });
+            expect(link).toHaveAttribute('href', '/settings?tou=1');
+        });
+    });
+
+    it('does not show TOU notice banner when manageTOUSchedules is already enabled or export is disabled', async () => {
+        localStorage.clear();
+        mockActionsAndSavings([]);
+        const { unmount } = renderWithRouter(
+            <Dashboard
+                siteID="site1"
+                settings={{
+                    utilityProvider: 'comed',
+                    ess: 'franklin',
+                    hasCredentials: { franklin: true },
+                    gridExportSolar: false,
+                    gridExportBatteries: true,
+                    manageTOUSchedules: true,
+                } as any}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.queryByText('Loading day...')).not.toBeInTheDocument();
+        });
+        expect(screen.queryByTestId('tou-notice-banner')).not.toBeInTheDocument();
+        unmount();
+
+        renderWithRouter(
+            <Dashboard
+                siteID="site1"
+                settings={{
+                    utilityProvider: 'comed',
+                    ess: 'franklin',
+                    hasCredentials: { franklin: true },
+                    gridExportSolar: false,
+                    gridExportBatteries: false,
+                    manageTOUSchedules: false,
+                } as any}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.queryByText('Loading day...')).not.toBeInTheDocument();
+        });
+        expect(screen.queryByTestId('tou-notice-banner')).not.toBeInTheDocument();
+    });
+
+    it('can dismiss the TOU notice banner and persists dismissal in localStorage', async () => {
+        const user = userEvent.setup();
+        localStorage.clear();
+        mockActionsAndSavings([]);
+        const settings = {
+            utilityProvider: 'comed',
+            ess: 'franklin',
+            hasCredentials: { franklin: true },
+            gridExportSolar: false,
+            gridExportBatteries: true,
+            manageTOUSchedules: false,
+        };
+
+        renderWithRouter(<Dashboard siteID="site1" settings={settings as any} />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('tou-notice-banner')).toBeInTheDocument();
+        });
+
+        const dismissBtn = screen.getByRole('button', { name: /Dismiss TOU notice/i });
+        await user.click(dismissBtn);
+
+        await waitFor(() => {
+            expect(screen.queryByTestId('tou-notice-banner')).not.toBeInTheDocument();
+        });
+        expect(localStorage.getItem('tou_notice_dismissed_site1')).toBe('true');
     });
 
     it('shows grid restrictions warning banner when all features are unchecked and utility is present', async () => {

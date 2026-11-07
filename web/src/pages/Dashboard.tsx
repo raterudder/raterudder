@@ -15,9 +15,45 @@ import {
     type SummaryType
 } from '../utils/dashboardUtils';
 
-export const whatsNewVersion = 10;
-export const whatsNewText = "New: variable battery reserve and you no longer need to login so often.";
+interface WhatsNewItem {
+    icon: string;
+    title: string;
+    description: string;
+    linkText?: string;
+    linkHref?: string;
+}
+
+export const whatsNewVersion = 11;
+export const whatsNewText = "Our biggest update yet is live with smarter full-day planning, direct grid exports, and a redesigned experience:";
 export const whatsNewLinkText = "";
+const whatsNewItems: WhatsNewItem[] = [
+    {
+        icon: "⚡",
+        title: "SmartPlan Algorithm",
+        description: "Full-horizon planning engine that optimizes charging, holding, and discharging across every price and weather interval.",
+    },
+    {
+        icon: "☀️",
+        title: "Direct Solar & Battery Export",
+        description: "Export excess solar without charging to 100% first, and discharge battery power during high-price peaks.",
+        linkText: "Configure in Settings",
+        linkHref: "/settings?tou=1",
+    },
+    {
+        icon: "🚗",
+        title: "EV Standby Charging",
+        description: "Automatically detects overnight EV charging and holds your battery in standby so it doesn't drain into your car.",
+        linkText: "Enable in Settings",
+        linkHref: "/settings?ev=1",
+    },
+    {
+        icon: "📊",
+        title: "Updated Dashboard & Forecast",
+        description: "Compare 7-day and 30-day savings, view 24-hour activity rollups, and explore the new planned battery schedule.",
+        linkText: "View Forecast",
+        linkHref: "/forecast",
+    },
+];
 export const STALE_DASHBOARD_TIMEOUT_MS = 10 * 60 * 1000;
 
 const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ siteID, settings = null }) => {
@@ -35,6 +71,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
     const onlyPlanMode = useFeatureFlag('onlyPlanMode');
 
     const [showWhatsNew, setShowWhatsNew] = useState(false);
+    const [showTOUNotice, setShowTOUNotice] = useState(false);
     const [showGridWarning, setShowGridWarning] = useState(false);
     const [showLocationWarning, setShowLocationWarning] = useState(false);
 
@@ -98,11 +135,24 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
             const isLocationDismissed = localStorage.getItem(locationKey) === 'true';
             const missingLocation = !settings.countryCode || !settings.postalCode;
             setShowLocationWarning(hasUtility && missingLocation && !isLocationDismissed);
+
+            const touKey = siteID ? `tou_notice_dismissed_${siteID}` : 'tou_notice_dismissed';
+            const isTOUDismissed = localStorage.getItem(touKey) === 'true';
+            const supportsTOU = ['tesla', 'franklin'].includes(settings.ess || '');
+            const canExport = Boolean(settings.gridExportSolar || settings.gridExportBatteries);
+            setShowTOUNotice(supportsTOU && canExport && !settings.manageTOUSchedules && !isTOUDismissed);
         } else {
             setShowGridWarning(false);
             setShowLocationWarning(false);
+            setShowTOUNotice(false);
         }
     }, [settings, siteID]);
+
+    const dismissTOUNotice = () => {
+        const key = siteID ? `tou_notice_dismissed_${siteID}` : 'tou_notice_dismissed';
+        localStorage.setItem(key, 'true');
+        setShowTOUNotice(false);
+    };
 
     const dismissGridWarning = () => {
         const key = siteID ? `grid_restrictions_warning_dismissed_${siteID}` : 'grid_restrictions_warning_dismissed';
@@ -399,11 +449,48 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
             {!loading && !error && (
                 <>
                     {showWhatsNew && (
-                        <div className="banner info-banner" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div className="banner info-banner whats-new-banner" data-testid="whats-new-banner">
+                            <div className="whats-new-header">
+                                <div className="whats-new-title-row">
+                                    <span className="whats-new-badge">Major Update</span>
+                                    <p className="whats-new-intro">
+                                        <strong>What's New:</strong> {whatsNewText}{whatsNewLinkText && <>{' '}<Link href="/settings">{whatsNewLinkText}</Link></>}
+                                    </p>
+                                </div>
+                                <button onClick={dismissWhatsNew} className="banner-dismiss-btn" aria-label="Dismiss What's New banner">
+                                    <span aria-hidden="true">&times;</span>
+                                </button>
+                            </div>
+                            <div className="whats-new-grid">
+                                {whatsNewItems.map((item) => (
+                                    <div key={item.title} className="whats-new-item">
+                                        <div className="whats-new-item-header">
+                                            <span className="whats-new-item-icon" aria-hidden="true">{item.icon}</span>
+                                            <span className="whats-new-item-title">{item.title}</span>
+                                        </div>
+                                        <p className="whats-new-item-desc">
+                                            {item.description}
+                                            {item.linkText && item.linkHref && (
+                                                <>
+                                                    {' '}
+                                                    <Link href={item.linkHref}>{item.linkText} →</Link>
+                                                </>
+                                            )}
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                    {showTOUNotice && (
+                        <div className="banner info-banner" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} data-testid="tou-notice-banner">
                             <p>
-                                <strong>What's New:</strong> {whatsNewText}{whatsNewLinkText && <>{' '}<Link href="/settings">{whatsNewLinkText}</Link></>}
+                                <span>
+                                    <strong>New Feature:</strong> Turn on the new Time-Of-Use (TOU) export management mode so RateRudder can export solar and battery power directly to the grid when prices are high without charging to 100% first.{' '}
+                                    <Link href="/settings?tou=1">Enable it in Settings</Link>
+                                </span>
                             </p>
-                            <button onClick={dismissWhatsNew} className="banner-dismiss-btn" aria-label="Dismiss What's New banner">
+                            <button onClick={dismissTOUNotice} className="banner-dismiss-btn" aria-label="Dismiss TOU notice">
                                 <span aria-hidden="true">&times;</span>
                             </button>
                         </div>

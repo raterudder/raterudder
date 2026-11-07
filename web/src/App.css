@@ -1184,7 +1184,6 @@ button {
   margin-bottom: 1rem;
   font-size: 0.95rem;
   line-height: 1.5;
-  border-left: 4px solid transparent;
 }
 
 .banner p {
@@ -1233,7 +1232,6 @@ button {
 .warning-banner {
   background: rgba(255, 184, 0, 0.1);
   border: 1px solid rgba(255, 184, 0, 0.2);
-  border-left: 4px solid var(--warning);
   color: var(--on-surface);
 }
 
@@ -1246,7 +1244,6 @@ button {
 .info-banner {
   background: rgba(75, 142, 255, 0.1);
   border: 1px solid rgba(75, 142, 255, 0.2);
-  border-left: 4px solid var(--primary);
   color: var(--on-surface);
 }
 
@@ -1254,6 +1251,119 @@ button {
   content: "ℹ️";
   font-size: 1.25rem;
   margin-right: 0.25rem;
+}
+
+.whats-new-banner {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.7rem;
+  padding: 0.9rem 1.15rem;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.12) 0%, rgba(16, 185, 129, 0.05) 55%, var(--surface-container-low) 100%);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  box-shadow: var(--shadow-sm);
+}
+
+.whats-new-banner p::before {
+  content: none;
+}
+
+.whats-new-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.whats-new-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.whats-new-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  background: rgba(56, 189, 248, 0.18);
+  color: var(--primary-glow);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  white-space: nowrap;
+}
+
+.whats-new-banner .whats-new-intro {
+  display: inline;
+  font-size: 0.9rem;
+  color: var(--on-surface);
+  line-height: 1.4;
+}
+
+.whats-new-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+@media (max-width: 640px) {
+  .whats-new-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.whats-new-item {
+  background: rgba(15, 19, 26, 0.55);
+  border: 1px solid var(--ghost-border);
+  border-radius: var(--radius-md);
+  padding: 0.65rem 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.whats-new-item:hover {
+  background: rgba(22, 27, 38, 0.75);
+  border-color: rgba(56, 189, 248, 0.3);
+}
+
+.whats-new-item-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.whats-new-item-icon {
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.whats-new-item-title {
+  font-size: 0.825rem;
+  font-weight: 700;
+  color: var(--on-surface);
+  letter-spacing: -0.01em;
+}
+
+.whats-new-banner .whats-new-item-desc {
+  display: block;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--on-surface-variant);
+}
+
+.whats-new-banner .whats-new-item-desc a {
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.whats-new-banner .whats-new-item-desc a:hover {
+  text-decoration: underline;
 }
 
 .error {
