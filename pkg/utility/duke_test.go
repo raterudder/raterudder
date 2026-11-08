@@ -143,6 +143,12 @@ func TestDuke(t *testing.T) {
 		assert.True(t, p.SeparateGenerationCredit)
 		assert.Equal(t, 0.0453, p.GenerationCreditDollarsPerKWH)
 
+		// NMB option
+		periodsNMB := dukeCarolinasNCPeriods("duke_carolinas_nc_rs", types.UtilityRateOptions{NetMeteringScheme: "nmb"}, []int{2026})
+		pNMB := getPriceForTime(periodsNMB, time.Date(2026, time.June, 15, 12, 0, 0, 0, etLocation))
+		assert.True(t, pNMB.SeparateGenerationCredit)
+		assert.Equal(t, 0.0453, pNMB.GenerationCreditDollarsPerKWH)
+
 		// SCG option
 		periodsSCG := dukeCarolinasNCPeriods("duke_carolinas_nc_rs", types.UtilityRateOptions{NetMeteringScheme: "scg"}, []int{2026})
 
@@ -190,6 +196,11 @@ func TestDuke(t *testing.T) {
 	})
 
 	t.Run("duke_progress_nc export rates (Schedule PP SCG)", func(t *testing.T) {
+		periodsNMB := dukeProgressNCPeriods("duke_progress_nc_res", types.UtilityRateOptions{NetMeteringScheme: "nmb"}, []int{2026})
+		pNMB := getPriceForTime(periodsNMB, time.Date(2026, time.June, 15, 12, 0, 0, 0, etLocation))
+		assert.True(t, pNMB.SeparateGenerationCredit)
+		assert.Equal(t, 0.0453, pNMB.GenerationCreditDollarsPerKWH)
+
 		periods := dukeProgressNCPeriods("duke_progress_nc_res", types.UtilityRateOptions{NetMeteringScheme: "scg"}, []int{2026})
 
 		// June weekday (June 15, 2026 - Monday)

@@ -286,9 +286,12 @@ func dukeCarolinasNCPeriods(plan string, options types.UtilityRateOptions, years
 	}
 
 	// Solar Export Credits
-	if options.NetMeteringScheme == "rsc" || options.NetMeteringScheme == "" {
+	switch options.NetMeteringScheme {
+	case "rsc", "":
 		periods = append(periods, buildExportCreditPeriod(years, dukeRSCNCCredit, "Solar Choice Net Excess Credit")...)
-	} else if options.NetMeteringScheme == "scg" {
+	case "nmb":
+		periods = append(periods, buildExportCreditPeriod(years, dukeRSCNCCredit, "Net Metering Bridge Excess Credit")...)
+	case "scg":
 		for _, year := range years {
 			holidays := getDukeHolidays(year)
 			periods = append(periods, buildDECNCPPExportPeriods(year, holidays)...)
@@ -470,9 +473,12 @@ func dukeProgressNCPeriods(plan string, options types.UtilityRateOptions, years 
 	}
 
 	// Solar Export Credits
-	if options.NetMeteringScheme == "rsc" || options.NetMeteringScheme == "" {
+	switch options.NetMeteringScheme {
+	case "rsc", "":
 		periods = append(periods, buildExportCreditPeriod(years, dukeRSCNCCredit, "Solar Choice Net Excess Credit")...)
-	} else if options.NetMeteringScheme == "scg" {
+	case "nmb":
+		periods = append(periods, buildExportCreditPeriod(years, dukeRSCNCCredit, "Net Metering Bridge Excess Credit")...)
+	case "scg":
 		// DEP NC Schedule PP Variable Avoided Cost Export Rates
 		for _, year := range years {
 			holidays := getDukeHolidays(year)
@@ -1342,6 +1348,20 @@ func dukeUtilityInfo() []types.UtilityProviderInfo {
 			Description: "Select your solar export rider.",
 			Choices: []types.UtilityOptionChoice{
 				{Value: "rsc", Name: "Residential Solar Choice (RSC)"},
+				{Value: "nmb", Name: "Net Metering Bridge (NMB)"},
+				{Value: "scg", Name: "Small Customer Generator (SCG)"},
+			},
+			Default: "rsc",
+		},
+	}
+	depSCOptions := []types.UtilityRateOption{
+		{
+			Field:       "netMeteringScheme",
+			Name:        "Export Scheme / Rider",
+			Type:        types.UtilityOptionTypeSelect,
+			Description: "Select your solar export rider.",
+			Choices: []types.UtilityOptionChoice{
+				{Value: "rsc", Name: "Residential Solar Choice (RSC)"},
 				{Value: "scg", Name: "Small Customer Generator (SCG)"},
 			},
 			Default: "rsc",
@@ -1530,7 +1550,7 @@ func dukeUtilityInfo() []types.UtilityProviderInfo {
 				{
 					ID:      "duke_progress_sc_res",
 					Name:    "Standard Residential",
-					Options: ncOptions,
+					Options: depSCOptions,
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						return dukeProgressSCPeriods("duke_progress_sc_res", opts, []int{2026, 2027}), nil
 					},
@@ -1538,7 +1558,7 @@ func dukeUtilityInfo() []types.UtilityProviderInfo {
 				{
 					ID:      "duke_progress_sc_r_tou_ev",
 					Name:    "Time-of-Use Electric Vehicle",
-					Options: ncOptions,
+					Options: depSCOptions,
 					GetFees: func(opts types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 						return dukeProgressSCPeriods("duke_progress_sc_r_tou_ev", opts, []int{2026, 2027}), nil
 					},
