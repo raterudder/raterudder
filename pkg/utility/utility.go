@@ -186,7 +186,7 @@ func (m *Map) Site(ctx context.Context, siteID string, settings types.Settings) 
 			}
 		}
 	case "octopus":
-		if (settings.UtilityRate == "octopus_intelligent_go" || settings.UtilityRate == "octopus_go") && settings.UtilityRateOptions.GenerationRate == "outgoing_agile" && m.baseOctopus != nil {
+		if settings.UtilityRateOptions.GenerationRate == "outgoing_agile" && m.baseOctopus != nil {
 			regionProvider, err := m.baseOctopus.Region(settings.UtilityRateOptions.Location)
 			if err != nil {
 				return nil, err

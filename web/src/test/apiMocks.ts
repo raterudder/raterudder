@@ -101,8 +101,18 @@ export const defaultUtilities = [
                 options: [],
             },
             {
+                id: 'octopus_go',
+                name: 'Octopus Go',
+                options: [],
+            },
+            {
                 id: 'octopus_intelligent_go',
                 name: 'Intelligent Octopus Go',
+                options: [],
+            },
+            {
+                id: 'octopus_cosy',
+                name: 'Cosy Octopus',
                 options: [],
             },
         ],

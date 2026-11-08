@@ -40,13 +40,15 @@ func TestOctopusUtility(t *testing.T) {
 		assert.Equal(t, "octopus", info.ID)
 		assert.Equal(t, "Octopus Energy (UK)", info.Name)
 		assert.Equal(t, "Intelligent Octopus Flux is not supported at this time.", info.RatesNotice)
-		require.Len(t, info.Rates, 3)
+		require.Len(t, info.Rates, 4)
 		assert.Equal(t, "octopus_flux", info.Rates[0].ID)
 		assert.Equal(t, "Octopus Flux", info.Rates[0].Name)
 		assert.Equal(t, "octopus_go", info.Rates[1].ID)
 		assert.Equal(t, "Octopus Go", info.Rates[1].Name)
 		assert.Equal(t, "octopus_intelligent_go", info.Rates[2].ID)
 		assert.Equal(t, "Intelligent Octopus Go", info.Rates[2].Name)
+		assert.Equal(t, "octopus_cosy", info.Rates[3].ID)
+		assert.Equal(t, "Cosy Octopus", info.Rates[3].Name)
 	})
 
 	t.Run("Octopus Flux - London", func(t *testing.T) {
@@ -243,6 +245,109 @@ func TestOctopusUtility(t *testing.T) {
 		p, err = u.priceForTime(time.Date(2026, time.July, 15, 23, 15, 0, 0, lonLocation))
 		if assert.NoError(t, err) {
 			assert.InDelta(t, 0.2802, p.DollarsPerKWH, 1e-4)
+		}
+	})
+
+	t.Run("Cosy Octopus - London", func(t *testing.T) {
+		u := &genericTOU{}
+		err := u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "octopus",
+			UtilityRate:     "octopus_cosy",
+			UtilityRateOptions: types.UtilityRateOptions{
+				Location: "london",
+			},
+		})
+		require.NoError(t, err)
+
+		periods, err := u.GetPeriods(context.Background())
+		require.NoError(t, err)
+		if assert.Len(t, periods, 3) {
+			assert.Equal(t, "Off-Peak", periods[0].Name)
+			assert.Equal(t, "Peak", periods[1].Name)
+			assert.Equal(t, "Standard", periods[2].Name)
+		}
+
+		// Standard window 1 (00:00 – 04:00): 02:00 -> Import £0.2880, Export £0.1500
+		p, err := u.priceForTime(time.Date(2026, time.November, 9, 2, 0, 0, 0, lonLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.2880, p.DollarsPerKWH, 1e-4)
+			assert.Equal(t, "Standard", p.PeriodName)
+			assert.True(t, p.SeparateGenerationCredit)
+			assert.InDelta(t, 0.1500, p.GenerationCreditDollarsPerKWH, 1e-4)
+		}
+
+		// Off-Peak dip 1 (04:00 – 07:00): 05:00 -> Import £0.1412
+		p, err = u.priceForTime(time.Date(2026, time.November, 9, 5, 0, 0, 0, lonLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.1412, p.DollarsPerKWH, 1e-4)
+			assert.Equal(t, "Off-Peak", p.PeriodName)
+		}
+
+		// Standard window 2 (07:00 – 13:00): 10:00 -> Import £0.2880
+		p, err = u.priceForTime(time.Date(2026, time.November, 9, 10, 0, 0, 0, lonLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.2880, p.DollarsPerKWH, 1e-4)
+			assert.Equal(t, "Standard", p.PeriodName)
+		}
+
+		// Off-Peak dip 2 (13:00 – 16:00): 14:00 -> Import £0.1412
+		p, err = u.priceForTime(time.Date(2026, time.November, 9, 14, 0, 0, 0, lonLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.1412, p.DollarsPerKWH, 1e-4)
+			assert.Equal(t, "Off-Peak", p.PeriodName)
+		}
+
+		// Peak (16:00 – 19:00): 17:00 -> Import £0.4319
+		p, err = u.priceForTime(time.Date(2026, time.November, 9, 17, 0, 0, 0, lonLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.4319, p.DollarsPerKWH, 1e-4)
+			assert.Equal(t, "Peak", p.PeriodName)
+		}
+
+		// Standard window 3 (19:00 – 22:00): 20:00 -> Import £0.2880
+		p, err = u.priceForTime(time.Date(2026, time.November, 9, 20, 0, 0, 0, lonLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.2880, p.DollarsPerKWH, 1e-4)
+			assert.Equal(t, "Standard", p.PeriodName)
+		}
+
+		// Off-Peak dip 3 (22:00 – 24:00): 23:00 -> Import £0.1412
+		p, err = u.priceForTime(time.Date(2026, time.November, 9, 23, 0, 0, 0, lonLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.1412, p.DollarsPerKWH, 1e-4)
+			assert.Equal(t, "Off-Peak", p.PeriodName)
+		}
+
+		// Test 12M Fixed variant (RateClass: "fixed") in London
+		err = u.ApplySettings(context.Background(), types.Settings{
+			UtilityProvider: "octopus",
+			UtilityRate:     "octopus_cosy",
+			UtilityRateOptions: types.UtilityRateOptions{
+				RateClass: "fixed",
+				Location:  "london",
+			},
+		})
+		require.NoError(t, err)
+
+		// Off-Peak (05:00) -> £0.1715
+		p, err = u.priceForTime(time.Date(2026, time.November, 9, 5, 0, 0, 0, lonLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.1715, p.DollarsPerKWH, 1e-4)
+			assert.Equal(t, "Off-Peak", p.PeriodName)
+		}
+
+		// Standard (10:00) -> £0.3495
+		p, err = u.priceForTime(time.Date(2026, time.November, 9, 10, 0, 0, 0, lonLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.3495, p.DollarsPerKWH, 1e-4)
+			assert.Equal(t, "Standard", p.PeriodName)
+		}
+
+		// Peak (17:00) -> £0.5242
+		p, err = u.priceForTime(time.Date(2026, time.November, 9, 17, 0, 0, 0, lonLocation))
+		if assert.NoError(t, err) {
+			assert.InDelta(t, 0.5242, p.DollarsPerKWH, 1e-4)
+			assert.Equal(t, "Peak", p.PeriodName)
 		}
 	})
 
@@ -718,6 +823,14 @@ func TestOctopusUtility(t *testing.T) {
 			require.NoError(t, err)
 			assert.NotEmpty(t, iogFees)
 
+			cosyFees, err := octopusCosyFees(types.UtilityRateOptions{Location: loc, GenerationRate: "outgoing_agile"})
+			require.NoError(t, err)
+			assert.NotEmpty(t, cosyFees)
+
+			cosyFixedFees, err := octopusCosyFees(types.UtilityRateOptions{RateClass: "fixed", Location: loc, GenerationRate: "outgoing_agile"})
+			require.NoError(t, err)
+			assert.NotEmpty(t, cosyFixedFees)
+
 			reg, err := base.Region(loc)
 			require.NoError(t, err)
 			p, err := reg.GetCurrentPrice(context.Background())
@@ -785,10 +898,10 @@ func TestOctopusUtility(t *testing.T) {
 		require.True(t, isSF)
 		assert.Equal(t, "london", sf2.base.(*baseOctopusRegion).location)
 
-		// 3. Switch location to eastern -> SiteFees wrapping eastern
+		// 3. Switch location to eastern and rate to octopus_cosy -> SiteFees wrapping eastern
 		u3, err := m.Site(ctx, "site-trans", types.Settings{
 			UtilityProvider: "octopus",
-			UtilityRate:     "octopus_intelligent_go",
+			UtilityRate:     "octopus_cosy",
 			UtilityRateOptions: types.UtilityRateOptions{
 				Location:       "eastern",
 				GenerationRate: "outgoing_agile",
@@ -798,19 +911,24 @@ func TestOctopusUtility(t *testing.T) {
 		sf3, isSF := u3.(*SiteFees)
 		require.True(t, isSF)
 		assert.Equal(t, "eastern", sf3.base.(*baseOctopusRegion).location)
+		currCosy, err := u3.GetCurrentPrice(ctx)
+		require.NoError(t, err)
+		// 12:00 London time in Eastern is Cosy Standard (£0.2882/kWh) + Agile Outgoing (£0.21/kWh)
+		assert.InDelta(t, 0.2882, currCosy.DollarsPerKWH, 1e-4)
+		assert.Equal(t, "Standard", currCosy.PeriodName)
+		assert.InDelta(t, 0.21, currCosy.GenerationCreditDollarsPerKWH, 1e-4)
 
-		// 4. Switch rate to octopus_flux with leftover GenerationRate: "outgoing_agile" -> must use genericTOU, not SiteFees!
+		// 4. Switch rate to octopus_flux -> must use genericTOU, not SiteFees!
 		u4, err := m.Site(ctx, "site-trans", types.Settings{
 			UtilityProvider: "octopus",
 			UtilityRate:     "octopus_flux",
 			UtilityRateOptions: types.UtilityRateOptions{
-				Location:       "london",
-				GenerationRate: "outgoing_agile",
+				Location: "london",
 			},
 		})
 		require.NoError(t, err)
 		_, isTOU4 := u4.(*genericTOU)
-		assert.True(t, isTOU4, "octopus_flux must use genericTOU even if GenerationRate is left as outgoing_agile")
+		assert.True(t, isTOU4, "octopus_flux must use genericTOU")
 	})
 
 	t.Run("GetConfirmedPrices Pre-1600 Horizon Capping and Active Slot Inclusion", func(t *testing.T) {

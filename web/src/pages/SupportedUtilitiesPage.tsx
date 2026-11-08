@@ -244,7 +244,7 @@ const UTILITY_METADATA: Record<string, UtilityMetadata> = {
     octopus: {
         region: 'United Kingdom',
         category: 'international',
-        blurb: 'Full support across all 14 UK DNO regions (A through P) for Octopus Flux (02:00-05:00 cheap import + 16:00-19:00 premium export) and Intelligent Octopus Go.'
+        blurb: 'Full support across all 14 UK DNO regions (A through P) for Octopus Flux (02:00-05:00 cheap import + 16:00-19:00 premium export), Octopus Go, Intelligent Octopus Go, and Cosy Octopus (Octopus Cozy).'
     },
     origin: {
         region: 'Australia (NSW • VIC • QLD • SA)',

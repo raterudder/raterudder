@@ -30,6 +30,8 @@ import (
 //   - Octopus Flux Export: FLUX-EXPORT-23-02-14
 //   - Octopus Go: GO-VAR-22-10-14
 //   - Intelligent Octopus Go: INTELLI-VAR-22-10-14
+//   - Cosy Octopus (Flexible): COSY-22-12-08
+//   - Cosy Octopus 12M Fixed: COSY-FIX-12M-26-10-30
 //   - Outgoing Octopus Export: OUTGOING-VAR-24-10-26
 //   - Agile Outgoing Octopus: AGILE-OUTGOING-19-05-13
 //
@@ -38,6 +40,8 @@ import (
 //   https://api.octopus.energy/v1/products/FLUX-IMPORT-23-02-14/electricity-tariffs/E-1R-FLUX-IMPORT-23-02-14-C/standard-unit-rates/
 //   https://api.octopus.energy/v1/products/GO-VAR-22-10-14/electricity-tariffs/E-1R-GO-VAR-22-10-14-C/standard-unit-rates/
 //   https://api.octopus.energy/v1/products/INTELLI-VAR-22-10-14/electricity-tariffs/E-1R-INTELLI-VAR-22-10-14-C/standard-unit-rates/
+//   https://api.octopus.energy/v1/products/COSY-22-12-08/electricity-tariffs/E-1R-COSY-22-12-08-C/standard-unit-rates/
+//   https://api.octopus.energy/v1/products/COSY-FIX-12M-26-10-30/electricity-tariffs/E-1R-COSY-FIX-12M-26-10-30-C/standard-unit-rates/
 //   https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-C/standard-unit-rates/
 
 const (
@@ -61,192 +65,284 @@ type octopusRateConfig struct {
 
 	IOGPeakRate    float64
 	IOGOffPeakRate float64
+
+	CosyPeakRate     float64
+	CosyOffPeakRate  float64
+	CosyStandardRate float64
+
+	CosyFixedPeakRate     float64
+	CosyFixedOffPeakRate  float64
+	CosyFixedStandardRate float64
 }
 
 // octopusRates stores current unit rates in base currency (£/kWh, e.g. 0.2450 = 24.5p/kWh)
 // indexed by the 14 UK distribution network (DNO / PES) regions A through P.
 var octopusRates = map[string]octopusRateConfig{
 	"eastern": { // PES A / DNO 10
-		RegionCode:         "A",
-		ImportStandardRate: 0.2429,
-		ImportPeakRate:     0.3401,
-		ImportOffPeakRate:  0.1458,
-		ExportStandardRate: 0.1011,
-		ExportPeakRate:     0.2932,
-		ExportOffPeakRate:  0.0499,
-		GoPeakRate:         0.3471,
-		GoOffPeakRate:      0.0940,
-		IOGPeakRate:        0.2896,
-		IOGOffPeakRate:     0.0700,
+		RegionCode:            "A",
+		ImportStandardRate:    0.2429,
+		ImportPeakRate:        0.3401,
+		ImportOffPeakRate:     0.1458,
+		ExportStandardRate:    0.1011,
+		ExportPeakRate:        0.2932,
+		ExportOffPeakRate:     0.0499,
+		GoPeakRate:            0.3471,
+		GoOffPeakRate:         0.0940,
+		IOGPeakRate:           0.2896,
+		IOGOffPeakRate:        0.0700,
+		CosyStandardRate:      0.2882,
+		CosyPeakRate:          0.4322,
+		CosyOffPeakRate:       0.1413,
+		CosyFixedStandardRate: 0.3276,
+		CosyFixedPeakRate:     0.4913,
+		CosyFixedOffPeakRate:  0.1607,
 	},
 	"east_midlands": { // PES B / DNO 11
-		RegionCode:         "B",
-		ImportStandardRate: 0.2306,
-		ImportPeakRate:     0.3229,
-		ImportOffPeakRate:  0.1384,
-		ExportStandardRate: 0.0976,
-		ExportPeakRate:     0.2770,
-		ExportOffPeakRate:  0.0434,
-		GoPeakRate:         0.3303,
-		GoOffPeakRate:      0.0940,
-		IOGPeakRate:        0.2777,
-		IOGOffPeakRate:     0.0700,
+		RegionCode:            "B",
+		ImportStandardRate:    0.2306,
+		ImportPeakRate:        0.3229,
+		ImportOffPeakRate:     0.1384,
+		ExportStandardRate:    0.0976,
+		ExportPeakRate:        0.2770,
+		ExportOffPeakRate:     0.0434,
+		GoPeakRate:            0.3303,
+		GoOffPeakRate:         0.0940,
+		IOGPeakRate:           0.2777,
+		IOGOffPeakRate:        0.0700,
+		CosyStandardRate:      0.2745,
+		CosyPeakRate:          0.4118,
+		CosyOffPeakRate:       0.1346,
+		CosyFixedStandardRate: 0.3130,
+		CosyFixedPeakRate:     0.4694,
+		CosyFixedOffPeakRate:  0.1536,
 	},
 	"london": { // PES C / DNO 12
-		RegionCode:         "C",
-		ImportStandardRate: 0.2425,
-		ImportPeakRate:     0.3396,
-		ImportOffPeakRate:  0.1456,
-		ExportStandardRate: 0.0980,
-		ExportPeakRate:     0.2860,
-		ExportOffPeakRate:  0.0524,
-		GoPeakRate:         0.3453,
-		GoOffPeakRate:      0.0940,
-		IOGPeakRate:        0.2802,
-		IOGOffPeakRate:     0.0700,
+		RegionCode:            "C",
+		ImportStandardRate:    0.2425,
+		ImportPeakRate:        0.3396,
+		ImportOffPeakRate:     0.1456,
+		ExportStandardRate:    0.0980,
+		ExportPeakRate:        0.2860,
+		ExportOffPeakRate:     0.0524,
+		GoPeakRate:            0.3453,
+		GoOffPeakRate:         0.0940,
+		IOGPeakRate:           0.2802,
+		IOGOffPeakRate:        0.0700,
+		CosyStandardRate:      0.2880,
+		CosyPeakRate:          0.4319,
+		CosyOffPeakRate:       0.1412,
+		CosyFixedStandardRate: 0.3495,
+		CosyFixedPeakRate:     0.5242,
+		CosyFixedOffPeakRate:  0.1715,
 	},
 	"merseyside_wales": { // PES D / DNO 13
-		RegionCode:         "D",
-		ImportStandardRate: 0.2552,
-		ImportPeakRate:     0.3573,
-		ImportOffPeakRate:  0.1532,
-		ExportStandardRate: 0.1054,
-		ExportPeakRate:     0.3068,
-		ExportOffPeakRate:  0.0512,
-		GoPeakRate:         0.3575,
-		GoOffPeakRate:      0.0940,
-		IOGPeakRate:        0.3017,
-		IOGOffPeakRate:     0.0700,
+		RegionCode:            "D",
+		ImportStandardRate:    0.2552,
+		ImportPeakRate:        0.3573,
+		ImportOffPeakRate:     0.1532,
+		ExportStandardRate:    0.1054,
+		ExportPeakRate:        0.3068,
+		ExportOffPeakRate:     0.0512,
+		GoPeakRate:            0.3575,
+		GoOffPeakRate:         0.0940,
+		IOGPeakRate:           0.3017,
+		IOGOffPeakRate:        0.0700,
+		CosyStandardRate:      0.3017,
+		CosyPeakRate:          0.4525,
+		CosyOffPeakRate:       0.1479,
+		CosyFixedStandardRate: 0.3432,
+		CosyFixedPeakRate:     0.5149,
+		CosyFixedOffPeakRate:  0.1684,
 	},
 	"west_midlands": { // PES E / DNO 14
-		RegionCode:         "E",
-		ImportStandardRate: 0.2328,
-		ImportPeakRate:     0.3259,
-		ImportOffPeakRate:  0.1397,
-		ExportStandardRate: 0.0979,
-		ExportPeakRate:     0.2781,
-		ExportOffPeakRate:  0.0439,
-		GoPeakRate:         0.3333,
-		GoOffPeakRate:      0.0940,
-		IOGPeakRate:        0.2785,
-		IOGOffPeakRate:     0.0700,
+		RegionCode:            "E",
+		ImportStandardRate:    0.2328,
+		ImportPeakRate:        0.3259,
+		ImportOffPeakRate:     0.1397,
+		ExportStandardRate:    0.0979,
+		ExportPeakRate:        0.2781,
+		ExportOffPeakRate:     0.0439,
+		GoPeakRate:            0.3333,
+		GoOffPeakRate:         0.0940,
+		IOGPeakRate:           0.2785,
+		IOGOffPeakRate:        0.0700,
+		CosyStandardRate:      0.2772,
+		CosyPeakRate:          0.4158,
+		CosyOffPeakRate:       0.1359,
+		CosyFixedStandardRate: 0.3167,
+		CosyFixedPeakRate:     0.4751,
+		CosyFixedOffPeakRate:  0.1554,
 	},
 	"north_east": { // PES F / DNO 15
-		RegionCode:         "F",
-		ImportStandardRate: 0.2319,
-		ImportPeakRate:     0.3248,
-		ImportOffPeakRate:  0.1392,
-		ExportStandardRate: 0.0971,
-		ExportPeakRate:     0.2769,
-		ExportOffPeakRate:  0.0421,
-		GoPeakRate:         0.3332,
-		GoOffPeakRate:      0.0940,
-		IOGPeakRate:        0.2769,
-		IOGOffPeakRate:     0.0700,
+		RegionCode:            "F",
+		ImportStandardRate:    0.2319,
+		ImportPeakRate:        0.3248,
+		ImportOffPeakRate:     0.1392,
+		ExportStandardRate:    0.0971,
+		ExportPeakRate:        0.2769,
+		ExportOffPeakRate:     0.0421,
+		GoPeakRate:            0.3332,
+		GoOffPeakRate:         0.0940,
+		IOGPeakRate:           0.2769,
+		IOGOffPeakRate:        0.0700,
+		CosyStandardRate:      0.2756,
+		CosyPeakRate:          0.4134,
+		CosyOffPeakRate:       0.1352,
+		CosyFixedStandardRate: 0.3128,
+		CosyFixedPeakRate:     0.4692,
+		CosyFixedOffPeakRate:  0.1535,
 	},
 	"north_west": { // PES G / DNO 16
-		RegionCode:         "G",
-		ImportStandardRate: 0.2407,
-		ImportPeakRate:     0.3370,
-		ImportOffPeakRate:  0.1445,
-		ExportStandardRate: 0.1033,
-		ExportPeakRate:     0.2925,
-		ExportOffPeakRate:  0.0466,
-		GoPeakRate:         0.3425,
-		GoOffPeakRate:      0.0940,
-		IOGPeakRate:        0.2957,
-		IOGOffPeakRate:     0.0700,
+		RegionCode:            "G",
+		ImportStandardRate:    0.2407,
+		ImportPeakRate:        0.3370,
+		ImportOffPeakRate:     0.1445,
+		ExportStandardRate:    0.1033,
+		ExportPeakRate:        0.2925,
+		ExportOffPeakRate:     0.0466,
+		GoPeakRate:            0.3425,
+		GoOffPeakRate:         0.0940,
+		IOGPeakRate:           0.2957,
+		IOGOffPeakRate:        0.0700,
+		CosyStandardRate:      0.2868,
+		CosyPeakRate:          0.4302,
+		CosyOffPeakRate:       0.1407,
+		CosyFixedStandardRate: 0.3208,
+		CosyFixedPeakRate:     0.4812,
+		CosyFixedOffPeakRate:  0.1574,
 	},
 	"southern": { // PES H / DNO 20
-		RegionCode:         "H",
-		ImportStandardRate: 0.2434,
-		ImportPeakRate:     0.3408,
-		ImportOffPeakRate:  0.1461,
-		ExportStandardRate: 0.1008,
-		ExportPeakRate:     0.2900,
-		ExportOffPeakRate:  0.0474,
-		GoPeakRate:         0.3481,
-		GoOffPeakRate:      0.0940,
-		IOGPeakRate:        0.2879,
-		IOGOffPeakRate:     0.0700,
+		RegionCode:            "H",
+		ImportStandardRate:    0.2434,
+		ImportPeakRate:        0.3408,
+		ImportOffPeakRate:     0.1461,
+		ExportStandardRate:    0.1008,
+		ExportPeakRate:        0.2900,
+		ExportOffPeakRate:     0.0474,
+		GoPeakRate:            0.3481,
+		GoOffPeakRate:         0.0940,
+		IOGPeakRate:           0.2879,
+		IOGOffPeakRate:        0.0700,
+		CosyStandardRate:      0.2866,
+		CosyPeakRate:          0.4298,
+		CosyOffPeakRate:       0.1405,
+		CosyFixedStandardRate: 0.3208,
+		CosyFixedPeakRate:     0.4812,
+		CosyFixedOffPeakRate:  0.1574,
 	},
 	"south_east": { // PES J / DNO 19
-		RegionCode:         "J",
-		ImportStandardRate: 0.2458,
-		ImportPeakRate:     0.3441,
-		ImportOffPeakRate:  0.1475,
-		ExportStandardRate: 0.1024,
-		ExportPeakRate:     0.2979,
-		ExportOffPeakRate:  0.0505,
-		GoPeakRate:         0.3490,
-		GoOffPeakRate:      0.0940,
-		IOGPeakRate:        0.2937,
-		IOGOffPeakRate:     0.0700,
+		RegionCode:            "J",
+		ImportStandardRate:    0.2458,
+		ImportPeakRate:        0.3441,
+		ImportOffPeakRate:     0.1475,
+		ExportStandardRate:    0.1024,
+		ExportPeakRate:        0.2979,
+		ExportOffPeakRate:     0.0505,
+		GoPeakRate:            0.3490,
+		GoOffPeakRate:         0.0940,
+		IOGPeakRate:           0.2937,
+		IOGOffPeakRate:        0.0700,
+		CosyStandardRate:      0.2910,
+		CosyPeakRate:          0.4366,
+		CosyOffPeakRate:       0.1427,
+		CosyFixedStandardRate: 0.3111,
+		CosyFixedPeakRate:     0.4666,
+		CosyFixedOffPeakRate:  0.1527,
 	},
 	"south_wales": { // PES K / DNO 21
-		RegionCode:         "K",
-		ImportStandardRate: 0.2426,
-		ImportPeakRate:     0.3397,
-		ImportOffPeakRate:  0.1456,
-		ExportStandardRate: 0.1021,
-		ExportPeakRate:     0.2935,
-		ExportOffPeakRate:  0.0469,
-		GoPeakRate:         0.3451,
-		GoOffPeakRate:      0.0940,
-		IOGPeakRate:        0.2919,
-		IOGOffPeakRate:     0.0700,
+		RegionCode:            "K",
+		ImportStandardRate:    0.2426,
+		ImportPeakRate:        0.3397,
+		ImportOffPeakRate:     0.1456,
+		ExportStandardRate:    0.1021,
+		ExportPeakRate:        0.2935,
+		ExportOffPeakRate:     0.0469,
+		GoPeakRate:            0.3451,
+		GoOffPeakRate:         0.0940,
+		IOGPeakRate:           0.2919,
+		IOGOffPeakRate:        0.0700,
+		CosyStandardRate:      0.2875,
+		CosyPeakRate:          0.4313,
+		CosyOffPeakRate:       0.1410,
+		CosyFixedStandardRate: 0.3178,
+		CosyFixedPeakRate:     0.4767,
+		CosyFixedOffPeakRate:  0.1560,
 	},
 	"south_west": { // PES L / DNO 22
-		RegionCode:         "L",
-		ImportStandardRate: 0.2432,
-		ImportPeakRate:     0.3405,
-		ImportOffPeakRate:  0.1460,
-		ExportStandardRate: 0.1020,
-		ExportPeakRate:     0.2922,
-		ExportOffPeakRate:  0.0455,
-		GoPeakRate:         0.3470,
-		GoOffPeakRate:      0.0940,
-		IOGPeakRate:        0.2917,
-		IOGOffPeakRate:     0.0700,
+		RegionCode:            "L",
+		ImportStandardRate:    0.2432,
+		ImportPeakRate:        0.3405,
+		ImportOffPeakRate:     0.1460,
+		ExportStandardRate:    0.1020,
+		ExportPeakRate:        0.2922,
+		ExportOffPeakRate:     0.0455,
+		GoPeakRate:            0.3470,
+		GoOffPeakRate:         0.0940,
+		IOGPeakRate:           0.2917,
+		IOGOffPeakRate:        0.0700,
+		CosyStandardRate:      0.2878,
+		CosyPeakRate:          0.4317,
+		CosyOffPeakRate:       0.1411,
+		CosyFixedStandardRate: 0.3155,
+		CosyFixedPeakRate:     0.4733,
+		CosyFixedOffPeakRate:  0.1548,
 	},
 	"yorkshire": { // PES M / DNO 23
-		RegionCode:         "M",
-		ImportStandardRate: 0.2323,
-		ImportPeakRate:     0.3253,
-		ImportOffPeakRate:  0.1395,
-		ExportStandardRate: 0.0969,
-		ExportPeakRate:     0.2717,
-		ExportOffPeakRate:  0.0419,
-		GoPeakRate:         0.3306,
-		GoOffPeakRate:      0.0940,
-		IOGPeakRate:        0.2748,
-		IOGOffPeakRate:     0.0700,
+		RegionCode:            "M",
+		ImportStandardRate:    0.2323,
+		ImportPeakRate:        0.3253,
+		ImportOffPeakRate:     0.1395,
+		ExportStandardRate:    0.0969,
+		ExportPeakRate:        0.2717,
+		ExportOffPeakRate:     0.0419,
+		GoPeakRate:            0.3306,
+		GoOffPeakRate:         0.0940,
+		IOGPeakRate:           0.2748,
+		IOGOffPeakRate:        0.0700,
+		CosyStandardRate:      0.2772,
+		CosyPeakRate:          0.4158,
+		CosyOffPeakRate:       0.1359,
+		CosyFixedStandardRate: 0.3257,
+		CosyFixedPeakRate:     0.4885,
+		CosyFixedOffPeakRate:  0.1598,
 	},
 	"southern_scotland": { // PES N / DNO 18
-		RegionCode:         "N",
-		ImportStandardRate: 0.2377,
-		ImportPeakRate:     0.3328,
-		ImportOffPeakRate:  0.1427,
-		ExportStandardRate: 0.0955,
-		ExportPeakRate:     0.2719,
-		ExportOffPeakRate:  0.0442,
-		GoPeakRate:         0.3345,
-		GoOffPeakRate:      0.0940,
-		IOGPeakRate:        0.2722,
-		IOGOffPeakRate:     0.0700,
+		RegionCode:            "N",
+		ImportStandardRate:    0.2377,
+		ImportPeakRate:        0.3328,
+		ImportOffPeakRate:     0.1427,
+		ExportStandardRate:    0.0955,
+		ExportPeakRate:        0.2719,
+		ExportOffPeakRate:     0.0442,
+		GoPeakRate:            0.3345,
+		GoOffPeakRate:         0.0940,
+		IOGPeakRate:           0.2722,
+		IOGOffPeakRate:        0.0700,
+		CosyStandardRate:      0.2827,
+		CosyPeakRate:          0.4240,
+		CosyOffPeakRate:       0.1386,
+		CosyFixedStandardRate: 0.3201,
+		CosyFixedPeakRate:     0.4802,
+		CosyFixedOffPeakRate:  0.1571,
 	},
 	"northern_scotland": { // PES P / DNO 17
-		RegionCode:         "P",
-		ImportStandardRate: 0.2437,
-		ImportPeakRate:     0.3412,
-		ImportOffPeakRate:  0.1463,
-		ExportStandardRate: 0.0998,
-		ExportPeakRate:     0.2873,
-		ExportOffPeakRate:  0.0473,
-		GoPeakRate:         0.3445,
-		GoOffPeakRate:      0.0940,
-		IOGPeakRate:        0.2868,
-		IOGOffPeakRate:     0.0700,
+		RegionCode:            "P",
+		ImportStandardRate:    0.2437,
+		ImportPeakRate:        0.3412,
+		ImportOffPeakRate:     0.1463,
+		ExportStandardRate:    0.0998,
+		ExportPeakRate:        0.2873,
+		ExportOffPeakRate:     0.0473,
+		GoPeakRate:            0.3445,
+		GoOffPeakRate:         0.0940,
+		IOGPeakRate:           0.2868,
+		IOGOffPeakRate:        0.0700,
+		CosyStandardRate:      0.2853,
+		CosyPeakRate:          0.4279,
+		CosyOffPeakRate:       0.1399,
+		CosyFixedStandardRate: 0.3414,
+		CosyFixedPeakRate:     0.5120,
+		CosyFixedOffPeakRate:  0.1675,
 	},
 }
 
@@ -489,6 +585,85 @@ func octopusIntelligentGoFees(options types.UtilityRateOptions) ([]types.Utility
 	return periods, nil
 }
 
+func octopusCosyFees(options types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
+	_, cfg, err := normalizeOctopusLocation(options.Location)
+	if err != nil {
+		return nil, err
+	}
+
+	offPeakRate := cfg.CosyOffPeakRate
+	peakRate := cfg.CosyPeakRate
+	standardRate := cfg.CosyStandardRate
+	if options.RateClass == "fixed" {
+		offPeakRate = cfg.CosyFixedOffPeakRate
+		peakRate = cfg.CosyFixedPeakRate
+		standardRate = cfg.CosyFixedStandardRate
+	}
+
+	periods := []types.UtilityFeesPeriod{
+		// 1. Off-Peak ("Cosy" hours): 04:00 – 07:00, 13:00 – 16:00, and 22:00 – 00:00 (8 hours)
+		{
+			TimePeriod: types.TimePeriod{
+				Name:        "Off-Peak",
+				LocationPtr: lonLocation,
+				Hours: []types.UtilityHourPeriod{
+					{HourStart: 4, HourEnd: 7},
+					{HourStart: 13, HourEnd: 16},
+					{HourStart: 22, HourEnd: 24},
+				},
+			},
+			DollarsPerKWH: offPeakRate,
+			Description:   "Cosy Octopus Off-Peak Rate",
+		},
+		// 2. Peak: 16:00 – 19:00 (3 hours)
+		{
+			TimePeriod: types.TimePeriod{
+				Name:        "Peak",
+				LocationPtr: lonLocation,
+				Hours: []types.UtilityHourPeriod{
+					{HourStart: 16, HourEnd: 19},
+				},
+			},
+			DollarsPerKWH: peakRate,
+			Description:   "Cosy Octopus Peak Rate",
+		},
+		// 3. Standard / Day: 00:00 – 04:00, 07:00 – 13:00, and 19:00 – 22:00 (13 hours)
+		{
+			TimePeriod: types.TimePeriod{
+				Name:        "Standard",
+				LocationPtr: lonLocation,
+				Hours: []types.UtilityHourPeriod{
+					{HourStart: 0, HourEnd: 4},
+					{HourStart: 7, HourEnd: 13},
+					{HourStart: 19, HourEnd: 22},
+				},
+			},
+			DollarsPerKWH: standardRate,
+			Description:   "Cosy Octopus Standard Rate",
+		},
+	}
+
+	periods = append(periods, octopusExportPeriods(options)...)
+	return periods, nil
+}
+
+func octopusCosyRateOptions() []types.UtilityRateOption {
+	opts := []types.UtilityRateOption{
+		{
+			Field:       "rateClass",
+			Name:        "Tariff Type",
+			Type:        types.UtilityOptionTypeSelect,
+			Description: "Select whether you are on the variable Flexible tariff or the 12M Fixed tariff.",
+			Choices: []types.UtilityOptionChoice{
+				{Value: "flexible", Name: "Cosy Octopus (Flexible)"},
+				{Value: "fixed", Name: "Cosy Octopus 12M Fixed"},
+			},
+			Default: "flexible",
+		},
+	}
+	return append(opts, octopusGoRateOptions()...)
+}
+
 func octopusGoRateOptions() []types.UtilityRateOption {
 	return []types.UtilityRateOption{
 		{
@@ -549,6 +724,12 @@ func octopusUtilityInfo() types.UtilityProviderInfo {
 				Name:    "Intelligent Octopus Go",
 				Options: octopusGoRateOptions(),
 				GetFees: octopusIntelligentGoFees,
+			},
+			{
+				ID:      "octopus_cosy",
+				Name:    "Cosy Octopus",
+				Options: octopusCosyRateOptions(),
+				GetFees: octopusCosyFees,
 			},
 		},
 	}
@@ -612,9 +793,7 @@ func (r *baseOctopusRegion) settingsMatch(settings types.Settings) bool {
 	if err != nil {
 		return false
 	}
-	return (settings.UtilityRate == "octopus_intelligent_go" || settings.UtilityRate == "octopus_go") &&
-		settings.UtilityRateOptions.GenerationRate == "outgoing_agile" &&
-		r.location == loc
+	return settings.UtilityRateOptions.GenerationRate == "outgoing_agile" && r.location == loc
 }
 
 func (r *baseOctopusRegion) GetCurrentPrice(ctx context.Context) (types.Price, error) {
