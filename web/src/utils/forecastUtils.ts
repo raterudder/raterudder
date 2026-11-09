@@ -24,6 +24,25 @@ export const ALL_ZONES: ZoneConfig[] = [
     { key: 'gridExport', label: 'Grid Export', color: '#f59e0b' },
 ];
 
+export function isSolarPoweredFlatPeriod(p: PlanPeriod): boolean {
+    if (p.batteryMode !== BatteryMode.Load || p.reason === ActionReason.BatteryAtReserve) {
+        return false;
+    }
+    if (p.endSoc > p.startSoc + 0.1 || p.endSoc < p.startSoc - 0.1) {
+        return false;
+    }
+    if (p.solarMode === SolarMode.Export || p.reason === ActionReason.DirectExport) {
+        return false;
+    }
+    const reserveFloor = (p.reserveSOC !== undefined && p.reserveSOC > 0 ? p.reserveSOC : 20) + 1;
+    if (p.startSoc <= reserveFloor && p.endSoc <= reserveFloor) {
+        return false;
+    }
+    const solarKWH = p.solarKWH ?? 0;
+    const loadKWH = p.loadKWH ?? 0;
+    return (p.startSoc >= 98 && p.endSoc >= 98) || (solarKWH > 0 && solarKWH >= loadKWH);
+}
+
 export function classifyPlanPeriod(p: PlanPeriod): ZoneConfig {
     // 1. Forced grid charge
     if (p.batteryMode === BatteryMode.ChargeAny) {
@@ -44,8 +63,8 @@ export function classifyPlanPeriod(p: PlanPeriod): ZoneConfig {
     if (isSolarExport) {
         return ALL_ZONES.find((z) => z.key === 'solarExport')!;
     }
-    // 5. Discharging to power home: SOC is falling
-    if (p.endSoc < p.startSoc - 0.1) {
+    // 5. Discharging to power home or running on solar while battery is full/steady in Load mode
+    if (p.endSoc < p.startSoc - 0.1 || isSolarPoweredFlatPeriod(p)) {
         return ALL_ZONES.find((z) => z.key === 'poweringHome')!;
     }
     // 6. Standby (includes holding at reserve or flat SOC)
@@ -343,6 +362,7 @@ export function buildPlanSummaryBeats(
 
     interface RawPlanPhase {
         category: SummaryPhaseCategory;
+        solarPoweredFlat: boolean;
         tsStart: string;
         tsEnd: string;
         durationHours: number;
@@ -356,6 +376,9 @@ export function buildPlanSummaryBeats(
         batteryMode: BatteryMode;
         solarMode: SolarMode;
     }
+
+    const isSamePlanPhase = (a: RawPlanPhase, b: RawPlanPhase) =>
+        a.category === b.category && a.solarPoweredFlat === b.solarPoweredFlat;
 
     const mergeInto = (target: RawPlanPhase, next: RawPlanPhase) => {
         target.tsEnd = next.tsEnd;
@@ -374,7 +397,7 @@ export function buildPlanSummaryBeats(
         const result: RawPlanPhase[] = [];
         for (const p of phases) {
             const prev = result[result.length - 1];
-            if (prev && prev.category === p.category) {
+            if (prev && isSamePlanPhase(prev, p)) {
                 mergeInto(prev, p);
             } else {
                 result.push({ ...p });
@@ -386,12 +409,14 @@ export function buildPlanSummaryBeats(
     const rawPhases: RawPlanPhase[] = periods.map((p) => {
         const z = classifyPlanPeriod(p);
         const category = zoneKeyToSummaryCategory(z.key);
+        const solarPoweredFlat = isSolarPoweredFlatPeriod(p);
         const durHours =
             p.durationHours > 0
                 ? p.durationHours
                 : Math.max(0, (new Date(p.tsEnd).getTime() - new Date(p.tsStart).getTime()) / 3600000);
         return {
             category,
+            solarPoweredFlat,
             tsStart: p.tsStart,
             tsEnd: p.tsEnd,
             durationHours: durHours,
@@ -415,7 +440,7 @@ export function buildPlanSummaryBeats(
     for (const p of coalescedPhases) {
         const prev = afterStandbyBridge[afterStandbyBridge.length - 1];
         const prevPrev = afterStandbyBridge[afterStandbyBridge.length - 2];
-        if (prev && prev.category === p.category) {
+        if (prev && isSamePlanPhase(prev, p)) {
             mergeInto(prev, p);
         } else if (
             p.category !== 'standby' &&
@@ -423,7 +448,7 @@ export function buildPlanSummaryBeats(
             prev.category === 'standby' &&
             prev.durationMinutes <= 60 &&
             prevPrev &&
-            prevPrev.category === p.category
+            isSamePlanPhase(prevPrev, p)
         ) {
             afterStandbyBridge.pop();
             mergeInto(prevPrev, p);
@@ -438,13 +463,13 @@ export function buildPlanSummaryBeats(
         const prev = afterSinglePeriodBridge[afterSinglePeriodBridge.length - 1];
         const prevPrev = afterSinglePeriodBridge[afterSinglePeriodBridge.length - 2];
         const isSinglePeriodSeparator = prev && (prev.count === 1 || prev.durationMinutes < 30);
-        if (prev && prev.category === p.category) {
+        if (prev && isSamePlanPhase(prev, p)) {
             mergeInto(prev, p);
         } else if (
             p.category !== 'standby' &&
             isSinglePeriodSeparator &&
             prevPrev &&
-            prevPrev.category === p.category
+            isSamePlanPhase(prevPrev, p)
         ) {
             afterSinglePeriodBridge.pop();
             mergeInto(prevPrev, p);
@@ -488,7 +513,8 @@ export function buildPlanSummaryBeats(
                     batteryMode: p.batteryMode,
                     solarMode: p.solarMode,
                 },
-                true
+                true,
+                p.solarPoweredFlat
             ),
             timeLabel,
             socText: formatSOCRange(p.startSoc, p.endSoc),

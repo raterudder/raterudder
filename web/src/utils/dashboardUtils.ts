@@ -152,12 +152,76 @@ const hasUpcomingBatteryExport = (action: Action): boolean => {
     return false;
 };
 
-export const getReasonText = (action: Action, symbol: string = '$'): string => {
+export type LoadSubType = 'solarCharge' | 'solarFull' | 'load';
+
+export const getActionLoadSubType = (
+    action: Action,
+    prevSOC?: number
+): LoadSubType => {
+    const effectiveMode =
+        action.targetBatteryMode !== undefined && action.targetBatteryMode !== BatteryMode.NoChange
+            ? action.targetBatteryMode
+            : action.batteryMode;
+    if (
+        effectiveMode !== BatteryMode.Load ||
+        action.reason === ActionReason.BatteryAtReserve ||
+        action.reason === ActionReason.DirectExport
+    ) {
+        return 'load';
+    }
+    const solarKW = action.systemStatus?.solarKW ?? 0;
+    const batteryKW = action.systemStatus?.batteryKW ?? 0;
+    const soc = action.systemStatus?.batterySOC;
+    const hasValidSOC = soc !== undefined && soc > 0;
+    const hasPrevSOC = prevSOC !== undefined && prevSOC > 0;
+    const socDelta = hasValidSOC && hasPrevSOC ? soc - prevSOC : 0;
+    const p0 = action.plan?.periods?.[0];
+    const planCharging = Boolean(
+        p0 && p0.batteryMode === BatteryMode.Load && p0.endSoc > p0.startSoc + 0.1
+    );
+    const planSolarFlat = Boolean(
+        p0 &&
+            p0.batteryMode === BatteryMode.Load &&
+            Math.abs(p0.endSoc - p0.startSoc) <= 0.1 &&
+            ((p0.startSoc >= 98 && p0.endSoc >= 98) ||
+                ((p0.solarKWH ?? 0) > 0 && (p0.solarKWH ?? 0) >= (p0.loadKWH ?? 0)))
+    );
+
+    if (
+        solarKW > 0 &&
+        (batteryKW < -0.1 ||
+            socDelta >= 0.3 ||
+            (batteryKW <= 0.1 && planCharging && (!hasValidSOC || soc < 98.5)))
+    ) {
+        return 'solarCharge';
+    }
+    if (!action.systemStatus && planCharging) {
+        return 'solarCharge';
+    }
+
+    if (
+        batteryKW <= 0.2 &&
+        socDelta >= -0.3 &&
+        ((hasValidSOC && soc >= 98 && (solarKW > 0 || planSolarFlat)) ||
+            (!hasValidSOC && planSolarFlat))
+    ) {
+        return 'solarFull';
+    }
+
+    return 'load';
+};
+
+export const getReasonText = (
+    action: Action,
+    symbol: string = '$',
+    loadSubType?: LoadSubType
+): string => {
     const reason = action.reason;
     if (!reason) {
         return action.description;
     }
 
+    const effectiveSubType = loadSubType ?? getActionLoadSubType(action);
     const currentPrice = action.currentPrice;
     const futurePrice = action.futurePrice;
     const nowCost = currentPrice ? gridChargeCost(currentPrice) : null;
@@ -180,6 +244,24 @@ export const getReasonText = (action: Action, symbol: string = '$'): string => {
 
     if (isNegativePrice && solarMode === SolarMode.NoExport) {
         suffixParts.push('Disabled solar export because the price is negative.');
+    }
+
+    if (
+        reason === ActionReason.SufficientBattery ||
+        reason === ActionReason.DischargeAtPeak
+    ) {
+        if (effectiveSubType === 'solarCharge') {
+            const parts = [
+                'Solar generation exceeds home load. Powering the home from solar and using excess solar to charge the battery.',
+            ];
+            return parts.concat(suffixParts).join(' ');
+        }
+        if (effectiveSubType === 'solarFull') {
+            const parts = [
+                'The battery is full and solar generation exceeds home load. Running the home on solar while keeping the battery at 100% and exporting surplus solar to the grid.',
+            ];
+            return parts.concat(suffixParts).join(' ');
+        }
     }
 
     switch (reason) {
@@ -430,6 +512,7 @@ export interface ActionSummary {
     isSummary: true;
     type: SummaryType;
     reason?: ActionReason;
+    loadSubType?: LoadSubType;
     latestAction: Action;
     startTime: string;
     endTime?: string;
@@ -477,7 +560,11 @@ export const hasSolarActivity = (item: Action | ActionSummary): boolean => {
     return (item.systemStatus?.solarKW ?? 0) > 0;
 };
 
-export const getActionTitle = (action: Action, isSummaryFault = false): string => {
+export const getActionTitle = (
+    action: Action,
+    isSummaryFault = false,
+    loadSubType?: LoadSubType
+): string => {
     const isFault = !!action.fault || isSummaryFault;
     const hasStorms = Boolean(action.systemStatus?.storms && action.systemStatus.storms.length > 0);
     const isEmergency = hasStorms || action.reason === ActionReason.EmergencyMode;
@@ -497,6 +584,14 @@ export const getActionTitle = (action: Action, isSummaryFault = false): string =
     }
     if (action.batteryMode === BatteryMode.NoChange) {
         return 'No Change';
+    }
+
+    const effectiveSubType = loadSubType ?? getActionLoadSubType(action);
+    if (effectiveSubType === 'solarCharge') {
+        return 'Charging from Solar';
+    }
+    if (effectiveSubType === 'solarFull') {
+        return 'Running on Solar';
     }
 
     switch (action.reason) {
@@ -647,11 +742,15 @@ const classifySummaryItem = (
     if (action.reason === ActionReason.DirectExport && effectiveMode !== BatteryMode.Standby) {
         return 'solarExport';
     }
+    if ('isSummary' in item && item.loadSubType === 'solarCharge') {
+        return 'solarCharge';
+    }
+    if ('isSummary' in item && item.loadSubType === 'solarFull') {
+        return 'load';
+    }
     if (
         (hasSOC && Math.round(endSOC) - Math.round(startSOC) >= 1) ||
-        (!('isSummary' in item) &&
-            (action.systemStatus?.batteryKW ?? 0) < -0.1 &&
-            (action.systemStatus?.solarKW ?? 0) > 0)
+        (!('isSummary' in item) && getActionLoadSubType(action) === 'solarCharge')
     ) {
         return hasSolarActivity(item) ? 'solarCharge' : 'charge';
     }
@@ -664,7 +763,8 @@ const classifySummaryItem = (
 export const getSummaryBeatHeadline = (
     category: SummaryPhaseCategory,
     action: Pick<Action, 'reason' | 'batteryMode' | 'solarMode' | 'systemStatus'>,
-    isCurrent: boolean
+    isCurrent: boolean,
+    solarPoweredFlat = false
 ): string => {
     const hasStorms = Boolean(action.systemStatus?.storms && action.systemStatus.storms.length > 0);
     switch (category) {
@@ -696,6 +796,9 @@ export const getSummaryBeatHeadline = (
             }
             return isCurrent ? 'Exporting to grid' : 'Exported to grid';
         case 'load':
+            if (solarPoweredFlat) {
+                return isCurrent ? 'Running on solar' : 'Ran on solar';
+            }
             if (action.reason === ActionReason.DischargeAtPeak) {
                 return isCurrent ? 'Powering home at peak' : 'Powered home at peak';
             }
@@ -738,6 +841,7 @@ export const buildDaySummary = (
 
     interface RawPhase {
         category: SummaryPhaseCategory;
+        solarFlat: boolean;
         startTime: string;
         endTime: string;
         effectiveEndTime: string;
@@ -773,6 +877,15 @@ export const buildDaySummary = (
         const startSOC = isSummary ? (item.startSOC ?? item.minSOC ?? item.avgSOC) : singleSOC;
         const ownEndSOC = isSummary ? (item.endSOC ?? item.maxSOC ?? item.avgSOC) : singleSOC;
         const category = classifySummaryItem(item, startSOC, ownEndSOC, hasSOC);
+        const solarFlat =
+            category === 'load' &&
+            ((isSummary && item.loadSubType === 'solarFull') ||
+                (!isSummary && getActionLoadSubType(action) === 'solarFull') ||
+                (hasSolarActivity(item) &&
+                    hasSOC &&
+                    startSOC >= 98 &&
+                    ownEndSOC >= 98 &&
+                    Math.abs(Math.round(ownEndSOC) - Math.round(startSOC)) < 1));
         let endSOC = ownEndSOC;
 
         let effectiveEndTime = endTime;
@@ -825,6 +938,7 @@ export const buildDaySummary = (
 
         return {
             category,
+            solarFlat,
             startTime,
             endTime,
             effectiveEndTime,
@@ -879,6 +993,9 @@ export const buildDaySummary = (
     const legend = SUMMARY_LEGEND_ORDER.filter(item => usedCategories.has(item.category));
 
     // 2. Build story beats:
+    const isSameBeatPhase = (a: RawPhase, b: RawPhase) =>
+        a.category === b.category && a.solarFlat === b.solarFlat;
+
     const mergePhaseInto = (prev: RawPhase, p: RawPhase) => {
         prev.endTime = p.endTime;
         prev.effectiveEndTime = p.effectiveEndTime;
@@ -909,7 +1026,7 @@ export const buildDaySummary = (
         const result: RawPhase[] = [];
         for (const p of phases) {
             const prev = result[result.length - 1];
-            if (prev && prev.category === p.category) {
+            if (prev && isSameBeatPhase(prev, p)) {
                 mergePhaseInto(prev, p);
             } else {
                 result.push({ ...p });
@@ -926,14 +1043,14 @@ export const buildDaySummary = (
     for (const p of coalescedPhases) {
         const prev = afterStandbyBridge[afterStandbyBridge.length - 1];
         const prevPrev = afterStandbyBridge[afterStandbyBridge.length - 2];
-        if (prev && prev.category === p.category) {
+        if (prev && isSameBeatPhase(prev, p)) {
             mergePhaseInto(prev, p);
         } else if (
             p.category !== 'standby' &&
             prev &&
             prev.category === 'standby' &&
             prevPrev &&
-            prevPrev.category === p.category
+            isSameBeatPhase(prevPrev, p)
         ) {
             afterStandbyBridge.pop();
             mergePhaseInto(prevPrev, p);
@@ -952,13 +1069,13 @@ export const buildDaySummary = (
             prev.category !== 'fault' &&
             prev.category !== 'vpp' &&
             (prev.count === 1 || prev.durationMinutes < 30);
-        if (prev && prev.category === p.category) {
+        if (prev && isSameBeatPhase(prev, p)) {
             mergePhaseInto(prev, p);
         } else if (
             p.category !== 'standby' &&
             isSinglePeriodSeparator &&
             prevPrev &&
-            prevPrev.category === p.category
+            isSameBeatPhase(prevPrev, p)
         ) {
             afterSinglePeriodBridge.pop();
             mergePhaseInto(prevPrev, p);
@@ -1001,7 +1118,7 @@ export const buildDaySummary = (
 
         return {
             category: p.category,
-            headline: getSummaryBeatHeadline(p.category, p.latestAction, p.isLatest),
+            headline: getSummaryBeatHeadline(p.category, p.latestAction, p.isLatest, p.solarFlat),
             timeLabel,
             socText: p.hasSOC ? formatSOCRange(p.startSOC, p.endSOC) : undefined,
             priceText: p.hasPrice ? formatPrice(p.avgPrice, currencySymbol) : undefined,
@@ -1025,10 +1142,13 @@ export function getPlanStatusSubvalue(action: Action, refTs?: string, symbol: st
     const isBatteryAtReserve = action.reason === ActionReason.BatteryAtReserve;
     const isDirectExportReason = action.reason === ActionReason.DirectExport;
     const isDirectSolarExportStandby = isDirectExportReason && action.batteryMode === BatteryMode.Standby;
+    const loadSubType = getActionLoadSubType(action);
 
     let state: 'charging' | 'discharging' | 'standby' = 'standby';
     if (isBatteryAtReserve || isDirectSolarExportStandby) {
         state = 'standby';
+    } else if (effectiveMode === BatteryMode.Load && loadSubType === 'solarCharge') {
+        state = 'charging';
     } else if (effectiveMode === BatteryMode.Load || effectiveMode === BatteryMode.Export) {
         state = 'discharging';
     } else if (effectiveMode === BatteryMode.ChargeAny) {
@@ -1072,6 +1192,24 @@ export function getPlanStatusSubvalue(action: Action, refTs?: string, symbol: st
 
     // Charging: find end of contiguous charge block
     if (state === 'charging') {
+        if (effectiveMode === BatteryMode.Load && loadSubType === 'solarCharge') {
+            let endSolarChargeTime = currentPeriod.tsEnd;
+            let endSolarSoc = currentPeriod.endSoc;
+            for (let i = 1; i < periods.length; i++) {
+                if (
+                    periods[i].batteryMode === BatteryMode.Load &&
+                    periods[i].endSoc > periods[i].startSoc + 0.1
+                ) {
+                    endSolarChargeTime = periods[i].tsEnd;
+                    endSolarSoc = periods[i].endSoc;
+                } else {
+                    break;
+                }
+            }
+            const targetSoc = endSolarSoc ? Math.round(endSolarSoc) : 100;
+            return `Charging to ${targetSoc}% until ${formatTime(endSolarChargeTime, refTs)}`;
+        }
+
         let endChargeTime = currentPeriod.tsEnd;
         for (let i = 1; i < periods.length; i++) {
             if (periods[i].batteryMode === BatteryMode.ChargeAny) {
@@ -1091,7 +1229,7 @@ export function getPlanStatusSubvalue(action: Action, refTs?: string, symbol: st
         return `Charging until ${formatTime(endChargeTime, refTs)}`;
     }
 
-    // Discharging:
+    // Discharging / Self-Powered:
     if (state === 'discharging') {
         // Direct export
         if (effectiveMode === BatteryMode.Export || action.reason === ActionReason.DirectExport) {
@@ -1106,10 +1244,32 @@ export function getPlanStatusSubvalue(action: Action, refTs?: string, symbol: st
             return `Exporting to grid until ${formatTime(endExportTime, refTs)}`;
         }
 
+        if (loadSubType === 'solarFull') {
+            let endSolarFullTime = currentPeriod.tsEnd;
+            for (let i = 1; i < periods.length; i++) {
+                const p = periods[i];
+                const isSolarFlat =
+                    p.batteryMode === BatteryMode.Load &&
+                    Math.abs(p.endSoc - p.startSoc) <= 0.1 &&
+                    ((p.startSoc >= 98 && p.endSoc >= 98) ||
+                        ((p.solarKWH ?? 0) > 0 && (p.solarKWH ?? 0) >= (p.loadKWH ?? 0)));
+                if (isSolarFlat) {
+                    endSolarFullTime = p.tsEnd;
+                } else {
+                    break;
+                }
+            }
+            const holdSoc = Math.round(currentPeriod.endSoc || action.systemStatus?.batterySOC || 100);
+            return `Holding at ${holdSoc}% on solar until ${formatTime(endSolarFullTime, refTs)}`;
+        }
+
         // Peak discharge
         let endDischargeTime = currentPeriod.tsEnd;
         for (let i = 1; i < periods.length; i++) {
-            if (periods[i].batteryMode === BatteryMode.Load) {
+            if (
+                periods[i].batteryMode === BatteryMode.Load &&
+                periods[i].endSoc <= periods[i].startSoc + 0.1
+            ) {
                 endDischargeTime = periods[i].tsEnd;
             } else {
                 break;

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Meter } from '@base-ui/react/meter';
 import { type Action, BatteryMode, SolarMode, ActionReason } from '../api';
-import { getBatteryModeLabel, isZeroTime, getPlanStatusSubvalue } from '../utils/dashboardUtils';
+import { getBatteryModeLabel, isZeroTime, getPlanStatusSubvalue, getActionLoadSubType } from '../utils/dashboardUtils';
 
 interface CurrentStatusProps {
     action: Action;
@@ -114,10 +114,15 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action, currencySymbol = 
         ? action.targetBatteryMode
         : action.batteryMode;
     const mode = effectiveBatteryMode;
+    const loadSubType = getActionLoadSubType(planMode ? action : { ...action, plan: undefined });
+    const isSolarCharging = mode === BatteryMode.Load && loadSubType === 'solarCharge';
+    const isSolarFull = mode === BatteryMode.Load && loadSubType === 'solarFull';
 
     let state: 'charging' | 'discharging' | 'standby' = 'standby';
     if (isBatteryAtReserve || isDirectSolarExportStandby) {
         state = 'standby';
+    } else if (isSolarCharging) {
+        state = 'charging';
     } else if (mode === BatteryMode.Load || mode === BatteryMode.Export) {
         state = 'discharging';
     } else if (mode === BatteryMode.ChargeAny) {
@@ -182,6 +187,8 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action, currencySymbol = 
         ? 'Peak Defense'
         : isBatteryAtReserve
         ? 'Battery At Reserve'
+        : isSolarCharging
+        ? 'Solar Charging'
         : state === 'discharging'
         ? 'Self-Powered'
         : `System ${state.charAt(0).toUpperCase() + state.slice(1)}`;
@@ -194,17 +201,21 @@ const CurrentStatus: React.FC<CurrentStatusProps> = ({ action, currencySymbol = 
         ? 'Holding Reserve • Home on Solar'
         : isBatteryAtReserve
         ? 'Holding Reserve'
+        : isSolarCharging
+        ? 'Charging from Solar'
+        : isSolarFull
+        ? 'Running on Solar • Battery Full'
         : state === 'discharging'
         ? 'Rely on Solar & Battery'
         : getBatteryModeLabel(mode);
 
     return (
-        <div className={`current-status-card ${state}`}>
+        <div className={`current-status-card ${state}${isSolarCharging ? ' solar-charging' : ''}`}>
             <div className="status-main">
                 <div className="status-icon">
                     {isDirectBatteryExport ? (
                         <span className="icon" aria-hidden="true">⚡</span>
-                    ) : isDirectSolarExport ? (
+                    ) : isDirectSolarExport || isSolarCharging || isSolarFull ? (
                         <span className="icon" aria-hidden="true">☀️</span>
                     ) : isDirectSolarExportStandby ? (
                         <span className="icon" aria-hidden="true">🛡️</span>

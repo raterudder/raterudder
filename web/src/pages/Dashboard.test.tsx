@@ -8,7 +8,8 @@ import * as api from '../api';
 import { setupDefaultApiMocks } from '../test/apiMocks';
 import { FeaturesProvider } from '../utils/features';
 
-const { fetchActionsAndSavings, fetchSettings, ActionReason } = api;
+const { fetchActionsAndSavings, fetchSettings, ActionReason, BatteryMode, SolarMode } = api;
+type Action = api.Action;
 
 vi.mock('../api');
 
@@ -1671,5 +1672,106 @@ describe('Dashboard', () => {
             expect(screen.getByRole('button', { name: /Last 7 Days/i })).toBeInTheDocument();
             expect(screen.getByRole('button', { name: /Last 30 Days/i })).toBeInTheDocument();
         });
+    });
+
+    it('splits consecutive Load actions into battery discharge, solar charging, and running on solar at 100%', async () => {
+        const user = userEvent.setup();
+        const actions: Action[] = [
+            // Overnight discharging (6:00 AM - 7:20 AM)
+            {
+                timestamp: '2026-06-15T06:00:00-05:00',
+                batteryMode: BatteryMode.Load,
+                solarMode: SolarMode.Any,
+                reason: ActionReason.SufficientBattery,
+                description: 'Sufficient battery',
+                systemStatus: { batterySOC: 50, solarKW: 0.1, homeKW: 1.5 },
+            },
+            {
+                timestamp: '2026-06-15T06:40:00-05:00',
+                batteryMode: BatteryMode.Load,
+                solarMode: SolarMode.Any,
+                reason: ActionReason.SufficientBattery,
+                description: 'Sufficient battery',
+                systemStatus: { batterySOC: 45, solarKW: 0.2, homeKW: 1.4 },
+            },
+            {
+                timestamp: '2026-06-15T07:20:00-05:00',
+                batteryMode: BatteryMode.Load,
+                solarMode: SolarMode.Any,
+                reason: ActionReason.SufficientBattery,
+                description: 'Sufficient battery',
+                systemStatus: { batterySOC: 40, solarKW: 0.4, homeKW: 1.3 },
+            },
+            // Morning solar charging (8:00 AM - 11:20 AM)
+            {
+                timestamp: '2026-06-15T08:00:00-05:00',
+                batteryMode: BatteryMode.Load,
+                solarMode: SolarMode.Any,
+                reason: ActionReason.SufficientBattery,
+                description: 'Sufficient battery',
+                systemStatus: { batterySOC: 50, solarKW: 3.5, homeKW: 1.1 },
+            },
+            {
+                timestamp: '2026-06-15T09:40:00-05:00',
+                batteryMode: BatteryMode.Load,
+                solarMode: SolarMode.Any,
+                reason: ActionReason.SufficientBattery,
+                description: 'Sufficient battery',
+                systemStatus: { batterySOC: 78, solarKW: 5.8, homeKW: 1.1 },
+            },
+            {
+                timestamp: '2026-06-15T11:20:00-05:00',
+                batteryMode: BatteryMode.Load,
+                solarMode: SolarMode.Any,
+                reason: ActionReason.SufficientBattery,
+                description: 'Sufficient battery',
+                systemStatus: { batterySOC: 97, solarKW: 6.2, homeKW: 1.2 },
+            },
+            // Midday running on solar at 100% (11:40 AM - 2:20 PM)
+            {
+                timestamp: '2026-06-15T11:40:00-05:00',
+                batteryMode: BatteryMode.Load,
+                solarMode: SolarMode.Any,
+                reason: ActionReason.SufficientBattery,
+                description: 'Sufficient battery',
+                systemStatus: { batterySOC: 100, solarKW: 6.5, homeKW: 1.3 },
+            },
+            {
+                timestamp: '2026-06-15T13:00:00-05:00',
+                batteryMode: BatteryMode.Load,
+                solarMode: SolarMode.Any,
+                reason: ActionReason.SufficientBattery,
+                description: 'Sufficient battery',
+                systemStatus: { batterySOC: 100, solarKW: 6.0, homeKW: 1.4 },
+            },
+            {
+                timestamp: '2026-06-15T14:20:00-05:00',
+                batteryMode: BatteryMode.Load,
+                solarMode: SolarMode.Any,
+                reason: ActionReason.SufficientBattery,
+                description: 'Sufficient battery',
+                systemStatus: { batterySOC: 100, solarKW: 5.2, homeKW: 1.3 },
+            },
+        ];
+
+        mockActionsAndSavings(actions);
+        renderWithRouter(<Dashboard siteID="site1" />);
+
+        await waitFor(() => {
+            expect(screen.getByText('Running on Solar • Battery Full')).toBeInTheDocument();
+        });
+
+        // Summary beats should show all three distinct phases
+        expect(screen.getByText('Running on solar')).toBeInTheDocument();
+        expect(screen.getByText('Charged from solar')).toBeInTheDocument();
+        expect(screen.getByText('Ran on solar & battery')).toBeInTheDocument();
+
+        // Expand detailed log and verify grouped titles
+        const toggleBtn = screen.getByRole('button', { name: /Show Detailed Action Log/i });
+        await user.click(toggleBtn);
+
+        expect(screen.getByRole('heading', { name: 'Running on Solar' })).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: 'Charging from Solar' })).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: 'Self-Powered' })).toBeInTheDocument();
     });
 });

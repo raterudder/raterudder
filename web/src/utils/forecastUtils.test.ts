@@ -155,6 +155,22 @@ describe('classifyPlanPeriod', () => {
         expect(result.label).toBe('Standby');
         expect(result.color).toBe('#64748b');
     });
+
+    it('classifies full battery in Load mode when solar covers load as Powering Home instead of Standby', () => {
+        const period = makePeriod({
+            batteryMode: BatteryMode.Load,
+            reason: ActionReason.DischargeAtPeak,
+            startSoc: 100,
+            endSoc: 100,
+            solarKWH: 1.5,
+            loadKWH: 0.4,
+            gridExportKWH: 1.1,
+        });
+        const result = classifyPlanPeriod(period);
+        expect(result.key).toBe('poweringHome');
+        expect(result.label).toBe('Powering Home');
+        expect(result.color).toBe('#38bdf8');
+    });
 });
 
 describe('reconstructFuturePricesFromPlan & buildPlanPriceSeries', () => {
@@ -336,6 +352,72 @@ describe('buildPlanSummaryBeats', () => {
             headline: 'Powering home at peak',
             socText: '95% → 40%',
             priceText: '$ 0.320/kWh',
+        });
+    });
+
+    it('emits Running on solar beat when battery is at 100% in Load mode before afternoon discharge', () => {
+        const periods: PlanPeriod[] = [
+            makePeriod({
+                tsStart: '2026-09-30T10:20:00-05:00',
+                tsEnd: '2026-09-30T11:40:00-05:00',
+                durationHours: 4 / 3,
+                batteryMode: BatteryMode.Load,
+                reason: ActionReason.SufficientBattery,
+                startSoc: 78,
+                endSoc: 100,
+                solarKWH: 5.0,
+                loadKWH: 0.8,
+                importDollars: 0.045,
+            }),
+            makePeriod({
+                tsStart: '2026-09-30T11:40:00-05:00',
+                tsEnd: '2026-09-30T15:00:00-05:00',
+                durationHours: 10 / 3,
+                batteryMode: BatteryMode.Load,
+                reason: ActionReason.DischargeAtPeak,
+                startSoc: 100,
+                endSoc: 100,
+                solarKWH: 8.5,
+                loadKWH: 2.2,
+                gridExportKWH: 6.3,
+                importDollars: 0.081,
+            }),
+            makePeriod({
+                tsStart: '2026-09-30T15:00:00-05:00',
+                tsEnd: '2026-09-30T21:00:00-05:00',
+                durationHours: 6,
+                batteryMode: BatteryMode.Load,
+                reason: ActionReason.DischargeAtPeak,
+                startSoc: 100,
+                endSoc: 50,
+                solarKWH: 0.2,
+                loadKWH: 6.0,
+                importDollars: 0.071,
+            }),
+        ];
+
+        const beats = buildPlanSummaryBeats(periods);
+        expect(beats).toHaveLength(3);
+        expect(beats[0]).toMatchObject({
+            category: 'solarCharge',
+            headline: 'Charging from solar',
+            timeLabel: '10:20 AM – 11:40 AM',
+            socText: '78% → 100%',
+            priceText: '$ 0.045/kWh',
+        });
+        expect(beats[1]).toMatchObject({
+            category: 'load',
+            headline: 'Running on solar',
+            timeLabel: '11:40 AM – 3:00 PM',
+            socText: '100%',
+            priceText: '$ 0.081/kWh',
+        });
+        expect(beats[2]).toMatchObject({
+            category: 'load',
+            headline: 'Powering home at peak',
+            timeLabel: '3:00 PM – 9:00 PM',
+            socText: '100% → 50%',
+            priceText: '$ 0.071/kWh',
         });
     });
 });

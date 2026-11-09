@@ -18,6 +18,7 @@ import {
     formatHour12,
     getCurrencySymbol,
     getPlanStatusSubvalue,
+    getActionLoadSubType,
     type ActionSummary
 } from './dashboardUtils';
 import { BatteryMode, SolarMode, ActionReason, type Action } from '../api';
@@ -615,6 +616,104 @@ describe('dashboardUtils', () => {
             };
             expect(getPlanStatusSubvalue(action, undefined, '$')).toBeNull();
         });
+
+        it('returns solar charging and holding on solar subvalues for Load mode', () => {
+            const chargingAction: Action = {
+                description: 'Charging from solar',
+                timestamp: '2026-07-22T10:27:00-05:00',
+                batteryMode: BatteryMode.Load,
+                solarMode: SolarMode.Any,
+                reason: ActionReason.SufficientBattery,
+                systemStatus: { batterySOC: 78, solarKW: 6.2, homeKW: 1.1 },
+                plan: {
+                    tsCreated: '2026-07-22T10:27:00-05:00',
+                    horizonHours: 24,
+                    totalProjectedCost: 0,
+                    totalExportCredits: 0.01,
+                    netEconomicBenefit: 2.5,
+                    periods: [
+                        {
+                            tsStart: '2026-07-22T10:27:00-05:00',
+                            tsEnd: '2026-07-22T11:40:00-05:00',
+                            durationHours: 1.2,
+                            importDollars: 0.045,
+                            batteryMode: BatteryMode.Load,
+                            solarMode: SolarMode.Any,
+                            reason: ActionReason.SufficientBattery,
+                            startSoc: 78,
+                            endSoc: 100,
+                            solarKWH: 4.5,
+                            loadKWH: 0.8,
+                            gridImportKWH: 0,
+                            gridExportKWH: 0,
+                            costDollars: 0,
+                        },
+                        {
+                            tsStart: '2026-07-22T11:40:00-05:00',
+                            tsEnd: '2026-07-22T15:00:00-05:00',
+                            durationHours: 3.33,
+                            importDollars: 0.055,
+                            batteryMode: BatteryMode.Load,
+                            solarMode: SolarMode.Any,
+                            reason: ActionReason.SufficientBattery,
+                            startSoc: 100,
+                            endSoc: 100,
+                            solarKWH: 5.0,
+                            loadKWH: 4.9,
+                            gridImportKWH: 0,
+                            gridExportKWH: 0.1,
+                            costDollars: -0.01,
+                        },
+                    ],
+                },
+            };
+            expect(getPlanStatusSubvalue(chargingAction, undefined, '$')).toBe('Charging to 100% until 11:40 AM');
+
+            const fullSolarAction: Action = {
+                ...chargingAction,
+                timestamp: '2026-07-22T12:00:00-05:00',
+                systemStatus: { batterySOC: 100, solarKW: 5.0, homeKW: 1.2 },
+                plan: {
+                    ...chargingAction.plan!,
+                    tsCreated: '2026-07-22T12:00:00-05:00',
+                    periods: [
+                        {
+                            tsStart: '2026-07-22T12:00:00-05:00',
+                            tsEnd: '2026-07-22T15:00:00-05:00',
+                            durationHours: 3,
+                            importDollars: 0.055,
+                            batteryMode: BatteryMode.Load,
+                            solarMode: SolarMode.Any,
+                            reason: ActionReason.SufficientBattery,
+                            startSoc: 100,
+                            endSoc: 100,
+                            solarKWH: 5.0,
+                            loadKWH: 4.9,
+                            gridImportKWH: 0,
+                            gridExportKWH: 0.1,
+                            costDollars: -0.01,
+                        },
+                        {
+                            tsStart: '2026-07-22T15:00:00-05:00',
+                            tsEnd: '2026-07-22T20:00:00-05:00',
+                            durationHours: 5,
+                            importDollars: 0.09,
+                            batteryMode: BatteryMode.Load,
+                            solarMode: SolarMode.Any,
+                            reason: ActionReason.SufficientBattery,
+                            startSoc: 100,
+                            endSoc: 60,
+                            solarKWH: 0.5,
+                            loadKWH: 6.0,
+                            gridImportKWH: 0,
+                            gridExportKWH: 0,
+                            costDollars: 0,
+                        },
+                    ],
+                },
+            };
+            expect(getPlanStatusSubvalue(fullSolarAction, undefined, '$')).toBe('Holding at 100% on solar until 3:00 PM');
+        });
     });
 
     describe('getBatteryPillLabel', () => {
@@ -626,8 +725,8 @@ describe('dashboardUtils', () => {
         });
     });
 
-    describe('getActionTitle', () => {
-        it('returns distinct strategic titles based on reason', () => {
+    describe('getActionLoadSubType & getActionTitle', () => {
+        it('returns distinct strategic titles based on reason and loadSubType', () => {
             const base: Action = {
                 description: 'test',
                 timestamp: '2026-07-22T04:00:00Z',
@@ -636,11 +735,51 @@ describe('dashboardUtils', () => {
             };
             expect(getActionTitle({ ...base, reason: ActionReason.SufficientBatteryTillCharge })).toBe('Using Battery Until Cheap Window');
             expect(getActionTitle({ ...base, reason: ActionReason.SufficientBattery })).toBe('Self-Powered');
+            expect(getActionTitle({ ...base, reason: ActionReason.SufficientBattery }, false, 'solarCharge')).toBe('Charging from Solar');
+            expect(getActionTitle({ ...base, reason: ActionReason.SufficientBattery }, false, 'solarFull')).toBe('Running on Solar');
             expect(getActionTitle({ ...base, reason: ActionReason.ArbitrageChargeExport, batteryMode: BatteryMode.ChargeAny })).toBe('Charging Before Peak');
             expect(getActionTitle({ ...base, reason: ActionReason.DeficitCharge, batteryMode: BatteryMode.ChargeAny })).toBe('Topping Up Battery');
             expect(getActionTitle({ ...base, reason: ActionReason.ArbitrageHold, batteryMode: BatteryMode.Standby })).toBe('Saving Battery for Peak');
             expect(getActionTitle({ ...base, reason: ActionReason.AlwaysChargeBelowThreshold, batteryMode: BatteryMode.ChargeAny })).toBe('Low-Rate Grid Charge');
             expect(getActionTitle({ ...base })).toBe('Solar first, then battery');
+        });
+
+        it('classifies Load actions into solarCharge, solarFull, and load subtypes', () => {
+            const solarCharging: Action = {
+                description: 'test',
+                timestamp: '2026-07-22T10:00:00Z',
+                batteryMode: BatteryMode.Load,
+                solarMode: SolarMode.Any,
+                reason: ActionReason.SufficientBattery,
+                systemStatus: { batterySOC: 75, solarKW: 5.5, homeKW: 1.2 },
+            };
+            expect(getActionLoadSubType(solarCharging, 68)).toBe('solarCharge');
+            expect(getReasonText(solarCharging, '$', 'solarCharge')).toBe(
+                'Solar generation exceeds home load. Powering the home from solar and using excess solar to charge the battery.'
+            );
+
+            const solarFull: Action = {
+                description: 'test',
+                timestamp: '2026-07-22T12:00:00Z',
+                batteryMode: BatteryMode.Load,
+                solarMode: SolarMode.Any,
+                reason: ActionReason.SufficientBattery,
+                systemStatus: { batterySOC: 99.6, solarKW: 4.5, homeKW: 1.1 },
+            };
+            expect(getActionLoadSubType(solarFull, 99.6)).toBe('solarFull');
+            expect(getReasonText(solarFull, '$', 'solarFull')).toBe(
+                'The battery is full and solar generation exceeds home load. Running the home on solar while keeping the battery at 100% and exporting surplus solar to the grid.'
+            );
+
+            const batteryDischarging: Action = {
+                description: 'test',
+                timestamp: '2026-07-22T18:00:00Z',
+                batteryMode: BatteryMode.Load,
+                solarMode: SolarMode.Any,
+                reason: ActionReason.SufficientBattery,
+                systemStatus: { batterySOC: 82, solarKW: 0.1, homeKW: 2.5 },
+            };
+            expect(getActionLoadSubType(batteryDischarging, 86)).toBe('load');
         });
     });
 
@@ -971,6 +1110,115 @@ describe('dashboardUtils', () => {
             expect(summaryWithOtherPeriod.beats[0].category).toBe('charge');
             expect(summaryWithOtherPeriod.beats[0].timeLabel).toBe('8:23 PM – 9:43 PM');
             expect(summaryWithOtherPeriod.beats[0].socText).toBe('24% → 80%');
+        });
+
+        it('emits distinct beats for solarCharge, solarFull (Running on solar), and battery discharge in Load mode', () => {
+            const middayFullSolar: ActionSummary = {
+                isSummary: true,
+                type: 'grouped',
+                reason: ActionReason.SufficientBattery,
+                loadSubType: 'solarFull',
+                startTime: '2026-10-19T11:40:00-05:00',
+                endTime: '2026-10-19T14:40:00-05:00',
+                latestAction: {
+                    description: '',
+                    timestamp: '2026-10-19T14:40:00-05:00',
+                    batteryMode: BatteryMode.Load,
+                    solarMode: SolarMode.Any,
+                    reason: ActionReason.SufficientBattery,
+                    systemStatus: { batterySOC: 100, solarKW: 5.2, homeKW: 1.4 }
+                },
+                count: 9,
+                alarms: new Set(),
+                storms: new Set(),
+                hasPrice: true,
+                avgPrice: 0.055,
+                min: 0.05,
+                max: 0.06,
+                hasSOC: true,
+                avgSOC: 100,
+                minSOC: 100,
+                maxSOC: 100,
+                startSOC: 100,
+                endSOC: 100,
+                hasSolar: true
+            };
+
+            const morningSolarCharge: ActionSummary = {
+                isSummary: true,
+                type: 'grouped',
+                reason: ActionReason.SufficientBattery,
+                loadSubType: 'solarCharge',
+                startTime: '2026-10-19T08:00:00-05:00',
+                endTime: '2026-10-19T11:20:00-05:00',
+                latestAction: {
+                    description: '',
+                    timestamp: '2026-10-19T11:20:00-05:00',
+                    batteryMode: BatteryMode.Load,
+                    solarMode: SolarMode.Any,
+                    reason: ActionReason.SufficientBattery,
+                    systemStatus: { batterySOC: 99, solarKW: 6.0, homeKW: 1.1 }
+                },
+                count: 10,
+                alarms: new Set(),
+                storms: new Set(),
+                hasPrice: true,
+                avgPrice: 0.045,
+                min: 0.04,
+                max: 0.05,
+                hasSOC: true,
+                avgSOC: 70,
+                minSOC: 40,
+                maxSOC: 99,
+                startSOC: 40,
+                endSOC: 99,
+                hasSolar: true
+            };
+
+            const overnightLoad: ActionSummary = {
+                isSummary: true,
+                type: 'grouped',
+                reason: ActionReason.SufficientBattery,
+                loadSubType: 'load',
+                startTime: '2026-10-19T00:00:00-05:00',
+                endTime: '2026-10-19T07:40:00-05:00',
+                latestAction: {
+                    description: '',
+                    timestamp: '2026-10-19T07:40:00-05:00',
+                    batteryMode: BatteryMode.Load,
+                    solarMode: SolarMode.Any,
+                    reason: ActionReason.SufficientBattery,
+                    systemStatus: { batterySOC: 40, solarKW: 0.1, homeKW: 1.5 }
+                },
+                count: 23,
+                alarms: new Set(),
+                storms: new Set(),
+                hasPrice: true,
+                avgPrice: 0.052,
+                min: 0.04,
+                max: 0.06,
+                hasSOC: true,
+                avgSOC: 50,
+                minSOC: 40,
+                maxSOC: 60,
+                startSOC: 60,
+                endSOC: 40,
+                hasSolar: false
+            };
+
+            const summary = buildDaySummary([middayFullSolar, morningSolarCharge, overnightLoad], '$');
+            expect(summary.beats).toHaveLength(3);
+            expect(summary.beats[0].category).toBe('load');
+            expect(summary.beats[0].headline).toBe('Running on solar');
+            expect(summary.beats[0].socText).toBe('100%');
+
+            expect(summary.beats[1].category).toBe('solarCharge');
+            expect(summary.beats[1].headline).toBe('Charged from solar');
+            expect(summary.beats[1].socText).toBe('40% → 100%');
+
+            expect(summary.beats[2].category).toBe('load');
+            expect(summary.beats[2].headline).toBe('Ran on solar & battery');
+            expect(summary.beats[2].socText).toBe('60% → 40%');
         });
     });
 });

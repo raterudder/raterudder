@@ -10,8 +10,10 @@ import {
     gridChargeCost,
     getActionTimestamp,
     getCurrencySymbol,
+    getActionLoadSubType,
     type ActionSummary,
     type ActionSummaryAccumulator,
+    type LoadSubType,
     type SummaryType
 } from '../utils/dashboardUtils';
 
@@ -268,11 +270,18 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
     const groupedActions = useMemo(() => {
         const accumulator: (Action | ActionSummaryAccumulator)[] = [];
         let currentSummary: ActionSummaryAccumulator | null = null;
+        let prevSOC: number | undefined;
 
         for (const action of visibleActions) {
             const isFault = !!action.fault || action.reason === ActionReason.VPPActive || !!action.systemStatus?.vppActive;
             const hasPrice = !!action.currentPrice && action.currentPrice.tsStart !== "0001-01-01T00:00:00Z";
             const price = action.currentPrice ? gridChargeCost(action.currentPrice) : 0;
+            const currentSOC =
+                action.systemStatus &&
+                action.systemStatus.batterySOC !== undefined &&
+                action.systemStatus.batterySOC !== 0
+                    ? action.systemStatus.batterySOC
+                    : undefined;
 
             const updateSummary = (summary: ActionSummaryAccumulator) => {
                 summary.count++;
@@ -300,7 +309,10 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                 }
             };
 
-            const createSummary = (type: SummaryType): ActionSummaryAccumulator => {
+            const createSummary = (
+                type: SummaryType,
+                loadSubType?: LoadSubType
+            ): ActionSummaryAccumulator => {
                  const hasSOC = !!(action.systemStatus && action.systemStatus.batterySOC !== undefined && action.systemStatus.batterySOC !== 0);
                  const soc = (action.systemStatus && action.systemStatus.batterySOC !== undefined && action.systemStatus.batterySOC !== 0) ? action.systemStatus.batterySOC : 0;
                  const hasSolar = (action.systemStatus?.solarKW ?? 0) > 0;
@@ -308,6 +320,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                     isSummary: true,
                     type: type,
                     reason: action.reason,
+                    loadSubType,
                     latestAction: action,
                     startTime: getActionTimestamp(action),
                     count: 1,
@@ -381,10 +394,15 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                 const effectiveBatteryMode = action.batteryMode === BatteryMode.NoChange && currentSummary
                     ? currentSummary.latestAction.batteryMode
                     : action.batteryMode;
+                const actionLoadSubType = getActionLoadSubType(
+                    { ...action, batteryMode: effectiveBatteryMode },
+                    prevSOC
+                );
 
                 if (
                     currentSummary &&
                     currentSummary.type === 'grouped' &&
+                    (currentSummary.loadSubType ?? 'load') === actionLoadSubType &&
                     (
                         (currentSummary.reason === action.reason && currentSummary.latestAction.batteryMode === effectiveBatteryMode) ||
                         (action.batteryMode === BatteryMode.NoChange)
@@ -399,8 +417,11 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                     if (currentSummary) {
                         accumulator.push(currentSummary);
                     }
-                    currentSummary = createSummary('grouped');
+                    currentSummary = createSummary('grouped', actionLoadSubType);
                 }
+            }
+            if (currentSOC !== undefined) {
+                prevSOC = currentSOC;
             }
         }
 

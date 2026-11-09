@@ -767,6 +767,11 @@ button {
   color: #8b5cf6;
 }
 
+.current-status-card.solar-charging .status-icon {
+  background: rgba(16, 185, 129, 0.14);
+  color: #10b981;
+}
+
 .current-status-card.standby .status-icon {
   background: rgba(100, 116, 139, 0.16);
   color: #94a3b8;

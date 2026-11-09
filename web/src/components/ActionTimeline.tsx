@@ -91,7 +91,7 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({
                 const isEmergency = hasStorms || action.reason === ActionReason.EmergencyMode;
                 const isVPP = !!action.systemStatus?.vppActive || action.reason === ActionReason.VPPActive;
 
-                const reasonText = getReasonText(action, currencySymbol);
+                const reasonText = getReasonText(action, currencySymbol, summary?.loadSubType);
                 const effectiveBatteryMode =
                     action.targetBatteryMode !== undefined && action.targetBatteryMode !== BatteryMode.NoChange
                         ? action.targetBatteryMode
@@ -115,7 +115,7 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({
                     action.currentPrice &&
                     (action.currentPrice.dollarsPerKWH + (action.currentPrice.gridUseDollarsPerKWH || 0)) < 0;
 
-                const title = getActionTitle(action, isFault);
+                const title = getActionTitle(action, isFault, summary?.loadSubType);
                 const showDeficitTag = !isZeroTime(action.deficitAt);
                 const showCapacityTag = !isZeroTime(action.capacityAt) && action.reason !== ActionReason.DirectExport;
                 const showSolarTag = hasSolarActivity(item) && effectiveSolarMode !== SolarMode.NoChange;

@@ -393,4 +393,91 @@ describe('CurrentStatus', () => {
 
         vi.useRealTimers();
     });
+
+    it('renders Solar Charging status when Load mode is charging from solar', () => {
+        const action: Action = {
+            ...defaultAction,
+            batteryMode: BatteryMode.Load,
+            reason: ActionReason.SufficientBattery,
+            systemStatus: {
+                ...defaultAction.systemStatus!,
+                batterySOC: 78.0,
+                solarKW: 6.2,
+                homeKW: 1.1,
+            },
+            plan: {
+                tsCreated: '2026-06-15T10:27:00-05:00',
+                horizonHours: 24,
+                totalProjectedCost: 0,
+                totalExportCredits: 0.01,
+                netEconomicBenefit: 2.0,
+                periods: [
+                    {
+                        tsStart: '2026-06-15T10:27:00-05:00',
+                        tsEnd: '2026-06-15T11:40:00-05:00',
+                        durationHours: 1.2,
+                        batteryMode: BatteryMode.Load,
+                        solarMode: SolarMode.Any,
+                        reason: ActionReason.SufficientBattery,
+                        startSoc: 78,
+                        endSoc: 100,
+                        solarKWH: 4.5,
+                        loadKWH: 0.8,
+                        importDollars: 0.045,
+                        gridImportKWH: 0,
+                        gridExportKWH: 0,
+                        costDollars: 0,
+                    },
+                ],
+            },
+        };
+        const { container } = render(<CurrentStatus action={action} />);
+        expect(screen.getByText('Solar Charging')).toBeInTheDocument();
+        expect(screen.getByText('Charging from Solar')).toBeInTheDocument();
+        expect(screen.getByText('Charging to 100% until 11:40 AM')).toBeInTheDocument();
+        expect(container.querySelector('.current-status-card.solar-charging')).toBeInTheDocument();
+    });
+
+    it('renders Running on Solar • Battery Full when Load mode is at 100% SOC with excess solar', () => {
+        const action: Action = {
+            ...defaultAction,
+            batteryMode: BatteryMode.Load,
+            reason: ActionReason.SufficientBattery,
+            systemStatus: {
+                ...defaultAction.systemStatus!,
+                batterySOC: 100.0,
+                solarKW: 5.0,
+                homeKW: 1.2,
+            },
+            plan: {
+                tsCreated: '2026-06-15T12:00:00-05:00',
+                horizonHours: 24,
+                totalProjectedCost: 0,
+                totalExportCredits: 0.01,
+                netEconomicBenefit: 2.0,
+                periods: [
+                    {
+                        tsStart: '2026-06-15T12:00:00-05:00',
+                        tsEnd: '2026-06-15T15:00:00-05:00',
+                        durationHours: 3.0,
+                        batteryMode: BatteryMode.Load,
+                        solarMode: SolarMode.Any,
+                        reason: ActionReason.SufficientBattery,
+                        startSoc: 100,
+                        endSoc: 100,
+                        solarKWH: 5.0,
+                        loadKWH: 4.9,
+                        importDollars: 0.055,
+                        gridImportKWH: 0,
+                        gridExportKWH: 0.1,
+                        costDollars: -0.01,
+                    },
+                ],
+            },
+        };
+        render(<CurrentStatus action={action} />);
+        expect(screen.getByText('Self-Powered')).toBeInTheDocument();
+        expect(screen.getByText('Running on Solar • Battery Full')).toBeInTheDocument();
+        expect(screen.getByText('Holding at 100% on solar until 3:00 PM')).toBeInTheDocument();
+    });
 });
