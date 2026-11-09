@@ -595,7 +595,12 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Ctx(ctx).InfoContext(ctx, "settings updated")
+	log.Ctx(ctx).InfoContext(
+		ctx,
+		"settings updated",
+		slog.Any("before", existingSV.Settings),
+		slog.Any("after", newSettings),
+	)
 
 	if !existing.Pause && newSettings.Pause && newSettings.ManageTOUSchedules {
 		s.revertManagedTOUModeOnPause(ctx, siteID, settingsWithVersion{

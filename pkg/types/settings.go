@@ -139,6 +139,13 @@ type Settings struct {
 	AlwaysChargeUnderDollarsPerKWH float64 `json:"alwaysChargeUnderDollarsPerKWH"`
 }
 
+// LogValue implements slog.LogValuer to omit sensitive fields like EncryptedCredentials when logging.
+func (s Settings) LogValue() slog.Value {
+	type settingsForLog Settings
+	s.EncryptedCredentials = nil
+	return slog.AnyValue(settingsForLog(s))
+}
+
 // GridSettings represents the ESS grid configuration capabilities.
 type GridSettings struct {
 	GridChargeBatteries bool `json:"gridChargeBatteries"`

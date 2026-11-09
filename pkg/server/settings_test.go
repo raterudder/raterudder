@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/raterudder/raterudder/pkg/controller"
 	"github.com/raterudder/raterudder/pkg/ess"
+	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 	"github.com/raterudder/raterudder/pkg/utility"
 	"github.com/stretchr/testify/assert"
@@ -256,6 +258,67 @@ func TestHandleUpdateSettings(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
 		assert.True(t, savedSettings.DryRun)
 		assert.Equal(t, existingNotifs, savedSettings.Notifications)
+	})
+
+	t.Run("Update Settings - Logs Before And After Settings", func(t *testing.T) {
+		mockS := &mockStorage{}
+		srv := newAuthServer("", nil, nil)
+		srv.storage = mockS
+
+		encrypted, err := srv.encryptCredentials(context.Background(), "site1", types.Credentials{
+			Mock: &types.MockCredentials{Strategy: "s1", Location: "l1"},
+		})
+		require.NoError(t, err)
+
+		mockS.On("GetSettings", mock.Anything, "site1").Return(types.Settings{
+			DryRun:               false,
+			MinBatterySOC:        15.0,
+			EncryptedCredentials: encrypted,
+		}, types.CurrentSettingsVersion, time.Time{}, nil)
+
+		mockS.On("SetSettings", mock.Anything, "site1", mock.Anything, types.CurrentSettingsVersion, mock.Anything).Return(time.Time{}, nil)
+
+		newSettings := types.Settings{
+			DryRun:                      true,
+			MinBatterySOC:               25.0,
+			IgnoreHourUsageOverMultiple: 5,
+			SolarTrendRatioMax:          3.0,
+			SolarBellCurveMultiplier:    1.0,
+		}
+		b, err := json.Marshal(newSettings)
+		require.NoError(t, err)
+
+		var logBuf bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
+
+		req := httptest.NewRequest("POST", "/api/settings", bytes.NewReader(b))
+		req = withUser(req, "admin@example.com", true)
+		ctx := context.WithValue(req.Context(), siteIDContextKey, "site1")
+		ctx = log.With(ctx, logger)
+		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		srv.handleUpdateSettings(w, req)
+		require.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+		var logEntry map[string]any
+		err = json.Unmarshal(logBuf.Bytes(), &logEntry)
+		require.NoError(t, err)
+		assert.Equal(t, "settings updated", logEntry["msg"])
+
+		beforeMap, ok := logEntry["before"].(map[string]any)
+		if assert.True(t, ok) {
+			assert.Equal(t, false, beforeMap["dryRun"])
+			assert.Equal(t, 15.0, beforeMap["minBatterySOC"])
+			assert.NotContains(t, beforeMap, "encryptedCredentials")
+		}
+
+		afterMap, ok := logEntry["after"].(map[string]any)
+		if assert.True(t, ok) {
+			assert.Equal(t, true, afterMap["dryRun"])
+			assert.Equal(t, 25.0, afterMap["minBatterySOC"])
+			assert.NotContains(t, afterMap, "encryptedCredentials")
+		}
 	})
 
 	t.Run("getESSSystem Backoff Logic", func(t *testing.T) {

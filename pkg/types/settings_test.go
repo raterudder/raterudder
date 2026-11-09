@@ -1,7 +1,10 @@
 package types
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -633,5 +636,33 @@ func TestGetOptimizationParams(t *testing.T) {
 		}
 		params := s.GetOptimizationParams()
 		assert.Equal(t, 0.03, params.BatteryExportDegradationDollarsPerKWH)
+	})
+}
+
+func TestSettingsLogValue(t *testing.T) {
+	t.Run("OmitsEncryptedCredentials", func(t *testing.T) {
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&buf, nil))
+
+		s := Settings{
+			DryRun:               true,
+			MinBatterySOC:        25.0,
+			UtilityProvider:      "comed",
+			EncryptedCredentials: []byte("secret-encrypted-bytes"),
+		}
+		logger.Info("test log", slog.Any("settings", s))
+
+		assert.NotEmpty(t, s.EncryptedCredentials)
+
+		var logEntry map[string]any
+		err := json.Unmarshal(buf.Bytes(), &logEntry)
+		require.NoError(t, err)
+
+		settingsMap, ok := logEntry["settings"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, true, settingsMap["dryRun"])
+		assert.Equal(t, 25.0, settingsMap["minBatterySOC"])
+		assert.Equal(t, "comed", settingsMap["utilityProvider"])
+		assert.NotContains(t, settingsMap, "encryptedCredentials")
 	})
 }
