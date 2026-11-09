@@ -1006,21 +1006,35 @@ func TestExtractVPPAnchors(t *testing.T) {
 	t.Run("FiltersOutEventsOutsideHorizonAndLeadWindow", func(t *testing.T) {
 		t.Parallel()
 
-		horizonEnd := now.Add(maxPlanningHorizonHours * time.Hour)
+		flexHorizonEnd := now.Add(maxFlexibleHorizonHours * time.Hour)
+		extendedWindowStart := now.Add((maxPlanningHorizonHours + 4) * time.Hour)
 		status := types.SystemStatus{
 			Timestamp: now,
 			VPPEvents: []types.VPPEvent{
-				{TSStart: now.Add(-2 * time.Hour), TSEnd: now},                                                       // Already ended
-				{TSStart: horizonEnd.Add(vppStandbyLeadTime), TSEnd: horizonEnd.Add(vppStandbyLeadTime + time.Hour)}, // Starts at/after horizonEnd + 2h lead window
-				{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(4 * time.Hour), OptOut: true},                       // Opted out
-				{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(4 * time.Hour)},                                     // Inside horizon
+				{TSStart: now.Add(-2 * time.Hour), TSEnd: now},                                                               // Already ended
+				{TSStart: flexHorizonEnd.Add(vppStandbyLeadTime), TSEnd: flexHorizonEnd.Add(vppStandbyLeadTime + time.Hour)}, // Starts at/after maxFlexibleHorizonHours + 2h lead window
+				{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(4 * time.Hour), OptOut: true},                               // Opted out
+				{TSStart: now.Add(2 * time.Hour), TSEnd: now.Add(4 * time.Hour)},                                             // Inside base 24h horizon
+				{TSStart: extendedWindowStart, TSEnd: extendedWindowStart.Add(2 * time.Hour)},                                // Inside 24h..34h extended horizon window
 			},
 		}
 
 		vppEvents := extractVPPAnchors(now, status, types.Settings{})
-		if assert.Len(t, vppEvents, 1) {
+		if assert.Len(t, vppEvents, 2) {
 			assert.Equal(t, now.Add(2*time.Hour), vppEvents[0].eventStart)
+			assert.Equal(t, extendedWindowStart, vppEvents[1].eventStart)
 		}
+
+		// When selectPlanningHorizonEnd keeps a 24h timeline, filterVPPAnchorsToTimeline drops the 28h anchor;
+		// when extended to 30h, both anchors are retained.
+		shortTimeline := []planInterval{{startTime: now, endTime: now.Add(maxPlanningHorizonHours * time.Hour)}}
+		shortFiltered := filterVPPAnchorsToTimeline(append([]vppAnchor(nil), vppEvents...), shortTimeline)
+		if assert.Len(t, shortFiltered, 1) {
+			assert.Equal(t, now.Add(2*time.Hour), shortFiltered[0].eventStart)
+		}
+		extendedTimeline := []planInterval{{startTime: now, endTime: now.Add(30 * time.Hour)}}
+		extendedFiltered := filterVPPAnchorsToTimeline(append([]vppAnchor(nil), vppEvents...), extendedTimeline)
+		assert.Len(t, extendedFiltered, 2)
 	})
 }
 
@@ -4422,6 +4436,451 @@ func TestPlanScenarios(t *testing.T) {
 		assert.NotEqual(t, types.ActionReasonDischargeAtPeak, satDec.Action.Reason,
 			"Weekend Off-Peak ($0.10481/kWh) should not be mislabeled as DischargeAtPeak")
 	})
+
+	t.Run("AfternoonOnPeak_DischargesRatherThanHoldingInStandbyForNextDayDirectSolarExport", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		c := NewController()
+
+		nyLoc, err := time.LoadLocation("America/New_York")
+		require.NoError(t, err)
+
+		// 2-tier TOU tariff:
+		// - Off-Peak (20:00 - 12:00): $0.20754/kWh import, $0.20254/kWh export
+		// - On-Peak  (12:00 - 20:00): $0.29982/kWh import, $0.29482/kWh export
+		// At 3:03 PM during On-Peak with 39.1% SOC on a 30 kWh battery (30% MinBatterySOC, MinBatteryExportDiff=$0.10),
+		// holding 39.1% SOC in Standby during today's On-Peak (importing at $0.29982/kWh) would allow tomorrow's mild
+		// morning solar to reach ~44.6% SOC by noon and unlock DirectSolarExport during tomorrow's On-Peak ($0.29482/kWh).
+		// Without in-horizon time discounting or peak Standby pruning, that ~1% Day-2 round-trip efficiency edge beat
+		// immediate Day-1 On-Peak self-consumption by ~$0.008. The planner must instead discharge immediately during
+		// today's On-Peak and only enter Standby once Off-Peak begins at 8:00 PM.
+		priceForHour := func(ts time.Time) types.Price {
+			h := ts.In(nyLoc).Hour()
+			imp := 0.20754
+			periodName := "Off-Peak"
+			if h >= 12 && h < 20 {
+				imp = 0.29982
+				periodName = "On-Peak"
+			}
+			return types.Price{
+				TSStart:                           ts,
+				TSEnd:                             ts.Add(time.Hour),
+				DollarsPerKWH:                     imp,
+				GenerationAdjustmentDollarsPerKWH: -0.005,
+				PeriodName:                        periodName,
+			}
+		}
+
+		t1503 := time.Date(2026, 11, 16, 15, 3, 0, 0, nyLoc)
+		t1500 := time.Date(2026, 11, 16, 15, 0, 0, 0, nyLoc)
+		var futurePrices []types.Price
+		for i := 1; i <= 48; i++ {
+			futurePrices = append(futurePrices, priceForHour(t1500.Add(time.Duration(i)*time.Hour)))
+		}
+
+		hourlyLoad := [24]float64{
+			0.66, 0.63, 0.39, 0.30, 0.36, 0.51,
+			0.75, 0.84, 0.93, 0.81, 0.66, 0.60,
+			0.60, 0.57, 0.51, 0.42, 0.54, 0.72,
+			0.60, 0.54, 0.42, 0.51, 0.69, 0.69,
+		}
+		hourlySolar := [24]float64{
+			0.00, 0.00, 0.00, 0.00, 0.00, 0.00,
+			0.00, 0.27, 0.81, 1.14, 1.08, 1.59,
+			1.38, 0.81, 0.45, 0.21, 0.00, 0.00,
+			0.00, 0.00, 0.00, 0.00, 0.00, 0.00,
+		}
+		var history []types.EnergyStats
+		for d := 1; d <= 7; d++ {
+			dayStart := time.Date(t1503.Year(), t1503.Month(), t1503.Day(), 0, 0, 0, 0, nyLoc).AddDate(0, 0, -d)
+			for h := 0; h < 24; h++ {
+				history = append(history, types.EnergyStats{
+					TSHourStart:  dayStart.Add(time.Duration(h) * time.Hour),
+					HomeKWH:      hourlyLoad[h],
+					SolarKWH:     hourlySolar[h],
+					TimeLocation: "America/New_York",
+				})
+			}
+		}
+
+		settings := types.Settings{
+			OptimizationProfile:                     "balanced",
+			MinBatterySOC:                           30.0,
+			GridChargeBatteries:                     true,
+			GridExportSolar:                         true,
+			GridExportBatteries:                     true,
+			ManageTOUSchedules:                      true,
+			MinBatteryExportDifferenceDollarsPerKWH: 0.10,
+			MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+				{UtilityPeriodName: "On-Peak", MinBatterySOC: 30},
+				{UtilityPeriodName: "Off-Peak", MinBatterySOC: 30},
+			},
+		}
+		status := types.SystemStatus{
+			Timestamp:             t1503,
+			TimeLocation:          "America/New_York",
+			BatteryCapacityKWH:    30.0,
+			BatterySOC:            40.0,
+			BatteryAboveMinSOC:    true,
+			MaxBatteryChargeKW:    16.0,
+			MaxBatteryDischargeKW: 20.0,
+			HomeKW:                0.37,
+			SolarKW:               0.21,
+		}
+
+		dec, plan, err := c.Plan(ctx, status, priceForHour(t1500), futurePrices, history, nil, settings, nil)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeLoad, dec.Action.BatteryMode,
+			"At 3:03 PM during On-Peak ($0.29982/kWh), battery must discharge rather than holding in Standby for tomorrow's equal-price On-Peak")
+		assert.NotEqual(t, types.ActionReasonArbitrageHoldExport, dec.Action.Reason)
+
+		t2000 := time.Date(2026, 11, 16, 20, 0, 0, 0, nyLoc)
+		sawOffPeakStandby := false
+		for _, p := range plan.Periods {
+			if p.TSEnd.Before(t2000) || p.TSEnd.Equal(t2000) {
+				assert.Equal(t, types.BatteryModeLoad, p.BatteryMode,
+					"All remaining Day-1 On-Peak intervals (%s) must stay in BatteryModeLoad", p.TSStart.In(nyLoc).Format("15:04"))
+			} else if p.TSStart.Equal(t2000) {
+				sawOffPeakStandby = true
+				assert.Equal(t, types.BatteryModeStandby, p.BatteryMode,
+					"At 8:00 PM Off-Peak ($0.20754/kWh), battery must hold remaining SOC in Standby for tomorrow's On-Peak")
+			}
+		}
+		assert.True(t, sawOffPeakStandby)
+
+		// Also verify Finding 1's counterexample at 4:20 PM (SOC = 35.5%) with stronger Day-2 solar (2.5 kWh at 13:00),
+		// where Eversource CT Rate 7's $0.09228/kWh spread (< $0.10 minPeakRateSpreadDollars) leaves isHighestPrice == false
+		// and Day-2 DirectSolarExport would otherwise beat a 2% horizon discount by ~$0.037. General dominance pruning in
+		// isBlockActionAllowed still eliminates Day-1 On-Peak Standby deterministically.
+		t1620 := time.Date(2026, 11, 16, 16, 20, 0, 0, nyLoc)
+		t1600Curr := time.Date(2026, 11, 16, 16, 0, 0, 0, nyLoc)
+		var future1620 []types.Price
+		for i := 1; i <= 30; i++ {
+			future1620 = append(future1620, priceForHour(t1600Curr.Add(time.Duration(i)*time.Hour)))
+		}
+		var historyStrongerDay2Solar []types.EnergyStats
+		for _, h := range history {
+			if h.TSHourStart.In(nyLoc).Hour() == 13 {
+				h.SolarKWH = 2.50
+			}
+			historyStrongerDay2Solar = append(historyStrongerDay2Solar, h)
+		}
+		status1620 := status
+		status1620.Timestamp = t1620
+		status1620.BatterySOC = 35.5
+		dec1620, _, err := c.Plan(ctx, status1620, priceForHour(t1600Curr), future1620, historyStrongerDay2Solar, nil, settings, nil)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeLoad, dec1620.Action.BatteryMode,
+			"At 4:20 PM On-Peak ($0.29982/kWh, <$0.10 TOU spread), battery must still discharge rather than entering Standby for stronger Day-2 solar export")
+
+		// Also verify that even when a higher critical-peak price ($0.45/kWh) exists late on Day 2
+		// (satisfying maxImportRate > block.minImportRate so Standby is permitted as a candidate in isBlockActionAllowed),
+		// smooth post-16h horizon discounting still chooses BatteryModeLoad today when battery energy only spans
+		// equal-price $0.29982/kWh windows before a zero-load late spike.
+		futureWithZeroLoadSpike := make([]types.Price, len(futurePrices))
+		copy(futureWithZeroLoadSpike, futurePrices)
+		// Hour +29 (20:00-21:00 on Day 2) set to $0.45/kWh; make hour 20 load negligible so the spike adds no demand.
+		var historyZero20 []types.EnergyStats
+		for _, h := range history {
+			if h.TSHourStart.In(nyLoc).Hour() == 20 {
+				h.HomeKWH = 0.01
+			}
+			historyZero20 = append(historyZero20, h)
+		}
+		futureWithZeroLoadSpike[28].DollarsPerKWH = 0.45
+		decBelowCeiling, _, err := c.Plan(ctx, status, priceForHour(t1500), futureWithZeroLoadSpike, historyZero20, nil, settings, nil)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeLoad, decBelowCeiling.Action.BatteryMode,
+			"Even when a higher late-horizon rate permits Standby as a candidate, post-16h time discounting must prefer immediate discharge over holding for tomorrow's equal-price DirectSolarExport")
+	})
+
+	t.Run("PeakStandbyEdgeCases_HoldsWhenVPPSlightlyHigherPriceExportSpikeOrMinSOCStepUpAhead", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		c := NewController()
+
+		nyLoc, err := time.LoadLocation("America/New_York")
+		require.NoError(t, err)
+
+		buildFlatLoadHistory := func(ref time.Time, hourlyLoadKWH float64) []types.EnergyStats {
+			var hist []types.EnergyStats
+			for d := 1; d <= 7; d++ {
+				dayStart := time.Date(ref.Year(), ref.Month(), ref.Day(), 0, 0, 0, 0, nyLoc).AddDate(0, 0, -d)
+				for h := 0; h < 24; h++ {
+					hist = append(hist, types.EnergyStats{
+						TSHourStart:  dayStart.Add(time.Duration(h) * time.Hour),
+						HomeKWH:      hourlyLoadKWH,
+						TimeLocation: "America/New_York",
+					})
+				}
+			}
+			return hist
+		}
+
+		// Edge Case 1: Upcoming VPP event later during Peak.
+		// At 2:00 PM during On-Peak ($0.30/kWh) with 45% SOC on a 13.5 kWh battery (20% minSOC, GridChargeBatteries=false)
+		// and a $2.00/kWh VPP event from 6:00 PM - 8:00 PM, Standby must be allowed and chosen at 2:00 PM so battery
+		// energy is preserved for the VPP event rather than draining on $0.30/kWh home load.
+		t1400 := time.Date(2026, 11, 15, 14, 0, 0, 0, nyLoc)
+		var vppFuture []types.Price
+		for i := 1; i <= 24; i++ {
+			ts := t1400.Add(time.Duration(i) * time.Hour)
+			imp := 0.12
+			if ts.Hour() >= 12 && ts.Hour() < 20 {
+				imp = 0.30
+			}
+			vppFuture = append(vppFuture, types.Price{
+				TSStart:       ts,
+				TSEnd:         ts.Add(time.Hour),
+				DollarsPerKWH: imp,
+			})
+		}
+		vppSettings := types.Settings{
+			OptimizationProfile: "balanced",
+			MinBatterySOC:       20.0,
+			GridChargeBatteries: false,
+			GridExportBatteries: true,
+			ManageTOUSchedules:  true,
+		}
+		vppStatus := types.SystemStatus{
+			Timestamp:             t1400,
+			TimeLocation:          "America/New_York",
+			BatteryCapacityKWH:    13.5,
+			BatterySOC:            45.0,
+			BatteryAboveMinSOC:    true,
+			MaxBatteryChargeKW:    5.0,
+			MaxBatteryDischargeKW: 5.0,
+			HomeKW:                1.5,
+			VPPEvents: []types.VPPEvent{
+				{
+					Description:   "Peak VPP Event",
+					TSStart:       time.Date(2026, 11, 15, 18, 0, 0, 0, nyLoc),
+					TSEnd:         time.Date(2026, 11, 15, 20, 0, 0, 0, nyLoc),
+					VPPSoc:        10.0,
+					DollarsPerKWH: 2.00,
+				},
+			},
+		}
+		decVPP, _, err := c.Plan(ctx, vppStatus, types.Price{TSStart: t1400, TSEnd: t1400.Add(time.Hour), DollarsPerKWH: 0.30}, vppFuture, buildFlatLoadHistory(t1400, 1.5), nil, vppSettings, nil)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeStandby, decVPP.Action.BatteryMode,
+			"During Peak ($0.30/kWh), planner must hold in Standby when an upcoming $2.00/kWh VPP event needs the battery")
+
+		// Edge Case 2: Upcoming slightly higher price ($0.305/kWh vs $0.285/kWh, both within the $0.03 isHighestPrice band).
+		// With scarce battery (30% SOC, 20% minSOC -> 1.35 kWh usable, GridChargeBatteries=false) and 2.0 kW load,
+		// the planner must hold in Standby during the $0.285/kWh hour to discharge during the $0.305/kWh hours.
+		t1600 := time.Date(2026, 11, 15, 16, 0, 0, 0, nyLoc)
+		var subPeakFuture []types.Price
+		for i := 1; i <= 24; i++ {
+			ts := t1600.Add(time.Duration(i) * time.Hour)
+			imp := 0.08
+			if i == 1 || i == 2 { // 17:00-19:00
+				imp = 0.305
+			}
+			subPeakFuture = append(subPeakFuture, types.Price{
+				TSStart:       ts,
+				TSEnd:         ts.Add(time.Hour),
+				DollarsPerKWH: imp,
+			})
+		}
+		scarceStatus := types.SystemStatus{
+			Timestamp:             t1600,
+			TimeLocation:          "America/New_York",
+			BatteryCapacityKWH:    13.5,
+			BatterySOC:            30.0,
+			BatteryAboveMinSOC:    true,
+			MaxBatteryChargeKW:    5.0,
+			MaxBatteryDischargeKW: 5.0,
+			HomeKW:                2.0,
+		}
+		noChargeSettings := types.Settings{
+			OptimizationProfile: "balanced",
+			MinBatterySOC:       20.0,
+			GridChargeBatteries: false,
+		}
+		decSubPeak, _, err := c.Plan(ctx, scarceStatus, types.Price{TSStart: t1600, TSEnd: t1600.Add(time.Hour), DollarsPerKWH: 0.285}, subPeakFuture, buildFlatLoadHistory(t1600, 2.0), nil, noChargeSettings, nil)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeStandby, decSubPeak.Action.BatteryMode,
+			"Planner must allow and choose Standby at $0.285/kWh when a slightly higher $0.305/kWh peak hour immediately follows")
+
+		// Edge Case 3: Upcoming lucrative wholesale export spike ($0.65/kWh) while import sits at Peak ceiling ($0.30/kWh).
+		var exportSpikeFuture []types.Price
+		for i := 1; i <= 24; i++ {
+			ts := t1600.Add(time.Duration(i) * time.Hour)
+			imp := 0.10
+			exp := 0.05
+			if i <= 3 { // 17:00-20:00 peak import $0.30/kWh
+				imp = 0.30
+				exp = 0.10
+			}
+			if i == 2 { // 18:00-19:00 export spike $0.65/kWh
+				exp = 0.65
+			}
+			exportSpikeFuture = append(exportSpikeFuture, types.Price{
+				TSStart:                       ts,
+				TSEnd:                         ts.Add(time.Hour),
+				DollarsPerKWH:                 imp,
+				SeparateGenerationCredit:      true,
+				GenerationCreditDollarsPerKWH: exp,
+			})
+		}
+		exportSettings := types.Settings{
+			OptimizationProfile: "balanced",
+			MinBatterySOC:       20.0,
+			GridChargeBatteries: false,
+			GridExportBatteries: true,
+			GridExportSolar:     true,
+			ManageTOUSchedules:  true,
+		}
+		exportStatus := scarceStatus
+		exportStatus.BatterySOC = 35.0
+		currPeakNoSpike := types.Price{
+			TSStart:                       t1600,
+			TSEnd:                         t1600.Add(time.Hour),
+			DollarsPerKWH:                 0.30,
+			SeparateGenerationCredit:      true,
+			GenerationCreditDollarsPerKWH: 0.10,
+		}
+		decExportSpike, _, err := c.Plan(ctx, exportStatus, currPeakNoSpike, exportSpikeFuture, buildFlatLoadHistory(t1600, 1.5), nil, exportSettings, nil)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeStandby, decExportSpike.Action.BatteryMode,
+			"Planner must hold in Standby during $0.30/kWh Peak when a $0.65/kWh battery export spike follows")
+
+		// Edge Case 4: Upcoming higher minSOC reserve step-up immediately after Peak.
+		// At 7:00 PM during Peak ($0.30/kWh, minSOC=20%) with 48% SOC, when 8:00 PM steps minSOC up to 50% at $0.26/kWh
+		// (where discharging below 48% at $0.30/kWh and immediately grid-recharging at $0.26/kWh + $0.02 wear at 90% RTE loses money),
+		// Standby must be allowed and chosen at 7:00 PM.
+		t1900 := time.Date(2026, 11, 15, 19, 0, 0, 0, nyLoc)
+		var stepUpFuture []types.Price
+		for i := 1; i <= 24; i++ {
+			ts := t1900.Add(time.Duration(i) * time.Hour)
+			imp := 0.26
+			periodName := "Shoulder"
+			if ts.Hour() >= 0 && ts.Hour() < 12 {
+				imp = 0.10
+				periodName = "Off-Peak"
+			} else if ts.Hour() >= 12 && ts.Hour() < 20 {
+				imp = 0.30
+				periodName = "On-Peak"
+			}
+			stepUpFuture = append(stepUpFuture, types.Price{
+				TSStart:       ts,
+				TSEnd:         ts.Add(time.Hour),
+				DollarsPerKWH: imp,
+				PeriodName:    periodName,
+			})
+		}
+		stepUpSettings := types.Settings{
+			OptimizationProfile: "balanced",
+			MinBatterySOC:       20.0,
+			GridChargeBatteries: true,
+			MinBatterySOCPeriods: []types.MinBatterySOCPeriod{
+				{UtilityPeriodName: "On-Peak", MinBatterySOC: 20},
+				{UtilityPeriodName: "Shoulder", MinBatterySOC: 50},
+				{UtilityPeriodName: "Off-Peak", MinBatterySOC: 20},
+			},
+		}
+		stepUpStatus := scarceStatus
+		stepUpStatus.Timestamp = t1900
+		stepUpStatus.BatterySOC = 48.0
+		curr1900 := types.Price{TSStart: t1900, TSEnd: t1900.Add(time.Hour), DollarsPerKWH: 0.30, PeriodName: "On-Peak"}
+		decStepUp, _, err := c.Plan(ctx, stepUpStatus, curr1900, stepUpFuture, buildFlatLoadHistory(t1900, 2.0), nil, stepUpSettings, nil)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeStandby, decStepUp.Action.BatteryMode,
+			"Planner must hold 48%% SOC in Standby at $0.30/kWh On-Peak rather than draining further before an 8:00 PM 50%% minSOC step-up at $0.26/kWh")
+
+		// Edge Case 5: Day-2 VPP event beyond 26h (now + 27h..29h) inside an extended 30h horizon.
+		// At 3:00 PM Day 1 during On-Peak ($0.35/kWh) with GridChargeBatteries=false, cloudy Day 2 (0 solar),
+		// and a $2.00/kWh VPP event at 6:00 PM - 8:00 PM Day 2 (now + 27h..29h), extractVPPAnchors must retain
+		// the Day-2 VPP anchor so Standby is permitted and chosen during Day-1 On-Peak.
+		t1500Day1 := time.Date(2026, 11, 15, 15, 0, 0, 0, nyLoc)
+		var day2VPPFuture []types.Price
+		for i := 1; i <= 30; i++ {
+			ts := t1500Day1.Add(time.Duration(i) * time.Hour)
+			imp := 0.10
+			if ts.Hour() >= 12 && ts.Hour() < 20 {
+				imp = 0.35
+			}
+			day2VPPFuture = append(day2VPPFuture, types.Price{
+				TSStart:       ts,
+				TSEnd:         ts.Add(time.Hour),
+				DollarsPerKWH: imp,
+			})
+		}
+		day2VPPStatus := vppStatus
+		day2VPPStatus.Timestamp = t1500Day1
+		day2VPPStatus.BatterySOC = 55.0
+		day2VPPStatus.VPPEvents = []types.VPPEvent{
+			{
+				Description:   "Next-Day Evening VPP Event",
+				TSStart:       time.Date(2026, 11, 16, 18, 0, 0, 0, nyLoc),
+				TSEnd:         time.Date(2026, 11, 16, 20, 0, 0, 0, nyLoc),
+				VPPSoc:        10.0,
+				DollarsPerKWH: 2.00,
+			},
+		}
+		decDay2VPP, _, err := c.Plan(ctx, day2VPPStatus, types.Price{TSStart: t1500Day1, TSEnd: t1500Day1.Add(time.Hour), DollarsPerKWH: 0.35}, day2VPPFuture, buildFlatLoadHistory(t1500Day1, 1.5), nil, vppSettings, nil)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeStandby, decDay2VPP.Action.BatteryMode,
+			"Planner must hold in Standby during Day-1 $0.35/kWh On-Peak when a $2.00/kWh Day-2 VPP event (now + 27h) needs unrefillable battery energy")
+
+		// Edge Case 6: Dynamic-pricing pre-charge within 16h does not procrastinate into a costlier hour.
+		// At 00:00 ($0.300/kWh) with 01:00-14:00 at $0.340/kWh, 14:00-15:00 (t=14h) at $0.304/kWh, and 15:00-19:00 Peak at $0.580/kWh,
+		// keeping [0, 16h] undiscounted ensures the planner charges immediately at 00:00 ($0.300/kWh) rather than waiting to pay $0.304/kWh at 14:00.
+		t0000 := time.Date(2026, 11, 16, 0, 0, 0, 0, nyLoc)
+		var dynPreChargeFuture []types.Price
+		for i := 1; i <= 24; i++ {
+			ts := t0000.Add(time.Duration(i) * time.Hour)
+			imp := 0.340
+			switch {
+			case i == 14:
+				imp = 0.304
+			case i >= 15 && i < 19:
+				imp = 0.580
+			case i >= 19:
+				imp = 0.340
+			}
+			dynPreChargeFuture = append(dynPreChargeFuture, types.Price{
+				TSStart:       ts,
+				TSEnd:         ts.Add(time.Hour),
+				DollarsPerKWH: imp,
+			})
+		}
+		var dynHistory []types.EnergyStats
+		for d := 1; d <= 7; d++ {
+			dayStart := time.Date(t0000.Year(), t0000.Month(), t0000.Day(), 0, 0, 0, 0, nyLoc).AddDate(0, 0, -d)
+			for h := 0; h < 24; h++ {
+				load := 0.2
+				if h >= 15 && h < 19 {
+					load = 1.1 // ~4.4 kWh total peak load, requiring ~1 hour of 5 kW pre-charging
+				}
+				dynHistory = append(dynHistory, types.EnergyStats{
+					TSHourStart:  dayStart.Add(time.Duration(h) * time.Hour),
+					HomeKWH:      load,
+					TimeLocation: "America/New_York",
+				})
+			}
+		}
+		dynStatus := types.SystemStatus{
+			Timestamp:             t0000,
+			TimeLocation:          "America/New_York",
+			BatteryCapacityKWH:    13.5,
+			BatterySOC:            20.0,
+			BatteryAboveMinSOC:    false,
+			MaxBatteryChargeKW:    5.0,
+			MaxBatteryDischargeKW: 5.0,
+			HomeKW:                0.2,
+		}
+		dynSettings := types.Settings{
+			OptimizationProfile: "balanced",
+			MinBatterySOC:       20.0,
+			GridChargeBatteries: true,
+		}
+		decDyn, _, err := c.Plan(ctx, dynStatus, types.Price{TSStart: t0000, TSEnd: t0000.Add(time.Hour), DollarsPerKWH: 0.300}, dynPreChargeFuture, dynHistory, nil, dynSettings, nil)
+		require.NoError(t, err)
+		assert.Equal(t, types.BatteryModeChargeAny, decDyn.Action.BatteryMode,
+			"Planner must pre-charge immediately at 00:00 ($0.300/kWh) rather than procrastinating into a costlier $0.304/kWh hour at t=14h")
+	})
 }
 
 func BenchmarkPlan(b *testing.B) {
@@ -4685,5 +5144,35 @@ func TestStepPenaltyCost(t *testing.T) {
 		costExport := stepPenaltyCost(exportNextState, interval)
 		expectedExportHolding := 2.7 * 1.0 * batteryHoldingCostPerHourPerKWH
 		assert.InDelta(t, expectedExportHolding, costExport, 1e-7)
+	})
+}
+
+func TestHorizonDiscountFactor(t *testing.T) {
+	t.Parallel()
+
+	t.Run("UndiscountedWithinIntradaySingleCycleWindowAndForNonPositiveOrNaNHours", func(t *testing.T) {
+		t.Parallel()
+
+		assert.InDelta(t, 1.0, horizonDiscountFactor(0.0), 1e-9)
+		assert.InDelta(t, 1.0, horizonDiscountFactor(12.0), 1e-9)
+		assert.InDelta(t, 1.0, horizonDiscountFactor(horizonDiscountStartHours), 1e-9)
+		assert.InDelta(t, 1.0, horizonDiscountFactor(-2.0), 1e-9)
+		assert.InDelta(t, 1.0, horizonDiscountFactor(math.NaN()), 1e-9)
+	})
+
+	t.Run("DecaysSmoothlyBeyond16HoursAndRemainsAboveTerminalDiscountThroughMaxFlexibleHorizon", func(t *testing.T) {
+		t.Parallel()
+
+		df20 := horizonDiscountFactor(20.0)
+		df24 := horizonDiscountFactor(24.0)
+		df34 := horizonDiscountFactor(float64(maxFlexibleHorizonHours))
+
+		assert.InDelta(t, math.Sqrt(horizonDiscountFactor24h), df20, 1e-9)
+		assert.InDelta(t, horizonDiscountFactor24h, df24, 1e-9)
+		assert.Less(t, df20, 1.0)
+		assert.Less(t, df24, df20)
+		assert.Less(t, df34, df24)
+		assert.Greater(t, df34, terminalTier1DiscountFactor,
+			"In-horizon discount at maxFlexibleHorizonHours (34h) must stay strictly above terminalTier1DiscountFactor (0.95) so post-horizon energy is never overvalued relative to late-horizon intervals")
 	})
 }

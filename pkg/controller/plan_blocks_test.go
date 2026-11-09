@@ -958,6 +958,115 @@ func TestIsBlockActionAllowed(t *testing.T) {
 		assert.True(t, isBlockActionAllowed(0, highReserveBlock, blockActionChoice{actionType: blockActionCharge, targetSOC: 80.0}, []timelineBlock{highReserveBlock, blockExpensive}, state20, nil, 0.40, settings, types.SystemStatus{}, baseTimeline, nil),
 			"Candidate charge targetSOC == block.minSOC (80%%) must be allowed when in reserve deficit")
 	})
+
+	t.Run("Standby_PeakCeilingPruningAndExceptions", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		state40 := planState{soc: 40.0, energyKWH: 12.0, capacityKWH: 30.0, maxChargeKW: 16.0, maxDischargeKW: 20.0, time: now}
+		peakSettings := settings
+		peakSettings.MinBatterySOC = 30.0
+		peakTimeline := []planInterval{
+			{startTime: now, endTime: now.Add(5 * time.Hour), durationHours: 5.0, importRate: 0.29982, exportRate: 0.29482, loadKWH: 2.2, minSOC: 30.0},
+			{startTime: now.Add(5 * time.Hour), endTime: now.Add(21 * time.Hour), durationHours: 16.0, importRate: 0.20754, exportRate: 0.20254, loadKWH: 4.0, solarKWH: 2.0, minSOC: 30.0},
+			{startTime: now.Add(21 * time.Hour), endTime: now.Add(29 * time.Hour), durationHours: 8.0, importRate: 0.29982, exportRate: 0.29482, loadKWH: 4.0, solarKWH: 3.0, minSOC: 30.0},
+		}
+		// Build blocks through buildTimelineBlocks: on Eversource CT Rate 7 ($0.29982 - $0.20754 = $0.09228 < $0.10 minPeakRateSpreadDollars),
+		// isHighestPrice is false on all blocks, proving Standby pruning does not rely on isHighestPrice.
+		equalPeakBlocks := buildTimelineBlocks(ctx, peakTimeline, nil, peakSettings, types.SystemStatus{})
+		require.Len(t, equalPeakBlocks, 3)
+		assert.False(t, equalPeakBlocks[0].isHighestPrice, "Spread < $0.10 leaves isHighestPrice false")
+
+		// 1. Disallowed when already at the horizon's highest import rate with equal next-day peak, no VPP, no export spike, and flat minSOC.
+		assert.False(t, isBlockActionAllowed(0, equalPeakBlocks[0], blockActionChoice{actionType: blockActionStandby}, equalPeakBlocks, state40, nil, 0.20754, peakSettings, types.SystemStatus{}, peakTimeline, nil),
+			"Standby must be disallowed at the horizon's highest import ceiling even when isHighestPrice is false")
+
+		// Also disallowed on a flat tariff ($0.22/kWh import, $0.08/kWh export) with no VPP or reserve step-up ahead.
+		flatTimeline := []planInterval{
+			{startTime: now, endTime: now.Add(6 * time.Hour), durationHours: 6.0, importRate: 0.22, exportRate: 0.08, loadKWH: 3.0, minSOC: 30.0},
+			{startTime: now.Add(6 * time.Hour), endTime: now.Add(12 * time.Hour), durationHours: 6.0, importRate: 0.22, exportRate: 0.08, loadKWH: 3.0, solarKWH: 4.0, minSOC: 30.0},
+		}
+		flatBlocks := buildTimelineBlocks(ctx, flatTimeline, nil, peakSettings, types.SystemStatus{})
+		require.NotEmpty(t, flatBlocks)
+		assert.False(t, isBlockActionAllowed(0, flatBlocks[0], blockActionChoice{actionType: blockActionStandby}, flatBlocks, state40, nil, 0.22, peakSettings, types.SystemStatus{}, flatTimeline, nil),
+			"Standby must be disallowed on a flat tariff when no higher rate, export spike, minSOC step-up, or VPP event lies ahead")
+
+		// 2. Allowed when a VPP event lies ahead.
+		upcomingVPP := []vppAnchor{
+			{eventStart: now.Add(3 * time.Hour), eventEnd: now.Add(5 * time.Hour), deadline: now.Add(time.Hour), vppSoc: 10.0, price: 2.0},
+		}
+		assert.True(t, isBlockActionAllowed(0, equalPeakBlocks[0], blockActionChoice{actionType: blockActionStandby}, equalPeakBlocks, state40, upcomingVPP, 0.20754, peakSettings, types.SystemStatus{}, peakTimeline, nil),
+			"Standby must be allowed during a peak block when an upcoming VPP event requires preserving battery SOC")
+
+		// 3. Allowed when a slightly higher import rate lies ahead, including inside a merged dynamic-tariff block
+		// where block.minImportRate ($0.260) < downstream maxImportRate ($0.284) < block.avgImportRate ($0.285).
+		// With 11 initial blocks (> targetTimelineBlocks = 10), buildTimelineBlocks merges the closest pair
+		// (intervals 0 and 1: |$0.310 - $0.260| = $0.050 <= $0.06) into Block 0 while leaving intervals 2..10 distinct.
+		mergedDynTimeline := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.310, exportRate: 0.05, solarKWH: 3.0, loadKWH: 0.5, minSOC: 30.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.260, exportRate: 0.05, solarKWH: 0.0, loadKWH: 2.5, minSOC: 30.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.284, exportRate: 0.15, solarKWH: 0.0, loadKWH: 2.0, minSOC: 30.0},
+		}
+		for k := 3; k < 11; k++ {
+			imp := 0.09
+			if k%2 == 1 {
+				imp = 0.18 // |$0.18 - $0.09| = $0.09 > $0.06 maxPriceBandMergeDollars, and < $0.260
+			}
+			mergedDynTimeline = append(mergedDynTimeline, planInterval{
+				startTime:     now.Add(time.Duration(k) * time.Hour),
+				endTime:       now.Add(time.Duration(k+1) * time.Hour),
+				durationHours: 1.0,
+				importRate:    imp,
+				exportRate:    0.05,
+				loadKWH:       1.0,
+				minSOC:        30.0,
+			})
+		}
+		mergedDynBlocks := buildTimelineBlocks(ctx, mergedDynTimeline, nil, peakSettings, types.SystemStatus{})
+		if assert.Len(t, mergedDynBlocks, 10) {
+			assert.Equal(t, 0, mergedDynBlocks[0].startIdx)
+			assert.Equal(t, 1, mergedDynBlocks[0].endIdx)
+			assert.Greater(t, mergedDynBlocks[0].avgImportRate, mergedDynBlocks[1].maxImportRate, "Merged Block 0 avgImportRate ($0.285) exceeds Block 1 maxImportRate ($0.284)")
+			assert.Greater(t, mergedDynBlocks[1].maxImportRate, mergedDynBlocks[0].minImportRate, "Block 1 maxImportRate ($0.284) exceeds Block 0 minImportRate ($0.260)")
+			assert.True(t, isBlockActionAllowed(0, mergedDynBlocks[0], blockActionChoice{actionType: blockActionStandby}, mergedDynBlocks, state40, nil, 0.10, peakSettings, types.SystemStatus{}, mergedDynTimeline, nil),
+				"Standby must be allowed on a merged dynamic-tariff block when downstream maxImportRate exceeds block.minImportRate")
+		}
+
+		// Also allowed when a 1-hour post-horizon spike (masked in the 4-hour knownPostHorizonRate average) exceeds block.minImportRate via postHorizon.maxImportRate().
+		postHorizonWithSpike := postHorizonValuation{
+			knownPostHorizonRate: 0.185,
+			postHorizonSlices: []postHorizonLoadSlice{
+				{loadKWH: 1.5, importRate: 0.56},
+				{loadKWH: 1.5, importRate: 0.06},
+				{loadKWH: 1.5, importRate: 0.06},
+				{loadKWH: 1.5, importRate: 0.06},
+			},
+		}
+		assert.InDelta(t, 0.56, postHorizonWithSpike.maxImportRate(), 1e-6)
+		assert.True(t, isBlockActionAllowed(0, equalPeakBlocks[0], blockActionChoice{actionType: blockActionStandby}, equalPeakBlocks, state40, nil, postHorizonWithSpike.maxImportRate(), peakSettings, types.SystemStatus{}, peakTimeline, nil),
+			"Standby must be allowed when postHorizon.maxImportRate() captures a 1-hour post-horizon spike exceeding current import rate")
+
+		// 4. Allowed when a downstream block has an export rate exceeding the current peak import rate AND export is enabled;
+		// disallowed when both GridExportSolar and GridExportBatteries are false.
+		exportSpikeBlocks := []timelineBlock{
+			equalPeakBlocks[0],
+			{startIdx: 1, endIdx: 1, minImportRate: 0.29982, avgImportRate: 0.29982, maxImportRate: 0.29982, minExportRate: 0.55, maxExportRate: 0.55, minSOC: 30.0, durationHours: 1.0},
+		}
+		assert.True(t, isBlockActionAllowed(0, exportSpikeBlocks[0], blockActionChoice{actionType: blockActionStandby}, exportSpikeBlocks, state40, nil, 0.20754, peakSettings, types.SystemStatus{}, peakTimeline[:2], nil),
+			"Standby must be allowed during peak when an upcoming wholesale export spike exceeds the peak import rate")
+		noExportSettings := peakSettings
+		noExportSettings.GridExportSolar = false
+		noExportSettings.GridExportBatteries = false
+		assert.False(t, isBlockActionAllowed(0, exportSpikeBlocks[0], blockActionChoice{actionType: blockActionStandby}, exportSpikeBlocks, state40, nil, 0.20754, noExportSettings, types.SystemStatus{}, peakTimeline[:2], nil),
+			"Downstream export spike must not enable Standby when both GridExportSolar and GridExportBatteries are disabled")
+
+		// 5. Allowed when a downstream block steps up minSOC above the current block's reserve floor.
+		reserveStepUpBlocks := []timelineBlock{
+			{startIdx: 0, endIdx: 0, minImportRate: 0.29982, avgImportRate: 0.29982, maxImportRate: 0.29982, minExportRate: 0.29482, maxExportRate: 0.29482, minSOC: 25.0, durationHours: 5.0},
+			{startIdx: 1, endIdx: 1, minImportRate: 0.20754, avgImportRate: 0.20754, maxImportRate: 0.20754, minExportRate: 0.20254, maxExportRate: 0.20254, minSOC: 50.0, durationHours: 16.0, isLowestPrice: true},
+		}
+		assert.True(t, isBlockActionAllowed(0, reserveStepUpBlocks[0], blockActionChoice{actionType: blockActionStandby}, reserveStepUpBlocks, state40, nil, 0.20754, peakSettings, types.SystemStatus{}, peakTimeline[:2], nil),
+			"Standby must be allowed during peak when an upcoming block has a higher minSOC reserve floor")
+	})
 }
 
 func TestValidateCandidateTrajectory(t *testing.T) {
@@ -1270,6 +1379,106 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 		}
 		validUnreach, reasonUnreach := validateCandidateTrajectory(actionsContinuousCharge, timelineUnreachable, settings, wear, 0.90, state20, 0)
 		assert.True(t, validUnreach, "Continuous ChargeAny during an unreachable minSOC window must be allowed: "+reasonUnreach)
+	})
+}
+
+func TestScoreCandidateTrajectory(t *testing.T) {
+	t.Parallel()
+
+	t.Run("EqualGridPrices_PrefersSoonerBatteryDeficitWhileKeepingPhysicalCostUndiscounted", func(t *testing.T) {
+		t.Parallel()
+
+		settings := types.Settings{
+			OptimizationProfile: "balanced",
+			MinBatterySOC:       30.0,
+		}
+		// 20-hour separation between two equal-price $0.30/kWh blocks (with a 20-hour zero-load overnight gap).
+		// Usable battery (1.0 kWh DC at 100% RTE) can cover either Block 0 OR Block 2, leaving the other block
+		// to import 1.0 kWh from the grid at $0.30/kWh.
+		timeline := []planInterval{
+			{durationHours: 1.0, importRate: 0.30, exportRate: 0.10, loadKWH: 1.0, minSOC: 30.0},
+			{durationHours: 19.0, importRate: 0.20, exportRate: 0.10, loadKWH: 0.0, minSOC: 30.0},
+			{durationHours: 1.0, importRate: 0.30, exportRate: 0.10, loadKWH: 1.0, minSOC: 30.0},
+		}
+		initial := planState{
+			soc:            40.0,
+			energyKWH:      4.0, // 3.0 kWh reserve + 1.0 kWh usable
+			capacityKWH:    10.0,
+			maxChargeKW:    5.0,
+			maxDischargeKW: 5.0,
+		}
+		postHorizon := postHorizonValuation{knownPostHorizonRate: 0.20}
+
+		// Trajectory A: Discharge now (battery hits 30% reserve deficit in step 0; grid import deferred to step 2 at t=20.5h).
+		soonerDeficitActs := []actionCandidate{
+			{batteryMode: types.BatteryModeLoad, solarMode: types.SolarModeAny},
+			{batteryMode: types.BatteryModeStandby, solarMode: types.SolarModeAny},
+			{batteryMode: types.BatteryModeLoad, solarMode: types.SolarModeAny},
+		}
+		// Trajectory B: Standby now (imports 1.0 kWh at t=0.5h; battery hits 30% reserve deficit later in step 2).
+		laterDeficitActs := []actionCandidate{
+			{batteryMode: types.BatteryModeStandby, solarMode: types.SolarModeAny},
+			{batteryMode: types.BatteryModeStandby, solarMode: types.SolarModeAny},
+			{batteryMode: types.BatteryModeLoad, solarMode: types.SolarModeAny},
+		}
+
+		scoreSooner, physSooner, statesSooner, _ := scoreCandidateTrajectory(soonerDeficitActs, timeline, initial, nil, postHorizon, settings, 1.0)
+		scoreLater, physLater, statesLater, _ := scoreCandidateTrajectory(laterDeficitActs, timeline, initial, nil, postHorizon, settings, 1.0)
+
+		assert.InDelta(t, 0.30, physSooner, 1e-6, "Reported physical cost must remain undiscounted")
+		assert.InDelta(t, 0.30, physLater, 1e-6, "Reported physical cost must remain undiscounted")
+		assert.InDelta(t, 30.0, statesSooner[1].soc, 1e-6, "Sooner-deficit path hits 30% reserve in step 0")
+		assert.InDelta(t, 30.0, statesLater[3].soc, 1e-6, "Later-deficit path hits 30% reserve in step 2")
+
+		expectedDiscountDelta := 0.30 * (horizonDiscountFactor(0.5) - horizonDiscountFactor(20.5))
+		expectedHoldingDelta := 1.0 * 20.0 * batteryHoldingCostPerHourPerKWH
+		assert.InDelta(t, expectedDiscountDelta+expectedHoldingDelta, scoreLater-scoreSooner, 1e-6,
+			"Score must prefer sooner battery deficit by both the 20-hour time-discount spread and holding penalty")
+		assert.Less(t, scoreSooner, scoreLater)
+	})
+
+	t.Run("EqualExportRates_PrefersSoonerExportRevenueOverNextDayExport", func(t *testing.T) {
+		t.Parallel()
+
+		settings := types.Settings{
+			OptimizationProfile:                     "balanced",
+			MinBatterySOC:                           30.0,
+			GridExportBatteries:                     true,
+			ManageTOUSchedules:                      true,
+			MinArbitrageDifferenceDollarsPerKWH:     0.0,
+			MinBatteryExportDifferenceDollarsPerKWH: 0.0,
+		}
+		timeline := []planInterval{
+			{durationHours: 1.0, importRate: 0.35, exportRate: 0.30, loadKWH: 0.0, minSOC: 30.0},
+			{durationHours: 21.0, importRate: 0.20, exportRate: 0.10, loadKWH: 0.0, minSOC: 30.0},
+			{durationHours: 1.0, importRate: 0.35, exportRate: 0.30, loadKWH: 0.0, minSOC: 30.0},
+		}
+		initial := planState{
+			soc:            40.0,
+			energyKWH:      4.0,
+			capacityKWH:    10.0,
+			maxChargeKW:    5.0,
+			maxDischargeKW: 5.0,
+		}
+		postHorizon := postHorizonValuation{knownPostHorizonRate: 0.20}
+
+		earlyExportActs := []actionCandidate{
+			{batteryMode: types.BatteryModeExport, solarMode: types.SolarModeAny, targetSOC: 30.0},
+			{batteryMode: types.BatteryModeStandby, solarMode: types.SolarModeAny},
+			{batteryMode: types.BatteryModeStandby, solarMode: types.SolarModeAny},
+		}
+		lateExportActs := []actionCandidate{
+			{batteryMode: types.BatteryModeStandby, solarMode: types.SolarModeAny},
+			{batteryMode: types.BatteryModeStandby, solarMode: types.SolarModeAny},
+			{batteryMode: types.BatteryModeExport, solarMode: types.SolarModeAny, targetSOC: 30.0},
+		}
+
+		scoreEarly, physEarly, _, _ := scoreCandidateTrajectory(earlyExportActs, timeline, initial, nil, postHorizon, settings, 1.0)
+		scoreLate, physLate, _, _ := scoreCandidateTrajectory(lateExportActs, timeline, initial, nil, postHorizon, settings, 1.0)
+
+		assert.InDelta(t, -0.30, physEarly, 1e-6, "Undiscounted physical export credit must be -$0.30")
+		assert.InDelta(t, -0.30, physLate, 1e-6, "Undiscounted physical export credit must be -$0.30")
+		assert.Less(t, scoreEarly, scoreLate, "Score must strictly prefer capturing equal-rate export revenue today over waiting >16h until tomorrow")
 	})
 }
 
@@ -1625,6 +1834,31 @@ func TestCritiqueBlockPlan(t *testing.T) {
 		assert.Equal(t, blockActionExport, winStandbyExp[2].actionType, "Block 2 must discover blockActionExport via standbyFloor (44.0%)")
 		assert.InDelta(t, 44.0, winStandbyExp[2].targetSOC, 0.1, "Block 2 export floor must match math.Ceil(43.2) = 44.0%")
 		assert.Equal(t, blockActionLoad, winStandbyExp[3].actionType, "Block 3 must discharge the preserved 44.0% -> 30.0% cushion to cover $0.45/kWh load")
+	})
+
+	t.Run("PairedChargeHoldTrial_DoesNotForceDominatedStandbyOnPrecedingPeakBlock", func(t *testing.T) {
+		t.Parallel()
+
+		// Day-1 Peak Block 0 ($0.35/kWh) -> Overnight Off-Peak Block 1 ($0.08/kWh) -> Day-2 Peak Block 2 ($0.35/kWh).
+		// When Pass 2 tests paired {Charge at Block 1, Load/Export at Block 2} under tcHold, Block 0 ($0.35/kWh ceiling)
+		// must NOT be rewritten from Load to Standby—it must discharge existing battery energy during Day-1 Peak first.
+		noExportSettings := settings
+		noExportSettings.GridExportBatteries = false
+		timelinePeakThenCharge := []planInterval{
+			{startTime: now, endTime: now.Add(2 * time.Hour), durationHours: 2.0, importRate: 0.35, exportRate: 0.05, loadKWH: 2.0, minSOC: 20.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 2.0, importRate: 0.08, exportRate: 0.05, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(4 * time.Hour), endTime: now.Add(6 * time.Hour), durationHours: 2.0, importRate: 0.35, exportRate: 0.05, loadKWH: 3.0, minSOC: 20.0},
+		}
+		blocksPeakThenCharge := buildTimelineBlocks(ctx, timelinePeakThenCharge, nil, noExportSettings, types.SystemStatus{})
+		require.Len(t, blocksPeakThenCharge, 3)
+		assert.False(t, isBlockActionAllowed(0, blocksPeakThenCharge[0], blockActionChoice{actionType: blockActionStandby}, blocksPeakThenCharge, planState{soc: 35.0, energyKWH: 13.5 * 0.35, capacityKWH: 13.5, time: now}, nil, 0.08, noExportSettings, types.SystemStatus{}, timelinePeakThenCharge, nil))
+
+		state35 := planState{soc: 35.0, energyKWH: 13.5 * 0.35, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
+		win, _ := critiqueBlockPlan(ctx, blocksPeakThenCharge, timelinePeakThenCharge, state35, nil, postHorizonValuation{knownPostHorizonRate: 0.08}, noExportSettings, types.SystemStatus{}, nil, 0)
+		require.Len(t, win, 3)
+		assert.Equal(t, blockActionLoad, win[0].actionType, "Day-1 Peak Block 0 must discharge in Load rather than being forced into Standby by tcHold")
+		assert.Equal(t, blockActionCharge, win[1].actionType, "Overnight Block 1 must grid-charge for Day-2 Peak")
+		assert.Equal(t, blockActionLoad, win[2].actionType, "Day-2 Peak Block 2 must discharge in Load")
 	})
 }
 

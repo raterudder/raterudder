@@ -119,6 +119,20 @@ const (
 	// corresponding to 4 hours of baseline residential consumption at 1.5 kW.
 	defaultPostHorizonLoadKWH = 6.0
 
+	// horizonDiscountStartHours (16) is the near-term lookahead window (in hours) across which
+	// in-horizon grid cashflows remain undiscounted (1.0x). Keeping the first 16 hours undiscounted
+	// preserves exact real tariff comparisons across intraday and overnight pre-charging / peak-hold
+	// cycles, while discounting next-day (>16h) cashflows where solar and load forecasts are speculative.
+	horizonDiscountStartHours = 16
+
+	// horizonDiscountFactor24h (0.98) is the discount factor reached at t=24h by the piecewise-smooth
+	// horizon-tail discount (1.0 for t<=16h, decaying exponentially as 0.98^((t-16)/8) for t>16h).
+	// When grid prices are equal across days, immediate battery self-consumption (hitting battery
+	// deficit sooner and pushing grid imports later) strictly beats holding in Standby for marginal
+	// next-day forecast gains, while staying strictly above terminalTier1DiscountFactor (0.95) even
+	// on 34-hour extended horizons (0.9555 at t=34h).
+	horizonDiscountFactor24h = 0.98
+
 	// terminalTier1DiscountFactor (0.95) applies a 5% time-preference discount to banked battery
 	// energy up to the forecasted post-horizon home load. This ensures the solver strictly prefers
 	// covering certain in-horizon home load at rate R today over hoarding energy in Standby to T+24h
@@ -305,6 +319,19 @@ type postHorizonValuation struct {
 	postHorizonSlices          []postHorizonLoadSlice
 }
 
+// maxImportRate returns the highest post-horizon import rate across both the blended
+// knownPostHorizonRate and individual hourly postHorizonSlices so a brief post-horizon
+// price spike is not masked by the 4-hour average during block-level pre-filtering.
+func (p postHorizonValuation) maxImportRate() float64 {
+	rate := p.knownPostHorizonRate
+	for _, s := range p.postHorizonSlices {
+		if s.importRate > rate {
+			rate = s.importRate
+		}
+	}
+	return rate
+}
+
 // minDeficitPriceSpread returns the minimum price spread ($/kWh) required for an economic peak.
 func minDeficitPriceSpread(settings types.Settings) float64 {
 	return max(minPeakRateSpreadDollars, settings.GetOptimizationParams().GridChargeDegradationDollarsPerKWH)
@@ -459,6 +486,7 @@ func (c *Controller) Plan(
 		log.Ctx(ctx).ErrorContext(ctx, "failed to build planning timeline", slog.Any("error", err))
 		return Decision{}, types.Plan{}, fmt.Errorf("buildPlanningTimeline: %w", err)
 	}
+	vppEvents = filterVPPAnchorsToTimeline(vppEvents, timeline)
 	postHorizon := c.buildPostHorizonValuation(timeline, futurePrices, settings, currentStatus, model)
 
 	// 4. Initial battery state
@@ -987,7 +1015,7 @@ func extractVPPAnchors(
 	}
 
 	optParams := settings.GetOptimizationParams()
-	vppScanEnd := now.Add(time.Duration(maxPlanningHorizonHours)*time.Hour + vppStandbyLeadTime)
+	vppScanEnd := now.Add(time.Duration(maxFlexibleHorizonHours)*time.Hour + vppStandbyLeadTime)
 	buffer := time.Duration(optParams.VPPChargingBufferMinutes) * time.Minute
 
 	var vppEvents []vppAnchor
@@ -1022,6 +1050,23 @@ func extractVPPAnchors(
 		return vppEvents[i].eventStart.Before(vppEvents[j].eventStart)
 	})
 	return vppEvents
+}
+
+// filterVPPAnchorsToTimeline retains only VPP anchors that overlap the constructed planning timeline
+// or its 2-hour firmware standby lead window, dropping anchors that fell inside maxFlexibleHorizonHours
+// when selectPlanningHorizonEnd kept a shorter (e.g. 24-hour) timeline.
+func filterVPPAnchorsToTimeline(vppEvents []vppAnchor, timeline []planInterval) []vppAnchor {
+	if len(vppEvents) == 0 || len(timeline) == 0 {
+		return vppEvents
+	}
+	cutoff := timeline[len(timeline)-1].endTime.Add(vppStandbyLeadTime)
+	filtered := vppEvents[:0:len(vppEvents)]
+	for _, ev := range vppEvents {
+		if ev.eventStart.Before(cutoff) {
+			filtered = append(filtered, ev)
+		}
+	}
+	return filtered
 }
 
 // buildPostHorizonValuation computes the post-horizon replacement rate, net solar surplus, and
@@ -1426,6 +1471,19 @@ func stepPenaltyCost(
 	interval planInterval,
 ) float64 {
 	return nextState.energyKWH * interval.durationHours * batteryHoldingCostPerHourPerKWH
+}
+
+var lnHorizonTailDiscountPerHour = math.Log(horizonDiscountFactor24h) / float64(maxPlanningHorizonHours-horizonDiscountStartHours)
+
+// horizonDiscountFactor returns the piecewise-smooth time-preference and forecast-uncertainty
+// discount factor at `hours` into the planning horizon: 1.0 across the near-term [0, 16h] cycle
+// (avoiding any price distortion during intraday/overnight charging or single-cycle peak holds),
+// decaying smoothly thereafter to 0.98 at t=24h and ~0.956 at t=34h (> terminalTier1DiscountFactor).
+func horizonDiscountFactor(hours float64) float64 {
+	if hours <= float64(horizonDiscountStartHours) || math.IsNaN(hours) {
+		return 1.0
+	}
+	return math.Exp(lnHorizonTailDiscountPerHour * (hours - float64(horizonDiscountStartHours)))
 }
 
 // calculateTerminalValuation credits or penalizes ending battery energy based on replacement cost.

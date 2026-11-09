@@ -1258,6 +1258,24 @@ func isBlockActionAllowed(
 		return true
 
 	case blockActionStandby:
+		// Disallow holding in Standby on any block when no VPP event, no higher import rate
+		// (in downstream blocks or post-horizon slices), no export rate exceeding this block's
+		// minimum import rate, and no higher reserve floor (minSOC step-up) lies ahead.
+		// Using block.minImportRate (without gating on block.isHighestPrice) handles <$0.10 TOU
+		// spreads (such as Eversource CT Rate 7) as well as merged dynamic-tariff blocks safely.
+		if !hasVPPAhead {
+			hasReasonToHold := knownPostHorizonRate > block.minImportRate+priceEpsilonForEquality
+			for j := blockIdx + 1; j < len(blocks) && !hasReasonToHold; j++ {
+				if blocks[j].maxImportRate > block.minImportRate+priceEpsilonForEquality ||
+					blocks[j].minSOC > block.minSOC+socTargetTolerancePct ||
+					((settings.GridExportBatteries || settings.GridExportSolar) && blocks[j].maxExportRate > block.minImportRate+priceEpsilonForEquality) {
+					hasReasonToHold = true
+				}
+			}
+			if !hasReasonToHold {
+				return false
+			}
+		}
 		if blockIdx == 0 && startState.soc >= almostFullSOC && !block.isHighestPrice && !hasVPPAhead {
 			// 1. If solar in Block 0 already covers load (netSolarKWH >= 0), BatteryModeLoad keeps the
 			// nearly-full battery at ~100% SOC without idling in Standby.
@@ -1561,10 +1579,14 @@ func scoreCandidateTrajectory(
 	optParams := settings.GetOptimizationParams()
 	wear := getWearRates(settings, optParams)
 
-	var wearSum, penaltySum float64
+	var discountedPhysicalCost, wearSum, penaltySum, elapsedHours float64
 	for i := 0; i < len(timeline); i++ {
 		states[i+1], metrics[i] = stepPhysics(states[i], actions[i], timeline[i], settings, roundTripEff)
 		totalPhysicalCost += metrics[i].costDollars
+		dur := max(0.0, timeline[i].durationHours)
+		midHours := elapsedHours + 0.5*dur
+		elapsedHours += dur
+		discountedPhysicalCost += metrics[i].costDollars * horizonDiscountFactor(midHours)
 		wearSum += stepWearCostDollars(actions[i], metrics[i], roundTripEff, wear)
 		penaltySum += stepPenaltyCost(states[i+1], timeline[i])
 	}
@@ -1583,7 +1605,7 @@ func scoreCandidateTrajectory(
 
 	termVal := calculateTerminalValuation(states[len(timeline)], postHorizon, settings, timeline, initial.capacityKWH, roundTripEff)
 
-	score = totalPhysicalCost + wearSum + penaltySum + termVal
+	score = discountedPhysicalCost + wearSum + penaltySum + termVal
 	if vppDeficitSOC > 0 {
 		// ensure we heavily penalize missing charging for a mandatory vpp event
 		score += float64(vppDeficitSOC) * 1000.0
@@ -1670,6 +1692,9 @@ func critiqueBlockPlan(
 	optParams := settings.GetOptimizationParams()
 	roundTripEff := resolveRoundTripEfficiency(optParams.RoundTripEfficiency, currentStatus)
 	wear := getWearRates(settings, optParams)
+	// Use maxImportRate() rather than knownPostHorizonRate (a 4-hour average) so a 1-hour
+	// post-horizon price spike in postHorizonSlices is not averaged away during pre-filtering.
+	maxPostRate := postHorizon.maxImportRate()
 
 	// Start with all blocks defaulting to self-consumption (blockActionLoad).
 	currentChoices := make([]blockActionChoice, len(blocks))
@@ -1701,7 +1726,7 @@ func critiqueBlockPlan(
 				startSOC < blocks[k].minSOC-reserveDeficitChargeTolerancePct &&
 				endState.soc < blocks[k].minSOC-reserveDeficitChargeTolerancePct {
 				cand := blockActionChoice{actionType: blockActionCharge, targetSOC: blocks[k].minSOC}
-				if isBlockActionAllowed(k, blocks[k], cand, blocks, blockStartState, vppEvents, postHorizon.knownPostHorizonRate, settings, currentStatus, timeline, lastAction) {
+				if isBlockActionAllowed(k, blocks[k], cand, blocks, blockStartState, vppEvents, maxPostRate, settings, currentStatus, timeline, lastAction) {
 					tcRec[k] = cand
 					changed = true
 					expanded = expandBlockAction(blocks[k], tcRec[k], blockStartState, timeline, vppEvents, settings, currentStatus, lastAction)
@@ -1904,7 +1929,7 @@ func critiqueBlockPlan(
 				if sameBlockChoice(cand, currentChoices[b]) {
 					continue
 				}
-				if !isBlockActionAllowed(b, blocks[b], cand, blocks, blockStartState, vppEvents, postHorizon.knownPostHorizonRate, settings, currentStatus, timeline, lastAction) {
+				if !isBlockActionAllowed(b, blocks[b], cand, blocks, blockStartState, vppEvents, maxPostRate, settings, currentStatus, timeline, lastAction) {
 					continue
 				}
 				copy(baseTrial, currentChoices)
@@ -2217,11 +2242,11 @@ func critiqueBlockPlan(
 						(a == 0 || pt[0].actionType != blockActionCharge) {
 						continue
 					}
-					if !isBlockActionAllowed(a, blocks[a], pt[0], blocks, stateA, vppEvents, postHorizon.knownPostHorizonRate, settings, currentStatus, timeline, lastAction) {
+					if !isBlockActionAllowed(a, blocks[a], pt[0], blocks, stateA, vppEvents, maxPostRate, settings, currentStatus, timeline, lastAction) {
 						continue
 					}
 					stateB := estimatePairedBlockStartState(a, b, pt, blocks, currentChoices, currentStates, initialState, roundTripEff)
-					if !isBlockActionAllowed(b, blocks[b], pt[1], blocks, stateB, vppEvents, postHorizon.knownPostHorizonRate, settings, currentStatus, timeline, lastAction) {
+					if !isBlockActionAllowed(b, blocks[b], pt[1], blocks, stateB, vppEvents, maxPostRate, settings, currentStatus, timeline, lastAction) {
 						continue
 					}
 					copy(baseTrial, currentChoices)
@@ -2230,14 +2255,23 @@ func critiqueBlockPlan(
 					trialVariants = trialVariants[:0]
 					trialVariants = append(trialVariants, baseTrial)
 					// When testing a charge at block a > 0, also test holding in Standby across preceding Load blocks
-					// (0..a-1) so the battery does not drain to reserve at a lower rate and force extra grid charging at a.
+					// (0..a-1) that are allowed to Standby so the battery does not drain to reserve at a lower rate
+					// and force extra grid charging at a.
 					if pt[0].actionType == blockActionCharge && a > 0 {
 						tcHold := make([]blockActionChoice, len(baseTrial))
 						copy(tcHold, baseTrial)
 						hasPrecedingLoad := false
+						standbyCand := blockActionChoice{actionType: blockActionStandby}
 						for k := 0; k < a; k++ {
-							if tcHold[k].actionType == blockActionLoad {
-								tcHold[k] = blockActionChoice{actionType: blockActionStandby}
+							if tcHold[k].actionType != blockActionLoad {
+								continue
+							}
+							stateK := initialState
+							if blocks[k].startIdx < len(currentStates) {
+								stateK = currentStates[blocks[k].startIdx]
+							}
+							if isBlockActionAllowed(k, blocks[k], standbyCand, blocks, stateK, vppEvents, maxPostRate, settings, currentStatus, timeline, lastAction) {
+								tcHold[k] = standbyCand
 								hasPrecedingLoad = true
 							}
 						}
@@ -2560,7 +2594,9 @@ func optimizeBlockTargets(
 				isBetterExportFloor := func(score, E float64, states []planState) (bool, float64) {
 					if choices[b].actionType == blockActionStandby &&
 						len(states) == len(initStates) && len(states) > blocks[b].endIdx+1 {
-						if blocks[b].avgImportRate < postHorizon.knownPostHorizonRate-priceEpsilonForEquality &&
+						// Use maxImportRate() rather than knownPostHorizonRate (a 4-hour average) so partial
+						// Standby discharge does not drain SOC needed for a 1-hour post-horizon price spike.
+						if blocks[b].avgImportRate < postHorizon.maxImportRate()-priceEpsilonForEquality &&
 							states[len(states)-1].soc < initStates[len(initStates)-1].soc-socTargetTolerancePct {
 							return false, 0
 						}
