@@ -1860,6 +1860,127 @@ func TestOptimizeBlockTargets(t *testing.T) {
 		assert.InDelta(t, 0.0, pathFine.metrics[3].gridImportKWH, 0.01,
 			"Late peak Block 3 must have zero grid import")
 	})
+
+	t.Run("TwoPass1DRefinement_EliminatesSplitOvernightPreChargeAfterMorningSolarBlockRefinesTo98", func(t *testing.T) {
+		t.Parallel()
+
+		// Scenario:
+		// - 30 kWh battery (16 kW max charge, 20 kW max discharge, 30% minSOC) starting at 42.1% SOC at 20:00.
+		// - Block 0 (20:00-07:20, 34 intervals of 20m): Off-Peak ($0.20754/kWh import, $0.20254/kWh export), no solar.
+		// - Block 1 (07:20-12:00, 14 intervals of 20m): Off-Peak ($0.20754/kWh import, $0.20254/kWh export) with morning solar:
+		//     * 07:20-09:00: solar <= load
+		//     * 09:00-10:00: solar 0.50 kWh, load 0.20 kWh (+0.30 kWh net solar/interval -> +2.8% SOC)
+		//     * 10:00-11:00: solar 0.54 kWh, load 0.17 kWh (+0.37 kWh net solar/interval)
+		//     * 11:00-12:00: solar 0.48 kWh, load 0.16 kWh (+0.32 kWh net solar/interval; 11:20-12:00 buffer adds +2.0% SOC)
+		// - Block 2 (12:00-20:00, 24 intervals of 20m): On-Peak ($0.29984/kWh import, $0.29484/kWh export).
+		//
+		// In Pass 1 (critiqueBlockPlan), coarse targets {50%, 75%, 100%} cause {Block 0: Standby, Block 1: Charge(100)}
+		// to grid-charge to 100% by 11:20 and spill the 11:20-12:00 solar, so Pass 1 adopts a split charge
+		// {Block 0: Charge(75), Block 1: Charge(100), Block 2: Export(30)}.
+		// In Pass 2 (optimizeBlockTargets):
+		// - Pass 1 of the 1D loop lowers Block 0 to 60% (while Block 1 is still at 100%) and then lowers Block 1 from 100% to 98%.
+		// - Pass 2 of the 1D loop re-evaluates Block 0 now that Block 1 is at 98%, dropping Block 0 to 30% (Standby, zero grid charge)
+		//   so all grid charging occurs in a single contiguous 10:00-11:20 window in Block 1 before 11:20-12:00 solar tops up 98% -> 100%.
+		splitSettings := types.Settings{
+			GridChargeBatteries: true,
+			GridExportBatteries: true,
+			GridExportSolar:     true,
+			ManageTOUSchedules:  true,
+			OptimizationProfile: "balanced",
+			MinBatterySOC:       30.0,
+		}
+		t2000 := time.Date(2026, 11, 8, 20, 0, 0, 0, time.UTC)
+		timelineSplit := make([]planInterval, 72)
+		for i := 0; i < 72; i++ {
+			ts := t2000.Add(time.Duration(i*20) * time.Minute)
+			imp := 0.20754
+			exp := 0.20254
+			sol := 0.0
+			load := 0.20
+			switch {
+			case i >= 34 && i < 36: // 07:20-08:00
+				sol = 0.09
+				load = 0.28
+			case i >= 36 && i < 39: // 08:00-09:00
+				sol = 0.23
+				load = 0.23
+			case i >= 39 && i < 42: // 09:00-10:00
+				sol = 0.50
+				load = 0.20
+			case i >= 42 && i < 45: // 10:00-11:00
+				sol = 0.54
+				load = 0.17
+			case i >= 45 && i < 48: // 11:00-12:00
+				sol = 0.48
+				load = 0.16
+			case i >= 48: // 12:00-20:00 On-Peak
+				imp = 0.29984
+				exp = 0.29484
+				load = 0.16
+				if i < 57 { // 12:00-15:00
+					sol = 0.35
+				} else if i >= 60 { // 16:00-20:00
+					load = 0.22
+				}
+			}
+			timelineSplit[i] = planInterval{
+				startTime:     ts,
+				endTime:       ts.Add(20 * time.Minute),
+				durationHours: 20.0 / 60.0,
+				importRate:    imp,
+				exportRate:    exp,
+				solarKWH:      sol,
+				loadKWH:       load,
+				minSOC:        30.0,
+			}
+		}
+
+		status30kWh := types.SystemStatus{
+			BatteryCapacityKWH:    30.0,
+			BatterySOC:            42.1,
+			MaxBatteryChargeKW:    16.0,
+			MaxBatteryDischargeKW: 20.0,
+			DCCoupled:             false,
+		}
+		initSplit := planState{
+			time:           t2000,
+			soc:            42.1,
+			energyKWH:      30.0 * 0.421,
+			capacityKWH:    30.0,
+			maxChargeKW:    16.0,
+			maxDischargeKW: 20.0,
+		}
+		blocksSplit := buildTimelineBlocks(ctx, timelineSplit, nil, splitSettings, status30kWh)
+		require.Len(t, blocksSplit, 3)
+
+		postHorizonSplit := postHorizonValuation{knownPostHorizonRate: 0.20754}
+		winningChoices, _ := critiqueBlockPlan(ctx, blocksSplit, timelineSplit, initSplit, nil, postHorizonSplit, splitSettings, status30kWh, nil, 0)
+		require.Len(t, winningChoices, 3)
+		assert.Equal(t, blockActionCharge, winningChoices[0].actionType, "Pass 1 initially adopts a split pre-charge in Block 0")
+		assert.Equal(t, blockActionCharge, winningChoices[1].actionType, "Pass 1 schedules main pre-peak charge in Block 1")
+
+		pathSplit := optimizeBlockTargets(ctx, winningChoices, blocksSplit, timelineSplit, initSplit, nil, postHorizonSplit, splitSettings, status30kWh, nil, 0)
+		require.NotNil(t, pathSplit)
+		require.Len(t, pathSplit.actions, 72)
+
+		// Block 0 (intervals 0..33, 20:00-07:20) must have zero ChargeAny intervals after Pass 2's second 1D pass.
+		for i := blocksSplit[0].startIdx; i <= blocksSplit[0].endIdx; i++ {
+			assert.Equal(t, types.BatteryModeStandby, pathSplit.actions[i].batteryMode,
+				"Block 0 interval %d (%s) must remain in Standby without an early 07:00 AM split charge",
+				i, timelineSplit[i].startTime.Format("15:04"))
+		}
+
+		// Block 1 (intervals 34..47, 07:20-12:00) must grid-charge contiguously in 10:00-11:20 (intervals 42..45) to 98%
+		// and let 11:20-12:00 solar (intervals 46..47) top up 98% -> 100% in Standby.
+		for i := 42; i <= 45; i++ {
+			assert.Equal(t, types.BatteryModeChargeAny, pathSplit.actions[i].batteryMode,
+				"Interval %d (%s) should be part of the contiguous morning ChargeAny window",
+				i, timelineSplit[i].startTime.Format("15:04"))
+			assert.InDelta(t, 98.0, pathSplit.actions[i].targetSOC, 0.1)
+		}
+		assert.InDelta(t, 98.0, pathSplit.states[46].soc, 0.2, "Grid charging must stop at 98%% at 11:20")
+		assert.InDelta(t, 100.0, pathSplit.states[48].soc, 0.2, "11:20-12:00 free solar must finish charging 98%% -> 100%%")
+	})
 }
 
 // TestPlanConstraintMechanisms evaluates the elimination of arbitrary penalties in favor of

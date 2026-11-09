@@ -2362,113 +2362,124 @@ func optimizeBlockTargets(
 
 	// Single-block 1D line searches (coarse 10% -> fine 2%/5% refinement) across all Charge and Export blocks.
 	// Seeding bestScore at choices[b].targetSOC preserves any joint 2D optimum while still optimizing additional blocks.
-	for b := 0; b < len(blocks); b++ {
-		switch choices[b].actionType {
-		case blockActionCharge:
-			minC := blocks[b].minSOC
-			maxC := 100.0
-			bestScore := math.MaxFloat64
-			initialC := choices[b].targetSOC
-			bestC := initialC
-			if initActs := expandBlockPlan(choices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff); len(initActs) > 0 {
-				if valid, _ := validateCandidateTrajectory(initActs, timeline, settings, wear, roundTripEff, initial, initialDeficitWait); valid {
-					bestScore, _, _, _ = scoreCandidateTrajectory(initActs, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+	// Run up to 2 passes so that when a downstream block's target is refined in pass 1 (e.g. a morning solar Charge
+	// block stepping down from 100% to 98% to leave headroom for late-block solar), an earlier Charge block can
+	// re-evaluate in pass 2 and drop unnecessary pre-charging.
+	for pass := 0; pass < 2; pass++ {
+		changed := false
+		for b := 0; b < len(blocks); b++ {
+			switch choices[b].actionType {
+			case blockActionCharge:
+				minC := blocks[b].minSOC
+				maxC := 100.0
+				bestScore := math.MaxFloat64
+				initialC := choices[b].targetSOC
+				bestC := initialC
+				if initActs := expandBlockPlan(choices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff); len(initActs) > 0 {
+					if valid, _ := validateCandidateTrajectory(initActs, timeline, settings, wear, roundTripEff, initial, initialDeficitWait); valid {
+						bestScore, _, _, _ = scoreCandidateTrajectory(initActs, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+					}
 				}
-			}
 
-			for _, C := range coarseSOCGrid(minC, maxC) {
-				copy(trialChoices, choices)
-				trialChoices[b].targetSOC = C
-				acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff)
-				valid, _ := validateCandidateTrajectory(acts, timeline, settings, wear, roundTripEff, initial, initialDeficitWait)
-				if !valid {
-					continue
+				for _, C := range coarseSOCGrid(minC, maxC) {
+					copy(trialChoices, choices)
+					trialChoices[b].targetSOC = C
+					acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff)
+					valid, _ := validateCandidateTrajectory(acts, timeline, settings, wear, roundTripEff, initial, initialDeficitWait)
+					if !valid {
+						continue
+					}
+					score, _, _, _ := scoreCandidateTrajectory(acts, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+					if score < bestScore-planScoreTieEpsilon || (math.Abs(score-bestScore) <= planScoreTieEpsilon && C < bestC) {
+						bestScore = score
+						bestC = C
+					}
 				}
-				score, _, _, _ := scoreCandidateTrajectory(acts, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
-				if score < bestScore-planScoreTieEpsilon || (math.Abs(score-bestScore) <= planScoreTieEpsilon && C < bestC) {
-					bestScore = score
-					bestC = C
+				// Fine 2%/5% search around coarseC, preferring lower targetSOC on exact ties.
+				coarseC := bestC
+				for _, dT := range fineOffsets {
+					C := min(maxC, max(minC, coarseC+dT))
+					copy(trialChoices, choices)
+					trialChoices[b].targetSOC = C
+					acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff)
+					valid, _ := validateCandidateTrajectory(acts, timeline, settings, wear, roundTripEff, initial, initialDeficitWait)
+					if !valid {
+						continue
+					}
+					score, _, _, _ := scoreCandidateTrajectory(acts, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+					if score < bestScore-planScoreTieEpsilon || (math.Abs(score-bestScore) <= planScoreTieEpsilon && C < bestC) {
+						bestScore = score
+						bestC = C
+					}
 				}
-			}
-			// Fine 2%/5% search around coarseC, preferring lower targetSOC on exact ties.
-			coarseC := bestC
-			for _, dT := range fineOffsets {
-				C := min(maxC, max(minC, coarseC+dT))
-				copy(trialChoices, choices)
-				trialChoices[b].targetSOC = C
-				acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff)
-				valid, _ := validateCandidateTrajectory(acts, timeline, settings, wear, roundTripEff, initial, initialDeficitWait)
-				if !valid {
-					continue
+				if initialC != bestC {
+					choices[b].targetSOC = bestC
+					changed = true
+					log.Ctx(ctx).DebugContext(ctx, "plan charge block target optimized",
+						slog.Int("blockIdx", b),
+						slog.Float64("targetSOC", bestC),
+						slog.Float64("initialTargetSOC", initialC),
+						slog.Float64("bestScoreDollars", bestScore),
+					)
 				}
-				score, _, _, _ := scoreCandidateTrajectory(acts, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
-				if score < bestScore-planScoreTieEpsilon || (math.Abs(score-bestScore) <= planScoreTieEpsilon && C < bestC) {
-					bestScore = score
-					bestC = C
-				}
-			}
-			if initialC != bestC {
-				choices[b].targetSOC = bestC
-				log.Ctx(ctx).DebugContext(ctx, "plan charge block target optimized",
-					slog.Int("blockIdx", b),
-					slog.Float64("targetSOC", bestC),
-					slog.Float64("initialTargetSOC", initialC),
-					slog.Float64("bestScoreDollars", bestScore),
-				)
-			}
 
-		case blockActionExport, blockActionDirectSolarExport:
-			minE := blocks[b].minSOC
-			maxE := 100.0
-			bestScore := math.MaxFloat64
-			initialE := choices[b].targetSOC
-			bestE := initialE
-			if initActs := expandBlockPlan(choices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff); len(initActs) > 0 {
-				if valid, _ := validateCandidateTrajectory(initActs, timeline, settings, wear, roundTripEff, initial, initialDeficitWait); valid {
-					bestScore, _, _, _ = scoreCandidateTrajectory(initActs, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+			case blockActionExport, blockActionDirectSolarExport:
+				minE := blocks[b].minSOC
+				maxE := 100.0
+				bestScore := math.MaxFloat64
+				initialE := choices[b].targetSOC
+				bestE := initialE
+				if initActs := expandBlockPlan(choices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff); len(initActs) > 0 {
+					if valid, _ := validateCandidateTrajectory(initActs, timeline, settings, wear, roundTripEff, initial, initialDeficitWait); valid {
+						bestScore, _, _, _ = scoreCandidateTrajectory(initActs, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+					}
 				}
-			}
 
-			for _, E := range coarseSOCGrid(minE, maxE) {
-				copy(trialChoices, choices)
-				trialChoices[b].targetSOC = E
-				acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff)
-				valid, _ := validateCandidateTrajectory(acts, timeline, settings, wear, roundTripEff, initial, initialDeficitWait)
-				if !valid {
-					continue
+				for _, E := range coarseSOCGrid(minE, maxE) {
+					copy(trialChoices, choices)
+					trialChoices[b].targetSOC = E
+					acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff)
+					valid, _ := validateCandidateTrajectory(acts, timeline, settings, wear, roundTripEff, initial, initialDeficitWait)
+					if !valid {
+						continue
+					}
+					score, _, _, _ := scoreCandidateTrajectory(acts, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+					if score < bestScore-planScoreTieEpsilon || (math.Abs(score-bestScore) <= planScoreTieEpsilon && E > bestE) {
+						bestScore = score
+						bestE = E
+					}
 				}
-				score, _, _, _ := scoreCandidateTrajectory(acts, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
-				if score < bestScore-planScoreTieEpsilon || (math.Abs(score-bestScore) <= planScoreTieEpsilon && E > bestE) {
-					bestScore = score
-					bestE = E
+				// Fine 2%/5% search around coarseE, preferring higher floorSOC on exact ties.
+				coarseE := bestE
+				for _, dF := range fineOffsets {
+					E := min(maxE, max(minE, coarseE+dF))
+					copy(trialChoices, choices)
+					trialChoices[b].targetSOC = E
+					acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff)
+					valid, _ := validateCandidateTrajectory(acts, timeline, settings, wear, roundTripEff, initial, initialDeficitWait)
+					if !valid {
+						continue
+					}
+					score, _, _, _ := scoreCandidateTrajectory(acts, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+					if score < bestScore-planScoreTieEpsilon || (math.Abs(score-bestScore) <= planScoreTieEpsilon && E > bestE) {
+						bestScore = score
+						bestE = E
+					}
+				}
+				if initialE != bestE {
+					choices[b].targetSOC = bestE
+					changed = true
+					log.Ctx(ctx).DebugContext(ctx, "plan export block target optimized",
+						slog.Int("blockIdx", b),
+						slog.Float64("floorSOC", bestE),
+						slog.Float64("initialFloorSOC", initialE),
+						slog.Float64("bestScoreDollars", bestScore),
+					)
 				}
 			}
-			// Fine 2%/5% search around coarseE, preferring higher floorSOC on exact ties.
-			coarseE := bestE
-			for _, dF := range fineOffsets {
-				E := min(maxE, max(minE, coarseE+dF))
-				copy(trialChoices, choices)
-				trialChoices[b].targetSOC = E
-				acts := expandBlockPlan(trialChoices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff)
-				valid, _ := validateCandidateTrajectory(acts, timeline, settings, wear, roundTripEff, initial, initialDeficitWait)
-				if !valid {
-					continue
-				}
-				score, _, _, _ := scoreCandidateTrajectory(acts, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
-				if score < bestScore-planScoreTieEpsilon || (math.Abs(score-bestScore) <= planScoreTieEpsilon && E > bestE) {
-					bestScore = score
-					bestE = E
-				}
-			}
-			if initialE != bestE {
-				choices[b].targetSOC = bestE
-				log.Ctx(ctx).DebugContext(ctx, "plan export block target optimized",
-					slog.Int("blockIdx", b),
-					slog.Float64("floorSOC", bestE),
-					slog.Float64("initialFloorSOC", initialE),
-					slog.Float64("bestScoreDollars", bestScore),
-				)
-			}
+		}
+		if !changed {
+			break
 		}
 	}
 
