@@ -1428,7 +1428,7 @@ func validateCandidateTrajectory(
 	// Whenever a trajectory charges from the grid and later dumps battery energy to the grid,
 	// or dumps battery energy to the grid and later charges from the grid before a full solar refill,
 	// the export rate must beat the grid charge rate by at least wear.exportGatePerKWH
-	// (max(BatteryExportDegradation, MinBatteryExportDifference)).
+	// (MinBatteryExportDifference when set, otherwise BatteryExportDegradation).
 	hasPriorCharge := false
 	var maxPriorChargeRate float64
 	var preChargeSOC float64

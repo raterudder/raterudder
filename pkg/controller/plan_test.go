@@ -4565,11 +4565,11 @@ func TestStepWearCostDollars(t *testing.T) {
 	}
 	wear := getWearRates(settings, settings.GetOptimizationParams())
 
-	t.Run("BatteryExportWear_UsesProfileDegradationAsFloorForUserMargin", func(t *testing.T) {
+	t.Run("BatteryExportWear_CapsWearAtProfileDefaultAndAllowsLowerUserMargins", func(t *testing.T) {
 		t.Parallel()
 
 		// With balanced profile (gridCharge = $0.02, batteryExportDegradation = $0.03) and MinBatteryExportDifference = $0.07:
-		// - exportGatePerKWH = max($0.03, $0.07) = $0.07 (gating grid-charge-to-export cycles)
+		// - exportGatePerKWH = $0.07 (gating grid-charge-to-export cycles)
 		// - batteryExportPerKWH = $0.03 - $0.02 = $0.01 (physical export-half wear on BatteryModeExport)
 		assert.InDelta(t, 0.07, wear.exportGatePerKWH, 1e-6)
 		assert.InDelta(t, 0.005, wear.solarExportPerKWH, 1e-6)
@@ -4581,17 +4581,53 @@ func TestStepWearCostDollars(t *testing.T) {
 		cost := stepWearCostDollars(cand, metrics, roundTripEff, wear)
 		assert.InDelta(t, (4.0/roundTripEff)*0.01, cost, 1e-6)
 
-		// Conservative profile default: BatteryExportDegradation = $0.04, GridChargeDegradation = $0.02 -> batteryExportPerKWH = $0.02
+		// Unset (0) uses profile defaults (e.g., conservative: BatteryExportDegradation = $0.04, GridChargeDegradation = $0.02 -> batteryExportPerKWH = $0.02)
 		consSettings := types.Settings{OptimizationProfile: "conservative"}
 		consWear := getWearRates(consSettings, consSettings.GetOptimizationParams())
+		assert.InDelta(t, 0.04, consWear.exportGatePerKWH, 1e-6)
+		assert.InDelta(t, 0.02, consWear.arbitrageGatePerKWH, 1e-6)
 		assert.InDelta(t, 0.02, consWear.batteryExportPerKWH, 1e-6, "Conservative profile must charge $0.02/kWh export wear ($0.04 full-cycle - $0.02 grid charge)")
 
-		// Small MinBatteryExportDifference ($0.01) is floored at profile's $0.03, so neither exportGatePerKWH nor batteryExportPerKWH drops below physical wear
-		lowMarginSettings := types.Settings{OptimizationProfile: "balanced", MinBatteryExportDifferenceDollarsPerKWH: 0.01}
-		lowMarginWear := getWearRates(lowMarginSettings, lowMarginSettings.GetOptimizationParams())
-		assert.InDelta(t, 0.03, lowMarginWear.exportGatePerKWH, 1e-6)
-		assert.InDelta(t, 0.01, lowMarginWear.batteryExportPerKWH, 1e-6)
-		assert.InDelta(t, 0.02, lowMarginWear.gridChargePerKWH, 1e-6)
+		// User-supplied MinBatteryExportDifference ($0.01) below profile default ($0.03) lowers exportGatePerKWH to $0.01
+		// and lowers batteryExportPerKWH to solarExportPerKWH ($0.005) while keeping unset gridChargePerKWH at $0.02.
+		lowExportSettings := types.Settings{OptimizationProfile: "balanced", MinBatteryExportDifferenceDollarsPerKWH: 0.01}
+		lowExportWear := getWearRates(lowExportSettings, lowExportSettings.GetOptimizationParams())
+		assert.InDelta(t, 0.01, lowExportWear.exportGatePerKWH, 1e-6)
+		assert.InDelta(t, 0.005, lowExportWear.batteryExportPerKWH, 1e-6)
+		assert.InDelta(t, 0.02, lowExportWear.gridChargePerKWH, 1e-6)
+		assert.InDelta(t, 0.02, lowExportWear.arbitrageGatePerKWH, 1e-6)
+
+		// User-supplied MinArbitrageDifference ($0.01) below profile default ($0.02) lowers arbitrageGatePerKWH and
+		// gridChargePerKWH to $0.01 without inflating batteryExportPerKWH above its $0.01 default.
+		lowArbSettings := types.Settings{OptimizationProfile: "balanced", MinArbitrageDifferenceDollarsPerKWH: 0.01}
+		lowArbWear := getWearRates(lowArbSettings, lowArbSettings.GetOptimizationParams())
+		assert.InDelta(t, 0.01, lowArbWear.arbitrageGatePerKWH, 1e-6)
+		assert.InDelta(t, 0.01, lowArbWear.gridChargePerKWH, 1e-6)
+		assert.InDelta(t, 0.03, lowArbWear.exportGatePerKWH, 1e-6)
+		assert.InDelta(t, 0.01, lowArbWear.batteryExportPerKWH, 1e-6)
+
+		// Lowering both (MinArbitrageDifference = $0.01, MinBatteryExportDifference = $0.02) yields $0.02 round-trip wear ($0.01 + $0.01).
+		bothLowerSettings := types.Settings{
+			OptimizationProfile:                     "balanced",
+			MinArbitrageDifferenceDollarsPerKWH:     0.01,
+			MinBatteryExportDifferenceDollarsPerKWH: 0.02,
+		}
+		bothLowerWear := getWearRates(bothLowerSettings, bothLowerSettings.GetOptimizationParams())
+		chargeCand := actionCandidate{batteryMode: types.BatteryModeChargeAny}
+		roundTripLowerWear := stepWearCostDollars(chargeCand, intervalMetrics{gridChargeKWH: 1.0}, roundTripEff, bothLowerWear) +
+			stepWearCostDollars(cand, intervalMetrics{batExportKWH: roundTripEff}, roundTripEff, bothLowerWear)
+		assert.InDelta(t, 0.02, roundTripLowerWear, 1e-6)
+
+		// Ultra-low user margins ($0.002, below SolarExportDegradation = $0.005) step solarExportPerKWH and batteryExportPerKWH down too.
+		ultraLowSettings := types.Settings{
+			OptimizationProfile:                     "balanced",
+			MinArbitrageDifferenceDollarsPerKWH:     0.002,
+			MinBatteryExportDifferenceDollarsPerKWH: 0.002,
+		}
+		ultraLowWear := getWearRates(ultraLowSettings, ultraLowSettings.GetOptimizationParams())
+		assert.InDelta(t, 0.002, ultraLowWear.gridChargePerKWH, 1e-6)
+		assert.InDelta(t, 0.002, ultraLowWear.solarExportPerKWH, 1e-6)
+		assert.InDelta(t, 0.002, ultraLowWear.batteryExportPerKWH, 1e-6)
 	})
 
 	t.Run("GridCharge_AlwaysPaysPhysicalWearNotArbitrageGate", func(t *testing.T) {

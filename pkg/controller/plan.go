@@ -220,17 +220,19 @@ func isSamePrice(importA, exportA, importB, exportB float64) bool {
 		math.Abs(exportA-exportB) <= priceEpsilonForEquality
 }
 
-// wearRates separates physical battery degradation costs ($/kWh, applied in stepWearCostDollars during
-// trajectory scoring) from minimum price-spread hurdles ($/kWh, used exclusively for eligibility/gating):
-//   - gridChargePerKWH, solarExportPerKWH, and batteryExportPerKWH are the physical wear rates applied in
+// wearRates separates battery degradation costs ($/kWh, applied in stepWearCostDollars during
+// trajectory scoring) from minimum price-spread hurdles ($/kWh, used for eligibility/gating):
+//   - When MinArbitrageDifferenceDollarsPerKWH or MinBatteryExportDifferenceDollarsPerKWH is 0 (unset),
+//     the OptimizationProfile degradation defaults (GridChargeDegradationDollarsPerKWH and
+//     BatteryExportDegradationDollarsPerKWH) are used.
+//   - gridChargePerKWH, solarExportPerKWH, and batteryExportPerKWH are the wear rates applied in
 //     stepWearCostDollars (where batteryExportPerKWH is the incremental export-half wear after accounting
-//     for gridChargePerKWH on the charging step).
-//   - arbitrageGatePerKWH (max(GridChargeDegradation, MinArbitrageDifferenceDollarsPerKWH)) and
-//     exportGatePerKWH (max(BatteryExportDegradation, MinBatteryExportDifferenceDollarsPerKWH)) are compared
-//     directly against raw (non-RTE-adjusted) import and export rate differences in block and trajectory
-//     eligibility checks (isBlockActionAllowed, validateCandidateTrajectory, holdInterveningOffPeakBlocks,
-//     and resolvePlanActionReason), never as actual wear costs or penalties (physical RTE losses and wear
-//     are evaluated in stepPhysics and stepWearCostDollars during trajectory scoring).
+//     for gridChargePerKWH on the charging step). They are capped at the profile's physical degradation
+//     defaults when user-supplied margins are higher, and step down when user-supplied margins are lower.
+//   - arbitrageGatePerKWH and exportGatePerKWH are compared directly against raw (non-RTE-adjusted) import
+//     and export rate differences in block and trajectory eligibility checks (isBlockActionAllowed,
+//     validateCandidateTrajectory, holdInterveningOffPeakBlocks, and resolvePlanActionReason), never as
+//     extra scoring penalties when set above physical degradation.
 type wearRates struct {
 	gridChargePerKWH    float64
 	arbitrageGatePerKWH float64
@@ -240,14 +242,25 @@ type wearRates struct {
 }
 
 func getWearRates(settings types.Settings, optParams types.OptimizationParams) wearRates {
-	solarExport := max(priceEpsilonForEquality, optParams.SolarExportDegradationDollarsPerKWH)
-	effectiveExportHurdle := max(optParams.BatteryExportDegradationDollarsPerKWH, settings.MinBatteryExportDifferenceDollarsPerKWH)
-	effectiveArbitrageHurdle := max(optParams.GridChargeDegradationDollarsPerKWH, settings.MinArbitrageDifferenceDollarsPerKWH)
+	effectiveArbitrageHurdle := optParams.GridChargeDegradationDollarsPerKWH
+	if settings.MinArbitrageDifferenceDollarsPerKWH > 0 {
+		effectiveArbitrageHurdle = settings.MinArbitrageDifferenceDollarsPerKWH
+	}
+	effectiveExportHurdle := optParams.BatteryExportDegradationDollarsPerKWH
+	if settings.MinBatteryExportDifferenceDollarsPerKWH > 0 {
+		effectiveExportHurdle = settings.MinBatteryExportDifferenceDollarsPerKWH
+	}
+
+	effectiveGridChargeWear := min(optParams.GridChargeDegradationDollarsPerKWH, effectiveArbitrageHurdle)
+	effectiveExportCycleWear := min(optParams.BatteryExportDegradationDollarsPerKWH, effectiveExportHurdle)
+	solarExport := max(priceEpsilonForEquality, min(optParams.SolarExportDegradationDollarsPerKWH, effectiveExportCycleWear))
+	defaultBatteryExportWear := optParams.BatteryExportDegradationDollarsPerKWH - optParams.GridChargeDegradationDollarsPerKWH
+
 	return wearRates{
-		gridChargePerKWH:    max(priceEpsilonForEquality, optParams.GridChargeDegradationDollarsPerKWH),
+		gridChargePerKWH:    max(priceEpsilonForEquality, effectiveGridChargeWear),
 		arbitrageGatePerKWH: max(priceEpsilonForEquality, effectiveArbitrageHurdle),
 		solarExportPerKWH:   solarExport,
-		batteryExportPerKWH: max(solarExport, optParams.BatteryExportDegradationDollarsPerKWH-optParams.GridChargeDegradationDollarsPerKWH),
+		batteryExportPerKWH: max(solarExport, min(defaultBatteryExportWear, effectiveExportCycleWear-effectiveGridChargeWear)),
 		exportGatePerKWH:    max(priceEpsilonForEquality, effectiveExportHurdle),
 	}
 }
