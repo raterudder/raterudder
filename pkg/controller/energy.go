@@ -1133,6 +1133,7 @@ func (c *Controller) BuildHourlyEnergyModel(
 
 	if detectedShift == "none" {
 		applyProportionalBlockScaling(
+			ctx,
 			&rawAvgLoadA,
 			&rawP75LoadA,
 			hasHour,
@@ -2132,6 +2133,7 @@ func computeDayBlockAvg(
 //     pool—inflating the baseline mean and variance so Welch's t-test fails. Therefore, Sunday also
 //     falls back to comparing against Thursday + Friday (the same 2 pre-weekend workdays used by Saturday).
 func isWeekdayBlockOutlier(
+	ctx context.Context,
 	dayMap map[string]*dayPoints,
 	isBlockDayValid func(string) bool,
 	ignoredOutlierHours map[dayHourKey]bool,
@@ -2170,13 +2172,45 @@ func isWeekdayBlockOutlier(
 	meanTarget := getMean(targetVals)
 	if len(prevVals) >= dayOfWeekOutlierMinPrecedingSamples {
 		meanPrev := getMean(prevVals)
-		if meanTarget >= math.Max(0.1, meanPrev)*dayOfWeekOutlierRatioThreshold && calculateWelchT(targetVals, prevVals) >= dayOfWeekOutlierTStatThreshold {
+		r := meanTarget / math.Max(0.1, meanPrev)
+		t := calculateWelchT(targetVals, prevVals)
+		if r >= dayOfWeekOutlierRatioThreshold && t >= dayOfWeekOutlierTStatThreshold {
+			log.Ctx(ctx).DebugContext(
+				ctx,
+				"detected weekday block outlier load surge",
+				slog.String("weekday", wd.String()),
+				slog.Int("blockStartHour", bStart),
+				slog.Int("blockEndHour", bEnd),
+				slog.String("detectedBy", "preceding2Days"),
+				slog.Float64("meanTargetKWH", meanTarget),
+				slog.Float64("meanPrecedingKWH", meanPrev),
+				slog.Float64("surgeRatio", r),
+				slog.Float64("tStat", t),
+				slog.Int("targetSamples", len(targetVals)),
+				slog.Int("precedingSamples", len(prevVals)),
+			)
 			return true
 		}
 	}
 	if wd == time.Sunday && len(sunTFVals) >= dayOfWeekOutlierMinPrecedingSamples {
 		meanPrec := getMean(sunTFVals)
-		if meanTarget >= math.Max(0.1, meanPrec)*dayOfWeekOutlierRatioThreshold && calculateWelchT(targetVals, sunTFVals) >= dayOfWeekOutlierTStatThreshold {
+		r := meanTarget / math.Max(0.1, meanPrec)
+		t := calculateWelchT(targetVals, sunTFVals)
+		if r >= dayOfWeekOutlierRatioThreshold && t >= dayOfWeekOutlierTStatThreshold {
+			log.Ctx(ctx).DebugContext(
+				ctx,
+				"detected weekday block outlier load surge",
+				slog.String("weekday", wd.String()),
+				slog.Int("blockStartHour", bStart),
+				slog.Int("blockEndHour", bEnd),
+				slog.String("detectedBy", "sundayVsThuFri"),
+				slog.Float64("meanTargetKWH", meanTarget),
+				slog.Float64("meanPrecedingKWH", meanPrec),
+				slog.Float64("surgeRatio", r),
+				slog.Float64("tStat", t),
+				slog.Int("targetSamples", len(targetVals)),
+				slog.Int("precedingSamples", len(sunTFVals)),
+			)
 			return true
 		}
 	}
@@ -2184,6 +2218,7 @@ func isWeekdayBlockOutlier(
 }
 
 func applyProportionalBlockScaling(
+	ctx context.Context,
 	rawAvgLoadA *[24]float64,
 	rawP75LoadA *[24]float64,
 	hasHour [24]bool,
@@ -2221,7 +2256,7 @@ func applyProportionalBlockScaling(
 			targetBlkTemp = targetTempSum / float64(targetTempCnt)
 		}
 
-		if !isWeekdayBlockOutlier(dayMap, isBlockDayValid, ignoredOutlierHours, wd, bStart, bEnd) {
+		if !isWeekdayBlockOutlier(ctx, dayMap, isBlockDayValid, ignoredOutlierHours, wd, bStart, bEnd) {
 			return 1.0, 0, 0
 		}
 
@@ -2359,8 +2394,9 @@ func applyProportionalBlockScaling(
 		}
 
 		baseMean := prevMean
+		recMean := 0.0
 		if len(recentOtherPts) >= 2 {
-			recMean := weightedMean(recentOtherPts)
+			recMean = weightedMean(recentOtherPts)
 			if recMean > 0 && recMean < baseMean {
 				baseMean = recMean
 			}
@@ -2387,10 +2423,39 @@ func applyProportionalBlockScaling(
 		}
 
 		ratio := expectedBlkAvg / modelAvg
-		if ratio < blockScalingMinDeficitRatio {
+		scale := 1.0
+		if ratio >= blockScalingMinDeficitRatio {
+			scale = math.Min(blockScalingMaxMultiplier, ratio)
+		}
+
+		log.Ctx(ctx).DebugContext(
+			ctx,
+			"evaluated proportional block scaling for weekday outlier block",
+			slog.Int("hour", targetTime.Hour()),
+			slog.String("targetDate", targetTime.Format("2006-01-02")),
+			slog.String("weekday", wd.String()),
+			slog.Int("blockStartHour", bStart),
+			slog.Int("blockEndHour", bEnd),
+			slog.Float64("targetMeanKWH", targetMean),
+			slog.Float64("prevMeanKWH", prevMean),
+			slog.Float64("recentOtherMeanKWH", recMean),
+			slog.Float64("baseMeanKWH", baseMean),
+			slog.Float64("expectedBlockAvgKWH", expectedBlkAvg),
+			slog.Float64("modelBlockAvgKWH", modelAvg),
+			slog.Int("modelHourCount", modelCnt),
+			slog.Float64("deficitRatio", ratio),
+			slog.Float64("scaleFactor", scale),
+			slog.Bool("hasTargetBlockTemp", hasTargetBlkTemp),
+			slog.Float64("targetBlockTempC", targetBlkTemp),
+			slog.Int("sameWeekdaySamples", len(sameWDPts)),
+			slog.Int("precedingWeekdaySamples", len(prevWDPts)),
+			slog.Int("recentOtherSamples", len(recentOtherPts)),
+		)
+
+		if scale <= 1.0 {
 			return 1.0, 0, 0
 		}
-		return math.Min(blockScalingMaxMultiplier, ratio), expectedBlkAvg, baseMean
+		return scale, expectedBlkAvg, baseMean
 	}
 
 	var scales [24]float64
@@ -2416,8 +2481,27 @@ func applyProportionalBlockScaling(
 		// Only raise hours that were washed out near baseline (< dayOfWeekOutlierRatioThreshold * baseMean)
 		// and are below expectedBlkAvg.
 		if hasHour[h] && scales[h] > 1.0 && rawAvgLoadA[h] < expectedAvgs[h] && rawAvgLoadA[h] < baseMeans[h]*dayOfWeekOutlierRatioThreshold {
+			beforeAvg := rawAvgLoadA[h]
+			beforeP75 := rawP75LoadA[h]
 			rawAvgLoadA[h] = math.Min(expectedAvgs[h], rawAvgLoadA[h]*scales[h])
 			rawP75LoadA[h] = math.Max(rawP75LoadA[h], rawAvgLoadA[h])
+			bStart5 := max(6, min(18, h-2))
+			log.Ctx(ctx).DebugContext(
+				ctx,
+				"applied proportional block scaling to washed-out hour",
+				slog.Int("hour", h),
+				slog.String("targetDate", targetTimes[h].Format("2006-01-02")),
+				slog.String("weekday", targetTimes[h].Weekday().String()),
+				slog.Int("blockStartHour", bStart5),
+				slog.Int("blockEndHour", bStart5+4),
+				slog.Float64("scaleFactor", scales[h]),
+				slog.Float64("baseMeanKWH", baseMeans[h]),
+				slog.Float64("expectedBlockAvgKWH", expectedAvgs[h]),
+				slog.Float64("rawAvgLoadBeforeKWH", beforeAvg),
+				slog.Float64("rawAvgLoadAfterKWH", rawAvgLoadA[h]),
+				slog.Float64("rawP75LoadBeforeKWH", beforeP75),
+				slog.Float64("rawP75LoadAfterKWH", rawP75LoadA[h]),
+			)
 		}
 	}
 }

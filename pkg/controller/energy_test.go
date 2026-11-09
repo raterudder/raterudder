@@ -3854,8 +3854,8 @@ func TestIsWeekdayBlockOutlier(t *testing.T) {
 		}
 
 		isValid := func(ds string) bool { return validDays[ds] }
-		assert.True(t, isWeekdayBlockOutlier(dayMap, isValid, nil, time.Friday, 10, 14))
-		assert.False(t, isWeekdayBlockOutlier(dayMap, isValid, nil, time.Friday, 16, 20), "non-elevated evening block should not be flagged")
+		assert.True(t, isWeekdayBlockOutlier(context.Background(), dayMap, isValid, nil, time.Friday, 10, 14))
+		assert.False(t, isWeekdayBlockOutlier(context.Background(), dayMap, isValid, nil, time.Friday, 16, 20), "non-elevated evening block should not be flagged")
 	})
 
 	t.Run("SundayBlockOutlierFallbackAgainstThursdayFriday", func(t *testing.T) {
@@ -3881,7 +3881,7 @@ func TestIsWeekdayBlockOutlier(t *testing.T) {
 		}
 
 		isValid := func(ds string) bool { return validDays[ds] }
-		assert.True(t, isWeekdayBlockOutlier(dayMap, isValid, nil, time.Sunday, 11, 15), "Sunday should qualify via Thursday+Friday fallback even when Saturday is also high")
+		assert.True(t, isWeekdayBlockOutlier(context.Background(), dayMap, isValid, nil, time.Sunday, 11, 15), "Sunday should qualify via Thursday+Friday fallback even when Saturday is also high")
 	})
 
 	t.Run("RejectsSingleSpikeAndInsufficientTargetDays", func(t *testing.T) {
@@ -3910,12 +3910,12 @@ func TestIsWeekdayBlockOutlier(t *testing.T) {
 		}
 
 		isValid := func(ds string) bool { return validDays[ds] }
-		assert.False(t, isWeekdayBlockOutlier(dayMap, isValid, nil, time.Friday, 10, 14), "single Friday spike must fail Welch's t-test")
+		assert.False(t, isWeekdayBlockOutlier(context.Background(), dayMap, isValid, nil, time.Friday, 10, 14), "single Friday spike must fail Welch's t-test")
 
 		// Fewer than 3 target weekday occurrences must return false
 		delete(validDays, "2025-06-06")
 		delete(validDays, "2025-06-13")
-		assert.False(t, isWeekdayBlockOutlier(dayMap, isValid, nil, time.Friday, 10, 14), "fewer than 3 target days must return false")
+		assert.False(t, isWeekdayBlockOutlier(context.Background(), dayMap, isValid, nil, time.Friday, 10, 14), "fewer than 3 target days must return false")
 	})
 }
 
@@ -3976,6 +3976,7 @@ func TestApplyProportionalBlockScaling(t *testing.T) {
 		rawAvgLoadA[10] = 1.35
 
 		applyProportionalBlockScaling(
+			context.Background(),
 			&rawAvgLoadA,
 			&rawP75LoadA,
 			hasHour,
@@ -4017,6 +4018,7 @@ func TestApplyProportionalBlockScaling(t *testing.T) {
 		}
 
 		applyProportionalBlockScaling(
+			context.Background(),
 			&rawAvgLoadA,
 			&rawP75LoadA,
 			hasHour,
@@ -4070,6 +4072,7 @@ func TestApplyProportionalBlockScaling(t *testing.T) {
 		}
 
 		applyProportionalBlockScaling(
+			context.Background(),
 			&rawAvgLoadA,
 			&rawP75LoadA,
 			hasHour,
@@ -4127,6 +4130,7 @@ func TestApplyProportionalBlockScaling(t *testing.T) {
 		}
 
 		applyProportionalBlockScaling(
+			context.Background(),
 			&rawAvgLoadA,
 			&rawP75LoadA,
 			hasHour,
@@ -4195,6 +4199,7 @@ func TestApplyProportionalBlockScaling(t *testing.T) {
 		}
 
 		applyProportionalBlockScaling(
+			context.Background(),
 			&rawAvgLoadA,
 			&rawP75LoadA,
 			hasHour,
