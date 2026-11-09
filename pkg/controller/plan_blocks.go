@@ -772,11 +772,43 @@ func expandBlockAction(
 		}
 
 	case blockActionStandby:
+		// By default (targetSOC <= 0 in Pass 1), hold the entire block in Standby. When Pass 2 sets a positive
+		// targetSOC floor to shed excess battery energy before an upcoming solar/peak cycle, discharge in
+		// BatteryModeLoad at the start of the block down to floorSOC and hold the remainder in Standby.
+		if choice.targetSOC <= 0 {
+			for i := 0; i < L; i++ {
+				actions[i] = actionCandidate{
+					batteryMode: types.BatteryModeStandby,
+					solarMode:   defaultSolarMode,
+				}
+			}
+			break
+		}
+		effRT := resolveRoundTripEfficiency(settings.GetOptimizationParams().RoundTripEfficiency, currentStatus)
+		floorSOC := max(choice.targetSOC, block.minSOC)
+		simState := startState
+		discharging := simState.soc > floorSOC+socTargetTolerancePct
 		for i := 0; i < L; i++ {
-			actions[i] = actionCandidate{
-				batteryMode: types.BatteryModeStandby,
+			step := block.startIdx + i
+			batMode := types.BatteryModeStandby
+			if discharging {
+				loadCand := actionCandidate{
+					batteryMode: types.BatteryModeLoad,
+					solarMode:   defaultSolarMode,
+				}
+				nextState, _ := stepPhysics(simState, loadCand, timeline[step], settings, effRT)
+				if simState.soc > floorSOC+socTargetTolerancePct && nextState.soc >= floorSOC-socTargetTolerancePct {
+					batMode = types.BatteryModeLoad
+				} else {
+					discharging = false
+				}
+			}
+			cand := actionCandidate{
+				batteryMode: batMode,
 				solarMode:   defaultSolarMode,
 			}
+			actions[i] = cand
+			simState, _ = stepPhysics(simState, cand, timeline[step], settings, effRT)
 		}
 
 	case blockActionDirectSolarExport:
@@ -1321,6 +1353,11 @@ func validateCandidateTrajectory(
 			actions[i].reason != types.ActionReasonEVChargingStandby &&
 			states[i].soc > timeline[i].minSOC+1.0 {
 			standbyImportedFromGrid := metrics[i].gridImportKWH > minSolarGenerationKW*timeline[i].durationHours
+			// Track the lowest SOC reached after Standby interval i so we can distinguish between exporting
+			// net solar surplus added after Standby (states[j+1].soc >= minSOCSinceStandby, which only requires
+			// exportRate >= importRate) versus exporting into the battery cushion that was held at grid-import
+			// expense during Standby (states[j+1].soc < minSOCSinceStandby, which requires wear.exportGatePerKWH).
+			minSOCSinceStandby := states[i+1].soc
 			for j := i + 1; j < len(timeline); j++ {
 				if actions[j].reason == types.ActionReasonVPPPrep || actions[j].reason == types.ActionReasonVPPActive {
 					break
@@ -1331,21 +1368,24 @@ func validateCandidateTrajectory(
 				//   with states[j+1].soc > states[j].soc, where states[j+1] is the ending SOC of interval j).
 				//   Requiring states[j+1].soc > states[j].soc ensures we only break when solar actually refills
 				//   the battery to >=98%, not when the battery was already sitting at >=98% in Standby.
-				if states[j].soc <= timeline[j].minSOC+1.0 ||
-					actions[j].batteryMode == types.BatteryModeChargeAny ||
+				if states[j].soc <= max(timeline[i].minSOC, timeline[j].minSOC)+1.0 ||
+					(actions[j].batteryMode == types.BatteryModeChargeAny && metrics[j].gridChargeKWH > minSignificantBatteryPowerKW*timeline[j].durationHours) ||
 					(states[j+1].soc > states[j].soc && states[j+1].soc >= almostFullSOC) {
 					break
 				}
 				if actions[j].batteryMode == types.BatteryModeExport {
 					minExportDiff := -dominatedPeriodPriceGapDollars
-					if standbyImportedFromGrid {
+					if standbyImportedFromGrid && states[j+1].soc < minSOCSinceStandby-socTargetTolerancePct {
 						minExportDiff = wear.exportGatePerKWH - priceEpsilonForEquality
 					}
 					if timeline[j].exportRate-timeline[i].importRate < minExportDiff {
 						return false, "HoldThenCheaperExport"
 					}
 				}
-				if states[j+1].soc <= timeline[j].minSOC+1.0 {
+				if states[j+1].soc < minSOCSinceStandby {
+					minSOCSinceStandby = states[j+1].soc
+				}
+				if states[j+1].soc <= max(timeline[i].minSOC, timeline[j].minSOC)+1.0 {
 					break
 				}
 			}
@@ -1816,21 +1856,36 @@ func critiqueBlockPlan(
 					blockActionChoice{actionType: blockActionExport, targetSOC: midExportFloor, useSolarExportPrefix: true},
 				)
 			}
-			// When a downstream block steps up minSOC (e.g. from 20% during peak to 80% post-peak),
-			// validateCandidateTrajectory's ExportBelowFutureReserve check rejects any BatteryModeExport
-			// (blockActionExport) that drains the battery below that future minSOC. Including coarse floors
+			// When a downstream block steps up minSOC (e.g. from 20% during peak to 80% post-peak) or an
+			// earlier block holds battery energy in Standby (setting minSOCSinceStandby > minSOC),
+			// validateCandidateTrajectory's ExportBelowFutureReserve / HoldThenCheaperExport checks reject
+			// BatteryModeExport candidates that drain below that elevated floor. Including coarse floors
 			// {20, 40, 60, 80} that are >5% away from minSOC and midExportFloor ensures Pass 1 can find a
-			// reserve-compliant BatteryModeExport floor. blockActionDirectSolarExport is omitted here because
+			// compliant BatteryModeExport floor. blockActionDirectSolarExport is omitted here because
 			// it runs in BatteryModeLoad (not subject to ExportBelowFutureReserve), already tests minSOC and
 			// midExportFloor above, and has its floor tuned across minSOC..100% in Pass 2.
-			hasHigherFutureMinSOC := false
+			hasHigherExportFloor := false
 			for j := b + 1; j < len(blocks); j++ {
 				if blocks[j].minSOC > minSOC+socTargetTolerancePct {
-					hasHigherFutureMinSOC = true
+					hasHigherExportFloor = true
 					break
 				}
 			}
-			if hasHigherFutureMinSOC {
+			for j := 0; j < b; j++ {
+				if currentChoices[j].actionType == blockActionStandby {
+					hasHigherExportFloor = true
+					if blocks[j].endIdx+1 < len(currentStates) {
+						standbyFloor := math.Ceil(currentStates[blocks[j].endIdx+1].soc)
+						if standbyFloor > minSOC+socTargetTolerancePct && standbyFloor < 100.0-socTargetTolerancePct {
+							candidateTypes = append(candidateTypes,
+								blockActionChoice{actionType: blockActionExport, targetSOC: standbyFloor, useSolarExportPrefix: false},
+								blockActionChoice{actionType: blockActionExport, targetSOC: standbyFloor, useSolarExportPrefix: true},
+							)
+						}
+					}
+				}
+			}
+			if hasHigherExportFloor {
 				for _, coarseFloor := range []float64{20, 40, 60, 80} {
 					if coarseFloor > minSOC+5.0 && math.Abs(coarseFloor-midExportFloor) > 5.0 {
 						candidateTypes = append(candidateTypes,
@@ -2067,6 +2122,23 @@ func critiqueBlockPlan(
 						},
 					)
 				}
+				stateA := initialState
+				if blocks[a].startIdx < len(currentStates) {
+					stateA = currentStates[blocks[a].startIdx]
+				}
+				standbyFloorA := math.Ceil(stateA.soc)
+				if standbyFloorA > minSOCB+socTargetTolerancePct && standbyFloorA < 100.0-socTargetTolerancePct {
+					pairedTrials = append(pairedTrials,
+						[2]blockActionChoice{
+							{actionType: blockActionStandby},
+							{actionType: blockActionExport, targetSOC: standbyFloorA, useSolarExportPrefix: false},
+						},
+						[2]blockActionChoice{
+							{actionType: blockActionStandby},
+							{actionType: blockActionExport, targetSOC: standbyFloorA, useSolarExportPrefix: true},
+						},
+					)
+				}
 				// in the case of variable SOC, we try a bunch of different SOCs targets for export
 				if len(settings.MinBatterySOCPeriods) > 0 {
 					for _, coarseFloor := range []float64{20, 40, 60, 80} {
@@ -2127,10 +2199,6 @@ func critiqueBlockPlan(
 							)
 						}
 					}
-				}
-				stateA := initialState
-				if blocks[a].startIdx < len(currentStates) {
-					stateA = currentStates[blocks[a].startIdx]
 				}
 				for _, pt := range pairedTrials {
 					// Skip paired trials that do not modify both blocks (already covered by single-block trials),
@@ -2423,16 +2491,117 @@ func optimizeBlockTargets(
 					)
 				}
 
-			case blockActionExport, blockActionDirectSolarExport:
+			case blockActionExport, blockActionDirectSolarExport, blockActionStandby:
 				minE := blocks[b].minSOC
 				maxE := 100.0
 				bestScore := math.MaxFloat64
-				initialE := choices[b].targetSOC
-				bestE := initialE
-				if initActs := expandBlockPlan(choices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff); len(initActs) > 0 {
+				initActs := expandBlockPlan(choices, blocks, initial, timeline, vppEvents, settings, currentStatus, lastAction, roundTripEff)
+				var initStates []planState
+				if len(initActs) > 0 {
 					if valid, _ := validateCandidateTrajectory(initActs, timeline, settings, wear, roundTripEff, initial, initialDeficitWait); valid {
-						bestScore, _, _, _ = scoreCandidateTrajectory(initActs, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+						bestScore, _, initStates, _ = scoreCandidateTrajectory(initActs, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
 					}
+				}
+				initialE := choices[b].targetSOC
+				if choices[b].actionType == blockActionStandby {
+					if blocks[b].startIdx >= len(initStates) || len(timeline) == 0 {
+						continue
+					}
+					startSOC := initStates[blocks[b].startIdx].soc
+					if startSOC <= minE+socTargetTolerancePct {
+						continue
+					}
+					var solarGainSOC float64
+					hitFullSolar := false
+					for k := blocks[b].endIdx + 1; k < len(initActs) && k+1 < len(initStates); k++ {
+						if initActs[k].batteryMode != types.BatteryModeChargeAny && initStates[k+1].soc > initStates[k].soc {
+							solarGainSOC += initStates[k+1].soc - initStates[k].soc
+							if initStates[k+1].soc >= almostFullSOC {
+								hitFullSolar = true
+							}
+						}
+					}
+					if solarGainSOC <= socTargetTolerancePct {
+						continue
+					}
+					// Do not liquidate multi-day battery cushion sitting in Tier 2 of terminal valuation
+					// (above the 4-hour postHorizonSlices Tier 1 window, where terminalSurplusDiscountFactor = 0.70
+					// applies a 30% haircut meant to discourage grid overcharging) unless downstream solar caps at 100%.
+					oneWayEff := math.Sqrt(roundTripEff)
+					var tier1LoadKWH float64
+					for _, slice := range postHorizon.postHorizonSlices {
+						tier1LoadKWH += slice.loadKWH / oneWayEff
+					}
+					tier1CeilingSOC := timeline[len(timeline)-1].minSOC + (tier1LoadKWH/initial.capacityKWH)*100.0
+					initEndSOC := initStates[len(initStates)-1].soc
+					if !hitFullSolar && initEndSOC > tier1CeilingSOC+socTargetTolerancePct {
+						continue
+					}
+					minE = max(minE, math.Floor(startSOC-solarGainSOC))
+					if startSOC <= minE+socTargetTolerancePct {
+						continue
+					}
+					maxE = min(100.0, math.Ceil(startSOC))
+					if initialE <= 0 {
+						initialE = maxE
+					}
+				}
+				bestE := initialE
+				bestBlockMinSOC := initialE
+				if len(initStates) > blocks[b].endIdx+1 {
+					bestBlockMinSOC = initStates[blocks[b].startIdx].soc
+					for idx := blocks[b].startIdx + 1; idx <= blocks[b].endIdx+1; idx++ {
+						if initStates[idx].soc < bestBlockMinSOC {
+							bestBlockMinSOC = initStates[idx].soc
+						}
+					}
+				}
+
+				isBetterExportFloor := func(score, E float64, states []planState) (bool, float64) {
+					if choices[b].actionType == blockActionStandby &&
+						len(states) == len(initStates) && len(states) > blocks[b].endIdx+1 {
+						if blocks[b].avgImportRate < postHorizon.knownPostHorizonRate-priceEpsilonForEquality &&
+							states[len(states)-1].soc < initStates[len(initStates)-1].soc-socTargetTolerancePct {
+							return false, 0
+						}
+						// Ensure partial Load in a Standby block only sheds excess battery that would otherwise
+						// remain unused at the end of the horizon (or be capped at 100% by solar), rather than
+						// stealing battery discharge from a downstream Load block.
+						hitFull := false
+						for k := blocks[b].endIdx + 1; k < len(initActs) && k+1 < len(initStates); k++ {
+							if initActs[k].batteryMode != types.BatteryModeChargeAny && initStates[k+1].soc >= almostFullSOC {
+								hitFull = true
+								break
+							}
+						}
+						if !hitFull {
+							blockDropSOC := initStates[blocks[b].endIdx+1].soc - states[blocks[b].endIdx+1].soc
+							endDropSOC := initStates[len(initStates)-1].soc - states[len(states)-1].soc
+							if endDropSOC < blockDropSOC-socTargetTolerancePct {
+								return false, 0
+							}
+						}
+					}
+					blockMinSOC := E
+					if len(states) > blocks[b].endIdx+1 {
+						blockMinSOC = states[blocks[b].startIdx].soc
+						for idx := blocks[b].startIdx + 1; idx <= blocks[b].endIdx+1; idx++ {
+							if states[idx].soc < blockMinSOC {
+								blockMinSOC = states[idx].soc
+							}
+						}
+					}
+					if score < bestScore-planScoreTieEpsilon {
+						return true, blockMinSOC
+					}
+					if math.Abs(score-bestScore) <= planScoreTieEpsilon {
+						dist := math.Abs(E - blockMinSOC)
+						bestDist := math.Abs(bestE - bestBlockMinSOC)
+						if dist < bestDist-socTargetTolerancePct || (math.Abs(dist-bestDist) <= socTargetTolerancePct && E > bestE) {
+							return true, blockMinSOC
+						}
+					}
+					return false, blockMinSOC
 				}
 
 				for _, E := range coarseSOCGrid(minE, maxE) {
@@ -2443,10 +2612,11 @@ func optimizeBlockTargets(
 					if !valid {
 						continue
 					}
-					score, _, _, _ := scoreCandidateTrajectory(acts, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
-					if score < bestScore-planScoreTieEpsilon || (math.Abs(score-bestScore) <= planScoreTieEpsilon && E > bestE) {
+					score, _, states, _ := scoreCandidateTrajectory(acts, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+					if better, blockMinSOC := isBetterExportFloor(score, E, states); better {
 						bestScore = score
 						bestE = E
+						bestBlockMinSOC = blockMinSOC
 					}
 				}
 				// Fine 2%/5% search around coarseE, preferring higher floorSOC on exact ties.
@@ -2460,21 +2630,26 @@ func optimizeBlockTargets(
 					if !valid {
 						continue
 					}
-					score, _, _, _ := scoreCandidateTrajectory(acts, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
-					if score < bestScore-planScoreTieEpsilon || (math.Abs(score-bestScore) <= planScoreTieEpsilon && E > bestE) {
+					score, _, states, _ := scoreCandidateTrajectory(acts, timeline, initial, vppEvents, postHorizon, settings, roundTripEff)
+					if better, blockMinSOC := isBetterExportFloor(score, E, states); better {
 						bestScore = score
 						bestE = E
+						bestBlockMinSOC = blockMinSOC
 					}
 				}
 				if initialE != bestE {
-					choices[b].targetSOC = bestE
-					changed = true
-					log.Ctx(ctx).DebugContext(ctx, "plan export block target optimized",
-						slog.Int("blockIdx", b),
-						slog.Float64("floorSOC", bestE),
-						slog.Float64("initialFloorSOC", initialE),
-						slog.Float64("bestScoreDollars", bestScore),
-					)
+					if choices[b].actionType == blockActionStandby && bestE >= maxE-socTargetTolerancePct {
+						choices[b].targetSOC = 0
+					} else {
+						choices[b].targetSOC = bestE
+						changed = true
+						log.Ctx(ctx).DebugContext(ctx, "plan export block target optimized",
+							slog.Int("blockIdx", b),
+							slog.Float64("floorSOC", bestE),
+							slog.Float64("initialFloorSOC", initialE),
+							slog.Float64("bestScoreDollars", bestScore),
+						)
+					}
 				}
 			}
 		}

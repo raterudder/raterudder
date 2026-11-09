@@ -652,6 +652,43 @@ func TestExpandBlockAction(t *testing.T) {
 			assert.Equal(t, types.SolarModeAny, noTouActs[i].solarMode, "When ManageTOUSchedules is false, solar mode must fall back to default SolarModeAny")
 		}
 	})
+
+	t.Run("Standby_PartialLoadDownToTargetSOCFloor", func(t *testing.T) {
+		t.Parallel()
+		// 4 intervals, each draining ~5% SOC (0.94868 kWh AC load on a 20 kWh pack at 90% RTE).
+		timeline := make([]planInterval, 4)
+		for i := 0; i < 4; i++ {
+			ti := now.Add(time.Duration(i*20) * time.Minute)
+			timeline[i] = planInterval{
+				startTime:     ti,
+				endTime:       ti.Add(20 * time.Minute),
+				durationHours: 1.0 / 3.0,
+				importRate:    0.20,
+				exportRate:    0.15,
+				loadKWH:       0.94868,
+				minSOC:        20.0,
+			}
+		}
+		block := timelineBlock{startIdx: 0, endIdx: 3, durationHours: 4.0 / 3.0, minSOC: 20.0, minImportRate: 0.20, avgImportRate: 0.20, maxImportRate: 0.20}
+		start45 := planState{soc: 45.0, energyKWH: 20.0 * 0.45, capacityKWH: 20.0, maxChargeKW: 10.0, maxDischargeKW: 10.0, time: now}
+
+		// 1. Default targetSOC == 0 holds the entire block in BatteryModeStandby.
+		fullStandbyActs := expandBlockAction(block, blockActionChoice{actionType: blockActionStandby}, start45, timeline, nil, settings, types.SystemStatus{}, nil)
+		require.Len(t, fullStandbyActs, 4)
+		for i := 0; i < 4; i++ {
+			assert.Equal(t, types.BatteryModeStandby, fullStandbyActs[i].batteryMode)
+		}
+
+		// 2. targetSOC == 35.0% discharges in BatteryModeLoad for the first 2 intervals (45% -> 40% -> 35%)
+		// and holds in BatteryModeStandby for the remaining 2 intervals.
+		partialStandbyActs := expandBlockAction(block, blockActionChoice{actionType: blockActionStandby, targetSOC: 35.0}, start45, timeline, nil, settings, types.SystemStatus{}, nil)
+		if assert.Len(t, partialStandbyActs, 4) {
+			assert.Equal(t, types.BatteryModeLoad, partialStandbyActs[0].batteryMode)
+			assert.Equal(t, types.BatteryModeLoad, partialStandbyActs[1].batteryMode)
+			assert.Equal(t, types.BatteryModeStandby, partialStandbyActs[2].batteryMode)
+			assert.Equal(t, types.BatteryModeStandby, partialStandbyActs[3].batteryMode)
+		}
+	})
 }
 
 func TestIsBlockActionAllowed(t *testing.T) {
@@ -1158,6 +1195,37 @@ func TestValidateCandidateTrajectory(t *testing.T) {
 		validDrain, reasonDrain := validateCandidateTrajectory(actionsHoldExport, timelineDrainToReserve, eversourceGateSettings, eversourceWear, 0.90, stateNearReserve, 0)
 		assert.False(t, validDrain, "Export step that finishes at minSOC must not bypass HoldThenCheaperExport")
 		assert.Equal(t, "HoldThenCheaperExport", reasonDrain)
+
+		// 4. Tracking minSOCSinceStandby: When interval 0 holds in Standby at 35% SOC (importing from the grid),
+		// interval 1 charges from free rooftop solar to 55% SOC, and interval 2 covers peak load down to 45% SOC
+		// (so minSOCSinceStandby remains 35%), exporting only the net solar surplus down to 35% in interval 3
+		// is allowed even when exportRate - importRate ($0.08728) < exportGatePerKWH ($0.09), whereas exporting
+		// below minSOCSinceStandby (down to 25%) dips into the Standby cushion and is rejected.
+		state35 := planState{soc: 35.0, energyKWH: 30.0 * 0.35, capacityKWH: 30.0, maxChargeKW: 10.0, maxDischargeKW: 10.0, time: now}
+		timelineSolarSurplusAfterStandby := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.20754, exportRate: 0.20254, loadKWH: 0.50, solarKWH: 0.0, minSOC: 25.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.20754, exportRate: 0.20254, loadKWH: 0.50, solarKWH: 7.0, minSOC: 25.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.29982, exportRate: 0.29482, loadKWH: 2.50, solarKWH: 0.0, minSOC: 25.0},
+			{startTime: now.Add(3 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 1.0, importRate: 0.29982, exportRate: 0.29482, loadKWH: 0.30, solarKWH: 0.0, minSOC: 25.0},
+		}
+		actionsExportOnlySolarSurplus := []actionCandidate{
+			{batteryMode: types.BatteryModeStandby},
+			{batteryMode: types.BatteryModeLoad},
+			{batteryMode: types.BatteryModeLoad},
+			{batteryMode: types.BatteryModeExport, targetSOC: 35.0},
+		}
+		validSolarSurplus, reasonSolarSurplus := validateCandidateTrajectory(actionsExportOnlySolarSurplus, timelineSolarSurplusAfterStandby, eversourceGateSettings, eversourceWear, 0.90, state35, 0)
+		assert.True(t, validSolarSurplus, "Exporting only net solar surplus down to minSOCSinceStandby (35%%) must be allowed: "+reasonSolarSurplus)
+
+		actionsExportIntoStandbyCushion := []actionCandidate{
+			{batteryMode: types.BatteryModeStandby},
+			{batteryMode: types.BatteryModeLoad},
+			{batteryMode: types.BatteryModeLoad},
+			{batteryMode: types.BatteryModeExport, targetSOC: 25.0},
+		}
+		validIntoCushion, reasonIntoCushion := validateCandidateTrajectory(actionsExportIntoStandbyCushion, timelineSolarSurplusAfterStandby, eversourceGateSettings, eversourceWear, 0.90, state35, 0)
+		assert.False(t, validIntoCushion, "Exporting below minSOCSinceStandby (dipping into Standby cushion) must still be rejected when spread < exportGatePerKWH")
+		assert.Equal(t, "HoldThenCheaperExport", reasonIntoCushion)
 	})
 
 	t.Run("EnforcesReserveDeficitRecovery_AndAllowsContinuousChargeWhenMinSOCUnreachable", func(t *testing.T) {
@@ -1521,6 +1589,42 @@ func TestCritiqueBlockPlan(t *testing.T) {
 		require.Len(t, winSwap, 3)
 		assert.Equal(t, blockActionLoad, winSwap[0].actionType, "Solver must discharge in costlier Block 0 ($0.09)")
 		assert.Equal(t, blockActionStandby, winSwap[1].actionType, "Solver must shift Standby hold to cheaper Block 1 ($0.05)")
+	})
+
+	t.Run("StandbyFloorExportCandidate_ExportsSolarSurplusAboveIntermediateStandbySOC", func(t *testing.T) {
+		t.Parallel()
+
+		// When Block 0 holds in Standby at 43.2% SOC (an intermediate SOC between coarse floors 40% and 60%)
+		// with grid import at $0.21/kWh to save battery energy for Block 3's $0.45/kWh evening peak load,
+		// Block 1 adds +11.9% net solar (43.2% -> 55.1%), and Block 2 has a $0.29/kWh export rate where
+		// $0.29 - $0.21 = $0.08/kWh is below MinBatteryExportDifference = $0.10/kWh:
+		// - Exporting down to 30% or 40% in Block 2 is rejected by HoldThenCheaperExport (< 43.2% minSOCSinceStandby).
+		// - Exporting down to 60%, 65%, or 80% in Block 2 is above 55.1% SOC (zero export).
+		// critiqueBlockPlan must include standbyFloor = math.Ceil(43.2) = 44.0% so Pass 1 discovers
+		// blockActionExport at Block 2 and exports the solar surplus down to ~44.0% while preserving
+		// the 43.2% -> 30.0% cushion for Block 3's $0.45/kWh evening peak load.
+		standbyExpSettings := settings
+		standbyExpSettings.MinBatterySOC = 30.0
+		standbyExpSettings.MinBatteryExportDifferenceDollarsPerKWH = 0.10
+		timelineStandbyExp := []planInterval{
+			{startTime: now, endTime: now.Add(2 * time.Hour), durationHours: 2.0, importRate: 0.21, exportRate: 0.05, loadKWH: 2.0, minSOC: 30.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(4 * time.Hour), durationHours: 2.0, importRate: 0.21, exportRate: 0.05, loadKWH: 0.5, solarKWH: 2.2, minSOC: 30.0},
+			{startTime: now.Add(4 * time.Hour), endTime: now.Add(6 * time.Hour), durationHours: 2.0, importRate: 0.30, exportRate: 0.29, loadKWH: 0.1, minSOC: 30.0},
+			{startTime: now.Add(6 * time.Hour), endTime: now.Add(8 * time.Hour), durationHours: 2.0, importRate: 0.45, exportRate: 0.05, loadKWH: 2.0, minSOC: 30.0},
+		}
+		blocksStandbyExp := []timelineBlock{
+			{startIdx: 0, endIdx: 0, minImportRate: 0.21, avgImportRate: 0.21, maxImportRate: 0.21, minExportRate: 0.05, maxExportRate: 0.05, minSOC: 30.0, durationHours: 2.0, isLowestPrice: true, netSolarKWH: -2.0},
+			{startIdx: 1, endIdx: 1, minImportRate: 0.21, avgImportRate: 0.21, maxImportRate: 0.21, minExportRate: 0.05, maxExportRate: 0.05, minSOC: 30.0, durationHours: 2.0, isLowestPrice: true, netSolarKWH: 1.7},
+			{startIdx: 2, endIdx: 2, minImportRate: 0.30, avgImportRate: 0.30, maxImportRate: 0.30, minExportRate: 0.29, maxExportRate: 0.29, minSOC: 30.0, durationHours: 2.0, netSolarKWH: -0.1},
+			{startIdx: 3, endIdx: 3, minImportRate: 0.45, avgImportRate: 0.45, maxImportRate: 0.45, minExportRate: 0.05, maxExportRate: 0.05, minSOC: 30.0, durationHours: 2.0, isHighestPrice: true, netSolarKWH: -2.0},
+		}
+		initStandbyExp := planState{soc: 43.2, energyKWH: 13.5 * 0.432, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
+		winStandbyExp, _ := critiqueBlockPlan(ctx, blocksStandbyExp, timelineStandbyExp, initStandbyExp, nil, postHorizonValuation{knownPostHorizonRate: 0.21}, standbyExpSettings, types.SystemStatus{}, nil, 0)
+		require.Len(t, winStandbyExp, 4)
+		assert.Equal(t, blockActionStandby, winStandbyExp[0].actionType, "Block 0 must hold in Standby at 43.2% SOC")
+		assert.Equal(t, blockActionExport, winStandbyExp[2].actionType, "Block 2 must discover blockActionExport via standbyFloor (44.0%)")
+		assert.InDelta(t, 44.0, winStandbyExp[2].targetSOC, 0.1, "Block 2 export floor must match math.Ceil(43.2) = 44.0%")
+		assert.Equal(t, blockActionLoad, winStandbyExp[3].actionType, "Block 3 must discharge the preserved 44.0% -> 30.0% cushion to cover $0.45/kWh load")
 	})
 }
 
@@ -1980,6 +2084,157 @@ func TestOptimizeBlockTargets(t *testing.T) {
 		}
 		assert.InDelta(t, 98.0, pathSplit.states[46].soc, 0.2, "Grid charging must stop at 98%% at 11:20")
 		assert.InDelta(t, 100.0, pathSplit.states[48].soc, 0.2, "11:20-12:00 free solar must finish charging 98%% -> 100%%")
+	})
+
+	t.Run("StandbyFloorOptimization_DischargesExcessOffPeakBatteryAndHoldsExactPeakNeed", func(t *testing.T) {
+		t.Parallel()
+
+		// Simulate an evening Off-Peak -> morning solar Off-Peak -> afternoon On-Peak TOU horizon
+		// (Eversource Rate 7: Off-Peak $0.20754 import / $0.20254 export, On-Peak $0.29984 import / $0.29484 export,
+		// MinSOC = 30.0%, MinBatteryExportDifference = $0.10/kWh > $0.0873/kWh spread).
+		// Starting at 41.7% SOC at 20:00:
+		// - Block 0 (20:00-08:00, 36 intervals, dark Off-Peak): has enough overnight load to drain 41.7% -> 30.0%.
+		// - Block 1 (08:00-12:00, 12 intervals, sunny Off-Peak): morning solar adds +9.3% SOC.
+		// - Block 2 (12:00-20:00, 24 intervals, On-Peak): home load consumes -13.4% SOC (while sunny 12:00-17:00
+		//   intervals run DirectSolarExport).
+		// Because morning solar (+9.3%) is 4.1% short of On-Peak load (-13.4%), Block 0 only needs to hold ~34.1% SOC
+		// in Standby overnight. Optimizing Block 0's Standby floor SOC must discharge the excess 41.7% -> 34.1% in
+		// BatteryModeLoad during the early evening, hold ~34.1% in Standby overnight, and finish On-Peak at 30.0%
+		// reserve rather than holding all 41.7% overnight and stranding 37.6% SOC at the end of On-Peak.
+		c := NewController()
+		t2000 := time.Date(2026, 11, 8, 20, 0, 0, 0, time.UTC)
+		timelineStandby := make([]planInterval, 72)
+		for i := 0; i < 72; i++ {
+			ti := t2000.Add(time.Duration(i*20) * time.Minute)
+			imp := 0.20754
+			exp := 0.20254
+			load := 0.22
+			solar := 0.0
+			switch {
+			case i < 36: // 20:00 - 08:00 Off-Peak
+				load = 0.22
+			case i < 39: // 08:00 - 09:00 Off-Peak (solar matches load)
+				load = 0.23
+				solar = 0.23
+			case i < 48: // 09:00 - 12:00 Off-Peak (+9.3% net solar across 9 intervals)
+				load = 0.18
+				solar = 0.5068
+			case i < 51: // 12:00 - 13:00 On-Peak
+				imp = 0.29984
+				exp = 0.29484
+				load = 0.15
+				solar = 0.44
+			case i < 54: // 13:00 - 14:00 On-Peak
+				imp = 0.29984
+				exp = 0.29484
+				load = 0.15
+				solar = 0.27
+			case i < 57: // 14:00 - 15:00 On-Peak
+				imp = 0.29984
+				exp = 0.29484
+				load = 0.15
+				solar = 0.14
+			case i < 60: // 15:00 - 16:00 On-Peak
+				imp = 0.29984
+				exp = 0.29484
+				load = 0.14
+				solar = 0.08
+			case i < 63: // 16:00 - 17:00 On-Peak
+				imp = 0.29984
+				exp = 0.29484
+				load = 0.15
+				solar = 0.01
+			default: // 17:00 - 20:00 On-Peak (dark, ~0.175 kWh load/step)
+				imp = 0.29984
+				exp = 0.29484
+				load = 0.175
+				solar = 0.0
+			}
+			timelineStandby[i] = planInterval{
+				startTime:     ti,
+				endTime:       ti.Add(20 * time.Minute),
+				durationHours: 1.0 / 3.0,
+				importRate:    imp,
+				exportRate:    exp,
+				loadKWH:       load,
+				solarKWH:      solar,
+				minSOC:        30.0,
+				price: types.Price{
+					TSStart:                       ti,
+					TSEnd:                         ti.Add(20 * time.Minute),
+					DollarsPerKWH:                 imp,
+					SeparateGenerationCredit:      true,
+					GenerationCreditDollarsPerKWH: exp,
+				},
+			}
+		}
+
+		standbySettings := settings
+		standbySettings.MinBatterySOC = 30.0
+		standbySettings.MinBatteryExportDifferenceDollarsPerKWH = 0.10
+		standbyStatus := types.SystemStatus{
+			Timestamp:             t2000,
+			BatteryCapacityKWH:    30.0,
+			BatterySOC:            41.7,
+			MaxBatteryChargeKW:    10.0,
+			MaxBatteryDischargeKW: 10.0,
+		}
+		initStandby := planState{
+			soc:            41.7,
+			energyKWH:      30.0 * 0.417,
+			capacityKWH:    30.0,
+			maxChargeKW:    10.0,
+			maxDischargeKW: 10.0,
+			time:           t2000,
+		}
+
+		postHorizonPrices := []types.Price{
+			{
+				TSStart:       t2000.Add(24 * time.Hour),
+				TSEnd:         t2000.Add(28 * time.Hour),
+				DollarsPerKWH: 0.20754,
+			},
+		}
+		postHorizon := c.buildPostHorizonValuation(timelineStandby, postHorizonPrices, standbySettings, standbyStatus, nil)
+		pathStandby := c.searchOptimalPlanBlocks(ctx, timelineStandby, initStandby, nil, postHorizon, standbySettings, standbyStatus, nil)
+		require.NotNil(t, pathStandby)
+		require.Len(t, pathStandby.actions, 72)
+
+		// Step 0 (20:00) must discharge excess battery in BatteryModeLoad rather than sitting in Standby at 41.7%.
+		assert.Equal(t, types.BatteryModeLoad, pathStandby.actions[0].batteryMode,
+			"Step 0 must discharge excess battery in BatteryModeLoad down to the Standby floor")
+		// Overnight tail of Block 0 (before 08:00 AM, index 35) must hold in BatteryModeStandby around ~34% SOC.
+		assert.Equal(t, types.BatteryModeStandby, pathStandby.actions[35].batteryMode,
+			"Late overnight intervals in Block 0 must hold in BatteryModeStandby to save energy for On-Peak")
+		assert.InDelta(t, 34.0, pathStandby.states[36].soc, 1.0,
+			"Battery must enter 08:00 AM around ~34%% SOC rather than holding all 41.7%% overnight")
+		// End of On-Peak (20:00, index 72) must land right at the 30.0% reserve floor without stranding ~37.6% SOC.
+		assert.InDelta(t, 30.0, pathStandby.states[72].soc, 1.0,
+			"Battery must finish On-Peak at ~30.0%% reserve floor with no stranded excess")
+
+		// Rolling-horizon check at 21:20 (after 4 intervals of Load have drained SOC from 41.7% down to 38.6%,
+		// which sits inside the (30%, 40%] coarse grid bin): optimizeBlockTargets must still find the ~34.0%
+		// Standby floor rather than saturating at >=40% and reverting Step 0 to Standby prematurely.
+		t2120 := t2000.Add(80 * time.Minute)
+		timeline2120 := timelineStandby[4:]
+		status2120 := standbyStatus
+		status2120.Timestamp = t2120
+		status2120.BatterySOC = 38.6
+		init2120 := initStandby
+		init2120.time = t2120
+		init2120.soc = 38.6
+		init2120.energyKWH = 30.0 * 0.386
+		path2120 := c.searchOptimalPlanBlocks(ctx, timeline2120, init2120, nil, postHorizon, standbySettings, status2120, nil)
+		require.NotNil(t, path2120)
+		require.Len(t, path2120.actions, 68)
+		assert.Equal(t, types.BatteryModeLoad, path2120.actions[0].batteryMode,
+			"At 21:20 (38.6%% SOC), Step 0 must continue discharging in BatteryModeLoad toward ~34.1%% floor")
+		assert.Equal(t, types.BatteryModeStandby, path2120.actions[31].batteryMode,
+			"Late overnight intervals before 08:00 AM must hold in BatteryModeStandby")
+		assert.InDelta(t, 34.0, path2120.states[32].soc, 1.0,
+			"Battery must enter 08:00 AM around ~34%% SOC from the 21:20 rolling poll")
+		assert.InDelta(t, 30.0, path2120.states[68].soc, 1.0,
+			"Battery must finish On-Peak at ~30.0%% reserve floor from the 21:20 rolling poll")
 	})
 }
 
