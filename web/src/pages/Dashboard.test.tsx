@@ -1774,4 +1774,39 @@ describe('Dashboard', () => {
         expect(screen.getByRole('heading', { name: 'Charging from Solar' })).toBeInTheDocument();
         expect(screen.getByRole('heading', { name: 'Self-Powered' })).toBeInTheDocument();
     });
+
+    it('queries day boundaries using the site timezone from settings.location.timeZone', async () => {
+        window.history.replaceState({}, '', '/?date=2026-11-09');
+        mockActionsAndSavings([]);
+
+        renderWithRouter(
+            <Dashboard
+                siteID="site1"
+                settings={{
+                    minBatterySOC: 10,
+                    ess: 'franklinwh',
+                    hasCredentials: { franklinwh: true },
+                    utilityProvider: 'pge',
+                    location: {
+                        postalCode: '94103',
+                        countryCode: 'US',
+                        timeZone: 'America/Los_Angeles',
+                    },
+                } as any}
+            />
+        );
+
+        await waitFor(() => {
+            expect(fetchActionsAndSavings).toHaveBeenCalled();
+        });
+
+        const calls = (fetchActionsAndSavings as any).mock.calls;
+        const lastCall = calls[calls.length - 1];
+        const startArg = lastCall[0] as Date;
+        const endArg = lastCall[1] as Date;
+
+        // 2026-11-09 in America/Los_Angeles (PST, UTC-8) starts at 08:00:00.000Z and ends at 2026-11-10T07:59:59.999Z
+        expect(startArg.toISOString()).toBe('2026-11-09T08:00:00.000Z');
+        expect(endArg.toISOString()).toBe('2026-11-10T07:59:59.999Z');
+    });
 });

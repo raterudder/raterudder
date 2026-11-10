@@ -90,7 +90,135 @@ export const extractOffsetMinutes = (isoStr?: string): number | null => {
     return sign * (hours * 60 + minutes);
 };
 
-export const formatTimeInOffset = (isoStr?: string, offsetMinutes?: number | null): string => {
+export interface WallClockParts {
+    year: number;
+    month: number;
+    day: number;
+    hour: number;
+    minute: number;
+    second: number;
+}
+
+export const getWallClockPartsInTimeZone = (date: Date, timeZone?: string): WallClockParts | null => {
+    if (!timeZone || isNaN(date.getTime())) return null;
+    try {
+        const parts = new Intl.DateTimeFormat('en-US', {
+            timeZone,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hourCycle: 'h23',
+        }).formatToParts(date);
+
+        let year = 0;
+        let month = 0;
+        let day = 0;
+        let hour = 0;
+        let minute = 0;
+        let second = 0;
+        for (const p of parts) {
+            switch (p.type) {
+                case 'year':
+                    year = parseInt(p.value, 10);
+                    break;
+                case 'month':
+                    month = parseInt(p.value, 10);
+                    break;
+                case 'day':
+                    day = parseInt(p.value, 10);
+                    break;
+                case 'hour':
+                    hour = parseInt(p.value, 10);
+                    if (hour === 24) hour = 0;
+                    break;
+                case 'minute':
+                    minute = parseInt(p.value, 10);
+                    break;
+                case 'second':
+                    second = parseInt(p.value, 10);
+                    break;
+            }
+        }
+        if (!year || !month || !day) return null;
+        return { year, month, day, hour, minute, second };
+    } catch {
+        return null;
+    }
+};
+
+export const getDateInTimeZone = (
+    year: number,
+    monthIndex: number,
+    day: number,
+    hour = 0,
+    minute = 0,
+    second = 0,
+    ms = 0,
+    timeZone?: string
+): Date => {
+    if (!timeZone) {
+        return new Date(year, monthIndex, day, hour, minute, second, ms);
+    }
+    const desiredUtcMs = Date.UTC(year, monthIndex, day, hour, minute, second, ms);
+    const getOffsetMs = (instantMs: number): number | null => {
+        const d = new Date(instantMs);
+        const parts = getWallClockPartsInTimeZone(d, timeZone);
+        if (!parts) return null;
+        const wallUtcMs = Date.UTC(
+            parts.year,
+            parts.month - 1,
+            parts.day,
+            parts.hour,
+            parts.minute,
+            parts.second,
+            d.getUTCMilliseconds()
+        );
+        return wallUtcMs - instantMs;
+    };
+
+    const offset1 = getOffsetMs(desiredUtcMs);
+    if (offset1 === null) {
+        return new Date(year, monthIndex, day, hour, minute, second, ms);
+    }
+    const guess1 = desiredUtcMs - offset1;
+    const offset2 = getOffsetMs(guess1) ?? offset1;
+    return new Date(desiredUtcMs - offset2);
+};
+
+export const getSiteTodayDate = (timeZone?: string, now: Date = new Date()): Date => {
+    if (timeZone) {
+        const parts = getWallClockPartsInTimeZone(now, timeZone);
+        if (parts) {
+            return new Date(parts.year, parts.month - 1, parts.day, 12, 0, 0, 0);
+        }
+    }
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0, 0);
+};
+
+export const isSameCalendarDate = (a: Date, b: Date): boolean =>
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate();
+
+export const getHourInTimeZone = (isoStr?: string, referenceTs?: string, timeZone?: string): number => {
+    if (!isoStr || isZeroTime(isoStr)) return 0;
+    const d = new Date(isoStr);
+    if (isNaN(d.getTime())) return 0;
+    const offsetMinutes = extractOffsetMinutes(isoStr) ?? extractOffsetMinutes(referenceTs);
+    if (offsetMinutes !== null && offsetMinutes !== undefined) {
+        return new Date(d.getTime() + offsetMinutes * 60 * 1000).getUTCHours();
+    }
+    if (timeZone) {
+        const parts = getWallClockPartsInTimeZone(d, timeZone);
+        if (parts) return parts.hour;
+    }
+    return d.getHours();
+};
+
+export const formatTimeInOffset = (isoStr?: string, offsetMinutes?: number | null, timeZone?: string): string => {
     if (!isoStr || isZeroTime(isoStr)) return '';
     try {
         if (offsetMinutes !== null && offsetMinutes !== undefined) {
@@ -109,16 +237,28 @@ export const formatTimeInOffset = (isoStr?: string, offsetMinutes?: number | nul
         if (directOffset !== null) {
             return formatTimeInOffset(isoStr, directOffset);
         }
+        if (timeZone) {
+            const d = new Date(isoStr);
+            const parts = getWallClockPartsInTimeZone(d, timeZone);
+            if (parts) {
+                let hour = parts.hour;
+                const min = String(parts.minute).padStart(2, '0');
+                const ampm = hour >= 12 ? 'PM' : 'AM';
+                hour = hour % 12;
+                if (hour === 0) hour = 12;
+                return `${hour}:${min} ${ampm}`;
+            }
+        }
         return new Date(isoStr).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
     } catch {
         return isoStr;
     }
 };
 
-export const formatTime = (ts?: string, referenceTs?: string): string => {
+export const formatTime = (ts?: string, referenceTs?: string, timeZone?: string): string => {
     if (!ts || isZeroTime(ts)) return '';
     const offset = extractOffsetMinutes(ts) ?? extractOffsetMinutes(referenceTs);
-    return formatTimeInOffset(ts, offset);
+    return formatTimeInOffset(ts, offset, timeZone);
 };
 
 export const formatHour12 = (hour: number): string => {
@@ -214,7 +354,8 @@ export const getActionLoadSubType = (
 export const getReasonText = (
     action: Action,
     symbol: string = '$',
-    loadSubType?: LoadSubType
+    loadSubType?: LoadSubType,
+    timeZone?: string
 ): string => {
     const reason = action.reason;
     if (!reason) {
@@ -230,13 +371,13 @@ export const getReasonText = (
     const futureCostStr = futureCost !== null ? formatPrice(futureCost, symbol) : '';
     const refTs = (!action.systemTimestamp || isZeroTime(action.systemTimestamp)) ? action.systemStatus?.timestamp : action.systemTimestamp;
     const getDeficitTimeStr = (act: Action) => {
-        if (!isZeroTime(act.deficitAt)) return formatTime(act.deficitAt!, refTs);
-        if (!isZeroTime(act.hitBufferedDeficitAt)) return formatTime(act.hitBufferedDeficitAt!, refTs);
-        if (!isZeroTime(act.hitThresholdDeficitAt)) return formatTime(act.hitThresholdDeficitAt!, refTs);
+        if (!isZeroTime(act.deficitAt)) return formatTime(act.deficitAt!, refTs, timeZone);
+        if (!isZeroTime(act.hitBufferedDeficitAt)) return formatTime(act.hitBufferedDeficitAt!, refTs, timeZone);
+        if (!isZeroTime(act.hitThresholdDeficitAt)) return formatTime(act.hitThresholdDeficitAt!, refTs, timeZone);
         return '';
     };
     const deficitTimeStr = getDeficitTimeStr(action);
-    const capacityTimeStr = !isZeroTime(action.capacityAt) ? formatTime(action.capacityAt, refTs) : '';
+    const capacityTimeStr = !isZeroTime(action.capacityAt) ? formatTime(action.capacityAt, refTs, timeZone) : '';
     const isNegativePrice = currentPrice && currentPrice.dollarsPerKWH < 0;
     const solarMode = action.targetSolarMode || action.solarMode ;
 
@@ -691,7 +832,7 @@ const SUMMARY_LEGEND_ORDER: DaySummaryLegendItem[] = [
     { category: 'fault', label: 'Alert' },
 ];
 
-const getMinutesFromMidnight = (isoStr?: string, referenceTs?: string): number => {
+const getMinutesFromMidnight = (isoStr?: string, referenceTs?: string, timeZone?: string): number => {
     if (!isoStr || isZeroTime(isoStr)) return 0;
     try {
         const d = new Date(isoStr);
@@ -700,6 +841,12 @@ const getMinutesFromMidnight = (isoStr?: string, referenceTs?: string): number =
         if (offsetMinutes !== null && offsetMinutes !== undefined) {
             const targetDate = new Date(d.getTime() + offsetMinutes * 60 * 1000);
             return targetDate.getUTCHours() * 60 + targetDate.getUTCMinutes();
+        }
+        if (timeZone) {
+            const parts = getWallClockPartsInTimeZone(d, timeZone);
+            if (parts) {
+                return parts.hour * 60 + parts.minute;
+            }
         }
         return d.getHours() * 60 + d.getMinutes();
     } catch {
@@ -830,7 +977,8 @@ export const getSummaryBeatHeadline = (
 
 export const buildDaySummary = (
     groupedActions: (Action | ActionSummary)[],
-    currencySymbol: string = '$'
+    currencySymbol: string = '$',
+    timeZone?: string
 ): DaySummaryData => {
     if (!groupedActions || groupedActions.length === 0) {
         return { segments: [], beats: [], legend: [] };
@@ -859,6 +1007,17 @@ export const buildDaySummary = (
         refTs?: string;
         isLatest: boolean;
     }
+
+    const rawStartMinutesList = chronological.map(item => {
+        const isSummary = 'isSummary' in item;
+        const action = isSummary ? item.latestAction : item;
+        const refTs =
+            action.systemTimestamp && !isZeroTime(action.systemTimestamp)
+                ? action.systemTimestamp
+                : action.systemStatus?.timestamp;
+        const startTime = isSummary ? item.startTime : getActionTimestamp(action);
+        return getMinutesFromMidnight(startTime, refTs, timeZone);
+    });
 
     const rawPhases: RawPhase[] = chronological.map((item, idx) => {
         const isSummary = 'isSummary' in item;
@@ -921,9 +1080,19 @@ export const buildDaySummary = (
                 ? (effEndMs - startMs) / 60000
                 : 0;
 
-        const startMinutes = getMinutesFromMidnight(startTime, refTs);
-        const rawEndMinutes = getMinutesFromMidnight(effectiveEndTime, refTs);
-        const endMinutes = Math.min(1440, Math.max(rawEndMinutes, startMinutes + 20));
+        const rawStartMinutes = rawStartMinutesList[idx];
+        const rawEndMinutes = getMinutesFromMidnight(effectiveEndTime, refTs, timeZone);
+        const hasLaterPhaseOnNextDay = rawStartMinutesList
+            .slice(idx + 1)
+            .some(laterMin => laterMin < rawStartMinutes);
+        const startedBeforeMidnight =
+            (!isNaN(startMs) && !isNaN(effEndMs) && effEndMs > startMs && rawEndMinutes < rawStartMinutes) ||
+            hasLaterPhaseOnNextDay;
+        const startMinutes = startedBeforeMidnight ? 0 : rawStartMinutes;
+        const endedBeforeMidnight = startedBeforeMidnight && rawEndMinutes >= rawStartMinutes;
+        const endMinutes = endedBeforeMidnight
+            ? 20
+            : Math.min(1440, Math.max(rawEndMinutes, startMinutes + 20));
 
         const hasPrice = isSummary
             ? item.hasPrice
@@ -1109,8 +1278,8 @@ export const buildDaySummary = (
     const newestFirst = [...beatPhases].reverse();
 
     const beats: DaySummaryBeat[] = newestFirst.map(p => {
-        const startFormatted = formatTime(p.startTime, p.refTs);
-        const endFormatted = formatTime(p.endTime, p.refTs);
+        const startFormatted = formatTime(p.startTime, p.refTs, timeZone);
+        const endFormatted = formatTime(p.endTime, p.refTs, timeZone);
         const timeLabel =
             startFormatted && endFormatted && startFormatted !== endFormatted
                 ? `${startFormatted} – ${endFormatted}`
@@ -1128,7 +1297,12 @@ export const buildDaySummary = (
     return { segments, beats, legend };
 };
 
-export function getPlanStatusSubvalue(action: Action, refTs?: string, symbol: string = '$'): string | null {
+export function getPlanStatusSubvalue(
+    action: Action,
+    refTs?: string,
+    symbol: string = '$',
+    timeZone?: string
+): string | null {
     if (!action.plan || !action.plan.periods || action.plan.periods.length === 0) {
         return null;
     }
@@ -1163,7 +1337,7 @@ export function getPlanStatusSubvalue(action: Action, refTs?: string, symbol: st
         if (action.reason === ActionReason.ArbitrageHoldExport) {
             const nextExport = periods.find(p => p.batteryMode === BatteryMode.Export);
             if (nextExport) {
-                return `Holding reserve for ${formatTime(nextExport.tsStart, refTs)} export`;
+                return `Holding reserve for ${formatTime(nextExport.tsStart, refTs, timeZone)} export`;
             }
             return 'Holding reserve for upcoming export window';
         }
@@ -1174,13 +1348,13 @@ export function getPlanStatusSubvalue(action: Action, refTs?: string, symbol: st
             if (p.batteryMode === BatteryMode.ChargeAny) {
                 const price = p.importDollars !== undefined ? p.importDollars : null;
                 const priceStr = price !== null ? ` (${symbol}${price.toFixed(3)}/kWh)` : '';
-                return `Waiting to charge at ${formatTime(p.tsStart, refTs)}${priceStr}`;
+                return `Waiting to charge at ${formatTime(p.tsStart, refTs, timeZone)}${priceStr}`;
             }
             if (p.batteryMode === BatteryMode.Load && p.reason === ActionReason.DischargeAtPeak) {
-                return `Saving reserve for ${formatTime(p.tsStart, refTs)} peak rate`;
+                return `Saving reserve for ${formatTime(p.tsStart, refTs, timeZone)} peak rate`;
             }
             if (p.batteryMode === BatteryMode.Export) {
-                return `Holding reserve for ${formatTime(p.tsStart, refTs)} export`;
+                return `Holding reserve for ${formatTime(p.tsStart, refTs, timeZone)} export`;
             }
         }
 
@@ -1207,7 +1381,7 @@ export function getPlanStatusSubvalue(action: Action, refTs?: string, symbol: st
                 }
             }
             const targetSoc = endSolarSoc ? Math.round(endSolarSoc) : 100;
-            return `Charging to ${targetSoc}% until ${formatTime(endSolarChargeTime, refTs)}`;
+            return `Charging to ${targetSoc}% until ${formatTime(endSolarChargeTime, refTs, timeZone)}`;
         }
 
         let endChargeTime = currentPeriod.tsEnd;
@@ -1221,12 +1395,12 @@ export function getPlanStatusSubvalue(action: Action, refTs?: string, symbol: st
         const targetSoc = action.chargeToSoc || (currentPeriod.endSoc ? Math.round(currentPeriod.endSoc) : 100);
         const price = action.currentPrice ? (action.currentPrice.dollarsPerKWH + (action.currentPrice.gridUseDollarsPerKWH || 0)) : null;
         if (price !== null && price < 0.06) {
-            return `Charging to ${targetSoc}% until ${formatTime(endChargeTime, refTs)} • Low rate (${symbol}${price.toFixed(3)}/kWh)`;
+            return `Charging to ${targetSoc}% until ${formatTime(endChargeTime, refTs, timeZone)} • Low rate (${symbol}${price.toFixed(3)}/kWh)`;
         }
         if (targetSoc > 0 && targetSoc < 100) {
-            return `Charging to ${targetSoc}% until ${formatTime(endChargeTime, refTs)}`;
+            return `Charging to ${targetSoc}% until ${formatTime(endChargeTime, refTs, timeZone)}`;
         }
-        return `Charging until ${formatTime(endChargeTime, refTs)}`;
+        return `Charging until ${formatTime(endChargeTime, refTs, timeZone)}`;
     }
 
     // Discharging / Self-Powered:
@@ -1241,7 +1415,7 @@ export function getPlanStatusSubvalue(action: Action, refTs?: string, symbol: st
                     break;
                 }
             }
-            return `Exporting to grid until ${formatTime(endExportTime, refTs)}`;
+            return `Exporting to grid until ${formatTime(endExportTime, refTs, timeZone)}`;
         }
 
         if (loadSubType === 'solarFull') {
@@ -1260,7 +1434,7 @@ export function getPlanStatusSubvalue(action: Action, refTs?: string, symbol: st
                 }
             }
             const holdSoc = Math.round(currentPeriod.endSoc || action.systemStatus?.batterySOC || 100);
-            return `Holding at ${holdSoc}% on solar until ${formatTime(endSolarFullTime, refTs)}`;
+            return `Holding at ${holdSoc}% on solar until ${formatTime(endSolarFullTime, refTs, timeZone)}`;
         }
 
         // Peak discharge
@@ -1279,7 +1453,7 @@ export function getPlanStatusSubvalue(action: Action, refTs?: string, symbol: st
         if (isPeak) {
             const price = action.currentPrice ? (action.currentPrice.dollarsPerKWH + (action.currentPrice.gridUseDollarsPerKWH || 0)) : null;
             const priceStr = price !== null ? ` (${symbol}${price.toFixed(3)}/kWh)` : '';
-            return `Peak rate defense${priceStr} until ${formatTime(endDischargeTime, refTs)}`;
+            return `Peak rate defense${priceStr} until ${formatTime(endDischargeTime, refTs, timeZone)}`;
         }
         return `Powering home on solar & battery`;
     }

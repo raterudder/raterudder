@@ -108,7 +108,7 @@ import {
     buildPlanSummaryBeats,
     type PlanSummaryStats,
 } from '../utils/forecastUtils';
-import { formatTime, getCurrencySymbol, type DaySummaryBeat } from '../utils/dashboardUtils';
+import { formatTime, getCurrencySymbol, getHourInTimeZone, type DaySummaryBeat } from '../utils/dashboardUtils';
 import { SummaryBeatsList } from '../components/ActionTimeline';
 
 const planCharts: ChartConfig[] = [
@@ -156,9 +156,9 @@ const planCharts: ChartConfig[] = [
     },
 ];
 
-function formatHour(ts: string, referenceTs?: string): string {
+function formatHour(ts: string, referenceTs?: string, timeZone?: string): string {
     if (!ts) return '';
-    const formatted = formatTime(ts, referenceTs);
+    const formatted = formatTime(ts, referenceTs, timeZone);
     return formatted.replace(':00 ', ' ');
 }
 
@@ -202,6 +202,7 @@ function ForecastChart({
     planStats,
     scheduleBeats,
     currencySymbol = '$',
+    timeZone,
 }: {
     data: any[];
     config: ChartConfig;
@@ -213,6 +214,7 @@ function ForecastChart({
     planStats?: PlanSummaryStats | null;
     scheduleBeats?: DaySummaryBeat[];
     currencySymbol?: string;
+    timeZone?: string;
 }) {
     // Compute reference value if applicable
     const refValue = config.referenceLine
@@ -399,7 +401,7 @@ function ForecastChart({
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--outline-variant)" vertical={false} opacity={0.4} />
                     <XAxis
                         dataKey="ts"
-                        tickFormatter={(ts) => formatHour(ts, data[0]?.ts)}
+                        tickFormatter={(ts) => formatHour(ts, data[0]?.ts, timeZone)}
                         tick={{ fontSize: isMobile ? 10 : 12 }}
                         stroke="var(--outline-variant)"
                         axisLine={false}
@@ -419,7 +421,7 @@ function ForecastChart({
                         content={({ active, payload, label }) => {
                             if (!active || !payload || !payload.length) return null;
                             const pt = payload[0].payload;
-                            const timeStr = formatHour(String(label || pt.ts), data[0]?.ts);
+                            const timeStr = formatHour(String(label || pt.ts), data[0]?.ts, timeZone);
 
                             const containerStyle: React.CSSProperties = {
                                 backgroundColor: 'var(--surface-container-high)',
@@ -862,12 +864,17 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
         rawModelingData.plan.periods.length > 0
     );
 
+    const siteTimeZone =
+        rawModelingData?.latestAction?.systemStatus?.timeLocation ||
+        settings?.location?.timeZone;
+
     const data = useMemo(() => {
         if (!rawModelingData) return [];
 
         if (isPlanActive) {
             const plan = rawModelingData.plan!;
             const periods = plan.periods;
+            const refTs = periods[0]?.tsStart;
 
             let planData: any[] = [];
             if (includeHistory && rawModelingData.energyHistory && rawModelingData.priceHistory) {
@@ -881,7 +888,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
                         : 0;
                     return {
                         ts: h.tsHourStart,
-                        hour: new Date(h.tsHourStart).getHours(),
+                        hour: getHourInTimeZone(h.tsHourStart, refTs, siteTimeZone),
                         plannedSOC: h.avgBatterySOC,
                         batterySOCIfUsed: h.avgBatterySOC,
                         batteryReserveSOC: periods[0]?.reserveSOC,
@@ -931,7 +938,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
             const getInterpolatedRates = (ts: string | Date) => {
                 const d = new Date(ts);
                 const tsMs = d.getTime();
-                const msIntoHour = (d.getMinutes() * 60 + d.getSeconds()) * 1000 + d.getMilliseconds();
+                const msIntoHour = ((tsMs % 3600000) + 3600000) % 3600000;
                 if (msIntoHour === 0) {
                     return getBaseRateAt(tsMs);
                 }
@@ -954,7 +961,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
 
                 const pt: any = {
                     ts: p.tsStart,
-                    hour: new Date(p.tsStart).getHours(),
+                    hour: getHourInTimeZone(p.tsStart, refTs, siteTimeZone),
                     plannedSOC: p.startSoc,
                     batterySOCIfUsed: p.startSoc,
                     batteryReserveSOC: p.reserveSOC,
@@ -986,7 +993,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
                     const endRates = getInterpolatedRates(p.tsEnd);
                     const endPt: any = {
                         ts: p.tsEnd,
-                        hour: new Date(p.tsEnd).getHours(),
+                        hour: getHourInTimeZone(p.tsEnd, refTs, siteTimeZone),
                         plannedSOC: p.endSoc,
                         batterySOCIfUsed: p.endSoc,
                         batteryReserveSOC: p.reserveSOC,
@@ -1015,6 +1022,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
             // The battery capacity for history is best estimated from the first simulation hour
             // or assumed from the context, here we use the first sim hour's capacity.
             const firstSim = modelingData[0];
+            const simRefTs = firstSim?.ts;
             const capacity = firstSim ? firstSim.batteryCapacityKWH : 10;
             const reserve = firstSim ? firstSim.batteryReserveKWH : 0;
 
@@ -1026,7 +1034,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
                     : 0;
                 return {
                     ts: h.tsHourStart,
-                    hour: new Date(h.tsHourStart).getHours(),
+                    hour: getHourInTimeZone(h.tsHourStart, simRefTs, siteTimeZone),
                     batteryKWH: (h.avgBatterySOC / 100) * capacity,
                     batteryCapacityKWH: capacity,
                     batteryReserveSOC: reserve,
@@ -1067,7 +1075,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
                 gridExportDollarsPerKWH: h.gridExportDollarsPerKWH ?? h.solarOppDollarsPerKWH ?? 0,
             };
         });
-    }, [rawModelingData, includeHistory, isPlanActive]);
+    }, [rawModelingData, includeHistory, isPlanActive, siteTimeZone]);
 
     const currencySymbol = getCurrencySymbol(settings?.utilityProvider);
 
@@ -1076,9 +1084,10 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
         return buildPlanSolarLoadSeries(
             rawModelingData.plan.periods,
             rawModelingData.energyHistory,
-            includeHistory
+            includeHistory,
+            siteTimeZone
         );
-    }, [rawModelingData, includeHistory, isPlanActive]);
+    }, [rawModelingData, includeHistory, isPlanActive, siteTimeZone]);
 
     const priceData = useMemo(() => {
         if (!isPlanActive || !rawModelingData?.plan) return [];
@@ -1086,9 +1095,10 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
             rawModelingData.plan.periods,
             rawModelingData.futurePrices,
             rawModelingData.priceHistory,
-            includeHistory
+            includeHistory,
+            siteTimeZone
         );
-    }, [rawModelingData, includeHistory, isPlanActive]);
+    }, [rawModelingData, includeHistory, isPlanActive, siteTimeZone]);
 
     const planStats = useMemo(() => {
         if (!isPlanActive || !rawModelingData?.plan) return null;
@@ -1102,9 +1112,10 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
         if (!isPlanActive || !rawModelingData?.plan) return [];
         return buildPlanSummaryBeats(
             rawModelingData.plan.periods,
-            currencySymbol
+            currencySymbol,
+            siteTimeZone
         );
-    }, [rawModelingData, isPlanActive, currencySymbol]);
+    }, [rawModelingData, isPlanActive, currencySymbol, siteTimeZone]);
 
     if (loading) return (
         <div className="loading-screen">
@@ -1170,7 +1181,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
                             <p className="forecast-subtitle">
                                 Optimal <strong>SmartPlan</strong> battery dispatch schedule generated {(() => {
                                     const startTs = rawModelingData?.plan?.tsCreated || rawModelingData?.updated;
-                                    return startTs ? formatTime(startTs, data[0]?.ts) : '';
+                                    return startTs ? formatTime(startTs, data[0]?.ts, siteTimeZone) : '';
                                 })()} ({rawModelingData?.plan?.horizonHours ?? 24}-Hour Horizon)
                             </p>
                             <div className="forecast-hero-grid">
@@ -1195,7 +1206,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
                             Predicted energy state <strong>assuming no action is taken</strong> starting from{' '}
                             {(() => {
                                 const startTs = rawModelingData?.updated || rawModelingData?.simulation?.[0]?.ts;
-                                return startTs ? formatTime(startTs, data[0]?.ts) : '';
+                                return startTs ? formatTime(startTs, data[0]?.ts, siteTimeZone) : '';
                             })()}
                         </p>
                     )}
@@ -1240,6 +1251,7 @@ const Forecast: React.FC<ForecastProps> = ({ siteID, settings = null }) => {
                                     planStats={isPlanActive ? planStats : null}
                                     scheduleBeats={isPlanActive && config.dataKey === 'plannedSOC' ? planScheduleBeats : undefined}
                                     currencySymbol={currencySymbol}
+                                    timeZone={siteTimeZone}
                                 />
                             );
                         })}

@@ -67,15 +67,25 @@ const historyCharts: ChartConfig[] = [
     }
 ];
 
-import { formatTime } from '../utils/dashboardUtils';
+import { formatTime, getSiteTodayDate, isSameCalendarDate } from '../utils/dashboardUtils';
 
-function formatHour(ts: string, referenceTs?: string): string {
+function formatHour(ts: string, referenceTs?: string, timeZone?: string): string {
     if (!ts) return '';
-    const formatted = formatTime(ts, referenceTs);
+    const formatted = formatTime(ts, referenceTs, timeZone);
     return formatted.replace(':00 ', ' ');
 }
 
-function HistoryChart({ data, config, isMobile }: { data: HistoryDataPoint[]; config: ChartConfig; isMobile: boolean }) {
+function HistoryChart({
+    data,
+    config,
+    isMobile,
+    timeZone,
+}: {
+    data: HistoryDataPoint[];
+    config: ChartConfig;
+    isMobile: boolean;
+    timeZone?: string;
+}) {
     return (
         <div className="chart-card">
             <h3>{config.title}</h3>
@@ -92,7 +102,7 @@ function HistoryChart({ data, config, isMobile }: { data: HistoryDataPoint[]; co
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--outline-variant)" vertical={false} opacity={0.4} />
                     <XAxis
                         dataKey="tsHourStart"
-                        tickFormatter={(ts) => formatHour(ts, data[0]?.tsHourStart)}
+                        tickFormatter={(ts) => formatHour(ts, data[0]?.tsHourStart, timeZone)}
                         tick={{ fontSize: isMobile ? 10 : 12 }}
                         stroke="var(--outline-variant)"
                         axisLine={false}
@@ -107,7 +117,7 @@ function HistoryChart({ data, config, isMobile }: { data: HistoryDataPoint[]; co
                         tickFormatter={(v: number) => v.toFixed(1)}
                     />
                     <Tooltip
-                        labelFormatter={(label) => formatHour(String(label), data[0]?.tsHourStart)}
+                        labelFormatter={(label) => formatHour(String(label), data[0]?.tsHourStart, timeZone)}
                         contentStyle={{
                             backgroundColor: 'var(--surface-container-high)',
                             border: '1px solid var(--border)',
@@ -149,26 +159,31 @@ function HistoryChart({ data, config, isMobile }: { data: HistoryDataPoint[]; co
     );
 }
 
-const History: React.FC<{ siteID?: string }> = ({ siteID }) => {
+const History: React.FC<{ siteID?: string; settings?: SettingsType | null }> = ({ siteID, settings: settingsProp = null }) => {
     const [location, setLocation] = useLocation();
     const searchString = useSearch();
     const searchParams = new URLSearchParams(searchString);
     const dateParam = searchParams.get('date');
 
-    const currentDate = useMemo(() => {
-        if (!dateParam) return new Date();
-        const d = new Date(dateParam + 'T12:00:00'); // Use noon to avoid TZ issues
-        return isNaN(d.getTime()) ? new Date() : d;
-    }, [dateParam]);
-
     const [data, setData] = useState<HistoryDataPoint[]>([]);
-    const [settings, setSettings] = useState<SettingsType | null>(null);
-    const settingsRef = useRef<SettingsType | null>(null);
-    const loadedSiteIDRef = useRef<string | undefined>(undefined);
+    const [settings, setSettings] = useState<SettingsType | null>(settingsProp);
+    const settingsRef = useRef<SettingsType | null>(settingsProp);
+    const loadedSiteIDRef = useRef<string | undefined>(settingsProp ? siteID : undefined);
     const isFirstMount = useRef(true);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+
+    const effectiveSettings = settingsProp ?? settings;
+    const siteTimeZone = data[0]?.timeLocation || effectiveSettings?.location?.timeZone;
+
+    const todayDate = useMemo(() => getSiteTodayDate(siteTimeZone), [siteTimeZone]);
+
+    const currentDate = useMemo(() => {
+        if (!dateParam) return todayDate;
+        const d = new Date(dateParam + 'T12:00:00'); // Use noon to avoid TZ issues
+        return isNaN(d.getTime()) ? todayDate : d;
+    }, [dateParam, todayDate]);
 
     useEffect(() => {
         const handleResize = () => setIsMobile(window.innerWidth < 768);
@@ -244,7 +259,7 @@ const History: React.FC<{ siteID?: string }> = ({ siteID }) => {
 
     const chartsToRender = useMemo(() => {
         const filtered = historyCharts.map(c => {
-            if (c.title === 'Home Load (kWh)' && settings?.release === 'staging') {
+            if (c.title === 'Home Load (kWh)' && effectiveSettings?.release === 'staging') {
                 return {
                     ...c,
                     dataKeys: [
@@ -255,14 +270,14 @@ const History: React.FC<{ siteID?: string }> = ({ siteID }) => {
             }
             return c;
         }).filter(c => {
-            if (c.dataKeys.some(dk => dk.key === 'irradiance') && settings?.release !== 'staging') return false;
+            if (c.dataKeys.some(dk => dk.key === 'irradiance') && effectiveSettings?.release !== 'staging') return false;
             return true;
         });
 
         return filtered;
-    }, [settings]);
+    }, [effectiveSettings]);
 
-    const isToday = currentDate.toDateString() === new Date().toDateString();
+    const isToday = isSameCalendarDate(currentDate, todayDate);
 
     return (
         <div className="content-container history-page">
@@ -289,7 +304,7 @@ const History: React.FC<{ siteID?: string }> = ({ siteID }) => {
             {!loading && !error && data.length > 0 && (
                 <div className="history-charts">
                     {chartsToRender.map(config => (
-                        <HistoryChart key={config.title} data={data} config={config} isMobile={isMobile} />
+                        <HistoryChart key={config.title} data={data} config={config} isMobile={isMobile} timeZone={siteTimeZone} />
                     ))}
                 </div>
             )}

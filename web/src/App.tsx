@@ -468,7 +468,7 @@ function AppContent() {
                                     {!effectiveSiteID && effectiveSites.length === 0 ? (
                                         <Redirect to="/welcome" replace />
                                     ) : (
-                                        <History siteID={effectiveSiteID} />
+                                        <History siteID={effectiveSiteID} settings={settings} />
                                     )}
                                 </ProtectedRoute>
                             </Route>

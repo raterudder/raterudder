@@ -4,6 +4,7 @@ import {
     formatTime,
     formatSOCRange,
     formatPrice,
+    getHourInTimeZone,
     getSummaryBeatHeadline,
     type SummaryPhaseCategory,
     type DaySummaryBeat,
@@ -136,9 +137,11 @@ export function reconstructFuturePricesFromPlan(periods: PlanPeriod[]): PriceHis
 export function buildPlanSolarLoadSeries(
     periods: PlanPeriod[],
     energyHistory: EnergyHistoryRes[] = [],
-    includeHistory: boolean = false
+    includeHistory: boolean = false,
+    timeZone?: string
 ): any[] {
     if (!periods || periods.length === 0) return [];
+    const refTs = periods[0]?.tsStart;
 
     interface HourBucket {
         hourMs: number;
@@ -178,7 +181,7 @@ export function buildPlanSolarLoadSeries(
             if (hMs < firstHourMs) {
                 series.push({
                     ts: h.tsHourStart,
-                    hour: new Date(h.tsHourStart).getHours(),
+                    hour: getHourInTimeZone(h.tsHourStart, refTs, timeZone),
                     predictedSolarKWH: h.solarKWH || 0,
                     avgHomeLoadKWH: Math.floor((h.homeLoadKWH || 0) * 10) / 10,
                     isHistory: true,
@@ -192,7 +195,7 @@ export function buildPlanSolarLoadSeries(
         const loadRate = b.durationHours > 0 ? b.loadKWH / b.durationHours : b.loadKWH;
         series.push({
             ts: b.ts,
-            hour: new Date(b.ts).getHours(),
+            hour: getHourInTimeZone(b.ts, refTs, timeZone),
             predictedSolarKWH: solarRate,
             avgHomeLoadKWH: Math.floor(loadRate * 10) / 10,
             isHistory: false,
@@ -206,9 +209,11 @@ export function buildPlanPriceSeries(
     periods: PlanPeriod[],
     futurePrices?: PriceHistoryRes[],
     priceHistory: PriceHistoryRes[] = [],
-    includeHistory: boolean = false
+    includeHistory: boolean = false,
+    timeZone?: string
 ): any[] {
     if (!periods || periods.length === 0) return [];
+    const refTs = periods[0]?.tsStart;
 
     const resolvedFuture =
         futurePrices && futurePrices.length > 0
@@ -228,7 +233,7 @@ export function buildPlanPriceSeries(
             if (pMs < firstFutureMs) {
                 series.push({
                     ts: p.tsHourStart,
-                    hour: new Date(p.tsHourStart).getHours(),
+                    hour: getHourInTimeZone(p.tsHourStart, refTs, timeZone),
                     gridChargeDollarsPerKWH: p.dollarsPerKWH + (p.gridUseDollarsPerKWH || 0),
                     gridExportDollarsPerKWH: p.exportDollarsPerKWH ?? p.dollarsPerKWH ?? 0,
                     isHistory: true,
@@ -240,7 +245,7 @@ export function buildPlanPriceSeries(
     for (const p of resolvedFuture) {
         series.push({
             ts: p.tsHourStart,
-            hour: new Date(p.tsHourStart).getHours(),
+            hour: getHourInTimeZone(p.tsHourStart, refTs, timeZone),
             gridChargeDollarsPerKWH: p.dollarsPerKWH + (p.gridUseDollarsPerKWH || 0),
             gridExportDollarsPerKWH: p.exportDollarsPerKWH ?? 0,
             isHistory: false,
@@ -253,7 +258,7 @@ export function buildPlanPriceSeries(
         if (new Date(lastPeriod.tsEnd).getTime() > new Date(lastPt.ts).getTime()) {
             series.push({
                 ts: lastPeriod.tsEnd,
-                hour: new Date(lastPeriod.tsEnd).getHours(),
+                hour: getHourInTimeZone(lastPeriod.tsEnd, refTs, timeZone),
                 gridChargeDollarsPerKWH: lastPt.gridChargeDollarsPerKWH,
                 gridExportDollarsPerKWH: lastPt.gridExportDollarsPerKWH,
                 isHistory: false,
@@ -352,7 +357,8 @@ function zoneKeyToSummaryCategory(zoneKey: string): SummaryPhaseCategory {
 
 export function buildPlanSummaryBeats(
     periods: PlanPeriod[],
-    currencySymbol: string = '$'
+    currencySymbol: string = '$',
+    timeZone?: string
 ): DaySummaryBeat[] {
     if (!periods || periods.length === 0) {
         return [];
@@ -491,8 +497,8 @@ export function buildPlanSummaryBeats(
     }
 
     return significantPhases.map((p) => {
-        const startFormatted = formatTime(p.tsStart, refTs);
-        const endFormatted = formatTime(p.tsEnd, refTs);
+        const startFormatted = formatTime(p.tsStart, refTs, timeZone);
+        const endFormatted = formatTime(p.tsEnd, refTs, timeZone);
         const timeLabel =
             startFormatted && endFormatted && startFormatted !== endFormatted
                 ? `${startFormatted} – ${endFormatted}`

@@ -19,6 +19,9 @@ import {
     getCurrencySymbol,
     getPlanStatusSubvalue,
     getActionLoadSubType,
+    getDateInTimeZone,
+    getSiteTodayDate,
+    getHourInTimeZone,
     type ActionSummary
 } from './dashboardUtils';
 import { BatteryMode, SolarMode, ActionReason, type Action } from '../api';
@@ -509,6 +512,22 @@ describe('dashboardUtils', () => {
             expect(formatTime('2026-07-21T20:39:04-05:00')).toBe('8:39 PM');
             expect(formatTime('2026-07-22T01:39:04Z', '2026-07-21T20:39:04-05:00')).toBe('8:39 PM');
             expect(formatTime('')).toBe('');
+        });
+
+        it('formatTime and timezone helpers convert UTC timestamps using site IANA timeZone', () => {
+            expect(formatTime('2026-11-09T16:23:00Z', undefined, 'America/Los_Angeles')).toBe('8:23 AM');
+            expect(getHourInTimeZone('2026-11-09T16:23:00Z', undefined, 'America/Los_Angeles')).toBe(8);
+
+            const laStart = getDateInTimeZone(2026, 10, 9, 0, 0, 0, 0, 'America/Los_Angeles');
+            const laEnd = getDateInTimeZone(2026, 10, 9, 23, 59, 59, 999, 'America/Los_Angeles');
+            expect(laStart.toISOString()).toBe('2026-11-09T08:00:00.000Z');
+            expect(laEnd.toISOString()).toBe('2026-11-10T07:59:59.999Z');
+
+            // 2026-11-10T02:30:00Z is still Nov 9 (6:30 PM PST) in America/Los_Angeles
+            const siteToday = getSiteTodayDate('America/Los_Angeles', new Date('2026-11-10T02:30:00Z'));
+            expect(siteToday.getFullYear()).toBe(2026);
+            expect(siteToday.getMonth()).toBe(10);
+            expect(siteToday.getDate()).toBe(9);
         });
 
         it('ignores zero systemTimestamp (0001-01-01) and falls back to systemStatus timestamp offset', () => {
@@ -1219,6 +1238,181 @@ describe('dashboardUtils', () => {
             expect(summary.beats[2].category).toBe('load');
             expect(summary.beats[2].headline).toBe('Ran on solar & battery');
             expect(summary.beats[2].socText).toBe('60% → 40%');
+        });
+
+        it('clamps cross-midnight overnight phase to start at 0 minutes so daytime segments are not squashed to the right', () => {
+            const eveningPeakLoad: ActionSummary = {
+                isSummary: true,
+                type: 'grouped',
+                reason: ActionReason.DischargeAtPeak,
+                loadSubType: 'load',
+                startTime: '2026-11-09T16:21:00-08:00',
+                endTime: '2026-11-09T19:41:00-08:00',
+                latestAction: {
+                    description: '',
+                    timestamp: '2026-11-09T19:41:00-08:00',
+                    batteryMode: BatteryMode.Load,
+                    solarMode: SolarMode.Any,
+                    reason: ActionReason.DischargeAtPeak,
+                    systemStatus: { batterySOC: 50, solarKW: 0, homeKW: 1.5 }
+                },
+                count: 11,
+                alarms: new Set(),
+                storms: new Set(),
+                hasPrice: true,
+                avgPrice: 0.56,
+                min: 0.56,
+                max: 0.56,
+                hasSOC: true,
+                avgSOC: 63,
+                minSOC: 50,
+                maxSOC: 76,
+                startSOC: 76,
+                endSOC: 50,
+                hasSolar: false
+            };
+
+            const afternoonTopUp: ActionSummary = {
+                isSummary: true,
+                type: 'grouped',
+                reason: ActionReason.DeficitCharge,
+                startTime: '2026-11-09T15:01:00-08:00',
+                endTime: '2026-11-09T15:41:00-08:00',
+                latestAction: {
+                    description: '',
+                    timestamp: '2026-11-09T15:41:00-08:00',
+                    batteryMode: BatteryMode.ChargeAny,
+                    solarMode: SolarMode.Any,
+                    reason: ActionReason.DeficitCharge,
+                    systemStatus: { batterySOC: 77, solarKW: 0.2, homeKW: 0.9 }
+                },
+                count: 3,
+                alarms: new Set(),
+                storms: new Set(),
+                hasPrice: true,
+                avgPrice: 0.24,
+                min: 0.24,
+                max: 0.24,
+                hasSOC: true,
+                avgSOC: 68,
+                minSOC: 58,
+                maxSOC: 77,
+                startSOC: 58,
+                endSOC: 77,
+                hasSolar: true
+            };
+
+            const daytimeSolarCharge: ActionSummary = {
+                isSummary: true,
+                type: 'grouped',
+                reason: ActionReason.SufficientBattery,
+                loadSubType: 'solarCharge',
+                startTime: '2026-11-09T09:01:00-08:00',
+                endTime: '2026-11-09T14:43:00-08:00',
+                latestAction: {
+                    description: '',
+                    timestamp: '2026-11-09T14:43:00-08:00',
+                    batteryMode: BatteryMode.Load,
+                    solarMode: SolarMode.Any,
+                    reason: ActionReason.SufficientBattery,
+                    systemStatus: { batterySOC: 58, solarKW: 1.5, homeKW: 0.8 }
+                },
+                count: 14,
+                alarms: new Set(),
+                storms: new Set(),
+                hasPrice: true,
+                avgPrice: 0.24,
+                min: 0.24,
+                max: 0.24,
+                hasSOC: true,
+                avgSOC: 52,
+                minSOC: 45,
+                maxSOC: 58,
+                startSOC: 45,
+                endSOC: 58,
+                hasSolar: true
+            };
+
+            const morningLoad: ActionSummary = {
+                isSummary: true,
+                type: 'grouped',
+                reason: ActionReason.SufficientBattery,
+                loadSubType: 'load',
+                startTime: '2026-11-09T08:23:00-08:00',
+                endTime: '2026-11-09T08:43:00-08:00',
+                latestAction: {
+                    description: '',
+                    timestamp: '2026-11-09T08:43:00-08:00',
+                    batteryMode: BatteryMode.Load,
+                    solarMode: SolarMode.Any,
+                    reason: ActionReason.SufficientBattery,
+                    systemStatus: { batterySOC: 45, solarKW: 0.8, homeKW: 1.0 }
+                },
+                count: 2,
+                alarms: new Set(),
+                storms: new Set(),
+                hasPrice: true,
+                avgPrice: 0.24,
+                min: 0.24,
+                max: 0.24,
+                hasSOC: true,
+                avgSOC: 45.5,
+                minSOC: 45,
+                maxSOC: 46,
+                startSOC: 46,
+                endSOC: 45,
+                hasSolar: true
+            };
+
+            // Overnight standby that began at 10:01 PM the previous night and continued until 8:03 AM
+            const crossMidnightStandby: ActionSummary = {
+                isSummary: true,
+                type: 'grouped',
+                reason: ActionReason.DeficitSaveForPeak,
+                startTime: '2026-11-08T22:01:00-08:00',
+                endTime: '2026-11-09T08:03:00-08:00',
+                latestAction: {
+                    description: '',
+                    timestamp: '2026-11-09T08:03:00-08:00',
+                    batteryMode: BatteryMode.Standby,
+                    solarMode: SolarMode.Any,
+                    reason: ActionReason.DeficitSaveForPeak,
+                    systemStatus: { batterySOC: 46, solarKW: 0.2, homeKW: 0.9 }
+                },
+                count: 30,
+                alarms: new Set(),
+                storms: new Set(),
+                hasPrice: true,
+                avgPrice: 0.24,
+                min: 0.24,
+                max: 0.24,
+                hasSOC: true,
+                avgSOC: 46,
+                minSOC: 46,
+                maxSOC: 46,
+                startSOC: 46,
+                endSOC: 46,
+                hasSolar: false
+            };
+
+            const summary = buildDaySummary(
+                [eveningPeakLoad, afternoonTopUp, daytimeSolarCharge, morningLoad, crossMidnightStandby],
+                '$',
+                'America/Los_Angeles'
+            );
+
+            // First segment (overnight standby) should start at 0% (midnight) and end around 8:23 AM (~34.9%)
+            expect(summary.segments[0].category).toBe('standby');
+            expect(summary.segments[0].leftPercent).toBe(0);
+            expect(summary.segments[0].widthPercent).toBeGreaterThan(30);
+            expect(summary.segments[0].widthPercent).toBeLessThan(40);
+
+            // Daytime solar charge segment should start around 9:01 AM (~37.5%), not squashed past 90%
+            const solarSeg = summary.segments.find(s => s.category === 'solarCharge');
+            expect(solarSeg).toBeDefined();
+            expect(solarSeg!.leftPercent).toBeGreaterThan(35);
+            expect(solarSeg!.leftPercent).toBeLessThan(42);
+            expect(solarSeg!.widthPercent).toBeGreaterThan(20);
         });
     });
 });

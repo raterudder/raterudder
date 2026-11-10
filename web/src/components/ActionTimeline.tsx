@@ -60,19 +60,21 @@ interface ActionTimelineProps {
     currencySymbol?: string;
     collapsible?: boolean;
     defaultOpen?: boolean;
+    timeZone?: string;
 }
 
 const ActionTimeline: React.FC<ActionTimelineProps> = ({
     groupedActions,
     currencySymbol = '$',
     collapsible = false,
-    defaultOpen = false
+    defaultOpen = false,
+    timeZone
 }) => {
     const [open, setOpen] = useState(defaultOpen);
 
     const daySummary = useMemo(
-        () => buildDaySummary(groupedActions, currencySymbol),
-        [groupedActions, currencySymbol]
+        () => buildDaySummary(groupedActions, currencySymbol, timeZone),
+        [groupedActions, currencySymbol, timeZone]
     );
 
     if (groupedActions.length === 0) {
@@ -91,7 +93,7 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({
                 const isEmergency = hasStorms || action.reason === ActionReason.EmergencyMode;
                 const isVPP = !!action.systemStatus?.vppActive || action.reason === ActionReason.VPPActive;
 
-                const reasonText = getReasonText(action, currencySymbol, summary?.loadSubType);
+                const reasonText = getReasonText(action, currencySymbol, summary?.loadSubType, timeZone);
                 const effectiveBatteryMode =
                     action.targetBatteryMode !== undefined && action.targetBatteryMode !== BatteryMode.NoChange
                         ? action.targetBatteryMode
@@ -138,14 +140,14 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({
                                     <div className="timeline-time">
                                         {isSummary &&
                                         summary!.endTime &&
-                                        formatTime(summary!.endTime, refTs) !== formatTime(summary!.startTime, refTs) ? (
+                                        formatTime(summary!.endTime, refTs, timeZone) !== formatTime(summary!.startTime, refTs, timeZone) ? (
                                             <div className="time-range">
-                                                <span className="time-start">{formatTime(summary!.startTime, refTs)}</span>
+                                                <span className="time-start">{formatTime(summary!.startTime, refTs, timeZone)}</span>
                                                 <span className="time-range-sep" aria-hidden="true">–</span>
-                                                <span className="time-end">{formatTime(summary!.endTime, refTs)}</span>
+                                                <span className="time-end">{formatTime(summary!.endTime, refTs, timeZone)}</span>
                                             </div>
                                         ) : (
-                                            formatTime(isSummary ? summary!.startTime : getActionTimestamp(action), refTs)
+                                            formatTime(isSummary ? summary!.startTime : getActionTimestamp(action), refTs, timeZone)
                                         )}
                                     </div>
                                 </div>
@@ -167,10 +169,10 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({
                                     </span>
                                 )}
                                 {showDeficitTag && (
-                                    <span className="tag tag-info">Empty: {formatTime(action.deficitAt!, refTs)}</span>
+                                    <span className="tag tag-info">Empty: {formatTime(action.deficitAt!, refTs, timeZone)}</span>
                                 )}
                                 {showCapacityTag && (
-                                    <span className="tag tag-info">Full: {formatTime(action.capacityAt!, refTs)}</span>
+                                    <span className="tag tag-info">Full: {formatTime(action.capacityAt!, refTs, timeZone)}</span>
                                 )}
                                 {isNegPrice && <span className="tag tag-warning">Negative Price</span>}
                                 {action.dryRun && <span className="tag dry-run">Dry Run</span>}
@@ -195,14 +197,16 @@ const ActionTimeline: React.FC<ActionTimelineProps> = ({
                                                     isSummary && summary
                                                         ? summary.stormStart?.toISOString() || ''
                                                         : action.systemStatus?.storms?.[0]?.tsStart || '',
-                                                    refTs
+                                                    refTs,
+                                                    timeZone
                                                 )}{' '}
                                                 -{' '}
                                                 {formatTime(
                                                     isSummary && summary
                                                         ? summary.stormEnd?.toISOString() || ''
                                                         : action.systemStatus?.storms?.[0]?.tsEnd || '',
-                                                    refTs
+                                                    refTs,
+                                                    timeZone
                                                 )}
                                             </p>
                                         )}

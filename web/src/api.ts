@@ -269,11 +269,22 @@ export interface ESSProviderInfo {
   hidden?: boolean;
 }
 
+export interface SiteLocation {
+    postalCode?: string;
+    latitude?: number;
+    longitude?: number;
+    city?: string;
+    countryCode?: string;
+    timeZone?: string;
+    elevation?: number;
+}
+
 export interface Settings {
     dryRun: boolean;
     pause: boolean;
     countryCode: string;
     postalCode: string;
+    location?: SiteLocation;
     release: string;
     alwaysChargeUnderDollarsPerKWH: number;
     minArbitrageDifferenceDollarsPerKWH: number;
@@ -762,6 +773,7 @@ export interface ForecastResponse {
 }
 export interface EnergyStats {
     tsHourStart: string;
+    timeLocation?: string;
     minBatterySOC: number;
     maxBatterySOC: number;
     batteryChargedKWH: number;

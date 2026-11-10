@@ -11,6 +11,9 @@ import {
     getActionTimestamp,
     getCurrencySymbol,
     getActionLoadSubType,
+    getDateInTimeZone,
+    getSiteTodayDate,
+    isSameCalendarDate,
     type ActionSummary,
     type ActionSummaryAccumulator,
     type LoadSubType,
@@ -168,19 +171,27 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
         setShowLocationWarning(false);
     };
 
-    const currentDate = useMemo(() => {
+    const siteTimeZone =
+        (actions.length > 0 ? actions[actions.length - 1]?.systemStatus?.timeLocation : undefined) ||
+        settings?.location?.timeZone;
+
+    const todayDate = useMemo(() => {
         void refreshTrigger;
+        return getSiteTodayDate(siteTimeZone);
+    }, [siteTimeZone, refreshTrigger]);
+
+    const currentDate = useMemo(() => {
         if (dateQuery) {
             const parts = dateQuery.split('-');
             if (parts.length === 3) {
                 const year = parseInt(parts[0], 10);
                 const month = parseInt(parts[1], 10) - 1;
                 const day = parseInt(parts[2], 10);
-                return new Date(year, month, day);
+                return new Date(year, month, day, 12, 0, 0, 0);
             }
         }
-        return new Date();
-    }, [dateQuery, refreshTrigger]);
+        return todayDate;
+    }, [dateQuery, todayDate]);
 
     const isFirstMount = useRef(true);
 
@@ -194,16 +205,15 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
             setLoading(true);
             setError(null);
             try {
-                // Calculate start and end of the day in local time
-                const start = new Date(currentDate);
-                start.setHours(0, 0, 0, 0);
-                const end = new Date(currentDate);
-                end.setHours(23, 59, 59, 999);
+                // Calculate start and end of the day in the site's timezone (or local time if unknown)
+                const y = currentDate.getFullYear();
+                const m = currentDate.getMonth();
+                const d = currentDate.getDate();
+                const start = getDateInTimeZone(y, m, d, 0, 0, 0, 0, siteTimeZone);
+                const end = getDateInTimeZone(y, m, d, 23, 59, 59, 999, siteTimeZone);
 
-                const weekStart = new Date(start);
-                weekStart.setDate(weekStart.getDate() - 6);
-                const monthStart = new Date(start);
-                monthStart.setDate(monthStart.getDate() - 29);
+                const weekStart = getDateInTimeZone(y, m, d - 6, 0, 0, 0, 0, siteTimeZone);
+                const monthStart = getDateInTimeZone(y, m, d - 29, 0, 0, 0, 0, siteTimeZone);
 
                 const actionsAndSavingsData = onlyPlanMode
                     ? await fetchActionsAndSavings(start, end, siteID, {
@@ -239,14 +249,14 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
             isCancelled = true;
             clearTimeout(timer);
         };
-    }, [currentDate, siteID, refreshTrigger, onlyPlanMode]);
+    }, [currentDate, siteID, refreshTrigger, onlyPlanMode, siteTimeZone]);
 
     const handleDateChange = useCallback((days: number) => {
         const newDate = new Date(currentDate);
         newDate.setDate(newDate.getDate() + days);
-        const today = new Date();
+        const today = getSiteTodayDate(siteTimeZone);
         const p = new URLSearchParams(search);
-        if (newDate.toDateString() === today.toDateString()) {
+        if (isSameCalendarDate(newDate, today)) {
             p.delete('date');
             const newSearch = p.toString();
             navigate(location + (newSearch ? "?" + newSearch : ""));
@@ -257,9 +267,9 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
             p.set('date', `${year}-${month}-${day}`);
             navigate(location + "?" + p.toString());
         }
-    }, [currentDate, search, location, navigate]);
+    }, [currentDate, siteTimeZone, search, location, navigate]);
 
-    const isToday = currentDate.toDateString() === new Date().toDateString();
+    const isToday = isSameCalendarDate(currentDate, todayDate);
 
 
     const latestAction = actions.length > 0 ? actions[actions.length - 1] : null;
@@ -585,7 +595,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                         </div>
                     )}
                     {siteID !== 'ALL' && isToday && latestAction && (
-                        <CurrentStatus action={latestAction} currencySymbol={currencySymbol} planMode={onlyPlanMode} />
+                        <CurrentStatus action={latestAction} currencySymbol={currencySymbol} planMode={onlyPlanMode} timeZone={siteTimeZone} />
                     )}
 
                     <SavingsHero
@@ -600,7 +610,7 @@ const Dashboard: React.FC<{ siteID?: string, settings?: Settings | null }> = ({ 
                     {siteID !== 'ALL' && (
                         <>
                             {visibleActions.length === 0 && <p className="no-actions">No actions recorded for this day.</p>}
-                            <ActionTimeline groupedActions={groupedActions} currencySymbol={currencySymbol} collapsible />
+                            <ActionTimeline groupedActions={groupedActions} currencySymbol={currencySymbol} collapsible timeZone={siteTimeZone} />
                         </>
                     )}
                 </>
