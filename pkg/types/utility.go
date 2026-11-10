@@ -283,8 +283,9 @@ func (p *TimePeriod) Contains(t time.Time) (bool, UtilityPeriodStartEnd, error) 
 			if match {
 				// On fall-back DST days where a wall-clock hour repeats (e.g. 01:00 EDT followed by 01:00 EST),
 				// time.Date always resolves to the first occurrence. When the period boundary is in the same
-				// hour as t, anchor to tHourStart so hStart/hEnd preserve t's actual DST offset.
-				tHourStart := t.Add(-time.Duration(t.Minute())*time.Minute - time.Duration(t.Second())*time.Second - time.Duration(t.Nanosecond()))
+				// hour as t, anchor to tHourStart so hStart/hEnd preserve t's actual DST offset, calling Round(0)
+				// first to strip any monotonic clock reading from time.Now() so hStart/hEnd match time.Date.
+				tHourStart := t.Round(0).Add(-time.Duration(t.Minute())*time.Minute - time.Duration(t.Second())*time.Second - time.Duration(t.Nanosecond()))
 				hStart := time.Date(t.Year(), t.Month(), t.Day(), hour.HourStart, hour.MinuteStart, 0, 0, t.Location())
 				if hour.HourStart == t.Hour() {
 					hStart = tHourStart.Add(time.Duration(hour.MinuteStart) * time.Minute)

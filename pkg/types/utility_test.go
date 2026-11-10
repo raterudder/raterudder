@@ -22,6 +22,19 @@ func TestUtilityPeriodContains(t *testing.T) {
 		expectedEnd := time.Date(now.Year(), now.Month(), now.Day(), 24, 0, 0, 0, now.Location())
 		assert.Equal(t, expectedStart, startEnd.Start)
 		assert.Equal(t, expectedEnd, startEnd.End)
+
+		// Also verify when HourStart/HourEnd match t.Hour() on a time carrying a monotonic clock reading
+		// (which previously only triggered for HourStart: 0 during 00:xx UTC and leaked m=... into Start/End).
+		nowMono := time.Now().UTC()
+		nowMono = nowMono.Add(time.Duration(15-nowMono.Minute()) * time.Minute)
+		sameHourPeriod := &TimePeriod{
+			Hours: []UtilityHourPeriod{{HourStart: nowMono.Hour(), MinuteStart: 0, HourEnd: nowMono.Hour(), MinuteEnd: 45}},
+		}
+		containedSameHour, sameHourStartEnd, err := sameHourPeriod.Contains(nowMono)
+		require.NoError(t, err)
+		assert.True(t, containedSameHour)
+		assert.Equal(t, time.Date(nowMono.Year(), nowMono.Month(), nowMono.Day(), nowMono.Hour(), 0, 0, 0, time.UTC), sameHourStartEnd.Start)
+		assert.Equal(t, time.Date(nowMono.Year(), nowMono.Month(), nowMono.Day(), nowMono.Hour(), 45, 0, 0, time.UTC), sameHourStartEnd.End)
 	})
 
 	t.Run("empty period", func(t *testing.T) {
