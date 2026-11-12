@@ -634,6 +634,7 @@ func findSolarExportStartIdx(
 	defaultSolarMode types.SolarMode,
 	requiredEndSOC float64,
 	effRT float64,
+	lastAction *types.Action,
 ) (int, bool) {
 	if !settings.ManageTOUSchedules || !settings.GridExportSolar || block.maxExportRate <= 0 {
 		return 0, false
@@ -655,14 +656,20 @@ func findSolarExportStartIdx(
 		return 0, false
 	}
 
+	isContinuingSolarExport := block.startIdx == 0 && lastAction != nil && lastAction.SolarMode == types.SolarModeExport
+
 	for s := block.startIdx; s <= block.endIdx; s++ {
+		minSolarKW := minSignificantSolarKW
+		if isContinuingSolarExport && s == block.startIdx {
+			minSolarKW = minSolarGenerationKW
+		}
 		simSt := startState
 		var simGridImportKWH float64
 		marginOK := true
 		hasSunnyExport := false
 		for k := block.startIdx; k <= block.endIdx; k++ {
 			cand := solarExportOrLoadCandForStep(k, s, true, defaultSolarMode)
-			if cand.solarMode == types.SolarModeExport && timeline[k].solarKWH >= minSignificantSolarKW*timeline[k].durationHours {
+			if cand.solarMode == types.SolarModeExport && timeline[k].solarKWH >= minSolarKW*timeline[k].durationHours {
 				if simSt.soc <= timeline[k].minSOC+solarExportReserveMarginPct {
 					marginOK = false
 					break
@@ -814,7 +821,7 @@ func expandBlockAction(
 	case blockActionDirectSolarExport:
 		effRT := resolveRoundTripEfficiency(settings.GetOptimizationParams().RoundTripEfficiency, currentStatus)
 		floorSOC := max(choice.targetSOC, block.minSOC)
-		solarExportStartIdx, hasSolarExport := findSolarExportStartIdx(block, startState, timeline, settings, defaultSolarMode, floorSOC, effRT)
+		solarExportStartIdx, hasSolarExport := findSolarExportStartIdx(block, startState, timeline, settings, defaultSolarMode, floorSOC, effRT, lastAction)
 		for i := 0; i < L; i++ {
 			actions[i] = solarExportOrLoadCandForStep(block.startIdx+i, solarExportStartIdx, hasSolarExport, defaultSolarMode)
 		}
@@ -962,7 +969,7 @@ func expandBlockAction(
 		solarExportStartIdx := 0
 		hasSolarExport := false
 		if choice.useSolarExportPrefix {
-			solarExportStartIdx, hasSolarExport = findSolarExportStartIdx(block, startState, timeline, settings, defaultSolarMode, floorSOC, effRT)
+			solarExportStartIdx, hasSolarExport = findSolarExportStartIdx(block, startState, timeline, settings, defaultSolarMode, floorSOC, effRT, lastAction)
 		}
 		prefixCandForStep := func(step int) actionCandidate {
 			return solarExportOrLoadCandForStep(step, solarExportStartIdx, hasSolarExport, defaultSolarMode)
@@ -1238,24 +1245,32 @@ func isBlockActionAllowed(
 		// BatteryModeLoad during the early intervals of a block before switching to SolarModeExport,
 		// a block that enters at minSOC is still eligible if its sunny intervals provide enough
 		// positiveNetSolarKWH to lift SOC above minSOC + solarExportReserveMarginPct.
-		var hasSunnyInterval bool
+		// When continuing an already-active SolarModeExport session at block 0, allow trickle daylight
+		// (>= minSolarGenerationKW) to sustain export as long as SOC remains above the reserve margin.
+		isContinuingSolarExport := blockIdx == 0 && lastAction != nil && lastAction.SolarMode == types.SolarModeExport
+		var hasSignificantSolar, hasTrickleSolar bool
 		var positiveNetSolarKWH float64
 		for k := block.startIdx; k <= block.endIdx; k++ {
 			if timeline[k].solarKWH >= minSignificantSolarKW*timeline[k].durationHours {
-				hasSunnyInterval = true
+				hasSignificantSolar = true
+			} else if isContinuingSolarExport && timeline[k].solarKWH >= minSolarGenerationKW*timeline[k].durationHours {
+				hasTrickleSolar = true
 			}
 			if net := timeline[k].solarKWH - timeline[k].loadKWH; net > 0 {
 				positiveNetSolarKWH += net
 			}
 		}
-		if !hasSunnyInterval {
-			return false
+		if hasSignificantSolar {
+			maxReachableSOC := startState.soc + (positiveNetSolarKWH*math.Sqrt(effRT)/startState.capacityKWH)*100.0
+			if maxReachableSOC <= block.minSOC+solarExportReserveMarginPct {
+				return false
+			}
+			return true
 		}
-		maxReachableSOC := startState.soc + (positiveNetSolarKWH*math.Sqrt(effRT)/startState.capacityKWH)*100.0
-		if maxReachableSOC <= block.minSOC+solarExportReserveMarginPct {
-			return false
+		if hasTrickleSolar && startState.soc > block.minSOC+solarExportReserveMarginPct {
+			return true
 		}
-		return true
+		return false
 
 	case blockActionStandby:
 		// Disallow holding in Standby on any block when no VPP event, no higher import rate

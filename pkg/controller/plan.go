@@ -6,11 +6,15 @@ import (
 	"log/slog"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/raterudder/raterudder/pkg/feats"
 	"github.com/raterudder/raterudder/pkg/log"
 	"github.com/raterudder/raterudder/pkg/types"
 )
+
+var ffPeakP75Load = feats.Bool("peakP75Load", false)
 
 const (
 	// minPlanningHorizonHours is the minimum lookahead required for accurate planning before erroring out.
@@ -360,7 +364,14 @@ func calculateTimelinePriceRange(timeline []planInterval) (minImport, maxImport 
 func isTruePeakRate(importRate, minImport, maxImport float64, settings types.Settings) bool {
 	return maxImport > 0 &&
 		importRate >= maxImport-priceMaterialityThresholdDollars &&
-		maxImport >= minImport+minDeficitPriceSpread(settings)
+		maxImport >= max(0.0, minImport)+minDeficitPriceSpread(settings)
+}
+
+// shouldUsePeakP75Load reports whether peak-rate intervals should use the 75th-percentile (P75)
+// home load forecast (instead of the baseline P55/P70 forecast) to buffer against peak load spikes.
+// Gated behind ffPeakP75Load; when enabled, applies to Balanced and Conservative optimization profiles.
+func shouldUsePeakP75Load(ctx context.Context, settings types.Settings) bool {
+	return ffPeakP75Load.Enabled(ctx) && !strings.EqualFold(settings.OptimizationProfile, "aggressive")
 }
 
 // findUpcomingPeak finds the highest price interval in timeline strictly after stepIdx.
@@ -487,7 +498,7 @@ func (c *Controller) Plan(
 		return Decision{}, types.Plan{}, fmt.Errorf("buildPlanningTimeline: %w", err)
 	}
 	vppEvents = filterVPPAnchorsToTimeline(vppEvents, timeline)
-	postHorizon := c.buildPostHorizonValuation(timeline, futurePrices, settings, currentStatus, model)
+	postHorizon := c.buildPostHorizonValuation(ctx, timeline, futurePrices, settings, currentStatus, model)
 
 	// 4. Initial battery state
 	capKWH := currentStatus.BatteryCapacityKWH
@@ -985,6 +996,22 @@ func (c *Controller) buildPlanningTimeline(
 		idx++
 	}
 
+	// On Balanced and Conservative profiles, elevate forecasted home load during peak-rate intervals
+	// to the 75th percentile (P75) while keeping P55 elsewhere so peak survival buffers scale with each
+	// site's empirical load volatility and naturally taper down as peak hours pass.
+	if len(timeline) > 0 && len(history) > 0 && shouldUsePeakP75Load(ctx, settings) {
+		minImp, maxImp := calculateTimelinePriceRange(timeline)
+		for i := range timeline {
+			if isTruePeakRate(timeline[i].importRate, minImp, maxImp, settings) {
+				profile := findTimeProfile(model, timeline[i].startTime)
+				p75LoadKWH := max(profile.AvgHomeLoadKWH, profile.P75HomeLoadKWH) * timeline[i].durationHours
+				if p75LoadKWH > timeline[i].loadKWH {
+					timeline[i].loadKWH = p75LoadKWH
+				}
+			}
+		}
+	}
+
 	totalHorizonDuration := time.Duration(0)
 	if len(timeline) > 0 {
 		totalHorizonDuration = timeline[len(timeline)-1].endTime.Sub(now)
@@ -1072,6 +1099,7 @@ func filterVPPAnchorsToTimeline(vppEvents []vppAnchor, timeline []planInterval) 
 // buildPostHorizonValuation computes the post-horizon replacement rate, net solar surplus, and
 // rate-sorted hourly net load slices across the 4 hours immediately following the planning horizon.
 func (c *Controller) buildPostHorizonValuation(
+	ctx context.Context,
 	timeline []planInterval,
 	futurePrices []types.Price,
 	settings types.Settings,
@@ -1122,6 +1150,8 @@ func (c *Controller) buildPostHorizonValuation(
 			break
 		}
 	}
+	minImp, maxImp := calculateTimelinePriceRange(timeline)
+	usePeakP75 := shouldUsePeakP75Load(ctx, settings)
 	var postHorizonSolarSurplusKWH float64
 	lastHourRate := postHorizon.knownPostHorizonRate
 	defaultHourlyLoadKWH := defaultPostHorizonLoadKWH / float64(postHorizonLoadForecastHours)
@@ -1157,6 +1187,9 @@ func (c *Controller) buildPostHorizonValuation(
 		homeLoadKWH := defaultHourlyLoadKWH
 		if hasLoadModel {
 			homeLoadKWH = prof.AvgHomeLoadKWH
+			if usePeakP75 && isTruePeakRate(hourRate, minImp, maxImp, settings) {
+				homeLoadKWH = max(homeLoadKWH, prof.P75HomeLoadKWH)
+			}
 		}
 		netLoadKWH := homeLoadKWH - prof.AvgSolarKWH
 		if netLoadKWH <= 0 {

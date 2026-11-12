@@ -1077,19 +1077,8 @@ func (c *Controller) BuildHourlyEnergyModel(
 
 		// Compute weighted percentile of the gathered points
 		pct := defaultStrategyPercentile
-		switch settings.HomeLoadPredictionStrategy {
-		case "conservative", "70p":
+		if settings.HomeLoadPredictionStrategy == "conservative" {
 			pct = conservativeStrategyPercentile
-		case "balanced", "moderate", "65p":
-			pct = 0.65
-		case "75p":
-			pct = 0.75
-		case "80p":
-			pct = 0.80
-		case "60p":
-			pct = 0.60
-		case "50p":
-			pct = 0.50
 		}
 		var avgLoadA, p75LoadA float64
 		if len(pts) > 0 {

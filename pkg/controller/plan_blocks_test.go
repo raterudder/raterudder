@@ -629,7 +629,7 @@ func TestExpandBlockAction(t *testing.T) {
 		touSettings := settings
 		touSettings.ManageTOUSchedules = true
 		touSettings.GridExportSolar = true
-		startIdx, found := findSolarExportStartIdx(block, stateFull, timeline, touSettings, types.SolarModeAny, 20.0, 0.90)
+		startIdx, found := findSolarExportStartIdx(block, stateFull, timeline, touSettings, types.SolarModeAny, 20.0, 0.90, nil)
 		assert.True(t, found)
 		assert.Equal(t, 0, startIdx)
 
@@ -642,7 +642,7 @@ func TestExpandBlockAction(t *testing.T) {
 		// When ManageTOUSchedules is false, findSolarExportStartIdx returns (0, false) and solar export is not scheduled.
 		noTouSettings := touSettings
 		noTouSettings.ManageTOUSchedules = false
-		startIdxNoTOU, foundNoTOU := findSolarExportStartIdx(block, stateFull, timeline, noTouSettings, types.SolarModeAny, 20.0, 0.90)
+		startIdxNoTOU, foundNoTOU := findSolarExportStartIdx(block, stateFull, timeline, noTouSettings, types.SolarModeAny, 20.0, 0.90, nil)
 		assert.False(t, foundNoTOU)
 		assert.Equal(t, 0, startIdxNoTOU)
 
@@ -651,6 +651,43 @@ func TestExpandBlockAction(t *testing.T) {
 		for i := 0; i < 3; i++ {
 			assert.Equal(t, types.SolarModeAny, noTouActs[i].solarMode, "When ManageTOUSchedules is false, solar mode must fall back to default SolarModeAny")
 		}
+
+		// Trickle solar (< 0.5 kW minSignificantSolarKW, >= 0.05 kW minSolarGenerationKW) followed by dark evening:
+		// Disallowed when initiating a new solar export, but sustained at step 0 when continuing an active SolarModeExport
+		// session with SOC safely above minSOC + solarExportReserveMarginPct.
+		trickleTimeline := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.25, solarKWH: 0.25, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.25, solarKWH: 0.15, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.25, solarKWH: 0.0, loadKWH: 0.5, minSOC: 20.0},
+		}
+		_, foundFreshTrickle := findSolarExportStartIdx(block, stateFull, trickleTimeline, touSettings, types.SolarModeAny, 20.0, 0.90, nil)
+		assert.False(t, foundFreshTrickle, "Trickle solar (< 0.5 kW) must not initiate a new DirectSolarExport without prior SolarModeExport")
+
+		lastSolarExport := &types.Action{BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport}
+		contIdx, foundContTrickle := findSolarExportStartIdx(block, stateFull, trickleTimeline, touSettings, types.SolarModeAny, 20.0, 0.90, lastSolarExport)
+		assert.True(t, foundContTrickle, "Continuing SolarModeExport at block 0 must sustain export during overcast trickle solar (>= 0.05 kW)")
+		assert.Equal(t, 0, contIdx)
+
+		contActs := expandBlockAction(block, blockActionChoice{actionType: blockActionDirectSolarExport, targetSOC: 20.0}, stateFull, trickleTimeline, nil, touSettings, types.SystemStatus{}, lastSolarExport)
+		if assert.Len(t, contActs, 3) {
+			for i := 0; i < 3; i++ {
+				assert.Equal(t, types.SolarModeExport, contActs[i].solarMode)
+			}
+		}
+
+		// Near-reserve SOC (<= minSOC + 5%) must exit SolarModeExport even when continuing.
+		stateNearReserve := planState{soc: 24.0, energyKWH: 13.5 * 0.24, capacityKWH: 13.5, maxChargeKW: 5.0, maxDischargeKW: 5.0, time: now}
+		_, foundLowSOC := findSolarExportStartIdx(block, stateNearReserve, trickleTimeline, touSettings, types.SolarModeAny, 20.0, 0.90, lastSolarExport)
+		assert.False(t, foundLowSOC, "Continuing SolarModeExport must stop when SOC drops within solarExportReserveMarginPct of minSOC")
+
+		// Zero solar after sunset (< minSolarGenerationKW) must exit SolarModeExport even when continuing.
+		darkTimeline := []planInterval{
+			{startTime: now, endTime: now.Add(time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.25, solarKWH: 0.0, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(time.Hour), endTime: now.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.25, solarKWH: 0.0, loadKWH: 0.5, minSOC: 20.0},
+			{startTime: now.Add(2 * time.Hour), endTime: now.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.35, exportRate: 0.25, solarKWH: 0.0, loadKWH: 0.5, minSOC: 20.0},
+		}
+		_, foundDark := findSolarExportStartIdx(block, stateFull, darkTimeline, touSettings, types.SolarModeAny, 20.0, 0.90, lastSolarExport)
+		assert.False(t, foundDark, "Post-sunset zero solar must exit SolarModeExport")
 	})
 
 	t.Run("Standby_PartialLoadDownToTargetSOCFloor", func(t *testing.T) {
@@ -825,6 +862,42 @@ func TestIsBlockActionAllowed(t *testing.T) {
 		state := planState{soc: 50.0, capacityKWH: 13.5, time: now}
 		allowed := isBlockActionAllowed(1, noSolarBlock, blockActionChoice{actionType: blockActionDirectSolarExport}, blocks, state, vppEvents, postHorizonRate, settings, types.SystemStatus{}, noSolarTimeline, nil)
 		assert.False(t, allowed, "DirectSolarExport must be disallowed when there is no solar")
+
+		// Trickle solar (0.24 kW, < 0.5 kW minSignificantSolarKW and >= 0.05 kW minSolarGenerationKW) in Block 0 (On-Peak):
+		peakBlock0 := blockExpensive
+		peakBlock0.startIdx = 0
+		peakBlock0.endIdx = 2
+		offPeakBlock1 := blockCheap
+		offPeakBlock1.startIdx = 3
+		offPeakBlock1.endIdx = 5
+		peakFirstBlocks := []timelineBlock{peakBlock0, offPeakBlock1}
+		trickleTimeline := make([]planInterval, len(baseTimeline))
+		copy(trickleTimeline, baseTimeline)
+		for i := 0; i < 3; i++ {
+			trickleTimeline[i].importRate = 0.40
+			trickleTimeline[i].exportRate = 0.35
+			trickleTimeline[i].solarKWH = 0.08 // 0.24 kW over 20m
+		}
+		for i := 3; i < 6; i++ {
+			trickleTimeline[i].importRate = 0.05
+			trickleTimeline[i].exportRate = 0.04
+			trickleTimeline[i].solarKWH = 0.0
+		}
+
+		lastSolarExport := &types.Action{BatteryMode: types.BatteryModeLoad, SolarMode: types.SolarModeExport}
+		assert.False(t, isBlockActionAllowed(0, peakBlock0, blockActionChoice{actionType: blockActionDirectSolarExport}, peakFirstBlocks, state, vppEvents, postHorizonRate, settings, types.SystemStatus{}, trickleTimeline, nil),
+			"Trickle solar (< 0.5 kW) must not initiate a new DirectSolarExport when lastAction is nil")
+		assert.True(t, isBlockActionAllowed(0, peakBlock0, blockActionChoice{actionType: blockActionDirectSolarExport}, peakFirstBlocks, state, vppEvents, postHorizonRate, settings, types.SystemStatus{}, trickleTimeline, lastSolarExport),
+			"Continuing an active SolarModeExport at block 0 must be allowed with trickle solar (>= 0.05 kW) and sufficient SOC")
+		assert.True(t, isBlockActionAllowed(0, peakBlock0, blockActionChoice{actionType: blockActionExport, targetSOC: 20.0, useSolarExportPrefix: true}, peakFirstBlocks, state, vppEvents, postHorizonRate, settings, types.SystemStatus{}, trickleTimeline, lastSolarExport),
+			"Hybrid DirectSolarExport->Export prefix must also remain allowed when continuing an active SolarModeExport at block 0")
+		assert.False(t, isBlockActionAllowed(1, peakBlock0, blockActionChoice{actionType: blockActionDirectSolarExport}, []timelineBlock{offPeakBlock1, peakBlock0}, state, vppEvents, postHorizonRate, settings, types.SystemStatus{}, trickleTimeline, lastSolarExport),
+			"Trickle-solar continuation only applies at blockIdx == 0, never to downstream blocks")
+		assert.False(t, isBlockActionAllowed(0, blockCheap, blockActionChoice{actionType: blockActionDirectSolarExport}, blocks, state, vppEvents, postHorizonRate, settings, types.SystemStatus{}, trickleTimeline, lastSolarExport),
+			"Continuing SolarModeExport must still be disallowed once an off-peak / lowest-price block begins")
+		stateNearReserve := planState{soc: 24.0, capacityKWH: 13.5, time: now}
+		assert.False(t, isBlockActionAllowed(0, peakBlock0, blockActionChoice{actionType: blockActionDirectSolarExport}, peakFirstBlocks, stateNearReserve, vppEvents, postHorizonRate, settings, types.SystemStatus{}, trickleTimeline, lastSolarExport),
+			"Continuing SolarModeExport with trickle solar must be disallowed when SOC is at or below minSOC + solarExportReserveMarginPct")
 	})
 
 	t.Run("Charge_DisallowedDuringActiveVPPEvent", func(t *testing.T) {
@@ -1860,6 +1933,68 @@ func TestCritiqueBlockPlan(t *testing.T) {
 		assert.Equal(t, blockActionCharge, win[1].actionType, "Overnight Block 1 must grid-charge for Day-2 Peak")
 		assert.Equal(t, blockActionLoad, win[2].actionType, "Day-2 Peak Block 2 must discharge in Load")
 	})
+
+	t.Run("ContinuesDirectSolarExportDuringOvercastPeakDipUntilSunset", func(t *testing.T) {
+		t.Parallel()
+		c := NewController()
+
+		touSettings := settings
+		touSettings.MinBatterySOC = 30.0
+		touSettings.MinBatteryExportDifferenceDollarsPerKWH = 0.10
+
+		// Receding two-tier TOU peak horizon (On-Peak $0.30 import / $0.295 export, Off-Peak $0.2075 import / $0.2025 export):
+		// - Poll 1 (sunny start >= 0.5 kW): interval 0 has 1.2 kW solar, intervals 1..2 have 0.30 kW overcast solar,
+		//   intervals 3..4 are post-sunset (0.0 kW), interval 5 is Off-Peak.
+		poll1Start := time.Date(2026, 11, 10, 13, 0, 0, 0, time.UTC)
+		buildHorizon := func(fromIdx int) []planInterval {
+			full := []planInterval{
+				{startTime: poll1Start, endTime: poll1Start.Add(time.Hour), durationHours: 1.0, importRate: 0.30, exportRate: 0.295, solarKWH: 1.20, loadKWH: 0.40, minSOC: 30.0},
+				{startTime: poll1Start.Add(time.Hour), endTime: poll1Start.Add(2 * time.Hour), durationHours: 1.0, importRate: 0.30, exportRate: 0.295, solarKWH: 0.30, loadKWH: 0.40, minSOC: 30.0},
+				{startTime: poll1Start.Add(2 * time.Hour), endTime: poll1Start.Add(3 * time.Hour), durationHours: 1.0, importRate: 0.30, exportRate: 0.295, solarKWH: 0.20, loadKWH: 0.40, minSOC: 30.0},
+				{startTime: poll1Start.Add(3 * time.Hour), endTime: poll1Start.Add(4 * time.Hour), durationHours: 1.0, importRate: 0.30, exportRate: 0.295, solarKWH: 0.0, loadKWH: 0.50, minSOC: 30.0},
+				{startTime: poll1Start.Add(4 * time.Hour), endTime: poll1Start.Add(5 * time.Hour), durationHours: 1.0, importRate: 0.30, exportRate: 0.295, solarKWH: 0.0, loadKWH: 0.50, minSOC: 30.0},
+				{startTime: poll1Start.Add(5 * time.Hour), endTime: poll1Start.Add(15 * time.Hour), durationHours: 10.0, importRate: 0.2075, exportRate: 0.2025, solarKWH: 0.0, loadKWH: 3.00, minSOC: 30.0},
+			}
+			return full[fromIdx:]
+		}
+
+		state45 := planState{soc: 45.0, energyKWH: 30.0 * 0.45, capacityKWH: 30.0, maxChargeKW: 10.0, maxDischargeKW: 10.0, time: poll1Start}
+		path1 := c.searchOptimalPlanBlocks(ctx, buildHorizon(0), state45, nil, postHorizonValuation{knownPostHorizonRate: 0.2075}, touSettings, types.SystemStatus{}, nil)
+		require.NotNil(t, path1)
+		if assert.NotEmpty(t, path1.actions) {
+			assert.Equal(t, types.BatteryModeLoad, path1.actions[0].batteryMode)
+			assert.Equal(t, types.SolarModeExport, path1.actions[0].solarMode, "Sunny peak interval (>= 0.5 kW) must initiate DirectSolarExport")
+		}
+
+		// Poll 2 (1 hour later, overcast 0.30 kW / 0.20 kW < 0.5 kW): continuing from Poll 1 keeps SolarModeExport active.
+		state43 := planState{soc: 43.0, energyKWH: 30.0 * 0.43, capacityKWH: 30.0, maxChargeKW: 10.0, maxDischargeKW: 10.0, time: poll1Start.Add(time.Hour)}
+		lastAct1 := &types.Action{
+			Timestamp:   poll1Start,
+			BatteryMode: path1.actions[0].batteryMode,
+			SolarMode:   path1.actions[0].solarMode,
+		}
+		path2 := c.searchOptimalPlanBlocks(ctx, buildHorizon(1), state43, nil, postHorizonValuation{knownPostHorizonRate: 0.2075}, touSettings, types.SystemStatus{}, lastAct1)
+		require.NotNil(t, path2)
+		if assert.NotEmpty(t, path2.actions) {
+			assert.Equal(t, types.BatteryModeLoad, path2.actions[0].batteryMode)
+			assert.Equal(t, types.SolarModeExport, path2.actions[0].solarMode, "Overcast mid-peak dip (0.30 kW) must continue SolarModeExport when lastAction exported solar")
+		}
+
+		// Poll 3 (3 hours later, post-sunset 0.0 kW): exits SolarModeExport cleanly while preserving tail BatteryModeExport.
+		state40 := planState{soc: 40.0, energyKWH: 30.0 * 0.40, capacityKWH: 30.0, maxChargeKW: 10.0, maxDischargeKW: 10.0, time: poll1Start.Add(3 * time.Hour)}
+		lastAct2 := &types.Action{
+			Timestamp:   poll1Start.Add(2 * time.Hour),
+			BatteryMode: path2.actions[0].batteryMode,
+			SolarMode:   path2.actions[0].solarMode,
+		}
+		path3 := c.searchOptimalPlanBlocks(ctx, buildHorizon(3), state40, nil, postHorizonValuation{knownPostHorizonRate: 0.2075}, touSettings, types.SystemStatus{}, lastAct2)
+		require.NotNil(t, path3)
+		if assert.Len(t, path3.actions, 3) {
+			assert.Equal(t, types.BatteryModeLoad, path3.actions[0].batteryMode)
+			assert.Equal(t, types.SolarModeAny, path3.actions[0].solarMode, "Post-sunset (0.0 kW) must exit SolarModeExport")
+			assert.Equal(t, types.BatteryModeExport, path3.actions[1].batteryMode, "Tail of On-Peak must still dump surplus battery")
+		}
+	})
 }
 
 func TestOptimizeBlockTargets(t *testing.T) {
@@ -2429,7 +2564,7 @@ func TestOptimizeBlockTargets(t *testing.T) {
 				DollarsPerKWH: 0.20754,
 			},
 		}
-		postHorizon := c.buildPostHorizonValuation(timelineStandby, postHorizonPrices, standbySettings, standbyStatus, nil)
+		postHorizon := c.buildPostHorizonValuation(ctx, timelineStandby, postHorizonPrices, standbySettings, standbyStatus, nil)
 		pathStandby := c.searchOptimalPlanBlocks(ctx, timelineStandby, initStandby, nil, postHorizon, standbySettings, standbyStatus, nil)
 		require.NotNil(t, pathStandby)
 		require.Len(t, pathStandby.actions, 72)
@@ -3497,7 +3632,7 @@ func TestPlanConstraintMechanisms(t *testing.T) {
 			BatterySOC:         30.0,
 		}
 		vppEvents := extractVPPAnchors(t0100, status0100, settings)
-		postHorizon := c.buildPostHorizonValuation(timeline, nil, settings, status0100, nil)
+		postHorizon := c.buildPostHorizonValuation(ctx, timeline, nil, settings, status0100, nil)
 		pathAtStart := c.searchOptimalPlanBlocks(ctx, timeline, initial, vppEvents, postHorizon, settings, status0100, nil)
 		if assert.Len(t, pathAtStart.actions, 4) {
 			assert.Equal(t, types.BatteryModeChargeAny, pathAtStart.actions[1].batteryMode,

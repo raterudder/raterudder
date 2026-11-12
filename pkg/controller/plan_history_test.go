@@ -29,7 +29,7 @@ var planBaselines = map[string]float64{
 	"site4_may.json":             2.383,
 	"site4_october.json":         -0.758,
 	"site4_september.json":       -4.214,
-	"site5_june.json":            20.539,
+	"site5_june.json":            20.538,
 	"site5_october.json":         -1.107,
 	"site5_september.json":       14.974,
 	"site7_june.json":            32.014,
@@ -42,7 +42,7 @@ var planBaselines = map[string]float64{
 	"site15_october.json":        5.079,
 	"site15_september.json":      3.369,
 	"site16_late-september.json": 3.010,
-	"site5_mid-october.json":     1.790,
+	"site5_mid-october.json":     1.789,
 }
 
 // TestPlanHistory evaluates the new Plan engine against real-world recorded site history datasets

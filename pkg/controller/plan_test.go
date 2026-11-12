@@ -887,7 +887,7 @@ func TestBuildPlanningTimeline(t *testing.T) {
 		expectedEnd1600 := time.Date(2026, 6, 16, 20, 0, 0, 0, chicagoLoc)
 		assert.Equal(t, expectedEnd1600, tl1600[len(tl1600)-1].endTime,
 			"When 24h lands mid-peak (16:00 Day 2), horizon must extend to 1 hour after Peak (20:00 Day 2 = 28h)")
-		ph1600 := c.buildPostHorizonValuation(tl1600, future1600, types.Settings{MinBatterySOC: 20}, status1600, model1600)
+		ph1600 := c.buildPostHorizonValuation(ctx, tl1600, future1600, types.Settings{MinBatterySOC: 20}, status1600, model1600)
 		assert.InDelta(t, 0.10, ph1600.knownPostHorizonRate, 0.001,
 			"Post-horizon valuation after extending past Day 2 Peak must see purely Off-Peak ($0.10/kWh) rates")
 
@@ -947,6 +947,176 @@ func TestBuildPlanningTimeline(t *testing.T) {
 		assert.Equal(t, 24, plan1600.HorizonHours, "Returned Plan.HorizonHours must be truncated to 24 hours")
 		assert.Equal(t, t1600.Add(24*time.Hour), plan1600.Periods[len(plan1600.Periods)-1].TSEnd,
 			"Returned Plan.Periods must be truncated at now + 24h (16:00 Day 2)")
+	})
+
+	t.Run("PeakP75Load_ElevatesTruePeakIntervalsOnBalancedAndConservative", func(t *testing.T) {
+		t.Parallel()
+
+		runNow := time.Date(2026, 6, 15, 12, 0, 0, 0, chicagoLoc)
+
+		// Build 20 days of realistic multi-day history (1.0 to 2.8 kWh/hr across days) so
+		// P50 < P55 < P70 < P75 < P80 are strictly separated without triggering EV outlier filtering.
+		var history []types.EnergyStats
+		for d := 1; d <= 20; d++ {
+			day := runNow.AddDate(0, 0, -d)
+			load := 1.0 + 0.2*float64((d-1)%10)
+			for h := 0; h < 24; h++ {
+				history = append(history, types.EnergyStats{
+					TSHourStart: time.Date(day.Year(), day.Month(), day.Day(), h, 0, 0, 0, chicagoLoc),
+					HomeKWH:     load,
+					SolarKWH:    0.0,
+				})
+			}
+		}
+
+		// 3-tier TOU schedule: Off-Peak $0.10, Mid-Peak 14:00-16:00 $0.25, Peak 16:00-20:00 $0.45
+		touPriceAt := func(ts time.Time) types.Price {
+			h := ts.Hour()
+			rate := 0.10
+			if h >= 16 && h < 20 {
+				rate = 0.45
+			} else if h >= 14 && h < 16 {
+				rate = 0.25
+			}
+			return types.Price{
+				TSStart:       ts,
+				TSEnd:         ts.Add(time.Hour),
+				DollarsPerKWH: rate,
+			}
+		}
+
+		currentPrice := touPriceAt(runNow)
+		var futurePrices []types.Price
+		for i := 1; i < 24; i++ {
+			futurePrices = append(futurePrices, touPriceAt(runNow.Add(time.Duration(i)*time.Hour)))
+		}
+
+		status := types.SystemStatus{
+			Timestamp:          runNow,
+			BatteryCapacityKWH: 20.0,
+			BatterySOC:         20.0,
+			TimeLocation:       "America/Chicago",
+		}
+
+		balSettings := types.Settings{
+			MinBatterySOC:              20,
+			GridChargeBatteries:        true,
+			OptimizationProfile:        "balanced",
+			HomeLoadPredictionStrategy: "default",
+		}
+		findIntervalAt := func(tl []planInterval, hour int) *planInterval {
+			for i := range tl {
+				if tl[i].startTime.Day() == 15 && tl[i].startTime.Hour() == hour && tl[i].startTime.Minute() == 0 {
+					return &tl[i]
+				}
+			}
+			return nil
+		}
+
+		// With ffPeakP75Load disabled by default, Balanced peak intervals keep P55 AvgHomeLoadKWH
+		tlDefault, _, modelDefault, err := c.buildPlanningTimeline(ctx, runNow, currentPrice, futurePrices, history, nil, balSettings, status, nil)
+		require.NoError(t, err)
+		defaultPeak := findIntervalAt(tlDefault, 17)
+		require.NotNil(t, defaultPeak)
+		assert.InDelta(t, findTimeProfile(modelDefault, defaultPeak.startTime).AvgHomeLoadKWH*defaultPeak.durationHours, defaultPeak.loadKWH, 1e-6,
+			"Balanced peak interval must stay on P55 AvgHomeLoadKWH when peakP75Load flag is disabled")
+
+		peakCtx := ffPeakP75Load.With(ctx, true)
+		tlBal, _, modelBal, err := c.buildPlanningTimeline(peakCtx, runNow, currentPrice, futurePrices, history, nil, balSettings, status, nil)
+		require.NoError(t, err)
+
+		prof13 := findTimeProfile(modelBal, time.Date(2026, 6, 15, 13, 0, 0, 0, chicagoLoc))
+		prof15 := findTimeProfile(modelBal, time.Date(2026, 6, 15, 15, 0, 0, 0, chicagoLoc))
+		prof17 := findTimeProfile(modelBal, time.Date(2026, 6, 15, 17, 0, 0, 0, chicagoLoc))
+		require.Greater(t, prof17.P75HomeLoadKWH, prof17.AvgHomeLoadKWH+0.2,
+			"test history must produce P75 materially higher than P55")
+
+		balOff := findIntervalAt(tlBal, 13)
+		balMid := findIntervalAt(tlBal, 15)
+		balPeak := findIntervalAt(tlBal, 17)
+		require.NotNil(t, balOff)
+		require.NotNil(t, balMid)
+		require.NotNil(t, balPeak)
+
+		assert.InDelta(t, prof13.AvgHomeLoadKWH*balOff.durationHours, balOff.loadKWH, 1e-6,
+			"Balanced off-peak interval must remain on P55 AvgHomeLoadKWH")
+		assert.InDelta(t, prof15.AvgHomeLoadKWH*balMid.durationHours, balMid.loadKWH, 1e-6,
+			"Balanced mid-peak/shoulder interval (> $0.03 below peak) must remain on P55 AvgHomeLoadKWH")
+		assert.InDelta(t, prof17.P75HomeLoadKWH*balPeak.durationHours, balPeak.loadKWH, 1e-6,
+			"Balanced peak interval must elevate to P75HomeLoadKWH")
+
+		// Conservative also elevates peak to P75 while keeping P70 off-peak
+		consSettings := balSettings
+		consSettings.OptimizationProfile = "conservative"
+		consSettings.HomeLoadPredictionStrategy = "conservative"
+		tlCons, _, modelCons, err := c.buildPlanningTimeline(peakCtx, runNow, currentPrice, futurePrices, history, nil, consSettings, status, nil)
+		require.NoError(t, err)
+		consOff := findIntervalAt(tlCons, 13)
+		consPeak := findIntervalAt(tlCons, 17)
+		require.NotNil(t, consOff)
+		require.NotNil(t, consPeak)
+		assert.InDelta(t, findTimeProfile(modelCons, consOff.startTime).AvgHomeLoadKWH*consOff.durationHours, consOff.loadKWH, 1e-6)
+		assert.InDelta(t, findTimeProfile(modelCons, consPeak.startTime).P75HomeLoadKWH*consPeak.durationHours, consPeak.loadKWH, 1e-6)
+
+		// Aggressive stays on P55 even during Peak
+		aggSettings := balSettings
+		aggSettings.OptimizationProfile = "aggressive"
+		tlAgg, _, modelAgg, err := c.buildPlanningTimeline(peakCtx, runNow, currentPrice, futurePrices, history, nil, aggSettings, status, nil)
+		require.NoError(t, err)
+		aggPeak := findIntervalAt(tlAgg, 17)
+		require.NotNil(t, aggPeak)
+		assert.InDelta(t, findTimeProfile(modelAgg, aggPeak.startTime).AvgHomeLoadKWH*aggPeak.durationHours, aggPeak.loadKWH, 1e-6,
+			"Aggressive profile must keep P55 AvgHomeLoadKWH during peak")
+
+		// Narrow spread ($0.10 vs $0.15 < $0.10 minDeficitPriceSpread) and negative midday (-$0.05 vs $0.07) must NOT trigger Peak P75
+		var negFuture []types.Price
+		negCur := types.Price{TSStart: runNow, TSEnd: runNow.Add(time.Hour), DollarsPerKWH: -0.05}
+		for i := 1; i < 24; i++ {
+			ts := runNow.Add(time.Duration(i) * time.Hour)
+			r := 0.04
+			if ts.Hour() >= 16 && ts.Hour() < 20 {
+				r = 0.07 // Only $0.07 above $0.00 (< $0.10 spread), even though $0.12 above -$0.05
+			}
+			negFuture = append(negFuture, types.Price{TSStart: ts, TSEnd: ts.Add(time.Hour), DollarsPerKWH: r})
+		}
+		tlNeg, _, modelNeg, err := c.buildPlanningTimeline(peakCtx, runNow, negCur, negFuture, history, nil, balSettings, status, nil)
+		require.NoError(t, err)
+		neg17 := findIntervalAt(tlNeg, 17)
+		require.NotNil(t, neg17)
+		assert.InDelta(t, findTimeProfile(modelNeg, neg17.startTime).AvgHomeLoadKWH*neg17.durationHours, neg17.loadKWH, 1e-6,
+			"Negative midday price must not cause an ordinary $0.07 evening rate to be treated as a true TOU peak")
+
+		// End-to-end Plan check at 15:00 (last $0.10 Off-Peak hour before 16:00-20:00 $0.45 Peak on a 2-tier TOU):
+		// Balanced with peakP75Load enabled must grid-charge to a higher target SOC than flag-disabled Balanced and Aggressive (P55).
+		twoTierPriceAt := func(ts time.Time) types.Price {
+			rate := 0.10
+			if ts.Hour() >= 16 && ts.Hour() < 20 {
+				rate = 0.45
+			}
+			return types.Price{TSStart: ts, TSEnd: ts.Add(time.Hour), DollarsPerKWH: rate}
+		}
+		chargeNow := time.Date(2026, 6, 15, 15, 0, 0, 0, chicagoLoc)
+		var chargeFuture []types.Price
+		for i := 1; i < 24; i++ {
+			chargeFuture = append(chargeFuture, twoTierPriceAt(chargeNow.Add(time.Duration(i)*time.Hour)))
+		}
+		chargeStatus := status
+		chargeStatus.Timestamp = chargeNow
+		chargeStatus.MaxBatteryChargeKW = 12.0
+
+		decBalOff, _, err := c.Plan(ctx, chargeStatus, twoTierPriceAt(chargeNow), chargeFuture, history, nil, balSettings, nil)
+		require.NoError(t, err)
+		decBal, _, err := c.Plan(peakCtx, chargeStatus, twoTierPriceAt(chargeNow), chargeFuture, history, nil, balSettings, nil)
+		require.NoError(t, err)
+		decAgg, _, err := c.Plan(peakCtx, chargeStatus, twoTierPriceAt(chargeNow), chargeFuture, history, nil, aggSettings, nil)
+		require.NoError(t, err)
+
+		assert.Equal(t, types.BatteryModeChargeAny, decBal.Action.BatteryMode)
+		assert.Equal(t, types.BatteryModeChargeAny, decAgg.Action.BatteryMode)
+		assert.Greater(t, decBal.Action.ChargeToSOC, decBalOff.Action.ChargeToSOC,
+			"Enabling peakP75Load must pre-charge Balanced Plan to a higher SOC than flag-disabled Balanced")
+		assert.Greater(t, decBal.Action.ChargeToSOC, decAgg.Action.ChargeToSOC,
+			"Balanced Plan must pre-charge to a higher SOC than Aggressive to cover Peak P75 home load")
 	})
 }
 
@@ -1046,6 +1216,7 @@ func TestBuildPostHorizonValuation(t *testing.T) {
 	require.NoError(t, err)
 
 	now := time.Date(2026, 6, 15, 8, 0, 0, 0, chicagoLoc)
+	ctx := context.Background()
 	c := NewController()
 
 	t.Run("KnownPostHorizonRate_UsesFuturePriceAfterHorizon", func(t *testing.T) {
@@ -1071,7 +1242,7 @@ func TestBuildPostHorizonValuation(t *testing.T) {
 			},
 		}
 
-		ph := c.buildPostHorizonValuation(timeline, futurePrices, types.Settings{}, types.SystemStatus{}, nil)
+		ph := c.buildPostHorizonValuation(ctx, timeline, futurePrices, types.Settings{}, types.SystemStatus{}, nil)
 		// First hour import rate: 0.22 + 0.03 = 0.25
 		// Second hour import rate: 0.28 + 0.07 = 0.35
 		// Average over post-horizon rollup window: (0.25 + 0.35) / 2 = 0.30
@@ -1088,7 +1259,7 @@ func TestBuildPostHorizonValuation(t *testing.T) {
 		}
 
 		// No future prices after horizon
-		ph := c.buildPostHorizonValuation(timeline, nil, types.Settings{}, types.SystemStatus{}, nil)
+		ph := c.buildPostHorizonValuation(ctx, timeline, nil, types.Settings{}, types.SystemStatus{}, nil)
 		assert.InDelta(t, 0.14, ph.knownPostHorizonRate, 0.001, "must fall back to latest timeline rate")
 	})
 
@@ -1105,7 +1276,7 @@ func TestBuildPostHorizonValuation(t *testing.T) {
 			mockModel[h] = TimeProfile{Hour: h, AvgHomeLoadKWH: 1.5}
 		}
 
-		ph := c.buildPostHorizonValuation(timeline, nil, types.Settings{}, types.SystemStatus{}, mockModel)
+		ph := c.buildPostHorizonValuation(ctx, timeline, nil, types.Settings{}, types.SystemStatus{}, mockModel)
 		// 4 hours * 1.5 kWh/hour = 6.0 kWh
 		if assert.Len(t, ph.postHorizonSlices, 4) {
 			var totalLoad float64
@@ -1129,7 +1300,7 @@ func TestBuildPostHorizonValuation(t *testing.T) {
 			{TSStart: tEnd.Add(time.Hour), TSEnd: tEnd.Add(2 * time.Hour), DollarsPerKWH: 0.30},     // 07:00-08:00: $0.30, netLoad 1.0
 			{TSStart: tEnd.Add(2 * time.Hour), TSEnd: tEnd.Add(8 * time.Hour), DollarsPerKWH: 0.30}, // 08:00-14:00: $0.30, netLoad <= 0 (sunny)
 		}
-		solarPH := c.buildPostHorizonValuation(timeline, postPrices, types.Settings{}, types.SystemStatus{}, solarModel)
+		solarPH := c.buildPostHorizonValuation(ctx, timeline, postPrices, types.Settings{}, types.SystemStatus{}, solarModel)
 		if assert.Len(t, solarPH.postHorizonSlices, 2, "sunny post-horizon hours with net solar surplus must not create net load slices") {
 			assert.InDelta(t, 0.30, solarPH.postHorizonSlices[0].importRate, 1e-6, "highest-rate post-horizon net load hour must be ordered first")
 			assert.InDelta(t, 1.0, solarPH.postHorizonSlices[0].loadKWH, 1e-6)
@@ -1139,8 +1310,8 @@ func TestBuildPostHorizonValuation(t *testing.T) {
 
 		// Verify brand-new site with no energy history (BuildHourlyEnergyModel returns 24 profiles at the 0.09 kWh standby floor)
 		// falls back to defaultPostHorizonLoadKWH (6.0 kWh / 4h = 1.5 kWh/hr) paired with post-horizon rates
-		emptyModel, _ := c.BuildHourlyEnergyModel(context.Background(), tEnd.Add(-6*time.Hour), nil, nil, types.Settings{})
-		coldStartPH := c.buildPostHorizonValuation(timeline, postPrices, types.Settings{}, types.SystemStatus{}, emptyModel)
+		emptyModel, _ := c.BuildHourlyEnergyModel(ctx, tEnd.Add(-6*time.Hour), nil, nil, types.Settings{})
+		coldStartPH := c.buildPostHorizonValuation(ctx, timeline, postPrices, types.Settings{}, types.SystemStatus{}, emptyModel)
 		if assert.Len(t, coldStartPH.postHorizonSlices, 4, "brand-new site with empty energy history must still populate 4 default load slices") {
 			assert.InDelta(t, 0.30, coldStartPH.postHorizonSlices[0].importRate, 1e-6)
 			assert.InDelta(t, 1.5, coldStartPH.postHorizonSlices[0].loadKWH, 1e-6)
@@ -1159,8 +1330,45 @@ func TestBuildPostHorizonValuation(t *testing.T) {
 			{startTime: t0.Add(6 * time.Hour), endTime: t0.Add(8 * time.Hour), durationHours: 2.0, importRate: -0.03, loadKWH: 2.0},
 		}
 
-		ph := c.buildPostHorizonValuation(timeline, nil, types.Settings{}, types.SystemStatus{}, nil)
+		ph := c.buildPostHorizonValuation(ctx, timeline, nil, types.Settings{}, types.SystemStatus{}, nil)
 		assert.Equal(t, 0.0, ph.knownPostHorizonRate, "Negative post-horizon rate must be floored at 0.0")
+	})
+
+	t.Run("PeakP75Load_ElevatesPeakPostHorizonSlicesOnBalanced", func(t *testing.T) {
+		t.Parallel()
+
+		tEnd := time.Date(2026, 7, 10, 16, 0, 0, 0, chicagoLoc)
+		timeline := []planInterval{
+			{startTime: tEnd.Add(-16 * time.Hour), endTime: tEnd.Add(-8 * time.Hour), durationHours: 8.0, importRate: 0.10},
+			{startTime: tEnd.Add(-8 * time.Hour), endTime: tEnd, durationHours: 8.0, importRate: 0.45},
+		}
+		mockModel := make([]TimeProfile, 24)
+		for h := 0; h < 24; h++ {
+			mockModel[h] = TimeProfile{Hour: h, AvgHomeLoadKWH: 1.0, P75HomeLoadKWH: 2.2}
+		}
+		postPrices := []types.Price{
+			{TSStart: tEnd, TSEnd: tEnd.Add(2 * time.Hour), DollarsPerKWH: 0.45},                    // 16:00-18:00 Peak
+			{TSStart: tEnd.Add(2 * time.Hour), TSEnd: tEnd.Add(4 * time.Hour), DollarsPerKWH: 0.10}, // 18:00-20:00 Off-Peak
+		}
+
+		phBalOff := c.buildPostHorizonValuation(ctx, timeline, postPrices, types.Settings{OptimizationProfile: "balanced"}, types.SystemStatus{}, mockModel)
+		if assert.Len(t, phBalOff.postHorizonSlices, 4) {
+			assert.InDelta(t, 1.0, phBalOff.postHorizonSlices[0].loadKWH, 1e-6, "Flag-disabled Balanced post-horizon slices must keep AvgHomeLoadKWH")
+		}
+
+		peakCtx := ffPeakP75Load.With(ctx, true)
+		phBal := c.buildPostHorizonValuation(peakCtx, timeline, postPrices, types.Settings{OptimizationProfile: "balanced"}, types.SystemStatus{}, mockModel)
+		if assert.Len(t, phBal.postHorizonSlices, 4) {
+			assert.InDelta(t, 2.2, phBal.postHorizonSlices[0].loadKWH, 1e-6, "Balanced peak post-horizon slice must use P75HomeLoadKWH")
+			assert.InDelta(t, 2.2, phBal.postHorizonSlices[1].loadKWH, 1e-6)
+			assert.InDelta(t, 1.0, phBal.postHorizonSlices[2].loadKWH, 1e-6, "Balanced off-peak post-horizon slice must keep AvgHomeLoadKWH")
+			assert.InDelta(t, 1.0, phBal.postHorizonSlices[3].loadKWH, 1e-6)
+		}
+
+		phAgg := c.buildPostHorizonValuation(peakCtx, timeline, postPrices, types.Settings{OptimizationProfile: "aggressive"}, types.SystemStatus{}, mockModel)
+		if assert.Len(t, phAgg.postHorizonSlices, 4) {
+			assert.InDelta(t, 1.0, phAgg.postHorizonSlices[0].loadKWH, 1e-6, "Aggressive post-horizon slices must keep AvgHomeLoadKWH")
+		}
 	})
 }
 
