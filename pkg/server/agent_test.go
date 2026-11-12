@@ -182,7 +182,9 @@ func TestHandleAgentSummary(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code)
 		assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
 		assert.Equal(t, "private, max-age=300", w.Header().Get("Cache-Control"))
-		assert.Equal(t, "Accept", w.Header().Get("Vary"))
+		assert.Equal(t, "noindex, nofollow, noarchive, nosnippet", w.Header().Get("X-Robots-Tag"))
+		assert.Equal(t, "no-referrer", w.Header().Get("Referrer-Policy"))
+		assert.Equal(t, "Accept, Authorization, Cookie", w.Header().Get("Vary"))
 
 		var res AgentSummaryRes
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
@@ -417,10 +419,13 @@ func TestHandleAgentSummary(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code)
 		assert.Equal(t, "text/html; charset=utf-8", w.Header().Get("Content-Type"))
 		assert.Equal(t, "private, max-age=300", w.Header().Get("Cache-Control"))
-		assert.Equal(t, "Accept", w.Header().Get("Vary"))
+		assert.Equal(t, "noindex, nofollow, noarchive, nosnippet", w.Header().Get("X-Robots-Tag"))
+		assert.Equal(t, "no-referrer", w.Header().Get("Referrer-Policy"))
+		assert.Equal(t, "Accept, Authorization, Cookie", w.Header().Get("Vary"))
 
 		body := w.Body.String()
 		assert.Contains(t, body, "<!DOCTYPE html>")
+		assert.Contains(t, body, "<meta name=\"robots\" content=\"noindex, nofollow\">")
 		assert.Contains(t, body, "<h1>RateRudder Energy Summary</h1>")
 		assert.Contains(t, body, "<h2>Current Status</h2>")
 		assert.Contains(t, body, "<li><strong>Battery SOC:</strong> 85.0% (Capacity: 15.0 kWh, Reserve: 20.0%)</li>")

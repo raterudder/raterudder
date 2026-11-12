@@ -394,7 +394,7 @@ func formatAgentSummaryText(summary AgentSummaryRes) string {
 
 func formatAgentSummaryHTML(summary AgentSummaryRes) string {
 	var b strings.Builder
-	b.WriteString("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>RateRudder Energy Summary</title>\n</head>\n<body>\n<main>\n")
+	b.WriteString("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"robots\" content=\"noindex, nofollow\">\n<title>RateRudder Energy Summary</title>\n</head>\n<body>\n<main>\n")
 	b.WriteString("<h1>RateRudder Energy Summary</h1>\n<ul>\n")
 	fmt.Fprintf(&b, "<li><strong>Site Time:</strong> %s (%s)</li>\n", html.EscapeString(summary.SiteTime.Format("2006-01-02 15:04 MST")), html.EscapeString(summary.TimeZone))
 	fmt.Fprintf(&b, "<li><strong>Last Updated:</strong> %s</li>\n", html.EscapeString(summary.UpdatedAt.Format("2006-01-02 15:04 MST")))
@@ -519,7 +519,9 @@ func (s *Server) handleAgentSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Cache-Control", "private, max-age=300")
-	w.Header().Set("Vary", "Accept")
+	w.Header().Set("X-Robots-Tag", "noindex, nofollow, noarchive, nosnippet")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Add("Vary", "Accept, Authorization, Cookie")
 	switch format {
 	case "html":
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
