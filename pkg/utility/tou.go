@@ -1102,6 +1102,7 @@ func touUtilityInfo() []types.UtilityProviderInfo {
 		dlcUtilityInfo(),
 		sdgeUtilityInfo(),
 		apsUtilityInfo(),
+		tepUtilityInfo(),
 		dominionUtilityInfo(),
 		bgeUtilityInfo(),
 		jeaUtilityInfo(),

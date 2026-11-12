@@ -121,19 +121,19 @@ func (m *Map) Site(ctx context.Context, siteID string, settings types.Settings) 
 			}
 		}
 	case "ameren":
-		if settings.UtilityRate == "ameren_bgs" {
-			u = &genericTOU{
+		if settings.UtilityRate == "ameren_psp" || settings.UtilityRate == "" {
+			if m.baseAmerenSmart == nil {
+				return nil, fmt.Errorf("ameren provider not configured")
+			}
+			u = &SiteFees{
+				base:   m.baseAmerenSmart,
 				siteID: siteID,
 			}
 			if err := u.ApplySettings(ctx, settings); err != nil {
 				return nil, err
 			}
 		} else {
-			if m.baseAmerenSmart == nil {
-				return nil, fmt.Errorf("ameren provider not configured")
-			}
-			u = &SiteFees{
-				base:   m.baseAmerenSmart,
+			u = &genericTOU{
 				siteID: siteID,
 			}
 			if err := u.ApplySettings(ctx, settings); err != nil {

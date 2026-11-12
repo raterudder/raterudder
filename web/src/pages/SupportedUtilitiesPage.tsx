@@ -17,9 +17,9 @@ const UTILITY_METADATA: Record<string, UtilityMetadata> = {
         blurb: 'Fetches live real-time prices from ComEd alongside PJM Day-Ahead hourly rates. Day-Ahead prices and 5-minute real-time prices are adjusted in upcoming hours against live trends to significantly reduce forecast error.'
     },
     ameren: {
-        region: 'Illinois',
+        region: 'Illinois • Missouri',
         category: 'realtime',
-        blurb: 'Pulls official MISO Day-Ahead market reports directly as soon as next-day clearing prices are published and pairs them with your Ameren Illinois delivery Zone (I, II, or III) and space heating riders.'
+        blurb: 'Pulls official MISO Day-Ahead market reports for Ameren Illinois Power Smart Pricing (PSP) and BGS, and models Ameren Missouri Rate 1M Evening/Morning, Overnight, Smart, Ultimate Demand TOU, and Anytime schedules.'
     },
     tesla_electric_tx: {
         region: 'Texas (ERCOT)',
@@ -105,6 +105,11 @@ const UTILITY_METADATA: Record<string, UtilityMetadata> = {
         region: 'Arizona',
         category: 'tou',
         blurb: 'Optimizes Arizona Public Service TOU-E, R-3, and R-EV plans alongside Resource Comparison Proxy (RCP) solar export credits.'
+    },
+    tep: {
+        region: 'Arizona',
+        category: 'tou',
+        blurb: 'Models Tucson Electric Power Demand TOU (TRRESDT), Time-of-Use (TRREST), Peak Demand (TRRESD), and Basic (TRRES) schedules paired with Rider-14 Resource Comparison Proxy (RCP) 10-year solar export cohorts.'
     },
     heco: {
         region: 'Hawai‘i (O‘ahu)',

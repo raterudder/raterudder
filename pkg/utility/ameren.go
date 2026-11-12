@@ -389,7 +389,7 @@ func amerenUtilityInfo() types.UtilityProviderInfo {
 	return types.UtilityProviderInfo{
 		ID:   "ameren",
 		Name: "Ameren",
-		Rates: []types.UtilityRateInfo{
+		Rates: append([]types.UtilityRateInfo{
 			{
 				ID:      "ameren_psp",
 				Name:    "Power Smart Pricing (Ameren IL)",
@@ -402,7 +402,7 @@ func amerenUtilityInfo() types.UtilityProviderInfo {
 				Options: []types.UtilityRateOption{netMeteringOption},
 				GetFees: getAmerenBGSFees,
 			},
-		},
+		}, amerenMORateInfos()...),
 	}
 }
 
