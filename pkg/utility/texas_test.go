@@ -73,26 +73,35 @@ func TestTexasUtility(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// Free Night window (8:00 PM - 6:00 AM): 11:00 PM
+		// Free Night window (9:00 PM - 6:00 AM): 11:00 PM
 		pNight, err := u.priceForTime(time.Date(2026, time.June, 20, 23, 0, 0, 0, ctLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.0000, pNight.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.0000, pNight.GridUseDollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.0000, pNight.ImportRateDollars(), 1e-6)
+		assert.True(t, pNight.SeparateGenerationCredit)
+		assert.InDelta(t, 0.0000, pNight.GenerationCreditDollarsPerKWH, 1e-6)
 
 		// Free Night early morning: 3:00 AM
 		pMorning, err := u.priceForTime(time.Date(2026, time.June, 21, 3, 0, 0, 0, ctLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.0000, pMorning.ImportRateDollars(), 1e-6)
 
-		// Daytime (6:00 AM - 8:00 PM): 1:00 PM
+		// 8:00 PM is still in paid Daytime window (6:00 AM - 9:00 PM)
+		pEvening, err := u.priceForTime(time.Date(2026, time.June, 20, 20, 0, 0, 0, ctLocation))
+		require.NoError(t, err)
+		assert.InDelta(t, 0.2400, pEvening.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.06533, pEvening.GridUseDollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.30533, pEvening.ImportRateDollars(), 1e-6)
+
+		// Daytime (6:00 AM - 9:00 PM): 1:00 PM
 		pDay, err := u.priceForTime(time.Date(2026, time.June, 20, 13, 0, 0, 0, ctLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.1950, pDay.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.2400, pDay.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.06533, pDay.GridUseDollarsPerKWH, 1e-6)
-		assert.InDelta(t, 0.26033, pDay.ImportRateDollars(), 1e-6)
+		assert.InDelta(t, 0.30533, pDay.ImportRateDollars(), 1e-6)
 		assert.True(t, pDay.SeparateGenerationCredit)
-		assert.InDelta(t, 0.0500, pDay.GenerationCreditDollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.0000, pDay.GenerationCreditDollarsPerKWH, 1e-6)
 	})
 
 	t.Run("Direct Energy Twelve Hour Power - Oncor", func(t *testing.T) {
@@ -110,6 +119,8 @@ func TestTexasUtility(t *testing.T) {
 		pNight, err := u.priceForTime(time.Date(2026, time.September, 10, 22, 0, 0, 0, ctLocation))
 		require.NoError(t, err)
 		assert.InDelta(t, 0.0000, pNight.ImportRateDollars(), 1e-6)
+		assert.True(t, pNight.SeparateGenerationCredit)
+		assert.InDelta(t, 0.0000, pNight.GenerationCreditDollarsPerKWH, 1e-6)
 
 		// Free Window morning: 7:00 AM
 		pMorning, err := u.priceForTime(time.Date(2026, time.September, 11, 7, 0, 0, 0, ctLocation))
@@ -119,37 +130,11 @@ func TestTexasUtility(t *testing.T) {
 		// Daytime (9:00 AM - 9:00 PM): 2:00 PM
 		pDay, err := u.priceForTime(time.Date(2026, time.September, 10, 14, 0, 0, 0, ctLocation))
 		require.NoError(t, err)
-		assert.InDelta(t, 0.2150, pDay.DollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.2800, pDay.DollarsPerKWH, 1e-6)
 		assert.InDelta(t, 0.06867, pDay.GridUseDollarsPerKWH, 1e-6)
-		assert.InDelta(t, 0.28367, pDay.ImportRateDollars(), 1e-6)
+		assert.InDelta(t, 0.34867, pDay.ImportRateDollars(), 1e-6)
 		assert.True(t, pDay.SeparateGenerationCredit)
-		assert.InDelta(t, 0.0300, pDay.GenerationCreditDollarsPerKWH, 1e-6)
-	})
-
-	t.Run("TXU Energy Free Nights - AEP Texas Central", func(t *testing.T) {
-		u := &genericTOU{}
-		err := u.ApplySettings(context.Background(), types.Settings{
-			UtilityProvider: "txu_tx",
-			UtilityRate:     "txu_free_nights",
-			UtilityRateOptions: types.UtilityRateOptions{
-				Location: "aep_central",
-			},
-		})
-		require.NoError(t, err)
-
-		// Free Night (8:00 PM - 6:00 AM): 1:00 AM
-		pNight, err := u.priceForTime(time.Date(2026, time.August, 5, 1, 0, 0, 0, ctLocation))
-		require.NoError(t, err)
-		assert.InDelta(t, 0.0000, pNight.ImportRateDollars(), 1e-6)
-
-		// Daytime (6:00 AM - 8:00 PM): 11:00 AM
-		pDay, err := u.priceForTime(time.Date(2026, time.August, 5, 11, 0, 0, 0, ctLocation))
-		require.NoError(t, err)
-		assert.InDelta(t, 0.2050, pDay.DollarsPerKWH, 1e-6)
-		assert.InDelta(t, 0.05690, pDay.GridUseDollarsPerKWH, 1e-6)
-		assert.InDelta(t, 0.26190, pDay.ImportRateDollars(), 1e-6)
-		assert.True(t, pDay.SeparateGenerationCredit)
-		assert.InDelta(t, 0.0400, pDay.GenerationCreditDollarsPerKWH, 1e-6)
+		assert.InDelta(t, 0.0000, pDay.GenerationCreditDollarsPerKWH, 1e-6)
 	})
 
 	t.Run("Map Site Integration for Tesla Dynamic", func(t *testing.T) {

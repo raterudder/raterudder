@@ -29,17 +29,12 @@ const UTILITY_METADATA: Record<string, UtilityMetadata> = {
     green_mountain_tx: {
         region: 'Texas (ERCOT)',
         category: 'texas',
-        blurb: 'Models overnight $0.00/kWh Free Nights charging windows paired with regulated Texas TDU delivery rates (CenterPoint, Oncor, AEP Texas, TNMP) so your battery refills for free overnight.'
+        blurb: 'Models Pollution Free All Nighter (9 PM to 6 AM free energy and waived TDU delivery) paired with regulated Texas TDU daytime wire rates (CenterPoint, Oncor, AEP Texas, TNMP) so your battery refills for free overnight.'
     },
     direct_energy_tx: {
         region: 'Texas (ERCOT)',
         category: 'texas',
-        blurb: 'Optimizes Direct Energy Twelve Hour Power (9 PM to 9 AM free energy) and fixed plans with automatic Texas TDU delivery fee modeling.'
-    },
-    txu_tx: {
-        region: 'Texas (ERCOT)',
-        category: 'texas',
-        blurb: 'Automates TXU Free Nights & Solar Days (8 PM to 6 AM free energy) and Season Pass plans across all 5 ERCOT Transmission and Distribution Utilities.'
+        blurb: 'Optimizes Direct Energy Twelve Hour Power (9 PM to 9 AM free energy and waived TDU delivery) and fixed plans with automatic Texas TDU delivery fee modeling.'
     },
     pg_e: {
         region: 'California',
@@ -376,7 +371,7 @@ const SupportedUtilitiesPage: React.FC = () => {
                             <span className="guardrail-icon" aria-hidden="true">🤠</span>
                             <h3>Texas / ERCOT &amp; Tesla Electric</h3>
                             <p>
-                                For <strong>Tesla Electric Dynamic</strong> plans, RateRudder authenticates directly with the <strong>official ERCOT Public API</strong> to pull Real-Time Settlement Point Prices and Day-Ahead Market prices, automatically layering on regulated PUCT wire charges for <strong>CenterPoint, Oncor, AEP Texas, or TNMP</strong>. Also supports TXU, Green Mountain, and Direct Energy <strong>Free Nights</strong> plans.
+                                For <strong>Tesla Electric Dynamic</strong> plans, RateRudder authenticates directly with the <strong>official ERCOT Public API</strong> to pull Real-Time Settlement Point Prices and Day-Ahead Market prices, automatically layering on regulated PUCT wire charges for <strong>CenterPoint, Oncor, AEP Texas, or TNMP</strong>. Also supports Green Mountain and Direct Energy <strong>Free Nights</strong> plans.
                             </p>
                         </div>
 

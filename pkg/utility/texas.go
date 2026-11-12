@@ -212,38 +212,38 @@ func texasPeriods(rep, plan string, opts types.UtilityRateOptions, years []int) 
 			})
 
 		case "green_mountain_free_nights":
-			// Free Nights (8:00 PM - 6:00 AM): $0.0000 import rate
+			// Free Nights (9:00 PM - 6:00 AM): $0.0000 import rate
 			periods = append(periods, types.UtilityFeesPeriod{
 				TimePeriod: types.TimePeriod{
 					Name:        "Free Night",
 					Start:       yearStart,
 					End:         yearEnd,
 					LocationPtr: ctLocation,
-					Hours:       []types.UtilityHourPeriod{{HourStart: 20, HourEnd: 24}, {HourStart: 0, HourEnd: 6}},
+					Hours:       []types.UtilityHourPeriod{{HourStart: 21, HourEnd: 24}, {HourStart: 0, HourEnd: 6}},
 				},
 				DollarsPerKWH: 0.0000,
 				Description:   "Green Mountain Free Night Energy Rate",
 			})
-			// Daytime (6:00 AM - 8:00 PM)
+			// Daytime (6:00 AM - 9:00 PM)
 			periods = append(periods, types.UtilityFeesPeriod{
 				TimePeriod: types.TimePeriod{
 					Name:        "Day",
 					Start:       yearStart,
 					End:         yearEnd,
 					LocationPtr: ctLocation,
-					Hours:       []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 20}},
+					Hours:       []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 21}},
 				},
-				DollarsPerKWH: 0.1950,
+				DollarsPerKWH: 0.2400,
 				Description:   "Green Mountain Daytime Energy Rate",
 			})
 			// On Green Mountain Free Nights, TDU delivery is credited 100% during free hours,
-			// so TDU delivery only applies during paid daytime hours (6:00 AM - 8:00 PM).
+			// so TDU delivery only applies during paid daytime hours (6:00 AM - 9:00 PM).
 			periods = append(periods, types.UtilityFeesPeriod{
 				TimePeriod: types.TimePeriod{
 					Start:       yearStart,
 					End:         yearEnd,
 					LocationPtr: ctLocation,
-					Hours:       []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 20}},
+					Hours:       []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 21}},
 				},
 				DollarsPerKWH:  tdu.DeliveryDollarsPerKWH,
 				GridAdditional: true,
@@ -254,34 +254,22 @@ func texasPeriods(rep, plan string, opts types.UtilityRateOptions, years []int) 
 					Start:       yearStart,
 					End:         yearEnd,
 					LocationPtr: ctLocation,
-					Hours:       []types.UtilityHourPeriod{{HourStart: 20, HourEnd: 24}, {HourStart: 0, HourEnd: 6}},
+					Hours:       []types.UtilityHourPeriod{{HourStart: 21, HourEnd: 24}, {HourStart: 0, HourEnd: 6}},
 				},
 				DollarsPerKWH:  0.0000,
 				GridAdditional: true,
 				Description:    fmt.Sprintf("%s TDU Delivery Charge (Free Night Waived)", tdu.Name),
 			})
-			// Solar Buyback Credit during Daytime
+			// Free Nights plans do not provide solar buyback/export credits.
 			periods = append(periods, types.UtilityFeesPeriod{
 				TimePeriod: types.TimePeriod{
 					Start:       yearStart,
 					End:         yearEnd,
 					LocationPtr: ctLocation,
-					Hours:       []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 20}},
-				},
-				DollarsPerKWH:            0.0500,
-				SeparateGenerationCredit: true,
-				Description:              "Green Mountain Solar Days Export Credit",
-			})
-			periods = append(periods, types.UtilityFeesPeriod{
-				TimePeriod: types.TimePeriod{
-					Start:       yearStart,
-					End:         yearEnd,
-					LocationPtr: ctLocation,
-					Hours:       []types.UtilityHourPeriod{{HourStart: 20, HourEnd: 24}, {HourStart: 0, HourEnd: 6}},
 				},
 				DollarsPerKWH:            0.0000,
 				SeparateGenerationCredit: true,
-				Description:              "Green Mountain Solar Export Credit (Night)",
+				Description:              "Green Mountain Solar Export Credit (No Buyback on Free Nights)",
 			})
 
 		case "green_mountain_fixed":
@@ -338,7 +326,7 @@ func texasPeriods(rep, plan string, opts types.UtilityRateOptions, years []int) 
 					LocationPtr: ctLocation,
 					Hours:       []types.UtilityHourPeriod{{HourStart: 9, HourEnd: 21}},
 				},
-				DollarsPerKWH: 0.2150,
+				DollarsPerKWH: 0.2800,
 				Description:   "Direct Energy Daytime Energy Rate",
 			})
 			// TDU delivery is credited during free window, applies during daytime
@@ -364,28 +352,16 @@ func texasPeriods(rep, plan string, opts types.UtilityRateOptions, years []int) 
 				GridAdditional: true,
 				Description:    fmt.Sprintf("%s TDU Delivery Charge (Free Hours Waived)", tdu.Name),
 			})
-			// Daytime Solar Export Credit
+			// Free Nights plans do not provide solar buyback/export credits.
 			periods = append(periods, types.UtilityFeesPeriod{
 				TimePeriod: types.TimePeriod{
 					Start:       yearStart,
 					End:         yearEnd,
 					LocationPtr: ctLocation,
-					Hours:       []types.UtilityHourPeriod{{HourStart: 9, HourEnd: 21}},
-				},
-				DollarsPerKWH:            0.0300,
-				SeparateGenerationCredit: true,
-				Description:              "Direct Energy Solar Export Credit",
-			})
-			periods = append(periods, types.UtilityFeesPeriod{
-				TimePeriod: types.TimePeriod{
-					Start:       yearStart,
-					End:         yearEnd,
-					LocationPtr: ctLocation,
-					Hours:       []types.UtilityHourPeriod{{HourStart: 21, HourEnd: 24}, {HourStart: 0, HourEnd: 9}},
 				},
 				DollarsPerKWH:            0.0000,
 				SeparateGenerationCredit: true,
-				Description:              "Direct Energy Solar Export Credit (Night)",
+				Description:              "Direct Energy Solar Export Credit (No Buyback on Twelve Hour Power)",
 			})
 
 		case "direct_energy_live_brighter":
@@ -398,98 +374,6 @@ func texasPeriods(rep, plan string, opts types.UtilityRateOptions, years []int) 
 				},
 				DollarsPerKWH: 0.1200,
 				Description:   "Direct Energy Live Brighter Energy Rate",
-			})
-			periods = append(periods, types.UtilityFeesPeriod{
-				TimePeriod: types.TimePeriod{
-					Start:       yearStart,
-					End:         yearEnd,
-					LocationPtr: ctLocation,
-				},
-				DollarsPerKWH:  tdu.DeliveryDollarsPerKWH,
-				GridAdditional: true,
-				Description:    fmt.Sprintf("%s TDU Delivery Charge", tdu.Name),
-			})
-
-		case "txu_free_nights":
-			// Free Nights (8:00 PM - 6:00 AM)
-			periods = append(periods, types.UtilityFeesPeriod{
-				TimePeriod: types.TimePeriod{
-					Name:        "Free Night",
-					Start:       yearStart,
-					End:         yearEnd,
-					LocationPtr: ctLocation,
-					Hours:       []types.UtilityHourPeriod{{HourStart: 20, HourEnd: 24}, {HourStart: 0, HourEnd: 6}},
-				},
-				DollarsPerKWH: 0.0000,
-				Description:   "TXU Free Night Energy Rate",
-			})
-			// Daytime (6:00 AM - 8:00 PM)
-			periods = append(periods, types.UtilityFeesPeriod{
-				TimePeriod: types.TimePeriod{
-					Name:        "Day",
-					Start:       yearStart,
-					End:         yearEnd,
-					LocationPtr: ctLocation,
-					Hours:       []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 20}},
-				},
-				DollarsPerKWH: 0.2050,
-				Description:   "TXU Daytime Energy Rate",
-			})
-			periods = append(periods, types.UtilityFeesPeriod{
-				TimePeriod: types.TimePeriod{
-					Start:       yearStart,
-					End:         yearEnd,
-					LocationPtr: ctLocation,
-					Hours:       []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 20}},
-				},
-				DollarsPerKWH:  tdu.DeliveryDollarsPerKWH,
-				GridAdditional: true,
-				Description:    fmt.Sprintf("%s TDU Delivery Charge (Daytime)", tdu.Name),
-			})
-			periods = append(periods, types.UtilityFeesPeriod{
-				TimePeriod: types.TimePeriod{
-					Start:       yearStart,
-					End:         yearEnd,
-					LocationPtr: ctLocation,
-					Hours:       []types.UtilityHourPeriod{{HourStart: 20, HourEnd: 24}, {HourStart: 0, HourEnd: 6}},
-				},
-				DollarsPerKWH:  0.0000,
-				GridAdditional: true,
-				Description:    fmt.Sprintf("%s TDU Delivery Charge (Free Night Waived)", tdu.Name),
-			})
-			periods = append(periods, types.UtilityFeesPeriod{
-				TimePeriod: types.TimePeriod{
-					Start:       yearStart,
-					End:         yearEnd,
-					LocationPtr: ctLocation,
-					Hours:       []types.UtilityHourPeriod{{HourStart: 6, HourEnd: 20}},
-				},
-				DollarsPerKWH:            0.0400,
-				SeparateGenerationCredit: true,
-				Description:              "TXU Solar Export Credit",
-			})
-			periods = append(periods, types.UtilityFeesPeriod{
-				TimePeriod: types.TimePeriod{
-					Start:       yearStart,
-					End:         yearEnd,
-					LocationPtr: ctLocation,
-					Hours:       []types.UtilityHourPeriod{{HourStart: 20, HourEnd: 24}, {HourStart: 0, HourEnd: 6}},
-				},
-				DollarsPerKWH:            0.0000,
-				SeparateGenerationCredit: true,
-				Description:              "TXU Solar Export Credit (Night)",
-			})
-
-		case "txu_season_pass":
-			periods = append(periods, types.UtilityFeesPeriod{
-				TimePeriod: types.TimePeriod{
-					Name:        "Standard",
-					Start:       yearStart,
-					End:         yearEnd,
-					LocationPtr: ctLocation,
-				},
-				DollarsPerKWH: 0.1300,
-				Description:   "TXU Season Pass Energy Rate",
 			})
 			periods = append(periods, types.UtilityFeesPeriod{
 				TimePeriod: types.TimePeriod{
@@ -550,7 +434,7 @@ func greenMountainUtilityInfo() types.UtilityProviderInfo {
 		Rates: []types.UtilityRateInfo{
 			{
 				ID:      "green_mountain_free_nights",
-				Name:    "Free Nights & Solar Days / Pollution Free All Night",
+				Name:    "Pollution Free All Nighter (9 PM - 6 AM Free)",
 				Options: opts,
 				GetFees: func(options types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 					return texasPeriods("green_mountain_tx", "green_mountain_free_nights", options, years)
@@ -591,35 +475,6 @@ func directEnergyUtilityInfo() types.UtilityProviderInfo {
 				Options: opts,
 				GetFees: func(options types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
 					return texasPeriods("direct_energy_tx", "direct_energy_live_brighter", options, years)
-				},
-			},
-		},
-	}
-}
-
-// txuUtilityInfo returns metadata for TXU Energy (Texas).
-func txuUtilityInfo() types.UtilityProviderInfo {
-	opts := texasTDUOptions()
-	years := []int{2026, 2027}
-
-	return types.UtilityProviderInfo{
-		ID:   "txu_tx",
-		Name: "TXU Energy (Texas)",
-		Rates: []types.UtilityRateInfo{
-			{
-				ID:      "txu_free_nights",
-				Name:    "Free Nights & Solar Days (8 PM - 6 AM Free)",
-				Options: opts,
-				GetFees: func(options types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return texasPeriods("txu_tx", "txu_free_nights", options, years)
-				},
-			},
-			{
-				ID:      "txu_season_pass",
-				Name:    "Season Pass Fixed",
-				Options: opts,
-				GetFees: func(options types.UtilityRateOptions) ([]types.UtilityFeesPeriod, error) {
-					return texasPeriods("txu_tx", "txu_season_pass", options, years)
 				},
 			},
 		},
